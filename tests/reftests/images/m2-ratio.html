@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<title>M2: a size given on one axis gives the other through the natural ratio; the width and height attributes are presentational hints</title>
+<link rel="match" href="m2-ratio-ref.html">
+<style>html, body { margin: 0 } img { display: block } .small { width: 20px }</style>
+<!-- 40x30: width 80 gives 60 high; height 15 gives 20 wide; any author rule
+     beats the attribute, even one this unspecific. -->
+<img src="resources/green-40x30.png" width="80">
+<img src="resources/green-40x30.png" height="15">
+<img src="resources/green-40x30.png" width="100" class="small">
+<!-- The same inline, where layout rather than taffy sizes it; with no font
+     size the line is just the image. -->
+<div style="font-size: 0"><img src="resources/green-40x30.png" width="80" style="display: inline"></div>

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<title>Canvas animation</title>
+<style>
+  body { margin: 0 }
+  canvas { display: block; margin: 20px }
+</style>
+<canvas id="chart" width="300" height="150"></canvas>
+<p id="note">Not read yet.</p>
+<script>
+  // Points as chart.js draws its legend's: a path each, more than a
+  // context records before drawing without waiting for the frame.
+  const ctx = document.getElementById("chart").getContext("2d");
+  let frame = 0;
+  function draw() {
+    frame++;
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, 300, 150);
+    ctx.fillStyle = ["#c62828", "#1565c0", "#2e7d32"][frame % 3];
+    for (let i = 0; i < 12000; i++) {
+      ctx.beginPath();
+      ctx.arc((i * 7 + frame * 5) % 280 + 10, (i * 13) % 130 + 10, 2, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+    // A corner no point reaches, read back after the draws.
+    if (frame === 3) {
+      const pixel = ctx.getImageData(0, 0, 1, 1).data.join(",");
+      document.getElementById("note").textContent = `Read ${pixel}.`;
+    }
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+</script>

@@ -1,0 +1,28 @@
+# The last segment, d: the fork keeps TracedSlot alone of its slots; the
+# tests that reach it still catch it broken. Linked against the V8 built
+# locally from the fork (RUSTY_V8_ARCHIVE): the fork's Rust is what changes.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "RUSTY_V8_ARCHIVE=$PWD/../third_party/rusty_v8_artifacts cargo test -q -p bindings"]
+timeout = 2400
+
+[[mutant]]
+name = "fork: a TracedSlot isn't traced"
+file = "../third_party/rusty_v8/src/cppgc/slot.rs"
+from = '''  pub unsafe fn trace(&self, visitor: &mut Visitor) {
+    if self.is_empty() {'''
+to = '''  pub unsafe fn trace(&self, visitor: &mut Visitor) {
+    if self.is_empty() || true {'''
+
+[[mutant]]
+name = "fork: a TracedSlot's set empties it"
+file = "../third_party/rusty_v8/src/cppgc/slot.rs"
+from = '''    let value = value
+      .map_or('''
+to = '''    let value = value
+      .filter(|_| false)
+      .map_or('''
+
+[[mutant]]
+name = "fork: a TracedSlot reads as empty"
+file = "../third_party/rusty_v8/src/cppgc/slot.rs"
+from = '''    (!location.is_null()).then(|| unsafe { *location })'''
+to = '''    (!location.is_null() && false).then(|| unsafe { *location })'''

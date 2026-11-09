@@ -1,0 +1,202 @@
+# Step 0c: the benchmarks' object model (`dom::bench`), the workloads
+# (`gc_bench`) and what `bench.py gc` reads from their traces. Run with
+# RUSTY_V8_ARCHIVE pointing at a V8 built from the fork (`ci.py v8`) until
+# the fork's release has the heap statistics.
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "bench::"]
+# A mutant takes seconds; the one that hangs waits this long.
+timeout = 300
+
+# `dom::bench`: the links a node's appends and removals keep.
+
+[[mutant]]
+name = "an appended child gets no previous sibling"
+file = "crates/dom/src/bench.rs"
+from = '''            child_node.previous_sibling.set(scope, &last);'''
+to = ''''''
+
+[[mutant]]
+name = "the last child doesn't point to the appended one"
+file = "crates/dom/src/bench.rs"
+from = '''            unsafe { last.as_ref() }.next_sibling.set(scope, child);'''
+to = '''            let _ = last;'''
+
+[[mutant]]
+name = "the parent's last child stays the old one"
+file = "crates/dom/src/bench.rs"
+from = '''    parent_node.last_child.set(scope, child);'''
+to = ''''''
+
+[[mutant]]
+name = "removing a node leaves its next sibling's link back"
+file = "crates/dom/src/bench.rs"
+from = '''        Some(next) => unsafe { next.as_ref() }
+            .previous_sibling
+            .set_from(scope, &node.previous_sibling),'''
+to = '''        Some(_) => {}'''
+# `remove_children` loops forever on the stale link: hangs (the timeout),
+# not fails.
+
+[[mutant]]
+name = "removing the last child empties the parent's last child"
+file = "crates/dom/src/bench.rs"
+from = '''        None => parent.last_child.set_from(scope, &node.previous_sibling),'''
+to = '''        None => parent.last_child.clear(scope),'''
+
+[[mutant]]
+name = "a removed node keeps its parent"
+file = "crates/dom/src/bench.rs"
+from = '''    node.parent.clear(scope);'''
+to = ''''''
+
+# Not "a removed node keeps its next sibling": appended again, it would
+# point back into its old siblings, and walking the children would loop
+# forever (a hang that fills the memory, not a failure).
+[[mutant]]
+name = "a removed node keeps its previous sibling"
+file = "crates/dom/src/bench.rs"
+from = '''    node.previous_sibling.clear(scope);'''
+to = ''''''
+
+[[mutant]]
+name = "a new subtree goes a level deeper than it fits"
+file = "crates/dom/src/bench.rs"
+from = '''    while fits < count {'''
+to = '''    while fits <= count {'''
+
+[[mutant]]
+name = "a new subtree's nodes don't get their own children"
+file = "crates/dom/src/bench.rs"
+from = '''        append_children(scope, &child, left, fanout, below);'''
+to = '''        let _ = below;'''
+
+[[mutant]]
+name = "removing the children removes only the first"
+file = "crates/dom/src/bench.rs"
+from = '''    while let Some(child) = unsafe { parent.first_child.get_ptr() } {'''
+to = '''    if let Some(child) = unsafe { parent.first_child.get_ptr() } {'''
+
+[[mutant]]
+name = "the subtree's size doesn't go back up past a last child"
+file = "crates/dom/src/bench.rs"
+from = '''                up = unsafe { up.parent.get() }.expect("a node under the root has a parent");'''
+to = '''                break;'''
+
+[[mutant]]
+name = "a node with a parent is appended anyway"
+file = "crates/dom/src/bench.rs"
+from = '''    assert!(!has_parent, "appending a node that has a parent");'''
+to = '''    let _ = has_parent;'''
+
+# `gc_bench`: what each workload keeps and drops, and what the report reads.
+
+[[mutant]]
+name = "replace doesn't remove the old children"
+file = "crates/gc_bench/src/lib.rs"
+from = '''                bench::remove_children(&mut dom.mutate(), &setup.container);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it"]
+
+[[mutant]]
+name = "list doesn't drop its first items"
+file = "crates/gc_bench/src/lib.rs"
+from = '''                    bench::remove(&mut dom.mutate(), &first);'''
+to = '''                    drop(first);'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it"]
+
+[[mutant]]
+name = "churn's new subtree is one node larger than the old"
+file = "crates/gc_bench/src/lib.rs"
+from = '''                bench::append_new_subtree(&mut dom.mutate(), &new, size.saturating_sub(1), FANOUT);'''
+to = '''                bench::append_new_subtree(&mut dom.mutate(), &new, size, FANOUT);'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it"]
+
+[[mutant]]
+name = "churn keeps the old subtree"
+file = "crates/gc_bench/src/lib.rs"
+from = '''                bench::remove(&mut dom.mutate(), &old);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it"]
+
+[[mutant]]
+name = "the peak used size is never taken"
+file = "crates/gc_bench/src/lib.rs"
+from = '''        self.peak_used = self.peak_used.max(stats.used_size_bytes);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it"]
+
+# Missed, and left to review: when the used size drops between turns
+# depends on when the GC runs (docs/test-gaps.md).
+[[mutant]]
+name = "the peak used size is the last turn's"
+file = "crates/gc_bench/src/lib.rs"
+from = '''        self.peak_used = self.peak_used.max(stats.used_size_bytes);'''
+to = '''        self.peak_used = stats.used_size_bytes;'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it"]
+
+[[mutant]]
+name = "no forced GC before the statistics"
+file = "crates/gc_bench/src/lib.rs"
+from = '''    let start = Instant::now();
+    dom.collect_garbage_for_testing();
+    let forced_gc = start.elapsed();'''
+to = '''    let start = Instant::now();
+    let forced_gc = start.elapsed();'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "RunTests"]
+
+[[mutant]]
+name = "the idle waits count as the run"
+file = "crates/gc_bench/src/lib.rs"
+from = '''    let run = start.elapsed().saturating_sub(event_loop.idle);'''
+to = '''    let run = start.elapsed();'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "RunTests"]
+
+# `bench.py gc`: what it reads from a trace.
+
+[[mutant]]
+name = "every slice is its own pause"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''        if end is not None and start - end < PAUSE_GAP_NS:'''
+to = '''        if end is not None and start - end < 0:'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "SummaryTests"]
+
+[[mutant]]
+name = "the nested GC slices count too"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''                if not any(is_gc(outer) for _, outer in stack):'''
+to = '''                if True:'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "SummaryTests"]
+
+[[mutant]]
+name = "the slices outside the span count too"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''            elif inside and is_gc(name):'''
+to = '''            elif is_gc(name):'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "SummaryTests"]
+
+[[mutant]]
+name = "the other threads' slices count too"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''    for _, time, _, kind, name, _ in sorted((e for e in events if e[0] == track), key=lambda e: (e[1], e[2])):'''
+to = '''    for _, time, _, kind, name, _ in sorted(events, key=lambda e: (e[1], e[2])):'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "SummaryTests"]
+
+[[mutant]]
+name = "cppgc's atomic phase counts as other"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''    if name.startswith("CppGC.Atomic") or name in V8_GC_SLICES'''
+to = '''    if name in V8_GC_SLICES'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "SummaryTests"]
+
+[[mutant]]
+name = "the percentiles round halves to even"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''math.ceil(fraction * len(ordered))'''
+to = '''round(fraction * len(ordered) + 0.5)'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "SummaryTests"]
+
+[[mutant]]
+name = "the pauses are only the first run's"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''    every_pause = [pause for run in runs for pause in run["pauses_ns"]]'''
+to = '''    every_pause = runs[0]["pauses_ns"]'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "SummaryTests"]

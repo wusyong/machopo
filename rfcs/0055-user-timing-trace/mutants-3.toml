@@ -1,0 +1,111 @@
+# 3: the tools find the timed windows by the runner's marks (`perfetto_marks`,
+# `mark_windows`), or by its frames in a trace with none (`frame_windows`, the
+# prototype's), and say which; Chrome records User Timing; the fake runner
+# sets the real one's marks. `MeasureTests` take Chrome for Testing.
+#   python3 scripts/test.py mutate rfcs/0055-user-timing-trace/mutants-3.toml
+test = ["python3", "scripts/speedometer_test.py", "SampleReadingTests", "CompareTests",
+        "MeasureTests.test_traces_of_both", "KunTests.test_the_windows_are_the_runners_times"]
+timeout = 900
+
+[[mutant]]
+name = "a window from a test's first start"
+file = "scripts/speedometer.py"
+from = '''            starts[name.removesuffix("-start")] = time'''
+to = '''            starts.setdefault(name.removesuffix("-start"), time)'''
+
+[[mutant]]
+name = "a start ends twice"
+file = "scripts/speedometer.py"
+from = '''            start = starts.pop(name.removesuffix("-async-end"), None)'''
+to = '''            start = starts.get(name.removesuffix("-async-end"))'''
+
+[[mutant]]
+name = "marks in the order given"
+file = "scripts/speedometer.py"
+from = '''    for time, name in sorted(marks):'''
+to = '''    for time, name in marks:'''
+
+[[mutant]]
+name = "a window ends at the sync time's end"
+file = "scripts/speedometer.py"
+from = '''        if name.endswith("-async-end"):
+            start = starts.pop(name.removesuffix("-async-end"), None)'''
+to = '''        if name.endswith("-sync-end"):
+            start = starts.pop(name.removesuffix("-sync-end"), None)'''
+
+[[mutant]]
+name = "any marks mean no frames"
+file = "scripts/speedometer.py"
+from = '''    windows = mark_windows(marks)
+    if windows:'''
+to = '''    windows = mark_windows(marks)
+    if marks:'''
+
+[[mutant]]
+name = "marks of any category"
+file = "scripts/speedometer.py"
+from = '''        if kind == 3 and USER_TIMING in categories:'''
+to = '''        if kind == 3:'''
+
+[[mutant]]
+name = "a measure's start is a mark"
+file = "scripts/speedometer.py"
+from = '''        if kind == 3 and USER_TIMING in categories:'''
+to = '''        if kind in (1, 3) and USER_TIMING in categories:'''
+
+[[mutant]]
+name = "interned categories unread"
+file = "scripts/speedometer.py"
+from = '''                if key in (1, 2):  # event_categories, event_names'''
+to = '''                if key == 2:  # event_names'''
+
+[[mutant]]
+name = "categories as text unread"
+file = "scripts/speedometer.py"
+from = '''                          for key, value in entries if key in (3, 22)]  # category_iids, categories'''
+to = '''                          for key, value in entries if key in (3,)]  # category_iids, categories'''
+
+[[mutant]]
+name = "instants are slices"
+file = "scripts/speedometer.py"
+from = '''        if kind in (1, 2):
+            slices.setdefault('''
+to = '''        if kind in (1, 2, 3):
+            slices.setdefault('''
+
+[[mutant]]
+name = "Chrome doesn't record User Timing"
+file = "scripts/speedometer.py"
+from = '''CHROME_TRACE_CATEGORIES = ("toplevel", "blink", "v8", "cc", "viz", "benchmark", "loading", "devtools.timeline",
+                           USER_TIMING)'''
+to = '''CHROME_TRACE_CATEGORIES = ("toplevel", "blink", "v8", "cc", "viz", "benchmark", "loading", "devtools.timeline")'''
+
+[[mutant]]
+name = "the report doesn't tell what found the windows"
+file = "scripts/speedometer.py"
+from = '''        lines += ["", f"## {name}", "", f"{totals_text(by_event)} The windows by {found_by}."]'''
+to = '''        lines += ["", f"## {name}", "", totals_text(by_event)]'''
+
+[[mutant]]
+name = "compare.md takes either side's for both"
+file = "scripts/speedometer.py"
+from = '''                found_by[side].add(found)'''
+to = '''                found_by["current"].add(found)'''
+
+[[mutant]]
+name = "the fake runner's test has no end mark"
+file = "scripts/speedometer/fake/resources/main.mjs"
+from = '''          performance.mark(`${label}-async-end`, { startTime: asyncEnd });'''
+to = ''''''
+
+[[mutant]]
+name = "the fake runner's start mark at the origin"
+file = "scripts/speedometer/fake/resources/main.mjs"
+from = '''      performance.mark(`${label}-start`);'''
+to = '''      performance.mark(`${label}-start`, { startTime: 0 });'''
+
+[[mutant]]
+name = "the fake runner's measures go"
+file = "scripts/speedometer/fake/resources/main.mjs"
+from = '''          performance.measure(`${label}-sync`, `${label}-start`, `${label}-sync-end`);'''
+to = ''''''

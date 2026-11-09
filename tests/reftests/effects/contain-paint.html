@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<title>contain: paint cuts what is in it at its padding box on both axes, and holds a fixed box in it</title>
+<link rel="match" href="contain-paint-ref.html">
+<style>
+  html, body { margin: 0 }
+  .c { contain: paint; width: 100px; height: 60px; margin: 20px; border: 5px solid blue;
+       background-color: yellow }
+  .over { width: 300px; height: 300px; margin: -20px; background-color: green }
+  .fixed { position: fixed; right: 0; bottom: 0; width: 30px; height: 30px; background-color: green }
+</style>
+<div class="c"><div class="over"></div></div>
+<div class="c"><div class="fixed"></div></div>

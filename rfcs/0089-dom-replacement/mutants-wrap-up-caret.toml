@@ -1,0 +1,25 @@
+# After the wrap-up's measurements: a host taking the focus looks for a
+# caret's first place by each run's first cluster's start, worked out
+# alone, not every cluster of the host's text (TipTap's focus()).
+# `layout`'s caret tests: the start the clusters give, and none worked
+# out.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "layout", "--test", "it", "caret"]
+timeout = 600
+
+[[mutant]]
+name = "layout: the caret's search works out every run's clusters"
+file = "crates/layout/src/caret.rs"
+from = '''                let first = run.first_cluster_start();'''
+to = '''                let first = run.clusters().first().map(|cluster| cluster.start);'''
+
+[[mutant]]
+name = "layout: a run's first cluster's start by working out its clusters"
+file = "crates/layout/src/fragment.rs"
+from = '''            TextGlyphs::Shaped(span) => match span.clusters.get() {'''
+to = '''            TextGlyphs::Shaped(span) => match Some(span.clusters()) {'''
+
+[[mutant]]
+name = "layout: a run's first cluster's start where its text starts"
+file = "crates/layout/src/text.rs"
+from = '''        let start = self.index_from(first, &mut 0);'''
+to = '''        let start = self.index_from(first, &mut 0).min(0);'''

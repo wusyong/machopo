@@ -1,0 +1,103 @@
+# The second stage's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0030-testdriver/mutations-stage2.toml`. Each runs `dom_js`'s
+# `user_activation` test (V8, nested iframes, a clock the test sets),
+# unless it names its own: the renderer's are the `user-activation`
+# scenario's (real input in a window).
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "user_activation"]
+timeout = 900
+
+[[mutant]]
+name = "a keydown doesn't activate"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            if key.down && key.key != "Escape" {'''
+to = '''            if key.down && key.key != "Escape" && false {'''
+test = ["python3", "scripts/test.py", "scenarios", "user-activation"]
+
+[[mutant]]
+name = "Escape activates"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            if key.down && key.key != "Escape" {'''
+to = '''            if key.down {'''
+test = ["python3", "scripts/test.py", "scenarios", "user-activation"]
+
+[[mutant]]
+name = "a mousedown doesn't activate"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                dom_api::user_activation::notify_activation(host, element);'''
+to = '''                let _ = element;'''
+test = ["python3", "scripts/test.py", "scenarios", "user-activation"]
+
+[[mutant]]
+name = "a mousedown activates after its dispatch"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        {
+            let (element, frame, _) = &target;
+            self.dispatch_from_renderer(*frame, &mut |host| {
+                dom_api::user_activation::notify_activation(host, element);
+            });
+        }
+        if self.fire_mouse(&target, "mousedown", &mouse) {'''
+to = '''        let not_canceled = self.fire_mouse(&target, "mousedown", &mouse);
+        {
+            let (element, frame, _) = &target;
+            self.dispatch_from_renderer(*frame, &mut |host| {
+                dom_api::user_activation::notify_activation(host, element);
+            });
+        }
+        if not_canceled {'''
+test = ["python3", "scripts/test.py", "scenarios", "user-activation"]
+
+[[mutant]]
+name = "the ancestors aren't activated"
+file = "crates/dom_api/src/user_activation.rs"
+from = '''        current = cx
+            .read()
+            .frame_owner(document.as_node())
+            .map(|owner| crate::node::document_of(cx, &owner));'''
+to = '''        current = None;'''
+
+[[mutant]]
+name = "the descendants aren't activated"
+file = "crates/dom_api/src/user_activation.rs"
+from = '''        if document_origin(&mut cx.mutate(), &child) == origin {
+            activate(cx, &child, now);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the descendants of another origin are activated too"
+file = "crates/dom_api/src/user_activation.rs"
+from = '''        if document_origin(&mut cx.mutate(), &child) == origin {'''
+to = '''        if document_origin(&mut cx.mutate(), &child) == origin || true {'''
+
+[[mutant]]
+name = "transient activation lasts its last millisecond too"
+file = "crates/dom_api/src/user_activation.rs"
+from = '''    now >= last && now < last + TRANSIENT_ACTIVATION_DURATION'''
+to = '''    now >= last && now <= last + TRANSIENT_ACTIVATION_DURATION'''
+
+[[mutant]]
+name = "transient activation doesn't expire"
+file = "crates/dom_api/src/user_activation.rs"
+from = '''    now >= last && now < last + TRANSIENT_ACTIVATION_DURATION'''
+to = '''    now >= last'''
+
+[[mutant]]
+name = "a window starts activated long ago"
+file = "crates/dom/src/event.rs"
+from = '''            last_activation: Cell::new(f64::INFINITY),'''
+to = '''            last_activation: Cell::new(0.0),'''
+
+[[mutant]]
+name = "hasBeenActive is isActive"
+file = "crates/dom_api/src/user_activation.rs"
+from = '''    let window = cx.read().user_activation_window(this);
+    Ok(has_sticky_activation(cx, &window))'''
+to = '''    let window = cx.read().user_activation_window(this);
+    Ok(has_transient_activation(cx, &window))'''
+
+[[mutant]]
+name = "userActivation is a new object each time"
+file = "crates/dom/src/navigator.rs"
+from = '''        if let Some(activation) = unsafe { self.own(navigator).user_activation.get_ptr() } {'''
+to = '''        if let Some(activation) = unsafe { self.own(navigator).user_activation.get_ptr() }.filter(|_| false) {'''

@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<title>Lines beside floats start past them and are as wide as the room left</title>
+<link rel="match" href="fl2-lines-around-ref.html">
+<!-- CSS 2 § 9.5: two words beside the left float (100px of room), three
+     below it; a word too wide for the room beside the right float goes
+     below it. -->
+<style>
+  body { margin: 0 }
+  div, p { font: 20px/1 Ahem; margin: 0 }
+</style>
+<div style="width: 200px">
+  <div style="float: left; width: 100px; height: 40px; background: green"></div>
+  <p>XX XX XX XX XX XX XX</p>
+</div>
+<div style="width: 200px">
+  <div style="float: right; width: 100px; height: 40px; background: green"></div>
+  <p>XXXXXX XX</p>
+</div>

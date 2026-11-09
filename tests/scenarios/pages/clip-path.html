@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<title>Clip path</title>
+<style>
+  html, body { margin: 0; height: 100% }
+  svg { position: absolute; left: 100px; top: 100px }
+  #note { position: absolute; left: 100px; top: 400px }
+</style>
+<body onclick="note('Clicked the page.')">
+<svg width="300" height="200">
+  <defs>
+    <clipPath id="chart-area-clip"><rect width="150" height="200"/></clipPath>
+  </defs>
+  <g style="clip-path: url(#chart-area-clip)">
+    <rect id="series" width="300" height="200" fill="teal"
+          onclick="event.stopPropagation(); note('Clicked the series.')"/>
+  </g>
+</svg>
+<span id="note">Nothing clicked yet.</span>
+<script>
+  function note(text) { document.getElementById("note").textContent = text; }
+</script>
+</body>

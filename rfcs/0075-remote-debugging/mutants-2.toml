@@ -1,0 +1,264 @@
+# Mutation test of the second stage: V8's inspector behind a page's
+# session, the realms and exceptions it is told of, V8's console, and what
+# the browser checks of the renderer's messages:
+# python3 scripts/test.py mutate rfcs/0075-remote-debugging/mutants-2.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools::", "windowless::without_a_driver", "windowless::a_renderers_devtools"]
+timeout = 900
+
+# The inspector (bindings).
+
+[[mutant]]
+name = "the inspector's clock is 0"
+file = "crates/bindings/src/devtools.rs"
+from = '''            .map_or(0.0, |since| since.as_secs_f64() * 1000.0)'''
+to = '''            .map_or(0.0, |since| since.as_secs_f64() * 0.0)'''
+
+[[mutant]]
+name = "no default context"
+file = "crates/bindings/src/devtools.rs"
+from = '''        let context = self.default_context.borrow();
+        let context = context.as_ref()?;'''
+to = '''        let context = self.default_context.borrow();
+        let context = context.as_ref().filter(|_| false)?;'''
+
+[[mutant]]
+name = "the console's sink isn't told"
+file = "crates/bindings/src/devtools.rs"
+from = '''        if let Some(sink) = &*self.console.borrow() {'''
+to = '''        if let Some(sink) = &*self.console.borrow()
+            && message.len() == usize::MAX
+        {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "console::"]
+
+[[mutant]]
+name = "a child frame's realm is the default"
+file = "crates/bindings/src/devtools.rs"
+from = '''    if main {
+        *devtools.default_context.borrow_mut()'''
+to = '''    if !main {
+        *devtools.default_context.borrow_mut()'''
+
+[[mutant]]
+name = "contexts have no frame"
+file = "crates/bindings/src/devtools.rs"
+from = '''        aux["frameId"] = frame_id.into();'''
+to = '''        aux["frame"] = frame_id.into();'''
+
+[[mutant]]
+name = "contexts have no origin"
+file = "crates/bindings/src/devtools.rs"
+from = '''        StringView::from(origin.as_bytes()),
+        StringView::from(aux.as_bytes()),'''
+to = '''        StringView::empty(),
+        StringView::from(aux.as_bytes()),'''
+
+[[mutant]]
+name = "contexts aren't cleared"
+file = "crates/bindings/src/devtools.rs"
+from = '''    devtools.inspector.reset_context_group(CONTEXT_GROUP);'''
+to = ''''''
+
+[[mutant]]
+name = "a context isn't destroyed"
+file = "crates/bindings/src/devtools.rs"
+from = '''        devtools.inspector.context_destroyed(context);'''
+to = '''        let _ = context;'''
+
+[[mutant]]
+name = "an exception's script isn't given"
+file = "crates/bindings/src/devtools.rs"
+from = '''        stack,
+        script_id,
+    ))'''
+to = '''        stack,
+        script_id & 0,
+    ))'''
+
+[[mutant]]
+name = "rejections aren't kept"
+file = "crates/bindings/src/devtools.rs"
+from = '''    reported.push(Reported {'''
+to = '''    reported.retain(|_| false);
+    reported.push(Reported {'''
+
+[[mutant]]
+name = "a rejection handled later isn't struck out"
+file = "crates/bindings/src/devtools.rs"
+from = '''    if let Some(exception_id) = found {'''
+to = '''    if let Some(exception_id) = found.filter(|_| false) {'''
+
+[[mutant]]
+name = "responses aren't sent"
+file = "crates/bindings/src/devtools.rs"
+from = '''    fn send_response(&self, _call_id: i32, message: UniquePtr<StringBuffer>) {
+        if let Some(message) = message.as_ref() {'''
+to = '''    fn send_response(&self, _call_id: i32, message: UniquePtr<StringBuffer>) {
+        if let Some(message) = message.as_ref().filter(|_| false) {'''
+
+[[mutant]]
+name = "events aren't sent"
+file = "crates/bindings/src/devtools.rs"
+from = '''    fn send_notification(&self, message: UniquePtr<StringBuffer>) {
+        if let Some(message) = message.as_ref() {'''
+to = '''    fn send_notification(&self, message: UniquePtr<StringBuffer>) {
+        if let Some(message) = message.as_ref().filter(|_| false) {'''
+
+[[mutant]]
+name = "stacks are always kept"
+file = "crates/bindings/src/script_state.rs"
+from = '''        isolate.set_promise_reject_callback(promise_reject_callback);'''
+to = '''        isolate.set_capture_stack_trace_for_uncaught_exceptions(true, 10);
+        isolate.set_promise_reject_callback(promise_reject_callback);'''
+
+[[mutant]]
+name = "a page's scripts mute their errors"
+file = "crates/bindings/src/script_state.rs"
+from = '''            // gets the exception itself.
+            true,'''
+to = '''            // gets the exception itself.
+            false,'''
+
+[[mutant]]
+name = "a session's messages aren't handed to the inspector"
+file = "crates/bindings/src/script_state.rs"
+from = '''        session.dispatch_protocol_message(v8::inspector::StringView::from(message.as_bytes()));'''
+to = '''        let _ = (session, message);'''
+
+# The realms and exceptions (dom_js).
+
+[[mutant]]
+name = "the main frame's document going is like any other's"
+file = "crates/dom_js/src/devtools.rs"
+from = '''    let cleared = gone.iter().any(|realm| realm.main) && !kept.iter().any(|realm| realm.main);'''
+to = '''    let cleared = gone.iter().any(|realm| realm.main) && kept.iter().any(|realm| realm.main);'''
+
+[[mutant]]
+name = "a new main frame's realm is cleared away"
+file = "crates/dom_js/src/devtools.rs"
+from = '''    let cleared = gone.iter().any(|realm| realm.main) && !kept.iter().any(|realm| realm.main);'''
+to = '''    let cleared = gone.iter().any(|realm| realm.main);'''
+
+[[mutant]]
+name = "no realm is the main frame's"
+file = "crates/dom_js/src/devtools.rs"
+from = '''        main: frame.is_some_and(FrameClient::is_main_frame),'''
+to = '''        main: frame.is_none(),'''
+
+[[mutant]]
+name = "a document's realm stays"
+file = "crates/dom_js/src/devtools.rs"
+from = '''                .is_none_or(|document| !read.is_fully_active(&document))'''
+to = '''                .is_none()'''
+
+[[mutant]]
+name = "an opaque origin is told as null"
+file = "crates/dom_js/src/devtools.rs"
+from = '''        Origin::Opaque(_) => "://".to_owned(),'''
+to = '''        Origin::Opaque(_) => "null".to_owned(),'''
+
+[[mutant]]
+name = "an exception is where it was thrown"
+file = "crates/dom_js/src/exception.rs"
+from = '''            if thrown.script_id == 0 || thrown.line.is_none() || script_id == thrown.script_id {'''
+to = '''            if thrown.script_id == -1 {'''
+
+[[mutant]]
+name = "a rejection has no place"
+file = "crates/dom_js/src/exception.rs"
+from = '''        Self {
+            url: thrown.url.clone(),
+            line: place(thrown.line),'''
+to = '''        Self {
+            url: String::new(),
+            line: place(thrown.line),'''
+
+[[mutant]]
+name = "the script's id is the stack's"
+file = "crates/dom_js/src/exception.rs"
+from = '''            script_id: message.get_script_id(),'''
+to = '''            script_id: 0,'''
+
+# The renderer and the browser.
+
+[[mutant]]
+name = "an engine without an inspector doesn't answer"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        if handled {
+            return;
+        }'''
+to = '''        if handled || !handled {
+            return;
+        }'''
+
+[[mutant]]
+name = "the main frame has no id after a relaunch"
+file = "crates/browser/src/web_contents.rs"
+from = '''        self.crashed = false;
+        self.process.send(RendererMsg::DevToolsMainFrameToken(
+            self.devtools_frame_token.clone(),
+        ));'''
+to = '''        self.crashed = false;'''
+
+[[mutant]]
+name = "a renderer's message for another tab passes"
+file = "crates/shell/src/automation_session.rs"
+from = '''            .filter(|attached| attached.tab == tab)
+        else {
+            tracing::warn!(session, "a DevTools message for another tab's session");'''
+to = '''            .filter(|attached| attached.tab != TabId(u32::MAX))
+        else {
+            tracing::warn!(session, "a DevTools message for another tab's session");'''
+
+[[mutant]]
+name = "a renderer's message over the limit passes"
+file = "crates/shell/src/automation_session.rs"
+from = '''        if message.len() > MAX_RENDERER_MESSAGE_SIZE {'''
+to = '''        if message.len() > usize::MAX - 1 {'''
+
+[[mutant]]
+name = "the session's parameters aren't passed on"
+file = "crates/shell/src/automation_session.rs"
+from = '''        let message = json!({ "id": command.id, "method": name, "params": params });'''
+to = '''        let message = json!({ "id": command.id, "method": name, "params": {} });'''
+
+[[mutant]]
+name = "the Kun domain without a driver"
+file = "crates/shell/src/automation_session.rs"
+from = '''        if !self.automation && command.method.name().starts_with("Kun.") {'''
+to = '''        if self.automation && command.method.name().starts_with("Kun.") {'''
+
+[[mutant]]
+name = "a crashed tab's session is sent on"
+file = "crates/shell/src/automation_session.rs"
+from = '''        if contents.is_crashed() {
+            return Dispatched::Now(Err(Error::new(
+                SERVER_ERROR,
+                "the tab's renderer has gone",
+            )));
+        }
+        let message = json!'''
+to = '''        let message = json!'''
+
+# Found after the first run: what may have no test.
+
+[[mutant]]
+name = "an engine switch leaves the sessions behind"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        for (session, send) in self.devtools_sessions.clone() {'''
+to = '''        for (session, send) in self.devtools_sessions.clone().into_iter().filter(|_| false) {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools::", "wasm"]
+
+[[mutant]]
+name = "a client gone leaves its session in the renderer"
+file = "crates/shell/src/automation_session.rs"
+from = '''            if let Some(contents) = view.contents(attached.tab) {
+                contents.devtools_detach(id);
+            }
+            false'''
+to = '''            false'''
+
+[[mutant]]
+name = "rejections are kept past the most"
+file = "crates/bindings/src/devtools.rs"
+from = '''    if reported.len() >= MAX_REPORTED_REJECTIONS {'''
+to = '''    if reported.len() >= usize::MAX {'''

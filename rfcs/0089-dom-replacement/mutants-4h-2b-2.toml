@@ -1,0 +1,108 @@
+# Stage 4h-2b-2: matchMedia, MediaQueryList (kept while it has listeners) and MediaQueryListEvent on
+# the new DOM, the rendering update's evaluate media queries and report changes, the CSS namespace.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it media_query && cargo test -q -p dom_js_next --test it media_queries"]
+timeout = 1200
+
+[[mutant]]
+name = "dom: a list's first listener doesn't keep it"
+file = "crates/dom_next/src/event.rs"
+from = '''            self.media_query_list_listened(target);'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a list kept for good"
+file = "crates/dom_next/src/media_query.rs"
+from = '''                    .is_some_and(|listeners| !listeners.is_empty())'''
+to = '''                    .is_some_and(|_| true)'''
+
+[[mutant]]
+name = "dom: evaluated in the same environment"
+file = "crates/dom_next/src/media_query.rs"
+from = '''        if data.media_environment.get().replace(Some(environment)) == Some(environment) {
+            return Vec::new();
+        }'''
+to = '''        data.media_environment.get().replace(Some(environment));'''
+
+[[mutant]]
+name = "dom: the newest list first"
+file = "crates/dom_next/src/media_query.rs"
+from = '''                    alive.push(list);'''
+to = '''                    alive.insert(0, list);'''
+
+[[mutant]]
+name = "api: a change to each list"
+file = "crates/dom_api_next/src/media_query_list.rs"
+from = '''            .filter(|&list| update_matches(cx, list))'''
+to = '''            .filter(|&list| update_matches(cx, list) || true)'''
+
+[[mutant]]
+name = "api: change isn't trusted"
+file = "crates/dom_api_next/src/media_query_list.rs"
+from = '''                    EventFlags {
+                        trusted: true,
+                        ..EventFlags::default()
+                    },'''
+to = '''                    EventFlags::default(),'''
+
+[[mutant]]
+name = "api: the environment's width its height"
+file = "crates/dom_api_next/src/media_query_list.rs"
+from = '''        width: viewport.map_or(0.0, |viewport| viewport.size.width),'''
+to = '''        width: viewport.map_or(0.0, |viewport| viewport.size.height),'''
+
+[[mutant]]
+name = "api: matches the result it last had"
+file = "crates/dom_api_next/src/media_query_list.rs"
+from = '''    let matches = cx
+        .media_query_list_queries(this)
+        .matches(&environment(cx, document));
+    cx.set_media_query_list_matches(this, matches);
+    Ok(matches)'''
+to = '''    let _ = document;
+    Ok(cx.media_query_list_queries(this).matches(&environment(cx, cx.media_query_list_document(this))) && false)'''
+
+[[mutant]]
+name = "api: addListener of another type"
+file = "crates/dom_api_next/src/media_query_list.rs"
+from = '''    let event_type = names::event::CHANGE;'''
+to = '''    let event_type = names::event::INPUT;'''
+
+[[mutant]]
+name = "api: removeListener takes nothing off"
+file = "crates/dom_api_next/src/media_query_list.rs"
+from = '''        cx.remove_listener(target, listener);'''
+to = '''        let _ = listener;'''
+
+[[mutant]]
+name = "api: a constructed event without its init's"
+file = "crates/dom_api_next/src/media_query_list.rs"
+from = '''    cx.set_media_query_list_event_data(event, &init.media, init.matches);'''
+to = '''    cx.set_media_query_list_event_data(event, "", false);'''
+
+[[mutant]]
+name = "api: a list is a plain EventTarget"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        ObjectRef::EventTarget(target) if cx.is_media_query_list(target) => {
+            const { crate::declare::interface_index("MediaQueryList") }
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "js: a namespace's operations not on its object"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''        object.define_own_property(scope_, key.into(), operation, v8::PropertyAttribute::NONE);'''
+to = ''''''
+
+[[mutant]]
+name = "js: a static overload on the prototype"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''                if desc.is_static {
+                    let function = overloaded_template(self.scope, set, None);'''
+to = '''                if false {
+                    let function = overloaded_template(self.scope, set, None);'''
+
+[[mutant]]
+name = "js: the step skips documents with lists"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        if !self.dom_mut().read(|cx| cx.has_media_query_lists(document.get(cx.gc))) {'''
+to = '''        if self.dom_mut().read(|cx| cx.has_media_query_lists(document.get(cx.gc))) {'''

@@ -1,0 +1,355 @@
+# Mutation test of step 2a (Request, the body mixin, fetch(RequestInfo)):
+# python3 scripts/test.py mutate rfcs/0027-fetch/mutants-2a.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "fetch"]
+timeout = 900
+
+# --- dom_api: the constructor -----------------------------------------------
+
+[[mutant]]
+name = "a string's request isn't cors"
+file = "crates/dom_api/src/request.rs"
+from = '''            (data, None, None, Some(DataMode::Cors))'''
+to = '''            (data, None, None, None)'''
+
+[[mutant]]
+name = "a URL with credentials"
+file = "crates/dom_api/src/request.rs"
+from = '''            if !parsed.username().is_empty() || parsed.password().is_some() {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "an init with members keeps the referrer"
+file = "crates/dom_api/src/request.rs"
+from = '''        data.referrer = Referrer::Client;
+        data.referrer_policy = String::new();
+    }'''
+to = '''        data.referrer_policy = String::new();
+    }'''
+
+[[mutant]]
+name = "an empty referrer is the client"
+file = "crates/dom_api/src/request.rs"
+from = '''        data.referrer = if referrer.as_str().is_empty() {
+            Referrer::NoReferrer'''
+to = '''        data.referrer = if referrer.as_str().is_empty() {
+            Referrer::Client'''
+
+[[mutant]]
+name = "a same-origin referrer is the client"
+file = "crates/dom_api/src/request.rs"
+from = '''                || !same_origin(&parsed, &origin)'''
+to = '''                || same_origin(&parsed, &origin)'''
+test = ["python3", "scripts/test.py", "wpt", "fetch/api/request/request-init-001"]
+
+[[mutant]]
+name = "a referrer that doesn't parse"
+file = "crates/dom_api/src/request.rs"
+from = '''                .map_err(|_| {
+                    construct_error(format!(
+                        "Referrer '{}' is not a valid URL.",
+                        referrer.as_str()
+                    ))
+                })?;'''
+to = '''                .unwrap_or_else(|_| Url::parse("about:client").unwrap());'''
+
+[[mutant]]
+name = "navigate mode"
+file = "crates/dom_api/src/request.rs"
+from = '''    if mode == Some(DataMode::Navigate) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "only-if-cached in any mode"
+file = "crates/dom_api/src/request.rs"
+from = '''    if data.cache == DataCache::OnlyIfCached && data.mode != DataMode::SameOrigin {'''
+to = '''    if data.cache == DataCache::OnlyIfCached && data.mode == DataMode::Navigate {'''
+
+[[mutant]]
+name = "the init's credentials go"
+file = "crates/dom_api/src/request.rs"
+from = '''        data.credentials = credentials.into();'''
+to = '''        let _ = credentials;'''
+
+[[mutant]]
+name = "a method that isn't a token"
+file = "crates/dom_api/src/request.rs"
+from = '''        if !headers::is_header_name(method.as_str()) {'''
+to = '''        if method.as_str().is_empty() {'''
+
+[[mutant]]
+name = "a forbidden method"
+file = "crates/dom_api/src/request.rs"
+from = '''        if protocol::network::is_forbidden_method(method.as_str()) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "methods aren't normalized"
+file = "crates/dom_api/src/request.rs"
+from = '''        data.method = normalize_method(method.as_str());'''
+to = '''        data.method = method.as_str().to_owned();'''
+
+[[mutant]]
+name = "every method is normalized"
+file = "crates/dom_api/src/request.rs"
+from = '''        .map_or_else(|| method.to_owned(), |known| (*known).to_owned())'''
+to = '''        .map_or_else(|| method.to_ascii_uppercase(), |known| (*known).to_owned())'''
+
+[[mutant]]
+name = "a null signal keeps the input's"
+file = "crates/dom_api/src/request.rs"
+from = '''    if let Some(given) = init.signal {
+        signal = given;
+    }'''
+to = '''    if let Some(Some(given)) = init.signal {
+        signal = Some(given);
+    }'''
+
+[[mutant]]
+name = "the signal isn't a dependent"
+file = "crates/dom_api/src/request.rs"
+from = '''    let signal = cx
+        .mutate()
+        .create_dependent_abort_signal(Some(&realm), &signals);
+    let input_list'''
+to = '''    let _ = signals;
+    let signal = cx.mutate().create_abort_signal(Some(&realm));
+    let input_list'''
+
+[[mutant]]
+name = "a no-cors request's headers are a request's"
+file = "crates/dom_api/src/request.rs"
+from = '''        cx.mutate()
+            .set_headers_guard(&request_headers, HeadersGuard::RequestNoCors);'''
+to = ''''''
+
+[[mutant]]
+name = "any method in no-cors"
+file = "crates/dom_api/src/request.rs"
+from = '''        if !protocol::network::is_cors_safelisted_method(&data.method) {'''
+to = '''        if data.method == "TRACK" {'''
+
+[[mutant]]
+name = "the input's headers stay with init's"
+file = "crates/dom_api/src/request.rs"
+from = '''        cx.mutate().set_headers_list(&request_headers, Vec::new());'''
+to = ''''''
+
+[[mutant]]
+name = "an init without headers drops the input's"
+file = "crates/dom_api/src/request.rs"
+from = '''                for (name, value) in list {
+                    headers::append_to(cx, &request_headers, &name, &value)?;
+                }'''
+to = '''                let _ = list;'''
+
+[[mutant]]
+name = "a GET may have a body"
+file = "crates/dom_api/src/request.rs"
+from = '''        && matches!(data.method.as_str(), "GET" | "HEAD")
+    {'''
+to = '''        && matches!(data.method.as_str(), "HEAD")
+    {'''
+
+[[mutant]]
+name = "the body's Content-Type isn't added"
+file = "crates/dom_api/src/request.rs"
+from = '''        if !headers::contains(&list, "Content-Type") {
+            headers::append(&mut list, "Content-Type", content_type);
+            cx.mutate().set_headers_list(&request_headers, list);
+        }
+    } else if'''
+to = '''        let _ = (list, content_type);
+    } else if'''
+
+[[mutant]]
+name = "a used input's body"
+file = "crates/dom_api/src/request.rs"
+from = '''        if body::body_used(cx, Body::Request(input_request)) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "the input isn't used"
+file = "crates/dom_api/src/request.rs"
+from = '''        cx.mutate().take_request_body(input_request);'''
+to = ''''''
+
+[[mutant]]
+name = "the new request is used as its input was"
+file = "crates/dom_api/src/request.rs"
+from = '''    data.body_used = false;
+    Ok(cx
+        .mutate()
+        .create_request('''
+to = '''    Ok(cx
+        .mutate()
+        .create_request('''
+
+# --- dom_api: the members ----------------------------------------------------
+
+[[mutant]]
+name = "no referrer reads as the client"
+file = "crates/dom_api/src/request.rs"
+from = '''        Referrer::NoReferrer => String::new(),'''
+to = '''        Referrer::NoReferrer => "about:client".to_owned(),'''
+
+[[mutant]]
+name = "a clone's signal is its own"
+file = "crates/dom_api/src/request.rs"
+from = '''        .create_dependent_abort_signal(Some(&realm), &[signal]);'''
+to = '''        .create_dependent_abort_signal(Some(&realm), &[]);
+    let _ = signal;'''
+
+[[mutant]]
+name = "a used request clones"
+file = "crates/dom_api/src/request.rs"
+from = '''    body::check_usable(cx, Body::Request(this))?;
+    let (data, list, guard, realm, signal) = {'''
+to = '''    let (data, list, guard, realm, signal) = {'''
+
+[[mutant]]
+name = "a request's body reads as a response's would"
+file = "crates/dom_api/src/body.rs"
+from = '''            Body::Request(request) => cx.mutate().take_request_body(request),'''
+to = '''            Body::Request(request) => cx.read().request_data(request).body,'''
+
+# --- dom_api: fetch() of a Request ---------------------------------------------
+
+# 2a's `fetch()` sent only `GET`; 2b sends any method (`mutants-2b.toml`).
+
+[[mutant]]
+name = "fetch() sends the init's headers only"
+file = "crates/dom_api/src/fetch.rs"
+from = '''            read.headers_list(&read.request_headers(&request)),'''
+to = '''            Vec::<(String, String)>::new(),'''
+
+# --- dom_api: the request-no-cors guard --------------------------------------
+
+[[mutant]]
+name = "no-cors appends any header"
+file = "crates/dom_api/src/headers.rs"
+from = '''        if !protocol::network::is_no_cors_safelisted_request_header(name, &combined) {'''
+to = '''        if combined.is_empty() {'''
+
+[[mutant]]
+name = "no-cors appends look at the value alone"
+file = "crates/dom_api/src/headers.rs"
+from = '''        let combined = match get(&list, name) {'''
+to = '''        let combined = match None::<String> {'''
+test = ["python3", "scripts/test.py", "wpt", "fetch/api/headers/headers-no-cors"]
+
+[[mutant]]
+name = "no-cors sets any header"
+file = "crates/dom_api/src/headers.rs"
+from = '''        && !protocol::network::is_no_cors_safelisted_request_header(name.as_str(), value)'''
+to = '''        && value.is_empty()'''
+
+# --- dom_api: Present ---------------------------------------------------------
+
+[[mutant]]
+name = "a null member is no member"
+file = "crates/dom_api/src/value.rs"
+from = '''    fn from_value(value: Value) -> Result<Option<T::Rust>, ApiError> {
+        T::from_value(value).map(Some)
+    }'''
+to = '''    fn from_value(value: Value) -> Result<Option<T::Rust>, ApiError> {
+        T::from_value(value).map(|_| None)
+    }'''
+
+# --- dom_wasm: a record's none -------------------------------------------------
+
+[[mutant]]
+name = "a guest's none is null"
+file = "crates/dom_wasm/src/host.rs"
+from = '''                if member.ty.nullable && matches!(field, Val::Option(None)) {
+                    continue;
+                }'''
+to = ''''''
+test = ["python3", "scripts/test.py", "reftest", "wasm/w9"]
+
+# --- protocol: the CORS-safelisted request-headers ---------------------------------
+
+[[mutant]]
+name = "any length"
+file = "crates/protocol/src/network.rs"
+from = '''    if value.chars().count() > 128 {'''
+to = '''    if value.chars().count() > 129 {'''
+test = ["cargo", "test", "-q", "-p", "protocol", "--test", "network"]
+
+[[mutant]]
+name = "an unsafe byte in Accept"
+file = "crates/protocol/src/network.rs"
+from = '''        "accept" => !value.contains(is_cors_unsafe_request_header_byte),'''
+to = '''        "accept" => true,'''
+test = ["cargo", "test", "-q", "-p", "protocol", "--test", "network"]
+
+[[mutant]]
+name = "a tab is unsafe"
+file = "crates/protocol/src/network.rs"
+from = '''    (c < '\u{20}' && c != '\t') ||'''
+to = '''    (c < '\u{20}' && c != '\u{1}') ||'''
+test = ["cargo", "test", "-q", "-p", "protocol", "--test", "network"]
+
+[[mutant]]
+name = "any language"
+file = "crates/protocol/src/network.rs"
+from = '''            .all(|c| c.is_ascii_alphanumeric() || " *,-.;=".contains(c)),'''
+to = '''            .all(|c| c.is_ascii_alphanumeric() || " *,-.;=@/".contains(c)),'''
+test = ["cargo", "test", "-q", "-p", "protocol", "--test", "network"]
+
+[[mutant]]
+name = "any Content-Type"
+file = "crates/protocol/src/network.rs"
+from = '''                        "application/x-www-form-urlencoded" | "multipart/form-data" | "text/plain"'''
+to = '''                        "application/x-www-form-urlencoded" | "multipart/form-data" | "text/plain" | "application/json"'''
+test = ["cargo", "test", "-q", "-p", "protocol", "--test", "network"]
+
+[[mutant]]
+name = "a suffix range"
+file = "crates/protocol/src/network.rs"
+from = '''        "range" => parse_single_range(value).is_some_and(|(start, _)| start.is_some()),'''
+to = '''        "range" => parse_single_range(value).is_some(),'''
+test = ["cargo", "test", "-q", "-p", "protocol", "--test", "network"]
+
+[[mutant]]
+name = "a backwards range"
+file = "crates/protocol/src/network.rs"
+from = '''        (Some(start), Some(end)) if start > end => None,'''
+to = '''        (Some(start), Some(end)) if start > end + 100 => None,'''
+test = ["cargo", "test", "-q", "-p", "protocol", "--test", "network"]
+
+[[mutant]]
+name = "a range without a start or end"
+file = "crates/protocol/src/network.rs"
+from = '''        (None, None) => None,'''
+to = '''        (None, None) => Some((Some(0), None)),'''
+test = ["cargo", "test", "-q", "-p", "protocol", "--test", "network"]
+
+[[mutant]]
+name = "any range unit"
+file = "crates/protocol/src/network.rs"
+from = '''    if !unit.eq_ignore_ascii_case("bytes") {'''
+to = '''    if unit.is_empty() {'''
+test = ["cargo", "test", "-q", "-p", "protocol", "--test", "network"]
+
+[[mutant]]
+name = "Range is a no-CORS-safelisted name"
+file = "crates/protocol/src/network.rs"
+from = '''        "content-language",
+        "content-type",
+    ]
+    .iter()
+    .any(|safelisted| name.eq_ignore_ascii_case(safelisted))'''
+to = '''        "content-language",
+        "content-type",
+        "range",
+    ]
+    .iter()
+    .any(|safelisted| name.eq_ignore_ascii_case(safelisted))'''
+test = ["cargo", "test", "-q", "-p", "protocol", "--test", "network"]
+
+[[mutant]]
+name = "any method is CORS-safelisted"
+file = "crates/protocol/src/network.rs"
+from = '''    matches!(method, "GET" | "HEAD" | "POST")'''
+to = '''    matches!(method, "GET" | "HEAD" | "POST" | "PUT")'''
+test = ["cargo", "test", "-q", "-p", "protocol", "--test", "network"]

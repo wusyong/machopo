@@ -1,0 +1,42 @@
+# Stage 5b-3a: the style engine's work counts, restored on style_next's
+# tests, each catch the optimization it counts being taken out.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "style_next", "--test", "it"]
+timeout = 1200
+
+[[mutant]]
+name = "style_next: no buckets, every selector matched"
+file = "crates/style_next/src/lib.rs"
+from = '''            Which::Tree if self.linear => {'''
+to = '''            Which::Tree if true => {'''
+
+[[mutant]]
+name = "style_next: no bloom filter"
+file = "crates/style_next/src/lib.rs"
+from = '''                if !selector_may_match(&hashes, self.bloom.filter()) {'''
+to = '''                if false && !selector_may_match(&hashes, self.bloom.filter()) {'''
+
+[[mutant]]
+name = "style: the matched properties cache never hits"
+file = "crates/style/src/cascade.rs"
+from = '''            .filter(|entry| entry.matches(key))'''
+to = '''            .filter(|entry| entry.matches(key) && false)'''
+
+[[mutant]]
+name = "style: the presentation attribute cache keeps nothing"
+file = "crates/style/src/hints.rs"
+from = '''        if let Some(found) = self.entries.get(name).and_then(|values| values.get(value)) {'''
+to = '''        if let Some(found) = self.entries.get(name).and_then(|values| values.get(value)).filter(|_| false) {'''
+
+[[mutant]]
+name = "style_next: the document's sheets collected at every recalc"
+file = "crates/style_next/src/lib.rs"
+from = '''            || self.testing.collect_every_tree_scope
+        {'''
+to = '''            || true
+        {'''
+
+[[mutant]]
+name = "style_next: every shadow root's sheets collected at every recalc"
+file = "crates/style_next/src/lib.rs"
+from = '''            self.environment_changed || self.testing.collect_every_tree_scope,'''
+to = '''            true,'''

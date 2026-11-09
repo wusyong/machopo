@@ -1,0 +1,189 @@
+# Stage 1f: the new DOM's heap as cppgc's (gc's driven heap: objects with a
+# JS edge allocated old, the wrapper holding the object's address and the
+# engine handing it over, the JS edge as the engine's own reference, the
+# marker retired), bindings' reset of dropped wrappers, dom_js's wrappers
+# and dom_next's sites. The V8 patch isn't mutated here (each mutant would
+# rebuild V8).
+test = ["cargo", "test", "-q", "-p", "gc", "--test", "it", "js::"]
+timeout = 900
+
+# --- gc: where objects are allocated ------------------------------------------
+
+[[mutant]]
+name = "an object with a JS edge is young in a driven heap"
+file = "crates/gc/src/heap.rs"
+from = '''        let old = self.inner.options.driven && !types::entry(index).js_edges.is_empty();'''
+to = '''        let old = false;'''
+
+[[mutant]]
+name = "every object of a driven heap is old"
+file = "crates/gc/src/heap.rs"
+from = '''        let old = self.inner.options.driven && !types::entry(index).js_edges.is_empty();'''
+to = '''        let old = self.inner.options.driven;'''
+
+[[mutant]]
+name = "an object with a JS edge is old in any heap"
+file = "crates/gc/src/heap.rs"
+from = '''        let old = self.inner.options.driven && !types::entry(index).js_edges.is_empty();'''
+to = '''        let old = !types::entry(index).js_edges.is_empty();'''
+
+# --- gc: handovers --------------------------------------------------------------
+
+[[mutant]]
+name = "a handed-over object isn't marked"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''            if self.marks.mark(data) {
+                if let Some(handed) = &self.handed {'''
+to = '''            if true {
+                if let Some(handed) = &self.handed {'''
+
+[[mutant]]
+name = "a handed-over object isn't marked from"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''                local.push(&self.worklist, data);
+            }
+        }
+        self.handing.fetch_sub(1, Ordering::SeqCst);'''
+to = '''            }
+        }
+        self.handing.fetch_sub(1, Ordering::SeqCst);'''
+
+[[mutant]]
+name = "a thread's handovers aren't published when it's done"
+file = "crates/gc/src/js.rs"
+from = '''    fn drop(&mut self) {
+        self.publish();
+    }'''
+to = '''    fn drop(&mut self) {}'''
+
+[[mutant]]
+name = "another heap's object handed over is marked"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''        if data >= crate::cage::CAGE_BYTES {
+            return;
+        }'''
+to = '''        if false {
+            return;
+        }'''
+
+[[mutant]]
+name = "the verifier doesn't count what was handed over"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''                    sync::lock(handed).push(data);'''
+to = ""
+
+# --- gc: the marker retired -----------------------------------------------------
+
+[[mutant]]
+name = "a handover ignores whether the marking is open"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''        if self.open.load(Ordering::SeqCst) {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "retiring doesn't close the marking"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''        self.open.store(false, Ordering::SeqCst);'''
+to = ""
+
+[[mutant]]
+name = "retiring doesn't wait for the handovers in progress"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''        while self.handing.load(Ordering::SeqCst) != 0 {'''
+to = '''        while false {'''
+
+[[mutant]]
+name = "the marking's end doesn't retire the marker"
+file = "crates/gc/src/heap.rs"
+from = '''        // it marks from now on is of its next one.
+        marking.marker.retire();'''
+to = ""
+
+[[mutant]]
+name = "the heap dropped doesn't retire the marker"
+file = "crates/gc/src/heap.rs"
+from = '''            // torn down while it marks): they touch the pages no more.
+            marking.marker.retire();'''
+to = ""
+
+# --- gc: reading back, JS edges, what an engine may do --------------------------
+
+[[mutant]]
+name = "reading back doesn't mark"
+file = "crates/gc/src/heap.rs"
+from = '''        self.inner.read_weak(offset as u32);'''
+to = ""
+
+[[mutant]]
+name = "reading back another heap's object doesn't panic"
+file = "crates/gc/src/heap.rs"
+from = '''        assert!(offset < cage::CAGE_BYTES, "an object of this heap");'''
+to = ""
+
+[[mutant]]
+name = "the marker doesn't hand the engine the JS edges"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''                        unsafe { local.mark(std::ptr::NonNull::new_unchecked(edge)) };'''
+to = ""
+
+[[mutant]]
+name = "a driven heap collects itself"
+file = "crates/gc/src/heap.rs"
+from = '''        assert!(
+            !self.inner.options.driven,
+            "the engine collects the heap it drives"
+        );'''
+to = ""
+
+[[mutant]]
+name = "an engine holds a heap it doesn't drive"
+file = "crates/gc/src/heap.rs"
+from = '''        assert!(
+            self.inner.options.driven,
+            "an engine holds a driven heap's objects"
+        );'''
+to = ""
+
+[[mutant]]
+name = "an engine holds an object with no JS edge"
+file = "crates/gc/src/heap.rs"
+from = '''        assert!(
+            !types::entry(T::__type().index()).js_edges.is_empty(),
+            "an object an engine holds has a JS edge"
+        );'''
+to = ""
+
+# --- bindings and dom_js: wrappers ----------------------------------------------
+
+[[mutant]]
+name = "a wrapper V8 dropped stays in its node's JS edge"
+file = "crates/bindings/src/unified.rs"
+from = '''        for edge in unsafe { gc::js_edges_of(object) } {'''
+to = '''        for edge in unsafe { gc::js_edges_of(object) }.take(0) {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "next_dom"]
+
+[[mutant]]
+name = "a node's wrapper is made again"
+file = "crates/dom_js/src/next.rs"
+from = '''            Some(wrapper) => Found::Wrapped(wrapper),'''
+to = '''            Some(_) => Found::Unwrapped(cx.root(node)),'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "next_dom"]
+
+[[mutant]]
+name = "a node doesn't keep its wrapper"
+file = "crates/dom_js/src/next.rs"
+from = '''                bindings::set_wrapper(scope, cx.wrapper_edge(node), wrapper);'''
+to = ""
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "next_dom"]
+
+# --- dom_next: sites ------------------------------------------------------------
+
+[[mutant]]
+name = "a node's site isn't its allocation's"
+file = "crates/dom_next/src/lib.rs"
+from = '''        self.gc.alloc_in(
+            site,
+            NodeInit {'''
+to = '''        self.gc.alloc(
+            NodeInit {'''
+test = ["cargo", "test", "-q", "-p", "dom_next", "--test", "it", "gc::"]

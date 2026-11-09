@@ -1,0 +1,171 @@
+# Stage 3b-1: the box tree built from the new DOM (`layout`'s `next`):
+# block and inline content, text, pseudo-elements, what goes to the
+# viewport, the layout tree flags cleared; checked against the old DOM's
+# boxes for kun's reftest pages and a few more.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "layout", "--test", "it", "next::"]
+timeout = 900
+
+[[mutant]]
+name = "the propagated overflow kept on its element"
+file = "crates/layout/src/next.rs"
+from = '''        if cx.propagated == Some(id) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a line clamp container's content not shaped ahead"
+file = "crates/layout/src/next.rs"
+from = '''        cx.in_line_clamp |= style.line_clamp().is_some();
+'''
+to = ''''''
+
+[[mutant]]
+name = "no ::before"
+file = "crates/layout/src/next.rs"
+from = '''        self.collect_pseudo(cx, parent, PseudoId::Before, out);
+'''
+to = ''''''
+
+[[mutant]]
+name = "no ::after"
+file = "crates/layout/src/next.rs"
+from = '''        self.collect_pseudo(cx, parent, PseudoId::After, out);
+'''
+to = ''''''
+
+[[mutant]]
+name = "a column group without its columns"
+file = "crates/layout/src/next.rs"
+from = '''            Display::Table(TableDisplay::ColumnGroup) => {
+                for child in children(cx.dom, parent) {'''
+to = '''            Display::Table(TableDisplay::ColumnGroup) => {
+                for child in children(cx.dom, parent).take(0) {'''
+
+[[mutant]]
+name = "text without its node"
+file = "crates/layout/src/next.rs"
+from = '''                        Some(cx.id(child)),'''
+to = '''                        None,'''
+
+[[mutant]]
+name = "SVG elements built"
+file = "crates/layout/src/next.rs"
+from = '''                        .is_some_and(|name| name.namespace() == names::SVG_NAMESPACE)'''
+to = '''                        .is_some_and(|_| false)'''
+
+[[mutant]]
+name = "display: contents is contents for every element"
+file = "crates/layout/src/next.rs"
+from = '''                            if !contents_is_none(cx.dom, child) {'''
+to = '''                            if true {'''
+
+[[mutant]]
+name = "an out-of-flow element in the flow"
+file = "crates/layout/src/next.rs"
+from = '''                        _ if style.is_out_of_flow() => {'''
+to = '''                        _ if false => {'''
+
+[[mutant]]
+name = "a float in the flow"
+file = "crates/layout/src/next.rs"
+from = '''                        _ if style.float != Float::None => {'''
+to = '''                        _ if false => {'''
+
+[[mutant]]
+name = "a <br> an inline element"
+file = "crates/layout/src/next.rs"
+from = '''                            if is_html(cx.dom, child, names::local::BR) {'''
+to = '''                            if false {'''
+
+[[mutant]]
+name = "a column out of a table built"
+file = "crates/layout/src/next.rs"
+from = '''                        display if display.generates_no_box() => {}
+'''
+to = ''''''
+
+[[mutant]]
+name = "a display: contents pseudo-element a box"
+file = "crates/layout/src/next.rs"
+from = '''        if style.display == Display::Contents {
+            out.extend(content(&style));
+            return;
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "an inline pseudo-element a box"
+file = "crates/layout/src/next.rs"
+from = '''        if style.display == Display::Inline {
+            out.push'''
+to = '''        if false {
+            out.push'''
+
+[[mutant]]
+name = "a floating pseudo-element in the flow"
+file = "crates/layout/src/next.rs"
+from = '''        } else if style.float != Float::None {
+            Child::Inline(InlineItem::Float(box_id))'''
+to = '''        } else if false {
+            Child::Inline(InlineItem::Float(box_id))'''
+
+[[mutant]]
+name = "an out-of-flow pseudo-element in the flow"
+file = "crates/layout/src/next.rs"
+from = '''        out.push(if style.is_out_of_flow() {'''
+to = '''        out.push(if false {'''
+
+[[mutant]]
+name = "an inline-block pseudo-element a block"
+file = "crates/layout/src/next.rs"
+from = '''        } else if style.display.is_atomic_inline() {
+            Child::Inline(InlineItem::Atomic(box_id'''
+to = '''        } else if false {
+            Child::Inline(InlineItem::Atomic(box_id'''
+
+[[mutant]]
+name = "<body> not the body"
+file = "crates/layout/src/next.rs"
+from = '''        let role = if Some(cx.id(element)) == cx.body {'''
+to = '''        let role = if false {'''
+
+[[mutant]]
+name = "containment doesn't keep <body>'s overflow"
+file = "crates/layout/src/next.rs"
+from = '''        .any(|style| applies_any_containment(style));'''
+to = '''        .any(|_| false);'''
+
+[[mutant]]
+name = "clip on the viewport"
+file = "crates/layout/src/next.rs"
+from = '''                    Overflow::Clip => Overflow::Hidden,'''
+to = '''                    Overflow::Clip => Overflow::Clip,'''
+
+[[mutant]]
+name = "a <body> under any root"
+file = "crates/layout/src/next.rs"
+from = '''        .filter(|&root| is_html(dom, root, names::local::HTML))
+'''
+to = ''''''
+
+[[mutant]]
+name = "the flags left set"
+file = "crates/layout/src/next.rs"
+from = '''        clear_layout_tree_flags(dom, document);
+        tree
+'''
+to = '''        tree
+'''
+
+[[mutant]]
+name = "the flags below left set"
+file = "crates/layout/src/next.rs"
+from = '''    if flags.contains(LayoutTreeFlags::CHILD_NEEDS_UPDATE) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "the root's box left out"
+file = "crates/layout/src/next.rs"
+from = '''            tree.boxes[LAYOUT_VIEW].children.push(root_box);
+'''
+to = ''''''

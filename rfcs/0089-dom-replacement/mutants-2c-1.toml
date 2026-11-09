@@ -1,0 +1,154 @@
+# Stage 2c-1: a window as a realm's global (its global proxy wrapping a
+# Window of a new document), its location, #[unforgeable] members, the
+# current realm's window for an event's time, events' paths through a
+# document's window.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_next"]
+timeout = 900
+
+[[mutant]]
+name = "a window's document doesn't know it"
+file = "crates/dom_next/src/window.rs"
+from = '''        data.window.set(self.gc, Some(window));
+        window'''
+to = '''        let _ = data;
+        window'''
+
+[[mutant]]
+name = "a location is made each time"
+file = "crates/dom_next/src/window.rs"
+from = '''        if let Some(location) = window.location.get(self.gc) {
+            return location;
+        }'''
+to = '''        if false {
+            return window.location.get(self.gc).unwrap();
+        }'''
+
+[[mutant]]
+name = "times count from the DOM's start"
+file = "crates/dom_next/src/window.rs"
+from = '''        window.map_or(now, |window| now - window.time_origin.get())'''
+to = '''        { let _ = window; now }'''
+
+[[mutant]]
+name = "a document's empty URL is one"
+file = "crates/dom_next/src/window.rs"
+from = '''        (!url.is_empty()).then(|| url.clone())'''
+to = '''        Some(url.clone())'''
+
+[[mutant]]
+name = "a node's window is none"
+file = "crates/dom_next/src/event.rs"
+from = '''            TargetRef::Node(node) => self.window_of(self.document_of(node)),'''
+to = '''            TargetRef::Node(_) => None,'''
+
+[[mutant]]
+name = "an erased window is no target"
+file = "crates/dom_next/src/event.rs"
+from = '''        match object.downcast::<Window>() {
+            Some(window) => Self::Window(window),'''
+to = '''        match None::<Gc<'gc, Window>> {
+            Some(window) => Self::Window(window),'''
+
+[[mutant]]
+name = "a document's parent is none"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''            None if cx.kind(node) == dom_next::NodeKind::Document => cx'''
+to = '''            None if false && cx.kind(node) == dom_next::NodeKind::Document => cx'''
+
+[[mutant]]
+name = "a load event reaches the window"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''                .filter(|_| *cx.event_type(event).borrow() != "load")'''
+to = '''                .filter(|_| true)'''
+
+[[mutant]]
+name = "a fired event counts from the DOM's start"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        let window = cx.target_window(target.get(cx.gc));'''
+to = '''        let window = { let _ = target; None };'''
+
+[[mutant]]
+name = "pathname is the whole URL"
+file = "crates/dom_api_next/src/window.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''    Ok(DomStr::Owned(url_of(cx, this).path().into()))'''
+to = '''    Ok(DomStr::Owned(url_of(cx, this).as_str().into()))'''
+
+[[mutant]]
+name = "href is always about:blank"
+file = "crates/dom_api_next/src/window.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''    cx.document_url(document)
+        .and_then(|url| url::Url::parse(&url.to_str()).ok())'''
+to = '''    { let _ = document; None::<url::Url> }'''
+
+[[mutant]]
+name = "a new event counts from the DOM's start"
+file = "crates/dom_api_next/src/event.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        front.current_window(cx),
+    ))'''
+to = '''        { let _ = front; None },
+    ))'''
+
+[[mutant]]
+name = "a window's this isn't a target"
+file = "crates/dom_api_next/src/typed.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        if let Some(window) = front.this_as::<dom_next::Window>(cx) {
+            return TargetRef::Window(window);
+        }'''
+to = '''        let _ = TargetRef::Window;'''
+
+[[mutant]]
+name = "an unforgeable attribute is on the prototype"
+file = "crates/dom_js_next/src/templates.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        let (on, attributes) = if is_unforgeable {'''
+to = '''        let (on, attributes) = if false && is_unforgeable {'''
+
+[[mutant]]
+name = "an unforgeable member is configurable"
+file = "crates/dom_js_next/src/templates.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''fn unforgeable() -> v8::PropertyAttribute {
+    v8::PropertyAttribute::DONT_DELETE
+}'''
+to = '''fn unforgeable() -> v8::PropertyAttribute {
+    v8::PropertyAttribute::NONE
+}'''
+
+[[mutant]]
+name = "an unforgeable method is on the prototype"
+file = "crates/dom_js_next/src/templates.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''                if desc.unforgeable {
+                    self.instance.set_with_attr('''
+to = '''                if false {
+                    self.instance.set_with_attr('''
+
+[[mutant]]
+name = "the current window is none"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        bindings::unwrap_object::<dom_next::Window>(self.scope, cx.gc, global)'''
+to = '''        { let _ = (global, cx); None }'''
+
+[[mutant]]
+name = "a realm's document has no URL"
+file = "crates/dom_js_next/src/window.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        cx.set_document_url(document, url);'''
+to = '''        let _ = url;'''
+
+[[mutant]]
+name = "the getters' unforgeable flag is dropped"
+file = "crates/dom_api_next_macros/src/lib.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''                            returns: <#ty as #api::typed::RetType>::DESC,
+                            unforgeable: #unforgeable,'''
+to = '''                            returns: <#ty as #api::typed::RetType>::DESC,
+                            unforgeable: { let _ = #unforgeable; false },'''

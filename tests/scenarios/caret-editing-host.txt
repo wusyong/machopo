@@ -1,0 +1,21 @@
+# The caret in an editing host: none until a click gives it the focus and
+# the caret at its start; it shows only while the page has the focus (it
+# goes when the address field takes it), and goes once the host loses
+# the focus.
+navigate pages/caret-editing-host.html
+wait-loaded
+capture none
+click #host
+wait-text #out "focused"
+expect-differs none #host
+capture shown
+screenshot focused
+key primary+l
+expect-differs shown #host
+screenshot address-field
+click #host
+wait-text #out "focused"
+capture again
+click #blank
+wait-text #out "not focused"
+expect-differs again #host

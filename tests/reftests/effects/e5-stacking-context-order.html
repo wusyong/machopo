@@ -1,0 +1,8 @@
+<!DOCTYPE html>
+<title>E5: an opacity or transform stacking context paints after its normal-flow siblings</title>
+<link rel="match" href="e5-stacking-context-order-ref.html">
+<style>html, body { margin: 0 }</style>
+<div style="width: 100px; height: 100px; opacity: 0.5; background-color: green"></div>
+<div style="width: 100px; height: 100px; margin-top: -100px; background-color: red"></div>
+<div style="width: 100px; height: 100px; transform: translate(0, 0); background-color: green"></div>
+<div style="width: 100px; height: 100px; margin-top: -100px; background-color: red"></div>

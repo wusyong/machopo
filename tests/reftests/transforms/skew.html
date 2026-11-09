@@ -1,0 +1,7 @@
+<!DOCTYPE html>
+<title>skew() slants about the center of the border box</title>
+<link rel="match" href="skew-ref.html">
+<meta name="fuzzy" content="maxDifference=0-255;totalPixels=0-400">
+<style>html, body { margin: 0 } div { position: absolute; width: 100px; height: 100px; background-color: green }</style>
+<div style="left: 100px; top: 100px; transform: skewX(45deg)"></div>
+<div style="left: 400px; top: 100px; transform: skew(0, -45deg)"></div>

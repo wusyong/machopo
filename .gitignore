@@ -1,0 +1,4 @@
+/target
+*.png
+!tests/**/*.png
+__pycache__/

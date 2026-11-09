@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>A child frame laid out at another size selects its images again</title>
+<link rel=match href=f8-child-resized-ref.html>
+<style>
+  body { margin: 0; }
+  iframe { display: block; width: 300px; height: 100px; border: 0; }
+</style>
+<iframe src="support/f8-child.html"></iframe>
+<script>
+  onload = () => {
+    const iframe = document.querySelector("iframe");
+    const img = iframe.contentDocument.querySelector("img");
+    img.onload = () => document.documentElement.classList.remove("reftest-wait");
+    iframe.style.width = "100px";
+  };
+</script>

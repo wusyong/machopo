@@ -1,0 +1,125 @@
+# Mutation test of the first stage: `dom` records each element of an
+# inserted or removed subtree that form owners and selects may concern,
+# and `dom_api` handles one element per record:
+# python3 scripts/test.py mutate rfcs/0042-form-bookkeeping/mutants-1.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "forms::"]
+timeout = 900
+
+# dom: what is recorded.
+
+[[mutant]]
+name = "only a subtree's root is recorded"
+file = "crates/dom/src/scope.rs"
+from = '''        if let Some(child) = unsafe { current.first_child.get() } {
+            current = child;
+            continue;
+        }'''
+to = '''        if let Some(child) = unsafe { current.first_child.get() }.filter(|_| false) {
+            current = child;
+            continue;
+        }'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::form_elements"]
+
+[[mutant]]
+name = "options aren't recorded"
+file = "crates/dom/src/scope.rs"
+from = '''            FORM_ELEMENTS.iter().any(|form| name.is_html(form))
+                || name.is_html(&local_name!("option"))'''
+to = '''            FORM_ELEMENTS.iter().any(|form| name.is_html(form))'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::form_elements"]
+
+[[mutant]]
+name = "an element with an id is recorded before any form attribute"
+file = "crates/dom/src/scope.rs"
+from = '''        }) || (ids
+            && matches!('''
+to = '''        }) || (true
+            && matches!('''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::form_elements"]
+
+[[mutant]]
+name = "a removal names the parent as the subtree's root"
+file = "crates/dom/src/scope.rs"
+from = '''            let (root, parent) = (node.id, parent.id);'''
+to = '''            let (root, parent) = (parent.id, parent.id);'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::form_elements"]
+
+# dom_api: what is done.
+
+[[mutant]]
+name = "a listed element inserted keeps its owner"
+file = "crates/dom_api/src/listed_element.rs"
+from = '''                if !element.get(&cx.read()).parser_inserted() {
+                    reset_form_owner(cx, &element, not_yet);
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "an element is inserted for good at its first record"
+file = "crates/dom_api/src/listed_element.rs"
+from = '''        let not_yet = |id: NodeId| last_inserted.get(&id).is_some_and(|&at| at > index);'''
+to = '''        let not_yet = |id: NodeId| last_inserted.get(&id).is_some_and(|&at| at > index && false);'''
+
+[[mutant]]
+name = "an element is never inserted for good"
+file = "crates/dom_api/src/listed_element.rs"
+from = '''        let not_yet = |id: NodeId| last_inserted.get(&id).is_some_and(|&at| at > index);'''
+to = '''        let not_yet = |id: NodeId| last_inserted.get(&id).is_some_and(|&at| at >= index);'''
+
+[[mutant]]
+name = "an option removed leaves its select as it was"
+file = "crates/dom_api/src/listed_element.rs"
+from = '''                let select = crate::select::option_removed(&cx.read(), parent);'''
+to = '''                let select = crate::select::option_removed(&cx.read(), parent).filter(|_| false);'''
+
+[[mutant]]
+name = "an option inserted leaves its select as it was"
+file = "crates/dom_api/src/listed_element.rs"
+from = '''                let select = crate::select::option_inserted(&mut cx.mutate(), &element, not_yet);'''
+to = '''                let select = crate::select::option_inserted(&mut cx.mutate(), &element, not_yet).filter(|_| false);'''
+
+[[mutant]]
+name = "the selects whose options changed don't run the algorithm"
+file = "crates/dom_api/src/listed_element.rs"
+from = '''        crate::select::selectedness_setting(&mut m, select, &|_| false);'''
+to = ''''''
+
+[[mutant]]
+name = "a form removed leaves its elements outside it theirs"
+file = "crates/dom_api/src/listed_element.rs"
+from = '''                if let (true, Some(parent)) = (is_form(node), parent)'''
+to = '''                if let (true, Some(parent)) = (is_form(node) && false, parent)'''
+
+[[mutant]]
+name = "a listed element removed with its owner outside keeps it"
+file = "crates/dom_api/src/listed_element.rs"
+from = '''                        .is_some_and(|owner| !is_inclusive_descendant(owner, removed))
+                {
+                    reset.push(element.clone());'''
+to = '''                        .is_some_and(|owner| is_inclusive_descendant(owner, removed))
+                {
+                    reset.push(element.clone());'''
+
+[[mutant]]
+name = "an element with an id inserted changes no form attribute's owner"
+file = "crates/dom_api/src/listed_element.rs"
+from = '''            if id && cx.mutate().form_attributes_seen() {
+                batch.reset_named(cx, &element, not_yet);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "a tree's named elements are reset by nothing"
+file = "crates/dom_api/src/listed_element.rs"
+from = '''        if self.named.insert(tree) {'''
+to = '''        if self.named.insert(tree) && false {'''
+
+# select: an option inserted selected.
+
+[[mutant]]
+name = "an option inserted selected leaves the others selected"
+file = "crates/dom_api/src/select.rs"
+from = '''    if !not_yet(option.id()) {
+        unselect_others(m, option, not_yet);
+    }'''
+to = ''''''

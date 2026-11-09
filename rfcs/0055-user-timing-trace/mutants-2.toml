@@ -1,0 +1,161 @@
+# 2: kun writes User Timing into the trace: `dom_api` sends a mark's and a
+# measure's event (`performance`), `shell`'s trace layer hands it to
+# `bindings::trace`, which writes the fork's events (whose C++ the last
+# ones break: each rebuilds V8 and links it through RUSTY_V8_ARCHIVE; V8
+# builds with -Werror, and a mutant it doesn't build passes, so that it
+# shows as missed rather than caught).
+#   RUSTY_V8_ARCHIVE=<../third_party/rusty_v8_artifacts, absolute> \
+#     python3 scripts/test.py mutate rfcs/0055-user-timing-trace/mutants-2.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "performance::"]
+timeout = 900
+
+[[mutant]]
+name = "how long ago from the coarsened now"
+file = "crates/dom_api/src/performance.rs"
+from = '''    let now = window_clock(cx, window);'''
+to = '''    let now = window_now(cx, window);'''
+
+[[mutant]]
+name = "how long ago, the other way"
+file = "crates/dom_api/src/performance.rs"
+from = '''    let ago = |time: f64| ((now - time) * 1e6) as i64;'''
+to = '''    let ago = |time: f64| ((time - now) * 1e6) as i64;'''
+
+[[mutant]]
+name = "a measure ends at its start"
+file = "crates/dom_api/src/performance.rs"
+from = '''            end_ago_ns = ago(start + entry.duration()),'''
+to = '''            end_ago_ns = ago(start),'''
+
+[[mutant]]
+name = "a measure starts at its end"
+file = "crates/dom_api/src/performance.rs"
+from = '''            start_ago_ns = ago(start),'''
+to = '''            start_ago_ns = ago(start + entry.duration()),'''
+
+[[mutant]]
+name = "mark() sends nothing"
+file = "crates/dom_api/src/performance.rs"
+from = '''    cx.mutate().add_performance_entry(this, &mark);
+    trace_entry(cx, &window, &mark);'''
+to = '''    cx.mutate().add_performance_entry(this, &mark);'''
+
+[[mutant]]
+name = "measure() sends nothing"
+file = "crates/dom_api/src/performance.rs"
+from = '''    cx.mutate().add_performance_entry(this, &measure);
+    trace_entry(cx, &window, &measure);'''
+to = '''    cx.mutate().add_performance_entry(this, &measure);'''
+
+[[mutant]]
+name = "the constructor's mark is sent"
+file = "crates/dom_api/src/performance.rs"
+from = '''    make_mark(cx, &window, mark_name.as_str(), mark_options)
+}'''
+to = '''    let mark = make_mark(cx, &window, mark_name.as_str(), mark_options)?;
+    trace_entry(cx, &window, &mark);
+    Ok(mark)
+}'''
+
+[[mutant]]
+name = "sent only when nothing takes it"
+file = "crates/dom_api/src/performance.rs"
+from = '''    if !tracing::enabled!(target: "blink.user_timing", tracing::Level::TRACE) {'''
+to = '''    if tracing::enabled!(target: "blink.user_timing", tracing::Level::TRACE) {'''
+
+[[mutant]]
+name = "a mark under another target"
+file = "crates/dom_api/src/performance.rs"
+from = '''            tracing::trace!(target: "blink.user_timing", mark = entry.name(), ago_ns = ago(start));'''
+to = '''            tracing::trace!(target: "dom_api", mark = entry.name(), ago_ns = ago(start));'''
+
+[[mutant]]
+name = "the trace takes spans only"
+file = "crates/shell/src/trace.rs"
+from = '''    metadata.is_span() || metadata.target() == USER_TIMING'''
+to = '''    metadata.is_span()'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "--test", "it", "--", "trace::"]
+
+[[mutant]]
+name = "the trace takes every event"
+file = "crates/shell/src/trace.rs"
+from = '''    metadata.is_span() || metadata.target() == USER_TIMING'''
+to = '''    true'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "--test", "it", "--", "trace::"]
+
+[[mutant]]
+name = "a mark's time the other way"
+file = "crates/shell/src/trace.rs"
+from = '''            "ago_ns" => self.ago = Some(value),'''
+to = '''            "ago_ns" => self.ago = Some(-value),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "--test", "it", "--", "trace::"]
+
+[[mutant]]
+name = "a measure's start and end swapped in the layer"
+file = "crates/shell/src/trace.rs"
+from = '''            } => (self.measure)(&name, start, end),'''
+to = '''            } => (self.measure)(&name, end, start),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "--test", "it", "--", "trace::"]
+
+[[mutant]]
+name = "the layer's marks go nowhere"
+file = "crates/shell/src/trace.rs"
+from = '''        mark: trace::mark,'''
+to = '''        mark: |_, _| {},'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "trace::"]
+
+[[mutant]]
+name = "blink.user_timing isn't recorded"
+file = "crates/bindings/src/trace.rs"
+from = '''    "kun",
+    "blink.user_timing",
+];'''
+to = '''    "kun",
+];'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "trace::"]
+
+[[mutant]]
+name = "bindings' mark the other way"
+file = "crates/bindings/src/trace.rs"
+from = '''    v8::kun_trace::mark(name, ago);'''
+to = '''    v8::kun_trace::mark(name, -ago);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "trace::"]
+
+[[mutant]]
+name = "bindings' measure from its end to its start"
+file = "crates/bindings/src/trace.rs"
+from = '''    v8::kun_trace::measure(name, start_ago, end_ago);'''
+to = '''    v8::kun_trace::measure(name, end_ago, start_ago);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "trace::"]
+
+[[mutant]]
+name = "the fork's measure tracks counted from 1"
+file = "../third_party/rusty_v8/src/machopo_trace.cc"
+from = '''  return x ^ (x >> 31);'''
+to = '''  return (x ^ (x >> 31)) * 0 + measures.load();'''
+test = ["sh", "-c", "python3 scripts/ci.py v8 --profile release > /dev/null 2>&1 || exit 0; touch ../third_party/rusty_v8/BUILD.gn && cargo test -q -p shell --test it -- trace::"]
+
+[[mutant]]
+name = "the fork's measures on the thread's track"
+file = "../third_party/rusty_v8/src/machopo_trace.cc"
+from = '''  perfetto::Track track(NextMeasureTrackId(),
+                        perfetto::ThreadTrack::Current());'''
+to = '''  perfetto::Track track(NextMeasureTrackId() * 0,
+                        perfetto::ThreadTrack::Current());'''
+test = ["sh", "-c", "python3 scripts/ci.py v8 --profile release > /dev/null 2>&1 || exit 0; touch ../third_party/rusty_v8/BUILD.gn && cargo test -q -p shell --test it -- trace::"]
+
+[[mutant]]
+name = "the fork's events now, however long ago"
+file = "../third_party/rusty_v8/src/machopo_trace.cc"
+from = '''  return ago < now ? now - ago : 0;'''
+to = '''  return ago < now ? now : 0;'''
+test = ["sh", "-c", "python3 scripts/ci.py v8 --profile release > /dev/null 2>&1 || exit 0; touch ../third_party/rusty_v8/BUILD.gn && cargo test -q -p shell --test it -- trace::"]
+
+[[mutant]]
+name = "the fork's measure ends with a later now"
+file = "../third_party/rusty_v8/src/machopo_trace.cc"
+from = '''  TRACE_EVENT_END("blink.user_timing", track, TraceTimeAgo(now, end_ago_ns));'''
+to = '''  TRACE_EVENT_END("blink.user_timing", track,
+                  TraceTimeAgo(kun_trace::TrackEvent::GetTraceTimeNs(),
+                               end_ago_ns));'''
+test = ["sh", "-c", "python3 scripts/ci.py v8 --profile release > /dev/null 2>&1 || exit 0; touch ../third_party/rusty_v8/BUILD.gn && cargo test -q -p shell --test it -- trace::"]

@@ -1,0 +1,385 @@
+# Mutation test of stage 1a: the flat tree, the marks across shadow roots
+# and for tree scopes' sheets, each tree scope's sheets in style,
+# inheritance along the flat tree and `display: contents` (2026-10-14):
+# python3 scripts/test.py mutate rfcs/0046-shadow-tree-rendering/mutants-1a.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "shadow::", "invalidation::", "cascade::"]
+timeout = 900
+
+# --- dom: the marks ---
+
+[[mutant]]
+name = "style marks stop at a shadow root"
+file = "crates/dom/src/scope.rs"
+from = '''    let mut ancestor = unsafe { parent_or_shadow_host(node) };
+    while let Some(node) = ancestor {
+        let mut flags = node.style_flags.get();'''
+to = '''    let mut ancestor = unsafe { node.parent.get() };
+    while let Some(node) = ancestor {
+        let mut flags = node.style_flags.get();'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "flat_tree::"]
+
+[[mutant]]
+name = "layout marks stop at a shadow root"
+file = "crates/dom/src/scope.rs"
+from = '''    let mut ancestor = unsafe { parent_or_shadow_host(node) };
+    while let Some(node) = ancestor {
+        let mut flags = node.layout_tree_flags.get();'''
+to = '''    let mut ancestor = unsafe { node.parent.get() };
+    while let Some(node) = ancestor {
+        let mut flags = node.layout_tree_flags.get();'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "flat_tree::"]
+
+[[mutant]]
+name = "style marks stop above a shadow root"
+file = "crates/dom/src/scope.rs"
+from = '''        node.style_flags.set(flags);
+        // SAFETY: as above.
+        ancestor = unsafe { parent_or_shadow_host(node) };'''
+to = '''        node.style_flags.set(flags);
+        // SAFETY: as above.
+        ancestor = unsafe { node.parent.get() };'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "flat_tree::"]
+
+[[mutant]]
+name = "layout marks stop above a shadow root"
+file = "crates/dom/src/scope.rs"
+from = '''        node.layout_tree_flags.set(flags);
+        // SAFETY: as above.
+        ancestor = unsafe { parent_or_shadow_host(node) };'''
+to = '''        node.layout_tree_flags.set(flags);
+        // SAFETY: as above.
+        ancestor = unsafe { node.parent.get() };'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "flat_tree::"]
+
+[[mutant]]
+name = "the style phase's layout marks stop above a shadow root"
+file = "crates/dom/src/scope.rs"
+from = '''            ancestor = node.parent_or_shadow_host();'''
+to = '''            ancestor = node.parent();'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "flat_tree::"]
+
+[[mutant]]
+name = "a shadow root isn't a tree scope"
+file = "crates/dom/src/scope.rs"
+from = '''        NodeKindData::DocumentFragment { shadow, .. } => shadow.is_some(),'''
+to = '''        NodeKindData::DocumentFragment { shadow, .. } => shadow.is_none(),'''
+
+[[mutant]]
+name = "a <link> owns no sheet"
+file = "crates/dom/src/scope.rs"
+from = '''            || name.is_html(&local_name!("link"))
+    })'''
+to = '''            || false
+    })'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "flat_tree::"]
+
+[[mutant]]
+name = "a <style> deep in what is inserted isn't found"
+file = "crates/dom/src/scope.rs"
+from = '''        let mut child = unsafe { node.first_child.get() };
+        while let Some(c) = child {
+            stack.push(c);'''
+to = '''        let mut child = unsafe { node.first_child.get() };
+        while let Some(c) = child {
+            let _ = &stack;'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "flat_tree::"]
+
+[[mutant]]
+name = "inserting a <style> marks nothing"
+file = "crates/dom/src/scope.rs"
+from = '''        if is_style_sheet_owner(parent_node) || unsafe { has_style_sheet_owner(child_node) } {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "removing a <style> marks nothing"
+file = "crates/dom/src/scope.rs"
+from = '''        if is_style_sheet_owner(parent) || unsafe { has_style_sheet_owner(node) } {'''
+to = '''        if false {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "flat_tree::"]
+
+[[mutant]]
+name = "a <style>'s text marks nothing"
+file = "crates/dom/src/scope.rs"
+from = '''            if is_style_sheet_owner(parent) {
+                set_tree_scope_style_sheets_changed(parent);'''
+to = '''            if false {
+                set_tree_scope_style_sheets_changed(parent);'''
+
+[[mutant]]
+name = "a <style>'s attribute marks nothing"
+file = "crates/dom/src/scope.rs"
+from = '''        if is_style_sheet_owner(element) {
+            set_tree_scope_style_sheets_changed(element);'''
+to = '''        if false {
+            set_tree_scope_style_sheets_changed(element);'''
+
+[[mutant]]
+name = "a shadow root in another document isn't marked"
+file = "crates/dom/src/scope.rs"
+from = '''                style_sheets_changed: shadow_root,'''
+to = '''                style_sheets_changed: false,'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "flat_tree::"]
+
+[[mutant]]
+name = "attaching a shadow root doesn't build the host again"
+file = "crates/dom/src/shadow_root.rs"
+from = '''        set_needs_reattach(self.own(host));'''
+to = '''        let _ = host;'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "flat_tree::"]
+
+[[mutant]]
+name = "a slot whose nodes changed isn't marked"
+file = "crates/dom/src/slot.rs"
+from = '''            set_layout_children_changed(self.own(slot));'''
+to = '''            let _ = slot;'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "flat_tree::"]
+
+[[mutant]]
+name = "what moved between slots isn't styled again"
+file = "crates/dom/src/slot.rs"
+from = '''            set_needs_style_recalc(node);
+            set_needs_reattach(node);'''
+to = '''            set_needs_reattach(node);'''
+
+[[mutant]]
+name = "what moved between slots isn't built again"
+file = "crates/dom/src/slot.rs"
+from = '''            set_needs_style_recalc(node);
+            set_needs_reattach(node);'''
+to = '''            set_needs_style_recalc(node);'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "flat_tree::"]
+
+[[mutant]]
+name = "a renamed slot's nodes aren't marked"
+file = "crates/dom/src/slot.rs"
+from = '''                moved_nodes.extend(nodes.filter_map(|node| self.handle_by_id(node)));'''
+to = '''                let _ = nodes;'''
+
+# --- dom: a sheet's adopters ---
+
+[[mutant]]
+name = "a sheet marks those that let go of it"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''            if adopts {'''
+to = '''            if adopts || true {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "style_sheets::"]
+
+[[mutant]]
+name = "a sheet marks no one"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''            if adopts {'''
+to = '''            if adopts && false {'''
+
+[[mutant]]
+name = "a sheet doesn't remember who adopts it"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''            adopters.insert(self, node.persistent());'''
+to = '''            let _ = adopters;'''
+
+[[mutant]]
+name = "adopting marks the document, not the shadow root"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''            adopters.insert(self, node.persistent());
+        }
+        self.set_style_sheets_changed(node);'''
+to = '''            adopters.insert(self, node.persistent());
+        }
+        let document = self.document_of(node);
+        self.set_style_sheets_changed(&document);'''
+
+# --- dom: the flat tree ---
+
+[[mutant]]
+name = "a host's flat children are its own"
+file = "crates/dom/src/slot.rs"
+from = '''        if let Some(root) = node.shadow_root() {
+            return FlatTreeChildren::Dom(root.children());'''
+to = '''        if let Some(root) = node.shadow_root().filter(|_| false) {
+            return FlatTreeChildren::Dom(root.children());'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "flat_tree::"]
+
+[[mutant]]
+name = "a slot's flat children are its fallback"
+file = "crates/dom/src/slot.rs"
+from = '''            if !assigned.is_empty() {'''
+to = '''            if assigned.is_empty() {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "flat_tree::"]
+
+[[mutant]]
+name = "a shadow root's child's flat parent is the shadow root"
+file = "crates/dom/src/slot.rs"
+from = '''        if parent.is_shadow_root() {
+            return parent.host();'''
+to = '''        if parent.is_shadow_root() {
+            return Some(parent);'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "flat_tree::"]
+
+[[mutant]]
+name = "a host's child's flat parent is the host"
+file = "crates/dom/src/slot.rs"
+from = '''            return self.find_slot(node);'''
+to = '''            return Some(parent);'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "flat_tree::"]
+
+[[mutant]]
+name = "a slot's fallback is in the flat tree with nodes assigned"
+file = "crates/dom/src/slot.rs"
+from = '''        if parent.is_slot() && !self.assigned_to(parent).is_empty() {'''
+to = '''        if false {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "flat_tree::"]
+
+# --- style: the sheets of each tree scope ---
+
+[[mutant]]
+name = "a marked shadow root's sheets aren't collected"
+file = "crates/style/src/lib.rs"
+from = '''            && !marked
+            && !media_changed
+        {
+            return (known.cascade.clone(), false);'''
+to = '''            && !media_changed
+        {
+            return (known.cascade.clone(), false);'''
+
+[[mutant]]
+name = "a shadow root's sheets that changed don't restyle its tree"
+file = "crates/style/src/lib.rs"
+from = '''            let shadow_force = restyle
+                || changed'''
+to = '''            let shadow_force = restyle'''
+
+[[mutant]]
+name = "the document's marked sheets aren't collected"
+file = "crates/style/src/lib.rs"
+from = '''        let texts = (author.is_none() || marked || linked_changed || other_document).then(|| {'''
+to = '''        let texts = (author.is_none() || linked_changed || other_document).then(|| {'''
+
+[[mutant]]
+name = "a linked sheet that arrives isn't collected"
+file = "crates/style/src/lib.rs"
+from = '''        let texts = (author.is_none() || marked || linked_changed || other_document).then(|| {'''
+to = '''        let texts = (author.is_none() || marked || other_document).then(|| {'''
+
+[[mutant]]
+name = "another document's sheets aren't collected"
+file = "crates/style/src/lib.rs"
+from = '''        let texts = (author.is_none() || marked || linked_changed || other_document).then(|| {'''
+to = '''        let texts = (author.is_none() || marked || linked_changed).then(|| {'''
+
+[[mutant]]
+name = "the same <style> text is parsed again"
+file = "crates/style/src/lib.rs"
+from = '''            let contents = texts
+                .entry(text)
+                .or_insert_with_key(|text| Arc::new(StyleSheetContents::parse(text, None)))
+                .clone();'''
+to = '''            let contents = Arc::new(StyleSheetContents::parse(&text, None));
+            texts.insert(text, contents.clone());'''
+
+[[mutant]]
+name = "texts no one has are kept"
+file = "crates/style/src/lib.rs"
+from = '''                .retain(|_, contents| Arc::strong_count(contents) > 1);'''
+to = '''                .retain(|_, contents| Arc::strong_count(contents) > 0);'''
+
+[[mutant]]
+name = "a shadow root adopts nothing"
+file = "crates/style/src/lib.rs"
+from = '''        for (contents, media) in root.adopted_style_sheet_contents() {'''
+to = '''        for (contents, media) in root.adopted_style_sheet_contents().into_iter().take(0) {'''
+
+[[mutant]]
+name = "a shadow tree's elements match the document's sheets"
+file = "crates/style/src/lib.rs"
+from = '''            let cascade_scope = cascades[tree_scope].clone();'''
+to = '''            let cascade_scope = cascades[0].clone();'''
+
+[[mutant]]
+name = "a shadow tree's structural selectors are the document's"
+file = "crates/style/src/lib.rs"
+from = '''            let dependencies = cascade_scope.dependencies;'''
+to = '''            let dependencies = author.cascade.dependencies;'''
+
+[[mutant]]
+name = "a shadow root's children changing restyles nothing"
+file = "crates/style/src/lib.rs"
+from = '''                || (dependencies.structural && root_flags.children_changed)'''
+to = '''                || false'''
+
+# --- style: the flat tree ---
+
+[[mutant]]
+name = "a host's child inherits from the host"
+file = "crates/style/src/lib.rs"
+from = '''                                    parent: slot_style,'''
+to = '''                                    parent: style.clone(),'''
+
+[[mutant]]
+name = "a restyled slot leaves its nodes"
+file = "crates/style/src/lib.rs"
+from = '''                                    force: force || restyled_slots.contains(&slot.id()),'''
+to = '''                                    force,'''
+
+[[mutant]]
+name = "a shadow tree's children are styled before it"
+file = "crates/style/src/lib.rs"
+from = '''            if descend {
+                stack.push(Visit::Children {'''
+to = '''            if false {
+                stack.push(Visit::Children {'''
+
+# --- style: display: contents ---
+
+[[mutant]]
+name = "contents isn't parsed"
+file = "crates/css/src/properties.rs"
+from = '''                    "contents" => computed_style::Display::Contents,'''
+to = '''                    "content" => computed_style::Display::Contents,'''
+
+[[mutant]]
+name = "a slot isn't display: contents"
+file = "crates/style/resources/html.css"
+from = '''slot {
+  display: contents;'''
+to = '''slot {
+  display: inline;'''
+
+[[mutant]]
+name = "the root element's contents isn't block"
+file = "crates/style/src/lib.rs"
+from = '''    if is_root && style.display == Display::Contents {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a contents element's children go in its box"
+file = "crates/style/src/lib.rs"
+from = '''            let children_layout_parent = if style.display == Display::Contents {'''
+to = '''            let children_layout_parent = if false {'''
+
+[[mutant]]
+name = "a contents element's pseudo-elements go in its box"
+file = "crates/style/src/lib.rs"
+from = '''        let pseudo_layout_parent = if style.display == Display::Contents {'''
+to = '''        let pseudo_layout_parent = if false {'''
+
+[[mutant]]
+name = "blockification looks at the parent, not the layout parent"
+file = "crates/style/src/lib.rs"
+from = '''        || layout_parent.display.is_flexible_or_grid()
+        || style.is_out_of_flow()'''
+to = '''        || parent.display.is_flexible_or_grid()
+        || style.is_out_of_flow()'''
+
+[[mutant]]
+name = "z-index looks at the parent, not the layout parent"
+file = "crates/style/src/lib.rs"
+from = '''        || layout_parent.display.is_flexible_or_grid()
+    {'''
+to = '''        || parent.display.is_flexible_or_grid()
+    {'''
+
+[[mutant]]
+name = "a slot's layout parent is itself"
+file = "crates/style/src/lib.rs"
+from = '''    while style.display == Display::Contents {'''
+to = '''    while false {'''

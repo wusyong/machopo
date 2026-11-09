@@ -1,0 +1,17 @@
+# about:demo's backgrounds: the card's gradient and the avatar's image are
+# painted; "Restyle the card" gives the card two layers (an image over
+# repeating stripes), which repaints it, and getComputedStyle reads them
+# back.
+window size=800x600
+navigate about:demo
+wait-loaded
+# The card at the top, its button under it.
+scroll-to #bg-card
+capture gradient
+screenshot gradient
+click #bg-restyle
+wait-text #bg-restyle-note "Two layers: background-size is 16px 16px, auto."
+expect-differs gradient #bg-card
+screenshot restyled
+click #bg-restyle
+wait-text #bg-restyle-note "One layer: a gradient."

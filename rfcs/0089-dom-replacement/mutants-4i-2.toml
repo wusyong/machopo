@@ -1,0 +1,249 @@
+# Stage 4i-2: new wrappers in their realm, the checkpoint as a callback
+# returns, init dictionaries' view and relatedTarget, DOMException's
+# structured clone and QuotaExceededError.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it"]
+timeout = 1500
+
+[[mutant]]
+name = "binding: no checkpoint as a callback returns"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''    if !bindings::trace::in_script() {
+        perform_microtask_checkpoint(scope);
+    }
+    result'''
+to = '''    result'''
+
+[[mutant]]
+name = "binding: a listener's call not counted"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''run_callback(self.scope, |scope| call_listener(scope, event, index));'''
+to = '''call_listener(self.scope, event, index);'''
+
+[[mutant]]
+name = "binding: a timer's call not counted"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''run_callback(self.scope, |scope| call_timer(scope, window, timer));'''
+to = '''call_timer(self.scope, window, timer);'''
+
+[[mutant]]
+name = "binding: the checkpoint's microtasks not counted"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''fn perform_microtask_checkpoint(scope: &mut Scope<'_, '_, '_>) {
+    let _entry = bindings::trace::enter_script();'''
+to = '''fn perform_microtask_checkpoint(scope: &mut Scope<'_, '_, '_>) {'''
+
+[[mutant]]
+name = "binding: a classic script's entry left before its error is reported"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        let _entry = bindings::trace::enter_script();
+        let ran =
+            v8::Script::compile(scope, source, Some(&origin)).and_then(|script| script.run(scope));
+        if ran.is_none() {
+            report_caught(scope, ReportAt::Global(global));
+        }'''
+to = '''        let ran = {
+            let _entry = bindings::trace::enter_script();
+            v8::Script::compile(scope, source, Some(&origin)).and_then(|script| script.run(scope))
+        };
+        if ran.is_none() {
+            report_caught(scope, ReportAt::Global(global));
+        }'''
+
+[[mutant]]
+name = "binding: the parser's construction not a callback"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        let made = crate::listeners::run_callback(&mut scope, |scope| {
+            crate::front::construct_custom_element(scope, &definition, document)
+        });'''
+to = '''        let made = crate::front::construct_custom_element(&mut scope, &definition, document);'''
+
+[[mutant]]
+name = "binding: never another realm"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        (!current.is_some_and(|current| gc::Gc::ptr_eq(current, document)))
+            .then(|| cx.node_id(document))'''
+to = '''        (false && !current.is_some_and(|current| gc::Gc::ptr_eq(current, document)))
+            .then(|| cx.node_id(document))'''
+
+[[mutant]]
+name = "binding: a node's wrapper in the current realm"
+file = "crates/dom_js_next/src/front.rs"
+from = '''                let made = new_wrapper_in_realm(&mut self.scope, interface, |cx| {
+                    ObjectRef::Node(root.get(cx.gc))
+                });'''
+to = '''                let made = templates::new_wrapper(&mut self.scope, interface);'''
+
+[[mutant]]
+name = "binding: an object's wrapper in the current realm"
+file = "crates/dom_js_next/src/front.rs"
+from = '''    let made = new_wrapper_in_realm(scope, interface, |cx| object.get(cx.gc));'''
+to = '''    let made = templates::new_wrapper(scope, interface);'''
+
+[[mutant]]
+name = "binding: a window not a related target"
+file = "crates/dom_js_next/src/front.rs"
+from = '''                bindings::is_wrapper::<Node>(scope, value)
+                    || bindings::is_wrapper::<Window>(scope, value)
+                    || bindings::is_wrapper::<EventTargetImpl>(scope, value),
+                "EventTarget",'''
+to = '''                bindings::is_wrapper::<Node>(scope, value)
+                    || bindings::is_wrapper::<EventTargetImpl>(scope, value),
+                "EventTarget",'''
+
+[[mutant]]
+name = "binding: a null view not none"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        let value = self.dict_value(dict, member)?;
+        if value.is_null_or_undefined() {
+            return Some(None);
+        }
+        let scope = self.scope.scope();
+        let (accepted, interface) = match kind {'''
+to = '''        let value = self.dict_value(dict, member)?;
+        if value.is_undefined() {
+            return Some(None);
+        }
+        let scope = self.scope.scope();
+        let (accepted, interface) = match kind {'''
+
+[[mutant]]
+name = "binding: the DOM's QuotaExceededError a DOMException"
+file = "crates/dom_js_next/src/exception.rs"
+from = '''    if name == "QuotaExceededError" {
+        let error = new_quota_exceeded_error(scope, message, None, None)?;'''
+to = '''    if false {
+        let error = new_quota_exceeded_error(scope, message, None, None)?;'''
+
+[[mutant]]
+name = "binding: QuotaExceededError's [[Prototype]] not DOMException"
+file = "crates/dom_js_next/src/exception.rs"
+from = '''    function.set_prototype(scope.scope(), parent.into())?;'''
+to = '''    let _ = parent;'''
+
+[[mutant]]
+name = "binding: a non-finite quota taken"
+file = "crates/dom_js_next/src/exception.rs"
+from = '''            if !number.is_finite() {
+                crate::throw_type_error('''
+to = '''            if false {
+                crate::throw_type_error('''
+
+[[mutant]]
+name = "binding: options that aren't an object ignored"
+file = "crates/dom_js_next/src/exception.rs"
+from = '''    if !options.is_null_or_undefined() {
+        let Ok(options) = v8::Local::<v8::Object>::try_from(options) else {'''
+to = '''    if options.is_object() {
+        let Ok(options) = v8::Local::<v8::Object>::try_from(options) else {'''
+
+[[mutant]]
+name = "binding: a DOMException unbranded"
+file = "crates/dom_js_next/src/exception.rs"
+from = '''    this.set_internal_field(MESSAGE, message.into());
+    set_brand(scope, this, Brand::DomException);'''
+to = '''    this.set_internal_field(MESSAGE, message.into());'''
+
+[[mutant]]
+name = "binding: the brands swapped"
+file = "crates/dom_js_next/src/exception.rs"
+from = '''            Brand::DomException => 1,
+            Brand::QuotaExceededError => 2,'''
+to = '''            Brand::DomException => 2,
+            Brand::QuotaExceededError => 1,'''
+
+[[mutant]]
+name = "binding: a quota field read as a number"
+file = "crates/dom_js_next/src/exception.rs"
+from = '''            .filter(|value| value.is_number())
+            .and_then(|value| value.number_value(scope))'''
+to = '''            .and_then(|value| value.number_value(scope))'''
+
+[[mutant]]
+name = "binding: a DOMException not written"
+file = "crates/dom_js_next/src/serialize.rs"
+from = '''        if write_dom_exception(scope, object, value_serializer) {
+            return Some(true);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "binding: a QuotaExceededError not read"
+file = "crates/dom_js_next/src/serialize.rs"
+from = '''        if tag == DOM_EXCEPTION_TAG || tag == QUOTA_EXCEEDED_ERROR_TAG {'''
+to = '''        if tag == DOM_EXCEPTION_TAG {'''
+
+[[mutant]]
+name = "binding: the amount requested not written"
+file = "crates/dom_js_next/src/serialize.rs"
+from = '''            write_number(out, quota);
+            write_number(out, requested);'''
+to = '''            write_number(out, quota);
+            write_number(out, None);'''
+
+[[mutant]]
+name = "api: a collection of no realm"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        ObjectRef::HtmlCollection(collection) => cx.collection_root(collection),'''
+to = '''        ObjectRef::HtmlCollection(_) => return None,'''
+
+[[mutant]]
+name = "api: attributes of no realm"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        ObjectRef::NamedNodeMap(map) => cx.attribute_map_element(map),'''
+to = '''        ObjectRef::NamedNodeMap(_) => return None,'''
+
+[[mutant]]
+name = "api: a class list of no realm"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        ObjectRef::DomTokenList(list) => cx.token_list_element(list),'''
+to = '''        ObjectRef::DomTokenList(_) => return None,'''
+
+[[mutant]]
+name = "api: a dataset of no realm"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        ObjectRef::DomStringMap(map) => cx.dataset_element(map),'''
+to = '''        ObjectRef::DomStringMap(_) => return None,'''
+
+[[mutant]]
+name = "api: an element's style of no realm"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''            dom_next::DeclarationOwner::Element(element)
+            | dom_next::DeclarationOwner::Computed(element, _) => element,
+            dom_next::DeclarationOwner::Rule(_) => return None,'''
+to = '''            dom_next::DeclarationOwner::Computed(element, _) => element,
+            dom_next::DeclarationOwner::Element(_) | dom_next::DeclarationOwner::Rule(_) => return None,'''
+
+[[mutant]]
+name = "api: a node's realm its own"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''    Some(cx.document_of(node))
+}'''
+to = '''    Some(node)
+}'''
+
+[[mutant]]
+name = "api: no view"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''    view.map(|KeptWindow(kept)| op.kept_object::<Window>(cx, kept))'''
+to = '''    let _ = (op, cx, view);
+    None'''
+
+[[mutant]]
+name = "api: no related target"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''    related.map(|KeptTarget(kept)| op.kept_target(cx, kept))'''
+to = '''    let _ = (op, cx, related);
+    None'''
+
+[[mutant]]
+name = "api: a keyboard event's view none"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''    cx.set_keyboard_event_data(event, init_view(op, cx, init.view), &info);'''
+to = '''    cx.set_keyboard_event_data(event, None, &info);'''
+
+[[mutant]]
+name = "api: a focus event's related target none"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    cx.set_focus_event_data(event, view, init.detail, related);'''
+to = '''    let _ = related;
+    cx.set_focus_event_data(event, view, init.detail, None);'''

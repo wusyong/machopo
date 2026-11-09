@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>K4: an element whose text is gone is :empty</title>
+<link rel="match" href="k4-style-ref.html">
+<style>html, body { margin: 0 } div { width: 100px; height: 50px; background-color: red; font: 20px/1 Ahem; color: red } div:empty { background-color: green }</style>
+<div id="box">X</div><div></div>
+<script src="after-frames.js"></script>
+<script>afterFrames(() => { document.getElementById("box").firstChild.textContent = ""; });</script>
+</html>

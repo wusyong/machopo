@@ -1,0 +1,33 @@
+[package]
+name = "driver"
+description = "machopodriver: machopo's WebDriver (classic) server, which drives machopo through --automation-pipe."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+doctest = false
+
+[[bin]]
+name = "machopodriver"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+base.workspace = true
+protocol.workspace = true
+webdriver.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+tokio = { workspace = true, features = ["net"] }
+crossbeam-channel.workspace = true
+icu_segmenter.workspace = true
+serde_json.workspace = true
+url.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

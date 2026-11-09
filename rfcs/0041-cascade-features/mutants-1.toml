@@ -1,0 +1,289 @@
+# Mutation test of stage 1 (custom properties and var(): the trie, parsing
+# and substituting, the cascade's winners, CSSOM):
+# python3 scripts/test.py mutate rfcs/0041-cascade-features/mutants-1.toml
+test = ["cargo", "test", "-q", "-p", "computed_style", "-p", "css", "-p", "style"]
+timeout = 600
+
+# computed_style: the trie.
+
+[[mutant]]
+name = "setting the same value copies the path anyway"
+file = "crates/computed_style/src/variables.rs"
+from = '''        if self.entry(&entry.name) == Some(&entry) {
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a split slot's entries stay at the same level"
+file = "crates/computed_style/src/variables.rs"
+from = '''                for old in std::mem::take(entries) {
+                    child.insert(old, shift + BITS);
+                }
+                child.insert(entry, shift + BITS);'''
+to = '''                for old in std::mem::take(entries) {
+                    child.insert(old, shift);
+                }
+                child.insert(entry, shift);'''
+
+# css: parsing values with var().
+
+[[mutant]]
+name = "var() takes any name"
+file = "crates/css/src/variables.rs"
+from = '''    if !crate::property_set::is_custom_property_name(&name) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a var() in a nested block isn't seen"
+file = "crates/css/src/variables.rs"
+from = '''                has_var |=
+                    input.parse_nested_block(|input| check_declaration_value(input, false))?;'''
+to = '''                input.parse_nested_block(|input| check_declaration_value(input, false))?;'''
+
+[[mutant]]
+name = "every value is kept unparsed"
+file = "crates/css/src/properties.rs"
+from = '''        Ok(true) => Ok(i.slice_from(start)),
+        _ => Err(i.new_custom_error::<_, ()>(())),'''
+to = '''        Ok(_) => Ok(i.slice_from(start)),
+        _ => Err(i.new_custom_error::<_, ()>(())),'''
+
+# css: substituting.
+
+[[mutant]]
+name = "no fallback"
+file = "crates/css/src/variables.rs"
+from = '''            let mut fallback = Output::default();
+            substitute_into(input, &mut fallback, lookup)?;
+            out.failed |= fallback.failed;'''
+to = '''            let mut fallback = Output::default();
+            substitute_into(input, &mut fallback, lookup)?;
+            out.failed = true;'''
+
+[[mutant]]
+name = "a failed fallback is taken"
+file = "crates/css/src/variables.rs"
+from = '''            out.failed |= fallback.failed;'''
+to = ''''''
+
+[[mutant]]
+name = "a failed reference stops the substitution"
+file = "crates/css/src/variables.rs"
+from = '''        None if input.is_exhausted() => out.failed = true,'''
+to = '''        None if input.is_exhausted() => return Err(input.new_custom_error(())),'''
+
+[[mutant]]
+name = "a fallback after a failure is a reference"
+file = "crates/css/src/variables.rs"
+from = '''        None if out.failed => while input.next_including_whitespace_and_comments().is_ok() {},'''
+to = ''''''
+
+[[mutant]]
+name = "a fallback takes ! and ;"
+file = "crates/css/src/variables.rs"
+from = '''    check_declaration_value(input, true).map(|_| ())'''
+to = '''    check_declaration_value(input, false).map(|_| ())'''
+
+[[mutant]]
+name = "a substituted value runs into what comes before"
+file = "crates/css/src/variables.rs"
+from = '''        self.separate(value);
+        self.text.push_str(value);'''
+to = '''        self.text.push_str(value);'''
+
+[[mutant]]
+name = "a substituted value runs into what follows"
+file = "crates/css/src/variables.rs"
+from = '''        if self.after_value == Some(self.text.len()) {
+            self.separate(text);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a cycle's members take their fallbacks"
+file = "crates/css/src/variables.rs"
+from = '''                _ if in_cycle => None,'''
+to = ''''''
+
+[[mutant]]
+name = "a cycle reaches to the top of the stack"
+file = "crates/css/src/variables.rs"
+from = '''            let in_cycle = (self.cycle_start..self.cycle_end).contains(&depth);'''
+to = '''            let in_cycle = self.cycle_start <= depth;'''
+
+[[mutant]]
+name = "a cycle found stays found"
+file = "crates/css/src/variables.rs"
+from = '''            if self.cycle_start >= self.stack.len() {
+                self.cycle_start = usize::MAX;
+                self.cycle_end = 0;
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "a CSS-wide keyword after substitution is text"
+file = "crates/css/src/variables.rs"
+from = '''                Some(text) => match CustomDeclared::new(&Arc::from(text)) {'''
+to = '''                Some(text) => match CustomDeclared::Value(&Arc::from(text)) {'''
+
+[[mutant]]
+name = "comments around a value with var() are kept"
+file = "crates/css/src/variables.rs"
+from = '''        let significant = !matches!(token, Token::WhiteSpace(_) | Token::Comment(_));'''
+to = '''        let significant = !matches!(token, Token::WhiteSpace(_));'''
+
+[[mutant]]
+name = "initial is a value"
+file = "crates/css/src/variables.rs"
+from = '''        if value.eq_ignore_ascii_case("initial") {'''
+to = '''        if value.eq_ignore_ascii_case("not initial") {'''
+
+[[mutant]]
+name = "inherit and unset are values"
+file = "crates/css/src/variables.rs"
+from = '''        } else if value.eq_ignore_ascii_case("inherit") || value.eq_ignore_ascii_case("unset") {'''
+to = '''        } else if false {'''
+
+# css: serializing.
+
+[[mutant]]
+name = "a shorthand's longhand reads as its value"
+file = "crates/css/src/serialize.rs"
+from = '''            if v.shorthand.is_none() {
+                dest.push_str(&v.css);
+            }'''
+to = '''            dest.push_str(&v.css);'''
+
+[[mutant]]
+name = "a shorthand's var() value is never written as the shorthand"
+file = "crates/css/src/property_set.rs"
+from = '''            .then(|| first.css.to_string());'''
+to = '''            .then(|| first.css.to_string())
+            .filter(|_| false);'''
+
+[[mutant]]
+name = "CSS.supports takes no custom property"
+file = "crates/css/src/css_namespace.rs"
+from = '''    if is_custom_property_name(property) {
+        return parser'''
+to = '''    if is_custom_property_name(property) && false {
+        return parser'''
+
+[[mutant]]
+name = "ALL leaves position out again"
+file = "crates/css/src/properties.rs"
+from = '''        BoxSizing,
+        Position,
+        Top,'''
+to = '''        BoxSizing,
+        Top,
+        Top,'''
+
+# style: the cascade.
+
+[[mutant]]
+name = "the last declaration met wins, not the first"
+file = "crates/style/src/lib.rs"
+from = '''            winners[declaration.id.index()].get_or_insert((declaration, *base));'''
+to = '''            winners[declaration.id.index()] = Some((declaration, *base));'''
+
+[[mutant]]
+name = "every custom property declaration counts"
+file = "crates/style/src/lib.rs"
+from = '''            if custom_seen.insert(name) {'''
+to = '''            if custom_seen.insert(name) || true {'''
+
+[[mutant]]
+name = "font-size isn't first"
+file = "crates/style/src/lib.rs"
+from = '''    if let Some((declaration, _)) = winners[LonghandId::FontSize.index()] {
+        apply(&mut style, declaration, &font_cx);
+    }
+    for (declaration, base_url) in winners.iter().flatten() {
+        if declaration.id == LonghandId::FontSize {
+            continue;
+        }'''
+to = '''    for (declaration, base_url) in winners.iter().flatten() {'''
+
+[[mutant]]
+name = "every var() takes the first one's substitution"
+file = "crates/style/src/lib.rs"
+from = '''            .position(|(u, _)| Arc::ptr_eq(u, unparsed))'''
+to = '''            .position(|_| true)'''
+
+# dom_api: getComputedStyle.
+
+[[mutant]]
+name = "getComputedStyle reads no custom property"
+file = "crates/css/src/computed.rs"
+from = '''    if is_custom_property_name(property) {
+        return Some('''
+to = '''    if is_custom_property_name(property) && false {
+        return Some('''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "computed_style::"]
+
+[[mutant]]
+name = "getComputedStyle lists no custom property"
+file = "crates/css/src/computed.rs"
+from = '''        .map(|(name, _)| name.to_string())
+        .collect()'''
+to = '''        .map(|(name, _)| name.to_string())
+        .filter(|_| false)
+        .collect()'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "computed_style::"]
+
+# style: keeping the old map.
+
+[[mutant]]
+name = "the old custom properties aren't kept"
+file = "crates/style/src/lib.rs"
+from = '''                        style.variables = old.variables.clone();'''
+to = ''''''
+
+# dom, dom_api and style: the inline style kept as declarations.
+
+[[mutant]]
+name = "CSSOM's declarations are parsed again from their text"
+file = "crates/dom/src/scope.rs"
+from = '''            text,
+            Some(Arc::new(declarations)),'''
+to = '''            text,
+            None.filter(|_: &Arc<CssPropertyValueSet>| !declarations.is_empty()),'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "style_data::"]
+
+[[mutant]]
+name = "setting the attribute doesn't parse it"
+file = "crates/dom/src/scope.rs"
+from = '''        if name.is_attr(&local_name!("style")) {
+            let new = match parsed {'''
+to = '''        if name.is_attr(&local_name!("style")) && parsed.is_some() {
+            let new = match parsed {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "style_data::"]
+
+[[mutant]]
+name = "an element made with a style attribute has no inline style"
+file = "crates/dom/src/scope.rs"
+from = '''                inline_style: crate::node::inline_style_of(&attributes),'''
+to = '''                inline_style: None,'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "style_data::"]
+
+[[mutant]]
+name = "CSSOM writes the attribute, to be parsed again"
+file = "crates/dom_api/src/css_style_declaration.rs"
+from = '''            cx.mutate().set_inline_style(element, block.clone())?;'''
+to = '''            cx.mutate().set_attribute(
+                element,
+                dom::QualName::attr(dom::name::local_name!("style")),
+                block.css_text(),
+            )?;'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "api::inline_style"]
+
+[[mutant]]
+name = "the cascade parses the attribute again"
+file = "crates/style/src/lib.rs"
+from = '''    let style_attribute = element.0.inline_style();'''
+to = '''    let style_attribute = element
+        .0
+        .attribute(&QualName::attr(local_name!("style")))
+        .map(|css| Arc::new(CssPropertyValueSet::parse(&css)));'''

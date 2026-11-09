@@ -1,0 +1,117 @@
+# Stage 4e-3b-2: what a change of a shadow tree's sheets styles again
+# (`rule_set_invalidation.rs`'s `host`, `slotted` and `all`; the walk's
+# `shadow_changes` and `Down::look`).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p style_next"]
+timeout = 3000
+
+[[mutant]]
+name = "rules: slotted not told"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''            self.slotted = true;
+            return true;'''
+to = '''            return true;'''
+
+[[mutant]]
+name = "rules: host not told"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''            self.host = true;
+            return true;'''
+to = '''            return true;'''
+
+[[mutant]]
+name = "rules: all not every one"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''            own: self.all || self.own.matches(cx, element),'''
+to = '''            own: self.own.matches(cx, element),'''
+
+[[mutant]]
+name = "every element: not the host"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''        Self {
+            host: true,
+            slotted: true,
+            all: true,'''
+to = '''        Self {
+            host: false,
+            slotted: true,
+            all: true,'''
+
+[[mutant]]
+name = "every element: not what is slotted"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''        Self {
+            host: true,
+            slotted: true,
+            all: true,'''
+to = '''        Self {
+            host: true,
+            slotted: false,
+            all: true,'''
+
+[[mutant]]
+name = "collect: every element for any change"
+file = "crates/style_next/src/shadow_sheets.rs"
+from = '''                Some(match sheets_change(old_sheets, &sheets, environment) {
+                    SheetsChange::Rules(rules) => rules,
+                    _ => RuleSetInvalidation::every_element(),
+                })'''
+to = '''                Some(RuleSetInvalidation::every_element())'''
+
+[[mutant]]
+name = "collect: in another order, its rules"
+file = "crates/style_next/src/shadow_sheets.rs"
+from = '''                    SheetsChange::Rules(rules) => rules,
+                    _ => RuleSetInvalidation::every_element(),'''
+to = '''                    SheetsChange::Rules(rules) => rules,
+                    _ => RuleSetInvalidation::default(),'''
+
+[[mutant]]
+name = "collect: a host the DOM marked styled whole"
+file = "crates/style_next/src/lib.rs"
+from = '''            if cx.style_flags(host).contains(StyleFlags::STYLE_SHEETS_CHANGED) {
+                self.shadow_changes.insert(cx.node_id(root), change);'''
+to = '''            if false && cx.style_flags(host).contains(StyleFlags::STYLE_SHEETS_CHANGED) {
+                self.shadow_changes.insert(cx.node_id(root), change);'''
+
+[[mutant]]
+name = "walk: the tree's elements not looked up"
+file = "crates/style_next/src/lib.rs"
+from = '''                let of_tree = change.find(cx, element, &mut invalidated.siblings);'''
+to = '''                let of_tree = Found::default();
+                let _ = change;'''
+
+[[mutant]]
+name = "walk: the host not told"
+file = "crates/style_next/src/lib.rs"
+from = '''                found.own |= change.host;'''
+to = '''                let _ = change.host;'''
+
+[[mutant]]
+name = "walk: what is slotted not told"
+file = "crates/style_next/src/lib.rs"
+from = '''                    .is_some_and(|change| change.slotted);'''
+to = '''                    .is_some_and(|change| change.slotted && false);'''
+
+[[mutant]]
+name = "walk: only the nearest slot's"
+file = "crates/style_next/src/lib.rs"
+from = '''                    .is_some_and(|change| change.slotted);
+                at = slot;'''
+to = '''                    .is_some_and(|change| change.slotted);
+                at = slot;
+                break;'''
+
+[[mutant]]
+name = "walk: not gone down below a host"
+file = "crates/style_next/src/lib.rs"
+from = '''            || self.rules.is_some()
+            || look
+        {'''
+to = '''            || self.rules.is_some()
+        {'''
+
+[[mutant]]
+name = "walk: look not handed down"
+file = "crates/style_next/src/lib.rs"
+from = '''        let look = down.look || invalidation.hosts_change;'''
+to = '''        let look = invalidation.hosts_change;'''

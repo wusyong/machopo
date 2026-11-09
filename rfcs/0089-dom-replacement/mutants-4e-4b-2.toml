@@ -1,0 +1,153 @@
+# Stage 4e-4b-2: custom elements' lifecycle callbacks on the new DOM:
+# `dom_next`'s callback reactions and their hooks, `dom_api_next`'s
+# upgrade's and invocation, `dom_js_next`'s calls; and what the earlier
+# stages' left unobservable.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it custom_elements && cargo test -q -p dom_js_next --test it custom_elements"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: no connectedCallback"
+file = "crates/dom_next/src/reactions.rs"
+from = '''            crate::CustomElementState::Custom => self.enqueue_callback_reaction(element, CallbackArgs::Connected),'''
+to = '''            crate::CustomElementState::Custom => {}'''
+
+[[mutant]]
+name = "dom: no disconnectedCallback"
+file = "crates/dom_next/src/style.rs"
+from = '''            if self.may_have_reactions(at) {
+                self.custom_element_disconnected(at);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: no attributeChangedCallback"
+file = "crates/dom_next/src/style.rs"
+from = '''        if self.is_custom_element(element) {
+            self.custom_element_attribute_changed(element, name, old, new);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: no adoptedCallback"
+file = "crates/dom_next/src/lib.rs"
+from = '''            if self.is_custom_element(at) {
+                self.enqueue_callback_reaction(at, CallbackArgs::Adopted(old, document));
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a callback the definition hasn't"
+file = "crates/dom_next/src/reactions.rs"
+from = '''        if !self.definition_has_callback(definition, callback) {
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: every attribute observed"
+file = "crates/dom_next/src/reactions.rs"
+from = '''                if !self.definition_observed_attributes(definition).contains(&name) {
+                    return;
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a failed upgrade's reactions kept"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''            cx.clear_element_reactions(element);'''
+to = ''''''
+
+[[mutant]]
+name = "dom: no namespace"
+file = "crates/dom_next/src/reactions.rs"
+from = '''                namespace: Some(ids.namespace).filter(|space| *space != names::NONE),'''
+to = '''                namespace: None,'''
+
+[[mutant]]
+name = "dom: old and new swapped"
+file = "crates/dom_next/src/reactions.rs"
+from = '''                old: old.map(DomString::new),
+                new: new.map(DomString::new),'''
+to = '''                old: new.map(DomString::new),
+                new: old.map(DomString::new),'''
+
+[[mutant]]
+name = "api: an upgrade's attributes not queued"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''        for index in 0..cx.attribute_count(element) {
+            let attribute = cx.attribute_at(element, index).expect("an attribute below the count");'''
+to = '''        for index in 0..0 {
+            let attribute = cx.attribute_at(element, index).expect("an attribute below the count");'''
+
+[[mutant]]
+name = "api: an upgrade's connection not queued"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''        if cx.is_connected(element) {
+            cx.enqueue_callback_reaction(element, CallbackArgs::Connected);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "api: an upgrade not custom after"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''        if constructed {
+            cx.set_custom_element_state(element, CustomElementState::Custom);
+        } else {'''
+to = '''        if constructed {
+        } else {'''
+
+[[mutant]]
+name = "api: no observed attributes"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''                observed: info.observed_attributes.iter().map(|name| names::intern(name)).collect(),'''
+to = '''                observed: Box::new([]),'''
+
+[[mutant]]
+name = "api: an element's first reaction only"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''        match reaction {
+            None => return,
+            Some(Rooted::Upgrade(definition)) => upgrade(host, &definition, element),
+            Some(Rooted::Callback(definition, callback)) => host.call_lifecycle_callback(element, &definition, callback),
+        }'''
+to = '''        match reaction {
+            None => return,
+            Some(Rooted::Upgrade(definition)) => upgrade(host, &definition, element),
+            Some(Rooted::Callback(definition, callback)) => host.call_lifecycle_callback(element, &definition, callback),
+        }
+        return;'''
+
+[[mutant]]
+name = "macros: a failing member's queue not invoked"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''            ::std::result::Result::Err(error) => {
+                #front.invoke_ce_reactions();
+                ::std::result::Result::Err(error)
+            }'''
+to = '''            ::std::result::Result::Err(error) => {
+                ::std::result::Result::Err(error)
+            }'''
+
+[[mutant]]
+name = "js: no callbacks said"
+file = "crates/dom_js_next/src/front.rs"
+from = '''            cx.set_definition_callbacks(definition.get(cx.gc), has);'''
+to = '''            let _ = has;'''
+
+[[mutant]]
+name = "js: a callback's exception not reported"
+file = "crates/dom_js_next/src/front.rs"
+from = '''    if function.call(tc, this.into(), &arguments).is_none() {
+        listeners::report_caught(tc, ReportAt::RealmOf(function.into()));
+    }'''
+to = '''    if function.call(tc, this.into(), &arguments).is_none() {
+        tc.reset();
+    }'''
+
+[[mutant]]
+name = "js: adoptedCallback's documents swapped"
+file = "crates/dom_js_next/src/front.rs"
+from = '''            arguments.push(listeners::wrap(scope, old).into());
+            arguments.push(listeners::wrap(scope, new).into());'''
+to = '''            arguments.push(listeners::wrap(scope, new).into());
+            arguments.push(listeners::wrap(scope, old).into());'''

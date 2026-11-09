@@ -1,0 +1,192 @@
+# 2c: the native looks (`paint`'s `theme`), the states they show (`dom`'s
+# flag, `layout`'s `ControlState`), a range's thumb at its ratio (`dom_api`,
+# `layout`), and the parts' rules' states asked of their hosts (`style`).
+#   python3 scripts/test.py mutate rfcs/0050-form-controls-rendering/mutants-2c.toml
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "theme::"]
+timeout = 900
+
+[[mutant]]
+name = "a check box's check is lower"
+file = "crates/paint/src/theme.rs"
+from = '''    check.line_to(PointF::new(rect.x + 0.4 * w, rect.y + 0.7 * h));'''
+to = '''    check.line_to(PointF::new(rect.x + 0.4 * w, rect.y + 0.75 * h));'''
+
+[[mutant]]
+name = "a check box's check is thicker"
+file = "crates/paint/src/theme.rs"
+from = '''        flags: PaintFlags::stroke(background, 0.16 * h),'''
+to = '''        flags: PaintFlags::stroke(background, 0.2 * h),'''
+
+[[mutant]]
+name = "an indeterminate check box's dash is wider"
+file = "crates/paint/src/theme.rs"
+from = '''            w * 8.0 / 13.0,'''
+to = '''            w * 9.0 / 13.0,'''
+
+[[mutant]]
+name = "a checked radio button's border is gray"
+file = "crates/paint/src/theme.rs"
+from = '''    let border = if state.checked {
+        ACCENT.of(theme)'''
+to = '''    let border = if state.checked {
+        BORDER.of(theme)'''
+
+[[mutant]]
+name = "a radio button's dot is smaller"
+file = "crates/paint/src/theme.rs"
+from = '''            0.6 * rect.width,'''
+to = '''            0.5 * rect.width,'''
+
+[[mutant]]
+name = "a disabled button isn't lightened"
+file = "crates/paint/src/theme.rs"
+from = '''        fill(ops, shape, LIGHTEN_LAYER);'''
+to = ''''''
+
+[[mutant]]
+name = "a hovered button that is pressed looks hovered"
+file = "crates/paint/src/theme.rs"
+from = '''        } else if state.pressed {
+            Self::Pressed
+        } else if state.hovered {
+            Self::Hovered'''
+to = '''        } else if state.hovered {
+            Self::Hovered
+        } else if state.pressed {
+            Self::Pressed'''
+
+[[mutant]]
+name = "a read-only text field isn't faded"
+file = "crates/paint/src/theme.rs"
+from = '''        if state.disabled || (text && state.read_only) {'''
+to = '''        if state.disabled || (text && state.read_only && false) {'''
+
+[[mutant]]
+name = "a range's track is thinner"
+file = "crates/paint/src/theme.rs"
+from = '''const SLIDER_TRACK_THICKNESS: f32 = 8.0;'''
+to = '''const SLIDER_TRACK_THICKNESS: f32 = 6.0;'''
+
+[[mutant]]
+name = "a range's track's border is opaque"
+file = "crates/paint/src/theme.rs"
+from = '''        border.a = 0x80;'''
+to = ''''''
+
+[[mutant]]
+name = "a range's value stops short of its thumb's middle"
+file = "crates/paint/src/theme.rs"
+from = '''(rect.x + middle - track.x).max(0.0)'''
+to = '''(rect.x + middle - track.x - 1.0).max(0.0)'''
+
+[[mutant]]
+name = "a range's thumb fills its box"
+file = "crates/paint/src/theme.rs"
+from = '''    let shape = inset(rect, 0.5);'''
+to = '''    let shape = rect;'''
+
+[[mutant]]
+name = "the clear button's cross is wider"
+file = "crates/paint/src/theme.rs"
+from = '''        flags: PaintFlags::stroke(CANCEL_CROSS, size / 6.0),'''
+to = '''        flags: PaintFlags::stroke(CANCEL_CROSS, size / 5.0),'''
+
+[[mutant]]
+name = "a text area is drawn by CSS"
+file = "crates/paint/src/theme.rs"
+from = '''            | TextArea
+'''
+to = '''
+'''
+
+[[mutant]]
+name = "the CSS border is drawn under a native look"
+file = "crates/paint/src/lib.rs"
+from = '''                self.box_shadows(node, style, &geometry, true, state);
+                self.column_backgrounds(fragment, properties);
+                return;'''
+to = '''                self.box_shadows(node, style, &geometry, true, state);'''
+
+[[mutant]]
+name = "a part is disabled as itself"
+file = "crates/layout/src/control.rs"
+from = '''        disabled: its.contains(ElementState::DISABLED),'''
+to = '''        disabled: own.contains(ElementState::DISABLED),'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::native"]
+
+[[mutant]]
+name = "a state change paints nothing again"
+file = "crates/layout/src/lib.rs"
+from = '''        if self.boxes[index].control_state != state {'''
+to = '''        if self.boxes[index].control_state != state && false {'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::native"]
+
+[[mutant]]
+name = "a control's parts don't follow its states"
+file = "crates/layout/src/lib.rs"
+from = '''                while let Some(node) = stack.pop() {
+                    self.update_control_state(node);'''
+to = '''                while let Some(node) = stack.pop() {'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::native"]
+
+[[mutant]]
+name = "a range's thumb goes past its track's end"
+file = "crates/layout/src/lib.rs"
+from = '''                b.layout.location.x += ratio * (room - thumb).max(0.0);'''
+to = '''                b.layout.location.x += ratio * room;'''
+
+[[mutant]]
+name = "a control's state flags nothing"
+file = "crates/dom/src/scope.rs"
+from = '''    if changed.intersects(ElementState::CONTROL) {'''
+to = '''    if changed.intersects(ElementState::CONTROL) && false {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "layout_tree_flags::a_controls"]
+
+[[mutant]]
+name = "the pointer's state isn't a control's"
+file = "crates/dom/src/node.rs"
+from = '''            | Self::HOVER.0
+            | Self::ACTIVE.0
+            | Self::FOCUS.0,'''
+to = '''            | Self::ACTIVE.0
+            | Self::FOCUS.0,'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "layout_tree_flags::a_controls"]
+
+[[mutant]]
+name = "an empty range's ratio isn't 0"
+file = "crates/dom_api/src/input.rs"
+from = '''    if max <= min {
+        return 0.0;
+    }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::a_ranges"]
+
+[[mutant]]
+name = "a range's min doesn't move its thumb"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        local_name!("max"),
+        local_name!("min"),'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::a_ranges"]
+
+[[mutant]]
+name = "a host's parts' rules don't restyle it"
+file = "crates/style/src/lib.rs"
+from = '''                dependencies = dependencies.or(own.cascade.shadow_pseudo_dependencies);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "a range's thumb is 15px"
+file = "crates/style/src/theme.rs"
+from = '''    const SLIDER_THUMB_SIZE: f32 = 16.0;'''
+to = '''    const SLIDER_THUMB_SIZE: f32 = 15.0;'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "a control's new state is taken from the last paint"
+file = "crates/paint/src/paint_controller.rs"
+from = '''                    && a.svg_image == b.svg_image
+                    && a.control_state == b.control_state;'''
+to = '''                    && a.svg_image == b.svg_image;'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "paint_controller::a_controls"]

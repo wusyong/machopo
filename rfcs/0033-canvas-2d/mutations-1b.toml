@@ -1,0 +1,300 @@
+# Step 1b's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0033-canvas-2d/mutations-1b.toml`. Each names the tests closest to
+# what it breaks.
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_2d::"]
+timeout = 900
+
+# dom: the bitmap's size and pixels, and a reset.
+
+[[mutant]]
+name = "a bigger area can have pixels"
+file = "crates/dom/src/canvas.rs"
+from = '''        const MAX_AREA: u64 = 32768 * 8192;'''
+to = '''        const MAX_AREA: u64 = 32768 * 8193;'''
+
+[[mutant]]
+name = "a longer side can have pixels"
+file = "crates/dom/src/canvas.rs"
+from = '''        const MAX_SIDE: u32 = 65535;'''
+to = '''        const MAX_SIDE: u32 = 65536;'''
+
+[[mutant]]
+name = "no width can have pixels"
+file = "crates/dom/src/canvas.rs"
+from = '''        width > 0
+            && height > 0'''
+to = '''        height > 0'''
+
+[[mutant]]
+name = "a bitmap starts transparent whatever its background"
+file = "crates/dom/src/canvas.rs"
+from = '''            if background == [0; 4] {'''
+to = '''            if true {'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "canvas::"]
+
+[[mutant]]
+name = "a reset keeps the state"
+file = "crates/dom/src/canvas.rs"
+from = '''    pub fn reset(&mut self, size: (u32, u32)) {
+        *self = Self::new(size);
+    }'''
+to = '''    pub fn reset(&mut self, size: (u32, u32)) {
+        self.size = size;
+    }'''
+
+# dom_api: recording.
+
+[[mutant]]
+name = "a matrix before every draw"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        if data.matrix != Some(matrix) {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "no matrix recorded"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            data.ops.push(PaintOp::SetMatrix { transform: matrix });'''
+to = ''''''
+
+[[mutant]]
+name = "a canvas with no pixels records"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        if !data.has_valid_size() {
+            return None;
+        }
+        let [a, b, c, d, e, f]'''
+to = '''        let [a, b, c, d, e, f]'''
+
+[[mutant]]
+name = "drawn early one op later"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if count >= MAX_RECORDED_OPS {'''
+to = '''    if count > MAX_RECORDED_OPS {'''
+
+[[mutant]]
+name = "a draw isn't recorded for the renderer"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    record_draw(cx, this);
+    if count >= MAX_RECORDED_OPS {'''
+to = '''    if count >= MAX_RECORDED_OPS {'''
+
+[[mutant]]
+name = "globalAlpha not applied"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let alpha = (f64::from(color.a) * global_alpha).round() as u8;'''
+to = '''    let alpha = color.a;'''
+
+[[mutant]]
+name = "a negative width doesn't go left"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        let (x0, x1) = (x.min(x + w), x.max(x + w));'''
+to = '''        let (x0, x1) = (x, x + w.abs());'''
+
+[[mutant]]
+name = "an empty fill is recorded"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if rect.is_empty() {
+        return Ok(());
+    }
+    let color = with_data(cx, this, |data| {
+        with_global_alpha(data.state().fill_style, data.state().global_alpha)
+    });'''
+to = '''    let color = with_data(cx, this, |data| {
+        with_global_alpha(data.state().fill_style, data.state().global_alpha)
+    });'''
+
+[[mutant]]
+name = "a flat stroked rect is a rect"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        (true, false) | (false, true) => PaintOp::DrawLine {
+            p0: PointF::new(rect.x, rect.y),
+            p1: PointF::new(rect.right(), rect.bottom()),
+            flags,
+        },
+        (false, false) => PaintOp::DrawRect { rect, flags },'''
+to = '''        _ => PaintOp::DrawRect { rect, flags },'''
+
+[[mutant]]
+name = "an opaque canvas's clear is transparent"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let op = if alpha {
+        PaintOp::ClearRect { rect }'''
+to = '''    let op = if alpha || true {
+        PaintOp::ClearRect { rect }'''
+
+[[mutant]]
+name = "save pushes nothing"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        data.states.push(state);'''
+to = '''        let _ = state;'''
+
+[[mutant]]
+name = "restore pops the last state"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        if data.states.len() > 1 {'''
+to = '''        if !data.states.is_empty() {'''
+
+[[mutant]]
+name = "a transform not finite applies"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if matrix.iter().all(|n| n.is_finite()) {
+        with_data(cx, this, |data| {
+            let state = data.state_mut();'''
+to = '''    if true {
+        with_data(cx, this, |data| {
+            let state = data.state_mut();'''
+
+[[mutant]]
+name = "matrices multiply the other way"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            state.transform = multiply(state.transform, matrix);'''
+to = '''            state.transform = multiply(matrix, state.transform);'''
+
+[[mutant]]
+name = "rotate turns the other way"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    transform_by(cx, this, [cos, sin, -sin, cos, 0.0, 0.0])'''
+to = '''    transform_by(cx, this, [cos, -sin, sin, cos, 0.0, 0.0])'''
+
+[[mutant]]
+name = "globalAlpha takes more than 1"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if (0.0..=1.0).contains(&value) {'''
+to = '''    if (0.0..=2.0).contains(&value) {'''
+
+[[mutant]]
+name = "lineWidth takes 0"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if value.is_finite() && value > 0.0 {'''
+to = '''    if value.is_finite() && value >= 0.0 {'''
+
+[[mutant]]
+name = "currentcolor of a canvas not connected"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            let inline = crate::script::is_connected(canvas)
+                .then(|| canvas.attribute(&QualName::attr("style")))
+                .flatten();'''
+to = '''            let inline = canvas.attribute(&QualName::attr("style"));'''
+
+[[mutant]]
+name = "a new size doesn't reset the context"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        m.read().canvas_data(&context).reset(size);'''
+to = ''''''
+
+# dom_api: reading back.
+
+[[mutant]]
+name = "getImageData reads without drawing first"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let len = pixel_bytes(width, height)?;
+    flush(cx, this);'''
+to = '''    let len = pixel_bytes(width, height)?;'''
+
+[[mutant]]
+name = "a negative read size doesn't go back"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        (i64::from(sy) + i64::from(sh), -i64::from(sh))'''
+to = '''        (i64::from(sy), -i64::from(sh))'''
+
+[[mutant]]
+name = "unpremultiplying rounds down"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let channel = |c: u8| ((f32::from(c) * 255.0 / f32::from(a)).round() as u32).min(255) as u8;'''
+to = '''    let channel = |c: u8| ((f32::from(c) * 255.0 / f32::from(a)) as u32).min(255) as u8;'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--lib", "canvas"]
+
+[[mutant]]
+name = "an opaque canvas reads back transparent before anything is drawn"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                    None => background,'''
+to = '''                    None => [0; 4],'''
+
+[[mutant]]
+name = "a new ImageData is display-p3"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let space = settings.color_space.unwrap_or(PredefinedColorSpace::Srgb);'''
+to = '''    let space = settings.color_space.unwrap_or(PredefinedColorSpace::DisplayP3);'''
+
+# The renderer.
+
+[[mutant]]
+name = "a flush keeps the recording"
+file = "crates/renderer/src/canvas.rs"
+from = '''    let ops = std::mem::take(&mut data.ops);'''
+to = '''    let ops = data.ops.clone();'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "canvas::"]
+
+[[mutant]]
+name = "a frame draws every canvas"
+file = "crates/renderer/src/canvas.rs"
+from = '''            if shown {'''
+to = '''            if true {'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "canvas::"]
+
+[[mutant]]
+name = "a canvas not drawn is forgotten"
+file = "crates/renderer/src/canvas.rs"
+from = '''        m.record_canvas_draw(canvas);
+    }
+}'''
+to = '''        let _ = canvas;
+    }
+}'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "canvas::"]
+
+[[mutant]]
+name = "the client draws nothing"
+file = "crates/renderer/src/layout_client.rs"
+from = '''        crate::canvas::flush(scope, canvas);'''
+to = '''        let _ = (scope, canvas);'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "canvas_2d"]
+
+[[mutant]]
+name = "the rendering update draws no canvas"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        crate::canvas::flush_shown(&mut self.dom.borrow_mut().mutate());'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "canvas_2d"]
+
+# raster, style and dom_js.
+
+[[mutant]]
+name = "a clear draws transparent over"
+file = "crates/raster/src/skia_backend.rs"
+from = '''            paint.set_blend_mode(sk::BlendMode::Clear);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib"]
+
+[[mutant]]
+name = "an opaque bitmap drawn as premultiplied"
+file = "crates/raster/src/skia_backend.rs"
+from = '''    let alpha = if opaque {
+        sk::AlphaType::Opaque'''
+to = '''    let alpha = if false {
+        sk::AlphaType::Opaque'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib"]
+
+[[mutant]]
+name = "an opaque color serializes as rgba"
+file = "crates/style/src/canvas.rs"
+from = '''    if a == u8::MAX {
+        return format!("#{r:02x}{g:02x}{b:02x}");
+    }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--lib", "canvas"]
+
+[[mutant]]
+name = "currentcolor without an inline color is white"
+file = "crates/style/src/canvas.rs"
+from = '''        _ => Color::BLACK,'''
+to = '''        _ => Color::WHITE,'''
+test = ["cargo", "test", "-q", "-p", "style", "--lib", "canvas"]
+
+[[mutant]]
+name = "JS's ImageData keeps bytes"
+file = "crates/dom_js/src/host.rs"
+from = '''        Ok(Some(ScriptValue::from_v8(v8::Global::new(scope, array))))'''
+to = '''        let _ = array;
+        Ok(None)'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "canvas::"]

@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<title>A table paints as Blink paints separated borders</title>
+<link rel="match" href="t1-separated-ref.html">
+<!-- The table's background and border go around its grid, not its caption;
+     a row's background is painted in each of its cells, not in the border
+     spacing, under the cell's own; a row group's under the row's. -->
+<style>
+  body { margin: 0 }
+  table { border-spacing: 10px; border: 5px solid blue; background: yellow }
+  caption { height: 20px; background: aqua }
+  tbody { background: red }
+  tr { background: lime }
+  td { padding: 0; width: 40px; height: 40px }
+</style>
+<table>
+  <caption></caption>
+  <tr><td></td><td style="background: green"></td></tr>
+</table>

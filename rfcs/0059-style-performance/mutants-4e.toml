@@ -1,0 +1,104 @@
+# 4e: a change of an element's class, id, attribute or state styles again
+# what the descendant invalidation sets find below it (`style`'s `lib.rs`).
+#   python3 scripts/test.py mutate rfcs/0059-style-performance/mutants-4e.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "invalidation::"]
+timeout = 1800
+
+[[mutant]]
+name = "no descendant sets collected"
+file = "crates/style/src/lib.rs"
+from = '''        self.descendants.add(&ancestors, &below);'''
+to = ''''''
+
+[[mutant]]
+name = "an element's own sets not carried down"
+file = "crates/style/src/lib.rs"
+from = '''                _ if own_below.is_empty() => below,'''
+to = '''                _ if true => below,'''
+
+# Equivalent: the set, with `any`, still goes down and styles each element
+# again, all but the shadow trees of hosts below, which the document's
+# rules don't match (Blink styles the whole subtree; so does kun).
+[[mutant]]
+name = "a whole subtree set not the whole subtree"
+file = "crates/style/src/lib.rs"
+from = '''                || own_below.any
+                || below_in(&own.cascade, |sets| &sets.any)'''
+to = '''                || below_in(&own.cascade, |sets| &sets.any)'''
+
+[[mutant]]
+name = "a host's sets not carried into its shadow tree"
+file = "crates/style/src/lib.rs"
+from = '''                    descendants: shadow_below.clone().filter(|_| walk_shadow),'''
+to = '''                    descendants: None,'''
+
+[[mutant]]
+name = "the shadow tree not walked for a host's sets"
+file = "crates/style/src/lib.rs"
+from = '''                descend || shadow_force || shadow_rules.is_some() || shadow_below.is_some();'''
+to = '''                descend || shadow_force || shadow_rules.is_some();'''
+
+[[mutant]]
+name = "states not looked up"
+file = "crates/style/src/lib.rs"
+from = '''        if !states.is_empty() {
+            for (state, set) in &self.states {'''
+to = '''        if false {
+            for (state, set) in &self.states {'''
+
+[[mutant]]
+name = "classes not looked up"
+file = "crates/style/src/lib.rs"
+from = '''                for class in &changes.classes {
+                    find(&self.classes, class);'''
+to = '''                for class in &changes.classes {
+                    find(&self.ids, class);'''
+
+[[mutant]]
+name = "attributes not looked up"
+file = "crates/style/src/lib.rs"
+from = '''                for name in &changes.attributes {
+                    find(&self.attributes, name.as_str());'''
+to = '''                for name in &changes.attributes {
+                    find(&self.ids, name.as_str());'''
+
+[[mutant]]
+name = "a subject list not looked into"
+file = "crates/style/src/lib.rs"
+from = '''        let below = rule_set_invalidation::compound_features(&compounds[0]).unwrap_or('''
+to = '''        let below = Some(InvalidationFeatures::of(&compounds[0])).unwrap_or('''
+
+[[mutant]]
+name = "the subject's nested ancestors left out"
+file = "crates/style/src/lib.rs"
+from = '''                for component in compound {
+                    ancestors.add_nested(component, false);
+                }
+                continue;'''
+to = '''                continue;'''
+
+[[mutant]]
+name = "a sibling's nested ancestors left out"
+file = "crates/style/src/lib.rs"
+from = '''                    // (`:is(.b .a) ~ .c`'s `.b`) is an ancestor's.
+                    ancestors.add_nested(component, false);'''
+to = '''                    // (`:is(.b .a) ~ .c`'s `.b`) is an ancestor's.'''
+
+[[mutant]]
+name = "an ancestor's compound left out"
+file = "crates/style/src/lib.rs"
+from = '''                for component in compound {
+                    ancestors.add_component(component);
+                }'''
+to = ''''''
+
+# Equivalent alone: `descend` counts `below`, so the debug build never goes
+# down only to check while it has a set; the filter keeps a slip there
+# from hiding in the debug build (as the one above did before it).
+[[mutant]]
+name = "the debug build's walk applies the sets"
+file = "crates/style/src/lib.rs"
+from = '''                        descendants: below.clone().filter(|_| descend),
+                        slotted: false,'''
+to = '''                        descendants: below.clone(),
+                        slotted: false,'''

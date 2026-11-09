@@ -1,0 +1,21 @@
+# about:demo's dropdown: `position: absolute` takes it
+# out of the flow and lays it out against the bar around it, its containing
+# block, over what follows; `offsetParent` and `getComputedStyle` report
+# where it landed.
+navigate about:demo
+wait-loaded
+# The bar is near the end of the page, far below its button: the bar as it
+# is, then the button (clicking it scrolls up to it), then the bar again,
+# scrolled to where it was.
+scroll-to #menu-bar
+capture closed
+click #menu-open
+# In the bar (its padding box starts after its 1px border), 20px and 26px
+# into it, as the stylesheet asks.
+wait-text #menu-note "Open: in menu-bar, at 20px 26px, 160×48."
+scroll-to #menu-bar
+# Where the dropdown is now, below the bar's own box.
+expect-differs closed #dropdown
+screenshot dropdown
+click #menu-open
+wait-text #menu-note "The menu is closed."

@@ -1,0 +1,264 @@
+# Mutation test of step 3a (fetch()'s CORS):
+# python3 scripts/test.py mutate rfcs/0027-fetch/mutants-3a.toml
+test = ["cargo", "test", "-q", "-p", "net", "--test", "load"]
+timeout = 900
+
+# --- net: the tainting ------------------------------------------------------
+
+[[mutant]]
+name = "a data: URL is the mode's"
+file = "crates/net/src/cors.rs"
+from = '''            || url.scheme() == "data"
+        {'''
+to = '''            || (url.scheme() == "data" && false)
+        {'''
+
+[[mutant]]
+name = "another origin's is basic"
+file = "crates/net/src/cors.rs"
+from = '''        if (same_origin(url, self.origin)
+            && !self.tainted'''
+to = '''        if (url.origin().is_tuple()
+            && !self.tainted'''
+
+[[mutant]]
+name = "an opaque origin is the URL's"
+file = "crates/net/src/cors.rs"
+from = '''    url.origin().is_tuple() && url.origin().ascii_serialization() == origin'''
+to = '''    url.origin().ascii_serialization() == origin'''
+
+[[mutant]]
+name = "same-origin mode goes anywhere"
+file = "crates/net/src/cors.rs"
+from = '''            RequestMode::SameOrigin => {
+                return Err(blocked(format!('''
+to = '''            RequestMode::SameOrigin => {
+                self.tainting = ResponseTainting::Basic;
+                #[allow(unreachable_code)]
+                return Ok(());
+                #[allow(unreachable_code)]
+                return Err(blocked(format!('''
+
+[[mutant]]
+name = "no-cors needn't follow"
+file = "crates/net/src/cors.rs"
+from = '''                if request.redirect != RedirectMode::Follow {'''
+to = '''                if request.redirect == RedirectMode::Error {'''
+
+[[mutant]]
+name = "no-cors is cors"
+file = "crates/net/src/cors.rs"
+from = '''                self.tainting = ResponseTainting::Opaque;'''
+to = '''                self.tainting = ResponseTainting::Cors;'''
+
+[[mutant]]
+name = "CORS for any scheme"
+file = "crates/net/src/cors.rs"
+from = '''                if !matches!(url.scheme(), "http" | "https") {'''
+to = '''                if url.scheme() == "about" {'''
+
+# 3a's network error for a request that needed a preflight went with 3b,
+# which sends the preflight (`mutants-3b.toml`).
+
+# --- net: Origin, the CORS check ----------------------------------------------
+
+[[mutant]]
+name = "no Origin for CORS"
+file = "crates/net/src/cors.rs"
+from = '''        if self.tainting == ResponseTainting::Cors || !matches!(method, "GET" | "HEAD") {'''
+to = '''        if !matches!(method, "GET" | "HEAD") {'''
+
+[[mutant]]
+name = "Origin isn't null once tainted"
+file = "crates/net/src/cors.rs"
+from = '''        if self.tainted { "null" } else { self.origin }'''
+to = '''        if self.tainted && false { "null" } else { self.origin }'''
+
+[[mutant]]
+name = "the CORS check passes"
+file = "crates/net/src/cors.rs"
+from = '''        if !allowed {
+            return Err(blocked(format!(
+                "{url} doesn't allow {}",
+                self.request_origin()
+            )));
+        }'''
+to = '''        let _ = allowed;'''
+
+[[mutant]]
+name = "star with credentials"
+file = "crates/net/src/cors.rs"
+from = '''            Some(origin) if origin == "*" && !include => true,'''
+to = '''            Some(origin) if origin == "*" => true,'''
+
+[[mutant]]
+name = "any origin allowed"
+file = "crates/net/src/cors.rs"
+from = '''            Some(origin) if origin != self.request_origin() => false,'''
+to = '''            Some(origin) if origin.is_empty() => false,'''
+
+[[mutant]]
+name = "credentials without Allow-Credentials"
+file = "crates/net/src/cors.rs"
+from = '''            Some(_) => header(raw, "access-control-allow-credentials").as_deref() == Some("true"),'''
+to = '''            Some(_) => true,'''
+
+[[mutant]]
+name = "a redirect isn't checked"
+file = "crates/net/src/url_loader.rs"
+from = '''        if let Some(cors) = &cors {
+            cors.check(&url, &raw)?;
+        }'''
+to = ''''''
+
+# --- net: redirects -----------------------------------------------------------
+
+[[mutant]]
+name = "credentials in a location"
+file = "crates/net/src/cors.rs"
+from = '''        if includes_credentials(to)
+            && ((self.request.mode == RequestMode::Cors && !same_origin(to, self.origin))
+                || self.tainting == ResponseTainting::Cors)'''
+to = '''        if includes_credentials(to) && false'''
+
+[[mutant]]
+name = "never tainted"
+file = "crates/net/src/cors.rs"
+from = '''            self.tainted = true;'''
+to = '''            self.tainted = false;'''
+
+[[mutant]]
+name = "tainted coming home"
+file = "crates/net/src/cors.rs"
+from = '''        if from.origin() != to.origin() && !same_origin(from, self.origin) {'''
+to = '''        if from.origin() != to.origin() {'''
+
+[[mutant]]
+name = "a redirect keeps the tainting"
+file = "crates/net/src/url_loader.rs"
+from = '''                url = next;
+                if let Some(cors) = &mut cors {
+                    cors.start(&url)?;
+                }'''
+to = '''                url = next;'''
+
+[[mutant]]
+name = "Origin isn't sent afresh"
+file = "crates/net/src/url_loader.rs"
+from = '''            cors.add_origin(&method, &mut sent);
+            // Fetch's "CORS-preflight fetch"'''
+to = '''            if hops == 0 {
+                cors.add_origin(&method, &mut sent);
+            }
+            // Fetch's "CORS-preflight fetch"'''
+
+# --- net: filtering -----------------------------------------------------------
+
+[[mutant]]
+name = "a CORS response keeps every header"
+file = "crates/net/src/cors.rs"
+from = '''                response.headers.retain(|(name, _)| {'''
+to = '''                response.headers.retain(|(name, _)| true || {'''
+
+[[mutant]]
+name = "a CORS response keeps Set-Cookie"
+file = "crates/net/src/cors.rs"
+from = '''                    !is_forbidden_response_header_name(name)
+                        && (is_cors_safelisted_response_header_name(name)'''
+to = '''                    (is_cors_safelisted_response_header_name(name)'''
+
+[[mutant]]
+name = "no safelisted response headers"
+file = "crates/net/src/cors.rs"
+from = '''                        && (is_cors_safelisted_response_header_name(name)'''
+to = '''                        && (is_cors_safelisted_response_header_name(name) && false'''
+
+[[mutant]]
+name = "star exposes with credentials"
+file = "crates/net/src/cors.rs"
+from = '''                let all = exposed.iter().any(|name| name == "*")
+                    && self.request.credentials != CredentialsMode::Include;'''
+to = '''                let all = exposed.iter().any(|name| name == "*");'''
+
+[[mutant]]
+name = "nothing exposed by name"
+file = "crates/net/src/cors.rs"
+from = '''                            || exposed.iter().any(|exposed| exposed == name))'''
+to = '''                            || exposed.iter().any(|exposed| exposed == name && false))'''
+
+[[mutant]]
+name = "an opaque fetch() keeps its body"
+file = "crates/net/src/cors.rs"
+from = '''                    response.body.clear();'''
+to = ''''''
+
+[[mutant]]
+name = "an opaque subresource loses its body"
+file = "crates/net/src/cors.rs"
+from = '''                if self.request.destination == RequestDestination::Empty {'''
+to = '''                if true {'''
+
+[[mutant]]
+name = "a response isn't marked"
+file = "crates/net/src/cors.rs"
+from = '''        response.tainting = self.tainting;'''
+to = ''''''
+
+# --- dom_api and the renderer ---------------------------------------------------
+
+[[mutant]]
+name = "fetch() blocks another origin"
+file = "crates/dom_api/src/fetch.rs"
+from = '''        "data" | "http" | "https" => {}'''
+to = '''        "data" => {}
+        "http" | "https" if url.origin().ascii_serialization() == initiator => {}'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "fetch"]
+
+[[mutant]]
+name = "fetch() sends cors"
+file = "crates/dom_api/src/fetch.rs"
+from = '''            DataMode::NoCors => RequestMode::NoCors,'''
+to = '''            DataMode::NoCors => RequestMode::Cors,'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "fetch"]
+
+[[mutant]]
+name = "fetch() sends no credentials"
+file = "crates/dom_api/src/fetch.rs"
+from = '''            RequestCredentials::Include => CredentialsMode::Include,'''
+to = '''            RequestCredentials::Include => CredentialsMode::Omit,'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "fetch"]
+
+[[mutant]]
+name = "an opaque response has its status"
+file = "crates/dom_api/src/fetch.rs"
+from = '''    if response.tainting == ResponseTainting::Opaque {'''
+to = '''    if response.tainting == ResponseTainting::Opaque && false {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "fetch", "where_a_fetch_may_go"]
+
+[[mutant]]
+name = "a CORS response is basic"
+file = "crates/dom_api/src/fetch.rs"
+from = '''            ResponseTainting::Cors => ResponseType::Cors,'''
+to = '''            ResponseTainting::Cors => ResponseType::Basic,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "fetch", "where_a_fetch_may_go"]
+
+[[mutant]]
+name = "the renderer sends cors"
+file = "crates/renderer/src/loader.rs"
+from = '''        resource.mode = request.mode;'''
+to = '''        let _ = request.mode;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "fetch", "where_a_fetch_may_go"]
+
+[[mutant]]
+name = "the renderer sends credentials"
+file = "crates/renderer/src/loader.rs"
+from = '''        resource.credentials = request.credentials;'''
+to = '''        let _ = request.credentials;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "fetch", "where_a_fetch_may_go"]
+
+[[mutant]]
+name = "the renderer loses the tainting"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    tainting: response.tainting,'''
+to = '''                    tainting: protocol::network::ResponseTainting::Basic,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "fetch", "where_a_fetch_may_go"]

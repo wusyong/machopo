@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<script>
+function run() { return new Promise(done => {
+  const log = [];
+  const ch = new MessageChannel();
+  ch.port1.addEventListener('message', () => { log.push('listener 1'); Promise.resolve().then(() => log.push('microtask')); });
+  ch.port1.addEventListener('message', () => log.push('listener 2'));
+  ch.port1.start();
+  ch.port2.postMessage(0);
+  setTimeout(() => done(log.join(', ')), 50);
+}); }
+</script>

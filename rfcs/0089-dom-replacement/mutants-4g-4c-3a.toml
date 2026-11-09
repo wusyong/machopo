@@ -1,0 +1,217 @@
+# Stage 4g-4c-3a: HTML's cross-origin objects on the new DOM (a window's and a location's
+# access check and interceptors, the cross-origin functions of the accessing realm, the
+# members' receivers checked), a child frame's location navigating it against the entry
+# realm's URL, the window's close, closed, focus, blur and opener, contentDocument and
+# frameElement across origins, a child's initial window with the page's focus.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "sh", "-c", "cargo test -q -p dom_js_next --test it -- cross_origin frames && cargo test -q -p html --test it -- next"]
+timeout = 900
+
+[[mutant]]
+name = "js: every realm reaches a location"
+file = "crates/dom_js_next/src/cross_origin.rs"
+from = '''        token.strict_equals(accessing.get_security_token(scope))'''
+to = '''        let _ = (token, accessing);
+        true'''
+
+[[mutant]]
+name = "js: no realm reaches a location"
+file = "crates/dom_js_next/src/cross_origin.rs"
+from = '''        let Some(context) = accessed.get_creation_context(scope) else {
+            return false;
+        };'''
+to = '''        let Some(context) = accessed.get_creation_context(scope).filter(|_| false) else {
+            return false;
+        };'''
+
+[[mutant]]
+name = "js: a getter run in the caller's realm"
+file = "crates/dom_js_next/src/cross_origin.rs"
+from = '''            && context != scope.scope().get_current_context()'''
+to = '''            && context != scope.scope().get_current_context()
+            && false'''
+
+[[mutant]]
+name = "js: a method's value refused"
+file = "crates/dom_js_next/src/cross_origin.rs"
+from = '''                if let Some(function) = function_in(&mut scope, *method) {
+                    rv.set(function.into());
+                }'''
+to = '''                let _ = method;
+                return refuse(&mut scope, key);'''
+
+[[mutant]]
+name = "js: then refused"
+file = "crates/dom_js_next/src/cross_origin.rs"
+from = '''    if name == "then" { Found::Fallback } else { Found::None }'''
+to = '''    Found::None'''
+
+[[mutant]]
+name = "js: the symbols refused"
+file = "crates/dom_js_next/src/cross_origin.rs"
+from = '''        return if fallback_symbols(scope.scope()).contains(&symbol) {'''
+to = '''        return if fallback_symbols(scope.scope()).contains(&symbol) && false {'''
+
+[[mutant]]
+name = "js: no child window by index"
+file = "crates/dom_js_next/src/cross_origin.rs"
+from = '''        let child = *dom_api_next::child_windows(cx, window).get(usize::try_from(index).ok()?)?;'''
+to = '''        let child = *dom_api_next::child_windows(cx, window).get(usize::try_from(index).ok()?.saturating_add(1))?;'''
+
+[[mutant]]
+name = "js: no child window by name"
+file = "crates/dom_js_next/src/cross_origin.rs"
+from = '''        return Found::Named(child);'''
+to = '''        let _ = child;'''
+
+[[mutant]]
+name = "js: an attribute enumerable"
+file = "crates/dom_js_next/src/cross_origin.rs"
+from = '''                Found::Property(Property { method: None, .. }) => v8::PropertyAttribute::DONT_ENUM,'''
+to = '''                Found::Property(Property { method: None, .. }) => v8::PropertyAttribute::NONE,'''
+
+[[mutant]]
+name = "js: a setter not called"
+file = "crates/dom_js_next/src/cross_origin.rs"
+from = '''            setter.call(scope.scope(), args.holder().into(), &[value]);'''
+to = '''            let _ = (setter, value);'''
+
+[[mutant]]
+name = "js: an attribute's descriptor without its setter"
+file = "crates/dom_js_next/src/cross_origin.rs"
+from = '''                let (get, set) = (accessor(&mut scope, *get), accessor(&mut scope, *set));'''
+to = '''                let (get, set) = (accessor(&mut scope, *get), accessor(&mut scope, None));'''
+
+[[mutant]]
+name = "js: a child's descriptor not enumerable"
+file = "crates/dom_js_next/src/cross_origin.rs"
+from = '''                    let descriptor = data_descriptor(scope.scope(), child.into(), true);'''
+to = '''                    let descriptor = data_descriptor(scope.scope(), child.into(), false);'''
+
+[[mutant]]
+name = "js: then not among the keys"
+file = "crates/dom_js_next/src/cross_origin.rs"
+from = '''            keys.push(string(scope, "then").into());'''
+to = ''''''
+
+[[mutant]]
+name = "js: a refused define V8's TypeError"
+file = "crates/dom_js_next/src/cross_origin.rs"
+from = '''    fn refused<'s>(mut scope: Scope<'_, 's, '_>, _: v8::Local<'s, v8::Object>) {
+        exception::throw_dom_exception('''
+to = '''    fn refused<'s>(mut scope: Scope<'_, 's, '_>, _: v8::Local<'s, v8::Object>) {
+        return;
+        #[allow(unreachable_code)]
+        exception::throw_dom_exception('''
+
+[[mutant]]
+name = "js: a getter's function unnamed"
+file = "crates/dom_js_next/src/cross_origin.rs"
+from = '''            MemberKind::Getter => format!("get {}", M::NAME),'''
+to = '''            MemberKind::Getter => M::NAME.to_owned(),'''
+
+[[mutant]]
+name = "js: a member's receiver not checked"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''    template.set_accept_any_receiver(false);
+}'''
+to = '''    let _ = template;
+}'''
+
+[[mutant]]
+name = "js: queueMicrotask's receiver not checked"
+file = "crates/dom_js_next/src/window.rs"
+from = '''    template.set_accept_any_receiver(false);'''
+to = ''''''
+
+[[mutant]]
+name = "js: a cross-origin member's receiver checked"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''        let function = if cross_origin::is_cross_origin(M::INTERFACE, M::NAME, M::KIND) {'''
+to = '''        let function = if cross_origin::is_cross_origin(M::INTERFACE, M::NAME, M::KIND) && false {'''
+
+[[mutant]]
+name = "js: a window's access not checked"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''        "Window" => Some(cross_origin::WINDOW_DATA),'''
+to = '''        "Window" => None,'''
+
+[[mutant]]
+name = "js: the entry window the current realm's"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        let context = scope.get_entered_or_microtask_context();'''
+to = '''        let context = scope.get_current_context();'''
+
+[[mutant]]
+name = "js: a child's initial window without the page's focus"
+file = "crates/dom_js_next/src/frames.rs"
+from = '''        cx.set_page_focused(window, focused);'''
+to = '''        let _ = (window, focused);'''
+
+[[mutant]]
+name = "api: a location's URL against its own document"
+file = "crates/dom_api_next/src/window.rs"
+from = '''    let base = match op.current_window(cx) {'''
+to = '''    let base = match None::<Gc<'gc, Window>> {'''
+
+[[mutant]]
+name = "api: a URL that doesn't parse navigates"
+file = "crates/dom_api_next/src/window.rs"
+from = '''    let resolved = base.join(url).map_err(|_| {'''
+to = '''    let resolved = base.join(url).or_else(|_| base.join("about:blank")).map_err(|_| {'''
+
+[[mutant]]
+name = "api: contentDocument across origins"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''        .filter(|&document| same_origin(cx, document, cx.document_of(this))))'''
+to = '''        .filter(|&document| same_origin(cx, document, cx.document_of(this)) || true))'''
+
+[[mutant]]
+name = "api: frameElement across origins"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''        .filter(|&owner| same_origin(cx, cx.document_of(owner), document)))'''
+to = '''        .filter(|&owner| same_origin(cx, cx.document_of(owner), document) || true))'''
+
+[[mutant]]
+name = "api: closed always false"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''    Ok(is_discarded(cx, this))'''
+to = '''    Ok(is_discarded(cx, this) && false)'''
+
+[[mutant]]
+name = "api: a named child's empty name counts"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''        if !name.is_empty() && !named.iter().any(|(other, _)| *other == name) {'''
+to = '''        if !named.iter().any(|(other, _)| *other == name) {'''
+
+[[mutant]]
+name = "api: window.focus does nothing"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    if !host.read(|cx| Gc::ptr_eq(old.get(cx.gc), new.get(cx.gc))) {
+        change_focused_frame(host, &top, &old, &new);
+    }
+    Ok(())'''
+to = '''    let _ = (top, old, new);
+    Ok(())'''
+
+[[mutant]]
+name = "dom: no navigation requested"
+file = "crates/dom_next/src/frame.rs"
+from = '''        navigations.push(NavigationRequest {
+            document: self.node_id(document),
+            url,
+        });'''
+to = '''        let _ = (document, url);'''
+
+[[mutant]]
+name = "api: targetOrigin / any origin"
+file = "crates/dom_api_next/src/message.rs"
+from = '''        "/" => incumbent.clone(),'''
+to = '''        "/" => None,'''
+
+[[mutant]]
+name = "html: a srcdoc document's parser quirks"
+file = "crates/html/src/next.rs"
+from = '''                iframe_srcdoc,
+                ..opts(true, QuirksMode::NoQuirks).tree_builder'''
+to = '''                iframe_srcdoc: iframe_srcdoc && false,
+                ..opts(true, QuirksMode::NoQuirks).tree_builder'''

@@ -1,0 +1,50 @@
+[package]
+name = "renderer"
+description = "Renderer main thread: event loop and pipeline driver (//content/renderer)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# A 2D context's data, drawn before each frame (`canvas.rs`).
+canvas.workspace = true
+base.workspace = true
+base64.workspace = true
+bytes.workspace = true
+gfx.workspace = true
+protocol.workspace = true
+compositor_paint.workspace = true
+raster.workspace = true
+compositor.workspace = true
+dom_api.workspace = true
+# The DOM's document, styled and laid out (`frame_view`).
+dom.workspace = true
+style.workspace = true
+computed_style.workspace = true
+html.workspace = true
+ipc.workspace = true
+# A `<link>`'s `media`, matched as its sheet starts loading, its sheet
+# parsed, the base URL a document's sheets resolve against, an SVG path's
+# data (`render_thread::documents`, `frame_view`).
+css.workspace = true
+layout.workspace = true
+paint.workspace = true
+tracing.workspace = true
+trace_event.workspace = true
+crossbeam-channel.workspace = true
+serde.workspace = true
+# The answer to a DevTools command no engine takes.
+serde_json.workspace = true
+encoding_rs.workspace = true
+# A navigation's randomized `confidence` (`navigation_timing`).
+getrandom.workspace = true
+url.workspace = true

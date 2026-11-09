@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<title>I3: an inline element that wraps is sliced: its start edge stays with its first text and its end edge with its last</title>
+<link rel="match" href="i3-slice-ref.html">
+<style>html, body { margin: 0 } body { font: 20px/1 Ahem; color: black } div { width: 100px }</style>
+<!-- "XX XX" and both borders don't fit in 100px: it breaks at the space, the
+     first line has only the start border and the second only the end one.
+     The text is transparent so the background and borders show. -->
+<div><span style="color: transparent; background-color: green; border-left: 20px solid blue; border-right: 20px solid blue">XX XX</span></div>
+<!-- "XXX " and the start border fit on the first line, "XX" doesn't: the
+     border goes to the next line with it. -->
+<div>XXX <span style="border-left: 20px solid blue">XX</span></div>
+<!-- "XX XX" fits exactly, but not with the end border after it: "XX" goes
+     to the next line with its border. -->
+<div>XX <span style="border-right: 20px solid blue">XX</span></div>

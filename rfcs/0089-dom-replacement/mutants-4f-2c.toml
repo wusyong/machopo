@@ -1,0 +1,368 @@
+# Stage 4f-2c: on the new DOM, HTML's form pseudo-classes matched by
+# asking the DOM and noted as their states change (checkedness,
+# indeterminate, a radio button's groups, a fieldset's disabling, the
+# value, a form's default button), the attributes each reads; the
+# style's state bits widened.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p style_next --test it form_states"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: a text input's checkedness checked"
+file = "crates/dom_next/src/form_state.rs"
+from = '''        matches!(self.input_kind(element), Some(InputKind::Checkbox | InputKind::Radio)) && self.checkedness(element)'''
+to = '''        self.checkedness(element)'''
+
+[[mutant]]
+name = "dom: a checkbox never indeterminate"
+file = "crates/dom_next/src/form_state.rs"
+from = '''            Some(InputKind::Checkbox) => self.indeterminate(element),'''
+to = '''            Some(InputKind::Checkbox) => false,'''
+
+[[mutant]]
+name = "dom: a checked radio indeterminate"
+file = "crates/dom_next/src/form_state.rs"
+from = '''            Some(InputKind::Radio) => !self.checkedness(element) && !self.radio_group_has_checked(element),'''
+to = '''            Some(InputKind::Radio) => !self.radio_group_has_checked(element),'''
+
+[[mutant]]
+name = "dom: a radio's group not looked at"
+file = "crates/dom_next/src/form_state.rs"
+from = '''            Some(InputKind::Radio) => !self.checkedness(element) && !self.radio_group_has_checked(element),'''
+to = '''            Some(InputKind::Radio) => !self.checkedness(element),'''
+
+[[mutant]]
+name = "dom: a progress with a value indeterminate"
+file = "crates/dom_next/src/form_state.rs"
+from = '''                    && self.attribute_value_by_id(element, names::local::VALUE).is_none()'''
+to = ''''''
+
+[[mutant]]
+name = "dom: any element enabled"
+file = "crates/dom_next/src/form_state.rs"
+from = '''        self.form_kind(element) & DISABLABLE != 0 && !self.is_disabled_form_control(element)'''
+to = '''        !self.is_disabled_form_control(element)'''
+
+[[mutant]]
+name = "dom: a checkbox neither required nor optional"
+file = "crates/dom_next/src/form_state.rs"
+from = '''                takes_readonly(kind) || matches!(kind, InputKind::Checkbox | InputKind::Radio | InputKind::File)'''
+to = '''                takes_readonly(kind)'''
+
+[[mutant]]
+name = "dom: a select neither required nor optional"
+file = "crates/dom_next/src/form_state.rs"
+from = '''                self.qualified_name(element) == Some(QualifiedName::html(names::local::SELECT))
+                    || '''
+to = '''                '''
+
+[[mutant]]
+name = "dom: required regardless of the attribute"
+file = "crates/dom_next/src/form_state.rs"
+from = '''        applies.then(|| self.attribute_value_by_id(element, names::local::REQUIRED).is_some())'''
+to = '''        applies.then_some(true)'''
+
+[[mutant]]
+name = "dom: a hidden input required"
+file = "crates/dom_next/src/form_state.rs"
+from = '''            | InputKind::Number
+    )
+}'''
+to = '''            | InputKind::Number
+            | InputKind::Hidden
+    )
+}'''
+
+[[mutant]]
+name = "dom: a read-only input read-write"
+file = "crates/dom_next/src/form_state.rs"
+from = '''            && self.attribute_value_by_id(element, names::local::READONLY).is_none()
+            && !self.is_disabled_form_control(element)'''
+to = '''            && !self.is_disabled_form_control(element)'''
+
+[[mutant]]
+name = "dom: a disabled input read-write"
+file = "crates/dom_next/src/form_state.rs"
+from = '''            && self.attribute_value_by_id(element, names::local::READONLY).is_none()
+            && !self.is_disabled_form_control(element)'''
+to = '''            && self.attribute_value_by_id(element, names::local::READONLY).is_none()'''
+
+[[mutant]]
+name = "dom: a textarea read-only"
+file = "crates/dom_next/src/form_state.rs"
+from = '''            None => self.qualified_name(element) == Some(QualifiedName::html(names::local::TEXTAREA)),
+        };
+        applies
+'''
+to = '''            None => false,
+        };
+        applies
+'''
+
+[[mutant]]
+name = "dom: a checkbox's placeholder shown"
+file = "crates/dom_next/src/form_state.rs"
+from = '''                    | InputKind::Number
+            )
+        ) && self'''
+to = '''                    | InputKind::Number
+                    | InputKind::Checkbox
+            )
+        ) && self'''
+
+[[mutant]]
+name = "dom: a placeholder shown without one"
+file = "crates/dom_next/src/form_state.rs"
+from = '''        ) && self.attribute_value_by_id(element, names::local::PLACEHOLDER).is_some()
+'''
+to = '''        )
+'''
+
+[[mutant]]
+name = "dom: a placeholder shown over a value"
+file = "crates/dom_next/src/form_state.rs"
+from = '''            && self.input_value(element).to_str().is_empty()'''
+to = ''''''
+
+[[mutant]]
+name = "dom: default regardless of checked"
+file = "crates/dom_next/src/form_state.rs"
+from = '''                self.attribute_value_by_id(element, names::local::CHECKED).is_some()
+            }'''
+to = '''                true
+            }'''
+
+[[mutant]]
+name = "dom: every submit button default"
+file = "crates/dom_next/src/form_state.rs"
+from = '''                .is_some_and(|button| Gc::ptr_eq(button, element)),'''
+to = '''                .is_some(),'''
+
+[[mutant]]
+name = "dom: a type=button button a submit button"
+file = "crates/dom_next/src/form_state.rs"
+from = '''                    && self.button_type(element) == "submit"'''
+to = '''                    && self.button_type(element) != "reset"'''
+
+[[mutant]]
+name = "dom: a default button's change not noted"
+file = "crates/dom_next/src/form_state.rs"
+from = '''        for button in [old, first].into_iter().flatten() {
+            self.state_changed(button, AttributeChanges::DEFAULT);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: radio groups not noted"
+file = "crates/dom_next/src/form_state.rs"
+from = '''            if self.input_kind(at_node) == Some(InputKind::Radio) {
+                self.state_changed(at_node, AttributeChanges::INDETERMINATE);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: checkedness not noted"
+file = "crates/dom_next/src/input.rs"
+from = '''        input.checked.set(checked);
+        self.state_changed(element, AttributeChanges::CHECKED);'''
+to = '''        input.checked.set(checked);'''
+
+[[mutant]]
+name = "dom: a radio's checkedness not its groups'"
+file = "crates/dom_next/src/input.rs"
+from = '''        if InputKind::from_raw(input.kind.get()) == InputKind::Radio {
+            self.radio_groups_changed(element);
+        }
+    }'''
+to = '''    }'''
+
+[[mutant]]
+name = "dom: indeterminate not noted"
+file = "crates/dom_next/src/input.rs"
+from = '''            input.indeterminate.set(indeterminate);
+            self.state_changed(element, AttributeChanges::INDETERMINATE);'''
+to = '''            input.indeterminate.set(indeterminate);'''
+
+[[mutant]]
+name = "dom: a value set not noted"
+file = "crates/dom_next/src/input.rs"
+from = '''                input.into_ref().value.get().set(Some(DomString::new(&sanitized)));
+                self.state_changed(element, AttributeChanges::VALUE);'''
+to = '''                input.into_ref().value.get().set(Some(DomString::new(&sanitized)));'''
+
+[[mutant]]
+name = "dom: a reset's value not noted"
+file = "crates/dom_next/src/input.rs"
+from = '''        input.into_ref().value.get().set(None);
+        self.state_changed(element, AttributeChanges::VALUE);'''
+to = '''        input.into_ref().value.get().set(None);'''
+
+[[mutant]]
+name = "dom: a type change's groups not noted"
+file = "crates/dom_next/src/input.rs"
+from = '''        if was == InputKind::Radio || kind == InputKind::Radio {
+            self.radio_groups_changed(element);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a type change's default button kept"
+file = "crates/dom_next/src/input.rs"
+from = '''            && (matches!(was, InputKind::Submit | InputKind::Image) || self.is_submit_button(element))
+        {
+            self.default_button_changed(form);'''
+to = '''            && (matches!(was, InputKind::Submit | InputKind::Image) || self.is_submit_button(element))
+        {
+            let _ = form;'''
+
+[[mutant]]
+name = "dom: a name change's groups not noted"
+file = "crates/dom_next/src/input.rs"
+from = '''                self.uncheck_radio_group(element);
+                self.radio_groups_changed(element);'''
+to = '''                self.uncheck_radio_group(element);'''
+
+[[mutant]]
+name = "dom: an owner change's groups not noted"
+file = "crates/dom_next/src/form.rs"
+from = '''        if self.input_kind(element) == Some(InputKind::Radio) {
+            self.radio_groups_changed(element);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an owner change's default button kept"
+file = "crates/dom_next/src/form.rs"
+from = '''            for form in [old, form].into_iter().flatten() {
+                self.default_button_changed(form);
+            }'''
+to = '''            let _ = (old, form);'''
+
+[[mutant]]
+name = "dom: a button's type change's default button kept"
+file = "crates/dom_next/src/form.rs"
+from = '''                if let Some(form) = self.form_owner(element) {
+                    self.default_button_changed(form);
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a fieldset's disabling not noted"
+file = "crates/dom_next/src/form.rs"
+from = '''                self.state_changed(at, crate::AttributeChanges::DISABLED);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an insertion's groups not noted"
+file = "crates/dom_next/src/form.rs"
+from = '''        if radio {
+            self.radio_groups_changed(node);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a removal's groups not noted"
+file = "crates/dom_next/src/form.rs"
+from = '''            if radio {
+                self.radio_groups_changed(parent);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "style: checked no state"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        PseudoClass::Checked => AttributeChanges::CHECKED,
+'''
+to = ''''''
+
+[[mutant]]
+name = "style: disabled no state"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        PseudoClass::Disabled | PseudoClass::Enabled | PseudoClass::ReadOnly | PseudoClass::ReadWrite => {'''
+to = '''        PseudoClass::Enabled | PseudoClass::ReadOnly | PseudoClass::ReadWrite => {'''
+
+[[mutant]]
+name = "style: checked's type not read"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        PseudoClass::Checked => &[TYPE],'''
+to = '''        PseudoClass::Checked => &[],'''
+
+[[mutant]]
+name = "style: indeterminate's value not read"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        PseudoClass::Indeterminate => &[TYPE, VALUE, NAME],'''
+to = '''        PseudoClass::Indeterminate => &[TYPE, NAME],'''
+
+[[mutant]]
+name = "style: disabled's attribute not read"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        PseudoClass::Disabled | PseudoClass::Enabled => &[DISABLED],'''
+to = '''        PseudoClass::Disabled | PseudoClass::Enabled => &[],'''
+
+[[mutant]]
+name = "style: required's attribute not read"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        PseudoClass::Required | PseudoClass::Optional => &[REQUIRED, TYPE],'''
+to = '''        PseudoClass::Required | PseudoClass::Optional => &[TYPE],'''
+
+[[mutant]]
+name = "style: readonly not read"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        PseudoClass::ReadOnly | PseudoClass::ReadWrite => &[READONLY, DISABLED, TYPE],'''
+to = '''        PseudoClass::ReadOnly | PseudoClass::ReadWrite => &[DISABLED, TYPE],'''
+
+[[mutant]]
+name = "style: a value attribute not read"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        PseudoClass::PlaceholderShown => &[PLACEHOLDER, VALUE, TYPE],'''
+to = '''        PseudoClass::PlaceholderShown => &[PLACEHOLDER, TYPE],'''
+
+[[mutant]]
+name = "style: default's checked not read"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        PseudoClass::Default => &[CHECKED, TYPE],'''
+to = '''        PseudoClass::Default => &[TYPE],'''
+
+[[mutant]]
+name = "style: a state asked of an ancestor not noted"
+file = "crates/style_next/src/invalidation.rs"
+from = '''                self.states |= pseudo_class_state(class);
+                self.attributes.extend(pseudo_class_attributes(class));'''
+to = '''                self.attributes.extend(pseudo_class_attributes(class));'''
+
+[[mutant]]
+name = "style: a sibling's state not looked at"
+file = "crates/style_next/src/invalidation.rs"
+from = '''                    let entry = (state, set.clone());'''
+to = '''                    let entry = (0, set.clone());'''
+
+[[mutant]]
+name = "style: the names' states missing"
+file = "crates/style_next/src/rule_index.rs"
+from = '''                names.states |= crate::invalidation::pseudo_class_state(class);
+'''
+to = ''''''
+
+[[mutant]]
+name = "style: checked never matches"
+file = "crates/style_next/src/selector.rs"
+from = '''            PseudoClass::Checked => self.cx.matches_checked(self.node),'''
+to = '''            PseudoClass::Checked => false,'''
+
+[[mutant]]
+name = "style: disabled never matches"
+file = "crates/style_next/src/selector.rs"
+from = '''            PseudoClass::Disabled => self.cx.is_disabled_form_control(self.node),'''
+to = '''            PseudoClass::Disabled => false,'''
+
+[[mutant]]
+name = "style: read-only always"
+file = "crates/style_next/src/selector.rs"
+from = '''            PseudoClass::ReadOnly => !self.cx.matches_read_write(self.node),'''
+to = '''            PseudoClass::ReadOnly => true,'''
+
+[[mutant]]
+name = "style: optional never"
+file = "crates/style_next/src/selector.rs"
+from = '''            PseudoClass::Optional => self.cx.matches_required(self.node) == Some(false),'''
+to = '''            PseudoClass::Optional => false,'''

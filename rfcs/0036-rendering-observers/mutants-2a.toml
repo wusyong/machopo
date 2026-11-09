@@ -1,0 +1,223 @@
+# Mutation test of step 2a (the GC types, the window's observers and those
+# waiting for its task, the constructor and its options, `observe`,
+# `unobserve`, `disconnect`, `takeRecords()`):
+# python3 scripts/test.py mutate rfcs/0036-rendering-observers/mutants-2a.toml
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "intersection_observers::"]
+timeout = 600
+
+# dom: who keeps whom, and the lists.
+
+[[mutant]]
+name = "an observation doesn't keep its observer"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''        observation.get().observer.set(self, observer.persistent());'''
+to = ''''''
+
+[[mutant]]
+name = "the window doesn't remember its observer"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''        window
+            .object()
+            .intersection_observers
+            .insert(self, observer.persistent());'''
+to = ''''''
+
+[[mutant]]
+name = "the observer doesn't remember its observation"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''        observer
+            .object()
+            .observations
+            .insert(self, observation.persistent());'''
+to = ''''''
+
+[[mutant]]
+name = "the element's list keeps only its first observation"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''                tail.next.set(self, observation.persistent());'''
+to = ''''''
+
+[[mutant]]
+name = "observing again adds another observation"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''        if self.intersection_observation(observer, target).is_some() {
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "observing doesn't ask for a frame"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''        self.frames.intersection_observations_version += 1;'''
+to = ''''''
+
+[[mutant]]
+name = "unobserving leaves the observer's set"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''            self.own(observer)
+                .observations
+                .remove(self, observation.get());'''
+to = ''''''
+
+[[mutant]]
+name = "unobserving the first on the element's list leaves it there"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''            rare.intersection_observations
+                .set_from(self, &observation.next);'''
+to = ''''''
+
+[[mutant]]
+name = "unobserving a later one on the element's list leaves it there"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''                current.next.set_from(self, &observation.next);'''
+to = ''''''
+
+[[mutant]]
+name = "disconnecting leaves the elements' lists"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''        for observation in observer.observations.live(self.roots) {
+            self.unlink_intersection_observation(observation.get());
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "what was computed isn't recorded"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''            observation.previous_is_intersecting.set(is_intersecting);'''
+to = ''''''
+
+[[mutant]]
+name = "the explicit root isn't kept"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''            observer.object().root.set(self, root.persistent());'''
+to = ''''''
+
+[[mutant]]
+name = "a root gone reads as the implicit root"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''            None => IntersectionObserverRoot::Gone,'''
+to = '''            None => IntersectionObserverRoot::Implicit,'''
+
+[[mutant]]
+name = "an entry's root bounds aren't kept"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''            object.root_bounds.set(self, root_bounds.persistent());'''
+to = ''''''
+
+[[mutant]]
+name = "a queued entry replaces the queue's last"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''            Some(last) => last.next.set(self, entry.persistent()),'''
+to = '''            Some(_) => {}'''
+
+[[mutant]]
+name = "an observer waits for the task once per entry"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''        if !observer_object.pending.replace(true) {'''
+to = '''        if { observer_object.pending.set(true); true } {'''
+
+[[mutant]]
+name = "every entry queues the task"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''        !window.intersection_task_queued.replace(true)'''
+to = '''        { window.intersection_task_queued.set(true); true }'''
+
+[[mutant]]
+name = "the task doesn't clear the window's flag"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''        window.intersection_task_queued.set(false);'''
+to = ''''''
+
+[[mutant]]
+name = "the task doesn't clear the observers' flag"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''            object.pending.set(false);'''
+to = ''''''
+
+[[mutant]]
+name = "the task leaves the window's list"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''        window.first_pending_intersection_observer.clear(self);'''
+to = ''''''
+
+[[mutant]]
+name = "taking the records leaves the queue"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''        observer.first_entry.clear(self);
+        observer.last_entry.clear(self);
+        entries'''
+to = '''        entries'''
+
+# dom_api: the constructor and the attributes.
+
+[[mutant]]
+name = "the thresholds aren't sorted"
+file = "crates/dom_api/src/intersection_observer.rs"
+from = '''    thresholds.sort_by(f64::total_cmp);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "intersection_observers::"]
+
+[[mutant]]
+name = "no thresholds stay none"
+file = "crates/dom_api/src/intersection_observer.rs"
+from = '''        thresholds.push(0.0);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "intersection_observers::"]
+
+[[mutant]]
+name = "a threshold a little outside 0 to 1 is taken"
+file = "crates/dom_api/src/intersection_observer.rs"
+from = '''    if thresholds.iter().any(|t| !(0.0..=1.0).contains(t)) {'''
+to = '''    if thresholds.iter().any(|t| !(-0.1..=1.1).contains(t)) {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "intersection_observers::"]
+
+[[mutant]]
+name = "scrollMargin reads rootMargin"
+file = "crates/dom_api/src/intersection_observer.rs"
+from = '''    Ok(style::serialize_intersection_margin(&options.scroll_margin).into())'''
+to = '''    Ok(style::serialize_intersection_margin(&options.root_margin).into())'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "intersection_observers::"]
+
+[[mutant]]
+name = "a document root reads as an element"
+file = "crates/dom_api/src/intersection_observer.rs"
+from = '''        IntersectionObserverRoot::Node(node) if node.kind() == NodeKind::Document => {'''
+to = '''        IntersectionObserverRoot::Node(node) if false && node.kind() == NodeKind::Document => {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "intersection_observers::"]
+
+# style: parsing and reading back a margin.
+
+[[mutant]]
+name = "three values leave the left as the bottom"
+file = "crates/style/src/intersection_observer.rs"
+from = '''        [top, horizontal, bottom] => [top, horizontal, bottom, horizontal],'''
+to = '''        [top, horizontal, bottom] => [top, horizontal, bottom, bottom],'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "intersection_observers::"]
+
+[[mutant]]
+name = "a margin reads back rounded"
+file = "crates/style/src/intersection_observer.rs"
+from = '''            MarginLength::Px(px) => format!("{}px", px.trunc() as i64),'''
+to = '''            MarginLength::Px(px) => format!("{}px", px.round() as i64),'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "intersection_observers::"]
+
+[[mutant]]
+name = "a margin takes a number"
+file = "crates/style/src/intersection_observer.rs"
+from = '''            _ => return None,
+        };'''
+to = '''            Token::Number { value, .. } => MarginLength::Px(f64::from(value)),
+            _ => return None,
+        };'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "intersection_observers::"]
+
+[[mutant]]
+name = "a margin takes more than four values"
+file = "crates/style/src/intersection_observer.rs"
+from = '''        if values.len() > 4 {
+            return None;
+        }'''
+to = '''        if values.len() > 5 {
+            return None;
+        }'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "intersection_observers::"]

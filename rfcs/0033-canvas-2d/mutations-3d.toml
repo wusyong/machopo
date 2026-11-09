@@ -1,0 +1,286 @@
+# Step 3d's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0033-canvas-2d/mutations-3d.toml`. Each names the tests closest to
+# what it breaks.
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_path"]
+timeout = 1500
+
+# gfx: hit testing.
+
+[[mutant]]
+name = "the edges outside"
+file = "crates/gfx/src/path_hit.rs"
+from = '''        inside || on_outline(&path, at)'''
+to = '''        inside'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib", "path_hit"]
+
+[[mutant]]
+name = "even-odd as non-zero"
+file = "crates/gfx/src/path_hit.rs"
+from = '''            FillRule::EvenOdd => winding % 2 != 0,'''
+to = '''            FillRule::EvenOdd => winding != 0,'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib", "path_hit"]
+
+[[mutant]]
+name = "a stroke of no width hit"
+file = "crates/gfx/src/path_hit.rs"
+from = '''        style.width > 0.0 && {'''
+to = '''        style.width >= 0.0 && {'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib", "path_hit"]
+
+[[mutant]]
+name = "square caps butt"
+file = "crates/gfx/src/path_hit.rs"
+from = '''        LineCap::Square => kurbo::Cap::Square,'''
+to = '''        LineCap::Square => kurbo::Cap::Butt,'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib", "path_hit"]
+
+[[mutant]]
+name = "miter joins beveled"
+file = "crates/gfx/src/path_hit.rs"
+from = '''        LineJoin::Miter => kurbo::Join::Miter,'''
+to = '''        LineJoin::Miter => kurbo::Join::Bevel,'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib", "path_hit"]
+
+[[mutant]]
+name = "the miter limit kurbo's"
+file = "crates/gfx/src/path_hit.rs"
+from = '''        .with_miter_limit(style.miter_limit.into());'''
+to = ''';
+    let _ = style.miter_limit;'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib", "path_hit"]
+
+[[mutant]]
+name = "no dashes"
+file = "crates/gfx/src/path_hit.rs"
+from = '''        stroke = stroke.with_dashes(phase.into(), pattern);'''
+to = '''        let _ = (phase, pattern);'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib", "path_hit"]
+
+[[mutant]]
+name = "the dashes' phase 0"
+file = "crates/gfx/src/path_hit.rs"
+from = '''        stroke = stroke.with_dashes(phase.into(), pattern);'''
+to = '''        stroke = stroke.with_dashes(0.0 * f64::from(phase), pattern);'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib", "path_hit"]
+
+[[mutant]]
+name = "an added path not transformed"
+file = "crates/gfx/src/path_shapes.rs"
+from = '''        other.transform(transform);
+        self.elements.extend(other.elements);'''
+to = '''        let _ = transform;
+        self.elements.extend(other.elements);'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib", "path_hit"]
+
+# style: path data as a path.
+
+[[mutant]]
+name = "relative commands left relative"
+file = "crates/style/src/svg.rs"
+from = '''        computed_style::append_path_data(&mut path, &absolute_path(&segments));'''
+to = '''        computed_style::append_path_data(&mut path, &segments);'''
+
+# dom_api: a Path2D.
+
+[[mutant]]
+name = "a copy empty"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        Some(Path2DOrString::Path2D(other)) => cx.read().path_2d(&other),'''
+to = '''        Some(Path2DOrString::Path2D(other)) => {
+            let _ = other;
+            Path::new()
+        }'''
+
+[[mutant]]
+name = "path data ignored"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        Some(Path2DOrString::String(data)) => style::path_from_string(data.as_str()),'''
+to = '''        Some(Path2DOrString::String(data)) => {
+            let _ = data;
+            Path::new()
+        }'''
+
+[[mutant]]
+name = "a Path2D under a transform that can't be inverted"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            f(&mut PathBuilder {
+                path,
+                singular: None,
+            })'''
+to = '''            f(&mut PathBuilder {
+                path,
+                singular: Some(Transform::IDENTITY),
+            })'''
+
+[[mutant]]
+name = "addPath's transform ignored"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        .with_path_2d(this, |path| path.add_path(&other, &to_gfx(matrix)));'''
+to = '''        .with_path_2d(this, |path| path.add_path(&other, &to_gfx(IDENTITY)));'''
+
+[[mutant]]
+name = "addPath of a transform not finite"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if !matrix.iter().all(|n| n.is_finite()) {
+        return Ok(());
+    }
+    let other = cx.read().path_2d(&path);'''
+to = '''    let other = cx.read().path_2d(&path);'''
+
+[[mutant]]
+name = "addPath's names that differ taken"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let matrix = crate::geometry::matrix_2d(&transform)?;
+    if !matrix.iter().all(|n| n.is_finite()) {'''
+to = '''    let matrix = crate::geometry::matrix_2d(&transform).unwrap_or(IDENTITY);
+    if !matrix.iter().all(|n| n.is_finite()) {'''
+
+# dom_api: a context's Path2D forms.
+
+[[mutant]]
+name = "fill(path) fills the current path"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let path = cx.read().path_2d(&path);
+    fill_path(cx, this, path, rule);'''
+to = '''    let _ = path;
+    let path = with_data(cx, this, |data| data.path.clone());
+    fill_path(cx, this, path, rule);'''
+
+[[mutant]]
+name = "stroke(path) strokes the current path"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let path = cx.read().path_2d(&path);
+    stroke_path(cx, this, path);'''
+to = '''    let _ = path;
+    let path = with_data(cx, this, |data| data.path.clone());
+    stroke_path(cx, this, path);'''
+
+[[mutant]]
+name = "clip(path) clips to the current path"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let path = cx.read().path_2d(&path);
+    clip_to(cx, this, path, rule);'''
+to = '''    let _ = path;
+    let path = with_data(cx, this, |data| data.path.clone());
+    clip_to(cx, this, path, rule);'''
+
+[[mutant]]
+name = "isPointInPath(path) of the current path"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let path = cx.read().path_2d(&path);
+    Ok(point_in_path(cx, this, &path, x, y, rule))'''
+to = '''    let _ = path;
+    let path = with_data(cx, this, |data| data.path.clone());
+    Ok(point_in_path(cx, this, &path, x, y, rule))'''
+
+[[mutant]]
+name = "isPointInStroke(path) of the current path"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let path = cx.read().path_2d(&path);
+    Ok(point_in_stroke(cx, this, &path, x, y))'''
+to = '''    let _ = path;
+    let path = with_data(cx, this, |data| data.path.clone());
+    Ok(point_in_stroke(cx, this, &path, x, y))'''
+
+# dom_api: hit testing.
+
+[[mutant]]
+name = "the point not mapped back"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    Some(PointF::new(
+        clamp_f32(a * x + c * y + e),
+        clamp_f32(b * x + d * y + f),
+    ))'''
+to = '''    let _ = (a, b, c, d, e, f);
+    Some(PointF::new(clamp_f32(x), clamp_f32(y)))'''
+
+[[mutant]]
+name = "a transform that can't be inverted hits"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let inverse = inverse(data.state().transform)?;'''
+to = '''    let inverse = inverse(data.state().transform).unwrap_or(IDENTITY);'''
+
+[[mutant]]
+name = "a point not finite let through"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    let inverse'''
+to = '''    let inverse'''
+
+[[mutant]]
+name = "isPointInPath's rule non-zero"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        .is_some_and(|at| path.contains(at, fill_rule(rule)))'''
+to = '''        .is_some_and(|at| path.contains(at, fill_rule(CanvasFillRule::Nonzero)))
+        || matches!(rule, CanvasFillRule::Evenodd) && false'''
+
+[[mutant]]
+name = "isPointInStroke's width 1"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            width: state.line_width as f32,
+            cap: state.line_cap,'''
+to = '''            width: 1.0,
+            cap: state.line_cap,'''
+
+[[mutant]]
+name = "isPointInStroke's caps butt"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            width: state.line_width as f32,
+            cap: state.line_cap,'''
+to = '''            width: state.line_width as f32,
+            cap: compositor_paint::LineCap::Butt,'''
+
+[[mutant]]
+name = "isPointInStroke's joins miter"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            join: state.line_join,
+            miter_limit: state.miter_limit as f32,
+            dash: dash.as_ref()'''
+to = '''            join: compositor_paint::LineJoin::Miter,
+            miter_limit: state.miter_limit as f32,
+            dash: dash.as_ref()'''
+
+[[mutant]]
+name = "isPointInStroke solid"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            dash: dash.as_ref().map(|dash| (dash.intervals(), dash.phase())),
+        };
+        Some(path.stroke_contains(at, &style, 0.05 / scale))'''
+to = '''            dash: dash.as_ref().map(|dash| (dash.intervals(), dash.phase())).filter(|_| false),
+        };
+        Some(path.stroke_contains(at, &style, 0.05 / scale))'''
+
+# dom_js: the interface told apart.
+
+[[mutant]]
+name = "JS's objects never of the interface"
+file = "crates/dom_js/src/templates.rs"
+from = '''                    .any(|i| i.name == name && (i.accepts)(object.kind()))'''
+to = '''                    .any(|i| i.name == name && (i.accepts)(object.kind()) && false)'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "canvas::"]
+
+# paint: SVG's stroke through gfx.
+
+[[mutant]]
+name = "SVG's square caps butt"
+file = "crates/paint/src/svg.rs"
+from = '''            StrokeLinecap::Square => LineCap::Square,
+        },
+        join: match svg.stroke_linejoin {'''
+to = '''            StrokeLinecap::Square => LineCap::Butt,
+        },
+        join: match svg.stroke_linejoin {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "geometry"]
+
+[[mutant]]
+name = "SVG's stroke solid"
+file = "crates/paint/src/svg.rs"
+from = '''        dash: dash.as_ref().map(|dash| (dash.intervals(), dash.phase())),
+    };
+    path.stroke_contains(point, &stroke, 0.05)'''
+to = '''        dash: dash.as_ref().map(|dash| (dash.intervals(), dash.phase())).filter(|_| false),
+    };
+    path.stroke_contains(point, &stroke, 0.05)'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "geometry"]

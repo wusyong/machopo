@@ -1,0 +1,68 @@
+# Stage 4e-3c-2: adopted sheets in `style_next`: a scope's after its own,
+# disabled ones kept with no rules, a changed sheet's scopes collected
+# again.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p style_next"]
+timeout = 3000
+
+[[mutant]]
+name = "the document's adopted sheets left out"
+file = "crates/style_next/src/lib.rs"
+from = '''        sheets.extend(Sheet::adopted(cx, document));'''
+to = ''''''
+
+[[mutant]]
+name = "a shadow root's adopted sheets left out"
+file = "crates/style_next/src/shadow_sheets.rs"
+from = '''        sheets.extend(Sheet::adopted(cx, root));'''
+to = ''''''
+
+[[mutant]]
+name = "disabled sheets apply"
+file = "crates/style_next/src/lib.rs"
+from = '''        !self.disabled && self.media.matches(environment)'''
+to = '''        self.media.matches(environment)'''
+
+[[mutant]]
+name = "the document's index takes disabled sheets"
+file = "crates/style_next/src/lib.rs"
+from = '''            if !sheet.disabled && set.match_media(&sheet.media, &environment) {'''
+to = '''            if set.match_media(&sheet.media, &environment) {'''
+
+[[mutant]]
+name = "disabled not compared for the document"
+file = "crates/style_next/src/lib.rs"
+from = '''Arc::ptr_eq(&a.media, &b.media) && a.disabled == b.disabled'''
+to = '''Arc::ptr_eq(&a.media, &b.media)'''
+
+[[mutant]]
+name = "disabled not compared for a kept sheet"
+file = "crates/style_next/src/lib.rs"
+from = '''                    && old[at].disabled == sheet.disabled'''
+to = ''''''
+
+[[mutant]]
+name = "disabled not compared for a shadow root"
+file = "crates/style_next/src/shadow_sheets.rs"
+from = '''|| !Arc::ptr_eq(&a.media, &b.media) || a.disabled != b.disabled'''
+to = '''|| !Arc::ptr_eq(&a.media, &b.media)'''
+
+[[mutant]]
+name = "changed sheets not looked at for the document"
+file = "crates/style_next/src/lib.rs"
+from = '''            || linked_changed
+            || adopted_changed
+            || force'''
+to = '''            || linked_changed
+            || force'''
+
+[[mutant]]
+name = "changed sheets not looked at for shadow roots"
+file = "crates/style_next/src/lib.rs"
+from = '''                    cx.mark_shadow_sheets_changed(root);'''
+to = '''                    let _ = root;'''
+
+[[mutant]]
+name = "every root adopting"
+file = "crates/style_next/src/shadow_sheets.rs"
+from = '''            .filter(|(_, scope)| scope.sheets.iter().any(|sheet| sheet.adopted.is_some_and(|id| sheets.contains(&id))))'''
+to = '''            .filter(|_| !sheets.is_empty())'''

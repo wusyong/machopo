@@ -1,0 +1,18 @@
+# A prototype for RFC 0021's step 0, not part of machopo's workspace: a
+# WebDriver server on Mozilla's `webdriver` crate that answers Status, New
+# Session and Delete Session (everything else is `unknown command`), to see
+# what the crate costs and whether wptrunner can drive it from outside the
+# WPT checkout.
+#   CARGO_TARGET_DIR=../../../target/step0 cargo build --release
+#   ../../../target/step0/release/step0-prototype --port 4444
+[workspace]
+
+[package]
+name = "step0-prototype"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+webdriver = "=0.54.0"
+serde_json = "1"

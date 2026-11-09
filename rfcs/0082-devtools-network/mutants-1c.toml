@@ -1,0 +1,73 @@
+# Mutation test of 1c: navigations committed on the UI thread, their
+# requests told by the browser and their documents' data by the renderer,
+# and `Page.domContentEventFired`, `loadEventFired`:
+# python3 scripts/test.py mutate rfcs/0082-devtools-network/mutants-1c.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools_network::"]
+timeout = 600
+
+[[mutant]]
+name = "the browser's own pages are requests"
+file = "crates/shell/src/automation_session.rs"
+from = '''                if !url.starts_with("about:") {'''
+to = '''                if !url.is_empty() {'''
+
+[[mutant]]
+name = "Network stays on"
+file = "crates/shell/src/automation_session.rs"
+from = '''attached.network = name == "Network.enable";'''
+to = '''attached.network = true;'''
+
+[[mutant]]
+name = "a navigation's redirect isn't told"
+file = "crates/shell/src/automation_session.rs"
+from = '''                        "redirectResponse": response_json(&redirect.response),'''
+to = '''                        "redirectResponse": Value::Null,'''
+
+[[mutant]]
+name = "a failed navigation's error isn't named"
+file = "crates/shell/src/automation_session.rs"
+from = '''                        "errorText": format!("net::{}", error.code.name()),'''
+to = '''                        "errorText": "net::ERR_FAILED",'''
+
+[[mutant]]
+name = "lifecycle events aren't on the clock"
+file = "crates/shell/src/automation_session.rs"
+from = '''                timestamp: TimeTicks::now().as_secs_f64(),'''
+to = '''                timestamp: 0.0,'''
+
+[[mutant]]
+name = "a document's data isn't told"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                        .did_commit_navigation(navigation_id, &body, &mime_type, &loaded);'''
+to = '''                        .main_frame_navigated();'''
+
+[[mutant]]
+name = "a navigation's body length is lost"
+file = "crates/browser/src/web_contents.rs"
+from = '''                    encoded_body_length: response.encoded_body_length,'''
+to = '''                    encoded_body_length: 0,'''
+
+[[mutant]]
+name = "an empty document has data"
+file = "crates/renderer/src/render_thread/network_agent.rs"
+from = '''        if !body.is_empty() {'''
+to = '''        if body.is_empty() {'''
+
+[[mutant]]
+name = "no domContentEventFired"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            (LoadEvent::DomContentLoaded, None) => self.page_agent.dom_content_loaded(),'''
+to = '''            (LoadEvent::DomContentLoaded, None) => {}'''
+
+[[mutant]]
+name = "no loadEventFired"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            (LoadEvent::Load, None) => self.page_agent.load_fired(),'''
+to = '''            (LoadEvent::Load, None) => {}'''
+
+[[mutant]]
+name = "a replaced navigation's end commits"
+file = "crates/browser/src/web_contents.rs"
+from = '''            .take_if(|navigation| navigation.id == navigation_id)'''
+to = '''            .take_if(|_| navigation_id != 0)'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "navigation::"]

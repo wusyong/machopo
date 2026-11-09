@@ -1,0 +1,30 @@
+# Mutation test of stage 3's B5 (cppgc's reads done in Rust, in the
+# rusty_v8 fork): every read is checked against C++'s in a debug build, so
+# a wrong one panics in the DOM's tests. Run against the locally built V8:
+# RUSTY_V8_ARCHIVE=../third_party/rusty_v8_artifacts python3 scripts/test.py mutate rfcs/0051-performance/mutants-3-b5.toml
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::"]
+timeout = 900
+
+[[mutant]]
+name = "a compressed Member is shifted too little"
+file = "../third_party/rusty_v8/src/cppgc/slot.rs"
+from = '''      ((compressed as i32 as i64 as u64) << COMPRESSION_SHIFT) as usize;'''
+to = '''      ((compressed as i32 as i64 as u64) << (COMPRESSION_SHIFT - 1)) as usize;'''
+
+[[mutant]]
+name = "a compressed Member isn't sign-extended"
+file = "../third_party/rusty_v8/src/cppgc/slot.rs"
+from = '''      ((compressed as i32 as i64 as u64) << COMPRESSION_SHIFT) as usize;'''
+to = '''      ((compressed as u64) << COMPRESSION_SHIFT) as usize;'''
+
+[[mutant]]
+name = "a decompressed Member isn't masked with the cage base"
+file = "../third_party/rusty_v8/src/cppgc/slot.rs"
+from = '''    (mask & cage_base()) as *mut RustObj'''
+to = '''    mask as *mut RustObj'''
+
+[[mutant]]
+name = "a Persistent's pointer is read from its node's field"
+file = "../third_party/rusty_v8/src/cppgc.rs"
+from = '''          let ptr = unsafe { self.inner.cast::<*mut RustObj>().read() };'''
+to = '''          let ptr = unsafe { self.inner.cast::<*mut RustObj>().add(1).read() };'''

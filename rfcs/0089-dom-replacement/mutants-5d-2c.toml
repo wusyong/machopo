@@ -1,0 +1,120 @@
+# Stage 5d-2c: navigation and frames on the DOM's engine.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it && cargo test -q -p dom_js_next --test it -- dom_core:: devtools:: && cargo test -q -p style_next --test it invalidation:: && cargo test -q -p shell --test it -- network::content_language automation_pipe::frames_are_switched && cargo test -q -p browser --test it -- the_tab_title_follows_document_title a_new_iframes_about_blank_has_its_parents_base_url a_child_frame_s_location clicks_go_into_child_frames documents_have_the_tabs_visibility"]
+timeout = 2400
+
+[[mutant]]
+name = "dom_api_next: a windowless document visible"
+file = "crates/dom_api_next/src/document.rs"
+from = '''        .is_none_or(|window| cx.page_hidden(window))'''
+to = '''        .is_some_and(|window| cx.page_hidden(window))'''
+
+[[mutant]]
+name = "renderer: a child frame's id without its f"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''    format!("{prefix:016x}.f{}", frame.0)'''
+to = '''    format!("{prefix:016x}.{}", frame.0)'''
+
+[[mutant]]
+name = "renderer: a frame id read without its f"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''        let number = number.strip_prefix('f')?;'''
+to = '''        let number = number.strip_prefix('f').unwrap_or(number);'''
+
+[[mutant]]
+name = "dom_js_next: a navigating child frame keeps its old document's frames"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''            crate::frames::discard_descendants(&mut state_scope, frame);'''
+to = '''            let _ = (&mut state_scope, frame);'''
+
+[[mutant]]
+name = "dom_js_next: a navigating child frame's descendants taken with it"
+file = "crates/dom_js_next/src/frames.rs"
+from = '''        if !with_it {
+            gone.remove(0);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom_next: a srcdoc document's base URL as kept, not its container's now"
+file = "crates/dom_next/src/base.rs"
+from = '''            Some("srcdoc") => {
+                if let Some(owner) = self.frame_owner(document) {
+                    return self.document_base_url(self.document_of(owner));
+                }'''
+to = '''            Some("srcdoc") => {'''
+
+[[mutant]]
+name = "dom_next: an about:blank's base URL not copied"
+file = "crates/dom_next/src/frame.rs"
+from = '''            self.copy_about_base_url(owner, document);'''
+to = '''            let _ = (owner, document);'''
+
+[[mutant]]
+name = "dom_next: an about document's own base element ignored"
+file = "crates/dom_next/src/base.rs"
+from = '''                (Some(href), Some(fallback)) => f(Some(&frozen_base_url(&fallback, &href))),'''
+to = '''                (Some(_), Some(fallback)) => f(Some(&fallback)),'''
+
+[[mutant]]
+name = "renderer: no title before a parser script"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                    // set another at once).
+                    self.update_next_title();'''
+to = '''                    // set another at once).'''
+
+[[mutant]]
+name = "dom_next: the whole Content-Language taken"
+file = "crates/dom_next/src/language.rs"
+from = '''            .and_then(|value| value.split(',').next())'''
+to = '''            .and_then(|value| Some(value))'''
+
+[[mutant]]
+name = "dom_next: a meta's content with a comma taken"
+file = "crates/dom_next/src/language.rs"
+from = '''        if content.contains(',') {
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom_next: a connected meta's changed content not taken"
+file = "crates/dom_next/src/frame.rs"
+from = '''                || name == QualifiedName::plain(names::local::CONTENT))
+            {
+                self.pragma_connected(element);'''
+to = '''                || name == QualifiedName::plain(names::local::CONTENT))
+            {'''
+
+[[mutant]]
+name = "dom_next: an http-equiv doesn't open the gate"
+file = "crates/dom_next/src/style.rs"
+from = '''            self.see(crate::form::PRAGMAS_SEEN);'''
+to = ''''''
+
+[[mutant]]
+name = "dom_next: a content language change styles nothing"
+file = "crates/dom_next/src/language.rs"
+from = '''            self.set_needs_style_recalc(root);'''
+to = '''            let _ = root;'''
+
+[[mutant]]
+name = "style_next: no content language for :lang()"
+file = "crates/style_next/src/selector.rs"
+from = '''        self.cx
+            .content_language(self.cx.document_of(self.node))
+            .unwrap_or_default()'''
+to = '''        String::new()'''
+
+[[mutant]]
+name = "style_next: :lang() stops at a shadow root"
+file = "crates/style_next/src/selector.rs"
+from = '''                .or_else(|| self.cx.shadow_host(node));'''
+to = ''';'''
+
+[[mutant]]
+name = "renderer: a child frame's Content-Language not its own"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                    .find(|(name, _)| name == "content-language")
+            })'''
+to = '''                    .find(|(name, _)| name == "content-language-not")
+            })'''

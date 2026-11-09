@@ -1,0 +1,8 @@
+<!DOCTYPE html>
+<title>M5: a broken image takes the size its attributes give and draws nothing; without them it is 0x0</title>
+<link rel="match" href="m5-broken-ref.html">
+<style>html, body { margin: 0 } img { display: block }</style>
+<img src="resources/missing.png">
+<img src="resources/missing.png" width="30" height="20">
+<img src="resources/not-an-image.txt" width="30" height="20">
+<div style="width: 30px; height: 20px; background-color: green"></div>

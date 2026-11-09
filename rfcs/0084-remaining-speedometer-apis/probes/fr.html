@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<script>
+const read = (blob, how, ...args) => new Promise(resolve => {
+  const r = new FileReader(); const ev = [];
+  for (const t of ['loadstart', 'progress', 'load', 'loadend', 'error', 'abort'])
+    r.addEventListener(t, e => ev.push(`${t}:${e.loaded}/${e.total}`));
+  r.onloadend = () => setTimeout(() => resolve({ result: r.result, ev }), 0);
+  r[how](blob, ...args);
+});
+async function run() {
+  const out = [];
+  out.push('dataurl none: ' + (await read(new Blob(['hi']), 'readAsDataURL')).result);
+  out.push('dataurl empty: ' + (await read(new Blob([]), 'readAsDataURL')).result);
+  out.push('dataurl weird type: ' + (await read(new Blob(['hi'], {type: 'Text/Plain;Charset=UTF-8'}), 'readAsDataURL')).result);
+  const f = new File(['ab'], 'a/b:c.txt');
+  out.push('name: ' + f.name + ' lm~now: ' + (Math.abs(f.lastModified - Date.now()) < 1000) + ' ' + Number.isInteger(f.lastModified));
+  out.push('lm 1.7: ' + new File([], 'x', {lastModified: 1.7}).lastModified + ' -1.5: ' + new File([], 'x', {lastModified: -1.5}).lastModified);
+  const big = new Blob([new Uint8Array(20 * 1024 * 1024)]);
+  out.push('big: ' + (await read(big, 'readAsArrayBuffer')).ev.join(' '));
+  const latin = new Blob([new Uint8Array([0xe9, 0x41])], {type: 'text/plain;charset=windows-1252'});
+  out.push('type charset: ' + (await read(latin, 'readAsText')).result);
+  out.push('label wins: ' + (await read(latin, 'readAsText', 'utf-8')).result);
+  out.push('bad label: ' + (await read(latin, 'readAsText', 'nope')).result);
+  const bom = new Blob([new Uint8Array([0xef, 0xbb, 0xbf, 0x41])], {type: 'text/plain;charset=windows-1252'});
+  out.push('bom: ' + JSON.stringify((await read(bom, 'readAsText', 'windows-1252')).result));
+  const u16 = new Blob([new Uint8Array([0xff, 0xfe, 0x41, 0x00])]);
+  out.push('utf16 bom: ' + JSON.stringify((await read(u16, 'readAsText')).result));
+  out.push('replacement label: ' + JSON.stringify((await read(new Blob(['ab']), 'readAsText', 'replacement')).result));
+  // Ordering: Blob.text vs FileReader vs setTimeout
+  const order = [];
+  await new Promise(done => {
+    const r = new FileReader();
+    r.onload = () => order.push('reader load');
+    r.onloadstart = () => order.push('reader loadstart');
+    r.onloadend = () => { order.push('reader loadend'); setTimeout(done, 50); };
+    new Blob(['x']).text().then(() => order.push('text()'));
+    r.readAsText(new Blob(['y']));
+    setTimeout(() => order.push('timeout 0'), 0);
+    Promise.resolve().then(() => order.push('microtask'));
+  });
+  out.push('order: ' + order.join(', '));
+  const r2 = new FileReader(); r2.readAsText(new Blob(['a']));
+  out.push('result while loading: ' + r2.result + ' error: ' + r2.error);
+  const r3 = new FileReader(); out.push('fresh: ' + r3.readyState + ' ' + r3.result + ' ' + r3.error);
+  try { r3.readAsText('x'); } catch (e) { out.push('not blob: ' + e.name + ' ' + e.message); }
+  try { new File(['a']); } catch (e) { out.push('no name: ' + e.name + ' ' + e.message); }
+  out.push('File proto: ' + Object.getOwnPropertyNames(File.prototype).join('|'));
+  out.push('FileReader proto: ' + Object.getOwnPropertyNames(FileReader.prototype).join('|'));
+  out.push('FileReader statics: ' + Object.getOwnPropertyNames(FileReader).join('|'));
+  const r4 = new FileReader(); let abortEv = [];
+  r4.onabort = () => abortEv.push('abort ' + r4.readyState); r4.onloadend = () => abortEv.push('loadend');
+  r4.abort(); out.push('abort idle: ' + abortEv.join(',') + ' state ' + r4.readyState);
+  return out.join('\n');
+}
+</script>

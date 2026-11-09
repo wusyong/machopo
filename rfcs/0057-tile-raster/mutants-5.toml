@@ -1,0 +1,129 @@
+# 5: raster threads (`LayerTreeHostImpl::prepare_tiles` on a rayon pool,
+# `RasterCache` shared, `--num-raster-threads` through `RendererFlags`,
+# `ci.py raster --raster-threads`).
+#   python3 scripts/test.py mutate rfcs/0057-tile-raster/mutants-5.toml
+test = ["cargo", "test", "-q", "-p", "raster", "-p", "compositor"]
+timeout = 900
+
+[[mutant]]
+name = "no pool is made"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''        if jobs.len() > 1 && threads > 1 && self.raster_pool.is_none() {'''
+to = '''        if false && jobs.len() > 1 && threads > 1 && self.raster_pool.is_none() {'''
+
+[[mutant]]
+name = "a pool for one thread"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''        if jobs.len() > 1 && threads > 1 && self.raster_pool.is_none() {'''
+to = '''        if jobs.len() > 1 && threads > 0 && self.raster_pool.is_none() {'''
+
+[[mutant]]
+name = "results applied to the wrong tiles"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''        for (job, result) in jobs.into_iter().zip(rastered) {'''
+to = '''        for (job, result) in jobs.into_iter().zip(rastered.into_iter().rev()) {'''
+
+[[mutant]]
+name = "rastered tiles not counted"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''            prepared.rastered += 1;
+            let bitmap = match result {'''
+to = '''            let bitmap = match result {'''
+
+[[mutant]]
+name = "the default takes every processor"
+file = "crates/compositor/src/layer_tree_host.rs"
+from = '''n.get().saturating_sub(1).max(1)'''
+to = '''n.get().max(1)'''
+
+[[mutant]]
+name = "the browser's UI gets the renderers' threads"
+file = "crates/compositor/src/layer_tree_host.rs"
+from = '''            shared_image_interface: None,
+            num_raster_threads: 1,'''
+to = '''            shared_image_interface: None,
+            num_raster_threads: default_num_raster_threads(),'''
+
+[[mutant]]
+name = "images not kept"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        tables
+            .images
+            .insert(data.id, (Arc::downgrade(&data.bytes), image.clone()));'''
+to = ''''''
+
+[[mutant]]
+name = "the pool's thread count ignored"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                .num_threads(threads)'''
+to = '''                .num_threads(1)'''
+test = ["sh", "-c", "cargo build -q -p shell && python3 scripts/raster_test.py RunTests"]
+
+[[mutant]]
+name = "the raster threads named otherwise"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                .thread_name(|i| format!("CompositorTileWorker{}", i + 1))'''
+to = '''                .thread_name(|i| format!("RasterWorker{}", i + 1))'''
+test = ["sh", "-c", "cargo build -q -p shell && python3 scripts/raster_test.py RunTests"]
+
+[[mutant]]
+name = "the renderer ignores its flag"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            num_raster_threads: flags
+                .num_raster_threads
+                .unwrap_or_else(compositor::default_num_raster_threads),'''
+to = '''            num_raster_threads: compositor::default_num_raster_threads(),'''
+test = ["sh", "-c", "cargo build -q -p shell && python3 scripts/raster_test.py RunTests"]
+
+[[mutant]]
+name = "the pipe doesn't pass it on"
+file = "crates/shell/src/automation_pipe.rs"
+from = '''            num_raster_threads: options.num_raster_threads,'''
+to = '''            num_raster_threads: None,'''
+test = ["sh", "-c", "cargo build -q -p shell && python3 scripts/raster_test.py RunTests"]
+
+[[mutant]]
+name = "the browser doesn't pass it to its renderers"
+file = "crates/shell/src/browser_window.rs"
+from = '''                num_raster_threads: options.num_raster_threads,'''
+to = '''                num_raster_threads: None,'''
+test = ["sh", "-c", "cargo build -q -p shell && python3 scripts/raster_test.py RunTests"]
+
+[[mutant]]
+name = "kun's flag not kept"
+file = "crates/shell/src/main.rs"
+from = '''        test_fonts,
+        script_language,
+        num_raster_threads,'''
+to = '''        test_fonts,
+        script_language,
+        num_raster_threads: None,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--bin", "kun"]
+
+[[mutant]]
+name = "kun takes 0 threads"
+file = "crates/shell/src/main.rs"
+from = '''                let parsed = v.parse::<usize>().ok().filter(|n| *n > 0);'''
+to = '''                let parsed = v.parse::<usize>().ok();'''
+test = ["cargo", "test", "-q", "-p", "shell", "--bin", "kun"]
+
+[[mutant]]
+name = "the tool reads only the compositor thread's raster"
+file = "scripts/raster.py"
+from = '''        if kind in (1, 2) and (thread.startswith(RASTER_THREAD) or thread == "Compositor"):'''
+to = '''        if kind in (1, 2) and thread == "Compositor":'''
+test = ["python3", "scripts/raster_test.py"]
+
+[[mutant]]
+name = "the tool doesn't pass the flag"
+file = "scripts/raster.py"
+from = '''                 *(["--num-raster-threads", str(raster_threads)] if raster_threads else [])]'''
+to = '''                 ]'''
+test = ["python3", "scripts/raster_test.py"]
+
+[[mutant]]
+name = "the report doesn't say the threads"
+file = "scripts/raster.py"
+from = '''        f"{f'{raster_threads} raster threads' if raster_threads else 'the default raster threads'}; "'''
+to = '''        f"the default raster threads; "'''
+test = ["python3", "scripts/raster_test.py"]

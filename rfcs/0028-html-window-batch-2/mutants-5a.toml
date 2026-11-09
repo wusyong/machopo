@@ -1,0 +1,138 @@
+# Mutation test of stage 5a (`crypto`, the table's `ArrayBufferView` and
+# `QuotaExceededError`):
+# python3 scripts/test.py mutate rfcs/0028-html-window-batch-2/mutants-5a.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "crypto"]
+timeout = 900
+
+# --- getRandomValues and randomUUID -----------------------------------------------
+
+[[mutant]]
+name = "a float array is filled"
+file = "crates/dom_api/src/crypto.rs"
+from = '''    if !kind.is_integer() {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a DataView is an integer array"
+file = "crates/dom_api/src/buffer.rs"
+from = '''            Self::Float16 | Self::Float32 | Self::Float64 | Self::DataView'''
+to = '''            Self::Float16 | Self::Float32 | Self::Float64'''
+
+[[mutant]]
+name = "65536 bytes are too many"
+file = "crates/dom_api/src/crypto.rs"
+from = '''    if length > MAX_BYTES {'''
+to = '''    if length >= MAX_BYTES {'''
+
+[[mutant]]
+name = "no limit"
+file = "crates/dom_api/src/crypto.rs"
+from = '''    if length > MAX_BYTES {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "nothing is written"
+file = "crates/dom_api/src/crypto.rs"
+from = '''    array.write(cx, &bytes);'''
+to = '''    let _ = &bytes;'''
+
+[[mutant]]
+name = "the UUID's version isn't set"
+file = "crates/dom_api/src/crypto.rs"
+from = '''    bytes[6] = (bytes[6] & 0x0f) | 0x40;'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--lib", "crypto"]
+
+[[mutant]]
+name = "the UUID's variant isn't set"
+file = "crates/dom_api/src/crypto.rs"
+from = '''    bytes[8] = (bytes[8] & 0x3f) | 0x80;'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--lib", "crypto"]
+
+[[mutant]]
+name = "a window gets a new crypto each time"
+file = "crates/dom/src/crypto.rs"
+from = '''        if let Some(crypto) = unsafe { self.own(window).crypto.get_ptr() } {
+            return CryptoHandle::new(&crypto, self.roots);
+        }'''
+to = ''''''
+
+# --- The page's view ------------------------------------------------------------------
+
+[[mutant]]
+name = "a view is written from its buffer's start"
+file = "crates/dom_js/src/buffer.rs"
+from = '''    let start = view.byte_offset();'''
+to = '''    let start = 0;'''
+
+[[mutant]]
+name = "a typed array is taken for another"
+file = "crates/dom_js/src/buffer.rs"
+from = '''        (v8::Value::is_float32_array, ViewKind::Float32),'''
+to = '''        (v8::Value::is_float32_array, ViewKind::Uint32),'''
+
+[[mutant]]
+name = "an ArrayBuffer is taken as a view"
+file = "crates/dom_js/src/convert.rs"
+from = '''        Base::ArrayBufferView if crate::buffer::view_kind(value).is_some() => Ok('''
+to = '''        Base::ArrayBufferView if value.is_object() => Ok('''
+
+[[mutant]]
+name = "another view is returned"
+file = "crates/dom_js/src/convert.rs"
+from = '''        Value::BufferView(dom_api::buffer::BufferView::Script(view)) => {
+            v8::Local::new(cx.scope(), view.v8_value())
+        }'''
+to = '''        Value::BufferView(dom_api::buffer::BufferView::Script(view)) => {
+            let _ = view;
+            v8::undefined(cx.scope()).into()
+        }'''
+
+# --- The guest's copy -----------------------------------------------------------------
+
+[[mutant]]
+name = "the guest's copy isn't written"
+file = "crates/dom_api/src/buffer.rs"
+from = '''                own[..n].copy_from_slice(&bytes[..n]);'''
+to = '''                let _ = n;'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "engine", "crypto"]
+
+[[mutant]]
+name = "the guest's kind is lost"
+file = "crates/dom_wasm/src/host.rs"
+from = '''                ("kind".into(), Val::Enum(wit::kebab_case(kind.name()))),'''
+to = '''                ("kind".into(), Val::Enum("int8".into())),'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "engine", "crypto"]
+
+# --- QuotaExceededError ---------------------------------------------------------------
+
+[[mutant]]
+name = "a QuotaExceededError is a plain DOMException"
+file = "crates/dom_js/src/exception.rs"
+from = '''    let quota = exception.name == dom_api::ExceptionName::QuotaExceededError;'''
+to = '''    let quota = false;'''
+
+[[mutant]]
+name = "the options aren't read"
+file = "crates/dom_js/src/glue.js"
+from = '''      this.#quota = quotaOption(options, "quota");'''
+to = ''''''
+
+[[mutant]]
+name = "a non-finite quota is taken"
+file = "crates/dom_js/src/glue.js"
+from = '''    if (!Number.isFinite(number)) {'''
+to = '''    if (false) {'''
+
+[[mutant]]
+name = "QuotaExceededError's toStringTag is DOMException's"
+file = "crates/dom_js/src/glue.js"
+from = '''    value: "QuotaExceededError",'''
+to = '''    value: "DOMException",'''
+
+[[mutant]]
+name = "a TypeMismatchError is code 0"
+file = "crates/dom_api/src/exception.rs"
+from = '''            Self::TypeMismatchError => "TypeMismatchError",'''
+to = '''            Self::TypeMismatchError => "TypeMismatch",'''

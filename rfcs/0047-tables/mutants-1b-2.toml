@@ -1,0 +1,171 @@
+# Mutation test of stage 1b-2: fixed table layout, heights spread over
+# rows, cells laid out at their height, updates (2026-10-15):
+# python3 scripts/test.py mutate rfcs/0047-tables/mutants-1b-2.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+timeout = 900
+
+# --- fixed layout ---
+
+[[mutant]]
+name = "a fixed table with no width is fixed"
+file = "crates/layout/src/table.rs"
+from = '''TableLayout::Fixed && style.width != Size::Auto;'''
+to = '''TableLayout::Fixed && true;'''
+
+[[mutant]]
+name = "a fixed table's columns from every row"
+file = "crates/layout/src/table.rs"
+from = '''        let Some(row) = grid.sections.iter().find_map(|s| s.rows.first()) else {'''
+to = '''        let Some(row) = grid.sections.iter().find_map(|s| s.rows.last()) else {'''
+
+[[mutant]]
+name = "a spanning cell's percentage isn't shared"
+file = "crates/layout/src/table.rs"
+from = '''                        column.percent = Some(p.max(0.0) / span as f32);'''
+to = '''                        column.percent = Some(p.max(0.0));'''
+
+[[mutant]]
+name = "a spanning cell's width isn't shared"
+file = "crates/layout/src/table.rs"
+from = '''                    let each = ((width - spacing * (span - 1) as f32) / span as f32).max(0.0);'''
+to = '''                    let each = width;'''
+
+[[mutant]]
+name = "auto columns of a fixed table share nothing"
+file = "crates/layout/src/table.rs"
+from = '''            } else if auto(c) {
+                room / auto_count as f32'''
+to = '''            } else if auto(c) {
+                0.0'''
+
+[[mutant]]
+name = "fixed columns of a fixed table don't grow"
+file = "crates/layout/src/table.rs"
+from = '''                c.max + room * c.max / fixed_total'''
+to = '''                c.max'''
+
+[[mutant]]
+name = "percentage columns of a fixed table don't grow"
+file = "crates/layout/src/table.rs"
+from = '''                        room * percent_width(c) / percent_total'''
+to = '''                        0.0'''
+
+[[mutant]]
+name = "too narrow, percentage columns keep their percentage"
+file = "crates/layout/src/table.rs"
+from = '''                    (target - fixed_total).max(0.0) * percent_width(c) / percent_total'''
+to = '''                    percent_width(c)'''
+
+[[mutant]]
+name = "a fixed table is narrower than its fixed columns"
+file = "crates/layout/src/table.rs"
+from = '''            (fixed, fixed, fixed)'''
+to = '''            (0.0 * fixed, fixed, fixed)'''
+
+# --- heights ---
+
+[[mutant]]
+name = "a row group's height doesn't count"
+file = "crates/layout/src/table.rs"
+from = '''                    rows.grow(px - have);'''
+to = '''                    rows.grow(0.0 * (px - have));'''
+
+[[mutant]]
+name = "a table's height goes to its headers too"
+file = "crates/layout/src/table.rs"
+from = '''            let takers: Vec<usize> = if lowest > 0 && in_tier.iter().any(|&i| bodies[i]) {'''
+to = '''            let takers: Vec<usize> = if false {'''
+
+[[mutant]]
+name = "a table's height goes nowhere"
+file = "crates/layout/src/table.rs"
+from = '''                min_height - content,
+            );'''
+to = '''                0.0 * (min_height - content),
+            );'''
+
+[[mutant]]
+name = "a row group's share goes nowhere"
+file = "crates/layout/src/table.rs"
+from = '''                    rows.grow(added);
+                }
+            }
+        }
+        // A collapsed row'''
+to = '''                    rows.grow(0.0 * added);
+                }
+            }
+        }
+        // A collapsed row'''
+
+[[mutant]]
+name = "a spanning cell's need goes nowhere"
+file = "crates/layout/src/table.rs"
+from = '''                &last,
+                needs - have,'''
+to = '''                &last,
+                0.0 * (needs - have),'''
+
+[[mutant]]
+name = "spread evenly"
+file = "crates/layout/src/table.rs"
+from = '''            out[i] = extra * heights[i] / total;'''
+to = '''            out[i] = extra / group.len() as f32;'''
+
+# --- cells at their height ---
+
+[[mutant]]
+name = "a cell's own height doesn't make it definite"
+file = "crates/layout/src/table.rs"
+from = '''        let definite = definite || laid.css_height > 0.0;'''
+to = '''        let definite = definite;'''
+
+[[mutant]]
+name = "a table's height doesn't make its cells definite"
+file = "crates/layout/src/table.rs"
+from = '''                            css_height.is_some(),'''
+to = '''                            false,'''
+
+[[mutant]]
+name = "every cell is definite"
+file = "crates/layout/src/table.rs"
+from = '''        let definite = definite || laid.css_height > 0.0;'''
+to = '''        let definite = true;'''
+
+[[mutant]]
+name = "a positioned cell isn't laid out at its height"
+file = "crates/layout/src/table.rs"
+from = '''        if (style.is_positioned() || percent_children) && height != laid.content_height {'''
+to = '''        if percent_children && height != laid.content_height {'''
+
+[[mutant]]
+name = "the second layout's out-of-flow boxes are dropped"
+file = "crates/layout/src/table.rs"
+from = '''            Some(mut output) => output.oof_candidates.take(),'''
+to = '''            Some(_) => laid.output.oof_candidates.clone(),'''
+
+# --- updates ---
+
+[[mutant]]
+name = "a cell's span doesn't rebuild it"
+file = "crates/dom/src/scope.rs"
+from = '''                name.is_attr(&local_name!("colspan")) || name.is_attr(&local_name!("rowspan"))'''
+to = '''                false'''
+
+[[mutant]]
+name = "a laid out cell keeps its old shift"
+file = "crates/layout/src/lib.rs"
+from = '''            self.boxes[index].content_shift = 0.0;'''
+to = '''            let _ = 0;'''
+
+[[mutant]]
+name = "a box's paint-only change keeps its anonymous table boxes"
+file = "crates/layout/src/lib.rs"
+from = '''            StyleDifference::Paint if self.has_anonymous_table_box(index) => {'''
+to = '''            StyleDifference::Paint if false => {'''
+
+[[mutant]]
+name = "an inline element's paint-only change keeps its anonymous table boxes"
+file = "crates/layout/src/lib.rs"
+from = '''                Some(StyleDifference::Paint) if anonymous => walk.collect(container),'''
+to = '''                Some(StyleDifference::Paint) if false => walk.collect(container),'''

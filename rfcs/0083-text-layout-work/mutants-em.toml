@@ -1,0 +1,31 @@
+# Mutation test of fontique leaving out fonts without an em (macOS's
+# GB18030 Bitmap has `bhed` for `head`), in our parley fork:
+# python3 scripts/test.py mutate rfcs/0083-text-layout-work/mutants-em.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "parley_"]
+timeout = 600
+
+[[mutant]]
+name = "a font without an em is taken"
+file = "../third_party/parley/fontique/src/font.rs"
+from = '''        if font.head().map_or(true, |head| head.units_per_em() == 0) {
+            return None;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a font without head is taken"
+file = "../third_party/parley/fontique/src/font.rs"
+from = '''font.head().map_or(true, |head| head.units_per_em() == 0)'''
+to = '''font.head().map_or(false, |head| head.units_per_em() == 0)'''
+
+[[mutant]]
+name = "a head of 0 units is taken"
+file = "../third_party/parley/fontique/src/font.rs"
+from = '''font.head().map_or(true, |head| head.units_per_em() == 0)'''
+to = '''font.head().is_err()'''
+
+[[mutant]]
+name = "every font is dropped"
+file = "../third_party/parley/fontique/src/font.rs"
+from = '''font.head().map_or(true, |head| head.units_per_em() == 0)'''
+to = '''true'''

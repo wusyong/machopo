@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<title>-webkit-line-clamp: two lines, the second ending with an ellipsis, the blocks around it ending with it</title>
+<link rel="match" href="line-clamp-ref.html">
+<style>
+  html, body { margin: 0 }
+  .clamp { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+           font: 20px/1 Ahem; white-space: pre; width: 120px; margin: 20px;
+           background-color: yellow; color: green }
+  .clamp div { border: 5px solid blue }
+</style>
+<div class="clamp">XXX
+XXX
+XXX</div>
+<div class="clamp">X<div>XX
+XX</div>X</div>
+<div class="clamp" style="text-align: right">XXX
+XXX
+XXX</div>

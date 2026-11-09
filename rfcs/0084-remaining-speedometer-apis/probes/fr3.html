@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<script>
+function once() {
+  return new Promise(done => {
+    let tick = 0, stop = false; const marks = [];
+    const step = () => { if (stop) return; tick++; queueTask(step); };
+    const ch = new MessageChannel(); const queue = []; ch.port1.onmessage = () => queue.shift()();
+    const queueTask = f => { queue.push(f); ch.port2.postMessage(0); };
+    const r = new FileReader();
+    r.onloadstart = () => marks.push('loadstart@' + tick);
+    r.onprogress = () => marks.push('progress@' + tick);
+    r.onload = () => marks.push('load@' + tick);
+    r.onloadend = () => { marks.push('loadend@' + tick); };
+    new Blob(['x']).text().then(() => marks.push('text@' + tick));
+    r.readAsText(new Blob(['y']));
+    queueTask(step);
+    setTimeout(() => { stop = true; done(marks.join(' ')); }, 200);
+  });
+}
+async function run() { const out = []; for (let i = 0; i < 6; i++) out.push(await once()); return out.join('\n'); }
+</script>

@@ -1,0 +1,68 @@
+# Mutation test of stage 1: the walks skipped where they would find
+# nothing, the id table pruned as it doubles, the realm only for a new
+# wrapper, and the spans of the loop's work between tasks:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-1.toml
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "frame_view::tests::the_region_walks_only_where_they_may_find_something"]
+timeout = 900
+
+[[mutant]]
+name = "the wheel region walks with no listener"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        let region = if scope.may_have_wheel_listeners() {'''
+to = '''        let region = if true {'''
+
+[[mutant]]
+name = "what covers a scroller is looked for with none composited"
+file = "crates/paint/src/hit_test.rs"
+from = '''    let covered = if composited.contains(&true) {'''
+to = '''    let covered = if true {'''
+
+[[mutant]]
+name = "what covers a composited scroller is never looked for"
+file = "crates/paint/src/hit_test.rs"
+from = '''    let covered = if composited.contains(&true) {'''
+to = '''    let covered = if false {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "hit_test::"]
+
+[[mutant]]
+name = "the id table is pruned at every turn"
+file = "crates/dom/src/node_id.rs"
+from = '''        if self.entries.len() < (self.pruned_to * 2).max(PRUNE_AT_LEAST) {'''
+to = '''        if false {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::the_id_table_is_pruned_as_it_doubles"]
+
+[[mutant]]
+name = "the id table is never pruned"
+file = "crates/dom/src/node_id.rs"
+from = '''        if self.entries.len() < (self.pruned_to * 2).max(PRUNE_AT_LEAST) {'''
+to = '''        if true {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::the_id_table_is_pruned_as_it_doubles"]
+
+[[mutant]]
+name = "a prune doesn't note what it left"
+file = "crates/dom/src/node_id.rs"
+from = '''        self.pruned_to = self.entries.len();'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::the_id_table_is_pruned_as_it_doubles"]
+
+[[mutant]]
+name = "the realm is looked up for an existing wrapper too"
+file = "crates/dom_js/src/convert.rs"
+from = '''    let create = |cx: &mut BindingContext<'_, 's, '_>| {'''
+to = '''    let _ = realm_context(cx, object);
+    let create = |cx: &mut BindingContext<'_, 's, '_>| {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::an_existing_wrapper_is_returned_without_its_realm"]
+
+[[mutant]]
+name = "the loop's work between tasks isn't a span"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            let _between = tracing::trace_span!("RenderThread::between_tasks").entered();'''
+to = ''''''
+test = ["python3", "scripts/speedometer_test.py", "MeasureTests.test_traces_of_both"]
+
+[[mutant]]
+name = "the platform tasks aren't a span"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            let ran = tracing::trace_span!("RenderThread::run_platform_tasks")'''
+to = '''            let ran = tracing::Span::none()'''
+test = ["python3", "scripts/speedometer_test.py", "MeasureTests.test_traces_of_both"]

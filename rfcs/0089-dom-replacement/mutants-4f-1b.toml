@@ -1,0 +1,257 @@
+# Stage 4f-1b: the form owner on the new DOM: reset in the DOM's
+# operations (the ancestor form, a `form` attribute, the parser's), a
+# form's elements kept until an owner changes, `elements`, `form[i]` and
+# `form[name]` (past names), `RadioNodeList`, `document.forms` and an
+# `HTMLCollection`'s named getter.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it forms"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: no form seen at a form's making"
+file = "crates/dom_next/src/lib.rs"
+from = '''            self.form_made();'''
+to = '''            let _ = ();'''
+
+[[mutant]]
+name = "dom: a cleared owner the same"
+file = "crates/dom_next/src/form.rs"
+from = '''            (old, form) => old.is_none() && form.is_none(),'''
+to = '''            (_, _) => true,'''
+
+[[mutant]]
+name = "dom: the old form's elements kept"
+file = "crates/dom_next/src/form.rs"
+from = '''            self.form_elements_changed(old);'''
+to = '''            let _ = old;'''
+
+[[mutant]]
+name = "dom: the new form's elements kept"
+file = "crates/dom_next/src/form.rs"
+from = '''                self.form_elements_changed(form);'''
+to = '''                let _ = form;'''
+
+[[mutant]]
+name = "dom: past names keep an element gone"
+file = "crates/dom_next/src/form.rs"
+from = '''            self.forget_past_names(old, element);'''
+to = '''            let _ = element;'''
+
+[[mutant]]
+name = "dom: an owner never cleared"
+file = "crates/dom_next/src/form.rs"
+from = '''                    association.owner.set(self.gc, None);'''
+to = '''                    let _ = association;'''
+
+[[mutant]]
+name = "dom: a reset keeps the parser inserted flag"
+file = "crates/dom_next/src/form.rs"
+from = '''        self.set_flag(element, PARSER_INSERTED, false);'''
+to = '''        let _ = ();'''
+
+[[mutant]]
+name = "dom: a form attribute counts out of a document"
+file = "crates/dom_next/src/form.rs"
+from = '''        if !self.is_connected(element) {
+            return None;
+        }'''
+to = '''        if false {
+            return None;
+        }'''
+
+[[mutant]]
+name = "dom: a form attribute names any element"
+file = "crates/dom_next/src/form.rs"
+from = '''            .filter(|found| self.is_form(*found));'''
+to = '''            .filter(|found| self.kind(*found) == crate::NodeKind::Element);'''
+
+[[mutant]]
+name = "dom: a form a form attribute names looks in its subtree"
+file = "crates/dom_next/src/form.rs"
+from = '''        if let Some(form) = form {
+            self.association_or_new(form).outside.set(true);
+        }'''
+to = '''        if let Some(form) = form {
+            let _ = form;
+        }'''
+
+[[mutant]]
+name = "dom: the ancestor form only the parent"
+file = "crates/dom_next/src/form.rs"
+from = '''            at = self.parent(node);'''
+to = '''            at = None;
+            let _ = node;'''
+
+[[mutant]]
+name = "dom: nothing within a removed subtree"
+file = "crates/dom_next/src/form.rs"
+from = '''            if Gc::ptr_eq(current, root) {'''
+to = '''            if false && Gc::ptr_eq(current, root) {'''
+
+[[mutant]]
+name = "dom: the parser's association unflagged"
+file = "crates/dom_next/src/form.rs"
+from = '''        self.set_flag(element, PARSER_INSERTED, true);'''
+to = '''        let _ = ();'''
+
+[[mutant]]
+name = "dom: the parser's form looks in its subtree"
+file = "crates/dom_next/src/form.rs"
+from = '''        self.changes.forms.seen.set(true);
+        self.association_or_new(form).outside.set(true);'''
+to = '''        self.changes.forms.seen.set(true);'''
+
+[[mutant]]
+name = "dom: a parser-inserted element reset at insertion"
+file = "crates/dom_next/src/form.rs"
+from = '''            if !self.flag(at, PARSER_INSERTED) {'''
+to = '''            if true {'''
+
+[[mutant]]
+name = "dom: insertion resets no form attribute"
+file = "crates/dom_next/src/form.rs"
+from = '''        if self.is_connected(node) {
+            self.reset_attributed();
+        }'''
+to = '''        if false {
+            self.reset_attributed();
+        }'''
+
+[[mutant]]
+name = "dom: a removed form keeps the elements outside"
+file = "crates/dom_next/src/form.rs"
+from = '''                forms.push(at);'''
+to = '''                let _ = at;'''
+
+[[mutant]]
+name = "dom: removal resets no form attribute"
+file = "crates/dom_next/src/form.rs"
+from = '''        if was_connected {
+            self.reset_attributed();
+        }'''
+to = '''        if false {
+            self.reset_attributed();
+        }'''
+
+[[mutant]]
+name = "dom: a form attribute not kept"
+file = "crates/dom_next/src/form.rs"
+from = '''                attributed.push(id);'''
+to = '''                let _ = id;'''
+
+[[mutant]]
+name = "dom: an id change resets no form attribute"
+file = "crates/dom_next/src/style.rs"
+from = '''                self.form_id_changed();'''
+to = '''                let _ = ();'''
+
+[[mutant]]
+name = "dom: a form attribute's change resets nothing"
+file = "crates/dom_next/src/style.rs"
+from = '''        if name == FORM_ATTRIBUTE {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "dom: a form's elements found each time"
+file = "crates/dom_next/src/form.rs"
+from = '''        if let Some(elements) = association.elements.get(self.gc) {
+            return elements;
+        }'''
+to = '''        if let Some(elements) = association.elements.get(self.gc) {
+            let _ = elements;
+        }'''
+
+[[mutant]]
+name = "dom: image buttons among the elements"
+file = "crates/dom_next/src/form.rs"
+from = '''                && !self.is_image_button(element)'''
+to = '''                && true'''
+
+[[mutant]]
+name = "dom: an image button's type case-sensitive"
+file = "crates/dom_next/src/form.rs"
+from = '''eq_ignore_ascii_case("image"))'''
+to = '''eq("image"))'''
+
+[[mutant]]
+name = "dom: several named the first"
+file = "crates/dom_next/src/form.rs"
+from = '''                several = true;'''
+to = '''                several = false;'''
+
+[[mutant]]
+name = "dom: named by name alone"
+file = "crates/dom_next/src/form.rs"
+from = '''        has(names::ID) || has(names::NAME)'''
+to = '''        has(names::NAME)'''
+
+[[mutant]]
+name = "dom: no past names"
+file = "crates/dom_next/src/form.rs"
+from = '''                self.remember_past_name(form, name, element);'''
+to = '''                let _ = (name, element);'''
+
+[[mutant]]
+name = "dom: a radio node list of every element"
+file = "crates/dom_next/src/form.rs"
+from = '''!self.is_named(element, &name) || f(element)'''
+to = '''{ let _ = &name; f(element) }'''
+
+[[mutant]]
+name = "dom: a form's elements walked as a collection"
+file = "crates/dom_next/src/collection.rs"
+from = '''        if collection.kind.get() == FORM_ELEMENTS {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "dom: document.forms every element"
+file = "crates/dom_next/src/collection.rs"
+from = '''            FORMS => return element.qualified_name() == QualifiedName::html(names::local::FORM),'''
+to = '''            FORMS => return true,'''
+
+[[mutant]]
+name = "api: a form's elements an HTMLCollection"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''            if cx.is_form_controls_collection(collection) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "api: a radio node list a NodeList"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''            if cx.is_radio_node_list(list) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "js: no inherited indexed getter"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''    if let Some(ancestor) = indexed_ancestor(interface) {'''
+to = '''    if let Some(ancestor) = indexed_ancestor(interface).filter(|_| false) {'''
+
+[[mutant]]
+name = "js: an anonymous indexed getter on the prototype"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''                    if desc.name.is_empty() {
+                        return;
+                    }'''
+to = '''                    if false {
+                        return;
+                    }'''
+
+[[mutant]]
+name = "js: a named getter's object not there"
+file = "crates/dom_js_next/src/named.rs"
+from = '''        Got::String(_) | Got::Object(..) => Some(true),'''
+to = '''        Got::String(_) => Some(true),
+        Got::Object(..) => Some(false),'''
+
+[[mutant]]
+name = "api: no HTMLCollection named getter"
+file = "crates/dom_api_next/src/interfaces.rs"
+from = '''        #[named(getter)]
+        method namedGetter(name: DomString) -> Option<Element> = collection::named_item;'''
+to = ''''''
+
+[[mutant]]
+name = "html: the parser associates nothing"
+file = "crates/html/src/next.rs"
+from = '''        cx.set_parser_form_owner(target, form);'''
+to = '''        let _ = (target, form);'''

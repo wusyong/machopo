@@ -1,0 +1,48 @@
+# Mutation test of step 1d (the focused element in a shadow tree, its
+# focus states, `activeElement` retargeted):
+# python3 scripts/test.py mutate rfcs/0035-shadow-dom-custom-elements/mutants-1d.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "shadow_dom"]
+timeout = 900
+
+[[mutant]]
+name = "focus-within stops at the shadow root"
+file = "crates/dom/src/scope.rs"
+from = '''    while let Some(up) = unsafe { parent_or_shadow_host(nodes[nodes.len() - 1]) } {'''
+to = '''    while let Some(up) = unsafe { nodes[nodes.len() - 1].parent.get() } {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "focus::"]
+
+[[mutant]]
+name = "removing a host leaves the focus in its shadow tree"
+file = "crates/dom/src/scope.rs"
+from = '''    if !is_shadow_including_inclusive_ancestor(removed, focused) {'''
+to = '''    if !std::ptr::eq(removed, focused) {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "focus::"]
+
+[[mutant]]
+name = "the focus can't be in a shadow tree"
+file = "crates/dom/src/scope.rs"
+from = '''        current = unsafe { parent_or_shadow_host(n) };'''
+to = '''        current = unsafe { n.parent.get() };'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "focus::"]
+
+[[mutant]]
+name = "activeElement isn't retargeted"
+file = "crates/dom_api/src/focus.rs"
+from = '''        let retargeted = crate::shadow_root::retarget(candidate.get(&read), Some(this_ref));'''
+to = '''        let retargeted = candidate.get(&read);'''
+
+[[mutant]]
+name = "activeElement is given outside its tree"
+file = "crates/dom_api/src/focus.rs"
+from = '''        if crate::shadow_root::tree_root(retargeted).ptr_eq(&this_ref) {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "a shadow root's activeElement falls back to the body"
+file = "crates/dom_api/src/focus.rs"
+from = '''    if this.kind() != NodeKind::Document {
+        return Ok(None);
+    }'''
+to = '''    if false {
+        return Ok(None);
+    }'''

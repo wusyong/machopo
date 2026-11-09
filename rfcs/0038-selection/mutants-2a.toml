@@ -1,0 +1,125 @@
+# Mutation test of step 2a (layout: the text nodes' offsets, the runs'
+# clusters, text_rects), with what 2b changed in them:
+# python3 scripts/test.py mutate rfcs/0038-selection/mutants-2a.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "text_rects::"]
+timeout = 600
+
+[[mutant]]
+name = "a text item has no text node"
+file = "crates/layout/src/lib.rs"
+from = '''                        Some(parent.id()),
+                        Some(child.id()),'''
+to = '''                        Some(parent.id()),
+                        None,'''
+
+[[mutant]]
+name = "every character is one UTF-16 unit"
+file = "crates/layout/src/text.rs"
+from = '''                    utf16 += c.len_utf16() as u32;'''
+to = '''                    utf16 += 1;'''
+
+[[mutant]]
+name = "a cluster ends where it starts"
+file = "crates/layout/src/text.rs"
+from = '''                    .map_or(self.length, |&(_, _, end)| end),'''
+to = '''                    .map_or(self.length, |&(_, start, _)| start),'''
+
+[[mutant]]
+name = "a cluster is at the kept character after"
+file = "crates/layout/src/text.rs"
+from = '''    fn char_at(&self, byte: u32) -> Option<&(u32, u32, u32)> {
+        let index = self.chars.partition_point(|&(b, ..)| b < byte);'''
+to = '''    fn char_at(&self, byte: u32) -> Option<&(u32, u32, u32)> {
+        let index = self.chars.partition_point(|&(b, ..)| b <= byte);'''
+
+[[mutant]]
+name = "a run's part starts at its first kept character"
+file = "crates/layout/src/text.rs"
+from = '''            .is_some_and(|&(_, start, _)| start == first.start)'''
+to = '''            .is_some_and(|&(_, start, _)| start == first.start && false)'''
+
+[[mutant]]
+name = "a run's part goes to the data's end"
+file = "crates/layout/src/text.rs"
+from = '''        let end = self
+            .char_at(end_byte)
+            .map_or(self.length, |&(_, start, _)| start);'''
+to = '''        let end = self.length + 0 * end_byte;'''
+
+[[mutant]]
+name = "a run has no clusters"
+file = "crates/layout/src/text.rs"
+from = '''            clusters.push(TextCluster {'''
+to = '''            if false { clusters.push(TextCluster { start: 0, end: 0, x: 0.0 }); }
+            let _ = (TextCluster {'''
+
+[[mutant]]
+name = "a run's clusters don't move with position: relative"
+file = "crates/layout/src/fragment.rs"
+from = '''            cluster.x += by.x;'''
+to = ''''''
+
+[[mutant]]
+name = "a point is in the cluster after it"
+file = "crates/layout/src/geometry.rs"
+from = '''                    .find(|c| c.start >= point)'''
+to = '''                    .find(|c| c.start > point)'''
+
+[[mutant]]
+name = "a start inside a cluster is past it"
+file = "crates/layout/src/geometry.rs"
+from = '''                    .find(|c| c.start <= point && point < c.end)'''
+to = '''                    .find(|c| c.start == point && point < c.end)'''
+
+[[mutant]]
+name = "hanging white space takes room"
+file = "crates/layout/src/geometry.rs"
+from = '''                    .map_or(run_end, |c| c.x)
+                    .min(run_end)'''
+to = '''                    .map_or(run_end, |c| c.x)'''
+
+[[mutant]]
+name = "a start in hanging white space takes room"
+file = "crates/layout/src/geometry.rs"
+from = '''                    .map_or_else(|| next(point), |c| c.x.min(run_end))'''
+to = '''                    .map_or_else(|| next(point), |c| c.x)'''
+
+[[mutant]]
+name = "a collapsed range at a run's end is in it"
+file = "crates/layout/src/geometry.rs"
+from = '''                source.start <= start && start < source.end'''
+to = '''                source.start <= start && start <= source.end'''
+
+[[mutant]]
+name = "a collapsed range at the data's end has no box"
+file = "crates/layout/src/geometry.rs"
+from = '''        rects.extend(at_end);'''
+to = ''''''
+
+[[mutant]]
+name = "a range is in a run it only touches"
+file = "crates/layout/src/geometry.rs"
+from = '''                start < source.end && source.start < end'''
+to = '''                start <= source.end && source.start <= end'''
+
+[[mutant]]
+name = "a text's box is the line's top"
+file = "crates/layout/src/geometry.rs"
+from = '''                run.baseline - run.ascent + offset.y,'''
+to = '''                run.baseline + offset.y,'''
+
+[[mutant]]
+name = "a text's box isn't scrolled"
+file = "crates/layout/src/geometry.rs"
+from = '''    walk(layout_view, scroll, &mut |fragment, offset, _, contents| {'''
+to = '''    walk(layout_view, scroll, &mut |fragment, offset, contents, _| {'''
+
+[[mutant]]
+name = "a transform isn't taken"
+file = "crates/layout/src/geometry.rs"
+from = '''    ) -> bool {
+        let (mut to_root, mut offset) = (to_root, offset);
+        if let Some(transform) = box_transform(fragment) {'''
+to = '''    ) -> bool {
+        let (mut to_root, mut offset) = (to_root, offset);
+        if let Some(transform) = box_transform(fragment).filter(|_| false) {'''

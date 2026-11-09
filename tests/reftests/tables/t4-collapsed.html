@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<title>A table's collapsed borders</title>
+<link rel="match" href="t4-collapsed-ref.html">
+<!-- Collapsed, the table's and its cells' borders become one line on each
+     grid line, centered on it, the table drawing them over the cells'
+     backgrounds: here 4px wide on lines 24px apart. -->
+<style>
+  body { margin: 0 }
+  table { border-collapse: collapse; border: 4px solid blue }
+  td { border: 4px solid blue; padding: 0; background: lime }
+  div { width: 20px; height: 20px }
+</style>
+<table>
+  <tr><td><div></div></td><td><div></div></td></tr>
+  <tr><td><div></div></td><td><div></div></td></tr>
+</table>

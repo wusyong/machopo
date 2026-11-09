@@ -1,0 +1,219 @@
+# Mutation test of 1b: the clock every process reads (`ipc::TimeTicks`),
+# bodies `net` decodes itself, Fetch's filtering in the renderer, and the
+# renderer's `Network` agent with the browser's part of the domain:
+# python3 scripts/test.py mutate rfcs/0082-devtools-network/mutants-1b.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools_network::"]
+timeout = 600
+
+# `TimeTicks`.
+
+[[mutant]]
+name = "a reading doesn't move by a duration"
+file = "crates/ipc/src/time_ticks.rs"
+from = '''        self.0.checked_add(duration).map(Self)'''
+to = '''        self.0.checked_sub(duration).map(Self)'''
+test = ["cargo", "test", "-q", "-p", "ipc"]
+
+[[mutant]]
+name = "the time since goes backwards"
+file = "crates/ipc/src/time_ticks.rs"
+from = '''        self.0.saturating_sub(earlier.0)'''
+to = '''        earlier.0.saturating_sub(self.0)'''
+test = ["cargo", "test", "-q", "-p", "ipc"]
+
+[[mutant]]
+name = "a reading in seconds is nothing"
+file = "crates/ipc/src/time_ticks.rs"
+from = '''        self.0.as_secs_f64()'''
+to = '''        0.0'''
+test = ["cargo", "test", "-q", "-p", "ipc"]
+
+# Decoding in `net`.
+
+[[mutant]]
+name = "a body isn't decoded"
+file = "crates/net/src/http.rs"
+from = '''content_encoding::decode(content_encoding.as_deref(), body)'''
+to = '''Ok::<_, String>(body)'''
+test = ["cargo", "test", "-q", "-p", "net"]
+
+[[mutant]]
+name = "an unknown coding is skipped"
+file = "crates/net/src/content_encoding.rs"
+from = '''            _ => return Ok(body),'''
+to = '''            _ => {}'''
+test = ["cargo", "test", "-q", "-p", "net"]
+
+[[mutant]]
+name = "codings are undone first first"
+file = "crates/net/src/content_encoding.rs"
+from = '''codings.iter().rev().try_fold'''
+to = '''codings.iter().try_fold'''
+test = ["cargo", "test", "-q", "-p", "net"]
+
+[[mutant]]
+name = "raw deflate isn't taken"
+file = "crates/net/src/content_encoding.rs"
+from = '''flate2::read::DeflateDecoder::new(data).read_to_end(&mut decoded)'''
+to = '''flate2::read::ZlibDecoder::new(data).read_to_end(&mut decoded)'''
+test = ["cargo", "test", "-q", "-p", "net"]
+
+[[mutant]]
+name = "a range asks for codings"
+file = "crates/net/src/http.rs"
+from = '''            if ranged {'''
+to = '''            if !ranged {'''
+test = ["cargo", "test", "-q", "-p", "net"]
+
+[[mutant]]
+name = "no encoded body length"
+file = "crates/net/src/http.rs"
+from = '''let encoded_body_length = u64::try_from(body.len()).unwrap_or(u64::MAX);'''
+to = '''let encoded_body_length = 0;'''
+test = ["cargo", "test", "-q", "-p", "net"]
+
+[[mutant]]
+name = "a header line is shorter"
+file = "crates/net/src/http.rs"
+from = '''.map(|(name, value)| name.len().saturating_add(value.len()).saturating_add(4))'''
+to = '''.map(|(name, value)| name.len().saturating_add(value.len()).saturating_add(2))'''
+test = ["cargo", "test", "-q", "-p", "net"]
+
+[[mutant]]
+name = "a body that doesn't decode is any failure"
+file = "crates/net/src/http.rs"
+from = '''NetErrorCode::ContentDecodingFailed, format'''
+to = '''NetErrorCode::Failed, format'''
+test = ["cargo", "test", "-q", "-p", "net"]
+
+# Fetch's filtering, now the renderer's.
+
+[[mutant]]
+name = "cookies reach the renderer"
+file = "crates/net/src/url_loader.rs"
+from = '''    raw.headers.retain(|(name, _)| !matches!(name.as_str(), "set-cookie" | "set-cookie2"));'''
+to = '''    raw.headers.retain(|(name, _)| !name.is_empty());'''
+test = ["cargo", "test", "-q", "-p", "net"]
+
+[[mutant]]
+name = "an opaque fetch()'s body reaches the renderer"
+file = "crates/net/src/cors.rs"
+from = '''            response.body.clear();'''
+to = '''            response.body.truncate(usize::MAX);'''
+test = ["cargo", "test", "-q", "-p", "net"]
+
+[[mutant]]
+name = "a CORS response isn't filtered for script"
+file = "crates/dom_api/src/fetch.rs"
+from = '''        ResponseTainting::Cors => cors_filtered_headers(headers, credentials),'''
+to = '''        ResponseTainting::Cors => headers,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools_network::requests_are_told"]
+
+[[mutant]]
+name = "the request's credentials are lost"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                            fetch.credentials,'''
+to = '''                            protocol::network::CredentialsMode::Omit,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "fetch::"]
+
+[[mutant]]
+name = "a star exposes all with credentials"
+file = "crates/protocol/src/network.rs"
+from = '''&& credentials != CredentialsMode::Include'''
+to = '''&& credentials != CredentialsMode::Omit'''
+test = ["cargo", "test", "-q", "-p", "protocol"]
+
+# The renderer's `Network` agent.
+
+[[mutant]]
+name = "requests aren't told"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''                self.network_agent.will_send(sent, frame);'''
+to = '''                let _ = (sent, frame);'''
+
+[[mutant]]
+name = "requests stop being watched at the end of a task"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''            self.network_agent.did_cancel(request_id);
+        }
+        self.next_request_id.watch(self.network_agent.enabled());'''
+to = '''            self.network_agent.did_cancel(request_id);
+        }
+        self.next_request_id.watch(false);'''
+
+[[mutant]]
+name = "a fetch() forgets its document"
+file = "crates/renderer/src/loader.rs"
+from = '''Some(request.owner)'''
+to = '''None'''
+
+[[mutant]]
+name = "an iframe's document's loader is its parent's"
+file = "crates/renderer/src/render_thread/network_agent.rs"
+from = '''            // An iframe's document: its request is its loader.
+            id.clone()'''
+to = '''            // An iframe's document: its request is its loader.
+            frame.loader_id.clone()'''
+
+[[mutant]]
+name = "a child frame's loader isn't its request"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        .with_devtools_loader_id(loader_id);'''
+to = '''        ;
+        let _ = loader_id;'''
+
+[[mutant]]
+name = "a body over the resource limit is kept"
+file = "crates/renderer/src/render_thread/network_agent.rs"
+from = '''if size > self.max_resource_buffer_size'''
+to = '''if size > usize::MAX'''
+
+[[mutant]]
+name = "the oldest bodies aren't dropped"
+file = "crates/renderer/src/render_thread/network_agent.rs"
+from = '''while self.kept.saturating_add(size) > self.max_total_buffer_size {'''
+to = '''while self.kept.saturating_add(size) > usize::MAX {'''
+
+[[mutant]]
+name = "every body is text"
+file = "crates/renderer/src/render_thread/network_agent.rs"
+from = '''let text = is_text('''
+to = '''let text = true || is_text('''
+
+[[mutant]]
+name = "a cancelled request isn't said to be"
+file = "crates/renderer/src/render_thread/network_agent.rs"
+from = '''"canceled": error.is_none(),'''
+to = '''"canceled": false,'''
+
+[[mutant]]
+name = "redirects aren't told"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.network_agent.did_redirect(request_id, redirect);'''
+to = '''        let _ = redirect;'''
+
+[[mutant]]
+name = "a request's body is always told"
+file = "crates/renderer/src/render_thread/network_agent.rs"
+from = '''if body.len() <= max_post_data_size {'''
+to = '''if body.len() <= usize::MAX {'''
+
+[[mutant]]
+name = "a new document keeps the old bodies"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.network_agent.main_frame_navigated();'''
+to = ''''''
+
+[[mutant]]
+name = "no dataReceived"
+file = "crates/renderer/src/render_thread/network_agent.rs"
+from = '''if body_length > 0 {'''
+to = '''if body_length > usize::MAX {'''
+
+# The browser's part.
+
+[[mutant]]
+name = "offline is taken for granted"
+file = "crates/shell/src/automation_session.rs"
+from = '''if offline || rules {'''
+to = '''if rules {'''

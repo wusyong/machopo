@@ -1,0 +1,23 @@
+# 1a: a canvas in a shadow tree is drawn and shown with its host
+# (`renderer`'s `canvas::flush_shown` takes the shadow-including root).
+#   python3 scripts/test.py mutate rfcs/0056-wgpu-everywhere/mutants-1a.toml
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "canvas::"]
+timeout = 600
+
+[[mutant]]
+name = "connected only through parents, as before"
+file = "crates/renderer/src/canvas.rs"
+from = '''                node.shadow_including_root().kind() == dom::NodeKind::Document'''
+to = '''                node.root().kind() == dom::NodeKind::Document'''
+
+[[mutant]]
+name = "connected or not"
+file = "crates/renderer/src/canvas.rs"
+from = '''                node.shadow_including_root().kind() == dom::NodeKind::Document'''
+to = '''                true'''
+
+[[mutant]]
+name = "shown whatever the frame"
+file = "crates/renderer/src/canvas.rs"
+from = '''                    && scope.document_frame(&node.document().to_handle()).is_some()'''
+to = '''                    && true'''

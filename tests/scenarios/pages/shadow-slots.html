@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<title>Shadow slots</title>
+<!-- A host whose shadow tree is drawn in place of its children: a gray
+     band (the shadow tree's own element) above slot "a" (blue) and slot
+     "b" (orange), each with what is assigned to it; the child no slot takes
+     isn't drawn. The host turns light green while the pointer is over what
+     is in a slot (its `:hover` goes up the flat tree); a click on the
+     slotted text moves it from slot "a" to slot "b". -->
+<style>
+  body { margin: 0; font: 20px/1 sans-serif }
+  #host { width: 300px; padding: 10px }
+  #host:hover { background: rgb(200, 255, 200) }
+</style>
+<div id="host"><span id="slotted" slot="a">Click to move me</span><span slot="none">NOT DRAWN</span></div>
+<p id="note">at a</p>
+<script>
+  const host = document.getElementById("host");
+  const root = host.attachShadow({ mode: "open" });
+  const band = document.createElement("div");
+  band.setAttribute("style", "height: 20px; background: gray");
+  root.appendChild(band);
+  for (const [name, color] of [["a", "rgb(0, 0, 255)"], ["b", "rgb(255, 128, 0)"]]) {
+    const wrap = document.createElement("div");
+    wrap.setAttribute("style", `min-height: 30px; margin-top: 10px; border: 3px solid ${color}; color: ${color}`);
+    const slot = document.createElement("slot");
+    slot.setAttribute("name", name);
+    wrap.appendChild(slot);
+    root.appendChild(wrap);
+  }
+  const slotted = document.getElementById("slotted");
+  slotted.addEventListener("click", () => {
+    slotted.slot = "b";
+    document.getElementById("note").textContent = "at b";
+  });
+</script>

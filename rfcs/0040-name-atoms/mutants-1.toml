@@ -1,0 +1,76 @@
+# Mutation test of stage 1 (names as html5ever's inline and static
+# atoms, or strings):
+# python3 scripts/test.py mutate rfcs/0040-name-atoms/mutants-1.toml
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "names::"]
+timeout = 900
+
+[[mutant]]
+name = "a short name is looked up in the static list first"
+file = "crates/dom/src/name.rs"
+from = '''        if name.len() <= MAX_INLINE_LEN {'''
+to = '''        if name.is_empty() {'''
+
+[[mutant]]
+name = "an unknown long name becomes a dynamic atom"
+file = "crates/dom/src/name.rs"
+from = '''        } else {
+            Self(Repr::Text(name.into()))
+        }
+    }'''
+to = '''        } else {
+            Self(Repr::Atom(Atom::from(name)))
+        }
+    }'''
+
+[[mutant]]
+name = "html5ever's dynamic atom is kept"
+file = "crates/dom/src/name.rs"
+from = '''        if atom.is_dynamic() {
+            Self(Repr::Text((*atom).into()))'''
+to = '''        if atom.is_dynamic() && atom.is_empty() {
+            Self(Repr::Text((*atom).into()))'''
+
+[[mutant]]
+name = "a string is not handed to html5ever as itself"
+file = "crates/dom/src/name.rs"
+from = '''            Repr::Text(text) => Atom::from(&**text),'''
+to = '''            Repr::Text(_) => Atom::from(""),'''
+
+[[mutant]]
+name = "an atom and a string may be the same name"
+file = "crates/dom/src/name.rs"
+from = '''            _ => false,'''
+to = '''            _ => true,'''
+
+[[mutant]]
+name = "two strings are the same name"
+file = "crates/dom/src/name.rs"
+from = '''            (Repr::Text(a), Repr::Text(b)) => a == b,'''
+to = '''            (Repr::Text(_), Repr::Text(_)) => true,'''
+
+[[mutant]]
+name = "a name hashes as its representation"
+file = "crates/dom/src/name.rs"
+from = '''        self.as_str().hash(state);'''
+to = '''        self.is_atom().hash(state);
+        self.as_str().hash(state);'''
+
+[[mutant]]
+name = "the HTML namespace is SVG's"
+file = "crates/dom/src/node.rs"
+from = '''        self.0 == NamespaceUrl::from_atom(crate::name::ns!(html))'''
+to = '''        self.0 == NamespaceUrl::from_atom(crate::name::ns!(svg))'''
+
+[[mutant]]
+name = "every namespace is none"
+file = "crates/dom/src/node.rs"
+from = '''        self.0.is_empty()
+    }'''
+to = '''        self.0.len() < 40
+    }'''
+
+[[mutant]]
+name = "the null namespace is HTML's"
+file = "crates/dom/src/node.rs"
+from = '''        Self(NamespaceUrl::from_atom(crate::name::ns!()))'''
+to = '''        Self(NamespaceUrl::from_atom(crate::name::ns!(html)))'''

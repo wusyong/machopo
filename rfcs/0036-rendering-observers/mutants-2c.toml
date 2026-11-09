@@ -1,0 +1,133 @@
+# Mutation test of step 2c (the rendering update's intersections, the
+# entries and the task):
+# python3 scripts/test.py mutate rfcs/0036-rendering-observers/mutants-2c.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "intersection_observers::"]
+timeout = 600
+
+# dom_api: the entries and the task.
+
+[[mutant]]
+name = "a ratio at a threshold is below it"
+file = "crates/dom_api/src/intersection_observer.rs"
+from = '''                    .position(|&t| t > ratio)'''
+to = '''                    .position(|&t| t >= ratio)'''
+
+[[mutant]]
+name = "a target meeting the root below the first threshold intersects"
+file = "crates/dom_api/src/intersection_observer.rs"
+from = '''        let is_intersecting = index > 0;'''
+to = '''        let is_intersecting = c.intersection_rect.is_some();'''
+
+[[mutant]]
+name = "a target with no area meeting the root has the ratio 0"
+file = "crates/dom_api/src/intersection_observer.rs"
+from = '''                } else {
+                    1.0
+                };'''
+to = '''                } else {
+                    0.0
+                };'''
+
+[[mutant]]
+name = "every computation is an entry"
+file = "crates/dom_api/src/intersection_observer.rs"
+from = '''        if previous.previous_threshold_index == Some(index)'''
+to = '''        if false && previous.previous_threshold_index == Some(index)'''
+
+[[mutant]]
+name = "what was computed isn't recorded"
+file = "crates/dom_api/src/intersection_observer.rs"
+from = '''        m.set_intersection_observation_state(&c.observer, &c.target, index, is_intersecting);'''
+to = ''''''
+
+[[mutant]]
+name = "a null root bounds is a rect"
+file = "crates/dom_api/src/intersection_observer.rs"
+from = '''                root_bounds: c.root_bounds.map(|r| values(Some(r))),'''
+to = '''                root_bounds: Some(values(c.root_bounds)),'''
+
+[[mutant]]
+name = "no task is queued"
+file = "crates/dom_api/src/intersection_observer.rs"
+from = '''    if queue_task {'''
+to = '''    if false && queue_task {'''
+
+[[mutant]]
+name = "an observer whose entries were taken is called back"
+file = "crates/dom_api/src/intersection_observer.rs"
+from = '''        if entries.is_empty() {
+            continue;
+        }'''
+to = ''''''
+
+# renderer: when and what is computed.
+
+[[mutant]]
+name = "the intersections are computed once"
+file = "crates/renderer/src/render_thread.rs"
+from = '''    if *computed == Some(now) {'''
+to = '''    if computed.is_some() {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "intersection_observers::"]
+
+[[mutant]]
+name = "a new observation doesn't compute"
+file = "crates/renderer/src/render_thread.rs"
+from = '''    let now = (view.pre_paints(), version);'''
+to = '''    let now = (view.pre_paints(), version - version);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "intersection_observers::"]
+
+[[mutant]]
+name = "a new pre-paint doesn't compute"
+file = "crates/renderer/src/render_thread.rs"
+from = '''    let now = (view.pre_paints(), version);'''
+to = '''    let now = (0, version);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "intersection_observers::"]
+
+[[mutant]]
+name = "pre-paint isn't counted"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        self.pre_paints += 1;'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "intersection_observers::"]
+
+[[mutant]]
+name = "a document root is an element"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    IntersectionObserverRoot::Node(node) if node.kind() == NodeKind::Document => {'''
+to = '''                    IntersectionObserverRoot::Node(node) if false && node.kind() == NodeKind::Document => {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "intersection_observers::"]
+
+[[mutant]]
+name = "every observation is the first frame's"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            Some((last, list)) if *last == frame => list.push(computed),'''
+to = '''            Some((_, list)) => list.push(computed),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "intersection_observers::"]
+
+[[mutant]]
+name = "a cross-origin target gets the root margin and root bounds"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let other = *root == IntersectionRoot::Implicit && {'''
+to = '''        let other = false && *root == IntersectionRoot::Implicit && {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "intersection_observers::"]
+
+[[mutant]]
+name = "an observer whose root is gone computes against the viewport"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    IntersectionObserverRoot::Gone => continue,'''
+to = '''                    IntersectionObserverRoot::Gone => IntersectionRoot::Implicit,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "intersection_observers::"]
+
+[[mutant]]
+name = "a target in a document no frame shows gets an entry"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                        && !shown.contains(&document.as_node().id())'''
+to = '''                        && false && !shown.contains(&document.as_node().id())'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "intersection_observers::"]
+
+[[mutant]]
+name = "a target with no rect gets the root's rect"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                (false, None) => Some(gfx::RectF::default()),'''
+to = '''                (false, None) => Some(geometry.root.unwrap_or_default()),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "intersection_observers::"]

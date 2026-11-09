@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<title>A table's legacy colors, border color and backgrounds paint as their CSS</title>
+<link rel="match" href="t5-legacy-attributes-ref.html">
+<!-- `bgcolor` (a legacy color: `chucknorris` is #c00000), `bordercolor`,
+     which makes the table's border and its cells' solid and its cells' of
+     its color, and a cell's `background`, as Chrome maps them. -->
+<style>
+  body { margin: 0 }
+  td { width: 40px; height: 40px }
+</style>
+<table bgcolor=yellow bordercolor=blue border=5 cellspacing=10 cellpadding=0>
+  <tr bgcolor=lime>
+    <td></td>
+    <td bgcolor=chucknorris></td>
+    <td background="../images/resources/green-blue-20x10.png"></td>
+  </tr>
+</table>

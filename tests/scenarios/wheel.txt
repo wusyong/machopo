@@ -1,0 +1,10 @@
+# The wheel in the page: over an element with a
+# blocking wheel listener the wheel waits for it, and canceled the page
+# doesn't scroll; elsewhere the compositor scrolls, and the listener gets
+# a wheel it can't cancel.
+navigate pages/wheel.html
+wait-loaded
+wheel #map 0 40
+wait-text #status "canceled 1 over the map"
+wheel-at 100 300 0 40
+wait-text #status "scrolled to 40, cancelable: false"

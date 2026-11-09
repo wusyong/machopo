@@ -1,0 +1,88 @@
+//! Which font each part of a text is shaped in, with the built-in Ahem
+//! (every glyph a 1em square, but no `€`) and Lato (one face, Medium, so
+//! italic is synthesized): a character the first font of the list has no
+//! glyph for takes the next one's, and the text after it the first one's
+//! again; each family list and each style picks from its own. (In a debug
+//! build every font picked without the whole query is checked against it.)
+
+use layout::BoxFragment;
+
+/// The text runs of `html`'s lines, in order: each one's font (its data's
+/// id), skew and advance.
+fn runs(html: &str) -> Vec<(u64, f32, f32)> {
+    let html = format!("<style>html, body {{ margin: 0 }}</style>{html}");
+    let view = crate::page::lay_out(&html).view;
+    fn collect(fragment: &BoxFragment, out: &mut Vec<(u64, f32, f32)>) {
+        for line in &fragment.lines {
+            for run in &line.runs {
+                out.push((run.font.id, run.skew, run.advance));
+            }
+        }
+        for child in &fragment.children {
+            collect(&child.fragment, out);
+        }
+    }
+    let mut out = Vec::new();
+    collect(&view, &mut out);
+    out
+}
+
+/// The fonts of `runs`, as the index of each one's first appearance.
+fn fonts(runs: &[(u64, f32, f32)]) -> Vec<usize> {
+    let mut seen = Vec::new();
+    runs.iter()
+        .map(|&(id, ..)| {
+            seen.iter().position(|&s| s == id).unwrap_or_else(|| {
+                seen.push(id);
+                seen.len() - 1
+            })
+        })
+        .collect()
+}
+
+/// A character the first font has no glyph for is in the next one; the
+/// characters after it are in the first again, not in the one before them.
+#[test]
+fn a_missing_glyph_falls_back_and_back_again() {
+    let runs = runs("<div style='font: 20px/1 Ahem, Lato'>XX\u{20AC}X\u{20AC}\u{20AC}XX</div>");
+    assert_eq!(fonts(&runs), [0, 1, 0, 1, 0]);
+    let advances: Vec<f32> = runs
+        .iter()
+        .map(|&(_, _, advance)| advance.round())
+        .collect();
+    assert_eq!(advances[0], 40.0, "Ahem: {advances:?}");
+    assert_eq!(advances[2], 20.0, "Ahem: {advances:?}");
+    assert_eq!(advances[4], 40.0, "Ahem: {advances:?}");
+    assert_eq!(advances[1], 12.0, "Lato: {advances:?}");
+}
+
+/// An element with other families picks from its own list, and the text
+/// after it from the first list again: one with a box (its edges split
+/// the shaping), and one with none (`display: contents`), shaped with the
+/// text around it.
+#[test]
+fn each_family_list_picks_its_own() {
+    for display in ["inline", "contents"] {
+        let runs = runs(&format!(
+            "<div style='font: 20px/1 Ahem'>XX<span style='display: {display}; font-family: Lato'>XX</span>XX</div>"
+        ));
+        assert_eq!(fonts(&runs), [0, 1, 0], "{display}");
+    }
+}
+
+/// An italic element takes the font's italic, synthesized as a skew since
+/// Lato has none; the text after it, upright again, has none. With a box
+/// and without.
+#[test]
+fn each_style_picks_its_own() {
+    for display in ["inline", "contents"] {
+        let runs = runs(&format!(
+            "<div style='font: 20px/1 Lato'>ab<i style='display: {display}'>ab</i>ab</div>"
+        ));
+        assert_eq!(fonts(&runs), [0, 0, 0], "{display}");
+        let skews: Vec<f32> = runs.iter().map(|&(_, skew, _)| skew).collect();
+        assert_eq!(skews[0], 0.0, "{display}: {skews:?}");
+        assert_ne!(skews[1], 0.0, "{display}: {skews:?}");
+        assert_eq!(skews[2], 0.0, "{display}: {skews:?}");
+    }
+}

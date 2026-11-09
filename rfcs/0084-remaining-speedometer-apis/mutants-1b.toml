@@ -1,0 +1,27 @@
+test = ["cargo", "test", "-p", "dom_js", "--test", "it", "--", "bindings::from_element_and_to_element"]
+timeout = 1200
+
+[[mutant]]
+name = "no event leaves its target"
+file = "crates/dom_api/src/ui_event.rs"
+from = '''    matches!(&*event.event_type(), "mouseout" | "mouseleave")'''
+to = '''    false'''
+
+[[mutant]]
+name = "only mouseout leaves"
+file = "crates/dom_api/src/ui_event.rs"
+from = '''    matches!(&*event.event_type(), "mouseout" | "mouseleave")'''
+to = '''    matches!(&*event.event_type(), "mouseout")'''
+
+[[mutant]]
+name = "fromElement is toElement"
+file = "crates/dom_api/src/ui_event.rs"
+from = '''    Ok(legacy_element(cx, this, !leaves(this)))'''
+to = '''    Ok(legacy_element(cx, this, leaves(this)))'''
+
+[[mutant]]
+name = "a window is no node but counts"
+file = "crates/dom_api/src/ui_event.rs"
+from = '''        EventTargetHandle::Window(_) | EventTargetHandle::Plain(_) => None,'''
+to = '''        EventTargetHandle::Window(w) => Some(cx.read().window_document(&w).as_node().clone()),
+        EventTargetHandle::Plain(_) => None,'''

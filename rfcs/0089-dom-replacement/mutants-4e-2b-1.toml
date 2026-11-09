@@ -1,0 +1,626 @@
+# Stage 4e-2b-1: the tree's members on the new DOM: `childNodes` (live,
+# its index cache cleared by the children's changes), `children`,
+# `getElementsByClassName`, `ParentNode`'s and `ChildNode`'s methods,
+# `replaceChild`, `nodeValue`, `normalize`, `compareDocumentPosition`,
+# `isEqualNode`, `isSameNode`, the namespace lookups, the element
+# siblings, the host-including ancestor check, and the hooks moved into
+# `link`.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it -- tree slot && cargo test -q -p dom_js_next --test it -- node_tree shadow_dom documents"]
+timeout = 3000
+
+[[mutant]]
+name = "childNodes: a new list each time"
+file = "crates/dom_next/src/lists.rs"
+from = '''        if let Some(list) = rare.child_nodes.get(self.gc) {
+            return list;
+        }
+        let children'''
+to = '''        let children'''
+
+[[mutant]]
+name = "childNodes: not marked"
+file = "crates/dom_next/src/lists.rs"
+from = '''        node.scope.set(node.scope.get() | HAS_CHILD_LIST);
+'''
+to = ''''''
+
+[[mutant]]
+name = "child list: the cached node kept"
+file = "crates/dom_next/src/lists.rs"
+from = '''        children.cached.set(self.gc, None);
+'''
+to = ''''''
+
+[[mutant]]
+name = "child list: the length kept"
+file = "crates/dom_next/src/lists.rs"
+from = '''        children.length.set(UNKNOWN);
+    }'''
+to = '''    }'''
+
+[[mutant]]
+name = "length: counted again each time"
+file = "crates/dom_next/src/lists.rs"
+from = '''        if list.length.get() != UNKNOWN {
+            return list.length.get();
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "length: from the cached node, as from the first"
+file = "crates/dom_next/src/lists.rs"
+from = '''            Some(cached) => (Some(cached), list.cached_index.get()),'''
+to = '''            Some(cached) => (Some(cached), 0_u32),'''
+
+[[mutant]]
+name = "length: not kept"
+file = "crates/dom_next/src/lists.rs"
+from = '''        list.length.set(count);
+        count'''
+to = '''        count'''
+
+[[mutant]]
+name = "item: past the length"
+file = "crates/dom_next/src/lists.rs"
+from = '''        if length != UNKNOWN && index >= length {
+            return None;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "item: forward from the cached, its index off"
+file = "crates/dom_next/src/lists.rs"
+from = '''            Some(cached) if index >= list.cached_index.get() => (cached, list.cached_index.get()),'''
+to = '''            Some(cached) if index >= list.cached_index.get() => (cached, list.cached_index.get().saturating_add(1)),'''
+
+[[mutant]]
+name = "item: back from the cached, its index off"
+file = "crates/dom_next/src/lists.rs"
+from = '''            Some(cached) if index > list.cached_index.get() / 2 => (cached, list.cached_index.get()),'''
+to = '''            Some(cached) if index > list.cached_index.get() / 2 => (cached, index),'''
+
+[[mutant]]
+name = "item: back from the last, its index off"
+file = "crates/dom_next/src/lists.rs"
+from = '''(self.last_child(parent)?, length.saturating_sub(1))'''
+to = '''(self.last_child(parent)?, length)'''
+
+[[mutant]]
+name = "item: the length found past the end wrong"
+file = "crates/dom_next/src/lists.rs"
+from = '''                    list.length.set(at_index.saturating_add(1));'''
+to = '''                    list.length.set(at_index);'''
+
+[[mutant]]
+name = "item: the cache not kept"
+file = "crates/dom_next/src/lists.rs"
+from = '''        list.cached.set(self.gc, Some(at));
+        list.cached_index.set(index);
+'''
+to = ''''''
+
+[[mutant]]
+name = "insert: no hooks"
+file = "crates/dom_next/src/lib.rs"
+from = '''        self.link(parent, node, child);
+        if parent.scope.get() & CHILDREN_HOOKS != 0 {
+            self.children_changed(parent, node, true);
+        }'''
+to = '''        self.link(parent, node, child);'''
+
+[[mutant]]
+name = "insert a fragment: no hooks"
+file = "crates/dom_next/src/lib.rs"
+from = '''                self.link(parent, first, child);
+                if parent.scope.get() & CHILDREN_HOOKS != 0 {
+                    self.children_changed(parent, first, true);
+                }'''
+to = '''                self.link(parent, first, child);'''
+
+[[mutant]]
+name = "textContent: no hooks"
+file = "crates/dom_next/src/lib.rs"
+from = '''                    if node.scope.get() & CHILDREN_HOOKS != 0 {
+                        self.children_changed(node, text, true);
+                    }
+'''
+to = ''''''
+
+[[mutant]]
+name = "host-including: not through hosts"
+file = "crates/dom_next/src/lib.rs"
+from = '''                None if self.is_shadow_root(at) => return self.is_host_including_ancestor_of_host(ancestor, at),
+'''
+to = ''''''
+
+[[mutant]]
+name = "host-including: the host not the ancestor"
+file = "crates/dom_next/src/lib.rs"
+from = '''            .is_some_and(|host| self.is_host_including_inclusive_ancestor(ancestor, host))'''
+to = '''            .is_some_and(|host| Gc::ptr_eq(host, ancestor))'''
+
+[[mutant]]
+name = "remove: no hooks"
+file = "crates/dom_next/src/lib.rs"
+from = '''        self.set_shadow_scope(node, None);
+        if parent.scope.get() & CHILDREN_HOOKS != 0 {
+            self.children_changed(parent, node, false);
+        }'''
+to = '''        self.set_shadow_scope(node, None);'''
+
+[[mutant]]
+name = "hooks: the child list not cleared"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if parent.scope.get() & lists::HAS_CHILD_LIST != 0 {
+            self.child_list_changed(parent);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "hooks: the slots only"
+file = "crates/dom_next/src/lib.rs"
+from = '''const CHILDREN_HOOKS: u8 = slot::SLOT_SCOPES | lists::HAS_CHILD_LIST;'''
+to = '''const CHILDREN_HOOKS: u8 = slot::SLOT_SCOPES;'''
+
+[[mutant]]
+name = "replace: any parent"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if !matches!(
+            parent_kind,
+            NodeKind::Document | NodeKind::DocumentFragment | NodeKind::Element
+        ) || self.is_host_including_inclusive_ancestor(node, parent)'''
+to = '''        if self.is_host_including_inclusive_ancestor(node, parent)'''
+
+[[mutant]]
+name = "replace: an ancestor"
+file = "crates/dom_next/src/lib.rs"
+from = '''        ) || self.is_host_including_inclusive_ancestor(node, parent)
+        {'''
+to = '''        ) {'''
+
+[[mutant]]
+name = "replace: a child of another"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if !self.parent(child).is_some_and(|of| Gc::ptr_eq(of, parent)) {
+            return Err(DomError::NotFound);
+        }
+        let kind = self.kind(node);
+        match kind {
+            NodeKind::Document => return Err(DomError::HierarchyRequest),
+            NodeKind::Text if parent_kind == NodeKind::Document => {
+                return Err(DomError::HierarchyRequest);
+            }
+            NodeKind::DocumentType if parent_kind != NodeKind::Document => {
+                return Err(DomError::HierarchyRequest);
+            }
+            _ => {}
+        }
+        if parent_kind != NodeKind::Document {
+            return Ok(());
+        }
+        // Another'''
+to = '''        let kind = self.kind(node);
+        match kind {
+            NodeKind::Document => return Err(DomError::HierarchyRequest),
+            NodeKind::Text if parent_kind == NodeKind::Document => {
+                return Err(DomError::HierarchyRequest);
+            }
+            NodeKind::DocumentType if parent_kind != NodeKind::Document => {
+                return Err(DomError::HierarchyRequest);
+            }
+            _ => {}
+        }
+        if parent_kind != NodeKind::Document {
+            return Ok(());
+        }
+        // Another'''
+
+[[mutant]]
+name = "replace: the child counted"
+file = "crates/dom_next/src/lib.rs"
+from = '''            self.children_of(parent, kind) > usize::from(self.kind(child) == kind)'''
+to = '''            self.children_of(parent, kind) > 0'''
+
+[[mutant]]
+name = "replace: a doctype after"
+file = "crates/dom_next/src/lib.rs"
+from = '''            !other(NodeKind::Element) && !self.sibling_of(child, NodeKind::DocumentType, true);'''
+to = '''            !other(NodeKind::Element);'''
+
+[[mutant]]
+name = "replace: a text in a document"
+file = "crates/dom_next/src/lib.rs"
+from = '''        let fits = match kind {
+            NodeKind::DocumentFragment => {
+                if self.has_child_of(node, NodeKind::Text) {'''
+to = '''        let fits = match kind {
+            NodeKind::DocumentFragment => {
+                if false {'''
+
+[[mutant]]
+name = "replace: two elements"
+file = "crates/dom_next/src/lib.rs"
+from = '''                    1 => element_fits,
+                    _ => false,'''
+to = '''                    1 => element_fits,
+                    _ => true,'''
+
+[[mutant]]
+name = "replace: a doctype after an element"
+file = "crates/dom_next/src/lib.rs"
+from = '''                !other(NodeKind::DocumentType) && !self.sibling_of(child, NodeKind::Element, false)'''
+to = '''                !other(NodeKind::DocumentType)'''
+
+[[mutant]]
+name = "replace: the node as its own next"
+file = "crates/dom_next/src/lib.rs"
+from = '''        let reference = skip(self.next_sibling(child), true);'''
+to = '''        let reference = self.next_sibling(child);'''
+
+[[mutant]]
+name = "replace: the node as its own previous"
+file = "crates/dom_next/src/lib.rs"
+from = '''        let previous = skip(self.previous_sibling(child), false);'''
+to = '''        let previous = self.previous_sibling(child);'''
+
+[[mutant]]
+name = "replace: the node not taken out first"
+file = "crates/dom_next/src/lib.rs"
+from = '''        // Out of its old parent first (its own record), as "adopt" takes it.
+        self.remove(node);
+'''
+to = ''''''
+
+[[mutant]]
+name = "replace: the child not removed"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if removed {
+            self.remove_noting(child, false);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "replace: no record"
+file = "crates/dom_next/src/lib.rs"
+from = '''            self.queue_tree_record(parent, &nodes, removed, previous, reference);'''
+to = '''            let _ = (removed, previous);'''
+
+[[mutant]]
+name = "replaceChildren: unchecked"
+file = "crates/dom_next/src/lib.rs"
+from = '''        self.ensure_pre_insertion_validity(parent, node, None)?;
+        self.replace_all(parent, Some(node));'''
+to = '''        self.replace_all(parent, Some(node));'''
+
+[[mutant]]
+name = "normalize: the node itself"
+file = "crates/dom_next/src/tree.rs"
+from = '''            if !Gc::ptr_eq(at, node) && self.kind(at) == NodeKind::Text {'''
+to = '''            if self.kind(at) == NodeKind::Text {'''
+
+[[mutant]]
+name = "normalize: a joined one again"
+file = "crates/dom_next/src/tree.rs"
+from = '''            if self.parent(text).is_none() {
+                continue;
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "normalize: an empty one kept"
+file = "crates/dom_next/src/tree.rs"
+from = '''            if own.to_str().is_empty() {
+                self.remove(text);
+                continue;
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "normalize: one run's data not joined"
+file = "crates/dom_next/src/tree.rs"
+from = '''            self.set_data(text, &joined);'''
+to = ''''''
+
+[[mutant]]
+name = "normalize: the run kept"
+file = "crates/dom_next/src/tree.rs"
+from = '''            for next in run {
+                self.remove(next);
+            }'''
+to = '''            let _ = run;'''
+
+[[mutant]]
+name = "equal: any kinds"
+file = "crates/dom_next/src/tree.rs"
+from = '''        if self.kind(a) != self.kind(b) {
+            return false;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "equal: the names"
+file = "crates/dom_next/src/tree.rs"
+from = '''                self.element_name(a) == self.element_name(b)
+                    && count'''
+to = '''                count'''
+
+[[mutant]]
+name = "equal: the attributes' count"
+file = "crates/dom_next/src/tree.rs"
+from = '''                    && count == self.attribute_count(b)
+'''
+to = ''''''
+
+[[mutant]]
+name = "equal: an attribute's value"
+file = "crates/dom_next/src/tree.rs"
+from = '''                                    && theirs.value == ours.value'''
+to = ''''''
+
+[[mutant]]
+name = "equal: a doctype"
+file = "crates/dom_next/src/tree.rs"
+from = '''            NodeKind::DocumentType => self.doctype(a) == self.doctype(b),'''
+to = '''            NodeKind::DocumentType => true,'''
+
+[[mutant]]
+name = "equal: character data"
+file = "crates/dom_next/src/tree.rs"
+from = '''            NodeKind::Text | NodeKind::Comment => self.data(a) == self.data(b),'''
+to = '''            NodeKind::Text | NodeKind::Comment => true,'''
+
+[[mutant]]
+name = "equal: fewer children"
+file = "crates/dom_next/src/tree.rs"
+from = '''                (None, None) => return true,'''
+to = '''                (None, _) | (_, None) => return true,'''
+
+[[mutant]]
+name = "position: itself"
+file = "crates/dom_next/src/tree.rs"
+from = '''        if Gc::ptr_eq(node, other) {
+            return 0;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "position: disconnected in one order"
+file = "crates/dom_next/src/tree.rs"
+from = '''            let order = if self.node_id(other) < self.node_id(node) {'''
+to = '''            let order = if true {'''
+
+[[mutant]]
+name = "position: a container"
+file = "crates/dom_next/src/tree.rs"
+from = '''        if common == theirs.len() {
+            return DOCUMENT_POSITION_CONTAINS | DOCUMENT_POSITION_PRECEDING;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "position: a contained one"
+file = "crates/dom_next/src/tree.rs"
+from = '''        if common == ours.len() {
+            return DOCUMENT_POSITION_CONTAINED_BY | DOCUMENT_POSITION_FOLLOWING;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "position: always following"
+file = "crates/dom_next/src/tree.rs"
+from = '''            if Gc::ptr_eq(sibling, our_child) {
+                return DOCUMENT_POSITION_PRECEDING;'''
+to = '''            if false {
+                return DOCUMENT_POSITION_PRECEDING;'''
+
+[[mutant]]
+name = "children: the descendants"
+file = "crates/dom_next/src/collection.rs"
+from = '''            at = if children {'''
+to = '''            at = if false {'''
+
+[[mutant]]
+name = "class: any of them"
+file = "crates/dom_next/src/collection.rs"
+from = '''        wanted.iter().all(|want| {'''
+to = '''        wanted.iter().any(|want| {'''
+
+[[mutant]]
+name = "class: none matches everything"
+file = "crates/dom_next/src/collection.rs"
+from = '''        if wanted.is_empty() {
+            return false;
+        }
+        let has'''
+to = '''        let has'''
+
+[[mutant]]
+name = "class: quirks ignored"
+file = "crates/dom_next/src/collection.rs"
+from = '''.any(|class| if quirks { class.lower == want.lower } else { class.name == want.name })'''
+to = '''.any(|class| class.name == want.name)'''
+
+[[mutant]]
+name = "class: a name twice"
+file = "crates/dom_next/src/collection.rs"
+from = '''            if !classes.iter().any(|class| class.name == name) {'''
+to = '''            if true {'''
+
+[[mutant]]
+name = "children: a new collection each time"
+file = "crates/dom_next/src/collection.rs"
+from = '''        if let Some(collection) = rare.children.get(self.gc) {
+            return collection;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "viable: the listed not skipped"
+file = "crates/dom_api_next/src/child_node.rs"
+from = '''        if !listed(nodes, node) {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "before: no viable, last"
+file = "crates/dom_api_next/src/child_node.rs"
+from = '''        None => cx.first_child(parent),'''
+to = '''        None => None,'''
+
+[[mutant]]
+name = "before: before the viable"
+file = "crates/dom_api_next/src/child_node.rs"
+from = '''        Some(viable) => cx.next_sibling(viable),'''
+to = '''        Some(viable) => Some(viable),'''
+
+[[mutant]]
+name = "replaceWith: always replaced"
+file = "crates/dom_api_next/src/child_node.rs"
+from = '''    if cx.parent(this).is_some_and(|of| Gc::ptr_eq(of, parent)) {
+        cx.replace_child(parent, node, this)?;'''
+to = '''    if true {
+        cx.replace_child(parent, node, this)?;'''
+
+[[mutant]]
+name = "convert: one in a fragment"
+file = "crates/dom_api_next/src/parent_node.rs"
+from = '''    if let [only] = nodes {
+        return Ok(node(only));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "prepend: last"
+file = "crates/dom_api_next/src/parent_node.rs"
+from = '''    cx.pre_insert(this, node, cx.first_child(this))?;'''
+to = '''    cx.pre_insert(this, node, None)?;'''
+
+[[mutant]]
+name = "previousElementSibling: any"
+file = "crates/dom_api_next/src/child_node.rs"
+from = '''    let mut at = cx.previous_sibling(this);
+    while let Some(node) = at {
+        if is_element(cx, node) {'''
+to = '''    let mut at = cx.previous_sibling(this);
+    while let Some(node) = at {
+        if true {'''
+
+[[mutant]]
+name = "nextElementSibling: any"
+file = "crates/dom_api_next/src/child_node.rs"
+from = '''    let mut at = cx.next_sibling(this);
+    while let Some(node) = at {
+        if is_element(cx, node) {'''
+to = '''    let mut at = cx.next_sibling(this);
+    while let Some(node) = at {
+        if true {'''
+
+[[mutant]]
+name = "lookups: a document's own"
+file = "crates/dom_api_next/src/node.rs"
+from = '''        NodeKind::Document => {
+            let mut child = cx.first_child(node);'''
+to = '''        NodeKind::Document if false => {
+            let mut child = cx.first_child(node);'''
+
+[[mutant]]
+name = "lookups: a text's itself"
+file = "crates/dom_api_next/src/node.rs"
+from = '''        _ => cx.parent(node).filter(|parent| is_element(cx, *parent)),
+    }'''
+to = '''        _ => Some(node),
+    }'''
+
+[[mutant]]
+name = "namespace: xml not bound"
+file = "crates/dom_api_next/src/node.rs"
+from = '''        Some("xml") => return Some(names::string(names::XML_NAMESPACE)),
+'''
+to = ''''''
+
+[[mutant]]
+name = "namespace: a name's prefix any"
+file = "crates/dom_api_next/src/node.rs"
+from = '''        if name.namespace != names::NONE && Some(name.prefix) == prefix_id {'''
+to = '''        if name.namespace != names::NONE {'''
+
+[[mutant]]
+name = "namespace: no declarations"
+file = "crates/dom_api_next/src/node.rs"
+from = '''            if attribute.name.namespace != names::XMLNS_NAMESPACE {
+                continue;
+            }
+            let declares'''
+to = '''            if true {
+                continue;
+            }
+            let declares'''
+
+[[mutant]]
+name = "namespace: an empty declaration bound"
+file = "crates/dom_api_next/src/node.rs"
+from = '''                return (!attribute.value.to_str().is_empty()).then_some(attribute.value);'''
+to = '''                return Some(attribute.value);'''
+
+[[mutant]]
+name = "namespace: not up the tree"
+file = "crates/dom_api_next/src/node.rs"
+from = '''        at = cx.parent(element).filter(|parent| is_element(cx, *parent));
+    }
+    None
+}
+
+/// DOM's "locate a namespace prefix"'''
+to = '''        at = None;
+    }
+    None
+}
+
+/// DOM's "locate a namespace prefix"'''
+
+[[mutant]]
+name = "prefix: a name's own not found"
+file = "crates/dom_api_next/src/node.rs"
+from = '''        if name.prefix != names::NONE && names::get(name.namespace) == namespace {
+            return Some(names::string(name.prefix));
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "prefix: a declaration's not found"
+file = "crates/dom_api_next/src/node.rs"
+from = '''                && *attribute.value.to_str() == *namespace
+            {
+                return Some(names::string(attribute.name.local));'''
+to = '''                && false
+            {
+                return Some(names::string(attribute.name.local));'''
+
+[[mutant]]
+name = "lookupPrefix: the empty namespace"
+file = "crates/dom_api_next/src/node.rs"
+from = '''    let Some(namespace) = namespace.filter(|namespace| !namespace.is_empty()) else {'''
+to = '''    let Some(namespace) = namespace else {'''
+
+[[mutant]]
+name = "isDefaultNamespace: the empty one"
+file = "crates/dom_api_next/src/node.rs"
+from = '''    let namespace = namespace.filter(|namespace| !namespace.is_empty());
+    let default'''
+to = '''    let default'''
+
+[[mutant]]
+name = "isSameNode: any"
+file = "crates/dom_api_next/src/node.rs"
+from = '''    Ok(other.is_some_and(|other| Gc::ptr_eq(this, other)))'''
+to = '''    Ok(other.is_some())'''
+
+[[mutant]]
+name = "front: a node as a string"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        if bindings::is_wrapper::<Node>(self.scope.scope(), value) {
+            return v8::Local::<v8::Object>::try_from(value)
+                .ok()
+                .map(dom_api_next::typed::NodeOrStr::Node);
+        }
+        strings::arg_string'''
+to = '''        strings::arg_string'''

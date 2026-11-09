@@ -1,0 +1,9 @@
+<!DOCTYPE html><meta charset=utf-8>
+<style>body{margin:0}iframe{position:absolute;left:0;width:300px;height:200px;border:0}#plain{position:absolute;left:400px;top:0;width:200px;height:200px;background:#fee}</style>
+<iframe id=same style="top:0"></iframe><iframe id=cross style="top:250px"></iframe><iframe id=site style="top:500px"></iframe><div id=plain></div><div id=cover style="position:absolute;left:150px;top:250px;width:150px;height:200px;background:rgba(255,0,0,.3)"></div><div id=cover2 style="position:absolute;left:150px;top:0;width:150px;height:200px;background:rgba(255,0,0,.3);will-change:transform"></div>
+<script>
+const q=new URLSearchParams(location.search);
+same.src="iip_short.html";cross.src="http://127.0.0.1:"+q.get("portB")+"/iip_short.html";site.src="http://localhost:"+q.get("portB")+"/iip_short.html";
+window.busy=(ms)=>{const s=performance.now();let d=null,c=null;while(performance.now()-s<ms){const t=performance.now()-s;if(d===null&&navigator.scheduling.isInputPending())d=Math.round(t);if(c===null&&navigator.scheduling.isInputPending({includeContinuous:true}))c=Math.round(t)}return {discrete:d,continuous:c,origin:location.origin}};
+window.runIn=(w,ms)=>{if(w=="top")return Promise.resolve(busy(ms));if(w=="same")return Promise.resolve(same.contentWindow.busy(ms));const f=w=="cross"?cross:site;return new Promise(r=>{addEventListener("message",function h(e){if(e.data&&e.data.reply){removeEventListener("message",h);r(e.data.reply)}});f.contentWindow.postMessage({cmd:"busy",ms},"*")})};
+</script>

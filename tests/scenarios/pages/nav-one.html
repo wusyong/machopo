@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<!-- navigation.txt's first page: links, and a counter that starts over when
+     the page is loaded again. -->
+<title>one</title>
+<style>
+  html, body { margin: 0 }
+  a, span { display: block; height: 40px }
+  #part { margin-top: 2000px }
+</style>
+<p id="where">one</p>
+<a id="to-two" href="nav-two.html">to two</a>
+<a id="to-part" href="#part">to part</a>
+<span id="count-me" onclick="more()">count</span>
+<p id="count">0</p>
+<p id="part">part</p>
+<script>
+  let clicks = 0;
+  function more() {
+    document.getElementById("count").textContent = String(++clicks);
+  }
+</script>

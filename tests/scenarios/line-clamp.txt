@@ -1,0 +1,16 @@
+# A news item as NewsSite has them: its title clamped to two lines, the
+# second ending with an ellipsis, and a photo `object-fit: cover` crops to
+# a square (the middle of a wide picture, half teal and half orange). The
+# title is 60 px tall from 100 px down the page, which starts 74 px down
+# the window: a click on its second line hits it; one where its third line
+# would be, hidden by the clamp, hits the summary after it. How the
+# ellipsis and the photo look is for a person to look at in the
+# screenshot.
+window size=800x600
+navigate pages/line-clamp.html
+wait-loaded
+screenshot clamped
+click-at 150 219
+wait-text #note "Clicked the title."
+click-at 150 249
+wait-text #note "Clicked the summary."

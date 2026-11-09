@@ -1,0 +1,123 @@
+# Stage 5d-2a: scripts and loads on the DOM's engine.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p style_next --test it cascade:: && cargo test -q -p renderer --lib && cargo test -q -p shell --test it -- network:: modules:: inserted_scripts:: fetch:: script:: automation_pipe:: sites:: && cargo test -q -p browser --test it -- query_element:: navigation::a_srcdoc_document_commits_with_nothing_else_to_wake_the_renderer && python3 scripts/test.py scenarios iframe-loads"]
+timeout = 2400
+
+[[mutant]]
+name = "renderer: an iframe's initial about:blank has no document"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                        self.next_children.documents.push(initial);'''
+to = '''                        let _ = initial;'''
+
+[[mutant]]
+name = "renderer: a srcdoc commits at once"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                self.queue_next_child_commit(frame, url, markup);'''
+to = '''                self.commit_next_child(frame, url, "text/html", None, markup.as_bytes(), None, None);'''
+
+[[mutant]]
+name = "renderer: a queued child commit doesn't hold back its parent's load"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            || self.commits.iter().any(|(id, _, _)| child_of_frame(id))'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: the loop sleeps with a child commit queued"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if self.next_child_commits_due() {
+            return Some(Duration::ZERO);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom_api_next: an inserted inline script's base URL is the document's URL"
+file = "crates/dom_api_next/src/script.rs"
+from = '''                base_url: cx.document_base_url(document).map(String::from),'''
+to = '''                base_url: None,'''
+
+[[mutant]]
+name = "dom_js_next: a script's base URL not used"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''            script.base_url.unwrap_or(script.url),'''
+to = '''            script.url,'''
+
+[[mutant]]
+name = "renderer: the window's load fires with element tasks queued"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                    .is_some_and(|window| cx.has_element_task(window))'''
+to = '''                    .is_some_and(|_| false)'''
+
+[[mutant]]
+name = "renderer: no failed subresource told with the load"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                    failed_subresources,'''
+to = '''                    failed_subresources: { let _ = failed_subresources; Vec::new() },'''
+
+[[mutant]]
+name = "renderer: a failed resource not noted"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                next.failed.push(failed_url(result, asked));'''
+to = '''                let _ = (result, asked);'''
+
+[[mutant]]
+name = "renderer: a link's href that doesn't parse not noted"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                next.failed.push(href);'''
+to = '''                let _ = href;'''
+
+[[mutant]]
+name = "style_next: a background image under display:none asked for"
+file = "crates/style_next/src/lib.rs"
+from = '''        if parents.rendered && style.display != Display::None {'''
+to = '''        if style.display != Display::None {'''
+
+[[mutant]]
+name = "renderer: a sheet blocks scripts whatever its media"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                        style::MediaQueryList::parse(&media).matches(&environment)'''
+to = '''                        { let _ = (&media, &environment); true }'''
+
+[[mutant]]
+name = "renderer: a removed link still blocks scripts"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                        cx.is_connected(link)'''
+to = '''                        true'''
+
+[[mutant]]
+name = "renderer: scripts blocked by sheets not retried after each loop"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            self.retry_next_scripts_blocked_by_sheets();'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: the last chunk's links start after the parse ends"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                    // loading first: the deferred scripts wait for them.
+                    self.start_next_loads();
+                    self.next_document_parsed(frame);'''
+to = '''                    // loading first: the deferred scripts wait for them.
+                    self.next_document_parsed(frame);'''
+
+[[mutant]]
+name = "renderer: a discarded document's fetches kept"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                        .is_none_or(|document| cx.is_discarded(document))'''
+to = '''                        .is_none()'''
+
+[[mutant]]
+name = "renderer: an uncaught exception printed as a plain message"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''            let kind = if message.uncaught {'''
+to = '''            let kind = if false {'''
+
+[[mutant]]
+name = "renderer: a child frame's blocked rendering not held back"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            if child.render_blocked {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "renderer: an unblocked child frame not laid out at its new size"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            self.needs_layout = true;
+            self.viewport = viewport;'''
+to = '''            self.viewport = viewport;'''

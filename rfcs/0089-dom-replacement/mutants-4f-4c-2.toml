@@ -1,0 +1,310 @@
+# Stage 4f-4c-2: on the new DOM, a list box's presses (Shift, Ctrl,
+# disabled options), drag and release, keys (Shift, Ctrl and Space), its
+# state between events, `:-internal-multi-select-focus`, and its option
+# scrolled into view in it.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_api_next --test it controls:: && cargo test -q -p style_next --test it form_states && cargo test -q -p shell --test it browser_view::a_"]
+timeout = 3000
+
+[[mutant]]
+name = "api: a disabled list box works"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''    (!cx.select_uses_menu_list(select) && !cx.is_disabled_form_control(select)).then_some(select)'''
+to = '''    (!cx.select_uses_menu_list(select)).then_some(select)'''
+
+[[mutant]]
+name = "api: Ctrl doesn't add"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''            } else if adds(modifiers) {
+                Mode::NotChangeOthers'''
+to = '''            } else if false {
+                Mode::NotChangeOthers'''
+
+[[mutant]]
+name = "api: Shift no range"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''            let mode = if modifiers & modifiers::SHIFT != 0 {
+                Mode::Range'''
+to = '''            let mode = if false {
+                Mode::Range'''
+
+[[mutant]]
+name = "api: without multiple Shift a range"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''    if !cx.select_is_multiple(select) {
+        mode = Mode::DeselectOthers;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: Ctrl on a selected one keeps it"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''    if cx.option_selectedness(clicked) && mode == Mode::NotChangeOthers {
+        state.range_selects = false;
+        cx.set_option_selected_dirty(clicked, false);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a press keeps the others"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''    if mode == Mode::DeselectOthers {
+        deselect_others(cx, select, Some(clicked));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a disabled option pressed selected"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''        if !cx.option_disabled(option) {
+            let mode'''
+to = '''        if true {
+            let mode'''
+
+[[mutant]]
+name = "api: the range's disabled ones selected"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''        if cx.option_disabled(*option) {
+            continue;
+        }
+        let at'''
+to = '''        let at'''
+
+[[mutant]]
+name = "api: the range's others as they were not"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''        } else if deselect || i >= state.anchor_selection.len() {'''
+to = '''        } else if true {'''
+
+[[mutant]]
+name = "api: the release fires nothing"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''    if let Some(select) = select {
+        on_change(host, &select);
+    }'''
+to = '''    let _ = select;'''
+
+[[mutant]]
+name = "api: the same selection fires change"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''            let fire = state.change_selection != now;'''
+to = '''            let fire = true;'''
+
+[[mutant]]
+name = "api: no scroll to the selection"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''        cx.lend_layout(select, |layout| layout.scroll_into_view_in(container, element));'''
+to = '''        let _ = (container, element);'''
+
+[[mutant]]
+name = "api: a drag without a press"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''        // The press wasn't in it.
+        if state.change_selection.is_empty() {
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a multiple drag doesn't move the end"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''            state.end = Some(cx.node_id(option));
+            update_selection(cx, select, &state, false);'''
+to = '''            let _ = option;'''
+
+[[mutant]]
+name = "api: a single drag doesn't follow"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''            set_anchor(cx, select, &mut state, Some(option));
+            state.end = Some(cx.node_id(option));
+            update_selection(cx, select, &state, true);'''
+to = '''            let _ = option;'''
+
+[[mutant]]
+name = "api: ArrowUp from the end"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''            "ArrowUp" => next_valid_option(cx, &items, index_of(&items, from_up).unwrap_or(length(&items)), false, 1),'''
+to = '''            "ArrowUp" => next_valid_option(cx, &items, length(&items), false, 1),'''
+
+[[mutant]]
+name = "api: PageDown one away"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''            "PageDown" => page_away(cx, &items, from_down, true, size),'''
+to = '''            "PageDown" => next_valid_option(cx, &items, index_of(&items, from_down).unwrap_or(-1), true, 1),'''
+
+[[mutant]]
+name = "api: PageUp not back"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''            "PageUp" => page_away(cx, &items, from_up, false, size),'''
+to = '''            "PageUp" => None,'''
+
+[[mutant]]
+name = "api: End not the last"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''            "End" => next_valid_option(cx, &items, length(&items), false, 1),'''
+to = '''            "End" => None,'''
+
+[[mutant]]
+name = "api: Ctrl's key selects"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''        state.non_contiguous = multiple && adds(modifiers);'''
+to = '''        state.non_contiguous = false;'''
+
+[[mutant]]
+name = "api: a key keeps the others"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''            if deselect {
+                deselect_others(cx, node, None);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "api: Ctrl+Space doesn't toggle"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''    if key == " " && adds(modifiers) {
+        return toggle_end(host, &select);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: Space's keypress doesn't toggle"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''        " " => toggle_end(host, &select),'''
+to = '''        " " => false,'''
+
+[[mutant]]
+name = "api: toggling without Ctrl's move"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''        if !(cx.select_is_multiple(node) && state.non_contiguous) {
+            return false;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a toggle fires nothing"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''    if toggled {
+        on_change(host, select);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a blur keeps the press"
+file = "crates/dom_api_next/src/list_box.rs"
+from = '''            state.change_selection.clear();
+            cx.set_list_box_state(node, state);'''
+to = '''            let _ = state;'''
+
+[[mutant]]
+name = "api: a press not the list box's"
+file = "crates/dom_api_next/src/input.rs"
+from = '''                && !crate::list_box::mouse_down(host, &target, input.modifiers)
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: a drag not the list box's"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            // A list box's drag (the primary button held).
+            crate::list_box::mouse_moved(host, &target);'''
+to = ''''''
+
+[[mutant]]
+name = "api: a drag without the button"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            && input.buttons & 1 != 0
+        {'''
+to = '''        {'''
+
+[[mutant]]
+name = "api: a release not the list box's"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            crate::list_box::mouse_up(host, released);'''
+to = ''''''
+
+[[mutant]]
+name = "api: a key not the list box's"
+file = "crates/dom_api_next/src/input.rs"
+from = '''                || crate::list_box::keydown(host, &target, &input.key, input.modifiers))'''
+to = ''')'''
+
+[[mutant]]
+name = "api: a keypress not the list box's"
+file = "crates/dom_api_next/src/input.rs"
+from = '''                && !crate::list_box::keypress(host, &target, &input.text)
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: a blur not the list box's"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        crate::list_box::did_blur(host, old);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: the anchor kept when not its"
+file = "crates/dom_next/src/select.rs"
+from = '''        state.anchor = ours(state.anchor);
+        state.end = ours(state.end);'''
+to = '''        state.end = ours(state.end);'''
+
+[[mutant]]
+name = "dom: the multi-select focus not noted"
+file = "crates/dom_next/src/select.rs"
+from = '''        if focus(&old) != focus(&state) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "dom: a disabled option the multi-select focus"
+file = "crates/dom_next/src/select.rs"
+from = '''        if !self.is_option(option) || self.option_disabled(option) {
+            return false;
+        }
+        let Some(select) = self.option_select(option)'''
+to = '''        if !self.is_option(option) {
+            return false;
+        }
+        let Some(select) = self.option_select(option)'''
+
+[[mutant]]
+name = "dom: the multi-select focus without Ctrl"
+file = "crates/dom_next/src/select.rs"
+from = '''        state.non_contiguous && state.end.is_some_and'''
+to = '''        state.end.is_some_and'''
+
+[[mutant]]
+name = "dom: a list box's choice not dirty"
+file = "crates/dom_next/src/select.rs"
+from = '''        self.set_selectedness(option, selected);
+        self.set_flag(option, OPTION_DIRTY, true);
+    }
+
+    /// `new Option'''
+to = '''        self.set_selectedness(option, selected);
+    }
+
+    /// `new Option'''
+
+[[mutant]]
+name = "style: no multi-select focus"
+file = "crates/style_next/src/selector.rs"
+from = '''            PseudoClass::InternalMultiSelectFocus => self.cx.matches_multi_select_focus(self.node),'''
+to = '''            PseudoClass::InternalMultiSelectFocus => false,'''
+
+[[mutant]]
+name = "renderer: no scroll in a container"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        self.view.scroll_into_view_in_after_layout(container, element);'''
+to = '''        let _ = (container, element);'''
+
+[[mutant]]
+name = "renderer: the container's scroll not done"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''                if self
+                    .scroll
+                    .scroll_into_view(fragment, element, None, scroll::IN_CONTAINER)
+                    .is_some()
+                {
+                    self.paint_dirty = true;
+                }'''
+to = '''                let _ = element;'''

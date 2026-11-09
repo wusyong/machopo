@@ -1,0 +1,7 @@
+<!DOCTYPE html>
+<title>preserveAspectRatio: the default centers the viewBox, meet; none stretches it</title>
+<link rel="match" href="view-box-aspect-ref.html">
+<style>body { margin: 0 } svg { display: block }</style>
+<svg width="200" height="100" viewBox="0 0 10 10"><rect width="10" height="10" fill="lime"/></svg>
+<svg width="200" height="100" viewBox="0 0 10 10" preserveAspectRatio="xMaxYMid slice"><rect width="10" height="5" fill="lime"/></svg>
+<svg width="200" height="100" viewBox="0 0 10 10" preserveAspectRatio="none"><rect width="5" height="10" fill="lime"/></svg>

@@ -1,0 +1,112 @@
+# Stage 4e-4b-1: custom element reactions on the new DOM: `dom_next`'s
+# reaction stack, element and backup queues, `dom_api_next`'s invocation
+# and `[CEReactions]` scopes, `dom_js_next`'s microtask.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it custom_elements && cargo test -q -p dom_js_next --test it custom_elements && cargo test -q -p dom_js_next --test it engine::the_parsers"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: no scope entered"
+file = "crates/dom_next/src/reactions.rs"
+from = '''        stack.depth.set(stack.depth.get().saturating_add(1));'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a queue pushed for each reaction"
+file = "crates/dom_next/src/reactions.rs"
+from = '''        if stack.top.get() != depth {
+            queues.push((depth, Persistent::new(self.gc, HeapVector::new(self.gc, 1))));'''
+to = '''        if true {
+            queues.push((depth, Persistent::new(self.gc, HeapVector::new(self.gc, 1))));'''
+
+[[mutant]]
+name = "dom: the outer queue forgotten"
+file = "crates/dom_next/src/reactions.rs"
+from = '''        stack.top.set(queues.last().map_or(0, |(at, _)| *at));'''
+to = '''        stack.top.set(0);'''
+
+[[mutant]]
+name = "dom: the backup microtask each time"
+file = "crates/dom_next/src/reactions.rs"
+from = '''            if !stack.backup_queued.replace(true) {'''
+to = '''            if !stack.backup_queued.replace(true) || true {'''
+
+[[mutant]]
+name = "dom: the backup queue's processing never done"
+file = "crates/dom_next/src/reactions.rs"
+from = '''        if taken.is_none() {
+            stack.backup_queued.set(false);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: no upgrade reaction as connected"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''            self.enqueue_upgrade_reaction(element, definition);
+            return;'''
+to = '''            let _ = definition;
+            return;'''
+
+[[mutant]]
+name = "dom: no upgrade reaction for a copy"
+file = "crates/dom_next/src/lib.rs"
+from = '''                    if let Some(definition) = self.custom_element_definition_for(copy) {
+                        self.enqueue_upgrade_reaction(copy, definition);
+                    }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: the microtasks never taken"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if bits != 0 {
+            cell.set(0);
+        }
+        Microtasks(bits)'''
+to = '''        Microtasks(bits & 0)'''
+
+[[mutant]]
+name = "api: define's candidates not enqueued"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''        for element in cx.take_upgrade_candidates(this.get(cx.gc), id) {
+            cx.enqueue_upgrade_reaction(element, definition);
+        }'''
+to = '''        let _ = (cx.take_upgrade_candidates(this.get(cx.gc), id), definition);'''
+
+[[mutant]]
+name = "api: upgrade's not enqueued"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''        for (element, definition) in cx.upgradable_under(root.get(cx.gc)) {
+            cx.enqueue_upgrade_reaction(element, definition);
+        }'''
+to = '''        let _ = cx.upgradable_under(root.get(cx.gc));'''
+
+[[mutant]]
+name = "api: an element queue's first element only"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''    while let Some(element) = host.mutate(|cx| cx.take_from_element_queue(queue).map(|element| Persistent::new(cx.gc, element))) {'''
+to = '''    if let Some(element) = host.mutate(|cx| cx.take_from_element_queue(queue).map(|element| Persistent::new(cx.gc, element))) {'''
+
+[[mutant]]
+name = "api: the backup queue's first element only"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''    while let Some(element) =
+        host.mutate(|cx| cx.take_from_backup_element_queue().map(|element| Persistent::new(cx.gc, element)))'''
+to = '''    if let Some(element) =
+        host.mutate(|cx| cx.take_from_backup_element_queue().map(|element| Persistent::new(cx.gc, element)))'''
+
+[[mutant]]
+name = "macros: the queue not invoked"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''            ::std::result::Result::Ok(left) => {
+                if left {
+                    #front.invoke_ce_reactions();
+                }'''
+to = '''            ::std::result::Result::Ok(left) => {
+                let _ = left;'''
+
+[[mutant]]
+name = "js: no backup microtask"
+file = "crates/dom_js_next/src/state.rs"
+from = '''    if microtasks.reactions() {
+        queue_backup_element_queue(scope);
+    }'''
+to = ''''''

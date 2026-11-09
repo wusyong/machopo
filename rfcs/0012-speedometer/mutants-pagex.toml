@@ -1,0 +1,33 @@
+# Mutation test of `MouseEvent`'s `pageX` and `pageY` reading the view's
+# scroll as the frame has it, with no layout update (2026-10-13), as
+# Blink's `MouseEvent::InitCoordinates`:
+# python3 scripts/test.py mutate rfcs/0012-speedometer/mutants-pagex.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "ui_events::page_and_offset_coordinates"]
+timeout = 900
+
+[[mutant]]
+name = "the layout is brought up to date first"
+file = "crates/dom_api/src/ui_event.rs"
+from = '''        .with_layout_client(|client, scope| client.viewport(scope, document))'''
+to = '''        .with_layout_client(|client, scope| {
+            client.update_style_and_layout(scope, document);
+            client.viewport(scope, document)
+        })'''
+
+[[mutant]]
+name = "pageY reads the horizontal scroll"
+file = "crates/dom_api/src/ui_event.rs"
+from = '''            (f64::from(viewport.scroll.x), f64::from(viewport.scroll.y))'''
+to = '''            (f64::from(viewport.scroll.x), f64::from(viewport.scroll.x))'''
+
+[[mutant]]
+name = "a view's scroll is never read"
+file = "crates/dom_api/src/ui_event.rs"
+from = '''    let Some(view) = cx.read().event_view(this) else {
+        return (0.0, 0.0);
+    };
+    let document'''
+to = '''    let Some(view) = cx.read().event_view(this).filter(|_| false) else {
+        return (0.0, 0.0);
+    };
+    let document'''

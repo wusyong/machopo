@@ -1,0 +1,7 @@
+<!DOCTYPE html>
+<title>I6: the space removed at the end of a wrapped line gets neither the element's background nor its underline</title>
+<link rel="match" href="i6-hanging-space-ref.html">
+<style>html, body { margin: 0 } body { font: 20px/1 Ahem; color: black }</style>
+<!-- "XX XX" breaks at the space in 80px; the space at the end of the first
+     line is removed, so nothing but the two squares shows there. -->
+<div style="width: 80px"><span style="background-color: green; text-decoration: underline">XX XX</span></div>

@@ -1,0 +1,26 @@
+<!doctype html>
+<script>
+const log = [];
+addEventListener('error', () => {
+  log.push('error'); queueMicrotask(() => log.push('error:m'));
+});
+addEventListener('error', () => log.push('error2'));
+addEventListener('unhandledrejection', e => log.push(`unhandled ${e.reason}`));
+const later = (name) => Promise.resolve().then(() => log.push(`${name}:m`));
+const target = new EventTarget();
+target.addEventListener('y', () => { later('y1'); log.push('y1'); });
+target.addEventListener('y', () => log.push('y2'));
+let handled;
+const { port1, port2 } = new MessageChannel();
+port1.addEventListener('message', () => { later('a'); log.push('a'); throw 1; });
+port1.addEventListener('message', () => {
+  handled = Promise.reject('handled'); Promise.reject('not handled');
+  later('b'); log.push('b');
+});
+port1.addEventListener('message', () => {
+  handled.catch(() => {}); log.push('c'); target.dispatchEvent(new Event('y'));
+});
+port1.onmessage = () => log.push('handler');
+port2.postMessage(0);
+function run() { return new Promise(r => setTimeout(() => r(log.join(' / ')), 200)); }
+</script>

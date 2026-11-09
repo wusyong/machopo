@@ -1,0 +1,91 @@
+# Step 2c: parallel marking: the segmented worklist and its termination,
+# the platform and its pool of workers, and the marking job. A broken
+# termination hangs rather than fails: the timeout is short (the tests
+# take seconds). Not here, as they would loop without end and fill memory
+# rather than fail: mark bits never set. The loom and shuttle tests
+# (`test.py gc-models`) aren't the command: these must be caught by the
+# tests every build runs, but two the loom model catches. Not here either:
+# the joining thread's publishing waking no worker, which only loses
+# parallelism (recorded in docs/test-gaps.md).
+test = ["cargo", "test", "-q", "-p", "gc"]
+timeout = 120
+
+# The worklist.
+
+[[mutant]]
+name = "a full segment never published"
+file = "crates/gc/src/worklist.rs"
+from = '''        if self.push.len() >= SEGMENT {'''
+to = '''        if self.push.len() >= SEGMENT && false {'''
+
+# The loom model's to catch, as the next: busy undercounted ends the work
+# early only on some interleavings, which the ordinary tests rarely hit.
+[[mutant]]
+name = "a thread that takes a segment not counted busy"
+file = "crates/gc/src/worklist.rs"
+from = '''                global.busy = global.busy.saturating_add(1);'''
+to = ''''''
+test = ["python3", "scripts/test.py", "gc-models"]
+
+[[mutant]]
+name = "the joining thread's seed not counted busy"
+file = "crates/gc/src/worklist.rs"
+from = '''                busy: 1,'''
+to = '''                busy: 0,'''
+test = ["python3", "scripts/test.py", "gc-models"]
+
+[[mutant]]
+name = "a thread that runs out stays busy"
+file = "crates/gc/src/worklist.rs"
+from = '''                global.busy = global.busy.saturating_sub(1);
+                if global.busy == 0 {
+                    global.done = true;
+                    self.changed.notify_all();
+                }
+                break;'''
+to = '''                if global.busy == 1 {
+                    global.done = true;
+                    self.changed.notify_all();
+                }
+                break;'''
+
+[[mutant]]
+name = "the last thread out doesn't wake the joining one"
+file = "crates/gc/src/worklist.rs"
+from = '''                if global.busy == 0 {
+                    global.done = true;
+                    self.changed.notify_all();
+                }
+                break;'''
+to = '''                if global.busy == 0 {
+                    global.done = true;
+                }
+                break;'''
+
+[[mutant]]
+name = "a panicking thread doesn't poison the work"
+file = "crates/gc/src/worklist.rs"
+from = '''        global.poisoned = true;'''
+to = ''''''
+
+# The platform.
+
+[[mutant]]
+name = "the job asks for no more workers than run it"
+file = "crates/gc/src/heap.rs"
+from = '''        active.saturating_add(self.worklist.available())'''
+to = '''        active'''
+
+[[mutant]]
+name = "run returns before its workers"
+file = "crates/gc/src/platform.rs"
+from = '''        while state.active > 0 {'''
+to = '''        while state.active > 0 && false {'''
+
+[[mutant]]
+name = "a worker's panic lost"
+file = "crates/gc/src/platform.rs"
+from = '''        if let Some(payload) = worker_panic {
+            panic::resume_unwind(payload);
+        }'''
+to = '''        let _ = worker_panic;'''

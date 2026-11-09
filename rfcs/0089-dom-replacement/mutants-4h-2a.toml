@@ -1,0 +1,231 @@
+# Stage 4h-2a: CSSOM on the new DOM: the sheets of <style>s and <link>s, owned by the DOM, their
+# rules' objects, their lists and media lists, StyleSheetList, and the style and link elements.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it sheets && cargo test -q -p style_next --test it && cargo test -q -p dom_js_next --test it -- style_sheets::"]
+timeout = 1200
+
+[[mutant]]
+name = "dom: a disconnected element has a sheet"
+file = "crates/dom_next/src/cssom.rs"
+from = '''        if !self.is_connected(owner) || !self.owns_sheet(owner) {'''
+to = '''        if !self.owns_sheet(owner) {'''
+
+[[mutant]]
+name = "dom: a link's sheet after it went is the same"
+file = "crates/dom_next/src/cssom.rs"
+from = '''            if current.owner.get(self.gc).is_some() {
+                return Some(current);
+            }'''
+to = '''            return Some(current);'''
+
+[[mutant]]
+name = "dom: a style's sheet after it went is the same"
+file = "crates/dom_next/src/cssom.rs"
+from = '''            Some(current) if current.owner.get(self.gc).is_some() => Some(current),'''
+to = '''            Some(current) => Some(current),'''
+
+[[mutant]]
+name = "dom: the text cache whatever the URL"
+file = "crates/dom_next/src/cssom.rs"
+from = '''            .filter(|contents| contents.base_url() == url.as_ref());'''
+to = ''';'''
+
+[[mutant]]
+name = "dom: no text cache"
+file = "crates/dom_next/src/cssom.rs"
+from = '''            .and_then(Weak::upgrade)'''
+to = '''            .and_then(|_| None::<Arc<StyleSheetContents>>)'''
+
+[[mutant]]
+name = "dom: an SVG style has no sheet"
+file = "crates/dom_next/src/cssom.rs"
+from = '''                && (name.namespace() == names::HTML_NAMESPACE
+                    || name.namespace() == names::SVG_NAMESPACE)'''
+to = '''                && name.namespace() == names::HTML_NAMESPACE'''
+
+[[mutant]]
+name = "dom: an empty title"
+file = "crates/dom_next/src/cssom.rs"
+from = '''            .filter(|title| !title.is_empty())'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a new link sheet leaves the old one its owner's"
+file = "crates/dom_next/src/cssom.rs"
+from = '''        if let Some(old) = data.sheet.get(self.gc) {
+            old.owner.set(self.gc, None);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a link's sheet not origin-clean as given"
+file = "crates/dom_next/src/cssom.rs"
+from = '''            Some(href),
+            origin_clean,'''
+to = '''            Some(href),
+            true,'''
+
+[[mutant]]
+name = "dom: a link's sheet back after it went is origin-clean"
+file = "crates/dom_next/src/cssom.rs"
+from = '''                current.origin_clean.get(),'''
+to = '''                true,'''
+
+[[mutant]]
+name = "dom: an inserted rule's object not at its index"
+file = "crates/dom_next/src/cssom.rs"
+from = '''        objects.set(self.gc, index, made);'''
+to = ''''''
+
+[[mutant]]
+name = "dom: the later objects not moved along"
+file = "crates/dom_next/src/cssom.rs"
+from = '''        for at in (index..last).rev() {'''
+to = '''        for at in (index..index).rev() {'''
+
+[[mutant]]
+name = "dom: a rule taken out keeps its parent"
+file = "crates/dom_next/src/cssom.rs"
+from = '''        rule.parent.set(self.gc, None);
+        self.rule_sheet_gone(rule);'''
+to = '''        self.rule_sheet_gone(rule);'''
+
+[[mutant]]
+name = "dom: the rules in a rule taken out keep their sheet"
+file = "crates/dom_next/src/cssom.rs"
+from = '''                    self.rule_sheet_gone(child);'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an edit in a group rule stays there"
+file = "crates/dom_next/src/cssom.rs"
+from = '''            if let Some(replaced) = self.css_rule(parent).replace_rule(&old, new) {
+                self.set_css_rule(parent, replaced);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: replaceSync keeps the rules' objects"
+file = "crates/dom_next/src/style_sheet.rs"
+from = '''        self.sheet_rules_replaced(sheet);'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an element's sheet changed marks nothing"
+file = "crates/dom_next/src/style_sheet.rs"
+from = '''            self.owner_sheet_changed(owner);'''
+to = ''''''
+
+[[mutant]]
+name = "dom: one taken out keeps its sheet"
+file = "crates/dom_next/src/style.rs"
+from = '''        if removed {
+            self.sheet_owner_removed(at);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a child put in keeps the sheet"
+file = "crates/dom_next/src/style.rs"
+from = '''        let mut sheets = self.owns_style_sheets(parent);
+        if sheets {
+            self.style_children_changed(parent);
+        }
+        // From the first input'''
+to = '''        let mut sheets = self.owns_style_sheets(parent);
+        // From the first input'''
+
+[[mutant]]
+name = "dom: a child taken out keeps the sheet"
+file = "crates/dom_next/src/style.rs"
+from = '''        let mut sheets = self.owns_style_sheets(parent);
+        if sheets {
+            self.style_children_changed(parent);
+        }
+        // The `:hover`'''
+to = '''        let mut sheets = self.owns_style_sheets(parent);
+        // The `:hover`'''
+
+[[mutant]]
+name = "dom: a text's data changing keeps the sheet"
+file = "crates/dom_next/src/style.rs"
+from = '''            self.style_children_changed(parent);
+            self.style_sheets_changed(parent);'''
+to = '''            self.style_sheets_changed(parent);'''
+
+[[mutant]]
+name = "dom: media isn't the sheet's"
+file = "crates/dom_next/src/style.rs"
+from = '''                self.sheet_owner_media_changed(element, new.unwrap_or_default());'''
+to = ''''''
+
+[[mutant]]
+name = "style: a disabled element's sheet applies"
+file = "crates/style_next/src/lib.rs"
+from = '''            disabled: cx.style_sheet_disabled(sheet),'''
+to = '''            disabled: false,'''
+
+[[mutant]]
+name = "api: the rules of a sheet not origin-clean"
+file = "crates/dom_api_next/src/css_style_sheet.rs"
+from = '''    if cx.style_sheet_origin_clean(this) {'''
+to = '''    if cx.style_sheet_origin_clean(this) || true {'''
+
+[[mutant]]
+name = "api: an element's sheet replaced"
+file = "crates/dom_api_next/src/css_style_sheet.rs"
+from = '''    if cx.style_sheet_is_constructed(this) {
+        return Ok(());
+    }'''
+to = '''    return Ok(());'''
+
+[[mutant]]
+name = "api: an element's sheet adopted"
+file = "crates/dom_api_next/src/css_style_sheet.rs"
+from = '''    if !cx.style_sheet_is_constructed(sheet) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: addRule at the start by default"
+file = "crates/dom_api_next/src/css_style_sheet.rs"
+from = '''    let index = index.unwrap_or_else(|| {
+        u32::try_from(cx.rule_count(RuleParent::Sheet(this))).unwrap_or(u32::MAX)
+    });'''
+to = '''    let index = index.unwrap_or(0);'''
+
+[[mutant]]
+name = "api: a rule's declarations changed aren't put in"
+file = "crates/dom_api_next/src/css_style.rs"
+from = '''            if changed {
+                set_rule_block(cx, rule, block);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a rule's cssText set isn't put in"
+file = "crates/dom_api_next/src/css_style.rs"
+from = '''        DeclarationOwner::Rule(rule) => set_rule_block(cx, rule, block),'''
+to = '''        DeclarationOwner::Rule(_) => {}'''
+
+[[mutant]]
+name = "api: a supports rule is a media rule"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''                const { crate::declare::interface_index("CSSSupportsRule") }'''
+to = '''                const { crate::declare::interface_index("CSSMediaRule") }'''
+
+[[mutant]]
+name = "api: a keyframe's style isn't its own"
+file = "crates/dom_api_next/src/css_style.rs"
+from = '''        css::CssRule::Keyframe(_) => now.with_keyframe_block(block),'''
+to = '''        css::CssRule::Keyframe(_) => now,'''
+
+[[mutant]]
+name = "api: a link's rel tokens by case"
+file = "crates/dom_api_next/src/token_list.rs"
+from = '''    Ok(tokens.iter().any(|supported| supported.eq_ignore_ascii_case(token)))'''
+to = '''    Ok(tokens.iter().any(|supported| *supported == token))'''
+
+[[mutant]]
+name = "api: a link's rel has no supported tokens"
+file = "crates/dom_api_next/src/token_list.rs"
+from = '''    .then_some(&["modulepreload", "stylesheet"])'''
+to = '''    .then_some(&[])'''

@@ -1,0 +1,161 @@
+# 4: a tile whose ops tell its color isn't rastered
+# (`DisplayItemList::color_if_solid_in_rect`, `LayerTreeHostImpl::prepare_tiles`).
+#   python3 scripts/test.py mutate rfcs/0057-tile-raster/mutants-4.toml
+test = ["cargo", "test", "-q", "-p", "compositor_paint", "-p", "raster", "-p", "compositor"]
+timeout = 900
+
+[[mutant]]
+name = "a translucent clear color taken as one"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''            255 => Some(clear),
+            0 => Some(Color::TRANSPARENT),
+            _ => None,'''
+to = '''            255 => Some(clear),
+            0 => Some(Color::TRANSPARENT),
+            _ => Some(clear),'''
+
+[[mutant]]
+name = "an opaque clear color taken as transparent"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''            255 => Some(clear),
+            0 => Some(Color::TRANSPARENT),'''
+to = '''            255 => Some(Color::TRANSPARENT),
+            0 => Some(Color::TRANSPARENT),'''
+
+[[mutant]]
+name = "a restore keeps the clip"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                        (matrix, clip) = (m, c);'''
+to = '''                        let _ = (m, c);'''
+
+[[mutant]]
+name = "a translate not followed"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                    matrix = matrix.map(|m| m.then(&Transform::translate(*dx, *dy)));'''
+to = '''                    let _ = (dx, dy);'''
+
+[[mutant]]
+name = "a concat not followed"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                    matrix = matrix.and_then(|m| only_scale_and_translate(m.then(transform)));'''
+to = '''                    let _ = transform;'''
+
+[[mutant]]
+name = "a rotation taken as a scale"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''            (b == 0.0 && c == 0.0).then_some(t)'''
+to = '''            let _ = (b, c);
+            Some(t)'''
+
+[[mutant]]
+name = "a rounded clip taken as its rect"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                PaintOp::ClipRRect { rrect, .. } if rrect.is_rect() => {'''
+to = '''                PaintOp::ClipRRect { rrect, .. } => {'''
+
+[[mutant]]
+name = "a group doesn't give up"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                | PaintOp::ClipPath { .. }
+                | PaintOp::SaveLayerAlpha { .. }
+                | PaintOp::SaveLayer { .. } => return None,'''
+to = '''                | PaintOp::ClipPath { .. }
+                | PaintOp::SaveLayer { .. } => return None,'''
+
+[[mutant]]
+name = "what a clip hides still reaches the tile"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                    if !rtree::meets(&clipped(drawn), &rect) {'''
+to = '''                    if !rtree::meets(&drawn, &rect) {'''
+
+[[mutant]]
+name = "what misses the tile isn't skipped"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                    if !rtree::meets(&clipped(drawn), &rect) {
+                        continue;
+                    }'''
+to = ''''''
+
+[[mutant]]
+name = "a fill covers past its clip"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                    let area = clipped(fill.0);'''
+to = '''                    let area = fill.0;'''
+
+[[mutant]]
+name = "a fill short of the right edge covers"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                        && area.right() >= rect.right()'''
+to = '''                        && area.right() + 1.0 >= rect.right()'''
+
+[[mutant]]
+name = "a translucent fill covers"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                    if fill.1.a != 255 || !covers {'''
+to = '''                    if !covers {'''
+
+[[mutant]]
+name = "a stroke taken as a fill"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                            if flags.style == PaintStyle::Fill
+                                && flags.shader.is_none()'''
+to = '''                            if flags.shader.is_none()'''
+
+[[mutant]]
+name = "a shader taken as the color"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                                && flags.shader.is_none()
+'''
+to = '''
+'''
+
+[[mutant]]
+name = "a blurred fill covers"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                                && flags.blur == 0.0
+'''
+to = '''
+'''
+
+[[mutant]]
+name = "a dashed fill covers"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                                && flags.dash.is_none()
+'''
+to = '''
+'''
+
+[[mutant]]
+name = "any blend mode covers"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                                && matches!(
+                                    flags.blend_mode,
+                                    BlendMode::SrcOver | BlendMode::Src
+                                ) =>'''
+to = '''                                && true =>'''
+
+[[mutant]]
+name = "a DrawColor of any blend mode covers"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                            blend_mode: BlendMode::SrcOver | BlendMode::Src,
+                        } => (EVERYWHERE, *color),'''
+to = '''                            blend_mode: _,
+                        } => (EVERYWHERE, *color),'''
+
+[[mutant]]
+name = "no pixel more for a shadow's blur"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                                device.map_rect(b).inset(-1.0)'''
+to = '''                                device.map_rect(b)'''
+
+[[mutant]]
+name = "an empty path gives up"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                            None => continue,'''
+to = '''                            None => return None,'''
+
+[[mutant]]
+name = "prepare_tiles doesn't predict"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                if let Some(color) = predicted {'''
+to = '''                if let Some(color) = predicted.filter(|_| false) {'''

@@ -1,0 +1,50 @@
+# Stage 1h-4: getters' results written from their handles with no local
+# handle made: a node's wrapper from its TracedReference (the rusty_v8
+# fork's ReturnValue::set_traced), a cached attribute value from its weak
+# handle (set_weak). Debug builds check both against V8's own setter. Run
+# with RUSTY_V8_ARCHIVE pointing at ../third_party/rusty_v8_artifacts. Each
+# test command in a scope of at most 24 GB (docs/testing.md); the
+# baselines take seconds, plus a relink.
+timeout = 300
+
+[[mutant]]
+name = "a traced reference's object isn't written back"
+file = "../third_party/rusty_v8/src/function.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''    self.set_checked(
+      |rv| rv.set_internal(object),
+      |raw| unsafe {
+        let value = slot.get(scope).expect("a traced reference set");'''
+to = '''    self.set_checked(
+      |_| { let _ = object; },
+      |raw| unsafe {
+        let value = slot.get(scope).expect("a traced reference set");'''
+
+[[mutant]]
+name = "a traced reference's node is read as its object"
+file = "../third_party/rusty_v8/src/cppgc/slot.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''    (!location.is_null()).then(|| unsafe { *location })'''
+to = '''    (!location.is_null()).then(|| location as usize)'''
+
+[[mutant]]
+name = "a weak global's object isn't written back"
+file = "../third_party/rusty_v8/src/function.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''      // collects the object), holding the object as a local's does.
+      let object = unsafe { *(value as *const usize) };
+      self.set_checked(
+        |rv| rv.set_internal(object),'''
+to = '''      // collects the object), holding the object as a local's does.
+      let object = unsafe { *(value as *const usize) };
+      self.set_checked(
+        |_| { let _ = object; },'''
+
+[[mutant]]
+name = "a weak global's location is read as its object"
+file = "../third_party/rusty_v8/src/function.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''      // collects the object), holding the object as a local's does.
+      let object = unsafe { *(value as *const usize) };'''
+to = '''      // collects the object), holding the object as a local's does.
+      let object = value as usize;'''

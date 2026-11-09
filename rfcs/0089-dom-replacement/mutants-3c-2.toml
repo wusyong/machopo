@@ -1,0 +1,188 @@
+# Stage 3c-2: `<link rel=stylesheet>` for the new DOM: the sheets
+# `style_next` collects (the renderer's, `<style>`s, the preferred set,
+# `type`, `disabled`, `media`); the renderer's loads (asked for as the
+# parser stops and after the DOM changes, blocking rendering, `load` and
+# `error` at the link, the window's `load` after them).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "style_next", "--test", "it", "sheets::"]
+timeout = 1200
+
+[[mutant]]
+name = "a link's sheet collects nothing"
+file = "crates/style_next/src/lib.rs"
+from = '''            || std::mem::take(&mut self.linked_changed)
+'''
+to = ''''''
+
+[[mutant]]
+name = "a sheet's media ignored"
+file = "crates/style_next/src/lib.rs"
+from = '''            if set.match_media(&sheet.media, &environment) {'''
+to = '''            if true {'''
+
+[[mutant]]
+name = "a sheet keeps its old media"
+file = "crates/style_next/src/lib.rs"
+from = '''            let kept_media = |sheet: &Sheet| (sheet.media_text == media_text).then(|| sheet.media.clone());'''
+to = '''            let kept_media = |sheet: &Sheet| Some(sheet.media.clone());'''
+
+[[mutant]]
+name = "other media keep the rules"
+file = "crates/style_next/src/lib.rs"
+from = '''                    Arc::ptr_eq(&a.contents, &b.contents) && Arc::ptr_eq(&a.media, &b.media)'''
+to = '''                    Arc::ptr_eq(&a.contents, &b.contents)'''
+
+[[mutant]]
+name = "an alternate title sets the preferred set"
+file = "crates/style_next/src/sheets.rs"
+from = '''            if preferred.is_none() && !alternate {'''
+to = '''            if preferred.is_none() {'''
+
+[[mutant]]
+name = "an untitled alternate applies"
+file = "crates/style_next/src/sheets.rs"
+from = '''        None => !alternate,'''
+to = '''        None => true,'''
+
+[[mutant]]
+name = "any type is CSS's"
+file = "crates/style_next/src/sheets.rs"
+from = '''        kind.is_empty() || kind.trim().eq_ignore_ascii_case("text/css")'''
+to = '''        true'''
+
+[[mutant]]
+name = "a disabled link loads"
+file = "crates/style_next/src/sheets.rs"
+from = '''        || cx.get_attribute(node, "disabled").is_some()
+'''
+to = ''''''
+
+[[mutant]]
+name = "any link's rel a sheet's"
+file = "crates/style_next/src/sheets.rs"
+from = '''        || !rel_has(cx, node, "stylesheet")
+'''
+to = ''''''
+
+[[mutant]]
+name = "an SVG style has no sheet"
+file = "crates/style_next/src/sheets.rs"
+from = '''            && (name.namespace() == names::HTML_NAMESPACE
+                || name.namespace() == names::SVG_NAMESPACE)'''
+to = '''            && name.namespace() == names::HTML_NAMESPACE'''
+
+[[mutant]]
+name = "no sheet loads"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            if !cx
+                .style_flags(document)
+                .contains(dom_next::StyleFlags::STYLE_SHEETS_CHANGED)
+            {'''
+to = '''            if true {'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom::"]
+
+[[mutant]]
+name = "what script adds isn't loaded"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            next.rendered_version = version;
+            self.start_next_loads();'''
+to = '''            next.rendered_version = version;'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom::"]
+
+[[mutant]]
+name = "a link loads again"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                    if !requested.contains(&id) {'''
+to = '''                    if true {'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom::"]
+
+[[mutant]]
+name = "no sheet blocks rendering"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                    blocking: !alternate,'''
+to = '''                    blocking: false,'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom::"]
+
+[[mutant]]
+name = "an alternate sheet blocks rendering"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                    blocking: !alternate,'''
+to = '''                    blocking: true,'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom::"]
+
+[[mutant]]
+name = "rendering never blocked"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        if self.next_render_blocked() {
+            return false;
+        }'''
+to = ''''''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom::"]
+
+[[mutant]]
+name = "the load doesn't wait for the sheets"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        if next.readiness != Readiness::Parsed || !next.pending_sheets.is_empty() {'''
+to = '''        if next.readiness != Readiness::Parsed {'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom::"]
+
+[[mutant]]
+name = "a failed sheet fires load"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        engine.fire_event(&sheet.link, if css.is_some() { "load" } else { "error" });'''
+to = '''        engine.fire_event(&sheet.link, "load");'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom::"]
+
+[[mutant]]
+name = "a loaded sheet not styled"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        next.view
+            .set_link_sheet(sheet.id, css.as_deref().unwrap_or_default(), base);
+'''
+to = ''''''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom::"]
+
+[[mutant]]
+name = "an error status a sheet"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''    if !(200..300).contains(&response.status) {
+        return None;
+    }
+'''
+to = ''''''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom::"]
+
+[[mutant]]
+name = "quirks mode takes no other type"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''    if response.mime_type != "text/css" && !quirks {'''
+to = '''    if response.mime_type != "text/css" {'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom::"]
+
+[[mutant]]
+name = "any type a sheet"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''    if response.mime_type != "text/css" && !quirks {'''
+to = '''    if false {'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom::"]
+
+[[mutant]]
+name = "a sheet's arrival asks for no frame"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        self.send_next_harness_results();
+        self.request_main_frame();
+        self.finish_next_load();
+    }
+}'''
+to = '''        self.send_next_harness_results();
+        self.finish_next_load();
+    }
+}'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom::"]
+
+[[mutant]]
+name = "no event at the link"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''            dom_api_next::fire_event(&mut Host { scope: &mut scope }, &target, event_type, false, false);
+'''
+to = ''''''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom::"]

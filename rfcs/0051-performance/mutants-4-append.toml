@@ -1,0 +1,59 @@
+# Mutation test of stage 4's parser append: each case that goes through
+# `insert_before` taken as one the parser just made:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-4-append.toml
+# Three make a cycle in the tree, and the append's walk of the new
+# subtree never ends: those hang (the test takes under a second).
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::"]
+timeout = 60
+
+[[mutant]]
+name = "a node in a tree isn't taken out of it"
+file = "crates/dom/src/scope.rs"
+from = '''            child_node.parent.get().is_none()
+                && child_node.first_child.get().is_none()'''
+to = '''            child_node.first_child.get().is_none()'''
+
+[[mutant]]
+name = "a node with children may be appended into itself"
+file = "crates/dom/src/scope.rs"
+from = '''                && child_node.first_child.get().is_none()
+                && child_node'''
+to = '''                && child_node'''
+
+[[mutant]]
+name = "a host may be appended into its own shadow tree"
+file = "crates/dom/src/scope.rs"
+from = '''                    .is_none_or(|rare| rare.shadow_root.get().is_none())'''
+to = '''                    .is_none_or(|rare| rare.shadow_root.get().is_some() || true)'''
+
+[[mutant]]
+name = "a node may be appended to itself"
+file = "crates/dom/src/scope.rs"
+from = '''            || std::ptr::eq(parent_node, child_node)
+            || !parent_node.kind().is_container()'''
+to = '''            || !parent_node.kind().is_container()'''
+
+[[mutant]]
+name = "a node may be appended to one that holds nothing"
+file = "crates/dom/src/scope.rs"
+from = '''            || !parent_node.kind().is_container()
+            || matches!(child_node.kind(), NodeKind::Document | NodeKind::Attr)
+            || !self.in_document(child, parent_document)'''
+to = '''            || matches!(child_node.kind(), NodeKind::Document | NodeKind::Attr)
+            || !self.in_document(child, parent_document)'''
+
+[[mutant]]
+name = "a document may be appended"
+file = "crates/dom/src/scope.rs"
+from = '''            || matches!(child_node.kind(), NodeKind::Document | NodeKind::Attr)
+            || !self.in_document(child, parent_document)'''
+to = '''            || !self.in_document(child, parent_document)'''
+
+[[mutant]]
+name = "a node of another document isn't adopted"
+file = "crates/dom/src/scope.rs"
+from = '''            || !self.in_document(child, parent_document)
+        {
+            return self.insert_before(parent, child, None);'''
+to = '''        {
+            return self.insert_before(parent, child, None);'''

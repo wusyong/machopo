@@ -1,0 +1,252 @@
+# Mutation test of step 1a (the Promise form, the DOM's tasks, Response's
+# constructor and text()):
+# python3 scripts/test.py mutate rfcs/0027-fetch/mutants-1a.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "fetch"]
+timeout = 900
+
+# --- dom_api: Response ----------------------------------------------------
+
+[[mutant]]
+name = "any status"
+file = "crates/dom_api/src/response.rs"
+from = '''    if !(200..=599).contains(&init.status) {'''
+to = '''    if init.status > 65535 {'''
+
+[[mutant]]
+name = "any statusText"
+file = "crates/dom_api/src/response.rs"
+from = '''    if !is_reason_phrase(init.status_text.as_str()) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a body with a null body status"
+file = "crates/dom_api/src/response.rs"
+from = '''        Some(_) if is_null_body_status(init.status) => {'''
+to = '''        Some(_) if init.status == 0 => {'''
+
+[[mutant]]
+name = "ok up to 300"
+file = "crates/dom_api/src/response.rs"
+from = '''    Ok((200..=299).contains(&cx.read().response_data(this).status))'''
+to = '''    Ok((200..=300).contains(&cx.read().response_data(this).status))'''
+
+[[mutant]]
+name = "a null body is used"
+file = "crates/dom_api/src/response.rs"
+from = '''    Ok(data.body.is_some() && data.body_used)'''
+to = '''    Ok(data.body_used || data.body.is_none())'''
+
+[[mutant]]
+name = "a body read twice"
+file = "crates/dom_api/src/response.rs"
+from = '''    if data.body.is_some() && data.body_used {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a null body never reads"
+file = "crates/dom_api/src/response.rs"
+from = '''        cx.settle_promise(promise.id(), Ok(convert(&[])));'''
+to = '''        let _ = convert;'''
+
+[[mutant]]
+name = "a body read on the timer task source"
+file = "crates/dom_api/src/response.rs"
+from = '''        TaskSource::Networking,'''
+to = '''        TaskSource::Timer,'''
+
+[[mutant]]
+name = "a body read at once"
+file = "crates/dom_api/src/response.rs"
+from = '''    queue_task(
+        &mut cx.mutate(),
+        &window,
+        TaskSource::Networking,
+        0.0,
+        Task::SettlePromise {
+            promise: promise.id(),
+            result: Ok(convert(&bytes)),
+        },
+    );'''
+to = '''    let _ = (window, queue_task, TaskSource::Networking);
+    cx.settle_promise(promise.id(), Ok(convert(&bytes)));'''
+
+[[mutant]]
+name = "the BOM stays"
+file = "crates/dom_api/src/response.rs"
+from = '''    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);'''
+to = '''    let bytes = bytes.strip_prefix(b"").unwrap_or(bytes);'''
+
+[[mutant]]
+name = "a URLSearchParams body is empty"
+file = "crates/dom_api/src/response.rs"
+from = '''            crate::url_search_params::serialize(&list).into_bytes().into()'''
+to = '''            crate::url_search_params::serialize(&list[..0]).into_bytes().into()'''
+
+# --- dom: Response and the DOM's tasks ------------------------------------
+
+[[mutant]]
+name = "reading doesn't use the body"
+file = "crates/dom/src/fetch.rs"
+from = '''        data.body_used = true;'''
+to = '''        let _ = &mut data.body_used;'''
+
+[[mutant]]
+name = "tasks run newest first"
+file = "crates/dom/src/tasks.rs"
+from = '''            .min_by(|(a, x), (b, y)| x.due.total_cmp(&y.due).then(a.cmp(b)))?;'''
+to = '''            .min_by(|(a, x), (b, y)| x.due.total_cmp(&y.due).then(b.cmp(a)))?;'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "timers"]
+
+[[mutant]]
+name = "a task due before it is"
+file = "crates/dom/src/tasks.rs"
+from = '''            .filter(|(_, queued)| queued.due <= now)'''
+to = '''            .filter(|(_, queued)| queued.due <= now + 10.0)'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "timers"]
+
+[[mutant]]
+name = "a negative delay"
+file = "crates/dom/src/scope.rs"
+from = '''        let due = self.timers.now() + delay.max(0.0);'''
+to = '''        let due = self.timers.now() + delay;'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "timers"]
+
+[[mutant]]
+name = "a discarded document keeps its tasks"
+file = "crates/dom/src/scope.rs"
+from = '''        self.tasks.clear_document(id);'''
+to = ''''''
+
+[[mutant]]
+name = "the DOM goes with its tasks"
+file = "crates/dom/src/isolate.rs"
+from = '''        self.state.tasks.clear();'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "timers"]
+
+# --- bindings: the realm's promises ----------------------------------------
+
+[[mutant]]
+name = "a promise settles twice"
+file = "crates/bindings/src/promise_resolvers.rs"
+from = '''    if entry.settled {
+        return None;
+    }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "bindings", "--test", "promise_resolvers"]
+
+[[mutant]]
+name = "a promise handed out is kept"
+file = "crates/bindings/src/promise_resolvers.rs"
+from = '''    entry.handed_out = true;'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "bindings", "--test", "promise_resolvers"]
+
+[[mutant]]
+name = "a settled promise is kept"
+file = "crates/bindings/src/promise_resolvers.rs"
+from = '''    if entry.handed_out {
+        table.entries.remove(&number);
+    }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "bindings", "--test", "promise_resolvers"]
+
+[[mutant]]
+name = "the realm's promises outlive it"
+file = "crates/bindings/src/promise_resolvers.rs"
+from = '''        self.table.borrow_mut().entries.clear();'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "bindings", "--test", "promise_resolvers"]
+
+[[mutant]]
+name = "an import is known by another number"
+file = "crates/bindings/src/module_record.rs"
+from = '''    Some((import, promise))'''
+to = '''    Some((import + 1, promise))'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "dynamic_import"]
+
+# --- dom_js: members returning a promise -------------------------------------
+
+[[mutant]]
+name = "a promise member throws"
+file = "crates/dom_js/src/templates.rs"
+from = '''    if !matches!(member.returns.base, dom_api::Base::Promise(_)) {'''
+to = '''    if true {'''
+
+[[mutant]]
+name = "a promise resolves with nothing"
+file = "crates/dom_js/src/host.rs"
+from = '''                let value = convert::to_js(self.cx, value);'''
+to = '''                let _ = convert::to_js(self.cx, value);
+                let value = v8::undefined(self.cx.scope()).into();'''
+
+# Not caught in step 1a: no member of it rejected a promise later (text()
+# only resolves; what rejects at once returns the error). Step 1c's json()
+# does, and catches it (mutants-1c.toml).
+[[mutant]]
+name = "a promise rejects with nothing"
+file = "crates/dom_js/src/host.rs"
+from = '''                let reason = exception::to_exception(tc, error)'''
+to = '''                let reason = exception::to_exception(tc, ApiError::Reported)'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "fetch", "--test", "dynamic_import"]
+
+# --- dom_wasm: a guest waiting for a promise ---------------------------------
+
+[[mutant]]
+name = "a settled promise doesn't wake its store"
+file = "crates/dom_wasm/src/promises.rs"
+from = '''    if let Some(waker) = waker {
+        waker.wake();
+    }'''
+to = '''    let _ = waker;'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "engine", "a_guests_response"]
+
+[[mutant]]
+name = "a waiting store isn't kept"
+file = "crates/dom_wasm/src/promises.rs"
+from = '''                    self.waits.fetch_add(1, Ordering::Relaxed);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "engine", "a_guests_response"]
+
+[[mutant]]
+name = "a promise settled before its wait is lost"
+file = "crates/dom_wasm/src/promises.rs"
+from = '''        if slot.result.is_some() {
+            return;
+        }
+        slot.result = Some(result);'''
+to = '''        if slot.waker.is_none() {
+            return;
+        }
+        slot.result = Some(result);'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "engine", "a_guests_response"]
+
+[[mutant]]
+name = "a RangeError's code is TypeError's"
+file = "crates/dom_api/src/wit.rs"
+from = '''        ApiError::Range(_) => RANGE_ERROR,'''
+to = '''        ApiError::Range(_) => TYPE_ERROR,'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "engine", "a_guests_response"]
+
+[[mutant]]
+name = "a promise member is a sync func"
+file = "crates/dom_api/src/wit.rs"
+from = '''                        || matches!(member.returns.base, Base::Promise(_)),'''
+to = '''                        || false,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "wit"]
+
+# --- renderer: the DOM's tasks in the event loop ----------------------------
+
+[[mutant]]
+name = "the renderer runs no DOM task"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            self.run_due_dom_tasks();'''
+to = ''''''
+test = ["python3", "scripts/test.py", "wpt", "dom/abort/"]
+
+[[mutant]]
+name = "the loop doesn't wait for a DOM task"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let task = dom.dom_tasks().next_due();'''
+to = '''        let task: Option<f64> = None;'''
+test = ["python3", "scripts/test.py", "wpt", "dom/abort/"]

@@ -1,0 +1,429 @@
+# Mutation test of stage 2d: a state or attribute that rules use across
+# siblings styles again only what their sibling invalidation sets find:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-2d.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it"]
+timeout = 600
+
+[[mutant]]
+name = "a sibling's set doesn't style it"
+file = "crates/style/src/lib.rs"
+from = '''let invalidated = sibling.as_ref().is_some_and(|sibling| sibling.restyle)'''
+to = '''let invalidated = false'''
+
+[[mutant]]
+name = "an ancestor's sibling's set doesn't find descendants"
+file = "crates/style/src/lib.rs"
+from = '''                || descendants.as_ref().is_some_and(|set| set.matches(node));'''
+to = ''';'''
+
+[[mutant]]
+name = "the descendant sets aren't passed down"
+file = "crates/style/src/lib.rs"
+from = '''                        sibling: sibling_invalidated.remove(&child.id()),
+                        descendants: below.clone(),'''
+to = '''                        sibling: sibling_invalidated.remove(&child.id()),
+                        descendants: None,'''
+
+[[mutant]]
+name = "the sibling sets aren't handed to the children"
+file = "crates/style/src/lib.rs"
+from = '''sibling: sibling_invalidated.remove(&child.id()),'''
+to = '''sibling: None,'''
+
+[[mutant]]
+name = "the walk doesn't go down for a descendant set"
+file = "crates/style/src/lib.rs"
+from = '''                || below.is_some()
+'''
+to = ''''''
+
+[[mutant]]
+name = "a host's children aren't forced for a sibling set"
+file = "crates/style/src/lib.rs"
+from = '''force: subtree || structural || !sibling_invalidated.is_empty(),'''
+to = '''force: subtree || structural,'''
+
+[[mutant]]
+name = "a host's children don't take the descendant sets"
+file = "crates/style/src/lib.rs"
+from = '''                    scope: tree_scope,
+                    descendants: below.clone(),'''
+to = '''                    scope: tree_scope,
+                    descendants: None,'''
+
+[[mutant]]
+name = "the sets aren't applied"
+file = "crates/style/src/lib.rs"
+from = '''            set.schedule(children[index + 1..].iter().copied(), &mut invalidated);'''
+to = ''''''
+
+[[mutant]]
+name = "a state the sets don't say isn't taken"
+file = "crates/style/src/lib.rs"
+from = '''.intersects(features.sibling_fallback.states)'''
+to = '''.intersects(ElementState::NONE)'''
+
+[[mutant]]
+name = "an attribute the sets don't say isn't taken"
+file = "crates/style/src/lib.rs"
+from = '''.is_some_and(|changes| features.sibling_fallback.uses(changes));'''
+to = '''.is_some_and(|_| false);'''
+
+[[mutant]]
+name = "what the sets don't say isn't structural"
+file = "crates/style/src/lib.rs"
+from = '''&& (flags.children_changed || sibling_fallback);'''
+to = '''&& flags.children_changed;'''
+
+[[mutant]]
+name = "an emptiness isn't scheduled"
+file = "crates/style/src/lib.rs"
+from = '''            if flags.children_changed
+                && selector_flags.intersects(ElementSelectorFlags::HAS_EMPTY_SELECTOR)'''
+to = '''            if false'''
+
+[[mutant]]
+name = "what is scheduled isn't taken"
+file = "crates/style/src/lib.rs"
+from = '''                (None, pending) => pending,'''
+to = '''                (None, _) => None,'''
+
+[[mutant]]
+name = "a set reaches every later sibling"
+file = "crates/style/src/lib.rs"
+from = '''.take(self.reach.map_or(usize::MAX, usize::from));'''
+to = '''.take(usize::MAX);'''
+
+[[mutant]]
+name = "a set takes every sibling"
+file = "crates/style/src/lib.rs"
+from = '''            if self.siblings.matches(sibling) {'''
+to = '''            if true {'''
+
+[[mutant]]
+name = "a set doesn't style the sibling itself"
+file = "crates/style/src/lib.rs"
+from = '''                entry.restyle |= self.restyle;'''
+to = ''''''
+
+[[mutant]]
+name = "a set's descendant part isn't kept"
+file = "crates/style/src/lib.rs"
+from = '''                entry.descendants.add(&self.descendants);'''
+to = ''''''
+
+[[mutant]]
+name = "nothing matches any"
+file = "crates/style/src/lib.rs"
+from = '''        self.any
+            || (!self.ids.is_empty()'''
+to = '''        false
+            || (!self.ids.is_empty()'''
+
+[[mutant]]
+name = "ids don't match"
+file = "crates/style/src/lib.rs"
+from = '''.is_some_and(|id| self.ids.iter().any(|f| id.eq_ignore_ascii_case(f))))'''
+to = '''.is_some_and(|_| false))'''
+
+[[mutant]]
+name = "classes don't match"
+file = "crates/style/src/lib.rs"
+from = '''.any(|class| self.classes.iter().any(|f| class.eq_ignore_ascii_case(f))))'''
+to = '''.any(|_| false))'''
+
+[[mutant]]
+name = "attributes don't match"
+file = "crates/style/src/lib.rs"
+from = '''self.attributes.iter().any(|f| name.eq_ignore_ascii_case(f))'''
+to = '''false'''
+
+[[mutant]]
+name = "names don't match"
+file = "crates/style/src/lib.rs"
+from = '''self.names.iter().any(|f| name.eq_ignore_ascii_case(f))'''
+to = '''false'''
+
+[[mutant]]
+name = "a compound with nothing to find finds nothing"
+file = "crates/style/src/lib.rs"
+from = '''            features.any = true;
+        }
+        features'''
+to = '''        }
+        features'''
+
+[[mutant]]
+name = "a class is taken as anything"
+file = "crates/style/src/lib.rs"
+from = '''            features.classes.push(class);'''
+to = '''            features.any = true;'''
+
+[[mutant]]
+name = "a name is taken as anything"
+file = "crates/style/src/lib.rs"
+from = '''            features.names.push(name);'''
+to = '''            features.any = true;'''
+
+[[mutant]]
+name = "an added set's any is lost"
+file = "crates/style/src/lib.rs"
+from = '''        self.any |= other.any;'''
+to = ''''''
+
+[[mutant]]
+name = "an added set's features are lost"
+file = "crates/style/src/lib.rs"
+from = '''                if !mine.contains(feature) {
+                    mine.push(feature.clone());
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "a class has no set"
+file = "crates/style/src/lib.rs"
+from = '''.entry(class.0.to_ascii_lowercase())'''
+to = '''.entry(String::new())'''
+
+[[mutant]]
+name = "an id has no set"
+file = "crates/style/src/lib.rs"
+from = '''Component::ID(id) => push(self.ids.entry(id.0.to_ascii_lowercase()).or_default(), set),'''
+to = '''Component::ID(_) => return false,'''
+
+[[mutant]]
+name = "an attribute has no set"
+file = "crates/style/src/lib.rs"
+from = '''            } => attribute(local_name_lower.0.clone()),
+            Component::AttributeInNoNamespace { local_name, .. } => {
+                attribute(local_name.0.to_ascii_lowercase());'''
+to = '''            } => return false,
+            Component::AttributeInNoNamespace { .. } => {
+                return false;'''
+
+[[mutant]]
+name = "a link has no set"
+file = "crates/style/src/lib.rs"
+from = '''                        attribute("href".to_owned());'''
+to = ''''''
+
+[[mutant]]
+name = "a language has no set"
+file = "crates/style/src/lib.rs"
+from = '''PseudoClass::Lang(_) => attribute("lang".to_owned()),'''
+to = '''PseudoClass::Lang(_) => {}'''
+
+[[mutant]]
+name = "a state has no set"
+file = "crates/style/src/lib.rs"
+from = '''                        self.states.push(entry);'''
+to = ''''''
+
+[[mutant]]
+name = "an emptiness has no set"
+file = "crates/style/src/lib.rs"
+from = '''            Component::Empty => push(&mut self.empty, set),'''
+to = '''            Component::Empty => {}'''
+
+[[mutant]]
+name = "a changed state finds no set"
+file = "crates/style/src/lib.rs"
+from = '''            if states.intersects(*state) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "a changed class finds no set"
+file = "crates/style/src/lib.rs"
+from = '''            find(&self.classes, class);'''
+to = ''''''
+
+[[mutant]]
+name = "a changed id finds no set"
+file = "crates/style/src/lib.rs"
+from = '''            find(&self.ids, id);'''
+to = ''''''
+
+[[mutant]]
+name = "a changed attribute finds no set"
+file = "crates/style/src/lib.rs"
+from = '''            find(&self.attributes, name.as_str());'''
+to = ''''''
+
+[[mutant]]
+name = "every rule takes the old way"
+file = "crates/style/src/lib.rs"
+from = '''        if !plain {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "a run of sibling combinators isn't followed"
+file = "crates/style/src/lib.rs"
+from = '''            while target > 0 && combinators[target - 1].is_sibling() {'''
+to = '''            while false {'''
+
+[[mutant]]
+name = "a run of + is taken as ~"
+file = "crates/style/src/lib.rs"
+from = '''.all(|combinator| *combinator == Combinator::NextSibling)'''
+to = '''.all(|_| false)'''
+
+[[mutant]]
+name = "a sibling is always styled itself"
+file = "crates/style/src/lib.rs"
+from = '''                restyle: target == 0,'''
+to = '''                restyle: true,'''
+
+[[mutant]]
+name = "a set has no descendant part"
+file = "crates/style/src/lib.rs"
+from = '''                    subject.clone()'''
+to = '''                    InvalidationFeatures::default()'''
+
+[[mutant]]
+name = "an ancestor's feature isn't kept"
+file = "crates/style/src/lib.rs"
+from = '''            if !combinators[index - 1].is_sibling() {
+                for component in compound {
+                    self.any.add_component(component);
+                }'''
+to = '''            if !combinators[index - 1].is_sibling() {
+                for component in compound {
+                    let _ = component;
+                }'''
+
+[[mutant]]
+name = "the subject's nested ancestors aren't kept"
+file = "crates/style/src/lib.rs"
+from = '''            if index == 0 {
+                // The subject's own nested lists (`:is(:focus) .a`'s are
+                // its own, `:is(.b .a)`'s `.b` an ancestor's).
+                for component in compound {
+                    self.any.add_nested(component, false);
+                }'''
+to = '''            if index == 0 {
+                for component in compound {
+                    let _ = component;
+                }'''
+
+[[mutant]]
+name = "a nested list's ancestors left of siblings aren't kept"
+file = "crates/style/src/lib.rs"
+from = '''                    // (`:is(.b .a) ~ .c`'s `.b`) is an ancestor's.
+                    self.any.add_nested(component, false);'''
+to = '''                    // (`:is(.b .a) ~ .c`'s `.b`) is an ancestor's.'''
+
+[[mutant]]
+name = "a nested list left of siblings isn't a fallback"
+file = "crates/style/src/lib.rs"
+from = '''                    self.sibling_fallback.add_component(component);'''
+to = ''''''
+
+[[mutant]]
+name = "a nested emptiness left of siblings has no set"
+file = "crates/style/src/lib.rs"
+from = '''                    if nests(component, |c| matches!(c, Component::Empty)) {
+                        self.siblings.add(&Component::Empty, &set);
+                    }'''
+to = ''''''
+
+[[mutant]]
+name = "positions among a list's matches aren't a fallback"
+file = "crates/style/src/lib.rs"
+from = '''                    Component::NthOf(_) => true,'''
+to = '''                    Component::NthOf(_) => false,'''
+
+[[mutant]]
+name = "nested siblings aren't a fallback"
+file = "crates/style/src/lib.rs"
+from = '''                if nested_siblings {
+                    self.sibling_fallback.add_nested(component, true);'''
+to = '''                if nested_siblings {'''
+
+[[mutant]]
+name = "a nested emptiness with siblings has no set"
+file = "crates/style/src/lib.rs"
+from = '''                        self.siblings.add(&Component::Empty, &set);
+                    }
+                }
+            }
+            if index == 0 {'''
+to = '''                    }
+                }
+            }
+            if index == 0 {'''
+
+[[mutant]]
+name = "an unusual rule isn't a fallback"
+file = "crates/style/src/lib.rs"
+from = '''            if SiblingReach::of(selector) != SiblingReach::default() {
+                self.sibling_fallback.add_selector(selector, true);
+            }
+            return;'''
+to = '''            return;'''
+
+[[mutant]]
+name = "another kind's rule isn't a fallback"
+file = "crates/style/src/lib.rs"
+from = '''                    if reach != SiblingReach::default() {
+                        features.sibling_fallback.add_selector(selector, true);
+                    }'''
+to = ''''''
+
+[[mutant]]
+name = "a position left of + reaches as far as the +s"
+file = "crates/style/src/lib.rs"
+from = '''Component::Nth(data) => run > 0 || !data.is_simple_edge(),'''
+to = '''Component::Nth(data) => !data.is_simple_edge(),'''
+
+[[mutant]]
+name = "a nested position left of + reaches as far as the +s"
+file = "crates/style/src/lib.rs"
+from = '''                        || (run > 0
+'''
+to = '''                        || (false
+'''
+
+[[mutant]]
+name = "nests doesn't look in lists"
+file = "crates/style/src/lib.rs"
+from = '''                list.slice().iter().any(any)'''
+to = '''                false'''
+
+[[mutant]]
+name = "a shadow root's children's attributes aren't structural"
+file = "crates/style/src/lib.rs"
+from = '''&& (root_flags.children_changed || root_flags.children_attributes_changed))'''
+to = '''&& root_flags.children_changed)'''
+
+[[mutant]]
+name = "a child's attributes don't touch its parent"
+file = "crates/style/src/lib.rs"
+from = '''if restyle || flags.children_changed || flags.children_attributes_changed {'''
+to = '''if restyle || flags.children_changed {'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "update::"]
+
+[[mutant]]
+name = "what is assigned to slots isn't structural"
+file = "crates/style/src/lib.rs"
+from = '''.or(shadow_cascade.slotted_dependencies);'''
+to = ''';'''
+
+[[mutant]]
+name = "an attribute doesn't flag its parent"
+file = "crates/dom/src/scope.rs"
+from = '''            set_children_attributes_changed(parent);
+        }
+        // A `<style>`'''
+to = '''        }
+        // A `<style>`'''
+
+[[mutant]]
+name = "an attribute is a structural change again"
+file = "crates/dom/src/scope.rs"
+from = '''            set_children_attributes_changed(parent);
+        }
+        // A `<style>`'''
+to = '''            set_children_attributes_changed(parent);
+            set_children_changed(parent);
+        }
+        // A `<style>`'''

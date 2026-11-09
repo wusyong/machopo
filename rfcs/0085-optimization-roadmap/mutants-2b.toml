@@ -1,0 +1,100 @@
+# Stage 2b: the fast path makes each element with its attributes
+# (`create_html_element_with_attributes`: by number, none looked for first,
+# an input of its type) and decodes each text and value once, as the scan
+# checks it. `dom`'s attribute tests (the element as one given them one by
+# one, the debug build's count of input type changes), `html`'s fast path
+# tests (inputs as the full parser's, the debug build's count of decodes),
+# `style`'s form states (radio buttons made so are seen).
+test = ["sh", "-c", "systemd-run --user --scope -q -p MemoryMax=24G -p MemorySwapMax=0 sh -c 'cargo test -q -p dom --test it attributes:: && cargo test -q -p html --test it fast_path:: && cargo test -q -p style --test it form_states::'"]
+timeout = 1200
+
+[[mutant]]
+name = "dom: an input not made of its type"
+file = "crates/dom/src/lib.rs"
+from = '''            self.input_made_of_type(element, kind);'''
+to = '''            let _ = kind;'''
+
+[[mutant]]
+name = "dom: an input made of the text type whatever its attribute"
+file = "crates/dom/src/input.rs"
+from = '''        let kind = InputKind::from_attribute(Some(value));
+        input.kind.set(kind as u8);'''
+to = '''        let kind = InputKind::from_attribute(Some(value).filter(|_| false));
+        input.kind.set(kind as u8);'''
+
+[[mutant]]
+name = "dom: a radio button made so not seen"
+file = "crates/dom/src/input.rs"
+from = '''        if kind == InputKind::Radio {
+            self.see(RADIOS_SEEN);
+        }
+    }
+
+    /// HTML's type change steps'''
+to = '''        if kind == InputKind::Radio {
+        }
+    }
+
+    /// HTML's type change steps'''
+
+[[mutant]]
+name = "dom: the attributes' change steps not run"
+file = "crates/dom/src/lib.rs"
+from = '''            list.push(self.gc, attribute);
+            self.attribute_added(element, name);
+            self.attribute_changed(element, name, None, Some(value));'''
+to = '''            list.push(self.gc, attribute);
+            self.attribute_added(element, name);'''
+
+[[mutant]]
+name = "dom: an id not flagged"
+file = "crates/dom/src/lib.rs"
+from = '''            list.push(self.gc, attribute);
+            self.attribute_added(element, name);'''
+to = '''            list.push(self.gc, attribute);'''
+
+[[mutant]]
+name = "dom: the change steps given no value"
+file = "crates/dom/src/lib.rs"
+from = '''            self.attribute_changed(element, name, None, Some(value));
+        }
+        element'''
+to = '''            self.attribute_changed(element, name, None, Some(""));
+        }
+        element'''
+
+[[mutant]]
+name = "dom: the list not the element's"
+file = "crates/dom/src/lib.rs"
+from = '''        let list = HeapVector::new(self.gc, attributes.len());
+        element.attributes.set(self.gc, Some(list));'''
+to = '''        let list = HeapVector::new(self.gc, attributes.len());'''
+
+[[mutant]]
+name = "html: building decodes again"
+file = "crates/html/src/fast_path_build.rs"
+from = '''                let node = cx.create_text(document, &text);'''
+to = '''                let node = cx.create_text(
+                    document,
+                    &crate::fast_path::decode(&text).expect("scanned"),
+                );'''
+
+[[mutant]]
+name = "html: a value kept as written"
+file = "crates/html/src/fast_path.rs"
+from = '''            attrs.push((attr_name, decode(value)?));'''
+to = '''            decode(value)?;
+            attrs.push((attr_name, Cow::Borrowed(value)));'''
+
+[[mutant]]
+name = "html: a text kept as written"
+file = "crates/html/src/fast_path.rs"
+from = '''            events.push(Event::Text(decode(text)?));'''
+to = '''            decode(text)?;
+            events.push(Event::Text(Cow::Borrowed(text)));'''
+
+[[mutant]]
+name = "html: the debug build's check of the inputs' types gone"
+file = "crates/html/src/fast_path_build.rs"
+from = '''                && cx.input_kind(a) == cx.input_kind(b)'''
+to = '''                && cx.input_kind(a).is_some() == cx.input_kind(b).is_some()'''

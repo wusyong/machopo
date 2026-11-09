@@ -1,0 +1,231 @@
+# Mutation test of step 3c (`adoptedStyleSheets`: the lists in `dom`, the
+# observable array in the table and `dom_js`, the renderer's sheets):
+# python3 scripts/test.py mutate rfcs/0016-cssom/mutants-3c.toml
+# `dom`'s mutants run `dom`'s tests (its GC workload adopts sheets) and
+# `dom_api`'s; those the style engine sees, `shell`'s whole browser.
+test = ["cargo", "test", "-q", "-p", "dom", "-p", "dom_api", "--test", "it"]
+timeout = 900
+
+[[mutant]]
+name = "adding a sheet doesn't lengthen the list"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''        if index == len {
+            rare.adopted_count.set(len as u32 + 1);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "taking the last sheet off doesn't shorten the list"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''        rare.adopted_count.set(len as u32 - 1);'''
+to = ''''''
+
+[[mutant]]
+name = "taking the last sheet off leaves it in its slot"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''        rare.adopted_style_sheets.slot(self, len - 1).clear(self);'''
+to = ''''''
+
+[[mutant]]
+name = "adopting doesn't mark the document"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''        if index == len {
+            rare.adopted_count.set(len as u32 + 1);
+        }
+        let document = self.document_of(node);
+        self.set_style_sheets_changed(&document);'''
+to = '''        if index == len {
+            rare.adopted_count.set(len as u32 + 1);
+        }'''
+
+[[mutant]]
+name = "taking a sheet off doesn't mark the document"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''        rare.adopted_count.set(len as u32 - 1);
+        let document = self.document_of(node);
+        self.set_style_sheets_changed(&document);'''
+to = '''        rare.adopted_count.set(len as u32 - 1);'''
+
+[[mutant]]
+name = "a sheet's changes don't mark its document"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''        let document = self.read().css_style_sheet_document(sheet);
+        self.set_style_sheets_changed(&document);'''
+to = '''        let _ = sheet;'''
+
+[[mutant]]
+name = "marking the document's sheets does nothing"
+file = "crates/dom/src/scope.rs"
+from = '''        flags.child_needs_style_recalc = true;
+        document.style_flags.set(flags);
+    }'''
+to = '''        let _ = flags;
+    }'''
+
+[[mutant]]
+name = "the style engine gets disabled sheets too"
+file = "crates/dom/src/css_style_sheet.rs"
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "style_sheets::"]
+from = '''                (!sheet.disabled.get()).then(|| sheet.contents.borrow().clone())'''
+to = '''                Some(sheet.contents.borrow().clone())'''
+
+[[mutant]]
+name = "the style engine gets the sheets in reverse"
+file = "crates/dom/src/css_style_sheet.rs"
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "style_sheets::"]
+from = '''        (0..rare.adopted_count.get() as usize)
+            .filter_map(|index| {'''
+to = '''        (0..rare.adopted_count.get() as usize)
+            .rev()
+            .filter_map(|index| {'''
+
+[[mutant]]
+name = "the renderer doesn't give the style engine the adopted sheets"
+file = "crates/renderer/src/frame_view.rs"
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "style_sheets::"]
+from = '''            self.style_engine.set_adopted_style_sheets(
+                self.document.get(scope).adopted_style_sheet_contents(),
+            );'''
+to = ''''''
+
+[[mutant]]
+name = "a sheet of another document can be adopted"
+file = "crates/dom_api/src/css_style_sheet.rs"
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+from = '''        if !constructor.get(&read).ptr_eq(&document) {'''
+to = '''        if !constructor.get(&read).ptr_eq(&document) && false {'''
+
+[[mutant]]
+name = "the delete algorithm keeps the sheet"
+file = "crates/dom_api/src/css_style_sheet.rs"
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+from = '''    cx.mutate().remove_last_adopted_style_sheet(this);
+    Ok(())'''
+to = '''    let _ = (cx, this);
+    Ok(())'''
+
+[[mutant]]
+name = "the setter doesn't delete the old sheets"
+file = "crates/dom_api/src/observable_array.rs"
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+from = '''    for _ in 0..(desc.list)(cx, this)?.len() {
+        (desc.delete_last)(cx, this)?;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "the setter sets every sheet at the start"
+file = "crates/dom_api/src/observable_array.rs"
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+from = '''        (desc.set)(cx, this, index as u32, value)?;'''
+to = '''        let _ = index;
+        (desc.set)(cx, this, 0, value)?;'''
+
+[[mutant]]
+name = "the array is made anew each time"
+file = "crates/dom_js/src/observable_array.rs"
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "style_sheets::"]
+from = '''    if let Some(array) = holder.get_private(scope, key)
+        && array.is_proxy()
+    {'''
+to = '''    if let Some(array) = holder.get_private(scope, key)
+        && array.is_proxy()
+        && false
+    {'''
+
+[[mutant]]
+name = "length is the target's"
+file = "crates/dom_js/src/observable_array.rs"
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "style_sheets::"]
+from = '''    if key == "length" {
+        return Key::Length;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a non-canonical number is an index"
+file = "crates/dom_js/src/observable_array.rs"
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "style_sheets::"]
+from = '''        Ok(index) if index != u32::MAX && index.to_string() == key => Key::Index(index),'''
+to = '''        Ok(index) => Key::Index(index),'''
+
+[[mutant]]
+name = "a length that isn't an integer is taken"
+file = "crates/dom_js/src/observable_array.rs"
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "style_sheets::"]
+from = '''    if f64::from(uint32) != number {'''
+to = '''    if f64::from(uint32) != number && false {'''
+
+[[mutant]]
+name = "a longer length is taken"
+file = "crates/dom_js/src/observable_array.rs"
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "style_sheets::"]
+from = '''    if uint32 as usize > len {
+        return Some(false);
+    }'''
+to = '''    if uint32 as usize > len {
+        return Some(true);
+    }'''
+
+[[mutant]]
+name = "any index can be deleted"
+file = "crates/dom_js/src/observable_array.rs"
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "style_sheets::"]
+from = '''            if len == 0 || index as usize != len - 1 {'''
+to = '''            if len == 0 {'''
+
+[[mutant]]
+name = "an index can be defined not configurable"
+file = "crates/dom_js/src/observable_array.rs"
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "style_sheets::"]
+from = '''                || descriptor.configurable == Some(false)'''
+to = ''''''
+
+[[mutant]]
+name = "an index can be defined read-only"
+file = "crates/dom_js/src/observable_array.rs"
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "style_sheets::"]
+from = '''                || descriptor.enumerable == Some(false)
+                || descriptor.writable == Some(false)'''
+to = '''                || descriptor.enumerable == Some(false)'''
+
+[[mutant]]
+name = "length can be defined configurable"
+file = "crates/dom_js/src/observable_array.rs"
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "style_sheets::"]
+from = '''                || descriptor.configurable == Some(true)'''
+to = ''''''
+
+[[mutant]]
+name = "length can be defined as an accessor"
+file = "crates/dom_js/src/observable_array.rs"
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "style_sheets::"]
+from = '''        Key::Length => {
+            if descriptor.is_accessor()
+                ||'''
+to = '''        Key::Length => {
+            if false
+                ||'''
+
+[[mutant]]
+name = "length's descriptor says read-only"
+file = "crates/dom_js/src/observable_array.rs"
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "style_sheets::"]
+from = '''            Some(data_descriptor(scope, len, true, false, false))'''
+to = '''            Some(data_descriptor(scope, len, false, false, false))'''
+
+[[mutant]]
+name = "the own keys leave out the target's"
+file = "crates/dom_js/src/observable_array.rs"
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "style_sheets::"]
+from = '''        for index in 0..own.length() {
+            keys.push(own.get_index(scope, index)?);
+        }'''
+to = '''        let _ = own;'''
+
+[[mutant]]
+name = "has an index past the end"
+file = "crates/dom_js/src/observable_array.rs"
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "style_sheets::"]
+from = '''            Some((index as usize) < len)'''
+to = '''            Some((index as usize) <= len)'''

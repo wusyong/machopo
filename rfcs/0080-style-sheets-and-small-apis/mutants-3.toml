@@ -1,0 +1,83 @@
+# Stage 3: the `<style>` and `<link>` sheets the DOM keeps, which the
+# style engine collects.
+test = ["sh", "-c", "cargo test -q -p dom --test it style_elements && cargo test -q -p style --test it -- invalidation:: media:: cascade:: shadow:: && cargo test -q -p shell --test it -- style_sheets::"]
+timeout = 1500
+
+# --- dom ---
+
+[[mutant]]
+name = "not kept once parsed"
+file = "crates/dom/src/style_element.rs"
+from = '''            rare.style_sheet.borrow_mut().get_or_insert_default().0 = Some(sheet.clone());'''
+to = '''            let _ = &sheet;'''
+
+[[mutant]]
+name = "a style element with no rare data to keep it in"
+file = "crates/dom/src/scope.rs"
+from = '''        if is_style_sheet_owner(element.node()) {'''
+to = '''        if is_style_sheet_owner(element.node()) && false {'''
+
+[[mutant]]
+name = "kept when its sheet is made again"
+file = "crates/dom/src/scope.rs"
+from = '''            sheet.0 = None;'''
+to = '''            let _ = &sheet;'''
+
+[[mutant]]
+name = "nothing shared"
+file = "crates/dom/src/style_element.rs"
+from = '''        if let Some(sheet) = sheets.get(&key).and_then(Weak::upgrade) {'''
+to = '''        if let Some(sheet) = sheets.get(&key).and_then(Weak::upgrade).filter(|_| false) {'''
+
+[[mutant]]
+name = "the sheets in use dropped too"
+file = "crates/dom/src/style_element.rs"
+from = '''            sheets.retain(|_, sheet| sheet.strong_count() > 0);'''
+to = '''            sheets.retain(|_, _| false);'''
+
+[[mutant]]
+name = "a link's sheet against the document's base URL"
+file = "crates/dom/src/style_element.rs"
+from = '''            self.style_sheet_texts.sheet(text, url.as_ref())'''
+to = '''            self.style_sheet_texts.sheet(text, base)'''
+
+[[mutant]]
+name = "a link's old sheet kept when another loads"
+file = "crates/dom/src/style_element.rs"
+from = '''        *self.rare_data(link).style_sheet.borrow_mut() = Some(Box::new((None, Some((css, url)))));'''
+to = '''        let mut sheet = self.rare_data(link).style_sheet.borrow_mut();
+        let old = sheet.take().and_then(|sheet| sheet.0);
+        *sheet = Some(Box::new((old, Some((css, url)))));
+        drop(sheet);'''
+
+[[mutant]]
+name = "a link's sheet loaded doesn't mark its tree scope"
+file = "crates/dom/src/style_element.rs"
+from = '''        crate::scope::set_tree_scope_style_sheets_changed(self.own(link));'''
+to = '''        let _ = self.own(link);'''
+
+# --- style ---
+
+[[mutant]]
+name = "a disabled style's sheet applied"
+file = "crates/style/src/lib.rs"
+from = '''            is_style_element(node) && !node.style_sheet_disabled()'''
+to = '''            is_style_element(node)'''
+
+[[mutant]]
+name = "any link's sheet applied"
+file = "crates/style/src/lib.rs"
+from = '''            stylesheet_link_href(node).is_some()'''
+to = '''            true'''
+
+[[mutant]]
+name = "a sheet with another media taken as the same"
+file = "crates/style/src/lib.rs"
+from = '''        Arc::ptr_eq(&self.contents, contents) && self.media_text == *media_text'''
+to = '''        Arc::ptr_eq(&self.contents, contents)'''
+
+[[mutant]]
+name = "other contents not a change"
+file = "crates/style/src/lib.rs"
+from = '''                            .any(|((contents, media), sheet)| !sheet.is(contents, media))'''
+to = '''                            .any(|_| false)'''

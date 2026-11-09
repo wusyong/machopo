@@ -1,0 +1,42 @@
+# Stage 4e-4c-1: `:defined` on the new DOM: the state's change noted for
+# style, its matching and its invalidation in `style_next`.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p style_next --test it invalidation::defined"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: the state's change not noted"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''        if was != self.is_defined_element(element) {
+            self.state_changed(element, crate::AttributeChanges::DEFINED);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a custom element not defined"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''        state == 0 || state == CustomElementState::Custom.bits()'''
+to = '''        state == 0'''
+
+[[mutant]]
+name = "dom: a failed element defined"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''        state == 0 || state == CustomElementState::Custom.bits()'''
+to = '''        state == 0 || state >= CustomElementState::Failed.bits()'''
+
+[[mutant]]
+name = "style: no state bit for :defined"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        PseudoClass::Defined => AttributeChanges::DEFINED,'''
+to = ''''''
+
+[[mutant]]
+name = "style: :defined not among the names style reads"
+file = "crates/style_next/src/rule_index.rs"
+from = '''                    self.states |= dom_next::AttributeChanges::DEFINED;'''
+to = ''''''
+
+[[mutant]]
+name = "style: :defined never matches"
+file = "crates/style_next/src/selector.rs"
+from = '''            PseudoClass::Defined => self.cx.is_defined_element(self.node),'''
+to = ''''''

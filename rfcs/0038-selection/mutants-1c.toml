@@ -1,0 +1,38 @@
+# Mutation test of step 1c (the selection's range out of the document is
+# none to script):
+# python3 scripts/test.py mutate rfcs/0038-selection/mutants-1c.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "selections::"]
+timeout = 600
+
+[[mutant]]
+name = "a range out of the document is the selection's to script"
+file = "crates/dom_api/src/selection.rs"
+from = '''    (in_document(cx, this, &start) && in_document(cx, this, &end)).then_some(range)'''
+to = '''    let _ = (start, end);
+    Some(range)'''
+
+[[mutant]]
+name = "getRangeAt hands out a range out of the document"
+file = "crates/dom_api/src/selection.rs"
+from = '''    match range_of(cx, this) {
+        Some(range) if index == 0 => Ok(range),'''
+to = '''    match cx.read().selection_range(this) {
+        Some(range) if index == 0 => Ok(range),'''
+
+[[mutant]]
+name = "containsNode looks at a range out of the document"
+file = "crates/dom_api/src/selection.rs"
+from = '''    let Some(range) = range_of(cx, this) else {
+        return Ok(false);
+    };'''
+to = '''    let Some(range) = cx.read().selection_range(this) else {
+        return Ok(false);
+    };'''
+
+[[mutant]]
+name = "addRange counts a range out of the document"
+file = "crates/dom_api/src/selection.rs"
+from = '''    if range_of(cx, this).is_some()
+        || !in_document(cx, this, &start)'''
+to = '''    if cx.read().selection_range(this).is_some()
+        || !in_document(cx, this, &start)'''

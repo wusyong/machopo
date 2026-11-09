@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>A new transform-origin draws the box about it, where the old one drew nothing</title>
+<link rel="match" href="transform-origin-change-ref.html">
+<style>html, body { margin: 0 } #box { position: absolute; left: 100px; top: 50px; width: 100px; height: 40px; background-color: green; transform: rotate(90deg) }</style>
+<div id="box"></div>
+<script src="after-frames.js"></script>
+<script>afterFrames(() => document.getElementById("box").style.transformOrigin = "0 0");</script>
+</html>

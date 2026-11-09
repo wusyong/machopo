@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>K4: a changed stylesheet styles everything again</title>
+<link rel="match" href="k4-style-ref.html">
+<style>html, body { margin: 0 } div { width: 100px; height: 50px }</style>
+<style id="sheet">div { background-color: red }</style>
+<div></div><div></div>
+<script src="after-frames.js"></script>
+<script>afterFrames(() => { document.getElementById("sheet").firstChild.textContent = "div { background-color: green }"; });</script>
+</html>

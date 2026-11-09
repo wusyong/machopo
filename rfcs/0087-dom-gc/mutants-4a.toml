@@ -1,0 +1,238 @@
+# Step 4a: marking the old generation alongside the mutator. The barrier
+# (SATB's, for edges and roots, and the release that publishes), black
+# allocation (ranges, large objects, promotion), the marker skipping the
+# young, when a marking starts and finishes, a scavenge cancelling and
+# posting the job again, the pool's posted jobs (yield, cancel), the
+# verifier's floating check, and the loom models (`test.py gc-models`).
+# Run with `RUSTY_V8_ARCHIVE` (`test.py` checks the third-party pins).
+test = ["cargo", "test", "-q", "-p", "gc"]
+timeout = 900
+
+# The barrier.
+
+[[mutant]]
+name = "an edge's old value skips the barrier"
+file = "crates/gc/src/heap/young.rs"
+from = '''            self.satb(edge.load(StdOrdering::Relaxed));
+'''
+to = '''
+'''
+
+[[mutant]]
+name = "the fuzzer alone: an edge's old value skips the barrier"
+file = "crates/gc/src/heap/young.rs"
+from = '''            self.satb(edge.load(StdOrdering::Relaxed));
+'''
+to = '''
+'''
+test = ["cargo", "test", "-q", "-p", "gc", "--test", "it", "fuzz::"]
+
+[[mutant]]
+name = "the barrier marks but doesn't push"
+file = "crates/gc/src/heap.rs"
+from = '''            .expect("the barrier runs while marking")
+            .push(old);'''
+to = '''            .expect("the barrier runs while marking");
+        let _ = old;'''
+
+[[mutant]]
+name = "the barrier marks young objects"
+file = "crates/gc/src/heap.rs"
+from = '''        if old == 0 || self.is_young(old) || !self.mark_table.mark(old) {'''
+to = '''        if old == 0 || !self.mark_table.mark(old) {'''
+
+[[mutant]]
+name = "a root's removal skips the barrier"
+file = "crates/gc/src/heap.rs"
+from = '''        self.shared.roots.borrow_mut().watch_removals(true);'''
+to = '''        self.shared.roots.borrow_mut().watch_removals(false);'''
+
+[[mutant]]
+name = "the loom model's edge is written relaxed"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''                    edge.store(1, Ordering::Release);'''
+to = '''                    edge.store(1, Ordering::Relaxed);'''
+test = ["python3", "scripts/test.py", "gc-models"]
+
+[[mutant]]
+name = "the loom model's marker doesn't fence"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''            fence(Ordering::Acquire);
+            if seen == 1 {'''
+to = '''            let _ = fence;
+            if seen == 1 {'''
+test = ["python3", "scripts/test.py", "gc-models"]
+
+# Black allocation.
+
+[[mutant]]
+name = "a range taken while marking isn't black"
+file = "crates/gc/src/heap.rs"
+from = '''            if black {
+                page.marks.set_range(next, limit, true);'''
+to = '''            if false {
+                page.marks.set_range(next, limit, true);'''
+
+[[mutant]]
+name = "the cursors' ranges at the start aren't black"
+file = "crates/gc/src/heap.rs"
+from = '''        self.blacken_cursors(true);'''
+to = '''        self.blacken_cursors(false);'''
+
+[[mutant]]
+name = "the cursors' ranges stay black after the end"
+file = "crates/gc/src/heap.rs"
+from = '''        self.blacken_cursors(false);
+        self.marking_active.set(false);'''
+to = '''        self.marking_active.set(false);'''
+
+[[mutant]]
+name = "a scavenge's ranges given back stay black"
+file = "crates/gc/src/heap/young.rs"
+from = '''                if self.black {
+                    page.marks.set_range(cursor.next, cursor.limit, false);'''
+to = '''                if false {
+                    page.marks.set_range(cursor.next, cursor.limit, false);'''
+
+[[mutant]]
+name = "promotion while marking isn't black"
+file = "crates/gc/src/heap/young.rs"
+from = '''            black: self.marking_active.get(),'''
+to = '''            black: false,'''
+
+[[mutant]]
+name = "a large object allocated while marking isn't black"
+file = "crates/gc/src/heap.rs"
+from = '''        object.set_marked(self.marking_active.get());'''
+to = '''        object.set_marked(false);'''
+
+[[mutant]]
+name = "a range's bits stop at a word's end"
+file = "crates/gc/src/page.rs"
+from = '''            first = to;
+        }'''
+to = '''            first = end;
+            let _ = to;
+        }'''
+
+[[mutant]]
+name = "a range's bits start at the word's first"
+file = "crates/gc/src/page.rs"
+from = '''            let mask = ones << (first % 64);'''
+to = '''            let mask = ones;'''
+
+# The marker.
+
+[[mutant]]
+name = "the marker walks into the young"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''            if edge != 0 && (!YOUNG || !self.is_young(edge)) && self.marks.mark(edge) {'''
+to = '''            if edge != 0 && self.marks.mark(edge) {'''
+
+[[mutant]]
+name = "the joined runs of a concurrent marking walk into the young"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''                unsafe { self.scan::<true, false>(data, local, &mut tally) };'''
+to = '''                unsafe { self.scan::<false, false>(data, local, &mut tally) };'''
+
+[[mutant]]
+name = "the background runs aren't counted"
+file = "crates/gc/src/worklist.rs"
+from = '''        global.segments.is_empty() && active.load(Ordering::SeqCst) == 0'''
+to = '''        global.segments.is_empty()'''
+test = ["python3", "scripts/test.py", "gc-models"]
+
+# Starting and finishing.
+
+[[mutant]]
+name = "a marking starts at the limit"
+file = "crates/gc/src/heap.rs"
+from = '''        self.concurrent && self.allocated.get() >= self.limit.get() / 2'''
+to = '''        self.concurrent && self.allocated.get() >= self.limit.get()'''
+
+[[mutant]]
+name = "a marking starts without the scavenge"
+file = "crates/gc/src/heap.rs"
+from = '''        self.young.get_mut().resize_at_full_gc();
+        self.scavenge(&*platform, true);
+        platform.trace_begin("Gc.MarkStart");'''
+to = '''        platform.trace_begin("Gc.MarkStart");'''
+
+[[mutant]]
+name = "a marking at the limit runs on"
+file = "crates/gc/src/heap.rs"
+from = '''            if at_limit || self.marking_done() {'''
+to = '''            if self.marking_done() {'''
+
+[[mutant]]
+name = "a marking done runs on"
+file = "crates/gc/src/heap.rs"
+from = '''            if at_limit || self.marking_done() {'''
+to = '''            if at_limit {'''
+
+[[mutant]]
+name = "a scavenge doesn't post the job again"
+file = "crates/gc/src/heap.rs"
+from = '''        let record = self.scavenge(&*platform, false);
+        if let Some(marking) = self.marking.get_mut() {
+            marking.post(&*platform);
+        }'''
+to = '''        let record = self.scavenge(&*platform, false);'''
+
+[[mutant]]
+name = "the roots removed before a scavenge wait for the end"
+file = "crates/gc/src/heap.rs"
+from = '''            // The roots removed since the last safepoint, while their
+            // objects haven't moved.
+            self.drain_barrier();'''
+to = '''            // The roots removed since the last safepoint, while their
+            // objects haven't moved.'''
+
+[[mutant]]
+name = "Heap::collect leaves a marking running"
+file = "crates/gc/src/heap.rs"
+from = '''        if self.inner.marking.get_mut().is_some() {
+            self.inner.drain_barrier();
+            self.inner.finish_marking();
+        }
+        self.inner.collect();'''
+to = '''        if self.inner.marking.get_mut().is_some() {
+            return;
+        }
+        self.inner.collect();'''
+
+# The pool's posted jobs.
+
+[[mutant]]
+name = "a posted run doesn't yield to run"
+file = "crates/gc/src/platform.rs"
+from = '''        self.cancelled.load(Ordering::Relaxed) || self.shared.running.load(Ordering::Relaxed)'''
+to = '''        self.cancelled.load(Ordering::Relaxed)'''
+test = ["cargo", "test", "-q", "-p", "gc", "--lib", "platform::"]
+
+[[mutant]]
+name = "cancel doesn't wait for the runs"
+file = "crates/gc/src/platform.rs"
+from = '''            if state.background[at].active == 0 {'''
+to = '''            if true {'''
+test = ["cargo", "test", "-q", "-p", "gc", "--lib", "platform::"]
+
+[[mutant]]
+name = "a background run never asks whether to yield"
+file = "crates/gc/src/worklist.rs"
+from = '''                if visited % YIELD_EVERY == 0 && should_yield() {'''
+to = '''                if visited % YIELD_EVERY == 0 && false {'''
+
+# The verifier.
+
+[[mutant]]
+name = "the verifier lets any marked object float"
+file = "crates/gc/src/heap/verify.rs"
+from = '''                        .find(|data| !seen.contains(data) && !floating.contains(data))'''
+to = '''                        .find(|data| !seen.contains(data) && floating.is_empty())'''
+
+[[mutant]]
+name = "what is allocated while marking isn't floating"
+file = "crates/gc/src/heap.rs"
+from = '''            marking.allocated(data);'''
+to = '''            let _ = data;'''

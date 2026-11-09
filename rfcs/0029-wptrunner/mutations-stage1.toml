@@ -1,0 +1,69 @@
+# The first stage's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0029-wptrunner/mutations-stage1.toml`. Each test runs through
+# wptrunner (`test.py wpt`), so one run at a time; `check_wpt_runs.py`
+# holds the checks that need a run of their own.
+test = ["python3", "scripts/test.py", "wpt", "dom/nodes/rootNode.html"]
+timeout = 900
+
+[[mutant]]
+name = "the product without the test fonts"
+file = "tests/wpt/wptrunner_machopo/wptrunner_machopo/__init__.py"
+from = '''args = ["--test-fonts", "--host-resolver-rules", HOST_RESOLVER_RULES]'''
+to = '''args = ["--host-resolver-rules", HOST_RESOLVER_RULES]'''
+test = ["python3", "scripts/test.py", "wpt", "css/css-flexbox/align-items-baseline-row-horz.html", "css/css-flexbox/text-as-flexitem-size-001.html", "css/css-grid/subgrid/subgrid-baseline-016.html"]
+
+[[mutant]]
+name = "include lines handed over as URLs"
+file = "scripts/test.py"
+from = '''return str(local) if path and local.exists() else root.url(path)'''
+to = '''return root.url(path)'''
+test = ["python3", "scripts/test.py", "wpt"]
+
+[[mutant]]
+name = "test.py doesn't pass the timeout multiplier"
+file = "scripts/test.py"
+from = '''        cmd += ["--timeout-multiplier", multiplier]'''
+to = '''        cmd += []'''
+test = ["python3", "rfcs/0029-wptrunner/check_wpt_runs.py", "timeout"]
+
+[[mutant]]
+name = "run.py doesn't pass the timeout multiplier"
+file = "tests/wpt/wptrunner_machopo/wptrunner_machopo/run.py"
+from = '''        "--timeout-multiplier", str(args.timeout_multiplier),'''
+to = ''''''
+test = ["python3", "rfcs/0029-wptrunner/check_wpt_runs.py", "timeout"]
+
+[[mutant]]
+name = "--update doesn't update"
+file = "tests/wpt/wptrunner_machopo/wptrunner_machopo/run.py"
+from = '''        return update(args)'''
+to = '''        return status'''
+test = ["python3", "rfcs/0029-wptrunner/check_wpt_runs.py", "update"]
+
+[[mutant]]
+name = "a full update, which rebuilds the conditions from this log"
+file = "tests/wpt/wptrunner_machopo/wptrunner_machopo/update.py"
+from = '''update_properties=(["os"], {}), full_update=False)'''
+to = '''update_properties=(["os"], {}), full_update=True)'''
+test = ["python3", "rfcs/0029-wptrunner/check_wpt_runs.py", "update"]
+
+[[mutant]]
+name = "no stale entries"
+file = "scripts/test.py"
+from = '''    if stale := stale_wpt_entries(include or [], root):'''
+to = '''    if stale := []:'''
+test = ["python3", "rfcs/0029-wptrunner/check_wpt_runs.py", "stale"]
+
+[[mutant]]
+name = "an .ini's test looked up with its .ini suffix"
+file = "scripts/test.py"
+from = '''        test = rel.parent if ini.name == "__dir__.ini" else rel.with_suffix("")'''
+to = '''        test = rel.parent if ini.name == "__dir__.ini" else rel'''
+test = ["python3", "scripts/test.py", "wpt", "dom/nodes/rootNode.html"]
+
+[[mutant]]
+name = "an include line naming a directory without its / taken for a file"
+file = "scripts/test.py"
+from = '''        if path.endswith("/") or (root.tests / path).is_dir():'''
+to = '''        if path.endswith("/"):'''
+test = ["python3", "scripts/test.py", "wdspec"]

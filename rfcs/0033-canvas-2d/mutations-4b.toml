@@ -1,0 +1,61 @@
+# Step 4b's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0033-canvas-2d/mutations-4b.toml`. Each names the tests closest to
+# what it breaks.
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "canvas::to_blob"]
+timeout = 1500
+
+[[mutant]]
+name = "a tainted canvas's blob"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let encoded = serialize_bitmap(cx, this, mime_type.as_str(), quality)?;'''
+to = '''    let encoded = serialize_bitmap(cx, this, mime_type.as_str(), quality).unwrap_or(None);'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "canvas_images"]
+
+[[mutant]]
+name = "the callback called at once"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let task = Task::CanvasBlob { callback, encoded };
+    queue_task(&mut cx.mutate(), &window, TaskSource::CanvasBlobSerialization, 0.0, task);'''
+to = '''    let _ = (window, TaskSource::CanvasBlobSerialization);
+    blob_serialized(cx, &callback, encoded);'''
+
+[[mutant]]
+name = "another task source"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    queue_task(&mut cx.mutate(), &window, TaskSource::CanvasBlobSerialization, 0.0, task);'''
+to = '''    queue_task(&mut cx.mutate(), &window, TaskSource::DomManipulation, 0.0, task);'''
+
+[[mutant]]
+name = "a canvas without a window called"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let Some(window) = cx.read().document_window(&document) else {
+        return Ok(());
+    };'''
+to = '''    let Some(window) = cx.read().document_window(&document) else {
+        blob_serialized(cx, &callback, encoded);
+        return Ok(());
+    };'''
+
+[[mutant]]
+name = "no callback without a blob"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        None => Value::Null,
+    };
+    let _ = crate::call_reporting'''
+to = '''        None => return,
+    };
+    let _ = crate::call_reporting'''
+
+[[mutant]]
+name = "a blob without a type"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            let data = dom::BlobData::new(bytes.into(), mime_type.to_owned());'''
+to = '''            let data = dom::BlobData::new(bytes.into(), String::new() + &mime_type[..0]);'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "canvas_export"]
+
+[[mutant]]
+name = "a blob short of a byte"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            let data = dom::BlobData::new(bytes.into(), mime_type.to_owned());'''
+to = '''            let data = dom::BlobData::new(bytes[1..].into(), mime_type.to_owned());'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "canvas_export"]

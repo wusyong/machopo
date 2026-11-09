@@ -1,0 +1,77 @@
+# Mutation test of stage E4: raster invalidation by chunks, those painted
+# as they were taken whole:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-e4.toml
+test = ["cargo", "test", "-q", "-p", "paint"]
+timeout = 1800
+
+[[mutant]]
+name = "no chunk is taken whole"
+file = "crates/paint/src/raster_invalidator.rs"
+from = '''                .then_some(at)
+            });'''
+to = '''                .then_some(at)
+                .filter(|_| false)
+            });'''
+
+[[mutant]]
+name = "a chunk is taken whole under another state"
+file = "crates/paint/src/raster_invalidator.rs"
+from = '''                    && was.state == state
+'''
+to = ''''''
+
+[[mutant]]
+name = "a chunk is taken whole from one of another length"
+file = "crates/paint/src/raster_invalidator.rs"
+from = '''                (was.artifact_items.len() == len
+                    && was.state == state'''
+to = '''                (was.state == state'''
+
+[[mutant]]
+name = "a chunk is taken whole whatever its items after the first"
+file = "crates/paint/src/raster_invalidator.rs"
+from = '''                    && chunk
+                        .items
+                        .clone()
+                        .zip(from..)
+                        .all(|(index, from)| indices[index] == Some(from)))'''
+to = ''')'''
+
+[[mutant]]
+name = "a chunk under another state is compared item by item"
+file = "crates/paint/src/raster_invalidator.rs"
+from = '''            if chunk.state != was.state {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "a chunk gone isn't rastered again"
+file = "crates/paint/src/raster_invalidator.rs"
+from = '''        for (old_position, was) in old.chunks.iter().enumerate() {
+            if !matched[old_position] {'''
+to = '''        for (old_position, was) in old.chunks.iter().enumerate() {
+            if false && !matched[old_position] {'''
+
+[[mutant]]
+name = "chunks painted in another order aren't rastered again"
+file = "crates/paint/src/raster_invalidator.rs"
+from = '''            let (was, chunk) = (&old.chunks[old_position], &self.chunks[position]);
+            if was.id != chunk.id {'''
+to = '''            let (was, chunk) = (&old.chunks[old_position], &self.chunks[position]);
+            if false && was.id != chunk.id {'''
+
+[[mutant]]
+name = "chunks starting alike have the same id"
+file = "crates/paint/src/raster_invalidator.rs"
+from = '''                ordinal: *ordinal,
+            };
+            *ordinal += 1;
+            let start = items.len();'''
+to = '''                ordinal: *ordinal,
+            };
+            let start = items.len();'''
+
+[[mutant]]
+name = "items in a chunk aren't compared"
+file = "crates/paint/src/raster_invalidator.rs"
+from = '''            self.chunk_invalidation(chunk, old, was, &mut push);'''
+to = ''''''

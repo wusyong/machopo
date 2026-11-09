@@ -1,0 +1,15 @@
+# about:demo's areas layout: each part in its named area; "Swap
+# sides" changes only the container's grid-template-areas (and its
+# columns), and the side and the main part trade places. The layout is at
+# the end of the page: scrolled to first, so that what is captured shows
+# it.
+navigate about:demo
+wait-loaded
+scroll-to #areas
+screenshot side-left
+capture side-left
+click #swap
+wait-text #swap-note "The side is on the right."
+expect-differs side-left #area-side
+expect-differs side-left #area-main
+screenshot side-right

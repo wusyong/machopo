@@ -1,0 +1,25 @@
+# Rounded corners: a click inside a circle's box but outside its curve hits
+# what is under it, one inside hits the circle, a corner rounded by a
+# flow-relative longhand alike; a scroll container with
+# rounded corners is a layer the compositor cuts to them, and the wheel
+# scrolls it there.
+navigate pages/rounded.html
+wait-loaded
+# The page starts 74px down the window (the tab strip and the toolbar):
+# its point (15, 15) is past the curve (120px from the centre, of a 100px
+# radius); (100, 100) is the centre.
+click-at 15 89
+wait-text #out "body 0"
+click-at 100 174
+wait-text #out "dot 0"
+# #logical's top left corner, (240, 220) to (340, 320): past its curve, and
+# well inside it.
+click-at 245 299
+wait-text #out "body 0"
+click-at 330 384
+wait-text #out "logical 0"
+capture top
+wheel #list 0 60
+wait-text #out "logical 60"
+expect-differs top #list
+screenshot scrolled

@@ -1,0 +1,118 @@
+# Stage 4h-1d-2, through the renderer: the parser's blocking and deferred scripts, its async ones
+# queued, `DOMContentLoaded` after the deferred ones, stylesheets that block scripts, the requests
+# and their responses (status, MIME type, charset, muted errors, CORS), the checkpoint before a
+# parser's script is prepared.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "sh", "-c", "cargo test -q -p shell --test it -- next_dom::"]
+timeout = 1800
+
+[[mutant]]
+name = "api: the parser's defer blocks it"
+file = "crates/dom_api_next/src/script.rs"
+from = '''        return if attr(names::local::DEFER).is_some() {'''
+to = '''        return if false {'''
+
+[[mutant]]
+name = "api: the parser's async blocks it"
+file = "crates/dom_api_next/src/script.rs"
+from = '''    if flags.parser_inserted && !is_async {
+        return if'''
+to = '''    if flags.parser_inserted {
+        return if'''
+
+[[mutant]]
+name = "renderer: stylesheets block no script"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                && !next.pending_sheets.values().any(|sheet| sheet.blocks_scripts)'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: a script after a sheet doesn't wait for it"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                    blocks_scripts: !blocks_nothing && parsers,'''
+to = '''                    blocks_scripts: false,'''
+
+[[mutant]]
+name = "renderer: deferred scripts run while parsing"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            if next.readiness != Readiness::Deferring {
+                return;
+            }'''
+to = '''            if next.readiness == Readiness::Parsed || next.readiness == Readiness::Loaded {
+                return;
+            }'''
+
+[[mutant]]
+name = "renderer: DOMContentLoaded before the deferred scripts"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        engine.document_ready(frame, DocumentReadiness::Interactive);
+        self.handle_next_frame_requests();
+        self.send_next_harness_results();
+        self.run_next_deferred_scripts(frame);'''
+to = '''        engine.document_ready(frame, DocumentReadiness::Interactive);
+        engine.document_ready(frame, DocumentReadiness::ContentLoaded);
+        self.handle_next_frame_requests();
+        self.send_next_harness_results();
+        self.run_next_deferred_scripts(frame);'''
+
+[[mutant]]
+name = "renderer: no CORS for crossorigin"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            fetching.mode = RequestMode::Cors;'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: no initiator, no tainting"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        fetching.initiator = initiator;'''
+to = '''        let _ = initiator;'''
+
+[[mutant]]
+name = "renderer: any status runs"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''    let response = result.as_ref().ok()?;
+    if !(200..300).contains(&response.status) {
+        return None;
+    }
+    let mime = response.mime_type.as_str();
+    if ["image/", "audio/", "video/"].iter().any(|prefix| mime.starts_with(prefix)) || mime == "text/csv" {'''
+to = '''    let response = result.as_ref().ok()?;
+    let mime = response.mime_type.as_str();
+    if ["image/", "audio/", "video/"].iter().any(|prefix| mime.starts_with(prefix)) || mime == "text/csv" {'''
+
+[[mutant]]
+name = "renderer: an image runs"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''    if ["image/", "audio/", "video/"].iter().any(|prefix| mime.starts_with(prefix)) || mime == "text/csv" {
+        return None;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: the charset attribute ignored"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        .and_then(|label| encoding_rs::Encoding::for_label(label.trim().as_bytes()))'''
+to = '''        .and_then(|_| None)'''
+
+[[mutant]]
+name = "renderer: never muted"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        muted: response.tainting == ResponseTainting::Opaque,'''
+to = '''        muted: false,'''
+
+[[mutant]]
+name = "renderer: no checkpoint before a parser's script is prepared"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                    if let Some(engine) = &mut self.next_engine {
+                        engine.perform_microtask_checkpoint();
+                    }
+                    let line'''
+to = '''                    let line'''
+
+[[mutant]]
+name = "renderer: a sheet's arrival doesn't run the scripts it blocked"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        if sheet.blocks_scripts {
+            self.advance_next_document(frame);
+            self.run_next_deferred_scripts(frame);
+        }'''
+to = ''''''

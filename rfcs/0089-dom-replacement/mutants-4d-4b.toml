@@ -1,0 +1,241 @@
+# Stage 4d-4b: the wheel on the new DOM: `dom_next`'s wheel listeners
+# (counted, passive by default, blocking for style), `style_next`'s flag,
+# `dom_api_next`'s legacy event types and wheel input, the renderer's
+# region, main-thread scroll and routing.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it -- wheel && cargo test -q -p dom_api_next --test it -- wheel && cargo test -q -p style_next --test it -- wheel && cargo test -q -p renderer --lib -- next_frame_view && cargo test -q -p shell --test it -- wheel::"]
+timeout = 3000
+
+[[mutant]]
+name = "a handler not passive by default"
+file = "crates/dom_next/src/event.rs"
+from = '''        if type_and_flags & HANDLER != 0 && self.default_passive(target, event_type) {
+            type_and_flags |= PASSIVE;
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "an added wheel listener not counted"
+file = "crates/dom_next/src/event.rs"
+from = '''        if is_wheel_type(event_type) {
+            self.wheel_listeners_changed(target, 1);
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "a removed wheel listener still counted"
+file = "crates/dom_next/src/event.rs"
+from = '''            if is_wheel_type(bits & LISTENER_TYPE) {
+                self.wheel_listeners_changed(target, -1);
+            }
+'''
+to = ''''''
+
+[[mutant]]
+name = "a window's listener not passive"
+file = "crates/dom_next/src/event.rs"
+from = '''            TargetRef::Window(_) => return true,
+            TargetRef::EventTarget(_) => return false,'''
+to = '''            TargetRef::Window(_) => return false,
+            TargetRef::EventTarget(_) => return false,'''
+
+[[mutant]]
+name = "a document's listener not passive"
+file = "crates/dom_next/src/event.rs"
+from = '''        if self.kind(node) == NodeKind::Document {
+            return true;
+        }
+        let document = self.document_of(node);'''
+to = '''        let document = self.document_of(node);'''
+
+[[mutant]]
+name = "the body's listener not passive"
+file = "crates/dom_next/src/event.rs"
+from = '''        Gc::ptr_eq(node, root) || self.body(document).is_some_and(|body| Gc::ptr_eq(node, body))'''
+to = '''        Gc::ptr_eq(node, root)'''
+
+[[mutant]]
+name = "a frameset not the body"
+file = "crates/dom_next/src/event.rs"
+from = '''            .find(|&child| is_html(child, &[names::local::BODY, names::local::FRAMESET]))'''
+to = '''            .find(|&child| is_html(child, &[names::local::BODY]))'''
+
+[[mutant]]
+name = "a mousewheel listener not passive by default"
+file = "crates/dom_next/src/event.rs"
+from = '''            names::event::TOUCHSTART | names::event::TOUCHMOVE | names::event::WHEEL | names::event::MOUSEWHEEL'''
+to = '''            names::event::TOUCHSTART | names::event::TOUCHMOVE | names::event::WHEEL'''
+
+[[mutant]]
+name = "a document's wheel listener styles no root"
+file = "crates/dom_next/src/event.rs"
+from = '''            TargetRef::Node(node) if self.kind(node) == NodeKind::Document => self.document_element(node),
+'''
+to = ''''''
+
+[[mutant]]
+name = "a window's wheel listener styles no root"
+file = "crates/dom_next/src/event.rs"
+from = '''            TargetRef::Window(window) => self.document_element(self.window_document(window)),
+            TargetRef::Node(_) | TargetRef::EventTarget(_) => None,'''
+to = '''            TargetRef::Node(_) | TargetRef::EventTarget(_) | TargetRef::Window(_) => None,'''
+
+[[mutant]]
+name = "no element blocks with listeners counted"
+file = "crates/dom_next/src/event.rs"
+from = '''        if self.changes.wheel_listeners.get() == 0 {
+            return false;
+        }'''
+to = '''        if self.changes.wheel_listeners.get() != u32::MAX {
+            return false;
+        }'''
+
+[[mutant]]
+name = "the root not blocked by its document's"
+file = "crates/dom_next/src/event.rs"
+from = '''        if self.kind(parent) != NodeKind::Document {
+            return false;
+        }
+        self.has_blocking_wheel_listener(TargetRef::Node(parent))
+            || self'''
+to = '''        if self.kind(parent) != NodeKind::Document {
+            return false;
+        }
+        self'''
+
+[[mutant]]
+name = "a passive wheel listener blocks"
+file = "crates/dom_next/src/event.rs"
+from = '''            is_wheel_type(bits & LISTENER_TYPE) && bits & PASSIVE == 0'''
+to = '''            is_wheel_type(bits & LISTENER_TYPE)'''
+
+[[mutant]]
+name = "mousewheel not a wheel type"
+file = "crates/dom_next/src/event.rs"
+from = '''    matches!(event_type, names::event::WHEEL | names::event::MOUSEWHEEL)'''
+to = '''    matches!(event_type, names::event::WHEEL)'''
+
+[[mutant]]
+name = "a wheel listener restyles nothing"
+file = "crates/dom_next/src/style.rs"
+from = '''        if self.is_connected(element) {
+            self.mark_style(element, StyleFlags::ATTRIBUTES_CHANGED);
+        }
+    }
+
+    /// An attribute named'''
+to = '''    }
+
+    /// An attribute named'''
+
+[[mutant]]
+name = "style ignores blocking listeners"
+file = "crates/style_next/src/lib.rs"
+from = '''        let blocking_wheel = self.cx.has_own_blocking_wheel_listener(element);'''
+to = '''        let blocking_wheel = false;'''
+
+[[mutant]]
+name = "script's events have legacy types"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''    if !cx.event_flags(event).trusted {
+        return None;
+    }
+    Some(match'''
+to = '''    Some(match'''
+
+[[mutant]]
+name = "wheel has no legacy type"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''        event::WHEEL => event::MOUSEWHEEL,
+'''
+to = ''''''
+
+[[mutant]]
+name = "the type not put back after the legacy listeners"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''                if let Some(original) = original {
+                    host.read(|cx| cx.set_event_type(event.get(cx.gc), original));
+                }'''
+to = '''                let _ = original;'''
+
+[[mutant]]
+name = "a listener with no passive isn't passive"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''            passive: passive.unwrap_or_else(|| cx.default_passive(this, event_type)),'''
+to = '''            passive: passive.unwrap_or(false),'''
+
+[[mutant]]
+name = "a wheel dispatched with no wheel listener"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        if !host.read(|cx| cx.may_have_wheel_listeners()) {
+            return true;
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "a wheel always cancelable"
+file = "crates/dom_api_next/src/input.rs"
+from = '''                    cancelable: input.cancelable,'''
+to = '''                    cancelable: true,'''
+
+[[mutant]]
+name = "the wheel's deltas the other way"
+file = "crates/dom_api_next/src/input.rs"
+from = '''                delta_y: f64::from(input.delta.y),'''
+to = '''                delta_y: -f64::from(input.delta.y),'''
+
+[[mutant]]
+name = "a paint makes no region"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        set_wheel_event_handler_region(pre, &layers, &artifact, &mut property_trees, wheel);
+        self.wheel_listeners_version = Some(wheel.version);
+        self.output'''
+to = '''        self.wheel_listeners_version = Some(wheel.version);
+        self.output'''
+
+[[mutant]]
+name = "listeners changing alone tell nothing"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            if self.wheel_listeners_version != Some(wheel.version) {'''
+to = '''            if false && self.wheel_listeners_version != Some(wheel.version) {'''
+
+[[mutant]]
+name = "the whole document never waits"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''                whole_document: cx.document_blocks_wheel(self.document.get(cx.gc)),'''
+to = '''                whole_document: false,'''
+
+[[mutant]]
+name = "a main-thread scroll not painted"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        self.paint_dirty |= moved.iter().any(|element| !self.composited.contains(element));
+'''
+to = ''''''
+
+[[mutant]]
+name = "a main-thread wheel is the input's"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                InputEvent::MouseWheel { .. } => self.handle_next_wheel(&event, cancelable, true),
+'''
+to = ''''''
+
+[[mutant]]
+name = "a canceled wheel scrolls"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        if scroll
+            && not_canceled
+            && let'''
+to = '''        if scroll
+            && let'''
+
+[[mutant]]
+name = "a scrolled wheel's event not dispatched"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if self.next_dom {
+            self.handle_next_wheel(&event, false, false);
+            return;
+        }
+'''
+to = ''''''

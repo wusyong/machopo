@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<title>F2: flex items go in order-modified document order; equal ones keep document order</title>
+<link rel="match" href="f2-order-ref.html">
+<style>
+  html, body { margin: 0 }
+  .c { display: flex }
+  .c div { width: 40px; height: 40px }
+</style>
+<div class="c">
+  <div style="background-color: red; order: 2"></div>
+  <div style="background-color: green"></div>
+  <div style="background-color: blue; order: -1"></div>
+  <div style="background-color: orange; order: 2"></div>
+</div>

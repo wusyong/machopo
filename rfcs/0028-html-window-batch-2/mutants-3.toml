@@ -1,0 +1,138 @@
+# Mutation test of stage 3 (`<a>` and `<area>`):
+# python3 scripts/test.py mutate rfcs/0028-html-window-batch-2/mutants-3.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "html_element"]
+timeout = 900
+
+# --- The URL members ---------------------------------------------------------
+
+[[mutant]]
+name = "the base URL is ignored"
+file = "crates/dom_api/src/hyperlink.rs"
+from = '''    let base = crate::document::document_base_url(cx, document.as_node())?;'''
+to = '''    let _ = document;
+    let base = Url::parse("about:blank").ok()?;'''
+
+[[mutant]]
+name = "an href that doesn't parse reads as empty"
+file = "crates/dom_api/src/hyperlink.rs"
+from = '''        None => reflect(cx, this, "href"),'''
+to = '''        None => DomString::default(),'''
+
+[[mutant]]
+name = "no URL's origin is null"
+file = "crates/dom_api/src/hyperlink.rs"
+from = '''    Ok(url(cx, this).map_or_else(DomString::default, |url| {
+        DomString::from(quirks::origin(&url))'''
+to = '''    Ok(url(cx, this).map_or_else(|| DomString::from("null"), |url| {
+        DomString::from(quirks::origin(&url))'''
+
+[[mutant]]
+name = "no URL's protocol is empty"
+file = "crates/dom_api/src/hyperlink.rs"
+from = '''        || DomString::from(":"),'''
+to = '''        || DomString::from(""),'''
+
+[[mutant]]
+name = "a setter that changes nothing writes the href"
+file = "crates/dom_api/src/hyperlink.rs"
+from = '''    if !change(&mut url) {
+        return Ok(());
+    }'''
+to = '''    let _ = change(&mut url);'''
+
+[[mutant]]
+name = "a URL that can't have a username takes one"
+file = "crates/dom_api/src/hyperlink.rs"
+from = '''        quirks::set_username(url, value.as_str()).is_ok()'''
+to = '''        let _ = quirks::set_username(url, value.as_str());
+        true'''
+
+[[mutant]]
+name = "an opaque path's host is set"
+file = "crates/dom_api/src/hyperlink.rs"
+from = '''        !url.cannot_be_a_base() && {
+            let _ = quirks::set_host(url, value.as_str());'''
+to = '''        {
+            let _ = quirks::set_host(url, value.as_str());'''
+
+[[mutant]]
+name = "an opaque path's pathname is set"
+file = "crates/dom_api/src/hyperlink.rs"
+from = '''        !url.cannot_be_a_base() && {
+            quirks::set_pathname(url, value.as_str());'''
+to = '''        {
+            quirks::set_pathname(url, value.as_str());'''
+
+[[mutant]]
+name = "search isn't set"
+file = "crates/dom_api/src/hyperlink.rs"
+from = '''        quirks::set_search(url, value.as_str());'''
+to = ''''''
+
+[[mutant]]
+name = "hash isn't set"
+file = "crates/dom_api/src/hyperlink.rs"
+from = '''        quirks::set_hash(url, value.as_str());'''
+to = ''''''
+
+# --- The elements' own members -----------------------------------------------
+
+[[mutant]]
+name = "unsafe-url isn't a referrer policy"
+file = "crates/dom_api/src/hyperlink.rs"
+from = '''        "unsafe-url",'''
+to = ''''''
+
+[[mutant]]
+name = "a link's relList doesn't support opener"
+file = "crates/dom_api/src/html_element.rs"
+from = '''        return Some(&["noopener", "noreferrer", "opener"]);'''
+to = '''        return Some(&["noopener", "noreferrer"]);'''
+
+[[mutant]]
+name = "text is empty"
+file = "crates/dom_api/src/hyperlink.rs"
+from = '''    Ok(crate::node::text_content(cx, this)?.unwrap_or_default())'''
+to = '''    Ok(DomString::default())'''
+
+[[mutant]]
+name = "every <a> and <area> is a link"
+file = "crates/dom_api/src/collection.rs"
+from = '''            (name.is_html("a") || name.is_html("area"))
+                && element.attribute(&QualName::attr("href")).is_some()'''
+to = '''            name.is_html("a") || name.is_html("area")'''
+
+[[mutant]]
+name = "an <area> isn't a link"
+file = "crates/dom_api/src/collection.rs"
+from = '''            (name.is_html("a") || name.is_html("area"))
+                && element.attribute(&QualName::attr("href")).is_some()'''
+to = '''            name.is_html("a") && element.attribute(&QualName::attr("href")).is_some()'''
+
+[[mutant]]
+name = "every <a> is an anchor"
+file = "crates/dom_api/src/collection.rs"
+from = '''            name.is_html("a") && element.attribute(&QualName::attr("name")).is_some()'''
+to = '''            name.is_html("a")'''
+
+[[mutant]]
+name = "links and anchors share a collection"
+file = "crates/dom/src/scope.rs"
+from = '''            |rare| &rare.links,'''
+to = '''            |rare| &rare.anchors,'''
+
+# --- WPT's URL data ------------------------------------------------------------
+
+[[mutant]]
+name = "the URL data's <a> isn't checked"
+file = "crates/dom_api/tests/url_data.rs"
+from = '''    element_parsing(cx, &mut failures);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "url_data"]
+
+[[mutant]]
+name = "the URL data's <a> setters aren't checked"
+file = "crates/dom_api/tests/url_data.rs"
+from = '''    element_setters(cx, &mut failures);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "url_data"]

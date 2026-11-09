@@ -1,0 +1,194 @@
+# Stage 5d-4c: the layout and rendering gaps.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p style_next --test it && cargo test -q -p dom_next --test it && cargo test -q -p layout --test it svg && cargo test -q -p renderer --lib svg && cargo test -q -p net --test it files_and_other_schemes && cargo test -q -p dom_js_next --test it -- wrappers frames:: && cargo test -q -p shell --test it -- images:: style_sheets::a_child_frames_changed_sheets_style_it"]
+timeout = 2400
+
+[[mutant]]
+name = "style_next: the root's own rem is its last font size"
+file = "crates/style_next/src/lib.rs"
+from = '''        let rem = if is_root {
+            self.initial_font_size
+        } else {'''
+to = '''        let rem = if is_root {
+            self.root_font_size
+        } else {'''
+
+[[mutant]]
+name = "style_next: the root's pseudo-elements' rem is the last walk's"
+file = "crates/style_next/src/lib.rs"
+from = '''                root_font_size: if is_root {
+                    style.font.size
+                } else {'''
+to = '''                root_font_size: if is_root {
+                    self.root_font_size
+                } else {'''
+
+[[mutant]]
+name = "dom_next: a document's list gives the roots another document has"
+file = "crates/dom_next/src/style.rs"
+from = '''            .filter(|root| Gc::ptr_eq(self.document_of(*root), document))'''
+to = '''            .filter(|_| true)'''
+
+[[mutant]]
+name = "dom_next: an adopted shadow root stays in its old document's list"
+file = "crates/dom_next/src/style_sheet.rs"
+from = '''            && data.sheets_listed.replace(false)'''
+to = '''            && data.sheets_listed.get() && false'''
+
+[[mutant]]
+name = "dom_next: a shadow root's adoption steps before its tree is adopted"
+file = "crates/dom_next/src/lib.rs"
+from = '''                self.adopt_tree(shadow, old, document);
+                // In its new document by now.
+                self.shadow_root_adopted(shadow, old, document);'''
+to = '''                self.shadow_root_adopted(shadow, old, document);
+                self.adopt_tree(shadow, old, document);'''
+
+[[mutant]]
+name = "renderer: an SVG image's use copies not made"
+file = "crates/renderer/src/svg_image.rs"
+from = '''            cx.update_use_trees();
+            style_next::StyleEngine::new()'''
+to = '''            style_next::StyleEngine::new()'''
+
+[[mutant]]
+name = "dom_api_next: an animation's object in the current realm"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        ObjectRef::EventTarget(target) => cx.animation_of_object(target)?.2,'''
+to = '''        ObjectRef::EventTarget(target) if false => cx.animation_of_object(target)?.2,'''
+
+[[mutant]]
+name = "dom_api_next: an effect's object in the current realm"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        ObjectRef::KeyframeEffect(effect) => cx.effect_of_object(effect).1,'''
+to = '''        ObjectRef::KeyframeEffect(effect) if false => cx.effect_of_object(effect).1,'''
+
+[[mutant]]
+name = "dom_api_next: a timeline's object in the current realm"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        ObjectRef::DocumentTimeline(timeline) => cx.timeline_document(timeline),'''
+to = '''        ObjectRef::DocumentTimeline(timeline) if false => cx.timeline_document(timeline),'''
+
+[[mutant]]
+name = "gfx: an SVG image with a ratio alone is 300x150"
+file = "crates/gfx/src/svg.rs"
+from = '''            (None, Some(ratio)) => 300.0 / ratio,'''
+to = '''            (None, Some(ratio)) => 150.0 + 0.0 * ratio,'''
+
+[[mutant]]
+name = "gfx: an SVG image's default dimensions taken as the image's"
+file = "crates/gfx/src/svg.rs"
+from = '''            [width.is_some(), height.is_some()],'''
+to = '''            [true, true],'''
+
+[[mutant]]
+name = "dom_next: a density corrects the default dimensions too"
+file = "crates/dom_next/src/image.rs"
+from = '''            if given {
+                to_integer(f64::from(length) / self.density)'''
+to = '''            if given || true {
+                to_integer(f64::from(length) / self.density)'''
+
+[[mutant]]
+name = "dom_next: a reselected image's update isn't a reaction"
+file = "crates/dom_next/src/image.rs"
+from = '''            loader.reacting.set(true);'''
+to = '''            loader.reacting.set(false);'''
+
+[[mutant]]
+name = "dom_next: an update stays a reaction"
+file = "crates/dom_next/src/image.rs"
+from = '''        loader.generation.set(generation);
+        loader.reacting.set(false);'''
+to = '''        loader.generation.set(generation);'''
+
+[[mutant]]
+name = "dom_next: a reaction's failure fires its error"
+file = "crates/dom_next/src/image.rs"
+from = '''            fire: load || !loader.reacting.get(),'''
+to = '''            fire: true,'''
+
+[[mutant]]
+name = "dom_api_next: an event that isn't to fire fires"
+file = "crates/dom_api_next/src/image.rs"
+from = '''            if event.fire {'''
+to = '''            if event.fire || true {'''
+
+[[mutant]]
+name = "layout: a ratio alone fills the width with its margins"
+file = "crates/layout/src/lib.rs"
+from = '''        for margin in [style.margin.left, style.margin.right] {'''
+to = '''        for margin in [style.margin.left, style.margin.right].into_iter().take(0) {'''
+
+[[mutant]]
+name = "layout: a ratio alone fills the width with its padding"
+file = "crates/layout/src/lib.rs"
+from = '''        leave(style.padding.left);'''
+to = '''        let _ = style.padding.left;'''
+
+[[mutant]]
+name = "layout: a ratio alone fills the width with its borders"
+file = "crates/layout/src/lib.rs"
+from = '''        let (mut px, mut percent) = (-(style.border_width.left + style.border_width.right), 100.0);'''
+to = '''        let (mut px, mut percent) = (0.0 * style.border_width.left, 100.0);'''
+
+[[mutant]]
+name = "net: a directory is read as a file"
+file = "crates/net/src/file.rs"
+from = '''            true => directory_listing(&path).map(|page| (page, true)),'''
+to = '''            true => std::fs::read(path).map(|body| (body, false)),'''
+
+[[mutant]]
+name = "net: a directory's listing unsorted"
+file = "crates/net/src/file.rs"
+from = '''    entries.sort();'''
+to = '''    entries.sort_by(|a, b| b.cmp(a));'''
+
+[[mutant]]
+name = "net: a directory's listing is no HTML"
+file = "crates/net/src/file.rs"
+from = '''            true => "text/html",'''
+to = '''            true => "text/plain",'''
+
+[[mutant]]
+name = "dom_next: a document's release keeps it a user"
+file = "crates/dom_next/src/image.rs"
+from = '''            documents.retain(|&user| user != id);'''
+to = '''            documents.retain(|&user| user != id || true);'''
+
+[[mutant]]
+name = "dom_next: an image no document uses stays"
+file = "crates/dom_next/src/image.rs"
+from = '''                entries.remove(url);
+                opaque.remove(url);'''
+to = '''                opaque.remove(url);'''
+
+[[mutant]]
+name = "dom_next: an image taken from the list doesn't make its document a user"
+file = "crates/dom_next/src/image.rs"
+from = '''        self.changes.images.borrow_mut().use_image(url, document);'''
+to = '''        let _ = document;'''
+
+[[mutant]]
+name = "dom_next: a background doesn't make its document a user"
+file = "crates/dom_next/src/image.rs"
+from = '''        let mut cache = self.changes.images.borrow_mut();
+        cache.use_image(url, document);'''
+to = '''        let mut cache = self.changes.images.borrow_mut();'''
+
+[[mutant]]
+name = "dom_next: an image that comes when no document uses it is kept"
+file = "crates/dom_next/src/image.rs"
+from = '''            let used = image.is_some() && cache.users.contains_key(url);'''
+to = '''            let used = image.is_some();'''
+
+[[mutant]]
+name = "dom_api_next: an unloaded document keeps its images"
+file = "crates/dom_api_next/src/lifecycle.rs"
+from = '''    host.mutate(|cx| cx.release_document_images(document.get(cx.gc)));'''
+to = '''    host.read(|cx| drop(document.get(cx.gc)));'''
+
+[[mutant]]
+name = "dom_next: a discarded document keeps its images"
+file = "crates/dom_next/src/frame.rs"
+from = '''            self.release_document_images(at);'''
+to = '''            let _ = at;'''

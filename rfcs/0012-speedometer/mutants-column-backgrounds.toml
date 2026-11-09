@@ -1,0 +1,22 @@
+# A table paints anew when one of its columns' or column groups'
+# background images loads (`Previous::is_invalidated` looks at the table's
+# `columns`). WPT's `table-backgrounds-b{c,s}-{column,colgroup}-001.xht`
+# failed whenever the image came after the first paint.
+#
+# python3 scripts/test.py mutate rfcs/0012-speedometer/mutants-column-backgrounds.toml
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "loaded_background"]
+timeout = 600
+
+[[mutant]]
+name = "a table doesn't look at its columns"
+file = "crates/paint/src/paint_controller.rs"
+from = '''            || fragment.columns.iter().any(|column| contains(column.node))'''
+to = '''            || false'''
+
+[[mutant]]
+name = "a block doesn't look at its own node"
+file = "crates/paint/src/paint_controller.rs"
+from = '''        contains(fragment.node)
+            || fragment.lines'''
+to = '''        false
+            || fragment.lines'''

@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<title>clip-path's shapes and boxes, and clip, cut a box and all in it</title>
+<link rel="match" href="clip-path-ref.html">
+<meta name="fuzzy" content="maxDifference=0-1;totalPixels=0-200">
+<style>
+  html, body { margin: 0 }
+  .c { position: absolute; width: 100px; height: 100px; background-color: green }
+  .over { width: 300px; height: 300px; margin: -100px; background-color: green }
+</style>
+<div class="c" style="left: 0; top: 0; clip-path: inset(10px 20px)"><div class="over"></div></div>
+<div class="c" style="left: 120px; top: 0; clip-path: polygon(0 0, 50% 0, 50% 50%, 100% 50%, 100% 100%, 0 100%)"></div>
+<div class="c" style="left: 240px; top: 0; clip-path: path(evenodd, 'M0 0 h100 v100 h-100 Z M25 25 h50 v50 h-50 Z')"></div>
+<div class="c" style="left: 360px; top: 0; width: 80px; height: 80px; border: 10px solid blue; clip-path: padding-box"></div>
+<div class="c" style="left: 0; top: 120px; clip: rect(10px, 60px, 50px, 20px)"></div>
+<div class="c" style="left: 120px; top: 120px; clip-path: circle(50%)"></div>
+<div class="c" style="left: 240px; top: 120px; clip-path: xywh(10px 20px 30px 40px round 5px)"></div>
+<div class="c" style="left: 360px; top: 120px; clip-path: ellipse(closest-side closest-side at 30px 50%)"></div>

@@ -1,0 +1,177 @@
+# 2e: `url()` resolved as it is parsed (`css`'s `css_url_data.rs`,
+# `properties.rs`, `variables.rs`, `stylesheet.rs`, `property_set.rs`;
+# `style`'s `lib.rs`, `hints.rs`; `dom`'s base URL and `style` attribute;
+# `dom_api`'s CSSOM and keyframes; the renderer's fallback base URL).
+#   python3 scripts/test.py mutate rfcs/0059-style-performance/mutants-2e.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cascade::"]
+timeout = 1800
+
+[[mutant]]
+name = "a url() never resolves"
+file = "crates/css/src/css_url_data.rs"
+from = '''        if self.absolute.is_none() {
+            self.absolute = base'''
+to = '''        if false {
+            self.absolute = base'''
+
+[[mutant]]
+name = "a fragment paint resolves"
+file = "crates/css/src/properties.rs"
+from = '''            Value::Paint(SpecifiedPaint::Url(url, _)) if !url.is_local() => url.resolve(base),'''
+to = '''            Value::Paint(SpecifiedPaint::Url(url, _)) => url.resolve(base),'''
+
+[[mutant]]
+name = "var() keeps no base URL"
+file = "crates/css/src/properties.rs"
+from = '''                        let new = Arc::new(UnparsedValue {
+                            base_url: Some(base.clone()),'''
+to = '''                        let new = Arc::new(UnparsedValue {
+                            base_url: None,'''
+
+[[mutant]]
+name = "what var() is substituted to doesn't resolve"
+file = "crates/css/src/variables.rs"
+from = '''        if let Some(base) = &self.base_url {
+            for declaration in &mut declarations {'''
+to = '''        if let Some(base) = None::<&url::Url> {
+            for declaration in &mut declarations {'''
+
+[[mutant]]
+name = "a constructed sheet's rules don't resolve"
+file = "crates/css/src/stylesheet.rs"
+from = '''        log.report();
+        if let Some(base) = &base_url {
+            resolve_rule_urls(&mut sheet.rules, base);
+        }'''
+to = '''        log.report();'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "style_sheets::urls"]
+
+[[mutant]]
+name = "a rule put in a sheet doesn't resolve"
+file = "crates/css/src/stylesheet.rs"
+from = '''    fn with_rules(&self, mut rules: Vec<CssRule>) -> Self {
+        if let Some(base) = &self.base_url {'''
+to = '''    fn with_rules(&self, mut rules: Vec<CssRule>) -> Self {
+        if let Some(base) = None::<&url::Url> {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "style_sheets::urls"]
+
+[[mutant]]
+name = "a keyframe doesn't resolve"
+file = "crates/css/src/stylesheet.rs"
+from = '''            CssRule::Keyframes(keyframes) if has_unresolved_urls(&keyframes.rules) => {'''
+to = '''            CssRule::Keyframes(keyframes) if false && has_unresolved_urls(&keyframes.rules) => {'''
+
+[[mutant]]
+name = "a <style> resolves against nothing"
+file = "crates/style/src/lib.rs"
+from = '''                if let Some(base) = text.url.clone().or_else(|| base.clone()) {'''
+to = '''                if let Some(base) = text.url.clone() {'''
+
+[[mutant]]
+name = "an unchanged <style> parsed again"
+file = "crates/style/src/lib.rs"
+from = '''                if let Some((_, sheet)) = kept {
+                    return sheet;
+                }'''
+to = '''                drop(kept);'''
+
+[[mutant]]
+name = "an unchanged shadow <style> parsed again"
+file = "crates/style/src/lib.rs"
+from = '''            let contents = match kept {
+                Some(sheet) => sheet.contents.clone(),'''
+to = '''            let contents = match kept.filter(|_| false) {
+                Some(sheet) => sheet.contents.clone(),'''
+
+[[mutant]]
+name = "a presentation attribute doesn't resolve"
+file = "crates/style/src/hints.rs"
+from = '''                if let Some(base) = base_url {
+                    set.resolve_urls(base);
+                }'''
+to = '''                let _ = base_url;'''
+
+[[mutant]]
+name = "a style attribute doesn't resolve"
+file = "crates/dom/src/node.rs"
+from = '''    if style.has_unresolved_urls()
+        && let Some(base) = base()'''
+to = '''    if false
+        && let Some(base) = base()'''
+
+[[mutant]]
+name = "a style attribute set later resolves against nothing"
+file = "crates/dom/src/scope.rs"
+from = '''        let document = name
+            .is_attr(&local_name!("style"))
+            .then(|| self.document_of(element));'''
+to = '''        let document: Option<NodeHandle> = None;'''
+
+[[mutant]]
+name = "the base URL leaves <base> out"
+file = "crates/dom/src/scope.rs"
+from = '''            Some(href) => frozen_base_url(&fallback, &href),'''
+to = '''            Some(_) => fallback,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "style_sheets::urls"]
+
+[[mutant]]
+name = "the base URL leaves the frame's fallback out"
+file = "crates/dom/src/scope.rs"
+from = '''            } => url::Url::parse(fallback_base_url.as_deref().unwrap_or(url)).ok(),'''
+to = '''            } => url::Url::parse(url).ok(),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "style_sheets::urls"]
+
+[[mutant]]
+name = "a new frame's document has no fallback base URL"
+file = "crates/dom_api/src/frame.rs"
+from = '''    cx.mutate()
+        .set_fallback_base_url(&content, base_url.as_ref().map(url::Url::as_str));'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "style_sheets::urls"]
+
+[[mutant]]
+name = "a srcdoc document has no fallback base URL"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                m.set_fallback_base_url(&document, fallback_base_url.as_ref().map(Url::as_str));'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "style_sheets::urls"]
+
+[[mutant]]
+name = "CSSOM on an element resolves against nothing"
+file = "crates/dom_api/src/css_style_declaration.rs"
+from = '''        Owner::Element(element) => {
+            let document = crate::node::document_of(cx, element);
+            crate::document::document_base_url(cx, document.as_node())
+        }'''
+to = '''        Owner::Element(_) => None,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "style_sheets::urls"]
+
+[[mutant]]
+name = "setProperty doesn't resolve"
+file = "crates/css/src/property_set.rs"
+from = '''            if let Some(base) = base {
+                declaration.resolve_urls(base, &mut unparsed);
+            }'''
+to = '''            if let Some(base) = base.filter(|_| false) {
+                declaration.resolve_urls(base, &mut unparsed);
+            }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "style_sheets::urls"]
+
+[[mutant]]
+name = "cssText doesn't resolve"
+file = "crates/dom_api/src/css_style_declaration.rs"
+from = '''    let mut block = CssPropertyValueSet::parse(value.as_str());
+    if let Some(base) = base_url(cx, &owner) {
+        block.resolve_urls(&base);
+    }'''
+to = '''    let block = CssPropertyValueSet::parse(value.as_str());'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "style_sheets::urls"]
+
+[[mutant]]
+name = "animate()'s keyframes don't resolve"
+file = "crates/dom_api/src/effect.rs"
+from = '''        for keyframe in &mut keyframes {
+            Arc::make_mut(&mut keyframe.block).resolve_urls(&base);
+        }'''
+to = '''        let _ = base;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "style_sheets::urls"]

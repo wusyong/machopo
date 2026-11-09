@@ -1,0 +1,21 @@
+[package]
+name = "animation"
+description = "The animation model: timing, CSS animations and transitions (blink/renderer/core/animation)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+base.workspace = true
+computed_style.workspace = true
+# Each longhand's animation type and interpolation (`css::interpolate`).
+css.workspace = true

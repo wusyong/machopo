@@ -1,0 +1,191 @@
+# Mutation test of step 3b-2: replaced animations removed (`animation`'s
+# `remove_replaced`, `dom`'s, the renderer's step), `replaceState`,
+# `persist()`, `remove` events and `commitStyles()` (`dom_api`'s
+# `animation`) (2026-10-16):
+# python3 scripts/test.py mutate rfcs/0048-css-animations/mutants-3b-2.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "animations::"]
+timeout = 900
+
+# --- Removing replaced animations
+[[mutant]]
+name = "an animation markup makes is replaceable"
+file = "crates/animation/src/animation.rs"
+from = '''        (matches!(self.owner, Owner::Script) || !self.owning)
+            && self.replace_state != ReplaceState::Removed'''
+to = '''        self.replace_state != ReplaceState::Removed'''
+
+[[mutant]]
+name = "a running animation is replaceable"
+file = "crates/animation/src/animation.rs"
+from = '''            && self.play_state(now) == PlayState::Finished
+            && self.computed(now).progress.is_some()'''
+to = '''            && self.computed(now).progress.is_some()'''
+
+[[mutant]]
+name = "an animation not in effect is replaceable"
+file = "crates/animation/src/animation.rs"
+from = '''            && self.play_state(now) == PlayState::Finished
+            && self.computed(now).progress.is_some()'''
+to = '''            && self.play_state(now) == PlayState::Finished'''
+
+[[mutant]]
+name = "a removed animation still gives values"
+file = "crates/animation/src/animation.rs"
+from = '''        if self.replace_state != ReplaceState::Removed {
+            self.apply_effect(now, style);
+        }'''
+to = '''        self.apply_effect(now, style);'''
+
+[[mutant]]
+name = "a removed animation is still reachable"
+file = "crates/animation/src/animation.rs"
+from = '''        if self.replace_state == ReplaceState::Removed {
+            return false;
+        }
+        match self.play_state(now) {'''
+to = '''        match self.play_state(now) {'''
+
+[[mutant]]
+name = "removing sends no remove event"
+file = "crates/animation/src/animation.rs"
+from = '''        self.notify(vec![notice], now, events);'''
+to = '''        let _ = notice;'''
+
+[[mutant]]
+name = "an animation partly covered is removed"
+file = "crates/animation/src/transition.rs"
+from = '''                covered &= !replaced.insert(id);'''
+to = '''                covered |= !replaced.insert(id);'''
+
+[[mutant]]
+name = "later animations don't cover"
+file = "crates/animation/src/transition.rs"
+from = '''        order.sort_by_key(|&i| std::cmp::Reverse(self.others[i].global_order));'''
+to = '''        order.sort_by_key(|&i| self.others[i].global_order);'''
+
+[[mutant]]
+name = "a persisted animation is removed"
+file = "crates/animation/src/transition.rs"
+from = '''            if covered && animation.replace_state == ReplaceState::Active {'''
+to = '''            if covered {'''
+
+[[mutant]]
+name = "the renderer removes nothing"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                for (_, document, _) in &frames {
+                    table.remove_replaced(*document);
+                }'''
+to = '''                let _ = &frames;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "web_animations::"]
+
+[[mutant]]
+name = "a finish event goes at the update's time"
+file = "crates/animation/src/animation.rs"
+from = '''                Notice::Finished { .. } => self.finish_time().map_or(now, |time| time.min(now)),'''
+to = '''                Notice::Finished { .. } => now,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "web_animations::"]
+
+# --- dom_api
+[[mutant]]
+name = "the remove event isn't fired"
+file = "crates/dom_api/src/animation.rs"
+from = '''        Notice::Removed {
+            current_time,
+            timeline_time,
+        } => (
+            "remove",'''
+to = '''        Notice::Removed {
+            current_time,
+            timeline_time,
+        } => (
+            "removed",'''
+
+[[mutant]]
+name = "getAnimations() gives removed animations"
+file = "crates/dom_api/src/animation.rs"
+from = '''    if animation.current_time(now).is_none() || animation.replace_state == ReplaceState::Removed {'''
+to = '''    if animation.current_time(now).is_none() {'''
+
+[[mutant]]
+name = "persist() does nothing"
+file = "crates/dom_api/src/animation.rs"
+from = '''        animation.replace_state = ReplaceState::Persisted;'''
+to = ''''''
+
+[[mutant]]
+name = "commitStyles() on a pseudo-element writes"
+file = "crates/dom_api/src/animation.rs"
+from = '''    if target.pseudo.is_some() {
+        return Err(not_styled());
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "commitStyles() on an element not rendered writes"
+file = "crates/dom_api/src/animation.rs"
+from = '''        if node.element_name().is_some()
+            && node
+                .computed_style()
+                .is_none_or(|style| style.display == computed_style::Display::None)
+        {
+            return false;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "display: contents isn't rendered"
+file = "crates/dom_api/src/animation.rs"
+from = '''                .is_none_or(|style| style.display == computed_style::Display::None)'''
+to = '''                .is_none_or(|style| style.display == computed_style::Display::None || style.display == computed_style::Display::Contents)'''
+
+[[mutant]]
+name = "only the element itself counts as rendered"
+file = "crates/dom_api/src/animation.rs"
+from = '''        at = read.flat_tree_parent(node);'''
+to = '''        at = None;
+        let _ = read.flat_tree_parent(node);'''
+
+[[mutant]]
+name = "commitStyles() writes nothing"
+file = "crates/dom_api/src/animation.rs"
+from = '''    if changed {
+        cx.mutate().set_inline_style(&element, block)?;
+    }'''
+to = '''    let _ = (changed, block);'''
+
+[[mutant]]
+name = "commitStyles() leaves out the animations under it"
+file = "crates/animation/src/transition.rs"
+from = '''        for animation in &stack[..=at] {'''
+to = '''        for animation in &stack[at..=at] {'''
+
+[[mutant]]
+name = "commitStyles() takes the animations over it"
+file = "crates/animation/src/transition.rs"
+from = '''        for animation in &stack[..=at] {'''
+to = '''        for animation in &stack {'''
+
+[[mutant]]
+name = "commitStyles() of a removed one leaves out the other removed"
+file = "crates/animation/src/transition.rs"
+from = '''        let with_removed = stack[at].replace_state == ReplaceState::Removed;'''
+to = '''        let with_removed = false;'''
+
+[[mutant]]
+name = "commitStyles() isn't endpoint-inclusive"
+file = "crates/animation/src/animation.rs"
+from = '''            .compute_inclusive(self.current_time(now), self.playback.playback_rate < 0.0);'''
+to = '''            .compute(self.current_time(now), self.playback.playback_rate < 0.0);'''
+
+[[mutant]]
+name = "endpoint-inclusive is exclusive at the end"
+file = "crates/animation/src/timing.rs"
+from = '''        } else if local > active_after || (!backwards && !inclusive && local == active_after) {'''
+to = '''        } else if local > active_after || (!backwards && local == active_after) {'''
+
+
+[[mutant]]
+name = "a finish event may go after now"
+file = "crates/animation/src/animation.rs"
+from = '''                Notice::Finished { .. } => self.finish_time().map_or(now, |time| time.min(now)),'''
+to = '''                Notice::Finished { .. } => self.finish_time().unwrap_or(now),'''

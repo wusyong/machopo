@@ -1,0 +1,249 @@
+# Mutation test of stage 2a: columns and column groups, and
+# `visibility: collapse` (2026-10-15):
+# python3 scripts/test.py mutate rfcs/0047-tables/mutants-2a.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+timeout = 900
+
+# --- boxes ---
+
+[[mutant]]
+name = "a table's column gets no box"
+file = "crates/layout/src/lib.rs"
+from = '''                            if table::TablePart::of(parent_style.display)
+                                == Some(table::TablePart::Table) =>'''
+to = '''                            if false =>'''
+
+[[mutant]]
+name = "a column group has no columns"
+file = "crates/layout/src/lib.rs"
+from = '''                    if column && let Some(id) = self.kept_or_built(cx, child) {'''
+to = '''                    if false && column && let Some(id) = self.kept_or_built(cx, child) {'''
+
+[[mutant]]
+name = "a column has a fragment"
+file = "crates/layout/src/lib.rs"
+from = '''                !style.is_out_of_flow()
+                    && !matches!(
+                        table::TablePart::of(style.display),'''
+to = '''                !style.is_out_of_flow()
+                    && matches!(
+                        table::TablePart::of(style.display),'''
+
+[[mutant]]
+name = "a column's paint-only change keeps the table's fragment"
+file = "crates/layout/src/lib.rs"
+from = '''            StyleDifference::Paint
+                if matches!(
+                    table::TablePart::of(style.display),'''
+to = '''            StyleDifference::Paint
+                if false && matches!(
+                    table::TablePart::of(style.display),'''
+
+[[mutant]]
+name = "a column's span is 1"
+file = "crates/layout/src/table.rs"
+from = '''        return (span, 1);'''
+to = '''        return (1, span.min(1));'''
+
+[[mutant]]
+name = "a column's span changing doesn't rebuild it"
+file = "crates/dom/src/scope.rs"
+from = '''                name.is_attr(&local_name!("span"))'''
+to = '''                false && name.is_attr(&local_name!("span"))'''
+
+[[mutant]]
+name = "the columns' flags stay set"
+file = "crates/layout/src/table.rs"
+from = '''                                b.needs_layout = false;
+                                b.needs_fragment = false;'''
+to = '''                                b.needs_fragment = false;'''
+
+# --- widths ---
+
+[[mutant]]
+name = "a column takes no width from its group"
+file = "crates/layout/src/table.rs"
+from = '''            (Size::Auto, Some(group)) => match self.boxes[group].style.width {'''
+to = '''            (Size::Auto, Some(group)) if false => match self.boxes[group].style.width {'''
+
+[[mutant]]
+name = "a column's fixed width isn't fixed"
+file = "crates/layout/src/table.rs"
+from = '''                column.max = px.max(column.min);
+                column.constrained = true;'''
+to = '''                column.max = px.max(column.min);
+                column.constrained = false;'''
+
+[[mutant]]
+name = "a column's percentage is dropped"
+file = "crates/layout/src/table.rs"
+from = '''                column.percent = Some(p);
+            }
+        }
+        column
+    }'''
+to = '''                column.percent = None.or(Some(p)).filter(|_| false);
+            }
+        }
+        column
+    }'''
+
+[[mutant]]
+name = "a column's min-width is dropped"
+file = "crates/layout/src/table.rs"
+from = '''            column.min = px;
+            column.set = true;'''
+to = '''            column.min = 0.0 * px;
+            column.set = true;'''
+
+[[mutant]]
+name = "a column with a width but no cell is merged"
+file = "crates/layout/src/table.rs"
+from = '''                column.mergeable = !starts && column.max == 0.0 && column.percent.is_none();'''
+to = '''                column.mergeable = !starts;'''
+
+[[mutant]]
+name = "a fixed table's column widths are dropped"
+file = "crates/layout/src/table.rs"
+from = '''                        column.constrained = true;
+                        column.min = px.max(0.0);
+                        column.max = px.max(0.0);'''
+to = '''                        column.constrained = true;
+                        column.min = 0.0 * px;
+                        column.max = 0.0 * px;'''
+
+[[mutant]]
+name = "a fixed table's first row overrides its columns"
+file = "crates/layout/src/table.rs"
+from = '''                .filter(|(_, defined)| !**defined)'''
+to = '''                .filter(|_| true)'''
+
+[[mutant]]
+name = "an unconstrained spanning cell widens fixed columns"
+file = "crates/layout/src/table.rs"
+from = '''    let widths = distribute((cell.max - inner).max(0.0), columns, cell.constrained);'''
+to = '''    let widths = distribute((cell.max - inner).max(0.0), columns, true);'''
+
+# --- visibility: collapse ---
+
+[[mutant]]
+name = "a collapsed column keeps the table's width"
+file = "crates/layout/src/table.rs"
+from = '''                    .filter(|(c, _)| c.collapsed && !c.mergeable)'''
+to = '''                    .filter(|(c, _)| false && c.collapsed && !c.mergeable)'''
+
+[[mutant]]
+name = "a collapsed column takes room"
+file = "crates/layout/src/table.rs"
+from = '''            if column.mergeable || (shrink_collapsed && column.collapsed) {'''
+to = '''            if column.mergeable {'''
+
+[[mutant]]
+name = "the rows are sized without the collapsed columns"
+file = "crates/layout/src/table.rs"
+from = '''                let sizing = column_locations(&widths, &columns, spacing.horizontal, false);'''
+to = '''                let sizing = column_locations(&widths, &columns, spacing.horizontal, true);'''
+
+[[mutant]]
+name = "a narrower cell isn't laid out again"
+file = "crates/layout/src/table.rs"
+from = '''        let laid = if cell_width != laid.width {'''
+to = '''        let laid = if false && cell_width != laid.width {'''
+
+[[mutant]]
+name = "a narrower cell is aligned by its first measure"
+file = "crates/layout/src/table.rs"
+from = '''            narrowed = self.lay_out_cell(laid.cell, cell_width, width);'''
+to = '''            narrowed = LaidOutCell { output: self.lay_out_cell(laid.cell, cell_width, width).output, ..*laid };'''
+
+[[mutant]]
+name = "a collapsed row keeps its height"
+file = "crates/layout/src/table.rs"
+from = '''                if collapsed {
+                    *height = 0.0;'''
+to = '''                if false && collapsed {
+                    *height = 0.0;'''
+
+[[mutant]]
+name = "a collapsed row keeps its border spacing"
+file = "crates/layout/src/table.rs"
+from = '''                if !collapsed {
+                    ry += height + spacing;
+                }'''
+to = '''                ry += height + spacing;'''
+
+[[mutant]]
+name = "a collapsed row group's rows don't collapse"
+file = "crates/layout/src/table.rs"
+from = '''                let group = self.boxes[section.index].style.visibility == Visibility::Collapse;'''
+to = '''                let group = false;'''
+
+[[mutant]]
+name = "a cell in a collapsed row keeps its height"
+file = "crates/layout/src/table.rs"
+from = '''                        let cell_height = if collapsed[r] {'''
+to = '''                        let cell_height = if false && collapsed[r] {'''
+
+[[mutant]]
+name = "a table's height keeps its collapsed rows"
+file = "crates/layout/src/table.rs"
+from = '''                            - layout.collapsed;'''
+to = '''                            - 0.0 * layout.collapsed;'''
+
+[[mutant]]
+name = "a collapsed row isn't hidden"
+file = "crates/layout/src/table.rs"
+from = '''                    self.boxes[row.index].hidden = collapsed[r];'''
+to = '''                    self.boxes[row.index].hidden = false && collapsed[r];'''
+
+[[mutant]]
+name = "a cell in collapsed columns isn't hidden"
+file = "crates/layout/src/table.rs"
+from = '''                                let hidden = spanned.iter().all(|c| c.collapsed);'''
+to = '''                                let hidden = false && spanned.iter().all(|c| c.collapsed);'''
+
+# --- paint ---
+
+[[mutant]]
+name = "column groups aren't first"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "tables::", "hit_test::"]
+from = '''        out.sort_by_key(|column| !column.group);'''
+to = '''        out.sort_by_key(|column| column.group);'''
+
+[[mutant]]
+name = "no column backgrounds"
+file = "crates/paint/src/lib.rs"
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "tables::", "hit_test::"]
+from = '''        self.column_backgrounds(fragment, properties);'''
+to = ''''''
+
+[[mutant]]
+name = "a column's background is in every cell it touches"
+file = "crates/paint/src/lib.rs"
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "tables::", "hit_test::"]
+from = '''                if cell.x < rect.x || cell.x >= rect.x + rect.width {'''
+to = '''                if cell.x + 1.0 < rect.x || cell.x >= rect.x + rect.width + 30.0 {'''
+
+[[mutant]]
+name = "a hidden cell has its table parts' backgrounds"
+file = "crates/paint/src/lib.rs"
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "tables::", "hit_test::"]
+from = '''            Some(TableDisplay::Cell) if !hides_empty_cell(part) && part.style.is_visible() => {'''
+to = '''            Some(TableDisplay::Cell) if !hides_empty_cell(part) => {'''
+
+[[mutant]]
+name = "what layout hides is painted and hit"
+file = "crates/paint/src/lib.rs"
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "tables::", "hit_test::"]
+from = '''        if fragment.hidden {'''
+to = '''        if false && fragment.hidden {'''
+
+# --- style ---
+
+[[mutant]]
+name = "a column group's width attribute does nothing"
+file = "crates/style/src/hints.rs"
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "tables::"]
+from = '''        if (*name == local_name!("col") || *name == local_name!("colgroup"))'''
+to = '''        if (*name == local_name!("col") || false)'''

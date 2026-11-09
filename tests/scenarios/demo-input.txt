@@ -1,0 +1,23 @@
+# about:demo's input box: the box with the dot takes the focus
+# when clicked and the arrow keys its keydown listener cancels, moving the
+# dot instead of scrolling the page; Shift+Tab goes back through the
+# links, the focused one yellow (:focus; the screenshot shows it); the
+# wheel over the box below is canceled by its listener.
+window size=800x1000
+navigate about:demo
+wait-loaded
+scroll-to #input-demo
+click #keypad
+wait-text #focus-note "The focus is on the box."
+key ArrowRight
+key ArrowRight
+key ArrowDown
+wait-text #dot-note "The dot is at 2, 1; the page didn't scroll."
+wait-text #key-log "The last key the page got: ArrowDown (code ArrowDown, keyCode 40)."
+key shift+Tab
+wait-text #focus-note "The focus is on Three."
+key shift+Tab
+wait-text #focus-note "The focus is on Two."
+screenshot focused-link
+wheel #wheel-pad 0 40
+wait-text #wheel-log "1 wheel over the box, the last 40px down; canceled, so the page stayed."

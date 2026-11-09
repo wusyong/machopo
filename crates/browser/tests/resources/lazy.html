@@ -1,0 +1,41 @@
+<!-- What <img loading=lazy> does, as Chrome 152 does: the `lazy_images` test of navigation.rs compares the title with what Chrome gave. -->
+<!doctype html><body style="margin:0">
+<img id=a loading=lazy src="slow-a.png" width=10 height=10>
+<img id=n loading=lazy src="none.png" style="display:none">
+<img id=autoeager sizes="auto, 10px" srcset="e50.png 50w, e51.png 51w" width=10 height=10>
+<img id=autopad loading=lazy sizes="auto" srcset="p50.png 50w, p51.png 51w" width=10 height=10 style="padding:0 40px">
+<img id=autoeager2 sizes="auto" width=10 height=10>
+<img id=side loading=lazy src="side.png" width=10 height=10 style="position:absolute;top:0;left:1300px">
+<img id=side2 loading=lazy src="side2.png" width=10 height=10 style="position:absolute;top:0;left:1500px">
+<div style="height:3000px"></div>
+<img id=far loading=lazy src="far.png" width=10 height=10>
+<img id=far2 loading=lazy src="far2.png" width=10 height=10>
+<img id=auto loading=lazy sizes="auto" srcset="w50.png 50w, w51.png 51w" width=10 height=10>
+<iframe id=f src="lazy-child.html" style="position:absolute;top:2500px;left:0;width:100px;height:50px;border:0"></iframe>
+<script>
+const out=[];
+const st=i=>JSON.stringify([i.complete,i.currentSrc.split('/').pop(),i.naturalWidth]);
+const $=id=>document.getElementById(id);
+const wait=ms=>new Promise(r=>setTimeout(r,ms));
+$('a').onload=()=>out.push('a load');
+let far2Loads=0;$('far2').onload=()=>far2Loads++;
+out.push('far sync '+st($('far')));
+const dis=new Image();dis.loading='lazy';dis.src='disconnected.png';dis.onload=()=>out.push('disconnected load');
+addEventListener('load',async()=>{
+  out.push('window load, a '+st($('a')));
+  await wait(800);
+  out.push('far '+st($('far'))+' child '+st(frames[0].document.getElementById('c'))+' autopad '+st($('autopad')));
+  $('autoeager2').srcset='f50.png 50w, f51.png 51w';
+  $('far2').loading='eager';
+  await wait(300);
+  out.push('far2 after eager '+st($('far2')));
+  out.push('autoeager '+st($('autoeager'))+' autoeager2 '+st($('autoeager2')));
+  scrollTo(0,2700);
+  await wait(800);
+  out.push('after scroll far '+st($('far'))+' auto '+st($('auto'))+' child '+st(frames[0].document.getElementById('c')));
+  $('auto').width=100;
+  await wait(800);
+  out.push('auto at 100px '+st($('auto'))+' far2 loads '+far2Loads+' side '+st($('side'))+' side2 '+st($('side2')));
+  document.title=out.join(' | ');
+});
+</script>

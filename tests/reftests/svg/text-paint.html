@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<title>SVG text: filled with a color or a gradient over its bounding box, stroked, turned by rotate</title>
+<link rel="match" href="text-paint-ref.html">
+<meta name="fuzzy" content="maxDifference=0-3;totalPixels=0-300">
+<style>body { margin: 0 } svg { display: block } text { font: 20px Ahem }</style>
+<svg width="200" height="140">
+  <defs><linearGradient id="g"><stop stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient></defs>
+  <text x="10" y="26" fill="url(#g)">XXXX</text>
+  <text x="10" y="56" fill="none" stroke="lime" stroke-width="4" stroke-linejoin="miter">X</text>
+  <text x="100" y="56" rotate="90" fill="lime">X</text>
+  <text x="10" y="96" fill="lime"><tspan fill="blue">X</tspan>X<tspan visibility="hidden">X</tspan></text>
+</svg>

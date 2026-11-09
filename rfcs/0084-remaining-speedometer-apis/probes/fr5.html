@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<script>
+const read = (blob, how) => new Promise(resolve => {
+  const r = new FileReader(); const ev = [];
+  for (const t of ['loadstart', 'progress', 'load', 'loadend']) r.addEventListener(t, e => ev.push(`${t}:${e.loaded}/${e.total}/${e.lengthComputable}/${e.bubbles}${e.cancelable}${e.isTrusted}`));
+  r.onloadend = () => setTimeout(() => resolve({ r, ev }), 0);
+  r[how](blob);
+});
+async function run() {
+  const out = [];
+  out.push('empty: ' + (await read(new Blob([]), 'readAsText')).ev.join(' '));
+  const done = (await read(new Blob(['ab']), 'readAsText')).r;
+  const evs = []; done.onabort = () => evs.push('abort'); done.onloadend = () => evs.push('loadend');
+  done.abort(); out.push('abort when done: ' + done.readyState + ' ' + JSON.stringify(done.result) + ' ' + evs.join(','));
+  out.push('PE proto: ' + Object.getOwnPropertyNames(ProgressEvent.prototype).join('|'));
+  const pe = new ProgressEvent('x', {loaded: 1.5, total: -2, lengthComputable: 1});
+  out.push('PE: ' + pe.loaded + ' ' + pe.total + ' ' + pe.lengthComputable + ' ' + pe.bubbles);
+  out.push('PE default: ' + JSON.stringify([new ProgressEvent('y').loaded, new ProgressEvent('y').total, new ProgressEvent('y').lengthComputable]));
+  try { new ProgressEvent(); } catch (e) { out.push('PE noargs: ' + e.name); }
+  out.push('PE nan: ' + (() => { try { return new ProgressEvent('x', {loaded: NaN}).loaded } catch (e) { return e.name } })());
+  const r = new FileReader(); out.push('handlers: ' + [r.onload, r.onloadstart].join());
+  out.push('instanceof: ' + (r instanceof EventTarget) + ' ' + String(r));
+  out.push('readAs on detached arg null: ' + (() => { try { r.readAsArrayBuffer(null); } catch (e) { return e.message } })());
+  out.push('readAsText label number: ' + (await new Promise(res => { const q = new FileReader(); q.onload = () => res(q.result); q.readAsText(new Blob(['ab']), 5); })));
+  return out.join('\n');
+}
+</script>

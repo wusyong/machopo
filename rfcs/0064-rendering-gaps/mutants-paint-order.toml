@@ -1,0 +1,125 @@
+# Out-of-flow boxes paint where their parents place them in tree order, in
+# the stacking context and under the effect around them there (`layout`,
+# `paint`).
+#   python3 scripts/test.py mutate rfcs/0064-rendering-gaps/mutants-paint-order.toml
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "artifact::out_of_flow", "hit_test::out_of_flow", "paint_controller::"]
+timeout = 900
+
+[[mutant]]
+name = "no places"
+file = "crates/layout/src/lib.rs"
+from = '''        let out_of_flow = self.out_of_flow_places(index, &in_flow);'''
+to = '''        let out_of_flow = Vec::new();'''
+
+[[mutant]]
+name = "places all first"
+file = "crates/layout/src/lib.rs"
+from = '''                if in_flow.get(before) == Some(&child) {
+                    before += 1;
+                }'''
+to = '''                if false {
+                    before += 1;
+                }'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::an_out_of_flow", "update::out_of_flow"]
+
+[[mutant]]
+name = "floats counted in places"
+file = "crates/layout/src/lib.rs"
+from = '''                if in_flow.get(before) == Some(&child) {'''
+to = '''                if true {'''
+
+[[mutant]]
+name = "places with fragments made before"
+file = "crates/layout/src/lib.rs"
+from = '''                before,
+                fragment: self.fragment(child),'''
+to = '''                before,
+                fragment: self.boxes[usize::from(child)].fragment.clone().unwrap(),'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::an_out_of_flow", "update::out_of_flow"]
+
+[[mutant]]
+name = "parents not made again for a new out-of-flow fragment"
+file = "crates/layout/src/lib.rs"
+from = '''            if anew {
+                let mut next'''
+to = '''            if false {
+                let mut next'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::an_out_of_flow", "update::out_of_flow"]
+
+[[mutant]]
+name = "out-of-flow boxes where their containing blocks hold them too"
+file = "crates/paint/src/lib.rs"
+from = '''            if !child.fragment.style.is_out_of_flow() {
+                take(&child.fragment);
+            }'''
+to = '''            take(&child.fragment);'''
+
+[[mutant]]
+name = "places after their children"
+file = "crates/paint/src/lib.rs"
+from = '''            while let Some(place) = places.next_if(|place| place.before == i) {'''
+to = '''            while let Some(place) = places.next_if(|place| place.before < i) {'''
+
+[[mutant]]
+name = "the last places left out"
+file = "crates/paint/src/lib.rs"
+from = '''        places.for_each(|place| take(&place.fragment));'''
+to = ''''''
+
+[[mutant]]
+name = "the containing block's effect"
+file = "crates/paint/src/lib.rs"
+from = '''            effect: out_of_flow_effect.unwrap_or(parent.effect),'''
+to = '''            effect: parent.effect,'''
+
+[[mutant]]
+name = "effects not set by parents"
+file = "crates/paint/src/lib.rs"
+from = '''                effects.insert(Arc::as_ptr(&place.fragment), contents.effect);'''
+to = ''''''
+
+[[mutant]]
+name = "the effect not kept when walked again"
+file = "crates/paint/src/lib.rs"
+from = '''        if let Some(effect) = out_of_flow_effect {
+            Arc::make_mut(&mut self.out_of_flow_effects).insert(address, effect);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "effects kept for fragments gone"
+file = "crates/paint/src/lib.rs"
+from = '''        if self.out_of_flow_effects.contains_key(&address) {
+            Arc::make_mut(&mut self.out_of_flow_effects).remove(&address);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the effect not an input"
+file = "crates/paint/src/lib.rs"
+from = '''            parent,
+            out_of_flow_effect,
+            parent_scroll,'''
+to = '''            parent,
+            out_of_flow_effect: None,
+            parent_scroll,'''
+
+[[mutant]]
+name = "a stacking context taken whole with its out-of-flow boxes walked again"
+file = "crates/paint/src/paint_controller.rs"
+from = '''                .all(|fragment| pre.unchanged_since(fragment, self.pre)))'''
+to = '''                .all(|_| true))'''
+
+[[mutant]]
+name = "a nested out-of-flow box not its stacking context's"
+file = "crates/paint/src/paint_controller.rs"
+from = '''            if subsequence.fragment.style.is_out_of_flow() {
+                out.push(subsequence.fragment.clone());
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "those in nested stacking contexts not theirs"
+file = "crates/paint/src/paint_controller.rs"
+from = '''            out.extend(subsequence.out_of_flow.iter().cloned());'''
+to = ''''''

@@ -1,0 +1,177 @@
+# Mutation test of step 3b (preflights):
+# python3 scripts/test.py mutate rfcs/0027-fetch/mutants-3b.toml
+test = ["cargo", "test", "-q", "-p", "net", "--test", "load", "preflights"]
+timeout = 900
+
+# --- protocol: the unsafe names -----------------------------------------------
+
+[[mutant]]
+name = "the safelisted values' size doesn't count"
+file = "crates/protocol/src/network.rs"
+from = '''    if safelisted_size > 1024 {'''
+to = '''    if safelisted_size > 1_000_000 {'''
+test = ["cargo", "test", "-q", "-p", "protocol", "--test", "network"]
+
+[[mutant]]
+name = "unsafe names keep their case"
+file = "crates/protocol/src/network.rs"
+from = '''            unsafe_names.push(name.to_ascii_lowercase());'''
+to = '''            unsafe_names.push(name.clone());'''
+test = ["cargo", "test", "-q", "-p", "protocol", "--test", "network"]
+
+[[mutant]]
+name = "unsafe names unsorted"
+file = "crates/protocol/src/network.rs"
+from = '''    unsafe_names.sort_unstable();
+    unsafe_names.dedup();'''
+to = '''    unsafe_names.dedup();'''
+test = ["cargo", "test", "-q", "-p", "protocol", "--test", "network"]
+
+# --- net: when, and what it asks ----------------------------------------------
+
+[[mutant]]
+name = "no preflight"
+file = "crates/net/src/url_loader.rs"
+from = '''            if let Some(preflight) = cors.preflight(&method, &headers) {'''
+to = '''            if let Some(preflight) = cors.preflight(&method, &headers).filter(|_| false) {'''
+
+[[mutant]]
+name = "a preflight for a safelisted request"
+file = "crates/net/src/cors.rs"
+from = '''        if is_cors_safelisted_method(method) && unsafe_names.is_empty() {
+            return None;
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "net", "--test", "load"]
+
+[[mutant]]
+name = "a preflight for a non-CORS request"
+file = "crates/net/src/cors.rs"
+from = '''        if self.tainting != ResponseTainting::Cors {
+            return None;
+        }
+        let unsafe_names'''
+to = '''        let unsafe_names'''
+test = ["cargo", "test", "-q", "-p", "net", "--test", "load"]
+
+[[mutant]]
+name = "a preflight for an unsafe method only"
+file = "crates/net/src/cors.rs"
+from = '''        if is_cors_safelisted_method(method) && unsafe_names.is_empty() {'''
+to = '''        if is_cors_safelisted_method(method) {'''
+
+[[mutant]]
+name = "the preflight doesn't ask for the method"
+file = "crates/net/src/cors.rs"
+from = '''            (
+                "Access-Control-Request-Method".to_owned(),
+                method.to_owned(),
+            ),'''
+to = ''''''
+
+[[mutant]]
+name = "the preflight doesn't ask for the headers"
+file = "crates/net/src/cors.rs"
+from = '''        if !unsafe_names.is_empty() {
+            preflight.push(('''
+to = '''        if unsafe_names.is_empty() {
+            preflight.push(('''
+
+[[mutant]]
+name = "the preflight has no Origin"
+file = "crates/net/src/cors.rs"
+from = '''        self.add_origin("OPTIONS", &mut preflight);
+        Some(preflight)'''
+to = '''        Some(preflight)'''
+
+[[mutant]]
+name = "the preflight's body is read"
+file = "crates/net/src/url_loader.rs"
+from = '''                    .send("OPTIONS", &url, "*/*", &preflight, None, false)'''
+to = '''                    .send("OPTIONS", &url, "*/*", &preflight, None, true)'''
+test = ["python3", "scripts/test.py", "wpt", "fetch/api/cors/cors-preflight-unterminated-body"]
+
+# --- net: what it has to answer ---------------------------------------------------
+
+[[mutant]]
+name = "the preflight isn't checked"
+file = "crates/net/src/url_loader.rs"
+from = '''                cors.check_preflight(&url, &answer, &method, &headers)?;'''
+to = '''                let _ = answer;'''
+
+[[mutant]]
+name = "the preflight's CORS check isn't made"
+file = "crates/net/src/cors.rs"
+from = '''        self.check(url, raw)?;
+        if !(200..=299).contains(&raw.status) {'''
+to = '''        if !(200..=299).contains(&raw.status) {'''
+
+[[mutant]]
+name = "any status"
+file = "crates/net/src/cors.rs"
+from = '''        if !(200..=299).contains(&raw.status) {'''
+to = '''        if !(200..=399).contains(&raw.status) {'''
+
+[[mutant]]
+name = "a list that doesn't parse"
+file = "crates/net/src/cors.rs"
+from = '''        .map(|item| is_token(item).then(|| item.to_owned()))'''
+to = '''        .map(|item| Some(item.to_owned()))'''
+
+[[mutant]]
+name = "any method"
+file = "crates/net/src/cors.rs"
+from = '''        if !methods.iter().any(|allowed| allowed == method)
+            && !is_cors_safelisted_method(method)'''
+to = '''        if false
+            && !is_cors_safelisted_method(method)'''
+
+[[mutant]]
+name = "a method's case doesn't count"
+file = "crates/net/src/cors.rs"
+from = '''        if !methods.iter().any(|allowed| allowed == method)'''
+to = '''        if !methods.iter().any(|allowed| allowed.eq_ignore_ascii_case(method))'''
+
+[[mutant]]
+name = "a safelisted method needs allowing"
+file = "crates/net/src/cors.rs"
+from = '''            && !is_cors_safelisted_method(method)
+            && (include'''
+to = '''            && (include'''
+
+[[mutant]]
+name = "star with credentials for methods"
+file = "crates/net/src/cors.rs"
+from = '''            && (include || !methods.iter().any(|allowed| allowed == "*"))'''
+to = '''            && !methods.iter().any(|allowed| allowed == "*")'''
+
+[[mutant]]
+name = "Authorization by star"
+file = "crates/net/src/cors.rs"
+from = '''        if headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+            && !named("authorization")
+        {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "any header"
+file = "crates/net/src/cors.rs"
+from = '''            if !named(&name) && (include || !named("*")) {'''
+to = '''            if !named(&name) && false {'''
+
+[[mutant]]
+name = "star with credentials for headers"
+file = "crates/net/src/cors.rs"
+from = '''            if !named(&name) && (include || !named("*")) {'''
+to = '''            if !named(&name) && !named("*") {'''
+
+# --- test_server: a route for a method ----------------------------------------
+
+[[mutant]]
+name = "a method's route isn't found"
+file = "crates/net/src/test_server.rs"
+from = '''        .get(&route_key)
+        .or_else(|| site.routes.get(&path))'''
+to = '''        .get(&path)'''

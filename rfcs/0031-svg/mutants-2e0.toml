@@ -1,0 +1,44 @@
+# Mutation test of step 2e-0 (glyphs drawn with paint flags, turned
+# glyphs):
+# python3 scripts/test.py mutate rfcs/0031-svg/mutants-2e0.toml
+test = ["cargo", "test", "-q", "-p", "raster", "--lib"]
+timeout = 900
+
+[[mutant]]
+name = "glyphs ignore their flags"
+file = "crates/raster/src/skia_backend.rs"
+from = '''            let paint = sk_paint(flags, cache);
+            if rotations.is_empty() {'''
+to = '''            let mut paint = sk::Paint::default();
+            paint.set_color(sk_color(flags.color));
+            paint.set_anti_alias(true);
+            if rotations.is_empty() {'''
+
+[[mutant]]
+name = "rotations are ignored"
+file = "crates/raster/src/skia_backend.rs"
+from = '''            if rotations.is_empty() {
+                let positions'''
+to = '''            if true {
+                let positions'''
+
+[[mutant]]
+name = "glyphs turn the other way"
+file = "crates/raster/src/skia_backend.rs"
+from = '''                        sk::RSXform::new(cos, sin, (p.x, p.y))'''
+to = '''                        sk::RSXform::new(cos, -sin, (p.x, p.y))'''
+
+[[mutant]]
+name = "turned glyphs aren't at their positions"
+file = "crates/raster/src/skia_backend.rs"
+from = '''                        sk::RSXform::new(cos, sin, (p.x, p.y))'''
+to = '''                        sk::RSXform::new(cos, sin, (0.0, 0.0))'''
+
+[[mutant]]
+name = "paint's text isn't filled"
+file = "crates/paint/src/lib.rs"
+from = '''                    rotations: Vec::new(),
+                    flags: PaintFlags::fill(color),'''
+to = '''                    rotations: Vec::new(),
+                    flags: PaintFlags::stroke(color, 1.0),'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "artifact::"]

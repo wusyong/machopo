@@ -1,0 +1,149 @@
+# Step 2a's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0033-canvas-2d/mutations-2a.toml`. Each names the tests closest to
+# what it breaks.
+test = ["cargo", "test", "-q", "-p", "style", "--lib", "canvas"]
+timeout = 1500
+
+# style: the `font` shorthand, computed and written back; the spacings.
+
+[[mutant]]
+name = "a canvas's font has two parts before its size"
+file = "crates/style/src/font.rs"
+from = '''    for _ in 0..if canvas { 4 } else { 2 } {'''
+to = '''    for _ in 0..2 {'''
+
+[[mutant]]
+name = "a page's font takes small-caps"
+file = "crates/style/src/font.rs"
+from = '''        if canvas
+            && !small_caps'''
+to = '''        if !small_caps'''
+
+[[mutant]]
+name = "a page's font takes the stretch keywords"
+file = "crates/style/src/font.rs"
+from = '''        if canvas
+            && stretch.is_none()'''
+to = '''        if stretch.is_none()'''
+
+[[mutant]]
+name = "bolder against 400"
+file = "crates/style/src/canvas.rs"
+from = '''                .map_or(400.0, |weight| weight.compute(parent.font_weight)),'''
+to = '''                .map_or(400.0, |weight| weight.compute(400.0)),'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_text"]
+
+[[mutant]]
+name = "em against 16px"
+file = "crates/style/src/canvas.rs"
+from = '''            font_size: parent.font_size,
+            parent_font_size: parent.font_size,
+            root_font_size,'''
+to = '''            font_size: parent.font_size,
+            parent_font_size: 16.0,
+            root_font_size,'''
+
+[[mutant]]
+name = "rem against the parent"
+file = "crates/style/src/canvas.rs"
+from = '''            parent_font_size: parent.font_size,
+            root_font_size,
+            base_url: None,'''
+to = '''            parent_font_size: parent.font_size,
+            root_font_size: parent.font_size,
+            base_url: None,'''
+
+[[mutant]]
+name = "oblique written as italic"
+file = "crates/style/src/canvas.rs"
+from = '''    if font.style == FontStyle::Italic {'''
+to = '''    if font.style != FontStyle::Normal {'''
+
+[[mutant]]
+name = "700 written as a number"
+file = "crates/style/src/canvas.rs"
+from = '''    if font.weight == 700.0 {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "the caps not written"
+file = "crates/style/src/canvas.rs"
+from = '''    if font.variant_caps == FontVariantCaps::SmallCaps {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a family of several words unquoted"
+file = "crates/style/src/font.rs"
+from = '''            FontFamily::Named(name) if is_identifier(name) => dest.push_str(name),'''
+to = '''            FontFamily::Named(name) if is_unquoted_family_name(name) => dest.push_str(name),'''
+
+[[mutant]]
+name = "a spacing with white space after it"
+file = "crates/style/src/canvas.rs"
+from = '''    if parser.next_including_whitespace().is_ok() {
+        return None;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a spacing's rem against 16px"
+file = "crates/style/src/canvas.rs"
+from = '''            parent_font_size: font_size,
+            root_font_size: font_size,'''
+to = '''            parent_font_size: font_size,
+            root_font_size: 16.0,'''
+
+# dom_api: setting them.
+
+[[mutant]]
+name = "a font set where no frame shows the document"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if !shown {
+        return Ok(());
+    }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_text"]
+
+[[mutant]]
+name = "the same font string set again"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if with_data(cx, this, |data| data.state().font_source.as_deref() == Some(text)) {'''
+to = '''    if false {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_text"]
+
+[[mutant]]
+name = "a font against 10px sans-serif always"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        let style = scope.node_by_id(canvas).and_then(|node| node.computed_style());'''
+to = '''        let style = scope.node_by_id(canvas).and_then(|_| None);'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_text"]
+
+[[mutant]]
+name = "rem against the initial 16px always"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            .and_then(|root| root.computed_style())
+            .map(|root| root.font_size);'''
+to = '''            .and_then(|_| None::<std::sync::Arc<computed_style::ComputedStyle>>)
+            .map(|root| root.font_size);'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_text"]
+
+[[mutant]]
+name = "a spacing read back as it was set"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        with_data(cx, this, |data| data.state_mut().word_spacing = spacing.to_css());'''
+to = '''        with_data(cx, this, |data| data.state_mut().word_spacing = value.as_str().to_owned());'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_text"]
+
+[[mutant]]
+name = "inherit set as ltr"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        CanvasDirection::Inherit => None,'''
+to = '''        CanvasDirection::Inherit => Some(Direction::Ltr),'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_text"]
+
+[[mutant]]
+name = "the baseline starts at the top"
+file = "crates/dom/src/canvas.rs"
+from = '''            text_baseline: TextBaseline::Alphabetic,'''
+to = '''            text_baseline: TextBaseline::Top,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_text"]

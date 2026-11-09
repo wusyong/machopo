@@ -1,0 +1,155 @@
+# Stage 1d: the schedule of the new DOM's heap's marking in V8's steps (gc's
+# schedule, the heap's thread's bounded step, the workers' progress), its
+# jobs on V8's workers (bindings' gc_platform), and dom_js's side. The V8
+# patch isn't mutated here (each mutant would rebuild V8).
+test = ["cargo", "test", "-q", "-p", "gc", "--test", "it", "js::"]
+timeout = 900
+
+# --- gc: the schedule ---------------------------------------------------------
+
+[[mutant]]
+name = "no step without progress"
+file = "crates/gc/src/heap/schedule.rs"
+from = '''        if marked.saturating_sub(last) < without_progress {'''
+to = '''        if false && marked.saturating_sub(last) < without_progress {'''
+test = ["cargo", "test", "-q", "-p", "gc", "--lib", "schedule"]
+
+[[mutant]]
+name = "the share due ignores the time"
+file = "crates/gc/src/heap/schedule.rs"
+from = '''        let expected = if elapsed >= MARKING_TIME {'''
+to = '''        let expected = if true {'''
+test = ["cargo", "test", "-q", "-p", "gc", "--lib", "schedule"]
+
+[[mutant]]
+name = "a step doesn't count what is marked"
+file = "crates/gc/src/heap/schedule.rs"
+from = '''        expected.saturating_sub(marked)
+'''
+to = '''        expected
+'''
+test = ["cargo", "test", "-q", "-p", "gc", "--lib", "schedule"]
+
+[[mutant]]
+name = "an object's bytes are the default's"
+file = "crates/gc/src/heap/schedule.rs"
+from = '''            .filter(|&bytes| bytes > 0)'''
+to = '''            .filter(|_| false)'''
+test = ["cargo", "test", "-q", "-p", "gc", "--lib", "schedule"]
+
+# --- gc: the heap's thread's steps --------------------------------------------
+
+[[mutant]]
+name = "the heap's thread doesn't mark in the engine's steps"
+file = "crates/gc/src/heap.rs"
+from = '''            if limit > 0 {
+                let scanned = marker.step(limit, started.checked_add(budget));'''
+to = '''            if false {
+                let scanned = marker.step(limit, started.checked_add(budget));'''
+
+[[mutant]]
+name = "a step has no time"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''            scanned.get() >= limit || deadline.is_some_and(|deadline| Instant::now() >= deadline)'''
+to = '''            scanned.get() >= limit'''
+
+[[mutant]]
+name = "a step has no limit"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''            scanned.get() >= limit || deadline.is_some_and(|deadline| Instant::now() >= deadline)'''
+to = '''            deadline.is_some_and(|deadline| Instant::now() >= deadline)'''
+
+[[mutant]]
+name = "a step out of segments doesn't resolve the ephemerons"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''            if !drained || over() {
+                break;
+            }'''
+to = '''            let _ = drained;
+            break;'''
+
+[[mutant]]
+name = "a step's objects aren't counted"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''        self.count_scanned(scanned.get(), false);
+        scanned.get()'''
+to = '''        scanned.get()'''
+
+[[mutant]]
+name = "the steps' objects aren't recorded"
+file = "crates/gc/src/heap.rs"
+from = '''                driven.stepped = driven.stepped.saturating_add(scanned);'''
+to = '''                let _ = scanned;'''
+
+[[mutant]]
+name = "a driven marking's pause starts at its end"
+file = "crates/gc/src/heap.rs"
+from = '''                (driven.before_pause.unwrap_or(scanned), driven.stepped)'''
+to = '''                (scanned, driven.stepped)'''
+
+[[mutant]]
+name = "a worker's objects count when its run ends"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''                    if scanned.is_multiple_of(PROGRESS) {
+                        self.count_scanned(PROGRESS, true);
+                    }'''
+to = ""
+
+# --- bindings: jobs on V8's workers -------------------------------------------
+
+[[mutant]]
+name = "run doesn't run the job on the caller"
+file = "crates/bindings/src/gc_platform.rs"
+from = '''        let joining = catch_unwind(AssertUnwindSafe(|| job.run(&Joining(&handle))));'''
+to = '''        let joining: std::thread::Result<()> = Ok(());'''
+test = ["cargo", "test", "-q", "-p", "bindings", "--test", "it", "gc_platform"]
+
+[[mutant]]
+name = "run doesn't wait for the workers"
+file = "crates/bindings/src/gc_platform.rs"
+from = '''        handle.stop(false);
+    }'''
+to = '''        std::mem::forget(handle);
+    }'''
+test = ["cargo", "test", "-q", "-p", "bindings", "--test", "it", "gc_platform"]
+
+[[mutant]]
+name = "a worker's panic is dropped"
+file = "crates/bindings/src/gc_platform.rs"
+from = '''    if let Err(panic) = ran {
+        task.panicked(Some(panic));
+    }'''
+to = '''    let _ = ran;'''
+test = ["cargo", "test", "-q", "-p", "bindings", "--test", "it", "gc_platform"]
+
+[[mutant]]
+name = "a dropped handle detaches"
+file = "crates/bindings/src/gc_platform.rs"
+from = '''        self.stop(std::thread::panicking());'''
+to = '''        self.stop(true);'''
+test = ["cargo", "test", "-q", "-p", "bindings", "--test", "it", "gc_platform"]
+
+[[mutant]]
+name = "a job asks for no worker"
+file = "crates/bindings/src/gc_platform.rs"
+from = '''        Ok(concurrency) => concurrency,'''
+to = '''        Ok(_) => 0,'''
+test = ["cargo", "test", "-q", "-p", "bindings", "--test", "it", "gc_platform"]
+
+# --- dom_js, and the step's time on its way from V8 ---------------------------
+
+[[mutant]]
+name = "the new DOM's heap has workers when the test says none"
+file = "crates/dom_js/src/next.rs"
+from = '''    if WITHOUT_WORKERS_HERE.get() {
+        Arc::new(InlinePlatform)'''
+to = '''    if false {
+        Arc::new(InlinePlatform)'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "next_dom_gc"]
+
+[[mutant]]
+name = "V8's step gives the new heap no time"
+file = "crates/bindings/src/unified.rs"
+from = '''    Duration::try_from_secs_f64(max_ms / 1000.0).unwrap_or(if max_ms > 0.0 {'''
+to = '''    Duration::try_from_secs_f64(0.0 * max_ms).unwrap_or(if max_ms > 0.0 {'''
+test = ["cargo", "test", "-q", "-p", "bindings", "--lib", "unified"]

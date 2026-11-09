@@ -1,0 +1,188 @@
+# Stage 4e-3b-1: shadow trees' own sheets in `style_next`
+# (`shadow_sheets.rs`), `:host` and `::slotted()`, the cascade order of
+# tree contexts; `dom_next`'s list of shadow roots whose sheets may have
+# changed; the renderer's loads of a shadow tree's `<link>`.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next -p style_next && cargo test -q -p shell --test it windowless::a_shadow_trees_link"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: a shadow tree's sheets the document's"
+file = "crates/dom_next/src/style.rs"
+from = '''        match self.containing_shadow_root(node) {
+            Some(root) => self.shadow_sheets_changed(root),
+            None => {
+                let document = self.document_of(node);'''
+to = '''        match None::<NodeRef<'gc>> {
+            Some(root) => self.shadow_sheets_changed(root),
+            None => {
+                let document = self.document_of(node);'''
+
+[[mutant]]
+name = "dom: not listed"
+file = "crates/dom_next/src/style.rs"
+from = '''        if data.sheets_listed.replace(true) {
+            return;
+        }'''
+to = '''        if data.sheets_listed.replace(true) || true {
+            return;
+        }'''
+
+[[mutant]]
+name = "dom: listed once for good"
+file = "crates/dom_next/src/style.rs"
+from = '''            if let Some(data) = self.shadow_data(*root) {
+                data.sheets_listed.set(false);
+            }'''
+to = '''            if let Some(data) = self.shadow_data(*root) {
+                let _ = data;
+            }'''
+
+[[mutant]]
+name = "dom: an owner coming not looked at"
+file = "crates/dom_next/src/style.rs"
+from = '''            self.set_flags(at, CONNECTED);
+            self.sheet_owner_moved(at, &mut sheets);'''
+to = '''            self.set_flags(at, CONNECTED);'''
+
+[[mutant]]
+name = "dom: an owner going not looked at"
+file = "crates/dom_next/src/style.rs"
+from = '''            // Before its tree scope is moved: its shadow root's still.
+            self.sheet_owner_moved(at, &mut sheets);'''
+to = '''            // Before its tree scope is moved: its shadow root's still.'''
+
+[[mutant]]
+name = "dom: the renderer sees none"
+file = "crates/dom_next/src/style.rs"
+from = '''        let found = (0..roots.len()).filter_map(|index| roots.get(self.gc, index)).collect();'''
+to = '''        let found = (0..roots.len()).filter_map(|index| roots.get(self.gc, index)).take(0).collect();'''
+
+[[mutant]]
+name = "index: no host rules"
+file = "crates/style_next/src/rule_index.rs"
+from = '''                Bucket::Host => index.host.push(data),'''
+to = '''                Bucket::Host => {}'''
+
+[[mutant]]
+name = "index: no slotted rules"
+file = "crates/style_next/src/rule_index.rs"
+from = '''                Bucket::Slotted => index.slotted.push(data),'''
+to = '''                Bucket::Slotted => {}'''
+
+[[mutant]]
+name = "sources: not the shadow tree's own"
+file = "crates/style_next/src/lib.rs"
+from = '''                sources.extend(scope(root).iter().map(|(index, first)| tree(index, *first, Which::Tree, host, 0)));'''
+to = '''                let _ = (host, scope(root));'''
+
+[[mutant]]
+name = "sources: slotted in the element's tree context"
+file = "crates/style_next/src/lib.rs"
+from = '''                sources.extend(scope(root).iter().map(|(index, first)| tree(index, *first, Which::Slotted, host, tree_order)));'''
+to = '''                sources.extend(scope(root).iter().map(|(index, first)| tree(index, *first, Which::Slotted, host, 0)));'''
+
+[[mutant]]
+name = "sources: no host rules"
+file = "crates/style_next/src/lib.rs"
+from = '''            sources.extend(scope(root).iter().map(|(index, first)| tree(index, *first, Which::Host, Some(element), tree_order)));'''
+to = '''            let _ = (root, tree_order);'''
+
+[[mutant]]
+name = "sources: host rules in the element's tree context"
+file = "crates/style_next/src/lib.rs"
+from = '''            sources.extend(scope(root).iter().map(|(index, first)| tree(index, *first, Which::Host, Some(element), tree_order)));'''
+to = '''            sources.extend(scope(root).iter().map(|(index, first)| tree(index, *first, Which::Host, Some(element), 0)));'''
+
+[[mutant]]
+name = "matching: no current host"
+file = "crates/style_next/src/lib.rs"
+from = '''            context.current_host = current_host;'''
+to = '''            let _ = current_host;'''
+
+[[mutant]]
+name = "matching: the host not featureless"
+file = "crates/style_next/src/lib.rs"
+from = '''            context.featureless = which == Which::Host;'''
+to = '''            context.featureless = false;'''
+
+[[mutant]]
+name = "sheets: an alternate link applies"
+file = "crates/style_next/src/shadow_sheets.rs"
+from = '''            if !sheets::owns_sheet(cx, owner) || sheets::is_alternate_stylesheet(cx, owner) {'''
+to = '''            if !sheets::owns_sheet(cx, owner) {'''
+
+[[mutant]]
+name = "sheets: a text parsed each time"
+file = "crates/style_next/src/shadow_sheets.rs"
+from = '''                match self.texts.get(text.as_str()) {'''
+to = '''                match self.texts.get(text.as_str()).filter(|_| false) {'''
+
+[[mutant]]
+name = "sheets: an index kept across media"
+file = "crates/style_next/src/shadow_sheets.rs"
+from = '''        if let Some((_, index)) = self.indexes.get(&key)
+            && !index.set.did_media_query_results_change(environment)'''
+to = '''        if let Some((_, index)) = self.indexes.get(&key)'''
+
+[[mutant]]
+name = "sheets: indexes not compared"
+file = "crates/style_next/src/shadow_sheets.rs"
+from = '''                || old.indexes.len() != indexes.len()
+                || old.indexes.iter().zip(&indexes).any(|((a, _), (b, _))| !Rc::ptr_eq(a, b))'''
+to = ''''''
+
+[[mutant]]
+name = "sheets: never changed"
+file = "crates/style_next/src/shadow_sheets.rs"
+from = '''        let changed = old.as_ref().is_none_or(|old| {'''
+to = '''        let changed = false && old.as_ref().is_none_or(|old| {'''
+
+[[mutant]]
+name = "collect: not every one when a link came"
+file = "crates/style_next/src/lib.rs"
+from = '''        if all {
+            roots.extend(self.shadow.roots().into_iter().filter_map(|id| cx.node_by_id(id)));
+        }'''
+to = '''        if false && all {
+            roots.extend(self.shadow.roots().into_iter().filter_map(|id| cx.node_by_id(id)));
+        }'''
+
+[[mutant]]
+name = "collect: the host not styled again"
+file = "crates/style_next/src/lib.rs"
+from = '''                    cx.set_needs_style_recalc(host);'''
+to = '''                    let _ = host;'''
+
+[[mutant]]
+name = "names: not the shadow trees'"
+file = "crates/style_next/src/lib.rs"
+from = '''        for index in self.shadow.all_indexes() {
+            let names = &index.names;'''
+to = '''        for index in self.shadow.all_indexes().take(0) {
+            let names = &index.names;'''
+
+[[mutant]]
+name = "sets: not the shadow tree's own"
+file = "crates/style_next/src/lib.rs"
+from = '''            Some(root) => (None, scope(root)),
+        };'''
+to = '''            Some(root) => (None, scope(root).get(..0).unwrap_or_default()),
+        };'''
+
+[[mutant]]
+name = "sets: not the hosted tree's"
+file = "crates/style_next/src/lib.rs"
+from = '''        let hosted = cx.shadow_root(element).map_or(&[][..], scope);'''
+to = '''        let hosted: &[(std::rc::Rc<RuleIndex>, usize)] = &[];'''
+
+[[mutant]]
+name = "features: not the shadow trees'"
+file = "crates/style_next/src/lib.rs"
+from = '''        [Some(&self.ua.features), self.author.map(|author| &author.features), Some(&self.shadow.features)]'''
+to = '''        [Some(&self.ua.features), self.author.map(|author| &author.features), None]'''
+
+[[mutant]]
+name = "renderer: no shadow tree's links"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                cx.sheet_changed_roots().into_iter().map(|root| (root, true)).collect();'''
+to = '''                cx.sheet_changed_roots().into_iter().map(|root| (root, true)).take(0).collect();'''

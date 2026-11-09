@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<title>E3: opacity applies to the element as a group: overlapping children blend once</title>
+<link rel="match" href="e3-opacity-group-ref.html">
+<meta name="fuzzy" content="maxDifference=0-2;totalPixels=0-20000">
+<style>html, body { margin: 0 }</style>
+<div style="opacity: 0.5">
+  <div style="width: 100px; height: 60px; background-color: green"></div>
+  <div style="width: 100px; height: 60px; margin-top: -20px; background-color: green"></div>
+</div>
+<!-- The same across paint chunks: the second child has its own transform node. -->
+<div style="opacity: 0.5">
+  <div style="width: 100px; height: 60px; background-color: green"></div>
+  <div style="width: 100px; height: 60px; margin-top: -20px; background-color: green; transform: translate(0, 0)"></div>
+</div>

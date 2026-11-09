@@ -1,0 +1,109 @@
+test = ["sh", "-c", "cargo test -q -p renderer --lib -- pending_user_input && cargo test -q -p dom_js --test it -- scheduling:: && cargo test -q -p shell --test it -- scheduling::"]
+timeout = 1800
+
+[[mutant]]
+name = "the compositor's posting counts nothing"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                posted_input.enqueue(Pending::of(event, *attribution, *document));'''
+to = '''                let _ = (event, attribution, document, &posted_input);'''
+
+[[mutant]]
+name = "a move counts out when taken, not when dispatched"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                            counts.dequeue(std::mem::replace(&mut self.pending_move_input, pending));'''
+to = '''                            counts.dequeue(pending);'''
+
+[[mutant]]
+name = "a dispatched move still counts"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.frame_settings
+            .pending_input
+            .dequeue(self.pending_move_input.take());'''
+to = '''        let _ = &self.pending_move_input;'''
+
+[[mutant]]
+name = "a replaced move still counts"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                            counts.dequeue(std::mem::replace(&mut self.pending_move_input, pending));'''
+to = '''                            if self.pending_move_input.is_none() {
+                                self.pending_move_input = pending;
+                            }'''
+
+[[mutant]]
+name = "a taken event still counts"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                        } else {
+                            counts.dequeue(pending);
+                        }'''
+to = '''                        } else {
+                            let _ = (counts, pending);
+                        }'''
+
+[[mutant]]
+name = "nothing is continuous"
+file = "crates/renderer/src/pending_user_input.rs"
+from = '''        let continuous = matches!(
+            event,
+            InputEvent::MouseMove { .. } | InputEvent::MouseWheel { .. }
+        );'''
+to = '''        let continuous = matches!(event, InputEvent::MouseWheel { .. });'''
+
+[[mutant]]
+name = "continuous ones count without includeContinuous"
+file = "crates/renderer/src/pending_user_input.rs"
+from = '''            .filter(|p| include_continuous || !p.continuous)'''
+to = '''            .filter(|_| include_continuous || true)'''
+
+[[mutant]]
+name = "one that can't be told is the drawn document's"
+file = "crates/renderer/src/pending_user_input.rs"
+from = '''            InputAttribution::Unknown => None,'''
+to = '''            InputAttribution::Unknown => document.map(Self::DrawnDocument),'''
+
+[[mutant]]
+name = "a count goes below what was counted in"
+file = "crates/renderer/src/pending_user_input.rs"
+from = '''            if *count == 0 {
+                counts.remove(&pending);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "the main document isn't known"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.frame_settings
+            .main_document
+            .set(Some((document_id, document.as_node().id())));'''
+to = ''''''
+
+[[mutant]]
+name = "a key is every frame's"
+file = "crates/dom_api/src/scheduling.rs"
+from = '''            .is_some_and(|focused| focused == document.as_node().id()),'''
+to = '''            .is_some_and(|_| true) || true,'''
+
+[[mutant]]
+name = "another origin's document's input is seen"
+file = "crates/dom_api/src/scheduling.rs"
+from = '''            crate::frame::document_origin(&mut m, &target)
+                == crate::frame::document_origin(&mut m, document)'''
+to = '''            let _ = &mut m;
+            true'''
+
+[[mutant]]
+name = "input for a node that isn't a document is seen"
+file = "crates/dom_api/src/scheduling.rs"
+from = '''            else {
+                return false;
+            };
+            if cx.read().document_window(target.as_node()).is_none() {'''
+to = '''            else {
+                return true;
+            };
+            if cx.read().document_window(target.as_node()).is_none() {'''
+
+[[mutant]]
+name = "includeContinuous is ignored"
+file = "crates/dom_api/src/scheduling.rs"
+from = '''    let pending = frame.pending_user_input(options.include_continuous);'''
+to = '''    let pending = frame.pending_user_input(false && options.include_continuous);'''

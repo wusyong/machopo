@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<!-- An editing host (#host); #out says whether it has the focus. #blank
+     takes a click without the focus. -->
+<title>caret in an editing host</title>
+<style>
+  html, body { margin: 0 }
+  body { padding: 20px; font: 24px sans-serif }
+  #host { width: 300px; border: 1px solid gray; padding: 4px; outline: none }
+  #blank { height: 200px }
+</style>
+<div id="host" contenteditable>some text</div>
+<div id="blank"></div>
+<div id="out"></div>
+<script>
+  const host = document.getElementById('host');
+  const out = document.getElementById('out');
+  const show = () =>
+    out.textContent = document.activeElement === host ? 'focused' : 'not focused';
+  for (const type of ['focus', 'blur']) host.addEventListener(type, show);
+  show();
+</script>

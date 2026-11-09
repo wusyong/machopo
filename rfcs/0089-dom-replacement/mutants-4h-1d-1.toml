@@ -1,0 +1,301 @@
+# Stage 4h-1d-1: script elements script inserts on the new DOM (their triggers recorded in tree
+# order with the iframes', the flags, "prepare the script element", an inline one run as the
+# call ends in its document's realm, `HTMLScriptElement`'s members).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "sh", "-c", "cargo test -q -p dom_next --test it -- scripts:: frames:: kinds:: && cargo test -q -p dom_js_next --test it -- scripts:: frames::"]
+timeout = 1200
+
+[[mutant]]
+name = "dom: one script makes isn't non-blocking"
+file = "crates/dom_next/src/script.rs"
+from = '''        element.flags.set(element.flags.get() | NON_BLOCKING);
+        self.see(form::SCRIPTS_SEEN);'''
+to = '''        self.see(form::SCRIPTS_SEEN);'''
+
+[[mutant]]
+name = "dom: one script makes isn't seen"
+file = "crates/dom_next/src/script.rs"
+from = '''        element.flags.set(element.flags.get() | NON_BLOCKING);
+        self.see(form::SCRIPTS_SEEN);'''
+to = '''        element.flags.set(element.flags.get() | NON_BLOCKING);'''
+
+[[mutant]]
+name = "dom: the parser's script is made as script's"
+file = "crates/dom_next/src/lib.rs"
+from = '''        let ids = self.intern_name(name);
+        let element = self.make_element(document, ids);'''
+to = '''        let ids = self.intern_name(name);
+        let element = self.create_element_named(document, ids);'''
+
+[[mutant]]
+name = "dom: a clone isn't already started"
+file = "crates/dom_next/src/script.rs"
+from = '''        if self.flag(original, ALREADY_STARTED) && self.is_html_script(original) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "dom: a parser-inserted script is recorded"
+file = "crates/dom_next/src/script.rs"
+from = '''        node.flags.get() & (PARSER_INSERTED | ALREADY_STARTED) == 0 && self.is_html_script(node)'''
+to = '''        node.flags.get() & ALREADY_STARTED == 0 && self.is_html_script(node)'''
+
+[[mutant]]
+name = "dom: an already started script is recorded"
+file = "crates/dom_next/src/script.rs"
+from = '''        node.flags.get() & (PARSER_INSERTED | ALREADY_STARTED) == 0 && self.is_html_script(node)'''
+to = '''        node.flags.get() & PARSER_INSERTED == 0 && self.is_html_script(node)'''
+
+[[mutant]]
+name = "dom: any element is recorded"
+file = "crates/dom_next/src/script.rs"
+from = '''        node.flags.get() & (PARSER_INSERTED | ALREADY_STARTED) == 0 && self.is_html_script(node)'''
+to = '''        node.flags.get() & (PARSER_INSERTED | ALREADY_STARTED) == 0'''
+
+[[mutant]]
+name = "dom: a node inserted into a script isn't looked at"
+file = "crates/dom_next/src/style.rs"
+from = '''        if steps {
+            self.script_children_changed(parent);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a connected script isn't recorded"
+file = "crates/dom_next/src/frame.rs"
+from = '''        } else {
+            self.script_connected(node);
+        }'''
+to = '''        }'''
+
+[[mutant]]
+name = "dom: connecting looks only once an iframe is made"
+file = "crates/dom_next/src/frame.rs"
+from = '''        self.has_seen(crate::form::IFRAMES_SEEN | crate::form::SCRIPTS_SEEN)'''
+to = '''        self.has_seen(crate::form::IFRAMES_SEEN)'''
+
+[[mutant]]
+name = "dom: async added leaves it non-blocking"
+file = "crates/dom_next/src/script.rs"
+from = '''            names::local::ASYNC => element.flags.set(element.flags.get() & !NON_BLOCKING),'''
+to = '''            names::local::ASYNC => {}'''
+
+[[mutant]]
+name = "dom: a src set isn't recorded"
+file = "crates/dom_next/src/script.rs"
+from = '''            names::local::SRC if self.is_connected(element) => self.record_script(element),'''
+to = '''            names::local::SRC => {}'''
+
+[[mutant]]
+name = "dom: a src set out of the document is recorded"
+file = "crates/dom_next/src/script.rs"
+from = '''            names::local::SRC if self.is_connected(element) => self.record_script(element),'''
+to = '''            names::local::SRC => self.record_script(element),'''
+
+[[mutant]]
+name = "dom: a src removed is recorded"
+file = "crates/dom_next/src/script.rs"
+from = '''        if !present || !self.is_html_script(element) {'''
+to = '''        if !self.is_html_script(element) {'''
+
+[[mutant]]
+name = "dom: a script the parser left unprepared isn't seen"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if !flags.parser_inserted && !flags.already_started {
+            self.see(form::SCRIPTS_SEEN);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: another element's flags read as a script's"
+file = "crates/dom_next/src/lib.rs"
+from = '''            non_blocking: script && self.flag(element, NON_BLOCKING),'''
+to = '''            non_blocking: self.flag(element, NON_BLOCKING),'''
+
+[[mutant]]
+name = "api: an already started script is prepared again"
+file = "crates/dom_api_next/src/script.rs"
+from = '''    if flags.already_started {
+        return Prepared::Nothing;
+    }
+    let prepared'''
+to = '''    let prepared'''
+
+[[mutant]]
+name = "api: an empty script is prepared"
+file = "crates/dom_api_next/src/script.rs"
+from = '''    if src.is_none() && source.is_empty() {
+        return Prepared::Nothing;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: one out of the document is prepared"
+file = "crates/dom_api_next/src/script.rs"
+from = '''    if !cx.is_connected(script) {
+        return Prepared::Nothing;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: any type runs"
+file = "crates/dom_api_next/src/script.rs"
+from = '''    if !is_classic(
+        attr(names::local::TYPE).as_deref(),
+        attr(names::local::LANGUAGE).as_deref(),
+    ) {
+        return Prepared::Nothing;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: it isn't marked started"
+file = "crates/dom_api_next/src/script.rs"
+from = '''    flags.already_started = true;'''
+to = ''''''
+
+[[mutant]]
+name = "api: nomodule runs"
+file = "crates/dom_api_next/src/script.rs"
+from = '''    if attr(names::local::NOMODULE).is_some() {
+        return Prepared::Nothing;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: for and event don't matter"
+file = "crates/dom_api_next/src/script.rs"
+from = '''        if !target.eq_ignore_ascii_case("window")
+            || !(event.eq_ignore_ascii_case("onload") || event.eq_ignore_ascii_case("onload()"))
+        {
+            return Prepared::Nothing;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "api: onload() isn't onload"
+file = "crates/dom_api_next/src/script.rs"
+from = '''            || !(event.eq_ignore_ascii_case("onload") || event.eq_ignore_ascii_case("onload()"))'''
+to = '''            || !event.eq_ignore_ascii_case("onload")'''
+
+[[mutant]]
+name = "api: for and event not stripped"
+file = "crates/dom_api_next/src/script.rs"
+from = '''        let trim = |value: &str| value.trim_matches(|c: char| c.is_ascii_whitespace()).to_owned();'''
+to = '''        let trim = |value: &str| value.to_owned();'''
+
+[[mutant]]
+name = "api: for compared by case"
+file = "crates/dom_api_next/src/script.rs"
+from = '''        if !target.eq_ignore_ascii_case("window")'''
+to = '''        if target != "window"'''
+
+[[mutant]]
+name = "api: the inline source is lost"
+file = "crates/dom_api_next/src/script.rs"
+from = '''        return Prepared::Inline(source.to_string());'''
+to = '''        return Prepared::Inline(String::new());'''
+
+[[mutant]]
+name = "api: src not stripped"
+file = "crates/dom_api_next/src/script.rs"
+from = '''    let src = src.trim_matches(|c: char| c.is_ascii_whitespace());'''
+to = '''    let src = src.as_str();'''
+
+[[mutant]]
+name = "api: no error for a src that doesn't parse"
+file = "crates/dom_api_next/src/script.rs"
+from = '''        cx.queue_element_task(script, names::event::ERROR);'''
+to = ''''''
+
+[[mutant]]
+name = "api: language not as text/"
+file = "crates/dom_api_next/src/script.rs"
+from = '''        (None, Some(language)) => format!("text/{language}"),'''
+to = '''        (None, Some(language)) => language.to_owned(),'''
+
+[[mutant]]
+name = "api: an empty language isn't JavaScript"
+file = "crates/dom_api_next/src/script.rs"
+from = '''        (Some(""), _) | (None, Some("") | None) => return true,'''
+to = '''        (Some(""), _) | (None, None) => return true,'''
+
+[[mutant]]
+name = "api: type not stripped"
+file = "crates/dom_api_next/src/script.rs"
+from = '''        (Some(kind), _) => kind.trim_matches(|c: char| c.is_ascii_whitespace()).to_owned(),'''
+to = '''        (Some(kind), _) => kind.to_owned(),'''
+
+[[mutant]]
+name = "api: MIME types by case"
+file = "crates/dom_api_next/src/script.rs"
+from = '''    ESSENCES.iter().any(|known| known.eq_ignore_ascii_case(essence))'''
+to = '''    ESSENCES.iter().any(|known| *known == essence)'''
+
+[[mutant]]
+name = "api: currentScript not set"
+file = "crates/dom_api_next/src/script.rs"
+from = '''        let current = cx.containing_shadow_root(script).is_none().then_some(script);'''
+to = '''        let current = None;'''
+
+[[mutant]]
+name = "api: currentScript in a shadow tree"
+file = "crates/dom_api_next/src/script.rs"
+from = '''        let current = cx.containing_shadow_root(script).is_none().then_some(script);'''
+to = '''        let current = Some(script);'''
+
+[[mutant]]
+name = "api: currentScript not put back"
+file = "crates/dom_api_next/src/script.rs"
+from = '''        cx.set_current_script(document.get(cx.gc), before.as_ref().map(|before| before.get(cx.gc)));'''
+to = ''''''
+
+[[mutant]]
+name = "api: a script recorded isn't prepared"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''                crate::script::update_script(host, script);'''
+to = ''''''
+
+[[mutant]]
+name = "api: scripts after the reactions"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        if self.read(|cx, _| cx.has_element_changes()) {
+            self.update_elements();
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "api: async = false leaves it non-blocking"
+file = "crates/dom_api_next/src/script.rs"
+from = '''            non_blocking: false,
+            ..flags'''
+to = '''            ..flags'''
+
+[[mutant]]
+name = "api: text is the descendants'"
+file = "crates/dom_api_next/src/script.rs"
+from = '''    Ok(DomStr::Owned(cx.child_text_content(this)))'''
+to = '''    Ok(DomStr::Owned(cx.text_content(this).unwrap_or_else(|| cx.child_text_content(this))))'''
+
+[[mutant]]
+name = "api: supports by case"
+file = "crates/dom_api_next/src/script.rs"
+from = '''    Ok(kind == "classic")'''
+to = '''    Ok(kind.eq_ignore_ascii_case("classic"))'''
+
+[[mutant]]
+name = "js: in the caller's realm"
+file = "crates/dom_js_next/src/frames.rs"
+from = '''    let context = v8::Local::new(scope, &realm);
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let global = context.global(scope);
+    v8::tc_scope!(let scope, scope);'''
+to = '''    let _ = realm;
+    let context = scope.get_current_context();
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let global = context.global(scope);
+    v8::tc_scope!(let scope, scope);'''
+
+[[mutant]]
+name = "js: what it throws isn't reported"
+file = "crates/dom_js_next/src/frames.rs"
+from = '''        crate::listeners::report_caught(scope, crate::listeners::ReportAt::Global(global));'''
+to = '''        let _ = global;'''

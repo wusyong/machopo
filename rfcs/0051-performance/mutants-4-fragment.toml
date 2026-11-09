@@ -1,0 +1,34 @@
+# Mutation test of stage 4's fragment parse into the context's document:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-4-fragment.toml
+test = ["cargo", "test", "-q", "-p", "html"]
+timeout = 600
+
+[[mutant]]
+name = "a fragment's hooks are told of the context's document"
+file = "crates/html/src/sink.rs"
+from = '''            Some(_) => None,
+            None => Some(self.document.as_node()),'''
+to = '''            Some(_) => Some(self.document.as_node()),
+            None => Some(self.document.as_node()),'''
+
+[[mutant]]
+name = "html5ever's root is appended to the fragment"
+file = "crates/html/src/sink.rs"
+from = '''            // html5ever's root: kept out of the tree.
+            *fragment.root.borrow_mut() = Some(node.clone());
+            return;'''
+to = '''            *fragment.root.borrow_mut() = Some(node.clone());'''
+
+[[mutant]]
+name = "what goes into html5ever's root stays in it"
+file = "crates/html/src/sink.rs"
+from = '''                    .is_some_and(|root| root.ptr_eq(parent)) =>'''
+to = '''                    .is_some_and(|root| root.ptr_eq(parent) && false) =>'''
+
+[[mutant]]
+name = "html5ever's document is the context's"
+file = "crates/html/src/sink.rs"
+from = '''            Some(fragment) => fragment.fragment.clone(),
+            None => self.document.as_node().clone(),'''
+to = '''            Some(_) => self.document.as_node().clone(),
+            None => self.document.as_node().clone(),'''

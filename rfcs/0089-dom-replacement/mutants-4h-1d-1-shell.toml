@@ -1,0 +1,32 @@
+# Stage 4h-1d-1, through the renderer: the parser's scripts prepared by the shared "prepare the
+# script element" (an empty one runs once script fills it, as soon as it can; one that ran isn't
+# non-blocking), one script inserts run as it is inserted, an empty `src`'s `error`.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "sh", "-c", "cargo test -q -p shell --test it -- next_dom::"]
+timeout = 1800
+
+[[mutant]]
+name = "api: the parser's empty script isn't made non-blocking"
+file = "crates/dom_api_next/src/script.rs"
+from = '''    if parser_inserted && !is_async {
+        flags.non_blocking = true;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: the parser's script that runs keeps non-blocking"
+file = "crates/dom_api_next/src/script.rs"
+from = '''        flags.parser_inserted = true;
+        flags.non_blocking = false;'''
+to = '''        flags.parser_inserted = true;'''
+
+[[mutant]]
+name = "renderer: the parser's external script doesn't run"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                    Url::parse(&url).map_or(Prepared::Nothing, Prepared::External)'''
+to = '''                    Url::parse(&url).map_or(Prepared::Nothing, |_| Prepared::Nothing)'''
+
+[[mutant]]
+name = "renderer: the parser's inline script doesn't run"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                dom_api_next::Prepared::Inline(source) => Prepared::Inline(source),'''
+to = '''                dom_api_next::Prepared::Inline(_) => Prepared::Nothing,'''

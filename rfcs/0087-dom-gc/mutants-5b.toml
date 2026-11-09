@@ -1,0 +1,322 @@
+# Step 5b: the sweep alongside the mutator. The `gc` crate's sweeper,
+# its handing, applying and finishing, the heap's thread's sweeping, the
+# marked bytes; `gc_bench`'s activity; `bench.py gc`'s reading of the
+# heap's thread's sweeping. Run with `RUSTY_V8_ARCHIVE` (`test.py` checks
+# the third-party pins).
+test = ["cargo", "test", "-q", "-p", "gc"]
+timeout = 900
+
+# The pause.
+
+[[mutant]]
+name = "a page handed keeps its ranges"
+file = "crates/gc/src/page.rs"
+from = '''    pub(crate) fn hand(&mut self) {
+        self.ranges.clear();'''
+to = '''    pub(crate) fn hand(&mut self) {'''
+
+[[mutant]]
+name = "the pages with finalizers go to the job"
+file = "crates/gc/src/heap.rs"
+from = '''                    if page.finalizable_objects > 0 {
+                        main_pages.push(number);'''
+to = '''                    if false {
+                        main_pages.push(number);'''
+
+[[mutant]]
+name = "the sweep is always in the pause"
+file = "crates/gc/src/heap.rs"
+from = '''        let atomic = atomic || !self.concurrent;'''
+to = '''        let atomic = true || atomic || !self.concurrent;'''
+
+[[mutant]]
+name = "a collect sweeps alongside"
+file = "crates/gc/src/heap.rs"
+from = '''        self.inner.collect(true);'''
+to = '''        self.inner.collect(false);'''
+
+[[mutant]]
+name = "a dead large object with a finalizer is freed in the pause"
+file = "crates/gc/src/heap.rs"
+from = '''                PageState::Large(object) if object.finalizable => {
+                    dead_large.push(number);
+                    0
+                }'''
+to = '''                PageState::Large(object) if object.finalizable && false => {
+                    dead_large.push(number);
+                    0
+                }'''
+
+# Applying and finishing.
+
+[[mutant]]
+name = "a marking's start doesn't finish the sweep"
+file = "crates/gc/src/heap.rs"
+from = '''        platform.trace_begin("Gc.Pause");
+        self.finish_sweeping(&*platform);
+        self.young.get_mut().resize_at_full_gc();'''
+to = '''        platform.trace_begin("Gc.Pause");
+        self.young.get_mut().resize_at_full_gc();'''
+
+[[mutant]]
+name = "a collect doesn't finish the sweep"
+file = "crates/gc/src/heap.rs"
+from = '''        platform.trace_begin("Gc.Pause");
+        self.finish_sweeping(&*platform);
+        // A nursery whose'''
+to = '''        platform.trace_begin("Gc.Pause");
+        // A nursery whose'''
+
+[[mutant]]
+name = "a safepoint doesn't apply the sweep"
+file = "crates/gc/src/heap.rs"
+from = '''        self.take_discarded();
+        self.sweep_at_safepoint();
+        if self.options.stress {'''
+to = '''        self.take_discarded();
+        if self.options.stress {'''
+
+[[mutant]]
+name = "a scavenge doesn't apply the sweep"
+file = "crates/gc/src/heap.rs"
+from = '''        self.inner.take_discarded();
+        self.inner.sweep_at_safepoint();'''
+to = '''        self.inner.take_discarded();'''
+
+[[mutant]]
+name = "an allocation doesn't sweep"
+file = "crates/gc/src/heap.rs"
+from = '''        if self.sweeping.get() && !ranged && space.available[class].is_empty() {'''
+to = '''        if false && self.sweeping.get() && !ranged && space.available[class].is_empty() {'''
+
+[[mutant]]
+name = "an allocation sweeps with a range left"
+file = "crates/gc/src/heap.rs"
+from = '''        if self.sweeping.get() && !ranged && space.available[class].is_empty() {'''
+to = '''        if self.sweeping.get() && space.available[class].is_empty() {'''
+
+[[mutant]]
+name = "an allocation's sweep doesn't apply the job's first"
+file = "crates/gc/src/heap.rs"
+from = '''        let started = Instant::now();
+        self.apply_swept(space);
+        let mut swept = 0usize;'''
+to = '''        let started = Instant::now();
+        let mut swept = 0usize;'''
+
+[[mutant]]
+name = "an empty page stays its class's"
+file = "crates/gc/src/heap.rs"
+from = '''        if live == 0 {
+            self.mark_table.remove(number);'''
+to = '''        if live == usize::MAX {
+            self.mark_table.remove(number);'''
+
+[[mutant]]
+name = "a page with room isn't offered"
+file = "crates/gc/src/heap.rs"
+from = '''            space.available[class].insert(at, number);'''
+to = '''            let _ = (at, class);'''
+
+[[mutant]]
+name = "the fewest free slots first"
+file = "crates/gc/src/heap.rs"
+from = '''                PageState::Small(other) => other.free >= free,'''
+to = '''                PageState::Small(other) => other.free <= free,'''
+
+[[mutant]]
+name = "the pages with finalizers aren't swept"
+file = "crates/gc/src/heap.rs"
+from = '''        let swept = self.sweep_main_pages();
+        if applied > 0 || swept > 0 {'''
+to = '''        let swept = 0;
+        if applied > 0 || swept > 0 {'''
+
+[[mutant]]
+name = "a dead large object's pages stay"
+file = "crates/gc/src/heap.rs"
+from = '''            for at in number..end {
+                self.mark_table.remove(at);
+                space.states[at] = PageState::Free { since: gc };
+            }
+            space.pool.extend(number..end);
+            freed.extend(number..end);'''
+to = '''            let _ = (end, gc);'''
+
+[[mutant]]
+name = "the sweep never ends"
+file = "crates/gc/src/heap.rs"
+from = '''        if !self.sweeper.is_done() || !self.main_pages.borrow().is_empty() {
+            return;
+        }'''
+to = '''        if true || !self.sweeper.is_done() || !self.main_pages.borrow().is_empty() {
+            return;
+        }'''
+
+[[mutant]]
+name = "the sweep ends with pages left"
+file = "crates/gc/src/heap.rs"
+from = '''        if !self.sweeper.is_done() || !self.main_pages.borrow().is_empty() {
+            return;
+        }'''
+to = '''        if !self.main_pages.borrow().is_empty() {
+            return;
+        }'''
+
+[[mutant]]
+name = "the heap's drop doesn't cancel the sweep"
+file = "crates/gc/src/heap.rs"
+from = '''        if let Some(job) = self.inner.sweep_job.get_mut().take() {
+            job.cancel();
+        }'''
+to = '''        if let Some(job) = self.inner.sweep_job.get_mut().take() {
+            std::mem::forget(job);
+        }'''
+
+[[mutant]]
+name = "the sweep on main isn't counted"
+file = "crates/gc/src/heap.rs"
+from = '''        self.pages_swept_on_main.set(
+            self.pages_swept_on_main
+                .get()
+                .saturating_add(u64::try_from(pages).unwrap_or(u64::MAX)),
+        );'''
+to = '''        let _ = pages;'''
+
+# The marked bytes.
+
+[[mutant]]
+name = "the scanned bytes aren't counted"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''            self.scanned_bytes.fetch_add(bytes, Ordering::Relaxed);'''
+to = '''            let _ = bytes;'''
+
+[[mutant]]
+name = "what was allocated black isn't counted"
+file = "crates/gc/src/heap.rs"
+from = '''                .load(Ordering::Relaxed)
+                .saturating_add(black),'''
+to = '''                .load(Ordering::Relaxed)
+                .saturating_add(0 * black),'''
+
+[[mutant]]
+name = "the marking's start isn't noted"
+file = "crates/gc/src/heap.rs"
+from = '''        self.allocated_at_mark.set(self.allocated.get());'''
+to = '''        let _ = &self.allocated_at_mark;'''
+
+[[mutant]]
+name = "a finalizable object isn't counted"
+file = "crates/gc/src/page.rs"
+from = '''            self.finalizable_objects = self.finalizable_objects.saturating_add(1);'''
+to = '''            let _ = self.finalizable_objects;'''
+
+[[mutant]]
+name = "a finalized object stays counted"
+file = "crates/gc/src/page.rs"
+from = '''            self.finalizable_objects = self
+                .finalizable_objects
+                .saturating_sub(gone.count_ones() as usize);'''
+to = '''            let _ = gone;'''
+
+# The job.
+
+[[mutant]]
+name = "the job's page stays busy"
+file = "crates/gc/src/heap/sweep.rs"
+from = '''            state.busy.retain(|&busy| busy != number);'''
+to = '''            let _ = &state.busy;'''
+
+[[mutant]]
+name = "the job's result is dropped"
+file = "crates/gc/src/heap/sweep.rs"
+from = '''            state.swept.push((number, swept));'''
+to = '''            drop(swept);'''
+
+[[mutant]]
+name = "the swept count isn't kept"
+file = "crates/gc/src/heap/sweep.rs"
+from = '''            self.swept.store(state.swept.len(), Ordering::Relaxed);'''
+to = '''            let _ = &self.swept;'''
+
+[[mutant]]
+name = "the job wants no worker"
+file = "crates/gc/src/heap/sweep.rs"
+from = '''        usize::from(self.left.load(Ordering::Relaxed) > 0)'''
+to = '''        usize::from(self.left.load(Ordering::Relaxed) > usize::MAX - 1)'''
+
+[[mutant]]
+name = "a claim takes from another class"
+file = "crates/gc/src/heap/sweep.rs"
+from = '''        let number = state.unswept.get_mut(class)?.pop()?;'''
+to = '''        let number = state.unswept.iter_mut().find_map(Vec::pop)?;
+        let _ = class;'''
+
+[[mutant]]
+name = "the background isn't timed"
+file = "crates/gc/src/heap/sweep.rs"
+from = '''            self.background_ns
+                .fetch_add(ns, std::sync::atomic::Ordering::Relaxed);'''
+to = '''            let _ = ns;'''
+
+# The verifier.
+
+[[mutant]]
+name = "the verifier lets an unswept page have ranges"
+file = "crates/gc/src/page.rs"
+from = '''            if !self.ranges.is_empty() || self.free != 0 {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "the verifier doesn't check who holds an unswept page"
+file = "crates/gc/src/heap/verify.rs"
+from = '''                    if page.unswept
+                        && !self.sweeper.holds(number)'''
+to = '''                    if false
+                        && !self.sweeper.holds(number)'''
+
+[[mutant]]
+name = "the verifier doesn't check a page as it is applied"
+file = "crates/gc/src/heap.rs"
+from = '''        if self.verifies()
+            && let Err(problem) = page.check()
+        {'''
+to = '''        if false
+            && let Err(problem) = page.check()
+        {'''
+
+# gc_bench and bench.py gc.
+
+[[mutant]]
+name = "the activity's sweep isn't the turns'"
+file = "crates/gc_bench/src/gc_heap.rs"
+test = ["cargo", "test", "-q", "-p", "gc_bench"]
+from = '''        sweep_on_main_ns: after
+            .sweep_on_main_ns
+            .saturating_sub(before.sweep_on_main_ns),'''
+to = '''        sweep_on_main_ns: after.sweep_on_main_ns,'''
+
+[[mutant]]
+name = "the report leaves out the sweep on main"
+file = "crates/gc_bench/src/lib.rs"
+test = ["cargo", "test", "-q", "-p", "gc_bench"]
+from = '''            activity.sweep_on_main_ns,
+            activity.pages_swept_on_main,
+        )'''
+to = '''            0,
+            activity.pages_swept_on_main,
+        )'''
+
+[[mutant]]
+name = "bench.py leaves the sweep on main out of the GC time"
+file = "scripts/bench/gc/gc_bench.py"
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "MarkingSummaryTests"]
+from = '''        "gc_ns": sum(end - begin for begin, end, _ in turns) + on_main,'''
+to = '''        "gc_ns": sum(end - begin for begin, end, _ in turns),'''
+
+[[mutant]]
+name = "bench.py leaves the sweep on main out of its kind"
+file = "scripts/bench/gc/gc_bench.py"
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "MarkingSummaryTests"]
+from = '''        by_kind["sweeping"] = by_kind.get("sweeping", 0) + on_main'''
+to = '''        by_kind["sweeping"] = by_kind.get("sweeping", 0)'''

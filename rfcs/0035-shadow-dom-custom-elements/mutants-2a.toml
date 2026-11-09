@@ -1,0 +1,270 @@
+# Mutation test of step 2a (the registry, definitions, `define`, `get`,
+# `getName`, `whenDefined`):
+# python3 scripts/test.py mutate rfcs/0035-shadow-dom-custom-elements/mutants-2a.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "custom_elements::"]
+timeout = 600
+
+# dom: the registry and its definitions.
+
+[[mutant]]
+name = "the window doesn't keep its registry"
+file = "crates/dom/src/custom_element.rs"
+from = '''        window
+            .object()
+            .custom_elements
+            .set(self, registry.persistent());'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "the registry doesn't keep its window"
+file = "crates/dom/src/custom_element.rs"
+from = '''        registry.object().window.set(self, window.persistent());'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "a definition doesn't link to the earlier ones"
+file = "crates/dom/src/custom_element.rs"
+from = '''        object.next.set_from(self, &registry.first);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "the registry doesn't keep a new definition"
+file = "crates/dom/src/custom_element.rs"
+from = '''        registry.first.set(self, definition.0.persistent());'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "the disconnected callback in the adopted slot"
+file = "crates/dom/src/custom_element.rs"
+from = '''            object.disconnected.set(self, init.disconnected.as_ref());'''
+to = '''            object.disconnected.set(self, init.adopted.as_ref());'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "no attributeChangedCallback kept"
+file = "crates/dom/src/custom_element.rs"
+from = '''                .set(self, init.attribute_changed.as_ref());'''
+to = '''                .set(self, None);'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "connected read from the disconnected slot"
+file = "crates/dom/src/custom_element.rs"
+from = '''            LifecycleCallback::Connected => &object.connected,'''
+to = '''            LifecycleCallback::Connected => &object.disconnected,'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "disable shadow from disable internals"
+file = "crates/dom/src/custom_element.rs"
+from = '''                    disable_shadow: init.disable_shadow,'''
+to = '''                    disable_shadow: init.disable_internals,'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "no observed attributes kept"
+file = "crates/dom/src/custom_element.rs"
+from = '''                    observed_attributes: init.observed_attributes,'''
+to = '''                    observed_attributes: Vec::new(),'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "a definition found by its local name"
+file = "crates/dom/src/custom_element.rs"
+from = '''            .find(|definition| definition.name() == name)'''
+to = '''            .find(|definition| definition.local_name() == name)'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "the running flag never set"
+file = "crates/dom/src/custom_element.rs"
+from = '''        self.own(registry).running.set(running);'''
+to = '''        self.own(registry).running.set(false);'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "a when-defined promise not taken out"
+file = "crates/dom/src/custom_element.rs"
+from = '''        Some(map.remove(index).1)'''
+to = '''        Some(map[index].1)'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+# dom_api: HTML's `define`, `get`, `getName`, `whenDefined`.
+
+[[mutant]]
+name = "define takes what isn't a constructor"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    if !cx.is_constructor(&constructor) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "define takes any name"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    if !crate::html_element::is_valid_custom_element_name(name) {
+        return Err(DomException::new(
+            ExceptionName::SyntaxError,
+            format!("define: '''
+to = '''    if false {
+        return Err(DomException::new(
+            ExceptionName::SyntaxError,
+            format!("define: '''
+
+[[mutant]]
+name = "a name defined twice"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    if cx.read().custom_element_definition(this, name).is_some() {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a constructor defined twice"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''        .is_some()
+    {
+        return Err(not_supported("define: the constructor is defined already"));'''
+to = '''        .is_none()
+    {
+        return Err(not_supported("define: the constructor is defined already"));'''
+
+[[mutant]]
+name = "customized built-ins defined"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    if options.extends.is_some() {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "define while defining"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    if cx.read().element_definition_is_running(this) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "the running flag not set while reading"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    cx.mutate().set_element_definition_is_running(this, true);'''
+to = ''''''
+
+[[mutant]]
+name = "the running flag left set when reading throws"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    let read = cx.read_custom_element_constructor(&constructor);
+    cx.mutate().set_element_definition_is_running(this, false);
+    let info = read?;'''
+to = '''    let info = cx.read_custom_element_constructor(&constructor)?;
+    cx.mutate().set_element_definition_is_running(this, false);'''
+
+[[mutant]]
+name = "the waiting promise not resolved on define"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''            .resolve(cx, constructor);
+    }
+}'''
+to = '''            ;
+    }
+}'''
+
+[[mutant]]
+name = "get gives nothing"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    Ok(definition.map(|definition| cx.mutate().custom_element_constructor(&definition)))'''
+to = '''    Ok(definition.and(None))'''
+
+[[mutant]]
+name = "getName gives nothing"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''        .map(|definition| DomString::from(definition.name())))'''
+to = '''        .and(None))'''
+
+[[mutant]]
+name = "whenDefined takes any name"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    let name = name.as_str();
+    if !crate::html_element::is_valid_custom_element_name(name) {
+        return Err(DomException::new(
+            ExceptionName::SyntaxError,
+            format!("whenDefined: '''
+to = '''    let name = name.as_str();
+    if false {
+        return Err(DomException::new(
+            ExceptionName::SyntaxError,
+            format!("whenDefined: '''
+
+[[mutant]]
+name = "whenDefined of a defined name never resolves"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''        promise.resolve(cx, constructor);
+        return Ok(promise);'''
+to = '''        let _ = constructor;
+        return Ok(promise);'''
+
+[[mutant]]
+name = "whenDefined a new promise each call"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    if let Some(waiting) = cx.read().when_defined_promise(this, name) {'''
+to = '''    if let Some(waiting) = None {'''
+
+[[mutant]]
+name = "whenDefined's promise not kept for define"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    cx.mutate()
+        .set_when_defined_promise(this, name, promise.id().get());'''
+to = ''''''
+
+# dom_js: reading the constructor.
+
+[[mutant]]
+name = "every function a constructor"
+file = "crates/dom_js/src/host.rs"
+from = '''        object.is_constructor()'''
+to = '''        object.is_function()'''
+
+[[mutant]]
+name = "any prototype"
+file = "crates/dom_js/src/host.rs"
+from = '''        let Ok(prototype) = v8::Local::<v8::Object>::try_from(prototype) else {'''
+to = '''        let Ok(prototype) = v8::Local::<v8::Object>::try_from(constructor) else {'''
+
+[[mutant]]
+name = "adopted read before disconnected"
+file = "crates/dom_js/src/host.rs"
+from = '''            "disconnectedCallback",
+            "adoptedCallback",'''
+to = '''            "adoptedCallback",
+            "disconnectedCallback",'''
+
+[[mutant]]
+name = "observedAttributes read without attributeChangedCallback"
+file = "crates/dom_js/src/host.rs"
+from = '''        if info.attribute_changed.is_some() {
+            info.observed_attributes'''
+to = '''        if true {
+            info.observed_attributes'''
+
+[[mutant]]
+name = "disabledFeatures not read"
+file = "crates/dom_js/src/host.rs"
+from = '''        info.disabled_features = self.strings(constructor, "disabledFeatures")?;'''
+to = ''''''
+
+[[mutant]]
+name = "the form callbacks not read"
+file = "crates/dom_js/src/host.rs"
+from = '''        if info.form_associated {
+            for name in ['''
+to = '''        if false {
+            for name in ['''
+
+[[mutant]]
+name = "a callback that isn't a function taken as none"
+file = "crates/dom_js/src/host.rs"
+from = '''            Err(_) => Err(ApiError::Type(format!("define: {name} is not a function"))),'''
+to = '''            Err(_) => Ok(None),'''
+
+[[mutant]]
+name = "what a callback's getter throws ignored"
+file = "crates/dom_js/src/host.rs"
+from = '''            let callback = self.function(prototype, name)?;'''
+to = '''            let callback = self.function(prototype, name).unwrap_or(None);'''

@@ -1,0 +1,65 @@
+# 1a: the rare inherited properties in a shared group (`computed_style`,
+# `css`, `style`, `layout`).
+#   python3 scripts/test.py mutate rfcs/0068-parsed-css/mutants-1a.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "style_groups::"]
+timeout = 900
+
+[[mutant]]
+name = "a child's own copy of its parent's group"
+file = "crates/computed_style/src/lib.rs"
+from = '''                    rare_inherited: parent.rare_inherited.clone(),'''
+to = '''                    rare_inherited: Arc::new((*parent.rare_inherited).clone()),'''
+
+[[mutant]]
+name = "the parent's decorations written again"
+file = "crates/css/src/properties.rs"
+from = '''    if !Arc::ptr_eq(&decorations, &style.rare_inherited.applied_text_decorations) {'''
+to = '''    if true {'''
+
+[[mutant]]
+name = "a float's empty decorations written again"
+file = "crates/style/src/lib.rs"
+from = '''        if decorations != style.rare_inherited.applied_text_decorations {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "the same inherited values in another copy differ"
+file = "crates/computed_style/src/lib.rs"
+from = '''                || self.rare_inherited == other.rare_inherited)'''
+to = '''                || false)'''
+
+[[mutant]]
+name = "the inherited group not compared"
+file = "crates/computed_style/src/lib.rs"
+from = '''            && (Arc::ptr_eq(&self.rare_inherited, &other.rare_inherited)
+                || self.rare_inherited == other.rare_inherited)'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::"]
+
+[[mutant]]
+name = "an anonymous block indented"
+file = "crates/computed_style/src/lib.rs"
+from = '''        if style.rare_inherited.text_indent != LengthPercentage::Px(0.0) {
+            style.rare_inherited_mut().text_indent = LengthPercentage::Px(0.0);
+        }
+        style'''
+to = '''        style'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "inline::"]
+
+[[mutant]]
+name = "a marker indented"
+file = "crates/style/src/lib.rs"
+from = '''            if style.rare_inherited.text_indent != LengthPercentage::Px(0.0) {
+                style.rare_inherited_mut().text_indent = LengthPercentage::Px(0.0);
+            }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "lists::"]
+
+[[mutant]]
+name = "a layout value hidden by the paint-only ones"
+file = "crates/layout/src/lib.rs"
+from = '''                new.rare_inherited.clone()
+            } else {'''
+to = '''                std::sync::Arc::new((*old.rare_inherited).clone())
+            } else {'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::"]

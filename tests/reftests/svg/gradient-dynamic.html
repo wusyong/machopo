@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>A shape follows its gradient: a stop's color, an id given later, another href, an attribute, from another svg</title>
+<link rel="match" href="gradient-dynamic-ref.html">
+<meta name="fuzzy" content="maxDifference=0-3;totalPixels=0-400">
+<style>body { margin: 0 } svg { display: block }</style>
+<svg width="0" height="0" style="position: absolute">
+  <linearGradient id="g1"><stop stop-color="red"/><stop id="s" offset="1" stop-color="lime"/></linearGradient>
+  <linearGradient id="g3" href="#g4"/>
+  <linearGradient id="g4"><stop stop-color="lime"/><stop offset="1" stop-color="lime"/></linearGradient>
+  <linearGradient id="g5" x2="0.5"><stop stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient>
+</svg>
+<svg width="220" height="120">
+  <rect x="10" y="10" width="100" height="40" fill="url(#g1)"/>
+  <rect x="120" y="10" width="90" height="40" fill="url(#later) lime"/>
+  <rect x="10" y="60" width="100" height="40" fill="url(#g3)"/>
+  <rect x="120" y="60" width="90" height="40" fill="url(#g5)"/>
+</svg>
+<script>
+requestAnimationFrame(() => requestAnimationFrame(() => {
+  document.getElementById("s").setAttribute("stop-color", "blue");
+  const later = document.createElementNS("http://www.w3.org/2000/svg", "linearGradient");
+  later.setAttribute("id", "later");
+  later.setAttribute("href", "#g1");
+  document.querySelector("svg").append(later);
+  document.getElementById("g3").setAttribute("href", "#g1");
+  document.getElementById("g5").setAttribute("x2", "1");
+  requestAnimationFrame(() => requestAnimationFrame(() => document.documentElement.classList.remove("reftest-wait")));
+}));
+</script>
+</html>

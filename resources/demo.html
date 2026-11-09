@@ -1,0 +1,1504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>machopo demo</title>
+<style>
+  body { margin: 0; background-color: #ffffff; color: #202124; font-family: sans-serif; }
+  .bar { height: 64px; background-color: #1a73e8; padding: 14px 16px; box-sizing: border-box; }
+  .address { height: 36px; background-color: #e6eefc; }
+  .page { margin: 32px 24px; }
+  .hero { padding: 24px; background-color: #e8f0fe; border: 2px solid #1a73e8; }
+  .hero h1 { margin: 0 0 8px 0; font-size: 32px; }
+  .card { margin-top: 24px; padding: 16px; height: 96px; border: 1px solid; }
+  .red { background-color: #ea4335; border-color: #a42f25; }
+  .yellow { background-color: #fbbc04; border-color: #b08403; }
+  .green { background-color: #34a853; border-color: #24763a; }
+  .band { margin-top: -72px; height: 48px; background-color: #000000; opacity: 0.25; }
+  .clip { margin-top: 48px; height: 80px; overflow: hidden; border: 1px solid #202124; }
+  .clip div { height: 160px; background-color: #9aa0a6; transform: translate(24px, 24px); }
+  .footer { margin-top: 48px; height: 48px; background-color: #202124; }
+  .script { margin-top: 24px; padding: 16px; border: 1px solid #1a73e8; }
+  .script p { margin: 8px 0; }
+  .button { padding: 4px 12px; background-color: #1a73e8; color: #ffffff; }
+  .track { height: 24px; background-color: #e8f0fe; }
+  #mover { width: 24px; height: 24px; background-color: #1a73e8; }
+  #light { width: 24px; height: 24px; background-color: #ea4335; }
+  .layer-note { margin: 24px 0 8px 0; }
+  .scroller { width: 320px; height: 120px; overflow: auto; border: 1px solid #202124; }
+  .scroller div { height: 40px; padding-left: 8px; }
+  .scroller .a { background-color: #e8f0fe; }
+  .scroller .b { background-color: #fce8e6; }
+  .covered { margin-top: 16px; }
+  .hairline { width: 319px; height: 39px; border: 0.5px solid #202124; }
+  .stripes { width: 320px; margin-top: 8px; }
+  .stripes div { height: 0.5px; background-color: #202124; }
+  .stripes div:nth-child(even) { background-color: #ffffff; }
+  .over { width: 120px; height: 40px; margin: -20px 0 0 240px; background-color: #34a853; }
+  .flex { display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+          margin-top: 16px; padding: 8px; border: 1px solid #1a73e8; }
+  .flex span { flex: 1; padding: 8px; background-color: #e8f0fe; text-align: center; }
+  #flex-b { flex: 2; font-size: 28px; background-color: #fce8e6; }
+  .cards { display: flex; margin-top: 16px; }
+  .cards span { width: 120px; height: 48px; padding: 4px; border: 1px solid #202124; }
+  #card-1 { margin-right: -70px; background-color: #fbbc04; }
+  #card-2 { background-color: #4285f4; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px;
+           margin-top: 16px; }
+  .tiles div { padding: 8px; background-color: #e8f0fe; border: 1px solid #1a73e8; }
+  #tile-1 { background-color: #fce8e6; }
+  .areas { display: grid; gap: 8px; margin-top: 16px;
+           grid-template: "head head" auto "side main" 80px "foot foot" auto / 120px 1fr; }
+  .areas div { padding: 8px; background-color: #e8f0fe; border: 1px solid #1a73e8; }
+  .navbar { margin-top: 16px; padding: 4px; background-color: #e8f0fe; }
+  .navbar span { display: inline-block; padding: 4px 12px; margin-right: 8px;
+                 background-color: #ffffff; border: 1px solid #1a73e8; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px;
+          background-color: #e8f0fe; border: 1px solid #1a73e8; }
+  .chip i { width: 8px; height: 8px; background-color: #34a853; }
+  .avatars { margin-top: 16px; }
+  .avatars span { display: inline-block; position: relative; width: 40px; height: 40px;
+                  margin-right: -12px; border: 2px solid #ffffff; color: #ffffff;
+                  text-align: center; line-height: 40px; }
+  /* A size of its own, so where it lands doesn't depend on the font. */
+  #fixed-bar { position: fixed; top: 0; right: 0; width: 88px; height: 20px;
+               background-color: #1a73e8; color: #ffffff; text-align: center; }
+  .menu-bar { position: relative; margin-top: 16px; width: 200px; height: 24px;
+              background-color: #e8f0fe; border: 1px solid #1a73e8; }
+  #dropdown { position: absolute; top: 26px; left: 20px; width: 160px; height: 48px;
+              background-color: #34a853; color: #ffffff; text-align: center;
+              line-height: 48px; }
+  /* Backgrounds: a gradient card, and an avatar whose image covers it, cut
+     to a circle. */
+  .backgrounds { display: flex; gap: 12px; margin-top: 16px; }
+  #canvas-demo, #canvas-paths, #canvas-text, #canvas-styles { display: block; margin-top: 16px; border: 1px solid #ccc; border-radius: 8px; }
+  #canvas-copy-img { display: block; }
+  #ro-box { margin-top: 16px; padding: 8px; height: 20px; border: 2px solid #1a73e8; border-radius: 8px; }
+  #io-list { margin-top: 16px; height: 100px; overflow: auto; border: 2px solid #1a73e8; border-radius: 8px; }
+  #io-list .spacer { height: 150px; padding: 8px; box-sizing: border-box; }
+  #io-box { height: 40px; background: #e8f0fe; }
+  #io-box.shown { background: #ceead6; }
+  #bg-card { width: 180px; height: 48px; padding: 8px; color: white; border-radius: 12px;
+             box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+             background: linear-gradient(135deg, #4285f4, #34a853); }
+  #bg-card.restyled { background: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAGklEQVR4nGN45WwKR/+RAAMVJZA5yIqoKAEAvhKL4XzpN60AAAAASUVORK5CYII=) right 8px top 8px / 16px 16px no-repeat,
+                                  repeating-linear-gradient(45deg, #fbbc04 0 10px, #ea4335 10px 20px); }
+  #bg-avatar { width: 64px; height: 64px; border-radius: 50%;
+               background: url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAGklEQVR4nGN45WwKR/+RAAMVJZA5yIqoKAEAvhKL4XzpN60AAAAASUVORK5CYII=) center / cover, #eee; }
+  /* An image-set(): a blue 16px image for 1x screens, a green 32px one
+     for 2x, both shown 16 CSS px wide. */
+  #bg-set { width: 64px; height: 64px; border: 1px solid #ccc; border-radius: 8px;
+            background: image-set(url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAFklEQVR42mNwav1CEmIY1TCqYfhqAADQu7sQzMqUQgAAAABJRU5ErkJggg==) 1x,
+                                  url(data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAKklEQVR42mMwWRFMU8QwasGoBaMWjFowasGoBaMWjFowasGoBaMWDBULAP6svD3I4Km6AAAAAElFTkSuQmCC) 2x) center no-repeat; }
+  #avatar-1 { z-index: 3; background-color: #ea4335; }
+  #avatar-2 { z-index: 2; background-color: #fbbc04; }
+  #avatar-3 { z-index: 1; background-color: #4285f4; }
+  .badge { position: relative; top: -10px; left: -4px; padding: 0 6px;
+           background-color: #ea4335; color: #ffffff; }
+  #area-head { grid-area: head; }
+  #area-side { grid-area: side; background-color: #fce8e6; }
+  #area-main { grid-area: main; }
+  #area-foot { grid-area: foot; }
+  .swatch { display: inline-block; width: 16px; height: 16px; background-color: #34a853; }
+  /* Custom properties: the root's, which the var() button changes. */
+  #themed { background-color: var(--accent, #34a853); width: var(--wide, 16px); }
+  /* calc() of a viewport unit and a length: styled again on a resize. */
+  #calc-bar { width: calc(10vw - 20px); }
+  /* @media: the swatch is wider in a wide window. */
+  #media-swatch { width: 16px; }
+  @media (min-width: 800px) { #media-swatch { width: 48px; } }
+  /* :hover and :active: red under the mouse, blue while a button is down. */
+  #hover-swatch:hover { background-color: #ea4335; }
+  #hover-swatch:active { background-color: #4285f4; }
+  /* :target: blue while the URL's fragment names it. */
+  #target-swatch:target { background-color: #4285f4; }
+  .label { width: fit-content; margin-top: 16px; padding: 4px 12px; background-color: #e8f0fe;
+           border: 1px solid #1a73e8; }
+  .focus-links a { padding: 4px 12px; margin-right: 8px; }
+  .focus-links a:focus { background-color: #fbbc04; }
+  .keypad { width: 120px; height: 60px; background-color: #e8f0fe; border: 1px solid #1a73e8; }
+  .keypad:focus { background-color: #fce8e6; }
+  .box { margin: 0 6px 0 0; }
+  .form-demo label { margin-right: 16px; }
+  .form-demo fieldset { margin: 8px 0; padding: 4px 12px; border: 1px solid #c0c0c0; }
+  .form-demo form button { padding: 4px 12px; border: 1px solid #1a73e8; background-color: #e8f0fe; }
+  #dot { width: 12px; height: 12px; background-color: #1a73e8; }
+  .wheel-pad { width: 320px; height: 60px; padding: 8px; box-sizing: border-box;
+               background-color: #e8f0fe; border: 1px solid #1a73e8; }
+</style>
+</head>
+<body>
+  <div class="bar"><div class="address"></div></div>
+  <div class="page">
+    <div class="hero">
+      <h1>machopo</h1>
+      <p>A Chromium-like browser in Rust. This page is rendered by machopo's pipeline:
+      html5ever, the cppgc-backed DOM, style, taffy + parley layout, paint and cc.
+      V8 runs the script in the box below.</p>
+    </div>
+    <div class="script">
+      <div class="track"><div id="mover"></div></div>
+      <p>The blue square moves every frame. Only the tiles it
+         passes through are rastered again, not the whole page, only its own style is
+         computed again, only its box takes the new style, the rest of the box tree
+         staying as it is, only it and the boxes it is in are laid out again, the
+         others keeping their fragments, and only it is painted again, the others'
+         display items taken from the last paint: run with
+         <code>RUST_LOG=compositor=debug,style=debug,layout=debug,paint=debug</code> to see
+         how many each frame.</p>
+      <p><span id="clicker" class="button" onclick="clicked()">Click me</span>
+         <span id="count">Not clicked yet.</span></p>
+      <p><a href="https://example.com/" id="kept">A link script keeps you from following</a>
+         <span id="kept-note"></span></p>
+      <div id="light"></div>
+      <p id="clock">The clock starts when the script runs.</p>
+      <p id="status">Loading.</p>
+      <p><span id="toggle" class="button" onclick="toggle()">Hide or show</span>
+         <span id="toggled">this text, whose boxes are built again each time while the
+         paragraph's other boxes stay.</span></p>
+      <p><span id="now" class="button" onclick="showNow()">performance.now()</span>
+         <span id="now-note">The time since this page's navigation started, in
+         milliseconds, coarsened to 0.1 ms as HR-Time asks. Each click is
+         marked, and measured from the first (User Timing).</span>
+         <span id="now-count">The button counts its clicks in its data-clicks attribute
+         (dataset), and puts the count in the tab's title (document.title).</span></p>
+      <p><span id="markup" class="button" onclick="markup()">innerHTML</span>
+         <span id="markup-note">Builds this text from markup, then adds the markup it reads
+         back.</span></p>
+      <p><span id="observe" class="button" onclick="observe()">MutationObserver</span>
+         <span id="observe-note">Changes <span id="observed">a</span> three ways in one click;
+         an observer reports the records in a microtask after it.</span></p>
+      <p><span id="abort-start" class="button" onclick="startWaiting()">Start</span>
+         <span id="abort-cancel" class="button" onclick="cancelWaiting()">Cancel</span>
+         <span id="abort-note">Start waits on one signal for two things, whichever comes first:
+         Cancel (an AbortController) or two seconds passing (AbortSignal.timeout), joined by
+         AbortSignal.any.</span></p>
+      <p><span id="walk" class="button" onclick="walkButtons()">TreeWalker</span>
+         <span id="walk-note">Names this page's buttons, found by a TreeWalker whose filter
+         accepts only them.</span></p>
+      <p><span id="module-note">A module script replaces this text once the page
+         is parsed, with what it imports from another module.</span></p>
+      <p><span id="restyle" class="button" onclick="restyle()">element.style</span>
+         <span id="swatch" class="swatch"></span>
+         <span id="restyle-note">Gives the green square another color and width through
+         element.style, then takes them away.</span></p>
+      <p><span id="computed" class="button" onclick="computedStyle()">getComputedStyle</span>
+         <span id="computed-note">Reads the green square's computed style: lengths in px,
+         colors resolved, whatever element.style says.</span></p>
+      <p><span id="adopt" class="button" onclick="adoptSheet()">adoptedStyleSheets</span>
+         <span id="adopted" class="swatch"></span>
+         <span id="adopt-note">Adopts a constructed stylesheet that paints this square blue,
+         then replaces its rules (yellow and wider), then adopts nothing again.</span></p>
+      <p><span id="theme" class="button" onclick="switchTheme()">var()</span>
+         <span id="themed" class="swatch"></span>
+         <span id="theme-note">This square takes its color and width from custom properties
+         of the root element, through var() with fallbacks: the button sets them in turn,
+         then removes them.</span></p>
+      <p><span id="measure-calc" class="button" onclick="measureCalc()">calc()</span>
+         <span id="calc-bar" class="swatch"></span>
+         <span id="calc-note">This bar is calc(10vw - 20px) wide: a tenth of the window's
+         width, less 20px. Click to measure it; resize the window and it follows.</span></p>
+      <p><span id="media-swatch" class="swatch"></span>
+         <span id="media-note">An @media rule widens this swatch in a window at least
+         800px wide, and matchMedia() says which it is.</span></p>
+      <p><span id="hover-swatch" class="swatch"></span>
+         <span id="hover-note">This swatch is red under the mouse (:hover) and blue while a
+         button is down on it (:active); it counts the mouse entering and leaving it.</span></p>
+      <p><span id="target-swatch" class="swatch"></span>
+         <a id="target-link" href="#target-swatch">This swatch turns blue when this link
+         navigates to it (:target).</a></p>
+      <p><span id="logical-button" class="button" onclick="moveLogical()">margin-inline-start</span>
+         <span id="logical" class="swatch"></span>
+         <span id="logical-note">The button sets this square's margin-inline-start and
+         inline-size, which are its margin-left and width here (left to right); then a
+         margin-left set after them wins; then it clears them.</span></p>
+      <p id="ellipsis-note" style="width: 24em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis">
+         This line is too long for its box: it is cut where the ellipsis fits
+         (text-overflow: ellipsis), and the rest of it isn't painted or hit.</p>
+      <div id="float-note" style="width: 24em">
+        <span style="float: left; width: 4em; height: 3em; margin: 0.2em 0.5em 0 0; background: #3a3"></span>
+        This text goes around the green square, which floats left (float: left):
+        the lines beside it start past it and are shorter, and the ones below it
+        are the whole width again. A box that clears it (clear: left) goes below it.
+        <div style="clear: left; color: #555">This line clears the float.</div></div>
+      <p><span id="measure" class="button" onclick="measure()">getBoundingClientRect</span>
+         <span id="measure-note">Measures the green square above as it is laid out now (it
+         is wider after element.style),</span>
+         <span id="window-note">and the window.</span></p>
+      <p><span id="scroll-box" class="button" onclick="scrollBox()">scrollBy</span>
+         <span id="scroll-note">Scrolls the first box below by 40px from script, up to its end.</span></p>
+      <p><span id="hit-box" class="button" onclick="hitBox()">elementsFromPoint</span>
+         <span id="hit-note">Names what is at the middle of the first box below, the topmost
+         first, as it is scrolled now, scrolling the window to the box first if it is out of
+         view.</span></p>
+      <p><span id="into-view" class="button" onclick="intoView()">scrollIntoView</span>
+         <span id="into-view-note">Centers row A4 of the first box below in it, and then in the
+         window: every scroll box out from the element is scrolled by the alignment asked for.</span></p>
+      <p><span id="import" class="button" onclick="importModule()">import()</span>
+         <span id="import-note">Imports a module from a data: URL when clicked:
+         the second time, the module map has it, and it doesn't run again.</span></p>
+      <p><span id="insert" class="button" onclick="insertScripts()">Insert scripts</span>
+         <span id="insert-note">Inserts two script elements when clicked: an inline
+         one, which runs before append() returns, and one from a data: URL, which runs once it
+         has loaded.</span></p>
+      <p><span id="hash" class="button" onclick="changeHash()">location.hash</span>
+         <span id="hash-note">Navigates to a fragment of this document when clicked:
+         location.hash, then location.href; the URL changes at once, nothing
+         loads (the count goes on), and hashchange comes after.</span></p>
+      <p><span id="push" class="button" onclick="pushHistory()">history.pushState</span>
+         <span id="push-note">Adds an entry of this document when clicked: back
+         and forward between its entries load nothing (the count goes on), and popstate
+         brings each one's state back.</span></p>
+      <p><span id="fetch" class="button" onclick="fetchData()">fetch()</span>
+         <span id="fetch-note">Fetches a data: URL when clicked, through the browser's
+         network service, then reads its body as JSON (a promise that settles once the body
+         is read).</span></p>
+      <p><span id="preload-note">A &lt;link rel=modulepreload&gt; fetches the
+         module import() imports, without running it, and replaces this text when it fires
+         load.</span></p>
+      <link id="preload" rel="modulepreload"
+            href="data:text/javascript,globalThis.moduleRuns = (globalThis.moduleRuns || 0) + 1;export const runs = globalThis.moduleRuns;"
+            onload="document.getElementById('preload-note').textContent =
+              'load fired: modulepreload fetched the module import() imports, which has run ' +
+              (globalThis.moduleRuns || 0) + ' times so far.'">
+      <p><span id="stall" class="button" onclick="stall()">Busy for 3 seconds</span>
+         <span id="stall-note">Script then keeps the page busy: scroll meanwhile, and the
+         page still moves, while the clock and the blue square wait.</span></p>
+      <p>Type <code>about:gpucrash</code> in the address field to lose the GPU device, as a
+         driver reset would: the page and the toolbar are drawn again on a new one. Only
+         what you type does that: <a href="about:gpucrash">a link to it</a> is just a
+         navigation, to an error page.</p>
+    </div>
+    <div class="script" id="input-demo">
+      <p>Keys, the focus and the wheel. Tab and Shift+Tab move the focus through
+         the page; on these three links it shows yellow (:focus), and Enter follows one.</p>
+      <p class="focus-links"><a href="#input-demo" id="focus-one">One</a><a
+         href="#input-demo" id="focus-two">Two</a><a href="#input-demo"
+         id="focus-three">Three</a></p>
+      <p id="focus-note">The focus is on nothing here yet.</p>
+      <div id="keypad" class="keypad" tabindex="0"><div id="dot"></div></div>
+      <p id="dot-note">Click the box above (it takes the focus, pink) and press the arrow keys:
+         its keydown listener moves the dot and cancels the page's scrolling.</p>
+      <p id="key-log">The last key the page got: none yet.</p>
+      <div id="wheel-pad" class="wheel-pad">The wheel over this box goes to its listener,
+         which cancels it: the page doesn't scroll here.</div>
+      <p id="wheel-log">No wheel over the box yet.</p>
+    </div>
+    <script>
+      (() => {
+        const byId = (id) => document.getElementById(id);
+        const names = { "focus-one": "One", "focus-two": "Two", "focus-three": "Three",
+                        keypad: "the box" };
+        document.addEventListener("focusin", (event) => {
+          const name = names[event.target.id];
+          if (name) byId("focus-note").textContent = `The focus is on ${name}.`;
+        });
+        document.addEventListener("keydown", (event) => {
+          byId("key-log").textContent =
+            `The last key the page got: ${event.key} (code ${event.code}, keyCode ${event.keyCode}).`;
+        });
+        const dot = { x: 0, y: 0 };
+        const steps = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+        byId("keypad").addEventListener("keydown", (event) => {
+          const step = steps[event.key];
+          if (!step) return;
+          event.preventDefault();
+          dot.x = Math.min(9, Math.max(0, dot.x + step[0]));
+          dot.y = Math.min(4, Math.max(0, dot.y + step[1]));
+          byId("dot").style.marginLeft = `${dot.x * 12}px`;
+          byId("dot").style.marginTop = `${dot.y * 12}px`;
+          byId("dot-note").textContent = `The dot is at ${dot.x}, ${dot.y}; the page didn't scroll.`;
+        });
+        let wheels = 0;
+        byId("wheel-pad").addEventListener("wheel", (event) => {
+          event.preventDefault();
+          wheels += 1;
+          byId("wheel-log").textContent =
+            `${wheels} ${wheels === 1 ? "wheel" : "wheels"} over the box, the last ${event.deltaY}px down; canceled, so the page stayed.`;
+        });
+      })();
+    </script>
+    <div class="script form-demo" id="form-demo">
+      <p>Forms, with Chrome's native looks (its Windows and Linux ones). Click a label or a box,
+         or Tab to one and press Space; the reset button puts them back. A control under the
+         pointer, or pressed, looks so.</p>
+      <form id="demo-form">
+        <p><input type="checkbox" id="agree" class="box"><label for="agree"
+           id="agree-label">A checkbox</label></p>
+        <p><input type="radio" name="size" value="small" id="size-small" class="box"
+           checked><label for="size-small" id="small-label">Small</label>
+           <input type="radio" name="size" value="large" id="size-large" class="box"><label
+           for="size-large" id="large-label">Large</label></p>
+        <fieldset disabled><legend>A disabled fieldset</legend><input type="checkbox"
+           id="locked" class="box"><label for="locked" id="locked-label">Can't be
+           checked</label></fieldset>
+        <p><button type="reset" id="demo-reset">Reset</button></p>
+      </form>
+      <p id="form-note">Nothing changed yet.</p>
+      <p>Unstyled, the controls are as big as Chrome makes them: a text field 20 characters
+         wide, a text area of 20 columns and 2 rows, a slider, a check box and a radio button,
+         buttons as wide as their text, the second one 40px tall with its text in the middle,
+         a select as wide as its longest option, and a list box of 3 rows.</p>
+      <p id="sized-controls"><input id="sized-text"> <textarea id="sized-area"></textarea>
+         <input type="range" id="sized-range"> <input type="checkbox" id="sized-check">
+         <input type="radio" id="sized-radio"> <button id="sized-button">A button</button>
+         <button id="sized-tall" style="height: 40px"><span id="sized-tall-text">Tall</span></button>
+         <select id="sized-select"><option>One</option><option>The longest option</option></select>
+         <select id="sized-list" size="3"><option id="sized-row">One</option><option selected>Two</option>
+           <option>Three</option><option>Four</option></select></p>
+      <p id="sized-note"></p>
+      <p>Picking from a list: click an option of the list box, Shift+click (or Shift+↓)
+         for a range and Ctrl+click (Cmd+click on a Mac) for one more; ↑, ↓, Home and End
+         move, and the list scrolls to what they pick. The select beside it changes with
+         ↑ and ↓ while it has the focus (its list doesn't open yet).</p>
+      <p><select id="pick-list" multiple size="4"><option>Apple</option><option>Banana</option>
+           <option>Cherry</option><option>Date</option><option>Elderberry</option>
+           <option>Fig</option><option>Grape</option></select>
+         <select id="pick-menu"><option>Small</option><option>Medium</option>
+           <option>Large</option></select></p>
+      <p id="pick-note">Nothing picked yet.</p>
+      <p>Stepping and clearing: the number field's ↑ and ↓, or its spin buttons (held, they
+         repeat), step it by 5; the slider's arrow keys, PageUp, PageDown, Home and End move
+         it; the search field's × or Escape empties it and fires <code>search</code>.</p>
+      <p><input type="number" id="step-number" step="5" min="0" max="50">
+         <input type="range" id="step-range" step="10">
+         <input type="search" id="step-search" value="machopo"></p>
+      <p id="step-note">Nothing stepped yet.</p>
+    </div>
+    <script>
+      (() => {
+        const form = document.getElementById("demo-form");
+        const describe = () => {
+          const agree = form.elements.agree.checked ? "checked" : "not checked";
+          const size = form.querySelector("input[name=size]:checked").value;
+          return `the checkbox is ${agree}, the size is ${size}`;
+        };
+        const note = (text) => { document.getElementById("form-note").textContent = text; };
+        form.addEventListener("change", () => note(`Changed: ${describe()}.`));
+        // The controls reset after the event: read them in a later task.
+        form.addEventListener("reset", () => setTimeout(() => note(`Reset: ${describe()}.`)));
+        // The text field's and the text area's sizes follow the font; these don't.
+        const rect = (id) => document.getElementById(id).getBoundingClientRect();
+        const size = (id) => `${Math.round(rect(id).width)}×${Math.round(rect(id).height)}`;
+        const [tall, text] = [rect("sized-tall"), rect("sized-tall-text")];
+        const [above, below] = [text.top - tall.top, tall.bottom - text.bottom];
+        const middle = Math.abs(above - below) <= 1 ? "in its middle"
+          : `${Math.round(above)}px below its top and ${Math.round(below)}px above its bottom`;
+        const rows = (rect("sized-list").height - 2) / rect("sized-row").height;
+        // What the list box and the select hold, at each `change`.
+        const [list, menu] = [document.getElementById("pick-list"), document.getElementById("pick-menu")];
+        const picked = () => {
+          const names = [...list.selectedOptions].map((option) => option.text);
+          document.getElementById("pick-note").textContent =
+            `Picked: ${names.join(", ") || "nothing"}; the size is ${menu.value}.`;
+        };
+        list.addEventListener("change", picked);
+        menu.addEventListener("change", picked);
+        // What the number, the slider and the search field hold, as they change.
+        const [number, range, search] = ["step-number", "step-range", "step-search"]
+          .map((id) => document.getElementById(id));
+        const stepped = (what) => {
+          document.getElementById("step-note").textContent =
+            `${what}: the number is ${number.value || "empty"}, the slider ${range.value}, ` +
+            `the search "${search.value}".`;
+        };
+        number.addEventListener("input", () => stepped("Stepped"));
+        range.addEventListener("input", () => stepped("Moved"));
+        search.addEventListener("search", () => stepped("Searched"));
+        document.getElementById("sized-note").textContent =
+          `The slider is ${size("sized-range")}, the check box ${size("sized-check")} and the ` +
+          `radio button ${size("sized-radio")}; the tall button's text is ${middle}; ` +
+          `the list box is ${rows} rows high.`;
+      })();
+    </script>
+    <p class="layer-note">The boxes below scroll with the wheel. Each is a layer of its own:
+       scrolling moves its tiles and paints nothing again. The compositor scrolls the first one
+       itself, so it keeps scrolling while the page is busy ("Busy for 3 seconds"). The green
+       block is painted after the second one and overlaps its bottom right corner: it must stay
+       on top while the box scrolls, and as the compositor can't tell what is under the pointer
+       there, the main thread scrolls that box, which waits while the page is busy.</p>
+    <div class="scroller">
+      <div class="a" onclick="picked('A1')">A1</div><div class="b" onclick="picked('A2')">A2</div>
+      <div class="a" onclick="picked('A3')">A3</div><div class="b" onclick="picked('A4')">A4</div>
+      <div class="a" onclick="picked('A5')">A5</div><div class="b" onclick="picked('A6')">A6</div>
+      <div class="a" onclick="picked('A7')">A7</div><div class="b" onclick="picked('A8')">A8</div>
+    </div>
+    <p id="picked">Click a row of the first box: the one under the pointer, where it scrolled to,
+       is named here.</p>
+    <div class="scroller covered">
+      <div class="a">B1</div><div class="b">B2</div><div class="a">B3</div><div class="b">B4</div>
+      <div class="a">B5</div><div class="b">B6</div><div class="a">B7</div><div class="b">B8</div>
+    </div>
+    <div class="over"></div>
+    <p class="layer-note">On a 2x display: the box below has a 0.5px border, one device
+       pixel on all four sides, and under it are sixteen 0.5px stripes, alternating dark and
+       white one device pixel each. At 1x the border is one pixel, and the stripes round to
+       whole pixels.</p>
+    <div class="hairline"></div>
+    <div class="stripes">
+      <div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div>
+      <div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div>
+    </div>
+    <div class="card red"></div>
+    <div class="card yellow"></div>
+    <div class="card green"></div>
+    <div class="band"></div>
+    <div class="clip"><div></div></div>
+    <p class="layer-note">Flex layout: three items share the row, B twice as wide
+       (<code>flex: 2</code>), their first lines on one baseline. The button gives A
+       <code>order: 1</code> and back: A moves to the end, and no box is built again.</p>
+    <div class="flex"><span id="flex-a">A</span><span id="flex-b">B</span><span id="flex-c">C</span></div>
+    <p><span id="flex-order" class="button" onclick="moveFirst()">Move A</span>
+       <span id="flex-note">A comes first.</span></p>
+    <p class="layer-note">The two cards are flex items that overlap: each is
+       painted whole, its background then its text, so the later card covers the earlier one.
+       <code>z-index</code> on a flex item makes it a stacking context: "Raise 1" gives the
+       first card <code>z-index: 1</code>, over the other. Click where they overlap: the one on
+       top is named.</p>
+    <div class="cards"><span id="card-1" onclick="picked('card 1')">1</span><span id="card-2"
+       onclick="picked('card 2')">2</span></div>
+    <p><span id="raise" class="button" onclick="raise()">Raise 1</span>
+       <span id="raise-note">Card 1 is under card 2.</span></p>
+    <p class="layer-note">The label below has <code>width: fit-content</code>: as wide
+       as its text, up to the room there is, then its text wraps. "Add a word" makes it
+       wider.</p>
+    <div id="label" class="label">fit-content</div>
+    <p><span id="grow" class="button" onclick="addWord()">Add a word</span>
+       <span id="grow-note">One word.</span></p>
+    <p class="layer-note">Grid layout: as many 120px-or-wider columns as fit
+       (<code>repeat(auto-fill, minmax(120px, 1fr))</code>), the tiles placed in order. "Widen
+       tile 1" gives it <code>grid-column: span 2</code>: the others move on.</p>
+    <div class="tiles"><div id="tile-1">1</div><div>2</div><div>3</div><div>4</div><div>5</div>
+      <div id="tile-6">6</div></div>
+    <p><span id="widen" class="button" onclick="widen()">Widen tile 1</span>
+       <span id="widen-note">Tile 1 takes one column.</span></p>
+    <p class="layer-note">A page laid out by name: <code>grid-template</code> gives
+       the areas, and each part goes in its area (<code>grid-area: side</code>), whatever its
+       place in the markup. "Swap sides" changes only the container's
+       <code>grid-template-areas</code>.</p>
+    <div id="areas" class="areas"><div id="area-main">Main</div><div id="area-side">Side</div>
+      <div id="area-head">Header</div><div id="area-foot">Footer</div></div>
+    <p><span id="swap" class="button" onclick="swapSides()">Swap sides</span>
+       <span id="swap-note">The side is on the left.</span></p>
+    <p class="layer-note">Inline-blocks: each link is a box as wide as its text, on
+       the line's baseline, and the line places them. "Rename" makes the first one longer: the
+       others move along.</p>
+    <div class="navbar"><span id="nav-1">Home</span><span id="nav-2">Docs</span><span
+      id="nav-3">Blog</span></div>
+    <p><span id="rename" class="button" onclick="rename()">Rename</span>
+       <span id="rename-note">The first link is Home.</span></p>
+    <p class="layer-note">An inline-flex chip on this line: <span id="chip"
+       class="chip"><i></i><span id="chip-count">3 new</span></span> its items centered, on
+       the line's baseline. "More" gives it a longer count: the text after it moves along.</p>
+    <p><span id="more" class="button" onclick="more()">More</span>
+       <span id="more-note">3 new.</span></p>
+    <p class="layer-note">Positioned boxes: the avatars overlap, and
+       <code>z-index</code> on them (they are <code>position: relative</code>) says which is on
+       top; the badge is moved up off its line by <code>top</code>. "Bring 3 forward" gives the
+       last one the highest <code>z-index</code>.</p>
+    <div class="avatars"><span id="avatar-1">1</span><span id="avatar-2">2</span><span
+      id="avatar-3">3</span></div>
+    <p><span id="forward" class="button" onclick="forward()">Bring 3 forward</span><span
+       class="badge">5</span> <span id="forward-note">Avatar 1 is on top.</span></p>
+    <p class="layer-note">Out of the flow: "Open menu" shows a
+       <code>position: absolute</code> dropdown. It is placed in the bar below, its containing
+       block (the nearest <code>position: relative</code> ancestor), and paints over what
+       follows it; <code>offsetParent</code> and <code>getComputedStyle</code> say where it
+       landed.</p>
+    <p><span id="menu-open" class="button" onclick="openMenu()">Open menu</span>
+       <span id="menu-note">The menu is closed.</span></p>
+    <p class="layer-note">Fixed to the viewport: "Pin a bar" puts a
+       <code>position: fixed</code> bar in the top right corner. It stays there as the page
+       scrolls — the compositor keeps it in place without the main thread — and
+       <code>getBoundingClientRect</code> says the same wherever the page is.</p>
+    <p><span id="pin" class="button" onclick="pinBar()">Pin a bar</span>
+       <span id="pin-note">No bar is pinned.</span></p>
+    <p class="layer-note">Backgrounds: the card is a <code>linear-gradient()</code> with rounded
+       corners and a shadow, the avatar an image scaled to cover it (<code>background-size: cover</code>),
+       cut to a circle (<code>border-radius: 50%</code>). "Restyle the card" gives the card two
+       layers: a small image in its corner over repeating stripes. The square on the right is
+       an <code>image-set()</code>: a blue image on a 1x screen, a green one twice as sharp on
+       a 2x screen, the same size on both.</p>
+    <div class="backgrounds"><div id="bg-card">Card</div><div id="bg-avatar"></div><div
+      id="bg-set"></div></div>
+    <p><span id="bg-restyle" class="button" onclick="restyleCard()">Restyle the card</span>
+       <span id="bg-restyle-note">One layer: a gradient.</span></p>
+    <p class="layer-note">A canvas: its 2D context fills rects with colors. Click the canvas
+       to add a square. "Add one later" adds one from an idle callback a second later,
+       which changes no DOM and asks for no frame itself: the frame that shows it comes
+       because the canvas asks for one. "Read a pixel" reads the first square back with
+       <code>getImageData</code>.</p>
+    <canvas id="canvas-demo" width="240" height="60" onclick="drawSquare()"></canvas>
+    <p><span id="canvas-later" class="button" onclick="drawLater()">Add one later</span>
+       <span id="canvas-read" class="button" onclick="readPixel()">Read a pixel</span>
+       <span id="canvas-note">Click the canvas to add a square.</span></p>
+    <p class="layer-note">Paths: a circle (<code>arc</code>), a rounded rect
+       (<code>roundRect</code>), a dashed line (<code>setLineDash</code>), a triangle with round
+       joins, and a star filled even-odd, cut to a circle (<code>clip</code>). "New size" sets
+       the canvas's <code>width</code>, which clears its bitmap and state; it is drawn again at
+       the new size.</p>
+    <canvas id="canvas-paths" width="240" height="80"></canvas>
+    <p><span id="canvas-resize" class="button" onclick="resizePaths()">New size</span>
+       <span id="canvas-paths-note">240 pixels wide.</span></p>
+    <p class="layer-note">Text: a chart's labels with <code>fillText</code>, each value centered
+       over its bar, the axis's right-aligned on their middle; a title outlined with
+       <code>strokeText</code>; and a box drawn where <code>measureText</code> says a word's ink
+       is. "Bigger text" draws them again in a larger font.</p>
+    <canvas id="canvas-text" width="240" height="140"></canvas>
+    <p><span id="canvas-bigger" class="button" onclick="biggerText()">Bigger text</span>
+       <span id="canvas-text-note">Text at 12px.</span></p>
+    <p class="layer-note">Styles and images: a sky of a linear gradient, a field of a pattern
+       (a small canvas's tiles), a sun of a radial gradient with a shadow, the small canvas
+       drawn scaled, and three <code>Path2D</code>s composited <code>multiply</code>, darker where
+       they overlap. Click a shape: <code>isPointInPath</code> finds it, and
+       <code>getImageData</code> / <code>putImageData</code> turn its box's colors around.
+       "Copy as image" encodes the canvas as a PNG (<code>toBlob</code>) and shows it below in an
+       image, through a blob URL.</p>
+    <canvas id="canvas-styles" width="240" height="140" onclick="pickShape(event)"></canvas>
+    <p><span id="canvas-styles-note">Click a shape.</span></p>
+    <p><span id="canvas-copy" class="button" onclick="copyStyles()">Copy as image</span>
+       <span id="canvas-copy-note">Not copied yet.</span> <span id="canvas-copy-size"></span></p>
+    <img id="canvas-copy-img" alt="">
+    <p class="layer-note">A <code>ResizeObserver</code> watches the box below, as wide as the
+       page: the note says the size of its content box the observer was last given, in the
+       frame that lays it out, before it is painted. Resize the window and the note follows.
+       "More padding" widens its padding: the box stays as wide, its content box narrows.</p>
+    <div id="ro-box">Observed</div>
+    <p><span id="ro-pad" class="button" onclick="padObserved()">More padding</span>
+       <span id="ro-note">Not observed yet.</span></p>
+    <p class="layer-note">An <code>IntersectionObserver</code> watches the last box of the list
+       below, with the list as its root: the note says how much of the box shows in it, from
+       the frame that moved it (at none, half and all of it). Scroll the list with the wheel.</p>
+    <div id="io-list"><div class="spacer">Scroll down.</div><div id="io-box">Observed</div></div>
+    <p><span id="io-note">Not observed yet.</span></p>
+    <p class="layer-note">A custom element with a shadow tree: <code>&lt;machopo-card&gt;</code>
+       styles itself with <code>:host</code> (its frame) from its shadow tree's own
+       <code>&lt;style&gt;</code>, and the page's rule for it wins over that (its corners);
+       an adopted stylesheet colors the footer; none of them styles anything outside it. Its
+       children go in its slots, the title in <code>&lt;slot name="title"&gt;</code>, the rest
+       in the default one, and <code>::slotted(b)</code> underlines the title. "Move the
+       title" gives the title the other slot's name: it is drawn there.</p>
+    <style>machopo-card { border-radius: 6px; }</style>
+    <machopo-card id="card"><b id="card-title" slot="title">Shadow DOM</b>Drawn from a shadow
+       tree.</machopo-card>
+    <p><span id="card-move" class="button" onclick="moveTitle()">Move the title</span>
+       <span id="card-note">The title is at the top.</span></p>
+    <script>
+      customElements.define("machopo-card", class extends HTMLElement {
+        constructor() {
+          super();
+          const root = this.attachShadow({ mode: "open" });
+          root.innerHTML = `<style>
+              :host { display: block; border: 2px solid #1a73e8; border-radius: 0;
+                      padding: 6px 10px; }
+              .title { display: block; color: #1a73e8; }
+              ::slotted(b) { text-decoration: underline; }
+            </style>
+            <span class="title"><slot name="title"></slot></span>
+            <slot></slot><span class="footer"><slot name="footer"></slot></span>`;
+          const sheet = new CSSStyleSheet();
+          sheet.replaceSync(".footer { display: block; color: #188038; }");
+          root.adoptedStyleSheets = [sheet];
+        }
+      });
+      function moveTitle() {
+        const title = document.getElementById("card-title");
+        const top = title.slot === "title";
+        title.slot = top ? "footer" : "title";
+        document.getElementById("card-note").textContent =
+          top ? "The title is at the bottom." : "The title is at the top.";
+      }
+    </script>
+    <p class="layer-note">A table: its columns as wide as their cells' content
+       (<code>colspan</code> spans two), its border and spacing from <code>border</code> and
+       <code>cellspacing</code>, a caption above it, its header row bold, and its cells'
+       content in the middle of their rows (<code>vertical-align</code>), the first column
+       tinted by its <code>&lt;col&gt;</code>'s background. "Add a row" inserts one: the table
+       lays out again around it. "Collapse a column" gives the last <code>&lt;col&gt;</code>
+       <code>visibility: collapse</code>: the column takes no room, and the table narrows.
+       "Collapse borders" sets <code>border-collapse: collapse</code>: the table's and the
+       cells' borders become one line on each grid line, with no spacing between.</p>
+    <table id="demo-table" border="1" cellspacing="2" cellpadding="4">
+      <caption>Browsers</caption>
+      <colgroup><col style="background: #e8f0fe"><col><col id="since-column"></colgroup>
+      <thead><tr><th>Engine</th><th>Layout</th><th>Since</th></tr></thead>
+      <tbody id="demo-table-body">
+        <tr><td>Blink</td><td>LayoutNG</td><td>2013</td></tr>
+        <tr><td style="height: 40px">machopo</td><td colspan="2">taffy, and its own tables</td></tr>
+      </tbody>
+    </table>
+    <p><span id="add-row" class="button" onclick="addRow()">Add a row</span>
+       <span id="table-note">2 rows.</span>
+       <span id="collapse-column" class="button" onclick="collapseColumn()">Collapse a column</span>
+       <span id="column-note">3 columns.</span>
+       <span id="collapse-borders" class="button" onclick="collapseBorders()">Collapse borders</span>
+       <span id="borders-note">Separate borders.</span></p>
+    <script>
+      function addRow() {
+        const body = document.getElementById("demo-table-body");
+        const tr = document.createElement("tr");
+        for (const text of ["Row", String(body.children.length + 1), "added"]) {
+          const td = document.createElement("td");
+          td.textContent = text;
+          tr.appendChild(td);
+        }
+        body.appendChild(tr);
+        document.getElementById("table-note").textContent = `${body.children.length} rows.`;
+      }
+      function collapseBorders() {
+        const table = document.getElementById("demo-table");
+        const collapsed = table.style.borderCollapse !== "collapse";
+        table.style.borderCollapse = collapsed ? "collapse" : "";
+        document.getElementById("borders-note").textContent =
+          collapsed ? "Collapsed borders." : "Separate borders.";
+      }
+      function collapseColumn() {
+        const col = document.getElementById("since-column");
+        const collapsed = col.style.visibility !== "collapse";
+        col.style.visibility = collapsed ? "collapse" : "";
+        document.getElementById("column-note").textContent =
+          collapsed ? "2 columns shown." : "3 columns.";
+      }
+    </script>
+    <p class="layer-note">CSS transitions: the bar below has <code>transition: width 600ms
+       ease-in-out, background-color 600ms</code>. "Move the bar" toggles a class that makes it
+       wider and green: it grows and changes color over the next frames, not at once, and each
+       property's <code>transitionend</code> reaches the note; the second note says where the
+       bar was two frames after the click (partway, not at the end). Clicked again halfway, it
+       goes back from where it is, in less time.</p>
+    <style>
+      #tr-bar { width: 80px; height: 16px; background-color: #1a73e8;
+                transition: width 600ms ease-in-out, background-color 600ms; }
+      #tr-bar.moved { width: 320px; background-color: #188038; }
+    </style>
+    <div id="tr-bar"></div>
+    <p><span id="tr-move" class="button" onclick="moveBar()">Move the bar</span>
+       <span id="tr-note">Not moved yet.</span>
+       <span id="tr-frame"></span></p>
+    <script>
+      let barEnded = [];
+      document.getElementById("tr-bar").addEventListener("transitionend", (e) => {
+        barEnded.push(e.propertyName);
+        if (barEnded.length === 2) {
+          const moved = document.getElementById("tr-bar").classList.contains("moved");
+          document.getElementById("tr-note").textContent =
+            `${moved ? "Moved" : "Back"}: ${barEnded.sort().join(" and ")} ended.`;
+        }
+      });
+      function moveBar() {
+        barEnded = [];
+        const bar = document.getElementById("tr-bar");
+        bar.classList.toggle("moved");
+        document.getElementById("tr-note").textContent = "Moving...";
+        document.getElementById("tr-frame").textContent = "";
+        // Two frames in: the first frame shows the change, the second has
+        // moved on from it.
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const width = bar.getBoundingClientRect().width;
+          document.getElementById("tr-frame").textContent =
+            width > 80 && width < 320 ? "Partway two frames in." : `At ${width}px two frames in.`;
+        }));
+      }
+    </script>
+    <p class="layer-note">CSS animations: the square below has <code>animation: spin 800ms
+       linear infinite</code>, with <code>@keyframes spin { to { transform: rotate(360deg) }
+       }</code>. It turns from the start, and each turn's <code>animationiteration</code>
+       counts in the note. "Pause the spinner" toggles <code>animation-play-state:
+       paused</code>: it stops where it is (the second note checks that it held still for a
+       while), and goes on from there when clicked again. "Reverse the spinner" uses Web
+       Animations: <code>getAnimations()</code> gives the square's <code>CSSAnimation</code>,
+       <code>reverse()</code> turns it the other way from where it is, and the note says so once
+       its <code>ready</code> promise resolves.</p>
+    <style>
+      @keyframes spin { to { transform: rotate(360deg); } }
+      #spinner { width: 32px; height: 32px; margin: 8px; background-color: #e8710a;
+                 animation: spin 800ms linear infinite; }
+      #spinner.paused { animation-play-state: paused; }
+    </style>
+    <div id="spinner"></div>
+    <p><span id="spin-pause" class="button" onclick="pauseSpinner()">Pause the spinner</span>
+       <span id="spin-reverse" class="button" onclick="reverseSpinner()">Reverse the spinner</span>
+       <span id="spin-note">Not turned yet.</span>
+       <span id="spin-hold"></span>
+       <span id="spin-direction"></span></p>
+    <script>
+      let turns = 0;
+      document.getElementById("spinner").addEventListener("animationiteration", () => {
+        turns++;
+        document.getElementById("spin-note").textContent =
+          turns === 1 ? "Turned once." : `Turned ${turns} times.`;
+        const hold = document.getElementById("spin-hold");
+        if (hold.textContent === "Turning again.") hold.textContent = "Turned on after the pause.";
+      });
+      function reverseSpinner() {
+        const animation = document.getElementById("spinner").getAnimations()[0];
+        animation.reverse();
+        animation.ready.then(() => {
+          document.getElementById("spin-direction").textContent =
+            `${animation.animationName} turns ${animation.playbackRate < 0 ? "backwards" : "forwards"}.`;
+        });
+      }
+      function pauseSpinner() {
+        const spinner = document.getElementById("spinner");
+        const hold = document.getElementById("spin-hold");
+        spinner.classList.toggle("paused");
+        if (!spinner.classList.contains("paused")) {
+          hold.textContent = "Turning again.";
+          return;
+        }
+        hold.textContent = "Pausing...";
+        // Where it stopped, then where it is a while later.
+        requestAnimationFrame(() => {
+          const at = getComputedStyle(spinner).transform;
+          setTimeout(() => {
+            hold.textContent = getComputedStyle(spinner).transform === at
+              ? "Held still while paused." : "Moved while paused.";
+          }, 300);
+        });
+      }
+    </script>
+    <div id="menu-bar" class="menu-bar"><div id="dropdown" style="display: none">Menu</div></div>
+    <p class="layer-note">Scroll anchoring: scroll the box below a little, then "Add a line
+       above" puts a line at its top, above what it shows. The box scrolls down by as much
+       itself, so the row at its top stays there. At the top of the box nothing is kept:
+       the new line shows.</p>
+    <div id="anchor-box" class="scroller">
+      <div class="a">C1</div><div class="b">C2</div><div class="a">C3</div><div class="b">C4</div>
+      <div class="a">C5</div><div class="b">C6</div><div class="a">C7</div><div class="b">C8</div>
+    </div>
+    <p><span id="anchor-add" class="button" onclick="addAbove()">Add a line above</span>
+       <span id="anchor-note">Nothing added yet.</span>
+       <span id="anchor-scroll">The box isn't scrolled.</span></p>
+    <script>
+      let linesAdded = 0;
+      const anchorBox = document.getElementById("anchor-box");
+      // Rounded: the offset is aligned to a device pixel.
+      anchorBox.addEventListener("scroll", () => {
+        document.getElementById("anchor-scroll").textContent =
+          `The box is scrolled ${Math.round(anchorBox.scrollTop)}px.`;
+      });
+      // The row at the box's top, inside its border.
+      function topRow() {
+        const r = anchorBox.getBoundingClientRect();
+        return document.elementFromPoint(r.left + 20, r.top + 2).textContent;
+      }
+      function addAbove() {
+        const before = topRow();
+        const line = document.createElement("div");
+        linesAdded++;
+        line.className = "b";
+        line.textContent = `New ${linesAdded}`;
+        anchorBox.prepend(line);
+        requestAnimationFrame(() => {
+          const now = topRow();
+          const lines = linesAdded === 1 ? "1 line" : `${linesAdded} lines`;
+          document.getElementById("anchor-note").textContent = now === before
+            ? `Added ${lines} above: ${now} is still at the top.`
+            : `Added ${lines} above: ${now} is at the top now, not ${before}.`;
+        });
+      }
+    </script>
+  </div>
+  <div class="footer"></div>
+<!-- A module script: it runs once the page is parsed, and imports from a
+     data: URL (this page's own URL, about:demo, has nothing a relative URL could
+     resolve to). -->
+<script type="module">
+  import { greeting } from "data:text/javascript,export const greeting = 'Imported from a data: URL';";
+  document.getElementById("module-note").textContent =
+    `${greeting} by a module script, whose import.meta.url is ${import.meta.url}.`;
+</script>
+<script>
+  // import(): the module counts how often it runs; the module
+  // map keeps it, so only the first import runs it. Its URL is the
+  // modulepreload link's: the map has the module from the preload already.
+  let imports = 0;
+  function importModule() {
+    const note = document.getElementById("import-note");
+    note.textContent = "Importing...";
+    import(document.getElementById("preload").href).then((ns) => {
+      imports++;
+      note.textContent = `Imported ${imports === 1 ? "once" : `${imports} times`}; ` +
+        `the module ran ${ns.runs === 1 ? "once" : `${ns.runs} times`}.`;
+    });
+  }
+  // Scripts that script inserts: the inline one runs at once,
+  // as `currentScript`; the external one in its turn, then fires `load`.
+  function insertScripts() {
+    const steps = [];
+    window.insertSteps = steps;
+    const inline = document.createElement("script");
+    inline.id = "inline-demo";
+    inline.textContent =
+      "insertSteps.push('inline ran (currentScript #' + document.currentScript.id + ')');";
+    document.body.append(inline);
+    steps.push("append() returned");
+    const external = document.createElement("script");
+    external.src = "data:text/javascript,insertSteps.push('data: URL script ran');";
+    external.onload = () => {
+      steps.push("load fired");
+      document.getElementById("insert-note").textContent = `${steps.join(", ")}.`;
+    };
+    document.body.append(external);
+  }
+  // Odd clicks set location.hash, even ones location.href; the count lives
+  // in this script, so it goes on only if nothing reloads.
+  let hashes = 0;
+  let hashSteps = [];
+  // fetch() of a data: URL, which any page may read: its response's
+  // status and Content-Type, then its body, parsed.
+  async function fetchData() {
+    const note = document.getElementById("fetch-note");
+    note.textContent = "Fetching...";
+    const json = JSON.stringify({ greeting: "Hello from fetch()" });
+    const response = await fetch("data:application/json," + encodeURIComponent(json));
+    const data = await response.json();
+    note.textContent = `${response.status} ${response.headers.get("content-type")}: ` +
+      `${data.greeting}.`;
+  }
+  function changeHash() {
+    hashes += 1;
+    const fragment = `#demo-${hashes}`;
+    const how = hashes % 2 ? "location.hash" : "location.href";
+    if (hashes % 2) {
+      location.hash = fragment;
+    } else {
+      location.href = fragment;
+    }
+    hashSteps = [`${how} = '${fragment}': URL had #${document.URL.split("#")[1]} at once`];
+  }
+  // Each click adds an entry whose state is its number; the count lives in
+  // this script, so it goes on only if nothing reloads.
+  let pushes = 0;
+  function pushHistory() {
+    pushes += 1;
+    history.pushState({ n: pushes }, "", `#push-${pushes}`);
+    document.getElementById("push-note").textContent =
+      `pushState #${pushes}: ${history.length} entries, state ${history.state.n}.`;
+  }
+  addEventListener("popstate", (event) => {
+    const state = event.state ? event.state.n : "null";
+    document.getElementById("push-note").textContent =
+      `popstate: state ${state}, URL #${location.hash.slice(1)}, after ${pushes} pushes.`;
+  });
+  addEventListener("hashchange", (event) => {
+    const fragment = (url) => url.split("#")[1] || "none";
+    hashSteps.push(`hashchange ${fragment(event.oldURL)} \u2192 ${fragment(event.newURL)}`);
+    document.getElementById("hash-note").textContent = `${hashSteps.join("; ")}.`;
+  });
+  function stall() {
+    const end = Date.now() + 3000;
+    while (Date.now() < end) {}
+    document.getElementById("stall-note").textContent = "Done: the page was busy for 3 seconds.";
+  }
+  function markup() {
+    const note = document.getElementById("markup-note");
+    note.innerHTML = "Built from <b>markup</b>: <i>one</i>, <i>two</i> &amp; <i>three</i>.";
+    note.insertAdjacentText("beforeend", ` Read back: ${note.innerHTML}`);
+  }
+  // Its records come in a microtask, after the click handler has returned.
+  const observed = document.getElementById("observed");
+  let observing = false;
+  new MutationObserver((records) => {
+    const parts = records.map((r) =>
+      r.type === "childList" ? `childList +${r.addedNodes.length} -${r.removedNodes.length}`
+        : r.type === "attributes" ? `attributes ${r.attributeName} (was ${r.oldValue})`
+        : `characterData (was ${r.oldValue})`);
+    document.getElementById("observe-note").textContent =
+      `${records.length} records, ${observing ? "during" : "after"} the click handler: ` +
+      `${parts.join(", ")}.`;
+  }).observe(observed, {
+    childList: true, attributes: true, characterData: true, subtree: true,
+    attributeOldValue: true, characterDataOldValue: true,
+  });
+  let observedClicks = 0;
+  function observe() {
+    observing = true;
+    observedClicks++;
+    observed.firstChild.data = "b";
+    observed.setAttribute("data-clicks", observedClicks);
+    observed.replaceChildren("c");
+    observing = false;
+  }
+  // Cancel aborts the controller's signal, the timer the other; the signal
+  // AbortSignal.any made from them aborts with the first, and its reason.
+  let controller = null;
+  function startWaiting() {
+    const mine = controller = new AbortController();
+    const signal = AbortSignal.any([mine.signal, AbortSignal.timeout(2000)]);
+    const note = document.getElementById("abort-note");
+    note.textContent = "Waiting: Cancel, or two seconds pass.";
+    signal.addEventListener("abort", () => {
+      // A later Start's wait, not this one, is shown.
+      if (controller !== mine) return;
+      note.textContent = `Aborted: ${signal.reason.name} (${signal.reason.message}).`;
+    });
+  }
+  function cancelWaiting() {
+    if (controller) controller.abort();
+  }
+  // A walker over the page's elements; its filter accepts the buttons,
+  // skips the rest (their children are still walked).
+  function walkButtons() {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, (node) =>
+      node.classList.contains("button") ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP);
+    const names = [];
+    for (let node; (node = walker.nextNode()); ) names.push(node.textContent);
+    document.getElementById("walk-note").textContent = `${names.length} buttons: ${names.join(", ")}.`;
+  }
+  // element.style: what a camel-cased property and setProperty
+  // write into the style attribute, serialized as Chrome writes it, and
+  // what cssText clears.
+  let restyled = false;
+  function restyle() {
+    const swatch = document.getElementById("swatch");
+    restyled = !restyled;
+    if (restyled) {
+      swatch.style.backgroundColor = "#ea4335";
+      swatch.style.setProperty("width", "4EM", "important");
+    } else {
+      swatch.style.cssText = "";
+    }
+    document.getElementById("restyle-note").textContent =
+      `style="${swatch.getAttribute("style")}", width ${swatch.style.getPropertyValue("width") || "from the stylesheet"}.`;
+  }
+  // getComputedStyle: the resolved values, read after the
+  // style (and, for `width`, the layout) is brought up to date: a length
+  // in px however it was written, a color as rgb(), and a shorthand from
+  // its longhands.
+  function computedStyle() {
+    const swatch = document.getElementById("swatch");
+    const style = getComputedStyle(swatch);
+    document.getElementById("computed-note").textContent =
+      `width ${style.width} (element.style: ${swatch.style.width || "none"}), ` +
+      `background-color ${style.backgroundColor}, margin ${style.margin}.`;
+  }
+  // Constructed stylesheets: one sheet, made once, which the document
+  // adopts (cascaded after the page's own), whose rules replaceSync then
+  // replaces, and which the document adopts no more. Each click restyles
+  // the square at the next frame.
+  const adoptedSheet = new CSSStyleSheet();
+  let adoptStep = 0;
+  // var(): the square's color and width are var(--accent) and
+  // var(--wide), with fallbacks; custom properties set on the root
+  // inherit down to it, and computed style reads them substituted.
+  // calc() and vw: the bar's computed width, against the window's.
+  // The mouse's boundary events on the swatch, counted.
+  {
+    const counts = { mouseenter: 0, mouseleave: 0 };
+    const swatch = document.getElementById("hover-swatch");
+    for (const type of Object.keys(counts)) {
+      swatch.addEventListener(type, () => {
+        counts[type] += 1;
+        document.getElementById("hover-note").textContent =
+          `mouseenter ${counts.mouseenter}, mouseleave ${counts.mouseleave}.`;
+      });
+    }
+  }
+  // matchMedia(): the note follows the window's width, from the list's
+  // `change`, which comes only when the result changes (the list isn't
+  // kept: its listener keeps it).
+  let mediaChanges = 0;
+  function showWidth(wide) {
+    document.getElementById("media-note").textContent = (wide
+      ? "matchMedia('(min-width: 800px)') matches: a wide window"
+      : "matchMedia('(min-width: 800px)') doesn't match: a narrow window") +
+      ` (changes: ${mediaChanges}).`;
+  }
+  showWidth(matchMedia("(min-width: 800px)").matches);
+  matchMedia("(min-width: 800px)").addListener((event) => {
+    mediaChanges += 1;
+    showWidth(event.matches);
+  });
+  function measureCalc() {
+    const width = getComputedStyle(document.getElementById("calc-bar")).width;
+    document.getElementById("calc-note").textContent =
+      `${width} wide in a ${innerWidth}px wide window: calc(10vw - 20px).`;
+  }
+  // Logical properties: margin-inline-start and inline-size are the
+  // square's margin-left and width (horizontal-tb, ltr), and the later of
+  // a logical and a physical property wins.
+  let logicalStep = 0;
+  function moveLogical() {
+    logicalStep = (logicalStep + 1) % 3;
+    const square = document.getElementById("logical");
+    if (logicalStep === 1) {
+      square.style.marginInlineStart = "24px";
+      square.style.inlineSize = "32px";
+    } else if (logicalStep === 2) {
+      square.style.marginLeft = "8px";
+    } else {
+      square.style.cssText = "";
+    }
+    const style = getComputedStyle(square);
+    document.getElementById("logical-note").textContent =
+      `style: ${square.style.cssText || "none"} The square's margin-left is ` +
+      `${style.marginLeft}, its width ${style.width}.`;
+  }
+  let themeStep = 0;
+  function switchTheme() {
+    themeStep = (themeStep + 1) % 3;
+    const root = document.documentElement.style;
+    if (themeStep === 1) {
+      root.setProperty("--accent", "#a142f4");
+    } else if (themeStep === 2) {
+      root.setProperty("--wide", "2em");
+    } else {
+      root.removeProperty("--accent");
+      root.removeProperty("--wide");
+    }
+    const style = getComputedStyle(document.getElementById("themed"));
+    document.getElementById("theme-note").textContent =
+      `--accent: ${style.getPropertyValue("--accent") || "not set"}, ` +
+      `--wide: ${style.getPropertyValue("--wide") || "not set"}; ` +
+      `the square is ${style.backgroundColor}, ${style.width} wide.`;
+  }
+  function adoptSheet() {
+    adoptStep = (adoptStep + 1) % 3;
+    if (adoptStep === 1) {
+      adoptedSheet.replaceSync("#adopted { background-color: #4285f4 }");
+      document.adoptedStyleSheets = [adoptedSheet];
+    } else if (adoptStep === 2) {
+      adoptedSheet.replaceSync("#adopted { background-color: #fbbc05; width: 32px }");
+    } else {
+      document.adoptedStyleSheets.pop();
+    }
+    const rules = document.adoptedStyleSheets
+      .flatMap((sheet) => Array.from(sheet.cssRules, (rule) => rule.cssText));
+    const style = getComputedStyle(document.getElementById("adopted"));
+    document.getElementById("adopt-note").textContent =
+      `${document.adoptedStyleSheets.length} adopted: ${rules.join(" ") || "nothing"}; ` +
+      `the square is ${style.backgroundColor}, ${style.width} wide.`;
+  }
+  // CSSOM View: reading geometry lays the page out first, so
+  // the square's width is the one element.style just gave it.
+  function measure() {
+    const square = document.getElementById("swatch").getBoundingClientRect();
+    document.getElementById("measure-note").textContent =
+      `The green square is ${square.width}×${square.height} CSS px;`;
+    document.getElementById("window-note").textContent =
+      `the window is ${innerWidth} CSS px wide, at ${devicePixelRatio}x.`;
+  }
+  // Script's scrolling: clamped to what the box can scroll; the
+  // promise resolves once it has.
+  function scrollBox() {
+    const box = document.querySelector(".scroller");
+    box.scrollBy(0, 40).then(() => {
+      // Rounded: the offset is aligned to a device pixel, so on a display
+      // whose scale isn't a whole number it isn't a whole CSS px.
+      document.getElementById("scroll-note").textContent =
+        `The first box below is scrolled ${Math.round(box.scrollTop)}px of ${
+          box.scrollHeight - box.clientHeight}.`;
+    });
+  }
+  // Hit testing from script: what is at a point of the window,
+  // by the same hit test as a click; a row of the box is named by its text.
+  // The window scrolls first if the box is out of view: points outside
+  // the viewport hit nothing.
+  function hitBox() {
+    const box = document.querySelector(".scroller");
+    let r = box.getBoundingClientRect();
+    if (r.top < 0 || r.bottom > innerHeight) {
+      window.scrollBy(0, r.top - 8);
+      r = box.getBoundingClientRect();
+    }
+    const [x, y] = [r.left + r.width / 2, r.top + r.height / 2];
+    const name = e => e.parentElement === box ? e.textContent
+      : e.tagName.toLowerCase() + (e.classList.length ? `.${e.classList[0]}` : "");
+    const all = document.elementsFromPoint(x, y);
+    document.getElementById("hit-note").textContent = all.length
+      ? `At the middle of the first box below: ${all.map(name).join(", ")}.`
+      : "The middle of the first box below is outside the window.";
+  }
+  // scrollIntoView: the row is exposed in the box around it by
+  // the alignment asked for, and then that box in the window, out to the
+  // page, so the row is on screen wherever it was.
+  function intoView() {
+    const box = document.querySelector(".scroller");
+    const row = [...box.children].find(e => e.textContent === "A4");
+    row.scrollIntoView({ block: "center" }).then(() => {
+      const r = row.getBoundingClientRect();
+      const into = Math.round(r.top - (box.getBoundingClientRect().top + box.clientTop));
+      // Centered in the window too, by the same alignment (within a device
+      // pixel, which the offset is aligned to).
+      const centered = Math.abs((r.top + r.bottom) / 2 - innerHeight / 2) < 1;
+      document.getElementById("into-view-note").textContent =
+        `A4 is ${into}px into the ${box.clientHeight}px box below, scrolled ${
+          Math.round(box.scrollTop)}px, and ${
+          centered ? "centered" : "not centered"} in the window.`;
+    });
+  }
+  function showNow() {
+    const button = document.getElementById("now");
+    button.dataset.clicks = Number(button.dataset.clicks ?? 0) + 1;
+    document.getElementById("now-count").textContent =
+      `Clicks counted in dataset: ${button.dataset.clicks} (data-clicks="${button.getAttribute("data-clicks")}").`;
+    document.title = `machopo demo (clicks: ${button.dataset.clicks})`;
+    const mark = performance.mark("click");
+    const clicks = performance.getEntriesByName("click", "mark");
+    const since = performance.measure("since the first click", {start: clicks[0].startTime});
+    document.getElementById("now-note").textContent = `performance.now() is ${mark.startTime} ms. `
+      + `Click ${clicks.length}, ${since.duration.toFixed(1)} ms after the first (performance.mark and measure).`;
+  }
+  let hidden = false;
+  function toggle() {
+    hidden = !hidden;
+    document.getElementById("toggled").setAttribute("style", hidden ? "display: none" : "");
+  }
+  let moved = false;
+  function moveFirst() {
+    moved = !moved;
+    document.getElementById("flex-a").setAttribute("style", moved ? "order: 1" : "");
+    document.getElementById("flex-note").textContent =
+      moved ? "A comes last (order: 1)." : "A comes first.";
+  }
+  let wide = false;
+  function widen() {
+    wide = !wide;
+    document.getElementById("tile-1").setAttribute("style", wide ? "grid-column: span 2" : "");
+    document.getElementById("widen-note").textContent =
+      wide ? "Tile 1 spans two columns." : "Tile 1 takes one column.";
+  }
+  let swapped = false;
+  function swapSides() {
+    swapped = !swapped;
+    document.getElementById("areas").setAttribute("style", swapped
+      ? 'grid-template-columns: 1fr 120px; grid-template-areas: "head head" "main side" "foot foot"'
+      : "");
+    document.getElementById("swap-note").textContent =
+      swapped ? "The side is on the right." : "The side is on the left.";
+  }
+  let renamed = false;
+  function rename() {
+    renamed = !renamed;
+    document.getElementById("nav-1").textContent = renamed ? "Home page" : "Home";
+    document.getElementById("rename-note").textContent =
+      renamed ? "The first link is Home page." : "The first link is Home.";
+  }
+  let many = false;
+  function more() {
+    many = !many;
+    const count = many ? "128 new" : "3 new";
+    document.getElementById("chip-count").textContent = count;
+    document.getElementById("more-note").textContent = count + ".";
+  }
+  let forward3 = false;
+  function forward() {
+    forward3 = !forward3;
+    document.getElementById("avatar-3").setAttribute("style", forward3 ? "z-index: 4" : "");
+    document.getElementById("forward-note").textContent =
+      forward3 ? "Avatar 3 is on top." : "Avatar 1 is on top.";
+  }
+  // position: absolute: the dropdown is laid out
+  // against its containing block, and script reads where it landed.
+  let menuOpen = false;
+  function openMenu() {
+    const menu = document.getElementById("dropdown");
+    menuOpen = !menuOpen;
+    menu.style.display = menuOpen ? "block" : "none";
+    const style = getComputedStyle(menu);
+    document.getElementById("menu-note").textContent = menuOpen
+      ? `Open: in ${menu.offsetParent.id}, at ${style.left} ${style.top}, ` +
+        `${menu.offsetWidth}×${menu.offsetHeight}.`
+      : "The menu is closed.";
+  }
+  // position: fixed: the bar is laid out against the
+  // viewport and stays there as the page scrolls.
+  let pinned = false;
+  function pinBar() {
+    pinned = !pinned;
+    let bar = document.getElementById("fixed-bar");
+    if (pinned) {
+      bar = document.createElement("div");
+      bar.id = "fixed-bar";
+      bar.textContent = "Pinned";
+      document.body.appendChild(bar);
+    } else if (bar) {
+      bar.remove();
+    }
+    const rect = bar && pinned ? bar.getBoundingClientRect() : null;
+    document.getElementById("pin-note").textContent = rect
+      // Rounded: a real window's viewport can be a fraction of a CSS px
+      // wide, and the bar is at its right edge.
+      ? `Pinned at ${Math.round(rect.left)} ${Math.round(rect.top)} in the viewport; ` +
+        "it stays there as you scroll."
+      : "No bar is pinned.";
+  }
+  // A canvas: a pale background, and squares in two colors, one more each
+  // click (ten fit; then they go over the first ones).
+  const canvasDemo = document.getElementById("canvas-demo").getContext("2d");
+  canvasDemo.fillStyle = "#e8eef8";
+  canvasDemo.fillRect(0, 0, 240, 60);
+  let squares = 0;
+  function drawSquare() {
+    canvasDemo.fillStyle = squares % 2 ? "#3366cc" : "#ff9900";
+    canvasDemo.fillRect(10 + (squares % 10) * 23, 20, 20, 20);
+    squares++;
+  }
+  drawSquare();
+  drawSquare();
+  function drawLater() {
+    setTimeout(() => requestIdleCallback(drawSquare), 1000);
+  }
+  function readPixel() {
+    const [r, g, b, a] = canvasDemo.getImageData(20, 30, 1, 1).data;
+    document.getElementById("canvas-note").textContent =
+      `The first square is rgba(${r}, ${g}, ${b}, ${a / 255}).`;
+  }
+  // Paths, drawn again whenever the canvas gets a new width (which clears
+  // its bitmap and its state).
+  const pathsCanvas = document.getElementById("canvas-paths");
+  function drawPaths() {
+    const ctx = pathsCanvas.getContext("2d");
+    const step = pathsCanvas.width / 5;
+    ctx.fillStyle = "#3366cc";
+    ctx.beginPath();
+    ctx.arc(step / 2, 40, 18, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.fillStyle = "#ff9900";
+    ctx.beginPath();
+    ctx.roundRect(step + 6, 22, step - 12, 36, 10);
+    ctx.fill();
+    ctx.strokeStyle = "#333";
+    ctx.lineWidth = 3;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(2 * step + 6, 40);
+    ctx.lineTo(3 * step - 6, 40);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.lineWidth = 6;
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "#33aa66";
+    ctx.beginPath();
+    ctx.moveTo(3.5 * step, 18);
+    ctx.lineTo(4 * step - 8, 62);
+    ctx.lineTo(3 * step + 8, 62);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(4.5 * step, 40, 20, 0, 2 * Math.PI);
+    ctx.clip();
+    ctx.fillStyle = "#cc3366";
+    ctx.beginPath();
+    for (let i = 0; i < 5; i++) {
+      const angle = -Math.PI / 2 + (i * 4 * Math.PI) / 5;
+      ctx.lineTo(4.5 * step + 26 * Math.cos(angle), 40 + 26 * Math.sin(angle));
+    }
+    ctx.closePath();
+    ctx.fill("evenodd");
+    ctx.restore();
+  }
+  drawPaths();
+  function resizePaths() {
+    pathsCanvas.width = pathsCanvas.width === 240 ? 180 : 240;
+    drawPaths();
+    document.getElementById("canvas-paths-note").textContent =
+      `${pathsCanvas.width} pixels wide.`;
+  }
+  // Text: a small chart's labels, a title and a box around a word where
+  // its ink is, in a font "Bigger text" makes larger.
+  let textSize = 12;
+  function drawText() {
+    const canvas = document.getElementById("canvas-text");
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.font = `bold ${textSize + 4}px sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    ctx.strokeStyle = "#3366cc";
+    ctx.strokeText("Visits", 120, 6);
+    ctx.font = `${textSize}px sans-serif`;
+    ctx.textBaseline = "bottom";
+    [30, 55, 42].forEach((value, i) => {
+      const x = 70 + i * 50;
+      ctx.fillStyle = "#ff9900";
+      ctx.fillRect(x - 15, 120 - value, 30, value);
+      ctx.fillStyle = "#333";
+      ctx.fillText(String(value), x, 118 - value);
+    });
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    ctx.fillText("0", 40, 120);
+    ctx.fillText("60", 40, 60);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = "#cc3366";
+    ctx.fillText("Peak", 196, 70);
+    const ink = ctx.measureText("Peak");
+    ctx.strokeStyle = "#cc3366";
+    ctx.strokeRect(196 - ink.actualBoundingBoxLeft - 2, 70 - ink.actualBoundingBoxAscent - 2,
+                   ink.actualBoundingBoxLeft + ink.actualBoundingBoxRight + 4,
+                   ink.actualBoundingBoxAscent + ink.actualBoundingBoxDescent + 4);
+  }
+  drawText();
+  function biggerText() {
+    textSize = textSize === 12 ? 18 : 12;
+    drawText();
+    document.getElementById("canvas-text-note").textContent = `Text at ${textSize}px.`;
+  }
+  // Styles and images: gradients, a pattern of a small canvas, a shadow,
+  // the small canvas drawn on the big one, and Path2Ds composited
+  // "multiply"; a click finds the shape under it and turns the colors of
+  // its box around.
+  const stylesCanvas = document.getElementById("canvas-styles");
+  const styles = stylesCanvas.getContext("2d");
+  const tile = document.createElement("canvas");
+  tile.width = 8;
+  tile.height = 8;
+  const tileContext = tile.getContext("2d");
+  tileContext.fillStyle = "#66aa44";
+  tileContext.fillRect(0, 0, 8, 8);
+  tileContext.fillStyle = "#88cc66";
+  tileContext.fillRect(0, 0, 4, 4);
+  tileContext.fillRect(4, 4, 4, 4);
+  const circle = new Path2D();
+  circle.arc(122, 70, 28, 0, 2 * Math.PI);
+  const shapes = [
+    ["circle", circle, "#cc0033", [94, 42, 56, 56]],
+    ["square", new Path2D("M 140 50 h 40 v 40 h -40 Z"), "#0033cc", [140, 50, 40, 40]],
+    ["triangle", new Path2D("M 30 110 L 60 60 L 90 110 Z"), "#33aa00", [30, 60, 60, 50]],
+  ];
+  const sky = styles.createLinearGradient(0, 0, 0, 140);
+  sky.addColorStop(0, "#8ec5ff");
+  sky.addColorStop(1, "#e8f4ff");
+  styles.fillStyle = sky;
+  styles.fillRect(0, 0, 240, 140);
+  styles.fillStyle = styles.createPattern(tile, "repeat");
+  styles.fillRect(0, 116, 240, 24);
+  const sun = styles.createRadialGradient(205, 28, 4, 205, 28, 20);
+  sun.addColorStop(0, "#fff7b0");
+  sun.addColorStop(1, "#ffb300");
+  styles.save();
+  styles.shadowColor = "rgba(0, 0, 0, 0.3)";
+  styles.shadowBlur = 8;
+  styles.shadowOffsetX = 3;
+  styles.shadowOffsetY = 3;
+  styles.fillStyle = sun;
+  styles.beginPath();
+  styles.arc(205, 28, 20, 0, 2 * Math.PI);
+  styles.fill();
+  styles.restore();
+  styles.imageSmoothingEnabled = false;
+  styles.drawImage(tile, 10, 10, 24, 24);
+  styles.globalCompositeOperation = "multiply";
+  for (const [, path, color] of shapes) {
+    styles.fillStyle = color;
+    styles.fill(path);
+  }
+  styles.globalCompositeOperation = "source-over";
+  function pickShape(event) {
+    const bounds = stylesCanvas.getBoundingClientRect();
+    // Inside the 1px border.
+    const x = event.clientX - bounds.left - 1;
+    const y = event.clientY - bounds.top - 1;
+    const note = document.getElementById("canvas-styles-note");
+    const hit = shapes.find(([, path]) => styles.isPointInPath(path, x, y));
+    if (!hit) {
+      note.textContent = "No shape there.";
+      return;
+    }
+    const [name, , , [left, top, width, height]] = hit;
+    const pixels = styles.getImageData(left, top, width, height);
+    for (let i = 0; i < pixels.data.length; i += 4) {
+      for (let c = 0; c < 3; c++) {
+        pixels.data[i + c] = 255 - pixels.data[i + c];
+      }
+    }
+    styles.putImageData(pixels, left, top);
+    note.textContent = `You picked the ${name}.`;
+  }
+  // "Copy as image": the styles canvas as toBlob's PNG, shown in an image
+  // through a blob URL, let go once it has loaded.
+  function copyStyles() {
+    stylesCanvas.toBlob((blob) => {
+      const img = document.getElementById("canvas-copy-img");
+      img.onload = () => {
+        URL.revokeObjectURL(img.src);
+        document.getElementById("canvas-copy-note").textContent =
+          `Copied as ${blob.type}: the image below.`;
+        document.getElementById("canvas-copy-size").textContent = `(${blob.size} bytes)`;
+      };
+      img.src = URL.createObjectURL(blob);
+    });
+  }
+  // Backgrounds: two layers (an image over stripes) or one (a gradient);
+  // getComputedStyle reads them back, one size per layer.
+  let cardRestyled = false;
+  function restyleCard() {
+    cardRestyled = !cardRestyled;
+    const card = document.getElementById("bg-card");
+    card.className = cardRestyled ? "restyled" : "";
+    const sizes = getComputedStyle(card).backgroundSize;
+    document.getElementById("bg-restyle-note").textContent = cardRestyled
+      ? `Two layers: background-size is ${sizes}.`
+      : "One layer: a gradient.";
+  }
+  let words = 1;
+  function addWord() {
+    words++;
+    document.getElementById("label").textContent += " and more";
+    document.getElementById("grow-note").textContent = `${words} words.`;
+  }
+  let raised = false;
+  function raise() {
+    raised = !raised;
+    document.getElementById("card-1").setAttribute("style", raised ? "z-index: 1" : "");
+    document.getElementById("raise-note").textContent =
+      raised ? "Card 1 is over card 2 (z-index: 1)." : "Card 1 is under card 2.";
+  }
+  function picked(row) {
+    document.getElementById("picked").textContent = `Clicked ${row}.`;
+  }
+  let clicks = 0;
+  function clicked() {
+    clicks++;
+    document.getElementById("count").textContent =
+      `Clicked ${clicks} time${clicks === 1 ? "" : "s"} (onclick).`;
+  }
+  document.getElementById("kept").addEventListener("click", (event) => {
+    event.preventDefault();
+    document.getElementById("kept-note").textContent = "(preventDefault kept you here)";
+  });
+  setTimeout(() => {
+    document.getElementById("light").setAttribute("style", "background-color: #34a853");
+  }, 2000);
+  let seconds = 0;
+  setInterval(() => {
+    seconds++;
+    document.getElementById("clock").textContent = `${seconds} s since the script ran (setInterval).`;
+  }, 1000);
+  const mover = document.getElementById("mover");
+  requestAnimationFrame(function step(time) {
+    // There and back across the track every 3 seconds.
+    const t = (time / 3000) % 1;
+    const x = 300 * (t < 0.5 ? t * 2 : 2 - t * 2);
+    mover.setAttribute("style", `margin-left: ${x}px`);
+    requestAnimationFrame(step);
+  });
+  addEventListener("load", () => {
+    document.getElementById("status").textContent = "load fired: every subresource is in.";
+  });
+  // The resize observer's note: the content box's size it was last given.
+  new ResizeObserver(entries => {
+    const rect = entries[0].contentRect;
+    document.getElementById("ro-note").textContent =
+      `Content box ${rect.width} by ${rect.height} px.`;
+  }).observe(document.getElementById("ro-box"));
+  function padObserved() {
+    document.getElementById("ro-box").style.padding = "8px 48px";
+  }
+  // The intersection observer's note: how much of the box its last entry
+  // says shows in the list.
+  new IntersectionObserver(entries => {
+    const entry = entries[entries.length - 1];
+    document.getElementById("io-note").textContent = entry.isIntersecting
+      ? `In view: ${Math.round(entry.intersectionRatio * 100)}%.`
+      : "Out of view.";
+    document.getElementById("io-box").classList.toggle("shown", entry.isIntersecting);
+  }, { root: document.getElementById("io-list"), threshold: [0, 0.5, 1] })
+    .observe(document.getElementById("io-box"));
+</script>
+</body>
+</html>

@@ -1,0 +1,456 @@
+# Mutation test of stage 5c (`Blob`, bodies of bytes and blob URLs):
+# python3 scripts/test.py mutate rfcs/0028-html-window-batch-2/mutants-5c.toml
+# Not here, as equivalent: JS's `[Clamp]` taking `NaN` as 0 (the table's
+# entry does too).
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "navigation", "blobs"]
+timeout = 900
+
+# --- The table's buffer sources and `[Clamp]` (JS) ----------------------------------
+
+[[mutant]]
+name = "a resizable buffer is a buffer source"
+file = "crates/dom_js/src/buffer.rs"
+from = '''    buffer.is_some_and(|buffer| buffer.get_backing_store().is_resizable_by_user_javascript())'''
+to = '''    let _ = buffer;
+    false'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "blob"]
+
+[[mutant]]
+name = "an ArrayBuffer's bytes are none"
+file = "crates/dom_js/src/buffer.rs"
+from = '''        return store[..buffer.byte_length().min(store.len())]'''
+to = '''        return store[..0]'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "blob"]
+
+[[mutant]]
+name = "an ArrayBuffer isn't a buffer source"
+file = "crates/dom_js/src/buffer.rs"
+from = '''    value.is_array_buffer() || view_kind(value).is_some()'''
+to = '''    view_kind(value).is_some()'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "blob"]
+
+[[mutant]]
+name = "a typed array is a union's sequence"
+file = "crates/dom_js/src/convert.rs"
+from = '''    if crate::buffer::is_buffer_source(value)
+        && let Some(source) = member(&|base| matches!(base, Base::BufferSource))'''
+to = '''    if false
+        && let Some(source) = member(&|base| matches!(base, Base::BufferSource))'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "blob"]
+
+[[mutant]]
+name = "[Clamp] rounds half away from zero"
+file = "crates/dom_js/src/convert.rs"
+from = '''n.clamp(-(2f64.powi(63)), 2f64.powi(63) - 1.0).round_ties_even()'''
+to = '''n.clamp(-(2f64.powi(63)), 2f64.powi(63) - 1.0).round()'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "blob"]
+
+[[mutant]]
+name = "a new Uint8Array is an ArrayBuffer"
+file = "crates/dom_js/src/convert.rs"
+from = '''        Value::Uint8Array(bytes) => crate::buffer::new_uint8_array(cx.scope(), &bytes),'''
+to = '''        Value::Uint8Array(bytes) => crate::buffer::new_array_buffer(cx.scope(), &bytes).into(),'''
+
+# --- Blob ---------------------------------------------------------------------------
+
+[[mutant]]
+name = "a type isn't lowercased"
+file = "crates/dom_api/src/blob.rs"
+from = '''        type_.to_ascii_lowercase()'''
+to = '''        type_.to_owned()'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "blob"]
+
+[[mutant]]
+name = "a type of other characters is kept"
+file = "crates/dom_api/src/blob.rs"
+from = '''    if type_.chars().all(|c| ('\u{20}'..='\u{7e}').contains(&c)) {'''
+to = '''    if true {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "blob"]
+
+[[mutant]]
+name = "line endings stay"
+file = "crates/dom_api/src/blob.rs"
+from = '''                EndingType::Native => {
+                    bytes.extend_from_slice(to_native_line_endings(text.as_str()).as_bytes());'''
+to = '''                EndingType::Native => {
+                    bytes.extend_from_slice(text.as_str().as_bytes());'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "blob"]
+
+[[mutant]]
+name = "a lone \\r stays"
+file = "crates/dom_api/src/blob.rs"
+from = '''            '\r' => {
+                chars.next_if_eq(&'\n');
+                out.push_str(native);
+            }'''
+to = '''            '\r' => {
+                chars.next_if_eq(&'\n');
+                out.push('\r');
+            }'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--lib", "blob"]
+
+[[mutant]]
+name = "a buffer part is left out"
+file = "crates/dom_api/src/blob.rs"
+from = '''            BlobPart::BufferSource(source) => bytes.extend(source.bytes(cx)),'''
+to = '''            BlobPart::BufferSource(_) => {}'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "blob"]
+
+[[mutant]]
+name = "a blob part is left out"
+file = "crates/dom_api/src/blob.rs"
+from = '''            BlobPart::Blob(blob) => bytes.extend_from_slice(cx.read().blob_data(&blob).bytes()),'''
+to = '''            BlobPart::Blob(_) => {}'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "blob"]
+
+[[mutant]]
+name = "a negative position counts from the start"
+file = "crates/dom_api/src/blob.rs"
+from = '''        size.saturating_add(position).max(0)'''
+to = '''        0'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "blob"]
+
+[[mutant]]
+name = "a position past the end isn't clamped"
+file = "crates/dom_api/src/blob.rs"
+from = '''        position.min(size)'''
+to = '''        position'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--lib", "blob"]
+
+[[mutant]]
+name = "a slice keeps its blob's type"
+file = "crates/dom_api/src/blob.rs"
+from = '''    let type_ = content_type.map_or_else(String::new, |t| normalize_type(t.as_str()));'''
+to = '''    let type_ = content_type.map_or_else(|| data.type_.clone(), |t| normalize_type(t.as_str()));'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "blob"]
+
+[[mutant]]
+name = "a slice's range is from its blob's start"
+file = "crates/dom/src/blob.rs"
+from = '''            range: self.range.start + start..self.range.start + end,'''
+to = '''            range: start..end,'''
+test = ["cargo", "test", "-q", "-p", "dom", "--lib", "blob"]
+
+[[mutant]]
+name = "a slice's bytes are its blob's all"
+file = "crates/dom/src/blob.rs"
+from = '''        if self.range == (0..self.bytes.len()) {'''
+to = '''        if true {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--lib", "blob"]
+
+# --- Bodies of bytes ----------------------------------------------------------------
+
+[[mutant]]
+name = "a blob body has no Content-Type"
+file = "crates/dom_api/src/body.rs"
+from = '''            let content_type = (!data.type_.is_empty()).then(|| data.type_.clone());'''
+to = '''            let content_type = None::<String>;'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "blob"]
+
+[[mutant]]
+name = "a blob of no type is a Content-Type"
+file = "crates/dom_api/src/body.rs"
+from = '''            let content_type = (!data.type_.is_empty()).then(|| data.type_.clone());'''
+to = '''            let content_type = Some(data.type_.clone());'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "blob"]
+
+[[mutant]]
+name = "a buffer body is text/plain"
+file = "crates/dom_api/src/body.rs"
+from = '''        BodyInit::BufferSource(source) => (source.bytes(cx).into(), None),'''
+to = '''        BodyInit::BufferSource(source) => (source.bytes(cx).into(), Some("text/plain".to_owned())),'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "blob"]
+
+[[mutant]]
+name = "blob() has no type"
+file = "crates/dom_api/src/body.rs"
+from = '''        BodyKind::Blob(_) => BodyKind::Blob(crate::blob::normalize_type(
+            &headers::get(&body.header_list(cx), "Content-Type").unwrap_or_default(),
+        )),'''
+to = '''        BodyKind::Blob(_) => BodyKind::Blob(String::new()),'''
+
+[[mutant]]
+name = "blob()'s type isn't lowercased"
+file = "crates/dom_api/src/body.rs"
+from = '''        BodyKind::Blob(_) => BodyKind::Blob(crate::blob::normalize_type(
+            &headers::get(&body.header_list(cx), "Content-Type").unwrap_or_default(),
+        )),'''
+to = '''        BodyKind::Blob(_) => BodyKind::Blob(
+            headers::get(&body.header_list(cx), "Content-Type").unwrap_or_default(),
+        ),'''
+
+[[mutant]]
+name = "arrayBuffer() gives a Uint8Array"
+file = "crates/dom_api/src/body.rs"
+from = '''        BodyKind::ArrayBuffer => Ok(Value::ArrayBuffer(bytes)),'''
+to = '''        BodyKind::ArrayBuffer => Ok(Value::Uint8Array(bytes)),'''
+
+[[mutant]]
+name = "a blob is read at once"
+file = "crates/dom_api/src/body.rs"
+from = '''    queue_task(
+        &mut cx.mutate(),
+        &window,
+        TaskSource::Networking,
+        0.0,
+        Task::ReadBody {'''
+to = '''    let result = package_data(cx, bytes.clone(), kind.clone());
+    cx.settle_promise(promise.id(), result);
+    return Ok(promise);
+    #[allow(unreachable_code)]
+    queue_task(
+        &mut cx.mutate(),
+        &window,
+        TaskSource::Networking,
+        0.0,
+        Task::ReadBody {'''
+
+[[mutant]]
+name = "fetch() doesn't take a blob URL"
+file = "crates/dom_api/src/fetch.rs"
+from = '''        "data" | "http" | "https" | "blob" => {}'''
+to = '''        "data" | "http" | "https" => {}'''
+
+# --- Blob URLs: the realm's side ----------------------------------------------------
+
+[[mutant]]
+name = "a blob URL is of an opaque origin"
+file = "crates/dom_api/src/dom_url.rs"
+from = '''        Origin::Tuple(origin) => origin,'''
+to = '''        Origin::Tuple(_) => "null",'''
+
+[[mutant]]
+name = "a blob URL isn't registered"
+file = "crates/dom_api/src/dom_url.rs"
+from = '''        frame.register_blob_url(&url, document.as_node().id(), &blob);'''
+to = '''        let _ = (&blob, document.as_node().id());'''
+
+[[mutant]]
+name = "another origin's blob URL is revoked"
+file = "crates/dom_api/src/dom_url.rs"
+from = '''    if !blob_origin.is_tuple() || blob_origin.ascii_serialization() != serialize_origin(&origin) {'''
+to = '''    if !blob_origin.is_tuple() {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "blob_urls"]
+
+[[mutant]]
+name = "a removed iframe's blob URLs stay"
+file = "crates/dom_api/src/frame.rs"
+from = '''                frame.documents_discarded(&|id| {'''
+to = '''                frame.documents_discarded(&|_| false);
+                let _ = (&|id: dom::NodeId| {'''
+
+# --- Blob URLs: the renderer --------------------------------------------------------
+
+[[mutant]]
+name = "a revoke reaches the browser at once"
+file = "crates/renderer/src/loader.rs"
+from = '''        if state.live.remove(url).is_some() {
+            state.revoked.push(url.to_owned());'''
+to = '''        if state.live.remove(url).is_some() {
+            let _ = self.to_browser.send(RendererHostMsg::RevokeBlobUrl { url: url.to_owned() });'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "loader"]
+
+[[mutant]]
+name = "a revoke never reaches the browser"
+file = "crates/renderer/src/loader.rs"
+from = '''            let _ = self.to_browser.send(RendererHostMsg::RevokeBlobUrl { url });'''
+to = '''            let _ = url;'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "loader"]
+
+[[mutant]]
+name = "is_revoked minds the fragment"
+file = "crates/renderer/src/loader.rs"
+from = '''        url.set_fragment(None);
+        self.state.borrow().gone'''
+to = '''        self.state.borrow().gone'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "loader"]
+
+[[mutant]]
+name = "a discarded document's URLs stay"
+file = "crates/renderer/src/loader.rs"
+from = '''            .filter(|(_, owner)| discarded(**owner))'''
+to = '''            .filter(|(_, owner)| discarded(**owner) && false)'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "loader"]
+
+[[mutant]]
+name = "the revokes are never flushed"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            self.blob_urls.flush_revoked();
+'''
+to = ''''''
+
+[[mutant]]
+name = "a fetch() of a revoked blob URL goes"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        if request.url.scheme() == "blob"
+            && self'''
+to = '''        if false
+            && self'''
+
+[[mutant]]
+name = "an image of a revoked blob URL is fetched"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        if url.scheme() == "blob"
+            && self'''
+to = '''        if false
+            && self'''
+
+# --- Blob URLs: the browser ---------------------------------------------------------
+
+[[mutant]]
+name = "another renderer's blob URL loads"
+file = "crates/net/src/blob.rs"
+from = '''                    requester.is_none_or(|requester| entry.owner == requester && !entry.revoked)'''
+to = '''                    requester.is_none_or(|_| !entry.revoked)'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "blob"]
+
+[[mutant]]
+name = "a revoked blob URL loads"
+file = "crates/net/src/blob.rs"
+from = '''                    requester.is_none_or(|requester| entry.owner == requester && !entry.revoked)'''
+to = '''                    requester.is_none_or(|requester| entry.owner == requester)'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "blob"]
+
+[[mutant]]
+name = "a navigation doesn't get a revoked one"
+file = "crates/net/src/blob.rs"
+from = '''                .filter(|entry| {
+                    requester'''
+to = '''                .filter(|entry| {
+                    !entry.revoked && requester'''
+
+[[mutant]]
+name = "another renderer revokes"
+file = "crates/net/src/blob.rs"
+from = '''        if let Some(entry) = entries.get_mut(&key).filter(|entry| entry.owner == owner) {'''
+to = '''        if let Some(entry) = entries.get_mut(&key) {'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "blob"]
+
+[[mutant]]
+name = "another renderer forgets"
+file = "crates/net/src/blob.rs"
+from = '''        if entries.get(&key).is_some_and(|entry| entry.owner == owner) {'''
+to = '''        if entries.get(&key).is_some() {'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "blob"]
+
+[[mutant]]
+name = "a gone renderer's URLs stay"
+file = "crates/net/src/blob.rs"
+from = '''            .retain(|_, entry| entry.owner != owner);'''
+to = '''            .retain(|_, _| true);'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "blob"]
+
+[[mutant]]
+name = "a POST gets a blob"
+file = "crates/net/src/blob.rs"
+from = '''        if request.method != "GET" {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "the fragment is the URL's"
+file = "crates/net/src/blob.rs"
+from = '''    url.set_fragment(None);
+    Some(url.into())'''
+to = '''    Some(url.into())'''
+
+[[mutant]]
+name = "a suffix range is from the start"
+file = "crates/net/src/blob.rs"
+from = '''                        (full_length.saturating_sub(suffix), full_length.saturating_sub(1))'''
+to = '''                        (0, suffix.saturating_sub(1))'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "blob"]
+
+[[mutant]]
+name = "a range's end isn't clamped"
+file = "crates/net/src/blob.rs"
+from = '''                        (start, end.map_or(last, |end| end.min(last)))'''
+to = '''                        (start, end.map_or(last, |end| end))'''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "blob"]
+
+[[mutant]]
+name = "a range past the end is satisfiable"
+file = "crates/net/src/blob.rs"
+from = '''                        if start >= full_length {
+                            return Err(invalid());
+                        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "net", "--lib", "blob"]
+
+[[mutant]]
+name = "no Content-Type"
+file = "crates/net/src/blob.rs"
+from = '''            ("content-type".to_owned(), mime_type.clone()),
+'''
+to = ''''''
+
+[[mutant]]
+name = "a ranged blob is 200"
+file = "crates/net/src/blob.rs"
+from = '''                    206,
+'''
+to = '''                    200,
+'''
+
+[[mutant]]
+name = "the IO thread doesn't register"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                            } => network.register_blob_url(renderer_id, &url, mime_type, bytes),'''
+to = '''                            } => drop((url, mime_type, bytes)),'''
+
+[[mutant]]
+name = "the IO thread doesn't revoke"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                                network.revoke_blob_url(renderer_id, &url);
+'''
+to = ''''''
+
+[[mutant]]
+name = "a blob URL subresource goes to the network"
+file = "crates/browser/src/render_process_host.rs"
+from = '''    if is_blob_url(&request.url) {
+        let result'''
+to = '''    if false {
+        let result'''
+
+[[mutant]]
+name = "a blob URL navigation goes to the network"
+file = "crates/browser/src/web_contents.rs"
+from = '''        if crate::render_process_host::is_blob_url(&request.url) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a link to a blob URL isn't followed"
+file = "crates/browser/src/web_contents.rs"
+from = '''"http" | "https" | "file" | "about" | "blob"'''
+to = '''"http" | "https" | "file" | "about"'''
+
+[[mutant]]
+name = "the UI thread forgets at once (for the IO thread too)"
+file = "crates/browser/src/web_contents.rs"
+from = '''                self.network
+                    .forget_blob_url(self.process.renderer_id(), url);'''
+to = '''                self.network
+                    .forget_blob_url(self.process.renderer_id() + 1, url);'''
+
+# --- wasm ---------------------------------------------------------------------------
+
+[[mutant]]
+name = "a guest's bytes aren't a buffer source"
+file = "crates/dom_wasm/src/host.rs"
+from = '''            Value::BufferSource(BufferSource::Bytes(byte_list(bytes)?))'''
+to = '''            Value::BufferSource(BufferSource::Bytes(Vec::new()))'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "engine", "a_guests_blobs"]
+
+[[mutant]]
+name = "a guest gets no bytes back"
+file = "crates/dom_wasm/src/host.rs"
+from = '''            Val::List(bytes.iter().map(|&byte| Val::U8(byte)).collect())'''
+to = '''            Val::List(bytes.iter().take(0).map(|&byte| Val::U8(byte)).collect())'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "engine", "a_guests_blobs"]
+
+[[mutant]]
+name = "a guest's s64 is 0"
+file = "crates/dom_wasm/src/host.rs"
+from = '''        (Base::ClampedI64, Val::S64(n)) => Value::Number(*n as f64),'''
+to = '''        (Base::ClampedI64, Val::S64(_)) => Value::Number(0.0),'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "engine", "a_guests_blobs"]

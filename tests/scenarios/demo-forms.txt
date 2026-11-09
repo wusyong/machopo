@@ -1,0 +1,61 @@
+# about:demo's forms: a click on a label checks its checkbox, one on the
+# other radio button's label moves the group's check to it, a click on a
+# box itself does too, Space on the focused checkbox toggles it, a disabled
+# fieldset's checkbox stays as it is, and the reset button puts the form
+# back. The boxes have their native looks, checked or not and disabled
+# (the screenshot shows them). Below them the
+# unstyled controls are Chrome's sizes (those that don't follow the font:
+# the text field's and the text area's are in the screenshot), a tall
+# button's text is in its middle, and a list box is 3 rows high (the
+# select and the list box are in the screenshot too). The list box to pick
+# from takes a click and Shift+ArrowDown, the select beside it opens its
+# list on a click, ArrowDown and Enter pick the next option
+# (`list-box.txt` has more). The number field steps by 5 with ArrowUp,
+# the slider by 10 with ArrowRight, and Escape empties the search field
+# (the spin button's press is in `shell`'s tests).
+window size=800x1000
+navigate about:demo
+wait-loaded
+scroll-to #form-demo
+click #agree-label
+wait-text #form-note "Changed: the checkbox is checked, the size is small."
+click #large-label
+wait-text #form-note "Changed: the checkbox is checked, the size is large."
+click #locked-label
+click #size-small
+wait-text #form-note "Changed: the checkbox is checked, the size is small."
+screenshot forms
+click #agree
+wait-text #form-note "Changed: the checkbox is not checked, the size is small."
+key Space
+wait-text #form-note "Changed: the checkbox is checked, the size is small."
+click #large-label
+wait-text #form-note "Changed: the checkbox is checked, the size is large."
+click #demo-reset
+wait-text #form-note "Reset: the checkbox is not checked, the size is small."
+wait-text #sized-note "The slider is 129×16, the check box 13×13 and the radio button 13×13; the tall button's text is in its middle; the list box is 3 rows high."
+scroll-to #sized-controls
+screenshot controls
+click #pick-list option:nth-child(2)
+wait-text #pick-note "Picked: Banana; the size is Small."
+key shift+ArrowDown
+wait-text #pick-note "Picked: Banana, Cherry; the size is Small."
+click #pick-menu
+# The list is shown once the click is handled (keys don't wait for it).
+capture menu-open
+key ArrowDown
+key Enter
+wait-text #pick-note "Picked: Banana, Cherry; the size is Medium."
+screenshot picked
+click #step-number
+key ArrowUp
+wait-text #step-note "Stepped: the number is 5, the slider 50, the search \"machopo\"."
+key ArrowUp
+wait-text #step-note "Stepped: the number is 10, the slider 50, the search \"machopo\"."
+click #step-range
+key ArrowRight
+wait-text #step-note "Moved: the number is 10, the slider 60, the search \"machopo\"."
+click #step-search
+key Escape
+wait-text #step-note "Searched: the number is 10, the slider 60, the search \"\"."
+screenshot stepped

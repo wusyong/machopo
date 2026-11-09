@@ -1,0 +1,177 @@
+# Mutation test of step 2a-0 (the path type, DrawPath, ClipPath, stroke
+# caps, joins and dashes):
+# python3 scripts/test.py mutate rfcs/0031-svg/mutants-2a0.toml
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+timeout = 900
+
+# --- gfx: Path ----------------------------------------------------------------
+
+[[mutant]]
+name = "bounds leave out control points"
+file = "crates/gfx/src/lib.rs"
+from = '''                PathElement::QuadTo(c, p) | PathElement::ConicTo(c, p, _) => vec![c, p],'''
+to = '''                PathElement::QuadTo(_, p) | PathElement::ConicTo(_, p, _) => vec![p],'''
+
+[[mutant]]
+name = "bounds leave out the origin a path with no move starts at"
+file = "crates/gfx/src/lib.rs"
+from = '''            Some(_) => Some(PointF::default()),'''
+to = '''            Some(_) => None,'''
+
+[[mutant]]
+name = "bounds count the origin after a move"
+file = "crates/gfx/src/lib.rs"
+from = '''            None | Some(PathElement::MoveTo(_)) => None,'''
+to = '''            None => None,
+            Some(PathElement::MoveTo(_)) => Some(PointF::default()),'''
+
+[[mutant]]
+name = "polygons aren't closed"
+file = "crates/gfx/src/lib.rs"
+from = '''                path.line_to(p);
+            }
+            path.close();'''
+to = '''                path.line_to(p);
+            }'''
+
+[[mutant]]
+name = "the fill rule isn't kept"
+file = "crates/gfx/src/lib.rs"
+from = '''        self.fill_rule = fill_rule;'''
+to = ''''''
+
+# --- compositor_paint: bounds and dashes --------------------------------------
+
+[[mutant]]
+name = "a stroked path's bounds leave out its width"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                bounds.inset(-width / 2.0 * reach)'''
+to = '''                bounds.inset(-0.0 * width * reach)'''
+test = ["cargo", "test", "-q", "-p", "compositor_paint", "--lib"]
+
+[[mutant]]
+name = "a stroked path's bounds leave out miters"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                    reach = reach.max(flags.miter_limit);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "compositor_paint", "--lib"]
+
+[[mutant]]
+name = "a stroked path's bounds leave out square caps"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                    reach = reach.max(std::f32::consts::SQRT_2);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "compositor_paint", "--lib"]
+
+[[mutant]]
+name = "an odd number of intervals isn't repeated"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''        let intervals: Arc<[f32]> = if intervals.len() % 2 == 1 {'''
+to = '''        let intervals: Arc<[f32]> = if intervals.len() % 2 == 3 {'''
+test = ["cargo", "test", "-q", "-p", "compositor_paint", "--lib"]
+
+[[mutant]]
+name = "negative intervals dash"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''        if intervals.iter().any(|i| !i.is_finite() || *i < 0.0)'''
+to = '''        if intervals.iter().any(|i| !i.is_finite())'''
+test = ["cargo", "test", "-q", "-p", "compositor_paint", "--lib"]
+
+[[mutant]]
+name = "intervals of all 0 dash"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''            || intervals.iter().sum::<f32>() <= 0.0'''
+to = '''            || intervals.is_empty()'''
+test = ["cargo", "test", "-q", "-p", "compositor_paint", "--lib"]
+
+[[mutant]]
+name = "a phase that isn't a number dashes"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''            || !phase.is_finite()'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "compositor_paint", "--lib"]
+
+# --- raster -------------------------------------------------------------------
+
+[[mutant]]
+name = "the fill rule is always non-zero"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        FillRule::EvenOdd => sk::PathFillType::EvenOdd,'''
+to = '''        FillRule::EvenOdd => sk::PathFillType::Winding,'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "a_path_fills_by_its_fill_rule"]
+
+[[mutant]]
+name = "a conic is a quadratic curve"
+file = "crates/raster/src/skia_backend.rs"
+from = '''                builder.conic_to(pt(c), pt(p), weight);'''
+to = '''                let _ = weight;
+                builder.quad_to(pt(c), pt(p));'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "paths_become_skias_element_for_element"]
+
+[[mutant]]
+name = "a cubic curve is a line"
+file = "crates/raster/src/skia_backend.rs"
+from = '''                builder.cubic_to(pt(c1), pt(c2), pt(p));'''
+to = '''                let _ = (c1, c2);
+                builder.line_to(pt(p));'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "paths_become_skias_element_for_element"]
+
+[[mutant]]
+name = "a path clip does nothing"
+file = "crates/raster/src/skia_backend.rs"
+from = '''            canvas.clip_path(&sk_path(path), sk::ClipOp::Intersect, *anti_alias);'''
+to = '''            let _ = (path, anti_alias);'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "a_path_clip_keeps_what_its_fill_covers"]
+
+[[mutant]]
+name = "caps are always butt"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        LineCap::Square => sk::PaintCap::Square,'''
+to = '''        LineCap::Square => sk::PaintCap::Butt,'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "strokes_end_and_join_as_their_flags_say"]
+
+[[mutant]]
+name = "round joins are miters"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        LineJoin::Round => sk::PaintJoin::Round,'''
+to = '''        LineJoin::Round => sk::PaintJoin::Miter,'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "strokes_end_and_join_as_their_flags_say"]
+
+[[mutant]]
+name = "the miter limit is Skia's default"
+file = "crates/raster/src/skia_backend.rs"
+from = '''    paint.set_stroke_miter(flags.miter_limit);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "strokes_end_and_join_as_their_flags_say"]
+
+[[mutant]]
+name = "dashes start at their beginning"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        paint.set_path_effect(sk::PathEffect::dash(dash.intervals(), dash.phase()));'''
+to = '''        paint.set_path_effect(sk::PathEffect::dash(dash.intervals(), 0.0));'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "dashes_go_through_their_intervals_from_the_phase"]
+
+# --- paint: borders -----------------------------------------------------------
+
+[[mutant]]
+name = "dots have butt caps"
+file = "crates/paint/src/lib.rs"
+from = '''            cap: if style == BorderStyle::Dotted && dash.is_some() {'''
+to = '''            cap: if false {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "artifact::dashes_and_dots_fit_their_sides"]
+
+[[mutant]]
+name = "dashes have round caps"
+file = "crates/paint/src/lib.rs"
+from = '''            cap: if style == BorderStyle::Dotted && dash.is_some() {'''
+to = '''            cap: if dash.is_some() {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "artifact::dashes_and_dots_fit_their_sides"]
+
+[[mutant]]
+name = "dashes with no room for two aren't solid"
+file = "crates/paint/src/lib.rs"
+from = '''            if length < 2.0 * dash + gap {
+                return None;
+            }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "artifact::dash_lengths_follow_the_width_and_the_path"]

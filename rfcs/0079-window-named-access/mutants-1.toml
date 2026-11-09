@@ -1,0 +1,236 @@
+# Stage 1: the tree scopes' id and name tables, and getElementById.
+test = ["sh", "-c", "cargo test -q -p dom --test it tree_scopes"]
+timeout = 900
+
+# --- the tables ---
+
+[[mutant]]
+name = "several under one name counted as one"
+file = "crates/dom/src/tree_scope.rs"
+from = '''                    Names::One(_) => 2,'''
+to = '''                    Names::One(_) => 1,'''
+
+[[mutant]]
+name = "a second under a name replaces the first"
+file = "crates/dom/src/tree_scope.rs"
+from = '''            None => {
+                names.table(table).insert(name.into(), Names::One(element));
+            }'''
+to = '''            _ => {
+                names.table(table).insert(name.into(), Names::One(element));
+            }'''
+
+[[mutant]]
+name = "the first kept when another comes"
+file = "crates/dom/src/tree_scope.rs"
+from = '''                *entry = Names::Many {
+                    count,
+                    first: Cell::new(None),
+                };'''
+to = '''                let first = match entry {
+                    Names::Many { first, .. } => first.get(),
+                    Names::One(_) => None,
+                };
+                *entry = Names::Many {
+                    count,
+                    first: Cell::new(first),
+                };'''
+
+[[mutant]]
+name = "the first kept when one goes"
+file = "crates/dom/src/tree_scope.rs"
+from = '''                *count = count.saturating_sub(1);
+                first.set(None);'''
+to = '''                *count = count.saturating_sub(1);
+                let _ = first;'''
+
+[[mutant]]
+name = "the count not taken down"
+file = "crates/dom/src/tree_scope.rs"
+from = '''                *count = count.saturating_sub(1);'''
+to = '''                *count = *count;'''
+
+[[mutant]]
+name = "one alone never taken out"
+file = "crates/dom/src/tree_scope.rs"
+from = '''            Some(Names::One(one)) if *one == element => {
+                entries.remove(name);
+            }'''
+to = '''            Some(Names::One(one)) if *one == element => {}'''
+
+[[mutant]]
+name = "the name it was put under forgotten"
+file = "crates/dom/src/tree_scope.rs"
+from = '''        if table == Table::Names {
+            names.named.insert(element, name.into());
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the first found not kept"
+file = "crates/dom/src/tree_scope.rs"
+from = '''        if let Some(Names::Many { first, .. }) = entry {
+            first.set(Some(element));
+        }'''
+to = '''        let _ = (entry, element);'''
+
+[[mutant]]
+name = "scopes gone never dropped"
+file = "crates/dom/src/tree_scope.rs"
+from = '''            scopes.retain(|id, _| alive(*id));'''
+to = '''            scopes.retain(|id, _| alive(*id) || true);'''
+
+[[mutant]]
+name = "pruned at every new scope"
+file = "crates/dom/src/tree_scope.rs"
+from = '''            self.prune_at.set(scopes.len().saturating_mul(2).max(16));'''
+to = '''            self.prune_at.set(0);'''
+
+# --- keeping them (scope.rs) ---
+
+[[mutant]]
+name = "an inserted subtree not put in"
+file = "crates/dom/src/scope.rs"
+from = '''                connected.then_some(&mut |id| links.push(id)),
+                scope.is_some().then_some(&mut scope_names),'''
+to = '''                connected.then_some(&mut |id| links.push(id)),
+                None,'''
+
+[[mutant]]
+name = "a removed subtree not taken out"
+file = "crates/dom/src/scope.rs"
+from = '''                None,
+                scope.is_some().then_some(&mut scope_names),'''
+to = '''                None,
+                None,'''
+
+[[mutant]]
+name = "a shadow tree's elements in its host's scope"
+file = "crates/dom/src/scope.rs"
+from = '''            if in_shadow {
+                return;
+            }
+            moved.sheets |= style_sheets && is_style_sheet_owner(node);'''
+to = '''            if in_shadow {
+                if let Some(scope_names) = scope_names.as_mut() {
+                    scope_names(node);
+                }
+                return;
+            }
+            moved.sheets |= style_sheets && is_style_sheet_owner(node);'''
+
+[[mutant]]
+name = "a shadow root isn't a scope"
+file = "crates/dom/src/scope.rs"
+from = '''        NodeKindData::Document { .. } | NodeKindData::DocumentFragment { shadow: Some(_), .. } => {
+            Some(current)
+        }'''
+to = '''        NodeKindData::Document { .. } => Some(current),'''
+
+[[mutant]]
+name = "any fragment is a scope"
+file = "crates/dom/src/scope.rs"
+from = '''        NodeKindData::Document { .. } | NodeKindData::DocumentFragment { shadow: Some(_), .. } => {
+            Some(current)
+        }'''
+to = '''        NodeKindData::Document { .. } | NodeKindData::DocumentFragment { .. } => Some(current),'''
+
+[[mutant]]
+name = "an empty id is a name"
+file = "crates/dom/src/scope.rs"
+from = '''    if let Some(id) = id.as_deref().filter(|id| !id.is_empty()) {
+        match alive {'''
+to = '''    if let Some(id) = id.as_deref() {
+        match alive {'''
+
+[[mutant]]
+name = "names in a shadow root's tables"
+file = "crates/dom/src/scope.rs"
+from = '''    if !matches!(scope.kind, NodeKindData::Document { .. }) || !is_named_element(node) {
+        return;
+    }'''
+to = '''    if !is_named_element(node) {
+        return;
+    }'''
+
+[[mutant]]
+name = "any element is named"
+file = "crates/dom/src/scope.rs"
+from = '''    if !matches!(scope.kind, NodeKindData::Document { .. }) || !is_named_element(node) {
+        return;
+    }'''
+to = '''    if !matches!(scope.kind, NodeKindData::Document { .. }) {
+        return;
+    }'''
+
+[[mutant]]
+name = "an object isn't named"
+file = "crates/dom/src/scope.rs"
+from = '''            || name.is_html(&local_name!("object"))
+    })
+}'''
+to = '''    })
+}'''
+
+[[mutant]]
+name = "an empty name is a name"
+file = "crates/dom/src/scope.rs"
+from = '''                .map(|attribute| attribute.value.as_str())
+                .filter(|name| !name.is_empty());
+            if let Some(name) = name {
+                tables.add(scope.id, Table::Names, name, node.id, alive);'''
+to = '''                .map(|attribute| attribute.value.as_str());
+            if let Some(name) = name {
+                tables.add(scope.id, Table::Names, name, node.id, alive);'''
+
+[[mutant]]
+name = "a name change not followed"
+file = "crates/dom/src/scope.rs"
+from = '''        let names_change = name.is_attr(&local_name!("id"))
+            || name.is_attr(&local_name!("name")) && is_named_element(element);'''
+to = '''        let names_change = name.is_attr(&local_name!("id"));'''
+
+[[mutant]]
+name = "the old id left in"
+file = "crates/dom/src/scope.rs"
+from = '''        if let Some(scope) = scope {
+            update_scope_names(self.tree_scopes, scope, element, None);
+        }
+        if let NodeState::Element {'''
+to = '''        if let NodeState::Element {'''
+
+[[mutant]]
+name = "the new id not put in"
+file = "crates/dom/src/scope.rs"
+from = '''            // Collected or not: nothing allocates here, so no GC runs.
+            let alive = |id: NodeId| node_ids.node(id).is_some();
+            update_scope_names(self.tree_scopes, scope, element, Some(&alive));'''
+to = '''            // Collected or not: nothing allocates here, so no GC runs.
+            let alive = |id: NodeId| node_ids.node(id).is_some();
+            let _ = (scope, alive);'''
+
+[[mutant]]
+name = "a scope gone looks alive"
+file = "crates/dom/src/scope.rs"
+from = '''        // Collected or not: no GC runs in this operation (see above).
+        let alive = |id: NodeId| node_ids.node(id).is_some();'''
+to = '''        // Collected or not: no GC runs in this operation (see above).
+        let alive = |id: NodeId| node_ids.get(id).is_some();'''
+
+# --- looking up ---
+
+[[mutant]]
+name = "a fragment looked up in the tables"
+file = "crates/dom/src/scope.rs"
+from = '''        if !is_tree_scope(root) {
+            return first_in_tree(root, matches);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the first of several not walked for"
+file = "crates/dom/src/scope.rs"
+from = '''                let first = first_in_tree(scope, matches)?;
+                self.tree_scopes'''
+to = '''                let first = scope.first_child().filter(|_| false)?;
+                self.tree_scopes'''

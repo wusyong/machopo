@@ -1,0 +1,212 @@
+# Step 3e: allocation sites. What decides a site (V8's thresholds, the
+# nursery's size, first survivals only, the counts starting over), what
+# takes it back (a full GC's marks against its old objects), numbering, the
+# site in a header (published, kept through copies, counted when marked,
+# the threads' counts added up), the allocation path, the verifier's
+# checks of flags, the full GC's growth, a replay's sites by type, and
+# `bench.py gc`'s pretenured column. Run with `RUSTY_V8_ARCHIVE`
+# (`test.py` checks the third-party pins).
+test = ["cargo", "test", "-q", "-p", "gc"]
+timeout = 900
+
+# Deciding a site.
+
+[[mutant]]
+name = "a site is tenured at 70%"
+file = "crates/gc/src/site.rs"
+from = '''const TENURE_PERCENT: usize = 80;'''
+to = '''const TENURE_PERCENT: usize = 70;'''
+
+[[mutant]]
+name = "99 objects decide a site"
+file = "crates/gc/src/site.rs"
+from = '''const MIN_CREATED: usize = 100;'''
+to = '''const MIN_CREATED: usize = 99;'''
+
+[[mutant]]
+name = "a small nursery tenures at once"
+file = "crates/gc/src/site.rs"
+from = '''                } else if large_nursery {'''
+to = '''                } else if true {'''
+
+[[mutant]]
+name = "a site not tenured is decided again"
+file = "crates/gc/src/site.rs"
+from = '''            let open = matches!(
+                stats.decision,
+                PretenureDecision::Undecided | PretenureDecision::MaybeTenure
+            );'''
+to = '''            let open = stats.decision != PretenureDecision::Tenure;'''
+
+[[mutant]]
+name = "the counts don't start over"
+file = "crates/gc/src/site.rs"
+from = '''            stats.created = 0;'''
+to = '''            let _ = &stats.created;'''
+
+[[mutant]]
+name = "the nursery's size is never large enough"
+file = "crates/gc/src/heap/young.rs"
+from = '''                .min(site::MIN_NURSERY_BYTES_TO_TENURE.div_ceil(PAGE_BYTES));'''
+to = '''                .max(site::MIN_NURSERY_BYTES_TO_TENURE.div_ceil(PAGE_BYTES));'''
+
+[[mutant]]
+name = "an aged survivor counts as found"
+file = "crates/gc/src/heap/young.rs"
+from = '''                    .copied(site, old_flags & AGED == 0, promote);'''
+to = '''                    .copied(site, true, promote);'''
+
+[[mutant]]
+name = "the threads' found aren't added up"
+file = "crates/gc/src/heap/young.rs"
+from = '''            site::add_counts(&mut site_counts.found, &copier.sites.found);'''
+to = '''            let _ = &copier.sites.found;'''
+
+# Taking a site back.
+
+[[mutant]]
+name = "a full GC never takes a site back"
+file = "crates/gc/src/site.rs"
+from = '''            {
+                stats.decision = PretenureDecision::Undecided;
+            }'''
+to = '''            {
+            }'''
+
+[[mutant]]
+name = "the last full GC's marks aren't old objects"
+file = "crates/gc/src/site.rs"
+from = '''            let old = stats.marked.saturating_add(stats.entered_old);'''
+to = '''            let old = stats.entered_old;'''
+
+[[mutant]]
+name = "the marks aren't kept"
+file = "crates/gc/src/site.rs"
+from = '''            stats.marked = now;'''
+to = '''            let _ = now;'''
+
+[[mutant]]
+name = "promoted objects don't enter the old generation"
+file = "crates/gc/src/site.rs"
+from = '''            stats.entered_old = stats.entered_old.saturating_add(promoted);'''
+to = '''            let _ = promoted;'''
+
+[[mutant]]
+name = "a site past the last has a number"
+file = "crates/gc/src/site.rs"
+from = '''    if *next > MAX_SITES {'''
+to = '''    if *next > MAX_SITES + 1 {'''
+
+# The site in a header, and the allocation path.
+
+[[mutant]]
+name = "a tenured site allocates young"
+file = "crates/gc/src/heap.rs"
+from = '''        let tenured = sites.as_ref().is_some_and(|sites| sites.is_tenured(site));'''
+to = '''        let tenured = sites.as_ref().is_some_and(|sites| sites.is_tenured(site)) && false;'''
+
+[[mutant]]
+name = "the nursery's objects aren't counted"
+file = "crates/gc/src/heap.rs"
+from = '''                sites.created(site);'''
+to = '''                let _ = site;'''
+
+[[mutant]]
+name = "the old generation's objects aren't counted"
+file = "crates/gc/src/heap.rs"
+from = '''            sites.entered_old(site);'''
+to = '''            let _ = site;'''
+
+[[mutant]]
+name = "pretenured objects aren't counted"
+file = "crates/gc/src/heap.rs"
+from = '''        if tenured {
+            self.pretenured
+                .set(self.pretenured.get().saturating_add(1));
+        }'''
+to = '''        let _ = tenured;'''
+
+[[mutant]]
+name = "an object's header has no site"
+file = "crates/gc/src/heap.rs"
+from = '''            self.header(data).add(1).write(site << site::SITE_SHIFT);'''
+to = '''            self.header(data).add(1).write(0 * site);'''
+
+[[mutant]]
+name = "a copy drops its site"
+file = "crates/gc/src/heap/young.rs"
+from = '''                    .write(flags & SITE_BITS | if promote { 0 } else { AGED });'''
+to = '''                    .write(if promote { 0 } else { AGED });'''
+
+[[mutant]]
+name = "marking counts every object for no site"
+file = "crates/gc/src/heap.rs"
+from = '''        tally.add(flags >> site::SITE_SHIFT);'''
+to = '''        tally.add(0 * flags);'''
+
+[[mutant]]
+name = "the marking threads' counts aren't added up"
+file = "crates/gc/src/heap.rs"
+from = '''            site::add_counts(&mut sync::lock(&self.site_marked), &tally.counts);'''
+to = '''            let _ = &tally.counts;'''
+
+[[mutant]]
+name = "a thread's last run isn't counted"
+file = "crates/gc/src/heap.rs"
+from = '''        tally.flush();'''
+to = '''        let _ = &tally;'''
+
+[[mutant]]
+name = "a run isn't counted when the site changes"
+file = "crates/gc/src/heap.rs"
+from = '''        if site != self.site {
+            self.flush();'''
+to = '''        if site != self.site {
+            self.run = 0;'''
+
+# The verifier.
+
+[[mutant]]
+name = "an old object's flags pass"
+file = "crates/gc/src/heap/verify.rs"
+from = '''        if flags & !allowed != 0 {'''
+to = '''        if flags & !allowed != 0 && false {'''
+
+[[mutant]]
+name = "an unknown site passes"
+file = "crates/gc/src/heap/verify.rs"
+from = '''        if site != 0 && site >= self.sites.borrow().len() {'''
+to = '''        if site != 0 && site >= self.sites.borrow().len() && false {'''
+
+# The full GC's growth.
+
+[[mutant]]
+name = "the heap grows to 1.5 times again"
+file = "crates/gc/src/heap.rs"
+from = '''            .set(used.max(self.options.min_allocation_bytes));'''
+to = '''            .set((used / 2).max(self.options.min_allocation_bytes));'''
+
+# A replay's sites.
+
+[[mutant]]
+name = "a replay's types share a site"
+file = "crates/gc_bench/src/gc_replay.rs"
+from = '''                self.held[*next] = Some(allocate(cx, plan.classes[ty], self.sites[ty]));'''
+to = '''                self.held[*next] = Some(allocate(cx, plan.classes[ty], self.sites[0]));'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it", "replay::"]
+
+# `bench.py gc`.
+
+[[mutant]]
+name = "the pretenured column is empty"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''                f"{'' if pretenured is None else f'{pretenured:g}'} | {row['live_nodes']} | "'''
+to = '''                f"{''} | {row['live_nodes']} | "'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "SummaryTests"]
+
+[[mutant]]
+name = "the pretenured are the first run's"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''        "pretenured_objects": median("pretenured_objects") if all("pretenured_objects" in run for run in runs)'''
+to = '''        "pretenured_objects": runs[0]["pretenured_objects"] if all("pretenured_objects" in run for run in runs)'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "SummaryTests"]

@@ -1,0 +1,248 @@
+# Mutation test of step 2c: CSS animations' events (the `animation` crate's
+# table, their order), `AnimationEvent` (JS and wasm) and
+# `onanimationcancel`, the renderer's dispatch, `::marker`'s animation
+# properties (2026-10-15):
+# python3 scripts/test.py mutate rfcs/0048-css-animations/mutants-2c.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "css_animations::", "animations::"]
+timeout = 900
+
+# --- the table
+[[mutant]]
+name = "a start scheduled at its end"
+file = "crates/animation/src/animation.rs"
+from = '''            (None | Some(Before), Active) => changes.push((true, start, with(true, at_start))),'''
+to = '''            (None | Some(Before), Active) => changes.push((true, start, with(true, at_end))),'''
+
+[[mutant]]
+name = "back into its active interval, the start's elapsed time"
+file = "crates/animation/src/animation.rs"
+from = '''            (Some(After), Active) => changes.push((true, end, with(false, at_end))),'''
+to = '''            (Some(After), Active) => changes.push((true, start, with(false, at_end))),'''
+
+[[mutant]]
+name = "back into its active interval, no start"
+file = "crates/animation/src/animation.rs"
+from = '''            (Some(After), Active) => changes.push((true, end, with(false, at_end))),'''
+to = '''            (Some(After), Active) => {}'''
+
+[[mutant]]
+name = "skipped over, no end"
+file = "crates/animation/src/animation.rs"
+from = '''                changes.push((true, start, with(true, at_start)));
+                changes.push((false, end, with(true, at_end)));'''
+to = '''                changes.push((true, start, with(true, at_start)));'''
+
+[[mutant]]
+name = "back before it, no end"
+file = "crates/animation/src/animation.rs"
+from = '''                changes.push((true, end, with(false, at_end)));
+                changes.push((false, start, with(false, at_start)));'''
+to = '''                changes.push((true, end, with(false, at_end)));'''
+
+[[mutant]]
+name = "back before it, at its times"
+file = "crates/animation/src/animation.rs"
+from = '''                changes.push((true, end, with(false, at_end)));
+                changes.push((false, start, with(false, at_start)));'''
+to = '''                changes.push((true, end, at_end));
+                changes.push((false, start, at_start));'''
+
+[[mutant]]
+name = "back into its delay, the end's elapsed time"
+file = "crates/animation/src/animation.rs"
+from = '''            (Some(Active), Before) => changes.push((false, start, with(false, at_start))),'''
+to = '''            (Some(Active), Before) => changes.push((false, end, with(false, at_start))),'''
+
+[[mutant]]
+name = "an end at its start"
+file = "crates/animation/src/animation.rs"
+from = '''            (Some(Active), After) => changes.push((false, end, with(true, at_end))),'''
+to = '''            (Some(Active), After) => changes.push((false, start, with(true, at_start))),'''
+
+[[mutant]]
+name = "an iteration event at every frame"
+file = "crates/animation/src/animation.rs"
+from = '''                    && iteration != last'''
+to = '''                    && (iteration != last || true)'''
+
+[[mutant]]
+name = "an iteration's elapsed time one more"
+file = "crates/animation/src/animation.rs"
+from = '''                    let elapsed = (reached - self.timing.iteration_start) * self.timing.duration;'''
+to = '''                    let elapsed = (reached + 1.0 - self.timing.iteration_start) * self.timing.duration;'''
+
+[[mutant]]
+name = "the times without the delay"
+file = "crates/animation/src/animation.rs"
+from = '''            Some(origin) if rate != 0.0 => origin + (self.timing.delay + elapsed) / rate,'''
+to = '''            Some(origin) if rate != 0.0 => origin + elapsed / rate,'''
+
+[[mutant]]
+name = "the times from now"
+file = "crates/animation/src/animation.rs"
+from = '''            Some(origin) if rate != 0.0 => origin + (self.timing.delay + elapsed) / rate,'''
+to = '''            Some(_) if rate != 0.0 => now + (self.timing.delay + elapsed) / rate,'''
+
+[[mutant]]
+name = "the last iteration not kept"
+file = "crates/animation/src/animation.rs"
+from = '''        self.last_iteration = timing.current_iteration;'''
+to = '''        self.last_iteration = Some(-1.0);'''
+
+[[mutant]]
+name = "a change runs forever"
+file = "crates/animation/src/animation.rs"
+from = '''        self.last_iteration = timing.current_iteration;
+        self.changed = false;
+    }'''
+to = '''        self.last_iteration = timing.current_iteration;
+    }'''
+
+[[mutant]]
+name = "a done animation canceled says so"
+file = "crates/animation/src/animation.rs"
+from = '''            Owner::CssAnimation(_) if !matches!(self.last_phase, None | Some(Phase::After)) => {'''
+to = '''            Owner::CssAnimation(_) if !matches!(self.last_phase, None) => {'''
+
+[[mutant]]
+name = "an animation never ticked canceled says so"
+file = "crates/animation/src/animation.rs"
+from = '''            Owner::CssAnimation(_) if !matches!(self.last_phase, None | Some(Phase::After)) => {'''
+to = '''            Owner::CssAnimation(_) if !matches!(self.last_phase, Some(Phase::After)) => {'''
+
+[[mutant]]
+name = "a cancel's elapsed time 0"
+file = "crates/animation/src/animation.rs"
+from = '''                events.push(self.animation_event(CssAnimationEventKind::Cancel, active, now));'''
+to = '''                events.push(self.animation_event(CssAnimationEventKind::Cancel, 0.0, now));'''
+
+[[mutant]]
+name = "a new name list cancels silently"
+file = "crates/animation/src/css_animation.rs"
+from = '''            let from = events.len();
+            animation.cancel(now, events);
+            in_place(&mut events[from..], places[&animation.id]);'''
+to = '''            let from = events.len();
+            in_place(&mut events[from..], places[&animation.id]);'''
+
+[[mutant]]
+name = "display: none cancels silently"
+file = "crates/animation/src/transition.rs"
+from = '''            if !matches!(animation.owner, Owner::Script) && animation.owning {
+                animation.cancel(now, events);
+                animation.disassociate();
+            }'''
+to = '''            if !matches!(animation.owner, Owner::Script) && animation.owning {
+                animation.disassociate();
+            }'''
+
+[[mutant]]
+name = "CSS animations' events dropped"
+file = "crates/animation/src/transition.rs"
+from = '''        self.css_animations.tick(now, events);'''
+to = '''        self.css_animations.tick(now, &mut Vec::new());'''
+
+# --- order, kinds and the DOM
+[[mutant]]
+name = "CSS animations' events before transitions'"
+file = "crates/animation/src/event.rs"
+from = '''            Self::Transition(e) => (e.scheduled_time, 0, e.order),'''
+to = '''            Self::Transition(e) => (e.scheduled_time, 2, e.order),'''
+test = ["cargo", "test", "-q", "-p", "animation", "--test", "it", "--", "events::"]
+
+[[mutant]]
+name = "events not by time"
+file = "crates/animation/src/event.rs"
+from = '''        a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2))'''
+to = '''        a.1.cmp(&b.1).then(a.2.cmp(&b.2))'''
+test = ["cargo", "test", "-q", "-p", "animation", "--test", "it", "--", "events::"]
+
+[[mutant]]
+name = "animationend is animationstart"
+file = "crates/animation/src/event.rs"
+from = '''            Self::End => "animationend",'''
+to = '''            Self::End => "animationstart",'''
+
+[[mutant]]
+name = "0.1s as an f32"
+file = "crates/animation/src/timing.rs"
+from = '''    seconds
+        .to_string()
+        .parse::<f64>()
+        .unwrap_or(f64::from(seconds))
+        * 1000.0'''
+to = '''    f64::from(seconds) * 1000.0'''
+
+[[mutant]]
+name = "the renderer's AnimationEvent without its name"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                            animation_name: event.name.to_string(),'''
+to = '''                            animation_name: String::new(),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "css_animations::"]
+
+[[mutant]]
+name = "the renderer's AnimationEvent without its pseudo-element"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                        EventKindInit::Animation(dom::AnimationEventData {
+                            animation_name: event.name.to_string(),
+                            elapsed_time: event.elapsed_time,
+                            pseudo_element,'''
+to = '''                        EventKindInit::Animation(dom::AnimationEventData {
+                            animation_name: event.name.to_string(),
+                            elapsed_time: event.elapsed_time,
+                            pseudo_element: String::new(),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "css_animations::"]
+
+[[mutant]]
+name = "a marker has no animations"
+file = "crates/css/src/properties.rs"
+from = '''                | AnimationPlayState
+                | AnimationName
+        )
+    }'''
+to = '''                | AnimationPlayState
+        )
+    }'''
+
+[[mutant]]
+name = "AnimationEvent's name empty"
+file = "crates/dom_api/src/event.rs"
+from = '''    Ok(DomString::from(
+        animation_data(this).animation_name.as_str(),
+    ))'''
+to = '''    Ok(DomString::from(""))'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "bindings::animation_events"]
+
+[[mutant]]
+name = "AnimationEvent's elapsed time 0"
+file = "crates/dom_api/src/event.rs"
+from = '''    Ok(animation_data(this).elapsed_time)'''
+to = '''    Ok(animation_data(this).elapsed_time * 0.0)'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "bindings::animation_events"]
+
+[[mutant]]
+name = "AnimationEvent is an Event"
+file = "crates/dom_api/src/object.rs"
+from = '''            Self::Event(event) if event.animation().is_some() => ObjectKind::AnimationEvent,'''
+to = '''            Self::Event(event) if event.animation().is_some() && false => ObjectKind::AnimationEvent,'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "bindings::animation_events"]
+
+[[mutant]]
+name = "no onanimationcancel"
+file = "crates/dom_api/src/handlers.rs"
+from = '''            onanimationcancel = "animationcancel",'''
+to = '''            onanimationcancel = "animationcancelx",'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "bindings::animation_events"]
+
+[[mutant]]
+name = "AnimationEventInit's pseudo-element dropped"
+file = "crates/dom_api/src/event.rs"
+from = '''    let kind = EventKindInit::Animation(AnimationEventData {
+        animation_name: init.animation_name.into_string(),
+        elapsed_time: init.elapsed_time,
+        pseudo_element: init.pseudo_element.into_string(),'''
+to = '''    let kind = EventKindInit::Animation(AnimationEventData {
+        animation_name: init.animation_name.into_string(),
+        elapsed_time: init.elapsed_time,
+        pseudo_element: String::new(),'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "it", "--", "engine::a_guest_makes_animation_events"]

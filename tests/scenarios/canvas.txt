@@ -1,0 +1,55 @@
+# about:demo's canvas: its 2D context's background and squares are
+# painted; clicking the canvas adds a square; "Add one later" adds one
+# from an idle callback a second later, which changes no DOM and, unlike a
+# timer's or an event's, asks for no frame: nothing but the canvas asks for
+# the one that shows it. "Read a pixel" reads the first square back with
+# getImageData. The paths' canvas is painted, and "New size" gives it a
+# new width, which clears it and makes it narrower, drawn again. The text's
+# canvas is painted (filled and stroked text, and a box from measureText),
+# and "Bigger text" draws it again larger. The styles' canvas is painted
+# (gradients, a pattern, a shadow, a canvas drawn on it, Path2Ds
+# composited "multiply"), and clicking its middle finds the circle with
+# isPointInPath and turns its box's colors around with putImageData.
+# "Copy as image" shows the styles canvas, as toBlob's PNG through a blob
+# URL, in an image below it.
+window size=800x600
+navigate about:demo
+wait-loaded
+scroll-to #canvas-demo
+capture squares
+screenshot squares
+click #canvas-demo
+expect-differs squares #canvas-demo
+screenshot added
+click #canvas-later
+capture clicked
+expect-differs clicked #canvas-demo
+screenshot later
+click #canvas-read
+wait-text #canvas-note "The first square is rgba(255, 153, 0, 1)."
+scroll-to #canvas-paths
+capture paths
+screenshot paths
+click #canvas-resize
+wait-text #canvas-paths-note "180 pixels wide."
+expect-differs paths #canvas-paths
+screenshot resized
+scroll-to #canvas-text
+capture text
+screenshot text
+click #canvas-bigger
+wait-text #canvas-text-note "Text at 18px."
+scroll-to #canvas-text
+expect-differs text #canvas-text
+screenshot bigger
+scroll-to #canvas-styles
+capture styles
+screenshot styles
+click #canvas-styles
+wait-text #canvas-styles-note "You picked the circle."
+expect-differs styles #canvas-styles
+screenshot picked
+click #canvas-copy
+wait-text #canvas-copy-note "Copied as image/png: the image below."
+scroll-to #canvas-copy-img
+screenshot copied

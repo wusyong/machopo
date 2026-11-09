@@ -1,0 +1,87 @@
+# Stage 2: the priority candidate; a scroller's own overflow-anchor, and
+# an inline element's.
+test = ["sh", "-c", "cargo test -q -p layout --test it scroll_anchor && cargo test -q -p renderer --lib -- the_focused_editable overflow_anchor_none overflow_anchor_none_on an_anchor_stays a_box_leaving"]
+timeout = 900
+
+[[mutant]]
+name = "no priority candidate"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''    let candidate = priority_candidate(layout_view, priority);'''
+to = '''    let candidate = priority_candidate(layout_view, &priority[..0]);'''
+
+[[mutant]]
+name = "the focused element itself, box or not"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''    let candidate = priority_candidate(layout_view, priority);'''
+to = '''    let candidate = priority.first().copied();'''
+
+[[mutant]]
+name = "the outermost of the elements with a box"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''            *first = at.min(*first);'''
+to = '''            *first = if *first == priority.len() { at } else { at.max(*first) };'''
+
+[[mutant]]
+name = "the priority candidate though it doesn't move with the scroller"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''        if !movable || skip(candidate) {'''
+to = '''        if skip(candidate) {'''
+
+[[mutant]]
+name = "sticky on the way to the priority candidate"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''        let movable = !matches!(child.style.position, Position::Fixed | Position::Sticky)'''
+to = '''        let movable = !matches!(child.style.position, Position::Fixed)'''
+
+[[mutant]]
+name = "only the priority candidate's own way"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''            .map(|(found, at, to_root, inner)| (found, at, to_root, inner && movable))'''
+to = '''            .map(|(found, at, to_root, inner)| (found, at, to_root, inner))'''
+
+[[mutant]]
+name = "the search not run in the priority candidate"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''        search.examine_candidate(examined, rect);
+        search.found.is_some()'''
+to = '''        let _ = examined;
+        search.found = fragment.node.map(|node| (ScrollAnchorNode::Box(node), rect));
+        search.found.is_some()'''
+
+[[mutant]]
+name = "any focused element"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''            .filter(|focused| focused.is_editable());'''
+to = '''            .filter(|_| true);'''
+
+[[mutant]]
+name = "only the focused element"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''            std::iter::successors(focused, |&n| scope.flat_tree_parent(n))'''
+to = '''            std::iter::successors(focused, |_| None)'''
+
+[[mutant]]
+name = "a container's own overflow-anchor"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''            if offset.y == 0.0 || opted_out {'''
+to = '''            if offset.y == 0.0 {'''
+
+[[mutant]]
+name = "only the node's own overflow-anchor"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''        node = scope.flat_tree_parent(n);
+    }
+    true
+}'''
+to = '''        node = scope.flat_tree_parent(n).filter(|_| false);
+    }
+    true
+}'''
+
+[[mutant]]
+name = "overflow-anchor past the scroller"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''        if Some(n.id()) == scroller {
+            return true;
+        }'''
+to = ''''''

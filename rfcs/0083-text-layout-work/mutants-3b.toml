@@ -1,0 +1,206 @@
+# Stage 3b: line break opportunities looked up in a table for characters
+# up to U+017F and from U+2000 to U+203F, words it can't decide given to
+# ICU4X (the parley fork's `line_table.rs` and `analyze_text`), and word
+# boundaries left out when turned off. A debug build gives every text
+# looked up to ICU4X whole too and panics when they differ, so most
+# mutants of the lookup are caught by any test with text.
+#
+# python3 scripts/test.py mutate rfcs/0083-text-layout-work/mutants-3b.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it"]
+timeout = 600
+
+# Which texts are looked up.
+
+[[mutant]]
+name = "other line break rules are looked up"
+file = "../third_party/parley/parley_engine/src/analysis.rs"
+from = '''            if segmenter_key == SegmenterKey::DEFAULT {'''
+to = '''            if true {'''
+
+[[mutant]]
+name = "texts looked up aren't counted"
+file = "../third_party/parley/parley_engine/src/analysis.rs"
+from = '''                analyzer.texts_looked_up += 1;'''
+to = ''''''
+
+[[mutant]]
+name = "words given to ICU4X aren't counted"
+file = "../third_party/parley/parley_engine/src/analysis.rs"
+from = '''                analyzer.words_given += line_table::line_breaks('''
+to = '''                let _ = line_table::line_breaks('''
+
+# A character's class.
+
+[[mutant]]
+name = "Latin Extended-A is outside the table"
+file = "../third_party/parley/parley_engine/src/line_table.rs"
+from = '''                0xC2..=0xC5 => match bytes.get(at + 1) {'''
+to = '''                0xC2..=0xC3 => match bytes.get(at + 1) {'''
+
+[[mutant]]
+name = "two bytes take the class of the wrong character"
+file = "../third_party/parley/parley_engine/src/line_table.rs"
+from = '''usize::from(byte & 0x7) << 6'''
+to = '''usize::from(byte & 0x3) << 6'''
+
+[[mutant]]
+name = "punctuation is outside the table"
+file = "../third_party/parley/parley_engine/src/line_table.rs"
+from = '''                    Some(&[0x80, last]) =>'''
+to = '''                    Some(&[0x81, last]) =>'''
+
+[[mutant]]
+name = "three bytes take the class of the wrong character"
+file = "../third_party/parley/parley_engine/src/line_table.rs"
+from = '''PUNCTUATION_CLASSES[usize::from(last & 0x3F)]'''
+to = '''PUNCTUATION_CLASSES[usize::from(last & 0x1F)]'''
+
+[[mutant]]
+name = "a word's last punctuation is outside the table"
+file = "../third_party/parley/parley_engine/src/line_table.rs"
+from = '''        0x2000..0x2040 => (&PUNCTUATION_CLASSES, 0x2000),'''
+to = ''''''
+
+[[mutant]]
+name = "an entry of the table is wrong"
+file = "../third_party/parley/parley_engine/src/line_table.rs"
+from = '''    // 4: AL
+    [
+        [S, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, B, N, N, B, N, N],
+        [S, B, N, B, B,'''
+to = '''    // 4: AL
+    [
+        [S, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, B, N, N, B, N, N],
+        [S, B, N, B, N,'''
+
+# The lookup.
+
+[[mutant]]
+name = "spaces aren't noted"
+file = "../third_party/parley/parley_engine/src/line_table.rs"
+from = '''            at += 1;
+            spaces = true;'''
+to = '''            at += 1;'''
+
+[[mutant]]
+name = "a character after another is taken as after spaces"
+file = "../third_party/parley/parley_engine/src/line_table.rs"
+from = '''            prev = class;
+            spaces = false;'''
+to = '''            prev = class;'''
+
+[[mutant]]
+name = "a character outside the table is looked up"
+file = "../third_party/parley/parley_engine/src/line_table.rs"
+from = '''            decided = class != 0
+                && match'''
+to = '''            decided = match'''
+
+[[mutant]]
+name = "an entry the table can't decide is taken as none"
+file = "../third_party/parley/parley_engine/src/line_table.rs"
+from = '''                    _ => false,
+                };'''
+to = '''                    _ => true,
+                };'''
+
+[[mutant]]
+name = "an opportunity found isn't kept"
+file = "../third_party/parley/parley_engine/src/line_table.rs"
+from = '''                        out.push(at);'''
+to = ''''''
+
+[[mutant]]
+name = "the word after one undecided looks up no previous character"
+file = "../third_party/parley/parley_engine/src/line_table.rs"
+from = '''prev = text[start..at].chars().next_back().map_or(0, class_of);'''
+to = '''prev = 0;'''
+
+[[mutant]]
+name = "the word after one undecided looks up the one where it stopped"
+file = "../third_party/parley/parley_engine/src/line_table.rs"
+from = '''prev = text[start..at].chars().next_back().map_or(0, class_of);'''
+to = '''prev = text[start..].chars().next().map_or(0, class_of);'''
+
+# A word given to ICU4X.
+
+[[mutant]]
+name = "what the table found in a word given to ICU4X is kept"
+file = "../third_party/parley/parley_engine/src/line_table.rs"
+from = '''            out.truncate(mark);'''
+to = ''''''
+
+[[mutant]]
+name = "words given to ICU4X aren't counted in the lookup"
+file = "../third_party/parley/parley_engine/src/line_table.rs"
+from = '''            given += 1;'''
+to = ''''''
+
+[[mutant]]
+name = "ICU4X doesn't see the word before"
+file = "../third_party/parley/parley_engine/src/line_table.rs"
+from = '''            let window_start = prev_word_start.unwrap_or(0);'''
+to = '''            let window_start = start;'''
+
+[[mutant]]
+name = "ICU4X doesn't see the word after"
+file = "../third_party/parley/parley_engine/src/line_table.rs"
+from = '''                .map_or(bytes.len(), |word| next_start + word);'''
+to = '''                .map_or(bytes.len(), |_| end);'''
+
+[[mutant]]
+name = "the word before's opportunities are kept from ICU4X"
+file = "../third_party/parley/parley_engine/src/line_table.rs"
+from = '''position >= start && position < next_start'''
+to = '''position < next_start'''
+
+[[mutant]]
+name = "the next word's start is kept from ICU4X"
+file = "../third_party/parley/parley_engine/src/line_table.rs"
+from = '''position >= start && position < next_start'''
+to = '''position >= start && position <= next_start'''
+
+[[mutant]]
+name = "the text's start is kept from ICU4X"
+file = "../third_party/parley/parley_engine/src/line_table.rs"
+from = '''position < next_start && position != 0'''
+to = '''position < next_start'''
+
+[[mutant]]
+name = "the word before is the first"
+file = "../third_party/parley/parley_engine/src/line_table.rs"
+from = '''        prev_word_start = Some(start);'''
+to = ''''''
+
+# Word boundaries.
+
+[[mutant]]
+name = "word boundaries can't be turned off"
+file = "../third_party/parley/parley/src/analysis.rs"
+from = '''        skip_word_boundaries: lcx.skip_word_boundaries,'''
+to = '''        skip_word_boundaries: false,'''
+
+[[mutant]]
+name = "turning word boundaries off turns them on"
+file = "../third_party/parley/parley/src/context.rs"
+from = '''        self.skip_word_boundaries = !on;'''
+to = '''        self.skip_word_boundaries = on;'''
+
+[[mutant]]
+name = "word boundaries are found when left out"
+file = "../third_party/parley/parley_engine/src/analysis.rs"
+from = '''    let mut wb_iter = (!options.skip_word_boundaries)'''
+to = '''    let mut wb_iter = true'''
+
+[[mutant]]
+name = "words without a dictionary are marked when left out"
+file = "../third_party/parley/parley_engine/src/analysis.rs"
+from = '''            && !options.skip_word_boundaries
+'''
+to = ''''''
+
+[[mutant]]
+name = "kun keeps word boundaries"
+file = "crates/layout/src/text.rs"
+from = '''        layout.set_word_boundaries(false);'''
+to = ''''''

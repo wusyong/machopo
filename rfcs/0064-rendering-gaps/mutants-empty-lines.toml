@@ -1,0 +1,41 @@
+# Empty lines (only out-of-flow boxes, floats and empty inline elements)
+# give no baseline (`layout`).
+#   python3 scripts/test.py mutate rfcs/0064-rendering-gaps/mutants-empty-lines.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it"]
+timeout = 900
+
+[[mutant]]
+name = "the first baseline from an empty line"
+file = "crates/layout/src/text.rs"
+from = '''            .lines()
+            .find(|line| self.holds_content(line))'''
+to = '''            .lines()
+            .find(|_| true)'''
+
+[[mutant]]
+name = "the last baseline from an empty line"
+file = "crates/layout/src/text.rs"
+from = '''            .rev()
+            .find(|line| self.holds_content(line))'''
+to = '''            .rev()
+            .find(|_| true)'''
+
+[[mutant]]
+name = "a forced break alone an empty line"
+file = "crates/layout/src/text.rs"
+from = '''        line.break_reason() == parley::BreakReason::Explicit
+            || line.items()'''
+to = '''        false
+            || line.items()'''
+
+[[mutant]]
+name = "an atomic inline alone an empty line"
+file = "crates/layout/src/text.rs"
+from = '''                    matches!(self.boxes[inline_box.id as usize], BoxItem::Atomic(_))
+                }
+            })
+    }'''
+to = '''                    false
+                }
+            })
+    }'''

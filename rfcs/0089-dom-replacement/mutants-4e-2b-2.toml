@@ -1,0 +1,215 @@
+# Stage 4e-2b-2: making nodes and documents on the new DOM:
+# `createComment`, `createDocumentFragment`,
+# `createProcessingInstruction` (its checks), `cloneNode`, `importNode`,
+# `adoptNode` (theirs), `DOMImplementation` (the same each time, its
+# documents and doctypes).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it -- documents node_tree"]
+timeout = 3000
+
+[[mutant]]
+name = "implementation: a new one each time"
+file = "crates/dom_next/src/lists.rs"
+from = '''        if let Some(implementation) = data.implementation.get(self.gc) {
+            return implementation;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "adoptNode: left in its parent"
+file = "crates/dom_next/src/lib.rs"
+from = '''        self.remove(node);
+        self.adopt(node, document);'''
+to = '''        self.adopt(node, document);'''
+
+[[mutant]]
+name = "adoptNode: not adopted"
+file = "crates/dom_next/src/lib.rs"
+from = '''        self.remove(node);
+        self.adopt(node, document);'''
+to = '''        self.remove(node);'''
+
+[[mutant]]
+name = "PI: any target"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    if !names_check::is_xml_name(target) || data.contains("?>") {'''
+to = '''    if data.contains("?>") {'''
+
+[[mutant]]
+name = "PI: any data"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    if !names_check::is_xml_name(target) || data.contains("?>") {'''
+to = '''    if !names_check::is_xml_name(target) {'''
+
+[[mutant]]
+name = "XML name: a digit first"
+file = "crates/dom_api_next/src/names_check.rs"
+from = '''    chars.next().is_some_and(start) && chars.all(rest)'''
+to = '''    chars.next().is_some_and(rest) && chars.all(rest)'''
+
+[[mutant]]
+name = "XML name: no hyphen after"
+file = "crates/dom_api_next/src/names_check.rs"
+from = '''            || matches!(c, '-' | '.' | '0'..='9''''
+to = '''            || matches!(c, '.' | '0'..='9''''
+
+[[mutant]]
+name = "XML name: the empty one"
+file = "crates/dom_api_next/src/names_check.rs"
+from = '''    chars.next().is_some_and(start) && chars.all(rest)'''
+to = '''    chars.next().is_none_or(start) && chars.all(rest)'''
+
+[[mutant]]
+name = "doctype name: whitespace"
+file = "crates/dom_api_next/src/names_check.rs"
+from = '''    !name.chars().any(|c| c.is_ascii_whitespace() || matches!(c, '\0' | '>'))'''
+to = '''    !name.chars().any(|c| matches!(c, '\0' | '>'))'''
+
+[[mutant]]
+name = "doctype name: >"
+file = "crates/dom_api_next/src/names_check.rs"
+from = '''    !name.chars().any(|c| c.is_ascii_whitespace() || matches!(c, '\0' | '>'))'''
+to = '''    !name.chars().any(|c| c.is_ascii_whitespace() || matches!(c, '\0'))'''
+
+[[mutant]]
+name = "doctype name: NULL"
+file = "crates/dom_api_next/src/names_check.rs"
+from = '''    !name.chars().any(|c| c.is_ascii_whitespace() || matches!(c, '\0' | '>'))'''
+to = '''    !name.chars().any(|c| c.is_ascii_whitespace() || matches!(c, '>'))'''
+
+[[mutant]]
+name = "createDocumentType: unchecked"
+file = "crates/dom_api_next/src/dom_implementation.rs"
+from = '''    if !names_check::is_valid_doctype_name(name) {
+        return Err(ApiError::dom(ExceptionName::InvalidCharacter));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "import: a document"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    if cx.kind(node) == NodeKind::Document || cx.is_shadow_root(node) {
+        return Err(not_supported());
+    }
+    Ok(cx.clone_node(node, Some(this), deep))'''
+to = '''    if cx.is_shadow_root(node) {
+        return Err(not_supported());
+    }
+    Ok(cx.clone_node(node, Some(this), deep))'''
+
+[[mutant]]
+name = "import: a shadow root"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    if cx.kind(node) == NodeKind::Document || cx.is_shadow_root(node) {
+        return Err(not_supported());
+    }
+    Ok(cx.clone_node(node, Some(this), deep))'''
+to = '''    if cx.kind(node) == NodeKind::Document {
+        return Err(not_supported());
+    }
+    Ok(cx.clone_node(node, Some(this), deep))'''
+
+[[mutant]]
+name = "import: into its own document"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    Ok(cx.clone_node(node, Some(this), deep))'''
+to = '''    Ok(cx.clone_node(node, None, deep))'''
+
+[[mutant]]
+name = "import: always deep"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    Ok(cx.clone_node(node, Some(this), deep))'''
+to = '''    Ok(cx.clone_node(node, Some(this), true))'''
+
+[[mutant]]
+name = "adopt: a document"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    if cx.kind(node) == NodeKind::Document {
+        return Err(not_supported());
+    }
+    if cx.is_shadow_root(node) {
+        return Err(ApiError::dom(ExceptionName::HierarchyRequest));'''
+to = '''    if cx.is_shadow_root(node) {
+        return Err(ApiError::dom(ExceptionName::HierarchyRequest));'''
+
+[[mutant]]
+name = "adopt: a shadow root"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    if cx.is_shadow_root(node) {
+        return Err(ApiError::dom(ExceptionName::HierarchyRequest));
+    }
+    cx.adopt_node(node, this);'''
+to = '''    cx.adopt_node(node, this);'''
+
+[[mutant]]
+name = "clone: a shadow root"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    if cx.is_shadow_root(this) {
+        return Err(not_supported());
+    }
+    Ok(cx.clone_node(this, None, deep))'''
+to = '''    Ok(cx.clone_node(this, None, deep))'''
+
+[[mutant]]
+name = "clone: never deep"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    Ok(cx.clone_node(this, None, deep))'''
+to = '''    Ok(cx.clone_node(this, None, false))'''
+
+[[mutant]]
+name = "createDocument: the empty name an element"
+file = "crates/dom_api_next/src/dom_implementation.rs"
+from = '''    let name = if qualified_name.is_empty() {
+        None
+    } else {'''
+to = '''    let name = if false {
+        None
+    } else {'''
+
+[[mutant]]
+name = "createDocument: no doctype"
+file = "crates/dom_api_next/src/dom_implementation.rs"
+from = '''    if let Some(doctype) = doctype {
+        cx.append_child(document, doctype)?;
+    }'''
+to = '''    let _ = doctype;'''
+
+[[mutant]]
+name = "createDocument: an HTML document"
+file = "crates/dom_api_next/src/dom_implementation.rs"
+from = '''    let document = cx.create_document(false);'''
+to = '''    let document = cx.create_document(true);'''
+
+[[mutant]]
+name = "createHTMLDocument: no doctype"
+file = "crates/dom_api_next/src/dom_implementation.rs"
+from = '''    cx.insert(document, doctype, None);
+'''
+to = ''''''
+
+[[mutant]]
+name = "createHTMLDocument: no title"
+file = "crates/dom_api_next/src/dom_implementation.rs"
+from = '''        cx.insert(element, cx.create_text(document, title), None);
+'''
+to = ''''''
+
+[[mutant]]
+name = "createHTMLDocument: no body"
+file = "crates/dom_api_next/src/dom_implementation.rs"
+from = '''    cx.insert(html, element(local::BODY), None);
+'''
+to = ''''''
+
+[[mutant]]
+name = "createHTMLDocument: a title of none"
+file = "crates/dom_api_next/src/dom_implementation.rs"
+from = '''    if let Some(title) = title {'''
+to = '''    if let Some(title) = title.or(Some("")) {'''
+
+[[mutant]]
+name = "hasFeature: false"
+file = "crates/dom_api_next/src/dom_implementation.rs"
+from = '''    Ok(true)
+}'''
+to = '''    Ok(false)
+}'''

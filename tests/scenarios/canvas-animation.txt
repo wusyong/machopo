@@ -1,0 +1,14 @@
+# A canvas drawn again each frame, as a chart.js animation is: more
+# points each frame than a context records before drawing without waiting
+# for the frame, so some are drawn while script is still running. Each
+# frame shows new points, in the next color; the third frame reads its
+# corner back, white, after its draws.
+window size=800x600
+navigate pages/canvas-animation.html
+wait-loaded
+wait-text #note "Read 255,255,255,255."
+capture first
+expect-differs first #chart
+capture second
+expect-differs second #chart
+screenshot drawn

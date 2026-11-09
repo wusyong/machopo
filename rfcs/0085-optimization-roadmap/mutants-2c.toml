@@ -1,0 +1,43 @@
+# Stage 2c: an id set again to its value leaves the documents' tables as
+# they are; the qualified name an attribute's member is given is
+# lowercased only if it has an uppercase letter and is an HTML element's in
+# an HTML document; a string argument's characters are scanned for ASCII
+# once. `dom`'s id tests (the debug build's count of the tables' changes),
+# `dom_js`'s core tests (names lowercased or not), `bindings`' tests (the
+# strings lent and not).
+test = ["sh", "-c", "systemd-run --user --scope -q -p MemoryMax=24G -p MemorySwapMax=0 sh -c 'cargo test -q -p dom --test it ids:: && cargo test -q -p dom_js --test it dom_core:: && cargo test -q -p bindings'"]
+timeout = 1200
+
+[[mutant]]
+name = "dom: an id set again to its value changes the tables"
+file = "crates/dom/src/style.rs"
+from = '''            if name == ID_ATTRIBUTE && old != new {'''
+to = '''            if name == ID_ATTRIBUTE {'''
+
+[[mutant]]
+name = "dom_api: a name lowercased only with no uppercase letter"
+file = "crates/dom_api/src/element.rs"
+from = '''    if qualified.bytes().any(|b| b.is_ascii_uppercase())
+        && cx.is_html_element_in_html_document(this)'''
+to = '''    if !qualified.bytes().any(|b| b.is_ascii_uppercase())
+        && cx.is_html_element_in_html_document(this)'''
+
+[[mutant]]
+name = "dom_api: a name with an uppercase letter lowercased whatever the element"
+file = "crates/dom_api/src/element.rs"
+from = '''    if qualified.bytes().any(|b| b.is_ascii_uppercase())
+        && cx.is_html_element_in_html_document(this)'''
+to = '''    if qualified.bytes().any(|b| b.is_ascii_uppercase())
+        || cx.is_html_element_in_html_document(this) && false'''
+
+[[mutant]]
+name = "bindings: characters lent unscanned the first time"
+file = "crates/bindings/src/v8_text.rs"
+from = '''        let known = self.ascii.get();'''
+to = '''        let known = true;'''
+
+[[mutant]]
+name = "bindings: characters found ASCII once scanned again"
+file = "crates/bindings/src/v8_text.rs"
+from = '''            self.ascii.set(true);'''
+to = '''            let _ = &self.ascii;'''

@@ -1,0 +1,193 @@
+# Step 2b: size classes to 32 KiB and large objects, the sweep reading only
+# the bitmaps, allocation bumping through free ranges, the fullest page
+# first, the pool of empty pages and discarding, and the slot found by a
+# multiplication. With 2a's mutants of the mark, the sweep and the
+# safepoint, rewritten for the new heap. Not here: a new object's bit in
+# `marks` (a large object's `marked`) left unset, which only debug builds
+# set, for the poison: equivalent.
+test = ["cargo", "test", "-q", "-p", "gc"]
+timeout = 600
+
+# Mark.
+
+[[mutant]]
+name = "roots not marked"
+file = "crates/gc/src/heap.rs"
+from = '''            mark(&mut states, offset, &mut worklist);'''
+to = '''            let _ = offset;'''
+
+[[mutant]]
+name = "an object's Members not marked"
+file = "crates/gc/src/heap.rs"
+from = '''                    let edge = unsafe { self.ptr(data).add(field.offset).cast::<u32>().read() };
+                    mark(states, edge as usize, worklist);'''
+to = '''                    let _ = unsafe { self.ptr(data).add(field.offset).cast::<u32>().read() };'''
+
+[[mutant]]
+name = "an array's edges not marked"
+file = "crates/gc/src/heap.rs"
+from = '''                    let edge = unsafe { self.ptr(data).cast::<u32>().add(1).add(i).read() };
+                    mark(states, edge as usize, worklist);'''
+to = '''                    let _ = unsafe { self.ptr(data).cast::<u32>().add(1).add(i).read() };'''
+
+[[mutant]]
+name = "a marked object not scanned"
+file = "crates/gc/src/heap.rs"
+from = '''    if new {
+        worklist.push(data);
+    }'''
+to = '''    let _ = new;'''
+
+[[mutant]]
+name = "a large object never scanned"
+file = "crates/gc/src/heap.rs"
+from = '''            !std::mem::replace(&mut object.marked, true)'''
+to = '''            !std::mem::replace(&mut object.marked, true) && false'''
+
+[[mutant]]
+name = "marks kept from the last GC"
+file = "crates/gc/src/heap.rs"
+from = '''                    page.clear_marks();'''
+to = ''''''
+
+[[mutant]]
+name = "the slot's multiplier rounded down"
+file = "crates/gc/src/page.rs"
+from = '''        magic[at] = (1u64 << MAGIC_SHIFT).div_ceil(CLASSES[at] as u64);'''
+to = '''        magic[at] = (1u64 << MAGIC_SHIFT) / CLASSES[at] as u64;'''
+
+# Sweep and finalizers.
+
+[[mutant]]
+name = "a free range's first word not skipped up to it"
+file = "crates/gc/src/page.rs"
+from = '''    let mut mask = u64::MAX << (from % 64);'''
+to = '''    let mut mask = u64::MAX;'''
+
+[[mutant]]
+name = "free ranges handed out highest first"
+file = "crates/gc/src/page.rs"
+from = '''        ranges.reverse();'''
+to = ''''''
+
+[[mutant]]
+name = "a dead object stays finalizable"
+file = "crates/gc/src/page.rs"
+from = '''            *finalizable &= marks;'''
+to = ''''''
+
+[[mutant]]
+name = "a new object not finalizable"
+file = "crates/gc/src/page.rs"
+from = '''            self.finalizable[word] |= bit;'''
+to = ''''''
+
+[[mutant]]
+name = "garbage not finalized"
+file = "crates/gc/src/heap.rs"
+from = '''            unsafe { self.finalize(data) };'''
+to = '''            let _ = data;'''
+
+[[mutant]]
+name = "the heap's drop finalizes nothing"
+file = "crates/gc/src/heap.rs"
+from = '''            unsafe { self.inner.finalize(data) };'''
+to = '''            let _ = data;'''
+
+[[mutant]]
+name = "a dead large object not finalized"
+file = "crates/gc/src/heap.rs"
+from = '''                        dead.push(large_data(number));'''
+to = ''''''
+
+[[mutant]]
+name = "a dead large object's pages kept"
+file = "crates/gc/src/heap.rs"
+from = '''                    object.pages
+'''
+to = '''                    0
+'''
+
+# Allocation.
+
+[[mutant]]
+name = "a page with free slots not offered again"
+file = "crates/gc/src/heap.rs"
+from = '''                        available[page.class].push((page.free, number));'''
+to = ''''''
+
+[[mutant]]
+name = "the emptiest page first"
+file = "crates/gc/src/heap.rs"
+from = '''            class.sort_unstable_by_key(|&(free, _)| Reverse(free));'''
+to = '''            class.sort_unstable_by_key(|&(free, _)| free);'''
+
+[[mutant]]
+name = "a cursor kept across a GC"
+file = "crates/gc/src/heap.rs"
+from = '''            cursor.set(Cursor::default());'''
+to = ''''''
+
+[[mutant]]
+name = "a cursor's bump not advanced"
+file = "crates/gc/src/heap.rs"
+from = '''        range.next = data.saturating_add(page::CLASSES[class]);'''
+to = '''        range.next = data;'''
+
+[[mutant]]
+name = "a large object over pages in use"
+file = "crates/gc/src/heap.rs"
+from = '''                run = 0;'''
+to = ''''''
+
+[[mutant]]
+name = "the pool never used"
+file = "crates/gc/src/heap.rs"
+from = '''            match space.pool.pop() {'''
+to = '''            match space.pool.pop().filter(|_| false) {'''
+
+[[mutant]]
+name = "a page discarded the GC that frees it"
+file = "crates/gc/src/heap.rs"
+from = '''                PageState::Free { since } if since < gc => {'''
+to = '''                PageState::Free { since } if since <= gc => {'''
+
+[[mutant]]
+name = "pages never discarded"
+file = "crates/gc/src/heap.rs"
+from = '''                PageState::Free { since } if since < gc => {'''
+to = '''                PageState::Free { since } if since < gc && false => {'''
+
+[[mutant]]
+name = "a discarded page not committed again"
+file = "crates/gc/src/heap.rs"
+from = '''        if held < bytes {'''
+to = '''        if held < bytes && held > 0 {'''
+
+# When a safepoint collects.
+
+[[mutant]]
+name = "stress ignored"
+file = "crates/gc/src/heap.rs"
+from = '''        self.inner.options.stress || self.inner.allocated.get() >= self.inner.limit.get()'''
+to = '''        self.inner.allocated.get() >= self.inner.limit.get()'''
+
+[[mutant]]
+name = "allocation since the last GC not reset"
+file = "crates/gc/src/heap.rs"
+from = '''        self.allocated.set(0);'''
+to = ''''''
+
+[[mutant]]
+name = "the next GC ignores what this one kept"
+file = "crates/gc/src/heap.rs"
+from = '''        self.limit.set(used.max(self.options.min_allocation_bytes));'''
+to = '''        self.limit.set(self.options.min_allocation_bytes);'''
+
+# HeapVector.
+
+[[mutant]]
+name = "a new array's edges not cleared"
+file = "crates/gc/src/vector.rs"
+from = '''                ptr.add(i).write(0);'''
+to = '''                let _ = i;'''

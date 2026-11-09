@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<!-- What script reads of the window, written into #out as the
+     page changes: the scroll offset, the viewport's width, and whether the
+     iframe without a box has the page's device pixels (its frame is laid
+     out by the rendering update, at 0×0, as Chrome's is). #scroll scrolls
+     the window from script, to the green block; #events counts the
+     window's `scroll` events; #hit is what `elementFromPoint(5, 300)` finds,
+     a 100px band, and whether the point is in it by its `offsetTop` and
+     `scrollY`, which don't hit test. -->
+<title>geometry</title>
+<style>
+  html, body { margin: 0 }
+  #out { height: 20px }
+  .tall { height: 3000px }
+</style>
+<p id="out"></p>
+<p id="events">0</p>
+<p id="hit"></p>
+<span id="scroll" onclick="window.scrollTo(0, 300)">scrollTo(0, 300)</span>
+<div style="display: none"><iframe id="hidden"></iframe></div>
+<div style="height: 300px"></div>
+<div style="height: 100px; background-color: green"></div>
+<div class="tall"></div>
+<script>
+  // The tall block in 100px bands, `b0` at its top.
+  const tall = document.querySelector('.tall');
+  for (let i = 0; i < 30; i++) {
+    const band = document.createElement('div');
+    band.id = `b${i}`;
+    band.style.height = '100px';
+    tall.append(band);
+  }
+  const hidden = document.getElementById('hidden').contentWindow;
+  let events = 0;
+  addEventListener('scroll', () => {
+    document.getElementById('events').textContent = `${++events}`;
+  });
+  setInterval(() => {
+    const same = hidden.devicePixelRatio === devicePixelRatio ? 'same' : 'differs';
+    document.getElementById('out').textContent = `${scrollY} ${innerWidth} ${same}`;
+    const hit = document.elementFromPoint(5, 300);
+    const y = scrollY + 300;
+    const inside = hit.offsetTop <= y && y < hit.offsetTop + hit.offsetHeight;
+    document.getElementById('hit').textContent = `${hit.id} ${inside}`;
+  }, 50);
+</script>

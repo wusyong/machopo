@@ -1,0 +1,269 @@
+# Mutation test of stage 1: `::before`, `::after` and `content`, and the
+# table `display` values (2026-10-14):
+# python3 scripts/test.py mutate rfcs/0045-generated-content-lists/mutants-1.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "generated::", "update::pseudo"]
+timeout = 600
+
+[[mutant]]
+name = "::before isn't parsed"
+file = "crates/css/src/selector.rs"
+from = '''        if name.eq_ignore_ascii_case("before") {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "attr() isn't parsed"
+file = "crates/css/src/properties.rs"
+from = '''            cssparser::Token::Function(name) if name.eq_ignore_ascii_case("attr") => input'''
+to = '''            cssparser::Token::Function(name) if false && name.eq_ignore_ascii_case("attr") => input'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cssom::"]
+
+[[mutant]]
+name = "attr() is serialized without its name"
+file = "crates/css/src/serialize.rs"
+from = '''                        dest.push_str("attr(");'''
+to = '''                        dest.push_str("(");'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cssom::"]
+
+[[mutant]]
+name = "display: table isn't parsed"
+file = "crates/css/src/properties.rs"
+from = '''                    "table" => computed_style::Display::Table(TableDisplay::Table),'''
+to = '''                    "tabl" => computed_style::Display::Table(TableDisplay::Table),'''
+
+[[mutant]]
+name = "a pseudo-element's rule is in the other bucket"
+file = "crates/css/src/rule_set.rs"
+from = '''            if iter.next_sequence() != Some(Combinator::PseudoElement) {'''
+to = '''            if true {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "matching::"]
+
+[[mutant]]
+name = "a table isn't block-level"
+file = "crates/computed_style/src/lib.rs"
+from = '''            Self::Block | Self::Flex | Self::Grid | Self::Table(_) | Self::ListItem'''
+to = '''            Self::Block | Self::Flex | Self::Grid | Self::ListItem'''
+
+[[mutant]]
+name = "an inline-table isn't blockified"
+file = "crates/computed_style/src/lib.rs"
+from = '''            Self::InlineTable => Self::Table(TableDisplay::Table),'''
+to = '''            Self::InlineTable => Self::InlineTable,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "computed::table"]
+
+[[mutant]]
+name = "an inline-table isn't an atomic inline"
+file = "crates/computed_style/src/lib.rs"
+from = '''            Self::InlineBlock | Self::InlineFlex | Self::InlineGrid | Self::InlineTable'''
+to = '''            Self::InlineBlock | Self::InlineFlex | Self::InlineGrid'''
+
+[[mutant]]
+name = "a table column has a box"
+file = "crates/computed_style/src/lib.rs"
+from = '''            Self::None | Self::Table(TableDisplay::Column | TableDisplay::ColumnGroup)'''
+to = '''            Self::None'''
+
+[[mutant]]
+name = "a pseudo-element's selector matches as an element's"
+file = "crates/style/src/lib.rs"
+from = '''                    let context = &mut *contexts[usize::from(pseudo.is_some())];'''
+to = '''                    let context = &mut *contexts[0];'''
+
+[[mutant]]
+name = "a pseudo-element's rule is the element's"
+file = "crates/style/src/lib.rs"
+from = '''                        let slot = &mut specificity[target_index(pseudo)];'''
+to = '''                        let slot = &mut specificity[0];'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "matching::"]
+
+[[mutant]]
+name = "normal stays normal on a pseudo-element"
+file = "crates/style/src/lib.rs"
+from = '''            Content::Normal | Content::None => Content::None,'''
+to = '''            Content::Normal => Content::Normal,
+            Content::None => Content::None,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "computed_style::pseudo"]
+
+[[mutant]]
+name = "attr() has no value"
+file = "crates/style/src/lib.rs"
+from = '''                            value: attribute_value(element.0, name).into(),'''
+to = '''                            value: Arc::from(""),'''
+
+[[mutant]]
+name = "attr() matches an HTML attribute's case"
+file = "crates/style/src/lib.rs"
+from = '''    let name = if html {'''
+to = '''    let name = if false {'''
+
+[[mutant]]
+name = "new pseudo-element styles don't flag layout"
+file = "crates/style/src/lib.rs"
+from = '''                        node.set_pseudo_styles_changed();'''
+to = ''''''
+
+[[mutant]]
+name = "the same pseudo-element styles count as new"
+file = "crates/dom/src/scope.rs"
+from = '''                if *pseudo_styles == new {
+                    return false;
+                }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::pseudo"]
+
+[[mutant]]
+name = "a pseudo-element with no rules isn't blockified"
+file = "crates/style/src/lib.rs"
+from = '''    let mut style = cascade_blocks(
+        Vec::new(),
+        element,
+        false,
+        element.font_size,
+        SizeF::default(),
+        |_| true,
+    );'''
+to = '''    let mut style = properties::cascade_start(element);'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "computed_style::pseudo"]
+
+[[mutant]]
+name = "a pseudo-element with no rules has content normal"
+file = "crates/style/src/lib.rs"
+from = '''        style.content = Content::None;
+    }
+    style
+}'''
+to = '''    }
+    style
+}'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "computed_style::pseudo"]
+
+[[mutant]]
+name = "getComputedStyle has no ::before"
+file = "crates/dom_api/src/computed_style.rs"
+from = '''                "before" => StyleTarget::Pseudo(PseudoId::Before),'''
+to = '''                "before" => StyleTarget::OtherPseudo,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "computed_style::pseudo"]
+
+[[mutant]]
+name = "a pseudo-element's width is its element's box's"
+file = "crates/dom_api/src/computed_style.rs"
+from = '''    if style::is_layout_dependent(property) && target == StyleTarget::Element {'''
+to = '''    if style::is_layout_dependent(property) {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "computed_style::the_pseudo"]
+
+[[mutant]]
+name = "no ::before is generated"
+file = "crates/layout/src/lib.rs"
+from = '''        self.collect_pseudo(cx, parent, PseudoId::Before, out);'''
+to = ''''''
+
+[[mutant]]
+name = "no ::after is generated"
+file = "crates/layout/src/lib.rs"
+from = '''        self.collect_pseudo(cx, parent, PseudoId::After, out);'''
+to = ''''''
+
+[[mutant]]
+name = "a text control generates content"
+file = "crates/layout/src/lib.rs"
+from = '''        if control {
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "an inline pseudo-element has no inline box"
+file = "crates/layout/src/lib.rs"
+from = '''            out.push(Child::Inline(InlineItem::Open(owner, style.clone())));
+            out.extend(content(&style));
+            out.push(Child::Inline(InlineItem::Close(owner, style.clone())));'''
+to = '''            out.extend(content(&style));'''
+
+[[mutant]]
+name = "new pseudo-element styles don't collect the content again"
+file = "crates/layout/src/lib.rs"
+from = '''        if (flags.children_changed || flags.pseudo_styles_changed)'''
+to = '''        if flags.children_changed'''
+
+[[mutant]]
+name = "a pseudo-element's box isn't marked"
+file = "crates/layout/src/lib.rs"
+from = '''            pseudo: b.pseudo,'''
+to = '''            pseudo: None,'''
+
+[[mutant]]
+name = "a pseudo-element's text isn't marked"
+file = "crates/layout/src/text.rs"
+from = '''            pseudo: owner.and_then(|owner| owner.pseudo),'''
+to = '''            pseudo: None,'''
+
+[[mutant]]
+name = "an element's own text is any of its runs"
+file = "crates/layout/src/text.rs"
+from = '''                            let own = run.node == Some(of.node) && run.pseudo == of.pseudo;'''
+to = '''                            let own = run.node == Some(of.node);'''
+
+[[mutant]]
+name = "an element's client rects have its pseudo-elements' boxes"
+file = "crates/layout/src/geometry.rs"
+from = '''        &mut |fragment, offset, to_root, contents| {
+            if fragment.node == Some(element) && fragment.pseudo.is_none() {'''
+to = '''        &mut |fragment, offset, to_root, contents| {
+            if fragment.node == Some(element) {'''
+
+[[mutant]]
+name = "an element's client rects have its pseudo-elements' inline boxes"
+file = "crates/layout/src/geometry.rs"
+from = '''                    .filter(|b| b.node == element && b.pseudo.is_none())
+                {
+                    rects.push('''
+to = '''                    .filter(|b| b.node == element)
+                {
+                    rects.push('''
+
+[[mutant]]
+name = "an element's box is its pseudo-element's"
+file = "crates/layout/src/geometry.rs"
+from = ''') -> Option<ElementBox> {
+    if fragment.node == Some(element) && fragment.pseudo.is_none() {'''
+to = ''') -> Option<ElementBox> {
+    if fragment.node == Some(element) {'''
+
+[[mutant]]
+name = "an element is fixed if its pseudo-element is"
+file = "crates/layout/src/geometry.rs"
+from = '''    fn find(fragment: &BoxFragment, element: NodeId) -> bool {
+        if fragment.node == Some(element) && fragment.pseudo.is_none() {'''
+to = '''    fn find(fragment: &BoxFragment, element: NodeId) -> bool {
+        if fragment.node == Some(element) {'''
+
+[[mutant]]
+name = "an element's bounds are its pseudo-element's"
+file = "crates/paint/src/hit_test.rs"
+from = '''        let origin = properties.offset;
+        if fragment.node == Some(element) && fragment.pseudo.is_none() {'''
+to = '''        let origin = properties.offset;
+        if fragment.node == Some(element) {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "hit_test::an_elements"]
+
+[[mutant]]
+name = "an element's bounds have its pseudo-elements' inline boxes"
+file = "crates/paint/src/hit_test.rs"
+from = '''            if node == element && pseudo.is_none() {'''
+to = '''            if node == element {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "hit_test::an_elements"]
+
+[[mutant]]
+name = "an element's paint offset is its pseudo-element's"
+file = "crates/paint/src/hit_test.rs"
+from = '''    while let Some(fragment) = stack.pop() {
+        if fragment.node == Some(element) && fragment.pseudo.is_none() {'''
+to = '''    while let Some(fragment) = stack.pop() {
+        if fragment.node == Some(element) {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "hit_test::an_elements"]
+
+[[mutant]]
+name = "a pseudo-element's box is found as its element's in the last paint"
+file = "crates/paint/src/paint_controller.rs"
+from = '''            .filter(|(_, painted)| painted.fragment.pseudo.is_none())'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it"]

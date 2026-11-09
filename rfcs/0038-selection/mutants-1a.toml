@@ -1,0 +1,283 @@
+# Mutation test of step 1a (Selection: the GC type, getSelection(), the
+# methods and script setting the selection's range):
+# python3 scripts/test.py mutate rfcs/0038-selection/mutants-1a.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "selections::"]
+timeout = 600
+
+# dom: the type.
+
+[[mutant]]
+name = "a document makes a new selection each time"
+file = "crates/dom/src/selection.rs"
+from = '''        if let Some(selection) = unsafe { rare.selection.get_ptr() } {
+            return SelectionHandle::new(&selection, self.roots);
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "selections::"]
+
+[[mutant]]
+name = "the document doesn't keep its selection"
+file = "crates/dom/src/selection.rs"
+from = '''        rare.selection.set(self, selection.persistent());'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "selections::"]
+
+[[mutant]]
+name = "the direction isn't kept"
+file = "crates/dom/src/selection.rs"
+from = '''        object.backward.store(backward, Ordering::Relaxed);'''
+to = '''        object.backward.store(false, Ordering::Relaxed);'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "selections::"]
+
+[[mutant]]
+name = "no range is a selection's"
+file = "crates/dom/src/selection.rs"
+from = '''            std::ptr::eq(selected, object).then(|| edge.get_ptr())?'''
+to = '''            false.then(|| edge.get_ptr())?'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "selections::"]
+
+[[mutant]]
+name = "every range is the selection's"
+file = "crates/dom/src/selection.rs"
+from = '''            std::ptr::eq(selected, object).then(|| edge.get_ptr())?'''
+to = '''            (!std::ptr::eq(selected, object) || true).then(|| edge.get_ptr())?'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "selections::"]
+
+# dom_api: getSelection() and reading the selection.
+
+[[mutant]]
+name = "a document without a window has a selection"
+file = "crates/dom_api/src/selection.rs"
+from = '''    if crate::document::default_view(cx, this)?.is_none() {'''
+to = '''    if crate::document::default_view(cx, this)?.is_none() && false {'''
+
+[[mutant]]
+name = "the anchor is always the start"
+file = "crates/dom_api/src/selection.rs"
+from = '''    Some(if read.selection_is_backward(this) {'''
+to = '''    Some(if false {'''
+
+[[mutant]]
+name = "a collapsed selection has a direction"
+file = "crates/dom_api/src/selection.rs"
+from = '''    if is_caret(cx, this).unwrap_or(true) {
+        return Ok("none".into());'''
+to = '''    if is_caret(cx, this).is_none() {
+        return Ok("none".into());'''
+
+[[mutant]]
+name = "the direction is always forward"
+file = "crates/dom_api/src/selection.rs"
+from = '''    Ok(if cx.read().selection_is_backward(this) {'''
+to = '''    Ok(if false {'''
+
+[[mutant]]
+name = "a caret's type is Range"
+file = "crates/dom_api/src/selection.rs"
+from = '''        Some(true) => "Caret",'''
+to = '''        Some(true) => "Range",'''
+
+[[mutant]]
+name = "getRangeAt takes any index"
+file = "crates/dom_api/src/selection.rs"
+from = '''        Some(range) if index == 0 => Ok(range),'''
+to = '''        Some(range) => Ok(range),'''
+
+[[mutant]]
+name = "every node is in the document"
+file = "crates/dom_api/src/selection.rs"
+from = '''        .ptr_eq(&document.get(&read))'''
+to = '''        .ptr_eq(&document.get(&read))
+        || true'''
+
+# dom_api: the methods.
+
+[[mutant]]
+name = "addRange replaces the range"
+file = "crates/dom_api/src/selection.rs"
+from = '''    if range_of(cx, this).is_some()
+        || !in_document(cx, this, &start)'''
+to = '''    if !in_document(cx, this, &start)'''
+
+[[mutant]]
+name = "addRange keeps a backward direction"
+file = "crates/dom_api/src/selection.rs"
+from = '''    set(cx, this, Some(&range), false);
+    Ok(())
+}
+
+/// `removeRange(range)`'''
+to = '''    set(cx, this, Some(&range), true);
+    Ok(())
+}
+
+/// `removeRange(range)`'''
+
+[[mutant]]
+name = "removeRange takes any range"
+file = "crates/dom_api/src/selection.rs"
+from = '''        .is_some_and(|selected| selected.ptr_eq(&range))'''
+to = '''        .is_some()'''
+
+[[mutant]]
+name = "collapse goes outside the document"
+file = "crates/dom_api/src/selection.rs"
+from = '''    check_point(cx, &node, offset)?;
+    if in_document(cx, this, &node) {
+        select(cx, this, (&node, offset), (&node, offset), false);
+    }'''
+to = '''    check_point(cx, &node, offset)?;
+    select(cx, this, (&node, offset), (&node, offset), false);'''
+
+[[mutant]]
+name = "collapse doesn't check the point"
+file = "crates/dom_api/src/selection.rs"
+from = '''    check_point(cx, &node, offset)?;
+    if in_document(cx, this, &node) {'''
+to = '''    if in_document(cx, this, &node) {'''
+
+[[mutant]]
+name = "collapseToStart collapses to the end"
+file = "crates/dom_api/src/selection.rs"
+from = '''    let (node, offset) = if to_start {'''
+to = '''    let (node, offset) = if !to_start {'''
+
+[[mutant]]
+name = "a focus in another tree keeps the anchor"
+file = "crates/dom_api/src/selection.rs"
+from = '''    if !a.root().ptr_eq(&f.root()) {
+        return (focus_point.clone(), focus_point, false);
+    }'''
+to = '''    if !a.root().ptr_eq(&f.root()) {
+        return (anchor_point, focus_point, false);
+    }'''
+
+[[mutant]]
+name = "a focus before the anchor isn't backward"
+file = "crates/dom_api/src/selection.rs"
+from = '''    if position((f, focus.1), (a, anchor.1)) == Ordering::Less {'''
+to = '''    if position((f, focus.1), (a, anchor.1)) == Ordering::Less && false {'''
+
+[[mutant]]
+name = "extend checks the selection before the document"
+file = "crates/dom_api/src/selection.rs"
+from = '''    if !in_document(cx, this, &node) {
+        return Ok(());
+    }
+    let Some((anchor, _)) = anchor_and_focus(cx, this) else {
+        return Err(DomException::new(
+            ExceptionName::InvalidStateError,
+            "the selection is empty",
+        ));
+    };'''
+to = '''    let Some((anchor, _)) = anchor_and_focus(cx, this) else {
+        return Err(DomException::new(
+            ExceptionName::InvalidStateError,
+            "the selection is empty",
+        ));
+    };
+    if !in_document(cx, this, &node) {
+        return Ok(());
+    }'''
+
+[[mutant]]
+name = "extend doesn't check the point"
+file = "crates/dom_api/src/selection.rs"
+from = '''    check_point(cx, &node, offset)?;
+    let (start, end, backward) = ordered(cx, (&anchor.0, anchor.1), (&node, offset));'''
+to = '''    let (start, end, backward) = ordered(cx, (&anchor.0, anchor.1), (&node, offset));'''
+
+[[mutant]]
+name = "setBaseAndExtent checks the document first"
+file = "crates/dom_api/src/selection.rs"
+from = '''    check_point(cx, &anchor_node, anchor_offset)?;
+    check_point(cx, &focus_node, focus_offset)?;
+    if !in_document(cx, this, &anchor_node) || !in_document(cx, this, &focus_node) {
+        return Ok(());
+    }'''
+to = '''    if !in_document(cx, this, &anchor_node) || !in_document(cx, this, &focus_node) {
+        return Ok(());
+    }
+    check_point(cx, &anchor_node, anchor_offset)?;
+    check_point(cx, &focus_node, focus_offset)?;'''
+
+[[mutant]]
+name = "selectAllChildren goes outside the document"
+file = "crates/dom_api/src/selection.rs"
+from = '''    if in_document(cx, this, &node) {
+        select(cx, this, (&node, 0), (&node, children), false);
+    }'''
+to = '''    select(cx, this, (&node, 0), (&node, children), false);'''
+
+[[mutant]]
+name = "deleteFromDocument does nothing"
+file = "crates/dom_api/src/selection.rs"
+from = '''        Some(range) => crate::range::delete_contents(cx, &range),'''
+to = '''        Some(_) => Ok(()),'''
+
+[[mutant]]
+name = "containsNode: a text node partly in it doesn't count"
+file = "crates/dom_api/src/selection.rs"
+from = '''    Ok(allow_partial_containment || node.kind() == NodeKind::Text)'''
+to = '''    Ok(allow_partial_containment)'''
+
+[[mutant]]
+name = "containsNode: a node all in it isn't"
+file = "crates/dom_api/src/selection.rs"
+from = '''        return Ok(true);
+    }
+    if position(before, end)'''
+to = '''        return Ok(allow_partial_containment);
+    }
+    if position(before, end)'''
+
+[[mutant]]
+name = "containsNode: a node outside it partly is"
+file = "crates/dom_api/src/selection.rs"
+from = '''    if position(before, end) == Ordering::Greater || position(after, start) == Ordering::Less {
+        return Ok(false);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "containsNode: another tree's node is compared"
+file = "crates/dom_api/src/selection.rs"
+from = '''    if !node.root().ptr_eq(&start.root()) {
+        return Ok(false);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "toString is empty"
+file = "crates/dom_api/src/selection.rs"
+from = '''        Some(range) => crate::range::to_string(cx, &range),'''
+to = '''        Some(_) => Ok(DomString::from("")),'''
+
+# dom_api: script setting the selection's range.
+
+[[mutant]]
+name = "setting the selection's range leaves the selection"
+file = "crates/dom_api/src/range.rs"
+from = '''    if let Some(selection) = selection {
+        crate::selection::range_set(cx, &selection, this, before);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "the selection's range set out of the document stays"
+file = "crates/dom_api/src/selection.rs"
+from = '''    } else {
+        cx.mutate().set_selection(selection, None, false);
+    }'''
+to = '''    } else {
+        cx.mutate().set_selection(selection, Some(range), false);
+    }'''
+
+[[mutant]]
+name = "setting the selection's range keeps its direction"
+file = "crates/dom_api/src/selection.rs"
+from = '''    if in_document(cx, selection, &start) && in_document(cx, selection, &end) {
+        cx.mutate().set_selection(selection, Some(range), false);'''
+to = '''    if in_document(cx, selection, &start) && in_document(cx, selection, &end) {
+        let backward = cx.read().selection_is_backward(selection);
+        cx.mutate().set_selection(selection, Some(range), backward);'''

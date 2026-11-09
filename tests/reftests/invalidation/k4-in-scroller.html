@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>K4: a change in a scroll container that is a layer is drawn in its layer</title>
+<link rel="match" href="k4-in-scroller-ref.html">
+<style>html, body { margin: 0 } .s { width: 100px; height: 100px; overflow: auto } .s div { height: 50px }</style>
+<div class="s">
+  <div style="background-color: green"></div>
+  <div id="box" style="background-color: red"></div>
+  <div style="height: 200px; background-color: blue"></div>
+</div>
+<script src="after-frames.js"></script>
+<script>afterFrames(() => document.getElementById("box").setAttribute("style", "background-color: green"));</script>
+</html>

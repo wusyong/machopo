@@ -1,0 +1,26 @@
+# The overshoot margin set as a marking starts and fixed until it ends
+# (decision 41), as V8's `old_generation_overshoot_margin`. Its cap at half
+# of what the cage has left is reached only in Miri's 16 MiB cage: those
+# mutants run the Miri-only test (the weekly Miri's command, one test).
+test = ["cargo", "test", "-q", "-p", "gc", "--test", "it", "concurrent::"]
+timeout = 600
+
+[[mutant]]
+name = "no margin"
+file = "crates/gc/src/heap.rs"
+from = '''        self.overshoot.set(self.overshoot_margin());'''
+to = '''        self.overshoot.set(0);'''
+
+[[mutant]]
+name = "the margin shrinks as the old generation grows"
+file = "crates/gc/src/heap.rs"
+from = '''        self.allocated.get() >= limit.saturating_add(self.overshoot.get())'''
+to = '''        self.allocated.get() >= limit.saturating_add(self.overshoot_margin())'''
+test = ["env", "MIRIFLAGS=-Zmiri-strict-provenance -Zmiri-disable-isolation", "cargo", "+nightly-2026-10-01", "miri", "test", "-q", "-p", "gc", "--test", "it", "--", "--exact", "concurrent::the_margin_is_at_most_half_of_the_cage_left"]
+
+[[mutant]]
+name = "the margin up to all the cage has left"
+file = "crates/gc/src/heap.rs"
+from = '''            .min(left / 2)'''
+to = '''            .min(left)'''
+test = ["env", "MIRIFLAGS=-Zmiri-strict-provenance -Zmiri-disable-isolation", "cargo", "+nightly-2026-10-01", "miri", "test", "-q", "-p", "gc", "--test", "it", "--", "--exact", "concurrent::the_margin_is_at_most_half_of_the_cage_left"]

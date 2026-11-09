@@ -1,0 +1,29 @@
+# Mutation test of the inventory's recording in Chrome (step 1b's tool, the
+# fix of which suite a page's use goes to, 2026-10-12):
+# python3 scripts/test.py mutate rfcs/0012-speedometer/mutants-1b.toml
+test = ["python3", "scripts/speedometer_test.py", "ChromeTests"]
+timeout = 300
+
+[[mutant]]
+name = "a suite's page is taken as the one before's"
+file = "scripts/speedometer/inventory.mjs"
+from = '''  current = suite.name;
+  return willRunTest(suite, test);'''
+to = '''  if (current !== suite.name) takeFrame();
+  current = suite.name;
+  return willRunTest(suite, test);'''
+
+[[mutant]]
+name = "every page is taken as the first suite's"
+file = "scripts/speedometer/inventory.mjs"
+from = '''  current = suite.name;
+  return willRunTest(suite, test);'''
+to = '''  current ??= suite.name;
+  return willRunTest(suite, test);'''
+
+[[mutant]]
+name = "a test's page isn't taken after it"
+file = "scripts/speedometer/inventory.mjs"
+from = '''client.didRunTest = (...args) => {
+  takeFrame();'''
+to = '''client.didRunTest = (...args) => {'''

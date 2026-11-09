@@ -1,0 +1,254 @@
+# Mutation test of step 3b (getBBox(), getCTM(), getScreenCTM(), SVG
+# elements' client rects, their focus and outlines):
+# python3 scripts/test.py mutate rfcs/0031-svg/mutants-3b.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "geometry::svg", "keys::tab_and_enter"]
+timeout = 900
+
+[[mutant]]
+name = "a <use>'s x and y count in its matrices"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''            Laid::Node(node) if element.element_name().is_some_and(|n| n.is_svg("use")) => {'''
+to = '''            Laid::Node(node) if element.element_name().is_some_and(|n| n.is_svg("nothing")) => {'''
+
+[[mutant]]
+name = "getCTM goes past the nearest viewport"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''        if i + 1 < path.len() && is_viewport(*element) {'''
+to = '''        if i + 1 < path.len() && is_viewport(*element) && i == 0 {'''
+
+[[mutant]]
+name = "getCTM stops at the element itself"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''        if i + 1 < path.len() && is_viewport(*element) {'''
+to = '''        if is_viewport(*element) {'''
+
+[[mutant]]
+name = "a <symbol> isn't a viewport"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''        .is_some_and(|name| name.is_svg("svg") || name.is_svg("symbol"))'''
+to = '''        .is_some_and(|name| name.is_svg("svg"))'''
+
+[[mutant]]
+name = "what is in a hidden container has a client rect"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''                hidden |= matches!(node.kind, SvgNodeKind::Hidden(_));'''
+to = '''                hidden |= false;'''
+
+[[mutant]]
+name = "an element with no layout node has a client rect"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''    let rendered = path.len() > 1 && !matches!(at, Laid::None);'''
+to = '''    let rendered = path.len() > 1;'''
+
+[[mutant]]
+name = "the screen matrix leaves out the content box"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''        .fold(content_box, |matrix, local| matrix.then(local));'''
+to = '''        .fold(to_root, |matrix, local| matrix.then(local));'''
+
+[[mutant]]
+name = "a shape with no area counts in a container's box"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''                SvgNodeKind::Shape(shape) => shape.path.as_ref().and(shape.bbox),'''
+to = '''                SvgNodeKind::Shape(shape) => shape.bbox,'''
+
+[[mutant]]
+name = "a hidden container counts in its parent's box"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''                SvgNodeKind::Hidden(_) => None,'''
+to = '''                SvgNodeKind::Hidden(children) => union_in(children),'''
+
+[[mutant]]
+name = "a <use>'s box leaves out its x and y"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''                node.content_transform.map_rect(bbox)'''
+to = '''                bbox'''
+
+[[mutant]]
+name = "boxes with no width or height don't count"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''        .reduce(union_even_if_empty)
+}
+
+/// The bounds of a `<text>`'s characters'''
+to = '''        .reduce(|a, b| a.union(&b))
+}
+
+/// The bounds of a `<text>`'s characters'''
+
+[[mutant]]
+name = "a <tspan>'s box leaves out what is in it"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''            at = node.parent();'''
+to = '''            at = None;'''
+
+[[mutant]]
+name = "a display: none <tspan> is laid out"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''            .is_some_and(|style| style.display != computed_style::Display::None)'''
+to = '''            .is_some()'''
+
+[[mutant]]
+name = "<defs> isn't captured"
+file = "crates/layout/src/svg.rs"
+from = '''        "defs" => SourceKind::Hidden,'''
+to = '''        "defs" => return None,'''
+
+[[mutant]]
+name = "a display: none <g> isn't captured"
+file = "crates/layout/src/svg.rs"
+from = '''    let hidden_group = name.is_svg("g") && style.display == Display::None;'''
+to = '''    let hidden_group = false;'''
+
+[[mutant]]
+name = "a <symbol> in the document isn't captured"
+file = "crates/layout/src/svg.rs"
+from = '''        "symbol" => SourceKind::Hidden,'''
+to = '''        "symbol" => return None,'''
+
+[[mutant]]
+name = "a <text> with no characters isn't captured"
+file = "crates/layout/src/svg.rs"
+from = '''            None => {
+                return Some(SourceNode {
+                    node,
+                    style,
+                    kind: SourceKind::Group,'''
+to = '''            None => {
+                return None;
+            }
+            #[allow(unreachable_patterns)]
+            None => {
+                return Some(SourceNode {
+                    node,
+                    style,
+                    kind: SourceKind::Group,'''
+
+[[mutant]]
+name = "an ellipse with no area is at its center"
+file = "crates/layout/src/svg.rs"
+from = '''    Some(RectF::new(cx - rx, cy - ry, 2.0 * rx, 2.0 * ry))'''
+to = '''    Some(RectF::new(cx, cy, 2.0 * rx, 2.0 * ry))'''
+
+[[mutant]]
+name = "a rect with no area has no box"
+file = "crates/layout/src/svg.rs"
+from = '''            return Some(RectF::new(
+                units.x(svg.x),'''
+to = '''            return None;
+            #[allow(unreachable_code)]
+            return Some(RectF::new(
+                units.x(svg.x),'''
+
+[[mutant]]
+name = "an SVG element out of an <svg> has a box"
+file = "crates/layout/src/lib.rs"
+from = '''                    if svg && !is_svg_root(child) {'''
+to = '''                    if svg && !is_svg_root(child) && false {'''
+
+[[mutant]]
+name = "a path's moves don't count in its box"
+file = "crates/gfx/src/lib.rs"
+from = '''        let r = moves.chain(curves).reduce(|a, b| a.union(b))?;'''
+to = '''        let r = moves.filter(|_| false).chain(curves).reduce(|a, b| a.union(b))?;'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+[[mutant]]
+name = "a move before another counts"
+file = "crates/gfx/src/lib.rs"
+from = '''            PathEl::MoveTo(p) if !matches!(elements.get(i + 1), Some(PathEl::MoveTo(_))) => {'''
+to = '''            PathEl::MoveTo(p) => {'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+[[mutant]]
+name = "the screen matrix keeps the viewport's scroll"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        geometry.screen_ctm = Transform::translate(-at.x, -at.y).then(&geometry.screen_ctm);'''
+to = '''        geometry.screen_ctm = Transform::translate(0.0, -at.y * 0.0).then(&geometry.screen_ctm);'''
+
+[[mutant]]
+name = "an SVG element's client rect keeps the viewport's scroll"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        geometry.client_rect = geometry.client_rect.map(|rect| rect.offset(-at.x, -at.y));'''
+to = '''        geometry.client_rect = geometry.client_rect.map(|rect| rect.offset(-at.x, 0.0));'''
+
+[[mutant]]
+name = "an SVG element has no client rects"
+file = "crates/renderer/src/layout_client.rs"
+from = '''            .and_then(|node| frame.svg_geometry(node).client_rect)'''
+to = '''            .and_then(|node| frame.svg_geometry(node).client_rect.filter(|_| false))'''
+
+[[mutant]]
+name = "a rendered SVG element can't take the focus"
+file = "crates/dom_api/src/focus.rs"
+from = '''            || (svg && client.svg_geometry(scope, id).client_rect.is_some()))'''
+to = '''            || (svg && client.svg_geometry(scope, id).client_rect.is_none()))'''
+
+[[mutant]]
+name = "a focus listener makes nothing focusable"
+file = "crates/dom_api/src/focus.rs"
+from = '''    focusable_by_default(cx, element) || has_focus_listeners(cx, element)'''
+to = '''    focusable_by_default(cx, element)'''
+
+[[mutant]]
+name = "an HTML element's focus listener makes it focusable"
+file = "crates/dom_api/src/focus.rs"
+from = '''    graphics
+        && ["focus", "blur", "focusin", "focusout"]'''
+to = '''    (graphics || true)
+        && ["focus", "blur", "focusin", "focusout"]'''
+
+[[mutant]]
+name = "a focus listener puts an element in sequential navigation"
+file = "crates/dom_api/src/focus.rs"
+from = '''                    && focusable_by_default(cx, &element)) =>'''
+to = '''                    && supports_focus(cx, &element)) =>'''
+
+[[mutant]]
+name = "getCTM gives the screen matrix"
+file = "crates/dom_api/src/svg_geometry.rs"
+from = '''    let ctm = geometry(cx, this).ctm;'''
+to = '''    let ctm = geometry(cx, this).screen_ctm;'''
+
+[[mutant]]
+name = "an SVG element has no outline"
+file = "crates/paint/src/svg.rs"
+from = '''        if node.style.outline_style.is_drawn()
+            && let Some(rect) = outline_rect(node)'''
+to = '''        if node.style.outline_style.is_drawn()
+            && false
+            && let Some(rect) = outline_rect(node)'''
+test = ["python3", "scripts/test.py", "reftest", "svg/outline.html", "svg/focus-outline.html"]
+
+[[mutant]]
+name = "an outline leaves out the stroke"
+file = "crates/paint/src/svg.rs"
+from = '''                bbox.inset(-shape.stroke_width / 2.0)'''
+to = '''                bbox'''
+test = ["python3", "scripts/test.py", "reftest", "svg/outline.html"]
+
+[[mutant]]
+name = "a group's outline leaves out its children's transforms"
+file = "crates/paint/src/svg.rs"
+from = '''            .filter_map(|child| Some(child.transform.map_rect(outline_rect(child)?)))'''
+to = '''            .filter_map(|child| outline_rect(child))'''
+test = ["python3", "scripts/test.py", "reftest", "svg/outline.html"]
+
+[[mutant]]
+name = "a hidden container is drawn"
+file = "crates/paint/src/svg.rs"
+from = '''            SvgNodeKind::Hidden(_) => return,'''
+to = '''            SvgNodeKind::Hidden(children) => {
+                for child in children {
+                    self.svg_node(child);
+                }
+            }'''
+test = ["python3", "scripts/test.py", "reftest", "svg/outline.html"]
+
+[[mutant]]
+name = "a hidden container is hit"
+file = "crates/paint/src/hit_test.rs"
+from = '''            SvgNodeKind::Hidden(_) => return None,'''
+to = '''            SvgNodeKind::Hidden(children) => {
+                return children.iter().rev().find_map(|n| self.svg_node(n, scroll));
+            }'''

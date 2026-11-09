@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>K4: a class on an element styles its descendants again (descendant selectors)</title>
+<link rel="match" href="k4-style-ref.html">
+<style>html, body { margin: 0 } div { width: 100px; height: 50px; background-color: red } .on div { background-color: green }</style>
+<section id="parent"><div></div><div></div></section>
+<script src="after-frames.js"></script>
+<script>afterFrames(() => document.getElementById("parent").setAttribute("class", "on"));</script>
+</html>

@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>K4: a class deep inside changes what :has() matches above it</title>
+<link rel="match" href="k4-style-ref.html">
+<style>html, body { margin: 0 } div { width: 100px; height: 50px; background-color: red } div:has(.ok) { background-color: green } span { display: block }</style>
+<div><span><span id="deep"></span></span></div><div><span class="ok"></span></div>
+<script src="after-frames.js"></script>
+<script>afterFrames(() => document.getElementById("deep").setAttribute("class", "ok"));</script>
+</html>

@@ -1,0 +1,82 @@
+# Mutation test of step 4c (the Lua runtime's custom element exports, a
+# guest's `construct` returning false):
+# python3 scripts/test.py mutate rfcs/0035-shadow-dom-custom-elements/mutants-4c.toml
+#
+# The Lua runtime's mutants rebuild it first, as `ci.py guests` does
+# (`build_lua_runtime`), from the WIT's C binding and Lua's source that
+# `ci.py guests` left in target/guests, then run W9. After the run,
+# rebuild it from the restored source the same way (or with `ci.py
+# guests`): the last mutant's build is left in resources/kun-lua.wasm.
+test = ["bash", "-c", """
+W=../third_party/wasi-sdk-34.0/bin L=target/guests/lua/lua-5.4.9/src G=target/guests/gen
+PATH=$W $W/clang --target=wasm32-wasip3 -O2 -DNDEBUG -Wall -Werror -Wl,--strip-debug \
+  -ffile-prefix-map=$PWD=/kun -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false \
+  -Dl_signalT=int '-Dl_randomizePivot()=(~0u)' -I$L -I$G -Isdk/lua \
+  $PWD/sdk/lua/kun_lua.c $PWD/target/guests/lua/kun_dom.c $PWD/$G/script.c $PWD/$G/script_component_type.o \
+  $(for f in lapi lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes lparser lstate \
+      lstring ltable ltm lundump lvm lzio lauxlib lbaselib lcorolib lmathlib lstrlib ltablib lutf8lib; \
+    do echo $PWD/$L/$f.c; done) \
+  -lsetjmp -o resources/kun-lua.wasm \
+&& cargo test -q -p shell --test it wasm_reftests::w9_lua
+"""]
+timeout = 900
+
+# The Lua runtime (sdk/lua/kun_lua.c).
+
+[[mutant]]
+name = "Lua's construct always constructs"
+file = "sdk/lua/kun_lua.c"
+from = '''    return call_element(id, own_element(element), (element_arguments){0});'''
+to = '''    call_element(id, own_element(element), (element_arguments){0});
+    return true;'''
+
+[[mutant]]
+name = "Lua's element kept as the borrow"
+file = "sdk/lua/kun_lua.c"
+from = '''    kun_dom_dom_node_drop_own(node);
+    kun_dom_dom_element_drop_borrow(element);
+    return own.__handle;'''
+to = '''    kun_dom_dom_node_drop_own(node);
+    kun_dom_dom_element_drop_own(own);
+    return element.__handle;'''
+
+[[mutant]]
+name = "Lua's disconnected not called"
+file = "sdk/lua/kun_lua.c"
+from = '''void exports_kun_dom_guest_disconnected(uint32_t id, exports_kun_dom_guest_borrow_element_t element) {
+    call_element(id, own_element(element), (element_arguments){0});'''
+to = '''void exports_kun_dom_guest_disconnected(uint32_t id, exports_kun_dom_guest_borrow_element_t element) {
+    kun_dom_dom_element_drop_borrow(element);
+    (void)id;'''
+
+[[mutant]]
+name = "Lua's adopted documents swapped"
+file = "sdk/lua/kun_lua.c"
+from = '''                     .old_document = own_document(old_document),
+                     .new_document = own_document(new_document),'''
+to = '''                     .old_document = own_document(new_document),
+                     .new_document = own_document(old_document),'''
+
+[[mutant]]
+name = "Lua's attribute values swapped"
+file = "sdk/lua/kun_lua.c"
+from = '''        push_string_or_nil(L, args.old_value);
+        push_string_or_nil(L, args.new_value);'''
+to = '''        push_string_or_nil(L, args.new_value);
+        push_string_or_nil(L, args.old_value);'''
+
+[[mutant]]
+name = "Lua's attribute namespace nil"
+file = "sdk/lua/kun_lua.c"
+from = '''        push_string_or_nil(L, args.namespace_);'''
+to = '''        if (args.namespace_) script_string_free(args.namespace_);
+        lua_pushnil(L);'''
+
+# dom_wasm: `construct`'s result.
+
+[[mutant]]
+name = "a guest's construct returning false constructs"
+file = "crates/dom_wasm/src/store.rs"
+from = '''                        if !constructed {'''
+to = '''                        if false && !constructed {'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "it", "engine::a_guests_custom_element"]

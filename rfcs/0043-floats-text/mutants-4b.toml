@@ -1,0 +1,62 @@
+# Mutation test of stage 4b: lines beside floats (2026-10-13):
+# python3 scripts/test.py mutate rfcs/0043-floats-text/mutants-4b.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "float::", "update::"]
+timeout = 900
+
+[[mutant]]
+name = "no float is beside the lines"
+file = "crates/layout/src/lib.rs"
+from = '''    if !ctx.has_active_floats(top) {'''
+to = '''    if true {'''
+
+[[mutant]]
+name = "a line is in the room where it starts, however tall"
+file = "crates/layout/src/text.rs"
+from = '''            let reached = if height > 0.0 {
+                band.top < top + height && end > top
+            } else {'''
+to = '''            let reached = if false {
+                band.top < top + height && end > top
+            } else {'''
+
+[[mutant]]
+name = "a line taller than its band isn't broken again"
+file = "crates/layout/src/text.rs"
+from = '''                if tall > height && bands.room(top, tall, width).1 + BREAK_TOLERANCE < room {'''
+to = '''                if false {'''
+
+[[mutant]]
+name = "a line that doesn't fit beside the floats stays there"
+file = "crates/layout/src/text.rs"
+from = '''            let Some((index, top)) = overflow else {'''
+to = '''            let Some((index, top)) = overflow.filter(|_| false) else {'''
+
+[[mutant]]
+name = "the line cache doesn't know the floats"
+file = "crates/layout/src/text.rs"
+from = '''            && beside == bands'''
+to = ''''''
+
+[[mutant]]
+name = "the fragments' lines are broken as if no float were beside them"
+file = "crates/layout/src/lib.rs"
+from = '''        let beside = inline.laid_out_beside().clone();'''
+to = '''        let beside = text::FloatBands::default();'''
+
+[[mutant]]
+name = "a line starts at the content box's left beside a float"
+file = "crates/layout/src/text.rs"
+from = '''            let start = origin.x + metrics.inline_min_coord + metrics.offset;'''
+to = '''            let start = origin.x + metrics.offset;'''
+
+[[mutant]]
+name = "the content is as tall as its lines added up"
+file = "crates/layout/src/text.rs"
+from = '''        let height = if bands.is_empty() {'''
+to = '''        let height = if true {'''
+
+[[mutant]]
+name = "a last empty line beside floats takes room"
+file = "crates/layout/src/text.rs"
+from = '''                .filter(|(i, line)| i + 1 < count || line.items().next().is_some())'''
+to = '''                .filter(|(i, line)| (*i, line).0 < usize::MAX)'''

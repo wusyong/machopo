@@ -1,0 +1,200 @@
+# Mutation test of stage 5a: the walks after each script (the base URL,
+# the <link>s, the background images) and the UA shadow trees' styles:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-5a.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it"]
+timeout = 900
+
+[[mutant]]
+name = "an author's sheet takes ::-internal-"
+file = "crates/css/src/selector.rs"
+from = '''            .filter(|prefix| self.user_agent || *prefix == "-webkit-")'''
+to = '''            .filter(|_| true)'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it"]
+
+[[mutant]]
+name = "the UA stylesheet takes no ::-internal-"
+file = "crates/css/src/selector.rs"
+from = '''            .filter(|prefix| self.user_agent || *prefix == "-webkit-")'''
+to = '''            .filter(|prefix| *prefix == "-webkit-")'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it"]
+
+[[mutant]]
+name = "a text field's inner editor wraps"
+file = "crates/style/resources/html.css"
+from = '''input::-internal-inner-editor {
+  display: block;
+  white-space: pre;'''
+to = '''input::-internal-inner-editor {
+  display: block;'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it"]
+
+[[mutant]]
+name = "the editing view port doesn't grow"
+file = "crates/style/resources/html.css"
+from = '''input::-internal-editing-view-port {
+  display: block;
+  flex-grow: 1;'''
+to = '''input::-internal-editing-view-port {
+  display: block;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+
+[[mutant]]
+name = "a menu list's inner element doesn't clip"
+file = "crates/style/resources/html.css"
+from = '''  min-width: 0;
+  overflow: hidden;
+  text-overflow: inherit;
+}
+
+/* An optgroup'''
+to = '''  min-width: 0;
+  text-overflow: inherit;
+}
+
+/* An optgroup'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it"]
+
+[[mutant]]
+name = "an optgroup's label has no padding"
+file = "crates/style/resources/html.css"
+from = '''optgroup::-internal-optgroup-label {
+  padding: 0 2px 1px;'''
+to = '''optgroup::-internal-optgroup-label {'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it"]
+
+[[mutant]]
+name = "an optgroup's label has no height"
+file = "crates/style/resources/html.css"
+from = '''  padding: 0 2px 1px;
+  min-height: 1.2em;'''
+to = '''  padding: 0 2px 1px;'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it"]
+
+[[mutant]]
+name = "a text area's tree is taken for a text field's"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''.is_some_and(|name| name.is_html(&local_name!("textarea")))'''
+to = '''.is_some_and(|name| name.is_html(&local_name!("input")))'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+
+[[mutant]]
+name = "the inner editor has no pseudo id"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''let editor = div(m, document, pseudo(INNER_EDITOR));'''
+to = '''let editor = div(m, document, pseudo("-internal-x"));'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it"]
+
+[[mutant]]
+name = "the editing view port has no pseudo id"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''let view_port = div(m, document, pseudo(EDITING_VIEW_PORT));'''
+to = '''let view_port = div(m, document, pseudo("-internal-x"));'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+
+[[mutant]]
+name = "layout doesn't know the inner editor"
+file = "crates/layout/src/control.rs"
+from = '''element.attr_ref(&dom::name::unlisted::PSEUDO).as_deref() == Some(INNER_EDITOR);'''
+to = '''element.attr_ref(&dom::name::unlisted::PSEUDO).is_none();'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it"]
+
+[[mutant]]
+name = "a <base> in a moved subtree isn't seen"
+file = "crates/dom/src/scope.rs"
+from = '''            moved.base |= is_base(node);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+
+[[mutant]]
+name = "an inserted <base> keeps the base URL"
+file = "crates/dom/src/scope.rs"
+from = '''        // A `<base>`: the base URLs are found again.
+        if moved.base {
+            self.frames.base_hrefs.get_mut().clear();
+        }
+        // The moved subtree'''
+to = '''        // The moved subtree'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+
+[[mutant]]
+name = "a removed <base> keeps the base URL"
+file = "crates/dom/src/scope.rs"
+from = '''        // A `<base>`: the base URLs are found again.
+        if moved.base {
+            self.frames.base_hrefs.get_mut().clear();
+        }
+        set_children_changed(parent);'''
+to = '''        set_children_changed(parent);'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+
+[[mutant]]
+name = "a <base>'s href keeps the base URL"
+file = "crates/dom/src/scope.rs"
+from = '''        if is_base(element) && name.is_attr(&local_name!("href")) {'''
+to = '''        if false {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+
+[[mutant]]
+name = "a connected <link> isn't recorded"
+file = "crates/dom/src/scope.rs"
+from = '''                connected.then_some(&mut |id| links.push(id)),'''
+to = '''                None,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+
+[[mutant]]
+name = "a connected <link>'s attribute isn't recorded"
+file = "crates/dom/src/scope.rs"
+from = '''            self.frames.link_changes.push(element.id);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+
+[[mutant]]
+name = "a frame takes another document's <link>"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            if node.root().id() != self.document.as_node().id() {
+                continue;
+            }
+            let link = node.to_handle();'''
+to = '''            let link = node.to_handle();'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+
+[[mutant]]
+name = "a <link> changed twice loads twice"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            if !self.requested_links.insert(id) {
+                continue;
+            }'''
+to = '''            self.requested_links.insert(id);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+
+[[mutant]]
+name = "a <link> isn't a preload candidate"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            self.preload_candidates.push(link);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+
+[[mutant]]
+name = "a background image isn't collected"
+file = "crates/style/src/lib.rs"
+from = '''                            for url in style.background_image_urls() {
+                                if !urls.contains(url) {
+                                    urls.push(url.clone());
+                                }
+                            }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+
+[[mutant]]
+name = "an element that isn't rendered loads its background"
+file = "crates/style/src/lib.rs"
+from = '''                            && animations::rendered(scope, node, &style)'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+
+[[mutant]]
+name = "the frame takes no background image"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        for url in self.style_engine.take_background_image_urls() {'''
+to = '''        for url in Vec::<std::sync::Arc<str>>::new() {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]

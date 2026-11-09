@@ -1,0 +1,76 @@
+test = ["sh", "-c", "cargo test -q -p paint --test it -- intersection:: && cargo test -q -p dom_js --test it -- intersection_observers:: && cargo test -q -p shell --test it -- intersection_observers::"]
+timeout = 2400
+
+[[mutant]]
+name = "an opacity doesn't distort"
+file = "crates/paint/src/intersection.rs"
+from = '''            if node.opacity != 1.0 || node.filter.is_some() {'''
+to = '''            if node.filter.is_some() {'''
+
+[[mutant]]
+name = "a filter doesn't distort"
+file = "crates/paint/src/intersection.rs"
+from = '''            if node.opacity != 1.0 || node.filter.is_some() {'''
+to = '''            if node.opacity != 1.0 {'''
+
+[[mutant]]
+name = "only the target's own effect counts"
+file = "crates/paint/src/intersection.rs"
+from = '''            effect = node.parent;
+        }'''
+to = '''            effect = node.parent.filter(|_| false);
+        }'''
+
+[[mutant]]
+name = "a scale down doesn't distort"
+file = "crates/paint/src/intersection.rs"
+from = '''        !(skew_x == 0.0 && skew_y == 0.0 && scale_x >= 1.0 && scale_x == scale_y)'''
+to = '''        !(skew_x == 0.0 && skew_y == 0.0 && scale_x == scale_y)'''
+
+[[mutant]]
+name = "a scale that isn't the same on both axes doesn't distort"
+file = "crates/paint/src/intersection.rs"
+from = '''        !(skew_x == 0.0 && skew_y == 0.0 && scale_x >= 1.0 && scale_x == scale_y)'''
+to = '''        !(skew_x == 0.0 && skew_y == 0.0 && scale_x >= 1.0)'''
+
+[[mutant]]
+name = "a rotation doesn't distort"
+file = "crates/paint/src/intersection.rs"
+from = '''        !(skew_x == 0.0 && skew_y == 0.0 && scale_x >= 1.0 && scale_x == scale_y)'''
+to = '''        !(scale_x >= 1.0 && scale_x == scale_y)'''
+
+[[mutant]]
+name = "a scale up distorts"
+file = "crates/paint/src/intersection.rs"
+from = '''        !(skew_x == 0.0 && skew_y == 0.0 && scale_x >= 1.0 && scale_x == scale_y)'''
+to = '''        !(skew_x == 0.0 && skew_y == 0.0 && scale_x == 1.0 && scale_x == scale_y)'''
+
+[[mutant]]
+name = "visibility is found though not asked"
+file = "crates/paint/src/intersection.rs"
+from = '''            request.visibility && intersection.is_some() && !self.distorted(target.boxes[0].1);'''
+to = '''            intersection.is_some() && !self.distorted(target.boxes[0].1);'''
+
+[[mutant]]
+name = "a target out of the root is visible"
+file = "crates/paint/src/intersection.rs"
+from = '''            request.visibility && intersection.is_some() && !self.distorted(target.boxes[0].1);'''
+to = '''            request.visibility && !self.distorted(target.boxes[0].1);'''
+
+[[mutant]]
+name = "one that doesn't intersect is visible"
+file = "crates/dom_api/src/intersection_observer.rs"
+from = '''        let is_visible = is_intersecting && c.is_visible;'''
+to = '''        let is_visible = c.is_visible;'''
+
+[[mutant]]
+name = "the renderer never asks"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            visibility: options.track_visibility,'''
+to = '''            visibility: false,'''
+
+[[mutant]]
+name = "the renderer drops what it found"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            is_visible: geometry.visible,'''
+to = '''            is_visible: false,'''

@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>The window's width</title>
+<script>
+  // An element for every 100 px of the runner's window's width, where the
+  // summary shows it.
+  window.tests = [
+    {
+      name: "MeasuringTheWindow",
+      run(doc) {
+        for (let i = 0; i < Math.round(top.innerWidth / 100); i++) doc.body.append(doc.createElement("i"));
+      },
+    },
+  ];
+</script>

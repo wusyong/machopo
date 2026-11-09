@@ -1,0 +1,11 @@
+# Stage 4g-4b-2a: what only the frame-input scenario reaches (a child frame's own hit test
+# through the top-level frame's pre-paint: its elementFromPoint).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "python3", "scripts/test.py", "scenarios", "--next-dom", "frame-input"]
+timeout = 3000
+
+[[mutant]]
+name = "a child frame's hit test at the top-level frame's point"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        let point = self.view.point_from_frame(self.selected, point)?;
+        self.view.element_at(point)'''
+to = '''        self.view.element_at(point)'''

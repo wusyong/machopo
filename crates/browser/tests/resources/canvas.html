@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<title></title>
+<body>
+<script>
+  // A canvas's 2D context: rects and paths drawn with each style and
+  // transform, read back with getImageData; the line goes in the title.
+  const out = [];
+  const px = (ctx, x, y) => Array.from(ctx.getImageData(x, y, 1, 1).data).join(",");
+  const canvas = (w, h, options) => {
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    return [c, c.getContext("2d", options)];
+  };
+  try {
+    // Fill, then half blue over it; a clear, whatever globalAlpha is.
+    let [c, ctx] = canvas(4, 2);
+    document.body.append(c);
+    ctx.fillStyle = "red";
+    ctx.fillRect(0, 0, 4, 2);
+    ctx.fillStyle = "rgba(0, 0, 255, 0.5)";
+    ctx.fillRect(1, 0, 1, 1);
+    ctx.globalAlpha = 0.5;
+    ctx.clearRect(3, 0, 1, 1);
+    out.push("fill " + px(ctx, 0, 0) + " " + px(ctx, 1, 0) + " " + px(ctx, 3, 0));
+
+    // globalAlpha, then save, transform and restore.
+    [c, ctx] = canvas(4, 4);
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = "#00ff00";
+    ctx.fillRect(0, 0, 1, 1);
+    ctx.save();
+    ctx.globalAlpha = 1;
+    ctx.translate(2, 0);
+    ctx.scale(2, 2);
+    ctx.fillRect(0, 0, 1, 1);
+    ctx.restore();
+    ctx.fillRect(0, 3, 1, 1);
+    out.push("alpha " + px(ctx, 0, 0) + " " + px(ctx, 3, 1) + " " + px(ctx, 1, 1) + " " + px(ctx, 0, 3));
+
+    // setTransform replaces, rotate turns (90 degrees: x goes down).
+    [c, ctx] = canvas(4, 4);
+    ctx.setTransform(1, 0, 0, 1, 1, 1);
+    ctx.fillRect(0, 0, 1, 1);
+    ctx.resetTransform();
+    ctx.translate(4, 0);
+    ctx.rotate(Math.PI / 2);
+    ctx.fillRect(0, 0, 1, 1);
+    out.push("transform " + px(ctx, 1, 1) + " " + px(ctx, 3, 0) + " " + px(ctx, 0, 0));
+
+    // A stroked rect's outline, as wide as lineWidth, centred on it.
+    [c, ctx] = canvas(6, 6);
+    ctx.strokeStyle = "blue";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(1, 1, 4, 4);
+    out.push("stroke " + px(ctx, 0, 0) + " " + px(ctx, 1, 3) + " " + px(ctx, 3, 3));
+
+    // An opaque canvas: black to start with, cleared to black.
+    [c, ctx] = canvas(2, 1, { alpha: false });
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, 2, 1);
+    ctx.clearRect(1, 0, 1, 1);
+    out.push("opaque " + px(canvas(1, 1, { alpha: false })[1], 0, 0) + " " + px(ctx, 0, 0) + " " + px(ctx, 1, 0));
+
+    // A new width clears the bitmap and the state.
+    [c, ctx] = canvas(2, 2);
+    ctx.fillStyle = "red";
+    ctx.translate(1, 0);
+    ctx.fillRect(0, 0, 1, 1);
+    c.width = 2;
+    ctx.fillRect(0, 0, 1, 1);
+    out.push("reset " + px(ctx, 0, 0) + " " + px(ctx, 1, 0) + " " + ctx.fillStyle);
+
+    // Out of the bitmap: transparent; a negative size goes back.
+    [c, ctx] = canvas(2, 1);
+    ctx.fillRect(0, 0, 2, 1);
+    const back = ctx.getImageData(2, 1, -3, -1);
+    out.push("bounds " + back.width + "x" + back.height + " " + Array.from(back.data).join(","));
+
+    // The same array each time; what a script writes in it stays.
+    const data = ctx.getImageData(0, 0, 1, 1);
+    data.data[0] = 7;
+    out.push("same " + (data.data === data.data) + " " + data.data[0] + " " + (data.data instanceof Uint8ClampedArray));
+    out.push("new " + (new ImageData(2, 3).data.length) + " " + new ImageData(1, 1).colorSpace);
+    try {
+      ctx.getImageData(0, 0, 0, 1);
+    } catch (e) {
+      out.push("zero " + e.name);
+    }
+
+    // Paths: filled by their rule, a circle's conics, a clip that stays
+    // through a read (which draws what was recorded) until restored,
+    // dashes, rounded corners and square caps.
+    [c, ctx] = canvas(8, 8);
+    ctx.moveTo(0, 0);
+    ctx.lineTo(8, 0);
+    ctx.lineTo(0, 8);
+    ctx.fill();
+    out.push("triangle " + px(ctx, 1, 1) + " " + px(ctx, 6, 6));
+    [c, ctx] = canvas(8, 8);
+    ctx.rect(0, 0, 8, 8);
+    ctx.rect(2, 2, 4, 4);
+    ctx.fill("evenodd");
+    out.push("evenodd " + px(ctx, 1, 1) + " " + px(ctx, 3, 3));
+    [c, ctx] = canvas(16, 16);
+    ctx.arc(8, 8, 6, 0, 2 * Math.PI);
+    ctx.fill();
+    out.push("circle " + px(ctx, 8, 8) + " " + px(ctx, 12, 8) + " " + px(ctx, 2, 2));
+    [c, ctx] = canvas(4, 4);
+    ctx.save();
+    ctx.rect(0, 0, 2, 2);
+    ctx.clip();
+    ctx.fillRect(0, 0, 1, 4);
+    const before = px(ctx, 0, 3);
+    ctx.fillRect(0, 0, 4, 4);
+    const clipped = px(ctx, 1, 1) + " " + px(ctx, 3, 3);
+    ctx.restore();
+    ctx.fillRect(3, 3, 1, 1);
+    out.push("clip " + before + " " + clipped + " " + px(ctx, 3, 3));
+    [c, ctx] = canvas(8, 2);
+    ctx.lineWidth = 2;
+    ctx.setLineDash([2, 2]);
+    ctx.moveTo(0, 1);
+    ctx.lineTo(8, 1);
+    ctx.stroke();
+    out.push("dash " + px(ctx, 1, 1) + " " + px(ctx, 2, 1) + " " + px(ctx, 5, 0));
+    [c, ctx] = canvas(8, 8);
+    ctx.roundRect(0, 0, 8, 8, 4);
+    ctx.fill();
+    out.push("round " + px(ctx, 0, 0) + " " + px(ctx, 4, 4));
+    [c, ctx] = canvas(8, 8);
+    ctx.lineWidth = 2;
+    ctx.moveTo(2, 2);
+    ctx.lineTo(6, 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.lineCap = "square";
+    ctx.moveTo(2, 6);
+    ctx.lineTo(6, 6);
+    ctx.stroke();
+    out.push("caps " + px(ctx, 1, 2) + " " + px(ctx, 1, 6));
+
+    // Gradients: red to blue across, a quarter way stopped green; a conic
+    // one red from the x axis round to blue.
+    [c, ctx] = canvas(100, 2);
+    let g = ctx.createLinearGradient(0, 0, 100, 0);
+    g.addColorStop(0, "red");
+    g.addColorStop(1, "blue");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 100, 2);
+    out.push("linear " + px(ctx, 0, 0) + " " + px(ctx, 50, 0) + " " + px(ctx, 99, 0));
+    [c, ctx] = canvas(40, 40);
+    g = ctx.createConicGradient(0, 20, 20);
+    g.addColorStop(0, "red");
+    g.addColorStop(1, "blue");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 40, 40);
+    const [r, , b] = ctx.getImageData(38, 21, 1, 1).data;
+    const [r2, , b2] = ctx.getImageData(38, 18, 1, 1).data;
+    out.push("conic " + (r > 230 && b < 25) + " " + (r2 < 25 && b2 > 230));
+
+    // Compositing: source-in keeps the overlap only, the red outside it
+    // goes too; xor cuts the overlap; copy replaces everything; an opaque
+    // canvas stays opaque.
+    [c, ctx] = canvas(4, 2);
+    ctx.fillStyle = "red";
+    ctx.fillRect(0, 0, 4, 2);
+    ctx.globalCompositeOperation = "source-in";
+    ctx.fillStyle = "blue";
+    ctx.fillRect(2, 0, 2, 2);
+    out.push("source-in " + px(ctx, 1, 1) + " " + px(ctx, 3, 1));
+    [c, ctx] = canvas(4, 2);
+    ctx.fillRect(0, 0, 3, 2);
+    ctx.globalCompositeOperation = "xor";
+    ctx.fillRect(2, 0, 2, 2);
+    out.push("xor " + px(ctx, 1, 1) + " " + px(ctx, 2, 1) + " " + px(ctx, 3, 1));
+    [c, ctx] = canvas(4, 2);
+    ctx.fillRect(0, 0, 4, 2);
+    ctx.globalCompositeOperation = "copy";
+    ctx.fillStyle = "lime";
+    ctx.fillRect(2, 0, 1, 1);
+    out.push("copy " + px(ctx, 0, 0) + " " + px(ctx, 2, 0));
+    [c, ctx] = canvas(2, 1, { alpha: false });
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, 2, 1);
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.fillRect(0, 0, 1, 1);
+    out.push("opaque-out " + px(ctx, 0, 0) + " " + px(ctx, 1, 0));
+
+    // A shadow: moved in the bitmap's pixels, not scaled with the square;
+    // blurred, partly past its edge.
+    [c, ctx] = canvas(20, 4);
+    ctx.scale(2, 2);
+    ctx.shadowColor = "lime";
+    ctx.shadowOffsetX = 6;
+    ctx.fillRect(0, 0, 2, 2);
+    out.push("shadow " + px(ctx, 1, 1) + " " + px(ctx, 5, 1) + " " + px(ctx, 7, 1) + " " + px(ctx, 11, 1));
+    [c, ctx] = canvas(20, 4);
+    ctx.shadowColor = "lime";
+    ctx.shadowBlur = 4;
+    ctx.shadowOffsetX = 10;
+    ctx.fillRect(0, 0, 4, 4);
+    const edge = ctx.getImageData(9, 1, 1, 1).data[3];
+    out.push("blurred " + (edge > 0 && edge < 255));
+
+    // A Path2D from path data: filled by the even-odd rule under a
+    // transform (the hole left), clipped to, and hit tested as it is.
+    [c, ctx] = canvas(20, 20);
+    const ring = new Path2D("M 0 0 H 8 V 8 H 0 Z M 2 2 H 6 V 6 H 2 Z");
+    ctx.translate(2, 2);
+    ctx.fill(ring, "evenodd");
+    out.push("path2d " + px(ctx, 3, 3) + " " + px(ctx, 6, 6) + " " +
+      ctx.isPointInPath(ring, 6, 6) + " " + ctx.isPointInPath(ring, 6, 6, "evenodd") + " " +
+      ctx.isPointInStroke(ring, 2, 5));
+    [c, ctx] = canvas(20, 20);
+    ctx.clip(new Path2D("M 0 0 H 5 V 5 H 0 Z"));
+    ctx.fillRect(0, 0, 20, 20);
+    out.push("clip2d " + px(ctx, 2, 2) + " " + px(ctx, 7, 7));
+
+    // putImageData over what was drawn (drawn first), not through the
+    // transform; read back as it was put.
+    [c, ctx] = canvas(4, 1);
+    ctx.fillStyle = "red";
+    ctx.fillRect(0, 0, 4, 1);
+    ctx.scale(2, 2);
+    const put = ctx.createImageData(2, 1);
+    put.data.set([0, 0, 255, 255, 0, 255, 0, 128]);
+    ctx.putImageData(put, 1, 0);
+    out.push("put " + px(ctx, 0, 0) + " " + px(ctx, 1, 0) + " " + px(ctx, 2, 0) + " " + px(ctx, 3, 0));
+
+    // Read back twice: drawn on the main thread from then on, with what it
+    // had, drawn and put over.
+    [c, ctx] = canvas(4, 1);
+    ctx.fillStyle = "red";
+    ctx.fillRect(0, 0, 4, 1);
+    const read = px(ctx, 0, 0) + " " + px(ctx, 1, 0);
+    ctx.fillStyle = "blue";
+    ctx.fillRect(1, 0, 1, 1);
+    const green = ctx.createImageData(1, 1);
+    green.data.set([0, 255, 0, 255]);
+    ctx.putImageData(green, 2, 0);
+    out.push("taken " + read + " " + px(ctx, 0, 0) + " " + px(ctx, 1, 0) + " " + px(ctx, 2, 0) + " " + px(ctx, 3, 0));
+
+    // Text in the system's fonts: only where its ink is across (the
+    // first and last columns with any), from x as textAlign says,
+    // squeezed into maxWidth; none for a NaN x.
+    const ink = (ctx) => {
+      const { width, height, data } = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
+      let min = width, max = -1;
+      for (let i = 3; i < data.length; i += 4) {
+        if (data[i] > 0) {
+          const x = ((i - 3) / 4) % width;
+          min = Math.min(min, x);
+          max = Math.max(max, x);
+        }
+      }
+      return [min, max];
+    };
+    const text = (draw) => {
+      const [c, ctx] = canvas(200, 40);
+      ctx.font = "30px sans-serif";
+      draw(ctx);
+      return ink(ctx);
+    };
+    let [min, max] = text((ctx) => ctx.fillText("MMMM", 10, 30));
+    out.push("text " + (min >= 9 && min <= 16) + " " + (max > 60));
+    [min, max] = text((ctx) => ctx.fillText("MMMM", 10, 30, 40));
+    out.push("squeezed " + (min >= 9 && min <= 14) + " " + (max > 40 && max <= 51));
+    [min, max] = text((ctx) => { ctx.textAlign = "right"; ctx.fillText("MMMM", 190, 30); });
+    out.push("right " + (min < 140) + " " + (max > 180 && max <= 191));
+    [min, max] = text((ctx) => ctx.fillText("MMMM", NaN, 30));
+    out.push("nan " + min + " " + max);
+    [min, max] = text((ctx) => ctx.strokeText("MMMM", 10, 30));
+    out.push("stroked " + (max > 60));
+    // Measured: the ink's left and right edges are where it was drawn (to
+    // a pixel, and the quarter pixel Skia rounds a glyph's position to, as
+    // it caches glyphs at four subpixel positions), the ink above the
+    // baseline and not much below it.
+    let m;
+    [min, max] = text((ctx) => {
+      m = ctx.measureText("MMMM");
+      ctx.fillText("MMMM", 10, 30);
+    });
+    out.push("measured " + (m instanceof TextMetrics) + " " + (m.width > 60) + " " +
+      (Math.abs(10 - m.actualBoundingBoxLeft - min) <= 1.25) + " " +
+      (Math.abs(10 + m.actualBoundingBoxRight - (max + 1)) <= 1.25) + " " +
+      (m.actualBoundingBoxAscent > 15 && Math.abs(m.actualBoundingBoxDescent) < 2) + " " +
+      (m.fontBoundingBoxAscent > 15 && m.fontBoundingBoxDescent > 0));
+    document.title = out.join(" | ");
+  } catch (e) {
+    document.title = "error " + e;
+  }
+</script>

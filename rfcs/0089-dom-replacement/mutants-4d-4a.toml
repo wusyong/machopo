@@ -1,0 +1,291 @@
+# Stage 4d-4a: `CustomEvent`, `createEvent` and the legacy `init*Event`s,
+# `WheelEvent`, `InputEvent` on the new DOM: `dom_next`'s initialized flag
+# and event data, `dom_api_next`'s members and the typed layer's `any`,
+# event target and string arguments, the V8 front's.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it -- event_interfaces ui_events events"]
+timeout = 3000
+
+[[mutant]]
+name = "a constructed event not initialized"
+file = "crates/dom_next/src/event.rs"
+from = '''                flags: Cell::new(flag_bits(flags) | INITIALIZED),'''
+to = '''                flags: Cell::new(flag_bits(flags)),'''
+
+[[mutant]]
+name = "createEvent's event initialized"
+file = "crates/dom_next/src/event.rs"
+from = '''        set_bits(&event.flags, INITIALIZED, false);
+'''
+to = ''''''
+
+[[mutant]]
+name = "initEvent initializes nothing"
+file = "crates/dom_next/src/event.rs"
+from = '''            kept | INITIALIZED
+                | flag_bits('''
+to = '''            kept
+                | flag_bits('''
+
+[[mutant]]
+name = "an uninitialized event dispatched"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''!cx.event_state(event).dispatching && cx.event_initialized(event)'''
+to = '''!cx.event_state(event).dispatching'''
+
+[[mutant]]
+name = "initMouseEvent makes a wheel event a mouse event"
+file = "crates/dom_next/src/ui_event.rs"
+from = '''        match self.wheel_event_data(event) {
+            Some(wheel) => wheel.mouse.set(self.gc, Some(data)),
+            None => event.data.set(self.gc, Some(data.erase())),
+        }'''
+to = '''        event.data.set(self.gc, Some(data.erase()));'''
+
+[[mutant]]
+name = "a wheel event's mouse data not a mouse event's"
+file = "crates/dom_next/src/ui_event.rs"
+from = '''        data.downcast::<MouseEventData>().or_else(|| {
+            data.downcast::<WheelEventData>()
+                .and_then(|wheel| wheel.mouse.get(self.gc))
+        })'''
+to = '''        data.downcast::<MouseEventData>()'''
+
+[[mutant]]
+name = "a wheel event's deltas swapped"
+file = "crates/dom_next/src/ui_event.rs"
+from = '''                deltas: Cell::new([wheel.delta_x, wheel.delta_y, wheel.delta_z]),'''
+to = '''                deltas: Cell::new([wheel.delta_x, wheel.delta_z, wheel.delta_y]),'''
+
+[[mutant]]
+name = "a wheel event not a UI event"
+file = "crates/dom_next/src/ui_event.rs"
+from = '''                    || data.downcast::<WheelEventData>().is_some()
+'''
+to = ''''''
+
+[[mutant]]
+name = "an input event not a UI event"
+file = "crates/dom_next/src/ui_event.rs"
+from = '''                    || data.downcast::<InputEventData>().is_some()
+'''
+to = ''''''
+
+[[mutant]]
+name = "an input event's detail 0"
+file = "crates/dom_next/src/ui_event.rs"
+from = '''        if let Some(input) = data.downcast::<InputEventData>() {
+            return (input.view.get(self.gc), input.detail.get());
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "initUIEvent leaves a mouse event's view"
+file = "crates/dom_next/src/ui_event.rs"
+from = '''        } else if let Some(mouse) = self.mouse_event_data(event) {
+            let mouse = mouse.into_ref();
+            (&mouse.view, &mouse.detail)
+'''
+to = '''        } else if let Some(mouse) = None::<Gc<'gc, MouseEventData>> {
+            let mouse = mouse.into_ref();
+            (&mouse.view, &mouse.detail)
+'''
+
+[[mutant]]
+name = "initUIEvent leaves an input event's view"
+file = "crates/dom_next/src/ui_event.rs"
+from = '''        } else if let Some(input) = data.downcast::<InputEventData>() {
+            let input = input.into_ref();
+            (&input.view, &input.detail)
+'''
+to = '''        } else if let Some(input) = None::<Gc<'gc, InputEventData>> {
+            let input = input.into_ref();
+            (&input.view, &input.detail)
+'''
+
+[[mutant]]
+name = "a wheel event's wrapper a mouse event's"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''            } else if cx.wheel_event_data(event).is_some() {
+                // Before `MouseEvent`: a wheel event's mouse data is one's.
+                const { crate::declare::interface_index("WheelEvent") }
+'''
+to = ''''''
+
+[[mutant]]
+name = "a custom event's wrapper an event's"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''            } else if cx.custom_event_data(event).is_some() {
+                const { crate::declare::interface_index("CustomEvent") }
+'''
+to = ''''''
+
+[[mutant]]
+name = "SVGEvents not an alias"
+file = "crates/dom_api_next/src/document.rs"
+from = '''        "event" | "events" | "htmlevents" | "svgevents" => CreatedEvent::Plain,'''
+to = '''        "event" | "events" | "htmlevents" => CreatedEvent::Plain,'''
+
+[[mutant]]
+name = "MouseEvents a UI event"
+file = "crates/dom_api_next/src/document.rs"
+from = '''        "mouseevent" | "mouseevents" => CreatedEvent::Mouse,'''
+to = '''        "mouseevent" => CreatedEvent::Mouse,
+        "mouseevents" => CreatedEvent::Ui,'''
+
+[[mutant]]
+name = "createEvent makes any name an event"
+file = "crates/dom_api_next/src/document.rs"
+from = '''        _ => return Err(ApiError::dom(ExceptionName::NotSupported)),'''
+to = '''        _ => CreatedEvent::Plain,'''
+
+[[mutant]]
+name = "createEvent case-sensitive"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    let kind = match lowercase(interface).as_ref() {'''
+to = '''    let kind = match interface {'''
+
+[[mutant]]
+name = "a custom event's detail not stored"
+file = "crates/dom_api_next/src/event.rs"
+from = '''    if let Some(detail) = init.detail {
+        let data = custom_data(cx, event);
+        op.store_any(cx, cx.detail_edge(data), detail);
+    }'''
+to = '''    let _ = init.detail;'''
+
+[[mutant]]
+name = "initCustomEvent while dispatched"
+file = "crates/dom_api_next/src/event.rs"
+from = '''    detail: AnyArg,
+) -> Result<(), ApiError> {
+    if cx.event_state(this).dispatching {
+        return Ok(());
+    }'''
+to = '''    detail: AnyArg,
+) -> Result<(), ApiError> {'''
+
+[[mutant]]
+name = "initCustomEvent keeps the detail"
+file = "crates/dom_api_next/src/event.rs"
+from = '''    op.store_any(cx, cx.detail_edge(custom_data(cx, this)), detail);'''
+to = '''    let _ = detail;'''
+
+[[mutant]]
+name = "an empty detail undefined"
+file = "crates/dom_js_next/src/front.rs"
+from = '''            None => self.call.rv.op().set_null(),
+        }
+    }'''
+to = '''            None => self.call.rv.op().set_undefined(),
+        }
+    }'''
+
+[[mutant]]
+name = "an undefined any argument kept undefined"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        if value.is_undefined() {
+            value = v8::null(self.scope.scope()).into();
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "an undefined any member kept"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        if value.is_undefined() {
+            return Some(None);
+        }
+        assert!(self.call.callback.is_none(), "a member takes one callback or `any`");'''
+to = '''        assert!(self.call.callback.is_none(), "a member takes one callback or `any`");'''
+
+[[mutant]]
+name = "a plain event target no target argument"
+file = "crates/dom_js_next/src/front.rs"
+from = '''            || bindings::is_wrapper::<EventTargetImpl>(scope, value)
+'''
+to = ''''''
+
+[[mutant]]
+name = "a window target argument a plain target"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        if let Some(window) = self.no_gc.unwrap::<Window>(cx.gc, *object) {
+            return TargetRef::Window(window);
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "a null data member a string"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        if value.is_null_or_undefined() {
+            return Some(None);
+        }
+        let string = value.to_string(scope)?;'''
+to = '''        if value.is_undefined() {
+            return Some(None);
+        }
+        let string = value.to_string(scope)?;'''
+
+[[mutant]]
+name = "an undefined key \"undefined\""
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        if front.is_undefined(index) {
+            return Some(None);
+        }
+        front.string_arg(index).map(Some)'''
+to = '''        front.string_arg(index).map(Some)'''
+
+[[mutant]]
+name = "the legacy alt key the shift key"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''        (alt_key, modifiers::ALT),'''
+to = '''        (alt_key, modifiers::SHIFT),'''
+
+[[mutant]]
+name = "initMouseEvent clears buttons"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''        button: low_i16(button),
+        ..info(cx, this)'''
+to = '''        button: low_i16(button),
+        ..MouseEventInfo::default()'''
+
+[[mutant]]
+name = "initMouseEvent's button saturated"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''        button: low_i16(button),'''
+to = '''        button: saturated_cast(button),'''
+
+[[mutant]]
+name = "initKeyboardEvent keeps the detail"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''        detail: 0,
+        key: DomString::new(key),'''
+to = '''        key: DomString::new(key),'''
+
+[[mutant]]
+name = "initMouseEvent while dispatched"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''    related_target: Option<TargetRef<'gc>>,
+) -> Result<(), ApiError> {
+    if cx.event_state(this).dispatching {
+        return Ok(());
+    }'''
+to = '''    related_target: Option<TargetRef<'gc>>,
+) -> Result<(), ApiError> {'''
+
+[[mutant]]
+name = "wheelDelta takes x first"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''    if y != 0 {
+        return Ok(y);
+    }'''
+to = '''    if y == 0 {
+        return Ok(y);
+    }'''
+
+[[mutant]]
+name = "wheelDeltaX deltaX's way"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''    Ok(saturated_cast(-wheel(cx, this).delta_x))'''
+to = '''    Ok(saturated_cast(wheel(cx, this).delta_x))'''

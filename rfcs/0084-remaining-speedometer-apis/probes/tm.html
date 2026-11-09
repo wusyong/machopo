@@ -1,0 +1,32 @@
+<!doctype html>
+<script>
+function busy(ms) { const end = performance.now() + ms; while (performance.now() < end); }
+function run() {
+  return new Promise(done => {
+    const out = [];
+    setTimeout(() => {
+      busy(50);
+      const set = performance.now();
+      out.push("event " + Math.round(new Event("x").timeStamp - set));
+      setTimeout(() => {
+        out.push("timeout " + Math.round(performance.now() - set));
+        const order = [];
+        const { port1, port2 } = new MessageChannel();
+        port1.onmessage = () => order.push("message");
+        setTimeout(() => order.push("timer"), 0);
+        port2.postMessage(0);
+        setTimeout(() => {
+          out.push(order.join(","));
+          busy(30);
+          const at = performance.now();
+          requestIdleCallback(() => {
+            out.push("idle " + Math.round(performance.now() - at));
+            done(out.join(" "));
+          }, { timeout: 40 });
+          busy(100);
+        }, 50);
+      }, 30);
+    }, 0);
+  });
+}
+</script>

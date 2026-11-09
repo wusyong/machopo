@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<title>J6: capture, target, bubble; stopPropagation; a non-bubbling event stops at the target</title>
+<link rel="match" href="j6-event-order-ref.html">
+<style>
+  html, body { margin: 0 }
+  #log div { height: 20px }
+  #log .gap { height: 10px }
+</style>
+<div id="outer"><div id="inner"></div></div>
+<div id="log"></div>
+<script>
+  // Each listener writes a row: the color says where it is, the width the
+  // event's phase (capturing 100px, at the target 75px, bubbling 50px).
+  const log = document.getElementById("log");
+  const outer = document.getElementById("outer");
+  const inner = document.getElementById("inner");
+  const colors = [
+    [window, "black"], [document, "gray"], [document.body, "blue"],
+    [outer, "orange"], [inner, "green"],
+  ];
+  const widths = { 1: 100, 2: 75, 3: 50 };
+  const row = (color, width) => {
+    const div = document.createElement("div");
+    div.setAttribute("style", `background-color: ${color}; width: ${width}px`);
+    log.appendChild(div);
+  };
+  for (const [target, color] of colors) {
+    for (const capture of [true, false]) {
+      target.addEventListener("x", (e) => {
+        // The wrong `currentTarget` shows as red.
+        row(e.currentTarget === target ? color : "red", widths[e.eventPhase]);
+      }, capture);
+    }
+  }
+  const gap = () => {
+    const div = document.createElement("div");
+    div.setAttribute("class", "gap");
+    log.appendChild(div);
+  };
+
+  inner.dispatchEvent(new Event("x", { bubbles: true }));
+  gap();
+  // Stopped while bubbling at `outer`: its other listeners would still run,
+  // nothing above it.
+  const stop = (e) => e.stopPropagation();
+  outer.addEventListener("x", stop);
+  inner.dispatchEvent(new Event("x", { bubbles: true }));
+  outer.removeEventListener("x", stop);
+  gap();
+  inner.dispatchEvent(new Event("x"));
+</script>

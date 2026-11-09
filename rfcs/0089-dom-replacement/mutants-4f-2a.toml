@@ -1,0 +1,460 @@
+# Stage 4f-2a: on the new DOM, the DOM's activation steps in the
+# dispatch, `click()`, an input's type, checkedness and indeterminate,
+# radio button groups, a checkbox's and a radio button's activation,
+# `input` and `change`, a label clicking its control, a form's buttons'
+# activation (doing nothing yet), disabled form controls (what a fieldset
+# ancestor says kept), the user's click on one not dispatched.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it -- activation:: forms:: && cargo test -q -p dom_api_next --test it input::"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: no form element made"
+file = "crates/dom_next/src/lib.rs"
+from = '''            if kind != 0 {
+                self.form_element_made(element, kind);'''
+to = '''            if false {
+                self.form_element_made(element, kind);'''
+
+[[mutant]]
+name = "dom: no fieldset seen"
+file = "crates/dom_next/src/form.rs"
+from = '''        if kind & FIELDSET != 0 {
+            self.see(FIELDSETS_SEEN);'''
+to = '''        if false {
+            self.see(FIELDSETS_SEEN);'''
+
+[[mutant]]
+name = "dom: an insertion looks at forms alone"
+file = "crates/dom_next/src/form.rs"
+from = '''    pub(crate) fn form_inserted(&self, parent: NodeRef<'gc>, node: NodeRef<'gc>) {
+        if self.changes.forms.seen.get() != 0 {'''
+to = '''    pub(crate) fn form_inserted(&self, parent: NodeRef<'gc>, node: NodeRef<'gc>) {
+        if self.changes.forms.seen.get() & FORMS_SEEN != 0 {'''
+
+[[mutant]]
+name = "dom: a removal looks at forms alone"
+file = "crates/dom_next/src/form.rs"
+from = '''    pub(crate) fn form_removed(&self, parent: NodeRef<'gc>, node: NodeRef<'gc>, was_connected: bool) {
+        if self.changes.forms.seen.get() != 0 {'''
+to = '''    pub(crate) fn form_removed(&self, parent: NodeRef<'gc>, node: NodeRef<'gc>, was_connected: bool) {
+        if self.changes.forms.seen.get() & FORMS_SEEN != 0 {'''
+
+[[mutant]]
+name = "dom: an insertion keeps the disabled state"
+file = "crates/dom_next/src/form.rs"
+from = '''            if fieldsets {
+                self.ancestor_disabled_changed(at);
+            }
+            // HTML's: the parser's'''
+to = '''            // HTML's: the parser's'''
+
+[[mutant]]
+name = "dom: a radio unchecks its group out of a document too"
+file = "crates/dom_next/src/form.rs"
+from = '''            if radios && connected {'''
+to = '''            if radios {'''
+
+[[mutant]]
+name = "dom: a connected radio doesn't uncheck its group"
+file = "crates/dom_next/src/form.rs"
+from = '''            if radios && connected {
+                self.uncheck_radio_group(at);
+            }'''
+to = '''            let _ = (radios, connected);'''
+
+[[mutant]]
+name = "dom: an insertion's legend not looked at"
+file = "crates/dom_next/src/form.rs"
+from = '''        if fieldsets {
+            self.fieldset_children_changed(parent, node);
+        }
+        // A form, or an id'''
+to = '''        // A form, or an id'''
+
+[[mutant]]
+name = "dom: a removal's legend not looked at"
+file = "crates/dom_next/src/form.rs"
+from = '''        if fieldsets {
+            self.fieldset_children_changed(parent, node);
+        }
+        if !self.has_seen(FORMS_SEEN) {'''
+to = '''        if !self.has_seen(FORMS_SEEN) {'''
+
+[[mutant]]
+name = "dom: a removal with no form keeps the disabled state"
+file = "crates/dom_next/src/form.rs"
+from = '''            if fieldsets {
+                self.for_each_inclusive_descendant(node, |at| {'''
+to = '''            if false {
+                self.for_each_inclusive_descendant(node, |at| {'''
+
+[[mutant]]
+name = "dom: a removal with a form keeps the disabled state"
+file = "crates/dom_next/src/form.rs"
+from = '''            if kind & LISTED != 0 && fieldsets {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "dom: the disabled state not kept"
+file = "crates/dom_next/src/form.rs"
+from = '''            ENABLED => return false,
+            DISABLED => return true,'''
+to = '''            DISABLED => return true,'''
+
+[[mutant]]
+name = "dom: the disabled state found not kept"
+file = "crates/dom_next/src/form.rs"
+from = '''        association.ancestor_disabled.set(if disabled { DISABLED } else { ENABLED });'''
+to = '''        let _ = UNKNOWN;'''
+
+[[mutant]]
+name = "dom: the first legend disables too"
+file = "crates/dom_next/src/form.rs"
+from = '''                && self.first_legend_child(parent).is_none_or(|legend| !Gc::ptr_eq(legend, child))'''
+to = ''''''
+
+[[mutant]]
+name = "dom: the first legend the first child"
+file = "crates/dom_next/src/form.rs"
+from = '''            if self.qualified_name(child) == Some(legend) {
+                return Some(child);'''
+to = '''            if true {
+                return Some(child);'''
+
+[[mutant]]
+name = "dom: a control's own disabled not looked at"
+file = "crates/dom_next/src/form.rs"
+from = '''            && (self.attribute_value_by_id(element, names::local::DISABLED).is_some() || self.ancestor_disabled(element))'''
+to = '''            && self.ancestor_disabled(element)'''
+
+[[mutant]]
+name = "dom: any element disabled"
+file = "crates/dom_next/src/form.rs"
+from = '''        self.form_kind(element) & DISABLABLE != 0
+            && ('''
+to = '''        true
+            && ('''
+
+[[mutant]]
+name = "dom: a fieldset's disabled not followed"
+file = "crates/dom_next/src/form.rs"
+from = '''            names::local::DISABLED if kind & FIELDSET != 0 => self.fieldset_disabled_changed(element),'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a type case-sensitive"
+file = "crates/dom_next/src/input.rs"
+from = '''                    .position(|keyword| keyword.eq_ignore_ascii_case(value))'''
+to = '''                    .position(|keyword| *keyword == value)'''
+
+[[mutant]]
+name = "dom: checked followed though dirty"
+file = "crates/dom_next/src/input.rs"
+from = '''            names::local::CHECKED if !input.dirty_checked.get() => self.set_checkedness(element, present),'''
+to = '''            names::local::CHECKED => self.set_checkedness(element, present),'''
+
+[[mutant]]
+name = "dom: a name change unchecks nothing"
+file = "crates/dom_next/src/input.rs"
+from = '''            names::local::NAME => self.uncheck_radio_group(element),'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a type change unchecks nothing"
+file = "crates/dom_next/src/input.rs"
+from = '''            self.see(RADIOS_SEEN);
+            self.uncheck_radio_group(element);'''
+to = '''            self.see(RADIOS_SEEN);'''
+
+[[mutant]]
+name = "dom: no radio seen"
+file = "crates/dom_next/src/input.rs"
+from = '''            self.see(RADIOS_SEEN);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: checking unchecks nothing"
+file = "crates/dom_next/src/input.rs"
+from = '''        input.checked.set(checked);
+        if checked {
+            self.uncheck_radio_group(element);
+        }'''
+to = '''        input.checked.set(checked);'''
+
+[[mutant]]
+name = "dom: checked not dirty"
+file = "crates/dom_next/src/input.rs"
+from = '''        input.dirty_checked.set(true);
+        self.set_checkedness(element, checked);'''
+to = '''        self.set_checkedness(element, checked);'''
+
+[[mutant]]
+name = "dom: a copy not checked"
+file = "crates/dom_next/src/input.rs"
+from = '''        to.checked.set(from.checked.get());'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a copy not dirty"
+file = "crates/dom_next/src/input.rs"
+from = '''        to.dirty_checked.set(from.dirty_checked.get());'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a copy not indeterminate"
+file = "crates/dom_next/src/input.rs"
+from = '''        to.indeterminate.set(from.indeterminate.get());'''
+to = ''''''
+
+[[mutant]]
+name = "dom: no copy's state"
+file = "crates/dom_next/src/lib.rs"
+from = '''                self.input_cloned(node, copy);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a click keeps indeterminate"
+file = "crates/dom_next/src/input.rs"
+from = '''                input.indeterminate.set(false);
+                self.set_checked(element, !state.checked);'''
+to = '''                self.set_checked(element, !state.checked);'''
+
+[[mutant]]
+name = "dom: a click doesn't toggle"
+file = "crates/dom_next/src/input.rs"
+from = '''                self.set_checked(element, !state.checked);'''
+to = '''                self.set_checked(element, state.checked);'''
+
+[[mutant]]
+name = "dom: a radio's checked one not kept"
+file = "crates/dom_next/src/input.rs"
+from = '''                        checked_radio = Some(other);'''
+to = '''                        let _ = other;'''
+
+[[mutant]]
+name = "dom: a canceled checkbox stays checked"
+file = "crates/dom_next/src/input.rs"
+from = '''                input.checked.set(state.checked);
+                input.indeterminate.set(state.indeterminate);'''
+to = '''                input.indeterminate.set(state.indeterminate);'''
+
+[[mutant]]
+name = "dom: a canceled checkbox's indeterminate stays"
+file = "crates/dom_next/src/input.rs"
+from = '''                input.checked.set(state.checked);
+                input.indeterminate.set(state.indeterminate);'''
+to = '''                input.checked.set(state.checked);'''
+
+[[mutant]]
+name = "dom: a canceled checked radio unchecked"
+file = "crates/dom_next/src/input.rs"
+from = '''            InputKind::Radio if !state.checked => {'''
+to = '''            InputKind::Radio => {'''
+
+[[mutant]]
+name = "dom: the checked one checked again out of the group"
+file = "crates/dom_next/src/input.rs"
+from = '''                    && self.in_radio_group_of(element, previous)'''
+to = ''''''
+
+[[mutant]]
+name = "dom: nameless radios a group"
+file = "crates/dom_next/src/input.rs"
+from = '''        if name.to_str().is_empty() {
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a group regardless of owner"
+file = "crates/dom_next/src/input.rs"
+from = '''        let owner = self.form_owner(element);'''
+to = '''        let owner = self.form_owner(element).filter(|_| false);'''
+
+[[mutant]]
+name = "dom: an ownerless group has owned ones"
+file = "crates/dom_next/src/input.rs"
+from = '''            if self.form_owner(node).is_none() && !in_group(node) {'''
+to = '''            if !in_group(node) {'''
+
+[[mutant]]
+name = "dom: an unchecked radio unchecks its group"
+file = "crates/dom_next/src/input.rs"
+from = '''        if !self.is_radio(element) || !self.checkedness(element) {'''
+to = '''        if !self.is_radio(element) {'''
+
+[[mutant]]
+name = "dom: an owner change unchecks nothing"
+file = "crates/dom_next/src/form.rs"
+from = '''        // HTML's: a checked radio button whose owner changed unchecks its
+        // new group.
+        self.uncheck_radio_group(element);'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a submit button without a form activated"
+file = "crates/dom_next/src/input.rs"
+from = '''            Some(InputKind::Submit | InputKind::Image | InputKind::Reset) => self.form_owner(element).is_some(),'''
+to = '''            Some(InputKind::Submit | InputKind::Image | InputKind::Reset) => true,'''
+
+[[mutant]]
+name = "dom: a button without a form activated"
+file = "crates/dom_next/src/input.rs"
+from = '''            || self.form_owner(element).is_none()
+        {'''
+to = '''        {'''
+
+[[mutant]]
+name = "dom: a type=button button activated"
+file = "crates/dom_next/src/input.rs"
+from = '''            .is_none_or(|value| !value.borrow().to_str().eq_ignore_ascii_case("button"))'''
+to = '''            .is_none_or(|_| true)'''
+
+[[mutant]]
+name = "api: any click an activation event"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''    cx.event_type(event) == event::CLICK && cx.mouse_event_data(event).is_some()'''
+to = '''    cx.event_type(event) == event::CLICK'''
+
+[[mutant]]
+name = "api: a label has no activation behavior"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''        || cx.qualified_name(node) == Some(QualifiedName::html(local::LABEL))'''
+to = ''''''
+
+[[mutant]]
+name = "api: a non-bubbling click activates an ancestor"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''        .take(if bubbles { path.len() } else { 1 })'''
+to = '''        .take(path.len())'''
+
+[[mutant]]
+name = "api: activation and canceled activation swapped"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''    if not_canceled {
+        activation_behavior'''
+to = '''    if !not_canceled {
+        activation_behavior'''
+
+[[mutant]]
+name = "api: a checked radio's click changes"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''            if (kind == InputKind::Radio && checked) || !host.read'''
+to = '''            if !host.read'''
+
+[[mutant]]
+name = "api: input and change out of a document"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''            if (kind == InputKind::Radio && checked) || !host.read(|cx| cx.is_connected(element.get(cx.gc))) {'''
+to = '''            if kind == InputKind::Radio && checked {'''
+
+[[mutant]]
+name = "api: input not composed"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''            fire_input_event(host, &target, event::INPUT, true);'''
+to = '''            fire_input_event(host, &target, event::INPUT, false);'''
+
+[[mutant]]
+name = "api: no change"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''            fire_input_event(host, &target, event::CHANGE, false);
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: a label clicks a control clicked"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''            if Gc::ptr_eq(node, control) {
+                return None;
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a label clicks for interactive content"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''            if in_label && is_interactive(cx, node) {'''
+to = '''            if false && in_label && is_interactive(cx, node) {'''
+
+[[mutant]]
+name = "api: interactive content around a label counts"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''            if Gc::ptr_eq(node, label) {
+                in_label = false;
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a label clicks a disabled control"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''        if cx.is_disabled_form_control(control) {
+            return None;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a label's control's click trusted"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''        Some((cx.root(control), cx.event_flags(event).trusted, modifiers))'''
+to = '''        Some((cx.root(control), true, modifiers))'''
+
+[[mutant]]
+name = "api: a label's modifiers dropped"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''        Some((cx.root(control), cx.event_flags(event).trusted, modifiers))'''
+to = '''        Some((cx.root(control), cx.event_flags(event).trusted, modifiers & 0))'''
+
+[[mutant]]
+name = "api: click() of a disabled control"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''    if host.read(|cx| cx.is_disabled_form_control(this.get(cx.gc))) {
+        return Ok(());
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a click while clicking"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''    let started = !clicking.contains(&id);'''
+to = '''    let started = true;'''
+
+[[mutant]]
+name = "api: clicking never ends"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''    clicking.retain(|clicking| *clicking != id);'''
+to = ''''''
+
+[[mutant]]
+name = "api: a synthetic click's detail 0"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''            detail: 1,
+            modifiers,'''
+to = '''            detail: 0,
+            modifiers,'''
+
+[[mutant]]
+name = "api: a disabled control's user click dispatched"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        let click = click.filter(|click| !host.read(|cx| crate::activation::in_disabled_control(cx, click.get(cx.gc))));
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: a disabled control's user click in it dispatched"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''        at = cx.parent(node);
+    }
+    false
+}'''
+to = '''        at = None;
+        let _ = node;
+    }
+    false
+}'''
+
+[[mutant]]
+name = "api: type the attribute's"
+file = "crates/dom_api_next/src/forms.rs"
+from = '''    Ok(DomStr::Name(dom_next::names::intern(kind.keyword())))'''
+to = '''    Ok(DomStr::Name(dom_next::names::intern(if kind == dom_next::InputKind::Text { "text" } else { "radio" })))'''

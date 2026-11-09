@@ -1,0 +1,170 @@
+test = ["sh", "-c", "cargo test -q -p dom --test it -- file_readers:: && cargo test -q -p dom_api --lib && cargo test -q -p dom_api --test it -- files:: && cargo test -q -p dom_js --test it -- file_reader:: && cargo test -q -p shell --test it -- file_reader::"]
+timeout = 2400
+
+[[mutant]]
+name = "a read doesn't make the reader LOADING"
+file = "crates/dom/src/file_reader.rs"
+from = '''        data.set_state(FileReaderState::Loading);
+        *data.result() = FileReaderResult::None;
+        data.read.store(read, Ordering::Relaxed);'''
+to = '''        *data.result() = FileReaderResult::None;
+        data.read.store(read, Ordering::Relaxed);'''
+
+[[mutant]]
+name = "a read left behind finishes"
+file = "crates/dom/src/file_reader.rs"
+from = '''        if !self.read().file_reader_reading(reader, read) {
+            return false;
+        }
+        let data = reader_data(self.own(reader));
+        data.set_state(FileReaderState::Done);'''
+to = '''        let data = reader_data(self.own(reader));
+        data.set_state(FileReaderState::Done);'''
+
+[[mutant]]
+name = "a read while one goes on is taken"
+file = "crates/dom_api/src/file_reader.rs"
+from = '''    if cx.read().file_reader_state(this) == FileReaderState::Loading {
+        return Err(DomException::new('''
+to = '''    if false && cx.read().file_reader_state(this) == FileReaderState::Loading {
+        return Err(DomException::new('''
+
+[[mutant]]
+name = "a task of a read left behind runs"
+file = "crates/dom_api/src/file_reader.rs"
+from = '''    if !cx.read().file_reader_reading(reader, read) {
+        return;
+    }
+    let size = data.len();'''
+to = '''    let size = data.len();'''
+
+[[mutant]]
+name = "no progress"
+file = "crates/dom_api/src/file_reader.rs"
+from = '''                ReadStep::LoadStart if size > 0 => ("loadstart", 0, ReadStep::Progress),'''
+to = '''                ReadStep::LoadStart if size > 0 => ("loadstart", 0, ReadStep::Load),'''
+
+[[mutant]]
+name = "an empty blob's read has a progress"
+file = "crates/dom_api/src/file_reader.rs"
+from = '''                ReadStep::LoadStart => ("loadstart", 0, ReadStep::Load),'''
+to = '''                ReadStep::LoadStart => ("loadstart", 0, ReadStep::Progress),'''
+
+[[mutant]]
+name = "loadend after a read begun in load"
+file = "crates/dom_api/src/file_reader.rs"
+from = '''            fire(cx, reader, "load", Some((size, size)));
+            if cx.read().file_reader_state(reader) != FileReaderState::Loading {'''
+to = '''            fire(cx, reader, "load", Some((size, size)));
+            if true {'''
+
+[[mutant]]
+name = "loadend after a read begun in abort"
+file = "crates/dom_api/src/file_reader.rs"
+from = '''    crate::event::dispatch_async(cx, &target, &event).await;
+    if cx.read().file_reader_state(this) != FileReaderState::Loading {'''
+to = '''    crate::event::dispatch_async(cx, &target, &event).await;
+    if true {'''
+
+[[mutant]]
+name = "an abort's length is known"
+file = "crates/dom_api/src/file_reader.rs"
+from = '''        length_computable: read.is_some(),'''
+to = '''        length_computable: true,'''
+
+[[mutant]]
+name = "loadstart has all the bytes"
+file = "crates/dom_api/src/file_reader.rs"
+from = '''                ReadStep::LoadStart if size > 0 => ("loadstart", 0, ReadStep::Progress),'''
+to = '''                ReadStep::LoadStart if size > 0 => ("loadstart", size, ReadStep::Progress),'''
+
+[[mutant]]
+name = "a data URL without a type has none"
+file = "crates/dom_api/src/file_reader.rs"
+from = '''                "application/octet-stream"'''
+to = '''                ""'''
+
+[[mutant]]
+name = "a binary string is UTF-8"
+file = "crates/dom_api/src/file_reader.rs"
+from = '''        ReadAs::BinaryString => FileReaderResult::Text(bytes.iter().map(|&b| char::from(b)).collect()),'''
+to = '''        ReadAs::BinaryString => FileReaderResult::Text(String::from_utf8_lossy(bytes).into_owned()),'''
+
+[[mutant]]
+name = "the type's charset isn't looked at"
+file = "crates/dom_api/src/file_reader.rs"
+from = '''        .or_else(|| charset(type_).and_then(named))'''
+to = '''        .or_else(|| charset(type_).and_then(named).filter(|_| false))'''
+
+[[mutant]]
+name = "the label isn't looked at"
+file = "crates/dom_api/src/file_reader.rs"
+from = '''        .and_then(|label| named(label.as_str()))'''
+to = '''        .and_then(|label| named(label.as_str()).filter(|_| false))'''
+
+[[mutant]]
+name = "a label with white space around it names its encoding"
+file = "crates/dom_api/src/file_reader.rs"
+from = '''        .filter(|label| label.as_str().trim_matches(|c: char| c.is_ascii_whitespace()) == label.as_str())'''
+to = ''''''
+
+[[mutant]]
+name = "no BOM sniffing"
+file = "crates/dom_api/src/file_reader.rs"
+from = '''    let (text, _, _) = encoding.decode(bytes);
+    text.into_owned()'''
+to = '''    let (text, _) = encoding.decode_without_bom_handling(bytes);
+    text.into_owned()'''
+
+[[mutant]]
+name = "a read's buffer is every read's"
+file = "crates/dom_api/src/file_reader.rs"
+from = '''            id: read,
+            cache: Object::EventTarget(this.clone()),'''
+to = '''            id: 1 + 0 * read,
+            cache: Object::EventTarget(this.clone()),'''
+
+[[mutant]]
+name = "the result's buffer is new each time"
+file = "crates/dom_js/src/convert.rs"
+from = '''    if holder
+        .get_private(scope, id_key)
+        .and_then(|kept| kept.number_value(scope))
+        == Some(id)'''
+to = '''    if false
+        && holder
+        .get_private(scope, id_key)
+        .and_then(|kept| kept.number_value(scope))
+        == Some(id)'''
+
+[[mutant]]
+name = "lastModified isn't kept as Blink's time"
+file = "crates/dom_api/src/blob.rs"
+from = '''        last_modified: as_blink_time(last_modified),'''
+to = '''        last_modified,'''
+
+[[mutant]]
+name = "lastModified wraps as an i32"
+file = "crates/dom_api/src/blob.rs"
+from = '''    let unsigned: u64 = base::numerics::saturated_cast(modulo);'''
+to = '''    let unsigned: u64 = base::numerics::saturated_cast::<u32, f64>(modulo).into();'''
+
+[[mutant]]
+name = "a file of now is of the epoch"
+file = "crates/dom_api/src/blob.rs"
+from = '''        Some(frame) => frame.clock_unix_start() + frame.now(),'''
+to = '''        Some(frame) => 0.0 * (frame.clock_unix_start() + frame.now()),'''
+
+[[mutant]]
+name = "a file is a blob to script"
+file = "crates/dom_api/src/object.rs"
+from = '''            Self::Blob(blob) if blob.is_file() => ObjectKind::File,'''
+to = '''            Self::Blob(blob) if false && blob.is_file() => ObjectKind::File,'''
+
+[[mutant]]
+name = "a progress event's loaded is its total"
+file = "crates/dom_api/src/event.rs"
+from = '''        loaded: init.loaded,
+        total: init.total,'''
+to = '''        loaded: init.total,
+        total: init.total,'''

@@ -1,0 +1,26 @@
+# Text decorations and shadows, and filters: TodoMVC's footer with its
+# `text-shadow`; dotted, double and wavy lines; text filled with nothing by
+# `-webkit-text-fill-color` that still casts its shadow and is still hit
+# (the page starts 74 px down the window); Spectrum's popover with its
+# `drop-shadow()`, hit where it is. "Decorate" gives a line a wavy
+# underline and a shadow, "Blur" blurs the popover and grays it, each of
+# which a frame then shows. How they look is for a person to look at in
+# the screenshots.
+window size=800x600
+navigate pages/text-effects.html
+wait-loaded
+screenshot decorated
+click-at 60 314
+wait-text #note "Clicked the hollow text."
+capture before
+click #decorate
+wait-text #note "Decorated."
+expect-differs before #lines
+screenshot wavy
+click-at 560 234
+wait-text #note "Clicked the popover."
+capture sharp
+click #blur
+wait-text #note "Blurred."
+expect-differs sharp #popover
+screenshot blurred

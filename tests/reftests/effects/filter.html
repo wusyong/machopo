@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<title>filter: its functions on a box and what is in it as a group (an inverted white is black, no brightness is black, half of it halves each channel, opacity() as opacity, a drop shadow its copy), what it makes cut by the clips around the box, and a filtered box the containing block of an absolute box in it</title>
+<link rel="match" href="filter-ref.html">
+<!-- opacity() as a color matrix, opacity as the layer's alpha: rounded apart by up to 2. -->
+<meta name="fuzzy" content="0-2;0-800">
+<style>
+  html, body { margin: 0 }
+  .b { position: absolute; width: 20px; height: 20px; top: 0 }
+</style>
+<div class="b" style="left: 0; background: white; filter: invert(1)"></div>
+<div class="b" style="left: 40px; background: green; filter: brightness(0)"></div>
+<div class="b" style="left: 80px; background: green; filter: opacity(0.5)"></div>
+<div class="b" style="left: 120px; background: green; filter: drop-shadow(green 20px 0 0)"></div>
+<div class="b" style="left: 180px; background: green; filter: brightness(0.5)"></div>
+<div style="position: absolute; left: 0; top: 40px; width: 30px; height: 20px; overflow: hidden">
+  <div style="width: 20px; height: 20px; background: green; filter: drop-shadow(red 20px 0 0)"></div>
+</div>
+<div style="margin-top: 80px; margin-left: 40px; width: 40px; height: 40px; filter: opacity(1)">
+  <div><div style="position: absolute; left: 10px; top: 10px; width: 20px; height: 20px; background: green"></div></div>
+</div>

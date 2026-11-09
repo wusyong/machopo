@@ -1,0 +1,162 @@
+# Mutation test of stage 4c (`loading="lazy"` and `sizes="auto"`):
+# python3 scripts/test.py mutate rfcs/0028-html-window-batch-2/mutants-4c.toml
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "navigation", "lazy_images"]
+timeout = 900
+
+# --- Deferring and resuming -------------------------------------------------------
+
+[[mutant]]
+name = "a lazy image loads at once"
+file = "crates/dom_api/src/image.rs"
+from = '''                    if !resuming
+                        && lazy'''
+to = '''                    if !resuming
+                        && false'''
+
+[[mutant]]
+name = "a lazy image delays the load event"
+file = "crates/dom_api/src/image.rs"
+from = '''        !request.lazy && (event.is_some() || request.state == ImageRequestState::Unavailable);'''
+to = '''        event.is_some() || request.state == ImageRequestState::Unavailable;'''
+
+[[mutant]]
+name = "loading set to eager updates nothing"
+file = "crates/dom_api/src/image.rs"
+from = '''    if is(&["loading"]) && is_img(m, element) && deferred() {'''
+to = '''    if false && deferred() {'''
+
+[[mutant]]
+name = "loading set to eager doesn't resume"
+file = "crates/dom_api/src/image.rs"
+from = '''        if current.deferred && !is_lazy(element.get(&cx.read())) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a request that no longer waits resumes again"
+file = "crates/dom_api/src/image.rs"
+from = '''    if resuming && !request.deferred {
+        return;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a lazy image resumes with the base URL it has then"
+file = "crates/dom_api/src/image.rs"
+from = '''    let selected = if resuming && !auto_sizes {'''
+to = '''    let selected = if false {'''
+test = ["python3", "scripts/test.py", "wpt", "the-img-element/image-loading-lazy-base-url"]
+
+[[mutant]]
+name = "nothing near the viewport resumes"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            .in_scope(|| self.lazy_images_due(lazy_images));'''
+to = '''            .in_scope(|| drop(lazy_images));'''
+
+# --- Near the viewport --------------------------------------------------------------
+
+[[mutant]]
+name = "no distance up and down"
+file = "crates/renderer/src/frame_view.rs"
+from = '''const LAZY_LOAD_MARGIN: (f32, f32) = (625.0, 1250.0);'''
+to = '''const LAZY_LOAD_MARGIN: (f32, f32) = (625.0, 0.0);'''
+
+[[mutant]]
+name = "a greater distance up and down"
+file = "crates/renderer/src/frame_view.rs"
+from = '''const LAZY_LOAD_MARGIN: (f32, f32) = (625.0, 1250.0);'''
+to = '''const LAZY_LOAD_MARGIN: (f32, f32) = (625.0, 5000.0);'''
+
+[[mutant]]
+name = "the same distance sideways"
+file = "crates/renderer/src/frame_view.rs"
+from = '''const LAZY_LOAD_MARGIN: (f32, f32) = (625.0, 1250.0);'''
+to = '''const LAZY_LOAD_MARGIN: (f32, f32) = (1250.0, 1250.0);'''
+
+[[mutant]]
+name = "no distance sideways"
+file = "crates/renderer/src/frame_view.rs"
+from = '''const LAZY_LOAD_MARGIN: (f32, f32) = (625.0, 1250.0);'''
+to = '''const LAZY_LOAD_MARGIN: (f32, f32) = (0.0, 1250.0);'''
+
+[[mutant]]
+name = "a child frame's image counts in its own viewport"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                meets(&content, &region).then(|| content.intersect(&region).offset(-x, -y))'''
+to = '''                let _ = (content, x, y);
+                Some(region)'''
+
+[[mutant]]
+name = "an image with no box is near"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                    !rects.is_empty() && meets(&layout::bounding_rect(&rects), &region)'''
+to = '''                    rects.is_empty() || meets(&layout::bounding_rect(&rects), &region)'''
+
+# --- sizes="auto" -------------------------------------------------------------------
+
+[[mutant]]
+name = "auto is 100vw where allowed too"
+file = "crates/dom_api/src/image.rs"
+from = '''        Some(sizes) if style::sizes_start_with_auto(&sizes) => auto
+            .map(|(width, _)| width)
+            .unwrap_or_else(|| style::default_source_size(&environment)),'''
+to = '''        Some(sizes) if style::sizes_start_with_auto(&sizes) => auto
+            .map(|_| style::default_source_size(&environment))
+            .unwrap_or_else(|| style::default_source_size(&environment)),'''
+
+[[mutant]]
+name = "auto is the width of an eager image too"
+file = "crates/dom_api/src/image.rs"
+from = '''        is_lazy(node)
+            && node
+                .attribute(&QualName::attr("sizes"))'''
+to = '''        node
+                .attribute(&QualName::attr("sizes"))'''
+
+[[mutant]]
+name = "auto past the first source size goes on"
+file = "crates/dom_api/src/image.rs"
+from = '''        Some(sizes) if style::sizes_start_with_auto(&sizes) => auto'''
+to = '''        Some(sizes) if style::sizes_start_with_auto(&sizes) && auto.is_some() => auto'''
+
+[[mutant]]
+name = "a source without sizes doesn't take the img's auto"
+file = "crates/dom_api/src/image.rs"
+from = '''            let sizes = attribute("sizes").or_else(|| allows_auto.then(|| "auto".to_owned()));'''
+to = '''            let sizes = attribute("sizes");'''
+test = ["python3", "scripts/test.py", "wpt", "the-img-element/sizes/sizes-auto.html"]
+
+[[mutant]]
+name = "an unsized image's auto is 0"
+file = "crates/dom_api/src/image.rs"
+from = '''    let width = if laid_out == 0.0 && no_size {'''
+to = '''    let width = if false {'''
+test = ["python3", "scripts/test.py", "wpt", "the-img-element/sizes/sizes-auto.html"]
+
+[[mutant]]
+name = "auto ignores padding"
+file = "crates/dom_api/src/image.rs"
+from = '''        (element_box.border_box.width - border[1] - border[3] - padding[1] - padding[3]).max(0.0);
+    let read = cx.read();'''
+to = '''        (element_box.border_box.width).max(0.0);
+    let read = cx.read();'''
+
+[[mutant]]
+name = "another width selects nothing again"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            if now != Some(*width) {'''
+to = '''            if now.is_none() {'''
+
+[[mutant]]
+name = "the frame watches no width"
+file = "crates/dom_api/src/image.rs"
+from = '''        frame.watch_auto_sizes(element, auto.map(|(_, laid_out)| laid_out));'''
+to = '''        frame.watch_auto_sizes(element, None);'''
+
+# --- complete -----------------------------------------------------------------------
+
+[[mutant]]
+name = "srcset alone is complete"
+file = "crates/dom_api/src/image.rs"
+from = '''    if srcset.is_none() && src.is_none_or(|src| src.is_empty()) {'''
+to = '''    if src.is_none_or(|src| src.is_empty()) {'''
+test = ["python3", "scripts/test.py", "wpt", "the-img-element/img.complete"]

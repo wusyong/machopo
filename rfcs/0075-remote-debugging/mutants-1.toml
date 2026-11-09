@@ -1,0 +1,227 @@
+# Mutation test of the first stage: the HTTP endpoints and websockets of
+# `--remote-debugging-port`, what keeps pages out, and the session's
+# clients kept apart:
+# python3 scripts/test.py mutate rfcs/0075-remote-debugging/mutants-1.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "remote_debugging::", "windowless::without_a_driver"]
+timeout = 900
+
+# What keeps pages out.
+
+[[mutant]]
+name = "any host is let in"
+file = "crates/shell/src/devtools_http_handler.rs"
+from = '''    name.parse::<IpAddr>().is_ok() || name.eq_ignore_ascii_case("localhost")'''
+to = '''    !name.is_empty() || name.parse::<IpAddr>().is_ok()'''
+
+[[mutant]]
+name = "the host isn't checked"
+file = "crates/shell/src/devtools_http_handler.rs"
+from = '''    if let Some(host) = header(&request, HOST)
+        && !is_allowed_host(host)'''
+to = '''    if let Some(host) = header(&request, HOST)
+        && host.is_empty()'''
+
+[[mutant]]
+name = "any page's origin is let in"
+file = "crates/shell/src/devtools_http_handler.rs"
+from = '''            Self::None => false,'''
+to = '''            Self::None => true,'''
+
+[[mutant]]
+name = "the origin isn't checked"
+file = "crates/shell/src/devtools_http_handler.rs"
+from = '''    if !context.allowed_origins.allows(origin) {'''
+to = '''    if origin.is_some_and(str::is_empty) {'''
+
+[[mutant]]
+name = "the origins listed aren't let in"
+file = "crates/shell/src/devtools_http_handler.rs"
+from = '''            Self::List(origins) => origins.contains(&origin),'''
+to = '''            Self::List(_) => false,'''
+
+[[mutant]]
+name = "DevTools' own pages aren't let in"
+file = "crates/shell/src/devtools_http_handler.rs"
+from = '''        if origin == "devtools://devtools" {'''
+to = '''        if origin == "devtools://other" {'''
+
+[[mutant]]
+name = "a GET opens a tab"
+file = "crates/shell/src/devtools_http_handler.rs"
+from = '''            if request.method() != Method::PUT {'''
+to = '''            if request.method() == Method::DELETE {'''
+
+[[mutant]]
+name = "target ids are the tabs' numbers"
+file = "crates/shell/src/automation_session.rs"
+from = '''        self.targets.entry(tab).or_insert_with(random_id).clone()'''
+to = '''        self.targets
+            .entry(tab)
+            .or_insert_with(|| format!("{:032X}", tab.0))
+            .clone()'''
+
+[[mutant]]
+name = "any browser id is the browser"
+file = "crates/shell/src/devtools_http_handler.rs"
+from = '''        if id != context.browser_id {'''
+to = '''        if id.is_empty() {'''
+
+# The endpoints.
+
+[[mutant]]
+name = "the new tab's URL isn't unescaped"
+file = "crates/shell/src/devtools_http_handler.rs"
+from = '''            let url = percent_encoding::percent_decode_str(&query)
+                .decode_utf8_lossy()
+                .into_owned();'''
+to = '''            let url = query.clone();'''
+
+[[mutant]]
+name = "what isn't a URL opens nothing"
+file = "crates/shell/src/automation_session.rs"
+from = '''                let url = if Url::parse(&url).is_ok() {
+                    url
+                } else {
+                    "about:blank".to_owned()
+                };'''
+to = '''                if Url::parse(&url).is_err() {
+                    return JsonAnswer::Failed(url);
+                }'''
+
+[[mutant]]
+name = "a tab isn't closed"
+file = "crates/shell/src/automation_session.rs"
+from = '''                Some(tab) if browser.view_mut().close(tab) => JsonAnswer::Done,'''
+to = '''                Some(_) => JsonAnswer::Done,'''
+
+# The clients kept apart.
+
+[[mutant]]
+name = "a session is any client's (by session_of)"
+file = "crates/shell/src/automation_session.rs"
+from = '''        self.sessions
+            .get(id)
+            .filter(|attached| attached.client == client)
+    }'''
+to = '''        self.sessions.get(id)
+    }'''
+
+[[mutant]]
+name = "a session is any client's (a page's methods)"
+file = "crates/shell/src/automation_session.rs"
+from = '''            .get_mut(session)
+            .filter(|attached| attached.client == client)'''
+to = '''            .get_mut(session)'''
+
+[[mutant]]
+name = "a page's events go to the driver"
+file = "crates/shell/src/automation_session.rs"
+from = '''        for (session_id, client) in sessions {
+            self.send(
+                client,'''
+to = '''        for (session_id, client) in sessions {
+            self.send(
+                self.driver.unwrap_or(client),'''
+
+[[mutant]]
+name = "every client hears of targets"
+file = "crates/shell/src/automation_session.rs"
+from = '''            .filter(|(_, client)| client.discover)'''
+to = '''            .filter(|(_, client)| client.discover || !client.discover)'''
+
+[[mutant]]
+name = "a client that goes leaves its sessions"
+file = "crates/shell/src/automation_session.rs"
+from = '''        self.clients.remove(&client);
+        self.sessions.retain(|_, attached| attached.client != client);'''
+to = '''        self.clients.remove(&client);'''
+
+[[mutant]]
+name = "the Kun domain without a driver"
+file = "crates/shell/src/automation_session.rs"
+from = '''        if !self.automation && command.method.name().starts_with("Kun.") {'''
+to = '''        if self.automation && command.method.name().starts_with("Kun.Nope") {'''
+
+[[mutant]]
+name = "no Kun domain for a remote client in automation mode"
+file = "crates/shell/src/automation_session.rs"
+from = '''        if !self.automation && command.method.name().starts_with("Kun.") {'''
+to = '''        if Some(client) != self.driver && command.method.name().starts_with("Kun.") {'''
+
+# A tab's own connection.
+
+[[mutant]]
+name = "a tab's connection's commands need a session"
+file = "crates/shell/src/automation_session.rs"
+from = '''            command.session_id.clone_from(&known.page_session);'''
+to = '''            command.session_id = None;'''
+
+[[mutant]]
+name = "a tab's connection is sent its session's id"
+file = "crates/shell/src/automation_session.rs"
+from = '''            if session.as_deref() == Some(implicit.as_str()) {'''
+to = '''            if session.as_deref() == Some("") {'''
+
+[[mutant]]
+name = "a tab's connection isn't told its tab has gone"
+file = "crates/shell/src/automation_session.rs"
+from = '''        for client in detached {'''
+to = '''        for client in detached.into_iter().take(0) {'''
+
+[[mutant]]
+name = "a tab's connection stays open after its tab"
+file = "crates/shell/src/devtools_http_handler.rs"
+from = '''                if detached {
+                    let _ = sink.close().await;
+                    break;
+                }'''
+to = '''                if detached {
+                    let _ = sink.flush().await;
+                }'''
+
+# The limits.
+
+[[mutant]]
+name = "no limit on a websocket's frames"
+file = "crates/shell/src/devtools_http_handler.rs"
+from = '''        .max_frame_size(Some(MAX_FRAME_SIZE));'''
+to = '''        .max_frame_size(None);'''
+
+[[mutant]]
+name = "no limit on a websocket's messages"
+file = "crates/shell/src/devtools_http_handler.rs"
+from = '''        .max_message_size(Some(MAX_MESSAGE_SIZE))'''
+to = '''        .max_message_size(None)'''
+
+[[mutant]]
+name = "no limit on the pipe's messages"
+file = "crates/shell/src/automation_pipe.rs"
+from = '''                } else if message.len() > MAX_MESSAGE_SIZE {'''
+to = '''                } else if message.len() > usize::MAX - 1 {'''
+
+# The options.
+
+[[mutant]]
+name = "no --name=value"
+file = "crates/shell/src/main.rs"
+from = '''            Some((name, value)) if name.starts_with("--") => {'''
+to = '''            Some((name, value)) if name.starts_with("---") => {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--bin", "kun"]
+
+[[mutant]]
+name = "a switch takes a value it doesn't use"
+file = "crates/shell/src/main.rs"
+from = '''        if inline.is_some() {
+            return Err(format!("{name} takes no value"));
+        }'''
+to = '''        if inline.as_deref() == Some("\\0") {
+            return Err(format!("{name} takes no value"));
+        }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--bin", "kun"]
+
+[[mutant]]
+name = "origins to allow without a port"
+file = "crates/shell/src/main.rs"
+from = '''    if remote_debugging_port.is_none() && remote_allow_origins.is_some() {'''
+to = '''    if remote_debugging_port.is_none() && remote_allow_origins.is_some() && false {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--bin", "kun"]

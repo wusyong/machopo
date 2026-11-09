@@ -1,0 +1,3275 @@
+{
+ "env": {
+  "date": "2026-10-26",
+  "commit": "bc004248ce8b",
+  "platform": "darwin",
+  "runs": 5,
+  "scale": 1.0,
+  "note": "stage 3's baseline: the microbenchmarks on v8, v8-single, isolate, standalone, gc and gc-parallel, and the 6 wasm recordings' replays (target/bench/gc/recordings) on standalone, gc and gc-parallel (isolate's lose trace events on this machine), one bench.py gc run each, 5 runs; kun bc004248 with step 3e's changes not yet committed. The gc heaps' replays run an operation from each recorded safepoint, unlike stage 2's."
+ },
+ "results": {
+  "build": {
+   "standalone": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 100000,
+    "live_nodes": 100002,
+    "run_ns": 19086875,
+    "idle_ns": 93684750,
+    "gc_ns": 7844585,
+    "gc_by_kind_ns": {
+     "marking": 111212,
+     "atomic": 6770123,
+     "young": 0,
+     "sweeping": 946751,
+     "other": 37916
+    },
+    "background_gc_ns": 830960,
+    "pauses": {
+     "count": 44,
+     "median_ns": 2917,
+     "p95_ns": 1328750,
+     "max_ns": 3916834
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 35258368,
+    "peak_used_bytes": 34480136,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 34400688,
+    "bytes_per_object": 344.0,
+    "forced_gc_ns": 5439500,
+    "forced_mark_ns": 4238917,
+    "mark_bytes_per_s": 8115442694.442944,
+    "mark_objects_per_s": 23591403.181520186,
+    "young": null
+   },
+   "isolate": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 100000,
+    "live_nodes": 100002,
+    "run_ns": 11581000,
+    "idle_ns": 0,
+    "gc_ns": 7143365,
+    "gc_by_kind_ns": {
+     "marking": 6068498,
+     "atomic": 327250,
+     "young": 0,
+     "sweeping": 739962,
+     "other": 1500
+    },
+    "background_gc_ns": 1267208,
+    "pauses": {
+     "count": 3,
+     "median_ns": 2267291,
+     "p95_ns": 5920917,
+     "max_ns": 5920917
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 35389440,
+    "peak_used_bytes": 34480328,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 34400688,
+    "bytes_per_object": 344.0,
+    "forced_gc_ns": 2902292,
+    "forced_mark_ns": 2279499,
+    "mark_bytes_per_s": 15091337175.40565,
+    "mark_objects_per_s": 43870166.20757456,
+    "young": null
+   },
+   "gc": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 100000,
+    "live_nodes": 100002,
+    "run_ns": 6681834,
+    "idle_ns": 0,
+    "gc_ns": 3715043,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 1795000,
+     "young": 1897583,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 9,
+     "median_ns": 277167,
+     "p95_ns": 1175209,
+     "max_ns": 1319500
+    },
+    "young_pauses": {
+     "count": 6,
+     "median_ns": 234042,
+     "p95_ns": 659833,
+     "p99_ns": 711834,
+     "max_ns": 711834
+    },
+    "peak_committed_bytes": 32243712,
+    "peak_used_bytes": 32000640,
+    "peak_nursery_bytes": 8388608,
+    "pretenured_objects": 72000,
+    "live_bytes": 32000640,
+    "bytes_per_object": 320.0,
+    "forced_gc_ns": 2260417,
+    "forced_mark_ns": 2196417,
+    "mark_bytes_per_s": 14569473829.423101,
+    "mark_objects_per_s": 45529605.71694719,
+    "young": null
+   },
+   "gc-parallel": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 100000,
+    "live_nodes": 100002,
+    "run_ns": 5433500,
+    "idle_ns": 0,
+    "gc_ns": 2506834,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 993667,
+     "young": 1513167,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 9,
+     "median_ns": 248708,
+     "p95_ns": 564042,
+     "max_ns": 582167
+    },
+    "young_pauses": {
+     "count": 6,
+     "median_ns": 212291,
+     "p95_ns": 395125,
+     "p99_ns": 408250,
+     "max_ns": 408250
+    },
+    "peak_committed_bytes": 32243712,
+    "peak_used_bytes": 32000640,
+    "peak_nursery_bytes": 8388608,
+    "pretenured_objects": 72000,
+    "live_bytes": 32000640,
+    "bytes_per_object": 320.0,
+    "forced_gc_ns": 1051791,
+    "forced_mark_ns": 989708,
+    "mark_bytes_per_s": 32333415512.45418,
+    "mark_objects_per_s": 101041923.47641931,
+    "young": null
+   }
+  },
+  "churn": {
+   "standalone": {
+    "runs": 5,
+    "replay": null,
+    "turns": 1000,
+    "nodes_allocated": 111000,
+    "live_nodes": 10001,
+    "run_ns": 30110874,
+    "idle_ns": 92036834,
+    "gc_ns": 12533872,
+    "gc_by_kind_ns": {
+     "marking": 508375,
+     "atomic": 8182499,
+     "young": 0,
+     "sweeping": 3158285,
+     "other": 615248
+    },
+    "background_gc_ns": 4193084,
+    "pauses": {
+     "count": 149,
+     "median_ns": 11709,
+     "p95_ns": 472250,
+     "max_ns": 2280167
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 5767168,
+    "peak_used_bytes": 5545904,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 3440688,
+    "bytes_per_object": 344.03439656034396,
+    "forced_gc_ns": 1133334,
+    "forced_mark_ns": 851500,
+    "mark_bytes_per_s": 4040737522.0199647,
+    "mark_objects_per_s": 11745155.607751027,
+    "young": null
+   },
+   "isolate": {
+    "runs": 5,
+    "replay": null,
+    "turns": 1000,
+    "nodes_allocated": 111000,
+    "live_nodes": 10001,
+    "run_ns": 6415167,
+    "idle_ns": 0,
+    "gc_ns": 2456442,
+    "gc_by_kind_ns": {
+     "marking": 1204194,
+     "atomic": 301749,
+     "young": 0,
+     "sweeping": 968882,
+     "other": 958
+    },
+    "background_gc_ns": 806040,
+    "pauses": {
+     "count": 4,
+     "median_ns": 641875,
+     "p95_ns": 806333,
+     "max_ns": 847791
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 12451840,
+    "peak_used_bytes": 11965528,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 3440688,
+    "bytes_per_object": 344.03439656034396,
+    "forced_gc_ns": 304375,
+    "forced_mark_ns": 155292,
+    "mark_bytes_per_s": 22156247585.194344,
+    "mark_objects_per_s": 64401256.9868377,
+    "young": null
+   },
+   "gc": {
+    "runs": 5,
+    "replay": null,
+    "turns": 1000,
+    "nodes_allocated": 111000,
+    "live_nodes": 10001,
+    "run_ns": 6042583,
+    "idle_ns": 0,
+    "gc_ns": 2967791,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 630875,
+     "young": 2334792,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 10,
+     "median_ns": 309458,
+     "p95_ns": 574791,
+     "max_ns": 623250
+    },
+    "young_pauses": {
+     "count": 9,
+     "median_ns": 286292,
+     "p95_ns": 467125,
+     "p99_ns": 488833,
+     "max_ns": 488833
+    },
+    "peak_committed_bytes": 18612224,
+    "peak_used_bytes": 13369856,
+    "peak_nursery_bytes": 16777216,
+    "pretenured_objects": 0,
+    "live_bytes": 3200640,
+    "bytes_per_object": 320.03199680032,
+    "forced_gc_ns": 221292,
+    "forced_mark_ns": 84375,
+    "mark_bytes_per_s": 37933511111.11111,
+    "mark_objects_per_s": 118530370.37037036,
+    "young": null
+   },
+   "gc-parallel": {
+    "runs": 5,
+    "replay": null,
+    "turns": 1000,
+    "nodes_allocated": 111000,
+    "live_nodes": 10001,
+    "run_ns": 5487375,
+    "idle_ns": 0,
+    "gc_ns": 2324792,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 519500,
+     "young": 1805292,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 10,
+     "median_ns": 204417,
+     "p95_ns": 462458,
+     "max_ns": 503125
+    },
+    "young_pauses": {
+     "count": 9,
+     "median_ns": 202875,
+     "p95_ns": 296084,
+     "p99_ns": 324000,
+     "max_ns": 324000
+    },
+    "peak_committed_bytes": 18874368,
+    "peak_used_bytes": 13498304,
+    "peak_nursery_bytes": 16777216,
+    "pretenured_objects": 0,
+    "live_bytes": 3200640,
+    "bytes_per_object": 320.03199680032,
+    "forced_gc_ns": 207041,
+    "forced_mark_ns": 69584,
+    "mark_bytes_per_s": 45996780869.16532,
+    "mark_objects_per_s": 143725569.096344,
+    "young": null
+   }
+  },
+  "replace": {
+   "standalone": {
+    "runs": 5,
+    "replay": null,
+    "turns": 500,
+    "nodes_allocated": 500000,
+    "live_nodes": 1002,
+    "run_ns": 29168051,
+    "idle_ns": 91371866,
+    "gc_ns": 7681919,
+    "gc_by_kind_ns": {
+     "marking": 626298,
+     "atomic": 1207371,
+     "young": 0,
+     "sweeping": 5848250,
+     "other": 0
+    },
+    "background_gc_ns": 2520543,
+    "pauses": {
+     "count": 304,
+     "median_ns": 20541,
+     "p95_ns": 89125,
+     "max_ns": 145708
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 1966080,
+    "peak_used_bytes": 1930120,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 344688,
+    "bytes_per_object": 344.0,
+    "forced_gc_ns": 30541,
+    "forced_mark_ns": 19000,
+    "mark_bytes_per_s": 18141473684.210526,
+    "mark_objects_per_s": 52736842.10526316,
+    "young": null
+   },
+   "isolate": {
+    "runs": 5,
+    "replay": null,
+    "turns": 500,
+    "nodes_allocated": 500000,
+    "live_nodes": 1002,
+    "run_ns": 20516458,
+    "idle_ns": 0,
+    "gc_ns": 8779658,
+    "gc_by_kind_ns": {
+     "marking": 803535,
+     "atomic": 1320206,
+     "young": 0,
+     "sweeping": 6645749,
+     "other": 4252
+    },
+    "background_gc_ns": 2965551,
+    "pauses": {
+     "count": 20,
+     "median_ns": 434583,
+     "p95_ns": 522458,
+     "max_ns": 811875
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 9437184,
+    "peak_used_bytes": 9006440,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 344688,
+    "bytes_per_object": 344.0,
+    "forced_gc_ns": 79583,
+    "forced_mark_ns": 26582,
+    "mark_bytes_per_s": 12966970130.163267,
+    "mark_objects_per_s": 37694680.61093973,
+    "young": null
+   },
+   "gc": {
+    "runs": 5,
+    "replay": null,
+    "turns": 500,
+    "nodes_allocated": 500000,
+    "live_nodes": 1002,
+    "run_ns": 11127334,
+    "idle_ns": 0,
+    "gc_ns": 1115002,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 162126,
+     "young": 952876,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 63,
+     "median_ns": 15417,
+     "p95_ns": 39041,
+     "max_ns": 50709
+    },
+    "young_pauses": {
+     "count": 58,
+     "median_ns": 15167,
+     "p95_ns": 35333,
+     "p99_ns": 43042,
+     "max_ns": 46834
+    },
+    "peak_committed_bytes": 7077888,
+    "peak_used_bytes": 6720960,
+    "peak_nursery_bytes": 4194304,
+    "pretenured_objects": 0,
+    "live_bytes": 320640,
+    "bytes_per_object": 320.0,
+    "forced_gc_ns": 60125,
+    "forced_mark_ns": 9375,
+    "mark_bytes_per_s": 34201600000.000004,
+    "mark_objects_per_s": 106880000.00000001,
+    "young": null
+   },
+   "gc-parallel": {
+    "runs": 5,
+    "replay": null,
+    "turns": 500,
+    "nodes_allocated": 500000,
+    "live_nodes": 1002,
+    "run_ns": 11095708,
+    "idle_ns": 0,
+    "gc_ns": 1114748,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 160791,
+     "young": 948165,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 63,
+     "median_ns": 15583,
+     "p95_ns": 38750,
+     "max_ns": 105833
+    },
+    "young_pauses": {
+     "count": 58,
+     "median_ns": 15250,
+     "p95_ns": 36000,
+     "p99_ns": 44833,
+     "max_ns": 105833
+    },
+    "peak_committed_bytes": 7077888,
+    "peak_used_bytes": 6720960,
+    "peak_nursery_bytes": 4194304,
+    "pretenured_objects": 0,
+    "live_bytes": 320640,
+    "bytes_per_object": 320.0,
+    "forced_gc_ns": 58209,
+    "forced_mark_ns": 9375,
+    "mark_bytes_per_s": 34201600000.000004,
+    "mark_objects_per_s": 106880000.00000001,
+    "young": null
+   }
+  },
+  "list": {
+   "standalone": {
+    "runs": 5,
+    "replay": null,
+    "turns": 1000,
+    "nodes_allocated": 50000,
+    "live_nodes": 2002,
+    "run_ns": 8571583,
+    "idle_ns": 96047417,
+    "gc_ns": 1670740,
+    "gc_by_kind_ns": {
+     "marking": 155332,
+     "atomic": 636995,
+     "young": 0,
+     "sweeping": 864412,
+     "other": 9499
+    },
+    "background_gc_ns": 487749,
+    "pauses": {
+     "count": 20,
+     "median_ns": 97541,
+     "p95_ns": 118750,
+     "max_ns": 154708
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 1966080,
+    "peak_used_bytes": 1829672,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 688688,
+    "bytes_per_object": 344.0,
+    "forced_gc_ns": 119042,
+    "forced_mark_ns": 80749,
+    "mark_bytes_per_s": 8528749582.038168,
+    "mark_objects_per_s": 24792876.691971418,
+    "young": null
+   },
+   "isolate": {
+    "runs": 5,
+    "replay": null,
+    "turns": 1000,
+    "nodes_allocated": 50000,
+    "live_nodes": 2002,
+    "run_ns": 2916459,
+    "idle_ns": 0,
+    "gc_ns": 962162,
+    "gc_by_kind_ns": {
+     "marking": 133584,
+     "atomic": 152166,
+     "young": 0,
+     "sweeping": 661708,
+     "other": 624
+    },
+    "background_gc_ns": 498334,
+    "pauses": {
+     "count": 2,
+     "median_ns": 486667,
+     "p95_ns": 676250,
+     "max_ns": 676250
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 9699328,
+    "peak_used_bytes": 9263752,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 688688,
+    "bytes_per_object": 344.0,
+    "forced_gc_ns": 111833,
+    "forced_mark_ns": 47791,
+    "mark_bytes_per_s": 14410412002.25984,
+    "mark_objects_per_s": 41890732.56470884,
+    "young": null
+   },
+   "gc": {
+    "runs": 5,
+    "replay": null,
+    "turns": 1000,
+    "nodes_allocated": 50000,
+    "live_nodes": 2002,
+    "run_ns": 1541125,
+    "idle_ns": 0,
+    "gc_ns": 421333,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 0,
+     "young": 421333,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 8,
+     "median_ns": 47541,
+     "p95_ns": 72083,
+     "max_ns": 74459
+    },
+    "young_pauses": {
+     "count": 8,
+     "median_ns": 47541,
+     "p95_ns": 72083,
+     "p99_ns": 74459,
+     "max_ns": 74459
+    },
+    "peak_committed_bytes": 5505024,
+    "peak_used_bytes": 4476672,
+    "peak_nursery_bytes": 4194304,
+    "pretenured_objects": 0,
+    "live_bytes": 640640,
+    "bytes_per_object": 320.0,
+    "forced_gc_ns": 49292,
+    "forced_mark_ns": 16583,
+    "mark_bytes_per_s": 38632334318.277756,
+    "mark_objects_per_s": 120726044.74461798,
+    "young": null
+   },
+   "gc-parallel": {
+    "runs": 5,
+    "replay": null,
+    "turns": 1000,
+    "nodes_allocated": 50000,
+    "live_nodes": 2002,
+    "run_ns": 1566083,
+    "idle_ns": 0,
+    "gc_ns": 426751,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 0,
+     "young": 426751,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 8,
+     "median_ns": 49875,
+     "p95_ns": 74625,
+     "max_ns": 79792
+    },
+    "young_pauses": {
+     "count": 8,
+     "median_ns": 49875,
+     "p95_ns": 74625,
+     "p99_ns": 79792,
+     "max_ns": 79792
+    },
+    "peak_committed_bytes": 5505024,
+    "peak_used_bytes": 4476672,
+    "peak_nursery_bytes": 4194304,
+    "pretenured_objects": 0,
+    "live_bytes": 640640,
+    "bytes_per_object": 320.0,
+    "forced_gc_ns": 48458,
+    "forced_mark_ns": 16958,
+    "mark_bytes_per_s": 37778039863.191414,
+    "mark_objects_per_s": 118056374.57247317,
+    "young": null
+   }
+  },
+  "chain-high": {
+   "standalone": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 918145,
+    "run_ns": 35564960,
+    "idle_ns": 91143125,
+    "gc_ns": 18167460,
+    "gc_by_kind_ns": {
+     "marking": 141957,
+     "atomic": 14734544,
+     "young": 0,
+     "sweeping": 3127120,
+     "other": 28585
+    },
+    "background_gc_ns": 3653210,
+    "pauses": {
+     "count": 59,
+     "median_ns": 7125,
+     "p95_ns": 1961667,
+     "max_ns": 5865125
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 53084160,
+    "peak_used_bytes": 51951088,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 51416120,
+    "bytes_per_object": 56.0,
+    "forced_gc_ns": 6565583,
+    "forced_mark_ns": 4944833,
+    "mark_bytes_per_s": 10397948727.489887,
+    "mark_objects_per_s": 185677655.8480337,
+    "young": null
+   },
+   "isolate": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 918145,
+    "run_ns": 18723875,
+    "idle_ns": 0,
+    "gc_ns": 8762193,
+    "gc_by_kind_ns": {
+     "marking": 7060357,
+     "atomic": 293666,
+     "young": 0,
+     "sweeping": 1403628,
+     "other": 874
+    },
+    "background_gc_ns": 2023791,
+    "pauses": {
+     "count": 3,
+     "median_ns": 2862250,
+     "p95_ns": 5366417,
+     "max_ns": 5366417
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 55312384,
+    "peak_used_bytes": 54143248,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 51416120,
+    "bytes_per_object": 56.0,
+    "forced_gc_ns": 6397000,
+    "forced_mark_ns": 4731416,
+    "mark_bytes_per_s": 10866962448.45095,
+    "mark_objects_per_s": 194052900.86519554,
+    "young": null
+   },
+   "v8": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 918145,
+    "run_ns": 20213375,
+    "idle_ns": 0,
+    "gc_ns": 14572039,
+    "gc_by_kind_ns": {
+     "marking": 85166,
+     "atomic": 4719000,
+     "young": 9767123,
+     "sweeping": 21086,
+     "other": 1543
+    },
+    "background_gc_ns": 10992668,
+    "pauses": {
+     "count": 8,
+     "median_ns": 721709,
+     "p95_ns": 7430209,
+     "max_ns": 7532000
+    },
+    "young_pauses": {
+     "count": 8,
+     "median_ns": 721292,
+     "p95_ns": 2598542,
+     "p99_ns": 2640667,
+     "max_ns": 2640667
+    },
+    "peak_committed_bytes": 29884416,
+    "peak_used_bytes": 23170040,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 22058680,
+    "bytes_per_object": 24.025268339968086,
+    "forced_gc_ns": 8472333,
+    "forced_mark_ns": 7611335,
+    "mark_bytes_per_s": 2898135478.204546,
+    "mark_objects_per_s": 120628641.36186358,
+    "young": {
+     "count": 8,
+     "survived_bytes": 24378012,
+     "ns": 9767123,
+     "bytes_per_s": 2496262205.359756,
+     "capacity_bytes": 16777216
+    }
+   },
+   "v8-single": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 918145,
+    "run_ns": 19882375,
+    "idle_ns": 0,
+    "gc_ns": 14214256,
+    "gc_by_kind_ns": {
+     "marking": 3804254,
+     "atomic": 627542,
+     "young": 9777168,
+     "sweeping": 3459,
+     "other": 1708
+    },
+    "background_gc_ns": 3462126,
+    "pauses": {
+     "count": 8,
+     "median_ns": 799833,
+     "p95_ns": 7087542,
+     "max_ns": 7160916
+    },
+    "young_pauses": {
+     "count": 8,
+     "median_ns": 796208,
+     "p95_ns": 2596750,
+     "p99_ns": 2612833,
+     "max_ns": 2612833
+    },
+    "peak_committed_bytes": 29884416,
+    "peak_used_bytes": 23169984,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 22058576,
+    "bytes_per_object": 24.025155068099266,
+    "forced_gc_ns": 9805667,
+    "forced_mark_ns": 6086293,
+    "mark_bytes_per_s": 3624303989.3084345,
+    "mark_objects_per_s": 150854551.36648858,
+    "young": {
+     "count": 8,
+     "survived_bytes": 24375132,
+     "ns": 9777168,
+     "bytes_per_s": 2492659224.020698,
+     "capacity_bytes": 16777216
+    }
+   },
+   "gc": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 918145,
+    "run_ns": 20130666,
+    "idle_ns": 0,
+    "gc_ns": 12191917,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 7146624,
+     "young": 5101417,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 9,
+     "median_ns": 1535583,
+     "p95_ns": 3109250,
+     "max_ns": 3176792
+    },
+    "young_pauses": {
+     "count": 6,
+     "median_ns": 592125,
+     "p95_ns": 1602917,
+     "p99_ns": 1644209,
+     "max_ns": 1644209
+    },
+    "peak_committed_bytes": 30408704,
+    "peak_used_bytes": 30265376,
+    "peak_nursery_bytes": 8388608,
+    "pretenured_objects": 655360,
+    "live_bytes": 29380640,
+    "bytes_per_object": 32.0,
+    "forced_gc_ns": 4370834,
+    "forced_mark_ns": 3794000,
+    "mark_bytes_per_s": 7743974696.889826,
+    "mark_objects_per_s": 241999209.27780706,
+    "young": null
+   },
+   "gc-parallel": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 918145,
+    "run_ns": 20209000,
+    "idle_ns": 0,
+    "gc_ns": 12283834,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 7191209,
+     "young": 5123958,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 9,
+     "median_ns": 1524833,
+     "p95_ns": 3127125,
+     "max_ns": 3249417
+    },
+    "young_pauses": {
+     "count": 6,
+     "median_ns": 575916,
+     "p95_ns": 1608958,
+     "p99_ns": 1638292,
+     "max_ns": 1638292
+    },
+    "peak_committed_bytes": 30408704,
+    "peak_used_bytes": 30265376,
+    "peak_nursery_bytes": 8388608,
+    "pretenured_objects": 655360,
+    "live_bytes": 29380640,
+    "bytes_per_object": 32.0,
+    "forced_gc_ns": 4367667,
+    "forced_mark_ns": 3777958,
+    "mark_bytes_per_s": 7776857233.457863,
+    "mark_objects_per_s": 243026788.5455582,
+    "young": null
+   }
+  },
+  "chain-low": {
+   "standalone": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 48897,
+    "run_ns": 30456500,
+    "idle_ns": 91243000,
+    "gc_ns": 14194995,
+    "gc_by_kind_ns": {
+     "marking": 473914,
+     "atomic": 7224291,
+     "young": 0,
+     "sweeping": 6474004,
+     "other": 458
+    },
+    "background_gc_ns": 4841334,
+    "pauses": {
+     "count": 175,
+     "median_ns": 14042,
+     "p95_ns": 397583,
+     "max_ns": 603542
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 4980736,
+    "peak_used_bytes": 4896472,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 2738232,
+    "bytes_per_object": 56.0,
+    "forced_gc_ns": 663792,
+    "forced_mark_ns": 469668,
+    "mark_bytes_per_s": 5830143846.291423,
+    "mark_objects_per_s": 104109711.54091826,
+    "young": null
+   },
+   "isolate": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 48897,
+    "run_ns": 13444958,
+    "idle_ns": 0,
+    "gc_ns": 6859279,
+    "gc_by_kind_ns": {
+     "marking": 1469364,
+     "atomic": 440876,
+     "young": 0,
+     "sweeping": 4950956,
+     "other": 1332
+    },
+    "background_gc_ns": 2485291,
+    "pauses": {
+     "count": 6,
+     "median_ns": 1177708,
+     "p95_ns": 1341750,
+     "max_ns": 1397084
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 11272192,
+    "peak_used_bytes": 10828816,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 2738232,
+    "bytes_per_object": 56.0,
+    "forced_gc_ns": 501834,
+    "forced_mark_ns": 286250,
+    "mark_bytes_per_s": 9565875982.532751,
+    "mark_objects_per_s": 170819213.97379914,
+    "young": null
+   },
+   "v8": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 48897,
+    "run_ns": 6386708,
+    "idle_ns": 0,
+    "gc_ns": 1446791,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 0,
+     "young": 1444001,
+     "sweeping": 0,
+     "other": 2626
+    },
+    "background_gc_ns": 358375,
+    "pauses": {
+     "count": 19,
+     "median_ns": 74708,
+     "p95_ns": 99375,
+     "max_ns": 143791
+    },
+    "young_pauses": {
+     "count": 19,
+     "median_ns": 74375,
+     "p95_ns": 98792,
+     "p99_ns": 143416,
+     "max_ns": 143416
+    },
+    "peak_committed_bytes": 5767168,
+    "peak_used_bytes": 2920188,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 1196968,
+    "bytes_per_object": 24.479375012781972,
+    "forced_gc_ns": 522542,
+    "forced_mark_ns": 393375,
+    "mark_bytes_per_s": 3042816650.778519,
+    "mark_objects_per_s": 124301239.27550048,
+    "young": {
+     "count": 19,
+     "survived_bytes": 2235980,
+     "ns": 1444001,
+     "bytes_per_s": 1538932452.2628446,
+     "capacity_bytes": 2097152
+    }
+   },
+   "v8-single": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 48897,
+    "run_ns": 6545625,
+    "idle_ns": 0,
+    "gc_ns": 1448832,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 0,
+     "young": 1446542,
+     "sweeping": 0,
+     "other": 2460
+    },
+    "background_gc_ns": 504125,
+    "pauses": {
+     "count": 19,
+     "median_ns": 73250,
+     "p95_ns": 117584,
+     "max_ns": 126500
+    },
+    "young_pauses": {
+     "count": 19,
+     "median_ns": 72833,
+     "p95_ns": 116875,
+     "p99_ns": 126041,
+     "max_ns": 126041
+    },
+    "peak_committed_bytes": 5767168,
+    "peak_used_bytes": 2930484,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 1197052,
+    "bytes_per_object": 24.481092909585456,
+    "forced_gc_ns": 664541,
+    "forced_mark_ns": 378375,
+    "mark_bytes_per_s": 3163665675.586389,
+    "mark_objects_per_s": 129228939.54410307,
+    "young": {
+     "count": 19,
+     "survived_bytes": 2256324,
+     "ns": 1446542,
+     "bytes_per_s": 1559075367.3242807,
+     "capacity_bytes": 2097152
+    }
+   },
+   "gc": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 48897,
+    "run_ns": 7308125,
+    "idle_ns": 0,
+    "gc_ns": 1114627,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 376333,
+     "young": 735041,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 19,
+     "median_ns": 45709,
+     "p95_ns": 242916,
+     "max_ns": 263500
+    },
+    "young_pauses": {
+     "count": 17,
+     "median_ns": 44458,
+     "p95_ns": 61167,
+     "p99_ns": 65125,
+     "max_ns": 65125
+    },
+    "peak_committed_bytes": 5505024,
+    "peak_used_bytes": 4857888,
+    "peak_nursery_bytes": 2097152,
+    "pretenured_objects": 0,
+    "live_bytes": 1564704,
+    "bytes_per_object": 32.0,
+    "forced_gc_ns": 257333,
+    "forced_mark_ns": 203250,
+    "mark_bytes_per_s": 7698420664.206642,
+    "mark_objects_per_s": 240575645.75645757,
+    "young": null
+   },
+   "gc-parallel": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 48897,
+    "run_ns": 7326042,
+    "idle_ns": 0,
+    "gc_ns": 1109124,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 372042,
+     "young": 730415,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 19,
+     "median_ns": 46250,
+     "p95_ns": 242750,
+     "max_ns": 255708
+    },
+    "young_pauses": {
+     "count": 17,
+     "median_ns": 45167,
+     "p95_ns": 61125,
+     "p99_ns": 65417,
+     "max_ns": 65417
+    },
+    "peak_committed_bytes": 5505024,
+    "peak_used_bytes": 4857888,
+    "peak_nursery_bytes": 2097152,
+    "pretenured_objects": 0,
+    "live_bytes": 1564704,
+    "bytes_per_object": 32.0,
+    "forced_gc_ns": 254958,
+    "forced_mark_ns": 200792,
+    "mark_bytes_per_s": 7792661062.193712,
+    "mark_objects_per_s": 243520658.1935535,
+    "young": null
+   }
+  },
+  "tree-high": {
+   "standalone": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 918145,
+    "run_ns": 39259958,
+    "idle_ns": 90695375,
+    "gc_ns": 20139614,
+    "gc_by_kind_ns": {
+     "marking": 159791,
+     "atomic": 16905043,
+     "young": 0,
+     "sweeping": 3049501,
+     "other": 33583
+    },
+    "background_gc_ns": 3624040,
+    "pauses": {
+     "count": 60,
+     "median_ns": 8292,
+     "p95_ns": 2781500,
+     "max_ns": 6138458
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 53084160,
+    "peak_used_bytes": 51951312,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 51416120,
+    "bytes_per_object": 56.0,
+    "forced_gc_ns": 7425208,
+    "forced_mark_ns": 5845125,
+    "mark_bytes_per_s": 8796410684.117107,
+    "mark_objects_per_s": 157078762.2163769,
+    "young": null
+   },
+   "isolate": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 918145,
+    "run_ns": 21784041,
+    "idle_ns": 0,
+    "gc_ns": 11338940,
+    "gc_by_kind_ns": {
+     "marking": 9338052,
+     "atomic": 265375,
+     "young": 0,
+     "sweeping": 1672104,
+     "other": 1083
+    },
+    "background_gc_ns": 2398083,
+    "pauses": {
+     "count": 3,
+     "median_ns": 3342375,
+     "p95_ns": 7551833,
+     "max_ns": 7551833
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 54525952,
+    "peak_used_bytes": 53369776,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 51416120,
+    "bytes_per_object": 56.0,
+    "forced_gc_ns": 7436542,
+    "forced_mark_ns": 5763208,
+    "mark_bytes_per_s": 8921440975.234627,
+    "mark_objects_per_s": 159311445.98633263,
+    "young": null
+   },
+   "v8": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 918145,
+    "run_ns": 25014209,
+    "idle_ns": 0,
+    "gc_ns": 18199299,
+    "gc_by_kind_ns": {
+     "marking": 88293,
+     "atomic": 4470500,
+     "young": 13605166,
+     "sweeping": 21873,
+     "other": 1627
+    },
+    "background_gc_ns": 8530125,
+    "pauses": {
+     "count": 9,
+     "median_ns": 1163125,
+     "p95_ns": 7124167,
+     "max_ns": 7774500
+    },
+    "young_pauses": {
+     "count": 9,
+     "median_ns": 1162583,
+     "p95_ns": 4461958,
+     "p99_ns": 4674333,
+     "max_ns": 4674333
+    },
+    "peak_committed_bytes": 40632320,
+    "peak_used_bytes": 26421804,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 25733468,
+    "bytes_per_object": 28.027673188875397,
+    "forced_gc_ns": 7573291,
+    "forced_mark_ns": 6696166,
+    "mark_bytes_per_s": 3843015241.85631,
+    "mark_objects_per_s": 137115029.7050581,
+    "young": {
+     "count": 9,
+     "survived_bytes": 36466820,
+     "ns": 13605166,
+     "bytes_per_s": 2680207209.526146,
+     "capacity_bytes": 16777216
+    }
+   },
+   "v8-single": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 918145,
+    "run_ns": 25070750,
+    "idle_ns": 0,
+    "gc_ns": 18189869,
+    "gc_by_kind_ns": {
+     "marking": 3617743,
+     "atomic": 553250,
+     "young": 13970333,
+     "sweeping": 37708,
+     "other": 1959
+    },
+    "background_gc_ns": 1682375,
+    "pauses": {
+     "count": 9,
+     "median_ns": 1225750,
+     "p95_ns": 6826708,
+     "max_ns": 6875000
+    },
+    "young_pauses": {
+     "count": 9,
+     "median_ns": 1225500,
+     "p95_ns": 4487375,
+     "p99_ns": 4949459,
+     "max_ns": 4949459
+    },
+    "peak_committed_bytes": 40632320,
+    "peak_used_bytes": 26421804,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 25733468,
+    "bytes_per_object": 28.027673188875397,
+    "forced_gc_ns": 10352250,
+    "forced_mark_ns": 6609001,
+    "mark_bytes_per_s": 3893700122.000284,
+    "mark_objects_per_s": 138923416.7160816,
+    "young": {
+     "count": 9,
+     "survived_bytes": 36735620,
+     "ns": 13970333,
+     "bytes_per_s": 2629545050.930425,
+     "capacity_bytes": 16777216
+    }
+   },
+   "gc": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 918145,
+    "run_ns": 21465042,
+    "idle_ns": 0,
+    "gc_ns": 13424918,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 7675582,
+     "young": 5770042,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 9,
+     "median_ns": 1702708,
+     "p95_ns": 3319583,
+     "max_ns": 3359958
+    },
+    "young_pauses": {
+     "count": 6,
+     "median_ns": 696209,
+     "p95_ns": 1805292,
+     "p99_ns": 1835542,
+     "max_ns": 1835542
+    },
+    "peak_committed_bytes": 30408704,
+    "peak_used_bytes": 30265376,
+    "peak_nursery_bytes": 8388608,
+    "pretenured_objects": 655360,
+    "live_bytes": 29380640,
+    "bytes_per_object": 32.0,
+    "forced_gc_ns": 4657833,
+    "forced_mark_ns": 4082000,
+    "mark_bytes_per_s": 7197609015.188634,
+    "mark_objects_per_s": 224925281.7246448,
+    "young": null
+   },
+   "gc-parallel": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 918145,
+    "run_ns": 21695250,
+    "idle_ns": 0,
+    "gc_ns": 13506374,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 7751208,
+     "young": 5715792,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 9,
+     "median_ns": 1720292,
+     "p95_ns": 3344375,
+     "max_ns": 3443083
+    },
+    "young_pauses": {
+     "count": 6,
+     "median_ns": 678042,
+     "p95_ns": 1763292,
+     "p99_ns": 1830583,
+     "max_ns": 1830583
+    },
+    "peak_committed_bytes": 30408704,
+    "peak_used_bytes": 30265376,
+    "peak_nursery_bytes": 8388608,
+    "pretenured_objects": 655360,
+    "live_bytes": 29380640,
+    "bytes_per_object": 32.0,
+    "forced_gc_ns": 4726833,
+    "forced_mark_ns": 4142584,
+    "mark_bytes_per_s": 7092346226.413272,
+    "mark_objects_per_s": 221635819.57541475,
+    "young": null
+   }
+  },
+  "tree-low": {
+   "standalone": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 48897,
+    "run_ns": 31917914,
+    "idle_ns": 90975211,
+    "gc_ns": 15056655,
+    "gc_by_kind_ns": {
+     "marking": 490215,
+     "atomic": 7971086,
+     "young": 0,
+     "sweeping": 6606444,
+     "other": 917
+    },
+    "background_gc_ns": 4899246,
+    "pauses": {
+     "count": 203,
+     "median_ns": 13959,
+     "p95_ns": 393875,
+     "max_ns": 645958
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 4980736,
+    "peak_used_bytes": 4896080,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 2738232,
+    "bytes_per_object": 56.0,
+    "forced_gc_ns": 702250,
+    "forced_mark_ns": 506376,
+    "mark_bytes_per_s": 5407507464.808759,
+    "mark_objects_per_s": 96562633.3001564,
+    "young": null
+   },
+   "isolate": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 48897,
+    "run_ns": 14676250,
+    "idle_ns": 0,
+    "gc_ns": 7207254,
+    "gc_by_kind_ns": {
+     "marking": 1600094,
+     "atomic": 411251,
+     "young": 0,
+     "sweeping": 5231748,
+     "other": 1417
+    },
+    "background_gc_ns": 2510537,
+    "pauses": {
+     "count": 6,
+     "median_ns": 1260083,
+     "p95_ns": 1408833,
+     "max_ns": 1420375
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 11272192,
+    "peak_used_bytes": 10828816,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 2738232,
+    "bytes_per_object": 56.0,
+    "forced_gc_ns": 527750,
+    "forced_mark_ns": 309333,
+    "mark_bytes_per_s": 8852052642.298105,
+    "mark_objects_per_s": 158072368.61246616,
+    "young": null
+   },
+   "v8": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 48897,
+    "run_ns": 7718292,
+    "idle_ns": 0,
+    "gc_ns": 1659413,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 0,
+     "young": 1656413,
+     "sweeping": 0,
+     "other": 2749
+    },
+    "background_gc_ns": 281918,
+    "pauses": {
+     "count": 22,
+     "median_ns": 76125,
+     "p95_ns": 106500,
+     "max_ns": 154792
+    },
+    "young_pauses": {
+     "count": 22,
+     "median_ns": 75833,
+     "p95_ns": 105833,
+     "p99_ns": 132583,
+     "max_ns": 154417
+    },
+    "peak_committed_bytes": 6029312,
+    "peak_used_bytes": 3093520,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 1394540,
+    "bytes_per_object": 28.51995009918809,
+    "forced_gc_ns": 643667,
+    "forced_mark_ns": 489459,
+    "mark_bytes_per_s": 2849145689.424446,
+    "mark_objects_per_s": 99900093.77700685,
+    "young": {
+     "count": 22,
+     "survived_bytes": 2555152,
+     "ns": 1656413,
+     "bytes_per_s": 1542564565.72123,
+     "capacity_bytes": 2097152
+    }
+   },
+   "v8-single": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 48897,
+    "run_ns": 7577500,
+    "idle_ns": 0,
+    "gc_ns": 1631002,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 0,
+     "young": 1622125,
+     "sweeping": 0,
+     "other": 3085
+    },
+    "background_gc_ns": 255000,
+    "pauses": {
+     "count": 22,
+     "median_ns": 74917,
+     "p95_ns": 105500,
+     "max_ns": 141500
+    },
+    "young_pauses": {
+     "count": 22,
+     "median_ns": 74667,
+     "p95_ns": 105041,
+     "p99_ns": 119917,
+     "max_ns": 141000
+    },
+    "peak_committed_bytes": 6029312,
+    "peak_used_bytes": 3093640,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 1394540,
+    "bytes_per_object": 28.51995009918809,
+    "forced_gc_ns": 685208,
+    "forced_mark_ns": 398416,
+    "mark_bytes_per_s": 3500210834.9062285,
+    "mark_objects_per_s": 122728504.87932211,
+    "young": {
+     "count": 22,
+     "survived_bytes": 2555152,
+     "ns": 1622125,
+     "bytes_per_s": 1572944131.9257147,
+     "capacity_bytes": 2097152
+    }
+   },
+   "gc": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 48897,
+    "run_ns": 7595291,
+    "idle_ns": 0,
+    "gc_ns": 1254499,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 403708,
+     "young": 851915,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 19,
+     "median_ns": 53750,
+     "p95_ns": 264833,
+     "max_ns": 272208
+    },
+    "young_pauses": {
+     "count": 17,
+     "median_ns": 52083,
+     "p95_ns": 71083,
+     "p99_ns": 73333,
+     "max_ns": 73333
+    },
+    "peak_committed_bytes": 5505024,
+    "peak_used_bytes": 4857888,
+    "peak_nursery_bytes": 2097152,
+    "pretenured_objects": 0,
+    "live_bytes": 1564704,
+    "bytes_per_object": 32.0,
+    "forced_gc_ns": 277250,
+    "forced_mark_ns": 220791,
+    "mark_bytes_per_s": 7086810603.693086,
+    "mark_objects_per_s": 221462831.36540893,
+    "young": null
+   },
+   "gc-parallel": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 48897,
+    "run_ns": 7834958,
+    "idle_ns": 0,
+    "gc_ns": 1260250,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 407499,
+     "young": 852751,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 19,
+     "median_ns": 53875,
+     "p95_ns": 269917,
+     "max_ns": 274583
+    },
+    "young_pauses": {
+     "count": 17,
+     "median_ns": 51667,
+     "p95_ns": 71041,
+     "p99_ns": 72625,
+     "max_ns": 72625
+    },
+    "peak_committed_bytes": 5505024,
+    "peak_used_bytes": 4857888,
+    "peak_nursery_bytes": 2097152,
+    "pretenured_objects": 0,
+    "live_bytes": 1564704,
+    "bytes_per_object": 32.0,
+    "forced_gc_ns": 282959,
+    "forced_mark_ns": 222084,
+    "mark_bytes_per_s": 7045550332.306695,
+    "mark_objects_per_s": 220173447.88458422,
+    "young": null
+   }
+  },
+  "graph-high": {
+   "standalone": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 918785,
+    "run_ns": 69373792,
+    "idle_ns": 84816833,
+    "gc_ns": 37402170,
+    "gc_by_kind_ns": {
+     "marking": 296338,
+     "atomic": 34485706,
+     "young": 0,
+     "sweeping": 2579967,
+     "other": 52501
+    },
+    "background_gc_ns": 3139041,
+    "pauses": {
+     "count": 61,
+     "median_ns": 17500,
+     "p95_ns": 3986000,
+     "max_ns": 12321125
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 61341696,
+    "peak_used_bytes": 60194520,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 58802240,
+    "bytes_per_object": 64.0,
+    "forced_gc_ns": 16646084,
+    "forced_mark_ns": 14784249,
+    "mark_bytes_per_s": 3977357253.655563,
+    "mark_objects_per_s": 62146207.08836817,
+    "young": null
+   },
+   "isolate": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 918785,
+    "run_ns": 25160458,
+    "idle_ns": 0,
+    "gc_ns": 8755706,
+    "gc_by_kind_ns": {
+     "marking": 7886502,
+     "atomic": 171749,
+     "young": 0,
+     "sweeping": 696955,
+     "other": 541
+    },
+    "background_gc_ns": 1024043,
+    "pauses": {
+     "count": 2,
+     "median_ns": 2900541,
+     "p95_ns": 6592291,
+     "max_ns": 6592291
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 64749568,
+    "peak_used_bytes": 63417048,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 58802240,
+    "bytes_per_object": 64.0,
+    "forced_gc_ns": 16503875,
+    "forced_mark_ns": 14631375,
+    "mark_bytes_per_s": 4018914148.533545,
+    "mark_objects_per_s": 62795533.57083664,
+    "young": null
+   },
+   "v8": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 918785,
+    "run_ns": 70734875,
+    "idle_ns": 0,
+    "gc_ns": 54763456,
+    "gc_by_kind_ns": {
+     "marking": 285209,
+     "atomic": 22378709,
+     "young": 31468625,
+     "sweeping": 35580,
+     "other": 2584
+    },
+    "background_gc_ns": 31396792,
+    "pauses": {
+     "count": 10,
+     "median_ns": 2103875,
+     "p95_ns": 23960542,
+     "max_ns": 24225208
+    },
+    "young_pauses": {
+     "count": 10,
+     "median_ns": 2103625,
+     "p95_ns": 8540666,
+     "p99_ns": 8708208,
+     "max_ns": 8708208
+    },
+    "peak_committed_bytes": 53477376,
+    "peak_used_bytes": 33847896,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 33105772,
+    "bytes_per_object": 36.03212068111691,
+    "forced_gc_ns": 17649125,
+    "forced_mark_ns": 16862834,
+    "mark_bytes_per_s": 1963238919.389232,
+    "mark_objects_per_s": 54485799.95509651,
+    "young": {
+     "count": 10,
+     "survived_bytes": 50397064,
+     "ns": 31468625,
+     "bytes_per_s": 1601209712.8489091,
+     "capacity_bytes": 33554432
+    }
+   },
+   "v8-single": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 918785,
+    "run_ns": 72700209,
+    "idle_ns": 0,
+    "gc_ns": 56683928,
+    "gc_by_kind_ns": {
+     "marking": 21422786,
+     "atomic": 1237458,
+     "young": 33429959,
+     "sweeping": 60249,
+     "other": 3124
+    },
+    "background_gc_ns": 3467375,
+    "pauses": {
+     "count": 10,
+     "median_ns": 2066375,
+     "p95_ns": 25030500,
+     "max_ns": 25430250
+    },
+    "young_pauses": {
+     "count": 10,
+     "median_ns": 2066083,
+     "p95_ns": 9926666,
+     "p99_ns": 10197334,
+     "max_ns": 10197334
+    },
+    "peak_committed_bytes": 53477376,
+    "peak_used_bytes": 33847432,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 33106236,
+    "bytes_per_object": 36.03262569589186,
+    "forced_gc_ns": 20542542,
+    "forced_mark_ns": 16715666,
+    "mark_bytes_per_s": 1980551418.052981,
+    "mark_objects_per_s": 54965503.617983274,
+    "young": {
+     "count": 10,
+     "survived_bytes": 50387868,
+     "ns": 33429959,
+     "bytes_per_s": 1507514886.25485,
+     "capacity_bytes": 33554432
+    }
+   },
+   "gc": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 918785,
+    "run_ns": 50880417,
+    "idle_ns": 0,
+    "gc_ns": 35453250,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 26523042,
+     "young": 8930208,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 10,
+     "median_ns": 2092000,
+     "p95_ns": 13423000,
+     "max_ns": 13801375
+    },
+    "young_pauses": {
+     "count": 6,
+     "median_ns": 1169625,
+     "p95_ns": 2875958,
+     "p99_ns": 2932666,
+     "max_ns": 2932666
+    },
+    "peak_committed_bytes": 44564480,
+    "peak_used_bytes": 44531760,
+    "peak_nursery_bytes": 8388608,
+    "pretenured_objects": 778240,
+    "live_bytes": 44101680,
+    "bytes_per_object": 48.0,
+    "forced_gc_ns": 14877667,
+    "forced_mark_ns": 14245041,
+    "mark_bytes_per_s": 3095932121.2202897,
+    "mark_objects_per_s": 64498585.85875604,
+    "young": null
+   },
+   "gc-parallel": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 918785,
+    "run_ns": 50807209,
+    "idle_ns": 0,
+    "gc_ns": 35351542,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 26483376,
+     "young": 8888374,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 10,
+     "median_ns": 2071458,
+     "p95_ns": 13412333,
+     "max_ns": 13485333
+    },
+    "young_pauses": {
+     "count": 6,
+     "median_ns": 1128709,
+     "p95_ns": 2858208,
+     "p99_ns": 2862000,
+     "max_ns": 2862000
+    },
+    "peak_committed_bytes": 44564480,
+    "peak_used_bytes": 44531760,
+    "peak_nursery_bytes": 8388608,
+    "pretenured_objects": 778240,
+    "live_bytes": 44101680,
+    "bytes_per_object": 48.0,
+    "forced_gc_ns": 14811916,
+    "forced_mark_ns": 14187250,
+    "mark_bytes_per_s": 3108543234.242013,
+    "mark_objects_per_s": 64761317.380041935,
+    "young": null
+   }
+  },
+  "graph-low": {
+   "standalone": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 51201,
+    "run_ns": 55348626,
+    "idle_ns": 87015293,
+    "gc_ns": 24359989,
+    "gc_by_kind_ns": {
+     "marking": 971839,
+     "atomic": 17565005,
+     "young": 0,
+     "sweeping": 5796542,
+     "other": 958
+    },
+    "background_gc_ns": 4683708,
+    "pauses": {
+     "count": 382,
+     "median_ns": 9584,
+     "p95_ns": 502334,
+     "max_ns": 927584
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 5767168,
+    "peak_used_bytes": 5559896,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 3276864,
+    "bytes_per_object": 64.0,
+    "forced_gc_ns": 1309000,
+    "forced_mark_ns": 1135751,
+    "mark_bytes_per_s": 2885195786.752554,
+    "mark_objects_per_s": 45081184.168008655,
+    "young": null
+   },
+   "isolate": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 51201,
+    "run_ns": 22335084,
+    "idle_ns": 0,
+    "gc_ns": 8949214,
+    "gc_by_kind_ns": {
+     "marking": 3659218,
+     "atomic": 500832,
+     "young": 0,
+     "sweeping": 4781878,
+     "other": 2042
+    },
+    "background_gc_ns": 2742375,
+    "pauses": {
+     "count": 7,
+     "median_ns": 1260333,
+     "p95_ns": 1651209,
+     "max_ns": 1705958
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 11534336,
+    "peak_used_bytes": 11085272,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 3276864,
+    "bytes_per_object": 64.0,
+    "forced_gc_ns": 1037750,
+    "forced_mark_ns": 813334,
+    "mark_bytes_per_s": 4028927845.141111,
+    "mark_objects_per_s": 62951997.58032986,
+    "young": null
+   },
+   "v8": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 51201,
+    "run_ns": 17975250,
+    "idle_ns": 0,
+    "gc_ns": 2937335,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 0,
+     "young": 2933958,
+     "sweeping": 0,
+     "other": 3167
+    },
+    "background_gc_ns": 536331,
+    "pauses": {
+     "count": 25,
+     "median_ns": 118458,
+     "p95_ns": 169500,
+     "max_ns": 197250
+    },
+    "young_pauses": {
+     "count": 25,
+     "median_ns": 118167,
+     "p95_ns": 169167,
+     "p99_ns": 178125,
+     "max_ns": 197000
+    },
+    "peak_committed_bytes": 8388608,
+    "peak_used_bytes": 4765388,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 1871944,
+    "bytes_per_object": 36.560692173980975,
+    "forced_gc_ns": 1275250,
+    "forced_mark_ns": 1000999,
+    "mark_bytes_per_s": 1870075794.2815127,
+    "mark_objects_per_s": 51149901.24865259,
+    "young": {
+     "count": 25,
+     "survived_bytes": 3329316,
+     "ns": 2933958,
+     "bytes_per_s": 1160084772.8563259,
+     "capacity_bytes": 4194304
+    }
+   },
+   "v8-single": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 51201,
+    "run_ns": 17884250,
+    "idle_ns": 0,
+    "gc_ns": 2849375,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 0,
+     "young": 2846166,
+     "sweeping": 0,
+     "other": 3209
+    },
+    "background_gc_ns": 583833,
+    "pauses": {
+     "count": 25,
+     "median_ns": 118042,
+     "p95_ns": 164458,
+     "max_ns": 176041
+    },
+    "young_pauses": {
+     "count": 25,
+     "median_ns": 117708,
+     "p95_ns": 164208,
+     "p99_ns": 175083,
+     "max_ns": 175833
+    },
+    "peak_committed_bytes": 8388608,
+    "peak_used_bytes": 4775344,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 1872760,
+    "bytes_per_object": 36.57662936270776,
+    "forced_gc_ns": 1051334,
+    "forced_mark_ns": 982334,
+    "mark_bytes_per_s": 1906439154.0962644,
+    "mark_objects_per_s": 52121783.42600378,
+    "young": {
+     "count": 25,
+     "survived_bytes": 3340424,
+     "ns": 2846166,
+     "bytes_per_s": 1171469267.7798836,
+     "capacity_bytes": 4194304
+    }
+   },
+   "gc": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 51201,
+    "run_ns": 16751625,
+    "idle_ns": 0,
+    "gc_ns": 3670206,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 1623084,
+     "young": 2047122,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 26,
+     "median_ns": 78500,
+     "p95_ns": 501583,
+     "max_ns": 949000
+    },
+    "young_pauses": {
+     "count": 23,
+     "median_ns": 72084,
+     "p95_ns": 151500,
+     "p99_ns": 158417,
+     "max_ns": 179708
+    },
+    "peak_committed_bytes": 5767168,
+    "peak_used_bytes": 5165568,
+    "peak_nursery_bytes": 2097152,
+    "pretenured_objects": 0,
+    "live_bytes": 2457648,
+    "bytes_per_object": 48.0,
+    "forced_gc_ns": 801625,
+    "forced_mark_ns": 757250,
+    "mark_bytes_per_s": 3245490921.0960712,
+    "mark_objects_per_s": 67614394.18950148,
+    "young": null
+   },
+   "gc-parallel": {
+    "runs": 5,
+    "replay": null,
+    "turns": 100,
+    "nodes_allocated": 1024000,
+    "live_nodes": 51201,
+    "run_ns": 16768209,
+    "idle_ns": 0,
+    "gc_ns": 3658206,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 1624749,
+     "young": 2031208,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 26,
+     "median_ns": 85542,
+     "p95_ns": 499333,
+     "max_ns": 944208
+    },
+    "young_pauses": {
+     "count": 23,
+     "median_ns": 77125,
+     "p95_ns": 158750,
+     "p99_ns": 164625,
+     "max_ns": 180208
+    },
+    "peak_committed_bytes": 5767168,
+    "peak_used_bytes": 5165568,
+    "peak_nursery_bytes": 2097152,
+    "pretenured_objects": 0,
+    "live_bytes": 2457648,
+    "bytes_per_object": 48.0,
+    "forced_gc_ns": 802708,
+    "forced_mark_ns": 759250,
+    "mark_bytes_per_s": 3236941718.8014483,
+    "mark_objects_per_s": 67436285.80836351,
+    "young": null
+   }
+  },
+  "replay:bindings-create-element-wasm.kungc": {
+   "standalone": {
+    "runs": 5,
+    "replay": {
+     "recording": "bindings-create-element-wasm.kungc",
+     "recorded_heap": "standalone",
+     "recorded_size_bytes": 6069967752,
+     "replayed_size_bytes": 6225608288,
+     "larger_than_classes": 2,
+     "skipped": {
+      "weak_writes": 0,
+      "weak_roots": 1,
+      "js_writes": 0,
+      "unknown_writes": 0,
+      "writes_outside": 0,
+      "unknown_roots": 0,
+      "unbalanced_roots": 0,
+      "slots_past_class": 0
+     },
+     "window_max": 13,
+     "window_mean": 11.456521739130435,
+     "recorded_gcs": {
+      "major": 42,
+      "marking": 21
+     }
+    },
+    "turns": 46,
+    "nodes_allocated": 19455036,
+    "live_nodes": 27,
+    "run_ns": 3708296042,
+    "idle_ns": 0,
+    "gc_ns": 988701391,
+    "gc_by_kind_ns": {
+     "marking": 118235897,
+     "atomic": 461924586,
+     "young": 0,
+     "sweeping": 408613446,
+     "other": 0
+    },
+    "background_gc_ns": 1064018040,
+    "pauses": {
+     "count": 27221,
+     "median_ns": 5500,
+     "p95_ns": 13292,
+     "max_ns": 41926875
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 663224320,
+    "peak_used_bytes": 651760920,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 7424,
+    "bytes_per_object": 274.962962962963,
+    "forced_gc_ns": 26417,
+    "forced_mark_ns": 8125,
+    "mark_bytes_per_s": 913723076.923077,
+    "mark_objects_per_s": 3323076.9230769235,
+    "young": null
+   },
+   "gc": {
+    "runs": 5,
+    "replay": {
+     "recording": "bindings-create-element-wasm.kungc",
+     "recorded_heap": "standalone",
+     "recorded_size_bytes": 6069967752,
+     "replayed_size_bytes": 6225608288,
+     "larger_than_classes": 2,
+     "skipped": {
+      "weak_writes": 0,
+      "weak_roots": 1,
+      "js_writes": 0,
+      "unknown_writes": 0,
+      "writes_outside": 0,
+      "unknown_roots": 0,
+      "unbalanced_roots": 0,
+      "slots_past_class": 0
+     },
+     "window_max": 13,
+     "window_mean": 11.456521739130435,
+     "recorded_gcs": {
+      "major": 42,
+      "marking": 21
+     }
+    },
+    "turns": 46,
+    "nodes_allocated": 19455036,
+    "live_nodes": 27,
+    "run_ns": 2944673417,
+    "idle_ns": 0,
+    "gc_ns": 6922354,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 8833,
+     "young": 6913521,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 6085,
+     "median_ns": 1042,
+     "p95_ns": 1167,
+     "max_ns": 4454459
+    },
+    "young_pauses": {
+     "count": 6084,
+     "median_ns": 1042,
+     "p95_ns": 1167,
+     "p99_ns": 2000,
+     "max_ns": 4454459
+    },
+    "peak_committed_bytes": 4456448,
+    "peak_used_bytes": 2875168,
+    "peak_nursery_bytes": 1048576,
+    "pretenured_objects": 0,
+    "live_bytes": 7520,
+    "bytes_per_object": 278.51851851851853,
+    "forced_gc_ns": 22000,
+    "forced_mark_ns": 1458,
+    "mark_bytes_per_s": 5157750342.935528,
+    "mark_objects_per_s": 18518518.51851852,
+    "young": null
+   },
+   "gc-parallel": {
+    "runs": 5,
+    "replay": {
+     "recording": "bindings-create-element-wasm.kungc",
+     "recorded_heap": "standalone",
+     "recorded_size_bytes": 6069967752,
+     "replayed_size_bytes": 6225608288,
+     "larger_than_classes": 2,
+     "skipped": {
+      "weak_writes": 0,
+      "weak_roots": 1,
+      "js_writes": 0,
+      "unknown_writes": 0,
+      "writes_outside": 0,
+      "unknown_roots": 0,
+      "unbalanced_roots": 0,
+      "slots_past_class": 0
+     },
+     "window_max": 13,
+     "window_mean": 11.456521739130435,
+     "recorded_gcs": {
+      "major": 42,
+      "marking": 21
+     }
+    },
+    "turns": 46,
+    "nodes_allocated": 19455036,
+    "live_nodes": 27,
+    "run_ns": 2943444875,
+    "idle_ns": 0,
+    "gc_ns": 6875359,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 9791,
+     "young": 6865568,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 6085,
+     "median_ns": 1042,
+     "p95_ns": 1334,
+     "max_ns": 4414459
+    },
+    "young_pauses": {
+     "count": 6084,
+     "median_ns": 1042,
+     "p95_ns": 1334,
+     "p99_ns": 4834,
+     "max_ns": 4414459
+    },
+    "peak_committed_bytes": 4456448,
+    "peak_used_bytes": 2875168,
+    "peak_nursery_bytes": 1048576,
+    "pretenured_objects": 0,
+    "live_bytes": 7520,
+    "bytes_per_object": 278.51851851851853,
+    "forced_gc_ns": 20292,
+    "forced_mark_ns": 1459,
+    "mark_bytes_per_s": 5154215215.901302,
+    "mark_objects_per_s": 18505825.908156272,
+    "young": null
+   }
+  },
+  "replay:bindings-gc-forest-wasm.kungc": {
+   "standalone": {
+    "runs": 5,
+    "replay": {
+     "recording": "bindings-gc-forest-wasm.kungc",
+     "recorded_heap": "standalone",
+     "recorded_size_bytes": 6552007752,
+     "replayed_size_bytes": 6720008288,
+     "larger_than_classes": 2,
+     "skipped": {
+      "weak_writes": 0,
+      "weak_roots": 1,
+      "js_writes": 0,
+      "unknown_writes": 0,
+      "writes_outside": 0,
+      "unknown_roots": 0,
+      "unbalanced_roots": 0,
+      "slots_past_class": 0
+     },
+     "window_max": 13,
+     "window_mean": 11.533333333333333,
+     "recorded_gcs": {
+      "major": 42,
+      "marking": 21
+     }
+    },
+    "turns": 45,
+    "nodes_allocated": 21000036,
+    "live_nodes": 27,
+    "run_ns": 4015850250,
+    "idle_ns": 0,
+    "gc_ns": 1052747178,
+    "gc_by_kind_ns": {
+     "marking": 140198293,
+     "atomic": 464041961,
+     "young": 0,
+     "sweeping": 448901552,
+     "other": 0
+    },
+    "background_gc_ns": 1168359251,
+    "pauses": {
+     "count": 29447,
+     "median_ns": 5500,
+     "p95_ns": 13667,
+     "max_ns": 43082375
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 715128832,
+    "peak_used_bytes": 702778392,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 7424,
+    "bytes_per_object": 274.962962962963,
+    "forced_gc_ns": 27792,
+    "forced_mark_ns": 9458,
+    "mark_bytes_per_s": 784943962.7828294,
+    "mark_objects_per_s": 2854726.157750053,
+    "young": null
+   },
+   "gc": {
+    "runs": 5,
+    "replay": {
+     "recording": "bindings-gc-forest-wasm.kungc",
+     "recorded_heap": "standalone",
+     "recorded_size_bytes": 6552007752,
+     "replayed_size_bytes": 6720008288,
+     "larger_than_classes": 2,
+     "skipped": {
+      "weak_writes": 0,
+      "weak_roots": 1,
+      "js_writes": 0,
+      "unknown_writes": 0,
+      "writes_outside": 0,
+      "unknown_roots": 0,
+      "unbalanced_roots": 0,
+      "slots_past_class": 0
+     },
+     "window_max": 13,
+     "window_mean": 11.533333333333333,
+     "recorded_gcs": {
+      "major": 42,
+      "marking": 21
+     }
+    },
+    "turns": 45,
+    "nodes_allocated": 21000036,
+    "live_nodes": 27,
+    "run_ns": 3176326958,
+    "idle_ns": 0,
+    "gc_ns": 7343894,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 9791,
+     "young": 7333269,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 6568,
+     "median_ns": 1042,
+     "p95_ns": 1167,
+     "max_ns": 33250
+    },
+    "young_pauses": {
+     "count": 6567,
+     "median_ns": 1042,
+     "p95_ns": 1167,
+     "p99_ns": 2583,
+     "max_ns": 33250
+    },
+    "peak_committed_bytes": 4456448,
+    "peak_used_bytes": 2689632,
+    "peak_nursery_bytes": 1048576,
+    "pretenured_objects": 0,
+    "live_bytes": 7520,
+    "bytes_per_object": 278.51851851851853,
+    "forced_gc_ns": 21000,
+    "forced_mark_ns": 1208,
+    "mark_bytes_per_s": 6225165562.913908,
+    "mark_objects_per_s": 22350993.377483446,
+    "young": null
+   },
+   "gc-parallel": {
+    "runs": 5,
+    "replay": {
+     "recording": "bindings-gc-forest-wasm.kungc",
+     "recorded_heap": "standalone",
+     "recorded_size_bytes": 6552007752,
+     "replayed_size_bytes": 6720008288,
+     "larger_than_classes": 2,
+     "skipped": {
+      "weak_writes": 0,
+      "weak_roots": 1,
+      "js_writes": 0,
+      "unknown_writes": 0,
+      "writes_outside": 0,
+      "unknown_roots": 0,
+      "unbalanced_roots": 0,
+      "slots_past_class": 0
+     },
+     "window_max": 13,
+     "window_mean": 11.533333333333333,
+     "recorded_gcs": {
+      "major": 42,
+      "marking": 21
+     }
+    },
+    "turns": 45,
+    "nodes_allocated": 21000036,
+    "live_nodes": 27,
+    "run_ns": 3183573417,
+    "idle_ns": 0,
+    "gc_ns": 7651383,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 9334,
+     "young": 7642049,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 6568,
+     "median_ns": 1042,
+     "p95_ns": 1209,
+     "max_ns": 2212959
+    },
+    "young_pauses": {
+     "count": 6567,
+     "median_ns": 1042,
+     "p95_ns": 1209,
+     "p99_ns": 4000,
+     "max_ns": 2212959
+    },
+    "peak_committed_bytes": 4456448,
+    "peak_used_bytes": 2689632,
+    "peak_nursery_bytes": 1048576,
+    "pretenured_objects": 0,
+    "live_bytes": 7520,
+    "bytes_per_object": 278.51851851851853,
+    "forced_gc_ns": 22042,
+    "forced_mark_ns": 1416,
+    "mark_bytes_per_s": 5310734463.276835,
+    "mark_objects_per_s": 19067796.61016949,
+    "young": null
+   }
+  },
+  "replay:bindings-gc-mini-tree-wasm.kungc": {
+   "standalone": {
+    "runs": 5,
+    "replay": {
+     "recording": "bindings-gc-mini-tree-wasm.kungc",
+     "recorded_heap": "standalone",
+     "recorded_size_bytes": 6552007752,
+     "replayed_size_bytes": 6720008288,
+     "larger_than_classes": 2,
+     "skipped": {
+      "weak_writes": 0,
+      "weak_roots": 1,
+      "js_writes": 0,
+      "unknown_writes": 0,
+      "writes_outside": 0,
+      "unknown_roots": 0,
+      "unbalanced_roots": 0,
+      "slots_past_class": 0
+     },
+     "window_max": 14,
+     "window_mean": 11.456521739130435,
+     "recorded_gcs": {
+      "major": 42,
+      "marking": 21
+     }
+    },
+    "turns": 46,
+    "nodes_allocated": 21000036,
+    "live_nodes": 27,
+    "run_ns": 6361752333,
+    "idle_ns": 0,
+    "gc_ns": 1355360558,
+    "gc_by_kind_ns": {
+     "marking": 245855881,
+     "atomic": 362507753,
+     "young": 0,
+     "sweeping": 746492391,
+     "other": 0
+    },
+    "background_gc_ns": 589107669,
+    "pauses": {
+     "count": 15586,
+     "median_ns": 16333,
+     "p95_ns": 38292,
+     "max_ns": 59179875
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 715128832,
+    "peak_used_bytes": 702778392,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 7424,
+    "bytes_per_object": 274.962962962963,
+    "forced_gc_ns": 31042,
+    "forced_mark_ns": 9334,
+    "mark_bytes_per_s": 795371759.1600599,
+    "mark_objects_per_s": 2892650.5249625025,
+    "young": null
+   },
+   "gc": {
+    "runs": 5,
+    "replay": {
+     "recording": "bindings-gc-mini-tree-wasm.kungc",
+     "recorded_heap": "standalone",
+     "recorded_size_bytes": 6552007752,
+     "replayed_size_bytes": 6720008288,
+     "larger_than_classes": 2,
+     "skipped": {
+      "weak_writes": 0,
+      "weak_roots": 1,
+      "js_writes": 0,
+      "unknown_writes": 0,
+      "writes_outside": 0,
+      "unknown_roots": 0,
+      "unbalanced_roots": 0,
+      "slots_past_class": 0
+     },
+     "window_max": 14,
+     "window_mean": 11.456521739130435,
+     "recorded_gcs": {
+      "major": 42,
+      "marking": 21
+     }
+    },
+    "turns": 46,
+    "nodes_allocated": 21000036,
+    "live_nodes": 27,
+    "run_ns": 6042547791,
+    "idle_ns": 0,
+    "gc_ns": 10259347,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 11500,
+     "young": 10246888,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 4875,
+     "median_ns": 2000,
+     "p95_ns": 2375,
+     "max_ns": 24833
+    },
+    "young_pauses": {
+     "count": 4875,
+     "median_ns": 2000,
+     "p95_ns": 2375,
+     "p99_ns": 5459,
+     "max_ns": 24833
+    },
+    "peak_committed_bytes": 6029312,
+    "peak_used_bytes": 3758680,
+    "peak_nursery_bytes": 2097152,
+    "pretenured_objects": 0,
+    "live_bytes": 7520,
+    "bytes_per_object": 278.51851851851853,
+    "forced_gc_ns": 57791,
+    "forced_mark_ns": 1417,
+    "mark_bytes_per_s": 5306986591.390262,
+    "mark_objects_per_s": 19054340.155257586,
+    "young": null
+   },
+   "gc-parallel": {
+    "runs": 5,
+    "replay": {
+     "recording": "bindings-gc-mini-tree-wasm.kungc",
+     "recorded_heap": "standalone",
+     "recorded_size_bytes": 6552007752,
+     "replayed_size_bytes": 6720008288,
+     "larger_than_classes": 2,
+     "skipped": {
+      "weak_writes": 0,
+      "weak_roots": 1,
+      "js_writes": 0,
+      "unknown_writes": 0,
+      "writes_outside": 0,
+      "unknown_roots": 0,
+      "unbalanced_roots": 0,
+      "slots_past_class": 0
+     },
+     "window_max": 14,
+     "window_mean": 11.456521739130435,
+     "recorded_gcs": {
+      "major": 42,
+      "marking": 21
+     }
+    },
+    "turns": 46,
+    "nodes_allocated": 21000036,
+    "live_nodes": 27,
+    "run_ns": 6054667333,
+    "idle_ns": 0,
+    "gc_ns": 10607109,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 11416,
+     "young": 10595151,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 4875,
+     "median_ns": 2042,
+     "p95_ns": 2459,
+     "max_ns": 31042
+    },
+    "young_pauses": {
+     "count": 4875,
+     "median_ns": 2042,
+     "p95_ns": 2459,
+     "p99_ns": 5834,
+     "max_ns": 31042
+    },
+    "peak_committed_bytes": 6029312,
+    "peak_used_bytes": 3758680,
+    "peak_nursery_bytes": 2097152,
+    "pretenured_objects": 0,
+    "live_bytes": 7520,
+    "bytes_per_object": 278.51851851851853,
+    "forced_gc_ns": 57417,
+    "forced_mark_ns": 1375,
+    "mark_bytes_per_s": 5469090909.090909,
+    "mark_objects_per_s": 19636363.636363637,
+    "young": null
+   }
+  },
+  "replay:bindings-gc-tree-wasm.kungc": {
+   "standalone": {
+    "runs": 5,
+    "replay": {
+     "recording": "bindings-gc-tree-wasm.kungc",
+     "recorded_heap": "standalone",
+     "recorded_size_bytes": 6552014304,
+     "replayed_size_bytes": 6720015008,
+     "larger_than_classes": 2,
+     "skipped": {
+      "weak_writes": 0,
+      "weak_roots": 1,
+      "js_writes": 0,
+      "unknown_writes": 0,
+      "writes_outside": 0,
+      "unknown_roots": 0,
+      "unbalanced_roots": 0,
+      "slots_past_class": 0
+     },
+     "window_max": 15,
+     "window_mean": 11.456521739130435,
+     "recorded_gcs": {
+      "major": 42,
+      "marking": 21
+     }
+    },
+    "turns": 46,
+    "nodes_allocated": 21000057,
+    "live_nodes": 27,
+    "run_ns": 9073113792,
+    "idle_ns": 0,
+    "gc_ns": 1892972082,
+    "gc_by_kind_ns": {
+     "marking": 727298724,
+     "atomic": 290671337,
+     "young": 0,
+     "sweeping": 874307904,
+     "other": 0
+    },
+    "background_gc_ns": 675387542,
+    "pauses": {
+     "count": 17255,
+     "median_ns": 20916,
+     "p95_ns": 150791,
+     "max_ns": 60180250
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 716570624,
+    "peak_used_bytes": 704195544,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 7424,
+    "bytes_per_object": 274.962962962963,
+    "forced_gc_ns": 31500,
+    "forced_mark_ns": 10167,
+    "mark_bytes_per_s": 730205567.0305892,
+    "mark_objects_per_s": 2655650.6344054295,
+    "young": null
+   },
+   "gc": {
+    "runs": 5,
+    "replay": {
+     "recording": "bindings-gc-tree-wasm.kungc",
+     "recorded_heap": "standalone",
+     "recorded_size_bytes": 6552014304,
+     "replayed_size_bytes": 6720015008,
+     "larger_than_classes": 2,
+     "skipped": {
+      "weak_writes": 0,
+      "weak_roots": 1,
+      "js_writes": 0,
+      "unknown_writes": 0,
+      "writes_outside": 0,
+      "unknown_roots": 0,
+      "unbalanced_roots": 0,
+      "slots_past_class": 0
+     },
+     "window_max": 15,
+     "window_mean": 11.456521739130435,
+     "recorded_gcs": {
+      "major": 42,
+      "marking": 21
+     }
+    },
+    "turns": 46,
+    "nodes_allocated": 21000057,
+    "live_nodes": 27,
+    "run_ns": 9510773500,
+    "idle_ns": 0,
+    "gc_ns": 962599703,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 955675038,
+     "young": 6799835,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 50,
+     "median_ns": 19546375,
+     "p95_ns": 40262375,
+     "max_ns": 47183167
+    },
+    "young_pauses": {
+     "count": 9,
+     "median_ns": 664542,
+     "p95_ns": 1949750,
+     "p99_ns": 1976666,
+     "max_ns": 1976666
+    },
+    "peak_committed_bytes": 695468032,
+    "peak_used_bytes": 368008488,
+    "peak_nursery_bytes": 16777216,
+    "pretenured_objects": 20873978,
+    "live_bytes": 7520,
+    "bytes_per_object": 278.51851851851853,
+    "forced_gc_ns": 5442250,
+    "forced_mark_ns": 4834,
+    "mark_bytes_per_s": 1555647496.8969798,
+    "mark_objects_per_s": 5585436.491518412,
+    "young": null
+   },
+   "gc-parallel": {
+    "runs": 5,
+    "replay": {
+     "recording": "bindings-gc-tree-wasm.kungc",
+     "recorded_heap": "standalone",
+     "recorded_size_bytes": 6552014304,
+     "replayed_size_bytes": 6720015008,
+     "larger_than_classes": 2,
+     "skipped": {
+      "weak_writes": 0,
+      "weak_roots": 1,
+      "js_writes": 0,
+      "unknown_writes": 0,
+      "writes_outside": 0,
+      "unknown_roots": 0,
+      "unbalanced_roots": 0,
+      "slots_past_class": 0
+     },
+     "window_max": 15,
+     "window_mean": 11.456521739130435,
+     "recorded_gcs": {
+      "major": 42,
+      "marking": 21
+     }
+    },
+    "turns": 46,
+    "nodes_allocated": 21000057,
+    "live_nodes": 27,
+    "run_ns": 9475802333,
+    "idle_ns": 0,
+    "gc_ns": 957715331,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 950947582,
+     "young": 6797375,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 50,
+     "median_ns": 19847209,
+     "p95_ns": 40409458,
+     "max_ns": 46419542
+    },
+    "young_pauses": {
+     "count": 9,
+     "median_ns": 659834,
+     "p95_ns": 1936333,
+     "p99_ns": 2003333,
+     "max_ns": 2003333
+    },
+    "peak_committed_bytes": 695468032,
+    "peak_used_bytes": 368008488,
+    "peak_nursery_bytes": 16777216,
+    "pretenured_objects": 20873978,
+    "live_bytes": 7520,
+    "bytes_per_object": 278.51851851851853,
+    "forced_gc_ns": 5161333,
+    "forced_mark_ns": 4750,
+    "mark_bytes_per_s": 1583157894.736842,
+    "mark_objects_per_s": 5684210.526315789,
+    "young": null
+   }
+  },
+  "replay:bindings-insert-before-wasm.kungc": {
+   "standalone": {
+    "runs": 5,
+    "replay": {
+     "recording": "bindings-insert-before-wasm.kungc",
+     "recorded_heap": "standalone",
+     "recorded_size_bytes": 14928,
+     "replayed_size_bytes": 15648,
+     "larger_than_classes": 2,
+     "skipped": {
+      "weak_writes": 0,
+      "weak_roots": 1,
+      "js_writes": 0,
+      "unknown_writes": 0,
+      "writes_outside": 0,
+      "unknown_roots": 0,
+      "unbalanced_roots": 0,
+      "slots_past_class": 0
+     },
+     "window_max": 15,
+     "window_mean": 13.39080459770115,
+     "recorded_gcs": {}
+    },
+    "turns": 87,
+    "nodes_allocated": 59,
+    "live_nodes": 1,
+    "run_ns": 3802214500,
+    "idle_ns": 0,
+    "gc_ns": 0,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 0,
+     "young": 0,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 0,
+     "median_ns": 0,
+     "p95_ns": 0,
+     "max_ns": 0
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 393216,
+    "peak_used_bytes": 257936,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 64,
+    "bytes_per_object": 64.0,
+    "forced_gc_ns": 7250,
+    "forced_mark_ns": 2750,
+    "mark_bytes_per_s": 23272727.272727273,
+    "mark_objects_per_s": 363636.36363636365,
+    "young": null
+   },
+   "gc": {
+    "runs": 5,
+    "replay": {
+     "recording": "bindings-insert-before-wasm.kungc",
+     "recorded_heap": "standalone",
+     "recorded_size_bytes": 14928,
+     "replayed_size_bytes": 15648,
+     "larger_than_classes": 2,
+     "skipped": {
+      "weak_writes": 0,
+      "weak_roots": 1,
+      "js_writes": 0,
+      "unknown_writes": 0,
+      "writes_outside": 0,
+      "unknown_roots": 0,
+      "unbalanced_roots": 0,
+      "slots_past_class": 0
+     },
+     "window_max": 15,
+     "window_mean": 13.39080459770115,
+     "recorded_gcs": {}
+    },
+    "turns": 87,
+    "nodes_allocated": 59,
+    "live_nodes": 1,
+    "run_ns": 5389276875,
+    "idle_ns": 0,
+    "gc_ns": 0,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 0,
+     "young": 0,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 0,
+     "median_ns": 0,
+     "p95_ns": 0,
+     "max_ns": 0
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 262144,
+    "peak_used_bytes": 16120,
+    "peak_nursery_bytes": 1048576,
+    "pretenured_objects": 0,
+    "live_bytes": 48,
+    "bytes_per_object": 48.0,
+    "forced_gc_ns": 6542,
+    "forced_mark_ns": 416,
+    "mark_bytes_per_s": 115384615.38461538,
+    "mark_objects_per_s": 2403846.1538461535,
+    "young": null
+   },
+   "gc-parallel": {
+    "runs": 5,
+    "replay": {
+     "recording": "bindings-insert-before-wasm.kungc",
+     "recorded_heap": "standalone",
+     "recorded_size_bytes": 14928,
+     "replayed_size_bytes": 15648,
+     "larger_than_classes": 2,
+     "skipped": {
+      "weak_writes": 0,
+      "weak_roots": 1,
+      "js_writes": 0,
+      "unknown_writes": 0,
+      "writes_outside": 0,
+      "unknown_roots": 0,
+      "unbalanced_roots": 0,
+      "slots_past_class": 0
+     },
+     "window_max": 15,
+     "window_mean": 13.39080459770115,
+     "recorded_gcs": {}
+    },
+    "turns": 87,
+    "nodes_allocated": 59,
+    "live_nodes": 1,
+    "run_ns": 5371937958,
+    "idle_ns": 0,
+    "gc_ns": 0,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 0,
+     "young": 0,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 0,
+     "median_ns": 0,
+     "p95_ns": 0,
+     "max_ns": 0
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 262144,
+    "peak_used_bytes": 16120,
+    "peak_nursery_bytes": 1048576,
+    "pretenured_objects": 0,
+    "live_bytes": 48,
+    "bytes_per_object": 48.0,
+    "forced_gc_ns": 7000,
+    "forced_mark_ns": 416,
+    "mark_bytes_per_s": 115384615.38461538,
+    "mark_objects_per_s": 2403846.1538461535,
+    "young": null
+   }
+  },
+  "replay:parser-innerHTML-setter-wasm.kungc": {
+   "standalone": {
+    "runs": 5,
+    "replay": {
+     "recording": "parser-innerHTML-setter-wasm.kungc",
+     "recorded_heap": "standalone",
+     "recorded_size_bytes": 7246397448,
+     "replayed_size_bytes": 7432202848,
+     "larger_than_classes": 2,
+     "skipped": {
+      "weak_writes": 0,
+      "weak_roots": 1,
+      "js_writes": 0,
+      "unknown_writes": 0,
+      "writes_outside": 0,
+      "unknown_roots": 0,
+      "unbalanced_roots": 0,
+      "slots_past_class": 0
+     },
+     "window_max": 25,
+     "window_mean": 12.511111111111111,
+     "recorded_gcs": {
+      "major": 42,
+      "marking": 21
+     }
+    },
+    "turns": 45,
+    "nodes_allocated": 23225644,
+    "live_nodes": 28,
+    "run_ns": 4239008792,
+    "idle_ns": 0,
+    "gc_ns": 1263436617,
+    "gc_by_kind_ns": {
+     "marking": 217613913,
+     "atomic": 476154958,
+     "young": 0,
+     "sweeping": 569570517,
+     "other": 0
+    },
+    "background_gc_ns": 1227198915,
+    "pauses": {
+     "count": 32689,
+     "median_ns": 5458,
+     "p95_ns": 21083,
+     "max_ns": 47043417
+    },
+    "young_pauses": null,
+    "peak_committed_bytes": 786694144,
+    "peak_used_bytes": 773120664,
+    "peak_nursery_bytes": null,
+    "pretenured_objects": null,
+    "live_bytes": 7776,
+    "bytes_per_object": 277.7142857142857,
+    "forced_gc_ns": 26834,
+    "forced_mark_ns": 9210,
+    "mark_bytes_per_s": 844299674.2671009,
+    "mark_objects_per_s": 3040173.7242128123,
+    "young": null
+   },
+   "gc": {
+    "runs": 5,
+    "replay": {
+     "recording": "parser-innerHTML-setter-wasm.kungc",
+     "recorded_heap": "standalone",
+     "recorded_size_bytes": 7246397448,
+     "replayed_size_bytes": 7432202848,
+     "larger_than_classes": 2,
+     "skipped": {
+      "weak_writes": 0,
+      "weak_roots": 1,
+      "js_writes": 0,
+      "unknown_writes": 0,
+      "writes_outside": 0,
+      "unknown_roots": 0,
+      "unbalanced_roots": 0,
+      "slots_past_class": 0
+     },
+     "window_max": 25,
+     "window_mean": 12.511111111111111,
+     "recorded_gcs": {
+      "major": 42,
+      "marking": 21
+     }
+    },
+    "turns": 45,
+    "nodes_allocated": 23225644,
+    "live_nodes": 28,
+    "run_ns": 2571747125,
+    "idle_ns": 0,
+    "gc_ns": 99816958,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 20954995,
+     "young": 78874967,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 840,
+     "median_ns": 117708,
+     "p95_ns": 264041,
+     "max_ns": 2226459
+    },
+    "young_pauses": {
+     "count": 783,
+     "median_ns": 116917,
+     "p95_ns": 125792,
+     "p99_ns": 135500,
+     "max_ns": 2226459
+    },
+    "peak_committed_bytes": 21757952,
+    "peak_used_bytes": 8665016,
+    "peak_nursery_bytes": 16777216,
+    "pretenured_objects": 0,
+    "live_bytes": 7888,
+    "bytes_per_object": 281.7142857142857,
+    "forced_gc_ns": 123042,
+    "forced_mark_ns": 1125,
+    "mark_bytes_per_s": 7011555555.555555,
+    "mark_objects_per_s": 24888888.888888888,
+    "young": null
+   },
+   "gc-parallel": {
+    "runs": 5,
+    "replay": {
+     "recording": "parser-innerHTML-setter-wasm.kungc",
+     "recorded_heap": "standalone",
+     "recorded_size_bytes": 7246397448,
+     "replayed_size_bytes": 7432202848,
+     "larger_than_classes": 2,
+     "skipped": {
+      "weak_writes": 0,
+      "weak_roots": 1,
+      "js_writes": 0,
+      "unknown_writes": 0,
+      "writes_outside": 0,
+      "unknown_roots": 0,
+      "unbalanced_roots": 0,
+      "slots_past_class": 0
+     },
+     "window_max": 25,
+     "window_mean": 12.511111111111111,
+     "recorded_gcs": {
+      "major": 42,
+      "marking": 21
+     }
+    },
+    "turns": 45,
+    "nodes_allocated": 23225644,
+    "live_nodes": 28,
+    "run_ns": 2547871542,
+    "idle_ns": 0,
+    "gc_ns": 85636327,
+    "gc_by_kind_ns": {
+     "marking": 0,
+     "atomic": 17373337,
+     "young": 68284374,
+     "sweeping": 0,
+     "other": 0
+    },
+    "background_gc_ns": 0,
+    "pauses": {
+     "count": 844,
+     "median_ns": 112708,
+     "p95_ns": 171208,
+     "max_ns": 2161084
+    },
+    "young_pauses": {
+     "count": 793,
+     "median_ns": 109375,
+     "p95_ns": 127000,
+     "p99_ns": 136500,
+     "max_ns": 2161084
+    },
+    "peak_committed_bytes": 21757952,
+    "peak_used_bytes": 16347880,
+    "peak_nursery_bytes": 16777216,
+    "pretenured_objects": 0,
+    "live_bytes": 7888,
+    "bytes_per_object": 281.7142857142857,
+    "forced_gc_ns": 107416,
+    "forced_mark_ns": 1208,
+    "mark_bytes_per_s": 6529801324.503312,
+    "mark_objects_per_s": 23178807.947019868,
+    "young": null
+   }
+  }
+ }
+}

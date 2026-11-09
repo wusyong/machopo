@@ -1,0 +1,153 @@
+# Stage 4h-4b: links and the base URL on the new DOM: the base URL kept on the document,
+# `HTMLHyperlinkElementUtils`, `<base>`, following hyperlinks, `document.title`.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it -- links::"]
+timeout = 1500
+
+[[mutant]]
+name = "dom: a <base> connected leaves the base URL"
+file = "crates/dom_next/src/frame.rs"
+from = '''            self.link_connected(node);
+            self.base_changed(node);'''
+to = '''            self.link_connected(node);'''
+
+[[mutant]]
+name = "dom: a <base> removed leaves the base URL"
+file = "crates/dom_next/src/frame.rs"
+from = '''        } else {
+            self.base_changed(node);
+        }'''
+to = '''        }'''
+
+[[mutant]]
+name = "dom: a <base>'s href changed leaves the base URL"
+file = "crates/dom_next/src/frame.rs"
+from = '''            if name == QualifiedName::plain(names::local::HREF) {
+                self.base_changed(element);
+            }'''
+to = '''            let _ = names::local::HREF;'''
+
+[[mutant]]
+name = "dom: data: base URLs kept"
+file = "crates/dom_next/src/base.rs"
+from = '''        .filter(|url| !matches!(url.scheme(), "data" | "javascript"))'''
+to = '''        .filter(|url| !matches!(url.scheme(), "javascript"))'''
+
+[[mutant]]
+name = "dom: the last <base> counts"
+file = "crates/dom_next/src/base.rs"
+from = '''                return Some(href.to_str().into_owned());
+            }
+            node = self.following_within(at, document);
+        }
+        None'''
+to = '''                let _ = href;
+            }
+            node = self.following_within(at, document);
+        }
+        None'''
+
+[[mutant]]
+name = "api: <base>.href against the base URL"
+file = "crates/dom_api_next/src/hyperlink.rs"
+from = '''        .fallback_base_url(cx.document_of(this))'''
+to = '''        .document_base_url(cx.document_of(this))'''
+
+[[mutant]]
+name = "api: a link's setters write nothing back"
+file = "crates/dom_api_next/src/hyperlink.rs"
+from = '''    if change(&mut url) {
+        crate::reflect::set_string::<{ names::local::HREF }>(cx, this, url.as_str())?;
+    }'''
+to = '''    let _ = change(&mut url);'''
+
+[[mutant]]
+name = "api: an opaque path's host set"
+file = "crates/dom_api_next/src/hyperlink.rs"
+from = '''pub(crate) fn set_host<'gc>(cx: &ApiCx<'_, 'gc>, this: NodeRef<'gc>, value: &str) -> Result<(), ApiError> {
+    set(cx, this, |url| {
+        !url.cannot_be_a_base() && {'''
+to = '''pub(crate) fn set_host<'gc>(cx: &ApiCx<'_, 'gc>, this: NodeRef<'gc>, value: &str) -> Result<(), ApiError> {
+    set(cx, this, |url| {
+        true && {'''
+
+[[mutant]]
+name = "api: an unparsed href read as empty"
+file = "crates/dom_api_next/src/hyperlink.rs"
+from = '''        None => crate::element::reflected(cx, this, names::local::HREF),'''
+to = '''        None => DomStr::Owned(DomString::new("")),'''
+
+[[mutant]]
+name = "api: relList supports nothing for links"
+file = "crates/dom_api_next/src/token_list.rs"
+from = '''        Some(&["noopener", "noreferrer", "opener"])'''
+to = '''        Some(&[])'''
+
+[[mutant]]
+name = "api: a link has no activation behavior"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''        || crate::hyperlink::is_hyperlink(cx, node)
+}'''
+to = '''}'''
+
+[[mutant]]
+name = "api: a disconnected link followed"
+file = "crates/dom_api_next/src/hyperlink.rs"
+from = '''        if !cx.is_connected(element) || !crate::history::is_fully_active(cx, document) {'''
+to = '''        if !crate::history::is_fully_active(cx, document) {'''
+
+[[mutant]]
+name = "api: _top is the frame itself"
+file = "crates/dom_api_next/src/hyperlink.rs"
+from = '''    if target.eq_ignore_ascii_case("_top") {
+        return Some(top(document));'''
+to = '''    if target.eq_ignore_ascii_case("_top") {
+        let _ = top;
+        return Some(document);'''
+
+[[mutant]]
+name = "api: a name finds no frame"
+file = "crates/dom_api_next/src/hyperlink.rs"
+from = '''            if named(at) {
+                found = Some(at);
+                break;
+            }'''
+to = '''            let _ = named(at);'''
+
+[[mutant]]
+name = "api: script's clicks open tabs"
+file = "crates/dom_api_next/src/hyperlink.rs"
+from = '''            (None, None) if trusted => cx.request_navigation('''
+to = '''            (None, None) if trusted || true => cx.request_navigation('''
+
+[[mutant]]
+name = "api: no <base> target"
+file = "crates/dom_api_next/src/hyperlink.rs"
+from = '''            .or_else(|| base_target(cx, document))'''
+to = '''            .or_else(|| base_target(cx, document).filter(|_| false))'''
+
+[[mutant]]
+name = "api: the title not collapsed"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    text.split_ascii_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// `title`.'''
+to = '''    text
+}
+
+/// `title`.'''
+
+[[mutant]]
+name = "api: no SVG title"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    let title = if let Some(svg) = svg_root(cx, this) {'''
+to = '''    let title = if let Some(svg) = svg_root(cx, this).filter(|_| false) {'''
+
+[[mutant]]
+name = "api: no title made in the head"
+file = "crates/dom_api_next/src/document.rs"
+from = '''                let title = cx.create_element(this, QualName::html("title"));
+                cx.append_child(head, title).map_err(ApiError::from)?;
+                title'''
+to = '''                let _ = head;
+                return Ok(());'''

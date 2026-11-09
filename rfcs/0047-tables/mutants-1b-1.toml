@@ -1,0 +1,366 @@
+# Mutation test of stage 1b-1: the fixup, the column sizing, the rows, the
+# cells' alignment, captions and baselines (2026-10-15):
+# python3 scripts/test.py mutate rfcs/0047-tables/mutants-1b-1.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "generated::"]
+timeout = 900
+
+# --- the fixup ---
+
+[[mutant]]
+name = "white space in a table makes a cell"
+file = "crates/layout/src/table.rs"
+from = '''        if run.iter().all(is_space_text) {
+            run.clear();
+            return;
+        }'''
+to = '''        if false {
+            run.clear();
+            return;
+        }'''
+
+[[mutant]]
+name = "an out-of-flow box among cells goes into a cell"
+file = "crates/layout/src/table.rs"
+from = '''                Child::Inline(InlineItem::OutOfFlow(id, _)) if run.iter().all(is_space_text) => {'''
+to = '''                Child::Inline(InlineItem::OutOfFlow(id, _)) if false => {'''
+
+[[mutant]]
+name = "a part in an inline element is the row's"
+file = "crates/layout/src/table.rs"
+from = '''                        Child::Inline(InlineItem::Open(..)) => depth += 1,'''
+to = '''                        Child::Inline(InlineItem::Open(..)) => {}'''
+
+[[mutant]]
+name = "a table's anonymous child is a row"
+file = "crates/layout/src/table.rs"
+from = '''            Some(TablePart::Table) => TableDisplay::RowGroup,'''
+to = '''            Some(TablePart::Table) => TableDisplay::Row,'''
+
+[[mutant]]
+name = "white space between misparented cells splits them"
+file = "crates/layout/src/table.rs"
+from = '''            if misparented(self, &child) || (space && !group.is_empty()) {'''
+to = '''            if misparented(self, &child) || (space && group.is_empty()) {'''
+
+[[mutant]]
+name = "cells in an inline element make a block table"
+file = "crates/layout/src/table.rs"
+from = '''            Some(style) => (style.clone(), Display::InlineTable),'''
+to = '''            Some(style) => (style.clone(), Display::Table(TableDisplay::Table)),'''
+
+[[mutant]]
+name = "the white space after misparented parts is dropped"
+file = "crates/layout/src/table.rs"
+from = '''        out.extend(after);'''
+to = '''        drop(after);'''
+
+[[mutant]]
+name = "a rowspan of 0 is 1"
+file = "crates/layout/src/table.rs"
+from = '''                                    0 => left,'''
+to = '''                                    0 => 1,'''
+
+[[mutant]]
+name = "no header group first"
+file = "crates/layout/src/table.rs"
+from = '''            sections.insert(0, header);'''
+to = '''            sections.push(header);'''
+
+[[mutant]]
+name = "a cell spanning rows doesn't take its slots"
+file = "crates/layout/src/table.rs"
+from = '''                                    *t = (*t).max(rowspan);'''
+to = '''                                    *t = (*t).max(1);'''
+
+[[mutant]]
+name = "blockified table parts stay table parts"
+file = "crates/computed_style/src/lib.rs"
+from = '''            Self::Table(_) => Self::Block,'''
+to = '''            Self::Table(_) => self,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "computed::table_displays"]
+
+# --- the columns ---
+
+[[mutant]]
+name = "no min-width on a cell"
+file = "crates/layout/src/table.rs"
+from = '''        let mut min = min_content.max(min_width.unwrap_or(0.0));'''
+to = '''        let mut min = min_content;'''
+
+[[mutant]]
+name = "no max-width on a cell"
+file = "crates/layout/src/table.rs"
+from = '''            max = max.min(max_width);
+            min = min.min(max_width);'''
+to = '''            max = max.min(max_width + 1000.0);
+            min = min.min(max_width + 1000.0);'''
+
+[[mutant]]
+name = "a cell's width isn't the column's maximum"
+file = "crates/layout/src/table.rs"
+from = '''        let mut max = width.unwrap_or(max_content);'''
+to = '''        let mut max = max_content;'''
+
+[[mutant]]
+name = "a fixed column grows with content"
+file = "crates/layout/src/table.rs"
+from = '''                (true, false) => {}'''
+to = '''                (true, false) => self.max = self.max.max(cell.max),'''
+
+[[mutant]]
+name = "percentages aren't held to 100"
+file = "crates/layout/src/table.rs"
+from = '''                let percent = percent.min(100.0 - total).max(0.0);'''
+to = '''                let percent = percent.max(0.0);'''
+
+[[mutant]]
+name = "a spanning cell's width isn't spread"
+file = "crates/layout/src/table.rs"
+from = '''        column.min = column.min.max(width);
+    }'''
+to = '''        column.min = column.min.max(0.0 * width);
+    }'''
+
+[[mutant]]
+name = "the percentage guess is the minimum's"
+file = "crates/layout/src/table.rs"
+from = '''                Some(PERCENT) => {
+                    if percent {'''
+to = '''                Some(PERCENT) => {
+                    if false {'''
+
+[[mutant]]
+name = "the fixed guess gives fixed columns their minimum"
+file = "crates/layout/src/table.rs"
+from = '''                    } else if column.constrained {
+                        let room = target - guesses[PERCENT];'''
+to = '''                    } else if false {
+                        let room = target - guesses[PERCENT];'''
+
+[[mutant]]
+name = "auto columns grow evenly"
+file = "crates/layout/src/table.rs"
+from = '''                            + share(room, column.max - column.min, increases[MAX], auto_count)'''
+to = '''                            + share(room, 1.0, auto_count as f32, auto_count)'''
+
+[[mutant]]
+name = "past the maxima, auto columns don't grow"
+file = "crates/layout/src/table.rs"
+from = '''                            column.max + share(room, column.max, auto_max, auto_count)'''
+to = '''                            column.max'''
+
+[[mutant]]
+name = "past the maxima, fixed columns don't grow"
+file = "crates/layout/src/table.rs"
+from = '''                            column.max + share(room, column.max, fixed_max, fixed_count)'''
+to = '''                            column.max'''
+
+[[mutant]]
+name = "past the maxima, percentage columns don't grow"
+file = "crates/layout/src/table.rs"
+from = '''                        column.percent_width(target)
+                            + share(
+                                room,
+                                column.percent.unwrap_or(0.0),
+                                total_percent,
+                                percent_count,
+                            )'''
+to = '''                        column.percent_width(target)'''
+
+[[mutant]]
+name = "an auto table takes no width for its percentages"
+file = "crates/layout/src/table.rs"
+from = '''        max = percent_estimate.max(others).min(LIMIT);'''
+to = '''        max += 0.0 * percent_estimate.max(others).min(LIMIT);'''
+
+[[mutant]]
+name = "a merged column has spacing"
+file = "crates/layout/src/table.rs"
+from = '''            if column.mergeable || (shrink_collapsed && column.collapsed) {
+                return (end, 0.0);
+            }'''
+to = '''            if shrink_collapsed && column.collapsed {
+                return (end, 0.0);
+            }'''
+
+[[mutant]]
+name = "a merged column counts for the spacing"
+file = "crates/layout/src/table.rs"
+from = '''        let count = columns.iter().filter(|c| !c.mergeable).count();
+        let spacing_x'''
+to = '''        let count = columns.len();
+        let spacing_x'''
+
+# --- the table's width and height ---
+
+[[mutant]]
+name = "a caption doesn't widen its table"
+file = "crates/layout/src/table.rs"
+from = '''        let table_min = (grid_min + spacing_x + inset_x).max(caption_min);'''
+to = '''        let table_min = grid_min + spacing_x + inset_x;'''
+
+[[mutant]]
+name = "an auto table fills the room"
+file = "crates/layout/src/table.rs"
+from = '''(room + inset_x).max(0.0).min(table_max)'''
+to = '''(room + inset_x).max(0.0)'''
+
+[[mutant]]
+name = "a table is narrower than its content"
+file = "crates/layout/src/table.rs"
+from = '''                min_width.map_or(width, |min| width.max(min)).max(table_min)'''
+to = '''                min_width.map_or(width, |min| width.max(min))'''
+
+[[mutant]]
+name = "no min-width on a table"
+file = "crates/layout/src/table.rs"
+from = '''                min_width.map_or(width, |min| width.max(min)).max(table_min)'''
+to = '''                width.max(table_min)'''
+
+[[mutant]]
+name = "a table's height is its content's"
+file = "crates/layout/src/table.rs"
+from = '''                        y += css_height
+                            .unwrap_or(0.0)'''
+to = '''                        y += 0.0f32'''
+
+[[mutant]]
+name = "an empty table's margins collapse through it"
+file = "crates/layout/src/table.rs"
+from = '''        output.margins_can_collapse_through = false;'''
+to = '''        let _ = 0;'''
+
+[[mutant]]
+name = "a table isn't a table to taffy"
+file = "crates/layout/src/lib.rs"
+from = '''            taffy_style.item_is_table = true;'''
+to = '''            taffy_style.item_is_table = false;'''
+
+# --- the rows and cells ---
+
+[[mutant]]
+name = "no border spacing above the rows"
+file = "crates/layout/src/table.rs"
+from = '''        let mut y = if shown > 0 { spacing } else { 0.0 };'''
+to = '''        let mut y = 0.0 * if shown > 0 { spacing } else { 0.0 };'''
+
+[[mutant]]
+name = "a row's own height doesn't count"
+file = "crates/layout/src/table.rs"
+from = '''            let own = match row_style.height {
+                Size::LengthPercentage(v) => v.px(),'''
+to = '''            let own = match row_style.height {
+                Size::LengthPercentage(_) => None::<f32>,'''
+
+[[mutant]]
+name = "a cell's height doesn't count"
+file = "crates/layout/src/table.rs"
+from = '''                let needs = laid.content_height.max(laid.css_height);
+                let aligned'''
+to = '''                let needs = laid.content_height;
+                let aligned'''
+
+[[mutant]]
+name = "no room below the baseline"
+file = "crates/layout/src/table.rs"
+from = '''                height = height.max(ascent + descent);'''
+to = '''                height = height.max(ascent);'''
+
+[[mutant]]
+name = "a row without baseline-aligned cells has no baseline"
+file = "crates/layout/src/table.rs"
+from = '''.map(|c| c.laid.baseline));'''
+to = '''.and(None));'''
+
+[[mutant]]
+name = "a cell spanning rows gets no room"
+file = "crates/layout/src/table.rs"
+from = '''                &last,
+                needs - have,'''
+to = '''                &last,
+                0.0 * (needs - have),'''
+
+[[mutant]]
+name = "an empty cell's baseline is its bottom"
+file = "crates/layout/src/table.rs"
+from = '''line.unwrap_or(content_height - p.bottom - b.bottom);'''
+to = '''line.unwrap_or(content_height);'''
+
+[[mutant]]
+name = "middle is top"
+file = "crates/layout/src/table.rs"
+from = '''            VerticalAlign::Middle => (height - laid.content_height) / 2.0,'''
+to = '''            VerticalAlign::Middle => 0.0,'''
+
+[[mutant]]
+name = "bottom is top"
+file = "crates/layout/src/table.rs"
+from = '''            VerticalAlign::Bottom => height - laid.content_height,'''
+to = '''            VerticalAlign::Bottom => 0.0,'''
+
+[[mutant]]
+name = "baseline is top"
+file = "crates/layout/src/table.rs"
+from = '''            _ => baseline.map_or(0.0, |b| b - laid.baseline),'''
+to = '''            _ => 0.0,'''
+
+[[mutant]]
+name = "a cell's block content isn't moved"
+file = "crates/layout/src/table.rs"
+from = '''                b.layout.location.y += delta;'''
+to = '''                b.layout.location.y += 0.0 * delta;'''
+
+[[mutant]]
+name = "a cell's lines aren't moved"
+file = "crates/layout/src/lib.rs"
+from = '''            border.top + padding.top + shift,
+        ));'''
+to = '''            border.top + padding.top,
+        ));'''
+
+[[mutant]]
+name = "out-of-flow boxes in a cell don't move with its content"
+file = "crates/layout/src/table.rs"
+from = '''            y: location.y + if in_flow { shift } else { 0.0 },'''
+to = '''            y: location.y,'''
+
+[[mutant]]
+name = "a row doesn't lay out the out-of-flow boxes in it"
+file = "crates/layout/src/table.rs"
+from = '''        compute_oof_layout(self, index.into(), &mut output);
+        output.oof_candidates'''
+to = '''        output.oof_candidates'''
+
+[[mutant]]
+name = "a row's out-of-flow children aren't passed up"
+file = "crates/layout/src/table.rs"
+from = '''                candidates.push(self.static_candidate(index, child, order, PointF::new(0.0, 0.0)));'''
+to = '''                let _ = order;'''
+
+[[mutant]]
+name = "a table has no baseline"
+file = "crates/layout/src/table.rs"
+from = '''        output.baselines.first = baseline;'''
+to = '''        output.baselines.first = None;'''
+
+[[mutant]]
+name = "an inline-table is aligned by its last line"
+file = "crates/layout/src/lib.rs"
+from = '''            || table::TablePart::of(style.display) == Some(table::TablePart::Table)
+        {'''
+to = '''            || false
+        {'''
+
+[[mutant]]
+name = "a table in an inline-block has no baseline"
+file = "crates/layout/src/lib.rs"
+from = '''            return b.table_baseline;'''
+to = '''            return None;'''
+
+[[mutant]]
+name = "the captions below go above"
+file = "crates/layout/src/table.rs"
+from = '''                    if side == CaptionSide::Bottom {
+                        let origin'''
+to = '''                    if side == CaptionSide::Top {
+                        let origin'''

@@ -1,0 +1,30 @@
+# Mutation test of `focus()` on the focused element doing nothing
+# (2026-10-13), as Blink's `Element::Focus`:
+# python3 scripts/test.py mutate rfcs/0012-speedometer/mutants-focus.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "focus::moving_the_focus"]
+timeout = 900
+
+[[mutant]]
+name = "the focused element is focused again"
+file = "crates/dom_api/src/focus.rs"
+from = '''    if focused_element_of(cx, &document).as_ref() == Some(this) {
+        return Ok(());
+    }
+    if !is_focusable_area(cx, this) {'''
+to = '''    if !is_focusable_area(cx, this) {'''
+
+[[mutant]]
+name = "the layout is brought up to date first"
+file = "crates/dom_api/src/focus.rs"
+from = '''    if focused_element_of(cx, &document).as_ref() == Some(this) {
+        return Ok(());
+    }
+    if !is_focusable_area(cx, this) {
+        return Ok(());
+    }'''
+to = '''    if !is_focusable_area(cx, this) {
+        return Ok(());
+    }
+    if focused_element_of(cx, &document).as_ref() == Some(this) {
+        return Ok(());
+    }'''

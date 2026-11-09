@@ -1,0 +1,22 @@
+# about:demo's CSS animation: the square turns by itself, from the page's
+# start, and each turn's animationiteration reaches the note; "Pause the
+# spinner" stops it where it is (it holds still for 300 ms), and clicked
+# again it turns on. "Reverse the spinner" turns it the other way (its
+# CSSAnimation from getAnimations(), reverse(), the note once ready
+# resolves), and back. The screenshots show the square turned some way,
+# then paused; whether it turns smoothly is for a person to look at.
+window size=800x1000
+navigate about:demo
+wait-loaded
+scroll-to #spinner
+wait-text #spin-note "Turned 2 times."
+screenshot spinner
+click #spin-pause
+wait-text #spin-hold "Held still while paused."
+screenshot spinner-paused
+click #spin-pause
+wait-text #spin-hold "Turned on after the pause."
+click #spin-reverse
+wait-text #spin-direction "spin turns backwards."
+click #spin-reverse
+wait-text #spin-direction "spin turns forwards."

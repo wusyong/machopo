@@ -1,0 +1,8 @@
+<!DOCTYPE html>
+<title>K3: at 2x, a box at a fractional position snaps to device pixels, not to CSS px</title>
+<link rel="match" href="k3-fractional-edges-ref.html">
+<style>html, body { margin: 0 } div { height: 20px; background-color: green }</style>
+<!-- 10.25 to 30.75 CSS px: 20.5 to 61.5 device px, rounded to 21 and 62,
+     which is 10.5 to 31 CSS px. Snapped to whole CSS px it would be 10 to
+     31, a device pixel wider on the left. -->
+<div style="margin-left: 10.25px; width: 20.5px"></div>

@@ -1,0 +1,20 @@
+# Step 1a's mutations of the Lua binding's generator: each rebuilds the
+# guests (`ci.py guests`, with `WIT_BINDGEN` set as it needs), then runs
+# W9, which checks a canvas's settings in Lua. Run `ci.py guests` again
+# afterwards: the last rebuild was a mutant's.
+test = ["python3", "-c", "import subprocess, sys; sys.exit(subprocess.call(['python3', 'scripts/ci.py', 'guests']) or subprocess.call(['cargo', 'test', '-q', '-p', 'shell', '--test', 'it', 'wasm_reftests::w9_lua']))"]
+timeout = 1800
+
+[[mutant]]
+name = "a boolean field that defaults to true is false when left out"
+file = "sdk/lua/generator/src/main.rs"
+from = '''            let _ = writeln!(defaults, "    {var}.{member} = true;");'''
+to = '''            let _ = writeln!(defaults, "    {var}.{member} = false;");'''
+
+[[mutant]]
+name = "a returned record's fields in kebab-case"
+file = "sdk/lua/generator/src/main.rs"
+from = '''                    snake(&field.name)
+                );'''
+to = '''                    field.name
+                );'''

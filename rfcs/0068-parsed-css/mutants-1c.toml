@@ -1,0 +1,139 @@
+# 1c: `border-image` and `border` resetting it (`css`, `layout`).
+#   python3 scripts/test.py mutate rfcs/0068-parsed-css/mutants-1c.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "border_image", "css_text_groups"]
+timeout = 900
+
+[[mutant]]
+name = "border leaves border-image"
+file = "crates/css/src/properties.rs"
+from = '''                    vec![color; 4],
+                    image.to_vec(),
+                ]'''
+to = '''                    vec![color; 4],
+                    image[..0].to_vec(),
+                ]'''
+
+[[mutant]]
+name = "border written over another border-image"
+file = "crates/css/src/serialize.rs"
+from = '''                .any(|((value, _), initial)| **value != initial)'''
+to = '''                .any(|((value, _), initial)| **value != initial && false)'''
+
+[[mutant]]
+name = "border-image always all five"
+file = "crates/css/src/border_image.rs"
+from = '''        .all(|((value, _), initial)| *value == initial)'''
+to = '''        .all(|((value, _), initial)| *value == initial && false)'''
+
+[[mutant]]
+name = "no fill after the numbers"
+file = "crates/css/src/border_image.rs"
+from = '''    if !fill {
+        fill = input.try_parse(|i| i.expect_ident_matching("fill")).is_ok();
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "the left side as the top"
+file = "crates/css/src/border_image.rs"
+from = '''    let left = values.get(3).unwrap_or(&right).clone();'''
+to = '''    let left = values.get(3).unwrap_or(&top).clone();'''
+
+[[mutant]]
+name = "a slash with nothing after it"
+file = "crates/css/src/border_image.rs"
+from = '''                } else if values[2].is_none() {
+                    return invalid(input);
+                }'''
+to = '''                }'''
+
+[[mutant]]
+name = "border-image without its longhands"
+file = "crates/css/src/border_image.rs"
+from = '''    if values.iter().all(Option::is_none) {
+        return invalid(input);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a negative percentage slice"
+file = "crates/css/src/border_image.rs"
+from = '''    if percent < 0.0 {
+        return invalid(input);
+    }
+    Ok(percent)'''
+to = '''    Ok(percent)'''
+
+[[mutant]]
+name = "the computed border-image without a source written whole"
+file = "crates/css/src/computed.rs"
+from = '''            return Some(if source.1 == "none" {'''
+to = '''            return Some(if source.1 == "none" && false {'''
+
+[[mutant]]
+name = "the computed border with its border-image"
+file = "crates/css/src/computed.rs"
+from = '''                block.set_property(name.name(), &text, "");
+            }'''
+to = '''                let _ = (name, text);
+            }'''
+
+[[mutant]]
+name = "a border image's url unresolved"
+file = "crates/css/src/properties.rs"
+from = '''            Value::BorderImageSource(SpecifiedImage::Url(url)) if !url.is_resolved() => {
+                url.resolve(base)
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "the width's lengths unresolved"
+file = "crates/css/src/border_image.rs"
+from = '''        SpecifiedBorderImageOutset::Length(v) => BorderImageOutset::Px(v.to_px(cx)),'''
+to = '''        SpecifiedBorderImageOutset::Length(v) => BorderImageOutset::Px(v.to_px(cx) * 0.0),'''
+
+[[mutant]]
+name = "another fill interpolates"
+file = "crates/css/src/interpolate.rs"
+from = '''        if self.fill != other.fill {
+            return None;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a number and a percentage interpolate"
+file = "crates/css/src/interpolate.rs"
+from = '''                (Percent(a), Percent(b)) => Some(Percent(a.animate(b, progress, cx)?)),
+                _ => None,
+            })?,'''
+to = '''                (Percent(a), Percent(b)) => Some(Percent(a.animate(b, progress, cx)?)),
+                (Number(a), Percent(b)) | (Percent(a), Number(b)) => Some(Number(a.animate(b, progress, cx)?)),
+            })?,'''
+
+[[mutant]]
+name = "a negative slice"
+file = "crates/css/src/interpolate.rs"
+from = '''                    NumberOrPercentage::Number(v) | NumberOrPercentage::Percent(v) => {
+                        *v = v.max(0.0)
+                    }'''
+to = '''                    NumberOrPercentage::Number(_) | NumberOrPercentage::Percent(_) => {}'''
+
+[[mutant]]
+name = "a negative width"
+file = "crates/css/src/interpolate.rs"
+from = '''                    BorderImageWidth::LengthPercentage(v) => lp(v),'''
+to = '''                    BorderImageWidth::LengthPercentage(_) => {}'''
+
+[[mutant]]
+name = "a negative outset"
+file = "crates/css/src/interpolate.rs"
+from = '''                    BorderImageOutset::Number(v) | BorderImageOutset::Px(v) => *v = v.max(0.0),'''
+to = '''                    BorderImageOutset::Number(_) | BorderImageOutset::Px(_) => {}'''
+
+[[mutant]]
+name = "a border image laid out"
+file = "crates/layout/src/lib.rs"
+from = '''                    border_image: old.rare.border_image.clone(),
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::"]

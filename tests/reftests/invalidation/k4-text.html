@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>K4: changed text is drawn as it is now</title>
+<link rel="match" href="k4-text-ref.html">
+<style>html, body { margin: 0 } p { margin: 0; font: 20px/1 Ahem }</style>
+<p>XXXX</p>
+<p id="line">XXXXXXXX</p>
+<p>XX</p>
+<script src="after-frames.js"></script>
+<script>afterFrames(() => { document.getElementById("line").textContent = "X X"; });</script>
+</html>

@@ -1,0 +1,19 @@
+# Mutation test of rooting a node without the id-table lookup (stage 3,
+# continued): the fork's `UnsafePtr::from_value` computes the object back
+# from a reference, and a debug build checks it against the id table's on
+# every root made so:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-3c-from-value.toml
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::"]
+timeout = 600
+
+[[mutant]]
+name = "the object is taken to start where its value does"
+file = "../third_party/rusty_v8/src/cppgc.rs"
+from = '''    let address = (value as *const T).expose_provenance() - offset;'''
+to = '''    let address = (value as *const T).expose_provenance() - offset * 0;'''
+
+[[mutant]]
+name = "the object is taken a word before its start"
+file = "../third_party/rusty_v8/src/cppgc.rs"
+from = '''    let address = (value as *const T).expose_provenance() - offset;'''
+to = '''    let address = (value as *const T).expose_provenance() - offset - 8;'''

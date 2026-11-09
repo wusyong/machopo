@@ -1,0 +1,315 @@
+# Stage 1b: gc's side of marking with a JS engine (driven marking, its
+# schedule, wrappers' objects handed over, JS edges, operations without a
+# safepoint), brought over from RFC 0088's branch: its gc mutants that
+# still apply (mutants-1c, 1d, 1f, 1g there), the one the cleanup changed,
+# and a few more. Each test command in a scope of at most 24 GB
+# (docs/testing.md: a mutation that makes a loop can grow a test without end).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--test", "it", "js::"]
+timeout = 60
+
+[[mutant]]
+name = "a driven heap starts its markings itself"
+file = "crates/gc/src/heap.rs"
+from = '''        if self.options.driven {
+            // The engine starts and finishes markings (`Heap::start_marking`);'''
+to = '''        if false {
+            // The engine starts and finishes markings (`Heap::start_marking`);'''
+
+[[mutant]]
+name = "no step without progress"
+file = "crates/gc/src/heap/schedule.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--lib", "schedule"]
+from = '''        if marked.saturating_sub(last) < without_progress {'''
+to = '''        if false && marked.saturating_sub(last) < without_progress {'''
+
+[[mutant]]
+name = "the share due ignores the time"
+file = "crates/gc/src/heap/schedule.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--lib", "schedule"]
+from = '''        let expected = if elapsed >= MARKING_TIME {'''
+to = '''        let expected = if true {'''
+
+[[mutant]]
+name = "a step doesn't count what is marked"
+file = "crates/gc/src/heap/schedule.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--lib", "schedule"]
+from = '''        expected.saturating_sub(marked)
+'''
+to = '''        expected
+'''
+
+[[mutant]]
+name = "an object's bytes are the default's"
+file = "crates/gc/src/heap/schedule.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--lib", "schedule"]
+from = '''            .filter(|&bytes| bytes > 0)'''
+to = '''            .filter(|_| false)'''
+
+[[mutant]]
+name = "the heap's thread doesn't mark in the engine's steps"
+file = "crates/gc/src/heap.rs"
+from = '''            if limit > 0 {
+                let scanned = marker.step(limit, started.checked_add(budget));'''
+to = '''            if false {
+                let scanned = marker.step(limit, started.checked_add(budget));'''
+
+[[mutant]]
+name = "a step has no time"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''            scanned.get() >= limit || deadline.is_some_and(|deadline| Instant::now() >= deadline)'''
+to = '''            scanned.get() >= limit'''
+
+[[mutant]]
+name = "a step has no limit"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''            scanned.get() >= limit || deadline.is_some_and(|deadline| Instant::now() >= deadline)'''
+to = '''            deadline.is_some_and(|deadline| Instant::now() >= deadline)'''
+
+[[mutant]]
+name = "a step out of segments doesn't resolve the ephemerons"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''            if !drained || over() {
+                break;
+            }'''
+to = '''            let _ = drained;
+            break;'''
+
+[[mutant]]
+name = "a step's objects aren't counted"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''        self.count_scanned(scanned.get(), false);
+        scanned.get()'''
+to = '''        scanned.get()'''
+
+[[mutant]]
+name = "the steps' objects aren't recorded"
+file = "crates/gc/src/heap.rs"
+from = '''                driven.stepped = driven.stepped.saturating_add(scanned);'''
+to = '''                let _ = scanned;'''
+
+[[mutant]]
+name = "a driven marking's pause starts at its end"
+file = "crates/gc/src/heap.rs"
+from = '''                (driven.before_pause.unwrap_or(scanned), driven.stepped)'''
+to = '''                (scanned, driven.stepped)'''
+
+[[mutant]]
+name = "an object with a JS edge is young in a driven heap"
+file = "crates/gc/src/heap.rs"
+from = '''        let old = self.inner.options.driven && !types::entry(index).js_edges.is_empty();'''
+to = '''        let old = false;'''
+
+[[mutant]]
+name = "every object of a driven heap is old"
+file = "crates/gc/src/heap.rs"
+from = '''        let old = self.inner.options.driven && !types::entry(index).js_edges.is_empty();'''
+to = '''        let old = self.inner.options.driven;'''
+
+[[mutant]]
+name = "an object with a JS edge is old in any heap"
+file = "crates/gc/src/heap.rs"
+from = '''        let old = self.inner.options.driven && !types::entry(index).js_edges.is_empty();'''
+to = '''        let old = !types::entry(index).js_edges.is_empty();'''
+
+[[mutant]]
+name = "a handed-over object isn't marked"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''            if self.marks.mark(data) {
+                if let Some(handed) = &self.handed {'''
+to = '''            if true {
+                if let Some(handed) = &self.handed {'''
+
+[[mutant]]
+name = "a handed-over object isn't marked from"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''                local.push(&self.worklist, data);
+            }
+        }
+        self.handing.fetch_sub(1, Ordering::SeqCst);'''
+to = '''            }
+        }
+        self.handing.fetch_sub(1, Ordering::SeqCst);'''
+
+[[mutant]]
+name = "a thread's handovers aren't published when it's done"
+file = "crates/gc/src/js.rs"
+from = '''    fn drop(&mut self) {
+        self.publish();
+    }'''
+to = '''    fn drop(&mut self) {}'''
+
+[[mutant]]
+name = "another heap's object handed over is marked"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''        if data >= crate::cage::CAGE_BYTES {
+            return;
+        }'''
+to = '''        if false {
+            return;
+        }'''
+
+[[mutant]]
+name = "the verifier doesn't count what was handed over"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''                    sync::lock(handed).push(data);'''
+to = ''''''
+
+[[mutant]]
+name = "a handover ignores whether the marking is open"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''        if self.open.load(Ordering::SeqCst) {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "retiring doesn't close the marking"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''        self.open.store(false, Ordering::SeqCst);'''
+to = ''''''
+
+[[mutant]]
+name = "retiring doesn't wait for the handovers in progress"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''        while self.handing.load(Ordering::SeqCst) != 0 {'''
+to = '''        while false {'''
+
+[[mutant]]
+name = "the marking's end doesn't retire the marker"
+file = "crates/gc/src/heap.rs"
+from = '''        // it marks from now on is of its next one.
+        marking.marker.retire();'''
+to = ''''''
+
+[[mutant]]
+name = "the heap dropped doesn't retire the marker"
+file = "crates/gc/src/heap.rs"
+from = '''            // torn down while it marks): they touch the pages no more.
+            marking.marker.retire();'''
+to = ''''''
+
+[[mutant]]
+name = "reading back doesn't mark"
+file = "crates/gc/src/heap.rs"
+from = '''        self.inner.read_weak(offset as u32);'''
+to = ''''''
+
+[[mutant]]
+name = "reading back another heap's object doesn't panic"
+file = "crates/gc/src/heap.rs"
+from = '''        assert!(offset < cage::CAGE_BYTES, "an object of this heap");'''
+to = ''''''
+
+[[mutant]]
+name = "the marker doesn't hand the engine the JS edges"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''                        unsafe { local.mark(std::ptr::NonNull::new_unchecked(edge)) };'''
+to = ''''''
+
+[[mutant]]
+name = "a driven heap collects itself"
+file = "crates/gc/src/heap.rs"
+from = '''        assert!(
+            !self.inner.options.driven,
+            "the engine collects the heap it drives"
+        );'''
+to = ''''''
+
+[[mutant]]
+name = "an engine holds a heap it doesn't drive"
+file = "crates/gc/src/heap.rs"
+from = '''        assert!(
+            self.inner.options.driven,
+            "an engine holds a driven heap's objects"
+        );'''
+to = ''''''
+
+[[mutant]]
+name = "an engine holds an object with no JS edge"
+file = "crates/gc/src/heap.rs"
+from = '''        assert!(
+            !types::entry(T::__type().index()).js_edges.is_empty(),
+            "an object an engine holds has a JS edge"
+        );'''
+to = ''''''
+
+[[mutant]]
+name = "an operation without a safepoint has one"
+file = "crates/gc/src/heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--test", "it", "young::"]
+from = '''    ) -> R {
+        f(&Mutation {
+            inner: &self.inner,
+            _invariant: PhantomData,
+        })
+    }'''
+to = '''    ) -> R {
+        self.inner.safepoint();
+        f(&Mutation {
+            inner: &self.inner,
+            _invariant: PhantomData,
+        })
+    }'''
+
+[[mutant]]
+name = "a worker's objects count when its run ends"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''                if scanned.is_multiple_of(PROGRESS) {
+                    self.count_scanned(PROGRESS, true);
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "a driven heap's safepoint looks at its limit"
+file = "crates/gc/src/heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--test", "it", "--", "js::", "young::"]
+from = '''        if inner.options.driven {
+            return inner.young.borrow().full;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the engine isn't told of the nursery's bytes"
+file = "crates/gc/src/heap.rs"
+from = '''        self.inner
+            .used
+            .get()
+            .saturating_add(self.inner.young_used.get())'''
+to = '''        self.inner.used.get()'''
+
+[[mutant]]
+name = "a driven heap's safepoint doesn't publish the barrier"
+file = "crates/gc/src/heap.rs"
+from = '''            if self.marking.get_mut().is_some() {
+                self.drain_barrier();
+                if let Some(marking) = self.marking.get_mut() {
+                    marking.notify();
+                }
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "a driven heap's full nursery isn't scavenged"
+file = "crates/gc/src/heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--test", "it", "--", "js::", "young::"]
+from = '''            if self.options.stress || self.young.get_mut().full {
+                self.scavenge_alone();
+            }
+            return;'''
+to = '''            return;'''
+
+[[mutant]]
+name = "an engine's step doesn't wake the workers"
+file = "crates/gc/src/heap.rs"
+from = '''                driven.stepped = driven.stepped.saturating_add(scanned);
+            }
+            marking.notify();'''
+to = '''                driven.stepped = driven.stepped.saturating_add(scanned);
+            }'''
+
+[[mutant]]
+name = "finishing a marking that isn't done"
+file = "crates/gc/src/heap.rs"
+from = '''        assert!(
+            inner.marking_done(),
+            "the engine finishes a marking once it is done"
+        );'''
+to = ''''''

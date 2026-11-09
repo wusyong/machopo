@@ -1,0 +1,142 @@
+# Stage 4h-4a: navigation on the new DOM: `Location`'s members, a navigation to a fragment,
+# `History`, the host's traversal and restored state, their events.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it -- history:: cross_origin::a_childs_location_navigates_it"]
+timeout = 1500
+
+[[mutant]]
+name = "api: no replacing before completely loaded"
+file = "crates/dom_api_next/src/location.rs"
+from = '''    let replace = replace || !cx.is_completely_loaded(document);'''
+to = '''    let replace = replace;'''
+
+[[mutant]]
+name = "api: the same hash navigates"
+file = "crates/dom_api_next/src/location.rs"
+from = '''        url.fragment().unwrap_or_default() != before'''
+to = '''        let _ = before;
+        true'''
+
+[[mutant]]
+name = "api: protocol navigates to any scheme"
+file = "crates/dom_api_next/src/location.rs"
+from = '''        matches!(url.scheme(), "http" | "https")'''
+to = '''        true'''
+
+[[mutant]]
+name = "api: no navigation to a fragment"
+file = "crates/dom_api_next/src/history.rs"
+from = '''        && without_fragment(&url) == without_fragment(&current)'''
+to = '''        && without_fragment(&url) == without_fragment(&current) && false'''
+
+[[mutant]]
+name = "api: a fragment sets no target"
+file = "crates/dom_api_next/src/history.rs"
+from = '''        cx.set_document_url(document, url.as_str());
+        update_target_element(cx, document, &url);'''
+to = '''        cx.set_document_url(document, url.as_str());'''
+
+[[mutant]]
+name = "api: a fragment keeps the state"
+file = "crates/dom_api_next/src/history.rs"
+from = '''            cx.set_window_history_state(window, None);
+            if current.fragment() != url.fragment() {'''
+to = '''            if current.fragment() != url.fragment() {'''
+
+[[mutant]]
+name = "api: hashchange for the same fragment"
+file = "crates/dom_api_next/src/history.rs"
+from = '''            if current.fragment() != url.fragment() {
+                cx.queue_hash_change(window, current.as_str().into(), url.as_str().into());'''
+to = '''            if true {
+                cx.queue_hash_change(window, current.as_str().into(), url.as_str().into());'''
+
+[[mutant]]
+name = "api: a child's entries counted"
+file = "crates/dom_api_next/src/history.rs"
+from = '''    if cx.frame_owner(document).is_none() {
+        cx.push_session_history_entry();'''
+to = '''    if true {
+        cx.push_session_history_entry();'''
+
+[[mutant]]
+name = "dom: a pushed entry leaves the length"
+file = "crates/dom_next/src/history.rs"
+from = '''            length: index.saturating_add(1),
+        });
+    }'''
+to = '''            length: self.session_history().length,
+        });
+    }'''
+
+[[mutant]]
+name = "api: any URL rewritten"
+file = "crates/dom_api_next/src/history.rs"
+from = '''            Ok(parsed) if can_have_url_rewritten(&current, &parsed) => parsed,'''
+to = '''            Ok(parsed) if true || can_have_url_rewritten(&current, &parsed) => parsed,'''
+
+[[mutant]]
+name = "api: traversals out of range asked for"
+file = "crates/dom_api_next/src/history.rs"
+from = '''    if (0..i64::from(session.length)).contains(&target) {'''
+to = '''    if (0..i64::from(session.length)).contains(&target) || true {'''
+
+[[mutant]]
+name = "api: go(0) doesn't reload"
+file = "crates/dom_api_next/src/history.rs"
+from = '''    if delta == 0 {
+        cx.request_navigation(document, FrameNavigation::Reload);'''
+to = '''    if delta == 0 && false {
+        cx.request_navigation(document, FrameNavigation::Reload);'''
+
+[[mutant]]
+name = "api: an unknown scroll restoration is auto"
+file = "crates/dom_api_next/src/history.rs"
+from = '''        "auto" => false,
+        _ => return Ok(()),'''
+to = '''        _ => false,'''
+
+[[mutant]]
+name = "js: history.state made each time"
+file = "crates/dom_js_next/src/front.rs"
+from = '''            if fresh {
+                Ok(no_gc.strong_value(edge))'''
+to = '''            if fresh && false {
+                Ok(no_gc.strong_value(edge))'''
+
+[[mutant]]
+name = "dom: a new state keeps the old object"
+file = "crates/dom_next/src/history.rs"
+from = '''        history.into_ref().serialized.get().set(serialized);
+        history.fresh.set(false);'''
+to = '''        history.into_ref().serialized.get().set(serialized);'''
+
+[[mutant]]
+name = "api: no popstate for a fragment"
+file = "crates/dom_api_next/src/history.rs"
+from = '''        if let (FrameNavigation::SameDocument { pop_state: true, .. }, Some(window)) = (&request.navigation, &window) {'''
+to = '''        if let (FrameNavigation::SameDocument { pop_state: true, .. }, Some(window)) = (&request.navigation, &window) && false {'''
+
+[[mutant]]
+name = "js: popstate's state not the history's"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''                no_gc.set_strong_value(edge, state);'''
+to = '''                let _ = (edge, state);'''
+
+[[mutant]]
+name = "api: no state restored"
+file = "crates/dom_api_next/src/history.rs"
+from = '''        if state.is_none() && !manual {
+            cx.set_window_history_state(window, None);
+            return;
+        }'''
+to = '''        let _ = &state;
+        if !manual || manual {
+            cx.set_window_history_state(window, None);
+            return;
+        }'''
+
+[[mutant]]
+name = "api: never completely loaded"
+file = "crates/dom_api_next/src/lifecycle.rs"
+from = '''            host.read(|cx| cx.set_completely_loaded(document.get(cx.gc)));'''
+to = '''            let _ = document;'''

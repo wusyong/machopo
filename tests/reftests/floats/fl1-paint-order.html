@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<title>A float is painted after the backgrounds of the blocks around it</title>
+<link rel="match" href="fl1-paint-order-ref.html">
+<!-- CSS 2 Appendix E: the floats (step 5) after the in-flow blocks'
+     backgrounds (step 4), each whole: the red block's background, later
+     in the tree, is under the green float and the blue box in it. -->
+<style>
+  body { margin: 0 }
+  div { box-sizing: border-box }
+</style>
+<div style="float: left; width: 100px; height: 100px; background: green">
+  <div style="margin: 25px; width: 50px; height: 50px; background: blue"></div>
+</div>
+<div style="width: 200px; height: 150px; background: red"></div>
+<div style="float: right; width: 60px; height: 60px; background: green; margin-top: -80px"></div>
+<div style="width: 800px; height: 100px; background: red"></div>
+<!-- In what is painted whole: a flex item, an inline-block. -->
+<div style="display: flex; height: 50px">
+  <div style="width: 100px"><div style="float: left; width: 50px; height: 50px; background: green"></div></div>
+</div>
+<div style="height: 50px"><span style="display: inline-block; width: 100px; height: 50px; vertical-align: top"><div style="float: right; width: 50px; height: 50px; background: green"></div></span></div>

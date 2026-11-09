@@ -1,0 +1,26 @@
+<!doctype html>
+<script>
+const names = l => l.map(e => `${e.name}@${Math.round(e.startTime)}`).join(',');
+function run() {
+  return new Promise(done => {
+    const out = [];
+    performance.mark('m50', { startTime: 50 });
+    performance.mark('m10', { startTime: 10 });
+    performance.mark('m30', { startTime: 30 });
+    const a = new PerformanceObserver(() => {});
+    a.observe({ type: 'mark', buffered: true });
+    out.push('buffered takeRecords ' + names(a.takeRecords()));
+    out.push('takeRecords again ' + names(a.takeRecords()));
+    const order = [];
+    const b = new PerformanceObserver(list => { order.push('b'); out.push('cb getEntries ' + names(list.getEntries()) + ' byType ' + names(list.getEntriesByType('mark'))); });
+    const c = new PerformanceObserver(() => order.push('c'));
+    c.observe({ type: 'measure' });
+    b.observe({ type: 'mark' });
+    c.observe({ type: 'mark' });
+    performance.mark('x40', { startTime: 40 });
+    performance.mark('x20', { startTime: 20 });
+    out.push('perf getEntries ' + names(performance.getEntriesByType('mark')));
+    setTimeout(() => { out.push('order ' + order.join(',')); done(out.join('\n')); }, 100);
+  });
+}
+</script>

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<title>C4: paths: a rect path filled, a fill cut to a clip, lines with flat and square ends and dashes, a rounded rect and a circle</title>
+<link rel="match" href="c4-paths-ref.html">
+<!-- The canvas is a layer of its own, drawn on transparent and composited
+     onto the page; the reference's rounded corners are drawn on white. The
+     two round the corners' anti-aliased pixels 1 apart on macOS arm64. -->
+<meta name="fuzzy" content="maxDifference=0-1;totalPixels=0-80">
+<style>
+  html, body { margin: 0 }
+  canvas { display: block }
+</style>
+<canvas width="200" height="200"></canvas>
+<script>
+  const ctx = document.querySelector("canvas").getContext("2d");
+  ctx.fillStyle = "green";
+  ctx.rect(10, 10, 30, 20);
+  ctx.fill();
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(60, 10, 20, 20);
+  ctx.clip();
+  ctx.fillRect(50, 0, 60, 60);
+  ctx.restore();
+  // Restored: no clip.
+  ctx.fillRect(100, 10, 10, 10);
+
+  ctx.strokeStyle = "blue";
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(10, 52);
+  ctx.lineTo(50, 52);
+  ctx.stroke();
+  ctx.lineCap = "square";
+  ctx.beginPath();
+  ctx.moveTo(70, 52);
+  ctx.lineTo(90, 52);
+  ctx.stroke();
+  ctx.lineCap = "butt";
+  ctx.setLineDash([10, 5]);
+  ctx.beginPath();
+  ctx.moveTo(10, 72);
+  ctx.lineTo(50, 72);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = "purple";
+  ctx.beginPath();
+  ctx.roundRect(10, 100, 60, 40, 10);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(130, 120, 20, 0, 2 * Math.PI);
+  ctx.fill();
+</script>

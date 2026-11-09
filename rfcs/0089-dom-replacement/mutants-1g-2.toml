@@ -1,0 +1,335 @@
+# Stage 1g-2: the new DOM from JS: dom_next's wrapper edge and driven
+# marking, dom_api_next's front end hooks ([NewObject], finish), dom_js_next
+# (templates, V8's front end, DOMException, the isolate's DOM), bindings'
+# registration with the isolate's state, and dom_js's kunNextDom hook. Run
+# with RUSTY_V8_ARCHIVE pointing at ../third_party/rusty_v8_artifacts. Each
+# test command in a scope of at most 24 GB (docs/testing.md); the
+# baselines take seconds, plus a relink.
+timeout = 300
+
+[[mutant]]
+name = "a DOM string is never ASCII"
+file = "crates/dom_next/src/string.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_next", "--test", "it", "--", "strings"]
+from = '''flags: if text.is_ascii() { ASCII } else { 0 },'''
+to = '''flags: 0,'''
+
+[[mutant]]
+name = "the driven heap's marking never finishes"
+file = "crates/dom_next/src/lib.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''        self.heap.finish_marking();
+'''
+to = ''''''
+
+[[mutant]]
+name = "a new object's wrapper isn't made ahead"
+file = "crates/dom_api_next/src/typed.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        front.prepare_new_node(I::INDEX);
+'''
+to = '''        let _ = front;
+'''
+
+[[mutant]]
+name = "a new object is given as any node"
+file = "crates/dom_api_next/src/typed.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        front.ret_new_node(cx, value);
+'''
+to = '''        front.ret_node(cx, value);
+'''
+
+[[mutant]]
+name = "a getter isn't finished"
+file = "crates/dom_api_next/src/declare.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''                        .map(|value| <$ty as $crate::typed::RetType>::give(front, cx, ::std::convert::Into::into(value)))
+                });
+                match result {
+                    ::std::result::Result::Ok(()) => front.finish(dom),'''
+to = '''                        .map(|value| <$ty as $crate::typed::RetType>::give(front, cx, ::std::convert::Into::into(value)))
+                });
+                match result {
+                    ::std::result::Result::Ok(()) => {}'''
+
+[[mutant]]
+name = "createElement isn't a new object"
+file = "crates/dom_api_next/src/interfaces.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''-> NewObject<Element> = document::create_element;'''
+to = '''-> Element = document::create_element;'''
+
+[[mutant]]
+name = "NotFoundError has no legacy code"
+file = "crates/dom_api_next/src/exception.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''        "NotFoundError" => 8,
+'''
+to = '''        "NotFoundError" => 0,
+'''
+
+[[mutant]]
+name = "a string result is made in the operation"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''            None => self.kept = Kept::String(value.clone()),
+'''
+to = '''            None => {
+                if let Some(string) = self.state.strings.get(self.scope, value) {
+                    self.rv.set(string.into());
+                }
+            }
+'''
+
+[[mutant]]
+name = "a node's new wrapper is made in the operation"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''            None => self.kept = Kept::Node(cx.root(node), interface_of(cx.kind(node))),
+'''
+to = '''            None => {
+                let wrapper = templates::new_wrapper(self.scope, self.state, interface_of(cx.kind(node)));
+                wrap_new(self.scope, cx, wrapper, node);
+                self.rv.set(wrapper.into());
+            }
+'''
+
+[[mutant]]
+name = "a kept node's new wrapper isn't wrapped"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''                            wrap_new(scope, cx, made, node);
+'''
+to = ''''''
+
+[[mutant]]
+name = "a new object isn't wrapped"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''                wrap_new(self.scope, cx, wrapper, node);
+'''
+to = ''''''
+
+[[mutant]]
+name = "the receiver isn't checked"
+file = "crates/dom_js_next/src/templates.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''            .signature(self.signature)
+'''
+to = ''''''
+
+[[mutant]]
+name = "constants aren't on the prototype"
+file = "crates/dom_js_next/src/templates.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''            prototype.set_with_attr(name.into(), value.into(), constant());
+'''
+to = ''''''
+
+[[mutant]]
+name = "attributes are read-only"
+file = "crates/dom_js_next/src/templates.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''            Some(getter),
+            setter,
+'''
+to = '''            Some(getter),
+            setter.and(None),
+'''
+
+[[mutant]]
+name = "a method's length is 0"
+file = "crates/dom_js_next/src/templates.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''            MemberKind::Method => INTERFACES[M::INTERFACE].members[M::MEMBER].required(),
+'''
+to = '''            MemberKind::Method => 0,
+'''
+
+[[mutant]]
+name = "interface objects inherit nothing"
+file = "crates/dom_js_next/src/templates.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''        function.set_prototype(scope, parent.into())?;
+'''
+to = '''        let _ = parent;
+'''
+
+[[mutant]]
+name = "prototypes have no toStringTag"
+file = "crates/dom_js_next/src/templates.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''    to_string_tag(scope, prototype, desc.name);
+'''
+to = ''''''
+
+[[mutant]]
+name = "a call that may allocate doesn't tell V8"
+file = "crates/dom_js_next/src/templates.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''    if M::KIND != MemberKind::Getter {
+        state.report(scope);
+    }
+'''
+to = ''''''
+
+[[mutant]]
+name = "node arguments needn't be wrappers"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''        if bindings::is_wrapper::<Node>(self.scope, value) {
+'''
+to = '''        if true {
+'''
+
+[[mutant]]
+name = "arguments are never too few"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''        if given >= required {
+'''
+to = '''        if true {
+'''
+
+[[mutant]]
+name = "undefined is null for LegacyNullToEmptyString"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''        if value.is_null() {
+'''
+to = '''        if value.is_null_or_undefined() {
+'''
+
+[[mutant]]
+name = "DOMException's prototype isn't Error's"
+file = "crates/dom_js_next/src/exception.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''    prototype.set_prototype(scope, error_prototype)?;
+'''
+to = '''    let _ = error_prototype;
+'''
+
+[[mutant]]
+name = "a thrown DOMException has no stack"
+file = "crates/dom_js_next/src/exception.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''    v8::Exception::capture_stack_trace(context, exception);
+'''
+to = '''    let _ = context;
+'''
+
+[[mutant]]
+name = "DOMException's code is always 0"
+file = "crates/dom_js_next/src/exception.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''.map_or(0, |name| dom_api_next::legacy_code(&name.to_rust_string_lossy(scope)));'''
+to = '''.map_or(0, |_| 0u16);'''
+
+[[mutant]]
+name = "DOMException's name defaults to empty"
+file = "crates/dom_js_next/src/exception.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''optional_string(scope, args.get(1), "Error")'''
+to = '''optional_string(scope, args.get(1), "")'''
+
+[[mutant]]
+name = "V8 may borrow the DOM in an operation"
+file = "crates/dom_js_next/src/state.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''            .try_borrow_mut()
+            .expect("V8 marks the DOM between its operations, never in one")
+'''
+to = '''            .borrow_mut()
+'''
+
+[[mutant]]
+name = "peek finds nothing"
+file = "crates/dom_js_next/src/strings.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''        self.entries
+            .borrow()
+            .get(&string.addr())
+            .and_then(|entry| entry.v8.to_local(scope))
+'''
+to = '''        let _ = (scope, string);
+        None
+'''
+
+[[mutant]]
+name = "the isolate's owner keeps its state"
+file = "crates/bindings/src/script_state.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "isolate_state", "unified_heap"]
+from = '''        unsafe { crate::drop_isolate_state(&mut self.isolate) };
+'''
+to = ''''''
+
+[[mutant]]
+name = "a second state is checked by its type only"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "isolate_state", "unified_heap"]
+from = '''        !crate::isolate_state::has_isolate_state(isolate),
+'''
+to = '''        crate::isolate_state::<T>(isolate).is_none(),
+'''
+
+[[mutant]]
+name = "pages get kunNextDom without the variable"
+file = "crates/dom_js/src/lib.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "kun_next_dom"]
+from = '''std::env::var_os("MACHOPO_NEXT_DOM").is_some_and(|value| value == "1")'''
+to = '''true'''
+
+[[mutant]]
+name = "pages never get kunNextDom"
+file = "crates/dom_js/src/lib.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "kun_next_dom"]
+from = '''std::env::var_os("MACHOPO_NEXT_DOM").is_some_and(|value| value == "1")'''
+to = '''false'''
+
+[[mutant]]
+name = "an in-place string result is cloned"
+file = "crates/dom_api_next/src/typed.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''            Self::InPlace(string) => front.ret_string(&string.borrow()),
+'''
+to = '''            Self::InPlace(string) => front.ret_string(&string.to_owned()),
+'''
+
+[[mutant]]
+name = "a name result is cloned"
+file = "crates/dom_api_next/src/typed.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''            Self::Name(id) => front.ret_string(&cx.name_ref(id)),
+'''
+to = '''            Self::Name(id) => front.ret_string(&cx.name(id)),
+'''
+
+[[mutant]]
+name = "getAttribute's value is cloned"
+file = "crates/dom_api_next/src/element.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = ''') -> Result<Option<StrRef<'gc>>, ApiError> {
+    Ok(cx.attribute_value(this, &qualified(cx, this, qualified_name)))
+'''
+to = ''') -> Result<Option<DomString>, ApiError> {
+    Ok(cx.get_attribute(this, &qualified(cx, this, qualified_name)))
+'''
+
+[[mutant]]
+name = "tagName is cloned"
+file = "crates/dom_api_next/src/element.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''    Ok(DomStr::Name(cx.node_name_id(this)))
+'''
+to = '''    Ok(DomStr::Owned(cx.node_name(this)))
+'''
+
+[[mutant]]
+name = "a node name is a new string each call"
+file = "crates/dom_next/src/lib.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_next", "--test", "it", "--", "tree"]
+from = '''        self.name(self.node_name_id(node))
+'''
+to = '''        DomString::from(self.name(self.node_name_id(node)).to_str().into_owned())
+'''

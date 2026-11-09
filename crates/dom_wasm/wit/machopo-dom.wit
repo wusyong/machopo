@@ -1,0 +1,372 @@
+// machopo:dom: the DOM for wasm guests, generated from dom_api's
+// declaration table by dom_wasm (`wit::describe`;
+// `MACHOPO_UPDATE_GOLDEN=1 cargo test -p dom_wasm --test it wit` writes it).
+package machopo:dom@0.1.0;
+
+interface dom {
+  /// A node: the store's own number for it, the same each time the store
+  /// is given it, until `release` lets it go. A number that isn't one of the
+  /// store's traps the call.
+  type node = u32;
+  type document = node;
+  type document-type = node;
+  type document-fragment = node;
+  type shadow-root = node;
+  type element = node;
+  type html-element = node;
+  type html-slot-element = node;
+  type html-template-element = node;
+  type html-meta-element = node;
+  type html-style-element = node;
+  type html-html-element = node;
+  type html-head-element = node;
+  type html-title-element = node;
+  type html-body-element = node;
+  type html-heading-element = node;
+  type html-paragraph-element = node;
+  type htmlhr-element = node;
+  type html-pre-element = node;
+  type html-quote-element = node;
+  type htmlo-list-element = node;
+  type htmlu-list-element = node;
+  type html-menu-element = node;
+  type htmlli-element = node;
+  type htmld-list-element = node;
+  type html-div-element = node;
+  type html-data-element = node;
+  type html-time-element = node;
+  type html-span-element = node;
+  type htmlbr-element = node;
+  type html-mod-element = node;
+  type html-directory-element = node;
+  type html-font-element = node;
+  type html-param-element = node;
+  type html-map-element = node;
+  type html-table-element = node;
+  type html-table-caption-element = node;
+  type html-table-col-element = node;
+  type html-table-section-element = node;
+  type html-table-row-element = node;
+  type html-table-cell-element = node;
+  type html-anchor-element = node;
+  type html-area-element = node;
+  type html-base-element = node;
+  type html-link-element = node;
+  type html-script-element = node;
+  type html-unknown-element = node;
+  type html-iframe-element = node;
+  type html-image-element = node;
+  type html-picture-element = node;
+  type html-source-element = node;
+  type html-canvas-element = node;
+  type html-form-element = node;
+  type html-input-element = node;
+  type html-button-element = node;
+  type html-select-element = node;
+  type html-option-element = node;
+  type html-opt-group-element = node;
+  type html-text-area-element = node;
+  type html-label-element = node;
+  type html-field-set-element = node;
+  type html-legend-element = node;
+  type html-output-element = node;
+  type html-data-list-element = node;
+  type html-progress-element = node;
+  type html-meter-element = node;
+  type svg-element = node;
+  type svg-graphics-element = node;
+  type svg-geometry-element = node;
+  type svgsvg-element = node;
+  type svgg-element = node;
+  type svg-defs-element = node;
+  type svg-desc-element = node;
+  type svg-metadata-element = node;
+  type svg-title-element = node;
+  type svg-symbol-element = node;
+  type svg-use-element = node;
+  type svg-switch-element = node;
+  type svg-style-element = node;
+  type svg-path-element = node;
+  type svg-rect-element = node;
+  type svg-circle-element = node;
+  type svg-ellipse-element = node;
+  type svg-line-element = node;
+  type svg-polyline-element = node;
+  type svg-polygon-element = node;
+  type svg-text-content-element = node;
+  type svg-text-positioning-element = node;
+  type svg-text-element = node;
+  type svgt-span-element = node;
+  type svg-text-path-element = node;
+  type svg-image-element = node;
+  type svg-foreign-object-element = node;
+  type svg-marker-element = node;
+  type svg-gradient-element = node;
+  type svg-linear-gradient-element = node;
+  type svg-radial-gradient-element = node;
+  type svg-stop-element = node;
+  type svg-pattern-element = node;
+  type svg-script-element = node;
+  type svga-element = node;
+  type svg-view-element = node;
+  type svg-clip-path-element = node;
+  type svg-mask-element = node;
+  type svg-filter-element = node;
+  type svgfe-blend-element = node;
+  type svgfe-color-matrix-element = node;
+  type svgfe-component-transfer-element = node;
+  type svg-component-transfer-function-element = node;
+  type svgfe-func-r-element = node;
+  type svgfe-func-g-element = node;
+  type svgfe-func-b-element = node;
+  type svgfe-func-a-element = node;
+  type svgfe-composite-element = node;
+  type svgfe-convolve-matrix-element = node;
+  type svgfe-diffuse-lighting-element = node;
+  type svgfe-distant-light-element = node;
+  type svgfe-point-light-element = node;
+  type svgfe-spot-light-element = node;
+  type svgfe-displacement-map-element = node;
+  type svgfe-drop-shadow-element = node;
+  type svgfe-flood-element = node;
+  type svgfe-gaussian-blur-element = node;
+  type svgfe-image-element = node;
+  type svgfe-merge-element = node;
+  type svgfe-merge-node-element = node;
+  type svgfe-morphology-element = node;
+  type svgfe-offset-element = node;
+  type svgfe-specular-lighting-element = node;
+  type svgfe-tile-element = node;
+  type svgfe-turbulence-element = node;
+  type svg-animation-element = node;
+  type svg-animate-element = node;
+  type svg-set-element = node;
+  type svg-animate-motion-element = node;
+  type svgm-path-element = node;
+  type svg-animate-transform-element = node;
+  type character-data = node;
+  type text = node;
+  type attr = node;
+  type cdata-section = node;
+  type xml-document = node;
+  type comment = node;
+  type processing-instruction = node;
+
+  /// What a call failed with: `code` 1 is a TypeError (`this` of another
+  /// interface), the others DOMException names: 2 HierarchyRequestError,
+  /// 3 NotFoundError, 4 InvalidCharacterError, 9 NamespaceError.
+  record dom-exception {
+    code: u32,
+    message: string,
+  }
+
+  /// A new HTML document, in no window.
+  create-document: func() -> document;
+  /// Lets the store's node `handle` go: the number may be another node's
+  /// after, and the node is collected once nothing else holds it.
+  release: func(handle: node);
+
+  /// `Node.nodeType`
+  node-node-type: func(this: node) -> result<u32, dom-exception>;
+
+  /// `Node.nodeName`
+  node-node-name: func(this: node) -> result<string, dom-exception>;
+
+  /// `Node.isConnected`
+  node-is-connected: func(this: node) -> result<bool, dom-exception>;
+
+  /// `Node.parentNode`
+  node-parent-node: func(this: node) -> result<option<node>, dom-exception>;
+
+  /// `Node.ownerDocument`
+  node-owner-document: func(this: node) -> result<option<document>, dom-exception>;
+
+  /// `Node.parentElement`
+  node-parent-element: func(this: node) -> result<option<element>, dom-exception>;
+
+  /// `Node.hasChildNodes`
+  node-has-child-nodes: func(this: node) -> result<bool, dom-exception>;
+
+  /// `Node.firstChild`
+  node-first-child: func(this: node) -> result<option<node>, dom-exception>;
+
+  /// `Node.lastChild`
+  node-last-child: func(this: node) -> result<option<node>, dom-exception>;
+
+  /// `Node.previousSibling`
+  node-previous-sibling: func(this: node) -> result<option<node>, dom-exception>;
+
+  /// `Node.nextSibling`
+  node-next-sibling: func(this: node) -> result<option<node>, dom-exception>;
+
+  /// `Node.textContent`
+  node-text-content: func(this: node) -> result<option<string>, dom-exception>;
+
+  /// `Node.textContent` (setter)
+  node-set-text-content: func(this: node, value: option<string>) -> result<_, dom-exception>;
+
+  /// `Node.appendChild`
+  node-append-child: func(this: node, node: node) -> result<node, dom-exception>;
+
+  /// `Node.insertBefore`
+  node-insert-before: func(this: node, node: node, child: option<node>) -> result<node, dom-exception>;
+
+  /// `Node.removeChild`
+  node-remove-child: func(this: node, child: node) -> result<node, dom-exception>;
+
+  /// `Node.contains`
+  node-contains: func(this: node, other: option<node>) -> result<bool, dom-exception>;
+
+  /// `Document.documentElement`
+  document-document-element: func(this: document) -> result<option<element>, dom-exception>;
+
+  /// `Document.readyState`
+  document-ready-state: func(this: document) -> result<string, dom-exception>;
+
+  /// `Document.firstElementChild`
+  document-first-element-child: func(this: document) -> result<option<element>, dom-exception>;
+
+  /// `Document.lastElementChild`
+  document-last-element-child: func(this: document) -> result<option<element>, dom-exception>;
+
+  /// `Document.childElementCount`
+  document-child-element-count: func(this: document) -> result<u32, dom-exception>;
+
+  /// `Document.getElementById`
+  document-get-element-by-id: func(this: document, element-id: string) -> result<option<element>, dom-exception>;
+
+  /// `Document.querySelector`
+  document-query-selector: func(this: document, selectors: string) -> result<option<element>, dom-exception>;
+
+  /// `Document.createElement`
+  document-create-element: func(this: document, local-name: string) -> result<element, dom-exception>;
+
+  /// `Document.createElementNS`
+  document-create-element-ns: func(this: document, namespace: option<string>, qualified-name: string) -> result<element, dom-exception>;
+
+  /// `Document.createTextNode`
+  document-create-text-node: func(this: document, data: string) -> result<text, dom-exception>;
+
+  /// `DocumentType.name`
+  document-type-name: func(this: document-type) -> result<string, dom-exception>;
+
+  /// `DocumentType.publicId`
+  document-type-public-id: func(this: document-type) -> result<string, dom-exception>;
+
+  /// `DocumentType.systemId`
+  document-type-system-id: func(this: document-type) -> result<string, dom-exception>;
+
+  /// `DocumentFragment.firstElementChild`
+  document-fragment-first-element-child: func(this: document-fragment) -> result<option<element>, dom-exception>;
+
+  /// `DocumentFragment.lastElementChild`
+  document-fragment-last-element-child: func(this: document-fragment) -> result<option<element>, dom-exception>;
+
+  /// `DocumentFragment.childElementCount`
+  document-fragment-child-element-count: func(this: document-fragment) -> result<u32, dom-exception>;
+
+  /// `DocumentFragment.querySelector`
+  document-fragment-query-selector: func(this: document-fragment, selectors: string) -> result<option<element>, dom-exception>;
+
+  /// `DocumentFragment.getElementById`
+  document-fragment-get-element-by-id: func(this: document-fragment, element-id: string) -> result<option<element>, dom-exception>;
+
+  /// `Element.namespaceURI`
+  element-namespace-uri: func(this: element) -> result<option<string>, dom-exception>;
+
+  /// `Element.prefix`
+  element-prefix: func(this: element) -> result<option<string>, dom-exception>;
+
+  /// `Element.localName`
+  element-local-name: func(this: element) -> result<string, dom-exception>;
+
+  /// `Element.tagName`
+  element-tag-name: func(this: element) -> result<string, dom-exception>;
+
+  /// `Element.id`
+  element-id: func(this: element) -> result<string, dom-exception>;
+
+  /// `Element.id` (setter)
+  element-set-id: func(this: element, value: string) -> result<_, dom-exception>;
+
+  /// `Element.className`
+  element-class-name: func(this: element) -> result<string, dom-exception>;
+
+  /// `Element.className` (setter)
+  element-set-class-name: func(this: element, value: string) -> result<_, dom-exception>;
+
+  /// `Element.firstElementChild`
+  element-first-element-child: func(this: element) -> result<option<element>, dom-exception>;
+
+  /// `Element.lastElementChild`
+  element-last-element-child: func(this: element) -> result<option<element>, dom-exception>;
+
+  /// `Element.childElementCount`
+  element-child-element-count: func(this: element) -> result<u32, dom-exception>;
+
+  /// `Element.getAttribute`
+  element-get-attribute: func(this: element, qualified-name: string) -> result<option<string>, dom-exception>;
+
+  /// `Element.setAttribute`
+  element-set-attribute: func(this: element, qualified-name: string, value: string) -> result<_, dom-exception>;
+
+  /// `Element.removeAttribute`
+  element-remove-attribute: func(this: element, qualified-name: string) -> result<_, dom-exception>;
+
+  /// `Element.hasAttribute`
+  element-has-attribute: func(this: element, qualified-name: string) -> result<bool, dom-exception>;
+
+  /// `Element.hasAttributes`
+  element-has-attributes: func(this: element) -> result<bool, dom-exception>;
+
+  /// `Element.getAttributeNS`
+  element-get-attribute-ns: func(this: element, namespace: option<string>, local-name: string) -> result<option<string>, dom-exception>;
+
+  /// `Element.setAttributeNS`
+  element-set-attribute-ns: func(this: element, namespace: option<string>, qualified-name: string, value: string) -> result<_, dom-exception>;
+
+  /// `Element.removeAttributeNS`
+  element-remove-attribute-ns: func(this: element, namespace: option<string>, local-name: string) -> result<_, dom-exception>;
+
+  /// `Element.hasAttributeNS`
+  element-has-attribute-ns: func(this: element, namespace: option<string>, local-name: string) -> result<bool, dom-exception>;
+
+  /// `Element.matches`
+  element-matches: func(this: element, selectors: string) -> result<bool, dom-exception>;
+
+  /// `Element.webkitMatchesSelector`
+  element-webkit-matches-selector: func(this: element, selectors: string) -> result<bool, dom-exception>;
+
+  /// `Element.closest`
+  element-closest: func(this: element, selectors: string) -> result<option<element>, dom-exception>;
+
+  /// `Element.querySelector`
+  element-query-selector: func(this: element, selectors: string) -> result<option<element>, dom-exception>;
+
+  /// `Element.innerHTML`
+  element-inner-html: func(this: element) -> result<string, dom-exception>;
+
+  /// `Element.innerHTML` (setter)
+  element-set-inner-html: func(this: element, value: option<string>) -> result<_, dom-exception>;
+
+  /// `Element.outerHTML`
+  element-outer-html: func(this: element) -> result<string, dom-exception>;
+
+  /// `Element.outerHTML` (setter)
+  element-set-outer-html: func(this: element, value: option<string>) -> result<_, dom-exception>;
+
+  /// `Element.insertAdjacentHTML`
+  element-insert-adjacent-html: func(this: element, position: string, %string: string) -> result<_, dom-exception>;
+
+  /// `CharacterData.data`
+  character-data-data: func(this: character-data) -> result<string, dom-exception>;
+
+  /// `CharacterData.data` (setter)
+  character-data-set-data: func(this: character-data, value: option<string>) -> result<_, dom-exception>;
+
+  /// `CharacterData.length`
+  character-data-length: func(this: character-data) -> result<u32, dom-exception>;
+
+  /// `ProcessingInstruction.target`
+  processing-instruction-target: func(this: processing-instruction) -> result<string, dom-exception>;
+}

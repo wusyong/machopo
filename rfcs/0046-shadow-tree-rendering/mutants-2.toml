@@ -1,0 +1,171 @@
+# Mutation test of stage 2: `:host`, `:host()`, `::slotted()` and the
+# cascade across trees (2026-10-15):
+# python3 scripts/test.py mutate rfcs/0046-shadow-tree-rendering/mutants-2.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "shadow::", "invalidation::"]
+timeout = 900
+
+[[mutant]]
+name = ":host isn't parsed"
+file = "crates/css/src/selector.rs"
+from = '''    fn parse_host(&self) -> bool {
+        true'''
+to = '''    fn parse_host(&self) -> bool {
+        false'''
+
+[[mutant]]
+name = "::slotted() isn't parsed"
+file = "crates/css/src/selector.rs"
+from = '''    fn parse_slotted(&self) -> bool {
+        true'''
+to = '''    fn parse_slotted(&self) -> bool {
+        false'''
+
+[[mutant]]
+name = "no pseudo-element after ::slotted()"
+file = "crates/css/src/selector.rs"
+from = '''    fn valid_after_slotted(&self) -> bool {
+        true'''
+to = '''    fn valid_after_slotted(&self) -> bool {
+        false'''
+
+[[mutant]]
+name = ":host rules go in the buckets"
+file = "crates/css/src/rule_set.rs"
+from = '''                    Component::Host(_) => host = true,'''
+to = '''                    Component::Host(_) => {}'''
+
+[[mutant]]
+name = "::slotted() rules go in the buckets"
+file = "crates/css/src/rule_set.rs"
+from = '''        if slotted {
+            self.slotted.push(data);'''
+to = '''        if false {
+            self.slotted.push(data);'''
+
+[[mutant]]
+name = "a host matches no :host rule"
+file = "crates/style/src/lib.rs"
+from = '''                self.candidates.extend_from_slice(sheet.rule_set.host_rules());'''
+to = '''                let _ = sheet.rule_set.host_rules();'''
+
+[[mutant]]
+name = "the host isn't featureless"
+file = "crates/style/src/lib.rs"
+from = '''            context.featureless = source.which == Which::Host;'''
+to = '''            context.featureless = false;'''
+
+[[mutant]]
+name = "rules match with no host"
+file = "crates/style/src/lib.rs"
+from = '''            context.current_host = source.host;'''
+to = '''            context.current_host = None;'''
+
+[[mutant]]
+name = "the inner tree's normal declarations win"
+file = "crates/style/src/lib.rs"
+from = '''        if important {
+            tree_order
+        } else {
+            u32::MAX - tree_order
+        }'''
+to = '''        if important {
+            u32::MAX - tree_order
+        } else {
+            tree_order
+        }'''
+
+[[mutant]]
+name = "trees aren't ordered"
+file = "crates/style/src/lib.rs"
+from = '''            tree: CascadePriority::tree(tree_order, important),'''
+to = '''            tree: 0,'''
+
+[[mutant]]
+name = "the shadow tree is as early as the first slot's"
+file = "crates/style/src/lib.rs"
+from = '''                            tree_order: sources.len() as u32,'''
+to = '''                            tree_order: 1,'''
+
+[[mutant]]
+name = "only the first slot's ::slotted() rules"
+file = "crates/style/src/lib.rs"
+from = '''        at = slot;
+    }
+    scopes'''
+to = '''        at = slot;
+        break;
+    }
+    scopes'''
+
+[[mutant]]
+name = "no element is assigned"
+file = "crates/style/src/lib.rs"
+from = '''        .is_none_or(|parent| parent.shadow_root().is_none())'''
+to = '''        .is_none_or(|parent| parent.shadow_root().is_some() || true)'''
+
+[[mutant]]
+name = "a host's :host rules' states aren't its"
+file = "crates/style/src/lib.rs"
+from = '''                dependencies = dependencies.or(cascade.host_dependencies);'''
+to = '''                let _ = cascade;'''
+
+[[mutant]]
+name = "a slotted element's ::slotted() rules' states aren't its"
+file = "crates/style/src/lib.rs"
+from = '''                dependencies = dependencies.or(slot_scope.cascade.slotted_dependencies);'''
+to = '''                let _ = slot_scope;'''
+
+[[mutant]]
+name = ":host() in a tree's rules isn't the host's"
+file = "crates/style/src/lib.rs"
+from = '''                            host = Dependencies::or(host, selector_dependencies(inner));'''
+to = '''                            let _ = inner;'''
+
+[[mutant]]
+name = "what is in :host() and ::slotted() isn't looked at"
+file = "crates/style/src/lib.rs"
+from = '''            Component::Host(Some(inner)) | Component::Slotted(inner) => {
+                selector_dependencies(inner)
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "a shadow tree's sheets that changed leave its host"
+file = "crates/style/src/lib.rs"
+from = '''                || shadow.as_ref().is_some_and(|(.., changed)| *changed);'''
+to = ''';'''
+
+[[mutant]]
+name = "no element is in a shadow tree"
+file = "crates/style/src/selector.rs"
+from = '''        root.is_shadow_root()
+            .then(|| root.host())'''
+to = '''        false
+            .then(|| root.host())'''
+
+[[mutant]]
+name = "no parent is a shadow root"
+file = "crates/style/src/selector.rs"
+from = '''        !self.is_boundary() && self.0.parent().is_some_and(|parent| parent.is_shadow_root())'''
+to = '''        false'''
+
+[[mutant]]
+name = "nothing is assigned to a slot"
+file = "crates/style/src/selector.rs"
+from = '''            .find_slot(self.0)'''
+to = '''            .find_slot(self.0)
+            .filter(|_| false)'''
+
+[[mutant]]
+name = "no element is a slot"
+file = "crates/style/src/selector.rs"
+from = '''    fn is_html_slot_element(&self) -> bool {
+        self.0.is_slot()'''
+to = '''    fn is_html_slot_element(&self) -> bool {
+        false'''
+
+[[mutant]]
+name = "elements are styled without their scope"
+file = "crates/style/src/lib.rs"
+from = '''            let element = StyleElement::in_tree(node, scope);'''
+to = '''            let element = StyleElement::new(node);'''

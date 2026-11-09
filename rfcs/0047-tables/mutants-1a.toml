@@ -1,0 +1,255 @@
+# Mutation test of stage 1a: the table properties, the user-agent
+# stylesheet's table rules and the tables' presentational hints
+# (2026-10-15):
+# python3 scripts/test.py mutate rfcs/0047-tables/mutants-1a.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "tables::", "invalidation::"]
+timeout = 900
+
+# --- css: the properties ---
+
+[[mutant]]
+name = "border-collapse isn't inherited by unset"
+file = "crates/css/src/properties.rs"
+from = '''                | PointerEvents
+                | BorderCollapse
+                | BorderSpacing'''
+to = '''                | PointerEvents
+                | BorderSpacing'''
+
+[[mutant]]
+name = "table-layout is inherited by unset"
+file = "crates/css/src/properties.rs"
+from = '''                | CaptionSide
+                | EmptyCells
+        )'''
+to = '''                | CaptionSide
+                | EmptyCells
+                | TableLayout
+        )'''
+
+[[mutant]]
+name = "one border-spacing length is the horizontal one only"
+file = "crates/css/src/properties.rs"
+from = '''                    .unwrap_or_else(|_| horizontal.clone());'''
+to = '''                    .unwrap_or_else(|_| Length::px(0.0));'''
+
+[[mutant]]
+name = "border-spacing takes negative lengths"
+file = "crates/css/src/properties.rs"
+from = '''                let horizontal = Length::parse(input, false)?;'''
+to = '''                let horizontal = Length::parse(input, true)?;'''
+
+[[mutant]]
+name = "border-spacing's lengths swapped when computed"
+file = "crates/css/src/properties.rs"
+from = '''                horizontal: horizontal.to_px(cx),
+                vertical: vertical.to_px(cx),'''
+to = '''                horizontal: vertical.to_px(cx),
+                vertical: horizontal.to_px(cx),'''
+
+[[mutant]]
+name = "caption-side bottom parses as top"
+file = "crates/css/src/properties.rs"
+from = '''                    "bottom" => computed_style::CaptionSide::Bottom,'''
+to = '''                    "bottom" => computed_style::CaptionSide::Top,'''
+
+[[mutant]]
+name = "inherit doesn't copy border-spacing"
+file = "crates/css/src/properties.rs"
+from = '''        BorderSpacing => to.border_spacing = from.border_spacing,'''
+to = '''        BorderSpacing => {}'''
+
+[[mutant]]
+name = "declared border-spacing always two lengths"
+file = "crates/css/src/serialize.rs"
+from = '''            if vertical != horizontal {
+                dest.push(' ');
+                vertical.to_css(dest);'''
+to = '''            {
+                dest.push(' ');
+                vertical.to_css(dest);'''
+
+[[mutant]]
+name = "computed border-spacing always two lengths"
+file = "crates/css/src/computed.rs"
+from = '''            if spacing.vertical != spacing.horizontal {'''
+to = '''            if true {'''
+
+[[mutant]]
+name = "empty-cells isn't inherited"
+file = "crates/computed_style/src/lib.rs"
+from = '''            empty_cells: parent.empty_cells,'''
+to = '''            empty_cells: EmptyCells::Show,'''
+
+[[mutant]]
+name = "border-spacing isn't inherited"
+file = "crates/computed_style/src/lib.rs"
+from = '''            border_spacing: parent.border_spacing,'''
+to = '''            border_spacing: BorderSpacing::ZERO,'''
+
+# --- style: the user-agent stylesheet ---
+
+[[mutant]]
+name = "a table's own rows aren't middle"
+file = "crates/style/resources/html.css"
+from = '''table > tr {
+  vertical-align: middle;
+}'''
+to = '''table > tr {
+}'''
+
+[[mutant]]
+name = "a table inherits text-indent"
+file = "crates/style/resources/html.css"
+from = '''  text-indent: initial;
+}'''
+to = '''}'''
+
+[[mutant]]
+name = "cells have no padding"
+file = "crates/style/resources/html.css"
+from = '''  vertical-align: inherit;
+  padding: 1px;'''
+to = '''  vertical-align: inherit;'''
+
+# --- style: the hints ---
+
+[[mutant]]
+name = "a table's zero width is kept"
+file = "crates/style/src/hints.rs"
+from = '''        if let Some(width) = attribute(local_name!("width"))
+            .and_then(|v| dimension(&v))
+            .filter(non_zero)
+        {
+            out.push(size(LonghandId::Width, width));
+        }'''
+to = '''        if let Some(width) = attribute(local_name!("width")).and_then(|v| dimension(&v)) {
+            out.push(size(LonghandId::Width, width));
+        }'''
+
+[[mutant]]
+name = "a table's border that isn't an integer is 0"
+file = "crates/style/src/hints.rs"
+from = '''            .unwrap_or(1),'''
+to = '''            .unwrap_or(0),'''
+
+[[mutant]]
+name = "a zero table border is outset"
+file = "crates/style/src/hints.rs"
+from = '''            if width > 0 {
+                push_border_style(out, computed_style::BorderStyle::Outset);'''
+to = '''            if width >= 0 {
+                push_border_style(out, computed_style::BorderStyle::Outset);'''
+
+[[mutant]]
+name = "cellspacing takes a percentage"
+file = "crates/style/src/hints.rs"
+from = '''        if let Some(LengthPercentage::Length(spacing)) =
+            attribute(local_name!("cellspacing")).and_then(|v| dimension(&v))
+        {'''
+to = '''        if let Some(spacing) = attribute(local_name!("cellspacing"))
+            .and_then(|v| dimension(&v))
+            .map(|v| match v {
+                LengthPercentage::Length(l) => l,
+                _ => Length::px(10.0),
+            })
+        {'''
+
+[[mutant]]
+name = "a centered table has no auto margins"
+file = "crates/style/src/hints.rs"
+from = '''            if align.eq_ignore_ascii_case("center") {'''
+to = '''            if align == "center" {'''
+
+[[mutant]]
+name = "a table's align right isn't a float"
+file = "crates/style/src/hints.rs"
+from = '''                    "right" => Some(computed_style::Float::Right),'''
+to = '''                    "right" => None,'''
+
+[[mutant]]
+name = "no col width"
+file = "crates/style/src/hints.rs"
+from = '''        if (*name == local_name!("col") || *name == local_name!("colgroup"))'''
+to = '''        if (false || *name == local_name!("colgroup"))'''
+
+[[mutant]]
+name = "no valign"
+file = "crates/style/src/hints.rs"
+from = '''        out.extend(property_declarations("vertical-align", &valign));'''
+to = ""
+
+[[mutant]]
+name = "align middle isn't center"
+file = "crates/style/src/hints.rs"
+from = '''        if align.eq_ignore_ascii_case("middle") || align.eq_ignore_ascii_case("absmiddle") {'''
+to = '''        if align.eq_ignore_ascii_case("absmiddle") {'''
+
+[[mutant]]
+name = "align absmiddle isn't center"
+file = "crates/style/src/hints.rs"
+from = '''        if align.eq_ignore_ascii_case("middle") || align.eq_ignore_ascii_case("absmiddle") {'''
+to = '''        if align.eq_ignore_ascii_case("middle") {'''
+
+[[mutant]]
+name = "align other than middle is dropped"
+file = "crates/style/src/hints.rs"
+from = '''            out.extend(property_declarations("text-align", &align));'''
+to = ""
+
+[[mutant]]
+name = "no row height"
+file = "crates/style/src/hints.rs"
+from = '''    if row && let Some(height)'''
+to = '''    if false && let Some(height)'''
+
+[[mutant]]
+name = "nowrap doesn't stop wrapping"
+file = "crates/style/src/hints.rs"
+from = '''            value: Value::TextWrapMode(computed_style::TextWrapMode::Nowrap),'''
+to = '''            value: Value::TextWrapMode(computed_style::TextWrapMode::Wrap),'''
+
+[[mutant]]
+name = "a cell's zero size is kept"
+file = "crates/style/src/hints.rs"
+from = '''        if let Some(value) = attribute(local)
+            .and_then(|v| dimension(&v))
+            .filter(non_zero)'''
+to = '''        if let Some(value) = attribute(local)
+            .and_then(|v| dimension(&v))'''
+
+[[mutant]]
+name = "zero is only a zero length"
+file = "crates/style/src/hints.rs"
+from = '''            && *value != LengthPercentage::Percent(0.0)'''
+to = '''            && true'''
+
+[[mutant]]
+name = "cells have no border with the table's"
+file = "crates/style/src/hints.rs"
+from = '''    if table_border(table).is_some_and(|width| width > 0) {'''
+to = '''    if table_border(table).is_some_and(|width| width > 100) {'''
+
+[[mutant]]
+name = "a negative cellpadding is taken"
+file = "crates/style/src/hints.rs"
+from = '''        .filter(|padding| *padding >= 0)'''
+to = '''        .filter(|padding| *padding >= -10)'''
+
+[[mutant]]
+name = "a cell without a row has a table"
+file = "crates/style/src/hints.rs"
+from = '''    let row = cell.parent().filter(|row| is(*row, &[local_name!("tr")]))?;'''
+to = '''    let row = cell.parent()?;'''
+
+[[mutant]]
+name = "a row group's cells have no table"
+file = "crates/style/src/hints.rs"
+from = '''        parent = parent.parent()?;'''
+to = '''        return None;'''
+
+[[mutant]]
+name = "a row's parent is its table whatever it is"
+file = "crates/style/src/hints.rs"
+from = '''    is(parent, &[local_name!("table")]).then_some(parent)'''
+to = '''    Some(parent)'''

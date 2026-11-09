@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Using things while loading</title>
+<style>.loading {}</style>
+<script>
+  // A `Blob` and a style sheet of its own as the page loads, before the
+  // runner's first hook for it: what the recording gives this suite, not
+  // the one before.
+  new Blob(["a"]);
+  window.tests = [{ name: "Nothing", run() {} }];
+</script>

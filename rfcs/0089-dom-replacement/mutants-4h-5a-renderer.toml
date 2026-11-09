@@ -1,0 +1,37 @@
+# Stage 4h-5a in the renderer: the blob URLs the new DOM's realms register, kept with
+# today's, revoked with their frame; one revoked before an image resolved it.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p renderer --lib -- blob_urls && cargo test -q -p shell --test it -- blob_urls_load_until_revoked"]
+timeout = 2400
+
+[[mutant]]
+name = "renderer: a frame's blob URLs kept as it goes"
+file = "crates/renderer/src/loader.rs"
+from = '''            .filter(|(_, owner)| **owner == BlobUrlOwner::NextFrame(frame))'''
+to = '''            .filter(|(_, owner)| **owner == BlobUrlOwner::NextFrame(frame) && false)'''
+
+[[mutant]]
+name = "renderer: a document's discard revokes a frame's"
+file = "crates/renderer/src/loader.rs"
+from = '''            .filter(|(_, owner)| matches!(owner, BlobUrlOwner::Document(owner) if discarded(*owner)))'''
+to = '''            .filter(|(_, owner)| match owner { BlobUrlOwner::Document(owner) => discarded(*owner), BlobUrlOwner::NextFrame(_) => true })'''
+
+[[mutant]]
+name = "renderer: the new DOM's blob URLs not registered"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                        self.blob_urls.register(&url, owner, data.type_(), data.shared_bytes());'''
+to = '''                        let _ = (url, owner, data);'''
+
+[[mutant]]
+name = "renderer: a revoked blob URL fetched"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                && self.blob_urls.is_revoked(&parsed)'''
+to = '''                && self.blob_urls.is_revoked(&parsed) && false'''
+
+[[mutant]]
+name = "renderer: an image fetched before a task's blob URL is registered"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        // handled (a task's blob URLs among them): the browser hears of a
+        // blob URL before a load of it.
+        self.handle_next_frame_requests();'''
+to = '''        // handled (a task's blob URLs among them): the browser hears of a
+        // blob URL before a load of it.'''

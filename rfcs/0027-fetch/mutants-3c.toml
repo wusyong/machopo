@@ -1,0 +1,142 @@
+# Mutation test of step 3c (subresources by CORS):
+# python3 scripts/test.py mutate rfcs/0027-fetch/mutants-3c.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "modules"]
+timeout = 900
+
+# --- dom_api: crossorigin -----------------------------------------------------
+
+[[mutant]]
+name = "use-credentials by its case"
+file = "crates/dom_api/src/script.rs"
+from = '''        value if value.eq_ignore_ascii_case("use-credentials") => CredentialsMode::Include,'''
+to = '''        value if value == "use-credentials" => CredentialsMode::Include,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--lib", "script"]
+
+[[mutant]]
+name = "a module's default credentials are include"
+file = "crates/dom_api/src/script.rs"
+from = '''    let credentials = crossorigin.unwrap_or(CredentialsMode::SameOrigin);'''
+to = '''    let credentials = crossorigin.unwrap_or(CredentialsMode::Include);'''
+
+[[mutant]]
+name = "a classic script's crossorigin is ignored"
+file = "crates/dom_api/src/script.rs"
+from = '''                ScriptKind::Classic => crossorigin,'''
+to = '''                ScriptKind::Classic => None,'''
+
+[[mutant]]
+name = "a classic script always goes by CORS"
+file = "crates/dom_api/src/script.rs"
+from = '''                ScriptKind::Classic => crossorigin,'''
+to = '''                ScriptKind::Classic => Some(credentials),'''
+
+[[mutant]]
+name = "an inline module's credentials are same-origin"
+file = "crates/dom_api/src/script.rs"
+from = '''            timing: waits(true),
+            credentials,'''
+to = '''            timing: waits(true),
+            credentials: CredentialsMode::SameOrigin,'''
+
+# --- renderer: the requests ---------------------------------------------------
+
+[[mutant]]
+name = "no initiator"
+file = "crates/renderer/src/frame_view.rs"
+from = '''    request.initiator = Some(match origin {'''
+to = '''    let _ = Some(match origin {'''
+
+[[mutant]]
+name = "no-cors mode"
+file = "crates/renderer/src/frame_view.rs"
+from = '''    request.mode = RequestMode::Cors;'''
+to = ''''''
+
+[[mutant]]
+name = "credentials always include"
+file = "crates/renderer/src/frame_view.rs"
+from = '''    request.credentials = credentials;'''
+to = ''''''
+
+[[mutant]]
+name = "a classic script's cors is ignored"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        let request = match cors {'''
+to = '''        let request = match cors.filter(|_| false) {'''
+
+[[mutant]]
+name = "a module's credentials are same-origin"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            modulator.fetch_tree(host, url, GraphFor::Script(script), credentials)'''
+to = '''            modulator.fetch_tree(host, url, GraphFor::Script(script), CredentialsMode::SameOrigin)'''
+
+[[mutant]]
+name = "an inline module's imports are same-origin"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            modulator.fetch_inline_tree(host, source, &url, base_url, line, script, credentials)'''
+to = '''            modulator.fetch_inline_tree(host, source, &url, base_url, line, script, CredentialsMode::SameOrigin)'''
+
+[[mutant]]
+name = "a preload's credentials are same-origin"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            let credentials = link.credentials;'''
+to = '''            let credentials = CredentialsMode::SameOrigin;'''
+
+[[mutant]]
+name = "an import() is include"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                GraphFor::Import(import.import),
+                CredentialsMode::SameOrigin,'''
+to = '''                GraphFor::Import(import.import),
+                CredentialsMode::Include,'''
+
+[[mutant]]
+name = "the host's fetch ignores the credentials"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            RequestDestination::Script,
+            credentials,
+        );
+        let request_id = (self.fetch)(request);'''
+to = '''            RequestDestination::Script,
+            CredentialsMode::SameOrigin,
+        );
+        let _ = credentials;
+        let request_id = (self.fetch)(request);'''
+
+[[mutant]]
+name = "a preload's default credentials are include"
+file = "crates/renderer/src/document.rs"
+from = '''                    .unwrap_or(CredentialsMode::SameOrigin),'''
+to = '''                    .unwrap_or(CredentialsMode::Include),'''
+
+[[mutant]]
+name = "a preload's crossorigin is ignored"
+file = "crates/renderer/src/document.rs"
+from = '''                        child.attribute(&QualName::attr("crossorigin")).as_deref(),'''
+to = '''                        None,'''
+
+[[mutant]]
+name = "the render thread drops a classic script's cors"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                        view.fetch_script(element, url, timing, kind, cors, &self.dom, fetch)'''
+to = '''                        view.fetch_script(element, url, timing, kind, None, &self.dom, fetch)'''
+
+# --- renderer: the modulator --------------------------------------------------
+
+[[mutant]]
+name = "descendants are same-origin"
+file = "crates/renderer/src/modulator.rs"
+from = '''                let request_id = host.fetch(&url, delays_load, entry.credentials);'''
+to = '''                let request_id = host.fetch(&url, delays_load, CredentialsMode::SameOrigin);'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "modulator"]
+
+[[mutant]]
+name = "a linker forgets its credentials"
+file = "crates/renderer/src/modulator.rs"
+from = '''                target,
+                credentials,
+                root: None,'''
+to = '''                target,
+                credentials: CredentialsMode::Include,
+                root: None,'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "modulator"]

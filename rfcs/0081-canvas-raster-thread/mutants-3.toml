@@ -1,0 +1,97 @@
+# Stage 3: a canvas read back twice with getImageData taken back from the
+# canvas raster thread, and drawn on the main thread from then on.
+#
+# python3 scripts/test.py mutate rfcs/0081-canvas-raster-thread/mutants-3.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+timeout = 120
+
+# dom_api: counting reads back, taking the bitmap back.
+
+[[mutant]]
+name = "taken back after three reads"
+file = "crates/dom_api/src/canvas.rs"
+from = '''const READBACKS_TO_DRAW_HERE: u8 = 2;'''
+to = '''const READBACKS_TO_DRAW_HERE: u8 = 3;'''
+
+[[mutant]]
+name = "taken back after one read"
+file = "crates/dom_api/src/canvas.rs"
+from = '''const READBACKS_TO_DRAW_HERE: u8 = 2;'''
+to = '''const READBACKS_TO_DRAW_HERE: u8 = 1;'''
+
+[[mutant]]
+name = "reads not counted"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    count_readback(cx, this);
+    let space = settings'''
+to = '''    let space = settings'''
+
+[[mutant]]
+name = "a bitmap drawn here counts reads too"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        data.resource.as_ref()?;
+        data.readbacks = data.readbacks.saturating_add(1);'''
+to = '''        data.readbacks = data.readbacks.saturating_add(1);'''
+
+[[mutant]]
+name = "taken back without the pixels coming"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let Some(snapshot) = snapshot.filter(gfx::ImageData::wait_ready) else {'''
+to = '''    let Some(snapshot) = snapshot.filter(|snapshot| { snapshot.wait_ready(); true }) else {'''
+
+[[mutant]]
+name = "taken back without its pixels"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        data.pixels = Some(pixels);
+        data.resource = None;'''
+to = '''        drop(pixels);
+        data.resource = None;'''
+
+[[mutant]]
+name = "left on the thread too"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        data.resource = None;
+        data.drawn_here = true;'''
+to = '''        data.drawn_here = true;'''
+
+[[mutant]]
+name = "taken back but sent there again"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        data.resource = None;
+        data.drawn_here = true;'''
+to = '''        data.resource = None;'''
+
+# renderer: drawing a canvas taken back on the main thread.
+
+[[mutant]]
+name = "a taken back canvas goes to the thread again"
+file = "crates/renderer/src/canvas.rs"
+from = '''    if settings.will_read_frequently || data.drawn_here {'''
+to = '''    if settings.will_read_frequently {'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "canvas"]
+
+# dom: a reset keeps where the bitmap is drawn.
+
+[[mutant]]
+name = "a reset forgets the reads back"
+file = "crates/dom/src/canvas.rs"
+from = '''            origin_clean,
+            readbacks,
+            drawn_here,
+            ..Self::new(size)'''
+to = '''            origin_clean,
+            drawn_here,
+            ..Self::new(size)'''
+test = ["cargo", "test", "-q", "-p", "dom", "--lib", "canvas"]
+
+[[mutant]]
+name = "a reset sends the bitmap to the thread again"
+file = "crates/dom/src/canvas.rs"
+from = '''            origin_clean,
+            readbacks,
+            drawn_here,
+            ..Self::new(size)'''
+to = '''            origin_clean,
+            readbacks,
+            ..Self::new(size)'''
+test = ["cargo", "test", "-q", "-p", "dom", "--lib", "canvas"]

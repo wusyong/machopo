@@ -1,0 +1,8 @@
+<!DOCTYPE html>
+<title>An iframe's srcdoc document without a doctype isn't in quirks mode</title>
+<link rel=match href=f4-child-fragment-ref.html>
+<style>
+  body { margin: 0; }
+  iframe { display: block; width: 100px; height: 50px; border: 0; }
+</style>
+<iframe srcdoc="<body style='margin: 0'><script>document.body.style.background = document.compatMode == 'CSS1Compat' ? 'green' : 'red';</script>"></iframe>

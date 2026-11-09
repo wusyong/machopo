@@ -1,0 +1,220 @@
+# Stage 4h-5b-1: `performance` on the new DOM: its clock, User Timing, PerformanceObserver,
+# Navigation Timing (the window's timing, the document's times marked as its events fire).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it -- performance:: wrappers::"]
+timeout = 1500
+
+[[mutant]]
+name = "api: now() not coarsened"
+file = "crates/dom_api_next/src/performance.rs"
+from = '''    coarsen(cx.now_since(Some(window)))'''
+to = '''    cx.now_since(Some(window)) + 0.01'''
+
+[[mutant]]
+name = "dom: timeOrigin without the window's own"
+file = "crates/dom_next/src/window.rs"
+from = '''        self.changes.unix_origin.get() + window.time_origin.get()'''
+to = '''        self.changes.unix_origin.get() + 0.0 * window.time_origin.get()'''
+
+[[mutant]]
+name = "api: the buffer not by startTime"
+file = "crates/dom_api_next/src/performance.rs"
+from = '''    entries.sort_by(|&a, &b| start_time_of(cx, a).total_cmp(&start_time_of(cx, b)));
+    entries
+}'''
+to = '''    entries
+}'''
+
+[[mutant]]
+name = "api: a timing name a mark"
+file = "crates/dom_api_next/src/performance.rs"
+from = '''    if TIMING_NAMES.contains(&name) {
+        return Err(dom_error('''
+to = '''    if false {
+        return Err(dom_error('''
+
+[[mutant]]
+name = "api: a mark's negative start"
+file = "crates/dom_api_next/src/performance.rs"
+from = '''        Some(time) if time < 0.0 => return Err(ApiError::type_error("startTime can't be negative")),'''
+to = ''''''
+
+[[mutant]]
+name = "api: a mark's detail dropped"
+file = "crates/dom_api_next/src/performance.rs"
+from = '''    let detail = options.detail.as_ref().map(|detail| detail.0.clone());
+    Ok(cx.create_performance_entry(window, PerformanceEntryType::Mark, name, start_time, 0.0, detail))'''
+to = '''    let _ = &options.detail;
+    Ok(cx.create_performance_entry(window, PerformanceEntryType::Mark, name, start_time, 0.0, None))'''
+
+[[mutant]]
+name = "js: a detail deserialized each time"
+file = "crates/dom_next/src/performance.rs"
+from = '''    pub fn set_performance_entry_detail_fresh(&self, entry: Gc<'gc, PerformanceEntry>) {
+        entry.fresh.set(true);'''
+to = '''    pub fn set_performance_entry_detail_fresh(&self, entry: Gc<'gc, PerformanceEntry>) {
+        let _ = entry;'''
+
+[[mutant]]
+name = "api: a mark's time the first of the name"
+file = "crates/dom_api_next/src/performance.rs"
+from = '''        .into_iter()
+        .rev()
+        .find(|&entry| cx.performance_entry_type(entry) == PerformanceEntryType::Mark'''
+to = '''        .into_iter()
+        .find(|&entry| cx.performance_entry_type(entry) == PerformanceEntryType::Mark'''
+
+[[mutant]]
+name = "api: measure's start plus duration ignored"
+file = "crates/dom_api_next/src/performance.rs"
+from = '''        mark_time(cx, this, start)? + duration'''
+to = '''        mark_time(cx, this, start)? + 0.0 * duration'''
+
+[[mutant]]
+name = "api: measure's end less duration ignored"
+file = "crates/dom_api_next/src/performance.rs"
+from = '''        mark_time(cx, this, end)? - duration'''
+to = '''        mark_time(cx, this, end)? - 0.0 * duration'''
+
+[[mutant]]
+name = "api: options and an end mark taken"
+file = "crates/dom_api_next/src/performance.rs"
+from = '''        if end_mark.is_some() {
+            return Err(ApiError::type_error("options and an end mark can't both be given"));
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a timing name's time taken when none"
+file = "crates/dom_api_next/src/performance.rs"
+from = '''            (time, start) if time > 0 => Ok(time.saturating_sub(start) as f64),'''
+to = '''            (time, start) => Ok(time.saturating_sub(start) as f64),'''
+
+[[mutant]]
+name = "dom: clearMarks clears every name"
+file = "crates/dom_next/src/performance.rs"
+from = '''                && name.is_none_or(|name| *self.performance_entry_name(entry).to_str() == *name)'''
+to = '''                && name.is_none_or(|_| true)'''
+
+[[mutant]]
+name = "api: a constructed mark in the buffer"
+file = "crates/dom_api_next/src/performance.rs"
+from = '''    make_mark(cx, window, name, options)
+}'''
+to = '''    let mark = make_mark(cx, window, name, options)?;
+    let performance = cx.window_performance(window);
+    cx.add_performance_entry(performance, mark);
+    Ok(mark)
+}'''
+
+[[mutant]]
+name = "api: observers called at once"
+file = "crates/dom_next/src/performance.rs"
+from = '''            self.push_target_task(window, performance, crate::window::PERFORMANCE_TIMELINE, 0);'''
+to = '''            let _ = (window, performance);'''
+
+[[mutant]]
+name = "dom: droppedEntriesCount every time"
+file = "crates/dom_next/src/performance.rs"
+from = '''        observer.requires_dropped.replace(false)'''
+to = '''        observer.requires_dropped.get()'''
+
+[[mutant]]
+name = "api: buffered ignored"
+file = "crates/dom_api_next/src/performance.rs"
+from = '''                Some(entry_type) => (vec![entry_type], options.buffered == Some(true)),'''
+to = '''                Some(entry_type) => (vec![entry_type], false),'''
+
+[[mutant]]
+name = "api: an observer's modes mixed"
+file = "crates/dom_api_next/src/performance.rs"
+from = '''            if mode == PerformanceObserverMode::Single {
+                return Err(invalid_modification('''
+to = '''            if false {
+                return Err(invalid_modification('''
+
+[[mutant]]
+name = "dom: entryTypes adds to the types"
+file = "crates/dom_next/src/performance.rs"
+from = '''        if self.performance_observer_mode(observer) == PerformanceObserverMode::Multiple {
+            observer.types.set(bits);
+        } else {'''
+to = '''        if false {
+            observer.types.set(bits);
+        } else {'''
+
+[[mutant]]
+name = "dom: disconnect keeps observing"
+file = "crates/dom_next/src/performance.rs"
+from = '''        observer.types.set(0);
+    }'''
+to = '''    }'''
+
+[[mutant]]
+name = "api: an entry list not by startTime"
+file = "crates/dom_api_next/src/performance.rs"
+from = '''            entries.sort_by(|&a, &b| start_time_of(cx, a).total_cmp(&start_time_of(cx, b)));
+            let list = cx.create_performance_observer_entry_list(&entries);'''
+to = '''            let list = cx.create_performance_observer_entry_list(&entries);'''
+
+[[mutant]]
+name = "js: a static attribute on the prototype"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''            MemberKind::Getter if desc.is_static => {'''
+to = '''            MemberKind::Getter if desc.is_static && false => {'''
+
+[[mutant]]
+name = "api: no navigation entry"
+file = "crates/dom_api_next/src/performance.rs"
+from = '''    let entry = cx.create_performance_entry(window, PerformanceEntryType::Navigation, &url, 0.0, 0.0, None);
+    cx.add_performance_entry(performance, entry);'''
+to = '''    let _ = url;'''
+
+[[mutant]]
+name = "api: the navigation entry not observed after load"
+file = "crates/dom_api_next/src/lifecycle.rs"
+from = '''            crate::performance::load_ended(host, document);'''
+to = ''''''
+
+[[mutant]]
+name = "api: domInteractive not marked"
+file = "crates/dom_api_next/src/lifecycle.rs"
+from = '''                mark(NavigationMilestone::DomInteractive);'''
+to = ''''''
+
+[[mutant]]
+name = "api: the load event's end before it"
+file = "crates/dom_api_next/src/lifecycle.rs"
+from = '''                fire_load(host, &window, &target);
+                mark(host, NavigationMilestone::LoadEventEnd);'''
+to = '''                mark(host, NavigationMilestone::LoadEventEnd);
+                fire_load(host, &window, &target);'''
+
+[[mutant]]
+name = "api: transferSize without its head"
+file = "crates/dom_api_next/src/performance.rs"
+from = '''        timing.encoded_body_size.saturating_add(HEADER_SIZE)'''
+to = '''        timing.encoded_body_size'''
+
+[[mutant]]
+name = "api: a navigation's duration 0"
+file = "crates/dom_api_next/src/performance.rs"
+from = '''        PerformanceEntryType::Navigation => relative(entry_timing(cx, this).load_event_end),'''
+to = '''        PerformanceEntryType::Navigation => 0.0,'''
+
+[[mutant]]
+name = "api: performance.timing in the window's clock"
+file = "crates/dom_api_next/src/performance.rs"
+from = '''    time.map_or(0, |time| base::numerics::saturated_cast::<u64, _>((cx.window_unix_time_origin(window) + time).floor()))'''
+to = '''    time.map_or(0, |time| base::numerics::saturated_cast::<u64, _>(time.floor()))'''
+
+[[mutant]]
+name = "api: the legacy type always navigate"
+file = "crates/dom_api_next/src/performance.rs"
+from = '''        NavigationType::Reload => 1,'''
+to = '''        NavigationType::Reload => 0,'''
+
+[[mutant]]
+name = "api: the confidence the same object"
+file = "crates/dom_next/src/performance.rs"
+from = '''            PerformanceTimingKind::Confidence(_) => return make(),'''
+to = '''            PerformanceTimingKind::Confidence(_) => &data.into_ref().timing,'''

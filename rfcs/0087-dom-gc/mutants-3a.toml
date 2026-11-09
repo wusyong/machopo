@@ -1,0 +1,190 @@
+# Step 3a: the young generation. The write barrier at each place an edge
+# is written, the scavenge (forwarding, ageing and promotion, the slot sets
+# taken and put back, Cheney's scan of the copies and of the promoted, the
+# nursery's finalizers, from-space given back), the safepoint's choice, a
+# full GC emptying the nursery first, and the verifier's checks after a
+# scavenge.
+test = ["cargo", "test", "-q", "-p", "gc"]
+timeout = 600
+
+# The write barrier.
+
+[[mutant]]
+name = "the barrier records nothing"
+file = "crates/gc/src/heap/young.rs"
+from = '''            if !self.is_young(slot) {
+                self.remember(slot);
+            }'''
+to = '''            if false {
+                self.remember(slot);
+            }'''
+
+[[mutant]]
+name = "Member::set skips the barrier"
+file = "crates/gc/src/member.rs"
+from = '''        cell.set(raw);
+        cx.inner.write_barrier(cell.as_ptr().cast(), raw);'''
+to = '''        cell.set(raw);'''
+
+[[mutant]]
+name = "a Member's init skips the barrier"
+file = "crates/gc/src/member.rs"
+from = '''        // The object may be old (the nursery was full, or it is large).
+        cx.inner.write_barrier(at.cast(), raw);'''
+to = '''        let _ = raw;'''
+
+[[mutant]]
+name = "a row's init skips the barrier"
+file = "crates/gc/src/member.rs"
+from = '''                .write_barrier(at.cast::<u32>().wrapping_add(i).cast(), raw);'''
+to = '''                .write_barrier(at.cast::<u32>().wrapping_add(i).cast(), 0 * raw);'''
+
+[[mutant]]
+name = "a vector's writes skip the barrier"
+file = "crates/gc/src/vector.rs"
+from = '''        edge.set(raw);
+        cx.inner.write_barrier(edge.as_ptr().cast(), raw);'''
+to = '''        edge.set(raw);'''
+
+# The scavenge.
+
+[[mutant]]
+name = "a forwarded object is copied again"
+file = "crates/gc/src/heap/young.rs"
+from = '''        if let Some(to) = self.forwarded(data) {
+            #[expect('''
+to = '''        if let Some(to) = None::<usize>.filter(|_| self.forwarded(data).is_some()) {
+            #[expect('''
+
+[[mutant]]
+name = "every survivor is promoted"
+file = "crates/gc/src/heap/young.rs"
+from = '''        let promote = scavenge.promote_all || flags & AGED != 0;'''
+to = '''        let promote = true || flags & AGED != 0;'''
+
+[[mutant]]
+name = "no survivor is promoted but a full GC's"
+file = "crates/gc/src/heap/young.rs"
+from = '''        let promote = scavenge.promote_all || flags & AGED != 0;'''
+to = '''        let promote = scavenge.promote_all || flags & AGED != 0 && false;'''
+
+[[mutant]]
+name = "a full GC leaves the nursery"
+file = "crates/gc/src/heap.rs"
+from = '''        self.scavenge(&*platform, true);'''
+to = '''        self.scavenge(&*platform, false);'''
+
+[[mutant]]
+name = "an old edge still young isn't put back"
+file = "crates/gc/src/heap/young.rs"
+from = '''        if old && moved != 0 && self.is_young(moved as usize) {'''
+to = '''        if old && moved != 0 && self.is_young(moved as usize) && false {'''
+
+[[mutant]]
+name = "the slot sets are no roots"
+file = "crates/gc/src/heap/young.rs"
+from = '''        for slot in self.take_remembered() {'''
+to = '''        for slot in self.take_remembered().into_iter().take(0) {'''
+
+[[mutant]]
+name = "the promoted aren't scanned"
+file = "crates/gc/src/heap/young.rs"
+from = '''            } else if let Some(data) = scavenge.promoted.pop() {'''
+to = '''            } else if let Some(data) = scavenge.promoted.pop().filter(|_| false) {'''
+
+[[mutant]]
+name = "an array's copy is short a word"
+file = "crates/gc/src/heap/young.rs"
+from = '''                capacity.saturating_add(1).saturating_mul(4)'''
+to = '''                capacity.saturating_mul(4)'''
+
+[[mutant]]
+name = "the nursery's dead aren't finalized"
+file = "crates/gc/src/heap/young.rs"
+from = '''                None => dead.push(data),'''
+to = '''                None => {}'''
+
+[[mutant]]
+name = "a young survivor leaves the finalizer list"
+file = "crates/gc/src/heap/young.rs"
+from = '''                Some(to) if self.is_young(to) => self.young.get_mut().finalizable.push(to),'''
+to = '''                Some(to) if self.is_young(to) => {}'''
+
+[[mutant]]
+name = "from-space's pages stay out of the pool"
+file = "crates/gc/src/heap/young.rs"
+from = '''            space.pool.push(number);
+        }
+        // The heap is whole again before any finalizer runs.'''
+to = '''        }
+        // The heap is whole again before any finalizer runs.'''
+
+[[mutant]]
+name = "from-space's pages stay young"
+file = "crates/gc/src/heap/young.rs"
+from = '''            self.young_pages[number].set(false);'''
+to = '''            let _ = number;'''
+
+# The nursery and the safepoint.
+
+[[mutant]]
+name = "a full nursery never scavenges"
+file = "crates/gc/src/heap.rs"
+from = '''        } else if self.inner.young.borrow().full {'''
+to = '''        } else if self.inner.young.borrow().full && false {'''
+
+[[mutant]]
+name = "the nursery has no limit"
+file = "crates/gc/src/heap/young.rs"
+from = '''        if !copying && young.pages.len() >= young.capacity_pages {'''
+to = '''        if !copying && young.pages.len() >= young.capacity_pages.max(1 << 20) {'''
+
+[[mutant]]
+name = "an object larger than a slot is young"
+file = "crates/gc/src/heap.rs"
+from = '''        if bytes <= page::MAX_SLOT_BYTES
+            && let Some(data) = self.allocate_young(bytes)'''
+to = '''        if bytes <= page::MAX_SLOT_BYTES * 2
+            && let Some(data) = self.allocate_young(bytes)'''
+
+# The verifier after a scavenge.
+
+[[mutant]]
+name = "an old edge not remembered passes"
+file = "crates/gc/src/heap/verify.rs"
+from = '''                if !young_host && self.is_young(edge) && !remembered(states, slot) {'''
+to = '''                if !young_host && self.is_young(edge) && !remembered(states, slot) && false {'''
+
+[[mutant]]
+name = "a forwarded object reached passes"
+file = "crates/gc/src/heap/verify.rs"
+from = '''                    if flags & !super::young::AGED != 0 {'''
+to = '''                    if false {'''
+
+[[mutant]]
+name = "a scavenge never runs the verifier"
+file = "crates/gc/src/heap.rs"
+from = '''        if self.verifies() {
+            self.verify_young();
+        }'''
+to = '''        if false {
+            self.verify_young();
+        }'''
+
+# `bench.py gc`.
+
+[[mutant]]
+name = "a scavenge on its own is an atomic pause"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''    if name in ("MinorGC", "Gc.Scavenge") or "SCAVENGER" in name:'''
+to = '''    if name in ("MinorGC",) or "SCAVENGER" in name:'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests"]
+
+# The pool (found while running this spec: a test of it hung now and then).
+
+[[mutant]]
+name = "a job's start wakes no worker it wants"
+file = "crates/gc/src/platform.rs"
+from = '''        if job.max_concurrency(0) > 0 {'''
+to = '''        if job.max_concurrency(1) > 1 {'''
+test = ["cargo", "test", "-q", "-p", "gc", "--lib", "platform::"]

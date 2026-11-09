@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<title>C3: at 2x, a canvas that is a layer, at a fractional position, snaps to device pixels like a box</title>
+<link rel="match" href="k3-fractional-edges-ref.html">
+<style>html, body { margin: 0 } canvas { display: block }</style>
+<!-- The box of k3-fractional-edges: 10.25 to 30.75 CSS px, 21 to 62
+     device px. The layer's quad must land there, not half a device pixel
+     off; one device pixel to each bitmap pixel. -->
+<canvas width="41" height="40" style="margin-left: 10.25px; width: 20.5px; height: 20px"></canvas>
+<script>
+  const ctx = document.querySelector("canvas").getContext("2d");
+  ctx.fillStyle = "green";
+  ctx.fillRect(0, 0, 41, 40);
+</script>

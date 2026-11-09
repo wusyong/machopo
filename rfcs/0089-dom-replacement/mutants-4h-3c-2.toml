@@ -1,0 +1,115 @@
+# Stage 4h-3c-2: Web Animations' effects on the new DOM: `KeyframeEffect` and its members, effects
+# given to and taken from animations, `timeline` set, `persist()`, `commitStyles()`'s checks.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it web_animations"]
+timeout = 1500
+
+[[mutant]]
+name = "api: fill \"auto\" not kept"
+file = "crates/dom_api_next/src/effect.rs"
+from = '''    let fill = if input.fill_auto {'''
+to = '''    let fill = if false {'''
+
+[[mutant]]
+name = "api: duration \"auto\" not kept"
+file = "crates/dom_api_next/src/effect.rs"
+from = '''            if input.duration_auto {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "api: computed duration not resolved"
+file = "crates/dom_api_next/src/effect.rs"
+from = '''            "duration" => *value = DictValue::Number(state.timing.duration),'''
+to = '''            "duration" => {}'''
+
+[[mutant]]
+name = "api: the constructor's timing dropped"
+file = "crates/dom_api_next/src/effect.rs"
+from = '''    animation::apply_timing(&mut timing, &mut input, &options.timing).map_err(ApiError::type_error)?;
+    input.pseudo'''
+to = '''    input.pseudo'''
+
+[[mutant]]
+name = "api: updateTiming changes nothing"
+file = "crates/dom_api_next/src/effect.rs"
+from = '''        *out = new;
+        *out_input = input;'''
+to = '''        let _ = (out, out_input, new, input);'''
+
+[[mutant]]
+name = "api: a free effect's target not set"
+file = "crates/dom_api_next/src/effect.rs"
+from = '''        None => cx.set_free_effect_target(this, target.map(|(element, _)| element)),'''
+to = '''        None => {}'''
+
+[[mutant]]
+name = "api: script's animation stays on its old target"
+file = "crates/dom_api_next/src/effect.rs"
+from = '''            if scripts && let Some(moved) = cx.take_animation(document, animation, hint) {'''
+to = '''            if false && let Some(moved) = cx.take_animation(document, animation, hint) {'''
+
+[[mutant]]
+name = "api: pseudoElement not set"
+file = "crates/dom_api_next/src/effect.rs"
+from = '''    change(cx, this, Change::Neither, |_, _, input| input.pseudo = pseudo);'''
+to = '''    let _ = pseudo;'''
+
+[[mutant]]
+name = "api: computed offsets not given"
+file = "crates/dom_api_next/src/effect.rs"
+from = '''                    ("computedOffset".into(), DictValue::Number(computed)),'''
+to = '''                    ("computedOffset".into(), DictValue::Number(0.0)),'''
+
+[[mutant]]
+name = "api: setKeyframes changes nothing"
+file = "crates/dom_api_next/src/effect.rs"
+from = '''    change(cx, this, Change::Keyframes, |out, _, _| *out = effect).ok_or_else(gone)'''
+to = '''    change(cx, this, Change::Keyframes, |_, _, _| drop(effect)).ok_or_else(gone)'''
+
+[[mutant]]
+name = "api: a free effect not taken"
+file = "crates/dom_api_next/src/animation.rs"
+from = '''    if let Some((free, element)) = cx.take_free_effect(effect) {'''
+to = '''    if let Some((free, element)) = cx.take_free_effect(effect).filter(|_| false) {'''
+
+[[mutant]]
+name = "api: the effect replaced not kept on its object"
+file = "crates/dom_api_next/src/animation.rs"
+from = '''        if let Some(taken) = take_effect(cx, document, object) {
+            cx.put_free_effect('''
+to = '''        if let Some(taken) = take_effect(cx, document, object).filter(|_| false) {
+            cx.put_free_effect('''
+
+[[mutant]]
+name = "api: timeline always kept"
+file = "crates/dom_api_next/src/animation.rs"
+from = '''    let has = value.is_some();'''
+to = '''    let has = true || value.is_some();'''
+
+[[mutant]]
+name = "api: persist() does nothing"
+file = "crates/dom_api_next/src/animation.rs"
+from = '''        animation.replace_state = animation::ReplaceState::Persisted;'''
+to = '''        let _ = animation;'''
+
+[[mutant]]
+name = "api: commitStyles() of a pseudo-element's"
+file = "crates/dom_api_next/src/animation.rs"
+from = '''    if pseudo.is_some() {
+        return Err(not_styled());'''
+to = '''    if false {
+        return Err(not_styled());'''
+
+[[mutant]]
+name = "api: commitStyles() of one not rendered"
+file = "crates/dom_api_next/src/animation.rs"
+from = '''    if !rendered {'''
+to = '''    if false && !rendered {'''
+
+[[mutant]]
+name = "api: any pseudo-element accepted"
+file = "crates/dom_api_next/src/animation.rs"
+from = '''        "::marker" => Some(PseudoId::Marker),
+        _ => {'''
+to = '''        "::marker" => Some(PseudoId::Marker),
+        other if other.starts_with("::") => None,
+        _ => {'''

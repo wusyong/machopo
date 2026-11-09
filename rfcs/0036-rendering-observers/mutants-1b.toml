@@ -1,0 +1,120 @@
+# Mutation test of step 1b (the rendering update's gather, broadcast and
+# loop):
+# python3 scripts/test.py mutate rfcs/0036-rendering-observers/mutants-1b.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "resize_observers::"]
+timeout = 900
+
+# dom_api: the sizes.
+
+[[mutant]]
+name = "the content box keeps the padding"
+file = "crates/dom_api/src/resize_observer.rs"
+from = '''                (border_box.width - left - right - padding_left - padding_right).max(0.0);'''
+to = '''                (border_box.width - left - right).max(0.0);'''
+
+[[mutant]]
+name = "the content rect starts at the border box"
+file = "crates/dom_api/src/resize_observer.rs"
+from = '''                    f64::from(padding_left),
+                    f64::from(padding_top),'''
+to = '''                    0.0,
+                    0.0,'''
+
+[[mutant]]
+name = "an SVG element without a box is 0x0"
+file = "crates/dom_api/src/resize_observer.rs"
+from = '''        (None, Some(svg)) if svg.client_rect.is_some() => ('''
+to = '''        (None, Some(svg)) if svg.client_rect.is_some() && false => ('''
+
+[[mutant]]
+name = "an inline element has its box"
+file = "crates/dom_api/src/resize_observer.rs"
+from = '''    let block_box = element_box.and_then(|b| b.block.map(|block| (b.border_box, block)));'''
+to = '''    let block_box = element_box.map(|b| (b.border_box, b.block.unwrap_or(dom::BlockBox { border: [0.0; 4], padding: [0.0; 4], margin: [0.0; 4], inset: [0.0; 4], scroll_size: gfx::SizeF::new(0.0, 0.0), scroll: None })));'''
+
+# dom_api: gather and broadcast.
+
+[[mutant]]
+name = "an unchanged size is broadcast again"
+file = "crates/dom_api/src/resize_observer.rs"
+from = '''            if observation.last_reported == Some(reported) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "the broadcast size isn't recorded"
+file = "crates/dom_api/src/resize_observer.rs"
+from = '''                    m.set_resize_observation_reported(&observer, &active.target, active.reported);'''
+to = ''''''
+
+[[mutant]]
+name = "the reported size is the content box's whatever the box"
+file = "crates/dom_api/src/resize_observer.rs"
+from = '''                ResizeObserverBox::BorderBox => values.border_box,'''
+to = '''                ResizeObserverBox::BorderBox => values.content_box,'''
+
+[[mutant]]
+name = "an observation as deep as the depth is active"
+file = "crates/dom_api/src/resize_observer.rs"
+from = '''            if target_depth > depth {'''
+to = '''            if target_depth >= depth {'''
+
+[[mutant]]
+name = "the depth broadcast is the deepest"
+file = "crates/dom_api/src/resize_observer.rs"
+from = '''        let shallowest = active.iter().map(|active| active.depth).min();'''
+to = '''        let shallowest = active.iter().map(|active| active.depth).max();'''
+
+[[mutant]]
+name = "the callback's this isn't the observer"
+file = "crates/dom_api/src/resize_observer.rs"
+from = '''            this.clone(),
+            vec![Value::List(entries), this],'''
+to = '''            Value::Undefined,
+            vec![Value::List(entries), this],'''
+
+[[mutant]]
+name = "no loop error"
+file = "crates/dom_api/src/resize_observer.rs"
+from = '''    if crate::event::report_exception(cx, &window, data, None) {'''
+to = '''    if true {'''
+
+# renderer: the loop.
+
+[[mutant]]
+name = "one round only"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            if !broadcast {
+                break;
+            }'''
+to = '''            break;'''
+
+[[mutant]]
+name = "the rounds after the first aren't laid out"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        loop {
+            self.update_lifecycle_to_pre_paint();
+            let mut broadcast = false;'''
+to = '''        self.update_lifecycle_to_pre_paint();
+        loop {
+            let mut broadcast = false;'''
+
+[[mutant]]
+name = "the depth stays where it started"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    depths[index] = depth;'''
+to = '''                    let _ = depth;'''
+
+[[mutant]]
+name = "the loop runs after the focus fixup"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.run_resize_observer_steps();
+        self.run_focus_fixup();'''
+to = '''        self.run_focus_fixup();
+        self.update_title(false);
+        self.run_resize_observer_steps();'''
+
+[[mutant]]
+name = "observing doesn't ask for a frame"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let newly_observed = observed != self.rendered_observations_versions;'''
+to = '''        let newly_observed = false;'''

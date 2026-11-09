@@ -1,0 +1,116 @@
+# Mutation test of stage 1c: geometry and hit testing in shadow trees,
+# `elementFromPoint`'s retargeting, `offsetParent` along the flat tree, a
+# range around a `display: contents` element; and what the WPT runs found:
+# the font of text in a `display: contents` element, counters through one
+# (2026-10-14):
+# python3 scripts/test.py mutate rfcs/0046-shadow-tree-rendering/mutants-1c.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "geometry::elements_in_shadow_trees_have_boxes"]
+timeout = 1200
+
+[[mutant]]
+name = "elementFromPoint isn't retargeted"
+file = "crates/dom_api/src/geometry.rs"
+from = '''                crate::shadow_root::retarget(node.get(&read), Some(tree_scope.get(&read)))
+                    .to_handle(),'''
+to = '''                node.get(&read).to_handle(),'''
+
+[[mutant]]
+name = "a shadow root's elementFromPoint looks in no frame"
+file = "crates/dom_api/src/geometry.rs"
+from = '''    tree_scope.get(&cx.read()).document().id()'''
+to = '''    tree_scope.id()'''
+
+[[mutant]]
+name = "a shadow root's elementsFromPoint ends with its first element"
+file = "crates/dom_api/src/geometry.rs"
+from = '''    let document = this.get(&cx.read()).document().to_handle();
+    if let Ok(Some(root)) = crate::document::document_element(cx, &document)'''
+to = '''    if let Ok(Some(root)) = crate::document::document_element(cx, this)'''
+
+[[mutant]]
+name = "hit text is its run's owner"
+file = "crates/renderer/src/layout_client.rs"
+from = '''        text_parent.or(hit.node).or_else(|| {'''
+to = '''        hit.node.or(text_parent).or_else(|| {'''
+
+[[mutant]]
+name = "hit text's parent may be a shadow root"
+file = "crates/renderer/src/layout_client.rs"
+from = '''            .filter(|parent| parent.kind() == NodeKind::Element)
+            .map(|parent| parent.id());'''
+to = '''            .map(|parent| parent.id());'''
+
+[[mutant]]
+name = "paint's hit test gives no text"
+file = "crates/paint/src/hit_test.rs"
+from = '''                        run.source.as_ref().map(|(text, _)| *text),'''
+to = '''                        None,'''
+
+[[mutant]]
+name = "offsetParent goes along the DOM"
+file = "crates/dom_api/src/box_geometry.rs"
+from = '''        read.flat_tree_parent(node.get(&read))'''
+to = '''        node.get(&read).parent()'''
+
+[[mutant]]
+name = "offsetParent sees into closed shadow trees"
+file = "crates/dom_api/src/box_geometry.rs"
+from = '''        if !hidden
+            && (style_says'''
+to = '''        if (style_says'''
+
+[[mutant]]
+name = "no shadow tree is closed"
+file = "crates/dom_api/src/shadow_root.rs"
+from = '''        .is_some_and(|init| init.mode == dom::ShadowRootMode::Closed);'''
+to = '''        .is_some_and(|init| init.mode != init.mode);'''
+
+[[mutant]]
+name = "a range has no boxes for a contents element"
+file = "crates/dom_api/src/range.rs"
+from = '''    if !contents {
+        out.extend(client.client_rects(scope, element));'''
+to = '''    if true {
+        out.extend(client.client_rects(scope, element));'''
+
+[[mutant]]
+name = "text in a contents element takes its container's font"
+file = "crates/layout/src/text.rs"
+from = '''        if std::ptr::eq(&**style, enclosing) {'''
+to = '''        if true {'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "shadow::"]
+
+[[mutant]]
+name = "the open elements aren't followed"
+file = "crates/layout/src/text.rs"
+from = '''                open.push(element);
+            } else {
+                open.pop();
+            }'''
+to = '''            }'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "shadow::"]
+
+[[mutant]]
+name = "a contents element counts as a box"
+file = "crates/layout/src/counters.rs"
+from = '''        if style.display == Display::Contents {
+            let mut sibling = sibling_set.clone();'''
+to = '''        if false {
+            let mut sibling = sibling_set.clone();'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "shadow::"]
+
+[[mutant]]
+name = "a contents element's ::before isn't counted"
+file = "crates/layout/src/counters.rs"
+from = '''            if let Some(before) = self.pseudo(element, PseudoId::Before, &before_set) {
+                sibling = before;
+            }'''
+to = '''            let _ = before_set;'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "shadow::"]
+
+[[mutant]]
+name = "the renderer's thread has Rust's default stack"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        .stack_size(8 << 20)'''
+to = '''        .stack_size(2 << 20)'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "geometry::a_thousand_levels_deep"]

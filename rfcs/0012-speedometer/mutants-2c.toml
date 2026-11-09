@@ -1,0 +1,106 @@
+# Mutation test of step 2c (traces: `MACHOPO_TRACE`, kun's spans, `--trace`):
+# python3 scripts/test.py mutate rfcs/0012-speedometer/mutants-2c.toml
+# The spans' mutants rebuild kun (the dev profile) and record a trace of a
+# fake suite in both browsers.
+test = ["python3", "scripts/speedometer_test.py", "MeasureTests.test_traces_of_both"]
+timeout = 900
+
+[[mutant]]
+name = "log events go into the trace"
+file = "crates/shell/src/trace.rs"
+from = '''        spans.with_filter(filter_fn(|metadata| metadata.is_span())),'''
+to = '''        spans.with_filter(filter_fn(|_| true)),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "trace::"]
+
+[[mutant]]
+name = "MACHOPO_TRACE writes nothing"
+file = "crates/shell/src/main.rs"
+from = '''    let (trace, _trace_end) = match std::env::var_os("MACHOPO_TRACE") {'''
+to = '''    let (trace, _trace_end) = match std::env::var_os("MACHOPO_TRACE_NOT") {'''
+
+[[mutant]]
+name = "a task isn't a slice"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                let _task = tracing::trace_span!("ThreadControllerImpl::RunTask").entered();
+                self.update_clock();'''
+to = '''                self.update_clock();'''
+
+[[mutant]]
+name = "a timer's callback isn't a slice"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            let _span = tracing::trace_span!("TimerFire").entered();'''
+to = ''''''
+
+[[mutant]]
+name = "animation frames aren't a slice"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let _span = tracing::trace_span!("PageAnimator::serviceScriptedAnimations").entered();'''
+to = ''''''
+
+[[mutant]]
+name = "an animation frame's callback isn't a slice"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                let _span = tracing::trace_span!("FireAnimationFrame").entered();'''
+to = ''''''
+
+[[mutant]]
+name = "the lifecycle isn't a slice"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        let _span = tracing::trace_span!("LocalFrameView::UpdateLifecyclePhases").entered();'''
+to = ''''''
+
+[[mutant]]
+name = "style and layout aren't a slice"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        let _span =
+            tracing::trace_span!("LocalFrameView::RunStyleAndLayoutLifecyclePhases").entered();'''
+to = ''''''
+
+[[mutant]]
+name = "a callback's call isn't a slice"
+file = "crates/dom_js/src/host.rs"
+from = '''            .then(|| tracing::trace_span!("FunctionCall").entered());'''
+to = '''            .then(|| ());'''
+
+[[mutant]]
+name = "microtasks aren't a slice"
+file = "crates/dom_js/src/engine.rs"
+from = '''        let _span = tracing::trace_span!("RunMicrotasks").entered();'''
+to = ''''''
+
+[[mutant]]
+name = "an event's dispatch isn't a slice"
+file = "crates/dom_api/src/event.rs"
+from = '''        .instrument(tracing::trace_span!("EventDispatch"))'''
+to = '''        .instrument(tracing::Span::none())'''
+
+[[mutant]]
+name = "pre-paint isn't a slice"
+file = "crates/paint/src/lib.rs"
+from = '''    let _span = tracing::trace_span!("PrePaint").entered();'''
+to = ''''''
+
+[[mutant]]
+name = "a hit test isn't a slice"
+file = "crates/paint/src/hit_test.rs"
+from = '''    let _span = tracing::trace_span!("HitTest").entered();'''
+to = ''''''
+
+[[mutant]]
+name = "kun is killed at once"
+file = "scripts/speedometer.py"
+from = '''            self.call("Browser.close", timeout=5)
+            self.process.wait(timeout=10)'''
+to = '''            pass'''
+
+[[mutant]]
+name = "Chrome records no trace"
+file = "scripts/speedometer.py"
+from = '''            f"--trace-startup={CHROME_TRACE_CATEGORIES}", f"--trace-startup-file={trace}",'''
+to = '''            f"--trace-startup-file={trace}",'''
+
+[[mutant]]
+name = "kun gets no trace file"
+file = "scripts/speedometer.py"
+from = '''    env = {"MACHOPO_TRACE": str(trace)} if trace else {}'''
+to = '''    env = {}'''

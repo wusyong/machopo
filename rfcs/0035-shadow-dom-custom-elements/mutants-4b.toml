@@ -1,0 +1,123 @@
+# Mutation test of step 4b (a wasm guest's custom elements constructed and
+# called back through its exports):
+# python3 scripts/test.py mutate rfcs/0035-shadow-dom-custom-elements/mutants-4b.toml
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "it", "engine::a_guests_custom_element"]
+timeout = 600
+
+# dom_api: a guest's element made, and upgraded.
+
+[[mutant]]
+name = "a guest's element constructed in its own call"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    if constructor.foreign().is_some() {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a guest's element made without an upgrade"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''        m.enqueue_upgrade_reaction(&element, &definition);
+        return element;'''
+to = '''        return element;'''
+
+[[mutant]]
+name = "an upgrade constructs without the element"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    match cx.construct_upgrading(constructor, element)? {'''
+to = '''    match cx.construct(constructor)? {'''
+
+[[mutant]]
+name = "construct_upgrading's default ignores construct"
+file = "crates/dom_api/src/host.rs"
+from = '''        let _ = element;
+        self.construct(constructor)'''
+to = '''        let _ = (element, constructor);
+        Err(CallError::Reported)'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "custom_elements::"]
+
+# dom_wasm: the exports called.
+
+[[mutant]]
+name = "a guest's construct gives back nothing"
+file = "crates/dom_wasm/src/lib.rs"
+from = '''        self.call(constructor, None, element.clone(), Vec::new())?;
+        Ok(element)'''
+to = '''        self.call(constructor, None, element.clone(), Vec::new())?;
+        Ok(Value::Undefined)'''
+
+[[mutant]]
+name = "a guest's construct not called"
+file = "crates/dom_wasm/src/lib.rs"
+from = '''        self.call(constructor, None, element.clone(), Vec::new())?;
+        Ok(element)'''
+to = '''        let _ = constructor;
+        Ok(element)'''
+
+[[mutant]]
+name = "the element not passed on from the renderer"
+file = "crates/dom_wasm/src/lib.rs"
+from = '''        let (access, result) = store::call(access, foreign, &this, &args);'''
+to = '''        let _ = this;
+        let (access, result) = store::call(access, foreign, &Value::Undefined, &args);'''
+
+[[mutant]]
+name = "connected calls disconnected"
+file = "crates/dom_wasm/src/store.rs"
+from = '''                            Export::Connected => exports.connected,'''
+to = '''                            Export::Connected => exports.disconnected,'''
+
+[[mutant]]
+name = "disconnected calls connected"
+file = "crates/dom_wasm/src/store.rs"
+from = '''                            _ => exports.disconnected,'''
+to = '''                            _ => exports.connected,'''
+
+[[mutant]]
+name = "adopted's documents swapped"
+file = "crates/dom_wasm/src/store.rs"
+from = '''                                    ResourceDynamic::new_borrow(old, document),
+                                    ResourceDynamic::new_borrow(new, document),'''
+to = '''                                    ResourceDynamic::new_borrow(new, document),
+                                    ResourceDynamic::new_borrow(old, document),'''
+
+[[mutant]]
+name = "attribute-changed's values swapped"
+file = "crates/dom_wasm/src/store.rs"
+from = '''                    string(old),
+                    string(new),'''
+to = '''                    string(new),
+                    string(old),'''
+
+[[mutant]]
+name = "attribute-changed without the namespace"
+file = "crates/dom_wasm/src/store.rs"
+from = '''                    string(namespace),
+                ))'''
+to = '''                    None,
+                ))'''
+
+[[mutant]]
+name = "the lent handles kept"
+file = "crates/dom_wasm/src/store.rs"
+from = '''        for slot in held
+            .into_iter()
+            .chain(element)
+            .chain(documents.into_iter().flatten())
+        {'''
+to = '''        for slot in held.into_iter() {'''
+
+[[mutant]]
+name = "adopted's documents kept"
+file = "crates/dom_wasm/src/store.rs"
+from = '''            .chain(element)
+            .chain(documents.into_iter().flatten())
+        {'''
+to = '''            .chain(element)
+        {'''
+
+[[mutant]]
+name = "a guest's construct trapping ignored"
+file = "crates/dom_wasm/src/lib.rs"
+from = '''        self.call(constructor, None, element.clone(), Vec::new())?;
+        Ok(element)'''
+to = '''        let _ = self.call(constructor, None, element.clone(), Vec::new());
+        Ok(element)'''

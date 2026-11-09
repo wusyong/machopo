@@ -1,0 +1,201 @@
+# Stage 3a-3: the thread's token and its cells (`gc`); a qualified name
+# one number; the node's flags for style and layout, marked up the
+# ancestors in a connected tree; what changed of an element's attributes;
+# the stylesheets' owners; the trees' version; ids given as asked for; an
+# element's style read and written with the token.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_next", "--test", "it"]
+timeout = 600
+
+[[mutant]]
+name = "a thread makes a second token"
+file = "crates/gc/src/token.rs"
+from = '''            !TAKEN.replace(true),'''
+to = '''            !TAKEN.replace(false),'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--test", "it", "token::"]
+
+[[mutant]]
+name = "a dropped token leaves the thread none"
+file = "crates/gc/src/token.rs"
+from = '''        TAKEN.set(false);'''
+to = '''        TAKEN.set(true);'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--test", "it", "token::"]
+
+[[mutant]]
+name = "a prefixed name in the bits"
+file = "crates/dom_next/src/names.rs"
+from = '''        if name.prefix == NONE && name.namespace <= MATHML_NAMESPACE && name.local <= LOCAL_MASK {'''
+to = '''        if name.namespace <= MATHML_NAMESPACE && name.local <= LOCAL_MASK {'''
+
+[[mutant]]
+name = "another namespace in the bits"
+file = "crates/dom_next/src/names.rs"
+from = '''        if name.prefix == NONE && name.namespace <= MATHML_NAMESPACE && name.local <= LOCAL_MASK {'''
+to = '''        if name.prefix == NONE && name.namespace <= XML_NAMESPACE && name.local <= LOCAL_MASK {'''
+
+[[mutant]]
+name = "is ignores the namespace"
+file = "crates/dom_next/src/names.rs"
+from = '''        if self.0 & TABLED == 0 {
+            return Self::in_bits(NameIds {
+                namespace,'''
+to = '''        if self.0 & TABLED == 0 {
+            return Self::in_bits(NameIds {
+                namespace: self.0 >> NAMESPACE_SHIFT,'''
+
+[[mutant]]
+name = "a tabled name numbered again"
+file = "crates/dom_next/src/names.rs"
+from = '''            if let Some(&number) = table.qualified_numbers.get(&name) {'''
+to = '''            if let Some(&number) = None::<&u32> {'''
+
+[[mutant]]
+name = "plain names through the table"
+file = "crates/dom_next/src/names.rs"
+from = '''    pub fn new(name: NameIds) -> Self {
+        if let Some(name) = Self::in_bits(name) {
+            return name;
+        }'''
+to = '''    pub fn new(name: NameIds) -> Self {'''
+
+[[mutant]]
+name = "marking doesn't stop at a marked ancestor"
+file = "crates/dom_next/src/style.rs"
+from = '''        while let Some(ancestor) = at.filter(|ancestor| ancestor.flags.get() & both != both) {'''
+to = '''        while let Some(ancestor) = at {'''
+
+[[mutant]]
+name = "marking stops at once"
+file = "crates/dom_next/src/style.rs"
+from = '''        while let Some(ancestor) = at.filter(|ancestor| ancestor.flags.get() & both != both) {'''
+to = '''        while let Some(ancestor) = at.filter(|_| false) {'''
+
+[[mutant]]
+name = "a style mark doesn't mark the ancestors"
+file = "crates/dom_next/src/style.rs"
+from = '''        let child_needs = StyleFlags::CHILD_NEEDS_STYLE_RECALC.0 << STYLE_SHIFT;
+        let mut at = self.parent(node);'''
+to = '''        let child_needs = StyleFlags::CHILD_NEEDS_STYLE_RECALC.0 << STYLE_SHIFT;
+        let mut at: Option<NodeRef<'gc>> = None;'''
+
+[[mutant]]
+name = "a tree apart is marked"
+file = "crates/dom_next/src/style.rs"
+from = '''        if self.is_connected(parent) {
+            self.inserted_connected(parent, node, previous, next);'''
+to = '''        if true {
+            self.inserted_connected(parent, node, previous, next);'''
+
+[[mutant]]
+name = "a removed subtree stays connected"
+file = "crates/dom_next/src/style.rs"
+from = '''            at.flags.set(at.flags.get() & !CONNECTED);'''
+to = '''            at.flags.set(at.flags.get());'''
+
+[[mutant]]
+name = "the inserted node isn't styled again"
+file = "crates/dom_next/src/style.rs"
+from = '''            (StyleFlags::NEEDS_STYLE_RECALC.0 << STYLE_SHIFT)
+                | (LayoutTreeFlags::NEEDS_REATTACH.0 << LAYOUT_SHIFT),'''
+to = '''            LayoutTreeFlags::NEEDS_REATTACH.0 << LAYOUT_SHIFT,'''
+
+[[mutant]]
+name = "a removal doesn't mark the parent"
+file = "crates/dom_next/src/style.rs"
+from = '''            (StyleFlags::CHILDREN_CHANGED.0 << STYLE_SHIFT)
+                | (LayoutTreeFlags::CHILDREN_CHANGED.0 << LAYOUT_SHIFT),'''
+to = '''            0,'''
+
+[[mutant]]
+name = "a text is a marked sibling"
+file = "crates/dom_next/src/style.rs"
+from = '''            if self.kind(sibling) == NodeKind::Element {
+                return Some(sibling);'''
+to = '''            if self.kind(sibling) != NodeKind::Document {
+                return Some(sibling);'''
+
+[[mutant]]
+name = "the siblings aren't marked"
+file = "crates/dom_next/src/style.rs"
+from = '''        if let Some(previous) = self.element_sibling(previous, false) {
+            self.mark_style(previous, StyleFlags::PRECEDES_CHANGE);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "an element styled whole notes its attributes"
+file = "crates/dom_next/src/style.rs"
+from = '''            .contains(StyleFlags::NEEDS_STYLE_RECALC)
+        {
+            return;'''
+to = '''            .contains(StyleFlags::NEEDS_STYLE_RECALC)
+            && false
+        {
+            return;'''
+
+[[mutant]]
+name = "every new class noted, kept ones too"
+file = "crates/dom_next/src/style.rs"
+from = '''            for class in new.iter().filter(|c| !old.contains(c)) {'''
+to = '''            for class in new.iter() {'''
+
+[[mutant]]
+name = "a changed id not noted"
+file = "crates/dom_next/src/style.rs"
+from = '''        if name.is(names::NONE, names::ID) && old != new {'''
+to = '''        if name.is(names::NONE, names::CLASS) && old != new {'''
+
+[[mutant]]
+name = "an attribute change doesn't mark the next sibling"
+file = "crates/dom_next/src/style.rs"
+from = '''        if let Some(next) = self.element_sibling(self.next_sibling(element), true) {
+            self.mark_style(next, StyleFlags::FOLLOWS_CHANGE);
+        }
+        if let Some(parent)'''
+to = '''        if let Some(parent)'''
+
+[[mutant]]
+name = "no element owns sheets"
+file = "crates/dom_next/src/style.rs"
+from = '''        name == STYLE_ELEMENT || name == LINK_ELEMENT'''
+to = '''        name == STYLE_ELEMENT'''
+
+[[mutant]]
+name = "a <style>'s text changing isn't a new sheet"
+file = "crates/dom_next/src/style.rs"
+from = '''        self.mark_style(parent, StyleFlags::CHILDREN_CHANGED);
+        if self.owns_style_sheets(parent) {
+            self.style_sheets_changed(parent);
+        }'''
+to = '''        self.mark_style(parent, StyleFlags::CHILDREN_CHANGED);'''
+
+[[mutant]]
+name = "a comment's data marks its parent"
+file = "crates/dom_next/src/style.rs"
+from = '''        if !self.is_connected(node) || self.kind(node) != NodeKind::Text {'''
+to = '''        if !self.is_connected(node) {'''
+
+[[mutant]]
+name = "the version doesn't count"
+file = "crates/dom_next/src/style.rs"
+from = '''                .checked_add(1)
+                .expect("fewer than 2^64 changes"),'''
+to = '''                .checked_add(0)
+                .expect("fewer than 2^64 changes"),'''
+
+[[mutant]]
+name = "an id given again each time"
+file = "crates/dom_next/src/style.rs"
+from = '''                node.id.set(id.get());'''
+to = ''''''
+
+[[mutant]]
+name = "clearing the flags keeps the attributes' changes"
+file = "crates/dom_next/src/style.rs"
+from = '''            data.changes.get().set(None);'''
+to = ''''''
+
+[[mutant]]
+name = "selector flags replaced, not added to"
+file = "crates/dom_next/src/style.rs"
+from = '''            data.selector_flags.set(data.selector_flags.get() | flags);'''
+to = '''            data.selector_flags.set(flags);'''

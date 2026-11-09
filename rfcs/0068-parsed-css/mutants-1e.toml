@@ -1,0 +1,44 @@
+# 1e: `animation-timeline`, `animation-range` and `animation` resetting
+# them (`css`).
+#   python3 scripts/test.py mutate rfcs/0068-parsed-css/mutants-1e.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "animation_properties::", "keyframes::"]
+timeout = 900
+
+[[mutant]]
+name = "a timeline of none"
+file = "crates/css/src/animation.rs"
+from = '''    input.expect_ident_matching("auto")?;
+    Ok(AnimationTimeline::Auto)'''
+to = '''    if input.try_parse(|i| i.expect_ident_matching("none")).is_err() {
+        input.expect_ident_matching("auto")?;
+    }
+    Ok(AnimationTimeline::Auto)'''
+
+[[mutant]]
+name = "animation leaves the timeline and the range"
+file = "crates/css/src/animation.rs"
+from = '''    .chain(animation_reset_values().map(|value| (value, true)))'''
+to = '''    .chain(animation_reset_values().map(|value| (value, true)).into_iter().take(0))'''
+
+[[mutant]]
+name = "animation written over another timeline"
+file = "crates/css/src/animation.rs"
+from = '''        .any(|((value, _), reset)| **value != reset)'''
+to = '''        .any(|((value, _), reset)| **value != reset && false)'''
+
+[[mutant]]
+name = "a range of lists of other lengths"
+file = "crates/css/src/animation.rs"
+from = '''    if starts.len() != ends.len() {
+        return None;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a keyframe keeps the timeline"
+file = "crates/css/src/stylesheet.rs"
+from = '''            | AnimationName
+            | AnimationTimeline
+'''
+to = '''            | AnimationName
+'''

@@ -1,0 +1,149 @@
+# The first stage's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0030-testdriver/mutations-stage1.toml`. Each runs `dom_js`'s
+# `messaging` test (V8, real iframes, the DOM's tasks run as the renderer
+# runs them), unless it names its own.
+#
+# Not here, as it is equivalent for now: `"/"` taken as `"*"`. They differ
+# only when the caller's origin isn't the target document's, and kun's
+# script reaches no window of another origin (not even its `postMessage`)
+# and has no `document.domain` (`docs/testing.md`, the equivalent mutants).
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "messaging"]
+timeout = 900
+
+[[mutant]]
+name = "the message is dispatched at once, not in a task"
+file = "crates/dom_api/src/window.rs"
+from = '''    queue_task(
+        &mut cx.mutate(),
+        this,
+        TaskSource::PostedMessage,
+        0.0,
+        Task::PostMessage(Box::new(posted)),
+    );'''
+to = '''    let _ = TaskSource::PostedMessage;
+    let _ = queue_task;
+    let _ = Task::PostMessage;
+    deliver_message(cx, posted);'''
+
+[[mutant]]
+name = "the target origin isn't checked"
+file = "crates/dom_api/src/window.rs"
+from = '''            if document_origin(&mut m, &document) != *target_origin {'''
+to = '''            if document_origin(&mut m, &document) != *target_origin && false {'''
+
+[[mutant]]
+name = "an opaque target origin matches any"
+file = "crates/dom_api/src/window.rs"
+from = '''                // An opaque origin is no document's.
+                cx.mutate().new_opaque_origin()'''
+to = '''                source_origin.clone()'''
+
+[[mutant]]
+name = "the message is serialized before the target origin is parsed"
+file = "crates/dom_api/src/window.rs"
+from = '''    let target_origin = match target_origin.as_str() {'''
+to = '''    let message_first = cx.serialize(message.as_ref())?;
+    let _ = message_first;
+    let target_origin = match target_origin.as_str() {'''
+
+[[mutant]]
+name = "the source is the target's realm, not the caller's"
+file = "crates/dom_api/src/window.rs"
+from = '''    let source = cx
+        .incumbent_window()'''
+to = '''    let source = cx
+        .realm_window()'''
+
+[[mutant]]
+name = "V8's incumbent is the current context"
+file = "crates/dom_js/src/host.rs"
+from = '''        let global = scope.get_entered_or_microtask_context().global(scope);'''
+to = '''        let global = scope.get_current_context().global(scope);'''
+
+[[mutant]]
+name = "the message event isn't trusted"
+file = "crates/dom_api/src/window.rs"
+from = '''        m.create_event(
+            "message",
+            false,
+            false,
+            true,'''
+to = '''        m.create_event(
+            "message",
+            false,
+            false,
+            false,'''
+
+[[mutant]]
+name = "the event's data isn't kept on the event"
+file = "crates/dom_api/src/event.rs"
+from = '''        let cache = Object::Event(this.clone());
+        return Ok(ScriptOrSerialized::Serialized(SerializedState { state, cache }));'''
+to = '''        let cache = Object::Window(cx.realm_window().expect("a realm"));
+        return Ok(ScriptOrSerialized::Serialized(SerializedState { state, cache }));'''
+
+[[mutant]]
+name = "initMessageEvent keeps a posted message"
+file = "crates/dom_api/src/event.rs"
+from = '''    let fields = MessageEventData {
+        origin: origin.into_string(),
+        last_event_id: last_event_id.into_string(),
+        serialized: None,
+    };
+    let mut m = cx.mutate();'''
+to = '''    let fields = MessageEventData {
+        origin: origin.into_string(),
+        last_event_id: last_event_id.into_string(),
+        serialized: cx.read().message_event_data(this).and_then(|data| data.serialized),
+    };
+    let mut m = cx.mutate();'''
+
+[[mutant]]
+name = "initMessageEvent leaves the source"
+file = "crates/dom/src/scope.rs"
+from = '''        match source {
+            Some(window) => {
+                self.own(window);
+                edge.set(self, window.persistent());
+            }
+            None => edge.clear(self),
+        }
+        // SAFETY: the slot is a field of the event, on this heap and rooted
+        // by `event`.
+        unsafe {
+            match data {'''
+to = '''        let _ = (source, edge);
+        // SAFETY: the slot is a field of the event, on this heap and rooted
+        // by `event`.
+        unsafe {
+            match data {'''
+
+[[mutant]]
+name = "the constructor's source isn't kept"
+file = "crates/dom/src/scope.rs"
+from = '''        if let (EventKind::Message { source: edge, .. }, Some(source)) =
+            (&event.object().kind, &source)
+        {
+            edge.set(self, source.persistent());
+        }'''
+to = '''        let _ = &source;'''
+
+[[mutant]]
+name = "createEvent has no MessageEvent"
+file = "crates/dom_api/src/document.rs"
+from = '''        "messageevent" => EventKindInit::Message(Default::default()),'''
+to = ''''''
+
+[[mutant]]
+name = "<body onmessage> isn't the window's"
+file = "crates/dom_api/src/handlers.rs"
+from = '''    ("onmessage", "message"),
+'''
+to = ''''''
+
+[[mutant]]
+name = "the end-to-end test: the child's messages don't go to its parent"
+file = "crates/dom_api/src/window.rs"
+from = '''        Task::PostMessage(Box::new(posted)),'''
+to = '''        Task::PostMessage(Box::new(PostedMessage { target: posted.source.clone(), ..posted })),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "messaging"]

@@ -1,0 +1,258 @@
+# Stage 1d: the new DOM's API (dom_api_next): the names' checks, the
+# members' functions, the typed paths and the declaration table's macro.
+# Each test command in a scope of at most 24 GB (docs/testing.md: a
+# mutation that makes a loop can grow a test without end); the baseline
+# takes about a second.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+timeout = 60
+
+[[mutant]]
+name = "an invalid prefix is valid"
+file = "crates/dom_api_next/src/names_check.rs"
+from = '''            if !is_valid_namespace_prefix(prefix) {
+                return Err(invalid());
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "an attribute's local name may hold ="
+file = "crates/dom_api_next/src/names_check.rs"
+from = '''    !name.is_empty() && !name.chars().any(|c| is_delimiter(c) || c == '=')'''
+to = '''    !name.is_empty() && !name.chars().any(is_delimiter)'''
+
+[[mutant]]
+name = "a letter first takes any name"
+file = "crates/dom_api_next/src/names_check.rs"
+from = '''        return !chars.any(is_delimiter);'''
+to = '''        return true;'''
+
+[[mutant]]
+name = "a prefix needs no namespace"
+file = "crates/dom_api_next/src/names_check.rs"
+from = '''    if prefix.is_some() && namespace.is_none() {
+        return Err(namespace_error());
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "xml in any namespace"
+file = "crates/dom_api_next/src/names_check.rs"
+from = '''    if prefix == Some("xml") && namespace != Some(XML_NAMESPACE) {
+        return Err(namespace_error());
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "xmlns anywhere"
+file = "crates/dom_api_next/src/names_check.rs"
+from = '''    if xmlns != (namespace == Some(XMLNS_NAMESPACE)) {'''
+to = '''    if xmlns && namespace != Some(XMLNS_NAMESPACE) {'''
+
+[[mutant]]
+name = "the empty namespace isn't null"
+file = "crates/dom_api_next/src/names_check.rs"
+from = '''    let namespace = namespace.filter(|uri| !uri.is_empty());'''
+to = ''''''
+
+[[mutant]]
+name = "createElement doesn't check the name"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    if !names_check::is_valid_element_local_name(local_name) {
+        return Err(ApiError::dom(ExceptionName::InvalidCharacter));
+    }
+    let html'''
+to = '''    let html'''
+
+[[mutant]]
+name = "createElement doesn't lowercase"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    let local = if html {'''
+to = '''    let local = if false {'''
+
+[[mutant]]
+name = "createElement's elements are HTML in XML documents"
+file = "crates/dom_api_next/src/document.rs"
+from = '''        namespace: html.then_some(HTML_NAMESPACE),'''
+to = '''        namespace: Some(HTML_NAMESPACE),'''
+
+[[mutant]]
+name = "attribute names aren't lowercased"
+file = "crates/dom_api_next/src/element.rs"
+from = '''    if cx.is_html_element_in_html_document(this) {
+        lowercase(qualified)'''
+to = '''    if false {
+        lowercase(qualified)'''
+
+[[mutant]]
+name = "lowercased for any element"
+file = "crates/dom_api_next/src/lib.rs"
+from = '''        self.element_name(element)
+            .is_some_and(|name| name.namespace == names::HTML_NAMESPACE)
+            && self.is_html_document(self.document_of(element))'''
+to = '''        self.is_html_document(self.document_of(element))'''
+
+[[mutant]]
+name = "lowercased in XML documents"
+file = "crates/dom_api_next/src/lib.rs"
+from = '''            .is_some_and(|name| name.namespace == names::HTML_NAMESPACE)
+            && self.is_html_document(self.document_of(element))'''
+to = '''            .is_some_and(|name| name.namespace == names::HTML_NAMESPACE)'''
+
+[[mutant]]
+name = "setAttribute doesn't check the name"
+file = "crates/dom_api_next/src/element.rs"
+from = '''    if !names_check::is_valid_attribute_local_name(qualified_name) {
+        return Err(ApiError::dom(ExceptionName::InvalidCharacter));
+    }
+    cx.set_attribute'''
+to = '''    cx.set_attribute'''
+
+[[mutant]]
+name = "className reflects id"
+file = "crates/dom_api_next/src/element.rs"
+from = '''    Ok(reflected(cx, this, "class"))'''
+to = '''    Ok(reflected(cx, this, "id"))'''
+
+[[mutant]]
+name = "hasAttributes is always true"
+file = "crates/dom_api_next/src/element.rs"
+from = '''    Ok(cx.attribute_count(this) > 0)'''
+to = '''    Ok(true)'''
+
+[[mutant]]
+name = "hasAttribute doesn't lowercase"
+file = "crates/dom_api_next/src/element.rs"
+from = '''        .get_attribute(this, &qualified(cx, this, qualified_name))
+        .is_some())'''
+to = '''        .get_attribute(this, qualified_name)
+        .is_some())'''
+
+[[mutant]]
+name = "every node is connected"
+file = "crates/dom_api_next/src/node.rs"
+from = '''    Ok(cx.kind(root) == NodeKind::Document)'''
+to = '''    Ok(true)'''
+
+[[mutant]]
+name = "any parent is an element"
+file = "crates/dom_api_next/src/node.rs"
+from = '''    Ok(cx.parent(this).filter(|parent| is_element(cx, *parent)))'''
+to = '''    Ok(cx.parent(this))'''
+
+[[mutant]]
+name = "contains isn't inclusive"
+file = "crates/dom_api_next/src/node.rs"
+from = '''    let mut at = other;
+    while let Some(node) = at {'''
+to = '''    let mut at = other.and_then(|node| cx.parent(node));
+    while let Some(node) = at {'''
+
+[[mutant]]
+name = "textContent of null is the string null"
+file = "crates/dom_api_next/src/node.rs"
+from = '''    cx.set_text_content(this, value.unwrap_or(""));'''
+to = '''    cx.set_text_content(this, value.unwrap_or("null"));'''
+
+[[mutant]]
+name = "length counts bytes"
+file = "crates/dom_api_next/src/character_data.rs"
+from = '''    Ok(u32::try_from(data_of(cx, this).utf16_len()).unwrap_or(u32::MAX))'''
+to = '''    Ok(u32::try_from(data_of(cx, this).len()).unwrap_or(u32::MAX))'''
+
+[[mutant]]
+name = "childElementCount counts every child"
+file = "crates/dom_api_next/src/parent_node.rs"
+from = '''        if is_element(cx, node) {
+            count = count.saturating_add(1);
+        }'''
+to = '''        count = count.saturating_add(1);'''
+
+[[mutant]]
+name = "lastElementChild is the last child"
+file = "crates/dom_api_next/src/parent_node.rs"
+from = '''    let mut child = cx.last_child(this);
+    while let Some(node) = child {
+        if is_element(cx, node) {
+            return Ok(Some(node));
+        }
+        child = cx.previous_sibling(node);
+    }'''
+to = '''    let child = cx.last_child(this);
+    if let Some(node) = child {
+        return Ok(Some(node));
+    }'''
+
+[[mutant]]
+name = "undefined is null for LegacyNullToEmptyString"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        front.legacy_null_string_arg(index)'''
+to = '''        front.nullable_string_arg(index)'''
+
+[[mutant]]
+name = "a node of another interface is accepted"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''    if !I::accepts(cx.kind(node)) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "null for a node isn't thrown"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''            front.throw(ApiError::type_error(format!(
+                "parameter {} is not of type '{}'",
+                index.saturating_add(1),
+                I::DESC.name
+            )));
+            None
+        }
+    }
+}'''
+to = '''            None
+        }
+    }
+}'''
+
+[[mutant]]
+name = "an interface accepts no descendant's kinds"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        desc.kinds.contains(&kind) && crate::declare::is_ancestor_or_self(interface, index)'''
+to = '''        desc.kinds.contains(&kind) && interface == index'''
+
+[[mutant]]
+name = "a getter has a safepoint"
+file = "crates/dom_api_next/src/declare.rs"
+from = '''                let result = dom.read(|cx| {
+                    let cx = &$crate::ApiCx::new(cx);
+                    let this = front.this(cx);
+                    debug_assert!(<$iface as $crate::declare::Interface>::accepts(cx.kind(this)));
+                    $get(cx, this)'''
+to = '''                let result = dom.mutate(|cx| {
+                    let cx = &$crate::ApiCx::new(cx);
+                    let this = front.this(cx);
+                    debug_assert!(<$iface as $crate::declare::Interface>::accepts(cx.kind(this)));
+                    $get(cx, this)'''
+
+[[mutant]]
+name = "a method doesn't count its arguments"
+file = "crates/dom_api_next/src/declare.rs"
+from = '''                if !front.has_args(stringify!($js), required) {
+                    return;
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "every argument is the first"
+file = "crates/dom_api_next/src/declare.rs"
+from = '''                    let ::std::option::Option::Some($arg) = <$aty as $crate::typed::ArgType>::take(front, index) else {
+                        return;
+                    };
+                    index = index.saturating_add(1);'''
+to = '''                    let ::std::option::Option::Some($arg) = <$aty as $crate::typed::ArgType>::take(front, 0) else {
+                        return;
+                    };
+                    index = index.saturating_add(1);'''
+
+[[mutant]]
+name = "NamespaceError's code is 13"
+file = "crates/dom_api_next/src/exception.rs"
+from = '''            Self::Namespace => 14,'''
+to = '''            Self::Namespace => 13,'''

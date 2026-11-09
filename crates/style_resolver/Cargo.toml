@@ -1,0 +1,30 @@
+[package]
+name = "style_resolver"
+description = "What style shares that doesn't read the DOM: the cascade, animations in the style phase, presentational hints (blink/renderer/core/css's resolver)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+base.workspace = true
+computed_style.workspace = true
+# Animations and transitions in a style change (`animation_style.rs`).
+animation.workspace = true
+css.workspace = true
+gfx.workspace = true
+rustc-hash.workspace = true
+# A cascade's declaration blocks on the stack (`cascade.rs`).
+smallvec.workspace = true
+cssparser.workspace = true
+
+[dev-dependencies]
+url.workspace = true

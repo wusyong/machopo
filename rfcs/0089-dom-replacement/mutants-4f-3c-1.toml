@@ -1,0 +1,362 @@
+# Stage 4f-3c-1: on the new DOM, the user's keys in a text control (typing
+# with beforeinput, textInput and input, deleting and moving by
+# grapheme cluster, Shift's selection, maxlength, read-only, Enter, the
+# commit's change), the focus out of a UA shadow tree and through the
+# form controls, WebDriver's Element Send Keys and Clear, TextEvent.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it ua_shadow && cargo test -q -p dom_api_next --test it -- editing focus:: && cargo test -q -p dom_js_next --test it event_interfaces"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: the latest value kept as before the user's change"
+file = "crates/dom_next/src/text_control.rs"
+from = '''            cell.set(Some(kept.unwrap_or(value)));'''
+to = '''            let _ = kept;
+            cell.set(Some(value));'''
+
+[[mutant]]
+name = "dom: the cursor at the start of the user's text"
+file = "crates/dom_next/src/text_control.rs"
+from = '''        self.set_selection_range(element, at, at, SelectionDirection::None);
+    }
+
+    /// HTML's committing'''
+to = '''        let _ = at;
+        self.set_selection_range(element, start, start, SelectionDirection::None);
+    }
+
+    /// HTML's committing'''
+
+[[mutant]]
+name = "dom: every commit a change"
+file = "crates/dom_next/src/text_control.rs"
+from = '''        *before.to_str() != *self.text_control_value(element).to_str()'''
+to = '''        let _ = before;
+        true'''
+
+[[mutant]]
+name = "dom: a selection change no change of the tree"
+file = "crates/dom_next/src/text_control.rs"
+from = '''        if new != old {
+            self.tree_changed();
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: the user's textarea edit not shown"
+file = "crates/dom_next/src/text_control.rs"
+from = '''            textarea.into_ref().value.get().set(Some(DomString::from(new)));
+            self.state_changed(element, AttributeChanges::VALUE);
+            self.shadow_tree_changed(element);
+        } else {
+            self.set_input_value_keeping_selection(element, &new);'''
+to = '''            textarea.into_ref().value.get().set(Some(DomString::from(new)));
+            self.state_changed(element, AttributeChanges::VALUE);
+        } else {
+            self.set_input_value_keeping_selection(element, &new);'''
+
+[[mutant]]
+name = "api: Delete not an edit key"
+file = "crates/dom_api_next/src/editing.rs"
+from = '''            "Delete" => Self::Delete,
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: End not an edit key"
+file = "crates/dom_api_next/src/editing.rs"
+from = '''            "End" => Self::End,
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: deleting back by code unit"
+file = "crates/dom_api_next/src/editing.rs"
+from = '''                EditKey::Backspace => (previous_boundary(&value, current.start), current.start),'''
+to = '''                EditKey::Backspace => (current.start.saturating_sub(1), current.start),'''
+
+[[mutant]]
+name = "api: deleting forward by code unit"
+file = "crates/dom_api_next/src/editing.rs"
+from = '''                _ => (current.start, next_boundary(&value, current.start)),'''
+to = '''                _ => (current.start, current.start.saturating_add(1).min(utf16_len(&value))),'''
+
+[[mutant]]
+name = "api: Home at the value's start"
+file = "crates/dom_api_next/src/editing.rs"
+from = '''                EditKey::Home => line_start(&value, focus),'''
+to = '''                EditKey::Home => 0,'''
+
+[[mutant]]
+name = "api: End at the value's end"
+file = "crates/dom_api_next/src/editing.rs"
+from = '''                _ => line_end(&value, focus),'''
+to = '''                _ => utf16_len(&value),'''
+
+[[mutant]]
+name = "api: an arrow keeps a selection's side"
+file = "crates/dom_api_next/src/editing.rs"
+from = '''                EditKey::Left => current.start,'''
+to = '''                EditKey::Left => previous_boundary(&value, focus),'''
+
+[[mutant]]
+name = "api: Shift doesn't extend"
+file = "crates/dom_api_next/src/editing.rs"
+from = '''            let new = if extend {
+                selection_between(anchor, target)'''
+to = '''            let new = if false {
+                selection_between(anchor, target)'''
+
+[[mutant]]
+name = "api: a collapsed selection queues select"
+file = "crates/dom_api_next/src/editing.rs"
+from = '''    if cx.set_selection_range(element, new.start, new.end, new.direction) && new.start != new.end {'''
+to = '''    if cx.set_selection_range(element, new.start, new.end, new.direction) {'''
+
+[[mutant]]
+name = "api: a canceled beforeinput edits"
+file = "crates/dom_api_next/src/editing.rs"
+from = '''    if !fire_input_event(host, element, event::BEFOREINPUT, input_type, data) || !still_editable(host, element) {
+        return;
+    }'''
+to = '''    let _ = fire_input_event(host, element, event::BEFOREINPUT, input_type, data);'''
+
+[[mutant]]
+name = "api: a canceled textInput edits"
+file = "crates/dom_api_next/src/editing.rs"
+from = '''        && (!fire_text_input(host, element, typed) || !still_editable(host, element))'''
+to = '''        && (!{ fire_text_input(host, element, typed); true } || !still_editable(host, element))'''
+
+[[mutant]]
+name = "api: no textInput"
+file = "crates/dom_api_next/src/editing.rs"
+from = '''    if let Some(typed) = text_input
+'''
+to = '''    if let Some(typed) = None::<&str>.filter(|_| text_input.is_some())
+'''
+
+[[mutant]]
+name = "api: no input after the edit"
+file = "crates/dom_api_next/src/editing.rs"
+from = '''    fire_input_event(host, element, event::INPUT, input_type, data);
+}'''
+to = '''    let _ = (input_type, data);
+}'''
+
+[[mutant]]
+name = "api: a read-only control typed in"
+file = "crates/dom_api_next/src/editing.rs"
+from = '''    if !mutable {
+        return true;
+    }
+    if text == "\r" {'''
+to = '''    let _ = mutable;
+    if text == "\r" {'''
+
+[[mutant]]
+name = "api: a read-only control deleted from"
+file = "crates/dom_api_next/src/editing.rs"
+from = '''            if !mutable {
+                return true;
+            }
+            let backward'''
+to = '''            let _ = mutable;
+            let backward'''
+
+[[mutant]]
+name = "api: an input's Enter types"
+file = "crates/dom_api_next/src/editing.rs"
+from = '''    if text == "\r" && !textarea {
+        commit(host, element);
+        return true;
+    }
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: maxlength not looked at"
+file = "crates/dom_api_next/src/editing.rs"
+from = '''    let text = match room {
+        Some(room) => fitting(text, room),
+        None => text,
+    };'''
+to = '''    let _ = room;'''
+
+[[mutant]]
+name = "api: a selection's room not counted"
+file = "crates/dom_api_next/src/editing.rs"
+from = '''            let unselected = length.saturating_sub(current.end.saturating_sub(current.start));'''
+to = '''            let unselected = length;'''
+
+[[mutant]]
+name = "api: maxlength's spaces not trimmed"
+file = "crates/dom_api_next/src/editing.rs"
+from = '''    value.trim_matches(|c: char| c.is_ascii_whitespace()).parse::<u32>().ok()'''
+to = '''    value.parse::<u32>().ok()'''
+
+[[mutant]]
+name = "api: the commit fires nothing"
+file = "crates/dom_api_next/src/editing.rs"
+from = '''    if host.mutate(|cx| cx.commit_edit(element.get(cx.gc))) {
+        fire_change(host, element);
+    }'''
+to = '''    host.mutate(|cx| cx.commit_edit(element.get(cx.gc)));'''
+
+[[mutant]]
+name = "api: an edit key with Ctrl edits"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            && !shortcut
+            && let Some(key) = crate::editing::EditKey::of(&input.key)'''
+to = '''            && let Some(key) = crate::editing::EditKey::of(&input.key)'''
+
+[[mutant]]
+name = "api: a keypress's text not typed"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            if fire_key(host, &target, event::KEYPRESS, &info) {
+                crate::editing::type_text(host, &target, &input.text);
+            }'''
+to = '''            fire_key(host, &target, event::KEYPRESS, &info);'''
+
+[[mutant]]
+name = "api: a canceled keypress types"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            if fire_key(host, &target, event::KEYPRESS, &info) {'''
+to = '''            if { fire_key(host, &target, event::KEYPRESS, &info); true } {'''
+
+[[mutant]]
+name = "api: no commit as the focus goes"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        crate::editing::commit(host, old);
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: the mouse's focus not out of a shadow tree"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        std::iter::successors(Some(target.get(cx.gc)), |&node| cx.flat_tree_parent(node))'''
+to = '''        std::iter::successors(Some(target.get(cx.gc)), |&node| cx.parent(node))'''
+
+[[mutant]]
+name = "api: form controls not in the tab order"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        || is_html(cx, element, &[local::BUTTON, local::SELECT, local::TEXTAREA])
+        || cx.input_kind(element).is_some_and(|kind| kind != dom_next::InputKind::Hidden)
+}'''
+to = '''}'''
+
+[[mutant]]
+name = "api: send keys to a file input"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''    if file {
+        return Err(WebDriverActionError::Unsupported("kun has no files to pick"));
+    }
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: send keys to what can't take the focus"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''    if !interactable {
+        return Err(WebDriverActionError::NotInteractable("the element can't take the keys"));
+    }
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: send keys doesn't focus"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''    if !had_focus {
+        crate::focus::focusing_steps(host, document, Some(&element), None);
+    }
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: a non-typeable control typed in"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''    if non_typeable {
+        let mutable'''
+to = '''    if false {
+        let mutable'''
+
+[[mutant]]
+name = "api: a read-only non-typeable control set"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''        return if mutable {
+            Ok(false)'''
+to = '''        return if true {
+            Ok(false)'''
+
+[[mutant]]
+name = "api: the cursor to the end when focused already"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''    if !had_focus {
+        host.mutate(|cx| {'''
+to = '''    if true {
+        host.mutate(|cx| {'''
+
+[[mutant]]
+name = "api: clear what isn't editable"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''        if !is_editable(cx, node) {
+            return Err(WebDriverActionError::InvalidElementState("the element isn't an editable form control"));
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: clear what isn't in view"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''        if !in_view {
+            return Err(WebDriverActionError::NotInteractable("the element isn't in view"));
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: clear an empty one"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''    if empty {
+        return Ok(());
+    }
+    crate::focus::focusing_steps'''
+to = '''    let _ = empty;
+    crate::focus::focusing_steps'''
+
+[[mutant]]
+name = "api: clear without input"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''    crate::editing::fire_plain_input(host, &element);
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: clear keeps its focus"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''    let _ = crate::focus::blur(host, element);
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: initTextEvent's data null"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''    cx.set_text_event_text(text, data.unwrap_or("undefined"));'''
+to = '''    cx.set_text_event_text(text, data.unwrap_or(""));'''
+
+[[mutant]]
+name = "api: initTextEvent while dispatched"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''    if cx.event_state(this).dispatching {
+        return Ok(());
+    }
+    cx.init_event(this, names::intern(event_type), bubbles, cancelable);
+    cx.set_ui_event_view_and_detail(this, view, 0);'''
+to = '''    cx.init_event(this, names::intern(event_type), bubbles, cancelable);
+    cx.set_ui_event_view_and_detail(this, view, 0);'''
+
+[[mutant]]
+name = "api: no TextEvent from createEvent"
+file = "crates/dom_api_next/src/document.rs"
+from = '''        "textevent" => CreatedEvent::Text,
+'''
+to = ''''''

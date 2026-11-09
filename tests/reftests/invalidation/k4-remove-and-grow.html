@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>K4: what was removed is gone, and what was added past the page's old end is drawn</title>
+<link rel="match" href="k4-remove-and-grow-ref.html">
+<style>html, body { margin: 0 } div { width: 100px; height: 50px }</style>
+<div style="background-color: green"></div>
+<div id="gone" style="background-color: red"></div>
+<div id="last" style="background-color: blue"></div>
+<script src="after-frames.js"></script>
+<script>afterFrames(() => {
+  const gone = document.getElementById("gone");
+  gone.parentNode.removeChild(gone);
+  const tall = document.createElement("div");
+  tall.setAttribute("style", "height: 500px; background-color: green");
+  document.body.appendChild(tall);
+});</script>
+</html>

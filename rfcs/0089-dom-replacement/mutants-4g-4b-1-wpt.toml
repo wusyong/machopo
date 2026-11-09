@@ -1,0 +1,65 @@
+# Stage 4g-4b-1: the render thread's per-frame steps on the new DOM, which only WPT reaches
+# (no cargo test drives the render thread): each document's resize observer loop in tree
+# order, the intersections of the frame tree's documents (through the iframes, the
+# top-level margin and bounds kept from another origin, by window), a child frame laid out
+# at another size reacting to the environment change.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "python3 scripts/test.py wpt --next-dom intersection-observer/ resize-observer/ html/semantics/embedded-content/the-img-element/environment-changes/ | grep -q 'expects 461, gaps 115'"]
+timeout = 3000
+
+[[mutant]]
+name = "only the top-level document's resize observers"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        for frame in engine.frames_in_tree_order() {
+            self.run_next_resize_observer_loop(frame);'''
+to = '''        for frame in engine.frames_in_tree_order().into_iter().take(1) {
+            self.run_next_resize_observer_loop(frame);'''
+
+[[mutant]]
+name = "the engine's resize observers the top-level window's"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''    fn has_resize_observations(&mut self, frame: dom_api_next::FrameId) -> bool {
+        let Some(context) = self.frame_context(frame) else {'''
+to = '''    fn has_resize_observations(&mut self, frame: dom_api_next::FrameId) -> bool {
+        let Some(context) = self.frame_context(frame).and(self.context.clone()) else {'''
+
+[[mutant]]
+name = "a child's document not in its iframe"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                    .or_else(|| cx.shadow_host(n))
+                    .or_else(|| cx.frame_owner(n));'''
+to = '''                    .or_else(|| cx.shadow_host(n));'''
+
+[[mutant]]
+name = "another origin's target given the margin"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                root_margin: (!other).then_some(options.root_margin),'''
+to = '''                root_margin: Some(options.root_margin),'''
+
+[[mutant]]
+name = "another origin's target given the root's bounds"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                    (true, _) => None,
+                    (false, None) => Some(gfx::RectF::default()),'''
+to = '''                    (true, _) => Some(geometry.root.unwrap_or_default()),
+                    (false, None) => Some(gfx::RectF::default()),'''
+
+[[mutant]]
+name = "only the top-level document's observers"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            .filter(|document| !blocked.contains(&cx.node_id(*document)))'''
+to = '''            .filter(|document| !blocked.contains(&cx.node_id(*document)))
+            .take(1)'''
+
+[[mutant]]
+name = "a target in a child's document not observed with the implicit root"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                        && !shown.contains(&cx.node_id(cx.document_of(observation.target)))'''
+to = '''                        && cx.node_id(cx.document_of(observation.target)) != cx.node_id(top)'''
+
+[[mutant]]
+name = "a resized child's environment not changed"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            for frame in resized {
+                engine.react_to_environment_changes(frame);
+            }'''
+to = '''            let _ = resized;'''

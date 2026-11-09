@@ -1,0 +1,59 @@
+<!doctype html>
+<style>
+body { margin: 0; font-size: 0; }
+.w { width: 250px; position: relative; margin-bottom: 40px; }
+.w::after { content: ""; display: block; clear: both; }
+i { display: inline-block; width: 100px; height: 10px; background: green; }
+.f { display: flex; }
+.c { display: flex; flex-direction: column; }
+.g { display: grid; }
+</style>
+<div class=w id=A><div class=t style="float:left"><div class="f"><div><i></i> <i></i> <i></i> <i></i></div></div></div></div>
+<div class=w id=B><div class=t style="float:left"><div class="c"><div class="f"><div><i></i> <i></i> <i></i> <i></i></div></div></div></div></div>
+<div class=w id=C><div class=t style="float:left"><div class="f"><div style="flex:1"><i></i> <i></i> <i></i> <i></i></div><div style="flex:1"><i></i> <i></i> <i></i> <i></i></div></div></div></div>
+<div class=w id=D style="height:20px"><div class=t style="position:absolute"><div class="f"><div><i></i> <i></i> <i></i> <i></i></div></div></div></div>
+<div class=w id=E><div class=t style="display:inline-block"><div class="f"><div><i></i> <i></i> <i></i> <i></i></div></div></div></div>
+<div class=w id=F><div class=t style="float:left"><div class="c"><div class="f"><div style="width:33%;min-width:50px"><i></i> <i></i></div><div style="width:66%"><i></i> <i></i> <i></i> <i></i></div></div></div></div></div>
+<div class=w id=G><div class=t style="float:left"><div class="f"><div><i></i> <i></i></div></div></div></div>
+<div class=w id=H><div class=t style="float:left"><div class="f" style="padding:0 10px"><div><i></i> <i></i> <i></i> <i></i></div><div><i></i></div></div></div></div>
+<div class=w id=I><div class=t style="float:left"><div class="f" style="flex-wrap:wrap"><div><i></i> <i></i></div><div><i></i> <i></i></div><div><i></i></div></div></div></div>
+<div class=w id=J><div class=t style="display:inline-flex"><div><i></i> <i></i> <i></i> <i></i></div></div></div>
+<div class=w id=K><div class=t style="float:left"><div class="f" style="max-width:220px"><div><i></i> <i></i> <i></i> <i></i></div></div></div></div>
+<div class=w id=L><div class=t style="float:left"><div class="f"><div style="flex:0 0 300px"><i></i></div></div></div></div>
+<div class=w id=M><div class=t style="float:left"><div class="f"><div style="flex:1 1 0px"><i></i> <i></i> <i></i> <i></i></div><div style="flex:1 1 0px"><i></i></div></div></div></div>
+<div class=w id=N><div class=t style="float:left"><div class="f" style="flex-direction:row-reverse"><div><i></i> <i></i> <i></i> <i></i></div></div></div></div>
+<div class=w id=O><div class="f t" style="width:fit-content"><div><i></i> <i></i> <i></i> <i></i></div></div></div>
+<div class=w id=P><div class=t style="float:left"><div class="f" style="flex-wrap:wrap"><div style="flex:0 1 300px"><i></i></div></div></div></div>
+<div class=w id=Q><div class=t style="float:left"><div class="f" style="gap:10px"><div><i></i> <i></i></div><div><i></i> <i></i></div></div></div></div>
+<div class=w id=R><div class=t style="float:left"><div class="f" style="min-width:300px"><div><i></i> <i></i> <i></i> <i></i></div></div></div></div>
+<div class=w id=S><div class=t style="float:left"><div class="f" style="box-sizing:border-box;padding:0 20px;border:5px solid"><div><i></i> <i></i> <i></i> <i></i></div></div></div></div>
+<div class=w id=T><div class=t style="float:left"><div class="f" style="margin:0 15px"><div><i></i> <i></i> <i></i> <i></i></div></div></div></div>
+<div class=w id=U><div class=t style="float:left"><div class="f" style="overflow:scroll"><div><i></i> <i></i> <i></i> <i></i></div></div></div></div>
+<div class=w id=V><div class=t style="float:left"><div class="f"><div style="flex:none"><i></i> <i></i> <i></i> <i></i></div></div></div></div>
+<div class=w id=W><div class=t style="float:left"><div class="g" style="grid-template-columns:1fr 1fr;gap:24px"><div><i></i> <i></i> <i></i> <i></i></div><div><i></i> <i></i></div></div></div></div>
+<div class=w id=X><div class=t style="float:left"><div class="c"><div class="g" style="grid-template-columns:1fr 1fr;gap:24px"><div><i></i> <i></i> <i></i> <i></i></div><div><i></i> <i></i></div></div></div></div></div>
+<div class=w id=Y><div class=t style="float:left"><div class="g" style="grid-template-columns:auto auto"><div><i></i> <i></i> <i></i> <i></i></div><div><i></i> <i></i></div></div></div></div>
+<div class=w id=Z><div class=t style="float:left"><div class="g" style="grid-template-columns:repeat(3,100px)"><div><i></i></div></div></div></div>
+<div class=w id=AA style="height:20px"><div class=t style="position:absolute"><div class="g" style="grid-template-columns:1fr"><div><i></i> <i></i> <i></i> <i></i></div></div></div></div>
+<div class=w id=AB><div class=t style="float:left"><div class="g" style="grid-template-columns:minmax(0,1fr) 2fr"><div><i></i> <i></i> <i></i> <i></i></div><div><i></i> <i></i></div></div></div></div>
+<div class=w id=AC><div class=t style="float:left"><div class="g" style="grid-template-columns:repeat(auto-fill,minmax(100px,1fr))"><div><i></i></div><div><i></i></div><div><i></i></div><div><i></i></div></div></div></div>
+<div class=w id=AD><div class=t style="display:inline-block"><div class="g"><div><i></i> <i></i> <i></i> <i></i></div></div></div></div>
+<div class=w id=BA><div class="t f" style="float:left"><div><i></i> <i></i> <i></i> <i></i></div></div></div>
+<div class=w id=BB><div class="t g" style="float:left;grid-template-columns:1fr 1fr;gap:24px"><div><i></i> <i></i> <i></i> <i></i></div><div><i></i> <i></i></div></div></div>
+<div class=w id=BC style="height:20px"><div class="t f" style="position:absolute"><div><i></i> <i></i> <i></i> <i></i></div></div></div>
+<div class=w id=BD style="height:20px"><div class="t g" style="position:absolute;grid-template-columns:1fr 1fr;gap:24px"><div><i></i> <i></i> <i></i> <i></i></div><div><i></i> <i></i></div></div></div>
+<div class=w id=BE><div class="t f" style="display:inline-flex"><div><i></i> <i></i> <i></i> <i></i></div></div></div>
+<div class=w id=BF><div class="t g" style="display:inline-grid;grid-template-columns:1fr 1fr;gap:24px"><div><i></i> <i></i> <i></i> <i></i></div><div><i></i> <i></i></div></div></div>
+<div class=w id=BG><div class="t c" style="float:left;flex-wrap:wrap;height:20px"><div><i></i> <i></i> <i></i> <i></i></div><div><i></i> <i></i></div></div></div>
+<div class=w id=BH><div class=t style="float:left"><div class=c style="flex-wrap:wrap;height:20px"><div><i></i> <i></i> <i></i> <i></i></div><div><i></i> <i></i></div></div></div></div>
+<div class=w id=BI><div class=t style="float:left"><div class=c><div style="aspect-ratio:1/1"><i></i> <i></i> <i></i> <i></i></div></div></div></div>
+<script>
+function report() {
+  return [...document.querySelectorAll('.w')].map(w => {
+    const t = w.querySelector('.t');
+    const inner = [t, ...t.querySelectorAll('.f, .c, .g')].map(e => e.getBoundingClientRect().width);
+    const items = [...t.querySelectorAll('.f > div, .g > div')].map(e => e.getBoundingClientRect().width);
+    return w.id + ': outer ' + t.getBoundingClientRect().width + ' flex ' + inner.join('/') + ' items ' + items.join('/');
+  }).join('\n');
+}
+</script>

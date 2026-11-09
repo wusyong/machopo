@@ -1,0 +1,30 @@
+<!DOCTYPE html><meta charset=utf-8>
+<script>
+async function run(){const o=[];const g=navigator.geolocation;const wait=ms=>new Promise(r=>setTimeout(r,ms));
+let hit=[];
+const id1=g.watchPosition(()=>{},e=>hit.push("w1:"+e.code));g.clearWatch(id1);
+const id2=g.watchPosition(()=>{},e=>hit.push("w2:"+e.code));
+const id3=g.watchPosition(()=>{},e=>hit.push("w3:"+e.code),{timeout:0});
+g.getCurrentPosition(()=>{},e=>hit.push("g1:"+e.code));
+setTimeout(()=>hit.push("timeout0"),0);
+Promise.resolve().then(()=>hit.push("microtask"));
+await wait(300);o.push("ids "+[id1,id2,id3].join(",")+" order "+hit.join(" "));
+hit=[];
+g.getCurrentPosition(()=>{},function(e){hit.push("this="+(this===undefined?"undefined":this===window?"window":String(this)));hit.push(Object.keys(e).length+" "+JSON.stringify(e)+" "+e.toString());
+ hit.push(Object.getOwnPropertyDescriptor(GeolocationPositionError.prototype,"code").get.name)});
+await wait(300);o.push(hit.join(" | "));
+hit=[];
+const id4=g.watchPosition(()=>{},e=>hit.push("w4:"+e.code));await wait(300);hit.push("then clear "+g.clearWatch(id4));
+const id5=g.watchPosition(()=>{},e=>hit.push("w5:"+e.code));await wait(300);
+o.push("later ids "+id4+","+id5+" "+hit.join(" "));
+hit=[];
+g.getCurrentPosition(()=>{},e=>{hit.push("e-thrown");throw new Error("boom")});
+window.onerror=(m)=>{hit.push("onerror "+m);return true};
+await wait(300);o.push(hit.join(" "));
+try{g.getCurrentPosition(()=>{},5)}catch(e){o.push("bad err cb "+e.name+": "+e.message)}
+try{g.getCurrentPosition(()=>{},undefined,5)}catch(e){o.push("bad opts "+e.name+": "+e.message)}
+hit=[];g.getCurrentPosition(()=>{},e=>hit.push("neg timeout "+e.code),{timeout:-5});await wait(300);o.push(hit.join(" "));
+hit=[];g.getCurrentPosition(()=>{},e=>hit.push("big timeout "+e.code),{timeout:1e12, maximumAge:Infinity, enableHighAccuracy:true});await wait(300);o.push(hit.join(" "));
+o.push("watch no cb: "+(()=>{try{return g.watchPosition()}catch(e){return e.name+": "+e.message}})());
+return o.join("\n")}
+</script>

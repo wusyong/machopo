@@ -1,0 +1,441 @@
+# Stage 1g: counting script's DOM calls (dom_js's call_counts,
+# MACHOPO_DOM_CALLS) and `bench.py speedometer --dom-calls`'s reading and report.
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::dom_calls"]
+timeout = 900
+
+[[mutant]]
+name = "a typed path's calls aren't counted"
+file = "crates/dom_js/src/typed.rs"
+from = '''    crate::call_counts::note(M::INTERFACE, M::MEMBER);
+'''
+to = ""
+
+[[mutant]]
+name = "the shared callback's calls aren't counted"
+file = "crates/dom_js/src/templates.rs"
+from = '''    crate::call_counts::note(index, member_index);
+'''
+to = ""
+
+[[mutant]]
+name = "a call is counted once whatever the member"
+file = "crates/dom_js/src/call_counts.rs"
+from = '''        let count = counts.calls.entry((interface, member)).or_insert(0);'''
+to = '''        let count = counts.calls.entry((interface, 0)).or_insert(0);'''
+
+[[mutant]]
+name = "the counts aren't the most called first"
+file = "crates/dom_js/src/call_counts.rs"
+from = '''        named.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));'''
+to = '''        named.sort_by(|a, b| a.0.cmp(&b.0));'''
+
+[[mutant]]
+name = "a thread writes no file as it ends"
+file = "crates/dom_js/src/call_counts.rs"
+from = '''        let Some(directory) = directory() else {
+            return;
+        };'''
+to = '''        let Some(directory) = directory().filter(|_| false) else {
+            return;
+        };'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "dom_calls"]
+
+[[mutant]]
+name = "the environment doesn't turn counting on"
+file = "crates/dom_js/src/call_counts.rs"
+from = '''    let on = directory().is_some();'''
+to = '''    let on = false;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "dom_calls"]
+
+[[mutant]]
+name = "only one thread's file is read"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''    for path in sorted(folder.glob("*.tsv")):'''
+to = '''    for path in sorted(folder.glob("*.tsv"))[:1]:'''
+test = ["python3", "scripts/bench/speedometer/speedometer_test.py", "DomCallsTests"]
+
+[[mutant]]
+name = "a member's share is of all the calls"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''            shares[member] += count / total / len(counts)'''
+to = '''            shares[member] += count / sum(sum(c.values()) for c in counts.values())'''
+test = ["python3", "scripts/bench/speedometer/speedometer_test.py", "DomCallsTests"]
+
+[[mutant]]
+name = "the tool's summaries are counted too"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''    server.summaries = False
+'''
+to = ""
+test = ["python3", "scripts/bench/speedometer/speedometer_test.py", "MeasureTests.test_dom_calls_of_kun"]
+
+# --- dom_next and kunNextDom: the members the single calls' pages need -------
+
+[[mutant]]
+name = "an element's nodeType is a text's"
+file = "crates/dom_next/src/lib.rs"
+from = '''            NodeKind::Element => 1,'''
+to = '''            NodeKind::Element => 3,'''
+test = ["cargo", "test", "-q", "-p", "dom_next", "--test", "it", "tree::"]
+
+[[mutant]]
+name = "every element's name is uppercased"
+file = "crates/dom_next/src/lib.rs"
+from = '''            NodeKind::Element if self.namespace(node) == ElementNamespace::Html => {'''
+to = '''            NodeKind::Element if true => {'''
+test = ["cargo", "test", "-q", "-p", "dom_next", "--test", "it", "tree::"]
+
+[[mutant]]
+name = "a prefixed name is taken"
+file = "crates/dom_next/src/lib.rs"
+from = '''        let Some(namespace) = ElementNamespace::from_uri(namespace).filter(|_| !name.contains(':'))'''
+to = '''        let Some(namespace) = ElementNamespace::from_uri(namespace)'''
+test = ["cargo", "test", "-q", "-p", "dom_next", "--test", "it", "tree::"]
+
+[[mutant]]
+name = "SVG's namespace isn't known"
+file = "crates/dom_next/src/lib.rs"
+from = '''            "http://www.w3.org/2000/svg" => Some(Self::Svg),'''
+to = ""
+test = ["cargo", "test", "-q", "-p", "dom_next", "--test", "it", "tree::"]
+
+[[mutant]]
+name = "a node made by a node has that node as its document"
+file = "crates/dom_next/src/lib.rs"
+from = '''            NodeKind::Document => Some(node),
+            _ => node.owner.get(self.gc),'''
+to = '''            _ => Some(node),'''
+test = ["cargo", "test", "-q", "-p", "dom_next", "--test", "it", "tree::"]
+
+[[mutant]]
+name = "innerHTML's nodes have no document"
+file = "crates/dom_next/src/parse.rs"
+from = '''    let owner = cx.owner_document(context);'''
+to = '''    let owner = None;'''
+test = ["cargo", "test", "-q", "-p", "dom_next", "--test", "it", "tree::"]
+
+# (`CLASS` itself changed is equivalent: the table interns `class` as that
+# number too.)
+[[mutant]]
+name = "className reads another attribute"
+file = "crates/dom_next/src/lib.rs"
+from = '''        match self.attribute(element, names::CLASS) {'''
+to = '''        match self.attribute(element, 0) {'''
+test = ["cargo", "test", "-q", "-p", "dom_next", "--test", "it", "tree::"]
+
+[[mutant]]
+name = "textContent reads the children's texts only"
+file = "crates/dom_next/src/lib.rs"
+from = '''                    at = self.first_child(current).or_else(|| {'''
+to = '''                    at = None.or_else(|| {'''
+test = ["cargo", "test", "-q", "-p", "dom_next", "--test", "it", "tree::"]
+
+[[mutant]]
+name = "textContent's setter keeps the children"
+file = "crates/dom_next/src/lib.rs"
+from = '''            NodeKind::Element => {
+                while let Some(child) = self.first_child(node) {
+                    self.detach(child);
+                }
+                if !value.is_empty() {'''
+to = '''            NodeKind::Element => {
+                if !value.is_empty() {'''
+test = ["cargo", "test", "-q", "-p", "dom_next", "--test", "it", "tree::"]
+
+[[mutant]]
+name = "textContent's setter makes an empty text"
+file = "crates/dom_next/src/lib.rs"
+from = '''                if !value.is_empty() {
+                    let text ='''
+to = '''                if true {
+                    let text ='''
+test = ["cargo", "test", "-q", "-p", "dom_next", "--test", "it", "tree::"]
+
+[[mutant]]
+name = "JS's tagName is a text's name too"
+file = "crates/dom_js/src/next.rs"
+from = '''        (cx.kind(node) == NodeKind::Element).then(|| cx.node_name_key(node))'''
+to = '''        Some(cx.node_name_key(node))'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "next_dom::the_members"]
+
+[[mutant]]
+name = "JS's textContent = null is \"null\""
+file = "crates/dom_js/src/next.rs"
+from = '''    let value = if value.is_null() {
+        String::new()
+    } else {
+        let Some(value) = string(scope, value) else {
+            return;
+        };
+        value
+    };
+    let state = state(scope);
+    let target'''
+to = '''    let value = {
+        let Some(value) = string(scope, value) else {
+            return;
+        };
+        value
+    };
+    let state = state(scope);
+    let target'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "next_dom::the_members"]
+
+[[mutant]]
+name = "createElementNS's null namespace is \"null\""
+file = "crates/dom_js/src/next.rs"
+from = '''    let namespace = if namespace.is_null() {
+        None
+    } else {'''
+to = '''    let namespace = if false {
+        None
+    } else {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "next_dom::the_members"]
+
+[[mutant]]
+name = "a page with no wasm versions gets them"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    return (wasm if has_wasm_versions(page) else []) + ['''
+to = '''    return wasm + ['''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "CommandTests.test_the_new_doms_pages_and_not_its_variants_as_pages"]
+
+# --- 1g's experiment 甲: the reads' floor --------------------------------------
+
+[[mutant]]
+name = "an operation without a safepoint has one"
+file = "crates/gc/src/heap.rs"
+from = '''    ) -> R {
+        f(&Mutation {
+            inner: &self.inner,
+            _invariant: PhantomData,
+        })
+    }'''
+to = '''    ) -> R {
+        self.inner.safepoint();
+        f(&Mutation {
+            inner: &self.inner,
+            _invariant: PhantomData,
+        })
+    }'''
+test = ["cargo", "test", "-q", "-p", "gc", "--test", "it", "young::"]
+
+[[mutant]]
+name = "the functions check no receiver"
+file = "crates/dom_js/src/next.rs"
+from = '''        .signature(signature)
+'''
+to = ""
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "next_dom"]
+
+[[mutant]]
+name = "the receiver is read from the wrong slot"
+file = "../third_party/rusty_v8/src/function.rs"
+from = '''  pub(super) const RECEIVER: isize = 9;'''
+to = '''  pub(super) const RECEIVER: isize = 10;'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::"]
+
+[[mutant]]
+name = "the return value's slot is the wrong one"
+file = "../third_party/rusty_v8/src/function.rs"
+from = '''  pub(super) const RETURN_VALUE: isize = 6;'''
+to = '''  pub(super) const RETURN_VALUE: isize = 7;'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::"]
+
+[[mutant]]
+name = "the isolate is read from the wrong slot"
+file = "../third_party/rusty_v8/src/function.rs"
+from = '''  pub(super) const ISOLATE: isize = 5;'''
+to = '''  pub(super) const ISOLATE: isize = 4;'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::"]
+
+[[mutant]]
+name = "the arguments start a slot late"
+file = "../third_party/rusty_v8/src/function.rs"
+from = '''  pub(super) const FIRST_ARGUMENT: isize = 10;'''
+to = '''  pub(super) const FIRST_ARGUMENT: isize = 11;'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::"]
+
+[[mutant]]
+name = "true and false are swapped"
+file = "../third_party/rusty_v8/src/function.rs"
+from = '''  pub(super) const TRUE: usize = 0x71;'''
+to = '''  pub(super) const TRUE: usize = 0x55;'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::"]
+
+[[mutant]]
+name = "null is undefined"
+file = "../third_party/rusty_v8/src/function.rs"
+from = '''  pub(super) const NULL: usize = 0x2d;'''
+to = '''  pub(super) const NULL: usize = 0x11;'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::"]
+
+[[mutant]]
+name = "a Smi isn't shifted"
+file = "../third_party/rusty_v8/src/function.rs"
+from = '''      .then(|| (value << 1) as usize)'''
+to = '''      .then(|| value as usize)'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::"]
+
+[[mutant]]
+name = "the return value's slot is written whole"
+file = "../third_party/rusty_v8/src/function.rs"
+from = '''    unsafe { *slot = (*slot & !0xffff_ffff) | (value & 0xffff_ffff) };'''
+to = '''    unsafe { *slot = value & 0xffff_ffff };'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::"]
+
+# --- 1g's experiment 丙: strings ---------------------------------------------
+
+[[mutant]]
+name = "a name's key ignores its case"
+file = "crates/dom_next/src/lib.rs"
+from = '''                uppercase: self.namespace(node) == ElementNamespace::Html,'''
+to = '''                uppercase: true,'''
+test = ["cargo", "test", "-q", "-p", "dom_next", "--test", "it", "tree::"]
+
+[[mutant]]
+name = "the cache gives any name's string"
+file = "crates/dom_js/src/next.rs"
+from = '''    if let Some(Some(name)) = state.names.borrow().get(index) {'''
+to = '''    if let Some(Some(name)) = state.names.borrow().iter().find(|name| name.is_some()) {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "next_dom"]
+
+[[mutant]]
+name = "the scratch string isn't emptied"
+file = "crates/dom_js/src/next.rs"
+from = '''        scratch.clear();
+        cx.text_content_into('''
+to = '''        cx.text_content_into('''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "next_dom"]
+
+[[mutant]]
+name = "a name with uppercase isn't lowercased"
+file = "crates/dom_next/src/lib.rs"
+from = '''    if name.bytes().any(|b| b.is_ascii_uppercase()) {'''
+to = '''    if false {'''
+test = ["cargo", "test", "-q", "-p", "dom_next", "--test", "it", "tree::"]
+
+[[mutant]]
+name = "textContent's text replaces what was there"
+file = "crates/dom_next/src/lib.rs"
+from = '''                if let Some(text) = node.text.get(self.gc) {
+                    joined.push_str(&text.data.get().borrow());
+                }
+                true'''
+to = '''                if let Some(text) = node.text.get(self.gc) {
+                    *joined = text.data.get().borrow().to_string();
+                }
+                true'''
+test = ["cargo", "test", "-q", "-p", "dom_next", "--test", "it", "tree::"]
+
+# --- 1g's experiment 丁: creation -------------------------------------------
+
+[[mutant]]
+name = "a known name gets a new number"
+file = "crates/dom_next/src/names.rs"
+from = '''    pub(crate) fn intern(&mut self, name: &str) -> u32 {
+        match self.find(name) {'''
+to = '''    pub(crate) fn intern(&mut self, name: &str) -> u32 {
+        match None {'''
+test = ["cargo", "test", "-q", "-p", "dom_next", "--test", "it", "tree::"]
+
+[[mutant]]
+name = "a parsed name gets a new number"
+file = "crates/dom_next/src/names.rs"
+from = '''    pub(crate) fn intern_atom(&mut self, atom: LocalName) -> u32 {
+        match self.find(&atom) {'''
+to = '''    pub(crate) fn intern_atom(&mut self, atom: LocalName) -> u32 {
+        match None {'''
+test = ["cargo", "test", "-q", "-p", "dom_next", "--test", "it", "tree::"]
+
+[[mutant]]
+name = "a new node doesn't keep its wrapper"
+file = "crates/dom_js/src/next.rs"
+from = '''    bindings::wrap(scope, cx.gc, wrapper, node);
+    bindings::set_wrapper(scope, cx.wrapper_edge(node), wrapper);'''
+to = '''    bindings::wrap(scope, cx.gc, wrapper, node);'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "next_dom"]
+
+[[mutant]]
+name = "a created wrapper isn't counted"
+file = "crates/dom_js/src/next.rs"
+from = '''        Ok(()) => {
+            state.made.set(state.made.get().wrapping_add(1));
+            rv.set(wrapper.into());
+        }'''
+to = '''        Ok(()) => {
+            rv.set(wrapper.into());
+        }'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "next_dom"]
+
+# --- 1g's step 4: the limit -------------------------------------------------
+
+[[mutant]]
+name = "the isolate's state is any type's"
+file = "crates/bindings/src/unified.rs"
+from = '''    if state.type_id != TypeId::of::<T>() {
+        return None;
+    }'''
+to = ""
+test = ["cargo", "test", "-q", "-p", "bindings", "--test", "it", "isolate_state"]
+
+[[mutant]]
+name = "a value's cached string is any value's"
+file = "crates/dom_js/src/next.rs"
+from = '''        && Arc::ptr_eq(cached, value)'''
+to = '''        && !cached.is_empty()'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "next_dom"]
+
+[[mutant]]
+name = "a name's index ignores its case"
+file = "crates/dom_next/src/lib.rs"
+from = '''                .saturating_add(usize::from(uppercase))'''
+to = ""
+test = ["cargo", "test", "-q", "-p", "dom_next", "--test", "it", "tree::"]
+
+[[mutant]]
+name = "a boilerplate is any context's"
+file = "crates/dom_js/src/next.rs"
+from = '''        && *of == context'''
+to = '''        && true'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "next_dom"]
+
+[[mutant]]
+name = "an isolate's state isn't dropped before the isolate"
+file = "crates/bindings/src/script_state.rs"
+from = '''        crate::unified::drop_isolate_state(&mut self.isolate);'''
+to = ""
+test = ["cargo", "test", "-q", "-p", "bindings", "--test", "it", "isolate_state"]
+
+
+# --- the registration's teardown: V8's GC finished first ---------------------
+# Caught only by the loaded stress run (a race at teardown): `test.py mutate`
+# runs it as a shell loop.
+
+[[mutant]]
+name = "the registration goes while V8 marks"
+file = "crates/bindings/src/unified.rs"
+from = '''            v8__kun__FinishMarking(isolate);
+'''
+to = ""
+test = ["sh", "-c", "b=$(cargo test -q -p dom_js --test it --no-run --message-format=json 2>/dev/null | python3 -c \"import sys,json;[print(m['executable']) for m in map(json.loads,sys.stdin) if m.get('executable') and m['target']['name']=='it']\" | tail -1); fails=0; for p in 1 2 3 4; do (for i in $(seq 1 120); do MACHOPO_V8_FLAGS=--stress-compaction $b next_dom >/dev/null 2>&1; [ $? -gt 128 ] && echo crash; done) & done | grep -q crash && exit 1; wait; exit 0"]
+timeout = 1800
+
+# --- step 5: the isolate's state borrowed, set once ---------------------------
+
+[[mutant]]
+name = "an isolate's state is replaced"
+file = "crates/bindings/src/unified.rs"
+from = '''    assert!(
+        isolate.get_data(STATE_SLOT).is_null(),
+        "an isolate's state is set once"
+    );
+'''
+to = ""
+test = ["cargo", "test", "-q", "-p", "bindings", "--test", "it", "isolate_state"]
+
+[[mutant]]
+name = "each call makes the isolate's new DOM anew"
+file = "crates/dom_js/src/next.rs"
+from = '''        Some(state) => state,'''
+to = '''        Some(_) => new_state(scope),'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "next_dom"]

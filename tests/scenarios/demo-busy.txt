@@ -1,0 +1,28 @@
+# about:demo's "Busy for 3 seconds": while script keeps the renderer's
+# main thread busy, the compositor scrolls the page and the box that is a
+# layer by itself; the box something is painted over waits for the main
+# thread. pages/busy.html has the same boxes at fixed places: while the page
+# is busy, nothing can be asked about where they are. The tab strip and
+# the toolbar are 74px high, so the page's y is the window's minus 74.
+navigate pages/busy.html
+wait-loaded
+click #stall
+wait-busy
+# A second is far more than the compositor takes, and far less than the
+# 3 seconds the main thread is busy for.
+timeout 1
+capture first now
+wheel-at 100 194 0 60
+expect-differs first
+capture page now
+wheel-at 600 534 0 130
+expect-differs page
+# The second box, 238 to 360 down the page, is at 108 to 230 in the
+# viewport once scrolled by 130 (182 to 304 in the window); it waits for the
+# main thread.
+capture second now
+wheel-at 100 184 0 60
+timeout 10
+wait-text #note "done"
+expect-differs second
+screenshot after

@@ -1,0 +1,177 @@
+# Mutation test of step 3b (constructed stylesheets, their `cssRules` and
+# rules' objects, a rule's `style`):
+# python3 scripts/test.py mutate rfcs/0016-cssom/mutants-3b.toml
+# `dom`'s mutants also run `dom`'s tests: its GC workload keeps sheets and
+# checks their rules' objects.
+test = ["cargo", "test", "-q", "-p", "dom", "-p", "dom_api", "--test", "it"]
+timeout = 600
+
+[[mutant]]
+name = "insertRule doesn't move the later rules' objects"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''        for to in (index + 1..=old_len).rev() {
+            let from = object.rule_objects.slot(self, to - 1);
+            let slot = object.rule_objects.slot(self, to);
+            slot.set_from(self, from);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "insertRule leaves the old object at the new rule's position"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''            slot.set_from(self, from);
+        }
+        object.rule_objects.slot(self, index).clear(self);
+    }'''
+to = '''            slot.set_from(self, from);
+        }
+    }'''
+
+[[mutant]]
+name = "deleteRule doesn't take the rule's object out"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''        self.take_rule_object(sheet, index);
+        for to in index..old_len - 1 {'''
+to = '''        for to in index..old_len - 1 {'''
+
+[[mutant]]
+name = "deleteRule doesn't move the later rules' objects"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''        for to in index..old_len - 1 {
+            let from = object.rule_objects.slot(self, to + 1);
+            let slot = object.rule_objects.slot(self, to);
+            slot.set_from(self, from);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "deleteRule leaves the last object twice"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''        object.rule_objects.slot(self, old_len - 1).clear(self);'''
+to = ''''''
+
+[[mutant]]
+name = "replaceSync doesn't take the rules' objects out"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''        for index in 0..old_len {
+            self.take_rule_object(sheet, index);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the objects are never moved"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''        unsafe { sheet.object().rule_objects.get(0) }.is_some()'''
+to = '''        unsafe { sheet.object().rule_objects.get(0) }.is_some() && false'''
+
+[[mutant]]
+name = "a taken-out object keeps its sheet"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''        rule.object().sheet.clear(self);
+        object.rule_objects.slot(self, index).clear(self);'''
+to = '''        object.rule_objects.slot(self, index).clear(self);'''
+
+[[mutant]]
+name = "a rule's object is made anew each time"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''        if let Some(rule) = unsafe { slot.get_ptr() } {
+            return CssStyleRuleHandle::new(&rule, self.roots);
+        }'''
+to = '''        if let Some(rule) = unsafe { slot.get_ptr() }.filter(|_| false) {
+            return CssStyleRuleHandle::new(&rule, self.roots);
+        }'''
+
+[[mutant]]
+name = "a rule's object has no sheet"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''        rule.object().sheet.set(self, sheet.persistent());'''
+to = ''''''
+
+[[mutant]]
+name = "a changed rule doesn't change its sheet"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''        let Some(sheet) = self.read().css_rule_sheet(rule) else {
+            return;
+        };'''
+to = '''        let Some(sheet) = self.read().css_rule_sheet(rule).filter(|_| false) else {
+            return;
+        };'''
+
+[[mutant]]
+name = "cssRules is made anew each time"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''        if let Some(list) = unsafe { self.own(sheet).rule_list.get_ptr() } {'''
+to = '''        if let Some(list) = unsafe { self.own(sheet).rule_list.get_ptr() }.filter(|_| false) {'''
+
+[[mutant]]
+name = "a rule's style is made anew each time"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''        if let Some(declaration) = unsafe { self.own(rule).declaration.get_ptr() } {'''
+to = '''        if let Some(declaration) = unsafe { self.own(rule).declaration.get_ptr() }.filter(|_| false) {'''
+
+[[mutant]]
+name = "insertRule returns 0"
+file = "crates/dom_api/src/css_style_sheet.rs"
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+from = '''        .insert_css_rule(this, Arc::new(inserted), index as usize);
+    Ok(index)'''
+to = '''        .insert_css_rule(this, Arc::new(inserted), index as usize);
+    Ok(0)'''
+
+[[mutant]]
+name = "replaceSync loses the base URL"
+file = "crates/dom_api/src/css_style_sheet.rs"
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+from = '''    let contents = Arc::new(StyleSheetContents::parse(text.as_str(), base_url));
+    cx.mutate().replace_css_style_sheet_contents(this, contents);'''
+to = '''    let _ = base_url;
+    let contents = Arc::new(StyleSheetContents::parse(text.as_str(), None));
+    cx.mutate().replace_css_style_sheet_contents(this, contents);'''
+
+[[mutant]]
+name = "baseURL is ignored"
+file = "crates/dom_api/src/css_style_sheet.rs"
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+from = '''    let base_url = match options.base_url {
+        None => document_base,'''
+to = '''    let base_url = match options.base_url.filter(|_| false) {
+        None => document_base,'''
+
+[[mutant]]
+name = "disabled can't be set"
+file = "crates/dom_api/src/css_style_sheet.rs"
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+from = '''    cx.mutate().set_css_style_sheet_disabled(this, disabled);'''
+to = '''    let _ = disabled;'''
+
+[[mutant]]
+name = "a rule's type is 0"
+file = "crates/dom_api/src/css_style_sheet.rs"
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+from = '''    Ok(1)
+}'''
+to = '''    Ok(0)
+}'''
+
+[[mutant]]
+name = "a rule's style doesn't change the rule"
+file = "crates/dom_api/src/css_style_declaration.rs"
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+from = '''            cx.mutate().set_css_rule(rule, Arc::new(changed));'''
+to = '''            let _ = changed;'''
+
+[[mutant]]
+name = "a rule's style has no parentRule"
+file = "crates/dom_api/src/css_style_declaration.rs"
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+from = '''        Object::StyleRuleCssStyleDeclaration(style) => {
+            Some(cx.read().style_rule_declaration_rule(style))
+        }'''
+to = '''        Object::StyleRuleCssStyleDeclaration(_) => None,'''
+
+[[mutant]]
+name = "a taken-out rule's object has no realm"
+file = "crates/dom_api/src/object.rs"
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+from = '''            Self::CssStyleRule(rule) => read.css_rule_document(rule),'''
+to = '''            Self::CssStyleRule(rule) => read.css_style_sheet_document(&read.css_rule_sheet(rule)?),'''

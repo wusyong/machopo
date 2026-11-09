@@ -1,0 +1,110 @@
+# Mutation test of stage 6a2: a fragment of the last tree walked with the
+# same inputs is left as it is, with all in it; what a box gone from the
+# tree had is let go of; the scroll offsets are set in place:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-6a2.toml
+test = ["cargo", "test", "-q", "-p", "paint"]
+timeout = 1800
+
+[[mutant]]
+name = "nothing is left as it was"
+file = "crates/paint/src/lib.rs"
+from = '''        if self.reuse
+            && old.is_some_and'''
+to = '''        if false
+            && old.is_some_and'''
+
+[[mutant]]
+name = "a fragment found with other inputs is left as it was"
+file = "crates/paint/src/lib.rs"
+from = '''                .is_some_and(|record| record.inputs == inputs && !record.frames_below)'''
+to = '''                .is_some_and(|record| !record.frames_below)'''
+
+[[mutant]]
+name = "a subtree with a child frame is left as it was"
+file = "crates/paint/src/lib.rs"
+from = '''                .is_some_and(|record| record.inputs == inputs && !record.frames_below)'''
+to = '''                .is_some_and(|record| record.inputs == inputs)'''
+
+[[mutant]]
+name = "an iframe given a child frame doesn't stop reuse"
+file = "crates/paint/src/lib.rs"
+from = '''            reuse: previous.frame_iframes == frame_iframes,'''
+to = '''            reuse: true,'''
+
+[[mutant]]
+name = "the old fragment isn't let go of"
+file = "crates/paint/src/lib.rs"
+from = '''        if let Some(old) = old {
+            self.release(Arc::as_ptr(old));
+        }'''
+to = '''        let _ = old;'''
+
+[[mutant]]
+name = "an old child none is isn't dropped"
+file = "crates/paint/src/lib.rs"
+from = '''                if !taken[j] {
+                    self.drop_subtree(&o.fragment);'''
+to = '''                if false {
+                    self.drop_subtree(&o.fragment);'''
+
+[[mutant]]
+name = "children aren't found by their boxes"
+file = "crates/paint/src/lib.rs"
+from = '''                        by_owner.entry(owner).or_insert(j);'''
+to = '''                        let _ = (owner, j);'''
+
+[[mutant]]
+name = "the same fragment's children aren't matched"
+file = "crates/paint/src/lib.rs"
+from = '''                *matched = Some(i);'''
+to = '''                let _ = (matched, i);'''
+
+[[mutant]]
+name = "a dropped subtree's children stay"
+file = "crates/paint/src/lib.rs"
+from = '''        for child in &old.children {
+            self.drop_subtree(&child.fragment);
+        }'''
+to = '''        let _ = &old.children;'''
+
+[[mutant]]
+name = "a gone child frame stays"
+file = "crates/paint/src/lib.rs"
+from = '''    for (_, frame) in std::mem::take(&mut pre.previous_frames) {
+        pre.drop_subtree(&frame.layout_view);
+    }'''
+to = '''    pre.previous_frames.clear();'''
+
+[[mutant]]
+name = "a gone SVG's states stay"
+file = "crates/paint/src/lib.rs"
+from = '''            forget(Arc::make_mut(&mut self.svg_states), &svg.children);'''
+to = '''            let _ = svg;'''
+
+[[mutant]]
+name = "scroll offsets aren't set in place"
+file = "crates/paint/src/lib.rs"
+from = '''    pre.scroll_in_place(scroll, child_frames);'''
+to = '''    let _ = scroll;'''
+
+[[mutant]]
+name = "a container in a child frame scrolls by the main frame's offsets"
+file = "crates/paint/src/lib.rs"
+from = '''                Some(iframe) => &child_frames[&iframe].scroll,'''
+to = '''                Some(_) => scroll,'''
+
+[[mutant]]
+name = "a child frame's viewport is set in place to no offset"
+file = "crates/paint/src/lib.rs"
+from = '''            if viewports.contains(&ScrollNodeId(index)) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "a place let go of isn't freed"
+file = "crates/paint/src/property_trees.rs"
+from = '''            if self.state[place] != PlaceState::Released {
+                continue;
+            }'''
+to = '''            if self.state[place] == PlaceState::Released {
+                continue;
+            }'''

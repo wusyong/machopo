@@ -1,0 +1,148 @@
+# Mutation test of step 1a (the shadow root node, `attachShadow`,
+# `shadowRoot`, `ShadowRoot`'s members, adopting shadow trees):
+# python3 scripts/test.py mutate rfcs/0035-shadow-dom-custom-elements/mutants-1a.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "shadow_dom"]
+timeout = 900
+
+[[mutant]]
+name = "the host doesn't point at its shadow root"
+file = "crates/dom/src/shadow_root.rs"
+from = '''        rare.shadow_root.set(self, root.persistent());'''
+to = '''        let _ = rare;'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::"]
+
+[[mutant]]
+name = "the shadow root doesn't point at its host"
+file = "crates/dom/src/shadow_root.rs"
+from = '''        edge.set(self, host.persistent());'''
+to = '''        let _ = edge;'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::"]
+
+[[mutant]]
+name = "adopting a host leaves its shadow tree"
+file = "crates/dom/src/scope.rs"
+from = '''                    stack.push((shadow, in_template));'''
+to = '''                    let _ = shadow;'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::"]
+
+[[mutant]]
+name = "adopting a host's shadow tree into a template's document misses it"
+file = "crates/dom/src/scope.rs"
+from = '''                    stack.push((shadow, in_template));'''
+to = '''                    stack.push((shadow, false));'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::"]
+
+[[mutant]]
+name = "a template's content is a shadow root"
+file = "crates/dom/src/scope.rs"
+from = '''    pub fn is_shadow_root(&self) -> bool {
+        self.shadow_root_init().is_some()'''
+to = '''    pub fn is_shadow_root(&self) -> bool {
+        self.host().is_some()'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it"]
+
+[[mutant]]
+name = "any namespace hosts a shadow root"
+file = "crates/dom_api/src/shadow_root.rs"
+from = '''    if name.namespace.url() != Namespace::HTML
+        || !(SHADOW_HOST_NAMES'''
+to = '''    if !(SHADOW_HOST_NAMES'''
+
+[[mutant]]
+name = "any element hosts a shadow root"
+file = "crates/dom_api/src/shadow_root.rs"
+from = '''        || !(SHADOW_HOST_NAMES.contains(&local)
+            || crate::html_element::is_valid_custom_element_name(local))'''
+to = '''        || false'''
+
+[[mutant]]
+name = "a custom element doesn't host a shadow root"
+file = "crates/dom_api/src/shadow_root.rs"
+from = '''            || crate::html_element::is_valid_custom_element_name(local))'''
+to = '''            || false)'''
+
+[[mutant]]
+name = "a second shadow root goes to dom"
+file = "crates/dom_api/src/shadow_root.rs"
+from = '''    if this.get(&cx.read()).shadow_root().is_some() {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "the mode isn't taken"
+file = "crates/dom_api/src/shadow_root.rs"
+from = '''            ShadowRootMode::Closed => dom::ShadowRootMode::Closed,'''
+to = '''            ShadowRootMode::Closed => dom::ShadowRootMode::Open,'''
+
+[[mutant]]
+name = "the slot assignment isn't taken"
+file = "crates/dom_api/src/shadow_root.rs"
+from = '''            SlotAssignmentMode::Manual => dom::SlotAssignmentMode::Manual,
+        },'''
+to = '''            SlotAssignmentMode::Manual => dom::SlotAssignmentMode::Named,
+        },'''
+
+[[mutant]]
+name = "delegatesFocus isn't taken"
+file = "crates/dom_api/src/shadow_root.rs"
+from = '''        delegates_focus: init.delegates_focus,'''
+to = '''        delegates_focus: false,'''
+
+[[mutant]]
+name = "clonable isn't taken"
+file = "crates/dom_api/src/shadow_root.rs"
+from = '''        clonable: init.clonable,'''
+to = '''        clonable: false,'''
+
+[[mutant]]
+name = "serializable isn't taken"
+file = "crates/dom_api/src/shadow_root.rs"
+from = '''        serializable: init.serializable,'''
+to = '''        serializable: false,'''
+
+[[mutant]]
+name = "a closed shadow root is shadowRoot's"
+file = "crates/dom_api/src/shadow_root.rs"
+from = '''                .is_some_and(|init| init.mode == dom::ShadowRootMode::Open)'''
+to = '''                .is_some()'''
+
+[[mutant]]
+name = "a shadow root's markup is parsed with it as the context"
+file = "crates/dom_api/src/markup.rs"
+from = '''    if node.shadow_root_init().is_none() {
+        return node.clone();
+    }'''
+to = '''    if true {
+        return node.clone();
+    }'''
+
+[[mutant]]
+name = "a shadow root can be cloned"
+file = "crates/dom_api/src/node.rs"
+from = '''    if this.shadow_root_init().is_some() {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a shadow root can be imported"
+file = "crates/dom_api/src/node.rs"
+from = '''    if node.shadow_root_init().is_some() {
+        return Err(DomException::new(
+            ExceptionName::NotSupportedError,'''
+to = '''    if false {
+        return Err(DomException::new(
+            ExceptionName::NotSupportedError,'''
+
+[[mutant]]
+name = "adopting a shadow root does nothing"
+file = "crates/dom_api/src/node.rs"
+from = '''    if node.shadow_root_init().is_some() {
+        return Err(DomException::new(
+            ExceptionName::HierarchyRequestError,'''
+to = '''    if false {
+        return Err(DomException::new(
+            ExceptionName::HierarchyRequestError,'''
+
+[[mutant]]
+name = "a shadow root is a plain DocumentFragment to script"
+file = "crates/dom_api/src/object.rs"
+from = '''                NodeKind::DocumentFragment if node.shadow_root_init().is_some() => {'''
+to = '''                NodeKind::DocumentFragment if false => {'''

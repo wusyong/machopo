@@ -1,0 +1,12 @@
+<!DOCTYPE html><body>
+<script>
+function run(){
+const a = document.body.appendChild(document.createElement('p'));
+const b = document.body.appendChild(document.createElement('p'));
+a.id = 'a'; b.id = 'b';
+const name = n => n ? n.id || n.constructor.name : String(n);
+const pair = e => name(e.fromElement) + '/' + name(e.toElement);
+const at = (type, related, target) => { const e = new MouseEvent(type, { relatedTarget: related }); let seen; target.addEventListener(type, () => seen = pair(e), { once: true }); target.dispatchEvent(e); return seen; };
+return [pair(new MouseEvent('mouseover', { relatedTarget: a })), at('mouseout', a, b), at('mouseleave', a, b), at('mouseover', a, b), at('click', a, b), at('mouseout', window, b), at('mouseover', null, window), 'fromElement' in MouseEvent.prototype, 'fromElement' in UIEvent.prototype].join();
+}
+</script>

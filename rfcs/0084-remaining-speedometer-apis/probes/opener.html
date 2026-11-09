@@ -1,0 +1,17 @@
+<!DOCTYPE html><iframe id=f></iframe>
+<script>
+function d(w){const x=Object.getOwnPropertyDescriptor(w,"opener");return x?("get" in x?"accessor":"data:"+String(x.value)):"none"}
+function run(){const o=[];const w=f.contentWindow;
+o.push("start "+d(w)+" "+w.opener);
+w.opener=null;o.push("after null "+d(w)+" "+w.opener);
+w.opener=undefined;o.push("after undefined "+d(w)+" "+w.opener);
+const w2=document.body.appendChild(document.createElement("iframe")).contentWindow;
+w2.opener=0;o.push("after 0 "+d(w2)+" "+w2.opener);
+const s=Object.getOwnPropertyDescriptor(window,"opener").set;o.push("setter "+s.name+" len="+s.length+" getter "+Object.getOwnPropertyDescriptor(window,"opener").get.name);
+try{s.call({},1);o.push("bad this ok")}catch(e){o.push("bad this "+e.name+": "+e.message)}
+const w3=document.body.appendChild(document.createElement("iframe")).contentWindow;
+Object.defineProperty(w3,"opener",{value:7,writable:false,configurable:false});o.push("frozen "+d(w3));
+try{w3.eval('"use strict";opener=8');o.push("strict set ok "+w3.opener)}catch(e){o.push("strict "+e.name+": "+e.message)}
+o.push("in proto "+("opener" in Window.prototype));
+return o.join("\n")}
+</script>

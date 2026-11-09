@@ -1,0 +1,325 @@
+# Stage 4f-2b: on the new DOM, an input's value by its value mode, kept
+# once dirty, sanitized by its type (text types, url, email, number,
+# range's step range, color), the type change steps, a copy's; a form's
+# reset() and reset event, reset buttons; a button's type;
+# RadioNodeList's value.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it -- form_values:: activation:: forms::"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: a hidden input's value its own"
+file = "crates/dom_next/src/input.rs"
+from = '''            Self::Hidden | Self::Submit | Self::Image | Self::Reset | Self::Button => ValueMode::Default,'''
+to = '''            Self::Submit | Self::Image | Self::Reset | Self::Button => ValueMode::Default,'''
+
+[[mutant]]
+name = "dom: a checkbox's value not on"
+file = "crates/dom_next/src/input.rs"
+from = '''            ValueMode::DefaultOn => attribute().unwrap_or_else(|| DomString::new("on")),'''
+to = '''            ValueMode::DefaultOn => attribute().unwrap_or_else(|| DomString::new("")),'''
+
+[[mutant]]
+name = "dom: a file input's value the attribute's"
+file = "crates/dom_next/src/input.rs"
+from = '''            ValueMode::Filename => DomString::new(""),
+        }'''
+to = '''            ValueMode::Filename => attribute().unwrap_or_else(|| DomString::new("")),
+        }'''
+
+[[mutant]]
+name = "dom: a type change leaves the value out of the attribute"
+file = "crates/dom_next/src/input.rs"
+from = '''        if let Some(value) = value {
+            self.set_attribute(element, "value", &value.to_str());
+        }'''
+to = '''        let _ = value;'''
+
+[[mutant]]
+name = "dom: a type change puts an empty value in the attribute"
+file = "crates/dom_next/src/input.rs"
+from = '''            .filter(|value| !value.to_str().is_empty());'''
+to = '''            ;'''
+
+[[mutant]]
+name = "dom: a type change keeps the dirty value"
+file = "crates/dom_next/src/input.rs"
+from = '''        if old != new {
+            input.value.get().set(None);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a copy's value not dirty"
+file = "crates/dom_next/src/input.rs"
+from = '''        to.into_ref().value.get().set(value);'''
+to = '''        let _ = value;'''
+
+[[mutant]]
+name = "dom: a value read unsanitized"
+file = "crates/dom_next/src/input.rs"
+from = '''                if *sanitized == *value.to_str() { value } else { DomString::new(&sanitized) }'''
+to = '''                let _ = sanitized;
+                value'''
+
+[[mutant]]
+name = "dom: a value set unsanitized"
+file = "crates/dom_next/src/input.rs"
+from = '''                input.into_ref().value.get().set(Some(DomString::new(&sanitized)));'''
+to = '''                let _ = sanitized;
+                input.into_ref().value.get().set(Some(DomString::new(value)));'''
+
+[[mutant]]
+name = "dom: a hidden input's value set its own"
+file = "crates/dom_next/src/input.rs"
+from = '''            ValueMode::Default | ValueMode::DefaultOn => self.set_attribute(element, "value", value),'''
+to = '''            ValueMode::Default | ValueMode::DefaultOn => input.into_ref().value.get().set(Some(DomString::new(value))),'''
+
+[[mutant]]
+name = "dom: a file input's value set to anything"
+file = "crates/dom_next/src/input.rs"
+from = '''            ValueMode::Filename => return Err(()),'''
+to = '''            ValueMode::Filename => {}'''
+
+[[mutant]]
+name = "dom: newlines kept"
+file = "crates/dom_next/src/input.rs"
+from = '''            InputKind::Text | InputKind::Search | InputKind::Tel | InputKind::Password => strip_newlines(value),'''
+to = '''            InputKind::Text | InputKind::Search | InputKind::Tel | InputKind::Password => value.to_owned(),'''
+
+[[mutant]]
+name = "dom: a url untrimmed"
+file = "crates/dom_next/src/input.rs"
+from = '''            InputKind::Url => strip_newlines(value).trim_matches(is_ascii_whitespace).to_owned(),'''
+to = '''            InputKind::Url => strip_newlines(value),'''
+
+[[mutant]]
+name = "dom: emails as one"
+file = "crates/dom_next/src/input.rs"
+from = '''            InputKind::Email if self.attribute_value_by_id(element, names::local::MULTIPLE).is_some() => value'''
+to = '''            InputKind::Email if false => value'''
+
+[[mutant]]
+name = "dom: an email untrimmed"
+file = "crates/dom_next/src/input.rs"
+from = '''            InputKind::Email => strip_newlines(value).trim_matches(is_ascii_whitespace).to_owned(),'''
+to = '''            InputKind::Email => strip_newlines(value),'''
+
+[[mutant]]
+name = "dom: any number"
+file = "crates/dom_next/src/input.rs"
+from = '''            InputKind::Number if !is_valid_float(value) || parse_float(value).is_none() => String::new(),'''
+to = '''            InputKind::Number if parse_float(value).is_none() => String::new(),'''
+
+[[mutant]]
+name = "dom: a range unsanitized"
+file = "crates/dom_next/src/input.rs"
+from = '''            InputKind::Range => self.sanitize_range(element, value),'''
+to = '''            InputKind::Range => value.to_owned(),'''
+
+[[mutant]]
+name = "dom: a color not lowercased"
+file = "crates/dom_next/src/input.rs"
+from = '''                if simple { value.to_ascii_lowercase() } else { "#000000".to_owned() }'''
+to = '''                if simple { value.to_owned() } else { "#000000".to_owned() }'''
+
+[[mutant]]
+name = "dom: any color"
+file = "crates/dom_next/src/input.rs"
+from = '''                if simple { value.to_ascii_lowercase() } else { "#000000".to_owned() }'''
+to = '''                if simple || true { value.to_ascii_lowercase() } else { "#000000".to_owned() }'''
+
+[[mutant]]
+name = "dom: a reset keeps the value"
+file = "crates/dom_next/src/input.rs"
+from = '''        input.into_ref().value.get().set(None);
+        input.dirty_checked.set(false);'''
+to = '''        input.dirty_checked.set(false);'''
+
+[[mutant]]
+name = "dom: a reset keeps the checkedness dirty"
+file = "crates/dom_next/src/input.rs"
+from = '''        input.into_ref().value.get().set(None);
+        input.dirty_checked.set(false);'''
+to = '''        input.into_ref().value.get().set(None);'''
+
+[[mutant]]
+name = "dom: a reset keeps the checkedness"
+file = "crates/dom_next/src/input.rs"
+from = '''        self.set_checkedness(element, self.attribute_value_by_id(element, names::local::CHECKED).is_some());'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a range's step any the default"
+file = "crates/dom_next/src/step_range.rs"
+from = '''            Some(step) if step.borrow().to_str().eq_ignore_ascii_case("any") => None,'''
+to = '''            Some(step) if step.borrow().to_str().eq_ignore_ascii_case("any") => Some(DEFAULT_STEP),'''
+
+[[mutant]]
+name = "dom: a range's step 0"
+file = "crates/dom_next/src/step_range.rs"
+from = '''            Some(step) => Some(number(&step.borrow().to_str()).filter(|s| *s > 0.0).unwrap_or(DEFAULT_STEP)),'''
+to = '''            Some(step) => Some(number(&step.borrow().to_str()).unwrap_or(DEFAULT_STEP)),'''
+
+[[mutant]]
+name = "dom: a range's maximum 50"
+file = "crates/dom_next/src/step_range.rs"
+from = '''        let max = attribute(names::local::MAX).unwrap_or(100.0).max(min);'''
+to = '''        let max = attribute(names::local::MAX).unwrap_or(50.0).max(min);'''
+
+[[mutant]]
+name = "dom: a range's maximum below its minimum"
+file = "crates/dom_next/src/step_range.rs"
+from = '''        let max = attribute(names::local::MAX).unwrap_or(100.0).max(min);'''
+to = '''        let max = attribute(names::local::MAX).unwrap_or(100.0);'''
+
+[[mutant]]
+name = "dom: a range not rounded to places"
+file = "crates/dom_next/src/step_range.rs"
+from = '''        let rounded = self.round(self.base + ((clamped - self.base) / step).round() * step);'''
+to = '''        let rounded = self.base + ((clamped - self.base) / step).round() * step;'''
+
+[[mutant]]
+name = "dom: a range not aligned"
+file = "crates/dom_next/src/step_range.rs"
+from = '''        let Some(step) = self.step else {
+            return clamped;
+        };'''
+to = '''        let Some(step) = self.step.filter(|_| false) else {
+            return clamped;
+        };'''
+
+[[mutant]]
+name = "dom: a range's value written again"
+file = "crates/dom_next/src/step_range.rs"
+from = '''                if clamped == n {
+                    value.to_owned()'''
+to = '''                if false {
+                    value.to_owned()'''
+
+[[mutant]]
+name = "dom: a range's default its minimum"
+file = "crates/dom_next/src/step_range.rs"
+from = '''            None => number_to_string(range.clamp(range.min + (range.max - range.min) / 2.0)),'''
+to = '''            None => number_to_string(range.clamp(range.min)),'''
+
+[[mutant]]
+name = "dom: a valid float may have a plus"
+file = "crates/dom_next/src/numbers.rs"
+from = '''    let rest = value.strip_prefix('-').unwrap_or(value);'''
+to = '''    let rest = value.strip_prefix(['-', '+']).unwrap_or(value);'''
+
+[[mutant]]
+name = "dom: a reset resets nothing"
+file = "crates/dom_next/src/form.rs"
+from = '''        for element in elements {
+            self.input_reset(element);
+        }'''
+to = '''        let _ = elements;'''
+
+[[mutant]]
+name = "dom: a radio list's value a checkbox's"
+file = "crates/dom_next/src/form.rs"
+from = '''                if self.input_kind(node) == Some(InputKind::Radio) && self.checkedness(node) {'''
+to = '''                if self.checkedness(node) {'''
+
+[[mutant]]
+name = "dom: a radio list sets a checkbox"
+file = "crates/dom_next/src/form.rs"
+from = '''                let matches = self.input_kind(node) == Some(InputKind::Radio)
+                    && match'''
+to = '''                let matches = true
+                    && match'''
+
+[[mutant]]
+name = "dom: a radio list's on not one with none"
+file = "crates/dom_next/src/form.rs"
+from = '''                        None => value == "on",'''
+to = '''                        None => false,'''
+
+[[mutant]]
+name = "dom: a radio list sets the last"
+file = "crates/dom_next/src/form.rs"
+from = '''                if matches {
+                    found = Some(node);
+                }
+                !matches'''
+to = '''                if matches {
+                    found = Some(node);
+                }
+                true'''
+
+[[mutant]]
+name = "dom: a button's type case-sensitive"
+file = "crates/dom_next/src/input.rs"
+from = '''            .find(|keyword| keyword.eq_ignore_ascii_case(&value))'''
+to = '''            .find(|keyword| *keyword == value)'''
+
+[[mutant]]
+name = "dom: a reset input doesn't reset"
+file = "crates/dom_next/src/input.rs"
+from = '''            Some(kind) => kind == InputKind::Reset,'''
+to = '''            Some(_) => false,'''
+
+[[mutant]]
+name = "dom: a reset button doesn't reset"
+file = "crates/dom_next/src/input.rs"
+from = '''                    && self.button_type(element) == "reset"'''
+to = '''                    && false'''
+
+[[mutant]]
+name = "api: reset() while resetting"
+file = "crates/dom_api_next/src/forms.rs"
+from = '''    if host.read(|cx| cx.form_locked_for_reset(this.get(cx.gc))) {
+        return Ok(());
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: reset() never unlocked"
+file = "crates/dom_api_next/src/forms.rs"
+from = '''    host.mutate(|cx| cx.set_form_locked_for_reset(this.get(cx.gc), false));
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: reset not cancelable"
+file = "crates/dom_api_next/src/forms.rs"
+from = '''            cancelable: true,
+            composed: false,'''
+to = '''            cancelable: false,
+            composed: false,'''
+
+[[mutant]]
+name = "api: reset not trusted"
+file = "crates/dom_api_next/src/forms.rs"
+from = '''            composed: false,
+            trusted: true,
+        };'''
+to = '''            composed: false,
+            trusted: false,
+        };'''
+
+[[mutant]]
+name = "api: a canceled reset resets"
+file = "crates/dom_api_next/src/forms.rs"
+from = '''    if dispatch(host, &target, &event) {'''
+to = '''    if dispatch(host, &target, &event) || true {'''
+
+[[mutant]]
+name = "api: a submit button resets"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''                    .filter(|_| cx.resets_form(node) && cx.window_of(cx.document_of(node)).is_some())'''
+to = '''                    .filter(|_| cx.window_of(cx.document_of(node)).is_some())'''
+
+[[mutant]]
+name = "api: a reset button resets out of a window"
+file = "crates/dom_api_next/src/activation.rs"
+from = '''                    .filter(|_| cx.resets_form(node) && cx.window_of(cx.document_of(node)).is_some())'''
+to = '''                    .filter(|_| cx.resets_form(node))'''
+
+[[mutant]]
+name = "api: a file input's value set throws nothing"
+file = "crates/dom_api_next/src/forms.rs"
+from = '''    cx.set_input_value(this, value).map_err(|()| ApiError::dom(ExceptionName::InvalidState))'''
+to = '''    let _ = cx.set_input_value(this, value);
+    Ok(())'''

@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<title>Floats in lines go beside their line, beside the next one, or below</title>
+<link rel="match" href="fl3-floats-in-lines-ref.html">
+<!-- CSS 2 § 9.5.1: a float after inline content goes beside its line, at
+     its top, and the content before it on the line moves past it too; one
+     the line breaks before goes beside the next line; one too wide for
+     what is left of its line goes below it. Each block holds its floats
+     (`overflow: hidden`). -->
+<style>
+  body { margin: 0 }
+  div { font: 20px/1 Ahem; width: 200px; overflow: hidden }
+  span { float: left; background: green }
+</style>
+<div>XX <span style="width: 40px; height: 40px"></span>XX XX XX</div>
+<div>XX XXXX<span style="width: 40px; height: 40px"></span>XXXX</div>
+<div>XXXXXXXX<span style="width: 100px; height: 20px"></span> XX</div>

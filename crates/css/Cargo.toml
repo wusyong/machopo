@@ -1,0 +1,27 @@
+[package]
+name = "css"
+description = "Parsing CSS, its values and their serialization (blink/renderer/core/css's parser and properties)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+base.workspace = true
+computed_style.workspace = true
+gfx.workspace = true
+cssparser.workspace = true
+selectors.workspace = true
+svgtypes.workspace = true
+precomputed-hash.workspace = true
+rustc-hash.workspace = true
+tracing.workspace = true
+url.workspace = true

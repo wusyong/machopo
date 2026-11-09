@@ -1,0 +1,38 @@
+[package]
+name = "net"
+description = "Resource loading (//services/network)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+base.workspace = true
+brotli-decompressor.workspace = true
+bytes.workspace = true
+flate2.workspace = true
+ipc.workspace = true
+data-url.workspace = true
+protocol.workspace = true
+reqwest.workspace = true
+# To recognise certificate errors in reqwest's error chain, to read PEM
+# certificates, and for the test server's HTTPS; the client's TLS backend
+# itself comes with reqwest. aws-lc-rs is the provider reqwest uses too.
+rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
+tokio = { workspace = true, features = ["net", "time"] }
+tower-layer.workspace = true
+tower-service.workspace = true
+url.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+crossbeam-channel.workspace = true
+flate2.workspace = true

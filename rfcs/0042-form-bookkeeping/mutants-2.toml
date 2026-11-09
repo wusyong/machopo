@@ -1,0 +1,71 @@
+# Mutation test of the second stage: `dom` records, for the form
+# pseudo-classes, each element of an inserted or removed subtree, and a
+# fieldset whose legends changed; `form_states` handles one element per
+# record:
+# python3 scripts/test.py mutate rfcs/0042-form-bookkeeping/mutants-2.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "forms::"]
+timeout = 900
+
+# dom: what is recorded.
+
+[[mutant]]
+name = "no element of a subtree is recorded"
+file = "crates/dom/src/scope.rs"
+from = '''                .is_some_and(|name| FORM_STATE_ELEMENTS.iter().any(|form| name.is_html(form)))'''
+to = '''                .is_some_and(|name| FORM_STATE_ELEMENTS.iter().any(|form| name.is_html(form)) && false)'''
+
+[[mutant]]
+name = "any child of a fieldset records its legends"
+file = "crates/dom/src/scope.rs"
+from = '''    if parent_name.is_html(&local_name!("fieldset"))
+        && child
+            .element_name()
+            .is_some_and(|name| name.is_html(&local_name!("legend")))
+    {'''
+to = '''    if parent_name.is_html(&local_name!("fieldset")) {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::form_state_elements"]
+
+[[mutant]]
+name = "a legend in or out of a fieldset records nothing"
+file = "crates/dom/src/scope.rs"
+from = '''        Some(FormStateChange::Legends(parent.id))'''
+to = '''        None'''
+
+[[mutant]]
+name = "a textarea's child records nothing"
+file = "crates/dom/src/scope.rs"
+from = '''    } else if parent_name.is_html(&local_name!("textarea")) {
+        Some(FormStateChange::Element(parent.id))'''
+to = '''    } else if parent_name.is_html(&local_name!("textarea")) {
+        None'''
+
+[[mutant]]
+name = "a removal records nothing for its parent's children"
+file = "crates/dom/src/scope.rs"
+from = '''            if let Some(change) = form_states_children_changed(parent, node) {'''
+to = '''            if let Some(change) = form_states_children_changed(parent, node).filter(|_| false) {'''
+
+# dom_api: what is done.
+
+[[mutant]]
+name = "an element inserted isn't computed"
+file = "crates/dom_api/src/form_states.rs"
+from = '''                if let Some(inserted) = read.node_by_id(id) {
+                    self.element(inserted);
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "an element removed leaves its tree as it was"
+file = "crates/dom_api/src/form_states.rs"
+from = '''                if self.element(removed)
+                    && let Some(parent) = read.node_by_id(parent)'''
+to = '''                if self.element(removed)
+                    && false
+                    && let Some(parent) = read.node_by_id(parent)'''
+
+[[mutant]]
+name = "a fieldset's legends changing changes nothing in them"
+file = "crates/dom_api/src/form_states.rs"
+from = '''                    .filter(|child| is_html(*child, &local_name!("legend")))'''
+to = '''                    .filter(|child| is_html(*child, &local_name!("legend")) && false)'''

@@ -1,0 +1,156 @@
+# Mutation test of step 2d-3 (`--sample`: Linux's perf in the timed windows,
+# the `perf` profile's frame pointers, the trace's log records, spans after
+# paint, the fake runner timing tests as Speedometer's):
+# python3 scripts/test.py mutate rfcs/0012-speedometer/mutants-2d-3.toml
+test = ["python3", "scripts/speedometer_test.py", "SampleReadingTests", "SampleTests", "MeasureTests.test_traces_of_both"]
+timeout = 900
+
+[[mutant]]
+name = "the perf profile has no frame pointers"
+file = "scripts/speedometer.py"
+from = '''        env["RUSTFLAGS"] = f"{env.get('RUSTFLAGS', '')} -C force-frame-pointers=yes".strip()'''
+to = '''        pass'''
+
+[[mutant]]
+name = "every profile has frame pointers"
+file = "scripts/speedometer.py"
+from = '''    if profile == "perf" and (sys.platform == "darwin" or sys.platform.startswith("linux")):'''
+to = '''    if sys.platform == "darwin" or sys.platform.startswith("linux"):'''
+
+[[mutant]]
+name = "kun isn't built with them"
+file = "scripts/speedometer.py"
+from = '''    done = subprocess.run(["cargo", "build", "-q", "--profile", profile, "-p", "shell", "--bin", "kun"], cwd=ROOT,
+                          env=build_env(profile))'''
+to = '''    done = subprocess.run(["cargo", "build", "-q", "--profile", profile, "-p", "shell", "--bin", "kun"], cwd=ROOT)'''
+
+[[mutant]]
+name = "perf takes no stacks"
+file = "scripts/speedometer.py"
+from = '''"-k", "monotonic", "--call-graph", "fp",'''
+to = '''"-k", "monotonic",'''
+
+[[mutant]]
+name = "perf's samples are on its own clock"
+file = "scripts/speedometer.py"
+from = '''"-k", "monotonic", "--call-graph", "fp",'''
+to = '''"--call-graph", "fp",'''
+
+[[mutant]]
+name = "V8 doesn't name its JS for perf"
+file = "scripts/speedometer.py"
+from = '''f"--perf-basic-prof --interpreted-frames-native-stack --no'''
+to = '''f"--interpreted-frames-native-stack --no'''
+
+[[mutant]]
+name = "interpreted JS shares the interpreter's frame"
+file = "scripts/speedometer.py"
+from = '''f"--perf-basic-prof --interpreted-frames-native-stack --no'''
+to = '''f"--perf-basic-prof --no'''
+
+[[mutant]]
+name = "the time suspended isn't counted"
+file = "scripts/speedometer.py"
+from = '''    return read_perf_script(script.stdout, thread, suspended)'''
+to = '''    return read_perf_script(script.stdout, thread, 0)'''
+
+[[mutant]]
+name = "the samples' times aren't moved"
+file = "scripts/speedometer.py"
+from = '''int(sample["ns"]) + offset, stack))'''
+to = '''int(sample["ns"]), stack))'''
+
+[[mutant]]
+name = "every thread's samples"
+file = "scripts/speedometer.py"
+from = '''        if sample and sample["comm"] == thread:'''
+to = '''        if sample:'''
+
+[[mutant]]
+name = "samples outside the windows folded"
+file = "scripts/speedometer.py"
+from = '''        if i >= 0 and time < windows[i][1] and stack:'''
+to = '''        if stack:'''
+
+[[mutant]]
+name = "a window ends at a timer started in the frame's callback"
+file = "scripts/speedometer.py"
+from = '''        i = bisect.bisect_left(timer_starts, end)'''
+to = '''        i = bisect.bisect_left(timer_starts, start)'''
+
+[[mutant]]
+name = "overlapping windows aren't merged"
+file = "scripts/speedometer.py"
+from = '''        if windows and start < windows[-1][1]:'''
+to = '''        if False:'''
+
+[[mutant]]
+name = "a frame with no timer after it is a window"
+file = "scripts/speedometer.py"
+from = '''        if i == len(timers):
+            continue
+        end = timers[i][1]'''
+to = '''        end = timers[i][1] if i < len(timers) else end'''
+
+[[mutant]]
+name = "V8's names stay in /tmp"
+file = "scripts/speedometer.py"
+from = '''                    Path(f"/tmp/perf-{pid}.map").unlink(missing_ok=True)'''
+to = '''                    pass'''
+
+[[mutant]]
+name = "the trace has log records made"
+file = "crates/shell/src/main.rs"
+from = '''    tracing_log::log::set_max_level(log_records);'''
+to = '''    let _ = log_records;'''
+
+[[mutant]]
+name = "the fake runner runs a test outside a frame's callback"
+file = "scripts/speedometer/fake/resources/main.mjs"
+from = '''    requestAnimationFrame(() => {
+      start = performance.now();'''
+to = '''    void (() => {
+      start = performance.now();'''
+
+[[mutant]]
+name = "the canvases' textures aren't a span"
+file = "crates/renderer/src/frame_view.rs"
+from = '''tracing::trace_span!("FrameView::take_canvas_textures")'''
+to = '''tracing::Span::none()'''
+
+[[mutant]]
+name = "the scroll hit test region isn't a span"
+file = "crates/renderer/src/frame_view.rs"
+from = '''tracing::trace_span!("paint::main_thread_scroll_hit_test_region")'''
+to = '''tracing::Span::none()'''
+
+[[mutant]]
+name = "making the layers isn't a span"
+file = "crates/renderer/src/frame_view.rs"
+from = '''tracing::trace_span!("PaintArtifactCompositor::Update")'''
+to = '''tracing::Span::none()'''
+
+[[mutant]]
+name = "the wheel handler region isn't a span"
+file = "crates/renderer/src/frame_view.rs"
+from = '''tracing::trace_span!("FrameView::set_wheel_event_handler_region")'''
+to = '''tracing::Span::none()'''
+
+[[mutant]]
+name = "V8 writes its log where kun runs"
+file = "scripts/speedometer.py"
+from = ''' --no-logfile-per-isolate --logfile={v8_log(samples)}")'''
+to = '''")'''
+
+[[mutant]]
+name = "V8's log is left with the samples"
+file = "scripts/speedometer.py"
+from = '''                v8_log(samples).unlink(missing_ok=True)'''
+to = ''''''
+
+[[mutant]]
+name = "what the test threw is a rejection left unhandled"
+file = "scripts/speedometer/fake/resources/main.mjs"
+from = '''      ran.catch(() => {});'''
+to = ''''''
+test = ["python3", "scripts/speedometer_test.py", "KunTests.test_the_runner_giving_up_ends_it", "ChromeTests.test_the_runner_giving_up_ends_it"]

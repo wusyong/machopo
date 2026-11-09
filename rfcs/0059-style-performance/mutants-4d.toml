@@ -1,0 +1,103 @@
+# 4d: a shadow root's sheets that change style what their rules may match
+# in its tree, its host and what is assigned to its slots; a constructed
+# sheet edited through CSSOM, what its edit may match (`style`'s
+# `rule_set_invalidation.rs`, `lib.rs`).
+#   python3 scripts/test.py mutate rfcs/0059-style-performance/mutants-4d.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "invalidation::"]
+timeout = 1800
+
+[[mutant]]
+name = "a host rule doesn't style the host"
+file = "crates/style/src/lib.rs"
+from = '''                || host_changed
+                || assigned_changed;'''
+to = '''                || assigned_changed;'''
+
+[[mutant]]
+name = "a slotted rule doesn't style what is assigned"
+file = "crates/style/src/lib.rs"
+from = '''                    slotted: slotted_changed,'''
+to = '''                    slotted: false,'''
+
+[[mutant]]
+name = "a slot assigned to a slot alone"
+file = "crates/style/src/lib.rs"
+from = '''                || (assigned_changed && node.is_slot());'''
+to = '''                || (false && node.is_slot());'''
+
+[[mutant]]
+name = "the shadow tree's rules not looked up"
+file = "crates/style/src/lib.rs"
+from = '''                    rules: shadow_rules,'''
+to = '''                    rules: None,'''
+
+# Equivalent: dom marks the host's ancestors when a shadow root's sheets
+# change (`set_style_sheets_changed`), so the host goes down anyway; kept
+# so that a scope collected for another reason is walked too.
+[[mutant]]
+name = "the shadow tree not walked for its rules"
+file = "crates/style/src/lib.rs"
+from = '''            if descend || shadow_force || shadow_rules.is_some() {'''
+to = '''            if descend || shadow_force {'''
+
+[[mutant]]
+name = "a shadow tree's sheets in another order kept"
+file = "crates/style/src/lib.rs"
+from = '''    kept.is_sorted_by(|a, b| a < b)
+        .then(|| changed_rules(&old_sheets, &new_sheets))'''
+to = '''    true
+        .then(|| changed_rules(&old_sheets, &new_sheets))'''
+
+[[mutant]]
+name = "a document's adopted sheet edited taken whole"
+file = "crates/style/src/lib.rs"
+from = '''                rules: media.matches(environment).then(|| contents.rules()),
+                kept: found.is_some(),'''
+to = '''                rules: media.matches(environment).then(|| contents.rules()),
+                kept: found.is_some() && false,'''
+
+[[mutant]]
+name = "every element of a shadow tree not each"
+file = "crates/style/src/rule_set_invalidation.rs"
+from = '''            own: self.all || self.own.matches(node),'''
+to = '''            own: self.own.matches(node),'''
+
+[[mutant]]
+name = "a slotted rule as any other"
+file = "crates/style/src/rule_set_invalidation.rs"
+from = '''        if subject.iter().any(|component| matches!(component, Component::Slotted(_))) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a host rule as any other"
+file = "crates/style/src/rule_set_invalidation.rs"
+from = '''        if subject.iter().any(|component| matches!(component, Component::Host(_))) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "rules both have not left out"
+file = "crates/style/src/rule_set_invalidation.rs"
+from = '''            .filter(|(_, rule)| both(address(rule)).is_none())'''
+to = '''            .filter(|(_, _)| true)'''
+
+[[mutant]]
+name = "a rule in another place left out"
+file = "crates/style/src/rule_set_invalidation.rs"
+test = ["cargo", "test", "-q", "-p", "style", "--lib", "rule_set_invalidation::"]
+from = '''            if old_place != new_place || last.is_some_and(|last| last > old_index) {'''
+to = '''            if last.is_some_and(|last| last > old_index) {'''
+
+[[mutant]]
+name = "a rule in another order left out"
+file = "crates/style/src/rule_set_invalidation.rs"
+test = ["cargo", "test", "-q", "-p", "style", "--lib", "rule_set_invalidation::"]
+from = '''            if old_place != new_place || last.is_some_and(|last| last > old_index) {'''
+to = '''            if old_place != new_place {'''
+
+[[mutant]]
+name = "a rule twice on a side left out"
+file = "crates/style/src/rule_set_invalidation.rs"
+test = ["cargo", "test", "-q", "-p", "style", "--lib", "rule_set_invalidation::"]
+from = '''        (old_index != usize::MAX && new_index != usize::MAX)
+            .then_some((old_place, old_index, new_place))'''
+to = '''        Some((old_place, old_index, new_place))'''

@@ -1,0 +1,11 @@
+# Stage 5b-3b: the title a task set goes to the browser before DevTools
+# hears its lifecycle event.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=16G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::the_title_goes_before_devtools_hears_the_load"]
+timeout = 900
+
+[[mutant]]
+name = "renderer: the lifecycle told before the title"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        // the title as it changes, before `load`).
+        self.update_next_title();'''
+to = '''        // the title as it changes, before `load`).'''

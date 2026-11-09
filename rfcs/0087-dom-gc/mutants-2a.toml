@@ -1,0 +1,186 @@
+# Step 2a: crates/gc's heap core (the cage, size-class pages, mark-sweep
+# at a safepoint, Member, Persistent, External, HeapVector) and
+# crates/gc_macros's derive(GcObject).
+test = ["cargo", "test", "-q", "-p", "gc"]
+timeout = 600
+
+# Mark.
+
+[[mutant]]
+name = "roots not marked"
+file = "crates/gc/src/heap.rs"
+from = '''            mark(&mut pages, offset, &mut worklist);'''
+to = '''            let _ = offset;'''
+
+[[mutant]]
+name = "an object's Members not marked"
+file = "crates/gc/src/heap.rs"
+from = '''                    let edge = unsafe { self.ptr(data).add(field.offset).cast::<u32>().read() };
+                    mark(pages, edge as usize, worklist);'''
+to = '''                    let _ = unsafe { self.ptr(data).add(field.offset).cast::<u32>().read() };'''
+
+[[mutant]]
+name = "an array's edges not marked"
+file = "crates/gc/src/heap.rs"
+from = '''                    let edge = unsafe { self.ptr(data).cast::<u32>().add(1).add(i).read() };
+                    mark(pages, edge as usize, worklist);'''
+to = '''                    let _ = unsafe { self.ptr(data).cast::<u32>().add(1).add(i).read() };'''
+
+[[mutant]]
+name = "a marked object not scanned"
+file = "crates/gc/src/heap.rs"
+from = '''    if page.mark(slot) {
+        worklist.push(data);
+    }'''
+to = '''    page.mark(slot);'''
+
+[[mutant]]
+name = "marks kept from the last GC"
+file = "crates/gc/src/heap.rs"
+from = '''            page.clear_marks();'''
+to = ''''''
+
+# Sweep and finalizers.
+
+[[mutant]]
+name = "a dead slot not freed"
+file = "crates/gc/src/heap.rs"
+from = '''                free[page.class].push(data);'''
+to = ''''''
+
+[[mutant]]
+name = "a dead object's header kept"
+file = "crates/gc/src/heap.rs"
+from = '''                    unsafe { self.header(data).write(0) };'''
+to = ''''''
+
+[[mutant]]
+name = "garbage not finalized"
+file = "crates/gc/src/heap.rs"
+from = '''                unsafe { drop(self.ptr(data)) };'''
+to = '''                let _ = drop;'''
+
+[[mutant]]
+name = "the heap's drop finalizes nothing"
+file = "crates/gc/src/heap.rs"
+from = '''                unsafe { drop(self.inner.ptr(data)) };'''
+to = '''                let _ = drop;'''
+
+# When a safepoint collects.
+
+[[mutant]]
+name = "stress ignored"
+file = "crates/gc/src/heap.rs"
+from = '''        self.inner.options.stress || self.inner.allocated.get() >= self.inner.limit.get()'''
+to = '''        self.inner.allocated.get() >= self.inner.limit.get()'''
+
+[[mutant]]
+name = "allocation since the last GC not reset"
+file = "crates/gc/src/heap.rs"
+from = '''        self.allocated.set(0);'''
+to = ''''''
+
+[[mutant]]
+name = "the next GC ignores what this one kept"
+file = "crates/gc/src/heap.rs"
+from = '''        self.limit.set(used.max(self.options.min_allocation_bytes));'''
+to = '''        self.limit.set(self.options.min_allocation_bytes);'''
+
+# Allocation.
+
+[[mutant]]
+name = "free slots never reused"
+file = "crates/gc/src/heap.rs"
+from = '''            .pop()'''
+to = '''            .pop()
+            .filter(|_| false)'''
+
+[[mutant]]
+name = "a page's bump not advanced"
+file = "crates/gc/src/heap.rs"
+from = '''                page.top = page.top.saturating_add(1);'''
+to = ''''''
+
+[[mutant]]
+name = "a new page's first slot handed out again"
+file = "crates/gc/src/heap.rs"
+from = '''        page.top = 1;'''
+to = '''        page.top = 0;'''
+
+[[mutant]]
+name = "the header's type not written"
+file = "crates/gc/src/heap.rs"
+from = '''            self.header(data).write(index);'''
+to = '''            let _ = index;'''
+
+[[mutant]]
+name = "a size gets a class too small"
+file = "crates/gc/src/page.rs"
+from = '''    let class = CLASSES.partition_point(|&size| size < bytes);'''
+to = '''    let class = CLASSES.partition_point(|&size| size < bytes).saturating_sub(1);'''
+
+# Members and roots.
+
+[[mutant]]
+name = "a Member of another heap read"
+file = "crates/gc/src/member.rs"
+from = '''        assert!(
+            cx.inner.cage.contains((&raw const self.raw).cast()),
+            "a Member of another heap"
+        );'''
+to = ''''''
+
+[[mutant]]
+name = "a Persistent of another heap read"
+file = "crates/gc/src/persistent.rs"
+from = '''        assert!(
+            Rc::ptr_eq(&self.shared, &cx.inner.shared),
+            "a Persistent of another heap"
+        );'''
+to = ''''''
+
+[[mutant]]
+name = "a dropped root still marks"
+file = "crates/gc/src/persistent.rs"
+from = '''        self.slots[index as usize] = 0;'''
+to = ''''''
+
+[[mutant]]
+name = "a freed root entry never reused"
+file = "crates/gc/src/persistent.rs"
+from = '''        self.free.push(index);'''
+to = ''''''
+
+# HeapVector.
+
+[[mutant]]
+name = "growing drops the edges"
+file = "crates/gc/src/vector.rs"
+from = '''                grown.edge(i).set(store.edge(i).get());'''
+to = '''                let _ = i;'''
+
+[[mutant]]
+name = "an edge past the length kept"
+file = "crates/gc/src/vector.rs"
+from = '''        store.edge(last).set(0);'''
+to = ''''''
+
+[[mutant]]
+name = "a new array's edges not cleared"
+file = "crates/gc/src/vector.rs"
+from = '''                ptr.add(i).write(0);'''
+to = '''                let _ = i;'''
+
+# derive(GcObject).
+
+[[mutant]]
+name = "the layout lists no Member"
+file = "crates/gc_macros/src/lib.rs"
+from = '''                        kind: <#types as ::gc::HeapField>::KIND,'''
+to = '''                        kind: ::gc::FieldKind::Data,'''
+
+[[mutant]]
+name = "an object may implement Drop"
+file = "crates/gc_macros/src/lib.rs"
+from = '''            impl<T: ::core::ops::Drop> MustNotImplDrop for T {}'''
+to = ''''''

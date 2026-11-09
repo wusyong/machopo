@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<title>I8: an inline-flex button (text and an icon, centered, with a gap) and an inline-grid on a line, each on its first baseline</title>
+<link rel="match" href="i8-inline-flex-ref.html">
+<style>
+  html, body { margin: 0 }
+  div { font: 20px/1 Ahem }
+  .button { display: inline-flex; align-items: center; gap: 5px; padding: 5px;
+            background-color: blue; color: white }
+  .icon { width: 10px; height: 10px; background-color: yellow }
+  .grid { display: inline-grid; grid-template-columns: 20px 20px; gap: 10px;
+          background-color: lime }
+  .grid i { height: 20px; background-color: black }
+</style>
+<!-- 65px by 30px; its text's baseline, 21px down, on the line's. -->
+<div>X<span class="button">OK<i class="icon"></i></span>Y</div>
+<!-- Its first item's bottom edge, 20px down, on the line's baseline. -->
+<div>X<span class="grid"><i></i><i></i></span>Y</div>

@@ -1,0 +1,15 @@
+# about:demo's ResizeObserver: the note under the observed box says the
+# size of its content box the observer was last given: the window's width
+# less the page's margins and the box's border and padding. Resizing the
+# window gives it the new size; "More padding" narrows the content box,
+# the border box keeping its width.
+window size=800x600
+navigate about:demo
+wait-loaded
+scroll-to #ro-box
+wait-text #ro-note "Content box 732 by 20 px."
+resize 600 600
+wait-text #ro-note "Content box 532 by 20 px."
+click #ro-pad
+wait-text #ro-note "Content box 452 by 20 px."
+screenshot padded

@@ -1,0 +1,206 @@
+# Mutation test of step 2d (upgrades, the construction stack, `failed`,
+# `:defined`):
+# python3 scripts/test.py mutate rfcs/0035-shadow-dom-custom-elements/mutants-2d.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "custom_elements::"]
+timeout = 600
+
+# dom: `:defined`.
+
+[[mutant]]
+name = "an uncustomized element not :defined when made"
+file = "crates/dom/src/scope.rs"
+from = '''                state: if custom == crate::custom_element::CustomElementState::Uncustomized {'''
+to = '''                state: if false {'''
+
+[[mutant]]
+name = "only custom elements :defined"
+file = "crates/dom/src/custom_element.rs"
+from = '''            CustomElementState::Uncustomized | CustomElementState::Custom
+        );'''
+to = '''            CustomElementState::Custom
+        );'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = ":defined never changes"
+file = "crates/dom/src/custom_element.rs"
+from = '''        crate::scope::update_element_state(node, |current| {'''
+to = '''        let _ = defined;
+        #[allow(unreachable_code)]
+        if true { return; }
+        crate::scope::update_element_state(node, |current| {'''
+
+[[mutant]]
+name = "the :defined pseudo-class matches nothing"
+file = "crates/style/src/selector.rs"
+from = '''            Self::Defined => ElementState::DEFINED,'''
+to = '''            Self::Defined => ElementState::NONE,'''
+
+# dom: upgrade reactions and candidates.
+
+[[mutant]]
+name = "a definition doesn't start the tree operations' look"
+file = "crates/dom/src/custom_element.rs"
+from = '''        // From now on insertions look for elements to upgrade.
+        self.reactions.custom_seen = true;'''
+to = ''''''
+
+[[mutant]]
+name = "an element inserted not tried for an upgrade"
+file = "crates/dom/src/custom_element.rs"
+from = '''            } else {
+                self.try_to_upgrade(std::slice::from_ref(element));
+            }'''
+to = '''            }'''
+
+[[mutant]]
+name = "define's candidates of any name"
+file = "crates/dom/src/custom_element.rs"
+from = '''                if node.element_name() == Some(&name) {'''
+to = '''                if node.element_name().is_some() {'''
+
+[[mutant]]
+name = "an element upgraded again"
+file = "crates/dom/src/custom_element.rs"
+from = '''            if !matches!(
+                node.custom_element_state(),
+                CustomElementState::Undefined | CustomElementState::Uncustomized
+            ) {
+                return false;
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "an upgrade without its attributes' callbacks"
+file = "crates/dom/src/custom_element.rs"
+from = '''            self.enqueue_attribute_changed(element, &attribute.name, None, Some(attribute.value));'''
+to = '''            let _ = attribute;'''
+
+[[mutant]]
+name = "an upgrade without connectedCallback"
+file = "crates/dom/src/custom_element.rs"
+from = '''        if connected {
+            self.enqueue_callback_reaction(
+                element,
+                LifecycleCallback::Connected,
+                ReactionArgs::None,
+            );
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "an upgrade in no document gets connectedCallback"
+file = "crates/dom/src/custom_element.rs"
+from = '''        if connected {
+            self.enqueue_callback_reaction'''
+to = '''        if connected || true {
+            self.enqueue_callback_reaction'''
+
+[[mutant]]
+name = "the element not on the construction stack"
+file = "crates/dom/src/custom_element.rs"
+from = '''            .push(Some(element.id()));'''
+to = '''            .push(None);'''
+
+[[mutant]]
+name = "the construction stack never popped"
+file = "crates/dom/src/custom_element.rs"
+from = '''            .borrow_mut()
+            .pop();'''
+to = '''            .borrow_mut();'''
+
+[[mutant]]
+name = "the construction stack never marked"
+file = "crates/dom/src/custom_element.rs"
+from = '''            *top = None;'''
+to = '''            let _ = top;'''
+
+# dom_api: upgrading.
+
+[[mutant]]
+name = "an upgrade reaction does nothing"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''                    upgrade(cx, &element, &definition);
+                    continue;'''
+to = '''                    let _ = definition;
+                    continue;'''
+
+[[mutant]]
+name = "an upgraded element not custom"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''            cx.mutate()
+                .set_custom_element_state(element, CustomElementState::Custom);
+            return;'''
+to = '''            return;'''
+
+[[mutant]]
+name = "a failed upgrade keeps its reactions"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    m.clear_custom_element_reactions(element);'''
+to = ''''''
+
+[[mutant]]
+name = "what an upgrade's constructor threw not reported"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''        CallError::Thrown(thrown) => cx.report_exception(&constructor, thrown),'''
+to = '''        CallError::Thrown(_) => {}'''
+
+[[mutant]]
+name = "a shadow root the definition disables upgraded"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    if definition.disable_shadow() && element.get(&cx.read()).shadow_root().is_some() {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "an upgrade's constructor may give back something else"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''        Value::Object(Object::Node(node)) if node.ptr_eq(element) => Ok(()),'''
+to = '''        _ => Ok(()),
+        #[allow(unreachable_patterns)]
+        Value::Object(Object::Node(node)) if node.ptr_eq(element) => Ok(()),'''
+
+[[mutant]]
+name = "HTMLElement makes a new element while upgrading"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''        Some(Some(element)) => {
+            cx.mutate().mark_constructed(&definition);
+            return Ok(HtmlConstructed::Upgraded(element));
+        }'''
+to = '''        Some(Some(_)) => {}'''
+
+[[mutant]]
+name = "HTMLElement makes a new element after the marker"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''        Some(None) => {
+            return Err(ApiError::Type(
+                "this custom element was constructed already".into(),
+            ));
+        }'''
+to = '''        Some(None) => {}'''
+
+[[mutant]]
+name = "define upgrades nothing"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    cx.mutate()
+        .enqueue_upgrade_candidates(document.as_node(), &definition);'''
+to = '''    let _ = (document, &definition);'''
+
+[[mutant]]
+name = "customElements.upgrade does nothing"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    cx.mutate().try_to_upgrade_tree(&root);'''
+to = '''    let _ = root;'''
+
+[[mutant]]
+name = "a clone not upgraded"
+file = "crates/dom_api/src/node.rs"
+from = '''                    m.enqueue_upgrade_reaction(&element, &definition);'''
+to = '''                    let _ = definition;'''
+
+# dom_js: the upgraded element's prototype.
+
+[[mutant]]
+name = "the upgraded element keeps its prototype"
+file = "crates/dom_js/src/templates.rs"
+from = '''                wrapper.set_prototype(scope, prototype);'''
+to = '''                let _ = prototype;'''

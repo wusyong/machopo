@@ -1,0 +1,315 @@
+# Stage 4f-4b: on the new DOM, the UA shadow trees of a select (a menu list's
+# inner element, a list box's slot), an optgroup and an option, kept up
+# with the options at once; `:-internal-list-box`; a list box's
+# scrollbar room in the new DOM's box tree.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it ua_shadow && cargo test -q -p dom_js_next --test it select:: && cargo test -q -p style_next --test it form_states && cargo test -q -p layout --test it next::"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: a select always a menu list's tree"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''            return Some(if self.select_uses_menu_list(element) { Tree::MenuList } else { Tree::ListBox });'''
+to = '''            return Some(Tree::MenuList);'''
+
+[[mutant]]
+name = "dom: an option has no tree"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''        if self.is_option(element) {
+            return Some(Tree::Option);
+        }
+        Some(match'''
+to = '''        Some(match'''
+
+[[mutant]]
+name = "dom: a menu list's tree not known"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''        if self.is_part(first, MENU_LIST_INNER) {
+            return Some(Tree::MenuList);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a list box's tree not known"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''        if self.is_slot(first) {
+            return Some(Tree::ListBox);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an optgroup's tree has no slot"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''            Tree::OptGroup => {
+                labeled(OPTGROUP_LABEL);
+                slot();
+            }'''
+to = '''            Tree::OptGroup => labeled(OPTGROUP_LABEL),'''
+
+[[mutant]]
+name = "dom: a menu list's text not shown"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''        self.set_data_if_changed(text, &self.menu_list_text(select));'''
+to = '''        let _ = text;'''
+
+[[mutant]]
+name = "dom: a menu list's labels not kept"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''        if !same {
+            self.set_attribute(inner, "labels", &labels);'''
+to = '''        if false {
+            self.set_attribute(inner, "labels", &labels);'''
+
+[[mutant]]
+name = "dom: new labels not laid out"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''            if self.is_connected(select) {
+                self.mark_layout(select, crate::LayoutTreeFlags::NEEDS_REATTACH);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an optgroup's label not shown"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''        self.set_data_if_changed(text, &value);
+    }'''
+to = '''        let _ = (text, value);
+    }'''
+
+[[mutant]]
+name = "dom: an empty option label shown"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''            .filter(|label| !label.is_empty());
+        let shown'''
+to = '''            ;
+        let shown'''
+
+[[mutant]]
+name = "dom: an option's label and slot both shown"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''        self.set_attribute_if_changed(slot, "style", shown.then_some(HIDDEN));'''
+to = '''        let _ = slot;'''
+
+[[mutant]]
+name = "dom: an option's label not its text"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''        self.set_data_if_changed(text, label.as_deref().unwrap_or(""));'''
+to = '''        let _ = text;'''
+
+[[mutant]]
+name = "dom: a select's tree not kept up"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''        let control = self.form_kind(element) & (INPUT | TEXTAREA) != 0
+            || self.is_select(element)'''
+to = '''        let control = self.form_kind(element) & (INPUT | TEXTAREA) != 0'''
+
+[[mutant]]
+name = "dom: a menu list's text not trimmed"
+file = "crates/dom_next/src/select.rs"
+from = '''                .trim_matches([' ', '\t', '\n', '\x0c', '\r'])
+                .to_owned(),'''
+to = '''                .to_owned(),'''
+
+[[mutant]]
+name = "dom: a multiple menu list shows none"
+file = "crates/dom_next/src/select.rs"
+from = '''            _ if self.select_is_multiple(select) => format!("{} selected", selected.len()),'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an optgroup's options not indented"
+file = "crates/dom_next/src/select.rs"
+from = '''            labels.push(if grouped { format!("    {label}") } else { label });'''
+to = '''            let _ = grouped;
+            labels.push(label);'''
+
+[[mutant]]
+name = "dom: a multiple menu list's count not measured"
+file = "crates/dom_next/src/select.rs"
+from = '''        if self.select_is_multiple(select) {
+            labels.push(format!("{} selected", labels.len()));
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a selectedness change not shown"
+file = "crates/dom_next/src/select.rs"
+from = '''        self.state_changed(option, AttributeChanges::CHECKED);
+        self.option_shown_changed(option);'''
+to = '''        self.state_changed(option, AttributeChanges::CHECKED);'''
+
+[[mutant]]
+name = "dom: a deeper text not its option's"
+file = "crates/dom_next/src/select.rs"
+from = '''            if self.is_select(node) {
+                return;
+            }
+            at = self.parent(node);'''
+to = '''            let _ = node;
+            at = None;'''
+
+[[mutant]]
+name = "dom: a subtree's text not found"
+file = "crates/dom_next/src/select.rs"
+from = '''        let mut at = self.first_child(node);
+        while let Some(descendant) = at {
+            if self.kind(descendant) == NodeKind::Text {'''
+to = '''        let mut at = None::<NodeRef<'gc>>;
+        while let Some(descendant) = at {
+            if self.kind(descendant) == NodeKind::Text {'''
+
+[[mutant]]
+name = "dom: an inserted option not measured"
+file = "crates/dom_next/src/select.rs"
+from = '''            self.select_first_if_none(select);
+            // Its labels.
+            self.shadow_tree_changed(select);'''
+to = '''            self.select_first_if_none(select);'''
+
+[[mutant]]
+name = "dom: a removed option not measured"
+file = "crates/dom_next/src/select.rs"
+from = '''            self.select_first_if_none(select);
+            self.shadow_tree_changed(select);
+        }
+    }
+
+    /// A "replace all"'''
+to = '''            self.select_first_if_none(select);
+        }
+    }
+
+    /// A "replace all"'''
+
+[[mutant]]
+name = "dom: a replace all not measured"
+file = "crates/dom_next/src/select.rs"
+from = '''        self.changes.forms.replacing.set(false);
+        if let Some(select) = self.nearest_select(parent) {
+            self.select_first_if_none(select);
+            self.shadow_tree_changed(select);'''
+to = '''        self.changes.forms.replacing.set(false);
+        if let Some(select) = self.nearest_select(parent) {
+            self.select_first_if_none(select);'''
+
+[[mutant]]
+name = "dom: an option's label attribute not its tree's"
+file = "crates/dom_next/src/select.rs"
+from = '''                names::local::LABEL => {
+                    self.shadow_tree_changed(element);
+                    self.option_shown_changed(element);'''
+to = '''                names::local::LABEL => {
+                    self.option_shown_changed(element);'''
+
+[[mutant]]
+name = "dom: an option's label attribute not its menu list's"
+file = "crates/dom_next/src/select.rs"
+from = '''                    self.shadow_tree_changed(element);
+                    self.option_shown_changed(element);
+                }'''
+to = '''                    self.shadow_tree_changed(element);
+                }'''
+
+[[mutant]]
+name = "dom: an optgroup's label attribute not shown"
+file = "crates/dom_next/src/select.rs"
+from = '''            if local == names::local::LABEL {
+                self.shadow_tree_changed(element);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: multiple and size keep the tree"
+file = "crates/dom_next/src/select.rs"
+from = '''                    // A menu list and a list box have different trees.
+                    self.shadow_tree_type_changed(element);'''
+to = ''''''
+
+[[mutant]]
+name = "dom: no trees from a select on"
+file = "crates/dom_next/src/select.rs"
+from = '''        self.see(crate::form::CONTROLS_SEEN);'''
+to = ''''''
+
+[[mutant]]
+name = "dom: multiple size 1 a list box"
+file = "crates/dom_next/src/select.rs"
+from = '''                == Some(1)
+        } else {'''
+to = '''                == Some(2)
+        } else {'''
+
+[[mutant]]
+name = "dom: a text's data not its option's"
+file = "crates/dom_next/src/style.rs"
+from = '''        self.option_text_changed(parent);
+    }
+}'''
+to = '''    }
+}'''
+
+[[mutant]]
+name = "dom: a select's options not scheduled"
+file = "crates/dom_next/src/style.rs"
+from = '''                    || self.is_select(at)
+                    || self.is_option(at)
+                    || self.is_optgroup(at))'''
+to = '''                    || self.is_select(at))'''
+
+[[mutant]]
+name = "dom: inserted text not its option's"
+file = "crates/dom_next/src/form.rs"
+from = '''        self.options_inserted(parent, node);
+        if self.has_seen(SELECTS_SEEN) && self.has_text(node) {
+            self.option_text_changed(parent);
+        }'''
+to = '''        self.options_inserted(parent, node);'''
+
+[[mutant]]
+name = "dom: removed text not its option's"
+file = "crates/dom_next/src/form.rs"
+from = '''        self.options_removed(parent, node);
+        if self.has_seen(SELECTS_SEEN) && self.has_text(node) {
+            self.option_text_changed(parent);
+        }'''
+to = '''        self.options_removed(parent, node);'''
+
+[[mutant]]
+name = "dom: label not dispatched"
+file = "crates/dom_next/src/form.rs"
+from = '''            | names::local::SIZE
+            | names::local::LABEL => {'''
+to = '''            | names::local::SIZE => {'''
+
+[[mutant]]
+name = "dom: textContent's option steps don't wait"
+file = "crates/dom_next/src/lib.rs"
+from = '''                let options = self.options_replacing(node);
+                while let Some(child) = self.first_child(node) {'''
+to = '''                let options = false;
+                while let Some(child) = self.first_child(node) {'''
+
+[[mutant]]
+name = "style: no list box"
+file = "crates/style_next/src/selector.rs"
+from = '''            PseudoClass::InternalListBox => self.is_html(names::local::SELECT) && !self.cx.select_uses_menu_list(self.node),'''
+to = '''            PseudoClass::InternalListBox => false,'''
+
+[[mutant]]
+name = "style: a list box's size not its pseudo-class's"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        PseudoClass::InternalListBox => &[MULTIPLE, SIZE],'''
+to = '''        PseudoClass::InternalListBox => &[MULTIPLE],'''
+
+[[mutant]]
+name = "layout: a list box's scrollbar has no room"
+file = "crates/layout/src/next.rs"
+from = '''        if own.as_ref().and_then(control::Control::list_box).is_some() {
+            layout_box.taffy_style.overflow.y = taffy::Overflow::Scroll;'''
+to = '''        if false {
+            layout_box.taffy_style.overflow.y = taffy::Overflow::Scroll;'''
+
+[[mutant]]
+name = "layout: no labels"
+file = "crates/layout/src/next.rs"
+from = '''            ControlAttribute::Labels => names::local::LABELS,'''
+to = '''            ControlAttribute::Labels => return None,'''

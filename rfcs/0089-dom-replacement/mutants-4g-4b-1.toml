@@ -1,0 +1,90 @@
+# Stage 4g-4b-1: each frame's loops on the new DOM: the windows' timers by when they are
+# due across the frames, the rendering update's animation frame callbacks and intersection
+# observers' tasks in tree order, the element tasks of each window, the frames' documents
+# in tree order and their origins.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it frames && cargo test -q -p dom_js_next --test it timers"]
+timeout = 900
+
+[[mutant]]
+name = "api: the iframes' documents not in tree order"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''        stack.extend(cx.child_content_documents(document).into_iter().rev());'''
+to = '''        stack.extend(cx.child_content_documents(document));'''
+
+[[mutant]]
+name = "api: an about: document's origin its URL's"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''            (Some(url), Some(owner)) if url.scheme() == "about" => at = cx.document_of(owner),'''
+to = '''            (Some(url), Some(owner)) if false && url.scheme() == "about" => at = cx.document_of(owner),'''
+
+[[mutant]]
+name = "dom: no iframe's content document listed"
+file = "crates/dom_next/src/frame.rs"
+from = '''            documents.extend(self.content_document(node));'''
+to = '''            let _ = node;'''
+
+[[mutant]]
+name = "js: the latest due timer first"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''                && best.as_ref().is_none_or(|(best, ..)| at < *best)'''
+to = '''                && best.as_ref().is_none_or(|(best, ..)| at > *best)'''
+
+[[mutant]]
+name = "js: a timer not due yet run"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''                let due = cx.next_due(window).filter(|due| *due <= now)?;'''
+to = '''                let due = cx.next_due(window)?;'''
+
+[[mutant]]
+name = "js: a window's now taken again each time"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''                    Some(&(_, now)) => now,'''
+to = '''                    Some(_) => cx.now_since(Some(window)),'''
+
+[[mutant]]
+name = "js: only the top-level window's animation frames asked"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''            frames.iter().any(|frame| {'''
+to = '''            frames.iter().take(1).any(|frame| {'''
+
+[[mutant]]
+name = "js: only the top-level window's animation frames run"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        // The documents as the step began (HTML's `docs`).
+        for (_, context, _) in self.frames_with_contexts() {'''
+to = '''        // The documents as the step began (HTML's `docs`).
+        for (_, context, _) in self.frames_with_contexts().into_iter().take(1) {'''
+
+[[mutant]]
+name = "js: the frames as made for the rendering update"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        // The documents as the step began (HTML's `docs`).
+        for (_, context, _) in self.frames_with_contexts() {'''
+to = '''        // The documents as the step began (HTML's `docs`).
+        for (_, context, _) in self.frames_as_made() {'''
+
+[[mutant]]
+name = "js: the latest timer's wait"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''                .min()
+        })
+    }'''
+to = '''                .max()
+        })
+    }'''
+
+[[mutant]]
+name = "js: only the top-level window's intersection observers"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        // Each window's task of its own.
+        for (_, context, _) in self.frames_with_contexts() {'''
+to = '''        // Each window's task of its own.
+        for (_, context, _) in self.frames_with_contexts().into_iter().take(1) {'''
+
+[[mutant]]
+name = "js: only the top-level window's element tasks"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        for (_, context, _) in self.frames_as_made() {
+            ran |= self.in_context(&context, |scope| {'''
+to = '''        for (_, context, _) in self.frames_as_made().into_iter().take(1) {
+            ran |= self.in_context(&context, |scope| {'''

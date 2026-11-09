@@ -1,0 +1,110 @@
+# machopo's CI, on our own Fedora runner (shell executor, tag `machopo`).
+# Every push runs the quick checks; the whole suite runs on the daily
+# schedule (Build > Pipeline schedules), or by hand from the web. machopo builds
+# against the projects in ../third_party, which `ci.py third-party` puts next
+# to the checkout at the commits machopo pins; V8 is the fork's prebuilt,
+# downloaded by the `v8` build script and cached in ~/.cargo/.rusty_v8.
+
+stages: [check, test]
+
+workflow:
+  auto_cancel:
+    # The first failing job cancels the rest of the pipeline: with one job
+    # at a time on the runner, the nightly suite would otherwise keep the
+    # machine busy for hours on a run that has failed already.
+    on_job_failure: all
+
+variables:
+  # The shell executor's default is `git clean -ffdx`, which would delete
+  # target/ too; keep it, so builds stay incremental.
+  GIT_CLEAN_FLAGS: -ffdx -e /target/
+  CARGO_TERM_COLOR: always
+  # Every test binary links V8 statically; with full debug info target/
+  # grows fast. Panics still give file and line.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+default:
+  tags: [machopo]
+  before_script:
+    - source ~/.cargo/env
+    # `sanity.py docs` reads ../third_party too, so even the checks sync it.
+    - python3 scripts/ci.py third-party
+
+.nightly:
+  stage: test
+  timeout: 6h
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_PIPELINE_SOURCE == "web"
+
+fmt:
+  stage: check
+  script:
+    - cargo fmt --check
+
+clippy:
+  stage: check
+  script:
+    - cargo clippy --workspace --all-targets -- -D warnings
+
+sanity:
+  stage: check
+  script:
+    - python3 scripts/sanity.py unsafe
+    - python3 scripts/sanity.py deps
+    - python3 scripts/sanity.py spans
+    - python3 scripts/sanity.py boundary
+    - python3 scripts/sanity.py tests
+    - python3 scripts/sanity.py numerics
+    - python3 scripts/sanity.py docs
+    - python3 scripts/sanity_numerics_test.py
+
+cargo-test:
+  extends: .nightly
+  script: [cargo test --workspace]
+
+scenarios:
+  extends: .nightly
+  script: [python3 scripts/test.py scenarios]
+  artifacts:
+    when: on_failure
+    paths: [target/scenario-results/]
+
+# No MACHOPO_WPT_TIMEOUT_MULTIPLIER for wptrunner's: it stretches the harness's
+# timers (`step_timeout`) but not wptserve's delays (`pipe=trickle`), and the
+# tests that race one against the other then fail.
+reftest:
+  extends: .nightly
+  script: [python3 scripts/test.py reftest]
+  artifacts:
+    when: on_failure
+    paths: [target/reftest-results/]
+
+wpt:
+  extends: .nightly
+  # A warning, not a failure: the pipeline passes with the rest green, and a
+  # job allowed to fail doesn't auto-cancel the others.
+  allow_failure: true
+  script: [python3 scripts/test.py wpt]
+  artifacts:
+    when: on_failure
+    paths: [target/wpt-results/]
+
+wdspec:
+  extends: .nightly
+  allow_failure: true # as wpt's
+  script: [python3 scripts/test.py wdspec]
+  artifacts:
+    when: on_failure
+    paths: [target/wdspec-results/]
+
+matrix:
+  extends: .nightly
+  script: [python3 scripts/test.py matrix]
+
+fuzz:
+  extends: .nightly
+  script: [python3 scripts/test.py fuzz]
+  artifacts:
+    when: on_failure
+    paths: [target/gc-fuzz-failures.jsonl]

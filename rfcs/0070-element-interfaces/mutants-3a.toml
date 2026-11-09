@@ -1,0 +1,70 @@
+# 3a: a node's collections in one table, by kind, and those of a name
+# weakly (`dom`).
+#   python3 scripts/test.py mutate rfcs/0070-element-interfaces/mutants-3a.toml
+# Left out as equivalent: `insert` for `insert_unordered` in the set of
+# collections of a name (either reuses a freed slot).
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it"]
+timeout = 900
+
+[[mutant]]
+name = "a node's own collection never found"
+file = "crates/dom/src/scope.rs"
+from = '''                .filter(|collection| unsafe { collection.as_ref() }.filter == filter);'''
+to = '''                .filter(|collection| unsafe { collection.as_ref() }.filter != filter);'''
+
+[[mutant]]
+name = "a collection of a name never found"
+file = "crates/dom/src/scope.rs"
+from = '''                .find(self.roots, |collection| collection.filter == filter);'''
+to = '''                .find(self.roots, |_| false);'''
+
+[[mutant]]
+name = "the first collection of a name, whatever its name"
+file = "crates/dom/src/weak_set.rs"
+from = '''            wanted(unsafe { target.as_ref() }).then(|| Root::new(&target, roots))'''
+to = '''            let _ = &wanted;
+            Some(Root::new(&target, roots))'''
+
+[[mutant]]
+name = "a tag name's collection kept"
+file = "crates/dom/src/collection.rs"
+from = '''            Self::TagName(_)
+                | Self::TagNameNs { .. }'''
+to = '''            Self::TagNameNs { .. }'''
+
+[[mutant]]
+name = "children kept weakly"
+file = "crates/dom/src/collection.rs"
+from = '''        matches!(
+            self,
+            Self::TagName(_)'''
+to = '''        matches!(
+            self,
+            Self::Children
+                | Self::TagName(_)'''
+
+[[mutant]]
+name = "the count not raised"
+file = "crates/dom/src/scope.rs"
+from = '''            .set(u32::try_from(count + 1).expect("few collections"));'''
+to = '''            .set(u32::try_from(count).expect("few collections"));'''
+
+[[mutant]]
+name = "every new one in the first slot"
+file = "crates/dom/src/scope.rs"
+from = '''        rare.collections
+            .slot(self, count)'''
+to = '''        rare.collections
+            .slot(self, 0)'''
+
+[[mutant]]
+name = "a chunk found as if of CHUNK slots"
+file = "crates/dom/src/chunks.rs"
+from = '''        let chunk = index / N;'''
+to = '''        let chunk = index / CHUNK;'''
+
+[[mutant]]
+name = "a slot read as if in chunks of CHUNK"
+file = "crates/dom/src/chunks.rs"
+from = '''        for _ in 0..index / N {'''
+to = '''        for _ in 0..index / CHUNK {'''

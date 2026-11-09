@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>J4: setTimeout runs in order of due time, clearTimeout cancels, setInterval repeats until cleared, microtasks run after each timer</title>
+<link rel="match" href="j4-timers-ref.html">
+<style>
+  html, body { margin: 0 }
+  div { width: 100px; height: 100px; background-color: red }
+</style>
+<div id="order"></div>
+<div id="arguments"></div>
+<div id="interval"></div>
+<div id="nested"></div>
+<div id="microtask"></div>
+<script>
+  const pass = (id) => document.getElementById(id).setAttribute("style", "background-color: green");
+  let checks = 5;
+  const done = () => {
+    if (--checks === 0) document.querySelector("html").classList.remove("reftest-wait");
+  };
+
+  // Earliest due first; the same due time in the order they were set.
+  const order = [];
+  setTimeout(() => order.push("b"), 20);
+  setTimeout(() => order.push("a"), 0);
+  clearTimeout(setTimeout(() => order.push("cancelled"), 10));
+  setTimeout(() => {
+    order.push("c");
+    if (order.join() === "a,b,c") pass("order");
+    done();
+  }, 20);
+
+  // Extra arguments go to the handler, with the global as `this` (strict,
+  // so an undefined `this` would stay undefined).
+  setTimeout(function (x, y) {
+    "use strict";
+    if (x === 1 && y === "two" && this === globalThis) pass("arguments");
+    done();
+  }, 0, 1, "two");
+
+  // Three times, then cleared: a fourth would undo the green.
+  let runs = 0;
+  const interval = setInterval(() => {
+    runs++;
+    if (runs === 3) {
+      clearInterval(interval);
+      setTimeout(() => {
+        if (runs === 3) pass("interval");
+        done();
+      }, 50);
+    }
+  }, 5);
+
+  // The microtask checkpoint after each timer's callback: before the next
+  // one, even of the same due time.
+  let resolved = false;
+  setTimeout(() => Promise.resolve().then(() => { resolved = true; }), 30);
+  setTimeout(() => {
+    if (resolved) pass("microtask");
+    done();
+  }, 30);
+
+  // A timer set by a timer runs too.
+  setTimeout(() => setTimeout(() => {
+    pass("nested");
+    done();
+  }, 0), 0);
+</script>

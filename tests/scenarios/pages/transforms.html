@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<title>Transforms</title>
+<style>
+  html, body { margin: 0; height: 100% }
+  #bar { position: absolute; left: 100px; top: 100px; width: 200px; height: 20px;
+         background-color: green; transform: rotate(90deg); transition: transform 200ms }
+  #bar.turned { transform-origin: 0 0; transform: rotate(180deg) }
+  #turn { position: absolute; left: 400px; top: 300px; padding: 4px 8px; border: 1px solid }
+  #note { position: absolute; left: 400px; top: 350px }
+</style>
+<body onclick="note('Clicked the page.')">
+<div id="bar" onclick="event.stopPropagation(); note('Clicked the turned bar.')"></div>
+<span id="turn" onclick="event.stopPropagation(); turn()">Turn about the corner</span>
+<span id="note">Nothing clicked yet.</span>
+<script>
+  function note(text) { document.getElementById("note").textContent = text; }
+  function turn() {
+    const bar = document.getElementById("bar");
+    bar.addEventListener("transitionend", () => note("Turned about its corner."), { once: true });
+    bar.classList.add("turned");
+  }
+</script>
+</body>

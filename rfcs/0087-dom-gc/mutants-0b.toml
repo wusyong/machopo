@@ -1,0 +1,39 @@
+# Step 0b: cppgc's brief heap statistics, through the rusty_v8 fork and
+# `DomIsolate::heap_statistics`. Run with RUSTY_V8_ARCHIVE pointing at a V8
+# built from the fork (`ci.py v8`) until the fork's release has them.
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "heap_statistics::"]
+timeout = 900
+
+[[mutant]]
+name = "dom reports the committed size as used"
+file = "crates/dom/src/isolate.rs"
+from = '''            used_size_bytes: stats.used_size_bytes,'''
+to = '''            used_size_bytes: stats.committed_size_bytes,'''
+
+[[mutant]]
+name = "dom reports nothing for a standalone heap"
+file = "crates/dom/src/isolate.rs"
+from = '''            Backing::Standalone(standalone) => standalone.heap.collect_statistics(),'''
+to = '''            Backing::Standalone(_) => v8::cppgc::HeapStatistics::default(),'''
+
+[[mutant]]
+name = "the fork's CppHeap statistics are left empty"
+file = "../third_party/rusty_v8/src/cppgc.rs"
+from = '''    // SAFETY: the heap is alive; `stats` is the struct C++ fills in.'''
+to = '''    return stats;'''
+
+[[mutant]]
+name = "the fork's standalone heap statistics are left empty"
+file = "../third_party/rusty_v8/src/cppgc/standalone.rs"
+from = '''    // SAFETY: the heap is alive; `stats` is the struct C++ fills in.'''
+to = '''    return stats;'''
+
+# C++: rebuilds V8 from the fork (`ci.py v8`, a minute or so for one file),
+# so the artifact must be rebuilt once more after the run.
+[[mutant]]
+name = "the fork's C++ copies the committed size as used"
+file = "../third_party/rusty_v8/src/binding.cc"
+from = '''  out->used_size_bytes = stats.used_size_bytes;'''
+to = '''  out->used_size_bytes = stats.committed_size_bytes;'''
+test = ["python3", "-c", "import subprocess, sys; sys.exit(subprocess.call([sys.executable, 'scripts/ci.py', 'v8', '--profile', 'release']) or subprocess.call(['cargo', 'test', '-q', '-p', 'dom', '--test', 'it', 'heap_statistics::']))"]
+timeout = 1800

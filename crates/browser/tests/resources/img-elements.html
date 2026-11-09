@@ -1,0 +1,55 @@
+<!-- What <img> and Image() do, as Chrome 152 does: the `img_elements` test of navigation.rs compares the title with what Chrome gave. -->
+<!doctype html><html><body>
+<script>
+const out=[];const log=(k,v)=>out.push(k+'='+JSON.stringify(v));
+const st=(i)=>[i.complete,i.naturalWidth,i.naturalHeight,i.width,i.height,i.currentSrc.replace(location.origin,''),i.src.replace(location.origin,'')];
+const tick=()=>new Promise(r=>setTimeout(r,0));
+const ev=(i,name)=>new Promise(r=>{i.addEventListener('load',()=>r(name+':load'));i.addEventListener('error',()=>r(name+':error'));});
+(async()=>{
+  const i=new Image();
+  log('new Image',[st(i),i.outerHTML]);
+  const j=new Image(5,7);log('new Image(5,7)',[st(j),j.outerHTML]);
+  const k=document.createElement('img');
+  const evs=[];for(const e of ['load','error','loadstart','loadend','progress','abort']) k.addEventListener(e,()=>evs.push(e));
+  k.src='a.png';log('after src sync',st(k));
+  await tick();log('after tick',st(k));
+  await ev(k,'k');log('after load',[st(k),evs]);
+  // cached: set src again on new element
+  const c=document.createElement('img');c.src='a.png';log('cached sync',st(c));
+  const ce=[];c.onload=()=>ce.push('load');await tick();log('cached tick',[st(c),ce]);
+  // broken
+  const b=document.createElement('img');const be=[];b.onerror=()=>be.push('error');b.onload=()=>be.push('load');b.src='bad.png';await new Promise(r=>setTimeout(r,300));log('bad',[st(b),be]);
+  const m=document.createElement('img');const me=[];m.onerror=()=>me.push('error');m.src='missing.png';await new Promise(r=>setTimeout(r,300));log('missing',[st(m),me]);
+  // empty src
+  const e=document.createElement('img');const ee=[];e.onerror=()=>ee.push('error');e.onload=()=>ee.push('load');e.setAttribute('src','');log('empty sync',st(e));await new Promise(r=>setTimeout(r,100));log('empty',[st(e),ee]);
+  // no src then remove src
+  const r2=document.createElement('img');r2.src='a.png';await tick();const re=[];r2.onerror=()=>re.push('error');r2.onload=()=>re.push('load');r2.removeAttribute('src');log('removed sync',st(r2));await new Promise(r=>setTimeout(r,100));log('removed',[st(r2),re]);
+  // invalid url
+  const u=document.createElement('img');const ue=[];u.onerror=()=>ue.push('error');u.src='http://[';await new Promise(r=>setTimeout(r,100));log('invalid',[st(u),ue]);
+  // width attribute and rendered
+  const w=document.createElement('img');w.src='b.png';w.setAttribute('width','33');await ev(w,'w');log('width attr unrendered',st(w));
+  document.body.append(w);log('rendered',st(w));w.style.width='50px';log('rendered styled',st(w));w.style.display='none';log('display none',st(w));
+  const w2=document.createElement('img');w2.setAttribute('width','x');w2.setAttribute('height','-3');w2.src='b.png';await ev(w2,'w2');log('bad dims',st(w2));
+  w2.width=12;log('set width',w2.getAttribute('width'));
+  // decode
+  const d=new Image();d.src='a.png';const t0=[];d.decode().then(()=>t0.push('decoded '+d.complete)).catch(e=>t0.push('rej '+e.name));await new Promise(r=>setTimeout(r,300));log('decode',t0);
+  const d2=new Image();d2.src='bad.png';const t1=[];await d2.decode().then(()=>t1.push('ok')).catch(e=>t1.push(e.name+':'+e.message));log('decode bad',t1);
+  const d3=new Image();const t3=[];await d3.decode().then(()=>t3.push('ok')).catch(e=>t3.push(e.name+':'+e.message));log('decode no src',t3);
+  const d4=new Image();d4.src='a.png';const p4=d4.decode();d4.src='b.png';const t4=[];await p4.then(()=>t4.push('ok')).catch(e=>t4.push(e.name+':'+e.message));log('decode changed',t4);
+  // two updates in one task: one event; a decode() of an image that loads, its src replaced
+  const e2=new Image();const e2e=[];e2.onerror=()=>e2e.push('error');e2.onload=()=>e2e.push('load');e2.src='';e2.src='';await new Promise(r=>setTimeout(r,200));log('empty twice',e2e);
+  const f2=new Image();const f2e=[];f2.onerror=()=>f2e.push('error');f2.onload=()=>f2e.push('load');f2.src='bad.png';f2.src='bad.png';await new Promise(r=>setTimeout(r,300));log('bad twice',f2e);
+  const d5=new Image();d5.src='slow.png';const t5=[];const p5=d5.decode().then(()=>t5.push('ok')).catch(x=>t5.push(x.name));await new Promise(r=>setTimeout(r,50));d5.src='b.png';await p5;log('decode loading then src',t5);
+  const d6=new Image();d6.src='slow2.png';const t6=[];const d6e=[];d6.onload=()=>d6e.push('load');const p6=d6.decode().then(()=>t6.push('ok '+d6.complete)).catch(x=>t6.push(x.name));await new Promise(r=>setTimeout(r,50));d6.src='slow2.png';await p6;await new Promise(r=>setTimeout(r,100));log('decode loading then same src',[t6,d6e]);
+  // src change during load
+  const s=new Image();const se=[];s.onload=()=>se.push('load '+s.currentSrc.split('/').pop());s.onerror=()=>se.push('error');s.src='a.png';s.src='b.png';await new Promise(r=>setTimeout(r,300));log('change during load',[se,st(s)]);
+  // same src again
+  const q=new Image();q.src='a.png';await ev(q,'q');const qe=[];q.onload=()=>qe.push('load');q.src='a.png';await new Promise(r=>setTimeout(r,200));log('same src again',qe);
+  // reflection
+  const rf=new Image();rf.setAttribute('crossorigin','x');rf.setAttribute('loading','LAZY');rf.setAttribute('decoding','SYNC');log('refl',[rf.alt,rf.crossOrigin,rf.loading,rf.decoding,rf.isMap,rf.useMap,rf.sizes,rf.srcset,rf.referrerPolicy,rf.fetchPriority,rf.name,rf.lowsrc,rf.align,rf.hspace,rf.vspace,rf.longDesc,rf.border]);
+  log('props',Object.getOwnPropertyNames(HTMLImageElement.prototype).filter(n=>!['x','y','browsingTopics'].includes(n)).sort().join(' '));
+  log('Image',[Image.name,Image.length,Image.prototype===HTMLImageElement.prototype,typeof Image]);
+  // load event order relative to document load? img in doc with srcset
+  document.title=out.join(' | ');
+})();
+</script>

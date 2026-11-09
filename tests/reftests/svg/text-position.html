@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<title>SVG text: x and y, lists of dx and dy, a tspan's own, text-anchor by chunk, white space collapsed</title>
+<link rel="match" href="text-position-ref.html">
+<style>body { margin: 0 } svg { display: block } text { font: 10px Ahem; fill: lime }</style>
+<svg width="200" height="120">
+  <text x="10" y="18">  XX
+     X </text>
+  <text x="10 50" y="38" dx="0 0 5">X<tspan>XX</tspan></text>
+  <text x="10" y="58" dy="0 10">XX<tspan dy="-10" dx="10">X</tspan></text>
+  <text x="100 150" y="98" text-anchor="middle">XX<tspan x="190" text-anchor="end">XX</tspan></text>
+  <text x="10" y="88" xml:space="preserve"> X</text>
+</svg>

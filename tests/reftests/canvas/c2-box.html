@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<title>C2: a canvas in its box: its bitmap in its content box, inside a border and padding; an opaque one black where nothing is drawn; one with nothing drawn shows the page; a new width clears what was drawn</title>
+<link rel="match" href="c2-box-ref.html">
+<style>
+  html, body { margin: 0 }
+  canvas { display: block; border: 5px solid blue; padding: 5px; margin-bottom: 10px }
+</style>
+<canvas id="opaque" width="40" height="20"></canvas>
+<canvas id="blank" width="40" height="20"></canvas>
+<canvas id="cleared" width="40" height="20"></canvas>
+<script>
+  const opaque = document.getElementById("opaque").getContext("2d", { alpha: false });
+  opaque.fillStyle = "lime";
+  opaque.fillRect(20, 0, 20, 20);
+  document.getElementById("blank").getContext("2d");
+  const cleared = document.getElementById("cleared");
+  const ctx = cleared.getContext("2d");
+  ctx.fillStyle = "red";
+  ctx.fillRect(0, 0, 40, 20);
+  cleared.width = 40;
+  ctx.fillStyle = "lime";
+  ctx.fillRect(0, 0, 20, 20);
+</script>

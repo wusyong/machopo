@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<title>An iframe is a replaced element: 300×150, with the UA stylesheet's 2px inset border; width, height and frameborder are presentational hints</title>
+<link rel=match href=f1-iframe-box-ref.html>
+<style>
+  body { margin: 0; color: green; }
+  iframe { display: block; margin-bottom: 10px; }
+</style>
+<iframe></iframe>
+<iframe width=100 height=50 frameborder=0 style="background-color: green"></iframe>
+<iframe style="width: 200px; border-width: 5px">this fallback text is not drawn</iframe>

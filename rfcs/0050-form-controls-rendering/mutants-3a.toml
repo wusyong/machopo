@@ -1,0 +1,256 @@
+# 3a: a menu list's UA shadow tree (`dom_api`), the option text and label
+# changes that sync it (`dom`, `dom_api`), its inner element's room and the
+# UA's rules (`style`, `css`), its size and baseline (`layout`), and its
+# native look and arrow (`paint`).
+#   python3 scripts/test.py mutate rfcs/0050-form-controls-rendering/mutants-3a.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::a_menu_list"]
+timeout = 900
+
+[[mutant]]
+name = "a multiple select of size 1 is a list box"
+file = "crates/dom_api/src/select.rs"
+from = '''        size == Some(1)'''
+to = '''        false'''
+
+[[mutant]]
+name = "a label is shown with its spaces"
+file = "crates/dom_api/src/select.rs"
+from = '''        [option] => crate::forms::display_label(*option)
+            .trim_matches([' ', '\t', '\n', '\x0c', '\r'])
+            .to_owned(),'''
+to = '''        [option] => crate::forms::display_label(*option),'''
+
+[[mutant]]
+name = "a multiple menu list shows nothing for none or several"
+file = "crates/dom_api/src/select.rs"
+from = '''        _ if is_multiple(select) => multiple_options_selected_text(selected.len()),'''
+to = ''''''
+
+[[mutant]]
+name = "an option in a group isn't indented"
+file = "crates/dom_api/src/select.rs"
+from = '''        format!("    {label}")'''
+to = '''        label'''
+
+[[mutant]]
+name = "a multiple menu list isn't as wide as its count"
+file = "crates/dom_api/src/select.rs"
+from = '''        labels.push(multiple_options_selected_text(options.len()));'''
+to = ''''''
+
+[[mutant]]
+name = "an empty label hides the text"
+file = "crates/dom_api/src/forms.rs"
+from = '''        .filter(|label| !label.is_empty())
+        .unwrap_or_else(|| text_of_option(option))'''
+to = '''        .unwrap_or_else(|| text_of_option(option))'''
+
+[[mutant]]
+name = "the shown text isn't synced"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''    if text.0 != shown {'''
+to = '''    if text.0 != shown && false {'''
+
+[[mutant]]
+name = "the labels aren't synced"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''    if old_labels.as_deref() != Some(labels.as_str()) {'''
+to = '''    if old_labels.is_none() {'''
+
+[[mutant]]
+name = "an option's change doesn't sync its select"
+file = "crates/dom_api/src/form_states.rs"
+from = '''            && let Some(select) = crate::forms::option_select(element)
+        {
+            self.select(select);'''
+to = '''            && let Some(select) = crate::forms::option_select(element)
+        {
+            let _ = select;'''
+
+[[mutant]]
+name = "a removed option doesn't sync its select"
+file = "crates/dom_api/src/form_states.rs"
+from = '''                        .and_then(crate::forms::nearest_select)
+                {
+                    self.select(select);'''
+to = '''                        .and_then(crate::forms::nearest_select)
+                {
+                    let _ = select;'''
+
+[[mutant]]
+name = "a label's change syncs nothing"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        local_name!("label"),'''
+to = ''''''
+
+[[mutant]]
+name = "multiple's change syncs nothing"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        local_name!("multiple"),'''
+to = ''''''
+
+[[mutant]]
+name = "size's change syncs nothing"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        local_name!("size"),'''
+to = ''''''
+
+[[mutant]]
+name = "a test document's selects get no selectedness"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''            crate::select::selectedness_setting(m, control, &|_| false);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::a_menu"]
+
+[[mutant]]
+name = "an option's text change records nothing"
+file = "crates/dom/src/scope.rs"
+from = '''                if let Some(option) = unsafe { inclusive_option_ancestor(parent) } {'''
+to = '''                if let Some(option) = unsafe { inclusive_option_ancestor(parent) }.filter(|_| false) {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "tree::form_state_elements"]
+
+[[mutant]]
+name = "an option's children change records nothing"
+file = "crates/dom/src/scope.rs"
+from = '''        unsafe { inclusive_option_ancestor(parent) }
+            .map(|option| FormStateChange::Element(option.id))'''
+to = '''        unsafe { inclusive_option_ancestor(parent) }.and(None)'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "tree::form_state_elements"]
+
+[[mutant]]
+name = "new labels don't rebuild the menu list's box"
+file = "crates/dom/src/scope.rs"
+from = '''        if name.is_attr(&crate::name::unlisted::LABELS) {'''
+to = '''        if name.is_attr(&crate::name::unlisted::LABELS) && false {'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::menu_lists"]
+
+[[mutant]]
+name = "the inner element's left margin is 3px"
+file = "crates/style/src/theme.rs"
+from = '''        style.margin.left = px(4.0);'''
+to = '''        style.margin.left = px(3.0);'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::a_menu"]
+
+[[mutant]]
+name = "the inner element has no padding above"
+file = "crates/style/src/theme.rs"
+from = '''        style.padding.top = LengthPercentage::Px(1.0);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::a_menu"]
+
+[[mutant]]
+name = "the inner element has its room without a native look"
+file = "crates/style/src/theme.rs"
+from = '''    if select.effective_appearance != EffectiveAppearance::None {'''
+to = '''    if select.effective_appearance != EffectiveAppearance::Checkbox {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::a_menu"]
+
+[[mutant]]
+name = "the inner element's block margins are always auto"
+file = "crates/style/src/theme.rs"
+from = '''    if select.align_items == ItemAlignment::Center {'''
+to = '''    if select.align_items != ItemAlignment::Stretch {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::a_menu"]
+
+[[mutant]]
+name = "a menu list keeps its line-height"
+file = "crates/style/src/theme.rs"
+from = '''        style.line_height = computed_style::LineHeight::Normal;'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::a_menu"]
+
+[[mutant]]
+name = "style's multiple select of size 1 is a list box"
+file = "crates/style/src/theme.rs"
+from = '''        size == Some(1)'''
+to = '''        false'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = ":-internal-list-box matches a menu list"
+file = "crates/style/src/selector.rs"
+from = '''                    && !crate::theme::uses_menu_list(self.0)'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::the_ua_rules_tell"]
+
+[[mutant]]
+name = "a page's sheet takes :-internal-list-box"
+file = "crates/css/src/selector.rs"
+from = '''        if self.user_agent && name.eq_ignore_ascii_case("-internal-list-box") {'''
+to = '''        if name.eq_ignore_ascii_case("-internal-list-box") {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "stylesheet::internal"]
+
+[[mutant]]
+name = "a menu list's text wraps its white space"
+file = "crates/style/resources/html.css"
+from = '''  align-items: center;
+  white-space: pre;
+  border: 1px solid rgb(118, 118, 118);'''
+to = '''  align-items: center;
+  border: 1px solid rgb(118, 118, 118);'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::the_ua_rules_tell"]
+
+[[mutant]]
+name = "a disabled select isn't faded"
+file = "crates/style/resources/html.css"
+from = '''  opacity: 0.7;'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::disabled"]
+
+[[mutant]]
+name = "a menu list's room across is 19px"
+file = "crates/layout/src/control.rs"
+from = '''const MENU_LIST_INLINE_PADDING: f32 = 4.0 + 16.0;'''
+to = '''const MENU_LIST_INLINE_PADDING: f32 = 4.0 + 15.0;'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::a_menu"]
+
+[[mutant]]
+name = "a menu list's widest label isn't rounded up"
+file = "crates/layout/src/control.rs"
+from = '''                SizeF::new(widest.ceil() + inline, line_height + 2.0 * block),'''
+to = '''                SizeF::new(widest + inline, line_height + 2.0 * block),'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::a_menu"]
+
+[[mutant]]
+name = "a tall menu list's baseline is at its top"
+file = "crates/layout/src/control.rs"
+from = '''                let shift = if centered { (room / 2.0).max(0.0) } else { 0.0 };'''
+to = '''                let shift = if centered { room.max(0.0) * 0.0 } else { 0.0 };'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::a_menu"]
+
+[[mutant]]
+name = "a menu list's inner element isn't centered"
+file = "crates/layout/src/control.rs"
+from = '''            ControlKind::MenuList { centered: true, .. } => Some(true),'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::a_menu"]
+
+[[mutant]]
+name = "the arrow is 4px to the right"
+file = "crates/paint/src/theme.rs"
+from = '''    let x = right - (ARROW_BOX + ARROW_WIDTH) / 2.0;'''
+to = '''    let x = right - ARROW_BOX / 2.0;'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "theme::menu"]
+
+[[mutant]]
+name = "the arrow's line scales"
+file = "crates/paint/src/theme.rs"
+from = '''        flags: PaintFlags::stroke(fragment.style.color, 2.0 / scale),'''
+to = '''        flags: PaintFlags::stroke(fragment.style.color, 2.0),'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "theme::menu"]
+
+[[mutant]]
+name = "a menu list is drawn by CSS"
+file = "crates/paint/src/theme.rs"
+from = '''            | Menulist
+    )'''
+to = '''
+    )'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "theme::menu"]
+
+[[mutant]]
+name = "a styled menu list has no arrow"
+file = "crates/paint/src/theme.rs"
+from = '''    if fragment.style.effective_appearance != EffectiveAppearance::MenulistButton {'''
+to = '''    if fragment.style.effective_appearance != EffectiveAppearance::Menulist {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "theme::menu"]

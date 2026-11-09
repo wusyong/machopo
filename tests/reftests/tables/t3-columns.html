@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<title>A table's columns paint and collapse</title>
+<link rel="match" href="t3-columns-ref.html">
+<!-- A column group's and a column's backgrounds are painted in the cells
+     that start in their columns, a group's under its column's. A collapsed
+     column and a collapsed row take no room, and what is in their cells
+     isn't painted, made visible again or not. -->
+<style>
+  body { margin: 0 }
+  table { border-spacing: 10px }
+  td { padding: 0 }
+  div { width: 40px; height: 20px }
+  .red { background: red; visibility: visible }
+</style>
+<table>
+  <colgroup style="background: blue">
+    <col style="background: lime"><col><col style="visibility: collapse">
+  </colgroup>
+  <tr><td><div></div></td><td><div></div></td><td><div class="red"></div></td></tr>
+  <tr style="visibility: collapse"><td><div class="red"></div></td><td></td><td></td></tr>
+  <tr><td colspan="2"><div style="width: 90px"></div></td><td></td></tr>
+</table>

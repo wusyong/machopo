@@ -1,0 +1,201 @@
+# Stage 5d-3c: what style_next styles again, its document indexes, a new viewport.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p style_next --test it && cargo test -q -p dom_next --test it && cargo test -q -p shell --test it -- browser_view::a_new_scale_factor"]
+timeout = 2400
+
+[[mutant]]
+name = "style_next: earlier siblings not marked"
+file = "crates/style_next/src/lib.rs"
+from = '''        if invalidated.earlier {
+            self.mark_earlier_siblings(element);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "style_next: a position from the end not noted"
+file = "crates/style_next/src/invalidation.rs"
+from = '''                        && data.nth_data().ty.is_from_end()'''
+to = '''                        && false'''
+
+[[mutant]]
+name = "style_next: a slow selector chooses no child"
+file = "crates/style_next/src/lib.rs"
+from = '''        if flags.intersects(Flags::HAS_SLOW_SELECTOR | Flags::MAY_HAVE_TREE_COUNTING_FUNCTION) {
+            return None;
+        }
+        let children: Vec<NodeRef<'gc>> ='''
+to = '''        if flags.intersects(Flags::HAS_SLOW_SELECTOR | Flags::MAY_HAVE_TREE_COUNTING_FUNCTION) {
+            return Some(NodeIdHashSet::default());
+        }
+        let children: Vec<NodeRef<'gc>> ='''
+
+[[mutant]]
+name = "style_next: a run of + chooses nothing after the change"
+file = "crates/style_next/src/lib.rs"
+from = '''                        if changed(child, StyleFlags::CLEAN) {
+                            left = n;
+                        }'''
+to = '''                        if changed(child, StyleFlags::CLEAN) {
+                            left = n & 0;
+                        }'''
+
+[[mutant]]
+name = "style_next: any reach taken as the longest run"
+file = "crates/style_next/src/lib.rs"
+from = '''            match reach.filter(|_| !host) {'''
+to = '''            match reach.or(Some(1)).filter(|_| !host) {'''
+
+[[mutant]]
+name = "style_next: the edges not chosen"
+file = "crates/style_next/src/lib.rs"
+from = '''            restyle.extend(elements.next().map(|&child| cx.node_id(child)));
+            restyle.extend(elements.next_back().map(|&child| cx.node_id(child)));'''
+to = '''            let _ = &mut elements;'''
+
+[[mutant]]
+name = "style_next: what precedes a change not chosen"
+file = "crates/style_next/src/lib.rs"
+from = '''                    .filter(|&&child| changed(child, StyleFlags::PRECEDES_CHANGE))'''
+to = '''                    .filter(|&&child| changed(child, StyleFlags::CLEAN))'''
+
+[[mutant]]
+name = "style_next: a selector's reach not noted"
+file = "crates/style_next/src/rule_index.rs"
+from = '''                    None => index.features.reach_any = true,'''
+to = '''                    None => {}'''
+
+[[mutant]]
+name = "style_next: a host's chosen light children not marked"
+file = "crates/style_next/src/lib.rs"
+from = '''                {
+                    cx.set_needs_style_recalc(child);
+                }
+                at = cx.next_sibling(child);'''
+to = '''                {
+                    let _ = child;
+                }
+                at = cx.next_sibling(child);'''
+
+[[mutant]]
+name = "style_next: a shadow root's children's change chooses none"
+file = "crates/style_next/src/lib.rs"
+from = '''            let mode = if chosen || by_root {'''
+to = '''            let mode = if chosen || (by_root && false) {'''
+
+[[mutant]]
+name = "dom_next: a shadow root keeps no selector flags"
+file = "crates/dom_next/src/style.rs"
+from = '''        } else if let Some(data) = self.shadow_data(node) {
+            // A shadow root's children's, as their parent's.
+            data.selector_flags.set(data.selector_flags.get() | flags);
+        }'''
+to = '''        }'''
+
+[[mutant]]
+name = "dom_next: a shadow root's children's change on its host"
+file = "crates/dom_next/src/style.rs"
+from = '''        self.set_flags(root, StyleFlags::CHILDREN_CHANGED.0 << STYLE_SHIFT);'''
+to = '''        self.set_flags(host, StyleFlags::CHILDREN_CHANGED.0 << STYLE_SHIFT);'''
+
+[[mutant]]
+name = "style_next: states not recorded"
+file = "crates/style_next/src/selector.rs"
+from = '''        if state != 0 {
+            self.cx.add_state_dependencies(self.node, state);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "style_next: any state change restyles the element"
+file = "crates/style_next/src/lib.rs"
+from = '''                    || changes.states & self.cx.state_dependencies(element) != 0'''
+to = '''                    || changes.states != 0'''
+
+[[mutant]]
+name = "style_next: the sets take every state"
+file = "crates/style_next/src/lib.rs"
+from = '''            let changes = if looked_at == changes.states {'''
+to = '''            let changes = if true || looked_at == changes.states {'''
+
+[[mutant]]
+name = "dom_next: the page's same focus moves the chain again"
+file = "crates/dom_next/src/user_action.rs"
+from = '''        if self.page_focused(window) == focused {
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom_next: a node moved between slots not styled again"
+file = "crates/dom_next/src/slot.rs"
+from = '''                (Some(old), Some(new)) => !Gc::ptr_eq(old, new),'''
+to = '''                (Some(_), Some(_)) => false,'''
+
+[[mutant]]
+name = "dom_next: a slot styled again with its new children"
+file = "crates/dom_next/src/style.rs"
+from = '''            // Style: what moved between slots is marked as the assignment
+            // is worked out (`assign_slottables`); the slot's own style
+            // doesn't change.'''
+to = '''            self.mark_style(slot, StyleFlags::NEEDS_STYLE_RECALC);'''
+
+[[mutant]]
+name = "style_next: no large sheet is an index of its own"
+file = "crates/style_next/src/lib.rs"
+from = '''        let large = |sheet: &Sheet| sheet.contents.rules().len() >= LARGE_SHEET_RULES;
+        let old_groups'''
+to = '''        let large = |_: &Sheet| false;
+        let old_groups'''
+
+[[mutant]]
+name = "style_next: a run's index made again each time"
+file = "crates/style_next/src/lib.rs"
+from = '''                        && !group.media_changed(old_sheets, environment)
+                })
+                .map(|group| group.index.clone())'''
+to = '''                        && false
+                })
+                .map(|group| group.index.clone())'''
+
+[[mutant]]
+name = "style_next: a large sheet's index not kept"
+file = "crates/style_next/src/lib.rs"
+from = '''                        .filter(|_| large(sheet) && sheet.applies(environment))?;'''
+to = '''                        .filter(|_| false)?;'''
+
+[[mutant]]
+name = "style_next: a new viewport styles everything"
+file = "crates/style_next/src/lib.rs"
+from = '''        } else if new_viewport {
+            self.viewport_changed = true;
+        }'''
+to = '''        } else if new_viewport {
+            self.environment_changed = true;
+        }'''
+
+[[mutant]]
+name = "style_next: a new viewport styles nothing"
+file = "crates/style_next/src/lib.rs"
+from = '''            || (self.viewport_changed && self.uses_viewport(element, existing.as_ref(), token));'''
+to = ''';'''
+
+[[mutant]]
+name = "style_next: a new viewport walks the marked paths alone"
+file = "crates/style_next/src/lib.rs"
+from = '''            || look
+            || self.viewport_changed
+        {'''
+to = '''            || look
+        {'''
+
+[[mutant]]
+name = "style_next: a new device pixel ratio styles nothing"
+file = "crates/style_next/src/lib.rs"
+from = '''        if new_ratio
+            || self.ua.set.did_media_query_results_change(&environment)'''
+to = '''        if self.ua.set.did_media_query_results_change(&environment)'''
+
+[[mutant]]
+name = "style_next: a shadow sheet's media not looked at"
+file = "crates/style_next/src/shadow_sheets.rs"
+from = '''                .any(|(sheet, &applied)| sheet.applies(environment) != applied)'''
+to = '''                .any(|(sheet, &applied)| sheet.applies(environment) != applied && false)'''

@@ -1,0 +1,125 @@
+# Stage 4e-5a: declarative shadow roots on the new DOM: `html`'s sink's
+# hooks, `dom_next`'s host check and declarative flag, `dom_api_next`'s
+# `attachShadow` taking one over and the template's attributes.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p html --test it next::declarative && cargo test -q -p dom_js_next --test it shadow && cargo test -q -p dom_js_next --test it custom_elements"]
+timeout = 3000
+
+[[mutant]]
+name = "html: the document parser's not allowed"
+file = "crates/html/src/next.rs"
+from = '''    fn allow_declarative_shadow_roots(&self, _: &NextHandle) -> bool {
+        true
+    }'''
+to = '''    fn allow_declarative_shadow_roots(&self, _: &NextHandle) -> bool {
+        false
+    }'''
+
+[[mutant]]
+name = "html: a host's second taken"
+file = "crates/html/src/next.rs"
+from = '''    if cx.kind(host) != NodeKind::Element || cx.is_shadow_host(host) || cx.shadow_host_check(host).is_err() {'''
+to = '''    if cx.kind(host) != NodeKind::Element || cx.shadow_host_check(host).is_err() {'''
+
+[[mutant]]
+name = "html: any element a host"
+file = "crates/html/src/next.rs"
+from = '''    if cx.kind(host) != NodeKind::Element || cx.is_shadow_host(host) || cx.shadow_host_check(host).is_err() {'''
+to = '''    if cx.kind(host) != NodeKind::Element || cx.is_shadow_host(host) {'''
+
+[[mutant]]
+name = "html: closed taken as open"
+file = "crates/html/src/next.rs"
+from = '''        Some(mode) if mode.eq_ignore_ascii_case("closed") => dom_next::ShadowRootMode::Closed,'''
+to = '''        Some(mode) if mode.eq_ignore_ascii_case("closed") => dom_next::ShadowRootMode::Open,'''
+
+[[mutant]]
+name = "html: clonable as serializable"
+file = "crates/html/src/next.rs"
+from = '''            clonable: value("shadowrootclonable").is_some(),'''
+to = '''            clonable: value("shadowrootserializable").is_some(),'''
+
+[[mutant]]
+name = "html: delegatesFocus ignored"
+file = "crates/html/src/next.rs"
+from = '''            delegates_focus: value("shadowrootdelegatesfocus").is_some(),'''
+to = '''            delegates_focus: false,'''
+
+[[mutant]]
+name = "html: not declarative"
+file = "crates/html/src/next.rs"
+from = '''    cx.set_shadow_root_declarative(root, true);
+    cx.set_template_content(template, root);'''
+to = '''    cx.set_template_content(template, root);'''
+
+[[mutant]]
+name = "html: the contents not the shadow root"
+file = "crates/html/src/next.rs"
+from = '''    cx.set_template_content(template, root);
+    true'''
+to = '''    let _ = template;
+    true'''
+
+[[mutant]]
+name = "dom: custom names not hosts"
+file = "crates/dom_next/src/shadow.rs"
+from = '''        let custom = !SHADOW_HOSTS.contains(&name.local)
+            && crate::custom_element::is_valid_custom_element_name(&names::get(name.local));'''
+to = '''        let custom = false;'''
+
+[[mutant]]
+name = "dom: disabled shadows allowed"
+file = "crates/dom_next/src/shadow.rs"
+from = '''            return Err(ShadowHostError::Disabled);'''
+to = ''''''
+
+[[mutant]]
+name = "api: another mode taken over"
+file = "crates/dom_api_next/src/shadow_root.rs"
+from = '''        if !cx.is_declarative_shadow_root(root) || !same_mode {'''
+to = '''        if !cx.is_declarative_shadow_root(root) {'''
+
+[[mutant]]
+name = "api: an imperative one taken over"
+file = "crates/dom_api_next/src/shadow_root.rs"
+from = '''        if !cx.is_declarative_shadow_root(root) || !same_mode {'''
+to = '''        if !same_mode {'''
+
+[[mutant]]
+name = "api: taken over not emptied"
+file = "crates/dom_api_next/src/shadow_root.rs"
+from = '''        while let Some(child) = cx.first_child(root) {
+            cx.pre_remove(root, child).expect("a child of its parent");
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "api: still declarative after"
+file = "crates/dom_api_next/src/shadow_root.rs"
+from = '''        cx.set_shadow_root_declarative(root, false);'''
+to = ''''''
+
+[[mutant]]
+name = "api: shadowRootMode case-sensitive"
+file = "crates/dom_api_next/src/html.rs"
+from = '''        Some(value) if value.eq_ignore_ascii_case("open") => "open",'''
+to = '''        Some(value) if value == "open" => "open",'''
+
+[[mutant]]
+name = "api: shadowRootMode not limited"
+file = "crates/dom_api_next/src/html.rs"
+from = '''        _ => "",
+    };
+    Ok(DomStr::Owned(dom_next::DomString::new(keyword)))'''
+to = '''        _ => "closed",
+    };
+    Ok(DomStr::Owned(dom_next::DomString::new(keyword)))'''
+
+[[mutant]]
+name = "api: a flag never removed"
+file = "crates/dom_api_next/src/html.rs"
+from = '''    } else {
+        cx.remove_attribute(this, name);
+    }'''
+to = '''    } else {
+        let _ = name;
+    }'''

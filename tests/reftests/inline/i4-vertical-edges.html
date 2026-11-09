@@ -1,0 +1,7 @@
+<!DOCTYPE html>
+<title>I4: vertical padding on an inline element is painted but doesn't change the line's height, so it covers the line above</title>
+<link rel="match" href="i4-vertical-edges-ref.html">
+<style>html, body { margin: 0 } body { font: 20px/1 Ahem; color: black }</style>
+<!-- The second line's span reaches 20px up, over the first line's text,
+     which paints before it. The third line is where it would be without it. -->
+<div>XXXXX<br><span style="padding-top: 20px; background-color: green">XX</span><br>X</div>

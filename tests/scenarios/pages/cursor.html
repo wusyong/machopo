@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<!-- What the pointer looks like over the page, for cursor.txt: what each
+     element's `cursor` asks for, and `auto`'s over text and links. A click
+     on #chart grabs it: its cursor changes under a pointer that stays. -->
+<title>cursor</title>
+<style>
+  html, body { margin: 0 }
+  div, a, input, button { display: block; box-sizing: border-box; height: 40px; width: 200px }
+  #chart { cursor: crosshair; background-color: #e8f0fe }
+  #chart.grabbed { cursor: grabbing }
+  #handle { cursor: ew-resize; background-color: #fce8e6 }
+  #hidden { cursor: none }
+  #fallback { cursor: url(missing.cur) 4 4, move }
+</style>
+<div id="chart"></div>
+<div id="handle"></div>
+<div id="line"><span id="text">text</span></div>
+<a id="link" href="#">link</a>
+<input id="field">
+<button id="button">button</button>
+<div id="hidden"></div>
+<div id="fallback"></div>
+<script>
+  const chart = document.getElementById('chart');
+  chart.addEventListener('click', () => chart.classList.add('grabbed'));
+</script>

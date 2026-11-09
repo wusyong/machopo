@@ -1,0 +1,14 @@
+# about:demo's grid tiles: tile 1 spans two columns, and the
+# others move on. The tiles are at the end of the page: scrolled to first,
+# so that what is captured shows them.
+navigate about:demo
+wait-loaded
+scroll-to #tile-1
+screenshot one-column
+capture one-column
+click #widen
+wait-text #widen-note "Tile 1 spans two columns."
+# Wider, and tile 6 moved: the frame changes where they are now.
+expect-differs one-column #tile-1
+expect-differs one-column #tile-6
+screenshot two-columns

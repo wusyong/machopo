@@ -1,0 +1,205 @@
+# Stage 4e-3a-3: the DOM notes only the changes style reads
+# (`dom_next::StyleNames`): the names the rules use anywhere in a
+# selector, the hints' attributes, `attr()`'s, given by `style_next`.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next -p style_next"]
+timeout = 3000
+
+[[mutant]]
+name = "uses: attributes not looked at"
+file = "crates/dom_next/src/style.rs"
+from = '''        if self.everything || self.attributes.contains(&name.local()) {
+            return true;
+        }'''
+to = '''        if self.everything {
+            return true;
+        }'''
+
+[[mutant]]
+name = "uses: every change"
+file = "crates/dom_next/src/style.rs"
+from = '''        if self.everything || self.attributes.contains(&name.local()) {
+            return true;
+        }'''
+to = '''        if true {
+            return true;
+        }'''
+
+[[mutant]]
+name = "uses: everything not looked at"
+file = "crates/dom_next/src/style.rs"
+from = '''        if self.everything || self.attributes.contains(&name.local()) {'''
+to = '''        if self.attributes.contains(&name.local()) {'''
+
+[[mutant]]
+name = "uses: only classes that came"
+file = "crates/dom_next/src/style.rs"
+from = '''            return changed(old, new) || changed(new, old);'''
+to = '''            return changed(new, old);'''
+
+[[mutant]]
+name = "uses: only classes that went"
+file = "crates/dom_next/src/style.rs"
+from = '''            return changed(old, new) || changed(new, old);'''
+to = '''            return changed(old, new);'''
+
+[[mutant]]
+name = "uses: a moved class counted"
+file = "crates/dom_next/src/style.rs"
+from = '''                    !tokens(to).any(|other| other == class)
+                        && names::find'''
+to = '''                    names::find'''
+
+[[mutant]]
+name = "uses: a class as written"
+file = "crates/dom_next/src/style.rs"
+from = '''                        && names::find(&lower(class))'''
+to = '''                        && names::find(class)'''
+
+[[mutant]]
+name = "uses: an id as written"
+file = "crates/dom_next/src/style.rs"
+from = '''                .any(|id| self.ids.contains(&lower(id)))'''
+to = '''                .any(|id| self.ids.contains(id))'''
+
+[[mutant]]
+name = "uses: no id"
+file = "crates/dom_next/src/style.rs"
+from = '''        name.is(names::NONE, names::ID)
+            && old != new'''
+to = '''        false
+            && old != new'''
+
+[[mutant]]
+name = "state: every state"
+file = "crates/dom_next/src/style.rs"
+from = '''            Some(names) if names.everything || names.states & state != 0 => {'''
+to = '''            Some(_) => {'''
+
+[[mutant]]
+name = "never styled: noted"
+file = "crates/dom_next/src/style.rs"
+from = '''            Some(_) => {
+                #[cfg(debug_assertions)]
+                self.passed_over(element, |changes| changes.note(name, old, new));
+            }
+            None => {}'''
+to = '''            Some(_) => {
+                #[cfg(debug_assertions)]
+                self.passed_over(element, |changes| changes.note(name, old, new));
+            }
+            None => self.note_for_style(element, |changes| changes.note(name, old, new)),'''
+
+[[mutant]]
+name = "passed over: not kept"
+file = "crates/dom_next/src/style.rs"
+from = '''        PASSED_OVER.with(|passed| passed.borrow_mut().push((document, element, changes)));'''
+to = '''        let _ = (document, element, changes);'''
+
+[[mutant]]
+name = "names: no class"
+file = "crates/style_next/src/rule_index.rs"
+from = '''                names.classes.insert(names::intern(&class.0.to_ascii_lowercase()));'''
+to = '''                let _ = class;'''
+
+[[mutant]]
+name = "names: no id"
+file = "crates/style_next/src/rule_index.rs"
+from = '''                names.ids.insert(id.0.to_ascii_lowercase().into());'''
+to = '''                let _ = id;'''
+
+[[mutant]]
+name = "names: no attribute"
+file = "crates/style_next/src/rule_index.rs"
+from = '''            | Component::AttributeInNoNamespace { local_name, .. } => {
+                names.attributes.extend(both(&local_name.0));
+            }'''
+to = '''            | Component::AttributeInNoNamespace { local_name, .. } => {
+                let _ = local_name;
+            }'''
+
+[[mutant]]
+name = "names: no state"
+file = "crates/style_next/src/rule_index.rs"
+from = '''                names.states |= crate::invalidation::pseudo_class_state(class);'''
+to = '''                let _ = crate::invalidation::pseudo_class_state(class);'''
+
+[[mutant]]
+name = "names: no href"
+file = "crates/style_next/src/rule_index.rs"
+from = '''                        names.attributes.insert(names::local::HREF);'''
+to = '''                        let _ = names::local::HREF;'''
+
+[[mutant]]
+name = "names: no open"
+file = "crates/style_next/src/rule_index.rs"
+from = '''                        names.attributes.insert(names::local::OPEN);'''
+to = '''                        let _ = names::local::OPEN;'''
+
+[[mutant]]
+name = "names: lists not gone into"
+file = "crates/style_next/src/rule_index.rs"
+from = '''            Component::Negation(list) | Component::Is(list) | Component::Where(list) => {
+                for selector in list.slice() {
+                    add_names(names, selector);
+                }
+            }
+            Component::NthOf'''
+to = '''            Component::NthOf'''
+
+[[mutant]]
+name = "names: :has() not everything"
+file = "crates/style_next/src/rule_index.rs"
+from = '''            Component::Has(_) => names.everything = true,'''
+to = '''            Component::Has(_) => {}'''
+
+[[mutant]]
+name = "given: not the author's"
+file = "crates/style_next/src/lib.rs"
+from = '''        if let Some(author) = &self.author {
+            let names = &author.index.names;'''
+to = '''        if let Some(author) = self.author.as_ref().filter(|_| false) {
+            let names = &author.index.names;'''
+
+[[mutant]]
+name = "given: no hints"
+file = "crates/style_next/src/lib.rs"
+from = '''        given.attributes.extend(hints::attribute_names());'''
+to = '''        let _ = hints::attribute_names();'''
+
+[[mutant]]
+name = "given: no style, lang, dir, link"
+file = "crates/style_next/src/lib.rs"
+from = '''        given.attributes.extend([
+            names::local::STYLE,'''
+to = '''        let _ = ([
+            names::local::STYLE,'''
+
+[[mutant]]
+name = "given: no attr()"
+file = "crates/style_next/src/lib.rs"
+from = '''        given.attributes.extend(self.attr_names.iter().copied());'''
+to = '''        let _ = &self.attr_names;'''
+
+[[mutant]]
+name = "given: not again after attr()"
+file = "crates/style_next/src/lib.rs"
+from = '''        self.matched_properties = cache.into_inner();
+        if self.names_stale {'''
+to = '''        self.matched_properties = cache.into_inner();
+        if false && self.names_stale {'''
+
+[[mutant]]
+name = "given: not again when the sheets change"
+file = "crates/style_next/src/lib.rs"
+from = '''        if !matches!(change, SheetsChange::Unchanged) || self.names_stale {'''
+to = '''        if self.names_stale {'''
+
+[[mutant]]
+name = "the debug check left out"
+file = "crates/style_next/src/lib.rs"
+from = '''        #[cfg(debug_assertions)]
+        check_passed_over(
+'''
+to = '''        #[cfg(any())]
+        check_passed_over(
+'''

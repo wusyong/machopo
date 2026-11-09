@@ -1,0 +1,479 @@
+# 2: a number's and a range's steps (`dom_api`'s `step_range`), the
+# cancel button and the spin button (`inner_elements`), the mouse capture
+# (`dom` and `renderer`) and an empty inner editor's line (`layout`).
+#   python3 scripts/test.py mutate rfcs/0052-form-control-interaction/mutants-2.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "input_steps::"]
+timeout = 900
+
+[[mutant]]
+name = "step=any is the default step for stepUp()"
+file = "crates/dom_api/src/step_range.rs"
+from = '''            (Some(_), true) => (any_handling == Any::DefaultStep).then_some(DEFAULT_STEP),'''
+to = '''            (Some(_), true) => Some(DEFAULT_STEP),'''
+
+[[mutant]]
+name = "a bad step is no step"
+file = "crates/dom_api/src/step_range.rs"
+from = '''            (Some(step), false) => Some(number(step).filter(|s| *s > 0.0).unwrap_or(DEFAULT_STEP)),'''
+to = '''            (Some(step), false) => number(step).filter(|s| *s > 0.0),'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "input_steps::", "forms::values_are_sanitized"]
+
+[[mutant]]
+name = "a range's maximum may be below its minimum"
+file = "crates/dom_api/src/step_range.rs"
+from = '''            (min, max.unwrap_or(100.0).max(min), min)'''
+to = '''            (min, max.unwrap_or(100.0), min)'''
+
+[[mutant]]
+name = "a range's step base is its value attribute"
+file = "crates/dom_api/src/step_range.rs"
+from = '''            (min, max.unwrap_or(100.0).max(min), min)'''
+to = '''            (min, max.unwrap_or(100.0).max(min), attribute_number(element, &local_name!("value")).unwrap_or(min))'''
+
+[[mutant]]
+name = "a number's step base isn't its value attribute"
+file = "crates/dom_api/src/step_range.rs"
+from = '''            let base = min
+                .or_else(|| attribute_number(element, &local_name!("value")))
+                .unwrap_or(0.0);'''
+to = '''            let base = min.unwrap_or(0.0);'''
+
+[[mutant]]
+name = "every value is off the step"
+file = "crates/dom_api/src/step_range.rs"
+from = '''        error < remainder && remainder < step - error'''
+to = '''        true'''
+
+[[mutant]]
+name = "no value is off the step"
+file = "crates/dom_api/src/step_range.rs"
+from = '''        error < remainder && remainder < step - error'''
+to = '''        false'''
+
+[[mutant]]
+name = "steps aren't rounded to their places"
+file = "crates/dom_api/src/step_range.rs"
+from = '''    let rounded = (value * scale).round() / scale;'''
+to = '''    let rounded = value;'''
+
+[[mutant]]
+name = "a range's value isn't aligned to its step"
+file = "crates/dom_api/src/step_range.rs"
+from = '''        let Some(step) = self.step else {
+            return clamped;
+        };
+        let rounded'''
+to = '''        let Some(step) = self.step.filter(|_| false) else {
+            return clamped;
+        };
+        let rounded'''
+
+[[mutant]]
+name = "a range's aligned value past the maximum stays"
+file = "crates/dom_api/src/step_range.rs"
+from = '''        let aligned = if rounded > self.max {
+            rounded - step'''
+to = '''        let aligned = if rounded > self.max {
+            rounded'''
+
+[[mutant]]
+name = "decimal places ignore the exponent"
+file = "crates/dom_api/src/step_range.rs"
+from = '''    (i32::try_from(fraction).unwrap_or(0) - exponent).max(0)'''
+to = '''    i32::try_from(fraction).unwrap_or(0)'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--lib", "step_range"]
+
+[[mutant]]
+name = "stepUp() with a minimum above the maximum steps"
+file = "crates/dom_api/src/step_range.rs"
+from = '''    if range.min > range.max {
+        return Ok(None);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "an unaligned value doesn't count its alignment as a step"
+file = "crates/dom_api/src/step_range.rs"
+from = '''            value = base + ((value - base) / step).ceil() * step;
+            count -= 1.0;'''
+to = '''            value = base + ((value - base) / step).ceil() * step;'''
+
+[[mutant]]
+name = "an unaligned value goes down by ceil"
+file = "crates/dom_api/src/step_range.rs"
+from = '''            value = base + ((value - base) / step).floor() * step;'''
+to = '''            value = base + ((value - base) / step).ceil() * step;'''
+
+[[mutant]]
+name = "a value past the maximum isn't its aligned maximum"
+file = "crates/dom_api/src/step_range.rs"
+from = '''    if value > range.max {
+        value = aligned_max;'''
+to = '''    if value > range.max {
+        value = range.max;'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "input_steps::", "forms::"]
+
+[[mutant]]
+name = "a value below the minimum stays"
+file = "crates/dom_api/src/step_range.rs"
+from = '''        value = base + ((range.min - base) / step).ceil() * step;
+    }'''
+to = '''    }'''
+
+[[mutant]]
+name = "stepUp() may go down"
+file = "crates/dom_api/src/step_range.rs"
+from = '''    if (count < 0.0 && current < value) || (count > 0.0 && current > value) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "stepUp() applies to text"
+file = "crates/dom_api/src/step_range.rs"
+from = '''        if !steppable(element) {
+            return Err(not_steppable());
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "stepUp() starts from NaN"
+file = "crates/dom_api/src/step_range.rs"
+from = '''    let current = if current.is_nan() { 0.0 } else { current };'''
+to = ''''''
+
+[[mutant]]
+name = "stepDown() goes up"
+file = "crates/dom_api/src/step_range.rs"
+from = '''    step(cx, this, -f64::from(n))'''
+to = '''    step(cx, this, f64::from(n))'''
+
+[[mutant]]
+name = "valueAsNumber reads text"
+file = "crates/dom_api/src/step_range.rs"
+from = '''    if !steppable(this.get(&cx.read())) {
+        return Ok(f64::NAN);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "an infinite valueAsNumber is no TypeError"
+file = "crates/dom_api/src/step_range.rs"
+from = '''    if value.is_infinite() {
+        return Err(ApiError::Type("The value provided is infinite.".into()));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "valueAsNumber sets text"
+file = "crates/dom_api/src/step_range.rs"
+from = '''    if !steppable(this.get(&cx.read())) {
+        return Err(DomException::new('''
+to = '''    if false {
+        return Err(DomException::new('''
+
+[[mutant]]
+name = "a NaN valueAsNumber is the value NaN"
+file = "crates/dom_api/src/step_range.rs"
+from = '''    if value.is_nan() {
+        Ok(crate::input::set_value(cx, this, DomString::from(""))?)'''
+to = '''    if false {
+        Ok(crate::input::set_value(cx, this, DomString::from(""))?)'''
+
+[[mutant]]
+name = "a range without a value isn't the middle"
+file = "crates/dom_api/src/step_range.rs"
+from = '''        None => number_to_string(range.clamp(range.min + (range.max - range.min) / 2.0)),'''
+to = '''        None => number_to_string(range.clamp(range.min)),'''
+
+[[mutant]]
+name = "the user's step from nothing starts at 0"
+file = "crates/dom_api/src/step_range.rs"
+from = '''        current = 0.0f64.max(range.min - next).min(range.max - next);'''
+to = '''        current = 0.0;'''
+
+[[mutant]]
+name = "the user's step below the minimum isn't the minimum"
+file = "crates/dom_api/src/step_range.rs"
+from = '''    if (n > 0.0 && current < range.min) || (n < 0.0 && current > range.max) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "the user's step at the maximum goes on"
+file = "crates/dom_api/src/step_range.rs"
+from = '''    if (n > 0.0 && current >= range.max) || (n < 0.0 && current <= range.min) {
+        return;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "the user's step is script's (no events)"
+file = "crates/dom_api/src/step_range.rs"
+from = '''    crate::input::set_value_for_user(cx, element, &number_to_string(value));'''
+to = '''    set_number(cx, element, value);'''
+
+[[mutant]]
+name = "a read-only number takes its keys"
+file = "crates/dom_api/src/step_range.rs"
+from = '''        "number" if !read_only => {'''
+to = '''        "number" => {'''
+
+[[mutant]]
+name = "a number's keys don't commit"
+file = "crates/dom_api/src/step_range.rs"
+from = '''            step_for_user(cx, element, n);
+            crate::editing::commit(cx, element);'''
+to = '''            step_for_user(cx, element, n);'''
+
+[[mutant]]
+name = "a number's ArrowDown goes up"
+file = "crates/dom_api/src/step_range.rs"
+from = '''                "ArrowDown" => -1,'''
+to = '''                "ArrowDown" => 1,'''
+
+[[mutant]]
+name = "a range with step=any goes by its step"
+file = "crates/dom_api/src/step_range.rs"
+from = '''        None => (range.max - range.min) / 100.0,'''
+to = '''        None => 1.0,'''
+
+[[mutant]]
+name = "a range's page is a step"
+file = "crates/dom_api/src/step_range.rs"
+from = '''    let big_step = ((range.max - range.min) / 10.0).max(step);'''
+to = '''    let big_step = step;'''
+
+[[mutant]]
+name = "a range's Home is its maximum"
+file = "crates/dom_api/src/step_range.rs"
+from = '''        "Home" => range.min,'''
+to = '''        "Home" => range.max,'''
+
+[[mutant]]
+name = "a range's unchanged key fires"
+file = "crates/dom_api/src/step_range.rs"
+from = '''    if value != current {'''
+to = '''    if true {'''
+
+[[mutant]]
+name = "the user's value fires change while focused"
+file = "crates/dom_api/src/input.rs"
+from = '''    if crate::focus::is_focused(cx, element) {
+        crate::editing::note_edit(&mut cx.mutate(), element, before.as_str());'''
+to = '''    if false {
+        crate::editing::note_edit(&mut cx.mutate(), element, before.as_str());'''
+
+[[mutant]]
+name = "the user's value keeps nothing to commit"
+file = "crates/dom_api/src/input.rs"
+from = '''        crate::editing::note_edit(&mut cx.mutate(), element, before.as_str());
+        fire_input(cx, element);'''
+to = '''        fire_input(cx, element);'''
+
+[[mutant]]
+name = "the user's unchanged value fires"
+file = "crates/dom_api/src/input.rs"
+from = '''    if self::value(cx, element).unwrap_or_default().as_str() == before.as_str() {
+        return;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "the input's keydown isn't stepped"
+file = "crates/dom_api/src/input.rs"
+from = '''            && (crate::step_range::keydown(cx, element, &key)'''
+to = '''            && (false'''
+
+[[mutant]]
+name = "Escape is the page's in a search field"
+file = "crates/dom_api/src/inner_elements.rs"
+from = '''    if !applies || key.key != "Escape" {'''
+to = '''    if true {'''
+
+[[mutant]]
+name = "Escape in an empty search field fires search"
+file = "crates/dom_api/src/inner_elements.rs"
+from = '''        .is_empty()
+    {
+        return false;
+    }'''
+to = '''        .is_empty()
+        && false
+    {
+        return false;
+    }'''
+
+[[mutant]]
+name = "a read-only field's parts work"
+file = "crates/dom_api/src/inner_elements.rs"
+from = '''    !crate::forms::is_disabled(field) && !field.has_attr(&local_name!("readonly"))'''
+to = '''    !crate::forms::is_disabled(field)'''
+
+[[mutant]]
+name = "the cancel button doesn't fire search"
+file = "crates/dom_api/src/inner_elements.rs"
+from = '''    crate::input::set_value_for_user(cx, field, "");
+    fire_search(cx, field);'''
+to = '''    crate::input::set_value_for_user(cx, field, "");'''
+
+[[mutant]]
+name = "the cancel button clears on mousedown"
+file = "crates/dom_api/src/inner_elements.rs"
+from = '''&& &*event.event_type() == "click";'''
+to = '''&& &*event.event_type() == "mousedown";'''
+
+[[mutant]]
+name = "the spin button's press doesn't focus"
+file = "crates/dom_api/src/inner_elements.rs"
+from = '''                crate::focus::focus_by_mouse(cx, &field);'''
+to = ''''''
+
+[[mutant]]
+name = "the spin button's halves are the other way"
+file = "crates/dom_api/src/inner_elements.rs"
+from = '''    Some(mouse.client_y < f64::from(rect.y + rect.height / 2.0))'''
+to = '''    Some(mouse.client_y >= f64::from(rect.y + rect.height / 2.0))'''
+
+[[mutant]]
+name = "the spin button's press doesn't repeat"
+file = "crates/dom_api/src/inner_elements.rs"
+from = '''                queue_repeat(cx, &field, state.press, SPIN_FIRST_REPEAT_MS);'''
+to = ''''''
+
+[[mutant]]
+name = "the spin button repeats at once"
+file = "crates/dom_api/src/inner_elements.rs"
+from = '''const SPIN_FIRST_REPEAT_MS: f64 = 250.0;'''
+to = '''const SPIN_FIRST_REPEAT_MS: f64 = 50.0;'''
+
+[[mutant]]
+name = "the spin button repeats every 100 ms"
+file = "crates/dom_api/src/inner_elements.rs"
+from = '''const SPIN_REPEAT_MS: f64 = 50.0;'''
+to = '''const SPIN_REPEAT_MS: f64 = 100.0;'''
+
+[[mutant]]
+name = "the spin button doesn't take the mouse"
+file = "crates/dom_api/src/inner_elements.rs"
+from = '''                    cx.mutate().set_mouse_capture(Some(element));'''
+to = ''''''
+
+[[mutant]]
+name = "a move doesn't find the half again"
+file = "crates/dom_api/src/inner_elements.rs"
+from = '''                    state.up = Some(up);
+                    set_spin(cx, &field, state);
+                }
+                false'''
+to = '''                }
+                false'''
+
+[[mutant]]
+name = "the spin button's release doesn't commit"
+file = "crates/dom_api/src/inner_elements.rs"
+from = '''                release(cx, &field, true);'''
+to = '''                release(cx, &field, false);'''
+
+[[mutant]]
+name = "a repeat of an old press steps"
+file = "crates/dom_api/src/inner_elements.rs"
+from = '''    let Some(pressed_up) = state.pressed_up.filter(|_| state.press == press) else {'''
+to = '''    let Some(pressed_up) = state.pressed_up else {'''
+
+[[mutant]]
+name = "a read-only field's press repeats"
+file = "crates/dom_api/src/inner_elements.rs"
+from = '''    if !live {
+        release(cx, field, false);
+        return;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "the repeat steps in the other half too"
+file = "crates/dom_api/src/inner_elements.rs"
+from = '''        state.up.filter(|up| *up == pressed_up)'''
+to = '''        state.up'''
+
+[[mutant]]
+name = "the repeat doesn't go on"
+file = "crates/dom_api/src/inner_elements.rs"
+from = '''        queue_repeat(cx, field, press, SPIN_REPEAT_MS);'''
+to = ''''''
+
+[[mutant]]
+name = "a release keeps the press"
+file = "crates/dom_api/src/inner_elements.rs"
+from = '''    state.pressed_up = None;
+    state.press += 1;'''
+to = ''''''
+
+[[mutant]]
+name = "a release keeps the mouse"
+file = "crates/dom_api/src/inner_elements.rs"
+from = '''        if captured {
+            m.set_mouse_capture(None);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a blur doesn't end the press"
+file = "crates/dom_api/src/focus.rs"
+from = '''        crate::inner_elements::did_blur(cx, old);'''
+to = ''''''
+
+[[mutant]]
+name = "the spin button isn't a part that takes the mouse"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''        SPIN_BUTTON => Some(MousePart::SpinButton),'''
+to = '''        SPIN_BUTTON => None,'''
+
+[[mutant]]
+name = "the cancel button isn't a part that takes the mouse"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''        CANCEL_BUTTON => Some(MousePart::CancelButton),'''
+to = '''        CANCEL_BUTTON => None,'''
+
+[[mutant]]
+name = "a removed element keeps the mouse"
+file = "crates/dom/src/scope.rs"
+from = '''        (element.shadow_including_root().kind() == NodeKind::Document).then_some(element)'''
+to = '''        Some(element)'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "mouse_capture"]
+
+[[mutant]]
+name = "the renderer ignores the mouse capture"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            Some(captured) => captured.id(),'''
+to = '''            Some(_) => view.mouse_target(&scope, point)?,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "forms::a_spin"]
+
+[[mutant]]
+name = "the renderer keeps the capture after the release"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if mouse.buttons == 0 {
+            self.dom.borrow_mut().mutate().set_mouse_capture(None);
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "forms::a_spin"]
+
+[[mutant]]
+name = "an empty inner editor has no line"
+file = "crates/layout/src/lib.rs"
+from = '''            if measured.size.height - inset.top - inset.bottom < line {'''
+to = '''            if false {'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::a_text_controls_value"]
+
+[[mutant]]
+name = "an inner editor beside a placeholder has a line"
+file = "crates/layout/src/lib.rs"
+from = '''            && !self.boxes[index].parent.is_some_and(|parent| {'''
+to = '''            && !self.boxes[index].parent.is_some_and(|parent| false && {'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::a_text_controls_value"]
+
+[[mutant]]
+name = "the view port is an inner editor"
+file = "crates/layout/src/control.rs"
+from = '''        && element
+            .children()
+            .all(|child| child.element_name().is_none());'''
+to = '''        && true;'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::a_text_controls_value"]

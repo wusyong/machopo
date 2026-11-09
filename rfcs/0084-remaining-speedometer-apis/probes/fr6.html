@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<script>
+function run() { return new Promise(done => {
+  const r = new FileReader(); const ev = [];
+  for (const t of ['loadstart', 'abort', 'loadend']) r.addEventListener(t, e => ev.push(`${t}:${e.loaded}/${e.total}/${e.lengthComputable} ${e.constructor.name}`));
+  r.onloadstart = () => r.abort();
+  r.readAsText(new Blob(['abcd']));
+  const r2 = new FileReader(); r2.readAsText(new Blob(['xyz'])); r2.addEventListener('abort', e => ev.push(`sync abort:${e.loaded}/${e.total}/${e.lengthComputable}`)); r2.abort();
+  setTimeout(() => done(ev.join('\n')), 100);
+}); }
+</script>

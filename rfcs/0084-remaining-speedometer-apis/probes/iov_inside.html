@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<style>body { margin: 0 }</style>
+<iframe id="framed" style="border: 0; width: 100px; height: 50px; display: block"
+  srcdoc="<body style='margin: 0; background: blue'><p>a frame</p>"></iframe>
+<div id="host" style="width: 100px; height: 50px"></div>
+<script>
+const el = id => document.getElementById(id);
+el('host').attachShadow({mode: 'open'}).innerHTML = '<div style="height: 50px; background: blue">shadow</div>';
+let finished; const result = new Promise(r => finished = r);
+onload = () => {
+  const seen = [];
+  const observer = new IntersectionObserver(entries => {
+    for (const e of entries) seen.push(`${e.target.id} ${e.isVisible}`);
+    if (seen.length == 2) finished(seen.join(', '));
+  }, {trackVisibility: true, delay: 100});
+  for (const id of ['framed', 'host']) observer.observe(el(id));
+};
+function run() { return Promise.race([result, new Promise(r => setTimeout(() => r('timeout'), 2000))]); }
+</script>

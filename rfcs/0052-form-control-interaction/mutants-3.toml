@@ -1,0 +1,464 @@
+# 3: a menu list's dropdown (`dom_api`'s `select_type`), `showPicker()`
+# and the user activation it consumes, `:open` (`dom`, `css`, `style`),
+# the renderer's side (`render_thread`), the browser's list (`shell`'s
+# `popup_menu` and `browser_view`) and the layer over the web views
+# (`compositor`).
+#   python3 scripts/test.py mutate rfcs/0052-form-control-interaction/mutants-3.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "select_type::"]
+timeout = 900
+
+[[mutant]]
+name = "any button's press opens the dropdown"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        if event_type != "mousedown" || mouse.button != 0 {'''
+to = '''        if event_type != "mousedown" {'''
+
+[[mutant]]
+name = "a press while shown opens it again"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        if state(select.get(&cx.read())).popup_open {
+            hide_popup(cx, select);
+        } else {'''
+to = '''        if false {
+            hide_popup(cx, select);
+        } else {'''
+
+[[mutant]]
+name = "the arrows open it without Alt"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        "ArrowDown" | "ArrowUp" => key.alt_key && !key.ctrl_key,'''
+to = '''        "ArrowDown" | "ArrowUp" => !key.ctrl_key,'''
+
+[[mutant]]
+name = "Alt+F4 opens it"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        "F4" => !key.alt_key && !key.ctrl_key,'''
+to = '''        "F4" => !key.ctrl_key,'''
+
+[[mutant]]
+name = "Enter's keypress doesn't open it"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        "keypress" if matches!(key.key_code, 0x20 | 0x0d) => {'''
+to = '''        "keypress" if matches!(key.key_code, 0x20) => {'''
+
+[[mutant]]
+name = "the labels aren't collapsed"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A menu list's dropdown's items'''
+to = '''        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A menu list's dropdown's items'''
+
+[[mutant]]
+name = "a group's label is an option"
+file = "crates/dom_api/src/select_type.rs"
+from = '''                    kind: MenuItemKind::Group,'''
+to = '''                    kind: MenuItemKind::Option,'''
+
+[[mutant]]
+name = "every option can be picked"
+file = "crates/dom_api/src/select_type.rs"
+from = '''                    kind: MenuItemKind::Option,
+                    enabled: !option_disabled(item),'''
+to = '''                    kind: MenuItemKind::Option,
+                    enabled: true,'''
+
+[[mutant]]
+name = "no item is the selected one"
+file = "crates/dom_api/src/select_type.rs"
+from = '''                    chosen = u32::try_from(index).ok();'''
+to = ''''''
+
+[[mutant]]
+name = "a multiple one opens it"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    if open || multiple {
+        return;
+    }'''
+to = '''    if open {
+        return;
+    }'''
+
+[[mutant]]
+name = "one shown opens again"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    if open || multiple {
+        return;
+    }'''
+to = '''    if multiple {
+        return;
+    }'''
+
+[[mutant]]
+name = "a shown dropdown isn't kept"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        state.popup_open = true;'''
+to = ''''''
+
+[[mutant]]
+name = "hiding doesn't tell the frame"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        frame.hide_popup_menu(select);'''
+to = ''''''
+
+[[mutant]]
+name = "a result for none shown is taken"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        if !state.popup_open {
+            return;
+        }
+        state.popup_open = false;'''
+to = '''        state.popup_open = false;'''
+
+[[mutant]]
+name = "a disabled option is picked"
+file = "crates/dom_api/src/select_type.rs"
+from = '''            .filter(|item| is_option(*item) && !option_disabled(*item))'''
+to = '''            .filter(|item| is_option(*item))'''
+
+[[mutant]]
+name = "a key's pick has a mouseup"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    if !by_keyboard {
+        crate::ui_event::fire_mouse_event(cx, select, "mouseup", data);'''
+to = '''    if true {
+        crate::ui_event::fire_mouse_event(cx, select, "mouseup", data);'''
+
+[[mutant]]
+name = "a pick has no click"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    crate::ui_event::fire_mouse_event(cx, select, "click", data);'''
+to = ''''''
+
+[[mutant]]
+name = "a blur keeps it"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    hide_popup(cx, element);
+    let mut m = cx.mutate();'''
+to = '''    let mut m = cx.mutate();'''
+
+[[mutant]]
+name = "showPicker() of another origin's frame"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    if !same_origin_as_top(cx, &document) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "the top document is the select's"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        top = crate::node::document_of(cx, &owner);
+    }
+    let mut m = cx.mutate();'''
+to = '''        let _ = owner;
+        break;
+    }
+    let mut m = cx.mutate();'''
+
+[[mutant]]
+name = "a disabled select's showPicker()"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    if crate::forms::is_disabled(this.get(&cx.read())) {
+        return Err(DomException::new('''
+to = '''    if false {
+        return Err(DomException::new('''
+
+[[mutant]]
+name = "showPicker() without the activation"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        .is_some_and(|window| crate::user_activation::has_transient_activation(cx, window))'''
+to = '''        .is_some_and(|_| true)'''
+
+[[mutant]]
+name = "showPicker() with no box"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    if !rendered {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "showPicker() keeps the activation"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    crate::user_activation::consume_activation(cx, &document);'''
+to = ''''''
+
+[[mutant]]
+name = "a list box's showPicker() opens one"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    if uses_menu_list(this.get(&cx.read())) {
+        show_popup(cx, this);
+    }'''
+to = '''    show_popup(cx, this);'''
+
+[[mutant]]
+name = "the activation isn't consumed"
+file = "crates/dom_api/src/user_activation.rs"
+from = '''            cx.mutate().set_last_activation(&window, f64::NEG_INFINITY);'''
+to = ''''''
+
+[[mutant]]
+name = "a removed select keeps its dropdown"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    crate::script::is_connected(node)
+        && !crate::forms::is_disabled(node)'''
+to = '''    !crate::forms::is_disabled(node)'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::a_removed"]
+
+[[mutant]]
+name = "no select matches :open"
+file = "crates/dom_api/src/select_type.rs"
+from = '''Some(FormControlData::Select(state)) if state.popup_open),'''
+to = '''Some(FormControlData::Select(state)) if state.popup_open && false),'''
+
+[[mutant]]
+name = ":open isn't a form state"
+file = "crates/dom/src/node.rs"
+from = '''            | Self::MULTI_SELECT_FOCUS.0
+            | Self::OPEN.0,'''
+to = '''            | Self::MULTI_SELECT_FOCUS.0,'''
+
+[[mutant]]
+name = ":open doesn't parse"
+file = "crates/css/src/selector.rs"
+from = '''        (Self::Open, "open"),'''
+to = '''        (Self::Open, "-kun-open"),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::open"]
+
+[[mutant]]
+name = "a dialog isn't open by its attribute"
+file = "crates/style/src/selector.rs"
+from = '''                    name.is_html(&local_name!("details")) || name.is_html(&local_name!("dialog"))'''
+to = '''                    name.is_html(&local_name!("details"))'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::open"]
+
+[[mutant]]
+name = ":open matches no state"
+file = "crates/style/src/selector.rs"
+from = '''        PseudoClass::Open => ElementState::OPEN,'''
+to = '''        PseudoClass::Open => ElementState::NONE,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::open"]
+
+[[mutant]]
+name = ":open isn't an attribute feature"
+file = "crates/style/src/lib.rs"
+from = '''                if matches!(class, PseudoClass::Open) {'''
+to = '''                if false {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::open"]
+
+[[mutant]]
+name = "a press on the page leaves the dropdown"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if button == MouseButton::Left
+            && let Some((frame, select)) = self.popup.take()
+        {'''
+to = '''        if button == MouseButton::Left
+            && let Some((frame, select)) = self.popup.take().filter(|_| false)
+        {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::a_selects"]
+
+[[mutant]]
+name = "the press that closed it opens it again"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if self.popup_closed_by_press == Some(select.id()) {'''
+to = '''        if false {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::a_selects"]
+
+[[mutant]]
+name = "a press closing it keeps the next from opening it"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.handle_popup_requests();
+        self.popup_closed_by_press = None;'''
+to = '''        self.handle_popup_requests();'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::a_selects"]
+
+[[mutant]]
+name = "the renderer doesn't close a select's that can't keep it"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            !frame_there
+                || !dom_api::select_type::can_keep_popup_menu(&self.dom.borrow_mut().read(), select)'''
+to = '''            !frame_there'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::a_removed"]
+
+[[mutant]]
+name = "a hide asked for isn't sent"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                        if self.popup.as_ref().is_some_and(|(_, s)| s.id() == select) {
+                            self.popup = None;
+                            let _ = self.to_browser.send(RendererHostMsg::HidePopupMenu);'''
+to = '''                        if self.popup.as_ref().is_some_and(|(_, s)| s.id() == select) {
+                            self.popup = None;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::a_blurred"]
+
+[[mutant]]
+name = "the browser's result isn't passed on"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                if let Some((frame, select)) = self.popup.take() {
+                    self.close_popup_in_dom(frame, &select, result);'''
+to = '''                if let Some((_, _)) = self.popup.take() {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::a_selects"]
+
+[[mutant]]
+name = "the list has no row limit"
+file = "crates/shell/src/popup_menu.rs"
+from = '''const MAX_ROWS: usize = 20;'''
+to = '''const MAX_ROWS: usize = 40;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "popup_menu"]
+
+[[mutant]]
+name = "the list is always below"
+file = "crates/shell/src/popup_menu.rs"
+from = '''        let (y, height) = if wanted <= below || below >= above {'''
+to = '''        let (y, height) = if true {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "popup_menu"]
+
+[[mutant]]
+name = "the list may be narrower than the select"
+file = "crates/shell/src/popup_menu.rs"
+from = '''        let width = (widest.ceil() + 2.0 * PADDING_X + 2.0 * BORDER).max(anchor.width);'''
+to = '''        let width = widest.ceil() + 2.0 * PADDING_X + 2.0 * BORDER;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "popup_menu"]
+
+[[mutant]]
+name = "the list goes out of the window"
+file = "crates/shell/src/popup_menu.rs"
+from = '''        let x = x.min(window.width - width).max(0.0);'''
+to = '''        let x = x.max(0.0);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "popup_menu"]
+
+[[mutant]]
+name = "a disabled option selected is highlighted"
+file = "crates/shell/src/popup_menu.rs"
+from = '''                .filter(|i| menu.items.get(*i).is_some_and(pickable)),'''
+to = ''','''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "popup_menu"]
+
+[[mutant]]
+name = "the pointer highlights a disabled option"
+file = "crates/shell/src/popup_menu.rs"
+from = '''        match self.item_at(point).filter(|i| pickable(&self.items[*i])) {'''
+to = '''        match self.item_at(point) {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "popup_menu"]
+
+[[mutant]]
+name = "a release picks a disabled option"
+file = "crates/shell/src/popup_menu.rs"
+from = '''        let index = self.item_at(point).filter(|i| pickable(&self.items[*i]))?;'''
+to = '''        let index = self.item_at(point)?;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "popup_menu"]
+
+[[mutant]]
+name = "the wheel scrolls past the last row"
+file = "crates/shell/src/popup_menu.rs"
+from = '''            (self.scroll + rows).min(last)'''
+to = '''            self.scroll + rows'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "popup_menu"]
+
+[[mutant]]
+name = "Escape picks"
+file = "crates/shell/src/popup_menu.rs"
+from = '''            "Escape" => return KeyOutcome::Closed(PopupMenuResult::Canceled { by_press: false }),'''
+to = '''            "Escape" => return KeyOutcome::Closed(picked(self)),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "popup_menu"]
+
+[[mutant]]
+name = "Alt+ArrowDown moves"
+file = "crates/shell/src/popup_menu.rs"
+from = '''            "ArrowDown" | "ArrowUp" if alt => return KeyOutcome::Closed(picked(self)),'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "popup_menu"]
+
+[[mutant]]
+name = "the keys stop on what can't be picked"
+file = "crates/shell/src/popup_menu.rs"
+from = '''            .filter(|i| self.items.get(*i).is_some_and(pickable))'''
+to = '''            .filter(|i| self.items.get(*i).is_some())'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "popup_menu"]
+
+[[mutant]]
+name = "the highlighted row below isn't scrolled to"
+file = "crates/shell/src/popup_menu.rs"
+from = '''        } else if index >= self.scroll + self.rows {
+            self.scroll = index + 1 - self.rows;
+        }'''
+to = '''        }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "popup_menu"]
+
+[[mutant]]
+name = "the highlighted row isn't painted"
+file = "crates/shell/src/popup_menu.rs"
+from = '''            if highlighted {
+                fill(&mut list, row, HIGHLIGHT);
+            }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "popup_menu"]
+
+[[mutant]]
+name = "a toolbar press leaves it"
+file = "crates/shell/src/browser_view.rs"
+from = '''                self.close_popup(PopupMenuResult::Canceled { by_press: true });'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::a_selects"]
+
+[[mutant]]
+name = "the keys go to the page while it is shown"
+file = "crates/shell/src/browser_view.rs"
+from = '''        if input.pressed
+            && let Some(popup) = &mut self.popup
+        {'''
+to = '''        if input.pressed
+            && let Some(popup) = self.popup.as_mut().filter(|_| false)
+        {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::a_selects"]
+
+[[mutant]]
+name = "a resize leaves it"
+file = "crates/shell/src/browser_view.rs"
+from = '''        self.scale = scale;
+        self.close_popup(PopupMenuResult::Canceled { by_press: false });'''
+to = '''        self.scale = scale;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::a_selects"]
+
+[[mutant]]
+name = "a wheel outside leaves it"
+file = "crates/shell/src/browser_view.rs"
+from = '''            self.close_popup(PopupMenuResult::Canceled { by_press: false });
+            self.update();
+        }
+        let (buttons, modifiers) = (self.buttons, self.page_modifiers());'''
+to = '''            self.update();
+        }
+        let (buttons, modifiers) = (self.buttons, self.page_modifiers());'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::a_selects"]
+
+[[mutant]]
+name = "a release on a row doesn't pick it"
+file = "crates/shell/src/browser_view.rs"
+from = '''                if let Some(result) = self.popup.as_mut().and_then(|popup| popup.mouse_up(point)) {'''
+to = '''                if let Some(result) = self.popup.as_mut().and_then(|popup| popup.mouse_up(point)).filter(|_| false) {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::a_selects"]
+
+[[mutant]]
+name = "a tab not shown has one"
+file = "crates/shell/src/browser_view.rs"
+from = '''                if let Some(anchor) = anchor.filter(|_| tab == self.tabs.active().tab()) {'''
+to = '''                if let Some(anchor) = anchor {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::only_the_tab"]
+
+[[mutant]]
+name = "the list is under the web views"
+file = "crates/shell/src/browser_view.rs"
+from = '''                        over_surfaces: true,'''
+to = '''                        over_surfaces: false,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::a_selects"]
+
+[[mutant]]
+name = "a layer over the surfaces is drawn under them"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''            let quads = if properties.over_surfaces {'''
+to = '''            let quads = if properties.over_surfaces && false {'''
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "a_layer_over_the_surfaces"]

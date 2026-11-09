@@ -1,0 +1,45 @@
+# Mutation test of the shared root cells (stage 3, continued): a clone
+# shares its root, which goes with the last clone:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-3d-cells.toml
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::"]
+timeout = 600
+
+[[mutant]]
+name = "a root goes with any of its clones"
+file = "crates/dom/src/handle.rs"
+from = '''        if Rc::get_mut(&mut cell).is_some() {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "a root never goes"
+file = "crates/dom/src/handle.rs"
+from = '''        if Rc::get_mut(&mut cell).is_some() {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a clone makes a root of its own"
+file = "crates/dom/src/handle.rs"
+from = '''        Self {
+            cell: ManuallyDrop::new(Rc::clone(&self.cell)),
+        }'''
+to = '''        Self::new(&self.cell.persistent, &self.cell.roots)'''
+
+[[mutant]]
+name = "a spare cell keeps the object it had"
+file = "crates/dom/src/handle.rs"
+from = '''        unique.object = unique.persistent.get().expect("set to something");'''
+to = ''''''
+
+[[mutant]]
+name = "a spare cell still roots what it pointed to"
+file = "crates/dom/src/handle.rs"
+from = '''        unique.persistent.set(&self.anchor.get_rust_obj());'''
+to = ''''''
+
+[[mutant]]
+name = "the spare cells outlive the isolate, and the roots with them"
+file = "crates/dom/src/handle.rs"
+from = '''        let spare = std::mem::take(&mut *self.spare.borrow_mut());
+        drop(spare);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--lib", "handle::"]

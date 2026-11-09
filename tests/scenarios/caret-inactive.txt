@@ -1,0 +1,19 @@
+# The caret without blinking: it moves with the arrow keys, the text as it
+# was; it shows only while the page has the focus: it goes when the
+# address field takes it, and comes back with a click in the field.
+navigate pages/caret.html
+wait-loaded
+click #field
+type "abc"
+wait-text #out "focused abc"
+capture end
+key ArrowLeft
+expect-differs end #field
+capture shown
+key primary+l
+expect-differs shown #field
+screenshot address-field
+capture gone
+click #field
+expect-differs gone #field
+screenshot back

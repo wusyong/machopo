@@ -1,0 +1,73 @@
+test = ["sh", "-c", "cargo test -q -p dom_js --test it -- wake_lock:: navigator:: && cargo test -q -p dom --test it -- navigator::"]
+timeout = 1800
+
+[[mutant]]
+name = "the permission is answered in the request's task"
+file = "crates/dom_api/src/wake_lock.rs"
+from = '''    if !answered {
+        let task = Task::WakeLockPermission {'''
+to = '''    if false {
+        let task = Task::WakeLockPermission {'''
+
+[[mutant]]
+name = "a hidden page's request is taken"
+file = "crates/dom_api/src/wake_lock.rs"
+from = '''    if !page_visible(cx, &document) {
+        return Err(not_allowed(NOT_VISIBLE));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a lock is granted to a page hidden meanwhile"
+file = "crates/dom_api/src/wake_lock.rs"
+from = '''    if !page_visible(cx, &document) {
+        promise.reject(cx, not_allowed(NOT_VISIBLE));
+        return;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "hiding the page releases nothing"
+file = "crates/dom_api/src/document.rs"
+from = '''    crate::wake_lock::page_visibility_changed(cx, document);'''
+to = ''''''
+
+[[mutant]]
+name = "a release fires nothing"
+file = "crates/dom_api/src/wake_lock.rs"
+from = '''    crate::event::dispatch(cx, &Object::EventTarget(sentinel.clone()), &event);'''
+to = '''    let _ = event;'''
+
+[[mutant]]
+name = "a released lock isn't released"
+file = "crates/dom/src/wake_lock.rs"
+from = '''        data.released.store(true, Ordering::Relaxed);'''
+to = ''''''
+
+[[mutant]]
+name = "the others aren't linked again"
+file = "crates/dom/src/wake_lock.rs"
+from = '''        for lock in kept {
+            sentinel_data(lock.object())
+                .next
+                .set_from(self, &owner.newest);
+            owner.newest.set(self, lock.persistent());
+        }'''
+to = '''        drop(kept);'''
+
+[[mutant]]
+name = "a released lock stays linked"
+file = "crates/dom/src/wake_lock.rs"
+from = '''            .filter(|s| !s.ptr_eq(sentinel))'''
+to = '''            .filter(|_| true)'''
+
+[[mutant]]
+name = "the locks are released newest first"
+file = "crates/dom/src/wake_lock.rs"
+from = '''        found.reverse();
+        found
+    }
+}'''
+to = '''        found
+    }
+}'''

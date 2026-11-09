@@ -1,0 +1,119 @@
+# Mutation test of step 2b (insertNode, surroundContents):
+# python3 scripts/test.py mutate rfcs/0037-range/mutants-2b.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "ranges::"]
+timeout = 600
+
+[[mutant]]
+name = "the node's own start takes it"
+file = "crates/dom_api/src/range.rs"
+from = '''            || start.ptr_eq(node)
+        {'''
+to = '''        {'''
+
+[[mutant]]
+name = "inserted before the start's first child"
+file = "crates/dom_api/src/range.rs"
+from = '''                .nth(start_offset as usize)'''
+to = '''                .next()'''
+
+[[mutant]]
+name = "split before checking"
+file = "crates/dom_api/src/range.rs"
+from = '''    crate::node::check_pre_insert(cx, &parent, node, reference.as_ref())?;
+    let mut reference = if start_is_text {'''
+to = '''    let mut reference = if start_is_text {'''
+
+[[mutant]]
+name = "the node as its own reference"
+file = "crates/dom_api/src/range.rs"
+from = '''    if reference.as_ref().is_some_and(|r| r.ptr_eq(node)) {'''
+to = '''    if false && reference.as_ref().is_some_and(|r| r.ptr_eq(node)) {'''
+
+[[mutant]]
+name = "the node not taken out first"
+file = "crates/dom_api/src/range.rs"
+from = '''    if node.get(&cx.read()).parent().is_some() {
+        cx.mutate().remove(node);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a fragment counts as one node"
+file = "crates/dom_api/src/range.rs"
+from = '''        at + if node.kind() == NodeKind::DocumentFragment {'''
+to = '''        at + if false {'''
+
+[[mutant]]
+name = "a range that isn't collapsed ends after the node"
+file = "crates/dom_api/src/range.rs"
+from = '''    let points = Points::of(cx, this);
+    if points.collapsed() {
+        cx.mutate()'''
+to = '''    let points = Points::of(cx, this);
+    if true {
+        cx.mutate()'''
+
+[[mutant]]
+name = "a collapsed range doesn't end after the node"
+file = "crates/dom_api/src/range.rs"
+from = '''    let points = Points::of(cx, this);
+    if points.collapsed() {
+        cx.mutate()'''
+to = '''    let points = Points::of(cx, this);
+    if false {
+        cx.mutate()'''
+
+[[mutant]]
+name = "an element partly in it surrounded"
+file = "crates/dom_api/src/range.rs"
+from = '''        if partly
+            .into_iter()
+            .any(|n| !matches!(n.kind(), NodeKind::Text | NodeKind::CdataSection))
+        {'''
+to = '''        if false
+            && partly
+                .into_iter()
+                .any(|n| !matches!(n.kind(), NodeKind::Text | NodeKind::CdataSection))
+        {'''
+
+[[mutant]]
+name = "a fragment as the new parent"
+file = "crates/dom_api/src/range.rs"
+from = '''        NodeKind::Document | NodeKind::Doctype | NodeKind::DocumentFragment
+    ) {'''
+to = '''        NodeKind::Document | NodeKind::Doctype
+    ) {'''
+
+[[mutant]]
+name = "the new parent keeps its children"
+file = "crates/dom_api/src/range.rs"
+from = '''        crate::node::replace_all(cx, None, &new_parent)?;'''
+to = ''''''
+
+[[mutant]]
+name = "the surrounded range isn't collapsed first"
+file = "crates/dom_api/src/range.rs"
+from = '''    let (fragment, collapse_to) = clone_or_extract(cx, &points, true)?;
+    if let Some((node, offset)) = collapse_to {
+        cx.mutate()
+            .set_range(this, (&node, offset), (&node, offset));
+    }
+    if new_parent'''
+to = '''    let (fragment, _) = clone_or_extract(cx, &points, true)?;
+    if new_parent'''
+
+[[mutant]]
+name = "the new parent isn't selected"
+file = "crates/dom_api/src/range.rs"
+from = '''    append(cx, &new_parent, fragment)?;
+    select_node(cx, this, new_parent)'''
+to = '''    append(cx, &new_parent, fragment)?;
+    let _ = new_parent;
+    Ok(())'''
+
+[[mutant]]
+name = "insertNode isn't [CEReactions]"
+file = "crates/dom_api/src/interfaces/core_dom.rs"
+from = '''        [CEReactions] method insertNode(node: Node) = range::insert_node;'''
+to = '''        method insertNode(node: Node) = range::insert_node;'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "spec::"]

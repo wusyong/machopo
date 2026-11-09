@@ -1,0 +1,15 @@
+# A prototype for RFC 0001 (Q16), not part of machopo's workspace. It needs our
+# rusty_v8 fork's tail allocation (Rust only) and `StandaloneHeap` (in the
+# fork's C++, not released yet), so link a V8 built from the fork:
+#   RUSTY_V8_ARCHIVE=../../../../third_party/rusty_v8_artifacts \
+#     CARGO_TARGET_DIR=../../../target cargo run --release -- all
+[workspace]
+
+[package]
+name = "q16-prototype"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+v8 = { version = "=152.2.0", path = "../../../../third_party/rusty_v8", features = ["v8_enable_pointer_compression"] }

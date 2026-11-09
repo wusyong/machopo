@@ -1,0 +1,161 @@
+# Mutation test of stage E1b: whether an element is inside a blocking
+# `wheel` listener is a bit of its style, inherited; paint records it with
+# the targets, and the wheel event handler region comes from them:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-e1b.toml
+test = ["cargo", "test", "-q", "-p", "style", "-p", "paint", "-p", "renderer"]
+timeout = 2400
+
+[[mutant]]
+name = "an element's own listener doesn't count"
+file = "crates/style/src/lib.rs"
+from = '''        style.inside_blocking_wheel_event_handler |= self.blocking_wheel;'''
+to = ''''''
+
+[[mutant]]
+name = "the bit isn't inherited"
+file = "crates/computed_style/src/lib.rs"
+from = '''            pointer_events,
+            inside_blocking_wheel_event_handler,
+            border_collapse,'''
+to = '''            pointer_events,
+            border_collapse,'''
+
+[[mutant]]
+name = "a listener coming or going doesn't style its element again"
+file = "crates/style/src/lib.rs"
+from = '''                || flags.wheel_listeners_changed
+'''
+to = ''''''
+
+[[mutant]]
+name = "an element's listener marks nothing"
+file = "crates/dom/src/scope.rs"
+from = '''            NodeKind::Element => set_wheel_listeners_changed(node),'''
+to = '''            NodeKind::Element => {}'''
+
+[[mutant]]
+name = "a document's or shadow root's listener marks nothing"
+file = "crates/dom/src/scope.rs"
+from = '''                    if node.kind() == NodeKind::Element {
+                        set_wheel_listeners_changed(node);
+                    }'''
+to = ''''''
+
+[[mutant]]
+name = "a listener removed marks nothing"
+file = "crates/dom/src/scope.rs"
+from = '''            self.unlink_listener(head, previous, listener);
+            self.wheel_listeners_changed(target, event_type);
+        }'''
+to = '''            self.unlink_listener(head, previous, listener);
+        }'''
+
+[[mutant]]
+name = "a listener taken off by its handle marks nothing"
+file = "crates/dom/src/scope.rs"
+from = '''            self.unlink_listener(head, previous, found);
+            self.wheel_listeners_changed(target, &event_type);'''
+to = '''            self.unlink_listener(head, previous, found);
+            let _ = event_type;'''
+
+[[mutant]]
+name = "an event handler coming marks nothing"
+file = "crates/dom/src/scope.rs"
+from = '''                self.wheel_listener_added(event_type);
+                self.wheel_listeners_changed(target, event_type);
+                (self.append_listener(head, listener), true)'''
+to = '''                self.wheel_listener_added(event_type);
+                (self.append_listener(head, listener), true)'''
+
+[[mutant]]
+name = "an event handler going marks nothing"
+file = "crates/dom/src/scope.rs"
+from = '''                self.unlink_listener(head, previous, listener);
+                self.wheel_listeners_changed(target, event_type);
+            }
+            return;'''
+to = '''                self.unlink_listener(head, previous, listener);
+            }
+            return;'''
+
+[[mutant]]
+name = "the root element doesn't count its document's"
+file = "crates/dom/src/scope.rs"
+from = '''                parent.wheel_listeners().blocking
+                    || unsafe { window.get() }'''
+to = '''                unsafe { window.get() }'''
+
+[[mutant]]
+name = "the root element doesn't count its window's"
+file = "crates/dom/src/scope.rs"
+from = '''                    || unsafe { window.get() }
+                        .is_some_and(|window| unsafe { wheel_listeners_in(&window.first_listener) }.blocking)'''
+to = ''''''
+
+[[mutant]]
+name = "an element at the top of a shadow tree doesn't count its shadow root's"
+file = "crates/dom/src/scope.rs"
+from = '''            _ => parent.kind() == NodeKind::DocumentFragment && parent.wheel_listeners().blocking,'''
+to = '''            _ => false,'''
+
+[[mutant]]
+name = "a run of targets doesn't break where the bit changes"
+file = "crates/paint/src/lib.rs"
+from = '''                    && chunk.container == container
+                    && chunk.wheel == wheel =>'''
+to = '''                    && chunk.container == container =>'''
+
+[[mutant]]
+name = "a border box's target isn't inside"
+file = "crates/paint/src/lib.rs"
+from = '''                container,
+                fragment.style.inside_blocking_wheel_event_handler,
+            );'''
+to = '''                container,
+                false,
+            );'''
+
+[[mutant]]
+name = "a line's targets aren't inside"
+file = "crates/paint/src/lib.rs"
+from = '''                    let wheel = style.inside_blocking_wheel_event_handler;'''
+to = '''                    let wheel = { let _ = style; false };'''
+
+[[mutant]]
+name = "an SVG element's targets aren't inside"
+file = "crates/paint/src/svg.rs"
+from = '''        let wheel = node.style.inside_blocking_wheel_event_handler;'''
+to = '''        let wheel = false;'''
+
+[[mutant]]
+name = "a child frame's canvas isn't inside"
+file = "crates/paint/src/lib.rs"
+from = '''            .is_some_and(|link| link.fragment.style.inside_blocking_wheel_event_handler)'''
+to = '''            .is_some_and(|_| false)'''
+
+[[mutant]]
+name = "every target is in the wheel region"
+file = "crates/paint/src/hit_test.rs"
+from = '''    for chunk in data.chunks.iter().filter(|chunk| chunk.wheel) {'''
+to = '''    for chunk in data.chunks.iter() {'''
+
+[[mutant]]
+name = "the wheel region isn't cut by the clips that move with it"
+file = "crates/paint/src/hit_test.rs"
+from = '''            for clip in &clips {
+                rect = rect.intersect(clip);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "the root element's listener isn't the whole document's"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                .is_some_and(|root| root.has_own_blocking_wheel_listener());'''
+to = '''                .is_some_and(|_| false);'''
+
+[[mutant]]
+name = "an iframe whose child frame went takes its line-phase items"
+file = "crates/paint/src/lib.rs"
+from = '''                        && !cached.child_frame
+'''
+to = ''''''

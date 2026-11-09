@@ -1,0 +1,193 @@
+# Stage 4e-4a-1: the custom element registry on the new DOM: `dom_next`'s
+# registry and definitions, `dom_api_next`'s `define`, `get`, `getName` and
+# `whenDefined`, `dom_js_next`'s reading of the constructor and the
+# promises.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it custom_elements && cargo test -q -p dom_js_next --test it custom_elements"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: a registry made each time"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''        window.custom_elements.set(self.gc, Some(registry));
+        registry'''
+to = '''        registry'''
+
+[[mutant]]
+name = "dom: a name without a hyphen"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''        && name.contains('-')
+'''
+to = '''
+'''
+
+[[mutant]]
+name = "dom: a name with a space"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''c.is_ascii_uppercase() || matches!('''
+to = '''c.is_ascii_uppercase() || false && matches!('''
+
+[[mutant]]
+name = "dom: a reserved name"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''        && !RESERVED_CUSTOM_ELEMENT_NAMES.contains(&name)'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a definition found by another name"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''            .find(|definition| definition.name.get() == name)'''
+to = '''            .find(|definition| definition.name.get() != name)'''
+
+[[mutant]]
+name = "dom: one promise number for all"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''        let id = self.changes.promises_made.get().checked_add(1).expect("fewer than 2^64 promises");'''
+to = '''        let id = self.changes.promises_made.get().checked_add(0).expect("fewer than 2^64 promises");'''
+
+[[mutant]]
+name = "dom: pending promises kept when taken"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''                taken.push(list.remove(self.gc, index).id.get());'''
+to = '''                taken.push(pending.id.get());
+                index = index.saturating_add(1);'''
+
+[[mutant]]
+name = "dom: a pending promise of another name"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''            .find(|pending| pending.name.get() == name)'''
+to = '''            .find(|pending| pending.name.get() != name)'''
+
+[[mutant]]
+name = "api: any function a constructor"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''    if !host.constructor_is_constructor() {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: a name defined twice"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''    if host.read(|cx| cx.custom_element_definition(this.get(cx.gc), id).is_some()) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: a constructor defined twice"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''    if host.constructor_is_defined(&this) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: extends taken"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''    if options.extends.is_some() {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: define while one runs"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''    if host.read(|cx| cx.element_definition_is_running(this.get(cx.gc))) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: running left set"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''    host.mutate(|cx| cx.set_element_definition_is_running(this.get(cx.gc), false));'''
+to = ''''''
+
+[[mutant]]
+name = "api: pending promises left"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''    if !pending.is_empty() {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: getName any definition's"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''        .find(|definition| op.same_callback(cx, cx.definition_edges(*definition).constructor, constructor));'''
+to = '''        .find(|definition| { let _ = op.same_callback(cx, cx.definition_edges(*definition).constructor, constructor); true });'''
+
+[[mutant]]
+name = "api: whenDefined a new promise each time"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''        Some(edge) => PromiseOf::Existing(edge),'''
+to = '''        Some(_) => PromiseOf::Pending(cx.add_when_defined(this, id)),'''
+
+[[mutant]]
+name = "api: whenDefined of a defined name pending"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''    if let Some(definition) = cx.custom_element_definition(this, id) {'''
+to = '''    if let Some(definition) = None::<gc::Gc<'gc, dom_next::CustomElementDefinition>> {'''
+
+[[mutant]]
+name = "js: a getter's exception not noted"
+file = "crates/dom_js_next/src/front.rs"
+from = '''                self.call.rare().threw = true;'''
+to = ''''''
+
+[[mutant]]
+name = "js: thrown over a getter's exception"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        if self.call.rare.as_ref().is_some_and(|rare| rare.threw) {
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "js: the constructor held weakly"
+file = "crates/dom_js_next/src/front.rs"
+from = '''            op.no_gc.set_strong(edges.constructor, constructor);'''
+to = '''            op.no_gc.set_wrapper(edges.constructor, constructor);'''
+
+[[mutant]]
+name = "js: whenDefined not resolved"
+file = "crates/dom_js_next/src/front.rs"
+from = '''            resolver.resolve(scope, constructor);'''
+to = '''            let _ = (resolver, constructor);'''
+
+[[mutant]]
+name = "js: a pending resolver not kept"
+file = "crates/dom_js_next/src/front.rs"
+from = '''                state.when_defined.insert(id, global);'''
+to = '''                drop((state, id, global));'''
+
+[[mutant]]
+name = "js: any function a constructor"
+file = "crates/dom_js_next/src/front.rs"
+from = '''.is_ok_and(|object| object.is_constructor())'''
+to = '''.is_ok()'''
+
+[[mutant]]
+name = "js: no constructor defined"
+file = "crates/dom_js_next/src/front.rs"
+from = '''                .any(|definition| op.same_callback(cx, cx.definition_edges(definition).constructor, CallbackArg(0)))'''
+to = '''                .any(|definition| { let _ = op.same_callback(cx, cx.definition_edges(definition).constructor, CallbackArg(0)); false })'''
+
+[[mutant]]
+name = "js: observedAttributes read with no callback"
+file = "crates/dom_js_next/src/custom_elements.rs"
+from = '''    if callbacks[3].is_some() {'''
+to = '''    if true {'''
+
+[[mutant]]
+name = "js: a callback that isn't a function taken"
+file = "crates/dom_js_next/src/custom_elements.rs"
+from = '''        Ok(function) => Some(Some(function)),'''
+to = '''        Ok(function) => Some(Some(function)),
+        Err(_) if true => Some(None),'''
+
+[[mutant]]
+name = "js: form callbacks not read"
+file = "crates/dom_js_next/src/custom_elements.rs"
+from = '''            callback(scope, prototype, name)?;'''
+to = '''            let _ = name;'''
+
+[[mutant]]
+name = "js: a prototype that isn't an object taken"
+file = "crates/dom_js_next/src/custom_elements.rs"
+from = '''    let Ok(prototype) = v8::Local::<v8::Object>::try_from(prototype) else {'''
+to = '''    let Ok(prototype) = v8::Local::<v8::Object>::try_from(prototype).or_else(|_| Ok::<_, ()>(constructor)) else {'''
+
+[[mutant]]
+name = "js: disabledFeatures not read"
+file = "crates/dom_js_next/src/custom_elements.rs"
+from = '''    info.disabled_features = strings(scope, constructor, "disabledFeatures")?;'''
+to = ''''''

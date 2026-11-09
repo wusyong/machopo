@@ -1,0 +1,239 @@
+# Step 1d's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0033-canvas-2d/mutations-1d.toml`. Each names the tests closest to
+# what it breaks; the last ones go through the canvas reftests (wptrunner).
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "layerize::"]
+timeout = 1500
+
+# paint: which canvases are layers.
+
+[[mutant]]
+name = "a canvas is never a layer"
+file = "crates/paint/src/layerize.rs"
+from = '''    (item.kind == DisplayItemKind::Canvas
+        && can_be_layer'''
+to = '''    (false
+        && can_be_layer'''
+
+[[mutant]]
+name = "a canvas's layer takes the chunks after it"
+file = "crates/paint/src/layerize.rs"
+from = '''                    && last.canvas.is_none()
+                    && canvas.is_none() =>'''
+to = '''                    && canvas.is_none() =>'''
+
+[[mutant]]
+name = "a canvas's chunk joins the layer before it"
+file = "crates/paint/src/layerize.rs"
+from = '''                    && last.canvas.is_none()
+                    && canvas.is_none() =>'''
+to = '''                    && last.canvas.is_none() =>'''
+
+[[mutant]]
+name = "a layer under any transform"
+file = "crates/paint/src/layerize.rs"
+from = '''        if t.matrix.as_translation().is_none() {
+            return false;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a layer under opacity"
+file = "crates/paint/src/layerize.rs"
+from = '''    trees.effect_chain(effect).is_empty() && rounded <= 1'''
+to = '''    rounded <= 1'''
+
+[[mutant]]
+name = "a layer under any rounded clips"
+file = "crates/paint/src/layerize.rs"
+from = '''    trees.effect_chain(effect).is_empty() && rounded <= 1'''
+to = '''    trees.effect_chain(effect).is_empty()'''
+
+[[mutant]]
+name = "a canvas's layer's bounds are its chunk's"
+file = "crates/paint/src/layerize.rs"
+from = '''        if layer.canvas.is_some() {
+            layer.bounds = artifact.items[artifact.chunks[layer.chunks.start].items.start].visual_rect;
+            continue;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a canvas's layer is in its scroller's space"
+file = "crates/paint/src/layerize.rs"
+from = '''        if let Some(canvas) = self.canvas {
+            return canvas.state.transform;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a canvas's layer is under its scroller's clip"
+file = "crates/paint/src/layerize.rs"
+from = '''        if let Some(canvas) = self.canvas {
+            return canvas.state.clip;
+        }'''
+to = ''''''
+
+# renderer: the texture layers, and draws without a paint.
+
+[[mutant]]
+name = "a canvas's layer gets a new id each time"
+file = "crates/renderer/src/compositing.rs"
+from = '''                    let id = last_canvases
+                        .remove(&canvas.element)
+                        .unwrap_or_else(LayerId::next);'''
+to = '''                    let id = LayerId::next();
+                    let _ = &mut last_canvases;'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "compositing"]
+
+[[mutant]]
+name = "a canvas's layer isn't remembered"
+file = "crates/renderer/src/compositing.rs"
+from = '''                    self.canvases.insert(canvas.element, id);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "compositing"]
+
+[[mutant]]
+name = "an opaque canvas's layer isn't"
+file = "crates/renderer/src/compositing.rs"
+from = '''                        contents_opaque: opaque,'''
+to = '''                        contents_opaque: false,'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "compositing"]
+
+[[mutant]]
+name = "a canvas drawn on that is a layer is painted again"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            if self.compositor.canvas_layer(canvas).is_some() {'''
+to = '''            if false {'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "frame_view::tests::a_canvas_layer"]
+
+[[mutant]]
+name = "a canvas's layer keeps its old snapshot"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        if !paints && !textures.is_empty() {'''
+to = '''        if false {'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "frame_view::tests::a_canvas_layer"]
+
+[[mutant]]
+name = "a canvas's layer drawn on isn't stale"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                self.stale_canvases.insert(canvas);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "frame_view::tests::a_canvas_layer"]
+
+[[mutant]]
+name = "a paint keeps a stale canvas's item"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            let stale: Vec<NodeId> = self.stale_canvases.drain().collect();'''
+to = '''            let stale: Vec<NodeId> = Vec::new();'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "frame_view::tests::a_canvas_layer"]
+
+[[mutant]]
+name = "a canvas reset keeps its layer"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                None => gone.push(canvas),'''
+to = '''                None => {}'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "frame_view::tests::a_canvas_layer"]
+
+# compositor: the snapshot as a resource, and its quad.
+
+[[mutant]]
+name = "a new resource at each commit"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                            Some(LayerImpl::Texture(last)) if last.layer.snapshot == layer.snapshot => {'''
+to = '''                            Some(LayerImpl::Texture(last)) if false => {'''
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "texture"]
+
+[[mutant]]
+name = "a new snapshot keeps the old resource"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                            Some(LayerImpl::Texture(last)) if last.layer.snapshot == layer.snapshot => {'''
+to = '''                            Some(LayerImpl::Texture(last)) if true => {'''
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "texture"]
+
+[[mutant]]
+name = "a new snapshot damages nothing"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                    if was.layer.snapshot == is.layer.snapshot {'''
+to = '''                    if true {'''
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "texture"]
+
+[[mutant]]
+name = "a lost GPU keeps the snapshots' resources"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                    LayerImpl::Texture(layer) => layer.resource = None,'''
+to = '''                    LayerImpl::Texture(_) => {}'''
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "texture"]
+
+[[mutant]]
+name = "a snapshot never goes on the GPU"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                            .and_then(|gpu| gpu.create_shared_image(size, snapshot.as_bytes()));'''
+to = '''                            .and_then(|gpu| gpu.create_shared_image(size, snapshot.as_bytes()))
+                            .filter(|_| false);'''
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "texture"]
+
+[[mutant]]
+name = "a snapshot on the GPU keeps its pixels too"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                            Some(_) => Arc::from([]),'''
+to = '''                            Some(_) => Arc::from(snapshot.as_bytes()),'''
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "texture"]
+
+[[mutant]]
+name = "a texture quad isn't scaled"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                        (bounds.width * scale).round(),'''
+to = '''                        bounds.width.round(),'''
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "texture"]
+
+[[mutant]]
+name = "a texture layer is sampled at the nearest texel"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                            tex_coord_rect: RectF::from_size(resource.size.to_f32()),
+                            nearest_neighbor: false,'''
+to = '''                            tex_coord_rect: RectF::from_size(resource.size.to_f32()),
+                            nearest_neighbor: true,'''
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "texture"]
+
+[[mutant]]
+name = "tiles are sampled bilinearly"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                            tex_coord_rect: RectF::from_size(resource.size.to_f32()),
+                            nearest_neighbor: true,'''
+to = '''                            tex_coord_rect: RectF::from_size(resource.size.to_f32()),
+                            nearest_neighbor: false,'''
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "texture"]
+
+# viz.
+
+[[mutant]]
+name = "the software renderer samples the nearest texel"
+file = "crates/viz/src/software_renderer.rs"
+from = '''                        let t = if nearest_neighbor {'''
+to = '''                        let t = if true {'''
+test = ["cargo", "test", "-q", "-p", "viz", "--lib", "texture"]
+
+[[mutant]]
+name = "bilinear weights from the texel's corner"
+file = "crates/viz/src/software_renderer.rs"
+from = '''                            let (fu, fv) = (u - 0.5, v - 0.5);'''
+to = '''                            let (fu, fv) = (u, v);'''
+test = ["cargo", "test", "-q", "-p", "viz", "--lib", "texture"]
+
+[[mutant]]
+name = "the aggregator samples every texture at the nearest texel"
+file = "crates/viz/src/surface_aggregator.rs"
+from = '''                            tex_coord_rect,
+                            nearest_neighbor,'''
+to = '''                            tex_coord_rect,
+                            nearest_neighbor: true,'''
+test = ["cargo", "test", "-q", "-p", "viz", "--lib", "surface_aggregator"]
+
+# Through the reftests.
+
+[[mutant]]
+name = "a layer at a whole CSS px"
+file = "crates/renderer/src/compositing.rs"
+from = '''                    origin: gfx::PointF::new(bounds.x, bounds.y),'''
+to = '''                    origin: gfx::PointF::new(bounds.x.floor(), bounds.y.floor()),'''
+test = ["python3", "scripts/test.py", "reftest", "hidpi/c3-canvas-layer.html"]

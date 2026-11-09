@@ -1,0 +1,26 @@
+# iframes load their documents:
+# `src` (another file: another origin) and `srcdoc` (its `onload`
+# attribute too), `load` at each iframe
+# before the window's, `about:blank` at once, a failed load, a srcdoc that
+# navigates again, a navigation that replaces one in flight, a nested
+# iframe, `about:blank` set later,
+# a srcdoc and an about:blank document's relative `src` (resolved against
+# the page), and an
+# iframe removed while it loads.
+# The `src` document has a stylesheet of its own.
+navigate pages/iframe-loads.html
+wait-loaded
+wait-text #blank "about:blank loaded at once"
+wait-text #src "the src document loaded, of another origin"
+wait-text #srcdoc "the srcdoc document loaded"
+wait-text #srcdoc-script "the srcdoc document ran its script"
+wait-text #srcdoc-onload "the srcdoc document ran its onload attribute"
+wait-text #missing "a missing document still fires load"
+wait-text #replaced "the later navigation won"
+wait-text #nested "the nested iframe loaded first"
+wait-text #window "the window loaded after its iframes"
+wait-text #again "navigated again"
+wait-text #blank-later "navigated to about:blank"
+wait-text #relative "a srcdoc document's src resolved against the page"
+wait-text #relative-blank "an about:blank document's src resolved against the page"
+wait-text #removed "the removed iframe didn't load"

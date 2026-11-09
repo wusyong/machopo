@@ -1,0 +1,223 @@
+# Mutation test of stage 4c: floats in lines (2026-10-14):
+# python3 scripts/test.py mutate rfcs/0043-floats-text/mutants-4c.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "float::", "update::", "position::"]
+timeout = 300
+
+[[mutant]]
+name = "a float in inline content is a block"
+file = "crates/layout/src/lib.rs"
+from = '''                        _ if style.float != Float::None => {'''
+to = '''                        _ if false => {'''
+
+[[mutant]]
+name = "a float after a block is in the inline content after it"
+file = "crates/layout/src/lib.rs"
+from = '''                Child::Inline(InlineItem::OutOfFlow(id, _) | InlineItem::Float(id))
+                    if has_items || InlineItem::is_collapsible_space_only(&run) =>'''
+to = '''                Child::Inline(InlineItem::OutOfFlow(id, _))
+                    if has_items || InlineItem::is_collapsible_space_only(&run) =>'''
+
+[[mutant]]
+name = "floats alone are inline content"
+file = "crates/layout/src/lib.rs"
+from = '''        if !has_items && !only_floats && !content.iter().any(|c| matches!(c, Child::Block(_))) {'''
+to = '''        if !has_items && !content.iter().any(|c| matches!(c, Child::Block(_))) {'''
+
+[[mutant]]
+name = "a float in a line isn't a child of its box"
+file = "crates/layout/src/lib.rs"
+from = '''                | InlineItem::Float(id) => Some(*id),'''
+to = '''                => Some(*id),'''
+
+[[mutant]]
+name = "floats becoming one or no longer one aren't built again"
+file = "crates/layout/src/lib.rs"
+from = '''            || (old.float == Float::None) != (new.float == Float::None)'''
+to = ''''''
+
+[[mutant]]
+name = "a box that went into a new anonymous block is dropped"
+file = "crates/layout/src/lib.rs"
+from = '''            if !kept.contains(&child) && self.boxes[usize::from(child)].parent == Some(index) {'''
+to = '''            if !kept.contains(&child) {'''
+
+[[mutant]]
+name = "a float in a line has no size"
+file = "crates/layout/src/text.rs"
+from = '''                    float.margin_box = atomics.lay_out(float.id, space, self.height).margin_box;'''
+to = '''                    atomics.lay_out(float.id, space, self.height);'''
+
+[[mutant]]
+name = "floats in lines are never placed"
+file = "crates/layout/src/text.rs"
+from = '''        let places = width.is_some() && !self.floats.is_empty() && atomics.places_floats();'''
+to = '''        let places = false;'''
+
+[[mutant]]
+name = "the line cache keeps floats from being placed again"
+file = "crates/layout/src/text.rs"
+from = '''        if !places
+            && let Some((broken_at, beside, size)) = &self.broken'''
+to = '''        if let Some((broken_at, beside, size)) = &self.broken'''
+
+[[mutant]]
+name = "a float narrower than nothing widens its line"
+file = "crates/layout/src/text.rs"
+from = '''let size = self.floats[index].margin_box.width.max(0.0);'''
+to = '''let size = self.floats[index].margin_box.width;'''
+
+[[mutant]]
+name = "a float after one below its line can be beside it"
+file = "crates/layout/src/text.rs"
+from = '''                                if below.is_empty()
+                                    && !skipped.contains(&index)'''
+to = '''                                if !skipped.contains(&index)'''
+
+[[mutant]]
+name = "a float on the next line is beside it again"
+file = "crates/layout/src/text.rs"
+from = '''                                    && !skipped.contains(&index)
+                                    && float.advance'''
+to = '''                                    && float.advance'''
+
+[[mutant]]
+name = "a float at the end of its line isn't on it"
+file = "crates/layout/src/text.rs"
+from = '''                let on_line = |&&(_, at): &&(usize, f32)| at <= line.advance;'''
+to = '''                let on_line = |&&(_, at): &&(usize, f32)| at < line.advance;'''
+
+[[mutant]]
+name = "a float the line breaks before is beside it"
+file = "crates/layout/src/text.rs"
+from = '''                    .filter(|float| !on_line(float))'''
+to = '''                    .filter(|_| false)'''
+
+[[mutant]]
+name = "a float below a line the line breaks before goes below it"
+file = "crates/layout/src/text.rs"
+from = '''                for &(index, _) in below.iter().filter(on_line) {'''
+to = '''                for &(index, _) in below.iter() {'''
+
+[[mutant]]
+name = "the line isn't broken again beside its floats"
+file = "crates/layout/src/text.rs"
+from = '''                        placed[index] = true;
+                    }
+                    *bands = atomics.float_bands();'''
+to = '''                        placed[index] = true;
+                    }'''
+
+[[mutant]]
+name = "the next line isn't beside the floats below this one"
+file = "crates/layout/src/text.rs"
+from = '''                if any {
+                    *bands = atomics.float_bands();
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "floats beside a line too long for them go below it"
+file = "crates/layout/src/text.rs"
+from = '''                if content > left + BREAK_TOLERANCE
+                    && beside.is_empty()
+                    && let Some(lower) = bands.next_top(top)'''
+to = '''                if content > left + BREAK_TOLERANCE
+                    && let Some(lower) = bands.next_top(top)'''
+
+[[mutant]]
+name = "the floats don't add to the min-content width"
+file = "crates/layout/src/text.rs"
+from = '''            min = min.max(atomics.float_widths(&floats, AvailableSpace::MinContent));'''
+to = ''''''
+
+[[mutant]]
+name = "the floats don't add to the max-content width"
+file = "crates/layout/src/text.rs"
+from = '''            max += atomics.float_widths(&floats, AvailableSpace::MaxContent);'''
+to = ''''''
+
+[[mutant]]
+name = "a max-content size leaves the floats out"
+file = "crates/layout/src/lib.rs"
+from = '''                    (None, AvailableSpace::MaxContent) if floats => {
+                        Some(inline.content_widths(self).1)
+                    }'''
+to = ''''''
+
+[[mutant]]
+name = "a shrink-to-fit box with floats breaks its lines in the room"
+file = "crates/layout/src/lib.rs"
+from = '''                    .or(fit.filter(|_| floats))'''
+to = ''''''
+
+[[mutant]]
+name = "a block formatting context's root doesn't hold the floats in its lines"
+file = "crates/layout/src/lib.rs"
+from = '''                        size.height = size.height.max(inline.floats_bottom());'''
+to = ''''''
+
+[[mutant]]
+name = "a float's containing block is the border box"
+file = "crates/layout/src/lib.rs"
+from = '''        // A float's containing block is the content box.
+        ctx.apply_content_box_inset([inset.left, inset.right]);'''
+to = ''''''
+
+[[mutant]]
+name = "a float's top isn't from the content box"
+file = "crates/layout/src/lib.rs"
+from = '''            self.inset.top + top,
+            direction,'''
+to = '''            top,
+            direction,'''
+
+[[mutant]]
+name = "the fragments are broken beside the floats around only"
+file = "crates/layout/src/lib.rs"
+from = '''            inline.keep_laid_out_beside();'''
+to = ''''''
+
+[[mutant]]
+name = "a float in a line isn't put where it was placed"
+file = "crates/layout/src/lib.rs"
+from = '''            self.place_floats(&inline, output.size.width, inset);'''
+to = ''''''
+
+[[mutant]]
+name = "a float in a line passes up from where it was"
+file = "crates/layout/src/lib.rs"
+from = '''                    theirs.translate(b.layout.location);'''
+to = ''''''
+
+[[mutant]]
+name = "a float in a line comes before the atomic inlines"
+file = "crates/layout/src/lib.rs"
+from = '''                inline && self.boxes[usize::from(child)].style.float != Float::None'''
+to = '''                false && self.boxes[usize::from(child)].style.float != Float::None'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "float"]
+
+[[mutant]]
+name = "a float in a line isn't painted"
+file = "crates/paint/src/lib.rs"
+from = '''        if paints_children_whole(fragment) {
+            return;
+        }
+        let on_lines = children_on_lines(fragment);'''
+to = '''        if paints_children_whole(fragment) || children_on_lines(fragment) {
+            return;
+        }
+        let on_lines = children_on_lines(fragment);'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "float"]
+
+[[mutant]]
+name = "a float in a line isn't hit"
+file = "crates/paint/src/hit_test.rs"
+from = '''        if paints_children_whole(fragment) {
+            return None;
+        }
+        let on_lines = children_on_lines(fragment);'''
+to = '''        if paints_children_whole(fragment) || children_on_lines(fragment) {
+            return None;
+        }
+        let on_lines = children_on_lines(fragment);'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "float"]

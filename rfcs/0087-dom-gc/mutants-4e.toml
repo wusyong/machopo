@@ -1,0 +1,180 @@
+# Step 4e-1: the measuring tools. The `gc` crate's counts of concurrent
+# markings (finished, at the limit, the workers' time) and its `Gc.Weak`
+# trace event; `gc_bench`'s activity over the turns and the `ids`
+# workload; `bench.py gc`'s reading of the markings' pauses from the trace,
+# their summary and table. Run with `RUSTY_V8_ARCHIVE` (`test.py` checks
+# the third-party pins).
+test = ["cargo", "test", "-q", "-p", "gc"]
+timeout = 900
+
+# The gc crate.
+
+[[mutant]]
+name = "a marking at the limit isn't counted"
+file = "crates/gc/src/heap.rs"
+from = '''                if !self.marking_done() {
+                    self.markings_at_limit'''
+to = '''                if false && !self.marking_done() {
+                    self.markings_at_limit'''
+
+[[mutant]]
+name = "a marking done counts as at the limit"
+file = "crates/gc/src/heap.rs"
+from = '''                if !self.marking_done() {
+                    self.markings_at_limit'''
+to = '''                if true {
+                    self.markings_at_limit'''
+
+[[mutant]]
+name = "finished markings aren't counted"
+file = "crates/gc/src/heap.rs"
+from = '''        self.concurrent_markings
+            .set(self.concurrent_markings.get().saturating_add(1));'''
+to = '''        let _ = &self.concurrent_markings;'''
+
+[[mutant]]
+name = "the background runs aren't timed"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''            self.background_ns
+                .fetch_add(ns, std::sync::atomic::Ordering::Relaxed);'''
+to = '''            let _ = ns;'''
+
+[[mutant]]
+name = "the weak clearing isn't in the trace"
+file = "crates/gc/src/heap.rs"
+from = '''        platform.trace_begin("Gc.Weak");
+        self.clear_weak(weak, pairs);
+        platform.trace_end();'''
+to = '''        self.clear_weak(weak, pairs);'''
+
+# gc_bench.
+
+[[mutant]]
+name = "the activity counts the markings since the heap began"
+file = "crates/gc_bench/src/gc_heap.rs"
+from = '''        concurrent_markings: after
+            .concurrent_markings
+            .saturating_sub(before.concurrent_markings),'''
+to = '''        concurrent_markings: after.concurrent_markings,'''
+test = ["cargo", "test", "-q", "-p", "gc_bench"]
+
+[[mutant]]
+name = "the id table's peak isn't kept"
+file = "crates/gc_bench/src/gc_heap.rs"
+from = '''        peak_id_chunks = peak_id_chunks.max(heap.stats().id_chunks);'''
+to = '''        let _ = &mut peak_id_chunks;'''
+test = ["cargo", "test", "-q", "-p", "gc_bench"]
+
+[[mutant]]
+name = "the ids workload keeps every node"
+file = "crates/gc_bench/src/gc_heap.rs"
+from = '''                    if i % IDS_KEPT_ONE_IN == 0 {'''
+to = '''                    if i % IDS_KEPT_ONE_IN < IDS_KEPT_ONE_IN {'''
+test = ["cargo", "test", "-q", "-p", "gc_bench"]
+
+[[mutant]]
+name = "the ids workload gives no id"
+file = "crates/gc_bench/src/gc_heap.rs"
+from = '''                    cx.new_id(node);'''
+to = '''                    let _ = node;'''
+test = ["cargo", "test", "-q", "-p", "gc_bench"]
+
+# bench.py gc.
+
+[[mutant]]
+name = "a full GC's pause counts as a marking's end"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''        elif "Gc.Mark" in names and "Gc.Scavenge" not in names:'''
+to = '''        elif "Gc.Mark" in names:'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "MarkingSummaryTests"]
+
+[[mutant]]
+name = "a marking's start counts as its end"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''        if "Gc.MarkStart" in names:
+            starts.append(end - begin)'''
+to = '''        if "Gc.MarkStart" in names:
+            ends.append(end - begin)'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "MarkingSummaryTests"]
+
+[[mutant]]
+name = "the end's marking is its whole pause"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''            ends_mark.append(sum(e - b for b, e, name in inside if name == "Gc.Mark"))'''
+to = '''            ends_mark.append(end - begin)'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "MarkingSummaryTests"]
+
+[[mutant]]
+name = "a pause outside the span counts"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''    for begin, end, name, outer in slices(events, span_track(events, span)):
+        if span not in outer:
+            continue
+        if name == "Gc.Pause"'''
+to = '''    for begin, end, name, outer in slices(events, span_track(events, span)):
+        if name == "Gc.Pause"'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "MarkingSummaryTests"]
+
+[[mutant]]
+name = "the ends' p99 is their median"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''        "end_mark_p99_ns": percentile(ends_mark, 0.99),'''
+to = '''        "end_mark_p99_ns": percentile(ends_mark, 0.5),'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "MarkingSummaryTests"]
+
+[[mutant]]
+name = "the ids workload runs on cppgc's heaps"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''    if workload in GC_WORKLOADS:
+        return heap.startswith("gc")'''
+to = '''    if workload in GC_WORKLOADS:
+        return True'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "MarkingSummaryTests"]
+
+# Step 4e-3: the overshoot margin while marking. Each named "margin: ...".
+
+[[mutant]]
+name = "margin: none while marking"
+file = "crates/gc/src/heap.rs"
+from = '''        self.allocated.get() >= limit.saturating_add(margin)'''
+to = '''        self.allocated.get() >= limit.saturating_add(0 * margin)'''
+
+[[mutant]]
+name = "margin: the least ignored"
+file = "crates/gc/src/heap.rs"
+from = '''            .max(self.options.min_overshoot_bytes)'''
+to = '''            .max(0 * self.options.min_overshoot_bytes)'''
+
+[[mutant]]
+name = "margin: half the limit ignored"
+file = "crates/gc/src/heap.rs"
+from = '''        let margin = (limit / 2)'''
+to = '''        let margin = (limit / 2 * 0)'''
+
+[[mutant]]
+name = "margin: the cage's left ignored"
+file = "crates/gc/src/heap.rs"
+from = '''            .min(left / 2);'''
+to = '''            .min(usize::MAX + 0 * left);'''
+
+[[mutant]]
+name = "margin: also with no marking"
+file = "crates/gc/src/heap.rs"
+from = '''        if !marking {
+            return self.allocated.get() >= limit;
+        }'''
+to = '''        if !marking && false {
+            return self.allocated.get() >= limit;
+        }'''
+
+[[mutant]]
+name = "margin: should_collect ignores it"
+file = "crates/gc/src/heap.rs"
+from = '''            || inner.at_limit(marking)'''
+to = '''            || inner.at_limit(false)'''
+
+[[mutant]]
+name = "margin: the safepoint ignores it"
+file = "crates/gc/src/heap.rs"
+from = '''            if self.at_limit(true) || self.marking_done() {'''
+to = '''            if self.at_limit(false) || self.marking_done() {'''

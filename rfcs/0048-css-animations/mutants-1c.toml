@@ -1,0 +1,271 @@
+# Mutation test of step 1c: the timing model and CSS transitions in the
+# `animation` crate (2026-10-15):
+# python3 scripts/test.py mutate rfcs/0048-css-animations/mutants-1c.toml
+test = ["cargo", "test", "-q", "-p", "animation", "--test", "it"]
+timeout = 600
+
+[[mutant]]
+name = "a zero duration has an active duration"
+file = "crates/animation/src/timing.rs"
+from = '''        if self.duration == 0.0 || self.iterations == 0.0 {
+            0.0'''
+to = '''        if self.iterations == 0.0 {
+            0.0'''
+
+[[mutant]]
+name = "the end time can be negative"
+file = "crates/animation/src/timing.rs"
+from = '''        (self.delay + self.active_duration() + self.end_delay).max(0.0)'''
+to = '''        self.delay + self.active_duration() + self.end_delay'''
+
+[[mutant]]
+name = "backwards playback's start boundary is active"
+file = "crates/animation/src/timing.rs"
+from = '''        let phase = if local < before_active || (backwards && !inclusive && local == before_active)'''
+to = '''        let phase = if local < before_active'''
+
+[[mutant]]
+name = "the end boundary is active"
+file = "crates/animation/src/timing.rs"
+from = '''        } else if local > active_after || (!backwards && !inclusive && local == active_after) {'''
+to = '''        } else if local > active_after {'''
+
+[[mutant]]
+name = "no backwards fill"
+file = "crates/animation/src/timing.rs"
+from = '''            Phase::Before => matches!(self.fill, FillMode::Backwards | FillMode::Both)'''
+to = '''            Phase::Before => matches!(self.fill, FillMode::Both)'''
+
+[[mutant]]
+name = "no forwards fill"
+file = "crates/animation/src/timing.rs"
+from = '''            Phase::After => matches!(self.fill, FillMode::Forwards | FillMode::Both)'''
+to = '''            Phase::After => matches!(self.fill, FillMode::Both)'''
+
+[[mutant]]
+name = "the forwards fill isn't held at the end"
+file = "crates/animation/src/timing.rs"
+from = '''                .then(|| (local - self.delay).min(active_duration).max(0.0)),'''
+to = '''                .then(|| (local - self.delay).max(0.0)),'''
+
+[[mutant]]
+name = "a zero duration before is at its end"
+file = "crates/animation/src/timing.rs"
+from = '''                Phase::Before => 0.0,
+                _ => self.iterations,'''
+to = '''                Phase::Before => self.iterations,
+                _ => self.iterations,'''
+
+[[mutant]]
+name = "the iteration start is ignored"
+file = "crates/animation/src/timing.rs"
+from = '''        } + self.iteration_start;'''
+to = '''        } + 0.0;'''
+
+[[mutant]]
+name = "an iteration's end is the next one's start"
+file = "crates/animation/src/timing.rs"
+from = '''        if simple == 0.0
+            && matches!(phase, Phase::Active | Phase::After)'''
+to = '''        if simple == 0.0
+            && false'''
+
+[[mutant]]
+name = "the end of an iteration counts as the next"
+file = "crates/animation/src/timing.rs"
+from = '''        } else if simple == 1.0 {
+            overall.floor() - 1.0'''
+to = '''        } else if simple == 1.0 {
+            overall.floor()'''
+
+[[mutant]]
+name = "alternate starts backwards"
+file = "crates/animation/src/timing.rs"
+from = '''                even == (self.direction == PlaybackDirection::Alternate)'''
+to = '''                even != (self.direction == PlaybackDirection::Alternate)'''
+
+[[mutant]]
+name = "the before flag is never set"
+file = "crates/animation/src/timing.rs"
+from = '''            progress: Some(self.easing.evaluate(directed, before_flag)),'''
+to = '''            progress: Some(self.easing.evaluate(directed, false && before_flag)),'''
+
+[[mutant]]
+name = "an unlisted transition keeps running"
+file = "crates/animation/src/transition.rs"
+from = '''            if matched.iter().any(|(id, _)| *id == owner(&t).property) {'''
+to = '''            if true {'''
+
+[[mutant]]
+name = "the first entry naming a property wins"
+file = "crates/animation/src/transition.rs"
+from = '''            Some(entry) => entry.1 = i,'''
+to = '''            Some(_) => {}'''
+
+[[mutant]]
+name = "a completed transition starts again"
+file = "crates/animation/src/transition.rs"
+from = '''                    && !completed_here'''
+to = '''                    && (completed_here || !completed_here)'''
+
+[[mutant]]
+name = "a completed transition to another value is kept"
+file = "crates/animation/src/transition.rs"
+from = '''                .retain(|(id, end)| *id != property || same_value(property, end, after));'''
+to = '''                .retain(|(_, _)| true);'''
+
+[[mutant]]
+name = "a zero combined duration starts one"
+file = "crates/animation/src/transition.rs"
+from = '''                    && combined > 0.0
+                    && transitionable(before, after)'''
+to = '''                    && combined >= 0.0
+                    && transitionable(before, after)'''
+
+[[mutant]]
+name = "the delay isn't in the combined duration"
+file = "crates/animation/src/transition.rs"
+from = '''            let combined = duration.max(0.0) + delay;'''
+to = '''            let combined = duration.max(0.0);'''
+
+[[mutant]]
+name = "allow-discrete isn't needed"
+file = "crates/animation/src/transition.rs"
+from = '''                interpolable(property, from, to) || behavior == TransitionBehavior::AllowDiscrete'''
+to = '''                interpolable(property, from, to) || true'''
+
+[[mutant]]
+name = "the same end value restarts it"
+file = "crates/animation/src/transition.rs"
+from = '''            if same_value(property, &owner(&self.transitions[r]).to, after) {'''
+to = '''            if same_value(property, &owner(&self.transitions[r]).to, after) && false {'''
+
+[[mutant]]
+name = "back to the current value starts another"
+file = "crates/animation/src/transition.rs"
+from = '''            if same_value(property, before, after)
+                || !transitionable(before, after)
+                || combined <= 0.0
+            {
+                continue;
+            }'''
+to = '''            if !transitionable(before, after) || combined <= 0.0 {
+                continue;
+            }'''
+
+[[mutant]]
+name = "a replaced transition isn't canceled"
+file = "crates/animation/src/transition.rs"
+from = '''            let progress = old.computed(now).progress.unwrap_or(0.0);
+            canceled.push(old);'''
+to = '''            let progress = old.computed(now).progress.unwrap_or(0.0);'''
+
+[[mutant]]
+name = "no reversing"
+file = "crates/animation/src/transition.rs"
+from = '''            if same_value(property, &old_owner.reversing_adjusted_start, after) {'''
+to = '''            if same_value(property, &old_owner.reversing_adjusted_start, after) && false {'''
+
+[[mutant]]
+name = "the shortening factor ignores the old one"
+file = "crates/animation/src/transition.rs"
+from = '''                let factor = (progress * old_owner.reversing_shortening_factor + 1.0
+                    - old_owner.reversing_shortening_factor)'''
+to = '''                let factor = (progress * 1.0 + 1.0 - 1.0)'''
+
+[[mutant]]
+name = "a reversal's start is the old start"
+file = "crates/animation/src/transition.rs"
+from = '''                    &old_owner.to,
+                    factor,'''
+to = '''                    before,
+                    factor,'''
+
+[[mutant]]
+name = "a transition doesn't fill backwards"
+file = "crates/animation/src/transition.rs"
+from = '''            fill: FillMode::Backwards,'''
+to = '''            fill: FillMode::None,'''
+
+[[mutant]]
+name = "no run event"
+file = "crates/animation/src/animation.rs"
+from = '''                if first {
+                    let run_at'''
+to = '''                if first && false {
+                    let run_at'''
+
+[[mutant]]
+name = "start again after starting"
+file = "crates/animation/src/animation.rs"
+from = '''            (Some(Active), After) => changes.push((false, end, with(true, at_end))),'''
+to = '''            (Some(Active), After) => {
+                changes.push((true, start, with(true, at_start)));
+                changes.push((false, end, with(true, at_end)));
+            }'''
+
+[[mutant]]
+name = "the start is scheduled at the start time"
+file = "crates/animation/src/animation.rs"
+from = '''            Some(origin) if rate != 0.0 => origin + (self.timing.delay + elapsed) / rate,'''
+to = '''            Some(origin) if rate != 0.0 => origin + elapsed / rate,'''
+
+[[mutant]]
+name = "elapsed time ignores a negative delay"
+file = "crates/animation/src/animation.rs"
+from = '''        let start = (-self.timing.delay).min(active).max(0.0);'''
+to = '''        let start = 0.0_f64.min(active).max(0.0);'''
+
+[[mutant]]
+name = "a done transition keeps running"
+file = "crates/animation/src/transition.rs"
+from = '''                    self.completed.push((owner.property, owner.to.clone()));
+                    self.others.push(t);'''
+to = '''                    self.completed.push((owner.property, owner.to.clone()));
+                    running.push(t);'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "animations::"]
+
+[[mutant]]
+name = "an unticked transition sends a cancel"
+file = "crates/animation/src/animation.rs"
+from = '''            Owner::Transition(owner) if owner.ran && self.last_phase != Some(Phase::After) => {'''
+to = '''            Owner::Transition(owner) if (owner.ran || true) && self.last_phase != Some(Phase::After) => {'''
+
+[[mutant]]
+name = "cancel_all keeps the completed"
+file = "crates/animation/src/transition.rs"
+from = '''            self.removed.push(animation);
+        }
+        self.completed.clear();'''
+to = '''            self.removed.push(animation);
+        }'''
+
+[[mutant]]
+name = "a pending transition starts at 0"
+file = "crates/animation/src/playback.rs"
+from = '''                    self.start_time = Some(if rate == 0.0 {
+                        ready_time
+                    } else {
+                        ready_time - hold / rate
+                    });'''
+to = '''                    self.start_time = Some(0.0);'''
+
+[[mutant]]
+name = "a pending transition isn't at its start"
+file = "crates/animation/src/playback.rs"
+from = '''        if rate > 0.0 && auto_rewind && current.is_none_or(|c| c < 0.0 || c >= end) {
+            seek = Some(0.0);'''
+to = '''        if rate > 0.0 && auto_rewind && current.is_none_or(|c| c < 0.0 || c >= end) {
+            seek = timeline;'''
+
+[[mutant]]
+name = "a pending transition ticks"
+file = "crates/animation/src/animation.rs"
+from = '''                if self.playback.pending.is_some() && self.playback.start_time.is_none() {'''
+to = '''                if false {'''
+
+[[mutant]]
+name = "transitionrun again at each tick"
+file = "crates/animation/src/animation.rs"
+from = '''                owner.ran = true;'''
+to = '''                owner.ran = false;'''

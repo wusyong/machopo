@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<title>C5: text in Ahem (each glyph an em square, 0.8em above the baseline): aligned, on each baseline, squeezed to maxWidth, stroked, letter-spaced, right to left, and a box as measureText measures it, as wide as the page's text</title>
+<link rel="match" href="c5-text-ref.html">
+<style>
+  html, body { margin: 0 }
+  canvas { display: block }
+</style>
+<canvas width="300" height="200"></canvas>
+<script>
+  const ctx = document.querySelector("canvas").getContext("2d");
+  ctx.font = "20px Ahem";
+  ctx.fillStyle = "green";
+  ctx.fillText("XX", 10, 30);
+  ctx.fillStyle = "blue";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "top";
+  ctx.fillText("XX", 150, 40);
+  ctx.fillStyle = "purple";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("XX", 200, 80);
+  ctx.fillStyle = "olive";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "bottom";
+  ctx.fillText("X", 10, 120);
+
+  // On the alphabetic baseline at 150 from here: 134 to 154.
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = "green";
+  ctx.fillText("XXXX", 50, 150, 40);
+  ctx.strokeStyle = "blue";
+  ctx.lineWidth = 2;
+  ctx.strokeText("X", 100, 150);
+  const m = ctx.measureText("XXX");
+  ctx.fillStyle = "black";
+  ctx.fillRect(140, 150 - m.fontBoundingBoxAscent, m.width,
+               m.fontBoundingBoxAscent + m.fontBoundingBoxDescent);
+  ctx.fillStyle = "purple";
+  ctx.letterSpacing = "10px";
+  ctx.fillText("XX", 210, 150);
+  ctx.letterSpacing = "0px";
+
+  ctx.fillStyle = "olive";
+  ctx.direction = "rtl";
+  ctx.textAlign = "start";
+  ctx.textBaseline = "bottom";
+  ctx.fillText("XX", 290, 190);
+</script>

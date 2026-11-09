@@ -1,0 +1,14 @@
+# The focus ring: a click focuses the box without one (`:focus-visible`
+# doesn't match after a pointer), Tab moves the focus to the link with the
+# UA's focus ring around it, which is drawn; the card's shadows show in the
+# screenshot.
+navigate pages/focus-ring.html
+wait-loaded
+click #box
+wait-text #out "box false"
+capture before
+key Tab
+wait-text #out "link true"
+# Around the link, where only the ring changes.
+expect-differs before #around
+screenshot ring

@@ -1,0 +1,122 @@
+# Stage 4b-3: `requestAnimationFrame`: the callbacks on the window
+# (`dom_next`), "run the animation frame callbacks" (`dom_api_next`), the
+# V8 host's call, the renderer running them each main frame before its
+# rendering and asking for frames while there are some.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it -- window && cargo test -q -p dom_api_next --test it -- animation_frame && cargo test -q -p shell --test it -- next_dom"]
+timeout = 3000
+
+[[mutant]]
+name = "handles start at 0"
+file = "crates/dom_next/src/window.rs"
+from = '''        window.last_animation_frame.set(handle);'''
+to = '''        window.last_animation_frame.set(handle - 1);'''
+
+[[mutant]]
+name = "cancelling another handle"
+file = "crates/dom_next/src/window.rs"
+from = '''                .is_some_and(|frame| frame.handle.get() == handle)'''
+to = '''                .is_some_and(|frame| frame.handle.get() != handle)'''
+
+[[mutant]]
+name = "no animation frames ever wanted"
+file = "crates/dom_next/src/window.rs"
+from = '''            .is_some_and(|frames| frames.len() > 0)'''
+to = '''            .is_some_and(|_| false)'''
+
+[[mutant]]
+name = "the time from the DOM's origin"
+file = "crates/dom_next/src/window.rs"
+from = '''        since.as_secs_f64() * 1000.0 - window.time_origin.get()'''
+to = '''        since.as_secs_f64() * 1000.0'''
+
+[[mutant]]
+name = "the time not coarsened"
+file = "crates/dom_api_next/src/animation_frame.rs"
+from = '''    let time = crate::event::coarsen(now);'''
+to = '''    let time = now;'''
+
+[[mutant]]
+name = "one requested while they run runs now"
+file = "crates/dom_api_next/src/animation_frame.rs"
+from = '''    let handles = host.read(|cx| cx.animation_frame_handles(window.get(cx.gc)));
+    for handle in handles {'''
+to = '''    let mut at = 0;
+    while let Some(handle) = host.read(|cx| cx.animation_frame_handles(window.get(cx.gc)).get(at).copied()) {
+        at += 1;'''
+
+[[mutant]]
+name = "a callback stays after it runs"
+file = "crates/dom_api_next/src/animation_frame.rs"
+from = '''            cx.take_animation_frame(window.get(cx.gc), handle)
+                .map(|frame| Persistent::new(cx.gc, frame))'''
+to = '''            let window = window.get(cx.gc);
+            let frame = cx.take_animation_frame(window, handle);
+            if frame.is_some() {
+                let again = cx.add_animation_frame(window);
+                let _ = again;
+            }
+            frame.map(|frame| Persistent::new(cx.gc, frame))'''
+
+[[mutant]]
+name = "no checkpoint after a callback"
+file = "crates/dom_api_next/src/animation_frame.rs"
+from = '''        host.call_animation_frame(window, &frame, time);
+        host.perform_microtask_checkpoint();'''
+to = '''        host.call_animation_frame(window, &frame, time);'''
+
+[[mutant]]
+name = "cancelAnimationFrame does nothing"
+file = "crates/dom_api_next/src/animation_frame.rs"
+from = '''    cx.take_animation_frame(this, handle);
+    Ok(())'''
+to = '''    let _ = (this, handle);
+    Ok(())'''
+
+[[mutant]]
+name = "this is the window"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''    let this = v8::undefined(scope);
+    v8::tc_scope!(let scope, scope);
+    if function.call(scope, this.into(), &[time.into()]).is_none() {'''
+to = '''    let this = scope.get_current_context().global(scope);
+    v8::tc_scope!(let scope, scope);
+    if function.call(scope, this.into(), &[time.into()]).is_none() {'''
+
+[[mutant]]
+name = "a throw not reported"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''        report_caught(scope, ReportAt::RealmOf(function.into()));'''
+to = ''''''
+
+[[mutant]]
+name = "the frames not run"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            self.run_next_animation_frames();'''
+to = ''''''
+
+[[mutant]]
+name = "no frame for an animation frame callback"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            let animation_frames = self.dom.borrow_mut().timers().wants_animation_frame()
+                || self.next_wants_animation_frame();'''
+to = '''            let animation_frames = self.dom.borrow_mut().timers().wants_animation_frame();'''
+
+[[mutant]]
+name = "what the callbacks change not drawn this frame"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        engine.run_animation_frames(std::time::Instant::now());
+        self.request_next_frame_if_dom_changed();'''
+to = '''        engine.run_animation_frames(std::time::Instant::now());'''
+
+[[mutant]]
+name = "the results a callback reports not sent"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        self.request_next_frame_if_dom_changed();
+        self.send_next_harness_results();
+    }
+
+    /// Asks for a main frame if the new DOM's trees changed since the'''
+to = '''        self.request_next_frame_if_dom_changed();
+    }
+
+    /// Asks for a main frame if the new DOM's trees changed since the'''

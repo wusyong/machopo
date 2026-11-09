@@ -1,0 +1,79 @@
+# Step 2d: the heap verifier, the fuzzer's seeds from recordings, and the
+# Verus proofs. The verifier's checks are caught by its unit tests, which
+# break a heap; the proved code by Verus (`test.py gc-verus`, which only
+# verifies: a mutant that loops runs nothing). Not here: the ASan
+# poisoning, which only fuzzing builds have (checked by hand: with marking
+# broken and the verifier off, the fuzzer stopped at a use-after-poison),
+# and the fuzzer's model, which is a test itself.
+test = ["cargo", "test", "-q", "-p", "gc"]
+timeout = 300
+
+# The verifier.
+
+[[mutant]]
+name = "a reachable object unmarked passes"
+file = "crates/gc/src/heap/verify.rs"
+from = '''                    if page.is_marked(slot) {'''
+to = '''                    if true {'''
+
+[[mutant]]
+name = "marked garbage passes"
+file = "crates/gc/src/heap/verify.rs"
+from = '''        if marked != seen.len() {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a free range over a marked slot passes"
+file = "crates/gc/src/page.rs"
+from = '''                    return Err(format!("free range {first}..{end} holds the marked slot {slot}"));'''
+to = '''                    let _ = slot;'''
+
+[[mutant]]
+name = "an edge to a freed page passes"
+file = "crates/gc/src/heap/verify.rs"
+from = '''        _ => Err(format!("{data:#x} isn't on a page in use")),'''
+to = '''        _ => Ok(()),'''
+
+[[mutant]]
+name = "commits miscounted pass"
+file = "crates/gc/src/heap/verify.rs"
+from = '''        if committed != space.committed_total {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a GC never runs the verifier"
+file = "crates/gc/src/heap.rs"
+from = '''        if self.options.verify || self.options.stress {'''
+to = '''        if false {'''
+
+# The seeds.
+
+[[mutant]]
+name = "every edge write the first field"
+file = "crates/gc_bench/src/seeds.rs"
+from = '''                let field = u8::try_from((offset / 4) % 4).unwrap_or(0);'''
+to = '''                let field = 0;'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it", "seeds::"]
+
+[[mutant]]
+name = "an operation keeps the last one's objects"
+file = "crates/gc_bench/src/seeds.rs"
+from = '''        self.handles = reached.into_iter().collect();'''
+to = '''        let _ = reached;'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it", "seeds::"]
+
+# The proved code.
+
+[[mutant]]
+name = "the first word's bits below from not skipped"
+file = "crates/gc/src/bits.rs"
+from = '''    let mut mask = 0xffff_ffff_ffff_ffffu64 << ((from % 64) as u64);'''
+to = '''    let mut mask = 0xffff_ffff_ffff_ffffu64;'''
+test = ["python3", "scripts/test.py", "gc-verus"]
+
+[[mutant]]
+name = "the next run searched from the last one's start"
+file = "crates/gc/src/bits.rs"
+from = '''        at = end;'''
+to = '''        at = first;'''
+test = ["python3", "scripts/test.py", "gc-verus"]

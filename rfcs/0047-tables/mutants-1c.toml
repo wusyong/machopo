@@ -1,0 +1,326 @@
+# Mutation test of stage 1c: how tables are painted, the layout made as
+# Chrome's after the comparison with WPT, and the compositor's tiles only
+# near the viewport (2026-10-15):
+# python3 scripts/test.py mutate rfcs/0047-tables/mutants-1c.toml
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "tables::"]
+timeout = 900
+
+# --- paint ---
+
+[[mutant]]
+name = "a table's background goes around its captions"
+file = "crates/paint/src/lib.rs"
+from = '''            Some(TableDisplay::Table) => {
+                let grid = table_grid(fragment);'''
+to = '''            Some(TableDisplay::Table) => {
+                let grid = RectF::new(0.0, 0.0, fragment.size.width, fragment.size.height);'''
+
+[[mutant]]
+name = "the captions below are above"
+file = "crates/paint/src/lib.rs"
+from = '''            CaptionSide::Bottom => bottom += height,'''
+to = '''            CaptionSide::Bottom => top += height,'''
+
+[[mutant]]
+name = "a row's background is its own"
+file = "crates/paint/src/lib.rs"
+from = '''            Some(TableDisplay::RowGroup | TableDisplay::Row) => {
+                self.part_backgrounds(fragment, properties);
+                return;
+            }'''
+to = '''            Some(TableDisplay::RowGroup | TableDisplay::Row) => {}'''
+
+[[mutant]]
+name = "a row group's background isn't in its rows' cells"
+file = "crates/paint/src/lib.rs"
+from = '''            Some(TableDisplay::Row) => table_cells(part, at, out),'''
+to = '''            Some(TableDisplay::Row) => {}'''
+
+[[mutant]]
+name = "an empty cell that hides paints"
+file = "crates/paint/src/lib.rs"
+from = '''            Some(TableDisplay::Cell) if hides_empty_cell(fragment) => return,'''
+to = '''            Some(TableDisplay::Cell) if false => return,'''
+
+[[mutant]]
+name = "a row's background is in an empty cell that hides"
+file = "crates/paint/src/lib.rs"
+from = '''            Some(TableDisplay::Cell) if !hides_empty_cell(part) && part.style.is_visible() => {'''
+to = '''            Some(TableDisplay::Cell) if part.style.is_visible() => {'''
+
+[[mutant]]
+name = "every cell is empty"
+file = "crates/paint/src/lib.rs"
+from = '''        && fragment.lines.is_empty()'''
+to = '''        && true'''
+
+# --- paint controller ---
+
+[[mutant]]
+name = "a new table part's fragment paints as before"
+file = "crates/paint/src/paint_controller.rs"
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "paint_controller::"]
+from = '''                && table_part(fragment).is_none() =>'''
+to = '''                && true =>'''
+
+# --- layout: widths ---
+
+[[mutant]]
+name = "a table's max-content width counts its percentages"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''        let intrinsic_max = (grid_intrinsic_max + spacing_x + inset_x).max(table_min);'''
+to = '''        let intrinsic_max = (grid_max + spacing_x + inset_x).max(table_min);'''
+
+[[mutant]]
+name = "past the maxima, fixed columns grow before auto ones"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''                    if auto_count > 0 {
+                        if percent {'''
+to = '''                    if false {
+                        if percent {'''
+
+[[mutant]]
+name = "a spanning cell's padding is its columns'"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''                        BoxSizing::ContentBox if span == 1 => inset,'''
+to = '''                        BoxSizing::ContentBox => inset,'''
+
+[[mutant]]
+name = "too narrow, percentage columns aren't scaled"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''                    (target - fixed_total).max(0.0) * percent_width(c) / percent_total'''
+to = '''                    percent_width(c)'''
+
+[[mutant]]
+name = "a 0 fixed column grows"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''                c.max + room * c.max / fixed_total'''
+to = '''                c.max + room / fixed_count as f32'''
+
+[[mutant]]
+name = "a calc() of a percentage and 0px is auto"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''            px: 0.0, percent, ..
+        } => Some(percent),'''
+to = '''            px: 0.0, percent, ..
+        } if false => Some(percent),'''
+
+[[mutant]]
+name = "a table's width given is narrower than its content"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''                    .map(|width| width.max(table_min))'''
+to = '''                    .map(|width| width)'''
+
+[[mutant]]
+name = "a table's size isn't held to its content"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''        output.size = output.size.f32_max(measured);'''
+to = '''        output.size = output.size;'''
+
+[[mutant]]
+name = "an in-flow table's sizes are hidden from taffy"
+file = "crates/layout/src/lib.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''            if style.is_out_of_flow() {
+                taffy_style.size = taffy::Size::auto();'''
+to = '''            if true {
+                taffy_style.size = taffy::Size::auto();'''
+
+[[mutant]]
+name = "a table's width is its contribution to its container"
+file = "crates/layout/src/lib.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''            Some(style) if self.measuring_width => style,'''
+to = '''            Some(style) if false => style,'''
+
+[[mutant]]
+name = "a table's width is hidden when laid out beside floats"
+file = "crates/layout/src/lib.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''            Some(style) if self.measuring_width => style,'''
+to = '''            Some(style) => style,'''
+
+[[mutant]]
+name = "a cell's percentages are of the table's content box"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''        let cell_basis = (width - 2.0 * left).max(0.0);'''
+to = '''        let cell_basis = width;'''
+
+[[mutant]]
+name = "rows without columns are 0 wide"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''            None => (0.0, width),'''
+to = '''            None => (0.0, 0.0),'''
+
+[[mutant]]
+name = "white space next to other content in a row group is dropped"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''        if run.iter().all(is_space_text) {
+            run.clear();'''
+to = '''        if run.iter().any(is_space_text) {
+            run.clear();'''
+
+[[mutant]]
+name = "a cell's padding is of nothing when measured"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''                    parent_size: taffy::Size {
+                        width: Some(0.0),
+                        height: None,
+                    },'''
+to = '''                    parent_size: taffy::Size::NONE,'''
+
+# --- layout: heights ---
+
+[[mutant]]
+name = "rows with a fixed height take the extra first"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''    let mut group: Vec<usize> = (0..heights.len()).filter(|&i| !constrained[i]).collect();'''
+to = '''    let mut group: Vec<usize> = (0..heights.len()).collect();'''
+
+[[mutant]]
+name = "empty rows share evenly, not to the preferred"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''    let picked: Vec<usize> = group.iter().copied().filter(|&i| preferred[i]).collect();'''
+to = '''    let picked: Vec<usize> = Vec::new();'''
+
+[[mutant]]
+name = "a row group with a percentage height is one with a fixed one"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''                        Size::LengthPercentage(v) if v.px().is_none() => 2,'''
+to = '''                        Size::LengthPercentage(v) if v.px().is_none() => 1,'''
+
+[[mutant]]
+name = "a row group with fixed rows takes the extra first"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''                        _ if rows.constrained.iter().any(|&c| c) => 1,'''
+to = '''                        _ if rows.constrained.iter().any(|&c| c) => 0,'''
+
+[[mutant]]
+name = "a row group with a percentage height doesn't grow toward it"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''                let grow = (v.resolve(min_height) - have).min(min_height - content);'''
+to = '''                let grow = 0.0f32;'''
+
+[[mutant]]
+name = "a baseline-aligned cell's height is below the baseline"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''                        descent = descent.max(laid.content_height - laid.baseline);'''
+to = '''                        descent = descent.max(laid.content_height.max(laid.css_height) - laid.baseline);'''
+
+[[mutant]]
+name = "an empty cell's baseline is at its height"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''line.unwrap_or(content_height - p.bottom - b.bottom);'''
+to = '''line.unwrap_or(content_height.max(css_height) - p.bottom - b.bottom);'''
+
+[[mutant]]
+name = "an empty first row's baseline is where it was laid out"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''            lineless.push(from);'''
+to = '''            lineless.push(None);'''
+
+[[mutant]]
+name = "a cell's max-height holds it"
+file = "crates/layout/src/lib.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''            taffy_style.max_size.height = taffy::LengthPercentageAuto::auto();'''
+to = '''            let _ = &mut taffy_style.max_size.height;'''
+
+[[mutant]]
+name = "ContentSize sizes by the style's height"
+file = "crates/layout/src/lib.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''    if inputs.sizing_mode == SizingMode::ContentSize {
+        return inputs'''
+to = '''    if false {
+        return inputs'''
+
+# --- layout: placing ---
+
+[[mutant]]
+name = "a caption isn't moved by position: relative"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''            let by = relative_offset(&style, width, None);
+            let location = taffy::Point {
+                x: m.left + by.x,'''
+to = '''            let by = PointF::new(0.0, 0.0);
+            let location = taffy::Point {
+                x: m.left + by.x,'''
+
+[[mutant]]
+name = "out-of-flow boxes in an empty cell move with its alignment"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''            y: location.y + if in_flow { shift } else { 0.0 },'''
+to = '''            y: location.y + shift,'''
+
+[[mutant]]
+name = "a line of only out-of-flow boxes is content"
+file = "crates/layout/src/text.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''                PositionedLayoutItem::GlyphRun(_) => true,
+                PositionedLayoutItem::InlineBox(inline_box) => {
+                    matches!(self.boxes[inline_box.id as usize], BoxItem::Atomic(_))
+                }'''
+to = '''                PositionedLayoutItem::GlyphRun(_) => true,
+                PositionedLayoutItem::InlineBox(_) => true,'''
+
+# --- compositor: tiles only near the viewport ---
+
+[[mutant]]
+name = "every tile is kept"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib"]
+from = '''                .retain(|(row, column), _| rows.contains(row) && columns.contains(column));'''
+to = '''                .retain(|_, _| true);'''
+
+[[mutant]]
+name = "the tiles a rect touches end a tile early"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib"]
+from = '''            (start / ts).floor() as u64..(end / ts).ceil() as u64'''
+to = '''            (start / ts).floor() as u64..(end / ts).floor() as u64'''
+
+[[mutant]]
+name = "the last tile isn't cut at the content's edge"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib"]
+from = '''            ts.min(width - x) as f32,'''
+to = '''            ts as f32,'''
+
+[[mutant]]
+name = "an invalidated tile is kept"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib"]
+from = '''                    .any(|invalid| !invalid.intersect(&rect).is_empty());
+            if kept'''
+to = '''                    .any(|invalid| false && !invalid.intersect(&rect).is_empty());
+            if kept'''
+
+[[mutant]]
+name = "a tile whose rect changed is kept"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib"]
+from = '''            let kept = tile.content_rect == rect'''
+to = '''            let kept = true'''

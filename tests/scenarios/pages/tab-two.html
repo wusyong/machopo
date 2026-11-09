@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<!-- tabs.txt's second tab: a counter of its own, kept while the
+     other tab is shown. -->
+<title>two</title>
+<style>#b { display: block; width: 100px; height: 40px; background: blue }</style>
+<p id=name>two</p>
+<span id=b onclick="document.getElementById('out').textContent = `clicked ${++clicks}`"></span>
+<p id=out>not clicked</p>
+<script>let clicks = 0;</script>

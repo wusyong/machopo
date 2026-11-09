@@ -1,0 +1,49 @@
+# The last segment, c: docs/test-gaps.md's conclusions measured on code
+# that went with the old DOM, tried again on today's. Each is expected
+# missed (what the entry says no test catches); one caught means the entry
+# is wrong.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js --test it && cargo test -q -p renderer --lib && cargo test -q -p shell --test it"]
+timeout = 3000
+
+[[mutant]]
+name = "renderer: a canvas that drew asks for no frame"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            || canvas_draws != next.rendered_canvas_draws;'''
+to = '''            || (canvas_draws != next.rendered_canvas_draws && false);'''
+
+[[mutant]]
+name = "renderer: the title checked after a batch of tasks only"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                self.run_queued_tasks();
+                self.update_title();
+                next = match rx.try_recv() {'''
+to = '''                self.run_queued_tasks();
+                next = match rx.try_recv() {'''
+
+[[mutant]]
+name = "renderer: the timeline updated only once there were animations"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        let mut update = dom_api::AnimationsUpdate::default();
+        for frame in engine.frames_in_tree_order() {'''
+to = '''        let mut update = dom_api::AnimationsUpdate::default();
+        if !engine.dom_mut().read(|cx| cx.has_seen_animations()) {
+            return;
+        }
+        for frame in engine.frames_in_tree_order() {'''
+
+[[mutant]]
+name = "dom_js: a [Replaceable] setter takes any receiver"
+file = "crates/dom_js/src/templates.rs"
+from = '''        .constructor_behavior(v8::ConstructorBehavior::Throw)
+        .build(scope);
+    checks_receiver(setter);
+    setter'''
+to = '''        .constructor_behavior(v8::ConstructorBehavior::Throw)
+        .build(scope);
+    setter'''
+
+[[mutant]]
+name = "dom_js: a pair iterator's forEach takes any receiver"
+file = "crates/dom_js/src/pairs.rs"
+from = '''    templates::checks_receiver(for_each);'''
+to = '''    let _ = &for_each;'''

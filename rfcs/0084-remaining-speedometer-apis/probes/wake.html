@@ -1,0 +1,27 @@
+<!DOCTYPE html><meta charset=utf-8>
+<script>
+window.log=[];
+async function run(){const o=[];const w=navigator.wakeLock;const wait=ms=>new Promise(r=>setTimeout(r,ms));
+o.push([w.constructor.name,w===navigator.wakeLock,Object.getOwnPropertyNames(WakeLock.prototype).join("|"),Object.getOwnPropertyNames(WakeLockSentinel.prototype).join("|"),Object.getPrototypeOf(WakeLockSentinel.prototype)===EventTarget.prototype].join(","));
+try{new WakeLock()}catch(e){o.push("ctor "+e.name)}
+try{new WakeLockSentinel()}catch(e){o.push("sctor "+e.name)}
+const hit=[];
+const p=w.request("screen");hit.push("returned "+(p instanceof Promise));
+p.then(s=>hit.push("resolved "+s.type+" "+s.released));
+setTimeout(()=>hit.push("timeout0"),0);Promise.resolve().then(()=>hit.push("microtask"));
+const s=await p;await wait(50);o.push(hit.join(" | "));
+const ev=[];s.addEventListener("release",e=>ev.push("release "+e.constructor.name+" "+e.isTrusted+" "+e.bubbles+" "+e.cancelable+" released="+s.released));
+s.onrelease=()=>ev.push("onrelease");
+const rp=s.release();ev.push("after release() released="+s.released);
+const r2=s.release();ev.push("second same promise? "+(rp===r2));
+rp.then(v=>ev.push("release resolved "+v));
+await wait(10);o.push(ev.join(" | "));
+const s2=await w.request();o.push("default type "+s2.type);
+const s3=await w.request("screen");o.push("two at once "+(s2!==s3));
+window.s2=s2;window.s3=s3;
+s2.onrelease=()=>log.push("s2 release vis="+document.visibilityState);s3.onrelease=()=>log.push("s3 release");
+document.addEventListener("visibilitychange",()=>log.push("visibilitychange "+document.visibilityState));
+try{await w.request("bogus")}catch(e){o.push("bogus "+e.name+": "+e.message)}
+return o.join("\n")}
+async function hidden(){const o=[...log];try{await navigator.wakeLock.request("screen");o.push("hidden ok")}catch(e){o.push("hidden "+e.name+": "+e.message)}return o.join(" | ")+" released "+s2.released+","+s3.released}
+</script>

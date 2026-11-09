@@ -1,0 +1,95 @@
+# 1: `ci.py speedometer --trace`'s phases (`scripts/speedometer.py`'s
+# `slice_phase`, `phase_times`, `write_phases_report`).
+#   python3 scripts/test.py mutate rfcs/0059-style-performance/mutants-1.toml
+test = ["python3", "scripts/speedometer_test.py", "PhasesTests"]
+timeout = 300
+
+[[mutant]]
+name = "the track with the fewest marks"
+file = "scripts/speedometer.py"
+from = '''    track = max(marks, key=lambda t: len(marks[t]))
+    windows = mark_windows(marks[track])
+    stack: list[str] = []'''
+to = '''    track = min(marks, key=lambda t: len(marks[t]))
+    windows = mark_windows(marks[track])
+    stack: list[str] = []'''
+
+[[mutant]]
+name = "a slice from before a window counts from its start"
+file = "scripts/speedometer.py"
+from = '''                overlap = min(end, time) - max(start, last)'''
+to = '''                overlap = min(end, time) - last'''
+
+[[mutant]]
+name = "a slice past a window counts to its end"
+file = "scripts/speedometer.py"
+from = '''                overlap = min(end, time) - max(start, last)'''
+to = '''                overlap = time - max(start, last)'''
+
+[[mutant]]
+name = "the outermost slice takes the time"
+file = "scripts/speedometer.py"
+from = '''                    phase = slice_phase(browser, stack[-1])
+                    if phase:
+                        phases[phase] += overlap
+                    else:
+                        others[stack[-1]] += overlap'''
+to = '''                    phase = slice_phase(browser, stack[0])
+                    if phase:
+                        phases[phase] += overlap
+                    else:
+                        others[stack[0]] += overlap'''
+
+[[mutant]]
+name = "V8's GC counted as script"
+file = "scripts/speedometer.py"
+from = '''        return "GC" if "GC" in name or "SCAVENGE" in name.upper() else "script"'''
+to = '''        return "script"'''
+
+[[mutant]]
+name = "the parser's slices not parse"
+file = "scripts/speedometer.py"
+from = '''    if name == "ParseHTML" or name.startswith("HTMLDocumentParser::"):'''
+to = '''    if name == "ParseHTML":'''
+
+[[mutant]]
+name = "Chrome's shaping not layout"
+file = "scripts/speedometer.py"
+from = '''        return "layout" if name.startswith("InlineNode::") else "canvas"'''
+to = '''        return "canvas"'''
+
+[[mutant]]
+name = "kun's names taken for Chrome's"
+file = "scripts/speedometer.py"
+from = '''    for phase, names in PHASE_SLICES[browser].items():'''
+to = '''    for phase, names in PHASE_SLICES["kun"].items():'''
+
+[[mutant]]
+name = "the totals not an iteration's"
+file = "scripts/speedometer.py"
+from = '''    ms = {suite: {b: {phase: ns / 1e6 / iterations for phase, ns in phases.items()}'''
+to = '''    ms = {suite: {b: {phase: ns / 1e6 for phase, ns in phases.items()}'''
+
+[[mutant]]
+name = "Chrome minus kun"
+file = "scripts/speedometer.py"
+from = '''                     + (f" | {values[0] - values[1]:+.1f} |" if both else " |"))'''
+to = '''                     + (f" | {values[1] - values[0]:+.1f} |" if both else " |"))'''
+
+[[mutant]]
+name = "a suite's cell without the difference"
+file = "scripts/speedometer.py"
+from = '''            return f"{values[0]:.1f} / {values[1]:.1f} ({values[0] - values[1]:+.1f})"'''
+to = '''            return f"{values[0]:.1f} / {values[1]:.1f}"'''
+
+[[mutant]]
+name = "the other slices not summed over the suites"
+file = "scripts/speedometer.py"
+from = '''                others.update(by_browser[b][1])'''
+to = '''                others = collections.Counter(by_browser[b][1])'''
+
+[[mutant]]
+name = "a browser not traced still reported"
+file = "scripts/speedometer.py"
+from = '''    browsers = [b for b in ("kun", "Chrome") if any(b in by_browser for by_browser in times.values())]'''
+to = '''    browsers = ["kun", "Chrome"]'''

@@ -1,0 +1,156 @@
+# Stage 3a-4: style on the new DOM (`style_next`): an element's classes as
+# names' numbers, a selector's names numbered on its thread
+# (`css::IdentAtom`), the rule index's buckets, matching, the walk's
+# invalidation, the sheets and the style attribute.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "style_next", "--test", "it"]
+timeout = 900
+
+[[mutant]]
+name = "an atom is any thread's"
+file = "crates/css/src/selector.rs"
+from = '''        (thread != 0 && word >> 32 == u64::from(thread))'''
+to = '''        (thread != 0)'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "css", "--lib", "an_ident_atom"]
+
+[[mutant]]
+name = "a class's lowercase name as written"
+file = "crates/dom_next/src/style.rs"
+from = '''                names::intern(&token.to_ascii_lowercase())'''
+to = '''                names::intern(token)'''
+
+[[mutant]]
+name = "a class bucket by its name as written"
+file = "crates/style_next/src/rule_index.rs"
+from = '''                    let lower = names::intern(&class.to_ascii_lowercase());'''
+to = '''                    let lower = names::intern(&class);'''
+
+[[mutant]]
+name = "a tag bucket by its name as written alone"
+file = "crates/style_next/src/rule_index.rs"
+from = '''                    if lower != name {
+                        index.tags.entry(lower).or_default().push(data);
+                    }'''
+to = ''''''
+
+[[mutant]]
+name = "a quirks mode document's ids by their bucket"
+file = "crates/style_next/src/rule_index.rs"
+from = '''        if quirks {
+            for rules in self.ids.values() {'''
+to = '''        if false {
+            for rules in self.ids.values() {'''
+
+[[mutant]]
+name = "a case-sensitive class compared lowercase"
+file = "crates/style_next/src/selector.rs"
+from = '''                .is_some_and(|number| classes.iter().any(|class| class.name == number)),'''
+to = '''                .is_some_and(|number| classes.iter().any(|class| class.lower == number)),'''
+
+[[mutant]]
+name = "the bloom filter has no classes"
+file = "crates/style_next/src/bloom.rs"
+from = '''    for class in cx.class_names(element) {
+        f(class.hash);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a name asked of an ancestor styles the element alone"
+file = "crates/style_next/src/lib.rs"
+from = '''            || touched
+            || (by_position'''
+to = '''            || (by_position'''
+
+[[mutant]]
+name = "what children inherit doesn't style them"
+file = "crates/style_next/src/lib.rs"
+from = '''        } else if inherited || structural {'''
+to = '''        } else if structural {'''
+
+[[mutant]]
+name = "siblings' positions don't count"
+file = "crates/style_next/src/lib.rs"
+from = '''        let by_position = moved
+            && (self.features().any(|features| features.sibling)'''
+to = '''        let by_position = false
+            && (self.features().any(|features| features.sibling)'''
+
+[[mutant]]
+name = "~ styles the next sibling alone"
+file = "crates/style_next/src/lib.rs"
+from = '''                if changed && self.later_siblings() {'''
+to = '''                if changed && false {'''
+
+[[mutant]]
+name = "a parent's :empty isn't styled again"
+file = "crates/style_next/src/lib.rs"
+from = '''            || by_position
+            || empty
+            || existing.is_none();'''
+to = '''            || by_position
+            || existing.is_none();'''
+
+[[mutant]]
+name = "children that came or went don't style their siblings"
+file = "crates/style_next/src/lib.rs"
+from = '''        let structural = flags.contains(StyleFlags::CHILDREN_CHANGED)
+            && selector_flags.intersects(ElementSelectorFlags::all().for_parent());'''
+to = '''        let structural = false;'''
+
+[[mutant]]
+name = "a new root font size styles its element alone"
+file = "crates/style_next/src/lib.rs"
+from = '''                    subtree = true;'''
+to = ''''''
+
+[[mutant]]
+name = ":has() styles what changed alone"
+file = "crates/style_next/src/lib.rs"
+from = '''        .any(|index| index.features.has);'''
+to = '''        .any(|index| index.features.has && false);'''
+
+[[mutant]]
+name = "a changed sheet's old rules kept"
+file = "crates/style_next/src/lib.rs"
+from = '''                    .find(|sheet| sheet.owner == id && sheet.text == text)'''
+to = '''                    .find(|sheet| sheet.owner == id)'''
+
+[[mutant]]
+name = "the style attribute parsed once"
+file = "crates/style_next/src/lib.rs"
+from = '''            Some(kept) if !changed => Some(kept),'''
+to = '''            Some(kept) => Some(kept),'''
+
+[[mutant]]
+name = "layout told of every style"
+file = "crates/style_next/src/lib.rs"
+from = '''            Some(old) if Arc::ptr_eq(&old, &style) || *old == *style => old,'''
+to = '''            Some(old) if Arc::ptr_eq(&old, &style) => old,'''
+
+[[mutant]]
+name = "a sheet in the document's tree order skipped"
+file = "crates/style_next/src/lib.rs"
+from = '''            if cx.qualified_name(node) == Some(style) {
+                owners.push(node);
+            }'''
+to = '''            if cx.qualified_name(node) == Some(style) && owners.is_empty() {
+                owners.push(node);
+            }'''
+
+[[mutant]]
+name = "a class repeated is kept twice"
+file = "crates/dom_next/src/style.rs"
+from = '''            if names.iter().any(|class| class.name == name) {
+                continue;
+            }'''
+to = ''''''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_next", "--test", "it", "style::"]
+
+[[mutant]]
+name = "a changed class attribute leaves the old classes"
+file = "crates/dom_next/src/style.rs"
+from = '''        if self.flag(element, CLASSES_STALE) {
+            self.make_class_list(element);
+        }'''
+to = ''''''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_next", "--test", "it", "style::"]

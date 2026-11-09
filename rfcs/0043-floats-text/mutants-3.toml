@@ -1,0 +1,159 @@
+# Mutation test of stage 3: `text-overflow` (2026-10-13):
+# python3 scripts/test.py mutate rfcs/0043-floats-text/mutants-3.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "text_overflow::"]
+timeout = 900
+
+# css
+
+[[mutant]]
+name = "ellipsis parses as clip"
+file = "crates/css/src/properties.rs"
+from = '''                    "ellipsis" => computed_style::TextOverflow::Ellipsis,'''
+to = '''                    "ellipsis" => computed_style::TextOverflow::Clip,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+[[mutant]]
+name = "text-overflow isn't applied"
+file = "crates/css/src/properties.rs"
+from = '''        (TextOverflow, Value::TextOverflow(v)) => style.text_overflow = v,'''
+to = '''        (TextOverflow, Value::TextOverflow(_)) => {}'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+[[mutant]]
+name = "text-overflow is inherited"
+file = "crates/computed_style/src/lib.rs"
+from = '''            text_transform: parent.text_transform,'''
+to = '''            text_transform: parent.text_transform,
+            text_overflow: parent.text_overflow,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+# layout
+
+[[mutant]]
+name = "a block that doesn't clip truncates"
+file = "crates/layout/src/lib.rs"
+from = '''    style.text_overflow == TextOverflow::Ellipsis && style.clips_overflow()'''
+to = '''    style.text_overflow == TextOverflow::Ellipsis'''
+
+[[mutant]]
+name = "an anonymous block doesn't truncate"
+file = "crates/layout/src/lib.rs"
+from = '''        let Some(inline) = InlineContent::new(cx.text, &style, &items, truncates) else {'''
+to = '''        let Some(inline) = InlineContent::new(cx.text, &style, &items, truncates && false) else {'''
+
+[[mutant]]
+name = "a line that just fits is truncated"
+file = "crates/layout/src/text.rs"
+from = '''                && content_end > origin.x + width + BREAK_TOLERANCE'''
+to = '''                && content_end >= origin.x + width'''
+
+[[mutant]]
+name = "the ellipsis is three dots in a font that has U+2026"
+file = "crates/layout/src/text.rs"
+from = '''    let text = if first_font(cx, "\u{2026}") == first_font(cx, "X") {'''
+to = '''    let text = if first_font(cx, "\u{2026}") != first_font(cx, "X") {'''
+
+[[mutant]]
+name = "the ellipsis isn't placed"
+file = "crates/layout/src/text.rs"
+from = '''    runs.push(ellipsis);
+}'''
+to = '''    let _ = ellipsis;
+}'''
+
+[[mutant]]
+name = "the ellipsis is the block's"
+file = "crates/layout/src/text.rs"
+from = '''        LineChild::Run(run) => runs[run].node,'''
+to = '''        LineChild::Run(_) => None,'''
+
+[[mutant]]
+name = "a child wholly outside the box isn't hidden"
+file = "crates/layout/src/text.rs"
+from = '''        if space <= 0.0 {
+            if !first {
+                hide(runs, child);
+            }
+            continue;
+        }'''
+to = '''        if space <= 0.0 {
+            continue;
+        }'''
+
+[[mutant]]
+name = "a run is cut where the ellipsis would overflow"
+file = "crates/layout/src/text.rs"
+from = '''        let cut = end(fit);'''
+to = '''        let cut = end(fit + 1);'''
+
+[[mutant]]
+name = "the first run keeps no cluster"
+file = "crates/layout/src/text.rs"
+from = '''        if fit == 0 || fit == starts.len() {
+            if !first {'''
+to = '''        if fit == 0 || fit == starts.len() {
+            if true {'''
+
+[[mutant]]
+name = "a first atomic inline is hidden"
+file = "crates/layout/src/text.rs"
+from = '''            LineChild::Atomic(_) => {
+                if first {
+                    placed = Some((child, child_right));
+                    break;
+                }'''
+to = '''            LineChild::Atomic(_) => {'''
+
+# parley (the fork): an atomic inline wraps as its span does
+
+[[mutant]]
+name = "an atomic inline first on a nowrap line wraps"
+file = "../third_party/parley/parley/src/layout/line_break.rs"
+from = '''                    if line_break == InlineBoxLineBreak::Auto {
+                        let parent'''
+to = '''                    if false {
+                        let parent'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "parley_inline_box::"]
+
+[[mutant]]
+name = "an edge takes its span's wrap mode"
+file = "../third_party/parley/parley/src/layout/line_break.rs"
+from = '''                    if line_break == InlineBoxLineBreak::Auto {
+                        let parent'''
+to = '''                    if true {
+                        let parent'''
+test = ["python3", "scripts/test.py", "wpt", "css/CSS2/linebox/inline-formatting-context-012.xht"]
+
+[[mutant]]
+name = "min-content counts an atomic inline first in nowrap as wrapping"
+file = "../third_party/parley/parley/src/layout/data.rs"
+from = '''                    if inline_box.line_break == InlineBoxLineBreak::Auto {
+                        self.text_wrap_mode'''
+to = '''                    if false {
+                        self.text_wrap_mode'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "parley_inline_box::"]
+
+# paint
+
+[[mutant]]
+name = "hidden glyphs are painted"
+file = "crates/paint/src/lib.rs"
+from = '''        let glyphs = &run.glyphs[..run.hidden_from.unwrap_or(run.glyphs.len())];'''
+to = '''        let glyphs = &run.glyphs[..];'''
+test = ["python3", "scripts/test.py", "reftest", "text/t16-text-overflow.html"]
+
+[[mutant]]
+name = "decorations go past the cut"
+file = "crates/paint/src/lib.rs"
+from = '''        let advance = run.visible_advance;'''
+to = '''        let advance = run.advance;'''
+test = ["python3", "scripts/test.py", "reftest", "text/t16-text-overflow.html"]
+
+[[mutant]]
+name = "a hidden atomic inline is painted and hit"
+file = "crates/paint/src/lib.rs"
+from = '''                if !atomic.hidden {
+                    parts.push(LinePart::Atomic(atomic.child));
+                }'''
+to = '''                parts.push(LinePart::Atomic(atomic.child));'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "hit_test::"]

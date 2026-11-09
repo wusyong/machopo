@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<script>
+function run() { return new Promise(done => {
+  const log = [];
+  const r = new FileReader();
+  r.onload = () => { log.push('load'); Promise.resolve().then(() => log.push('microtask')); };
+  r.onloadend = () => { log.push('loadend'); setTimeout(() => done(log.join(', ')), 0); };
+  r.readAsText(new Blob(['a']));
+}); }
+</script>

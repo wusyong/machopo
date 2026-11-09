@@ -1,0 +1,58 @@
+# Step 3c: the nursery's size (V8's: doubling as survivors add up to it, up
+# to its largest; halving at a full GC after scavenges of garbage, down to
+# its first) and `Mutation::pretenured`.
+test = ["cargo", "test", "-q", "-p", "gc"]
+timeout = 600
+
+[[mutant]]
+name = "the nursery never grows"
+file = "crates/gc/src/heap/young.rs"
+from = '''        if self.survived_since_growing > self.capacity_bytes() {'''
+to = '''        if self.survived_since_growing > self.capacity_bytes() && false {'''
+
+[[mutant]]
+name = "the nursery grows past its largest"
+file = "crates/gc/src/heap/young.rs"
+from = '''            self.capacity_pages = self.capacity_pages.saturating_mul(2).min(self.max_pages);'''
+to = '''            self.capacity_pages = self.capacity_pages.saturating_mul(2);'''
+
+[[mutant]]
+name = "the nursery never shrinks"
+file = "crates/gc/src/heap/young.rs"
+from = '''        if self.kept_since_full_gc.saturating_mul(16) < self.seen_since_full_gc {'''
+to = '''        if self.kept_since_full_gc.saturating_mul(16) < self.seen_since_full_gc && false {'''
+
+[[mutant]]
+name = "the nursery shrinks past its first size"
+file = "crates/gc/src/heap/young.rs"
+from = '''            self.capacity_pages = (self.capacity_pages / 2).max(self.first_pages);'''
+to = '''            self.capacity_pages = (self.capacity_pages / 2).max(1);'''
+
+[[mutant]]
+name = "a full GC's scavenge counts for the size"
+file = "crates/gc/src/heap/young.rs"
+from = '''        if !promote_all {
+            young.scavenged('''
+to = '''        if true {
+            young.scavenged('''
+
+[[mutant]]
+name = "pretenuring is ignored"
+file = "crates/gc/src/heap.rs"
+from = '''            && self.pretenure.get() == 0'''
+to = '''            && self.pretenure.get() < u32::MAX'''
+
+[[mutant]]
+name = "a panic leaves the pretenuring on"
+file = "crates/gc/src/heap.rs"
+from = '''                self.0.set(self.0.get().saturating_sub(1));'''
+to = '''                let _ = self;'''
+
+[[mutant]]
+name = "a smaller nursery keeps what the larger counted"
+file = "crates/gc/src/heap/young.rs"
+from = '''            self.survived_since_growing = 0;
+        }
+        self.seen_since_full_gc = 0;'''
+to = '''        }
+        self.seen_since_full_gc = 0;'''

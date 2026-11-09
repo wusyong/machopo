@@ -1,0 +1,245 @@
+# Mutation test of step 1b: each longhand's animation type and the
+# interpolation of computed values (2026-10-15):
+# python3 scripts/test.py mutate rfcs/0048-css-animations/mutants-1b.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "interpolation::"]
+timeout = 900
+
+[[mutant]]
+name = "display is discrete"
+file = "crates/css/src/interpolate.rs"
+from = '''            Display
+            | TransitionProperty'''
+to = '''            TransitionProperty'''
+
+[[mutant]]
+name = "visibility is discrete"
+file = "crates/css/src/interpolate.rs"
+from = '''            | Y
+            | Visibility
+            | BorderSpacing => AnimationType::ByComputedValue,'''
+to = '''            | Y
+            | BorderSpacing => AnimationType::ByComputedValue,'''
+
+[[mutant]]
+name = "lerp backwards"
+file = "crates/css/src/interpolate.rs"
+from = '''    a + (b - a) * progress
+}'''
+to = '''    b + (a - b) * progress
+}'''
+
+[[mutant]]
+name = "integers round halves to even"
+file = "crates/css/src/interpolate.rs"
+from = '''        Some((lerp((*self).into(), (*other).into(), progress) + 0.5).floor() as i32)'''
+to = '''        Some(lerp((*self).into(), (*other).into(), progress).round() as i32)'''
+
+[[mutant]]
+name = "z-index auto interpolates as 0"
+file = "crates/css/src/interpolate.rs"
+from = '''            (Some(a), Some(b)) => Some(a.animate(b, progress, cx)),
+            _ => None,'''
+to = '''            (a, b) => Some(a.unwrap_or(0).animate(&b.unwrap_or(0), progress, cx)),'''
+
+[[mutant]]
+name = "letter-spacing normal isn't 0"
+file = "crates/css/src/interpolate.rs"
+from = '''        let (a, b) = (self.unwrap_or(0.0), other.unwrap_or(0.0));'''
+to = '''        let (a, b) = (self.unwrap_or(1.0), other.unwrap_or(1.0));'''
+
+[[mutant]]
+name = "a zero percentage isn't a length"
+file = "crates/css/src/interpolate.rs"
+from = '''        Lp::Percent(percent) => (0.0, percent, zero_is_length && percent == 0.0),'''
+to = '''        Lp::Percent(percent) => (0.0, percent, false),'''
+
+[[mutant]]
+name = "a mix with no length is a calc()"
+file = "crates/css/src/interpolate.rs"
+from = '''    } else if px == 0.0 {
+        Lp::Percent(percent)'''
+to = '''    } else if false {
+        Lp::Percent(percent)'''
+
+[[mutant]]
+name = "vertical-align's baseline isn't 0px"
+file = "crates/css/src/interpolate.rs"
+from = '''            Self::Baseline => Some(LengthPercentage::ZERO),'''
+to = '''            Self::Baseline => None,'''
+
+[[mutant]]
+name = "a mix below 0 isn't clamped"
+file = "crates/css/src/interpolate.rs"
+from = '''        LengthPercentage::Calc { non_negative, .. } => *non_negative = true,'''
+to = '''        LengthPercentage::Calc { .. } => {}'''
+
+[[mutant]]
+name = "a length below 0 isn't clamped"
+file = "crates/css/src/interpolate.rs"
+from = '''        LengthPercentage::Px(px) => *px = px.max(0.0),'''
+to = '''        LengthPercentage::Px(_) => {}'''
+
+[[mutant]]
+name = "opacity isn't clamped"
+file = "crates/css/src/interpolate.rs"
+from = '''        Opacity => style.opacity = style.opacity.clamp(0.0, 1.0),'''
+to = '''        Opacity => {}'''
+
+[[mutant]]
+name = "font-weight isn't clamped"
+file = "crates/css/src/interpolate.rs"
+from = '''        FontWeight => style.font_weight = style.font_weight.clamp(1.0, 1000.0),'''
+to = '''        FontWeight => {}'''
+
+[[mutant]]
+name = "line-height numbers and lengths mix"
+file = "crates/css/src/interpolate.rs"
+from = '''            (Self::Px(a), Self::Px(b)) => Some(Self::Px(a.animate(b, progress, cx)?)),'''
+to = '''            (Self::Px(a), Self::Px(b)) => Some(Self::Px(a.animate(b, progress, cx)?)),
+            (Self::Number(a), Self::Px(b)) => Some(Self::Px(a.animate(b, progress, cx)?)),'''
+
+[[mutant]]
+name = "colors mix unpremultiplied"
+file = "crates/css/src/interpolate.rs"
+from = '''        (lerp(a[i], b[i], progress) / alpha)'''
+to = '''        (lerp(a[i] / a[3].max(1e-9), b[i] / b[3].max(1e-9), progress))'''
+
+[[mutant]]
+name = "two currentcolors resolve"
+file = "crates/css/src/interpolate.rs"
+from = '''        if *self == Self::CurrentColor && *other == Self::CurrentColor {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "currentcolor is the other style's color"
+file = "crates/css/src/interpolate.rs"
+from = '''            resolve(self, cx.from),'''
+to = '''            resolve(self, cx.to),'''
+
+[[mutant]]
+name = "visibility steps between visible and hidden"
+file = "crates/css/src/interpolate.rs"
+from = '''        if *self != Self::Visible && *other != Self::Visible {'''
+to = '''        if *self != Self::Visible || *other != Self::Visible {'''
+
+[[mutant]]
+name = "visibility is visible at 0"
+file = "crates/css/src/interpolate.rs"
+from = '''        Some(if progress <= 0.0 {'''
+to = '''        Some(if progress < 0.0 {'''
+
+[[mutant]]
+name = "a padding shadow has the other's color"
+file = "crates/css/src/interpolate.rs"
+from = '''            color: StyleColor::Rgba(Color::TRANSPARENT),
+            inset: like.inset,'''
+to = '''            color: like.color,
+            inset: like.inset,'''
+
+[[mutant]]
+name = "inset and not interpolate"
+file = "crates/css/src/interpolate.rs"
+from = '''                if a.inset != b.inset {
+                    return None;
+                }'''
+to = '''                if a.inset != b.inset && false {
+                    return None;
+                }'''
+
+[[mutant]]
+name = "blur below 0"
+file = "crates/css/src/interpolate.rs"
+from = '''                    blur: a.blur.animate(&b.blur, progress, cx)?.max(0.0),'''
+to = '''                    blur: a.blur.animate(&b.blur, progress, cx)?,'''
+
+[[mutant]]
+name = "lists repeat to the longer, not the common multiple"
+file = "crates/css/src/interpolate.rs"
+from = '''    let n = a.len() / gcd(a.len(), b.len()) * b.len();'''
+to = '''    let n = a.len().max(b.len());'''
+
+[[mutant]]
+name = "an empty list interpolates"
+file = "crates/css/src/interpolate.rs"
+from = '''        return (a.is_empty() && b.is_empty()).then(|| Arc::new([]) as Arc<[T]>);'''
+to = '''        return Some(Arc::new([]) as Arc<[T]>);'''
+
+[[mutant]]
+name = "a position from the end is taken from the start"
+file = "crates/css/src/interpolate.rs"
+from = '''            if !c.from_end {
+                return c.offset;
+            }'''
+to = '''            if true {
+                return c.offset;
+            }'''
+
+[[mutant]]
+name = "background-size auto doesn't interpolate with auto"
+file = "crates/css/src/interpolate.rs"
+from = '''                    (LengthPercentageOrAuto::Auto, LengthPercentageOrAuto::Auto) => {
+                        Some(LengthPercentageOrAuto::Auto)
+                    }'''
+to = '''                    (LengthPercentageOrAuto::Auto, LengthPercentageOrAuto::Auto) => None,'''
+
+[[mutant]]
+name = "none isn't scale(1)"
+file = "crates/css/src/interpolate.rs"
+from = '''            TransformOperation::Scale(..) => TransformOperation::Scale(1.0, 1.0),'''
+to = '''            TransformOperation::Scale(..) => TransformOperation::Scale(0.0, 0.0),'''
+
+[[mutant]]
+name = "different functions are taken as the same"
+file = "crates/css/src/interpolate.rs"
+from = '''                .all(|(a, b)| std::mem::discriminant(a) == std::mem::discriminant(b));'''
+to = '''                .all(|(_, _)| true);'''
+
+[[mutant]]
+name = "the list's matrix is in the wrong order"
+file = "crates/css/src/interpolate.rs"
+from = '''        m = m.then(&next);'''
+to = '''        m = next.then(&m);'''
+
+[[mutant]]
+name = "a percentage goes into a matrix"
+file = "crates/css/src/interpolate.rs"
+from = '''        LengthPercentage::Percent(0.0) => Some(0.0),
+        _ => None,'''
+to = '''        LengthPercentage::Percent(_) => Some(0.0),
+        _ => None,'''
+
+[[mutant]]
+name = "a flip isn't a negative scale"
+file = "crates/css/src/interpolate.rs"
+from = '''        if a * d - b * c < 0.0 {
+            if a < d {'''
+to = '''        if a * d - b * c < 0.0 && false {
+            if a < d {'''
+
+[[mutant]]
+name = "the rotation goes the long way"
+file = "crates/css/src/interpolate.rs"
+from = '''        if (a.angle - b.angle).abs() > 180.0 {'''
+to = '''        if (a.angle - b.angle).abs() > 1800.0 {'''
+
+[[mutant]]
+name = "the rotation isn't taken out"
+file = "crates/css/src/interpolate.rs"
+from = '''        if angle != 0.0 {
+            // Rotate the rows back by the angle.'''
+to = '''        if angle != 0.0 && false {
+            // Rotate the rows back by the angle.'''
+
+[[mutant]]
+name = "the skew is applied after the rotation"
+file = "crates/css/src/interpolate.rs"
+from = '''        let row0 = [cs * m11 + sn * m21, cs * m12 + sn * m22];
+        let row1 = [-sn * m11 + cs * m21, -sn * m12 + cs * m22];'''
+to = '''        let row0 = [m11 * cs - m12 * sn, m11 * sn + m12 * cs];
+        let row1 = [m21 * cs - m22 * sn, m21 * sn + m22 * cs];'''
+
+[[mutant]]
+name = "the half turn's sine isn't exactly 0"
+file = "crates/css/src/interpolate.rs"
+from = '''        let (sn, cs) = (snap(sn), snap(cs));'''
+to = '''        let (sn, cs) = (sn, snap(cs));'''

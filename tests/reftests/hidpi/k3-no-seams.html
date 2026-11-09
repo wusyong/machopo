@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<title>K3: at 1.5x, boxes one CSS px high share their edges, with no seam of what is under them</title>
+<link rel="match" href="k3-no-seams-ref.html">
+<style>
+  html, body { margin: 0 }
+  #under { width: 100px; height: 20px; background-color: red }
+  #under div { height: 1px; background-color: green }
+</style>
+<!-- Each edge is at a half device pixel. Snapped to device pixels, the
+     boxes tile the 30 device px; snapped to CSS px, each edge would blend
+     green with the red under it. -->
+<div id="under">
+  <div></div><div></div><div></div><div></div><div></div>
+  <div></div><div></div><div></div><div></div><div></div>
+  <div></div><div></div><div></div><div></div><div></div>
+  <div></div><div></div><div></div><div></div><div></div>
+</div>

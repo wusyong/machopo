@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<title></title>
+<script>
+  // A canvas's bitmap as an image file: toDataURL's PNG, loaded in an
+  // <img> and drawn on another canvas, is its pixels (half transparent
+  // blue too); JPEG's quality counts only as a number; a canvas with no
+  // pixels is "data:,". toBlob gives the same file in a later task, of
+  // the bitmap when it was called; null for no pixels. The results go in
+  // the title.
+  const px = (ctx, x, y) => Array.from(ctx.getImageData(x, y, 1, 1).data).join(",");
+  const canvas = (w, h) => {
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    return [c, c.getContext("2d")];
+  };
+  // A data: URL's base64 decoded, as bytes joined with commas.
+  const urlBytes = (url) => {
+    const digits = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const out = [];
+    let bits = 0;
+    let count = 0;
+    for (const digit of url.slice(url.indexOf(",") + 1)) {
+      if (digit === "=") break;
+      bits = (bits << 6) | digits.indexOf(digit);
+      count += 6;
+      if (count >= 8) {
+        count -= 8;
+        out.push((bits >> count) & 255);
+        bits &= (1 << count) - 1;
+      }
+    }
+    return out.join(",");
+  };
+  const blobBytes = async (blob) => Array.from(new Uint8Array(await blob.arrayBuffer())).join(",");
+  const toBlob = (c, ...args) => new Promise((done) => c.toBlob(done, ...args));
+  const loaded = (src) => new Promise((done, failed) => {
+    const img = new Image();
+    img.onload = () => done(img);
+    img.onerror = () => failed("the PNG didn't load");
+    img.src = src;
+  });
+
+  (async () => {
+    const out = [];
+    const [c, ctx] = canvas(2, 1);
+    ctx.fillStyle = "red";
+    ctx.fillRect(0, 0, 1, 1);
+    ctx.fillStyle = "rgba(0, 0, 255, 0.5)";
+    ctx.fillRect(1, 0, 1, 1);
+    const png = c.toDataURL();
+    out.push(png.slice(0, 22));
+
+    const [big, bigContext] = canvas(64, 64);
+    const gradient = bigContext.createLinearGradient(0, 0, 64, 64);
+    gradient.addColorStop(0, "red");
+    gradient.addColorStop(1, "blue");
+    bigContext.fillStyle = gradient;
+    bigContext.fillRect(0, 0, 64, 64);
+    const low = big.toDataURL("image/jpeg", 0.1);
+    const high = big.toDataURL("image/jpeg", 1);
+    const string = big.toDataURL("IMAGE/JPEG", "0.1");
+    const byDefault = big.toDataURL("image/jpeg");
+    out.push("jpeg " + low.slice(0, 23) + " " + (low.length < high.length) + " " +
+      (string === byDefault) + " " + (string !== low));
+    out.push("webp " + big.toDataURL("image/webp").slice(0, 22));
+
+    const [empty] = canvas(0, 1);
+    out.push("empty " + empty.toDataURL());
+
+    // toBlob, then the bitmap changed: the blob is of the bitmap before.
+    let called = false;
+    const pngBlob = toBlob(c).then((blob) => (called = true, blob));
+    const syncCall = called;
+    ctx.fillStyle = "lime";
+    ctx.fillRect(0, 0, 2, 1);
+    const jpegBlob = toBlob(big, "image/jpeg", 0.1);
+    const webpBlob = toBlob(big, "image/webp");
+    const emptyBlob = toBlob(empty);
+    let blob = await pngBlob;
+    out.push("blob " + syncCall + " " + blob.type + " " +
+      ((await blobBytes(blob)) === urlBytes(png)));
+    blob = await jpegBlob;
+    out.push(blob.type + " " + ((await blobBytes(blob)) === urlBytes(low)));
+    out.push((await webpBlob).type + " " + (await emptyBlob));
+
+    const img = await loaded(png);
+    const [, back] = canvas(2, 1);
+    back.drawImage(img, 0, 0);
+    out.push("back " + px(back, 0, 0) + " " + px(back, 1, 0));
+    document.title = out.join(" | ");
+  })().catch((e) => {
+    document.title = "error " + e;
+  });
+</script>

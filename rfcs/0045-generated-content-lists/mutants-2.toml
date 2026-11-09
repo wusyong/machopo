@@ -1,0 +1,322 @@
+# Mutation test of stage 2: list items, `::marker`, `list-style-*` and the
+# counters (2026-10-14):
+# python3 scripts/test.py mutate rfcs/0045-generated-content-lists/mutants-2.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "lists::", "update::markers", "update::counters"]
+timeout = 600
+
+[[mutant]]
+name = "::marker isn't parsed"
+file = "crates/css/src/selector.rs"
+from = '''        } else if name.eq_ignore_ascii_case("marker") {'''
+to = '''        } else if false {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "matching::a_list"]
+
+[[mutant]]
+name = "counter() takes none"
+file = "crates/css/src/properties.rs"
+from = '''        computed_style::ListStyleType::None => Err(location.new_custom_error(())),'''
+to = '''        computed_style::ListStyleType::None => Ok(computed_style::ListStyleType::None),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cssom::"]
+
+[[mutant]]
+name = "a counter reset without a value has none"
+file = "crates/css/src/properties.rs"
+from = '''            value: value.or((!is_reversed).then_some(0)),'''
+to = '''            value,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cssom::"]
+
+[[mutant]]
+name = "counter-increment's default is 0"
+file = "crates/css/src/properties.rs"
+from = '''parse_counter_changes(input, 1)'''
+to = '''parse_counter_changes(input, 0)'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cssom::"]
+
+[[mutant]]
+name = "list-style's lone none is the image's"
+file = "crates/css/src/properties.rs"
+from = '''                    (1, false) => kind = Some(none_type),'''
+to = '''                    (1, false) => image = Some(Value::ListStyleImage),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cssom::"]
+
+[[mutant]]
+name = "list-style writes the initial type"
+file = "crates/css/src/serialize.rs"
+from = '''                Value::ListStyleType(ListStyleType::Disc) => {}'''
+to = '''                Value::ListStyleType(ListStyleType::Circle) => {}'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cssom::"]
+
+[[mutant]]
+name = "a counter function writes decimal"
+file = "crates/css/src/serialize.rs"
+from = '''    if *style != ListStyleType::Decimal {'''
+to = '''    if true {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cssom::"]
+
+[[mutant]]
+name = "display: list-item isn't parsed"
+file = "crates/css/src/properties.rs"
+from = '''                    "list-item" => computed_style::Display::ListItem,'''
+to = '''                    "list-itemx" => computed_style::Display::ListItem,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "computed::lists"]
+
+[[mutant]]
+name = "list-style-type isn't inherited"
+file = "crates/computed_style/src/lib.rs"
+from = '''            list_style_type: parent.list_style_type.clone(),'''
+to = ''''''
+
+[[mutant]]
+name = "::marker takes every property"
+file = "crates/style/src/lib.rs"
+from = '''            LonghandId::applies_to_marker
+'''
+to = '''            |_| true
+'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "matching::a_list"]
+
+[[mutant]]
+name = "any element has a marker style"
+file = "crates/style/src/lib.rs"
+from = '''        if if marker {
+            !list_item
+        } else {'''
+to = '''        if if marker {
+            false
+        } else {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "matching::a_list"]
+
+[[mutant]]
+name = "a marker's normal content is none"
+file = "crates/style/src/lib.rs"
+from = '''            Content::Normal if marker => Content::Normal,
+'''
+to = ''''''
+
+[[mutant]]
+name = "an outside marker is inline"
+file = "crates/style/src/lib.rs"
+from = '''                ListStylePosition::Outside => Display::InlineBlock,'''
+to = '''                ListStylePosition::Outside => Display::Inline,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "matching::a_list"]
+
+[[mutant]]
+name = "a marker takes its list item's indent"
+file = "crates/style/src/lib.rs"
+from = '''            pseudo_style.text_indent = LengthPercentage::Px(0.0);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "matching::a_list"]
+
+[[mutant]]
+name = "a marker's rules are the ::before's"
+file = "crates/style/src/lib.rs"
+from = '''        Some(PseudoId::Marker) => 3,'''
+to = '''        Some(PseudoId::Marker) => 1,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "matching::a_list"]
+
+[[mutant]]
+name = "ol start resets to the start"
+file = "crates/style/src/hints.rs"
+from = '''                value: Some(start.saturating_sub(1)),'''
+to = '''                value: Some(start),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "computed::lists"]
+
+[[mutant]]
+name = "a reversed ol resets to the start"
+file = "crates/style/src/hints.rs"
+from = '''                value: start.map(|start| start.saturating_add(1)),'''
+to = '''                value: start,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "computed::lists"]
+
+[[mutant]]
+name = "ol type A isn't upper-alpha"
+file = "crates/style/src/hints.rs"
+from = '''        "A" => Some(ListStyleType::UpperAlpha),'''
+to = '''        "A" => None,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "computed::lists"]
+
+[[mutant]]
+name = "ul type is case-sensitive"
+file = "crates/style/src/hints.rs"
+from = '''    let bullet = match kind.to_ascii_lowercase().as_str() {'''
+to = '''    let bullet = match kind.as_str() {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "computed::lists"]
+
+[[mutant]]
+name = "li value isn't a hint"
+file = "crates/style/src/hints.rs"
+from = '''    if li
+        && let Some(value) = element'''
+to = '''    if false
+        && let Some(value) = element'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "computed::lists"]
+
+[[mutant]]
+name = "li isn't a list item"
+file = "crates/style/resources/html.css"
+from = '''li {
+  display: list-item;
+}'''
+to = '''li {
+  display: block;
+}'''
+
+[[mutant]]
+name = "lists don't reset list-item"
+file = "crates/style/resources/html.css"
+from = '''ol, ul, menu {
+  counter-reset: list-item;
+}'''
+to = '''ol, ul, menu {
+}'''
+
+[[mutant]]
+name = "a sibling's counters are inherited over the parent's"
+file = "crates/layout/src/counters.rs"
+from = '''            if !parent_set.iter().any(|&i| self.instances[i].name == *name) {'''
+to = '''            if true {'''
+
+[[mutant]]
+name = "a sibling's counters aren't inherited"
+file = "crates/layout/src/counters.rs"
+from = '''            if !parent_set.iter().any(|&i| self.instances[i].name == *name) {
+                set.push(instance);
+            }'''
+to = '''            if !parent_set.iter().any(|&i| self.instances[i].name == *name) {
+            }'''
+
+[[mutant]]
+name = "a reset doesn't take a sibling's counter's place"
+file = "crates/layout/src/counters.rs"
+from = '''            && self.instances[set[i]].origin_parent == parent'''
+to = '''            && false'''
+
+[[mutant]]
+name = "a reversed list's items count up"
+file = "crates/layout/src/counters.rs"
+from = '''if reversed { -1 } else { 1 }'''
+to = '''if reversed { 1 } else { 1 }'''
+
+[[mutant]]
+name = "a reversed counter starts without its first set's value"
+file = "crates/layout/src/counters.rs"
+from = '''                    start += i64::from(to);
+                    break;'''
+to = '''                    break;'''
+
+[[mutant]]
+name = "a reversed counter ends at 0"
+file = "crates/layout/src/counters.rs"
+from = '''                    last_negated = negated;'''
+to = ''''''
+
+[[mutant]]
+name = "an overflowing increment saturates"
+file = "crates/layout/src/counters.rs"
+from = '''value.checked_add(by).unwrap_or(value)'''
+to = '''value.saturating_add(by)'''
+
+[[mutant]]
+name = "a pseudo-element's counters aren't shown"
+file = "crates/layout/src/counters.rs"
+from = '''        if shows_counters(&style) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "::after doesn't see the children's counters"
+file = "crates/layout/src/counters.rs"
+from = '''            let set = self.inherit(&set, &sibling);'''
+to = '''            let set = self.inherit(&set, &Set::new());'''
+
+[[mutant]]
+name = "a number's suffix is a period alone"
+file = "crates/layout/src/counters.rs"
+from = '''        _ => ". ",'''
+to = '''        _ => ".",'''
+
+[[mutant]]
+name = "alphabetic counters start at b"
+file = "crates/layout/src/counters.rs"
+from = '''        value -= 1;'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--lib", "counters"]
+
+[[mutant]]
+name = "an inside marker isn't collected"
+file = "crates/layout/src/lib.rs"
+from = '''            && parent_style.list_style_position == ListStylePosition::Inside'''
+to = '''            && false'''
+
+[[mutant]]
+name = "an outside marker isn't built"
+file = "crates/layout/src/lib.rs"
+from = '''            || style.list_style_position != ListStylePosition::Outside'''
+to = '''            || true'''
+
+[[mutant]]
+name = "an outside marker's top is on the line's baseline"
+file = "crates/layout/src/lib.rs"
+from = '''            (Some(line), Some(own)) => PointF::new(line.x, line.y - own.y),'''
+to = '''            (Some(line), Some(own)) => PointF::new(line.x, line.y),'''
+
+[[mutant]]
+name = "an outside marker ends at the content box"
+file = "crates/layout/src/lib.rs"
+from = '''            (Some(line), Some(own)) => PointF::new(line.x, line.y - own.y),'''
+to = '''            (Some(line), Some(own)) => PointF::new(content.x, line.y - own.y),'''
+
+[[mutant]]
+name = "an empty list item isn't as tall as its marker"
+file = "crates/layout/src/lib.rs"
+from = '''                    height: marker_height,'''
+to = '''                    height: 0.0,'''
+
+[[mutant]]
+name = "an outside marker isn't on the first line"
+file = "crates/layout/src/lib.rs"
+from = '''            if let Some(first) = lines.first_mut() {
+                first.atomic_inlines.insert('''
+to = '''            if let Some(first) = lines.first_mut().filter(|_| false) {
+                first.atomic_inlines.insert('''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "markers_are", "a_marker"]
+
+[[mutant]]
+name = "a new counter text doesn't collect the content again"
+file = "crates/layout/src/lib.rs"
+from = '''                    .is_some_and(|old| old != text)'''
+to = '''                    .is_some_and(|_| false)'''
+
+[[mutant]]
+name = "a box built again where counters were doesn't work them out"
+file = "crates/layout/src/lib.rs"
+from = '''        let pass = (!walk.dirty.is_empty() && self.counters.any)'''
+to = '''        let pass = false'''
+
+[[mutant]]
+name = "getComputedStyle has no ::marker"
+file = "crates/dom_api/src/computed_style.rs"
+from = '''                "marker" => StyleTarget::Pseudo(PseudoId::Marker),'''
+to = '''                "marker" => StyleTarget::OtherPseudo,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "computed_style::pseudo"]
+
+[[mutant]]
+name = ":marker is ::marker"
+file = "crates/dom_api/src/computed_style.rs"
+from = '''                _ if single_colon && !css2 && PSEUDO_ELEMENTS.contains(&name.as_str()) => {'''
+to = '''                _ if false => {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "computed_style::pseudo"]
+
+[[mutant]]
+name = "an argument without a colon is a pseudo-element"
+file = "crates/dom_api/src/computed_style.rs"
+from = '''        Some(text) if !text.starts_with(':') => StyleTarget::Element,
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "computed_style::pseudo"]
+
+[[mutant]]
+name = "boxes built again where there were no counters don't work them out"
+file = "crates/layout/src/lib.rs"
+from = '''                .any(|(element, _)| has_counters_below(*element));'''
+to = '''                .any(|_| false);'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::a_first"]

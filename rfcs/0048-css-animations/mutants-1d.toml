@@ -1,0 +1,110 @@
+# Mutation test of step 1d: transitions in style recalc (2026-10-15):
+# python3 scripts/test.py mutate rfcs/0048-css-animations/mutants-1d.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "animations::"]
+timeout = 900
+
+[[mutant]]
+name = "an inherited property's frame leaves the subtree"
+file = "crates/style/src/animations.rs"
+from = '''                .any(|id| id == LonghandId::FontSize || id.is_inherited())'''
+to = '''                .any(|id| id == LonghandId::FontSize)'''
+
+[[mutant]]
+name = "a font-size frame leaves the cascade"
+file = "crates/style/src/animations.rs"
+from = '''                .any(|id| id == LonghandId::FontSize || id.is_inherited())'''
+to = '''                .any(|id| id.is_inherited() && id != LonghandId::FontSize)'''
+
+[[mutant]]
+name = "the ems don't follow a transition's font-size"
+file = "crates/style/src/lib.rs"
+from = '''    if let Some(font_size) = animated_font_size {
+        style.font_size = font_size;
+    } else if let Some((declaration, _)) = winners[LonghandId::FontSize.index()] {'''
+to = '''    if let Some(font_size) = animated_font_size.filter(|_| false) {
+        style.font_size = font_size;
+    } else if let Some((declaration, _)) = winners[LonghandId::FontSize.index()] {'''
+
+[[mutant]]
+name = "display none doesn't cancel"
+file = "crates/style/src/animations.rs"
+from = '''        if !rendered {
+            if let Some(mut gone) = targets.remove(&target) {'''
+to = '''        if false {
+            if let Some(mut gone) = targets.remove(&target) {'''
+
+[[mutant]]
+name = "a style that wasn't rendered starts one"
+file = "crates/style/src/animations.rs"
+from = '''        let was_rendered = old.is_some_and(|old| old.display != Display::None);'''
+to = '''        let was_rendered = old.is_some();'''
+
+[[mutant]]
+name = "a delay alone isn't time"
+file = "crates/style/src/animations.rs"
+from = '''    ) && (transitions.duration.iter().any(|d| *d > 0.0)
+        || transitions.delay.iter().any(|d| *d > 0.0))'''
+to = '''    ) && transitions.duration.iter().any(|d| *d > 0.0)'''
+
+[[mutant]]
+name = "the base style isn't the new one"
+file = "crates/style/src/animations.rs"
+from = '''        entry.base = base.clone();
+        let style = if entry.animations.is_running() || !entry.animations.css_animations.is_empty()'''
+to = '''        let style = if entry.animations.is_running() || !entry.animations.css_animations.is_empty()'''
+
+[[mutant]]
+name = "an ancestor's display none is rendered"
+file = "crates/style/src/animations.rs"
+from = '''            .is_some_and(|style| style.display == Display::None)'''
+to = '''            .is_some_and(|style| style.display == Display::None && false)'''
+
+[[mutant]]
+name = "a pseudo-element with no content is rendered"
+file = "crates/style/src/lib.rs"
+from = '''                                            && (pseudo == PseudoId::Marker
+                                                || base.content != Content::None),'''
+to = '''                                            && (pseudo == PseudoId::Marker
+                                                || base.content != Content::None
+                                                || true),'''
+
+[[mutant]]
+name = "a gone pseudo-element's transitions stay"
+file = "crates/style/src/lib.rs"
+from = '''                            if pseudo_styles.get(pseudo).is_none() {
+                                animator.forget(node.id(), pseudo);'''
+to = '''                            if pseudo_styles.get(pseudo).is_none() && false {
+                                animator.forget(node.id(), pseudo);'''
+
+[[mutant]]
+name = "a frame doesn't sample the pseudo-elements"
+file = "crates/style/src/lib.rs"
+from = '''        let new = match (&old, animator.sample(target(Some(pseudo)))) {'''
+to = '''        let new = match (&old, None::<ComputedStyle>) {'''
+
+[[mutant]]
+name = "a frame doesn't sample the element"
+file = "crates/style/src/lib.rs"
+from = '''    let style = match animator.sample(target(None)) {'''
+to = '''    let style = match None::<ComputedStyle> {'''
+
+[[mutant]]
+name = "a frame's new style isn't stored"
+file = "crates/style/src/lib.rs"
+from = '''            let style = Arc::new(style);
+            node.set_computed_style(style.clone());
+            style
+        }
+        _ => old,'''
+to = '''            let style = Arc::new(style);
+            style
+        }
+        _ => old,'''
+
+[[mutant]]
+name = "pseudo-elements inherit the base style"
+file = "crates/style/src/lib.rs"
+from = '''    let style = animate(None, own_cascade.cascade(None, None), &own_cascade);'''
+to = '''    let base = own_cascade.cascade(None, None);
+    let _ = animate(None, base.clone(), &own_cascade);
+    let style = base;'''

@@ -1,0 +1,81 @@
+# Mutation test of stage 6a1: the property nodes keep their ids from one
+# pre-paint to the next (by their owner and role), each after its parent,
+# and the unscrolled pre-paint comes of the same trees:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-6a1.toml
+test = ["cargo", "test", "-q", "-p", "paint"]
+timeout = 1800
+
+[[mutant]]
+name = "a key doesn't keep its place"
+file = "crates/paint/src/property_trees.rs"
+from = '''        if let Some(place) = kept
+            && !self.given[place]'''
+to = '''        if let Some(place) = kept
+            && false'''
+
+[[mutant]]
+name = "a free place isn't taken again"
+file = "crates/paint/src/property_trees.rs"
+from = '''            Some(&free) if after_parent(free) => {'''
+to = '''            Some(&free) if false => {'''
+
+[[mutant]]
+name = "a kept place may be before the parent's"
+file = "crates/paint/src/property_trees.rs"
+from = '''            && !self.given[place]
+            && after_parent(place)'''
+to = '''            && !self.given[place]'''
+
+[[mutant]]
+name = "a free place may be before the parent's"
+file = "crates/paint/src/property_trees.rs"
+from = '''            Some(&free) if after_parent(free) => {'''
+to = '''            Some(&free) => {'''
+
+[[mutant]]
+name = "a moved key keeps its old place"
+file = "crates/paint/src/property_trees.rs"
+from = '''            && kept.is_none_or(|kept| !self.given[kept])'''
+to = '''            && kept.is_none()'''
+
+[[mutant]]
+name = "only a container's scroll translation is moved by it"
+file = "crates/paint/src/layerize.rs"
+from = '''        let scroller = own[index].or_else(|| node.parent.and_then(|p| scroller_of[p.0]));'''
+to = '''        let scroller = own[index];'''
+
+[[mutant]]
+name = "a gone scroll node stays"
+file = "crates/paint/src/lib.rs"
+from = '''            self.trees.scroll[place] = None;'''
+to = '''            let _ = place;'''
+
+[[mutant]]
+name = "an unscrolled container keeps its scroll offset"
+file = "crates/paint/src/lib.rs"
+from = '''                trees.transform[node.scroll_translation.0].matrix = Transform::IDENTITY;'''
+to = '''                let _ = &mut trees;'''
+# What paints a frame is checked against an unscrolled pre-paint
+# from scratch (in a debug build).
+test = ["cargo", "test", "-q", "-p", "paint", "-p", "renderer", "-p", "compositor", "-p", "shell"]
+
+[[mutant]]
+name = "an unscrolled child frame keeps its scroll offset"
+file = "crates/paint/src/lib.rs"
+from = '''                    frame.viewport_scroll = PointF::new(0.0, 0.0);'''
+to = '''                    let _ = &mut frame;'''
+# What paints a frame is checked against an unscrolled pre-paint
+# from scratch (in a debug build).
+test = ["cargo", "test", "-q", "-p", "paint", "-p", "renderer", "-p", "compositor", "-p", "shell"]
+
+[[mutant]]
+name = "a mostly empty tree doesn't start again"
+file = "crates/paint/src/property_trees.rs"
+from = '''                free >= Slots::FREE_TO_START_AGAIN && free * 2 > slots.given.len()'''
+to = '''                free >= Slots::FREE_TO_START_AGAIN && false'''
+
+[[mutant]]
+name = "a tree with a few empty places starts again"
+file = "crates/paint/src/property_trees.rs"
+from = '''                free >= Slots::FREE_TO_START_AGAIN && free * 2 > slots.given.len()'''
+to = '''                free * 2 > slots.given.len()'''

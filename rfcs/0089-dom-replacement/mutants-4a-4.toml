@@ -1,0 +1,169 @@
+# Stage 4a-4: `MutationObserver`: registrations in a node's rare data, the
+# records the tree's, attributes' and data's changes queue, transient
+# registrations, the options' checks, the delivery as a microtask the
+# front end queues after the operation.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_next", "-p", "dom_api_next", "-p", "dom_js_next"]
+timeout = 1800
+
+[[mutant]]
+name = "an ancestor's registration without subtree"
+file = "crates/dom_next/src/mutation.rs"
+from = '''                    if !Gc::ptr_eq(node, target) && options & SUBTREE == 0 {'''
+to = '''                    if false {'''
+
+[[mutant]]
+name = "a namespaced attribute is the filter's"
+file = "crates/dom_next/src/mutation.rs"
+from = '''                                    name.namespace() != names::NONE || !filter.contains(&name.local())'''
+to = '''                                    !filter.contains(&name.local())'''
+
+[[mutant]]
+name = "the filter ignored"
+file = "crates/dom_next/src/mutation.rs"
+from = '''                            (options & ATTRIBUTES != 0 && !filtered, options & ATTRIBUTE_OLD_VALUE != 0)'''
+to = '''                            (options & ATTRIBUTES != 0, options & ATTRIBUTE_OLD_VALUE != 0)'''
+
+[[mutant]]
+name = "every observer gets the old value"
+file = "crates/dom_next/src/mutation.rs"
+from = '''                    old_value: LocalExternal::new(if with_old { old_value.clone() } else { None }),'''
+to = '''                    old_value: LocalExternal::new(old_value.clone()),'''
+
+[[mutant]]
+name = "the microtask queued each record"
+file = "crates/dom_next/src/mutation.rs"
+from = '''        if !self.changes.mutations.queued.replace(true) {'''
+to = '''        if { self.changes.mutations.queued.set(true); true } {'''
+
+[[mutant]]
+name = "the microtask stays queued after a delivery"
+file = "crates/dom_next/src/mutation.rs"
+from = '''        state.queued.set(false);'''
+to = ''''''
+
+[[mutant]]
+name = "observing again adds a registration"
+file = "crates/dom_next/src/mutation.rs"
+from = '''        match existing {
+            Some(index) => {'''
+to = '''        match existing.filter(|_| false) {
+            Some(index) => {'''
+
+[[mutant]]
+name = "disconnect keeps the registrations"
+file = "crates/dom_next/src/mutation.rs"
+from = '''                self.unregister(node, |registration| Gc::ptr_eq(self.observer_of(registration), observer));'''
+to = '''                let _ = node;'''
+
+[[mutant]]
+name = "no transient registrations"
+file = "crates/dom_next/src/lib.rs"
+from = '''            self.add_transient_registrations(parent, node);'''
+to = ''''''
+
+[[mutant]]
+name = "transient registrations stay after the delivery"
+file = "crates/dom_next/src/mutation.rs"
+from = '''    pub fn remove_transient_registrations(&self, observer: Gc<'gc, MutationObserver>) {
+        self.remove_transients_from(observer, |_| true);'''
+to = '''    pub fn remove_transient_registrations(&self, observer: Gc<'gc, MutationObserver>) {
+        let _ = observer;'''
+
+[[mutant]]
+name = "a fragment's nodes recorded with no previous sibling"
+file = "crates/dom_next/src/lib.rs"
+from = '''                (self.children(node), self.previous_of(parent, child))'''
+to = '''                (self.children(node), None)'''
+
+[[mutant]]
+name = "replace all records no removed nodes"
+file = "crates/dom_next/src/lib.rs"
+from = '''            (self.children(parent), node.map_or_else(Vec::new, |node| self.as_nodes(node)))'''
+to = '''            (Vec::new(), node.map_or_else(Vec::new, |node| self.as_nodes(node)))'''
+
+[[mutant]]
+name = "a removal never recorded"
+file = "crates/dom_next/src/lib.rs"
+from = '''            if note {
+                self.queue_tree_record(parent, &[], &[node], previous, next);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "replace all's insertion recorded on its own"
+file = "crates/dom_next/src/lib.rs"
+from = '''            self.insert_noting(parent, node, None, false);'''
+to = '''            self.insert_noting(parent, node, None, true);'''
+
+[[mutant]]
+name = "data changes not recorded"
+file = "crates/dom_next/src/lib.rs"
+from = '''            self.queue_character_data_record(node, &old);'''
+to = ''''''
+
+[[mutant]]
+name = "attribute changes not recorded"
+file = "crates/dom_next/src/style.rs"
+from = '''            self.queue_attribute_record(element, name, old);'''
+to = ''''''
+
+[[mutant]]
+name = "CSSOM's old value not written first"
+file = "crates/dom_next/src/style.rs"
+from = '''            // The attribute as it is before the change: its record's old
+            // value (`set_inline_style`).
+            self.synchronize_attributes(element);'''
+to = ''''''
+
+[[mutant]]
+name = "CSSOM's change not recorded"
+file = "crates/dom_next/src/style.rs"
+from = '''            self.queue_attribute_record(element, STYLE_ATTRIBUTE, old.as_deref());'''
+to = ''''''
+
+[[mutant]]
+name = "an old value doesn't imply attributes"
+file = "crates/dom_api_next/src/mutation_observer.rs"
+from = '''        options.attributeOldValue.is_some() || options.attributeFilter.is_some(),'''
+to = '''        options.attributeFilter.is_some(),'''
+
+[[mutant]]
+name = "an old value doesn't imply character data"
+file = "crates/dom_api_next/src/mutation_observer.rs"
+from = '''    let character_data = options.characterData.unwrap_or(options.characterDataOldValue.is_some());'''
+to = '''    let character_data = options.characterData.unwrap_or(false);'''
+
+[[mutant]]
+name = "a filter without attributes taken"
+file = "crates/dom_api_next/src/mutation_observer.rs"
+from = '''    if options.attributeFilter.is_some() && !attributes {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "an observer with no records called"
+file = "crates/dom_api_next/src/mutation_observer.rs"
+from = '''        if !records.is_empty() {
+            host.call_mutation_callback(observer, &records);
+        }'''
+to = '''        host.call_mutation_callback(observer, &records);'''
+
+[[mutant]]
+name = "the front end queues no delivery"
+file = "crates/dom_js_next/src/state.rs"
+from = '''        let queue = state.dom.take_mutation_microtask();'''
+to = '''        let queue = false;'''
+
+[[mutant]]
+name = "the parser's changes not delivered"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''    fn perform_microtask_checkpoint(&mut self) {
+        self.queue_mutation_delivery();'''
+to = '''    fn perform_microtask_checkpoint(&mut self) {'''
+
+[[mutant]]
+name = "no checkpoint before a parser's script"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        engine.perform_microtask_checkpoint();
+        engine.run_classic_script(&ClassicScript { source, url, line });'''
+to = '''        engine.run_classic_script(&ClassicScript { source, url, line });'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "next_dom"]

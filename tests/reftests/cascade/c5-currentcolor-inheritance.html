@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<title>C5: border-color defaults to currentcolor, which takes the inherited color</title>
+<link rel="match" href="green-squares-ref.html">
+<style>html, body { margin: 0 }</style>
+<div style="color: green">
+  <section><div style="width: 0; height: 0; border: 50px solid"></div></section>
+</div>
+<!-- `inherit` copies the keyword currentcolor, which then means the child's own color. -->
+<div style="color: red; border-color: currentcolor">
+  <div style="color: green; width: 0; height: 0; border: 50px solid; border-color: inherit"></div>
+</div>

@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>A shadow root</title>
+<div id="host"></div>
+<script>
+  // Nothing, then an open shadow root with two items, one in a shadow root
+  // of its own.
+  window.tests = [
+    { name: "Nothing", run() {} },
+    {
+      name: "AddingAShadowRoot",
+      run(doc) {
+        const root = doc.getElementById("host").attachShadow({ mode: "open" });
+        root.innerHTML = '<span class="item">ab</span><div></div>';
+        root.querySelector("div").attachShadow({ mode: "open" }).innerHTML = '<span class="item">c</span>';
+      },
+    },
+  ];
+</script>

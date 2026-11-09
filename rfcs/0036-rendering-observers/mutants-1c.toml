@@ -1,0 +1,42 @@
+# Mutation test of step 1c (the device-pixel content box, snapped with the
+# paint offset):
+# python3 scripts/test.py mutate rfcs/0036-rendering-observers/mutants-1c.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "resize_observers::"]
+timeout = 900
+
+[[mutant]]
+name = "the size isn't snapped from where the box starts"
+file = "crates/dom_api/src/resize_observer.rs"
+from = '''        (at + length * scale).round() - at.round()'''
+to = '''        (length * scale).round()'''
+
+[[mutant]]
+name = "snapped from where the content box starts"
+file = "crates/dom_api/src/resize_observer.rs"
+from = '''            block: snap(content.block, at.y),'''
+to = '''            block: snap(content.block, at.y + content_rect[1] as f32),'''
+
+[[mutant]]
+name = "no paint offset"
+file = "crates/renderer/src/layout_client.rs"
+from = '''        self.frame_view.as_ref()?.paint_offset(element)'''
+to = '''        self.frame_view.as_ref().and(None)'''
+
+[[mutant]]
+name = "the paint offset isn't looked for in child frames"
+file = "crates/paint/src/hit_test.rs"
+from = '''        // Tree order: the first box is the first fragment.
+        if let Some(frame) = pre.child_frame(fragment) {
+            stack.push(&frame.layout_view);
+        }'''
+to = '''        // Tree order: the first box is the first fragment.'''
+
+[[mutant]]
+name = "the rounds after the first aren't pre-painted"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        loop {
+            self.update_lifecycle_to_pre_paint();
+            let mut broadcast = false;'''
+to = '''        self.update_lifecycle_to_pre_paint();
+        loop {
+            let mut broadcast = false;'''

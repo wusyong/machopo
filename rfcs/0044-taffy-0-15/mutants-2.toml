@@ -1,0 +1,148 @@
+# Mutation test of stage 2: out-of-flow boxes in inline content
+# (2026-10-13):
+# python3 scripts/test.py mutate rfcs/0044-taffy-0-15/mutants-2.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "position::"]
+timeout = 900
+
+# Style
+
+[[mutant]]
+name = "the display before blockification isn't kept"
+file = "crates/style/src/lib.rs"
+from = '''    style.original_display = style.display;'''
+to = '''    style.original_display = style.display.blockified();'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cascade::"]
+
+# Box tree
+
+[[mutant]]
+name = "an out-of-flow box is always among the blocks"
+file = "crates/layout/src/lib.rs"
+from = '''                                out.push(Child::Inline(InlineItem::OutOfFlow(id, style.clone())));'''
+to = '''                                out.push(Child::Block(id));'''
+
+[[mutant]]
+name = "an out-of-flow box after only spaces goes in the inline content"
+file = "crates/layout/src/lib.rs"
+from = '''                    if has_items || InlineItem::is_collapsible_space_only(&run) =>'''
+to = '''                    if has_items =>'''
+
+[[mutant]]
+name = "an out-of-flow box is no child of its inline content's box"
+file = "crates/layout/src/lib.rs"
+from = '''                InlineItem::Atomic(id, _) | InlineItem::OutOfFlow(id, _) => Some(*id),'''
+to = '''                InlineItem::Atomic(id, _) => Some(*id),'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "position::", "update::"]
+
+# Inline content
+
+[[mutant]]
+name = "spaces don't collapse across an out-of-flow box"
+file = "crates/layout/src/text.rs"
+from = '''            InlineItem::Open(..) | InlineItem::Close(..) | InlineItem::OutOfFlow(..) => {
+                tags.push((chars.len(), index))
+            }'''
+to = '''            InlineItem::Open(..) | InlineItem::Close(..) => tags.push((chars.len(), index)),
+            InlineItem::OutOfFlow(..) => {
+                tags.push((chars.len(), index));
+                last_collapsible = false;
+                line_start = false;
+            }'''
+
+[[mutant]]
+name = "an out-of-flow box alone makes no inline content"
+file = "crates/layout/src/text.rs"
+from = '''                InlineItem::Atomic(..) | InlineItem::OutOfFlow(..)
+            )'''
+to = '''                InlineItem::Atomic(..)
+            )'''
+
+[[mutant]]
+name = "a block-level out-of-flow box is where it is on its line"
+file = "crates/layout/src/text.rs"
+from = '''                                let inline_level = !self.out_of_flow[index].1.is_block_level();'''
+to = '''                                let inline_level = true;'''
+
+[[mutant]]
+name = "a block-level out-of-flow box always goes below its line"
+file = "crates/layout/src/text.rs"
+from = '''                                } else if content {'''
+to = '''                                } else if true {'''
+
+[[mutant]]
+name = "an atomic inline isn't content before an out-of-flow box"
+file = "crates/layout/src/text.rs"
+from = '''                            BoxItem::Atomic(_) => content = true,'''
+to = '''                            BoxItem::Atomic(_) => {}'''
+
+# Passing them up
+
+[[mutant]]
+name = "inline content lays out no out-of-flow box itself"
+file = "crates/layout/src/lib.rs"
+from = '''            output.oof_positioning_area = Some(OofPositioningArea {'''
+to = '''            let _ = Some(OofPositioningArea {'''
+
+[[mutant]]
+name = "inline content's padding box starts at its border box"
+file = "crates/layout/src/lib.rs"
+from = '''                offset: taffy::Point {
+                    x: border.left,
+                    y: border.top,
+                },'''
+to = '''                offset: taffy::Point { x: 0.0, y: 0.0 },'''
+
+[[mutant]]
+name = "an atomic inline passes nothing up"
+file = "crates/layout/src/lib.rs"
+from = '''        self.boxes[index].oof_candidates = output.oof_candidates.take();'''
+to = '''        let _ = output.oof_candidates.take();'''
+
+[[mutant]]
+name = "what an atomic inline passes up isn't moved to where it is"
+file = "crates/layout/src/lib.rs"
+from = '''                        x: placed[i].x + b.layout.margin.left + by.x,'''
+to = '''                        x: b.layout.margin.left + by.x,'''
+
+[[mutant]]
+name = "what a moved atomic inline passes up isn't moved with it"
+file = "crates/layout/src/lib.rs"
+from = '''                        y: placed[i].y + b.layout.margin.top + by.y,'''
+to = '''                        y: placed[i].y + b.layout.margin.top,'''
+
+# Self-alignment in the static-position rectangle
+
+[[mutant]]
+name = "auto self-alignment doesn't take the container's justify-items"
+file = "crates/layout/src/lib.rs"
+from = '''                        .unwrap_or(justify_items)'''
+to = '''                        .unwrap_or(taffy::AlignItems::NORMAL)'''
+
+[[mutant]]
+name = "what inline content passes up is aligned with its style taken out"
+file = "crates/layout/src/lib.rs"
+from = '''        // Its style back first: what it passes up is aligned by it.
+        self.boxes[index].taffy_style = style;
+        if inputs.run_mode == RunMode::PerformLayout {
+            output.oof_candidates = self.passed_up(index, &inline, &output, inset);
+        }'''
+to = '''        if inputs.run_mode == RunMode::PerformLayout {
+            output.oof_candidates = self.passed_up(index, &inline, &output, inset);
+        }
+        self.boxes[index].taffy_style = style;'''
+
+[[mutant]]
+name = "an inline-level box's rectangle has no height"
+file = "crates/layout/src/text.rs"
+from = '''                                        0.0,
+                                        metrics.line_height,
+                                    )'''
+to = '''                                        0.0,
+                                        0.0,
+                                    )'''
+
+[[mutant]]
+name = "a block-level box's rectangle has no width"
+file = "crates/layout/src/text.rs"
+from = '''                                    RectF::new(origin.x, top, width, 0.0)'''
+to = '''                                    RectF::new(origin.x, top, 0.0, 0.0)'''

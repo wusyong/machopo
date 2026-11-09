@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>A timer, a frame, a hit test, garbage, markup and custom elements</title>
+<p>text</p>
+<script>
+  // A timer, then an animation frame's callback that asks what is at a
+  // point: each in a trace of its own kind. Then enough short-lived
+  // objects for V8 to collect young garbage, inside the test's call. Then
+  // markup parsed into an element that a definition then upgrades, which
+  // calls back into script, as does a listener `click()` runs.
+  let defined = 0;
+  // Script calling back into script through the DOM, from each kind of
+  // script (this one, a module, a timer's callback): the listener is never
+  // a call of its own.
+  function callBack(target) {
+    target.addEventListener("back", () => {}, { once: true });
+    target.dispatchEvent(new Event("back"));
+  }
+  callBack(document);
+  // Short-lived objects, enough for V8 to collect young garbage: script's
+  // own work, which the sampler's test finds by this function's name.
+  function makeGarbage() {
+    let kept = 0;
+    for (let i = 0; i < 400000; i++) {
+      kept += { i, text: "item " + i }.text.length;
+    }
+    return kept;
+  }
+  // Markup script builds, parsed over and over: the sampler's test finds no
+  // log records made for its tokens.
+  function parseMarkup(doc) {
+    const host = doc.createElement("ul");
+    for (let i = 0; i < 1000; i++) {
+      let items = "";
+      for (let j = 0; j < 20; j++) {
+        items += `<li class="item-${j}"><span>${i} ${j}</span></li>`;
+      }
+      host.innerHTML = items;
+    }
+  }
+  window.tests = [
+    {
+      name: "TimerThenFrame",
+      run(doc) {
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            callBack(doc);
+            requestAnimationFrame(() => {
+              doc.elementFromPoint(10, 10);
+              resolve();
+            });
+          });
+        });
+      },
+    },
+    {
+      name: "Garbage",
+      run(doc) {
+        doc.querySelector("p").dataset.length = makeGarbage();
+      },
+    },
+    {
+      name: "Markup",
+      run(doc) {
+        parseMarkup(doc);
+      },
+    },
+    {
+      name: "MarkupAndElements",
+      run(doc) {
+        const name = `x-item-${defined++}`;
+        const host = doc.createElement("div");
+        doc.body.append(host);
+        host.innerHTML = `<${name}></${name}><span>more</span>`;
+        customElements.define(name, class extends HTMLElement {
+          static observedAttributes = ["data-n"];
+          connectedCallback() {
+            this.dataset.connected = "yes";
+          }
+          attributeChangedCallback() {}
+        });
+        host.firstChild.dataset.n = "1";
+        host.addEventListener("click", () => host.remove());
+        host.click();
+      },
+    },
+  ];
+</script>
+<script type="module">
+  callBack(document);
+</script>

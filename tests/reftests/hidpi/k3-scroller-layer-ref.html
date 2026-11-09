@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<style>
+  html, body { margin: 0 }
+  .box { margin: 10.25px 0 0 10.25px; width: 100px; height: 50px }
+  .box div { height: 20px }
+  .a { background-color: green } .b { background-color: blue }
+</style>
+<!-- The same, with nothing to scroll: painted in the document. -->
+<div class="box" style="overflow: hidden">
+  <div class="a"></div><div class="b"></div><div class="a" style="height: 10px"></div>
+</div>

@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<title>F4: align-items: baseline lines up the items' first lines</title>
+<link rel="match" href="f4-baseline-ref.html">
+<style>
+  html, body { margin: 0 }
+  .c { display: flex; align-items: baseline; font-family: Ahem; line-height: 1; color: green }
+</style>
+<div class="c">
+  <div style="font-size: 20px">X</div>
+  <div style="font-size: 40px">X</div>
+  <div style="font-size: 20px; padding-top: 10px">X</div>
+  <div style="font-size: 20px"><p style="margin: 5px 0 0">X</p><p style="margin: 0">X</p></div>
+</div>

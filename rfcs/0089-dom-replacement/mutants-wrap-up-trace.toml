@@ -1,0 +1,101 @@
+# The wrap-up's trace: kun's spans made only when the trace takes them
+# (`trace_event`), the script spans the new DOM's engine had lost and the
+# main frame's steps, named and nested as Chrome's trace has them.
+# `trace_event`'s own test, then the Speedometer tool's test of kun's and
+# Chrome's traces (the fake suites, a dev build of kun).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p trace_event && python3 scripts/bench/speedometer/speedometer_test.py MeasureTests.test_traces_of_both"]
+timeout = 1800
+
+[[mutant]]
+name = "trace_event: a span made when the trace is off too"
+file = "crates/trace_event/src/lib.rs"
+from = '''        if $crate::tracing::level_enabled!($crate::tracing::Level::TRACE) {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "trace_event: a TRACE span made when the trace takes INFO"
+file = "crates/trace_event/src/lib.rs"
+from = '''        if $crate::tracing::level_enabled!($crate::tracing::Level::TRACE) {'''
+to = '''        if $crate::tracing::level_enabled!($crate::tracing::Level::INFO) {'''
+
+[[mutant]]
+name = "trace_event: in_scope's span ends before its function runs"
+file = "crates/trace_event/src/lib.rs"
+from = '''    let _span = span;
+    f()'''
+to = '''    drop(span);
+    f()'''
+
+[[mutant]]
+name = "dom_js: every call is a FunctionCall, nested ones too"
+file = "crates/dom_js/src/listeners.rs"
+from = '''    let _outermost = if entry.is_outermost() {'''
+to = '''    let _outermost = if true || entry.is_outermost() {'''
+
+[[mutant]]
+name = "dom_js: a listener script's dispatch calls with no v8.callFunction"
+file = "crates/dom_js/src/listeners.rs"
+from = '''        // Script is on the stack: a call nested in it, never the outermost.
+        let _call = trace_event::trace_event!("v8.callFunction");'''
+to = '''        // Script is on the stack: a call nested in it, never the outermost.'''
+
+[[mutant]]
+name = "dom_js: a constructor constructed with no v8.callAsConstructor"
+file = "crates/dom_js/src/listeners.rs"
+from = '''    let _span = trace_event::trace_event!("v8.callAsConstructor");'''
+to = ''''''
+
+[[mutant]]
+name = "dom_js: the microtasks after a callback aren't RunMicrotasks"
+file = "crates/dom_js/src/listeners.rs"
+from = '''    let _span = trace_event::trace_event!("RunMicrotasks");'''
+to = ''''''
+
+[[mutant]]
+name = "dom_js: a parser's classic script isn't EvaluateScript"
+file = "crates/dom_js/src/engine.rs"
+from = '''        let span = trace_event::trace_event!("EvaluateScript");'''
+to = '''        let span = trace_event::trace_event!("Script");'''
+
+[[mutant]]
+name = "dom_api: a dispatch isn't EventDispatch"
+file = "crates/dom_api/src/event_target.rs"
+from = '''trace_event::trace_event!("EventDispatch")'''
+to = '''trace_event::trace_event!("Dispatch")'''
+
+[[mutant]]
+name = "dom_api: a timer's task isn't TimerFire"
+file = "crates/dom_api/src/timer.rs"
+from = '''trace_event::trace_event!("TimerFire")'''
+to = '''trace_event::trace_event!("Timer")'''
+
+# Equivalent: dom_js's `run_callback` runs the checkpoint as the callback
+# returns, inside the span; the one after it here has nothing left to run.
+[[mutant]]
+name = "dom_api: an animation frame callback's microtasks outside FireAnimationFrame"
+file = "crates/dom_api/src/animation_frame.rs"
+from = '''        let _span = trace_event::trace_event!("FireAnimationFrame");
+        host.call_animation_frame(window, &frame, time);
+        host.perform_microtask_checkpoint();'''
+to = '''        let span = trace_event::trace_event!("FireAnimationFrame");
+        host.call_animation_frame(window, &frame, time);
+        drop(span);
+        host.perform_microtask_checkpoint();'''
+
+[[mutant]]
+name = "renderer: the layers updated in the lifecycle's span"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        drop(lifecycle);'''
+to = '''        let _lifecycle = lifecycle;'''
+
+[[mutant]]
+name = "renderer: the compositor's update in the paint's span"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        drop(paint_tree);'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: the platform tasks with no span of their own"
+file = "crates/renderer/src/render_thread.rs"
+from = '''trace_event::trace_event!("RenderThread::run_platform_tasks")'''
+to = '''None'''

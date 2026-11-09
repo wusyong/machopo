@@ -1,0 +1,123 @@
+# Mutation test of stage 1 (the element's id and class kept for style,
+# StyleElement reading them and the attributes borrowed):
+# python3 scripts/test.py mutate rfcs/0039-selector-matching/mutants-1.toml
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "style_data::"]
+timeout = 600
+
+# dom: what the element keeps.
+
+[[mutant]]
+name = "a new element has no id"
+file = "crates/dom/src/scope.rs"
+from = '''                id: crate::node::id_of(&attributes),'''
+to = '''                id: None,'''
+
+[[mutant]]
+name = "a new element has no classes"
+file = "crates/dom/src/scope.rs"
+from = '''                class_names: crate::node::class_names_of(&attributes),'''
+to = '''                class_names: Box::default(),'''
+
+[[mutant]]
+name = "a class may be there twice"
+file = "crates/dom/src/node.rs"
+from = '''        if !names.iter().any(|name| &**name == token) {
+            names.push(token.into());
+        }'''
+to = '''        names.push(token.into());'''
+
+[[mutant]]
+name = "any white space splits classes"
+file = "crates/dom/src/node.rs"
+from = '''    for token in class.value.split_ascii_whitespace() {'''
+to = '''    for token in class.value.split_whitespace() {'''
+
+[[mutant]]
+name = "a changed id or class isn't kept"
+file = "crates/dom/src/scope.rs"
+from = '''        if (name.is_attr("id") || name.is_attr("class"))'''
+to = '''        if false'''
+
+[[mutant]]
+name = "a changed id isn't kept"
+file = "crates/dom/src/scope.rs"
+from = '''        if (name.is_attr("id") || name.is_attr("class"))'''
+to = '''        if name.is_attr("class")'''
+
+[[mutant]]
+name = "a changed class isn't kept"
+file = "crates/dom/src/scope.rs"
+from = '''        if (name.is_attr("id") || name.is_attr("class"))'''
+to = '''        if name.is_attr("id")'''
+
+[[mutant]]
+name = "an attribute name of any namespace is the null namespace's"
+file = "crates/dom/src/node.rs"
+from = '''        self.namespace.url().is_empty() && self.prefix.is_none() && &*self.local == local'''
+to = '''        &*self.local == local'''
+
+[[mutant]]
+name = "no element has its attributes borrowed"
+file = "crates/dom/src/scope.rs"
+from = '''            NodeState::Element { attributes, .. } => Some(attributes.as_slice()),'''
+to = '''            NodeState::Element { .. } => None,'''
+
+[[mutant]]
+name = "every node has attributes to borrow"
+file = "crates/dom/src/scope.rs"
+from = '''            NodeState::Element { attributes, .. } => Some(attributes.as_slice()),
+            _ => None,'''
+to = '''            NodeState::Element { attributes, .. } => Some(attributes.as_slice()),
+            _ => Some(&[]),'''
+
+# style: matching reads them.
+
+[[mutant]]
+name = "an id matches whatever the case sensitivity"
+file = "crates/style/src/selector.rs"
+from = '''            .is_some_and(|value| case_sensitivity.eq(value.as_bytes(), id.0.as_bytes()))'''
+to = '''            .is_some_and(|value| value.as_bytes() == id.0.as_bytes())'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "an id never matches"
+file = "crates/style/src/selector.rs"
+from = '''            .is_some_and(|value| case_sensitivity.eq(value.as_bytes(), id.0.as_bytes()))'''
+to = '''            .is_some_and(|_| false)'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "a class matches whatever the case sensitivity"
+file = "crates/style/src/selector.rs"
+from = '''            .any(|class| case_sensitivity.eq(class.as_bytes(), name.0.as_bytes()))'''
+to = '''            .any(|class| class.as_bytes() == name.0.as_bytes())'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "only the first class matches"
+file = "crates/style/src/selector.rs"
+from = '''            .any(|class| case_sensitivity.eq(class.as_bytes(), name.0.as_bytes()))'''
+to = '''            .take(1)
+            .any(|class| case_sensitivity.eq(class.as_bytes(), name.0.as_bytes()))'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "a link needs no href"
+file = "crates/style/src/selector.rs"
+from = '''(name.is_html("a") || name.is_html("area")) && self.has_attr("href")'''
+to = '''(name.is_html("a") || name.is_html("area"))'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "an attribute selector ignores the namespace"
+file = "crates/style/src/selector.rs"
+from = '''                    NamespaceConstraint::Specific(url) => attr.name.namespace.url() == url.0,'''
+to = '''                    NamespaceConstraint::Specific(_) => true,'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "an attribute selector matches the first attribute only"
+file = "crates/style/src/selector.rs"
+from = '''        attributes.iter().any(|attr| {'''
+to = '''        attributes.iter().take(1).any(|attr| {'''
+test = ["cargo", "test", "-q", "-p", "style"]

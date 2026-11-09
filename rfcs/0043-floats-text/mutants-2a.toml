@@ -1,0 +1,99 @@
+# Mutation test of stage 2a: `vertical-align` on parley's spans and inline
+# boxes (2026-10-13):
+# python3 scripts/test.py mutate rfcs/0043-floats-text/mutants-2a.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "inline::vertical_align"]
+timeout = 900
+
+[[mutant]]
+name = "middle parses as top"
+file = "crates/css/src/properties.rs"
+from = '''                            "middle" => computed_style::VerticalAlign::Middle,'''
+to = '''                            "middle" => computed_style::VerticalAlign::Top,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cssom::"]
+
+[[mutant]]
+name = "a length isn't applied"
+file = "crates/css/src/properties.rs"
+from = '''            style.vertical_align = computed_style::VerticalAlign::Length(v.compute(cx));'''
+to = '''            let _ = v.compute(cx);'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+[[mutant]]
+name = "a length computes to baseline"
+file = "crates/css/src/computed.rs"
+from = '''            computed_style::VerticalAlign::Length(length) => length_percentage(length, dest),'''
+to = '''            computed_style::VerticalAlign::Length(_) => dest.push_str("baseline"),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+[[mutant]]
+name = "the UA stylesheet doesn't lower sub"
+file = "crates/style/resources/html.css"
+from = '''sub {
+  vertical-align: sub;'''
+to = '''sub {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+[[mutant]]
+name = "sub isn't lowered"
+file = "crates/layout/src/text.rs"
+from = '''        Css::Sub => VerticalAlign::SUB,'''
+to = '''        Css::Sub => VerticalAlign::BASELINE,'''
+
+[[mutant]]
+name = "top is baseline"
+file = "crates/layout/src/text.rs"
+from = '''        Css::Top => VerticalAlign::TOP,'''
+to = '''        Css::Top => VerticalAlign::BASELINE,'''
+
+[[mutant]]
+name = "a percentage is 0"
+file = "crates/layout/src/text.rs"
+from = '''                LengthPercentage::Percent(p) => percent(p),
+                LengthPercentage::Calc { px, percent: p, .. } => px + percent(p),
+            })
+        }
+    }
+}'''
+to = '''                LengthPercentage::Percent(_) => 0.0,
+                LengthPercentage::Calc { px, percent: p, .. } => px + percent(p),
+            })
+        }
+    }
+}'''
+
+[[mutant]]
+name = "a normal line height is the font size"
+file = "crates/layout/src/text.rs"
+from = '''                    LineHeight::Normal => normal_line_height(cx, style),'''
+to = '''                    LineHeight::Normal => style.font_size,'''
+
+[[mutant]]
+name = "the block's own text is moved"
+file = "crates/layout/src/text.rs"
+from = '''                if node.is_some_and(|node| inline_nodes.contains(&node)) {
+                    vertical_align(cx, style)'''
+to = '''                if node.is_some() {
+                    vertical_align(cx, style)'''
+
+[[mutant]]
+name = "the spans aren't aligned"
+file = "crates/layout/src/text.rs"
+from = '''            builder.push(
+                StyleProperty::VerticalAlign(run_aligns[index]),
+                range.clone(),
+            );'''
+to = ''''''
+
+[[mutant]]
+name = "an atomic inline isn't aligned"
+file = "crates/layout/src/text.rs"
+from = '''                        vertical_align: atomic_aligns[atomics.len()],'''
+to = '''                        vertical_align: VerticalAlign::BASELINE,'''
+test = ["python3", "scripts/test.py", "reftest", "inline/"]
+
+[[mutant]]
+name = "an inline box's background stays on the line's baseline"
+file = "crates/layout/src/text.rs"
+from = '''        let baseline = line_box.baseline.unwrap_or(baseline);'''
+to = ''''''
+test = ["python3", "scripts/test.py", "reftest", "inline/"]

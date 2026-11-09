@@ -1,0 +1,162 @@
+# Mutation test of the inventory's four false positives (empty longhands,
+# at-rules, selectors, elements in a namespace):
+# python3 scripts/test.py mutate rfcs/0012-speedometer/mutants-inventory-false-positives.toml
+# The Chrome test needs a Chrome that runs: on Windows its sandbox can't
+# read target/'s chrome.exe (progress.md, 2026-10-12).
+test = [
+    "python3", "scripts/speedometer_test.py", "InventoryReportTests",
+    "ChromeTests.test_the_recording_has_what_kuns_probe_tries",
+    "KunTests.test_the_probe_posts_what_kun_lacks",
+]
+timeout = 300
+
+[[mutant]]
+name = "the recording leaves out an element's namespace"
+file = "scripts/speedometer/record.js"
+from = '''      return `element:${namespaces[args[0]] ?? ""}|${local}:${result?.constructor?.name}`;'''
+to = '''      return `element:${local}:${result?.constructor?.name}`;'''
+
+[[mutant]]
+name = "the recording keeps a qualified name's prefix"
+file = "scripts/speedometer/record.js"
+from = '''      const local = String(args[1]).split(":").pop();'''
+to = '''      const local = String(args[1]);'''
+
+[[mutant]]
+name = "empty longhands are recorded"
+file = "scripts/speedometer/inventory.mjs"
+from = '''      if (value === "") pending = true;
+      else add(out.declarations, `${property}: ${value}`);'''
+to = '''      if (value === "") pending = true;
+      add(out.declarations, `${property}: ${value}`);'''
+
+[[mutant]]
+name = "a shorthand with empty longhands isn't recorded"
+file = "scripts/speedometer/inventory.mjs"
+from = '''    if (!pending) return;'''
+to = '''    return;'''
+
+[[mutant]]
+name = "a custom property is recorded as if a shorthand"
+file = "scripts/speedometer/inventory.mjs"
+from = '''      if (name.startsWith("--")) continue;'''
+to = ''''''
+
+[[mutant]]
+name = "a nested at-rule's text is its own"
+file = "scripts/speedometer/inventory.mjs"
+from = '''      const text = top ?? rule.cssText;'''
+to = '''      const text = rule.cssText;'''
+
+[[mutant]]
+name = "nesting has no text"
+file = "scripts/speedometer/inventory.mjs"
+from = '''          out.atRuleTexts.nesting ??= text;'''
+to = ''''''
+
+[[mutant]]
+name = "an at-rule has no text"
+file = "scripts/speedometer/inventory.mjs"
+from = '''        out.atRuleTexts[kind] ??= text;'''
+to = ''''''
+
+[[mutant]]
+name = "selector lists split inside parentheses"
+file = "scripts/speedometer/probe.js"
+from = '''      else if (c === "(" || c === "[") depth++;
+      else if (c === ")" || c === "]") depth--;
+      else if ((c === "," || c === undefined) && depth === 0) {
+        out.push(list.slice(start, i).trim());'''
+to = '''      else if ((c === "," || c === undefined) && depth === 0) {
+        out.push(list.slice(start, i).trim());'''
+
+[[mutant]]
+name = "selector lists split inside strings"
+file = "scripts/speedometer/probe.js"
+from = '''      } else if (c === '"' || c === "'") quote = c;
+      else if (c === "(" || c === "[") depth++;
+      else if (c === ")" || c === "]") depth--;
+      else if ((c === "," || c === undefined) && depth === 0) {
+        out.push(list.slice(start, i).trim());'''
+to = '''      } else if (c === "(") depth++;
+      else if (c === ")") depth--;
+      else if ((c === "," || c === undefined) && depth === 0) {
+        out.push(list.slice(start, i).trim());'''
+
+[[mutant]]
+name = "an escaped quote ends a string"
+file = "scripts/speedometer/probe.js"
+from = '''        if (c === "\\") i++;
+        else if (c === quote) quote = null;
+      } else if (c === '"' || c === "'") quote = c;
+      else if (c === "(" || c === "[") depth++;
+      else if (c === ")" || c === "]") depth--;
+      else if ((c === "," || c === undefined) && depth === 0) {
+        out.push(list.slice(start, i).trim());'''
+to = '''        if (c === quote) quote = null;
+      } else if (c === '"' || c === "'") quote = c;
+      else if (c === "(" || c === "[") depth++;
+      else if (c === ")" || c === "]") depth--;
+      else if ((c === "," || c === undefined) && depth === 0) {
+        out.push(list.slice(start, i).trim());'''
+
+[[mutant]]
+name = "an item that parses has culprits"
+file = "scripts/speedometer/probe.js"
+from = '''    for (const item of items(selector)) {
+      if (parses(item)) continue;'''
+to = '''    for (const item of items(selector)) {'''
+
+[[mutant]]
+name = "every pseudo is a culprit"
+file = "scripts/speedometer/probe.js"
+from = '''      const alone = (item.match(pseudo) ?? []).filter((p) => !parses(`*${p}`));'''
+to = '''      const alone = item.match(pseudo) ?? [];'''
+
+[[mutant]]
+name = "an item whose pseudos each parse has no culprit"
+file = "scripts/speedometer/probe.js"
+from = '''      for (const p of alone.length ? alone : [item]) culprits.add(p);'''
+to = '''      for (const p of alone) culprits.add(p);'''
+
+[[mutant]]
+name = "the probe doesn't look in nested rules"
+file = "scripts/speedometer/probe.js"
+from = '''        if (rule.cssRules) walk(rule.cssRules);'''
+to = ''''''
+
+[[mutant]]
+name = "a style rule with nested rules is nesting without them"
+file = "scripts/speedometer/probe.js"
+from = '''          if (rule.cssRules?.length) kinds.add("nesting");'''
+to = '''          kinds.add("nesting");'''
+
+[[mutant]]
+name = "the probe finds every kind of at-rule kept"
+file = "scripts/speedometer/probe.js"
+from = '''    if (!kinds.has(kind)) missing.atRules.push(kind);'''
+to = ''''''
+
+[[mutant]]
+name = "the probe makes every element without a namespace"
+file = "scripts/speedometer/probe.js"
+from = '''      if (bar < 0) element = document.createElement(tag);'''
+to = '''      if (bar < 0 || true) element = document.createElement(tag.slice(bar + 1));'''
+
+[[mutant]]
+name = "the probe list has no at-rules"
+file = "scripts/speedometer.py"
+from = '''            at_rules.setdefault(kind, text)'''
+to = '''            pass'''
+
+[[mutant]]
+name = "the report lists the whole selector"
+file = "scripts/speedometer.py"
+from = '''        failing = sorted({part for s in selectors for part in culprits.get(s, [s])})'''
+to = '''        failing = sorted(set(selectors))'''
+
+[[mutant]]
+name = "the report lists every at-rule"
+file = "scripts/speedometer.py"
+from = '''        at_rules = sorted(k for k in suite["atRules"] if k in lacking.get("atRules", set()))'''
+to = '''        at_rules = sorted(suite["atRules"])'''

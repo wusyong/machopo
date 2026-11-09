@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>C6: a canvas's styles and images as the page draws the same: a gradient of opaque stops, an image drawn 1:1, a pattern repeated, a shadow with no blur, destination-over, a Path2D filled even-odd, and pixels put whatever the transform</title>
+<link rel="match" href="c6-styles-ref.html">
+<style>
+  html, body { margin: 0 }
+  canvas { display: block }
+</style>
+<canvas width="300" height="200"></canvas>
+<img id="image" src="../images/resources/green-blue-20x10.png" style="display: none">
+<script>
+  onload = () => {
+    const ctx = document.querySelector("canvas").getContext("2d");
+    const image = document.getElementById("image");
+
+    // Hard stops: red, then blue, at the middle.
+    const gradient = ctx.createLinearGradient(0, 0, 100, 0);
+    gradient.addColorStop(0, "red");
+    gradient.addColorStop(0.5, "red");
+    gradient.addColorStop(0.5, "blue");
+    gradient.addColorStop(1, "blue");
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, 100, 40);
+
+    ctx.drawImage(image, 120, 0);
+
+    // Tiles from the canvas's origin: 50 is a whole number of them down.
+    ctx.fillStyle = ctx.createPattern(image, "repeat");
+    ctx.fillRect(0, 50, 100, 30);
+
+    ctx.save();
+    ctx.shadowColor = "black";
+    ctx.shadowOffsetX = 10;
+    ctx.shadowOffsetY = 10;
+    ctx.fillStyle = "lime";
+    ctx.fillRect(160, 60, 30, 30);
+    ctx.restore();
+
+    ctx.fillStyle = "blue";
+    ctx.fillRect(20, 110, 40, 40);
+    ctx.globalCompositeOperation = "destination-over";
+    ctx.fillStyle = "red";
+    ctx.fillRect(0, 100, 80, 60);
+    ctx.globalCompositeOperation = "source-over";
+
+    ctx.fillStyle = "green";
+    ctx.fill(new Path2D("M 220 0 h 60 v 60 h -60 Z M 235 15 h 30 v 30 h -30 Z"), "evenodd");
+
+    const put = ctx.createImageData(10, 10);
+    for (let i = 0; i < put.data.length; i += 4) {
+      put.data.set([255, 0, 255, 255], i);
+    }
+    ctx.scale(2, 2);
+    ctx.putImageData(put, 250, 150);
+
+    document.documentElement.classList.remove("reftest-wait");
+  };
+</script>

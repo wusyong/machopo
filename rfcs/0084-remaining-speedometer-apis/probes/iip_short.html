@@ -1,0 +1,5 @@
+<!DOCTYPE html><meta charset=utf-8><style>body{margin:0;background:#eef}</style><div>short child</div>
+<script>
+window.busy=(ms)=>{const s=performance.now();let d=null,c=null,n=0;while(performance.now()-s<ms){n++;const t=performance.now()-s;if(d===null&&navigator.scheduling.isInputPending())d=Math.round(t);if(c===null&&navigator.scheduling.isInputPending({includeContinuous:true}))c=Math.round(t)}return {discrete:d,continuous:c,origin:location.origin}};
+addEventListener("message",e=>{if(e.data&&e.data.cmd=="busy")e.source.postMessage({reply:busy(e.data.ms)},"*")});
+</script>

@@ -1,0 +1,87 @@
+# Stage 3c: paint places a text run's glyphs in a plain loop
+# (`layout`'s `TextFragment::for_each_glyph`), into buffers it keeps for the
+# next run (`paint`'s `text_run`).
+#
+# python3 scripts/test.py mutate rfcs/0083-text-layout-work/mutants-3c.toml
+test = ["cargo", "test", "-q", "-p", "layout", "-p", "paint"]
+timeout = 900
+
+# The loop.
+
+[[mutant]]
+name = "a shaped glyph isn't moved past the ones before"
+file = "crates/layout/src/fragment.rs"
+from = '''                    offset += g.advance;'''
+to = ''''''
+
+[[mutant]]
+name = "a shaped glyph isn't on the baseline"
+file = "crates/layout/src/fragment.rs"
+from = '''f(g.id, PointF::new(x + (g.x + offset), baseline + g.y));'''
+to = '''f(g.id, PointF::new(x + (g.x + offset), g.y));'''
+
+[[mutant]]
+name = "a shaped run's glyphs aren't cut"
+file = "crates/layout/src/fragment.rs"
+from = '''span.span.glyphs(&span.shaped).take(count)'''
+to = '''span.span.glyphs(&span.shaped)'''
+
+[[mutant]]
+name = "an owned run's glyphs aren't cut"
+file = "crates/layout/src/fragment.rs"
+from = '''glyphs.iter().take(count)'''
+to = '''glyphs.iter()'''
+
+[[mutant]]
+name = "an owned glyph isn't placed from the run's start"
+file = "crates/layout/src/fragment.rs"
+from = '''f(id, PointF::new(x + at.x, baseline + at.y));'''
+to = '''f(id, PointF::new(at.x, baseline + at.y));'''
+
+[[mutant]]
+name = "the glyphs of a run asked for are none"
+file = "crates/layout/src/fragment.rs"
+from = '''self.for_each_glyph(usize::MAX, |id, at| glyphs.push((id, at)));'''
+to = '''self.for_each_glyph(0, |id, at| glyphs.push((id, at)));'''
+
+# Paint.
+
+[[mutant]]
+name = "the ids of the run before are kept"
+file = "crates/paint/src/lib.rs"
+from = '''        ids.clear();
+'''
+to = ''''''
+
+[[mutant]]
+name = "the positions of the run before are kept"
+file = "crates/paint/src/lib.rs"
+from = '''        positions.clear();
+'''
+to = ''''''
+
+[[mutant]]
+name = "glyphs hidden by text-overflow are painted"
+file = "crates/paint/src/lib.rs"
+from = '''run.for_each_glyph(run.hidden_from.unwrap_or(usize::MAX), |id, at| {'''
+to = '''run.for_each_glyph(usize::MAX, |id, at| {'''
+
+[[mutant]]
+name = "glyphs aren't moved to the snapped baseline"
+file = "crates/paint/src/lib.rs"
+from = '''positions.push(PointF::new(origin.x + at.x, origin.y + at.y + shift));'''
+to = '''positions.push(PointF::new(origin.x + at.x, origin.y + at.y));'''
+
+[[mutant]]
+name = "glyphs aren't placed from the origin"
+file = "crates/paint/src/lib.rs"
+from = '''positions.push(PointF::new(origin.x + at.x, origin.y + at.y + shift));'''
+to = '''positions.push(PointF::new(at.x, origin.y + at.y + shift));'''
+
+[[mutant]]
+name = "a run without glyphs is painted"
+file = "crates/paint/src/lib.rs"
+from = '''        if ids.is_empty() {
+            return;
+        }'''
+to = ''''''

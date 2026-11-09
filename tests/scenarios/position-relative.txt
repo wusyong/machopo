@@ -1,0 +1,14 @@
+# about:demo's overlapping avatars: "Bring 3 forward" gives the
+# last one the highest z-index, and it paints over the one before it.
+navigate about:demo
+wait-loaded
+# The avatars are far down the page: scroll to them first, their button
+# just below them in the window, so clicking it scrolls nothing.
+scroll-to .avatars
+screenshot one-on-top
+capture one-on-top
+click #forward
+wait-text #forward-note "Avatar 3 is on top."
+# Over avatar 2 now: the frame changes where they overlap.
+expect-differs one-on-top #avatar-2
+screenshot three-on-top

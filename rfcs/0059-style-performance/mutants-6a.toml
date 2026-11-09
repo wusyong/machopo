@@ -1,0 +1,30 @@
+# 6a: the invalidation tables looked up without copying names (V2), and
+# whether a removed subtree is above carried down the walk (V4) (`style`'s
+# `lib.rs`, `animations.rs`, `rule_set_invalidation.rs`).
+#   python3 scripts/test.py mutate rfcs/0059-style-performance/mutants-6a.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it"]
+timeout = 1800
+
+[[mutant]]
+name = "a moved parent not carried to its children"
+file = "crates/style/src/lib.rs"
+from = '''                        moved_above: (!node.is_slot()).then_some(moved),'''
+to = '''                        moved_above: (!node.is_slot()).then_some(false),'''
+
+[[mutant]]
+name = "the removed root itself not looked at"
+file = "crates/style/src/animations.rs"
+from = '''            _ if table.removed.contains(&node.id()) => node.id(),'''
+to = '''            _ if false => node.id(),'''
+
+[[mutant]]
+name = "a moved host not carried into its shadow tree"
+file = "crates/style/src/lib.rs"
+from = '''                    moved_above: Some(moved),'''
+to = '''                    moved_above: Some(false),'''
+
+[[mutant]]
+name = "names not lowered for the tables"
+file = "crates/style/src/rule_set_invalidation.rs"
+from = '''    if name.bytes().any(|byte| byte.is_ascii_uppercase()) {'''
+to = '''    if false {'''

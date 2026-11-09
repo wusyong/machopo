@@ -1,0 +1,36 @@
+# Stage 4h-3c-1, through the renderer: the animations' promises and events across frames, a frame
+# asked for when script changed one.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it -- next_dom::web_animations_on_the_new_dom next_dom::script_changed_animations_get_frames next_dom::get_animations_in_composite_order"]
+timeout = 1800
+
+[[mutant]]
+name = "renderer: no frame for script's changes"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        self.next_animations_running
+            || self
+                .next_engine
+                .as_mut()
+                .is_some_and(|engine| engine.animations_want_frames())'''
+to = '''        self.next_animations_running'''
+
+[[mutant]]
+name = "api: the events before the promises"
+file = "crates/dom_api_next/src/animations.rs"
+from = '''    crate::animation::settle_animation_notices(host);
+    host.perform_microtask_checkpoint();'''
+to = ''''''
+
+[[mutant]]
+name = "api: transitions listed after CSS animations"
+file = "crates/dom_api_next/src/animation.rs"
+from = '''    found.sort_by_key(|&(class, order, place, name, id, _, _)| (class, order, place, name, id));'''
+to = '''    found.sort_by_key(|&(class, order, place, name, id, _, _)| (std::cmp::Reverse(class), order, place, name, id));'''
+
+[[mutant]]
+name = "api: a CSS animation's style not brought up to date"
+file = "crates/dom_api_next/src/animation.rs"
+from = '''    start_timeline(cx, document);
+    cx.with_style(document, |_| ());
+    let now = cx.animation_time(document);'''
+to = '''    start_timeline(cx, document);
+    let now = cx.animation_time(document);'''

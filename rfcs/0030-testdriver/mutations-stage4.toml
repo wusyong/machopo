@@ -1,0 +1,243 @@
+# The fourth stage's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0030-testdriver/mutations-stage4.toml`. Each runs `dom_js`'s
+# `editing` test (V8, the renderer's calls into `dom_api::editing` made
+# directly), unless it names its own: machopodriver against kun (`webdriver`),
+# machopodriver's own (`driver`), or the `typing` scenario (real keys in a
+# window).
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "editing"]
+timeout = 900
+
+[[mutant]]
+name = "beforeinput can't cancel"
+file = "crates/dom_api/src/editing.rs"
+from = '''    if !ui_event::fire_input_event(cx, element, "beforeinput", input_type, data)
+        || !still_editable(cx, element)
+    {'''
+to = '''    if !(ui_event::fire_input_event(cx, element, "beforeinput", input_type, data) || true)
+        || !still_editable(cx, element)
+    {'''
+
+[[mutant]]
+name = "textInput can't cancel"
+file = "crates/dom_api/src/editing.rs"
+from = '''        && (!ui_event::fire_text_input(cx, element, typed) || !still_editable(cx, element))'''
+to = '''        && (!(ui_event::fire_text_input(cx, element, typed) || true) || !still_editable(cx, element))'''
+
+[[mutant]]
+name = "no input after the change"
+file = "crates/dom_api/src/editing.rs"
+from = '''    ui_event::fire_input_event(cx, element, "input", input_type, data);'''
+to = '''    let _ = (input_type, data);'''
+
+[[mutant]]
+name = "the cursor stays before what was typed"
+file = "crates/dom_api/src/editing.rs"
+from = '''    let at = start + utf16_len(text);'''
+to = '''    let at = start;'''
+
+[[mutant]]
+name = "deleting backward takes a code unit"
+file = "crates/dom_api/src/editing.rs"
+from = '''        .filter(|b| *b < at)
+        .max()
+        .unwrap_or(0)'''
+to = '''        .filter(|b| *b < at)
+        .max()
+        .map(|_| at - 1)
+        .unwrap_or(0)'''
+
+[[mutant]]
+name = "the left arrow on a selection moves from its focus"
+file = "crates/dom_api/src/editing.rs"
+from = '''                EditKey::Left => current.start,'''
+to = '''                EditKey::Left => previous_boundary(&value, focus),'''
+
+[[mutant]]
+name = "Shift doesn't extend the selection"
+file = "crates/dom_api/src/editing.rs"
+from = '''            let new = if extend {'''
+to = '''            let new = if extend && false {'''
+
+[[mutant]]
+name = "Home goes to the value's start"
+file = "crates/dom_api/src/editing.rs"
+from = '''        .map_or(0, |newline| unit_at(value, newline + 1))'''
+to = '''        .map_or(0, |newline| unit_at(value, newline + 1) * 0)'''
+
+[[mutant]]
+name = "maxlength is ignored"
+file = "crates/dom_api/src/editing.rs"
+from = '''            Some(room) => fitting(text, room).to_owned(),'''
+to = '''            Some(_) => text.to_owned(),'''
+
+[[mutant]]
+name = "a read-only control is typed in"
+file = "crates/dom_api/src/editing.rs"
+from = '''    element.attribute(&QualName::attr("readonly")).is_none()'''
+to = '''    true'''
+
+[[mutant]]
+name = "Enter in an input doesn't commit"
+file = "crates/dom_api/src/editing.rs"
+from = '''    if text == "\r" && !textarea {
+        commit(cx, element);'''
+to = '''    if text == "\r" && !textarea {'''
+
+[[mutant]]
+name = "a commit fires change whatever the value"
+file = "crates/dom_api/src/editing.rs"
+from = '''        let changed = before != relevant_value(node);'''
+to = '''        let changed = true || before != relevant_value(node);'''
+
+[[mutant]]
+name = "each change of the user's is the base"
+file = "crates/dom_api/src/editing.rs"
+from = '''        Some(FormControlData::Input(mut state)) if state.value_before_edit.is_none() => {'''
+to = '''        Some(FormControlData::Input(mut state)) => {'''
+
+[[mutant]]
+name = "Delete takes nothing"
+file = "crates/dom_api/src/editing.rs"
+from = '''            if start != end {
+                edit(cx, element, Some((start, end)), "", input_type, None, None);'''
+to = '''            if start != end && input_type == "deleteContentBackward" {
+                edit(cx, element, Some((start, end)), "", input_type, None, None);'''
+
+[[mutant]]
+name = "createEvent has no TextEvent"
+file = "crates/dom_api/src/document.rs"
+from = '''        "textevent" => EventKindInit::Ui(dom::UiEventFields::Text(Default::default())),'''
+to = ''''''
+
+[[mutant]]
+name = "initTextEvent's default data is empty"
+file = "crates/dom_api/src/ui_event.rs"
+from = '''    let data = data.map_or_else(|| "undefined".to_owned(), |data| data.as_str().to_owned());'''
+to = '''    let data = data.map_or_else(String::new, |data| data.as_str().to_owned());'''
+
+[[mutant]]
+name = "a selection the user makes queues no select"
+file = "crates/dom_api/src/editing.rs"
+from = '''    if new != old && new.start != new.end {'''
+to = '''    if new != old && new.start != new.end && false {'''
+test = ["python3", "scripts/test.py", "scenarios", "typing"]
+
+[[mutant]]
+name = "losing the focus doesn't commit"
+file = "crates/dom_api/src/focus.rs"
+from = '''        crate::editing::commit(cx, old);'''
+to = '''        let _ = old;'''
+test = ["python3", "scripts/test.py", "scenarios", "typing"]
+
+[[mutant]]
+name = "the renderer types nothing"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    if not_canceled && dom_api::editing::type_text(host, &target, &key.text) {'''
+to = '''                    if not_canceled && false {'''
+test = ["python3", "scripts/test.py", "scenarios", "typing"]
+
+[[mutant]]
+name = "a key the text control took still scrolls the page"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                && dom_api::editing::edit_key(host, &target, edit, key.modifiers.shift)'''
+to = '''                && dom_api::editing::edit_key(host, &target, edit, key.modifiers.shift)
+                && false'''
+test = ["python3", "scripts/test.py", "scenarios", "typing"]
+
+[[mutant]]
+name = "a scenario's Enter types nothing"
+file = "crates/shell/src/scenario.rs"
+from = '''            NamedKey::Enter => Some("\r".to_owned()),'''
+to = '''            NamedKey::Enter => None,'''
+test = ["python3", "scripts/test.py", "scenarios", "typing"]
+
+[[mutant]]
+name = "Send Keys leaves the cursor where it was"
+file = "crates/renderer/src/render_thread/webdriver.rs"
+from = '''            if !had_focus {
+                dom_api::editing::cursor_to_end(host, &element);
+            }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "webdriver", "--", "keys_are_sent"]
+
+[[mutant]]
+name = "Send Keys moves a focused control's cursor too"
+file = "crates/renderer/src/render_thread/webdriver.rs"
+from = '''            if !had_focus {
+                dom_api::editing::cursor_to_end(host, &element);
+            }'''
+to = '''            dom_api::editing::cursor_to_end(host, &element);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "webdriver", "--", "keys_are_sent"]
+
+[[mutant]]
+name = "Send Keys types into a file input"
+file = "crates/dom_api/src/editing.rs"
+from = '''        "file" => SendKeysTarget::File,'''
+to = '''        "file" => SendKeysTarget::Keys,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "webdriver", "--", "keys_are_sent"]
+
+[[mutant]]
+name = "Send Keys types into a non-typeable control"
+file = "crates/renderer/src/render_thread/webdriver.rs"
+from = '''            if target == SendKeysTarget::NonTypeable {'''
+to = '''            if target == SendKeysTarget::NonTypeable && false {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "webdriver", "--", "keys_are_sent"]
+
+[[mutant]]
+name = "Send Keys to an element that can't take the focus"
+file = "crates/renderer/src/render_thread/webdriver.rs"
+from = '''            if !dom_api::focus::is_keyboard_interactable(host, &element) {'''
+to = '''            if !dom_api::focus::is_keyboard_interactable(host, &element) && false {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "webdriver", "--", "keys_are_sent"]
+
+[[mutant]]
+name = "the driver doesn't wait for an element to be interactable"
+file = "crates/driver/src/session.rs"
+from = '''                    if failure.error == "element not interactable"'''
+to = '''                    if failure.error == "element not interactable" && false'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "webdriver", "--", "keys_are_sent"]
+
+[[mutant]]
+name = "Clear changes an empty control"
+file = "crates/dom_api/src/editing.rs"
+from = '''    let empty = relevant_value_or_files(cx, element).is_empty();
+    if empty {'''
+to = '''    let empty = relevant_value_or_files(cx, element).is_empty();
+    if empty && false {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "webdriver", "--", "elements_are_cleared"]
+
+[[mutant]]
+name = "Clear leaves the user's change to commit"
+file = "crates/dom_api/src/editing.rs"
+from = '''    forget_edit(&mut cx.mutate(), element);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "webdriver", "--", "elements_are_cleared"]
+
+[[mutant]]
+name = "Clear doesn't look at the view"
+file = "crates/renderer/src/render_thread/webdriver.rs"
+from = '''        if !in_view {'''
+to = '''        if !in_view && false {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "webdriver", "--", "elements_are_cleared"]
+
+[[mutant]]
+name = "Send Keys doesn't shift"
+file = "crates/driver/src/actions.rs"
+from = '''            if is_shifted(c) && !keys.shift {'''
+to = '''            if is_shifted(c) && !keys.shift && false {'''
+test = ["cargo", "test", "-q", "-p", "driver", "--lib"]
+
+[[mutant]]
+name = "NULL lets go of nothing"
+file = "crates/driver/src/actions.rs"
+from = '''        if cluster == "\u{E000}" {
+            release_keys(id, held, state, input)?;'''
+to = '''        if cluster == "\u{E000}" {'''
+test = ["cargo", "test", "-q", "-p", "driver", "--lib"]
+
+[[mutant]]
+name = "Send Keys leaves its modifiers down"
+file = "crates/driver/src/actions.rs"
+from = '''    let released = release_keys(&id, &mut held, state, input);'''
+to = '''    let released = Ok(());'''
+test = ["cargo", "test", "-q", "-p", "driver", "--lib"]

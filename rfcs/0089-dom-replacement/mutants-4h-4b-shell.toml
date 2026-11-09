@@ -1,0 +1,16 @@
+# Stage 4h-4b, through the renderer and the browser: the user's clicks on links, a `<base>`'s
+# URL for them, a new tab.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it -- next_dom::links_the_user_follows"]
+timeout = 1800
+
+[[mutant]]
+name = "api: the user's new tab in the frame"
+file = "crates/dom_api_next/src/hyperlink.rs"
+from = '''        let chosen = chosen_document(cx, document, &target);'''
+to = '''        let chosen = chosen_document(cx, document, &target).or(Some(document));'''
+
+[[mutant]]
+name = "renderer: a <link>'s href against the URL"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                    .read(|cx| cx.resolve_url(document.get(cx.gc), href.trim()))'''
+to = '''                    .read(|cx| cx.document_url(document.get(cx.gc)).and_then(|url| url::Url::parse(&url.to_str()).ok()?.join(href.trim()).ok()))'''

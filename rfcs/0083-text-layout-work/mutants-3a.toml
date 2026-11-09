@@ -1,0 +1,650 @@
+# Stage 3a: text is shaped a word at a time where that gives what shaping
+# it whole does, and what shaping a word gave is kept (the parley fork's
+# `shape/words.rs`, `shape/space.rs` and `shape_segment`), by the word, its
+# characters' font styles (parley's ids) and its options.
+#
+# python3 scripts/test.py mutate rfcs/0083-text-layout-work/mutants-3a.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it"]
+timeout = 600
+
+# When a segment is shaped a word at a time.
+
+[[mutant]]
+name = "right to left is shaped a word at a time"
+file = "../third_party/parley/parley_engine/src/shape/words.rs"
+from = '''            && ltr
+'''
+to = ''''''
+
+[[mutant]]
+name = "Arabic is shaped a word at a time"
+file = "../third_party/parley/parley_engine/src/shape/words.rs"
+from = '''            && script != ARABIC
+'''
+to = ''''''
+
+[[mutant]]
+name = "features off unless asked for are shaped a word at a time"
+file = "../third_party/parley/parley_engine/src/shape/words.rs"
+from = '''            && !asks_for_rare_features(options.features)'''
+to = ''''''
+
+[[mutant]]
+name = "every font is shaped a word at a time"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''            if *reach == SpaceReach::Across {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "a style without an id is shaped a word at a time"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''                let Some(style) = select_font.font_style(style_index) else {
+                    return Ok(false);
+                };'''
+to = '''                let style = select_font.font_style(style_index).unwrap_or(0);'''
+
+# The key.
+
+[[mutant]]
+name = "the key has no size"
+file = "../third_party/parley/parley_engine/src/shape/words.rs"
+from = '''            font_size: options.font_size.to_bits(),'''
+to = '''            font_size: 0,'''
+
+[[mutant]]
+name = "the key has no language"
+file = "../third_party/parley/parley_engine/src/shape/words.rs"
+from = '''            language: options.language,'''
+to = '''            language: None,'''
+
+[[mutant]]
+name = "the key has no script"
+file = "../third_party/parley/parley_engine/src/shape/words.rs"
+from = '''        let key = OptionsKey {
+            script,'''
+to = '''        let key = OptionsKey {
+            script: Script::COMMON,'''
+
+[[mutant]]
+name = "the key has no features"
+file = "../third_party/parley/parley_engine/src/shape/words.rs"
+from = '''                .map(|feature| (u32::from_be_bytes(feature.tag.to_bytes()), feature.value))'''
+to = '''                .map(|feature| (u32::from_be_bytes(feature.tag.to_bytes()), feature.value))
+                .take(0)'''
+
+[[mutant]]
+name = "the key has no variations"
+file = "../third_party/parley/parley_engine/src/shape/words.rs"
+from = '''                .map(|variation| {
+                    (
+                        u32::from_be_bytes(variation.tag.to_bytes()),
+                        variation.value.to_bits(),
+                    )
+                })'''
+to = '''                .map(|variation| {
+                    (
+                        u32::from_be_bytes(variation.tag.to_bytes()),
+                        variation.value.to_bits(),
+                    )
+                })
+                .take(0)'''
+
+[[mutant]]
+name = "the key has no font styles"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''                scratch.styles.push(style);'''
+to = '''                scratch.styles.push(style & 0);'''
+
+[[mutant]]
+name = "a font style has no weight"
+file = "../third_party/parley/parley/src/shape/cache.rs"
+from = '''                    weight: style.font_weight.value().to_bits(),'''
+to = '''                    weight: 0,'''
+
+[[mutant]]
+name = "a word's text is compared by its hash"
+file = "../third_party/parley/parley_engine/src/shape/words.rs"
+from = '''                word.options == options && &*word.text == text && &*word.styles == styles'''
+to = '''                word.options == options && &*word.styles == styles'''
+
+# Splitting into words.
+
+[[mutant]]
+name = "no split before a space"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''                && (ch == ' ' || previous == Some(' '));'''
+to = '''                && previous == Some(' ');'''
+
+[[mutant]]
+name = "no split after a space"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''                && (ch == ' ' || previous == Some(' '));'''
+to = '''                && ch == ' ';'''
+
+[[mutant]]
+name = "a split inside a grapheme"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''            let split = index > start.1
+                && char_info[index].is_grapheme_start()
+'''
+to = '''            let split = index > start.1
+'''
+
+[[mutant]]
+name = "words of 32 characters aren't kept"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''        let keep = word.char_range.len() <= MAX_WORD_CHARS;'''
+to = '''        let keep = word.char_range.len() < MAX_WORD_CHARS;'''
+
+# Putting words together.
+
+[[mutant]]
+name = "runs of other fonts are put together"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''        if let Some((run_font, run_range, _)) = &mut self.run
+            && run_font == font
+        {'''
+to = '''        if let Some((run_font, run_range, _)) = &mut self.run
+            && (run_font == font || true)
+        {'''
+
+[[mutant]]
+name = "a word's clusters count from the word"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''                    cluster: glyph.cluster + offset,
+                    ..*glyph'''
+to = '''                    cluster: glyph.cluster,
+                    ..*glyph'''
+
+[[mutant]]
+name = "a word of another font drops the run before"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''        } else {
+            self.flush();
+            self.glyphs.extend_from_slice(glyphs);'''
+to = '''        } else {
+            self.run = None;
+            self.glyphs.clear();
+            self.glyphs.extend_from_slice(glyphs);'''
+
+[[mutant]]
+name = "a word shaped isn't kept"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''        if keep {
+            words.insert('''
+to = '''        if false {
+            words.insert('''
+
+[[mutant]]
+name = "a segment shaped whole after words keeps them"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''        shaped_text.truncate(mark);
+        select_font.begin_segment(segment, options);'''
+to = '''        select_font.begin_segment(segment, options);'''
+
+[[mutant]]
+name = "a segment shaped whole after words doesn't begin again"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''        shaped_text.truncate(mark);
+        select_font.begin_segment(segment, options);'''
+to = '''        shaped_text.truncate(mark);'''
+
+[[mutant]]
+name = "a taken word isn't counted"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''                reused += 1;'''
+to = ''''''
+
+# Limits and clearing.
+
+[[mutant]]
+name = "the words kept never start again"
+file = "../third_party/parley/parley_engine/src/shape/words.rs"
+from = '''        if self.words.len() >= MAX_WORDS {'''
+to = '''        if self.words.len() > MAX_WORDS {'''
+
+[[mutant]]
+name = "the ids of options start again without the words"
+file = "../third_party/parley/parley_engine/src/shape/words.rs"
+from = '''            self.options.clear();
+            self.words.clear();
+        }'''
+to = '''            self.options.clear();
+        }'''
+
+[[mutant]]
+name = "the ids of options never start again"
+file = "../third_party/parley/parley_engine/src/shape/words.rs"
+from = '''        if self.options.len() >= MAX_OPTIONS {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "the ids of font styles start again without the words"
+file = "../third_party/parley/parley/src/shape/cache.rs"
+from = '''            self.font_styles.clear();
+            scx.clear_words();
+        }
+        styles'''
+to = '''            self.font_styles.clear();
+        }
+        styles'''
+
+[[mutant]]
+name = "the ids of font styles never start again"
+file = "../third_party/parley/parley/src/shape/cache.rs"
+from = '''        if self.font_styles.len() + styles.len() > FONT_STYLES {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "clearing keeps the words"
+file = "../third_party/parley/parley_engine/src/shape/words.rs"
+from = '''    pub(crate) fn clear(&mut self) {
+        self.words.clear();'''
+to = '''    pub(crate) fn clear(&mut self) {'''
+
+[[mutant]]
+name = "adding fonts keeps what shaping gave"
+file = "crates/layout/src/text.rs"
+from = '''        self.layout.clear_shapings();'''
+to = ''''''
+
+# parley's font selector and its check in a debug build.
+
+[[mutant]]
+name = "a new font selector keeps the query's attributes"
+file = "../third_party/parley/parley/src/shape/mod.rs"
+from = '''        query.set_attributes(attrs);'''
+to = ''''''
+
+[[mutant]]
+name = "the check shapes a word at a time"
+file = "../third_party/parley/parley/src/shape/mod.rs"
+from = '''            scx.set_shape_words(false);
+            scx.shape_text(
+                text,
+                analysis,
+                char_style_indices,
+                items(),
+                font_selector,
+                &mut whole,
+            );'''
+to = '''            scx.shape_text(
+                text,
+                analysis,
+                char_style_indices,
+                items(),
+                font_selector,
+                &mut whole,
+            );'''
+
+[[mutant]]
+name = "no font style ids"
+file = "../third_party/parley/parley/src/shape/mod.rs"
+from = '''        self.font_styles.get(usize::from(style_index)).copied()'''
+to = '''        self.font_styles.get(usize::from(style_index)).copied().filter(|_| false)'''
+
+# How far a font reaches across a space (the parley fork's `space.rs`).
+
+[[mutant]]
+name = "AAT tables don't count"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''        .any(|tag| font.table_data(Tag::new(tag)).is_some())'''
+to = '''        .any(|tag| font.table_data(Tag::new(tag)).is_some() && false)'''
+
+[[mutant]]
+name = "the kern table doesn't count"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''    font_space.in_kern(font, &mut by_position)?;
+'''
+to = ''''''
+
+[[mutant]]
+name = "GSUB doesn't count"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''                font_space.substitution(&lookups.lookups().get(index)?, &mut by_substitution)?;
+'''
+to = ''''''
+
+[[mutant]]
+name = "GPOS doesn't count"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''                    font_space.position(&lookups.get(index)?, &mut by_position)?;
+'''
+to = ''''''
+
+[[mutant]]
+name = "a lookup a context applies isn't looked into"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''            if *applied != Applied::Not {
+                font_space.substitution('''
+to = '''            if *applied == Applied::ByFeature {
+                font_space.substitution('''
+
+[[mutant]]
+name = "features don't count"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''        if !off_by_default(record.feature_tag().to_be_bytes()) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "features off unless asked for count"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''    OFF.contains(&&tag) || (digits'''
+to = '''    (digits'''
+
+[[mutant]]
+name = "a kern pair with the space on the right doesn't count"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''                        if self.is_space(pair.right()) {'''
+to = '''                        if false {'''
+
+[[mutant]]
+name = "a kern pair with the space on the left doesn't count"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''                        if self.is_space(pair.left()) && !self.is_mark(pair.right()) {'''
+to = '''                        if false {'''
+
+[[mutant]]
+name = "the kern table doesn't skip marks"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''                            reached.before_skips_marks = true;
+'''
+to = ''''''
+
+[[mutant]]
+name = "a kern subtable of classes is looked into"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''                _ => reached.across = true,'''
+to = '''                _ => {}'''
+
+[[mutant]]
+name = "a space after the first glyph of a rule doesn't count"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''        for (index, position) in positions.iter().enumerate() {'''
+to = '''        for (index, position) in positions.iter().enumerate().take(1) {'''
+
+[[mutant]]
+name = "a rule of three reaches only beside the space"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''            let [first, second] = positions else {
+                reached.across = true;
+                return;
+            };'''
+to = '''            let [first, second, ..] = positions else {
+                reached.across = true;
+                return;
+            };'''
+
+[[mutant]]
+name = "a lookup skipping marks doesn't say so"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''                reached.before_skips_marks |= skips_marks;
+'''
+to = ''''''
+
+[[mutant]]
+name = "class 0 can be marks only"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''                *class != 0
+                    && class_def'''
+to = '''                class_def'''
+
+[[mutant]]
+name = "class 0 without a coverage is some glyphs"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''                (0, None) => return false,'''
+to = '''                (0, None) => {}'''
+
+[[mutant]]
+name = "class 0 with a coverage is none of it"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''                        if class_def.get(GlyphId::from(glyph)) == 0 {'''
+to = '''                        if false {'''
+
+[[mutant]]
+name = "a lookup skipping base glyphs doesn't count"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''    flag.contains(LookupFlag::IGNORE_BASE_GLYPHS)'''
+to = '''    flag.contains(LookupFlag::IGNORE_BASE_GLYPHS) && false'''
+
+[[mutant]]
+name = "a ligature's components don't count"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''                                .chain(ligature?.component_glyph_ids().iter().map(BigEndian::get))'''
+to = '''                                .chain(ligature?.component_glyph_ids().iter().map(BigEndian::get).take(0))'''
+
+[[mutant]]
+name = "a ligature starting with a space isn't told"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''                        reached.space_ligatures |= self.is_space(first);
+'''
+to = ''''''
+
+[[mutant]]
+name = "glyph pairs don't count"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''                                        Position::Glyph(record?.second_glyph()),
+                                    ];
+                                    self.rule(&positions, flag, reached);'''
+to = '''                                        Position::Glyph(record?.second_glyph()),
+                                    ];'''
+
+[[mutant]]
+name = "class pairs don't count"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''                                    if !moves(pair.value_record1()) && !moves(pair.value_record2())'''
+to = '''                                    if true'''
+
+[[mutant]]
+name = "class pairs that move nothing count"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''                                    if !moves(pair.value_record1()) && !moves(pair.value_record2())'''
+to = '''                                    if false'''
+
+[[mutant]]
+name = "cursive attachment doesn't count"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''                    reached.across |= has_space(table?.coverage()?);'''
+to = ''''''
+
+[[mutant]]
+name = "a space as a mark on a base doesn't count"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''            PositionSubtables::MarkToBase(subtables) => {
+                for table in subtables.iter() {
+                    reached.across |= has_space(table?.mark_coverage()?);'''
+to = '''            PositionSubtables::MarkToBase(subtables) => {
+                for table in subtables.iter() {
+                    reached.across |= has_space(table?.mark_coverage()?) && false;'''
+
+[[mutant]]
+name = "a space as a mark on a ligature doesn't count"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''            PositionSubtables::MarkToLig(subtables) => {
+                for table in subtables.iter() {
+                    reached.across |= has_space(table?.mark_coverage()?);'''
+to = '''            PositionSubtables::MarkToLig(subtables) => {
+                for table in subtables.iter() {
+                    reached.across |= has_space(table?.mark_coverage()?) && false;'''
+
+[[mutant]]
+name = "a space as a mark's base doesn't count"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''has_space(table.mark1_coverage()?) || has_space(table.mark2_coverage()?);'''
+to = '''has_space(table.mark1_coverage()?);'''
+
+[[mutant]]
+name = "a chained context's lookahead doesn't count"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''                for coverages in [table.input_coverages(), table.lookahead_coverages()] {'''
+to = '''                for coverages in [table.input_coverages()] {'''
+
+[[mutant]]
+name = "a chained context's backtrack isn't reversed"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''                            .backtrack_sequence()
+                            .iter()
+                            .rev()
+                            .map(BigEndian::get)'''
+to = '''                            .backtrack_sequence()
+                            .iter()
+                            .map(BigEndian::get)'''
+
+[[mutant]]
+name = "what a feature makes of a space isn't a space"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''        substituted(lookups, on, true, &mut spaces)?;
+'''
+to = ''''''
+
+[[mutant]]
+name = "what a context makes of a space is a space"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''            if *applied == Applied::Not || (of_space && *applied != Applied::ByFeature) {'''
+to = '''            if *applied == Applied::Not {'''
+
+[[mutant]]
+name = "ligatures of a space are spaces"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''                SubstitutionSubtables::Ligature(subtables) if !of_space => {'''
+to = '''                SubstitutionSubtables::Ligature(subtables) => {'''
+
+[[mutant]]
+name = "what substitutions make of the glyph before a space doesn't count"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''        substituted(lookups, on, false, &mut by_substitution.before)?;
+'''
+to = ''''''
+
+[[mutant]]
+name = "what substitutions make of the glyph after a space doesn't count"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''        substituted(lookups, on, false, &mut by_substitution.after)?;
+'''
+to = ''''''
+
+[[mutant]]
+name = "a mark ending a word isn't taken where marks are skipped"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''                if class == 3 {
+                    reached.before.insert(glyph);
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "a font with 256 glyphs beside a space is shaped whole"
+file = "../third_party/parley/parley_engine/src/shape/space.rs"
+from = '''    if count(&by_position.before, &by_substitution.before) > MAX_BESIDE'''
+to = '''    if count(&by_position.before, &by_substitution.before) >= MAX_BESIDE'''
+
+# Words shaped again as one where shaping takes a space with the glyph
+# beside it (the fork's `shaper.rs`).
+
+[[mutant]]
+name = "a glyph a kerning pair takes before a space isn't shaped again"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''            if beside.moved.before(last.id) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "a glyph a kerning pair takes after a space isn't shaped again"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''            if beside.moved.after(next.id) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "a glyph a substitution takes before a space isn't shaped again"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''            if beside.substituted.before(last.id)
+                ||'''
+to = '''            if false
+                ||'''
+
+[[mutant]]
+name = "a glyph a substitution takes after a space is shaped again with the space only"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''                join = Join::LastTwo;'''
+to = '''                join = join.max(Join::Last);'''
+
+[[mutant]]
+name = "the word after a substitution with a space isn't shaped again"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''                joins_next = true;'''
+to = ''''''
+
+[[mutant]]
+name = "the word after isn't shaped again when asked"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''        let mut join = if self.word.joins_next {'''
+to = '''        let mut join = if false {'''
+
+[[mutant]]
+name = "a grapheme of several characters before a space isn't shaped again"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''                || (beside.skips_marks && marks)'''
+to = ''''''
+
+[[mutant]]
+name = "every grapheme is of several characters"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''            let marks = char'''
+to = '''            let marks = true || char'''
+
+[[mutant]]
+name = "a space with its marks isn't shaped again"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''                || (beside.space_ligatures && space_marks)'''
+to = ''''''
+
+[[mutant]]
+name = "a space with its marks first in a run isn't shaped again with the word after"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''                joins_next: space_marks
+                    && matches!'''
+to = '''                joins_next: false
+                    && matches!'''
+
+[[mutant]]
+name = "words shaped again as one start at the last word"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''                    start.byte..range.byte_range.end,'''
+to = '''                    range.byte_range.start..range.byte_range.end,'''
+
+[[mutant]]
+name = "the clusters of words shaped again count from the run"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''                            cluster: glyph.cluster + offset,
+                            ..glyph'''
+to = '''                            cluster: glyph.cluster,
+                            ..glyph'''
+
+[[mutant]]
+name = "words shaped again as one aren't counted"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''                self.joined += 1;
+'''
+to = ''''''
+
+[[mutant]]
+name = "words shaped again as one aren't added up"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''    words.joined += runs.joined;
+'''
+to = ''''''
+
+# fontique keeps a font it prunes while something still holds it, so that
+# loading it again gives the same blob, and the words kept still match it.
+
+[[mutant]]
+name = "a font pruned while held is loaded again as another blob"
+file = "../third_party/parley/fontique/src/source_cache.rs"
+from = '''                            .remove(&source.id())'''
+to = '''                            .remove(&SourceId::new())'''
+test = ["cargo", "test", "-q", "--manifest-path", "../third_party/parley/Cargo.toml", "-p", "fontique", "--lib", "source_cache"]
+
+[[mutant]]
+name = "pruning forgets a font still held"
+file = "../third_party/parley/fontique/src/source_cache.rs"
+from = '''                        self.pruned.insert(*id, data.font_data.downgrade());'''
+to = ''''''
+test = ["cargo", "test", "-q", "--manifest-path", "../third_party/parley/Cargo.toml", "-p", "fontique", "--lib", "source_cache"]

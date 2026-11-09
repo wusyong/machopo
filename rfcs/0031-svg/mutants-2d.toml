@@ -1,0 +1,313 @@
+# Mutation test of step 2d (SVG's linear and radial gradients):
+# python3 scripts/test.py mutate rfcs/0031-svg/mutants-2d.toml
+# The timeout is for "an href cycle goes on", which runs until killed.
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "svg::", "update::an_svg"]
+timeout = 300
+
+# --- layout: what a url() finds -----------------------------------------------
+
+[[mutant]]
+name = "fragments aren't percent-decoded"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''        let id = dom::fragment_id(url)?;'''
+to = '''        let id = url.strip_prefix('#')?.to_owned();'''
+
+[[mutant]]
+name = "any element is a paint server"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''        if !name.is_svg("linearGradient") && !name.is_svg("radialGradient") {
+            return None;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "an href cycle goes on"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''            .filter(|next| seen.insert(next.id()))'''
+to = ''''''
+
+[[mutant]]
+name = "the geometry comes from any gradient"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''                .filter(|e| same_kind(e))'''
+to = ''''''
+
+[[mutant]]
+name = "x2 is 0 by default"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''                x2: length("x2").unwrap_or(percent(100.0)),'''
+to = '''                x2: length("x2").unwrap_or(percent(0.0)),'''
+
+[[mutant]]
+name = "fx is 50% by default"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''                fx: length("fx").unwrap_or(cx),'''
+to = '''                fx: length("fx").unwrap_or(half),'''
+
+[[mutant]]
+name = "user space by default"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''            .unwrap_or(true);
+        let spread'''
+to = '''            .unwrap_or(false);
+        let spread'''
+
+[[mutant]]
+name = "reflect repeats"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''                Some("reflect") => Some(Spread::Reflect),'''
+to = '''                Some("reflect") => Some(Spread::Repeat),'''
+
+[[mutant]]
+name = "gradientTransform is ignored"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''                .then(|| style.transform.clone())'''
+to = '''                .then(Default::default)'''
+
+[[mutant]]
+name = "the stops are the gradient's own"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''            .find(|stops| !stops.is_empty())'''
+to = '''            .next()'''
+
+[[mutant]]
+name = "offsets may go back"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''                .clamp(0.0, 1.0)
+                .max(last);'''
+to = '''                .clamp(0.0, 1.0);'''
+
+[[mutant]]
+name = "offsets aren't clamped"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''                .clamp(0.0, 1.0)
+                .max(last);'''
+to = '''                .max(last);'''
+
+[[mutant]]
+name = "a percentage offset is a number"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''                        Some(percent) => percent.parse::<f32>().ok().map(|p| p / 100.0),'''
+to = '''                        Some(percent) => percent.parse::<f32>().ok(),'''
+
+[[mutant]]
+name = "stop-opacity is ignored"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''            let alpha = (f32::from(color.a) * style.svg.stop_opacity).round() as u8;
+            (offset, Color { a: alpha, ..color })'''
+to = '''            (offset, color)'''
+
+[[mutant]]
+name = "no stops paints the fallback"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''            SourceServer::NoStops => return Some(SvgPaintServer::None),'''
+to = '''            SourceServer::NoStops => return None,'''
+
+# --- layout: laid out ---------------------------------------------------------
+
+[[mutant]]
+name = "a box with no height is used"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''            let bbox = bbox.filter(|b| b.width > 0.0 && b.height > 0.0)?;'''
+to = '''            let bbox = bbox?;'''
+
+[[mutant]]
+name = "the box scales before it moves"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''            let to_user = Transform::translate(bbox.x, bbox.y)
+                .then(&Transform::scale(bbox.width, bbox.height));'''
+to = '''            let to_user = Transform::scale(bbox.width, bbox.height)
+                .then(&Transform::translate(bbox.x, bbox.y));'''
+
+[[mutant]]
+name = "user space's percentages are of 1"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''            (Transform::IDENTITY, viewport)'''
+to = '''            (Transform::IDENTITY, SizeF::new(1.0, 1.0))'''
+
+[[mutant]]
+name = "a line with no length is a gradient"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''                if start == end {
+                    return Some(SvgPaintServer::Color(last));
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "a radius of 0 is a gradient"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''                if radius <= 0.0 {
+                    return Some(SvgPaintServer::Color(last));
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "one stop is a gradient"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''        if let [(_, color)] = gradient.stops[..] {
+            return Some(SvgPaintServer::Color(color));
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "gradientTransform is outside the box's"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''        let transform = to_user.then(&gradient_transform(&gradient.transform, units));'''
+to = '''        let transform = gradient_transform(&gradient.transform, units).then(&to_user);'''
+
+[[mutant]]
+name = "shapes have no paint servers"
+file = "crates/layout/src/svg.rs"
+from = '''            [cx.server(&style.svg.fill), cx.server(&style.svg.stroke)],'''
+to = '''            [None, None],'''
+
+[[mutant]]
+name = "the stroke's is the fill's"
+file = "crates/layout/src/svg.rs"
+from = '''            [cx.server(&style.svg.fill), cx.server(&style.svg.stroke)],'''
+to = '''            [cx.server(&style.svg.fill), cx.server(&style.svg.fill)],'''
+
+[[mutant]]
+name = "the box holds the control points"
+file = "crates/layout/src/svg.rs"
+from = '''path.as_ref().and_then(Path::tight_bounds)'''
+to = '''path.as_ref().and_then(Path::bounds)'''
+
+# --- paint --------------------------------------------------------------------
+
+[[mutant]]
+name = "the focal and end circles swap"
+file = "crates/paint/src/svg.rs"
+from = '''                start: focal,
+                start_radius: focal_radius,
+                end: center,
+                end_radius: radius,'''
+to = '''                start: center,
+                start_radius: radius,
+                end: focal,
+                end_radius: focal_radius,'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "reflect is a repeat"
+file = "crates/paint/src/svg.rs"
+from = '''            Spread::Reflect => TileMode::Mirror,'''
+to = '''            Spread::Reflect => TileMode::Repeat,'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "SVG mixes premultiplied"
+file = "crates/paint/src/svg.rs"
+from = '''        interpolation: ColorInterpolation::Unpremultiplied,'''
+to = '''        interpolation: ColorInterpolation::Premultiplied,'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "a gradient's opacity is ignored"
+file = "crates/paint/src/svg.rs"
+from = '''            let alpha = (255.0 * opacity).round() as u8;'''
+to = '''            let alpha = 255;'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "a gradient without stops paints"
+file = "crates/paint/src/svg.rs"
+from = '''        (SvgPaint::Url(..), Some(SvgPaintServer::None)) => return None,'''
+to = '''        (SvgPaint::Url(..), Some(SvgPaintServer::None)) => Color::BLACK,'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "one color's opacity is ignored"
+file = "crates/paint/src/svg.rs"
+from = '''        (SvgPaint::Url(..), Some(SvgPaintServer::Color(color))) => *color,'''
+to = '''        (SvgPaint::Url(..), Some(SvgPaintServer::Color(color))) => return Some(PaintFlags::fill(*color)),'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+# --- style: who paints with what --------------------------------------------
+
+[[mutant]]
+name = "clients aren't told"
+file = "crates/style/src/svg_resources.rs"
+from = '''        if changed {
+            element.set_needs_reattach_layout_tree();
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a new chain isn't a change"
+file = "crates/style/src/svg_resources.rs"
+from = '''            && (chains != state.chains
+                ||'''
+to = '''            && (false
+                ||'''
+
+[[mutant]]
+name = "a touched gradient isn't a change"
+file = "crates/style/src/svg_resources.rs"
+from = '''                || chains.iter().flatten().any(|id| touched.contains(id)));'''
+to = '''                || false);'''
+
+[[mutant]]
+name = "a use isn't a client"
+file = "crates/style/src/svg_resources.rs"
+from = '''                "rect" | "circle" | "ellipse" | "line" | "polyline" | "polygon" | "path" | "use"'''
+to = '''                "rect" | "circle" | "ellipse" | "line" | "polyline" | "polygon" | "path"'''
+
+[[mutant]]
+name = "a use's copy isn't looked at"
+file = "crates/style/src/svg_resources.rs"
+from = '''        if let Some(instance) = element.svg_use_instance() {
+            copy(&instance, &mut out);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a use copied again isn't looked at again"
+file = "crates/style/src/lib.rs"
+from = '''        touched.extend(copied_again);'''
+to = '''        drop(copied_again);'''
+
+[[mutant]]
+name = "a use's href isn't percent-decoded"
+file = "crates/style/src/svg_use.rs"
+from = '''    dom::fragment_id(&href)'''
+to = '''    href.trim().strip_prefix('#').map(str::to_owned)'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "svg_use::"]
+
+[[mutant]]
+name = "stop-color isn't applied"
+file = "crates/style/src/properties.rs"
+from = '''        (StopColor, Value::Color(v)) => style.svg.stop_color = v.compute(),'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "stop-opacity isn't clamped"
+file = "crates/style/src/properties.rs"
+from = '''        (StopOpacity, Value::Opacity(v)) => style.svg.stop_opacity = v.clamp(0.0, 1.0),'''
+to = '''        (StopOpacity, Value::Opacity(v)) => style.svg.stop_opacity = v,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "svg::"]
+
+# --- dom and gfx --------------------------------------------------------------
+
+[[mutant]]
+name = "fragment ids aren't decoded"
+file = "crates/dom/src/svg.rs"
+from = '''        let byte = (bytes[i] == b'%')'''
+to = '''        let byte = (bytes[i] == b'%' && false)'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::fragment_ids"]
+
+[[mutant]]
+name = "no move after a close"
+file = "crates/gfx/src/lib.rs"
+from = '''                    current = start;
+                    needs_move = true;'''
+to = '''                    current = start;'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+[[mutant]]
+name = "tight bounds hold the control points"
+file = "crates/gfx/src/lib.rs"
+from = '''        let r = path.bounding_box();'''
+to = '''        let r = path.control_box();'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]

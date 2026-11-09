@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<title>Form pseudo-classes</title>
+<style>
+  body { margin: 0 }
+  label, button { display: block; width: 100px; height: 20px; margin: 0 0 10px }
+  #mark { display: block; width: 20px; height: 20px; background: gray }
+  input:checked ~ #mark { width: 80px; background: green }
+</style>
+<form>
+  <label for="box" id="label">check</label>
+  <input type="checkbox" id="box">
+  <span id="mark"></span>
+  <button type="reset" id="reset">reset</button>
+</form>

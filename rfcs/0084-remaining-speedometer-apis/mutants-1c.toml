@@ -1,0 +1,26 @@
+test = ["cargo", "test", "-p", "dom_js", "--test", "it", "--", "navigator::connection"]
+timeout = 1200
+
+[[mutant]]
+name = "a new connection each time"
+file = "crates/dom/src/navigator.rs"
+from = '''        if let Some(connection) = unsafe { self.own(navigator).connection.get_ptr() } {'''
+to = '''        if let Some(connection) = None::<v8::cppgc::UnsafePtr<EventTargetImpl>> {'''
+
+[[mutant]]
+name = "the connection is a plain event target"
+file = "crates/dom_api/src/object.rs"
+from = '''            Self::EventTarget(target) if target.is_network_information() => {'''
+to = '''            Self::EventTarget(target) if false && target.is_network_information() => {'''
+
+[[mutant]]
+name = "an unknown type is 3g"
+file = "crates/dom_api/src/network_information.rs"
+from = '''    Ok(EffectiveConnectionType::FourG)'''
+to = '''    Ok(EffectiveConnectionType::ThreeG)'''
+
+[[mutant]]
+name = "no estimate is the slowest downlink"
+file = "crates/dom_api/src/network_information.rs"
+from = '''    Ok(10.0)'''
+to = '''    Ok(0.0)'''

@@ -1,0 +1,108 @@
+# Mutation test of stage 8's C3: the fragment parser's fast path:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-8-c3.toml
+test = ["cargo", "test", "-q", "-p", "html", "-p", "dom_api"]
+timeout = 2400
+
+[[mutant]]
+name = "any context takes the fast path"
+file = "crates/html/src/fast_path.rs"
+from = '''    if !context.namespace().is_html() || !is_context(context.local().as_str()) {'''
+to = '''    if !context.namespace().is_html() {'''
+
+[[mutant]]
+name = "the attribute hooks aren't run"
+file = "crates/html/src/fast_path.rs"
+from = '''                    hooks.attribute_changed(
+                        m,
+                        &element,
+                        &attr.name,
+                        &attr.value,
+                        line,
+                        hooks_document,
+                    );'''
+to = '''                    let _ = (&hooks, line, &element, attr, hooks_document);'''
+
+[[mutant]]
+name = "text is dropped"
+file = "crates/html/src/fast_path.rs"
+from = '''            events.push(Event::Text(text));'''
+to = '''            let _ = text;'''
+
+[[mutant]]
+name = "any end tag closes the current element"
+file = "crates/html/src/fast_path.rs"
+from = '''            if open.last() != Some(&name) {'''
+to = '''            if open.is_empty() {'''
+
+[[mutant]]
+name = "a non-void element may close itself"
+file = "crates/html/src/fast_path.rs"
+from = '''                Some(b'/') if bytes.get(after + 1) == Some(&b'>') && is_void(name) => {'''
+to = '''                Some(b'/') if bytes.get(after + 1) == Some(&b'>') => {'''
+
+[[mutant]]
+name = "a repeated attribute is taken"
+file = "crates/html/src/fast_path.rs"
+from = '''            if attrs.iter().any(|(name, _)| name.as_str() == attr_name) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "an open p isn't closed by a block"
+file = "crates/html/src/fast_path.rs"
+from = '''        if closes_p(name) && open.contains(&"p") {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a heading doesn't close a heading"
+file = "crates/html/src/fast_path.rs"
+from = '''        if is_heading(name) && open.last().is_some_and(|current| is_heading(current)) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "an li doesn't close an li"
+file = "crates/html/src/fast_path.rs"
+from = '''                if element == "li" {'''
+to = '''                if false {'''
+
+[[mutant]]
+name = "an a or button nests in its own"
+file = "crates/html/src/fast_path.rs"
+from = '''        if (name == "button" || name == "a") && open.contains(&name) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a carriage return in a tag is taken"
+file = "crates/html/src/fast_path.rs"
+from = '''            b'\r' => return None,'''
+to = '''            b'\r' => {}'''
+
+[[mutant]]
+name = "any numeric reference is passed through"
+file = "crates/html/src/fast_path.rs"
+from = '''                if !plain {'''
+to = '''                if !plain && false {'''
+
+[[mutant]]
+name = "a fast document isn't in quirks mode"
+file = "crates/html/src/fast_path.rs"
+from = '''    m.set_quirks_mode(document, dom::QuirksMode::Quirks);'''
+to = ''''''
+
+[[mutant]]
+name = "a fast document keeps the white space before it"
+file = "crates/html/src/fast_path.rs"
+from = '''    let start = input.trim_start_matches([' ', '\t', '\n', '\x0C']);'''
+to = '''    let start = input;'''
+
+[[mutant]]
+name = "a fast document's skipped lines don't count"
+file = "crates/html/src/fast_path.rs"
+from = '''            *line += skipped;'''
+to = '''            let _ = (line, skipped);'''
+
+[[mutant]]
+name = "a fast document has no head"
+file = "crates/html/src/fast_path.rs"
+from = '''    m.parser_append_child(&html, &head)
+        .expect("the root takes its head");'''
+to = '''    let _ = &head;'''

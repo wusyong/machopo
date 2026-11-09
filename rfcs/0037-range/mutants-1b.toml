@@ -1,0 +1,98 @@
+# Mutation test of step 1b (live ranges moving with insertions, removals
+# and adoption):
+# python3 scripts/test.py mutate rfcs/0037-range/mutants-1b.toml
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "ranges::"]
+timeout = 600
+
+[[mutant]]
+name = "an insertion moves no range"
+file = "crates/dom/src/scope.rs"
+from = '''        self.live_ranges_inserted(child_node);
+'''
+to = ''''''
+
+[[mutant]]
+name = "an insertion moves a range at the new child's index"
+file = "crates/dom/src/range.rs"
+from = '''                if offset.load(Ordering::Relaxed) > index {
+                    offset.fetch_add(1, Ordering::Relaxed);'''
+to = '''                if offset.load(Ordering::Relaxed) >= index {
+                    offset.fetch_add(1, Ordering::Relaxed);'''
+
+[[mutant]]
+name = "an insertion moves ranges in other nodes"
+file = "crates/dom/src/range.rs"
+from = '''                if !unsafe { edge.get() }.is_some_and(|n| std::ptr::eq(n, parent)) {
+                    continue;
+                }'''
+to = '''                if unsafe { edge.get() }.is_none() || parent.id.get() == 0 {
+                    continue;
+                }'''
+
+[[mutant]]
+name = "a removal moves no range"
+file = "crates/dom/src/scope.rs"
+from = '''        self.live_ranges_pre_removing(node);
+'''
+to = ''''''
+
+[[mutant]]
+name = "a removal moves only ranges in the node itself"
+file = "crates/dom/src/range.rs"
+from = '''                if is_inclusive_ancestor(node, container) {'''
+to = '''                if std::ptr::eq(node, container) {'''
+
+[[mutant]]
+name = "a removed range goes to the parent's start"
+file = "crates/dom/src/range.rs"
+from = '''                    offset.store(index, Ordering::Relaxed);'''
+to = '''                    let _ = index;
+                    offset.store(0, Ordering::Relaxed);'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "ranges::"]
+
+[[mutant]]
+name = "a removal moves back a range at the node's index"
+file = "crates/dom/src/range.rs"
+from = '''                    if offset.load(Ordering::Relaxed) > index {
+                        offset.fetch_sub(1, Ordering::Relaxed);'''
+to = '''                    if offset.load(Ordering::Relaxed) >= index {
+                        offset.fetch_sub(1, Ordering::Relaxed);'''
+
+[[mutant]]
+name = "a removal moves back ranges in other nodes"
+file = "crates/dom/src/range.rs"
+from = '''                } else if std::ptr::eq(container, parent) {'''
+to = '''                } else if !std::ptr::eq(container, node) {'''
+
+[[mutant]]
+name = "adoptNode leaves ranges in the old set"
+file = "crates/dom/src/scope.rs"
+from = '''            self.move_node_iterators(&old_document);
+            self.move_live_ranges(&old_document);'''
+to = '''            self.move_node_iterators(&old_document);'''
+
+[[mutant]]
+name = "an insertion's adoption leaves ranges in the old set"
+file = "crates/dom/src/scope.rs"
+from = '''            self.move_node_iterators(old_document);
+            self.move_live_ranges(old_document);'''
+to = '''            self.move_node_iterators(old_document);'''
+
+[[mutant]]
+name = "a moved range stays in the old set too"
+file = "crates/dom/src/range.rs"
+from = '''            if let Some(rare) = unsafe { self.own(old_document).rare_data.get() } {
+                rare.live_ranges.remove(self, range.object());
+            }
+            self.add_live_range(&range, &start);'''
+to = '''            self.add_live_range(&range, &start);'''
+
+[[mutant]]
+name = "a node's index counts the following siblings"
+file = "crates/dom/src/range.rs"
+from = '''    let before = std::iter::successors(unsafe { node.previous_sibling.get() }, |n| unsafe {
+        n.previous_sibling.get()
+    })'''
+to = '''    let before = std::iter::successors(unsafe { node.next_sibling.get() }, |n| unsafe {
+        n.next_sibling.get()
+    })'''

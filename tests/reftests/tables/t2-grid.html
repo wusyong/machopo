@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<title>A table's columns and rows are sized from its cells</title>
+<link rel="match" href="t2-grid-ref.html">
+<!-- Each column as wide as its cells, a cell spanning columns over them;
+     each row as tall as its cells, the content of an HTML table's cells in
+     the middle. A fixed table's columns from its first row's widths, the
+     rest to the `auto` ones. -->
+<style>
+  body { margin: 0 }
+  table { border-spacing: 0 }
+  td { padding: 0 }
+  div { background: green }
+</style>
+<table>
+  <tr>
+    <td><div style="width: 40px; height: 40px"></div></td>
+    <td><div style="width: 20px; height: 20px"></div></td>
+  </tr>
+  <tr><td colspan="2"><div style="width: 60px; height: 20px"></div></td></tr>
+</table>
+<table style="table-layout: fixed; width: 100px">
+  <tr>
+    <td style="width: 30px; height: 10px; background: blue"></td>
+    <td style="background: green"></td>
+  </tr>
+</table>

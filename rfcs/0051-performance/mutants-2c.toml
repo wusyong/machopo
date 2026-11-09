@@ -1,0 +1,128 @@
+# Mutation test of stage 2c: a change among an element's children styles
+# again only those its selector flags (and where the change was) say:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-2c.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it"]
+timeout = 600
+
+[[mutant]]
+name = "the chosen children aren't styled again"
+file = "crates/style/src/lib.rs"
+from = '''                        Some(Some(some)) => some.contains(&child.id()),'''
+to = '''                        Some(Some(_)) => false,'''
+
+[[mutant]]
+name = "a position from the end doesn't style them all"
+file = "crates/style/src/lib.rs"
+from = '''    if flags.intersects(Flags::HAS_SLOW_SELECTOR | Flags::MAY_HAVE_TREE_COUNTING_FUNCTION) {
+        return None;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "every child is taken for one after the change"
+file = "crates/style/src/lib.rs"
+from = '''                    flags.follows_change || flags.needs_style_recalc'''
+to = '''                    flags.follows_change || flags.needs_style_recalc || true'''
+
+[[mutant]]
+name = "a host's shadow tree's rules don't make its parent structural"
+file = "crates/style/src/lib.rs"
+from = '''                || selector_flags.intersects(ElementSelectorFlags::all().for_parent()))'''
+to = '''                )'''
+
+[[mutant]]
+name = "a host's shadow tree's reach isn't taken"
+file = "crates/style/src/lib.rs"
+from = '''        match reach.0.filter(|_| !host) {'''
+to = '''        match reach.0 {'''
+
+[[mutant]]
+name = "a run of + reaches one further"
+file = "crates/style/src/lib.rs"
+from = '''                        left = n;'''
+to = '''                        left = n + 1;'''
+
+[[mutant]]
+name = "the siblings around the change aren't taken for an edge"
+file = "crates/style/src/lib.rs"
+from = '''                    flags.follows_change || flags.precedes_change'''
+to = '''                    flags.follows_change && flags.precedes_change'''
+
+[[mutant]]
+name = "the parent isn't styled again for :empty"
+file = "crates/style/src/lib.rs"
+from = '''                || empty_changed
+                || flags.attributes_changed'''
+to = '''                || flags.attributes_changed'''
+
+[[mutant]]
+name = "~ is taken as reaching as far as the +s"
+file = "crates/style/src/lib.rs"
+from = '''                Component::Combinator(Combinator::LaterSibling) | Component::NthOf(_) => true,'''
+to = '''                Component::Combinator(Combinator::LaterSibling) | Component::NthOf(_) => false,'''
+
+[[mutant]]
+name = "what is nested in a list isn't looked at"
+file = "crates/style/src/lib.rs"
+from = '''            selectors.any(|selector| SiblingReach::of(selector) != SiblingReach::default())'''
+to = '''            selectors.any(|_| false)'''
+
+[[mutant]]
+name = "only a nested position is taken as any number"
+file = "crates/style/src/lib.rs"
+from = '''            selectors.any(|selector| SiblingReach::of(selector) != SiblingReach::default())'''
+to = '''            selectors.any(|selector| SiblingReach::of(selector).0.is_none())'''
+
+[[mutant]]
+name = "a position from the first is taken as an edge"
+file = "crates/style/src/lib.rs"
+from = '''                Component::Nth(data) => !data.is_simple_edge(),'''
+to = '''                Component::Nth(_) => false,'''
+
+[[mutant]]
+name = "the parent's flags aren't kept"
+file = "crates/style/src/selector.rs"
+from = '''            node.add_selector_flags(bits(parent));'''
+to = ''''''
+
+[[mutant]]
+name = "a pseudo-element's rules flag nothing"
+file = "crates/style/src/lib.rs"
+from = '''            &mut pseudo_caches,
+            quirks_mode,
+            NeedsSelectorFlags::Yes,'''
+to = '''            &mut pseudo_caches,
+            quirks_mode,
+            NeedsSelectorFlags::No,'''
+
+[[mutant]]
+name = "an insertion doesn't flag the sibling before"
+file = "crates/dom/src/scope.rs"
+from = '''            set_siblings_changed(child_node.previous_sibling.get(), false);'''
+to = ''''''
+
+[[mutant]]
+name = "a removal doesn't flag the sibling after"
+file = "crates/dom/src/scope.rs"
+from = '''            set_siblings_changed(node.next_sibling.get(), true);'''
+to = ''''''
+
+[[mutant]]
+name = "an attribute doesn't flag the sibling after"
+file = "crates/dom/src/scope.rs"
+from = '''        unsafe { set_siblings_changed(element.next_sibling.get(), true) };'''
+to = ''''''
+
+[[mutant]]
+name = "a state doesn't flag the sibling after"
+file = "crates/dom/src/scope.rs"
+from = '''        unsafe { set_siblings_changed(node.next_sibling.get(), true) };'''
+to = ''''''
+
+[[mutant]]
+name = "text next to the change is flagged instead of an element"
+file = "crates/dom/src/scope.rs"
+from = '''        if node.kind() == NodeKind::Element {
+            let mut flags = node.style_flags.get();'''
+to = '''        if true {
+            let mut flags = node.style_flags.get();'''

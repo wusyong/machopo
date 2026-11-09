@@ -1,0 +1,223 @@
+# Stage 1: `toJSON`, `layerX`/`layerY`, `focus()`'s scrolling and the
+# caret an editing host takes the focus with.
+test = ["sh", "-c", "cargo test -q -p renderer --lib scroll:: && cargo test -q -p dom_js --test it geometry:: && cargo test -q -p shell --test it -- focus:: geometry::mouse_event_layer_coordinates"]
+timeout = 1200
+
+# --- toJSON ---
+
+[[mutant]]
+name = "toJSON out of the interface's order"
+file = "crates/dom_api/src/geometry.rs"
+from = '''        ("x", x),
+        ("y", y),'''
+to = '''        ("y", y),
+        ("x", x),'''
+
+[[mutant]]
+name = "toJSON's left is right"
+file = "crates/dom_api/src/geometry.rs"
+from = '''        ("left", left),'''
+to = '''        ("left", right),'''
+
+# --- layerX, layerY ---
+
+[[mutant]]
+name = "no layer: page coordinates always"
+file = "crates/dom_api/src/ui_event.rs"
+from = '''    let x = match layer_origin(cx, this) {'''
+to = '''    let x = match layer_origin(cx, this).filter(|_| false) {'''
+
+[[mutant]]
+name = "layerY from the layer's x"
+file = "crates/dom_api/src/ui_event.rs"
+from = '''        Some((_, y)) => mouse(this).client_y - y,'''
+to = '''        Some((y, _)) => mouse(this).client_y - y,'''
+
+[[mutant]]
+name = "only a positioned box is a layer"
+file = "crates/dom_api/src/ui_event.rs"
+from = '''                .is_some_and(|style| style.is_positioned() || style.is_stacking_context())'''
+to = '''                .is_some_and(|style| style.is_positioned())'''
+
+[[mutant]]
+name = "only a stacking context is a layer"
+file = "crates/dom_api/src/ui_event.rs"
+from = '''                .is_some_and(|style| style.is_positioned() || style.is_stacking_context())'''
+to = '''                .is_some_and(|style| style.is_stacking_context())'''
+
+[[mutant]]
+name = "a display: contents element is a layer"
+file = "crates/dom_api/src/ui_event.rs"
+from = '''                && client.element_box(scope, node.id()).is_some()
+            {'''
+to = '''            {'''
+
+[[mutant]]
+name = "a positioned root element isn't a layer"
+file = "crates/dom_api/src/ui_event.rs"
+from = '''                && client.element_box(scope, node.id()).is_some()
+            {'''
+to = '''                && client.element_box(scope, node.id()).is_some()
+                && scope
+                    .flat_tree_parent(node)
+                    .is_some_and(|parent| parent.kind() == NodeKind::Element)
+            {'''
+
+[[mutant]]
+name = "a target without a box: page coordinates"
+file = "crates/dom_api/src/ui_event.rs"
+from = '''            node = scope.flat_tree_parent(node)?;
+        }
+        loop {'''
+to = '''            return None;
+        }
+        loop {'''
+
+[[mutant]]
+name = "not snapped to the layout unit"
+file = "crates/dom_api/src/ui_event.rs"
+from = '''    saturated_cast((coordinate * 64.0).round().div_euclid(64.0))'''
+to = '''    saturated_cast(coordinate.floor())'''
+
+[[mutant]]
+name = "rounded, not floored"
+file = "crates/dom_api/src/ui_event.rs"
+from = '''    saturated_cast((coordinate * 64.0).round().div_euclid(64.0))'''
+to = '''    saturated_cast(coordinate.round())'''
+
+# --- focus() scrolling ---
+
+[[mutant]]
+name = "focus scrolls to the nearest edge"
+file = "crates/dom_api/src/focus.rs"
+from = '''        block: ScrollAlignment::CenterIfNeeded,'''
+to = '''        block: ScrollAlignment::Nearest,'''
+
+[[mutant]]
+name = "focus scrolls sideways to the nearest edge"
+file = "crates/dom_api/src/focus.rs"
+from = '''        inline: ScrollAlignment::CenterIfNeeded,'''
+to = '''        inline: ScrollAlignment::Nearest,'''
+
+[[mutant]]
+name = "no caret revealed: the box"
+file = "crates/dom_api/src/focus.rs"
+from = '''        crate::editing::is_text_field(element) || crate::html_element::is_editing_host(element)'''
+to = '''        false'''
+
+[[mutant]]
+name = "a text control's box, not its caret"
+file = "crates/dom_api/src/focus.rs"
+from = '''        crate::editing::is_text_field(element) || crate::html_element::is_editing_host(element)'''
+to = '''        crate::html_element::is_editing_host(element)'''
+
+[[mutant]]
+name = "no box when there is no caret"
+file = "crates/dom_api/src/focus.rs"
+from = '''        if !(reveals_caret && client.scroll_caret_into_view(scope, document, params)) {'''
+to = '''        if !reveals_caret {'''
+
+[[mutant]]
+name = "center if needed never centers"
+file = "crates/renderer/src/scroll.rs"
+from = '''            } else if align == ScrollAlignment::CenterIfNeeded
+                && (end <= current || start >= port_end)'''
+to = '''            } else if false
+                && (end <= current || start >= port_end)'''
+
+[[mutant]]
+name = "touching the edge is partly in view"
+file = "crates/renderer/src/scroll.rs"
+from = '''                && (end <= current || start >= port_end)'''
+to = '''                && (end < current || start > port_end)'''
+
+[[mutant]]
+name = "in view by how much is shown"
+file = "crates/renderer/src/scroll.rs"
+from = '''            if (start >= current && end <= port_end) || (start <= current && end >= port_end) {'''
+to = '''            let shown = end.min(port_end) - start.max(current);
+            if shown >= size || shown >= port {'''
+
+[[mutant]]
+name = "a caret from its block's border box"
+file = "crates/renderer/src/selection.rs"
+from = '''        return Some(rect.offset(-(b.left + p.left), -(b.top + p.top)));'''
+to = '''        return Some(rect);'''
+
+[[mutant]]
+name = "no caret in an anonymous block"
+file = "crates/renderer/src/selection.rs"
+from = '''            .filter(|child| child.fragment.role == layout::BoxRole::AnonymousBlock)'''
+to = '''            .filter(|_| false)'''
+
+[[mutant]]
+name = "an anonymous block's caret not offset"
+file = "crates/renderer/src/selection.rs"
+from = '''                    .map(|rect| rect.offset(child.offset.x, child.offset.y))'''
+to = '''                    .map(|rect| rect)'''
+
+# --- the caret an editing host takes the focus with ---
+
+[[mutant]]
+name = "at the first text's start, collapsed white space and all"
+file = "crates/dom_api/src/selection.rs"
+from = '''                .any(|rect| rect.width > 0.0)'''
+to = '''                .any(|rect| rect.width >= 0.0)'''
+
+[[mutant]]
+name = "a kept line break isn't a place"
+file = "crates/dom_api/src/selection.rs"
+from = '''        keeps_newlines && usize::try_from(i).ok().and_then(|i| units.get(i)) == Some(&newline)'''
+to = '''        false && usize::try_from(i).ok().and_then(|i| units.get(i)) == Some(&newline)'''
+
+[[mutant]]
+name = "a text node without a box is a place"
+file = "crates/dom_api/src/selection.rs"
+from = '''    if client.text_rects(scope, id, 0, length).is_empty() && !(0..length).any(kept_newline) {
+        return None;
+    }'''
+to = '''    if client.text_rects(scope, id, 0, length).is_empty() && !(0..length).any(kept_newline) {
+        return Some(0);
+    }'''
+
+[[mutant]]
+name = "not before a br"
+file = "crates/dom_api/src/selection.rs"
+from = '''                        .is_some_and(|name| name.is_html(&local_name!("br"))) =>'''
+to = '''                        .is_some_and(|name| name.is_html(&local_name!("br")) && false) =>'''
+
+[[mutant]]
+name = "an element a caret can't be in: the host's start"
+file = "crates/dom_api/src/selection.rs"
+from = '''                    if ignores_content(at) {
+                        return Some((at.parent()?.to_handle(), index(at)));
+                    }'''
+to = '''                    if ignores_content(at) {
+                        return None;
+                    }'''
+
+[[mutant]]
+name = "an element a caret can't be in is passed by"
+file = "crates/dom_api/src/selection.rs"
+from = '''                    if ignores_content(at) {
+                        return Some((at.parent()?.to_handle(), index(at)));
+                    }'''
+to = '''                    if ignores_content(at) && false {
+                        return Some((at.parent()?.to_handle(), index(at)));
+                    }'''
+
+[[mutant]]
+name = "an element not editable is passed by"
+file = "crates/dom_api/src/selection.rs"
+from = '''                    if !at.is_editable() {
+                        return Some((at.parent()?.to_handle(), 0));
+                    }'''
+to = '''                    if !at.is_editable() && false {
+                        return Some((at.parent()?.to_handle(), 0));
+                    }'''
+
+[[mutant]]
+name = "an element not editable: the host's start"
+file = "crates/dom_api/src/selection.rs"
+from = '''                        return Some((at.parent()?.to_handle(), 0));'''
+to = '''                        return None;'''

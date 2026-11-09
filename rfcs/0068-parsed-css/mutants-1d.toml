@@ -1,0 +1,70 @@
+# 1d: the logical corners and `border-spacing`'s two longhands (`css`,
+# `style`).
+#   python3 scripts/test.py mutate rfcs/0068-parsed-css/mutants-1d.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "logical::", "tables::", "interpolation::"]
+timeout = 900
+
+[[mutant]]
+name = "start-end the top left"
+file = "crates/css/src/properties.rs"
+from = '''            BorderStartEndRadius => BorderTopRightRadius,'''
+to = '''            BorderStartEndRadius => BorderTopLeftRadius,'''
+
+[[mutant]]
+name = "end-start the bottom right"
+file = "crates/css/src/properties.rs"
+from = '''            BorderEndStartRadius => BorderBottomLeftRadius,'''
+to = '''            BorderEndStartRadius => BorderBottomRightRadius,'''
+
+[[mutant]]
+name = "the corners no group"
+file = "crates/css/src/properties.rs"
+from = '''            &BORDER_COLOR,
+            &BORDER_RADIUS,
+            &SIZE,'''
+to = '''            &BORDER_COLOR,
+            &SIZE,'''
+
+[[mutant]]
+name = "border-spacing always two lengths"
+file = "crates/css/src/serialize.rs"
+from = '''        Shorthand::BorderSpacing => {
+            if same(0, 1) {'''
+to = '''        Shorthand::BorderSpacing => {
+            if false {'''
+
+[[mutant]]
+name = "one length only the horizontal"
+file = "crates/css/src/properties.rs"
+from = '''                let vertical = input
+                    .try_parse(|i| Length::parse(i, false))
+                    .unwrap_or_else(|_| horizontal.clone());
+                Ok(vec![Value::Length(horizontal), Value::Length(vertical)])'''
+to = '''                let vertical = input
+                    .try_parse(|i| Length::parse(i, false))
+                    .unwrap_or(Length::px(0.0));
+                Ok(vec![Value::Length(horizontal), Value::Length(vertical)])'''
+
+[[mutant]]
+name = "the vertical spacing not inherited"
+file = "crates/css/src/properties.rs"
+from = '''                | WebkitBorderHorizontalSpacing
+                | WebkitBorderVerticalSpacing
+'''
+to = '''                | WebkitBorderHorizontalSpacing
+'''
+
+[[mutant]]
+name = "cellspacing only across"
+file = "crates/style/src/hints.rs"
+from = '''                LonghandId::WebkitBorderHorizontalSpacing,
+                LonghandId::WebkitBorderVerticalSpacing,
+            ] {'''
+to = '''                LonghandId::WebkitBorderHorizontalSpacing,
+            ] {'''
+
+[[mutant]]
+name = "a negative vertical spacing"
+file = "crates/css/src/interpolate.rs"
+from = '''            spacing.vertical = spacing.vertical.max(0.0);'''
+to = '''            spacing.vertical = spacing.vertical.max(-1e9);'''

@@ -1,0 +1,8 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>A page that reports whether it has focus</title>
+<script>
+  addEventListener("load", () => {
+    fetch("/__machopo__/results", { method: "POST", body: JSON.stringify({ focus: document.hasFocus() }) });
+  });
+</script>

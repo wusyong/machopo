@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<title>user activation</title>
+<button id="b">press</button>
+<input id="i">
+<p id="log"></p>
+<script>
+const ua = navigator.userActivation;
+const show = text => { document.getElementById('log').textContent = text; };
+const state = () => `${ua.hasBeenActive}/${ua.isActive}`;
+// Script's own click and events aren't user input.
+document.getElementById('b').click();
+document.getElementById('i').dispatchEvent(new KeyboardEvent('keydown', {key: 'x'}));
+show(`load ${state()}`);
+// Seen in the listener: the input activates before its event.
+document.getElementById('b').addEventListener('mousedown', () => show(`mousedown ${state()}`));
+document.getElementById('i').addEventListener('keydown', e => show(`keydown ${e.key} ${state()}`));
+document.getElementById('i').focus();
+</script>

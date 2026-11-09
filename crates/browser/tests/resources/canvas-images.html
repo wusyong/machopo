@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<title></title>
+<body>
+<img id="same" src="/green.png">
+<img id="other">
+<script>
+  // Images on a canvas: an <img> of this origin drawn whole, scaled and in
+  // part, as a pattern, and through another canvas; one of another origin
+  // (the `other` query parameter's URL) taints the canvas it is drawn on,
+  // whose pixels can't be read after, nor exported. The results go in the
+  // title.
+  const other = document.getElementById("other");
+  other.src = new URLSearchParams(location.search).get("other");
+  const loaded = (img) => img.complete ? Promise.resolve() : new Promise((done) => img.onload = done);
+  const px = (ctx, x, y) => Array.from(ctx.getImageData(x, y, 1, 1).data).join(",");
+  const canvas = (w, h) => {
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    return [c, c.getContext("2d")];
+  };
+  const same = document.getElementById("same");
+  Promise.all([loaded(same), loaded(other)]).then(() => {
+    const out = [];
+    try {
+      // Whole at (10, 10); scaled to half; its top left quarter doubled.
+      let [c, ctx] = canvas(100, 100);
+      ctx.drawImage(same, 10, 10);
+      out.push("whole " + px(ctx, 9, 9) + " " + px(ctx, 10, 10) + " " + px(ctx, 49, 39) + " " + px(ctx, 50, 40));
+      [c, ctx] = canvas(100, 100);
+      ctx.drawImage(same, 0, 0, 20, 15);
+      out.push("scaled " + px(ctx, 19, 14) + " " + px(ctx, 20, 15));
+      [c, ctx] = canvas(100, 100);
+      ctx.drawImage(same, 0, 0, 20, 15, 0, 0, 40, 30);
+      out.push("part " + px(ctx, 39, 29) + " " + px(ctx, 40, 30));
+      // A pattern repeated across only: nothing under the first row.
+      [c, ctx] = canvas(100, 100);
+      ctx.fillStyle = ctx.createPattern(same, "repeat-x");
+      ctx.fillRect(0, 0, 100, 100);
+      out.push("pattern " + px(ctx, 90, 10) + " " + px(ctx, 90, 40));
+      // Through another canvas.
+      const [, back] = canvas(100, 100);
+      back.drawImage(c, 0, 0);
+      out.push("canvas " + px(back, 90, 10));
+      // Another origin's: drawn, then the pixels can't be read.
+      [c, ctx] = canvas(100, 100);
+      ctx.drawImage(other, 0, 0);
+      const thrown = (f) => {
+        try {
+          f();
+          return "readable";
+        } catch (e) {
+          return e.name;
+        }
+      };
+      out.push("other " + thrown(() => ctx.getImageData(0, 0, 1, 1)) + " " +
+        thrown(() => c.toDataURL()) + " " + thrown(() => c.toBlob(() => {})));
+    } catch (e) {
+      out.push("error " + e);
+    }
+    document.title = out.join(" | ");
+  });
+</script>

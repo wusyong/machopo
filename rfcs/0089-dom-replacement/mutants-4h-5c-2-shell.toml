@@ -1,0 +1,28 @@
+# Stage 4h-5c-2 in a whole browser: the renderer sends the new DOM's fetch() requests,
+# gives their responses back (what it sends of a request, and its cancelling, are in the
+# test gaps: the test server sees neither).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it -- next_dom::fetch_on_the_new_dom"]
+timeout = 2400
+
+[[mutant]]
+name = "renderer: a fetch's response not given back"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        if let Some(id) = self.next_fetches.remove(&request_id) {
+            self.next_fetch_answered(id, result);
+            return true;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: a revoked blob URL fetched"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            && url.scheme() == "blob"
+            && self.blob_urls.is_revoked(&url)
+        {
+            if let Some(engine) = &mut self.next_engine {
+                engine.fetch_response(request.id, Err(()));'''
+to = '''            && url.scheme() == "never"
+            && self.blob_urls.is_revoked(&url)
+        {
+            if let Some(engine) = &mut self.next_engine {
+                engine.fetch_response(request.id, Err(()));'''

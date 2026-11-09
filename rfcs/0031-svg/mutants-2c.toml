@@ -1,0 +1,298 @@
+# Mutation test of step 2c (`<use>`, `<symbol>`, `<switch>`, `<defs>`):
+# python3 scripts/test.py mutate rfcs/0031-svg/mutants-2c.toml
+# The timeout is for "copies don't stop at the limit", which runs on (2^40
+# copies) until killed.
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "svg_use::"]
+timeout = 300
+
+# --- style: what a copy is ----------------------------------------------------
+
+[[mutant]]
+name = "copies match in the original's tree"
+file = "crates/style/src/lib.rs"
+from = '''                StyleElement::in_copy(element, root),'''
+to = '''                StyleElement::new(element),'''
+
+[[mutant]]
+name = "a copy's root has a parent"
+file = "crates/style/src/selector.rs"
+from = '''    fn parent_element(&self) -> Option<Self> {
+        if self.is_boundary() {'''
+to = '''    fn parent_element(&self) -> Option<Self> {
+        if false {'''
+
+[[mutant]]
+name = "a copy's root has previous siblings"
+file = "crates/style/src/selector.rs"
+from = '''    fn prev_sibling_element(&self) -> Option<Self> {
+        if self.is_boundary() {'''
+to = '''    fn prev_sibling_element(&self) -> Option<Self> {
+        if false {'''
+
+[[mutant]]
+name = "the boundary is lost below the root"
+file = "crates/style/src/selector.rs"
+from = '''            .map(|n| Self(n, self.1))'''
+to = '''            .map(|n| Self(n, None))'''
+
+[[mutant]]
+name = "a copy inherits from where its element is"
+file = "crates/style/src/svg_use.rs"
+from = '''    let copy = copy(target, target.id(), style, ids, path, copied, copies, style_of);'''
+to = '''    let parent = target.parent().and_then(|p| p.computed_style()).unwrap_or_else(|| style.clone());
+    let copy = copy(target, target.id(), &parent, ids, path, copied, copies, style_of);'''
+
+[[mutant]]
+name = "the last element with the id is used"
+file = "crates/style/src/svg_use.rs"
+from = '''            ids.entry(id).or_insert(node.id());'''
+to = '''            ids.insert(id, node.id());'''
+
+[[mutant]]
+name = "xlink:href isn't followed"
+file = "crates/style/src/svg_use.rs"
+from = '''        .or_else(|| element.attribute_ns(Namespace::XLINK, "href"))?;'''
+to = '''        ?;'''
+
+[[mutant]]
+name = "xlink:href wins over href"
+file = "crates/style/src/svg_use.rs"
+from = '''    let href = element
+        .attribute(&QualName::attr("href"))
+        .or_else(|| element.attribute_ns(Namespace::XLINK, "href"))?;'''
+to = '''    let href = element
+        .attribute_ns(Namespace::XLINK, "href")
+        .or_else(|| element.attribute(&QualName::attr("href")))?;'''
+
+[[mutant]]
+name = "a reference needn't be a fragment"
+file = "crates/style/src/svg_use.rs"
+from = '''    href.trim().strip_prefix('#').map(str::to_owned)'''
+to = '''    Some(href.trim().trim_start_matches('#').to_owned())'''
+
+[[mutant]]
+name = "nested uses aren't copied"
+file = "crates/style/src/svg_use.rs"
+from = '''    let used = if is_use(element) {'''
+to = '''    let used = if false {'''
+
+# --- style: cycles and the limit ------------------------------------------------
+
+[[mutant]]
+name = "a use may reference itself"
+file = "crates/style/src/svg_use.rs"
+from = '''    if target.id() == user.id()
+        || path'''
+to = '''    if path'''
+
+[[mutant]]
+name = "no cycle through what a use is in"
+file = "crates/style/src/svg_use.rs"
+from = '''    if target.id() == user.id()
+        || path
+            .iter()
+            .any(|element| element.attribute(&QualName::attr("id")) == id)
+    {'''
+to = '''    if target.id() == user.id() {'''
+
+[[mutant]]
+name = "a copy's elements aren't on the path"
+file = "crates/style/src/svg_use.rs"
+from = '''    path.push(element);
+    let children'''
+to = '''    let children'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "svg_use::cycles"]
+
+[[mutant]]
+name = "a copy's element stays on the path"
+file = "crates/style/src/svg_use.rs"
+from = '''        .collect();
+    path.pop();'''
+to = '''        .collect();'''
+
+[[mutant]]
+name = "the use isn't on the path"
+file = "crates/style/src/svg_use.rs"
+from = '''    path.push(user);
+    let copy'''
+to = '''    let copy'''
+
+[[mutant]]
+name = "a use's ancestors aren't on the path"
+file = "crates/style/src/svg_use.rs"
+from = '''            let mut path = ancestors(element);'''
+to = '''            let mut path = Vec::new();'''
+
+[[mutant]]
+name = "too many copies draw anyway"
+file = "crates/style/src/svg_use.rs"
+from = '''            instance.filter(|_| copies <= MAX_COPIES)'''
+to = '''            instance'''
+
+[[mutant]]
+name = "copies don't stop at the limit"
+file = "crates/style/src/svg_use.rs"
+from = '''    *copies += 1;
+    if *copies > MAX_COPIES {
+        return None;
+    }'''
+to = '''    *copies += 1;'''
+
+# --- style: when a copy is made again -------------------------------------------
+
+[[mutant]]
+name = "a restyled use keeps its copy"
+file = "crates/style/src/svg_use.rs"
+from = '''        let stale = restyled.contains(&id)
+            ||'''
+to = '''        let stale ='''
+
+[[mutant]]
+name = "a new target keeps the copy"
+file = "crates/style/src/svg_use.rs"
+from = '''            || target != state.target
+'''
+to = '''
+'''
+
+[[mutant]]
+name = "a change in what is copied keeps the copy"
+file = "crates/style/src/svg_use.rs"
+from = '''            || state.copied.iter().any(|node| touched.contains(node));'''
+to = ''';'''
+
+[[mutant]]
+name = "changed children don't touch"
+file = "crates/style/src/lib.rs"
+from = '''            if restyle || flags.children_changed {'''
+to = '''            if restyle {'''
+
+[[mutant]]
+name = "restyled uses aren't listed"
+file = "crates/style/src/lib.rs"
+from = '''                    if svg_use::is_use(node) {
+                        restyled_uses.push(node.id());
+                    }'''
+to = ''''''
+
+[[mutant]]
+name = "the box tree isn't told"
+file = "crates/style/src/svg_use.rs"
+from = '''        element.set_needs_reattach_layout_tree();'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "update::an_svg"]
+
+# --- layout -------------------------------------------------------------------
+
+[[mutant]]
+name = "a copy is drawn as its element"
+file = "crates/layout/src/svg.rs"
+from = '''    let node = shown_as.unwrap_or(element.id());'''
+to = '''    let node = element.id();'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "a use isn't placed"
+file = "crates/layout/src/svg.rs"
+from = '''                content_transform = Transform::translate(units.x(style.svg.x), units.y(style.svg.y));'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "the svg's size wins over the use's"
+file = "crates/layout/src/svg.rs"
+from = '''                    match used.or(size.length_percentage()) {'''
+to = '''                    match size.length_percentage().or(used) {'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "a negative size is used"
+file = "crates/layout/src/svg.rs"
+from = '''        LengthPercentage::Px(px) if px < 0.0 => None,'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "a size that doesn't parse is used"
+file = "crates/layout/src/svg.rs"
+from = '''    if text.trim().parse::<svgtypes::Length>().is_err() {
+        return None;
+    }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "a symbol is drawn as a group"
+file = "crates/layout/src/svg.rs"
+from = '''                    SourceKind::Group if target.element_name().is_some_and(|n| n.is_svg("symbol")) => {'''
+to = '''                    SourceKind::Group if false => {'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "every symbol is drawn"
+file = "crates/layout/src/svg.rs"
+from = '''        "symbol" if used => SourceKind::Group,'''
+to = '''        "symbol" => SourceKind::Group,'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "a switch draws every child"
+file = "crates/layout/src/svg.rs"
+from = '''        if only_first {
+            out.truncate(1);
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "conditions are ignored"
+file = "crates/layout/src/svg.rs"
+from = '''        || !conditions_hold(element)
+'''
+to = '''
+'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "a language prefix needn't end at a dash"
+file = "crates/layout/src/svg.rs"
+from = '''                                    && prefix.ends_with('-')'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "a language prefix is case-sensitive"
+file = "crates/layout/src/svg.rs"
+from = '''                                prefix[..preferred.len()].eq_ignore_ascii_case(preferred)'''
+to = '''                                &prefix[..preferred.len()] == *preferred'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "empty requiredExtensions hold"
+file = "crates/layout/src/svg.rs"
+from = '''            names.peek().is_some() && names.all(|name| EXTENSIONS.contains(&name))'''
+to = '''            names.all(|name| EXTENSIONS.contains(&name))'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "any extension holds"
+file = "crates/layout/src/svg.rs"
+from = '''            names.peek().is_some() && names.all(|name| EXTENSIONS.contains(&name))'''
+to = '''            names.peek().is_some()'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::"]
+
+# --- dom ------------------------------------------------------------------------
+
+[[mutant]]
+name = "attribute_ns takes the prefix"
+file = "crates/dom/src/scope.rs"
+from = '''                .find(|a| a.name.namespace.url() == namespace && &*a.name.local == local)'''
+to = '''                .find(|a| a.name.namespace.url() == namespace && &*a.name.local == local && a.name.prefix.is_none())'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "attributes_by_namespace"]
+
+[[mutant]]
+name = "adoption keeps the copy"
+file = "crates/dom/src/scope.rs"
+from = '''                } => (computed_style.take(), svg_use.take()),'''
+to = '''                } => (computed_style.take(), None::<std::sync::Arc<crate::svg::SvgUseInstance>>),'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "computed_style::svg_use_instances"]

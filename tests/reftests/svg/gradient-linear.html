@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<title>Linear gradients: in the shape's bounding box, along x2 and y2, through href and xlink:href, reflected, offsets clamped to the one before, on a stroke</title>
+<link rel="match" href="gradient-linear-ref.html">
+<meta name="fuzzy" content="maxDifference=0-3;totalPixels=0-400">
+<style>body { margin: 0 } svg { display: block }</style>
+<svg width="220" height="170">
+  <defs>
+    <linearGradient id="h"><stop offset="0" stop-color="red"/><stop offset="100%" stop-color="blue"/></linearGradient>
+    <linearGradient id="v" href="#h" x2="0" y2="1"/>
+    <linearGradient id="reflect" xlink:href="#h" x2="0.5" spreadMethod="reflect"/>
+    <linearGradient id="stops"><stop offset="0.25" style="stop-color: lime"/><stop offset="0.1" stop-color="navy"/></linearGradient>
+  </defs>
+  <rect x="10" y="10" width="100" height="50" fill="url(#h)"/>
+  <rect x="120" y="10" width="90" height="50" fill="url(#v)"/>
+  <rect x="10" y="70" width="100" height="40" fill="url(#reflect)"/>
+  <rect x="120" y="70" width="80" height="40" fill="url(#stops) red"/>
+  <rect x="10" y="120" width="200" height="40" fill="none" stroke="url(#h)" stroke-width="20"/>
+</svg>

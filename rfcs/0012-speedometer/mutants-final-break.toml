@@ -1,0 +1,71 @@
+# The line after a final forced break: made only in a text control's inner
+# editor (parley's `Layout::set_line_after_final_break`, kun's `editor`).
+# Editor-CodeMirror's empty lines (`<div class="cm-line"><br></div>`) were
+# two lines tall. The parley file is CRLF in the fork's working tree: each
+# `from` there is one line.
+#
+# `LayoutData`'s default for the setting is equivalent: every build clears
+# the data first (`build_into_layout`), which sets it.
+# So is taking back the only line (`self.lines.lines.len() > 1` made
+# `true`): the builder gives every layout an item, even with no text, so
+# the first line is never without one; the check keeps it so all the same.
+#
+# python3 scripts/test.py mutate rfcs/0012-speedometer/mutants-final-break.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "final", "text_area"]
+timeout = 900
+
+[[mutant]]
+name = "parley never takes the line back"
+file = "../third_party/parley/parley/src/layout/line_break.rs"
+from = '''            && !self.layout.data.line_after_final_break'''
+to = '''            && false'''
+
+[[mutant]]
+name = "parley takes the line back even when asked to make it"
+file = "../third_party/parley/parley/src/layout/line_break.rs"
+from = '''            && !self.layout.data.line_after_final_break'''
+to = '''            && true'''
+
+[[mutant]]
+name = "parley yields nothing but keeps the line"
+file = "../third_party/parley/parley/src/layout/line_break.rs"
+from = '''            self.lines.lines.pop();'''
+to = '''            ();'''
+
+[[mutant]]
+name = "parley takes the line back but goes on"
+file = "../third_party/parley/parley/src/layout/line_break.rs"
+from = '''            self.lines.lines.pop();'''
+to = '''            self.lines.lines.pop();
+        }
+        if false {'''
+
+[[mutant]]
+name = "parley's clear keeps the last setting"
+file = "../third_party/parley/parley/src/layout/data.rs"
+from = '''        self.line_after_final_break = true;'''
+to = '''        '''
+
+[[mutant]]
+name = "parley's setter does nothing"
+file = "../third_party/parley/parley/src/layout/layout.rs"
+from = '''        self.data.line_after_final_break = made;'''
+to = '''        let _ = made;'''
+
+[[mutant]]
+name = "kun makes the line everywhere"
+file = "crates/layout/src/text.rs"
+from = '''        layout.set_line_after_final_break(editor);'''
+to = '''        layout.set_line_after_final_break(true);'''
+
+[[mutant]]
+name = "kun makes the line nowhere"
+file = "crates/layout/src/text.rs"
+from = '''        layout.set_line_after_final_break(editor);'''
+to = '''        layout.set_line_after_final_break(false);'''
+
+[[mutant]]
+name = "the inner editor isn't told apart"
+file = "crates/layout/src/lib.rs"
+from = '''            let editor = self.boxes[index].empty_line.is_some();'''
+to = '''            let editor = false;'''

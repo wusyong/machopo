@@ -1,0 +1,64 @@
+# The last segment, b: the abstractions layout kept for two DOMs folded
+# into what reads the DOM. What moved: a table part's span, a form control's
+# element, an SVG element, the build's tree.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p layout --test it"]
+timeout = 2400
+
+[[mutant]]
+name = "layout: a colspan isn't clamped"
+file = "crates/layout/src/table.rs"
+from = '''    let colspan = match attribute(local::COLSPAN) {
+        Some(0) | None => 1,
+        Some(n) => n.min(MAX_COLSPAN),
+    };'''
+to = '''    let colspan = match attribute(local::COLSPAN) {
+        Some(0) | None => 1,
+        Some(n) => n,
+    };'''
+
+[[mutant]]
+name = "layout: a rowspan of 0 is 1"
+file = "crates/layout/src/table.rs"
+from = '''    let rowspan = attribute(local::ROWSPAN).map_or(1, |n| n.min(MAX_ROWSPAN));'''
+to = '''    let rowspan = attribute(local::ROWSPAN).map_or(1, |n| n.clamp(1, MAX_ROWSPAN));'''
+
+[[mutant]]
+name = "layout: a colgroup's span isn't read"
+file = "crates/layout/src/table.rs"
+from = '''    if html(local::COL) || html(local::COLGROUP) {'''
+to = '''    if html(local::COL) {'''
+
+[[mutant]]
+name = "layout: a cell's span read as a column's"
+file = "crates/layout/src/table.rs"
+from = '''    if !(html(local::TD) || html(local::TH)) {'''
+to = '''    if !html(local::TD) {'''
+
+[[mutant]]
+name = "layout: a slot isn't a control's part"
+file = "crates/layout/src/control.rs"
+from = '''            local::SLOT => ControlName::Slot,'''
+to = '''            local::SLOT => ControlName::Other,'''
+
+[[mutant]]
+name = "layout: a control's attribute isn't read"
+file = "crates/layout/src/control.rs"
+from = '''            .attribute_value_by_id(self.node, local)
+            .map(|value| value.borrow().to_str().into_owned())'''
+to = '''            .attribute_value_by_id(self.node, local)
+            .map(|value| value.borrow().to_str().into_owned())
+            .filter(|_| local != names::local::SIZE)'''
+
+[[mutant]]
+name = "layout: an SVG xlink:href read by its local name alone"
+file = "crates/layout/src/svg_dom.rs"
+from = '''            SvgAttr::XlinkHref => {
+                dom.attribute_value_ns(self.node, Some("http://www.w3.org/1999/xlink"), "href")
+            }'''
+to = '''            SvgAttr::XlinkHref => dom.attribute_value_ns(self.node, None, "href"),'''
+
+[[mutant]]
+name = "layout: a tree built again whole notes no scroll anchoring change"
+file = "crates/layout/src/tree_builder.rs"
+from = '''                self.note_scroll_anchoring_changes(dom, element, &old.boxes[index].style, &new);'''
+to = '''                let _ = (element, &old.boxes[index].style, &new);'''

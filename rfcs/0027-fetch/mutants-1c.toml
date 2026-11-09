@@ -1,0 +1,137 @@
+# Mutation test of step 1c (the rest of Response, JSON):
+# python3 scripts/test.py mutate rfcs/0027-fetch/mutants-1c.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "fetch"]
+timeout = 900
+
+# --- dom_api: Response --------------------------------------------------------
+
+[[mutant]]
+name = "headers are new each time"
+file = "crates/dom_api/src/response.rs"
+from = '''    Ok(cx.read().response_headers(this))'''
+to = '''    let headers = cx.read().response_headers(this);
+    let list = cx.read().headers_list(&headers);
+    Ok(cx.mutate().create_headers(list, HeadersGuard::Response))'''
+
+[[mutant]]
+name = "the body's Content-Type over the init's"
+file = "crates/dom_api/src/response.rs"
+from = '''        if !headers::contains(&list, "Content-Type") {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "no Content-Type from the body"
+file = "crates/dom_api/src/response.rs"
+from = '''            headers::append(&mut list, "Content-Type", content_type);'''
+to = '''            let _ = content_type;'''
+
+[[mutant]]
+name = "the init's headers are dropped"
+file = "crates/dom_api/src/response.rs"
+from = '''    if let Some(init) = init.headers {
+        headers::fill(cx, headers, init)?;
+    }'''
+to = '''    let _ = init.headers;'''
+
+[[mutant]]
+name = "a new response's headers have no guard"
+file = "crates/dom_api/src/response.rs"
+from = '''    let realm = realm_window(cx)?;
+    let headers = cx
+        .mutate()
+        .create_headers(Vec::new(), HeadersGuard::Response);'''
+to = '''    let realm = realm_window(cx)?;
+    let headers = cx.mutate().create_headers(Vec::new(), HeadersGuard::None);'''
+
+[[mutant]]
+name = "default is basic"
+file = "crates/dom_api/src/response.rs"
+from = '''        DataType::Default => ResponseType::Default,'''
+to = '''        DataType::Default => ResponseType::Basic,'''
+
+[[mutant]]
+name = "a read body clones"
+file = "crates/dom_api/src/response.rs"
+from = '''    let data = cx.read().response_data(this);
+    check_usable(&data)?;'''
+to = '''    let data = cx.read().response_data(this);'''
+
+[[mutant]]
+name = "a clone shares the headers"
+file = "crates/dom_api/src/response.rs"
+from = '''    let headers = cx.mutate().create_headers(list, guard);
+    Ok(cx.mutate().create_response(&realm, data, &headers))'''
+to = '''    let _ = (list, guard);
+    let headers = cx.read().response_headers(this);
+    Ok(cx.mutate().create_response(&realm, data, &headers))'''
+
+[[mutant]]
+name = "a clone's headers have no guard"
+file = "crates/dom_api/src/response.rs"
+from = '''    let headers = cx.mutate().create_headers(list, guard);'''
+to = '''    let _ = guard;
+    let headers = cx.mutate().create_headers(list, HeadersGuard::None);'''
+
+[[mutant]]
+name = "json reads as text"
+file = "crates/dom_api/src/response.rs"
+from = '''        BodyKind::Json => cx.parse_json(text.as_str()).map(Value::Any),'''
+to = '''        BodyKind::Json => Ok(Value::String(text)),'''
+
+[[mutant]]
+name = "an error isn't a network error"
+file = "crates/dom_api/src/response.rs"
+from = '''        status: 0,
+        ..new_data(DataType::Error)'''
+to = '''        status: 0,
+        ..new_data(DataType::Default)'''
+
+[[mutant]]
+name = "an error's headers can change"
+file = "crates/dom_api/src/response.rs"
+from = '''    let headers = cx
+        .mutate()
+        .create_headers(Vec::new(), HeadersGuard::Immutable);
+    let data = ResponseData {
+        status: 0,'''
+to = '''    let headers = cx
+        .mutate()
+        .create_headers(Vec::new(), HeadersGuard::Response);
+    let data = ResponseData {
+        status: 0,'''
+
+[[mutant]]
+name = "any redirect status"
+file = "crates/dom_api/src/response.rs"
+from = '''    if !is_redirect_status(status) {'''
+to = '''    if status == 0 {'''
+
+[[mutant]]
+name = "a redirect's headers can change"
+file = "crates/dom_api/src/response.rs"
+from = '''        vec![("Location".into(), parsed.to_string())],
+        HeadersGuard::Immutable,'''
+to = '''        vec![("Location".into(), parsed.to_string())],
+        HeadersGuard::Response,'''
+
+[[mutant]]
+name = "Response.json is text"
+file = "crates/dom_api/src/response.rs"
+from = '''    let body = (Arc::from(text.into_bytes()), "application/json");'''
+to = '''    let body = (Arc::from(text.into_bytes()), "text/plain;charset=UTF-8");'''
+
+# --- dom_js: JSON ------------------------------------------------------------
+
+[[mutant]]
+name = "what serializes to nothing is the text undefined"
+file = "crates/dom_js/src/host.rs"
+from = '''                Ok((text != "undefined").then_some(text))'''
+to = '''                Ok(Some(text))'''
+
+# From step 1a, which had nothing to reject a promise later: a null body's
+# json() does now.
+[[mutant]]
+name = "a promise rejects with nothing"
+file = "crates/dom_js/src/host.rs"
+from = '''                let reason = exception::to_exception(tc, error)'''
+to = '''                let reason = exception::to_exception(tc, ApiError::Reported)'''

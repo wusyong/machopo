@@ -1,0 +1,174 @@
+# Stage 4e-3c-1: constructed style sheets and `adoptedStyleSheets` on the
+# new DOM: `dom_next`'s `CssStyleSheet` and adopted lists, `dom_api_next`'s
+# members, `dom_js_next`'s observable array and promises.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it style && cargo test -q -p dom_js_next --test it style_sheets"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: a replaced sheet not listed"
+file = "crates/dom_next/src/style_sheet.rs"
+from = '''        sheet.contents.set(self.gc, Some(contents));
+        self.tree_changed();
+        self.style_sheet_changed(sheet);'''
+to = '''        sheet.contents.set(self.gc, Some(contents));
+        self.tree_changed();'''
+
+[[mutant]]
+name = "dom: disabled the same listed"
+file = "crates/dom_next/src/style_sheet.rs"
+from = '''        if sheet.disabled.replace(disabled) != disabled {'''
+to = '''        if sheet.disabled.replace(disabled) == disabled || true {'''
+
+[[mutant]]
+name = "dom: listed for good"
+file = "crates/dom_next/src/style_sheet.rs"
+from = '''        for sheet in &taken {
+            sheet.listed.set(false);
+        }'''
+to = '''        for sheet in &taken {
+            let _ = sheet;
+        }'''
+
+[[mutant]]
+name = "dom: listed twice"
+file = "crates/dom_next/src/style_sheet.rs"
+from = '''        if sheet.listed.replace(true) {
+            return;
+        }'''
+to = '''        if sheet.listed.replace(true) && false {
+            return;
+        }'''
+
+[[mutant]]
+name = "dom: one sheet number"
+file = "crates/dom_next/src/style_sheet.rs"
+from = '''        self.changes.sheets_made.set(id);'''
+to = '''        let _ = id;'''
+
+[[mutant]]
+name = "dom: set at the end replaces the last"
+file = "crates/dom_next/src/style_sheet.rs"
+from = '''        if index == list.len() {
+            list.push(self.gc, sheet);'''
+to = '''        if index == list.len() && list.is_empty() {
+            list.push(self.gc, sheet);'''
+
+[[mutant]]
+name = "dom: the scope not marked"
+file = "crates/dom_next/src/style_sheet.rs"
+from = '''        self.tree_changed();
+        match self.kind(scope) {
+            NodeKind::Document => self.mark_document_sheets_changed(scope),
+            _ => self.mark_shadow_sheets_changed(scope),
+        }'''
+to = '''        self.tree_changed();'''
+
+[[mutant]]
+name = "api: another document's sheet adopted"
+file = "crates/dom_api_next/src/css_style_sheet.rs"
+from = '''    if !gc::Gc::ptr_eq(cx.style_sheet_document(sheet), cx.document_of(this)) {'''
+to = '''    if false && !gc::Gc::ptr_eq(cx.style_sheet_document(sheet), cx.document_of(this)) {'''
+
+[[mutant]]
+name = "api: options' disabled left out"
+file = "crates/dom_api_next/src/css_style_sheet.rs"
+from = '''&options.media, options.disabled))'''
+to = '''&options.media, false))'''
+
+[[mutant]]
+name = "js: the array made each time"
+file = "crates/dom_js_next/src/observable_array.rs"
+from = '''    if let Some(array) = holder.get_private(scope, key)
+        && array.is_proxy()
+    {'''
+to = '''    if let Some(array) = holder.get_private(scope, key)
+        && array.is_proxy()
+        && false
+    {'''
+
+[[mutant]]
+name = "js: assigned values not checked first"
+file = "crates/dom_js_next/src/observable_array.rs"
+from = '''    if values.iter().any(|value| !is_item(scope, item, *value)) {'''
+to = '''    if false && values.iter().any(|value| !is_item(scope, item, *value)) {'''
+
+[[mutant]]
+name = "js: assigning keeps what was there"
+file = "crates/dom_js_next/src/observable_array.rs"
+from = '''    for _ in 0..len {
+        if call(scope, code, Op::Delete, holder, &[]).is_none() {
+            return;
+        }
+    }'''
+to = '''    let _ = len;'''
+
+[[mutant]]
+name = "js: a length past the end"
+file = "crates/dom_js_next/src/observable_array.rs"
+from = '''    if new > len {
+        return Some(false);
+    }'''
+to = '''    if new > len {
+        return Some(true);
+    }'''
+
+[[mutant]]
+name = "js: a shorter length deletes nothing"
+file = "crates/dom_js_next/src/observable_array.rs"
+from = '''    for _ in new..len {
+        call(scope, code, Op::Delete, owner, &[])?;
+    }'''
+to = '''    let _ = (new, len);'''
+
+[[mutant]]
+name = "js: an index past the length set"
+file = "crates/dom_js_next/src/observable_array.rs"
+from = '''    if usize::try_from(index).unwrap_or(usize::MAX) > len {
+        return Some(false);
+    }'''
+to = '''    if usize::try_from(index).unwrap_or(usize::MAX) > len.saturating_add(1) {
+        return Some(false);
+    }'''
+
+[[mutant]]
+name = "js: has past the length"
+file = "crates/dom_js_next/src/observable_array.rs"
+from = '''            .map(|(_, _, list)| usize::try_from(index).is_ok_and(|index| index < list.len())),'''
+to = '''            .map(|(_, _, list)| usize::try_from(index).is_ok_and(|index| index <= list.len())),'''
+
+[[mutant]]
+name = "js: no indices among the keys"
+file = "crates/dom_js_next/src/observable_array.rs"
+from = '''            (0..list.len()).map(|index| templates::string(scope, &index.to_string()).into()).collect();'''
+to = '''            (0..list.len()).take(0).map(|index| templates::string(scope, &index.to_string()).into()).collect();'''
+
+[[mutant]]
+name = "js: made non-extensible"
+file = "crates/dom_js_next/src/observable_array.rs"
+from = '''    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    rv.set_bool(false);
+}'''
+to = '''    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    rv.set_bool(true);
+}'''
+
+[[mutant]]
+name = "js: an index not the list's"
+file = "crates/dom_js_next/src/observable_array.rs"
+from = '''        Ok(index) if index != u32::MAX && index.to_string() == key => Key::Index(index),'''
+to = '''        Ok(index) if index != u32::MAX && index.to_string() == key && false => Key::Index(index),'''
+
+[[mutant]]
+name = "js: the operations on the prototype"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''            *(if set { &mut templates.set } else { &mut templates.delete }) = Some(global);
+            return;'''
+to = '''            *(if set { &mut templates.set } else { &mut templates.delete }) = Some(global);'''
+
+[[mutant]]
+name = "js: a promise not resolved"
+file = "crates/dom_js_next/src/front.rs"
+from = '''                resolver.resolve(scope, wrapper.into());'''
+to = '''                let _ = wrapper;'''

@@ -1,0 +1,72 @@
+# 1: interface objects made the first time they are needed (`dom_js`).
+#   python3 scripts/test.py mutate rfcs/0070-element-interfaces/mutants-1.toml
+# Left out as equivalent: an interface object linked again each time it is
+# asked for (the same [[Prototype]], set again), and the getters' side
+# effect types (only a debugger's side-effect-free evaluation tells).
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it"]
+timeout = 900
+
+[[mutant]]
+name = "a global's property made in the reading realm"
+file = "crates/dom_js/src/templates.rs"
+from = '''    let context = holders_context(scope, &args);'''
+to = '''    let context = scope.get_current_context();'''
+
+[[mutant]]
+name = "a namespace made in the reading realm"
+file = "crates/dom_js/src/lib.rs"
+from = '''    let context = templates::holders_context(scope, &args);'''
+to = '''    let context = scope.get_current_context();'''
+
+[[mutant]]
+name = "an interface object not linked to its parent's"
+file = "crates/dom_js/src/templates.rs"
+from = '''            function.set_prototype(scope, parent.into());'''
+to = '''            let _ = parent;'''
+
+[[mutant]]
+name = "a wrapper made before its interface object is linked"
+file = "crates/dom_js/src/templates.rs"
+from = '''    interface_object(scope, index);
+    let template = self::interface(scope, index);'''
+to = '''    let template = self::interface(scope, index);'''
+
+[[mutant]]
+name = "the global's own interface object not linked"
+file = "crates/dom_js/src/lib.rs"
+from = '''        templates::interface_object(scope, index("Window"));'''
+to = ''''''
+
+[[mutant]]
+name = "an interface object enumerable"
+file = "crates/dom_js/src/templates.rs"
+from = '''            v8::PropertyAttribute::DONT_ENUM,
+            v8::SideEffectType::HasNoSideEffect,'''
+to = '''            v8::PropertyAttribute::NONE,
+            v8::SideEffectType::HasNoSideEffect,'''
+
+[[mutant]]
+name = "a namespace enumerable"
+file = "crates/dom_js/src/lib.rs"
+from = '''                v8::PropertyAttribute::DONT_ENUM,
+                v8::SideEffectType::HasNoSideEffect,'''
+to = '''                v8::PropertyAttribute::NONE,
+                v8::SideEffectType::HasNoSideEffect,'''
+
+[[mutant]]
+name = "no legacy window alias"
+file = "crates/dom_js/src/templates.rs"
+from = '''            lazy(scope, alias, INTERFACE_OBJECT, index);'''
+to = '''            let _ = alias;'''
+
+[[mutant]]
+name = "a legacy factory function is the interface object"
+file = "crates/dom_js/src/templates.rs"
+from = '''            lazy(scope, factory.name, LEGACY_FACTORY, index);'''
+to = '''            lazy(scope, factory.name, INTERFACE_OBJECT, index);'''
+
+[[mutant]]
+name = "no callback interface object"
+file = "crates/dom_js/src/templates.rs"
+from = '''        if !interface.constants().is_empty() {'''
+to = '''        if interface.constants().is_empty() {'''

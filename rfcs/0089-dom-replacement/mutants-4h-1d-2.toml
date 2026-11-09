@@ -1,0 +1,136 @@
+# Stage 4h-1d-2: external scripts that wait for no parser on the new DOM (queued in the DOM,
+# fetched by the host, each run in a task of its own as soon as it can or in order, `load` or
+# `error` after, the load event delayed till), their requests, and muted errors.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "sh", "-c", "cargo test -q -p dom_next --test it -- scripts:: && cargo test -q -p dom_js_next --test it -- scripts::"]
+timeout = 1200
+
+[[mutant]]
+name = "dom: a queued script doesn't delay the load event"
+file = "crates/dom_next/src/script.rs"
+from = '''        self.change_load_delay(document, true);'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an in-order script isn't in its document's list"
+file = "crates/dom_next/src/script.rs"
+from = '''            list.push(self.gc, element);'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a fetch handed back stays"
+file = "crates/dom_next/src/script.rs"
+from = '''            .borrow_mut()
+            .remove(&key)
+            .and_then(|id| self.node_by_id(id))'''
+to = '''            .borrow_mut()
+            .get(&key)
+            .copied()
+            .and_then(|id| self.node_by_id(id))'''
+
+[[mutant]]
+name = "dom: in order, only the first fetched"
+file = "crates/dom_next/src/script.rs"
+from = '''        while let Some(first) = list.get(self.gc, 0)'''
+to = '''        if let Some(first) = list.get(self.gc, 0)'''
+
+[[mutant]]
+name = "dom: in order, any fetched one"
+file = "crates/dom_next/src/script.rs"
+from = '''        if !pending.in_order.get() {
+            self.queue_script_task(element, document);
+            return;
+        }'''
+to = '''        if true {
+            self.queue_script_task(element, document);
+            return;
+        }'''
+
+[[mutant]]
+name = "dom: a ready script stays pending"
+file = "crates/dom_next/src/script.rs"
+from = '''        data.script.set(self.gc, None);'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a ready script still delays the load event"
+file = "crates/dom_next/src/script.rs"
+from = '''        self.change_load_delay(document, false);'''
+to = ''''''
+
+[[mutant]]
+name = "dom: its turn in its element's document's window"
+file = "crates/dom_next/src/window.rs"
+from = '''    pub(crate) fn queue_script_task(&self, element: NodeRef<'gc>, document: NodeRef<'gc>) {
+        let Some(window) = self.window_of(document) else {'''
+to = '''    pub(crate) fn queue_script_task(&self, element: NodeRef<'gc>, document: NodeRef<'gc>) {
+        let _ = document;
+        let Some(window) = self.window_of(self.document_of(element)) else {'''
+
+[[mutant]]
+name = "api: crossorigin's use-credentials is anonymous"
+file = "crates/dom_api_next/src/script.rs"
+from = '''                ScriptCors::UseCredentials
+            } else {'''
+to = '''                ScriptCors::Anonymous
+            } else {'''
+
+[[mutant]]
+name = "api: no charset asked"
+file = "crates/dom_api_next/src/script.rs"
+from = '''        charset: attr(names::local::CHARSET),'''
+to = '''        charset: None,'''
+
+[[mutant]]
+name = "api: one left as it was is in order"
+file = "crates/dom_api_next/src/script.rs"
+from = '''    cx.queue_script(script, request, !is_async && !flags.non_blocking);'''
+to = '''    cx.queue_script(script, request, !is_async);'''
+
+[[mutant]]
+name = "api: async = false is as soon as possible"
+file = "crates/dom_api_next/src/script.rs"
+from = '''    cx.queue_script(script, request, !is_async && !flags.non_blocking);'''
+to = '''    cx.queue_script(script, request, false);'''
+
+[[mutant]]
+name = "api: a moved script runs"
+file = "crates/dom_api_next/src/script.rs"
+from = '''        (cx.node_id(ready.document) == cx.node_id(document)).then(|| (cx.root(document), ready.loaded))'''
+to = '''        Some((cx.root(document), ready.loaded))'''
+
+[[mutant]]
+name = "api: no error for a failed fetch"
+file = "crates/dom_api_next/src/script.rs"
+from = '''        crate::fire_event(host, &target, names::event::ERROR, false, false);'''
+to = ''''''
+
+[[mutant]]
+name = "api: no load after it ran"
+file = "crates/dom_api_next/src/script.rs"
+from = '''    crate::fire_event(host, &target, names::event::LOAD, false, false);'''
+to = ''''''
+
+[[mutant]]
+name = "api: an external script's currentScript not set"
+file = "crates/dom_api_next/src/script.rs"
+from = '''        let current = cx.containing_shadow_root(script).is_none().then_some(script);
+        cx.set_current_script(document.get(cx.gc), current).map(|before| cx.root(before))'''
+to = '''        cx.set_current_script(document.get(cx.gc), None).map(|before| cx.root(before))'''
+
+[[mutant]]
+name = "api: never muted"
+file = "crates/dom_api_next/src/script.rs"
+from = '''            muted: loaded.muted,'''
+to = '''            muted: false,'''
+
+[[mutant]]
+name = "js: a muted script is shared cross-origin"
+file = "crates/dom_js_next/src/frames.rs"
+from = '''        !script.muted,'''
+to = '''        true,'''
+
+[[mutant]]
+name = "js: muted errors reported whole"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''        if message.is_some_and(|message| !message.is_shared_cross_origin()) {'''
+to = '''        if false {'''

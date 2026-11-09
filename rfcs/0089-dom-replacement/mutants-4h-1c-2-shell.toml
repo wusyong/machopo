@@ -1,0 +1,193 @@
+# Stage 4h-1c-2: what the whole browser's tests on the new DOM reach: an editing host taking
+# the focus (and Tab), the selection collapsing where layout puts a caret first, the Selection
+# API giving the focus out of its operation (#[then_script]), and the caret drawn in it.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "sh", "-c", "cargo test -q -p shell --test it -- selections:: focus::an_editing keys::tab_reaches selection_painting::carets_on_the_new_dom"]
+timeout = 2400
+
+[[mutant]]
+name = "api: an editing host isn't focusable by default"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        || cx.is_editing_host(element)
+}'''
+to = '''
+}'''
+
+[[mutant]]
+name = "api: taking the focus leaves the selection"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        if selection == SelectionOnFocus::Restore {
+            crate::selection::focused(cx, element.get(cx.gc));
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "api: the Selection API's focus moves the selection"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    focusing_steps_with(host, document, Some(element), None, SelectionOnFocus::Keep);'''
+to = '''    focusing_steps_with(host, document, Some(element), None, SelectionOnFocus::Restore);'''
+
+[[mutant]]
+name = "api: the Selection API focuses a host that can't take it"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    if !host.mutate(|cx| is_focusable_area(cx, element.get(cx.gc))) {
+        return;
+    }
+    focusing_steps_with(host, document, Some(element), None, SelectionOnFocus::Keep);'''
+to = '''    focusing_steps_with(host, document, Some(element), None, SelectionOnFocus::Keep);'''
+
+[[mutant]]
+name = "api: a selection already in the host moves"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    if inside {
+        return;
+    }
+    // The focusing steps laid'''
+to = '''    let _ = inside;
+    // The focusing steps laid'''
+
+[[mutant]]
+name = "api: the selection at the host's start, not layout's"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''        .with_layout(element, |layout| layout.first_caret_position(cx, element))'''
+to = '''        .with_layout(element, |_| (element, 0))'''
+
+[[mutant]]
+name = "api: a backward selection's focus host not tried"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    let host = cx.editing_host_of(anchor.0).or_else(|| {
+        cx.selection_is_backward(this)
+            .then(|| cx.editing_host_of(focus.0))
+            .flatten()
+    })?;'''
+to = '''    let _ = focus;
+    let host = cx.editing_host_of(anchor.0)?;'''
+
+[[mutant]]
+name = "api: a forward selection's focus host tried"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''        cx.selection_is_backward(this)
+            .then(|| cx.editing_host_of(focus.0))'''
+to = '''        true
+            .then(|| cx.editing_host_of(focus.0))'''
+
+[[mutant]]
+name = "api: another frame's selection gives the focus"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    (focused_frame && !has_focus).then_some(FocusHost { document, host })'''
+to = '''    let _ = focused_frame;
+    (!has_focus).then_some(FocusHost { document, host })'''
+
+[[mutant]]
+name = "api: a selection set as it was gives the focus"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    set(cx, this, Some(range), backward).then(|| focus_host(cx, this)).flatten()'''
+to = '''    set(cx, this, Some(range), backward);
+    focus_host(cx, this)'''
+
+[[mutant]]
+name = "api: addRange gives no focus"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    Ok(set(cx, this, Some(range), false).then(|| focus_host(cx, this)).flatten())'''
+to = '''    set(cx, this, Some(range), false);
+    Ok(None)'''
+
+[[mutant]]
+name = "macro: what a method leaves isn't done"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''                    #api::typed::ThenScript::run(#value, &mut #api::typed::FrontHost(&mut *#front));
+'''
+to = '''                    let _ = #value;
+'''
+
+[[mutant]]
+name = "layout: invisible text is a candidate"
+file = "crates/layout/src/caret.rs"
+from = '''                let text = self.laid_out.texts.get(&id).filter(|text| text.visible)?;'''
+to = '''                let text = self.laid_out.texts.get(&id)?;'''
+
+[[mutant]]
+name = "layout: a kept line break isn't a candidate"
+file = "crates/layout/src/caret.rs"
+from = '''                let newline = text
+                    .keeps_newlines'''
+to = '''                let newline = false'''
+
+[[mutant]]
+name = "layout: a wrapped text's last line"
+file = "crates/layout/src/caret.rs"
+from = '''                    (Some(a), Some(b)) => Some(a.min(b)),'''
+to = '''                    (Some(a), Some(b)) => Some(a.max(b)),'''
+
+[[mutant]]
+name = "layout: a br isn't a candidate"
+file = "crates/layout/src/caret.rs"
+from = '''                    return self.box_tree.is_rendered(id).then_some((parent, index));'''
+to = '''                    return None;'''
+
+[[mutant]]
+name = "layout: before what isn't editable"
+file = "crates/layout/src/caret.rs"
+from = '''                if !cx.is_editable(node) {
+                    return Some((parent, 0));
+                }'''
+to = '''                if !cx.is_editable(node) {
+                    return Some((parent, index));
+                }'''
+
+[[mutant]]
+name = "layout: into what ignores content"
+file = "crates/layout/src/caret.rs"
+from = '''                if cx.editing_ignores_content(node) || element.table {'''
+to = '''                if element.table {'''
+
+[[mutant]]
+name = "layout: into a table"
+file = "crates/layout/src/caret.rs"
+from = '''                if cx.editing_ignores_content(node) || element.table {'''
+to = '''                if cx.editing_ignores_content(node) {'''
+
+[[mutant]]
+name = "layout: an empty box with height isn't a candidate"
+file = "crates/layout/src/caret.rs"
+from = '''                (element.height > 0.0).then_some((node, 0))'''
+to = '''                None'''
+
+[[mutant]]
+name = "layout: an empty box without height is a candidate"
+file = "crates/layout/src/caret.rs"
+from = '''                (element.height > 0.0).then_some((node, 0))'''
+to = '''                (element.height >= 0.0).then_some((node, 0))'''
+
+[[mutant]]
+name = "renderer: no caret in an editing host"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''                caret = crate::next_selection::caret(cx, token, document, box_tree, text);'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: a caret outside the focused element"
+file = "crates/renderer/src/next_selection.rs"
+from = '''    if !inside || !cx.is_editable(element) {'''
+to = '''    if !cx.is_editable(element) {'''
+
+[[mutant]]
+name = "renderer: a caret where one can't type"
+file = "crates/renderer/src/next_selection.rs"
+from = '''    if !inside || !cx.is_editable(element) {'''
+to = '''    if !inside {'''
+
+[[mutant]]
+name = "renderer: no caret in an empty element"
+file = "crates/renderer/src/next_selection.rs"
+from = '''    if cx.first_child(container).is_none() {
+        return empty(cx, token, container, text);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: no caret before a br"
+file = "crates/renderer/src/next_selection.rs"
+from = '''        .filter(|n| is_br(cx, *n))
+        .or('''
+to = '''        .filter(|_| false)
+        .or('''

@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<title>Custom elements</title>
+<!-- A custom element, undefined until a click on "define" defines it: hidden by
+     `:not(:defined)`, then upgraded (its constructor and its
+     `connectedCallback` fill in its label), shown with a blue border by
+     `:defined`, 200px wide. A click on it changes its `label` attribute,
+     which its `attributeChangedCallback` (`observedAttributes`) shows. The
+     note says "waiting", then "ok" once defined, or what was off. -->
+<style>
+  body { margin: 0; font: 20px/1 sans-serif }
+  x-card { display: block; width: 200px; padding: 10px; border: 5px solid rgb(0, 0, 255) }
+  x-card:not(:defined) { display: none }
+  #go { display: inline-block; padding: 4px; background: rgb(220, 220, 220) }
+</style>
+<x-card id="card" label="first"></x-card>
+<div id="go">define</div>
+<p id="note">waiting</p>
+<script>
+  const card = document.getElementById("card");
+  const log = [];
+  class XCard extends HTMLElement {
+    static observedAttributes = ["label"];
+    constructor() { super(); log.push("made"); }
+    connectedCallback() { log.push("connected"); this.textContent = "Card: " + this.getAttribute("label"); }
+    attributeChangedCallback(name, old, now) {
+      log.push(name);
+      if (this.isConnected) this.textContent = "Card: " + now;
+    }
+  }
+  document.getElementById("go").addEventListener("click", () => {
+    customElements.define("x-card", XCard);
+    const off = [];
+    if (!(card instanceof XCard)) off.push("not upgraded");
+    if (log.join() !== "made,label,connected") off.push(log.join());
+    if (card.offsetWidth !== 230) off.push("width " + card.offsetWidth);
+    document.getElementById("note").textContent = off.length ? off.join(", ") : "ok";
+  });
+  card.addEventListener("click", () => card.setAttribute("label", "second"));
+</script>

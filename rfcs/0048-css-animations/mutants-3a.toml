@@ -1,0 +1,513 @@
+# Mutation test of step 3a: Web Animations' script API (`dom_api`'s
+# `animation`), the playback procedures (`animation`'s `playback`), the
+# animations' objects (`dom`'s `animation_objects`), the animations that left
+# their elements and what is let go of (`dom`'s `animations`), kept promises
+# (`bindings`, `dom_wasm`) and the renderer's steps (2026-10-15):
+# python3 scripts/test.py mutate rfcs/0048-css-animations/mutants-3a.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "animations::"]
+timeout = 900
+
+# --- dom_api's members
+[[mutant]]
+name = "a member doesn't apply what style sent first"
+file = "crates/dom_api/src/animation.rs"
+from = '''    for notice in notices {
+        settle(cx, this, id, notice);
+    }'''
+to = '''    let _ = notices;'''
+
+[[mutant]]
+name = "a new ready isn't new"
+file = "crates/dom_api/src/animation.rs"
+from = '''        Notice::NewReady => forget_ready(cx),'''
+to = '''        Notice::NewReady => {}'''
+
+[[mutant]]
+name = "a new finished isn't new"
+file = "crates/dom_api/src/animation.rs"
+from = '''        Notice::NewFinished => forget_finished(cx),'''
+to = '''        Notice::NewFinished => {}'''
+
+[[mutant]]
+name = "an aborted ready doesn't reject"
+file = "crates/dom_api/src/animation.rs"
+from = '''        Notice::ReadyAborted => {
+            if let Some(number) = ready {
+                resolver(number).reject(cx, abort_error());
+            }'''
+to = '''        Notice::ReadyAborted => {
+            if let Some(number) = ready {
+                let _ = number;
+            }'''
+
+[[mutant]]
+name = "a canceled finished doesn't reject"
+file = "crates/dom_api/src/animation.rs"
+from = '''        Notice::Canceled { .. } => {
+            if let Some(number) = finished {
+                resolver(number).reject(cx, abort_error());
+            }'''
+to = '''        Notice::Canceled { .. } => {
+            if let Some(number) = finished {
+                let _ = number;
+            }'''
+
+[[mutant]]
+name = "finished never resolves"
+file = "crates/dom_api/src/animation.rs"
+from = '''        Notice::Finished { .. } => {
+            if let Some(number) = finished {
+                resolver(number).resolve(cx, this.clone());
+            }'''
+to = '''        Notice::Finished { .. } => {
+            if let Some(number) = finished {
+                let _ = number;
+            }'''
+
+[[mutant]]
+name = "ready never resolves"
+file = "crates/dom_api/src/animation.rs"
+from = '''        Notice::ReadyResolved => {
+            if let Some(number) = ready {
+                resolver(number).resolve(cx, this.clone());
+            }'''
+to = '''        Notice::ReadyResolved => {
+            if let Some(number) = ready {
+                let _ = number;
+            }'''
+
+[[mutant]]
+name = "a promise asked once settled waits"
+file = "crates/dom_api/src/animation.rs"
+from = '''    if settled {
+        promise.resolve(cx, this.clone());
+    }'''
+to = '''    let _ = settled;'''
+
+[[mutant]]
+name = "a new promise each time"
+file = "crates/dom_api/src/animation.rs"
+from = '''    if let Some(number) = existing {
+        return Ok(PromiseResolver::from_id(PromiseId::new(number)));
+    }'''
+to = '''    let _ = existing;'''
+
+[[mutant]]
+name = "play() leaves animation-play-state in charge"
+file = "crates/dom_api/src/animation.rs"
+from = '''        playback.play(true, now, end, notices)
+    })?;
+    override_play_state(cx, this);'''
+to = '''        playback.play(true, now, end, notices)
+    })?;'''
+
+[[mutant]]
+name = "pause() leaves animation-play-state in charge"
+file = "crates/dom_api/src/animation.rs"
+from = '''        playback.pause(now, end, notices)
+    })?;
+    override_play_state(cx, this);'''
+to = '''        playback.pause(now, end, notices)
+    })?;'''
+
+[[mutant]]
+name = "a member's change isn't styled"
+file = "crates/dom_api/src/animation.rs"
+from = '''        element.set_animations_changed();
+    }
+    notify(cx, this, document, target, sent);'''
+to = '''        let _ = element;
+    }
+    notify(cx, this, document, target, sent);'''
+
+[[mutant]]
+name = "a member's events never go"
+file = "crates/dom_api/src/animation.rs"
+from = '''    cx.read().animations().events.extend(queued);'''
+to = '''    let _ = queued;'''
+
+[[mutant]]
+name = "one filling isn't relevant"
+file = "crates/dom_api/src/animation.rs"
+from = '''    current || timing.active_time.is_some()'''
+to = '''    current'''
+
+[[mutant]]
+name = "one in its delay isn't relevant"
+file = "crates/dom_api/src/animation.rs"
+from = '''        animation::Phase::Before => rate > 0.0,'''
+to = '''        animation::Phase::Before => false,'''
+
+[[mutant]]
+name = "::after before ::before"
+file = "crates/dom_api/src/animation.rs"
+from = '''        Some(computed_style::PseudoId::After) => 3,'''
+to = '''        Some(computed_style::PseudoId::After) => 1,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "web_animations::"]
+
+[[mutant]]
+name = "a document's into shadow trees"
+file = "crates/dom_api/src/animation.rs"
+from = '''            && shadow_including
+'''
+to = '''            && true
+'''
+
+[[mutant]]
+name = "CSS animations with the transitions"
+file = "crates/dom_api/src/animation.rs"
+from = '''                    found.push((
+                        1,
+                        order,'''
+to = '''                    found.push((
+                        0,
+                        order,'''
+
+[[mutant]]
+name = "an element's are its subtree's"
+file = "crates/dom_api/src/animation.rs"
+from = '''            HashMap::from([(element.id(), 0)])'''
+to = '''            tree_places(element, true)'''
+
+[[mutant]]
+name = "a transition's object is a CSSAnimation"
+file = "crates/dom_api/src/animation.rs"
+from = '''                        owner.property.name(),
+                        animation.id,
+                        AnimationClass::CssTransition,
+                    ));'''
+to = '''                        owner.property.name(),
+                        animation.id,
+                        AnimationClass::CssAnimation,
+                    ));'''
+
+[[mutant]]
+name = "currentTime = null always"
+file = "crates/dom_api/src/animation.rs"
+from = '''        if has == Some(true) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "another exception"
+file = "crates/dom_api/src/animation.rs"
+from = '''            ExceptionName::InvalidStateError,
+            "the animation can't do that in its state",'''
+to = '''            ExceptionName::NotSupportedError,
+            "the animation can't do that in its state",'''
+
+[[mutant]]
+name = "reverse() out of paused leaves animation-play-state in charge"
+file = "crates/dom_api/src/animation.rs"
+from = '''    if is_paused(cx, this) != was_paused {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "finish bubbles"
+file = "crates/dom_api/src/animation.rs"
+from = '''    let event = cx.mutate().create_event(
+        event_type,
+        false,'''
+to = '''    let event = cx.mutate().create_event(
+        event_type,
+        true,'''
+
+[[mutant]]
+name = "cancel has a current time"
+file = "crates/dom_api/src/animation.rs"
+from = '''                current_time: None,
+                timeline_time,'''
+to = '''                current_time: timeline_time,
+                timeline_time,'''
+
+# --- dom's table
+[[mutant]]
+name = "one that left its element never starts"
+file = "crates/dom/src/animations.rs"
+from = '''            animation.commit_pending_detached(now, &mut sent);'''
+to = '''            let _ = now;'''
+
+[[mutant]]
+name = "ready waits for the next update"
+file = "crates/dom/src/animations.rs"
+from = '''            .partition(|pending| pending.event.is_promise_notice());'''
+to = '''            .partition(|_| false);'''
+
+[[mutant]]
+name = "one that left its element doesn't move"
+file = "crates/dom/src/animations.rs"
+from = '''            animation.tick_detached(now, &mut sent);'''
+to = '''            let _ = now;'''
+
+[[mutant]]
+name = "a transition done isn't kept"
+file = "crates/animation/src/transition.rs"
+from = '''                    self.completed.push((owner.property, owner.to.clone()));
+                    self.others.push(t);'''
+to = '''                    self.completed.push((owner.property, owner.to.clone()));
+                    drop(t);'''
+
+[[mutant]]
+name = "nothing is let go of"
+file = "crates/dom/src/animations.rs"
+from = '''                let keep = held(animation)
+'''
+to = '''                let keep = true || held(animation)
+'''
+
+[[mutant]]
+name = "nothing that left its element is let go of"
+file = "crates/dom/src/animations.rs"
+from = '''            let keep = held(animation);'''
+to = '''            let keep = true;'''
+
+[[mutant]]
+name = "a stopped one gives back what its notices haven't reached"
+file = "crates/dom/src/animations.rs"
+from = '''            if unsettled.contains(&animation.id) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "a stopped one keeps its ready"
+file = "crates/dom/src/animations.rs"
+from = '''            if !animation.playback.is_ready_pending() {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "a stopped one keeps its finished"
+file = "crates/dom/src/animations.rs"
+from = '''            if animation.playback.is_finished_resolved() {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "a running one gives back its promises"
+file = "crates/dom/src/animations.rs"
+from = '''            if animation.playback.is_pending()
+                || !matches!(
+                    animation.play_state(now),
+                    PlayState::Idle | PlayState::Finished
+                )
+            {'''
+to = '''            if animation.playback.is_pending() {'''
+
+[[mutant]]
+name = "a stopped one that left its element is active"
+file = "crates/dom/src/animations.rs"
+from = '''                    .chain(entry.animations.others.iter().filter(reachable))'''
+to = '''                    .chain(entry.animations.others.iter())'''
+
+# --- dom's objects
+[[mutant]]
+name = "an object isn't kept"
+file = "crates/dom/src/animation_objects.rs"
+from = '''        let slot = rare.kept_animation_object_slots.slot(self, len);
+        slot.set(self, object.persistent());'''
+to = '''        let slot = rare.kept_animation_object_slots.slot(self, len);
+        let _ = slot;'''
+
+[[mutant]]
+name = "another object each time"
+file = "crates/dom/src/animation_objects.rs"
+from = '''            if data(object.object()).is_some_and(|data| data.id == id) {'''
+to = '''            if data(object.object()).is_some_and(|data| data.id == id && false) {'''
+
+[[mutant]]
+name = "a kept object is never let go of"
+file = "crates/dom/src/animation_objects.rs"
+from = '''            if data(held.object()).is_some_and(|data| live.contains(&data.id)) {'''
+to = '''            if data(held.object()).is_some_and(|_| true) {'''
+
+# --- animation's playback
+[[mutant]]
+name = "one that left its element runs forever"
+file = "crates/animation/src/animation.rs"
+from = '''        self.tick_playback(now, events);
+        self.last_phase = Some(self.computed(now).phase);'''
+to = '''        self.tick_playback(now, events);'''
+
+[[mutant]]
+name = "a done transition canceled says so"
+file = "crates/animation/src/animation.rs"
+from = '''            Owner::Transition(owner) if owner.ran && self.last_phase != Some(Phase::After) => {'''
+to = '''            Owner::Transition(owner) if owner.ran => {'''
+
+[[mutant]]
+name = "a cancel sends no notices"
+file = "crates/animation/src/animation.rs"
+from = '''        self.playback.cancel(self.at(now), self.end(), &mut notices);
+        self.notify(notices, now, events);'''
+to = '''        self.playback.cancel(self.at(now), self.end(), &mut notices);'''
+
+[[mutant]]
+name = "finish() notifies later"
+file = "crates/animation/src/playback.rs"
+from = '''        self.update_finished_state(true, true, timeline, end, notices);
+        Ok(())
+    }
+
+    /// `cancel()`'''
+to = '''        self.update_finished_state(true, false, timeline, end, notices);
+        Ok(())
+    }
+
+    /// `cancel()`'''
+
+[[mutant]]
+name = "finish() leaves a pending play"
+file = "crates/animation/src/playback.rs"
+from = '''        if self.pending == Some(PendingTask::Play) && self.start_time.is_some() {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a cancel sends no cancel"
+file = "crates/animation/src/playback.rs"
+from = '''            notices.push(Notice::Canceled {
+                timeline_time: timeline,
+            });'''
+to = '''            let _ = timeline;'''
+
+[[mutant]]
+name = "reverse() keeps the direction"
+file = "crates/animation/src/playback.rs"
+from = '''        self.pending_playback_rate = Some(if rate == 0.0 { 0.0 } else { -rate });'''
+to = '''        self.pending_playback_rate = Some(rate);'''
+
+[[mutant]]
+name = "a new rate jumps"
+file = "crates/animation/src/playback.rs"
+from = '''        if let Some(previous) = previous {
+            self.set_current_time(previous, timeline, end, notices);
+        }'''
+to = '''        let _ = previous;'''
+
+[[mutant]]
+name = "updatePlaybackRate() at once"
+file = "crates/animation/src/playback.rs"
+from = '''                let _ = self.play(false, timeline, end, notices);'''
+to = '''                self.apply_pending_playback_rate();'''
+
+[[mutant]]
+name = "a pending rate jumps"
+file = "crates/animation/src/playback.rs"
+from = '''                    self.start_time = Some(ready_time - current / self.playback_rate);'''
+to = '''                    let _ = current;'''
+
+[[mutant]]
+name = "a start time set leaves ready waiting"
+file = "crates/animation/src/playback.rs"
+from = '''        if self.pending.take().is_some() {
+            self.resolve_ready(notices);
+        }'''
+to = '''        self.pending.take();'''
+
+[[mutant]]
+name = "back from its end keeps finished"
+file = "crates/animation/src/playback.rs"
+from = '''                notices.push(Notice::NewFinished);'''
+to = '''                let _ = notices;'''
+
+[[mutant]]
+name = "a pending pause isn't paused"
+file = "crates/animation/src/playback.rs"
+from = '''        if self.pending == Some(PendingTask::Pause)
+            || (self.start_time.is_none() && self.pending != Some(PendingTask::Play))'''
+to = '''        if self.start_time.is_none() && self.pending != Some(PendingTask::Play)'''
+
+[[mutant]]
+name = "a seek ignores the rate"
+file = "crates/animation/src/playback.rs"
+from = '''            self.start_time = Some(timeline - seek / self.playback_rate);'''
+to = '''            self.start_time = Some(timeline - seek);'''
+
+[[mutant]]
+name = "pause() keeps ready"
+file = "crates/animation/src/playback.rs"
+from = '''        let had_pending_play = self.pending.take() == Some(PendingTask::Play);
+        if !had_pending_play {'''
+to = '''        let had_pending_play = self.pending.take() == Some(PendingTask::Play);
+        if had_pending_play && false {'''
+
+# --- kept promises
+[[mutant]]
+name = "a rejected kept promise is unhandled"
+file = "crates/bindings/src/promise_resolvers.rs"
+from = '''    resolver.get_promise(scope).mark_as_handled();'''
+to = '''    let _ = resolver.get_promise(scope);'''
+
+[[mutant]]
+name = "a realm's kept promises stay"
+file = "crates/dom_wasm/src/promises.rs"
+from = '''        .retain(|_, slot| slot.owner.as_ref() != Some(window));'''
+to = '''        .retain(|_, _| true);'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "it", "--", "a_guest_uses_web_animations"]
+
+# --- the renderer
+[[mutant]]
+name = "the update's promises aren't settled"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            if !notices.is_empty() {
+                let document = *document;'''
+to = '''            if false {
+                let document = *document;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "web_animations::"]
+
+[[mutant]]
+name = "the started ones' ready isn't settled"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            .in_scope(|| self.settle_animation_notices(started));'''
+to = '''            .in_scope(|| drop(started));'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "web_animations::"]
+
+[[mutant]]
+name = "no finish or cancel event"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                        dom_api::animation::fire_playback_event(
+                            host,
+                            document,
+                            playback.id,
+                            playback.notice,
+                        );'''
+to = '''                        let _ = (host, document, playback);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "web_animations::"]
+
+[[mutant]]
+name = "one that left its element wants no frames"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            animating = !running.is_empty() || detached_running;'''
+to = '''            animating = !running.is_empty();'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "web_animations::"]
+
+[[mutant]]
+name = "the run loop doesn't count one that left its element"
+file = "crates/dom/src/animations.rs"
+from = '''            || self.detached.values().any(|(_, a)| a.is_running())
+    }'''
+to = '''    }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "web_animations::"]
+
+[[mutant]]
+name = "the renderer lets go of nothing"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                dom_api::animation::let_go(host, document, &promises);'''
+to = '''                let _ = (host, document, &promises);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "web_animations::"]
+
+# --- what is let go of (the renderer's step; `dom_js`'s frames call it too)
+[[mutant]]
+name = "no promise given back"
+file = "crates/dom_api/src/animation.rs"
+from = '''    for &number in promises {
+        cx.release_promise(PromiseId::new(number));
+    }'''
+to = '''    let _ = promises;'''
+
+[[mutant]]
+name = "no object let go of"
+file = "crates/dom_api/src/animation.rs"
+from = '''    cx.mutate().let_go_of_animation_objects(&document, &active);'''
+to = '''    let _ = (&document, &active);'''
+
+[[mutant]]
+name = "the objects alive aren't live"
+file = "crates/dom/src/animation_objects.rs"
+from = '''                live.extend(self.animation_object_ids(&document));'''
+to = '''                let _ = document;'''

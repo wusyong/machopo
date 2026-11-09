@@ -1,0 +1,322 @@
+# Stage 4h-1b-2: a range's contents on the new DOM: cloneContents, extractContents,
+# deleteContents, insertNode, surroundContents, toString, createContextualFragment, and
+# getClientRects / getBoundingClientRect.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "sh", "-c", "cargo test -q -p dom_js_next --test it -- ranges && cargo test -q -p dom_api_next --test it -- ranges"]
+timeout = 900
+
+[[mutant]]
+name = "api: a substring to the end"
+file = "crates/dom_api_next/src/range.rs"
+from = '''        .utf16_substring(from, to.saturating_sub(from))'''
+to = '''        .utf16_substring(from, usize::MAX)'''
+
+[[mutant]]
+name = "api: a node at the start is contained"
+file = "crates/dom_api_next/src/range.rs"
+from = '''        && position(cx, (node, 0), start) == Ordering::Greater'''
+to = '''        && position(cx, (node, 0), start) != Ordering::Less'''
+
+[[mutant]]
+name = "api: the start's text whole in its string"
+file = "crates/dom_api_next/src/range.rs"
+from = '''        text.push_str(&substring(cx, start.0, start.1, u32::MAX));'''
+to = '''        text.push_str(&substring(cx, start.0, 0, u32::MAX));'''
+
+[[mutant]]
+name = "api: the end's text not in its string"
+file = "crates/dom_api_next/src/range.rs"
+from = '''        text.push_str(&substring(cx, end.0, 0, end.1));
+    }
+    Ok(DomStr::Owned(DomString::from(text)))'''
+to = '''    }
+    Ok(DomStr::Owned(DomString::from(text)))'''
+
+[[mutant]]
+name = "api: a comment's data in the string"
+file = "crates/dom_api_next/src/range.rs"
+from = '''        if is_text(cx, node) && is_contained(cx, node, start, end) {'''
+to = '''        if cx.kind(node).is_character_data() && is_contained(cx, node, start, end) {'''
+
+[[mutant]]
+name = "api: a first partial child where the start holds the end"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    let first_partial = if start_holds_end {
+        None'''
+to = '''    let first_partial = if false {
+        None'''
+
+[[mutant]]
+name = "api: collapsing to the start's ancestor's start"
+file = "crates/dom_api_next/src/range.rs"
+from = '''        (parent, cx.index(reference).saturating_add(1))'''
+to = '''        (parent, cx.index(reference))'''
+
+[[mutant]]
+name = "api: an extracted text's data stays"
+file = "crates/dom_api_next/src/range.rs"
+from = '''        if extract {
+            // Start before end in one node: no underflow.
+            cx.replace_data(start.0, units(start.1), units(end.1.saturating_sub(start.1)), "");
+        }
+        return Ok((fragment, None));'''
+to = '''        return Ok((fragment, None));'''
+
+[[mutant]]
+name = "api: a doctype extracted"
+file = "crates/dom_api_next/src/range.rs"
+from = '''        return Err(ApiError::dom(ExceptionName::HierarchyRequest));
+    }
+    if let Some(first) = parts.first_partial {'''
+to = '''    }
+    if let Some(first) = parts.first_partial {'''
+
+[[mutant]]
+name = "api: the first partial text's data stays"
+file = "crates/dom_api_next/src/range.rs"
+from = '''                cx.replace_data(start.0, units(start.1), usize::MAX, "");
+            }
+        } else {'''
+to = '''            }
+        } else {'''
+
+[[mutant]]
+name = "api: the first partial element's contents not in its copy"
+file = "crates/dom_api_next/src/range.rs"
+from = '''            let (inner, _) = clone_or_extract(cx, start, (first, cx.node_length(first)), extract)?;
+            cx.append_child(clone, inner)?;'''
+to = '''            let _ = clone_or_extract(cx, start, (first, cx.node_length(first)), extract)?;'''
+
+[[mutant]]
+name = "api: contained children cloned shallow"
+file = "crates/dom_api_next/src/range.rs"
+from = '''            cx.clone_node(child, None, true)'''
+to = '''            cx.clone_node(child, None, false)'''
+
+[[mutant]]
+name = "api: contained children moved when cloned"
+file = "crates/dom_api_next/src/range.rs"
+from = '''        let child = if extract {
+            child'''
+to = '''        let child = if true {
+            child'''
+
+[[mutant]]
+name = "api: the last partial text's data stays"
+file = "crates/dom_api_next/src/range.rs"
+from = '''                cx.replace_data(end.0, 0, units(end.1), "");
+            }
+        } else {'''
+to = '''            }
+        } else {'''
+
+[[mutant]]
+name = "api: the last partial element's contents not in its copy"
+file = "crates/dom_api_next/src/range.rs"
+from = '''            let (inner, _) = clone_or_extract(cx, (last, 0), end, extract)?;
+            cx.append_child(clone, inner)?;'''
+to = '''            let _ = clone_or_extract(cx, (last, 0), end, extract)?;'''
+
+[[mutant]]
+name = "api: an extracted range doesn't collapse"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    let (fragment, collapse_to) = clone_or_extract(cx, cx.range_start(this), cx.range_end(this), true)?;
+    if let Some(point) = collapse_to {
+        cx.set_range(this, point, point);
+    }
+    Ok(fragment)'''
+to = '''    let (fragment, _) = clone_or_extract(cx, cx.range_start(this), cx.range_end(this), true)?;
+    Ok(fragment)'''
+
+[[mutant]]
+name = "api: deleting removes a contained node's descendants on their own"
+file = "crates/dom_api_next/src/range.rs"
+from = '''            to_remove.push(node);
+            at = next_past(cx, node, Some(common));'''
+to = '''            to_remove.push(node);
+            at = cx.first_child(node).or_else(|| next_past(cx, node, Some(common)));'''
+
+[[mutant]]
+name = "api: deleting leaves the start's data"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    if is_character_data(cx, start.0) {
+        cx.replace_data(start.0, units(start.1), usize::MAX, "");
+    }
+    for node in to_remove {'''
+to = '''    for node in to_remove {'''
+
+[[mutant]]
+name = "api: deleting leaves the end's data"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    if is_character_data(cx, end.0) {
+        cx.replace_data(end.0, 0, units(end.1), "");
+    }
+    cx.set_range(this, collapse_to, collapse_to);'''
+to = '''    cx.set_range(this, collapse_to, collapse_to);'''
+
+[[mutant]]
+name = "api: a range deleted doesn't collapse"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    cx.set_range(this, collapse_to, collapse_to);
+    Ok(())'''
+to = '''    Ok(())'''
+
+[[mutant]]
+name = "api: inserting into a text without a parent"
+file = "crates/dom_api_next/src/range.rs"
+from = '''        || (start_is_text && cx.parent(start).is_none())'''
+to = '''        || false'''
+
+[[mutant]]
+name = "api: insertion not checked before the split"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    cx.ensure_pre_insertion_validity(parent, node, reference)?;
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: insertion before the text, not split"
+file = "crates/dom_api_next/src/range.rs"
+from = '''        Some(cx.split_text(start, offset))'''
+to = '''        Some(start)'''
+
+[[mutant]]
+name = "api: a node inserted before itself"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    if reference.is_some_and(|reference| Gc::ptr_eq(reference, node)) {
+        reference = cx.next_sibling(node);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a collapsed range ends before what was inserted"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    let new_offset = at.saturating_add(added);'''
+to = '''    let new_offset = at;'''
+
+[[mutant]]
+name = "api: a fragment inserted counts one"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    let added = if cx.kind(node) == NodeKind::DocumentFragment {'''
+to = '''    let added = if false {'''
+
+[[mutant]]
+name = "api: a range not collapsed takes the end"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    if Gc::ptr_eq(start.0, end.0) && start.1 == end.1 {
+        cx.set_range(this, start, (parent, new_offset));'''
+to = '''    if true {
+        cx.set_range(this, start, (parent, new_offset));'''
+
+[[mutant]]
+name = "api: surrounding a partly selected element"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    if partly(start.0, end.0) || partly(end.0, start.0) {'''
+to = '''    if partly(start.0, end.0) {'''
+
+[[mutant]]
+name = "api: a fragment surrounds"
+file = "crates/dom_api_next/src/range.rs"
+from = '''        NodeKind::Document | NodeKind::DocumentType | NodeKind::DocumentFragment
+    ) {
+        return Err(invalid_node_type('''
+to = '''        NodeKind::Document | NodeKind::DocumentType
+    ) {
+        return Err(invalid_node_type('''
+
+[[mutant]]
+name = "api: the new parent keeps its children"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    if cx.first_child(new_parent).is_some() {
+        cx.replace_all(new_parent, None);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: surrounding doesn't select the new parent"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    cx.append_child(new_parent, fragment)?;
+    select_node(cx, this, new_parent)'''
+to = '''    cx.append_child(new_parent, fragment)?;
+    Ok(())'''
+
+[[mutant]]
+name = "api: a text's own element as the context"
+file = "crates/dom_api_next/src/range.rs"
+from = '''        NodeKind::Text | NodeKind::Comment => cx.parent(start).filter(|parent| cx.kind(*parent) == NodeKind::Element),'''
+to = '''        NodeKind::Text | NodeKind::Comment => None,'''
+
+[[mutant]]
+name = "api: the root as the context"
+file = "crates/dom_api_next/src/range.rs"
+from = '''        Some(element) if !is_html_root(element) => element,'''
+to = '''        Some(element) => element,'''
+
+[[mutant]]
+name = "api: a contextual fragment's scripts already started"
+file = "crates/dom_api_next/src/range.rs"
+from = '''            cx.set_script_flags(node, dom_next::ScriptFlags::default());'''
+to = '''            let _ = node;'''
+
+[[mutant]]
+name = "api: a contextual fragment's custom elements not upgraded"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    cx.upgrade_defined_in(fragment);
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: a contextual fragment in an XML document"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    crate::markup::html_only(cx, start, "createContextualFragment")?;
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: a range's boxes from the start's child after it"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    } else if let Some(child) = child_at(start, start_offset) {
+        Some(child)'''
+to = '''    } else if let Some(child) = child_at(start, start_offset.saturating_add(1)) {
+        Some(child)'''
+
+[[mutant]]
+name = "api: a range's boxes past its end"
+file = "crates/dom_api_next/src/range.rs"
+from = '''        if past_last.is_some_and(|past| Gc::ptr_eq(past, node)) {
+            break;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a text's part from its start"
+file = "crates/dom_api_next/src/range.rs"
+from = '''                let from = if Gc::ptr_eq(node, start) { start_offset } else { 0 };'''
+to = '''                let from = 0;'''
+
+[[mutant]]
+name = "api: an element whose parent is in it"
+file = "crates/dom_api_next/src/range.rs"
+from = '''            (!parent_in && !around(node)).then_some(BoxPart::Element(node))'''
+to = '''            (!around(node)).then_some(BoxPart::Element(node))'''
+
+[[mutant]]
+name = "api: a display contents element's own box"
+file = "crates/dom_api_next/src/range.rs"
+from = '''        .is_some_and(|style| style.display == computed_style::Display::Contents);
+    if !contents {'''
+to = '''        .is_some_and(|_| false);
+    if !contents {'''
+
+[[mutant]]
+name = "api: a text's element not told"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    let element = cx.parent(text).map(|parent| cx.node_id(parent));'''
+to = '''    let element = None;'''
+
+[[mutant]]
+name = "dom: upgrading defined elements upgrades nothing"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''            if let Some(definition) = definition {
+                self.enqueue_upgrade_reaction(at, definition);
+            }'''
+to = '''            let _ = definition;'''

@@ -1,0 +1,55 @@
+# Mutation test of step 4c (SVG images as backgrounds):
+# python3 scripts/test.py mutate rfcs/0031-svg/mutants-4c.toml
+test = ["python3", "scripts/test.py", "reftest", "backgrounds/b4-svg.html"]
+timeout = 900
+
+[[mutant]]
+name = "a ratio alone fills the area"
+file = "crates/paint/src/background.rs"
+from = '''                    (None, None, Some(_)) => tile_size(BackgroundSize::Contain, natural, area),'''
+to = '''                    (None, None, Some(_)) => area,'''
+
+[[mutant]]
+name = "a width alone ignores the ratio"
+file = "crates/paint/src/background.rs"
+from = '''                    (Some(w), None, Some(r)) => SizeF::new(w, w / r),'''
+to = '''                    (Some(w), None, Some(_)) => SizeF::new(w, area.height),'''
+test = ["cargo", "test", "-q", "-p", "paint", "--lib", "background"]
+
+[[mutant]]
+name = "a viewBox's ratio wins over a width and a height"
+file = "crates/paint/src/background.rs"
+from = '''                        (Some(w), Some(h)) if w > 0.0 && h > 0.0 => Some(w / h),'''
+to = '''                        (Some(w), Some(h)) if w > 0.0 && h > 0.0 && false => Some(w / h),'''
+
+[[mutant]]
+name = "a tile under a LayoutUnit is drawn"
+file = "crates/paint/src/background.rs"
+from = '''    if tile.width < 1.0 / 64.0 || tile.height < 1.0 / 64.0 {'''
+to = '''    if tile.width <= 0.0 || tile.height <= 0.0 {'''
+test = ["python3", "scripts/test.py", "wpt", "css/css-backgrounds/background-size/vector/tall--contain--height.html"]
+
+[[mutant]]
+name = "an SVG background is laid out at its natural size"
+file = "crates/paint/src/background.rs"
+from = '''            let (record, size) = images.svg_image(image, tile_rect.size(), client)?;'''
+to = '''            let (record, size) = images.svg_image(image, SizeF::new(300.0, 150.0), client)?;'''
+
+[[mutant]]
+name = "a record isn't scaled to its tile"
+file = "crates/raster/src/skia_backend.rs"
+from = '''                    canvas.scale((tile.width / size.width, tile.height / size.height));'''
+to = '''                    let _ = size;'''
+
+[[mutant]]
+name = "a background's URL isn't taken for an SVG image"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                ImageState::Svg { image, natural } => Some((*image, *natural)),'''
+to = '''                ImageState::Svg { .. } => None,'''
+
+[[mutant]]
+name = "what asked for an SVG image isn't painted again"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                self.paint_controller.invalidate(clients);'''
+to = '''                let _ = clients;'''
+test = ["python3", "scripts/test.py", "reftest", "backgrounds/b4-svg.html", "images/m7-svg.html"]

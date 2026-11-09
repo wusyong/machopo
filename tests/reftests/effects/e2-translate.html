@@ -1,0 +1,6 @@
+<!DOCTYPE html>
+<title>E2: translate() moves the box without moving the layout, and paints over later siblings</title>
+<link rel="match" href="e2-translate-ref.html">
+<style>html, body { margin: 0 }</style>
+<div style="width: 50px; height: 50px; background-color: green; transform: translate(30px, 20px)"></div>
+<div style="width: 50px; height: 50px; background-color: blue"></div>

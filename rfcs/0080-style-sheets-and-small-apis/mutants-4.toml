@@ -1,0 +1,259 @@
+# Stage 4: the CSSOM of the document's sheets (`sheet`, `styleSheets`, the
+# edits the element takes, origin-clean, titles), the sets of rules each
+# large sheet has and their features, and an edit resolving only its
+# rule's `url()`s.
+test = ["sh", "-c", "cargo test -q -p dom --test it style_elements && cargo test -q -p style --test it -- invalidation:: stylesheet:: && cargo test -q -p dom_js --test it style_sheets:: && cargo test -q -p shell --test it -- style_sheets::"]
+timeout = 2400
+
+# --- dom: the element's sheet and script's object ---
+
+[[mutant]]
+name = "the old object still the sheet when it is made again"
+file = "crates/dom/src/scope.rs"
+from = '''            crate::version::bump(&mut sheet.generation);'''
+to = '''            let _ = &sheet.generation;'''
+
+[[mutant]]
+name = "any object of the element its sheet"
+file = "crates/dom/src/style_element.rs"
+from = '''            .is_some_and(|data| data.sheet.borrow().generation == owner.generation);'''
+to = '''            .is_some();'''
+
+[[mutant]]
+name = "an edit through the object not the element's"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''        if let Some(element) = self.read().css_style_sheet_owner_node(sheet) {'''
+to = '''        if let Some(element) = self.read().css_style_sheet_owner_node(sheet).filter(|_| false) {'''
+
+[[mutant]]
+name = "the object's media not the element's"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''                owned.media = Some(object.media.borrow().clone());'''
+to = '''                let _ = &owned.media;'''
+
+[[mutant]]
+name = "the object's disabled not the element's"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''                .set(object.disabled.get());'''
+to = '''                .set(false && object.disabled.get());'''
+
+[[mutant]]
+name = "the element's disabled not the object's"
+file = "crates/dom/src/scope.rs"
+from = '''            object.object().disabled.set(disabled);'''
+to = '''            let _ = object.object();'''
+
+[[mutant]]
+name = "a media attribute not the object's"
+file = "crates/dom/src/style_element.rs"
+from = '''            *object.media.borrow_mut() = new.clone();'''
+to = '''            let _ = object;'''
+
+[[mutant]]
+name = "a title attribute not the object's"
+file = "crates/dom/src/style_element.rs"
+from = '''        *owner.title.borrow_mut() = attribute(element, local_name!("title"));'''
+to = '''        let _ = owner;'''
+
+[[mutant]]
+name = "a title marks the tree scope"
+file = "crates/dom/src/scope.rs"
+from = '''            if !name.is_attr(&local_name!("title")) {'''
+to = '''            if true {'''
+
+[[mutant]]
+name = "a link's rel doesn't make its sheet again"
+file = "crates/dom/src/scope.rs"
+from = '''                    && (name.is_attr(&local_name!("rel"))'''
+to = '''                    && (false'''
+
+[[mutant]]
+name = "a sheet while not connected"
+file = "crates/dom/src/style_element.rs"
+from = '''        of_element && self.shadow_including_root().kind() == NodeKind::Document'''
+to = '''        of_element'''
+
+[[mutant]]
+name = "a link's sheet before it loads"
+file = "crates/dom/src/style_element.rs"
+from = '''                .is_some_and(|data| data.sheet.borrow().linked.is_some())'''
+to = '''                .is_some()'''
+
+[[mutant]]
+name = "no alternate link loaded"
+file = "crates/dom/src/style_element.rs"
+from = '''    if !is_link(node) || !rel_has(node, "stylesheet") || !is_css_type(node) {'''
+to = '''    if !is_link(node) || !rel_has(node, "stylesheet") || rel_has(node, "alternate") || !is_css_type(node) {'''
+
+[[mutant]]
+name = "the list kept whatever the DOM did"
+file = "crates/dom/src/style_element.rs"
+from = '''            .is_some_and(|cache| cache.version == self.dom_tree_version);'''
+to = '''            .is_some();'''
+
+[[mutant]]
+name = "the list found again each time"
+file = "crates/dom/src/style_element.rs"
+from = '''            .is_some_and(|cache| cache.version == self.dom_tree_version);'''
+to = '''            .is_some_and(|_| false);'''
+
+[[mutant]]
+name = "a link loading leaves the lists as they were"
+file = "crates/dom/src/style_element.rs"
+from = '''        // It is in `styleSheets` now.
+        crate::version::bump(self.dom_tree_version);'''
+to = '''        // It is in `styleSheets` now.
+        let _ = &self.dom_tree_version;'''
+
+# --- dom_api ---
+
+[[mutant]]
+name = "any sheet's rules readable"
+file = "crates/dom_api/src/css_style_sheet.rs"
+from = '''    if cx.read().css_style_sheet_origin_clean(this) {'''
+to = '''    if true {'''
+
+[[mutant]]
+name = "an element's sheet replaceable"
+file = "crates/dom_api/src/css_style_sheet.rs"
+from = '''    if cx.read().css_style_sheet_constructed(this) {'''
+to = '''    if true {'''
+
+[[mutant]]
+name = "an element's sheet adoptable"
+file = "crates/dom_api/src/css_style_sheet.rs"
+from = '''        if !read.css_style_sheet_constructed(&sheet) {'''
+to = '''        if false {'''
+
+# --- renderer ---
+
+[[mutant]]
+name = "another origin's sheet origin-clean"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                    Ok(response) => response.tainting != ResponseTainting::Opaque,'''
+to = '''                    Ok(_) => true,'''
+
+[[mutant]]
+name = "crossorigin not by CORS"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                        request.mode = RequestMode::Cors;'''
+to = '''                        let _ = RequestMode::Cors;'''
+
+[[mutant]]
+name = "a sheet that failed has none"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                loaded_sheet = Some((link, css, base, asked, origin_clean));'''
+to = '''                if !css.is_empty() {
+                    loaded_sheet = Some((link, css, base, asked, origin_clean));
+                }'''
+
+[[mutant]]
+name = "an alternate sheet keeps scripts waiting"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                    let blocking = !dom::is_alternate_stylesheet(node);'''
+to = '''                    let blocking = true;'''
+
+# --- style: titles ---
+
+[[mutant]]
+name = "no preferred set"
+file = "crates/style/src/lib.rs"
+from = '''            if preferred.is_none() && !alternate {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "an alternate sheet gives the preferred set"
+file = "crates/style/src/lib.rs"
+from = '''            if preferred.is_none() && !alternate {'''
+to = '''            if preferred.is_none() {'''
+
+[[mutant]]
+name = "an untitled alternate sheet applies"
+file = "crates/style/src/lib.rs"
+from = '''        } else if alternate {
+            continue;
+        }'''
+to = '''        }'''
+
+[[mutant]]
+name = "a disabled sheet applies"
+file = "crates/style/src/lib.rs"
+from = '''    for node in dom::style_sheet_owners(document) {
+        if node.style_sheet_disabled() {'''
+to = '''    for node in dom::style_sheet_owners(document) {
+        if false {'''
+
+# --- style: sets ---
+
+[[mutant]]
+name = "every sheet small"
+file = "crates/style/src/lib.rs"
+from = '''    let large = |sheet: &DocumentSheet| sheet.contents.rules().len() >= LARGE_SHEET_RULES;'''
+to = '''    let large = |sheet: &DocumentSheet| sheet.contents.rules().len() >= usize::MAX;'''
+
+[[mutant]]
+name = "a run's set never taken again"
+file = "crates/style/src/lib.rs"
+from = '''                old.len() == run.len()
+                    && old'''
+to = '''                old.len() == run.len() + 1
+                    && old'''
+
+[[mutant]]
+name = "a run's set taken again whatever its media"
+file = "crates/style/src/lib.rs"
+from = '''                    && !set.did_media_query_results_change(environment)
+            });'''
+to = '''                    && !set.depends_on_media() | true
+            });'''
+
+[[mutant]]
+name = "a large sheet's media not looked at"
+file = "crates/style/src/lib.rs"
+from = '''            let matched = sheet.applies(environment);
+            SheetGroup {'''
+to = '''            let matched = true;
+            SheetGroup {'''
+
+[[mutant]]
+name = "a large sheet's media change not seen"
+file = "crates/style/src/lib.rs"
+from = '''            sheets[self.sheets.start].applies(environment) != matched'''
+to = '''            false && matched'''
+
+[[mutant]]
+name = "a set's features worked out each time"
+file = "crates/style/src/lib.rs"
+from = '''        if let Some((_, features)) = self.sets.get(&key) {'''
+to = '''        if let Some((_, features)) = self.sets.get(&key).filter(|_| false) {'''
+
+[[mutant]]
+name = "only the first set's features"
+file = "crates/style/src/lib.rs"
+from = '''                for (_, features) in many {
+                    merged.merge(&features.features);
+                }'''
+to = '''                merged.merge(&many[0].1.features);'''
+
+[[mutant]]
+name = "the descendant sets not merged"
+file = "crates/style/src/lib.rs"
+from = '''        self.descendants.merge(&other.descendants);'''
+to = '''        let _ = &other.descendants;'''
+
+[[mutant]]
+name = "only the first set's dependencies"
+file = "crates/style/src/lib.rs"
+from = '''            for (all, of_set) in dependencies.iter_mut().zip(features.dependencies) {
+                *all = all.or(of_set);
+            }'''
+to = '''            let _ = features;'''
+
+# --- css ---
+
+[[mutant]]
+name = "an edit resolves every rule's url()s"
+file = "crates/css/src/stylesheet.rs"
+from = '''            resolve_rule_urls(&mut rules[index..=index], base);'''
+to = '''            let _ = index;
+            resolve_rule_urls(&mut rules, base);'''

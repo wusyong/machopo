@@ -1,0 +1,325 @@
+# Mutation test of stage 1 (background images and gradients):
+# python3 scripts/test.py mutate rfcs/0026-backgrounds-borders/mutants-1.toml
+test = ["cargo", "test", "-q", "-p", "style"]
+timeout = 900
+
+# --- style -------------------------------------------------------------
+
+[[mutant]]
+name = "lists don't repeat to the number of images"
+file = "crates/computed_style/src/lib.rs"
+from = '''list[i % list.len()].clone()'''
+to = '''list[0].clone()'''
+
+[[mutant]]
+name = "one box in the shorthand isn't both"
+file = "crates/style/src/properties.rs"
+from = '''|l| l.boxes.last().copied(),'''
+to = '''|l| l.boxes.get(1).copied(),'''
+
+[[mutant]]
+name = "a color in any layer"
+file = "crates/style/src/properties.rs"
+from = '''if layer.color.is_some() && !last {'''
+to = '''if false {'''
+
+[[mutant]]
+name = "a length from the end side counts from the start"
+file = "crates/style/src/background.rs"
+from = '''                px => PositionComponent {
+                    from_end: true,'''
+to = '''                px => PositionComponent {
+                    from_end: false,'''
+
+[[mutant]]
+name = "a percentage from the end side isn't flipped"
+file = "crates/style/src/background.rs"
+from = '''start(ComputedLengthPercentage::Percent(100.0 - percent))'''
+to = '''start(ComputedLengthPercentage::Percent(percent))'''
+
+[[mutant]]
+name = "url() isn't resolved"
+file = "crates/style/src/background.rs"
+from = '''match cx.base_url.and_then(|base| base.join(url).ok()) {'''
+to = '''match None::<url::Url> {'''
+
+[[mutant]]
+name = "a linked sheet's url() resolves against the document"
+file = "crates/style/src/lib.rs"
+from = '''let base = sheet.base_url.as_ref().or(base_url);'''
+to = '''let base = base_url;'''
+
+[[mutant]]
+name = "a new base URL restyles nothing"
+file = "crates/style/src/lib.rs"
+from = '''            || self.base_url_changed.replace(false)'''
+to = '''            || false'''
+
+[[mutant]]
+name = "repeat repeat isn't one keyword"
+file = "crates/style/src/background.rs"
+from = '''        (x, y) if x == y => dest.push_str(repeat_name(x)),'''
+to = '''        (x, y) if false && x == y => dest.push_str(repeat_name(x)),'''
+
+[[mutant]]
+name = "a size without its position"
+file = "crates/style/src/serialize.rs"
+from = '''        if position_written || size_written {'''
+to = '''        if position_written {'''
+
+[[mutant]]
+name = "the computed color in the first layer"
+file = "crates/style/src/serialize.rs"
+from = '''        if i == n - 1 {
+            text.push_str(&value_text(lists.color));'''
+to = '''        if i == 0 {
+            text.push_str(&value_text(lists.color));'''
+
+[[mutant]]
+name = "the default direction written"
+file = "crates/style/src/background.rs"
+from = '''        GradientKind::Linear(LinearDirection::To(None, Some(VerticalSide::Bottom))) => {}'''
+to = '''        GradientKind::Linear(LinearDirection::To(None, Some(VerticalSide::Top))) => {}'''
+
+[[mutant]]
+name = "initial values written in the shorthand"
+file = "crates/style/src/serialize.rs"
+from = '''        let written = |_: usize, initial: bool| !initial;'''
+to = '''        let written = |_: usize, _initial: bool| true;'''
+
+# --- layout ------------------------------------------------------------
+
+[[mutant]]
+name = "a background image change lays out again"
+file = "crates/layout/src/lib.rs"
+from = '''            background_image: old.background_image.clone(),
+'''
+to = '''
+'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "update"]
+
+# --- paint -------------------------------------------------------------
+
+[[mutant]]
+name = "the color clipped as the top layer"
+file = "crates/paint/src/lib.rs"
+from = '''let bottom = layers.last().expect("at least one layer");'''
+to = '''let bottom = layers.first().expect("at least one layer");'''
+test = ["cargo", "test", "-q", "-p", "paint"]
+
+[[mutant]]
+name = "layers top first"
+file = "crates/paint/src/lib.rs"
+from = '''        for layer in layers.iter().rev() {'''
+to = '''        for layer in layers.iter() {'''
+test = ["cargo", "test", "-q", "-p", "paint"]
+
+[[mutant]]
+name = "the root's background only in its box"
+file = "crates/paint/src/lib.rs"
+from = '''                Some(RectF::new(0.0, 0.0, document_size.width, document_size.height)),
+                state,
+            );
+            self.skip_background = source.node;'''
+to = '''                None,
+                state,
+            );
+            self.skip_background = source.node;'''
+test = ["cargo", "test", "-q", "-p", "paint"]
+
+[[mutant]]
+name = "a root with only an image isn't the canvas's"
+file = "crates/paint/src/lib.rs"
+from = '''                    || root.style.has_background_image()'''
+to = '''                    || false'''
+test = ["cargo", "test", "-q", "-p", "paint"]
+
+[[mutant]]
+name = "a tile that doesn't repeat across fills the area"
+file = "crates/paint/src/background.rs"
+from = '''    if !x.repeats {
+        rect = intersect_x(rect, tile_rect.x, tile_rect.right());
+    }'''
+to = '''    if false {
+        rect = intersect_x(rect, tile_rect.x, tile_rect.right());
+    }'''
+test = ["cargo", "test", "-q", "-p", "paint"]
+
+[[mutant]]
+name = "fractional tiles"
+file = "crates/paint/src/background.rs"
+from = '''    let length = |v: f32| (v * dsf).round().max(1.0) / dsf;'''
+to = '''    let length = |v: f32| v;'''
+test = ["cargo", "test", "-q", "-p", "paint"]
+
+[[mutant]]
+name = "space shares the room among the tiles, not the gaps"
+file = "crates/paint/src/background.rs"
+from = '''spacing: (extent - count * size) / (count - 1.0),'''
+to = '''spacing: (extent - count * size) / count,'''
+test = ["cargo", "test", "-q", "-p", "paint"]
+
+[[mutant]]
+name = "round rounds down"
+file = "crates/paint/src/background.rs"
+from = '''extent / (extent / size).round().max(1.0)'''
+to = '''extent / (extent / size).floor().max(1.0)'''
+test = ["cargo", "test", "-q", "-p", "paint"]
+
+[[mutant]]
+name = "round on one axis loses the ratio"
+file = "crates/paint/src/background.rs"
+from = '''            tile.height *= width / tile.width;'''
+to = '''            tile.height *= 1.0;'''
+test = ["cargo", "test", "-q", "-p", "paint"]
+
+[[mutant]]
+name = "cover is contain"
+file = "crates/paint/src/background.rs"
+from = '''            let scale = if size == BackgroundSize::Cover {'''
+to = '''            let scale = if size != BackgroundSize::Cover {'''
+test = ["cargo", "test", "-q", "-p", "paint"]
+
+[[mutant]]
+name = "a corner's line along the diagonal"
+file = "crates/paint/src/background.rs"
+from = '''(sx * f64::from(h), sy * f64::from(w))'''
+to = '''(sx * f64::from(w), sy * f64::from(h))'''
+test = ["cargo", "test", "-q", "-p", "paint"]
+
+[[mutant]]
+name = "a hint is the middle"
+file = "crates/paint/src/background.rs"
+from = '''    if (h - 0.5).abs() < 1e-6 {'''
+to = '''    if true {'''
+test = ["cargo", "test", "-q", "-p", "paint"]
+
+[[mutant]]
+name = "a gradient's line shrinks to its stops"
+file = "crates/paint/src/background.rs"
+from = '''        first = first.min(0.0);'''
+to = '''        first = first.min(first);'''
+test = ["cargo", "test", "-q", "-p", "paint"]
+
+[[mutant]]
+name = "a degenerate repeating gradient is its first color"
+file = "crates/paint/src/background.rs"
+from = '''        let color = placed[placed.len() - 1].1;'''
+to = '''        let color = placed[0].1;'''
+test = ["cargo", "test", "-q", "-p", "paint"]
+
+[[mutant]]
+name = "rings start inside the center"
+file = "crates/paint/src/background.rs"
+from = '''            if first < 0.0 {
+                let shift'''
+to = '''            if first < -1e9 {
+                let shift'''
+test = ["cargo", "test", "-q", "-p", "paint"]
+
+[[mutant]]
+name = "the padding box from unsnapped borders"
+file = "crates/paint/src/lib.rs"
+from = '''        let w = |width: f32| snap_border_width(width, dsf);
+        let border = Sides {'''
+to = '''        let w = |width: f32| width;
+        let border = Sides {'''
+test = ["cargo", "test", "-q", "-p", "paint"]
+
+[[mutant]]
+name = "an invalidated box takes its items from the last paint"
+file = "crates/paint/src/paint_controller.rs"
+from = '''        if self.is_invalidated(fragment) {
+            return None;
+        }'''
+to = '''        if false && self.is_invalidated(fragment) {
+            return None;
+        }'''
+test = ["cargo", "test", "-q", "-p", "paint"]
+
+[[mutant]]
+name = "an invalidated inline element's block isn't painted anew"
+file = "crates/paint/src/paint_controller.rs"
+from = '''            || fragment.lines.iter().any(|line| {'''
+to = '''            || false && fragment.lines.iter().any(|line| {'''
+test = ["cargo", "test", "-q", "-p", "paint"]
+
+# --- raster ------------------------------------------------------------
+
+[[mutant]]
+name = "a repeating tile is clamped"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        if repeats {
+            sk::TileMode::Repeat'''
+to = '''        if repeats {
+            sk::TileMode::Clamp'''
+test = ["cargo", "test", "-q", "-p", "raster"]
+
+[[mutant]]
+name = "no gaps between spaced tiles"
+file = "crates/raster/src/skia_backend.rs"
+from = '''                tile.width + shader.spacing.width,'''
+to = '''                tile.width,'''
+test = ["cargo", "test", "-q", "-p", "raster"]
+
+[[mutant]]
+name = "a circle for every ellipse"
+file = "crates/raster/src/skia_backend.rs"
+from = '''                    &sk::Matrix::scale((1.0, y_scale)),'''
+to = '''                    &sk::Matrix::scale((1.0, 1.0)),'''
+test = ["cargo", "test", "-q", "-p", "raster"]
+
+[[mutant]]
+name = "colors interpolated unpremultiplied"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        in_premul: interpolation::InPremul::Yes,'''
+to = '''        in_premul: interpolation::InPremul::No,'''
+test = ["cargo", "test", "-q", "-p", "raster"]
+
+# --- renderer ----------------------------------------------------------
+
+[[mutant]]
+name = "background images aren't loaded"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        for url in background_image_urls(scope, &self.document) {'''
+to = '''        for url in Vec::<String>::new() {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "network", "background"]
+
+[[mutant]]
+name = "a hidden element's background image loads"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        if style.display == computed_style::Display::None {
+            continue;
+        }'''
+to = '''        if false {
+            continue;
+        }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "network", "background"]
+
+[[mutant]]
+name = "load doesn't wait for a stylesheet's background images"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            && !self.background_images_unchecked'''
+to = '''            && true'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "network", "background"]
+
+[[mutant]]
+name = "a loaded background image doesn't repaint"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                        self.background_images_loaded.extend(showing);'''
+to = '''                        drop(showing);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "network", "background"]
+
+[[mutant]]
+name = "a linked sheet has no URL"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                            .insert(link, css.into(), Url::parse(&url).ok());'''
+to = '''                            .insert(link, css.into(), None);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "network", "background"]
+
+[[mutant]]
+name = "the style engine never learns the base URL"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            self.style_engine.set_base_url(Some(self.base_url.clone()));'''
+to = '''            self.style_engine.set_base_url(None);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "geometry", "background"]

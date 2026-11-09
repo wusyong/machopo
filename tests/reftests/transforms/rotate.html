@@ -1,0 +1,7 @@
+<!DOCTYPE html>
+<title>rotate() turns about the center of the border box; rotateZ() is the same turn</title>
+<link rel="match" href="rotate-ref.html">
+<style>html, body { margin: 0 } div { position: absolute; width: 100px; height: 40px; background-color: green }</style>
+<div style="left: 50px; top: 50px; transform: rotate(90deg)"></div>
+<div style="left: 250px; top: 50px; transform: rotateZ(-0.25turn)"></div>
+<div style="left: 450px; top: 50px; transform: rotate(180deg) rotate(0.5turn)"></div>

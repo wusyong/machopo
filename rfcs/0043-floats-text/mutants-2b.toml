@@ -1,0 +1,110 @@
+# Mutation test of stage 2b: `InlineContent` on parley's `TreeBuilder`, the
+# spans nested as the inline elements are (2026-10-13):
+# python3 scripts/test.py mutate rfcs/0043-floats-text/mutants-2b.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "inline::"]
+timeout = 900
+
+[[mutant]]
+name = "the root is parley's default style"
+file = "crates/layout/src/text.rs"
+from = '''        let root = text_style(container, 0);'''
+to = '''        let root = TextStyle::default();'''
+
+[[mutant]]
+name = "an element's span isn't aligned"
+file = "crates/layout/src/text.rs"
+from = '''            properties.push(StyleProperty::VerticalAlign(element_aligns[element]));'''
+to = ''''''
+
+[[mutant]]
+name = "a run's span shifts again"
+file = "crates/layout/src/text.rs"
+from = '''            StyleProperty::Brush(index as u32),
+            StyleProperty::VerticalAlign(VerticalAlign::BASELINE),'''
+to = '''            StyleProperty::Brush(index as u32),'''
+
+[[mutant]]
+name = "the elements open before this content aren't entered"
+file = "crates/layout/src/text.rs"
+from = '''        for &element in &open_at_start {
+            element_span(&mut builder, element);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the elements open before this content nest the other way"
+file = "crates/layout/src/text.rs"
+from = '''                    open_at_start.insert(0, elements.len());'''
+to = '''                    open_at_start.push(elements.len());'''
+
+[[mutant]]
+name = "an element's span goes on after its end"
+file = "crates/layout/src/text.rs"
+from = '''            if !start {
+                builder.pop_style_span();
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "the text is all pushed before the edges and atomic inlines"
+file = "crates/layout/src/text.rs"
+from = '''            push_runs(
+                &mut builder,
+                &text,
+                &mut runs,
+                byte_index,'''
+to = '''            push_runs(
+                &mut builder,
+                &text,
+                &mut runs,
+                usize::MAX,'''
+
+[[mutant]]
+name = "an atomic inline isn't aligned"
+file = "crates/layout/src/text.rs"
+from = '''                        vertical_align: atomic_aligns[atomics.len()],'''
+to = '''                        vertical_align: VerticalAlign::BASELINE,'''
+
+[[mutant]]
+name = "letter-spacing: normal inherits the parent span's"
+file = "crates/layout/src/text.rs"
+from = '''        StyleProperty::LetterSpacing(s.letter_spacing),
+        StyleProperty::WordSpacing(s.word_spacing),
+        StyleProperty::Brush(s.brush),
+    ]
+}'''
+to = '''        StyleProperty::LetterSpacing(s.letter_spacing),
+        StyleProperty::WordSpacing(s.word_spacing),
+        StyleProperty::Brush(s.brush),
+    ]
+    .into_iter()
+    .filter(|p| !matches!(p, StyleProperty::LetterSpacing(0.0)))
+    .collect()
+}'''
+
+[[mutant]]
+name = "word-spacing: normal inherits the parent span's"
+file = "crates/layout/src/text.rs"
+from = '''        StyleProperty::LetterSpacing(s.letter_spacing),
+        StyleProperty::WordSpacing(s.word_spacing),
+        StyleProperty::Brush(s.brush),
+    ]
+}'''
+to = '''        StyleProperty::LetterSpacing(s.letter_spacing),
+        StyleProperty::WordSpacing(s.word_spacing),
+        StyleProperty::Brush(s.brush),
+    ]
+    .into_iter()
+    .filter(|p| !matches!(p, StyleProperty::WordSpacing(0.0)))
+    .collect()
+}'''
+
+[[mutant]]
+name = "the edges don't keep to their content"
+file = "crates/layout/src/text.rs"
+from = '''                line_break: if start {
+                    InlineBoxLineBreak::KeepWithNext
+                } else {
+                    InlineBoxLineBreak::KeepWithPrevious
+                },'''
+to = '''                line_break: InlineBoxLineBreak::Auto,'''

@@ -1,0 +1,189 @@
+# The binding's typed paths visited by kind: the table's expansion picks
+# each member's `TypedVisitor` method, the binding's visitors take only
+# their kinds, cross-origin members are the table's `#[cross_origin]`.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_api_next_macros && cargo test -q -p dom_api_next --test it && cargo test -q -p dom_js_next --test it"]
+timeout = 1500
+
+[[mutant]]
+name = "macro: a setter visited as a getter"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''                            } else {
+                                "setter"
+                            },'''
+to = '''                            } else {
+                                "getter"
+                            },'''
+
+[[mutant]]
+name = "macro: a static attribute visited as a regular getter"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''                        if *is_static {
+                            "static_member"
+                        } else if cross_origin.0 {'''
+to = '''                        if false {
+                            "static_member"
+                        } else if cross_origin.0 {'''
+
+[[mutant]]
+name = "macro: no cross-origin getter"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''                        } else if cross_origin.0 {'''
+to = '''                        } else if false {'''
+
+[[mutant]]
+name = "macro: no cross-origin setter"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''                            if cross_origin.1 {'''
+to = '''                            if false {'''
+
+[[mutant]]
+name = "macro: bare #[cross_origin] marks nothing"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''                    syn::Meta::Path(_) => (true, false),'''
+to = '''                    syn::Meta::Path(_) => (false, false),'''
+
+[[mutant]]
+name = "macro: no cross-origin method"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''                } else if *cross_origin {
+                    "cross_origin"'''
+to = '''                } else if false {
+                    "cross_origin"'''
+
+[[mutant]]
+name = "macro: pairs visited as a method"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''                } else if *pairs {
+                    "pairs"'''
+to = '''                } else if false {
+                    "pairs"'''
+
+[[mutant]]
+name = "macro: named visited as a method"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''                } else if named.is_some() {
+                    "named"'''
+to = '''                } else if false {
+                    "named"'''
+
+[[mutant]]
+name = "macro: observable visited as a method"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''                } else if observable.is_some() {
+                    "observable"'''
+to = '''                } else if false {
+                    "observable"'''
+
+[[mutant]]
+name = "macro: indexed visited as a method"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''                } else if *indexed {
+                    "indexed"'''
+to = '''                } else if false {
+                    "indexed"'''
+
+[[mutant]]
+name = "macro: a static method visited as a regular one"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''                } else if *is_static {
+                    "static_member"'''
+to = '''                } else if false {
+                    "static_member"'''
+
+[[mutant]]
+name = "macro: a cross-origin static attribute allowed"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''            if (cross_origin.0 || cross_origin.1) && is_static'''
+to = '''            if false && is_static'''
+
+[[mutant]]
+name = "macro: a cross-origin setter without a setter allowed"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''                || cross_origin.1 && set.is_none()'''
+to = '''                || false'''
+
+[[mutant]]
+name = "macro: a cross-origin special method allowed"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''            if cross_origin
+                && (is_static'''
+to = '''            if false
+                && (is_static'''
+
+[[mutant]]
+name = "table: Location.replace not cross-origin"
+file = "crates/dom_api_next/src/interfaces.rs"
+from = '''        #[cross_origin]
+        method replace(url: NavigationUrl) = location::replace;'''
+to = '''        method replace(url: NavigationUrl) = location::replace;'''
+
+[[mutant]]
+name = "table: Window.location's setter not cross-origin"
+file = "crates/dom_api_next/src/interfaces.rs"
+from = '''        #[cross_origin(getter, setter)]'''
+to = '''        #[cross_origin]'''
+
+[[mutant]]
+name = "binding: a cross-origin member's receiver checked"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''        self.function::<M, CrossOriginMember<M>>(false);'''
+to = '''        self.function::<M, CrossOriginMember<M>>(true);'''
+
+[[mutant]]
+name = "binding: a regular member's receiver not checked"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''    fn method<M: TypedMember>(&mut self) {
+        self.function::<M, Member<M>>(true);'''
+to = '''    fn method<M: TypedMember>(&mut self) {
+        self.function::<M, Member<M>>(false);'''
+
+[[mutant]]
+name = "binding: a cross-origin member's callback the regular one"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''        self.function::<M, CrossOriginMember<M>>(false);'''
+to = '''        self.function::<M, Member<M>>(false);'''
+
+[[mutant]]
+name = "binding: a named indexed getter not on the prototype"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''        if !INTERFACES[M::INTERFACE].members[M::MEMBER].name.is_empty() {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "binding: an anonymous indexed getter on the prototype"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''        if !INTERFACES[M::INTERFACE].members[M::MEMBER].name.is_empty() {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "binding: another interface's indexed getter installed"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''    fn indexed<M: TypedMember>(&mut self) {
+        if !self.takes::<M>() {
+            return;
+        }'''
+to = '''    fn indexed<M: TypedMember>(&mut self) {'''
+
+[[mutant]]
+name = "binding: an ancestor's every member on a descendant's objects"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''            && (!self.only_unforgeable || INTERFACES[M::INTERFACE].members[M::MEMBER].unforgeable)'''
+to = '''            && true'''
+
+[[mutant]]
+name = "binding: no inherited indexed getter"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''        if M::INTERFACE == self.ancestor {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "binding: the legacy caller for every interface's item"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''        if const { INTERFACES[M::INTERFACE].is_html_dda }'''
+to = '''        if true'''
+
+[[mutant]]
+name = "binding: no legacy caller"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''        if const { INTERFACES[M::INTERFACE].is_html_dda }'''
+to = '''        if false'''

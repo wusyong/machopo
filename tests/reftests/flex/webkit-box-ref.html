@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<title>-webkit-box: reference</title>
+<style>
+  html, body { margin: 0 }
+  .box { position: relative; width: 300px; height: 100px; margin-bottom: 10px;
+         background-color: yellow }
+  .box div { position: absolute; background-color: green }
+</style>
+<div class="box">
+  <div style="left: 0; top: 0; width: 100px; height: 100px"></div>
+  <div style="left: 100px; top: 0; width: 180px; height: 100px; background-color: blue"></div>
+  <div style="left: 280px; top: 0; width: 20px; height: 100px"></div>
+</div>
+<div class="box">
+  <div style="left: 260px; top: 40px; width: 20px; height: 20px"></div>
+  <div style="left: 280px; top: 40px; width: 20px; height: 20px; background-color: blue"></div>
+</div>
+<div class="box">
+  <div style="left: 0; top: 0; width: 20px; height: 20px"></div>
+  <div style="left: 0; top: 80px; width: 20px; height: 20px; background-color: blue"></div>
+</div>

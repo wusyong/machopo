@@ -1,0 +1,130 @@
+# Stage 1e: V8's side of the new DOM's binding but wrappers: bindings'
+# isolate state and external ASCII strings, dom_js_next's strings and
+# their cache, and bench.py calls counting store-to-load forwarding
+# conflicts. Each test command in a scope of at most 24 GB
+# (docs/testing.md); the baselines take seconds, plus a relink of V8.
+timeout = 300
+
+[[mutant]]
+name = "a state of another type is borrowed"
+file = "crates/bindings/src/isolate_state.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "external_string", "isolate_state"]
+from = '''    if slot.type_id != TypeId::of::<T>() {
+        return None;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a state may be set twice"
+file = "crates/bindings/src/isolate_state.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "external_string", "isolate_state"]
+from = '''    assert!(
+        isolate.get_data(STATE_SLOT).is_null(),
+        "an isolate's state is set once"
+    );'''
+to = ''''''
+
+[[mutant]]
+name = "dropping the state leaves it in the slot"
+file = "crates/bindings/src/isolate_state.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "external_string", "isolate_state"]
+from = '''    isolate.set_data(STATE_SLOT, ptr::null_mut());
+    // SAFETY: what `set_isolate_state` boxed'''
+to = '''    // SAFETY: what `set_isolate_state` boxed'''
+
+[[mutant]]
+name = "V8's reference is never released"
+file = "crates/bindings/src/external_string.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "external_string", "isolate_state"]
+from = '''        drop(unsafe { Arc::from_raw(text) });'''
+to = '''        std::mem::forget(unsafe { Arc::from_raw(text) });'''
+
+[[mutant]]
+name = "non-ASCII is made external"
+file = "crates/bindings/src/external_string.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "external_string", "isolate_state"]
+from = '''    assert!(text.is_ascii(), "an external one-byte string is ASCII");'''
+to = ''''''
+
+[[mutant]]
+name = "an ASCII string is copied"
+file = "crates/dom_js_next/src/strings.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''    match string.shared_ascii() {'''
+to = '''    match None::<std::sync::Arc<str>> {'''
+
+[[mutant]]
+name = "the cache never finds a string"
+file = "crates/dom_js_next/src/strings.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''        if let Some(local) = self
+            .entries
+            .borrow()
+            .get(&key)
+            .and_then(|entry| entry.v8.to_local(scope))
+        {
+            return Some(local);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a collected string's entry isn't marked dead"
+file = "crates/dom_js_next/src/strings.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''                if let Some(dead) = dead.upgrade() {
+                    dead.borrow_mut().push(key);
+                }'''
+to = '''                let _ = (dead, key);'''
+
+[[mutant]]
+name = "dead entries stay"
+file = "crates/dom_js_next/src/strings.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''            if entries.get(&key).is_some_and(|entry| entry.v8.is_empty()) {
+                entries.remove(&key);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "a dead key drops the entry made again"
+file = "crates/dom_js_next/src/strings.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''            if entries.get(&key).is_some_and(|entry| entry.v8.is_empty()) {'''
+to = '''            if entries.contains_key(&key) {'''
+
+[[mutant]]
+name = "a TypeError is an Error"
+file = "crates/dom_js_next/src/strings.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''    let error = v8::Exception::type_error(scope, message);'''
+to = '''    let error = v8::Exception::error(scope, message);'''
+
+[[mutant]]
+name = "the conflicts' event isn't stlf"
+file = "scripts/bench/calls/calls.py"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "python3", "scripts/bench/calls/calls_test.py"]
+from = '''        if stlf is not None and event == stlf:
+            event = "stlf"'''
+to = '''        if False:
+            event = "stlf"'''
+
+[[mutant]]
+name = "an event perf doesn't list is used"
+file = "scripts/bench/calls/calls.py"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "python3", "scripts/bench/calls/calls_test.py"]
+from = '''    return event if event in listed else None'''
+to = '''    return event'''
+
+[[mutant]]
+name = "the report leaves the conflicts out"
+file = "scripts/bench/calls/calls.py"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "python3", "scripts/bench/calls/calls_test.py"]
+from = '''            stlf = f" [{got['stlf']:.2f}]" if got and "stlf" in got else ""'''
+to = '''            stlf = ""'''
+
+[[mutant]]
+name = "conflicts some runs didn't count are per call"
+file = "scripts/bench/calls/calls.py"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "python3", "scripts/bench/calls/calls_test.py"]
+from = '''    events = [e for e in (*EVENTS, "stlf") if all(e in run for runs in counts.values() for run in runs)]'''
+to = '''    events = [e for e in (*EVENTS, "stlf") if any(e in run for runs in counts.values() for run in runs)]'''

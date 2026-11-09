@@ -1,0 +1,209 @@
+# Stage 4g-1b-1: on the new DOM, srcset, sizes, <picture> and <source> (selected in the
+# engine's microtask against the frame's viewport), the environment's changes, a
+# picture's relevant mutations, a loading image taken at once.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it images && cargo test -q -p dom_api_next --test it images && cargo test -q -p dom_js_next --test it images"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: srcset's source taken at once"
+file = "crates/dom_next/src/image.rs"
+from = '''        let selected = if responsive {
+            None
+        } else {'''
+to = '''        let selected = if false {
+            None
+        } else {'''
+
+[[mutant]]
+name = "dom: srcset without src cleared at once"
+file = "crates/dom_next/src/image.rs"
+from = '''        if !responsive && self.image_source(element).is_none() {'''
+to = '''        if self.image_source(element).is_none() {'''
+
+[[mutant]]
+name = "dom: a loading image not taken at once"
+file = "crates/dom_next/src/image.rs"
+from = '''selected.clone().filter(|url| self.is_image_loading(url))'''
+to = '''selected.clone().filter(|_| false)'''
+
+[[mutant]]
+name = "dom: a waiting current replaced"
+file = "crates/dom_next/src/image.rs"
+from = '''                if waiting {
+                    return;
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an available current replaced"
+file = "crates/dom_next/src/image.rs"
+from = '''                if let Some(rejected) = kept {'''
+to = '''                if let Some(rejected) = kept.filter(|_| false) {'''
+
+[[mutant]]
+name = "dom: the density not kept"
+file = "crates/dom_next/src/image.rs"
+from = '''                request.density = density;
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: the density not applied"
+file = "crates/dom_next/src/image.rs"
+from = '''        if self.density == 1.0 {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "dom: another density changes nothing"
+file = "crates/dom_next/src/image.rs"
+from = '''            Some(std::mem::replace(&mut current.density, density) != density)'''
+to = '''            Some(false)'''
+
+[[mutant]]
+name = "dom: not listed for the environment"
+file = "crates/dom_next/src/image.rs"
+from = '''            self.list_responsive_image(loader, element);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: another document's listed"
+file = "crates/dom_next/src/image.rs"
+from = '''                Gc::ptr_eq(self.document_of(element), document)
+                    && '''
+to = '''                '''
+
+[[mutant]]
+name = "dom: a picture isn't responsive"
+file = "crates/dom_next/src/image.rs"
+from = '''.is_some_and(|parent| self.is_html_named(parent, names::local::PICTURE))'''
+to = '''.is_some_and(|parent| self.is_html_named(parent, names::local::DIV))'''
+
+[[mutant]]
+name = "dom: a source's coming changes nothing"
+file = "crates/dom_next/src/image.rs"
+from = '''        } else if self.is_html_named(node, names::local::SOURCE) {
+            self.update_images_after(next);'''
+to = '''        } else if false {
+            self.update_images_after(next);'''
+
+[[mutant]]
+name = "dom: an img's coming into a picture changes nothing"
+file = "crates/dom_next/src/image.rs"
+from = '''        if self.is_img(node) {
+            self.update_image_data(node);
+        } else if'''
+to = '''        if false {
+            self.update_image_data(node);
+        } else if'''
+
+[[mutant]]
+name = "dom: a source's media isn't relevant"
+file = "crates/dom_next/src/image.rs"
+from = '''names::local::SRCSET | names::local::SIZES | names::local::MEDIA | names::local::TYPE'''
+to = '''names::local::SRCSET | names::local::SIZES | names::local::TYPE'''
+
+[[mutant]]
+name = "dom: media isn't a control attribute"
+file = "crates/dom_next/build.rs"
+from = '''        ("media", 32),
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a picture isn't seen"
+file = "crates/dom_next/build.rs"
+from = '''        ("picture", 32),
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a picture's making not looked at"
+file = "crates/dom_next/src/lib.rs"
+from = '''                    | form::LISTED
+                    | form::CONTROL_ATTRIBUTE);'''
+to = '''                    | form::LISTED);'''
+
+[[mutant]]
+name = "api: no picture"
+file = "crates/dom_api_next/src/image.rs"
+from = '''    if let Some(picture) = picture {'''
+to = '''    if let Some(picture) = picture.filter(|_| false) {'''
+
+[[mutant]]
+name = "api: media always matches"
+file = "crates/dom_api_next/src/image.rs"
+from = '''                && !media::MediaQueryList::parse(&query).matches(&environment)'''
+to = '''                && false'''
+
+[[mutant]]
+name = "api: any type"
+file = "crates/dom_api_next/src/image.rs"
+from = '''                if !SUPPORTED_TYPES.contains(&essence.as_str()) {'''
+to = '''                if false {'''
+
+[[mutant]]
+name = "api: sizes ignored"
+file = "crates/dom_api_next/src/image.rs"
+from = '''            .and_then(|sizes| media::source_size(&sizes, &environment))'''
+to = '''            .and_then(|_| None::<f32>)'''
+
+[[mutant]]
+name = "api: the device pixel ratio ignored"
+file = "crates/dom_api_next/src/image.rs"
+from = '''            device_pixel_ratio: viewport.device_scale_factor,'''
+to = '''            device_pixel_ratio: 1.0,'''
+
+[[mutant]]
+name = "api: srcset not selected"
+file = "crates/dom_api_next/src/image.rs"
+from = '''            let selected = if cx.image_uses_srcset_or_picture(element) {'''
+to = '''            let selected = if false {'''
+
+[[mutant]]
+name = "api: another image not updated"
+file = "crates/dom_api_next/src/image.rs"
+from = '''            if !same {
+                cx.reselect_image(element);'''
+to = '''            if false {
+                cx.reselect_image(element);'''
+
+[[mutant]]
+name = "api: the same image updated"
+file = "crates/dom_api_next/src/image.rs"
+from = '''                    .is_ok_and(|url| cx.set_image_density(element, &url, density)),'''
+to = '''                    .is_ok_and(|url| cx.set_image_density(element, &url, density) && false),'''
+
+[[mutant]]
+name = "dom: an adopted image not listed in its new document"
+file = "crates/dom_next/src/image.rs"
+from = '''            .is_some_and(|listed| Gc::ptr_eq(listed, document))'''
+to = '''            .is_some()'''
+
+[[mutant]]
+name = "dom: insertion doesn't look at pictures"
+file = "crates/dom_next/src/form.rs"
+from = '''        next: Option<NodeRef<'gc>>,
+    ) {
+        if self.has_seen(PICTURES_SEEN) {'''
+to = '''        next: Option<NodeRef<'gc>>,
+    ) {
+        if false {'''
+
+[[mutant]]
+name = "dom: removal doesn't look at pictures"
+file = "crates/dom_next/src/form.rs"
+from = '''        was_connected: bool,
+    ) {
+        if self.has_seen(PICTURES_SEEN) {'''
+to = '''        was_connected: bool,
+    ) {
+        if false {'''
+
+[[mutant]]
+name = "dom: a page with pictures alone skips the hook"
+file = "crates/dom_next/src/form.rs"
+from = '''        if self.changes.forms.seen.get() & !CONTROLS_SEEN != 0 {
+            self.form_subtree_inserted(parent, node, next);'''
+to = '''        if self.changes.forms.seen.get() & !(CONTROLS_SEEN | PICTURES_SEEN) != 0 {
+            self.form_subtree_inserted(parent, node, next);'''

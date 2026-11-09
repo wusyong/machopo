@@ -1,0 +1,145 @@
+# Mutation test of stage 5 (the flow-relative properties):
+# python3 scripts/test.py mutate rfcs/0041-cascade-features/mutants-5.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "logical::"]
+timeout = 1800
+
+# css: each longhand's physical one.
+
+[[mutant]]
+name = "inline-start is right"
+file = "crates/css/src/properties.rs"
+from = '''            MarginInlineStart => MarginLeft,'''
+to = '''            MarginInlineStart => MarginRight,'''
+
+[[mutant]]
+name = "block-start is bottom"
+file = "crates/css/src/properties.rs"
+from = '''            InsetBlockStart => Top,'''
+to = '''            InsetBlockStart => Bottom,'''
+
+[[mutant]]
+name = "the inline size is the height"
+file = "crates/css/src/properties.rs"
+from = '''            InlineSize => Width,'''
+to = '''            InlineSize => Height,'''
+
+[[mutant]]
+name = "inline-end's border color is the left one"
+file = "crates/css/src/properties.rs"
+from = '''            BorderInlineEndColor => BorderRightColor,'''
+to = '''            BorderInlineEndColor => BorderLeftColor,'''
+
+[[mutant]]
+name = "the maximum block size is the maximum width"
+file = "crates/css/src/properties.rs"
+from = '''            MaxBlockSize => MaxHeight,'''
+to = '''            MaxBlockSize => MaxWidth,'''
+
+[[mutant]]
+name = "padding-block-end isn't a property"
+file = "crates/css/src/properties.rs"
+from = '''            "padding-block-end" => PaddingBlockEnd,
+'''
+to = ''''''
+
+[[mutant]]
+name = "a flow-relative longhand is applied as itself"
+file = "crates/css/src/properties.rs"
+from = '''    let id = declaration.id.physical();'''
+to = '''    let id = declaration.id;'''
+
+# css: the shorthands.
+
+[[mutant]]
+name = "no two-value shorthands"
+file = "crates/css/src/properties.rs"
+from = '''PAIRS.iter().find(|(n, _)| n.eq_ignore_ascii_case(name))'''
+to = '''PAIRS.iter().find(|_| false)'''
+
+[[mutant]]
+name = "border-inline-start is inline-end"
+file = "crates/css/src/properties.rs"
+from = '''            "border-inline-start" => Self::FlowBorderSide(2),'''
+to = '''            "border-inline-start" => Self::FlowBorderSide(3),'''
+
+[[mutant]]
+name = "border-block sets the start side twice"
+file = "crates/css/src/properties.rs"
+from = '''                .flat_map(|sides| [sides[2 * axis], sides[2 * axis + 1]])'''
+to = '''                .flat_map(|sides| [sides[2 * axis], sides[2 * axis]])'''
+
+[[mutant]]
+name = "border-block is written with the colors apart"
+file = "crates/css/src/serialize.rs"
+from = '''            if !(same(0, 1) && same(2, 3) && same(4, 5)) {'''
+to = '''            if !(same(0, 1) && same(2, 3)) {'''
+
+# css: the logical property groups, for CSSOM's order.
+
+[[mutant]]
+name = "the same mapping logic moves a declaration too"
+file = "crates/css/src/properties.rs"
+from = '''        self.is_logical() != other.is_logical()
+            && self'''
+to = '''        self'''
+
+[[mutant]]
+name = "any group moves a declaration"
+file = "crates/css/src/properties.rs"
+from = '''                .is_some_and(|group| other.logical_group() == Some(group))'''
+to = '''                .is_some_and(|_| other.logical_group().is_some())'''
+
+[[mutant]]
+name = "the sizes are no group"
+file = "crates/css/src/properties.rs"
+from = '''            &SIZE,
+'''
+to = ''''''
+
+[[mutant]]
+name = "setProperty leaves an overridden declaration in place"
+file = "crates/css/src/property_set.rs"
+from = '''        if overridden {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "setProperty looks before the declaration too"
+file = "crates/css/src/property_set.rs"
+from = '''            PropertyKey::Longhand(id) => self.values[i + 1..].iter().any(|later| {'''
+to = '''            PropertyKey::Longhand(id) => self.values.iter().any(|later| {'''
+
+# style: the cascade.
+
+[[mutant]]
+name = "a flow-relative longhand has a place of its own"
+file = "crates/style/src/lib.rs"
+from = '''            winners[declaration.id.physical().index()].get_or_insert((declaration, *base));'''
+to = '''            winners[declaration.id.index()].get_or_insert((declaration, *base));'''
+
+[[mutant]]
+name = "the first in a block wins"
+file = "crates/style/src/lib.rs"
+from = '''        for declaration in block.declarations(*important).rev() {'''
+to = '''        for declaration in block.declarations(*important) {'''
+
+# css and dom_api: getComputedStyle.
+
+[[mutant]]
+name = "a flow-relative longhand is never layout-dependent"
+file = "crates/css/src/computed.rs"
+from = '''        LonghandId::from_name(property).map(LonghandId::physical),'''
+to = '''        LonghandId::from_name(property),'''
+
+[[mutant]]
+name = "every longhand names a physical one"
+file = "crates/css/src/computed.rs"
+from = '''    (id.physical() != id).then(|| id.physical().name())'''
+to = '''    Some(id.physical().name())'''
+
+[[mutant]]
+name = "getComputedStyle resolves a flow-relative longhand as itself"
+file = "crates/dom_api/src/computed_style.rs"
+from = '''    let property = style::physical_property(property).unwrap_or(property);
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "computed_style::"]

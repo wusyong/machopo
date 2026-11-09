@@ -1,0 +1,17 @@
+# A custom element (tests/scenarios/pages/custom-elements.html): hidden by
+# `:not(:defined)` until a click on "define" defines it; then upgraded, its
+# `connectedCallback` writing "Card: first", shown with a blue border by
+# `:defined`; the note says "ok". A click on the card changes its `label`:
+# its `attributeChangedCallback` writes "Card: second".
+window size=400x300
+navigate pages/custom-elements.html
+wait-loaded
+wait-text #note "waiting"
+screenshot undefined
+click #go
+wait-text #note "ok"
+screenshot defined
+wait-text #card "Card: first"
+click #card
+wait-text #card "Card: second"
+screenshot changed

@@ -1,0 +1,144 @@
+# 3: each op's visual rect, a static R-tree over them in a layer's list,
+# and raster playing only the ops a tile finds; a tile that finds none
+# isn't rastered (`compositor_paint`'s `DisplayItemList` and `rtree`,
+# `raster::ops_for` and `playback_ops`, `LayerTreeHostImpl::prepare_tiles`).
+#   python3 scripts/test.py mutate rfcs/0057-tile-raster/mutants-3.toml
+test = ["cargo", "test", "-q", "-p", "compositor_paint", "-p", "raster", "-p", "compositor"]
+timeout = 900
+
+[[mutant]]
+name = "rects that only touch meet"
+file = "crates/compositor_paint/src/rtree.rs"
+from = '''    a.x < b.right() && b.x < a.right() && a.y < b.bottom() && b.y < a.bottom()'''
+to = '''    a.x < b.right() && b.x <= a.right() && a.y < b.bottom() && b.y < a.bottom()'''
+
+[[mutant]]
+name = "a search's indices not in order"
+file = "crates/compositor_paint/src/rtree.rs"
+from = '''        found.sort_unstable();
+        found'''
+to = '''        found'''
+
+[[mutant]]
+name = "nodes of twelve children"
+file = "crates/compositor_paint/src/rtree.rs"
+from = '''        let count = run.len().div_ceil(MAX_CHILDREN);'''
+to = '''        let count = run.len().div_ceil(MAX_CHILDREN + 1);'''
+
+[[mutant]]
+name = "a node's rect only its first child's"
+file = "crates/compositor_paint/src/rtree.rs"
+from = '''                        rect: level[first..end]
+                            .iter()
+                            .fold(RectF::default(), |union, entry| union.union(&entry.rect)),'''
+to = '''                        rect: level[first].rect,'''
+
+[[mutant]]
+name = "a node's last child not searched"
+file = "crates/compositor_paint/src/rtree.rs"
+from = '''                entry.start as usize..entry.end as usize,'''
+to = '''                entry.start as usize..entry.end as usize - 1,'''
+
+[[mutant]]
+name = "a drawing op without its rect draws nowhere"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''            None => EVERYWHERE,
+        });'''
+to = '''            None => RectF::default(),
+        });'''
+
+[[mutant]]
+name = "a list drawn into another keeps its rects where they were"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''            .extend(other.visual_rects.iter().map(|r| r.offset(dx, dy)));'''
+to = '''            .extend(other.visual_rects.iter().copied());'''
+
+[[mutant]]
+name = "a layer's list builds no index"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''        if self.usage == UsageHint::TopLevel {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a record builds an index"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''            usage: UsageHint::Record,
+            ..Self::default()'''
+to = '''            usage: UsageHint::TopLevel,
+            ..Self::default()'''
+
+[[mutant]]
+name = "a group whose filter may reach past it isn't everywhere"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''            if inside > 0 {
+                *rect = EVERYWHERE;
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "a group's filter doesn't reach past it"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''            flags.image_filter.is_some() || flags.blend_mode != BlendMode::SrcOver'''
+to = '''            flags.blend_mode != BlendMode::SrcOver'''
+
+[[mutant]]
+name = "a group's blend mode doesn't reach past it"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''            flags.image_filter.is_some() || flags.blend_mode != BlendMode::SrcOver'''
+to = '''            flags.image_filter.is_some()'''
+
+[[mutant]]
+name = "a save's rect not its restore's"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                    if let Some(restore) = restore {
+                        self.visual_rects[restore] = drawn;
+                    }'''
+to = ''''''
+
+[[mutant]]
+name = "a save's rect not what it holds"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                    let drawn = drawn.union(&self.visual_rects[i]);
+                    self.visual_rects[i] = drawn;'''
+to = '''                    let drawn = drawn.union(&self.visual_rects[i]);'''
+
+[[mutant]]
+name = "what a save holds not in its scope's"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                    outer.1 = outer.1.union(&drawn);'''
+to = ''''''
+
+[[mutant]]
+name = "a transform or a clip applies to nothing"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                    self.visual_rects[i] = drawn.union(&self.visual_rects[i]);'''
+to = ''''''
+
+[[mutant]]
+name = "a tile's rect not scaled back to CSS px"
+file = "crates/raster/src/lib.rs"
+from = '''    list.ops_in(params.content_rect.inset(-1.0).scale(1.0 / scale))'''
+to = '''    list.ops_in(params.content_rect.inset(-1.0))'''
+
+[[mutant]]
+name = "no pixel more for anti-aliasing"
+file = "crates/raster/src/lib.rs"
+from = '''    list.ops_in(params.content_rect.inset(-1.0).scale(1.0 / scale))'''
+to = '''    list.ops_in(params.content_rect.scale(1.0 / scale))'''
+
+[[mutant]]
+name = "every op played"
+file = "crates/raster/src/skia_backend.rs"
+from = '''    for &op in ops {
+        draw_op(&canvas, &all[op], &base, cache);
+    }'''
+to = '''    for op in all {
+        draw_op(&canvas, op, &base, cache);
+    }
+    let _ = ops;'''
+
+[[mutant]]
+name = "a tile one op draws in skipped"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                if let (true, Some(color)) = (ops.is_empty(), blank) {'''
+to = '''                if let (true, Some(color)) = (ops.len() <= 1, blank) {'''

@@ -1,0 +1,340 @@
+# Stage 1: canvases drawn on the canvas raster thread, snapshots waited
+# for where their pixels are read, the backlog's limits,
+# `willReadFrequently` drawn on the main thread.
+#
+# python3 scripts/test.py mutate rfcs/0081-canvas-raster-thread/mutants-1.toml
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "canvas"]
+timeout = 120
+
+# gfx: pending snapshots.
+
+[[mutant]]
+name = "a pending snapshot is always ready"
+file = "crates/gfx/src/lib.rs"
+from = '''            Some(pending) => pending.wait().is_some(),'''
+to = '''            Some(_) => true,'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+[[mutant]]
+name = "filling wakes nobody"
+file = "crates/gfx/src/lib.rs"
+from = '''        self.filled.notify_all();'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+[[mutant]]
+name = "unfilled pixels read as none"
+file = "crates/gfx/src/lib.rs"
+from = '''            None => panic!("a pending snapshot's pixels are read before `wait_ready`"),'''
+to = '''            None => &[],'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+[[mutant]]
+name = "filled with any pixels"
+file = "crates/gfx/src/lib.rs"
+from = '''        assert_eq!(Some(pixels.len()), self.len, "the pixels are the size's");'''
+to = '''        let _ = self.len;'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+[[mutant]]
+name = "a dropped filler tells nobody"
+file = "crates/gfx/src/lib.rs"
+from = '''        self.pending.set(None);'''
+to = '''        let _ = &self.pending;'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+# The wait points.
+
+[[mutant]]
+name = "raster doesn't wait for a snapshot"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        if !data.wait_ready() {
+            return None;
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib"]
+
+[[mutant]]
+name = "the upload doesn't wait for a snapshot"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                    if layer.resource.is_none() && layer.layer.snapshot.wait_ready() {'''
+to = '''                    if layer.resource.is_none() {'''
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "texture"]
+
+[[mutant]]
+name = "a read doesn't wait for the snapshot"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    .filter(gfx::ImageData::wait_ready);'''
+to = ''';'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+# raster: written pixels, the main thread's draws counted.
+
+[[mutant]]
+name = "pixels written at the corner"
+file = "crates/raster/src/skia_backend.rs"
+from = '''                (saturated_cast::<i32, _>(*x), saturated_cast::<i32, _>(*y)),'''
+to = '''                (0, 0),'''
+
+[[mutant]]
+name = "draws not counted"
+file = "crates/raster/src/lib.rs"
+from = '''        DRAWS_INTO.set(DRAWS_INTO.get().wrapping_add(1));'''
+to = ''''''
+
+# dom: the bitmap another thread has.
+
+[[mutant]]
+name = "a snapshot made here for a bitmap another thread has"
+file = "crates/dom/src/canvas.rs"
+from = '''        if self.resource.is_some() {
+            return None;
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--lib", "canvas"]
+
+[[mutant]]
+name = "a bitmap another thread has drawn here"
+file = "crates/dom/src/canvas.rs"
+from = '''        assert!(
+            self.resource.is_none(),
+            "another thread draws on the bitmap"
+        );'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--lib", "canvas"]
+
+# dom_api: flushes, reads and putImageData.
+
+[[mutant]]
+name = "the limit's flush makes a snapshot"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    record_draw(cx, this);
+    if count >= MAX_RECORDED_OPS {
+        flush(cx, this, CanvasFlush::Draw);'''
+to = '''    record_draw(cx, this);
+    if count >= MAX_RECORDED_OPS {
+        flush(cx, this, CanvasFlush::Read);'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a read reads the pixels here"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        (Some(_), Some(snapshot)) => f(data, Some(snapshot.as_bytes())),'''
+to = '''        (Some(_), Some(_)) => f(data, data.pixels.as_deref()),'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a read flushes without a snapshot"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    flush(cx, this, CanvasFlush::Read);
+    // Waited for with the data let go of: the wait borrows nothing.'''
+to = '''    flush(cx, this, CanvasFlush::Draw);
+    // Waited for with the data let go of: the wait borrows nothing.'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "an export reads the pixels here"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let pixels = with_read_pixels(cx, &context, |_, pixels| pixels.map(<[u8]>::to_vec))'''
+to = '''    flush(cx, &context, CanvasFlush::Read);
+    let pixels = with_data(cx, &context, |data| data.pixels.clone())'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a source canvas flushed without a snapshot"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                    client.flush_canvas(scope, id, CanvasFlush::Read)'''
+to = '''                    client.flush_canvas(scope, id, CanvasFlush::Draw)'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a partial put flushes first anyway"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    } else if !elsewhere(cx) {'''
+to = '''    } else if true {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a partial put flushes with a snapshot"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    } else if !elsewhere(cx) {
+        flush(cx, this, CanvasFlush::Draw);'''
+to = '''    } else if !elsewhere(cx) {
+        flush(cx, this, CanvasFlush::Read);'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a put writes here on a bitmap another thread has"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if elsewhere(cx) {'''
+to = '''    if false {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "sent pixels not premultiplied"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                pixels.extend_from_slice(&pixel(bx, by));'''
+to = '''                pixels.extend_from_slice(&bytes[..4]);'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "sent pixels at the left"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                x: saturated_cast(x0),'''
+to = '''                x: 0,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "sent pixels never reach the limit"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        record_draw(cx, this);
+        if count >= MAX_RECORDED_OPS {
+            flush(cx, this, CanvasFlush::Draw);
+        }
+        return Ok(());'''
+to = '''        record_draw(cx, this);
+        let _ = count;
+        return Ok(());'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+# renderer: what goes to the thread.
+
+[[mutant]]
+name = "a canvas read frequently goes to the thread too"
+file = "crates/renderer/src/canvas.rs"
+from = '''    if settings.will_read_frequently {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "every canvas drawn here"
+file = "crates/renderer/src/canvas.rs"
+from = '''    if settings.will_read_frequently {'''
+to = '''    if true {'''
+
+[[mutant]]
+name = "a draw's flush makes a snapshot too"
+file = "crates/renderer/src/canvas.rs"
+from = '''    if flush == CanvasFlush::Read && data.snapshot.is_none() {'''
+to = '''    if data.snapshot.is_none() {'''
+
+[[mutant]]
+name = "a read makes a new snapshot each time"
+file = "crates/renderer/src/canvas.rs"
+from = '''    if flush == CanvasFlush::Read && data.snapshot.is_none() {'''
+to = '''    if flush == CanvasFlush::Read {'''
+
+[[mutant]]
+name = "a snapshot kept past new draws"
+file = "crates/renderer/src/canvas.rs"
+from = '''    if !ops.is_empty() {
+        data.snapshot = None;'''
+to = '''    if !ops.is_empty() {'''
+
+[[mutant]]
+name = "the pixels here not moved"
+file = "crates/renderer/src/canvas.rs"
+from = '''                pixels: data.pixels.take(),'''
+to = '''                pixels: None,'''
+
+[[mutant]]
+name = "a frame flushes without snapshots"
+file = "crates/renderer/src/canvas.rs"
+from = '''                flush_into(&scope, canvas, CanvasFlush::Read, raster, &mut items);'''
+to = '''                flush_into(&scope, canvas, CanvasFlush::Draw, raster, &mut items);'''
+
+[[mutant]]
+name = "a batch for each canvas of a frame"
+file = "crates/renderer/src/canvas.rs"
+from = '''                flush_into(&scope, canvas, CanvasFlush::Read, raster, &mut items);'''
+to = '''                flush(&scope, canvas, CanvasFlush::Read, raster);'''
+
+[[mutant]]
+name = "a frame's batch counted as script's"
+file = "crates/renderer/src/canvas.rs"
+from = '''    raster.send(items, true);'''
+to = '''    raster.send(items, false);'''
+
+[[mutant]]
+name = "a frame lets go of no bitmap"
+file = "crates/renderer/src/canvas.rs"
+from = '''    let mut items = raster.releases();'''
+to = '''    let mut items = Vec::new();'''
+
+# renderer: the thread and its backlog.
+
+[[mutant]]
+name = "held bitmaps let go of"
+file = "crates/renderer/src/canvas_raster.rs"
+from = '''            let held = resource.strong_count() > 0;'''
+to = '''            let held = false;'''
+
+[[mutant]]
+name = "a let go bitmap kept"
+file = "crates/renderer/src/canvas_raster.rs"
+from = '''            bitmaps.remove(&id);'''
+to = '''            let _ = id;'''
+
+[[mutant]]
+name = "a snapshot's pixels drawn over"
+file = "crates/renderer/src/canvas_raster.rs"
+from = '''            if Arc::get_mut(&mut bitmap.pixels).is_none() {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "script's ops one past the limit"
+file = "crates/renderer/src/canvas_raster.rs"
+from = '''            self.ops > 0 && self.ops.saturating_add(ops) > MAX_QUEUED_OPS'''
+to = '''            self.ops > 0 && self.ops.saturating_add(ops) >= MAX_QUEUED_OPS'''
+
+[[mutant]]
+name = "a big batch waits on an empty queue"
+file = "crates/renderer/src/canvas_raster.rs"
+from = '''            self.ops > 0 && self.ops.saturating_add(ops) > MAX_QUEUED_OPS'''
+to = '''            self.ops.saturating_add(ops) > MAX_QUEUED_OPS'''
+
+[[mutant]]
+name = "one frame more behind"
+file = "crates/renderer/src/canvas_raster.rs"
+from = '''            self.frames >= MAX_FRAMES_BEHIND'''
+to = '''            self.frames > MAX_FRAMES_BEHIND'''
+
+[[mutant]]
+name = "a frame never waits"
+file = "crates/renderer/src/canvas_raster.rs"
+from = '''        while !state.closed && state.full(ops, frame) {'''
+to = '''        while !state.closed && !frame && state.full(ops, frame) {'''
+
+[[mutant]]
+name = "a closed backlog still waited on"
+file = "crates/renderer/src/canvas_raster.rs"
+from = '''        while !state.closed && state.full(ops, frame) {'''
+to = '''        while state.full(ops, frame) {'''
+
+[[mutant]]
+name = "script's ops not counted"
+file = "crates/renderer/src/canvas_raster.rs"
+from = '''            state.ops = state.ops.saturating_add(ops);'''
+to = ''''''
+
+[[mutant]]
+name = "a drawn batch wakes nobody"
+file = "crates/renderer/src/canvas_raster.rs"
+from = '''            state.ops = state.ops.saturating_sub(ops);
+        }
+        self.changed.notify_all();'''
+to = '''            state.ops = state.ops.saturating_sub(ops);
+        }'''
+
+[[mutant]]
+name = "a thread that panicked leaves the backlog open"
+file = "crates/renderer/src/canvas_raster.rs"
+from = '''    let _close = CloseOnExit(backlog.clone());'''
+to = '''    let _close = backlog.clone();'''
+
+[[mutant]]
+name = "a closed thread goes on"
+file = "crates/renderer/src/canvas_raster.rs"
+from = '''        if backlog.is_closed() {
+            return;
+        }'''
+to = ''''''

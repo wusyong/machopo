@@ -1,0 +1,139 @@
+# Mutation test of stage 2 (the rule sets: buckets by the rightmost
+# compound, the document's sheets in one set, the rule collector):
+# python3 scripts/test.py mutate rfcs/0039-selector-matching/mutants-2.toml
+test = ["cargo", "test", "-q", "-p", "style"]
+timeout = 600
+
+# css: the buckets.
+
+[[mutant]]
+name = "no id bucket"
+file = "crates/css/src/rule_set.rs"
+from = '''        if let Some(id) = id {
+            push(&mut self.ids'''
+to = '''        if let Some(id) = id.filter(|_| false) {
+            push(&mut self.ids'''
+
+[[mutant]]
+name = "no class bucket"
+file = "crates/css/src/rule_set.rs"
+from = '''        } else if let Some(class) = class {'''
+to = '''        } else if let Some(class) = class.filter(|_| false) {'''
+
+[[mutant]]
+name = "no tag bucket"
+file = "crates/css/src/rule_set.rs"
+from = '''        } else if let Some((name, lower)) = tag {'''
+to = '''        } else if let Some((name, lower)) = tag.filter(|_| false) {'''
+
+[[mutant]]
+name = "a tag only under its lowercase name"
+file = "crates/css/src/rule_set.rs"
+from = '''            push(&mut self.tags, name.as_str().into(), data);
+            if lower != name {
+                push(&mut self.tags, lower.as_str().into(), data);
+            }'''
+to = '''            let _ = name;
+            push(&mut self.tags, lower.as_str().into(), data);'''
+
+[[mutant]]
+name = "a tag only under its name as written"
+file = "crates/css/src/rule_set.rs"
+from = '''            if lower != name {
+                push(&mut self.tags, lower.as_str().into(), data);
+            }'''
+to = '''            let _ = lower;'''
+
+[[mutant]]
+name = "an id keyed as written"
+file = "crates/css/src/rule_set.rs"
+from = '''            push(&mut self.ids, id.to_ascii_lowercase().into(), data);'''
+to = '''            push(&mut self.ids, id.as_str().into(), data);'''
+
+[[mutant]]
+name = "a class keyed as written"
+file = "crates/css/src/rule_set.rs"
+from = '''            push(&mut self.classes, class.to_ascii_lowercase().into(), data);'''
+to = '''            push(&mut self.classes, class.as_str().into(), data);'''
+
+[[mutant]]
+name = "looked up as written"
+file = "crates/css/src/rule_set.rs"
+from = '''    let found = if key.bytes().any(|b| b.is_ascii_uppercase()) {'''
+to = '''    let found = if false {'''
+
+[[mutant]]
+name = "the element's id isn't looked up"
+file = "crates/css/src/rule_set.rs"
+from = '''            out.extend_from_slice(lookup(&self.ids, id));'''
+to = '''            let _ = id;'''
+
+[[mutant]]
+name = "only the element's first class is looked up"
+file = "crates/css/src/rule_set.rs"
+from = '''        for class in classes {
+            out.extend_from_slice(lookup(&self.classes, class));'''
+to = '''        for class in classes.iter().take(1) {
+            out.extend_from_slice(lookup(&self.classes, class));'''
+
+[[mutant]]
+name = "the element's name isn't looked up"
+file = "crates/css/src/rule_set.rs"
+from = '''        if let Some(found) = self.tags.get(local_name) {'''
+to = '''        if let Some(found) = self.tags.get("") {'''
+
+[[mutant]]
+name = "the rest aren't matched"
+file = "crates/css/src/rule_set.rs"
+from = '''        out.extend_from_slice(&self.other);'''
+to = '''        let _ = &self.other;'''
+
+# style: the sets in the cascade and the collector.
+
+[[mutant]]
+name = "the document's sheets' rules in the wrong sheet"
+file = "crates/style/src/lib.rs"
+from = '''                .flat_map(|(i, sheet)| (0..sheet.rules.len()).map(move |r| (i as u32, r as u32)))'''
+to = '''                .flat_map(|(i, sheet)| (0..sheet.rules.len()).map(move |r| (0 * i as u32, r as u32)))'''
+
+[[mutant]]
+name = "a linked sheet's url() against the document's"
+file = "crates/style/src/lib.rs"
+from = '''                    sheet.base_url.as_ref().or(*base_url),'''
+to = '''                    *base_url,'''
+
+[[mutant]]
+name = "a rule's order within its set only"
+file = "crates/style/src/lib.rs"
+from = '''                        sheet.first + rule_index,'''
+to = '''                        rule_index,'''
+
+[[mutant]]
+name = "a rule counts with its first matching selector"
+file = "crates/style/src/lib.rs"
+from = '''                        specificity = specificity.max(Some(data.specificity));'''
+to = '''                        specificity = specificity.or(Some(data.specificity));'''
+
+[[mutant]]
+name = "a selector looked up twice is matched twice"
+file = "crates/style/src/lib.rs"
+from = '''            self.candidates.dedup();'''
+to = ''''''
+
+[[mutant]]
+name = "the candidates aren't sorted"
+file = "crates/style/src/lib.rs"
+from = '''            self.candidates.sort_unstable();'''
+to = ''''''
+
+[[mutant]]
+name = "linear matching uses the buckets"
+file = "crates/style/src/lib.rs"
+from = '''            if self.linear {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "adopted sheets after the document's own with the wrong order"
+file = "crates/style/src/lib.rs"
+from = '''        let mut first = ua.sheet.rules.len() + author.rule_index.len();'''
+to = '''        let mut first = ua.sheet.rules.len();'''

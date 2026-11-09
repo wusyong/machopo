@@ -1,0 +1,115 @@
+# Stage 3a-1: the names and values tables, one a thread; the fixed names
+# made at compile time.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_next", "--test", "it"]
+timeout = 600
+
+[[mutant]]
+name = "fixed names go through the table"
+file = "crates/dom_next/src/names.rs"
+from = '''pub fn intern(name: &str) -> NameId {
+    if let Some(number) = find_fixed(name) {
+        return number;
+    }'''
+to = '''pub fn intern(name: &str) -> NameId {
+    if name.is_empty() {
+        return NONE;
+    }'''
+
+[[mutant]]
+name = "dynamic numbers start at 0"
+file = "crates/dom_next/src/names.rs"
+from = '''            .checked_add(FIXED_COUNT)
+            .and_then'''
+to = '''            .checked_add(0)
+            .and_then'''
+
+[[mutant]]
+name = "find doesn't look in the table"
+file = "crates/dom_next/src/names.rs"
+from = '''    find_fixed(name).or_else(|| TABLE.with_borrow(|table| table.find(name)))'''
+to = '''    find_fixed(name)'''
+
+[[mutant]]
+name = "a fixed name's string made each time"
+file = "crates/dom_next/src/names.rs"
+from = '''            table.fixed_strings[index]
+                .get_or_insert_with(|| DomString::new(FIXED[index]))
+                .clone()'''
+to = '''            DomString::new(FIXED[index])'''
+
+[[mutant]]
+name = "a dynamic name's string made each time"
+file = "crates/dom_next/src/names.rs"
+from = '''        Some(index) => table.dynamic(index).clone(),'''
+to = '''        Some(index) => DomString::new(&table.dynamic(index).to_str()),'''
+
+[[mutant]]
+name = "get reads a dynamic name off by one"
+file = "crates/dom_next/src/names.rs"
+from = '''    usize::try_from(number).ok()?.checked_sub(FIXED_COUNT)'''
+to = '''    usize::try_from(number).ok()?.checked_sub(FIXED_COUNT - 1)'''
+
+[[mutant]]
+name = "uppercase letters not split in constants"
+file = "crates/dom_next/build.rs"
+from = '''        if c.is_ascii_uppercase() {
+            out.push('_');
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the DOM's own names not first"
+file = "crates/dom_next/build.rs"
+from = '''    let mut names: Vec<&str> = OWN.to_vec();'''
+to = '''    let mut names: Vec<&str> = OWN[..9].to_vec();'''
+
+[[mutant]]
+name = "values not interned"
+file = "crates/dom_next/src/string.rs"
+from = '''        if let Some(string) = values.strings.get(text) {
+            return string.clone();
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the tag name given as a new string"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        self.ret_string(&names::string(id));'''
+to = '''        self.ret_string(&DomString::new(&names::get(id)));'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next", "--test", "it", "element::"]
+
+[[mutant]]
+name = "a found fixed name not compared"
+file = "crates/dom_next/src/names.rs"
+from = '''    name_eq(FIXED[usize::from(number)].as_bytes(), name.as_bytes()).then_some(NameId::from(number))'''
+to = '''    (FIXED[usize::from(number)].len() == name.len()).then_some(NameId::from(number))'''
+
+[[mutant]]
+name = "name_eq doesn't compare the whole words"
+file = "crates/dom_next/src/names.rs"
+from = '''        if x != y {
+            return false;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "an uppercased fixed name is the local name"
+file = "crates/dom_next/build.rs"
+from = '''            true => numbers[name.to_ascii_uppercase().as_str()],'''
+to = '''            true => number,'''
+
+[[mutant]]
+name = "an uppercased fixed name through the table"
+file = "crates/dom_next/src/names.rs"
+from = '''    if prefix == NONE
+        && uppercase
+        && let Some(&upper)'''
+to = '''    if prefix == NONE
+        && !uppercase
+        && let Some(&upper)'''
+
+[[mutant]]
+name = "a prefixed attribute found by its local name alone"
+file = "crates/dom_next/src/lib.rs"
+from = '''                    names::find(p) == Some(prefix) && names::find(l) == Some(name.local)'''
+to = '''                    names::find(l) == Some(name.local)'''

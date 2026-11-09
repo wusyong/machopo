@@ -1,0 +1,219 @@
+# Stage 4h-5a: `URL`, `URLSearchParams` and the pair iterator, `crypto`, `structuredClone`,
+# `File`, `FileReader`, `ProgressEvent` and blob URLs on the new DOM.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it -- urls:: files::"]
+timeout = 1500
+
+[[mutant]]
+name = "api: a URL's base ignored"
+file = "crates/dom_api_next/src/url.rs"
+from = '''        .base_url(base.as_ref())'''
+to = '''        .base_url(None)'''
+
+[[mutant]]
+name = "api: setting href leaves the params"
+file = "crates/dom_api_next/src/url.rs"
+from = '''    cx.with_url(this, |old| *old = url);
+    set_list(cx, this, list);'''
+to = '''    cx.with_url(this, |old| *old = url);
+    let _ = list;'''
+
+[[mutant]]
+name = "api: setting search leaves the params"
+file = "crates/dom_api_next/src/url.rs"
+from = '''        parse_query(value.strip_prefix('?').unwrap_or(value))
+    };
+    set_list(cx, this, list);'''
+to = '''        parse_query(value.strip_prefix('?').unwrap_or(value))
+    };
+    let _ = list;'''
+
+[[mutant]]
+name = "api: the params don't write the query back"
+file = "crates/dom_api_next/src/url.rs"
+from = '''        cx.with_url(url, |url| url.set_query((!query.is_empty()).then_some(query.as_str())));'''
+to = '''        let _ = (url, query);'''
+
+[[mutant]]
+name = "api: an empty list leaves an empty query"
+file = "crates/dom_api_next/src/url.rs"
+from = '''url.set_query((!query.is_empty()).then_some(query.as_str()))'''
+to = '''url.set_query(Some(query.as_str()))'''
+
+[[mutant]]
+name = "api: delete ignores the value"
+file = "crates/dom_api_next/src/url.rs"
+from = '''    pair.0 == name && value.is_none_or(|value| pair.1 == value)'''
+to = '''    pair.0 == name'''
+
+[[mutant]]
+name = "api: set keeps the later pairs of the name"
+file = "crates/dom_api_next/src/url.rs"
+from = '''                let keep = index <= first || n != name;'''
+to = '''                let keep = true;'''
+
+[[mutant]]
+name = "api: a pair of one string taken"
+file = "crates/dom_api_next/src/url.rs"
+from = '''                [name, value] => Ok((name.clone(), value.clone())),'''
+to = '''                [name, value] => Ok((name.clone(), value.clone())),
+                [name] => Ok((name.clone(), String::new())),'''
+
+[[mutant]]
+name = "api: the query's ? kept"
+file = "crates/dom_api_next/src/url.rs"
+from = '''        StringPairsInit::String(query) => parse_query(query.strip_prefix('?').unwrap_or(query)),'''
+to = '''        StringPairsInit::String(query) => parse_query(query),'''
+
+[[mutant]]
+name = "js: an iterator's index doesn't move on"
+file = "crates/dom_js_next/src/pairs.rs"
+from = '''        let next = v8::Integer::new_from_unsigned(scope, index.saturating_add(1));'''
+to = '''        let next = v8::Integer::new_from_unsigned(scope, index);'''
+
+[[mutant]]
+name = "js: keys give the values"
+file = "crates/dom_js_next/src/pairs.rs"
+from = '''            Ok(KEY) => pair.get_index(scope, 0),'''
+to = '''            Ok(KEY) => pair.get_index(scope, 1),'''
+
+[[mutant]]
+name = "js: forEach gives the key first"
+file = "crates/dom_js_next/src/pairs.rs"
+from = '''            if callback.call(scope, this_arg, &[value, key, this.into()]).is_none() {'''
+to = '''            if callback.call(scope, this_arg, &[key, value, this.into()]).is_none() {'''
+
+[[mutant]]
+name = "js: @@iterator isn't entries"
+file = "crates/dom_js_next/src/pairs.rs"
+from = '''    prototype.set_with_attr(iterator.into(), entries.into(), v8::PropertyAttribute::DONT_ENUM);'''
+to = '''    let _ = (iterator, entries);'''
+
+[[mutant]]
+name = "js: a record's values not converted"
+file = "crates/dom_js_next/src/front.rs"
+from = '''            let value = item.to_string(scope)?.to_rust_string_lossy(scope);'''
+to = '''            let _ = item;
+            let value = name.clone();'''
+
+[[mutant]]
+name = "api: getRandomValues takes a float array"
+file = "crates/dom_api_next/src/crypto.rs"
+from = '''    if !array.integer {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: getRandomValues takes too many bytes"
+file = "crates/dom_api_next/src/crypto.rs"
+from = '''    if array.byte_length > MAX_BYTES {'''
+to = '''    if array.byte_length > MAX_BYTES * 2 {'''
+
+[[mutant]]
+name = "js: a view's offset ignored"
+file = "crates/dom_js_next/src/front.rs"
+from = '''                    for (cell, byte) in store.iter().skip(offset).zip(bytes) {'''
+to = '''                    let _ = offset;
+                    for (cell, byte) in store.iter().zip(bytes) {'''
+
+[[mutant]]
+name = "api: a UUID's version not set"
+file = "crates/dom_api_next/src/crypto.rs"
+from = '''    bytes[6] = (bytes[6] & 0x0f) | 0x40;'''
+to = ''''''
+
+[[mutant]]
+name = "api: a clone's ports not shipped"
+file = "crates/dom_api_next/src/crypto.rs"
+from = '''    let ports = value.ports.iter().map(|&port| cx.ship_message_port(port)).collect();'''
+to = '''    let ports = value.ports.clone();'''
+
+[[mutant]]
+name = "api: a File's lastModified not Blink's time"
+file = "crates/dom_api_next/src/file_reader.rs"
+from = '''        last_modified: as_blink_time(last_modified),'''
+to = '''        last_modified,'''
+
+[[mutant]]
+name = "dom: a slice of a File is a File"
+file = "crates/dom_next/src/blob.rs"
+from = '''            // A slice of a `File` is a `Blob`.
+            file: None,'''
+to = '''            file: self.file.clone(),'''
+
+[[mutant]]
+name = "api: an empty blob's read has a progress"
+file = "crates/dom_api_next/src/file_reader.rs"
+from = '''                ReadStep::LoadStart => (names::event::LOADSTART, 0, ReadStep::Load),'''
+to = '''                ReadStep::LoadStart => (names::event::LOADSTART, 0, ReadStep::Progress),'''
+
+[[mutant]]
+name = "api: a read while one goes on"
+file = "crates/dom_api_next/src/file_reader.rs"
+from = '''    if cx.file_reader_state(this) == FileReaderState::Loading {
+        return Err(ApiError::Dom(DomException {'''
+to = '''    if false {
+        return Err(ApiError::Dom(DomException {'''
+
+[[mutant]]
+name = "api: loadend after a load handler began another read"
+file = "crates/dom_api_next/src/file_reader.rs"
+from = '''            if host.read(|cx| cx.file_reader_state(reader.get(cx.gc))) != FileReaderState::Loading {
+                fire(host, reader, names::event::LOADEND, Some((size, size)));'''
+to = '''            if true {
+                fire(host, reader, names::event::LOADEND, Some((size, size)));'''
+
+[[mutant]]
+name = "api: abort fires no loadend"
+file = "crates/dom_api_next/src/file_reader.rs"
+from = '''    if host.read(|cx| cx.file_reader_state(this.get(cx.gc))) != FileReaderState::Loading {
+        fire(host, &this, names::event::LOADEND, None);'''
+to = '''    if false {
+        fire(host, &this, names::event::LOADEND, None);'''
+
+[[mutant]]
+name = "api: a data URL's type left out"
+file = "crates/dom_api_next/src/file_reader.rs"
+from = '''            let type_ = if data.type_().is_empty() {'''
+to = '''            let type_ = if true {'''
+
+[[mutant]]
+name = "api: readAsText ignores its label"
+file = "crates/dom_api_next/src/file_reader.rs"
+from = '''        ReadAs::Text(label) => FileReaderResult::Text(decode(bytes, label.as_deref(), data.type_())),'''
+to = '''        ReadAs::Text(label) => FileReaderResult::Text(decode(bytes, label.as_deref().filter(|_| false), data.type_())),'''
+
+[[mutant]]
+name = "js: a read's buffer a new one each time"
+file = "crates/dom_next/src/file_reader.rs"
+from = '''    pub fn set_file_reader_buffer_fresh(&self, reader: Gc<'gc, EventTargetImpl>) {
+        self.reader(reader).fresh.set(true);'''
+to = '''    pub fn set_file_reader_buffer_fresh(&self, reader: Gc<'gc, EventTargetImpl>) {
+        let _ = reader;'''
+
+[[mutant]]
+name = "api: a blob URL of another origin revoked"
+file = "crates/dom_api_next/src/url.rs"
+from = '''|| origin.as_ref() != Some(&blob_origin) {'''
+to = '''{'''
+
+[[mutant]]
+name = "api: blob URL requests not handed to the host"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''                if let Some(document) = document {
+                    host.register_blob_url(&document, &url, &data);
+                }'''
+to = '''                let _ = (document, url, data);'''
+
+[[mutant]]
+name = "js: a record's repeated key a pair of its own"
+file = "crates/dom_js_next/src/front.rs"
+from = '''            match entries.iter_mut().find(|(other, _)| *other == name) {'''
+to = '''            match entries.iter_mut().find(|(other, _)| *other == name && false) {'''
+
+[[mutant]]
+name = "js: a clone in the current realm"
+file = "crates/dom_js_next/src/front.rs"
+from = '''                    let context = this
+                        .get_creation_context(scope)
+                        .unwrap_or_else(|| scope.get_current_context());'''
+to = '''                    let _ = this;
+                    let context = scope.get_current_context();'''

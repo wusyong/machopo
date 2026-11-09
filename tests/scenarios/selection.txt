@@ -1,0 +1,21 @@
+# The selection is drawn in the active colors while the page has the
+# focus, gray while the address field has it, and in the active colors
+# again once a click gives the page the focus back. Script selecting
+# other text, changing nothing else, is drawn too.
+navigate pages/selection.html
+wait-loaded
+wait-text #out "focused"
+capture active
+key primary+l
+wait-text #out "not focused"
+expect-differs active #text
+screenshot inactive
+capture inactive
+click #blank
+wait-text #out "focused"
+expect-differs inactive #text
+screenshot active
+capture unselected
+key s
+expect-differs unselected #other
+expect-differs active #text

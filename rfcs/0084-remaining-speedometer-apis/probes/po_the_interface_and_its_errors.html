@@ -1,0 +1,34 @@
+<!doctype html><script>
+globalThis.log = [];
+globalThis.attempt = f => {
+    try { const v = f(); return v === undefined ? 'ok' : String(v); }
+    catch (e) { return `${e.name}: ${e.message}`; }
+};
+globalThis.names = l => l.map(e => `${e.entryType}:${e.name}@${Math.round(e.startTime)}`).join(',');
+const wait = () => new Promise(r => setTimeout(r, 50));
+async function steps() {
+{ const types = PerformanceObserver.supportedEntryTypes;
+         log.push(types.join(), Object.isFrozen(types), types === PerformanceObserver.supportedEntryTypes,
+                  Object.getOwnPropertyNames(PerformanceObserver.prototype).join(),
+                  Object.getOwnPropertyNames(PerformanceObserver).join(),
+                  Object.getOwnPropertyNames(PerformanceObserverEntryList.prototype).join(),
+                  typeof Object.getOwnPropertyDescriptor(PerformanceObserver, 'supportedEntryTypes').get);
+         const o = new PerformanceObserver(() => {});
+         log.push(attempt(() => o.observe()), attempt(() => o.observe({})),
+                  attempt(() => o.observe({ entryTypes: ['mark'], type: 'mark' })),
+                  attempt(() => o.observe({ entryTypes: ['mark'], buffered: true })),
+                  attempt(() => o.observe({ type: 'mark' })));
+         const o2 = new PerformanceObserver(() => {});
+         log.push(attempt(() => o2.observe({ type: 'mark' })), attempt(() => o2.observe({ entryTypes: ['mark'] })));
+         // Types machopo doesn't make are left out; an empty list registers
+         // nothing, but the way of asking is taken.
+         const o3 = new PerformanceObserver(() => {});
+         log.push(attempt(() => o3.observe({ entryTypes: [] })), attempt(() => o3.observe({ type: 'mark' })));
+         log.push(attempt(() => new PerformanceObserver(() => {}).observe({ type: 'nope' })),
+                  attempt(() => PerformanceObserver(() => {})).split(':')[0],
+                  attempt(() => new PerformanceObserver()).split(':')[0],
+                  attempt(() => new PerformanceObserver({})).split(':')[0]);
+         o.disconnect(); o2.disconnect(); }
+}
+function run() { return steps().then(() => log.join(' / ')); }
+</script>

@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<title>An iframe in a child frame's document shows its own child frame; an iframe without a box paints nothing</title>
+<link rel=match href=f3-nested-iframes-ref.html>
+<style>
+  body { margin: 0; }
+  iframe { display: block; border: 2px solid black; }
+</style>
+<iframe srcdoc="<style>body { margin: 0 } iframe { display: block; margin: 5px; width: 40px; height: 30px; border: 4px solid navy }</style><iframe srcdoc='<style>html { background: green }</style>'></iframe>"></iframe>
+<iframe style="display: none" srcdoc="<style>html { background: red }</style>"></iframe>

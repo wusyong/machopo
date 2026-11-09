@@ -1,0 +1,270 @@
+# `bench.py speedometer --sample` on Windows: samply through ETW, its times
+# from the kernel ETL's start, the `perf` profile's exe naming its PDB,
+# Windows's DLLs named after through `samply load`, and the sampling as
+# Administrator in one copy of the script (`scripts/bench/common.py`,
+# `scripts/bench/speedometer/speedometer.py`).
+#   python3 scripts/test.py mutate rfcs/0066-windows-sampling/mutants-3.toml
+test = ["python3", "scripts/bench/speedometer/speedometer_test.py", "SampleReadingTests", "WindowsNamesTests",
+        "ElevatedTests", "CompareTests"]
+timeout = 180
+
+[[mutant]]
+name = "no way on Windows"
+file = "scripts/bench/common.py"
+from = '''    if sys.platform == "win32":
+        return WINDOWS_SAMPLING'''
+to = '''    if False:
+        return WINDOWS_SAMPLING'''
+
+[[mutant]]
+name = "perf on Windows"
+file = "scripts/bench/common.py"
+from = '''    return samply_sampler(samples) if sys.platform in ("darwin", "win32") else perf_sampler(samples)'''
+to = '''    return samply_sampler(samples) if sys.platform == "darwin" else perf_sampler(samples)'''
+
+[[mutant]]
+name = "no V8 provider"
+file = "scripts/bench/common.py"
+from = '''*options, "--browsers", "--keep-etl",'''
+to = '''*options, "--keep-etl",'''
+
+[[mutant]]
+name = "no ETL kept"
+file = "scripts/bench/common.py"
+from = '''*options, "--browsers", "--keep-etl",'''
+to = '''*options, "--browsers",'''
+
+[[mutant]]
+name = "the perf map's flags on Windows"
+file = "scripts/bench/common.py"
+from = '''"-o", str(samples), "--"], V8_ETW_FLAGS)'''
+to = '''"-o", str(samples), "--"], V8_SAMPLED_FLAGS.format(v8_log(samples)))'''
+
+[[mutant]]
+name = "the ETLs from before kept"
+file = "scripts/bench/common.py"
+from = '''    for etl in samply_etls(samples):
+        etl.unlink(missing_ok=True)
+    return'''
+to = '''    return'''
+
+[[mutant]]
+name = "the kernel ETL misnamed"
+file = "scripts/bench/common.py"
+from = '''name + ".kernel.etl"'''
+to = '''name + ".etl"'''
+
+[[mutant]]
+name = "every profile's PDB"
+file = "scripts/bench/common.py"
+from = '''    if profile != "perf" or sys.platform != "win32":'''
+to = '''    if sys.platform != "win32":'''
+
+[[mutant]]
+name = "the PDB of the tree's target"
+file = "scripts/bench/common.py"
+from = '''    pdb = target / "perf" / "kun.pdb"'''
+to = '''    pdb = ROOT / "target" / "perf" / "kun.pdb"'''
+
+[[mutant]]
+name = "not built so"
+file = "scripts/bench/common.py"
+from = '''                           *build_options(profile, target or root / "target")], cwd=root, env=env)'''
+to = '''                           ], cwd=root, env=env)'''
+
+[[mutant]]
+name = "perf's samples on Windows"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''    return samply_samples(samples, thread) if sys.platform in ("darwin", "win32") else perf_samples(samples, thread)'''
+to = '''    return samply_samples(samples, thread) if sys.platform == "darwin" else perf_samples(samples, thread)'''
+
+[[mutant]]
+name = "the wall clock on Windows"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''    if sys.platform == "win32":
+        offset = round('''
+to = '''    if False:
+        offset = round('''
+
+[[mutant]]
+name = "the ETL's time misread"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''ETL_START = 72 + 16'''
+to = '''ETL_START = 72 + 24'''
+
+[[mutant]]
+name = "the boot time as the frequency"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''ETL_PERF_FREQ = ETL_BOOT_TIME + 8'''
+to = '''ETL_PERF_FREQ = ETL_BOOT_TIME'''
+
+[[mutant]]
+name = "a frequency of 10 MHz"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''    return start * 1_000_000_000 // frequency'''
+to = '''    return start * 1_000_000_000 // 10_000_000'''
+
+[[mutant]]
+name = "JIT frames looked up"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''            if profile["libs"][library].get("codeId") and (name.startswith("fun_") or name.startswith("[")):'''
+to = '''            if name.startswith("fun_") or name.startswith("["):'''
+
+[[mutant]]
+name = "only the made-up names"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''            if profile["libs"][library].get("codeId") and (name.startswith("fun_") or name.startswith("[")):'''
+to = '''            if profile["libs"][library].get("codeId") and name.startswith("fun_"):'''
+
+[[mutant]]
+name = "every thread's"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''        if record["name"] != thread:
+            continue
+        frames, funcs, resources = record["frameTable"], record["funcTable"], record["resourceTable"]
+        for i, func in enumerate(frames["func"]):'''
+to = '''        frames, funcs, resources = record["frameTable"], record["funcTable"], record["resourceTable"]
+        for i, func in enumerate(frames["func"]):'''
+
+[[mutant]]
+name = "the DLLs' paths kept"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''        libraries[index]["path"] = str(hidden / libraries[index]["name"])'''
+to = '''        pass'''
+
+[[mutant]]
+name = "the profile changed"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''    libraries = [dict(library) for library in profile["libs"]]'''
+to = '''    libraries = profile["libs"]'''
+
+[[mutant]]
+name = "the copy left"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''    finally:
+        copy.unlink(missing_ok=True)'''
+to = '''    finally:
+        pass'''
+
+[[mutant]]
+name = "a failed lookup fails the run"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''    except (OSError, ValueError, RuntimeError) as e:'''
+to = '''    except (OSError, ValueError) as e:'''
+
+[[mutant]]
+name = "no name as a name"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''for (k, address), name in zip(frames, named) if name}'''
+to = '''for (k, address), name in zip(frames, named)}'''
+
+[[mutant]]
+name = "a lookup for nothing"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''    if not nameless:
+        return {}
+    hidden'''
+to = '''    hidden'''
+
+[[mutant]]
+name = "what's found last"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''        named = found.get((code_id, frames["address"][i]))
+        if named:'''
+to = '''        named = found.get((code_id, frames["address"][i]))
+        if False:'''
+
+[[mutant]]
+name = "looked up elsewhere too"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''nameless_frames(profile, symbols, thread)) if sys.platform == "win32" \'''
+to = '''nameless_frames(profile, symbols, thread)) if True \'''
+
+[[mutant]]
+name = "samply load left running"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''        load.kill()
+        load.wait()'''
+to = '''        pass'''
+
+[[mutant]]
+name = "its URL as written"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''urllib.parse.unquote(line))'''
+to = '''line)'''
+
+[[mutant]]
+name = "never as Administrator"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''    if sys.platform == "win32" and not is_admin():
+        return sample_elevated(jobs)'''
+to = '''    if False:
+        return sample_elevated(jobs)'''
+
+[[mutant]]
+name = "as Administrator even when one"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''    if sys.platform == "win32" and not is_admin():
+        return sample_elevated(jobs)'''
+to = '''    if sys.platform == "win32":
+        return sample_elevated(jobs)'''
+
+[[mutant]]
+name = "the environment not handed"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''    os.environ.update(given["env"])'''
+to = '''    pass'''
+
+[[mutant]]
+name = "the globals not handed"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''        globals()[name] = Path(value)'''
+to = '''        pass'''
+
+[[mutant]]
+name = "the rows back as dicts"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''{event: collections.Counter(stacks) for event, stacks in by_event.items()}'''
+to = '''{event: stacks for event, stacks in by_event.items()}'''
+
+[[mutant]]
+name = "nothing back read anyway"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''    if not results.exists():
+        raise SystemExit('''
+to = '''    if False:
+        raise SystemExit('''
+
+[[mutant]]
+name = "a failing copy's error not caught"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''        except BaseException:
+            traceback.print_exc()
+            return 1'''
+to = '''        except KeyboardInterrupt:
+            traceback.print_exc()
+            return 1'''
+
+[[mutant]]
+name = "no xperf, no matter"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''    if sys.platform == "win32" and xperf() is None:'''
+to = '''    if False:'''
+
+[[mutant]]
+name = "a version's runs together"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''    turns = [(side, run) for run in range(1, args.runs + 1) for side in ("against", "current")]'''
+to = '''    turns = [(side, run) for side in ("against", "current") for run in range(1, args.runs + 1)]'''
+
+[[mutant]]
+name = "frame pointers on Windows"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''(the `perf` profile, {way.unwound}), "'''
+to = '''(the `perf` profile, frame pointers), "'''
+
+[[mutant]]
+name = "samply load's output left open"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''        load.stdout.close()'''
+to = '''        pass'''

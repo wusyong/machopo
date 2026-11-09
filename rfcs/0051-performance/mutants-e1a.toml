@@ -1,0 +1,130 @@
+# Mutation test of stage E1a: paint records what hit testing can find, and
+# the scroll hit test region's covered scrollers come from that record:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-e1a.toml
+test = ["cargo", "test", "-q", "-p", "paint"]
+timeout = 1800
+
+[[mutant]]
+name = "targets are recorded where hit testing doesn't go"
+file = "crates/paint/src/lib.rs"
+from = '''        if !self.hit_testable {
+            return;
+        }
+        let data = &mut self.artifact.hit_test;'''
+to = '''        let data = &mut self.artifact.hit_test;'''
+
+[[mutant]]
+name = "an iframe's pointer-events doesn't keep hit testing out"
+file = "crates/paint/src/lib.rs"
+from = '''            self.hit_testable &= hittable(&fragment.style);'''
+to = ''''''
+
+[[mutant]]
+name = "a stacking context is taken whole whether hit testing went into it or not"
+file = "crates/paint/src/paint_controller.rs"
+from = '''            && subsequence.hit_testable == hit_testable'''
+to = ''''''
+
+[[mutant]]
+name = "a box takes its items whether hit testing went into it or not"
+file = "crates/paint/src/paint_controller.rs"
+from = '''            || painted.hit_testable != hit_testable'''
+to = ''''''
+
+[[mutant]]
+name = "a stacking context taken whole takes no targets"
+file = "crates/paint/src/lib.rs"
+from = '''        self.push_hits_cached(old_hits.clone());'''
+to = ''''''
+
+[[mutant]]
+name = "a box's lines taken whole take no targets"
+file = "crates/paint/src/lib.rs"
+from = '''                    self.push_hits_cached(cached.text_hits);'''
+to = ''''''
+
+[[mutant]]
+name = "a box's lines' targets aren't kept"
+file = "crates/paint/src/lib.rs"
+from = '''            painted.text_hits = start.hits - from.hits..end.hits - from.hits;'''
+to = '''            painted.text_hits = start.hits - from.hits..start.hits - from.hits;'''
+
+[[mutant]]
+name = "a stacking context taken whole doesn't move its targets"
+file = "crates/paint/src/paint_controller.rs"
+from = '''        subsequence.hits = shift(&subsequence.hits, by.1);'''
+to = ''''''
+
+[[mutant]]
+name = "targets are placed from where the items start"
+file = "crates/paint/src/paint_controller.rs"
+from = '''            hits: subsequence.hits.start,'''
+to = '''            hits: subsequence.items.start,'''
+
+[[mutant]]
+name = "a scroll container's own box shares a chunk"
+file = "crates/paint/src/lib.rs"
+from = '''                if chunk.state == state && chunk.scroll == scroll && chunk.container == container =>'''
+to = '''                if chunk.state == state && chunk.scroll == scroll =>'''
+
+[[mutant]]
+name = "a chunk's bounds are its first rect's"
+file = "crates/paint/src/lib.rs"
+from = '''                chunk.bounds = chunk.bounds.union(&rect);'''
+to = ''''''
+
+[[mutant]]
+name = "a border box is a target whatever its style"
+file = "crates/paint/src/lib.rs"
+from = '''        if hittable(&fragment.style) {
+            let container = properties'''
+to = '''        if true {
+            let container = properties'''
+
+[[mutant]]
+name = "an inline box is a target whatever its style"
+file = "crates/paint/src/lib.rs"
+from = '''                    LinePart::InlineBox(b) if hittable(&b.style) => Some(b.rect),'''
+to = '''                    LinePart::InlineBox(b) => Some(b.rect),'''
+
+[[mutant]]
+name = "a child frame's canvas isn't a target"
+file = "crates/paint/src/lib.rs"
+from = '''            self.push_hit(canvas, frame.state, Some(frame.scroll), Some(frame.scroll));'''
+to = ''''''
+
+[[mutant]]
+name = "an SVG container with bounding-box isn't a target"
+file = "crates/paint/src/svg.rs"
+from = '''                if node.style.pointer_events == PointerEvents::BoundingBox {'''
+to = '''                if false {'''
+
+[[mutant]]
+name = "what is in the container's scroll chain covers it"
+file = "crates/paint/src/hit_test.rs"
+from = '''                if in_scroll_chain(trees, chunk.scroll, scroller) {
+                    return false;
+                }
+                let moves_target'''
+to = '''                let moves_target'''
+
+[[mutant]]
+name = "what the compositor scrolls apart is taken where it is painted"
+file = "crates/paint/src/hit_test.rs"
+from = '''                if let Some(target_at) = anywhere_in(&moves_target, &moves_it) {
+                    return overlap(target_at, it_at);
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "the container is taken where it is painted"
+file = "crates/paint/src/hit_test.rs"
+from = '''                let it_at = anywhere_in(&moves_it, &moves_target).unwrap_or(it);'''
+to = '''                let it_at = it;'''
+
+[[mutant]]
+name = "a container with no box of its own is the compositor's"
+file = "crates/paint/src/hit_test.rs"
+from = '''                // No box to pick it by: let the main thread decide.
+                return true;'''
+to = '''                return false;'''

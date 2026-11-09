@@ -1,0 +1,349 @@
+# Mutation test of step 2a-1 (the SVG properties, presentation attributes,
+# the CSS namespace, visibility):
+# python3 scripts/test.py mutate rfcs/0031-svg/mutants-2a1.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "svg::"]
+timeout = 900
+
+# --- style: values ------------------------------------------------------------
+
+[[mutant]]
+name = "a url paint's none fallback is dropped"
+file = "crates/style/src/svg.rs"
+from = '''            SpecifiedFallback::None
+        } else if let Ok(color) = input.try_parse(parse_style_color) {'''
+to = '''            SpecifiedFallback::Absent
+        } else if let Ok(color) = input.try_parse(parse_style_color) {'''
+
+[[mutant]]
+name = "a dash array may end in a comma"
+file = "crates/style/src/svg.rs"
+from = '''            Err(_) if comma => return Err(input.new_custom_error(())),'''
+to = ''''''
+
+[[mutant]]
+name = "a dash may be negative"
+file = "crates/style/src/svg.rs"
+from = '''        match input.try_parse(|i| LengthPercentage::parse_svg(i, false)) {'''
+to = '''        match input.try_parse(|i| LengthPercentage::parse_svg(i, true)) {'''
+
+[[mutant]]
+name = "path() keeps what parses"
+file = "crates/style/src/svg.rs"
+from = '''    match path_data(&data, true) {'''
+to = '''    match path_data(&data, false) {'''
+
+[[mutant]]
+name = "the d attribute is all or nothing"
+file = "crates/style/src/svg.rs"
+from = '''    let segments = path_data(data, false)?;'''
+to = '''    let segments = path_data(data, true)?;'''
+
+[[mutant]]
+name = "a close leaves the current point"
+file = "crates/style/src/svg.rs"
+from = '''            PathSegment::ClosePath => (sx, sy),
+        };'''
+to = '''            PathSegment::ClosePath => (cx, cy),
+        };'''
+
+[[mutant]]
+name = "relative commands aren't offset"
+file = "crates/style/src/svg.rs"
+from = '''        let (dx, dy) = if segment_is_abs(segment) { (0.0, 0.0) } else { (cx, cy) };'''
+to = '''        let (dx, dy) = (0.0, 0.0);'''
+
+[[mutant]]
+name = "an arc's flags are swapped"
+file = "crates/style/src/svg.rs"
+from = '''                    f32::from(u8::from(large_arc)),
+                    f32::from(u8::from(sweep)),'''
+to = '''                    f32::from(u8::from(sweep)),
+                    f32::from(u8::from(large_arc)),'''
+
+[[mutant]]
+name = "transform functions compose the wrong way"
+file = "crates/style/src/svg.rs"
+from = '''                let [a2, b2, c2, d2, e2, f2] = next;'''
+to = '''                let ([a, b, c, d, e, f], [a2, b2, c2, d2, e2, f2]) = (next, [a, b, c, d, e, f]);'''
+
+[[mutant]]
+name = "quarter turns aren't exact"
+file = "crates/style/src/svg.rs"
+from = '''    if quarter.fract() == 0.0 {'''
+to = '''    if quarter.fract() == 0.5 {'''
+
+[[mutant]]
+name = "an invalid transform function is skipped"
+file = "crates/style/src/svg.rs"
+from = '''        let next = match token.ok()? {'''
+to = '''        let Ok(token) = token else { continue };
+        let next = match token {'''
+
+[[mutant]]
+name = "a plain number may be negative"
+file = "crates/style/src/values.rs"
+from = '''            if !negative && value < 0.0 {
+                return invalid(input);
+            }
+            return Ok(Self::Length(Length {'''
+to = '''            return Ok(Self::Length(Length {'''
+
+[[mutant]]
+name = "a plain number is written as px"
+file = "crates/style/src/values.rs"
+from = '''            Self::Number => "",'''
+to = '''            Self::Number => "px",'''
+
+# --- style: properties and the cascade ----------------------------------------
+
+[[mutant]]
+name = "fill isn't inherited"
+file = "crates/style/src/properties.rs"
+from = '''                | WhiteSpace
+                | Fill
+                | FillOpacity'''
+to = '''                | WhiteSpace
+                | FillOpacity'''
+
+[[mutant]]
+name = "fill-opacity isn't clamped"
+file = "crates/style/src/properties.rs"
+from = '''        (FillOpacity, Value::Opacity(v)) => style.svg.fill_opacity = v.clamp(0.0, 1.0),'''
+to = '''        (FillOpacity, Value::Opacity(v)) => style.svg.fill_opacity = v,'''
+
+[[mutant]]
+name = "inherit doesn't copy cx"
+file = "crates/style/src/properties.rs"
+from = '''        Cx => to.svg.cx = from.svg.cx,'''
+to = '''        Cx => {}'''
+
+[[mutant]]
+name = "d isn't made absolute"
+file = "crates/style/src/properties.rs"
+from = '''        (D, Value::Path(v)) => style.svg.d = v.map(|segments| absolute_path(&segments)),'''
+to = '''        (D, Value::Path(v)) => style.svg.d = v,'''
+
+[[mutant]]
+name = "the inherited SVG style isn't inherited"
+file = "crates/computed_style/src/lib.rs"
+from = '''            svg: SvgStyle::inherit(&parent.svg),'''
+to = '''            svg: SvgStyle::initial(),'''
+
+[[mutant]]
+name = "inset has no name"
+file = "crates/style/src/properties.rs"
+from = '''            Self::Sides(INSET) => "inset",'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cssom::"]
+
+# --- style: presentation attributes -------------------------------------------
+
+[[mutant]]
+name = "presentation attributes on HTML elements"
+file = "crates/style/src/hints.rs"
+from = '''    if name.namespace.url() == Namespace::SVG {'''
+to = '''    if name.namespace.url() == Namespace::SVG || name.is_html("div") {'''
+
+[[mutant]]
+name = "cx on any element"
+file = "crates/style/src/hints.rs"
+from = '''        "cx" | "cy" => is(&["circle", "ellipse"]),'''
+to = '''        "cx" | "cy" => true,'''
+
+[[mutant]]
+name = "width not on use"
+file = "crates/style/src/hints.rs"
+from = '''        "width" | "height" => is(&["foreignObject", "image", "mask", "rect", "svg", "symbol"]),'''
+to = '''        "width" | "height" => is(&["foreignObject", "image", "mask", "rect", "svg", "symbol", "use"]),'''
+
+[[mutant]]
+name = "an animation element's fill is the property"
+file = "crates/style/src/hints.rs"
+from = '''            || (SVG_PRESENTATION_ATTRIBUTES.contains(&name) && !(animation && name == "fill"))'''
+to = '''            || SVG_PRESENTATION_ATTRIBUTES.contains(&name)'''
+
+[[mutant]]
+name = "symbol takes no transform"
+file = "crates/style/src/hints.rs"
+from = '''        | "line" | "path" | "polygon" | "polyline" | "rect" | "svg" | "switch" | "symbol"'''
+to = '''        | "line" | "path" | "polygon" | "polyline" | "rect" | "svg" | "switch"'''
+
+[[mutant]]
+name = "gradients take transform"
+file = "crates/style/src/hints.rs"
+from = '''        "linearGradient" | "radialGradient" => Some("gradientTransform"),'''
+to = '''        "linearGradient" | "radialGradient" => Some("transform"),'''
+
+[[mutant]]
+name = "d on any element"
+file = "crates/style/src/hints.rs"
+from = '''        } else if name == "d" && local == "path" {'''
+to = '''        } else if name == "d" {'''
+
+[[mutant]]
+name = "a plain number isn't px where CSS takes none"
+file = "crates/style/src/hints.rs"
+from = '''        return parse(&format!("{number}px")).unwrap_or_default();'''
+to = '''        return Vec::new();'''
+
+# --- style: CSS.supports ------------------------------------------------------
+
+[[mutant]]
+name = "a condition isn't tried as a declaration"
+file = "crates/style/src/css_namespace.rs"
+from = '''        .or_else(|| condition_text(&format!("({text})")))'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::the_css_namespace"]
+
+[[mutant]]
+name = "and and or mix"
+file = "crates/style/src/css_namespace.rs"
+from = '''        if operator.is_some_and(|operator| operator != and) {'''
+to = '''        if operator.is_some_and(|_| false) {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::the_css_namespace"]
+
+[[mutant]]
+name = "not doesn't negate"
+file = "crates/style/src/css_namespace.rs"
+from = '''        return Ok(!in_parens(input)?);'''
+to = '''        return in_parens(input);'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::the_css_namespace"]
+
+[[mutant]]
+name = "selector() takes a list"
+file = "crates/style/src/css_namespace.rs"
+from = '''                Ok(SelectorQuery::parse(text).is_some_and(|query| query.len() == 1))'''
+to = '''                Ok(SelectorQuery::parse(text).is_some())'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::the_css_namespace"]
+
+[[mutant]]
+name = "a declaration's !important isn't taken off"
+file = "crates/style/src/css_namespace.rs"
+from = '''            match value[..at].trim_end().strip_suffix('!') {'''
+to = '''            match None::<&str> {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::the_css_namespace"]
+
+[[mutant]]
+name = "an unknown function is true"
+file = "crates/style/src/css_namespace.rs"
+from = '''        Token::Function(_) => input.parse_nested_block(|i| {
+            skip_rest(i);
+            Ok(false)
+        }),'''
+to = '''        Token::Function(_) => input.parse_nested_block(|i| {
+            skip_rest(i);
+            Ok(true)
+        }),'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::the_css_namespace"]
+
+[[mutant]]
+name = "supports(property, value) asks a condition"
+file = "crates/dom_api/src/dom_window_css.rs"
+from = '''        Some(value) => style::supports_declaration(first.as_str(), value.as_str()),'''
+to = '''        Some(_) => style::supports_condition(first.as_str()),'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::the_css_namespace"]
+
+# --- dom_api ------------------------------------------------------------------
+
+[[mutant]]
+name = "an SVG element's transform is none"
+file = "crates/dom_api/src/computed_style.rs"
+from = '''            if svg && style.display != computed_style::Display::None {'''
+to = '''            if false {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "computed_style::"]
+
+[[mutant]]
+name = "a display: none SVG element's transform is its matrix"
+file = "crates/dom_api/src/computed_style.rs"
+from = '''            if svg && style.display != computed_style::Display::None {'''
+to = '''            if svg {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "computed_style::"]
+
+[[mutant]]
+name = "a hidden box takes the focus"
+file = "crates/dom_api/src/focus.rs"
+from = '''                .is_none_or(|style| style.is_visible())'''
+to = '''                .is_none_or(|_| true)'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "focus::"]
+
+# --- paint and hit testing ----------------------------------------------------
+
+[[mutant]]
+name = "a hidden box paints its decorations"
+file = "crates/paint/src/lib.rs"
+from = '''        // `visibility: hidden`: laid out, not painted (its descendants
+        // may be).
+        if !style.is_visible() {
+            return;
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "artifact::hidden_boxes"]
+
+[[mutant]]
+name = "hidden text is painted"
+file = "crates/paint/src/lib.rs"
+from = '''        if color.a == 0 || run.glyphs.is_empty() || !style.is_visible() {'''
+to = '''        if color.a == 0 || run.glyphs.is_empty() {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "artifact::hidden_boxes"]
+
+[[mutant]]
+name = "a hidden inline box is painted"
+file = "crates/paint/src/lib.rs"
+from = '''        let style = &inline_box.style;
+        if !style.is_visible() {
+            return;
+        }'''
+to = '''        let style = &inline_box.style;'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "artifact::hidden_boxes"]
+
+[[mutant]]
+name = "a hidden outline is painted"
+file = "crates/paint/src/lib.rs"
+from = '''        if !style.outline_style.is_drawn() || !style.is_visible() {'''
+to = '''        if !style.outline_style.is_drawn() {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "artifact::hidden_boxes"]
+
+[[mutant]]
+name = "a hidden image is drawn"
+file = "crates/paint/src/lib.rs"
+from = '''        if let Some(image) = fragment.image.as_ref().filter(|_| visible) {'''
+to = '''        if let Some(image) = fragment.image.as_ref() {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "artifact::a_hidden_image"]
+
+[[mutant]]
+name = "a hidden iframe paints its child frame"
+file = "crates/paint/src/lib.rs"
+from = '''        if let Some(frame) = pre.child_frame(fragment).filter(|_| visible) {'''
+to = '''        if let Some(frame) = pre.child_frame(fragment) {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "child_frames::a_hidden_iframe"]
+
+[[mutant]]
+name = "a hidden iframe's child frame is hit"
+file = "crates/paint/src/hit_test.rs"
+from = '''            if !fragment.style.is_visible() {
+                return None;
+            }
+            return self.child_frame(frame);'''
+to = '''            return self.child_frame(frame);'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "child_frames::a_hidden_iframe"]
+
+[[mutant]]
+name = "a hidden border box is hit"
+file = "crates/paint/src/hit_test.rs"
+from = '''        if fragment.role == BoxRole::LayoutView || !fragment.style.is_visible() {'''
+to = '''        if fragment.role == BoxRole::LayoutView {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "geometry::hidden_boxes"]
+
+[[mutant]]
+name = "hidden text is hit"
+file = "crates/paint/src/hit_test.rs"
+from = '''                    LinePart::Run(run) if !run.style.is_visible() => None,'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "geometry::hidden_boxes"]
+
+[[mutant]]
+name = "a hidden inline box is hit"
+file = "crates/paint/src/hit_test.rs"
+from = '''                    LinePart::InlineBox(b) if !b.style.is_visible() => None,'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "geometry::hidden_boxes"]

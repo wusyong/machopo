@@ -1,0 +1,131 @@
+# Mutation test of step 3c (`slotchange`):
+# python3 scripts/test.py mutate rfcs/0035-shadow-dom-custom-elements/mutants-3c.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "slots::"]
+timeout = 600
+
+[[mutant]]
+name = "a slot signaled twice"
+file = "crates/dom/src/slot.rs"
+from = '''        if !self.mutations.signal_slots.iter().any(|s| s.ptr_eq(slot)) {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "signal slots don't queue the microtask"
+file = "crates/dom/src/mutation_observer.rs"
+from = '''        if (state.pending.is_empty() && state.signal_slots.is_empty()) || state.microtask_queued {'''
+to = '''        if state.pending.is_empty() || state.microtask_queued {'''
+
+[[mutant]]
+name = "a host's new child's slot not signaled"
+file = "crates/dom/src/slot.rs"
+from = '''        if parent_ref.shadow_root().is_some() && node_ref.is_slottable() {
+            changes.slottables.push(node.clone());
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a removed child's slot not signaled"
+file = "crates/dom/src/slot.rs"
+from = '''        if let Some(slot) = read.assigned_slot(node) {
+            changes.slots.push(slot);
+        }
+        if parent_ref.is_slot() {
+            changes.fallback = Some(parent.clone());
+        }
+        let has_slot = has_slot(node.get(&read));'''
+to = '''        if parent_ref.is_slot() {
+            changes.fallback = Some(parent.clone());
+        }
+        let has_slot = has_slot(node.get(&read));'''
+
+[[mutant]]
+name = "a renamed slottable's old slot not signaled"
+file = "crates/dom/src/slot.rs"
+from = '''        if *name == QualName::attr("slot") {
+            if let Some(slot) = self.read().assigned_slot(element) {
+                changes.slots.push(slot);
+            }'''
+to = '''        if *name == QualName::attr("slot") {'''
+
+[[mutant]]
+name = "a renamed slottable's new slot not signaled"
+file = "crates/dom/src/slot.rs"
+from = '''            changes.slottables.push(element.clone());
+        } else if'''
+to = '''        } else if'''
+
+[[mutant]]
+name = "a renamed slot's shadow root not compared"
+file = "crates/dom/src/slot.rs"
+from = '''        } else if *name == QualName::attr("name") && element.get(&self.read()).is_slot() {'''
+to = '''        } else if false {'''
+
+[[mutant]]
+name = "an inserted slot's shadow root not compared"
+file = "crates/dom/src/slot.rs"
+from = '''        let has_slot = has_slot(node_ref);'''
+to = '''        let has_slot = false && has_slot(node_ref);'''
+
+[[mutant]]
+name = "a removed slot's shadow root not compared"
+file = "crates/dom/src/slot.rs"
+from = '''        let has_slot = has_slot(node.get(&read));'''
+to = '''        let has_slot = false && has_slot(node.get(&read));'''
+
+[[mutant]]
+name = "a removed slot not signaled"
+file = "crates/dom/src/slot.rs"
+from = '''                        !nodes.is_empty() && !after.iter().any(|(s, _)| s == slot)'''
+to = '''                        false && !nodes.is_empty() && !after.iter().any(|(s, _)| s == slot)'''
+
+[[mutant]]
+name = "a slot with the same nodes signaled"
+file = "crates/dom/src/slot.rs"
+from = '''                    old.map_or(!nodes.is_empty(), |old| old != nodes)'''
+to = '''                    old.map_or(!nodes.is_empty(), |_| true)'''
+
+[[mutant]]
+name = "a new slot without nodes signaled"
+file = "crates/dom/src/slot.rs"
+from = '''                    old.map_or(!nodes.is_empty(), |old| old != nodes)'''
+to = '''                    old.map_or(true, |old| old != nodes)'''
+
+[[mutant]]
+name = "an empty slot's fallback not signaled"
+file = "crates/dom/src/slot.rs"
+from = '''            if in_shadow_tree && empty {'''
+to = '''            if false && in_shadow_tree && empty {'''
+
+[[mutant]]
+name = "a slot with assigned nodes signaled for its children"
+file = "crates/dom/src/slot.rs"
+from = '''            if in_shadow_tree && empty {'''
+to = '''            if in_shadow_tree {'''
+
+[[mutant]]
+name = "assign() signals nothing"
+file = "crates/dom/src/slot.rs"
+from = '''        let slot_changes = self.slot_changes_before_assign(slot, nodes);'''
+to = '''        let slot_changes = SlotChanges::default();
+        let _ = nodes;'''
+
+[[mutant]]
+name = "assign() doesn't look at the old slots' shadow roots"
+file = "crates/dom/src/slot.rs"
+from = '''                if !roots.iter().any(|r| r.ptr_eq(&root)) {
+                    roots.push(root);
+                }'''
+to = '''                let _ = root;'''
+
+[[mutant]]
+name = "slotchange never fired"
+file = "crates/dom_api/src/mutation_observer.rs"
+from = '''    // HTML's `slotchange`: bubbles, not composed.
+    for slot in signal_slots {'''
+to = '''    for slot in [] as [dom::NodeHandle; 0] {'''
+
+[[mutant]]
+name = "slotchange doesn't bubble"
+file = "crates/dom_api/src/mutation_observer.rs"
+from = '''            .create_event("slotchange", true, false, true, dom::EventKindInit::Plain);'''
+to = '''            .create_event("slotchange", false, false, true, dom::EventKindInit::Plain);'''

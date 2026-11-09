@@ -1,0 +1,8 @@
+<!DOCTYPE html>
+<title>M3: an inline image's bottom sits on the baseline, and the line grows to hold it</title>
+<link rel="match" href="m3-baseline-ref.html">
+<style>html, body { margin: 0 } div { font: 20px/1 Ahem }</style>
+<!-- A 20x40 image between two Ahem squares: its bottom on the baseline
+     (16px below the text's top), so the line is 40 above the baseline and
+     4 below it, 44px, and the squares sit at 24px. -->
+<div>X<img src="resources/green-20x40.png">X</div>

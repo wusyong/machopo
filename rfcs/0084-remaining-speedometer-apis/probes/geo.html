@@ -1,0 +1,22 @@
+<!DOCTYPE html><meta charset=utf-8>
+<script>
+async function run(){const o=[];const g=navigator.geolocation;
+o.push([g.constructor.name,g===navigator.geolocation,Object.getOwnPropertyNames(Geolocation.prototype).join("|")].join(","));
+o.push("GPE "+[typeof GeolocationPositionError,GeolocationPositionError.PERMISSION_DENIED,GeolocationPositionError.POSITION_UNAVAILABLE,GeolocationPositionError.TIMEOUT,Object.getOwnPropertyNames(GeolocationPositionError.prototype).join("|")].join(","));
+o.push("GP "+[typeof GeolocationPosition,Object.getOwnPropertyNames(GeolocationPosition.prototype).join("|"),Object.getOwnPropertyNames(GeolocationCoordinates.prototype).join("|")].join(","));
+try{new GeolocationPositionError()}catch(e){o.push("ctor "+e.name+": "+e.message)}
+const t0=performance.now();let sync=true;
+const r=await new Promise(res=>{const id=g.getCurrentPosition(p=>res("success"),e=>res(["error",sync,e.constructor.name,e.code,JSON.stringify(e.message),e instanceof GeolocationPositionError,Object.prototype.toString.call(e),Math.round(performance.now()-t0)].join(",")));o.push("gcp returns "+id);sync=false;setTimeout(()=>res("no callback in 3s"),3000)});
+o.push(r);
+const r2=await new Promise(res=>{const id=g.watchPosition(p=>res("success"),e=>res(["werror",e.code,JSON.stringify(e.message)].join(",")+" id="+id));setTimeout(()=>res("no callback"),3000)});
+o.push(r2);
+o.push("clearWatch "+g.clearWatch(1)+" "+g.clearWatch(-5));
+try{g.getCurrentPosition()}catch(e){o.push("no args "+e.name+": "+e.message)}
+try{g.getCurrentPosition(1)}catch(e){o.push("bad cb "+e.name+": "+e.message)}
+try{g.getCurrentPosition(()=>{},null,{timeout:0})}catch(e){o.push("opts "+e.name)}
+const r3=await new Promise(res=>{g.getCurrentPosition(()=>res("s"),e=>res("timeout0 "+e.code+" "+JSON.stringify(e.message)),{timeout:0});setTimeout(()=>res("none"),3000)});
+o.push(r3);
+const r4=await new Promise(res=>{g.getCurrentPosition(()=>res("s"));setTimeout(()=>res("no error cb: fine"),500)});o.push(r4);
+try{const p=await navigator.permissions.query({name:"geolocation"});o.push("perm "+p.state)}catch(e){o.push("perm err "+e)}
+return o.join("\n")}
+</script>

@@ -1,0 +1,346 @@
+# 1a: system colors, `appearance`, system fonts, the UA stylesheet's form
+# control rules and the native look `appearance` comes to.
+#   python3 scripts/test.py mutate rfcs/0050-form-controls-rendering/mutants-1a.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::", "cascade::", "cssom::"]
+timeout = 900
+
+[[mutant]]
+name = "system colors don't parse"
+file = "crates/css/src/values.rs"
+from = '''            if let Some(system) = SystemColor::from_name(&name) {
+                return Ok(SpecifiedColor::System(system));
+            }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "css", "--lib", "values::"]
+
+[[mutant]]
+name = "a system color computes to the defaults whatever the platform's"
+file = "crates/css/src/values.rs"
+from = '''            Self::System(system) => StyleColor::Rgba(system.color(cx.system_colors)),'''
+to = '''            Self::System(system) => StyleColor::Rgba(system.color(&gfx::SystemColors::DEFAULT)),'''
+
+[[mutant]]
+name = "a system color reads back as its color"
+file = "crates/css/src/values.rs"
+from = '''            Self::System(system) => dest.push_str(system.name()),'''
+to = '''            Self::System(system) => write_rgba(dest, system.color(&gfx::SystemColors::DEFAULT)),'''
+
+[[mutant]]
+name = "the deprecated borders take the button's text color"
+file = "crates/css/src/values.rs"
+from = '''            | ThreeDLightShadow | ThreeDShadow | WindowFrame => colors.button_border,'''
+to = '''            | ThreeDLightShadow | ThreeDShadow | WindowFrame => colors.button_text,'''
+test = ["cargo", "test", "-q", "-p", "css", "--lib", "values::"]
+
+[[mutant]]
+name = "a page sees the platform's accent color"
+file = "crates/css/src/values.rs"
+from = '''            AccentColor => Color::from_hex(0x0075ff),'''
+to = '''            AccentColor => colors.highlight,'''
+test = ["cargo", "test", "-q", "-p", "css", "--lib", "values::"]
+
+[[mutant]]
+name = "the inactive caption's text is the platform's gray text"
+file = "crates/css/src/values.rs"
+from = '''            InactiveCaptionText => Color::from_hex(0x808080),'''
+to = '''            InactiveCaptionText => colors.gray_text,'''
+test = ["cargo", "test", "-q", "-p", "css", "--lib", "values::"]
+
+[[mutant]]
+name = "a canvas's system color is the default"
+file = "crates/css/src/canvas.rs"
+from = '''        SpecifiedColor::System(system) => CanvasColor::Color(system.color(system_colors)),'''
+to = '''        SpecifiedColor::System(system) => CanvasColor::Color(system.color(&gfx::SystemColors::DEFAULT)),'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_styles::system_colors"]
+
+[[mutant]]
+name = "a canvas's currentcolor takes the default system colors"
+file = "crates/css/src/canvas.rs"
+from = '''    match parse_canvas_color(&declared, system_colors) {'''
+to = '''    match parse_canvas_color(&declared, &gfx::SystemColors::DEFAULT) {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_styles::system_colors"]
+
+[[mutant]]
+name = "a canvas's system colors aren't the frame's"
+file = "crates/dom_api/src/frame.rs"
+from = '''        .map_or(gfx::SystemColors::DEFAULT, |frame| frame.system_colors())'''
+to = '''        .map_or(gfx::SystemColors::DEFAULT, |_| gfx::SystemColors::DEFAULT)'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_styles::system_colors"]
+
+[[mutant]]
+name = "the engine's system colors aren't used"
+file = "crates/style/src/lib.rs"
+from = '''            system_colors: self.system_colors.get(),'''
+to = '''            system_colors: gfx::SystemColors::DEFAULT,'''
+
+[[mutant]]
+name = "a frame's style engine doesn't get the renderer's system colors"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        style_engine.set_system_colors(requests.settings.system_colors);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "the_renderer_has_the_browsers_system_colors"]
+
+[[mutant]]
+name = "the renderer's flags' system colors aren't its frames'"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                system_colors: flags.system_colors,'''
+to = '''                system_colors: gfx::SystemColors::DEFAULT,'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "the_renderer_has_the_browsers_system_colors"]
+
+[[mutant]]
+name = "a frame tells script the default system colors"
+file = "crates/renderer/src/frame_view.rs"
+from = '''    fn system_colors(&self) -> gfx::SystemColors {
+        self.settings.system_colors
+    }'''
+to = '''    fn system_colors(&self) -> gfx::SystemColors {
+        gfx::SystemColors::DEFAULT
+    }'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "the_renderer_has_the_browsers_system_colors"]
+
+[[mutant]]
+name = "a window with the test fonts gets the platform's colors"
+file = "crates/shell/src/system_colors.rs"
+from = '''    if test_fonts {
+        SystemColors::DEFAULT
+    } else {
+        platform()
+    }'''
+to = '''    let _ = test_fonts;
+    platform()'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "system_colors"]
+
+[[mutant]]
+name = "the button border is the registry's default"
+file = "crates/shell/src/system_colors.rs"
+from = '''            button_border: button_text,'''
+to = '''            button_border: defaults.button_border,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "system_colors"]
+
+[[mutant]]
+name = "visited links aren't the hot tracking color"
+file = "crates/shell/src/system_colors.rs"
+from = '''            visited_text: hotlight,'''
+to = '''            visited_text: defaults.visited_text,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "system_colors"]
+
+[[mutant]]
+name = "a registry color with a fourth number parses"
+file = "crates/shell/src/system_colors.rs"
+from = '''        channels.next().is_none().then_some(Color::rgb(r, g, b))'''
+to = '''        Some(Color::rgb(r, g, b))'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "system_colors"]
+
+[[mutant]]
+name = "menulist-button doesn't parse"
+file = "crates/css/src/properties.rs"
+from = '''                    "menulist-button" => MenulistButton,'''
+to = ''''''
+
+[[mutant]]
+name = "-webkit-appearance isn't an alias"
+file = "crates/css/src/properties.rs"
+from = '''            "appearance" | "-webkit-appearance" => Appearance,'''
+to = '''            "appearance" => Appearance,'''
+
+[[mutant]]
+name = "webkitAppearance isn't an attribute"
+file = "crates/css/src/property_set.rs"
+from = '''    if upper && dashed.starts_with("webkit-") {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a dashed webkit- name is an attribute"
+file = "crates/css/src/property_set.rs"
+from = '''    if upper && dashed.starts_with("webkit-") {'''
+to = '''    if dashed.starts_with("webkit-") {'''
+
+[[mutant]]
+name = "base-select reads back as auto"
+file = "crates/css/src/serialize.rs"
+from = '''        BaseSelect => "base-select",'''
+to = '''        BaseSelect => "auto",'''
+
+[[mutant]]
+name = "getComputedStyle reads appearance as none"
+file = "crates/css/src/computed.rs"
+from = '''        Appearance => dest.push_str(crate::serialize::appearance_name(style.appearance)),'''
+to = '''        Appearance => dest.push_str("none"),'''
+
+[[mutant]]
+name = "a system font isn't a font"
+file = "crates/css/src/properties.rs"
+from = '''    if let Ok(system) = input.try_parse(crate::font::parse_system_font) {
+        return Ok(vec![Value::SystemFont(system); 5]);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "the menu's font is the default size"
+file = "crates/css/src/font.rs"
+from = '''            Self::Menu | Self::SmallCaption | Self::StatusBar => 12.0,'''
+to = '''            Self::Menu | Self::SmallCaption | Self::StatusBar => 16.0,'''
+
+[[mutant]]
+name = "a system font inherits the weight"
+file = "crates/css/src/properties.rs"
+from = '''        (FontWeight, Value::SystemFont(_)) => style.font_weight = 400.0,'''
+to = '''        (FontWeight, Value::SystemFont(_)) => style.font_weight = parent.font_weight,'''
+
+[[mutant]]
+name = "a system font inherits the line height"
+file = "crates/css/src/properties.rs"
+from = '''            style.line_height = computed_style::LineHeight::Normal
+        }'''
+to = '''            style.line_height = parent.line_height
+        }'''
+
+[[mutant]]
+name = "a longhand of a system font reads back as it"
+file = "crates/css/src/serialize.rs"
+from = '''        Value::SystemFont(_) => {}'''
+to = '''        Value::SystemFont(system) => dest.push_str(system.name()),'''
+
+[[mutant]]
+name = "a system font reads back as font though a longhand changed"
+file = "crates/css/src/serialize.rs"
+from = '''            .all(|(value, _)| **value == Value::SystemFont(system))'''
+to = '''            .any(|(value, _)| **value == Value::SystemFont(system))'''
+
+[[mutant]]
+name = "an input's type is read as written"
+file = "crates/style/src/theme.rs"
+from = '''            let ty = ty.as_deref().map(str::to_ascii_lowercase);'''
+to = '''            let ty = ty.as_deref().map(str::to_owned);'''
+
+[[mutant]]
+name = "a select of size one is a list box"
+file = "crates/style/src/theme.rs"
+from = '''        size.is_none_or(|size| size <= 1)'''
+to = '''        size.is_none_or(|size| size < 1)'''
+
+[[mutant]]
+name = "a size with white space before it isn't one"
+file = "crates/style/src/theme.rs"
+from = '''    let digits = value.trim_start_matches(['\t', '\n', '\x0c', '\r', ' ']);'''
+to = '''    let digits = value;'''
+
+[[mutant]]
+name = "textfield on a search field is a search field"
+file = "crates/style/src/theme.rs"
+from = '''        Appearance::Textfield if auto == EffectiveAppearance::SearchField => {
+            EffectiveAppearance::TextField
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "menulist-button on a select is a menu list"
+file = "crates/style/src/theme.rs"
+from = '''        Appearance::MenulistButton if auto == EffectiveAppearance::Menulist => {
+            EffectiveAppearance::MenulistButton
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "base-select on a select is native"
+file = "crates/style/src/theme.rs"
+from = '''        {
+            return EffectiveAppearance::None;
+        }
+        _ => auto,'''
+to = '''        {
+            auto
+        }
+        _ => auto,'''
+
+[[mutant]]
+name = "a text area isn't drawn as CSS for the author's border"
+file = "crates/style/src/theme.rs"
+from = '''            | EffectiveAppearance::TextArea
+    ) && (author.background'''
+to = '''    ) && (author.background'''
+
+[[mutant]]
+name = "a check box is drawn as CSS for the author's background"
+file = "crates/style/src/theme.rs"
+from = '''        EffectiveAppearance::PushButton
+            | EffectiveAppearance::SquareButton
+            | EffectiveAppearance::Listbox'''
+to = '''        EffectiveAppearance::PushButton
+            | EffectiveAppearance::Checkbox
+            | EffectiveAppearance::SquareButton
+            | EffectiveAppearance::Listbox'''
+
+[[mutant]]
+name = "a border radius doesn't count"
+file = "crates/style/src/theme.rs"
+from = '''(author.background || author.border || author.border_radius)'''
+to = '''(author.background || author.border)'''
+
+[[mutant]]
+name = "a styled menu list loses its arrow"
+file = "crates/style/src/theme.rs"
+from = '''        EffectiveAppearance::Menulist if styled => EffectiveAppearance::MenulistButton,'''
+to = ''''''
+
+[[mutant]]
+name = "the UA's declarations count as the author's"
+file = "crates/style/src/lib.rs"
+from = '''        let author = author_levels.contains(&priority.level);'''
+to = '''        let author = { let _ = &author_levels; true };'''
+
+[[mutant]]
+name = "an author's border doesn't count"
+file = "crates/style/src/lib.rs"
+from = '''            author.border |= id.is_border();'''
+to = ''''''
+
+[[mutant]]
+name = "a border color isn't a border"
+file = "crates/css/src/properties.rs"
+from = '''        BORDER_WIDTH.contains(&self) || BORDER_STYLE.contains(&self) || BORDER_COLOR.contains(&self)'''
+to = '''        BORDER_WIDTH.contains(&self) || BORDER_STYLE.contains(&self)'''
+
+[[mutant]]
+name = "a pseudo-element is its element's control"
+file = "crates/style/src/lib.rs"
+from = '''            env,
+            control: None,
+            applies,'''
+to = '''            env,
+            control: own_cascade.control,
+            applies,'''
+
+[[mutant]]
+name = "buttons aren't appearance: auto"
+file = "crates/style/resources/html.css"
+from = '''input[type=button i], input[type=submit i], input[type=reset i], button {
+  appearance: auto;'''
+to = '''input[type=button i], input[type=submit i], input[type=reset i], button {'''
+
+[[mutant]]
+name = "a radio button has a check box's margins"
+file = "crates/style/resources/html.css"
+from = '''input[type=radio i] {
+  margin: 3px 3px 0 5px;
+}'''
+to = ''''''
+
+[[mutant]]
+name = "a text field's border is the button's"
+file = "crates/style/resources/html.css"
+from = '''  border: 2px inset rgb(118, 118, 118);'''
+to = '''  border: 2px inset ButtonBorder;'''
+
+[[mutant]]
+name = "a text area's font isn't monospace"
+file = "crates/style/resources/html.css"
+from = '''  font-family: monospace;
+  padding: 2px;'''
+to = '''  padding: 2px;'''
+
+[[mutant]]
+name = "a disabled button isn't faded"
+file = "crates/style/resources/html.css"
+from = '''  color: rgba(16, 16, 16, 0.3);'''
+to = ''''''

@@ -1,0 +1,18 @@
+test = ["cargo", "test", "-p", "dom_js", "--test", "it", "--", "bindings::opener_is_null_and_replaceable"]
+timeout = 1200
+
+[[mutant]]
+name = "a window is its own opener"
+file = "crates/dom_api/src/window.rs"
+from = '''    _this: &WindowHandle,
+) -> Result<Option<WindowHandle>, DomException> {
+    Ok(None)'''
+to = '''    _this: &WindowHandle,
+) -> Result<Option<WindowHandle>, DomException> {
+    Ok(Some(_this.clone()))'''
+
+[[mutant]]
+name = "assigning to opener doesn't replace it"
+file = "crates/dom_api/src/interfaces/core_frame.rs"
+from = '''        [Replaceable] attribute opener: Option<Window>, get = window::opener;'''
+to = '''        attribute opener: Option<Window>, get = window::opener;'''

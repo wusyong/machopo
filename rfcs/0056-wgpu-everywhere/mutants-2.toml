@@ -1,0 +1,77 @@
+# 2: `WgpuRenderer` without a window: the process's `GpuContext` (made once,
+# made again when lost), the adapter it picks (`MACHOPO_GPU_ADAPTER`), and the
+# offscreen output read back. Runs on this machine's GPU; the ones about the
+# CPU adapter also with MACHOPO_GPU_ADAPTER=cpu, by hand.
+#   python3 scripts/test.py mutate rfcs/0056-wgpu-everywhere/mutants-2.toml
+test = ["cargo", "test", "-q", "-p", "viz", "--lib"]
+timeout = 900
+
+[[mutant]]
+name = "an integrated GPU before a discrete one"
+file = "crates/viz/src/gpu_context.rs"
+from = '''        (_, wgpu::DeviceType::DiscreteGpu) => Some(0),'''
+to = '''        (_, wgpu::DeviceType::DiscreteGpu) => Some(2),'''
+
+[[mutant]]
+name = "asked for the CPU adapter, any adapter"
+file = "crates/viz/src/gpu_context.rs"
+from = '''        (AdapterPreference::Cpu, _) => None,'''
+to = '''        (AdapterPreference::Cpu, _) => Some(1),'''
+
+[[mutant]]
+name = "no CPU adapter to fall back to"
+file = "crates/viz/src/gpu_context.rs"
+from = '''        (_, wgpu::DeviceType::Cpu) => Some(4),'''
+to = '''        (_, wgpu::DeviceType::Cpu) => None,'''
+
+[[mutant]]
+name = "the environment can't ask for the CPU adapter"
+file = "crates/viz/src/gpu_context.rs"
+from = '''            Some("cpu") => Self::Cpu,'''
+to = '''            Some("cpu") => Self::Gpu,'''
+
+[[mutant]]
+name = "a device for each renderer"
+file = "crates/viz/src/gpu_context.rs"
+from = '''        let context = Arc::new(Self::new(surface, 0)?);
+        *shared = Some(context.clone());'''
+to = '''        let context = Arc::new(Self::new(surface, 0)?);'''
+
+[[mutant]]
+name = "a lost device made again by every renderer"
+file = "crates/viz/src/gpu_context.rs"
+from = '''            && context.generation > lost.generation'''
+to = '''            && context.generation > lost.generation + 1'''
+
+[[mutant]]
+name = "clients not told the device was lost"
+file = "crates/viz/src/wgpu_renderer.rs"
+from = '''                    self.shared_images.context_lost();'''
+to = '''                    {}'''
+
+[[mutant]]
+name = "an offscreen output can't be read back"
+file = "crates/viz/src/wgpu_renderer.rs"
+from = '''            Output::Offscreen { .. } => true,'''
+to = '''            Output::Offscreen { .. } => false,'''
+
+[[mutant]]
+name = "an offscreen output keeps its size"
+file = "crates/viz/src/wgpu_renderer.rs"
+from = '''                if Size::new(texture.width(), texture.height()) != size {'''
+to = '''                if false {'''
+
+[[mutant]]
+name = "Windows draws with every backend"
+file = "crates/viz/src/gpu_context.rs"
+from = '''pub const BACKENDS: wgpu::Backends = if cfg!(windows) {
+    wgpu::Backends::DX12'''
+to = '''pub const BACKENDS: wgpu::Backends = if cfg!(windows) {
+    wgpu::Backends::all()'''
+
+[[mutant]]
+name = "the instance on every backend"
+file = "crates/viz/src/gpu_context.rs"
+from = '''            descriptor.backends = BACKENDS;'''
+to = ''''''
+

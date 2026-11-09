@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>SVG's style element styles the document, and changes as its text does</title>
+<link rel="match" href="style-element-ref.html">
+<style>body { margin: 0 } svg { display: block }</style>
+<svg width="100" height="60">
+  <style>.a { fill: lime } .b { fill: red }</style>
+  <rect class="a" x="10" y="10" width="20" height="20"/>
+  <rect class="b" x="40" y="10" width="20" height="20"/>
+  <style type="text/plain">.a { fill: red }</style>
+</svg>
+<script>
+requestAnimationFrame(() => requestAnimationFrame(() => {
+  document.querySelector("svg style:not([type])").textContent = ".a, .b { fill: lime }";
+  requestAnimationFrame(() => requestAnimationFrame(() => document.documentElement.classList.remove("reftest-wait")));
+}));
+</script>
+</html>

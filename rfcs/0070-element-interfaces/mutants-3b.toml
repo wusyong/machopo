@@ -1,0 +1,134 @@
+# 3b: the table elements' interfaces (`dom_api`'s `table` and
+# reflections, `dom`'s collections of a table).
+#   python3 scripts/test.py mutate rfcs/0070-element-interfaces/mutants-3b.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "element_interfaces"]
+timeout = 900
+
+[[mutant]]
+name = "the head's rows after the others"
+file = "crates/dom_api/src/table.rs"
+from = '''    in_sections(local_name!("thead"))
+        .chain(bodies)'''
+to = '''    bodies
+        .chain(in_sections(local_name!("thead")))'''
+
+[[mutant]]
+name = "the table's own rows left out"
+file = "crates/dom_api/src/table.rs"
+from = '''        let own = is_row(&child).then_some(child);'''
+to = '''        let own = None;'''
+
+[[mutant]]
+name = "the last row not looked for in the foot"
+file = "crates/dom_api/src/table.rs"
+from = '''        .filter(is(&local_name!("tfoot")))
+        .find_map(|foot| last_of(foot))'''
+to = '''        .filter(is(&local_name!("caption")))
+        .find_map(|foot| last_of(foot))'''
+
+[[mutant]]
+name = "insertRow at the number of rows refused"
+file = "crates/dom_api/src/table.rs"
+from = '''            if before.is_none() && seen != index {'''
+to = '''            if before.is_none() {'''
+
+[[mutant]]
+name = "a row in an empty table without a tbody"
+file = "crates/dom_api/src/table.rs"
+from = '''                    let body = create(cx, this, local_name!("tbody"));
+                    crate::node::pre_insert(cx, &body, row.clone(), None)?;
+                    crate::node::pre_insert(cx, this, body, None)?;
+                    return Ok(row);'''
+to = '''                    return crate::node::pre_insert(cx, this, row, None);'''
+
+[[mutant]]
+name = "a row into the first tbody"
+file = "crates/dom_api/src/table.rs"
+from = '''                children_backwards(this.get(&read))
+                    .find(is(&local_name!("tbody")))
+                    .map(|body| body.to_handle())'''
+to = '''                this.get(&read)
+                    .children()
+                    .find(is(&local_name!("tbody")))
+                    .map(|body| body.to_handle())'''
+
+[[mutant]]
+name = "deleteRow(-1) of an empty table throws"
+file = "crates/dom_api/src/table.rs"
+from = '''        None if index == -1 => Ok(()),
+        None => Err(index_size_error("no row at that index")),'''
+to = '''        None => Err(index_size_error("no row at that index")),'''
+
+[[mutant]]
+name = "a section of the wrong kind set"
+file = "crates/dom_api/src/table.rs"
+from = '''        && !is(name)(&section.get(&cx.read()))'''
+to = '''        && false'''
+
+[[mutant]]
+name = "a head before a colgroup"
+file = "crates/dom_api/src/table.rs"
+from = '''                && !is(&local_name!("colgroup"))(child)'''
+to = ''''''
+
+[[mutant]]
+name = "a new tbody appended"
+file = "crates/dom_api/src/table.rs"
+from = '''            .and_then(|last| last.next_sibling())'''
+to = '''            .and_then(|_| None::<NodeRef<'_>>)'''
+
+[[mutant]]
+name = "a section's row indexed in no table"
+file = "crates/dom_api/src/table.rs"
+from = '''            parent.parent().filter(is(&local_name!("table")))'''
+to = '''            parent.parent()'''
+
+[[mutant]]
+name = "a table's own row without a section index"
+file = "crates/dom_api/src/table.rs"
+from = '''        if is(&local_name!("table"))(&parent) {
+            rows(parent).position(|r| r.id() == row.id())'''
+to = '''        if is(&local_name!("table"))(&parent) {
+            None'''
+
+[[mutant]]
+name = "cellIndex counts every child"
+file = "crates/dom_api/src/table.rs"
+from = '''        .and_then(|row| row.children().filter(is_cell).position(|c| c.id() == cell.id()));'''
+to = '''        .and_then(|row| row.children().position(|c| c.id() == cell.id()));'''
+
+[[mutant]]
+name = "insertCell past the end allowed"
+file = "crates/dom_api/src/table.rs"
+from = '''        if before.is_none() && this.get(&read).children().filter(picks).count() != index {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a huge span the default"
+file = "crates/dom_api/src/reflection.rs"
+from = '''    Some(digits.parse().unwrap_or(u64::MAX))'''
+to = '''    digits.parse().ok()'''
+
+[[mutant]]
+name = "-0 not a span"
+file = "crates/dom_api/src/reflection.rs"
+from = '''    if digits.is_empty() || (negative && digits.bytes().any(|d| d != b'0')) {'''
+to = '''    if digits.is_empty() || negative {'''
+
+[[mutant]]
+name = "a span not brought up to the minimum"
+file = "crates/dom_api/src/reflection.rs"
+from = '''                .clamp(*range.start(), *range.end())'''
+to = '''                .min(*range.end())'''
+
+[[mutant]]
+name = "scope without colgroup"
+file = "crates/dom_api/src/element_reflections.rs"
+from = '''    &["row", "col", "rowgroup", "colgroup"],'''
+to = '''    &["row", "col", "rowgroup"],'''
+
+[[mutant]]
+name = "a table's tBodies its sections"
+file = "crates/dom_api/src/collection.rs"
+from = '''        CollectionFilter::TableTBodies => name.is_html(&local_name!("tbody")),'''
+to = '''        CollectionFilter::TableTBodies => name.is_html(&local_name!("tbody")) || name.is_html(&local_name!("thead")),'''

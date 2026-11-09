@@ -1,0 +1,101 @@
+test = ["sh", "-c", "cargo test -q -p dom --test it -- intersection_observers:: && cargo test -q -p dom_js --test it -- intersection_observers:: && cargo test -q -p shell --test it -- intersection_observers::"]
+timeout = 2400
+
+[[mutant]]
+name = "trackVisibility takes any delay"
+file = "crates/dom_api/src/intersection_observer.rs"
+from = '''    if options.track_visibility && delay_micros < MIN_VISIBILITY_DELAY_MICROS {'''
+to = '''    if false && options.track_visibility && delay_micros < MIN_VISIBILITY_DELAY_MICROS {'''
+
+[[mutant]]
+name = "the margins are checked first"
+file = "crates/dom_api/src/intersection_observer.rs"
+from = '''    let delay_micros: i64 = base::numerics::saturated_cast(options.delay * 1000.0);
+    if options.track_visibility && delay_micros < MIN_VISIBILITY_DELAY_MICROS {
+        return Err(DomException::new(ExceptionName::NotSupportedError, TRACK_VISIBILITY).into());
+    }
+    let margin = |text: &DomString, name: &str| {'''
+to = '''    let delay_micros: i64 = base::numerics::saturated_cast(options.delay * 1000.0);
+    let margin = |text: &DomString, name: &str| {'''
+
+[[mutant]]
+name = "the delay is whole milliseconds"
+file = "crates/dom_api/src/intersection_observer.rs"
+from = '''    let delay_micros: i64 = base::numerics::saturated_cast(options.delay * 1000.0);'''
+to = '''    let delay_micros: i64 = base::numerics::saturated_cast::<i64, f64>(options.delay) * 1000;'''
+
+[[mutant]]
+name = "a saturated delay reads in milliseconds"
+file = "crates/dom_api/src/intersection_observer.rs"
+from = '''        i64::MAX | i64::MIN => micros,'''
+to = '''        i64::MIN => micros,'''
+
+[[mutant]]
+name = "trackVisibility reads false"
+file = "crates/dom_api/src/intersection_observer.rs"
+from = '''    Ok(cx.read().intersection_observer_options(this).track_visibility)'''
+to = '''    let _ = cx.read().intersection_observer_options(this).track_visibility;
+    Ok(false)'''
+
+[[mutant]]
+name = "a change of visibility brings no entry"
+file = "crates/dom_api/src/intersection_observer.rs"
+from = '''            && previous.previous_is_visible == c.is_visible'''
+to = ''''''
+
+[[mutant]]
+name = "the entry isn't visible"
+file = "crates/dom_api/src/intersection_observer.rs"
+from = '''                is_visible: c.is_visible,
+                intersection_ratio: ratio,'''
+to = '''                is_visible: false,
+                intersection_ratio: ratio,'''
+
+[[mutant]]
+name = "the visibility computed isn't kept"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''            observation.previous_is_visible.set(is_visible);'''
+to = ''''''
+
+[[mutant]]
+name = "the delay is ignored"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    if let Some(last) = observation.last_run
+                        && now < last + delay
+                    {'''
+to = '''                    if let Some(last) = observation.last_run
+                        && now < last + 0.0 * delay
+                    {'''
+
+[[mutant]]
+name = "no frame comes when the delay is up"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            self.intersections_due = None;
+            self.request_main_frame();'''
+to = '''            self.intersections_due = None;'''
+
+[[mutant]]
+name = "the loop doesn't wake when the delay is up"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let due = sooner_ms(
+            sooner_ms(self.next_timer_due(), self.idle_wake()),
+            self.intersections_due,
+        );'''
+to = '''        let due = sooner_ms(
+            sooner_ms(self.next_timer_due(), self.idle_wake()),
+            self.intersections_due.filter(|_| false),
+        );'''
+
+[[mutant]]
+name = "what waits isn't computed again"
+file = "crates/renderer/src/render_thread.rs"
+from = '''    if due.is_some() {
+        *computed = None;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "the time of a computation isn't kept"
+file = "crates/dom/src/intersection_observer.rs"
+from = '''            observation.get().last_run.set(Some(time));'''
+to = '''            let _ = (observation, time);'''

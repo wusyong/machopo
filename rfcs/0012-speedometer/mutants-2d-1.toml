@@ -1,0 +1,63 @@
+# Mutation test of step 2d-1 (a Perfetto trace: kun's spans and V8's
+# events), kun's side; the fork's C++ is broken by hand (progress.md). Run
+# against the locally built V8:
+# RUSTY_V8_ARCHIVE=../third_party/rusty_v8_artifacts python3 scripts/test.py mutate rfcs/0012-speedometer/mutants-2d-1.toml
+test = ["python3", "scripts/speedometer_test.py", "MeasureTests.test_traces_of_both"]
+timeout = 900
+
+[[mutant]]
+name = "a span's entry doesn't begin a slice"
+file = "crates/shell/src/trace.rs"
+from = '''            (self.begin)(span.name());'''
+to = '''            let _ = span;'''
+
+[[mutant]]
+name = "a span's exit doesn't end its slice"
+file = "crates/shell/src/trace.rs"
+from = '''        if ctx.span(id).is_some() {
+            (self.end)();
+        }'''
+to = '''        let _ = (id, ctx);'''
+
+[[mutant]]
+name = "the trace isn't stopped at the end"
+file = "crates/shell/src/trace.rs"
+from = '''        trace::stop();'''
+to = ''''''
+
+[[mutant]]
+name = "kun's spans aren't recorded"
+file = "crates/bindings/src/trace.rs"
+from = '''    "devtools.timeline",
+    "kun",
+];'''
+to = '''    "devtools.timeline",
+];'''
+
+[[mutant]]
+name = "V8's GC events aren't recorded"
+file = "crates/bindings/src/trace.rs"
+from = '''    "loading",
+    "devtools.timeline",'''
+to = '''    "loading",'''
+
+[[mutant]]
+name = "a trace starts after V8"
+file = "crates/bindings/src/trace.rs"
+from = '''    if platform::is_initialized() {
+        return Err(StartError::V8Started);
+    }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "bindings", "--lib", "trace::"]
+
+[[mutant]]
+name = "kun traces without its spans' layer"
+file = "crates/shell/src/main.rs"
+from = '''            Ok((layer, end)) => (Some(layer), Some(end)),'''
+to = '''            Ok((layer, end)) => (None::<Option<()>>.map(|_| layer), Some(end)),'''
+
+[[mutant]]
+name = "kun's trace is named as JSON"
+file = "scripts/speedometer.py"
+from = '''trace = folder / f"{name}-kun.pftrace"'''
+to = '''trace = folder / f"{name}-kun.json"'''

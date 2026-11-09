@@ -1,0 +1,137 @@
+# Step 2c's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0033-canvas-2d/mutations-2c.toml`. Each names the tests closest to
+# what it breaks.
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_text"]
+timeout = 1500
+
+# dom_api: measureText.
+
+[[mutant]]
+name = "measuring asks for no ink"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let values = lay_out_text(cx, this, text.as_str(), true)'''
+to = '''    let values = lay_out_text(cx, this, text.as_str(), false)'''
+
+[[mutant]]
+name = "drawing asks for the ink"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let Some((state, direction, shaped)) = lay_out_text(cx, this, text, false) else {'''
+to = '''    let Some((state, direction, shaped)) = lay_out_text(cx, this, text, true) else {'''
+
+[[mutant]]
+name = "measured from the left end"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            let dx = align_offset(state.text_align, direction, width);'''
+to = '''            let dx = 0.0;'''
+
+[[mutant]]
+name = "the ink's left edge the wrong way"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                actual_bounding_box_left: dx - f64::from(ink.x),'''
+to = '''                actual_bounding_box_left: f64::from(ink.x) - dx,'''
+
+[[mutant]]
+name = "the ink's right edge from the left end"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                actual_bounding_box_right: f64::from(ink.right()) - dx,'''
+to = '''                actual_bounding_box_right: f64::from(ink.right()),'''
+
+[[mutant]]
+name = "the font's ascent OS/2's"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                font_bounding_box_ascent: f64::from(metrics.ascent) - below,'''
+to = '''                font_bounding_box_ascent: f64::from(metrics.typo_ascent) - below,'''
+
+[[mutant]]
+name = "the font's descent from the alphabetic baseline"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                font_bounding_box_descent: f64::from(metrics.descent) + below,'''
+to = '''                font_bounding_box_descent: f64::from(metrics.descent),'''
+
+[[mutant]]
+name = "the ink's ascent from the alphabetic baseline"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                actual_bounding_box_ascent: -f64::from(ink.y) - below,'''
+to = '''                actual_bounding_box_ascent: -f64::from(ink.y),'''
+
+[[mutant]]
+name = "the ink's descent its height"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                actual_bounding_box_descent: f64::from(ink.bottom()) + below,'''
+to = '''                actual_bounding_box_descent: f64::from(ink.height) + below,'''
+
+[[mutant]]
+name = "the baselines from the alphabetic one"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            let line = |baseline| f64::from(baseline_offset(baseline, metrics)) - below;'''
+to = '''            let line = |baseline| f64::from(baseline_offset(baseline, metrics));'''
+
+[[mutant]]
+name = "the hanging baseline the top"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                hanging_baseline: line(TextBaseline::Hanging),'''
+to = '''                hanging_baseline: line(TextBaseline::Top),'''
+
+[[mutant]]
+name = "a getter reads another member"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    Ok(cx.read().text_metrics(this).actual_bounding_box_ascent)'''
+to = '''    Ok(cx.read().text_metrics(this).font_bounding_box_ascent)'''
+
+# dom: the values kept.
+
+[[mutant]]
+name = "a TextMetrics forgets its values"
+file = "crates/dom/src/canvas.rs"
+from = '''        self.own(metrics).values'''
+to = '''        let _ = self.own(metrics);
+        TextMetricsValues::default()'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "script_objects::text_metrics"]
+
+# raster: the ink.
+
+[[mutant]]
+name = "Skia's whole-pixel glyph bounds"
+file = "crates/raster/src/skia_backend.rs"
+from = '''            let bounds = match font.get_path(glyph) {'''
+to = '''            let bounds = match None::<sk::Path> {'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "ink_bounds"]
+
+[[mutant]]
+name = "a glyph with no ink counted"
+file = "crates/raster/src/skia_backend.rs"
+from = '''            if !bounds.is_empty() {
+                ink = ink.union(&bounds);
+            }'''
+to = '''            ink = ink.union(&bounds);'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "ink_bounds"]
+
+[[mutant]]
+name = "a glyph's ink not where it is"
+file = "crates/raster/src/skia_backend.rs"
+from = '''                position.x + bounds.left,'''
+to = '''                bounds.left,'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "ink_bounds"]
+
+[[mutant]]
+name = "the ink not made bold"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        .set_embolden(embolden)'''
+to = '''        .set_embolden(false)'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "ink_bounds"]
+
+[[mutant]]
+name = "the ink not slanted"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        .set_skew_x(-skew.to_radians().tan());'''
+to = '''        .set_skew_x(0.0);'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "ink_bounds"]
+
+# renderer: the ink added.
+
+[[mutant]]
+name = "the renderer adds no ink"
+file = "crates/renderer/src/layout_client.rs"
+from = '''            shaped.ink = raster::ink_bounds(self.raster_cache, &shaped.runs);'''
+to = '''            let _ = &self.raster_cache;'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "canvas_2d"]

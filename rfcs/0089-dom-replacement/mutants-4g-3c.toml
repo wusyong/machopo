@@ -1,0 +1,232 @@
+# Stage 4g-3c: SVG's geometry members on the new DOM (SVGMatrix, SVGPoint, SVGRect, getBBox,
+# getCTM, getScreenCTM, SVGGeometryElement's and SVGTextContentElement's methods), what they
+# compute shared with today's DOM in gfx::svg; an SVG element's client rect, focus and
+# ResizeObserver sizes from its geometry; the layout's geometry queries generic over the DOM.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it svg && cargo test -q -p layout --test it -- next svg && cargo test -q -p dom_api_next --test it && cargo test -q -p dom_js --test it svg && cargo test -q -p dom_api --test it svg"]
+timeout = 3000
+
+[[mutant]]
+name = "gfx: a product's translation without the first's"
+file = "crates/gfx/src/svg.rs"
+from = '''            a * e2 + c * f2 + e,'''
+to = '''            a * e2 + c * f2,'''
+
+[[mutant]]
+name = "gfx: a singular matrix inverted"
+file = "crates/gfx/src/svg.rs"
+from = '''        if det == 0.0 || !det.is_finite() {'''
+to = '''        if !det.is_finite() {'''
+
+[[mutant]]
+name = "gfx: an inverse's sign"
+file = "crates/gfx/src/svg.rs"
+from = '''            -b / det,'''
+to = '''            b / det,'''
+
+[[mutant]]
+name = "gfx: a translation not of floats"
+file = "crates/gfx/src/svg.rs"
+from = '''        [1.0, 0.0, 0.0, 1.0, float(x), float(y)]'''
+to = '''        [1.0, 0.0, 0.0, 1.0, x, y]'''
+
+[[mutant]]
+name = "gfx: a scale of x alone"
+file = "crates/gfx/src/svg.rs"
+from = '''        [factor, 0.0, 0.0, factor, 0.0, 0.0]'''
+to = '''        [factor, 0.0, 0.0, 1.0, 0.0, 0.0]'''
+
+[[mutant]]
+name = "gfx: a turn the other way"
+file = "crates/gfx/src/svg.rs"
+from = '''        [cos, sin, -sin, cos, 0.0, 0.0]'''
+to = '''        [cos, -sin, sin, cos, 0.0, 0.0]'''
+
+[[mutant]]
+name = "gfx: a vector with no y turned to"
+file = "crates/gfx/src/svg.rs"
+from = '''        if x == 0.0 || y == 0.0 {'''
+to = '''        if x == 0.0 {'''
+
+[[mutant]]
+name = "gfx: flipX no flip"
+file = "crates/gfx/src/svg.rs"
+from = '''    pub const FLIP_X: MatrixValues = [-1.0, 0.0, 0.0, 1.0, 0.0, 0.0];'''
+to = '''    pub const FLIP_X: MatrixValues = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];'''
+
+[[mutant]]
+name = "gfx: skewX skews y"
+file = "crates/gfx/src/svg.rs"
+from = '''        [1.0, 0.0, float(angle).to_radians().tan(), 1.0, 0.0, 0.0]'''
+to = '''        [1.0, float(angle).to_radians().tan(), 0.0, 1.0, 0.0, 0.0]'''
+
+[[mutant]]
+name = "gfx: a point transformed not to floats"
+file = "crates/gfx/src/svg.rs"
+from = '''        [float(a * x + c * y + e), float(b * x + d * y + f)]'''
+to = '''        [a * x + c * y + e, float(b * x + d * y + f)]'''
+
+[[mutant]]
+name = "gfx: each character one number"
+file = "crates/gfx/src/svg.rs"
+from = '''        chars.iter().map(|c| c.units).sum()'''
+to = '''        chars.iter().map(|_| 1).sum()'''
+
+[[mutant]]
+name = "gfx: a character only by its first number"
+file = "crates/gfx/src/svg.rs"
+from = '''            .find(|(range, _)| range.contains(&charnum))'''
+to = '''            .find(|(range, _)| range.start == charnum)'''
+
+[[mutant]]
+name = "gfx: a substring from the end"
+file = "crates/gfx/src/svg.rs"
+from = '''        if charnum >= count(chars) {
+            return None;
+        }
+        // Past the end is to the end.'''
+to = '''        if charnum > count(chars) {
+            return None;
+        }
+        // Past the end is to the end.'''
+
+[[mutant]]
+name = "gfx: a substring with the character after it"
+file = "crates/gfx/src/svg.rs"
+from = '''                .filter(|(range, _)| range.start < end && charnum < range.end)'''
+to = '''                .filter(|(range, _)| range.start <= end && charnum < range.end)'''
+
+[[mutant]]
+name = "gfx: an extent's far corner the near"
+file = "crates/gfx/src/svg.rs"
+from = '''            (x0, y0, x1, y1) = (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y));'''
+to = '''            (x0, y0, x1, y1) = (x0.min(p.x), y0.min(p.y), x1.min(p.x), y1.max(p.y));'''
+
+[[mutant]]
+name = "gfx: a cell holds nothing"
+file = "crates/gfx/src/svg.rs"
+from = '''        corners.iter().zip(next).all(|(&a, &b)| side(a, b) >= 0.0)'''
+to = '''        corners.iter().zip(next).all(|(&a, &b)| side(a, b) < 0.0)'''
+
+[[mutant]]
+name = "gfx: a point past the path's end"
+file = "crates/gfx/src/svg.rs"
+from = '''    let distance = f32_from_f64(distance).clamp(0.0, shape_length(path, is_path));'''
+to = '''    let distance = f32_from_f64(distance).max(0.0);'''
+
+[[mutant]]
+name = "gfx: a point on an empty path"
+file = "crates/gfx/src/svg.rs"
+from = '''    if path.elements().is_empty() {
+        return None;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "next: a point's x not a float"
+file = "crates/dom_api_next/src/svg_geometry.rs"
+from = '''    cx.set_svg_point(this, [webidl_float(value), y]);'''
+to = '''    cx.set_svg_point(this, [value, y]);'''
+
+[[mutant]]
+name = "next: a rect's values not floats"
+file = "crates/dom_api_next/src/svg_geometry.rs"
+from = '''                values[$index] = webidl_float(value);'''
+to = '''                values[$index] = value;'''
+
+[[mutant]]
+name = "next: a matrix's attribute set elsewhere"
+file = "crates/dom_api_next/src/svg_geometry.rs"
+from = '''                let mut values = cx.svg_matrix(this);
+                values[$index] = value;'''
+to = '''                let mut values = cx.svg_matrix(this);
+                values[($index + 1) % 6] = value;'''
+
+[[mutant]]
+name = "next: getScreenCTM is getCTM"
+file = "crates/dom_api_next/src/svg_geometry.rs"
+from = '''    Ok(new_matrix(cx, geometry(cx, this).screen_ctm))'''
+to = '''    Ok(new_matrix(cx, geometry(cx, this).ctm))'''
+
+[[mutant]]
+name = "next: a point not finite looked for"
+file = "crates/dom_api_next/src/svg_geometry.rs"
+from = '''    (x.is_finite() && y.is_finite()).then(|| PointF::new(x, y))'''
+to = '''    Some(PointF::new(x, y))'''
+
+[[mutant]]
+name = "next: the fill for the stroke"
+file = "crates/dom_api_next/src/svg_geometry.rs"
+from = '''    Ok(point_in(cx, this, point, true))'''
+to = '''    Ok(point_in(cx, this, point, false))'''
+
+[[mutant]]
+name = "next: a character number out of range selected"
+file = "crates/dom_api_next/src/svg_geometry.rs"
+from = '''    if charnum as usize >= text::count(&chars(cx, this)) {'''
+to = '''    if false && charnum as usize >= text::count(&chars(cx, this)) {'''
+
+[[mutant]]
+name = "next: no character at a point is 0"
+file = "crates/dom_api_next/src/svg_geometry.rs"
+from = '''    Ok(found.map_or(-1, |n| i32::try_from(n).unwrap_or(i32::MAX)))'''
+to = '''    Ok(found.map_or(0, |n| i32::try_from(n).unwrap_or(i32::MAX)))'''
+
+[[mutant]]
+name = "next: the end of a character its start"
+file = "crates/dom_api_next/src/svg_geometry.rs"
+from = '''    Ok(new_point(cx, char_at(cx, this, charnum)?.end))'''
+to = '''    Ok(new_point(cx, char_at(cx, this, charnum)?.start))'''
+
+[[mutant]]
+name = "next: an SVG element has no client rect"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''        if !rects.is_empty() || !svg {'''
+to = '''        if !rects.is_empty() || true {'''
+
+[[mutant]]
+name = "next: an SVG element never takes the focus"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''                    || (svg && layout.svg_geometry(cx, element).client_rect.is_some()))'''
+to = '''                    || (svg && false))'''
+
+[[mutant]]
+name = "next: an SVG element's resize size none"
+file = "crates/dom_api_next/src/resize_observer.rs"
+from = '''        return svg_entry_values(cx, target, scale);'''
+to = '''        return ResizeObserverEntryValues::default();'''
+
+[[mutant]]
+name = "next: an SVG element not rendered has a resize size"
+file = "crates/dom_api_next/src/resize_observer.rs"
+from = '''        .filter(|geometry| geometry.client_rect.is_some())'''
+to = ''''''
+
+[[mutant]]
+name = "next: InvalidAccessError another name"
+file = "crates/dom_api_next/src/exception.rs"
+from = '''            Self::InvalidAccess => "InvalidAccessError",'''
+to = '''            Self::InvalidAccess => "InvalidStateError",'''
+
+[[mutant]]
+name = "layout: getCTM through every viewport"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''    matches!(element.svg_name(), Some(SvgName::Svg | SvgName::Symbol))'''
+to = '''    matches!(element.svg_name(), Some(SvgName::Symbol))'''
+
+[[mutant]]
+name = "layout: a tspan not laid out with its text"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''    matches!(element.svg_name(), Some(SvgName::Tspan | SvgName::A))'''
+to = '''    matches!(element.svg_name(), Some(SvgName::A))'''
+
+[[mutant]]
+name = "layout: a use placed as itself"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''            Laid::Node(node) if element.svg_name() == Some(SvgName::Use) => {'''
+to = '''            Laid::Node(node) if false => {'''
+
+[[mutant]]
+name = "layout: a rect's path no line"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''    let is_rect = element.svg_name() == Some(SvgName::Rect);'''
+to = '''    let is_rect = false;'''

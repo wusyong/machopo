@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<title>C2: an id beats a class beats a type</title>
+<link rel="match" href="green-squares-ref.html">
+<style>html, body { margin: 0 }</style>
+<style>
+  #a { background-color: green }
+  .a { background-color: red }
+  div.b { background-color: green }
+  .b { background-color: red }
+  div { background-color: red }
+  div { width: 100px; height: 100px }
+</style>
+<div id="a" class="a"></div>
+<div class="b"></div>

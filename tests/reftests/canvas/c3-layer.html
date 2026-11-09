@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>C3: a canvas that is a layer: its bitmap scaled into its box, drawn on again in a later frame, under opacity (painted into the page), and in a scroller that is scrolled, cut to it</title>
+<link rel="match" href="c3-layer-ref.html">
+<style>
+  html, body { margin: 0 }
+  canvas { display: block; margin-bottom: 10px }
+  #scroller { width: 100px; height: 40px; overflow: auto }
+</style>
+<!-- 4x2 pixels in a 40x20 box: one color stays one color, scaled. -->
+<canvas id="scaled" width="4" height="2" style="width: 40px; height: 20px"></canvas>
+<canvas id="later" width="40" height="20"></canvas>
+<div style="opacity: 0.5"><canvas id="faded" width="40" height="20"></canvas></div>
+<div id="scroller">
+  <div style="height: 30px"></div>
+  <canvas id="scrolled" width="40" height="20"></canvas>
+  <div style="height: 100px"></div>
+</div>
+<script>
+  function fill(id, color) {
+    const ctx = document.getElementById(id).getContext("2d");
+    ctx.fillStyle = color;
+    ctx.fillRect(0, 0, 40, 20);
+  }
+  fill("scaled", "lime");
+  fill("later", "red");
+  fill("faded", "lime");
+  fill("scrolled", "lime");
+  document.getElementById("scroller").scrollTop = 40;
+  // Drawn on once it is on screen: only its layer changes.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    fill("later", "lime");
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      document.documentElement.classList.remove("reftest-wait");
+    }));
+  }));
+</script>
+</html>

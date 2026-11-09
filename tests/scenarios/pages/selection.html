@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<!-- Text selected on load (#text), and room to click without selecting
+     anything (#blank). #out says whether the page has the focus. A key
+     selects #other instead, changing nothing else. -->
+<title>selection</title>
+<style>
+  html, body { margin: 0 }
+  body { padding: 20px; font: 24px sans-serif }
+  #blank { height: 200px }
+</style>
+<p id="text">Selected text</p>
+<p id="other">Other text</p>
+<div id="blank"></div>
+<div id="out"></div>
+<script>
+  getSelection().selectAllChildren(document.getElementById('text'));
+  const out = document.getElementById('out');
+  const show = () => out.textContent = document.hasFocus() ? 'focused' : 'not focused';
+  addEventListener('keydown', (e) => {
+    if (e.key === 's') getSelection().selectAllChildren(document.getElementById('other'));
+  });
+  addEventListener('focus', show);
+  addEventListener('blur', show);
+  show();
+</script>

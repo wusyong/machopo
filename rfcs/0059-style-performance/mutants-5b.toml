@@ -1,0 +1,40 @@
+# 5b: `ComputedStyle`'s rare non-inherited properties, background lists
+# and SVG properties in shared `Arc` groups (`computed_style`'s `lib.rs`,
+# `layout`'s `StyleDifference`).
+#   python3 scripts/test.py mutate rfcs/0059-style-performance/mutants-5b.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it"]
+timeout = 1800
+
+[[mutant]]
+name = "the parent's SVG properties not shared"
+file = "crates/computed_style/src/lib.rs"
+from = '''        let svg = if svg == *parent.svg {'''
+to = '''        let svg = if false {'''
+
+[[mutant]]
+name = "the initial groups made again for each style"
+file = "crates/computed_style/src/lib.rs"
+from = '''        INITIAL.with(Self::clone)'''
+to = '''        Self::make_initial()'''
+
+[[mutant]]
+name = "a shared group written in place"
+file = "crates/computed_style/src/lib.rs"
+from = '''    pub fn rare_mut(&mut self) -> &mut RareNonInherited {
+        Arc::make_mut(&mut self.rare)'''
+to = '''    pub fn rare_mut(&mut self) -> &mut RareNonInherited {
+        Arc::get_mut(&mut self.rare).expect("not shared")'''
+
+[[mutant]]
+name = "a border radius change lays out"
+file = "crates/layout/src/lib.rs"
+test = ["cargo", "test", "-q", "-p", "layout"]
+from = '''            rare: if new.rare.border_radius == old.rare.border_radius {'''
+to = '''            rare: if true {'''
+
+[[mutant]]
+name = "a background change lays out"
+file = "crates/layout/src/lib.rs"
+test = ["cargo", "test", "-q", "-p", "layout"]
+from = '''            backgrounds: old.backgrounds.clone(),'''
+to = '''            backgrounds: new.backgrounds.clone(),'''

@@ -1,0 +1,101 @@
+# 5a: the matched properties cache keyed by position and shared; the same
+# style again keeps the old one (`style`'s `lib.rs`, `animations.rs`).
+#   python3 scripts/test.py mutate rfcs/0059-style-performance/mutants-5a.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it"]
+timeout = 1800
+
+[[mutant]]
+name = "the same style again not kept"
+file = "crates/style/src/lib.rs"
+from = '''                        Some(old) if Arc::ptr_eq(old, &style) || **old == *style => old.clone(),'''
+to = '''                        Some(old) if false => old.clone(),'''
+
+[[mutant]]
+name = "the cache's entry not shared"
+file = "crates/style/src/lib.rs"
+from = '''            .map(|entry| entry.style.clone());'''
+to = '''            .map(|entry| Arc::new((*entry.style).clone()));'''
+
+# Equivalent but for a hash collision: the hash has the position too, so
+# entries of other positions are under other hashes.
+[[mutant]]
+name = "an entry of another position taken"
+file = "crates/style/src/lib.rs"
+from = '''            && self.position == key.position
+'''
+to = '''
+'''
+
+[[mutant]]
+name = "the layout parent's flex not looked at"
+file = "crates/style/src/lib.rs"
+from = '''                in_flex_or_grid: self.layout_parent.display.is_flexible_or_grid(),'''
+to = '''                in_flex_or_grid: false,'''
+
+[[mutant]]
+name = "an element's own wheel listener left out"
+file = "crates/style/src/lib.rs"
+from = '''                blocking_wheel: self.blocking_wheel,'''
+to = '''                blocking_wheel: false,'''
+
+# Equivalent with the UA sheet as it is: the inner element's rule takes
+# `text-overflow: inherit`, and the cache keeps no style with a value
+# inherited that isn't inherited; kept for the select's values `adjust`
+# reads (`form_controls::a_menu_lists_inner_element_follows_its_own_select`).
+[[mutant]]
+name = "a menu list's inner element cached"
+file = "crates/style/src/lib.rs"
+from = '''        !position
+            .control
+            .is_some_and(theme::Control::is_menu_list_inner)
+            && blocks'''
+to = '''        blocks'''
+
+[[mutant]]
+name = "a keyframe's vw not marked"
+file = "crates/style/src/animations.rs"
+from = '''            Arc::make_mut(&mut style).has_viewport_units = true;'''
+to = ''''''
+
+[[mutant]]
+name = "attr() not the element's own"
+file = "crates/style/src/lib.rs"
+from = '''            Arc::make_mut(&mut pseudo_style).content = Content::Items(items);'''
+to = '''            let _: Vec<ContentItem> = items;'''
+
+[[mutant]]
+name = "a marker's display not its position's"
+file = "crates/style/src/lib.rs"
+from = '''            style.display = match parent.list_style_position {'''
+to = '''            let _ = match parent.list_style_position {'''
+
+[[mutant]]
+name = "before's content: normal kept"
+file = "crates/style/src/lib.rs"
+from = '''        Some(_) if style.content == Content::Normal => style.content = Content::None,'''
+to = '''        Some(_) if false => style.content = Content::None,'''
+
+[[mutant]]
+name = "a pseudo-element taken for its element"
+file = "crates/style/src/lib.rs"
+from = '''            pseudo: Some(pseudo),'''
+to = '''            pseudo: None,'''
+
+# A pseudo-element's viewport units (WPT's `marker-content-014.html`, which
+# 4b had made fail).
+[[mutant]]
+name = "a pseudo-element's viewport units not looked at"
+file = "crates/style/src/lib.rs"
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "media::"]
+from = '''                    && (old.as_ref().is_some_and(|old| old.has_viewport_units)
+                        || [PseudoId::Before, PseudoId::After, PseudoId::Marker]'''
+to = '''                    && (old.as_ref().is_some_and(|old| old.has_viewport_units)
+                        || []'''
+
+[[mutant]]
+name = "a marker's viewport units not counted"
+file = "crates/style/src/lib.rs"
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "media::"]
+from = '''                            &pseudo_styles.marker,
+                        ]'''
+to = '''                        ]'''

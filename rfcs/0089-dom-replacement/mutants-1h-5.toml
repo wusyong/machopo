@@ -1,0 +1,59 @@
+# Stage 1h-5: the GC's report: the young generation's GC by heap (V8's
+# scavenges, the gc crate's own) and each version's longest pause with
+# the phases that took most of it (gc_bench.window_gc, blink_perf's
+# next-dom report). blink_perf_test builds kun: run with RUSTY_V8_ARCHIVE
+# pointing at ../third_party/rusty_v8_artifacts.
+timeout = 600
+
+[[mutant]]
+name = "the gc crate's scavenge counts as the engine's"
+file = "scripts/bench/gc/gc_bench.py"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "python3", "scripts/bench/gc/gc_bench_test.py"]
+from = '''            heap = "gc" if name == "Gc.Scavenge" else "engine"'''
+to = '''            heap = "engine"'''
+
+[[mutant]]
+name = "a phase's own time keeps its phases'"
+file = "scripts/bench/gc/gc_bench.py"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "python3", "scripts/bench/gc/gc_bench_test.py"]
+from = '''        own[name] = own.get(name, 0) + max(0, stop - start - phases)'''
+to = '''        own[name] = own.get(name, 0) + max(0, stop - start)'''
+
+[[mutant]]
+name = "the shortest pause is listed"
+file = "scripts/bench/gc/gc_bench.py"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "python3", "scripts/bench/gc/gc_bench_test.py"]
+from = '''    begin, end = max(spans, key=lambda span: span[1] - span[0])'''
+to = '''    begin, end = min(spans, key=lambda span: span[1] - span[0])'''
+
+[[mutant]]
+name = "every phase is listed"
+file = "scripts/bench/gc/gc_bench.py"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "python3", "scripts/bench/gc/gc_bench_test.py"]
+from = '''    ranked = sorted(own.items(), key=lambda item: (-item[1], item[0]))[:PAUSE_PHASES]'''
+to = '''    ranked = sorted(own.items(), key=lambda item: (-item[1], item[0]))'''
+
+[[mutant]]
+name = "the report's young columns swap"
+file = "scripts/bench/blink_perf/blink_perf.py"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "python3", "scripts/bench/blink_perf/blink_perf_test.py"]
+from = '''                cells += [ms(gc_ns), ms(in_engine), ms(common.median([y.get("engine", 0) for y in young])),
+                          ms(common.median([y.get("gc", 0) for y in young])),'''
+to = '''                cells += [ms(gc_ns), ms(in_engine), ms(common.median([y.get("gc", 0) for y in young])),
+                          ms(common.median([y.get("engine", 0) for y in young])),'''
+
+[[mutant]]
+name = "the report lists no longest pause"
+file = "scripts/bench/blink_perf/blink_perf.py"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "python3", "scripts/bench/blink_perf/blink_perf_test.py"]
+from = '''    if longest:
+        lines += ["", "## Longest pauses", "", *longest]'''
+to = '''    if False:
+        lines += ["", "## Longest pauses", "", *longest]'''
+
+[[mutant]]
+name = "the report's longest pause is the first run's"
+file = "scripts/bench/blink_perf/blink_perf.py"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "python3", "scripts/bench/blink_perf/blink_perf_test.py"]
+from = '''                pause = max((gc.get("longest_pause", {"ns": 0}) for gc in gcs), key=lambda one: one["ns"])'''
+to = '''                pause = gcs[0].get("longest_pause", {"ns": 0})'''

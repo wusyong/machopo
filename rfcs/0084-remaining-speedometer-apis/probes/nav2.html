@@ -1,0 +1,31 @@
+<!doctype html>
+<script>
+const log = [];
+const t = () => Math.round(performance.now());
+new PerformanceObserver((list, o, opts) => {
+  const e = list.getEntries()[0];
+  log.push(`observer at loadEventEnd=${e.loadEventEnd > 0} duration=${e.duration === e.loadEventEnd} ${JSON.stringify(opts)} n=${list.getEntries().length}`);
+}).observe({ type: 'navigation' });
+document.addEventListener('readystatechange', () => {
+  const e = performance.getEntriesByType('navigation')[0];
+  log.push(`readystate ${document.readyState} interactive=${e.domInteractive > 0} complete=${e.domComplete > 0} dcl=${e.domContentLoadedEventStart > 0}`);
+});
+document.addEventListener('DOMContentLoaded', () => {
+  const e = performance.getEntriesByType('navigation')[0];
+  log.push(`dcl start=${e.domContentLoadedEventStart > 0} end=${e.domContentLoadedEventEnd > 0} t.dclStart=${performance.timing.domContentLoadedEventStart > 0}`);
+});
+addEventListener('load', () => {
+  const e = performance.getEntriesByType('navigation')[0];
+  log.push(`load start=${e.loadEventStart > 0} end=${e.loadEventEnd} duration=${e.duration} t.loadEventEnd=${performance.timing.loadEventEnd}`);
+  queueMicrotask(() => log.push('load microtask end=' + performance.getEntriesByType('navigation')[0].loadEventEnd));
+  setTimeout(() => log.push('after load end=' + (performance.getEntriesByType('navigation')[0].loadEventEnd > 0)), 0);
+  try { performance.measure('m', 'loadEventEnd'); log.push('measure ok'); } catch (e) { log.push('measure ' + e.name); }
+  try { performance.measure('m2', 'domInteractive'); log.push('measure2 ' + performance.getEntriesByName('m2')[0].startTime.toFixed(1) + ' vs ' + performance.getEntriesByType('navigation')[0].domInteractive.toFixed(1)); } catch (e) { log.push('measure2 ' + e.name); }
+});
+function run() { return new Promise(r => setTimeout(() => {
+  new PerformanceObserver((list, o, opts) => log.push(`late buffered n=${list.getEntries().length}`)).observe({ type: 'navigation', buffered: true });
+  new PerformanceObserver((list, o, opts) => log.push(`late unbuffered`)).observe({ type: 'navigation' });
+  setTimeout(() => r(log.join('\n')), 100);
+}, 300)); }
+</script>
+<p>x</p>

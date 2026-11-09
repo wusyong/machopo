@@ -1,0 +1,8 @@
+<!DOCTYPE html>
+<title>E4: later siblings paint over earlier ones, and all text over all backgrounds</title>
+<link rel="match" href="e4-paint-order-ref.html">
+<style>html, body { margin: 0 }</style>
+<div style="width: 100px; height: 100px; background-color: red"></div>
+<div style="width: 100px; height: 100px; margin-top: -100px; background-color: green"></div>
+<div style="font: 20px/1 Ahem; color: green">X</div>
+<div style="width: 100px; height: 20px; margin-top: -20px; background-color: red"></div>

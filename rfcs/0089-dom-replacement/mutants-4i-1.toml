@@ -1,0 +1,275 @@
+# Stage 4i-1: the binding's shape as today's DOM has it (the members' order,
+# a global's own members, inherited unforgeable ones, indexed queries,
+# [Replaceable], window.event, document.all) and the small members.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it && cargo test -q -p bindings --test it -- isolate_state::"]
+timeout = 1500
+
+[[mutant]]
+name = "binding: members in the order visited, not the table's"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''        ordered.sort_unstable_by_key(|(index, _)| *index);
+'''
+to = ''''''
+
+[[mutant]]
+name = "binding: a global's methods on its prototype"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''                    } else if global {
+                        instance.set(name.into(), function.into());'''
+to = '''                    } else if global {
+                        prototype.set(name.into(), function.into());'''
+
+[[mutant]]
+name = "binding: a global's attributes on its prototype"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''                    } else if global {
+                        (instance, v8::PropertyAttribute::NONE)'''
+to = '''                    } else if global {
+                        (prototype, v8::PropertyAttribute::NONE)'''
+
+[[mutant]]
+name = "binding: no constants on the prototype"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''.filter(|_| !self.only_unforgeable)'''
+to = '''.filter(|_| false)'''
+
+[[mutant]]
+name = "binding: no ancestor's unforgeable members"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''        if INTERFACES[index].members.iter().any(|member| member.unforgeable) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "binding: an ancestor's every member on each object"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''        if self.only_unforgeable && !desc.unforgeable {
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "binding: no replaceable setter"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''desc.members[index]
+                                .replaceable'''
+to = '''false'''
+
+[[mutant]]
+name = "binding: replacing defines nothing"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''    if args.this().create_data_property(scope, name.into(), args.get(0)) == Some(false) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "binding: all detectable"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''        instance.mark_as_undetectable();
+'''
+to = ''''''
+
+[[mutant]]
+name = "binding: all called as its namedItem"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''                && M::NAME == "item"'''
+to = '''                && M::NAME == "namedItem"'''
+
+[[mutant]]
+name = "binding: no legacy window alias"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''    for (alias, name) in LEGACY_WINDOW_ALIASES {'''
+to = '''    for (alias, name) in [("", ""); 0] {'''
+
+[[mutant]]
+name = "binding: an indexed property writable without a setter"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''let attributes = if setter {'''
+to = '''let attributes = if !setter {'''
+
+[[mutant]]
+name = "binding: no indices listed"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''        rv.set(v8::Array::new_with_elements(scope.scope(), &indices));
+'''
+to = ''''''
+
+[[mutant]]
+name = "binding: a string item never there"
+file = "crates/dom_js_next/src/named.rs"
+from = '''        Got::String(string) => Some(!string.is_empty()),'''
+to = '''        Got::String(_) => Some(false),'''
+
+[[mutant]]
+name = "binding: no Uncaught prefix"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''            message: format!("Uncaught {}", exception.to_rust_string_lossy(tc))'''
+to = '''            message: format!("{}", exception.to_rust_string_lossy(tc))'''
+
+[[mutant]]
+name = "binding: the current event set in shadow trees"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''        if !in_shadow_tree {
+            cx.set_window_current_event'''
+to = '''        if true {
+            cx.set_window_current_event'''
+
+[[mutant]]
+name = "binding: a shadow root's listener not in its tree"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''cx.is_shadow_root(node) || cx.containing_shadow_root(node).is_some()'''
+to = '''cx.containing_shadow_root(node).is_some()'''
+
+[[mutant]]
+name = "binding: the current event not restored"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''            cx.set_window_current_event(window, previous);
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: mouseleave not leaving"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''        names::event::MOUSEOUT | names::event::MOUSELEAVE'''
+to = '''        names::event::MOUSEOUT'''
+
+[[mutant]]
+name = "api: initMessageEvent while dispatched"
+file = "crates/dom_api_next/src/message.rs"
+from = '''    if cx.event_state(this).dispatching {
+        return Ok(());
+    }
+    cx.init_event(this, names::intern(event_type), bubbles, cancelable);
+    cx.set_message_event_data('''
+to = '''    cx.init_event(this, names::intern(event_type), bubbles, cancelable);
+    cx.set_message_event_data('''
+
+[[mutant]]
+name = "api: initMessageEvent's data not stored"
+file = "crates/dom_api_next/src/message.rs"
+from = '''    let edge = cx.message_data_edge(message_data(cx, this));
+    op.store_any(cx, edge, data);
+    Ok(())
+}
+
+/// Runs'''
+to = '''    let _ = data;
+    Ok(())
+}
+
+/// Runs'''
+
+[[mutant]]
+name = "api: any port taken"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''                if cx.is_message_port(port) {'''
+to = '''                if true {'''
+
+[[mutant]]
+name = "api: no createEvent('MessageEvent')"
+file = "crates/dom_api_next/src/document.rs"
+from = '''        "messageevent" => CreatedEvent::Message,
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: a missing value 1"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''    values.map(|value| value.unwrap_or(0.0))'''
+to = '''    values.map(|value| value.unwrap_or(1.0))'''
+
+[[mutant]]
+name = "api: toJSON's top after right"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''        ("top", top),
+        ("right", right),'''
+to = '''        ("right", right),
+        ("top", top),'''
+
+[[mutant]]
+name = "api: read-only rects as DOMRect"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        ObjectRef::DomRect(rect) if cx.is_read_only_rect(rect) => {'''
+to = '''        ObjectRef::DomRect(rect) if false && cx.is_read_only_rect(rect) => {'''
+
+[[mutant]]
+name = "dom: an intersection rect writable"
+file = "crates/dom_next/src/intersection.rs"
+from = '''        let intersection_rect = self.new_read_only_rect(values.intersection_rect);'''
+to = '''        let intersection_rect = self.new_rect(values.intersection_rect);'''
+
+[[mutant]]
+name = "dom: a content rect writable"
+file = "crates/dom_next/src/resize.rs"
+from = '''        let content_rect = self.new_rect_of(values.content_rect, true);'''
+to = '''        let content_rect = self.new_rect_of(values.content_rect, false);'''
+
+[[mutant]]
+name = "dom: all has no element"
+file = "crates/dom_next/src/collection.rs"
+from = '''            ALL => return true,'''
+to = '''            ALL => return false,'''
+
+[[mutant]]
+name = "dom: all not by id"
+file = "crates/dom_next/src/ids.rs"
+from = '''        if is(names::ID) {
+            return true;
+        }
+        let qualified'''
+to = '''        let qualified'''
+
+[[mutant]]
+name = "dom: a meta's name not all's"
+file = "crates/dom_next/src/ids.rs"
+from = '''            local::META,'''
+to = '''            local::A,'''
+
+[[mutant]]
+name = "api: no array index"
+file = "crates/dom_api_next/src/collection.rs"
+from = '''    match array_index(key) {'''
+to = '''    match None::<u32> {'''
+
+[[mutant]]
+name = "api: one named element as a collection"
+file = "crates/dom_api_next/src/collection.rs"
+from = '''        1 => cx
+            .collection_item(named, 0)
+            .map(CollectionOrElement::Element),'''
+to = '''        1 => Some(CollectionOrElement::Collection(named)),'''
+
+[[mutant]]
+name = "api: no current event"
+file = "crates/dom_api_next/src/window.rs"
+from = '''    Ok(cx.window_current_event(this))'''
+to = '''    Ok(None)'''
+
+[[mutant]]
+name = "api: all an HTMLCollection"
+file = "crates/dom_api_next/src/collection.rs"
+from = '''    Ok(cx.kept_collection(this, dom_next::KeptCollection::All))'''
+to = '''    Ok(cx.elements_by_tag_name(this, "*"))'''
+
+[[mutant]]
+name = "api: declarations as CSSStyleDeclaration"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''            const { crate::declare::interface_index("CSSStyleProperties") }'''
+to = '''            const { crate::declare::interface_index("CSSStyleDeclaration") }'''
+
+[[mutant]]
+name = "bindings: no indexed query"
+file = "crates/bindings/src/isolate_state.rs"
+from = '''            .getter(indexed_trampoline::<T, G>)
+            .query(indexed_query::<T, G>)
+            .enumerator(indexed_enumerate::<T, G>)
+            .data(data),
+    );
+}
+
+/// Gives'''
+to = '''            .getter(indexed_trampoline::<T, G>)
+            .enumerator(indexed_enumerate::<T, G>)
+            .data(data),
+    );
+}
+
+/// Gives'''

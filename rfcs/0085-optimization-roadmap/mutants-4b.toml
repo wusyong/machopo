@@ -1,0 +1,60 @@
+# Stage 4b: a root's collections by qualified name (`getElementsByTagName`,
+# `getElementsByTagNameNS`) kept weakly in a few slots
+# of its rare data and found again for the same kind and name, as Blink's
+# `NodeListsNodeData`. `dom`'s collection tests (the same object while held,
+# another for another name, kind or root; none kept alive), `dom_js`'s
+# collections tests.
+test = ["sh", "-c", "systemd-run --user --scope -q -p MemoryMax=24G -p MemorySwapMax=0 --setenv=RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts sh -c 'cargo test -q -p dom --test it collection:: && cargo test -q -p dom_js --test it collections::'"]
+timeout = 1800
+
+[[mutant]]
+name = "dom: a collection by name never found again"
+file = "crates/dom/src/collection.rs"
+from = '''            .named_collections
+            .get(self.gc)?;'''
+to = '''            .named_collections
+            .get(self.gc)
+            .filter(|_| false)?;'''
+
+[[mutant]]
+name = "dom: a new collection by name not kept"
+file = "crates/dom/src/collection.rs"
+from = '''        named.slots[slot].set(self.gc, Some(collection));'''
+to = '''        let _ = (slot, collection);'''
+
+[[mutant]]
+name = "dom: a collection by name found for another kind"
+file = "crates/dom/src/collection.rs"
+from = '''                collection.kind.get() == kind
+                    && collection.prefix.get() == prefix'''
+to = '''                (collection.kind.get() == kind || kind != 0)
+                    && collection.prefix.get() == prefix'''
+
+[[mutant]]
+name = "dom: a collection by name found for another name"
+file = "crates/dom/src/collection.rs"
+from = '''                    && collection.local.get() == local'''
+to = '''                    && (collection.local.get() == local || local != 0)'''
+
+[[mutant]]
+name = "dom: the collections by name kept alive by their root"
+file = "crates/dom/src/collection.rs"
+from = '''        named.slots[slot].set(self.gc, Some(collection));'''
+to = '''        named.slots[slot].set(self.gc, Some(collection));
+        let kept = match rare.collections.get(self.gc) {
+            Some(kept) => kept,
+            None => {
+                let kept = HeapVector::new(self.gc, 1);
+                rare.collections.set(self.gc, Some(kept));
+                kept
+            }
+        };
+        kept.push(self.gc, collection);'''
+
+[[mutant]]
+name = "dom: the oldest slot never moves on"
+file = "crates/dom/src/collection.rs"
+from = '''                named
+                    .next
+                    .set(u8::try_from((next + 1) % NAMED_SLOTS).unwrap_or(0));'''
+to = '''                let _ = &named.next;'''

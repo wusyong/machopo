@@ -1,0 +1,38 @@
+[package]
+name = "style"
+description = "Style on the DOM (dom): selector matching and the cascade (blink/renderer/core/css's resolver and StyleEngine)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+computed_style.workspace = true
+css.workspace = true
+dom.workspace = true
+elise.workspace = true
+gfx.workspace = true
+rustc-hash.workspace = true
+selectors.workspace = true
+# An element's rule sources, on the stack (`Walk::sources`).
+smallvec.workspace = true
+# The cascade of declaration blocks into a computed style, the matched
+# properties cache and the UA stylesheet's text: what doesn't read the DOM
+# (`style_resolver::cascade`).
+style_resolver.workspace = true
+
+[dev-dependencies]
+# Animations' keyframe effects, read back.
+animation.workspace = true
+# Documents to style, parsed into the DOM (`next`).
+html.workspace = true
+# Sheets' base URLs.
+url.workspace = true

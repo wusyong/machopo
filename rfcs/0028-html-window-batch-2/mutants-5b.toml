@@ -1,0 +1,105 @@
+# Mutation test of stage 5b (`requestIdleCallback`):
+# python3 scripts/test.py mutate rfcs/0028-html-window-batch-2/mutants-5b.toml
+# The DOM's own ones are `dom`'s `timers` test's: which callbacks may run in
+# an idle period isn't what a page can tell Chrome's from (it sometimes
+# starts the next period at once).
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "navigation", "idle_callbacks"]
+timeout = 900
+
+# --- The DOM's idle callbacks -------------------------------------------------------
+
+[[mutant]]
+name = "an idle period lets none run"
+file = "crates/dom/src/timers.rs"
+from = '''            idle.runnable = true;'''
+to = '''            idle.runnable = false;'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "timers"]
+
+[[mutant]]
+name = "one requested in an idle period runs in it"
+file = "crates/dom/src/timers.rs"
+from = '''                runnable: false,'''
+to = '''                runnable: true,'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "timers"]
+
+[[mutant]]
+name = "the last requested runs first"
+file = "crates/dom/src/timers.rs"
+from = '''            .find(|(_, idle)| idle.runnable)?'''
+to = '''            .filter(|(_, idle)| idle.runnable)
+            .last()?'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "timers"]
+
+[[mutant]]
+name = "cancelIdleCallback does nothing"
+file = "crates/dom/src/timers.rs"
+from = '''            self.idle_callbacks.remove(&handle);
+        }'''
+to = '''        }'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "timers"]
+
+[[mutant]]
+name = "cancelIdleCallback cancels another window's"
+file = "crates/dom/src/timers.rs"
+from = '''            .is_some_and(|idle| idle.owner == owner)'''
+to = '''            .is_some()'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "timers"]
+
+[[mutant]]
+name = "a gone document's idle callbacks stay"
+file = "crates/dom/src/timers.rs"
+from = '''        self.idle_callbacks.retain(|_, idle| idle.owner != owner);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "timers"]
+
+[[mutant]]
+name = "the timeout is ignored"
+file = "crates/dom_api/src/timers.rs"
+from = '''    let timeout = (options.timeout > 0).then(|| timers.now() + f64::from(options.timeout));'''
+to = '''    let timeout = None;'''
+
+# --- IdleDeadline ---------------------------------------------------------------------
+
+[[mutant]]
+name = "time left isn't counted down"
+file = "crates/dom_js/src/glue.js"
+from = '''      const remaining = deadline - apply(performanceNow, performanceObject, []);'''
+to = '''      const remaining = deadline;'''
+
+# --- The renderer's idle periods ------------------------------------------------------
+
+[[mutant]]
+name = "a period while drawing lasts as long as one with nothing to draw"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            let next_frame = self.last_main_frame + FRAME_INTERVAL;'''
+to = '''            let next_frame = now + LONG_IDLE_PERIOD;'''
+
+[[mutant]]
+name = "animation frames aren't drawing"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            || self.dom.borrow_mut().timers().wants_animation_frame();'''
+to = ''';'''
+
+[[mutant]]
+name = "the main frame's time isn't kept"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.last_main_frame = self.clock.now();'''
+to = ''''''
+
+[[mutant]]
+name = "a long idle period is longer"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let end = sooner_ms(Some(now + LONG_IDLE_PERIOD), self.next_timer_due())?;'''
+to = '''        let end = sooner_ms(Some(now + 2.0 * LONG_IDLE_PERIOD), self.next_timer_due())?;'''
+
+[[mutant]]
+name = "a timeout waits for the due timers"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            if idle.is_some_and(|idle| timer.is_none_or(|timer| idle < timer))'''
+to = '''            if idle.is_some() && timer.is_none()'''
+
+[[mutant]]
+name = "a timeout runs it as in an idle period"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.invoke_idle_callback(owner, &callback, now, true);'''
+to = '''        self.invoke_idle_callback(owner, &callback, now, false);'''

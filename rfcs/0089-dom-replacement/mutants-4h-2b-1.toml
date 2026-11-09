@@ -1,0 +1,147 @@
+# Stage 4h-2b-1: getComputedStyle on the new DOM (a computed CSSStyleDeclaration, the style or the
+# layout brought up to date, pseudo-elements), ::selection in style_next's walk, the declaration's
+# supported names, a shadow root's sheets collected again once connected.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_api_next --test it computed_style && cargo test -q -p dom_js_next --test it css_style && cargo test -q -p style_next --test it && cargo test -q -p dom_next --test it sheets"]
+timeout = 1200
+
+[[mutant]]
+name = "api: every value lays out"
+file = "crates/dom_api_next/src/computed_style.rs"
+from = '''    cx.with_style(element, |layout| {'''
+to = '''    cx.with_layout(element, |layout| {'''
+
+[[mutant]]
+name = "api: what layout decides from the style"
+file = "crates/dom_api_next/src/computed_style.rs"
+from = '''    if style::is_layout_dependent(property) && target == StyleTarget::Element {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: a pseudo-element's is the element's"
+file = "crates/dom_api_next/src/computed_style.rs"
+from = '''            StyleTarget::Pseudo(pseudo) => layout
+                .pseudo_style(cx, element, pseudo)
+                .unwrap_or_else(|| Arc::new(style::pseudo_style_without_rules(&style, pseudo))),'''
+to = '''            StyleTarget::Pseudo(_) => style,'''
+
+[[mutant]]
+name = "api: a pseudo-element kun doesn't have has the element's style"
+file = "crates/dom_api_next/src/computed_style.rs"
+from = '''    if target == StyleTarget::OtherPseudo {
+        return None;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: one colon for any pseudo-element"
+file = "crates/dom_api_next/src/computed_style.rs"
+from = '''                _ if single_colon && !css2 && PSEUDO_ELEMENTS.contains(&name.as_str()) => {
+                    StyleTarget::OtherPseudo
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "api: an unknown pseudo-element isn't an error"
+file = "crates/dom_api_next/src/computed_style.rs"
+from = '''                _ => {
+                    return Err(ApiError::Dom(DomException {'''
+to = '''                _ if true => StyleTarget::OtherPseudo,
+                _ => {
+                    return Err(ApiError::Dom(DomException {'''
+
+[[mutant]]
+name = "api: a pseudo argument without a colon isn't the element's"
+file = "crates/dom_api_next/src/computed_style.rs"
+from = '''        Some(text) if !text.starts_with(':') => StyleTarget::Element,'''
+to = ''''''
+
+[[mutant]]
+name = "api: setProperty on a computed declaration"
+file = "crates/dom_api_next/src/css_style.rs"
+from = '''    writable(cx, this)?;
+    let base = base_url(cx, this);'''
+to = '''    let base = base_url(cx, this);'''
+
+[[mutant]]
+name = "api: cssText set on a computed declaration"
+file = "crates/dom_api_next/src/css_style.rs"
+from = '''    writable(cx, this)?;
+    let mut block = CssPropertyValueSet::parse(value);'''
+to = '''    let mut block = CssPropertyValueSet::parse(value);'''
+
+[[mutant]]
+name = "api: removeProperty on a computed declaration"
+file = "crates/dom_api_next/src/css_style.rs"
+from = '''    writable(cx, this)?;
+    let value = change(cx, this, |block| block.remove_property(property));'''
+to = '''    let value = change(cx, this, |block| block.remove_property(property));'''
+
+[[mutant]]
+name = "api: a computed declaration's length is its own declarations'"
+file = "crates/dom_api_next/src/css_style.rs"
+from = '''    if let Some((element, target)) = computed(cx, this) {
+        let names = crate::computed_style::property_names(cx, element, target);
+        return Ok(u32::try_from(names.len()).unwrap_or(u32::MAX));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a computed declaration's value is its own declarations'"
+file = "crates/dom_api_next/src/css_style.rs"
+from = '''    if let Some((element, target)) = computed(cx, this) {
+        let value = crate::computed_style::property_value(cx, element, target, property);
+        return Ok(DomStr::Owned(DomString::from(value)));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: no supported names"
+file = "crates/dom_api_next/src/css_style.rs"
+from = '''    Ok(css::css_property_attributes()
+        .into_iter()
+        .map(DomString::from)
+        .collect())'''
+to = '''    Ok(Vec::new())'''
+
+[[mutant]]
+name = "style: ::selection rules skipped"
+file = "crates/style_next/src/lib.rs"
+from = '''                    Some(PseudoElement::Selection) => Target::Selection,'''
+to = '''                    Some(PseudoElement::Selection) => continue,'''
+
+[[mutant]]
+name = "style: ::selection matched as the element"
+file = "crates/style_next/src/lib.rs"
+from = '''                    Target::Selection => (&mut context, NextElement { selection: true, ..matched }),'''
+to = '''                    Target::Selection => (&mut context, matched),'''
+
+[[mutant]]
+name = "style: ::selection's originating element its parent"
+file = "crates/style_next/src/selector.rs"
+from = '''        if self.selection {
+            return Some(Self {
+                selection: false,
+                ..*self
+            });
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "style: a ::selection rule is a UA shadow part's to invalidation"
+file = "crates/style_next/src/invalidation.rs"
+from = '''            matches!(component, Component::PseudoElement(p) if p.id().is_none() && *p != PseudoElement::Selection)'''
+to = '''            matches!(component, Component::PseudoElement(p) if p.id().is_none())'''
+
+[[mutant]]
+name = "style: a ::selection rule is a UA shadow part's to sheet changes"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''            matches!(component, Component::PseudoElement(p) if p.id().is_none() && *p != PseudoElement::Selection)'''
+to = '''            matches!(component, Component::PseudoElement(p) if p.id().is_none())'''
+
+[[mutant]]
+name = "dom: a shadow root connected again isn't collected again"
+file = "crates/dom_next/src/style.rs"
+from = '''            if at.scope.get() & crate::shadow::SHADOW_ROOT != 0 {
+                self.shadow_sheets_changed(at);
+            }'''
+to = ''''''

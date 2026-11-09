@@ -1,0 +1,28 @@
+# Mutation test of SVG's shapes through gfx::Path's methods:
+# python3 scripts/test.py mutate rfcs/0031-svg/mutants-shapes.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::"]
+timeout = 900
+
+[[mutant]]
+name = "an ellipse starts at its top"
+file = "crates/layout/src/svg.rs"
+from = '''    path.add_oval(bounds, true, 1);'''
+to = '''    path.add_oval(bounds, true, 0);'''
+
+[[mutant]]
+name = "an ellipse goes counterclockwise"
+file = "crates/layout/src/svg.rs"
+from = '''    path.add_oval(bounds, true, 1);'''
+to = '''    path.add_oval(bounds, false, 1);'''
+
+[[mutant]]
+name = "a rounded rect goes counterclockwise"
+file = "crates/layout/src/svg.rs"
+from = '''[SizeF::new(rx, ry); 4], true)'''
+to = '''[SizeF::new(rx, ry); 4], false)'''
+
+[[mutant]]
+name = "a rect goes from its bottom right"
+file = "crates/layout/src/svg.rs"
+from = '''                path.add_rect(PointF::new(x, y), PointF::new(x + w, y + h));'''
+to = '''                path.add_rect(PointF::new(x + w, y + h), PointF::new(x, y));'''

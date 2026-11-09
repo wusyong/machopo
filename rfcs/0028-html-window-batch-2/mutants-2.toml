@@ -1,0 +1,335 @@
+# Mutation test of stage 2 (nodes and HTML elements):
+# python3 scripts/test.py mutate rfcs/0028-html-window-batch-2/mutants-2.toml
+# The Lua generator's mutants rebuild the guests: run `python3 scripts/ci.py
+# guests` once it is done, so resources/kun-lua.wasm is the generator's
+# again.
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "html_element"]
+timeout = 900
+
+# --- The alias form ------------------------------------------------------
+
+[[mutant]]
+name = "the table drops the alias"
+file = "crates/dom_api/src/declare.rs"
+from = '''    (@alias $alias:ident) => { ::std::option::Option::Some(stringify!($alias)) };'''
+to = '''    (@alias $alias:ident) => { ::std::option::Option::None };'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "bindings", "legacy_window_alias"]
+
+[[mutant]]
+name = "the alias isn't installed"
+file = "crates/dom_js/src/lib.rs"
+from = '''            if let Some(alias) = interface.legacy_window_alias {'''
+to = '''            if let Some(alias) = None::<&str> {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "bindings", "legacy_window_alias"]
+
+[[mutant]]
+name = "the alias is enumerable"
+file = "crates/dom_js/src/lib.rs"
+from = '''                    alias.into(),
+                    function.into(),
+                    v8::PropertyAttribute::DONT_ENUM,'''
+to = '''                    alias.into(),
+                    function.into(),
+                    v8::PropertyAttribute::NONE,'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "bindings", "legacy_window_alias"]
+
+[[mutant]]
+name = "the IDL's aliases aren't read"
+file = "crates/dom_api/tests/webidl/mod.rs"
+from = '''                    interface.aliases.extend(aliases(&attributes));'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "spec"]
+
+[[mutant]]
+name = "a list of aliases is read as none"
+file = "crates/dom_api/tests/webidl/mod.rs"
+from = '''        Some("(") => attributes[at + 3..]'''
+to = '''        Some("(") => attributes[at + 3..at + 3]'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "spec"]
+
+[[mutant]]
+name = "the table's alias is never a difference"
+file = "crates/dom_api/tests/spec.rs"
+from = '''            && !spec.aliases.iter().any(|a| a == alias)'''
+to = '''            && false'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "spec"]
+
+[[mutant]]
+name = "the IDL's aliases are never missing"
+file = "crates/dom_api/tests/spec.rs"
+from = '''            if interface.legacy_window_alias != Some(alias) {'''
+to = '''            if false {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "spec"]
+
+# --- HTMLElement's global attributes -------------------------------------
+
+[[mutant]]
+name = "title reflects lang"
+file = "crates/dom_api/src/html_element.rs"
+from = '''reflected!(title, set_title: string "title");'''
+to = '''reflected!(title, set_title: string "lang");'''
+
+[[mutant]]
+name = "translate=no translates"
+file = "crates/dom_api/src/html_element.rs"
+from = '''        _ if value.eq_ignore_ascii_case("no") => Some(false),'''
+to = '''        _ if value.eq_ignore_ascii_case("no") => Some(true),'''
+
+[[mutant]]
+name = "the root's translation mode is no-translate"
+file = "crates/dom_api/src/html_element.rs"
+from = '''    Ok(inherited_state(this.get(&cx.read()), "translate", state).unwrap_or(true))'''
+to = '''    Ok(inherited_state(this.get(&cx.read()), "translate", state).unwrap_or(false))'''
+
+[[mutant]]
+name = "an SVG element's attribute counts"
+file = "crates/dom_api/src/html_element.rs"
+from = '''        .filter(|n| is_html(*n, &[]))'''
+to = ''''''
+
+[[mutant]]
+name = "nothing inherits"
+file = "crates/dom_api/src/html_element.rs"
+from = '''    std::iter::successors(Some(node), |n| n.parent())
+        .filter(|n| is_html(*n, &[]))'''
+to = '''    std::iter::once(node)
+        .filter(|n| is_html(*n, &[]))'''
+
+[[mutant]]
+name = "until-found is read case-sensitively"
+file = "crates/dom_api/src/html_element.rs"
+from = '''        Some(value) if value.eq_ignore_ascii_case("until-found") => {'''
+to = '''        Some(value) if value == "until-found" => {'''
+
+[[mutant]]
+name = "NaN hides"
+file = "crates/dom_api/src/html_element.rs"
+from = '''(number != 0.0 && !number.is_nan()).then_some("")'''
+to = '''(number != 0.0).then_some("")'''
+
+[[mutant]]
+name = "the empty string hides"
+file = "crates/dom_api/src/html_element.rs"
+from = '''        Some(Hidden::String(text)) if text.as_str().is_empty() => None,'''
+to = ''''''
+
+[[mutant]]
+name = "a link without an href is draggable"
+file = "crates/dom_api/src/html_element.rs"
+from = '''                || (is_html(element, &["a"])
+                    && element.attribute(&QualName::attr("href")).is_some())'''
+to = '''                || is_html(element, &["a"])'''
+
+[[mutant]]
+name = "draggable=FALSE is auto"
+file = "crates/dom_api/src/html_element.rs"
+from = '''        Some(value) if value.eq_ignore_ascii_case("false") => false,'''
+to = '''        Some(value) if value == "false" => false,'''
+
+[[mutant]]
+name = "spellchecking is off by default"
+file = "crates/dom_api/src/html_element.rs"
+from = '''    Ok(inherited_state(this.get(&cx.read()), "spellcheck", state).unwrap_or(true))'''
+to = '''    Ok(inherited_state(this.get(&cx.read()), "spellcheck", state).unwrap_or(false))'''
+
+[[mutant]]
+name = "no element takes its form owner's autocapitalization"
+file = "crates/dom_api/src/html_element.rs"
+from = '''            Some(form) if is_html(element, AUTOCAPITALIZE_INHERITING) => {'''
+to = '''            Some(form) if false => {'''
+
+[[mutant]]
+name = "every element takes its form owner's autocapitalization"
+file = "crates/dom_api/src/html_element.rs"
+from = '''            Some(form) if is_html(element, AUTOCAPITALIZE_INHERITING) => {'''
+to = '''            Some(form) if is_html(element, &[]) => {'''
+
+[[mutant]]
+name = "an invalid autocapitalize is the default"
+file = "crates/dom_api/src/html_element.rs"
+from = '''        Some(_) => "sentences",'''
+to = '''        Some(_) => "",'''
+
+[[mutant]]
+name = "an empty autocapitalize doesn't take the form's"
+file = "crates/dom_api/src/html_element.rs"
+from = '''        None | Some("") => match element.form_owner() {'''
+to = '''        None => match element.form_owner() {'''
+
+[[mutant]]
+name = "an empty contenteditable inherits"
+file = "crates/dom_api/src/html_element.rs"
+from = '''fn content_editable_state(value: &str) -> Option<bool> {
+    match value {
+        "" => Some(true),'''
+to = '''fn content_editable_state(value: &str) -> Option<bool> {
+    match value {
+        "" => None,'''
+
+[[mutant]]
+name = "plaintext-only reads as true"
+file = "crates/dom_api/src/html_element.rs"
+from = '''        Some(value) if value.eq_ignore_ascii_case("plaintext-only") => "plaintext-only",'''
+to = ''''''
+
+[[mutant]]
+name = "setting inherit keeps the attribute"
+file = "crates/dom_api/src/html_element.rs"
+from = '''        Some("inherit") => crate::element::remove(cx, this, &QualName::attr("contenteditable")),'''
+to = '''        Some("inherit") => Ok(()),'''
+
+[[mutant]]
+name = "contentEditable's keywords are case-sensitive"
+file = "crates/dom_api/src/html_element.rs"
+from = '''        .find(|keyword| value.as_str().eq_ignore_ascii_case(keyword));'''
+to = '''        .find(|keyword| value.as_str() == *keyword);'''
+
+[[mutant]]
+name = "everything is editable"
+file = "crates/dom_api/src/html_element.rs"
+from = '''    Ok(state.unwrap_or(false))'''
+to = '''    Ok(state.unwrap_or(true))'''
+
+# --- Nodes, templates, names, the document -------------------------------
+
+[[mutant]]
+name = "every node is connected"
+file = "crates/dom_api/src/node.rs"
+from = '''    Ok(crate::script::is_connected(this.get(&cx.read())))'''
+to = '''    Ok(true)'''
+
+[[mutant]]
+name = "a clone's attributes have no change steps"
+file = "crates/dom_api/src/node.rs"
+from = '''                for (name, value) in &copied {
+                    crate::handlers::attribute_changed('''
+to = '''                for (name, value) in copied.iter().take(0) {
+                    crate::handlers::attribute_changed('''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "bindings", "clone"]
+
+[[mutant]]
+name = "getElementsByName takes any namespace"
+file = "crates/dom_api/src/collection.rs"
+from = '''            name.namespace.url() == Namespace::HTML
+                && element.attribute(&QualName::attr("name")).as_deref() == Some(&**wanted)'''
+to = '''            element.attribute(&QualName::attr("name")).as_deref() == Some(&**wanted)'''
+
+[[mutant]]
+name = "getElementsByName is an HTMLCollection"
+file = "crates/dom_api/src/object.rs"
+from = '''                | CollectionFilter::Labels
+                | CollectionFilter::Name(_) => ObjectKind::NodeList,'''
+to = '''                | CollectionFilter::Labels => ObjectKind::NodeList,'''
+
+[[mutant]]
+name = "any document element is the html element"
+file = "crates/dom_api/src/document.rs"
+from = '''        .is_some_and(|name| name.is_html("html"))
+        .then(|| element.to_handle())'''
+to = '''        .is_some()
+        .then(|| element.to_handle())'''
+
+# --- Visibility ------------------------------------------------------------
+
+[[mutant]]
+name = "a document no frame shows is visible"
+file = "crates/dom_api/src/document.rs"
+from = '''crate::frame::document_frame(cx, this).is_some_and(|f| f.is_page_visible())'''
+to = '''crate::frame::document_frame(cx, this).is_none_or(|f| f.is_page_visible())'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "navigation", "visibility"]
+
+[[mutant]]
+name = "hidden is visible"
+file = "crates/dom_api/src/document.rs"
+from = '''    Ok(visibility_state(cx, this)? == DocumentVisibilityState::Hidden)'''
+to = '''    Ok(visibility_state(cx, this)? != DocumentVisibilityState::Hidden)'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "navigation", "visibility"]
+
+[[mutant]]
+name = "visibilitychange doesn't bubble"
+file = "crates/dom_api/src/document.rs"
+from = '''        .create_event("visibilitychange", true, false, true, EventKindInit::Plain);'''
+to = '''        .create_event("visibilitychange", false, false, true, EventKindInit::Plain);'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "navigation", "visibility"]
+
+[[mutant]]
+name = "the state it has fires visibilitychange"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if self.frame_settings.page_hidden.get() == !visible {
+            return;
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "navigation", "visibility"]
+
+[[mutant]]
+name = "the page's state doesn't change"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.frame_settings.page_hidden.set(!visible);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "navigation", "visibility"]
+
+[[mutant]]
+name = "only the main frame's document hears"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            .unwrap_or_default();
+        for frame in frames {
+            let Some(document) = self'''
+to = '''            .unwrap_or_default();
+        for frame in frames.into_iter().take(1) {
+            let Some(document) = self'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "navigation", "visibility"]
+
+[[mutant]]
+name = "a frame's page is always visible"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        !self.settings.page_hidden.get()'''
+to = '''        true'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "navigation", "visibility"]
+
+[[mutant]]
+name = "a link's tab behind isn't hidden"
+file = "crates/shell/src/browser_view.rs"
+from = '''        if !foreground {
+            contents.was_hidden();
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "browser_view", "a_tab_opened_behind"]
+
+[[mutant]]
+name = "a driven tab behind isn't hidden"
+file = "crates/shell/src/browser_view.rs"
+from = '''        if background {
+            contents.was_hidden();
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "browser_view", "a_tab_opened_behind"]
+
+# --- kun:dom and the Lua runtime -------------------------------------------
+
+[[mutant]]
+name = "a union of values can't be both taken and returned"
+file = "crates/dom_api/src/wit.rs"
+from = '''                !resources || !returned.iter().any(|r| std::ptr::eq(*r, desc)),'''
+to = '''                !returned.iter().any(|r| std::ptr::eq(*r, desc)),'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "wit"]
+
+[[mutant]]
+name = "kun:dom can't return a boolean case"
+file = "crates/dom_wasm/src/host.rs"
+from = '''                    (Base::Bool, Value::Bool(_)) => true,'''
+to = ''''''
+test = ["python3", "scripts/test.py", "reftest", "wasm/w9"]
+
+[[mutant]]
+name = "Lua's booleans are the string case"
+file = "sdk/lua/generator/src/main.rs"
+from = '''            "        {branch} (lua_isboolean(L, {index})) {{ {var}.tag = {tag}; {var}.val.{field} = lua_toboolean(L, {index}); }}"'''
+to = '''            "        {branch} (0) {{ {var}.tag = {tag}; {var}.val.{field} = lua_toboolean(L, {index}); }}"'''
+test = ["sh", "-c", "python3 scripts/ci.py guests >/dev/null && python3 scripts/test.py reftest wasm/w9"]
+
+[[mutant]]
+name = "a returned boolean case is nil in Lua"
+file = "sdk/lua/generator/src/main.rs"
+from = '''                        Shape::Bool => format!("lua_pushboolean(L, {at});"),'''
+to = '''                        Shape::Bool => format!("lua_pushnil(L); (void){at};"),'''
+test = ["sh", "-c", "python3 scripts/ci.py guests >/dev/null && python3 scripts/test.py reftest wasm/w9"]

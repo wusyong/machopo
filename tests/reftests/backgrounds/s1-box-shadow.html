@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<title>Shadows 1: an unblurred shadow is the box moved by its offset and grown by its spread, not under the box; an inset one is inside the padding box</title>
+<link rel="match" href="s1-box-shadow-ref.html">
+<style>
+  html, body { margin: 0 }
+  div { position: absolute; width: 60px; height: 40px }
+</style>
+<!-- Offset 10 right and 20 down, spread 5: 75 by 55 from (15, 25). The
+     box is transparent: the shadow isn't under it. -->
+<div style="left: 10px; top: 10px; box-shadow: 10px 20px 0 5px green"></div>
+<!-- Two shadows, the first on top. -->
+<div style="left: 150px; top: 10px; background: white;
+            box-shadow: 10px 10px blue, 20px 20px green"></div>
+<!-- Inset, inside the border: the padding box less itself moved 10 right
+     and 5 down. -->
+<div style="left: 10px; top: 120px; border: 5px solid black;
+            box-shadow: inset 10px 5px green"></div>

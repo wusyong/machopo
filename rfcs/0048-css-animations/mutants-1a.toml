@@ -1,0 +1,175 @@
+# Mutation test of step 1a: the `transition-*` properties, `<time>` and the
+# easing functions (2026-10-15):
+# python3 scripts/test.py mutate rfcs/0048-css-animations/mutants-1a.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "transitions::"]
+timeout = 900
+
+[[mutant]]
+name = "ms taken as seconds"
+file = "crates/css/src/animation.rs"
+from = '''"ms" => SpecifiedTime { seconds: value / 1000.0, unit: TimeUnit::Milliseconds },'''
+to = '''"ms" => SpecifiedTime { seconds: value, unit: TimeUnit::Milliseconds },'''
+
+[[mutant]]
+name = "a negative duration is valid"
+file = "crates/css/src/animation.rs"
+from = '''    if non_negative && time.seconds < 0.0 {'''
+to = '''    if false && time.seconds < 0.0 {'''
+
+[[mutant]]
+name = "a math function's negative duration isn't clamped"
+file = "crates/css/src/animation.rs"
+from = '''        let seconds = if non_negative {
+            seconds.max(0.0)'''
+to = '''        let seconds = if non_negative {
+            seconds'''
+
+[[mutant]]
+name = "ms written in seconds"
+file = "crates/css/src/animation.rs"
+from = '''                write_number(dest, f64::from(self.seconds) * 1000.0);
+                dest.push_str("ms");'''
+to = '''                write_number(dest, self.seconds.into());
+                dest.push_str("s");'''
+
+[[mutant]]
+name = "time units in calc() unknown"
+file = "crates/css/src/calc.rs"
+from = '''            } else if let Some(seconds) = time_seconds(value, unit) {'''
+to = '''            } else if let Some(seconds) = time_seconds(value, unit).filter(|_| false) {'''
+
+[[mutant]]
+name = "linear()'s first input isn't 0"
+file = "crates/css/src/animation.rs"
+from = '''        points[0].1 = Some(0.0);'''
+to = '''        points[0].1 = Some(0.1);'''
+
+[[mutant]]
+name = "linear()'s last input isn't at least 1"
+file = "crates/css/src/animation.rs"
+from = '''            .fold(1.0_f64, f64::max);'''
+to = '''            .fold(0.0_f64, f64::max);'''
+
+[[mutant]]
+name = "linear()'s inputs aren't raised to the one before"
+file = "crates/css/src/animation.rs"
+from = '''            *input = input.max(largest);'''
+to = '''            *input = input.min(f64::INFINITY);'''
+
+[[mutant]]
+name = "linear()'s missing inputs aren't spaced evenly"
+file = "crates/css/src/animation.rs"
+from = '''            point.1 = Some(from + (to - from) * (k + 1) as f64 / steps);'''
+to = '''            point.1 = Some(from + (to - from) * k as f64 / steps);'''
+
+[[mutant]]
+name = "cubic-bezier()'s x out of range is valid"
+file = "crates/css/src/animation.rs"
+from = '''        if is_x && !(0.0..=1.0).contains(&value) {'''
+to = '''        if is_x && false {'''
+
+[[mutant]]
+name = "a math function's x isn't clamped"
+file = "crates/css/src/animation.rs"
+from = '''            *point = if is_x { value.clamp(0.0, 1.0) } else { value };'''
+to = '''            *point = value;'''
+
+[[mutant]]
+name = "jump-none takes 1 step"
+file = "crates/css/src/animation.rs"
+from = '''    let least = if position == StepPosition::JumpNone {
+        2.0'''
+to = '''    let least = if position == StepPosition::JumpNone {
+        1.0'''
+
+[[mutant]]
+name = "a math function's step count is cut, not rounded"
+file = "crates/css/src/animation.rs"
+from = '''        Some(value) => (value + 0.5).floor(),'''
+to = '''        Some(value) => value.floor(),'''
+
+[[mutant]]
+name = "steps(n, end) written with its position"
+file = "crates/css/src/animation.rs"
+from = '''                StepPosition::End | StepPosition::JumpEnd => None,'''
+to = '''                StepPosition::End | StepPosition::JumpEnd => Some("end"),'''
+
+[[mutant]]
+name = "the shorthand drops the duration before a delay"
+file = "crates/css/src/animation.rs"
+from = '''        if durations[i].seconds() != 0.0 || delayed {'''
+to = '''        if durations[i].seconds() != 0.0 {'''
+
+[[mutant]]
+name = "the shorthand writes lists of different lengths"
+file = "crates/css/src/animation.rs"
+from = '''        behaviors.len(),
+    ]
+    .iter()
+    .any(|&len| len != n)'''
+to = '''        behaviors.len(),
+    ]
+    .iter()
+    .any(|&len| len < n)'''
+
+[[mutant]]
+name = "none among other transitions"
+file = "crates/css/src/animation.rs"
+from = '''    if transitions.len() > 1
+        && transitions'''
+to = '''    if transitions.len() > 99
+        && transitions'''
+
+[[mutant]]
+name = "default is a property name"
+file = "crates/css/src/animation.rs"
+from = '''"none" | "initial" | "inherit" | "unset" | "revert" | "revert-layer" | "default" =>'''
+to = '''"none" | "initial" | "inherit" | "unset" | "revert" | "revert-layer" =>'''
+
+[[mutant]]
+name = "the before flag is ignored"
+file = "crates/computed_style/src/animation.rs"
+from = '''    if before && (input * steps).fract() == 0.0 {'''
+to = '''    if false && (input * steps).fract() == 0.0 {'''
+
+[[mutant]]
+name = "steps() isn't held at the last jump"
+file = "crates/computed_style/src/animation.rs"
+from = '''    if input <= 1.0 && current > jumps {'''
+to = '''    if input < 0.0 && current > jumps {'''
+
+[[mutant]]
+name = "linear() before its first point starts at the last segment"
+file = "crates/computed_style/src/animation.rs"
+from = '''        .unwrap_or(0)
+        .min(last - 1);'''
+to = '''        .unwrap_or(last - 1)
+        .min(last - 1);'''
+
+[[mutant]]
+name = "cubic-bezier() is flat before the start"
+file = "crates/computed_style/src/animation.rs"
+from = '''        return slope * input;'''
+to = '''        return 0.0 * input;'''
+
+[[mutant]]
+name = "cubic-bezier()'s start slope ignores the second point"
+file = "crates/computed_style/src/animation.rs"
+from = '''        } else if y1 == 0.0 && x2 > 0.0 {
+            y2 / x2'''
+to = '''        } else if y1 == 0.0 && x2 > 0.0 {
+            0.0'''
+
+[[mutant]]
+name = "the delay is the duration"
+file = "crates/css/src/properties.rs"
+from = '''        (TransitionDelay, Value::Times(v)) => {
+            style.transitions.delay = v.iter().map(|t| t.seconds()).collect();'''
+to = '''        (TransitionDelay, Value::Times(v)) => {
+            style.transitions.duration = v.iter().map(|t| t.seconds()).collect();'''
+
+[[mutant]]
+name = "inherit doesn't copy the property list"
+file = "crates/css/src/properties.rs"
+from = '''        TransitionProperty => to.transitions.property = from.transitions.property.clone(),'''
+to = '''        TransitionProperty => {}'''

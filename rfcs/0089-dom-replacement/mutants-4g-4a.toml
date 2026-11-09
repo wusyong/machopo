@@ -1,0 +1,292 @@
+# Stage 4g-4a: iframes on the new DOM: what happens to them recorded by the DOM (connected,
+# disconnected, src and srcdoc), their steps after each call and before the custom element
+# reactions (a child browsing context made, navigated, discarded with those below it), the
+# frames' realms with security tokens by origin, Window's parent, top, frameElement, length
+# and window[i]; the renderer's frame tree laid out at the iframes' content boxes.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it frames && cargo test -q -p dom_js_next --test it -- frames blobs && cargo test -q -p renderer --lib next_frame_view && cargo test -q -p layout --test it -- next"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: a removed iframe recorded as inserted"
+file = "crates/dom_next/src/frame.rs"
+from = '''            FrameOwnerChange::Removed(id)
+        });'''
+to = '''            FrameOwnerChange::Inserted(id)
+        });'''
+
+[[mutant]]
+name = "dom: srcdoc recorded as src"
+file = "crates/dom_next/src/frame.rs"
+from = '''            self.record_frame_owner_change(FrameOwnerChange::SrcdocChanged(id));'''
+to = '''            self.record_frame_owner_change(FrameOwnerChange::SrcChanged(id));'''
+
+[[mutant]]
+name = "dom: no microtask asked for"
+file = "crates/dom_next/src/frame.rs"
+from = '''            .set(self.changes.microtasks.get() | Microtasks::FRAMES);'''
+to = '''            .set(self.changes.microtasks.get());'''
+
+[[mutant]]
+name = "dom: an iframe made not seen"
+file = "crates/dom_next/src/frame.rs"
+from = '''        self.see(crate::form::IFRAMES_SEEN);'''
+to = '''        self.see(0);'''
+
+[[mutant]]
+name = "dom: the documents below not discarded"
+file = "crates/dom_next/src/frame.rs"
+from = '''                    documents.push(inner);'''
+to = '''                    let _ = inner;'''
+
+[[mutant]]
+name = "dom: the old content document still the iframe's"
+file = "crates/dom_next/src/frame.rs"
+from = '''            old.frame_owner.set(self.gc, None);'''
+to = '''            let _ = old;'''
+
+[[mutant]]
+name = "dom: nothing discarded"
+file = "crates/dom_next/src/frame.rs"
+from = '''            .is_some_and(|data| data.into_ref().discarded.get())'''
+to = '''            .is_some_and(|_| false)'''
+
+[[mutant]]
+name = "dom: removal not recorded"
+file = "crates/dom_next/src/style.rs"
+from = '''                self.frame_owner_moved(at, false);'''
+to = '''                let _ = at;'''
+
+[[mutant]]
+name = "dom: attribute changes not recorded"
+file = "crates/dom_next/src/style.rs"
+from = '''                self.frame_owner_attribute_changed(element, name);'''
+to = '''                let _ = name;'''
+
+[[mutant]]
+name = "dom: an iframe made never marks the DOM"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if name.namespace == names::HTML_NAMESPACE && name.local == names::local::IFRAME {
+            self.iframe_made();'''
+to = '''        if name.namespace == names::HTML_NAMESPACE && name.local == names::local::IFRAME {'''
+
+[[mutant]]
+name = "html: the parser's iframe waits for the next call"
+file = "crates/html/src/next.rs"
+from = '''        if (left || frames) && let Some(host) = self.host.borrow_mut().as_mut() {'''
+to = '''        if left && let Some(host) = self.host.borrow_mut().as_mut() {'''
+
+[[mutant]]
+name = "api: the host not told of a removed frame"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''                    host.discard_child(&document);'''
+to = '''                    let _ = document;'''
+
+[[mutant]]
+name = "api: a frame made in a discarded document"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''        (!cx.is_discarded(document)).then(|| cx.root(owner))'''
+to = '''        Some(cx.root(owner))'''
+
+[[mutant]]
+name = "api: a frame made for a disconnected iframe"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''        let owner = cx.node_by_id(owner).filter(|owner| cx.is_connected(*owner))?;'''
+to = '''        let owner = cx.node_by_id(owner)?;'''
+
+[[mutant]]
+name = "api: src counts with a srcdoc"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''                    (has_frame && (matches!(change, FrameOwnerChange::SrcdocChanged(_)) || !srcdoc))'''
+to = '''                    (has_frame && (matches!(change, FrameOwnerChange::SrcdocChanged(_)) || true))'''
+
+[[mutant]]
+name = "api: an initial about:blank fires no load"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''        (None, _) if initial => {'''
+to = '''        (None, _) if false => {'''
+
+[[mutant]]
+name = "api: src not resolved against the document's URL"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''            match url::Url::options().base_url(base.as_ref()).parse(src.trim()) {'''
+to = '''            match url::Url::options().base_url(None).parse(src.trim()) {'''
+
+[[mutant]]
+name = "api: about:blank never matched"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''        url.scheme() == "about"
+            && url.path() == "blank"'''
+to = '''        url.scheme() == "about"
+            && url.path() == "blank-"'''
+
+[[mutant]]
+name = "api: a discarded window's parent"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''    if is_discarded(cx, this) {
+        return Ok(None);
+    }
+    Ok(Some(parent_window(cx, this).unwrap_or(this)))'''
+to = '''    Ok(Some(parent_window(cx, this).unwrap_or(this)))'''
+
+[[mutant]]
+name = "api: a discarded window's top"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''    if is_discarded(cx, this) {
+        return Ok(None);
+    }
+    let mut window = this;'''
+to = '''    let mut window = this;'''
+
+[[mutant]]
+name = "api: a top-level window's parent none"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''    Ok(Some(parent_window(cx, this).unwrap_or(this)))'''
+to = '''    Ok(parent_window(cx, this))'''
+
+[[mutant]]
+name = "api: top one parent up"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''    while let Some(parent) = parent_window(cx, window) {'''
+to = '''    if let Some(parent) = parent_window(cx, window) {'''
+
+[[mutant]]
+name = "api: child windows only the document's children"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''        stack.extend(cx.first_child(node));
+    }
+    windows'''
+to = '''    }
+    windows'''
+
+[[mutant]]
+name = "api: the iframes' steps after the reactions"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        if self.read(|cx, _| cx.has_frame_owner_changes()) {
+            self.update_frames();
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "js: no iframe steps after a call"
+file = "crates/dom_js_next/src/state.rs"
+from = '''    if microtasks.frames() {'''
+to = '''    if false && microtasks.frames() {'''
+
+[[mutant]]
+name = "js: a child's initial about:blank its own origin"
+file = "crates/dom_js_next/src/frames.rs"
+from = '''    if let Some(token) = token {
+        context.set_security_token(token);
+    }'''
+to = '''    let _ = token;'''
+
+[[mutant]]
+name = "js: an about: document inherits nothing"
+file = "crates/dom_js_next/src/frames.rs"
+from = '''    let inherits = url.starts_with("about:");'''
+to = '''    let inherits = false;'''
+
+[[mutant]]
+name = "js: every origin opaque"
+file = "crates/dom_js_next/src/frames.rs"
+from = '''        Ok(origin) if origin.is_tuple() => origin.ascii_serialization(),'''
+to = '''        Ok(origin) if false => origin.ascii_serialization(),'''
+
+[[mutant]]
+name = "js: the frames below a removed one stay"
+file = "crates/dom_js_next/src/frames.rs"
+from = '''        self.frames.retain(|frame| !gone.contains(&frame.id));'''
+to = '''        self.frames.retain(|frame| frame.id != gone[0]);'''
+
+[[mutant]]
+name = "js: the host not told a frame went"
+file = "crates/dom_js_next/src/frames.rs"
+from = '''    state.frames.requests.push(FrameRequest::Removed { frame });'''
+to = '''    let _ = frame;'''
+
+[[mutant]]
+name = "js: a new top-level document keeps the children"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''                scope.state_mut().0.frames.clear_children();'''
+to = '''                let _ = &scope;'''
+
+[[mutant]]
+name = "js: a child's document not its iframe's content document"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''                    cx.set_content_document(owner.get(cx.gc), Some(document));'''
+to = '''                    let _ = owner;'''
+
+[[mutant]]
+name = "js: the parser's reactions before the iframes' steps"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        if scope.state().0.dom.read(|cx| cx.has_frame_owner_changes()) {
+            state::update_frames(&mut scope);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "js: Window iterable"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''    if INTERFACES[interface].name == "Window" {
+        return;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "layout: an iframe not replaced"
+file = "crates/layout/src/next.rs"
+from = '''            || dom.is_iframe(element)
+            || is_svg_root(dom, element)'''
+to = '''            || is_svg_root(dom, element)'''
+
+[[mutant]]
+name = "layout: an inline iframe not atomic"
+file = "crates/layout/src/next.rs"
+from = '''        local::CANVAS,
+        local::IFRAME,'''
+to = '''        local::CANVAS,'''
+
+[[mutant]]
+name = "renderer: a child laid out at 0x0"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''                .map_or(SizeF::new(0.0, 0.0), crate::frame_view::content_box_size);'''
+to = '''                .map_or(SizeF::new(0.0, 0.0), |_| SizeF::new(0.0, 0.0));'''
+
+[[mutant]]
+name = "renderer: a child's change not painted"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            if laid_out || child.paint_dirty || child.needs_pre_paint || child.scroll.needs_pre_paint {'''
+to = '''            if laid_out {'''
+
+[[mutant]]
+name = "renderer: a child's paint flag kept"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            child.paint_dirty = false;
+            child.needs_pre_paint = false;'''
+to = '''            child.needs_pre_paint = false;'''
+
+[[mutant]]
+name = "renderer: the frames below a child not painted"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            child.collect_child_frames(frames);'''
+to = '''            let _ = frames;'''
+
+[[mutant]]
+name = "renderer: a frame two below not found"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''                child.child_mut(frame)'''
+to = '''                None'''
+
+[[mutant]]
+name = "renderer: a frame below not removed"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        self.children.iter_mut().any(|child| child.remove_child(frame))'''
+to = '''        false'''
+
+[[mutant]]
+name = "renderer: a view below not found"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        self.children
+            .iter()
+            .find_map(|child| child.view_of(document))'''
+to = '''        None'''

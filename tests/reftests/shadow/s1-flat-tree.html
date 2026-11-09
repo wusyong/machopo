@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<title>A shadow host draws its shadow tree, slots their assigned nodes</title>
+<link rel="match" href="s1-flat-tree-ref.html">
+<!-- The host's box holds its shadow tree; a named slot holds the child of
+     its name, the default slot the rest, a slot with nothing its fallback;
+     a child for no slot isn't drawn. The shadow tree's `<style>` styles it
+     only, and the document's styles nothing in it; what is in a slot
+     inherits from the slot. -->
+<style>
+  body { margin: 0 }
+  div { font: 20px/1 Ahem; width: 300px }
+  p { margin: 0; color: red }
+</style>
+<div id="host"><span slot="b">BB</span>XX<span slot="none">NONE</span></div>
+<script>
+  const root = document.getElementById("host").attachShadow({ mode: "open" });
+  root.innerHTML = `<style>
+      p { margin: 0; color: green }
+      slot[name=b] { color: blue }
+    </style>
+    <p>AA</p><slot name="b"></slot><slot></slot><p><slot name="c">CC</slot></p>`;
+</script>

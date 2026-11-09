@@ -1,0 +1,513 @@
+# Mutation test of step 3b-1: script's effects and animations (`dom_api`'s
+# `effect` and `animation`: `KeyframeEffect`, `element.animate()`,
+# `new Animation()`, `effect` and `timeline` set), reading keyframes
+# (`dom_js`'s `keyframes`), script's keyframes computed by style (`style`'s
+# and `animation`'s), and what `dom` keeps of them (2026-10-16):
+# python3 scripts/test.py mutate rfcs/0048-css-animations/mutants-3b.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "animations::"]
+timeout = 900
+
+# --- Timing
+[[mutant]]
+name = "a negative iterationStart is taken"
+file = "crates/dom_api/src/effect.rs"
+from = '''    if timing.iteration_start.is_some_and(|start| start < 0.0) {'''
+to = '''    if timing.iteration_start.is_some_and(|start| start < -1.0) {'''
+
+[[mutant]]
+name = "negative iterations are taken"
+file = "crates/dom_api/src/effect.rs"
+from = '''    if timing.iterations.is_some_and(|n| n.is_nan() || n < 0.0) {'''
+to = '''    if timing.iterations.is_some_and(|n| n.is_nan()) {'''
+
+[[mutant]]
+name = "a negative duration is taken"
+file = "crates/dom_api/src/effect.rs"
+from = '''        Some(DurationValue::Number(d)) if d.is_nan() || *d < 0.0 => {'''
+to = '''        Some(DurationValue::Number(d)) if d.is_nan() => {'''
+
+[[mutant]]
+name = "any duration string is auto"
+file = "crates/dom_api/src/effect.rs"
+from = '''        Some(DurationValue::String(s)) if s.as_str() == "auto" => Some(None),'''
+to = '''        Some(DurationValue::String(_)) => Some(None),'''
+
+[[mutant]]
+name = "an easing that isn't one is linear"
+file = "crates/dom_api/src/effect.rs"
+from = '''            css::animation::parse_easing_text(text.as_str())
+                .ok_or_else(|| type_error("not an easing function"))?,'''
+to = '''            css::animation::parse_easing_text(text.as_str())
+                .unwrap_or((EasingFunction::Linear, "linear".into())),'''
+
+[[mutant]]
+name = "fill forwards fills nothing"
+file = "crates/dom_api/src/effect.rs"
+from = '''            FillMode::Forwards => computed_style::FillMode::Forwards,'''
+to = '''            FillMode::Forwards => computed_style::FillMode::None,'''
+
+[[mutant]]
+name = "fill auto isn't remembered"
+file = "crates/dom_api/src/effect.rs"
+from = '''        input.fill_auto = fill == FillMode::Auto;'''
+to = '''        input.fill_auto = false;'''
+
+[[mutant]]
+name = "duration auto isn't remembered"
+file = "crates/dom_api/src/effect.rs"
+from = '''        input.duration_auto = duration.is_none();'''
+to = '''        input.duration_auto = false;'''
+
+[[mutant]]
+name = "alternate-reverse is normal"
+file = "crates/dom_api/src/effect.rs"
+from = '''            PlaybackDirection::AlternateReverse => {
+                computed_style::PlaybackDirection::AlternateReverse
+            }'''
+to = '''            PlaybackDirection::AlternateReverse => computed_style::PlaybackDirection::Normal,'''
+
+[[mutant]]
+name = "the computed timing never goes backwards"
+file = "crates/dom_api/src/effect.rs"
+from = '''                found.animation.playback.playback_rate < 0.0,'''
+to = '''                false,'''
+
+[[mutant]]
+name = "the computed fill keeps auto"
+file = "crates/dom_api/src/effect.rs"
+from = '''        fill: match timing.fill {
+            FillMode::Auto => FillMode::None,
+            fill => fill,
+        },'''
+to = '''        fill: timing.fill,'''
+
+[[mutant]]
+name = "updateTiming leaves the finished state"
+file = "crates/dom_api/src/effect.rs"
+from = '''    cx.read().animations().timing_inputs.insert(id, input);
+    if let Some(animation) = state.animation {
+        crate::animation::update_finished_state(cx, animation);
+    }'''
+to = '''    cx.read().animations().timing_inputs.insert(id, input);
+    let _ = state.animation;'''
+
+[[mutant]]
+name = "updateTiming isn't kept from a CSS animation's style"
+file = "crates/dom_api/src/effect.rs"
+from = '''                            owner.timing_overrides = owner.timing_overrides.union(members);'''
+to = '''                            let _ = members;'''
+
+[[mutant]]
+name = "setKeyframes isn't kept from a CSS animation's style"
+file = "crates/dom_api/src/effect.rs"
+from = '''                        Change::Keyframes => owner.keyframes_overridden = true,'''
+to = '''                        Change::Keyframes => {}'''
+
+[[mutant]]
+name = "a changed effect's target isn't styled again"
+file = "crates/dom_api/src/effect.rs"
+from = '''    let (target, result) = target;
+    if let Some(target) = target
+        && let Some(element) = cx.read().node_by_id(target.element)
+    {
+        element.set_animations_changed();
+    }
+    Some(result)'''
+to = '''    let (_, result) = target;
+    Some(result)'''
+
+[[mutant]]
+name = "options not given are a duration of 0"
+file = "crates/dom_api/src/interfaces/core_animation.rs"
+from = '''options: KeyframeEffectOptionsOrNumber = { effect::no_options() },'''
+to = '''options: KeyframeEffectOptionsOrNumber = { KeyframeEffectOptionsOrNumber::Number(0.0) },'''
+
+# --- Targets and pseudo-elements
+[[mutant]]
+name = "a pseudo-element given with CSS 2's colon isn't one"
+file = "crates/dom_api/src/effect.rs"
+from = '''        "::before" | ":before" => Ok(Some(PseudoId::Before)),'''
+to = '''        "::before" => Ok(Some(PseudoId::Before)),'''
+
+[[mutant]]
+name = "::marker isn't a pseudo-element an effect can target"
+file = "crates/dom_api/src/effect.rs"
+from = '''        "::marker" => Ok(Some(PseudoId::Marker)),'''
+to = '''        "::marker" => Ok(None),'''
+
+[[mutant]]
+name = "a new effect forgets its pseudo-element"
+file = "crates/dom_api/src/effect.rs"
+from = '''    input.pseudo = pseudo;
+    let id = new_id(cx);'''
+to = '''    let id = new_id(cx);'''
+
+[[mutant]]
+name = "a new effect's target is its element, not the pseudo-element"
+file = "crates/dom_api/src/effect.rs"
+from = '''            target: target.map(|element| AnimationTarget {
+                element: element.id(),
+                pseudo,
+            }),'''
+to = '''            target: target.map(|element| AnimationTarget {
+                element: element.id(),
+                pseudo: None,
+            }),'''
+
+[[mutant]]
+name = "a free effect's target isn't set"
+file = "crates/dom_api/src/effect.rs"
+from = '''                free.target = target;'''
+to = '''                let _ = (&free, target);'''
+
+[[mutant]]
+name = "script's animation stays where it was when its effect's target changes"
+file = "crates/dom_api/src/effect.rs"
+from = '''            if scripts {
+                crate::animation::move_animation(cx, animation, target);
+            }'''
+to = '''            let _ = scripts;'''
+
+[[mutant]]
+name = "the old target isn't styled again"
+file = "crates/dom_api/src/effect.rs"
+from = '''    for target in [state.target, target].into_iter().flatten() {'''
+to = '''    for target in [target].into_iter().flatten() {'''
+
+[[mutant]]
+name = "setting pseudoElement doesn't retarget"
+file = "crates/dom_api/src/effect.rs"
+from = '''    if let Some(target) = target {
+        retarget(
+            cx,
+            id,
+            Some(AnimationTarget {
+                element: target.element,
+                pseudo,
+            }),
+        )?;
+    }'''
+to = '''    let _ = target;'''
+
+# --- Keyframes
+[[mutant]]
+name = "a property's script name isn't camel-cased"
+file = "crates/dom_api/src/effect.rs"
+from = '''            '-' => upper = true,'''
+to = '''            '-' => out.push('-'),'''
+
+[[mutant]]
+name = "properties that aren't animatable are taken"
+file = "crates/dom_api/src/effect.rs"
+from = '''                .any(|id| id.animation_type() != css::interpolate::AnimationType::NotAnimatable)'''
+to = '''                .any(|_| true)'''
+
+[[mutant]]
+name = "an offset past 1 is taken"
+file = "crates/dom_api/src/effect.rs"
+from = '''            if !(0.0..=1.0).contains(&offset) {'''
+to = '''            if !(0.0..=10.0).contains(&offset) {'''
+
+[[mutant]]
+name = "offsets out of order are taken"
+file = "crates/dom_api/src/effect.rs"
+from = '''            if offset < last {'''
+to = '''            if offset < last - 1.0 {'''
+
+[[mutant]]
+name = "a keyframe's composite isn't checked"
+file = "crates/dom_api/src/effect.rs"
+from = '''    if !is_composite(&composite) {'''
+to = '''    if composite.is_empty() {'''
+
+[[mutant]]
+name = "a lone value goes at 0"
+file = "crates/dom_api/src/effect.rs"
+from = '''            let offset = if n == 1 {
+                1.0
+            } else {'''
+to = '''            let offset = if n == 1 {
+                0.0
+            } else {'''
+
+[[mutant]]
+name = "property-indexed keyframes aren't sorted by offset"
+file = "crates/dom_api/src/effect.rs"
+from = '''    by_offset.sort_by(|a, b| a.0.total_cmp(&b.0));'''
+to = '''    let _ = &mut by_offset;'''
+
+[[mutant]]
+name = "an easing list isn't repeated"
+file = "crates/dom_api/src/effect.rs"
+from = '''            let easing = (!easings.is_empty()).then(|| easings[i % easings.len()].clone());'''
+to = '''            let easing = easings.get(i).cloned();'''
+
+[[mutant]]
+name = "an offset list isn't given to the keyframes"
+file = "crates/dom_api/src/effect.rs"
+from = '''            let offset = offsets.get(i).copied().flatten();'''
+to = '''            let offset = offsets.get(i + 100).copied().flatten();'''
+
+[[mutant]]
+name = "getKeyframes gives no computed offsets"
+file = "crates/dom_api/src/effect.rs"
+from = '''                    ("computedOffset".into(), number(computed)),'''
+to = '''                    ("computedOffset".into(), number(0.0)),'''
+
+[[mutant]]
+name = "a keyframe that isn't an object is taken"
+file = "crates/dom_js/src/keyframes.rs"
+from = '''                if !(item.is_null_or_undefined() || item.is_object()) {'''
+to = '''                if false {'''
+
+[[mutant]]
+name = "a list's values are read as lists"
+file = "crates/dom_js/src/keyframes.rs"
+from = '''                list.push(keyframe_like(cx, item, false, is_property)?);'''
+to = '''                list.push(keyframe_like(cx, item, true, is_property)?);'''
+
+[[mutant]]
+name = "a keyframe's properties aren't sorted"
+file = "crates/dom_js/src/keyframes.rs"
+from = '''    properties.sort();'''
+to = '''    properties.reverse();'''
+
+[[mutant]]
+name = "a property that isn't one is read"
+file = "crates/dom_js/src/keyframes.rs"
+from = '''        if is_property(&name) {
+            properties.push(name);
+        }'''
+to = '''        if is_property(&name) || name != "offset" && name != "easing" && name != "composite" {
+            properties.push(name);
+        }'''
+
+# --- Style
+[[mutant]]
+name = "style doesn't compute script's keyframes"
+file = "crates/style/src/animations.rs"
+from = '''            if animation.effect.declared.is_some() {
+                animation.effect = script_effect(&base, &animation.effect, restyle);
+            }'''
+to = '''            let _ = &animation;'''
+
+[[mutant]]
+name = "script's keyframes are never computed again"
+file = "crates/animation/src/css_animation.rs"
+from = '''                .is_none_or(|source| !Arc::ptr_eq(&source.base, base) && *source.base != **base)'''
+to = '''                .is_none()'''
+
+[[mutant]]
+name = "uncomputed keyframes don't need the cascade"
+file = "crates/style/src/animations.rs"
+from = '''        inherited || uncomputed'''
+to = '''        let _ = uncomputed;
+        inherited'''
+
+[[mutant]]
+name = "style replaces keyframes script set"
+file = "crates/animation/src/css_animation.rs"
+from = '''                    if !owner.keyframes_overridden {
+                        animation.effect = keyframes;
+                    }'''
+to = '''                    animation.effect = keyframes;'''
+
+[[mutant]]
+name = "style replaces timing script set"
+file = "crates/animation/src/css_animation.rs"
+from = '''                    let timing = owner.timing_overrides.apply(&timing, &animation.timing);'''
+to = ''''''
+
+[[mutant]]
+name = "an override of one member keeps others too"
+file = "crates/animation/src/timing.rs"
+from = '''            delay: pick(self.delay).delay,'''
+to = '''            delay: pick(self.duration).delay,'''
+
+[[mutant]]
+name = "a CSS animation's effect replaced leaves style its timing"
+file = "crates/dom_api/src/animation.rs"
+from = '''            owner.timing_overrides = TimingOverrides::ALL;'''
+to = ''''''
+
+# --- Animations
+[[mutant]]
+name = "setting the timeline changes nothing"
+file = "crates/animation/src/animation.rs"
+from = '''        self.has_timeline = has;
+        let _ = self.control('''
+to = '''        let _ = self.control('''
+
+[[mutant]]
+name = "setting the timeline keeps the hold time"
+file = "crates/animation/src/animation.rs"
+from = '''            if playback.start_time.is_some() {
+                playback.hold_time = None;
+            }
+            playback.update_finished_state(false, false, at, end, notices);
+            Ok(())
+        });
+        if self.current_time(now).is_none() {'''
+to = '''            playback.update_finished_state(false, false, at, end, notices);
+            Ok(())
+        });
+        if self.current_time(now).is_none() {'''
+
+[[mutant]]
+name = "an animation that loses its timeline says nothing"
+file = "crates/animation/src/animation.rs"
+from = '''        if self.current_time(now).is_none() {
+            self.cancel_event(active, now, events);
+            self.went_idle();
+        }'''
+to = '''        let _ = active;'''
+
+[[mutant]]
+name = "an animation that loses its timeline doesn't start its events over"
+file = "crates/animation/src/animation.rs"
+from = '''            self.cancel_event(active, now, events);
+            self.went_idle();
+        }'''
+to = '''            self.cancel_event(active, now, events);
+        }'''
+
+# --- What the review of WPT's results found
+[[mutant]]
+name = "the first of a name keeps the first animation"
+file = "crates/animation/src/css_animation.rs"
+from = '''                && let Some(at) = old.iter().rposition(|a| owner(a).name == *name)'''
+to = '''                && let Some(at) = old.iter().position(|a| owner(a).name == *name)'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "css_animations::"]
+
+[[mutant]]
+name = "names are matched from the start"
+file = "crates/animation/src/css_animation.rs"
+from = '''        for (i, name) in names.iter().enumerate().rev() {'''
+to = '''        for (i, name) in names.iter().enumerate() {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "css_animations::"]
+
+[[mutant]]
+name = "a disassociated animation keeps its place when it runs again"
+file = "crates/dom_api/src/animation.rs"
+from = '''        if renumber {
+            table.order += 1;'''
+to = '''        if renumber && false {
+            table.order += 1;'''
+
+[[mutant]]
+name = "a disassociated animation takes a new place each time it runs"
+file = "crates/dom_api/src/animation.rs"
+from = '''                found.animation.needs_global_order = false;'''
+to = ''''''
+
+[[mutant]]
+name = "disassociating doesn't ask for a new place"
+file = "crates/animation/src/animation.rs"
+from = '''        self.owning = false;
+        self.needs_global_order = true;'''
+to = '''        self.owning = false;'''
+
+[[mutant]]
+name = "script's and disassociated animations go by when they were made"
+file = "crates/dom_api/src/animation.rs"
+from = '''                        animation.global_order,'''
+to = '''                        animation.id,'''
+
+[[mutant]]
+name = "the before-change style leaves out keyframes script just set"
+file = "crates/style/src/animations.rs"
+from = '''                if animation.effect.needs_computing(&last) {
+                    animation.effect = script_effect(&last, &animation.effect, restyle);
+                }'''
+to = '''                let _ = (&animation, &last);'''
+
+[[mutant]]
+name = "linear() compares its stops in f32"
+file = "crates/computed_style/src/animation.rs"
+from = '''        .rposition(|p| p.input <= input)'''
+to = '''        .rposition(|p| f64::from(p.input as f32) <= input)'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "transitions::linear"]
+
+[[mutant]]
+name = "a new animation always has the timeline"
+file = "crates/dom_api/src/animation.rs"
+from = '''    animation.has_timeline = has_timeline;
+    let base = target.map(|target| base_style(cx, target));'''
+to = '''    let _ = has_timeline;
+    let base = target.map(|target| base_style(cx, target));'''
+
+[[mutant]]
+name = "an animation without a timeline still has one"
+file = "crates/dom_api/src/animation.rs"
+from = '''    if read_animation(cx, this, |a, _| a.has_timeline) == Some(false) {
+        return Ok(None);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "an effect taken keeps its old animation's id"
+file = "crates/dom_api/src/animation.rs"
+from = '''                found.animation.effect_id = None;'''
+to = ''''''
+
+[[mutant]]
+name = "an effect taken leaves its keyframes with its old animation"
+file = "crates/dom_api/src/animation.rs"
+from = '''                found.animation.effect = Arc::new(KeyframeEffect::empty());'''
+to = ''''''
+
+[[mutant]]
+name = "an effect set aside isn't free"
+file = "crates/dom_api/src/animation.rs"
+from = '''        cx.read().animations().effects.insert(
+            old,'''
+to = '''        cx.read().animations().effects.insert(
+            old + 1_000_000,'''
+
+[[mutant]]
+name = "script's animation doesn't move to its new effect's target"
+file = "crates/dom_api/src/animation.rs"
+from = '''    if scripts {
+        move_animation(cx, id, target);
+    }'''
+to = '''    let _ = scripts;'''
+
+[[mutant]]
+name = "animate()'s id isn't set"
+file = "crates/dom_api/src/animation.rs"
+from = '''    if !name.as_str().is_empty() {
+        set_id(cx, &animation, name)?;
+    }'''
+to = '''    let _ = name;'''
+
+[[mutant]]
+name = "animate()'s timeline: null is the document's"
+file = "crates/dom_api/src/animation.rs"
+from = '''            !matches!(options.timeline, Some(None)),'''
+to = '''            true,'''
+
+[[mutant]]
+name = "animate() doesn't play"
+file = "crates/dom_api/src/animation.rs"
+from = '''    play(cx, &animation)?;
+    Ok(animation)'''
+to = '''    Ok(animation)'''
+
+# --- What dom keeps
+[[mutant]]
+name = "an effect's object doesn't keep its animation"
+file = "crates/dom/src/animations.rs"
+from = '''            live.contains(&animation.id) || animation.effect_id.is_some_and(|id| live.contains(&id))'''
+to = '''            live.contains(&animation.id)'''
+
+[[mutant]]
+name = "a free effect script holds is let go of"
+file = "crates/dom/src/animations.rs"
+from = '''        self.effects.retain(|id, _| live.contains(id));'''
+to = '''        self.effects.clear();'''
+
+[[mutant]]
+name = "effects' objects aren't counted as live"
+file = "crates/dom/src/animation_objects.rs"
+from = '''                live.extend(self.effect_object_ids(&document));'''
+to = ''''''

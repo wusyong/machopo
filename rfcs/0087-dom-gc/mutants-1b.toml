@@ -1,0 +1,180 @@
+# Step 1b: the barriers' work on a recording (`gc_bench analyze`'s
+# concurrent marking: SATB's and Dijkstra's barriers, markers at a pace,
+# the pause, the floating garbage). Run with RUSTY_V8_ARCHIVE pointing at a
+# V8 built from the fork (`ci.py v8`).
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it", "--", "analyze::"]
+timeout = 600
+
+# The barriers.
+
+[[mutant]]
+name = "no black allocation"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''        self.set_marked(object);
+        self.cycle.allocated_bytes'''
+to = '''        self.cycle.allocated_bytes'''
+
+[[mutant]]
+name = "SATB's barrier on a young object's write"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''                objects[from as usize].generation == Generation::Old
+                    && objects[old as usize].generation == Generation::Old'''
+to = '''                objects[old as usize].generation == Generation::Old'''
+
+[[mutant]]
+name = "SATB's barrier on the value written"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''            Barrier::Satb => old.is_some_and(|old| {'''
+to = '''            Barrier::Satb => new.is_some_and(|old| {'''
+
+[[mutant]]
+name = "Dijkstra's barrier on the value overwritten"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''            Barrier::Dijkstra => new.is_some_and(|new| self.mark(objects, new)),'''
+to = '''            Barrier::Dijkstra => old.is_some_and(|new| self.mark(objects, new)),'''
+
+[[mutant]]
+name = "a barrier counted that marked nothing new"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''            Barrier::Dijkstra => new.is_some_and(|new| self.mark(objects, new)),'''
+to = '''            Barrier::Dijkstra => new.is_some_and(|new| {
+                self.mark(objects, new);
+                true
+            }),'''
+
+[[mutant]]
+name = "no SATB barrier on a root deletion"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''                for marker in self.markers.iter_mut().filter(|marker| marker.active) {
+                    marker.unrooted(&self.objects, object);
+                }'''
+to = '''                let _ = object;'''
+
+[[mutant]]
+name = "Dijkstra's barrier on a root deletion"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''        if self.barrier == Barrier::Satb
+            && objects[object as usize].generation == Generation::Old'''
+to = '''        if objects[object as usize].generation == Generation::Old'''
+
+# The markers.
+
+[[mutant]]
+name = "a marker ignores its pace"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''        self.credit = self.credit.saturating_add(self.pace.saturating_mul(size));'''
+to = '''        self.credit = if self.pace == 0 { 0 } else { u64::MAX };'''
+
+[[mutant]]
+name = "a root entry costs nothing"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''                let Some(credit) = self.credit.checked_sub(ROOT_ENTRY_BYTES) else {'''
+to = '''                let Some(credit) = self.credit.checked_sub(0) else {'''
+
+[[mutant]]
+name = "no scavenge before marking starts"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''                if !self.young.is_empty() {
+                    self.minor_gc();
+                }
+                let roots'''
+to = '''                let roots'''
+
+[[mutant]]
+name = "a marker pauses before it is done"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''                    } else {
+                        marker.is_done()
+                    }'''
+to = '''                    } else {
+                        true
+                    }'''
+
+[[mutant]]
+name = "a marker with pace 0 pauses without its leader"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''                        leaders.contains(&marker.barrier)'''
+to = '''                        true'''
+
+[[mutant]]
+name = "the leader is the fastest pace"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''        .min()'''
+to = '''        .max()'''
+
+[[mutant]]
+name = "no full GC after the pauses"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''        if !self.markers.iter().any(|marker| marker.active) {
+            self.full_gc();
+        }'''
+to = '''        let _ = self.markers.len();'''
+
+[[mutant]]
+name = "a root's object left in the root table once unrooted"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''                    self.rooted.remove(&object);'''
+to = '''                    let _ = object;'''
+
+# The pause.
+
+[[mutant]]
+name = "the pause doesn't mark the root entries left"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''            cycle.pause_roots = cycle.pause_roots.saturating_add(1);
+            if objects[root as usize].roots > 0 {
+                self.mark(objects, root);
+            }'''
+to = '''            cycle.pause_roots = cycle.pause_roots.saturating_add(1);
+            let _ = root;'''
+
+[[mutant]]
+name = "Dijkstra's pause doesn't rescan the roots"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''            for &root in rooted {
+                self.mark(objects, root);
+            }'''
+to = '''            let _ = rooted;'''
+
+[[mutant]]
+name = "Dijkstra's rescan isn't counted"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''            cycle.pause_roots = cycle.pause_roots.saturating_add(root_entries);'''
+to = '''            let _ = root_entries;'''
+
+[[mutant]]
+name = "the pause's scanning isn't counted"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''            cycle.pause_bytes = cycle
+                .pause_bytes
+                .saturating_add(objects[object as usize].size);'''
+to = '''            let _ = cycle.pause_bytes;'''
+
+[[mutant]]
+name = "floating garbage counts what is reachable"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''            let mut bits = bits & !reachable.get(word).copied().unwrap_or(0);'''
+to = '''            let mut bits = bits;'''
+
+[[mutant]]
+name = "floating garbage counts any object"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''                if object.generation == Generation::Old {
+                    cycle.floating_bytes'''
+to = '''                if object.generation != Generation::Old || true {
+                    cycle.floating_bytes'''
+
+[[mutant]]
+name = "reachable ignores edges"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''            reachable[word] |= bit;
+            left.extend('''
+to = '''            reachable[word] |= bit;
+            let _ = left.len();
+            Vec::<u32>::new().extend('''
+
+[[mutant]]
+name = "an unfinished cycle reported finished"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''                unfinished: marker.active,'''
+to = '''                unfinished: false,'''

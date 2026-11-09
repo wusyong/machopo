@@ -1,0 +1,59 @@
+# After the wrap-up's measurements: an HTMLCollection's index cache
+# (Blink's `CollectionIndexCache`), which jQuery's `cleanData` went through
+# a walk from the first each time without. `dom`'s tests: what the cache
+# finds after each change, and the debug build's count of the nodes its
+# walks look at.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom", "--test", "it"]
+timeout = 1800
+
+[[mutant]]
+name = "dom: the cache kept across a change of the trees"
+file = "crates/dom/src/collection.rs"
+from = '''        if collection.version.get() != version {'''
+to = '''        if collection.version.get() != version && false {'''
+
+[[mutant]]
+name = "dom: item walks from the first each time"
+file = "crates/dom/src/collection.rs"
+from = '''            Some(cached) if index >= cache.cached_index.get() => (cached, cache.cached_index.get()),'''
+to = '''            Some(cached) if false => (cached, cache.cached_index.get()),'''
+
+[[mutant]]
+name = "dom: item keeps no place"
+file = "crates/dom/src/collection.rs"
+from = '''        cache.cached.set(self.gc, Some(at));
+        cache.cached_index.set(index);
+        Some(at)'''
+to = '''        Some(at)'''
+
+[[mutant]]
+name = "dom: running off the end doesn't keep the length"
+file = "crates/dom/src/collection.rs"
+from = '''                None => {
+                    cache.length.set(at_index.saturating_add(1));
+                    return None;
+                }'''
+to = '''                None => {
+                    return None;
+                }'''
+
+[[mutant]]
+name = "dom: the length counted again each time"
+file = "crates/dom/src/collection.rs"
+from = '''        if cache.length.get() != UNKNOWN {
+            return cache.length.get();
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: the length counted from the first, not the last found"
+file = "crates/dom/src/collection.rs"
+from = '''        let (mut at, mut count) = match cache.cached.get(self.gc) {'''
+to = '''        let (mut at, mut count) = match None::<NodeRef<'gc>> {'''
+
+[[mutant]]
+name = "dom: the document's mode changed with the caches kept"
+file = "crates/dom/src/lib.rs"
+from = '''        // What a class matches changes with it: the caches of what matched.
+        self.tree_changed();'''
+to = ''''''

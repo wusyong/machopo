@@ -1,0 +1,24 @@
+# Inline SVG's hit testing: a shape is found by its geometry, not its
+# bounds (the stroke-only circle's middle is its <svg>), text by its
+# characters (the <tspan> a character is in), and a click on a shape
+# inside an SVG <a> follows the link. Tab takes the focus to an SVG <a>,
+# with the focus ring around its shape, and Enter follows it.
+navigate pages/svg-link.html
+wait-loaded
+click #ring
+wait-text #clicked "ring"
+click #words
+wait-text #clicked "word"
+click #link
+wait-text #where "two"
+navigate pages/svg-focus.html
+wait-loaded
+click #start
+wait-text #out "start"
+capture before
+key Tab
+wait-text #out "link"
+expect-differs before #around
+screenshot svg-focus-ring
+key Enter
+wait-text #where "two"

@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<title>I2: an inline element's horizontal margin, border and padding take room on the line</title>
+<link rel="match" href="i2-horizontal-edges-ref.html">
+<style>html, body { margin: 0 } body { font: 20px/1 Ahem; color: black }</style>
+<style>
+  span {
+    margin: 0 20px;
+    border-left: 20px solid blue;
+    border-right: 20px solid blue;
+    padding: 0 20px;
+    background-color: green;
+  }
+</style>
+<div>X<span>X</span>X</div>

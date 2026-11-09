@@ -1,0 +1,6 @@
+# The toolchain everything is built and tested with: the workspace's
+# `rust-version` (MSRV), so what we test is what we claim to support.
+# Raise both together.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]

@@ -1,0 +1,146 @@
+# 2: the 24 element interfaces' reflections, `WindowEventHandlers` on the
+# window and `<body>`, `<style>`'s `disabled` (`dom_api`, `dom`, `style`)
+# and `<map>`'s `areas`.
+#   python3 scripts/test.py mutate rfcs/0070-element-interfaces/mutants-2.toml
+# Left out as equivalent: `set_style_sheet_disabled`'s early return is only
+# what spares a restyle, which a test checks with the restyled elements.
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it"]
+timeout = 900
+
+[[mutant]]
+name = "a WindowEventHandlers handler missing"
+file = "crates/dom_api/src/handlers.rs"
+from = '''            onunhandledrejection = "unhandledrejection",'''
+to = ''''''
+
+[[mutant]]
+name = "<body>'s handlers checked against GlobalEventHandlers"
+file = "crates/dom_api/src/handlers.rs"
+from = '''pub fn body_event_handler(
+    cx: &mut dyn ScriptHost,
+    this: &NodeHandle,
+    event_type: DomString,
+) -> Result<Option<ScriptCallback>, DomException> {
+    let event_type = event_type.as_str();
+    check_handler(WINDOW_EVENT_HANDLERS, &[], event_type)?;'''
+to = '''pub fn body_event_handler(
+    cx: &mut dyn ScriptHost,
+    this: &NodeHandle,
+    event_type: DomString,
+) -> Result<Option<ScriptCallback>, DomException> {
+    let event_type = event_type.as_str();
+    check_handler(GLOBAL_EVENT_HANDLERS, &[], event_type)?;'''
+
+[[mutant]]
+name = "the window without WindowEventHandlers"
+file = "crates/dom_api/src/interfaces/core_frame.rs"
+from = '''        [WindowEventHandlers] attributes,
+            get = handlers::window_event_handler, set = handlers::set_window_event_handler;'''
+to = ''''''
+
+[[mutant]]
+name = "a long reflected as non-negative"
+file = "crates/dom_api/src/reflection.rs"
+from = '''        .and_then(|value| parse_integer(&value))
+        .unwrap_or(default)'''
+to = '''        .and_then(|value| parse_non_negative_integer(&value))
+        .unwrap_or(default)'''
+
+[[mutant]]
+name = "<ol start>'s default 0"
+file = "crates/dom_api/src/element_reflections.rs"
+from = '''reflected!(start, set_start: long "start" = 1);'''
+to = '''reflected!(start, set_start: long "start" = 0);'''
+
+[[mutant]]
+name = "bgColor without LegacyNullToEmptyString"
+file = "crates/dom_api/src/interfaces/core_html.rs"
+from = '''        [CEReactions, LegacyNullToEmptyString] attribute bgColor: DomString,'''
+to = '''        [CEReactions] attribute bgColor: DomString,'''
+
+[[mutant]]
+name = "<listing> not HTMLPreElement"
+file = "crates/dom_api/src/interfaces/core_html.rs"
+from = '''tags("pre", "listing", "xmp")'''
+to = '''tags("pre", "xmp")'''
+
+[[mutant]]
+name = "a map's areas are its links"
+file = "crates/dom_api/src/collection.rs"
+from = '''        CollectionFilter::MapAreas => name.is_html(&local_name!("area")),'''
+to = '''        CollectionFilter::MapAreas => name.is_html(&local_name!("a")),'''
+
+[[mutant]]
+name = "disabled read without a sheet"
+file = "crates/dom_api/src/css_style_sheet.rs"
+from = '''    Ok(has_style_sheet(element) && element.style_sheet_disabled())'''
+to = '''    Ok(element.style_sheet_disabled())'''
+
+[[mutant]]
+name = "disabled set without a sheet"
+file = "crates/dom_api/src/css_style_sheet.rs"
+from = '''    if has_style_sheet(this.get(&cx.read())) {
+        cx.mutate().set_style_sheet_disabled(this, disabled);'''
+to = '''    if true {
+        cx.mutate().set_style_sheet_disabled(this, disabled);'''
+
+[[mutant]]
+name = "a style's type keeps its sheet's flag"
+file = "crates/dom/src/scope.rs"
+from = '''            if name.is_attr(&local_name!("type")) {
+                // SAFETY: nothing allocates while it is used.
+                unsafe { enable_style_sheet(element) };'''
+to = '''            if false {
+                // SAFETY: nothing allocates while it is used.
+                unsafe { enable_style_sheet(element) };'''
+
+[[mutant]]
+name = "its text's data keeps its sheet's flag"
+file = "crates/dom/src/scope.rs"
+from = '''            // A `<style>`'s text: its sheet, a new one.
+            if is_style_sheet_owner(parent) {
+                // SAFETY: nothing allocates while it is used.
+                unsafe { enable_style_sheet(parent) };'''
+to = '''            // A `<style>`'s text: its sheet, a new one.
+            if is_style_sheet_owner(parent) {'''
+
+[[mutant]]
+name = "a text inserted into it keeps its sheet's flag"
+file = "crates/dom/src/scope.rs"
+from = '''        if parent_owns_sheets {
+            // SAFETY: nothing allocates while it is used.
+            unsafe { enable_style_sheet(parent_node) };
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "a_disabled_style"]
+
+[[mutant]]
+name = "a text removed from it keeps its sheet's flag"
+file = "crates/dom/src/scope.rs"
+from = '''        if parent_owns_sheets {
+            // SAFETY: nothing allocates while it is used.
+            unsafe { enable_style_sheet(parent) };
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "inserted or removed, it keeps its sheet's flag"
+file = "crates/dom/src/scope.rs"
+from = '''            // not disabled (`node` is alive, nothing allocates).
+            enable_style_sheet(node);'''
+to = ''''''
+
+[[mutant]]
+name = "the flag set without collecting the sheets again"
+file = "crates/dom/src/scope.rs"
+from = '''        self.rare_data(element).style_sheet_disabled.set(disabled);
+        set_tree_scope_style_sheets_changed(self.own(element));'''
+to = '''        self.rare_data(element).style_sheet_disabled.set(disabled);'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "a_disabled_style"]
+
+[[mutant]]
+name = "a disabled sheet applied"
+file = "crates/style/src/lib.rs"
+from = '''        if !is_style_element(node) || node.style_sheet_disabled() {'''
+to = '''        if !is_style_element(node) {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "a_disabled_style"]

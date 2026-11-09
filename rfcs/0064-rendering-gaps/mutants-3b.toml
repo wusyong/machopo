@@ -1,0 +1,242 @@
+# 3b: SVG's `<clipPath>`, `clip-path: url()` and `clip-rule` (`css`,
+# `layout`, `style`, `paint`, `raster`).
+#   python3 scripts/test.py mutate rfcs/0064-rendering-gaps/mutants-3b.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::clip_paths"]
+timeout = 1800
+
+[[mutant]]
+name = "url() not parsed"
+file = "crates/css/src/masking.rs"
+from = '''    if let Ok(url) = input.try_parse(crate::svg::parse_url) {'''
+to = '''    if let Some(url) = None::<CssUrlData> {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cssom::"]
+
+[[mutant]]
+name = "a local url() resolved"
+file = "crates/css/src/properties.rs"
+from = '''            Value::ClipPath(crate::masking::SpecifiedClipPath::Url(url)) if !url.is_local() => {'''
+to = '''            Value::ClipPath(crate::masking::SpecifiedClipPath::Url(url)) => {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cascade::urls"]
+
+[[mutant]]
+name = "a url() in a sheet left unresolved"
+file = "crates/css/src/properties.rs"
+from = '''            Value::Paint(SpecifiedPaint::Url(url, _))
+            | Value::ClipPath(crate::masking::SpecifiedClipPath::Url(url)) => {
+                !url.is_local() && !url.is_resolved()'''
+to = '''            Value::Paint(SpecifiedPaint::Url(url, _)) => {
+                !url.is_local() && !url.is_resolved()'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cascade::urls"]
+
+[[mutant]]
+name = "computed url() written as none"
+file = "crates/css/src/masking.rs"
+from = '''        ClipPath::Url(url) => return crate::svg::url_to_css(url, dest),'''
+to = '''        ClipPath::Url(_) => return dest.push_str("none"),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::clips"]
+
+[[mutant]]
+name = "clip-rule not inherited"
+file = "crates/css/src/properties.rs"
+from = '''                | FillRule
+                | ClipRule
+'''
+to = '''                | FillRule
+'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::clips"]
+
+[[mutant]]
+name = "clip-rule set as fill-rule"
+file = "crates/css/src/properties.rs"
+from = '''        (ClipRule, Value::FillRule(v)) => style.svg_mut().clip_rule = v,'''
+to = '''        (ClipRule, Value::FillRule(v)) => style.svg_mut().fill_rule = v,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::clips"]
+
+[[mutant]]
+name = "any element a clip path"
+file = "crates/layout/src/svg.rs"
+from = '''    if !element
+        .element_name()
+        .is_some_and(|name| name.is_svg(&local_name!("clipPath")))
+    {
+        return None;
+    }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::clip_paths"]
+
+[[mutant]]
+name = "text in a clip path drawn as nothing"
+file = "crates/layout/src/svg.rs"
+from = '''            SourceKind::Text(_) | SourceKind::Use(..) => return None,'''
+to = '''            SourceKind::Text(_) | SourceKind::Use(..) => {}'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::clip_paths"]
+
+[[mutant]]
+name = "hidden shapes clip"
+file = "crates/layout/src/svg.rs"
+from = '''                if shape.style.visibility == Visibility::Visible =>'''
+to = '''                =>'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::clip_paths"]
+
+[[mutant]]
+name = "nested clip path dropped"
+file = "crates/layout/src/svg.rs"
+from = '''        ClipPath::Url(_) => Some(clip_of(cx, &own, depth + 1)?),'''
+to = '''        ClipPath::Url(_) => None,'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::clip_paths"]
+
+[[mutant]]
+name = "no depth limit"
+file = "crates/layout/src/svg.rs"
+from = '''    if depth >= 16 {
+        return None;
+    }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::clip_paths"]
+
+[[mutant]]
+name = "objectBoundingBox as userSpaceOnUse"
+file = "crates/layout/src/svg.rs"
+from = '''        .is_some_and(|units| units.trim() == "objectBoundingBox");'''
+to = '''        .is_some_and(|units| units.trim() == "userSpaceOnUse");'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::clip_paths"]
+
+[[mutant]]
+name = "bounding box units not scaled"
+file = "crates/layout/src/svg.rs"
+from = '''                Transform::translate(bbox.x, bbox.y)
+                    .then(&Transform::scale(bbox.width, bbox.height)),'''
+to = '''                Transform::translate(bbox.x, bbox.y),'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::clip_paths"]
+
+[[mutant]]
+name = "clip path's transform left out"
+file = "crates/layout/src/svg.rs"
+from = '''        let to_user = to_user.then(&own);'''
+to = '''        let to_user = to_user.then(&Transform::IDENTITY);'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::clip_paths"]
+
+[[mutant]]
+name = "shape's transform left out"
+file = "crates/layout/src/svg.rs"
+from = '''                path.transform(&to_user.then(&node.transform));'''
+to = '''                path.transform(&to_user);'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::clip_paths"]
+
+[[mutant]]
+name = "clip-rule left out"
+file = "crates/layout/src/svg.rs"
+from = '''                Some(path.with_fill_rule(node.style.svg.clip_rule))'''
+to = '''                Some(path)'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::clip_paths"]
+
+[[mutant]]
+name = "nested not laid out"
+file = "crates/layout/src/svg.rs"
+from = '''            clip.lay_out_into(viewport, bbox, out);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::clip_paths"]
+
+[[mutant]]
+name = "an SVG element's url() no clip"
+file = "crates/layout/src/svg.rs"
+from = '''            ClipPath::Url(_) => self
+                .clip
+                .as_ref()
+                .map(|clip| clip.lay_out(viewport, fill_box())),'''
+to = '''            ClipPath::Url(_) => None,'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::clip_paths"]
+
+[[mutant]]
+name = "an SVG element captures no clip"
+file = "crates/layout/src/svg.rs"
+from = '''    let clip = clip_of(cx, &style, 0);'''
+to = '''    let clip = None;'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::clip_paths"]
+
+[[mutant]]
+name = "unstroked stroke box grown"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''    let unstroked = painted && node.style.svg.stroke == computed_style::SvgPaint::None;'''
+to = '''    let unstroked = false;'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::clip_paths"]
+
+[[mutant]]
+name = "a box's url() no clip"
+file = "crates/layout/src/clip_path.rs"
+from = '''            return Some(source?.lay_out(size, border_box));'''
+to = '''            return None;'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::clip_paths"]
+
+[[mutant]]
+name = "a box captures no clip"
+file = "crates/layout/src/lib.rs"
+from = '''        layout_box.clip_source = svg::clip_source(element, &style, cx.text);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::clip_paths"]
+
+[[mutant]]
+name = "another url() not rebuilt"
+file = "crates/layout/src/lib.rs"
+from = '''        if (url(old) || url(new)) && old.rare.clip_path != new.rare.clip_path {
+            return Self::Reattach;'''
+to = '''        if false {
+            return Self::Reattach;'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "update::clip_paths"]
+
+[[mutant]]
+name = "clip-path clients not tracked"
+file = "crates/style/src/svg_resources.rs"
+from = '''    }) || element
+        .computed_style()
+        .is_some_and(|style| matches!(style.rare.clip_path, ClipPath::Url(_)))'''
+to = '''    })'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "update::clip_paths"]
+
+[[mutant]]
+name = "clip-path's url() not a client's"
+file = "crates/style/src/svg_resources.rs"
+from = '''        for url in paints.chain(clip) {'''
+to = '''        for url in paints.chain(None::<&std::sync::Arc<str>>) {'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "update::clip_paths"]
+
+[[mutant]]
+name = "a clip path's children left off its chain"
+file = "crates/style/src/svg_resources.rs"
+from = '''            out.extend(node.children().map(|child| child.id()));'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "update::clip_paths"]
+
+[[mutant]]
+name = "an SVG element unclipped"
+file = "crates/paint/src/svg.rs"
+from = '''        if let Some(clip_path) = &node.clip_path {
+            for (i, paths) in clip_path.iter().enumerate() {
+                state.clip'''
+to = '''        if let Some(clip_path) = None::<&layout::ClipPaths> {
+            for (i, paths) in clip_path.iter().enumerate() {
+                state.clip'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "hit_test::clip_paths"]
+
+[[mutant]]
+name = "one path of a union drawn"
+file = "crates/paint/src/lib.rs"
+from = '''                        paths: paths.to_vec(),'''
+to = '''                        paths: paths[..1].to_vec(),'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "artifact::a_clip_path_element"]
+
+[[mutant]]
+name = "a union in its first path's bounds"
+file = "crates/paint/src/lib.rs"
+from = '''            .reduce(|a, b| a.union(&b))
+            .unwrap_or_else(|| at.map_rect(RectF::new(0.0, 0.0, 0.0, 0.0)));'''
+to = '''            .reduce(|a, _| a)
+            .unwrap_or_else(|| at.map_rect(RectF::new(0.0, 0.0, 0.0, 0.0)));'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "artifact::a_clip_path_element"]
+
+[[mutant]]
+name = "raster clips to the first path"
+file = "crates/raster/src/skia_backend.rs"
+from = '''                .reduce(|a, b| sk::op(&a, &b, sk::PathOp::Union).unwrap_or(a))'''
+to = '''                .reduce(|a, _| a)'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "a_clip_to_paths"]

@@ -1,0 +1,16 @@
+# User activation: script's own click and events don't activate the page;
+# a press of the mouse does, before its `mousedown` is dispatched; Escape
+# doesn't, another key does (each run on a new document, which starts
+# without it).
+navigate pages/user-activation.html
+wait-loaded
+wait-text #log "load false/false"
+click #b
+wait-text #log "mousedown true/true"
+navigate pages/user-activation.html
+wait-loaded
+wait-text #log "load false/false"
+key Escape
+wait-text #log "keydown Escape false/false"
+key a
+wait-text #log "keydown a true/true"

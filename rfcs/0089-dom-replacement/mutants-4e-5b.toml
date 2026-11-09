@@ -1,0 +1,119 @@
+# Stage 4e-5b: setHTMLUnsafe, parseHTMLUnsafe and getHTML on the new DOM:
+# `html`'s fragment and whole-document parses with declarative shadow
+# roots and the serializer's shadow roots, `dom_api_next`'s members, the
+# table's static methods and `dom_js_next`'s `getHTML` options.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it shadow_dom && cargo test -q -p dom_js_next --test it wrappers"]
+timeout = 3000
+
+[[mutant]]
+name = "html: a fragment's never attach"
+file = "crates/html/src/next.rs"
+from = '''    fn allow_declarative_shadow_roots(&self, _: &NodeRef<'gc>) -> bool {
+        self.declarative_shadows
+    }'''
+to = '''    fn allow_declarative_shadow_roots(&self, _: &NodeRef<'gc>) -> bool {
+        false
+    }'''
+
+[[mutant]]
+name = "html: the fast path taken for setHTMLUnsafe"
+file = "crates/html/src/next.rs"
+from = '''    if !declarative_shadows && crate::fast_path_next::parse_fragment(cx, document, fragment, context, input) {'''
+to = '''    if crate::fast_path_next::parse_fragment(cx, document, fragment, context, input) {'''
+
+[[mutant]]
+name = "html: a whole document's doctype dropped"
+file = "crates/html/src/next.rs"
+from = '''            let doctype = self.cx.create_doctype(self.fragment, &name, &public_id, &system_id);
+            self.cx.insert(self.fragment, doctype, None);'''
+to = '''            let _ = (name, public_id, system_id);'''
+
+[[mutant]]
+name = "html: a whole document's root kept out"
+file = "crates/html/src/next.rs"
+from = '''            && !self.whole_document
+            && gc::Gc::ptr_eq(*parent, self.fragment)'''
+to = '''            && gc::Gc::ptr_eq(*parent, self.fragment)'''
+
+[[mutant]]
+name = "html: listed shadow roots not written"
+file = "crates/html/src/serialize_next.rs"
+from = '''    let listed = shadows.listed.iter().any(|at| gc::Gc::ptr_eq(*at, root));'''
+to = '''    let listed = shadows.listed.is_empty() && false;'''
+
+[[mutant]]
+name = "html: any shadow root serializable"
+file = "crates/html/src/serialize_next.rs"
+from = '''    if !(listed || shadows.serializable && init.serializable) {'''
+to = '''    if !(listed || shadows.serializable) {'''
+
+[[mutant]]
+name = "html: clonable before serializable"
+file = "crates/html/src/serialize_next.rs"
+from = '''        (init.serializable, "shadowrootserializable"),
+        (init.clonable, "shadowrootclonable"),'''
+to = '''        (init.clonable, "shadowrootclonable"),
+        (init.serializable, "shadowrootserializable"),'''
+
+[[mutant]]
+name = "html: delegatesFocus not written"
+file = "crates/html/src/serialize_next.rs"
+from = '''        (init.delegates_focus, "shadowrootdelegatesfocus"),'''
+to = '''        (false, "shadowrootdelegatesfocus"),'''
+
+[[mutant]]
+name = "html: the node's own shadow root not written"
+file = "crates/html/src/serialize_next.rs"
+from = '''        write_shadow(self.0, s, self.1, self.2)?;
+        for_each_content'''
+to = '''        for_each_content'''
+
+[[mutant]]
+name = "api: setHTMLUnsafe as innerHTML"
+file = "crates/dom_api_next/src/markup.rs"
+from = '''    let fragment = html::next::parse_fragment_unsafe_in(cx, this, html, scripting_enabled(cx, this));'''
+to = '''    let fragment = html::next::parse_fragment_in(cx, this, html, scripting_enabled(cx, this));'''
+
+[[mutant]]
+name = "api: setHTMLUnsafe into a template itself"
+file = "crates/dom_api_next/src/markup.rs"
+from = '''    let fragment = html::next::parse_fragment_unsafe_in(cx, this, html, scripting_enabled(cx, this));
+    let parent = cx.template_content(this).unwrap_or(this);'''
+to = '''    let fragment = html::next::parse_fragment_unsafe_in(cx, this, html, scripting_enabled(cx, this));
+    let parent = this;'''
+
+[[mutant]]
+name = "api: a shadow root's setHTMLUnsafe into its host"
+file = "crates/dom_api_next/src/markup.rs"
+from = '''    let fragment = html::next::parse_fragment_unsafe_in(cx, host, html, scripting_enabled(cx, host));
+    cx.replace_all(root, Some(fragment));'''
+to = '''    let fragment = html::next::parse_fragment_unsafe_in(cx, host, html, scripting_enabled(cx, host));
+    cx.replace_all(host, Some(fragment));'''
+
+[[mutant]]
+name = "api: serializableShadowRoots ignored"
+file = "crates/dom_api_next/src/markup.rs"
+from = '''        serializable: options.serializable_shadow_roots,'''
+to = '''        serializable: false,'''
+
+[[mutant]]
+name = "js: a node that isn't a shadow root listed"
+file = "crates/dom_js_next/src/front.rs"
+from = '''                if cx.is_shadow_root(node) {
+                    Ok(node)'''
+to = '''                if true {
+                    Ok(node)'''
+
+[[mutant]]
+name = "js: an item that isn't a node listed"
+file = "crates/dom_js_next/src/front.rs"
+from = '''                Ok(object) if bindings::is_wrapper::<Node>(scope, item) => nodes.push(object),'''
+to = '''                Ok(object) => nodes.push(object),'''
+
+[[mutant]]
+name = "js: a static method on the prototype"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''                if desc.is_static {
+                    self.template.set(name.into(), function.into());
+                } else if desc.unforgeable {'''
+to = '''                if desc.unforgeable {'''

@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>K4: what was the first child isn't any more once another comes before it</title>
+<link rel="match" href="k4-style-ref.html">
+<style>html, body { margin: 0 } div { width: 100px; height: 50px; background-color: green } div:first-child { background-color: red }</style>
+<section id="list"><div id="old"></div></section>
+<script src="after-frames.js"></script>
+<script>afterFrames(() => {
+  const list = document.getElementById("list");
+  const first = document.createElement("div");
+  first.setAttribute("style", "background-color: green");
+  list.insertBefore(first, document.getElementById("old"));
+});</script>
+</html>

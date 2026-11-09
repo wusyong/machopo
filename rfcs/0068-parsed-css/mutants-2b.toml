@@ -1,0 +1,177 @@
+# 2b: the font properties take effect, and a variable font is drawn at its
+# axes (`layout`, `raster`, the parley fork).
+#   python3 scripts/test.py mutate rfcs/0068-parsed-css/mutants-2b.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--", "font_features"]
+timeout = 900
+
+[[mutant]]
+name = "optimizeSpeed kerns"
+file = "crates/layout/src/font_features.rs"
+from = '''        FontKerning::Auto if speed => out.push(feature(b"kern", 0)),'''
+to = '''        FontKerning::Auto if speed && false => out.push(feature(b"kern", 0)),'''
+
+[[mutant]]
+name = "optimizeSpeed keeps the ligatures"
+file = "crates/layout/src/font_features.rs"
+from = '''            None if speed => out.extend([feature(b"liga", 0), feature(b"clig", 0)]),'''
+to = '''            None if speed && false => out.extend([feature(b"liga", 0), feature(b"clig", 0)]),'''
+
+[[mutant]]
+name = "no ligatures keeps calt"
+file = "crates/layout/src/font_features.rs"
+from = '''            [b"liga", b"clig", b"dlig", b"hlig", b"calt"]'''
+to = '''            [b"liga", b"clig", b"dlig", b"hlig"]'''
+
+[[mutant]]
+name = "common ligatures only liga"
+file = "crates/layout/src/font_features.rs"
+from = '''            Some(on) => out.extend([feature(b"liga", on.into()), feature(b"clig", on.into())]),'''
+to = '''            Some(on) => out.extend([feature(b"liga", on.into())]),'''
+
+[[mutant]]
+name = "the settings first"
+file = "crates/layout/src/font_features.rs"
+from = '''    let mut out = Vec::new();
+    // `optimizeSpeed` turns off kerning'''
+to = '''    let mut out: Vec<FontFeature> = font.feature_settings.iter().map(|s| feature(&s.tag, s.value as u16)).collect();
+    // `optimizeSpeed` turns off kerning'''
+
+[[mutant]]
+name = "tabular as proportional"
+file = "crates/layout/src/font_features.rs"
+from = '''        Some(NumericSpacing::Tabular) => out.push(feature(b"tnum", 1)),'''
+to = '''        Some(NumericSpacing::Tabular) => out.push(feature(b"pnum", 1)),'''
+
+[[mutant]]
+name = "super as sub"
+file = "crates/layout/src/font_features.rs"
+from = '''        FontVariantPosition::Super => out.push(feature(b"sups", 1)),'''
+to = '''        FontVariantPosition::Super => out.push(feature(b"subs", 1)),'''
+
+[[mutant]]
+name = "no historical forms"
+file = "crates/layout/src/font_features.rs"
+from = '''    if font.variant_alternates.historical_forms {'''
+to = '''    if font.variant_alternates.historical_forms && false {'''
+
+[[mutant]]
+name = "no variation settings"
+file = "crates/layout/src/font_features.rs"
+from = '''    font.variation_settings
+        .iter()
+        .map(|setting| FontVariation::new(Tag::new(&setting.tag), setting.value))
+        .collect()'''
+to = '''    font.variation_settings
+        .iter()
+        .take(0)
+        .map(|setting| FontVariation::new(Tag::new(&setting.tag), setting.value))
+        .collect()'''
+
+[[mutant]]
+name = "a font without axes given some"
+file = "crates/layout/src/font_features.rs"
+from = '''    if run.normalized_coords().is_empty() {
+        return Arc::new([]);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "opsz without optical sizing"
+file = "crates/layout/src/font_features.rs"
+from = '''        if font.optical_sizing && !font.variation_settings.iter().any(|v| v.tag == *b"opsz") {'''
+to = '''        if !font.variation_settings.iter().any(|v| v.tag == *b"opsz") {'''
+
+[[mutant]]
+name = "the weight's axis over the settings"
+file = "crates/layout/src/font_features.rs"
+from = '''        for setting in font.variation_settings.iter() {
+            set(setting.tag, setting.value);
+        }'''
+to = '''        for setting in font.variation_settings.iter() {
+            if setting.tag != *b"wght" {
+                set(setting.tag, setting.value);
+            }
+        }'''
+
+[[mutant]]
+name = "bold synthesized anyway"
+file = "crates/layout/src/font_features.rs"
+from = '''    font.synthesis_weight && face_bold'''
+to = '''    face_bold'''
+
+[[mutant]]
+name = "italic synthesized anyway"
+file = "crates/layout/src/font_features.rs"
+from = '''    if font.synthesis_style {
+        skew.unwrap_or(0.0)'''
+to = '''    if true {
+        skew.unwrap_or(0.0)'''
+
+[[mutant]]
+name = "a span's features not its own"
+file = "crates/layout/src/text.rs"
+from = '''        StyleProperty::FontFeatures(s.font_features),
+'''
+to = ''''''
+
+[[mutant]]
+name = "a span's width not its own"
+file = "crates/layout/src/text.rs"
+from = '''        StyleProperty::FontWidth(s.font_width),
+'''
+to = ''''''
+
+[[mutant]]
+name = "a span's variations not its own"
+file = "crates/layout/src/text.rs"
+from = '''        StyleProperty::FontVariations(s.font_variations),
+'''
+to = ''''''
+
+[[mutant]]
+name = "a span's optical sizing not its own"
+file = "crates/layout/src/text.rs"
+from = '''        StyleProperty::OpticalSizing(s.optical_sizing),
+'''
+to = ''''''
+
+[[mutant]]
+name = "no width"
+file = "crates/layout/src/text.rs"
+from = '''        font_width: parley::FontWidth::from_ratio(style.font.stretch / 100.0),'''
+to = '''        font_width: parley::FontWidth::from_ratio(1.0 + 0.0 * style.font.stretch),'''
+
+[[mutant]]
+name = "the shaper's opsz left out"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''    if options.optical_sizing && !options.variations.iter().any(|v| v.tag == OPSZ) {'''
+to = '''    if false && options.optical_sizing && !options.variations.iter().any(|v| v.tag == OPSZ) {'''
+
+[[mutant]]
+name = "a kept shaping without its optical sizing"
+file = "../third_party/parley/parley/src/shape/cache.rs"
+from = '''            optical_sizing: style.optical_sizing,
+        }'''
+to = '''            optical_sizing: false,
+        }'''
+
+# Not a mutant: the fork splitting the shaping items where optical sizing
+# changes is equivalent in kun, which puts an inline box at each element's
+# edges, where parley splits the items anyway (`docs/test-gaps.md`).
+
+[[mutant]]
+name = "drawn at the default instance"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        let instance = typeface
+            .clone_with_arguments(&arguments)
+            .unwrap_or(typeface);'''
+to = '''        let instance = typeface;
+        let _ = &arguments;'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "--", "a_variable_font"]
+
+[[mutant]]
+name = "instances kept by font alone"
+file = "crates/raster/src/skia_backend.rs"
+from = '''                .map(|v| (v.tag, v.value.to_bits()))'''
+to = '''                .map(|v| (v.tag, 0 * v.value.to_bits()))'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "--", "a_variable_font"]

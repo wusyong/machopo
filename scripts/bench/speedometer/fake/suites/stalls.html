@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>An exception, then nothing</title>
+<script>
+  // What a suite that breaks halfway does: throws, and never finishes.
+  window.tests = [
+    {
+      name: "Stalling",
+      run() {
+        setTimeout(() => {
+          throw new Error("thrown before the stall");
+        });
+        return new Promise(() => {});
+      },
+    },
+  ];
+</script>

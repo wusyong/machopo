@@ -1,0 +1,128 @@
+test = ["sh", "-c", "cargo test -q -p dom --test it -- collections:: && cargo test -q -p dom_api --lib collection && cargo test -q -p dom_api --test it -- api:: wit:: && cargo test -q -p dom_js --test it -- document_all"]
+timeout = 2400
+
+[[mutant]]
+name = "document.all has no element"
+file = "crates/dom_api/src/collection.rs"
+from = '''        CollectionFilter::DocumentAll => true,'''
+to = '''        CollectionFilter::DocumentAll => false,'''
+
+[[mutant]]
+name = "an id doesn't name an element"
+file = "crates/dom_api/src/collection.rs"
+from = '''            element.id_for_style().as_deref() == Some(&**wanted)
+                || name.namespace().is_html()
+                    && ALL_NAMED.contains'''
+to = '''            false
+                || name.namespace().is_html()
+                    && ALL_NAMED.contains'''
+
+[[mutant]]
+name = "a name doesn't name an element"
+file = "crates/dom_api/src/collection.rs"
+from = '''                    && element.attr_ref(&local_name!("name")).as_deref() == Some(&**wanted)
+        }
+        CollectionFilter::TagName(wanted) if &**wanted == "*" => true,'''
+to = '''                    && false
+        }
+        CollectionFilter::TagName(wanted) if &**wanted == "*" => true,'''
+
+[[mutant]]
+name = "any element's name names it"
+file = "crates/dom_api/src/collection.rs"
+from = '''                    && ALL_NAMED.contains(&name.local().as_str())'''
+to = '''                    && true'''
+
+[[mutant]]
+name = "a meta's name doesn't name it"
+file = "crates/dom_api/src/collection.rs"
+from = '''"img", "input", "map", "meta",'''
+to = '''"img", "input", "map", "metax",'''
+
+[[mutant]]
+name = "an SVG element's id doesn't name it"
+file = "crates/dom_api/src/collection.rs"
+from = '''            element.id_for_style().as_deref() == Some(&**wanted)
+                || name.namespace().is_html()
+                    && ALL_NAMED'''
+to = '''            (name.namespace().is_html() && element.id_for_style().as_deref() == Some(&**wanted))
+                || name.namespace().is_html()
+                    && ALL_NAMED'''
+
+[[mutant]]
+name = "one element named is a collection"
+file = "crates/dom_api/src/collection.rs"
+from = '''        1 => item(cx, &named, 0)?.map(HTMLCollectionOrElement::Element),'''
+to = '''        1 if false => item(cx, &named, 0)?.map(HTMLCollectionOrElement::Element),'''
+
+[[mutant]]
+name = "the empty string names nothing"
+file = "crates/dom_api/src/collection.rs"
+from = '''    use crate::interfaces::HTMLCollectionOrElement;
+    let document'''
+to = '''    use crate::interfaces::HTMLCollectionOrElement;
+    if name.is_empty() {
+        return Ok(None);
+    }
+    let document'''
+
+[[mutant]]
+name = "item takes no index"
+file = "crates/dom_api/src/collection.rs"
+from = '''    match array_index(key.as_str()) {'''
+to = '''    match None::<u32> {'''
+
+[[mutant]]
+name = "item without an argument is the first"
+file = "crates/dom_api/src/collection.rs"
+from = '''    let Some(key) = name_or_index else {
+        return Ok(None);
+    };'''
+to = '''    let Some(key) = name_or_index else {
+        return Ok(item(cx, this, 0)?.map(crate::interfaces::HTMLCollectionOrElement::Element));
+    };'''
+
+[[mutant]]
+name = "a leading zero is an index"
+file = "crates/dom_api/src/collection.rs"
+from = '''    if key.is_empty() || (key.len() > 1 && key.starts_with('0')) {'''
+to = '''    if key.is_empty() {'''
+
+[[mutant]]
+name = "2^32 - 1 is an index"
+file = "crates/dom_api/src/collection.rs"
+from = '''    key.parse::<u32>().ok().filter(|&index| index != u32::MAX)'''
+to = '''    key.parse::<u32>().ok()'''
+
+[[mutant]]
+name = "document.all is an HTMLCollection"
+file = "crates/dom_api/src/object.rs"
+from = '''                CollectionFilter::DocumentAll => ObjectKind::HtmlAllCollection,
+'''
+to = ''''''
+
+[[mutant]]
+name = "document.all is new each time"
+file = "crates/dom_api/src/document.rs"
+from = '''        .collection(this, dom::CollectionFilter::DocumentAll))'''
+to = '''        .create_collection(this, dom::CollectionFilter::DocumentAll))'''
+
+[[mutant]]
+name = "a named collection isn't kept weakly"
+file = "crates/dom/src/collection.rs"
+from = '''                | Self::DocumentAllNamed(_)
+'''
+to = ''''''
+
+[[mutant]]
+name = "document.all is detectable"
+file = "crates/dom_js/src/templates.rs"
+from = '''            instance.mark_as_undetectable();'''
+to = ''''''
+
+[[mutant]]
+name = "the legacy caller isn't JS's only"
+file = "crates/dom_api/src/declare.rs"
+from = '''    (@exposure LegacyCaller) => { $crate::Exposure::Js };
+'''
+to = ''''''

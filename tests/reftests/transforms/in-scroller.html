@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>Turned boxes in a scroller move with its content</title>
+<link rel="match" href="in-scroller-ref.html">
+<style>
+  html, body { margin: 0 }
+  #scroller { width: 300px; height: 200px; overflow: auto }
+  .turned { width: 100px; height: 20px; margin: 40px 0 0 40px; background-color: green; transform: rotate(90deg) }
+</style>
+<div id="scroller"><div style="height: 100px"></div><div class="turned"></div><div class="turned"></div><div style="height: 600px"></div></div>
+<script src="../invalidation/after-frames.js"></script>
+<script>afterFrames(() => document.getElementById("scroller").scrollTop = 60);</script>
+</html>

@@ -1,0 +1,39 @@
+<!DOCTYPE html><meta charset=utf-8>
+<div id=a style="width:100px;height:100px"></div><div id=b style="width:100px;height:100px"></div>
+<script>
+async function run(){
+const o={};const t=(k,f)=>{try{o[k]=f()}catch(e){o[k]="THROW "+e.name+": "+e.message}};
+t("opener",()=>String(window.opener)+" "+("opener" in window)+" "+JSON.stringify(Object.getOwnPropertyDescriptor(window,"opener")&&Object.keys(Object.getOwnPropertyDescriptor(window,"opener"))));
+t("opener set",()=>{window.opener=5;const v=window.opener;window.opener=null;return v+" then "+window.opener+" own:"+Object.getOwnPropertyNames(window).includes("opener")});
+t("MouseEvent fromElement",()=>{const e=new MouseEvent("mouseover",{relatedTarget:a});return [e.fromElement,e.toElement,e.srcElement].map(x=>x&&x.id||String(x)).join(",")});
+t("mouseout",()=>{const e=new MouseEvent("mouseout",{relatedTarget:a});let r;b.addEventListener("mouseout",ev=>r=[ev.fromElement,ev.toElement].map(x=>x&&x.id||String(x)).join(","),{once:true});b.dispatchEvent(e);return r});
+t("mouseover dispatched",()=>{const e=new MouseEvent("mouseover",{relatedTarget:a});let r;b.addEventListener("mouseover",ev=>r=[ev.fromElement,ev.toElement].map(x=>x&&x.id||String(x)).join(","),{once:true});b.dispatchEvent(e);return r});
+t("click from/to",()=>{const e=new MouseEvent("click",{relatedTarget:a});let r;b.addEventListener("click",ev=>r=[ev.fromElement,ev.toElement].map(x=>x&&x.id||String(x)).join(","),{once:true});b.dispatchEvent(e);return r});
+t("fromElement on proto",()=>["fromElement","toElement"].map(k=>k+":"+Object.getOwnPropertyDescriptor(MouseEvent.prototype,k)?.get?.name).join(" "));
+t("IO",()=>{const io=new IntersectionObserver(()=>{});const io2=new IntersectionObserver(()=>{},{delay:100,trackVisibility:true});const io3=new IntersectionObserver(()=>{},{delay:50,trackVisibility:false});return [io.delay,io.trackVisibility,io2.delay,io2.trackVisibility,io3.delay,io3.trackVisibility].join(",")});
+t("IO tv no delay",()=>{new IntersectionObserver(()=>{},{trackVisibility:true,delay:99});return "ok"});
+t("connection",()=>{const c=navigator.connection;return c&&[c.constructor.name,c.effectiveType,c.saveData,c.rtt,c.downlink,c.type,c.downlinkMax,typeof c.onchange,c instanceof EventTarget,Object.getOwnPropertyNames(Object.getPrototypeOf(c)).join("|")].join(",")});
+t("scheduling",()=>{const s=navigator.scheduling;return s&&[s.constructor.name,typeof s.isInputPending,s.isInputPending&&s.isInputPending(),Object.getOwnPropertyNames(Object.getPrototypeOf(s)).join("|")].join(",")});
+t("wakeLock",()=>{const w=navigator.wakeLock;return w&&[w.constructor.name,Object.getOwnPropertyNames(Object.getPrototypeOf(w)).join("|"),typeof WakeLockSentinel, WakeLockSentinel&&Object.getOwnPropertyNames(WakeLockSentinel.prototype).join("|")].join(",")});
+if(navigator.wakeLock)try{const s=await navigator.wakeLock.request("screen");o["wakeLock req"]=[s.constructor.name,s.type,s.released].join(",");const p=s.release();o["release ret"]=String(p);await p;o["after release"]=s.released;let ev=0;}catch(e){o["wakeLock req"]="REJECT "+e.name+": "+e.message}
+try{await navigator.wakeLock.request("system")}catch(e){o["wakeLock system"]="REJECT "+e.name+": "+e.message}
+try{await navigator.wakeLock.request()}catch(e){o["wakeLock none"]="REJECT "+e.name+": "+e.message}
+t("prerendering",()=>[document.prerendering,typeof document.onprerenderingchange].join(","));
+t("PO supported",()=>PerformanceObserver.supportedEntryTypes.join(","));
+t("nav entry",()=>{const n=performance.getEntriesByType("navigation")[0];return n&&[n.constructor.name,n.name,n.entryType,n.type,n.activationStart,n.redirectCount,n.startTime,n.responseStart>0,n.domContentLoadedEventEnd>0,n.loadEventEnd>0,n.nextHopProtocol,n.deliveryType,n.workerStart,typeof n.toJSON].join(",")});
+t("nav entry keys",()=>{const n=performance.getEntriesByType("navigation")[0];return Object.keys(n.toJSON()).join(",")});
+t("resource",()=>performance.getEntriesByType("resource").length);
+t("perf.navigation",()=>performance.navigation&&[performance.navigation.type,performance.navigation.redirectCount].join(","));
+t("perf.timing",()=>performance.timing&&[performance.timing.navigationStart>0,performance.timing.loadEventEnd>0].join(","));
+t("getEntries types",()=>[...new Set(performance.getEntries().map(e=>e.entryType))].join(","));
+t("document.all",()=>[typeof document.all,document.all==null,document.all===undefined,!!document.all,document.all.length,document.all[0].tagName,document.all.a&&document.all.a.id,document.all("b")&&document.all("b").id,document.all.item(1).tagName,document.all.namedItem("a").id,Object.prototype.toString.call(document.all),document.all.constructor.name].join(","));
+t("FileReader",()=>[typeof FileReader,typeof File,FileReader.EMPTY,FileReader.LOADING,FileReader.DONE,Object.getOwnPropertyNames(FileReader.prototype).join("|")].join(","));
+if(typeof FileReader=="function"){o["fr"]=await new Promise(res=>{const r=new FileReader();const ev=[];["loadstart","progress","load","loadend","error","abort"].forEach(n=>r.addEventListener(n,e=>ev.push(n+":"+r.readyState+":"+(e.loaded)+"/"+e.total+":"+e.lengthComputable)));r.onloadend=()=>setTimeout(()=>res(ev.join(" ")+" result="+r.result),0);r.readAsText(new Blob(["héllo"]));ev.push("sync:"+r.readyState)});
+o["fr dataurl"]=await new Promise(res=>{const r=new FileReader();r.onload=()=>res(r.result);r.readAsDataURL(new Blob(["hi"],{type:"text/plain"}))});
+o["fr ab"]=await new Promise(res=>{const r=new FileReader();r.onload=()=>res(r.result.constructor.name+r.result.byteLength);r.readAsArrayBuffer(new Blob(["hi"]))});
+o["fr binstr"]=await new Promise(res=>{const r=new FileReader();r.onload=()=>res(JSON.stringify(r.result));r.readAsBinaryString(new Blob(["é"]))});
+t("fr twice",()=>{const r=new FileReader();r.readAsText(new Blob(["a"]));r.readAsText(new Blob(["b"]));return "no throw"});
+o["fr abort"]=await new Promise(res=>{const r=new FileReader();const ev=[];["loadstart","progress","load","loadend","error","abort"].forEach(n=>r.addEventListener(n,()=>ev.push(n+":"+r.readyState)));r.readAsText(new Blob(["a"]));r.abort();ev.push("after:"+r.readyState+":"+r.result);setTimeout(()=>res(ev.join(" ")),50)});}
+t("File",()=>{const f=new File(["ab"],"x.txt",{type:"text/plain",lastModified:5});return [f.name,f.size,f.type,f.lastModified,f instanceof Blob,f.webkitRelativePath,Object.prototype.toString.call(f)].join(",")});
+return JSON.stringify(o,null,1)}
+</script>

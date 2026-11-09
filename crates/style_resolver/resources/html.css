@@ -1,0 +1,717 @@
+/*
+ * The user-agent stylesheet (Blink's `html.css`): the HTML standard's
+ * "Rendering" section, limited to the properties we support. Its
+ * selectors are in HTML's namespace, which the parser takes as the
+ * default as `html.css` declares it; the rules of Blink's `svg.css` say
+ * `svg|`.
+ *
+ * Deviations, until the missing features exist:
+ * - Logical properties (`margin-block`, `padding-inline-start`, ...) are
+ *   written as their physical equivalents for horizontal left-to-right text.
+ * - `text-decoration` only sets the line (no color or style).
+ * - `th`'s and `caption`'s `text-align` is `center`: Chrome's
+ *   `-internal-center` and `-webkit-center` also center block children.
+ * - No quirks-mode rules (a table's font and `white-space` not inherited).
+ * - `::marker` has no `unicode-bidi`.
+ * - `fieldset` gets no border: its `legend` isn't laid out on it.
+ * - Form controls: Chrome's `light-dark()` colors are their light ones;
+ *   no `text-shadow` or `writing-mode`; an `<input>` has no
+ *   `overflow: clip` (machopo computes it to `hidden`, a scroll container).
+ */
+
+/* Hidden elements */
+area, base, basefont, datalist, head, link, meta, noembed,
+noframes, param, rp, script, style, template, title {
+  display: none;
+}
+
+[hidden] {
+  display: none;
+}
+
+/* A slot has no box: what is assigned to it (or its fallback) is laid
+   out in its place. */
+slot {
+  display: contents;
+}
+
+/* Scripting is enabled (the parser treats `<noscript>` as raw text). */
+noscript {
+  display: none !important;
+}
+
+/* The page */
+html, body {
+  display: block;
+}
+
+body {
+  margin: 8px;
+}
+
+/* Flow content */
+address, blockquote, center, dialog, div, figure, figcaption, footer, form,
+header, hr, legend, listing, main, p, plaintext, pre, search, xmp {
+  display: block;
+}
+
+blockquote, figure, listing, p, plaintext, pre, xmp {
+  margin-top: 1em;
+  margin-bottom: 1em;
+}
+
+blockquote, figure {
+  margin-left: 40px;
+  margin-right: 40px;
+}
+
+listing, plaintext, pre, xmp {
+  font-family: monospace;
+  white-space: pre;
+}
+
+center {
+  text-align: center;
+}
+
+/* Phrasing content */
+cite, dfn, em, i, var {
+  font-style: italic;
+}
+
+b, strong {
+  font-weight: bolder;
+}
+
+code, kbd, samp, tt {
+  font-family: monospace;
+}
+
+big {
+  font-size: larger;
+}
+
+small {
+  font-size: smaller;
+}
+
+mark {
+  background-color: Mark;
+  color: MarkText;
+}
+
+sub {
+  vertical-align: sub;
+  font-size: smaller;
+}
+
+sup {
+  vertical-align: super;
+  font-size: smaller;
+}
+
+u, ins {
+  text-decoration: underline;
+}
+
+s, strike, del {
+  text-decoration: line-through;
+}
+
+nobr {
+  white-space: nowrap;
+}
+
+address {
+  font-style: italic;
+}
+
+:link, :visited {
+  text-decoration: underline;
+}
+
+/* The document's link colors (`<body link>`, `alink`; Blink's
+   `-webkit-link`). */
+:link {
+  color: -webkit-link;
+}
+
+:visited {
+  color: #551A8B;
+}
+
+:link:active, :visited:active {
+  color: -webkit-activelink;
+}
+
+a:any-link, area:any-link {
+  cursor: pointer;
+}
+
+a:any-link:read-write {
+  cursor: text;
+}
+
+/* Sections and headings */
+article, aside, h1, h2, h3, h4, h5, h6, hgroup, nav, section {
+  display: block;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-weight: bold;
+}
+
+h1 { margin-top: 0.67em; margin-bottom: 0.67em; font-size: 2.00em; }
+h2 { margin-top: 0.83em; margin-bottom: 0.83em; font-size: 1.50em; }
+h3 { margin-top: 1.00em; margin-bottom: 1.00em; font-size: 1.17em; }
+h4 { margin-top: 1.33em; margin-bottom: 1.33em; font-size: 1.00em; }
+h5 { margin-top: 1.67em; margin-bottom: 1.67em; font-size: 0.83em; }
+h6 { margin-top: 2.33em; margin-bottom: 2.33em; font-size: 0.67em; }
+
+:is(article, aside, nav, section) h1 {
+  margin-top: 0.83em;
+  margin-bottom: 0.83em;
+  font-size: 1.50em;
+}
+
+:is(article, aside, nav, section) :is(article, aside, nav, section) h1 {
+  margin-top: 1.00em;
+  margin-bottom: 1.00em;
+  font-size: 1.17em;
+}
+
+:is(article, aside, nav, section) :is(article, aside, nav, section)
+:is(article, aside, nav, section) h1 {
+  margin-top: 1.33em;
+  margin-bottom: 1.33em;
+  font-size: 1.00em;
+}
+
+:is(article, aside, nav, section) :is(article, aside, nav, section)
+:is(article, aside, nav, section) :is(article, aside, nav, section) h1 {
+  margin-top: 1.67em;
+  margin-bottom: 1.67em;
+  font-size: 0.83em;
+}
+
+:is(article, aside, nav, section) :is(article, aside, nav, section)
+:is(article, aside, nav, section) :is(article, aside, nav, section)
+:is(article, aside, nav, section) h1 {
+  margin-top: 2.33em;
+  margin-bottom: 2.33em;
+  font-size: 0.67em;
+}
+
+hgroup > p {
+  margin: 0;
+}
+
+/* Lists */
+dir, dd, dl, dt, menu, ol, ul {
+  display: block;
+}
+
+li {
+  display: list-item;
+}
+
+ol, ul, menu {
+  counter-reset: list-item;
+}
+
+ol {
+  list-style-type: decimal;
+}
+
+dir, menu, ul {
+  list-style-type: disc;
+}
+
+:is(dir, menu, ol, ul) :is(dir, menu, ul) {
+  list-style-type: circle;
+}
+
+:is(dir, menu, ol, ul) :is(dir, menu, ol, ul) :is(dir, menu, ul) {
+  list-style-type: square;
+}
+
+::marker {
+  font-variant-numeric: tabular-nums;
+  white-space: pre;
+  text-transform: none;
+}
+
+dir, dl, menu, ol, ul {
+  margin-top: 1em;
+  margin-bottom: 1em;
+}
+
+:is(dir, dl, menu, ol, ul) :is(dir, dl, menu, ol, ul) {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+dd {
+  margin-left: 40px;
+}
+
+dir, menu, ol, ul {
+  padding-left: 40px;
+}
+
+/* Tables (Chrome's rules: no `border-color`, which is `currentColor`; the
+   cells' padding is the HTML standard's, which `<table cellpadding>`
+   overrides). The cells' borders, with `<table border>`, are
+   presentational hints. */
+table {
+  display: table;
+  box-sizing: border-box;
+  border-spacing: 2px;
+  border-collapse: separate;
+  text-indent: initial;
+}
+
+caption {
+  display: table-caption;
+  text-align: center;
+}
+
+colgroup {
+  display: table-column-group;
+}
+
+col {
+  display: table-column;
+}
+
+thead {
+  display: table-header-group;
+  vertical-align: middle;
+  border-color: inherit;
+}
+
+tbody {
+  display: table-row-group;
+  vertical-align: middle;
+  border-color: inherit;
+}
+
+tfoot {
+  display: table-footer-group;
+  vertical-align: middle;
+  border-color: inherit;
+}
+
+/* A row put in the table itself, with the DOM. */
+table > tr {
+  vertical-align: middle;
+}
+
+/* The table's border color, down to its rows (Chrome's; the cells take
+   `bordercolor` from the table itself). */
+tr {
+  display: table-row;
+  vertical-align: inherit;
+  border-color: inherit;
+}
+
+td, th {
+  display: table-cell;
+  vertical-align: inherit;
+  padding: 1px;
+}
+
+th {
+  font-weight: bold;
+  text-align: center;
+}
+
+/* The hr element */
+hr {
+  color: gray;
+  border-style: inset;
+  border-width: 1px;
+  margin: 0.5em auto;
+}
+
+/* The fieldset and legend elements; the details and summary elements */
+fieldset, details, summary {
+  display: block;
+}
+
+fieldset {
+  margin-left: 2px;
+  margin-right: 2px;
+  padding: 0.35em 0.75em 0.625em;
+}
+
+legend {
+  padding-left: 2px;
+  padding-right: 2px;
+}
+
+/* Form controls (Chrome's rules). Their native looks are `appearance`'s;
+   an author's background or border draws a button or a text field as
+   these rules do instead. */
+label {
+  cursor: default;
+}
+
+input, textarea, select, button {
+  margin: 0em;
+  font: -webkit-small-control;
+  text-rendering: auto;
+  color: FieldText;
+  letter-spacing: normal;
+  word-spacing: normal;
+  line-height: normal;
+  text-transform: none;
+  text-indent: 0;
+  display: inline-block;
+  text-align: start;
+}
+
+input {
+  appearance: auto;
+  cursor: text;
+  background-color: Field;
+  border: 2px inset rgb(118, 118, 118);
+  padding: 1px 2px;
+}
+
+input[type=hidden i] {
+  appearance: none;
+  display: none !important;
+}
+
+input[type=search i] {
+  box-sizing: border-box;
+}
+
+input[type=date i], input[type=datetime-local i], input[type=month i],
+input[type=time i], input[type=week i] {
+  font-family: monospace;
+  padding: 0 0 0 1px;
+}
+
+input[type=button i], input[type=submit i], input[type=reset i], button {
+  appearance: auto;
+  cursor: default;
+  text-align: center;
+  color: ButtonText;
+  padding: 1px 6px;
+  border: 2px outset ButtonBorder;
+  background-color: ButtonFace;
+  box-sizing: border-box;
+}
+
+input[type=button i], input[type=submit i], input[type=reset i] {
+  user-select: none;
+  white-space: pre;
+}
+
+input[type=checkbox i], input[type=radio i] {
+  cursor: default;
+  box-sizing: border-box;
+  margin: 3px 3px 3px 4px;
+  padding: initial;
+  border: initial;
+  background-color: initial;
+}
+
+input[type=radio i] {
+  margin: 3px 3px 0 5px;
+}
+
+input[type=range i] {
+  cursor: default;
+  padding: initial;
+  border: initial;
+  margin: 2px;
+  color: #101010;
+}
+
+input[type=color i] {
+  cursor: default;
+  background-color: ButtonFace;
+  border: 1px solid ButtonBorder;
+}
+
+input[type=file i] {
+  cursor: default;
+  appearance: none;
+  background-color: initial;
+  border: initial;
+  padding: initial;
+  white-space: pre;
+  align-items: baseline;
+}
+
+input[type=image i] {
+  cursor: pointer;
+  appearance: none;
+  background-color: initial;
+  border: initial;
+  padding: initial;
+}
+
+textarea {
+  appearance: auto;
+  cursor: text;
+  background-color: Field;
+  border: 1px solid rgb(118, 118, 118);
+  font-family: monospace;
+  padding: 2px;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  overflow: auto;
+  resize: auto;
+}
+
+input[type=password i] {
+  -webkit-text-security: disc !important;
+}
+
+/* A text control's placeholder, its UA shadow tree's element (whose
+   `display` the control sets: shown while the value is empty) */
+::-webkit-input-placeholder {
+  -webkit-text-security: none;
+  color: #757575;
+  pointer-events: none !important;
+  text-overflow: inherit;
+  line-height: initial;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow: hidden;
+}
+
+textarea::-webkit-input-placeholder {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  overflow: visible;
+}
+
+/* A text control's inner editor (Blink's `CreateInnerEditorStyle`): a
+   block, whose single line of a text field's value doesn't wrap and is cut
+   at its edge (with the control's `text-overflow`), and which a text
+   area's value fills, wrapped as the text area says */
+input::-internal-inner-editor {
+  display: block;
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow: hidden;
+  text-overflow: inherit;
+}
+
+textarea::-internal-inner-editor {
+  display: block;
+}
+
+/* The room a search field's or a number field's decoration container
+   leaves its part (Blink's `EditingViewPortElement`) */
+input::-internal-editing-view-port {
+  display: block;
+  flex-grow: 1;
+  min-width: 0;
+}
+
+/* A menu list's inner element: a flex item that takes the menu list's
+   room, but may be narrower than its text, which it cuts (with the
+   select's `text-overflow`; Blink's `MenuListInnerElement::
+   CustomStyleForLayoutObject`) */
+select::-internal-menulist-inner {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: inherit;
+}
+
+/* An optgroup's label: a row of a list box */
+optgroup::-internal-optgroup-label {
+  padding: 0 2px 1px;
+  min-height: 1.2em;
+}
+
+/* A search field's and a number field's value and part: the clear button
+   and the spin button show while the field can be edited and has the
+   focus or the pointer */
+input::-webkit-textfield-decoration-container {
+  display: flex;
+  align-items: center;
+}
+
+input::-webkit-inner-spin-button {
+  appearance: auto;
+  display: inline-block;
+  flex: none;
+  align-self: stretch;
+  opacity: 0;
+  pointer-events: none;
+}
+
+input::-webkit-search-cancel-button {
+  appearance: auto;
+  display: block;
+  flex: none;
+  margin-left: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* A range's container, track and thumb: the theme sizes the thumb and draws
+   the track */
+input[type=range i]::-webkit-slider-container {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  display: flex;
+}
+
+input[type=range i]::-webkit-slider-runnable-track {
+  flex: 1;
+  min-width: 0;
+  align-self: center;
+  box-sizing: border-box;
+  display: block;
+}
+
+input[type=range i]::-webkit-slider-thumb {
+  appearance: auto;
+  box-sizing: border-box;
+  display: block;
+}
+
+input:enabled:read-write:is(:focus, :hover)::-webkit-inner-spin-button,
+input:enabled:read-write:is(:focus, :hover)::-webkit-search-cancel-button {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+select {
+  appearance: auto;
+  cursor: default;
+  box-sizing: border-box;
+  align-items: center;
+  white-space: pre;
+  border: 1px solid rgb(118, 118, 118);
+  background-color: Field;
+  border-radius: 0;
+}
+
+select:-internal-list-box {
+  border-radius: 2px;
+  align-items: flex-start;
+  overflow-x: hidden;
+  overflow-y: scroll;
+  vertical-align: text-bottom;
+  white-space: nowrap;
+}
+
+select:-internal-list-box option, select:-internal-list-box optgroup {
+  line-height: normal !important;
+}
+
+select:-internal-list-box:focus option:checked {
+  background-color: SelectedItem !important;
+  color: SelectedItemText !important;
+}
+
+select:-internal-list-box:focus option:checked:disabled {
+  background-color: rgb(200, 200, 200) !important;
+}
+
+select:-internal-list-box option:checked {
+  background-color: rgb(206, 206, 206);
+  color: rgb(16, 16, 16);
+}
+
+select:-internal-list-box:disabled option:checked,
+select:-internal-list-box option:checked:disabled {
+  color: gray;
+}
+
+select:-internal-list-box:focus-visible option:-internal-multi-select-focus {
+  outline: auto 1px -webkit-focus-ring-color;
+  outline-offset: -1px;
+}
+
+select:-internal-list-box hr {
+  border-style: none;
+  margin-top: 0.5em;
+  margin-bottom: 0;
+}
+
+optgroup {
+  font-weight: bolder;
+  display: block;
+}
+
+option {
+  font-weight: normal;
+  display: block;
+  padding: 0 2px 1px;
+  white-space: nowrap;
+  min-height: 1.2em;
+}
+
+select optgroup option {
+  padding-left: 20px;
+  font-weight: normal;
+}
+
+select:disabled {
+  opacity: 0.7;
+  border-color: rgba(118, 118, 118, 0.3);
+}
+
+select:disabled, optgroup:disabled, option:disabled, select[disabled] > option {
+  color: GrayText;
+}
+
+select:disabled option, optgroup:disabled option {
+  color: GrayText;
+}
+
+input:disabled, textarea:disabled {
+  color: rgb(84, 84, 84);
+  background-color: rgba(239, 239, 239, 0.3);
+  border-color: rgba(118, 118, 118, 0.3);
+}
+
+input[type=button i]:disabled, input[type=submit i]:disabled,
+input[type=reset i]:disabled, button:disabled {
+  color: rgba(16, 16, 16, 0.3);
+  background-color: rgba(239, 239, 239, 0.3);
+  border-color: rgba(118, 118, 118, 0.3);
+}
+
+/* Replaced elements clip their content (Chrome's: with
+   `overflow-clip-margin: content-box`, which machopo has no property for and
+   gives a replaced element's clip always) */
+img, video, canvas, embed, object {
+  overflow: clip;
+}
+
+/* Embedded content (`frameborder` is a presentational hint) */
+iframe {
+  border: 2px inset;
+}
+
+/* SVG: the viewports clip what is outside them (Chrome's `svg.css`) */
+svg|svg:not(:root), svg|symbol, svg|image, svg|marker, svg|pattern,
+svg|foreignObject {
+  overflow: hidden;
+}
+
+/* SVG: an element's transform is about its viewport's origin, but for an
+   outermost `<svg>`'s, which is a CSS box's (Chrome's `svg.css`) */
+svg|*:not(svg|svg), svg|*:not(svg|foreignObject) > svg|svg {
+  transform-origin: 0 0;
+}
+
+/* Focus: the platform's focus ring on what has keyboard focus (Chrome's
+   rule, in `html.css` and `svg.css`) */
+:focus-visible, svg|*:focus-visible {
+  outline: auto 1px -webkit-focus-ring-color;
+}

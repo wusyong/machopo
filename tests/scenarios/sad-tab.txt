@@ -1,0 +1,13 @@
+# A tab whose renderer has gone: `about:crash`, as typed,
+# ends it, and the tab stays with its sad tab until reloading launches
+# another renderer.
+navigate pages/tab-one.html
+wait-loaded
+wait-text #name "one"
+navigate about:crash
+# For a person to look at. There is no renderer to wait for: the next
+# frame drawn.
+screenshot sad-tab now
+key primary+r
+wait-loaded
+wait-text #name "one"

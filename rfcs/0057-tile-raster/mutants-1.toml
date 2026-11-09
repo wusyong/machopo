@@ -1,0 +1,81 @@
+# 1: `ci.py raster` (`scripts/raster.py`): a few pages scrolled and resized
+# in kun; the compositor thread's raster from the trace, the tiles from the
+# log.
+#   python3 scripts/test.py mutate rfcs/0057-tile-raster/mutants-1.toml
+test = ["python3", "scripts/raster_test.py"]
+timeout = 900
+
+[[mutant]]
+name = "slices paired with the first open one"
+file = "scripts/raster.py"
+from = '''            begun, start = stack.pop()'''
+to = '''            begun, start = stack.pop(0)'''
+
+[[mutant]]
+name = "what began after the phase counts"
+file = "scripts/raster.py"
+from = '''    lengths = [(end - start) / 1e6 for begun, start, end in found if begun == name and window[0] <= start <= window[1]]'''
+to = '''    lengths = [(end - start) / 1e6 for begun, start, end in found if begun == name and window[0] <= start]'''
+
+[[mutant]]
+name = "the shortest as the longest"
+file = "scripts/raster.py"
+from = '''    return {"count": len(lengths), "total_ms": round(sum(lengths), 1), "max_ms": round(max(lengths, default=0), 1)}'''
+to = '''    return {"count": len(lengths), "total_ms": round(sum(lengths), 1), "max_ms": round(min(lengths, default=0), 1)}'''
+
+[[mutant]]
+name = "the log's tiles outside the phase count"
+file = "scripts/raster.py"
+from = '''        if window[0] <= at <= window[1]:'''
+to = '''        if True:'''
+
+[[mutant]]
+name = "every tile one color"
+file = "scripts/raster.py"
+from = '''            solid += int(found["solid"])'''
+to = '''            solid += int(found["rastered"])'''
+
+[[mutant]]
+name = "the log's colors left in"
+file = "scripts/raster.py"
+from = '''    for line in ANSI.sub("", text).splitlines():'''
+to = '''    for line in text.splitlines():'''
+
+[[mutant]]
+name = "the window doesn't grow back"
+file = "scripts/raster.py"
+from = '''    return down + down[::-1]'''
+to = '''    return down'''
+
+[[mutant]]
+name = "macOS's monotonic clock for the trace's"
+file = "scripts/raster.py"
+from = '''        return time.clock_gettime_ns(time.CLOCK_UPTIME_RAW)'''
+to = '''        return time.clock_gettime_ns(time.CLOCK_MONOTONIC)'''
+
+[[mutant]]
+name = "no compositor log"
+file = "scripts/raster.py"
+from = '''    env = {**os.environ, "MACHOPO_TRACE": str(trace), "RUST_LOG": "info,compositor=debug"}'''
+to = '''    env = {**os.environ, "MACHOPO_TRACE": str(trace), "RUST_LOG": "info"}'''
+
+[[mutant]]
+name = "the raster read off another thread"
+file = "scripts/raster.py"
+from = '''    compositor = spans(slices.get("Compositor", []), {"TileManager::PrepareTiles", "raster::playback"})'''
+to = '''    compositor = spans(slices.get("main", []), {"TileManager::PrepareTiles", "raster::playback"})'''
+
+[[mutant]]
+name = "each update's mean wrong"
+file = "scripts/raster.py"
+from = '''            mean = prepare["total_ms"] / prepare["count"] if prepare["count"] else 0'''
+to = '''            mean = prepare["total_ms"] if prepare["count"] else 0'''
+
+[[mutant]]
+name = "an unknown page run"
+file = "scripts/raster.py"
+from = '''        if name not in PAGES:
+            print(f"no page {name}; the pages: {', '.join(PAGES)}")
+            return 2'''
+to = '''        if name not in PAGES:
+            print(f"no page {name}; the pages: {', '.join(PAGES)}")'''

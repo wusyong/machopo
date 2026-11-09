@@ -1,0 +1,99 @@
+# Stage 4g-4c-3b: WebDriver in the new DOM's child frames: the engine's WebDriver methods in
+# a frame's realm, a window's value by its document, the queries' points in the top-level
+# viewport, document.location.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "sh", "-c", "cargo test -q -p dom_js_next --test it -- webdriver cross_origin && cargo test -q -p dom_api_next --test it -- webdriver"]
+timeout = 900
+
+[[mutant]]
+name = "js: a frame's script in the top-level realm"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        let Some(context) = self.frame_context(frame) else {
+            return Err(dom_api_next::WebDriverScriptError(
+                "the frame has no document".into(),
+            ));
+        };
+        let started = {'''
+to = '''        let _ = frame;
+        let Some(context) = self.context.clone() else {
+            return Err(dom_api_next::WebDriverScriptError(
+                "the frame has no document".into(),
+            ));
+        };
+        let started = {'''
+
+[[mutant]]
+name = "js: a frame's property in the top-level realm"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        let Some(context) = self.frame_context(frame) else {
+            return Err(dom_api_next::WebDriverScriptError(
+                "the frame has no document".into(),
+            ));
+        };
+        let isolate = self.data.isolate();'''
+to = '''        let _ = frame;
+        let Some(context) = self.context.clone() else {
+            return Err(dom_api_next::WebDriverScriptError(
+                "the frame has no document".into(),
+            ));
+        };
+        let isolate = self.data.isolate();'''
+
+[[mutant]]
+name = "js: a window argument the current realm's"
+file = "crates/dom_js_next/src/webdriver.rs"
+from = '''                state.frames.of_document(*document).map(|frame| frame.context.clone())'''
+to = '''                state.frames.iter().next().map(|frame| frame.context.clone())'''
+
+[[mutant]]
+name = "api: a child frame's click point in its own viewport"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''    let rect = in_top_view(cx, document, in_view(first, port)?)?;'''
+to = '''    let rect = in_view(first, port)?;'''
+
+[[mutant]]
+name = "api: a frame's in-view check at the top-level point"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''    cx.with_layout(document, |layout| layout.elements_at(at))?'''
+to = '''    let _ = at;
+    cx.with_layout(document, |layout| layout.elements_at(center))?'''
+
+[[mutant]]
+name = "api: a frame's viewport at the origin"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''            let origin = point_in_top(cx, document, PointF::new(0.0, 0.0))'''
+to = '''            let origin = Some(PointF::new(0.0, 0.0))'''
+
+[[mutant]]
+name = "api: a probe's box in its frame's viewport"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''                        .and_then(|rect| rect_in_top(cx, document, rect)),'''
+to = '''                        .and_then(Some),'''
+
+[[mutant]]
+name = "api: a screenshot's rect in its frame's viewport"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''                .and_then(|rect| in_top_view(cx, document, rect))'''
+to = ''''''
+
+[[mutant]]
+name = "api: a hit in a child frame not in its iframe"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''                (cx.kind(at) == NodeKind::Document)
+                    .then(|| cx.frame_owner(at))
+                    .flatten()'''
+to = '''                (cx.kind(at) == NodeKind::Document && false)
+                    .then(|| cx.frame_owner(at))
+                    .flatten()'''
+
+[[mutant]]
+name = "api: document.location none"
+file = "crates/dom_api_next/src/window.rs"
+from = '''    Ok(cx.window_of(this).map(|window| cx.window_location(window)))'''
+to = '''    let _ = this;
+    Ok(None::<Gc<'gc, Location>>)'''
+
+[[mutant]]
+name = "api: document.location set without a window does nothing"
+file = "crates/dom_api_next/src/window.rs"
+from = '''        None => Err(ApiError::Type("The document has no location.".into())),'''
+to = '''        None => Ok(()),'''

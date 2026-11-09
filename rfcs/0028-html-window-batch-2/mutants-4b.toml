@@ -1,0 +1,327 @@
+# Mutation test of stage 4b (`srcset`, `sizes`, `<picture>` and reacting to
+# environment changes):
+# python3 scripts/test.py mutate rfcs/0028-html-window-batch-2/mutants-4b.toml
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "navigation", "srcset"]
+timeout = 900
+
+# --- Media queries and sizes ----------------------------------------------------
+
+[[mutant]]
+name = "and: unknown wins over false"
+file = "crates/style/src/media.rs"
+from = '''        (Some(false), _) | (_, Some(false)) => Some(false),
+        (Some(true), Some(true)) => Some(true),'''
+to = '''        (Some(true), Some(true)) => Some(true),
+        (None, _) | (_, None) => None,
+        (Some(false), _) | (_, Some(false)) => Some(false),'''
+test = ["cargo", "test", "-q", "-p", "style", "--lib", "media"]
+
+[[mutant]]
+name = "or: unknown wins over true"
+file = "crates/style/src/media.rs"
+from = '''        (Some(true), _) | (_, Some(true)) => Some(true),
+        (Some(false), Some(false)) => Some(false),'''
+to = '''        (Some(false), Some(false)) => Some(false),
+        (None, _) | (_, None) => None,
+        (Some(true), _) | (_, Some(true)) => Some(true),'''
+test = ["cargo", "test", "-q", "-p", "style", "--lib", "media"]
+
+[[mutant]]
+name = "orientation: a square is landscape"
+file = "crates/style/src/media.rs"
+from = '''environment.height >= environment.width'''
+to = '''environment.height > environment.width'''
+test = ["cargo", "test", "-q", "-p", "style", "--lib", "media"]
+
+[[mutant]]
+name = "general-enclosed takes a stray closing bracket"
+file = "crates/style/src/media.rs"
+from = '''            return invalid(input);
+        }
+    }
+    Ok(())'''
+to = '''            continue;
+        }
+    }
+    Ok(())'''
+test = ["cargo", "test", "-q", "-p", "style", "--lib", "media"]
+
+[[mutant]]
+name = "a negative source size is taken"
+file = "crates/style/src/media.rs"
+from = '''        Token::Dimension { value, unit, .. } if value >= 0.0 => match length(value, &unit) {'''
+to = '''        Token::Dimension { value, unit, .. } => match length(value, &unit) {'''
+test = ["cargo", "test", "-q", "-p", "style", "--lib", "media"]
+
+[[mutant]]
+name = "a size whose condition doesn't match is taken"
+file = "crates/style/src/media.rs"
+from = '''            && condition.is_none_or(|c| c.matches(environment))'''
+to = '''            && condition.is_none_or(|_| true)'''
+
+[[mutant]]
+name = "the default size isn't 100vw"
+file = "crates/style/src/media.rs"
+from = '''pub fn default_source_size(environment: &MediaEnvironment) -> f32 {
+    environment.width'''
+to = '''pub fn default_source_size(environment: &MediaEnvironment) -> f32 {
+    environment.width / 2.0'''
+
+# --- srcset ---------------------------------------------------------------------
+
+[[mutant]]
+name = "a w descriptor isn't over the source size"
+file = "crates/dom_api/src/srcset.rs"
+from = '''                f64::from(width) / f64::from(source_size)'''
+to = '''                f64::from(width) / 100.0'''
+
+[[mutant]]
+name = "src counts among widths"
+file = "crates/dom_api/src/srcset.rs"
+from = '''        if previous != Some(density) && !(has_width && from_src) {'''
+to = '''        if previous != Some(density) {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--lib", "srcset"]
+
+[[mutant]]
+name = "past the geometric mean takes the lower"
+file = "crates/dom_api/src/srcset.rs"
+from = '''        winner = if (dpr <= 1.0 && dpr > current) || dpr >= geometric_mean {'''
+to = '''        winner = if dpr <= 1.0 && dpr > current {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--lib", "srcset"]
+
+[[mutant]]
+name = "a denser candidate already loaded doesn't win"
+file = "crates/dom_api/src/srcset.rs"
+from = '''        .find(|&i| cached(deduped[i].1))'''
+to = '''        .find(|_| false)'''
+
+[[mutant]]
+name = "an x descriptor is a width"
+file = "crates/dom_api/src/srcset.rs"
+from = '''        (None, Some(density)) => Descriptor::Density(density),'''
+to = '''        (None, Some(density)) => Descriptor::Width(density as u32),'''
+
+[[mutant]]
+name = "a bad descriptor keeps the candidate"
+file = "crates/dom_api/src/srcset.rs"
+from = '''            _ => return None,
+        }
+    }
+    // A height only goes with a width'''
+to = '''            _ => {}
+        }
+    }
+    // A height only goes with a width'''
+
+[[mutant]]
+name = "parentheses don't hold a descriptor's spaces"
+file = "crates/dom_api/src/srcset.rs"
+from = '''                Some('(') => {
+                    current.push('(');
+                    state = State::InParens;
+                }'''
+to = '''                Some('(') => {
+                    current.push('(');
+                }'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--lib", "srcset"]
+
+# --- Selecting a source ---------------------------------------------------------
+
+[[mutant]]
+name = "a source's media isn't looked at"
+file = "crates/dom_api/src/image.rs"
+from = '''                && !style::MediaQueryList::parse(&media).matches(&environment)'''
+to = '''                && false'''
+
+[[mutant]]
+name = "a source's type isn't looked at"
+file = "crates/dom_api/src/image.rs"
+from = '''                if !SUPPORTED_TYPES.contains(&essence.as_str()) {'''
+to = '''                if essence.is_empty() {'''
+
+[[mutant]]
+name = "sources after the img count"
+file = "crates/dom_api/src/image.rs"
+from = '''            if child.id() == node.id() {
+                break;
+            }'''
+to = '''            if child.id() == node.id() {
+                continue;
+            }'''
+test = ["python3", "scripts/test.py", "wpt", "the-img-element/update-the-source-set"]
+
+[[mutant]]
+name = "a source's sizes isn't looked at"
+file = "crates/dom_api/src/image.rs"
+from = '''            let sizes = attribute("sizes").or_else(|| allows_auto.then(|| "auto".to_owned()));'''
+to = '''            let sizes = allows_auto.then(|| "auto".to_owned());'''
+
+[[mutant]]
+name = "an img's sizes isn't looked at"
+file = "crates/dom_api/src/image.rs"
+from = '''    let source_size = size(attribute("sizes"));
+    srcset::pick('''
+to = '''    let source_size = size(None);
+    srcset::pick('''
+
+[[mutant]]
+name = "the natural size isn't over the density"
+file = "crates/dom_api/src/image.rs"
+from = '''            let corrected = |size: u32| (f64::from(size) / r.density) as u32;'''
+to = '''            let corrected = |size: u32| size;'''
+
+[[mutant]]
+name = "layout's size isn't over the density"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            ImageState::Loaded { data, size } if *density != 1.0 => {'''
+to = '''            ImageState::Loaded { data, size } if *density == 1234.5 => {'''
+
+[[mutant]]
+name = "the main frame's size before a layout is 0 by 0"
+file = "crates/renderer/src/layout_client.rs"
+from = '''        if frame.owner().is_none() {
+            answer.size = size;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the device pixel ratio before a layout is 1"
+file = "crates/renderer/src/layout_client.rs"
+from = '''        answer.device_scale_factor = device_scale_factor;
+        Some(answer)'''
+to = '''        let _ = device_scale_factor;
+        Some(answer)'''
+
+[[mutant]]
+name = "no source selected is an error with srcset too"
+file = "crates/dom_api/src/image.rs"
+from = '''            has_src.then_some(false)'''
+to = '''            Some(false)'''
+test = ["python3", "scripts/test.py", "wpt", "the-img-element/null-image-source"]
+
+# --- Relevant mutations ---------------------------------------------------------
+
+[[mutant]]
+name = "a source's attribute change updates nothing"
+file = "crates/dom_api/src/image.rs"
+from = '''    for image in &images {
+        m.record_image_change(image);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a source's attribute change updates the img before it"
+file = "crates/dom_api/src/image.rs"
+from = '''            std::iter::successors(node.next_sibling(), |sibling| sibling.next_sibling())'''
+to = '''            std::iter::successors(node.parent().and_then(|p| p.first_child()), |sibling| sibling.next_sibling())'''
+test = ["python3", "scripts/test.py", "wpt", "the-img-element/relevant-mutations"]
+
+[[mutant]]
+name = "a picture's children changing updates nothing"
+file = "crates/dom/src/scope.rs"
+from = '''    if is(child, "img") {
+        changes.push(ElementChange::Image(child.id));
+        return;
+    }'''
+to = '''    if is(child, "img") {
+        return;
+    }'''
+test = ["python3", "scripts/test.py", "wpt", "the-img-element/relevant-mutations"]
+
+[[mutant]]
+name = "a source inserted after the img updates it"
+file = "crates/dom/src/scope.rs"
+from = '''    let mut next = unsafe { child.next_sibling.get() };'''
+to = '''    let mut next = unsafe { parent.first_child.get() };'''
+test = ["python3", "scripts/test.py", "wpt", "the-img-element/relevant-mutations"]
+
+# --- Keeping the current request --------------------------------------------------
+
+[[mutant]]
+name = "the same image, completely available, is replaced"
+file = "crates/dom_api/src/image.rs"
+from = '''            ImageRequestState::CompletelyAvailable => available.is_some(),'''
+to = '''            ImageRequestState::CompletelyAvailable => false,'''
+test = ["python3", "scripts/test.py", "wpt", "the-img-element/decode/image-decode-path-changes"]
+
+[[mutant]]
+name = "the same image, loading, is replaced"
+file = "crates/dom_api/src/image.rs"
+from = '''            ImageRequestState::Unavailable => true,
+            ImageRequestState::Broken => false,'''
+to = '''            ImageRequestState::Unavailable => false,
+            ImageRequestState::Broken => false,'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "navigation", "img"]
+
+# --- Environment changes --------------------------------------------------------
+
+[[mutant]]
+name = "a resize selects nothing again"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                if environment_changed {
+                    let frames = self'''
+to = '''                if false {
+                    let frames = self'''
+
+[[mutant]]
+name = "another density at the same URL is fetched again"
+file = "crates/dom_api/src/image.rs"
+from = '''            if current.url == url && current.state != ImageRequestState::Broken =>'''
+to = '''            if false =>'''
+test = ["python3", "scripts/test.py", "wpt", "the-img-element/srcset/srcset-w-reselect-on-resize"]
+
+[[mutant]]
+name = "another density at the same URL is kept"
+file = "crates/dom_api/src/image.rs"
+from = '''            if current.density == density {
+                return;
+            }'''
+to = '''            return;'''
+
+[[mutant]]
+name = "a child frame's resize selects nothing again"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            self.resized |= self.owner.is_some();'''
+to = ''''''
+test = ["python3", "scripts/test.py", "wpt", "the-img-element/srcset/srcset-w-reselect-on-resize"]
+
+[[mutant]]
+name = "a child frame's resize waits for another reason to draw"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if scroll_events || resized {'''
+to = '''        if scroll_events {'''
+test = ["python3", "scripts/test.py", "wpt", "the-img-element/srcset/srcset-w-reselect-on-resize"]
+
+# --- A new iframe's base URL ------------------------------------------------------
+
+[[mutant]]
+name = "a new iframe's about:blank has no base URL until the render thread has it"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        *child.fallback_base_url.borrow_mut() = base_url.cloned();'''
+to = '''        let _ = base_url;'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "navigation", "about_blank_has"]
+
+[[mutant]]
+name = "a new iframe's base URL is its parent's when the render thread has it"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            view.set_fallback_base_url(base.unwrap_or_else(|| self.base_url.clone()));'''
+to = '''            let _ = base;
+            view.set_fallback_base_url(self.base_url.clone());'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "navigation", "about_blank_has"]
+
+# --- A child frame not laid out yet ---------------------------------------------
+
+[[mutant]]
+name = "a child frame not laid out yet has the viewport of none"
+file = "crates/renderer/src/layout_client.rs"
+from = '''        if frame.owner().is_some() && !frame.is_laid_out() {'''
+to = '''        if false {'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "navigation", "a_child_frames_images"]
+
+[[mutant]]
+name = "a child frame not laid out yet isn't laid out to select"
+file = "crates/dom_api/src/image.rs"
+from = '''            crate::geometry::with_layout(cx, id, |client, scope| client.viewport(scope, id))
+                .flatten()'''
+to = '''            None'''
+test = ["python3", "scripts/test.py", "wpt", "the-img-element/srcset-natural-size-in-dynamic-iframe"]

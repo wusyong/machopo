@@ -1,0 +1,73 @@
+# Stage 4h-3a, through the renderer: script's scrolling clamped and drawn, the scroll steps'
+# `scroll` events, `scrollIntoView` through the frames.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it -- next_dom::script_scrolls_and_its_scroll_events next_dom::scroll_into_view_through_frames"]
+timeout = 1800
+
+[[mutant]]
+name = "js: a document's scroll doesn't bubble"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''            Some((cx.root(node), cx.kind(node) == dom_next::NodeKind::Document))'''
+to = '''            Some((cx.root(node), false))'''
+
+[[mutant]]
+name = "js: no microtask checkpoint after a scroll event"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''                document,
+                false,
+            );
+        });
+        self.perform_microtask_checkpoint();'''
+to = '''                document,
+                false,
+            );
+        });'''
+
+[[mutant]]
+name = "renderer: no scroll events"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        for target in due {
+            engine.fire_scroll_event(target);
+        }'''
+to = '''        let _ = due;'''
+
+[[mutant]]
+name = "renderer: no frame for script's scrolling"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        } else if observed || scrolled {'''
+to = '''        } else if observed {'''
+
+[[mutant]]
+name = "renderer: script's scrolling not marked"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            self.containers_moved(&before);
+            self.scrolled_by_script = true;'''
+to = '''            self.containers_moved(&before);'''
+
+
+[[mutant]]
+name = "renderer: scrollIntoView stops at the frame"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''                Some((iframe, _)) if !params.nearest_only => (target, inner) = (iframe, Some(rect)),'''
+to = '''                Some((iframe, _)) if false => (target, inner) = (iframe, Some(rect)),'''
+
+[[mutant]]
+name = "renderer: the iframe's own rect, not the element's"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''                Some((iframe, _)) if !params.nearest_only => (target, inner) = (iframe, Some(rect)),'''
+to = '''                Some((iframe, _)) if !params.nearest_only => (target, inner) = (iframe, None),'''
+
+[[mutant]]
+name = "renderer: child frames' scrolls not taken"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        for child in &mut self.children {
+            child.take_scroll_events(out);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: the viewport's target the root's"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            out.push(target.unwrap_or(self.document_node));'''
+to = '''            if let Some(target) = target {
+                out.push(target);
+            }'''

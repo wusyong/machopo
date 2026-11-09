@@ -1,0 +1,189 @@
+# Stage 1f-2: the new DOM for wasm guests (dom_wasm_next): each store's
+# handles to the nodes (its own numbers, the main store's in the node's
+# engine word, the others' in shared entries), the typed host functions'
+# checks before the operation, the errors' codes; gc's JS edge as the
+# embedder's word where no engine drives the heap, dom_next's engine word
+# and shared text. The C guest (tests/guests/dom.wasm) is built already.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_wasm_next"]
+timeout = 600
+
+[[mutant]]
+name = "the embedder's word reads 0"
+file = "crates/gc/src/js.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--test", "it", "--", "js::"]
+from = '''        self.raw.load(Ordering::Relaxed)'''
+to = '''        0'''
+
+[[mutant]]
+name = "the embedder's word isn't written"
+file = "crates/gc/src/js.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--test", "it", "--", "js::"]
+from = '''        self.raw.store(word, Ordering::Relaxed);'''
+to = '''        let _ = word;'''
+
+[[mutant]]
+name = "a driven heap's JS edge is read as the embedder's"
+file = "crates/gc/src/js.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--test", "it", "--", "js::"]
+from = '''        assert!(!cx.inner.is_driven(), "a driven heap's JS edge is its engine's");
+        self.raw.load(Ordering::Relaxed)'''
+to = '''        self.raw.load(Ordering::Relaxed)'''
+
+[[mutant]]
+name = "a node's engine word reads 0"
+file = "crates/dom_next/src/lib.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_next"]
+from = '''        node.into_ref().wrapper.embedder_word(self.gc)'''
+to = '''        { let _ = node; 0 }'''
+
+[[mutant]]
+name = "a string's shared text is a copy"
+file = "crates/dom_next/src/string.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_next"]
+from = '''    pub fn shared_text(&self) -> Arc<str> {
+        self.text.clone()'''
+to = '''    pub fn shared_text(&self) -> Arc<str> {
+        Arc::from(&*self.text)'''
+
+[[mutant]]
+name = "the main store's handle isn't found again"
+file = "crates/dom_wasm_next/src/handles.rs"
+from = '''            if self.store_mut(store).holds(cx, handle, node) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "a main handle read isn't checked but for 0"
+file = "crates/dom_wasm_next/src/handles.rs"
+from = '''            if self.store_mut(store).holds(cx, handle, node) {'''
+to = '''            if handle != 0 {'''
+
+[[mutant]]
+name = "the main store's handle isn't written in the word"
+file = "crates/dom_wasm_next/src/handles.rs"
+from = '''            cx.set_engine_word(node, (word & !LOW) | u64::from(handle));'''
+to = ''''''
+
+[[mutant]]
+name = "another store's handle isn't found in its shared entry"
+file = "crates/dom_wasm_next/src/handles.rs"
+from = '''find(|(of, _)| *of == store)'''
+to = '''find(|(of, _)| *of == u32::MAX)'''
+
+[[mutant]]
+name = "a release leaves the main handle in the word"
+file = "crates/dom_wasm_next/src/handles.rs"
+from = '''            cx.set_engine_word(node, word & !LOW);'''
+to = ''''''
+
+[[mutant]]
+name = "a store's handle stays in its shared entry"
+file = "crates/dom_wasm_next/src/handles.rs"
+from = '''        handles.retain(|&(of, _)| of != store);'''
+to = ''''''
+
+[[mutant]]
+name = "an emptied shared entry isn't freed"
+file = "crates/dom_wasm_next/src/handles.rs"
+from = '''            self.shared.free.push(u32::try_from(entry).expect("an entry's index"));'''
+to = ''''''
+
+[[mutant]]
+name = "a store going leaves its shared entries"
+file = "crates/dom_wasm_next/src/handles.rs"
+from = '''        for node in handles.nodes(cx) {
+            let word = cx.engine_word(node);
+            self.unshare(cx, store, node, word);
+        }'''
+to = '''        let _ = handles;'''
+
+[[mutant]]
+name = "every store is main"
+file = "crates/dom_wasm_next/src/handles.rs"
+from = '''        if self.stores.is_empty() {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "a released slot keeps its generation"
+file = "crates/dom_wasm_next/src/handles.rs"
+from = '''        slot.generation = if slot.generation == u8::MAX { 1 } else { slot.generation.saturating_add(1) };'''
+to = ''''''
+
+[[mutant]]
+name = "a generation wraps to 0"
+file = "crates/dom_wasm_next/src/handles.rs"
+from = '''        slot.generation = if slot.generation == u8::MAX { 1 } else { slot.generation.saturating_add(1) };'''
+to = '''        slot.generation = slot.generation.wrapping_add(1);'''
+
+[[mutant]]
+name = "a released slot keeps its node"
+file = "crates/dom_wasm_next/src/handles.rs"
+from = '''        self.member(cx, at).set(cx.gc, None);'''
+to = ''''''
+
+[[mutant]]
+name = "a handle's generation isn't checked"
+file = "crates/dom_wasm_next/src/handles.rs"
+from = '''            .filter(|slot| slot.generation == generation)'''
+to = '''            .filter(|slot| { let _ = generation; slot.generation != 0 })'''
+
+[[mutant]]
+name = "this of another interface is taken"
+file = "crates/dom_wasm_next/src/front.rs"
+from = '''        if !dom_api_next::typed::accepts(M::INTERFACE, kind) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "node arguments aren't checked before the operation"
+file = "crates/dom_wasm_next/src/front.rs"
+from = '''            <M::Args as WitArgs>::check(&rest, handles)?;'''
+to = ''''''
+
+[[mutant]]
+name = "a TypeError is code 0"
+file = "crates/dom_wasm_next/src/front.rs"
+from = '''pub const TYPE_ERROR: u32 = 1;'''
+to = '''pub const TYPE_ERROR: u32 = 0;'''
+
+[[mutant]]
+name = "HierarchyRequestError is NotFoundError's code"
+file = "crates/dom_wasm_next/src/front.rs"
+from = '''        ExceptionName::HierarchyRequest => 2,'''
+to = '''        ExceptionName::HierarchyRequest => 3,'''
+
+[[mutant]]
+name = "NotFoundError is another code"
+file = "crates/dom_wasm_next/src/front.rs"
+from = '''        ExceptionName::NotFound => 3,'''
+to = '''        ExceptionName::NotFound => 0,'''
+
+[[mutant]]
+name = "InvalidCharacterError is another code"
+file = "crates/dom_wasm_next/src/front.rs"
+from = '''        ExceptionName::InvalidCharacter => 4,'''
+to = '''        ExceptionName::InvalidCharacter => 0,'''
+
+[[mutant]]
+name = "NamespaceError is another code"
+file = "crates/dom_wasm_next/src/front.rs"
+from = '''        ExceptionName::Namespace => 9,'''
+to = '''        ExceptionName::Namespace => 0,'''
+
+[[mutant]]
+name = "a null string result is the empty string"
+file = "crates/dom_wasm_next/src/front.rs"
+from = '''            Ret::Str(value) => Some(value),
+            Ret::Null => None,'''
+to = '''            Ret::Str(value) => Some(value),
+            Ret::Null => Some(Arc::from("")),'''
+
+[[mutant]]
+name = "a handle not the store's is released"
+file = "crates/dom_wasm_next/src/lib.rs"
+from = '''            if handles.kind(handle).is_none() {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "a store going leaves its table"
+file = "crates/dom_wasm_next/src/lib.rs"
+from = '''                    .mutate(|cx| tables.remove_store(cx, self.number));'''
+to = '''                    .mutate(|_| drop(&tables));'''

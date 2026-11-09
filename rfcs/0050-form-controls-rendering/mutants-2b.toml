@@ -1,0 +1,197 @@
+# 2b: an `<input>` button's label and a search field's and a number field's
+# part in their UA shadow trees (`dom_api`'s `text_control_tree`), any
+# `::-webkit-` pseudo-element (`css`), the parts' native look and size
+# (`style`'s `theme`, the UA stylesheet), and the button layout of an
+# `<input>` button whatever its `display` (`layout`).
+#   python3 scripts/test.py mutate rfcs/0050-form-controls-rendering/mutants-2b.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::a_text_control"]
+timeout = 900
+
+[[mutant]]
+name = "a search field has no clear button"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''        "search" => Tree::Field(Some(CANCEL_BUTTON)),'''
+to = '''        "search" => Tree::Field(None),'''
+
+[[mutant]]
+name = "a number field has no spin button"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''        "number" => Tree::Field(Some(SPIN_BUTTON)),'''
+to = '''        "number" => Tree::Field(None),'''
+
+[[mutant]]
+name = "a submit button has no label"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''        "submit" | "reset" | "button" => Tree::Button,'''
+to = '''        "reset" | "button" => Tree::Button,'''
+
+[[mutant]]
+name = "a submit button's default label isn't Chrome's"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''                    "submit" => "Submit",'''
+to = '''                    "submit" => "Send",'''
+
+[[mutant]]
+name = "an empty label has no line"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''            label.push('\u{200B}');'''
+to = ''''''
+
+[[mutant]]
+name = "the clear button always shows"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''        let hidden = value.is_empty();'''
+to = '''        let hidden = false;'''
+
+[[mutant]]
+name = "a new type keeps the old tree"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''            (made.is_some() && made != tree).then(|| {'''
+to = '''            (made.is_some() && made != tree && false).then(|| {'''
+
+[[mutant]]
+name = "the editing view port doesn't take the room"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''const VIEW_PORT_STYLE: &str = "display: block; flex-grow: 1; min-width: 0";'''
+to = '''const VIEW_PORT_STYLE: &str = "display: block; min-width: 0";'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "no ::-webkit- pseudo-element parses"
+file = "crates/css/src/selector.rs"
+from = '''        } else if name.len() > "-webkit-".len()'''
+to = '''        } else if name.len() > 100'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "placeholder_selectors", "form_controls::"]
+
+[[mutant]]
+name = "a ::-webkit- pseudo-element takes no state"
+file = "crates/css/src/selector.rs"
+from = '''        matches!(self, Self::Webkit(_))'''
+to = '''        false'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "placeholder_selectors"]
+
+[[mutant]]
+name = "a ::-webkit- pseudo-element keeps its case"
+file = "crates/css/src/selector.rs"
+from = '''            Ok(PseudoElement::Webkit(name.to_ascii_lowercase().into()))'''
+to = '''            Ok(PseudoElement::Webkit(name.to_string().into()))'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "placeholder_selectors"]
+
+[[mutant]]
+name = "the clear button has no native look"
+file = "crates/style/src/theme.rs"
+from = '''                Some("-webkit-search-cancel-button") => {
+                    EffectiveAppearance::SearchFieldCancelButton
+                }
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "a part outside a UA shadow tree has a native look"
+file = "crates/style/src/theme.rs"
+from = '''        if element
+            .root()
+            .shadow_root_init()
+            .is_some_and(|init| init.mode == dom::ShadowRootMode::UserAgent)
+        {'''
+to = '''        if element
+            .root()
+            .shadow_root_init()
+            .is_some()
+        {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "a spin button is 14px wide"
+file = "crates/style/src/theme.rs"
+from = '''    const SPIN_BUTTON_WIDTH: f32 = 15.0;'''
+to = '''    const SPIN_BUTTON_WIDTH: f32 = 14.0;'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "a clear button grows faster"
+file = "crates/style/src/theme.rs"
+from = '''            let size = (0.7 * style.font_size + 3.0).round().clamp(8.0, 24.0);'''
+to = '''            let size = (0.75 * style.font_size + 3.0).round().clamp(8.0, 24.0);'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "a clear button is 9px at least"
+file = "crates/style/src/theme.rs"
+from = '''            let size = (0.7 * style.font_size + 3.0).round().clamp(8.0, 24.0);'''
+to = '''            let size = (0.7 * style.font_size + 3.0).round().clamp(9.0, 24.0);'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "a clear button grows past 24px"
+file = "crates/style/src/theme.rs"
+from = '''            let size = (0.7 * style.font_size + 3.0).round().clamp(8.0, 24.0);'''
+to = '''            let size = (0.7 * style.font_size + 3.0).round().clamp(8.0, 25.0);'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "a part's given size is the theme's"
+file = "crates/style/src/theme.rs"
+from = '''        if let Some(theirs) = theirs
+            && *size == Size::Auto
+        {'''
+to = '''        if let Some(theirs) = theirs {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "the parts never show"
+file = "crates/style/resources/html.css"
+from = '''input:enabled:read-write:is(:focus, :hover)::-webkit-inner-spin-button,
+input:enabled:read-write:is(:focus, :hover)::-webkit-search-cancel-button {
+  opacity: 1;'''
+to = '''input:enabled:read-write:is(:focus, :hover)::-webkit-inner-spin-button,
+input:enabled:read-write:is(:focus, :hover)::-webkit-search-cancel-button {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "a read-only field's parts show"
+file = "crates/style/resources/html.css"
+from = '''input:enabled:read-write:is(:focus, :hover)::-webkit-inner-spin-button,'''
+to = '''input:enabled:is(:focus, :hover)::-webkit-inner-spin-button,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "a spin button isn't as tall as the field's line"
+file = "crates/style/resources/html.css"
+from = '''  align-self: stretch;
+  opacity: 0;'''
+to = '''  opacity: 0;'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "the clear button has no room before it"
+file = "crates/style/resources/html.css"
+from = '''  margin-left: 1px;'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "the decoration container isn't a flex container"
+file = "crates/style/resources/html.css"
+from = '''input::-webkit-textfield-decoration-container {
+  display: flex;'''
+to = '''input::-webkit-textfield-decoration-container {'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "a grid input button lays its label out as a grid"
+file = "crates/layout/src/lib.rs"
+from = '''        Display::Flex | Display::Grid => Display::Block,'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "a grid button lays its content out as a block"
+file = "crates/layout/src/lib.rs"
+from = '''    if !control::is_input_button(element) {
+        return style;
+    }
+    Arc::new(ComputedStyle {'''
+to = '''    Arc::new(ComputedStyle {'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::"]

@@ -1,0 +1,61 @@
+# Stage 5c-1: DevTools' V8 inspector on the DOM's engine.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it devtools:: && cargo test -q -p renderer --lib task_queue:: && cargo test -q -p dom_api_next performance && cargo test -q -p shell --test it devtools"]
+timeout = 2400
+
+[[mutant]]
+name = "dom_js_next: the realms not cleared as the top-level frame navigates"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        if place.is_none() && before.is_some() {
+            crate::devtools::realms_cleared(scope);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom_js_next: a child frame's old realm not destroyed"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''                crate::devtools::realm_destroyed(scope, before);'''
+to = ''''''
+
+[[mutant]]
+name = "dom_js_next: a removed frame's realm not destroyed"
+file = "crates/dom_js_next/src/frames.rs"
+from = '''        crate::devtools::realm_destroyed(scope.scope(), &removed.context);'''
+to = ''''''
+
+[[mutant]]
+name = "dom_js_next: an initial about:blank's realm not told"
+file = "crates/dom_js_next/src/frames.rs"
+from = '''    crate::devtools::realm_created(scope, context, id, &parent_document);'''
+to = ''''''
+
+[[mutant]]
+name = "dom_js_next: an unhandled rejection not reported for a later handler to revoke"
+file = "crates/dom_js_next/src/devtools.rs"
+from = '''        bindings::devtools::rejection_reported(scope, promise, id);'''
+to = ''''''
+
+[[mutant]]
+name = "bindings: a session detached while paused not put back"
+file = "crates/bindings/src/devtools.rs"
+from = '''                    after.push(Queued::Detach(session));'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: Shutdown doesn't wake a paused script"
+file = "crates/renderer/src/task_queue.rs"
+from = '''                    self.devtools.push(DevToolsQueued::Quit, false);'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: an interrupting message taken after an attach"
+file = "crates/renderer/src/task_queue.rs"
+from = '''            known &= matches!(next, DevToolsQueued::Message { .. });'''
+to = ''''''
+
+[[mutant]]
+name = "dom_api_next: an unsupported entry type not warned of"
+file = "crates/dom_api_next/src/performance.rs"
+from = '''    cx.warn_console(format!(
+        "The entry type '{name}' does not exist or isn't supported."
+    ));'''
+to = '''    let _ = (cx, name);'''

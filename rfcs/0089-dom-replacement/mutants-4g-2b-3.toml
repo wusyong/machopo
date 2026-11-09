@@ -1,0 +1,289 @@
+# Stage 4g-2b-3: on the new DOM, toDataURL (encoded on the main thread), toBlob (the bitmap taken
+# at the call, encoded on the renderer's encoder thread, the callback called in an element task),
+# and Blob itself (its constructor's parts and options, size, type, slice, text, arrayBuffer,
+# bytes); the canvas crate's export steps, which today's DOM shares.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p canvas && cargo test -q -p dom_next --lib && cargo test -q -p dom_api_next --lib && cargo test -q -p dom_api --test it canvas_export && cargo test -q -p dom_js_next --test it -- blobs canvas && cargo test -q -p shell --test it next_dom_canvas"]
+timeout = 3000
+
+[[mutant]]
+name = "export: a JPEG's type in another case not one"
+file = "crates/canvas/src/export.rs"
+from = '''if mime_type.eq_ignore_ascii_case("image/jpeg") {'''
+to = '''if mime_type == "image/jpeg" {'''
+
+[[mutant]]
+name = "export: a quality outside 0 to 1 taken"
+file = "crates/canvas/src/export.rs"
+from = '''        .filter(|q| (0.0..=1.0).contains(q))'''
+to = '''        .filter(|_| true)'''
+
+[[mutant]]
+name = "export: a quality not rounded"
+file = "crates/canvas/src/export.rs"
+from = '''clamp_floor::<u8>(q * 100.0 + 0.5)'''
+to = '''clamp_floor::<u8>(q * 100.0)'''
+
+[[mutant]]
+name = "export: a PNG's type wrong"
+file = "crates/canvas/src/export.rs"
+from = '''            Self::Png => "image/png",'''
+to = '''            Self::Png => "image/jpeg",'''
+
+[[mutant]]
+name = "export: no context opaque"
+file = "crates/canvas/src/export.rs"
+from = '''let opaque = data.is_some() && background[3] == 255;'''
+to = '''let opaque = background[3] == 255;'''
+
+[[mutant]]
+name = "export: a context without alpha not opaque"
+file = "crates/canvas/src/export.rs"
+from = '''let opaque = data.is_some() && background[3] == 255;'''
+to = '''let opaque = false && background[3] == 255;'''
+
+[[mutant]]
+name = "blob data: a slice's end before its start kept"
+file = "crates/dom_next/src/blob.rs"
+from = '''        let end = end.max(start);'''
+to = '''        let end = end.max(0);'''
+
+[[mutant]]
+name = "blob data: a slice of a slice from the bytes' start"
+file = "crates/dom_next/src/blob.rs"
+from = '''range: self.range.start.saturating_add(start)..self.range.start.saturating_add(end),'''
+to = '''range: start..end,'''
+
+[[mutant]]
+name = "toBlob: the file's blob not made"
+file = "crates/dom_next/src/canvas.rs"
+from = '''            callback.blob.set(self.gc, Some(blob));'''
+to = '''            drop(blob);'''
+
+[[mutant]]
+name = "toBlob: a JPEG's blob of PNG's type"
+file = "crates/dom_next/src/canvas.rs"
+from = '''let encoding = if callback.jpeg { "image/jpeg" } else { "image/png" };'''
+to = '''let encoding = if false { "image/jpeg" } else { "image/png" };'''
+
+[[mutant]]
+name = "toBlob: the calls numbered the same"
+file = "crates/dom_next/src/canvas.rs"
+from = '''let id = made.get().wrapping_add(1);'''
+to = '''let id = made.get();'''
+
+[[mutant]]
+name = "element task: a toBlob's fires an event"
+file = "crates/dom_next/src/window.rs"
+from = '''            CANVAS_BLOB => ElementTaskKind::CanvasBlob(data),'''
+to = '''            CANVAS_BLOB => ElementTaskKind::Fire(task.event_type.get()),'''
+
+[[mutant]]
+name = "export: a canvas that isn't origin-clean exported"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''        && !with_data(cx, context, |data| data.origin_clean)'''
+to = '''        && false'''
+
+[[mutant]]
+name = "export: a size that can't have pixels exported"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    if !canvas::is_valid_bitmap_size(size) {
+        return Ok(None);
+    }'''
+to = '''    if false {
+        return Ok(None);
+    }'''
+
+[[mutant]]
+name = "export: what was recorded not drawn first"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''            flush(cx, context, CanvasFlush::Read);
+            let background = canvas::background(cx.canvas_context_settings(context));
+            with_data(cx, context, |data| export::export_bitmap('''
+to = '''            let background = canvas::background(cx.canvas_context_settings(context));
+            with_data(cx, context, |data| export::export_bitmap('''
+
+[[mutant]]
+name = "toDataURL: JPEG by default"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    let encoding = export::image_encoding(mime_type.unwrap_or("image/png"), quality);
+    let file = bitmap_to_export'''
+to = '''    let encoding = export::image_encoding(mime_type.unwrap_or("image/jpeg"), quality);
+    let file = bitmap_to_export'''
+
+[[mutant]]
+name = "toBlob: JPEG by default"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    let encoding = export::image_encoding(mime_type.unwrap_or("image/png"), quality);
+    let edge = cx.request_canvas_blob'''
+to = '''    let encoding = export::image_encoding(mime_type.unwrap_or("image/jpeg"), quality);
+    let edge = cx.request_canvas_blob'''
+
+[[mutant]]
+name = "toBlob: a document with no window encodes"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    if cx.window_of(cx.document_of(this)).is_none() {
+        return Ok(());
+    }'''
+to = '''    if false {
+        return Ok(());
+    }'''
+
+[[mutant]]
+name = "toBlob: the callback not called"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''        host.call_blob_callback(&callback);'''
+to = '''        drop(callback);'''
+
+[[mutant]]
+name = "blob: native line endings ignored"
+file = "crates/dom_api_next/src/blob.rs"
+from = '''            BlobPart::String(text) if native => to_native_line_endings(text, &mut bytes),'''
+to = '''            BlobPart::String(text) if false => to_native_line_endings(text, &mut bytes),'''
+
+[[mutant]]
+name = "blob: a CRLF two line endings"
+file = "crates/dom_api_next/src/blob.rs"
+from = '''                chars.next_if_eq(&'\n');'''
+to = '''                chars.next_if_eq(&'x');'''
+
+[[mutant]]
+name = "blob: a type not lowercased"
+file = "crates/dom_api_next/src/blob.rs"
+from = '''        type_.to_ascii_lowercase()'''
+to = '''        type_.to_owned()'''
+
+[[mutant]]
+name = "blob: a type of any characters kept"
+file = "crates/dom_api_next/src/blob.rs"
+from = '''if type_.chars().all(|c| ('\u{20}'..='\u{7e}').contains(&c)) {'''
+to = '''if type_.chars().all(|_| true) {'''
+
+[[mutant]]
+name = "blob: a negative position not from the end"
+file = "crates/dom_api_next/src/blob.rs"
+from = '''        size.saturating_add(position).max(0)'''
+to = '''        position.max(0)'''
+
+[[mutant]]
+name = "blob: a position past the end kept"
+file = "crates/dom_api_next/src/blob.rs"
+from = '''        position.min(size)'''
+to = '''        position'''
+
+[[mutant]]
+name = "blob: a slice's type not normalized"
+file = "crates/dom_api_next/src/blob.rs"
+from = '''content_type.map_or_else(String::new, normalize_type)'''
+to = '''content_type.map_or_else(String::new, str::to_owned)'''
+
+[[mutant]]
+name = "blob: the BOM kept"
+file = "crates/dom_api_next/src/blob.rs"
+from = '''let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);'''
+to = '''let bytes = bytes.strip_prefix(b"").unwrap_or(bytes);'''
+
+[[mutant]]
+name = "blob: a blob part's bytes left out"
+file = "crates/dom_api_next/src/blob.rs"
+from = '''            BlobPart::Blob(blob) => bytes.extend_from_slice(cx.blob_data(blob).bytes()),'''
+to = '''            BlobPart::Blob(_) => {}'''
+
+[[mutant]]
+name = "blob: no size"
+file = "crates/dom_api_next/src/blob.rs"
+from = '''    Ok(cx.blob_data(this).bytes().len() as f64)'''
+to = '''    Ok(0.0)'''
+
+[[mutant]]
+name = "clamp: NaN not 0"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        let value = if value.is_nan() {
+            0.0
+        } else {'''
+to = '''        let value = if value.is_nan() {
+            1.0
+        } else {'''
+
+[[mutant]]
+name = "clamp: rounded toward 0"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''.round_ties_even()'''
+to = '''.trunc()'''
+
+[[mutant]]
+name = "front: a quality that isn't a number converted"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        value.is_number().then(|| value.number_value(self.scope.scope())).flatten()'''
+to = '''        value.number_value(self.scope.scope())'''
+
+[[mutant]]
+name = "front: a blob part a string"
+file = "crates/dom_js_next/src/front.rs"
+from = '''            let part = if bindings::is_wrapper::<dom_next::Blob>(scope, value) {'''
+to = '''            let part = if false {'''
+
+[[mutant]]
+name = "front: a view part a string"
+file = "crates/dom_js_next/src/front.rs"
+from = '''            } else if let Ok(view) = v8::Local::<v8::ArrayBufferView>::try_from(value) {'''
+to = '''            } else if let Some(view) = None::<v8::Local<'_, v8::ArrayBufferView>> {'''
+
+[[mutant]]
+name = "front: no parts a TypeError"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        if value.is_undefined() {
+            return Some(None);
+        }
+        let mut parts = Vec::new();'''
+to = '''        let mut parts = Vec::new();'''
+
+[[mutant]]
+name = "front: bytes() an ArrayBuffer"
+file = "crates/dom_js_next/src/front.rs"
+from = '''let value: v8::Local<'_, v8::Value> = if view {'''
+to = '''let value: v8::Local<'_, v8::Value> = if false {'''
+
+[[mutant]]
+name = "sequence: the items converted after the iteration"
+file = "crates/dom_js_next/src/observable_array.rs"
+from = '''        let item = result.get(scope, value_key.into())?;
+        f(scope, item)?;'''
+to = '''        let item = result.get(scope, value_key.into())?;
+        let _ = (&mut f, item);'''
+
+[[mutant]]
+name = "listeners: the callback called with null"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''        Some(blob) => wrap(scope, blob).into(),'''
+to = '''        Some(_) => v8::null(scope.scope()).into(),'''
+
+[[mutant]]
+name = "encoder: a JPEG a PNG"
+file = "crates/renderer/src/canvas_encoder.rs"
+from = '''            raster::encode_jpeg(pixels, size, bitmap.opaque, quality)'''
+to = '''            raster::encode_png(pixels, size, bitmap.opaque)'''
+
+[[mutant]]
+name = "renderer: the toBlob calls not sent"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            self.start_next_canvas_encodes();
+'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: an encoded file not handed to the DOM"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        engine.dom_mut().mutate(|cx| cx.canvas_encoded(id, file));'''
+to = '''        let _ = (engine, id, file);'''
+
+[[mutant]]
+name = "renderer: toDataURL with no encoder"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        crate::canvas_encoder::encode_bitmap(bitmap, encoding)'''
+to = '''        { let _ = (bitmap, encoding); None }'''
+
+[[mutant]]
+name = "today's DOM: a JPEG's URL of PNG's type"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    (encoding, encoding.mime_type())'''
+to = '''    (encoding, "image/png")'''

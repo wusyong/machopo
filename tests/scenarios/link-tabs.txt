@@ -1,0 +1,15 @@
+# A link with a target opens a new tab, shown, after the one it came from.
+# Closing it goes back to that one. The scenario's clicks
+# hold no keys: the middle button and the keys for a tab behind are in
+# `browser_view`'s tests.
+navigate pages/link-tabs.html
+wait-loaded
+wait-text #name "links"
+click #open
+wait-text #name "two"
+# Its page drawn before it takes input.
+wait-loaded
+click #b
+wait-text #out "clicked 1"
+key primary+w
+wait-text #name "links"

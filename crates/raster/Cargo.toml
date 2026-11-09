@@ -1,0 +1,29 @@
+[package]
+name = "raster"
+description = "Plays a compositor_paint display list back into a bitmap (Skia raster path)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+base.workspace = true
+gfx.workspace = true
+compositor_paint.workspace = true
+tracing.workspace = true
+trace_event.workspace = true
+skia-safe.workspace = true
+read-fonts.workspace = true
+# A canvas's `toDataURL` and `toBlob` as PNG, as Blink encodes one.
+png.workspace = true
+
+[dev-dependencies]
+fdeflate.workspace = true

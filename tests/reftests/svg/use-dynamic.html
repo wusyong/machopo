@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>A use follows what it references: a changed attribute, another href, an element given the id later</title>
+<link rel="match" href="rect-ref.html">
+<style>body { margin: 0 } svg { display: block }</style>
+<svg width="100" height="60">
+  <defs><rect id="r" width="20" height="10" fill="lime"/><rect id="other" width="20" height="20" fill="red"/></defs>
+  <use id="u1" href="#r" x="10" y="10"/>
+  <use id="u2" href="#other" x="30" y="10"/>
+  <use href="#later" x="30" y="10"/>
+</svg>
+<script>
+requestAnimationFrame(() => requestAnimationFrame(() => {
+  document.getElementById("r").setAttribute("height", "20");
+  document.getElementById("u2").setAttribute("href", "#missing");
+  const later = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  for (const [k, v] of [["id", "later"], ["width", 20], ["height", 20], ["fill", "lime"]]) later.setAttribute(k, v);
+  document.querySelector("defs").append(later);
+  requestAnimationFrame(() => requestAnimationFrame(() => document.documentElement.classList.remove("reftest-wait")));
+}));
+</script>
+</html>

@@ -1,0 +1,157 @@
+# Stage 4f-1c: on the new DOM, a label's labeled control (`for`, else its
+# first labelable descendant) and `form`, a labelable element's `labels`
+# found at each ask, a fieldset's `elements` and `type`, a legend's
+# `form`.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it forms"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: a fieldset's elements any element"
+file = "crates/dom_next/src/collection.rs"
+from = '''            FIELDSET_ELEMENTS => return self.is_listed(element),'''
+to = '''            FIELDSET_ELEMENTS => return true,'''
+
+[[mutant]]
+name = "dom: a fieldset's elements a new collection each time"
+file = "crates/dom_next/src/form.rs"
+from = '''        let collection = self.new_collection(fieldset, crate::collection::FIELDSET_ELEMENTS, None);
+        association.collection.set(self.gc, Some(collection));'''
+to = '''        let collection = self.new_collection(fieldset, crate::collection::FIELDSET_ELEMENTS, None);'''
+
+[[mutant]]
+name = "dom: a fieldset's elements a form's"
+file = "crates/dom_next/src/form.rs"
+from = '''        let collection = self.new_collection(fieldset, crate::collection::FIELDSET_ELEMENTS, None);'''
+to = '''        let collection = self.new_collection(fieldset, crate::collection::FORM_ELEMENTS, None);'''
+
+[[mutant]]
+name = "dom: a legend's form any parent's"
+file = "crates/dom_next/src/form.rs"
+from = '''        if self.qualified_name(parent) != Some(QualifiedName::html(names::local::FIELDSET)) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "dom: a legend's form none"
+file = "crates/dom_next/src/form.rs"
+from = '''        self.form_owner(parent)
+    }'''
+to = '''        let _ = parent;
+        None
+    }'''
+
+[[mutant]]
+name = "dom: a label's for element whatever it is"
+file = "crates/dom_next/src/form.rs"
+from = '''                .element_by_id(root, &id.to_str())
+                .filter(|found| self.is_labelable(*found));'''
+to = '''                .element_by_id(root, &id.to_str());'''
+
+[[mutant]]
+name = "dom: a label's for in the document only"
+file = "crates/dom_next/src/form.rs"
+from = '''            let root = self.root_node(label, false);
+            return self'''
+to = '''            let root = self.document_of(label);
+            return self'''
+
+[[mutant]]
+name = "dom: a label's for not looked at"
+file = "crates/dom_next/src/form.rs"
+from = '''        if let Some(id) = self.attribute_value_by_id(label, names::local::FOR) {'''
+to = '''        if let Some(id) = self.attribute_value_by_id(label, names::NONE) {'''
+
+[[mutant]]
+name = "dom: a label's descendant any element"
+file = "crates/dom_next/src/form.rs"
+from = '''            if self.is_labelable(node) {
+                return Some(node);
+            }
+            at = self.following_within(node, label);'''
+to = '''            if self.kind(node) == crate::NodeKind::Element {
+                return Some(node);
+            }
+            at = self.following_within(node, label);'''
+
+[[mutant]]
+name = "dom: a label's descendants only its children"
+file = "crates/dom_next/src/form.rs"
+from = '''            at = self.following_within(node, label);'''
+to = '''            at = self.next_sibling(node);'''
+
+[[mutant]]
+name = "dom: a hidden input labelable"
+file = "crates/dom_next/src/form.rs"
+from = '''                    .is_some_and(|value| value.borrow().to_str().eq_ignore_ascii_case("hidden")))'''
+to = '''                    .is_some_and(|value| value.borrow().to_str() == "hidden"))'''
+
+[[mutant]]
+name = "dom: a label's form none"
+file = "crates/dom_next/src/form.rs"
+from = '''        self.form_owner(self.label_control(label)?)'''
+to = '''        self.label_control(label).and(None)'''
+
+[[mutant]]
+name = "dom: labels of a hidden input"
+file = "crates/dom_next/src/form.rs"
+from = '''        if !self.is_labelable(element) {
+            return None;
+        }
+        let association'''
+to = '''        let association'''
+
+[[mutant]]
+name = "dom: labels a new list each time"
+file = "crates/dom_next/src/form.rs"
+from = '''        let list = self.new_labels_list(element);
+        association.labels.set(self.gc, Some(list));'''
+to = '''        let list = self.new_labels_list(element);'''
+
+[[mutant]]
+name = "dom: labels any label"
+file = "crates/dom_next/src/form.rs"
+from = '''                && self.label_control(node).is_some_and(|control| Gc::ptr_eq(control, element))'''
+to = '''                && self.label_control(node).is_some()'''
+
+[[mutant]]
+name = "dom: labels any element pointing at it"
+file = "crates/dom_next/src/form.rs"
+from = '''            if self.qualified_name(node) == Some(label)
+                && self.label_control'''
+to = '''            if self.kind(node) == crate::NodeKind::Element
+                && self.label_control'''
+
+[[mutant]]
+name = "dom: labels from the whole document"
+file = "crates/dom_next/src/form.rs"
+from = '''        let root = self.root_node(element, false);
+        let label = QualifiedName::html(names::local::LABEL);'''
+to = '''        let root = self.document_of(element);
+        let label = QualifiedName::html(names::local::LABEL);'''
+
+[[mutant]]
+name = "dom: labels don't stop"
+file = "crates/dom_next/src/form.rs"
+from = '''                && self.label_control(node).is_some_and(|control| Gc::ptr_eq(control, element))
+                && !f(node)'''
+to = '''                && self.label_control(node).is_some_and(|control| Gc::ptr_eq(control, element))
+                && (f(node) && false)'''
+
+[[mutant]]
+name = "dom: a live list's labels not found"
+file = "crates/dom_next/src/lists.rs"
+from = '''            self.for_each_label(element, f);
+            return true;'''
+to = '''            let _ = (element, f);
+            return true;'''
+
+[[mutant]]
+name = "api: a fieldset's type empty"
+file = "crates/dom_api_next/src/forms.rs"
+from = '''    Ok(DomStr::Name(dom_next::names::local::FIELDSET))'''
+to = '''    Ok(DomStr::Name(dom_next::names::NONE))'''
+
+[[mutant]]
+name = "api: an input's labels never null"
+file = "crates/dom_api_next/src/interfaces.rs"
+from = '''        attribute labels: Option<NodeList>, get = forms::input_labels;'''
+to = '''        attribute labels: NodeList, get = forms::labels;'''

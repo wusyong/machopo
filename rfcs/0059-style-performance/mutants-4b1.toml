@@ -1,0 +1,65 @@
+# 4b, K1a: a frame waiting for its stylesheets takes its size for media
+# queries from the frames around it (`dom_api`'s `media_query_list.rs`, the
+# renderer's `layout_client.rs`, `frame_view.rs`).
+#   python3 scripts/test.py mutate rfcs/0059-style-performance/mutants-4b1.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "network::a_loading_frames_media_queries_leave_it_unstyled"]
+timeout = 1800
+
+[[mutant]]
+name = "media queries lay the frame out"
+file = "crates/dom_api/src/media_query_list.rs"
+from = '''                client.frame_viewport(scope, id)'''
+to = '''                client.update_style_and_layout(scope, id);
+                client.viewport(scope, id)'''
+
+[[mutant]]
+name = "the renderer lays the frame out for its size"
+file = "crates/renderer/src/layout_client.rs"
+from = '''        let size = view.frame_size_for(scope, text, viewport, device_scale_factor, document)?;'''
+to = '''        view.update_style_and_layout_for(scope, text, viewport, device_scale_factor, document);
+        let size = view.frame_size_for(scope, text, viewport, device_scale_factor, document)?;'''
+
+[[mutant]]
+name = "a frame's size not its iframe's"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        child.frame_size_for(scope, text, size, device_scale_factor, document)'''
+to = '''        child.frame_size_for(scope, text, viewport, device_scale_factor, document)'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "frame_view::tests::a_frames_size_comes_from_the_frames_around_it"]
+
+[[mutant]]
+name = "a loading frame laid out for its media queries"
+file = "crates/renderer/src/layout_client.rs"
+from = '''            .is_some_and(|frame| frame.is_waiting_for_style_sheets(scope));'''
+to = '''            .is_some_and(|_| false);'''
+
+[[mutant]]
+name = "every frame not laid out for its media queries"
+file = "crates/renderer/src/layout_client.rs"
+from = '''            .is_some_and(|frame| frame.is_waiting_for_style_sheets(scope));'''
+to = '''            .is_some_and(|_| true);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "geometry::a_child_frames_media_queries_follow_its_iframe"]
+
+[[mutant]]
+name = "a link not started doesn't count"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        self.is_render_blocked()
+            || scope.link_changes()'''
+to = '''        self.is_render_blocked()
+            && scope.link_changes()'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "network::a_frames_media_queries_before_its_link_loads_leave_it_unstyled"]
+
+[[mutant]]
+name = "another document's link counts"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                        node.root().id() == self.document.as_node().id()
+                            && style::stylesheet_link_href(node).is_some()'''
+to = '''                        style::stylesheet_link_href(node).is_some()'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "frame_view::tests::a_frame_waits_for_its_links_from_their_insertion"]
+
+[[mutant]]
+name = "a link loading doesn't count"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        self.is_render_blocked()
+            || scope.link_changes()'''
+to = '''        scope.link_changes()'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "frame_view::tests::a_frame_waits_for_its_links_from_their_insertion"]

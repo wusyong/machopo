@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<title>F6: z-index on flex items: negative under the flex container's background, positive over the later items; a stacking context in an item paints over the later items</title>
+<link rel="match" href="f6-z-index-ref.html">
+<style>
+  html, body { margin: 0 }
+  .c { display: flex; background-color: silver }
+  .c > div { width: 40px; height: 40px; margin-right: -20px }
+</style>
+<div class="c">
+  <div style="background-color: red; z-index: 2"></div>
+  <div style="background-color: blue"></div>
+  <div style="background-color: green; z-index: -1"></div>
+  <div style="background-color: yellow; z-index: 1"></div>
+</div>
+<div class="c">
+  <div><div style="height: 40px; background-color: purple; transform: translate(0px, 0px)"></div></div>
+  <div style="background-color: blue"></div>
+</div>

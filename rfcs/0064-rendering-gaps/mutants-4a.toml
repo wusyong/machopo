@@ -1,0 +1,348 @@
+# 4a: `text-shadow`, the text decorations' style, color, thickness and
+# offset, `-webkit-text-fill-color` (`computed_style`, `css`, `style`,
+# `layout`, `paint`).
+#   python3 scripts/test.py mutate rfcs/0064-rendering-gaps/mutants-4a.toml
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "artifact::"]
+timeout = 900
+
+[[mutant]]
+name = "blink not parsed"
+file = "crates/css/src/properties.rs"
+from = '''                "blink" => &mut line.blink,
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cssom::text_decorations"]
+
+[[mutant]]
+name = "from-font thickness not parsed"
+file = "crates/css/src/text_decor.rs"
+from = '''        if input
+            .try_parse(|i| i.expect_ident_matching("from-font"))
+            .is_ok()
+        {
+            return Ok(Self::FromFont);
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cssom::text_decorations"]
+
+[[mutant]]
+name = "an underline position's part twice"
+file = "crates/css/src/text_decor.rs"
+from = '''            if *taken {
+                return Err(location.new_custom_error(()));
+            }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cssom::text_decorations"]
+
+[[mutant]]
+name = "a text shadow's spread"
+file = "crates/css/src/shadow.rs"
+from = '''                    .filter(|_| !text)'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cssom::text_decorations"]
+
+[[mutant]]
+name = "an inset text shadow"
+file = "crates/css/src/shadow.rs"
+from = '''                && !text
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cssom::text_decorations"]
+
+[[mutant]]
+name = "the shorthand writes auto"
+file = "crates/css/src/serialize.rs"
+from = '''                matches!(
+                    values[1].0,
+                    Value::TextDecorationThickness(crate::text_decor::SpecifiedThickness::Auto)
+                ),'''
+to = '''                false,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cssom::text_decorations"]
+
+[[mutant]]
+name = "the computed shorthand writes currentcolor"
+file = "crates/css/src/computed.rs"
+from = '''    if rare.text_decoration_color != StyleColor::CurrentColor {'''
+to = '''    if true {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "computed::shorthands"]
+
+[[mutant]]
+name = "the computed shorthand left out"
+file = "crates/dom_api/src/computed_style.rs"
+from = '''    if let Some(value) = style::shorthand_from_style(&style, property) {'''
+to = '''    if let Some(value) = None::<String> {'''
+test = ["python3", "scripts/test.py", "wpt", "css/css-text-decor/parsing/text-decoration-computed.html"]
+
+[[mutant]]
+name = "text-shadow not inherited by unset"
+file = "crates/css/src/properties.rs"
+from = '''                | TextShadow
+                | WebkitTextFillColor
+                | Fill'''
+to = '''                | WebkitTextFillColor
+                | Fill'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "computed::text_decorations"]
+
+[[mutant]]
+name = "text-shadow not inherited"
+file = "crates/computed_style/src/lib.rs"
+from = '''            text_shadow,
+            text_fill_color,'''
+to = '''            text_fill_color,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "computed::text_decorations"]
+
+[[mutant]]
+name = "the decoration's color the text's"
+file = "crates/computed_style/src/lib.rs"
+from = '''            color: self.resolve(self.rare.text_decoration_color),'''
+to = '''            color: self.color,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cascade::text_decorations"]
+
+[[mutant]]
+name = "the ancestors' decorations dropped"
+file = "crates/computed_style/src/lib.rs"
+from = '''        parent.iter().copied().chain([own]).collect()'''
+to = '''        [own].into()'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cascade::text_decorations"]
+
+[[mutant]]
+name = "a thickness doesn't interpolate"
+file = "crates/css/src/interpolate.rs"
+from = '''            (Length(a), Length(b)) => Some(Length(a.animate(b, progress, cx)?)),'''
+to = '''            (Length(_), Length(_)) => None,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "interpolation::text_decorations"]
+
+[[mutant]]
+name = "auto offsets don't interpolate"
+file = "crates/css/src/interpolate.rs"
+from = '''            (None, None) => Some(None),
+            _ => None,
+        }
+    }
+}
+
+/// `text-decoration-thickness`'''
+to = '''            _ => None,
+        }
+    }
+}
+
+/// `text-decoration-thickness`'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "interpolation::text_decorations"]
+
+[[mutant]]
+name = "text-shadow lays out"
+file = "crates/layout/src/lib.rs"
+from = '''            text_shadow: old.text_shadow.clone(),
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::a_transform_origin_makes_fragments_only"]
+
+[[mutant]]
+name = "a decoration's style lays out"
+file = "crates/layout/src/lib.rs"
+from = '''                    text_decoration_style: old.rare.text_decoration_style,
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::a_transform_origin_makes_fragments_only"]
+
+[[mutant]]
+name = "auto thickness an eighth"
+file = "crates/paint/src/text_decoration.rs"
+from = '''        TextDecorationThickness::Auto => font_size / 10.0,'''
+to = '''        TextDecorationThickness::Auto => font_size / 8.0,'''
+
+[[mutant]]
+name = "from-font thickness auto"
+file = "crates/paint/src/text_decoration.rs"
+from = '''        TextDecorationThickness::FromFont if run.underline_size > 0.0 => run.underline_size * dsf,'''
+to = '''        TextDecorationThickness::FromFont if run.underline_size > 0.0 => font_size / 10.0,'''
+
+[[mutant]]
+name = "a thickness not rounded"
+file = "crates/paint/src/text_decoration.rs"
+from = '''        TextDecorationThickness::Length(length) => (length.resolve(run.font_size) * dsf).round(),'''
+to = '''        TextDecorationThickness::Length(length) => length.resolve(run.font_size) * dsf,'''
+
+[[mutant]]
+name = "no thinner than 0"
+file = "crates/paint/src/text_decoration.rs"
+from = '''    .max(1.0);
+    // From the top of the text'''
+to = '''    .max(0.0);
+    // From the top of the text'''
+
+[[mutant]]
+name = "a gap with an offset"
+file = "crates/paint/src/text_decoration.rs"
+from = '''        let gap = if decoration.underline_offset.is_none() {'''
+to = '''        let gap = if true {'''
+
+[[mutant]]
+name = "under at the baseline"
+file = "crates/paint/src/text_decoration.rs"
+from = '''    if position.under {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "from-font position auto"
+file = "crates/paint/src/text_decoration.rs"
+from = '''    if position.from_font && run.underline_size > 0.0 {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "an overline in the text"
+file = "crates/paint/src/text_decoration.rs"
+from = '''        Line::Over => -thickness.floor(),'''
+to = '''        Line::Over => 0.0,'''
+
+[[mutant]]
+name = "a line-through halfway"
+file = "crates/paint/src/text_decoration.rs"
+from = '''        Line::Through => 2.0 * ascent / 3.0 - thickness / 2.0,'''
+to = '''        Line::Through => ascent / 2.0 - thickness / 2.0,'''
+
+[[mutant]]
+name = "a double overline's second line below"
+file = "crates/paint/src/text_decoration.rs"
+from = '''        Line::Over => (-apart, -apart),'''
+to = '''        Line::Over => (apart, -apart),'''
+test = ["python3", "scripts/test.py", "reftest", "text/"]
+
+[[mutant]]
+name = "a solid line's top not snapped"
+file = "crates/paint/src/text_decoration.rs"
+from = '''            (rect.y + 0.5).floor(),'''
+to = '''            rect.y,'''
+
+[[mutant]]
+name = "a solid line's ends not snapped"
+file = "crates/paint/src/text_decoration.rs"
+from = '''    let (left, right) = (rect.x.round(), (rect.x + rect.width).round());'''
+to = '''    let (left, right) = (rect.x, rect.x + rect.width);'''
+test = ["python3", "scripts/test.py", "wpt", "css/css-text-decor/text-decoration-thickness-percent-001.html"]
+
+[[mutant]]
+name = "an odd width's middle on the pixel"
+file = "crates/paint/src/text_decoration.rs"
+from = '''    let y = if thickness % 2.0 == 1.0 {'''
+to = '''    let y = if false {'''
+
+[[mutant]]
+name = "dots not inset"
+file = "crates/paint/src/text_decoration.rs"
+from = '''        x0 += thickness / 2.0;'''
+to = ''''''
+
+[[mutant]]
+name = "thin dots round"
+file = "crates/paint/src/text_decoration.rs"
+from = '''    let dashed = style == TextDecorationStyle::Dashed || width <= 3.0;
+    if dashed {'''
+to = '''    let dashed = style == TextDecorationStyle::Dashed;
+    if dashed {'''
+
+[[mutant]]
+name = "thin dashes as thick ones"
+file = "crates/paint/src/text_decoration.rs"
+from = '''            let (dash_ratio, gap_ratio) = if width >= 3.0 { (2.0, 1.0) } else { (3.0, 2.0) };'''
+to = '''            let (dash_ratio, gap_ratio) = (2.0, 1.0);'''
+
+[[mutant]]
+name = "dash gaps not fitted"
+file = "crates/paint/src/text_decoration.rs"
+from = '''            gap = best_dash_gap(length, dash, gap);'''
+to = ''''''
+
+[[mutant]]
+name = "the more dashes always"
+file = "crates/paint/src/text_decoration.rs"
+from = '''    if more_gap <= 0.0 || (fewer_gap - gap).abs() < (more_gap - gap).abs() {'''
+to = '''    if more_gap <= 0.0 {'''
+
+[[mutant]]
+name = "a wave a wavelength short"
+file = "crates/paint/src/text_decoration.rs"
+from = '''    let wavelength = 1.0 + 2.0 * (2.0 * t + 0.5).round();'''
+to = '''    let wavelength = 2.0 * (2.0 * t + 0.5).round();'''
+
+[[mutant]]
+name = "a wave uncut"
+file = "crates/paint/src/text_decoration.rs"
+from = '''    let bounds = scale_rect(RectF::new(rect.x, top, rect.width, bottom - top), css);'''
+to = '''    let bounds = scale_rect(RectF::new(rect.x - 20.0, top, rect.width, bottom - top), css);'''
+
+[[mutant]]
+name = "the glyphs' shadows with them"
+file = "crates/paint/src/lib.rs"
+from = '''        self.text_shadows(
+            item,
+            DisplayItemKind::Text,
+            std::slice::from_ref(&glyphs),
+            style,
+        );
+        self.text_shadows(item, DisplayItemKind::TextDecoration, &under_over, style);
+        for (op, visual_rect) in under_over {
+            self.text_item(item, DisplayItemKind::TextDecoration, op, visual_rect);
+        }
+        self.text_item(item, DisplayItemKind::Text, glyphs.0, glyphs.1);'''
+to = '''        self.text_shadows(item, DisplayItemKind::TextDecoration, &under_over, style);
+        for (op, visual_rect) in under_over {
+            self.text_item(item, DisplayItemKind::TextDecoration, op, visual_rect);
+        }
+        self.text_shadows(
+            item,
+            DisplayItemKind::Text,
+            std::slice::from_ref(&glyphs),
+            style,
+        );
+        self.text_item(item, DisplayItemKind::Text, glyphs.0, glyphs.1);'''
+
+[[mutant]]
+name = "the first shadow first"
+file = "crates/paint/src/lib.rs"
+from = '''        for shadow in style.text_shadow.iter().rev() {'''
+to = '''        for shadow in style.text_shadow.iter() {'''
+
+[[mutant]]
+name = "transparent items painted"
+file = "crates/paint/src/lib.rs"
+from = '''        if flags.color.a == 0 {
+            return;
+        }
+        self.push('''
+to = '''        self.push('''
+
+[[mutant]]
+name = "the text filled with its color"
+file = "crates/paint/src/lib.rs"
+from = '''                flags: PaintFlags::fill(style.resolve(style.text_fill_color)),'''
+to = '''                flags: PaintFlags::fill(style.color),'''
+
+[[mutant]]
+name = "a shadow its blur radius"
+file = "crates/paint/src/text_decoration.rs"
+from = '''    let sigma = shadow.blur / 2.0;'''
+to = '''    let sigma = shadow.blur;'''
+
+[[mutant]]
+name = "a shadow's reach unspread"
+file = "crates/paint/src/text_decoration.rs"
+from = '''    let reach = 3.0 * sigma;'''
+to = '''    let reach = 0.0;'''
+
+[[mutant]]
+name = "a shadow the text's color"
+file = "crates/paint/src/text_decoration.rs"
+from = '''    let color = style.resolve(shadow.color);'''
+to = '''    let color = style.color;'''
+
+[[mutant]]
+name = "a marker's text-shadow ignored"
+file = "crates/css/src/properties.rs"
+from = '''                | OverflowWrap
+                | TextShadow
+                | Content'''
+to = '''                | OverflowWrap
+                | Content'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "matching::a_list_items_marker"]

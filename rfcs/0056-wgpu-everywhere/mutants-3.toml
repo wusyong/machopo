@@ -1,0 +1,52 @@
+# 3: every mode draws with `WgpuRenderer`: `SystemInfo.getInfo` tells the
+# adapter, the windowless browser's shared images and context loss,
+# headless's read back, and the tools' use of the adapter.
+#   python3 scripts/test.py mutate rfcs/0056-wgpu-everywhere/mutants-3.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+timeout = 1200
+
+[[mutant]]
+name = "SystemInfo.getInfo tells no adapter"
+file = "crates/shell/src/automation_session.rs"
+from = '''                let (devices, aux) = match viz::gpu_context::adapter_info() {'''
+to = '''                let (devices, aux) = match None::<wgpu::AdapterInfo> {'''
+
+[[mutant]]
+name = "SystemInfo.getInfo tells another adapter type"
+file = "crates/shell/src/automation_session.rs"
+from = '''                            "adapterType": format!("{:?}", adapter.device_type),'''
+to = '''                            "adapterType": "Gpu",'''
+
+[[mutant]]
+name = "headless reads back nothing"
+file = "crates/shell/src/headless.rs"
+from = '''    display.request_copy_of_output(CopyOutputRequest::new(move |result| {'''
+to = '''    let _ = (CopyOutputRequest::new(move |result| {'''
+
+[[mutant]]
+name = "the windowless browser's tiles not shared images"
+file = "crates/shell/src/windowless.rs"
+from = '''        Some(gpu.clone()),'''
+to = '''        None,'''
+
+[[mutant]]
+name = "the windowless toolbar not told the device was lost"
+file = "crates/shell/src/windowless.rs"
+from = '''                browser.view_mut().did_lose_context();'''
+to = '''                {}'''
+
+[[mutant]]
+name = "the CPU adapter takes half the CPUs"
+file = "scripts/test.py"
+from = '''    return ["--processes", str(max(1, cpus // 4))]'''
+to = '''    return ["--processes", str(max(1, cpus // 2))]'''
+test = ["python3", "scripts/wpt_expectations_test.py"]
+timeout = 120
+
+[[mutant]]
+name = "the CPU adapter no problem for the times"
+file = "scripts/speedometer.py"
+from = '''    if gpu["type"] == "Cpu":'''
+to = '''    if False:'''
+test = ["python3", "scripts/speedometer_test.py", "ComparisonTests"]
+timeout = 120

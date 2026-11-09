@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<style>body { margin: 0 } div div { width: 20px; height: 20px }</style>
+<div><div id="plain"></div></div>
+<div style="opacity: 0.5"><div id="faded"></div></div>
+<div style="transform: rotate(10deg)"><div id="turned"></div></div>
+<div style="position: absolute; top: 5000px"><div id="below"></div></div>
+<div style="position: absolute; left: 300px; top: 300px; transform: scale(2); transform-origin: 0 0"><div id="bigger"></div></div>
+<div style="position: absolute; left: 500px; top: 300px; transform: scale(0.5); transform-origin: 0 0"><div id="smaller"></div></div>
+<div style="filter: blur(1px)"><div id="blurred"></div></div>
+<script>
+const seen = {};
+const tracking = new IntersectionObserver(entries => {
+  for (const e of entries) seen[e.target.id] = e.isVisible;
+}, {trackVisibility: true, delay: 100});
+for (const id of ['plain', 'faded', 'turned', 'below', 'bigger', 'smaller', 'blurred']) tracking.observe(document.getElementById(id));
+new IntersectionObserver(entries => { seen.untracked = entries[0].isVisible; }).observe(document.getElementById('plain'));
+function run() { return new Promise(r => setTimeout(r, 800)).then(() => JSON.stringify(seen)); }
+</script>

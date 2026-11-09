@@ -1,0 +1,47 @@
+# Stage 4e: a dispatch's path through shadow trees retargets its target
+# and related target once a tree scope (`Retargeter`: DOM's retarget reads
+# its `b` only through its tree scope), and asks whether a parent is in
+# the target's tree once a scope (`shadow_path`'s `last_in`). `dom_js`'s
+# shadow DOM tests (the debug build's count of retargets; the related
+# targets listeners see), then WPT's `shadow-dom/`.
+test = ["sh", "-c", "export RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts; systemd-run --user --scope -q -p MemoryMax=24G -p MemorySwapMax=0 --setenv=RUSTY_V8_ARCHIVE=$RUSTY_V8_ARCHIVE cargo test -q -p dom_js --test it shadow_dom:: && python3 scripts/test.py wpt shadow-dom/"]
+timeout = 1200
+
+[[mutant]]
+name = "dom_api: a retarget kept for another tree scope"
+file = "crates/dom_api/src/event_target.rs"
+from = '''        if let Some((last, result)) = self.last
+            && last.same(key)
+        {'''
+to = '''        if let Some((_, result)) = self.last {'''
+
+[[mutant]]
+name = "dom_api: a retarget never kept"
+file = "crates/dom_api/src/event_target.rs"
+from = '''        self.last = Some((key, result));'''
+to = '''        let _ = key;'''
+
+[[mutant]]
+name = "dom_api: every node's tree scope the document's"
+file = "crates/dom_api/src/event_target.rs"
+from = '''            TargetRef::Node(node) => Self::Node(cx.containing_shadow_root(node)),'''
+to = '''            TargetRef::Node(_) => Self::Node(None),'''
+
+[[mutant]]
+name = "dom_api: a shadow root's tree scope its own tree's host's"
+file = "crates/dom_api/src/event_target.rs"
+from = '''            TargetRef::Node(node) if cx.is_shadow_root(node) => Self::Node(Some(node)),'''
+to = '''            TargetRef::Node(node) if cx.is_shadow_root(node) && false => Self::Node(Some(node)),'''
+
+[[mutant]]
+name = "dom_api: whether a parent is in the target's tree kept past a new target"
+file = "crates/dom_api/src/event_target.rs"
+from = '''            // The target so far is another: its tree another.
+            last_in = None;'''
+to = '''            // The target so far is another: its tree another.'''
+
+[[mutant]]
+name = "dom_api: whether a parent is in the target's tree kept for another scope"
+file = "crates/dom_api/src/event_target.rs"
+from = '''            Some((last, in_tree)) if last.same(key) => in_tree,'''
+to = '''            Some((_, in_tree)) => in_tree,'''

@@ -1,0 +1,102 @@
+# Stage 4g-3d: SVG images on the new DOM: the XML parser into the new DOM, an image/svg+xml
+# response made a document of the page's DOM (styled once), kept by the frame by number;
+# the DOM's images raster or SVG (its natural size, over the density); layout sizing an SVG
+# <img>; paint drawing one in a box or a background, painted for each size it is asked at.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p renderer --lib next_frame_view && cargo test -q -p dom_next --test it images && cargo test -q -p layout --test it -- next && cargo test -q -p html --test it xml"]
+timeout = 3000
+
+[[mutant]]
+name = "xml: the DOCTYPE's entities not expanded"
+file = "crates/html/src/next.rs"
+from = '''    let input = crate::xml::prepare(input);'''
+to = '''    let input = std::borrow::Cow::Borrowed(input);'''
+
+[[mutant]]
+name = "xml: an HTML document"
+file = "crates/html/src/next.rs"
+from = '''    let document = dom.mutate(|cx| NextHandle::new(cx, cx.create_document(false)));
+    let mut sink = NextSink::<dyn ParserHost>::new(document);
+    sink.scripts_never_run = true;'''
+to = '''    let document = dom.mutate(|cx| NextHandle::new(cx, cx.create_document(true)));
+    let mut sink = NextSink::<dyn ParserHost>::new(document);
+    sink.scripts_never_run = true;'''
+
+[[mutant]]
+name = "image: an SVG image no size"
+file = "crates/dom_next/src/image.rs"
+from = '''            Self::Svg(_, natural) => natural.dom_size(),'''
+to = '''            Self::Svg(_, _) => gfx::Size::default(),'''
+
+[[mutant]]
+name = "image: an SVG image's dimensions not over the density"
+file = "crates/dom_next/src/image.rs"
+from = '''                    let corrected = |length: f32| base::numerics::f32_from_f64(f64::from(length) / current.density);'''
+to = '''                    let corrected = |length: f32| base::numerics::f32_from_f64(f64::from(length));'''
+
+[[mutant]]
+name = "image: an SVG image not shown"
+file = "crates/dom_next/src/image.rs"
+from = '''                (ImageRequestState::CompletelyAvailable, Some(Image::Svg(image, natural)), _) => {'''
+to = '''                (ImageRequestState::CompletelyAvailable, Some(Image::Svg(image, natural)), _) if false => {'''
+
+[[mutant]]
+name = "gfx: an SVG image's height not through its ratio"
+file = "crates/gfx/src/svg.rs"
+from = '''        let height = self.height.or_else(|| Some(self.width? / self.ratio?));
+        crate::Size::new('''
+to = '''        let height = self.height;
+        crate::Size::new('''
+
+[[mutant]]
+name = "gfx: an SVG image's default width"
+file = "crates/gfx/src/svg.rs"
+from = '''            clamp_round(width.unwrap_or(300.0)),'''
+to = '''            clamp_round(width.unwrap_or(150.0)),'''
+
+[[mutant]]
+name = "layout: an SVG img failed"
+file = "crates/layout/src/next.rs"
+from = '''        dom_next::ImageState::Loaded(dom_next::Image::Svg(image, natural)) => {
+            ImageState::Svg { image, natural }
+        }'''
+to = '''        dom_next::ImageState::Loaded(dom_next::Image::Svg(..)) => ImageState::Failed,'''
+
+[[mutant]]
+name = "renderer: a background's SVG image not found"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            dom_next::Image::Svg(image, natural) => Some((*image, *natural)),'''
+to = '''            dom_next::Image::Svg(..) => None,'''
+
+[[mutant]]
+name = "renderer: a size not painted yet not noted"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            self.missing.borrow_mut().push((image, size, client));'''
+to = '''            let _ = (size, client);'''
+
+[[mutant]]
+name = "renderer: what paint asked for not painted"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''                        image.prepare(cx, token, text, size, self.device_scale_factor);'''
+to = '''                        let _ = (image, cx, size);'''
+
+[[mutant]]
+name = "renderer: what asked not painted again"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            self.paint_controller.invalidate(clients);
+            artifact = self'''
+to = '''            let _ = clients;
+            artifact = self'''
+
+[[mutant]]
+name = "renderer: an image of any root"
+file = "crates/renderer/src/svg_image.rs"
+from = '''            return (cx.qualified_name(node)
+                == Some(dom_next::QualifiedName::svg(dom_next::names::local::SVG)))
+            .then_some(node);'''
+to = '''            return Some(node);'''
+
+[[mutant]]
+name = "renderer: one paint for every scale"
+file = "crates/renderer/src/svg_image.rs"
+from = '''        device_scale_factor.to_bits(),'''
+to = '''        0,'''

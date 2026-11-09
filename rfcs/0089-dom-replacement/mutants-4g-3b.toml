@@ -1,0 +1,344 @@
+# Stage 4g-3b: on the new DOM, SVG's <use> copies what it references into its UA shadow tree
+# before style (the <use>s in a copy too, no cycles, at most MAX_COPIES elements) and copies
+# again as its reference or what it copied changes; a copy matches its <use>'s tree's rules;
+# layout captures the copy as the <use>, and draws again what an id found (gradients,
+# <clipPath>s, an HTML box's clip-path) when an id finds another element or what it found
+# changed.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it svg_use && cargo test -q -p style_next --test it && cargo test -q -p layout --test it -- next"]
+timeout = 3000
+
+[[mutant]]
+name = "use: a control's UA tree is a use's"
+file = "crates/dom_next/src/svg_use.rs"
+from = '''        (self.shadow_root_init(root)?.mode == ShadowRootMode::UserAgent && self.is_svg_use(host))'''
+to = '''        (self.shadow_root_init(root)?.mode == ShadowRootMode::UserAgent)'''
+
+[[mutant]]
+name = "use: the outermost use is the nearest"
+file = "crates/dom_next/src/svg_use.rs"
+from = '''        while let Some(outer) = self.use_tree_host(host) {'''
+to = '''        while let Some(outer) = None::<NodeRef<'gc>> {'''
+
+[[mutant]]
+name = "use: one back is not copied again"
+file = "crates/dom_next/src/svg_use.rs"
+from = '''                    Some(tree) => tree.dirty |= connected,'''
+to = '''                    Some(tree) => tree.dirty |= false,'''
+
+[[mutant]]
+name = "use: one connected is not kept"
+file = "crates/dom_next/src/svg_use.rs"
+from = '''                    None if connected => trees.uses.push(UseTree {'''
+to = '''                    None if false => trees.uses.push(UseTree {'''
+
+[[mutant]]
+name = "use: an element with an id moved changes no id"
+file = "crates/dom_next/src/svg_use.rs"
+from = '''            if has_id {
+                trees.ids_changed = true;
+            }'''
+to = '''            if has_id {
+                trees.ids_changed = false;
+            }'''
+
+[[mutant]]
+name = "use: an href changed is not copied again"
+file = "crates/dom_next/src/svg_use.rs"
+from = '''        if id || (href && self.is_svg_use(element)) {'''
+to = '''        if id || (false && self.is_svg_use(element)) {'''
+
+[[mutant]]
+name = "use: an xlink:href changed is not copied again"
+file = "crates/dom_next/src/svg_use.rs"
+from = '''            && (name.namespace() == names::NONE || name.namespace() == names::XLINK_NAMESPACE);'''
+to = '''            && name.namespace() == names::NONE;'''
+
+[[mutant]]
+name = "use: an id changed changes no id"
+file = "crates/dom_next/src/svg_use.rs"
+from = '''                trees.ids_changed |= id;'''
+to = '''                trees.ids_changed |= false;'''
+
+[[mutant]]
+name = "use: what it copied changing doesn't copy again"
+file = "crates/dom_next/src/svg_use.rs"
+from = '''                        if tree.targets.contains(&id) {
+                            tree.dirty = true;'''
+to = '''                        if tree.targets.contains(&id) {
+                            tree.dirty = false;'''
+
+[[mutant]]
+name = "use: only a change to what it copied, not in it"
+file = "crates/dom_next/src/svg_use.rs"
+from = '''                at = self.parent(ancestor);'''
+to = '''                at = None;'''
+
+[[mutant]]
+name = "use: an id changing alone copies nothing again"
+file = "crates/dom_next/src/svg_use.rs"
+from = '''        if !(trees.stale || trees.ids_changed) {'''
+to = '''        if !trees.stale {'''
+
+[[mutant]]
+name = "use: its lookups not made again"
+file = "crates/dom_next/src/svg_use.rs"
+from = '''            if ids_changed && !tree.dirty {'''
+to = '''            if false && ids_changed && !tree.dirty {'''
+
+[[mutant]]
+name = "use: one that left keeps its copy"
+file = "crates/dom_next/src/svg_use.rs"
+from = '''                if let Some(element) = self.node_by_id(tree.element) {
+                    self.clear_use_copy(element);
+                }'''
+to = '''                if let Some(element) = self.node_by_id(tree.element) {
+                    let _ = element;
+                }'''
+
+[[mutant]]
+name = "use: too many copies kept"
+file = "crates/dom_next/src/svg_use.rs"
+from = '''        if !self.copy_into(user, &mut copying) {
+            self.clear_use_copy(user);
+        }'''
+to = '''        if !self.copy_into(user, &mut copying) {
+            let _ = user;
+        }'''
+
+[[mutant]]
+name = "use: any target copied"
+file = "crates/dom_next/src/svg_use.rs"
+from = '''        let Some(target) = target.filter(|target| self.is_copied(*target)) else {'''
+to = '''        let Some(target) = target else {'''
+
+[[mutant]]
+name = "use: no cycle looked for"
+file = "crates/dom_next/src/svg_use.rs"
+from = '''        if self.has_cycle(user, target) {'''
+to = '''        if false && self.has_cycle(user, target) {'''
+
+[[mutant]]
+name = "use: referencing itself no cycle"
+file = "crates/dom_next/src/svg_use.rs"
+from = '''        if Gc::ptr_eq(user, target) {'''
+to = '''        if false && Gc::ptr_eq(user, target) {'''
+
+[[mutant]]
+name = "use: a cycle looked for past SVG"
+file = "crates/dom_next/src/svg_use.rs"
+from = '''        while let Some(ancestor) = at.filter(|at| self.is_svg_element(*at)) {'''
+to = '''        while let Some(ancestor) = at {'''
+
+[[mutant]]
+name = "use: texts not copied"
+file = "crates/dom_next/src/svg_use.rs"
+from = '''                NodeKind::Text => true,'''
+to = '''                NodeKind::Text => false,'''
+
+[[mutant]]
+name = "use: a script copied"
+file = "crates/dom_next/src/svg_use.rs"
+from = '''            name.namespace() == names::SVG_NAMESPACE && name.local() != names::local::SCRIPT'''
+to = '''            name.namespace() == names::SVG_NAMESPACE'''
+
+[[mutant]]
+name = "use: no xlink:href"
+file = "crates/dom_next/src/svg_use.rs"
+from = '''            .or_else(|| {
+                self.attribute_value_ns(user, Some("http://www.w3.org/1999/xlink"), "href")
+            })?;'''
+to = '''            ?;'''
+
+[[mutant]]
+name = "use: a copy's pseudo attribute is a part's"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''        if self.shadow_host(root).is_some_and(|host| self.is_svg_use(host)) {'''
+to = '''        if false && self.shadow_host(root).is_some_and(|host| self.is_svg_use(host)) {'''
+
+[[mutant]]
+name = "use: one made is not seen"
+file = "crates/dom_next/src/lib.rs"
+from = '''            self.svg_use_made();'''
+to = '''            {}'''
+
+[[mutant]]
+name = "use: connected not looked at"
+file = "crates/dom_next/src/style.rs"
+from = '''                self.svg_use_node_moved(at, true);'''
+to = '''                let _ = at;'''
+
+[[mutant]]
+name = "use: one removed not looked at"
+file = "crates/dom_next/src/style.rs"
+from = '''                self.svg_use_node_moved(at, false);'''
+to = '''                let _ = at;'''
+
+[[mutant]]
+name = "use: an attribute changed not looked at"
+file = "crates/dom_next/src/style.rs"
+from = '''                self.svg_use_attribute_changed(element, name);'''
+to = '''                let _ = name;'''
+
+[[mutant]]
+name = "use: a text's data changed not looked at"
+file = "crates/dom_next/src/style.rs"
+from = '''        if self.has_seen_uses() {
+            self.svg_use_subtree_changed(parent);
+        }'''
+to = '''        if false {
+            self.svg_use_subtree_changed(parent);
+        }'''
+
+[[mutant]]
+name = "use: children inserted not looked at"
+file = "crates/dom_next/src/style.rs"
+from = '''        if sheets {
+            self.style_sheets_changed(parent);
+        }
+        if uses {
+            self.svg_use_subtree_changed(parent);
+        }'''
+to = '''        if sheets {
+            self.style_sheets_changed(parent);
+        }'''
+
+[[mutant]]
+name = "use: children removed not looked at"
+file = "crates/dom_next/src/style.rs"
+from = '''            self.user_action_element_removed(parent, states);
+        }
+        if uses {
+            self.svg_use_subtree_changed(parent);
+        }'''
+to = '''            self.user_action_element_removed(parent, states);
+        }'''
+
+[[mutant]]
+name = "style: a copy matches its own tree's rules"
+file = "crates/style_next/src/lib.rs"
+from = '''        let scoped = cx.outermost_use(element).unwrap_or(element);'''
+to = '''        let scoped = element;'''
+
+[[mutant]]
+name = "layout: a use's copy as nodes not captured"
+file = "crates/layout/src/svg.rs"
+from = '''                None => element.use_copy().map(|root| (root, None)),'''
+to = '''                None => None,'''
+
+[[mutant]]
+name = "layout: an svg in a copy outermost"
+file = "crates/layout/src/next.rs"
+from = '''        && dom.use_tree_host(element).is_none()'''
+to = ''''''
+
+[[mutant]]
+name = "layout: lookups not noted"
+file = "crates/layout/src/svg_gradient.rs"
+from = '''            lookups.push((id, found));'''
+to = '''            let _ = found;'''
+
+[[mutant]]
+name = "layout: a change in an svg not noted"
+file = "crates/layout/src/next.rs"
+from = '''                walk.svg_changed.push(element);'''
+to = '''                let _ = element;'''
+
+[[mutant]]
+name = "layout: clients only for changes in svgs"
+file = "crates/layout/src/next.rs"
+from = '''        if self.svg_clients.is_empty() || (walk.svg_changed.is_empty() && !walk.children_changed)'''
+to = '''        if self.svg_clients.is_empty() || walk.svg_changed.is_empty()'''
+
+[[mutant]]
+name = "layout: what an id found changing not followed"
+file = "crates/layout/src/next.rs"
+from = '''                found.is_some_and(|found| touched.contains(&found))'''
+to = '''                found.is_some_and(|found| touched.contains(&found) && false)'''
+
+[[mutant]]
+name = "layout: in what an id found, only it"
+file = "crates/layout/src/next.rs"
+from = '''                at = dom.dom.parent(node);
+            }
+        }
+        let mut stale = Vec::new();'''
+to = '''                at = None;
+            }
+        }
+        let mut stale = Vec::new();'''
+
+[[mutant]]
+name = "layout: an id finding another not followed"
+file = "crates/layout/src/next.rs"
+from = '''                    || dom
+                        .dom
+                        .element_by_id(scope, looked_up)
+                        .map(|element| dom.id(element))
+                        != *found'''
+to = '''                    || false'''
+
+[[mutant]]
+name = "layout: ids looked up in the element"
+file = "crates/layout/src/next.rs"
+from = '''            while let Some(parent) = dom.dom.parent(scope) {
+                scope = parent;
+            }'''
+to = '''            while let Some(parent) = None::<NodeRef<'gc>> {
+                scope = parent;
+            }'''
+
+[[mutant]]
+name = "layout: a stale svg not captured again"
+file = "crates/layout/src/next.rs"
+from = '''                walk.collect(Container::Box(element, index));
+            } else {'''
+to = '''                let _ = index;
+            } else {'''
+
+[[mutant]]
+name = "layout: a stale box's clip kept"
+file = "crates/layout/src/next.rs"
+from = '''                self.boxes[index].clip_source = clip;
+                self.note_svg_client(id, lookups);
+                self.mark_needs_layout(index);'''
+to = '''                let _ = clip;
+                self.note_svg_client(id, lookups);
+                self.mark_needs_layout(index);'''
+
+[[mutant]]
+name = "layout: an svg captured again keeps its clip"
+file = "crates/layout/src/next.rs"
+from = '''                self.note_svg_client(cx.dom.id(element), lookups);
+                self.boxes[index].clip_source = clip;'''
+to = '''                self.note_svg_client(cx.dom.id(element), lookups);
+                let _ = clip;'''
+
+[[mutant]]
+name = "layout: an HTML box's clip not built"
+file = "crates/layout/src/next.rs"
+from = '''        layout_box.clip_source = clip;'''
+to = '''        let _ = clip;'''
+
+[[mutant]]
+name = "layout: an HTML box not a client"
+file = "crates/layout/src/next.rs"
+from = '''        self.note_svg_client(id, lookups);
+        layout_box.span = span(cx.dom, element);'''
+to = '''        let _ = lookups;
+        layout_box.span = span(cx.dom, element);'''
+
+[[mutant]]
+name = "layout: an svg built not a client"
+file = "crates/layout/src/next.rs"
+from = '''                replaced
+            };
+            self.note_svg_client(id, lookups);'''
+to = '''                replaced
+            };
+            let _ = lookups;'''
+
+[[mutant]]
+name = "layout: a capture again not counted"
+file = "crates/layout/src/next.rs"
+from = '''                cx.stats.svg_captured = cx.stats.svg_captured.wrapping_add(1);'''
+to = ''''''

@@ -1,0 +1,203 @@
+# Mutation test of step 2b (net's methods, bodies and redirect modes):
+# python3 scripts/test.py mutate rfcs/0027-fetch/mutants-2b.toml
+test = ["cargo", "test", "-q", "-p", "net", "--test", "load"]
+timeout = 900
+
+# --- net: the request -------------------------------------------------------
+
+[[mutant]]
+name = "a forbidden method"
+file = "crates/net/src/url_loader.rs"
+from = '''    if !is_token(&request.method) || is_forbidden_method(&request.method) {'''
+to = '''    if !is_token(&request.method) {'''
+
+[[mutant]]
+name = "no Origin"
+file = "crates/net/src/cors.rs"
+from = '''            headers.push(("Origin".to_owned(), self.request_origin().to_owned()));'''
+to = '''            let _ = self.request_origin();'''
+
+[[mutant]]
+name = "an Origin on a GET"
+file = "crates/net/src/cors.rs"
+from = '''        if self.tainting == ResponseTainting::Cors || !matches!(method, "GET" | "HEAD") {'''
+to = '''        if self.tainting == ResponseTainting::Cors || !matches!(method, "HEAD") {'''
+
+[[mutant]]
+name = "a HEAD of a data: URL has a body"
+file = "crates/net/src/url_loader.rs"
+from = '''            if request.method == "HEAD" {
+                response.body.clear();
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "the body isn't sent"
+file = "crates/net/src/http.rs"
+from = '''            Some(body) => request = request.body(body.to_vec()),'''
+to = '''            Some(_) => {}'''
+
+[[mutant]]
+name = "no Content-Length for an empty POST"
+file = "crates/net/src/http.rs"
+from = '''        let empty_body = matches!(method, reqwest::Method::POST | reqwest::Method::PUT);'''
+to = '''        let empty_body = false;'''
+
+[[mutant]]
+name = "the method isn't sent"
+file = "crates/net/src/http.rs"
+from = '''        let mut request = client.request(method, url.as_str());'''
+to = '''        let _ = method;
+        let mut request = client.request(reqwest::Method::GET, url.as_str());'''
+
+# --- net: redirects ---------------------------------------------------------
+
+[[mutant]]
+name = "an error redirect is followed"
+file = "crates/net/src/url_loader.rs"
+from = '''                RedirectMode::Follow => {}
+                RedirectMode::Error => {'''
+to = '''                RedirectMode::Follow | RedirectMode::Error => {}
+                RedirectMode::Manual if false => {'''
+
+[[mutant]]
+name = "a manual redirect is followed"
+file = "crates/net/src/url_loader.rs"
+from = '''                RedirectMode::Manual => return Ok(filter(&cors, finish(url, raw, false))),'''
+to = '''                RedirectMode::Manual => {}'''
+
+[[mutant]]
+name = "a 302 keeps a POST"
+file = "crates/net/src/url_loader.rs"
+from = '''                if (matches!(raw.status, 301 | 302) && method == "POST")'''
+to = '''                if (matches!(raw.status, 301) && method == "POST")'''
+
+[[mutant]]
+name = "a 301 changes any method"
+file = "crates/net/src/url_loader.rs"
+from = '''                if (matches!(raw.status, 301 | 302) && method == "POST")'''
+to = '''                if (matches!(raw.status, 301 | 302) && method != "GET")'''
+
+[[mutant]]
+name = "a 303 keeps a HEAD"
+file = "crates/net/src/url_loader.rs"
+from = '''                    || (raw.status == 303 && !matches!(method.as_str(), "GET" | "HEAD"))'''
+to = '''                    || (raw.status == 303 && method != "GET")'''
+
+[[mutant]]
+name = "a 303 keeps the method"
+file = "crates/net/src/url_loader.rs"
+from = '''                    || (raw.status == 303 && !matches!(method.as_str(), "GET" | "HEAD"))'''
+to = '''                    || (raw.status == 333 && !matches!(method.as_str(), "GET" | "HEAD"))'''
+
+[[mutant]]
+name = "a GET keeps the body"
+file = "crates/net/src/url_loader.rs"
+from = '''                    method = "GET".to_owned();
+                    body = None;'''
+to = '''                    method = "GET".to_owned();'''
+
+[[mutant]]
+name = "a GET keeps the body's headers"
+file = "crates/net/src/url_loader.rs"
+from = '''                    headers.retain(|(name, _)| !is_request_body_header_name(name));'''
+to = ''''''
+
+[[mutant]]
+name = "Authorization goes to another origin"
+file = "crates/net/src/url_loader.rs"
+from = '''                if next.origin() != url.origin() {'''
+to = '''                if next.origin() == url.origin() && false {'''
+
+[[mutant]]
+name = "Authorization never goes on"
+file = "crates/net/src/url_loader.rs"
+from = '''                if next.origin() != url.origin() {'''
+to = '''                if true {'''
+
+[[mutant]]
+name = "a Location's other bytes are lost"
+file = "crates/net/src/url_loader.rs"
+from = '''            decoded.push_str(&format!("%{byte:02X}"));'''
+to = '''            let _ = byte;
+            decoded.push('\u{fffd}');'''
+test = ["python3", "scripts/test.py", "wpt", "fetch/api/redirect/redirect-location-escape"]
+
+# --- dom_api and the renderer: what goes, what comes back ----------------------
+
+[[mutant]]
+name = "fetch() sends no body"
+file = "crates/dom_api/src/fetch.rs"
+from = '''    let body = data.body.as_deref().map(<[u8]>::to_vec);'''
+to = '''    let body = data.body.as_deref().map(|_| Vec::new());'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "fetch", "fetch_of_a_request"]
+
+[[mutant]]
+name = "fetch() follows a manual request's redirects"
+file = "crates/dom_api/src/fetch.rs"
+from = '''            RequestRedirect::Manual => RedirectMode::Manual,'''
+to = '''            RequestRedirect::Manual => RedirectMode::Follow,'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "fetch", "fetch_of_a_request"]
+
+[[mutant]]
+name = "a manual redirect isn't filtered"
+file = "crates/dom_api/src/fetch.rs"
+from = '''    if redirect == RedirectMode::Manual && matches!(response.status, 301 | 302 | 303 | 307 | 308) {'''
+to = '''    if redirect == RedirectMode::Manual && false {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "fetch", "methods_bodies_and_redirect_modes"]
+
+[[mutant]]
+name = "an opaque redirect has its status"
+file = "crates/dom_api/src/fetch.rs"
+from = '''            response_type: ResponseType::OpaqueRedirect,
+            url: Some(response.url),
+            redirected: false,
+            status: 0,'''
+to = '''            response_type: ResponseType::OpaqueRedirect,
+            url: Some(response.url),
+            redirected: false,
+            status: response.status,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "fetch", "methods_bodies_and_redirect_modes"]
+
+[[mutant]]
+name = "an opaque redirect has its headers"
+file = "crates/dom_api/src/fetch.rs"
+from = '''    if redirect == RedirectMode::Manual && matches!(response.status, 301 | 302 | 303 | 307 | 308) {
+        let headers = cx
+            .mutate()
+            .create_headers(Vec::new(), HeadersGuard::Immutable);'''
+to = '''    if redirect == RedirectMode::Manual && matches!(response.status, 301 | 302 | 303 | 307 | 308) {
+        let headers = cx
+            .mutate()
+            .create_headers(response.headers.clone(), HeadersGuard::Immutable);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "fetch", "methods_bodies_and_redirect_modes"]
+
+[[mutant]]
+name = "the renderer sends a GET"
+file = "crates/renderer/src/loader.rs"
+from = '''        resource.method = request.method;'''
+to = '''        let _ = request.method;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "fetch", "methods_bodies_and_redirect_modes"]
+
+[[mutant]]
+name = "the renderer sends no body"
+file = "crates/renderer/src/loader.rs"
+from = '''        resource.body = request.body;'''
+to = '''        let _ = request.body;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "fetch", "methods_bodies_and_redirect_modes"]
+
+[[mutant]]
+name = "the renderer follows every redirect"
+file = "crates/renderer/src/loader.rs"
+from = '''        resource.redirect = request.redirect;'''
+to = '''        let _ = request.redirect;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "fetch", "methods_bodies_and_redirect_modes"]
+
+[[mutant]]
+name = "the response doesn't know the redirect mode"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                            fetch.redirect,
+                            fetch.abort,'''
+to = '''                            protocol::network::RedirectMode::Follow,
+                            fetch.abort,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "fetch", "methods_bodies_and_redirect_modes"]

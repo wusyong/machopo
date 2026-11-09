@@ -1,0 +1,19 @@
+# Step 0a: cppgc's phases in the trace, and the Speedometer phase report
+# counting them as GC.
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "trace::"]
+timeout = 900
+
+[[mutant]]
+name = "kun's trace doesn't record cppgc"
+file = "crates/bindings/src/trace.rs"
+from = '''    "devtools.timeline",
+    "cppgc",'''
+to = '''    "devtools.timeline",'''
+
+[[mutant]]
+name = "CppGC slices take no phase"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''    if name.startswith("CppGC."):'''
+to = '''    if name.startswith("CppGC.") and False:'''
+test = ["python3", "scripts/bench/speedometer/speedometer_test.py", "-k", "test_each_browser_names_its_phases"]
+timeout = 60

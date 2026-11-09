@@ -1,0 +1,54 @@
+# Stage 4h-3c-2, through the renderer with keyframes computed: replaced animations removed,
+# `commitStyles()`'s values, a target changed, a frame made while others' animations started,
+# script's animations that don't run kept on a restyle.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it -- next_dom::effects_replaced_committed_and_retargeted next_dom::animations_of_a_frame_made_while_starting_others next_dom::script_animations_not_running_kept_when_restyled"]
+timeout = 1800
+
+[[mutant]]
+name = "renderer: every frame's animations start"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            if Some(frame) == top || shown.contains(&frame) {'''
+to = '''            if true || Some(frame) == top || shown.contains(&frame) {'''
+
+[[mutant]]
+name = "renderer: frames below a child frame not shown"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            frames.extend(child.child_frame());
+            child.child_frames_shown(frames);'''
+to = '''            frames.extend(child.child_frame());'''
+
+[[mutant]]
+name = "dom: a changed target not styled again"
+file = "crates/dom_next/src/animations.rs"
+from = '''    pub fn animations_changed(&self, element: NodeRef<'gc>) {
+        self.set_needs_style_recalc(element);'''
+to = '''    pub fn animations_changed(&self, element: NodeRef<'gc>) {
+        let _ = element;'''
+
+[[mutant]]
+name = "api: commitStyles() writes nothing"
+file = "crates/dom_api_next/src/animation.rs"
+from = '''        changed |= Arc::make_mut(&mut block).set_property(name, &value, "");'''
+to = '''        let _ = (name, value);'''
+
+[[mutant]]
+name = "api: commitStyles() commits the base value"
+file = "crates/dom_api_next/src/animation.rs"
+from = '''            let style = target.animations.apply_up_to(now, &target.base, id);'''
+to = '''            let style = (*target.base).clone();'''
+
+[[mutant]]
+name = "api: no remove event"
+file = "crates/dom_api_next/src/animation.rs"
+from = '''        } => (names::event::REMOVE, current_time, timeline_time),'''
+to = '''        } => {
+            let _ = (current_time, timeline_time);
+            return;
+        }'''
+
+[[mutant]]
+name = "style: script's animations that don't run not applied on a restyle"
+file = "crates/style/src/animation_style.rs"
+from = '''        || !entry.animations.others.is_empty()
+    {'''
+to = '''    {'''

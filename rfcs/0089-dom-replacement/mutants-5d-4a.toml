@@ -1,0 +1,135 @@
+# Stage 5d-4a: the known failures, the flaky WPT, 5d-3's regressions.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p html --test it && cargo test -q -p style_next --test it && cargo test -q -p dom_next --test it images:: && cargo test -q -p dom_api_next --lib idle:: && cargo test -q -p dom_api_next --test it webdriver:: && cargo test -q -p dom_js_next --test it idle:: && cargo test -q -p shell --test it -- selection_painting:: webdriver::screenshots automation_pipe::pages_are_captured geometry:: script::an_idle_period && cargo test -q -p browser --test it -- srcset_and_picture"]
+timeout = 2400
+
+[[mutant]]
+name = "dom_api_next: nothing in view to capture is not interactable"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''                .ok_or(WebDriverQueryError::NothingToCapture)'''
+to = '''                .ok_or(WebDriverQueryError::NotInteractable)'''
+
+[[mutant]]
+name = "renderer: child frames' selections not worked out"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            child.update_document_selection(cx, page, &mut changed);'''
+to = '''            let _ = (&child, page);'''
+
+[[mutant]]
+name = "renderer: child frames' selections not painted"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        tables.extend(selection_tables(&child.selected, &child.children));'''
+to = '''        let _ = child;'''
+
+[[mutant]]
+name = "dom_next: naturalWidth rounded"
+file = "crates/dom_next/src/image.rs"
+from = '''                self.with_requests(loader, |requests| requests.current.natural_size_truncated())'''
+to = '''                self.with_requests(loader, |requests| requests.current.natural_size())'''
+
+[[mutant]]
+name = "html: a CDATA section dumped as text"
+file = "crates/html/src/next.rs"
+from = '''        NodeKind::Text if cx.is_cdata_section(node) => {'''
+to = '''        NodeKind::Text if false => {'''
+
+[[mutant]]
+name = "html: a fragment has no form element pointer"
+file = "crates/html/src/next.rs"
+from = '''        scripting_enabled,
+        form,
+    )'''
+to = '''        scripting_enabled,
+        form.filter(|_| false),
+    )'''
+
+[[mutant]]
+name = "html: the fragment parser's elements on no line"
+file = "crates/html/src/next.rs"
+from = '''        self.cx
+            .set_parser_line(base::numerics::saturated_cast(self.current_line.get()));'''
+to = ''''''
+
+[[mutant]]
+name = "html: the fast path's elements on no line"
+file = "crates/html/src/fast_path_next.rs"
+from = '''                // Where its event handlers' sources are: its tag's `>`.
+                cx.set_parser_line(line);'''
+to = '''                let _ = line;'''
+
+[[mutant]]
+name = "html: the fast path counts no lines in text"
+file = "crates/html/src/fast_path.rs"
+from = '''            line = line.saturating_add(count_lines(text));'''
+to = ''''''
+
+[[mutant]]
+name = "html: a document's skipped lines not counted"
+file = "crates/html/src/fast_path_next.rs"
+from = '''            *line = line.saturating_add(skipped);'''
+to = '''            *line = line.saturating_add(skipped & 0);'''
+
+[[mutant]]
+name = "html: no document takes the fast path"
+file = "crates/html/src/next.rs"
+from = '''    if !scripting_enabled
+        && let Some(document) = dom.mutate(|cx| {'''
+to = '''    if false
+        && let Some(document) = dom.mutate(|cx| {'''
+
+[[mutant]]
+name = "html: the fast path's document in no quirks mode"
+file = "crates/html/src/fast_path_next.rs"
+from = '''    cx.set_quirks_mode(document, QuirksMode::Quirks);'''
+to = ''''''
+
+[[mutant]]
+name = "style_next: an animated element not styled for a new viewport"
+file = "crates/style_next/src/lib.rs"
+from = '''            || self.cx.read_animations(element, |_| ()).is_some()'''
+to = ''''''
+
+[[mutant]]
+name = "dom_api_next: offsetParent in an open shadow tree"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''        gc::Gc::ptr_eq(cx.retarget(node, Some(element)), node)'''
+to = '''        !cx.is_closed_shadow_hidden(node, element)'''
+
+[[mutant]]
+name = "dom_next: a slot's fallback not styled as it shows"
+file = "crates/dom_next/src/style.rs"
+from = '''                if self.kind(at) == NodeKind::Element {
+                    self.set_flags(at, needs);
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "style_next: attr() lowercased in XHTML"
+file = "crates/style_next/src/lib.rs"
+from = '''            && *self.cx.document_content_type(document).to_str() == *"text/html";'''
+to = ''';'''
+
+[[mutant]]
+name = "renderer: style has no viewport before the first layout"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        if selected == *document {
+            view.set_viewport_unstyled(*viewport, *device_scale_factor);
+        }'''
+to = '''        let _ = (viewport, device_scale_factor, document);'''
+
+[[mutant]]
+name = "renderer: an idle period not cut at the next frame"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            .map(|end| frame.map_or(end, |frame| end.min(frame)))'''
+to = '''            .map(|end| frame.map_or(end, |_| end))'''
+
+[[mutant]]
+name = "dom_api_next: the time remaining rounded past the deadline"
+file = "crates/dom_api_next/src/idle.rs"
+from = '''        (remaining * STEPS_PER_MS).floor() / STEPS_PER_MS'''
+to = '''        (remaining * STEPS_PER_MS).round() / STEPS_PER_MS'''
+
+[[mutant]]
+name = "html: a template's contents have the form element pointer"
+file = "crates/html/src/next.rs"
+from = '''    let form = (!is(context, names::local::TEMPLATE))'''
+to = '''    let form = true'''

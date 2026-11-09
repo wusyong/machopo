@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<title>G1: grid tracks (fixed, fr, repeat), gaps, auto-placement and placement by line number and span</title>
+<link rel="match" href="g1-tracks-and-placement-ref.html">
+<style>
+  html, body { margin: 0 }
+  .g { display: grid; width: 360px; grid-template-columns: 60px repeat(2, 1fr 2fr);
+       grid-auto-rows: 20px; column-gap: 0; row-gap: 10px; background-color: silver }
+</style>
+<div class="g">
+  <div style="background-color: blue"></div>
+  <div style="background-color: green; grid-column: 3 / span 2"></div>
+  <div style="background-color: orange; grid-row: 2; grid-column: -2"></div>
+  <div style="background-color: purple"></div>
+</div>

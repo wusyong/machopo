@@ -1,0 +1,66 @@
+# Mutation test of stage 5c2: the matched properties cache:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-5c2.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it"]
+timeout = 900
+
+[[mutant]]
+name = "the cache isn't asked"
+file = "crates/style/src/lib.rs"
+from = '''        cache.filter(|_| animated_font_size.is_none() && MatchedPropertiesCache::takes(&blocks));'''
+to = '''        cache.filter(|_| false && MatchedPropertiesCache::takes(&blocks));'''
+
+[[mutant]]
+name = "an animated font size's cascade is kept"
+file = "crates/style/src/lib.rs"
+from = '''        cache.filter(|_| animated_font_size.is_none() && MatchedPropertiesCache::takes(&blocks));'''
+to = '''        cache.filter(|_| MatchedPropertiesCache::takes(&blocks));'''
+
+[[mutant]]
+name = "inherit of a property not inherited is kept"
+file = "crates/style/src/lib.rs"
+from = '''        if cascaded.style.explicit_inheritance {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a cascade is kept the first time"
+file = "crates/style/src/lib.rs"
+from = '''        if !self.entries.contains_key(&hash) && self.missed.insert(hash) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "the root font size isn't compared"
+file = "crates/style/src/lib.rs"
+from = '''            && self.root_font_size.to_bits() == key.root_font_size.to_bits()'''
+to = ''''''
+
+[[mutant]]
+name = "the environment isn't compared"
+file = "crates/style/src/lib.rs"
+from = '''            && self.env == key.env'''
+to = ''''''
+
+[[mutant]]
+name = "a shared parent isn't compared"
+file = "crates/style/src/lib.rs"
+from = '''                .is_some_and(|parent| Arc::ptr_eq(parent, &self.parent))'''
+to = '''                .is_some()'''
+
+[[mutant]]
+name = "the parent isn't compared"
+file = "crates/style/src/lib.rs"
+from = '''                || self.parent.same_inherited(key.parent))'''
+to = '''                || true)'''
+
+[[mutant]]
+name = "new document sheets keep the old cascades"
+file = "crates/style/src/lib.rs"
+from = '''        // them.
+        self.matched_properties.borrow_mut().clear();'''
+to = '''        // them.'''
+
+[[mutant]]
+name = "a new base URL keeps the old cascades"
+file = "crates/style/src/lib.rs"
+from = '''            // Its cascades had it at the same address.
+            self.matched_properties.borrow_mut().clear();'''
+to = '''            // Its cascades had it at the same address.'''

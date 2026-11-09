@@ -1,0 +1,30 @@
+# Tabs: opened, switched and closed with the shortcuts. Queries,
+# clicks and navigations go to the tab shown, and a tab keeps its page while
+# another is shown.
+navigate pages/tab-one.html
+wait-loaded
+wait-text #name "one"
+# A new tab, shown; the address field's navigation goes to it.
+key primary+t
+navigate pages/tab-two.html
+wait-loaded
+wait-text #name "two"
+click #b
+wait-text #out "clicked 1"
+# Back and forth, around the ends.
+key ctrl+Tab
+wait-text #name "one"
+key ctrl+shift+Tab
+wait-text #out "clicked 1"
+key primary+1
+wait-text #name "one"
+key primary+9
+wait-text #name "two"
+click #b
+wait-text #out "clicked 2"
+# Closing the tab shown shows the one left.
+key primary+1
+wait-text #name "one"
+key primary+w
+wait-text #name "two"
+wait-text #out "clicked 2"

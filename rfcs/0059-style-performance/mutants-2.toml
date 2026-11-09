@@ -1,0 +1,141 @@
+# 2: render-blocked start_loads (`renderer`'s `frame_view.rs`), `rendered`
+# carried down style's walk and the animations' fast path (`style`'s
+# `lib.rs`, `animations.rs`), presentation attributes kept on the element
+# and shared (`dom`'s `scope.rs`, `style`'s `hints.rs`).
+#   python3 scripts/test.py mutate rfcs/0059-style-performance/mutants-2.toml
+test = ["cargo", "test", "-q", "-p", "style"]
+timeout = 1200
+
+[[mutant]]
+name = "start_loads styles while a stylesheet loads"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        if self.is_render_blocked() {
+            self.background_images_unchecked = true;
+            return;
+        }'''
+to = '''        if false {
+            self.background_images_unchecked = true;
+            return;
+        }'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "frame_view::"]
+
+[[mutant]]
+name = "load doesn't wait for the look"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        if self.is_render_blocked() {
+            self.background_images_unchecked = true;
+            return;
+        }'''
+to = '''        if self.is_render_blocked() {
+            return;
+        }'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "frame_view::"]
+
+[[mutant]]
+name = "the document's children not rendered"
+file = "crates/style/src/lib.rs"
+from = '''                descendants: None,
+                rendered_above: Some(true),
+            })'''
+to = '''                descendants: None,
+                rendered_above: Some(false),
+            })'''
+
+[[mutant]]
+name = "an element's own display not carried down"
+file = "crates/style/src/lib.rs"
+from = '''            let rendered = above && style.display != Display::None;
+            if node.is_slot() {'''
+to = '''            let rendered = above;
+            if node.is_slot() {'''
+
+[[mutant]]
+name = "a shadow tree rendered whatever its host"
+file = "crates/style/src/lib.rs"
+from = '''                    descendants: None,
+                    rendered_above: Some(rendered),
+                }));'''
+to = '''                    descendants: None,
+                    rendered_above: Some(true),
+                }));'''
+
+[[mutant]]
+name = "what is assigned to a slot rendered whatever the slot"
+file = "crates/style/src/lib.rs"
+from = '''                                    rendered_above: rendered_slots.get(&slot.id()).copied(),'''
+to = '''                                    rendered_above: Some(true),'''
+
+[[mutant]]
+name = "a slot's fallback children take it as their parent"
+file = "crates/style/src/lib.rs"
+from = '''                        rendered_above: (!node.is_slot()).then_some(rendered),'''
+to = '''                        rendered_above: Some(rendered),'''
+
+[[mutant]]
+name = "a child assigned to an unstyled slot taken as assigned to none"
+file = "crates/style/src/lib.rs"
+from = '''                                rendered_above: slot.is_none().then_some(true),'''
+to = '''                                rendered_above: Some(true),'''
+
+[[mutant]]
+name = "an element with a transition skips its style change"
+file = "crates/style/src/animations.rs"
+from = '''        if !may_animate(&base) && !may_transition(&base) && !table.targets.contains_key(&target)'''
+to = '''        if !may_animate(&base) && !table.targets.contains_key(&target)'''
+
+[[mutant]]
+name = "an element with animations skips its style change"
+file = "crates/style/src/animations.rs"
+from = '''        if !may_animate(&base) && !may_transition(&base) && !table.targets.contains_key(&target)'''
+to = '''        if !may_animate(&base) && !may_transition(&base)'''
+
+[[mutant]]
+name = "presentation attributes kept past a change"
+file = "crates/dom/src/scope.rs"
+from = '''                } => presentation_style.take(),'''
+to = '''                } => presentation_style.clone(),'''
+
+[[mutant]]
+name = "presentation attributes dropped for a class"
+file = "crates/dom/src/scope.rs"
+from = '''        } else if !name.is_attr(&local_name!("id")) && !name.is_attr(&local_name!("class")) {
+            // Its presentation attributes may say otherwise'''
+to = '''        } else {
+            // Its presentation attributes may say otherwise'''
+
+[[mutant]]
+name = "the kept presentation attributes not used"
+file = "crates/style/src/hints.rs"
+from = '''        let hints = match element.presentation_style() {'''
+to = '''        let hints = match None::<(Arc<CssPropertyValueSet>, u64)> {'''
+
+[[mutant]]
+name = "a path's d in the shared cache"
+file = "crates/style/src/hints.rs"
+from = '''        if name == "d" && local == "path" {
+            if let Some(segments)'''
+to = '''        if name == "d" && local == "path" && cache.is_none() {
+            if let Some(segments)'''
+
+[[mutant]]
+name = "attributes that aren't presentation attributes in the shared cache"
+file = "crates/style/src/hints.rs"
+from = '''            && !(SVG_PRESENTATION_ATTRIBUTES.contains(&name) && !(animation && name == "fill"))
+        {
+            continue;
+        }'''
+to = '''            && !(SVG_PRESENTATION_ATTRIBUTES.contains(&name) && !(animation && name == "fill"))
+        {
+        }'''
+
+[[mutant]]
+name = "the shared cache never starts again"
+file = "crates/style/src/hints.rs"
+from = '''        if self.len >= PRESENTATION_ATTRIBUTE_CACHE_SIZE {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "the shared cache keeps nothing"
+file = "crates/style/src/hints.rs"
+from = '''            .insert(value.into(), declarations.clone());'''
+to = '''            ;'''

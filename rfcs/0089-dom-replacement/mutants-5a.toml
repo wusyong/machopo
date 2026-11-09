@@ -1,0 +1,33 @@
+# Stage 5a: the scenarios judged by their known failures.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--lib", "scenario::"]
+timeout = 900
+
+[[mutant]]
+name = "a failure the list doesn't name passes"
+file = "crates/shell/src/scenario.rs"
+from = '''        if !passed && !known.contains(name) {'''
+to = '''        if false && !passed && !known.contains(name) {'''
+
+[[mutant]]
+name = "a known failure that passes is kept"
+file = "crates/shell/src/scenario.rs"
+from = '''        if ran.peek().is_some() && ran.all(|(_, passed)| *passed) {'''
+to = '''        if ran.peek().is_some() && ran.any(|(_, passed)| *passed) {'''
+
+[[mutant]]
+name = "a known failure that didn't run is taken off"
+file = "crates/shell/src/scenario.rs"
+from = '''        if ran.peek().is_some() && ran.all(|(_, passed)| *passed) {'''
+to = '''        if ran.all(|(_, passed)| *passed) {'''
+
+[[mutant]]
+name = "a name no scenario has passes"
+file = "crates/shell/src/scenario.rs"
+from = '''        if !names.contains(name) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "comments stay in the names"
+file = "crates/shell/src/scenario.rs"
+from = '''        .map(|line| line.split('#').next().unwrap_or("").trim())'''
+to = '''        .map(str::trim)'''

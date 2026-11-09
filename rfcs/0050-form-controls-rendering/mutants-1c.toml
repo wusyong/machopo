@@ -1,0 +1,134 @@
+# 1c: what the theme adjusts an element with an `appearance` to (`style`'s
+# `theme`), the UA rules it brought (a hidden input's `appearance`, `<mark>`),
+# a button's fit-content width and flow root, and which controls render
+# their `::before` and `::after` (`layout`).
+#   python3 scripts/test.py mutate rfcs/0050-form-controls-rendering/mutants-1c.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::", "update::form_controls"]
+timeout = 900
+
+[[mutant]]
+name = "every element is adjusted, an appearance or not"
+file = "crates/style/src/theme.rs"
+from = '''    if style.appearance != Appearance::None {'''
+to = '''    if true {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "form_controls::"]
+
+[[mutant]]
+name = "a list item with an appearance stays one"
+file = "crates/style/src/theme.rs"
+from = '''            Display::Table(TableDisplay::Table) | Display::ListItem => Display::Block,'''
+to = '''            Display::Table(TableDisplay::Table) => Display::Block,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "form_controls::"]
+
+[[mutant]]
+name = "an inline element with an appearance stays inline"
+file = "crates/style/src/theme.rs"
+from = '''            Display::Inline | Display::InlineTable | Display::Table(_) => Display::InlineBlock,'''
+to = '''            Display::InlineTable | Display::Table(_) => Display::InlineBlock,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "form_controls::"]
+
+[[mutant]]
+name = "a table part with an appearance stays one"
+file = "crates/style/src/theme.rs"
+from = '''            Display::Inline | Display::InlineTable | Display::Table(_) => Display::InlineBlock,'''
+to = '''            Display::Inline | Display::InlineTable => Display::InlineBlock,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "form_controls::"]
+
+[[mutant]]
+name = "a hidden input has a native look"
+file = "crates/style/resources/html.css"
+from = '''input[type=hidden i] {
+  appearance: none;
+'''
+to = '''input[type=hidden i] {
+'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "form_controls::"]
+
+[[mutant]]
+name = "mark has no background"
+file = "crates/style/resources/html.css"
+from = '''  background-color: Mark;
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cascade::user_agent_text_rules"]
+
+[[mutant]]
+name = "an input button has no button layout"
+file = "crates/layout/src/control.rs"
+from = '''            ["button", "submit", "reset"]'''
+to = '''            ["button", "reset"]'''
+
+[[mutant]]
+name = "a button isn't a flow root"
+file = "crates/layout/src/lib.rs"
+from = '''    taffy_style.contain = taffy::Contain::PAINT;
+    if !in_flex_or_grid'''
+to = '''    if !in_flex_or_grid'''
+
+[[mutant]]
+name = "a button in a block fills it"
+file = "crates/layout/src/lib.rs"
+from = '''        taffy_style.size.width = taffy::Dimension::fit_content();'''
+to = ''''''
+
+[[mutant]]
+name = "a flex item button is fit-content"
+file = "crates/layout/src/lib.rs"
+from = '''    if !in_flex_or_grid && style.width == Size::Auto {'''
+to = '''    if style.width == Size::Auto {'''
+
+[[mutant]]
+name = "a button's given width is fit-content"
+file = "crates/layout/src/lib.rs"
+from = '''    if !in_flex_or_grid && style.width == Size::Auto {'''
+to = '''    if !in_flex_or_grid {'''
+
+[[mutant]]
+name = "a button's taffy style isn't its own"
+file = "crates/layout/src/lib.rs"
+from = '''            } else if b.button {
+                b.taffy_style =
+                    button_taffy_style(&b.style, b.role, container.is_some(), &self.calcs);
+            }'''
+to = '''            }'''
+
+[[mutant]]
+name = "a restyled button keeps its box"
+file = "crates/layout/src/lib.rs"
+from = '''                if self.boxes[index].control.is_some() || self.boxes[index].button =>'''
+to = '''                if self.boxes[index].control.is_some() =>'''
+
+[[mutant]]
+name = "a flex button's content is centered"
+file = "crates/layout/src/lib.rs"
+from = '''            let centered = if b.button && !b.style.display.is_flexible_or_grid() {'''
+to = '''            let centered = if b.button {'''
+
+[[mutant]]
+name = "a select renders its pseudo-elements"
+file = "crates/layout/src/control.rs"
+from = '''    if name.is_html(&local_name!("textarea")) || name.is_html(&local_name!("select")) {'''
+to = '''    if name.is_html(&local_name!("textarea")) {'''
+
+[[mutant]]
+name = "every input renders its pseudo-elements"
+file = "crates/layout/src/control.rs"
+from = '''    if !name.is_html(&local_name!("input")) {
+        return true;
+    }'''
+to = '''    if true {
+        return true;
+    }'''
+
+[[mutant]]
+name = "a check box renders no pseudo-elements"
+file = "crates/layout/src/control.rs"
+from = '''            "checkbox"
+                | "radio"'''
+to = '''            "radio"'''
+
+[[mutant]]
+name = "no control renders its pseudo-elements"
+file = "crates/layout/src/lib.rs"
+from = '''        if !control::has_generated_children(element) {'''
+to = '''        if element.element_name().is_some_and(|n| n.is_html(&local_name!("input")) || n.is_html(&local_name!("textarea")) || n.is_html(&local_name!("select"))) {'''

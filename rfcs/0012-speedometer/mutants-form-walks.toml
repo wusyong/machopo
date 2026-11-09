@@ -1,0 +1,85 @@
+# Mutation test of the form bookkeeping's walks (2026-10-13): descendants
+# along the child and sibling edges, each subtree walked once a batch, and
+# only a form's submit buttons depending on their tree:
+# python3 scripts/test.py mutate rfcs/0012-speedometer/mutants-form-walks.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "forms::"]
+timeout = 900
+
+# Descendants.
+
+[[mutant]]
+name = "descendants go on past the node"
+file = "crates/dom_api/src/node.rs"
+from = '''        if node.id() == root {
+            return None;
+        }
+        if let Some(sibling) = node.next_sibling() {'''
+to = '''        if let Some(sibling) = node.next_sibling() {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+
+[[mutant]]
+name = "descendants leave out grandchildren"
+file = "crates/dom_api/src/node.rs"
+from = '''        next = current
+            .first_child()
+            .or_else(|| next_skipping_children(current, root));'''
+to = '''        next = next_skipping_children(current, root);'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+
+[[mutant]]
+name = "a walk doesn't go into children"
+file = "crates/dom_api/src/node.rs"
+from = '''        let next = if visit(current) {
+            current.first_child()
+        } else {
+            None
+        };'''
+to = '''        visit(current);
+        let next = None;'''
+
+# Each subtree walked once.
+
+[[mutant]]
+name = "a subtree walked already counts for nothing"
+file = "crates/dom_api/src/form_states.rs"
+from = '''                tree |= walked;
+                return false;'''
+to = '''                return false;'''
+
+[[mutant]]
+name = "a subtree walked is recorded as having nothing that depends on its tree"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        self.walked.insert(node.id(), tree);'''
+to = '''        self.walked.insert(node.id(), false);'''
+
+[[mutant]]
+name = "a change in a subtree walked already counts for nothing"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        if let Some(tree) = walked {
+            return tree;
+        }'''
+to = '''        if walked.is_some() {
+            return false;
+        }'''
+
+# A form's submit buttons.
+
+[[mutant]]
+name = "a form's submit button doesn't depend on its tree"
+file = "crates/dom_api/src/form_states.rs"
+from = '''(element.form_owner().is_some() && is_submit_button(element))'''
+to = '''(element.form_owner().is_none() && is_submit_button(element))'''
+
+[[mutant]]
+name = "a submit button leaving its form leaves its default button as it was"
+file = "crates/dom_api/src/listed_element.rs"
+from = '''        crate::form_states::form_owner_changed(&mut m, element, old);'''
+to = ''''''
+
+[[mutant]]
+name = "only other elements leaving a form change its default button"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        && is_submit_button(element.get(&m.read()))
+    {'''
+to = '''        && !is_submit_button(element.get(&m.read()))
+    {'''

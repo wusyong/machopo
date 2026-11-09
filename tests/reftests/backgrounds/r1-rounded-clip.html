@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<title>Border radius 1: a circular avatar cuts its content to the circle (overflow: hidden), as its own background would be cut</title>
+<link rel="match" href="r1-rounded-clip-ref.html">
+<!-- Only the curves' anti-aliasing differs: Skia's anti-aliased clip is a
+     coarser mask than its drawing, and the clip and the border meet at the
+     padding edge's curve, each partly covering the same pixels. -->
+<meta name="fuzzy" content="maxDifference=0-90;totalPixels=0-420">
+<style>
+  html, body { margin: 0 }
+  .avatar { width: 80px; height: 80px; border-radius: 50%; overflow: hidden; margin: 10px }
+  .avatar div { width: 120px; height: 120px; background: green }
+</style>
+<div class="avatar"><div></div></div>
+<!-- Elliptical corners, and the clip inside a border: its curve is the
+     padding edge's. -->
+<div class="avatar" style="width: 100px; height: 60px; border: 10px solid blue;
+                           border-radius: 30px / 20px"><div></div></div>

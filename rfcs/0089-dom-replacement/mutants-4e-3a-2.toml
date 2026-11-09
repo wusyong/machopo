@@ -1,0 +1,332 @@
+# Stage 4e-3a-2: stylesheet invalidation in `style_next`
+# (`rule_set_invalidation.rs`): the rules of the sheets that came and went,
+# what finds the elements they may match, applied in the walk; an assigned
+# node's sibling sets marked along its DOM siblings, a walk after for those
+# passed.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p style_next"]
+timeout = 3000
+
+[[mutant]]
+name = "lookup: no id"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''        if !self.ids.is_empty()
+            && cx.attribute_value_by_id(element, names::ID)'''
+to = '''        if false
+            && cx.attribute_value_by_id(element, names::ID)'''
+
+[[mutant]]
+name = "lookup: an id not lowercased"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''                    self.ids.contains(&id.to_ascii_lowercase())'''
+to = '''                    self.ids.contains(&*id)'''
+
+[[mutant]]
+name = "lookup: no class"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''        if !self.classes.is_empty()
+            && cx
+                .class_names(element)'''
+to = '''        if false
+            && cx
+                .class_names(element)'''
+
+[[mutant]]
+name = "lookup: no attribute"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''        if !self.attributes.is_empty()
+            && (0..cx.attribute_count(element))'''
+to = '''        if false
+            && (0..cx.attribute_count(element))'''
+
+[[mutant]]
+name = "lookup: no name"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''        !self.names.is_empty()
+            && cx
+                .element_name(element)'''
+to = '''        false
+            && cx
+                .element_name(element)'''
+
+[[mutant]]
+name = "media rules left out"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''                !rule.media.matches(environment)
+                    || rule.rules.iter().all(|rule| self.add_rule(rule, environment))'''
+to = '''                true'''
+
+[[mutant]]
+name = "media rules that don't match counted"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''                !rule.media.matches(environment)
+                    || rule.rules'''
+to = '''                false
+                    || rule.rules'''
+
+[[mutant]]
+name = "supports rules left out"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''                !rule.supported || rule.rules.iter().all(|rule| self.add_rule(rule, environment))'''
+to = '''                true'''
+
+[[mutant]]
+name = "keyframes not everything"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''            CssRule::Keyframes(_) | CssRule::Keyframe(_) => false,'''
+to = '''            CssRule::Keyframes(_) | CssRule::Keyframe(_) => true,'''
+
+[[mutant]]
+name = ":has() not everything"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''            .any(|component| nests(component, |c| matches!(c, Component::Has(_))))
+        {
+            return false;
+        }'''
+to = '''            .any(|component| nests(component, |c| matches!(c, Component::Has(_))))
+        {
+            return true;
+        }'''
+
+[[mutant]]
+name = "a host's rule not left out"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''            .any(|component| matches!(component, Component::Slotted(_) | Component::Host(_)))'''
+to = '''            .any(|component| matches!(component, Component::Slotted(_)))'''
+
+[[mutant]]
+name = "the subject's features as a subtree"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''            } else {
+                self.own.add(&features);
+            }'''
+to = '''            } else {
+                self.subtree.add(&features);
+            }'''
+
+[[mutant]]
+name = "an ancestor's features as its own"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''        if !combinators[left].is_sibling() {
+            self.subtree.add(&features);'''
+to = '''        if !combinators[left].is_sibling() {
+            self.own.add(&features);'''
+
+[[mutant]]
+name = "a run of + reaches all"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''                .then(|| u8::try_from(run.len()).unwrap_or(u8::MAX)),
+            siblings: InvalidationFeatures::of(&compounds[target]),
+            restyle: target == 0,
+            descendants: if target == 0 {
+                InvalidationFeatures::default()
+            } else {
+                every
+            },'''
+to = '''                .then(|| u8::try_from(run.len()).unwrap_or(u8::MAX)).filter(|_| false),
+            siblings: InvalidationFeatures::of(&compounds[target]),
+            restyle: target == 0,
+            descendants: if target == 0 {
+                InvalidationFeatures::default()
+            } else {
+                every
+            },'''
+
+[[mutant]]
+name = "the sibling not restyled"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''            siblings: InvalidationFeatures::of(&compounds[target]),
+            restyle: target == 0,
+            descendants: if target == 0 {
+                InvalidationFeatures::default()
+            } else {
+                every
+            },'''
+to = '''            siblings: InvalidationFeatures::of(&compounds[target]),
+            restyle: false,
+            descendants: if target == 0 {
+                InvalidationFeatures::default()
+            } else {
+                every
+            },'''
+
+[[mutant]]
+name = "nothing below the sibling"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''            descendants: if target == 0 {
+                InvalidationFeatures::default()
+            } else {
+                every
+            },
+        };
+        let mut lookup'''
+to = '''            descendants: InvalidationFeatures::default(),
+        };
+        let _ = every;
+        let mut lookup'''
+
+[[mutant]]
+name = "find: no sibling sets"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''            if features.matches(cx, element) {
+                siblings.push(set);
+            }'''
+to = '''            if features.matches(cx, element) {
+                let _ = set;
+            }'''
+
+[[mutant]]
+name = "changed rules: none cancel"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''            .filter(|(_, rule)| both(address(rule)).is_none())'''
+to = '''            .filter(|(_, rule)| true || both(address(rule)).is_none())'''
+
+[[mutant]]
+name = "changed rules: places not compared"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''            if old_place != new_place || last.is_some_and(|last| last > old_index) {'''
+to = '''            if last.is_some_and(|last| last > old_index) {'''
+
+[[mutant]]
+name = "changed rules: order not compared"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''            if old_place != new_place || last.is_some_and(|last| last > old_index) {'''
+to = '''            if old_place != new_place {'''
+
+[[mutant]]
+name = "changed rules: twice taken as once"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''                .and_modify(|entry| entry.1 = usize::MAX)'''
+to = '''                .and_modify(|_| {})'''
+
+[[mutant]]
+name = "changed rules: a kept sheet's rules counted"
+file = "crates/style_next/src/rule_set_invalidation.rs"
+from = '''            if sheet.kept {
+                #[expect(clippy::arithmetic_side_effects, reason = "one per sheet: a slice's")]
+                {
+                    kept += 1;
+                }
+            } else if let Some(sheet_rules) = sheet.rules {'''
+to = '''            if sheet.kept {
+                #[expect(clippy::arithmetic_side_effects, reason = "one per sheet: a slice's")]
+                {
+                    kept += 1;
+                }
+            }
+            if let Some(sheet_rules) = sheet.rules {'''
+
+[[mutant]]
+name = "sheets kept in another order"
+file = "crates/style_next/src/lib.rs"
+from = '''    if !kept_order.is_sorted() {
+        return SheetsChange::Everything;
+    }'''
+to = '''    if false && !kept_order.is_sorted() {
+        return SheetsChange::Everything;
+    }'''
+
+[[mutant]]
+name = "a sheet kept by its contents alone"
+file = "crates/style_next/src/lib.rs"
+from = '''                    && Arc::ptr_eq(&old[at].contents, &sheet.contents)
+                    && Arc::ptr_eq(&old[at].media, &sheet.media)'''
+to = '''                    && Arc::ptr_eq(&old[at].contents, &sheet.contents)'''
+
+[[mutant]]
+name = "a sheet's media not looked at"
+file = "crates/style_next/src/lib.rs"
+from = '''                rules: sheet
+                    .media
+                    .matches(environment)
+                    .then(|| sheet.contents.rules()),'''
+to = '''                rules: Some(sheet.contents.rules()),'''
+
+[[mutant]]
+name = "every change everything"
+file = "crates/style_next/src/lib.rs"
+from = '''        .map_or(SheetsChange::Everything, SheetsChange::Rules)'''
+to = '''        .map_or(SheetsChange::Everything, |_| SheetsChange::Everything)'''
+
+[[mutant]]
+name = "a change of rules alone doesn't walk"
+file = "crates/style_next/src/lib.rs"
+from = '''            && !matches!(change, SheetsChange::Rules(_))
+        {
+            return;
+        }'''
+to = '''        {
+            return;
+        }'''
+
+[[mutant]]
+name = "found: not its subtree"
+file = "crates/style_next/src/lib.rs"
+from = '''            || found.subtree
+'''
+to = '''
+'''
+
+[[mutant]]
+name = "found: not itself"
+file = "crates/style_next/src/lib.rs"
+from = '''            || found.own
+'''
+to = '''
+'''
+
+[[mutant]]
+name = "found in a shadow tree too"
+file = "crates/style_next/src/lib.rs"
+from = '''            Some(rules) if self.cx.containing_shadow_root(element).is_none() => {'''
+to = '''            Some(rules) => {'''
+
+[[mutant]]
+name = "a change of rules doesn't go down"
+file = "crates/style_next/src/lib.rs"
+from = '''            || verify_children
+            || self.rules.is_some()'''
+to = '''            || verify_children'''
+
+[[mutant]]
+name = "an assigned node's siblings not marked"
+file = "crates/style_next/src/lib.rs"
+from = '''                .is_some_and(|parent| self.cx.shadow_root(parent).is_some())
+        {
+            self.mark_siblings(element, &invalidated);'''
+to = '''                .is_some_and(|parent| self.cx.shadow_root(parent).is_some())
+            && false
+        {
+            self.mark_siblings(element, &invalidated);'''
+
+[[mutant]]
+name = "mark: every later sibling"
+file = "crates/style_next/src/lib.rs"
+from = '''            let reached = invalidated.later
+                || invalidated.siblings.iter().any(|set| {
+                    set.reach.is_none_or(|reach| after <= usize::from(reach))
+                        && set.siblings.matches(cx, sibling)
+                });'''
+to = '''            let reached = invalidated.later || !invalidated.siblings.is_empty();'''
+
+[[mutant]]
+name = "mark: reach not counted"
+file = "crates/style_next/src/lib.rs"
+from = '''                    set.reach.is_none_or(|reach| after <= usize::from(reach))
+                        && set.siblings.matches(cx, sibling)'''
+to = '''                    set.siblings.matches(cx, sibling)'''
+
+[[mutant]]
+name = "mark: later not"
+file = "crates/style_next/src/lib.rs"
+from = '''            let reached = invalidated.later
+                ||'''
+to = '''            let reached = false
+                ||'''
+
+[[mutant]]
+name = "no walk after"
+file = "crates/style_next/src/lib.rs"
+from = '''        if cx.style_flags(document).contains(StyleFlags::CHILD_NEEDS_STYLE_RECALC) {
+            cx.clear_style_flags(document);'''
+to = '''        if false && cx.style_flags(document).contains(StyleFlags::CHILD_NEEDS_STYLE_RECALC) {
+            cx.clear_style_flags(document);'''

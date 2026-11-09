@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<title>CSS in JS</title>
+<style>html, body { margin: 0 } button { position: absolute; left: 20px; top: 200px }</style>
+<body>
+<div id="card">A card styled from script</div>
+<button id="restyle">Restyle</button>
+<span id="note" style="position: absolute; left: 20px; top: 240px">Styled.</span>
+<script>
+  // What a CSS-in-JS library's production build does (emotion's
+  // "speedy" mode): one <style>, its rules inserted through its sheet,
+  // a class for each.
+  const style = document.head.appendChild(document.createElement("style"));
+  const sheet = style.sheet;
+  const insert = rule => sheet.insertRule(rule, sheet.cssRules.length);
+  insert(".css-card { margin: 20px; width: 200px; height: 100px; background: teal; color: white }");
+  document.getElementById("card").className = "css-card";
+  document.getElementById("restyle").onclick = () => {
+    insert(".css-wide { width: 400px; background: rebeccapurple }");
+    document.getElementById("card").className = "css-card css-wide";
+    document.getElementById("note").textContent = "Restyled.";
+  };
+</script>
+</body>

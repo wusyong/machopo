@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<title>Text effects</title>
+<style>
+  html, body { margin: 0; height: 100% }
+  body { font: 16px sans-serif; background: #f5f5f5 }
+  /* TodoMVC's footer. */
+  .info { margin: 65px auto 0; color: #4d4d4d; font-size: 11px; text-shadow: 0 1px 0 rgba(255, 255, 255, 0.5); text-align: center }
+  #lines { position: absolute; left: 20px; top: 120px; font-size: 24px; line-height: 2 }
+  #lines.decorated span { text-decoration: underline wavy red; text-shadow: 2px 2px 2px blue }
+  .dotted { text-decoration: underline dotted 2px }
+  .double { text-decoration: overline double green }
+  .hollow { color: navy; -webkit-text-fill-color: transparent; text-shadow: 3px 3px navy }
+  #decorate { position: absolute; left: 400px; top: 300px; padding: 4px 8px; border: 1px solid }
+  /* Spectrum's popover. */
+  #popover { position: absolute; left: 500px; top: 120px; width: 120px; height: 80px; background: white;
+             border-radius: 4px; filter: drop-shadow(0px 1px 4px rgba(0, 0, 0, 0.15)) }
+  #popover.blurred { filter: blur(3px) grayscale(1) }
+  #blur { position: absolute; left: 520px; top: 300px; padding: 4px 8px; border: 1px solid }
+  #note { position: absolute; left: 400px; top: 350px }
+</style>
+<body onclick="note('Clicked the page.')">
+<footer class="info"><p>Double-click to edit a todo</p><p>Part of TodoMVC</p></footer>
+<div id="lines">
+  <div class="dotted">Dotted, 2px thick</div>
+  <div class="double">A double overline</div>
+  <div class="hollow" onclick="event.stopPropagation(); note('Clicked the hollow text.')">Only its shadow</div>
+  <div><span>Wavy, shadowed</span></div>
+</div>
+<span id="decorate" onclick="event.stopPropagation(); decorate()">Decorate</span>
+<div id="popover" onclick="event.stopPropagation(); note('Clicked the popover.')">A popover</div>
+<span id="blur" onclick="event.stopPropagation(); blurPopover()">Blur</span>
+<span id="note">Nothing clicked yet.</span>
+<script>
+  function note(text) { document.getElementById("note").textContent = text; }
+  function blurPopover() {
+    document.getElementById("popover").classList.add("blurred");
+    note("Blurred.");
+  }
+  function decorate() {
+    document.getElementById("lines").classList.add("decorated");
+    note("Decorated.");
+  }
+</script>
+</body>

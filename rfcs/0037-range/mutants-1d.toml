@@ -1,0 +1,177 @@
+# Mutation test of step 1d (comparing ranges and points, toString, the
+# unsigned long conversion of a string):
+# python3 scripts/test.py mutate rfcs/0037-range/mutants-1d.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "ranges::"]
+timeout = 600
+
+[[mutant]]
+name = "commonAncestorContainer is the start's node"
+file = "crates/dom_api/src/range.rs"
+from = '''    let ancestor = std::iter::successors(Some(start), |n| n.parent())
+        .find(|a| std::iter::successors(Some(end), |n| n.parent()).any(|n| n.ptr_eq(a)))
+        .expect("a range's boundary points are in one tree");
+    Ok(ancestor.to_handle())'''
+to = '''    let _ = end;
+    Ok(start.to_handle())'''
+
+[[mutant]]
+name = "how isn't taken modulo 2^16"
+file = "crates/dom_api/src/range.rs"
+from = '''    let how = how % 0x1_0000;'''
+to = ''''''
+
+[[mutant]]
+name = "any how compares"
+file = "crates/dom_api/src/range.rs"
+from = '''    if how > 3 {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "ranges in different trees compared"
+file = "crates/dom_api/src/range.rs"
+from = '''    if !tree_root(this_start.0.get(&read)).ptr_eq(&tree_root(source_start.0.get(&read))) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "START_TO_END compares the starts"
+file = "crates/dom_api/src/range.rs"
+from = '''        1 => (&this_end, &source_start),'''
+to = '''        1 => (&this_start, &source_start),'''
+
+[[mutant]]
+name = "END_TO_START compares the ends"
+file = "crates/dom_api/src/range.rs"
+from = '''        _ => (&this_start, &source_end),'''
+to = '''        _ => (&this_end, &source_end),'''
+
+[[mutant]]
+name = "a point's doctype taken"
+file = "crates/dom_api/src/range.rs"
+from = '''    if point.kind() == NodeKind::Doctype {
+        return Err(invalid_node_type("a boundary point can't be in a doctype"));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a point past its node's length taken"
+file = "crates/dom_api/src/range.rs"
+from = '''    if offset > node_length(point) {
+        return Err(DomException::new(
+            ExceptionName::IndexSizeError,
+            format!("the offset {offset} is past the node's length"),
+        ));
+    }
+    let (start, end) = (read.range_start(this), read.range_end(this));
+    if position((point, offset), (start.0.get(read), start.1)) == Ordering::Less {'''
+to = '''    let (start, end) = (read.range_start(this), read.range_end(this));
+    if position((point, offset), (start.0.get(read), start.1)) == Ordering::Less {'''
+
+[[mutant]]
+name = "a point after the end is in the range"
+file = "crates/dom_api/src/range.rs"
+from = '''    if position((point, offset), (end.0.get(read), end.1)) == Ordering::Greater {
+        return Ok(Ordering::Greater);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a point in another tree checked as in it"
+file = "crates/dom_api/src/range.rs"
+from = '''    if !in_tree(&read, this, &node) {
+        return Ok(false);
+    }
+    Ok(point_against(&read, this, &node, offset)? == Ordering::Equal)'''
+to = '''    Ok(point_against(&read, this, &node, offset)? == Ordering::Equal)'''
+
+[[mutant]]
+name = "comparePoint takes another tree"
+file = "crates/dom_api/src/range.rs"
+from = '''    if !in_tree(&read, this, &node) {
+        return Err(wrong_document("comparePoint: the node is in another tree"));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a node without a parent doesn't intersect"
+file = "crates/dom_api/src/range.rs"
+from = '''    let Some(parent) = node.parent() else {
+        return Ok(true);
+    };'''
+to = '''    let Some(parent) = node.parent() else {
+        return Ok(false);
+    };'''
+
+[[mutant]]
+name = "a node starting at the end intersects"
+file = "crates/dom_api/src/range.rs"
+from = '''        position((parent, offset), (end.0.get(&read), end.1)) == Ordering::Less'''
+to = '''        position((parent, offset), (end.0.get(&read), end.1)) != Ordering::Greater'''
+
+[[mutant]]
+name = "a node ending at the start intersects"
+file = "crates/dom_api/src/range.rs"
+from = '''            && position((parent, offset + 1), (start.0.get(&read), start.1)) == Ordering::Greater,'''
+to = '''            && position((parent, offset + 1), (start.0.get(&read), start.1)) != Ordering::Less,'''
+
+[[mutant]]
+name = "toString leaves out the start's text"
+file = "crates/dom_api/src/range.rs"
+from = '''        text.push_str(&substring(start, start_offset, u32::MAX));'''
+to = ''''''
+
+[[mutant]]
+name = "toString leaves out the end's text"
+file = "crates/dom_api/src/range.rs"
+from = '''        text.push_str(&substring(end, 0, end_offset));'''
+to = ''''''
+
+[[mutant]]
+name = "toString takes a comment's data"
+file = "crates/dom_api/src/range.rs"
+from = '''    matches!(node.kind(), NodeKind::Text | NodeKind::CdataSection)'''
+to = '''    matches!(node.kind(), NodeKind::Text | NodeKind::CdataSection | NodeKind::Comment)'''
+
+[[mutant]]
+name = "toString takes the start's text node whole"
+file = "crates/dom_api/src/range.rs"
+from = '''            && position((node, 0), (start, start_offset)) == Ordering::Greater'''
+to = '''            && position((node, 0), (start, start_offset)) != Ordering::Less'''
+
+[[mutant]]
+name = "toString of one text node is all of it"
+file = "crates/dom_api/src/range.rs"
+from = '''        return Ok(substring(start, start_offset, end_offset).into());'''
+to = '''        return Ok(substring(start, 0, u32::MAX).into());'''
+
+[[mutant]]
+name = "a substring's units in bytes"
+file = "crates/dom_api/src/range.rs"
+from = '''    let units: Vec<u16> = node.text().unwrap_or_default().encode_utf16().collect();
+    let to = (to as usize).min(units.len());
+    String::from_utf16_lossy(&units[(from as usize).min(to)..to])'''
+to = '''    let text = node.text().unwrap_or_default();
+    let to = (to as usize).min(text.len());
+    String::from_utf8_lossy(&text.as_bytes()[(from as usize).min(to)..to]).into_owned()'''
+
+[[mutant]]
+name = "compareDocumentPosition's order reversed"
+file = "crates/dom_api/src/node.rs"
+from = '''        std::cmp::Ordering::Less => PRECEDING,
+        _ => FOLLOWING,'''
+to = '''        std::cmp::Ordering::Less => FOLLOWING,
+        _ => PRECEDING,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "api::"]
+
+[[mutant]]
+name = "unsigned long through V8's Uint32Value"
+file = "crates/dom_js/src/convert.rs"
+from = '''            let n = value.number_value(cx.scope()).ok_or(Failed::Threw)?;
+            let n = if n.is_finite() {
+                n.trunc().rem_euclid(4_294_967_296.0) + 0.0
+            } else {
+                0.0
+            };
+            Ok(Value::Number(n))'''
+to = '''            let n = value.uint32_value(cx.scope()).ok_or(Failed::Threw)?;
+            Ok(Value::Number(f64::from(n)))'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::arguments_convert_by_webidl"]

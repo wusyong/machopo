@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<title>C3: the later of equal selectors wins, and !important beats specificity</title>
+<link rel="match" href="green-squares-ref.html">
+<style>html, body { margin: 0 }</style>
+<style>
+  .a { background-color: red }
+  .a { background-color: green }
+  .b { background-color: green !important }
+  #b.b { background-color: red }
+  div { width: 100px; height: 100px }
+</style>
+<div class="a"></div>
+<div id="b" class="b" style="background-color: red"></div>

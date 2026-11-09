@@ -1,0 +1,100 @@
+# Mutation test of the form bookkeeping reading attributes borrowed, and
+# names compared local name first (2026-10-13):
+# python3 scripts/test.py mutate rfcs/0012-speedometer/mutants-attributes.toml
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "style_data::"]
+timeout = 900
+
+# dom: the borrowed readers.
+
+[[mutant]]
+name = "an attribute by name of any namespace"
+file = "crates/dom/src/scope.rs"
+from = '''                .find(|a| a.name.is_attr(local))
+                .map(|a| a.value.as_str()),'''
+to = '''                .find(|a| &*a.name.local == local)
+                .map(|a| a.value.as_str()),'''
+
+[[mutant]]
+name = "an attribute by name is the first one"
+file = "crates/dom/src/scope.rs"
+from = '''                .find(|a| a.name.is_attr(local))
+                .map(|a| a.value.as_str()),'''
+to = '''                .find(|_| local.is_empty() || true)
+                .map(|a| a.value.as_str()),'''
+
+[[mutant]]
+name = "no element has an attribute by name"
+file = "crates/dom/src/scope.rs"
+from = '''        self.attr_ref(local).is_some()
+    }'''
+to = '''        self.attr_ref(local).is_some() && local.is_empty()
+    }'''
+
+# dom: the names, local name first.
+
+[[mutant]]
+name = "an HTML name of any namespace"
+file = "crates/dom/src/node.rs"
+from = '''        &*self.local == local && self.namespace.url() == Namespace::HTML'''
+to = '''        &*self.local == local'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "forms::"]
+
+[[mutant]]
+name = "an SVG name of any namespace"
+file = "crates/dom/src/node.rs"
+from = '''        &*self.local == local && self.namespace.url() == Namespace::SVG'''
+to = '''        &*self.local == local'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::names_are_of_their_namespace"]
+
+# dom_api: the form helpers.
+
+[[mutant]]
+name = "an input's type from another attribute"
+file = "crates/dom_api/src/input.rs"
+from = '''        .attr_ref("type")
+        .and_then(|ty| {'''
+to = '''        .attr_ref("name")
+        .and_then(|ty| {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "forms::"]
+
+[[mutant]]
+name = "an input's default value from another attribute"
+file = "crates/dom_api/src/input.rs"
+from = '''    let value = element.attr_ref("value");'''
+to = '''    let value = element.attr_ref("name");'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "forms::"]
+
+[[mutant]]
+name = "an input is never checked by default"
+file = "crates/dom_api/src/input.rs"
+from = '''        checkedness: element.has_attr("checked"),'''
+to = '''        checkedness: element.has_attr("checked") && false,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "forms::"]
+
+[[mutant]]
+name = "a button's type from another attribute"
+file = "crates/dom_api/src/reset.rs"
+from = '''        let ty = element.attr_ref("type");'''
+to = '''        let ty = element.attr_ref("name");'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "forms::"]
+
+[[mutant]]
+name = "nothing is disabled by its attribute"
+file = "crates/dom_api/src/forms.rs"
+from = '''    element.has_attr("disabled")'''
+to = '''    element.has_attr("disabled") && false'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "forms::"]
+
+[[mutant]]
+name = "a form pseudo-class's attribute is never there"
+file = "crates/dom_api/src/form_states.rs"
+from = '''    element.has_attr(name)'''
+to = '''    element.has_attr(name) && false'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "forms::"]
+
+[[mutant]]
+name = "a form attribute names no form"
+file = "crates/dom_api/src/listed_element.rs"
+from = '''    let id = element.attr_ref("form")?;'''
+to = '''    let id = element.attr_ref("form").filter(|_| false)?;'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "forms::"]

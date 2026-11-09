@@ -1,0 +1,89 @@
+# Stage 1h-6: V8 sets its major GC's limits from the DOM's live bytes,
+# and resets the references to the wrappers its scavenges drop on its
+# threads in parallel (TryResetRoot):
+# gc's driven marking counts what it scans and what enters the old
+# generation meanwhile (black), and ends with them as what it uses;
+# bindings returns them from the marking's end, and dom_js_next tells V8
+# its used bytes as a total. The V8 patch's side (End's value set as the
+# embedder's size, the total reported) isn't mutated: each mutant would
+# rebuild V8 (some 11 minutes); dom_js_next's limits test covers it. Run
+# with RUSTY_V8_ARCHIVE pointing at ../third_party/rusty_v8_artifacts.
+timeout = 600
+
+[[mutant]]
+name = "the marker counts no bytes"
+file = "crates/gc/src/heap/concurrent.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--test", "it", "--", "js::"]
+from = '''            tally.bytes = tally.bytes.saturating_add(self.marks.slot_bytes(data));'''
+to = '''            let _ = data;'''
+
+[[mutant]]
+name = "what is allocated while a driven marking runs isn't counted"
+file = "crates/gc/src/heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--test", "it", "--", "js::"]
+from = '''        if self.counts_live.get() {
+            self.black_bytes
+                .set(self.black_bytes.get().saturating_add(bytes));
+        }
+        data
+'''
+to = '''        data
+'''
+
+[[mutant]]
+name = "what is promoted while a driven marking runs isn't counted"
+file = "crates/gc/src/heap/young.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--test", "it", "--", "js::"]
+from = '''        if self.counts_live.get() {
+            self.black_bytes
+                .set(self.black_bytes.get().saturating_add(old_bytes));
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "a driven marking ends with what it used, the dead too"
+file = "crates/gc/src/heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--test", "it", "--", "js::"]
+from = '''        if self.counts_live.replace(false) {'''
+to = '''        if self.counts_live.replace(false) && false {'''
+
+[[mutant]]
+name = "V8 is told what the DOM used before the marking"
+file = "crates/dom_js_next/src/state.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it", "--", "wrappers::"]
+from = '''    fn end(&self) -> usize {
+        self.dom().finish_marking()
+    }'''
+to = '''    fn end(&self) -> usize {
+        let used = self.dom().used_bytes();
+        self.dom().finish_marking();
+        used
+    }'''
+
+[[mutant]]
+name = "bindings tells V8 another size than the heap's"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it", "--", "wrappers::"]
+from = '''        let used = self.heap().end();'''
+to = '''        let used = self.heap().end().max(1 << 40);'''
+
+[[mutant]]
+name = "the DOM reports its change, not its size"
+file = "crates/dom_js_next/src/state.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it", "--", "wrappers::"]
+from = '''        self.reported.set(used);
+        bindings::report_embedder_used_size(isolate, used);'''
+to = '''        let change = used.abs_diff(self.reported.get());
+        self.reported.set(used);
+        bindings::report_embedder_used_size(isolate, change);'''
+
+[[mutant]]
+name = "a parallel reset reports a reset it didn't make"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it", "--", "wrappers::"]
+from = '''        unsafe { Self::reset(object, handle) }
+'''
+to = '''        let _ = (object, handle);
+        true
+'''

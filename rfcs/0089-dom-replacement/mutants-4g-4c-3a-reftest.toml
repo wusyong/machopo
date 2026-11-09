@@ -1,0 +1,38 @@
+# Stage 4g-4c-3a: what only the f9 and f10 reftests reach (a child frame's navigation to a
+# fragment of its document in the render thread: its URL, scrolled, nothing loaded; a srcdoc
+# document's parser).
+# Today's DOM expects f9 to fail, so the new DOM's run doesn't fail on it: it passes when
+# the new DOM alone passes it (and f10, which today's DOM passes, is no gap).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "sh", "-c", "python3 scripts/test.py reftest --next-dom frames/f9-child-location-fragment.html frames/f10-srcdoc-no-quirks.html | grep -q 'gaps 0 (in 0 tests), the new DOM alone 1,'"]
+timeout = 3000
+
+[[mutant]]
+name = "a fragment's navigation loads the document again"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                if url.fragment().is_some() && self.navigate_next_to_fragment(frame, &url) {'''
+to = '''                if url.fragment().is_some() && false && self.navigate_next_to_fragment(frame, &url) {'''
+
+[[mutant]]
+name = "a fragment's navigation doesn't scroll"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        self.scroll_next_to_fragment(frame);
+        self.request_main_frame();
+        true'''
+to = '''        self.request_main_frame();
+        true'''
+
+[[mutant]]
+name = "a fragment's navigation keeps the document's URL"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        if let Some(engine) = &mut self.next_engine {
+            engine
+                .dom_mut()
+                .mutate(|cx| cx.set_document_url(document.get(cx.gc), url.as_str()));
+        }'''
+to = '''        let _ = document;'''
+
+[[mutant]]
+name = "a srcdoc document parsed as another"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        let mut parser = if url.as_str() == "about:srcdoc" {'''
+to = '''        let mut parser = if url.as_str() == "about:srcdoc" && false {'''

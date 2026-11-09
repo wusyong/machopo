@@ -1,0 +1,142 @@
+# Mutation test of stage 2a: what rules for elements below use of an
+# element (classes, ids, attributes, states, presentational hints), and
+# what its children take of it (D1):
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-2a.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it"]
+timeout = 600
+
+[[mutant]]
+name = "a change rules below use doesn't style the subtree"
+file = "crates/style/src/lib.rs"
+from = '''                || for_below;'''
+to = ''';'''
+
+[[mutant]]
+name = "a combinator doesn't end the subject's compound"
+file = "crates/style/src/lib.rs"
+from = '''                Component::Combinator(_) => subject = false,'''
+to = '''                Component::Combinator(_) => {}'''
+
+[[mutant]]
+name = "a UA shadow part's host is taken as itself"
+file = "crates/style/src/lib.rs"
+from = '''                Component::PseudoElement(pseudo) => shadow_part = pseudo.id().is_none(),'''
+to = '''                Component::PseudoElement(_) => shadow_part = false,'''
+
+[[mutant]]
+name = "a list nested in the subject's compound is taken as others'"
+file = "crates/style/src/lib.rs"
+from = '''                component if subject => self.add_nested(component, false),'''
+to = '''                component if subject => self.add_nested(component, true),'''
+
+[[mutant]]
+name = "lang, dir and contenteditable are for the element alone"
+file = "crates/style/src/lib.rs"
+from = '''            ATTRIBUTES_FOR_DESCENDANTS.contains(&&*name) || self.attributes.contains(&name)'''
+to = '''            self.attributes.contains(&name)'''
+
+[[mutant]]
+name = "classes rules below use are missed"
+file = "crates/style/src/lib.rs"
+from = '''            .any(|class| self.classes.contains(&class.to_ascii_lowercase()))'''
+to = '''            .any(|class| self.classes.contains(&class.to_ascii_lowercase()) && false)'''
+
+[[mutant]]
+name = "ids rules below use are missed"
+file = "crates/style/src/lib.rs"
+from = '''                .any(|id| self.ids.contains(&id.to_ascii_lowercase()))'''
+to = '''                .any(|id| self.ids.contains(&id.to_ascii_lowercase()) && false)'''
+
+[[mutant]]
+name = "a state for other elements' rules styles the subtree"
+file = "crates/style/src/lib.rs"
+from = '''                        .intersection(dependencies.states)
+                        .intersects(features.states)'''
+to = '''                        .intersects(features.states)'''
+
+[[mutant]]
+name = "states rules below use are missed"
+file = "crates/style/src/lib.rs"
+from = '''                        .intersection(dependencies.states)
+                        .intersects(features.states)'''
+to = '''                        .intersection(dependencies.states)
+                        .intersects(features.states)
+                        && false'''
+
+[[mutant]]
+name = "a table's cell hints are missed"
+file = "crates/style/src/lib.rs"
+from = '''                .is_some_and(|changes| hints::for_descendants(node, changes))'''
+to = '''                .is_some_and(|changes| hints::for_descendants(node, changes) && false)'''
+
+[[mutant]]
+name = "another root font size doesn't style every rem"
+file = "crates/style/src/lib.rs"
+from = '''            let subtree = subtree || std::mem::take(&mut rem_changed) || rendered_changed;'''
+to = '''            let subtree = subtree || (std::mem::take(&mut rem_changed) && false) || rendered_changed;'''
+
+[[mutant]]
+name = "what they inherit doesn't style the children"
+file = "crates/style/src/lib.rs"
+from = '''    if !old.same_inherited(new) || old.display != new.display || new.display == Display::Contents {'''
+to = '''    if old.display != new.display || new.display == Display::Contents {'''
+
+[[mutant]]
+name = "a display doesn't style the children"
+file = "crates/style/src/lib.rs"
+from = '''    if !old.same_inherited(new) || old.display != new.display || new.display == Display::Contents {'''
+to = '''    if !old.same_inherited(new) || new.display == Display::Contents {'''
+
+[[mutant]]
+name = "display: contents doesn't pass a display on"
+file = "crates/style/src/lib.rs"
+from = '''    if !old.same_inherited(new) || old.display != new.display || new.display == Display::Contents {'''
+to = '''    if !old.same_inherited(new) || old.display != new.display {'''
+
+[[mutant]]
+name = "a value taken with inherit doesn't style the children"
+file = "crates/style/src/lib.rs"
+from = '''                    .is_some_and(|style| style.explicit_inheritance)
+                    || animated(child.id())'''
+to = '''                    .is_some_and(|style| style.explicit_inheritance && false)
+                    || animated(child.id())'''
+
+[[mutant]]
+name = "an animation's keyframes don't style the children"
+file = "crates/style/src/lib.rs"
+from = '''                    || animated(child.id())'''
+to = '''                    || (animated(child.id()) && false)'''
+
+[[mutant]]
+name = "every restyle takes the children along"
+file = "crates/style/src/lib.rs"
+from = '''            let children_inherit = !subtree
+                && restyle'''
+to = '''            let children_inherit = !subtree
+                && (restyle || true)'''
+
+[[mutant]]
+name = "inherit isn't noted"
+file = "crates/css/src/properties.rs"
+from = '''            style.explicit_inheritance = true;'''
+to = ''''''
+
+[[mutant]]
+name = "the old id isn't noted"
+file = "crates/dom/src/node.rs"
+from = '''            for id in [old_id, new_id].into_iter().flatten() {'''
+to = '''            for id in [new_id].into_iter().flatten() {'''
+
+[[mutant]]
+name = "a removed class isn't noted"
+file = "crates/dom/src/node.rs"
+from = '''        for class in old_classes.iter().filter(|c| !new_classes.contains(c)) {
+            add(&mut self.classes, class);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "display: none coming or going doesn't style the subtree"
+file = "crates/style/src/lib.rs"
+from = '''            let subtree = subtree || std::mem::take(&mut rem_changed) || rendered_changed;'''
+to = '''            let subtree = subtree || std::mem::take(&mut rem_changed) || (rendered_changed && false);'''

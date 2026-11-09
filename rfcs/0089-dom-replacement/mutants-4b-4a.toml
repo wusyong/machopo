@@ -1,0 +1,253 @@
+# Stage 4b-4a: focus: the document's focused element and its chain's bits
+# (`dom_next`), `:focus`, `:focus-within`, `:focus-visible`
+# (`style_next`), `focus()`, `blur()`, `tabIndex`, `activeElement`,
+# `hasFocus()`, `FocusEvent`, the page's focus, the fixup
+# (`dom_api_next`), the engine and the renderer passing them on.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it -- style && cargo test -q -p style_next --test it -- focus && cargo test -q -p dom_api_next --test it -- focus && cargo test -q -p dom_js_next --test it -- ui_events && cargo test -q -p shell --test it -- next_dom::focus"]
+timeout = 3000
+
+[[mutant]]
+name = "the focus matches without the system's focus"
+file = "crates/dom_next/src/user_action.rs"
+from = '''        let matching = data.window.get(self.gc).is_some_and(|window| self.page_focused(window));'''
+to = '''        let matching = true;'''
+
+[[mutant]]
+name = "every element of the chain :focus"
+file = "crates/dom_next/src/user_action.rs"
+from = '''                    if is_new {
+                        bits |= FOCUSED;'''
+to = '''                    if true {
+                        bits |= FOCUSED;'''
+
+[[mutant]]
+name = "the ring whatever it is asked"
+file = "crates/dom_next/src/user_action.rs"
+from = '''                        if visible {
+                            bits |= FOCUS_VISIBLE;'''
+to = '''                        if true {
+                            bits |= FOCUS_VISIBLE;'''
+
+[[mutant]]
+name = "a change of focus not noted"
+file = "crates/dom_next/src/user_action.rs"
+from = '''            if states != 0 {
+                self.state_changed(element, states);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "the old chain keeps its focus bits"
+file = "crates/dom_next/src/user_action.rs"
+from = '''                index >= old_chain.len() || !new_chain.iter().any(|&other| Gc::ptr_eq(other, *element))'''
+to = '''                index >= old_chain.len()'''
+
+[[mutant]]
+name = "the page's focus doesn't move the bits"
+file = "crates/dom_next/src/user_action.rs"
+from = '''            self.move_focus_chain(Some(element), Some(element), focused, visible);'''
+to = ''''''
+
+[[mutant]]
+name = "the focused element stays when taken out"
+file = "crates/dom_next/src/user_action.rs"
+from = '''            data.focused.set(self.gc, None);
+            let above'''
+to = '''            let above'''
+
+[[mutant]]
+name = "the chain above keeps :focus-within"
+file = "crates/dom_next/src/user_action.rs"
+from = '''                element.flags.set(flags & !FOCUS_BITS);
+                if flags & FOCUS_WITHIN != 0 {'''
+to = '''                if flags & FOCUS_WITHIN != 0 {'''
+
+[[mutant]]
+name = "a subtree taken out keeps its focus bits"
+file = "crates/dom_next/src/style.rs"
+from = '''            at.flags.set(at.flags.get() & !(CONNECTED | HOVERED | ACTIVE | FOCUS_BITS));'''
+to = '''            at.flags.set(at.flags.get() & !(CONNECTED | HOVERED | ACTIVE));'''
+
+[[mutant]]
+name = ":focus-within is :focus"
+file = "crates/style_next/src/selector.rs"
+from = '''            PseudoClass::FocusWithin => self.cx.has_focus_within(self.node),'''
+to = '''            PseudoClass::FocusWithin => self.cx.is_focused(self.node),'''
+
+[[mutant]]
+name = ":focus-visible is :focus"
+file = "crates/style_next/src/selector.rs"
+from = '''            PseudoClass::FocusVisible => self.cx.is_focus_visible(self.node),'''
+to = '''            PseudoClass::FocusVisible => self.cx.is_focused(self.node),'''
+
+[[mutant]]
+name = ":focus-within asked of an ancestor not a feature"
+file = "crates/style_next/src/rule_index.rs"
+from = '''                    self.states |= dom_next::AttributeChanges::FOCUS_WITHIN;'''
+to = ''''''
+
+[[mutant]]
+name = "a tabindex not an integer focusable"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    parse_integer(&cx.attribute_value_by_id(element, local::TABINDEX)?.borrow().to_str())'''
+to = '''    cx.attribute_value_by_id(element, local::TABINDEX).map(|_| 0)'''
+
+[[mutant]]
+name = "a link without an href focusable"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''                && cx.attribute_value_by_id(element, local::HREF).is_some()))'''
+to = '''                ))'''
+
+[[mutant]]
+name = "a hidden box focusable"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''                        .is_none_or(|style| style.is_visible())'''
+to = '''                        .is_none_or(|_| true)'''
+
+[[mutant]]
+name = "an element without a box focusable"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''                layout.element_box(cx.node_id(element)).is_some()
+                    &&'''
+to = '''                true
+                    &&'''
+
+[[mutant]]
+name = "focusin doesn't bubble"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    let bubbles = matches!(event_type, "focusin" | "focusout" | "DOMFocusIn" | "DOMFocusOut");'''
+to = '''    let bubbles = false;'''
+
+[[mutant]]
+name = "no related target"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        let related = related.map(|related| TargetRef::Node(related.get(cx.gc)));
+        cx.set_focus_event_data(event, window, 0, related);'''
+to = '''        let _ = related;
+        cx.set_focus_event_data(event, window, 0, None);'''
+
+[[mutant]]
+name = "the events without the system's focus"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''            window.is_some_and(|window| cx.page_focused(window)),
+            visible'''
+to = '''            true,
+            visible'''
+
+[[mutant]]
+name = "a listener's move of the focus doesn't stop the old one's events"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''                if focused_element(host, document).is_some() {
+                    element = None;
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "the new one's events go on after it lost the focus"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''            if !has_focus_now(host, document, element) {
+                return false;
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "an element taken out by a listener takes the focus"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    if !still {
+        return false;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "focus() of a non-focusable element"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    if !host.mutate(|cx| is_focusable_area(cx, this.get(cx.gc))) {
+        return Ok(());
+    }
+    focusing_steps(host, &document, Some(&this), options.focusVisible);'''
+to = '''    focusing_steps(host, &document, Some(&this), options.focusVisible);'''
+
+[[mutant]]
+name = "focusVisible ignored"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    focusing_steps(host, &document, Some(&this), options.focusVisible);'''
+to = '''    focusing_steps(host, &document, Some(&this), None);'''
+
+[[mutant]]
+name = "blur() of one without the focus"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    if !has_focus_now(host, &document, &this) {
+        return Ok(());
+    }
+    focusing_steps(host, &document, None, None);'''
+to = '''    focusing_steps(host, &document, None, None);'''
+
+[[mutant]]
+name = "tabIndex -1 for a link"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''            local::A,
+            local::AREA,
+            local::BUTTON,'''
+to = '''            local::AREA,
+            local::BUTTON,'''
+
+[[mutant]]
+name = "activeElement without a focus the root"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        .or_else(|| crate::geometry::body(cx, this))
+        .or_else(|| crate::geometry::document_element(cx, this)))'''
+to = '''        .or_else(|| crate::geometry::document_element(cx, this)))'''
+
+[[mutant]]
+name = "the window's focus event last"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    if focused {
+        fire_focus_event(host, "focus", &window_target, None);
+        if let Some(target) = &target {'''
+to = '''    if focused {
+        if let Some(target) = &target {'''
+
+[[mutant]]
+name = "the page's focus without events"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    let Some(element) = element else {
+        return;
+    };
+    let window_target'''
+to = '''    let Some(element) = element.and(None::<Option<NodeRoot>>) else {
+        return;
+    };
+    let window_target'''
+
+[[mutant]]
+name = "no fixup"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    if host.mutate(|cx| is_focusable_area(cx, element.get(cx.gc))) {
+        return;
+    }
+    focusing_steps(host, document, None, None);'''
+to = '''    let _ = element;'''
+
+[[mutant]]
+name = "a FocusEvent is a plain event"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''            } else if cx.focus_event_data(event).is_some() {'''
+to = '''            } else if false {'''
+
+[[mutant]]
+name = "a new window without the page's focus"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''                cx.set_page_focused(window, page_focused);'''
+to = ''''''
+
+[[mutant]]
+name = "the renderer forgets a focus before the engine"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        engine.set_page_focused(self.page_focus.is_focused());'''
+to = ''''''
+
+[[mutant]]
+name = "the renderer runs no fixup"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.run_next_focus_fixup();'''
+to = ''''''

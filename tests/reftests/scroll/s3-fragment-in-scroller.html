@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>S3: a #target inside a scroll container scrolls both the container and the viewport</title>
+<link rel="match" href="green-square-ref.html">
+<script>
+  // Go to #target as following a link to it would, then end the test once
+  // the scroll is drawn (wptrunner loads a test at its own URL, without a
+  // fragment).
+  addEventListener("load", () => {
+    location.hash = "target";
+    requestAnimationFrame(() => requestAnimationFrame(() =>
+      document.documentElement.classList.remove("reftest-wait")));
+  });
+</script>
+<style>html, body { margin: 0 } div { width: 100px }</style>
+<div style="height: 800px; background-color: red"></div>
+<div style="height: 100px; overflow: auto">
+  <div style="height: 500px; background-color: red"></div>
+  <div id="target" style="height: 100px; background-color: green"></div>
+  <div style="height: 500px"></div>
+</div>
+<div style="height: 2000px"></div>

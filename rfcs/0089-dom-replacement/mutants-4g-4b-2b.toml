@@ -1,0 +1,115 @@
+# Stage 4g-4b-2b: the keyboard and the focus through the frames on the new DOM: the
+# focused frame (the old one's element and window losing the focus, the iframes leading to
+# the new one its documents' focused elements, the windows' events), an iframe's focus its
+# child frame's, hasFocus() up the chain, the page's focus at every window and the
+# focused frame's events, Tab through the frames, the keys at the focused frame.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_api_next --test it focus && cargo test -q -p dom_next --test it frames"]
+timeout = 3000
+
+[[mutant]]
+name = "focus: an iframe's focus its own"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    if let Some(child) = child {
+        return focusing_steps(host, &child, None, visible);
+    }'''
+to = '''    let _ = child;'''
+
+[[mutant]]
+name = "focus: the focused frame never changes"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        change_focused_frame(host, &top, &old, document);'''
+to = '''        let _ = (&top, &old);'''
+
+[[mutant]]
+name = "focus: the old frame's element keeps the focus"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    if focused_element(host, old).is_some() {
+        set_focused_element(host, old, None, None);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "focus: the iframes leading to the old frame stay focused"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''                cx.set_focused_element(document, None, false);'''
+to = ''''''
+
+[[mutant]]
+name = "focus: the iframes leading to the new frame not focused"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''            cx.set_focused_element(cx.document_of(owner), Some(owner), false);'''
+to = ''''''
+
+[[mutant]]
+name = "focus: the focused frame not recorded"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        cx.set_focused_frame(top.get(cx.gc), new);'''
+to = ''''''
+
+[[mutant]]
+name = "focus: the old window doesn't blur"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    if let Some(window) = windows.0 {'''
+to = '''    if let Some(window) = windows.0.filter(|_| false) {'''
+
+[[mutant]]
+name = "focus: hasFocus only the focused frame's"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        at = cx.frame_owner(document).map(|owner| cx.document_of(owner));'''
+to = '''        at = None;'''
+
+[[mutant]]
+name = "focus: only the top-level window knows the page's focus"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        for document in crate::documents_in_tree_order(cx, top) {'''
+to = '''        for document in crate::documents_in_tree_order(cx, top).into_iter().take(1) {'''
+
+[[mutant]]
+name = "focus: the page's focus events at the top-level frame"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        let frame = cx.focused_frame(top);
+        let window = cx.window_of(frame)?;'''
+to = '''        let frame = top;
+        let window = cx.window_of(frame)?;'''
+
+[[mutant]]
+name = "focus: an iframe in the order, not its document's"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''            Some(child) => order.extend(navigation_order(cx, child)),'''
+to = '''            Some(_) => order.push(element),'''
+
+[[mutant]]
+name = "focus: an iframe out of the order"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''                .or_else(|| (frame || focusable_by_default(cx, node)).then_some(0));'''
+to = '''                .or_else(|| (focusable_by_default(cx, node)).then_some(0));'''
+
+[[mutant]]
+name = "focus: Tab from the top-level document's focused element"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''            .focused_element(cx.focused_frame(top))'''
+to = '''            .focused_element(top)'''
+
+[[mutant]]
+name = "focus: Tab focuses in the top-level document"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        let document = cx.document_of(candidate.get(cx.gc));'''
+to = '''        let document = cx.top_document(cx.document_of(candidate.get(cx.gc)));'''
+
+[[mutant]]
+name = "focus: an iframe can't take the focus"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''            || cx.content_document(element).is_some())'''
+to = ''')'''
+
+[[mutant]]
+name = "input: keys at the top-level document"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            cx.root(cx.focused_frame(cx.top_document(top.get(cx.gc))))'''
+to = '''            cx.root(top.get(cx.gc))'''
+
+[[mutant]]
+name = "dom: a discarded focused frame kept"
+file = "crates/dom_next/src/frame.rs"
+from = '''            .filter(|&document| Gc::ptr_eq(self.top_document(document), top))'''
+to = '''            .filter(|_| true)'''

@@ -1,0 +1,40 @@
+# Mutation test of dropping `--rounds` (one round, kun then Chrome):
+# python3 scripts/test.py mutate rfcs/0012-speedometer/mutants-one-round.toml
+test = ["python3", "scripts/speedometer_test.py"]
+timeout = 600
+
+[[mutant]]
+name = "one browser runs every suite before the other"
+file = "scripts/speedometer.py"
+from = '''    return [(name, browser) for name in names for browser in browsers]'''
+to = '''    return [(name, browser) for browser in browsers for name in names]'''
+
+[[mutant]]
+name = "only the first browser's run is checked"
+file = "scripts/speedometer.py"
+from = '''    for browser, run in runs.items():'''
+to = '''    for browser, run in list(runs.items())[:1]:'''
+
+[[mutant]]
+name = "kun's run isn't checked against Chrome's"
+file = "scripts/speedometer.py"
+from = '''        problem = suite_problem(reference[name] if reference else None, measured)'''
+to = '''        problem = suite_problem(None, measured)'''
+
+[[mutant]]
+name = "the samples leave out the first iteration"
+file = "scripts/speedometer.py"
+from = '''    return [iteration[suite]["total"] for iteration in run["iterations"]]'''
+to = '''    return [iteration[suite]["total"] for iteration in run["iterations"][1:]]'''
+
+[[mutant]]
+name = "the first iteration's column takes the last"
+file = "scripts/speedometer.py"
+from = '''            f"{runs[b]['iterations'][0][row['suite']]['total']:.1f}" if b in runs else "not run"'''
+to = '''            f"{runs[b]['iterations'][-1][row['suite']]['total']:.1f}" if b in runs else "not run"'''
+
+[[mutant]]
+name = "each suite keeps only the first browser's run"
+file = "scripts/speedometer.py"
+from = '''                results[browser][name] = run'''
+to = '''                results[browser].setdefault(name, run) if browser == browsers[0] else None'''

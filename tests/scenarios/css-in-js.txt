@@ -1,0 +1,13 @@
+# A card styled by rules a page's script puts in a <style>'s sheet
+# (`insertRule`), as a CSS-in-JS library does: teal, 200 px wide. The
+# button adds a rule and the class it is for: the card is purple and
+# 400 px wide. How it looks is for a person to look at in the screenshots.
+window size=800x600
+navigate pages/css-in-js.html
+wait-loaded
+screenshot styled
+capture styled
+click #restyle
+wait-text #note "Restyled."
+expect-differs styled #card
+screenshot restyled

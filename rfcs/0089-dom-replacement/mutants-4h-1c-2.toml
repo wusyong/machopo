@@ -1,0 +1,210 @@
+# Stage 4h-1c-2: editability on the new DOM (contenteditable's states, what is editable, the
+# editing host, what a caret can't be in), contentEditable and isContentEditable, :read-write
+# of editable elements and contenteditable restyling the subtree, the editing host's
+# overflow-wrap.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "sh", "-c", "cargo test -q -p dom_next --test it -- editing && cargo test -q -p dom_js_next --test it -- editing && cargo test -q -p style_next --test it -- editable_elements_are_read_write an_editing_hosts_long_words_wrap"]
+timeout = 1200
+
+[[mutant]]
+name = "dom: the empty value isn't true"
+file = "crates/dom_next/src/editing.rs"
+from = '''        if value.is_empty() || value.eq_ignore_ascii_case("true") {'''
+to = '''        if value.eq_ignore_ascii_case("true") {'''
+
+[[mutant]]
+name = "dom: true only in lower case"
+file = "crates/dom_next/src/editing.rs"
+from = '''        if value.is_empty() || value.eq_ignore_ascii_case("true") {'''
+to = '''        if value.is_empty() || value == "true" {'''
+
+[[mutant]]
+name = "dom: plaintext-only is inherit"
+file = "crates/dom_next/src/editing.rs"
+from = '''        } else if value.eq_ignore_ascii_case("plaintext-only") {
+            Self::PlaintextOnly'''
+to = '''        } else if value.eq_ignore_ascii_case("plaintext-only") {
+            Self::Inherit'''
+
+[[mutant]]
+name = "dom: plaintext-only's keyword is true's"
+file = "crates/dom_next/src/editing.rs"
+from = '''            Self::PlaintextOnly => "plaintext-only",'''
+to = '''            Self::PlaintextOnly => "true",'''
+
+[[mutant]]
+name = "dom: any element has a contenteditable state"
+file = "crates/dom_next/src/editing.rs"
+from = '''        if self.qualified_name(element)?.namespace() != names::HTML_NAMESPACE {
+            return None;
+        }'''
+to = '''        self.qualified_name(element)?;'''
+
+[[mutant]]
+name = "dom: plaintext-only doesn't make it editable"
+file = "crates/dom_next/src/editing.rs"
+from = '''                Some(ContentEditable::True | ContentEditable::PlaintextOnly) => return Some(at),'''
+to = '''                Some(ContentEditable::True) => return Some(at),
+                Some(ContentEditable::PlaintextOnly) => return None,'''
+
+[[mutant]]
+name = "dom: false doesn't stop the walk"
+file = "crates/dom_next/src/editing.rs"
+from = '''                Some(ContentEditable::False) => return None,
+                Some(ContentEditable::Inherit) | None => {}'''
+to = '''                Some(ContentEditable::False | ContentEditable::Inherit) | None => {}'''
+
+[[mutant]]
+name = "dom: every node reaches its parent's editability"
+file = "crates/dom_next/src/editing.rs"
+from = '''            if !reached {
+                return None;
+            }'''
+to = '''            let _ = reached;'''
+
+[[mutant]]
+name = "dom: an svg isn't reached"
+file = "crates/dom_next/src/editing.rs"
+from = '''                        || name == QualifiedName::svg(names::local::SVG)
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a math isn't reached"
+file = "crates/dom_next/src/editing.rs"
+from = '''
+                        || name.is(names::MATHML_NAMESPACE, names::local::MATH)'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a text reaches under any parent"
+file = "crates/dom_next/src/editing.rs"
+from = '''                    self.kind(at) != NodeKind::Element
+                        && self
+                            .qualified_name(parent)
+                            .is_some_and(|name| name.namespace() == names::HTML_NAMESPACE)'''
+to = '''                    self.kind(at) != NodeKind::Element'''
+
+[[mutant]]
+name = "dom: a text doesn't reach"
+file = "crates/dom_next/src/editing.rs"
+from = '''                    self.kind(at) != NodeKind::Element
+                        && self'''
+to = '''                    false
+                        && self'''
+
+[[mutant]]
+name = "dom: an editing host inside an editable one"
+file = "crates/dom_next/src/editing.rs"
+from = '''        self.is_editable(node)
+            && !self.parent(node).is_some_and(|parent| self.is_editable(parent))'''
+to = '''        self.is_editable(node)'''
+
+[[mutant]]
+name = "dom: the innermost editing host"
+file = "crates/dom_next/src/editing.rs"
+from = '''        let mut host = self.editable_from(node)?;
+        while let Some(parent) = self.parent(host)
+            && let Some(from) = self.editable_from(parent)
+        {
+            host = from;
+        }
+        Some(host)'''
+to = '''        self.editable_from(node)'''
+
+[[mutant]]
+name = "dom: a caret in any element's content"
+file = "crates/dom_next/src/editing.rs"
+from = '''        name.namespace() == names::HTML_NAMESPACE
+            && ['''
+to = '''        false
+            && ['''
+
+[[mutant]]
+name = "dom: a caret in another namespace's img"
+file = "crates/dom_next/src/editing.rs"
+from = '''        name.namespace() == names::HTML_NAMESPACE
+            && ['''
+to = '''        true
+            && ['''
+
+[[mutant]]
+name = "api: inherit sets the attribute"
+file = "crates/dom_api_next/src/html.rs"
+from = '''        Some(ContentEditable::Inherit) => {
+            cx.remove_attribute(this, "contenteditable");
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "api: any other value sets true"
+file = "crates/dom_api_next/src/html.rs"
+from = '''    .find(|state| value.eq_ignore_ascii_case(state.keyword()));'''
+to = '''    .find(|state| value.eq_ignore_ascii_case(state.keyword()))
+    .or(Some(ContentEditable::True));'''
+
+[[mutant]]
+name = "api: the value set as given"
+file = "crates/dom_api_next/src/html.rs"
+from = '''        Some(state) => cx.set_attribute_ns(this, QualName::local("contenteditable"), state.keyword()),'''
+to = '''        Some(_) => cx.set_attribute_ns(this, QualName::local("contenteditable"), value),'''
+
+[[mutant]]
+name = "api: contentEditable's state of a missing attribute"
+file = "crates/dom_api_next/src/html.rs"
+from = '''    let state = cx.content_editable(this).unwrap_or(ContentEditable::Inherit);'''
+to = '''    let state = cx.content_editable(this).unwrap_or(ContentEditable::True);
+    let state = if state == ContentEditable::Inherit { ContentEditable::True } else { state };'''
+
+[[mutant]]
+name = "api: isContentEditable only by the element's own attribute"
+file = "crates/dom_api_next/src/html.rs"
+from = '''    Ok(cx.is_editable(this))'''
+to = '''    Ok(matches!(cx.content_editable(this), Some(ContentEditable::True | ContentEditable::PlaintextOnly)))'''
+
+[[mutant]]
+name = "dom: editable elements aren't read-write"
+file = "crates/dom_next/src/form_state.rs"
+from = '''            None => return self.is_editable(element),'''
+to = '''            None => false,'''
+
+[[mutant]]
+name = "dom: an editable input is read-write"
+file = "crates/dom_next/src/form_state.rs"
+from = '''        let applies = match self.input_kind(element) {
+            Some(kind) => takes_readonly(kind),
+            None if'''
+to = '''        if self.is_editable(element) {
+            return true;
+        }
+        let applies = match self.input_kind(element) {
+            Some(kind) => takes_readonly(kind),
+            None if'''
+
+[[mutant]]
+name = "style: contenteditable restyles the element only"
+file = "crates/style_next/src/invalidation.rs"
+from = '''    name == names::local::LANG || name == names::local::DIR || name == names::local::CONTENTEDITABLE'''
+to = '''    name == names::local::LANG || name == names::local::DIR'''
+
+[[mutant]]
+name = "style: no overflow-wrap hint"
+file = "crates/style_next/src/hints.rs"
+from = '''        hints.push(css::properties::Declaration {
+            id: css::properties::LonghandId::OverflowWrap,
+            value: css::properties::Value::OverflowWrap(computed_style::OverflowWrap::BreakWord),
+        });'''
+to = ''''''
+
+[[mutant]]
+name = "style: plaintext-only has no overflow-wrap hint"
+file = "crates/style_next/src/hints.rs"
+from = '''        Some(ContentEditable::True | ContentEditable::PlaintextOnly)
+    ) {'''
+to = '''        Some(ContentEditable::True)
+    ) {'''
+
+[[mutant]]
+name = "style: contenteditable's changes not noted"
+file = "crates/style_next/src/hints.rs"
+from = '''    .chain([names::local::CONTENTEDITABLE])'''
+to = '''    .chain([])'''

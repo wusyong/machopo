@@ -1,0 +1,108 @@
+# Stage 2: allocation's fast path. `gc`'s integration tests: `alloc` (the
+# bump, the slow path's count, used bytes exact, sites, drop glue), the
+# verifier's checks of the pages' counts, `sweep`'s small limit, `js`'s
+# driven marking's live bytes.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--test", "it"]
+timeout = 180
+
+[[mutant]]
+name = "gc: no fast path"
+file = "crates/gc/src/heap.rs"
+from = '''            .filter(|_| old && site == 0 || self.inner.has_no_nursery());'''
+to = '''            .filter(|_| false && (old && site == 0 || self.inner.has_no_nursery()));'''
+
+[[mutant]]
+name = "gc: a range not counted as it is taken"
+file = "crates/gc/src/heap.rs"
+from = '''        self.count_allocated(range.limit.saturating_sub(range.next));
+        range'''
+to = '''        range'''
+
+[[mutant]]
+name = "gc: used counts the cursors' tails"
+file = "crates/gc/src/heap.rs"
+from = '''        self.used.get().saturating_sub(self.unused_tails())'''
+to = '''        self.used.get()'''
+
+[[mutant]]
+name = "gc: the limits by the raw count"
+file = "crates/gc/src/heap.rs"
+from = '''            && self.allocated.get().saturating_sub(self.unused_tails()) >= bytes'''
+to = ''''''
+
+[[mutant]]
+name = "gc: the sweep keeps the tails in use"
+file = "crates/gc/src/heap.rs"
+from = '''            self.used.set(self.used.get().saturating_sub(tail));'''
+to = ''''''
+
+[[mutant]]
+name = "gc: a marking's black bytes leave out the tails"
+file = "crates/gc/src/heap.rs"
+from = '''        self.black_bytes.set(self.unused_tails());'''
+to = '''        self.black_bytes.set(0);'''
+
+[[mutant]]
+name = "gc: the sweep reads the pages' counts unflushed"
+file = "crates/gc/src/heap.rs"
+from = '''        {
+            let mut space = self.space.borrow_mut();
+            self.flush_cursor_counts(&mut space);
+        }
+        let space = self.space.get_mut();'''
+to = '''        let space = self.space.get_mut();'''
+
+[[mutant]]
+name = "gc: the fast path's object not finalizable"
+file = "crates/gc/src/heap.rs"
+from = '''        self.mark_table.publish(data, finalizable, mark);'''
+to = '''        self.mark_table.publish(data, false, mark);'''
+
+[[mutant]]
+name = "gc: the fast path's object not counted on its page"
+file = "crates/gc/src/heap.rs"
+from = '''            range.finalizable = range.finalizable.saturating_add(1);'''
+to = ''''''
+
+[[mutant]]
+name = "gc: the fast path's object not counted as the heap thread's"
+file = "crates/gc/src/heap.rs"
+from = '''                range.main = range.main.saturating_add(1);'''
+to = ''''''
+
+[[mutant]]
+name = "gc: a cursor leaves its page unflushed"
+file = "crates/gc/src/heap.rs"
+from = '''        // The cursor may leave its page: its counts first.
+        self.flush_cursor_counts(&mut space);'''
+to = ''''''
+
+[[mutant]]
+name = "gc: the fast path's object unmarked in debug builds"
+file = "crates/gc/src/heap.rs"
+from = '''        let mark = cfg!(debug_assertions) && !marking;
+        if !finalizable && !mark {
+            return;
+        }
+        self.mark_table.publish'''
+to = '''        let mark = false && !marking;
+        if !finalizable && !mark {
+            return;
+        }
+        self.mark_table.publish'''
+
+[[mutant]]
+name = "gc: the fast path's object not the verifier's while marking"
+file = "crates/gc/src/heap.rs"
+from = '''        if marking {
+            self.allocated_while_marking(data);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "gc: no fast path in allocate"
+file = "crates/gc/src/heap.rs"
+from = '''        if (old && site == 0 || self.has_no_nursery())
+            && let Some(data) = class.and_then(|class| self.bump(class))'''
+to = '''        if false
+            && let Some(data) = class.and_then(|class| self.bump(class))'''

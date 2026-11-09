@@ -1,0 +1,249 @@
+# Stage 4i-3: user activation through the frame tree, `focus()` scrolling,
+# WebDriver's scroll into view, DevTools' child frames and network
+# idleness on the new DOM.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it images:: && cargo test -q -p shell --test it -- navigator:: focus::focusing webdriver:: devtools_lifecycle::the_new_doms devtools_lifecycle::a_navigation_is_told_through_its_lifecycle_on devtools_lifecycle::a_subresource_on_its_way_keeps_the_network_busy_on"]
+timeout = 1500
+
+[[mutant]]
+name = "api: activation not up the frames"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''        at = cx.frame_owner(above).map(|owner| cx.document_of(owner));'''
+to = '''        at = None;'''
+
+[[mutant]]
+name = "api: activation down to every origin"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''        if same_origin(cx, child, document)
+            && let Some(window) = cx.window_of(child)'''
+to = '''        if let Some(window) = cx.window_of(child)'''
+
+[[mutant]]
+name = "api: activation not down"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''        if same_origin(cx, child, document)
+            && let Some(window) = cx.window_of(child)'''
+to = '''        if false
+            && let Some(window) = cx.window_of(child)'''
+
+[[mutant]]
+name = "api: consumed in its window alone"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''    for document in documents_in_tree_order(cx, cx.top_document(document)) {'''
+to = '''    for document in [document] {'''
+
+[[mutant]]
+name = "dom: consuming makes a window sticky"
+file = "crates/dom_next/src/window.rs"
+from = '''        if window.last_activation.get() != f64::INFINITY {
+            window.last_activation.set(f64::NEG_INFINITY);'''
+to = '''        if true {
+            window.last_activation.set(f64::NEG_INFINITY);'''
+
+[[mutant]]
+name = "api: focus() ignores preventScroll"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        || options.preventScroll
+    {'''
+to = '''        || false
+    {'''
+
+[[mutant]]
+name = "api: focus() never by the caret"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''            crate::editing::is_text_field(cx, element) || cx.is_editing_host(element);'''
+to = '''            false;'''
+
+[[mutant]]
+name = "api: focus() aligns to the nearest edge"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        block: gfx::ScrollAlignment::CenterIfNeeded,
+        inline: gfx::ScrollAlignment::CenterIfNeeded,'''
+to = '''        block: gfx::ScrollAlignment::Nearest,
+        inline: gfx::ScrollAlignment::CenterIfNeeded,'''
+
+[[mutant]]
+name = "api: focus() scrolls only its frame"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        nearest_only: false,
+    };
+    host.mutate(|cx| {'''
+to = '''        nearest_only: true,
+    };
+    host.mutate(|cx| {'''
+
+[[mutant]]
+name = "renderer: the caret's block, not the caret"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            .scroll_rect_into_view(caret.block, Some(rect), &document_of, params);'''
+to = '''            .scroll_rect_into_view(caret.block, None, &document_of, params);'''
+
+[[mutant]]
+name = "renderer: a read-only control's caret revealed"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''    if selection.start < selection.end
+        || cx
+            .attribute_value_by_id(control, dom_next::names::local::READONLY)
+            .is_some()
+    {'''
+to = '''    if selection.start < selection.end
+    {'''
+
+[[mutant]]
+name = "renderer: no caret of an editing host revealed"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        return crate::next_selection::caret(cx, token, document, box_tree, text);
+    };'''
+to = '''        return None;
+    };'''
+
+[[mutant]]
+name = "webdriver: what is in view scrolled too"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''    if in_view_center(cx, document, element).is_some() {
+        return;
+    }
+    let params'''
+to = '''    let params'''
+
+[[mutant]]
+name = "webdriver: scrolled to its start"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''        block: gfx::ScrollAlignment::End,'''
+to = '''        block: gfx::ScrollAlignment::Start,'''
+
+[[mutant]]
+name = "webdriver: a click doesn't scroll"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''            let element = element(cx, document, id)?;
+            scroll_into_view(cx, document, element);
+            let center'''
+to = '''            let element = element(cx, document, id)?;
+            let center'''
+
+[[mutant]]
+name = "webdriver: a screenshot doesn't scroll"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''            let element = element(cx, document, id)?;
+            scroll_into_view(cx, document, element);
+            let bounds'''
+to = '''            let element = element(cx, document, id)?;
+            let bounds'''
+
+[[mutant]]
+name = "webdriver: sending keys doesn't scroll"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''    host.mutate(|cx| scroll_into_view(cx, document.get(cx.gc), element.get(cx.gc)));
+'''
+to = ''''''
+
+[[mutant]]
+name = "webdriver: clearing doesn't scroll"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''        scroll_into_view(cx, document, node);
+        let port'''
+to = '''        let port'''
+
+[[mutant]]
+name = "webdriver: a hit in a shadow tree not its host's"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''                .or_else(|| cx.shadow_host(at))
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an image fetch the element's, not its document's"
+file = "crates/dom_next/src/image.rs"
+from = '''        let document = self.node_id(self.document_of(element));'''
+to = '''        let document = self.node_id(element);'''
+
+[[mutant]]
+name = "renderer: a frame's images not counted"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        let images = self
+            .next_images
+            .values()
+            .filter(|(_, of)| *of == document)'''
+to = '''        let images = self
+            .next_images
+            .values()
+            .filter(|_| false)'''
+
+[[mutant]]
+name = "renderer: every frame's images counted"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        let images = self
+            .next_images
+            .values()
+            .filter(|(_, of)| *of == document)'''
+to = '''        let images = self
+            .next_images
+            .values()
+            .filter(|_| true)'''
+
+[[mutant]]
+name = "renderer: a frame's fetch()es not counted"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        let fetches = self
+            .next_fetches
+            .values()
+            .filter(|(_, of)| *of == document)'''
+to = '''        let fetches = self
+            .next_fetches
+            .values()
+            .filter(|_| false)'''
+
+[[mutant]]
+name = "renderer: no idleness watched"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            next.idleness.start();'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: no wake-up for the idleness"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            .filter_map(|next| next.idleness.next_due())
+            .min()'''
+to = '''            .filter_map(|next| next.idleness.next_due())
+            .max()
+            .filter(|_| false)'''
+
+[[mutant]]
+name = "renderer: a child's load not told"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                if let Some(id) = self.tell_next_lifecycle(frame, "load", ipc::TimeTicks::now()) {
+                    self.page_agent.stopped_loading(&id);
+                }
+                self.request_main_frame();
+                self.finish_next_load(parent);'''
+to = '''                self.request_main_frame();
+                self.finish_next_load(parent);'''
+
+[[mutant]]
+name = "renderer: no child frames told"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                if *of != parent {
+                    continue;
+                }'''
+to = '''                if true {
+                    continue;
+                }'''
+
+[[mutant]]
+name = "renderer: a child never its initial document"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            initial: committed.is_none(),'''
+to = '''            initial: false,'''
+
+[[mutant]]
+name = "renderer: a child never navigating"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            .any(|(of, _, _)| *of == frame);
+        let id = self.next_frame_id(frame);'''
+to = '''            .any(|_| false);
+        let id = self.next_frame_id(frame);'''
+
+[[mutant]]
+name = "renderer: a child's name not told"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            name: Some(name),'''
+to = '''            name: Some(String::new()),'''

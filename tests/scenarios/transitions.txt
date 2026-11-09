@@ -1,0 +1,18 @@
+# about:demo's transition: "Move the bar" makes the bar wider and green
+# over 600 ms (two frames after the click it is partway: the page's first
+# transition doesn't jump to its end), and each property's transitionend
+# reaches the note; again, it goes back, partway too. The screenshots
+# show the bar narrow and blue, then wide and green; whether it moves
+# smoothly is for a person to look at.
+window size=800x1000
+navigate about:demo
+wait-loaded
+scroll-to #tr-bar
+screenshot bar
+click #tr-move
+wait-text #tr-frame "Partway two frames in."
+wait-text #tr-note "Moved: background-color and width ended."
+screenshot bar-moved
+click #tr-move
+wait-text #tr-frame "Partway two frames in."
+wait-text #tr-note "Back: background-color and width ended."

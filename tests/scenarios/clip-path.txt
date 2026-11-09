@@ -1,0 +1,14 @@
+# A chart's series as React-Stockcharts draws them: a `<g>` clipped to its
+# chart area by `clip-path: url(#…)`, the series reaching past it. The
+# chart is 300 × 200 px from 100 px across and down the page, which starts
+# 74 px down the window, and its area its left half: a click there hits
+# the series; one on its right half, which the clip cuts away, hits the
+# page. How the cut looks is for a person to look at in the screenshot.
+window size=800x600
+navigate pages/clip-path.html
+wait-loaded
+screenshot clipped
+click-at 175 274
+wait-text #note "Clicked the series."
+click-at 325 274
+wait-text #note "Clicked the page."

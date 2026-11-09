@@ -1,0 +1,122 @@
+# Step 5c: the three kinds of finalizer. `External`s' (`Send`) run on the
+# sweep's worker, `LocalExternal`s' on the heap's thread; the finalizable
+# bitmap in `Marks`; the pages and large objects handed by kind. Run with
+# `RUSTY_V8_ARCHIVE` (`test.py` checks the third-party pins).
+test = ["cargo", "test", "-q", "-p", "gc"]
+timeout = 900
+
+# The kinds.
+
+[[mutant]]
+name = "a LocalExternal's drop is the sweep's"
+file = "crates/gc/src/external.rs"
+from = '''    const MAIN_THREAD_DROP: bool = needs_drop::<T>();'''
+to = '''    const MAIN_THREAD_DROP: bool = false && needs_drop::<T>();'''
+
+[[mutant]]
+name = "a type with a LocalExternal is the sweep's"
+file = "crates/gc/src/types.rs"
+from = '''            } else if main {
+                Finalizer::Main'''
+to = '''            } else if main && false {
+                Finalizer::Main'''
+
+[[mutant]]
+name = "an object to finalize on the heap's thread isn't counted"
+file = "crates/gc/src/page.rs"
+from = '''        if finalizer == Finalizer::Main {
+            self.main_objects = self.main_objects.saturating_add(1);
+        }'''
+to = '''        let _ = finalizer;'''
+
+[[mutant]]
+name = "a finalized object of the heap's thread stays counted"
+file = "crates/gc/src/heap.rs"
+from = '''                page.main_objects = page.main_objects.saturating_sub(main);'''
+to = '''                let _ = main;'''
+
+# The pause.
+
+[[mutant]]
+name = "a page with a LocalExternal goes to the job"
+file = "crates/gc/src/heap.rs"
+from = '''                    if page.main_objects > 0 {
+                        main_pages.push(number);'''
+to = '''                    if false {
+                        main_pages.push(number);'''
+
+[[mutant]]
+name = "a page to finalize is any thread's"
+file = "crates/gc/src/heap.rs"
+from = '''                        handed.finalizing.push(number);'''
+to = '''                        handed.pages[page.class].push(number);'''
+
+[[mutant]]
+name = "a dead Send large object is the heap's thread's"
+file = "crates/gc/src/heap.rs"
+from = '''                    handed.large.push(number);'''
+to = '''                    dead_large.push(number);'''
+
+[[mutant]]
+name = "a dead object to finalize is poisoned in the pause"
+file = "crates/gc/src/heap.rs"
+from = '''            } else if !self.mark_table.is_finalizable(data) {'''
+to = '''            } else if true || !self.mark_table.is_finalizable(data) {'''
+
+# The job.
+
+[[mutant]]
+name = "the job doesn't finalize"
+file = "crates/gc/src/heap/sweep.rs"
+from = '''                drop(self.base.0.wrapping_add(data));'''
+to = '''                let _ = drop;'''
+
+[[mutant]]
+name = "the dead objects stay finalizable"
+file = "crates/gc/src/page.rs"
+from = '''            finalizable.fetch_and(!gone, Ordering::Relaxed);'''
+to = '''            let _ = finalizable;'''
+
+[[mutant]]
+name = "a page whose finalizer panicked is lost"
+file = "crates/gc/src/heap/sweep.rs"
+from = '''        if !std::thread::panicking() {
+            return;
+        }'''
+to = '''        if true {
+            return;
+        }'''
+
+[[mutant]]
+name = "a finalized large object's pages stay"
+file = "crates/gc/src/heap.rs"
+from = '''        for number in freed {
+            self.free_large(space, number);
+        }'''
+to = '''        let _ = freed;'''
+
+# The counts.
+
+[[mutant]]
+name = "a page's finalizables aren't recounted"
+file = "crates/gc/src/page.rs"
+from = '''        if self.finalizable_objects > 0 {
+            self.finalizable_objects = ones(&self.marks.finalizable_words()).count();
+        }'''
+to = '''        let _ = &self.finalizable_objects;'''
+
+# The verifier.
+
+[[mutant]]
+name = "the verifier lets the job hold a page of the heap's thread"
+file = "crates/gc/src/heap/verify.rs"
+from = '''                    if page.unswept && page.main_objects > 0 && self.sweeper.holds(number) {'''
+to = '''                    if false && page.unswept && page.main_objects > 0 && self.sweeper.holds(number) {'''
+
+[[mutant]]
+name = "the verifier lets a dead large object the job doesn't hold stay"
+file = "crates/gc/src/heap/verify.rs"
+from = '''                        && (self.dead_large.borrow().contains(&number)
+                            || self.sweeper.holds(number)) => {}'''
+to = '''                        && (self.dead_large.borrow().contains(&number)
+                            || true) => {}'''

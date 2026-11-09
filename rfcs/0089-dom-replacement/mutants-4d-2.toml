@@ -1,0 +1,77 @@
+# Stage 4d-2: event and listener types as names' numbers: `dom_next`'s
+# events and listeners, the members that take a type from script, the
+# events the DOM fires by constant.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it -- events window && cargo test -q -p dom_api_next --test it && cargo test -q -p dom_js_next --test it"]
+timeout = 3000
+
+[[mutant]]
+name = "every listener in the snapshot"
+file = "crates/dom_next/src/event.rs"
+from = '''                if listener.event_type == event_type {'''
+to = '''                if listener.event_type == listener.event_type {'''
+
+[[mutant]]
+name = "a listener of another type found"
+file = "crates/dom_next/src/event.rs"
+from = '''                listener.event_type == event_type
+                    && (listener.flags.get() & CAPTURE != 0) == capture'''
+to = '''                (listener.flags.get() & CAPTURE != 0) == capture'''
+
+[[mutant]]
+name = "initEvent keeps the type"
+file = "crates/dom_next/src/event.rs"
+from = '''        event.event_type.set(event_type);'''
+to = '''        let _ = event_type;'''
+
+[[mutant]]
+name = "an ErrorEvent of another type"
+file = "crates/dom_next/src/event.rs"
+from = '''            names::event::ERROR,'''
+to = '''            names::event::LOAD,'''
+
+[[mutant]]
+name = "type reads no name"
+file = "crates/dom_api_next/src/event.rs"
+from = '''    Ok(DomStr::Name(cx.event_type(this)))'''
+to = '''    Ok(DomStr::Name(names::NONE))'''
+
+[[mutant]]
+name = "removeEventListener removes nothing"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''    let Some(event_type) = names::find(event_type) else {
+        return Ok(());
+    };'''
+to = '''    let Some(event_type) = names::find(event_type).filter(|_| false) else {
+        return Ok(());
+    };'''
+
+[[mutant]]
+name = "load reaches the window"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''                .filter(|_| cx.event_type(event) != names::event::LOAD)'''
+to = '''                .filter(|_| cx.event_type(event) != names::event::ERROR)'''
+
+[[mutant]]
+name = "DOMFocusOut doesn't bubble"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    let bubbles = matches!(event_type, event::FOCUSIN | event::FOCUSOUT | event::DOM_FOCUS_IN | event::DOM_FOCUS_OUT);'''
+to = '''    let bubbles = matches!(event_type, event::FOCUSIN | event::FOCUSOUT | event::DOM_FOCUS_IN);'''
+
+[[mutant]]
+name = "mouseleave bubbles"
+file = "crates/dom_api_next/src/input.rs"
+from = '''    let boundary_only = matches!(event_type, event::MOUSEENTER | event::MOUSELEAVE);'''
+to = '''    let boundary_only = matches!(event_type, event::MOUSEENTER);'''
+
+[[mutant]]
+name = "a key up is a key down"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        let event_type = if input.down { event::KEYDOWN } else { event::KEYUP };'''
+to = '''        let event_type = event::KEYDOWN;'''
+
+[[mutant]]
+name = "a link's load an error"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''if css.is_some() { dom_next::names::event::LOAD } else { dom_next::names::event::ERROR }'''
+to = '''if css.is_some() { dom_next::names::event::ERROR } else { dom_next::names::event::ERROR }'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it -- next_dom"]

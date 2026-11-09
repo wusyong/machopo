@@ -1,0 +1,116 @@
+# Mutation test of step 2b (Range.getClientRects() and
+# getBoundingClientRect(), through LayoutClient::text_rects):
+# python3 scripts/test.py mutate rfcs/0038-selection/mutants-2b.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "ranges::a_ranges_boxes"]
+timeout = 600
+
+# dom_api: the parts of a range's boxes.
+
+[[mutant]]
+name = "a range out of a document has boxes"
+file = "crates/dom_api/src/range.rs"
+from = '''    if document.kind() != NodeKind::Document {
+        return None;
+    }
+    let is_character_data'''
+to = '''    let is_character_data'''
+
+[[mutant]]
+name = "an empty element a range starts in isn't its first node"
+file = "crates/dom_api/src/range.rs"
+from = '''    } else if start_offset == 0 {
+        Some(start)
+    } else {
+        next_skipping_children(start)
+    };'''
+to = '''    } else {
+        next_skipping_children(start)
+    };'''
+
+[[mutant]]
+name = "a text a range ends in isn't in it"
+file = "crates/dom_api/src/range.rs"
+from = '''    let past_last = if is_character_data(end) {
+        next_skipping_children(end)'''
+to = '''    let past_last = if is_character_data(end) {
+        Some(end)'''
+
+[[mutant]]
+name = "an element has no boxes in a range"
+file = "crates/dom_api/src/range.rs"
+from = '''            NodeKind::Element | NodeKind::Text | NodeKind::CdataSection'''
+to = '''            NodeKind::Text | NodeKind::CdataSection'''
+
+[[mutant]]
+name = "a text is in a range to its start only"
+file = "crates/dom_api/src/range.rs"
+from = '''                } else {
+                    u32::MAX
+                };'''
+to = '''                } else {
+                    0
+                };'''
+
+[[mutant]]
+name = "an element inside another has its boxes too"
+file = "crates/dom_api/src/range.rs"
+from = '''            (!parent_in && !around).then(|| BoxPart::Element(node.id()))'''
+to = '''            let _ = parent_in;
+            (!around).then(|| BoxPart::Element(node.id()))'''
+
+[[mutant]]
+name = "an element around the range's end has its boxes"
+file = "crates/dom_api/src/range.rs"
+from = '''            let around = !start.ptr_eq(&end) && (holds(node, start) || holds(node, end));'''
+to = '''            let around = !start.ptr_eq(&end) && holds(node, start);'''
+
+[[mutant]]
+name = "an element a collapsed range is in has no boxes"
+file = "crates/dom_api/src/range.rs"
+from = '''            let around = !start.ptr_eq(&end) && (holds(node, start) || holds(node, end));'''
+to = '''            let around = holds(node, start) || holds(node, end);'''
+
+[[mutant]]
+name = "a text's part is asked as an element's boxes"
+file = "crates/dom_api/src/range.rs"
+from = '''                BoxPart::Text(text, start, end) => client.text_rects(scope, text, start, end),'''
+to = '''                BoxPart::Text(text, ..) => client.client_rects(scope, text),'''
+
+[[mutant]]
+name = "the rect around takes boxes without a size"
+file = "crates/dom_api/src/range.rs"
+from = '''        .filter(|r| r.width != 0.0 && r.height != 0.0)
+        .copied()
+        .reduce(|a, b| a.union(&b))
+        .or_else(|| rects.first().copied())'''
+to = '''        .copied()
+        .reduce(|a, b| a.union(&b))
+        .or_else(|| rects.first().copied())'''
+
+[[mutant]]
+name = "the rect around boxes without a size is empty"
+file = "crates/dom_api/src/range.rs"
+from = '''        .reduce(|a, b| a.union(&b))
+        .or_else(|| rects.first().copied())'''
+to = '''        .reduce(|a, b| a.union(&b))'''
+
+# renderer: the frame's scroll.
+
+[[mutant]]
+name = "a text's boxes keep the viewport's scroll"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        layout::text_rects(fragment, &self.scroll.containers, text, start, end)
+            .into_iter()
+            .map(|rect| rect.offset(-at.x, -at.y))
+            .collect()'''
+to = '''        let _ = at;
+        layout::text_rects(fragment, &self.scroll.containers, text, start, end)'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "geometry::a_ranges_boxes"]
+
+[[mutant]]
+name = "a text in a fixed box loses the viewport's scroll"
+file = "crates/renderer/src/layout_client.rs"
+from = '''        frame.text_rects(text, element, start, end)'''
+to = '''        let _ = element;
+        frame.text_rects(text, None, start, end)'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "geometry::a_ranges_boxes"]

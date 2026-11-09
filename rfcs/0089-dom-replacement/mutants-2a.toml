@@ -1,0 +1,454 @@
+# Stage 2a: the node kinds testharness's documents have (doctypes,
+# comments, processing instructions, fragments; a document's quirks mode, a
+# template's contents, a script's flags) in the new DOM, gc's checked
+# downcast of an erased edge, the interfaces of the new kinds, and the
+# parser on the new DOM (html::next), checked by the html5lib
+# tree-construction tests.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_next"]
+timeout = 900
+
+[[mutant]]
+name = "an erased edge downcasts to any type"
+file = "crates/gc/src/member.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--test", "it", "downcast"]
+from = '''        (index == T::__type().index()).then(|| unsafe { Gc::from_raw(self.as_non_null().cast()) })'''
+to = '''        { let _ = index; true }.then(|| unsafe { Gc::from_raw(self.as_non_null().cast()) })'''
+
+[[mutant]]
+name = "the kind is two bits"
+file = "crates/dom_next/src/lib.rs"
+from = '''const KIND_MASK: u16 = 0b111;'''
+to = '''const KIND_MASK: u16 = 0b11;'''
+
+[[mutant]]
+name = "an HTML document's bit is the quirks mode's"
+file = "crates/dom_next/src/lib.rs"
+from = '''const HTML_DOCUMENT: u16 = 1 << 3;'''
+to = '''const HTML_DOCUMENT: u16 = 1 << 4;'''
+
+[[mutant]]
+name = "a script's two flags are one bit"
+file = "crates/dom_next/src/lib.rs"
+from = '''const ALREADY_STARTED: u16 = 1 << 8;'''
+to = '''const ALREADY_STARTED: u16 = 1 << 7;'''
+
+[[mutant]]
+name = "a flag is never cleared"
+file = "crates/dom_next/src/lib.rs"
+from = '''            .set(if on { flags | flag } else { flags & !flag });'''
+to = '''            .set(if on { flags | flag } else { flags });'''
+
+[[mutant]]
+name = "a quirks mode keeps the old one's bits"
+file = "crates/dom_next/src/lib.rs"
+from = '''            .set((document.flags.get() & !QUIRKS_MASK) | (bits << QUIRKS_SHIFT));'''
+to = '''            .set(document.flags.get() | (bits << QUIRKS_SHIFT));'''
+
+[[mutant]]
+name = "a template document has a template document of its own"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if self.flag(document, TEMPLATE_DOCUMENT) {
+            return document;
+        }'''
+to = '''        if false && self.flag(document, TEMPLATE_DOCUMENT) {
+            return document;
+        }'''
+
+[[mutant]]
+name = "each template has its own template document"
+file = "crates/dom_next/src/lib.rs"
+from = '''            && let Some(inert) = data.template_document.get(self.gc)'''
+to = '''            && let Some(inert) = data.template_document.get(self.gc).filter(|_| false)'''
+
+[[mutant]]
+name = "a template document is always an HTML one"
+file = "crates/dom_next/src/lib.rs"
+from = '''        let inert = self.create_document(self.is_html_document(document));'''
+to = '''        let inert = self.create_document(true);'''
+
+[[mutant]]
+name = "a template in any namespace has contents"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if name.namespace == names::HTML_NAMESPACE && self.names.borrow().get(name.local) == "template" {'''
+to = '''        if self.names.borrow().get(name.local) == "template" {'''
+
+[[mutant]]
+name = "adopting a template leaves its contents"
+file = "crates/dom_next/src/lib.rs"
+from = '''                self.adopt(content, self.template_document(document));'''
+to = '''                let _ = content;'''
+
+[[mutant]]
+name = "a doctype's ids are swapped"
+file = "crates/dom_next/src/lib.rs"
+from = '''            public_id: data.public_id.get().clone(),
+            system_id: data.system_id.get().clone(),'''
+to = '''            public_id: data.system_id.get().clone(),
+            system_id: data.public_id.get().clone(),'''
+
+[[mutant]]
+name = "every node has a target"
+file = "crates/dom_next/src/lib.rs"
+from = '''        (self.kind(node) == NodeKind::ProcessingInstruction).then(|| self.name(node.local.get()))'''
+to = '''        true.then(|| self.name(node.local.get()))'''
+
+[[mutant]]
+name = "a doctype is character data"
+file = "crates/dom_next/src/lib.rs"
+from = '''        matches!(self, Self::Text | Self::Comment | Self::ProcessingInstruction)'''
+to = '''        matches!(self, Self::Text | Self::Comment | Self::ProcessingInstruction | Self::DocumentType)'''
+
+[[mutant]]
+name = "a comment's nodeName is a text's"
+file = "crates/dom_next/src/lib.rs"
+from = '''            NodeKind::Comment => names::COMMENT_NAME,'''
+to = '''            NodeKind::Comment => names::TEXT_NAME,'''
+
+[[mutant]]
+name = "a processing instruction's nodeType is a comment's"
+file = "crates/dom_next/src/lib.rs"
+from = '''            NodeKind::ProcessingInstruction => 7,'''
+to = '''            NodeKind::ProcessingInstruction => 8,'''
+
+[[mutant]]
+name = "a doctype goes in an element"
+file = "crates/dom_next/src/lib.rs"
+from = '''            NodeKind::DocumentType if parent_kind != NodeKind::Document => {'''
+to = '''            NodeKind::DocumentType if false => {'''
+
+[[mutant]]
+name = "a node goes in a comment"
+file = "crates/dom_next/src/lib.rs"
+from = '''            NodeKind::Document | NodeKind::DocumentFragment | NodeKind::Element
+        ) {'''
+to = '''            NodeKind::Document | NodeKind::DocumentFragment | NodeKind::Element | NodeKind::Comment
+        ) {'''
+
+[[mutant]]
+name = "a fragment with two elements goes in a document"
+file = "crates/dom_next/src/lib.rs"
+from = '''                if elements > 1 || self.has_child_of(node, NodeKind::Text) {'''
+to = '''                if elements > 2 || self.has_child_of(node, NodeKind::Text) {'''
+
+[[mutant]]
+name = "a fragment with a text goes in a document"
+file = "crates/dom_next/src/lib.rs"
+from = '''                if elements > 1 || self.has_child_of(node, NodeKind::Text) {'''
+to = '''                if elements > 1 {'''
+
+[[mutant]]
+name = "a fragment's element skips the element rule"
+file = "crates/dom_next/src/lib.rs"
+from = '''                if elements == 1 {
+                    element_rule()?;
+                }'''
+to = '''                if elements == 1 {
+                    let _ = element_rule;
+                }'''
+
+[[mutant]]
+name = "an element goes before a doctype"
+file = "crates/dom_next/src/lib.rs"
+from = '''                self.kind(child) == NodeKind::DocumentType
+                    || self.sibling_of(child, NodeKind::DocumentType, true)'''
+to = '''                self.kind(child) == NodeKind::DocumentType'''
+
+[[mutant]]
+name = "an element goes before the doctype itself"
+file = "crates/dom_next/src/lib.rs"
+from = '''                self.kind(child) == NodeKind::DocumentType
+                    || self.sibling_of(child, NodeKind::DocumentType, true)'''
+to = '''                self.sibling_of(child, NodeKind::DocumentType, true)'''
+
+[[mutant]]
+name = "a doctype looks for elements after it"
+file = "crates/dom_next/src/lib.rs"
+from = '''                    Some(child) => self.sibling_of(child, NodeKind::Element, false),'''
+to = '''                    Some(child) => self.sibling_of(child, NodeKind::Element, true),'''
+
+[[mutant]]
+name = "a doctype appended after the element goes in"
+file = "crates/dom_next/src/lib.rs"
+from = '''                    None => self.has_child_of(parent, NodeKind::Element),'''
+to = '''                    None => false,'''
+
+[[mutant]]
+name = "a second doctype goes in"
+file = "crates/dom_next/src/lib.rs"
+from = '''                if self.has_child_of(parent, NodeKind::DocumentType) || element_before {'''
+to = '''                if element_before {'''
+
+[[mutant]]
+name = "a fragment is inserted itself"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if self.kind(node) == NodeKind::DocumentFragment {
+            while let Some(first) = self.first_child(node) {'''
+to = '''        if false {
+            while let Some(first) = self.first_child(node) {'''
+
+[[mutant]]
+name = "a fragment's children are inserted in reverse"
+file = "crates/dom_next/src/lib.rs"
+from = '''            while let Some(first) = self.first_child(node) {
+                self.remove(first);
+                self.adopt(first, self.document_of(parent));
+                self.link(parent, first, child);'''
+to = '''            while let Some(first) = self.last_child(node) {
+                self.remove(first);
+                self.adopt(first, self.document_of(parent));
+                self.link(parent, first, child);'''
+
+[[mutant]]
+name = "a fragment's children keep their document"
+file = "crates/dom_next/src/lib.rs"
+from = '''                self.adopt(first, self.document_of(parent));'''
+to = '''                let _ = first;'''
+
+[[mutant]]
+name = "appended data replaces the data"
+file = "crates/dom_next/src/lib.rs"
+from = '''        let joined = format!("{}{more}", data.to_str());'''
+to = '''        let joined = more.to_owned();'''
+
+[[mutant]]
+name = "a fragment's textContent is a document's"
+file = "crates/dom_next/src/lib.rs"
+from = '''            NodeKind::Document | NodeKind::DocumentType => None,'''
+to = '''            NodeKind::Document | NodeKind::DocumentType | NodeKind::DocumentFragment => None,'''
+
+[[mutant]]
+name = "a comment's text is part of textContent"
+file = "crates/dom_next/src/lib.rs"
+from = '''                    if self.kind(at) == NodeKind::Text
+                        && let Some(data) = self.text_data(at)'''
+to = '''                    if let Some(data) = self.text_data(at)'''
+
+[[mutant]]
+name = "setting a doctype's textContent panics"
+file = "crates/dom_next/src/lib.rs"
+from = '''            NodeKind::Document | NodeKind::DocumentType => {}'''
+to = '''            NodeKind::Document => {}
+            NodeKind::DocumentType => self.set_data(node, value),'''
+
+[[mutant]]
+name = "a clone is in its original's document"
+file = "crates/dom_next/src/lib.rs"
+from = '''        let document = document.unwrap_or_else(|| self.document_of(node));'''
+to = '''        let document = { let _ = document; self.document_of(node) };'''
+
+[[mutant]]
+name = "a cloned document is in no-quirks mode"
+file = "crates/dom_next/src/lib.rs"
+from = '''                self.set_quirks_mode(copy, self.quirks_mode(node));'''
+to = '''                let _ = node;'''
+
+[[mutant]]
+name = "a clone has no attributes"
+file = "crates/dom_next/src/lib.rs"
+from = '''                for index in 0..self.attribute_count(node) {'''
+to = '''                for index in 0..0 {'''
+
+[[mutant]]
+name = "a clone's template has no contents"
+file = "crates/dom_next/src/lib.rs"
+from = '''                if deep
+                    && let (Some(from), Some(to))'''
+to = '''                if false
+                    && let (Some(from), Some(to))'''
+
+[[mutant]]
+name = "a deep clone has no descendants"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if deep {
+            let copy_document = self.document_of(copy);'''
+to = '''        if false {
+            let copy_document = self.document_of(copy);'''
+
+[[mutant]]
+name = "a cloned processing instruction's target is its data"
+file = "crates/dom_next/src/lib.rs"
+from = '''                &self.target(node).expect("a target").to_str(),'''
+to = '''                &self.data(node).expect("a target").to_str(),'''
+
+[[mutant]]
+name = "a doctype's name reads as public id"
+file = "crates/dom_api_next/src/document_type.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        cx.doctype(this).expect("a doctype").public_id,'''
+to = '''        cx.doctype(this).expect("a doctype").system_id,'''
+
+[[mutant]]
+name = "a fragment's lastElementChild is its first"
+file = "crates/dom_api_next/src/interfaces.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''    interface DocumentFragment : Node [DocumentFragment] {
+        attribute firstElementChild: Option<Element>, get = parent_node::first_element_child;
+        attribute lastElementChild: Option<Element>, get = parent_node::last_element_child;'''
+to = '''    interface DocumentFragment : Node [DocumentFragment] {
+        attribute firstElementChild: Option<Element>, get = parent_node::first_element_child;
+        attribute lastElementChild: Option<Element>, get = parent_node::first_element_child;'''
+
+[[mutant]]
+name = "a comment is a text"
+file = "crates/dom_api_next/src/interfaces.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''    interface Comment : CharacterData [Comment] {}'''
+to = '''    interface Comment : CharacterData [] {}'''
+
+[[mutant]]
+name = "the parser's texts never continue"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "--", "next::", "tree_construction_on_the_new_dom"]
+from = '''                .filter(|last| cx.kind(*last) == NodeKind::Text)'''
+to = '''                .filter(|_| false)'''
+
+[[mutant]]
+name = "a text before a sibling never continues"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "--", "next::", "tree_construction_on_the_new_dom"]
+from = '''                        .filter(|previous| cx.kind(*previous) == NodeKind::Text)'''
+to = '''                        .filter(|_| false)'''
+
+[[mutant]]
+name = "a fragment parse's root is in the fragment"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "--", "next::", "tree_construction_on_the_new_dom"]
+from = '''            && fragment.root.borrow().is_none()
+        {'''
+to = '''            && false
+        {'''
+
+[[mutant]]
+name = "a fragment parse's root's children stay in the root"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "--", "next::", "tree_construction_on_the_new_dom"]
+from = '''                &fragment.fragment
+            }
+            _ => parent,'''
+to = '''                parent
+            }
+            _ => parent,'''
+
+[[mutant]]
+name = "a context that is an integration point isn't one"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "--", "next::", "tree_construction_on_the_new_dom"]
+from = '''        integration_point: integration_point.then(|| context.clone()),'''
+to = '''        integration_point: { let _ = integration_point; None },'''
+
+[[mutant]]
+name = "an annotation-xml the parser made is no integration point"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "--", "next::", "tree_construction_on_the_new_dom"]
+from = '''            if flags.mathml_annotation_xml_integration_point {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "the parser never sets the quirks mode"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "--", "next::", "tree_construction_on_the_new_dom"]
+from = '''        self.with(|cx| cx.set_quirks_mode(self.document.get(cx), mode));'''
+to = '''        let _ = mode;'''
+
+[[mutant]]
+name = "a fragment parse is in no-quirks mode"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "--", "next::", "tree_construction_on_the_new_dom"]
+from = '''        opts(scripting_enabled, quirks_mode),
+        context,'''
+to = '''        opts(scripting_enabled, { let _ = quirks_mode; QuirksMode::NoQuirks }),
+        context,'''
+
+[[mutant]]
+name = "a fragment parse sets its document's quirks mode"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "--", "next::", "tree_construction_on_the_new_dom"]
+from = '''        if self.fragment.is_some() {
+            return;
+        }'''
+to = '''        if false {
+            return;
+        }'''
+
+[[mutant]]
+name = "missing attributes overwrite the ones there"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "--", "next::", "tree_construction_on_the_new_dom"]
+from = '''                    .get_attribute_ns(target, name.namespace, name.local)
+                    .is_none()'''
+to = '''                    .get_attribute_ns(target, name.namespace, name.local)
+                    .is_none() || true'''
+
+[[mutant]]
+name = "children are never reparented"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "--", "next::", "tree_construction_on_the_new_dom"]
+from = '''            while let Some(child) = cx.first_child(node) {
+                cx.insert(new_parent, child, None);
+            }'''
+to = '''            let _ = (node, new_parent);'''
+
+[[mutant]]
+name = "two handles of one node are different nodes"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "--", "next::", "tree_construction_on_the_new_dom"]
+from = '''        Rc::ptr_eq(&x.0, &y.0) || self.with(|cx| gc::Gc::ptr_eq(x.get(cx), y.get(cx)))'''
+to = '''        Rc::ptr_eq(&x.0, &y.0)'''
+
+[[mutant]]
+name = "a parse with scripting disabled runs its scripts"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "--", "next::", "tree_construction_on_the_new_dom"]
+from = '''    sink.scripts_never_run = !scripting_enabled;'''
+to = '''    sink.scripts_never_run = { let _ = scripting_enabled; false };'''
+
+[[mutant]]
+name = "a fragment's scripts run"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "--", "next::", "tree_construction_on_the_new_dom"]
+from = '''    sink.scripts_never_run = true;'''
+to = '''    sink.scripts_never_run = false;'''
+
+[[mutant]]
+name = "a fragment's link is parser-inserted"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "--", "next::", "tree_construction_on_the_new_dom"]
+from = '''        let is_parsers_link = self.fragment.is_none() && html && &*name.local == "link";'''
+to = '''        let is_parsers_link = html && &*name.local == "link";'''
+
+[[mutant]]
+name = "a multiple select's selectedcontent is filled"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "--", "next::", "tree_construction_on_the_new_dom"]
+from = '''    if has(select, "multiple") {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "with none selected, no option fills selectedcontent"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "--", "next::", "tree_construction_on_the_new_dom"]
+from = '''                .is_some_and(|first| gc::Gc::ptr_eq(*first, option)));'''
+to = '''                .is_some_and(|_| false));'''
+
+[[mutant]]
+name = "selectedcontent keeps its old contents"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "--", "next::", "tree_construction_on_the_new_dom"]
+from = '''    while let Some(old) = cx.first_child(selectedcontent) {
+        cx.remove(old);
+    }'''
+to = '''    let _ = selectedcontent;'''
+
+[[mutant]]
+name = "selectedcontent's copy has no comments"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "--", "next::", "tree_construction_on_the_new_dom"]
+from = '''            NodeKind::Element | NodeKind::Text | NodeKind::Comment'''
+to = '''            NodeKind::Element | NodeKind::Text'''
+
+[[mutant]]
+name = "the dump doesn't sort attributes"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "--", "next::", "tree_construction_on_the_new_dom"]
+from = '''            attrs.sort_by(|(a, _), (b, _)| a.encode_utf16().cmp(b.encode_utf16()));'''
+to = '''            let _ = &mut attrs;'''

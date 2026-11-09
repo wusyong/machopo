@@ -1,0 +1,173 @@
+# 3c: the legacy presentational hints (`style`'s `hints`), legacy colors
+# and the document's link colors (`css`, `style`).
+#   python3 scripts/test.py mutate rfcs/0070-element-interfaces/mutants-3c.toml
+# Left out as equivalent: none.
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "legacy_hints", "tables::", "invalidation::"]
+timeout = 900
+
+[[mutant]]
+name = "a named legacy color read as digits"
+file = "crates/css/src/values.rs"
+from = '''    if let Ok((r, g, b)) = cssparser::color::parse_named_color(&value.to_ascii_lowercase()) {
+        return Some(Color::rgb(r, g, b));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "#rgb read as digits"
+file = "crates/css/src/values.rs"
+from = '''    if bytes.len() == 4 && bytes[0] == b'#' && bytes[1..].iter().all(u8::is_ascii_hexdigit) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "outside the BMP one zero"
+file = "crates/css/src/values.rs"
+from = '''            digits.extend(b"00");'''
+to = '''            digits.push(b'0');'''
+
+[[mutant]]
+name = "no 128 limit"
+file = "crates/css/src/values.rs"
+from = '''    digits.truncate(128);'''
+to = ''''''
+
+[[mutant]]
+name = "a long part's first eight digits"
+file = "crates/css/src/values.rs"
+from = '''            *part = &part[length - 8..];'''
+to = '''            *part = &part[..8];'''
+
+[[mutant]]
+name = "leading zeros kept"
+file = "crates/css/src/values.rs"
+from = '''    while length > 2 && parts.iter().all(|part| part[0] == b'0') {'''
+to = '''    while false {'''
+
+[[mutant]]
+name = "a link's color the default"
+file = "crates/css/src/values.rs"
+from = '''            Self::System(SystemColor::WebkitLink) => StyleColor::Rgba(cx.link_colors.link),'''
+to = ''''''
+
+[[mutant]]
+name = "alink not read"
+file = "crates/style/src/lib.rs"
+from = '''        active_link: color(local_name!("alink")).unwrap_or(defaults.active_link),'''
+to = '''        active_link: defaults.active_link,'''
+
+[[mutant]]
+name = "new link colors restyle nothing"
+file = "crates/style/src/lib.rs"
+from = '''            || links_changed
+'''
+to = '''
+'''
+
+[[mutant]]
+name = "the UA's links of a fixed color"
+file = "crates/style/resources/html.css"
+from = '''  color: -webkit-link;'''
+to = '''  color: #0000EE;'''
+
+[[mutant]]
+name = "a font's sizes off by one"
+file = "crates/style/src/hints.rs"
+from = '''    Some(SIZES[size.clamp(1, 7) as usize - 1])'''
+to = '''    Some(SIZES[size.clamp(0, 6) as usize])'''
+
+[[mutant]]
+name = "a smaller font relative to 0"
+file = "crates/style/src/hints.rs"
+from = '''        -1 => 3 - number.min(3),'''
+to = '''        -1 => -number,'''
+
+[[mutant]]
+name = "a rule's color not its background"
+file = "crates/style/src/hints.rs"
+from = '''            push_color(out, &BORDER_COLOR, color);
+            push_color(out, &[LonghandId::BackgroundColor], color);
+        }
+    } else if'''
+to = '''            push_color(out, &BORDER_COLOR, color);
+        }
+    } else if'''
+
+[[mutant]]
+name = "noshade not gray"
+file = "crates/style/src/hints.rs"
+from = '''        let gray = gfx::Color::rgb(128, 128, 128);'''
+to = '''        let gray = gfx::Color::rgb(169, 169, 169);'''
+
+[[mutant]]
+name = "a rule's size its height"
+file = "crates/style/src/hints.rs"
+from = '''                    Length::px((size - 2) as f32),'''
+to = '''                    Length::px(size as f32),'''
+
+[[mutant]]
+name = "a rule aligned right on the left"
+file = "crates/style/src/hints.rs"
+from = '''        } else if align.eq_ignore_ascii_case("right") {
+            (auto, zero)'''
+to = '''        } else if align.eq_ignore_ascii_case("right") {
+            (zero, auto)'''
+
+[[mutant]]
+name = "leftmargin the top and bottom"
+file = "crates/style/src/hints.rs"
+from = '''                || attribute.name.is_attr(&dom::name::unlisted::LEFTMARGIN)'''
+to = '''                || attribute.name.is_attr(&dom::name::unlisted::TOPMARGIN)'''
+
+[[mutant]]
+name = "a background's URL untrimmed"
+file = "crates/style/src/hints.rs"
+from = '''        .map(|value| value.trim_matches(HTML_WHITESPACE).to_owned())'''
+to = '''        .map(|value| value.to_owned())'''
+
+[[mutant]]
+name = "a bordercolor table outset"
+file = "crates/style/src/hints.rs"
+from = '''                let style = if has_border_color(element) {'''
+to = '''                let style = if false {'''
+
+[[mutant]]
+name = "a cell without its table's bordercolor"
+file = "crates/style/src/hints.rs"
+from = '''        if let Some(color) = legacy_color(table, &dom::name::unlisted::BORDERCOLOR) {
+            push_color(out, &BORDER_COLOR, color);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a table's bordercolor not its cells' hints"
+file = "crates/style/src/hints.rs"
+from = '''                || dom::name::unlisted::BORDERCOLOR.is(name)'''
+to = ''''''
+
+[[mutant]]
+name = "a column's background not mapped"
+file = "crates/style/src/hints.rs"
+from = '''    // The table parts' `bgcolor` and `background` (Blink's
+    // `HTMLTablePartElement`, a column's too).
+    background_declarations(element, out);
+    if column {'''
+to = '''    if !column {
+        background_declarations(element, out);
+    }
+    if column {'''
+
+[[mutant]]
+name = "the rows don't inherit the border color"
+file = "crates/style/resources/html.css"
+from = '''  vertical-align: inherit;
+  border-color: inherit;'''
+to = '''  vertical-align: inherit;'''
+
+[[mutant]]
+name = "a background's URL not resolved"
+file = "crates/style/src/hints.rs"
+from = '''    if let Some(base) = base_url {
+        hints.resolve_urls(base);
+    }'''
+to = ''''''
+test = ["python3", "scripts/test.py", "reftest", "tables/t5-legacy-attributes.html"]

@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<script src="../resources/runner.js"></script>
+<script src="resources/catching.js"></script>
+<script>
+  // Valid, with a script that catches what it calls: marked.
+  PerfTestRunner.measureRunsPerSecond({
+    run() {
+      tryToCall();
+    },
+  });
+</script>

@@ -1,0 +1,74 @@
+# Stage 4g-4c-1: the new DOM's WindowProxy: a frame's global proxy going on as it
+# navigates (the realm before detached), a child frame's initial about:blank's window kept
+# for a document of its origin (an about: one, or the same tuple origin).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts/", "sh", "-c", "cargo test -q -p dom_js_next --test it frames && cargo test -q -p dom_api_next --test it images"]
+timeout = 900
+
+[[mutant]]
+name = "a navigating frame gets a new proxy"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        let context = create_window_realm(scope, url, proxy);'''
+to = '''        let _ = proxy;
+        let context = create_window_realm(scope, url, None);'''
+
+[[mutant]]
+name = "the realm before not detached"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''            context.detach_global();'''
+to = ''''''
+
+[[mutant]]
+name = "an about: document not of its parent's origin"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        if url.starts_with("about:") {
+            return true;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "any origin its parent's"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        matches!((parent, origin), (Some(parent), Ok(origin)) if parent.is_tuple() && parent == origin)'''
+to = '''        matches!((parent, origin), (Some(_), Ok(_)))'''
+
+[[mutant]]
+name = "the kept window keeps its document"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''            cx.reuse_window(window, document);'''
+to = ''''''
+
+[[mutant]]
+name = "a child frame's first document not initial"
+file = "crates/dom_js_next/src/frames.rs"
+from = '''        Some(owner.clone()),
+        true,
+    ));'''
+to = '''        Some(owner.clone()),
+        false,
+    ));'''
+
+[[mutant]]
+name = "the kept window's document still initial"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''            Some(owner.clone()),
+            false,
+        ));
+        document'''
+to = '''            Some(owner.clone()),
+            true,
+        ));
+        document'''
+
+[[mutant]]
+name = "dom: the document before keeps its window"
+file = "crates/dom_next/src/window.rs"
+from = '''        if let Some(data) = self.document_data(old) {
+            data.window.set(self.gc, None);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "images: a frame never laid out not laid out first"
+file = "crates/dom_api_next/src/image.rs"
+from = '''        Some(false) => cx.with_layout(element, |layout| read(layout)),'''
+to = '''        Some(false) => cx.peek_layout(element, read),'''

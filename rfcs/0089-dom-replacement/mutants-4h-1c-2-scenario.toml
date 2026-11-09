@@ -1,0 +1,12 @@
+# Stage 4h-1c-2: what only the editing host's caret scenario reaches (the caret drawn only while
+# the page has the focus).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "python3", "scripts/test.py", "scenarios", "--next-dom", "caret-editing-host"]
+timeout = 3000
+
+[[mutant]]
+name = "the editing host's caret without the page's focus"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            if active {
+                caret = crate::next_selection::caret(cx, token, document, box_tree, text);'''
+to = '''            if true {
+                caret = crate::next_selection::caret(cx, token, document, box_tree, text);'''

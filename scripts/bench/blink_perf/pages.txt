@@ -1,0 +1,30 @@
+# The pages `bench.py blink-perf` runs by default: one a line, under
+# ../third_party/blink_perf, by area; `bench.py blink-perf dom/` runs the
+# lines under `dom/` alone. Each is valid in machopo and in Chrome (both give
+# values, their documents' summaries are the same) twice in a row, and was
+# checked by hand where the report says to (machopo over 2 times faster, a page
+# that catches exceptions itself). A page goes on once two `--pages` runs
+# of it are valid; a page here that stops being valid is a regression,
+# first in the report. The list starts small and grows an area at a time.
+
+# Calls from JS into the DOM.
+bindings/create-element.html
+bindings/insert-before.html
+bindings/set-attribute.html
+
+# What a node costs: its attributes.
+dom/modify-element-id.html
+
+# Style: matching and invalidation.
+css/PseudoClassSelectors.html
+
+# Selector queries.
+parser/query-selector-all-class.html
+
+# Layout and text.
+layout/chapter-reflow-once.html
+layout/flexbox-row-nowrap.html
+layout/line-layout-line-height.html
+
+# Event dispatch.
+events/EventsDispatchingInV1ShadowTrees.html

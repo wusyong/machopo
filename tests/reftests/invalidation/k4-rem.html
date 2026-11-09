@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<html id="root" class="reftest-wait">
+<title>K4: another root font size changes what rem is everywhere</title>
+<link rel="match" href="k4-style-ref.html">
+<style>html, body { margin: 0 } div { width: 10rem; height: 5rem; background-color: green }</style>
+<div></div><div></div>
+<script src="after-frames.js"></script>
+<script>afterFrames(() => document.getElementById("root").setAttribute("style", "font-size: 10px"));</script>
+</html>

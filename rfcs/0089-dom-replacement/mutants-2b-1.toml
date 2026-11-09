@@ -1,0 +1,213 @@
+# Stage 2b-1: objects besides nodes in the table and the bindings (an
+# event, a plain event target), constructors, dictionaries, optional
+# arguments, double and unsigned short results; for_each_member!'s plain
+# class, which the wasm side binds alone.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_next"]
+timeout = 900
+
+[[mutant]]
+name = "composed is cancelable's bit"
+file = "crates/dom_next/src/event.rs"
+from = '''const COMPOSED: u16 = 1 << 2;'''
+to = '''const COMPOSED: u16 = 1 << 1;'''
+
+[[mutant]]
+name = "an event is never trusted"
+file = "crates/dom_next/src/event.rs"
+from = '''            (flags.trusted, TRUSTED),'''
+to = '''            (false, TRUSTED),'''
+
+[[mutant]]
+name = "an event's type isn't interned"
+file = "crates/dom_next/src/event.rs"
+from = '''        let event_type = self.values.borrow_mut().intern(event_type);'''
+to = '''        let event_type = DomString::new(event_type);'''
+
+[[mutant]]
+name = "an event is made at the DOM's start"
+file = "crates/dom_next/src/event.rs"
+from = '''                time_stamp: Cell::new(self.origin.elapsed().as_secs_f64() * 1000.0),'''
+to = '''                time_stamp: Cell::new(0.0),'''
+
+[[mutant]]
+name = "an event's time is in seconds"
+file = "crates/dom_next/src/event.rs"
+from = '''                time_stamp: Cell::new(self.origin.elapsed().as_secs_f64() * 1000.0),'''
+to = '''                time_stamp: Cell::new(self.origin.elapsed().as_secs_f64()),'''
+
+[[mutant]]
+name = "an event target's wrapper edge is a node's"
+file = "crates/dom_next/src/event.rs"
+from = '''            ObjectRef::EventTarget(target) => &target.into_ref().wrapper,'''
+to = '''            ObjectRef::EventTarget(_) => self.wrapper_edge(self.create_document(true)),'''
+
+[[mutant]]
+name = "coarsening rounds"
+file = "crates/dom_api_next/src/event.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''    (ms * STEPS_PER_MS).floor() / STEPS_PER_MS'''
+to = '''    (ms * STEPS_PER_MS).round() / STEPS_PER_MS'''
+
+[[mutant]]
+name = "coarsening keeps microseconds"
+file = "crates/dom_api_next/src/event.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''    const STEPS_PER_MS: f64 = 10.0;'''
+to = '''    const STEPS_PER_MS: f64 = 1000.0;'''
+
+[[mutant]]
+name = "timeStamp isn't coarsened"
+file = "crates/dom_api_next/src/event.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''    Ok(coarsen(cx.event_time_stamp(this)))'''
+to = '''    Ok(cx.event_time_stamp(this))'''
+
+[[mutant]]
+name = "bubbles is EventInit's cancelable"
+file = "crates/dom_api_next/src/event.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''            bubbles: init.bubbles,'''
+to = '''            bubbles: init.cancelable,'''
+
+[[mutant]]
+name = "a script's event is trusted"
+file = "crates/dom_api_next/src/event.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''            trusted: false,'''
+to = '''            trusted: true,'''
+
+[[mutant]]
+name = "every parameter is required"
+file = "crates/dom_api_next/src/declare.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''            .position(|param| param.optional)'''
+to = '''            .position(|_| false)'''
+
+[[mutant]]
+name = "a dictionary's members are read in the table's order"
+file = "crates/dom_api_next_macros/src/lib.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next", "-p", "dom_api_next_macros"]
+from = '''    ordered.sort_by_key(|member| member.name.unraw().to_string());'''
+to = '''    let _ = &mut ordered;'''
+
+[[mutant]]
+name = "a constructor's call isn't checked"
+file = "crates/dom_api_next_macros/src/lib.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next", "-p", "dom_api_next_macros"]
+from = '''            if !#front.construct(<#iface as #api::declare::Interface>::INDEX, #required) {'''
+to = '''            if false && !#front.construct(<#iface as #api::declare::Interface>::INDEX, #required) {'''
+
+[[mutant]]
+name = "a node interface's constructor is plain"
+file = "crates/dom_api_next_macros/src/lib.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next", "-p", "dom_api_next_macros"]
+from = '''                && *kind != Kind::Constructor
+                && !entry.types.iter().any(|ty| names_any(ty, &not_plain));'''
+to = '''                && !entry.types.iter().any(|ty| names_any(ty, &not_plain));'''
+
+[[mutant]]
+name = "an object interface's member is plain"
+file = "crates/dom_api_next_macros/src/lib.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next", "-p", "dom_api_next_macros"]
+from = '''            let plain = node
+                && *kind'''
+to = '''            let plain = true
+                && *kind'''
+
+[[mutant]]
+name = "a generic's argument isn't looked at"
+file = "crates/dom_api_next_macros/src/lib.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next", "-p", "dom_api_next_macros"]
+from = '''    quote!(#ty).into_iter().any(|token| match token {'''
+to = '''    quote!(#ty).into_iter().take(1).any(|token| match token {'''
+
+[[mutant]]
+name = "a dictionary is plain"
+file = "crates/dom_api_next_macros/src/lib.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next", "-p", "dom_api_next_macros"]
+from = '''    dictionaries.chain(objects).collect()'''
+to = '''    { let _ = dictionaries; objects.collect() }'''
+
+[[mutant]]
+name = "a raw name keeps its r#"
+file = "crates/dom_api_next_macros/src/lib.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next", "-p", "dom_api_next_macros"]
+from = '''    LitStr::new(&name.unraw().to_string(), name.span())'''
+to = '''    LitStr::new(&name.to_string(), name.span())'''
+
+[[mutant]]
+name = "a dictionary's member isn't set"
+file = "crates/dom_api_next_macros/src/lib.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next", "-p", "dom_api_next_macros"]
+from = '''                #value.#field = #taken;'''
+to = '''                let _ = #taken;'''
+
+[[mutant]]
+name = "a constructor called without new constructs"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        if self.args.new_target().is_undefined() {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a constructor's arguments aren't counted"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        if given >= required {
+            return true;
+        }
+        self.throw_type_error(&format!(
+            "Failed to construct'''
+to = '''        if given >= required || true {
+            return true;
+        }
+        self.throw_type_error(&format!(
+            "Failed to construct'''
+
+[[mutant]]
+name = "a dictionary that isn't an object is undefined"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        self.throw_type_error(&format!("The provided value is not of type '{name}'."));
+        None'''
+to = '''        let _ = name;
+        Some(None)'''
+
+[[mutant]]
+name = "a double result is truncated to a Smi"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        let smi = value.fract() == 0.0
+            && value.abs()'''
+to = '''        let smi = value.abs()'''
+
+[[mutant]]
+name = "a heap number result is dropped"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''            Kept::F64(value) => self.rv.set_double(value),'''
+to = '''            Kept::F64(_) => {}'''
+
+[[mutant]]
+name = "no interface object constructs"
+file = "crates/dom_js_next/src/templates.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        if M::INTERFACE != self.interface || M::KIND != MemberKind::Constructor {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "a constructor's length is 0"
+file = "crates/dom_js_next/src/templates.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        let length = INTERFACES[M::INTERFACE].members[M::MEMBER].required();
+        self.template = Some('''
+to = '''        let length = 0;
+        self.template = Some('''
+
+[[mutant]]
+name = "an object interface is in the WIT"
+file = "crates/dom_wasm_next/src/wit.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_wasm_next", "--test", "it", "wit"]
+from = '''    interface.node
+        && member.kind != MemberKind::Constructor'''
+to = '''    member.kind != MemberKind::Constructor'''

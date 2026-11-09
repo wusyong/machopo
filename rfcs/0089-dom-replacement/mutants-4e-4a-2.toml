@@ -1,0 +1,241 @@
+# Stage 4e-4a-2: constructing and upgrading custom elements on the new
+# DOM: `dom_next`'s states, maps, candidates and construction stack,
+# `dom_api_next`'s `[HTMLConstructor]`, `createElement`'s checks and the
+# upgrade, `dom_js_next`'s construction.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it custom_elements && cargo test -q -p dom_js_next --test it custom_elements"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: a valid name's element uncustomized"
+file = "crates/dom_next/src/lib.rs"
+from = '''            self.undefined_if_custom_name(element, name.local);'''
+to = ''''''
+
+[[mutant]]
+name = "dom: another namespace's undefined"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if ids.namespace == names::HTML_NAMESPACE && custom_element::has_hyphen(name.local) {'''
+to = '''        if custom_element::has_hyphen(name.local) {'''
+
+[[mutant]]
+name = "dom: a copy uncustomized"
+file = "crates/dom_next/src/lib.rs"
+from = '''                if self.custom_element_state(node) != CustomElementState::Uncustomized {'''
+to = '''                if false {'''
+
+[[mutant]]
+name = "dom: no candidate as connected"
+file = "crates/dom_next/src/style.rs"
+from = '''            if self.is_undefined_custom_element(at) {
+                self.try_to_upgrade(at);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a defined name's candidate"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''        if self.custom_element_definition(registry, name).is_some() {
+            return;
+        }
+        let lists = match registry.candidates.get(self.gc) {'''
+to = '''        let lists = match registry.candidates.get(self.gc) {'''
+
+[[mutant]]
+name = "dom: no registry made for a candidate"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''        let registry = self.custom_elements(window);
+        let Some(name) = self.element_name(element).map(|name| name.local) else {'''
+to = '''        let Some(registry) = self.custom_elements_if_made(window) else {
+            return;
+        };
+        let Some(name) = self.element_name(element).map(|name| name.local) else {'''
+
+[[mutant]]
+name = "dom: dead candidates kept"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''                } else {
+                    list.remove(self.gc, index);
+                }'''
+to = '''                } else {
+                    index = index.saturating_add(1);
+                }'''
+
+[[mutant]]
+name = "dom: a disconnected candidate taken"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''                self.is_connected(*element)
+                    && self.is_undefined_custom_element(*element)'''
+to = '''                self.is_undefined_custom_element(*element)'''
+
+[[mutant]]
+name = "dom: candidates in the order they came"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''        found.sort_by(|a, b| a.0.cmp(&b.0));'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a shadow tree after the host's children"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''                path.push(0);'''
+to = '''                path.push(usize::MAX);'''
+
+[[mutant]]
+name = "dom: a candidate twice"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''        found.dedup_by(|a, b| Gc::ptr_eq(a.1, b.1));'''
+to = ''''''
+
+[[mutant]]
+name = "dom: no constructor numbers"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''        with_taken(&registry.by_constructor, |map| map.entry(number).or_default().push(index));'''
+to = '''        let _ = (number, index);'''
+
+[[mutant]]
+name = "dom: no marker"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''        if with_taken(&definition.markers, |markers| markers.last().copied()).unwrap_or(false) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "dom: a marker left as popped"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''            with_taken(&definition.markers, |markers| markers.pop());'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an upgradable custom element"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''            if self.is_undefined_custom_element(at)
+                && let Some(definition) = self.custom_element_definition_for(at)'''
+to = '''            if let Some(definition) = self.custom_element_definition_for(at)'''
+
+[[mutant]]
+name = "api: an upgrade of any state"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''        if !matches!(
+            cx.custom_element_state(element),
+            CustomElementState::Undefined | CustomElementState::Uncustomized
+        ) {
+            return false;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "api: an upgrade not custom after"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''        if constructed {
+            cx.set_custom_element_state(element, CustomElementState::Custom);
+        } else {'''
+to = '''        if constructed {
+        } else {'''
+
+[[mutant]]
+name = "api: no upgrade at define"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''    for element in &candidates {
+        upgrade(host, &definition, element);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: the top not marked"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''            cx.mark_construction_top(definition);'''
+to = ''''''
+
+[[mutant]]
+name = "api: a new element undefined"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''            cx.set_custom_element_state(element, CustomElementState::Custom);
+            cx.set_element_custom_definition(element, definition);'''
+to = '''            cx.set_custom_element_state(element, CustomElementState::Undefined);
+            cx.set_element_custom_definition(element, definition);'''
+
+[[mutant]]
+name = "api: attributes taken"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''    check(cx.attribute_count(element) == 0, "have attributes")?;'''
+to = ''''''
+
+[[mutant]]
+name = "api: children taken"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''    check(cx.first_child(element).is_none(), "have children")?;'''
+to = ''''''
+
+[[mutant]]
+name = "api: a parent taken"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''    check(cx.parent(element).is_none(), "have a parent")?;'''
+to = ''''''
+
+[[mutant]]
+name = "api: another document taken"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''    check(gc::Gc::ptr_eq(cx.document_of(element), document), "be of another document")?;'''
+to = ''''''
+
+[[mutant]]
+name = "api: another local name taken"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''        cx.element_name(element).is_some_and(|name| name.local == cx.definition_local_name(definition)),'''
+to = '''        true,'''
+
+[[mutant]]
+name = "api: a failed element undefined"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''    cx.set_custom_element_state(element, CustomElementState::Failed);
+    element'''
+to = '''    cx.set_custom_element_state(element, CustomElementState::Undefined);
+    element'''
+
+[[mutant]]
+name = "api: createElement not constructing"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    if cx.custom_element_state(element) == dom_next::CustomElementState::Undefined {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: shadow not disabled"
+file = "crates/dom_api_next/src/shadow_root.rs"
+from = '''            .is_some_and(|definition| cx.definition_disabled(definition).1)'''
+to = '''            .is_some_and(|definition| cx.definition_disabled(definition).0)'''
+
+[[mutant]]
+name = "js: HTMLElement constructing itself"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        if interface == const { dom_api_next::declare::interface_index("HTMLElement") } && self.is_own_constructor(interface) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "js: an upgraded wrapper's prototype kept"
+file = "crates/dom_js_next/src/front.rs"
+from = '''                if let Some(prototype) = prototype {
+                    wrapper.set_prototype(self.scope.scope(), prototype);
+                }'''
+to = '''                let _ = prototype;'''
+
+[[mutant]]
+name = "js: an upgrade giving another object"
+file = "crates/dom_js_next/src/front.rs"
+from = '''            .is_some_and(|wrapper| wrapper == made);'''
+to = '''            .is_some_and(|wrapper| wrapper == made || true);'''
+
+[[mutant]]
+name = "js: createElement's error not reported"
+file = "crates/dom_js_next/src/front.rs"
+from = '''            if checked.is_none() {
+                listeners::report_caught(tc, ReportAt::RealmOf(constructor.into()));
+            }'''
+to = '''            if checked.is_none() {
+                tc.reset();
+            }'''
+
+[[mutant]]
+name = "js: createElement's check skipped"
+file = "crates/dom_js_next/src/front.rs"
+from = '''                match checked {
+                    Ok(()) => Some(made),'''
+to = '''                match checked.or(Ok(())) {
+                    Ok(()) => Some(made),'''

@@ -1,0 +1,61 @@
+# After the wrap-up's measurements: a node's children a ring of previous
+# siblings, the first's the last child (Blink's `previous_`), so that a
+# node has no `last_child` and has room for the subtree's bloom filter.
+# `dom`'s tests: the children forward and back after each change.
+test = ["sh", "-c", "systemd-run --user --scope -q -p MemoryMax=24G -p MemorySwapMax=0 cargo test --no-run -q -p dom --test it && systemd-run --user --scope -q -p MemoryMax=2G -p MemorySwapMax=0 cargo test -q -p dom --test it"]
+# A ring broken can leave a walk that never ends, and one that grows a
+# list too: it is caught by the timeout or by the tests' memory cap (2 GB:
+# they take a few hundred MB; built first, under the usual cap).
+timeout = 120
+
+[[mutant]]
+name = "dom: a first child's previous sibling the last child"
+file = "crates/dom/src/lib.rs"
+from = '''            .filter(|previous| !previous.next_sibling.is_null())'''
+to = '''            .filter(|_| true)'''
+
+[[mutant]]
+name = "dom: the last child the first's own"
+file = "crates/dom/src/lib.rs"
+from = '''        node.first_child.get(self.gc)?.previous_sibling.get(self.gc)'''
+to = '''        node.first_child.get(self.gc)'''
+
+[[mutant]]
+name = "dom: a removal leaves the ring as it was"
+file = "crates/dom/src/lib.rs"
+from = '''        if (previous.is_none() || next.is_none())
+            && let Some(first) = parent.first_child.get(self.gc)'''
+to = '''        if false
+            && let Some(first) = parent.first_child.get(self.gc)'''
+
+[[mutant]]
+name = "dom: a removal of the last child leaves the ring"
+file = "crates/dom/src/lib.rs"
+from = '''        if (previous.is_none() || next.is_none())'''
+to = '''        if previous.is_none()'''
+
+[[mutant]]
+name = "dom: an insertion leaves the ring as it was"
+file = "crates/dom/src/lib.rs"
+from = '''        if previous.is_none() || child.is_none() {
+            let first = parent.first_child.get(self.gc).expect("`node` at least");'''
+to = '''        if false {
+            let first = parent.first_child.get(self.gc).expect("`node` at least");'''
+
+[[mutant]]
+name = "dom: the ring's last the old one after an append"
+file = "crates/dom/src/lib.rs"
+from = '''            let last = if child.is_none() { Some(node) } else { last };'''
+to = '''            let last = if false { Some(node) } else { last };'''
+
+[[mutant]]
+name = "dom: an append leaves the ring"
+file = "crates/dom/src/lib.rs"
+from = '''        if previous.is_none() || child.is_none() {'''
+to = '''        if previous.is_none() {'''
+
+[[mutant]]
+name = "dom: an insertion before the first child takes its link for the previous"
+file = "crates/dom/src/lib.rs"
+from = '''                    ring.filter(|previous| !previous.next_sibling.is_null()),'''
+to = '''                    ring,'''

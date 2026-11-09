@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<script>
+function run() {
+  const f = () => {};
+  const tryIt = o => { try { const io = new IntersectionObserver(f, o); return `${io.delay},${io.trackVisibility}`; } catch (e) { return `${e.name}: ${e.message.slice(0, 40)}`; } };
+  const out = [];
+  for (const o of [{}, { delay: -5 }, { delay: 1.5 }, { delay: 1e20 }, { delay: NaN }, { delay: '30' }, { trackVisibility: 1, delay: 100 },
+                   { trackVisibility: true, delay: 99.9 }, { trackVisibility: true, delay: 100, rootMargin: 'x' }, { trackVisibility: true, rootMargin: 'x' },
+                   { trackVisibility: true, delay: 100, threshold: 2 }, { delay: -1, trackVisibility: true }]) out.push(JSON.stringify(o) + ' => ' + tryIt(o));
+  out.push('proto: ' + Object.getOwnPropertyNames(IntersectionObserver.prototype).join('|'));
+  out.push('entry proto: ' + Object.getOwnPropertyNames(IntersectionObserverEntry.prototype).join('|'));
+  return out.join('\n');
+}
+</script>

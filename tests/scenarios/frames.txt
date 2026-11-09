@@ -1,0 +1,35 @@
+# Child frames' documents: `frame` picks in an iframe's
+# document, nested, and `frame top` in the page's again; an iframe without
+# a box still has its document. The outer iframe is half the window wide:
+# resized, its document is laid out again.
+navigate pages/frames.html
+wait-loaded
+wait-text #text "the page"
+frame #outer
+wait-text #text "the child document"
+frame #inner
+wait-text #deep "the grandchild document"
+frame top
+wait-text #text "the page"
+# The child frames painted in their iframes.
+screenshot frames
+frame #hidden
+wait-text #there "a child document without a box"
+frame top
+frame iframe
+resize 600 400
+wait-change #half
+# Input into child frames (2b-3): a click in one; one far below the window,
+# and below its child frame's viewport, scrolled into view in both first;
+# a wheel there scrolls the child frame.
+frame top
+frame #outer
+click #press
+wait-text #press "pressed"
+frame top
+frame #far
+click #far-press
+wait-text #far-press "pressed"
+screenshot frames-far
+wheel #far-press 0 -40
+wait-change #far-press

@@ -1,0 +1,158 @@
+# Step 1a's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0033-canvas-2d/mutations-1a.toml`. Each names the tests closest to
+# what it breaks.
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas::"]
+timeout = 900
+
+[[mutant]]
+name = "the default width isn't 300"
+file = "crates/dom/src/canvas.rs"
+from = '''pub const DEFAULT_CANVAS_WIDTH: u32 = 300;'''
+to = '''pub const DEFAULT_CANVAS_WIDTH: u32 = 301;'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "-0 isn't 0"
+file = "crates/dom/src/canvas.rs"
+from = '''    if negative && value != 0 {'''
+to = '''    if negative {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--lib", "canvas"]
+
+[[mutant]]
+name = "no limit at what a long holds"
+file = "crates/dom/src/canvas.rs"
+from = '''    u32::try_from(value).ok().filter(|value| *value <= i32::MAX as u32)'''
+to = '''    u32::try_from(value).ok()'''
+test = ["cargo", "test", "-q", "-p", "dom", "--lib", "canvas"]
+
+[[mutant]]
+name = "the size from the attributes, but for height"
+file = "crates/dom/src/canvas.rs"
+from = '''            dimension("height", DEFAULT_CANVAS_HEIGHT),'''
+to = '''            DEFAULT_CANVAS_HEIGHT,'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "the context doesn't point at its canvas"
+file = "crates/dom/src/canvas.rs"
+from = '''        context.object().canvas.set(self, canvas.persistent());'''
+to = ''''''
+
+[[mutant]]
+name = "the canvas doesn't keep its context"
+file = "crates/dom/src/canvas.rs"
+from = '''        rare.canvas_context.set(self, context.persistent());'''
+to = '''        let _ = rare;'''
+
+[[mutant]]
+name = "a canvas isn't replaced"
+file = "crates/layout/src/lib.rs"
+from = '''    is_image(element) || is_iframe(element) || is_canvas(element)'''
+to = '''    is_image(element) || is_iframe(element)'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a canvas's natural size isn't its bitmap's"
+file = "crates/layout/src/replaced.rs"
+from = '''            .or(self.canvas)'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a canvas is sized as an iframe"
+file = "crates/layout/src/lib.rs"
+from = '''                Replaced::canvas(element.canvas_size())'''
+to = '''                Replaced::iframe()'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a new size doesn't lay the canvas out again"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        element.set_needs_reattach_layout_tree();'''
+to = '''        let _ = element;'''
+
+[[mutant]]
+name = "any element's size attributes lay it out again"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if element.element_name().is_some_and(|n| n.is_html("canvas")) {'''
+to = '''    if true {'''
+
+[[mutant]]
+name = "the hook isn't called"
+file = "crates/dom_api/src/handlers.rs"
+from = '''    crate::canvas::attribute_changed(m, element, name);
+'''
+to = ''''''
+
+[[mutant]]
+name = "only width is a new size"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if *name != QualName::attr("width") && *name != QualName::attr("height") {'''
+to = '''    if *name != QualName::attr("width") {'''
+
+[[mutant]]
+name = "every id gets the 2D context"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if context_id.as_str() != "2d" {'''
+to = '''    if context_id.as_str() == "none" {'''
+
+[[mutant]]
+name = "a new context each time"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if let Some(context) = m.read().canvas_context(this) {
+        return Ok(Some(context));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "alpha always true"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        alpha: options.alpha,'''
+to = '''        alpha: true,'''
+
+[[mutant]]
+name = "willReadFrequently not read back"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        will_read_frequently: settings.will_read_frequently,
+    })'''
+to = '''        will_read_frequently: false,
+    })'''
+
+[[mutant]]
+name = "display-p3 read back as srgb"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            dom::PredefinedColorSpace::DisplayP3 => PredefinedColorSpace::DisplayP3,'''
+to = '''            dom::PredefinedColorSpace::DisplayP3 => PredefinedColorSpace::Srgb,'''
+
+[[mutant]]
+name = "a dictionary's members out of order in JS"
+file = "crates/dom_js/src/convert.rs"
+from = '''            members.sort_by_key(|(name, _)| *name);
+            let object = v8::Object::new(cx.scope());'''
+to = '''            let object = v8::Object::new(cx.scope());'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "canvas::"]
+
+[[mutant]]
+name = "a returned record's fields not in kebab-case"
+file = "crates/dom_wasm/src/host.rs"
+from = '''                    Ok((wit::kebab_case(member.name), field))'''
+to = '''                    Ok((member.name.to_string(), field))'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "it", "a_guest_uses_a_canvas"]
+
+[[mutant]]
+name = "a digit's unit starts a word"
+file = "crates/dom_api/src/wit.rs"
+from = '''                Some(prev) if prev.is_ascii_digit() => {
+                    chars.get(i + 1).is_some_and(char::is_ascii_lowercase)
+                }'''
+to = '''                Some(prev) if prev.is_ascii_digit() => true,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "wit::"]
+
+[[mutant]]
+name = "a word after a digit doesn't start one"
+file = "crates/dom_api/src/wit.rs"
+from = '''                Some(prev) if prev.is_ascii_digit() => {
+                    chars.get(i + 1).is_some_and(char::is_ascii_lowercase)
+                }'''
+to = '''                Some(prev) if prev.is_ascii_digit() => false,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "wit::"]

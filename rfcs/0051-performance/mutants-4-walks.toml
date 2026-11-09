@@ -1,0 +1,51 @@
+# Mutation test of stage 4's first step: what an insertion or removal
+# changes in the moved subtree, found in one walk that allocates nothing:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-4-walks.toml
+test = ["cargo", "test", "-q", "-p", "dom", "-p", "dom_api"]
+timeout = 1200
+
+[[mutant]]
+name = "the subtree is never walked"
+file = "crates/dom/src/scope.rs"
+from = '''    if !style_sheets && form.is_none() && form_state.is_none() {
+        return sheets;
+    }'''
+to = '''    return sheets;'''
+
+[[mutant]]
+name = "the subtree isn't walked for its style sheets alone"
+file = "crates/dom/src/scope.rs"
+from = '''    if !style_sheets && form.is_none() && form_state.is_none() {'''
+to = '''    if form.is_none() && form_state.is_none() {'''
+
+[[mutant]]
+name = "a style sheet owner in the subtree isn't seen"
+file = "crates/dom/src/scope.rs"
+from = '''            sheets |= style_sheets && is_style_sheet_owner(node);'''
+to = '''            sheets |= false && style_sheets;'''
+
+[[mutant]]
+name = "the subtree's form elements aren't recorded"
+file = "crates/dom/src/scope.rs"
+from = '''                form(node.id);'''
+to = ''''''
+
+[[mutant]]
+name = "the subtree's form state elements aren't recorded"
+file = "crates/dom/src/scope.rs"
+from = '''                form_state(node.id);'''
+to = ''''''
+
+[[mutant]]
+name = "elements with an id aren't recorded for form owners"
+file = "crates/dom/src/scope.rs"
+from = '''    }) || (ids
+        && matches!('''
+to = '''    }) || (false
+        && matches!('''
+
+[[mutant]]
+name = "an inserted subtree's iframes below its root aren't recorded"
+file = "crates/dom/src/scope.rs"
+from = '''    while let Some((node, in_shadow)) = next.take().or_else(|| stack.pop()) {'''
+to = '''    while let Some((node, in_shadow)) = next.take() {'''

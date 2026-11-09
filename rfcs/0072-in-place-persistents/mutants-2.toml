@@ -1,0 +1,39 @@
+# 2: the id table's slots in chunks (`dom`). Until the fork's
+# kun-v152.2.0-17 is out, with RUSTY_V8_ARCHIVE at a V8 `ci.py v8` built:
+#   python3 scripts/test.py mutate rfcs/0072-in-place-persistents/mutants-2.toml
+# Left out as equivalent: `clear` keeping the chunks (`DomIsolate`'s field
+# order drops the table, chunks and all, before the heap anyway). A first
+# run also had `get` hand out a collected node's slot: missed, as rooting it
+# and reading it both find it empty; the check it removed is gone.
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it"]
+timeout = 900
+
+[[mutant]]
+name = "a pruned slot never reused"
+file = "crates/dom/src/node_id.rs"
+from = '''                free.push(number);'''
+to = '''                let _ = number;'''
+
+[[mutant]]
+name = "a live entry pruned"
+file = "crates/dom/src/node_id.rs"
+from = '''            let alive = !slot(chunks, number).get_rust_obj().is_null();'''
+to = '''            let alive = slot(chunks, number).get_rust_obj().is_null();'''
+
+[[mutant]]
+name = "an entry's slot never set"
+file = "crates/dom/src/node_id.rs"
+from = '''        slot(&self.chunks, number).set(node);'''
+to = '''        let _ = node;'''
+
+[[mutant]]
+name = "the next slot read"
+file = "crates/dom/src/node_id.rs"
+from = '''        Some(slot(&self.chunks, *self.entries.get(&id)?).get_ref())'''
+to = '''        Some(slot(&self.chunks, *self.entries.get(&id)? ^ 1).get_ref())'''
+
+[[mutant]]
+name = "a new chunk's first slot handed out twice"
+file = "crates/dom/src/node_id.rs"
+from = '''        self.free.extend((first + 1..first + CHUNK as u32).rev());'''
+to = '''        self.free.extend((first..first + CHUNK as u32).rev());'''

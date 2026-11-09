@@ -1,0 +1,162 @@
+# Step 2e: the new heap next to cppgc in `gc_bench`. In `gc`: a GC's
+# record and its trace phases, `[Member<T>; N]` and `Member<Erased>` edges,
+# the edge list marking reads, and the GC limit; in `gc_bench`: the
+# workloads and the replay on the new heap, the objects a plan leaves
+# reachable, and when the heaps are measured; in `bench.py gc`: the new
+# heap's slices and its record checked against the trace. Run with
+# `RUSTY_V8_ARCHIVE` (`gc_bench` links V8).
+test = ["cargo", "test", "-q", "-p", "gc"]
+timeout = 600
+
+# A GC's record and phases.
+
+[[mutant]]
+name = "the record counts no marked objects"
+file = "crates/gc/src/heap.rs"
+from = '''        record.marked_objects = marking.scanned.load(Ordering::Relaxed);'''
+to = '''        record.marked_objects = 0;'''
+
+[[mutant]]
+name = "the record's bytes are none"
+file = "crates/gc/src/heap.rs"
+from = '''        record.marked_bytes = used;'''
+to = '''        record.marked_bytes = 0;'''
+
+[[mutant]]
+name = "sweeping isn't a phase of the trace"
+file = "crates/gc/src/heap.rs"
+from = '''        platform.trace_begin("Gc.Sweep");'''
+to = '''        platform.trace_begin("Gc.Mark");'''
+
+[[mutant]]
+name = "the pause is named as marking in the trace"
+file = "crates/gc/src/heap.rs"
+from = '''        platform.trace_begin("Gc.Pause");'''
+to = '''        platform.trace_begin("Gc.Mark");'''
+
+# Edges in a row, and to any type.
+
+[[mutant]]
+name = "an array field is one edge"
+file = "crates/gc/src/types.rs"
+from = '''            FieldKind::Members(count) => count as usize,'''
+to = '''            FieldKind::Members(_) => 1,'''
+
+[[mutant]]
+name = "an array's edges all at its first"
+file = "crates/gc/src/types.rs"
+from = '''            let at = field.offset.saturating_add(i.saturating_mul(4));
+            edges.push'''
+to = '''            let at = field.offset.saturating_add(i.saturating_mul(0));
+            edges.push'''
+
+[[mutant]]
+name = "an array field has no edges"
+file = "crates/gc/src/member.rs"
+from = '''        FieldKind::Members(N as u32)'''
+to = '''        FieldKind::Members(0)'''
+
+[[mutant]]
+name = "marking reads a type's edges but the last"
+file = "crates/gc/src/heap.rs"
+from = '''                for &at in &ty.edges {'''
+to = '''                for &at in &ty.edges[..ty.edges.len().saturating_sub(1)] {'''
+
+# The GC limit.
+
+[[mutant]]
+name = "the next GC waits for all a GC kept"
+file = "crates/gc/src/heap.rs"
+from = '''            .set((used / 2).max(self.options.min_allocation_bytes));'''
+to = '''            .set(used.max(self.options.min_allocation_bytes));'''
+
+# The workloads and the replay on the new heap.
+
+[[mutant]]
+name = "a replayed edge points back at its object"
+file = "crates/gc_bench/src/gc_replay.rs"
+from = '''                edge.set(cx, Some(self.held(to).erased(cx)));'''
+to = '''                edge.set(cx, Some(self.held(from).erased(cx)));'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it", "replay::"]
+
+[[mutant]]
+name = "a replayed edge is never cleared"
+file = "crates/gc_bench/src/gc_replay.rs"
+from = '''                edge.set(cx, None);'''
+to = '''                let _ = edge;'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it", "replay::"]
+
+[[mutant]]
+name = "a replayed root keeps nothing"
+file = "crates/gc_bench/src/gc_replay.rs"
+from = '''                    self.rooted.insert(object, (1, root));'''
+to = '''                    drop(root);'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it", "replay::"]
+
+[[mutant]]
+name = "the plan's cleared edges still keep"
+file = "crates/gc_bench/src/replay.rs"
+from = '''                if let Some(edge) = edges[from as usize].get_mut(slot as usize) {
+                    *edge = 0;
+                }'''
+to = '''                let _ = edges[from as usize].get_mut(slot as usize);'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it", "replay::"]
+
+[[mutant]]
+name = "the plan's roots are never dropped"
+file = "crates/gc_bench/src/replay.rs"
+from = '''                let count = &mut roots[object as usize];
+                *count = count.saturating_sub(1);'''
+to = '''                let _ = &mut roots[object as usize];'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it", "replay::"]
+
+[[mutant]]
+name = "a gc heap's replay drops its objects at once"
+file = "crates/gc_bench/src/gc_replay.rs"
+from = '''                if plan.last_use[*next] as usize == at {'''
+to = '''                if true {'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it", "replay::"]
+
+[[mutant]]
+name = "a turn on the gc heap measures nothing"
+file = "crates/gc_bench/src/gc_heap.rs"
+from = '''        peak_used = peak_used.max(stats.used_size_bytes);'''
+to = '''        peak_used = peak_used.max(0);'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it", "--", "workloads::", "replay::"]
+
+[[mutant]]
+name = "churn's tree loses its new subtree"
+file = "crates/gc_bench/src/gc_heap.rs"
+from = '''                link_last(cx, parent, new);'''
+to = '''                let _ = (parent, new);'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it", "workloads::"]
+
+# `bench.py gc`.
+
+[[mutant]]
+name = "the gc crate's marking isn't a marking slice"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''MARK_SLICES = {"V8.GC_MC_MARK", "CppGC.AtomicMark", "Gc.Mark"}'''
+to = '''MARK_SLICES = {"V8.GC_MC_MARK", "CppGC.AtomicMark"}'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "RunTests"]
+
+[[mutant]]
+name = "the gc crate's bytes aren't checked"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''    if record["marked_bytes"] != live:'''
+to = '''    if False:'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "GcRecordTests"]
+
+[[mutant]]
+name = "the objects a second are the bytes"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''        "mark_objects_per_s": runs[0]["live_nodes"] / (mark_ns / 1e9) if mark_ns else None,'''
+to = '''        "mark_objects_per_s": live / (mark_ns / 1e9) if mark_ns else None,'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "SummaryTests"]
+
+[[mutant]]
+name = "a gc crate's pause is other work"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''    if (name.startswith("CppGC.Atomic") or name.startswith("Gc.") or name in V8_GC_SLICES'''
+to = '''    if (name.startswith("CppGC.Atomic") or name in V8_GC_SLICES'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests"]

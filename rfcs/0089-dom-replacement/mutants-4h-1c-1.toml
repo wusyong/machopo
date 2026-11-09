@@ -1,0 +1,286 @@
+# Stage 4h-1c-1: Selection on the new DOM: getSelection, its members, its range live and
+# script's setting it, selectionchange at the document and at text controls.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "sh", "-c", "cargo test -q -p dom_js_next --test it -- selections text_controls::a_selection_that_changes"]
+timeout = 900
+
+[[mutant]]
+name = "dom: the old range stays the selection's"
+file = "crates/dom_next/src/selection.rs"
+from = '''            old.selection.set(self.gc, None);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: the new range doesn't know its selection"
+file = "crates/dom_next/src/selection.rs"
+from = '''            range.selection.set(self.gc, Some(selection));
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: selectionchange queued each change"
+file = "crates/dom_next/src/selection.rs"
+from = '''        if scheduled.replace(true) {
+            return;
+        }'''
+to = '''        scheduled.set(true);'''
+
+[[mutant]]
+name = "dom: selectionchange stays scheduled"
+file = "crates/dom_next/src/selection.rs"
+from = '''        if let Some(scheduled) = self.selectionchange_cell(target) {
+            scheduled.set(false);
+        }'''
+to = '''        let _ = target;'''
+
+[[mutant]]
+name = "dom: a moved range schedules nothing"
+file = "crates/dom_next/src/selection.rs"
+from = '''        if let Some(selection) = range.selection.get(self.gc) {
+            self.schedule_selectionchange(self.selection_document(selection));
+        }'''
+to = '''        let _ = range;'''
+
+[[mutant]]
+name = "range: a range not moved by data schedules"
+file = "crates/dom_next/src/range.rs"
+from = '''            if moved {
+                self.selection_range_moved(range);
+            }'''
+to = '''            let _ = moved;
+            self.selection_range_moved(range);'''
+
+[[mutant]]
+name = "range: a split schedules nothing"
+file = "crates/dom_next/src/range.rs"
+from = '''                    at.set(at.get().saturating_sub(offset));
+                    self.selection_range_moved(range);'''
+to = '''                    at.set(at.get().saturating_sub(offset));'''
+
+[[mutant]]
+name = "range: a join schedules nothing"
+file = "crates/dom_next/src/range.rs"
+from = '''                    at.set(at.get().saturating_add(length));
+                    self.selection_range_moved(range);'''
+to = '''                    at.set(at.get().saturating_add(length));'''
+
+[[mutant]]
+name = "text control: a selection set schedules nothing"
+file = "crates/dom_next/src/text_control.rs"
+from = '''            self.tree_changed();
+            self.schedule_selectionchange(element);'''
+to = '''            self.tree_changed();'''
+
+[[mutant]]
+name = "text control: a cursor not moved schedules"
+file = "crates/dom_next/src/text_control.rs"
+from = '''            if moved {
+                self.schedule_selectionchange(element);
+            }'''
+to = '''            let _ = moved;
+            self.schedule_selectionchange(element);'''
+
+[[mutant]]
+name = "api: selectionchange doesn't bubble at a control"
+file = "crates/dom_api_next/src/text_control.rs"
+from = '''                        cx.kind(target) != dom_next::NodeKind::Document'''
+to = '''                        false'''
+
+[[mutant]]
+name = "api: selectionchange bubbles at a document"
+file = "crates/dom_api_next/src/text_control.rs"
+from = '''                        cx.kind(target) != dom_next::NodeKind::Document'''
+to = '''                        true'''
+
+[[mutant]]
+name = "api: a document without a window has a selection"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    if cx.window_of(this).is_none() || cx.is_discarded(this) {'''
+to = '''    if cx.is_discarded(this) {'''
+
+[[mutant]]
+name = "api: a shadow tree isn't in the document"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    Gc::ptr_eq(cx.root_node(node, true), cx.selection_document(this))'''
+to = '''    Gc::ptr_eq(cx.root_node(node, false), cx.selection_document(this))'''
+
+[[mutant]]
+name = "api: a range out of the document is seen"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    (in_document(cx, this, cx.range_start(range).0) && in_document(cx, this, cx.range_end(range).0)).then_some(range)'''
+to = '''    Some(range)'''
+
+[[mutant]]
+name = "api: a backward selection's anchor at its start"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    Some(if cx.selection_is_backward(this) {
+        (end, start)'''
+to = '''    Some(if false {
+        (end, start)'''
+
+[[mutant]]
+name = "api: every change seen as one"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    if !same(seen(cx, this), before) {'''
+to = '''    if true {'''
+
+[[mutant]]
+name = "api: a collapsed selection's direction"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    let name = if is_caret(cx, this).unwrap_or(true) {
+        "none"'''
+to = '''    let name = if is_caret(cx, this).is_none() {
+        "none"'''
+
+[[mutant]]
+name = "api: a range at any index"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''        Some(range) if index == 0 => Ok(range),'''
+to = '''        Some(range) => Ok(range),'''
+
+[[mutant]]
+name = "api: a range added over one"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    if range_of(cx, this).is_some()
+        || !in_document'''
+to = '''    if !in_document'''
+
+[[mutant]]
+name = "api: a range from another document added"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''        || !in_document(cx, this, cx.range_start(range).0)
+        || !in_document(cx, this, cx.range_end(range).0)
+    {
+        return Ok(());
+    }
+    set(cx, this, Some(range), false);'''
+to = '''    {
+        return Ok(());
+    }
+    set(cx, this, Some(range), false);'''
+
+[[mutant]]
+name = "api: another range removed"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    if !cx
+        .selection_range(this)
+        .is_some_and(|selected| Gc::ptr_eq(selected, range))
+    {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: a selection in a doctype"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    if cx.kind(node) == NodeKind::DocumentType {
+        return Err(ApiError::Dom(crate::exception::DomException {
+            name: ExceptionName::InvalidNodeType,'''
+to = '''    if false {
+        return Err(ApiError::Dom(crate::exception::DomException {
+            name: ExceptionName::InvalidNodeType,'''
+
+[[mutant]]
+name = "api: collapsing to a point out of the document"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    check_point(cx, node, offset)?;
+    if in_document(cx, this, node) {
+        select(cx, this, (node, offset), (node, offset), false);'''
+to = '''    check_point(cx, node, offset)?;
+    if true {
+        select(cx, this, (node, offset), (node, offset), false);'''
+
+[[mutant]]
+name = "api: collapsing to the end for the start"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    let point = if to_start {
+        cx.range_start(range)'''
+to = '''    let point = if !to_start {
+        cx.range_start(range)'''
+
+[[mutant]]
+name = "api: another tree's focus ordered"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    if !Gc::ptr_eq(cx.root_node(anchor.0, false), cx.root_node(focus.0, false)) {
+        return (focus, focus, false);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: extending out of the document"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    if !in_document(cx, this, node) {
+        return Ok(());
+    }
+    let Some((anchor, _))'''
+to = '''    let Some((anchor, _))'''
+
+[[mutant]]
+name = "api: setBaseAndExtent's points checked after"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    check_point(cx, anchor_node, anchor_offset)?;
+    check_point(cx, focus_node, focus_offset)?;
+    if !in_document(cx, this, anchor_node) || !in_document(cx, this, focus_node) {
+        return Ok(());
+    }'''
+to = '''    if !in_document(cx, this, anchor_node) || !in_document(cx, this, focus_node) {
+        return Ok(());
+    }
+    check_point(cx, anchor_node, anchor_offset)?;
+    check_point(cx, focus_node, focus_offset)?;'''
+
+[[mutant]]
+name = "api: all of a text's data its children"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''        let children = u32::try_from(children).unwrap_or(u32::MAX);'''
+to = '''        let children = cx.node_length(node).max(u32::try_from(children).unwrap_or(u32::MAX));'''
+
+[[mutant]]
+name = "api: a node partly in it contained"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    Ok(allow_partial.unwrap_or(false) || cx.kind(node) == NodeKind::Text)'''
+to = '''    Ok(true)'''
+
+[[mutant]]
+name = "api: a node wholly in it not contained"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    if position(start, before) != Ordering::Greater && position(end, after) != Ordering::Less {
+        return Ok(true);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: deleting from an empty selection's document"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''        Some(range) => crate::range::delete_contents(cx, range),'''
+to = '''        Some(range) => { let _ = range; Ok(()) }'''
+
+[[mutant]]
+name = "api: a range set out of the document stays the selection"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''    } else {
+        cx.set_selection(this, None, false);
+    }
+    changed_since(cx, this, before);'''
+to = '''    } else {
+        cx.set_selection(this, Some(range), false);
+    }
+    changed_since(cx, this, before);'''
+
+[[mutant]]
+name = "api: a range set keeps the direction"
+file = "crates/dom_api_next/src/selection.rs"
+from = '''        cx.set_selection(this, Some(range), false);
+    } else {'''
+to = '''        cx.set_selection(this, Some(range), cx.selection_is_backward(this));
+    } else {'''
+
+[[mutant]]
+name = "api: a selection's range set alone"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    let Some(selection) = cx.range_selection(this) else {
+        cx.set_range(this, start, end);
+        return;
+    };'''
+to = '''    let Some(selection) = cx.range_selection(this).filter(|_| false) else {
+        cx.set_range(this, start, end);
+        return;
+    };'''

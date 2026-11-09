@@ -1,0 +1,32 @@
+# Stage 4h-5b-1 in a whole browser: the navigation timing the renderer gives the new DOM,
+# its time origin the navigation's start (the browser's, as ticks).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it -- navigation_timing_on_the_new_dom"]
+timeout = 2400
+
+[[mutant]]
+name = "renderer: no navigation timing for the new DOM"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        engine.set_navigation_timing(
+            top,
+            crate::navigation_timing::next_timing(timing, time_origin, self.clock.now()),
+        );'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: a child's time origin its commit"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        let now = load.map_or_else(std::time::Instant::now, |(_, started, _)| started);'''
+to = '''        let now = std::time::Instant::now();'''
+
+[[mutant]]
+name = "renderer: the timing's times not since the time origin"
+file = "crates/renderer/src/navigation_timing.rs"
+from = '''    let since = |time: Option<f64>| time.map(|time| time - time_origin);'''
+to = '''    let since = |time: Option<f64>| time.map(|time| time - time_origin + 1000.0);'''
+
+[[mutant]]
+name = "renderer: the time origin as the commit is handled"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                let time_origin = self.clock.before_now(ipc::TimeTicks::now().saturating_since(navigation_start));'''
+to = '''                let _ = navigation_start;
+                let time_origin = self.clock.now();'''

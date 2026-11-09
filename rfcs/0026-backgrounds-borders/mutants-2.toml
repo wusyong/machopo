@@ -1,0 +1,320 @@
+# Mutation test of stage 2 (border-radius):
+# python3 scripts/test.py mutate rfcs/0026-backgrounds-borders/mutants-2.toml
+test = ["cargo", "test", "-q", "-p", "paint"]
+timeout = 900
+
+# --- gfx -------------------------------------------------------------
+
+[[mutant]]
+name = "corners that overlap aren't scaled down"
+file = "crates/gfx/src/lib.rs"
+from = '''        let radii = if f < 1.0 {'''
+to = '''        let radii = if false {'''
+test = ["cargo", "test", "-q", "-p", "gfx"]
+
+[[mutant]]
+name = "the padding edge's radii aren't less the border"
+file = "crates/gfx/src/lib.rs"
+from = '''SizeF::new((radius.width - x).max(0.0), (radius.height - y).max(0.0))'''
+to = '''SizeF::new(radius.width.max(x - x), radius.height.max(y - y))'''
+test = ["cargo", "test", "-q", "-p", "gfx"]
+
+[[mutant]]
+name = "a point past a corner's curve is inside"
+file = "crates/gfx/src/lib.rs"
+from = '''            dx * dx + dy * dy <= 1.0'''
+to = '''            dx * dx + dy * dy <= 2.0'''
+test = ["cargo", "test", "-q", "-p", "gfx"]
+
+# --- style -----------------------------------------------------------
+
+[[mutant]]
+name = "two radii in the shorthand go to the wrong corners"
+file = "crates/style/src/properties.rs"
+from = '''            [a, b] => [a, b, a, b],'''
+to = '''            [a, b] => [a, b, b, a],'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "the vertical radii after / are dropped"
+file = "crates/style/src/properties.rs"
+from = '''.map(|i| (Value::CornerRadius(x[i], Some(y[i])), false))'''
+to = '''.map(|i| (Value::CornerRadius(x[i], Some(x[i])), false))'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "a longhand's vertical radius is dropped"
+file = "crates/style/src/properties.rs"
+from = '''                y: y.map_or(x, |y| y.compute(cx)),'''
+to = '''                y: x,'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "a negative radius is valid"
+file = "crates/style/src/properties.rs"
+from = '''        let mut values = vec![LengthPercentage::parse(input, false)?];'''
+to = '''        let mut values = vec![LengthPercentage::parse(input, true)?];'''
+test = ["python3", "scripts/test.py", "wpt", "css/css-backgrounds/parsing/border-radius"]
+
+[[mutant]]
+name = "inherit doesn't copy a corner"
+file = "crates/style/src/properties.rs"
+from = '''                *corner_mut(&mut to.border_radius, i) = *corner_mut(&mut from.border_radius, i);'''
+to = '''                let _ = i;'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "a longhand's equal radii serialize twice"
+file = "crates/style/src/serialize.rs"
+from = '''            if let Some(y) = y.filter(|y| y != x) {'''
+to = '''            if let Some(y) = y {'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "the shorthand always writes / and the vertical radii"
+file = "crates/style/src/serialize.rs"
+from = '''    if xs == ys {
+        horizontal'''
+to = '''    if false {
+        horizontal'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "a computed corner always has two radii"
+file = "crates/style/src/computed.rs"
+from = '''    if radius.y != radius.x {'''
+to = '''    if true {'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "a change of radius relays out"
+file = "crates/layout/src/lib.rs"
+from = '''            border_radius: old.border_radius,'''
+to = '''            border_radius: new.border_radius,'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "update"]
+
+# --- layout ----------------------------------------------------------
+
+[[mutant]]
+name = "every line of an inline element has its start padding"
+file = "crates/layout/src/text.rs"
+from = '''            left: if line_box.first { edge.padding.left } else { 0.0 },'''
+to = '''            left: edge.padding.left,'''
+
+[[mutant]]
+name = "every line of an inline element is its first"
+file = "crates/layout/src/text.rs"
+from = '''            first: line_box.first,'''
+to = '''            first: true,'''
+
+[[mutant]]
+name = "every line of an inline element is its last"
+file = "crates/layout/src/text.rs"
+from = '''            last: line_box.last,'''
+to = '''            last: true,'''
+
+# --- paint -----------------------------------------------------------
+
+[[mutant]]
+name = "the overflow clip is square"
+file = "crates/paint/src/lib.rs"
+from = '''                .add_rounded_clip(local.clip, local.transform, clip);'''
+to = '''                .add_rounded_clip(local.clip, local.transform, RRectF::from_rect(clip.rect));'''
+
+[[mutant]]
+name = "a replaced element's content isn't cut to its corners"
+file = "crates/paint/src/lib.rs"
+from = '''        if replaced && style.has_border_radius() && !style.clips_overflow() {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a rounded clip goes into the display list square"
+file = "crates/paint/src/lib.rs"
+from = '''                let op = if rrect.is_rect() {'''
+to = '''                let op = if true {'''
+
+[[mutant]]
+name = "a rounded background color fills its rect"
+file = "crates/paint/src/lib.rs"
+from = '''            self.fill_rrect(client, kind, color_area, PaintFlags::fill(color), state);'''
+to = '''            self.fill(client, kind, color_area.rect, color, state);'''
+
+[[mutant]]
+name = "a rounded layer's shader extends its edge"
+file = "crates/paint/src/lib.rs"
+from = '''                    decal: true,'''
+to = '''                    decal: false,'''
+
+[[mutant]]
+name = "no bleed avoidance"
+file = "crates/paint/src/lib.rs"
+from = '''            None if shrink && clip == BackgroundBox::BorderBox => geometry.shrunk_border_box(dsf),'''
+to = '''            None if false => geometry.shrunk_border_box(dsf),'''
+
+[[mutant]]
+name = "a translucent border hides the background's edge"
+file = "crates/paint/src/lib.rs"
+from = '''                w(width) > 0.0 && border_style.draws_solid() && style.resolve(color).a == 255'''
+to = '''                w(width) > 0.0 && border_style.draws_solid()'''
+
+[[mutant]]
+name = "a missing side hides the background's edge"
+file = "crates/paint/src/lib.rs"
+from = '''                w(width) > 0.0 && border_style.draws_solid() && style.resolve(color).a == 255'''
+to = '''                border_style.draws_solid() && style.resolve(color).a == 255'''
+
+[[mutant]]
+name = "the background shrinks by the whole border"
+file = "crates/paint/src/lib.rs"
+from = '''        let w = |width: f32| snap_border_width(width, dsf) / 2.0;'''
+to = '''        let w = |width: f32| snap_border_width(width, dsf);'''
+
+[[mutant]]
+name = "a rounded border of one color with a side missing is a whole ring"
+file = "crates/paint/src/lib.rs"
+from = '''        if visible.len() == 4 && visible.iter().all(|(_, _, c, _)| style.resolve(*c) == color) {'''
+to = '''        if visible.iter().all(|(_, _, c, _)| style.resolve(*c) == color) {'''
+
+[[mutant]]
+name = "a rounded border's side isn't cut to its trapezoid"
+file = "crates/paint/src/lib.rs"
+from = '''            self.push(state, item(Some(polygon), color));'''
+to = '''            self.push(state, item(None, color));'''
+
+[[mutant]]
+name = "a rounded border is drawn square"
+file = "crates/paint/src/lib.rs"
+from = '''        if !rounded.is_rect() {
+            self.rounded_border(client, style, width, rounded, state);'''
+to = '''        if false {
+            self.rounded_border(client, style, width, rounded, state);'''
+
+[[mutant]]
+name = "an inline element's start corners on every line"
+file = "crates/paint/src/lib.rs"
+from = '''        if !inline_box.first {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "an inline element's end corners on every line"
+file = "crates/paint/src/lib.rs"
+from = '''        if !inline_box.last {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a box's corners are hit past their curves"
+file = "crates/paint/src/hit_test.rs"
+from = '''            rect: RRectF::new(border_box, crate::border_radii(&fragment.style, fragment.size)),'''
+to = '''            rect: RRectF::from_rect(border_box),'''
+
+[[mutant]]
+name = "a rounded clip's corners are hit past their curves"
+file = "crates/paint/src/hit_test.rs"
+from = '''                (Some(rrect), Some(p)) => rrect.contains(p),'''
+to = '''                (Some(rrect), Some(p)) => rrect.rect.contains(p),'''
+
+[[mutant]]
+name = "a scroller under two rounded clips is a layer"
+file = "crates/paint/src/layerize.rs"
+from = '''            overflows && translations && trees.effect_chain(node.effect).is_empty() && rounded <= 1'''
+to = '''            overflows && translations && trees.effect_chain(node.effect).is_empty() && rounded <= 2'''
+
+# --- raster ----------------------------------------------------------
+
+[[mutant]]
+name = "decal is clamp"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        } else if shader.decal {
+            sk::TileMode::Decal'''
+to = '''        } else if shader.decal {
+            sk::TileMode::Clamp'''
+test = ["cargo", "test", "-q", "-p", "raster"]
+
+[[mutant]]
+name = "a decal gradient is drawn directly"
+file = "crates/raster/src/skia_backend.rs"
+from = '''            if !spaced && !shader.repeat_x && !shader.repeat_y && !shader.decal =>'''
+to = '''            if !spaced && !shader.repeat_x && !shader.repeat_y =>'''
+test = ["cargo", "test", "-q", "-p", "raster"]
+
+[[mutant]]
+name = "a border side isn't cut to its polygon"
+file = "crates/raster/src/skia_backend.rs"
+from = '''                    canvas.clip_path(&builder.detach(), sk::ClipOp::Intersect, true);'''
+to = '''                    let _ = builder.detach();'''
+test = ["cargo", "test", "-q", "-p", "raster"]
+
+# --- compositor ------------------------------------------------------
+
+[[mutant]]
+name = "a layer's quads carry no rounded clip"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                        rounded_clip: rounded,'''
+to = '''                        rounded_clip: None,'''
+test = ["cargo", "test", "-q", "-p", "compositor"]
+
+[[mutant]]
+name = "the rounded clip doesn't stay put as the layer scrolls"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                                rect: r.rect.scale(s).offset(-scroll.x, -scroll.y),'''
+to = '''                                rect: r.rect.scale(s),'''
+test = ["cargo", "test", "-q", "-p", "compositor"]
+
+[[mutant]]
+name = "the rounded clip isn't where its node is"
+file = "crates/compositor/src/property_trees.rs"
+from = '''                    return Some(rrect.offset(at.x, at.y));'''
+to = '''                    return Some(rrect);'''
+test = ["cargo", "test", "-q", "-p", "compositor"]
+
+[[mutant]]
+name = "the compositor's clip nodes lose their corners"
+file = "crates/renderer/src/compositing.rs"
+from = '''radii: node.radii,'''
+to = '''radii: Default::default(),'''
+test = ["python3", "scripts/test.py", "reftest", "backgrounds/r3"]
+
+# --- viz -------------------------------------------------------------
+
+[[mutant]]
+name = "an embedded surface's quads lose its rounded clip"
+file = "crates/viz/src/surface_aggregator.rs"
+from = '''                .or(rounded);'''
+to = '''                .or(None);'''
+test = ["cargo", "test", "-q", "-p", "viz"]
+
+[[mutant]]
+name = "an embedded surface's rounded clips aren't moved with it"
+file = "crates/viz/src/surface_aggregator.rs"
+from = '''                .map(|r| r.offset(offset.x, offset.y))'''
+to = '''                .map(|r| r)'''
+test = ["cargo", "test", "-q", "-p", "viz"]
+
+[[mutant]]
+name = "the software renderer ignores the rounded clip"
+file = "crates/viz/src/software_renderer.rs"
+from = '''            Some(r) => opacity * rounded_corner::coverage(r, x as f32 + 0.5, y as f32 + 0.5),'''
+to = '''            Some(_) => opacity,'''
+test = ["cargo", "test", "-q", "-p", "viz"]
+
+[[mutant]]
+name = "a rounded clip's edge isn't anti-aliased"
+file = "crates/viz/src/rounded_corner.rs"
+from = '''    (0.5 - d).clamp(0.0, 1.0)
+}'''
+to = '''    if d <= 0.0 { 1.0 } else { 0.0 }
+}'''
+test = ["cargo", "test", "-q", "-p", "viz"]
+
+[[mutant]]
+name = "the wgpu shader cuts every quad away"
+file = "crates/viz/src/rounded_corner.rs"
+from = '''    if (r.z < r.x) {
+        return 1.0;
+    }'''
+to = '''    if (r.z < r.x) {
+        return 0.0;
+    }'''
+# `rounded` alone misses it: its checks are text and the rounded scroller,
+# which has a rounded clip; `backgrounds` waits for the card, which hasn't.
+test = ["python3", "scripts/test.py", "automation", "rounded", "backgrounds"]

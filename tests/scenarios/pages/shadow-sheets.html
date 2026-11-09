@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<title>Shadow sheets</title>
+<!-- A host whose shadow tree has sheets of its own: its `<style>` gives the
+     host a blue border (`:host`), green once it has the class `on`
+     (`:host(.on)`, a click toggles it), the slotted text orange
+     (`::slotted()`), its own band gray and 200px wide; a constructed sheet
+     it adopts (`adoptedStyleSheets`) gives the teal bar under it 150px.
+     The document's `p` rule doesn't reach into the shadow tree (the band
+     is a `p` too). Once loaded, the note says "ok" or what was off. -->
+<style>
+  body { margin: 0; font: 20px/1 sans-serif }
+  #host { display: block; width: 300px; padding: 10px }
+  p { width: 50px }
+</style>
+<div id="host"><span id="slotted">Slotted text</span></div>
+<p id="note">loading</p>
+<script>
+  const host = document.getElementById("host");
+  const root = host.attachShadow({ mode: "open" });
+  const style = document.createElement("style");
+  style.textContent = ":host { border: 5px solid rgb(0, 0, 255) } :host(.on) { border-color: rgb(0, 160, 0) } " +
+    "::slotted(span) { color: rgb(255, 128, 0) } p { width: 200px; height: 20px; margin: 0 0 10px; background: gray }";
+  root.appendChild(style);
+  const band = document.createElement("p");
+  root.appendChild(band);
+  const adopted = new CSSStyleSheet();
+  adopted.replaceSync(".adopted { width: 150px; height: 10px; margin: 0 0 10px; background: rgb(0, 128, 128) }");
+  root.adoptedStyleSheets = [adopted];
+  const bar = document.createElement("div");
+  bar.className = "adopted";
+  root.appendChild(bar);
+  root.appendChild(document.createElement("slot"));
+  host.addEventListener("click", () => host.classList.toggle("on"));
+  window.addEventListener("load", () => {
+    const off = [];
+    if (band.offsetWidth !== 200) off.push("band " + band.offsetWidth);
+    if (bar.offsetWidth !== 150) off.push("adopted " + bar.offsetWidth);
+    if (host.offsetWidth !== 330) off.push("host " + host.offsetWidth);
+    document.getElementById("note").textContent = off.length ? off.join(", ") : "ok";
+  });
+</script>

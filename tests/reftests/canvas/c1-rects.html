@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<title>C1: a canvas's 2D context drawn into the page: a fill, a clear showing the page through it, a scaled and translated fill, a stroked outline; nothing reads its pixels back</title>
+<link rel="match" href="c1-rects-ref.html">
+<style>html, body { margin: 0 } canvas { display: block }</style>
+<canvas id="c" width="100" height="60"></canvas>
+<script>
+  const ctx = document.getElementById("c").getContext("2d");
+  ctx.fillStyle = "lime";
+  ctx.fillRect(0, 0, 100, 60);
+  ctx.clearRect(10, 10, 20, 20);
+  ctx.save();
+  ctx.translate(50, 10);
+  ctx.scale(2, 2);
+  ctx.fillStyle = "blue";
+  ctx.fillRect(0, 0, 10, 10);
+  ctx.restore();
+  // Centred on the rect: 2px wide, from 40 to 60 down, 0 to 100 across.
+  ctx.strokeStyle = "black";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(1, 41, 98, 18);
+</script>

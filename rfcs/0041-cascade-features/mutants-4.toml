@@ -1,0 +1,699 @@
+# Mutation test of stage 4 (4a: :hover, :active and the mouse's boundary
+# events; 4b: :lang(), :read-only / :read-write, :required / :optional and
+# :target):
+# python3 scripts/test.py mutate rfcs/0041-cascade-features/mutants-4.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "mouse::"]
+timeout = 1800
+
+# dom: the hover and active elements and their states.
+
+[[mutant]]
+name = "only the hover element is hovered, not its ancestors"
+file = "crates/dom/src/scope.rs"
+from = '''    let keep = new.map(|new| chain(new, state)).unwrap_or_default();'''
+to = '''    let keep: Vec<&Node> = new.map(|new| vec![new]).unwrap_or_default();'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "focus::"]
+
+[[mutant]]
+name = "the old chain keeps its state"
+file = "crates/dom/src/scope.rs"
+from = '''                update_element_state(node, |current| current.difference(state));'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "focus::"]
+
+[[mutant]]
+name = "the active element's state is the hover one"
+file = "crates/dom/src/scope.rs"
+from = '''    if state == ElementState::HOVER {
+        hover_element'''
+to = '''    if true {
+        hover_element'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "focus::"]
+
+[[mutant]]
+name = "removing the hover element leaves it hovered"
+file = "crates/dom/src/scope.rs"
+from = '''        unhover_removed(self, node);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "focus::"]
+
+[[mutant]]
+name = "removing anything moves the hover element"
+file = "crates/dom/src/scope.rs"
+from = '''        if !is_shadow_including_inclusive_ancestor(removed, element) {
+            continue;
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "focus::"]
+
+[[mutant]]
+name = "the removed node's parent doesn't take its place"
+file = "crates/dom/src/scope.rs"
+from = '''        move_chain_state(Some(element), parent, state);'''
+to = '''        let parent: Option<&Node> = None;
+        move_chain_state(Some(element), parent, state);'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "focus::"]
+
+# style: matching.
+
+[[mutant]]
+name = ":hover matches the active state"
+file = "crates/style/src/selector.rs"
+from = '''        PseudoClass::Hover => ElementState::HOVER,'''
+to = '''        PseudoClass::Hover => ElementState::ACTIVE,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::"]
+
+[[mutant]]
+name = ":active never matches"
+file = "crates/style/src/selector.rs"
+from = '''            PseudoClass::Visited => false,'''
+to = '''            PseudoClass::Visited | PseudoClass::Active => false,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::"]
+
+# dom_api: the events.
+
+[[mutant]]
+name = "mouseenter bubbles"
+file = "crates/dom_api/src/ui_event.rs"
+from = '''    let bubbles = matches!(event_type, "mouseover" | "mouseout");'''
+to = '''    let bubbles = true;'''
+
+[[mutant]]
+name = "boundary events have no relatedTarget"
+file = "crates/dom_api/src/ui_event.rs"
+from = '''        m.set_event_related_target(&event, related.map(dom::EventTarget::Node));'''
+to = ''''''
+
+# renderer: what the mouse is over.
+
+[[mutant]]
+name = "iframes aren't hovered"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            element = iframe;
+        }'''
+to = '''            element = iframe;
+            break;
+        }'''
+
+[[mutant]]
+name = ":hover doesn't keep to the active chain"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                        Some(active) => common_ancestor(element.get(&read), active)
+                            .map(|node| node.to_handle()),'''
+to = '''                        Some(_) => Some(element.clone()),'''
+
+[[mutant]]
+name = "a frame left keeps its hover"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    m.set_hover_element(&old.document, None);'''
+to = ''''''
+
+[[mutant]]
+name = "a removed node gets a mouseout"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                .then(|| (node.to_handle(), index > 0))'''
+to = '''                .then(|| (node.to_handle(), false))'''
+
+[[mutant]]
+name = "the mousemove goes to the removed node"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            Some((still, true)) => Some((still, frame, at)),'''
+to = '''            Some((_, true)) => Some((node, frame, at)),'''
+test = ["python3", "scripts/test.py", "wpt", "uievents/mouse/mousemove_after_mouseover_target_removed.html"]
+
+[[mutant]]
+name = "mouseleave and mouseenter go past the shared ancestor"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        while i > 0 && j > 0 && exited_ancestors[i - 1].id() == entered_ancestors[j - 1].id() {'''
+to = '''        while false && i > 0 && j > 0 && exited_ancestors[i - 1].id() == entered_ancestors[j - 1].id() {'''
+
+[[mutant]]
+name = "mouseenter goes child first"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        for node in entered_ancestors[..j].iter().rev() {'''
+to = '''        for node in entered_ancestors[..j].iter() {'''
+
+[[mutant]]
+name = "no mouseout"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            fire(self, exited, "mouseout", entered);'''
+to = ''''''
+
+[[mutant]]
+name = "a layout doesn't move what is under the mouse"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.recompute_under_mouse();
+    }'''
+to = '''    }'''
+
+[[mutant]]
+name = "a press doesn't make anything active"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                m.set_active_element(document, Some(element));'''
+to = ''''''
+
+[[mutant]]
+name = "a release keeps the active element"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if mouse.buttons == 0 {
+            let mut dom = self.dom.borrow_mut();'''
+to = '''        if false {
+            let mut dom = self.dom.borrow_mut();'''
+
+[[mutant]]
+name = "a press doesn't move the hover"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.update_under_mouse(target.as_ref(), point, &mouse);
+        let Some(target) = target else {'''
+to = '''        let Some(target) = target else {'''
+
+[[mutant]]
+name = "a key doesn't change the boundary events' modifiers"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.last_mouse_modifiers = key.modifiers;'''
+to = ''''''
+test = ["python3", "scripts/test.py", "wpt", "uievents/mouse/mouse_boundary_events_modifier_no_mouse_movement.html"]
+
+[[mutant]]
+name = "another DOM keeps the old one's mouse state"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        // What the mouse was over and pressed is the old DOM's.
+        self.under_mouse.clear();
+        self.active_documents.clear();'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "script_languages::"]
+
+# --- 4b ---------------------------------------------------------------------
+
+# css: :lang()'s ranges, parsed, written and matched.
+
+[[mutant]]
+name = "lang matches the first subtag case-sensitively"
+file = "crates/css/src/selector.rs"
+from = '''        if first != "*" && !first.eq_ignore_ascii_case(tag_first) {'''
+to = '''        if first != "*" && first != tag_first {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::lang"]
+
+[[mutant]]
+name = "a wildcard first subtag matches nothing"
+file = "crates/css/src/selector.rs"
+from = '''        if first != "*" && !first.eq_ignore_ascii_case(tag_first) {'''
+to = '''        if !first.eq_ignore_ascii_case(tag_first) {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::lang"]
+
+[[mutant]]
+name = "lang matches the later subtags case-sensitively"
+file = "crates/css/src/selector.rs"
+from = '''                if next.eq_ignore_ascii_case(subtag) {'''
+to = '''                if *next == subtag {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::lang"]
+
+[[mutant]]
+name = "a missing subtag is skipped past a singleton"
+file = "crates/css/src/selector.rs"
+from = '''                if next.len() == 1 {
+                    return false;
+                }
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::lang"]
+
+[[mutant]]
+name = "a missing subtag isn't skipped"
+file = "crates/css/src/selector.rs"
+from = '''                    return false;
+                }
+                tag.next();
+            }
+        }
+        true'''
+to = '''                    return false;
+                }
+                return false;
+            }
+        }
+        true'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::lang"]
+
+[[mutant]]
+name = "a later wildcard has to match a subtag"
+file = "crates/css/src/selector.rs"
+from = '''            if subtag == "*" {
+                continue;
+            }
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::lang"]
+
+[[mutant]]
+name = "a tag with a long subtag matches"
+file = "crates/css/src/selector.rs"
+from = '''            .any(|subtag| subtag.is_empty() || subtag.len() > 8)'''
+to = '''            .any(|subtag| subtag.is_empty())'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::lang"]
+
+[[mutant]]
+name = "the unknown language matches a wildcard"
+file = "crates/css/src/selector.rs"
+from = '''            .any(|subtag| subtag.is_empty() || subtag.len() > 8)'''
+to = '''            .any(|subtag| subtag.len() > 8)'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::lang"]
+
+[[mutant]]
+name = "a string isn't a range"
+file = "crates/css/src/selector.rs"
+from = '''                cssparser::Token::QuotedString(range) => (range, true),
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::lang", "stylesheet::"]
+
+[[mutant]]
+name = "a string range is written as an identifier"
+file = "crates/css/src/selector.rs"
+from = '''        if self.quoted {'''
+to = '''        if false {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "stylesheet::"]
+
+[[mutant]]
+name = ":lang( is case-sensitive"
+file = "crates/css/src/selector.rs"
+from = '''        if !name.eq_ignore_ascii_case("lang") {'''
+to = '''        if &*name != "lang" {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "stylesheet::"]
+
+# style: matching, and what a state change styles again.
+
+[[mutant]]
+name = ":lang() takes its first range only"
+file = "crates/style/src/selector.rs"
+from = '''                ranges.iter().any(|range| range.matches(&language))'''
+to = '''                ranges.iter().take(1).any(|range| range.matches(&language))'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::lang"]
+
+[[mutant]]
+name = ":read-only is :read-write"
+file = "crates/style/src/selector.rs"
+from = '''            PseudoClass::ReadOnly => !self.is_read_write(),'''
+to = '''            PseudoClass::ReadOnly => self.is_read_write(),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::the_form_states"]
+
+[[mutant]]
+name = "no editable element is read-write"
+file = "crates/style/src/selector.rs"
+from = '''            self.0.is_editable()'''
+to = '''            false'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::the_form_states"]
+
+[[mutant]]
+name = "a text control is read-write by contenteditable"
+file = "crates/style/src/selector.rs"
+from = '''            self.0.element_state().contains(ElementState::READ_WRITE)'''
+to = '''            self.0.is_editable()'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::read_write"]
+
+[[mutant]]
+name = ":target matches by the state"
+file = "crates/style/src/selector.rs"
+from = '''            PseudoClass::Target => self
+                .0
+                .document()
+                .target_element()
+                .is_some_and(|target| target.ptr_eq(&self.0)),
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::target"]
+
+[[mutant]]
+name = "a new target styles nothing again"
+file = "crates/style/src/selector.rs"
+from = '''        PseudoClass::Target => ElementState::TARGET,'''
+to = '''        PseudoClass::Target => ElementState::NONE,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::target"]
+
+[[mutant]]
+name = ":read-only doesn't depend on READ_WRITE"
+file = "crates/style/src/selector.rs"
+from = '''        PseudoClass::ReadOnly | PseudoClass::ReadWrite => ElementState::READ_WRITE,'''
+to = '''        PseudoClass::ReadOnly => ElementState::NONE,
+        PseudoClass::ReadWrite => ElementState::READ_WRITE,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::the_form_states"]
+
+[[mutant]]
+name = ":required matches the optional"
+file = "crates/style/src/selector.rs"
+from = '''        PseudoClass::Required => ElementState::REQUIRED,'''
+to = '''        PseudoClass::Required => ElementState::OPTIONAL,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::the_form_states"]
+
+# dom: the form states, a node's language, editability, the target element
+# and the <meta> records.
+
+[[mutant]]
+name = "READ_WRITE isn't a form state"
+file = "crates/dom/src/node.rs"
+from = '''            | Self::READ_WRITE.0
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::read_write"]
+
+[[mutant]]
+name = "xml:lang is ignored"
+file = "crates/dom/src/scope.rs"
+from = '''                if let Some(lang) = n.attribute_ns(XML_NAMESPACE, "lang") {
+                    return lang;
+                }
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "languages::"]
+
+[[mutant]]
+name = "lang comes before xml:lang"
+file = "crates/dom/src/scope.rs"
+from = '''                if let Some(lang) = n.attribute_ns(XML_NAMESPACE, "lang") {
+                    return lang;
+                }
+                if let Some(lang) = n.attr_ref(&local_name!("lang")) {
+                    return lang.to_string();
+                }'''
+to = '''                if let Some(lang) = n.attr_ref(&local_name!("lang")) {
+                    return lang.to_string();
+                }
+                if let Some(lang) = n.attribute_ns(XML_NAMESPACE, "lang") {
+                    return lang;
+                }'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "languages::"]
+
+[[mutant]]
+name = "the language stops at a shadow root"
+file = "crates/dom/src/scope.rs"
+from = '''            node = n.parent_or_shadow_host();
+        }
+        self.document().content_language()'''
+to = '''            node = n.parent();
+        }
+        self.document().content_language()'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "languages::"]
+
+[[mutant]]
+name = "no content language"
+file = "crates/dom/src/scope.rs"
+from = '''        self.document().content_language()
+    }'''
+to = '''        String::new()
+    }'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "languages::"]
+
+[[mutant]]
+name = "a new content language styles nothing again"
+file = "crates/dom/src/scope.rs"
+from = '''        while let Some(node) = child {
+            set_needs_style_recalc(node);'''
+to = '''        while let Some(node) = child {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "languages::"]
+
+[[mutant]]
+name = "the same content language styles everything again"
+file = "crates/dom/src/scope.rs"
+from = '''            if &**content_language == language {
+                return;
+            }
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "languages::"]
+
+[[mutant]]
+name = "an element of another namespace is editable"
+file = "crates/dom/src/scope.rs"
+from = '''        is_html(self)
+            && std::iter::successors'''
+to = '''        std::iter::successors'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "languages::"]
+
+[[mutant]]
+name = "contenteditable counts on any element"
+file = "crates/dom/src/scope.rs"
+from = '''                .filter(is_html)
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "languages::"]
+
+[[mutant]]
+name = "plaintext-only isn't editable"
+file = "crates/dom/src/scope.rs"
+from = '''        _ if value.eq_ignore_ascii_case("plaintext-only") => Some(true),
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "languages::"]
+
+[[mutant]]
+name = "the target's ancestors are targets too"
+file = "crates/dom/src/scope.rs"
+from = '''        if state == ElementState::TARGET {
+            vec![node]'''
+to = '''        if false {
+            vec![node]'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "focus::"]
+
+[[mutant]]
+name = "the target element is the hover element"
+file = "crates/dom/src/scope.rs"
+from = '''    } else {
+        target_element
+    }'''
+to = '''    } else {
+        hover_element
+    }'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "focus::"]
+
+[[mutant]]
+name = "removing the target element moves it to the parent"
+file = "crates/dom/src/scope.rs"
+from = '''    for state in [ElementState::HOVER, ElementState::ACTIVE] {'''
+to = '''    for state in [ElementState::HOVER, ElementState::ACTIVE, ElementState::TARGET] {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "focus::"]
+
+[[mutant]]
+name = "a meta in a shadow tree is recorded"
+file = "crates/dom/src/scope.rs"
+from = '''            && !in_shadow
+            && node'''
+to = '''            && node'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "languages::"]
+
+[[mutant]]
+name = "a meta without http-equiv is recorded"
+file = "crates/dom/src/scope.rs"
+from = '''            && has_http_equiv(node)
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "languages::"]
+
+# dom_api: the form states, the content-language pragma and the target of
+# a navigation to a fragment.
+
+[[mutant]]
+name = "readonly doesn't make an input read-only"
+file = "crates/dom_api/src/form_states.rs"
+from = '''            readonly_applies && !readonly && !disabled,'''
+to = '''            readonly_applies && !disabled,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::read_write"]
+
+[[mutant]]
+name = "a disabled input is read-write"
+file = "crates/dom_api/src/form_states.rs"
+from = '''            readonly_applies && !readonly && !disabled,'''
+to = '''            readonly_applies && !readonly,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::read_write"]
+
+[[mutant]]
+name = "every input type is read-write"
+file = "crates/dom_api/src/form_states.rs"
+from = '''            readonly_applies && !readonly && !disabled,'''
+to = '''            !readonly && !disabled,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::read_write"]
+
+[[mutant]]
+name = "a checkbox can't be required"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        if readonly_applies || matches!(ty, "checkbox" | "radio" | "file") {'''
+to = '''        if readonly_applies {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::required"]
+
+[[mutant]]
+name = "every input type can be required"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        if readonly_applies || matches!(ty, "checkbox" | "radio" | "file") {'''
+to = '''        if true {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::required"]
+
+[[mutant]]
+name = "a select can't be required"
+file = "crates/dom_api/src/form_states.rs"
+from = '''    } else if is_html(element, &local_name!("select")) {
+        set(required, true);'''
+to = '''    } else if is_html(element, &local_name!("select")) {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::required"]
+
+[[mutant]]
+name = "readonly doesn't make a textarea read-only"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        set(ElementState::READ_WRITE, !readonly && !disabled);'''
+to = '''        set(ElementState::READ_WRITE, !disabled);'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::read_write"]
+
+[[mutant]]
+name = "a disabled textarea is read-write"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        set(ElementState::READ_WRITE, !readonly && !disabled);'''
+to = '''        set(ElementState::READ_WRITE, !readonly);'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::read_write"]
+
+[[mutant]]
+name = "a textarea can't be required"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        set(ElementState::READ_WRITE, !readonly && !disabled);
+        set(required, true);'''
+to = '''        set(ElementState::READ_WRITE, !readonly && !disabled);'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::required"]
+
+[[mutant]]
+name = "required is ignored"
+file = "crates/dom_api/src/form_states.rs"
+from = '''    let required = if has_attribute(element, &local_name!("required")) {'''
+to = '''    let required = if false {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::required"]
+
+[[mutant]]
+name = "a new readonly isn't looked at"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        local_name!("readonly"),
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::read_write"]
+
+[[mutant]]
+name = "a new required isn't looked at"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        local_name!("required"),
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::required"]
+
+[[mutant]]
+name = "any http-equiv sets the content language"
+file = "crates/dom_api/src/html_element.rs"
+from = '''            .is_some_and(|value| value.eq_ignore_ascii_case("content-language"));'''
+to = '''            .is_some();'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "api::a_content_language"]
+
+[[mutant]]
+name = "the pragma's name is case-sensitive"
+file = "crates/dom_api/src/html_element.rs"
+from = '''            .is_some_and(|value| value.eq_ignore_ascii_case("content-language"));'''
+to = '''            .is_some_and(|value| value.to_string() == "content-language");'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "api::a_content_language"]
+
+[[mutant]]
+name = "the pragma's name is trimmed"
+file = "crates/dom_api/src/html_element.rs"
+from = '''            .is_some_and(|value| value.eq_ignore_ascii_case("content-language"));'''
+to = '''            .is_some_and(|value| value.trim().eq_ignore_ascii_case("content-language"));'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "api::a_content_language"]
+
+[[mutant]]
+name = "a meta taken out again sets the content language"
+file = "crates/dom_api/src/html_element.rs"
+from = '''            Some(content) if pragma && crate::script::is_connected(meta) => {'''
+to = '''            Some(content) if pragma => {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "api::a_content_language"]
+
+[[mutant]]
+name = "an inserted meta does nothing"
+file = "crates/dom_api/src/frame.rs"
+from = '''            ElementChange::Meta(element) => crate::html_element::meta_inserted(cx, element),'''
+to = '''            ElementChange::Meta(_) => {}'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "api::a_content_language"]
+
+[[mutant]]
+name = "a navigation to a fragment doesn't set the target"
+file = "crates/dom_api/src/navigation.rs"
+from = '''        update_target_element(m, document, &url);
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "location::"]
+
+[[mutant]]
+name = "a fragment naming nothing keeps the old target"
+file = "crates/dom_api/src/navigation.rs"
+from = '''    m.set_target_element(document, target.as_ref());'''
+to = '''    if target.is_some() {
+        m.set_target_element(document, target.as_ref());
+    }'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "location::"]
+
+# renderer and browser: when the target is set, and where the content
+# language comes from.
+
+[[mutant]]
+name = "parsing doesn't set the target"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                        dom_api::navigation::update_target_element(
+                            &mut dom.mutate(),
+                            document,
+                            &url,
+                        );'''
+to = '''                        let _ = (document, url);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "history::the_target"]
+
+[[mutant]]
+name = "a traversal doesn't set the target"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        dom_api::navigation::update_target_element(
+            &mut self.dom.borrow_mut().mutate(),
+            &document,
+            &new_url,
+        );
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "history::the_target"]
+
+[[mutant]]
+name = "a committed document has no content language"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            if let Some(language) = content_language.and_then(document::content_language) {
+                m.set_content_language(&document, &language);
+            }
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "network::content_language"]
+
+[[mutant]]
+name = "an iframe's document has no content language"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if let Some(language) = &content_language {
+            self.dom
+                .borrow_mut()
+                .mutate()
+                .set_content_language(&document, language);
+        }
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "network::content_language"]
+
+[[mutant]]
+name = "the content language is the whole header"
+file = "crates/renderer/src/document.rs"
+from = '''    let language = header.split(',').next().unwrap_or_default();'''
+to = '''    let language = header;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "network::content_language"]
+
+[[mutant]]
+name = "the browser doesn't pass on Content-Language"
+file = "crates/browser/src/web_contents.rs"
+from = '''                    response.charset,
+                    content_language,
+                    response.body,'''
+to = '''                    response.charset,
+                    None,
+                    response.body,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "network::content_language"]

@@ -1,0 +1,304 @@
+# Stage 1g-1: the gc heap marking with V8's major GCs: bindings'
+# unified_heap and gc_platform, the rusty_v8 fork's v8::kun, and the V8
+# fork's patch (rebuilt for each of its mutants, last). Run with
+# RUSTY_V8_ARCHIVE pointing at ../third_party/rusty_v8_artifacts, built
+# from the patched fork (the prebuilt has none of it), and rebuild V8 after:
+# the last C++ mutant's build is left there. Each test command in a scope
+# of at most 24 GB (docs/testing.md); the baselines take seconds, plus a
+# relink, and about a minute more to rebuild V8.
+timeout = 300
+
+[[mutant]]
+name = "every type's wrappers share a tag"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--test", "unified_heap_marking", "--test", "unified_heap_linear", "--", "unified_heap", "gc_platform", "incremental_markings", "finishes_the_marking", "objects_behind"]
+from = '''        .and_then(|index| v8::kun::FIRST_TAG.checked_add(index))'''
+to = '''        .and_then(|_| v8::kun::FIRST_TAG.checked_add(0))'''
+
+[[mutant]]
+name = "the marking's hand-over is dropped"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--test", "unified_heap_marking", "--test", "unified_heap_linear", "--", "unified_heap", "gc_platform", "incremental_markings", "finishes_the_marking", "objects_behind"]
+from = '''        *self.marker() = marker;'''
+to = '''        drop(marker);'''
+
+[[mutant]]
+name = "the heap's marking is done before it is drained"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--lib", "--", "unified_heap"]
+from = '''    marker.is_none_or(gc::WrapperMarker::is_drained)'''
+to = '''    let _ = marker;
+    true'''
+
+[[mutant]]
+name = "V8's wrapped objects aren't handed over"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--test", "unified_heap_marking", "--test", "unified_heap_linear", "--", "unified_heap", "gc_platform", "incremental_markings", "finishes_the_marking", "objects_behind"]
+from = '''        unsafe { local.local.hand(object.cast()) };'''
+to = '''        let _ = (local, object);'''
+
+[[mutant]]
+name = "the handed objects aren't published"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--test", "unified_heap_marking", "--test", "unified_heap_linear", "--", "unified_heap", "gc_platform", "incremental_markings", "finishes_the_marking", "objects_behind"]
+from = '''        local.local.publish();'''
+to = ''''''
+
+[[mutant]]
+name = "a local is always empty"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--test", "unified_heap_marking", "--test", "unified_heap_linear", "--", "unified_heap", "gc_platform", "incremental_markings", "finishes_the_marking", "objects_behind"]
+from = '''    fn is_local_empty(local: &Local) -> bool {
+        local.local.is_empty()
+    }'''
+to = '''    fn is_local_empty(local: &Local) -> bool {
+        let _ = local;
+        true
+    }'''
+
+[[mutant]]
+name = "the heap's marking never ends"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--test", "unified_heap_marking", "--test", "unified_heap_linear", "--", "unified_heap", "gc_platform", "incremental_markings", "finishes_the_marking", "objects_behind"]
+from = '''    fn end(&self) {
+        self.heap().end();'''
+to = '''    fn end(&self) {'''
+
+[[mutant]]
+name = "V8's step's time is in seconds"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--lib", "--", "unified_heap"]
+from = '''    Duration::try_from_secs_f64(max_ms / 1000.0)'''
+to = '''    Duration::try_from_secs_f64(max_ms)'''
+
+[[mutant]]
+name = "a dropped wrapper's reference stays"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--test", "unified_heap_marking", "--test", "unified_heap_linear", "--", "unified_heap", "gc_platform", "incremental_markings", "finishes_the_marking", "objects_behind"]
+from = '''            if unsafe { handle.reset_if_same(slot(edge.as_ref())) } {
+                break;
+            }'''
+to = '''            let _ = (handle, edge);'''
+
+[[mutant]]
+name = "a wrapper may wrap twice"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--test", "unified_heap_marking", "--test", "unified_heap_linear", "--", "unified_heap", "gc_platform", "incremental_markings", "finishes_the_marking", "objects_behind"]
+from = '''    assert!(
+        wrapper.is_api_wrapper() && !v8::Object::is_wrapping(isolate, wrapper),
+        "a wrapper of the heap's is an API wrapper wrapping nothing yet"
+    );'''
+to = ''''''
+
+[[mutant]]
+name = "anything is a wrapper"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--test", "unified_heap_marking", "--test", "unified_heap_linear", "--", "unified_heap", "gc_platform", "incremental_markings", "finishes_the_marking", "objects_behind"]
+from = '''        .is_ok_and(|object| v8::kun::unwrap(isolate, object, tag::<T>()).is_some())'''
+to = '''        .is_ok()'''
+
+[[mutant]]
+name = "an object's reference isn't droppable"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--test", "unified_heap_marking", "--test", "unified_heap_linear", "--", "unified_heap", "gc_platform", "incremental_markings", "finishes_the_marking", "objects_behind"]
+from = '''    unsafe { slot(edge).set_droppable(scope, wrapper) };'''
+to = '''    unsafe { slot(edge).set(scope, Some(wrapper)) };'''
+
+[[mutant]]
+name = "the heap's JS edges aren't marked"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--test", "unified_heap_marking", "--test", "unified_heap_linear", "--", "unified_heap", "gc_platform", "incremental_markings", "finishes_the_marking", "objects_behind"]
+from = '''        self.marker.mark(slot(unsafe { edge.as_ref() }));'''
+to = '''        let _ = edge;'''
+
+[[mutant]]
+name = "a local's marking never ends"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--lib", "--", "unified_heap"]
+from = '''        self.0.store(false, Ordering::Relaxed);'''
+to = ''''''
+
+[[mutant]]
+name = "V8's end leaves its marking running"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--lib", "--", "unified_heap"]
+from = '''        if let Some(running) = self.running().take() {
+            running.end();
+        }'''
+to = '''        let _ = self.running().take();'''
+
+[[mutant]]
+name = "V8's hand-overs aren't checked"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--lib", "--", "unified_heap"]
+from = '''        local.running.check("V8 hands an object over");'''
+to = ''''''
+
+[[mutant]]
+name = "V8's publications aren't checked"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--lib", "--", "unified_heap"]
+from = '''            local.running.check("V8 publishes objects");'''
+to = ''''''
+
+[[mutant]]
+name = "an empty publication is checked"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--lib", "--", "unified_heap"]
+from = '''        if !local.local.is_empty() {
+            local.running.check("V8 publishes objects");
+        }'''
+to = '''        local.running.check("V8 publishes objects");'''
+
+[[mutant]]
+name = "a local going with objects isn't checked"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--lib", "--", "unified_heap"]
+from = '''            self.running.check("a local holding objects goes");'''
+to = ''''''
+
+[[mutant]]
+name = "an empty local's going is checked"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--lib", "--", "unified_heap"]
+from = '''        if !self.local.is_empty() && !thread::panicking() {'''
+to = '''        if !thread::panicking() {'''
+
+[[mutant]]
+name = "a local going while unwinding is checked"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--lib", "--", "unified_heap"]
+from = '''        if !self.local.is_empty() && !thread::panicking() {'''
+to = '''        if !self.local.is_empty() {'''
+
+[[mutant]]
+name = "the heap's locals aren't checked"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--lib", "--", "unified_heap"]
+from = '''        self.running.check("the heap's marker takes a local");'''
+to = ''''''
+
+[[mutant]]
+name = "the heap's marks aren't checked"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--lib", "--", "unified_heap"]
+from = '''        self.running.check("the heap's marker marks a reference");'''
+to = ''''''
+
+[[mutant]]
+name = "the heap's publications aren't checked"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--lib", "--", "unified_heap"]
+from = '''            self.running.check("the heap's marker publishes references");'''
+to = ''''''
+
+[[mutant]]
+name = "the heap's local going while unwinding is checked"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--lib", "--", "unified_heap"]
+from = '''        if !thread::panicking() {
+            self.running.check("the heap's marker publishes references");'''
+to = '''        {
+            self.running.check("the heap's marker publishes references");'''
+
+[[mutant]]
+name = "run doesn't wait for the workers"
+file = "crates/bindings/src/gc_platform.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--test", "unified_heap_marking", "--test", "unified_heap_linear", "--", "unified_heap", "gc_platform", "incremental_markings", "finishes_the_marking", "objects_behind"]
+from = '''        handle.stop();
+    }
+
+    fn post_job'''
+to = '''        if let Some(handle) = handle.handle.lock().unwrap().take() {
+            handle.cancel_and_detach();
+        }
+    }
+
+    fn post_job'''
+
+[[mutant]]
+name = "a run's panic is lost"
+file = "crates/bindings/src/gc_platform.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--test", "unified_heap_marking", "--test", "unified_heap_linear", "--", "unified_heap", "gc_platform", "incremental_markings", "finishes_the_marking", "objects_behind"]
+from = '''        self.kept().get_or_insert(panic);'''
+to = '''        drop(panic);'''
+
+[[mutant]]
+name = "a job asks for no worker"
+file = "crates/bindings/src/gc_platform.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--test", "unified_heap_marking", "--test", "unified_heap_linear", "--", "unified_heap", "gc_platform", "incremental_markings", "finishes_the_marking", "objects_behind"]
+from = '''            self.0.job().max_concurrency(worker_count)
+        }))'''
+to = '''            self.0.job().max_concurrency(worker_count) * 0
+        }))'''
+
+[[mutant]]
+name = "a worker's run never yields"
+file = "crates/bindings/src/gc_platform.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--test", "unified_heap_marking", "--test", "unified_heap_linear", "--", "unified_heap", "gc_platform", "incremental_markings", "finishes_the_marking", "objects_behind"]
+from = '''    fn should_yield(&self) -> bool {
+        self.0.should_yield()
+    }'''
+to = '''    fn should_yield(&self) -> bool {
+        false
+    }'''
+
+[[mutant]]
+name = "the fork's handle doesn't cancel"
+file = "../third_party/rusty_v8/src/machopo.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--test", "unified_heap_marking", "--test", "unified_heap_linear", "--", "unified_heap", "gc_platform", "incremental_markings", "finishes_the_marking", "objects_behind"]
+from = '''    // SAFETY: the handle, deleted once.
+    unsafe { v8__kun__JobHandle__Cancel(self.0.as_ptr()) };'''
+to = '''    // SAFETY: the handle, deleted once.
+    unsafe { v8__kun__JobHandle__CancelAndDetach(self.0.as_ptr()) };'''
+
+[[mutant]]
+name = "the fork hands over nothing"
+file = "../third_party/rusty_v8/src/machopo.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--test", "unified_heap_marking", "--test", "unified_heap_linear", "--", "unified_heap", "gc_platform", "incremental_markings", "finishes_the_marking", "objects_behind"]
+from = '''      M::hand(unsafe { local::<M>(handoff) }, object);'''
+to = '''      let _ = (handoff, object);'''
+
+[[mutant]]
+name = "unregistering doesn't finish the GC that runs"
+file = "../third_party/rusty_v8/src/machopo.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--test", "unified_heap_marking", "--test", "unified_heap_linear", "--", "unified_heap", "gc_platform", "incremental_markings", "finishes_the_marking", "objects_behind"]
+from = '''      v8__kun__FinishMarking(self.isolate);
+'''
+to = ''''''
+
+[[mutant]]
+name = "the fork's marker marks nothing"
+file = "../third_party/rusty_v8/src/machopo.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--test", "unified_heap_marking", "--test", "unified_heap_linear", "--", "unified_heap", "gc_platform", "incremental_markings", "finishes_the_marking", "objects_behind"]
+from = '''    unsafe { v8__kun__TracedMarker__Mark(self.0, slot.raw()) };'''
+to = '''    let _ = slot;'''
+
+[[mutant]]
+name = "V8's main thread's handed objects aren't published before a step"
+file = "../third_party/rusty_v8/v8/src/heap/cppgc-js/cpp-heap.cc"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "python3 scripts/ci.py v8 --profile release >/dev/null && cargo test -q -p bindings --test it --test unified_heap_marking --test unified_heap_linear -- unified_heap gc_platform incremental_markings finishes_the_marking objects_behind"]
+from = '''          state->PublishHandedObjects();'''
+to = '''          (void)state;'''
+
+[[mutant]]
+name = "V8's marking hands the embedder's objects to cppgc"
+file = "../third_party/rusty_v8/v8/src/heap/marking-visitor-inl.h"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "python3 scripts/ci.py v8 --profile release >/dev/null && cargo test -q -p bindings --test it --test unified_heap_marking --test unified_heap_linear -- unified_heap gc_platform incremental_markings finishes_the_marking objects_behind"]
+from = '''  if (Address object = table->Get(handle, kun::kTagRange)) {'''
+to = '''  if (Address object = 0) {'''
+
+[[mutant]]
+name = "V8's barrier takes the embedder's objects for cppgc's"
+file = "../third_party/rusty_v8/v8/src/heap/heap-write-barrier.cc"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "python3 scripts/ci.py v8 --profile release >/dev/null && cargo test -q -p bindings --test it --test unified_heap_marking --test unified_heap_linear -- unified_heap gc_platform incremental_markings finishes_the_marking objects_behind"]
+from = '''  if (table.Get(handle, kun::kTagRange)) return;'''
+to = ''''''
+
+[[mutant]]
+name = "a marking state's local isn't counted as work"
+file = "../third_party/rusty_v8/v8/src/heap/cppgc-js/cpp-marking-state.h"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "python3 scripts/ci.py v8 --profile release >/dev/null && cargo test -q -p bindings --test it --test unified_heap_marking --test unified_heap_linear -- unified_heap gc_platform incremental_markings finishes_the_marking objects_behind"]
+from = '''    return marking_state_.marking_worklist().IsLocalEmpty() &&
+           (!kun_local_ || kun_marking_->IsLocalEmpty(kun_local_));'''
+to = '''    return marking_state_.marking_worklist().IsLocalEmpty();'''

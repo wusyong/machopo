@@ -1,0 +1,41 @@
+# Mutation test of step 3d's fix (a shadow root moving to another
+# document lets go of the sheets it adopts, but through a template):
+# python3 scripts/test.py mutate rfcs/0016-cssom/mutants-3d.toml
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "style_sheets::"]
+timeout = 600
+
+[[mutant]]
+name = "a shadow root keeps its sheets in another document"
+file = "crates/dom/src/scope.rs"
+from = '''        for index in 0..rare.adopted_count.get() as usize {
+            // SAFETY: as above.
+            if let Some(slot) = unsafe { rare.adopted_style_sheets.get(index) } {
+                slot.clear(self);
+            }
+        }
+        rare.adopted_count.set(0);'''
+to = ''''''
+
+[[mutant]]
+name = "moving into a template's content lets go of them too"
+file = "crates/dom/src/scope.rs"
+from = '''        if template_of(old) == Some(document as *const Node)
+            || template_of(document) == Some(old as *const Node)
+        {'''
+to = '''        if template_of(document) == Some(old as *const Node) {'''
+
+[[mutant]]
+name = "moving out of a template's content lets go of them too"
+file = "crates/dom/src/scope.rs"
+from = '''        if template_of(old) == Some(document as *const Node)
+            || template_of(document) == Some(old as *const Node)
+        {'''
+to = '''        if template_of(old) == Some(document as *const Node) {'''
+
+[[mutant]]
+name = "only an emptied count, the sheets still kept"
+file = "crates/dom/src/scope.rs"
+from = '''            if let Some(slot) = unsafe { rare.adopted_style_sheets.get(index) } {
+                slot.clear(self);
+            }'''
+to = '''            let _ = index;'''

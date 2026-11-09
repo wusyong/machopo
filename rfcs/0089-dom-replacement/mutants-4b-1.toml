@@ -1,0 +1,239 @@
+# Stage 4b-1: script reads the layout: `NextLayout` lent to each operation
+# (laid out first, or not where no layout changes what is read), CSSOM
+# View's `offset*`, `client*`, `scroll*`, rects, `elementFromPoint`,
+# `scrollingElement` and the window's viewport; `DOMRect`, `DOMRectList`;
+# `double` arguments; the new DOM's frame given the window's size at the
+# commit.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next -p dom_api_next && cargo test -q -p shell --test it -- next_dom"]
+timeout = 2400
+
+[[mutant]]
+name = "the layout lent to a node of another document"
+file = "crates/dom_api_next/src/lib.rs"
+from = '''        let shown = self.node_id(document) == layout.document() && self.is_connected(node);'''
+to = '''        let shown = self.is_connected(node);'''
+
+[[mutant]]
+name = "the layout lent to a detached node"
+file = "crates/dom_api_next/src/lib.rs"
+from = '''        let shown = self.node_id(document) == layout.document() && self.is_connected(node);'''
+to = '''        let shown = self.node_id(document) == layout.document();'''
+
+[[mutant]]
+name = "the layout not put back"
+file = "crates/dom_api_next/src/lib.rs"
+from = '''        cell.set(Some(layout));
+        result'''
+to = '''        drop(layout);
+        result'''
+
+[[mutant]]
+name = "nothing laid out first"
+file = "crates/dom_api_next/src/lib.rs"
+from = '''            layout.update_style_and_layout(self.dom);'''
+to = ''''''
+
+[[mutant]]
+name = "innerWidth lays out"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''        .peek_layout(document, |layout| saturated_cast(layout.viewport().size.width))'''
+to = '''        .with_layout(document, |layout| saturated_cast(layout.viewport().size.width))'''
+
+[[mutant]]
+name = "top is the larger"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''    let [_, y, _, height] = cx.rect(this);
+    Ok(nan_safe_min(y, y + height))'''
+to = '''    let [_, y, _, height] = cx.rect(this);
+    Ok(nan_safe_max(y, y + height))'''
+
+[[mutant]]
+name = "min takes the number over NaN"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''    if a.is_nan() || b.is_nan() { f64::NAN } else { a.min(b) }'''
+to = '''    a.min(b)'''
+
+[[mutant]]
+name = "height's setter sets the width"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''    cx.set_rect_value(this, 3, value);'''
+to = '''    cx.set_rect_value(this, 2, value);'''
+
+[[mutant]]
+name = "a rect of no height counts in the bounding rect"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''        .filter(|rect| rect.width != 0.0 && rect.height != 0.0)'''
+to = '''        .filter(|rect| rect.width != 0.0)'''
+
+[[mutant]]
+name = "all empty: the last rect"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''        .or_else(|| rects.first().copied())'''
+to = '''        .or_else(|| rects.last().copied())'''
+
+[[mutant]]
+name = "the body has an offset parent"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''    if is_html(cx, element, &[local::BODY]) || style_says(cx, layout, element, ComputedStyle::is_fixed) {'''
+to = '''    if style_says(cx, layout, element, ComputedStyle::is_fixed) {'''
+
+[[mutant]]
+name = "a fixed element has an offset parent"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''    if is_html(cx, element, &[local::BODY]) || style_says(cx, layout, element, ComputedStyle::is_fixed) {'''
+to = '''    if is_html(cx, element, &[local::BODY]) {'''
+
+[[mutant]]
+name = "a positioned ancestor isn't the offset parent"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''        style_says(cx, layout, node, ComputedStyle::is_positioned)
+            ||'''
+to = '''        false
+            ||'''
+
+[[mutant]]
+name = "a td isn't the offset parent"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''            || is_html(cx, node, &[local::BODY, local::TABLE, local::TD, local::TH])'''
+to = '''            || is_html(cx, node, &[local::BODY, local::TABLE, local::TH])'''
+
+[[mutant]]
+name = "the body's offset is its start"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''    if is_html(cx, element, &[local::BODY]) {
+        return origin;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "without an offset parent, from the origin"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''        return start;'''
+to = '''        return origin;'''
+
+[[mutant]]
+name = "from the body: the origin, not the root's box"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''            .map_or(origin, |root| PointF::new(root.border_box.x, root.border_box.y))'''
+to = '''            .map_or(origin, |_| origin)'''
+
+[[mutant]]
+name = "a block parent's right border"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''            }) => PointF::new(border_box.x + block.border[3], border_box.y + block.border[0]),'''
+to = '''            }) => PointF::new(border_box.x + block.border[1], border_box.y + block.border[0]),'''
+
+[[mutant]]
+name = "an inline parent's border box"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''            Some(inline) => inline.start,'''
+to = '''            Some(inline) => PointF::new(inline.border_box.x, inline.border_box.y),'''
+
+[[mutant]]
+name = "lengths truncated"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''fn round(length: f32) -> i32 {
+    clamp_round(length)'''
+to = '''fn round(length: f32) -> i32 {
+    saturated_cast(length)'''
+
+[[mutant]]
+name = "clientTop the bottom border"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''found.block.map_or(0, |block| round(block.border[0]))'''
+to = '''found.block.map_or(0, |block| round(block.border[2]))'''
+
+[[mutant]]
+name = "clientWidth less the top and bottom borders"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''                }) => round(border_box.width - block.border[1] - block.border[3]),'''
+to = '''                }) => round(border_box.width - block.border[0] - block.border[2]),'''
+
+[[mutant]]
+name = "the root's clientWidth its own"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''            if viewport_element {
+                return saturated_cast(layout.viewport().size.width);'''
+to = '''            if false {
+                return saturated_cast(layout.viewport().size.width);'''
+
+[[mutant]]
+name = "the viewport element the body in standards mode"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''    let viewport_element = if in_quirks_mode(cx, document) {'''
+to = '''    let viewport_element = if !in_quirks_mode(cx, document) {'''
+
+[[mutant]]
+name = "the body the scrolling element in standards mode"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''    if !in_quirks_mode(cx, document) {
+        return document_element(cx, document);'''
+to = '''    if false {
+        return document_element(cx, document);'''
+
+[[mutant]]
+name = "a body that scrolls is the scrolling element"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''    (!scrolls).then_some(body)'''
+to = '''    Some(body)'''
+
+[[mutant]]
+name = "no scrolling element in quirks mode without a layout"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''        .unwrap_or_else(|| scrolling_element_of(cx, None, this)))'''
+to = '''        .unwrap_or(None))'''
+
+[[mutant]]
+name = "the scrolling element's scroll its own"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''            return Some(layout.viewport().scroll);'''
+to = '''            return box_of(cx, layout, element)?.block?.scroll;'''
+
+[[mutant]]
+name = "the scrolling element's scrollWidth the viewport's"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''                return round(layout.viewport().content_size.width);'''
+to = '''                return round(layout.viewport().size.width);'''
+
+[[mutant]]
+name = "the viewport's right edge is in it"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''            if !((0.0..size.width).contains(&point.x) && (0.0..size.height).contains(&point.y)) {'''
+to = '''            if !((0.0..=size.width).contains(&point.x) && (0.0..size.height).contains(&point.y)) {'''
+
+[[mutant]]
+name = "nothing hit: null, not the root"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''                None => document_element(cx, this),'''
+to = '''                None => None,'''
+
+[[mutant]]
+name = "a double takes a NaN"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        front.f64_arg(index, true)'''
+to = '''        front.f64_arg(index, false)'''
+
+[[mutant]]
+name = "V8's double takes a NaN"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        if finite && !value.is_finite() {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "the frame's size only at its first frame"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        }
+        self.set_next_viewport();
+'''
+to = '''        }
+'''
+
+[[mutant]]
+name = "the window's size the last layout's"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        Viewport {
+            size: self.viewport,
+            device_scale_factor: self.device_scale_factor,
+            ..self.view.script_viewport()
+        }'''
+to = '''        self.view.script_viewport()'''

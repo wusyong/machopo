@@ -1,0 +1,99 @@
+# Stage 4e-4c-2: the document parser constructing custom elements at once
+# on the new DOM: `html`'s sink asking its engine, `dom_js_next`'s
+# construction for it and the reactions of its insertions.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p html --test it next:: && cargo test -q -p dom_js_next --test it the_parser"]
+timeout = 3000
+
+[[mutant]]
+name = "html: never constructed"
+file = "crates/html/src/next.rs"
+from = '''        if defined {
+            self.to_construct.borrow_mut().push((handle.clone(), name, attrs));
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "html: another namespace's constructed"
+file = "crates/html/src/next.rs"
+from = '''        if &*name.ns != HTML || !dom_next::has_hyphen(&name.local) || self.host.borrow().is_none() {'''
+to = '''        if !dom_next::has_hyphen(&name.local) || self.host.borrow().is_none() {'''
+
+[[mutant]]
+name = "html: an undefined name's constructed"
+file = "crates/html/src/next.rs"
+from = '''            cx.custom_element_definition_in(self.document.get(cx), &name.local)
+                .is_some()'''
+to = '''            let _ = cx.custom_element_definition_in(self.document.get(cx), &name.local);
+            true'''
+
+[[mutant]]
+name = "html: no element queue around an insertion"
+file = "crates/html/src/next.rs"
+from = '''        if left && let Some(host) = self.host.borrow_mut().as_mut() {
+            host.run_custom_element_reactions();
+        }'''
+to = '''        let _ = left;'''
+
+[[mutant]]
+name = "dom: no definition by name"
+file = "crates/dom_next/src/custom_element.rs"
+from = '''        let registry = self.custom_elements_if_made(window)?;
+        self.custom_element_definition(registry, names::find(local)?)'''
+to = '''        let _ = (self.custom_elements_if_made(window)?, local);
+        None'''
+
+[[mutant]]
+name = "js: no microtask checkpoint first"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        // The JS stack is empty: the microtasks first.
+        self.perform_microtask_checkpoint();'''
+to = ''''''
+
+[[mutant]]
+name = "js: the attributes not appended"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''                    for (name, value) in attributes {
+                        cx.set_attribute_ns(element, *name, value);
+                    }'''
+to = '''                    let _ = (element, attributes);'''
+
+[[mutant]]
+name = "js: no element queue around the construction"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        scope.state_mut().0.dom.mutate(|cx| cx.enter_ce_reactions());'''
+to = ''''''
+
+[[mutant]]
+name = "js: the construction's queue not invoked"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        if left {
+            dom_api_next::invoke_left_ce_reactions(&mut Host { scope: &mut scope });
+        }
+        state::report(&mut scope);
+        element'''
+to = '''        let _ = left;
+        state::report(&mut scope);
+        element'''
+
+[[mutant]]
+name = "js: an insertion's reactions not run"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        dom_api_next::invoke_left_ce_reactions(&mut Host { scope: &mut scope });
+        state::report(&mut scope);
+    }'''
+to = '''        state::report(&mut scope);
+    }'''
+
+[[mutant]]
+name = "html: a template's contents' constructed"
+file = "crates/html/src/next.rs"
+from = '''        if !in_document {
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "html: a fostered one not constructed"
+file = "crates/html/src/next.rs"
+from = '''            self.construct_if_due(&parent, node);'''
+to = '''            let _ = (&parent, node);'''

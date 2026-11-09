@@ -1,0 +1,88 @@
+# Mutation test of RFC 0040's tail (2026-10-13): reflection and the other
+# name helpers taking atoms, unlisted names, matches on names as atoms:
+# python3 scripts/test.py mutate rfcs/0012-speedometer/mutants-name-tail.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "html_element::"]
+timeout = 900
+
+# dom: unlisted names.
+
+[[mutant]]
+name = "an unlisted name is any attribute"
+file = "crates/dom/src/name.rs"
+from = '''        name.as_str() == self.0
+    }'''
+to = '''        !name.is_empty()
+    }'''
+
+[[mutant]]
+name = "enterkeyhint reflects autocapitalize"
+file = "crates/dom_api/src/reflection.rs"
+from = '''    ("enterkeyhint") => {
+        dom::name::unlisted::ENTERKEYHINT
+    };'''
+to = '''    ("enterkeyhint") => {
+        dom::name::unlisted::AUTOCAPITALIZE
+    };'''
+
+# dom_api: reflection reads through the atom.
+
+[[mutant]]
+name = "a reflected string attribute reads nothing"
+file = "crates/dom_api/src/html_element.rs"
+from = '''    let value = this.get(&read).attr_ref(name);
+    DomString::from(value.as_deref().unwrap_or_default())'''
+to = '''    let value = this.get(&read).attr_ref(name).filter(|_| false);
+    DomString::from(value.as_deref().unwrap_or_default())'''
+
+[[mutant]]
+name = "a reflected boolean attribute is never there"
+file = "crates/dom_api/src/html_element.rs"
+from = '''    this.get(&cx.read()).has_attr(name)
+}'''
+to = '''    this.get(&cx.read()).has_attr(name) && false
+}'''
+
+# dom_api: the matches on names, now on atoms.
+
+[[mutant]]
+name = "a label isn't interactive content"
+file = "crates/dom_api/src/forms.rs"
+from = '''            local_name!("iframe"),
+            local_name!("label"),'''
+to = '''            local_name!("iframe"),'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::disabled_controls_and_labels"]
+
+# Not here, equivalent: a changed value stored for an input whose value
+# isn't kept (it follows the attribute anyway; docs/testing.md).
+
+[[mutant]]
+name = "a changed type isn't one"
+file = "crates/dom_api/src/input.rs"
+from = '''    } else if *local == local_name!("type") {'''
+to = '''    } else if *local == local_name!("title") {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "forms::"]
+
+[[mutant]]
+name = "a disabled optgroup asks its select for nothing"
+file = "crates/dom_api/src/select.rs"
+from = '''        } else if optgroup {'''
+to = '''        } else if optgroup && false {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "forms::"]
+
+# layout: SVG elements by name.
+
+[[mutant]]
+name = "an SVG rect is a circle"
+file = "crates/layout/src/svg.rs"
+from = '''        (local_name!("rect"), SvgName::Rect),'''
+to = '''        (local_name!("rect"), SvgName::Circle),'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg"]
+
+[[mutant]]
+name = "a polygon isn't closed"
+file = "crates/layout/src/svg.rs"
+from = '''                closed: *name.local() == local_name!("polygon"),
+            }'''
+to = '''                closed: *name.local() == local_name!("polyline"),
+            }'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg"]

@@ -1,0 +1,35 @@
+# Mutation test of stage 5c1: CSS-wide keywords and the initial style
+# without whole styles made and copied, transitions' times once each:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-5c1.toml
+test = ["cargo", "test", "-q", "-p", "css", "-p", "style", "-p", "animation"]
+timeout = 900
+
+[[mutant]]
+name = "initial takes the parent's value"
+file = "crates/css/src/properties.rs"
+from = '''            INITIAL.with(|initial| copy(id, initial, style));'''
+to = '''            copy(id, parent, style);'''
+
+[[mutant]]
+name = "a copied side is another's"
+file = "crates/css/src/properties.rs"
+from = '''        0 => &sides.top,'''
+to = '''        0 => &sides.bottom,'''
+
+[[mutant]]
+name = "a copied corner is another's"
+file = "crates/css/src/properties.rs"
+from = '''        0 => &corners.top_left,'''
+to = '''        0 => &corners.bottom_right,'''
+
+[[mutant]]
+name = "a property listed again keeps its first transition"
+file = "crates/animation/src/transition.rs"
+from = '''            Some(entry) => matched[entry].1 = i,'''
+to = '''            Some(_) => {}'''
+
+[[mutant]]
+name = "every transition takes the first one's times"
+file = "crates/animation/src/transition.rs"
+from = '''                *times[i].get_or_insert_with('''
+to = '''                *times[0].get_or_insert_with('''

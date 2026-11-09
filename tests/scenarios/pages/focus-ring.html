@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<!-- The focus ring and shadows. #box takes the focus when clicked (no
+     ring: `:focus-visible` doesn't match after a click); Tab from it moves
+     the focus to #link, which shows the UA's focus ring (inside #around,
+     whose padding leaves room for it). #out says what
+     has the focus and whether it matches `:focus-visible`. #card has
+     shadows, around it and inside it. -->
+<title>focus ring</title>
+<style>
+  html, body { margin: 0 }
+  body { padding: 20px }
+  #box { width: 120px; height: 40px; background: #e8f0fe }
+  #around { display: inline-block; margin-top: 20px; padding: 10px }
+  #link { display: inline-block; padding: 4px }
+  #card { margin-top: 30px; width: 200px; height: 80px; border-radius: 8px; background: white;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3), inset 0 0 0 2px #1a73e8 }
+</style>
+<div id="box" tabindex="0"></div>
+<div id="around"><a id="link" href="#nowhere">A link</a></div>
+<div id="card"></div>
+<p id="out">nothing has the focus</p>
+<script>
+  const show = () => {
+    const element = document.activeElement;
+    document.getElementById("out").textContent =
+      `${element.id} ${element.matches(":focus-visible")}`;
+  };
+  document.addEventListener("focusin", show);
+</script>

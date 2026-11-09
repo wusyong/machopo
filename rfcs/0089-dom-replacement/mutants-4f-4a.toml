@@ -1,0 +1,601 @@
+# Stage 4f-4a: on the new DOM, an option's selectedness and dirtiness, a
+# select's list of options, the selectedness setting algorithm and the
+# insertion, removal, replace-all and attribute steps; the pseudo-classes
+# of an option; the members of the select, option, optgroup, options
+# collection, datalist, progress, meter and output; the indexed setter,
+# the legacy factory and the union arguments of the bindings.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it select:: && cargo test -q -p style_next --test it form_states"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: a datalist doesn't hide its options"
+file = "crates/dom_next/src/select.rs"
+from = '''                if self.hides_options(node) {
+                    return None;
+                }
+                if self.is_optgroup(node) {
+                    if optgroup {'''
+to = '''                if false {
+                    return None;
+                }
+                if self.is_optgroup(node) {
+                    if optgroup {'''
+
+[[mutant]]
+name = "dom: an optgroup in an optgroup's options the select's"
+file = "crates/dom_next/src/select.rs"
+from = '''                if self.is_optgroup(node) {
+                    if optgroup {
+                        return None;
+                    }'''
+to = '''                if self.is_optgroup(node) {
+                    if false {
+                        return None;
+                    }'''
+
+[[mutant]]
+name = "dom: a select in a select's options its"
+file = "crates/dom_next/src/select.rs"
+from = '''            if self.is_select(at) || self.hides_options(at) {
+                continue;
+            }'''
+to = '''            if self.hides_options(at) {
+                continue;
+            }'''
+
+[[mutant]]
+name = "dom: the walk into an optgroup in an optgroup"
+file = "crates/dom_next/src/select.rs"
+from = '''                if below == Below::Optgroup {
+                    continue;
+                }'''
+to = '''                let _ = below;'''
+
+[[mutant]]
+name = "dom: the algorithm keeps the first"
+file = "crates/dom_next/src/select.rs"
+from = '''        match selected.next_back() {'''
+to = '''        match selected.next() {'''
+
+[[mutant]]
+name = "dom: a disabled option selected with none"
+file = "crates/dom_next/src/select.rs"
+from = '''            if first.is_none() && !self.option_disabled(option) {'''
+to = '''            if first.is_none() {'''
+
+[[mutant]]
+name = "dom: a list box selects one with none"
+file = "crates/dom_next/src/select.rs"
+from = '''        if self.select_is_multiple(select) || self.select_display_size(select) != 1 {
+            return;
+        }
+        let mut first = None;'''
+to = '''        if self.select_is_multiple(select) {
+            return;
+        }
+        let mut first = None;'''
+
+[[mutant]]
+name = "dom: a multiple select selects one with none"
+file = "crates/dom_next/src/select.rs"
+from = '''        if self.select_is_multiple(select) || self.select_display_size(select) != 1 {
+            return;
+        }
+        let mut first = None;'''
+to = '''        if self.select_display_size(select) != 1 {
+            return;
+        }
+        let mut first = None;'''
+
+[[mutant]]
+name = "dom: a multiple select's one selected unselects the others"
+file = "crates/dom_next/src/select.rs"
+from = '''    fn unselect_others(&self, select: NodeRef<'gc>, option: NodeRef<'gc>) {
+        if self.select_is_multiple(select) {
+            return;
+        }'''
+to = '''    fn unselect_others(&self, select: NodeRef<'gc>, option: NodeRef<'gc>) {'''
+
+[[mutant]]
+name = "dom: script's selected not dirty"
+file = "crates/dom_next/src/select.rs"
+from = '''        self.set_selectedness(option, selected);
+        self.set_flag(option, OPTION_DIRTY, true);
+        if let Some(select)'''
+to = '''        self.set_selectedness(option, selected);
+        if let Some(select)'''
+
+[[mutant]]
+name = "dom: script's selected keeps the others"
+file = "crates/dom_next/src/select.rs"
+from = '''            if selected {
+                self.unselect_others(select, option);
+            } else {'''
+to = '''            if false {
+                self.unselect_others(select, option);
+            } else {'''
+
+[[mutant]]
+name = "dom: script's unselected leaves none"
+file = "crates/dom_next/src/select.rs"
+from = '''            } else {
+                self.select_first_if_none(select);
+            }
+        }
+    }
+
+    /// `new Option(...)`'''
+to = '''            }
+        }
+    }
+
+    /// `new Option(...)`'''
+
+[[mutant]]
+name = "dom: new Option's selected not its selectedness"
+file = "crates/dom_next/src/select.rs"
+from = '''        self.set_selectedness(option, selected);
+        self.set_flag(option, OPTION_DIRTY, false);
+    }'''
+to = '''        let _ = selected;
+        self.set_flag(option, OPTION_DIRTY, false);
+    }'''
+
+[[mutant]]
+name = "dom: selectedIndex's option not dirty"
+file = "crates/dom_next/src/select.rs"
+from = '''            self.set_selectedness(chosen, true);
+            self.set_flag(chosen, OPTION_DIRTY, true);'''
+to = '''            self.set_selectedness(chosen, true);'''
+
+[[mutant]]
+name = "dom: a reset keeps the dirtiness"
+file = "crates/dom_next/src/select.rs"
+from = '''            self.set_selectedness(option, self.attribute_value_by_id(option, names::local::SELECTED).is_some());
+            self.set_flag(option, OPTION_DIRTY, false);'''
+to = '''            self.set_selectedness(option, self.attribute_value_by_id(option, names::local::SELECTED).is_some());'''
+
+[[mutant]]
+name = "dom: a reset keeps the selectedness"
+file = "crates/dom_next/src/select.rs"
+from = '''            self.set_selectedness(option, self.attribute_value_by_id(option, names::local::SELECTED).is_some());
+            self.set_flag(option, OPTION_DIRTY, false);'''
+to = '''            self.set_flag(option, OPTION_DIRTY, false);'''
+
+[[mutant]]
+name = "dom: of a subtree's selected the first stays"
+file = "crates/dom_next/src/select.rs"
+from = '''            {
+                last = Some(at);
+            }'''
+to = '''            {
+                last = last.or(Some(at));
+            }'''
+
+[[mutant]]
+name = "dom: an insertion leaves none selected"
+file = "crates/dom_next/src/select.rs"
+from = '''        if !self.changes.forms.replacing.get() {
+            self.select_first_if_none(select);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a removal leaves none selected"
+file = "crates/dom_next/src/select.rs"
+from = '''        if let Some(select) = self.nearest_select(parent) {
+            self.select_first_if_none(select);
+        }
+    }
+
+    /// A "replace all"'''
+to = '''        let _ = parent;
+    }
+
+    /// A "replace all"'''
+
+[[mutant]]
+name = "dom: a replace all's steps don't wait"
+file = "crates/dom_next/src/select.rs"
+from = '''        self.changes.forms.replacing.set(true);
+        true'''
+to = '''        false'''
+
+[[mutant]]
+name = "dom: a dirty option's selected attribute selects it"
+file = "crates/dom_next/src/select.rs"
+from = '''                    if !self.option_dirtiness(element) {
+                        self.set_selectedness(element, present);
+                    }'''
+to = '''                    self.set_selectedness(element, present);'''
+
+[[mutant]]
+name = "dom: a selected attribute keeps the others"
+file = "crates/dom_next/src/select.rs"
+from = '''                        if self.option_selectedness(element) {
+                            self.unselect_others(select, element);
+                        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an option's disabled leaves none selected"
+file = "crates/dom_next/src/select.rs"
+from = '''                names::local::DISABLED => {
+                    if let Some(select) = self.option_select(element) {
+                        self.select_first_if_none(select);
+                    }
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an optgroup's disabled not its options'"
+file = "crates/dom_next/src/select.rs"
+from = '''                    if self.is_option(at) {
+                        self.state_changed(at, AttributeChanges::DISABLED);
+                    }
+                });'''
+to = '''                    let _ = at;
+                });'''
+
+[[mutant]]
+name = "dom: an optgroup's disabled leaves none selected"
+file = "crates/dom_next/src/select.rs"
+from = '''                if let Some(select) = self.nearest_select(element) {
+                    self.select_first_if_none(select);
+                }
+            }
+        } else if self.is_select(element) {'''
+to = '''            }
+        } else if self.is_select(element) {'''
+
+[[mutant]]
+name = "dom: multiple and size don't set them again"
+file = "crates/dom_next/src/select.rs"
+from = '''                names::local::MULTIPLE | names::local::SIZE => self.selectedness_setting(element),'''
+to = '''                names::local::MULTIPLE | names::local::SIZE => {}'''
+
+[[mutant]]
+name = "dom: a select's disabled not its options'"
+file = "crates/dom_next/src/select.rs"
+from = '''            if self.is_option(at) || self.is_optgroup(at) {
+                self.state_changed(at, AttributeChanges::DISABLED);
+            }
+        });
+    }'''
+to = '''            let _ = at;
+        });
+    }'''
+
+[[mutant]]
+name = "dom: an option not disabled by its select"
+file = "crates/dom_next/src/select.rs"
+from = '''                    .is_some_and(|select| self.is_disabled_form_control(select)),'''
+to = '''                    .is_some_and(|select| { let _ = select; false }),'''
+
+[[mutant]]
+name = "dom: an option not disabled by its optgroup"
+file = "crates/dom_next/src/select.rs"
+from = '''            if self.is_optgroup(node) {
+                return self.attribute_value_by_id(node, names::local::DISABLED).is_some();
+            }'''
+to = '''            if self.is_optgroup(node) {
+                return false;
+            }'''
+
+[[mutant]]
+name = "dom: a clone not selected"
+file = "crates/dom_next/src/select.rs"
+from = '''            self.set_flag(copy, OPTION_SELECTED, self.option_selectedness(original));'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an option's text has its script's"
+file = "crates/dom_next/src/select.rs"
+from = '''                    if script {
+                        at = self.next_skipping_children(node, option);
+                        continue;
+                    }'''
+to = '''                    let _ = script;'''
+
+[[mutant]]
+name = "dom: an option's text not collapsed"
+file = "crates/dom_next/src/select.rs"
+from = '''    text.split([' ', '\t', '\n', '\x0c', '\r'])
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")'''
+to = '''    text.to_owned()'''
+
+[[mutant]]
+name = "dom: an option's label not its attribute"
+file = "crates/dom_next/src/select.rs"
+from = '''        match self.attribute_value_by_id(option, names::local::LABEL) {'''
+to = '''        match self.attribute_value_by_id(option, names::local::TITLE) {'''
+
+[[mutant]]
+name = "dom: an output's reset keeps the override"
+file = "crates/dom_next/src/select.rs"
+from = '''        self.set_text_content(element, &default.to_str());
+        self.set_output_default_value_override(element, None);'''
+to = '''        self.set_text_content(element, &default.to_str());'''
+
+[[mutant]]
+name = "dom: a selectedness change not noted"
+file = "crates/dom_next/src/select.rs"
+from = '''        self.set_flag(option, OPTION_SELECTED, selected);
+        self.state_changed(option, AttributeChanges::CHECKED);'''
+to = '''        self.set_flag(option, OPTION_SELECTED, selected);'''
+
+[[mutant]]
+name = "dom: no select seen"
+file = "crates/dom_next/src/select.rs"
+from = '''        self.see(SELECTS_SEEN);'''
+to = '''        let _ = SELECTS_SEEN;'''
+
+[[mutant]]
+name = "dom: a fieldset's disabled not its options'"
+file = "crates/dom_next/src/form.rs"
+from = '''            } else if self.is_option(at) || self.is_optgroup(at) {
+                // Disabled with their select.
+                self.state_changed(at, crate::AttributeChanges::DISABLED);
+            }'''
+to = '''            }'''
+
+[[mutant]]
+name = "dom: a form's reset not its selects'"
+file = "crates/dom_next/src/form.rs"
+from = '''            self.select_reset(element);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an option never checked"
+file = "crates/dom_next/src/form_state.rs"
+from = '''            None => self.is_option(element) && self.option_selectedness(element),'''
+to = '''            None => false,'''
+
+[[mutant]]
+name = "dom: an option never default"
+file = "crates/dom_next/src/form_state.rs"
+from = '''            None if self.is_option(element) => self.attribute_value_by_id(element, names::local::SELECTED).is_some(),
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an option never enabled"
+file = "crates/dom_next/src/form_state.rs"
+from = '''        match self.option_matches_disabled(element) {
+            Some(disabled) => !disabled,'''
+to = '''        match None::<bool> {
+            Some(disabled) => !disabled,'''
+
+[[mutant]]
+name = "dom: selectedOptions every option"
+file = "crates/dom_next/src/collection.rs"
+from = '''                self.for_each_option(root, |option| !self.option_selectedness(option) || found(option));'''
+to = '''                self.for_each_option(root, found);'''
+
+[[mutant]]
+name = "dom: a datalist's options its every element"
+file = "crates/dom_next/src/collection.rs"
+from = '''            DATALIST_OPTIONS => return self.is_option(element),'''
+to = '''            DATALIST_OPTIONS => return true,'''
+
+[[mutant]]
+name = "api: length past the limit"
+file = "crates/dom_api_next/src/select.rs"
+from = '''        if length > MAX_LIST_ITEMS {
+            return Ok(());
+        }
+        for _ in current..length {'''
+to = '''        for _ in current..length {'''
+
+[[mutant]]
+name = "api: the indexed setter's null not removing"
+file = "crates/dom_api_next/src/select.rs"
+from = '''    let Some(option) = option else {
+        return remove_index(cx, this, i32::try_from(index).unwrap_or(i32::MAX));
+    };'''
+to = '''    let Some(option) = option else {
+        return Ok(());
+    };'''
+
+[[mutant]]
+name = "api: the indexed setter appends in place"
+file = "crates/dom_api_next/src/select.rs"
+from = '''        let old = options[usize::try_from(index).unwrap_or(usize::MAX)];
+        if let Some(parent) = cx.parent(old) {
+            cx.replace_child(parent, option, old)?;
+        }'''
+to = '''        cx.append_child(this, option)?;'''
+
+[[mutant]]
+name = "api: add before an element out of the select"
+file = "crates/dom_api_next/src/select.rs"
+from = '''            if !inside {
+                return Err('''
+to = '''            if false {
+                return Err('''
+
+[[mutant]]
+name = "api: add before the same element"
+file = "crates/dom_api_next/src/select.rs"
+from = '''            if Gc::ptr_eq(before, element) {
+                return Ok(());
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "api: add at an index at the end"
+file = "crates/dom_api_next/src/select.rs"
+from = '''        Some(ElementOrLong::Long(index)) => u32::try_from(index)
+            .ok()
+            .and_then(|index| cx.collection_item(cx.select_options(this), index)),'''
+to = '''        Some(ElementOrLong::Long(_)) => None,'''
+
+[[mutant]]
+name = "api: add in the select, not the option's parent"
+file = "crates/dom_api_next/src/select.rs"
+from = '''    let parent = reference.and_then(|reference| cx.parent(reference)).unwrap_or(this);'''
+to = '''    let parent = this;'''
+
+[[mutant]]
+name = "api: remove() not the select"
+file = "crates/dom_api_next/src/select.rs"
+from = '''        None => crate::child_node::remove(cx, this),'''
+to = '''        None => Ok(()),'''
+
+[[mutant]]
+name = "api: an option's form its own"
+file = "crates/dom_api_next/src/select.rs"
+from = '''    Ok(cx.option_select(this).and_then(|select| cx.form_owner(select)))'''
+to = '''    Ok(cx.form_owner(this))'''
+
+[[mutant]]
+name = "api: new Option's value not set"
+file = "crates/dom_api_next/src/select.rs"
+from = '''    if let Some(value) = value {
+        cx.set_attribute(option, "value", value);
+    }'''
+to = '''    let _ = value;'''
+
+[[mutant]]
+name = "api: new Option's defaultSelected not set"
+file = "crates/dom_api_next/src/select.rs"
+from = '''    if default_selected {
+        cx.set_attribute(option, "selected", "");
+    }'''
+to = '''    let _ = default_selected;'''
+
+[[mutant]]
+name = "api: a progress's negative max"
+file = "crates/dom_api_next/src/select.rs"
+from = '''    if value > 0.0 {
+        set_double(cx, this, "max", value);
+    }'''
+to = '''    set_double(cx, this, "max", value);'''
+
+[[mutant]]
+name = "api: a progress's value past max"
+file = "crates/dom_api_next/src/select.rs"
+from = '''    Some(value.unwrap_or(0.0).min(max))'''
+to = '''    Some(value.unwrap_or(0.0))'''
+
+[[mutant]]
+name = "api: a progress's negative value"
+file = "crates/dom_api_next/src/select.rs"
+from = '''    let value = attribute_float(cx, this, names::local::VALUE).filter(|value| *value >= 0.0);'''
+to = '''    let value = attribute_float(cx, this, names::local::VALUE);'''
+
+[[mutant]]
+name = "api: an indeterminate progress's position"
+file = "crates/dom_api_next/src/select.rs"
+from = '''    Ok(progress_current(cx, this).map_or(-1.0, |value| value / max))'''
+to = '''    Ok(progress_current(cx, this).map_or(0.0, |value| value / max))'''
+
+[[mutant]]
+name = "api: a meter's value not clamped"
+file = "crates/dom_api_next/src/select.rs"
+from = '''    let value = attribute_float(cx, this, names::local::VALUE).unwrap_or(0.0).clamp(min, max);'''
+to = '''    let value = attribute_float(cx, this, names::local::VALUE).unwrap_or(0.0);'''
+
+[[mutant]]
+name = "api: a meter's optimum not clamped"
+file = "crates/dom_api_next/src/select.rs"
+from = '''        .unwrap_or((min + max) / 2.0)
+        .clamp(min, max);'''
+to = '''        .unwrap_or((min + max) / 2.0);'''
+
+[[mutant]]
+name = "api: an output's value forgets its default"
+file = "crates/dom_api_next/src/select.rs"
+from = '''    let default = output_default(cx, this);
+    cx.set_output_default_value_override(this, Some(default));
+    cx.set_text_content(this, value);'''
+to = '''    cx.set_text_content(this, value);'''
+
+[[mutant]]
+name = "api: an output's default value with no override the override"
+file = "crates/dom_api_next/src/select.rs"
+from = '''    if cx.output_default_value_override(this).is_none() {
+        cx.set_text_content(this, value);
+    } else {'''
+to = '''    if false {
+        cx.set_text_content(this, value);
+    } else {'''
+
+[[mutant]]
+name = "api: add takes any node"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        if cx.is_option(node) || cx.is_optgroup(node) {
+            return Ok(node);
+        }'''
+to = '''        if cx.is_option(node) || cx.is_optgroup(node) || true {
+            return Ok(node);
+        }'''
+
+[[mutant]]
+name = "api: remove(undefined) the select"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        if front.arg_count() <= index {
+            return Some(None);
+        }
+        front.i32_arg(index).map(Some)'''
+to = '''        if front.is_undefined(index) {
+            return Some(None);
+        }
+        front.i32_arg(index).map(Some)'''
+
+[[mutant]]
+name = "api: new Option's undefined value set"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''    type Param<'a, 'gc> = Option<&'a str>;
+
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<F::Str>> {
+        if front.is_undefined(index) {
+            return Some(None);
+        }'''
+to = '''    type Param<'a, 'gc> = Option<&'a str>;
+
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<F::Str>> {'''
+
+[[mutant]]
+name = "js: no indexed setter"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''    if setter {
+        let data'''
+to = '''    if false {
+        let data'''
+
+[[mutant]]
+name = "js: a legacy factory's prototype its own"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''    function.define_own_property(
+        scope.scope(),
+        key.into(),
+        prototype,
+        v8::PropertyAttribute::READ_ONLY | v8::PropertyAttribute::DONT_ENUM | v8::PropertyAttribute::DONT_DELETE,
+    );'''
+to = '''    let _ = prototype;'''
+
+[[mutant]]
+name = "js: a node before as a long"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        if bindings::is_wrapper::<Node>(self.scope.scope(), value) {
+            return v8::Local::<v8::Object>::try_from(value)
+                .ok()
+                .map(|node| Some(dom_api_next::typed::NodeOrLong::Node(node)));
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "js: the indexed setter takes a number"
+file = "crates/dom_js_next/src/named.rs"
+from = '''        if bindings::is_wrapper::<dom_next::Node>(self.scope.scope(), value) {
+            return v8::Local::<v8::Object>::try_from(value).ok().map(Some);
+        }
+        crate::throw_type_error('''
+to = '''        if bindings::is_wrapper::<dom_next::Node>(self.scope.scope(), value) || value.is_number() {
+            return v8::Local::<v8::Object>::try_from(value).ok().map(Some);
+        }
+        crate::throw_type_error('''

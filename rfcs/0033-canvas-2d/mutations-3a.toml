@@ -1,0 +1,181 @@
+# Step 3a's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0033-canvas-2d/mutations-3a.toml`. Each names the tests closest to
+# what it breaks.
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_styles"]
+timeout = 1500
+
+# dom: the styles' slots.
+
+[[mutant]]
+name = "a saved level's styles not copied"
+file = "crates/dom/src/canvas.rs"
+from = '''            slot.set_from(self, below);'''
+to = '''            let _ = (slot, below);'''
+
+[[mutant]]
+name = "a popped level keeps its gradients"
+file = "crates/dom/src/canvas.rs"
+from = '''        self.clear_canvas_styles(context, level..level + 1);
+        true'''
+to = '''        true'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "script_objects::a_contexts_styles"]
+
+[[mutant]]
+name = "a reset context keeps its gradients"
+file = "crates/dom/src/canvas.rs"
+from = '''        self.clear_canvas_styles(context, 0..levels);'''
+to = '''        let _ = levels;'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "script_objects::a_contexts_styles"]
+
+[[mutant]]
+name = "a color keeps the gradient"
+file = "crates/dom/src/canvas.rs"
+from = '''            CanvasStyleValue::Color(color) => {
+                slot.clear(self);'''
+to = '''            CanvasStyleValue::Color(color) => {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "script_objects::a_contexts_styles"]
+
+[[mutant]]
+name = "fill and stroke in one slot"
+file = "crates/dom/src/canvas.rs"
+from = '''            CanvasStyleTarget::Stroke => 1,'''
+to = '''            CanvasStyleTarget::Stroke => 0,'''
+
+[[mutant]]
+name = "the stroke style set as the fill"
+file = "crates/dom/src/canvas.rs"
+from = '''            CanvasStyleTarget::Stroke => data.state_mut().stroke_style = style,'''
+to = '''            CanvasStyleTarget::Stroke => data.state_mut().fill_style = style,'''
+
+# dom_api: the gradients made and checked.
+
+[[mutant]]
+name = "a negative radius taken"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    for (name, radius) in [("r0", r0), ("r1", r1)] {
+        if radius < 0.0 {'''
+to = '''    for (name, radius) in [("r0", r0), ("r1", r1)] {
+        if radius < -1.0 {'''
+
+[[mutant]]
+name = "an offset past 1 taken"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if !(0.0..=1.0).contains(&offset) {'''
+to = '''    if !(0.0..=1.5).contains(&offset) {'''
+
+[[mutant]]
+name = "a stop of no color taken"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        None => {
+            return Err(DomException::new(
+                ExceptionName::SyntaxError,'''
+to = '''        None => {
+            return Ok(());
+            #[allow(unreachable_code)]
+            return Err(DomException::new(
+                ExceptionName::SyntaxError,'''
+
+[[mutant]]
+name = "a color that isn't one replaces the gradient"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            Some(color) => CanvasStyleValue::Color(color),
+            None => return,'''
+to = '''            Some(color) => CanvasStyleValue::Color(color),
+            None => CanvasStyleValue::Color(Color::BLACK),'''
+
+# dom_api: the shader.
+
+[[mutant]]
+name = "the stops not sorted"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    stops.sort_by(|a, b| a.offset.total_cmp(&b.offset));'''
+to = ''''''
+
+[[mutant]]
+name = "the first stop not copied to 0"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        Some(first) if first.offset > 0.0 => shader_stops.push(stop(0.0, first.color)),'''
+to = '''        Some(first) if first.offset > 5.0 => shader_stops.push(stop(0.0, first.color)),'''
+
+[[mutant]]
+name = "the last stop not copied to 1"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if last.offset < 1.0 {'''
+to = '''    if last.offset < 0.0 {'''
+
+[[mutant]]
+name = "no stops opaque"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        None => shader_stops.push(stop(0.0, Color::TRANSPARENT)),'''
+to = '''        None => shader_stops.push(stop(0.0, Color::BLACK)),'''
+
+[[mutant]]
+name = "a line of no length drawn"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            if (x0, y0) == (x1, y1) {
+                return PaintShader::Empty;
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "two circles that are one drawn"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            if (x0, y0, r0) == (x1, y1, r1) {
+                return PaintShader::Empty;
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "a conic gradient not turned"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            (kind, turn)'''
+to = '''            let _ = turn;
+            (kind, Transform::IDENTITY)'''
+
+[[mutant]]
+name = "a conic gradient turned the other way"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            let (sin, cos) = start_angle.sin_cos();'''
+to = '''            let (sin, cos) = (-start_angle).sin_cos();'''
+
+[[mutant]]
+name = "the stops mixed premultiplied"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        interpolation: ColorInterpolation::Unpremultiplied,
+    })
+}'''
+to = '''        interpolation: ColorInterpolation::Premultiplied,
+    })
+}'''
+
+[[mutant]]
+name = "a gradient without globalAlpha"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let color = with_global_alpha(color, state.global_alpha);
+    let flags = match target {'''
+to = '''    let flags = match target {'''
+
+[[mutant]]
+name = "a stroke's gradient dropped"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    PaintFlags { shader, ..flags }'''
+to = '''    let _ = shader;
+    flags'''
+
+# compositor_paint / raster: the sweep and nothing.
+
+[[mutant]]
+name = "a sweep without its angles"
+file = "crates/raster/src/skia_backend.rs"
+from = '''            (start_angle, end_angle),
+            &spec,'''
+to = '''            (start_angle, end_angle + 180.0),
+            &spec,'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "sweep"]
+
+[[mutant]]
+name = "the empty shader a color"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        PaintShader::Empty => Some(sk::shaders::empty()),'''
+to = '''        PaintShader::Empty => Some(sk::shaders::color(sk::Color::RED)),'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "sweep"]

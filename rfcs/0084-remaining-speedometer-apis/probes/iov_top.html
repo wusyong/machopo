@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<body style="margin: 0">
+<style>
+iframe { position: absolute; left: 0; width: 200px; height: 100px; border: 0 }
+.over { position: absolute; background: rgba(255,0,0,.5) }
+</style>
+<script>
+const portB = new URLSearchParams(location.search).get('portB');
+const same = 'iov_child.html', cross = `http://localhost:${portB}/iov_child.html`;
+const cases = [
+  ['same-covered', same, 'left: 20px; top: 20px; width: 20px; height: 20px'],
+  ['same-alone', same, null],
+  ['cross-covered', cross, 'left: 20px; top: 20px; width: 20px; height: 20px'],
+  ['cross-alone', cross, null],
+  ['cross-covered-elsewhere', cross, 'left: 150px; top: 60px; width: 20px; height: 20px'],
+  ['same-covered-elsewhere', same, 'left: 150px; top: 60px; width: 20px; height: 20px'],
+];
+const results = {};
+let done;
+const all = new Promise(r => done = r);
+addEventListener('message', e => { results[e.data.name] = `${e.data.visible}/${e.data.intersecting}`;
+  if (Object.keys(results).length == cases.length) done(); });
+cases.forEach(([name, src, over], i) => {
+  const top = i * 110;
+  const f = document.createElement('iframe');
+  f.src = src + '#' + name; f.style.top = top + 'px';
+  document.body.append(f);
+  if (over) {
+    const d = document.createElement('div'); d.className = 'over';
+    d.style.cssText = over; d.style.top = (top + parseInt(/top: (\d+)/.exec(over)[1])) + 'px';
+    document.body.append(d);
+  }
+});
+function run() { return Promise.race([all, new Promise(r => setTimeout(r, 4000))]).then(() => JSON.stringify(results)); }
+</script>

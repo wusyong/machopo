@@ -1,0 +1,106 @@
+# 2: a tile outside where its layer's display list draws isn't rastered
+# (`DisplayItemList::drawn_bounds`, `LayerTreeHostImpl::prepare_tiles`).
+#   python3 scripts/test.py mutate rfcs/0057-tile-raster/mutants-2.toml
+test = ["cargo", "test", "-q", "-p", "compositor_paint", "-p", "compositor"]
+timeout = 900
+
+[[mutant]]
+name = "a drawing op without its rect leaves the list bounded"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''        _ => true,
+    }
+}'''
+to = '''        _ => false,
+    }
+}'''
+
+[[mutant]]
+name = "an opacity group makes the list unbounded"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''        | PaintOp::SetMatrix { .. }
+        | PaintOp::SaveLayerAlpha { .. } => false,'''
+to = '''        | PaintOp::SetMatrix { .. } => false,'''
+
+[[mutant]]
+name = "a group's filter leaves the list bounded"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''            flags.image_filter.is_some() || flags.blend_mode != BlendMode::SrcOver'''
+to = '''            flags.blend_mode != BlendMode::SrcOver'''
+
+[[mutant]]
+name = "a group's blend mode leaves the list bounded"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''            flags.image_filter.is_some() || flags.blend_mode != BlendMode::SrcOver'''
+to = '''            flags.image_filter.is_some()'''
+
+[[mutant]]
+name = "a list drawn into another leaves it bounded"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''        self.unbounded |= other.unbounded;'''
+to = ''''''
+
+[[mutant]]
+name = "drawn bounds always known"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''        (!self.unbounded).then_some(self.bounds)'''
+to = '''        Some(self.bounds)'''
+
+[[mutant]]
+name = "the bounds not scaled to the tiles' pixels"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                .map(|bounds| bounds.scale(contents_scale).inset(-1.0));'''
+to = '''                .map(|bounds| bounds.inset(-1.0));'''
+
+[[mutant]]
+name = "no pixel more for anti-aliasing"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                .map(|bounds| bounds.scale(contents_scale).inset(-1.0));'''
+to = '''                .map(|bounds| bounds.scale(contents_scale));'''
+
+[[mutant]]
+name = "a translucent clear color skipped too"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                0 => Some(Color::TRANSPARENT),
+                _ => None,'''
+to = '''                0 => Some(Color::TRANSPARENT),
+                _ => Some(clear_color),'''
+
+[[mutant]]
+name = "a skipped tile transparent even if the layer is opaque"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                255 => Some(clear_color),'''
+to = '''                255 => Some(Color::TRANSPARENT),'''
+
+[[mutant]]
+name = "tiles the content draws in skipped too"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                    && drawn.intersect(&tile.content_rect).is_empty()'''
+to = '''                    && (drawn.intersect(&tile.content_rect).is_empty() || true)'''
+
+[[mutant]]
+name = "skipped tiles not counted"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                    prepared.skipped += 1;'''
+to = ''''''
+
+[[mutant]]
+name = "the log doesn't say how many were skipped"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                skipped = prepared.skipped,
+'''
+to = ''''''
+test = ["sh", "-c", "cargo build -q -p shell && python3 scripts/raster_test.py RunTests"]
+
+[[mutant]]
+name = "the tool doesn't read the skipped tiles"
+file = "scripts/raster.py"
+from = '''            skipped += int(found["skipped"] or 0)'''
+to = ''''''
+test = ["python3", "scripts/raster_test.py"]
+
+[[mutant]]
+name = "the report leaves out the skipped tiles"
+file = "scripts/raster.py"
+from = '''                         f"{tiles['skipped']} |")'''
+to = '''                         f"0 |")'''
+test = ["python3", "scripts/raster_test.py"]

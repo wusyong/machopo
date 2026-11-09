@@ -1,0 +1,13 @@
+# about:demo's inline-flex chip: "More" gives it a longer
+# count, and it grows on its line. The chip is at the end of the page:
+# scrolled to first, so that what is captured shows it.
+navigate about:demo
+wait-loaded
+scroll-to #chip
+screenshot few
+capture few
+click #more
+wait-text #more-note "128 new."
+# Wider: the frame changes where it is now.
+expect-differs few #chip
+screenshot many

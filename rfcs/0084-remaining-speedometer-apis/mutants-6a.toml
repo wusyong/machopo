@@ -1,0 +1,168 @@
+test = ["sh", "-c", "cargo test -q -p dom --test it -- performance:: && cargo test -q -p dom_js --test it -- performance_observers:: && cargo test -q -p shell --test it -- devtools_log::script_warnings"]
+timeout = 2400
+
+[[mutant]]
+name = "a new entry isn't an observer's"
+file = "crates/dom_api/src/performance_observer.rs"
+from = '''            cx.mutate()
+                .queue_performance_observer_entry(performance, observer, entry);
+            observed = true;'''
+to = '''            observed = true;'''
+
+[[mutant]]
+name = "an observer takes every type"
+file = "crates/dom_api/src/performance_observer.rs"
+from = '''        if cx
+            .read()
+            .performance_observer_observes(observer, entry.entry_type())
+        {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "the delivery isn't queued"
+file = "crates/dom_api/src/performance_observer.rs"
+from = '''    if m.set_performance_observer_task_queued(performance, true) {
+        return;
+    }'''
+to = '''    if true {
+        return;
+    }'''
+
+[[mutant]]
+name = "the delivery stays queued"
+file = "crates/dom_api/src/performance_observer.rs"
+from = '''    cx.mutate()
+        .set_performance_observer_task_queued(performance, false);
+    let observers'''
+to = '''    let observers'''
+
+[[mutant]]
+name = "a delivered list isn't sorted"
+file = "crates/dom_api/src/performance_observer.rs"
+from = '''        entries.sort_by(|a, b| a.start_time().total_cmp(&b.start_time()));
+        let list'''
+to = '''        let list'''
+
+[[mutant]]
+name = "droppedEntriesCount every time"
+file = "crates/dom_api/src/performance_observer.rs"
+from = '''            dropped_entries_count: dropped.then_some(0),'''
+to = '''            dropped_entries_count: { let _ = dropped; Some(0) },'''
+
+[[mutant]]
+name = "entryTypes after type is taken"
+file = "crates/dom_api/src/performance_observer.rs"
+from = '''            if mode == PerformanceObserverMode::Single {'''
+to = '''            if false && mode == PerformanceObserverMode::Single {'''
+
+[[mutant]]
+name = "type after entryTypes is taken"
+file = "crates/dom_api/src/performance_observer.rs"
+from = '''            if mode == PerformanceObserverMode::Multiple {'''
+to = '''            if false && mode == PerformanceObserverMode::Multiple {'''
+
+[[mutant]]
+name = "an empty entryTypes doesn't take the way"
+file = "crates/dom_api/src/performance_observer.rs"
+from = '''            cx.mutate()
+                .set_performance_observer_mode(this, PerformanceObserverMode::Multiple);
+            let mut types'''
+to = '''            let mut types'''
+
+[[mutant]]
+name = "buffered is ignored"
+file = "crates/dom_api/src/performance_observer.rs"
+from = '''                Some(entry_type) => (vec![entry_type], options.buffered == Some(true)),'''
+to = '''                Some(entry_type) => (vec![entry_type], false),'''
+
+[[mutant]]
+name = "buffered entries newest first"
+file = "crates/dom_api/src/performance_observer.rs"
+from = '''        let mut entries = crate::performance::entries(cx, &performance);'''
+to = '''        let mut entries = cx.read().performance_entries(&performance);'''
+
+[[mutant]]
+name = "no warning of a type kun doesn't make"
+file = "crates/dom_api/src/performance_observer.rs"
+from = '''                None => {
+                    warn(cx, &window, &unsupported(type_.as_str()));
+                    (Vec::new(), false)
+                }'''
+to = '''                None => (Vec::new(), false),'''
+
+[[mutant]]
+name = "no warning of buffered with entryTypes"
+file = "crates/dom_api/src/performance_observer.rs"
+from = '''            if options.buffered == Some(true) {
+                warn('''
+to = '''            if false {
+                warn('''
+
+[[mutant]]
+name = "type replaces the types"
+file = "crates/dom/src/performance_observer.rs"
+from = '''            PerformanceObserverMode::Single => object.types.get() | bits,'''
+to = '''            PerformanceObserverMode::Single => bits,'''
+
+[[mutant]]
+name = "an observer isn't registered"
+file = "crates/dom/src/performance_observer.rs"
+from = '''        observers.push(observer.clone());'''
+to = ''''''
+
+[[mutant]]
+name = "disconnect keeps the buffer"
+file = "crates/dom/src/performance_observer.rs"
+from = '''        object.types.set(0);
+        self.take_performance_observer_entries(observer);'''
+to = '''        object.types.set(0);'''
+
+[[mutant]]
+name = "disconnect keeps the types"
+file = "crates/dom/src/performance_observer.rs"
+from = '''        let object = self.own(observer);
+        object.types.set(0);'''
+to = '''        let object = self.own(observer);'''
+
+[[mutant]]
+name = "disconnect keeps the registration"
+file = "crates/dom/src/performance_observer.rs"
+from = '''            let kept: Vec<_> = observers_in(&self.read(), list, count)
+                .into_iter()
+                .filter(|kept| !kept.ptr_eq(observer))
+                .collect();'''
+to = '''            let kept: Vec<_> = observers_in(&self.read(), list, count);'''
+
+[[mutant]]
+name = "an observer is called in the order it registered"
+file = "crates/dom_api/src/performance_observer.rs"
+from = '''    let observers = cx.mutate().take_active_performance_observers(performance);'''
+to = '''    let _ = cx.mutate().take_active_performance_observers(performance);
+    let observers = cx.read().performance_observers(performance);'''
+
+[[mutant]]
+name = "a delivered observer stays active"
+file = "crates/dom/src/performance_observer.rs"
+from = '''        for observer in &active {
+            observer.object().active.set(false);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the list isn't cleared"
+file = "crates/dom/src/performance_observer.rs"
+from = '''        set_observers(self, &data.active, &data.active_count, &[]);
+        active'''
+to = '''        active'''
+
+[[mutant]]
+name = "observe doesn't ask for droppedEntriesCount"
+file = "crates/dom/src/performance_observer.rs"
+from = '''        object.requires_dropped_entries.set(true);'''
+to = ''''''
+
+[[mutant]]
+name = "takeRecords keeps the buffer"
+file = "crates/dom/src/performance_observer.rs"
+from = '''        let count = object.buffered.replace(0);'''
+to = '''        let count = object.buffered.get();'''

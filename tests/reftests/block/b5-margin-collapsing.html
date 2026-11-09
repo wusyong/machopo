@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<title>B5: adjacent sibling margins, and parent and first-child margins, collapse</title>
+<link rel="match" href="b5-margin-collapsing-ref.html">
+<style>html, body { margin: 0 }</style>
+<div style="width: 100px; height: 20px; margin-bottom: 20px; background-color: green"></div>
+<div style="width: 100px; height: 20px; margin-top: 30px; background-color: green"></div>
+<div style="margin-top: 10px">
+  <div style="width: 100px; height: 20px; margin-top: 40px; background-color: green"></div>
+</div>

@@ -1,0 +1,57 @@
+# Stage 4h-1e-1, through the renderer: the parser's module scripts deferred in document order with
+# the classic ones, its async ones queued, the module requests (CORS) and responses (status, MIME).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "sh", "-c", "cargo test -q -p shell --test it -- next_dom::"]
+timeout = 1800
+
+[[mutant]]
+name = "dom: the parser's deferred module runs as soon as it can"
+file = "crates/dom_next/src/script.rs"
+from = '''        if pending.parser.get() {
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a pending script always fetched"
+file = "crates/dom_next/src/script.rs"
+from = '''        self.pending_script(element).is_some_and(|pending| pending.fetched.get())'''
+to = '''        self.pending_script(element).is_some()'''
+
+[[mutant]]
+name = "dom: a module fetched as a classic script"
+file = "crates/dom_next/src/script.rs"
+from = '''            document: self.node_id(document),
+            module: true,'''
+to = '''            document: self.node_id(document),
+            module: false,'''
+
+[[mutant]]
+name = "api: the parser's module isn't deferred"
+file = "crates/dom_api_next/src/script.rs"
+from = '''    let deferred = flags.parser_inserted && !is_async;'''
+to = '''    let deferred = false;'''
+
+[[mutant]]
+name = "renderer: a module of any MIME type"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''    if !(200..300).contains(&response.status) || !dom_api_next::is_javascript_mime_type(&response.mime_type) {'''
+to = '''    if !(200..300).contains(&response.status) {'''
+
+[[mutant]]
+name = "renderer: a deferred module never ready"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        if !script.module {
+            return script.ready.is_some();
+        }'''
+to = '''        if true {
+            return script.ready.is_some();
+        }'''
+
+[[mutant]]
+name = "renderer: a module's response doesn't move the deferred ones"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                // A deferred module script's graph may be in.
+                for frame in self.next_frames() {
+                    self.run_next_deferred_scripts(frame);
+                }'''
+to = ''''''

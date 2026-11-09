@@ -1,0 +1,225 @@
+# 2a: a text control's UA shadow tree (`dom_api`'s `text_control_tree`, the
+# UA mode in `dom`), `::placeholder` (`css`, `style`), the value laid out in
+# the control's size (`layout`), `-webkit-text-security`, and what reads
+# them (`getComputedStyle`, the mouse's focus).
+#   python3 scripts/test.py mutate rfcs/0050-form-controls-rendering/mutants-2a.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::a_text_control"]
+timeout = 900
+
+[[mutant]]
+name = "a password field has no tree"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''        "text" | "url" | "tel" | "email" | "password" => Tree::Field(None),'''
+to = '''        "text" | "url" | "tel" | "email" => Tree::Field(None),'''
+
+[[mutant]]
+name = "a control in no browsing context gets a tree"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''        let shown = always || {'''
+to = '''        let shown = true || {'''
+
+[[mutant]]
+name = "a control that isn't a text field keeps its tree"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''    for child in stale.iter().flatten() {
+        m.remove(child);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "the value isn't synced"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''    if text.0 != value {'''
+to = '''    if text.0.is_empty() && false {'''
+
+[[mutant]]
+name = "a text field's placeholder keeps its line breaks"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''                    crate::input::strip_newlines(&text)'''
+to = '''                    text'''
+
+[[mutant]]
+name = "the placeholder always shows"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''            let display = if value.is_empty() {'''
+to = '''            let display = if true {'''
+
+[[mutant]]
+name = "the placeholder stays without the attribute"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''        (None, Some(holder)) => m.remove(&holder),'''
+to = '''        (None, Some(_)) => {}'''
+
+[[mutant]]
+name = "the placeholder's text isn't synced"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''                && old_text.as_deref() != Some(placeholder.as_str())'''
+to = '''                && old_text.is_none()'''
+
+[[mutant]]
+name = "the trees aren't kept up to date"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        crate::text_control_tree::update(m, element, false);'''
+to = ''''''
+
+[[mutant]]
+name = "a text field's value wraps"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''"display: block; white-space: pre; overflow-wrap: normal; overflow: hidden; text-overflow: inherit"'''
+to = '''"display: block; overflow-wrap: normal; overflow: hidden; text-overflow: inherit"'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "a text field's value isn't clipped"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''"display: block; white-space: pre; overflow-wrap: normal; overflow: hidden; text-overflow: inherit"'''
+to = '''"display: block; white-space: pre; overflow-wrap: normal; text-overflow: inherit"'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "a UA shadow root is open"
+file = "crates/dom/src/node.rs"
+from = '''        self != Self::Open'''
+to = '''        self == Self::Closed'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "flat_tree::a_user_agent"]
+
+[[mutant]]
+name = "::placeholder isn't parsed"
+file = "crates/css/src/selector.rs"
+from = '''        } else if name.eq_ignore_ascii_case("placeholder") {
+            Ok(PseudoElement::Placeholder)'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::", "placeholder_selectors"]
+
+[[mutant]]
+name = "::-webkit-input-placeholder isn't parsed"
+file = "crates/css/src/selector.rs"
+from = '''        } else if name.eq_ignore_ascii_case("placeholder") {'''
+to = '''        } else if name.eq_ignore_ascii_case("-webkit-input-placeholder") {
+            Err(location.new_custom_error(
+                SelectorParseErrorKind::UnsupportedPseudoClassOrElement(name),
+            ))
+        } else if name.eq_ignore_ascii_case("placeholder") {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "the placeholder rules are in the buckets"
+file = "crates/css/src/rule_set.rs"
+from = '''                        shadow_pseudo |= pseudo.shadow_pseudo_id().is_some();'''
+to = '''                        let _ = pseudo;'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "the placeholder's originating element is its parent"
+file = "crates/style/src/selector.rs"
+from = '''        self.containing_shadow_host()
+    }'''
+to = '''        self.parent_element()
+    }'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "an open shadow tree's element is a placeholder"
+file = "crates/style/src/lib.rs"
+from = '''                    outer: user_agent.then_some(tree_scope),'''
+to = '''                    outer: Some(tree_scope).filter(|_| user_agent || true),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "a UA shadow tree knows no host's tree"
+file = "crates/style/src/lib.rs"
+from = '''                    outer: user_agent.then_some(tree_scope),'''
+to = '''                    outer: user_agent.then_some(tree_scope).filter(|_| false),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "the placeholder's color isn't Chrome's"
+file = "crates/style/resources/html.css"
+from = '''  color: #757575;'''
+to = '''  color: darkgray;'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "a text area's placeholder doesn't wrap"
+file = "crates/style/resources/html.css"
+from = '''textarea::-webkit-input-placeholder {
+  white-space: pre-wrap;'''
+to = '''textarea::-webkit-input-placeholder {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "a password field isn't masked"
+file = "crates/style/resources/html.css"
+from = '''  -webkit-text-security: disc !important;'''
+to = '''  -webkit-text-security: disc;'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "-webkit-text-security isn't parsed"
+file = "crates/css/src/properties.rs"
+from = '''                    "disc" => Disc,'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cssom::text_security"]
+
+[[mutant]]
+name = "the prefixed properties are listed first"
+file = "crates/css/src/computed.rs"
+from = '''    names.sort_unstable_by_key(|name| (name.starts_with('-'), *name));'''
+to = '''    names.sort_unstable();'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "computed::the_list"]
+
+[[mutant]]
+name = "the text isn't masked"
+file = "crates/layout/src/text.rs"
+from = '''                    if let Some(mask) = mask {'''
+to = '''                    if let Some(mask) = mask.filter(|_| false) {'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "a text area with its tree ignores its children"
+file = "crates/layout/src/control.rs"
+from = '''        self.kind == ControlKind::TextArea && !self.shadow_tree'''
+to = '''        self.kind == ControlKind::TextArea'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "a text field's content isn't centered"
+file = "crates/layout/src/control.rs"
+from = '''            ControlKind::TextField { .. } => Some(false),'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "a text field's centering is safe"
+file = "crates/layout/src/lib.rs"
+from = '''        self.shift_content(index, if safe { shift.max(0.0) } else { shift });'''
+to = '''        self.shift_content(index, shift.max(0.0));'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "a control's content isn't laid out"
+file = "crates/layout/src/lib.rs"
+from = '''            if !children.is_empty() && inputs.run_mode == RunMode::PerformLayout {'''
+to = '''            if false {'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::"]
+
+[[mutant]]
+name = "::placeholder is no style"
+file = "crates/dom_api/src/computed_style.rs"
+from = '''                "placeholder" => StyleTarget::Placeholder,
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "computed_style::placeholder"]
+
+[[mutant]]
+name = "the mouse's focus stops at a shadow root"
+file = "crates/dom_api/src/focus.rs"
+from = '''            .parent_or_shadow_host()
+            .map(|p| p.to_handle());
+    }
+    on_the_spot(focusing_steps(cx, &document, None));'''
+to = '''            .parent()
+            .map(|p| p.to_handle());
+    }
+    on_the_spot(focusing_steps(cx, &document, None));'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "focus::a_press_of_the_mouse"]

@@ -1,0 +1,380 @@
+# Stage 4g-1b-2a: IntersectionObserver on the new DOM: the observers and observations
+# (the targets keep them), the interfaces and their options, the entry's constructor,
+# what the rendering update queues, the task that delivers it, and the renderer's
+# computation after the lifecycle; and the last <link>s looked for before the load.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it intersection && cargo test -q -p dom_api_next --test it intersection && cargo test -q -p dom_js_next --test it intersection_observers"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: no list made for an element with no data"
+file = "crates/dom_next/src/intersection.rs"
+from = '''        if !make {
+            return None;
+        }'''
+to = '''        if !make || true {
+            return None;
+        }'''
+
+[[mutant]]
+name = "dom: a second observation of the same target"
+file = "crates/dom_next/src/intersection.rs"
+from = '''            || self.observation_of(observer, target).is_some()
+'''
+to = '''            || false
+'''
+
+[[mutant]]
+name = "dom: a document observed"
+file = "crates/dom_next/src/intersection.rs"
+from = '''        if self.kind(target) != crate::NodeKind::Element
+'''
+to = '''        if false
+'''
+
+[[mutant]]
+name = "dom: observing doesn't change the version"
+file = "crates/dom_next/src/intersection.rs"
+from = '''        list.push(self.gc, reference);
+        self.intersection_changed();
+    }'''
+to = '''        list.push(self.gc, reference);
+    }'''
+
+[[mutant]]
+name = "dom: making an observer doesn't change the version"
+file = "crates/dom_next/src/intersection.rs"
+from = '''        list.push(self.gc, entry);
+        self.intersection_changed();
+        observer'''
+to = '''        list.push(self.gc, entry);
+        observer'''
+
+[[mutant]]
+name = "dom: unobserve leaves it on the target"
+file = "crates/dom_next/src/intersection.rs"
+from = '''                list.remove(self.gc, index);
+                // Off its'''
+to = '''                // Off its'''
+
+[[mutant]]
+name = "dom: unobserve leaves it on the observer"
+file = "crates/dom_next/src/intersection.rs"
+from = '''                observation.observer.set(self.gc, None);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: unobserve doesn't change the version"
+file = "crates/dom_next/src/intersection.rs"
+from = '''                observation.observer.set(self.gc, None);
+                self.intersection_changed();'''
+to = '''                observation.observer.set(self.gc, None);'''
+
+[[mutant]]
+name = "dom: disconnect leaves the targets'"
+file = "crates/dom_next/src/intersection.rs"
+from = '''        for state in self.intersection_observations(observer) {
+            self.unobserve_intersection(observer, state.target);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a gone root is the implicit one"
+file = "crates/dom_next/src/intersection.rs"
+from = '''            None if observer.explicit_root.get() => IntersectionObserverRoot::Gone,
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: the last run not set"
+file = "crates/dom_next/src/intersection.rs"
+from = '''            observation.last_run.set(now);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: every entry queues the task"
+file = "crates/dom_next/src/intersection.rs"
+from = '''        pending.len() == 1
+'''
+to = '''        true
+'''
+
+[[mutant]]
+name = "dom: an observer waiting twice"
+file = "crates/dom_next/src/intersection.rs"
+from = '''        if observer.pending.replace(true) {
+            return false;
+        }'''
+to = '''        observer.pending.set(true);'''
+
+[[mutant]]
+name = "dom: taken observers still waiting"
+file = "crates/dom_next/src/intersection.rs"
+from = '''        for observer in &taken {
+            observer.pending.set(false);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: the queue not emptied"
+file = "crates/dom_next/src/intersection.rs"
+from = '''        entries.clear(self.gc);
+        taken
+'''
+to = '''        taken
+'''
+
+[[mutant]]
+name = "api: thresholds not sorted"
+file = "crates/dom_api_next/src/intersection_observer.rs"
+from = '''    thresholds.sort_by(f64::total_cmp);
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: no thresholds left empty"
+file = "crates/dom_api_next/src/intersection_observer.rs"
+from = '''    if thresholds.is_empty() {
+        thresholds.push(0.0);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a threshold out of range taken"
+file = "crates/dom_api_next/src/intersection_observer.rs"
+from = '''    if thresholds.iter().any(|t| !(0.0..=1.0).contains(t)) {'''
+to = '''    if thresholds.iter().any(|t| !(0.0..=1.0).contains(t)) && false {'''
+
+[[mutant]]
+name = "api: trackVisibility without a delay taken"
+file = "crates/dom_api_next/src/intersection_observer.rs"
+from = '''    if init.track_visibility && delay_micros < MIN_VISIBILITY_DELAY_MICROS {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: a root that isn't an element or a document taken"
+file = "crates/dom_api_next/src/intersection_observer.rs"
+from = '''    if root.is_some_and(|root| !matches!(cx.kind(root), NodeKind::Element | NodeKind::Document)) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: a saturated delay divided"
+file = "crates/dom_api_next/src/intersection_observer.rs"
+from = '''        i64::MAX | i64::MIN => micros,
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: a target with no area has the ratio 0"
+file = "crates/dom_api_next/src/intersection_observer.rs"
+from = '''                } else {
+                    1.0
+                };'''
+to = '''                } else {
+                    0.0
+                };'''
+
+[[mutant]]
+name = "api: a ratio at a threshold below it"
+file = "crates/dom_api_next/src/intersection_observer.rs"
+from = '''                    .position(|&t| t > ratio)'''
+to = '''                    .position(|&t| t >= ratio)'''
+
+[[mutant]]
+name = "api: intersecting below the first threshold"
+file = "crates/dom_api_next/src/intersection_observer.rs"
+from = '''        let is_intersecting = index > 0;'''
+to = '''        let is_intersecting = c.intersection_rect.is_some();'''
+
+[[mutant]]
+name = "api: visible though not intersecting"
+file = "crates/dom_api_next/src/intersection_observer.rs"
+from = '''        let is_visible = is_intersecting && c.is_visible;'''
+to = '''        let is_visible = c.is_visible;'''
+
+[[mutant]]
+name = "api: a change of visibility no entry"
+file = "crates/dom_api_next/src/intersection_observer.rs"
+from = '''            && previous.previous_is_visible == is_visible
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: an unchanged one an entry"
+file = "crates/dom_api_next/src/intersection_observer.rs"
+from = '''        if previous.previous_threshold_index == Some(index)
+'''
+to = '''        if false && previous.previous_threshold_index == Some(index)
+'''
+
+[[mutant]]
+name = "api: the state not kept"
+file = "crates/dom_api_next/src/intersection_observer.rs"
+from = '''        cx.set_intersection_observation_state(c.observer, c.target, index, is_intersecting, is_visible);
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: an unobserved target's state"
+file = "crates/dom_api_next/src/intersection_observer.rs"
+from = '''            .find(|o| gc::Gc::ptr_eq(o.target, c.target));'''
+to = '''            .find(|_| true);'''
+
+[[mutant]]
+name = "api: the time not coarsened"
+file = "crates/dom_api_next/src/intersection_observer.rs"
+from = '''                time: crate::event::coarsen(time),'''
+to = '''                time,'''
+
+[[mutant]]
+name = "api: an observer called with no entries"
+file = "crates/dom_api_next/src/intersection_observer.rs"
+from = '''        if entries.is_empty() {
+            continue;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "api: an entry of a node that isn't an element"
+file = "crates/dom_api_next/src/intersection_observer.rs"
+from = '''        .filter(|&target| cx.kind(target) == NodeKind::Element)
+'''
+to = ''''''
+
+[[mutant]]
+name = "js: thresholds a new array each time"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        && u32::try_from(numbers.len()).is_ok_and(|length| length == cached.length())'''
+to = '''        && false'''
+
+[[mutant]]
+name = "js: thresholds not frozen"
+file = "crates/dom_js_next/src/front.rs"
+from = '''    array.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
+    holder.set_private'''
+to = '''    holder.set_private'''
+
+[[mutant]]
+name = "js: an entry init's member not required"
+file = "crates/dom_js_next/src/front.rs"
+from = '''            if value.is_undefined() {
+                self.throw_type_error(&format!(
+                    "{NAME}: Failed to read the '{name}' property from '{INIT}': Required member is undefined."'''
+to = '''            if value.is_undefined() && name == "" {
+                self.throw_type_error(&format!(
+                    "{NAME}: Failed to read the '{name}' property from '{INIT}': Required member is undefined."'''
+
+[[mutant]]
+name = "js: a rect's width its height"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        for (member, index) in [("height", 3), ("width", 2), ("x", 0), ("y", 1)] {'''
+to = '''        for (member, index) in [("height", 2), ("width", 3), ("x", 0), ("y", 1)] {'''
+
+[[mutant]]
+name = "js: a null rootBounds a rect"
+file = "crates/dom_js_next/src/front.rs"
+from = '''                    if name == "rootBounds" && value.is_null() {'''
+to = '''                    if false {'''
+
+[[mutant]]
+name = "js: the callback's this undefined"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''        .and_then(|function| function.call(scope, this.into(), &[entries.into(), this.into()]));'''
+to = '''        .and_then(|function| function.call(scope, v8::undefined(scope).into(), &[entries.into(), this.into()]));'''
+
+[[mutant]]
+name = "renderer: never computed again"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it next_dom_intersection_observers"]
+from = '''        if *computed == Some(state) {
+            return (false, None);
+        }'''
+to = '''        if computed.is_some() {
+            return (false, None);
+        }'''
+
+[[mutant]]
+name = "renderer: the delay not held"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it next_dom_intersection_observers"]
+from = '''                    && now < last + delay
+'''
+to = '''                    && false
+'''
+
+[[mutant]]
+name = "renderer: no frame when the delay is up"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it next_dom_intersection_observers"]
+from = '''            self.intersections_due = due.map(|wait| self.clock.now() + wait);'''
+to = '''            self.intersections_due = None;'''
+
+[[mutant]]
+name = "renderer: a target in no frame computed"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it next_dom_intersection_observers"]
+from = '''                if matches!(root, paint::IntersectionRoot::Implicit)
+                    && cx.node_id'''
+to = '''                if false
+                    && cx.node_id'''
+
+[[mutant]]
+name = "renderer: a target with no rect has root bounds"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it next_dom_intersection_observers"]
+from = '''                    None => gfx::RectF::default(),
+'''
+to = '''                    None => geometry.root.unwrap_or_default(),
+'''
+
+[[mutant]]
+name = "renderer: observing asks for no frame"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it next_dom_intersection_observers"]
+from = '''        } else if observed {
+            self.request_main_frame();
+        }'''
+to = '''        }'''
+
+[[mutant]]
+name = "renderer: the task not run"
+file = "crates/renderer/src/render_thread.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it next_dom_intersection_observers"]
+from = '''            self.run_next_intersection_task();
+'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: a shadow tree covers its host"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it next_dom_intersection_observers"]
+from = '''                at = cx.parent(n).or_else(|| cx.shadow_host(n));'''
+to = '''                at = cx.parent(n);'''
+
+[[mutant]]
+name = "renderer: the last links not looked for before the load"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it next_dom::a_linked_sheet"]
+from = '''        // style update below takes the flag that says the sheets changed.
+        self.start_next_loads();
+'''
+to = '''        // style update below takes the flag that says the sheets changed.
+'''
+
+[[mutant]]
+name = "renderer: a scroll asks for no frame"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it next_dom_intersection_observers::a_scroll"]
+from = '''        if frame.view.take_scrolled() {
+            self.request_main_frame();
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: the scroll steps not run"
+file = "crates/renderer/src/render_thread.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it next_dom_intersection_observers::a_scroll"]
+from = '''            self.run_next_scroll_steps();
+'''
+to = ''''''

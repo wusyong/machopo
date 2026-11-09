@@ -1,0 +1,142 @@
+# Stage 4d-1: the root tables without `Rc` and `RefCell` (`gc`'s
+# `RootTable`, `Persistent`, the heap's drop with roots left), the
+# dispatch passing over targets with no listeners in one operation, and
+# the drop orders that let roots go before their heap.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p gc && cargo test -q -p dom_api_next --test it -- dispatch && cargo test -q -p dom_js_next && cargo test -q -p style_next"]
+timeout = 3000
+
+[[mutant]]
+name = "a root removed while marking not kept"
+file = "crates/gc/src/persistent.rs"
+from = '''            if let Some(removed) = &mut entries.removed {
+                removed.push(offset);
+            }'''
+to = '''            let _ = offset;'''
+
+[[mutant]]
+name = "a removed root's entry not freed"
+file = "crates/gc/src/persistent.rs"
+from = '''            entries.free.push(index);
+        });'''
+to = '''            let _ = index;
+        });'''
+
+[[mutant]]
+name = "a dead weak root not cleared"
+file = "crates/gc/src/persistent.rs"
+from = '''        for slot in &mut slots {
+            *slot = update(*slot);
+        }'''
+to = '''        for slot in &mut slots {
+            let _ = update(*slot);
+        }'''
+
+[[mutant]]
+name = "another heap's root read"
+file = "crates/gc/src/persistent.rs"
+from = '''        assert!(
+            std::ptr::eq(self.table.as_ptr(), &raw const cx.inner.shared.roots),
+            "a Persistent of another heap"
+        );'''
+to = ''''''
+
+[[mutant]]
+name = "roots outliving the heap not caught"
+file = "crates/gc/src/heap.rs"
+from = '''            debug_assert!(std::thread::panicking(), "{left} roots outlive their heap");'''
+to = ''''''
+
+[[mutant]]
+name = "every target its own operation"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''                if listeners > 0 {
+                    return Some(listeners);
+                }'''
+to = '''                return Some(listeners);'''
+
+[[mutant]]
+name = "the pass goes on past stopPropagation"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''                if cx.event_state(event).stop_propagation {
+                    return None;
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "capturing from the target up"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''                    Pass::Capture => count - 1 - at,'''
+to = '''                    Pass::Capture => at,'''
+
+[[mutant]]
+name = "bubbling at the capturing phase"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''                    (_, Pass::Bubble) => BUBBLING_PHASE,'''
+to = '''                    (_, Pass::Bubble) => CAPTURING_PHASE,'''
+
+[[mutant]]
+name = "an event that doesn't bubble bubbles"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''    invoke_pass(host, event, Pass::Bubble, if bubbles { len } else { 1 });'''
+to = '''    invoke_pass(host, event, Pass::Bubble, len);'''
+
+[[mutant]]
+name = "the engine's heap before its roots"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''pub struct V8NextEngine {
+    settings: NextEngineSettings,
+    /// A context of no window, to make the first realm in (a realm is
+    /// made in some context of its isolate).
+    bootstrap: v8::Global<v8::Context>,
+    /// The window's realm and its document, once there is one.
+    context: Option<v8::Global<v8::Context>>,
+    document: Option<NodeRoot>,
+    /// The window's mouse state (a new one with each window).
+    event_handler: dom_api_next::EventHandler,
+    /// Whether the page has the system's focus (the host's): each new
+    /// window starts with it.
+    page_focused: bool,
+    /// The isolate, and in its state the DOM's heap: last, as fields drop
+    /// in order, so that the roots above go first (a root never outlives
+    /// its heap) and the `Global`s before their isolate.
+    data: V8PerIsolateData,
+}'''
+to = '''pub struct V8NextEngine {
+    data: V8PerIsolateData,
+    settings: NextEngineSettings,
+    /// A context of no window, to make the first realm in (a realm is
+    /// made in some context of its isolate).
+    bootstrap: v8::Global<v8::Context>,
+    /// The window's realm and its document, once there is one.
+    context: Option<v8::Global<v8::Context>>,
+    document: Option<NodeRoot>,
+    /// The window's mouse state (a new one with each window).
+    event_handler: dom_api_next::EventHandler,
+    /// Whether the page has the system's focus (the host's): each new
+    /// window starts with it.
+    page_focused: bool,
+}'''
+
+[[mutant]]
+name = "the state's DOM before the frame's roots"
+file = "crates/dom_js_next/src/state.rs"
+from = '''    pub(crate) layout: Box<dom_api_next::LayoutCell>,
+    /// The DOM: each operation borrows it from the isolate (`Front::read`,
+    /// `Front::mutate`); V8's major GCs between them (`EmbedderHeapState`).
+    /// Last, as fields drop in order: the roots above (the frame's, in
+    /// `layout`) go before their heap.
+    pub(crate) dom: Dom,
+}'''
+to = '''    pub(crate) dom: Dom,
+    pub(crate) layout: Box<dom_api_next::LayoutCell>,
+}'''
+
+[[mutant]]
+name = "the renderer's engine before its document"
+file = "crates/renderer/src/render_thread.rs"
+from = '''    next_document: Option<next::NextDocument>,
+    /// The new DOM's engine, made at its first document.
+    next_engine: Option<Box<dyn dom_api_next::NextEngine>>,'''
+to = '''    next_engine: Option<Box<dyn dom_api_next::NextEngine>>,
+    next_document: Option<next::NextDocument>,'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it -- next_dom"]

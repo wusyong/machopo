@@ -1,0 +1,10 @@
+# Step 4c's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0033-canvas-2d/mutations-4c.toml`.
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_images"]
+timeout = 1500
+
+[[mutant]]
+name = "a new size keeps the canvas tainted"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        m.read().canvas_data(&context).origin_clean = true;'''
+to = '''        m.read().canvas_data(&context).origin_clean &= true;'''

@@ -1,0 +1,235 @@
+# 2c: a line breaks after a soft hyphen with a hyphen (`layout`, the parley
+# fork).
+#   python3 scripts/test.py mutate rfcs/0068-parsed-css/mutants-2c.toml
+# Left out as equivalent (`docs/test-gaps.md`): a new line keeping the
+# soft hyphen, the hyphen not scaled, `check` on it, the min-content width
+# without the `NoBreak` condition, and a hyphen shaped for `none`.
+test = ["cargo", "test", "-q", "-p", "layout", "--", "inline::", "update::"]
+timeout = 900
+
+[[mutant]]
+name = "no character is a soft hyphen"
+file = "../third_party/parley/parley_engine/src/shape/data.rs"
+from = '''                | if source_char == '\u{AD}' {'''
+to = '''                | if false && source_char == '\u{AD}' {'''
+
+[[mutant]]
+name = "no cluster starts with a soft hyphen"
+file = "../third_party/parley/parley_engine/src/shape/shaped_text.rs"
+from = '''                .with_soft_hyphen(first_character.flags.is_soft_hyphen()),'''
+to = '''                .with_soft_hyphen(false),'''
+
+[[mutant]]
+name = "a hyphen that doesn't fit is taken"
+file = "../third_party/parley/parley/src/layout/line_break.rs"
+from = '''                if self.line.x + advance <= max_advance || self.prev_boundary.is_none() {'''
+to = '''                if true {'''
+
+[[mutant]]
+name = "a hyphen that doesn't fit is never taken"
+file = "../third_party/parley/parley/src/layout/line_break.rs"
+from = '''                if self.line.x + advance <= max_advance || self.prev_boundary.is_none() {'''
+to = '''                if self.line.x + advance <= max_advance {'''
+
+[[mutant]]
+name = "the opportunity has no hyphen"
+file = "../third_party/parley/parley/src/layout/line_break.rs"
+from = '''                        prev.state.hyphen_advance = advance;'''
+to = '''                        prev.state.hyphen_advance = 0.0;'''
+
+[[mutant]]
+name = "an edge after a soft hyphen with none breaks"
+file = "../third_party/parley/parley/src/layout/line_break.rs"
+from = '''            SoftHyphens::NoBreak => {}
+            SoftHyphens::Hyphen(advance) => {
+                if self.line.x'''
+to = '''            SoftHyphens::NoBreak => self.mark_line_break_opportunity(),
+            SoftHyphens::Hyphen(advance) => {
+                if self.line.x'''
+
+[[mutant]]
+name = "none has no emergency opportunity"
+file = "../third_party/parley/parley/src/layout/line_break.rs"
+from = '''                            && self.state.line.soft_hyphen != SoftHyphens::NoBreak
+'''
+to = '''
+'''
+
+[[mutant]]
+name = "the line breaker forgets the soft hyphen"
+file = "../third_party/parley/parley/src/layout/line_break.rs"
+from = '''                        self.state.line.soft_hyphen = soft_hyphen;'''
+to = '''                        self.state.line.soft_hyphen = SoftHyphens::Break;'''
+
+[[mutant]]
+name = "the line breaker keeps it past an atomic inline"
+file = "../third_party/parley/parley/src/layout/line_break.rs"
+from = '''                        // kun: the opportunities beside an atomic inline are its own.
+                        self.state.line.soft_hyphen = SoftHyphens::Break;'''
+to = '''                        // kun: the opportunities beside an atomic inline are its own.'''
+
+[[mutant]]
+name = "a new line keeps the hyphen"
+file = "../third_party/parley/parley/src/layout/line_break.rs"
+from = '''        self.soft_hyphen = SoftHyphens::Break;
+        self.hyphen_advance = 0.0;'''
+to = '''        self.soft_hyphen = SoftHyphens::Break;'''
+
+[[mutant]]
+name = "the line's advance leaves the hyphen out"
+file = "../third_party/parley/parley/src/layout/line_break.rs"
+from = '''            advance: state.x + state.hyphen_advance,'''
+to = '''            advance: state.x,'''
+
+[[mutant]]
+name = "the line has no hyphen"
+file = "../third_party/parley/parley/src/layout/line_break.rs"
+from = '''            hyphen_advance: state.hyphen_advance,'''
+to = '''            hyphen_advance: 0.0,'''
+
+[[mutant]]
+name = "an edge's opportunity has no hyphen"
+file = "../third_party/parley/parley/src/layout/line_break.rs"
+from = '''                            self.state
+                                .mark_line_break_opportunity_after_soft_hyphen(max_advance);
+                        }
+                        self.state.line.glue_next = true;'''
+to = '''                            self.state.mark_line_break_opportunity();
+                        }
+                        self.state.line.glue_next = true;'''
+
+[[mutant]]
+name = "no room for the hyphen in RTL"
+file = "../third_party/parley/parley/src/layout/alignment.rs"
+from = '''            line.metrics.offset += line.metrics.hyphen_advance;'''
+to = ''''''
+
+[[mutant]]
+name = "the min-content width leaves the hyphen out"
+file = "../third_party/parley/parley/src/layout/data.rs"
+from = '''                self.running_min_width += advance;
+                self.soft_break();'''
+to = '''                self.soft_break();'''
+
+[[mutant]]
+name = "an edge after a soft hyphen with none breaks in the min-content width"
+file = "../third_party/parley/parley/src/layout/data.rs"
+from = '''            SoftHyphens::NoBreak => {}
+            SoftHyphens::Hyphen(advance) => {
+                self.running_min_width'''
+to = '''            SoftHyphens::NoBreak => self.soft_break(),
+            SoftHyphens::Hyphen(advance) => {
+                self.running_min_width'''
+
+[[mutant]]
+name = "the measurer forgets the soft hyphen"
+file = "../third_party/parley/parley/src/layout/data.rs"
+from = '''                    if cluster.is_soft_hyphen() {'''
+to = '''                    if false && cluster.is_soft_hyphen() {'''
+
+[[mutant]]
+name = "the measurer keeps it past an atomic inline"
+file = "../third_party/parley/parley/src/layout/data.rs"
+from = '''                        // kun: the opportunities beside an atomic inline are its own.
+                        self.soft_hyphen = SoftHyphens::Break;'''
+to = '''                        // kun: the opportunities beside an atomic inline are its own.'''
+
+[[mutant]]
+name = "an edge's fragment has no hyphen"
+file = "../third_party/parley/parley/src/layout/data.rs"
+from = '''                        self.soft_break_after(self.soft_hyphen);'''
+to = '''                        self.soft_break();'''
+
+[[mutant]]
+name = "a span's soft hyphens aren't applied"
+file = "../third_party/parley/parley/src/resolve/mod.rs"
+from = '''            SoftHyphens(value) => self.soft_hyphens = value,'''
+to = '''            SoftHyphens(_) => {}'''
+
+[[mutant]]
+name = "the layout style loses them"
+file = "../third_party/parley/parley/src/resolve/mod.rs"
+from = '''            soft_hyphens: self.soft_hyphens,'''
+to = '''            soft_hyphens: crate::SoftHyphens::Break,'''
+
+[[mutant]]
+name = "the root style loses them"
+file = "../third_party/parley/parley/src/resolve/mod.rs"
+from = '''            soft_hyphens: scale_soft_hyphens(raw_style.soft_hyphens, scale),'''
+to = '''            soft_hyphens: crate::SoftHyphens::Break,'''
+
+[[mutant]]
+name = "none breaks"
+file = "crates/layout/src/text.rs"
+from = '''        if style.rare_inherited.hyphens == Hyphens::None {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "spans have no soft hyphens"
+file = "crates/layout/src/text.rs"
+from = '''        StyleProperty::SoftHyphens(s.soft_hyphens),
+'''
+to = ''''''
+
+[[mutant]]
+name = "no room on the left in RTL"
+file = "crates/layout/src/text.rs"
+from = '''                metrics.hyphen_advance
+            } else {
+                0.0
+            };'''
+to = '''                0.0
+            } else {
+                0.0
+            };'''
+
+[[mutant]]
+name = "the RTL hyphen over the text"
+file = "crates/layout/src/text.rs"
+from = '''                    text_left - fragment.advance'''
+to = '''                    text_left'''
+
+[[mutant]]
+name = "the hyphen before the text's end"
+file = "crates/layout/src/text.rs"
+from = '''                    text_right
+                };'''
+to = '''                    text_right - fragment.advance
+                };'''
+
+[[mutant]]
+name = "the first run has the soft hyphen"
+file = "crates/layout/src/text.rs"
+from = '''        .any(|cluster| cluster.style_index() == style && cluster.text_range().end == end)'''
+to = '''        .any(|cluster| cluster.style_index() == style || cluster.text_range().end == end)'''
+
+[[mutant]]
+name = "the hyphen keeps the style it was shaped in"
+file = "crates/layout/src/text.rs"
+from = '''                fragment.style = style;
+'''
+to = ''''''
+
+[[mutant]]
+name = "the hyphen is no element's"
+file = "crates/layout/src/text.rs"
+from = '''                fragment.node = owner.map(|owner| owner.node);
+                fragment.pseudo = owner.and_then(|owner| owner.pseudo);
+                fragment.style = style;'''
+to = '''                fragment.style = style;'''
+
+[[mutant]]
+name = "the hyphen isn't moved with its element"
+file = "crates/layout/src/text.rs"
+from = '''                fragment.translate(by);
+                children.push(('''
+to = '''                children.push(('''
+
+[[mutant]]
+name = "hyphens lay nothing out again"
+file = "crates/layout/src/lib.rs"
+from = '''                    user_modify: old.rare_inherited.user_modify,
+'''
+to = '''                    user_modify: old.rare_inherited.user_modify,
+                    hyphens: old.rare_inherited.hyphens,
+'''

@@ -1,0 +1,166 @@
+# Stage 2b: a text fragment is a span of its paragraph's shaped text; its
+# glyphs are placed and its clusters worked out (the parley fork's
+# `GlyphSpan::clusters`) when asked, and how a line ends too. Layout places
+# them only for `text-overflow`, and counts what it places.
+#
+# python3 scripts/test.py mutate rfcs/0083-text-layout-work/mutants-2b.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it"]
+timeout = 600
+
+# A span's clusters.
+
+[[mutant]]
+name = "a span's clusters are all of its run's"
+file = "../third_party/parley/parley/src/layout/line.rs"
+from = '''            (slice.characters_in(chars.clone())[0].style_index == style_index).then(|| {'''
+to = '''            true.then(|| {'''
+
+[[mutant]]
+name = "a span's clusters are only its glyph run's"
+file = "../third_party/parley/parley/src/layout/line.rs"
+from = '''            line_clusters: self.run.line_slice().shaped_clusters_range(),'''
+to = '''            line_clusters: self.shaped_clusters.clone(),'''
+
+[[mutant]]
+name = "a span's clusters are in logical order"
+file = "../third_party/parley/parley/src/layout/line.rs"
+from = '''        AtomGraphemes::new(slice, is_rtl).filter_map(move |(atom, grapheme)| {'''
+to = '''        AtomGraphemes::new(slice, false).filter_map(move |(atom, grapheme)| {'''
+
+[[mutant]]
+name = "a span's clusters have no spacing"
+file = "../third_party/parley/parley/src/layout/line.rs"
+from = '''                    advance: spacing.grapheme_advance(&atom, grapheme, is_rtl),'''
+to = '''                    advance: grapheme.advance(),'''
+
+[[mutant]]
+name = "a right-to-left span's text starts at its logical start"
+file = "../third_party/parley/parley/src/layout/line.rs"
+from = '''        let first = if self.is_rtl { last.start } else { first? };'''
+to = '''        let first = first?;'''
+
+[[mutant]]
+name = "a span's text leaves out its last grapheme"
+file = "../third_party/parley/parley/src/layout/line.rs"
+from = '''        if let Some(start) = current {
+            last = Some(start..chars.end);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a span's text is of every style"
+file = "../third_party/parley/parley/src/layout/line.rs"
+from = '''                if character.style_index == self.style_index {'''
+to = '''                if true {'''
+
+# kun's text fragments.
+
+[[mutant]]
+name = "a run's source is its whole node"
+file = "crates/layout/src/text.rs"
+from = '''            .and_then(|text| text.run_source(span.text_range(shaped)));'''
+to = '''            .and_then(|text| text.run_source(None));'''
+
+[[mutant]]
+name = "a run's clusters don't advance"
+file = "crates/layout/src/text.rs"
+from = '''                at += cluster.advance;'''
+to = ''''''
+
+[[mutant]]
+name = "a run's glyphs are placed from the line's start"
+file = "crates/layout/src/fragment.rs"
+from = '''                let at = PointF::new(x + (g.x + offset), baseline + g.y);'''
+to = '''                let at = PointF::new(g.x + offset, baseline + g.y);'''
+
+[[mutant]]
+name = "an ellipsis's glyphs aren't moved"
+file = "crates/layout/src/fragment.rs"
+from = '''            .map(move |&(id, at)| (id, PointF::new(x + at.x, baseline + at.y)));'''
+to = '''            .map(move |&(id, at)| (id, at));'''
+
+[[mutant]]
+name = "a run's clusters are placed from the line's start"
+file = "crates/layout/src/fragment.rs"
+from = '''                .map_or(run_end, |c| self.x + c.x)'''
+to = '''                .map_or(run_end, |c| c.x)'''
+
+[[mutant]]
+name = "a cut run's clusters are placed from the line's start"
+file = "crates/layout/src/text.rs"
+from = '''                .map(|c| fragment.x + c.x)'''
+to = '''                .map(|c| c.x)'''
+
+# How a line ends.
+
+[[mutant]]
+name = "a wrap keeps the clusters past the line"
+file = "crates/layout/src/fragment.rs"
+from = '''            .find(|cluster| self.x + cluster.x < self.end)'''
+to = '''            .find(|cluster| cluster.x < self.end)'''
+
+[[mutant]]
+name = "a newline's box is where its run starts"
+file = "crates/layout/src/fragment.rs"
+from = '''                    .map_or(text.end, |newline| text.x + newline.x)'''
+to = '''                    .map_or(text.end, |newline| newline.x)'''
+
+[[mutant]]
+name = "a newline ends the line after it"
+file = "crates/layout/src/fragment.rs"
+from = '''                    .map_or(text.start, |newline| newline.start),'''
+to = '''                    .map_or(text.start, |newline| newline.end),'''
+
+# What layout places.
+
+[[mutant]]
+name = "clusters placed aren't counted"
+file = "crates/layout/src/text.rs"
+from = '''            for run in runs.iter().filter(|run| run.clusters_made()) {'''
+to = '''            for run in runs.iter().filter(|_| false) {'''
+
+[[mutant]]
+name = "glyphs placed to cut aren't counted"
+file = "crates/layout/src/text.rs"
+from = '''        *glyphs = glyphs.saturating_add(xs.len());'''
+to = ''''''
+
+[[mutant]]
+name = "a line's end works its clusters out"
+file = "crates/layout/src/text.rs"
+from = '''            let end = self.line_end(&line, &runs, &children, origin, last);'''
+to = '''            let end = self.line_end(&line, &runs, &children, origin, last);
+            if let Some(end) = &end {
+                end.kind();
+            }'''
+
+[[mutant]]
+name = "a tree built again has other runs"
+file = "crates/layout/src/fragment.rs"
+from = '''                || (a.glyphs(&self.shaped).eq(b.glyphs(&other.shaped))'''
+to = '''                || (false && a.glyphs(&self.shaped).eq(b.glyphs(&other.shaped))'''
+
+# Paint.
+
+[[mutant]]
+name = "what text-overflow hides is painted"
+file = "crates/paint/src/lib.rs"
+from = '''            .take(run.hidden_from.unwrap_or(usize::MAX))'''
+to = '''            .take(usize::MAX)'''
+test = ["python3", "scripts/test.py", "reftest", "text/t16-text-overflow.html"]
+
+[[mutant]]
+name = "every line's end works its clusters out"
+file = "crates/paint/src/lib.rs"
+from = '''        if let Some(text) = end.text() {
+            self.images.selection(text)?;
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "paint_controller::"]
+
+[[mutant]]
+name = "a break's caret is at any line's end"
+file = "crates/paint/src/lib.rs"
+from = '''.find_map(|line| line.end.as_ref().filter(|end| end.br() == Some(br)))?;'''
+to = '''.find_map(|line| line.end.as_ref().filter(|end| end.br().is_some() || end.text().is_some()))?;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "selection_painting::"]

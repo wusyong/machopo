@@ -1,0 +1,186 @@
+# Step 3e's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0033-canvas-2d/mutations-3e.toml`. Each names the tests closest to
+# what it breaks.
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_image_data"]
+timeout = 1500
+
+# dom_api: createImageData.
+
+[[mutant]]
+name = "a negative width taken as it is"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let (width, height) = (sw.unsigned_abs(), sh.unsigned_abs());'''
+to = '''    let (width, height) = (sw as u32, sh.unsigned_abs());'''
+
+[[mutant]]
+name = "a size of 0 made"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if width == 0 || height == 0 {
+        let which = if width == 0 { "width" } else { "height" };'''
+to = '''    if width == 0 && height == 0 {
+        let which = if width == 0 { "width" } else { "height" };'''
+
+[[mutant]]
+name = "the context's color space not the default"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        .unwrap_or_else(|| color_space(cx.read().canvas_context_settings(this).color_space));'''
+to = '''        .unwrap_or(PredefinedColorSpace::Srgb);'''
+
+[[mutant]]
+name = "another's color space not taken"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let space = color_space(read.image_data_color_space(&image_data));'''
+to = '''    let space = PredefinedColorSpace::Srgb;
+    let _ = read.image_data_color_space(&image_data);'''
+
+# dom_api: putImageData's pixels.
+
+[[mutant]]
+name = "premultiplied without rounding"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        let product = u32::from(c) * u32::from(a) + 128;'''
+to = '''        let product = u32::from(c) * u32::from(a);'''
+
+[[mutant]]
+name = "not premultiplied"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                let pixel = if settings.alpha {
+                    premultiply([r, g, b, a])'''
+to = '''                let pixel = if settings.alpha {
+                    [r, g, b, a]'''
+
+[[mutant]]
+name = "an opaque canvas takes the alpha"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                } else {
+                    [r, g, b, 255]
+                };'''
+to = '''                } else {
+                    [r, g, b, a]
+                };'''
+
+[[mutant]]
+name = "a detached buffer read"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if bytes.len() != width as usize * height as usize * 4 {'''
+to = '''    if bytes.is_empty() && false {'''
+
+# dom_api: putImageData's rects.
+
+[[mutant]]
+name = "a dirty rect too big for a long's area taken"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if dirty_width.checked_mul(dirty_height).is_none() {'''
+to = '''    if dirty_width.checked_mul(dirty_height).is_none() && false {'''
+
+[[mutant]]
+name = "a negative size not going back"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            size => (start + size, -size),'''
+to = '''            size => (start, -size),'''
+
+[[mutant]]
+name = "the source not moved back by dx"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                let source = (((by - dy) * i64::from(width) + (bx - dx)) * 4) as usize;'''
+to = '''                let source = (((by - dy) * i64::from(width) + (bx - dx * 0)) * 4) as usize;'''
+
+[[mutant]]
+name = "the dirty rect not cut to the image"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let x1 = (x + w).min(i64::from(width)).saturating_add(dx).min(i64::from(bitmap_width));'''
+to = '''    let x1 = (x + w).saturating_add(dx).min(i64::from(bitmap_width));'''
+
+[[mutant]]
+name = "the dirty rect not cut to the bitmap"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let x1 = (x + w).min(i64::from(width)).saturating_add(dx).min(i64::from(bitmap_width));'''
+to = '''    let x1 = (x + w).min(i64::from(width)).saturating_add(dx);'''
+
+[[mutant]]
+name = "the dirty rect past the bottom"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let y1 = (y + h).min(i64::from(height)).saturating_add(dy).min(i64::from(bitmap_height));'''
+to = '''    let y1 = (y + h).min(i64::from(height)).saturating_add(dy).min(i64::from(bitmap_height) + 1);'''
+
+[[mutant]]
+name = "the whole bitmap drawn first"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let whole = x0 == 0'''
+to = '''    let whole = false && x0 == 0'''
+
+[[mutant]]
+name = "the whole bitmap keeps the recording"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        with_data(cx, this, |data| {
+            data.ops.clear();
+            data.matrix = None;
+        });'''
+to = '''        with_data(cx, this, |data| {
+            data.matrix = None;
+        });'''
+
+[[mutant]]
+name = "part of it not drawn first"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    } else {
+        flush(cx, this);
+    }
+    let settings = cx.read().canvas_context_settings(this);'''
+to = '''    }
+    let settings = cx.read().canvas_context_settings(this);'''
+
+[[mutant]]
+name = "the canvas not painted again"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                pixels[target..target + 4].copy_from_slice(&pixel);
+            }
+        }
+    });
+    record_draw(cx, this);'''
+to = '''                pixels[target..target + 4].copy_from_slice(&pixel);
+            }
+        }
+    });'''
+
+[[mutant]]
+name = "the short form a pixel short"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        side(width),
+        side(height),'''
+to = '''        side(width) - 1,
+        side(height),'''
+
+# [EnforceRange] long.
+
+[[mutant]]
+name = "a long out of range taken"
+file = "crates/dom_api/src/value.rs"
+from = '''            Value::Number(n) => Err(ApiError::Type(format!(
+                "{n} is outside the range of a long"
+            ))),'''
+to = '''            Value::Number(n) => Ok(n as i32),'''
+
+[[mutant]]
+name = "JS's numbers not truncated"
+file = "crates/dom_js/src/convert.rs"
+from = '''        Base::EnforcedI32 => {
+            let n = value.number_value(cx.scope()).ok_or(Failed::Threw)?;
+            let n = n.trunc() + 0.0;'''
+to = '''        Base::EnforcedI32 => {
+            let n = value.number_value(cx.scope()).ok_or(Failed::Threw)?;'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "canvas::"]
+
+[[mutant]]
+name = "getImageData's width a plain long"
+file = "crates/dom_api/src/interfaces/modules_canvas.rs"
+from = '''        method getImageData(sx: EnforcedI32, sy: EnforcedI32, sw: EnforcedI32, sh: EnforcedI32, settings: ImageDataSettings)'''
+to = '''        method getImageData(sx: EnforcedI32, sy: EnforcedI32, sw: i32, sh: EnforcedI32, settings: ImageDataSettings)'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "canvas::"]
+
+[[mutant]]
+name = "a guest's s32 not taken as an enforced long"
+file = "crates/dom_wasm/src/host.rs"
+from = '''        (Base::I32 | Base::EnforcedI32, Val::S32(n)) => Value::Number(f64::from(*n)),'''
+to = '''        (Base::I32, Val::S32(n)) => Value::Number(f64::from(*n)),'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "it", "a_guest_uses_a_canvas"]

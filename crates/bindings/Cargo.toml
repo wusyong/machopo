@@ -1,0 +1,30 @@
+[package]
+name = "bindings"
+description = "V8 isolate / context and event loop glue (blink/renderer/platform/bindings)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+base.workspace = true
+# A `gc` heap marking with V8's major GCs (`unified_heap`).
+elise.workspace = true
+v8.workspace = true
+ctor.workspace = true
+tracing.workspace = true
+trace_event.workspace = true
+# The inspector's context data (`auxData`), as JSON.
+serde_json.workspace = true
+
+[dev-dependencies]
+
+[build-dependencies]

@@ -1,0 +1,66 @@
+# Stage 4h-4a, through the renderer and the browser: the session history, `:target`, the
+# top-level frame's `location`, `javascript:` URLs.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it -- next_dom::history_through_the_browser next_dom::the_target_element_follows_the_fragment_on_the_new_dom next_dom::the_top_level_location_navigates next_dom::a_javascript_url_runs_in_the_frame"]
+timeout = 1800
+
+[[mutant]]
+name = "renderer: no same-document commit for the browser"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                if top {
+                    let _ = self
+                        .to_browser
+                        .send(RendererHostMsg::DidCommitSameDocumentNavigation {
+                            url,'''
+to = '''                if top && false {
+                    let _ = self
+                        .to_browser
+                        .send(RendererHostMsg::DidCommitSameDocumentNavigation {
+                            url,'''
+
+[[mutant]]
+name = "renderer: a traversal scrolls when manual"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        if !history.manual_scroll_restoration && fragment {'''
+to = '''        if fragment {'''
+
+[[mutant]]
+name = "renderer: a fragment doesn't scroll"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                if scroll {
+                    self.scroll_next_to_fragment(frame);
+                }'''
+to = '''                let _ = scroll;'''
+
+[[mutant]]
+name = "renderer: the top-level location not the browser's"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            FrameNavigation::To { url, replace } if top => {'''
+to = '''            FrameNavigation::To { url, replace } if top && false => {'''
+
+[[mutant]]
+name = "renderer: the fragment at load sets no target"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            dom_api_next::update_target_element(cx, document, &url);
+            let element = cx.target_element(document)?;'''
+to = '''            let _ = &url;
+            let element = cx.target_element(document)?;'''
+
+[[mutant]]
+name = "dom: a target changed restyles nothing"
+file = "crates/dom_next/src/history.rs"
+from = '''        for changed in [old, element].into_iter().flatten() {
+            self.state_changed(changed, AttributeChanges::TARGET);
+        }'''
+to = '''        let _ = (old, AttributeChanges::TARGET);'''
+
+[[mutant]]
+name = "style: :target not matched"
+file = "crates/style_next/src/selector.rs"
+from = '''            PseudoClass::Target => self.cx.is_target(self.node),'''
+to = '''            PseudoClass::Target => false,'''
+
+[[mutant]]
+name = "renderer: javascript: URLs loaded"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            FrameNavigation::To { url, .. } if url.starts_with("javascript:") => {'''
+to = '''            FrameNavigation::To { url, .. } if url.starts_with("javascript:") && false => {'''

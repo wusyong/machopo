@@ -1,0 +1,30 @@
+# What script reads of the window, from what the page
+# writes as it changes: the scroll offset after a wheel, the viewport's
+# width after a resize, and an iframe without a box with the page's device
+# pixels, which only the rendering update gives it (`devicePixelRatio`
+# lays nothing out). At 2x, so 1 would differ (in a real window the
+# display's scale). 800 wide, as a real window isn't at first; resized once
+# the page is in, as a Wayland compositor overrides a resize that comes
+# before it has configured the new window. And the window scrolled by
+# script, and hit testing from script after a wheel.
+window scale=2
+navigate pages/geometry.html
+wait-loaded
+resize 800 600
+wait-text #out "0 800 same"
+# Script scrolls the window (2b): the next frame shows the green block.
+capture top
+click #scroll
+wait-text #out "300 800 same"
+expect-differs top
+wait-text #events "1"
+# A wheel the compositor scrolls: its `scroll` event once the main thread
+# has the offset (2c).
+wheel-at 400 300 0 200
+wait-change #events
+wait-text #out "500 800 same"
+# What `elementFromPoint` finds there is by the offset the compositor
+# scrolled to, as `scrollY` and `offsetTop` are (2e).
+wait-text #hit "b2 true"
+resize 600 600
+wait-text #out "500 600 same"

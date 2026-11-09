@@ -1,0 +1,8 @@
+<!DOCTYPE html>
+<title>transform-origin: the point in the border box the transform is about</title>
+<link rel="match" href="origin-ref.html">
+<style>html, body { margin: 0 } div { position: absolute; width: 100px; height: 40px; background-color: green }</style>
+<div style="left: 100px; top: 50px; transform-origin: 0 0; transform: rotate(90deg)"></div>
+<div style="left: 300px; top: 50px; transform-origin: right bottom; transform: rotate(180deg)"></div>
+<div style="left: 100px; top: 300px; transform-origin: 10px 30%; transform: scale(2)"></div>
+<div style="left: 500px; top: 300px; -webkit-transform-origin: left; transform: translate(10%, 0) scale(0.5)"></div>

@@ -1,0 +1,38 @@
+# Mutation test of the bindings' interface objects and accessor names,
+# which WPT's idlharness found once fetch() let it run:
+# python3 scripts/test.py mutate rfcs/0027-fetch/mutants-bindings.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "bindings", "interface_prototypes_and_accessor_names"]
+timeout = 900
+
+[[mutant]]
+name = "a writable prototype"
+file = "crates/dom_js/src/templates.rs"
+from = '''        template.read_only_prototype();'''
+to = ''''''
+
+[[mutant]]
+name = "an unnamed getter"
+file = "crates/dom_js/src/templates.rs"
+from = '''            function.set_class_name(string(scope, &format!("get {}", desc.name)));'''
+to = ''''''
+
+[[mutant]]
+name = "an unnamed setter"
+file = "crates/dom_js/src/templates.rs"
+from = '''                setter.set_class_name(string(scope, &format!("set {}", desc.name)));'''
+to = '''                let _ = setter;'''
+
+[[mutant]]
+name = "a Replaceable setter takes any this"
+file = "crates/dom_js/src/templates.rs"
+from = '''    if !valid_this {
+        exception::throw_type_error(scope, "Illegal invocation");
+        return;
+    }'''
+to = '''    let _ = valid_this;'''
+
+[[mutant]]
+name = "a Replaceable setter takes this of any interface"
+file = "crates/dom_js/src/templates.rs"
+from = '''        .is_some_and(|object| (interface.accepts)(object.kind()));'''
+to = '''        .is_some_and(|object| (interface.accepts)(object.kind()) || true);'''

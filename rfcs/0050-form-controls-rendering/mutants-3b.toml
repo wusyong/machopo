@@ -1,0 +1,165 @@
+# 3b: a list box's rows (`layout`), its options' UA rules and the focus
+# dependencies of its rules (`style`), an optgroup's UA shadow tree
+# (`dom_api`), and `size` and `multiple` rebuilding its box (`dom`).
+#   python3 scripts/test.py mutate rfcs/0050-form-controls-rendering/mutants-3b.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::a_list_box"]
+timeout = 900
+
+[[mutant]]
+name = "an optgroup has no UA shadow tree"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''        .is_some_and(|name| name.is_html(&local_name!("optgroup")))
+    {
+        return Some(Tree::OptGroup);'''
+to = '''        .is_some_and(|name| name.is_html(&local_name!("optgroup")) && false)
+    {
+        return Some(Tree::OptGroup);'''
+
+[[mutant]]
+name = "an optgroup's label keeps its white space"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''        let label = label
+            .split([' ', '\t', '\n', '\x0c', '\r'])
+            .filter(|word| !word.is_empty());
+        let label = label.collect::<Vec<_>>().join(" ");'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::an_optgroup"]
+
+[[mutant]]
+name = "an optgroup's label isn't synced"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''        (label, (text.text().unwrap_or_default(), text.to_handle()))
+    };
+    if text.0 != label {
+        m.set_character_data(&text.1, &label)
+            .expect("the label's child is a text");'''
+to = '''        (label, (text.text().unwrap_or_default(), text.to_handle()))
+    };
+    if text.0 != label && false {
+        m.set_character_data(&text.1, &label)
+            .expect("the label's child is a text");'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::an_optgroup"]
+
+[[mutant]]
+name = "a select's size doesn't rebuild its box"
+file = "crates/dom/src/scope.rs"
+from = '''                name.is_attr(&local_name!("size")) || name.is_attr(&local_name!("multiple"))'''
+to = '''                name.is_attr(&local_name!("multiple"))'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::list_boxes"]
+
+[[mutant]]
+name = "a list box's rules ask everyone's focus"
+file = "crates/style/src/lib.rs"
+from = '''                of_list_box |= matches!('''
+to = '''                of_list_box &= matches!('''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::"]
+
+[[mutant]]
+name = "a list box's rules ask any select's focus"
+file = "crates/style/src/lib.rs"
+from = '''                && !theme::uses_menu_list(node)'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::a_list_box"]
+
+[[mutant]]
+name = "a list box's rules ask nothing of the options"
+file = "crates/style/src/lib.rs"
+from = '''                if std::mem::take(&mut of_list_box) {
+                    list_box = list_box.or(found);
+                } else {
+                    rest = rest.or(found);
+                }'''
+to = '''                std::mem::take(&mut of_list_box);
+                list_box = list_box.or(found);'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::a_list_box"]
+
+[[mutant]]
+name = "a list box's options keep its line-height"
+file = "crates/style/resources/html.css"
+from = '''  line-height: normal !important;'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::a_list_box"]
+
+[[mutant]]
+name = "a focused list box's selection is gray"
+file = "crates/style/resources/html.css"
+from = '''  background-color: SelectedItem !important;'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::a_list_box"]
+
+[[mutant]]
+name = "an option in a group isn't indented"
+file = "crates/style/resources/html.css"
+from = '''  padding-left: 20px;'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::a_list_box"]
+
+[[mutant]]
+name = "an option has no padding"
+file = "crates/style/resources/html.css"
+from = '''  padding: 0 2px 1px;'''
+to = ''''''
+
+[[mutant]]
+name = "a list box without size has 3 rows"
+file = "crates/layout/src/control.rs"
+from = '''const DEFAULT_LIST_BOX_SIZE: u32 = 4;'''
+to = '''const DEFAULT_LIST_BOX_SIZE: u32 = 3;'''
+
+[[mutant]]
+name = "an empty list box's rows are a line high"
+file = "crates/layout/src/control.rs"
+from = '''                    empty_row: metrics.ascent.round() + metrics.descent.round() + 1.0,'''
+to = '''                    empty_row: metrics.ascent.round() + metrics.descent.round(),'''
+
+[[mutant]]
+name = "a list box keeps no room for its scrollbar"
+file = "crates/layout/src/lib.rs"
+from = '''            layout_box.taffy_style.scrollbar_width = control::SCROLLBAR_THICKNESS;'''
+to = ''''''
+
+[[mutant]]
+name = "a list box's rows are its shortest's"
+file = "crates/layout/src/lib.rs"
+from = '''                    Some(tallest.map_or(b.layout.size.height, |t| t.max(b.layout.size.height)));'''
+to = '''                    Some(tallest.map_or(b.layout.size.height, |t| t.min(b.layout.size.height)));'''
+
+[[mutant]]
+name = "an optgroup's label is no row"
+file = "crates/layout/src/control.rs"
+from = '''            && element.attr_ref(&dom::name::unlisted::PSEUDO).as_deref() == Some(OPTGROUP_LABEL))'''
+to = '''            && element.attr_ref(&dom::name::unlisted::PSEUDO).as_deref() == Some(OPTGROUP_LABEL)
+            && false)'''
+
+[[mutant]]
+name = "a list box's own height is its rows'"
+file = "crates/layout/src/lib.rs"
+from = '''                .maybe_resolve(inputs.parent_size.height, calc)
+                .is_none()'''
+to = '''                .maybe_resolve(inputs.parent_size.height, calc)
+                .is_none_or(|_| true)'''
+
+[[mutant]]
+name = "a list box's min-height doesn't count"
+file = "crates/layout/src/lib.rs"
+from = '''                        (rows as f32 * row + inset.top + inset.bottom).maybe_clamp(min, max),'''
+to = '''                        (rows as f32 * row + inset.top + inset.bottom).maybe_clamp(None, max),'''
+
+[[mutant]]
+name = "an option has no UA shadow tree"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''        .is_some_and(|name| name.is_html(&local_name!("option")))
+    {
+        return Some(Tree::Option);'''
+to = '''        .is_some_and(|name| name.is_html(&local_name!("option")) && false)
+    {
+        return Some(Tree::Option);'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::an_option"]
+
+[[mutant]]
+name = "an option's children show with its label"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''    for ((old, node), hidden) in [(container, !shown), (slot, shown)] {'''
+to = '''    for ((old, node), hidden) in [(container, !shown)] {
+        let _ = &slot;'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "forms::an_option"]

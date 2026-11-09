@@ -1,0 +1,245 @@
+# Stage 4g-2b-2: on the new DOM, drawImage's three forms, createPattern and CanvasPattern (its
+# setTransform, a fill or stroke style kept with the state), imageSmoothingEnabled and
+# imageSmoothingQuality, and origin-clean: an <img> from another origin without CORS, a canvas
+# that drew one, a pattern of one; the canvas crate's image steps.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p canvas && cargo test -q -p dom_js_next --test it canvas && cargo test -q -p shell --test it next_dom_canvas"]
+timeout = 3000
+
+[[mutant]]
+name = "image: a negative height kept"
+file = "crates/canvas/src/image.rs"
+from = '''let (y, h) = if h < 0.0 { (y + h, -h) } else { (y, h) };'''
+to = '''let (y, h) = (y, h);'''
+
+[[mutant]]
+name = "image: a source past the image not cut"
+file = "crates/canvas/src/image.rs"
+from = '''if sx >= 0.0 && sy >= 0.0 && sx + sw <= image[0] && sy + sh <= image[1] {'''
+to = '''if true {'''
+
+[[mutant]]
+name = "image: numbers not checked"
+file = "crates/canvas/src/image.rs"
+from = '''        .all(f64::is_finite)'''
+to = '''        .all(|_| true)'''
+
+[[mutant]]
+name = "image: a rect of no size drawn"
+file = "crates/canvas/src/image.rs"
+from = '''if src[2] == 0.0 || src[3] == 0.0 || dst[2] == 0.0 || dst[3] == 0.0 {'''
+to = '''if false {'''
+
+[[mutant]]
+name = "image: the density ignored"
+file = "crates/canvas/src/image.rs"
+from = '''src: Some(rect(src, image.density)),'''
+to = '''src: Some(rect(src, 1.0)),'''
+
+[[mutant]]
+name = "image: smoothing ignored"
+file = "crates/canvas/src/image.rs"
+from = '''        filter: state.image_filter(),'''
+to = '''        filter: FilterQuality::Low,'''
+
+[[mutant]]
+name = "image: no global alpha"
+file = "crates/canvas/src/image.rs"
+from = '''        flags: Some(PaintFlags::fill(with_global_alpha(
+            Color::BLACK,
+            state.global_alpha,
+        ))),'''
+to = '''        flags: Some(PaintFlags::fill(Color::BLACK)),'''
+
+[[mutant]]
+name = "image: a canvas's taint dropped"
+file = "crates/canvas/src/image.rs"
+from = '''Some(data) => (data.snapshot(background), data.origin_clean),'''
+to = '''Some(data) => (data.snapshot(background), true),'''
+
+[[mutant]]
+name = "image: nothing drawn is nothing"
+file = "crates/canvas/src/image.rs"
+from = '''    let data = snapshot.or_else(|| {'''
+to = '''    let data = snapshot.or_else(|| -> Option<gfx::ImageData> {
+        return None;'''
+
+[[mutant]]
+name = "image: the empty repetition a SyntaxError"
+file = "crates/canvas/src/image.rs"
+from = '''"repeat" | "" => (true, true),'''
+to = '''"repeat" => (true, true),'''
+
+[[mutant]]
+name = "image: repeat-x along y"
+file = "crates/canvas/src/image.rs"
+from = '''"repeat-x" => (true, false),'''
+to = '''"repeat-x" => (false, true),'''
+
+[[mutant]]
+name = "image: a pattern of nothing of no size"
+file = "crates/canvas/src/image.rs"
+from = '''            (1.0, 1.0),
+        ),'''
+to = '''            (0.0, 0.0),
+        ),'''
+
+[[mutant]]
+name = "image: a pattern clamped past its tile"
+file = "crates/canvas/src/image.rs"
+from = '''        decal: true,'''
+to = '''        decal: false,'''
+
+[[mutant]]
+name = "image: high quality reads back low"
+file = "crates/canvas/src/image.rs"
+from = '''        FilterQuality::High => "high",'''
+to = '''        FilterQuality::High => "low",'''
+
+[[mutant]]
+name = "dom: an opaque image clean"
+file = "crates/dom_next/src/image.rs"
+from = '''if image.is_some() && !origin_clean {'''
+to = '''if false {'''
+
+[[mutant]]
+name = "dom: a broken image has nothing to draw"
+file = "crates/dom_next/src/image.rs"
+from = '''(ImageRequestState::Broken, _) => Err(true),'''
+to = '''(ImageRequestState::Broken, _) => Err(false),'''
+
+[[mutant]]
+name = "dom: an image of no size drawn"
+file = "crates/dom_next/src/image.rs"
+from = '''if size.width > 0 && size.height > 0 =>'''
+to = '''if true =>'''
+
+[[mutant]]
+name = "dom: an updating image drawn"
+file = "crates/dom_next/src/image.rs"
+from = '''        if loader.microtask_queued.get() {
+            return ImageForCanvas::Nothing;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a pending request's image drawn"
+file = "crates/dom_next/src/image.rs"
+from = '''            if requests.pending.is_some() {
+                return Err(false);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: save drops the pattern"
+file = "crates/dom_next/src/canvas.rs"
+from = '''            to.pattern.set(self.gc, from.pattern.get(self.gc));'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a style's pattern not found"
+file = "crates/dom_next/src/canvas.rs"
+from = '''None => slot.pattern.get(self.gc).map(CanvasStyleObject::Pattern),'''
+to = '''None => None,'''
+
+[[mutant]]
+name = "dom: a pattern style not kept"
+file = "crates/dom_next/src/canvas.rs"
+from = '''Some(CanvasStyleObject::Pattern(pattern)) => (None, Some(pattern)),'''
+to = '''Some(CanvasStyleObject::Pattern(_)) => (None, None),'''
+
+[[mutant]]
+name = "api: a pattern style doesn't taint"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''if !cx.with_canvas_pattern(pattern, |pattern| pattern.origin_clean) {'''
+to = '''if false {'''
+
+[[mutant]]
+name = "api: a pattern always smoothed"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''let filter = with_data(cx, this, |data| data.state().image_filter());'''
+to = '''let filter = compositor_paint::FilterQuality::Low;'''
+
+[[mutant]]
+name = "api: an image's density 1"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''let density = if density > 0.0 { density } else { 1.0 };'''
+to = '''let density = 1.0;'''
+
+[[mutant]]
+name = "api: an image at its own size"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''size: (f64::from(size.width) / density, f64::from(size.height) / density),'''
+to = '''size: (f64::from(size.width), f64::from(size.height)),'''
+
+[[mutant]]
+name = "api: a canvas of no height usable"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    if size.0 == 0 || size.1 == 0 {'''
+to = '''    if size.0 == 0 {'''
+
+[[mutant]]
+name = "api: any canvas size has pixels"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    if !canvas::is_valid_bitmap_size(size) {
+        return Ok(Some(image::invalid_canvas_source(size)));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a source canvas not flushed"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''            flush(cx, context, CanvasFlush::Read);
+            let background'''
+to = '''            let background'''
+
+[[mutant]]
+name = "api: drawImage doesn't taint"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''        if !source.origin_clean {
+            data.origin_clean = false;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "api: smoothing can't be turned off"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''data.state_mut().image_smoothing_enabled = value'''
+to = '''data.state_mut().image_smoothing_enabled = true'''
+
+[[mutant]]
+name = "api: any quality is the first"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''image::SMOOTHING_QUALITIES.iter().find(|(name, _)| *name == value)'''
+to = '''image::SMOOTHING_QUALITIES.iter().find(|_| true)'''
+
+[[mutant]]
+name = "api: a pattern's transform ignored"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''cx.with_canvas_pattern(this, |pattern| pattern.transform = matrix);'''
+to = '''let _ = matrix;'''
+
+[[mutant]]
+name = "typed: a pattern is a string"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        if let Some(object) = front.object_if::<dom_next::CanvasPattern>(index) {
+            return Some(CanvasStyleTaken::Pattern(object));
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "typed: any element a source"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''if cx.is_img(node) || cx.is_canvas(node) {'''
+to = '''if true {'''
+
+[[mutant]]
+name = "renderer: an image's request from no origin"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            request.initiator = initiator.clone();'''
+to = '''            let _ = &initiator;'''
+
+[[mutant]]
+name = "renderer: an opaque response clean"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''Ok(response) if response.tainting == ResponseTainting::Opaque'''
+to = '''Ok(response) if response.tainting == ResponseTainting::Basic && false'''

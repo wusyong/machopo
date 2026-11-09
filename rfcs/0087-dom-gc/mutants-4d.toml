@@ -1,0 +1,107 @@
+# Step 4d: the id table. Giving ids (young ones listed), a full GC
+# clearing the dead and freeing empty chunks, a scavenge updating the
+# young through its list, a lookup checking the type and marking what it
+# finds, and the verifier's checks. Run with `RUSTY_V8_ARCHIVE`
+# (`test.py` checks the third-party pins).
+test = ["cargo", "test", "-q", "-p", "gc"]
+timeout = 900
+
+# Giving and looking up.
+
+[[mutant]]
+name = "a young object's id isn't listed"
+file = "crates/gc/src/ids.rs"
+from = '''        if young {
+            self.young.push(self.last);
+        }'''
+to = '''        let _ = young;'''
+
+[[mutant]]
+name = "a lookup doesn't check the type"
+file = "crates/gc/src/heap.rs"
+from = '''        if !erased && index != T::__type().index() {'''
+to = '''        if false && !erased && index != T::__type().index() {'''
+
+[[mutant]]
+name = "a lookup of Erased checks the type"
+file = "crates/gc/src/heap.rs"
+from = '''        let erased = std::ptr::eq(T::__type(), <crate::Erased as HeapType>::__type());'''
+to = '''        let erased = false;'''
+
+[[mutant]]
+name = "a lookup skips the read barrier"
+file = "crates/gc/src/heap.rs"
+from = '''        self.inner.read_weak(offset);
+        // SAFETY: a live object of `cx`'s heap, a `T` (its header says so,'''
+to = '''        // SAFETY: a live object of `cx`'s heap, a `T` (its header says so,'''
+
+# A full GC.
+
+[[mutant]]
+name = "the end clears no id"
+file = "crates/gc/src/heap.rs"
+from = '''        self.ids.borrow_mut().clear(dead);'''
+to = '''        let _ = &self.ids;'''
+
+[[mutant]]
+name = "a dead object's id isn't cleared"
+file = "crates/gc/src/ids.rs"
+from = '''                    if *entry != 0 && dead(*entry) {
+                        *entry = 0;
+                    }'''
+to = '''                    let _ = (&entry, &dead);'''
+
+[[mutant]]
+name = "an empty chunk isn't freed"
+file = "crates/gc/src/ids.rs"
+from = '''                    *slot = None;'''
+to = '''                    let _ = &slot;'''
+
+# A scavenge.
+
+[[mutant]]
+name = "a scavenge leaves the young ids"
+file = "crates/gc/src/heap/young.rs"
+from = '''        self.ids
+            .borrow_mut()
+            .update_young(&after, |offset| self.is_young(offset as usize));'''
+to = '''        let _ = &self.ids;'''
+
+[[mutant]]
+name = "a promoted object's id stays listed"
+file = "crates/gc/src/ids.rs"
+from = '''            if *entry != 0 && young(*entry) {'''
+to = '''            if *entry != 0 {'''
+
+[[mutant]]
+name = "a still young object's id leaves the list"
+file = "crates/gc/src/ids.rs"
+from = '''                kept.push(id);'''
+to = '''                let _ = id;'''
+
+# The verifier.
+
+[[mutant]]
+name = "the verifier skips the ids after a full GC"
+file = "crates/gc/src/heap/verify.rs"
+from = '''            self.check_weak(states, offset, concurrent)
+                .map_err(|problem| format!("id {id}: {problem}"))?;'''
+to = '''            let _ = (id, offset);'''
+
+[[mutant]]
+name = "the verifier skips the empty chunks"
+file = "crates/gc/src/heap/verify.rs"
+from = '''        if ids.has_empty_chunk() {'''
+to = '''        if false && ids.has_empty_chunk() {'''
+
+[[mutant]]
+name = "the verifier skips the young ids not listed"
+file = "crates/gc/src/heap/verify.rs"
+from = '''                if !listed.contains(&id) {'''
+to = '''                if false && !listed.contains(&id) {'''
+
+[[mutant]]
+name = "the verifier skips the listed ids not young"
+file = "crates/gc/src/heap/verify.rs"
+from = '''            if offset == 0 || !self.is_young(offset) {'''
+to = '''            if false && (offset == 0 || !self.is_young(offset)) {'''

@@ -1,0 +1,40 @@
+# Stage 4d (first planned as stage 2's first step, then the last stage's):
+# allocation's size class worked out once per type
+# (`TypeInfo::class`, `page::const_class_for`), the type's JS edges too
+# (`TypeInfo::has_js_edges`), and `publish`'s finalizable bit set by a plain
+# load and store (`Marks::set_finalizable_alone`). `gc`'s tests: the class
+# test, debug builds' check of each allocation's class against the search,
+# the JS edges' (objects that have them are old where an engine drives the
+# heap) and the finalizers'.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "--setenv=RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "cargo", "test", "-q", "-p", "gc"]
+timeout = 120
+
+[[mutant]]
+name = "gc: the compile-time class one too small"
+file = "crates/gc/src/page.rs"
+from = '''        if CLASSES[class] >= bytes {'''
+to = '''        if CLASSES[class] > bytes {'''
+
+[[mutant]]
+name = "gc: a type's class without its header"
+file = "crates/gc/src/types.rs"
+from = '''            class: page::const_class_for((size as usize).saturating_add(page::HEADER_BYTES)),'''
+to = '''            class: page::const_class_for(size as usize),'''
+
+[[mutant]]
+name = "gc: a type's JS edges never found"
+file = "crates/gc/src/types.rs"
+from = '''            js_edges = js_edges || matches!(fields[at].kind, FieldKind::JsEdge);'''
+to = '''            js_edges = js_edges && matches!(fields[at].kind, FieldKind::JsEdge);'''
+
+[[mutant]]
+name = "gc: publish's finalizable bit not set"
+file = "crates/gc/src/page.rs"
+from = '''            word.load(Ordering::Relaxed) | 1u64 << (slot % 64),'''
+to = '''            word.load(Ordering::Relaxed),'''
+
+[[mutant]]
+name = "gc: a type's class taken as large"
+file = "crates/gc/src/types.rs"
+from = '''        (self.class != page::NO_CLASS).then_some(self.class as usize)'''
+to = '''        None'''

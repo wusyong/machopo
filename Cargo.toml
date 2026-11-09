@@ -1,0 +1,222 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+default-members = ["crates/shell"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+license = "MIT OR Apache-2.0"
+
+# Internal crates.
+[workspace.dependencies]
+base = { path = "crates/base" }
+trace_event = { path = "crates/trace_event" }
+gfx = { path = "crates/gfx" }
+protocol = { path = "crates/protocol" }
+compositor_paint = { path = "crates/compositor_paint" }
+raster = { path = "crates/raster" }
+compositor = { path = "crates/compositor" }
+viz = { path = "crates/viz" }
+bindings = { path = "crates/bindings" }
+ipc = { path = "crates/ipc" }
+# The DOM's GC: machopo's own project (not a fork), next to the repo at the
+# commit `third_party.toml` pins; its docs are in ../third_party/elise/docs.
+elise = { path = "../third_party/elise/crates/elise" }
+dom = { path = "crates/dom" }
+dom_api = { path = "crates/dom_api" }
+dom_api_macros = { path = "crates/dom_api_macros" }
+dom_wasm = { path = "crates/dom_wasm" }
+dom_js = { path = "crates/dom_js" }
+canvas = { path = "crates/canvas" }
+html = { path = "crates/html" }
+css = { path = "crates/css" }
+animation = { path = "crates/animation" }
+style_resolver = { path = "crates/style_resolver" }
+style = { path = "crates/style" }
+computed_style = { path = "crates/computed_style" }
+layout = { path = "crates/layout" }
+paint = { path = "crates/paint" }
+net = { path = "crates/net" }
+renderer = { path = "crates/renderer" }
+browser = { path = "crates/browser" }
+driver = { path = "crates/driver" }
+
+# Third-party crates. Pin major versions here only.
+# Our rusty_v8 fork's `machopo` branch, next to the repo (see
+# ../third_party/rusty_v8/README.machopo.md). Pointer compression makes V8
+# check `Object::wrap` tags on unwrap. Linked from the fork's prebuilt
+# `_ptrcomp` library (`.cargo/config.toml`).
+v8 = { version = "=152.2.0", path = "../third_party/rusty_v8", features = ["v8_enable_pointer_compression"] }
+# wasm scripts, in `dom_wasm` only: our fork (`../third_party/wasmtime`, its
+# `machopo` branch), with elise as a collector (`gc-elise`: `dom_wasm`
+# chooses it, its stores borrowing the DOM's heap). Pinned: the Component Model's async ABI
+# is still moving, and each major version changes the API; a fork on
+# another version doesn't build.
+wasmtime = { version = "=50.0.1", path = "../third_party/wasmtime/crates/wasmtime", features = ["gc-elise"] }
+wasmtime-wasi = { version = "=50.0.1", path = "../third_party/wasmtime/crates/wasi" }
+skia-safe = "0.153"
+wgpu = "30"
+winit = "0.30"
+pollster = "1"
+bytemuck = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+# The operating system's monotonic clock (`ipc::TimeTicks`): `clock_gettime`
+# on Unix, `QueryPerformanceCounter` on Windows (both in the tree already,
+# through tokio, mio and others).
+rustix = { version = "1", default-features = false, features = ["std", "time"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Performance"] }
+# Timing the connections reqwest opens (`net`'s connector layer; in the
+# tree already, through reqwest).
+tower-layer = "0.3"
+tower-service = "0.3"
+# Response bodies (`protocol::network`): shared between who loaded them and
+# who keeps them (DevTools), and made from the `Vec` the network service
+# reads into without a copy (in the tree already, through reqwest).
+bytes = { version = "1", features = ["serde"] }
+png = "0.18"
+# PNG's deflate, to read back what `png` wrote (raster's tests).
+fdeflate = "0.3"
+tracing = "0.1"
+# Channels between threads (not the async ones on the network thread).
+# Once the renderer is its own process, the IO threads put what IPC brings
+# into these too.
+crossbeam-channel = "0.5"
+# The compositor's raster workers (in the tree already, through wasmtime).
+rayon = "1.12"
+html5ever = "0.40"
+# SVG files as images: XML from the same project, the same `TreeSink`.
+xml5ever = "0.40"
+# `selectors` 0.40 is built on `cssparser` 0.37, not the newest 0.38.
+cssparser = "0.37"
+selectors = "0.40"
+precomputed-hash = "0.1"
+# Grapheme clusters for editing text controls: the version parley's
+# `parley_engine` already pulls in, with its built-in data.
+icu_segmenter = { version = "2.3", features = ["compiled_data"] }
+# Bidi classes, for HTML's `dir="auto"`: the version `parley_engine`
+# already pulls in, with its built-in data.
+icu_properties = { version = "2.3", features = ["compiled_data"] }
+# Text layout (fontique finds fonts; DirectWrite on Windows). Our fork's
+# `machopo` branch (upstream main plus our changes), next to the repo
+# (`../third_party`, each project its own repository); see
+# ../third_party/parley/README.machopo.md.
+parley = { path = "../third_party/parley/parley" }
+# SVG's own attribute syntax: path data and the `transform` attribute's
+# list (CSS values go through `cssparser`).
+svgtypes = "0.16"
+# 2D geometry for SVG's layout: arcs to curves, path bounds (`svgtypes`
+# is built on it).
+kurbo = "0.13"
+# Block, flexbox and grid layout.
+taffy = { version = "0.15", default-features = false, features = ["std", "block_layout", "float_layout", "flexbox", "grid", "content_size", "calc"] }
+# Only to split faces out of font collections for Skia; the version parley
+# already pulls in.
+read-fonts = "0.41"
+# Fonts made in tests, a lookup or two each: the version on `read-fonts`
+# 0.41.
+write-fonts = "0.50"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Rust's allocator in the `machopo` executable (`shell`): mimalloc v3, built with
+# `cc`, as Chromium's allocations go through PartitionAlloc; the platform's
+# malloc stays C++'s (V8, Skia).
+mimalloc = "0.1.52"
+# FxHash, for tables keyed by machopo's own ids or a fixed set of names, where a
+# key can't be chosen to collide and SipHash's cost is pure overhead.
+rustc-hash = "2"
+scoped-tls = "1"
+# Vectors on the stack while short (`style_resolver`'s cascade); `selectors` uses it
+# already.
+smallvec = "1"
+# The `log` crate's records into `tracing` (tracing-subscriber's), and its
+# levels as `log`'s: `shell` sets how far those records go.
+tracing-log = "0.2"
+# Network (`net`). reqwest's default TLS: rustls with aws-lc-rs, which
+# builds with just a C compiler, and certificates checked against the OS
+# trust store. Its own redirect following is off; `net` follows them. So
+# is its decompression: `net` decodes the body itself, to know how many
+# bytes came and to keep `Content-Encoding` and `Content-Length`.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2"] }
+# `net`'s decoders of `Content-Encoding` (gzip and deflate, brotli).
+flate2 = "1"
+brotli-decompressor = "6"
+tokio = { version = "1", features = ["rt", "sync"] }
+url = "2"
+# `data:` URLs, by the Fetch Standard's processor (`net`).
+data-url = "0.3"
+encoding_rs = "0.8"
+# `crypto.getRandomValues()`: the operating system's random numbers, as
+# Chromium's renderer takes them (BoringSSL's `RAND_bytes`, `getrandom(2)`).
+getrandom = "0.3"
+# machopodriver: WebDriver's commands, types and capabilities
+# without its server (warp): the driver serves HTTP with hyper, which
+# reqwest already brings.
+webdriver = { version = "0.54", default-features = false }
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+# `machopo --remote-debugging-port`'s websockets (DevTools and other CDP
+# clients), on hyper's upgraded connections; a page's `WebSocket` is to use
+# the same. Without its client (`connect`): machopo only answers there.
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# `/json/new?<url>`'s URL, escaped as a query (`url` brings it).
+percent-encoding = "2"
+# `Machopo.captureWindow`'s pixels, as CDP's binary data, a canvas's
+# `toDataURL` and DevTools' bodies that aren't text: base64.
+base64 = "0.22"
+# The address bar's copy and paste (`ui::Clipboard`). Text only: without
+# the default `image-data` feature.
+arboard = { version = "3", default-features = false }
+
+# Proc-macro and test-only crates.
+syn = "2"
+quote = "1"
+proc-macro2 = "1"
+trybuild = "1"
+# Only the declarative `ctor!`, through `bindings`'s re-export.
+ctor = { version = "1", default-features = false, features = ["std"] }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+# `unsafe` is confined to `bindings` (V8 FFI) and `ipc` (the channels' shared
+# memory), which opt back in at their crate roots. Everything else builds on
+# their safe APIs, and on elise's, the GC's.
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "warn"
+# Integer arithmetic and casts say what overflow does: checked, saturating,
+# wrapping, or an `#[expect(..., reason)]` that says why it can't (the rules
+# are in the `base` crate's README; `sanity.py numerics` checks the
+# exceptions). Tests are exempt, at each root.
+arithmetic_side_effects = "warn"
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+cast_possible_wrap = "warn"
+
+[profile.dev]
+# V8 and Skia are prebuilt; keep our own code debuggable but make the
+# rasteriser / pixel loops bearable in debug builds.
+opt-level = 1
+# File and line in backtraces, but no variables or types for a debugger:
+# about a third of the debug info, so the tests that link V8 link about
+# twice as fast (Chromium's `symbol_level = 1`). For a debugger, build with
+# `CARGO_PROFILE_DEV_DEBUG=full`.
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+# What `bench.py speedometer` measures machopo with: release, with the link-time
+# optimization Chrome's official build has (ThinLTO; not its PGO), and line
+# tables so that a profiler names functions and lines (no change to the
+# code generated).
+[profile.perf]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"

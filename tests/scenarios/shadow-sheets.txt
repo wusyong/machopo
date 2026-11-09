@@ -1,0 +1,14 @@
+# A shadow tree's own sheets (tests/scenarios/pages/shadow-sheets.html): its
+# `<style>` gives the host a blue border, the slotted text orange, its band
+# gray and 200px wide (the document's `p` rule doesn't reach it), and a
+# constructed sheet it adopts the teal bar 150px; the note says "ok". A click on the host
+# gives it the class `on`: the border turns green (`:host(.on)`).
+window size=400x300
+navigate pages/shadow-sheets.html
+wait-loaded
+wait-text #note "ok"
+screenshot sheets
+capture before-click
+click #host
+expect-differs before-click #host
+screenshot on

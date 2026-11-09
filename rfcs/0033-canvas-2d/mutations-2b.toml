@@ -1,0 +1,387 @@
+# Step 2b's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0033-canvas-2d/mutations-2b.toml`. Each names the tests closest to
+# what it breaks.
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_text"]
+timeout = 1500
+
+# dom_api: the text prepared, the style it is laid out in.
+
+[[mutant]]
+name = "a tab kept"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            '\t' | '\n' | '\u{c}' | '\r' => ' ','''
+to = '''            '\n' | '\u{c}' | '\r' => ' ','''
+
+[[mutant]]
+name = "U+000B made a space"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            '\t' | '\n' | '\u{c}' | '\r' => ' ','''
+to = '''            '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' => ' ','''
+
+[[mutant]]
+name = "a spacing's em against 16px"
+file = "crates/dom_api/src/canvas.rs"
+from = '''spacing.to_px(state.font.size)'''
+to = '''spacing.to_px(16.0)'''
+
+[[mutant]]
+name = "inherit always ltr"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        direction: state.direction.unwrap_or_else(|| directionality(canvas)),'''
+to = '''        direction: state.direction.unwrap_or(Direction::Ltr),'''
+
+[[mutant]]
+name = "the kerning not passed on"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        kerning: state.font_kerning,
+    }'''
+to = '''        kerning: computed_style::FontKerning::Auto,
+    }'''
+
+# dom_api: directionality.
+
+[[mutant]]
+name = "dir=ltr not its own"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            Some(DirState::Ltr) => return Direction::Ltr,'''
+to = '''            Some(DirState::Ltr) => false,'''
+
+[[mutant]]
+name = "a bdi with no dir not auto"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            None => element.element_name().is_some_and(|name| name.is_html("bdi")),'''
+to = '''            None => false,'''
+
+[[mutant]]
+name = "the parent's not inherited"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            Some(parent) if parent.kind() == dom::NodeKind::Element => element = parent,'''
+to = '''            Some(parent) if false => element = parent,'''
+
+[[mutant]]
+name = "auto with no strong character inherits"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            return auto_directionality(element).unwrap_or(Direction::Ltr);'''
+to = '''            if let Some(direction) = auto_directionality(element) {
+                return direction;
+            }'''
+
+[[mutant]]
+name = "dir matched case-sensitively"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    match dir.to_ascii_lowercase().as_str() {'''
+to = '''    match dir.as_str() {'''
+
+[[mutant]]
+name = "an SVG element's dir"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if name.namespace.url() != dom::Namespace::HTML {
+        return None;
+    }
+    let dir'''
+to = '''    let _ = name;
+    let dir'''
+
+[[mutant]]
+name = "auto reads what a script holds"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            ["bdi", "script", "style", "textarea"]'''
+to = '''            ["bdi", "style", "textarea"]'''
+
+[[mutant]]
+name = "auto reads what a bdi holds"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            ["bdi", "script", "style", "textarea"]'''
+to = '''            ["script", "style", "textarea"]'''
+
+[[mutant]]
+name = "auto reads what an element with its own dir holds"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        }) || dir_state(node).is_some()'''
+to = '''        })'''
+
+[[mutant]]
+name = "an Arabic letter not right to left"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                BidiClass::RightToLeft | BidiClass::ArabicLetter => Some(Direction::Rtl),'''
+to = '''                BidiClass::RightToLeft => Some(Direction::Rtl),'''
+
+[[mutant]]
+name = "auto stops at the end of a nested element"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                at = at.parent().filter(|parent| *parent != element)?;'''
+to = '''                return None;'''
+
+# dom_api: the baselines.
+
+[[mutant]]
+name = "top at hhea's ascent"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        TextBaseline::Top => metrics.typo_ascent,'''
+to = '''        TextBaseline::Top => metrics.ascent,'''
+
+[[mutant]]
+name = "bottom at hhea's descent"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        TextBaseline::Bottom => -metrics.typo_descent,'''
+to = '''        TextBaseline::Bottom => -metrics.descent,'''
+
+[[mutant]]
+name = "middle halfway between hhea's"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        TextBaseline::Middle => (metrics.typo_ascent - metrics.typo_descent) / 2.0,'''
+to = '''        TextBaseline::Middle => (metrics.ascent - metrics.descent) / 2.0,'''
+
+[[mutant]]
+name = "hanging at 80% of the typo ascent"
+file = "crates/dom_api/src/canvas.rs"
+from = '''metrics.hanging.unwrap_or(metrics.ascent * 0.8)'''
+to = '''metrics.hanging.unwrap_or(metrics.typo_ascent * 0.8)'''
+
+[[mutant]]
+name = "hanging not BASE's"
+file = "crates/dom_api/src/canvas.rs"
+from = '''metrics.hanging.unwrap_or(metrics.ascent * 0.8)'''
+to = '''metrics.ascent * 0.8'''
+
+[[mutant]]
+name = "ideographic at the typo descent"
+file = "crates/dom_api/src/canvas.rs"
+from = '''metrics.ideographic.unwrap_or(-metrics.descent)'''
+to = '''metrics.ideographic.unwrap_or(-metrics.typo_descent)'''
+
+[[mutant]]
+name = "ideographic not BASE's"
+file = "crates/dom_api/src/canvas.rs"
+from = '''metrics.ideographic.unwrap_or(-metrics.descent)'''
+to = '''-metrics.descent'''
+
+[[mutant]]
+name = "alphabetic not BASE's"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        TextBaseline::Alphabetic => metrics.alphabetic.unwrap_or(0.0),'''
+to = '''        TextBaseline::Alphabetic => 0.0,'''
+
+[[mutant]]
+name = "the baseline not moved"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let baseline = y as f32 + baseline_offset(state.text_baseline, &shaped.metrics);'''
+to = '''    let baseline = y as f32;'''
+
+# dom_api: drawing.
+
+[[mutant]]
+name = "a NaN x drawn"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if !x.is_finite() || !y.is_finite() {
+        return;
+    }
+    if max_width'''
+to = '''    if max_width'''
+
+[[mutant]]
+name = "a maxWidth of 0 drawn"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if max_width.is_some_and(|width| !width.is_finite() || width <= 0.0) {'''
+to = '''    if max_width.is_some_and(|width| !width.is_finite()) {'''
+
+[[mutant]]
+name = "an infinite maxWidth drawn"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if max_width.is_some_and(|width| !width.is_finite() || width <= 0.0) {'''
+to = '''    if max_width.is_some_and(|width| width.is_nan() || width <= 0.0) {'''
+
+[[mutant]]
+name = "drawn where no frame shows the document"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        read.document_frame(&canvas.document().to_handle())?;'''
+to = ''''''
+
+[[mutant]]
+name = "the direction not used for start and end"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let rtl = direction == Direction::Rtl;'''
+to = '''    let rtl = false;'''
+
+[[mutant]]
+name = "centered at the start"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        (TextAlign::Center, _) => width / 2.0,'''
+to = '''        (TextAlign::Center, _) => 0.0,'''
+
+[[mutant]]
+name = "aligned by the width before squeezing"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let width = squeeze.unwrap_or(font_width);'''
+to = '''    let width = font_width;'''
+
+[[mutant]]
+name = "stretched to a wider maxWidth"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let squeeze = max_width.filter(|&width| width < font_width);'''
+to = '''    let squeeze = max_width;'''
+
+[[mutant]]
+name = "the left end not scaled back"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let origin = PointF::new((left / scale) as f32, baseline);'''
+to = '''    let origin = PointF::new(left as f32, baseline);'''
+
+[[mutant]]
+name = "no scale for maxWidth"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    record_under(cx, this, [scale, 0.0, 0.0, 1.0, 0.0, 0.0], ops);'''
+to = '''    record_under(cx, this, IDENTITY, ops);'''
+
+[[mutant]]
+name = "the scale after the transform"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        let matrix = multiply(transform, local);'''
+to = '''        let matrix = multiply(local, transform);'''
+
+[[mutant]]
+name = "a glyph's own height left out"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                .map(|p| PointF::new(origin.x + p.x, origin.y + p.y))'''
+to = '''                .map(|p| PointF::new(origin.x + p.x, origin.y))'''
+
+[[mutant]]
+name = "text stroked with the fill's flags"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let flags = if stroke {'''
+to = '''    let flags = if false {'''
+
+[[mutant]]
+name = "text filled without globalAlpha"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    } else {
+        PaintFlags::fill(with_global_alpha(state.fill_style, state.global_alpha))
+    };'''
+to = '''    } else {
+        PaintFlags::fill(state.fill_style)
+    };'''
+
+[[mutant]]
+name = "text drawn under a transform that can't be inverted"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        if !data.has_valid_size() || !invertible(transform) {'''
+to = '''        if !data.has_valid_size() {'''
+
+# layout: the line laid out.
+
+[[mutant]]
+name = "the base direction always ltr"
+file = "crates/layout/src/canvas_text.rs"
+from = '''        Direction::Rtl => parley::BaseDirection::Rtl,'''
+to = '''        Direction::Rtl => parley::BaseDirection::Ltr,'''
+test = ["cargo", "test", "-q", "-p", "layout", "--lib", "canvas_text"]
+
+[[mutant]]
+name = "positions from the line's top"
+file = "crates/layout/src/canvas_text.rs"
+from = '''                .map(|g| (g.id as u16, PointF::new(g.x, g.y - baseline)))'''
+to = '''                .map(|g| (g.id as u16, PointF::new(g.x, g.y)))'''
+test = ["cargo", "test", "-q", "-p", "layout", "--lib", "canvas_text"]
+
+[[mutant]]
+name = "empty text a font size wide"
+file = "crates/layout/src/canvas_text.rs"
+from = '''    if text.is_empty() {
+        return (Vec::new(), 0.0);
+    }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--lib", "canvas_text"]
+
+[[mutant]]
+name = "no letter spacing"
+file = "crates/layout/src/canvas_text.rs"
+from = '''        StyleProperty::LetterSpacing(style.letter_spacing),'''
+to = '''        StyleProperty::LetterSpacing(0.0),'''
+test = ["cargo", "test", "-q", "-p", "layout", "--lib", "canvas_text"]
+
+[[mutant]]
+name = "no word spacing"
+file = "crates/layout/src/canvas_text.rs"
+from = '''        StyleProperty::WordSpacing(style.word_spacing),'''
+to = '''        StyleProperty::WordSpacing(0.0),'''
+test = ["cargo", "test", "-q", "-p", "layout", "--lib", "canvas_text"]
+
+[[mutant]]
+name = "kerning never turned off"
+file = "crates/layout/src/canvas_text.rs"
+from = '''        FontKerning::None => features.push(feature(b"kern", 0)),'''
+to = '''        FontKerning::None => {}'''
+test = ["cargo", "test", "-q", "-p", "layout", "--lib", "canvas_text"]
+
+[[mutant]]
+name = "the size not passed on"
+file = "crates/layout/src/canvas_text.rs"
+from = '''        StyleProperty::FontSize(font.size),'''
+to = '''        StyleProperty::FontSize(16.0),'''
+test = ["cargo", "test", "-q", "-p", "layout", "--lib", "canvas_text"]
+
+[[mutant]]
+name = "the metrics not the first font's"
+file = "crates/layout/src/canvas_text.rs"
+from = '''        .map(|run| font_metrics(&run.font, run.size))'''
+to = '''        .map(|_| FontMetrics::default())'''
+test = ["cargo", "test", "-q", "-p", "layout", "--lib", "canvas_text"]
+
+[[mutant]]
+name = "hhea's descent with its sign"
+file = "crates/layout/src/canvas_text.rs"
+from = '''            -f32::from(hhea.descender().to_i16()) * scale,'''
+to = '''            f32::from(hhea.descender().to_i16()) * scale,'''
+test = ["cargo", "test", "-q", "-p", "layout", "--lib", "canvas_text"]
+
+[[mutant]]
+name = "the typo ascent not normalized"
+file = "crates/layout/src/canvas_text.rs"
+from = '''            layout_unit(size * typo_ascent / height),'''
+to = '''            layout_unit(typo_ascent),'''
+test = ["cargo", "test", "-q", "-p", "layout", "--lib", "canvas_text"]
+
+[[mutant]]
+name = "the typo values not rounded"
+file = "crates/layout/src/canvas_text.rs"
+from = '''    (value * 64.0).round() / 64.0'''
+to = '''    value'''
+test = ["cargo", "test", "-q", "-p", "layout", "--lib", "canvas_text"]
+
+[[mutant]]
+name = "BASE's baselines not read"
+file = "crates/layout/src/canvas_text.rs"
+from = '''        hanging: base(b"hang"),'''
+to = '''        hanging: None,'''
+test = ["cargo", "test", "-q", "-p", "layout", "--lib", "canvas_text"]
+
+[[mutant]]
+name = "BASE's tags not matched"
+file = "crates/layout/src/canvas_text.rs"
+from = '''    let index = tags.baseline_tags().iter().position(|t| t.get() == tag)?;'''
+to = '''    let index = tags.baseline_tags().iter().position(|_| true)?;'''
+test = ["cargo", "test", "-q", "-p", "layout", "--lib", "canvas_text"]
+
+# renderer: the layout and the shared cache.
+
+[[mutant]]
+name = "the renderer lays no text out"
+file = "crates/renderer/src/layout_client.rs"
+from = '''        Some(shaped)
+    }'''
+to = '''        let _ = shaped;
+        None
+    }'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "canvas_2d"]
+
+[[mutant]]
+name = "a cache for each flush"
+file = "crates/renderer/src/canvas.rs"
+from = '''    raster::draw_into(
+        &list,
+        cache,'''
+to = '''    let _ = cache;
+    raster::draw_into(
+        &list,
+        &mut RasterCache::default(),'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "canvas::"]

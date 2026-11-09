@@ -1,0 +1,156 @@
+# Mutation test of stage 4a (`<img>`'s loading and members):
+# python3 scripts/test.py mutate rfcs/0028-html-window-batch-2/mutants-4a.toml
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "navigation", "img"]
+timeout = 900
+
+# --- Update the image data ----------------------------------------------------
+
+[[mutant]]
+name = "an attribute change doesn't update the image data"
+file = "crates/dom_api/src/image.rs"
+from = '''    if is(RELEVANT_ATTRIBUTES) && is_img(m, element) {
+        m.record_image_change(element);
+    }'''
+to = '''    if is(RELEVANT_ATTRIBUTES) && is_img(m, element) {
+    }'''
+
+[[mutant]]
+name = "an image the document has waits for a microtask"
+file = "crates/dom_api/src/image.rs"
+from = '''        match frame.cached_image(url.as_str())? {'''
+to = '''        match None? {'''
+
+[[mutant]]
+name = "the src is resolved before the microtask"
+file = "crates/dom_api/src/image.rs"
+from = '''            cx.queue_microtask(crate::microtask::Microtask::UpdateImageData {
+                element: element.clone(),
+                generation,
+            });'''
+to = '''            continue_update(cx, element, generation, false);'''
+test = ["python3", "scripts/test.py", "wpt", "the-img-element/image-base-url"]
+
+[[mutant]]
+name = "an empty src fires no error"
+file = "crates/dom_api/src/image.rs"
+from = '''            has_src.then_some(false)'''
+to = '''            None'''
+
+[[mutant]]
+name = "a superseded update runs on"
+file = "crates/dom_api/src/image.rs"
+from = '''    let Some(mut request) = request.filter(|r| r.generation == generation) else {'''
+to = '''    let Some(mut request) = request else {'''
+
+[[mutant]]
+name = "an event for an old request fires"
+file = "crates/dom_api/src/image.rs"
+from = '''    if request.generation != generation {
+        return;
+    }
+    let decodes'''
+to = '''    let decodes'''
+
+[[mutant]]
+name = "a request delays no load event"
+file = "crates/dom_api/src/image.rs"
+from = '''        !request.lazy && (event.is_some() || request.state == ImageRequestState::Unavailable);'''
+to = '''        false;'''
+
+[[mutant]]
+name = "the event doesn't end the delay"
+file = "crates/dom_api/src/image.rs"
+from = '''        stop_delaying(&mut m, &mut request);
+        m.set_image_request(element, request);'''
+to = '''        m.set_image_request(element, request);'''
+
+[[mutant]]
+name = "the renderer doesn't wait for the delay count"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        }) && !self.load_event_delayed
+            && self.parser.is_none()'''
+to = '''        })
+            && self.parser.is_none()'''
+
+# --- Members --------------------------------------------------------------------
+
+[[mutant]]
+name = "complete is true while loading"
+file = "crates/dom_api/src/image.rs"
+from = '''    Ok(request(cx, this).is_none_or(|r| r.state != ImageRequestState::Unavailable))'''
+to = '''    Ok(true)'''
+
+[[mutant]]
+name = "currentSrc is the URL while loading"
+file = "crates/dom_api/src/image.rs"
+from = '''        .filter(|r| r.state != ImageRequestState::Unavailable)
+        .map(|r| r.url)'''
+to = '''        .map(|r| r.url)'''
+
+[[mutant]]
+name = "width ignores the box"
+file = "crates/dom_api/src/image.rs"
+from = '''    if let Some(element_box) = crate::box_geometry::element_box(cx, this) {'''
+to = '''    if let Some(element_box) = None::<dom::ElementBox> {'''
+
+[[mutant]]
+name = "width ignores the attribute"
+file = "crates/dom_api/src/image.rs"
+from = '''    if let Some(value) = attribute.as_deref().and_then(parse_non_negative_integer) {'''
+to = '''    if let Some(value) = None::<i32> {'''
+
+[[mutant]]
+name = "decode of an available image doesn't check the request"
+file = "crates/dom_api/src/image.rs"
+from = '''        r.generation == generation && r.state == ImageRequestState::CompletelyAvailable'''
+to = '''        r.state == ImageRequestState::CompletelyAvailable'''
+
+[[mutant]]
+name = "a replaced request's decodes don't reject"
+file = "crates/dom_api/src/image.rs"
+from = '''    for promise in &old.decodes {
+        reject_decode(&mut m, document, *promise);
+    }'''
+to = '''    let _ = &old.decodes;'''
+
+[[mutant]]
+name = "Image() drops its height"
+file = "crates/dom_api/src/image.rs"
+from = '''    let attributes = [("width", width), ("height", height)]'''
+to = '''    let attributes = [("width", width), ("height", None)]'''
+
+[[mutant]]
+name = "loading's invalid value is lazy"
+file = "crates/dom_api/src/image.rs"
+from = '''reflected!(loading, set_loading: enumerated "loading", &["lazy", "eager"], Some("eager"), "eager");'''
+to = '''reflected!(loading, set_loading: enumerated "loading", &["lazy", "eager"], Some("eager"), "lazy");'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "html_element", "img_"]
+
+# --- The renderer -----------------------------------------------------------------
+
+[[mutant]]
+name = "an error status is a broken image"
+file = "crates/renderer/src/frame_view.rs"
+from = '''    match raster::image_size(&response.body) {
+        Some(size) => ImageState::Loaded {'''
+to = '''    if !(200..300).contains(&response.status) {
+        return ImageState::Failed;
+    }
+    match raster::image_size(&response.body) {
+        Some(size) => ImageState::Loaded {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "network", "an_image_with_an_error_status_shows"]
+
+[[mutant]]
+name = "the frame doesn't answer from its images"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        let available = self.images.borrow().get(&url).copied();
+        if available.is_none() {'''
+to = '''        let available = None;
+        if available.is_none() {'''
+
+[[mutant]]
+name = "an image the frame fetched isn't told to its elements"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                        self.images_fetched.push((img, url.clone(), available));'''
+to = ''''''
+

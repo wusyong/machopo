@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<title>A document's load waits for its iframes' documents to load</title>
+<link rel=match href=f7-load-waits-for-children-ref.html>
+<style>
+  body { margin: 0; }
+  iframe { display: none; }
+  div { width: 100px; height: 100px; background-color: red; }
+</style>
+<div id="result"></div>
+<iframe src="support/f7-child.html"></iframe>
+<script>
+  onload = () => {
+    const child = frames[0].document;
+    if (child.readyState === "complete" && child.getElementById("loaded"))
+      document.getElementById("result").style.backgroundColor = "green";
+  };
+</script>

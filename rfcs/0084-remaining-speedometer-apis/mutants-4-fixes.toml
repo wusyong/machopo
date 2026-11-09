@@ -1,0 +1,99 @@
+test = ["sh", "-c", "cargo test -q -p bindings --lib trace && cargo test -q -p dom --test it -- timers:: && cargo test -q -p dom_js --test it -- dispatch:: && cargo test -q -p shell --test it -- script:: scheduling:: file_reader::"]
+timeout = 2400
+
+[[mutant]]
+name = "no checkpoint after a task's callback"
+file = "crates/dom_js/src/host.rs"
+from = '''        self.cx.mutate().timers().finished_timer();
+        self.cx.scope().perform_microtask_checkpoint();'''
+to = '''        self.cx.mutate().timers().finished_timer();'''
+
+[[mutant]]
+name = "a checkpoint after a callback script calls too"
+file = "crates/dom_js/src/host.rs"
+from = '''        if bindings::trace::in_script() {
+            return;
+        }
+        let _span = tracing::trace_span!("RunMicrotasks").entered();'''
+to = '''        let _span = tracing::trace_span!("RunMicrotasks").entered();'''
+
+[[mutant]]
+name = "in_script is always true"
+file = "crates/bindings/src/trace.rs"
+from = '''    SCRIPT_DEPTH.with(|depth| depth.get() > 0)'''
+to = '''    SCRIPT_DEPTH.with(|depth| depth.get() >= 0)'''
+
+[[mutant]]
+name = "the checkpoint before the report"
+file = "crates/dom_api/src/host.rs"
+from = '''    let result = match result {
+        Ok(value) => Ok(value),'''
+to = '''    cx.clean_up_after_callback();
+    let result = match result {
+        Ok(value) => Ok(value),'''
+
+[[mutant]]
+name = "no clean-up after a reported call"
+file = "crates/dom_api/src/host.rs"
+from = '''    cx.clean_up_after_callback();
+    result
+}'''
+to = '''    result
+}'''
+
+[[mutant]]
+name = "the timer's nesting stays through the checkpoint"
+file = "crates/dom_js/src/host.rs"
+from = '''        self.cx.mutate().timers().finished_timer();
+        self.cx.scope().perform_microtask_checkpoint();'''
+to = '''        self.cx.scope().perform_microtask_checkpoint();'''
+
+[[mutant]]
+name = "error listeners are outermost"
+file = "crates/dom_js/src/exception.rs"
+from = '''            let entry = bindings::trace::enter_script();
+            let not_canceled ='''
+to = '''            let entry = ();
+            let not_canceled ='''
+
+[[mutant]]
+name = "the clock isn't read"
+file = "crates/dom/src/timers.rs"
+from = '''        self.clock
+            .map_or(self.now, |start| start.elapsed().as_secs_f64() * 1000.0)'''
+to = '''        self.now'''
+
+[[mutant]]
+name = "set_now keeps the clock"
+file = "crates/dom/src/timers.rs"
+from = '''        self.clock = None;
+        self.now = now;'''
+to = '''        self.now = now;'''
+
+[[mutant]]
+name = "a timer is due by the fixed time"
+file = "crates/dom/src/timers.rs"
+from = '''    pub fn take_due(&mut self) -> Option<(u32, Timer)> {
+        let now = self.now();'''
+to = '''    pub fn take_due(&mut self) -> Option<(u32, Timer)> {
+        let now = self.now;'''
+
+[[mutant]]
+name = "an idle timeout is due by the fixed time"
+file = "crates/dom/src/timers.rs"
+from = '''    pub fn take_due_idle_timeout(&mut self) -> Option<(NodeId, ScriptCallback)> {
+        let now = self.now();'''
+to = '''    pub fn take_due_idle_timeout(&mut self) -> Option<(NodeId, ScriptCallback)> {
+        let now = self.now;'''
+
+[[mutant]]
+name = "a timer counts from the fixed time"
+file = "crates/dom/src/timers.rs"
+from = '''                due: self.now() + timeout,'''
+to = '''                due: self.now + timeout,'''
+
+[[mutant]]
+name = "the renderer's DOM has no clock"
+file = "crates/renderer/src/render_thread.rs"
+from = '''    dom.timers().set_clock(clock.start());'''
+to = '''    let _ = clock;'''

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>J5: requestAnimationFrame runs once a frame; on the fifth frame the box is where five steps put it</title>
+<link rel="match" href="j5-animation-frames-ref.html">
+<style>
+  html, body { margin: 0 }
+  div { width: 100px; height: 100px; background-color: green }
+</style>
+<div id="box"></div>
+<div id="times" style="background-color: red"></div>
+<script>
+  const box = document.getElementById("box");
+  let frames = 0;
+  let first;
+  let ok = true;
+
+  // Never runs: a red box if it did.
+  cancelAnimationFrame(requestAnimationFrame(() => { ok = false; }));
+
+  let last;
+  function step(time) {
+    frames++;
+    // Coarsened to 100 µs, as performance.now() is, and on its timeline:
+    // never past it, each frame's after the one before.
+    if (Math.abs(time * 10 - Math.round(time * 10)) > 1e-6) ok = false;
+    if (time > performance.now() || (last !== undefined && time <= last)) ok = false;
+    last = time;
+    if (first === undefined) first = time;
+    box.setAttribute("style", `margin-left: ${frames * 10}px`);
+    if (frames < 5) {
+      requestAnimationFrame(step);
+      return;
+    }
+    if (ok && time > first) {
+      document.getElementById("times").setAttribute("style", "background-color: green");
+    }
+    document.querySelector("html").classList.remove("reftest-wait");
+  }
+  requestAnimationFrame(step);
+  // One requested during a frame runs in the next, with a later time.
+  requestAnimationFrame((time) => {
+    requestAnimationFrame((later) => { if (later <= time) ok = false; });
+  });
+</script>

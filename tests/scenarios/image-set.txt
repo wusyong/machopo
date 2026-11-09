@@ -1,0 +1,9 @@
+# about:demo's image-set(): on a 2x screen the square on the right of the
+# backgrounds shows the green 2x image, 16 CSS px wide as the blue 1x one
+# would be (`screenshot` to look at; which image loads and its size at
+# each scale are `shell`'s tests).
+window size=800x600 scale=2
+navigate about:demo
+wait-loaded
+scroll-to #bg-set
+screenshot image-set-2x

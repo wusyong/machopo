@@ -1,0 +1,72 @@
+# 4a: stylesheets that block scripts (`html`'s `sink.rs`, the renderer's
+# `frame_view.rs`, `script.rs`, `render_thread.rs`).
+#   python3 scripts/test.py mutate rfcs/0059-style-performance/mutants-4a.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "network::stylesheets_block_the_parsers_scripts"]
+timeout = 1800
+
+[[mutant]]
+name = "the parser's links not marked"
+file = "crates/html/src/sink.rs"
+from = '''            } else if is_parsers_link {'''
+to = '''            } else if false && is_parsers_link {'''
+
+[[mutant]]
+name = "a fragment's links marked too"
+file = "crates/html/src/sink.rs"
+from = '''        let is_parsers_link = self.fragment.is_none() && name.is_html(&local_name!("link"));'''
+to = '''        let is_parsers_link = name.is_html(&local_name!("link"));'''
+
+[[mutant]]
+name = "a link's media not looked at"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                        && media.zip(environment).is_none_or(|(media, environment)| {'''
+to = '''                        && media.zip(environment).is_none_or(|(media, environment)| true || {'''
+
+[[mutant]]
+name = "the main frame's media of its own viewport"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                    let environment = if self.owner.is_none() {
+                        Some(window)'''
+to = '''                    let environment = if self.owner.is_none() {
+                        Some((self.viewport, window.1))'''
+
+[[mutant]]
+name = "a removed link still blocks"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                link.root().id() == self.document.as_node().id()
+                    && style::stylesheet_link_href(link).is_some()'''
+to = '''                style::stylesheet_link_href(link).is_some()'''
+
+[[mutant]]
+name = "a link no longer a stylesheet still blocks"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                link.root().id() == self.document.as_node().id()
+                    && style::stylesheet_link_href(link).is_some()'''
+to = '''                link.root().id() == self.document.as_node().id()'''
+
+[[mutant]]
+name = "the blocking script doesn't wait"
+file = "crates/renderer/src/script.rs"
+from = '''        } else if sheets_loaded && self.blocking.as_ref().is_some_and(|s| s.loaded.is_some()) {'''
+to = '''        } else if self.blocking.as_ref().is_some_and(|s| s.loaded.is_some()) {'''
+
+[[mutant]]
+name = "the deferred scripts don't wait"
+file = "crates/renderer/src/script.rs"
+from = '''        } else if !parsing
+            && sheets_loaded
+            && self.deferred.front()'''
+to = '''        } else if !parsing
+            && self.deferred.front()'''
+
+[[mutant]]
+name = "an inline script doesn't wait"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                if view.has_script_blocking_sheet(&self.dom.borrow_mut().read()) {'''
+to = '''                if false && view.has_script_blocking_sheet(&self.dom.borrow_mut().read()) {'''
+
+[[mutant]]
+name = "a waiting inline script isn't the current script"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    Some(Source::Classic(..) | Source::Inline { .. })'''
+to = '''                    Some(Source::Classic(..))'''

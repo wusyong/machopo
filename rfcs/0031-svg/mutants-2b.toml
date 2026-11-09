@@ -1,0 +1,157 @@
+# Mutation test of step 2b (hit testing, pointer-events, SVG links):
+# python3 scripts/test.py mutate rfcs/0031-svg/mutants-2b.toml
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+timeout = 900
+
+# --- style --------------------------------------------------------------------
+
+[[mutant]]
+name = "visibleFill parses as visibleStroke"
+file = "crates/style/src/properties.rs"
+from = '''                    "visiblefill" => VisibleFill,'''
+to = '''                    "visiblefill" => VisibleStroke,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "svg::pointer_events"]
+
+[[mutant]]
+name = "pointer-events isn't inherited"
+file = "crates/computed_style/src/lib.rs"
+from = '''            pointer_events: parent.pointer_events,'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "svg::pointer_events"]
+
+# --- which part of a shape counts ---------------------------------------------
+
+[[mutant]]
+name = "none is hit"
+file = "crates/paint/src/svg.rs"
+from = '''        PointerEvents::None => return false,'''
+to = '''        PointerEvents::None => (false, true, true),'''
+
+[[mutant]]
+name = "an unpainted fill counts"
+file = "crates/paint/src/svg.rs"
+from = '''        PointerEvents::Auto | PointerEvents::VisiblePainted => (true, fill_painted, stroke_painted),'''
+to = '''        PointerEvents::Auto | PointerEvents::VisiblePainted => (true, true, stroke_painted),'''
+
+[[mutant]]
+name = "visibleStroke counts the fill"
+file = "crates/paint/src/svg.rs"
+from = '''        PointerEvents::VisibleStroke => (true, false, true),'''
+to = '''        PointerEvents::VisibleStroke => (true, true, true),'''
+
+[[mutant]]
+name = "painted is visible only"
+file = "crates/paint/src/svg.rs"
+from = '''        PointerEvents::Painted => (false, fill_painted, stroke_painted),'''
+to = '''        PointerEvents::Painted => (true, fill_painted, stroke_painted),'''
+
+[[mutant]]
+name = "a hidden shape is hit"
+file = "crates/paint/src/svg.rs"
+from = '''    if visible_only && !style.is_visible() {
+        return false;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "bounding-box is the shape"
+file = "crates/paint/src/svg.rs"
+from = '''            let bounds = to_kurbo(path).bounding_box();
+            return bounds.contains(kurbo::Point::new(point.x.into(), point.y.into()));'''
+to = '''            let _ = path;
+            (true, true, true)'''
+
+# --- the geometry -------------------------------------------------------------
+
+[[mutant]]
+name = "even-odd is non-zero"
+file = "crates/paint/src/svg.rs"
+from = '''            FillRule::EvenOdd => winding % 2 != 0,'''
+to = '''            FillRule::EvenOdd => winding != 0,'''
+
+[[mutant]]
+name = "the edges aren't inside"
+file = "crates/paint/src/svg.rs"
+from = '''        if inside || on_outline(&path, at) {'''
+to = '''        if inside {'''
+
+[[mutant]]
+name = "a stroke's dashes are ignored"
+file = "crates/paint/src/svg.rs"
+from = '''        stroke = stroke.with_dashes(dash.phase().into(), pattern);'''
+to = '''        let _ = (dash, pattern);'''
+
+[[mutant]]
+name = "a conic is its ends' lines"
+file = "crates/paint/src/svg.rs"
+from = '''                let k = 4.0 * w / (3.0 * (1.0 + w));'''
+to = '''                let k = 0.0 * w;'''
+
+[[mutant]]
+name = "a stroke is never hit"
+file = "crates/paint/src/svg.rs"
+from = '''    stroke && shape.stroke_width > 0.0 && {'''
+to = '''    false && {'''
+
+# --- the walk -----------------------------------------------------------------
+
+[[mutant]]
+name = "an svg's content isn't hit"
+file = "crates/paint/src/hit_test.rs"
+from = '''            if let Some(hit) = svg.children.iter().rev().find_map(|n| self.svg_node(n, scroll)) {
+                return Some(hit);
+            }
+        }'''
+to = '''            let _ = (svg, scroll);
+        }'''
+
+[[mutant]]
+name = "a later shape isn't over an earlier one"
+file = "crates/paint/src/hit_test.rs"
+from = '''            if let Some(hit) = svg.children.iter().rev().find_map(|n| self.svg_node(n, scroll)) {'''
+to = '''            if let Some(hit) = svg.children.iter().find_map(|n| self.svg_node(n, scroll)) {'''
+
+[[mutant]]
+name = "a container is never found"
+file = "crates/paint/src/hit_test.rs"
+from = '''            children.iter().any(|child| svg_hit(pre, in_state, child))'''
+to = '''            children.iter().any(|_| false)'''
+
+[[mutant]]
+name = "a shape is tested in the root's space"
+file = "crates/paint/src/hit_test.rs"
+from = '''            in_state(pre.svg_states[&node.node]).is_some_and(|p| shape_hit(node, shape, p))'''
+to = '''            in_state(PropertyTreeState::ROOT).is_some_and(|p| shape_hit(node, shape, p))'''
+
+[[mutant]]
+name = "pointer-events: none boxes are hit"
+file = "crates/paint/src/hit_test.rs"
+from = '''            || fragment.style.pointer_events == PointerEvents::None
+        {'''
+to = '''        {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "geometry::pointer_events"]
+
+[[mutant]]
+name = "pointer-events: none text is hit"
+file = "crates/paint/src/hit_test.rs"
+from = '''    style.is_visible() && style.pointer_events != PointerEvents::None'''
+to = '''    style.is_visible()'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "geometry::pointer_events", "child_frames::a_child_frame_under"]
+
+# --- SVG links ----------------------------------------------------------------
+
+[[mutant]]
+name = "an SVG a follows no link"
+file = "crates/dom_api/src/activation.rs"
+from = '''    let behavior: &'static dyn ActivationBehavior = if name.is_html("a") || name.is_svg("a") {'''
+to = '''    let behavior: &'static dyn ActivationBehavior = if name.is_html("a") {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "events::an_svg_link"]
+
+[[mutant]]
+name = "xlink:href isn't read"
+file = "crates/dom_api/src/activation.rs"
+from = '''            .is_some_and(|name| name.is_svg("a"))
+            .then(|| {'''
+to = '''            .is_some_and(|_| false)
+            .then(|| {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "events::an_svg_link"]

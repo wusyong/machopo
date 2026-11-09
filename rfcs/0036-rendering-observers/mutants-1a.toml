@@ -1,0 +1,125 @@
+# Mutation test of step 1a (the GC types, the window's observers,
+# `observe`, `unobserve`, `disconnect`):
+# python3 scripts/test.py mutate rfcs/0036-rendering-observers/mutants-1a.toml
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "resize_observers::"]
+timeout = 600
+
+# dom: who keeps whom.
+
+[[mutant]]
+name = "an observation doesn't keep its observer"
+file = "crates/dom/src/resize_observer.rs"
+from = '''        observation
+            .get()
+            .observer
+            .set(self, observer.persistent());'''
+to = ''''''
+
+[[mutant]]
+name = "the window doesn't remember its observer"
+file = "crates/dom/src/resize_observer.rs"
+from = '''        window
+            .object()
+            .resize_observers
+            .insert(self, observer.persistent());'''
+to = ''''''
+
+[[mutant]]
+name = "the observer doesn't remember its observation"
+file = "crates/dom/src/resize_observer.rs"
+from = '''        observer
+            .object()
+            .observations
+            .insert(self, observation.persistent());'''
+to = ''''''
+
+[[mutant]]
+name = "the element's list keeps only its first observation"
+file = "crates/dom/src/resize_observer.rs"
+from = '''                tail.next.set(self, observation.persistent());'''
+to = ''''''
+
+[[mutant]]
+name = "unobserving the first on an element leaves it on the list"
+file = "crates/dom/src/resize_observer.rs"
+from = '''            rare.resize_observations.set_from(self, &observation.next);'''
+to = ''''''
+
+[[mutant]]
+name = "unobserving a later one leaves it on the list"
+file = "crates/dom/src/resize_observer.rs"
+from = '''                current.next.set_from(self, &observation.next);'''
+to = ''''''
+
+[[mutant]]
+name = "disconnect leaves the observations on their elements"
+file = "crates/dom/src/resize_observer.rs"
+from = '''        for observation in observer.observations.live(self.roots) {
+            self.unlink_resize_observation(observation.get());
+        }'''
+to = ''''''
+
+# dom: observing again, reporting, order.
+
+[[mutant]]
+name = "observing again with another box adds a second observation"
+file = "crates/dom/src/resize_observer.rs"
+from = '''        self.unobserve_resize(observer, target);
+        let order = self.next_observer_order();'''
+to = '''        let order = self.next_observer_order();'''
+
+[[mutant]]
+name = "observing again with the same box replaces it"
+file = "crates/dom/src/resize_observer.rs"
+from = '''        if same {
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "what was reported isn't recorded"
+file = "crates/dom/src/resize_observer.rs"
+from = '''                observation.last_reported.set(Some(size));'''
+to = ''''''
+
+[[mutant]]
+name = "the observations aren't in the order they were made"
+file = "crates/dom/src/resize_observer.rs"
+from = '''        observations.sort_by_key(|observation| observation.get().order);'''
+to = ''''''
+
+[[mutant]]
+name = "the window's observers aren't in the order they were made"
+file = "crates/dom/src/resize_observer.rs"
+from = '''        observers.sort_by_key(|observer| observer.object().order);'''
+to = ''''''
+
+# dom: entries.
+
+[[mutant]]
+name = "an entry doesn't keep its target"
+file = "crates/dom/src/resize_observer.rs"
+from = '''        object.target.set(self, target.persistent());'''
+to = ''''''
+
+[[mutant]]
+name = "an entry's border box is its content box"
+file = "crates/dom/src/resize_observer.rs"
+from = '''        object.border_box_size.set(self, border_box.persistent());'''
+to = '''        object.border_box_size.set(self, content_box.persistent());'''
+
+# dom_api: the box option.
+
+[[mutant]]
+name = "border-box observes the content box"
+file = "crates/dom_api/src/resize_observer.rs"
+from = '''        ResizeObserverBoxOptions::BorderBox => ResizeObserverBox::BorderBox,'''
+to = '''        ResizeObserverBoxOptions::BorderBox => ResizeObserverBox::ContentBox,'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "resize_observers::"]
+
+[[mutant]]
+name = "unobserve does nothing"
+file = "crates/dom_api/src/resize_observer.rs"
+from = '''    cx.mutate().unobserve_resize(this, &target);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "resize_observers::"]

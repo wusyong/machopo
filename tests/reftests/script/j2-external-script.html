@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<title>J2: an external script loads and runs before what follows it parses; a failed load is skipped; defer runs after parsing, async once loaded</title>
+<link rel="match" href="j2-external-script-ref.html">
+<style>
+  html, body { margin: 0 }
+  div { width: 100px; height: 100px }
+</style>
+<!-- Runs after parsing, so it sees the last element. -->
+<script defer src="resources/j2-defer.js"></script>
+<div id="for-async" style="background-color: red"></div>
+<!-- Runs once loaded: `for-async` is parsed by then, whenever that is. -->
+<script async src="resources/j2-async.js"></script>
+<!-- Fails to load: parsing carries on. -->
+<script src="resources/does-not-exist.js"></script>
+<!-- Appends a box where the parser is: before `last`. -->
+<script src="resources/j2-blocking.js"></script>
+<div id="last" style="background-color: blue"></div>

@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<title>A use draws what it references at its x and y; the copy inherits from the use; defs aren't drawn</title>
+<link rel="match" href="rect-ref.html">
+<style>body { margin: 0 } svg { display: block }</style>
+<svg width="100" height="60">
+  <defs><rect id="r" width="20" height="20"/></defs>
+  <use href="#r" x="10" y="10" fill="lime"/>
+  <use xlink:href="#r" x="30" y="10" style="fill: lime"/>
+</svg>

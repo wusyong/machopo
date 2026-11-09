@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<title>List items' markers and counters</title>
+<link rel="match" href="g2-lists-ref.html">
+<!-- css-lists 3: an outside marker ends where its list item's content box
+     starts, on its first line, in the marker's own color; an inside one is
+     the first inline box of the first line; `<ol start>` and `<li value>`
+     number the items; `counter()` in a `::before`. -->
+<style>
+  body { margin: 0 }
+  ol, div { margin: 0; padding-left: 100px; font: 20px/1 Ahem; color: green }
+  ::marker { color: blue }
+  .c { counter-reset: c }
+  .c p { margin: 0; counter-increment: c }
+  .c p::before { content: counter(c, upper-roman) " "; color: blue }
+</style>
+<ol start="9"><li>X<li>XX</ol>
+<ol style="list-style-position: inside"><li value="3">X</ol>
+<ol style="list-style-type: none"><li>X</ol>
+<div class="c"><p>X<p>X</div>

@@ -1,0 +1,26 @@
+# Stage 3a-2: the DOM's strings their thread's (a count that isn't atomic),
+# finalized on the heap's thread, copied into V8. That a string isn't
+# `Send` is checked as `dom_next` builds (its `use std::rc::Rc` made
+# `std::sync::Arc as Rc` doesn't build), not by a mutant here.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_next"]
+timeout = 600
+
+[[mutant]]
+name = "the values table never drops a value"
+file = "crates/dom_next/src/string.rs"
+from = '''        Rc::strong_count(&self.text) == 1'''
+to = '''        false'''
+
+[[mutant]]
+name = "the values table drops values others hold"
+file = "crates/dom_next/src/string.rs"
+from = '''        Rc::strong_count(&self.text) == 1'''
+to = '''        true'''
+
+[[mutant]]
+name = "the string cache keeps no entry"
+file = "crates/dom_js_next/src/strings.rs"
+from = '''        let (local, weak) = Self::make(scope, self.dead(), string)?;
+        self.insert(string, weak);'''
+to = '''        let (local, _weak) = Self::make(scope, self.dead(), string)?;'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it", "strings::"]

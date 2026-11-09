@@ -1,0 +1,587 @@
+{
+ "env": {
+  "date": "2026-10-27",
+  "kun": "88b4e8073b09",
+  "profile": "perf",
+  "chrome": "152.0.7977.82",
+  "os": "macOS 26.6.2 (arm64)",
+  "cpu": "Apple M4",
+  "cores": 10,
+  "cpus": "all",
+  "power": "AC",
+  "gpu": "unknown",
+  "note": "stage 1e: bench.py blink-perf --next-dom, 3 runs each; the median over the runs of each run's median; the GC's medians over the runs (ns), the pauses over all of them; the full results (15 MB, every pause) stay in target/bench/blink_perf/next-dom.json"
+ },
+ "pages": {
+  "bindings/create-element.html": {
+   "wasm detached": {
+    "unit": "runs/s",
+    "median": 512.8205212495154,
+    "errors": [],
+    "gc": {
+     "window_ns": 17749400001,
+     "gc_ns": 2804799688,
+     "in_engine_ns": 0,
+     "by_kind_ns": {
+      "marking": 972363062,
+      "atomic": 463798457,
+      "young": 0,
+      "sweeping": 1365050251,
+      "other": 0
+     },
+     "pauses_per_run": 35619.0,
+     "pause_p50_ns": 14625,
+     "pause_p95_ns": 34250,
+     "pause_max_ns": 66176583,
+     "background_gc_ns": 1013425542
+    }
+   },
+   "wasm next": {
+    "unit": "runs/s",
+    "median": 1129.2909895707483,
+    "errors": [],
+    "gc": {
+     "window_ns": 15622000000,
+     "gc_ns": 2060596,
+     "in_engine_ns": 0,
+     "by_kind_ns": {
+      "marking": 0,
+      "atomic": 0,
+      "young": 2060596,
+      "sweeping": 0,
+      "other": 0
+     },
+     "pauses_per_run": 4028.0,
+     "pause_p50_ns": 458,
+     "pause_p95_ns": 542,
+     "pause_max_ns": 16750,
+     "background_gc_ns": 0
+    }
+   },
+   "JS today": {
+    "unit": "runs/s",
+    "median": 579.372194386015,
+    "errors": [],
+    "gc": {
+     "window_ns": 19566700000,
+     "gc_ns": 2525994026,
+     "in_engine_ns": 0,
+     "by_kind_ns": {
+      "marking": 762137419,
+      "atomic": 1096325622,
+      "young": 36408208,
+      "sweeping": 604615648,
+      "other": 39876
+     },
+     "pauses_per_run": 73290.66666666667,
+     "pause_p50_ns": 7584,
+     "pause_p95_ns": 15041,
+     "pause_max_ns": 76256833,
+     "background_gc_ns": 1397628468
+    }
+   },
+   "JS next": {
+    "unit": "runs/s",
+    "median": 1248.699271592095,
+    "errors": [],
+    "gc": {
+     "window_ns": 16718800000,
+     "gc_ns": 5282495911,
+     "in_engine_ns": 471090783,
+     "by_kind_ns": {
+      "marking": 143863027,
+      "atomic": 899435666,
+      "young": 4247656682,
+      "sweeping": 211957,
+      "other": 34206
+     },
+     "pauses_per_run": 4010.6666666666665,
+     "pause_p50_ns": 22250,
+     "pause_p95_ns": 6171417,
+     "pause_max_ns": 46647000,
+     "background_gc_ns": 5910274219
+    }
+   },
+   "JS Chrome": {
+    "unit": "runs/s",
+    "median": 4131.165573492933,
+    "errors": []
+   }
+  },
+  "bindings/gc-forest.html": {
+   "wasm detached": {
+    "unit": "ms",
+    "median": 370.94999999999993,
+    "errors": [],
+    "gc": {
+     "window_ns": 8891200000,
+     "gc_ns": 1378318618,
+     "in_engine_ns": 0,
+     "by_kind_ns": {
+      "marking": 484289827,
+      "atomic": 239171873,
+      "young": 0,
+      "sweeping": 658413457,
+      "other": 0
+     },
+     "pauses_per_run": 15647.333333333334,
+     "pause_p50_ns": 14542,
+     "pause_p95_ns": 22583,
+     "pause_max_ns": 93059459,
+     "background_gc_ns": 481572874
+    }
+   },
+   "wasm next": {
+    "unit": "ms",
+    "median": 176.74999999999994,
+    "errors": [],
+    "gc": {
+     "window_ns": 3566100000,
+     "gc_ns": 460659,
+     "in_engine_ns": 0,
+     "by_kind_ns": {
+      "marking": 0,
+      "atomic": 0,
+      "young": 460659,
+      "sweeping": 0,
+      "other": 0
+     },
+     "pauses_per_run": 916.0,
+     "pause_p50_ns": 458,
+     "pause_p95_ns": 625,
+     "pause_max_ns": 15875,
+     "background_gc_ns": 0
+    }
+   },
+   "JS today": {
+    "unit": "ms",
+    "median": 268.8000000000003,
+    "errors": [],
+    "gc": {
+     "window_ns": 6646200000,
+     "gc_ns": 1078824007,
+     "in_engine_ns": 0,
+     "by_kind_ns": {
+      "marking": 263894891,
+      "atomic": 458195332,
+      "young": 30133626,
+      "sweeping": 327729043,
+      "other": 15544
+     },
+     "pauses_per_run": 19138.333333333332,
+     "pause_p50_ns": 7666,
+     "pause_p95_ns": 17125,
+     "pause_max_ns": 82908833,
+     "background_gc_ns": 610155787
+    }
+   },
+   "JS next": {
+    "unit": "ms",
+    "median": 154.00000000000006,
+    "errors": [],
+    "gc": {
+     "window_ns": 3385700000,
+     "gc_ns": 1088821357,
+     "in_engine_ns": 134878382,
+     "by_kind_ns": {
+      "marking": 47346082,
+      "atomic": 203902293,
+      "young": 837494461,
+      "sweeping": 197375,
+      "other": 25203
+     },
+     "pauses_per_run": 697.0,
+     "pause_p50_ns": 22084,
+     "pause_p95_ns": 6129166,
+     "pause_max_ns": 48952833,
+     "background_gc_ns": 1195244756
+    }
+   },
+   "JS Chrome": {
+    "unit": "ms",
+    "median": 47.35000002384186,
+    "errors": []
+   }
+  },
+  "bindings/gc-mini-tree.html": {
+   "wasm detached": {
+    "unit": "ms",
+    "median": 693.9499999999998,
+    "errors": [],
+    "gc": {
+     "window_ns": 14961000000,
+     "gc_ns": 1429567381,
+     "in_engine_ns": 0,
+     "by_kind_ns": {
+      "marking": 519452256,
+      "atomic": 230376959,
+      "young": 0,
+      "sweeping": 679640249,
+      "other": 0
+     },
+     "pauses_per_run": 17799.0,
+     "pause_p50_ns": 16583,
+     "pause_p95_ns": 35750,
+     "pause_max_ns": 34234750,
+     "background_gc_ns": 499574874
+    }
+   },
+   "wasm next": {
+    "unit": "ms",
+    "median": 254.0,
+    "errors": [],
+    "gc": {
+     "window_ns": 5111900000,
+     "gc_ns": 1241968,
+     "in_engine_ns": 0,
+     "by_kind_ns": {
+      "marking": 0,
+      "atomic": 0,
+      "young": 1241968,
+      "sweeping": 0,
+      "other": 0
+     },
+     "pauses_per_run": 916.0,
+     "pause_p50_ns": 1209,
+     "pause_p95_ns": 1917,
+     "pause_max_ns": 15500,
+     "background_gc_ns": 0
+    }
+   },
+   "JS today": {
+    "unit": "ms",
+    "median": 335.4000000000001,
+    "errors": [],
+    "gc": {
+     "window_ns": 7954200001,
+     "gc_ns": 1052465993,
+     "in_engine_ns": 0,
+     "by_kind_ns": {
+      "marking": 276789331,
+      "atomic": 450139291,
+      "young": 12158166,
+      "sweeping": 313377371,
+      "other": 18043
+     },
+     "pauses_per_run": 21287.333333333332,
+     "pause_p50_ns": 7542,
+     "pause_p95_ns": 17416,
+     "pause_max_ns": 71041125,
+     "background_gc_ns": 559080120
+    }
+   },
+   "JS next": {
+    "unit": "ms",
+    "median": 176.7499999999999,
+    "errors": [],
+    "gc": {
+     "window_ns": 3829500000,
+     "gc_ns": 1098358878,
+     "in_engine_ns": 133108854,
+     "by_kind_ns": {
+      "marking": 47324047,
+      "atomic": 200415417,
+      "young": 849559876,
+      "sweeping": 213092,
+      "other": 14875
+     },
+     "pauses_per_run": 540.3333333333334,
+     "pause_p50_ns": 22625,
+     "pause_p95_ns": 6373000,
+     "pause_max_ns": 48710250,
+     "background_gc_ns": 1295529866
+    }
+   },
+   "JS Chrome": {
+    "unit": "ms",
+    "median": 72.94999992847443,
+    "errors": []
+   }
+  },
+  "bindings/gc-tree.html": {
+   "wasm detached": {
+    "unit": "ms",
+    "median": 992.3500000000004,
+    "errors": [],
+    "gc": {
+     "window_ns": 20948500001,
+     "gc_ns": 1426085000,
+     "in_engine_ns": 0,
+     "by_kind_ns": {
+      "marking": 509965696,
+      "atomic": 231596414,
+      "young": 0,
+      "sweeping": 683664958,
+      "other": 0
+     },
+     "pauses_per_run": 17798.333333333332,
+     "pause_p50_ns": 16375,
+     "pause_p95_ns": 34750,
+     "pause_max_ns": 32034708,
+     "background_gc_ns": 503905541
+    }
+   },
+   "wasm next": {
+    "unit": "ms",
+    "median": 390.7500000000003,
+    "errors": [],
+    "gc": {
+     "window_ns": 7802900000,
+     "gc_ns": 960120080,
+     "in_engine_ns": 0,
+     "by_kind_ns": {
+      "marking": 0,
+      "atomic": 26247506,
+      "young": 926399451,
+      "sweeping": 0,
+      "other": 0
+     },
+     "pauses_per_run": 150.0,
+     "pause_p50_ns": 7622750,
+     "pause_p95_ns": 9721667,
+     "pause_max_ns": 18875125,
+     "background_gc_ns": 460147289
+    }
+   },
+   "JS today": {
+    "unit": "ms",
+    "median": 391.49999999999955,
+    "errors": [],
+    "gc": {
+     "window_ns": 11156599999,
+     "gc_ns": 2424685970,
+     "in_engine_ns": 0,
+     "by_kind_ns": {
+      "marking": 99491980,
+      "atomic": 1642529496,
+      "young": 86738335,
+      "sweeping": 565776098,
+      "other": 18663
+     },
+     "pauses_per_run": 8068.333333333333,
+     "pause_p50_ns": 7833,
+     "pause_p95_ns": 117541,
+     "pause_max_ns": 459577625,
+     "background_gc_ns": 2641878098
+    }
+   },
+   "JS next": {
+    "unit": "ms",
+    "median": 197.45000000000027,
+    "errors": [],
+    "gc": {
+     "window_ns": 4289300000,
+     "gc_ns": 1111960217,
+     "in_engine_ns": 135571899,
+     "by_kind_ns": {
+      "marking": 48106950,
+      "atomic": 203538252,
+      "young": 860001420,
+      "sweeping": 199418,
+      "other": 15419
+     },
+     "pauses_per_run": 699.6666666666666,
+     "pause_p50_ns": 22500,
+     "pause_p95_ns": 6288875,
+     "pause_max_ns": 47737500,
+     "background_gc_ns": 1334242965
+    }
+   },
+   "JS Chrome": {
+    "unit": "ms",
+    "median": 94.60000002384186,
+    "errors": []
+   }
+  },
+  "bindings/insert-before.html": {
+   "wasm detached": {
+    "unit": "runs/s",
+    "median": 57.34602667474867,
+    "errors": [],
+    "gc": {
+     "window_ns": 17506600000,
+     "gc_ns": 0,
+     "in_engine_ns": 0,
+     "by_kind_ns": {
+      "marking": 0,
+      "atomic": 0,
+      "young": 0,
+      "sweeping": 0,
+      "other": 0
+     },
+     "pauses_per_run": 0.0,
+     "pause_p50_ns": 0,
+     "pause_p95_ns": 0,
+     "pause_max_ns": 0,
+     "background_gc_ns": 0
+    }
+   },
+   "wasm next": {
+    "unit": "runs/s",
+    "median": 111.83181055976436,
+    "errors": [],
+    "gc": {
+     "window_ns": 17910600001,
+     "gc_ns": 0,
+     "in_engine_ns": 0,
+     "by_kind_ns": {
+      "marking": 0,
+      "atomic": 0,
+      "young": 0,
+      "sweeping": 0,
+      "other": 0
+     },
+     "pauses_per_run": 0.0,
+     "pause_p50_ns": 0,
+     "pause_p95_ns": 0,
+     "pause_max_ns": 0,
+     "background_gc_ns": 0
+    }
+   },
+   "JS today": {
+    "unit": "runs/s",
+    "median": 132.81120189595748,
+    "errors": [],
+    "gc": {
+     "window_ns": 16082000000,
+     "gc_ns": 3517054,
+     "in_engine_ns": 0,
+     "by_kind_ns": {
+      "marking": 0,
+      "atomic": 0,
+      "young": 3503095,
+      "sweeping": 0,
+      "other": 13959
+     },
+     "pauses_per_run": 99.33333333333333,
+     "pause_p50_ns": 31125,
+     "pause_p95_ns": 55125,
+     "pause_max_ns": 71500,
+     "background_gc_ns": 236376
+    }
+   },
+   "JS next": {
+    "unit": "runs/s",
+    "median": 444.80146700856494,
+    "errors": [],
+    "gc": {
+     "window_ns": 16260300001,
+     "gc_ns": 4557288,
+     "in_engine_ns": 0,
+     "by_kind_ns": {
+      "marking": 0,
+      "atomic": 0,
+      "young": 4535831,
+      "sweeping": 0,
+      "other": 21457
+     },
+     "pauses_per_run": 160.33333333333334,
+     "pause_p50_ns": 22750,
+     "pause_p95_ns": 45167,
+     "pause_max_ns": 65625,
+     "background_gc_ns": 212710
+    }
+   },
+   "JS Chrome": {
+    "unit": "runs/s",
+    "median": 307.71204427922396,
+    "errors": []
+   }
+  },
+  "parser/innerHTML-setter.html": {
+   "wasm detached": {
+    "unit": "runs/s",
+    "median": 2554.3806457763317,
+    "errors": [],
+    "gc": {
+     "window_ns": 19333700000,
+     "gc_ns": 4831214857,
+     "in_engine_ns": 0,
+     "by_kind_ns": {
+      "marking": 1855382061,
+      "atomic": 726881213,
+      "young": 0,
+      "sweeping": 2257410831,
+      "other": 0
+     },
+     "pauses_per_run": 56812.333333333336,
+     "pause_p50_ns": 20125,
+     "pause_p95_ns": 48208,
+     "pause_max_ns": 113216125,
+     "background_gc_ns": 1610813081
+    }
+   },
+   "wasm next": {
+    "unit": "runs/s",
+    "median": 3053.241493320784,
+    "errors": [],
+    "gc": {
+     "window_ns": 15734800000,
+     "gc_ns": 204611093,
+     "in_engine_ns": 0,
+     "by_kind_ns": {
+      "marking": 0,
+      "atomic": 11084258,
+      "young": 193503977,
+      "sweeping": 0,
+      "other": 0
+     },
+     "pauses_per_run": 4322.0,
+     "pause_p50_ns": 51083,
+     "pause_p95_ns": 59375,
+     "pause_max_ns": 125166,
+     "background_gc_ns": 18229823
+    }
+   },
+   "JS today": {
+    "unit": "runs/s",
+    "median": 2611.3825593253887,
+    "errors": [],
+    "gc": {
+     "window_ns": 21471100001,
+     "gc_ns": 3062890589,
+     "in_engine_ns": 0,
+     "by_kind_ns": {
+      "marking": 869947049,
+      "atomic": 1162114878,
+      "young": 872500,
+      "sweeping": 1030870897,
+      "other": 40839
+     },
+     "pauses_per_run": 109055.0,
+     "pause_p50_ns": 7583,
+     "pause_p95_ns": 14708,
+     "pause_max_ns": 71675583,
+     "background_gc_ns": 1563201779
+    }
+   },
+   "JS next": {
+    "unit": "runs/s",
+    "median": 3096.375949815625,
+    "errors": [],
+    "gc": {
+     "window_ns": 15944100000,
+     "gc_ns": 191396369,
+     "in_engine_ns": 0,
+     "by_kind_ns": {
+      "marking": 0,
+      "atomic": 0,
+      "young": 191367198,
+      "sweeping": 0,
+      "other": 36128
+     },
+     "pauses_per_run": 584.0,
+     "pause_p50_ns": 246458,
+     "pause_p95_ns": 786292,
+     "pause_max_ns": 1090083,
+     "background_gc_ns": 290999
+    }
+   },
+   "JS Chrome": {
+    "unit": "runs/s",
+    "median": 12882.956371799792,
+    "errors": []
+   }
+  }
+ }
+}

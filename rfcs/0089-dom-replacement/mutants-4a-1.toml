@@ -1,0 +1,270 @@
+# Stage 4a-1: the id table and `getElementById`; selector queries
+# (`querySelector(All)`, `matches`, `closest`) and their fast paths; the
+# static `NodeList`, `classList` and `dataset`; named properties in the V8
+# bindings.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_next", "-p", "style_next", "-p", "dom_api_next", "-p", "dom_js_next"]
+timeout = 1800
+
+[[mutant]]
+name = "a second element with the id is taken as the first"
+file = "crates/dom_next/src/ids.rs"
+from = '''            entry.first = (entry.count == 0).then_some(id);'''
+to = '''            entry.first = Some(id);'''
+
+[[mutant]]
+name = "the first leaving keeps it the first"
+file = "crates/dom_next/src/ids.rs"
+from = '''            } else if entry.first == Some(id) {
+                entry.first = None;
+            }'''
+to = '''            }'''
+
+[[mutant]]
+name = "an entry stays when no element has the id"
+file = "crates/dom_next/src/ids.rs"
+from = '''            if entry.count == 0 {
+                table.entries.remove(&key);
+            } else if'''
+to = '''            if'''
+
+[[mutant]]
+name = "a document's data isn't made for its first id"
+file = "crates/dom_next/src/ids.rs"
+from = '''        self.ensure_document_data(document);
+'''
+to = ''''''
+
+[[mutant]]
+name = "an element coming in isn't added"
+file = "crates/dom_next/src/style.rs"
+from = '''                self.id_added(self.document_of(parent), at);'''
+to = ''''''
+
+[[mutant]]
+name = "an element leaving isn't removed"
+file = "crates/dom_next/src/style.rs"
+from = '''                self.id_removed(self.document_of(parent), at, key);'''
+to = ''''''
+
+[[mutant]]
+name = "an id's change isn't followed"
+file = "crates/dom_next/src/style.rs"
+from = '''            if name == ID_ATTRIBUTE {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "the old id stays in the table"
+file = "crates/dom_next/src/style.rs"
+from = '''            self.id_removed(document, element, old.addr());'''
+to = ''''''
+
+[[mutant]]
+name = "a lone id below an element by the table"
+file = "crates/style_next/src/query.rs"
+from = '''        if let Fast::Id(id) = &self.fast
+            && cx.kind(root) == NodeKind::Document'''
+to = '''        if let Fast::Id(id) = &self.fast'''
+
+[[mutant]]
+name = "a lone class compares as written in quirks mode"
+file = "crates/style_next/src/query.rs"
+from = '''                    let name = if in_quirks { lower } else { name };'''
+to = ''''''
+
+[[mutant]]
+name = "a lone type compares as written"
+file = "crates/style_next/src/query.rs"
+from = '''        && cx.is_html_document(cx.document_of(element));'''
+to = '''        && false;'''
+
+[[mutant]]
+name = "no scope element"
+file = "crates/style_next/src/query.rs"
+from = '''            context.scope_element = scope.map(|scope| NextElement { node: scope, ..next }.opaque());'''
+to = ''''''
+
+[[mutant]]
+name = "closest doesn't look at the element itself"
+file = "crates/style_next/src/query.rs"
+from = '''        let mut at = Some(element);
+        while'''
+to = '''        let mut at = cx.parent(element);
+        while'''
+
+[[mutant]]
+name = "a new class list each time"
+file = "crates/dom_next/src/lists.rs"
+from = '''        data.class_list.set(self.gc, Some(list));'''
+to = ''''''
+
+[[mutant]]
+name = "a new dataset each time"
+file = "crates/dom_next/src/lists.rs"
+from = '''        data.dataset.set(self.gc, Some(map));'''
+to = ''''''
+
+[[mutant]]
+name = "an empty set adds the attribute"
+file = "crates/dom_api_next/src/token_list.rs"
+from = '''    if tokens.is_empty() && cx.attribute_value_by_id(element, names::CLASS).is_none() {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "add appends a token it has"
+file = "crates/dom_api_next/src/token_list.rs"
+from = '''        if !tokens.iter().any(|have| have == token) {
+            tokens.push(token.to_owned());
+        }'''
+to = '''        tokens.push(token.to_owned());'''
+
+[[mutant]]
+name = "contains looks before the classes are made"
+file = "crates/dom_api_next/src/token_list.rs"
+from = '''    let classes = cx.class_names(element(cx, this));
+    Ok(names::find(token).is_some_and(|name| classes.iter().any(|class| class.name == name)))'''
+to = '''    Ok(names::find(token).is_some_and(|name| cx.class_names(element(cx, this)).iter().any(|class| class.name == name)))'''
+
+[[mutant]]
+name = "toggle with force true removes"
+file = "crates/dom_api_next/src/token_list.rs"
+from = '''        Some(index) if force != Some(true) => {'''
+to = '''        Some(index) => {'''
+
+[[mutant]]
+name = "toggle with force false adds"
+file = "crates/dom_api_next/src/token_list.rs"
+from = '''        None if force != Some(false) => {'''
+to = '''        None => {'''
+
+[[mutant]]
+name = "replace keeps both"
+file = "crates/dom_api_next/src/token_list.rs"
+from = '''    tokens.retain(|have| have != new_token || !std::mem::replace(&mut kept, true));'''
+to = ''''''
+
+[[mutant]]
+name = "replace checks whitespace first"
+file = "crates/dom_api_next/src/token_list.rs"
+from = '''    check_empty(token)?;
+    check_empty(new_token)?;
+    check(token)?;'''
+to = '''    check(token)?;'''
+
+[[mutant]]
+name = "a token with whitespace taken"
+file = "crates/dom_api_next/src/token_list.rs"
+from = '''    if token.bytes().any(|byte| byte.is_ascii_whitespace()) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "supports answers"
+file = "crates/dom_api_next/src/token_list.rs"
+from = '''    Err(ApiError::type_error(
+        "the 'class' attribute has no supported tokens",
+    ))'''
+to = '''    Ok(false)'''
+
+[[mutant]]
+name = "an undefined force is false"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        Some((!front.is_undefined(index)).then(|| front.bool_arg(index)))'''
+to = '''        Some(Some(front.bool_arg(index)))'''
+
+[[mutant]]
+name = "variadic strings: the first only"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        (index..front.arg_count())'''
+to = '''        (index..front.arg_count().min(index + 1))'''
+
+[[mutant]]
+name = "a namespaced data- attribute is a pair"
+file = "crates/dom_api_next/src/dataset.rs"
+from = '''        if name.namespace() != names::NONE {
+            continue;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "an upper-case data- attribute is a pair"
+file = "crates/dom_api_next/src/dataset.rs"
+from = '''        if rest.bytes().any(|byte| byte.is_ascii_uppercase()) {
+            continue;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a name with a dash before a lower-case letter set"
+file = "crates/dom_api_next/src/dataset.rs"
+from = '''    if has_dash_before_lower(name) {
+        return Err('''
+to = '''    if false {
+        return Err('''
+
+[[mutant]]
+name = "an invalid attribute name set"
+file = "crates/dom_api_next/src/dataset.rs"
+from = '''    if !names_check::is_valid_attribute_local_name(&local) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a name with a dash before a lower-case letter deleted"
+file = "crates/dom_api_next/src/dataset.rs"
+from = '''    if !has_dash_before_lower(name) {'''
+to = '''    if true {'''
+
+[[mutant]]
+name = "named properties don't shadow the prototype's"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''            named.options(desc.override_builtins),'''
+to = '''            named.options(false),'''
+
+[[mutant]]
+name = "named properties aren't enumerable"
+file = "crates/dom_js_next/src/named.rs"
+from = '''                if calls.names.is_none() {'''
+to = '''                if true {'''
+
+[[mutant]]
+name = "no enumerator"
+file = "crates/dom_js_next/src/named.rs"
+from = '''            enumerator: self.names.is_some(),'''
+to = '''            enumerator: false,'''
+
+[[mutant]]
+name = "an accessor defined through the setter"
+file = "crates/dom_js_next/src/named.rs"
+from = '''        if descriptor.has_get() || descriptor.has_set() {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "indices aren't names"
+file = "crates/bindings/src/isolate_state.rs"
+from = '''    template.set_indexed_property_handler(indexed);
+}'''
+to = '''    let _ = indexed;
+}'''
+
+[[mutant]]
+name = "anonymous operations on the prototype"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''            self.named.add::<M>(named);
+            return;'''
+to = '''            self.named.add::<M>(named);'''
+
+[[mutant]]
+name = "a document's ids found by a walk"
+file = "crates/dom_next/src/ids.rs"
+from = '''        if self.kind(root) != NodeKind::Document || !self.is_connected(root) {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "the first found isn't kept"
+file = "crates/dom_next/src/ids.rs"
+from = '''                entry.first = Some(first);'''
+to = ''''''
+
+[[mutant]]
+name = "an id doesn't flag its element"
+file = "crates/dom_next/src/style.rs"
+from = '''            element.flags.set(element.flags.get() | HAS_ID);'''
+to = ''''''

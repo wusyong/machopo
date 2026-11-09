@@ -1,0 +1,249 @@
+# The third stage's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0030-testdriver/mutations-stage3.toml`. Each runs machopodriver's own
+# `actions` tests (the key tables, the ticks, a window on a clock the test
+# moves), unless it names its own: machopodriver against kun (`webdriver`), or
+# kun's automation messages (`automation_pipe`).
+#
+# Not here: the input state a closed window leaves in the session's map
+# (equivalent: nothing reaches it again, a window's handle isn't reused);
+# the renderer dispatching the move waiting for a frame as its tab is
+# hidden (no test can make the move reach the main thread before the
+# hiding and after its last frame: input comes through the compositor
+# thread, the hiding straight; in `docs/testing.md`).
+test = ["cargo", "test", "-q", "-p", "driver", "--lib"]
+timeout = 900
+
+[[mutant]]
+name = "the numpad's Enter isn't Enter"
+file = "crates/driver/src/actions.rs"
+from = '''        '\u{E006}' | '\u{E007}' => "Enter",'''
+to = '''        '\u{E006}' => "Enter",'''
+
+[[mutant]]
+name = "the right-hand modifiers are on the left"
+file = "crates/driver/src/actions.rs"
+from = '''        Some('\u{E050}'..='\u{E053}') => 2,'''
+to = '''        Some('\u{E050}'..='\u{E053}') => 1,'''
+
+[[mutant]]
+name = "the numpad's digits have the digit row's keyCode"
+file = "crates/driver/src/actions.rs"
+from = '''            digit => digit.parse::<u16>().map_or(0, |n| 96 + n),'''
+to = '''            digit => digit.parse::<u16>().map_or(0, |n| 48 + n),'''
+
+[[mutant]]
+name = "Enter types nothing"
+file = "crates/driver/src/actions.rs"
+from = '''    if key == "Enter" {
+        return "\r".into();
+    }'''
+to = '''    if key == "Enter" {
+        return String::new();
+    }'''
+
+[[mutant]]
+name = "WebDriver's code points with no key type themselves"
+file = "crates/driver/src/actions.rs"
+from = '''    let reserved = single(raw).is_some_and(|c| ('\u{E000}'..='\u{E05D}').contains(&c));'''
+to = '''    let reserved = false;'''
+
+[[mutant]]
+name = "a key pressed again doesn't repeat"
+file = "crates/driver/src/actions.rs"
+from = '''    let repeat = !keys.pressed.insert(key.to_owned());'''
+to = '''    keys.pressed.insert(key.to_owned());
+    let repeat = false;'''
+
+[[mutant]]
+name = "Shift isn't held"
+file = "crates/driver/src/actions.rs"
+from = '''        "Shift" => keys.shift = true,'''
+to = '''        "Shift" => {}'''
+
+[[mutant]]
+name = "a key up of a key not down is dispatched"
+file = "crates/driver/src/actions.rs"
+from = '''    if !keys.pressed.remove(key) {
+        return Ok(());
+    }'''
+to = '''    keys.pressed.remove(key);'''
+
+[[mutant]]
+name = "a press 500 ms after the last is a double click"
+file = "crates/driver/src/actions.rs"
+from = '''                && now.saturating_duration_since(at) < DOUBLE_CLICK_TIME'''
+to = '''                && now.saturating_duration_since(at) <= DOUBLE_CLICK_TIME'''
+
+[[mutant]]
+name = "a press 4 px away isn't a double click"
+file = "crates/driver/src/actions.rs"
+from = '''                && (x - last_x).abs() <= DOUBLE_CLICK_RANGE'''
+to = '''                && (x - last_x).abs() < DOUBLE_CLICK_RANGE'''
+
+[[mutant]]
+name = "presses count up across Perform Actions"
+file = "crates/driver/src/actions.rs"
+from = '''            pointer.last_press = None;'''
+to = '''            let _ = pointer;'''
+
+[[mutant]]
+name = "the middle button is the right's bit"
+file = "crates/driver/src/actions.rs"
+from = '''        1 => 4,'''
+to = '''        1 => 2,'''
+
+[[mutant]]
+name = "Release Actions lets go in the order pressed"
+file = "crates/driver/src/actions.rs"
+from = '''    let undo: Vec<_> = state.cancel_list.iter().rev().cloned().collect();'''
+to = '''    let undo: Vec<_> = state.cancel_list.iter().cloned().collect();'''
+
+[[mutant]]
+name = "Release Actions doesn't let go of keys"
+file = "crates/driver/src/actions.rs"
+from = '''                    .push((id.clone(), Action::KeyUp(raw.clone())));'''
+to = '''                    .truncate(usize::MAX);'''
+
+[[mutant]]
+name = "a tick lasts all its durations"
+file = "crates/driver/src/actions.rs"
+from = '''                    tick.duration = tick.duration.max(duration.unwrap_or(0));'''
+to = '''                    tick.duration += duration.unwrap_or(0);'''
+
+[[mutant]]
+name = "a tick doesn't wait"
+file = "crates/driver/src/actions.rs"
+from = '''        if past < lasts {'''
+to = '''        if past < lasts && false {'''
+
+[[mutant]]
+name = "the viewport's far edges are out"
+file = "crates/driver/src/actions.rs"
+from = '''    if !(0.0..=port.width).contains(&x) || !(0.0..=port.height).contains(&y) {'''
+to = '''    if !(0.0..port.width).contains(&x) || !(0.0..port.height).contains(&y) {'''
+
+[[mutant]]
+name = "the pointer origin is the viewport's"
+file = "crates/driver/src/actions.rs"
+from = '''        PointerOrigin::Pointer => from,'''
+to = '''        PointerOrigin::Pointer => (0.0, 0.0 * from.0),'''
+
+[[mutant]]
+name = "a child frame's points are the top-level viewport's"
+file = "crates/driver/src/actions.rs"
+from = '''    Ok(((x, y), (port.x + x, port.y + y)))'''
+to = '''    Ok(((x, y), (x, y)))'''
+
+[[mutant]]
+name = "a pen is a mouse"
+file = "crates/driver/src/actions.rs"
+from = '''                if parameters.pointer_type != PointerType::Mouse {'''
+to = '''                if parameters.pointer_type == PointerType::Touch {'''
+
+[[mutant]]
+name = "the back and forward buttons are no buttons"
+file = "crates/driver/src/actions.rs"
+from = '''        3 | 4 => Err(unsupported(format!("kun's mouse has no button {button}"))),'''
+to = '''        3 | 4 => Err(invalid(format!("kun's mouse has no button {button}"))),'''
+
+[[mutant]]
+name = "durations past the maximum safe integer"
+file = "crates/driver/src/actions.rs"
+from = '''    safe(duration, "duration")?;'''
+to = ''''''
+
+[[mutant]]
+name = "a scroll from the pointer"
+file = "crates/driver/src/actions.rs"
+from = '''            if scroll.origin == PointerOrigin::Pointer {'''
+to = '''            if scroll.origin == PointerOrigin::Pointer && false {'''
+
+[[mutant]]
+name = "a source's type changes"
+file = "crates/driver/src/actions.rs"
+from = '''            Some((_, source)) if std::mem::discriminant(source) == std::mem::discriminant(&new) => {'''
+to = '''            Some((_, source)) if std::mem::discriminant(source) == std::mem::discriminant(source) => {'''
+
+[[mutant]]
+name = "two sequences for one source"
+file = "crates/driver/src/actions.rs"
+from = '''        if by_source.iter().any(|(known, _)| *known == id) {'''
+to = '''        if by_source.iter().any(|(known, _)| *known == id) && false {'''
+
+[[mutant]]
+name = "a whole float duration is refused"
+file = "crates/driver/src/http.rs"
+from = '''        Route::PerformActions => integral_numbers(body),'''
+to = '''        Route::PerformActions => body,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "webdriver", "--", "actions_are"]
+
+[[mutant]]
+name = "one input state for the session"
+file = "crates/driver/src/session.rs"
+from = '''        self.check_context()?;
+        let mut state = self.inputs.remove(&self.window).unwrap_or_default();'''
+to = '''        self.check_context()?;
+        let mut state = self.inputs.remove("").unwrap_or_default();'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "webdriver", "--", "input_state"]
+
+[[mutant]]
+name = "Release Actions keeps the sources"
+file = "crates/driver/src/session.rs"
+from = '''        actions::release(&mut state, &mut WindowInput { session: self })
+    }'''
+to = '''        let released = actions::release(&mut state, &mut WindowInput { session: self });
+        self.inputs.insert(self.window.clone(), state);
+        released
+    }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "webdriver", "--", "actions_are"]
+
+[[mutant]]
+name = "a rawKeyDown types"
+file = "crates/shell/src/automation_session.rs"
+from = '''    let text = if params.kind == "keyDown" {'''
+to = '''    let text = if params.kind != "keyUp" {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "automation_pipe", "--", "key_events"]
+
+[[mutant]]
+name = "a key's location isn't checked"
+file = "crates/shell/src/automation_session.rs"
+from = '''    if params.location > 3 {'''
+to = '''    if params.location > 4 {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "automation_pipe", "--", "key_events"]
+
+[[mutant]]
+name = "a wheel's deltas swapped"
+file = "crates/shell/src/automation_session.rs"
+from = '''                x: params.delta_x,
+                y: params.delta_y,'''
+to = '''                x: params.delta_y,
+                y: params.delta_x,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "automation_pipe", "--", "wheels"]
+
+[[mutant]]
+name = "the element origin scrolls and checks as Element Click"
+file = "crates/shell/src/automation_session.rs"
+from = '''            in_view_center_only: params.in_view_center_only,'''
+to = '''            in_view_center_only: false,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "automation_pipe", "--", "action_points"]
+
+[[mutant]]
+name = "a move is answered before it is dispatched"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if is_move && self.pending_mouse_move.is_some() {'''
+to = '''        if is_move && self.pending_mouse_move.is_some() && false {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "automation_pipe", "--", "mouse_events"]
+
+[[mutant]]
+name = "a child frame's viewport is where its corner's point is"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        Some(RectF::new(-corner.x, -corner.y, size.width, size.height))'''
+to = '''        Some(RectF::new(corner.x, corner.y, size.width, size.height))'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "automation_pipe", "--", "action_points"]
+
+[[mutant]]
+name = "the in-view center point isn't clamped to the viewport"
+file = "crates/renderer/src/render_thread/webdriver.rs"
+from = '''        let (left, right) = (x0.min(x1).max(0.0), x0.max(x1).min(port.width));'''
+to = '''        let (left, right) = (x0.min(x1), x0.max(x1).min(port.width));'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "automation_pipe", "--", "action_points"]

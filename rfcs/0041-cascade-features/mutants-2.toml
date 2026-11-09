@@ -1,0 +1,217 @@
+# Mutation test of stage 2 (math functions: parsing, simplifying,
+# serializing and computing them; calc() in layout through taffy; viewport
+# units and their recalc; sizes):
+# python3 scripts/test.py mutate rfcs/0041-cascade-features/mutants-2.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "calc::"]
+timeout = 600
+
+# css: parsing.
+
+[[mutant]]
+name = "+ and - need no white space"
+file = "crates/css/src/calc.rs"
+from = '''        let operator = input.try_parse(|input| {
+            input.expect_whitespace()?;'''
+to = '''        let operator = input.try_parse(|input| {
+            let _ = input.try_parse(|i| i.expect_whitespace());'''
+
+[[mutant]]
+name = "division by 0"
+file = "crates/css/src/calc.rs"
+from = '''if other_kind == Kind::Number && n != 0.0 => {'''
+to = '''if other_kind == Kind::Number => {'''
+
+[[mutant]]
+name = "a length times a length"
+file = "crates/css/src/calc.rs"
+from = '''                _ => return invalid(input),
+            }
+        };'''
+to = '''                (node, _) => (node, kind),
+            }
+        };'''
+
+[[mutant]]
+name = "min() mixes lengths and percentages"
+file = "crates/css/src/calc.rs"
+from = '''    if kind == Kind::LengthPercent || args.iter().any(|(_, k)| *k != kind) {'''
+to = '''    if args.iter().any(|(_, k)| *k == Kind::Number && kind != Kind::Number) {'''
+
+[[mutant]]
+name = "no calc() where a length goes"
+file = "crates/css/src/values.rs"
+from = '''        if let Ok(calc) = input.try_parse(|input| {'''
+to = '''        if let Ok(calc) = input.try_parse(|input| {
+            input.expect_ident_matching("never")?;'''
+
+# css: simplifying.
+
+[[mutant]]
+name = "numbers aren't multiplied in"
+file = "crates/css/src/calc.rs"
+from = '''        Node::Length(v, unit) => Node::Length(v * k, unit),
+        Node::Angle(v) => Node::Angle(v * k),'''
+to = '''        Node::Length(v, unit) => Node::Length(v, unit),
+        Node::Angle(v) => Node::Angle(v * k),'''
+
+[[mutant]]
+name = "terms of a unit aren't added up"
+file = "crates/css/src/calc.rs"
+from = '''            Some(Node::Number(v)) => *v += value_of(&term),'''
+to = '''            Some(Node::Number(_)) => leaves.push(term),'''
+
+[[mutant]]
+name = "absolute lengths stay in their units"
+file = "crates/css/src/calc.rs"
+from = '''        Some(px) if unit != LengthUnit::Number => Node::Length(value * px, LengthUnit::Px),'''
+to = '''        Some(_) if false => Node::Length(value, LengthUnit::Px),'''
+
+[[mutant]]
+name = "terms aren't sorted by unit"
+file = "crates/css/src/calc.rs"
+from = '''    leaves.sort_by(|a, b| leaf_key(a).cmp(&leaf_key(b)));'''
+to = ''''''
+
+[[mutant]]
+name = "min() of one unit is the max"
+file = "crates/css/src/calc.rs"
+from = '''        let pick = |a: f32, b: f32| if min { a.min(b) } else { a.max(b) };'''
+to = '''        let pick = |a: f32, b: f32| if min { a.max(b) } else { a.max(b) };'''
+
+[[mutant]]
+name = "clamp() of one unit ignores its maximum"
+file = "crates/css/src/calc.rs"
+from = '''        let v = value_of(&lo).max(value_of(&value).min(value_of(&hi)));'''
+to = '''        let v = value_of(&lo).max(value_of(&value));'''
+
+# css: serializing.
+
+[[mutant]]
+name = "a negative term is written after a +"
+file = "crates/css/src/calc.rs"
+from = '''                } else if is_negative(term) {'''
+to = '''                } else if is_negative(term) && false {'''
+
+[[mutant]]
+name = "a computed calc() writes its sign wrong"
+file = "crates/css/src/calc.rs"
+from = '''    dest.push_str(if px < 0.0 { " - " } else { " + " });'''
+to = '''    dest.push_str(" + ");'''
+
+# css: computing.
+
+[[mutant]]
+name = "min() of an element's lengths is the max"
+file = "crates/css/src/calc.rs"
+from = '''                        order != Ordering::Greater'''
+to = '''                        order != Ordering::Less'''
+
+[[mutant]]
+name = "no clamping where negative isn't allowed"
+file = "crates/css/src/calc.rs"
+from = '''        if self.non_negative && self.kind != Kind::LengthPercent {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a calc() of percentages is a calc() of both"
+file = "crates/css/src/values.rs"
+from = '''                    CalcKind::Percent => ComputedLengthPercentage::Percent(value.percent),'''
+to = '''                    CalcKind::Number => ComputedLengthPercentage::Percent(value.percent),'''
+
+[[mutant]]
+name = "integers are truncated"
+file = "crates/css/src/values.rs"
+from = '''        return Ok((value + 0.5).floor() as i32);'''
+to = '''        return Ok(value as i32);'''
+
+[[mutant]]
+name = "a number below its minimum is kept"
+file = "crates/css/src/values.rs"
+from = '''        return Ok(value.max(min));'''
+to = '''        return Ok(value);'''
+
+[[mutant]]
+name = "vmin is the larger side"
+file = "crates/css/src/values.rs"
+from = '''                        ViewportAxis::Min => size.width.min(size.height),'''
+to = '''                        ViewportAxis::Min => size.width.max(size.height),'''
+
+[[mutant]]
+name = "a style that used the viewport doesn't say so"
+file = "crates/css/src/values.rs"
+from = '''                    used.set(true);'''
+to = ''''''
+
+# style: viewport units' recalc.
+
+[[mutant]]
+name = "a new viewport styles nothing again"
+file = "crates/style/src/lib.rs"
+from = '''                || (viewport_changed && old.as_ref().is_some_and(|old| old.has_viewport_units))'''
+to = ''''''
+
+[[mutant]]
+name = "a new viewport visits only what is marked"
+file = "crates/style/src/lib.rs"
+from = '''            if restyle || flags.child_needs_style_recalc || viewport_changed {'''
+to = '''            if restyle || flags.child_needs_style_recalc {'''
+
+[[mutant]]
+name = "any new viewport asks for a recalc"
+file = "crates/style/src/lib.rs"
+from = '''        self.viewport_changed.set(true);
+        self.viewport_used.get()'''
+to = '''        self.viewport_changed.set(true);
+        true'''
+
+[[mutant]]
+name = "the same viewport asks for a recalc"
+file = "crates/style/src/lib.rs"
+from = '''        if self.viewport.replace(viewport) == viewport {
+            return false;
+        }'''
+to = '''        if self.viewport.replace(viewport) == viewport {
+            return self.viewport_used.get();
+        }'''
+
+# style: sizes.
+
+[[mutant]]
+name = "a lone calc() in sizes is a condition"
+file = "crates/css/src/media.rs"
+from = '''                if with_condition.is_ok() {
+                    return with_condition;
+                }'''
+to = '''                return with_condition;'''
+test = ["cargo", "test", "-q", "-p", "css", "--lib", "media::"]
+
+# layout: calc() through taffy.
+
+[[mutant]]
+name = "taffy's calc() isn't clamped"
+file = "crates/layout/src/calc.rs"
+from = '''        if calc.non_negative { v.max(0.0) } else { v }'''
+to = '''        v'''
+test = ["cargo", "test", "-q", "-p", "layout", "calc"]
+
+[[mutant]]
+name = "a calc() is its percentage alone in taffy"
+file = "crates/layout/src/lib.rs"
+from = '''        } => taffy::LengthPercentage::calc(calcs.handle(px, percent, non_negative)),'''
+to = '''        } => {
+            let _ = (px, non_negative);
+            taffy::LengthPercentage::percent(percent / 100.0)
+        }'''
+test = ["cargo", "test", "-q", "-p", "layout", "calc"]
+
+# renderer: a new viewport restyles. (The resize scenario can't tell:
+# about:demo's animation dirties the style every frame.)
+
+[[mutant]]
+name = "the renderer ignores a new viewport's styles"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        if self.style_engine.set_viewport(self.viewport) {
+            self.style_dirty = true;
+        }'''
+to = '''        let _ = self.style_engine.set_viewport(self.viewport);'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "frame_view::tests::a_new_viewport"]

@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<title>I7: inline-blocks: a navigation bar of padded links, sized to fit their text and placed by the line, and the baseline of one with two lines and of one that clips</title>
+<link rel="match" href="i7-inline-block-ref.html">
+<style>
+  html, body { margin: 0 }
+  div { font: 20px/1 Ahem }
+  nav { font: 20px/1 Ahem; width: 400px; background-color: silver }
+  a { display: inline-block; padding: 5px; margin-right: 10px; background-color: blue; color: white }
+  span { display: inline-block; padding: 5px; background-color: lime }
+</style>
+<!-- 50px, 30px and 70px wide, 10px apart; 30px high, as tall as the line. -->
+<nav><a>AB</a><a>C</a><a>DEF</a></nav>
+<!-- The last line's baseline 41px down the inline-block: X and Y there. -->
+<div>X<span>A<br>B</span>Y</div>
+<!-- Clipping: its bottom edge on the baseline. -->
+<div>X<span style="overflow: hidden">A</span>Y</div>

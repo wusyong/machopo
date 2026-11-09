@@ -1,0 +1,147 @@
+test = ["sh", "-c", "cargo test -q -p renderer --lib navigation_timing && cargo test -q -p dom_api --lib navigation_timing && cargo test -q -p dom_js --test it -- navigation_timings:: performance_observers:: && cargo test -q -p shell --test it -- navigation_timing:: trace:: performance::"]
+timeout = 2400
+
+[[mutant]]
+name = "a resolved name is at the fetch's start"
+file = "crates/renderer/src/navigation_timing.rs"
+from = '''        .map_or((fetch_start, fetch_start), |dns| (at(dns.start), at(dns.end)));'''
+to = '''        .map_or((fetch_start, fetch_start), |_| (fetch_start, fetch_start));'''
+
+[[mutant]]
+name = "the request is sent as the fetch starts"
+file = "crates/renderer/src/navigation_timing.rs"
+from = '''    timing.request_start = Some(if connect.is_some() {'''
+to = '''    timing.request_start = Some(if false {'''
+
+[[mutant]]
+name = "HTTP has a secure connection"
+file = "crates/renderer/src/navigation_timing.rs"
+from = '''    timing.secure_connection_start = (load.url.scheme() == "https").then_some(connect_start);'''
+to = '''    timing.secure_connection_start = Some(connect_start);'''
+
+[[mutant]]
+name = "a redirect of another origin counts"
+file = "crates/renderer/src/navigation_timing.rs"
+from = '''    let exposed = load.redirects.iter().all(same_origin) || load.redirects.iter().all(opted_in);'''
+to = '''    let exposed = { let _ = (same_origin, opted_in); true };'''
+
+[[mutant]]
+name = "an opt-in of any origin counts"
+file = "crates/renderer/src/navigation_timing.rs"
+from = '''                .any(|value| value == "*" || value == destination.ascii_serialization())'''
+to = '''                .any(|value| !value.is_empty())'''
+
+[[mutant]]
+name = "a same-origin redirect needn't opt in with one of another"
+file = "crates/renderer/src/navigation_timing.rs"
+from = '''    let exposed = load.redirects.iter().all(same_origin) || load.redirects.iter().all(opted_in);'''
+to = '''    let exposed = load.redirects.iter().all(|hop| same_origin(hop) || opted_in(hop));'''
+
+[[mutant]]
+name = "nothing came over the network"
+file = "crates/renderer/src/navigation_timing.rs"
+from = '''    timing.transferred = load.timing.is_some();'''
+to = '''    timing.transferred = false;'''
+
+[[mutant]]
+name = "a milestone takes its last time"
+file = "crates/renderer/src/navigation_timing.rs"
+from = '''        time.get_or_insert(at);'''
+to = '''        *time = Some(at);'''
+
+[[mutant]]
+name = "no domInteractive"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            DocumentReadyState::Interactive => self.reach(frame, Milestone::DomInteractive),'''
+to = '''            DocumentReadyState::Interactive => {}'''
+
+[[mutant]]
+name = "loadEventEnd before the listeners"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            LoadEvent::Load => (Milestone::LoadEventStart, Milestone::LoadEventEnd),'''
+to = '''            LoadEvent::Load => (Milestone::LoadEventEnd, Milestone::LoadEventStart),'''
+
+[[mutant]]
+name = "the observers aren't told of the load's end"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                dom_api::navigation_timing::load_ended(host, window);'''
+to = '''                let _ = (host, window);'''
+
+[[mutant]]
+name = "a child frame's redirects aren't kept"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                .push(protocol::renderer::RedirectHop::of(redirect));'''
+to = ''';'''
+
+[[mutant]]
+name = "the main frame's redirects aren't kept"
+file = "crates/browser/src/web_contents.rs"
+from = '''            navigation.redirects.push(RedirectHop::of(redirect));'''
+to = ''''''
+
+[[mutant]]
+name = "a reload is a navigation"
+file = "crates/browser/src/web_contents.rs"
+from = '''            NavigationType::Reload => NavigationTimingType::Reload,'''
+to = '''            NavigationType::Reload => NavigationTimingType::Navigate,'''
+
+[[mutant]]
+name = "a time isn't coarsened"
+file = "crates/dom_api/src/navigation_timing.rs"
+from = '''    time.map_or(0.0, |time| coarsen(time - origin).max(0.0))'''
+to = '''    time.map_or(0.0, |time| (time - origin).max(0.0))'''
+
+[[mutant]]
+name = "a head counts nothing"
+file = "crates/dom_api/src/navigation_timing.rs"
+from = '''        timing.encoded_body_size.saturating_add(HEADER_SIZE)'''
+to = '''        timing.encoded_body_size'''
+
+[[mutant]]
+name = "a navigation entry lasts nothing"
+file = "crates/dom_api/src/performance.rs"
+from = '''        PerformanceEntryType::Navigation => crate::navigation_timing::duration(cx, this),'''
+to = '''        PerformanceEntryType::Navigation => this.duration(),'''
+
+[[mutant]]
+name = "the navigation entry isn't made"
+file = "crates/dom_api/src/performance.rs"
+from = '''    crate::navigation_timing::ensure_entry(cx, window, &performance);
+    performance'''
+to = '''    performance'''
+
+[[mutant]]
+name = "an old time rounds"
+file = "crates/dom_api/src/navigation_timing.rs"
+from = '''    base::numerics::saturated_cast::<u64, _>((unix_start + time).floor())'''
+to = '''    base::numerics::saturated_cast::<u64, _>((unix_start + time).round())'''
+
+[[mutant]]
+name = "domLoading is domInteractive"
+file = "crates/dom_api/src/navigation_timing.rs"
+from = '''        "domLoading" => timing.dom_loading,'''
+to = '''        "domLoading" => timing.dom_interactive,'''
+
+[[mutant]]
+name = "a measure from what hasn't happened"
+file = "crates/dom_api/src/performance.rs"
+from = '''            (Some(time), Some(start)) if time > 0 => Ok(time.saturating_sub(start) as f64),'''
+to = '''            (Some(time), Some(start)) => Ok(time.saturating_sub(start) as f64),'''
+
+[[mutant]]
+name = "the confidence isn't randomized"
+file = "crates/dom_api/src/navigation_timing.rs"
+from = '''    if fraction < RANDOMIZED_TRIGGER_RATE {'''
+to = '''    if false && fraction < RANDOMIZED_TRIGGER_RATE {'''
+
+[[mutant]]
+name = "a high confidence says low"
+file = "crates/dom_api/src/navigation_timing.rs"
+from = '''        PerformanceTimingKind::Confidence { high: true } => Value::High,'''
+to = '''        PerformanceTimingKind::Confidence { high: true } => Value::Low,'''
+
+[[mutant]]
+name = "navigation isn't a supported type"
+file = "crates/dom_api/src/performance_observer.rs"
+from = '''    ("navigation", PerformanceEntryType::Navigation),'''
+to = '''    ("navigations", PerformanceEntryType::Navigation),'''

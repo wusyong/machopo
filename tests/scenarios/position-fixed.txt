@@ -1,0 +1,23 @@
+# about:demo's pinned bar: `position: fixed` lays it
+# out against the viewport, so it stays in the corner as the page scrolls
+# (the compositor keeps it there) and its client rect says the same
+# wherever the page is.
+window size=800x600
+navigate about:demo
+wait-loaded
+# The button is far down the page: scroll to it first.
+scroll-to #pin
+click #pin
+wait-text #pin-note "Pinned at 712 0 in the viewport; it stays there as you scroll."
+capture pinned
+screenshot pinned
+# The page moves under it.
+# The page is near its end here, so scroll back up.
+wheel #pin 0 -300
+expect-differs pinned
+# Asked again after the scroll, the bar is in the same place in the
+# viewport: it was laid out against the viewport, not the document.
+click #pin
+wait-text #pin-note "No bar is pinned."
+click #pin
+wait-text #pin-note "Pinned at 712 0 in the viewport; it stays there as you scroll."

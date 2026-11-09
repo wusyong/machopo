@@ -1,0 +1,235 @@
+# Stage 5d-3a: geometry and scrolling on the DOM's engine.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p renderer --lib next_frame_view:: && cargo test -q -p dom_api_next --test it -- focus:: geometry:: input:: && cargo test -q -p dom_js_next --test it svg_geometry:: && cargo test -q -p shell --test it -- geometry:: resize_observers:: scroll_anchoring:: webdriver::inserted_frames && cargo test -q -p browser --test it -- an_element_in_a_child_frame_is_scrolled_into_view"]
+timeout = 2400
+
+[[mutant]]
+name = "renderer: a main frame never laid out before innerWidth"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            if self.view.fragment.is_none() {
+                dom_api_next::NextLayout::update_style_and_layout(self, cx);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: a child frame's innerWidth without the frames around it laid out"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        view.update_frames_around(cx, token, text, *viewport, *device_scale_factor, *selected);'''
+to = '''        let _ = (view, token, text, viewport, device_scale_factor, selected);'''
+
+[[mutant]]
+name = "renderer: the child frame not given its size"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            child.set_viewport_unstyled(child_viewport, device_scale_factor);
+        } else {'''
+to = '''        } else {'''
+
+[[mutant]]
+name = "dom_js_next: a new child frame not shown at once"
+file = "crates/dom_js_next/src/frames.rs"
+from = '''        layout.child_frame_created(id, parent_document, owner_id, document.clone(), document_id);'''
+to = '''        let _ = (parent_document, owner_id, document_id);'''
+
+[[mutant]]
+name = "renderer: a shown child frame keeps no compositor id"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                            Some(view) => view.set_document_id(document_id),'''
+to = '''                            Some(_) => {}'''
+
+[[mutant]]
+name = "dom_api_next: offsetParent by the DOM parents"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''        cx.flat_tree_parent(node)
+            .filter(|&parent| cx.kind(parent) == NodeKind::Element)'''
+to = '''        cx.parent(node)
+            .filter(|&parent| cx.kind(parent) == NodeKind::Element)'''
+
+[[mutant]]
+name = "dom_api_next: offsetParent in a closed shadow tree"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''        !cx.is_closed_shadow_hidden(node, element)
+            && ('''
+to = '''        true
+            && ('''
+
+[[mutant]]
+name = "dom_api_next: elementFromPoint not retargeted"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''        element_at(cx, this, PointF::new(f32_from_f64(x), f32_from_f64(y)))
+            .map(|element| cx.retarget(element, Some(this))),'''
+to = '''        element_at(cx, this, PointF::new(f32_from_f64(x), f32_from_f64(y))),'''
+
+[[mutant]]
+name = "dom_api_next: a run of text's element, not its parent"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''    let mut node = text_parent
+        .or_else(|| hit.element.and_then(|element| cx.node_by_id(element)))'''
+to = '''    let _ = text_parent;
+    let mut node = None
+        .or_else(|| hit.element.and_then(|element| cx.node_by_id(element)))'''
+
+[[mutant]]
+name = "renderer: a child document's hit test from the top-level frame"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''    fn hit_test(&mut self, point: PointF) -> dom_api_next::Hit {
+        self.selected_mut().hit_test(point)
+    }'''
+to = '''    fn hit_test(&mut self, point: PointF) -> dom_api_next::Hit {
+        match self.view.point_from_frame(self.selected, point) {
+            Some(point) => self.view.hit_test(point),
+            None => dom_api_next::Hit::default(),
+        }
+    }'''
+
+[[mutant]]
+name = "renderer: a child document's elementsFromPoint from the top-level frame"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''    fn elements_at(&mut self, point: PointF) -> Vec<NodeId> {
+        self.selected_mut().elements_at(point)
+    }'''
+to = '''    fn elements_at(&mut self, point: PointF) -> Vec<NodeId> {
+        match self.view.point_from_frame(self.selected, point) {
+            Some(point) => self.view.elements_at(point),
+            None => Vec::new(),
+        }
+    }'''
+
+[[mutant]]
+name = "dom_api_next: no root element below the content"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''    if let Some(root) = document_element(cx, document)
+        && !found.iter().any(|&seen| Gc::ptr_eq(seen, root))
+    {
+        found.push(root);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "dom_api_next: an SVG element's focus listener doesn't count"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''            || has_focus_listeners(cx, element))'''
+to = '''            || (has_focus_listeners(cx, element) && false))'''
+
+[[mutant]]
+name = "dom_api_next: any element's focus listener counts"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        name.namespace == names::SVG_NAMESPACE && SVG_GRAPHICS.contains(&name.local)'''
+to = '''        name.namespace == names::SVG_NAMESPACE || SVG_GRAPHICS.contains(&name.local)'''
+
+[[mutant]]
+name = "dom_api_next: any listener counts for the focus"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''                        [event::FOCUS, event::BLUR, event::FOCUSIN, event::FOCUSOUT]
+                            .contains(&cx.listener_type(listener))'''
+to = '''                        true'''
+
+[[mutant]]
+name = "dom_api_next: a detached path has no length"
+file = "crates/dom_api_next/src/svg_geometry.rs"
+from = '''            is_path(cx, this).then(|| {'''
+to = '''            false.then(|| {'''
+
+[[mutant]]
+name = "renderer: a child frame's paint offset as its own view has it"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''    fn paint_offset(&self, node: NodeId) -> Option<PointF> {
+        self.view.paint_offset(node)
+    }'''
+to = '''    fn paint_offset(&self, node: NodeId) -> Option<PointF> {
+        self.selected().paint_offset(node)
+    }'''
+
+[[mutant]]
+name = "renderer: no anchors picked"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        if let Some(last) = &self.fragment {
+            self.scroll.pick_scroll_anchors('''
+to = '''        if let Some(last) = self.fragment.as_ref().filter(|_| false) {
+            self.scroll.pick_scroll_anchors('''
+
+[[mutant]]
+name = "renderer: anchors moved, not committed"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            self.scroll.clamp(&fragment);
+            self.scrolled_by_script = true;'''
+to = '''            self.scroll.clamp(&fragment);'''
+
+[[mutant]]
+name = "renderer: a scroll keeps the viewport's anchor"
+file = "crates/renderer/src/scroll.rs"
+from = '''        if moved {
+            self.anchors.remove(&None);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: a scroll keeps a container's anchor"
+file = "crates/renderer/src/scroll.rs"
+from = '''        if moved {
+            self.anchors.remove(&Some(element));
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: anchoring's move drops the anchor"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''            moved |= self.move_scroller(scroller, PointF::new(current.x, current.y + adjustment));'''
+to = '''            moved |= match scroller {
+                None => self.set_viewport(PointF::new(current.x, current.y + adjustment)),
+                Some(element) => {
+                    self.set_container(element, PointF::new(current.x, current.y + adjustment))
+                }
+            };'''
+
+[[mutant]]
+name = "renderer: a rebuilt box keeps its anchor"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''        if rebuilt.contains(&cx.node_id(n)) {
+            return false;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: overflow-anchor changes keep the anchors"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''        for &changed in &changes.overflow_anchor {
+            self.anchors.remove(&None);'''
+to = '''        for &changed in changes.overflow_anchor.iter().take(0) {
+            self.anchors.remove(&None);'''
+
+[[mutant]]
+name = "renderer: the focused editable element not first"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''                &priority,
+            ) {'''
+to = '''                &[],
+            ) {'''
+
+[[mutant]]
+name = "renderer: an anchor moved in CSS px, not device pixels"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''            let snap = |y: f32| (y * device_scale_factor).round();'''
+to = '''            let snap = |y: f32| y * device_scale_factor;'''
+
+[[mutant]]
+name = "renderer: a change on the way followed"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''            if changed_on_the_way(cx, anchor.node.node(), scroller, disabled) {'''
+to = '''            if false && changed_on_the_way(cx, anchor.node.node(), scroller, disabled) {'''
+
+[[mutant]]
+name = "renderer: overflow-anchor none on a scroller ignored"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''            if offset.y == 0.0 || opted_out {'''
+to = '''            if offset.y == 0.0 {'''
+
+[[mutant]]
+name = "renderer: overflow-anchor none around an anchor ignored"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''            let skip = |node: NodeId| gone(node) || !anchors_now(cx, token, node, scroller);'''
+to = '''            let skip = |node: NodeId| gone(node);'''
+
+[[mutant]]
+name = "renderer: an element in a frame the page shows never scrolled into view"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''            && owners.iter().all(|&(_, _, iframe)| iframe.is_some_and(inside))'''
+to = ''''''

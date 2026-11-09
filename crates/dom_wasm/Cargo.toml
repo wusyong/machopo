@@ -1,0 +1,24 @@
+[package]
+name = "dom_wasm"
+description = "The DOM (dom, dom_api) for wasm guests on wasmtime: machopo:dom's WIT and host functions, each store's handles to the nodes."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+dom_api.workspace = true
+dom.workspace = true
+elise.workspace = true
+wasmtime.workspace = true
+
+[dev-dependencies]
+wasmtime-wasi.workspace = true

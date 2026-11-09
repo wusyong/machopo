@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<title>I7 reference</title>
+<style>
+  html, body { margin: 0 }
+  .row { display: flex; align-items: flex-start }
+  .row > div { flex: none }
+  .link { padding: 5px; margin-right: 10px; background-color: blue }
+  .glyphs { height: 20px; background-color: white }
+  .box { padding: 5px; background-color: lime }
+  .glyph { width: 20px; height: 20px; background-color: black }
+</style>
+<div class="row" style="width: 400px; height: 30px; background-color: silver">
+  <div class="link"><div class="glyphs" style="width: 40px"></div></div>
+  <div class="link"><div class="glyphs" style="width: 20px"></div></div>
+  <div class="link"><div class="glyphs" style="width: 60px"></div></div>
+</div>
+<!-- The baseline 41px down: each glyph 16px above it, 4px below. -->
+<div class="row" style="height: 50px">
+  <div class="glyph" style="margin-top: 25px"></div>
+  <div class="box"><div class="glyph" style="height: 40px"></div></div>
+  <div class="glyph" style="margin-top: 25px"></div>
+</div>
+<!-- The baseline 30px down, and the line 4px deeper for the descent. -->
+<div class="row" style="height: 34px">
+  <div class="glyph" style="margin-top: 14px"></div>
+  <div class="box"><div class="glyph"></div></div>
+  <div class="glyph" style="margin-top: 14px"></div>
+</div>

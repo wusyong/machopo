@@ -1,0 +1,22 @@
+# Step 3f's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0033-canvas-2d/mutations-3f.toml`. The fix WPT found: `new
+# ImageData(sw, sh)` past Blink's limits is an `IndexSizeError`.
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_image_data"]
+timeout = 1500
+
+[[mutant]]
+name = "more bytes than 32 bits count taken"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if u128::from(sw) * u128::from(sh) * 4 > u128::from(u32::MAX) {'''
+to = '''    if u128::from(sw) * u128::from(sh) * 4 > u128::from(u32::MAX) * 2 {'''
+
+[[mutant]]
+name = "an IndexSizeError a RangeError"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        return Err(ApiError::Dom(DomException::new(
+            ExceptionName::IndexSizeError,
+            "The requested image size exceeds the supported range.",
+        )));'''
+to = '''        return Err(ApiError::Range(
+            "The requested image size exceeds the supported range.".into(),
+        ));'''

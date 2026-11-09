@@ -1,0 +1,314 @@
+# 5a: `position: sticky` on the main thread (`css`, `computed_style`,
+# `layout`, `paint`, `dom_api`, `renderer`).
+#   python3 scripts/test.py mutate rfcs/0064-rendering-gaps/mutants-5a.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "sticky::"]
+timeout = 900
+
+[[mutant]]
+name = "sticky not parsed"
+file = "crates/css/src/properties.rs"
+from = '''"sticky" | "-webkit-sticky" => computed_style::Position::Sticky,'''
+to = '''"-webkit-sticky" => computed_style::Position::Sticky,'''
+
+[[mutant]]
+name = "-webkit-sticky not parsed"
+file = "crates/css/src/properties.rs"
+from = '''"sticky" | "-webkit-sticky" => computed_style::Position::Sticky,'''
+to = '''"sticky" => computed_style::Position::Sticky,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cascade::position_insets"]
+
+[[mutant]]
+name = "sticky written as relative"
+file = "crates/css/src/serialize.rs"
+from = '''        Position::Sticky => "sticky",'''
+to = '''        Position::Sticky => "relative",'''
+test = ["python3", "scripts/test.py", "wpt", "css/css-position/sticky/position-sticky-parsing.html"]
+
+[[mutant]]
+name = "no stacking context"
+file = "crates/computed_style/src/lib.rs"
+from = '''            || self.position == Position::Sticky
+            || self.effective_z_index.is_some()'''
+to = '''            || self.effective_z_index.is_some()'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cascade::position_insets"]
+
+[[mutant]]
+name = "sticky with no inset"
+file = "crates/computed_style/src/lib.rs"
+from = '''                .any(|v| *v != LengthPercentageOrAuto::Auto)'''
+to = '''                .any(|_| true)'''
+
+[[mutant]]
+name = "laid out moved by its inset"
+file = "crates/layout/src/lib.rs"
+from = '''        inset: if style.position == Position::Sticky {'''
+to = '''        inset: if false {'''
+
+[[mutant]]
+name = "an inset lays it out again"
+file = "crates/layout/src/lib.rs"
+from = '''                old.inset
+            } else {
+                new.inset
+            },'''
+to = '''                new.inset
+            } else {
+                new.inset
+            },'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::a_sticky"]
+
+[[mutant]]
+name = "only children said to stick"
+file = "crates/layout/src/lib.rs"
+from = '''            .any(|child| child.fragment.sticky_below || sticky::sticks(&child.fragment));'''
+to = '''            .any(|child| sticky::sticks(&child.fragment));'''
+
+[[mutant]]
+name = "table parts stick"
+file = "crates/layout/src/sticky.rs"
+from = '''    fragment.style.is_sticky_constrained()
+        && !matches!(
+            TablePart::of(fragment.style.display),
+            Some(TablePart::RowGroup | TablePart::Row | TablePart::Cell)
+        )'''
+to = '''    fragment.style.is_sticky_constrained()'''
+
+[[mutant]]
+name = "a scroll container no scroller"
+file = "crates/layout/src/sticky.rs"
+from = '''            Some(element) if fragment.style.is_scroll_container() => {'''
+to = '''            Some(element) if false && fragment.style.is_scroll_container() => {'''
+
+[[mutant]]
+name = "a scroll container's content from its border box"
+file = "crates/layout/src/sticky.rs"
+from = '''                let origin = PointF::new(-b.left, -b.top);'''
+to = '''                let origin = PointF::new(0.0 * b.left, 0.0);'''
+
+[[mutant]]
+name = "the scrollport with its padding"
+file = "crates/layout/src/sticky.rs"
+from = '''                    constraining_rect: RectF::new(
+                        p.left,
+                        p.top,'''
+to = '''                    constraining_rect: RectF::new(
+                        0.0,
+                        0.0,'''
+
+[[mutant]]
+name = "an anonymous block a containing block"
+file = "crates/layout/src/sticky.rs"
+from = '''                BoxRole::AnonymousBlock | BoxRole::AnonymousTable'''
+to = '''                BoxRole::AnonymousTable'''
+
+[[mutant]]
+name = "a fixed box's scroll with the viewport"
+file = "crates/layout/src/sticky.rs"
+from = '''                    fixed_to_view: true,'''
+to = '''                    fixed_to_view: false,'''
+
+[[mutant]]
+name = "into its containing block's padding"
+file = "crates/layout/src/sticky.rs"
+from = '''            p.bottom + margin(m.bottom),'''
+to = '''            margin(m.bottom),'''
+
+[[mutant]]
+name = "into its margins"
+file = "crates/layout/src/sticky.rs"
+from = '''            p.bottom + margin(m.bottom),'''
+to = '''            p.bottom,'''
+
+[[mutant]]
+name = "a percentage of the width"
+file = "crates/layout/src/sticky.rs"
+from = '''            inset(style.inset.top, constraining.height),'''
+to = '''            inset(style.inset.top, constraining.width),'''
+
+[[mutant]]
+name = "neither inset gives way"
+file = "crates/layout/src/sticky.rs"
+from = '''                (Some(min), Some(if free < 0.0 { max + free } else { max }))'''
+to = '''                (Some(min), Some(max + 0.0 * free))'''
+
+[[mutant]]
+name = "getComputedStyle's after giving way"
+file = "crates/layout/src/sticky.rs"
+from = '''            resolved_inset,
+            shifting_containing_block'''
+to = '''            resolved_inset: [top, right, bottom, left],
+            shifting_containing_block'''
+
+[[mutant]]
+name = "no sticky box around"
+file = "crates/layout/src/sticky.rs"
+from = '''            shifting_containing_block: sticky,'''
+to = '''            shifting_containing_block: None,'''
+
+[[mutant]]
+name = "a sticky box around a scroll container"
+file = "crates/layout/src/sticky.rs"
+from = '''                (inner, origin, None, (fragment, origin, true))'''
+to = '''                (inner, origin, sticky, (fragment, origin, true))'''
+
+[[mutant]]
+name = "a fixed box's moved by the viewport"
+file = "crates/layout/src/sticky.rs"
+from = '''            let scrolled = if constraints.fixed_to_view {'''
+to = '''            let scrolled = if false {'''
+
+[[mutant]]
+name = "the viewport unscrolled"
+file = "crates/layout/src/sticky.rs"
+from = '''                    None => viewport,'''
+to = '''                    None => PointF::new(0.0, 0.0),'''
+
+[[mutant]]
+name = "the box around unmoved"
+file = "crates/layout/src/sticky.rs"
+from = '''                .map_or(PointF::new(0.0, 0.0), |index| totals[index]);'''
+to = '''                .map_or(PointF::new(0.0, 0.0), |_| PointF::new(0.0, 0.0));'''
+
+[[mutant]]
+name = "a total without the boxes around"
+file = "crates/layout/src/sticky.rs"
+from = '''            totals.push(PointF::new(ancestor.x + x, ancestor.y + y));'''
+to = '''            totals.push(PointF::new(x, y));'''
+
+[[mutant]]
+name = "no end inset"
+file = "crates/layout/src/sticky.rs"
+from = '''    if let Some(max) = max {'''
+to = '''    if let Some(max) = max.filter(|_| false) {'''
+
+[[mutant]]
+name = "no start inset"
+file = "crates/layout/src/sticky.rs"
+from = '''    if let Some(min) = min {'''
+to = '''    if let Some(min) = min.filter(|_| false) {'''
+
+[[mutant]]
+name = "past its containing block's start"
+file = "crates/layout/src/sticky.rs"
+from = '''        delta += wanted.max(available);'''
+to = '''        delta += wanted.max(available.min(wanted));'''
+
+[[mutant]]
+name = "past its containing block's end"
+file = "crates/layout/src/sticky.rs"
+from = '''        delta += wanted.min(available);'''
+to = '''        delta += wanted.min(available.max(wanted));'''
+
+[[mutant]]
+name = "client rects unstuck"
+file = "crates/layout/src/geometry.rs"
+from = '''        visit: &mut dyn FnMut(&BoxFragment, PointF, &Transform, &Transform) -> bool,
+    ) -> bool {
+        let (mut to_root, mut offset) = (to_root, stuck(fragment, offset, sticky));'''
+to = '''        visit: &mut dyn FnMut(&BoxFragment, PointF, &Transform, &Transform) -> bool,
+    ) -> bool {
+        let (mut to_root, mut offset) = (to_root, offset);'''
+
+[[mutant]]
+name = "an SVG element unstuck"
+file = "crates/layout/src/geometry.rs"
+from = '''    ) -> Option<(&'a BoxFragment, Transform)> {
+        let (mut to_root, mut offset) = (to_root, stuck(fragment, offset, sticky));'''
+to = '''    ) -> Option<(&'a BoxFragment, Transform)> {
+        let (mut to_root, mut offset) = (to_root, offset);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "geometry::sticky"]
+
+[[mutant]]
+name = "offsetTop unstuck"
+file = "crates/layout/src/geometry.rs"
+from = '''    let offset = stuck(fragment, offset, sticky);
+'''
+to = ''''''
+
+[[mutant]]
+name = "an unstuck box's insets unresolved"
+file = "crates/layout/src/geometry.rs"
+from = '''    if style.position == computed_style::Position::Sticky {'''
+to = '''    if false {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "geometry::sticky"]
+
+[[mutant]]
+name = "auto insets resolved"
+file = "crates/dom_api/src/computed_style.rs"
+from = '''            if style.position == computed_style::Position::Sticky
+                && *inset_of(style, &property) == computed_style::LengthPercentageOrAuto::Auto =>'''
+to = '''            if false
+                && *inset_of(style, &property) == computed_style::LengthPercentageOrAuto::Auto =>'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "geometry::sticky"]
+
+[[mutant]]
+name = "insets of the parent"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        if let Some(constraints) = self.scroll.sticky.get((element, None))'''
+to = '''        if let Some(constraints) = self.scroll.sticky.get((element, None)).filter(|_| false)'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "geometry::sticky"]
+
+[[mutant]]
+name = "no offsets on a scroll"
+file = "crates/renderer/src/scroll.rs"
+from = '''        if !self.sticky.is_empty() {
+            self.stuck.offsets = self.sticky.offsets(&self.containers, self.viewport);
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "frame_view::tests::a_sticky"]
+
+[[mutant]]
+name = "no constraints after layout"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            self.scroll
+                .set_sticky(layout::StickyPositions::new(&fragment, viewport));'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "geometry::sticky"]
+
+[[mutant]]
+name = "not painted again as it moves"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            || sticky != self.painted_sticky;'''
+to = '''            || sticky.len() != self.painted_sticky.len();'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "frame_view::tests::a_sticky"]
+
+[[mutant]]
+name = "pre-paint unstuck"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        let pre = paint::pre_paint_frame_tree(
+            &fragment,
+            &self.scroll.containers,
+            &self.stuck(),'''
+to = '''        let pre = paint::pre_paint_frame_tree(
+            &fragment,
+            &self.scroll.containers,
+            &Default::default(),'''
+test = ["python3", "scripts/test.py", "scenarios", "position-sticky"]
+
+[[mutant]]
+name = "a child frame's unstuck"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            stuck.offsets.extend(&child.scroll.stuck.offsets);'''
+to = ''''''
+test = ["python3", "scripts/test.py", "scenarios", "position-sticky"]
+
+[[mutant]]
+name = "no translation node"
+file = "crates/paint/src/lib.rs"
+from = '''            Some(node) if layout::sticks(fragment) => {'''
+to = '''            Some(node) if false && layout::sticks(fragment) => {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "hit_test::a_sticky"]
+
+[[mutant]]
+name = "the offset snapped alone"
+file = "crates/paint/src/lib.rs"
+from = '''                let snapped = |at: f32, by: f32| snap_to(at + by, dsf) - snap_to(at, dsf);'''
+to = '''                let snapped = |at: f32, by: f32| snap_to(by, dsf) + 0.0 * at;'''
+test = ["python3", "scripts/test.py", "wpt", "css/css-position/sticky/position-sticky-fractional-offset.html"]
+
+[[mutant]]
+name = "the reftest's boxes unstuck"
+file = "crates/paint/src/lib.rs"
+from = '''                node.matrix = Transform::translate(snapped(at.x, by.x), snapped(at.y, by.y));'''
+to = '''                node.matrix = Transform::translate(0.0 * snapped(at.x, by.x), 0.0 * snapped(at.y, by.y));'''
+test = ["python3", "scripts/test.py", "reftest", "position/p3-sticky.html"]

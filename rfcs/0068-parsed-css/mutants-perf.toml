@@ -1,0 +1,42 @@
+# What the RFC made the cascade cost, taken back: it goes through the
+# longhands declared alone, and `border` resets `border-image` without
+# copying the rare group (`style`, `css`).
+#   python3 scripts/test.py mutate rfcs/0068-parsed-css/mutants-perf.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it"]
+timeout = 900
+
+[[mutant]]
+name = "nothing declared"
+file = "crates/style/src/lib.rs"
+from = '''                declared.insert(id.index());'''
+to = ''''''
+
+[[mutant]]
+name = "a lower priority declaration wins"
+file = "crates/style/src/lib.rs"
+from = '''            if winner.is_none() && applies(id) {'''
+to = '''            if applies(id) {'''
+
+[[mutant]]
+name = "the index without its word"
+file = "crates/style/src/lib.rs"
+from = '''                    word * 64 + bit'''
+to = '''                    word + bit'''
+
+[[mutant]]
+name = "too few words"
+file = "crates/style/src/lib.rs"
+from = '''    const WORDS: usize = LonghandId::COUNT.div_ceil(64);'''
+to = '''    const WORDS: usize = LonghandId::COUNT / 64;'''
+
+[[mutant]]
+name = "the UA's declarations as the author's"
+file = "crates/style/src/lib.rs"
+from = '''        if let Some((.., true)) = winners[index] {'''
+to = '''        if let Some(_) = winners[index] {'''
+
+[[mutant]]
+name = "border copies the rare group"
+file = "crates/css/src/properties.rs"
+from = '''        if $style.rare.$($field).+ != value {'''
+to = '''        if true || $style.rare.$($field).+ != value {'''

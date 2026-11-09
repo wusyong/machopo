@@ -1,0 +1,7 @@
+<!DOCTYPE html><meta charset=utf-8>
+<script>
+const log=[];let changes=0;const c=navigator.connection;
+const snap=t=>log.push(t+":"+[c.effectiveType,c.rtt,c.downlink,c.saveData].join("/"));
+snap("parse");c.onchange=()=>{changes++;snap("change")};
+function run(){return new Promise(r=>{setTimeout(()=>snap("1s"),1000);setTimeout(()=>{snap("4s");r(log.join(" ")+" changes="+changes+" host="+location.host)},4000)})}
+</script>

@@ -1,0 +1,310 @@
+# Stage 4c-1: WebDriver on the new DOM: `dom_api_next`'s queries (an
+# element still the document's, Find, rect, name, attribute, click point,
+# an action's origin, a screenshot's rect, the viewport), the engine's
+# script (this, async settling, JSON clone), the renderer's references and
+# values, and the document told to DevTools' `Page` agent.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_api_next --test it -- webdriver && cargo test -q -p dom_js_next --test it -- webdriver && cargo test -q -p shell --test it -- webdriver::the_new_doms devtools_lifecycle::the_new_doms"]
+timeout = 3000
+
+[[mutant]]
+name = "the document's node an element"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''    if cx.kind(node) != NodeKind::Element {
+        return Err(WebDriverQueryError::NoSuchElement);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "one taken out not stale"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''    if !cx.is_connected(node) || !gc::Gc::ptr_eq(cx.document_of(node), document) {'''
+to = '''    if !gc::Gc::ptr_eq(cx.document_of(node), document) {'''
+
+[[mutant]]
+name = "another document's not stale"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''    if !cx.is_connected(node) || !gc::Gc::ptr_eq(cx.document_of(node), document) {'''
+to = '''    if !cx.is_connected(node) {'''
+
+[[mutant]]
+name = "find from the document always"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''                Some(from) => element(cx, document, from)?,'''
+to = '''                Some(from) => element(cx, document, from).map(|_| document)?,'''
+
+[[mutant]]
+name = "find by tag name with CSS"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''                ElementLocator::TagName => crate::collection::elements_by_tag_name(cx, root, value),'''
+to = '''                ElementLocator::TagName => crate::query::select_all(cx, root, value).unwrap_or_default(),'''
+
+[[mutant]]
+name = "the rect not scrolled"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''            Ok(WebDriverAnswer::Rect(bounds.offset(scroll.x, scroll.y)))'''
+to = '''            Ok(WebDriverAnswer::Rect(bounds.offset(0.0, scroll.y)))'''
+
+[[mutant]]
+name = "no prefix in the tag name"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''            Ok(WebDriverAnswer::Text(Some(if name.prefix == dom_next::names::NONE {'''
+to = '''            Ok(WebDriverAnswer::Text(Some(if true {'''
+
+[[mutant]]
+name = "a click on what is on top"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''            if !on_top {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "a click under nothing"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''        .any(|hit| is_inclusive_ancestor(cx, element, hit))
+        .then_some(center)'''
+to = '''        .any(|_| false)
+        .then_some(center)'''
+
+[[mutant]]
+name = "the element alone, not in it"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''        std::iter::successors(Some(node), |&at| cx.parent(at)).any(|at| gc::Gc::ptr_eq(at, ancestor))'''
+to = '''        gc::Gc::ptr_eq(node, ancestor)'''
+
+[[mutant]]
+name = "the click's center not floored"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''        (rect.y + rect.height / 2.0).floor(),
+    );'''
+to = '''        rect.y + rect.height / 2.0,
+    );'''
+
+[[mutant]]
+name = "the click's box the whole of it"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''    let rect = in_view(first, port)?;'''
+to = '''    let rect = in_view(first, port).map(|_| first)?;'''
+
+[[mutant]]
+name = "an action's origin not clamped"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''            let (left, right) = (x0.min(x1).max(0.0), x0.max(x1).min(port.width));'''
+to = '''            let (left, right) = (x0.min(x1), x0.max(x1).min(port.width));'''
+
+[[mutant]]
+name = "an action's origin of a negative size"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''            let (top, bottom) = (y0.min(y1).max(0.0), y0.max(y1).min(port.height));'''
+to = '''            let (top, bottom) = (y0.max(0.0), y1.min(port.height));'''
+
+[[mutant]]
+name = "an action's origin not floored"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''                ((left + right) / 2.0).floor(),'''
+to = '''                (left + right) / 2.0,'''
+
+[[mutant]]
+name = "a screenshot of all of it"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''            in_view(bounds, port)
+                .map(WebDriverAnswer::Rect)'''
+to = '''            in_view(bounds, port)
+                .map(|_| WebDriverAnswer::Rect(bounds))'''
+
+[[mutant]]
+name = "an empty part in view"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''    (right > left && bottom > top).then(|| RectF::new(left, top, right - left, bottom - top))'''
+to = '''    (right >= left && bottom > top).then(|| RectF::new(left, top, right - left, bottom - top))'''
+
+[[mutant]]
+name = "a boolean attribute as it is"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''                if BOOLEAN_ATTRIBUTES.contains(&name.to_ascii_lowercase().as_str()) && value != WebDriverValue::Null {'''
+to = '''                if false {'''
+
+[[mutant]]
+name = "another renderer's reference"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''        if prefix != self.webdriver_state.prefix {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a document shown before not stale"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''            return Err(if self.webdriver_state.documents.contains_key(&of) {'''
+to = '''            return Err(if false {'''
+
+[[mutant]]
+name = "a document never shown stale"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''            return Err(if self.webdriver_state.documents.contains_key(&of) {'''
+to = '''            return Err(if true {'''
+
+[[mutant]]
+name = "a result's element out of the document"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''                self.next_query(&WebDriverQuery::Element(element))?;
+                WebDriverValue::Element(self.next_reference(document, element))'''
+to = '''                WebDriverValue::Element(self.next_reference(document, element))'''
+
+[[mutant]]
+name = "the viewport turned"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''                rect_value(0.0, 0.0, size.width, size.height)'''
+to = '''                rect_value(0.0, 0.0, size.height, size.width)'''
+
+[[mutant]]
+name = "the top-level frame no frame"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''            WebDriverCommand::SwitchToFrame { index: None, element: None } => WebDriverValue::Null,'''
+to = ''''''
+
+[[mutant]]
+name = "the action's origin the click's point"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''                let query = if in_view_center_only {'''
+to = '''                let query = if !in_view_center_only {'''
+
+[[mutant]]
+name = "an element no element"
+file = "crates/dom_js_next/src/webdriver.rs"
+from = '''                Kind::Element(cx.node_id(node))'''
+to = '''                Kind::Other'''
+
+[[mutant]]
+name = "the window no window"
+file = "crates/dom_js_next/src/webdriver.rs"
+from = '''            return Kind::Window(cx.node_id(cx.window_document(window)));'''
+to = '''            return Kind::Other;'''
+
+[[mutant]]
+name = "a token list no collection"
+file = "crates/dom_js_next/src/webdriver.rs"
+from = '''            || no_gc.unwrap::<DomTokenList>(cx.gc, object).is_some()'''
+to = ''''''
+
+[[mutant]]
+name = "a node list no collection"
+file = "crates/dom_js_next/src/webdriver.rs"
+from = '''            || no_gc.unwrap::<NodeList>(cx.gc, object).is_some()'''
+to = ''''''
+
+[[mutant]]
+name = "an inherited toJSON"
+file = "crates/dom_js_next/src/webdriver.rs"
+from = '''    if object.has_own_property(v8_scope, to_json.into()).ok_or(Failed::Threw)? {'''
+to = '''    if object.has(v8_scope, to_json.into()).ok_or(Failed::Threw)? {'''
+
+[[mutant]]
+name = "side by side a cycle"
+file = "crates/dom_js_next/src/webdriver.rs"
+from = '''    seen.pop();
+    cloned'''
+to = '''    cloned'''
+
+[[mutant]]
+name = "an arguments object an object"
+file = "crates/dom_js_next/src/webdriver.rs"
+from = '''    let collection = value.is_array() || value.is_arguments_object() || matches!(kind, Kind::Collection);'''
+to = '''    let collection = value.is_array() || matches!(kind, Kind::Collection);'''
+
+[[mutant]]
+name = "properties not enumerable too"
+file = "crates/dom_js_next/src/webdriver.rs"
+from = '''                property_filter: v8::PropertyFilter::ONLY_ENUMERABLE | v8::PropertyFilter::SKIP_SYMBOLS,'''
+to = '''                property_filter: v8::PropertyFilter::SKIP_SYMBOLS,'''
+
+[[mutant]]
+name = "this undefined"
+file = "crates/dom_js_next/src/webdriver.rs"
+from = '''        let returned = function.call(scope, window.into(), &values).ok_or(Failed::Threw)?;
+        let promise'''
+to = '''        let undefined = v8::undefined(scope);
+        let returned = function.call(scope, undefined.into(), &values).ok_or(Failed::Threw)?;
+        let promise'''
+
+[[mutant]]
+name = "an async script settled each call"
+file = "crates/dom_js_next/src/webdriver.rs"
+from = '''    let settled = v8::Boolean::new(scope, true);'''
+to = '''    let settled = v8::Boolean::new(scope, false);'''
+
+[[mutant]]
+name = "an async script's rejection unheard"
+file = "crates/dom_js_next/src/webdriver.rs"
+from = '''        returned.catch(scope, reject).ok_or(Failed::Threw)?;'''
+to = '''        let _ = reject;'''
+
+[[mutant]]
+name = "an async script's promise not awaited"
+file = "crates/dom_js_next/src/webdriver.rs"
+from = '''    resolver.resolve(scope, args.get(0));
+    let promise = resolver.get_promise(scope);
+    let _ = await_script(scope, id, promise);'''
+to = '''    let _ = resolver;
+    let value = v8::Local::new(scope, args.get(0));
+    v8::tc_scope!(let tc, scope);
+    let cloned = match state::scope(tc) {
+        Some(mut scope) => clone(&mut scope, value, &mut Vec::new()),
+        None => return,
+    };
+    let result = cloned.map_err(|failed| failure(tc, failed));
+    settled(tc, id, result);'''
+
+[[mutant]]
+name = "no load to DevTools"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        if let Some(id) = self.tell_next_lifecycle("load") {
+            self.page_agent.stopped_loading(&id);
+        }'''
+to = '''        if let Some(id) = self.next_frame_info().map(|main| main.id) {
+            self.page_agent.stopped_loading(&id);
+        }'''
+
+[[mutant]]
+name = "no frameStoppedLoading"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            self.page_agent.stopped_loading(&id);'''
+to = '''            let _ = id;'''
+
+[[mutant]]
+name = "no DOMContentLoaded to DevTools"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        self.tell_next_lifecycle("DOMContentLoaded");'''
+to = ''''''
+
+[[mutant]]
+name = "no domContentEventFired"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        self.page_agent.dom_content_loaded();'''
+to = ''''''
+
+[[mutant]]
+name = "no loadEventFired"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        self.page_agent.load_fired();'''
+to = ''''''
+
+[[mutant]]
+name = "the loader not the navigation's"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            loader_id: next.navigation_id.to_string(),'''
+to = '''            loader_id: "0".to_owned(),'''
+
+[[mutant]]
+name = "an opaque origin"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            origin @ url::Origin::Tuple(..) => origin.ascii_serialization(),'''
+to = '''            url::Origin::Tuple(..) => "://".to_owned(),'''
+
+[[mutant]]
+name = "no markup to DevTools"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            source: next.source.clone(),'''
+to = '''            source: Rc::from(""),'''
+
+[[mutant]]
+name = "the new DOM's frame not told"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''            None if self.next_document.is_some() => frames.extend(self.next_frame_info()),'''
+to = ''''''

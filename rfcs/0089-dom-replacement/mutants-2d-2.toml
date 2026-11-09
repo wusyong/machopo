@@ -1,0 +1,170 @@
+# Stage 2d-2: a document's loading (readiness, readystatechange,
+# DOMContentLoaded, the window's load with its legacy target override),
+# the new DOM's timers in the renderer's loop, unhandledrejection, console,
+# queueMicrotask, string timer handlers.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom"]
+timeout = 1200
+
+[[mutant]]
+name = "a document's readiness starts loading"
+file = "crates/dom_next/src/window.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        ready_state: Cell::new(ready_state_bits(DocumentReadyState::Complete)),'''
+to = '''        ready_state: Cell::new(ready_state_bits(DocumentReadyState::Loading)),'''
+
+[[mutant]]
+name = "readiness isn't set"
+file = "crates/dom_next/src/window.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        self.ensure_document_data(document).ready_state.set(ready_state_bits(state));'''
+to = '''        let _ = (document, state);'''
+
+[[mutant]]
+name = "no readystatechange"
+file = "crates/dom_api_next/src/lifecycle.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''    fire_event(host, dom, &target, "readystatechange", false, false);'''
+to = ''''''
+
+[[mutant]]
+name = "DOMContentLoaded doesn't bubble"
+file = "crates/dom_api_next/src/lifecycle.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''            fire_event(host, dom, &target, "DOMContentLoaded", true, false);'''
+to = '''            fire_event(host, dom, &target, "DOMContentLoaded", false, false);'''
+
+[[mutant]]
+name = "load is fired at the document"
+file = "crates/dom_api_next/src/lifecycle.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''                fire_load(host, dom, &window, &target);'''
+to = '''                let _ = window;
+                fire_event(host, dom, &target, "load", false, false);'''
+
+[[mutant]]
+name = "load's target is the window"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        cx.set_event_target(event, Some(target.get(cx.gc)));
+        cx.set_event_path(event, &[at.get(cx.gc)]);'''
+to = '''        cx.set_event_target(event, Some(at.get(cx.gc)));
+        cx.set_event_path(event, &[at.get(cx.gc)]);'''
+
+[[mutant]]
+name = "interactive reads as loading"
+file = "crates/dom_api_next/src/document.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        dom_next::DocumentReadyState::Interactive => "interactive",'''
+to = '''        dom_next::DocumentReadyState::Interactive => "loading",'''
+
+[[mutant]]
+name = "a rejection's event is an Event"
+file = "crates/dom_api_next/src/typed.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''            } else if cx.promise_rejection_data(event).is_some() {'''
+to = '''            } else if false {'''
+
+[[mutant]]
+name = "rejections aren't notified"
+file = "crates/dom_js_next/src/engine.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        self.data.isolate().perform_microtask_checkpoint();
+        self.notify_rejected_promises();'''
+to = '''        self.data.isolate().perform_microtask_checkpoint();'''
+
+[[mutant]]
+name = "a rejection's reason isn't kept"
+file = "crates/dom_js_next/src/engine.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''                        bindings::set_strong_value(host.scope, reason_edge, reason);'''
+to = '''                        let _ = (reason_edge, reason);'''
+
+[[mutant]]
+name = "the inspector doesn't hear of the realm"
+file = "crates/dom_js_next/src/engine.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''            bindings::devtools::context_created(scope, context, &origin, None, true);'''
+to = '''            let _ = origin;'''
+
+[[mutant]]
+name = "a window's document starts complete"
+file = "crates/dom_js_next/src/engine.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom"]
+from = '''            cx.set_ready_state(document, dom_next::DocumentReadyState::Loading);'''
+to = ''''''
+
+[[mutant]]
+name = "no time until a timer"
+file = "crates/dom_js_next/src/engine.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom"]
+from = '''        crate::window::until_next_timer(scope, context)'''
+to = '''        { let _ = (scope, context); None }'''
+
+[[mutant]]
+name = "a microtask's exception isn't reported"
+file = "crates/dom_js_next/src/window.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''    if callback.call(scope, undefined, &[]).is_none() {
+        crate::listeners::report_caught('''
+to = '''    if callback.call(scope, undefined, &[]).is_none() && false {
+        crate::listeners::report_caught('''
+
+[[mutant]]
+name = "queueMicrotask runs nothing"
+file = "crates/dom_js_next/src/window.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''    scope.enqueue_microtask(job);'''
+to = '''    let _ = job;'''
+
+[[mutant]]
+name = "any handler is a function"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        let handler = if value.is_function() {'''
+to = '''        let handler = if true {'''
+
+[[mutant]]
+name = "a string handler doesn't run"
+file = "crates/dom_js_next/src/listeners.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''            let ran = v8::Script::compile(scope, source, Some(&origin)).and_then(|script| script.run(scope));
+            if ran.is_none() {
+                report_caught(scope, state, dom, ReportAt::Global(this));
+            }
+        }
+    }'''
+to = '''            let _ = (source, origin, state, this);
+        }
+    }'''
+
+[[mutant]]
+name = "loading never ends"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom"]
+from = '''                    self.next_document_loaded();
+                    return;'''
+to = '''                    return;'''
+
+[[mutant]]
+name = "no load after DOMContentLoaded"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom"]
+from = '''        if let Some(engine) = &mut self.next_engine {
+            engine.document_ready(DocumentReadiness::Loaded);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "timers don't run"
+file = "crates/renderer/src/render_thread.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom"]
+from = '''            self.run_due_tasks();
+            self.run_next_timers();'''
+to = '''            self.run_due_tasks();'''
+
+[[mutant]]
+name = "the loop doesn't wait for the new DOM's timers"
+file = "crates/renderer/src/render_thread.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom"]
+from = '''        let next = self.next_engine.as_mut().and_then(|engine| engine.until_next_timer());'''
+to = '''        let next: Option<Duration> = None;'''

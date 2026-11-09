@@ -1,0 +1,36 @@
+# Mutation test of the anchor pool (stage 3, continued): a spare root
+# points at an anchor that is rooted on its own:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-3c-anchor.toml
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::"]
+timeout = 600
+
+[[mutant]]
+name = "a spare still roots what it pointed to"
+file = "crates/dom/src/handle.rs"
+from = '''        persistent.set(&self.anchor.get_rust_obj());'''
+to = ''''''
+
+[[mutant]]
+name = "the anchor is rooted only by the spares"
+file = "crates/dom/src/handle.rs"
+from = '''type AnchorRoot = Persistent<RootAnchor>;'''
+to = '''type AnchorRoot = v8::cppgc::WeakPersistent<RootAnchor>;'''
+
+[[mutant]]
+name = "a dropped root's Persistent isn't kept"
+file = "crates/dom/src/handle.rs"
+from = '''        if spares.len() < SPARE_LIMIT {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a spare is never taken"
+file = "crates/dom/src/handle.rs"
+from = '''        let mut spare = self.spare.borrow_mut().pop()?;'''
+to = '''        let mut spare = None.or_else(|| self.spare.borrow_mut().pop()).filter(|_| false)?;'''
+
+[[mutant]]
+name = "a spare is taken but not set"
+file = "crates/dom/src/handle.rs"
+from = '''        spare.set(&source.get_rust_obj());
+        // SAFETY: it points at what `source` does, a `T`.'''
+to = '''        // SAFETY: it points at what `source` does, a `T`.'''

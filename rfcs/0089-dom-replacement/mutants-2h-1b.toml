@@ -1,0 +1,24 @@
+# Stage 2h-1b: the V8 front's call held across its operation (`Call`),
+# lent whole; a kept result boxed.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+timeout = 1800
+
+[[mutant]]
+name = "a kept result isn't finished"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        if self.call.kept.is_some() {
+            self.finish_kept();'''
+to = '''        if false {
+            self.finish_kept();'''
+
+[[mutant]]
+name = "a result to keep is dropped"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        self.call.kept = Some(Box::new(kept));'''
+to = '''        drop(kept);'''
+
+[[mutant]]
+name = "a name's string isn't returned from the cache"
+file = "crates/dom_js_next/src/front.rs"
+from = '''            .and_then(|index| self.caches.names.get(index))'''
+to = '''            .and_then(|index| self.caches.names.get(index).filter(|_| false))'''

@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<title>Position 2: a dropdown taken out of the flow by position: absolute, placed in its relatively positioned container however deep it sits, over the block after it</title>
+<link rel="match" href="p2-dropdown-ref.html">
+<style>
+  html, body { margin: 0 }
+  .menu { position: relative; width: 120px; height: 24px; background-color: gray }
+  /* Two levels below the container, and still placed in it. */
+  .deep { height: 24px }
+  .dropdown { position: absolute; top: 24px; left: 20px; width: 80px; height: 40px;
+              background-color: green }
+  /* Sized from its insets: the container's padding box, less 10px all round. */
+  .inset { position: absolute; top: 10px; right: 10px; bottom: 10px; left: 10px;
+           background-color: red }
+  .box { position: relative; margin-top: 10px; width: 120px; height: 40px;
+         padding: 10px; background-color: silver }
+  .after { width: 120px; height: 20px; background-color: blue }
+</style>
+<!-- Out of the flow: the menu is 24px tall, and the dropdown paints over
+     what follows it. -->
+<div class="menu"><div class="deep"><div class="dropdown"></div></div></div>
+<div class="after"></div>
+<!-- Both insets of each axis: it fills the padding box, less the insets. -->
+<div class="box"><div class="inset"></div></div>

@@ -1,0 +1,29 @@
+# The tab strip, clicked where its parts are. In the
+# 800px wide window the strip is 34px high; tabs are 240px wide from x 8
+# and 6 to 34 down, so the first's middle is at (128, 20) and the second's
+# at (368, 20), whose close button is at (472, 20). The new tab button
+# follows the last tab: at (266, 20) with one tab, (506, 20) with two.
+navigate pages/tab-one.html
+wait-loaded
+wait-text #name "one"
+click-at 266 20
+navigate pages/tab-long.html
+wait-loaded
+wait-text #name "long"
+# For a person to look at: the active tab joined to the toolbar, the long
+# title fading out.
+screenshot tab-strip
+click-at 128 20
+wait-text #name "one"
+click-at 368 20
+wait-text #name "long"
+# Closing the tab shown shows the one left.
+click-at 472 20
+wait-text #name "one"
+# A new tab again, from the button.
+click-at 266 20
+navigate pages/tab-two.html
+wait-loaded
+wait-text #name "two"
+click-at 128 20
+wait-text #name "one"

@@ -1,0 +1,319 @@
+# Mutation test of steps 3a and 3b (the guest's `resizes` and
+# `intersections` exports: the WIT, dom_wasm's calls, the Lua runtime and
+# its generator):
+# python3 scripts/test.py mutate rfcs/0036-rendering-observers/mutants-3ab.toml
+#
+# The Lua runtime's and the generator's mutants rebuild the runtime first,
+# as `ci.py guests` does (`build_lua_runtime`), from the WIT's C binding
+# and Lua's source that `ci.py guests` left in target/guests, then run W9
+# (the generator's also regenerate the binding). After the run, rebuild it
+# from the restored source with `ci.py guests`: the last mutant's build is
+# left in resources/kun-lua.wasm, and its binding in target/guests.
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "it", "engine::a_guests_resize_and_intersection_observers"]
+timeout = 900
+
+# dom_wasm: which export, what it is given, and the realm's window.
+
+[[mutant]]
+name = "a resize observer's callback is the mutations export"
+file = "crates/dom_wasm/src/store.rs"
+from = '''            Base::Callback(CallbackType::ResizeObserverCallback) => Self::Resizes,'''
+to = '''            Base::Callback(CallbackType::ResizeObserverCallback) => Self::Mutations,'''
+
+[[mutant]]
+name = "an intersection observer's callback is the resizes export"
+file = "crates/dom_wasm/src/store.rs"
+from = '''            Base::Callback(CallbackType::IntersectionObserverCallback) => Self::Intersections,'''
+to = '''            Base::Callback(CallbackType::IntersectionObserverCallback) => Self::Resizes,'''
+
+[[mutant]]
+name = "the kinds of the two exports swapped"
+file = "crates/dom_wasm/src/store.rs"
+from = '''            Self::Resizes,
+            Self::Intersections,
+        ][kind as usize]'''
+to = '''            Self::Intersections,
+            Self::Resizes,
+        ][kind as usize]'''
+
+[[mutant]]
+name = "a resize observer's callback calls the intersections export"
+file = "crates/dom_wasm/src/store.rs"
+from = '''                            Export::Resizes => (exports.resizes, "ResizeObserver"),'''
+to = '''                            Export::Resizes => (exports.intersections, "ResizeObserver"),'''
+
+[[mutant]]
+name = "a resize observer is lent as an intersection observer"
+file = "crates/dom_wasm/src/store.rs"
+from = '''                            Export::Resizes => (exports.resizes, "ResizeObserver"),'''
+to = '''                            Export::Resizes => (exports.resizes, "IntersectionObserver"),'''
+
+[[mutant]]
+name = "resize entries are given as intersection entries"
+file = "crates/dom_wasm/src/store.rs"
+from = '''                                (m.hold(store_id, entry), "ResizeObserverEntry")'''
+to = '''                                (m.hold(store_id, entry), "IntersectionObserverEntry")'''
+
+[[mutant]]
+name = "with_host's host has no window"
+file = "crates/dom_wasm/src/lib.rs"
+from = '''                    window: Some(window),'''
+to = '''                    window: None,'''
+
+[[mutant]]
+name = "a required nullable member's none is no member"
+file = "crates/dom_wasm/src/host.rs"
+from = '''                if member.ty.nullable && !member.required && matches!(field, Val::Option(None)) {'''
+to = '''                if member.ty.nullable && matches!(field, Val::Option(None)) {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "wasm_reftests::w9_lua"]
+
+# The WIT.
+
+[[mutant]]
+name = "no resizes export"
+file = "crates/dom_api/src/wit.rs"
+from = '''        "  resizes: func(id: u32, entries: list<resize-observer-entry>, observer: borrow<resize-observer>);"'''
+to = '''        "  /// (none)"'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "wit::"]
+
+[[mutant]]
+name = "the intersections export's observer is owned"
+file = "crates/dom_api/src/wit.rs"
+from = '''        "  intersections: func(id: u32, entries: list<intersection-observer-entry>, observer: borrow<intersection-observer>);"'''
+to = '''        "  intersections: func(id: u32, entries: list<intersection-observer-entry>, observer: intersection-observer);"'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "wit::"]
+
+# The Lua runtime (sdk/lua/kun_lua.c).
+
+[[mutant]]
+name = "Lua's resize entries are of the observer's kind"
+file = "sdk/lua/kun_lua.c"
+from = '''    resize_observer_entry_kind = find_kind("ResizeObserverEntry");'''
+to = '''    resize_observer_entry_kind = find_kind("ResizeObserver");'''
+test = ["bash", "-c", """
+W=../third_party/wasi-sdk-34.0/bin L=target/guests/lua/lua-5.4.9/src G=target/guests/gen
+PATH=$W $W/clang --target=wasm32-wasip3 -O2 -DNDEBUG -Wall -Werror -Wl,--strip-debug \
+  -ffile-prefix-map=$PWD=/kun -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false \
+  -Dl_signalT=int '-Dl_randomizePivot()=(~0u)' -I$L -I$G -Isdk/lua \
+  $PWD/sdk/lua/kun_lua.c $PWD/target/guests/lua/kun_dom.c $PWD/$G/script.c $PWD/$G/script_component_type.o \
+  $(for f in lapi lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes lparser lstate \
+      lstring ltable ltm lundump lvm lzio lauxlib lbaselib lcorolib lmathlib lstrlib ltablib lutf8lib; \
+    do echo $PWD/$L/$f.c; done) \
+  -lsetjmp -o resources/kun-lua.wasm \
+&& cargo test -q -p shell --test it wasm_reftests::w9_lua
+"""]
+
+[[mutant]]
+name = "Lua's intersection entries are mutation records"
+file = "sdk/lua/kun_lua.c"
+from = '''                      .records_kind = intersection_observer_entry_kind,'''
+to = '''                      .records_kind = mutation_record_kind,'''
+test = ["bash", "-c", """
+W=../third_party/wasi-sdk-34.0/bin L=target/guests/lua/lua-5.4.9/src G=target/guests/gen
+PATH=$W $W/clang --target=wasm32-wasip3 -O2 -DNDEBUG -Wall -Werror -Wl,--strip-debug \
+  -ffile-prefix-map=$PWD=/kun -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false \
+  -Dl_signalT=int '-Dl_randomizePivot()=(~0u)' -I$L -I$G -Isdk/lua \
+  $PWD/sdk/lua/kun_lua.c $PWD/target/guests/lua/kun_dom.c $PWD/$G/script.c $PWD/$G/script_component_type.o \
+  $(for f in lapi lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes lparser lstate \
+      lstring ltable ltm lundump lvm lzio lauxlib lbaselib lcorolib lmathlib lstrlib ltablib lutf8lib; \
+    do echo $PWD/$L/$f.c; done) \
+  -lsetjmp -o resources/kun-lua.wasm \
+&& cargo test -q -p shell --test it wasm_reftests::w9_lua
+"""]
+
+[[mutant]]
+name = "Lua's intersection observer is lent as a resize observer"
+file = "sdk/lua/kun_lua.c"
+from = '''                      .borrowed_kind = intersection_observer_kind,'''
+to = '''                      .borrowed_kind = resize_observer_kind,'''
+test = ["bash", "-c", """
+W=../third_party/wasi-sdk-34.0/bin L=target/guests/lua/lua-5.4.9/src G=target/guests/gen
+PATH=$W $W/clang --target=wasm32-wasip3 -O2 -DNDEBUG -Wall -Werror -Wl,--strip-debug \
+  -ffile-prefix-map=$PWD=/kun -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false \
+  -Dl_signalT=int '-Dl_randomizePivot()=(~0u)' -I$L -I$G -Isdk/lua \
+  $PWD/sdk/lua/kun_lua.c $PWD/target/guests/lua/kun_dom.c $PWD/$G/script.c $PWD/$G/script_component_type.o \
+  $(for f in lapi lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes lparser lstate \
+      lstring ltable ltm lundump lvm lzio lauxlib lbaselib lcorolib lmathlib lstrlib ltablib lutf8lib; \
+    do echo $PWD/$L/$f.c; done) \
+  -lsetjmp -o resources/kun-lua.wasm \
+&& cargo test -q -p shell --test it wasm_reftests::w9_lua
+"""]
+
+[[mutant]]
+name = "Lua's resize observer's callback isn't given the observer"
+file = "sdk/lua/kun_lua.c"
+from = '''                      .drop_borrowed = drop_resize_observer,'''
+to = '''                      .drop_borrowed = NULL,'''
+test = ["bash", "-c", """
+W=../third_party/wasi-sdk-34.0/bin L=target/guests/lua/lua-5.4.9/src G=target/guests/gen
+PATH=$W $W/clang --target=wasm32-wasip3 -O2 -DNDEBUG -Wall -Werror -Wl,--strip-debug \
+  -ffile-prefix-map=$PWD=/kun -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false \
+  -Dl_signalT=int '-Dl_randomizePivot()=(~0u)' -I$L -I$G -Isdk/lua \
+  $PWD/sdk/lua/kun_lua.c $PWD/target/guests/lua/kun_dom.c $PWD/$G/script.c $PWD/$G/script_component_type.o \
+  $(for f in lapi lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes lparser lstate \
+      lstring ltable ltm lundump lvm lzio lauxlib lbaselib lcorolib lmathlib lstrlib ltablib lutf8lib; \
+    do echo $PWD/$L/$f.c; done) \
+  -lsetjmp -o resources/kun-lua.wasm \
+&& cargo test -q -p shell --test it wasm_reftests::w9_lua
+"""]
+
+[[mutant]]
+name = "Lua's records keep only the first handle"
+file = "sdk/lua/kun_lua.c"
+from = '''            (handles)[i_] = (list)->ptr[i_].__handle;                            \'''
+to = '''            (handles)[i_] = (list)->ptr[0].__handle;                             \'''
+test = ["bash", "-c", """
+W=../third_party/wasi-sdk-34.0/bin L=target/guests/lua/lua-5.4.9/src G=target/guests/gen
+PATH=$W $W/clang --target=wasm32-wasip3 -O2 -DNDEBUG -Wall -Werror -Wl,--strip-debug \
+  -ffile-prefix-map=$PWD=/kun -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false \
+  -Dl_signalT=int '-Dl_randomizePivot()=(~0u)' -I$L -I$G -Isdk/lua \
+  $PWD/sdk/lua/kun_lua.c $PWD/target/guests/lua/kun_dom.c $PWD/$G/script.c $PWD/$G/script_component_type.o \
+  $(for f in lapi lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes lparser lstate \
+      lstring ltable ltm lundump lvm lzio lauxlib lbaselib lcorolib lmathlib lstrlib ltablib lutf8lib; \
+    do echo $PWD/$L/$f.c; done) \
+  -lsetjmp -o resources/kun-lua.wasm \
+&& cargo test -q -p shell --test it wasm_reftests::w9_lua
+"""]
+
+[[mutant]]
+name = "a threshold of a number is an array"
+file = "sdk/lua/kun_lua.c"
+from = '''        *number = lua_tonumber(L, -1);
+        lua_pop(L, 1);
+        return false;'''
+to = '''        *number = lua_tonumber(L, -1);
+        lua_pop(L, 1);
+        numbers->ptr = malloc(sizeof(double));
+        numbers->len = 0;
+        return true;'''
+test = ["bash", "-c", """
+W=../third_party/wasi-sdk-34.0/bin L=target/guests/lua/lua-5.4.9/src G=target/guests/gen
+PATH=$W $W/clang --target=wasm32-wasip3 -O2 -DNDEBUG -Wall -Werror -Wl,--strip-debug \
+  -ffile-prefix-map=$PWD=/kun -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false \
+  -Dl_signalT=int '-Dl_randomizePivot()=(~0u)' -I$L -I$G -Isdk/lua \
+  $PWD/sdk/lua/kun_lua.c $PWD/target/guests/lua/kun_dom.c $PWD/$G/script.c $PWD/$G/script_component_type.o \
+  $(for f in lapi lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes lparser lstate \
+      lstring ltable ltm lundump lvm lzio lauxlib lbaselib lcorolib lmathlib lstrlib ltablib lutf8lib; \
+    do echo $PWD/$L/$f.c; done) \
+  -lsetjmp -o resources/kun-lua.wasm \
+&& cargo test -q -p shell --test it wasm_reftests::w9_lua
+"""]
+
+[[mutant]]
+name = "a threshold of anything is accepted"
+file = "sdk/lua/kun_lua.c"
+from = '''    if (!lua_istable(L, -1)) luaL_error(L, "the field '%s' must be a number or an array of numbers", name);'''
+to = '''    if (!lua_istable(L, -1)) { lua_pop(L, 1); return; }'''
+test = ["bash", "-c", """
+W=../third_party/wasi-sdk-34.0/bin L=target/guests/lua/lua-5.4.9/src G=target/guests/gen
+PATH=$W $W/clang --target=wasm32-wasip3 -O2 -DNDEBUG -Wall -Werror -Wl,--strip-debug \
+  -ffile-prefix-map=$PWD=/kun -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false \
+  -Dl_signalT=int '-Dl_randomizePivot()=(~0u)' -I$L -I$G -Isdk/lua \
+  $PWD/sdk/lua/kun_lua.c $PWD/target/guests/lua/kun_dom.c $PWD/$G/script.c $PWD/$G/script_component_type.o \
+  $(for f in lapi lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes lparser lstate \
+      lstring ltable ltm lundump lvm lzio lauxlib lbaselib lcorolib lmathlib lstrlib ltablib lutf8lib; \
+    do echo $PWD/$L/$f.c; done) \
+  -lsetjmp -o resources/kun-lua.wasm \
+&& cargo test -q -p shell --test it wasm_reftests::w9_lua
+"""]
+
+[[mutant]]
+name = "a root of another type is accepted"
+file = "sdk/lua/kun_lua.c"
+from = '''    if (field(L, index, name, false)) luaL_error(L, "the field '%s' must be one of the objects it takes", name);'''
+to = '''    if (field(L, index, name, false)) lua_pop(L, 1);'''
+test = ["bash", "-c", """
+W=../third_party/wasi-sdk-34.0/bin L=target/guests/lua/lua-5.4.9/src G=target/guests/gen
+PATH=$W $W/clang --target=wasm32-wasip3 -O2 -DNDEBUG -Wall -Werror -Wl,--strip-debug \
+  -ffile-prefix-map=$PWD=/kun -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false \
+  -Dl_signalT=int '-Dl_randomizePivot()=(~0u)' -I$L -I$G -Isdk/lua \
+  $PWD/sdk/lua/kun_lua.c $PWD/target/guests/lua/kun_dom.c $PWD/$G/script.c $PWD/$G/script_component_type.o \
+  $(for f in lapi lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes lparser lstate \
+      lstring ltable ltm lundump lvm lzio lauxlib lbaselib lcorolib lmathlib lstrlib ltablib lutf8lib; \
+    do echo $PWD/$L/$f.c; done) \
+  -lsetjmp -o resources/kun-lua.wasm \
+&& cargo test -q -p shell --test it wasm_reftests::w9_lua
+"""]
+
+[[mutant]]
+name = "a required record field may be missing"
+file = "sdk/lua/kun_lua.c"
+from = '''    if (!field(L, index, name, required)) return false;
+    if (!lua_istable(L, -1)) luaL_error(L, "the field '%s' must be a table", name);'''
+to = '''    if (!field(L, index, name, false)) return false;
+    if (!lua_istable(L, -1)) luaL_error(L, "the field '%s' must be a table", name);'''
+test = ["bash", "-c", """
+W=../third_party/wasi-sdk-34.0/bin L=target/guests/lua/lua-5.4.9/src G=target/guests/gen
+PATH=$W $W/clang --target=wasm32-wasip3 -O2 -DNDEBUG -Wall -Werror -Wl,--strip-debug \
+  -ffile-prefix-map=$PWD=/kun -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false \
+  -Dl_signalT=int '-Dl_randomizePivot()=(~0u)' -I$L -I$G -Isdk/lua \
+  $PWD/sdk/lua/kun_lua.c $PWD/target/guests/lua/kun_dom.c $PWD/$G/script.c $PWD/$G/script_component_type.o \
+  $(for f in lapi lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes lparser lstate \
+      lstring ltable ltm lundump lvm lzio lauxlib lbaselib lcorolib lmathlib lstrlib ltablib lutf8lib; \
+    do echo $PWD/$L/$f.c; done) \
+  -lsetjmp -o resources/kun-lua.wasm \
+&& cargo test -q -p shell --test it wasm_reftests::w9_lua
+"""]
+
+# The generator (sdk/lua/generator): the binding regenerated, then the
+# runtime rebuilt.
+
+[[mutant]]
+name = "a string with a default is always the default"
+file = "sdk/lua/generator/src/main.rs"
+from = '''                "        if (lua_getfield(L, {index}, \"{field_name}\") != LUA_TNIL) {{ lua_pop(L, 1); {var}.{member} = kun_lua_field_string(L, {index}, \"{field_name}\", true); }} else lua_pop(L, 1);"'''
+to = '''                "        lua_getfield(L, {index}, \"{field_name}\"); lua_pop(L, 1);"'''
+test = ["bash", "-c", """
+(cd sdk/lua/generator && cargo run --quiet --release --locked --target-dir=../../../target/guests/lua-generator \
+  -- ../../../crates/dom_api/tests/machopo-dom.wit ../../../target/guests/lua/kun_dom.c) \
+&& W=../third_party/wasi-sdk-34.0/bin L=target/guests/lua/lua-5.4.9/src G=target/guests/gen \
+&& PATH=$W $W/clang --target=wasm32-wasip3 -O2 -DNDEBUG -Wall -Werror -Wl,--strip-debug \
+  -ffile-prefix-map=$PWD=/kun -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false \
+  -Dl_signalT=int '-Dl_randomizePivot()=(~0u)' -I$L -I$G -Isdk/lua \
+  $PWD/sdk/lua/kun_lua.c $PWD/target/guests/lua/kun_dom.c $PWD/$G/script.c $PWD/$G/script_component_type.o \
+  $(for f in lapi lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes lparser lstate \
+      lstring ltable ltm lundump lvm lzio lauxlib lbaselib lcorolib lmathlib lstrlib ltablib lutf8lib; \
+    do echo $PWD/$L/$f.c; done) \
+  -lsetjmp -o resources/kun-lua.wasm \
+&& cargo test -q -p shell --test it wasm_reftests::w9_lua
+"""]
+
+[[mutant]]
+name = "an optional record given is none"
+file = "sdk/lua/generator/src/main.rs"
+from = '''                format!(" {var}.{member}.is_some = true;")'''
+to = '''                format!(" {var}.{member}.is_some = false;")'''
+test = ["bash", "-c", """
+(cd sdk/lua/generator && cargo run --quiet --release --locked --target-dir=../../../target/guests/lua-generator \
+  -- ../../../crates/dom_api/tests/machopo-dom.wit ../../../target/guests/lua/kun_dom.c) \
+&& W=../third_party/wasi-sdk-34.0/bin L=target/guests/lua/lua-5.4.9/src G=target/guests/gen \
+&& PATH=$W $W/clang --target=wasm32-wasip3 -O2 -DNDEBUG -Wall -Werror -Wl,--strip-debug \
+  -ffile-prefix-map=$PWD=/kun -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false \
+  -Dl_signalT=int '-Dl_randomizePivot()=(~0u)' -I$L -I$G -Isdk/lua \
+  $PWD/sdk/lua/kun_lua.c $PWD/target/guests/lua/kun_dom.c $PWD/$G/script.c $PWD/$G/script_component_type.o \
+  $(for f in lapi lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes lparser lstate \
+      lstring ltable ltm lundump lvm lzio lauxlib lbaselib lcorolib lmathlib lstrlib ltablib lutf8lib; \
+    do echo $PWD/$L/$f.c; done) \
+  -lsetjmp -o resources/kun-lua.wasm \
+&& cargo test -q -p shell --test it wasm_reftests::w9_lua
+"""]
+
+[[mutant]]
+name = "an omitted threshold is 1"
+file = "sdk/lua/generator/src/main.rs"
+from = '''                "    {var}.{member}.tag = {number_tag};\n    {var}.{member}.val.{number} = 0;"'''
+to = '''                "    {var}.{member}.tag = {number_tag};\n    {var}.{member}.val.{number} = 1;"'''
+test = ["bash", "-c", """
+(cd sdk/lua/generator && cargo run --quiet --release --locked --target-dir=../../../target/guests/lua-generator \
+  -- ../../../crates/dom_api/tests/machopo-dom.wit ../../../target/guests/lua/kun_dom.c) \
+&& W=../third_party/wasi-sdk-34.0/bin L=target/guests/lua/lua-5.4.9/src G=target/guests/gen \
+&& PATH=$W $W/clang --target=wasm32-wasip3 -O2 -DNDEBUG -Wall -Werror -Wl,--strip-debug \
+  -ffile-prefix-map=$PWD=/kun -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false \
+  -Dl_signalT=int '-Dl_randomizePivot()=(~0u)' -I$L -I$G -Isdk/lua \
+  $PWD/sdk/lua/kun_lua.c $PWD/target/guests/lua/kun_dom.c $PWD/$G/script.c $PWD/$G/script_component_type.o \
+  $(for f in lapi lcode lctype ldebug ldo ldump lfunc lgc llex lmem lobject lopcodes lparser lstate \
+      lstring ltable ltm lundump lvm lzio lauxlib lbaselib lcorolib lmathlib lstrlib ltablib lutf8lib; \
+    do echo $PWD/$L/$f.c; done) \
+  -lsetjmp -o resources/kun-lua.wasm \
+&& cargo test -q -p shell --test it wasm_reftests::w9_lua
+"""]

@@ -1,0 +1,104 @@
+# Step 3d: the replay split at the recorded safepoints (the plan's bits,
+# one operation of the new heap from each), the full GC's least limit, the
+# nursery's peak in `gc_bench`'s reports, and `bench.py gc`'s minor pauses
+# (the young generation's alone, their distribution, the report's table)
+# and nursery column. Run with `RUSTY_V8_ARCHIVE` (`test.py` checks the
+# third-party pins).
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it", "replay::"]
+timeout = 900
+
+# The plan's safepoints.
+
+[[mutant]]
+name = "the plan records no safepoint"
+file = "crates/gc_bench/src/replay.rs"
+from = '''        if std::mem::take(&mut safepoint) {'''
+to = '''        if std::mem::take(&mut safepoint) && false {'''
+
+[[mutant]]
+name = "a safepoint stands before every op after it"
+file = "crates/gc_bench/src/replay.rs"
+from = '''        if std::mem::take(&mut safepoint) {'''
+to = '''        if safepoint {'''
+
+[[mutant]]
+name = "a safepoint's bit is read from the wrong word"
+file = "crates/gc_bench/src/replay.rs"
+from = '''            .get(at / 64)'''
+to = '''            .get(at / 32)'''
+
+# The new heap's operations.
+
+[[mutant]]
+name = "a turn is one operation"
+file = "crates/gc_bench/src/gc_replay.rs"
+from = '''                    if plan.safepoint_before(at) {'''
+to = '''                    if false && plan.safepoint_before(at) {'''
+
+[[mutant]]
+name = "the operations aren't counted"
+file = "crates/gc_bench/src/gc_replay.rs"
+from = '''            mutations = mutations.saturating_add(1);'''
+to = '''            let _ = mutations;'''
+
+# `bench.py gc`'s minor pauses.
+
+[[mutant]]
+name = "a full GC's pause is a minor one"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''    return pauses([one for one in slices if gc_kind(one[2]) == "young"])'''
+to = '''    return pauses([one for one in slices if gc_kind(one[2]) in ("young", "atomic")])'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests"]
+
+[[mutant]]
+name = "the p99 is the p95"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''            "p99_ns": percentile(every_young_pause, 0.99),'''
+to = '''            "p99_ns": percentile(every_young_pause, 0.95),'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "SummaryTests"]
+
+[[mutant]]
+name = "the minor pauses are only the first run's"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''    every_young_pause = [pause for run in runs for pause in run.get("young_pauses_ns", [])]'''
+to = '''    every_young_pause = list(runs[0].get("young_pauses_ns", []))'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "SummaryTests"]
+
+[[mutant]]
+name = "the table shows ms"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''                f"| {workload} | {heap} | {data['count']:g} | {us(data['median_ns'])} | {us(data['p95_ns'])} | "'''
+to = '''                f"| {workload} | {heap} | {data['count']:g} | {ms(data['median_ns'])} | {us(data['p95_ns'])} | "'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "SummaryTests"]
+
+# The full GC's least limit and the nursery's peak.
+
+[[mutant]]
+name = "the least before a full GC is cppgc's"
+file = "crates/gc/src/heap.rs"
+from = '''            min_allocation_bytes: 2 << 20,'''
+to = '''            min_allocation_bytes: 640 << 10,'''
+test = ["cargo", "test", "-q", "-p", "gc", "--test", "it", "heap::"]
+
+[[mutant]]
+name = "the nursery's peak isn't kept"
+file = "crates/gc_bench/src/gc_heap.rs"
+from = '''        peak_nursery = peak_nursery.max(heap.stats().nursery_bytes);'''
+to = '''        let _ = &mut peak_nursery;'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it", "workloads::"]
+
+[[mutant]]
+name = "the nursery's peak is the first run's"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''        "peak_nursery_bytes": max((run["peak_nursery_bytes"] for run in runs if "peak_nursery_bytes" in run),
+                                  default=None),'''
+to = '''        "peak_nursery_bytes": next((run["peak_nursery_bytes"] for run in runs if "peak_nursery_bytes" in run),
+                                   None),'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "SummaryTests"]
+
+[[mutant]]
+name = "the nursery column is empty"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''{'' if nursery is None else mib(nursery)}'''
+to = '''{''}'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "SummaryTests"]

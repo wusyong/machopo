@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<!-- frames.txt's page: child frames' documents, picked with `frame`; one
+     nested, one in an iframe without a box. The outer iframe is half the
+     window wide, so resizing the window lays its document out again. Its
+     button, and the far iframe's (below the window, and below its own
+     viewport), say when they are clicked. -->
+<title>frames</title>
+<style>iframe { width: 50%; }</style>
+<iframe id="outer"
+  srcdoc="<p id=text>the child document</p><div id=half style='width: 50%; height: 20px'></div><button id=press onclick='this.textContent = &quot;pressed&quot;'>press</button><iframe id=inner srcdoc='<p id=deep>the grandchild document</p>'></iframe>"></iframe>
+<iframe id="hidden" style="display: none"
+  srcdoc="<p id=there>a child document without a box</p>"></iframe>
+<p id="text">the page</p>
+<div style="height: 1000px"></div>
+<iframe id="far"
+  srcdoc="<div style='height: 1000px'></div><button id=far-press onclick='this.textContent = &quot;pressed&quot;'>press</button><div style='height: 100px'></div>"></iframe>

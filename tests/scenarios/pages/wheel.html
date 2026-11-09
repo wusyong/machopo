@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<!-- The wheel in the page, for wheel.txt: #map cancels the wheels over it
+     (a blocking listener); the document's listener, passive by default,
+     notes the others. #status says what the last wheel was. -->
+<title>wheel</title>
+<style>
+  html, body { margin: 0 }
+  #map { height: 120px; background-color: #e8f0fe }
+  #rest { height: 3000px }
+</style>
+<div id="map">map</div>
+<p id="status">no wheel yet</p>
+<div id="rest"></div>
+<script>
+  const status = document.getElementById('status');
+  let canceled = 0;
+  document.getElementById('map').addEventListener('wheel', e => {
+    e.preventDefault();
+    canceled += 1;
+    status.textContent = `canceled ${canceled} over the map`;
+  });
+  document.addEventListener('wheel', e => {
+    if (e.target.id === 'map') return;
+    status.textContent = `scrolled to ${Math.round(scrollY)}, cancelable: ${e.cancelable}`;
+  });
+</script>

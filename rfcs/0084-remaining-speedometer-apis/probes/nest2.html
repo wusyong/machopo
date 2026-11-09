@@ -1,0 +1,17 @@
+<script>
+const out = [];
+let result;
+function measure(name, delay) {
+  const set = performance.now();
+  setTimeout(() => out.push(`${name} ${(performance.now() - set).toFixed(1)}`), delay);
+}
+function nest(level) {
+  if (level < 8) return setTimeout(() => nest(level + 1), 0);
+  measure("direct", 0);
+  queueMicrotask(() => measure("microtask", 0));
+  Promise.resolve().then(() => measure("promise", 0));
+  setTimeout(() => result = out.join(", "), 100);
+}
+setTimeout(() => nest(1), 0);
+function run() { return new Promise(r => setTimeout(() => r(result), 400)); }
+</script>

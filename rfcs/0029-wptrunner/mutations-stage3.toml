@@ -1,0 +1,83 @@
+# The third stage's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0029-wptrunner/mutations-stage3.toml`. The wptrunner ones run one at
+# a time (`test.py reftest`); `check_wpt_runs.py` holds the checks that need
+# a run of their own.
+test = ["python3", "scripts/test.py", "reftest"]
+timeout = 900
+
+[[mutant]]
+name = "the product drops a subsuite's arguments"
+file = "tests/wpt/wptrunner_machopo/wptrunner_machopo/__init__.py"
+from = '''    subsuite_args = (subsuite.config if subsuite else {}).get("binary_args", [])'''
+to = '''    subsuite_args = []'''
+test = ["python3", "scripts/test.py", "reftest", "hidpi/"]
+
+[[mutant]]
+name = "hidpi/ in the default subsuite too"
+file = "scripts/test.py"
+from = '''REFTEST_EXCLUDES = ["hidpi/", "wasm/"]'''
+to = '''REFTEST_EXCLUDES = ["wasm/"]'''
+test = ["python3", "scripts/test.py", "reftest", "hidpi/"]
+
+[[mutant]]
+name = "wasm/ through wptrunner"
+file = "scripts/test.py"
+from = '''REFTEST_EXCLUDES = ["hidpi/", "wasm/"]'''
+to = '''REFTEST_EXCLUDES = ["hidpi/"]'''
+test = ["python3", "scripts/test.py", "reftest", "wasm/"]
+
+[[mutant]]
+name = "our roots' manifests not brought up to date"
+file = "tests/wpt/wptrunner_machopo/wptrunner_machopo/run.py"
+from = '''    update_root_manifests(args)
+'''
+to = ''''''
+test = ["python3", "rfcs/0029-wptrunner/check_wpt_runs.py", "kunnew"]
+
+[[mutant]]
+name = "the update leaves our roots out"
+file = "tests/wpt/wptrunner_machopo/wptrunner_machopo/update.py"
+from = '''        test_paths[url_base] = TestRoot(tests, expectations, manifest)'''
+to = '''        pass'''
+test = ["python3", "rfcs/0029-wptrunner/check_wpt_runs.py", "kunupdate"]
+
+[[mutant]]
+name = "the config without our roots"
+file = "tests/wpt/wptrunner_machopo/wptrunner_machopo/run.py"
+from = '''    if args.root:
+        argv += ["--config", write_config(args)]'''
+to = '''    if False:
+        argv += ["--config", write_config(args)]'''
+
+[[mutant]]
+name = "kun's --scale not handed to the pipe's window"
+file = "crates/shell/src/main.rs"
+from = '''                scale: pipe.scale,'''
+to = '''                scale: 1.0,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "automation_pipe", "the_scale"]
+
+[[mutant]]
+name = "the wasm reftests' pages always alike"
+file = "crates/shell/tests/wasm_reftests.rs"
+from = '''    if actual.size == expected.size && actual.pixels == expected.pixels {'''
+to = '''    if true {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "wasm_reftests"]
+
+[[mutant]]
+name = "the wasm reftests' reference is the test"
+file = "crates/shell/tests/wasm_reftests.rs"
+from = '''    test.with_file_name(href)'''
+to = '''    test.to_owned()'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "wasm_reftests"]
+
+[[mutant]]
+name = "the visual state answered at once with nothing to draw"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let ready = RendererHostMsg::VisualStateReady { request_id };
+        self.request_main_frame();'''
+to = '''        let ready = RendererHostMsg::VisualStateReady { request_id };
+        if !self.needs_begin_main_frame {
+            let _ = self.to_browser.send(ready);
+            return;
+        }'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "navigation", "the_visual_state"]

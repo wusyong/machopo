@@ -1,0 +1,150 @@
+# Stage 1h-2: the new DOM's getters closer to Chrome's: the empty name
+# and the reflected attributes found with no look in the names table, the
+# names' V8 strings made once a DOM (dom_next, dom_api_next, dom_js_next),
+# the isolate's state in its slot's box (bindings), the fork's inline
+# unwrap and ReturnValue::set_global (debug builds check both against V8's
+# own). Run with RUSTY_V8_ARCHIVE pointing at
+# ../third_party/rusty_v8_artifacts. Each test command in a scope of at
+# most 24 GB (docs/testing.md); the baselines take seconds, plus a relink.
+timeout = 300
+
+[[mutant]]
+name = "the empty name isn't none"
+file = "crates/dom_next/src/names.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_next", "--test", "it"]
+from = '''            return Some(NONE);'''
+to = '''            return None;'''
+
+[[mutant]]
+name = "id and className's fixed numbers are swapped"
+file = "crates/dom_next/src/names.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''pub const ID: NameId = 9;
+pub const CLASS: NameId = 10;'''
+to = '''pub const ID: NameId = 10;
+pub const CLASS: NameId = 9;'''
+
+[[mutant]]
+name = "a reflected attribute in a namespace is found by number"
+file = "crates/dom_next/src/lib.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''attribute.namespace.get() == names::NONE && '''
+to = ''''''
+
+[[mutant]]
+name = "an absent reflected attribute is another name"
+file = "crates/dom_api_next/src/element.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''.map_or(DomStr::Name(names::NONE), DomStr::from)'''
+to = '''.map_or(DomStr::Name(names::ID), DomStr::from)'''
+
+[[mutant]]
+name = "a front's name result is dropped by default"
+file = "crates/dom_api_next/src/typed.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        self.ret_string(&cx.name_ref(id));
+'''
+to = '''        let _ = (cx, id);
+'''
+
+[[mutant]]
+name = "a name's V8 string is never returned from the DOM's"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''            Some(string) => self.rv.set_global(self.scope, string),'''
+to = '''            Some(_) => self.kept = Kept::Name(id, cx.name(id)),'''
+
+[[mutant]]
+name = "a name's V8 string isn't kept"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''                    names[index] = Some(v8::Global::new(self.scope, string));
+'''
+to = '''                    let _ = &mut names[index];
+'''
+
+[[mutant]]
+name = "a name's V8 string is kept at another number"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''                    names[index] = Some(v8::Global::new(self.scope, string));
+'''
+to = '''                    names[index.saturating_sub(1)] = Some(v8::Global::new(self.scope, string));
+'''
+
+[[mutant]]
+name = "the names' V8 strings made aren't counted"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''                    self.state
+                        .names_made
+                        .set(self.state.names_made.get().wrapping_add(1));
+'''
+to = ''''''
+
+[[mutant]]
+name = "an isolate's state is any type's"
+file = "crates/bindings/src/isolate_state.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it"]
+from = '''    if unsafe { (*slot.as_ptr()).type_id } != TypeId::of::<T>() {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "an isolate's state is never dropped"
+file = "crates/bindings/src/isolate_state.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it"]
+from = '''    unsafe { ((*slot).drop)(slot) };'''
+to = '''    let _ = slot;'''
+
+[[mutant]]
+name = "the inline unwrap gives the entry unshifted"
+file = "../third_party/rusty_v8/src/machopo.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it"]
+from = '''    NonNull::new((entry >> PAYLOAD_SHIFT) as *mut c_void)'''
+to = '''    NonNull::new(entry as *mut c_void)'''
+
+[[mutant]]
+name = "the inline unwrap misses a marked entry"
+file = "../third_party/rusty_v8/src/machopo.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''  Some(if actual == first || actual == first + 1 {'''
+to = '''  Some(if actual == first {'''
+
+[[mutant]]
+name = "the inline unwrap takes any tag"
+file = "../third_party/rusty_v8/src/machopo.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it"]
+from = '''  Some(if actual == first || actual == first + 1 {'''
+to = '''  Some(if actual != 0 {'''
+
+[[mutant]]
+name = "the inline unwrap reads any object"
+file = "../third_party/rusty_v8/src/machopo.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''    if instance_type != JS_SPECIAL_API_OBJECT_TYPE
+      && !(FIRST_JS_API_OBJECT_TYPE..=LAST_JS_API_OBJECT_TYPE)
+        .contains(&instance_type)
+    {
+      return None;
+    }
+'''
+to = '''    let _ = instance_type;
+'''
+
+[[mutant]]
+name = "set_global writes nothing"
+file = "../third_party/rusty_v8/src/function.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''      self.set_checked(
+        |rv| rv.set_internal(object),
+        |raw| unsafe { v8__ReturnValue__Value__Set(raw, value) },'''
+to = '''      self.set_checked(
+        |_| { let _ = object; },
+        |raw| unsafe { v8__ReturnValue__Value__Set(raw, value) },'''
+
+[[mutant]]
+name = "the embedder heap's thread check passes on any thread"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--lib", "--", "unified_heap"]
+from = '''        THREAD.with(|id| *id),'''
+to = '''        thread,'''

@@ -1,0 +1,128 @@
+# Stage 1f-1: declare! as a proc macro (dom_api_next_macros), its syntax
+# unchanged, and the list of members it gives engines (for_each_member!,
+# with each typed path's argument and result types). dom_api_next's
+# tests call every member through the expansion; its table tests compare
+# the list with the typed paths and the descriptions. The calls' string
+# arguments' release before the engine allocates again is dom_js_next's
+# to see (its strings borrow V8's characters). Run with RUSTY_V8_ARCHIVE
+# pointing at ../third_party/rusty_v8_artifacts.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next", "-p", "dom_api_next_macros"]
+timeout = 600
+
+[[mutant]]
+name = "every interface is the first"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''                const INDEX: usize = #index;'''
+to = '''                const INDEX: usize = 0;'''
+
+[[mutant]]
+name = "every typed path says it is its interface's first member"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''                    const MEMBER: usize = #member;'''
+to = '''                    const MEMBER: usize = 0;'''
+
+[[mutant]]
+name = "the list names no member"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''            rows.extend(quote! {
+                $cb!(#name, #member_name, #kind_ident, #api::interfaces::typed_paths::#name::M<#member>);
+            });'''
+to = '''            let _ = member_name;'''
+
+[[mutant]]
+name = "the list says every member is a getter"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''                $cb!(#name, #member_name, #kind_ident, #api::interfaces::typed_paths::#name::M<#member>);'''
+to = '''                $cb!(#name, #member_name, Getter, #api::interfaces::typed_paths::#name::M<#member>);'''
+
+[[mutant]]
+name = "a getter's result type is nothing"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''        type Ret = #ty;'''
+to = '''        type Ret = ();'''
+
+[[mutant]]
+name = "a setter takes nothing"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''        type Args = (#ty,);'''
+to = '''        type Args = ();'''
+
+[[mutant]]
+name = "a method takes nothing"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''        type Args = (#(#types,)*);'''
+to = '''        type Args = ();'''
+
+[[mutant]]
+name = "a getter's operation has a safepoint"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''            let #result = #dom.borrow_mut().read(|#cx| {'''
+to = '''            let #result = #dom.borrow_mut().mutate(|#cx| {'''
+
+[[mutant]]
+name = "a method needs no arguments"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''            if !#front.has_args(#js, #required) {'''
+to = '''            if !#front.has_args(#js, 0) {'''
+
+[[mutant]]
+name = "every argument is taken as the first"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''take(#front, #indices) else {'''
+to = '''take(#front, 0) else {'''
+
+[[mutant]]
+name = "every argument's error names the first parameter"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''param(#front, #cx, &#names, #param_indices)?;'''
+to = '''param(#front, #cx, &#names, 0)?;'''
+
+[[mutant]]
+name = "a nullable node argument can't be null"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''                #front.node_arg(#index)'''
+to = '''                #api::typed::take_node::<#name, F>(#front, #index).map(::std::option::Option::Some)'''
+
+[[mutant]]
+name = "a nullable node result's none is undefined"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''                    ::std::option::Option::None => #front.ret_null(),'''
+to = '''                    ::std::option::Option::None => #front.ret_undefined(),'''
+
+[[mutant]]
+name = "a parent declared later is taken"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''            && !earlier.iter().any(|other| other.name == *parent)'''
+to = '''            && false'''
+
+[[mutant]]
+name = "an interface declared twice is taken"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''        if earlier.iter().any(|other| other.name == interface.name) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a member declared twice is taken"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''                if seen.contains(&key) {'''
+to = '''                if false {'''
+
+[[mutant]]
+name = "a constant of another type is taken"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''            if ty != "u32" {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "a method's arguments are kept past its operation"
+file = "crates/dom_api_next_macros/src/lib.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''            #(#api::typed::release(#names);)*'''
+to = ''''''
+
+[[mutant]]
+name = "a setter's value is kept past its operation"
+file = "crates/dom_api_next_macros/src/lib.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''            #api::typed::release(#value);'''
+to = ''''''

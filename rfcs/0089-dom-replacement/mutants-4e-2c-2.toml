@@ -1,0 +1,141 @@
+# Stage 4e-2c-2: layout through the flat tree on the new DOM: the boxes
+# of a host's shadow tree and of slots' assigned nodes, the walks up it,
+# a shadow root's flags on its host, a slot's child bit, the `:hover` and
+# boundary chains, and the frame laying out again for any layout flag.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p layout --test it -- next && cargo test -q -p dom_next --test it -- shadow && cargo test -q -p renderer --lib -- next_frame_view && cargo test -q -p dom_api_next --test it"]
+timeout = 3000
+
+[[mutant]]
+name = "boxes: the DOM's children"
+file = "crates/layout/src/next.rs"
+from = '''fn children<'a, 'b, 'gc>(dom: &'a Cx<'b, 'gc>, node: NodeRef<'gc>) -> dom_next::FlatChildren<'a, 'b, 'gc> {
+    dom.flat_tree_children(node)
+}'''
+to = '''fn children<'a, 'b, 'gc>(dom: &'a Cx<'b, 'gc>, node: NodeRef<'gc>) -> impl Iterator<Item = NodeRef<'gc>> + use<'a, 'b, 'gc> {
+    std::iter::successors(dom.first_child(node), |&child| dom.next_sibling(child))
+}'''
+
+[[mutant]]
+name = "tree root: the DOM's"
+file = "crates/layout/src/next.rs"
+from = '''    while let Some(parent) = dom.flat_tree_parent(root) {'''
+to = '''    while let Some(parent) = dom.parent(root) {'''
+
+[[mutant]]
+name = "gone: the DOM's parents"
+file = "crates/layout/src/next.rs"
+from = '''            node = dom.dom.flat_tree_parent(n);
+        }
+        true'''
+to = '''            node = dom.dom.parent(n);
+        }
+        true'''
+
+[[mutant]]
+name = "lists reached: the DOM's parents"
+file = "crates/layout/src/next.rs"
+from = '''                    node = dom.dom.flat_tree_parent(n);
+                }
+                false'''
+to = '''                    node = dom.dom.parent(n);
+                }
+                false'''
+
+[[mutant]]
+name = "container: the DOM's parents above"
+file = "crates/layout/src/next.rs"
+from = '''                let mut above = dom.dom.flat_tree_parent(n);'''
+to = '''                let mut above = dom.dom.parent(n);'''
+
+[[mutant]]
+name = "container: the DOM's parents"
+file = "crates/layout/src/next.rs"
+from = '''            node = dom.dom.flat_tree_parent(n);
+        }
+        None'''
+to = '''            node = dom.dom.parent(n);
+        }
+        None'''
+
+[[mutant]]
+name = "scroll anchoring: the DOM's parents"
+file = "crates/layout/src/next.rs"
+from = '''        let mut node = dom.dom.flat_tree_parent(element);'''
+to = '''        let mut node = dom.dom.parent(element);'''
+
+[[mutant]]
+name = "enclosing list: the DOM's parents"
+file = "crates/layout/src/list_items/next.rs"
+from = '''    let mut ancestor = dom.dom.flat_tree_parent(node);'''
+to = '''    let mut ancestor = dom.dom.parent(node);'''
+
+[[mutant]]
+name = "flags: a shadow root's on itself"
+file = "crates/dom_next/src/style.rs"
+from = '''        if node.scope.get() & crate::shadow::SHADOW_ROOT != 0 {
+            return self.shadow_host(node).expect("a shadow root's host");
+        }
+        node'''
+to = '''        node'''
+
+[[mutant]]
+name = "inserted: the root flagged"
+file = "crates/dom_next/src/style.rs"
+from = '''        let flagged = self.flagged_for(parent);
+        self.set_flags(
+            flagged,
+            ((StyleFlags::CHILDREN_CHANGED.0'''
+to = '''        let flagged = parent;
+        self.set_flags(
+            flagged,
+            ((StyleFlags::CHILDREN_CHANGED.0'''
+
+[[mutant]]
+name = "removed: the root flagged"
+file = "crates/dom_next/src/style.rs"
+from = '''        let flagged = self.flagged_for(parent);
+        self.set_flags(
+            flagged,
+            (StyleFlags::CHILDREN_CHANGED.0 << STYLE_SHIFT)'''
+to = '''        let flagged = parent;
+        self.set_flags(
+            flagged,
+            (StyleFlags::CHILDREN_CHANGED.0 << STYLE_SHIFT)'''
+
+[[mutant]]
+name = "slot: no child bit"
+file = "crates/dom_next/src/style.rs"
+from = '''                LayoutTreeFlags(LayoutTreeFlags::NEEDS_REATTACH.0 | LayoutTreeFlags::CHILD_NEEDS_UPDATE.0),'''
+to = '''                LayoutTreeFlags::NEEDS_REATTACH,'''
+
+[[mutant]]
+name = "hover: the DOM's chain"
+file = "crates/dom_next/src/user_action.rs"
+from = '''        std::iter::successors(element, |&node| self.flat_tree_parent(node))'''
+to = '''        std::iter::successors(element, |&node| self.parent(node))'''
+
+[[mutant]]
+name = "under the mouse: the DOM's chain"
+file = "crates/dom_api_next/src/input.rs"
+from = '''                std::iter::successors(Some(element), |&node| cx.flat_tree_parent(node))'''
+to = '''                std::iter::successors(Some(element), |&node| cx.parent(node))'''
+
+[[mutant]]
+name = "common ancestor: the DOM's"
+file = "crates/dom_api_next/src/input.rs"
+from = '''    let around_a: Vec<NodeRef<'gc>> = std::iter::successors(Some(a), |&node| cx.flat_tree_parent(node)).collect();
+    std::iter::successors(Some(b), |&node| cx.flat_tree_parent(node))'''
+to = '''    let around_a: Vec<NodeRef<'gc>> = std::iter::successors(Some(a), |&node| cx.parent(node)).collect();
+    std::iter::successors(Some(b), |&node| cx.parent(node))'''
+
+[[mutant]]
+name = "boundary: the DOM's chain"
+file = "crates/dom_api_next/src/input.rs"
+from = '''                std::iter::successors(Some(node.get(cx.gc)), |&at| cx.flat_tree_parent(at))'''
+to = '''                std::iter::successors(Some(node.get(cx.gc)), |&at| cx.parent(at))'''
+
+[[mutant]]
+name = "frame: only for what was built"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''                    flagged || update.full'''
+to = '''                    update.full'''

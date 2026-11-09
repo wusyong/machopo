@@ -1,0 +1,128 @@
+# Mutation test of the third stage: pausing (the DevTools queue, the
+# pause's loop, interrupts, detaching and ending while paused), commands
+# left waiting when a renderer goes, and the inspector's Profiler:
+# python3 scripts/test.py mutate rfcs/0075-remote-debugging/mutants-3.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools::", "automation_pipe::the_profile"]
+timeout = 900
+
+# The pause's loop and interrupts (bindings).
+
+[[mutant]]
+name = "script doesn't pause"
+file = "crates/bindings/src/devtools.rs"
+from = '''        self.quit.set(false);
+        let mut after = Vec::new();'''
+to = '''        self.quit.set(true);
+        let mut after = Vec::new();'''
+
+[[mutant]]
+name = "the pause never ends"
+file = "crates/bindings/src/devtools.rs"
+from = '''    fn quit_message_loop_on_pause(&self) {
+        self.shared.quit.set(true);
+    }'''
+to = '''    fn quit_message_loop_on_pause(&self) {
+        self.shared.quit.set(false);
+    }'''
+
+[[mutant]]
+name = "commands wait while paused"
+file = "crates/bindings/src/devtools.rs"
+from = '''                    match self.session(&session).filter(|_| !waiting) {'''
+to = '''                    match self.session(&session).filter(|_| false) {'''
+
+[[mutant]]
+name = "a session attached while paused goes"
+file = "crates/bindings/src/devtools.rs"
+from = '''                Queued::Attach(session) => after.push(Queued::Attach(session)),'''
+to = '''                Queued::Attach(session) => drop(session),'''
+
+[[mutant]]
+name = "a session detached while paused goes on debugging"
+file = "crates/bindings/src/devtools.rs"
+from = '''                            dispatch(&attached.session, STOP_DEBUGGING);'''
+to = ''''''
+
+[[mutant]]
+name = "a renderer ending leaves script paused"
+file = "crates/bindings/src/devtools.rs"
+from = '''                    for session in sessions {
+                        dispatch(&session, TERMINATE);
+                    }'''
+to = '''                    drop(sessions);'''
+
+[[mutant]]
+name = "interrupts take nothing"
+file = "crates/bindings/src/devtools.rs"
+from = '''        for (session, message) in queue.take_interrupting() {'''
+to = '''        for (session, message) in queue.take_interrupting().into_iter().filter(|_| false) {'''
+
+[[mutant]]
+name = "idle isn't told"
+file = "crates/bindings/src/script_state.rs"
+from = '''        if idle {
+            self.devtools.idle_started();'''
+to = '''        if !idle {
+            self.devtools.idle_started();'''
+test = ["cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "cpu_profiles"]
+
+# The DevTools queue (renderer).
+
+[[mutant]]
+name = "nothing interrupts script"
+file = "crates/renderer/src/task_queue.rs"
+from = '''            if let Some(interrupter) = interrupter {
+                interrupter();
+            }'''
+to = '''            drop(interrupter);'''
+
+[[mutant]]
+name = "the renderer ending isn't queued"
+file = "crates/renderer/src/task_queue.rs"
+from = '''                if matches!(msg, RendererMsg::Shutdown) {'''
+to = '''                if matches!(msg, RendererMsg::WasHidden) {'''
+
+[[mutant]]
+name = "what the pause left goes back backwards"
+file = "crates/renderer/src/task_queue.rs"
+from = '''        for next in back.into_iter().rev() {'''
+to = '''        for next in back {'''
+
+[[mutant]]
+name = "the main loop leaves the DevTools queue"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            MainThreadTask::DevTools => {
+                self.run_devtools_queue();
+                true
+            }'''
+to = '''            MainThreadTask::DevTools => true,'''
+
+# The browser.
+
+[[mutant]]
+name = "evaluating interrupts script"
+file = "crates/shell/src/automation_session.rs"
+from = '''        contents.devtools_message(session, message.to_string(), INTERRUPTING.contains(&name));'''
+to = '''        contents.devtools_message(
+            session,
+            message.to_string(),
+            INTERRUPTING.contains(&name) || name == "Runtime.evaluate",
+        );'''
+
+[[mutant]]
+name = "nothing is marked to interrupt"
+file = "crates/shell/src/automation_session.rs"
+from = '''        contents.devtools_message(session, message.to_string(), INTERRUPTING.contains(&name));'''
+to = '''        contents.devtools_message(session, message.to_string(), INTERRUPTING.is_empty());'''
+
+[[mutant]]
+name = "a command left waiting isn't answered"
+file = "crates/shell/src/automation_session.rs"
+from = '''            .chain(forwarded.into_values());'''
+to = '''            .chain(forwarded.into_values().filter(|_| false));'''
+
+[[mutant]]
+name = "an answered command is answered again"
+file = "crates/shell/src/automation_session.rs"
+from = '''            self.forwarded.remove(&(session.to_owned(), id));'''
+to = '''            let _ = id;'''

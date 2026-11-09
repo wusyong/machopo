@@ -1,0 +1,260 @@
+# Mutation test of stage 3: the lifecycle events from the renderer, the
+# network's quiet, `Page.navigate` answered as it is about to commit,
+# machopodriver's waits, and `Target`'s detaching:
+# python3 scripts/test.py mutate rfcs/0082-devtools-network/mutants-3.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools_lifecycle::"]
+timeout = 600
+
+# The lifecycle events.
+
+[[mutant]]
+name = "a new document has no init"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''        self.tell("Page.frameStartedLoading", json!({ "frameId": frame.id }));
+        self.lifecycle_event(
+            &frame.id,
+            frame.document,
+            &frame.loader_id,
+            "init",
+            TimeTicks::now(),
+        );'''
+to = '''        self.tell("Page.frameStartedLoading", json!({ "frameId": frame.id }));'''
+
+[[mutant]]
+name = "a frame's initial document has no init"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''        event("init");
+        if frame.navigating {'''
+to = '''        if frame.navigating {'''
+
+[[mutant]]
+name = "an initial document that stays doesn't load"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''        if frame.navigating {
+            return;
+        }'''
+to = '''        return;'''
+
+[[mutant]]
+name = "an initial document loads though another comes"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''        if frame.navigating {
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a new document doesn't start loading"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''        self.tell("Page.frameStartedLoading", json!({ "frameId": frame.id }));
+        self.lifecycle_event('''
+to = '''        self.lifecycle_event('''
+
+[[mutant]]
+name = "a loaded document doesn't stop loading"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    self.page_agent.stopped_loading(&id);'''
+to = '''                    let _ = id;'''
+
+[[mutant]]
+name = "the lifecycle so far isn't told as it is turned on"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''                    self.replay_lifecycle(session);'''
+to = ''''''
+
+[[mutant]]
+name = "init is told again as the events are turned on"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''                if name != "init" {'''
+to = '''                if !name.is_empty() {'''
+
+[[mutant]]
+name = "a new document keeps the old one's lifecycle"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''            if lifecycle.document != document || name == "init" {'''
+to = '''            if lifecycle.events.is_empty() {'''
+
+[[mutant]]
+name = "the events go without Page"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''            .filter(|session| enabled.contains(session))'''
+to = '''            .filter(|session| !enabled.contains(session) || true)'''
+
+[[mutant]]
+name = "Page.disable leaves the events on"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''            "Page.disable" => {
+                self.enabled.borrow_mut().retain(|known| known != session);
+                self.lifecycle.borrow_mut().retain(|known| known != session);'''
+to = '''            "Page.disable" => {
+                self.enabled.borrow_mut().retain(|known| known != session);'''
+
+[[mutant]]
+name = "the browser doesn't pass the events' switch on"
+file = "crates/shell/src/automation_session.rs"
+from = '''            return self.forward(client, command, "Page.setLifecycleEventsEnabled", &params, browser);'''
+to = '''            let _ = params;
+            return Dispatched::Now(Ok(json!({})));'''
+
+[[mutant]]
+name = "a new renderer has the events off"
+file = "crates/shell/src/automation_session.rs"
+from = '''                    for (session, mut command) in restoring {'''
+to = '''                    for (session, mut command) in restoring.into_iter().filter(|_| false) {'''
+
+[[mutant]]
+name = "what the browser asked a new renderer is answered to the client"
+file = "crates/shell/src/automation_session.rs"
+from = '''            if self.restoring.remove(&(session.to_owned(), id)) {
+                return;
+            }'''
+to = '''            self.restoring.remove(&(session.to_owned(), id));'''
+
+# The network's quiet.
+
+[[mutant]]
+name = "the network isn't watched"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    view.idleness().start();'''
+to = ''''''
+
+[[mutant]]
+name = "fetch()es aren't counted"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            let active = view
+                .subresources_in_flight()
+                .saturating_add(self.fetches.in_flight_for(view.document().as_node().id()));'''
+to = '''            let active = view.subresources_in_flight();'''
+
+[[mutant]]
+name = "subresources aren't counted"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            let active = view
+                .subresources_in_flight()
+                .saturating_add(self.fetches.in_flight_for(view.document().as_node().id()));'''
+to = '''            let active = self.fetches.in_flight_for(view.document().as_node().id());'''
+
+[[mutant]]
+name = "the loop doesn't wake for the quiet"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        sooner(
+            sooner(sooner(sooner(self.until_next_timer(), heap), engine), caret),
+            idle,
+        )'''
+to = '''        let _ = idle;
+        sooner(sooner(sooner(self.until_next_timer(), heap), engine), caret)'''
+timeout = 120
+
+[[mutant]]
+name = "the quiet isn't looked at after tasks"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            self.check_network_idle();'''
+to = ''''''
+timeout = 120
+
+[[mutant]]
+name = "the quiet window is shorter"
+file = "crates/renderer/src/idleness_detector.rs"
+from = '''pub(crate) const QUIET_WINDOW: Duration = Duration::from_millis(500);'''
+to = '''pub(crate) const QUIET_WINDOW: Duration = Duration::from_millis(100);'''
+
+[[mutant]]
+name = "two in flight are quiet"
+file = "crates/renderer/src/idleness_detector.rs"
+from = '''            let since = self.quiet_since.filter(|_| active == 0);
+            self.quiet_since = (active == 0).then(|| since.unwrap_or(now));'''
+to = '''            let since = self.quiet_since.filter(|_| active <= 2);
+            self.quiet_since = (active <= 2).then(|| since.unwrap_or(now));'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "idleness_detector"]
+
+[[mutant]]
+name = "the quiet is told when it ends, not when it began"
+file = "crates/renderer/src/idleness_detector.rs"
+from = '''                due.push(("networkIdle", since));'''
+to = '''                due.push(("networkIdle", now));'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "idleness_detector"]
+
+# Page.navigate's answer.
+
+[[mutant]]
+name = "Page.navigate is answered as it starts"
+file = "crates/shell/src/automation_session.rs"
+from = '''                if !loading {
+                    return Dispatched::Now(Ok(self.navigate_result(tab, loader, None)));
+                }'''
+to = '''                let _ = loading;
+                return Dispatched::Now(Ok(self.navigate_result(tab, loader, None)));'''
+
+[[mutant]]
+name = "a load that failed is answered without its error"
+file = "crates/shell/src/automation_session.rs"
+from = '''                self.navigation_ready(tab, *navigation_id, Some(error_text));'''
+to = '''                self.navigation_ready(tab, *navigation_id, None);'''
+
+[[mutant]]
+name = "a replaced navigation isn't answered"
+file = "crates/shell/src/automation_session.rs"
+from = '''                .partition(|(of, id, _)| *of == tab && *id < loader);'''
+to = '''                .partition(|(of, id, _)| *of == tab && *id < loader && false);'''
+timeout = 180
+
+[[mutant]]
+name = "a closed tab's navigation isn't answered"
+file = "crates/shell/src/automation_session.rs"
+from = '''            .chain(navigates.into_iter().map(|(_, _, reply): (_, _, Reply)| reply))'''
+to = '''            .chain(navigates.into_iter().take(0).map(|(_, _, reply): (_, _, Reply)| reply))'''
+timeout = 180
+
+[[mutant]]
+name = "a navigation's answer says it is a download"
+file = "crates/shell/src/automation_session.rs"
+from = '''            is_download: false,'''
+to = '''            is_download: true,'''
+
+# machopodriver.
+
+[[mutant]]
+name = "machopodriver takes a load that failed as loaded"
+file = "crates/driver/src/session.rs"
+from = '''        if let Some(error) = result["errorText"].as_str() {'''
+to = '''        if let Some(error) = result["errorText"].as_str().filter(|_| false) {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "webdriver::"]
+
+[[mutant]]
+name = "Kun.waitForLoad is the tab shown's, whatever the session"
+file = "crates/shell/src/automation_session.rs"
+from = '''                    .map_or(tab, |attached| attached.tab);'''
+to = '''                    .map_or(tab, |_| tab);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "automation_pipe::waiting_for_a_load"]
+
+[[mutant]]
+name = "machopodriver doesn't wait for the frame"
+file = "crates/driver/src/session.rs"
+from = '''            Some(Ok(())) if self.page_load_strategy == PageLoadStrategy::Normal => {'''
+to = '''            Some(Ok(())) if self.page_load_strategy == PageLoadStrategy::None => {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "webdriver::"]
+
+# Target.
+
+[[mutant]]
+name = "detachFromTarget isn't told"
+file = "crates/shell/src/automation_session.rs"
+from = '''        self.detached_from_target(client, session, tab);
+    }'''
+to = '''        let _ = (client, tab);
+    }'''
+
+[[mutant]]
+name = "detachFromTarget leaves the session"
+file = "crates/shell/src/automation_session.rs"
+from = '''    fn detach(&mut self, browser: &BrowserWindow, client: ClientId, session: &str, tab: TabId) {
+        self.sessions.remove(session);'''
+to = '''    fn detach(&mut self, browser: &BrowserWindow, client: ClientId, session: &str, tab: TabId) {'''
+
+[[mutant]]
+name = "a closed tab's flat sessions aren't told"
+file = "crates/shell/src/automation_session.rs"
+from = '''        for (client, session, tab) in flat {
+            self.detached_from_target(client, &session, tab);
+        }'''
+to = '''        let _ = flat;'''

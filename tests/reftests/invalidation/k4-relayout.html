@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>K4: laid out again only where it changed, the page looks as if all of it was</title>
+<link rel="match" href="k4-relayout-ref.html">
+<style>
+  html, body { margin: 0 }
+  body { font: 20px/1 Ahem }
+  .box { height: 20px; background-color: green; margin-bottom: 10px }
+</style>
+<div id="outer">
+  <div class="box"></div>
+  <div class="box" id="grows"></div>
+  <div class="box"></div>
+</div>
+<div id="narrows" style="width: 400px">XX XX XX XX XX XX XX XX XX XX</div>
+<p id="recolored" style="width: 200px">XX XX XX XX XX XX</p>
+<div class="box"></div>
+<script src="after-frames.js"></script>
+<script>afterFrames(() => {
+  document.getElementById("grows").setAttribute("style", "height: 60px");
+  document.getElementById("narrows").setAttribute("style", "width: 150px");
+  document.getElementById("recolored").setAttribute("style", "width: 200px; color: green");
+});</script>
+</html>

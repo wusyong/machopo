@@ -1,0 +1,139 @@
+# Mutation test of step 2b (`paint::intersections`):
+# python3 scripts/test.py mutate rfcs/0036-rendering-observers/mutants-2b.toml
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "intersection::"]
+timeout = 600
+
+[[mutant]]
+name = "the root's margin isn't applied"
+file = "crates/paint/src/intersection.rs"
+from = '''            Some(margin) => grow(rect, &margin),'''
+to = '''            Some(_) => rect,'''
+
+[[mutant]]
+name = "a percentage of the root's margin is of the other side"
+file = "crates/paint/src/intersection.rs"
+from = '''    let top = side(&margin[0], rect.height);'''
+to = '''    let top = side(&margin[0], rect.width);'''
+
+[[mutant]]
+name = "the scroll margin isn't applied"
+file = "crates/paint/src/intersection.rs"
+from = '''                clip_rect = grow(clip_rect, scroll_margin);'''
+to = ''''''
+
+[[mutant]]
+name = "the clips don't cut"
+file = "crates/paint/src/intersection.rs"
+from = '''            rect = inclusive_intersect(rect, clip_rect)?;'''
+to = ''''''
+
+[[mutant]]
+name = "the clips around the root cut too"
+file = "crates/paint/src/intersection.rs"
+from = '''            if outside.contains(&clip) {
+                continue;
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "edges touching don't intersect"
+file = "crates/paint/src/intersection.rs"
+from = '''    (right >= x && bottom >= y).then(|| RectF::new(x, y, right - x, bottom - y))'''
+to = '''    (right > x && bottom > y).then(|| RectF::new(x, y, right - x, bottom - y))'''
+
+[[mutant]]
+name = "what isn't the root's descendant intersects it"
+file = "crates/paint/src/intersection.rs"
+from = '''        let Some(target) = target.filter(|_| descendant) else {'''
+to = '''        let Some(target) = target else {'''
+
+[[mutant]]
+name = "a child frame's elements are in the roots around its iframe"
+file = "crates/paint/src/intersection.rs"
+from = '''            let around = std::mem::take(&mut self.around);'''
+to = '''            let around = self.around.clone();'''
+
+[[mutant]]
+name = "a root that clips is its border box"
+file = "crates/paint/src/intersection.rs"
+from = '''                let rect = if fragment.style.clips_overflow() {'''
+to = '''                let rect = if false && fragment.style.clips_overflow() {'''
+
+[[mutant]]
+name = "what is fixed scrolls with the viewport"
+file = "crates/paint/src/intersection.rs"
+from = '''        if self.pre.trees.is_fixed(space) {'''
+to = '''        if false && self.pre.trees.is_fixed(space) {'''
+
+[[mutant]]
+name = "the viewport's scroll offset isn't taken off"
+file = "crates/paint/src/intersection.rs"
+from = '''            self.pre.viewport_scroll
+        }'''
+to = '''            PointF::new(0.0, 0.0)
+        }'''
+
+[[mutant]]
+name = "a child frame's rects stay in the main frame's viewport"
+file = "crates/paint/src/intersection.rs"
+from = '''                self.to_space(rect, origin)'''
+to = '''                Some(rect)'''
+
+[[mutant]]
+name = "a clip's space is the rect's"
+file = "crates/paint/src/intersection.rs"
+from = '''        if space == to {'''
+to = '''        if true || space == to {'''
+
+[[mutant]]
+name = "a clip whose space can't be undone maps as identity"
+file = "crates/paint/src/intersection.rs"
+from = '''        let matrix = self.to_root[to.0].inverse()?.then(&self.to_root[space.0]);'''
+to = '''        let matrix = self.to_root[to.0]
+            .inverse()
+            .unwrap_or(gfx::Transform::IDENTITY)
+            .then(&self.to_root[space.0]);'''
+
+[[mutant]]
+name = "only an element's first box counts"
+file = "crates/paint/src/intersection.rs"
+from = '''                .fold(first, |all, (rect, _)| all.union(rect));'''
+to = '''                .fold(first, |all, _| all);'''
+
+[[mutant]]
+name = "an inline element's boxes are missed"
+file = "crates/paint/src/intersection.rs"
+from = '''                    self.found(b.node, frame)
+                        .boxes
+                        .push((rect, properties.contents));'''
+to = '''                    let _ = rect;'''
+
+[[mutant]]
+name = "an SVG shape is grown by its whole stroke width"
+file = "crates/paint/src/intersection.rs"
+from = '''                    shape.stroke_width / 2.0'''
+to = '''                    shape.stroke_width'''
+
+[[mutant]]
+name = "an SVG container has nothing in it"
+file = "crates/paint/src/intersection.rs"
+from = '''                .flat_map(|child| self.svg_node(child, frame))'''
+to = '''                .flat_map(|child| self.svg_node(child, frame).into_iter().take(0))'''
+
+[[mutant]]
+name = "a child frame's document as the root is its viewport unmapped"
+file = "crates/paint/src/intersection.rs"
+from = '''                    Some(self.to_viewport(port, origin)),'''
+to = '''                    Some(port),'''
+
+[[mutant]]
+name = "a document as the root takes what is in another frame"
+file = "crates/paint/src/intersection.rs"
+from = '''                target.is_some_and(|t| t.frame.is_none()),'''
+to = '''                target.is_some(),'''
+
+[[mutant]]
+name = "an element root moves with its own scroll offset"
+file = "crates/paint/src/intersection.rs"
+from = '''                (rect, properties.local.transform, properties.contents.clip)'''
+to = '''                (rect, properties.contents.transform, properties.contents.clip)'''

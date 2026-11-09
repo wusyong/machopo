@@ -1,0 +1,27 @@
+# What the pointer looks like: what `cursor` asks for over each element (the
+# keyword after images machopo doesn't load), `auto`'s I-beam over text and hand
+# over a link, the UA stylesheet's over form controls, and the address
+# field's. A new `cursor` under a pointer that stays shows without a move.
+navigate pages/cursor.html
+wait-loaded
+hover #chart
+wait-cursor crosshair
+hover #handle
+wait-cursor ew-resize
+hover #text
+wait-cursor text
+# Beside the text, the arrow.
+hover #line
+wait-cursor default
+hover #link
+wait-cursor pointer
+hover #field
+wait-cursor text
+hover #button
+wait-cursor default
+hover #hidden
+wait-cursor none
+hover #fallback
+wait-cursor move
+click #chart
+wait-cursor grabbing

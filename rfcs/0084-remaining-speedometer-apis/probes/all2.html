@@ -1,0 +1,39 @@
+<!doctype html>
+<svg><circle id=c name=c></circle></svg><a name=n1></a><meta name=m>
+<script>
+function run() {
+  const r = [];
+  const d = Object.getOwnPropertyDescriptor(Document.prototype, 'all');
+  r.push('desc ' + (d ? [typeof d.get, d.set, d.enumerable, d.configurable].join() : 'none'));
+  r.push('html own ' + !!Object.getOwnPropertyDescriptor(HTMLDocument.prototype, 'all'));
+  const x = new Document();
+  r.push('new Document ' + x.all.length + ' ' + typeof x.all);
+  const xml = document.implementation.createDocument(null, 'root');
+  xml.documentElement.appendChild(xml.createElement('kid')).setAttribute('id', 'k');
+  r.push('xml ' + xml.all.length + ' ' + (xml.all.k && xml.all.k.tagName));
+  const h = document.implementation.createHTMLDocument();
+  r.push('created ' + h.all.length);
+  r.push('svg id ' + (document.all.c && document.all.c.tagName));
+  r.push('a name ' + (document.all.n1 && document.all.n1.tagName));
+  r.push('meta ' + (document.all.m && document.all.m.tagName));
+  r.push('item(n1) ' + (document.all.item('n1') && document.all.item('n1').tagName));
+  r.push('getter.call ' + (d.get.call(document) === document.all));
+  r.push('in Object.keys(document) ' + Object.keys(document).includes('all'));
+  r.push('for-in ' + (() => { for (const k in document) if (k === 'all') return true; return false; })());
+  r.push('ToPrimitive ' + (document.all + ''));
+  r.push('Boolean ' + Boolean(document.all));
+  r.push('if ' + (document.all ? 'yes' : 'no'));
+  r.push('typeof prop ' + typeof document.all.length);
+  r.push('void eq ' + (document.all == undefined) + ' ' + (document.all === document.all));
+  r.push('strict null ' + (document.all === null));
+  r.push('Array.from ' + Array.from(document.all).length);
+  r.push('spread ' + [...document.all].length);
+  r.push('apply ' + (document.all.item.call(document.all, 0).tagName));
+  r.push('item on HTMLCollection ' + (() => { try { return HTMLAllCollection.prototype.item.call(document.forms, 0); } catch (e) { return e.name; } })());
+  r.push('length getter on HTMLCollection ' + (() => { try { return Object.getOwnPropertyDescriptor(HTMLAllCollection.prototype, 'length').get.call(document.forms); } catch (e) { return e.name; } })());
+  r.push('toString tag ' + HTMLAllCollection.prototype[Symbol.toStringTag]);
+  r.push('iterator ' + (HTMLAllCollection.prototype[Symbol.iterator] === Array.prototype.values));
+  r.push('construct ' + (() => { try { new HTMLAllCollection(); } catch (e) { return e.name + ': ' + e.message; } })());
+  return r.join('\n');
+}
+</script>

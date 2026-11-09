@@ -1,0 +1,44 @@
+<!doctype html>
+<div id=t style="width:50px;height:50px"></div>
+<script>
+const log = [];
+function pair(name, add) {
+  add(() => { log.push(name + ":a"); queueMicrotask(() => log.push(name + ":m")); });
+  add(() => { log.push(name + ":b"); });
+}
+function run() {
+  return new Promise(done => {
+    // Events from a task.
+    const { port1, port2 } = new MessageChannel();
+    pair("message", f => port1.addEventListener("message", f));
+    port1.start();
+    port2.postMessage(0);
+    // rAF callbacks.
+    pair("raf", f => requestAnimationFrame(f));
+    // Observer callbacks.
+    pair("io", f => new IntersectionObserver(f).observe(t));
+    pair("ro", f => new ResizeObserver(f).observe(t));
+    // A handler attribute and a listener.
+    const { port1: q1, port2: q2 } = new MessageChannel();
+    q1.onmessage = () => { log.push("handler:a"); queueMicrotask(() => log.push("handler:m")); };
+    q1.addEventListener("message", () => log.push("handler:b"));
+    q2.postMessage(0);
+    // A rejection in one listener, handled in the next.
+    addEventListener("unhandledrejection", e => log.push("unhandledrejection"));
+    addEventListener("rejectionhandled", e => log.push("rejectionhandled"));
+    const { port1: r1, port2: r2 } = new MessageChannel();
+    let p;
+    r1.addEventListener("message", () => { p = Promise.reject(1); log.push("reject:a"); });
+    r1.addEventListener("message", () => { p.catch(() => {}); log.push("reject:b"); });
+    r1.start();
+    r2.postMessage(0);
+    // From script: no checkpoint between.
+    const e = new EventTarget();
+    pair("dispatch", f => e.addEventListener("x", f));
+    setTimeout(() => {
+      e.dispatchEvent(new Event("x"));
+      setTimeout(() => done(log.join(" ")), 300);
+    }, 200);
+  });
+}
+</script>

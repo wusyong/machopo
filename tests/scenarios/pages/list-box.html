@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<title>list box</title>
+<select id="list" multiple size="3">
+  <option id="a">a</option><option id="b">b</option><option id="c">c</option>
+  <option id="d">d</option><option id="e">e</option><option id="f">f</option>
+</select>
+<select id="menu"><option>one</option><option>two</option><option>three</option></select>
+<p id="out">nothing</p>
+<p id="scroll">top</p>
+<p id="menu-out">one</p>
+<script>
+const list = document.getElementById('list');
+const menu = document.getElementById('menu');
+// What is selected at each `change`, and how many `input`s came before it.
+let inputs = 0;
+list.addEventListener('input', () => { inputs++; });
+list.addEventListener('change', () => {
+  const values = [...list.selectedOptions].map((option) => option.value);
+  document.getElementById('out').textContent = `${values.join(' ')} (${inputs} inputs)`;
+});
+list.addEventListener('scroll', () => {
+  document.getElementById('scroll').textContent = list.scrollTop > 0 ? 'scrolled' : 'top';
+});
+menu.addEventListener('change', () => {
+  document.getElementById('menu-out').textContent = menu.value;
+});
+</script>

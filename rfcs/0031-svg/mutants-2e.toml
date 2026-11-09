@@ -1,0 +1,235 @@
+# Mutation test of step 2e (SVG's text):
+# python3 scripts/test.py mutate rfcs/0031-svg/mutants-2e.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "svg::", "update::an_svg"]
+timeout = 900
+
+# --- layout: the characters ---------------------------------------------------
+
+[[mutant]]
+name = "spaces at the start are kept"
+file = "crates/layout/src/svg_text.rs"
+from = '''            if !self.owners.is_empty() && self.pending.is_none() {'''
+to = '''            if self.pending.is_none() {'''
+
+[[mutant]]
+name = "collapsed spaces are dropped"
+file = "crates/layout/src/svg_text.rs"
+from = '''        if let Some(owner) = self.pending.take() {
+            self.text.push(' ');
+            self.owners.push(owner);
+        }
+        self.text.push(c);'''
+to = '''        self.pending = None;
+        self.text.push(c);'''
+
+[[mutant]]
+name = "xml:space is ignored"
+file = "crates/layout/src/svg_text.rs"
+from = '''            Some("preserve") => true,'''
+to = '''            Some("preserve") => false,'''
+
+[[mutant]]
+name = "white-space is ignored"
+file = "crates/layout/src/svg_text.rs"
+from = '''            _ => preserve || !style.white_space.collapses_spaces(),'''
+to = '''            _ => preserve,'''
+
+[[mutant]]
+name = "a preserved tab stays a tab"
+file = "crates/layout/src/svg_text.rs"
+from = '''            self.text.push(if is_space(c) { ' ' } else { c });'''
+to = '''            self.text.push(c);'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "a tspan not displayed has characters"
+file = "crates/layout/src/svg_text.rs"
+from = '''                    if child_style.display == Display::None || !crate::svg::conditions_hold(child) {'''
+to = '''                    if !crate::svg::conditions_hold(child) {'''
+
+[[mutant]]
+name = "any element has characters"
+file = "crates/layout/src/svg_text.rs"
+from = '''                    if !name.is_svg("tspan") && !name.is_svg("a") {'''
+to = '''                    if false {'''
+
+[[mutant]]
+name = "a text without characters is drawn"
+file = "crates/layout/src/svg_text.rs"
+from = '''        if owners.is_empty() {
+            return None;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the outer element's position wins"
+file = "crates/layout/src/svg_text.rs"
+from = '''                c.dx = lists.dx.get(k).copied().or(c.dx);'''
+to = '''                c.dx = c.dx.or(lists.dx.get(k).copied());'''
+
+[[mutant]]
+name = "rotate's last value doesn't go on"
+file = "crates/layout/src/svg_text.rs"
+from = '''                    c.rotate = Some(lists.rotate.get(k).copied().unwrap_or(last));'''
+to = '''                    c.rotate = Some(lists.rotate.get(k).copied().unwrap_or(0.0 * last));'''
+
+[[mutant]]
+name = "a copy's text is drawn as itself"
+file = "crates/layout/src/svg_text.rs"
+from = '''        let node = self.shown_as.unwrap_or(element.id());'''
+to = '''        let node = element.id();'''
+
+[[mutant]]
+name = "text has no paint servers"
+file = "crates/layout/src/svg_text.rs"
+from = '''        let servers = [
+            self.cx.server(&style.svg.fill),
+            self.cx.server(&style.svg.stroke),
+        ];'''
+to = '''        let servers = [None, None];'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+# --- layout: placed ---------------------------------------------------------
+
+[[mutant]]
+name = "dx is ignored"
+file = "crates/layout/src/svg_text.rs"
+from = '''                pen.x += resolve(dx, viewport.width);'''
+to = ''''''
+
+[[mutant]]
+name = "dy is ignored"
+file = "crates/layout/src/svg_text.rs"
+from = '''                pen.y += resolve(dy, viewport.height);'''
+to = ''''''
+
+[[mutant]]
+name = "x doesn't start a chunk"
+file = "crates/layout/src/svg_text.rs"
+from = '''                pen.x = resolve(x, viewport.width);
+                starts = true;'''
+to = '''                pen.x = resolve(x, viewport.width);'''
+
+[[mutant]]
+name = "y doesn't start a chunk"
+file = "crates/layout/src/svg_text.rs"
+from = '''                pen.y = resolve(y, viewport.height);
+                starts = true;'''
+to = '''                pen.y = resolve(y, viewport.height);'''
+
+[[mutant]]
+name = "middle is the end"
+file = "crates/layout/src/svg_text.rs"
+from = '''                TextAnchor::Middle => 0.5,'''
+to = '''                TextAnchor::Middle => 1.0,'''
+
+[[mutant]]
+name = "a chunk ends where its last character starts"
+file = "crates/layout/src/svg_text.rs"
+from = '''                max = max.max(at.x + cluster.advance);'''
+to = '''                max = max.max(at.x);'''
+
+[[mutant]]
+name = "glyphs don't turn"
+file = "crates/layout/src/svg_text.rs"
+from = '''                run.rotations.push(degrees);'''
+to = '''                run.rotations.push(0.0);'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "cells have no descent"
+file = "crates/layout/src/svg_text.rs"
+from = '''                    descent: run.descent,'''
+to = '''                    descent: 0.0,'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "cells don't turn back"
+file = "crates/layout/src/svg_text.rs"
+from = '''        let (x, y) = (x * cos + y * sin, -x * sin + y * cos);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+# --- paint ------------------------------------------------------------------
+
+[[mutant]]
+name = "text isn't filled"
+file = "crates/paint/src/svg.rs"
+from = '''            if let Some(flags) =
+                paint_flags(style, &svg.fill, run.fill_server.as_ref(), svg.fill_opacity)
+            {
+                self.push(state, glyphs(flags, ink));
+            }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "text's stroke is a fill"
+file = "crates/paint/src/svg.rs"
+from = '''                    dash: Dash::new(&run.dashes, run.dash_offset),
+                    style: PaintStyle::Stroke {
+                        width: run.stroke_width,
+                    },'''
+to = '''                    dash: Dash::new(&run.dashes, run.dash_offset),
+                    style: PaintStyle::Fill,'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "unpainted text is hit"
+file = "crates/paint/src/svg.rs"
+from = '''    let painted =
+        !matches!(style.svg.fill, SvgPaint::None) || !matches!(style.svg.stroke, SvgPaint::None);'''
+to = '''    let painted = true;'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "a character is found as its text"
+file = "crates/paint/src/hit_test.rs"
+from = '''                        node: Some(cell.node),'''
+to = '''                        node: Some(node.node),'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "pointer-events none text is hit"
+file = "crates/paint/src/svg.rs"
+from = '''        PointerEvents::None => return false,
+        PointerEvents::Auto | PointerEvents::VisiblePainted => (true, painted),'''
+to = '''        PointerEvents::None => (false, true),
+        PointerEvents::Auto | PointerEvents::VisiblePainted => (true, painted),'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+# --- style --------------------------------------------------------------------
+
+[[mutant]]
+name = "text-anchor isn't inherited"
+file = "crates/computed_style/src/lib.rs"
+from = '''            text_anchor: parent.text_anchor,'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "svg::text_anchor"]
+
+[[mutant]]
+name = "middle parses as end"
+file = "crates/style/src/properties.rs"
+from = '''                    "middle" => computed_style::TextAnchor::Middle,'''
+to = '''                    "middle" => computed_style::TextAnchor::End,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "svg::text_anchor"]
+
+# --- elementsFromPoint's containers (C1) --------------------------------------
+
+[[mutant]]
+name = "every container is listed"
+file = "crates/paint/src/hit_test.rs"
+from = '''                if node.style.pointer_events != PointerEvents::BoundingBox {
+                    return None;
+                }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "a bounding-box container isn't listed"
+file = "crates/paint/src/hit_test.rs"
+from = '''                if node.style.pointer_events != PointerEvents::BoundingBox {
+                    return None;
+                }'''
+to = '''                return None;'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]

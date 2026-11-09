@@ -1,0 +1,14 @@
+# machopo as a wptrunner product, registered through the
+# `wptrunner.products` entry point (tools/wptrunner/docs/plugins.rst of the
+# WPT checkout), so the checkout stays as it is. `python3 scripts/test.py
+# wpt` and `wdspec` install a copy of it into their venv under target/.
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wptrunner-machopo"
+version = "0.0.1"
+
+[project.entry-points."wptrunner.products"]
+machopo = "wptrunner_machopo:get_product"

@@ -1,0 +1,94 @@
+# Stage 4f-1a: the form controls' interfaces on the new DOM: an HTML
+# element's interface by its name (`HTMLUnknownElement`), and `reflect`'s
+# rules.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it forms && cargo test -q -p dom_js_next --test it custom_elements"]
+timeout = 3000
+
+[[mutant]]
+name = "api: HTML's names unknown"
+file = "crates/dom_api_next/src/declare.rs"
+from = '''            table[id as usize] = HTML_ELEMENT as u8;'''
+to = '''            let _ = id;'''
+
+[[mutant]]
+name = "api: any name HTMLElement"
+file = "crates/dom_api_next/src/declare.rs"
+from = '''    let mut table = [HTML_UNKNOWN_ELEMENT as u8; dom_next::names::FIXED_COUNT];'''
+to = '''    let mut table = [HTML_ELEMENT as u8; dom_next::names::FIXED_COUNT];'''
+
+[[mutant]]
+name = "api: a custom element's name unknown"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''    if dom_next::is_valid_custom_element_name(&dom_next::names::get(local)) {
+        crate::declare::HTML_ELEMENT'''
+to = '''    if false {
+        crate::declare::HTML_ELEMENT'''
+
+[[mutant]]
+name = "api: a failed custom element HTMLElement"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''                && cx.custom_element_state(node) == dom_next::CustomElementState::Failed'''
+to = '''                && false'''
+
+[[mutant]]
+name = "api: a boolean never removed"
+file = "crates/dom_api_next/src/reflect.rs"
+from = '''        cx.remove_attribute(this, &names::get(N));'''
+to = ''''''
+
+[[mutant]]
+name = "api: a negative long kept"
+file = "crates/dom_api_next/src/reflect.rs"
+from = '''    Ok(integer(cx, this, N).filter(|value| *value >= 0).unwrap_or(D))'''
+to = '''    Ok(integer(cx, this, N).unwrap_or(D))'''
+
+[[mutant]]
+name = "api: a negative long set"
+file = "crates/dom_api_next/src/reflect.rs"
+from = '''    if value < 0 {
+        return Err(index_size_error(&format!("{} can't be negative", names::get(N))));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: an unsigned long past the limit kept"
+file = "crates/dom_api_next/src/reflect.rs"
+from = '''    let value = if value <= MAX_REFLECTED { value } else { D };'''
+to = '''    let value = if value <= u32::MAX { value } else { D };'''
+
+[[mutant]]
+name = "api: a positive's 0 kept"
+file = "crates/dom_api_next/src/reflect.rs"
+from = '''        0 => D,'''
+to = '''        0 => 0,'''
+
+[[mutant]]
+name = "api: 0 set without the fallback"
+file = "crates/dom_api_next/src/reflect.rs"
+from = '''    if value == 0 && !F {'''
+to = '''    if value == 0 {'''
+
+[[mutant]]
+name = "api: 0 set with no error"
+file = "crates/dom_api_next/src/reflect.rs"
+from = '''    if value == 0 && !F {'''
+to = '''    if value == 0 && F {'''
+
+[[mutant]]
+name = "api: leading whitespace not skipped"
+file = "crates/dom_api_next/src/reflect.rs"
+from = '''    let text = text.trim_start_matches(|c: char| matches!(c, ' ' | '\t' | '\n' | '\x0c' | '\r'));'''
+to = ''''''
+
+[[mutant]]
+name = "api: what follows the digits not ignored"
+file = "crates/dom_api_next/src/reflect.rs"
+from = '''    let end = digits.find(|c: char| !c.is_ascii_digit()).unwrap_or(digits.len());'''
+to = '''    let end = digits.len();'''
+
+[[mutant]]
+name = "api: the sign ignored"
+file = "crates/dom_api_next/src/reflect.rs"
+from = '''    i32::try_from(if negative { value.checked_neg()? } else { value }).ok()'''
+to = '''    let _ = negative;
+    i32::try_from(value).ok()'''

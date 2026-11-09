@@ -1,0 +1,107 @@
+# Mutation test of stage 1: taffy 0.15 and its out-of-flow hoisting
+# (2026-10-13):
+# python3 scripts/test.py mutate rfcs/0044-taffy-0-15/mutants-1.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it"]
+timeout = 900
+
+# Out-of-flow boxes
+
+[[mutant]]
+name = "a containing block doesn't lay its out-of-flow boxes out"
+file = "crates/layout/src/lib.rs"
+from = '''            if inputs.run_mode == RunMode::PerformLayout {
+                compute_oof_layout(tree, id, &mut output);
+            }'''
+to = '''            if false {
+                compute_oof_layout(tree, id, &mut output);
+            }'''
+
+[[mutant]]
+name = "an out-of-flow child is also its parent's fragment"
+file = "crates/layout/src/lib.rs"
+from = '''            .filter(|&child| !self.boxes[usize::from(child)].style.is_out_of_flow())
+            .chain('''
+to = '''            .chain('''
+
+[[mutant]]
+name = "the hoisted boxes make no fragment"
+file = "crates/layout/src/lib.rs"
+from = '''            .chain(self.boxes[usize::from(id)].absolute.iter().copied())
+            .collect();'''
+to = '''            .collect();'''
+
+[[mutant]]
+name = "the hoisted boxes of the last layout stay"
+file = "crates/layout/src/lib.rs"
+from = '''    fn clear_hoisted_children(&mut self, id: taffy::NodeId) {
+        self.boxes[usize::from(id)].absolute.clear();
+    }'''
+to = '''    fn clear_hoisted_children(&mut self, _: taffy::NodeId) {}'''
+
+[[mutant]]
+name = "an out-of-flow child gives an inline-block its baseline"
+file = "crates/layout/src/lib.rs"
+from = '''            if child.style.is_out_of_flow() {
+                return None;
+            }
+            let baseline'''
+to = '''            let baseline'''
+
+[[mutant]]
+name = "a grid keeps no tracks for its out-of-flow children"
+file = "crates/layout/src/lib.rs"
+from = '''        self.boxes[usize::from(id)].grid_info = DetailedLayoutInfo::Grid(Box::new(info));'''
+to = '''        let _ = info;'''
+
+# Styles
+
+[[mutant]]
+name = "a static box is relative"
+file = "crates/layout/src/lib.rs"
+from = '''            Position::Static => taffy::Position::Static,'''
+to = '''            Position::Static => taffy::Position::Relative,'''
+
+[[mutant]]
+name = "a fixed box is absolute"
+file = "crates/layout/src/lib.rs"
+from = '''            Position::Fixed => taffy::Position::Fixed,'''
+to = '''            Position::Fixed => taffy::Position::Absolute,'''
+
+[[mutant]]
+name = "self-alignment normal is auto"
+file = "crates/layout/src/lib.rs"
+from = '''        justify_self: style.justify_self.map(item_alignment),'''
+to = '''        justify_self: style
+            .justify_self
+            .filter(|&v| v != ItemAlignment::Normal)
+            .map(item_alignment),'''
+
+[[mutant]]
+name = "an ident alone is the first line of its name"
+file = "crates/layout/src/lib.rs"
+from = '''        GridLine::Ident(name) => taffy::GridPlacement::NamedLine(name.to_string(), 0),'''
+to = '''        GridLine::Ident(name) => taffy::GridPlacement::NamedLine(name.to_string(), 1),'''
+
+[[mutant]]
+name = "a replaced grid item is stretched"
+file = "crates/layout/src/lib.rs"
+from = '''        taffy_style.item_is_replaced =
+            container.display.is_grid() && replaced.natural_size().is_some();'''
+to = '''        taffy_style.item_is_replaced = false;'''
+
+[[mutant]]
+name = "fit-content() of a calc() is its length"
+file = "crates/layout/src/lib.rs"
+from = '''                } => Max::fit_content_calc(calcs.handle(px, percent, non_negative)),'''
+to = '''                } => {
+                    let _ = (percent, non_negative);
+                    Max::fit_content_px(px)
+                }'''
+
+# Margins
+
+[[mutant]]
+name = "an atomic inline is laid out in the room with its margins"
+file = "crates/layout/src/lib.rs"
+from = '''        let margins = m.left + m.right;'''
+to = '''        let margins = 0.0;'''

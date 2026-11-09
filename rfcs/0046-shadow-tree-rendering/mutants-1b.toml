@@ -1,0 +1,116 @@
+# Mutation test of stage 1b: the box tree along the flat tree, `display:
+# contents`, the update across shadow roots and counters (2026-10-14):
+# python3 scripts/test.py mutate rfcs/0046-shadow-tree-rendering/mutants-1b.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "shadow::", "update::"]
+timeout = 900
+
+[[mutant]]
+name = "boxes are built along the DOM"
+file = "crates/layout/src/lib.rs"
+from = '''        for child in cx.scope.flat_tree_children(parent) {'''
+to = '''        for child in parent.children() {'''
+
+[[mutant]]
+name = "a contents element's content isn't collected"
+file = "crates/layout/src/lib.rs"
+from = '''                            if !contents_is_none(child) {'''
+to = '''                            if false {'''
+
+[[mutant]]
+name = "contents hides nothing"
+file = "crates/layout/src/lib.rs"
+from = '''                            if !contents_is_none(child) {'''
+to = '''                            if true {'''
+
+[[mutant]]
+name = "contents doesn't hide a replaced element"
+file = "crates/layout/src/lib.rs"
+from = '''    is_replaced(element)
+        || element.element_name().is_some_and(|n| {'''
+to = '''    false
+        || element.element_name().is_some_and(|n| {'''
+
+[[mutant]]
+name = "contents doesn't hide a <select>"
+file = "crates/layout/src/lib.rs"
+from = '''                local_name!("select"),
+            ]'''
+to = '''            ]'''
+
+[[mutant]]
+name = "a contents pseudo-element has a box"
+file = "crates/layout/src/lib.rs"
+from = '''        if style.display == Display::Contents {
+            out.extend(content(&style));
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a shadow root's children aren't walked"
+file = "crates/layout/src/lib.rs"
+from = '''        if root_flags.child_needs_update {
+            for child in root.children() {'''
+to = '''        if false {
+            for child in root.children() {'''
+
+[[mutant]]
+name = "a child taken out of a shadow root collects nothing"
+file = "crates/layout/src/lib.rs"
+from = '''        if root_flags.children_changed
+            && let Some(inner) = inner'''
+to = '''        if false
+            && let Some(inner) = inner'''
+
+[[mutant]]
+name = "a host's child updates in the host's box"
+file = "crates/layout/src/lib.rs"
+from = '''                .and_then(|slot| self.container_of(walk.scope, slot, &walk.rebuild));'''
+to = '''                .and_then(|_| self.container_of(walk.scope, node, &walk.rebuild));'''
+
+[[mutant]]
+name = "the container is looked for along the DOM"
+file = "crates/layout/src/lib.rs"
+from = '''            node = scope.flat_tree_parent(n);'''
+to = '''            node = n.parent();'''
+
+[[mutant]]
+name = "an ancestor built again is looked for along the DOM"
+file = "crates/layout/src/lib.rs"
+from = '''                    above = scope.flat_tree_parent(a);'''
+to = '''                    above = a.parent();'''
+
+[[mutant]]
+name = "a contents element's content isn't in its container"
+file = "crates/layout/src/lib.rs"
+from = '''                matches!(style.display, Display::Inline | Display::Contents)'''
+to = '''                matches!(style.display, Display::Inline)'''
+
+[[mutant]]
+name = "a shadow tree's flags aren't cleared with its host's"
+file = "crates/layout/src/lib.rs"
+from = '''        node.shadow_root()
+            .into_iter()
+            .chain(node.children())
+            .for_each(clear_layout_tree_flags);'''
+to = '''        node.children().for_each(clear_layout_tree_flags);'''
+
+[[mutant]]
+name = "counters below are looked for along the DOM"
+file = "crates/layout/src/lib.rs"
+from = '''        || scope
+            .flat_tree_children(element)'''
+to = '''        || element
+            .children()'''
+
+[[mutant]]
+name = "counters go along the DOM"
+file = "crates/layout/src/counters.rs"
+from = '''        for child in self.scope.flat_tree_children(element) {'''
+to = '''        for child in element.children() {'''
+
+[[mutant]]
+name = "a hidden contents element counts"
+file = "crates/layout/src/counters.rs"
+from = '''            || (style.display == Display::Contents && super::contents_is_none(element))'''
+to = ''''''

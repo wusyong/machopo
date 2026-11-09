@@ -1,0 +1,268 @@
+# Mutation test of stage 3 (shadows and outlines):
+# python3 scripts/test.py mutate rfcs/0026-backgrounds-borders/mutants-3.toml
+test = ["cargo", "test", "-q", "-p", "paint"]
+timeout = 900
+
+# --- style -------------------------------------------------------------
+
+[[mutant]]
+name = "a spread without a blur"
+file = "crates/style/src/shadow.rs"
+from = '''let spread = blur.and_then(|_| input.try_parse(|i| Length::parse(i, true)).ok());'''
+to = '''let spread = input.try_parse(|i| Length::parse(i, true)).ok();'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "a negative blur"
+file = "crates/style/src/shadow.rs"
+from = '''                let blur = input.try_parse(|i| Length::parse(i, false)).ok();'''
+to = '''                let blur = input.try_parse(|i| Length::parse(i, true)).ok();'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "inset isn't written"
+file = "crates/style/src/shadow.rs"
+from = '''        if self.inset {
+            parts.push("inset".to_owned());'''
+to = '''        if false {
+            parts.push("inset".to_owned());'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "an omitted shadow color is black"
+file = "crates/style/src/shadow.rs"
+from = '''                .map_or(StyleColor::CurrentColor, SpecifiedColor::compute),'''
+to = '''                .map_or(StyleColor::Rgba(gfx::Color::BLACK), SpecifiedColor::compute),'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "a computed inset shadow doesn't say so"
+file = "crates/style/src/computed.rs"
+from = '''        if shadow.inset {
+            dest.push_str(" inset");'''
+to = '''        if false {
+            dest.push_str(" inset");'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "the cascade starts the widths at 0"
+file = "crates/style/src/properties.rs"
+from = '''    let medium = 3.0;'''
+to = '''    let medium = 0.0;'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "initial is the computed initial style"
+file = "crates/style/src/properties.rs"
+from = '''            initial = cascade_start(&ComputedStyle::initial());'''
+to = '''            initial = ComputedStyle::initial();'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "no focus ring color"
+file = "crates/style/src/values.rs"
+from = '''            if name == SpecifiedColor::FOCUS_RING {'''
+to = '''            if false {'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "the UA draws no focus ring"
+file = "crates/style/resources/html.css"
+from = '''  outline: auto 1px -webkit-focus-ring-color;'''
+to = '''  outline: none;'''
+# The invalidation test still restyles for the rule's `:focus-visible`.
+test = ["python3", "scripts/test.py", "scenarios", "focus-ring"]
+
+[[mutant]]
+name = "a change of shadow relays out"
+file = "crates/layout/src/lib.rs"
+from = '''            box_shadow: old.box_shadow.clone(),'''
+to = '''            box_shadow: new.box_shadow.clone(),'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "update"]
+
+[[mutant]]
+name = "a change of outline offset relays out"
+file = "crates/layout/src/lib.rs"
+from = '''            outline_offset: old.outline_offset,'''
+to = '''            outline_offset: new.outline_offset,'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "update"]
+
+# --- gfx and raster ------------------------------------------------------
+
+[[mutant]]
+name = "a small radius grows by the whole spread"
+file = "crates/gfx/src/lib.rs"
+from = '''                radius + d * (1.0 + t * t * t)'''
+to = '''                radius + d + t - t'''
+test = ["cargo", "test", "-q", "-p", "gfx"]
+
+[[mutant]]
+name = "a square corner grows round"
+file = "crates/gfx/src/lib.rs"
+from = '''            } else if radius <= 0.0 {
+                0.0'''
+to = '''            } else if radius <= 0.0 {
+                d'''
+test = ["cargo", "test", "-q", "-p", "gfx"]
+
+[[mutant]]
+name = "no blur"
+file = "crates/raster/src/skia_backend.rs"
+from = '''    if flags.blur > 0.0 {'''
+to = '''    if false {'''
+test = ["cargo", "test", "-q", "-p", "raster"]
+
+[[mutant]]
+name = "an outer shadow under its box"
+file = "crates/raster/src/skia_backend.rs"
+from = '''                } else {
+                    sk::ClipOp::Difference
+                };'''
+to = '''                } else {
+                    sk::ClipOp::Intersect
+                };'''
+test = ["cargo", "test", "-q", "-p", "raster"]
+
+[[mutant]]
+name = "an inset shadow's hole isn't cut"
+file = "crates/raster/src/skia_backend.rs"
+from = '''                        canvas.draw_drrect(sk_rrect(shape), sk_rrect(hole), &paint);'''
+to = '''                        let _ = hole;
+                        canvas.draw_rrect(sk_rrect(shape), &paint);'''
+test = ["cargo", "test", "-q", "-p", "raster"]
+
+[[mutant]]
+name = "a blurred shadow's op bounds are its shape"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''                shape.rect.inset(-3.0 * flags.blur)'''
+to = '''                shape.rect'''
+test = ["cargo", "test", "-q", "-p", "compositor_paint"]
+
+# --- paint ---------------------------------------------------------------
+
+[[mutant]]
+name = "the first shadow underneath"
+file = "crates/paint/src/lib.rs"
+from = '''        for shadow in style.box_shadow.iter().rev().filter(|s| s.inset == inset) {'''
+to = '''        for shadow in style.box_shadow.iter().filter(|s| s.inset == inset) {'''
+
+[[mutant]]
+name = "every shadow both outer and inset"
+file = "crates/paint/src/lib.rs"
+from = '''        for shadow in style.box_shadow.iter().rev().filter(|s| s.inset == inset) {'''
+to = '''        for shadow in style.box_shadow.iter().rev().filter(|_| inset == inset) {'''
+
+[[mutant]]
+name = "an outer shadow isn't spread"
+file = "crates/paint/src/lib.rs"
+from = '''                let shape = border_box.offset(shadow.x, shadow.y).spread(shadow.spread);'''
+to = '''                let shape = border_box.offset(shadow.x, shadow.y);'''
+
+[[mutant]]
+name = "an inset shadow's hole grows by the spread"
+file = "crates/paint/src/lib.rs"
+from = '''                    .spread(-shadow.spread);'''
+to = '''                    .spread(shadow.spread);'''
+
+[[mutant]]
+name = "the blur radius is the deviation"
+file = "crates/paint/src/lib.rs"
+from = '''            let sigma = shadow.blur / 2.0;'''
+to = '''            let sigma = shadow.blur;'''
+
+[[mutant]]
+name = "a blurred shadow's visual rect is its shape"
+file = "crates/paint/src/lib.rs"
+from = '''                let visual_rect = shape.rect.inset(-3.0 * sigma);'''
+to = '''                let visual_rect = shape.rect;'''
+
+[[mutant]]
+name = "a box's inset shadows before its background"
+file = "crates/paint/src/lib.rs"
+from = '''        self.box_shadows(node, style, &geometry, false, state);
+        if !skips_background {'''
+to = '''        self.box_shadows(node, style, &geometry, true, state);
+        if !skips_background {'''
+
+[[mutant]]
+name = "an inline element has no outer shadow"
+file = "crates/paint/src/lib.rs"
+from = '''        self.box_shadows(node, style, &geometry, false, state);
+        self.box_background('''
+to = '''        self.box_background('''
+
+[[mutant]]
+name = "no outline phase"
+file = "crates/paint/src/lib.rs"
+from = '''        self.outlines(root, true);'''
+to = ''''''
+
+[[mutant]]
+name = "outlines painted whole are painted again"
+file = "crates/paint/src/lib.rs"
+from = '''        if children_on_lines(fragment) || paints_children_whole(fragment) {
+            return;
+        }
+        for child in &fragment.children {
+            self.outlines(&child.fragment, false);'''
+to = '''        for child in &fragment.children {
+            self.outlines(&child.fragment, false);'''
+
+[[mutant]]
+name = "an atomic inline paints no outline"
+file = "crates/paint/src/lib.rs"
+from = '''                        self.text(child, false);
+                        self.outlines(child, false);'''
+to = '''                        self.text(child, false);'''
+
+[[mutant]]
+name = "a flex item paints no outline"
+file = "crates/paint/src/lib.rs"
+from = '''            if whole {
+                self.outlines(&child.fragment, false);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "an inline element paints no outline"
+file = "crates/paint/src/lib.rs"
+from = '''                        self.outline(Some(inline_box.node), &inline_box.style, rect, radii, state);'''
+to = '''                        let _ = (rect, radii);'''
+
+[[mutant]]
+name = "an outline isn't offset"
+file = "crates/paint/src/lib.rs"
+from = '''                    let mut outer = RRectF::new(b, radii).spread(offset + width);'''
+to = '''                    let mut outer = RRectF::new(b, radii).spread(width);'''
+
+[[mutant]]
+name = "an outline inside out isn't kept twice its width"
+file = "crates/paint/src/lib.rs"
+from = '''                    let (w, h) = (r.width.max(2.0 * width), r.height.max(2.0 * width));'''
+to = '''                    let (w, h) = (r.width, r.height);'''
+test = ["python3", "scripts/test.py", "reftest", "wpt/css/css-ui/outline-01"]
+
+[[mutant]]
+name = "an outline inside out is centred where it collapsed"
+file = "crates/paint/src/lib.rs"
+from = '''                    let center = PointF::new(b.x + b.width / 2.0, b.y + b.height / 2.0);'''
+to = '''                    let center = PointF::new(r.x + r.width / 2.0, r.y + r.height / 2.0);'''
+test = ["python3", "scripts/test.py", "reftest", "wpt/css/css-ui/outline-01"]
+
+[[mutant]]
+name = "a focus ring around a square box is square"
+file = "crates/paint/src/lib.rs"
+from = '''                    RRectF::uniform(edge.rect, FOCUS_RING_WIDTH)'''
+to = '''                    edge'''
+
+[[mutant]]
+name = "a focus ring has no white ring"
+file = "crates/paint/src/lib.rs"
+from = '''                ring(dark, edge.spread(FOCUS_RING_WIDTH), Color::WHITE);'''
+to = ''''''
+
+[[mutant]]
+name = "an outline of style none is drawn"
+file = "crates/computed_style/src/lib.rs"
+from = '''            Self::Line(style) => style.draws_solid(),'''
+to = '''            Self::Line(_) => true,'''

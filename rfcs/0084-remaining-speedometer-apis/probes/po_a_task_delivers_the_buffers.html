@@ -1,0 +1,40 @@
+<!doctype html><script>
+globalThis.log = [];
+globalThis.attempt = f => {
+    try { const v = f(); return v === undefined ? 'ok' : String(v); }
+    catch (e) { return `${e.name}: ${e.message}`; }
+};
+globalThis.names = l => l.map(e => `${e.entryType}:${e.name}@${Math.round(e.startTime)}`).join(',');
+const wait = () => new Promise(r => setTimeout(r, 50));
+async function steps() {
+{ performance.mark('early', { startTime: 1 });
+         globalThis.order = [];
+         globalThis.obs = new PerformanceObserver(function (list, observer, options) {
+           order.push('obs');
+           log.push(`this ${this === obs} ${observer === obs} ${arguments.length} ${JSON.stringify(options)}`,
+                    names(list.getEntries()), names(list.getEntriesByType('measure')),
+                    names(list.getEntriesByName('b')), names(list.getEntriesByName('b', 'measure')),
+                    list.getEntries() === list.getEntries());
+         });
+         const c = new PerformanceObserver((list, o, options) => {
+           order.push('c');
+           log.push(`c ${names(list.getEntries())} ${JSON.stringify(options)}`);
+         });
+         c.observe({ type: 'measure' });
+         obs.observe({ type: 'mark', buffered: true });
+         obs.observe({ type: 'measure' });
+         c.observe({ type: 'mark' });
+         performance.mark('b', { startTime: 5 });
+         performance.mark('a', { startTime: 3 });
+         performance.measure('b');
+         log.push('took ' + names(obs.takeRecords()));
+         performance.mark('x', { startTime: 40 });
+         performance.mark('y', { startTime: 20 });
+         queueMicrotask(() => log.push('microtask')); }
+await wait();
+{ log.push('order ' + order.join());
+         performance.mark('z', { startTime: 50 }); }
+await wait();
+}
+function run() { return steps().then(() => log.join(' / ')); }
+</script>

@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>An SVG element that takes the focus gets its outline</title>
+<link rel="match" href="focus-outline-ref.html">
+<style>body { margin: 0 } svg { display: block } rect:focus { outline: 2px solid red }</style>
+<svg width="100" height="60"><rect id="r" tabindex="0" x="10" y="10" width="20" height="20" fill="blue"/></svg>
+<script>
+requestAnimationFrame(() => requestAnimationFrame(() => {
+  document.getElementById("r").focus();
+  requestAnimationFrame(() => requestAnimationFrame(() => document.documentElement.classList.remove("reftest-wait")));
+}));
+</script>
+</html>

@@ -1,0 +1,67 @@
+# Mutation test of the measuring (decision 9): `--sample`'s two events at a
+# fixed period, and `--against`'s comparison:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-measure.toml
+test = ["python3", "scripts/speedometer_test.py", "SampleReadingTests", "CompareTests"]
+timeout = 120
+
+[[mutant]]
+name = "the samples follow the clock, not a fixed period"
+file = "scripts/speedometer.py"
+from = '''    return (["perf", "record", "-q", *events, "-c", str(SAMPLE_PERIOD), "-k", "monotonic", "--call-graph", "fp",'''
+to = '''    return (["perf", "record", "-q", *events, "-k", "monotonic", "--call-graph", "fp",'''
+
+[[mutant]]
+name = "instructions aren't sampled"
+file = "scripts/speedometer.py"
+from = '''SAMPLE_EVENTS = ("cycles", "instructions")'''
+to = '''SAMPLE_EVENTS = ("cycles",)'''
+
+[[mutant]]
+name = "a sample with no event is dropped"
+file = "scripts/speedometer.py"
+from = '''            event = sample["event"] or "cycles"'''
+to = '''            event = sample["event"] or "none"'''
+
+[[mutant]]
+name = "the instructions' stacks overwrite the cycles'"
+file = "scripts/speedometer.py"
+from = '''    return folder / (f"{name}-kun.folded" if event == "cycles" else f"{name}-kun.{event}.folded")'''
+to = '''    return folder / f"{name}-kun.folded"'''
+
+[[mutant]]
+name = "the IPC is cycles per instruction"
+file = "scripts/speedometer.py"
+from = '''    ipc = f" (IPC {instructions / cycles:.2f})" if cycles and instructions else ""'''
+to = '''    ipc = f" (IPC {cycles / instructions:.2f})" if cycles and instructions else ""'''
+
+[[mutant]]
+name = "another version is built into the working tree's target"
+file = "scripts/speedometer.py"
+from = '''        env["CARGO_TARGET_DIR"] = str(target)'''
+to = '''        pass'''
+
+[[mutant]]
+name = "a version pinning third_party otherwise is compared anyway"
+file = "scripts/speedometer.py"
+from = '''        elif theirs != (ROOT / path).read_text(encoding="utf-8"):'''
+to = '''        elif False:'''
+
+[[mutant]]
+name = "the working tree's version runs first"
+file = "scripts/speedometer.py"
+from = '''        for side in ("against", "current"):
+            print(f"{side}, run {run} of {args.runs}:")'''
+to = '''        for side in ("current", "against"):
+            print(f"{side}, run {run} of {args.runs}:")'''
+
+[[mutant]]
+name = "a side's runs are summed up by their mean"
+file = "scripts/speedometer.py"
+from = '''        lines.append(f"| {event} | {spread(against)} | {spread(current)} | {change(median(against), median(current))} |")'''
+to = '''        lines.append(f"| {event} | {spread(against)} | {spread(current)} | {change(sum(against) / len(against), sum(current) / len(current))} |")'''
+
+[[mutant]]
+name = "the functions are compared by one run"
+file = "scripts/speedometer.py"
+from = '''    medians = {f: tuple(median([counter[f] for counter in selfs[side]]) for side in ("against", "current"))'''
+to = '''    medians = {f: tuple(selfs[side][0][f] for side in ("against", "current"))'''

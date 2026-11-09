@@ -1,0 +1,12 @@
+<!DOCTYPE html><meta charset=utf-8>
+<style>body{margin:0}iframe{width:300px;height:200px;border:0;display:block}.w{position:absolute;left:0}</style>
+<div class=w style="top:0;clip-path:inset(0 round 20px)"><iframe id=a></iframe></div>
+<div class=w style="top:250px"><iframe id=b></iframe></div>
+<div style="position:absolute;left:0;top:250px;width:10px;height:10px;background:red"></div>
+<div style="position:absolute;left:290px;top:440px;width:10px;height:10px;background:red"></div>
+<div class=w style="top:500px;opacity:.5"><iframe id=c></iframe></div>
+<script>
+const q=new URLSearchParams(location.search);
+for(const f of [a,b,c])f.src="http://127.0.0.1:"+q.get("portB")+"/iip_short.html";
+window.runIn=(w,ms)=>{const f={a,b,c}[w];return new Promise(r=>{addEventListener("message",function h(e){if(e.data&&e.data.reply){removeEventListener("message",h);r(e.data.reply)}});f.contentWindow.postMessage({cmd:"busy",ms},"*")})};
+</script>

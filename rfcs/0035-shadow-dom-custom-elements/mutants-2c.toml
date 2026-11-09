@@ -1,0 +1,298 @@
+# Mutation test of step 2c (custom element reactions, `[CEReactions]`,
+# the backup element queue, the four callbacks), and what steps 2a and 2b
+# left for it (the callbacks a definition gets, a constructed element
+# being custom):
+# python3 scripts/test.py mutate rfcs/0035-shadow-dom-custom-elements/mutants-2c.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "custom_elements::"]
+timeout = 600
+
+# dom: enqueueing.
+
+[[mutant]]
+name = "attributes not observed get attributeChangedCallback"
+file = "crates/dom/src/custom_element.rs"
+from = '''            && !definition.observed_attributes().contains(local_name)'''
+to = '''            && false'''
+
+[[mutant]]
+name = "every element on the backup element queue"
+file = "crates/dom/src/custom_element.rs"
+from = '''        match self.reactions.stack.last_mut() {'''
+to = '''        match None::<&mut Vec<NodeHandle>> {'''
+
+[[mutant]]
+name = "a microtask asked for each reaction outside [CEReactions]"
+file = "crates/dom/src/custom_element.rs"
+from = '''                if !self.reactions.processing_backup {'''
+to = '''                if true {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "the backup element queue never ends"
+file = "crates/dom/src/custom_element.rs"
+from = '''        self.reactions.processing_backup = false;'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "an element's reactions last first"
+file = "crates/dom/src/custom_element.rs"
+from = '''        let reaction = queue.pop_front();'''
+to = '''        let reaction = queue.pop_back();'''
+
+[[mutant]]
+name = "a shadow tree's elements not walked"
+file = "crates/dom/src/scope.rs"
+from = '''            if let Some(shadow) = unsafe { rare.shadow_root.get() } {
+                stack.push(shadow);
+            }'''
+to = '''            if let Some(shadow) = unsafe { rare.shadow_root.get() } {
+                let _ = shadow;
+            }'''
+
+[[mutant]]
+name = "a shadow tree walked after the children"
+file = "crates/dom/src/scope.rs"
+from = '''        // As `record_frame_owners`: children last first, a shadow root
+        // after them.
+        // SAFETY: per the caller.
+        let mut child = unsafe { node.last_child.get() };
+        while let Some(c) = child {
+            stack.push(c);
+            // SAFETY: as above.
+            child = unsafe { c.previous_sibling.get() };
+        }
+        // SAFETY: as above; the node keeps its rare data, which keeps its
+        // shadow root.
+        if let Some(rare) = unsafe { node.rare_data.get() } {
+            // SAFETY: as above.
+            if let Some(shadow) = unsafe { rare.shadow_root.get() } {
+                stack.push(shadow);
+            }
+        }'''
+to = '''        if let Some(rare) = unsafe { node.rare_data.get() } {
+            if let Some(shadow) = unsafe { rare.shadow_root.get() } {
+                stack.push(shadow);
+            }
+        }
+        let mut child = unsafe { node.last_child.get() };
+        while let Some(c) = child {
+            stack.push(c);
+            child = unsafe { c.previous_sibling.get() };
+        }'''
+
+[[mutant]]
+name = "connected in a tree that isn't a document's"
+file = "crates/dom/src/scope.rs"
+from = '''        if unsafe { is_connected(parent_node) } {
+            self.enqueue_connected(child_node);'''
+to = '''        if true {
+            self.enqueue_connected(child_node);'''
+
+[[mutant]]
+name = "disconnected from a tree that isn't a document's"
+file = "crates/dom/src/scope.rs"
+from = '''        let disconnected = if unsafe { is_connected(parent) } {'''
+to = '''        let disconnected = if true {'''
+
+[[mutant]]
+name = "no disconnectedCallback"
+file = "crates/dom/src/scope.rs"
+from = '''        self.enqueue_for_each(&disconnected, crate::LifecycleCallback::Disconnected);'''
+to = ''''''
+
+[[mutant]]
+name = "no adoptedCallback when inserted into another document"
+file = "crates/dom/src/scope.rs"
+from = '''            self.enqueue_adopted(child_node, old_document, document.as_node());'''
+to = ''''''
+
+[[mutant]]
+name = "no adoptedCallback for adoptNode"
+file = "crates/dom/src/scope.rs"
+from = '''            self.enqueue_adopted(node, &old_document, document.as_node());'''
+to = ''''''
+
+[[mutant]]
+name = "adoptedCallback's documents swapped"
+file = "crates/dom/src/custom_element.rs"
+from = '''                old: DocumentHandle::new(old.clone()),
+                new: DocumentHandle::new(new.clone()),'''
+to = '''                old: DocumentHandle::new(new.clone()),
+                new: DocumentHandle::new(old.clone()),'''
+
+[[mutant]]
+name = "setAttribute's callback without the new value"
+file = "crates/dom/src/scope.rs"
+from = '''        let new_value = self.is_custom(element).then(|| value.clone());'''
+to = '''        let new_value = self.is_custom(element).then(String::new);'''
+
+[[mutant]]
+name = "setAttribute's callback without the old value"
+file = "crates/dom/src/scope.rs"
+from = '''        let callback_old_value = new_value.as_ref().and(old_value.clone());'''
+to = '''        let callback_old_value = None;'''
+
+[[mutant]]
+name = "removeAttribute without attributeChangedCallback"
+file = "crates/dom/src/scope.rs"
+from = '''            let old_value = Some(removed.value.clone());
+            self.enqueue_attribute_changed(element, &removed.name, old_value, None);'''
+to = ''''''
+
+[[mutant]]
+name = "setAttributeNode without attributeChangedCallback"
+file = "crates/dom/src/scope.rs"
+from = '''            self.enqueue_attribute_changed(element, &name.clone(), old_value, new_value);'''
+to = '''            let _ = (old_value, new_value);'''
+
+[[mutant]]
+name = "attributeChangedCallback without the namespace"
+file = "crates/dom/src/custom_element.rs"
+from = '''            namespace: (!namespace.is_empty()).then(|| namespace.to_owned()),'''
+to = '''            namespace: None,'''
+
+[[mutant]]
+name = "reactions left at teardown"
+file = "crates/dom/src/isolate.rs"
+from = '''        self.state.reactions.clear();'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+# dom_api: `[CEReactions]` and invoking.
+
+[[mutant]]
+name = "[CEReactions] ignored"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    if !member.ce_reactions {
+        return (member.call)(cx, this, args);
+    }'''
+to = '''    if true {
+        return (member.call)(cx, this, args);
+    }'''
+
+[[mutant]]
+name = "attributeChangedCallback's null an undefined"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''                        value.map_or(Value::Null, |value| Value::String(value.into()))'''
+to = '''                        value.map_or(Value::Undefined, |value| Value::String(value.into()))'''
+
+[[mutant]]
+name = "the backup element queue's microtask never queued"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''        cx.queue_microtask(crate::Microtask::CustomElementReactions);'''
+to = ''''''
+
+[[mutant]]
+name = "the backup element queue's microtask does nothing"
+file = "crates/dom_api/src/microtask.rs"
+from = '''            crate::custom_elements::invoke_backup_element_queue(cx);'''
+to = ''''''
+
+[[mutant]]
+name = "an attribute's setter not [CEReactions]"
+file = "crates/dom_api/src/declare.rs"
+from = '''            $crate::declare!(@setter $iface $js, $ty, $set, true),
+        ] $($rest)*)
+    };
+    (@members $iface:ident [$($acc:tt)*]
+        $(#[$meta:meta])*
+        [CEReactions, LegacyNullToEmptyString]'''
+to = '''            $crate::declare!(@setter $iface $js, $ty, $set, false),
+        ] $($rest)*)
+    };
+    (@members $iface:ident [$($acc:tt)*]
+        $(#[$meta:meta])*
+        [CEReactions, LegacyNullToEmptyString]'''
+
+[[mutant]]
+name = "a [LegacyNullToEmptyString] setter not [CEReactions]"
+file = "crates/dom_api/src/declare.rs"
+from = '''            $crate::declare!(@setter $iface $js, $crate::LegacyNullToEmptyString, $set, true),'''
+to = '''            $crate::declare!(@setter $iface $js, $crate::LegacyNullToEmptyString, $set, false),'''
+
+[[mutant]]
+name = "a method not [CEReactions]"
+file = "crates/dom_api/src/declare.rs"
+from = '''    (@ce CEReactions) => { true };'''
+to = '''    (@ce CEReactions) => { false };'''
+
+[[mutant]]
+name = "an unnamed setter not [CEReactions]"
+file = "crates/dom_api/src/declare.rs"
+from = '''    (@anonymous_ce CEReactions, $special:ident) => { true };'''
+to = '''    (@anonymous_ce CEReactions, $special:ident) => { false };'''
+
+[[mutant]]
+name = "a definition's disconnectedCallback its adoptedCallback"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''        disconnected: info.disconnected,'''
+to = '''        disconnected: info.adopted.clone(),'''
+
+[[mutant]]
+name = "a constructed element not custom"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    m.set_custom_element_state(&element, CustomElementState::Custom);'''
+to = ''''''
+
+[[mutant]]
+name = "a constructed element without its definition"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    m.set_element_definition(&element, Some(&definition));'''
+to = ''''''
+
+# dom_js: the calls in `[CEReactions]` scopes, and what `define` reads.
+
+[[mutant]]
+name = "dom_js's members not in their [CEReactions] scope"
+file = "crates/dom_js/src/templates.rs"
+from = '''    match dom_api::custom_elements::call_member(&mut V8Host::new(&mut cx), member, &this, values) {'''
+to = '''    match (member.call)(&mut V8Host::new(&mut cx), &this, values) {'''
+
+[[mutant]]
+name = "dom_js's special operations not in their [CEReactions] scope"
+file = "crates/dom_js/src/properties.rs"
+from = '''    match dom_api::custom_elements::call_member(&mut V8Host::new(&mut cx), member, &this, call_args)
+    {'''
+to = '''    match (member.call)(&mut V8Host::new(&mut cx), &this, call_args) {'''
+
+[[mutant]]
+name = "disconnectedCallback read as adoptedCallback"
+file = "crates/dom_js/src/host.rs"
+from = '''                "disconnectedCallback" => info.disconnected = callback,'''
+to = '''                "disconnectedCallback" => info.adopted = callback,'''
+
+# The callers check that an element is custom.
+
+[[mutant]]
+name = "an attribute's callback for an element that isn't custom"
+file = "crates/dom/src/custom_element.rs"
+from = '''        self.reactions.custom_seen
+            && element.get(&self.read()).custom_element_state() == CustomElementState::Custom'''
+to = '''        self.reactions.custom_seen'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "a tree's callbacks for elements that aren't custom"
+file = "crates/dom/src/custom_element.rs"
+from = '''    pub(crate) fn custom_elements_in(&self, node: &Node) -> Vec<NodeHandle> {
+        self.elements_in(node, &[CustomElementState::Custom])'''
+to = '''    pub(crate) fn custom_elements_in(&self, node: &Node) -> Vec<NodeHandle> {
+        self.elements_in(
+            node,
+            &[
+                CustomElementState::Custom,
+                CustomElementState::Failed,
+                CustomElementState::Undefined,
+                CustomElementState::Precustomized,
+                CustomElementState::Uncustomized,
+            ],
+        )'''
+
+# `attachShadow` and `disabledFeatures`.
+
+[[mutant]]
+name = "disabledFeatures' shadow ignored"
+file = "crates/dom_api/src/shadow_root.rs"
+from = '''        .is_some_and(|definition| definition.disable_shadow())'''
+to = '''        .is_some_and(|definition| definition.disable_internals())'''

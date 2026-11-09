@@ -1,0 +1,163 @@
+# Stage 4h-3b: CSS transitions and animations on the new DOM: the elements' animations in
+# `dom_next`, style_next's style change events and sampling (the shared `style::animation_style`
+# steps), the timeline moving on, `TransitionEvent` and `AnimationEvent`.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p style_next --test it animations && cargo test -q -p dom_js_next --test it event_interfaces"]
+timeout = 1500
+
+[[mutant]]
+name = "dom: an element no longer in the document keeps them"
+file = "crates/dom_next/src/animations.rs"
+from = '''            let here = self.is_connected(element) && Gc::ptr_eq(self.document_of(element), document);'''
+to = '''            let here = true || Gc::ptr_eq(self.document_of(element), document);'''
+
+[[mutant]]
+name = "dom: what moved on isn't styled again"
+file = "crates/dom_next/src/animations.rs"
+from = '''                animations.moved_on.set(true);
+                self.mark_style_path(element);'''
+to = '''                animations.moved_on.set(true);'''
+
+[[mutant]]
+name = "dom: nothing marked moved on"
+file = "crates/dom_next/src/animations.rs"
+from = '''                animations.moved_on.set(true);'''
+to = ''''''
+
+[[mutant]]
+name = "dom: the pending don't start"
+file = "crates/dom_next/src/animations.rs"
+from = '''                    started |= entry.animations.commit_pending(now, &mut sent);'''
+to = '''                    let _: (&mut Vec<AnimationEvent>, bool) = (&mut sent, entry.animations.is_empty());'''
+
+[[mutant]]
+name = "dom: removals not recorded"
+file = "crates/dom_next/src/animations.rs"
+from = '''        if state.seen.get() {
+            state.removed.borrow_mut().insert(self.node_id(node));
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: frames not wanted while they run"
+file = "crates/dom_next/src/animations.rs"
+from = '''                        .any(|target| target.animations.is_running())'''
+to = '''                        .any(|_| false)'''
+
+[[mutant]]
+name = "dom: those done kept"
+file = "crates/dom_next/src/animations.rs"
+from = '''                                animation.playback.is_pending() || animation.is_reachable(now)'''
+to = '''                                animation.playback.is_pending() || animation.is_reachable(now) || true'''
+
+[[mutant]]
+name = "dom: replaced ones not removed"
+file = "crates/dom_next/src/animations.rs"
+from = '''                    entry.animations.remove_replaced(now, &mut sent);'''
+to = ''''''
+
+[[mutant]]
+name = "core: a transition starts from a style from before"
+file = "crates/style/src/animation_style.rs"
+from = '''    let old = if moved {
+        None
+    } else {'''
+to = '''    let old = if false {
+        None
+    } else {'''
+
+[[mutant]]
+name = "style: an ancestor's display none ignored"
+file = "crates/style_next/src/lib.rs"
+from = '''                    rendered: parents.rendered && style.display != Display::None,'''
+to = '''                    rendered: true,'''
+
+[[mutant]]
+name = "style: its own display none ignored"
+file = "crates/style_next/src/lib.rs"
+from = '''            .is_some_and(|change| change.rendered && style.display != Display::None);'''
+to = '''            .is_some_and(|change| change.rendered);'''
+
+[[mutant]]
+name = "style: a removed root not found"
+file = "crates/style_next/src/lib.rs"
+from = '''            let root = self.cx.removed_since_styled(element);'''
+to = '''            let root = false;'''
+
+[[mutant]]
+name = "style: moved not carried down"
+file = "crates/style_next/src/lib.rs"
+from = '''                    moved,
+                    changed,'''
+to = '''                    moved: false,
+                    changed,'''
+
+[[mutant]]
+name = "style: an inherited animation sampled, not cascaded"
+file = "crates/style_next/src/lib.rs"
+from = '''                    (moved_on
+                        && animation_style::needs_cascade('''
+to = '''                    (false
+                        && animation_style::needs_cascade('''
+
+[[mutant]]
+name = "style: an animated child not styled again with its parent"
+file = "crates/style_next/src/lib.rs"
+from = '''                        || (parents.changed && animation_style::animated(own))'''
+to = ''''''
+
+[[mutant]]
+name = "style: the walk not down to animated children"
+file = "crates/style_next/src/lib.rs"
+from = '''        let animated_children = changed && self.cx.has_seen_animations();'''
+to = '''        let animated_children = false;'''
+
+[[mutant]]
+name = "style: not sampled"
+file = "crates/style_next/src/lib.rs"
+from = '''            Some(style) if !own && moved_on => {'''
+to = '''            Some(style) if !own && moved_on && false => {'''
+
+[[mutant]]
+name = "style: a pseudo-element's sample not written"
+file = "crates/style_next/src/lib.rs"
+from = '''                    *slot = Some(Arc::new(new));
+                    pseudo_changed = true;'''
+to = '''                    pseudo_changed = true;'''
+
+[[mutant]]
+name = "style: a gone pseudo-element's kept"
+file = "crates/style_next/src/lib.rs"
+from = '''                    self.forget_pseudo_animations(element, pseudo);'''
+to = ''''''
+
+[[mutant]]
+name = "style: no keyframes in the document"
+file = "crates/style_next/src/lib.rs"
+from = '''        Some(self.author?.set.keyframes(name)?.0.clone())'''
+to = '''        None'''
+
+[[mutant]]
+name = "style: display none coming not the whole subtree"
+file = "crates/style_next/src/lib.rs"
+from = '''                if self.cx.has_seen_animations()
+                    && old.as_ref().is_some_and(|old| {'''
+to = '''                if false
+                    && old.as_ref().is_some_and(|old| {'''
+
+[[mutant]]
+name = "api: transition and animation events' data swapped"
+file = "crates/dom_api_next/src/animations.rs"
+from = '''    cx.set_animation_event_data(
+        event,
+        true,
+        &init.propertyName,'''
+to = '''    cx.set_animation_event_data(
+        event,
+        false,
+        &init.propertyName,'''
+
+[[mutant]]
+name = "api: elapsedTime the default"
+file = "crates/dom_api_next/src/animations.rs"
+from = '''    Ok(fields(cx, this).elapsed_time)'''
+to = '''    Ok(0.0)'''

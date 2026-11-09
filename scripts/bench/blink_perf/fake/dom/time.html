@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<script src="../resources/runner.js"></script>
+<div id="list"></div>
+<script>
+  // Builds and drops a list: a time each iteration. The runner's garbage
+  // collection does nothing in a browser without Blink's test harness: the
+  // page isn't left out.
+  PerfTestRunner.measureTime({
+    run() {
+      PerfTestRunner.gc();
+      const list = document.getElementById("list");
+      for (let i = 0; i < 100; i++) list.appendChild(document.createElement("p"));
+      list.textContent = "";
+    },
+  });
+</script>

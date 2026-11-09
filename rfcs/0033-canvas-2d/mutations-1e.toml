@@ -1,0 +1,385 @@
+# Step 1e's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0033-canvas-2d/mutations-1e.toml`. Each names the tests closest to
+# what it breaks: gfx's shapes against Skia's own (in raster), the context
+# without a raster (dom_api), the pixels in the browser.
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "path_shape"]
+timeout = 1500
+
+# gfx: the shapes, against Skia's.
+
+[[mutant]]
+name = "no lone point for an arc of nothing"
+file = "crates/gfx/src/path_shapes.rs"
+from = '''        let lone = if sweep == 0.0 && (start == 0.0 || start == 360.0) {'''
+to = '''        let lone = if false {'''
+
+[[mutant]]
+name = "a line between contiguous arcs"
+file = "crates/gfx/src/path_shapes.rs"
+from = '''            } else if !path.last_point().is_some_and(|last| nearly_equal(last, p)) {'''
+to = '''            } else {'''
+
+[[mutant]]
+name = "nearly a whole turn is nothing"
+file = "crates/gfx/src/path_shapes.rs"
+from = '''            if magnitude < 360.0 && magnitude > 359.0 {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "no conic for what is left of a quadrant"
+file = "crates/gfx/src/path_shapes.rs"
+from = '''    if dot < 1.0 {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "counterclockwise arcs go clockwise"
+file = "crates/gfx/src/path_shapes.rs"
+from = '''        [cos, sin, sin, -cos, 0.0, 0.0]'''
+to = '''        [cos, sin, -sin, cos, 0.0, 0.0]'''
+
+[[mutant]]
+name = "the quadrant across an axis"
+file = "crates/gfx/src/path_shapes.rs"
+from = '''        if (x < 0.0) != (y < 0.0) {
+            q += 1;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a tangent arc's distance signed"
+file = "crates/gfx/src/path_shapes.rs"
+from = '''        let dist = ((f64::from(radius) * (1.0 - cosh) / sinh) as f32).abs();'''
+to = '''        let dist = (f64::from(radius) * (1.0 - cosh) / sinh) as f32;'''
+
+[[mutant]]
+name = "a tangent arc between lines that are one"
+file = "crates/gfx/src/path_shapes.rs"
+from = '''        if !finite(before) || !finite(after) || (sinh as f32).abs() <= NEARLY_ZERO {'''
+to = '''        if !finite(before) || !finite(after) {'''
+
+[[mutant]]
+name = "after a close, a segment starts at the last point"
+file = "crates/gfx/src/path_shapes.rs"
+from = '''            Some(PathElement::Close) => self'''
+to = '''            Some(PathElement::Close) if false => self'''
+
+[[mutant]]
+name = "radii that overflow aren't scaled"
+file = "crates/gfx/src/path_shapes.rs"
+from = '''    if scale < 1.0 {
+        adjust_radii'''
+to = '''    if false {
+        adjust_radii'''
+
+[[mutant]]
+name = "a radius too small to matter stays"
+file = "crates/gfx/src/path_shapes.rs"
+from = '''    if *a + *b == *a {
+        *b = 0.0;'''
+to = '''    if false {
+        *b = 0.0;'''
+
+[[mutant]]
+name = "a rounded rect is never an oval"
+file = "crates/gfx/src/path_shapes.rs"
+from = '''        && first.width >= width as f32 / 2.0'''
+to = '''        && false'''
+
+[[mutant]]
+name = "a rounded rect's corners start at the same corner either way"
+file = "crates/gfx/src/path_shapes.rs"
+from = '''        let mut corners = Walk::new(rect_corners(left, top, right, bottom), clockwise, usize::from(!clockwise));
+        self.move_to(ends.current());'''
+to = '''        let mut corners = Walk::new(rect_corners(left, top, right, bottom), clockwise, 0);
+        self.move_to(ends.current());'''
+
+[[mutant]]
+name = "a transform leaves the origin a segment starts at"
+file = "crates/gfx/src/path_shapes.rs"
+from = '''        if first.is_some_and(|e| !matches!(e, PathElement::MoveTo(_))) {'''
+to = '''        if false {'''
+
+# dom_api: the path methods.
+
+[[mutant]]
+name = "a line on an empty path only moves"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if data.path.is_empty() {
+        data.path.move_to(p);
+    }
+    data.path.line_to(p);'''
+to = '''    data.path.line_to(p);'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "closing a line of no length keeps it"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        if only_line(&data.path).is_some_and(|(start, end)| start == end) {'''
+to = '''        if false {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a curve with no point starts at the origin"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        if data.path.last_point().is_none() {
+            data.path.move_to(control);
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "points aren't mapped under a transform that can't be inverted"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        Some(transform) => transform.map_point(p),'''
+to = '''        Some(_) => p,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "the path stays put as the transform changes"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if invertible(new) {
+        data.path.transform(&to_gfx(undo()));
+    }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a reset leaves the path in the old space"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if invertible(current) {
+        data.path.transform(&to_gfx(current));
+    }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a restore leaves the path in the popped space"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        if invertible(from) && from != IDENTITY {
+            data.path.transform(&to_gfx(from));
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a translation under a transform that can't be inverted"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            if invertible(data.state().transform) {
+                change_transform(data, [1.0, 0.0, 0.0, 1.0, x, y], || {'''
+to = '''            if true {
+                change_transform(data, [1.0, 0.0, 0.0, 1.0, x, y], || {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a draw under a transform that can't be inverted"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        if !data.has_valid_size() || !invertible(data.state().transform) {'''
+to = '''        if !data.has_valid_size() {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "an arc with no radius is an arc"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        if radius == 0.0 || start == end {
+            let p = PointF::new(center.x + radius * start.cos(), center.y + radius * start.sin());'''
+to = '''        if false {
+            let p = PointF::new(center.x + radius * start.cos(), center.y + radius * start.sin());'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a counterclockwise turn and more isn't one turn"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    } else if counterclockwise && start - end >= TWO_PI {'''
+to = '''    } else if false {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a whole ellipse in one arc"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if (sweep.abs() - 360.0).abs() <= 1.0 / 4096.0 {'''
+to = '''    if false {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a rotated ellipse leaves the path where it was"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        path.transform(&to_gfx(back));'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a flat ellipse has no quarter turns"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        while angle < end {'''
+to = '''        while false {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "an arc to with no point arcs from the origin"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            None => data.path.move_to(q1),'''
+to = '''            None => data.path.tangent_arc_to(q1, q2, radius),'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "an arc to the last point after a close arcs"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            Some(last) if q1 == last || q1 == q2 || radius == 0.0 => line_to_point(data, p1),'''
+to = '''            Some(_) if q1 == q2 || radius == 0.0 => line_to_point(data, p1),'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "two radii spread the wrong way"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            [a, b] => [a, b, b, a],'''
+to = '''            [a, b] => [a, b, a, b],'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a negative width keeps the corners"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            corners.swap(0, 1);
+            corners.swap(2, 3);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "no move after a rounded rect"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        data.path.move_to(PointF::new(x, y));
+    });
+    Ok(())
+}'''
+to = '''    });
+    Ok(())
+}'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+# dom_api: fill, stroke, the line styles.
+
+[[mutant]]
+name = "a stroke of one point"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        if bounds.width == 0.0 && bounds.height == 0.0 {
+            return None;
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "evenodd fills nonzero"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        CanvasFillRule::Evenodd => FillRule::EvenOdd,'''
+to = '''        CanvasFillRule::Evenodd => FillRule::NonZero,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "strokes have no dashes"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        dash: Dash::new(&dash, state.line_dash_offset as f32),'''
+to = '''        dash: None,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "an odd dash list isn't repeated"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        segments.repeat(2)'''
+to = '''        segments.clone()'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a negative dash is taken"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if segments.iter().any(|s| !s.is_finite() || *s < 0.0) {'''
+to = '''    if segments.iter().any(|s| !s.is_finite()) {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "the miter limit starts as Skia's"
+file = "crates/dom/src/canvas.rs"
+from = '''            miter_limit: 10.0,'''
+to = '''            miter_limit: 4.0,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+# dom_api: clips and the recording.
+
+[[mutant]]
+name = "a recording doesn't replay the levels' saves"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        if level > 0 {
+            ops.push(PaintOp::Save);
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a recording doesn't replay the clips"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        ops.extend(state.clips.iter().map(|clip| PaintOp::ClipPath {'''
+to = '''        ops.extend(state.clips.iter().filter(|_| false).map(|clip| PaintOp::ClipPath {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "save copies the clips"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        let state = CanvasDrawingState {
+            clips: Vec::new(),
+            ..data.state().clone()
+        };'''
+to = '''        let state = data.state().clone();'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a restore isn't recorded"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            data.ops.push(PaintOp::Restore);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a restore keeps the matrix it pops"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            // The matrix is the one before the matching `Save`.
+            data.matrix = None;'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a clip under a transform that can't be inverted"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        if !invertible(transform) {
+            return;
+        }
+        let path = data.path.clone().with_fill_rule(fill_rule(rule));'''
+to = '''        let path = data.path.clone().with_fill_rule(fill_rule(rule));'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a clip kept in the transform's space"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        in_pixels.transform(&to_gfx(transform));'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+# Drawn, in the browser.
+
+[[mutant]]
+name = "clips drawn without anti-aliasing"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                PaintOp::ClipPath {
+                    path,
+                    anti_alias: true,
+                },'''
+to = '''                PaintOp::ClipPath {
+                    path,
+                    anti_alias: false,
+                },'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]
+
+[[mutant]]
+name = "a strokeRect line has caps"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            path.line_to(PointF::new(rect.right(), rect.bottom()));
+            path.close();'''
+to = '''            path.line_to(PointF::new(rect.right(), rect.bottom()));'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas"]

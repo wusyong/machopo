@@ -1,0 +1,169 @@
+# Mutation test of stage 5b2: the form pseudo-classes are worked out as
+# selectors and a control's native look ask for them:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-5b2.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+timeout = 900
+
+[[mutant]]
+name = "a possible change isn't marked"
+file = "crates/dom/src/scope.rs"
+from = '''        mark_element_states_changed(self.own(element), ElementState::COMPUTED_FORM);'''
+to = '''        let _ = self.own(element);'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it"]
+
+[[mutant]]
+name = "a recorded change keeps the cache"
+file = "crates/dom/src/scope.rs"
+from = '''        self.frames.form_state_changes_seen += 1;
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it"]
+
+[[mutant]]
+name = "the cache is kept whatever changed"
+file = "crates/dom/src/form_states.rs"
+from = '''        if cache.version != version ||'''
+to = '''        if false ||'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it"]
+
+[[mutant]]
+name = "style answers from what is stored"
+file = "crates/style/src/selector.rs"
+from = '''            Some(form) => form.states.matches(form.scope, self.0, state),'''
+to = '''            Some(_) => self.0.element_state().intersects(state),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+
+[[mutant]]
+name = "a form pseudo-class isn't asked"
+file = "crates/style/src/selector.rs"
+from = '''                if state.intersects(ElementState::COMPUTED_FORM) {'''
+to = '''                if false {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+
+[[mutant]]
+name = "a text control's :read-write is what is stored"
+file = "crates/style/src/selector.rs"
+from = '''            self.form_state(ElementState::READ_WRITE)'''
+to = '''            self.0.element_state().contains(ElementState::READ_WRITE)'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+
+[[mutant]]
+name = "the engine keeps the stored answer"
+file = "crates/style/src/lib.rs"
+from = '''        self.form_states.set(states);'''
+to = '''        let _ = states;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+
+[[mutant]]
+name = "a query asks no one"
+file = "crates/style/src/lib.rs"
+from = '''        let form = selector::FormStatesIn {
+            scope: read,
+            states: form,
+        };
+        let form = Some(&form);'''
+to = '''        let form: Option<&selector::FormStatesIn<'_>> = {
+            let _ = (read, form);
+            None
+        };'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+
+[[mutant]]
+name = "a native look shows what is stored"
+file = "crates/layout/src/control.rs"
+from = '''    let form = |state| form_states.matches(scope, control, state);'''
+to = '''    let form = |state| {
+        let _ = (scope, form_states);
+        control.element_state().intersects(state)
+    };'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it"]
+
+[[mutant]]
+name = "a box tree built with them asks no one"
+file = "crates/layout/src/lib.rs"
+from = '''        Self::build_document(scope, document.get(scope), text, images, form_states).0'''
+to = '''        Self::build_document(scope, document.get(scope), text, images, &dom::StoredFormStates).0'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it"]
+
+[[mutant]]
+name = "a radio button's group isn't looked at"
+file = "crates/dom_api/src/form_states.rs"
+from = '''            let trees = if depends_on_tree(element) {'''
+to = '''            let trees = if false {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+
+[[mutant]]
+name = "the changes aren't marked"
+file = "crates/dom_api/src/form_states.rs"
+from = '''            m.form_states_changed(element);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+
+[[mutant]]
+name = "one inserted is marked"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        if !inserted {'''
+to = '''        if true {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+
+[[mutant]]
+name = "a select's own states aren't set"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        if let Some(ui) = ui {
+            m.set_form_states(element, *ui);
+        }'''
+to = '''        let _ = ui;'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+
+[[mutant]]
+name = "an option's list box focus is lost"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        ElementState::MULTI_SELECT_FOCUS
+    } else if'''
+to = '''        ElementState::NONE
+    } else if'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+
+[[mutant]]
+name = "a select's :open is lost"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        ElementState::OPEN
+    } else {'''
+to = '''        ElementState::NONE
+    } else {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+
+[[mutant]]
+name = "a tree's radio buttons aren't marked"
+file = "crates/dom_api/src/form_states.rs"
+from = '''                if depends_on_tree(element) && self.seen.insert(element.id())'''
+to = '''                if false && self.seen.insert(element.id())'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+
+[[mutant]]
+name = "a tree's submit buttons without a form are marked"
+file = "crates/dom_api/src/form_states.rs"
+from = '''                if depends_on_tree(element) && self.seen.insert(element.id())'''
+to = '''                if (crate::input::is_radio(element) || is_submit_button(element))
+                    && self.seen.insert(element.id())'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+
+[[mutant]]
+name = "the frame's style asks no one"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        style_engine.set_form_states(&dom_api::HTML_FORM_STATES);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+
+[[mutant]]
+name = "the frame's box tree asks no one"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                    self.box_tree = Some(BoxTree::build_with_form_states(
+                        scope,
+                        &self.document,
+                        text,
+                        &images,
+                        &dom_api::HTML_FORM_STATES,
+                    ));'''
+to = '''                    self.box_tree = Some(BoxTree::build(scope, &self.document, text, &images));'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]

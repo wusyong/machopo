@@ -1,0 +1,35 @@
+# Sticky boxes: CodeMirror's gutter stays at its editor's left as the
+# lines scroll across, a child frame's header at the top of its frame as
+# that scrolls, and NewsSite's navigation at the top of the page as the
+# page scrolls; each is hit, and its client rect is, where it stuck (the
+# page starts 74 px down the window).
+window size=800x600
+navigate pages/position-sticky.html
+wait-loaded
+screenshot top
+# Across: the gutter stays at the left, inside the editor's border.
+wheel #code 300 0
+click #gutter
+wait-text #note "Clicked the gutter, 1 from the left."
+click #note
+wait-text #note "Cleared."
+click-at 40 154
+wait-text #note "Clicked the gutter, 1 from the left."
+screenshot across
+# The frame's header, at its top (the frame at 203 in the page) after
+# its document scrolled 200.
+frame #frame
+wheel #head 0 200
+frame top
+# Once the scroll is in (a capture waits for the input to be handled).
+capture scrolled
+click-at 100 284
+wait-text #note "Clicked the frame's header, 0 from its top."
+# Down: the navigation stays at the top, over what scrolled under it.
+wheel-at 600 400 0 600
+capture down
+click-at 700 94
+wait-text #note "Clicked the navigation (1), 0 from the top."
+click #nav
+wait-text #note "Clicked the navigation (2), 0 from the top."
+screenshot down

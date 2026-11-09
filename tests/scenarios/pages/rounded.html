@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<!-- Rounded corners. #dot is a circle at the page's top left: a click in
+     its box but outside its curve hits what is under it, the body. #list
+     is a scroll container with rounded corners, a layer the compositor
+     cuts to them: the wheel scrolls it. #logical's top left corner is
+     rounded by a flow-relative longhand (border-start-start-radius), as
+     Spectrum's buttons are. #out says what the last click hit and where
+     #list is scrolled to. -->
+<title>rounded</title>
+<style>
+  html, body { margin: 0; height: 100% }
+  #dot { position: absolute; left: 0; top: 0; width: 200px; height: 200px;
+         border-radius: 50%; background: #1a73e8 }
+  #out { position: absolute; left: 220px; top: 0 }
+  #list { position: absolute; left: 0; top: 220px; width: 200px; height: 150px;
+          border-radius: 24px; overflow: auto; background: #e8f0fe }
+  #list div { height: 50px; margin: 4px; background: #34a853 }
+  #logical { position: absolute; left: 240px; top: 220px; width: 100px; height: 100px;
+             border-start-start-radius: 100px; background: #fbbc04 }
+</style>
+<div id="dot"></div>
+<p id="out">nothing yet</p>
+<div id="list"><div></div><div></div><div></div><div></div><div></div><div></div></div>
+<div id="logical"></div>
+<script>
+  let hit = "nothing";
+  const list = document.getElementById("list");
+  const show = () => {
+    document.getElementById("out").textContent = `${hit} ${list.scrollTop}`;
+  };
+  document.body.addEventListener("click", (event) => {
+    hit = event.target.id || event.target.localName;
+    show();
+  });
+  list.addEventListener("scroll", show);
+</script>

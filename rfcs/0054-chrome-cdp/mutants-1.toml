@@ -1,0 +1,124 @@
+# Mutation test of the first two stages (Windows): the CDP pipe both
+# browsers share, Chrome through its pipe and closed, its trace through
+# `Tracing`, and its folder readable by the app containers:
+# python3 scripts/test.py mutate rfcs/0054-chrome-cdp/mutants-1.toml
+test = ["python3", "scripts/speedometer_test.py", "CdpPipeTests"]
+timeout = 600
+
+[[mutant]]
+name = "events are dropped"
+file = "scripts/speedometer.py"
+from = '''                (self.answers if "id" in message else self.events).put(message)'''
+to = '''                if "id" in message:
+                    self.answers.put(message)'''
+
+[[mutant]]
+name = "an answer to an earlier call is taken"
+file = "scripts/speedometer.py"
+from = '''            if message.get("id") != self.next_id:
+                continue'''
+to = '''            if message.get("id") is None:
+                continue'''
+
+[[mutant]]
+name = "an event before the one waited for is taken"
+file = "scripts/speedometer.py"
+from = '''            if message.get("method") == method:
+                return message.get("params", {})'''
+to = '''            return message.get("params", {})'''
+
+[[mutant]]
+name = "the browser isn't asked to close"
+file = "scripts/speedometer.py"
+from = '''            self.call("Browser.close", timeout=5)'''
+to = '''            raise RuntimeError("not asked")'''
+test = ["python3", "scripts/speedometer_test.py", "CdpPipeTests", "ChromeTests.test_the_page_is_left_alone_and_chrome_ends_on_its_own"]
+
+[[mutant]]
+name = "the browser isn't given time to end"
+file = "scripts/speedometer.py"
+from = '''            self.process.wait(timeout=grace)'''
+to = '''            pass'''
+test = ["python3", "scripts/speedometer_test.py", "ChromeTests.test_the_page_is_left_alone_and_chrome_ends_on_its_own"]
+
+[[mutant]]
+name = "a session stays on Chrome's page"
+file = "scripts/speedometer.py"
+from = '''        self.call("Target.detachFromTarget", {"sessionId": session})'''
+to = '''        pass'''
+test = ["python3", "scripts/speedometer_test.py", "ChromeTests.test_the_page_is_left_alone_and_chrome_ends_on_its_own"]
+
+[[mutant]]
+name = "Chrome's pipe handles the wrong way round"
+file = "scripts/speedometer.py"
+from = '''            command.insert(2, f"--remote-debugging-io-pipes={handles[0]},{handles[1]}")'''
+to = '''            command.insert(2, f"--remote-debugging-io-pipes={handles[1]},{handles[0]}")'''
+test = ["python3", "scripts/speedometer_test.py", "ChromeTests.test_the_page_is_left_alone_and_chrome_ends_on_its_own"]
+
+[[mutant]]
+name = "a folder's DACL is taken as letting the app containers read"
+file = "scripts/speedometer.py"
+from = '''    if all(inherited_read(folder, sid) for sid in APP_CONTAINERS):
+        return'''
+to = '''    if True:
+        return'''
+test = ["python3", "scripts/speedometer_test.py", "ChromeTests.test_chromes_sandbox_may_read_its_folder"]
+
+[[mutant]]
+name = "the read isn't passed on to what's in the folder"
+file = "scripts/speedometer.py"
+from = '''    grants = [f"*{sid}:(OI)(CI)(RX)" for sid in APP_CONTAINERS]'''
+to = '''    grants = [f"*{sid}:(RX)" for sid in APP_CONTAINERS]'''
+test = ["python3", "scripts/speedometer_test.py", "ChromeTests.test_chromes_sandbox_may_read_its_folder"]
+
+[[mutant]]
+name = "ALL APPLICATION PACKAGES' alias isn't known"
+file = "scripts/speedometer.py"
+from = '''    names = {sid, {"S-1-15-2-1": "AC"}.get(sid, sid)}'''
+to = '''    names = {sid}'''
+test = ["python3", "scripts/speedometer_test.py", "ChromeTests.test_chromes_sandbox_may_read_its_folder"]
+
+[[mutant]]
+name = "a grant that isn't passed on counts"
+file = "scripts/speedometer.py"
+from = '''        if trustee in names and "OI" in flags and "CI" in flags and "IO" not in flags:'''
+to = '''        if trustee in names and "IO" not in flags:'''
+test = ["python3", "scripts/speedometer_test.py", "ChromeTests.test_chromes_sandbox_may_read_its_folder"]
+
+[[mutant]]
+name = "Chrome doesn't record"
+file = "scripts/speedometer.py"
+from = '''            if trace:
+                chrome.call("Tracing.start", {'''
+to = '''            if False:
+                chrome.call("Tracing.start", {'''
+test = ["python3", "scripts/speedometer_test.py", "MeasureTests.test_traces_of_both"]
+
+[[mutant]]
+name = "Chrome's trace isn't read back"
+file = "scripts/speedometer.py"
+from = '''            chunk = chrome.call("IO.read", {"handle": done["stream"], "size": 1 << 20})'''
+to = '''            chunk = {"eof": True}'''
+test = ["python3", "scripts/speedometer_test.py", "MeasureTests.test_traces_of_both"]
+
+[[mutant]]
+name = "Chrome's trace is only its first chunk"
+file = "scripts/speedometer.py"
+from = '''            if chunk.get("eof"):
+                break'''
+to = '''            break'''
+test = ["python3", "scripts/speedometer_test.py", "MeasureTests.test_traces_of_both"]
+
+[[mutant]]
+name = "Chrome's trace is left half written"
+file = "scripts/speedometer.py"
+from = '''    partial.replace(path)'''
+to = '''    shutil.copyfile(partial, path)'''
+test = ["python3", "scripts/speedometer_test.py", "MeasureTests.test_traces_of_both"]
+
+[[mutant]]
+name = "Chrome's tab isn't brought to the front"
+file = "scripts/speedometer.py"
+from = '''        session = self.navigate(url, front=True)'''
+to = '''        session = self.navigate(url)'''
+test = ["python3", "scripts/speedometer_test.py", "ChromeTests.test_the_page_has_focus"]

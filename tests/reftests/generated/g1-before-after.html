@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<title>::before and ::after generate their content in their element</title>
+<link rel="match" href="g1-before-after-ref.html">
+<!-- css-content 3: inline by default, around the element's text; a box of
+     its own with a block-level display; `attr()`; an empty `display: table`
+     clearfix (laid out as a block) holds the float before it. -->
+<style>
+  body { margin: 0 }
+  div { font: 20px/1 Ahem; width: 300px }
+  .a::before { content: "XX"; color: green }
+  .a::after { content: "Z" attr(data-x); color: blue }
+  .b::before { content: ""; display: block; width: 50px; height: 20px; background: green }
+  .c::after { content: ""; display: table; clear: both }
+  .f { float: left; width: 40px; height: 40px; background: blue }
+</style>
+<div class="a" data-x="W">YY</div>
+<div class="b">Y</div>
+<div class="c"><div class="f"></div></div>
+<div>Y</div>

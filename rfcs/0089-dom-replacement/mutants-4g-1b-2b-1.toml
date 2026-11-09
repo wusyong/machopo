@@ -1,0 +1,253 @@
+# Stage 4g-1b-2b-1: ResizeObserver on the new DOM: the observers and observations (the
+# targets keep them), the interfaces, the frozen arrays, the gather and broadcast (the
+# flat tree's depth, entries read as delivered) and the renderer's loop.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it resize && cargo test -q -p dom_api_next --test it resize && cargo test -q -p dom_js_next --test it resize_observers"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: the same box observed anew"
+file = "crates/dom_next/src/resize.rs"
+from = '''            .is_some_and(|observation| observation.observed_box.get() == observed_box.code())'''
+to = '''            .is_some_and(|_| false)'''
+
+[[mutant]]
+name = "dom: a document observed"
+file = "crates/dom_next/src/resize.rs"
+from = '''        if self.kind(target) != crate::NodeKind::Element {
+            return;
+        }
+        if self'''
+to = '''        if false {
+            return;
+        }
+        if self'''
+
+[[mutant]]
+name = "dom: unobserve leaves it on the target"
+file = "crates/dom_next/src/resize.rs"
+from = '''                list.remove(self.gc, index);
+                // Off its observer's list too'''
+to = '''                // Off its observer's list too'''
+
+[[mutant]]
+name = "dom: unobserve leaves it on the observer"
+file = "crates/dom_next/src/resize.rs"
+from = '''                observation.observer.set(self.gc, None);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: disconnect leaves the targets'"
+file = "crates/dom_next/src/resize.rs"
+from = '''        for state in self.resize_observations(observer) {
+            self.unobserve_resize(observer, state.target);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: observing doesn't change the version"
+file = "crates/dom_next/src/resize.rs"
+from = '''        list.push(self.gc, reference);
+        self.resize_changed();'''
+to = '''        list.push(self.gc, reference);'''
+
+[[mutant]]
+name = "dom: what was reported not kept"
+file = "crates/dom_next/src/resize.rs"
+from = '''            observation.reported_inline.set(size.inline);
+            observation.reported_block.set(size.block);'''
+to = ''''''
+
+[[mutant]]
+name = "dom: nothing reported reads as reported"
+file = "crates/dom_next/src/resize.rs"
+from = '''                    last_reported: (!inline.is_nan()).then(|| BoxSize {'''
+to = '''                    last_reported: Some(BoxSize {'''
+
+[[mutant]]
+name = "dom: the border box read as the device pixels'"
+file = "crates/dom_next/src/resize.rs"
+from = '''            1 => Self::BorderBox,
+            2 => Self::DevicePixelContentBox,'''
+to = '''            2 => Self::BorderBox,
+            1 => Self::DevicePixelContentBox,'''
+
+[[mutant]]
+name = "api: border-box observes the content box"
+file = "crates/dom_api_next/src/resize_observer.rs"
+from = '''        "border-box" => ResizeObserverBox::BorderBox,'''
+to = '''        "border-box" => ResizeObserverBox::ContentBox,'''
+
+[[mutant]]
+name = "api: another box taken"
+file = "crates/dom_api_next/src/resize_observer.rs"
+from = '''    let observed_box = match options.r#box.as_str() {'''
+to = '''    let known = ["content-box", "border-box", "device-pixel-content-box"];
+    let observed_box = match if known.contains(&options.r#box.as_str()) { options.r#box.as_str() } else { "content-box" } {'''
+
+[[mutant]]
+name = "api: an unchanged size called back"
+file = "crates/dom_api_next/src/resize_observer.rs"
+from = '''                if observation.last_reported == Some(size) {'''
+to = '''                if false && observation.last_reported == Some(size) {'''
+
+[[mutant]]
+name = "api: as deep as the depth called back"
+file = "crates/dom_api_next/src/resize_observer.rs"
+from = '''                if target_depth > depth {'''
+to = '''                if target_depth >= depth {'''
+
+[[mutant]]
+name = "api: nothing skipped"
+file = "crates/dom_api_next/src/resize_observer.rs"
+from = '''                } else {
+                    round.skipped = true;
+                }'''
+to = '''                }'''
+
+[[mutant]]
+name = "api: the deepest broadcast"
+file = "crates/dom_api_next/src/resize_observer.rs"
+from = '''                    round.broadcast = Some(round.broadcast.map_or(target_depth, |d| d.min(target_depth)));'''
+to = '''                    round.broadcast = Some(round.broadcast.map_or(target_depth, |d| d.max(target_depth)));'''
+
+[[mutant]]
+name = "api: the content box reported for any"
+file = "crates/dom_api_next/src/resize_observer.rs"
+from = '''                        observed_size(&values, observation.observed_box),
+                    );'''
+to = '''                        observed_size(&values, ResizeObserverBox::ContentBox),
+                    );'''
+
+[[mutant]]
+name = "api: no checkpoint after a callback"
+file = "crates/dom_api_next/src/resize_observer.rs"
+from = '''            host.call_resize_callback(&observer, &entries);
+            host.perform_microtask_checkpoint();'''
+to = '''            host.call_resize_callback(&observer, &entries);'''
+
+[[mutant]]
+name = "api: the depth the DOM tree's"
+file = "crates/dom_api_next/src/resize_observer.rs"
+from = '''    std::iter::successors(Some(node), |&node| cx.flat_tree_parent(node))'''
+to = '''    std::iter::successors(Some(node), |&node| cx.parent(node).or_else(|| cx.shadow_host(node)))'''
+
+[[mutant]]
+name = "api: the content rect at the origin"
+file = "crates/dom_api_next/src/resize_observer.rs"
+from = '''            f64::from(padding_left),
+            f64::from(padding_top),'''
+to = '''            0.0,
+            0.0,'''
+
+[[mutant]]
+name = "api: the padding counted in the content box"
+file = "crates/dom_api_next/src/resize_observer.rs"
+from = '''    let width = (border_box.width - left - right - padding_left - padding_right).max(0.0);'''
+to = '''    let width = (border_box.width - left - right).max(0.0);'''
+
+[[mutant]]
+name = "api: device pixels not snapped from the paint offset"
+file = "crates/dom_api_next/src/resize_observer.rs"
+from = '''    let at = offset.unwrap_or(gfx::PointF::new(0.0, 0.0));'''
+to = '''    let at = offset.filter(|_| false).unwrap_or(gfx::PointF::new(0.0, 0.0));'''
+
+[[mutant]]
+name = "api: device pixels at 1x"
+file = "crates/dom_api_next/src/resize_observer.rs"
+from = '''    let scale = f64::from(scale);'''
+to = '''    let scale = f64::from(scale) * 0.0 + 1.0;'''
+
+[[mutant]]
+name = "api: nothing observed"
+file = "crates/dom_api_next/src/resize_observer.rs"
+from = '''        .any(|observer| !cx.resize_observations(observer).is_empty())'''
+to = '''        .any(|_| false)'''
+
+[[mutant]]
+name = "js: frozen arrays new each time"
+file = "crates/dom_js_next/src/front.rs"
+from = '''                && same(scope, array)
+            {
+                return array;'''
+to = '''                && same(scope, array)
+                && false
+            {
+                return array;'''
+
+[[mutant]]
+name = "js: frozen arrays not frozen"
+file = "crates/dom_js_next/src/front.rs"
+from = '''    let array = v8::Array::new_with_elements(scope, values);
+    array.set_integrity_level(scope, v8::IntegrityLevel::Frozen);'''
+to = '''    let array = v8::Array::new_with_elements(scope, values);'''
+
+[[mutant]]
+name = "renderer: one round"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it next_dom_resize_observers"]
+from = '''            match round.broadcast {
+                Some(deeper) => depth = deeper,
+                None => break round.skipped,
+            }'''
+to = '''            break round.skipped;'''
+
+[[mutant]]
+name = "renderer: no layout before a round"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it next_dom_resize_observers"]
+from = '''            if let Some((dom, frame)) = next_frame(&mut self.next_engine) {
+                dom.mutate(|cx| frame.update_lifecycle_to_pre_paint(cx));
+            }
+            let Some(engine) = &mut self.next_engine else {
+                return;
+            };
+            let round'''
+to = '''            let Some(engine) = &mut self.next_engine else {
+                return;
+            };
+            let round'''
+
+[[mutant]]
+name = "renderer: no loop error"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it next_dom_resize_observers"]
+from = '''            engine.report_resize_loop_error();
+'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: no frame after the loop error"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it next_dom_resize_observers"]
+from = '''            self.next_resize_loop_error = true;
+'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: observing asks for no frame"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it next_dom_resize_observers"]
+from = '''        let observed =
+            intersections != next.rendered_intersections || resizes != next.rendered_resizes;'''
+to = '''        let observed = intersections != next.rendered_intersections;'''
+
+[[mutant]]
+name = "renderer: the steps not run"
+file = "crates/renderer/src/render_thread.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it next_dom_resize_observers"]
+from = '''        self.run_next_resize_observer_steps();
+'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: no paint offset"
+file = "crates/renderer/src/next_frame_view.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it next_dom_resize_observers"]
+from = '''    fn paint_offset(&self, node: NodeId) -> Option<PointF> {
+        self.view.paint_offset(node)
+    }'''
+to = '''    fn paint_offset(&self, node: NodeId) -> Option<PointF> {
+        let _ = node;
+        None
+    }'''

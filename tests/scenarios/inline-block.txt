@@ -1,0 +1,14 @@
+# about:demo's inline-block links: "Rename" makes the first one
+# longer, and the line moves the others along. The links are at the end of
+# the page: scrolled to first, so that what is captured shows them.
+navigate about:demo
+wait-loaded
+scroll-to #nav-1
+screenshot short
+capture short
+click #rename
+wait-text #rename-note "The first link is Home page."
+# Wider, and the next one moved: the frame changes where they are now.
+expect-differs short #nav-1
+expect-differs short #nav-2
+screenshot long

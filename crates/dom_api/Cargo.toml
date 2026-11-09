@@ -1,0 +1,45 @@
+[package]
+name = "dom_api"
+description = "The engine-independent DOM API on the DOM (dom), beside dom_api until it replaces it: the spec's algorithms with their arguments' checks, and the declaration table each engine binds from."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+base.workspace = true
+# `toDataURL`'s URL.
+base64.workspace = true
+getrandom.workspace = true
+encoding_rs.workspace = true
+# Canvas's data and steps, apart from the DOM.
+canvas.workspace = true
+animation.workspace = true
+computed_style.workspace = true
+compositor_paint.workspace = true
+css.workspace = true
+dom_api_macros.workspace = true
+dom.workspace = true
+elise.workspace = true
+# Marks and measures in machopo's trace, as Chrome's `blink.user_timing`
+# (`performance`).
+tracing.workspace = true
+trace_event.workspace = true
+gfx.workspace = true
+html.workspace = true
+# Grapheme clusters, which typing deletes and moves by.
+icu_segmenter.workspace = true
+style.workspace = true
+# Fetch's header list's algorithms and what a guard forbids.
+protocol.workspace = true
+# Intersection observers' margins, parsed and serialized.
+style_resolver.workspace = true
+url.workspace = true

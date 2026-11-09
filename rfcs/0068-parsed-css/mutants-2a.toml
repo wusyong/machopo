@@ -1,0 +1,158 @@
+# 2a: the font group and the font longhands (`computed_style`, `css`,
+# `layout`).
+#   python3 scripts/test.py mutate rfcs/0068-parsed-css/mutants-2a.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "fonts::", "style_groups::", "interpolation::", "computed::"]
+timeout = 900
+
+[[mutant]]
+name = "a font property written though the same"
+file = "crates/css/src/properties.rs"
+from = '''        if $style.font.$field != value {'''
+to = '''        if true || $style.font.$field != value {'''
+
+[[mutant]]
+name = "a child's own copy of its parent's font"
+file = "crates/computed_style/src/lib.rs"
+from = '''                    font: parent.font.clone(),'''
+to = '''                    font: Arc::new((*parent.font).clone()),'''
+
+[[mutant]]
+name = "the font not compared for the children"
+file = "crates/computed_style/src/lib.rs"
+from = '''            && (Arc::ptr_eq(&self.font, &other.font) || self.font == other.font)
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "invalidation::"]
+
+[[mutant]]
+name = "font leaves the other font longhands"
+file = "crates/css/src/properties.rs"
+from = '''        others.to_vec(),
+        vec![
+            Value::FontWeight(font.weight.unwrap_or(FontWeightValue::Normal)),'''
+to = '''        others[..0].to_vec(),
+        vec![
+            Value::FontWeight(font.weight.unwrap_or(FontWeightValue::Normal)),'''
+
+[[mutant]]
+name = "font's small caps dropped"
+file = "crates/css/src/properties.rs"
+from = '''        variant[3] = Value::FontVariantCaps(computed_style::FontVariantCaps::SmallCaps);'''
+to = ''''''
+
+[[mutant]]
+name = "font written over another variant"
+file = "crates/css/src/serialize.rs"
+from = '''    if !resets_alike(variant, &variant_initial, Some(3))
+        || !resets_alike(others, &crate::font_features::other_initial_values(), None)
+    {
+        return None;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "font written with other caps"
+file = "crates/css/src/serialize.rs"
+from = '''        _ => return None,
+    }
+    if !matches!(weight, Value::FontWeight(FontWeight::Normal)) {'''
+to = '''        _ => {}
+    }
+    if !matches!(weight, Value::FontWeight(FontWeight::Normal)) {'''
+
+[[mutant]]
+name = "font's stretch left out"
+file = "crates/css/src/serialize.rs"
+from = '''        keyword => parts.push(crate::font_features::stretch_name(keyword).to_owned()),'''
+to = '''        _ => {}'''
+
+[[mutant]]
+name = "the computed weight 400 written"
+file = "crates/css/src/computed.rs"
+from = '''        let value = if *name == "font-weight" && value == "400" {'''
+to = '''        let value = if false && *name == "font-weight" && value == "400" {'''
+
+[[mutant]]
+name = "computed settings not one per tag"
+file = "crates/css/src/font_features.rs"
+from = '''        if !out.iter().any(|kept| tag(kept) == tag(setting)) {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "computed settings not sorted"
+file = "crates/css/src/font_features.rs"
+from = '''    out.sort_by_key(&tag);'''
+to = '''    out.reverse();'''
+
+[[mutant]]
+name = "a feature's 1 written"
+file = "crates/css/src/font_features.rs"
+from = '''        if setting.value != 1 {'''
+to = '''        if setting.value != 1 || true {'''
+
+[[mutant]]
+name = "a negative feature value"
+file = "crates/css/src/font_features.rs"
+from = '''            if value < 0 {
+                return invalid(input);
+            }
+            value as u32'''
+to = '''            value as u32'''
+
+[[mutant]]
+name = "a language override's padding kept"
+file = "crates/css/src/font_features.rs"
+from = '''    Ok(Some(trimmed.into()))'''
+to = '''    Ok(Some(string.as_ref().into()))'''
+
+[[mutant]]
+name = "ex-height written"
+file = "crates/css/src/font_features.rs"
+from = '''        FontSizeAdjustMetric::ExHeight => None,'''
+to = '''        FontSizeAdjustMetric::ExHeight => Some("ex-height"),'''
+
+[[mutant]]
+name = "font-variant: none with the others"
+file = "crates/css/src/font_features.rs"
+from = '''        return others_normal.then(|| "none".to_owned());'''
+to = '''        return Some("none".to_owned());'''
+
+[[mutant]]
+name = "two of one ligature kind"
+file = "crates/css/src/font_features.rs"
+from = '''    if slot.is_some() {
+        return Some(false);
+    }
+    *slot = Some(on);'''
+to = '''    *slot = Some(on);'''
+
+[[mutant]]
+name = "a stretch keyword's percentage"
+file = "crates/css/src/font_features.rs"
+from = '''            Self::Keyword(keyword) => keyword.percentage(),'''
+to = '''            Self::Keyword(_) => 100.0,'''
+
+[[mutant]]
+name = "other axes interpolate"
+file = "crates/css/src/interpolate.rs"
+from = '''            || self.iter().zip(other.iter()).any(|(a, b)| a.tag != b.tag)'''
+to = ''''''
+
+[[mutant]]
+name = "another metric interpolates"
+file = "crates/css/src/interpolate.rs"
+from = '''            (Adjust(a_metric, Some(a)), Adjust(b_metric, Some(b))) if a_metric == b_metric => {'''
+to = '''            (Adjust(a_metric, Some(a)), Adjust(_b_metric, Some(b))) => {'''
+
+[[mutant]]
+name = "a negative stretch"
+file = "crates/css/src/interpolate.rs"
+from = '''        FontStretch => style.font_mut().stretch = style.font.stretch.max(0.0),'''
+to = '''        FontStretch => style.font_mut().stretch = style.font.stretch.max(-1e9),'''
+
+[[mutant]]
+name = "font smoothing laid out"
+file = "crates/layout/src/lib.rs"
+from = '''            font: if new.font.smoothing == old.font.smoothing {'''
+to = '''            font: if true {'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::"]

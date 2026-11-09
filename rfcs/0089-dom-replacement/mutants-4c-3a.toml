@@ -1,0 +1,115 @@
+# Stage 4c-3a: `test.py wpt --next-dom` and `reftest --next-dom` judged
+# against today's DOM's expectations (`next_dom_results`, `strict_gaps`,
+# `judge_next_dom`, the refusal to write them), and the new DOM's
+# browser-window members (`outerWidth` and its kin) the reftest executor
+# reads.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "python3 scripts/wpt_expectations_test.py && cargo test -q -p dom_api_next --test it -- geometry && cargo test -q -p shell --test it -- webdriver::the_new_doms"]
+timeout = 3000
+
+[[mutant]]
+name = "a known intermittent status a difference"
+file = "scripts/test.py"
+from = '''            if expected is None or status in (entry.get("known_intermittent") or []):
+                report["expected"] += 1'''
+to = '''            if expected is None:
+                report["expected"] += 1'''
+
+[[mutant]]
+name = "a harness expected OK no gap"
+file = "scripts/test.py"
+from = '''            kind = "gaps" if expected in PASSING else "new" if status in PASSING else "other"'''
+to = '''            kind = "gaps" if expected == "PASS" else "new" if status in PASSING else "other"'''
+
+[[mutant]]
+name = "a harness now OK not the new DOM's alone"
+file = "scripts/test.py"
+from = '''            kind = "gaps" if expected in PASSING else "new" if status in PASSING else "other"'''
+to = '''            kind = "gaps" if expected in PASSING else "new" if status == "PASS" else "other"'''
+
+[[mutant]]
+name = "every run complete"
+file = "scripts/test.py"
+from = '''    report: dict = {"expected": 0, "gaps": {}, "new": {}, "other": {}, "complete": False}'''
+to = '''    report: dict = {"expected": 0, "gaps": {}, "new": {}, "other": {}, "complete": True}'''
+
+[[mutant]]
+name = "a subtest's name left out"
+file = "scripts/test.py"
+from = '''            if subtest := entry.get("subtest"):
+                what = f"{subtest}: {what}"'''
+to = ''''''
+
+[[mutant]]
+name = "a directory's prefix its sibling's"
+file = "scripts/test.py"
+from = '''        if any(test.strip("/") == path or test.strip("/").startswith(path + "/") for path in strict)'''
+to = '''        if any(test.strip("/").startswith(path) for path in strict)'''
+
+[[mutant]]
+name = "a run cut short passes"
+file = "scripts/test.py"
+from = '''    if not report["complete"]:
+        print("the run didn't get to its end")
+        return 1'''
+to = '''    if not report["complete"]:
+        print("the run didn't get to its end")'''
+
+[[mutant]]
+name = "a gap where it caught up passes"
+file = "scripts/test.py"
+from = '''        for test in strict:
+            print(f"  {test}")
+        return 1'''
+to = '''        for test in strict:
+            print(f"  {test}")'''
+
+[[mutant]]
+name = "the new DOM's results written as the expectations"
+file = "scripts/test.py"
+from = '''    if next_dom and os.environ.get("MACHOPO_UPDATE_EXPECTATIONS"):'''
+to = '''    if False:'''
+
+[[mutant]]
+name = "outerWidth the height"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''    Ok(window_screen_rect(cx, this).map_or(0, |rect| saturated_cast(rect.width)))'''
+to = '''    Ok(window_screen_rect(cx, this).map_or(0, |rect| saturated_cast(rect.height)))'''
+
+[[mutant]]
+name = "screenX the y"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''    Ok(window_screen_rect(cx, this).map_or(0, |rect| saturated_cast(rect.x)))'''
+to = '''    Ok(window_screen_rect(cx, this).map_or(0, |rect| saturated_cast(rect.y)))'''
+
+[[mutant]]
+name = "the browser window's rect laid out first"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''    cx.peek_layout(cx.window_document(window), |layout| layout.window_screen_rect())'''
+to = '''    cx.with_layout(cx.window_document(window), |layout| layout.window_screen_rect())'''
+
+[[mutant]]
+name = "the frame has no browser window"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''    fn window_screen_rect(&self) -> Option<RectF> {
+        self.window_screen_rect
+    }'''
+to = '''    fn window_screen_rect(&self) -> Option<RectF> {
+        None
+    }'''
+
+[[mutant]]
+name = "the window's rect not given the frame"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            frame.set_window_screen_rect(window);'''
+to = '''            let _ = window;'''
+
+[[mutant]]
+name = "a new window rect not given at once"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                if self.next_dom {
+                    self.set_next_viewport();
+                }
+            }
+            RendererMsg::QueryElement {'''
+to = '''            }
+            RendererMsg::QueryElement {'''

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<title>J1: an inline script changes the DOM parsed before it, not after; the rest parses as usual; microtasks run between scripts</title>
+<link rel="match" href="j1-inline-script-ref.html">
+<style>
+  html, body { margin: 0 }
+  div { width: 100px; height: 100px }
+  .not-parsed-yet { width: 200px }
+</style>
+<div id="before" style="background-color: red"></div>
+<script>
+  const before = document.getElementById("before");
+  before.setAttribute("style", "background-color: green");
+  // The element after this script isn't parsed yet.
+  if (document.getElementById("after") === null) {
+    before.classList.add("not-parsed-yet");
+  }
+  // Runs at the microtask checkpoint after this script, before the next.
+  globalThis.microtaskRan = false;
+  Promise.resolve().then(() => { globalThis.microtaskRan = true; });
+</script>
+<div id="after" style="background-color: green"></div>
+<div id="microtask" style="background-color: red"></div>
+<script>
+  if (globalThis.microtaskRan) {
+    document.getElementById("microtask").setAttribute("style", "background-color: green");
+  }
+</script>

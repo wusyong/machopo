@@ -1,0 +1,52 @@
+# Stage 4h-5b-2 in a whole browser: the renderer's idle periods for the new DOM, its input
+# monitor. (Its time origin of a navigation that started before the renderer is in the test
+# gaps: the shell test sees it only when the renderer starts after the navigation.)
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it -- scheduling::input_is_pending_on_the_new_dom next_dom::idle_callbacks_on_the_new_dom next_dom::idle_periods_wait_for_the_new_doms_timers next_dom::navigation_timing_on_the_new_dom"]
+timeout = 2400
+
+[[mutant]]
+name = "renderer: the new DOM's idle callbacks not run"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            self.run_next_idle_callback(deadline);'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: no idle period in the new DOM"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                self.start_next_idle_period();'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: the loop not woken for the new DOM's idle callbacks"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let (waiting, runnable) = (waiting || next_waiting, runnable || next_runnable);'''
+to = '''        let _ = (next_waiting, next_runnable);'''
+
+[[mutant]]
+name = "renderer: no input monitor"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        engine.set_input_monitor(Box::new(NextInputMonitor::new(
+            self.frame_settings.pending_input.clone(),
+            document_id,
+            node,
+        )));'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: input for the drawn document no one's"
+file = "crates/renderer/src/pending_user_input.rs"
+from = '''(id == self.drawn.0).then_some'''
+to = '''(id != self.drawn.0).then_some'''
+
+[[mutant]]
+name = "renderer: a child frame's input the focused frame's"
+file = "crates/renderer/src/pending_user_input.rs"
+from = '''                    .map(|raw| PendingInput::Document(dom_next::NodeId::from_raw(raw))),'''
+to = '''                    .map(|_| PendingInput::FocusedFrame),'''
+
+[[mutant]]
+name = "renderer: an idle period while the new DOM's timers are due"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let end = sooner_ms(Some(now + LONG_IDLE_PERIOD), sooner_ms(self.next_timer_due(), next))?;'''
+to = '''        let _ = next;
+        let end = sooner_ms(Some(now + LONG_IDLE_PERIOD), self.next_timer_due())?;'''

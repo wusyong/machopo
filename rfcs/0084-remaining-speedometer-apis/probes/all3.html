@@ -1,0 +1,5 @@
+<!doctype html><a name=""></a><div name=""></div>
+<script>function run() { const all = document.all; const r = [all.namedItem(''), all.item(''), all[''], all('')].map(v => v && v.tagName || String(v));
+document.querySelector('a').remove(); const p = document.createElement('p'); p.id = ''; document.body.append(p);
+r.push(...[all.namedItem(''), all['']].map(v => v && v.tagName || String(v)), String(document.forms.namedItem('')), String(document.getElementsByTagName('p').namedItem('')), String(document.getElementsByTagName('p')['']));
+return r.join(' / '); }</script>

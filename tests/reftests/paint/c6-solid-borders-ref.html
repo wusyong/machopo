@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<title>C6 reference: the borders built from boxes</title>
+<style>html, body { margin: 0 }</style>
+<div style="box-sizing: border-box; width: 85px; height: 45px; padding: 10px 0 0 15px; background-color: green">
+  <div style="width: 50px; height: 30px; background-color: white"></div>
+</div>
+<div style="width: 100px; height: 10px; background-color: green"></div>
+<div style="height: 30px"></div>
+<div style="width: 100px; height: 20px; background-color: blue"></div>
+<div style="width: 80px; height: 30px; background-color: blue">
+  <div style="margin-left: 10px; height: 30px; background-color: green">
+    <div style="width: 50px; height: 30px; background-color: white"></div>
+  </div>
+</div>
+<div style="box-sizing: border-box; width: 100px; height: 60px; padding: 10px; background-color: green">
+  <div style="height: 40px; background-color: white"></div>
+</div>
+<div style="width: 100px; height: 10px; background-color: green"></div>

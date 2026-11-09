@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<script src="../resources/runner.js"></script>
+<script>
+  // A document the summary can't walk: the values go without it.
+  document.querySelectorAll = function () {
+    throw new Error("can't walk");
+  };
+  PerfTestRunner.measureRunsPerSecond({
+    run() {
+      document.createElement("span");
+    },
+  });
+</script>

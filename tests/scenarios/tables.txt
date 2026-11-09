@@ -1,0 +1,25 @@
+# about:demo's table: its caption, header row and cells laid out as a
+# table (the screenshot shows the columns, the spanning cell, the borders
+# and spacing, the text in the middle of the tall row, the first column's
+# background), a row added by script below the others, the table laid out
+# again around it, its last column collapsed, the table narrower, and its
+# borders collapsed: one line on each grid line, no spacing.
+navigate about:demo
+wait-loaded
+scroll-to #demo-table
+screenshot table
+capture table
+click #add-row
+wait-text #table-note "3 rows."
+expect-differs table #demo-table
+screenshot table-added
+capture added
+click #collapse-column
+wait-text #column-note "2 columns shown."
+expect-differs added #demo-table
+screenshot table-collapsed
+capture column-collapsed
+click #collapse-borders
+wait-text #borders-note "Collapsed borders."
+expect-differs column-collapsed #demo-table
+screenshot borders-collapsed

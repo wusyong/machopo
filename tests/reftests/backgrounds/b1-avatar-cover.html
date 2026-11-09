@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<title>Backgrounds 1: an avatar's image covers its box (background-size: cover, centered), and contain fits it, tiled or not</title>
+<link rel="match" href="b1-avatar-cover-ref.html">
+<style>
+  html, body { margin: 0 }
+  div { width: 60px; height: 60px; margin-bottom: 10px }
+</style>
+<!-- 20x10, green then blue: scaled to 120x60, its middle 60px shown. -->
+<div style="background: url(../images/resources/green-blue-20x10.png) center / cover"></div>
+<!-- Scaled to 60x30, at the top, once. -->
+<div style="background: url(../images/resources/green-blue-20x10.png) no-repeat 0 0 / contain"></div>
+<!-- The same, repeated down. -->
+<div style="background: url(../images/resources/green-blue-20x10.png) repeat-y 0 0 / contain"></div>

@@ -1,0 +1,28 @@
+[package]
+name = "gc_bench"
+description = "GC microbenchmarks: DOM-like workloads on the gc crate's heap and V8's (as V8's test/benchmarks/cpp/cppgc)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "gc_bench"
+path = "src/main.rs"
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+base.workspace = true
+# The heap the workloads run on.
+elise.workspace = true
+# V8's heap (the patterns in JS), its start and the trace.
+bindings.workspace = true
+# The executable's `#[global_allocator]`, as `machopo`'s.
+mimalloc.workspace = true

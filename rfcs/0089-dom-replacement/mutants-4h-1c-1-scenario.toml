@@ -1,0 +1,25 @@
+# Stage 4h-1c-1: what only the selection scenario reaches (the renderer drawing the document's
+# selection, in the active colors while its page has the focus).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "python3", "scripts/test.py", "scenarios", "--next-dom", "selection"]
+timeout = 3000
+
+[[mutant]]
+name = "the document's selection not drawn"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        if control.is_none() {
+            // The document's selection'''
+to = '''        if false {
+            // The document's selection'''
+
+[[mutant]]
+name = "the document's selection always inactive"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            let active = page && dom_next::NodeRef::ptr_eq(cx.focused_frame(cx.top_document(document)), document);'''
+to = '''            let active = false;'''
+
+[[mutant]]
+name = "a selection change isn't drawn"
+file = "crates/dom_next/src/selection.rs"
+from = '''        selection.backward.set(backward);
+        self.tree_changed();'''
+to = '''        selection.backward.set(backward);'''

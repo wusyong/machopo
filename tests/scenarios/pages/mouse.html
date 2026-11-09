@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<!-- The mouse in the page, for mouse.txt: #log has the events of the last
+     series of clicks on #target; #focus, what has the focus. -->
+<title>mouse</title>
+<style>
+  html, body { margin: 0 }
+  div { height: 40px }
+  #target { background-color: #e8f0fe }
+  #f { background-color: #fce8e6 }
+</style>
+<div id="target">target</div>
+<div id="f" tabindex="0">focusable</div>
+<div id="plain">plain</div>
+<p id="log"></p>
+<p id="focus"></p>
+<script>
+  const log = document.getElementById('log');
+  const target = document.getElementById('target');
+  for (const type of ['mousedown', 'mouseup', 'click', 'dblclick']) {
+    target.addEventListener(type, e => {
+      if (e.type === 'mousedown' && e.detail === 1) log.textContent = '';
+      log.textContent += (log.textContent ? ' ' : '') + e.type + ':' + e.detail;
+    });
+  }
+  const show = () => {
+    const active = document.activeElement;
+    document.getElementById('focus').textContent = active.id || active.tagName;
+  };
+  document.addEventListener('focusin', show);
+  document.addEventListener('focusout', () => setTimeout(show));
+</script>

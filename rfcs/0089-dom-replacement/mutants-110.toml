@@ -1,0 +1,75 @@
+# Decision 110: a safepoint's checks inlined (its work out of line), the
+# write barrier's fast path inlined with a fixed table of young pages, and
+# a wrapper's tag masked from its type's index.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p gc"]
+timeout = 3000
+
+[[mutant]]
+name = "gc: discarded pages not taken back at a safepoint"
+file = "crates/gc/src/heap.rs"
+from = '''        self.discards.has_done()
+            || self.sweeping.get()'''
+to = '''        self.sweeping.get()'''
+
+[[mutant]]
+name = "gc: has_done always false"
+file = "crates/gc/src/heap/discard.rs"
+from = '''        self.done.load(Ordering::Relaxed) != 0'''
+to = '''        false'''
+
+[[mutant]]
+name = "gc: a sweep's step not at a safepoint"
+file = "crates/gc/src/heap.rs"
+from = '''            || self.sweeping.get()
+            || self.options.stress'''
+to = '''            || self.options.stress'''
+
+[[mutant]]
+name = "gc: stress not at every safepoint"
+file = "crates/gc/src/heap.rs"
+from = '''            || self.options.stress
+            || self.marking.get_mut().is_some()'''
+to = '''            || self.marking.get_mut().is_some()'''
+
+[[mutant]]
+name = "gc: a running marking not stepped at a safepoint"
+file = "crates/gc/src/heap.rs"
+from = '''            || self.marking.get_mut().is_some()
+            || self.young.get_mut().full'''
+to = '''            || self.young.get_mut().full'''
+
+[[mutant]]
+name = "gc: no scavenge for a full nursery"
+file = "crates/gc/src/heap.rs"
+from = '''            || self.young.get_mut().full
+            || (!self.options.driven'''
+to = '''            || (!self.options.driven'''
+
+[[mutant]]
+name = "gc: no full GC at the limit"
+file = "crates/gc/src/heap.rs"
+from = '''(!self.options.driven && (self.at_limit(false) || self.starts_marking()))'''
+to = '''(!self.options.driven && self.starts_marking())'''
+
+[[mutant]]
+name = "gc: no marking's start at half the limit"
+file = "crates/gc/src/heap.rs"
+from = '''(!self.options.driven && (self.at_limit(false) || self.starts_marking()))'''
+to = '''(!self.options.driven && self.at_limit(false))'''
+
+[[mutant]]
+name = "gc: the write barrier records nothing"
+file = "crates/gc/src/heap/young.rs"
+from = '''    fn remember_written(&self, slot: usize) {
+        self.remember(slot);
+    }'''
+to = '''    fn remember_written(&self, slot: usize) {
+        let _ = slot;
+    }'''
+
+[[mutant]]
+name = "bindings: every type one tag"
+file = "crates/bindings/src/unified_heap.rs"
+from = '''    let tag = v8::kun::FIRST_TAG + (gc::type_index::<T>() & MASK) as u16;'''
+to = '''    let tag = v8::kun::FIRST_TAG + (gc::type_index::<T>() & 0) as u16;'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it"]

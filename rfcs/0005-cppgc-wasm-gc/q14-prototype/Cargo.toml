@@ -1,0 +1,14 @@
+# A prototype for RFC 0001 (Q14), not part of machopo's workspace: compiles a
+# small wasm GC module with wasmtime's collectors and prints the machine
+# code of each function, to see what a GC field access costs today.
+#   CARGO_TARGET_DIR=../../../target cargo run --release
+[workspace]
+
+[package]
+name = "q14-prototype"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+wasmtime = "=49.0.2"

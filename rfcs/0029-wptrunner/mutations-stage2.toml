@@ -1,0 +1,53 @@
+# The second stage's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0029-wptrunner/mutations-stage2.toml`. Each test runs through
+# wptrunner (`test.py wpt`), so one run at a time; `check_wpt_runs.py`
+# holds the checks that need a run of their own.
+test = ["python3", "scripts/test.py", "wpt"]
+timeout = 900
+
+[[mutant]]
+name = "test.py wpt without the reftests"
+file = "scripts/test.py"
+from = '''        "wpt-results", ["testharness", "reftest", "crashtest"], include_list("include.txt"), args.tests, extra'''
+to = '''        "wpt-results", ["testharness", "crashtest"], include_list("include.txt"), args.tests, extra'''
+
+[[mutant]]
+name = "test.py wpt without the crashtests"
+file = "scripts/test.py"
+from = '''        "wpt-results", ["testharness", "reftest", "crashtest"], include_list("include.txt"), args.tests, extra'''
+to = '''        "wpt-results", ["testharness", "reftest"], include_list("include.txt"), args.tests, extra'''
+
+[[mutant]]
+name = "no expectations for the tests that didn't run"
+file = "scripts/test.py"
+from = '''        if in_scope and test not in files:'''
+to = '''        if False:'''
+test = ["python3", "rfcs/0029-wptrunner/check_wpt_runs.py", "unrun"]
+
+[[mutant]]
+name = "screenshots only of unexpected failures"
+file = "tests/wpt/wptrunner_machopo/wptrunner_machopo/run.py"
+from = '''        "--reftest-screenshot", "fail",'''
+to = ''''''
+test = ["python3", "rfcs/0029-wptrunner/check_wpt_runs.py", "screenshots"]
+
+[[mutant]]
+name = "no screenshots written"
+file = "tests/wpt/wptrunner_machopo/wptrunner_machopo/screenshots.py"
+from = '''            shots = (entry.get("extra") or {}).get("reftest_screenshots")'''
+to = '''            shots = None'''
+test = ["python3", "rfcs/0029-wptrunner/check_wpt_runs.py", "screenshots"]
+
+[[mutant]]
+name = "a diff that marks nothing"
+file = "tests/wpt/wptrunner_machopo/wptrunner_machopo/screenshots.py"
+from = '''    out.paste(Image.new("RGB", a.size, (255, 0, 0)), mask=mask)'''
+to = ''''''
+test = ["python3", "rfcs/0029-wptrunner/check_wpt_runs.py", "screenshots"]
+
+[[mutant]]
+name = "the expected screenshot is the test's"
+file = "tests/wpt/wptrunner_machopo/wptrunner_machopo/screenshots.py"
+from = '''base64.b64decode(shots[-1]["screenshot"])'''
+to = '''base64.b64decode(shots[-3]["screenshot"])'''
+test = ["python3", "rfcs/0029-wptrunner/check_wpt_runs.py", "screenshots"]

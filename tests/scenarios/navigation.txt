@@ -1,0 +1,71 @@
+# Links, history and the address field: what was checked by hand in the
+# window. The toolbar is under the 34px tab strip: its buttons are 28px
+# squares centered at (20, 54) for back, (52, 54) for forward and (84, 54)
+# for reload.
+navigate pages/nav-one.html
+wait-loaded
+click #to-two
+wait-text #where "two"
+click-at 20 54
+wait-text #where "one"
+click-at 52 54
+wait-text #where "two"
+# The platform's back and forward shortcuts.
+platform mac
+key cmd+[
+platform other
+key alt+ArrowLeft
+platform all
+wait-text #where "one"
+platform mac
+key cmd+]
+platform other
+key alt+ArrowRight
+platform all
+wait-text #where "two"
+platform mac
+key cmd+ArrowLeft
+platform other
+key alt+ArrowLeft
+platform all
+wait-text #where "one"
+# Reloading, by the button, the platform's shortcut and F5: the page loads
+# again, and its script starts over. Input goes only to a page that has
+# been drawn: wait for the load before each click.
+wait-loaded
+click #count-me
+wait-text #count "1"
+click-at 84 54
+wait-text #count "0"
+wait-loaded
+click #count-me
+wait-text #count "1"
+key primary+r
+wait-text #count "0"
+wait-loaded
+click #count-me
+wait-text #count "1"
+key F5
+wait-text #count "0"
+# A link to a fragment of the page scrolls there, without loading it again.
+wait-loaded
+click #count-me
+wait-text #count "1"
+click #to-part
+wait-change #part
+wait-text #count "1"
+# The address field: F6, the platform's shortcut, and Alt+D off macOS take
+# it, everything selected, so typing replaces the URL.
+key F6
+type "about:demo"
+key Enter
+wait-text #status "load fired: every subresource is in."
+key primary+l
+type "about:blank"
+key Enter
+wait-loaded
+platform other
+key alt+d
+type "about:demo"
+key Enter
+wait-text #status "load fired: every subresource is in."

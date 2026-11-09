@@ -1,0 +1,145 @@
+# 2a: object-fit, object-position, and overflow: clip that isn't a scroll
+# container (`css`, `computed_style`, `style`, `layout`, `paint`,
+# `renderer`).
+#   python3 scripts/test.py mutate rfcs/0064-rendering-gaps/mutants-2a.toml
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "artifact::"]
+timeout = 1800
+
+[[mutant]]
+name = "cover parsed as contain"
+file = "crates/css/src/properties.rs"
+from = '''                    "cover" => computed_style::ObjectFit::Cover,'''
+to = '''                    "cover" => computed_style::ObjectFit::Contain,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cssom::"]
+
+[[mutant]]
+name = "object-position takes three values"
+file = "crates/css/src/background.rs"
+from = '''        if parts.len() == 3 && !three {'''
+to = '''        if parts.len() == 3 && !three && false {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cssom::"]
+
+[[mutant]]
+name = "contain and cover swapped"
+file = "crates/layout/src/replaced.rs"
+from = '''                if (room.width / room.height > r) == cover {'''
+to = '''                if (room.width / room.height > r) != cover {'''
+
+[[mutant]]
+name = "none sized to fit"
+file = "crates/layout/src/replaced.rs"
+from = '''            ObjectFit::None => natural(),'''
+to = '''            ObjectFit::None => fit(false),'''
+
+[[mutant]]
+name = "scale-down always contain"
+file = "crates/layout/src/replaced.rs"
+from = '''                if none.width <= contain.width {'''
+to = '''                if false {'''
+
+[[mutant]]
+name = "object-position left out"
+file = "crates/layout/src/replaced.rs"
+from = '''            content.x + position.x.resolve(room.width - size.width),'''
+to = '''            content.x + (room.width - size.width) / 2.0,'''
+
+[[mutant]]
+name = "no object rect on the fragment"
+file = "crates/layout/src/lib.rs"
+from = '''            object_rect: b.replaced.as_ref().filter(|r| r.svg.is_none()).map(|r| {'''
+to = '''            object_rect: b.replaced.as_ref().filter(|_| false).map(|r| {'''
+
+[[mutant]]
+name = "content past the box not cut"
+file = "crates/paint/src/lib.rs"
+from = '''            .is_some_and(|object| object.union(&content_box) != content_box);'''
+to = '''            .is_some_and(|_| false);'''
+
+[[mutant]]
+name = "a replaced element's content always cut"
+file = "crates/paint/src/lib.rs"
+from = '''            && ((replaced_clip && (overflows || style.has_border_radius()))'''
+to = '''            && ((replaced_clip && (true || style.has_border_radius()))'''
+
+[[mutant]]
+name = "no UA overflow clip on images"
+file = "crates/style/resources/html.css"
+from = '''img, video, canvas, embed, object {
+  overflow: clip;
+}'''
+to = '''img, video, canvas, embed, object {
+}'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+[[mutant]]
+name = "clip computed as hidden"
+file = "crates/css/src/properties.rs"
+from = '''            Self::Clip => Overflow::Clip,'''
+to = '''            Self::Clip => Overflow::Hidden,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cascade::"]
+
+[[mutant]]
+name = "clip kept next to an axis that scrolls"
+file = "crates/css/src/properties.rs"
+from = '''                Overflow::Clip => Overflow::Hidden,
+                scrolling => scrolling,'''
+to = '''                Overflow::Clip => Overflow::Clip,
+                scrolling => scrolling,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cascade::"]
+
+[[mutant]]
+name = "clip a scroll container"
+file = "crates/computed_style/src/lib.rs"
+from = '''        self.clips_overflow()
+            && self.overflow_x != Overflow::Clip
+            && self.overflow_y != Overflow::Clip'''
+to = '''        self.clips_overflow()'''
+
+[[mutant]]
+name = "clip a scroll container to taffy"
+file = "crates/layout/src/lib.rs"
+from = '''                Overflow::Clip => taffy::Overflow::Clip,'''
+to = '''                Overflow::Clip => taffy::Overflow::Hidden,'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it"]
+
+[[mutant]]
+name = "clip on the viewport kept"
+file = "crates/layout/src/lib.rs"
+from = '''                        Overflow::Clip => Overflow::Hidden,
+                        axis => axis,'''
+to = '''                        Overflow::Clip => Overflow::Clip,
+                        axis => axis,'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "scroll::"]
+
+[[mutant]]
+name = "clip on one axis cuts both"
+file = "crates/paint/src/lib.rs"
+from = '''        both || style.overflow_x != Overflow::Visible,
+        both || style.overflow_y != Overflow::Visible,'''
+to = '''        true,
+        true,'''
+
+[[mutant]]
+name = "a clipping inline-block's baseline its bottom"
+file = "crates/layout/src/lib.rs"
+from = '''        } else if style.is_scroll_container()
+            || applied_containment'''
+to = '''        } else if style.clips_overflow()
+            || applied_containment'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "inline_block::"]
+
+[[mutant]]
+name = "script scrolls a clipping box"
+file = "crates/renderer/src/scroll.rs"
+from = '''    if !fragment.style.is_scroll_container() {'''
+to = '''    if !fragment.style.clips_overflow() {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "geometry::overflow_clip"]
+
+[[mutant]]
+name = "object-position steps"
+file = "crates/css/src/interpolate.rs"
+from = '''            | ObjectPosition
+'''
+to = '''
+'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "interpolation::"]

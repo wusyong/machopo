@@ -1,0 +1,10 @@
+# Stage 4g-4c-3b: what only the frames scenario reaches (a scenario's `frame` picking a child
+# frame: QueryElement through the iframes).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "python3", "scripts/test.py", "scenarios", "--next-dom", "frames"]
+timeout = 3000
+
+[[mutant]]
+name = "a probe's frames not followed"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''            frame = next.view.frame_owned_by(found.element)?;'''
+to = '''            let _ = next.view.frame_owned_by(found.element)?;'''

@@ -1,0 +1,8 @@
+<!DOCTYPE html>
+<title>C1: the UA stylesheet gives body an 8px margin and hides head</title>
+<link rel="match" href="c1-ua-stylesheet-ref.html">
+<!-- `head` is `display: none`, so the block `title` inside it is not rendered
+     either. Without that UA rule, `head` would be inline and the title a red
+     block inside it. -->
+<style>title { display: block; height: 50px; background-color: red; }</style>
+<div style="width: 100px; height: 100px; background-color: green"></div>

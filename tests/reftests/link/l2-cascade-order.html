@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<title>L2: link and style sheets cascade in tree order; failed and inactive links don't apply</title>
+<link rel="match" href="../cascade/green-squares-ref.html">
+<style>html, body { margin: 0 } div { width: 100px; height: 100px }</style>
+<!-- A link before a style: the style wins. -->
+<link rel="stylesheet" href="resources/l2-a-red.css">
+<style>#a { background-color: green }</style>
+<!-- A style before a link: the link wins. -->
+<style>#b { background-color: red }</style>
+<link rel="stylesheet" href="resources/l2-b-green.css">
+<!-- A missing sheet fails, and the page still renders. -->
+<link rel="stylesheet" href="resources/missing.css">
+<!-- None of these apply. -->
+<link rel="alternate stylesheet" href="resources/l2-all-red.css">
+<link rel="stylesheet" type="text/plain" href="resources/l2-all-red.css">
+<link rel="stylesheet" disabled href="resources/l2-all-red.css">
+<link rel="icon" href="resources/l2-all-red.css">
+<div id="a"></div>
+<div id="b"></div>

@@ -1,0 +1,60 @@
+# Step 5d: what the heap uses, and the next limit, set once the sweep is
+# done from the live bytes it found (the marker counts nothing). Run with
+# `RUSTY_V8_ARCHIVE` (`test.py` checks the third-party pins).
+test = ["cargo", "test", "-q", "-p", "gc"]
+timeout = 900
+
+[[mutant]]
+name = "the marked large objects aren't counted"
+file = "crates/gc/src/heap.rs"
+from = '''                    large_live = large_live.saturating_add(object.bytes);'''
+to = '''                    let _ = &large_live;'''
+
+[[mutant]]
+name = "a swept page's live slots aren't counted"
+file = "crates/gc/src/heap.rs"
+from = '''                .saturating_add(live.saturating_mul(page.slot_bytes)),'''
+to = '''                .saturating_add(0 * live.saturating_mul(page.slot_bytes)),'''
+
+[[mutant]]
+name = "the live bytes start from the last GC's"
+file = "crates/gc/src/heap.rs"
+from = '''        self.swept_live.set(large_live);'''
+to = '''        self.swept_live.set(self.swept_live.get().saturating_add(large_live));'''
+
+[[mutant]]
+name = "what was allocated since the GC is left out"
+file = "crates/gc/src/heap.rs"
+from = '''        self.used.set(live.saturating_add(self.allocated.get()));'''
+to = '''        self.used.set(live);'''
+
+[[mutant]]
+name = "the limit stays the last GC's"
+file = "crates/gc/src/heap.rs"
+from = '''        self.limit.set(live.max(self.options.min_allocation_bytes));
+        let mut last = self.last_gc.get();'''
+to = '''        let mut last = self.last_gc.get();'''
+
+[[mutant]]
+name = "the GC's marked bytes aren't set"
+file = "crates/gc/src/heap.rs"
+from = '''        last.marked_bytes = live;'''
+to = '''        let _ = &mut last;'''
+
+[[mutant]]
+name = "a collect's record has no marked bytes"
+file = "crates/gc/src/heap.rs"
+from = '''            record.marked_bytes = self.last_live.get();'''
+to = '''            let _ = self.last_live.get();'''
+
+[[mutant]]
+name = "the verifier checks what the heap uses while the sweep runs"
+file = "crates/gc/src/heap/verify.rs"
+from = '''        if !self.sweeping.get() && used != self.used.get() {'''
+to = '''        if used != self.used.get() {'''
+
+[[mutant]]
+name = "the verifier doesn't check what the heap uses once the sweep is done"
+file = "crates/gc/src/heap/verify.rs"
+from = '''            if marked != self.used.get() {'''
+to = '''            if false && marked != self.used.get() {'''

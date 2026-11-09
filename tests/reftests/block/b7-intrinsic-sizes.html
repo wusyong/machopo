@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<title>B7: width: min-content, max-content and fit-content size a block to its content, within or past the room</title>
+<link rel="match" href="b7-intrinsic-sizes-ref.html">
+<style>
+  html, body { margin: 0 }
+  body { font: 20px/1 Ahem; color: green }
+  div { background-color: silver }
+  .room { width: 100px; background-color: transparent }
+</style>
+<div style="width: min-content">XX XXX</div>
+<div style="width: max-content">XX XXX</div>
+<div style="width: fit-content">XX XXX</div>
+<div class="room"><div style="width: fit-content">XX XXX</div></div>
+<div class="room"><div style="width: max-content">XX XXX</div></div>
+<div style="width: fit-content; padding: 0 10px; border: 5px solid blue">XX</div>

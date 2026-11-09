@@ -1,0 +1,32 @@
+# Typing in text controls: what a key types goes in at the cursor; Enter
+# breaks a textarea's line; the arrows, Home and Backspace move and delete
+# in it (Home doesn't scroll the page back to its top); Shift with an arrow
+# selects; Space types a space rather than scrolling; leaving a control the
+# user changed fires its `change`.
+navigate pages/typing.html
+wait-loaded
+wait-text #out "//0-0"
+click #t
+type "ab"
+key Enter
+type "c"
+wait-text #out "ab|c//0-0"
+wheel-at 400 500 0 100
+wait-text #scroll "scrolled 100"
+key ArrowLeft
+key Backspace
+key Home
+type "z"
+wait-text #out "zabc//0-0"
+wait-text #scroll "scrolled 100"
+click #i
+wait-text #log "change t zabc"
+type "xy"
+key shift+ArrowLeft
+wait-text #out "zabc/xy/1-2"
+type "z"
+key Space
+wait-text #out "zabc/xz /3-3"
+wait-text #scroll "scrolled 100"
+key Tab
+wait-text #log "change t zabc, change i xz "

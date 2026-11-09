@@ -1,0 +1,27 @@
+# 3 (after): forget_moved only for the removed roots the walk met
+# (`style`'s `animations.rs`), only elements recorded (`dom`'s `scope.rs`).
+#   python3 scripts/test.py mutate rfcs/0059-style-performance/mutants-3b.toml
+test = ["cargo", "test", "-q", "-p", "style"]
+timeout = 1200
+
+[[mutant]]
+name = "the roots met not recorded"
+file = "crates/style/src/animations.rs"
+from = '''                if met.last() != Some(&node.id()) {
+                    met.push(node.id());
+                }'''
+to = '''                let _ = &mut met;'''
+
+[[mutant]]
+name = "the roots met not forgotten"
+file = "crates/style/src/animations.rs"
+from = '''        for id in self.met.take() {
+            table.removed.remove(&id);
+        }'''
+to = '''        let _ = &mut table;'''
+
+[[mutant]]
+name = "a text node recorded as removed"
+file = "crates/dom/src/scope.rs"
+from = '''            if animations.seen && node.kind() == NodeKind::Element {'''
+to = '''            if animations.seen {'''

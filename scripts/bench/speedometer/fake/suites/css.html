@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>CSS to record</title>
+<style>
+  .shorthand { --m: 1px; margin: var(--m) 2px; color: red }
+  @media (min-width: 1px) { .media {} }
+  @keyframes spin { from { opacity: 0 } }
+  .nest { color: blue; .inner { color: green } }
+</style>
+<script>
+  // What the recording has to get right: a shorthand that `var()`s (its
+  // longhands read empty), each kind of at-rule with its top-level rule's
+  // text, and an SVG element made with its namespace.
+  window.tests = [
+    {
+      name: "MakingASvgElement",
+      run(doc) {
+        doc.body.append(doc.createElementNS("http://www.w3.org/2000/svg", "circle"));
+        doc.body.append(doc.createElementNS("http://www.w3.org/2000/svg", "svg:rect"));
+        doc.body.append(doc.createElementNS("urn:machopo", "thing"));
+      },
+    },
+  ];
+</script>

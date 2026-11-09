@@ -1,0 +1,224 @@
+# about:demo's script box: what has been checked by hand in the window.
+# The clock and the blue square run on Viz's own BeginFrames.
+# Tall enough that every element clicked is in the window.
+window size=800x1000
+navigate about:demo
+wait-loaded
+# The tab shows the page's title (and follows document.title, checked
+# below).
+wait-title "machopo demo"
+# The light turns green 2 seconds after the script ran: keep it red.
+capture loaded
+wait-text #status "load fired: every subresource is in."
+# The clock shows 1 s for a second, from a second after the script ran.
+wait-text #clock "1 s since the script ran (setInterval)."
+# The light goes green two seconds after the script ran. Checked here, while
+# the page is still at the top and the frame captured as "loaded" lines up
+# with it: clicking the buttons below scrolls it out of view in a window too
+# short for the whole box (a real one, where `window size=` is the system's).
+expect-differs loaded #light
+click #clicker
+wait-text #count "Clicked 1 time (onclick)."
+click #clicker
+wait-text #count "Clicked 2 times (onclick)."
+# A link whose click listener calls preventDefault: the page stays.
+click #kept
+wait-text #kept-note "(preventDefault kept you here)"
+wait-text #status "load fired: every subresource is in."
+# A module script ran after parsing, with what it imported from
+# a data: URL.
+wait-text #module-note "Imported from a data: URL by a module script, whose import.meta.url is about:demo."
+# <link rel=modulepreload> fetched the module the import()
+# button imports below, and fired load without running it.
+wait-text #preload-note "load fired: modulepreload fetched the module import() imports, which has run 0 times so far."
+# performance.now(), and User Timing's mark and measure. Before anything
+# above it moves, so only its text can change. The
+# button counts its clicks in dataset, which writes data-clicks,
+# and sets document.title to the count: the tab's title follows.
+click #now
+wait-change #now-note
+wait-text #now-count "Clicks counted in dataset: 1 (data-clicks=\"1\")."
+wait-title "machopo demo (clicks: 1)"
+click #now
+wait-text #now-count "Clicks counted in dataset: 2 (data-clicks=\"2\")."
+wait-title "machopo demo (clicks: 2)"
+# Hidden, then shown again: its box goes, and comes back.
+click #toggle
+wait-change #toggled
+click #toggle
+wait-change #toggled
+# innerHTML: the text built from markup, then the markup read
+# back (escaped as innerHTML writes it).
+click #markup
+wait-text #markup-note "Built from markup: one, two & three. Read back: Built from <b>markup</b>: <i>one</i>, <i>two</i> &amp; <i>three</i>."
+# MutationObserver: one click changes the text, an attribute and
+# the children; the observer gets the three records in a microtask after
+# the click handler, with the old values. A second click, the next ones.
+click #observe
+wait-text #observe-note "3 records, after the click handler: characterData (was a), attributes data-clicks (was null), childList +1 -1."
+click #observe
+wait-text #observe-note "3 records, after the click handler: characterData (was c), attributes data-clicks (was 1), childList +1 -1."
+# AbortController: Start waits on AbortSignal.any of a
+# controller's signal and AbortSignal.timeout(2000). Cancel aborts it at
+# once, with an AbortError; left alone, the DOM's own timer, which the
+# renderer runs, aborts it with a TimeoutError.
+click #abort-start
+wait-text #abort-note "Waiting: Cancel, or two seconds pass."
+click #abort-cancel
+wait-text #abort-note "Aborted: AbortError (signal is aborted without reason)."
+click #abort-start
+wait-text #abort-note "Waiting: Cancel, or two seconds pass."
+wait-text #abort-note "Aborted: TimeoutError (signal timed out)."
+# TreeWalker: the buttons, in tree order, through a filter
+# that skips everything else.
+click #walk
+wait-text #walk-note "49 buttons: Click me, Hide or show, performance.now(), innerHTML, MutationObserver, Start, Cancel, TreeWalker, element.style, getComputedStyle, adoptedStyleSheets, var(), calc(), margin-inline-start, getBoundingClientRect, scrollBy, elementsFromPoint, scrollIntoView, import(), Insert scripts, location.hash, history.pushState, fetch(), Busy for 3 seconds, Move A, Raise 1, Add a word, Widen tile 1, Swap sides, Rename, More, Bring 3 forward, Open menu, Pin a bar, Restyle the card, Add one later, Read a pixel, New size, Bigger text, Copy as image, More padding, Move the title, Add a row, Collapse a column, Collapse borders, Move the bar, Pause the spinner, Reverse the spinner, Add a line above."
+wait-change #mover
+screenshot demo
+# import(): a module from a data: URL (the modulepreload link's,
+# in the module map already), run once however often it is imported. Its
+# button is below the window: clicking scrolls to it, so after the
+# screenshot.
+click #import
+wait-text #import-note "Imported once; the module ran once."
+# fetch(): a data: URL through the browser's network service, its body
+# read as JSON once it comes.
+click #fetch
+wait-text #fetch-note "200 application/json: Hello from fetch()."
+click #import
+wait-text #import-note "Imported 2 times; the module ran once."
+# Scripts that script inserts: the inline one runs before
+# append() returns, the data: URL one once loaded, then its load event.
+click #insert
+wait-text #insert-note "inline ran (currentScript #inline-demo), append() returned, data: URL script ran, load fired."
+# Down to the innerHTML line, for its bold and italic text: what the text
+# checks above can't see.
+wheel #mover 0 300
+wait-change #markup-note
+screenshot markup
+# CSSOM, last: these buttons are below the window, and clicking
+# scrolls to them. getComputedStyle reads the square's resolved values:
+# the stylesheet's 16px, the color as rgb(), and `margin` written from its
+# longhands.
+click #computed
+wait-text #computed-note "width 16px (element.style: none), background-color rgb(52, 168, 83), margin 0px."
+# style.backgroundColor and setProperty write the style attribute,
+# serialized as Chrome writes it (a hex color as rgb(), the unit
+# lowercase), and the square is drawn wider and red; cssText = "" takes
+# both away.
+capture green
+click #restyle
+wait-text #restyle-note "style=\"background-color: rgb(234, 67, 53); width: 4em !important;\", width 4em."
+expect-differs green #swatch
+screenshot restyled
+# The same computed read now: `width` is the 4em element.style just
+# gave it, in px.
+click #computed
+wait-text #computed-note "width 64px (element.style: 4em), background-color rgb(234, 67, 53), margin 0px."
+# adoptedStyleSheets: the document adopts a constructed sheet,
+# cascaded after the page's own, and the next square turns blue; the
+# sheet's rules replaced, it turns yellow and twice as wide; adopted no
+# more, it is the stylesheet's green again. Each frame differs from the
+# one before.
+capture unadopted
+click #adopt
+wait-text #adopt-note "1 adopted: #adopted { background-color: rgb(66, 133, 244); }; the square is rgb(66, 133, 244), 16px wide."
+expect-differs unadopted #adopted
+capture blue
+click #adopt
+wait-text #adopt-note "1 adopted: #adopted { background-color: rgb(251, 188, 5); width: 32px; }; the square is rgb(251, 188, 5), 32px wide."
+expect-differs blue #adopted
+screenshot adopted
+capture yellow
+click #adopt
+wait-text #adopt-note "0 adopted: nothing; the square is rgb(52, 168, 83), 16px wide."
+expect-differs yellow #adopted
+# var(): the next square's color and width are custom properties of the
+# root element, with fallbacks. The root's --accent turns it purple, then
+# its --wide makes it 2em (32px) wide; both removed, the fallbacks are back.
+capture unthemed
+click #theme
+wait-text #theme-note "--accent: #a142f4, --wide: not set; the square is rgb(161, 66, 244), 16px wide."
+expect-differs unthemed #themed
+capture purple
+click #theme
+wait-text #theme-note "--accent: #a142f4, --wide: 2em; the square is rgb(161, 66, 244), 32px wide."
+expect-differs purple #themed
+screenshot themed
+capture wide
+click #theme
+wait-text #theme-note "--accent: not set, --wide: not set; the square is rgb(52, 168, 83), 16px wide."
+expect-differs wide #themed
+# getBoundingClientRect measures the square as element.style
+# left it, laid out as script asks. (What it says of the window depends on
+# the display in a real window.)
+click #measure
+wait-text #measure-note "The green square is 64×16 CSS px;"
+# scrollBy scrolls the first box below from script, clamped at
+# its end (eight 40px rows in 120px: 200px).
+click #scroll-box
+wait-text #scroll-note "The first box below is scrolled 40px of 200."
+click #scroll-box
+click #scroll-box
+click #scroll-box
+click #scroll-box
+click #scroll-box
+wait-text #scroll-note "The first box below is scrolled 200px of 200."
+# elementsFromPoint names what is at the middle of that box,
+# scrolled to its end: the row there, the box, and their ancestors. (The
+# box is below the window here: the button scrolls the window to it.)
+click #hit-box
+wait-text #hit-note "At the middle of the first box below: A7, div.scroller, div.page, body, html."
+# scrollIntoView centers A4 in that box (its top 120px into the
+# 320px of rows, so 80 of the 200 it can scroll), and then centers the row
+# in the window as well, as every scroll box out from it is scrolled.
+capture scrolled
+click #into-view
+wait-text #into-view-note "A4 is 40px into the 120px box below, scrolled 80px, and centered in the window."
+expect-differs scrolled
+capture red
+click #restyle
+wait-text #restyle-note "style=\"\", width from the stylesheet."
+expect-differs red #swatch
+# location, last: a fragment of the document scrolls. The URL
+# changes at once, nothing loads (the count in the page's script goes
+# on), and hashchange comes in a task of its own, with both URLs.
+click #hash
+wait-text #hash-note "location.hash = '#demo-1': URL had #demo-1 at once; hashchange none → demo-1."
+click #hash
+wait-text #hash-note "location.href = '#demo-2': URL had #demo-2 at once; hashchange demo-1 → demo-2."
+# history, after it: two entries of this document, then the
+# toolbar's back button (28px squares under the 34px tab strip; back at
+# (20, 54)) goes to the first without loading anything (the count in the
+# page's script goes on), and popstate brings its state back.
+click #push
+wait-text #push-note "pushState #1: 4 entries, state 1."
+click #push
+wait-text #push-note "pushState #2: 5 entries, state 2."
+click-at 20 54
+wait-text #push-note "popstate: state 1, URL #push-1, after 2 pushes."
+# :hover and the mouse's boundary events: a click on the swatch leaves the
+# mouse on it, red, after a mouseenter; a click on its note takes it off.
+capture unhovered
+click #hover-swatch
+wait-text #hover-note "mouseenter 1, mouseleave 0."
+expect-differs unhovered #hover-swatch
+click #hover-note
+wait-text #hover-note "mouseenter 1, mouseleave 1."
+# :target: the link to the swatch's fragment makes it the target, blue.
+capture untargeted
+click #target-link
+expect-differs untargeted #target-swatch
+# Logical properties: margin-inline-start and inline-size move and widen
+# the square as margin-left and width do; a margin-left set after them
+# wins; cleared, the square is back.
+capture unmoved
+click #logical-button
+wait-text #logical-note "style: margin-inline-start: 24px; inline-size: 32px; The square's margin-left is 24px, its width 32px."
+expect-differs unmoved #logical
+capture moved
+click #logical-button
+wait-text #logical-note "style: margin-inline-start: 24px; inline-size: 32px; margin-left: 8px; The square's margin-left is 8px, its width 32px."
+expect-differs moved #logical
+click #logical-button
+wait-text #logical-note "style: none The square's margin-left is 0px, its width 16px."

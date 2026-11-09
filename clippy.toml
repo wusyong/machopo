@@ -1,0 +1,20 @@
+# V8 platform tasks may GC without scanning the stack, so they must only run
+# from the outermost event loop, never while a DOM scope is alive. These raw
+# APIs take `&Isolate` and can't enforce that; use the `&mut self` wrapper
+# `bindings::V8PerIsolateData::pump_platform_tasks` (or
+# `dom::DomIsolate::run_platform_tasks`).
+disallowed-methods = [
+    { path = "v8::platform::Platform::pump_message_loop", reason = "use V8PerIsolateData::pump_platform_tasks" },
+    { path = "v8::platform::Platform::run_idle_tasks", reason = "use V8PerIsolateData::pump_platform_tasks" },
+    { path = "std::sync::atomic::Atomic::fetch_add", reason = "wraps silently: base::AtomicSequenceNumber, or #[expect] why wrapping is fine" },
+]
+
+# The `v8` crate's `TracedReference` is 1-aligned (C++ accesses it as
+# `std::atomic`), and its `reset(&mut self)` can't be used soundly while a
+# marker thread traces the same field. Use the aligned, raw-pointer slot.
+# machopo's GC objects are `gc`'s: cppgc's `Member`s have no use.
+disallowed-types = [
+    { path = "v8::cppgc::Member", reason = "machopo's GC objects are gc's" },
+    { path = "v8::cppgc::WeakMember", reason = "machopo's GC objects are gc's" },
+    { path = "v8::TracedReference", reason = "use v8::cppgc::TracedSlot (our fork)" },
+]

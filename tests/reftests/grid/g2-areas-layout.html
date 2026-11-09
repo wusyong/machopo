@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<title>G2: a page laid out with grid-template areas (header, sidebar, main, footer), placed by area name and by the areas' implicit line names</title>
+<link rel="match" href="g2-areas-layout-ref.html">
+<style>
+  html, body { margin: 0 }
+  .page { display: grid; width: 360px; column-gap: 10px; background-color: silver;
+          grid-template:
+            [top] "head head" 20px
+                  "side main" 60px [content-end]
+                  "foot foot" 10px
+            / [side-col] 100px 1fr }
+  .page > div { min-width: 0 }
+</style>
+<div class="page">
+  <!-- In DOM order unlike on the page: placement is by name. -->
+  <div style="background-color: orange; grid-area: foot"></div>
+  <div style="background-color: green; grid-area: main"></div>
+  <div style="background-color: blue; grid-row: top; grid-column: head"></div>
+  <div style="background-color: purple; grid-row: side-start / content-end; grid-column: side-col"></div>
+</div>

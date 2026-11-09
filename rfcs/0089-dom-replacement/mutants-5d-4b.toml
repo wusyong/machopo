@@ -1,0 +1,406 @@
+# Stage 5d-4b: the DOM and script gaps.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it && cargo test -q -p renderer --lib navigation_timing && cargo test -q -p shell --test it -- navigation_timing:: focus::an_editing_hosts_caret_on_focus"]
+timeout = 2400
+
+[[mutant]]
+name = "dom_js_next: a named or indexed setter calls no lifecycle callback"
+file = "crates/dom_js_next/src/named.rs"
+from = '''        crate::front::call_lifecycle_callback(&mut self.scope, element, definition, callback);'''
+to = '''        let _ = (element, definition, callback);'''
+
+[[mutant]]
+name = "dom_next: an inline style's change enqueues no attributeChanged"
+file = "crates/dom_next/src/style.rs"
+from = '''        let custom = self.is_custom_element(element);'''
+to = '''        let custom = false && self.is_custom_element(element);'''
+
+[[mutant]]
+name = "dom_next: a custom element's declarations taken out unsynchronized"
+file = "crates/dom_next/src/style.rs"
+from = '''        if self.observed() || self.is_custom_element(element) {'''
+to = '''        if self.observed() {'''
+
+[[mutant]]
+name = "dom_api_next: HTMLElement's constructor finds no running definition"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''    let running = cx.active_constructor(|definition| {
+        op.is_new_target(cx, cx.definition_edges(definition).constructor)
+    });'''
+to = '''    let running: Option<Gc<'gc, CustomElementDefinition>> = None;'''
+
+[[mutant]]
+name = "dom_js_next: a synchronous creation's constructor not active"
+file = "crates/dom_js_next/src/front.rs"
+from = '''            .mutate(|cx| cx.push_active_constructor(definition.get(cx.gc)));'''
+to = '''            .mutate(|cx| drop(definition.get(cx.gc)));'''
+
+[[mutant]]
+name = "dom_api_next: shadow disabled upgrades a shadow host"
+file = "crates/dom_api_next/src/custom_elements.rs"
+from = '''    if disable_shadow && cx.shadow_root(element).is_some() {'''
+to = '''    if false && disable_shadow && cx.shadow_root(element).is_some() {'''
+
+[[mutant]]
+name = "dom_js_next: a DOMException isn't an error"
+file = "crates/dom_js_next/src/exception.rs"
+from = '''    brand(scope, object).is_some()
+}'''
+to = '''    brand(scope, object).is_some() && false
+}'''
+
+[[mutant]]
+name = "dom_js_next: no native error check installed"
+file = "crates/dom_js_next/src/state.rs"
+from = '''    bindings::set_native_error_check(isolate, crate::exception::is_dom_exception);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom_js_next: supportedEntryTypes a new array each time"
+file = "crates/dom_js_next/src/front.rs"
+from = '''                let array = frozen_array(self.scope.scope(), this, &values);
+                self.rv().set(array.into());
+            }
+            Kept::Numbers(numbers) => {'''
+to = '''                let _ = this;
+                let array = v8::Array::new_with_elements(self.scope.scope(), &values);
+                self.rv().set(array.into());
+            }
+            Kept::Numbers(numbers) => {'''
+
+[[mutant]]
+name = "dom_api_next: createHTMLDocument's title nullable"
+file = "crates/dom_api_next/src/interfaces.rs"
+from = '''method createHTMLDocument(title?: OptionalString)'''
+to = '''method createHTMLDocument(title?: Option<DomString>)'''
+
+[[mutant]]
+name = "dom_api_next: an XHTML document's createElement of no namespace"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    let namespace = html || cx.document_content_type(this).to_str() == "application/xhtml+xml";'''
+to = '''    let namespace = html;'''
+
+[[mutant]]
+name = "dom_next: a comment's data change runs no children changed steps"
+file = "crates/dom_next/src/style.rs"
+from = '''        let Some(parent) = self.parent(node) else {
+            return;
+        };
+        if self.owns_style_sheets(parent) {
+            self.style_children_changed(parent);
+            self.style_sheets_changed(parent);
+        }
+        if self.has_seen_uses() {
+            self.svg_use_subtree_changed(parent);
+        }
+    }
+}'''
+to = '''        let Some(parent) = self.parent(node).filter(|_| false) else {
+            return;
+        };
+        if self.owns_style_sheets(parent) {
+            self.style_children_changed(parent);
+            self.style_sheets_changed(parent);
+        }
+        if self.has_seen_uses() {
+            self.svg_use_subtree_changed(parent);
+        }
+    }
+}'''
+
+[[mutant]]
+name = "dom_next: host-including walks don't go through a template's contents"
+file = "crates/dom_next/src/lib.rs"
+from = '''            .or_else(|| self.template_content_host(root))
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom_next: a template's contents know no template"
+file = "crates/dom_next/src/lib.rs"
+from = '''                    host: Some(element),'''
+to = '''                    host: None,'''
+
+[[mutant]]
+name = "dom_next: a parser-associated control's form elements not found again"
+file = "crates/dom_next/src/form.rs"
+from = '''            } else if forms && let Some(form) = self.form_owner(at) {
+                self.form_elements_changed(form);'''
+to = '''            } else if forms && let Some(form) = self.form_owner(at) {'''
+
+[[mutant]]
+name = "dom_next: a parser-associated submit button's default button not found again"
+file = "crates/dom_next/src/form.rs"
+from = '''                if self.is_submit_button(at) {
+                    self.default_button_changed(form);
+                }'''
+to = '''                let _ = form;'''
+
+[[mutant]]
+name = "dom_next: a morphed radio's group not checked again"
+file = "crates/dom_next/src/input.rs"
+from = '''                    self.is_radio(previous)
+                        && match'''
+to = '''                    false
+                        && match'''
+
+[[mutant]]
+name = "dom_api_next: a shadow path's entries not in shadow trees"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''            in_shadow: in_shadow_tree(cx, *at),'''
+to = '''            in_shadow: false,'''
+
+[[mutant]]
+name = "dom_api_next: a shadow path's targets never cleared"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''    cx.set_event_shadow_path(event, &entries, clear);'''
+to = '''    cx.set_event_shadow_path(event, &entries, clear && false);'''
+
+[[mutant]]
+name = "dom_api_next: a plain path through a slot isn't a shadow one"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''                shadow |= in_shadow_tree(cx, parent);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom_api_next: a related target retargeted as it is read"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''    if let Some(entry) = cx.event_shadow_current(event) {
+        return entry.related.unwrap_or(related);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "dom_js_next: window.event's in-shadow-tree always false"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''                .is_some_and(|entry| entry.in_shadow);'''
+to = '''                .is_some_and(|entry| entry.in_shadow && false);'''
+
+[[mutant]]
+name = "dom_api_next: ErrorEvent's error not kept"
+file = "crates/dom_api_next/src/event.rs"
+from = '''        op.store_any(cx, cx.error_edge(error_data(cx, event)), error);'''
+to = '''        let _ = error;'''
+
+[[mutant]]
+name = "dom_js_next: a listener's microtasks after its current event"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''    run_callback(scope, |scope| match handler {'''
+to = '''    in_script(scope, |scope| match handler {'''
+
+[[mutant]]
+name = "bindings: Error.isError of an API wrapper false"
+file = "crates/bindings/src/script_state.rs"
+from = '''    check(scope, object)
+}'''
+to = '''    check(scope, object) && false
+}'''
+
+[[mutant]]
+name = "dom_js_next: a promise member throws"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''        let function = if !desc.is_static && matches!(desc.returns, TypeDesc::Promise(_)) {'''
+to = '''        let function = if false && !desc.is_static && matches!(desc.returns, TypeDesc::Promise(_)) {'''
+
+[[mutant]]
+name = "dom_js_next: a promise member's exception fulfils it"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''    resolver.reject(tc, exception);'''
+to = '''    resolver.resolve(tc, exception);'''
+
+[[mutant]]
+name = "layout: a text of only line breaks in pre no caret"
+file = "crates/layout/src/caret.rs"
+from = '''                    return parent
+                        .keeps_newlines'''
+to = '''                    return parent
+                        .table'''
+
+[[mutant]]
+name = "layout: a hidden style keeps line breaks for the caret"
+file = "crates/layout/src/caret.rs"
+from = '''    style.is_visible() && style.white_space_collapse.preserves_newlines()'''
+to = '''    style.white_space_collapse.preserves_newlines()'''
+
+[[mutant]]
+name = "renderer: a child frame's reload a navigate"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                        ChildNavigation::Src(url),
+                        dom_next::NavigationType::Reload,'''
+to = '''                        ChildNavigation::Src(url),
+                        dom_next::NavigationType::Navigate,'''
+
+[[mutant]]
+name = "renderer: a reload with a fragment scrolls instead"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                if navigation_type != dom_next::NavigationType::Reload
+                    && url.fragment().is_some()'''
+to = '''                if url.fragment().is_some()'''
+
+[[mutant]]
+name = "renderer: an iframe's no-referrer not read"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                    no_referrer: self.next_child_no_referrer(frame),'''
+to = '''                    no_referrer: false,'''
+
+[[mutant]]
+name = "renderer: no-referrer opts in to the destination"
+file = "crates/renderer/src/navigation_timing.rs"
+from = '''                        || (!load.no_referrer && value == destination.ascii_serialization())'''
+to = '''                        || value == destination.ascii_serialization()'''
+
+[[mutant]]
+name = "dom_js_next: an initial about:blank unloaded"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        let unloaded = if initial {'''
+to = '''        let unloaded = if false && initial {'''
+
+[[mutant]]
+name = "dom_js_next: a frame's children not unloaded"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        for child in children {
+            self.unload_document(child);
+        }'''
+to = '''        let _ = children;'''
+
+[[mutant]]
+name = "dom_api_next: no pagehide"
+file = "crates/dom_api_next/src/lifecycle.rs"
+from = '''    fire_event(host, &window, event::PAGEHIDE, false, false);
+'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: the unload before told of another origin"
+file = "crates/renderer/src/navigation_timing.rs"
+from = '''        && previous.is_some_and(|previous| previous.origin() == url.origin())'''
+to = '''        && previous.is_some()'''
+
+[[mutant]]
+name = "renderer: no cross-origin redirects ever"
+file = "crates/renderer/src/navigation_timing.rs"
+from = '''    timing.has_cross_origin_redirects = !load.redirects.iter().all(same_origin);'''
+to = '''    timing.has_cross_origin_redirects = false;'''
+
+[[mutant]]
+name = "renderer: the top-level document before not unloaded"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        let unloaded = engine
+            .unload_document(top)'''
+to = '''        let unloaded = None::<std::time::Instant>.map(|_| top)
+            .and_then(|top| engine.unload_document(top))'''
+
+[[mutant]]
+name = "dom_api_next: a window-less document's nodes of the current realm"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''    if cx.window_of(document).is_none()
+        && let Some(window) = cx.document_relevant_window(document)'''
+to = '''    if false
+        && let Some(window) = cx.document_relevant_window(document)'''
+
+[[mutant]]
+name = "dom_js_next: a node's wrapper prepared in the current realm"
+file = "crates/dom_js_next/src/front.rs"
+from = '''            .is_some_and(|context| context != scope.get_current_context())'''
+to = '''            .is_some_and(|context| context != context)'''
+
+[[mutant]]
+name = "dom_api_next: createHTMLDocument's of no relevant window"
+file = "crates/dom_api_next/src/dom_implementation.rs"
+from = '''    let document = cx.create_document(true);
+    cx.set_document_relevant_window('''
+to = '''    let document = cx.create_document(true);
+    (|_: NodeRef<'gc>, _: Option<Gc<'gc, dom_next::Window>>| ())('''
+
+[[mutant]]
+name = "dom_api_next: createDocument's of no relevant window"
+file = "crates/dom_api_next/src/dom_implementation.rs"
+from = '''    let document = cx.create_document(false);
+    cx.set_document_relevant_window('''
+to = '''    let document = cx.create_document(false);
+    (|_: NodeRef<'gc>, _: Option<Gc<'gc, dom_next::Window>>| ())('''
+
+[[mutant]]
+name = "dom_api_next: DOMParser's document of no relevant window"
+file = "crates/dom_api_next/src/attr.rs"
+from = '''    cx.set_document_relevant_window(document, cx.dom_parser_window(this));
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom_next: a template document of no relevant window"
+file = "crates/dom_next/src/lib.rs"
+from = '''        self.set_document_relevant_window(inert, self.document_relevant_window(document));
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom_next: a document's copy of no relevant window"
+file = "crates/dom_next/src/lib.rs"
+from = '''                self.set_document_relevant_window(copy, self.document_relevant_window(node));
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom_api_next: a rule's wrapper of the current realm"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        ObjectRef::CssRule(rule) => rule_document(rule)?,'''
+to = '''        ObjectRef::CssRule(_) => return None,'''
+
+[[mutant]]
+name = "dom_next: adopted sheets cleared into a template"
+file = "crates/dom_next/src/style_sheet.rs"
+from = '''        if template_of(document, old) || template_of(old, document) {
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom_next: adopted sheets kept across documents"
+file = "crates/dom_next/src/style_sheet.rs"
+from = '''        list.clear(self.gc);
+        self.adopted_changed(shadow);'''
+to = '''        let _ = list;'''
+
+[[mutant]]
+name = "dom_js_next: a navigated realm's document not kept"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''            crate::window_properties::detached(
+                &mut state::scope(scope).expect("the engine's DOM"),
+                context,
+            );
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom_api_next: listeners of a target not fully active called"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''            if cx.has_discarded_documents() && !current_target_fully_active(cx, event) {'''
+to = '''            if false && cx.has_discarded_documents() && !current_target_fully_active(cx, event) {'''
+
+[[mutant]]
+name = "dom_next: a discarded document not noted"
+file = "crates/dom_next/src/frame.rs"
+from = '''        self.changes.discarded_documents.set(true);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom_api_next: new EventTarget()'s window not kept"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''    cx.set_event_target_window(target, op.current_window(cx));
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom_api_next: a node's relevant global none"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''        TargetRef::Node(node) => cx.document_relevant_window(cx.document_of(node)),'''
+to = '''        TargetRef::Node(_) => None,'''
+
+[[mutant]]
+name = "dom_api_next: a discarded document fully active"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''        cx.window_of(document).is_some() && !cx.is_discarded(document)'''
+to = '''        cx.window_of(document).is_some()'''

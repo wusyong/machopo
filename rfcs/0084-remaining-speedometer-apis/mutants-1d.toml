@@ -1,0 +1,77 @@
+test = ["cargo", "test", "-p", "dom_js", "--test", "it", "--", "geolocation::"]
+timeout = 1200
+
+[[mutant]]
+name = "the watches fail before the one-shot requests"
+file = "crates/dom/src/geolocation.rs"
+from = '''        one_shots
+            .into_iter()
+            .chain(watchers)'''
+to = '''        watchers
+            .into_iter()
+            .chain(one_shots)'''
+
+[[mutant]]
+name = "the permission is answered in the request's next task"
+file = "crates/dom_api/src/geolocation.rs"
+from = '''    if !answered {
+        let task'''
+to = '''    if false {
+        let task'''
+
+[[mutant]]
+name = "a timeout of 0 doesn't time out"
+file = "crates/dom_api/src/geolocation.rs"
+from = '''    if timeout == 0 {
+        let task = Task::GeolocationTimer {'''
+to = '''    if false {
+        let task = Task::GeolocationTimer {'''
+
+[[mutant]]
+name = "a one-shot request waits on after timing out"
+file = "crates/dom/src/geolocation.rs"
+from = '''        if object.watch_id == 0 {
+            object.live.set(false);
+        }'''
+to = '''        if object.watch_id == 0 {}'''
+
+[[mutant]]
+name = "clearWatch clears nothing"
+file = "crates/dom/src/geolocation.rs"
+from = '''            if notifier.get().watch_id == watch_id {
+                notifier.get().live.set(false);
+            }'''
+to = '''            if notifier.get().watch_id == watch_id {}'''
+
+[[mutant]]
+name = "a hidden page's request starts"
+file = "crates/dom_api/src/geolocation.rs"
+from = '''    let visible = page_visible(cx, &document);
+    let (id, watch_id)'''
+to = '''    let visible = true;
+    let (id, watch_id)'''
+
+[[mutant]]
+name = "showing the page starts nothing"
+file = "crates/dom_api/src/document.rs"
+from = '''    crate::geolocation::page_visibility_changed(cx, document);'''
+to = ''''''
+
+[[mutant]]
+name = "watch ids count from 0"
+file = "crates/dom/src/geolocation.rs"
+from = '''                    next_watch_id: Cell::new(1),'''
+to = '''                    next_watch_id: Cell::new(0),'''
+
+[[mutant]]
+name = "each callback gets an error of its own"
+file = "crates/dom_api/src/geolocation.rs"
+from = '''    for callback in requests.into_iter().filter_map(|r| r.error) {
+        call_error(cx, &callback, &error);
+    }'''
+to = '''    for callback in requests.into_iter().filter_map(|r| r.error) {
+        let error = cx
+            .mutate()
+            .create_geolocation_position_error(&window, PERMISSION_DENIED, DENIED);
+        call_error(cx, &callback, &error);
+    }'''

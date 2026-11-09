@@ -1,0 +1,28 @@
+[package]
+name = "html"
+description = "html5ever and xml5ever -> DOM tree builder (blink/renderer/core/html/parser, core/xml/parser)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+base.workspace = true
+dom.workspace = true
+elise.workspace = true
+html5ever.workspace = true
+scoped-tls.workspace = true
+xml5ever.workspace = true
+tracing.workspace = true
+trace_event.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true

@@ -1,0 +1,240 @@
+# Mutation test of step 2b (making a defined element: `new X()`,
+# `createElement` and `createElementNS`):
+# python3 scripts/test.py mutate rfcs/0035-shadow-dom-custom-elements/mutants-2b.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "custom_elements::"]
+timeout = 600
+
+# dom: an element's custom element state and definition.
+
+[[mutant]]
+name = "a valid custom element name starts uncustomized"
+file = "crates/dom/src/scope.rs"
+from = '''        {
+            crate::custom_element::CustomElementState::Undefined
+        } else {'''
+to = '''        {
+            crate::custom_element::CustomElementState::Uncustomized
+        } else {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "any namespace's custom element name starts undefined"
+file = "crates/dom/src/scope.rs"
+from = '''        let custom = if name.namespace.url() == crate::node::Namespace::HTML
+            && crate::custom_element::is_valid_custom_element_name(&name.local)'''
+to = '''        let custom = if crate::custom_element::is_valid_custom_element_name(&name.local)'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "a custom element name may be reserved"
+file = "crates/dom/src/custom_element.rs"
+from = '''        && !RESERVED_CUSTOM_ELEMENT_NAMES.contains(&name)'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "the state never set"
+file = "crates/dom/src/custom_element.rs"
+from = '''            *custom = state;'''
+to = '''            let _ = (custom, state);'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "an element's definition never set"
+file = "crates/dom/src/custom_element.rs"
+from = '''                rare.custom_element_definition
+                    .set(self, definition.0.persistent());'''
+to = '''                let _ = (rare, definition);'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "an element's definition never emptied"
+file = "crates/dom/src/custom_element.rs"
+from = '''                    rare.custom_element_definition.clear(self);'''
+to = '''                    let _ = rare;'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "a failed element not made unknown"
+file = "crates/dom/src/scope.rs"
+from = '''            self.create_element_of(document, QualName::html(local_name), Vec::new(), true);'''
+to = '''            self.create_element_of(document, QualName::html(local_name), Vec::new(), false);'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "a failed element not failed"
+file = "crates/dom/src/scope.rs"
+from = '''        self.set_custom_element_state(&element, crate::CustomElementState::Failed);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "custom_elements::"]
+
+[[mutant]]
+name = "a window's registry never found without making it"
+file = "crates/dom/src/custom_element.rs"
+from = '''        Some(CustomElementRegistryHandle::new(&registry, self.roots))
+    }'''
+to = '''        let _ = registry;
+        None
+    }'''
+
+# dom_api: the interface of a failed element, and "create an element".
+
+[[mutant]]
+name = "a failed element an HTMLElement"
+file = "crates/dom_api/src/object.rs"
+from = '''                NodeKind::Element if node.is_unknown_element_object() => {'''
+to = '''                NodeKind::Element if false => {'''
+
+[[mutant]]
+name = "definitions looked up in any namespace"
+file = "crates/dom/src/custom_element.rs"
+from = '''        if name.namespace.url() != crate::node::Namespace::HTML {
+            return None;
+        }
+        let window = self.document_window(document)?;'''
+to = '''        let window = self.document_window(document)?;'''
+
+[[mutant]]
+name = "definitions looked up for a document without a window"
+file = "crates/dom/src/custom_element.rs"
+from = '''        let window = self.document_window(document)?;
+        let registry = self.window_custom_elements_if_made(&window)?;'''
+to = '''        let window = self.document_realm_window(document)?;
+        let registry = self.window_custom_elements_if_made(&window)?;'''
+
+[[mutant]]
+name = "createElement never constructs"
+file = "crates/dom_api/src/document.rs"
+from = '''        QualName::new(namespace, local_name.as_str())
+    };
+    Ok(crate::custom_elements::create_element(cx, &doc(this), name))'''
+to = '''        QualName::new(namespace, local_name.as_str())
+    };
+    Ok(cx.mutate().create_element(&doc(this), name, Vec::new()))'''
+
+[[mutant]]
+name = "createElementNS never constructs"
+file = "crates/dom_api/src/document.rs"
+from = '''        crate::names::NameContext::Element,
+    )?;
+    Ok(crate::custom_elements::create_element(cx, &doc(this), name))'''
+to = '''        crate::names::NameContext::Element,
+    )?;
+    Ok(cx.mutate().create_element(&doc(this), name, Vec::new()))'''
+
+[[mutant]]
+name = "what the constructor threw not reported"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''            cx.report_exception(&constructor, thrown);'''
+to = '''            drop(thrown);'''
+
+[[mutant]]
+name = "what create an element refuses not reported"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''                cx.report_error(&constructor, error);'''
+to = ''''''
+
+[[mutant]]
+name = "a failed constructor's element an ordinary one"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''            cx.mutate()
+                .create_failed_custom_element(document, &name.local)'''
+to = '''            cx.mutate()
+                .create_element(document, name, Vec::new())'''
+
+[[mutant]]
+name = "what isn't a node a NotSupportedError, not a TypeError"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''        return Err(ApiError::Type(
+            "the custom element constructor didn't make an HTMLElement".into(),
+        ));
+    };
+    let read = cx.read();'''
+to = '''        return Err(not_supported("not an HTMLElement"));
+    };
+    let read = cx.read();'''
+
+[[mutant]]
+name = "a constructor may make an element of another namespace"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''        .filter(|name| name.namespace.url() == Namespace::HTML)'''
+to = '''        .filter(|_| true)'''
+
+[[mutant]]
+name = "a constructor may give its element attributes"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    let problem = if node
+        .attributes()
+        .is_some_and(|attributes| !attributes.is_empty())
+    {'''
+to = '''    let problem = if false {'''
+
+[[mutant]]
+name = "a constructor may give its element children"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    } else if node.first_child().is_some() {'''
+to = '''    } else if false {'''
+
+[[mutant]]
+name = "a constructor may give its element a parent"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    } else if node.parent().is_some() {'''
+to = '''    } else if false {'''
+
+[[mutant]]
+name = "a constructor may make an element of another document"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    } else if node.document().id() != document.as_node().id() {'''
+to = '''    } else if false {'''
+
+[[mutant]]
+name = "a constructor may make an element of another name"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    } else if &*name.local != local_name {'''
+to = '''    } else if false {'''
+
+[[mutant]]
+name = "new.target looked up in no registry"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''        .custom_element_definition_by_constructor(&registry, new_target)
+        .ok_or_else(illegal)?;'''
+to = '''        .custom_element_definition_by_constructor(&registry, new_target)
+        .and(None::<CustomElementDefinitionHandle>)
+        .ok_or_else(illegal)?;'''
+
+[[mutant]]
+name = "new X() makes an element of the definition's name, not its local name"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''        QualName::html(definition.local_name()),
+        Vec::new(),
+    );'''
+to = '''        QualName::html("x-wrong"),
+        Vec::new(),
+    );'''
+
+# dom_js: `HTMLElement`'s interface object, and `construct`.
+
+[[mutant]]
+name = "HTMLElement itself as new.target"
+file = "crates/dom_js/src/templates.rs"
+from = '''    if new_target.strict_equals(active.into()) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "HTMLElement an illegal constructor"
+file = "crates/dom_js/src/templates.rs"
+from = '''            None if interface.name == "HTMLElement" => {'''
+to = '''            None if interface.name == "HTMLElement-" => {'''
+
+[[mutant]]
+name = "the new element wrapped in a wrapper of its own"
+file = "crates/dom_js/src/templates.rs"
+from = '''            let wrapper = convert::wrap_into(&mut cx, &dom_api::Object::Node(element), args.this());'''
+to = '''            let wrapper = convert::to_js(&mut cx, dom_api::Value::Object(dom_api::Object::Node(element)));'''
+
+[[mutant]]
+name = "construct calls instead"
+file = "crates/dom_js/src/host.rs"
+from = '''            match object.call_as_constructor(tc, &[]) {'''
+to = '''            let undefined = v8::undefined(tc).into();
+            match object.call_as_function(tc, undefined, &[]) {'''

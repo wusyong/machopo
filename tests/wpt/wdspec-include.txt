@@ -1,0 +1,40 @@
+# WPT's WebDriver tests (wdspec) that `python3 scripts/test.py wdspec` runs: one
+# path per line (from the checkout's root, with its leading /), a file or a
+# directory.
+/webdriver/tests/classic/status
+/webdriver/tests/classic/new_session
+/webdriver/tests/classic/delete_session
+/webdriver/tests/classic/get_timeouts
+/webdriver/tests/classic/set_timeouts
+/webdriver/tests/classic/navigate_to
+/webdriver/tests/classic/get_current_url
+/webdriver/tests/classic/back
+/webdriver/tests/classic/forward
+/webdriver/tests/classic/refresh
+/webdriver/tests/classic/get_title
+/webdriver/tests/classic/get_window_handle
+/webdriver/tests/classic/get_window_handles
+/webdriver/tests/classic/execute_script
+/webdriver/tests/classic/execute_async_script
+/webdriver/tests/classic/find_element
+/webdriver/tests/classic/find_elements
+/webdriver/tests/classic/find_element_from_element
+/webdriver/tests/classic/find_elements_from_element
+/webdriver/tests/classic/get_element_rect
+/webdriver/tests/classic/get_element_tag_name
+/webdriver/tests/classic/get_element_attribute
+/webdriver/tests/classic/get_element_property
+/webdriver/tests/classic/new_window
+/webdriver/tests/classic/close_window
+/webdriver/tests/classic/switch_to_window
+/webdriver/tests/classic/switch_to_frame
+/webdriver/tests/classic/switch_to_parent_frame
+/webdriver/tests/classic/get_window_rect
+/webdriver/tests/classic/set_window_rect
+/webdriver/tests/classic/element_click
+/webdriver/tests/classic/element_send_keys
+/webdriver/tests/classic/element_clear
+/webdriver/tests/classic/take_screenshot
+/webdriver/tests/classic/take_element_screenshot
+/webdriver/tests/classic/perform_actions
+/webdriver/tests/classic/release_actions

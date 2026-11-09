@@ -1,0 +1,8 @@
+<!DOCTYPE html>
+<title>T17: text decorations and shadows where Blink puts them (an underline moved by text-underline-offset, its thickness given; a double overline above the text; a line-through two thirds down the ascent in the decorating box's color, the glyphs not filled by -webkit-text-fill-color: transparent; a shadow cast by transparent text)</title>
+<link rel="match" href="t17-text-decorations-ref.html">
+<style>html, body { margin: 0 } div { font: 20px/1 Ahem; color: transparent; margin-bottom: 20px }</style>
+<div style="text-decoration: underline 4px green; text-underline-offset: 2px">XXXXX</div>
+<div style="text-shadow: green 10px 0">XXXXX</div>
+<div style="text-decoration: overline double 2px green">XXXXX</div>
+<div style="color: green; -webkit-text-fill-color: transparent; text-decoration: line-through">XXXXX</div>

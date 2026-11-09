@@ -1,0 +1,162 @@
+# Stage 4g-2c-1: on the new DOM, Path2D (its constructor of another path or of path data, addPath,
+# its CanvasPath members, the context's), fill, stroke and clip of one, isPointInPath and
+# isPointInStroke, and roundRect's radii; the canvas crate's hit tests and radii checks, which
+# today's DOM shares.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p canvas && cargo test -q -p dom_js_next --test it -- canvas && cargo test -q -p dom_api --test it canvas && cargo test -q -p dom_js --test it canvas && cargo test -q -p shell --test it next_dom_canvas"]
+timeout = 3000
+
+[[mutant]]
+name = "hit: the point not mapped by the transform"
+file = "crates/canvas/src/context.rs"
+from = '''    let [a, b, c, d, e, f] = inverse(data.state().transform)?;'''
+to = '''    let [a, b, c, d, e, f] = IDENTITY;'''
+
+[[mutant]]
+name = "hit: the stroke one wide"
+file = "crates/canvas/src/context.rs"
+from = '''    let style = gfx::StrokeStyle {
+        width: f32_from_f64(state.line_width),'''
+to = '''    let style = gfx::StrokeStyle {
+        width: 1.0,'''
+
+[[mutant]]
+name = "radii: five taken"
+file = "crates/canvas/src/path.rs"
+from = '''    if radii.is_empty() || radii.len() > 4 {'''
+to = '''    if radii.is_empty() {'''
+
+[[mutant]]
+name = "radii: a negative x taken"
+file = "crates/canvas/src/path.rs"
+from = '''                    return Err(negative("X-r", x));'''
+to = '''                    return Ok(None);'''
+
+[[mutant]]
+name = "radii: a negative y taken"
+file = "crates/canvas/src/path.rs"
+from = '''                    return Err(negative("Y-r", y));'''
+to = '''                    return Ok(None);'''
+
+[[mutant]]
+name = "radii: one that isn't finite taken"
+file = "crates/canvas/src/path.rs"
+from = '''                let r = f32_from_f64(r);
+                if !r.is_finite() {'''
+to = '''                let r = f32_from_f64(r);
+                if false {'''
+
+[[mutant]]
+name = "fill(path): the current default path"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    let path = cx.with_path_2d(path, |path| path.clone());
+    fill_with(cx, this, path, rule);'''
+to = '''    let _ = path;
+    let path = with_data(cx, this, |data| data.path.clone());
+    fill_with(cx, this, path, rule);'''
+
+[[mutant]]
+name = "stroke(path): the current default path"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    let path = cx.with_path_2d(path, |path| path.clone());
+    stroke_with(cx, this, path);'''
+to = '''    let _ = path;
+    let path = with_data(cx, this, |data| data.path.clone());
+    stroke_with(cx, this, path);'''
+
+[[mutant]]
+name = "clip(path): the current default path"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    let path = cx.with_path_2d(path, |path| path.clone());
+    with_data(cx, this, |data| context::clip(data, path, rule));'''
+to = '''    let _ = path;
+    with_data(cx, this, |data| context::clip(data, data.path.clone(), rule));'''
+
+[[mutant]]
+name = "isPointInPath(path): the current default path"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    Ok(with_data(cx, this, |data| context::point_in_path(data, &path, x, y, rule)))'''
+to = '''    Ok(with_data(cx, this, |data| { let _ = &path; context::point_in_path(data, &data.path, x, y, rule) }))'''
+
+[[mutant]]
+name = "isPointInStroke(path): the current default path"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    Ok(with_data(cx, this, |data| context::point_in_stroke(data, &path, x, y)))'''
+to = '''    Ok(with_data(cx, this, |data| { let _ = &path; context::point_in_stroke(data, &data.path, x, y) }))'''
+
+[[mutant]]
+name = "roundRect: a TypeError"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''canvas::path::round_rect_radii(radii).map_err(ApiError::Range)?;'''
+to = '''canvas::path::round_rect_radii(radii).map_err(ApiError::type_error)?;'''
+
+[[mutant]]
+name = "Path2D: a copy empty"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''        Some(Path2dOrString::Path(other)) => cx.with_path_2d(other, |path| path.clone()),'''
+to = '''        Some(Path2dOrString::Path(_)) => gfx::Path::new(),'''
+
+[[mutant]]
+name = "Path2D: path data ignored"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''        Some(Path2dOrString::String(data)) => css::path_from_string(data),'''
+to = '''        Some(Path2dOrString::String(_)) => gfx::Path::new(),'''
+
+[[mutant]]
+name = "addPath: the transform ignored"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''path.add_path(&other, &context::to_gfx(matrix))'''
+to = '''path.add_path(&other, &context::to_gfx(context::IDENTITY))'''
+
+[[mutant]]
+name = "Path2D's methods: the context's path"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''        cx.with_path_2d(self, |mut path| CanvasPath::with_path(&mut path, f))'''
+to = '''        let mut other = gfx::Path::new();
+        let _ = self;
+        CanvasPath::with_path(&mut &mut other, f)'''
+
+[[mutant]]
+name = "Path2D's argument a string"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        if let Some(path) = front.object_if::<dom_next::Path2d>(index) {
+            return Some(Some(Path2dOrStringTaken::Path(path)));'''
+to = '''        if let Some(path) = None::<F::Node> {
+            return Some(Some(Path2dOrStringTaken::Path(path)));'''
+
+[[mutant]]
+name = "front: no radii by default"
+file = "crates/dom_js_next/src/front.rs"
+from = '''            return Some(vec![Radius::Both(0.0)]);'''
+to = '''            return Some(vec![]);'''
+
+[[mutant]]
+name = "front: a sequence of radii a point"
+file = "crates/dom_js_next/src/front.rs"
+from = '''            if !object.get(scope, symbol.into())?.is_undefined() {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "front: a point's members out of order"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        for (name, at) in [("w", 3), ("x", 0), ("y", 1), ("z", 2)] {'''
+to = '''        for (name, at) in [("x", 0), ("y", 1), ("w", 3), ("z", 2)] {'''
+
+[[mutant]]
+name = "front: a point's x and y swapped"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        x: point[0],
+        y: point[1],'''
+to = '''        x: point[1],
+        y: point[0],'''
+
+[[mutant]]
+name = "overloads: a Path2D not told apart"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''        "Path2D" => bindings::is_wrapper::<dom_next::Path2d>(scope, value),'''
+to = '''        "Path2D" => false,'''
+
+[[mutant]]
+name = "today's DOM: a point's radius one number"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            Radius::Point { x: *x, y: *y }'''
+to = '''            Radius::Both(*x)'''

@@ -1,0 +1,18 @@
+# The caret in a text field: it blinks by itself (hidden, then shown
+# again), wherever it is as the user types, and goes once the field loses
+# the focus.
+window caret-blink=300
+navigate pages/caret.html
+wait-loaded
+click #field
+wait-text #out "focused "
+capture first
+expect-differs first #field
+capture second
+expect-differs second #field
+type "ab"
+wait-text #out "focused ab"
+screenshot typed
+click #blank
+wait-text #out "not focused ab"
+screenshot blurred

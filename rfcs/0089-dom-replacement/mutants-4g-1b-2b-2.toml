@@ -1,0 +1,192 @@
+# Stage 4g-1b-2b-2: on the new DOM, loading=lazy (a document's lazy load observer, the
+# request that waits, its resumption, the load it doesn't delay) and sizes=auto (the width,
+# a document's resize observer that selects again), the backgrounds the load waits for.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it images && cargo test -q -p dom_api_next --test it images"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: never lazy"
+file = "crates/dom_next/src/image.rs"
+from = '''            .is_some_and(|loading| loading.borrow().to_str().eq_ignore_ascii_case("lazy"))'''
+to = '''            .is_some_and(|loading| loading.borrow().to_str() == "never")'''
+
+[[mutant]]
+name = "dom: a lazy one not deferred"
+file = "crates/dom_next/src/image.rs"
+from = '''                request.deferred = lazy && !resuming && self.available_image(&url).is_none();'''
+to = '''                request.deferred = false;'''
+
+[[mutant]]
+name = "dom: an available one deferred"
+file = "crates/dom_next/src/image.rs"
+from = '''                request.deferred = lazy && !resuming && self.available_image(&url).is_none();'''
+to = '''                request.deferred = lazy && !resuming;'''
+
+[[mutant]]
+name = "dom: a deferred one not observed"
+file = "crates/dom_next/src/image.rs"
+from = '''                    if let Some(observer) = self.lazy_load_observer(document) {
+                        self.observe_intersection(observer, element);
+                    }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a lazy one delays the load"
+file = "crates/dom_next/src/image.rs"
+from = '''        let delays = delays && !loader.lazy_update.get();'''
+to = '''        let delays = delays;'''
+
+[[mutant]]
+name = "dom: an update begins eager"
+file = "crates/dom_next/src/image.rs"
+from = '''        loader
+            .lazy_update
+            .set(self.is_lazy_image(element) && self.window_of(self.document_of(element)).is_some());
+        // Those asked'''
+to = '''        loader.lazy_update.set(false);
+        // Those asked'''
+
+[[mutant]]
+name = "dom: loading not seen as the update begins"
+file = "crates/dom_next/src/image.rs"
+from = '''            if let Some(loader) = self.image_loader(element)
+                && loader.microtask_queued.get()
+            {'''
+to = '''            if let Some(loader) = self.image_loader(element)
+                && loader.microtask_queued.get() && false
+            {'''
+
+[[mutant]]
+name = "dom: loading eager doesn't resume"
+file = "crates/dom_next/src/image.rs"
+from = '''            if !self.is_lazy_image(element) {
+                self.resume_lazy_image(element);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: resumed but still observed"
+file = "crates/dom_next/src/image.rs"
+from = '''            self.unobserve_intersection(observer, element);
+        }
+        loader.resuming.set(true);'''
+to = '''        }
+        loader.resuming.set(true);'''
+
+[[mutant]]
+name = "dom: resumed with no microtask"
+file = "crates/dom_next/src/image.rs"
+from = '''        loader.resuming.set(true);
+        if !loader.microtask_queued.replace(true) {
+            self.queue_image_microtask(element);
+        }'''
+to = '''        loader.resuming.set(true);'''
+
+[[mutant]]
+name = "dom: a resumed current not fetched"
+file = "crates/dom_next/src/image.rs"
+from = '''                    (waiting, waiting && resuming && std::mem::take(&mut current.deferred))'''
+to = '''                    (waiting, false)'''
+
+[[mutant]]
+name = "dom: a resumed pending not fetched"
+file = "crates/dom_next/src/image.rs"
+from = '''                            let resumed = resuming && std::mem::take(&mut pending.deferred);'''
+to = '''                            let resumed = false;'''
+
+[[mutant]]
+name = "dom: the backgrounds not waited for"
+file = "crates/dom_next/src/image.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "python3 scripts/test.py reftest --next-dom backgrounds/"]
+from = '''                cache.fetches.push(url.to_owned());
+                cache.backgrounds.insert(url.to_owned());'''
+to = '''                cache.fetches.push(url.to_owned());'''
+
+[[mutant]]
+name = "dom: the lazy observer has no root margin"
+file = "crates/dom_next/src/intersection.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it next_dom_lazy_images"]
+from = '''                root_margin: [vertical, horizontal, vertical, horizontal],'''
+to = '''                root_margin: [gfx::MarginLength::Px(0.0); 4],'''
+
+[[mutant]]
+name = "dom: the lazy observer has no scroll margin"
+file = "crates/dom_next/src/intersection.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it next_dom_lazy_images"]
+from = '''                scroll_margin: [vertical, horizontal, vertical, horizontal],
+                thresholds'''
+to = '''                scroll_margin: [gfx::MarginLength::Px(0.0); 4],
+                thresholds'''
+
+[[mutant]]
+name = "dom: the auto sizes observer not first"
+file = "crates/dom_next/src/resize.rs"
+from = '''        observers.sort_by_key(|observer| !observer.auto_sizes.get());'''
+to = ''''''
+
+[[mutant]]
+name = "api: the lazy observer's targets not resumed"
+file = "crates/dom_api_next/src/intersection_observer.rs"
+from = '''                if cx.intersection_entry_values(entry).1 {'''
+to = '''                if false && cx.intersection_entry_values(entry).1 {'''
+
+[[mutant]]
+name = "api: the lazy observer calls script"
+file = "crates/dom_api_next/src/intersection_observer.rs"
+from = '''            if !cx.is_lazy_load_observer(observer) {
+                return false;
+            }
+            for entry'''
+to = '''            if true {
+                return false;
+            }
+            for entry'''
+
+[[mutant]]
+name = "api: the auto sizes observer calls script"
+file = "crates/dom_api_next/src/resize_observer.rs"
+from = '''            if !cx.is_auto_sizes_observer(observer) {
+                return false;
+            }'''
+to = '''            if true {
+                return false;
+            }'''
+
+[[mutant]]
+name = "api: the auto sizes observer selects nothing"
+file = "crates/dom_api_next/src/resize_observer.rs"
+from = '''                    crate::image::select_again(cx, target);'''
+to = ''''''
+
+[[mutant]]
+name = "api: auto sizes not allowed"
+file = "crates/dom_api_next/src/image.rs"
+from = '''    let allows_auto = cx.allows_auto_sizes(element);
+    let auto = Cell::new(false);'''
+to = '''    let allows_auto = false && cx.allows_auto_sizes(element);
+    let auto = Cell::new(false);'''
+
+[[mutant]]
+name = "api: no default of 300px"
+file = "crates/dom_api_next/src/image.rs"
+from = '''    Some(if laid_out == 0.0 && no_size { 300.0 } else { laid_out })'''
+to = '''    Some(laid_out)'''
+
+[[mutant]]
+name = "api: a source doesn't take the img's auto"
+file = "crates/dom_api_next/src/image.rs"
+from = '''                .or_else(|| allows_auto.then(|| "auto".to_owned()));'''
+to = ''';'''
+
+[[mutant]]
+name = "api: an auto-sized one not observed"
+file = "crates/dom_api_next/src/image.rs"
+from = '''    cx.observe_auto_sizes(element, auto.get());'''
+to = '''    cx.observe_auto_sizes(element, false);'''
+
+[[mutant]]
+name = "renderer: the load waits for nothing but the count"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "python3 scripts/test.py reftest --next-dom backgrounds/"]
+from = '''            cx.background_images_loading() || cx.load_event_delayed(document.get(cx.gc))'''
+to = '''            cx.load_event_delayed(document.get(cx.gc))'''

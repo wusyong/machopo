@@ -1,0 +1,20 @@
+{
+  "hidpi-2x": {
+    "config": {"binary_args": ["--scale", "2"]},
+    "include": [
+      "/_machopo/hidpi/c3-canvas-layer.html",
+      "/_machopo/hidpi/k3-fractional-edges.html",
+      "/_machopo/hidpi/k3-hairline-border.html",
+      "/_machopo/hidpi/k3-image.html",
+      "/_machopo/hidpi/k3-scroller-layer.html",
+      "/_machopo/hidpi/svg-image.html"
+    ]
+  },
+  "hidpi-1.5x": {
+    "config": {"binary_args": ["--scale", "1.5"]},
+    "include": [
+      "/_machopo/hidpi/k3-border-width.html",
+      "/_machopo/hidpi/k3-no-seams.html"
+    ]
+  }
+}

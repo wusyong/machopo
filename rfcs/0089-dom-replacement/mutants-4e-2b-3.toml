@@ -1,0 +1,77 @@
+# Stage 4e-2b-3: `document.body` (and its setter), `head`, `doctype` and
+# `HTMLTemplateElement`'s `content` on the new DOM.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it -- documents"]
+timeout = 3000
+
+[[mutant]]
+name = "html child: any document element"
+file = "crates/dom_api_next/src/document.rs"
+from = '''        .filter(|&html| is_html_named(cx, html, local::HTML))?;'''
+to = '''?;'''
+
+[[mutant]]
+name = "html child: the last"
+file = "crates/dom_api_next/src/document.rs"
+from = '''        if matches(at) {
+            return Some(at);
+        }'''
+to = '''        if matches(at) && cx.next_sibling(at).is_none() {
+            return Some(at);
+        }'''
+
+[[mutant]]
+name = "body: no frameset"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    Ok(html_child(cx, this, |at| {
+        is_html_named(cx, at, local::BODY) || is_html_named(cx, at, local::FRAMESET)
+    }))'''
+to = '''    Ok(html_child(cx, this, |at| is_html_named(cx, at, local::BODY)))'''
+
+[[mutant]]
+name = "set body: any element"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    let Some(value) = value.filter(|&value| {
+        is_html_named(cx, value, local::BODY) || is_html_named(cx, value, local::FRAMESET)
+    }) else {'''
+to = '''    let Some(value) = value else {'''
+
+[[mutant]]
+name = "set body: itself replaced"
+file = "crates/dom_api_next/src/document.rs"
+from = '''        Some(old) if gc::Gc::ptr_eq(old, value) => Ok(()),
+'''
+to = ''''''
+
+[[mutant]]
+name = "set body: appended, not in place"
+file = "crates/dom_api_next/src/document.rs"
+from = '''            cx.replace_child(parent, value, old)?;'''
+to = '''            cx.append_child(parent, value)?;'''
+
+[[mutant]]
+name = "set body: no document element, nothing"
+file = "crates/dom_api_next/src/document.rs"
+from = '''            None => Err(ApiError::dom(ExceptionName::HierarchyRequest)),
+        },'''
+to = '''            None => Ok(()),
+        },'''
+
+[[mutant]]
+name = "head: the body"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    Ok(html_child(cx, this, |at| is_html_named(cx, at, local::HEAD)))'''
+to = '''    Ok(html_child(cx, this, |at| is_html_named(cx, at, local::BODY)))'''
+
+[[mutant]]
+name = "html named: any namespace"
+file = "crates/dom_api_next/src/document.rs"
+from = '''        .is_some_and(|name| name.namespace == names::HTML_NAMESPACE && name.local == local)'''
+to = '''        .is_some_and(|name| name.local == local)'''
+
+[[mutant]]
+name = "doctype: the first child"
+file = "crates/dom_api_next/src/document.rs"
+from = '''        if cx.kind(at) == NodeKind::DocumentType {
+            return Ok(Some(at));
+        }'''
+to = '''        return Ok(Some(at));'''

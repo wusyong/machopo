@@ -1,0 +1,334 @@
+# Mutation test of step 2a-2 (inline SVG's layout and paint):
+# python3 scripts/test.py mutate rfcs/0031-svg/mutants-2a2.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "svg::"]
+timeout = 900
+
+# --- layout: sizing -----------------------------------------------------------
+
+[[mutant]]
+name = "an svg has no ratio"
+file = "crates/layout/src/replaced.rs"
+from = '''            .or_else(|| self.svg.as_ref()?.ratio())'''
+to = ''''''
+
+[[mutant]]
+name = "a ratio alone doesn't fill the width"
+file = "crates/layout/src/replaced.rs"
+from = '''            (None, None) => match ratio.filter(|_| self.fills_width(style)) {'''
+to = '''            (None, None) => match ratio.filter(|_| false) {'''
+
+[[mutant]]
+name = "a block-level svg with a ratio alone doesn't fill the width"
+file = "crates/layout/src/lib.rs"
+from = '''    if replaced.fills_width(style) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "an svg isn't replaced"
+file = "crates/layout/src/lib.rs"
+from = '''    is_image(element) || is_iframe(element) || is_svg_root(element)'''
+to = '''    is_image(element) || is_iframe(element)'''
+
+# --- layout: what is drawn ----------------------------------------------------
+
+[[mutant]]
+name = "unknown elements are groups"
+file = "crates/layout/src/svg.rs"
+from = '''        "path" => SourceKind::Path,
+        _ => return None,'''
+to = '''        "path" => SourceKind::Path,
+        _ => SourceKind::Group,'''
+
+[[mutant]]
+name = "display: none is drawn"
+file = "crates/layout/src/svg.rs"
+from = '''    if style.display == Display::None || name.namespace.url() != dom::Namespace::SVG {'''
+to = '''    if name.namespace.url() != dom::Namespace::SVG {'''
+
+# --- layout: viewports --------------------------------------------------------
+
+[[mutant]]
+name = "meet slices"
+file = "crates/layout/src/svg.rs"
+from = '''        let s = if self.aspect.slice {
+            sx.max(sy)
+        } else {
+            sx.min(sy)
+        };'''
+to = '''        let s = sx.max(sy);'''
+
+[[mutant]]
+name = "the alignment is ignored"
+file = "crates/layout/src/svg.rs"
+from = '''        let tx = -b.x * s + ax * (size.width - b.width * s);'''
+to = '''        let tx = -b.x * s + 0.0 * ax * (size.width - b.width * s);'''
+
+[[mutant]]
+name = "percentages are of the viewport, not the viewBox"
+file = "crates/layout/src/svg.rs"
+from = '''        self.view_box.map_or(size, |b| b.size())'''
+to = '''        size'''
+
+[[mutant]]
+name = "an empty viewBox draws"
+file = "crates/layout/src/svg.rs"
+from = '''        let disabled = view_box.is_some_and(|(_, _, w, h)| w == 0.0 || h == 0.0);'''
+to = '''        let disabled = false;'''
+
+[[mutant]]
+name = "a negative viewBox counts"
+file = "crates/layout/src/svg.rs"
+from = '''                [x, y, w, h] if w >= 0.0 && h >= 0.0 => Some((x, y, w, h)),'''
+to = '''                [x, y, w, h] => Some((x, y, w.abs(), h.abs())),'''
+
+[[mutant]]
+name = "a nested svg doesn't clip"
+file = "crates/layout/src/svg.rs"
+from = '''                if style.overflow_x != Overflow::Visible {
+                    clip = Some(rect);
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "a nested svg isn't placed"
+file = "crates/layout/src/svg.rs"
+from = '''                    Transform::translate(rect.x, rect.y).then(&nested.transform(rect.size()));'''
+to = '''                    nested.transform(rect.size());'''
+
+[[mutant]]
+name = "the svg overflow rule is gone"
+file = "crates/style/resources/html.css"
+from = '''svg:not(:root), symbol, image, marker, pattern, foreignObject {
+  overflow: hidden;
+}'''
+to = ''''''
+
+# --- layout: shapes -----------------------------------------------------------
+
+[[mutant]]
+name = "an auto radius is 0"
+file = "crates/layout/src/svg.rs"
+from = '''                (Some(rx), None) => (rx, rx),
+                (None, Some(ry)) => (ry, ry),
+                (Some(rx), Some(ry)) => (rx, ry),
+            };
+            let (rx, ry) = (rx.clamp(0.0, w / 2.0), ry.clamp(0.0, h / 2.0));'''
+to = '''                (Some(rx), None) => (rx, 0.0),
+                (None, Some(ry)) => (0.0, ry),
+                (Some(rx), Some(ry)) => (rx, ry),
+            };
+            let (rx, ry) = (rx.clamp(0.0, w / 2.0), ry.clamp(0.0, h / 2.0));'''
+
+[[mutant]]
+name = "radii aren't cut to half the sides"
+file = "crates/layout/src/svg.rs"
+from = '''            let (rx, ry) = (rx.clamp(0.0, w / 2.0), ry.clamp(0.0, h / 2.0));'''
+to = '''            let (rx, ry) = (rx.max(0.0), ry.max(0.0));'''
+
+[[mutant]]
+name = "a rect with no area is drawn"
+file = "crates/layout/src/svg.rs"
+from = '''            if w <= 0.0 || h <= 0.0 {
+                return None;
+            }
+            // An `auto` radius'''
+to = '''            // An `auto` radius'''
+
+[[mutant]]
+name = "r is of the width"
+file = "crates/layout/src/svg.rs"
+from = '''            let r = units.diagonal(svg.r);'''
+to = '''            let r = units.x(svg.r);'''
+
+[[mutant]]
+name = "an ellipse's auto radius is nothing"
+file = "crates/layout/src/svg.rs"
+from = '''                (Some(r), None) | (None, Some(r)) => (r, r),
+                (None, None) => return None,'''
+to = '''                _ => return None,'''
+
+[[mutant]]
+name = "a line's y1 is of the width"
+file = "crates/layout/src/svg.rs"
+from = '''            path.move_to(PointF::new(units.x(*x1), units.y(*y1)));'''
+to = '''            path.move_to(PointF::new(units.x(*x1), units.x(*y1)));'''
+
+[[mutant]]
+name = "a polygon isn't closed"
+file = "crates/layout/src/svg.rs"
+from = '''            if *closed {
+                path.close();
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "S doesn't reflect"
+file = "crates/layout/src/svg.rs"
+from = '''                let c1 = reflect(last_cubic, current);'''
+to = '''                let c1 = current;'''
+
+[[mutant]]
+name = "T doesn't reflect"
+file = "crates/layout/src/svg.rs"
+from = '''                let c = reflect(last_quad, current);'''
+to = '''                let c = current;'''
+
+[[mutant]]
+name = "the sweep flag is ignored"
+file = "crates/layout/src/svg.rs"
+from = '''        large_arc,
+        sweep,
+    };
+    match kurbo::Arc::from_svg_arc(&arc) {'''
+to = '''        large_arc,
+        sweep: !sweep,
+    };
+    match kurbo::Arc::from_svg_arc(&arc) {'''
+
+[[mutant]]
+name = "a flat arc is nothing"
+file = "crates/layout/src/svg.rs"
+from = '''        None if from != to => path.line_to(pt(to.0, to.1)),'''
+to = ''''''
+
+[[mutant]]
+name = "a conic's weight is 1"
+file = "crates/layout/src/svg.rs"
+from = '''    let weight = (step / 2.0).cos();'''
+to = '''    let weight = 1.0f64;'''
+
+[[mutant]]
+name = "a transform's percentages are of the height"
+file = "crates/layout/src/svg.rs"
+from = '''                    Transform::translate(resolve(x, viewport.width), resolve(y, viewport.height))'''
+to = '''                    Transform::translate(resolve(x, viewport.height), resolve(y, viewport.height))'''
+
+[[mutant]]
+name = "stroke-width is of the width"
+file = "crates/layout/src/svg.rs"
+from = '''                stroke_width: units.diagonal(style.svg.stroke_width).max(0.0),'''
+to = '''                stroke_width: units.x(style.svg.stroke_width).max(0.0),'''
+
+# --- updates ------------------------------------------------------------------
+
+[[mutant]]
+name = "a change below an svg isn't taken"
+file = "crates/layout/src/lib.rs"
+from = '''            if flags.child_needs_update || flags.children_changed {
+                walk.collect(Container::Box(element, index));
+            }
+            return None;'''
+to = '''            return None;'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "update::an_svg"]
+
+[[mutant]]
+name = "collecting an svg again keeps its content"
+file = "crates/layout/src/lib.rs"
+from = '''                let replaced = Replaced::svg(svg::SvgSource::capture(element));'''
+to = '''                let replaced = self.boxes[index].replaced.clone().unwrap();'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "update::an_svg"]
+
+[[mutant]]
+name = "an SVG attribute flags no layout"
+file = "crates/dom/src/scope.rs"
+from = '''            .is_some_and(|n| n.namespace.url() == crate::node::Namespace::SVG)'''
+to = '''            .is_some_and(|_| false)'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "layout_tree_flags::"]
+
+# --- paint --------------------------------------------------------------------
+
+[[mutant]]
+name = "an svg scrolls"
+file = "crates/paint/src/lib.rs"
+from = '''        if style.clips_overflow() && fragment.svg.is_none() {'''
+to = '''        if style.clips_overflow() {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "an svg doesn't clip to its content box"
+file = "crates/paint/src/lib.rs"
+from = '''        if style.clips_overflow() && fragment.svg.is_some() {'''
+to = '''        if false {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "the viewBox isn't a transform node"
+file = "crates/paint/src/svg.rs"
+from = '''            .add_transform(contents.transform, content_box.then(&svg.content_transform));'''
+to = '''            .add_transform(contents.transform, content_box);'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "an element's transform isn't a node"
+file = "crates/paint/src/svg.rs"
+from = '''        if !node.transform.is_identity() {'''
+to = '''        if false {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "opacity isn't an effect"
+file = "crates/paint/src/svg.rs"
+from = '''        if node.style.opacity < 1.0 {'''
+to = '''        if false {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "a nested svg's clip isn't a node"
+file = "crates/paint/src/svg.rs"
+from = '''        if let Some(clip) = node.clip {'''
+to = '''        if let Some(clip) = node.clip.filter(|_| false) {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "an svg's content is taken from the last paint"
+file = "crates/paint/src/lib.rs"
+from = '''                        && self.pre.child_frame(fragment).is_none()
+                        && fragment.svg.is_none() =>'''
+to = '''                        && self.pre.child_frame(fragment).is_none() =>'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "an svg's content isn't cut to its rounded corners"
+file = "crates/paint/src/lib.rs"
+from = '''            || fragment.svg.is_some()
+            || fragment'''
+to = '''            || fragment'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "hidden shapes are painted"
+file = "crates/paint/src/svg.rs"
+from = '''        if !style.is_visible() {
+            return;
+        }
+        let state'''
+to = '''        let state'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "a stroke 0 wide is painted"
+file = "crates/paint/src/svg.rs"
+from = '''        if shape.stroke_width > 0.0'''
+to = '''        if shape.stroke_width >= 0.0'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "paint opacity isn't applied"
+file = "crates/paint/src/svg.rs"
+from = '''    let alpha = (f32::from(color.a) * opacity).round() as u8;'''
+to = '''    let alpha = color.a;'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "a url's fallback isn't used"
+file = "crates/paint/src/svg.rs"
+from = '''            SvgPaintFallback::Color(color) => style.resolve(*color),'''
+to = '''            SvgPaintFallback::Color(_) => return None,'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]
+
+[[mutant]]
+name = "round caps are butt"
+file = "crates/paint/src/svg.rs"
+from = '''                    StrokeLinecap::Round => LineCap::Round,'''
+to = '''                    StrokeLinecap::Round => LineCap::Butt,'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "svg::"]

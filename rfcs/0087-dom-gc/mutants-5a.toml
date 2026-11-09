@@ -1,0 +1,124 @@
+# Step 5a: free pages' memory given back to the OS on a worker. Run with
+# `RUSTY_V8_ARCHIVE` (`test.py` checks the third-party pins).
+test = ["cargo", "test", "-q", "-p", "gc"]
+timeout = 900
+
+[[mutant]]
+name = "the sweep discards in the pause, workers or not"
+file = "crates/gc/src/heap.rs"
+from = '''                PageState::Free { since } if since < gc && self.concurrent => {'''
+to = '''                PageState::Free { since } if since < gc && false => {'''
+
+[[mutant]]
+name = "a handed page stays free"
+file = "crates/gc/src/heap.rs"
+from = '''                    space.states[number] = PageState::Discarding;
+                    handed.push(number);'''
+to = '''                    handed.push(number);'''
+
+[[mutant]]
+name = "a handed page is listed in the pool too"
+file = "crates/gc/src/heap.rs"
+from = '''                    space.states[number] = PageState::Discarding;
+                    handed.push(number);'''
+to = '''                    space.states[number] = PageState::Discarding;
+                    space.pool.push(number);
+                    handed.push(number);'''
+
+[[mutant]]
+name = "the pages aren't pushed to the job"
+file = "crates/gc/src/heap.rs"
+from = '''            self.discards.push(&handed);'''
+to = '''            let _ = &handed;'''
+
+[[mutant]]
+name = "the job is posted again each GC"
+file = "crates/gc/src/heap.rs"
+from = '''                Some(job) => job.notify_concurrency_increase(),
+                None => *job = platform.post_job(self.discards.clone()),'''
+to = '''                _ => *job = platform.post_job(self.discards.clone()),'''
+
+[[mutant]]
+name = "a safepoint doesn't take the discarded"
+file = "crates/gc/src/heap.rs"
+from = '''    fn safepoint(&mut self) {
+        self.take_discarded();'''
+to = '''    fn safepoint(&mut self) {'''
+
+[[mutant]]
+name = "collect doesn't take the discarded"
+file = "crates/gc/src/heap.rs"
+from = '''    pub fn collect(&mut self) {
+        self.inner.take_discarded();'''
+to = '''    pub fn collect(&mut self) {'''
+
+[[mutant]]
+name = "scavenge doesn't take the discarded"
+file = "crates/gc/src/heap.rs"
+from = '''    pub fn scavenge(&mut self) {
+        self.inner.take_discarded();'''
+to = '''    pub fn scavenge(&mut self) {'''
+
+[[mutant]]
+name = "a discarded page keeps its committed bytes"
+file = "crates/gc/src/heap.rs"
+from = '''    space.committed_total = space
+        .committed_total
+        .saturating_sub(space.committed[number]);
+    space.committed[number] = 0;
+    space.discarded.push(number);'''
+to = '''    space.discarded.push(number);'''
+
+[[mutant]]
+name = "a taken page isn't listed as discarded"
+file = "crates/gc/src/heap.rs"
+from = '''            space.states[number] = PageState::Free {
+                since: self.gcs.get(),
+            };
+            discarded(space, number);'''
+to = '''            space.states[number] = PageState::Free {
+                since: self.gcs.get(),
+            };
+            let _ = number;'''
+
+[[mutant]]
+name = "the heap's drop doesn't cancel the job"
+file = "crates/gc/src/heap.rs"
+from = '''        if let Some(job) = self.inner.discard_job.get_mut().take() {
+            job.cancel();
+        }'''
+to = '''        if let Some(job) = self.inner.discard_job.get_mut().take() {
+            std::mem::forget(job);
+        }'''
+
+[[mutant]]
+name = "the job wants no worker"
+file = "crates/gc/src/heap/discard.rs"
+from = '''        usize::from(self.left.load(Ordering::Relaxed) > 0)'''
+to = '''        usize::from(self.left.load(Ordering::Relaxed) > usize::MAX - 1)'''
+
+[[mutant]]
+name = "the job's pages aren't reported done"
+file = "crates/gc/src/heap/discard.rs"
+from = '''            queue.done.push(number);
+            self.done.store(queue.done.len(), Ordering::Relaxed);'''
+to = '''            let _ = number;'''
+
+[[mutant]]
+name = "the done count isn't kept"
+file = "crates/gc/src/heap/discard.rs"
+from = '''            queue.done.push(number);
+            self.done.store(queue.done.len(), Ordering::Relaxed);'''
+to = '''            queue.done.push(number);'''
+
+[[mutant]]
+name = "the job doesn't discard"
+file = "crates/gc/src/heap/discard.rs"
+from = '''            unsafe { self.discarder.discard(page::start_of(number), PAGE_BYTES) };'''
+to = '''            let _ = &self.discarder;'''
+
+[[mutant]]
+name = "the verifier doesn't check the discarding pages"
+file = "crates/gc/src/heap/verify.rs"
+from = '''                    if !self.discards.holds(number) || space.committed[number] == 0 {'''
+to = '''                    if false {'''

@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<title>J3: an uncaught exception stops only the script that threw; later scripts run</title>
+<link rel="match" href="j3-uncaught-exception-ref.html">
+<style>
+  html, body { margin: 0 }
+  div { width: 100px; height: 100px; background-color: red }
+</style>
+<div id="a"></div>
+<div id="b"></div>
+<script>
+  document.getElementById("a").setAttribute("style", "background-color: green");
+  throw new Error("J3 throws on purpose");
+  document.getElementById("a").setAttribute("style", "background-color: red");
+</script>
+<script>
+  document.getElementById("b").setAttribute("style", "background-color: green");
+</script>

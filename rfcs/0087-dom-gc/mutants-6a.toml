@@ -1,0 +1,169 @@
+# Step 6a: the old generation's fragmentation measured once a sweep is
+# done and when a marking starts (its pages' free slots, what V8's choice
+# of pages to evacuate would move and free), allocation's free ranges
+# counted, and gc_bench's and bench.py gc's reports of them. Run with `RUSTY_V8_ARCHIVE` (`test.py`
+# checks the third-party pins).
+test = ["cargo", "test", "-q", "-p", "gc"]
+timeout = 900
+
+[[mutant]]
+name = "a page is a candidate however full"
+file = "crates/gc/src/heap/fragmentation.rs"
+from = '''                >= area.saturating_mul(TARGET_FREE_PERCENT)'''
+to = '''                >= 0'''
+
+[[mutant]]
+name = "the most live pages first"
+file = "crates/gc/src/heap/fragmentation.rs"
+from = '''    candidates.sort_unstable_by_key(|&(live, _)| live);'''
+to = '''    candidates.sort_unstable_by_key(|&(live, _)| std::cmp::Reverse(live));'''
+
+[[mutant]]
+name = "no limit to the bytes moved"
+file = "crates/gc/src/heap/fragmentation.rs"
+from = '''        if total > MAX_EVACUATED_BYTES {'''
+to = '''        if false && total > MAX_EVACUATED_BYTES {'''
+
+[[mutant]]
+name = "every class's objects packed as the smallest class's"
+file = "crates/gc/src/heap/fragmentation.rs"
+from = '''        by_class[class] = by_class[class].saturating_add(live);'''
+to = '''        by_class[0] = by_class[0].saturating_add(live);'''
+
+[[mutant]]
+name = "candidates kept though no page is freed"
+file = "crates/gc/src/heap/fragmentation.rs"
+from = '''    if released == 0 {'''
+to = '''    if false && released == 0 {'''
+
+[[mutant]]
+name = "the nursery's pages counted as the old generation's"
+file = "crates/gc/src/heap/fragmentation.rs"
+from = '''            if !matches!(state, PageState::Young { .. }) {'''
+to = '''            if true || !matches!(state, PageState::Young { .. }) {'''
+
+[[mutant]]
+name = "a page's free ranges aren't counted"
+file = "crates/gc/src/heap/fragmentation.rs"
+from = '''                .map(|&(first, end)| end.saturating_sub(first) as usize)'''
+to = '''                .map(|&(first, _)| first as usize * 0)'''
+
+[[mutant]]
+name = "the cursor's range isn't counted free"
+file = "crates/gc/src/heap/fragmentation.rs"
+from = '''            if cursor.page == number {'''
+to = '''            if false && cursor.page == number {'''
+
+[[mutant]]
+name = "every sweep is the first"
+file = "crates/gc/src/heap/fragmentation.rs"
+from = '''            count: last.get().count.saturating_add(1),'''
+to = '''            count: 1,'''
+
+[[mutant]]
+name = "the freed pages' bytes aren't counted"
+file = "crates/gc/src/heap/fragmentation.rs"
+from = '''        measured.released_bytes = measured.released_pages.saturating_mul(PAGE_BYTES);'''
+to = '''        measured.released_bytes = measured.released_pages;'''
+
+[[mutant]]
+name = "measured though not asked"
+file = "crates/gc/src/heap.rs"
+from = '''        if self.options.measure_fragmentation {
+            self.measure_fragmentation(&self.fragmentation);'''
+to = '''        if true || self.options.measure_fragmentation {
+            self.measure_fragmentation(&self.fragmentation);'''
+
+[[mutant]]
+name = "not measured when a marking starts"
+file = "crates/gc/src/heap.rs"
+from = '''            self.measure_fragmentation(&self.fragmentation_at_marking);'''
+to = '''            let _ = &self.fragmentation_at_marking;'''
+
+[[mutant]]
+name = "a marking's start measured as a sweep"
+file = "crates/gc/src/heap.rs"
+from = '''            self.measure_fragmentation(&self.fragmentation_at_marking);'''
+to = '''            self.measure_fragmentation(&self.fragmentation);'''
+
+[[mutant]]
+name = "the ranges taken aren't counted"
+file = "crates/gc/src/heap.rs"
+from = '''            space.ranges = space.ranges.saturating_add(1);'''
+to = '''            let _ = &space.ranges;'''
+
+[[mutant]]
+name = "the ranges' slots aren't counted"
+file = "crates/gc/src/heap.rs"
+from = '''            space.range_slots = space'''
+to = '''            let _ = space'''
+
+[[mutant]]
+name = "a replay's operations aren't sampled, only its turns"
+file = "crates/gc_bench/src/gc_replay.rs"
+from = '''            fragmentations.sample(heap);'''
+to = '''            let _ = &fragmentations;'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it", "replay::"]
+
+[[mutant]]
+name = "a sweep sampled again"
+file = "crates/gc_bench/src/gc_heap.rs"
+from = '''        if last.count != self.seen {'''
+to = '''        if true || last.count != self.seen {'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--lib"]
+
+[[mutant]]
+name = "the markings' measures aren't sampled"
+file = "crates/gc_bench/src/gc_heap.rs"
+from = '''        self.marking.sample(stats.fragmentation_at_marking);'''
+to = '''        let _ = &self.marking;'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--lib"]
+
+[[mutant]]
+name = "the median is the least"
+file = "crates/gc_bench/src/gc_heap.rs"
+from = '''            let median = shares.get(shares.len() / 2).copied().unwrap_or(0);'''
+to = '''            let median = shares.first().copied().unwrap_or(0);'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--lib"]
+
+[[mutant]]
+name = "the turns' ranges counted from the heap's start"
+file = "crates/gc_bench/src/gc_heap.rs"
+from = '''        old_ranges: after.old_ranges.saturating_sub(before.old_ranges),'''
+to = '''        old_ranges: after.old_ranges,'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--lib"]
+
+[[mutant]]
+name = "the report's line leaves out the fragmentation"
+file = "crates/gc_bench/src/lib.rs"
+from = '''            self.released_max,'''
+to = '''            self.released_median,'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--lib"]
+
+[[mutant]]
+name = "the report's line has the sweeps' for the markings'"
+file = "crates/gc_bench/src/lib.rs"
+from = '''            activity.fragmentation_at_marking.json(),'''
+to = '''            activity.fragmentation.json(),'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--lib"]
+
+[[mutant]]
+name = "bench.py's most freed is the runs' median"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''        "released_max": max(every("released_max")),'''
+to = '''        "released_max": statistics.median(every("released_max")),'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "FragmentationSummaryTests"]
+
+[[mutant]]
+name = "bench.py's markings summarized from the sweeps"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''        "fragmentation_at_marking": summarize_fragmentation(runs, "fragmentation_at_marking"),'''
+to = '''        "fragmentation_at_marking": summarize_fragmentation(runs, "fragmentation"),'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "FragmentationSummaryTests"]
+
+[[mutant]]
+name = "bench.py's slots a range of the runs' totals"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''            run.get("old_range_slots", 0) / run["old_ranges"] if run.get("old_ranges") else 0 for run in runs),'''
+to = '''            run.get("old_range_slots", 0) for run in runs),'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "FragmentationSummaryTests"]

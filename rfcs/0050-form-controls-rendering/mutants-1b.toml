@@ -1,0 +1,231 @@
+# 1b: form controls' sizes and baselines (`layout`'s `control`, text
+# metrics), check boxes' and radio buttons' theme size and the replaced
+# elements' `display` (`style`'s `theme`), a button's content centered, and
+# the attributes that build a control's box again (`dom`). What 1c changed of
+# the theme's `display` and of the button layout is mutants-1c.toml's.
+#   python3 scripts/test.py mutate rfcs/0050-form-controls-rendering/mutants-1b.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "form_controls::", "update::form_controls"]
+timeout = 900
+
+[[mutant]]
+name = "a check box is 12px"
+file = "crates/style/src/theme.rs"
+from = '''    const TOGGLE_SIZE: f32 = 13.0;'''
+to = '''    const TOGGLE_SIZE: f32 = 12.0;'''
+
+[[mutant]]
+name = "a check box's width is 13px though given"
+file = "crates/style/src/theme.rs"
+from = '''            && *size == Size::Auto'''
+to = '''            && true'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "form_controls::"]
+
+[[mutant]]
+name = "a check box drawn as CSS is 13px"
+file = "crates/style/src/theme.rs"
+from = '''        EffectiveAppearance::Checkbox | EffectiveAppearance::Radio => {'''
+to = '''        EffectiveAppearance::Checkbox | EffectiveAppearance::Radio | EffectiveAppearance::None => {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "form_controls::"]
+
+[[mutant]]
+name = "a slider is 128px"
+file = "crates/layout/src/control.rs"
+from = '''const SLIDER_SIZE: SizeF = SizeF::new(129.0, 16.0);'''
+to = '''const SLIDER_SIZE: SizeF = SizeF::new(128.0, 16.0);'''
+
+[[mutant]]
+name = "a text area keeps no room for a scrollbar"
+file = "crates/layout/src/control.rs"
+from = '''const SCROLLBAR_THICKNESS: f32 = 15.0;'''
+to = '''const SCROLLBAR_THICKNESS: f32 = 0.0;'''
+
+[[mutant]]
+name = "the default size is 10"
+file = "crates/layout/src/control.rs"
+from = '''const DEFAULT_SIZE: u32 = 20;'''
+to = '''const DEFAULT_SIZE: u32 = 10;'''
+
+[[mutant]]
+name = "the default rows are 1"
+file = "crates/layout/src/control.rs"
+from = '''const DEFAULT_ROWS: u32 = 2;'''
+to = '''const DEFAULT_ROWS: u32 = 1;'''
+
+[[mutant]]
+name = "a check box drawn as CSS has a toggle's baseline"
+file = "crates/layout/src/control.rs"
+from = '''                    if !matches!(
+                        style.effective_appearance,
+                        EffectiveAppearance::Checkbox | EffectiveAppearance::Radio
+                    ) {
+                        return None;
+                    }'''
+to = ''''''
+
+[[mutant]]
+name = "a text field has no room for the widest character"
+file = "crates/layout/src/control.rs"
+from = '''(size as f32 * metrics.avg_char_width + metrics.max_char_adjustment).ceil()'''
+to = '''(size as f32 * metrics.avg_char_width).ceil()'''
+
+[[mutant]]
+name = "a text field's width isn't rounded up"
+file = "crates/layout/src/control.rs"
+from = '''(size as f32 * metrics.avg_char_width + metrics.max_char_adjustment).ceil()'''
+to = '''(size as f32 * metrics.avg_char_width + metrics.max_char_adjustment)'''
+
+[[mutant]]
+name = "a text field's ascent isn't rounded"
+file = "crates/layout/src/control.rs"
+from = '''                            ascent: metrics.ascent.round(),'''
+to = '''                            ascent: metrics.ascent,'''
+
+[[mutant]]
+name = "a normal line height isn't rounded"
+file = "crates/layout/src/control.rs"
+from = '''        LineHeight::Normal => metrics.ascent.round() + metrics.descent.round(),'''
+to = '''        LineHeight::Normal => metrics.ascent + metrics.descent,'''
+
+[[mutant]]
+name = "a size of 0 counts"
+file = "crates/layout/src/control.rs"
+from = '''    digits[..end].parse().ok().filter(|&n| n > 0)'''
+to = '''    digits[..end].parse().ok()'''
+
+[[mutant]]
+name = "a size with white space before it isn't one"
+file = "crates/layout/src/control.rs"
+from = '''    let digits = value.trim_start_matches(['\t', '\n', '\x0c', '\r', ' ']);'''
+to = '''    let digits = &*value;'''
+
+[[mutant]]
+name = "a text field's line isn't centered"
+file = "crates/layout/src/control.rs"
+from = '''                Some(top + (content - line_height) / 2.0 + ascent)'''
+to = '''                Some(top + ascent + 0.0 * (content - line_height))'''
+
+[[mutant]]
+name = "a slider's baseline is its bottom margin edge"
+file = "crates/layout/src/control.rs"
+from = '''            ControlKind::Slider | ControlKind::Toggle => Some(border_box.height),'''
+to = '''            ControlKind::Toggle => Some(border_box.height),
+            ControlKind::Slider => None,'''
+
+[[mutant]]
+name = "a text area's children are laid out"
+file = "crates/layout/src/control.rs"
+from = '''        self.kind == ControlKind::TextArea'''
+to = '''        false'''
+
+[[mutant]]
+name = "the average character isn't rounded up"
+file = "crates/layout/src/text.rs"
+from = '''    let avg = x.max(x.round());'''
+to = '''    let avg = x;'''
+
+[[mutant]]
+name = "every font's average is off"
+file = "crates/layout/src/text.rs"
+from = '''    if zero > 0.0 && avg > zero * 1.7 {'''
+to = '''    if zero > 0.0 && avg > zero * 0.5 {'''
+
+[[mutant]]
+name = "the widest character is of the rounded font size"
+file = "crates/layout/src/text.rs"
+from = '''    let max_char_width = x_range.map_or(0.0, |range| (range * style.font_size).round());'''
+to = '''    let max_char_width = x_range.map_or(0.0, |range| (range * style.font_size.round()).round());'''
+
+[[mutant]]
+name = "a flex or grid item keeps its own size"
+file = "crates/layout/src/lib.rs"
+from = '''                .or(b.control.as_ref().and_then(|c| c.sizing.as_ref()));
+            if let Some(sizing) = sizing {
+                b.taffy_style =
+                    replaced_taffy_style(&b.style, sizing, container.as_deref(), &self.calcs);
+            }'''
+to = '''                ;
+            if let Some(sizing) = sizing {
+                b.taffy_style =
+                    replaced_taffy_style(&b.style, sizing, container.as_deref(), &self.calcs);
+            }'''
+
+[[mutant]]
+name = "a restyled control keeps its box"
+file = "crates/layout/src/lib.rs"
+from = '''                if self.boxes[index].control.is_some() || self.boxes[index].button =>'''
+to = '''                if self.boxes[index].button =>'''
+
+[[mutant]]
+name = "a text area's changed children are collected"
+file = "crates/layout/src/lib.rs"
+from = '''        if self.boxes[index]
+            .control
+            .as_ref()
+            .is_some_and(control::Control::ignores_children)
+        {
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a flex container doesn't see a text field's baseline"
+file = "crates/layout/src/lib.rs"
+from = '''            output.baselines.first =
+                control.baseline(SizeF::new(output.size.width, output.size.height), &edge);'''
+to = '''            let _ = &edge;'''
+
+[[mutant]]
+name = "a toggle's baseline is its bottom margin edge"
+file = "crates/layout/src/lib.rs"
+from = '''        let baseline = if let Some(control) = &self.boxes[index].control {
+            control.baseline(border_box, &edge)
+        } else if'''
+to = '''        let baseline = if'''
+
+[[mutant]]
+name = "an empty button's baseline is its bottom margin edge"
+file = "crates/layout/src/lib.rs"
+from = '''            self.last_baseline(index).or(Some(
+                edge.border.top + edge.padding.top + self.boxes[index].content_shift,
+            ))'''
+to = '''            self.last_baseline(index)'''
+
+[[mutant]]
+name = "a button's content isn't centered"
+file = "crates/layout/src/lib.rs"
+from = '''                self.center_content(index, inset, &output, safe);'''
+to = '''                let _ = (inset, &output, safe);'''
+
+[[mutant]]
+name = "a button's content that doesn't fit goes above it"
+file = "crates/layout/src/lib.rs"
+from = '''if safe { shift.max(0.0) } else { shift }'''
+to = '''shift'''
+
+[[mutant]]
+name = "a button's lines take no room"
+file = "crates/layout/src/lib.rs"
+from = '''            Some(inline) => inline.lines_height().unwrap_or(0.0),'''
+to = '''            Some(_) => 0.0,'''
+
+[[mutant]]
+name = "an inline control has no box"
+file = "crates/layout/src/lib.rs"
+from = '''fn is_atomic_when_inline(element: NodeRef<'_>) -> bool {
+    is_replaced(element)
+        ||'''
+to = '''fn is_atomic_when_inline(element: NodeRef<'_>) -> bool {
+    is_replaced(element)
+        && false &&'''
+
+[[mutant]]
+name = "a size change keeps the box"
+file = "crates/dom/src/scope.rs"
+from = '''                name.is_attr(&local_name!("size")) || name.is_attr(&local_name!("type"))'''
+to = '''                name.is_attr(&local_name!("type"))'''
+
+[[mutant]]
+name = "a cols change keeps the box"
+file = "crates/dom/src/scope.rs"
+from = '''                name.is_attr(&local_name!("cols")) || name.is_attr(&local_name!("rows"))'''
+to = '''                name.is_attr(&local_name!("rows"))'''

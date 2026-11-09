@@ -1,0 +1,57 @@
+# Mutation test of step 2c (createContextualFragment):
+# python3 scripts/test.py mutate rfcs/0037-range/mutants-2c.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "ranges::"]
+timeout = 600
+
+[[mutant]]
+name = "the context is always a body"
+file = "crates/dom_api/src/range.rs"
+from = '''        Some(element) if !crate::markup::needs_body_context(cx, &element) => element,'''
+to = '''        Some(element) if false && !crate::markup::needs_body_context(cx, &element) => element,'''
+
+[[mutant]]
+name = "a text node's start has no context element"
+file = "crates/dom_api/src/range.rs"
+from = '''            NodeKind::Text | NodeKind::CdataSection | NodeKind::Comment => node'''
+to = '''            NodeKind::CdataSection | NodeKind::Comment => node'''
+
+[[mutant]]
+name = "an html element is its own context"
+file = "crates/dom_api/src/range.rs"
+from = '''        Some(element) if !crate::markup::needs_body_context(cx, &element) => element,'''
+to = '''        Some(element) => element,'''
+test = ["python3", "scripts/test.py", "wpt", "domparsing/createContextualFragment.html"]
+
+[[mutant]]
+name = "the fragment's custom elements not constructed"
+file = "crates/dom_api/src/range.rs"
+from = '''    cx.mutate().try_to_upgrade_tree(&fragment);'''
+to = ''''''
+
+[[mutant]]
+name = "the fragment's scripts stay started"
+file = "crates/dom_api/src/range.rs"
+from = '''                already_started: false,
+                parser_inserted: false,'''
+to = '''                already_started: true,
+                parser_inserted: false,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "inserted_scripts::contextual"]
+
+[[mutant]]
+name = "the fragment's scripts stay the parser's"
+file = "crates/dom_api/src/range.rs"
+from = '''                already_started: false,
+                parser_inserted: false,'''
+to = '''                already_started: false,
+                parser_inserted: true,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "inserted_scripts::contextual"]
+
+[[mutant]]
+name = "only top-level scripts found"
+file = "crates/dom_api/src/range.rs"
+from = '''            stack.extend(node.children());
+        }
+        found'''
+to = '''        }
+        found'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "inserted_scripts::contextual"]

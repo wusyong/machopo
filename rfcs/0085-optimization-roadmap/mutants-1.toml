@@ -1,0 +1,154 @@
+# Stage 1: both browsers' samples by category (`categories.py`), a
+# Chromium's samples (`--sample --browser chrome`: its renderer main thread
+# by the tid its trace gives, on CLOCK_MONOTONIC, V8's perf maps without the
+# sandbox and gone after), and `categories.md`. The tool's tests: the
+# categories' (stacks of both browsers' shapes), the comparison's, and a
+# Chromium sampled on the fake `frames` suite (Fedora's, installed).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "python3", "scripts/bench/speedometer/speedometer_test.py", "CategoryTests", "SampleReadingTests", "ChromeSampleTests"]
+timeout = 600
+
+[[mutant]]
+name = "categories: V8's own frames don't look outward"
+file = "scripts/bench/speedometer/categories.py"
+from = '''        if found == V8:
+            in_v8 = True'''
+to = '''        if found == V8:
+            return "V8 API"'''
+
+[[mutant]]
+name = "categories: under JS, V8's frames are V8 API's"
+file = "scripts/bench/speedometer/categories.py"
+from = '''        elif found == "JS":
+            return "JS"'''
+to = '''        elif found == "JS":
+            return "V8 API" if in_v8 else "JS"'''
+
+[[mutant]]
+name = "categories: an allocation is its own"
+file = "scripts/bench/speedometer/categories.py"
+from = '''    if PASS_ANY.search(frame):
+        return PASS'''
+to = '''    if PASS_ANY.search(frame):
+        return "other"'''
+
+[[mutant]]
+name = "categories: Rust's containers are their own"
+file = "scripts/bench/speedometer/categories.py"
+from = '''    if PASS_RUST.search(frame):
+        return PASS'''
+to = '''    if PASS_RUST.search(frame):
+        return "other"'''
+
+[[mutant]]
+name = "categories: WTF's strings and PartitionAlloc are their own"
+file = "scripts/bench/speedometer/categories.py"
+from = '''    if PASS_CXX.search(name):
+        return PASS'''
+to = '''    if PASS_CXX.search(name):
+        return "other"'''
+
+[[mutant]]
+name = "categories: Skia's frames are paint's under a canvas too"
+file = "scripts/bench/speedometer/categories.py"
+from = '''            return "canvas" if found == "canvas" else "paint"'''
+to = '''            return "paint"'''
+
+[[mutant]]
+name = "categories: the font builder is text's"
+file = "scripts/bench/speedometer/categories.py"
+from = '''MatchResult|MatchedProperties\w*|\w*Cascade\w*|FontBuilder|'''
+to = '''MatchResult|MatchedProperties\w*|\w*Cascade\w*|'''
+
+[[mutant]]
+name = "categories: the sampling's own counts in the shares"
+file = "scripts/bench/speedometer/categories.py"
+from = '''        whole = sum(count for found, count in counts.items() if found != SAMPLING)'''
+to = '''        whole = sum(counts.values())'''
+
+[[mutant]]
+name = "categories: a Rust frame naming rusty_v8's types is V8's"
+file = "scripts/bench/speedometer/categories.py"
+from = '''    if frame.startswith("<"):
+        return False'''
+to = '''    if frame.startswith("<") and False:
+        return False'''
+
+[[mutant]]
+name = "categories: a C++ name keeps its qualifiers"
+file = "scripts/bench/speedometer/categories.py"
+from = '''    name = re.sub(r"(\s+(const|volatile|&&|&|noexcept))+$", "", name)'''
+to = '''    name = name'''
+
+[[mutant]]
+name = "categories: V8's GC by a type in the arguments"
+file = "scripts/bench/speedometer/categories.py"
+from = '''        return "GC" if V8_GC.search(bare(frame)) else V8'''
+to = '''        return "GC" if V8_GC.search(frame) else V8'''
+
+[[mutant]]
+name = "categories: a suite's catching up takes kun's time in the category, not the gap"
+file = "scripts/bench/speedometer/categories.py"
+from = '''    return geomean([(kun[s].time_ms - sum(kun[s].by_category[c] - chrome[s].by_category[c] for c in categories))'''
+to = '''    return geomean([(kun[s].time_ms - sum(kun[s].by_category[c] for c in categories))'''
+
+[[mutant]]
+name = "categories: a suite's gaps listed when kun is ahead too"
+file = "scripts/bench/speedometer/categories.py"
+from = '''                                           for c in CATEGORIES), reverse=True)[:3] if g >= 0.05]'''
+to = '''                                           for c in CATEGORIES), reverse=True)[:3]]'''
+
+[[mutant]]
+name = "speedometer: the Chromium's time over Chrome for Testing's turned over"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''    ratio = {name: times["chromium"][name] / times["chrome"][name]'''
+to = '''    ratio = {name: times["chrome"][name] / times["chromium"][name]'''
+
+[[mutant]]
+name = "speedometer: the report written without a Chromium's samples"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''                                        ("a Chromium's samples (--sample --browser chrome)", folded["chrome"]),'''
+to = '''                                        ("a Chromium's samples (--sample --browser chrome)", True),'''
+
+[[mutant]]
+name = "speedometer: a thread's samples by its name though a tid is given"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''        if sample and (int(sample["tid"]) == tid if tid is not None else sample["comm"] == thread):'''
+to = '''        if sample and sample["comm"] == thread:'''
+
+[[mutant]]
+name = "common: the marked thread the first one described"
+file = "scripts/bench/common.py"
+from = '''    return next((descriptors[track] for track, _ in marked.most_common() if track in descriptors), None)'''
+to = '''    return next(iter(descriptors.values()), None) if marked else None'''
+
+[[mutant]]
+name = "speedometer: Chrome's samples moved to CLOCK_BOOTTIME"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''            taken, _ = perf_samples(samples, MAIN_THREAD, tid=thread[1], monotonic=True)'''
+to = '''            taken, _ = perf_samples(samples, MAIN_THREAD, tid=thread[1])'''
+
+[[mutant]]
+name = "speedometer: Chromium sampled in its sandbox"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''            arguments = ("--no-sandbox", f"--js-flags={V8_SAMPLED_FLAGS.format(log)}")'''
+to = '''            arguments = (f"--js-flags={V8_SAMPLED_FLAGS.format(log)}",)'''
+
+[[mutant]]
+name = "speedometer: the run's perf maps left"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''            for path in set(Path("/tmp").glob("perf-*.map")) - maps:
+                path.unlink(missing_ok=True)'''
+to = '''            for path in set():
+                path.unlink(missing_ok=True)'''
+
+[[mutant]]
+name = "speedometer: the Chromium not timed first"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''    timed = time_chromium(binary, names, max(args.iterations, 10))'''
+to = '''    timed = {name: None for name in names}'''
+
+[[mutant]]
+name = "speedometer: Chromium sampled with the default trace categories"
+file = "scripts/bench/speedometer/speedometer.py"
+from = '''                                          categories=(USER_TIMING,), binary=binary, wrapper=wrapper,'''
+to = '''                                          binary=binary, wrapper=wrapper,'''

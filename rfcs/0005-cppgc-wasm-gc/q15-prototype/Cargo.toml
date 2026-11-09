@@ -1,0 +1,16 @@
+# A prototype for RFC 0001 (Q15), not part of machopo's workspace. It uses Q16's
+# wasm objects (`../q16-prototype/src/wasm.rs`) and needs our rusty_v8
+# fork's `WeakObjectTable` (C++, not released yet), so link a V8 built from
+# the fork:
+#   RUSTY_V8_ARCHIVE=../../../../third_party/rusty_v8_artifacts \
+#     CARGO_TARGET_DIR=../../../target cargo run --release -- all
+[workspace]
+
+[package]
+name = "q15-prototype"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+v8 = { version = "=152.2.0", path = "../../../../third_party/rusty_v8", features = ["v8_enable_pointer_compression"] }

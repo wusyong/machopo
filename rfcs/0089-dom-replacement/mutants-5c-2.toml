@@ -1,0 +1,123 @@
+# Stage 5c-2: DevTools' Network, initiators and resources on the DOM's
+# requests.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p renderer --lib && cargo test -q -p dom_next --test it initiators:: && cargo test -q -p html --test it next:: && cargo test -q -p dom_js_next --test it devtools:: && cargo test -q -p shell --test it devtools"]
+timeout = 1500
+
+[[mutant]]
+name = "renderer: no request told to Network"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        let request_id = self.next_request_id.next();
+        if self.network_agent.enabled() {'''
+to = '''        let request_id = self.next_request_id.next();
+        if false {'''
+
+[[mutant]]
+name = "renderer: a script's stack not its load's initiator"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''if let Some(stack) = stack.filter(|_| stacks) {'''
+to = '''if let Some(stack) = stack.filter(|_| false) {'''
+
+[[mutant]]
+name = "renderer: a parser line taken again"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''let line = next.parser_lines.remove(element)?;'''
+to = '''let line = next.parser_lines.get(element).copied()?;'''
+
+[[mutant]]
+name = "renderer: the parser line not zero-based"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                    line: line.saturating_sub(1),'''
+to = '''                    line,'''
+
+[[mutant]]
+name = "renderer: a subresource not recorded for getResourceTree"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            Rc::make_mut(&mut next.resources).add_result(kind, url, result);'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: a cancelled fetch not told"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        self.network_agent.did_cancel(request_id);'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: frameAttached without its stack"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                        if self.page_agent.any_enabled()
+                            && let Some(stack) ='''
+to = '''                        if false
+                            && let Some(stack) ='''
+
+[[mutant]]
+name = "renderer: the stacks no load took kept"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            self.clear_next_request_stacks();'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: a redirect not told"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.network_agent.did_redirect(request_id, redirect);'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: a response not told"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.network_agent.did_finish(request_id, &result);'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: an iframe's document request not its own loader"
+file = "crates/renderer/src/render_thread/network_agent.rs"
+from = '''        let loader_id = if request.destination == RequestDestination::Iframe {'''
+to = '''        let loader_id = if false {'''
+
+[[mutant]]
+name = "renderer: stacks still wanted after the last session detaches"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        self.devtools_sessions.retain(|known| known != session);
+        self.update_next_stacks_wanted();
+    }'''
+to = '''        self.devtools_sessions.retain(|known| known != session);
+    }'''
+
+[[mutant]]
+name = "dom_next: the last asker's stack wins"
+file = "crates/dom_next/src/initiator.rs"
+from = '''            kept.entry(asker).or_insert_with(|| stack.clone());'''
+to = '''            kept.insert(asker, stack.clone());'''
+
+[[mutant]]
+name = "dom_next: what the parser connects noted as script's"
+file = "crates/dom_next/src/initiator.rs"
+from = '''        (stacks.requests.get() || frame && stacks.frames.get())
+            && self.changes.parser_line.get() == 0'''
+to = '''        (stacks.requests.get() || frame && stacks.frames.get())'''
+
+[[mutant]]
+name = "dom_next: a fetch() not noted"
+file = "crates/dom_next/src/fetch.rs"
+from = '''            self.asked_for_load(crate::StackAsker::Fetch(start.id));'''
+to = ''''''
+
+[[mutant]]
+name = "dom_next: an image not noted"
+file = "crates/dom_next/src/image.rs"
+from = '''        self.element_asked_for_load(element, false);'''
+to = ''''''
+
+[[mutant]]
+name = "dom_js_next: no stack captured after the operation"
+file = "crates/dom_js_next/src/state.rs"
+from = '''    if microtasks.stacks() {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "html: the parser's insertions not the parser's"
+file = "crates/html/src/next.rs"
+from = '''            // for.
+            cx.set_parser_line(line);
+            insert(cx);'''
+to = '''            // for.
+            insert(cx);'''

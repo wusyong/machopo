@@ -1,0 +1,321 @@
+# Stage 4g-1a: on the new DOM, an <img>'s requests (current and pending), the list of
+# available images shared by the DOM's documents, load and error, decode(), the
+# replaced box, and background images (fetched, drawn once they come, before load).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it images && cargo test -q -p dom_js_next --test it images"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: no image available at once"
+file = "crates/dom_next/src/image.rs"
+from = '''let available = selected.as_ref().and_then(|url| self.available_image(url));'''
+to = '''let available = selected.as_ref().and_then(|url| self.available_image(url)).filter(|_| false);'''
+
+[[mutant]]
+name = "dom: the queued microtask not done with"
+file = "crates/dom_next/src/image.rs"
+from = '''            // An update's microtask queued before is done with.
+            loader.microtask_queued.set(false);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a microtask done with runs anyway"
+file = "crates/dom_next/src/image.rs"
+from = '''        if !loader.microtask_queued.replace(false) {
+            return;
+        }'''
+to = '''        loader.microtask_queued.set(false);'''
+
+[[mutant]]
+name = "dom: stale decodes not rejected"
+file = "crates/dom_next/src/image.rs"
+from = '''        self.reject_decodes(element, &stale);
+'''
+to = '''        let _ = stale;
+'''
+
+[[mutant]]
+name = "dom: no source keeps the image"
+file = "crates/dom_next/src/image.rs"
+from = '''        if self.image_source(element).is_none() {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "dom: the microtask's bit not set"
+file = "crates/dom_next/src/image.rs"
+from = '''.set(self.changes.microtasks.get() | crate::Microtasks::IMAGES);'''
+to = '''.set(self.changes.microtasks.get());'''
+
+[[mutant]]
+name = "dom: no src fires error"
+file = "crates/dom_next/src/image.rs"
+from = '''                if has_src && has_window {'''
+to = '''                if has_window {'''
+
+[[mutant]]
+name = "dom: no pending request"
+file = "crates/dom_next/src/image.rs"
+from = '''                    if requests.current.state == ImageRequestState::CompletelyAvailable {
+                        requests
+                            .pending'''
+to = '''                    if false {
+                        requests
+                            .pending'''
+
+[[mutant]]
+name = "dom: a document with no window fetches"
+file = "crates/dom_next/src/image.rs"
+from = '''                if !has_window {
+                    self.reject_decodes(element, &upcoming);
+                    return;
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a fetch's waiters lost"
+file = "crates/dom_next/src/image.rs"
+from = '''                Some(CacheEntry::Loading(waiting)) => waiting,'''
+to = '''                Some(CacheEntry::Loading(_)) => Vec::new(),'''
+
+[[mutant]]
+name = "dom: a failed image stays in the list"
+file = "crates/dom_next/src/image.rs"
+from = '''            if let Some(image) = &image {
+                cache
+                    .entries
+                    .insert(url.to_owned(), CacheEntry::Loaded(image.clone()));
+            }'''
+to = '''            if let Some(image) = &image {
+                cache
+                    .entries
+                    .insert(url.to_owned(), CacheEntry::Loaded(image.clone()));
+            } else {
+                cache.entries.insert(url.to_owned(), CacheEntry::Loading(Vec::new()));
+            }'''
+
+[[mutant]]
+name = "dom: the pending request never done"
+file = "crates/dom_next/src/image.rs"
+from = '''            if requests.pending.as_ref().is_some_and(waiting) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "dom: a done request queues no event"
+file = "crates/dom_next/src/image.rs"
+from = '''        self.queue_image_task(element, ImageTaskAction::Event { load, generation });'''
+to = '''        let _ = (load, generation);'''
+
+[[mutant]]
+name = "dom: a done request's boxes not built again"
+file = "crates/dom_next/src/image.rs"
+from = '''        self.set_needs_reattach(element);
+        let generation = loader.generation.get();'''
+to = '''        let generation = loader.generation.get();'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p layout --test it next_update::an_image"]
+
+[[mutant]]
+name = "dom: nothing delays the load event"
+file = "crates/dom_next/src/image.rs"
+from = '''        if delays {
+            self.change_load_delay(document, true);'''
+to = '''        if false {
+            self.change_load_delay(document, true);'''
+
+[[mutant]]
+name = "dom: an older event fires"
+file = "crates/dom_next/src/image.rs"
+from = '''        if loader.generation.get() != generation {
+            return None;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: decode before the microtask is the current's"
+file = "crates/dom_next/src/image.rs"
+from = '''            if queued {
+                requests.upcoming.push(promise);'''
+to = '''            if false {
+                requests.upcoming.push(promise);'''
+
+[[mutant]]
+name = "dom: an available decode never ready"
+file = "crates/dom_next/src/image.rs"
+from = '''                    requests.ready.push((promise, requests.serial));
+                    Some(ImageTaskAction::Decode { promise })'''
+to = '''                    Some(ImageTaskAction::Decode { promise })'''
+
+[[mutant]]
+name = "dom: a replaced current's ready decode resolves"
+file = "crates/dom_next/src/image.rs"
+from = '''                serial == requests.serial
+                    && '''
+to = '''                '''
+
+[[mutant]]
+name = "dom: loading drawn as failed"
+file = "crates/dom_next/src/image.rs"
+from = '''                (ImageRequestState::Unavailable, _) => ImageState::Loading,'''
+to = '''                (ImageRequestState::Unavailable, _) => ImageState::Failed,'''
+
+[[mutant]]
+name = "dom: an img's attributes not looked at"
+file = "crates/dom_next/src/form.rs"
+from = '''        if kind == 0 {
+            self.image_attribute_changed(element, local);'''
+to = '''        if kind != 0 {
+            self.image_attribute_changed(element, local);'''
+
+[[mutant]]
+name = "dom: src isn't a relevant attribute"
+file = "crates/dom_next/build.rs"
+from = '''        ("src", 32),
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: adoption doesn't update"
+file = "crates/dom_next/src/lib.rs"
+from = '''            self.image_adopted(at);
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: complete ignores the pending request"
+file = "crates/dom_api_next/src/image.rs"
+from = '''    if cx.image_has_pending_request(this) || cx.image_update_queued(this) {'''
+to = '''    if cx.image_update_queued(this) {'''
+
+[[mutant]]
+name = "api: currentSrc while it loads"
+file = "crates/dom_api_next/src/image.rs"
+from = '''        .filter(|(state, _)| *state != ImageRequestState::Unavailable)
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: width is the natural height"
+file = "crates/dom_api_next/src/image.rs"
+from = '''    if width { natural.width } else { natural.height }'''
+to = '''    if width { natural.height } else { natural.height }'''
+
+[[mutant]]
+name = "api: a load rejects the decodes"
+file = "crates/dom_api_next/src/image.rs"
+from = '''            let error = (!event.load).then(decoding_error);'''
+to = '''            let error = event.load.then(decoding_error);'''
+
+[[mutant]]
+name = "api: crossOrigin always anonymous"
+file = "crates/dom_api_next/src/image.rs"
+from = '''eq_ignore_ascii_case("use-credentials")'''
+to = '''eq_ignore_ascii_case("x")'''
+
+[[mutant]]
+name = "api: Image() without a height"
+file = "crates/dom_api_next/src/image.rs"
+from = '''    if let Some(height) = height {
+        cx.set_attribute(image, "height", &height.to_string());
+    }'''
+to = '''    let _ = height;'''
+
+[[mutant]]
+name = "js: the images' microtask not queued"
+file = "crates/dom_js_next/src/state.rs"
+from = '''    if microtasks.images() {
+        queue_image_updates(scope);'''
+to = '''    if false {
+        queue_image_updates(scope);'''
+
+[[mutant]]
+name = "js: a rejection resolves"
+file = "crates/dom_js_next/src/front.rs"
+from = '''            Some(reason) => resolver.reject(scope, reason),'''
+to = '''            Some(reason) => resolver.resolve(scope, reason),'''
+
+[[mutant]]
+name = "renderer: load doesn't wait for the images"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        if !self.next_images.is_empty()
+            ||'''
+to = '''        if false
+            ||'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "python3 scripts/test.py reftest --next-dom backgrounds/ images/ tables/t5-legacy-attributes.html"]
+
+[[mutant]]
+name = "renderer: no style before load"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        let document = next.document.clone();
+        if let Some((dom, frame)) = next_frame(&mut self.next_engine) {
+            dom.mutate(|cx| frame.update_style_and_layout(cx));'''
+to = '''        let document = next.document.clone();
+        if let Some((dom, frame)) = next_frame(&mut self.next_engine) {
+            let _ = (dom, frame);'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "python3 scripts/test.py reftest --next-dom backgrounds/ images/ tables/t5-legacy-attributes.html"]
+
+[[mutant]]
+name = "renderer: the elements showing it not painted again"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''                paint_controller.invalidate(showing);'''
+to = '''                let _ = showing;'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p renderer --lib a_backgrounds_image"]
+
+[[mutant]]
+name = "renderer: an image that came not looked for"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        if std::mem::take(&mut self.images_came) {'''
+to = '''        if false {'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p renderer --lib a_backgrounds_image"]
+
+[[mutant]]
+name = "renderer: an awaited background forgotten"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''                None => self.awaited_backgrounds.entry(url).or_default().push(element),'''
+to = '''                None => {}'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p renderer --lib a_backgrounds_image"]
+
+[[mutant]]
+name = "renderer: <style>'s url() unresolved"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            style.set_url_context(Some(style::UrlContext::new(base, &referrer)));'''
+to = '''            let _ = (base, referrer);'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p renderer --lib a_backgrounds_image"]
+
+[[mutant]]
+name = "style: no background urls"
+file = "crates/style_next/src/lib.rs"
+from = '''        if style.display != Display::None {
+            let mut urls'''
+to = '''        if false {
+            let mut urls'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p renderer --lib a_backgrounds_image"]
+
+[[mutant]]
+name = "style: hints' url() unresolved"
+file = "crates/style_next/src/hints.rs"
+from = '''            set.resolve_urls(base);'''
+to = '''            let _ = base;'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "python3 scripts/test.py reftest --next-dom backgrounds/ images/ tables/t5-legacy-attributes.html"]
+
+[[mutant]]
+name = "dom: a style attribute's url() unresolved"
+file = "crates/dom_next/src/style.rs"
+from = '''            block.resolve_urls(&css::UrlContext::new(base, &referrer));'''
+to = '''            let _ = (base, referrer);'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p renderer --lib a_backgrounds_image"]
+
+[[mutant]]
+name = "layout: an inline img isn't atomic"
+file = "crates/layout/src/next.rs"
+from = '''        local::BUTTON,
+        local::IMG,
+'''
+to = '''        local::BUTTON,
+'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p layout --test it next_update::an_image"]
+
+[[mutant]]
+name = "layout: an img isn't replaced"
+file = "crates/layout/src/next.rs"
+from = '''        if dom.is_img(element) {'''
+to = '''        if false {'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p layout --test it next_update::an_image"]

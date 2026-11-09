@@ -1,0 +1,253 @@
+# Mutation test of stage 3 (@media, @supports and the sheets' media in the
+# cascade, their evaluation again in a new environment; the CSSOM of
+# group rules and media lists; matchMedia):
+# python3 scripts/test.py mutate rfcs/0041-cascade-features/mutants-3.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "media::", "stylesheet::"]
+timeout = 900
+
+# css: media queries.
+
+[[mutant]]
+name = "a blank media list is not all"
+file = "crates/css/src/media.rs"
+from = '''        if input.is_exhausted() {
+            return Self(Vec::new());
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "all and is kept before a condition"
+file = "crates/css/src/media.rs"
+from = '''            (Some(name), Some(condition)) if name == "all" && !self.not && !self.only => {'''
+to = '''            (Some(name), Some(condition)) if false => {'''
+
+[[mutant]]
+name = "a condition's parentheses are dropped"
+file = "crates/css/src/media.rs"
+from = '''                    return Ok(Self::Group(Box::new(condition)));'''
+to = '''                    return Ok(condition);'''
+
+[[mutant]]
+name = "appendMedium appends what is there"
+file = "crates/css/src/media.rs"
+from = '''        if self.queries().any(|existing| existing == text) {
+            return None;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "deleteMedium finds what isn't there"
+file = "crates/css/src/media.rs"
+from = '''        (kept.len() < self.0.len()).then_some(Self(kept))'''
+to = '''        Some(Self(kept))'''
+
+# css: rules and their sets.
+
+[[mutant]]
+name = "a false @supports applies"
+file = "crates/css/src/rule_set.rs"
+from = '''                    if supports.supported {'''
+to = '''                    if true {'''
+
+[[mutant]]
+name = "every @media applies"
+file = "crates/css/src/rule_set.rs"
+from = '''                    if self.match_media(&media.media, environment) {'''
+to = '''                    if self.match_media(&media.media, environment) || true {'''
+
+[[mutant]]
+name = "a set forgets its media queries"
+file = "crates/css/src/rule_set.rs"
+from = '''        self.media_results.push((media.clone(), matches));'''
+to = ''''''
+
+[[mutant]]
+name = "a set's media queries never come out otherwise"
+file = "crates/css/src/rule_set.rs"
+from = '''            .any(|(media, matched)| media.matches(environment) != *matched)'''
+to = '''            .any(|_| false)'''
+
+[[mutant]]
+name = "a group rule's rules aren't indented"
+file = "crates/css/src/stylesheet.rs"
+from = '''            out.push_str("  ");'''
+to = ''''''
+
+[[mutant]]
+name = "a condition keeps its white space"
+file = "crates/css/src/stylesheet.rs"
+from = '''                    simplify_white_space(input.slice_from(start)),'''
+to = '''                    input.slice_from(start).trim().to_owned(),'''
+
+[[mutant]]
+name = "adopted contents keep their set in any environment"
+file = "crates/css/src/stylesheet.rs"
+from = '''            Some(set) if !set.did_media_query_results_change(environment) => set.clone(),'''
+to = '''            Some(set) => set.clone(),'''
+
+[[mutant]]
+name = "a group rule's insertRule doesn't check the index"
+file = "crates/css/src/stylesheet.rs"
+from = '''    if index > rules.len() {
+        return Err(InsertRuleError::IndexSize);
+    }
+    let rule = parse_rule(rule).ok_or(InsertRuleError::Syntax)?;'''
+to = '''    let rule = parse_rule(rule).ok_or(InsertRuleError::Syntax)?;
+    if index > rules.len() {
+        return Err(InsertRuleError::Syntax);
+    }'''
+
+# style: the engine.
+
+[[mutant]]
+name = "a sheet's own media is ignored"
+file = "crates/style/src/lib.rs"
+from = '''                    .is_none_or(|media| rule_set.match_media(media, &environment))'''
+to = '''                    .is_none_or(|_| true)'''
+
+[[mutant]]
+name = "a <style>'s media is ignored"
+file = "crates/style/src/lib.rs"
+from = '''        sheets.push(SheetText {
+            css: text.into(),
+            url: None,
+            media: media(),
+        });'''
+to = '''        sheets.push(SheetText {
+            css: text.into(),
+            url: None,
+            media: None,
+        });'''
+
+[[mutant]]
+name = "a new environment doesn't make the sets again"
+file = "crates/style/src/lib.rs"
+from = '''        if media_changed {
+            self.media_changed.set(true);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "only viewport units ask for a recalc"
+file = "crates/style/src/lib.rs"
+from = '''        (new_viewport && self.viewport_used.get()) || media_changed'''
+to = '''        new_viewport && self.viewport_used.get()'''
+
+[[mutant]]
+name = "an adopted sheet's media is ignored"
+file = "crates/style/src/lib.rs"
+from = '''                    let matched = media.matches(&environment);'''
+to = '''                    let matched = true;'''
+
+[[mutant]]
+name = "an adopted sheet's media isn't evaluated again"
+file = "crates/style/src/lib.rs"
+from = '''                        media.matches(&environment) != *matched
+                            || rule_set'''
+to = '''                        rule_set'''
+
+# dom: the CSSOM objects.
+
+[[mutant]]
+name = "a rule in a group rule doesn't reach its sheet"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''                self.set_css_rule(&parent, changed);'''
+to = '''                let _ = (parent, changed);'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "css_style_sheet::"]
+
+[[mutant]]
+name = "a rule taken out keeps its parent rule"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''        rule.object().parent_rule.clear(self);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "css_style_sheet::"]
+
+[[mutant]]
+name = "a rule in a group rule has no sheet"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''                CssRuleParent::Rule(parent) => rule = parent,'''
+to = '''                CssRuleParent::Rule(_) => return None,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "css_style_sheet::"]
+
+[[mutant]]
+name = "a list with listeners isn't kept"
+file = "crates/dom/src/scope.rs"
+from = '''        if let EventTarget::Plain(target) = target {
+            self.keep_listened_media_query_list(target);
+        }'''
+to = '''        let _ = target;'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "media_query_lists::"]
+
+# dom_api: the CSSOM and matchMedia.
+
+[[mutant]]
+name = "a media rule's media list changes nothing"
+file = "crates/dom_api/src/css_style_sheet.rs"
+from = '''            let changed = cx.read().css_rule_contents(&rule).with_media(media);
+            cx.mutate().set_css_rule(&rule, changed);'''
+to = '''            let _ = (rule, media);'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "css_style_sheet::"]
+
+[[mutant]]
+name = "a constructed sheet's media is ignored"
+file = "crates/dom_api/src/css_style_sheet.rs"
+from = '''        Arc::new(MediaQueryList::parse(options.media.as_str())),'''
+to = '''        Arc::new(MediaQueryList::parse("")),'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "css_style_sheet::"]
+
+[[mutant]]
+name = "a list's new result isn't kept"
+file = "crates/dom_api/src/media_query_list.rs"
+from = '''    cx.mutate().set_media_query_list_matches(list, matches);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "media_query_list::"]
+
+[[mutant]]
+name = "change fires though nothing changed"
+file = "crates/dom_api/src/media_query_list.rs"
+from = '''        .filter(|list| update_matches(cx, list))'''
+to = '''        .filter(|list| {
+            update_matches(cx, list);
+            true
+        })'''
+test = ["python3", "scripts/test.py", "scenarios", "resize"]
+
+# renderer: the rendering update and the environment.
+
+[[mutant]]
+name = "the rendering update reports no media query changes"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.report_media_query_changes();
+'''
+to = ''''''
+test = ["python3", "scripts/test.py", "scenarios", "resize"]
+
+[[mutant]]
+name = "the style sees the viewport and device scale factor late"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        self.take_environment(viewport, device_scale_factor);
+        self.update_own_style(scope);'''
+to = '''        self.update_own_style(scope);
+        self.take_environment(viewport, device_scale_factor);'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "frame_view::tests::a_new_environment"]
+
+# dom_js: an error with no position, which a listener of matchMedia's
+# change could throw.
+
+[[mutant]]
+name = "a position-less error's column overflows"
+file = "crates/dom_js/src/exception.rs"
+from = '''            .and_then(|m| m.get_start_column().checked_add(1));'''
+to = '''            .map(|m| m.get_start_column() + 1);'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "dispatch::a_listener_that_isnt"]
+
+[[mutant]]
+name = "the main frame's style waits for a layout to see the window"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        let own_viewport = if self.owner.is_none() {
+            viewport
+        } else {
+            self.viewport
+        };'''
+to = '''        let own_viewport = self.viewport;'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "frame_view::tests::a_style_update"]

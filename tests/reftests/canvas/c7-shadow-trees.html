@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<title>C7: canvases in shadow trees are drawn into the page with their hosts: one in an open shadow root, one in a closed shadow root of a custom element; nothing reads their pixels back</title>
+<link rel="match" href="c7-shadow-trees-ref.html">
+<style>html, body { margin: 0 } div, x-chart { display: block }</style>
+<div id="open"></div>
+<x-chart></x-chart>
+<script>
+  function canvas(color) {
+    const c = document.createElement("canvas");
+    c.width = 100;
+    c.height = 40;
+    c.style.display = "block";
+    const ctx = c.getContext("2d");
+    ctx.fillStyle = color;
+    ctx.fillRect(10, 10, 80, 20);
+    return c;
+  }
+  document.getElementById("open").attachShadow({ mode: "open" }).append(canvas("lime"));
+  customElements.define("x-chart", class extends HTMLElement {
+    constructor() {
+      super();
+      this.attachShadow({ mode: "closed" }).append(canvas("blue"));
+    }
+  });
+</script>

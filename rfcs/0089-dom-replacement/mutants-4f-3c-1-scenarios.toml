@@ -1,0 +1,31 @@
+# Stage 4f-3c-1: the new DOM's frame's caret (drawn, only while the page
+# has the focus, blinking, painted again as it moves), which only the
+# scenarios see.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "python3 scripts/test.py scenarios --next-dom caret caret-inactive"]
+timeout = 3000
+
+[[mutant]]
+name = "renderer: no caret"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''                    caret: self.caret.filter(|_| self.caret_shown),'''
+to = '''                    caret: None,'''
+
+[[mutant]]
+name = "renderer: a caret without the page's focus"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            } else if page && cx.attribute_value_by_id(control, dom_next::names::local::READONLY).is_none() {'''
+to = '''            } else if cx.attribute_value_by_id(control, dom_next::names::local::READONLY).is_none() {'''
+
+[[mutant]]
+name = "renderer: the caret never blinks"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        self.caret_shown = !self.caret_shown;
+'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: a caret that moved not painted"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            let blocks = [self.caret, caret].into_iter().flatten().map(|c| c.block);
+            self.paint_controller.invalidate_caret(blocks);'''
+to = '''            let _ = [self.caret, caret];'''

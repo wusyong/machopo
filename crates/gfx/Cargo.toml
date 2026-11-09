@@ -1,0 +1,22 @@
+[package]
+name = "gfx"
+description = "Geometry and color primitives (//ui/gfx)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+base.workspace = true
+kurbo.workspace = true
+# `NodeIdHashMap`, as the DOMs hash their ids.
+rustc-hash.workspace = true
+serde.workspace = true

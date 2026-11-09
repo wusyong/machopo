@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<title>Position 1: overlapping avatars stacked by z-index, and a badge moved off its button by position: relative, over the block after it</title>
+<link rel="match" href="p1-avatars-and-badge-ref.html">
+<style>
+  html, body { margin: 0 }
+  .avatars { height: 40px }
+  .avatar { position: relative; width: 40px; height: 40px }
+  .avatar + .avatar { margin-top: -40px }
+  .button { margin-top: 10px; width: 80px; height: 30px; background-color: gray }
+  .badge { position: relative; top: 22px; left: 72px; width: 16px; height: 16px;
+           background-color: red }
+</style>
+<!-- In the same place, moved 30px apart; the first on top. -->
+<div class="avatars">
+  <div class="avatar" style="z-index: 3; background-color: red"></div>
+  <div class="avatar" style="z-index: 2; left: 30px; background-color: green"></div>
+  <div class="avatar" style="z-index: 1; left: 60px; background-color: blue"></div>
+</div>
+<!-- Positioned, the badge paints over the block after its button. -->
+<div class="button"><div class="badge"></div></div>
+<div style="width: 80px; height: 10px; background-color: silver"></div>

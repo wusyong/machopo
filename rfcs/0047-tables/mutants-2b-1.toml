@@ -1,0 +1,128 @@
+# Mutation test of stage 2b-1: collapsed borders resolved and laid out
+# (2026-10-15):
+# python3 scripts/test.py mutate rfcs/0047-tables/mutants-2b-1.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+timeout = 900
+
+[[mutant]]
+name = "separated tables collapse"
+file = "crates/layout/src/table.rs"
+from = '''        let borders = (style.border_collapse == BorderCollapse::Collapse)'''
+to = '''        let borders = (style.border_collapse != BorderCollapse::Collapse)'''
+
+[[mutant]]
+name = "hidden doesn't win"
+file = "crates/layout/src/table.rs"
+from = '''    if edge.style.is_none() || style == BorderStyle::Hidden {'''
+to = '''    if edge.style.is_none() {'''
+
+[[mutant]]
+name = "a hidden edge is beaten"
+file = "crates/layout/src/table.rs"
+from = '''    if edge_style == BorderStyle::Hidden {
+        return false;
+    }'''
+to = '''    if false && edge_style == BorderStyle::Hidden {
+        return false;
+    }'''
+
+[[mutant]]
+name = "the narrower wins"
+file = "crates/layout/src/table.rs"
+from = '''        return width > edge_width;'''
+to = '''        return width < edge_width;'''
+
+[[mutant]]
+name = "no bottom edges"
+file = "crates/layout/src/table.rs"
+from = '''            take(self, bottom, EdgeSide::Bottom);'''
+to = ''''''
+
+[[mutant]]
+name = "no right edges"
+file = "crates/layout/src/table.rs"
+from = '''            take(self, right, EdgeSide::Right);'''
+to = ''''''
+
+[[mutant]]
+name = "a cell's border is its whole edges"
+file = "crates/layout/src/table.rs"
+from = '''            top: border.top / 2.0,'''
+to = '''            top: border.top,'''
+
+[[mutant]]
+name = "an edge that draws nothing has a width"
+file = "crates/layout/src/table.rs"
+from = '''        let width = |edge: &CollapsedEdge| if edge.can_paint() { edge.width() } else { 0.0 };'''
+to = '''        let width = |edge: &CollapsedEdge| edge.width();'''
+
+[[mutant]]
+name = "rows have no borders"
+file = "crates/layout/src/table.rs"
+from = '''                borders.merge(
+                    (start + r, 0),
+                    (1, columns),
+                    &style(row.index),
+                    order,
+                    false,
+                );'''
+to = ''''''
+
+[[mutant]]
+name = "columns have no borders"
+file = "crates/layout/src/table.rs"
+from = '''                        borders.merge((0, c), (rows, 1), &style(column.index), order, false);'''
+to = ''''''
+
+[[mutant]]
+name = "the table has no borders"
+file = "crates/layout/src/table.rs"
+from = '''        borders.merge((0, 0), (rows, columns), &style(index), order, false);
+        borders'''
+to = '''        borders'''
+
+[[mutant]]
+name = "a collapsed table keeps its padding"
+file = "crates/layout/src/lib.rs"
+from = '''            if style.border_collapse == BorderCollapse::Collapse {
+                taffy_style.padding = taffy::Rect::zero();
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "a collapsed table keeps its border spacing"
+file = "crates/layout/src/table.rs"
+from = '''            computed_style::BorderSpacing::ZERO
+        } else {'''
+to = '''            style.border_spacing
+        } else {'''
+
+[[mutant]]
+name = "a collapsed table's fragment has its style's border"
+file = "crates/layout/src/lib.rs"
+from = '''            && let Some(c) = b.collapsed_border
+        {'''
+to = '''            && let Some(c) = b.collapsed_border.filter(|_| false)
+        {'''
+
+[[mutant]]
+name = "a cell's new border keeps its cache"
+file = "crates/layout/src/table.rs"
+from = '''        b.taffy_style.border = border_rect(border.unwrap_or(b.style.border_width));
+        b.cache.clear();'''
+to = '''        b.taffy_style.border = border_rect(border.unwrap_or(b.style.border_width));'''
+
+[[mutant]]
+name = "a restyled cell keeps its collapsed border"
+file = "crates/layout/src/lib.rs"
+from = '''                // Its table sets its collapsed borders again.
+                b.collapsed_border = None;'''
+to = ''''''
+
+[[mutant]]
+name = "a cell's edges have its style's border"
+file = "crates/layout/src/table.rs"
+from = '''        if let Some(border) = b.collapsed_border {
+            edge.border = border;
+        }'''
+to = ''''''

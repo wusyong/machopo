@@ -1,0 +1,70 @@
+# Stage 4h-3b, through the renderer: each frame's update of animations and its events, the pending
+# animations started at the commit, frames wanted while they run.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it -- next_dom::transitions_and_animations_on_the_new_dom next_dom::animation_events_in_order_each_checkpointed next_dom::an_animations_value_is_rendered"]
+timeout = 1800
+
+[[mutant]]
+name = "api: events not sorted"
+file = "crates/dom_api_next/src/animations.rs"
+from = '''        sort_events(cx, document, &mut pending);'''
+to = ''''''
+
+[[mutant]]
+name = "api: no checkpoint between events"
+file = "crates/dom_api_next/src/animations.rs"
+from = '''        crate::event_target::dispatch(host, &target, &event);
+        host.perform_microtask_checkpoint();'''
+to = '''        crate::event_target::dispatch(host, &target, &event);'''
+
+[[mutant]]
+name = "api: events not trusted"
+file = "crates/dom_api_next/src/animations.rs"
+from = '''                        trusted: true,'''
+to = '''                        trusted: false,'''
+
+[[mutant]]
+name = "api: ::before's events ::after's"
+file = "crates/dom_api_next/src/animations.rs"
+from = '''                    Some(::computed_style::PseudoId::Before) => "::before",'''
+to = '''                    Some(::computed_style::PseudoId::Before) => "::after",'''
+
+[[mutant]]
+name = "api: the wrapper of a transition event an animation event's"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''                if data.transition {
+                    const { crate::declare::interface_index("TransitionEvent") }'''
+to = '''                if !data.transition {
+                    const { crate::declare::interface_index("TransitionEvent") }'''
+
+[[mutant]]
+name = "js: the timeline at 0"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''                .map_or(0.0, |window| cx.time_at(window, frame_time));'''
+to = '''                .map_or(0.0, |_| 0.0);'''
+
+[[mutant]]
+name = "renderer: no update of animations"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            self.update_next_animations(next_frame_time);'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: pending ones never start"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        self.start_next_pending_animations();
+        self.layer_tree_host.commit(promises);'''
+to = '''        self.layer_tree_host.commit(promises);'''
+
+[[mutant]]
+name = "renderer: no frames while they run"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    || self.next_animations_running'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: what moved on not drawn"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        if update.changed {
+            self.request_main_frame();
+        }'''
+to = ''''''

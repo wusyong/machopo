@@ -1,0 +1,30 @@
+# Stage 4h-1a, the renderer's side: a parser's script its document's currentScript while it
+# runs, given back to the document it was set on; the document's encoding and content type.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "sh", "-c", "cargo test -q -p shell --test it -- next_dom::scripts_run_in_order next_dom::the_documents_encoding"]
+timeout = 1200
+
+[[mutant]]
+name = "renderer: no currentScript while a script runs"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            let current = cx.containing_shadow_root(script).is_none().then_some(script);'''
+to = '''            let current = None;'''
+
+[[mutant]]
+name = "renderer: currentScript kept after the script"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            cx.set_current_script(document.get(cx.gc), before.as_ref().map(|before| before.get(cx.gc)));'''
+to = '''            let _ = (&document, &before);'''
+
+[[mutant]]
+name = "renderer: currentScript given back to the script's document now"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            cx.set_current_script(document.get(cx.gc), before.as_ref().map(|before| before.get(cx.gc)));'''
+to = '''            let _ = &document;
+            let script = script.get(cx.gc);
+            cx.set_current_script(cx.document_of(script), before.as_ref().map(|before| before.get(cx.gc)));'''
+
+[[mutant]]
+name = "renderer: the document's encoding the default"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        cx.set_document_character_set(document, encoding.name());'''
+to = '''        let _ = encoding;'''

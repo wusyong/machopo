@@ -1,0 +1,181 @@
+# Mutation test of step 2c (AbortSignal and cancelling):
+# python3 scripts/test.py mutate rfcs/0027-fetch/mutants-2c.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "fetch"]
+timeout = 900
+
+# --- dom: abort steps -------------------------------------------------------
+
+[[mutant]]
+name = "abort steps aren't given back"
+file = "crates/dom/src/abort.rs"
+from = '''                if algorithm.steps.get() != 0 {
+                    steps.push(algorithm.steps.get());
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "abort steps share a number"
+file = "crates/dom/src/tasks.rs"
+from = '''        self.next_steps += 1;
+        self.abort_steps.insert(self.next_steps, (owner, steps));'''
+to = '''        self.next_steps = 1;
+        self.abort_steps.insert(self.next_steps, (owner, steps));'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "timers", "abort_steps"]
+
+[[mutant]]
+name = "a discarded document's abort steps stay"
+file = "crates/dom/src/tasks.rs"
+from = '''        self.abort_steps
+            .retain(|_, (steps_owner, _)| *steps_owner != owner);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "timers", "abort_steps"]
+
+# --- dom_api: fetch() ---------------------------------------------------------
+
+[[mutant]]
+name = "an aborted signal's fetch() goes"
+file = "crates/dom_api/src/fetch.rs"
+from = '''    if let Some(reason) = crate::abort::reason_error(cx, &signal) {
+        return Err(reason);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "fetch() keeps no abort steps"
+file = "crates/dom_api/src/fetch.rs"
+from = '''        Some(request) => id.set(Some(request)),'''
+to = '''        Some(_) => {}'''
+
+[[mutant]]
+name = "an abort doesn't cancel"
+file = "crates/dom_api/src/fetch.rs"
+from = '''        .is_some_and(|frame| frame.cancel_fetch(request));'''
+to = '''        .is_some_and(|frame| { let _ = (frame, request); true });'''
+
+[[mutant]]
+name = "an abort rejects in the aborting realm"
+file = "crates/dom_api/src/fetch.rs"
+from = '''    if cx.realm_window().is_some_and(|realm| realm.ptr_eq(&window)) {'''
+to = '''    if true {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "fetch", "an_abort_from_another_realm"]
+
+[[mutant]]
+name = "the response's abort steps stay"
+file = "crates/dom_api/src/fetch.rs"
+from = '''    let signal = abort
+        .and_then(|abort| cx.mutate().remove_abort_steps(abort))'''
+to = '''    let signal = abort
+        .and_then(|_| None::<Box<dyn std::any::Any>>)'''
+
+[[mutant]]
+name = "a response doesn't keep the signal"
+file = "crates/dom_api/src/fetch.rs"
+from = '''        cx.mutate().set_response_signal(&response, signal);
+    }
+    promise.resolve(cx, response);'''
+to = '''        let _ = signal;
+    }
+    promise.resolve(cx, response);'''
+
+[[mutant]]
+name = "an aborted response's body reads"
+file = "crates/dom_api/src/body.rs"
+from = '''        if let Some(error) = signal.and_then(|signal| crate::abort::reason_error(cx, &signal)) {'''
+to = '''        if let Some(error) = signal.and(None::<crate::exception::ApiError>) {'''
+
+[[mutant]]
+name = "an aborted response's body is used"
+file = "crates/dom_api/src/body.rs"
+from = '''    let (has_body, _) = body.state(cx);
+    if let Body::Response(response) = body
+        && has_body
+    {'''
+to = '''    let bytes = body.take(cx);
+    let has_body = bytes.is_some();
+    if let Body::Response(response) = body
+        && has_body
+    {'''
+
+[[mutant]]
+name = "a clone doesn't keep the signal"
+file = "crates/dom_api/src/response.rs"
+from = '''        cx.mutate().set_response_signal(&clone, signal);'''
+to = '''        let _ = signal;'''
+
+# --- the renderer: cancelling ---------------------------------------------------
+
+[[mutant]]
+name = "a cancel isn't sent"
+file = "crates/renderer/src/loader.rs"
+from = '''        let _ = self
+            .to_browser
+            .send(RendererHostMsg::CancelResource { request_id });'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "fetches_are_sent_and_cancelled"]
+
+[[mutant]]
+name = "a cancel goes for a fetch that came back"
+file = "crates/renderer/src/loader.rs"
+from = '''        if self.pending.borrow_mut().remove(&request_id).is_none() {
+            return false;
+        }'''
+to = '''        self.pending.borrow_mut().remove(&request_id);'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "fetches_are_sent_and_cancelled"]
+
+[[mutant]]
+name = "a discarded document's fetches go on"
+file = "crates/renderer/src/loader.rs"
+from = '''            .filter(|(_, fetch)| discarded(fetch.owner))'''
+to = '''            .filter(|(_, fetch)| discarded(fetch.owner) && false)'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "fetches_are_sent_and_cancelled"]
+
+[[mutant]]
+name = "every document is discarded"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            .is_none_or(|document| !dom.is_fully_active(&document))'''
+to = '''            .is_none_or(|document| { let _ = document; true })'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "fetch", "an_abort_from_another_realm"]
+
+[[mutant]]
+name = "a removed iframe's fetches go on"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        // Script may have removed iframes, discarding their documents.
+        self.fetches.cancel_discarded(discarded(&dom.read()));'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "fetch", "an_abort_from_another_realm"]
+
+[[mutant]]
+name = "the frame cancels nothing"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            .is_some_and(|fetches| fetches.cancel(id))'''
+to = '''            .is_some_and(|fetches| { let _ = (fetches, id); false })'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "fetch", "an_aborted_fetch"]
+
+# --- net and the browser ------------------------------------------------------
+
+[[mutant]]
+name = "a cancelled load calls back"
+file = "crates/net/src/lib.rs"
+from = '''        if let Some(task) = state.task.take() {
+            task.abort();
+        }'''
+to = '''        let _ = state.task.take();'''
+test = ["cargo", "test", "-q", "-p", "net", "--test", "load", "a_load_is_cancelled"]
+
+[[mutant]]
+name = "a load cancelled before it starts starts"
+file = "crates/net/src/lib.rs"
+from = '''                        if state.cancelled {
+                            continue;
+                        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "net", "--test", "load", "a_load_is_cancelled"]
+
+[[mutant]]
+name = "the IO thread doesn't cancel"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                                if let Some(load) = load {
+                                    load.cancel();
+                                }'''
+to = '''                                drop(load);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "fetch", "an_abort_from_another_realm"]

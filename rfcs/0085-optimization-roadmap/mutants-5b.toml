@@ -1,0 +1,13 @@
+# Stage 5b: the renderer's DOM heap (the one V8 drives) without a nursery.
+# `dom_js`'s test of its heap's stats after making elements and
+# dispatching events.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js", "--test", "it", "wrappers::the_doms_heap_has_no_nursery"]
+timeout = 600
+
+[[mutant]]
+name = "dom_js: the DOM's heap with the default nursery"
+file = "crates/dom_js/src/state.rs"
+from = '''                    nursery_bytes: 0,
+'''
+to = '''
+'''

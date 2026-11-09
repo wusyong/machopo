@@ -1,0 +1,25 @@
+# A prototype for RFC 0082 (decision 5), not part of machopo's workspace: does
+# a tokio task-local, set around one request's `send`, see the DNS and
+# connect timings reqwest's resolver and connector layer measure for the
+# connection that request itself opened, and nothing for one it reused?
+#   CARGO_TARGET_DIR=../../../target/prototypes cargo run
+[workspace]
+
+[package]
+name = "timing-prototype"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# machopo's versions and features (Cargo.lock on 2026-10-23).
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "http2"] }
+hyper = { version = "=1.11.1", features = ["server", "http1", "http2"] }
+hyper-util = { version = "=0.1.21", features = ["tokio"] }
+http-body-util = "0.1"
+tokio = { version = "1", features = ["rt", "net", "time", "macros", "sync"] }
+tower-layer = "=0.3.3"
+tower-service = "=0.3.3"
+# The HTTPS server (HTTP/2 by ALPN), with WPT's test certificates.
+rustls = { version = "=0.23.45", default-features = false, features = ["std", "aws_lc_rs"] }
+tokio-rustls = { version = "=0.26.6", default-features = false, features = ["aws_lc_rs"] }

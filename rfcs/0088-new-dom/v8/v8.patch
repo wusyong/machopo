@@ -1,0 +1,686 @@
+diff --git a/include/v8-machopo.h b/include/v8-machopo.h
+new file mode 100644
+index 00000000..4aa3b430
+--- /dev/null
++++ b/include/v8-machopo.h
+@@ -0,0 +1,123 @@
++// machopo: an embedder heap marking with V8's major GCs as cppgc's does in the
++// unified heap (machopo's RFC 0088, stages 1c and 1f). Applied as a patch from
++// machopo's rfcs/0088-new-dom/v8 and never committed; in a header of its own,
++// so that changing it rebuilds only what includes it.
++//
++// The embedder heap's objects are wrapped by their address, as cppgc's,
++// with a tag of kTagRange (one per type): V8's marking hands the object
++// to the heap's marking, and its write barrier, heap snapshot and young
++// generation leave it alone. The objects never move. The embedder heap's
++// marker hands V8 the TracedReferences its objects hold, from its own
++// threads.
++
++#ifndef INCLUDE_V8_MACHOPO_H_
++#define INCLUDE_V8_MACHOPO_H_
++
++#include <stdint.h>
++
++#include "v8-local-handle.h"  // NOLINT(build/include_directory)
++#include "v8-sandbox.h"       // NOLINT(build/include_directory)
++#include "v8config.h"         // NOLINT(build/include_directory)
++
++namespace v8 {
++
++class CppHeap;
++class Isolate;
++class Object;
++class TracedReferenceBase;
++
++namespace machopo {
++
++/** The tags of wrappers whose CppHeapPointerTable entry holds an embedder
++ * heap's object (not a cppgc one). */
++constexpr CppHeapPointerTag kFirstTag = static_cast<CppHeapPointerTag>(0x4000);
++constexpr CppHeapPointerTag kLastTag = static_cast<CppHeapPointerTag>(0x4fff);
++constexpr CppHeapPointerTagRange kTagRange(kFirstTag, kLastTag);
++
++/**
++ * The embedder heap, marking with V8's major GCs: V8 starts its marking
++ * with its own, advances it with each of its steps, asks whether it is done
++ * before it finishes (in the pause, advancing it again while either side
++ * finds more), and ends it once both are done.
++ */
++class EmbedderMarking {
++ public:
++  virtual ~EmbedderMarking() = default;
++
++  /** A major GC's marking starts. */
++  virtual void Start() = 0;
++
++  /**
++   * Marks for up to `max_duration_ms`, what V8's step leaves after cppgc's
++   * (all that is left in the atomic pause). Returns whether nothing is
++   * left.
++   */
++  virtual bool Advance(double max_duration_ms, bool in_atomic_pause) = 0;
++
++  /** Whether nothing is left now (V8's locals published). */
++  virtual bool IsDone() = 0;
++
++  /** Both sides are done (in the pause, after V8 cleared what died). */
++  virtual void End() = 0;
++
++  /**
++   * A marking thread's list of wrapped objects to hand over, with the
++   * thread's marking state; published with it, and deleted with it.
++   */
++  virtual void* NewLocal() = 0;
++  virtual void Hand(void* local, void* object) = 0;
++  virtual void Publish(void* local) = 0;
++  virtual bool IsLocalEmpty(void* local) = 0;
++  virtual void DeleteLocal(void* local) = 0;
++};
++
++/** Sets (or, with null, clears) `heap`'s embedder heap. */
++V8_EXPORT void SetEmbedderMarking(CppHeap* heap, EmbedderMarking* marking);
++
++/**
++ * The embedder heap's used bytes changed by `delta` since last told
++ * (cppgc's ReportBufferedAllocationSizeIfPossible): V8 counts them with
++ * cppgc's, and may start, advance or finish a major GC now. Only between
++ * the embedder heap's operations.
++ */
++V8_EXPORT void ReportEmbedderAllocation(Isolate* isolate, int64_t delta);
++
++/** Finishes a major GC's marking that runs, atomically (its concurrent
++ * markers joined): afterwards no V8 thread marks, nor calls the embedder
++ * marking, until the next GC starts. Before the embedder heap is unset
++ * and freed (Chrome finishes its GC before it detaches a CppHeap). */
++V8_EXPORT void FinishMarking(Isolate* isolate);
++
++/** Wraps `wrapper` (an API wrapper wrapping nothing) with the embedder
++ * heap's `object` (not null), tagged `tag` (of kTagRange). */
++V8_EXPORT void Wrap(Isolate* isolate, Local<Object> wrapper, void* object,
++                    uint16_t tag);
++
++/** The object `wrapper` holds with `tag`, null if none (another tag's, or
++ * not an API wrapper: checked here, so callers need no IsApiWrapper). */
++V8_EXPORT void* Unwrap(Isolate* isolate, Local<Object> wrapper, uint16_t tag);
++
++/**
++ * A thread's marking of the TracedReferences the embedder heap's objects
++ * hold into V8's worklists (cppgc's ConcurrentUnifiedHeapMarkingVisitor),
++ * on any thread, while V8 runs a major GC's marking; published when
++ * deleted.
++ */
++class V8_EXPORT TracedMarker {
++ public:
++  explicit TracedMarker(Isolate* isolate);
++  ~TracedMarker();
++  TracedMarker(const TracedMarker&) = delete;
++  TracedMarker& operator=(const TracedMarker&) = delete;
++
++  void Mark(const TracedReferenceBase& reference);
++  void Publish();
++
++ private:
++  void* impl_;
++};
++
++}  // namespace machopo
++}  // namespace v8
++
++#endif  // INCLUDE_V8_MACHOPO_H_
+diff --git a/src/heap/cppgc-js/cpp-heap.cc b/src/heap/cppgc-js/cpp-heap.cc
+index b897df95..9bcf9bef 100644
+--- a/src/heap/cppgc-js/cpp-heap.cc
++++ b/src/heap/cppgc-js/cpp-heap.cc
+@@ -12,8 +12,10 @@
+ #include "include/cppgc/heap-consistency.h"
+ #include "include/cppgc/platform.h"
+ #include "include/v8-isolate.h"
++#include "include/v8-machopo.h"
+ #include "include/v8-local-handle.h"
+ #include "include/v8-platform.h"
++#include "src/api/api-inl.h"
+ #include "src/base/logging.h"
+ #include "src/base/macros.h"
+ #include "src/base/platform/time.h"
+@@ -49,10 +51,12 @@
+ #include "src/heap/gc-tracer.h"
+ #include "src/heap/heap-controller.h"
+ #include "src/heap/heap.h"
++#include "src/heap/incremental-marking.h"
+ #include "src/heap/marking-worklist.h"
+ #include "src/heap/minor-mark-sweep.h"
+ #include "src/heap/traced-handles-marking-visitor.h"
+ #include "src/init/v8.h"
++#include "src/objects/cpp-heap-object-wrapper-inl.h"  // machopo
+ #include "src/profiler/heap-profiler.h"
+ 
+ namespace v8 {
+@@ -837,6 +841,12 @@ void CppHeap::InitializeMarking(
+   marker_ = std::make_unique<UnifiedHeapMarker>(
+       isolate_ ? isolate()->heap() : nullptr, AsBase(), schedule,
+       platform_.get(), marking_config);
++  // machopo: the embedder heap marks with major GCs, from now on: V8 makes its
++  // marking states, each with the embedder heap's local, before it starts
++  // ours (StartMarking).
++  embedder_marking_started_ =
++      embedder_marking_ && *collection_type_ == CollectionType::kMajor;
++  if (embedder_marking_started_) embedder_marking_->Start();
+ }
+ 
+ namespace {
+@@ -865,6 +875,11 @@ void CppHeap::StartMarking() {
+   marking_done_ = false;
+ }
+ 
++// machopo: whether the embedder heap marks in this GC.
++bool CppHeap::embedder_marks() const {
++  return TracingInitialized() && embedder_marking_started_;
++}
++
+ size_t CppHeap::last_bytes_marked() const {
+   DCHECK(TracingInitialized());
+   return TracingInitialized() ? marker_->last_bytes_marked() : 0;
+@@ -876,6 +891,8 @@ bool CppHeap::AdvanceMarking(v8::base::TimeDelta max_duration,
+   if (!TracingInitialized()) {
+     return true;
+   }
++  // machopo: the embedder heap's step gets what cppgc's leaves of the step.
++  const auto step_start = v8::base::TimeTicks::Now();
+   is_in_v8_marking_step_ = true;
+   cppgc::internal::StatsCollector::EnabledScope stats_scope(
+       stats_collector(),
+@@ -889,12 +906,34 @@ bool CppHeap::AdvanceMarking(v8::base::TimeDelta max_duration,
+   marking_done_ = marker_->To<UnifiedHeapMarker>().AdvanceMarkingOnStep(
+       max_duration, marked_bytes_limit, stack_state);
+   DCHECK_IMPLIES(in_atomic_pause_, marking_done_);
++  // machopo: the embedder heap advances with cppgc, every step (what the step
++  // marked may have handed it more); IsMarkingDone asks it again.
++  bool embedder_done = true;
++  if (embedder_marks()) {
++    // What V8's main thread handed over since, first: its pause waits for
++    // that thread's local to empty.
++    if (isolate_) {
++      if (auto* local = GetV8MarkingWorklists(isolate_, *collection_type_)) {
++        if (auto* state = local->cpp_marking_state()) {
++          state->PublishHandedObjects();
++        }
++      }
++    }
++    const auto left = max_duration - (v8::base::TimeTicks::Now() - step_start);
++    embedder_done = embedder_marking_->Advance(
++        left < v8::base::TimeDelta() ? 0.0 : left.InMillisecondsF(),
++        in_atomic_pause_);
++  }
+   is_in_v8_marking_step_ = false;
+-  return marking_done_;
++  return marking_done_ && embedder_done;
+ }
+ 
+ bool CppHeap::IsMarkingDone() const {
+-  return !TracingInitialized() || marking_done_;
++  // machopo: and the embedder heap's, as it is now (V8's threads may have
++  // handed it more since its last step).
++  return !TracingInitialized() ||
++         (marking_done_ &&
++          (!embedder_marks() || embedder_marking_->IsDone()));
+ }
+ 
+ bool CppHeap::ShouldFinalizeIncrementalMarking() const {
+@@ -968,6 +1007,12 @@ void CppHeap::ProcessCrossThreadWeakness() {
+ void CppHeap::FinishMarkingAndProcessWeakness() {
+   CHECK(in_atomic_pause_);
+   CHECK(marking_done_);
++  // machopo: both sides are done; the embedder heap ends its marking.
++  if (embedder_marks()) {
++    CHECK(embedder_marking_->IsDone());
++    embedder_marking_started_ = false;
++    embedder_marking_->End();
++  }
+ 
+ #if defined(CPPGC_YOUNG_GENERATION)
+   // Check if the young generation was enabled via flag. We must enable young
+@@ -1281,17 +1326,60 @@ void CppHeap::FinishSweepingIfOutOfWork() { sweeper_.FinishIfOutOfWork(); }
+ std::unique_ptr<CppMarkingState> CppHeap::CreateCppMarkingState() {
+   if (!TracingInitialized()) return {};
+   DCHECK(IsMarking());
+-  return std::make_unique<CppMarkingState>(
++  auto state = std::make_unique<CppMarkingState>(
+       std::make_unique<cppgc::internal::MarkingStateBase>(
+           AsBase(), marker()->To<UnifiedHeapMarker>().GetMarkingWorklists()));
++  // machopo: the embedder heap's local, for the objects V8 hands over.
++  if (embedder_marks()) {
++    state->set_machopo_local(embedder_marking_, embedder_marking_->NewLocal());
++  }
++  return state;
+ }
+ 
+ std::unique_ptr<CppMarkingState>
+ CppHeap::CreateCppMarkingStateForMutatorThread() {
+   if (!TracingInitialized()) return {};
+   DCHECK(IsMarking());
+-  return std::make_unique<CppMarkingState>(
++  auto state = std::make_unique<CppMarkingState>(
+       marker()->To<UnifiedHeapMarker>().GetMutatorMarkingState());
++  // machopo: as above.
++  if (embedder_marks()) {
++    state->set_machopo_local(embedder_marking_, embedder_marking_->NewLocal());
++  }
++  return state;
++}
++
++// machopo: as ReportBufferedAllocationSizeIfPossible, for the embedder heap's
++// used bytes (include/v8-machopo.h).
++void CppHeap::ReportEmbedderAllocation(int64_t delta) {
++  if (delta < 0) {
++    size_t decrease = static_cast<size_t>(-delta);
++    size_t used = embedder_used_size_.load(std::memory_order_relaxed);
++    embedder_used_size_.store(used > decrease ? used - decrease : 0,
++                              std::memory_order_relaxed);
++    return;
++  }
++  embedder_used_size_.fetch_add(static_cast<size_t>(delta),
++                                std::memory_order_relaxed);
++  embedder_allocated_size_ += delta;
++  if (!IsGCAllowed() || !v8_flags.incremental_marking) return;
++  if (embedder_allocated_size_ <= embedder_allocated_size_limit_for_check_) {
++    return;
++  }
++  Heap* heap = isolate_->heap();
++  heap->StartIncrementalMarkingIfAllocationLimitIsReached(
++      heap->main_thread_local_heap(), heap->GCFlagsForIncrementalMarking(),
++      kGCCallbackScheduleIdleGarbageCollection);
++  if (heap->incremental_marking()->IsMajorMarking()) {
++    if (heap->AllocationLimitOvershotByLargeMargin()) {
++      heap->FinalizeIncrementalMarkingAtomically(
++          i::GarbageCollectionReason::kExternalFinalize);
++    } else {
++      heap->incremental_marking()->AdvanceOnAllocation();
++    }
++  }
++  embedder_allocated_size_limit_for_check_ =
++      embedder_allocated_size_ + kIncrementalMarkingCheckInterval;
+ }
+ 
+ void CppHeap::CollectGarbage(cppgc::internal::GCConfig config) {
+@@ -1401,3 +1489,99 @@ bool CppHeap::CurrentThreadIsHeapThread() const {
+ 
+ }  // namespace internal
+ }  // namespace v8
++
++// machopo: include/v8-machopo.h.
++namespace v8::machopo {
++
++void SetEmbedderMarking(v8::CppHeap* heap, EmbedderMarking* marking) {
++  internal::CppHeap::From(heap)->set_embedder_marking(marking);
++}
++
++void ReportEmbedderAllocation(v8::Isolate* isolate, int64_t delta) {
++  auto* heap = reinterpret_cast<internal::Isolate*>(isolate)->heap();
++  if (!heap->cpp_heap()) return;
++  internal::CppHeap::From(heap->cpp_heap())->ReportEmbedderAllocation(delta);
++}
++
++void FinishMarking(v8::Isolate* isolate) {
++  reinterpret_cast<internal::Isolate*>(isolate)
++      ->heap()
++      ->FinalizeIncrementalMarkingAtomicallyIfRunning(
++          internal::GarbageCollectionReason::kExternalFinalize);
++}
++
++void Wrap(v8::Isolate* isolate, Local<Object> wrapper, void* object,
++          uint16_t tag) {
++  CHECK_NOT_NULL(object);
++  CHECK(tag >= static_cast<uint16_t>(kFirstTag) &&
++        tag <= static_cast<uint16_t>(kLastTag));
++  auto obj = internal::Tagged<internal::Object>(
++      internal::ValueHelper::ValueAsAddress(*wrapper));
++  CHECK(internal::IsJSApiWrapperObject(internal::Cast<internal::JSObject>(obj)));
++  internal::CppHeapObjectWrapper(internal::Cast<internal::JSObject>(obj))
++      .SetCppHeapWrappable(reinterpret_cast<internal::Isolate*>(isolate),
++                           object, static_cast<CppHeapPointerTag>(tag));
++}
++
++void* Unwrap(v8::Isolate* isolate, Local<Object> wrapper, uint16_t tag) {
++  auto obj = internal::Tagged<internal::Object>(
++      internal::ValueHelper::ValueAsAddress(*wrapper));
++  if (!internal::IsJSApiWrapperObject(internal::Cast<internal::HeapObject>(obj))) {
++    return nullptr;
++  }
++  // Another tag's entry reads as none.
++  const auto tag_value = static_cast<CppHeapPointerTag>(tag);
++  return internal::CppHeapObjectWrapper(internal::Cast<internal::JSObject>(obj))
++      .GetCppHeapWrappable(reinterpret_cast<internal::Isolate*>(isolate),
++                           CppHeapPointerTagRange(tag_value, tag_value));
++}
++
++namespace {
++
++// What a TracedMarker holds: as ConcurrentUnifiedHeapMarkingVisitor, V8's
++// worklist of its own, the marking state over it, and the isolate set as
++// the thread's current.
++struct TracedMarkerImpl {
++  explicit TracedMarkerImpl(internal::Heap* heap)
++      : worklist(heap->mark_compact_collector()->marking_worklists()),
++        state(heap, &worklist, cppgc::internal::CollectionType::kMajor) {
++    scope.emplace(heap->isolate());
++#ifdef V8_COMPRESS_POINTERS_IN_MULTIPLE_CAGES
++    saved_isolate_group = internal::IsolateGroup::current();
++    internal::IsolateGroup::set_current(heap->isolate()->isolate_group());
++#endif
++  }
++  ~TracedMarkerImpl() {
++    worklist.Publish();
++#ifdef V8_COMPRESS_POINTERS_IN_MULTIPLE_CAGES
++    internal::IsolateGroup::set_current(saved_isolate_group);
++#endif
++  }
++
++  internal::MarkingWorklists::Local worklist;
++  internal::UnifiedHeapMarkingState state;
++  std::optional<internal::SetCurrentIsolateScope> scope;
++#ifdef V8_COMPRESS_POINTERS_IN_MULTIPLE_CAGES
++  internal::IsolateGroup* saved_isolate_group = nullptr;
++#endif
++};
++
++}  // namespace
++
++TracedMarker::TracedMarker(v8::Isolate* isolate)
++    : impl_(new TracedMarkerImpl(
++          reinterpret_cast<internal::Isolate*>(isolate)->heap())) {}
++
++TracedMarker::~TracedMarker() {
++  delete static_cast<TracedMarkerImpl*>(impl_);
++}
++
++void TracedMarker::Mark(const TracedReferenceBase& reference) {
++  static_cast<TracedMarkerImpl*>(impl_)->state.MarkAndPush(reference);
++}
++
++void TracedMarker::Publish() {
++  static_cast<TracedMarkerImpl*>(impl_)->worklist.Publish();
++}
++
++}  // namespace v8::machopo
+diff --git a/src/heap/cppgc-js/cpp-heap.h b/src/heap/cppgc-js/cpp-heap.h
+index c8618c0a..ff382f90 100644
+--- a/src/heap/cppgc-js/cpp-heap.h
++++ b/src/heap/cppgc-js/cpp-heap.h
+@@ -26,6 +26,11 @@ static_assert(
+ #include "src/objects/cpp-heap-object-wrapper.h"
+ #include "src/objects/js-objects.h"
+ 
++// machopo: the embedder heap marking with major GCs (include/v8-machopo.h).
++namespace v8::machopo {
++class EmbedderMarking;
++}  // namespace v8::machopo
++
+ namespace v8 {
+ 
+ class Isolate;
+@@ -161,6 +166,20 @@ class V8_EXPORT_PRIVATE CppHeap final
+ 
+   bool ShouldFinalizeIncrementalMarking() const;
+ 
++  // machopo: the embedder heap marking with major GCs, and its used bytes
++  // (include/v8-machopo.h).
++  void set_embedder_marking(v8::machopo::EmbedderMarking* marking) {
++    embedder_marking_ = marking;
++    // Unset while marking: the rest of this GC goes without it (the
++    // marking states keep their locals).
++    if (!marking) embedder_marking_started_ = false;
++  }
++  bool embedder_marks() const;
++  size_t embedder_used_size() const {
++    return embedder_used_size_.load(std::memory_order_relaxed);
++  }
++  void ReportEmbedderAllocation(int64_t delta);
++
+   // StatsCollector::AllocationObserver interface.
+   void AllocatedObjectSizeIncreased(size_t) final;
+   void AllocatedObjectSizeDecreased(size_t) final;
+@@ -239,6 +258,14 @@ class V8_EXPORT_PRIVATE CppHeap final
+   Isolate* isolate_ = nullptr;
+   Heap* heap_ = nullptr;
+   bool marking_done_ = true;
++  // machopo: the embedder heap, whether it marks in this GC, its used bytes and
++  // what it allocated (as `used_size_`, `allocated_size_` and
++  // `allocated_size_limit_for_check_` are cppgc's).
++  v8::machopo::EmbedderMarking* embedder_marking_ = nullptr;
++  bool embedder_marking_started_ = false;
++  std::atomic<size_t> embedder_used_size_{0};
++  uint64_t embedder_allocated_size_ = 0;
++  size_t embedder_allocated_size_limit_for_check_ = 0;
+   // |collection_type_| is initialized when marking is in progress.
+   std::optional<CollectionType> collection_type_;
+   GarbageCollectionFlags current_gc_flags_;
+diff --git a/src/heap/cppgc-js/cpp-marking-state.h b/src/heap/cppgc-js/cpp-marking-state.h
+index fe24f063..8db6a010 100644
+--- a/src/heap/cppgc-js/cpp-marking-state.h
++++ b/src/heap/cppgc-js/cpp-marking-state.h
+@@ -9,6 +9,7 @@
+ 
+ #include "src/heap/cppgc-internal/marking-state.h"
+ #include "src/heap/cppgc-internal/marking-worklists.h"
++#include "include/v8-machopo.h"
+ #include "src/heap/cppgc-js/cpp-heap.h"
+ #include "src/objects/embedder-data-slot.h"
+ 
+@@ -32,7 +33,30 @@ class CppMarkingState final {
+   CppMarkingState(const CppMarkingState&) = delete;
+   CppMarkingState& operator=(const CppMarkingState&) = delete;
+ 
+-  void Publish() { marking_state_.Publish(); }
++  // machopo: the embedder heap's local list of objects to hand over, with this state
++  // (include/v8-machopo.h).
++  ~CppMarkingState() {
++    if (machopo_local_) machopo_marking_->DeleteLocal(machopo_local_);
++  }
++  void set_machopo_local(v8::machopo::EmbedderMarking* marking, void* local) {
++    machopo_marking_ = marking;
++    machopo_local_ = local;
++  }
++  V8_INLINE void HandObject(void* object) {
++    if (machopo_local_) machopo_marking_->Hand(machopo_local_, object);
++  }
++  // The objects handed over on this thread, published for the
++  // embedder heap's marking: the main thread's, before each of its steps
++  // (V8 publishes that state's other work only when it shares it).
++  void PublishHandedObjects() {
++    if (machopo_local_) machopo_marking_->Publish(machopo_local_);
++  }
++
++  void Publish() {
++    marking_state_.Publish();
++    // machopo: the objects handed over too.
++    if (machopo_local_) machopo_marking_->Publish(machopo_local_);
++  }
+ 
+   V8_INLINE void MarkAndPush(void* instance) {
+     marking_state_.MarkAndPush(
+@@ -40,12 +64,16 @@ class CppMarkingState final {
+   }
+ 
+   bool IsLocalEmpty() const {
+-    return marking_state_.marking_worklist().IsLocalEmpty();
++    // machopo: and no object left to hand over.
++    return marking_state_.marking_worklist().IsLocalEmpty() &&
++           (!machopo_local_ || machopo_marking_->IsLocalEmpty(machopo_local_));
+   }
+ 
+  private:
+   std::unique_ptr<cppgc::internal::MarkingStateBase> owned_marking_state_;
+   cppgc::internal::MarkingStateBase& marking_state_;
++  v8::machopo::EmbedderMarking* machopo_marking_ = nullptr;
++  void* machopo_local_ = nullptr;
+ };
+ 
+ }  // namespace internal
+diff --git a/src/heap/cppgc-js/cpp-snapshot.cc b/src/heap/cppgc-js/cpp-snapshot.cc
+index 6058cc88..28b865cd 100644
+--- a/src/heap/cppgc-js/cpp-snapshot.cc
++++ b/src/heap/cppgc-js/cpp-snapshot.cc
+@@ -2,6 +2,7 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
++#include "include/v8-machopo.h"  // machopo
+ #include "src/heap/cppgc-js/cpp-snapshot.h"
+ 
+ #include <memory>
+@@ -78,6 +79,11 @@ void* ExtractEmbedderDataBackref(Isolate* isolate, CppHeap& cpp_heap,
+   if (!IsJSApiWrapperObject(js_object)) {
+     return nullptr;
+   }
++  // machopo: the embedder heap's object isn't cppgc's (include/v8-machopo.h).
++  if (CppHeapObjectWrapper(js_object).GetCppHeapWrappable(
++          isolate, machopo::kTagRange)) {
++    return nullptr;
++  }
+   // Wrapper using cpp_heap_wrappable field.
+   return CppHeapObjectWrapper(js_object).GetCppHeapWrappable(
+       isolate, kAnyCppHeapPointer);
+@@ -515,6 +521,11 @@ void CppGraphBuilderImpl::RecordTracedReferenceOnStack(
+ 
+ void CppGraphBuilderImpl::AddEdgeForCppHeapWrapper(
+     Tagged<CppHeapPointerWrapperObjectT> object) {
++  // machopo: the embedder heap's object isn't cppgc's (include/v8-machopo.h).
++  if (CppHeapObjectWrapper::From(object).GetCppHeapWrappable(
++          cpp_heap_.isolate(), machopo::kTagRange)) {
++    return;
++  }
+   void* cpp_object = CppHeapObjectWrapper::From(object).GetCppHeapWrappable(
+       cpp_heap_.isolate(), kAnyCppHeapPointer);
+   if (!cpp_object) {
+diff --git a/src/heap/heap-write-barrier.cc b/src/heap/heap-write-barrier.cc
+index 378b75bd..3606d4c2 100644
+--- a/src/heap/heap-write-barrier.cc
++++ b/src/heap/heap-write-barrier.cc
+@@ -2,6 +2,7 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
++#include "include/v8-machopo.h"  // machopo
+ #include "src/heap/heap-write-barrier.h"
+ 
+ #include "src/heap/heap-layout-inl.h"
+@@ -85,6 +86,9 @@ void WriteBarrier::MarkingSlowFromCppHeapWrappable(
+   // stay in sync to avoid a marked handle pointing to an unmarked object.
+   SBXCHECK_EQ(table.Get(handle, kAnyCppHeapPointer),
+               reinterpret_cast<Address>(object));
++  // machopo: the embedder heap's object isn't cppgc's; one wrapped while it
++  // marks is marked already, black or in its snapshot (include/v8-machopo.h).
++  if (table.Get(handle, machopo::kTagRange)) return;
+ #endif  // V8_COMPRESS_POINTERS
+ 
+   if (heap->cpp_heap() && object) {
+diff --git a/src/heap/heap.cc b/src/heap/heap.cc
+index e9423f6d..b87526e9 100644
+--- a/src/heap/heap.cc
++++ b/src/heap/heap.cc
+@@ -5356,7 +5356,10 @@ size_t Heap::YoungGenerationConsumedBytes() const {
+ }
+ 
+ size_t Heap::EmbedderSizeOfObjects() const {
+-  return cpp_heap_ ? CppHeap::From(cpp_heap_)->used_size() : 0;
++  // machopo: with the embedder heap's (include/v8-machopo.h).
++  return cpp_heap_ ? CppHeap::From(cpp_heap_)->used_size() +
++                         CppHeap::From(cpp_heap_)->embedder_used_size()
++                   : 0;
+ }
+ 
+ uint64_t Heap::GlobalSizeOfObjects() const {
+diff --git a/src/heap/marking-visitor-inl.h b/src/heap/marking-visitor-inl.h
+index 492dadeb..4b298bb3 100644
+--- a/src/heap/marking-visitor-inl.h
++++ b/src/heap/marking-visitor-inl.h
+@@ -5,6 +5,7 @@
+ #ifndef V8_HEAP_MARKING_VISITOR_INL_H_
+ #define V8_HEAP_MARKING_VISITOR_INL_H_
+ 
++#include "include/v8-machopo.h"  // machopo
+ #include "src/heap/marking-visitor.h"
+ // Include the non-inl header before the rest of the headers.
+ 
+@@ -296,6 +297,13 @@ void MarkingVisitorBase<ConcreteVisitor>::VisitCppHeapPointer(
+   CppHeapPointerTable* table = cpp_heap_pointer_table_;
+   CppHeapPointerTable::Space* space = heap_->cpp_heap_pointer_space();
+   table->Mark(space, handle, slot.address());
++  // machopo: the embedder heap's object, not a cppgc one: its to mark
++  // (include/v8-machopo.h). Another tag's entry reads as none here.
++  if (Address object = table->Get(handle, machopo::kTagRange)) {
++    local_marking_worklists_->cpp_marking_state()->HandObject(
++        reinterpret_cast<void*>(object));
++    return;
++  }
+   Address cpp_heap_pointer = table->Get(handle, kAnyCppHeapPointer);
+ #else   // !V8_COMPRESS_POINTERS
+   Address cpp_heap_pointer = slot.load();
+diff --git a/src/heap/minor-mark-sweep.cc b/src/heap/minor-mark-sweep.cc
+index 89ff1bae..d7492fb2 100644
+--- a/src/heap/minor-mark-sweep.cc
++++ b/src/heap/minor-mark-sweep.cc
+@@ -2,6 +2,7 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
++#include "include/v8-machopo.h"  // machopo
+ #include "src/heap/minor-mark-sweep.h"
+ 
+ #include <algorithm>
+@@ -602,6 +603,11 @@ void VisitObjectWithCppHeapPointerField(
+   DCHECK(IsCppHeapPointerWrapperObject(object));
+   DCHECK(!HeapLayout::InYoungGeneration(object));
+ 
++  // machopo: the embedder heap's object isn't cppgc's (include/v8-machopo.h).
++  if (CppHeapObjectWrapper::From(object).GetCppHeapWrappable(
++          isolate, machopo::kTagRange)) {
++    return;
++  }
+   // Wrapper using cpp_heap_wrappable field.
+   void* wrappable = CppHeapObjectWrapper::From(object).GetCppHeapWrappable(
+       isolate, kAnyCppHeapPointer);
+diff --git a/src/heap/young-generation-marking-visitor-inl.h b/src/heap/young-generation-marking-visitor-inl.h
+index 897d667a..83452c90 100644
+--- a/src/heap/young-generation-marking-visitor-inl.h
++++ b/src/heap/young-generation-marking-visitor-inl.h
+@@ -5,6 +5,7 @@
+ #ifndef V8_HEAP_YOUNG_GENERATION_MARKING_VISITOR_INL_H_
+ #define V8_HEAP_YOUNG_GENERATION_MARKING_VISITOR_INL_H_
+ 
++#include "include/v8-machopo.h"  // machopo
+ #include "src/heap/young-generation-marking-visitor.h"
+ // Include the non-inl header before the rest of the headers.
+ 
+@@ -67,6 +68,8 @@ void YoungGenerationMarkingVisitor<marking_mode>::VisitCppHeapPointer(
+     return;
+   }
+   const CppHeapPointerTable& table = isolate_->cpp_heap_pointer_table();
++  // machopo: the embedder heap's object isn't cppgc's (include/v8-machopo.h).
++  if (table.Get(handle, machopo::kTagRange)) return;
+   Address cpp_heap_pointer = table.Get(handle, kAnyCppHeapPointer);
+ #else   // !V8_COMPRESS_POINTERS
+   Address cpp_heap_pointer = slot.load();
+diff --git a/src/profiler/heap-profiler.cc b/src/profiler/heap-profiler.cc
+index 1bc589b7..9fd7a098 100644
+--- a/src/profiler/heap-profiler.cc
++++ b/src/profiler/heap-profiler.cc
+@@ -2,6 +2,7 @@
+ // Use of this source code is governed by a BSD-style license that can be
+ // found in the LICENSE file.
+ 
++#include "include/v8-machopo.h"  // machopo
+ #include "src/profiler/heap-profiler.h"
+ 
+ #include <fstream>
+@@ -65,6 +66,10 @@ std::vector<v8::Local<v8::Value>> HeapProfiler::GetDetachedJSWrapperObjects() {
+     // Ensure object is wrappable, otherwise GetDetachedness() can crash
+     CppHeapObjectWrapper wrapper = CppHeapObjectWrapper(Cast<JSObject>(obj));
+     if (!wrapper.GetCppHeapWrappable(isolate(), kAnyCppHeapPointer)) continue;
++    // machopo: the embedder heap's object isn't cppgc's (include/v8-machopo.h).
++    if (wrapper.GetCppHeapWrappable(isolate(), machopo::kTagRange)) {
++      continue;
++    }
+ 
+     v8::Local<v8::Value> data(
+         Utils::ToLocal(direct_handle(Cast<JSObject>(obj), isolate())));

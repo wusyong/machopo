@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<!-- about:demo's "Busy for 3 seconds" and its two boxes, at fixed places, so
+     demo-busy.txt can point at them while the page answers no query. -->
+<title>busy</title>
+<style>
+  html, body { margin: 0 }
+  /* Tall enough for the note's line box in any font: its ink must not
+     reach the first box, or the compositor can't tell a wheel there is
+     for the box and leaves it to the main thread (a real window uses
+     the system's fonts, where 20px wasn't enough). */
+  p { margin: 0; height: 30px }
+  #stall { display: block; width: 200px; height: 30px; background-color: #1a73e8 }
+  .scroller { width: 320px; height: 120px; overflow: auto; border: 1px solid #202124 }
+  .scroller div { height: 40px }
+  .a { background-color: #e8f0fe }
+  .b { background-color: #fce8e6 }
+  .covered { margin-top: 16px }
+  .over { width: 120px; height: 40px; margin: -20px 0 0 240px; background-color: #34a853 }
+  .stripe { height: 50px }
+  .stripe:nth-child(odd) { background-color: #fbbc04 }
+</style>
+<!-- 0 to 30: the button; 30 to 60: the note; 60 to 182: the first box;
+     198 to 320: the second, under the green block (300 to 340). -->
+<span id="stall" onclick="stall()"></span>
+<p id="note">idle</p>
+<div class="scroller" id="first">
+  <div class="a"></div><div class="b"></div><div class="a"></div><div class="b"></div>
+  <div class="a"></div><div class="b"></div><div class="a"></div><div class="b"></div>
+</div>
+<div class="scroller covered" id="second">
+  <div class="a"></div><div class="b"></div><div class="a"></div><div class="b"></div>
+  <div class="a"></div><div class="b"></div><div class="a"></div><div class="b"></div>
+</div>
+<div class="over"></div>
+<div>
+  <div class="stripe"></div><div class="stripe"></div><div class="stripe"></div>
+  <div class="stripe"></div><div class="stripe"></div><div class="stripe"></div>
+  <div class="stripe"></div><div class="stripe"></div><div class="stripe"></div>
+  <div class="stripe"></div><div class="stripe"></div><div class="stripe"></div>
+  <div class="stripe"></div><div class="stripe"></div><div class="stripe"></div>
+  <div class="stripe"></div><div class="stripe"></div><div class="stripe"></div>
+  <div class="stripe"></div><div class="stripe"></div><div class="stripe"></div>
+</div>
+<script>
+  function stall() {
+    const end = Date.now() + 3000;
+    while (Date.now() < end) {}
+    document.getElementById("note").textContent = "done";
+  }
+</script>

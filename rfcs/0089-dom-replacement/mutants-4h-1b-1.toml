@@ -1,0 +1,601 @@
+# Stage 4h-1b-1: ranges and traversal on the new DOM: Range's boundary points and comparisons,
+# StaticRange, a live range adjusted as its tree changes (insertion, removal, data, splitText,
+# normalize, another document, adoption), NodeIterator and TreeWalker with their filters, the
+# iterators' pre-removing steps, NodeFilter's interface object.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "sh", "-c", "cargo test -q -p dom_js_next --test it -- ranges frames::a_filter"]
+timeout = 900
+
+[[mutant]]
+name = "range: a new range on no document's list"
+file = "crates/dom_next/src/range.rs"
+from = '''        let range = self.make_range(start, end, false);
+        self.add_live_range(self.document_of(start.0), range);'''
+to = '''        let range = self.make_range(start, end, false);'''
+
+[[mutant]]
+name = "range: a range set into another document stays on its list"
+file = "crates/dom_next/src/range.rs"
+from = '''        if !Gc::ptr_eq(old, new) {
+            self.remove_live_range(old, range);'''
+to = '''        if false {
+            self.remove_live_range(old, range);'''
+
+[[mutant]]
+name = "range: an insertion at the offset moves it"
+file = "crates/dom_next/src/range.rs"
+from = '''                    && offset.get() > *index.get_or_insert_with(|| self.index(child))'''
+to = '''                    && offset.get() >= *index.get_or_insert_with(|| self.index(child))'''
+
+[[mutant]]
+name = "range: an insertion moves nothing"
+file = "crates/dom_next/src/range.rs"
+from = '''                    offset.set(offset.get().saturating_add(1));'''
+to = '''                    offset.set(offset.get());'''
+
+[[mutant]]
+name = "range: a removal moves only a point in the node itself"
+file = "crates/dom_next/src/range.rs"
+from = '''                if self.is_inclusive_ancestor(node, at) {
+                    point.set(self.gc, Some(parent));'''
+to = '''                if Gc::ptr_eq(node, at) {
+                    point.set(self.gc, Some(parent));'''
+
+[[mutant]]
+name = "range: a point in what goes moves to the parent's start"
+file = "crates/dom_next/src/range.rs"
+from = '''                    point.set(self.gc, Some(parent));
+                    offset.set(index);'''
+to = '''                    point.set(self.gc, Some(parent));
+                    offset.set(0);'''
+
+[[mutant]]
+name = "range: a removal moves the point at its index"
+file = "crates/dom_next/src/range.rs"
+from = '''                } else if Gc::ptr_eq(at, parent) && offset.get() > index {'''
+to = '''                } else if Gc::ptr_eq(at, parent) && offset.get() >= index {'''
+
+[[mutant]]
+name = "range: a removal runs no iterator's pre-removing steps"
+file = "crates/dom_next/src/range.rs"
+from = '''        self.node_iterators_removing(document, node);
+'''
+to = ''''''
+
+[[mutant]]
+name = "range: a point at the replaced part's end moves with the rest"
+file = "crates/dom_next/src/range.rs"
+from = '''                if at.get() > offset && at.get() <= replaced_end {'''
+to = '''                if at.get() > offset && at.get() < replaced_end {'''
+
+[[mutant]]
+name = "range: a point in the replaced part moves to its end"
+file = "crates/dom_next/src/range.rs"
+from = '''                    at.set(offset);
+'''
+to = '''                    at.set(replaced_end);
+'''
+
+[[mutant]]
+name = "range: a point past the replaced part keeps the count"
+file = "crates/dom_next/src/range.rs"
+from = '''                    at.set(at.get().saturating_sub(count).saturating_add(added));'''
+to = '''                    at.set(at.get().saturating_add(added));'''
+
+[[mutant]]
+name = "range: a split moves the point at its offset"
+file = "crates/dom_next/src/range.rs"
+from = '''                if Gc::ptr_eq(container, node) && at.get() > offset {'''
+to = '''                if Gc::ptr_eq(container, node) && at.get() >= offset {'''
+
+[[mutant]]
+name = "range: a point split off keeps its offset"
+file = "crates/dom_next/src/range.rs"
+from = '''                    at.set(at.get().saturating_sub(offset));'''
+to = '''                    at.set(at.get());'''
+
+[[mutant]]
+name = "range: a point after the split text stays before the new one"
+file = "crates/dom_next/src/range.rs"
+from = '''                if point.get(self.gc).is_some_and(|point| Gc::ptr_eq(point, parent)) && at.get() == after {
+                    at.set(after.saturating_add(1));'''
+to = '''                if point.get(self.gc).is_some_and(|point| Gc::ptr_eq(point, parent)) && at.get() == after {
+                    at.set(after);'''
+
+[[mutant]]
+name = "range: a joined text's point keeps its offset"
+file = "crates/dom_next/src/range.rs"
+from = '''                    at.set(at.get().saturating_add(length));'''
+to = '''                    at.set(at.get());'''
+
+[[mutant]]
+name = "range: a point before a joined text goes to the start"
+file = "crates/dom_next/src/range.rs"
+from = '''                    point.set(self.gc, Some(node));
+                    at.set(length);'''
+to = '''                    point.set(self.gc, Some(node));
+                    at.set(0);'''
+
+[[mutant]]
+name = "range: a point before a joined text by the first's index"
+file = "crates/dom_next/src/range.rs"
+from = '''                    && at.get() == *index.get_or_insert_with(|| self.index(current))'''
+to = '''                    && at.get() == *index.get_or_insert_with(|| self.index(node))'''
+
+[[mutant]]
+name = "range: adoption moves no range"
+file = "crates/dom_next/src/range.rs"
+from = '''            if Gc::ptr_eq(self.document_of(self.range_start(range).0), document) {
+                moved.push(range);'''
+to = '''            if false {
+                moved.push(range);'''
+
+[[mutant]]
+name = "range: adoption moves no iterator"
+file = "crates/dom_next/src/range.rs"
+from = '''        self.move_node_iterators(old, document);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: adoption adjusts nothing"
+file = "crates/dom_next/src/lib.rs"
+from = '''        self.adopt_tree(node, old, document);
+        if self.has_seen_live() {'''
+to = '''        self.adopt_tree(node, old, document);
+        if false {'''
+
+[[mutant]]
+name = "dom: setting data moves no point"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if self.has_seen_live() {
+            // DOM's "replace data" of all of it.'''
+to = '''        if false {
+            // DOM's "replace data" of all of it.'''
+
+[[mutant]]
+name = "dom: replacing data moves no point"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if self.has_seen_live() {
+            // A `count` past the end'''
+to = '''        if false {
+            // A `count` past the end'''
+
+[[mutant]]
+name = "dom: inserting a node moves no point"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if let Some(child) = child
+            && self.has_seen_live()
+        {
+            self.live_ranges_inserting(parent, child);
+        }
+        self.link(parent, node, child);'''
+to = '''        self.link(parent, node, child);'''
+
+[[mutant]]
+name = "dom: inserting a fragment's children moves no point"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if let Some(child) = child
+                    && self.has_seen_live()
+                {
+                    self.live_ranges_inserting(parent, child);
+                }
+                self.link(parent, first, child);'''
+to = '''                self.link(parent, first, child);'''
+
+[[mutant]]
+name = "dom: removing moves no point"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if self.has_seen_live() {
+            self.live_removing(parent, node);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "form: nothing live is ever seen"
+file = "crates/dom_next/src/form.rs"
+from = '''pub(crate) const LIVE_SEEN: u8 = 1 << 7;'''
+to = '''pub(crate) const LIVE_SEEN: u8 = 0;'''
+
+[[mutant]]
+name = "tree: normalizing sets the joined data whole"
+file = "crates/dom_next/src/tree.rs"
+from = '''            self.replace_data(text, length, 0, &rest);'''
+to = '''            self.set_data(text, &(own.to_str().into_owned() + &rest));'''
+
+[[mutant]]
+name = "tree: each joined text at the first's length"
+file = "crates/dom_next/src/tree.rs"
+from = '''                    length = length.saturating_add(self.node_length(next));
+'''
+to = ''''''
+
+[[mutant]]
+name = "traversal: removing the root moves its iterators"
+file = "crates/dom_next/src/traversal.rs"
+from = '''        if !self.is_inclusive_ancestor(node, at) || self.is_inclusive_ancestor(node, root) {'''
+to = '''        if !self.is_inclusive_ancestor(node, at) || Gc::ptr_eq(node, root) && false {'''
+
+[[mutant]]
+name = "traversal: the pointer before is taken as after"
+file = "crates/dom_next/src/traversal.rs"
+from = '''        if flags.get() & before != 0 {
+            if let Some(next) = self.following_past(node, root) {'''
+to = '''        if false {
+            if let Some(next) = self.following_past(node, root) {'''
+
+[[mutant]]
+name = "traversal: nothing after keeps the pointer before"
+file = "crates/dom_next/src/traversal.rs"
+from = '''            flag(flags, before, false);
+'''
+to = ''''''
+
+[[mutant]]
+name = "traversal: a previous sibling, not its last descendant"
+file = "crates/dom_next/src/traversal.rs"
+from = '''        while let Some(child) = self.last_child(last) {
+            last = child;
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "traversal: the position being filtered isn't moved"
+file = "crates/dom_next/src/traversal.rs"
+from = '''            self.move_off(root, node, &iterator.candidate, &iterator.flags, POINTER_BEFORE_CANDIDATE);
+'''
+to = ''''''
+
+[[mutant]]
+name = "traversal: the node after a removal past the root"
+file = "crates/dom_next/src/traversal.rs"
+from = '''        loop {
+            if Gc::ptr_eq(at, root) {
+                return None;
+            }
+            if let Some(next) = self.next_sibling(at) {'''
+to = '''        loop {
+            if let Some(next) = self.next_sibling(at) {'''
+
+[[mutant]]
+name = "traversal: an iterator's pointer starts after its root"
+file = "crates/dom_next/src/traversal.rs"
+from = '''                flags: Cell::new(POINTER_BEFORE_REFERENCE | filter_bit),'''
+to = '''                flags: Cell::new(filter_bit),'''
+
+[[mutant]]
+name = "traversal: a node iterator without its filter"
+file = "crates/dom_next/src/traversal.rs"
+from = '''        let filter_bit = if has_filter { HAS_FILTER } else { 0 };
+        let iterator = self.gc.alloc_in('''
+to = '''        let filter_bit = 0;
+        let iterator = self.gc.alloc_in('''
+
+[[mutant]]
+name = "traversal: the active flag never set"
+file = "crates/dom_next/src/traversal.rs"
+from = '''        flag(traversal.flags(), ACTIVE, active);'''
+to = '''        let _ = active;'''
+
+[[mutant]]
+name = "api: a point in the child at the offset is before it"
+file = "crates/dom_api_next/src/range.rs"
+from = '''            if cx.index(child) < a_offset {'''
+to = '''            if cx.index(child) <= a_offset {'''
+
+[[mutant]]
+name = "api: a point in another tree doesn't collapse the range"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    let other_tree = !Gc::ptr_eq(root(cx, point.0), root(cx, old_start.0));'''
+to = '''    let other_tree = false;'''
+
+[[mutant]]
+name = "api: a start past the end keeps the end"
+file = "crates/dom_api_next/src/range.rs"
+from = '''        (point, if past_end { point } else { old_end })'''
+to = '''        (point, old_end)'''
+
+[[mutant]]
+name = "api: an end before the start keeps the start"
+file = "crates/dom_api_next/src/range.rs"
+from = '''        (if before_start { point } else { old_start }, point)'''
+to = '''        (old_start, point)'''
+
+[[mutant]]
+name = "api: a point in a doctype"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    if cx.kind(node) == NodeKind::DocumentType {
+        return Err(invalid_node_type("a range's boundary point can't be in a doctype"));
+    }
+    let length'''
+to = '''    let length'''
+
+[[mutant]]
+name = "api: an offset at the length is out of range"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    if offset > length {'''
+to = '''    if offset >= length {'''
+
+[[mutant]]
+name = "api: after a node is before it"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    Ok((parent, if after { index.saturating_add(1) } else { index }))'''
+to = '''    Ok((parent, index))'''
+
+[[mutant]]
+name = "api: collapse goes to the start by default"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    let point = if to_start.unwrap_or(false) {'''
+to = '''    let point = if to_start.unwrap_or(true) {'''
+
+[[mutant]]
+name = "api: selectNode ends before the node"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    cx.set_range(this, (parent, index), (parent, index.saturating_add(1)));'''
+to = '''    cx.set_range(this, (parent, index), (parent, index));'''
+
+[[mutant]]
+name = "api: the common ancestor of the end's"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    while !cx.is_inclusive_ancestor(ancestor, end) {'''
+to = '''    while !cx.is_inclusive_ancestor(end, ancestor) && !cx.is_inclusive_ancestor(ancestor, end) {'''
+
+[[mutant]]
+name = "api: START_TO_END compares the starts"
+file = "crates/dom_api_next/src/range.rs"
+from = '''        1 => (this_end, source_start),'''
+to = '''        1 => (this_start, source_start),'''
+
+[[mutant]]
+name = "api: END_TO_START compares the ends"
+file = "crates/dom_api_next/src/range.rs"
+from = '''        _ => (this_start, source_end),'''
+to = '''        _ => (this_end, source_end),'''
+
+[[mutant]]
+name = "api: 4 is a way to compare"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    if how > 3 {'''
+to = '''    if how > 4 {'''
+
+[[mutant]]
+name = "api: a static range compared as a range"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    if cx.is_static_range(source) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: ranges in other trees compared"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    if !Gc::ptr_eq(root(cx, this_start.0), root(cx, source_start.0)) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: a point at the end is after the range"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    if position(cx, point, cx.range_end(this)) == Ordering::Greater {'''
+to = '''    if position(cx, point, cx.range_end(this)) != Ordering::Less {'''
+
+[[mutant]]
+name = "api: comparing a point in another tree"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    if !in_tree(cx, this, node) {
+        return Err(wrong_document('''
+to = '''    if false {
+        return Err(wrong_document('''
+
+[[mutant]]
+name = "api: a node starting at the end intersects"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    Ok(position(cx, (parent, index), cx.range_end(this)) == Ordering::Less'''
+to = '''    Ok(position(cx, (parent, index), cx.range_end(this)) != Ordering::Greater'''
+
+[[mutant]]
+name = "api: a node without a parent doesn't intersect"
+file = "crates/dom_api_next/src/range.rs"
+from = '''    let Some(parent) = cx.parent(node) else {
+        return Ok(true);'''
+to = '''    let Some(parent) = cx.parent(node) else {
+        return Ok(false);'''
+
+[[mutant]]
+name = "api: a static range in a doctype"
+file = "crates/dom_api_next/src/range.rs"
+from = '''        if matches!(cx.kind(node), NodeKind::DocumentType | NodeKind::Attr) {'''
+to = '''        if matches!(cx.kind(node), NodeKind::Attr) {'''
+
+[[mutant]]
+name = "api: whatToShow by the node type itself"
+file = "crates/dom_api_next/src/traversal.rs"
+from = '''    let bit = u32::from(cx.node_type(node)).saturating_sub(1);'''
+to = '''    let bit = u32::from(cx.node_type(node));'''
+
+[[mutant]]
+name = "api: a filter never called"
+file = "crates/dom_api_next/src/traversal.rs"
+from = '''    if !has_filter {
+        return host.mutate(|cx| {'''
+to = '''    if true {
+        return host.mutate(|cx| {'''
+
+[[mutant]]
+name = "api: an iterator's filter running isn't checked first"
+file = "crates/dom_api_next/src/traversal.rs"
+from = '''    if check && active {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: the active flag stays set"
+file = "crates/dom_api_next/src/traversal.rs"
+from = '''            .mutate(|cx| cx.set_traversal_active(traversal.get(cx.gc), false));'''
+to = '''            .mutate(|cx| cx.set_traversal_active(traversal.get(cx.gc), true));'''
+
+[[mutant]]
+name = "api: an accepted node's reference is the node filtered"
+file = "crates/dom_api_next/src/traversal.rs"
+from = '''            walk.set_position((&at, at_before));'''
+to = '''            walk.set_position((&node, before));'''
+
+[[mutant]]
+name = "api: the next node past the root"
+file = "crates/dom_api_next/src/traversal.rs"
+from = '''    let mut at = node.clone();
+    loop {
+        if walk.same(&at, root) {
+            return None;
+        }'''
+to = '''    let mut at = node.clone();
+    loop {'''
+
+[[mutant]]
+name = "api: the node before the root"
+file = "crates/dom_api_next/src/traversal.rs"
+from = '''fn preceding<W: Walk>(walk: &mut W, node: &W::Node, root: &W::Node) -> Option<W::Node> {
+    if walk.same(node, root) {
+        return None;
+    }'''
+to = '''fn preceding<W: Walk>(walk: &mut W, node: &W::Node, root: &W::Node) -> Option<W::Node> {'''
+
+[[mutant]]
+name = "api: a skipped child's children not looked at"
+file = "crates/dom_api_next/src/traversal.rs"
+from = '''        if result == FILTER_SKIP
+            && let Some(grandchild) = walk.relative(&at, child)'''
+to = '''        if result == FILTER_REJECT
+            && let Some(grandchild) = walk.relative(&at, child)'''
+
+[[mutant]]
+name = "api: a rejected sibling's children looked at"
+file = "crates/dom_api_next/src/traversal.rs"
+from = '''            if result == FILTER_REJECT || sibling.is_none() {'''
+to = '''            if sibling.is_none() {'''
+
+[[mutant]]
+name = "api: an accepted parent doesn't end the siblings' walk"
+file = "crates/dom_api_next/src/traversal.rs"
+from = '''        if walk.filter(&node)? == FILTER_ACCEPT {
+            return Ok(None);
+        }'''
+to = '''        walk.filter(&node)?;'''
+
+[[mutant]]
+name = "api: a skipped previous node's children not looked at"
+file = "crates/dom_api_next/src/traversal.rs"
+from = '''            let mut result = walk.filter(&node)?;
+            while result != FILTER_REJECT'''
+to = '''            let mut result = walk.filter(&node)?;
+            while result == FILTER_ACCEPT'''
+
+[[mutant]]
+name = "api: a rejected next node's children looked at"
+file = "crates/dom_api_next/src/traversal.rs"
+from = '''    loop {
+        while result != FILTER_REJECT
+            && let Some(child) = walk.relative(&node, Relative::FirstChild)'''
+to = '''    loop {
+        while let Some(child) = walk.relative(&node, Relative::FirstChild)'''
+
+[[mutant]]
+name = "api: an accepted node isn't the walker's current"
+file = "crates/dom_api_next/src/traversal.rs"
+from = '''    walk.set_current(&node);
+    Ok(Some(node))'''
+to = '''    Ok(Some(node))'''
+
+[[mutant]]
+name = "api: the parent walk past the root"
+file = "crates/dom_api_next/src/traversal.rs"
+from = '''    let mut node = walk.current();
+    while !walk.same(&node, &root) {
+        let Some(parent) = walk.relative(&node, Relative::Parent) else {'''
+to = '''    let mut node = walk.current();
+    loop {
+        let Some(parent) = walk.relative(&node, Relative::Parent) else {'''
+
+[[mutant]]
+name = "api: an iterator made with a filter has none"
+file = "crates/dom_api_next/src/traversal.rs"
+from = '''    let iterator = cx.create_node_iterator(root, what_to_show, filter.is_some());'''
+to = '''    let iterator = cx.create_node_iterator(root, what_to_show, false);'''
+
+[[mutant]]
+name = "api: a walker made with a filter has none"
+file = "crates/dom_api_next/src/traversal.rs"
+from = '''    let walker = cx.create_tree_walker(root, what_to_show, filter.is_some());'''
+to = '''    let walker = cx.create_tree_walker(root, what_to_show, false);'''
+
+[[mutant]]
+name = "typed: an unsigned short saturates"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''            .map(|value| u16::try_from(value & 0xFFFF).expect("the low 16 bits"))'''
+to = '''            .map(|value| u16::try_from(value.min(0xFFFF)).expect("the low 16 bits"))'''
+
+[[mutant]]
+name = "typed: whatToShow's default is none"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        if front.is_undefined(index) {
+            return Some(u32::MAX);
+        }'''
+to = '''        if front.is_undefined(index) {
+            return Some(0);
+        }'''
+
+[[mutant]]
+name = "front: a filter's result saturates"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''        Some(value) => Ok(u16::try_from(value & 0xFFFF).expect("the low 16 bits")),'''
+to = '''        Some(value) => Ok(u16::try_from(value.min(0xFFFF)).expect("the low 16 bits")),'''
+
+[[mutant]]
+name = "front: an object's acceptNode called on undefined"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''                    Ok(accept) => accept.call(tc, filter.into(), &[argument.into()]),'''
+to = '''                    Ok(accept) => accept.call(tc, v8::undefined(tc).into(), &[argument.into()]),'''
+
+[[mutant]]
+name = "front: a static range's containers swapped"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        self.call.rare().static_range_nodes = Some([nodes[1], nodes[0]]);'''
+to = '''        self.call.rare().static_range_nodes = Some([nodes[0], nodes[1]]);'''
+
+[[mutant]]
+name = "front: a static range's offsets swapped"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        Some((offsets[1], offsets[0]))'''
+to = '''        Some((offsets[0], offsets[1]))'''
+
+[[mutant]]
+name = "front: what the filter threw isn't thrown"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        if let Some(thrown) = self.call.rare.as_mut().and_then(|rare| rare.thrown.take()) {
+            self.scope.scope().throw_exception(thrown);
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "templates: NodeFilter's constants are writable"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''            v8::PropertyAttribute::READ_ONLY | v8::PropertyAttribute::DONT_DELETE,
+        )?;'''
+to = '''            v8::PropertyAttribute::DONT_DELETE,
+        )?;'''
+
+[[mutant]]
+name = "templates: NodeFilter has a prototype"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''    template.set_class_name(string(scope, interface.name));
+    template.remove_prototype();'''
+to = '''    template.set_class_name(string(scope, interface.name));'''
+
+[[mutant]]
+name = "front: a filter of a removed frame's realm called"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''                .is_some_and(|window| !cx.is_discarded(cx.window_document(window)))'''
+to = '''                .is_some_and(|_| true)'''
+
+[[mutant]]
+name = "front: a string's negative number doesn't wrap"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        base::numerics::saturated_cast(number.trunc().rem_euclid(4_294_967_296.0))'''
+to = '''        base::numerics::saturated_cast(number.trunc())'''

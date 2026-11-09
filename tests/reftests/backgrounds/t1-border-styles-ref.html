@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<title>Border styles 1 reference</title>
+<style>
+  html, body { margin: 0 }
+  div { width: 60px; height: 30px; margin: 10px }
+</style>
+<!-- 72 by 42 in all: 2px of red, 2px of gap, 2px of red. -->
+<div style="width: 68px; height: 38px; border: 2px solid red; position: relative">
+  <div style="position: absolute; left: 2px; top: 2px; margin: 0; width: 60px; height: 30px;
+              border: 2px solid red"></div>
+</div>
+<div style="border: 6px solid; border-color: black rgb(84, 84, 84) rgb(84, 84, 84) black"></div>
+<div style="background: green"></div>

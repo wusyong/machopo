@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<title>display: contents lays its children out as its parent's</title>
+<link rel="match" href="s2-display-contents-ref.html">
+<!-- No box of its own (its border isn't drawn): its text, in its font and
+     color, and its ::before are on its parent's line; a block in it is a
+     block of the parent; in a flex container its children are items. -->
+<style>
+  body { margin: 0 }
+  div { font: 20px/1 Ahem; width: 300px }
+  .c { display: contents; border: 5px solid red; color: green; font-size: 40px }
+  span.c::before { content: "B" }
+  .flex { display: flex }
+  .flex span { width: 40px; height: 20px; background: blue }
+</style>
+<div>X<span class="c">YY</span>Z</div>
+<div><div class="c"><p style="margin: 0; height: 20px; background: blue"></p></div></div>
+<div class="flex"><div class="c"><span></span><span style="background: green"></span></div></div>

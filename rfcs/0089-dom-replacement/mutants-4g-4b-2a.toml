@@ -1,0 +1,138 @@
+# Stage 4g-4b-2a: the mouse and wheels into child frames on the new DOM: the page's
+# EventHandler with each frame's mouse state, an input over an iframe passed on to its
+# child frame (its point there, the iframe what the parent has it over), a press capturing
+# the child frame, the frames left; the renderer's wheel through child frames, the
+# compositor's deltas of theirs, points between frames; same_origin; a child's event
+# handlers compiled in its realm.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_api_next --test it input && cargo test -q -p renderer --lib next_frame_view && cargo test -q -p dom_js_next --test it frames && cargo test -q -p shell --test it next_dom_intersection"]
+timeout = 3000
+
+[[mutant]]
+name = "input: a press in a child frame captures nothing"
+file = "crates/dom_api_next/src/input.rs"
+from = '''                self.subframe = Some(child.clone());'''
+to = '''                let _ = child;'''
+
+[[mutant]]
+name = "input: the iframe not active"
+file = "crates/dom_api_next/src/input.rs"
+from = '''                host.mutate(|cx| cx.set_active_element(document.get(cx.gc), Some(iframe.get(cx.gc))));'''
+to = ''''''
+
+[[mutant]]
+name = "input: the capture kept after the release"
+file = "crates/dom_api_next/src/input.rs"
+from = '''                self.subframe = None;'''
+to = ''''''
+
+[[mutant]]
+name = "input: captured, outside the frame, no target"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            if target.is_none() && captured_here {'''
+to = '''            if false && target.is_none() && captured_here {'''
+
+[[mutant]]
+name = "input: a parent never finds the iframe"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            node = cx.frame_owner(cx.document_of(node))?;'''
+to = '''            return None;'''
+
+[[mutant]]
+name = "input: the iframe's border passed on"
+file = "crates/dom_api_next/src/input.rs"
+from = '''                        (!Gc::ptr_eq(deep, target.get(cx.gc)))'''
+to = '''                        true'''
+
+[[mutant]]
+name = "input: a frame left keeps the pointer"
+file = "crates/dom_api_next/src/input.rs"
+from = '''                self.frames[index].1.update_under_mouse(host, &left, None, &info);'''
+to = '''                let _ = (left, info);'''
+
+[[mutant]]
+name = "input: a gone frame's state kept"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        self.frames.retain(|_| shown.next().unwrap_or(false));'''
+to = '''        let _ = shown;'''
+
+[[mutant]]
+name = "input: a child frame's point the top-level one's"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        cx.with_layout(top, |layout| layout.point_in_frame(document, point))'''
+to = '''        cx.with_layout(top, |layout| layout.point_in_frame(document, point).map(|_| point))'''
+
+[[mutant]]
+name = "input: a wheel's point the top-level frame's"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            point: point_in_frame(host, document, &frame, input.point).unwrap_or(input.point),'''
+to = '''            point: input.point,'''
+
+[[mutant]]
+name = "renderer: a wheel doesn't scroll a child frame"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''                let Some(child) = child_view_mut(children, iframe) else {
+                    return false;
+                };
+                let target = (child.document_node != element).then_some(element);'''
+to = '''                let Some(child) = child_view_mut(children, iframe).filter(|_| false) else {
+                    return false;
+                };
+                let target = (child.document_node != element).then_some(element);'''
+
+[[mutant]]
+name = "renderer: the compositor's child frame deltas dropped"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        apply_child_compositor_deltas(&mut self.children, &scroll.containers);'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: a point into a child frame not past the scrolling"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        pre.point_in_child_frame(iframe, PointF::new(point.x + viewport.x, point.y + viewport.y))'''
+to = '''        pre.point_in_child_frame(iframe, point)'''
+
+[[mutant]]
+name = "renderer: a point out of a child frame not past the scrolling"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        Some(PointF::new(at.x - viewport.x, at.y - viewport.y))'''
+to = '''        Some(at)'''
+
+[[mutant]]
+name = "api: a document not its own origin"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''    if gc::Gc::ptr_eq(a, b) {
+        return true;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: an about: document's origin its own"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''            Some(owner) if about => at = cx.document_of(owner),'''
+to = '''            Some(owner) if false && about => at = cx.document_of(owner),'''
+
+[[mutant]]
+name = "js: a child's handlers compiled in the current realm"
+file = "crates/dom_js_next/src/handlers.rs"
+from = '''            Some(realm) => v8::Local::new(v8_scope, realm),'''
+to = '''            Some(_) => v8_scope.get_current_context(),'''
+
+[[mutant]]
+name = "geometry: elementFromPoint goes into child frames"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''            Some(owner) => node = owner,
+            None => break,'''
+to = '''            Some(_) => return Some(node),
+            None => break,'''
+
+[[mutant]]
+name = "geometry: elementFromPoint gives none for a parent's element"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''            None => break,
+        }
+    }
+    document_element(cx, document)'''
+to = '''            None => break,
+        }
+    }
+    None'''

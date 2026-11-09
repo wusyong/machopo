@@ -1,0 +1,42 @@
+# 3: every type's roots kept for reuse (`dom`). Until the fork's
+# kun-v152.2.0-17 is out, with RUSTY_V8_ARCHIVE at a V8 `ci.py v8` built:
+#   python3 scripts/test.py mutate rfcs/0072-in-place-persistents/mutants-3.toml
+# The unit tests too: `the_roots_go_with_the_isolate` is one.
+test = ["cargo", "test", "-q", "-p", "dom", "--lib", "--test", "it"]
+timeout = 900
+
+[[mutant]]
+name = "another type's spare never taken"
+file = "crates/dom/src/handle.rs"
+from = '''        let pool = others.get_mut(&TypeId::of::<T>())?;'''
+to = '''        let pool = others.get_mut(&TypeId::of::<()>())?;'''
+
+[[mutant]]
+name = "another type's spare never kept"
+file = "crates/dom/src/handle.rs"
+from = '''        if spares.len() < OTHER_SPARE_LIMIT {'''
+to = '''        if false && spares.len() < OTHER_SPARE_LIMIT {'''
+
+[[mutant]]
+name = "another type keeps one more"
+file = "crates/dom/src/handle.rs"
+from = '''        if spares.len() < OTHER_SPARE_LIMIT {'''
+to = '''        if spares.len() <= OTHER_SPARE_LIMIT {'''
+
+[[mutant]]
+name = "another type keeps one fewer"
+file = "crates/dom/src/handle.rs"
+from = '''const OTHER_SPARE_LIMIT: usize = 64;'''
+to = '''const OTHER_SPARE_LIMIT: usize = 63;'''
+
+[[mutant]]
+name = "nodes and collections keep as few as other types"
+file = "crates/dom/src/handle.rs"
+from = '''            return if spares.len() < SPARE_LIMIT {'''
+to = '''            return if spares.len() < OTHER_SPARE_LIMIT {'''
+
+[[mutant]]
+name = "teardown keeps the other types' spares"
+file = "crates/dom/src/handle.rs"
+from = '''        let others = std::mem::take(&mut *self.spare_others.borrow_mut());'''
+to = '''        let others = ();'''

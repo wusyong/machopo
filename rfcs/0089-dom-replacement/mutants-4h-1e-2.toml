@@ -1,0 +1,139 @@
+# Stage 4h-1e-2: import(), import.meta.resolve and <link rel=modulepreload> on the new DOM, and
+# failed module fetches not kept in the module map.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_api_next --lib module && cargo test -q -p dom_js_next --test it -- scripts::"]
+timeout = 1200
+
+[[mutant]]
+name = "api: a failed module stays in the map"
+file = "crates/dom_api_next/src/module.rs"
+from = '''            None => self.map.remove(&url).expect("fetching"),'''
+to = '''            None => std::mem::replace(self.map.get_mut(&url).expect("fetching"), Entry::Fetching(Vec::new())),'''
+
+[[mutant]]
+name = "api: a module's fetch options aren't its fetch's"
+file = "crates/dom_api_next/src/module.rs"
+from = '''                self.fetches.insert(request_id, (url.clone(), entry.credentials));'''
+to = '''                self.fetches.insert(request_id, (url.clone(), CredentialsMode::Anonymous));'''
+
+[[mutant]]
+name = "dom: a modulepreload rel isn't seen"
+file = "crates/dom_next/src/script.rs"
+from = '''        if local == names::local::REL && self.is_module_preload(element) {
+            self.see(form::PRELOADS_SEEN);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: rel's keywords by case"
+file = "crates/dom_next/src/script.rs"
+from = '''                    .any(|keyword| keyword.eq_ignore_ascii_case("modulepreload"))'''
+to = '''                    .any(|keyword| keyword == "modulepreload")'''
+
+[[mutant]]
+name = "dom: rel whole, not its keywords"
+file = "crates/dom_next/src/script.rs"
+from = '''                    .split(|c: char| c.is_ascii_whitespace())'''
+to = '''                    .split('\u{0}')'''
+
+[[mutant]]
+name = "dom: a link in a shadow tree preloads"
+file = "crates/dom_next/src/script.rs"
+from = '''            && self.containing_shadow_root(node).is_none()'''
+to = ''''''
+
+[[mutant]]
+name = "dom: the same value processed again"
+file = "crates/dom_next/src/script.rs"
+from = '''        if relevant && old != new && self.has_seen(form::PRELOADS_SEEN) {'''
+to = '''        if relevant && self.has_seen(form::PRELOADS_SEEN) {'''
+
+[[mutant]]
+name = "dom: href changing isn't processed"
+file = "crates/dom_next/src/script.rs"
+from = '''        let relevant = [names::local::REL, names::local::HREF, names::local::AS, names::local::CROSSORIGIN]'''
+to = '''        let relevant = [names::local::REL, names::local::AS, names::local::CROSSORIGIN]'''
+
+[[mutant]]
+name = "dom: a connected link isn't recorded"
+file = "crates/dom_next/src/frame.rs"
+from = '''            self.script_connected(node);
+            self.link_connected(node);'''
+to = '''            self.script_connected(node);'''
+
+[[mutant]]
+name = "api: a preload isn't processed"
+file = "crates/dom_api_next/src/frame.rs"
+from = '''                if let Some(link) = link {
+                    host.preload_module(&link);
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a classic script's credentials never include"
+file = "crates/dom_api_next/src/script.rs"
+from = '''        .is_some_and(|value| value.borrow().to_str().eq_ignore_ascii_case("use-credentials"))'''
+to = '''        .is_some_and(|_| false)'''
+
+[[mutant]]
+name = "js: import() takes no credentials of its script"
+file = "crates/dom_js_next/src/modules.rs"
+from = '''        Some("include") => ScriptCors::UseCredentials,'''
+to = '''        Some("never") => ScriptCors::UseCredentials,'''
+
+[[mutant]]
+name = "js: import() resolves against the document"
+file = "crates/dom_js_next/src/modules.rs"
+from = '''    let base_url = bindings::referrer_base_url(scope, options);'''
+to = '''    let base_url: Option<String> = { let _ = options; None };'''
+
+[[mutant]]
+name = "js: an import in the map settles at once"
+file = "crates/dom_js_next/src/modules.rs"
+from = '''        Ok(url) => with_modules(&mut state_scope, &document, true, |map, imports, host| {'''
+to = '''        Ok(url) => with_modules(&mut state_scope, &document, false, |map, imports, host| {'''
+
+[[mutant]]
+name = "js: a failed import's URL lost"
+file = "crates/dom_js_next/src/modules.rs"
+from = '''                url.as_ref().map_or("", Url::as_str)'''
+to = '''                { let _ = &url; "" }'''
+
+[[mutant]]
+name = "js: a classic script's credentials not carried"
+file = "crates/dom_js_next/src/frames.rs"
+from = '''    if script.use_credentials { "include" } else { "same-origin" }'''
+to = '''    let _ = script;
+    "same-origin"'''
+
+[[mutant]]
+name = "js: no import.meta.resolve"
+file = "crates/dom_js_next/src/modules.rs"
+from = '''            records: ModuleRecords::with_resolve(scope, Some(resolve_specifier)),'''
+to = '''            records: ModuleRecords::with_resolve(scope, None),'''
+
+[[mutant]]
+name = "js: a preload's as isn't looked at"
+file = "crates/dom_js_next/src/modules.rs"
+from = '''            if !is_script_like(destination) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "js: a preload's credentials same-origin"
+file = "crates/dom_js_next/src/modules.rs"
+from = '''                Some(value) if value.eq_ignore_ascii_case("use-credentials") => ScriptCors::UseCredentials,'''
+to = '''                Some(value) if value.eq_ignore_ascii_case("never") => ScriptCors::UseCredentials,'''
+
+[[mutant]]
+name = "js: a preload's load and error swapped"
+file = "crates/dom_js_next/src/modules.rs"
+from = '''                            let event = if done.root.is_some() { names::event::LOAD } else { names::event::ERROR };'''
+to = '''                            let event = if done.root.is_none() { names::event::LOAD } else { names::event::ERROR };'''
+
+[[mutant]]
+name = "js: no checkpoint after a module fetched"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        if found {
+            self.perform_microtask_checkpoint();
+        }
+        found'''
+to = '''        found'''

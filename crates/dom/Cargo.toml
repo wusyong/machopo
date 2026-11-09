@@ -1,0 +1,38 @@
+[package]
+name = "dom"
+description = "The DOM on machopo's own GC (gc): the node tree, its names, attributes and text (Blink's core/dom)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# A 2D context's data, apart from the DOM (`canvas.rs`).
+canvas.workspace = true
+# A `srcset` density's natural size, rounded (`image`).
+base.workspace = true
+elise.workspace = true
+# The navigation timing's milestones in machopo's trace, as Chrome's
+# `blink.user_timing` (`performance`).
+tracing.workspace = true
+# The style an element keeps (`style.rs`): computed styles, declarations.
+animation.workspace = true
+computed_style.workspace = true
+css.workspace = true
+# Node ids (`gfx::NodeId`), which boxes and fragments refer to nodes by.
+gfx.workspace = true
+# The bidi class of a character, for an element's `dir=auto` (`directionality`).
+icu_properties.workspace = true
+# The tables of names and attribute values hash short strings no attacker
+# chooses the hash of (FxHash, as `dom`'s).
+rustc-hash.workspace = true
+# An `<img>`'s `src` resolved against its document's URL (`image`).
+url.workspace = true

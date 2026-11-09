@@ -1,0 +1,8 @@
+# Every text file is LF, in the repository and in each checkout, whatever
+# core.autocrlf says: a file written on Windows doesn't change every line,
+# and tests read the same bytes on every platform.
+* text=auto eol=lf
+
+# Byte for byte, as they were made: saved sites are as they were
+# downloaded (Project Gutenberg's page has CRLF line endings).
+tests/sites/** -text

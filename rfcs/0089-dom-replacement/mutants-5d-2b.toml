@@ -1,0 +1,131 @@
+# Stage 5d-2b: tasks and timing on the DOM's engine.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it && cargo test -q -p dom_js_next --test it -- tasks:: blobs:: && cargo test -q -p renderer --lib navigation_timing:: && cargo test -q -p shell --test it -- messaging:: script:: forms:: performance:: navigator:: trace:: images:: fetch:: && cargo test -q -p browser --test it -- links::"]
+timeout = 2400
+
+[[mutant]]
+name = "dom_next: a pass runs what was queued during it"
+file = "crates/dom_next/src/tasks.rs"
+from = '''.is_none_or(|limit| number < limit)'''
+to = '''.is_none_or(|_| true)'''
+
+[[mutant]]
+name = "dom_next: queuing a task doesn't set the flag"
+file = "crates/dom_next/src/tasks.rs"
+from = '''self.changes.tasks_queued.set(true);'''
+to = ''''''
+
+[[mutant]]
+name = "dom_next: a timer runs before its time"
+file = "crates/dom_next/src/tasks.rs"
+from = '''.filter(|&(at, _, _)| at <= now)'''
+to = '''.filter(|_| true)'''
+
+[[mutant]]
+name = "dom_next: an interval keeps its first number"
+file = "crates/dom_next/src/window.rs"
+from = '''timer.number.set(self.next_task_number());'''
+to = ''''''
+
+[[mutant]]
+name = "dom_next: an element task queued in the pass runs in it"
+file = "crates/dom_next/src/window.rs"
+from = '''if !self.task_may_run(task.number.get()) {'''
+to = '''if false {'''
+
+[[mutant]]
+name = "dom_next: a message queued in the pass runs in it"
+file = "crates/dom_next/src/message.rs"
+from = '''.filter(|(_, message)| self.task_may_run(message.number.get()))'''
+to = '''.filter(|_| true)'''
+
+[[mutant]]
+name = "dom_next: a waiting image not held"
+file = "crates/dom_next/src/image.rs"
+from = '''    fn wait_for_image(&self, element: NodeRef<'gc>, url: String) {
+        self.hold_pending_image(element);'''
+to = '''    fn wait_for_image(&self, element: NodeRef<'gc>, url: String) {'''
+
+[[mutant]]
+name = "dom_next: a fetched image kept"
+file = "crates/dom_next/src/image.rs"
+from = '''self.let_go_pending_image(element);'''
+to = ''''''
+
+[[mutant]]
+name = "dom_api_next: the timer's nesting level kept through its microtasks"
+file = "crates/dom_api_next/src/timer.rs"
+from = '''host.read(|cx| cx.set_timer_nesting(window.get(cx.gc), 0));'''
+to = ''''''
+
+[[mutant]]
+name = "dom_api_next: navigator wrapped in the caller's realm"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''ObjectRef::Navigator(navigator) => Some(cx.navigator_window(navigator)),'''
+to = '''ObjectRef::Navigator(_) => None,'''
+
+[[mutant]]
+name = "dom_api_next: a mark not traced"
+file = "crates/dom_api_next/src/performance.rs"
+from = '''trace_entry(cx, performance, entry);'''
+to = ''''''
+
+[[mutant]]
+name = "dom_js_next: a string handler named after the document"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''let name = v8::String::empty(scope);'''
+to = '''let name = v8::String::new(scope, "x").unwrap();'''
+
+[[mutant]]
+name = "dom_js_next: a callback's object wrapped in the current realm"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''Some(context) if context != current => {'''
+to = '''Some(context) if false && context != current => {'''
+
+[[mutant]]
+name = "dom_js_next: fetches sent after the task"
+file = "crates/dom_js_next/src/state.rs"
+from = '''crate::frames::send_fetches(scope);'''
+to = ''''''
+
+[[mutant]]
+name = "dom_js_next: a frame gone not told to the load sink"
+file = "crates/dom_js_next/src/frames.rs"
+from = '''sink.frame_gone(removed.id);'''
+to = '''let _ = (&sink, removed.id);'''
+
+[[mutant]]
+name = "renderer: no DOM tasks after a channel task"
+file = "crates/renderer/src/render_thread.rs"
+from = '''self.run_next_queued_tasks();'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: a response before its fetch is noted"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        // (`FrameRequest::FetchSent`): this may be one's response.
+        self.handle_next_frame_requests();'''
+to = '''        // (`FrameRequest::FetchSent`): this may be one's response.'''
+
+[[mutant]]
+name = "renderer: a load queued twice"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''if next.readiness != Readiness::LoadQueued {'''
+to = '''if true {'''
+
+[[mutant]]
+name = "renderer: a fetch of a revoked blob goes"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''if fetch_of_revoked_blob(&self.blob_urls, request) {'''
+to = '''if false && fetch_of_revoked_blob(&self.blob_urls, request) {'''
+
+[[mutant]]
+name = "renderer: domLoading not clamped after the response"
+file = "crates/renderer/src/navigation_timing.rs"
+from = '''.fold(dom_loading, f64::max);'''
+to = '''.fold(dom_loading, |a, _| a);'''
+
+[[mutant]]
+name = "dom_api_next_macros: a blob read in the current window"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''Some(quote!(#front.prepare_relevant_window();))'''
+to = '''None'''

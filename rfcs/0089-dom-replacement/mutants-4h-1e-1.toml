@@ -1,0 +1,106 @@
+# Stage 4h-1e-1: module scripts on the new DOM (prepared and queued in the DOM, their graphs
+# fetched by the realm's module map, run in tasks, their errors reported).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "sh", "-c", "cargo test -q -p dom_api_next --lib module && cargo test -q -p dom_next --test it -- scripts:: && cargo test -q -p dom_js_next --test it -- scripts::"]
+timeout = 1200
+
+[[mutant]]
+name = "dom: an inline module fires load"
+file = "crates/dom_next/src/script.rs"
+from = '''            external: pending.external.get(),'''
+to = '''            external: true,'''
+
+[[mutant]]
+name = "api: any type is a module's"
+file = "crates/dom_api_next/src/script.rs"
+from = '''    if module && !type_attr.as_deref().is_some_and(is_module_type) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: module only in lower case"
+file = "crates/dom_api_next/src/script.rs"
+from = '''        .eq_ignore_ascii_case("module")'''
+to = '''        == "module"'''
+
+[[mutant]]
+name = "api: a module's nomodule counts"
+file = "crates/dom_api_next/src/script.rs"
+from = '''    if !module && attr(names::local::NOMODULE).is_some() {'''
+to = '''    if attr(names::local::NOMODULE).is_some() {'''
+
+[[mutant]]
+name = "api: a module's for and event count"
+file = "crates/dom_api_next/src/script.rs"
+from = '''    if !module && let (Some(event), Some(target)) = (attr(names::local::EVENT), attr(names::local::FOR)) {'''
+to = '''    if let (Some(event), Some(target)) = (attr(names::local::EVENT), attr(names::local::FOR)) {'''
+
+[[mutant]]
+name = "api: a module's credentials include"
+file = "crates/dom_api_next/src/script.rs"
+from = '''            ModuleSource::External(url.into()),
+            cors.unwrap_or(ScriptCors::Anonymous),'''
+to = '''            ModuleSource::External(url.into()),
+            cors.unwrap_or(ScriptCors::UseCredentials),'''
+
+[[mutant]]
+name = "api: an inline module's text lost"
+file = "crates/dom_api_next/src/script.rs"
+from = '''            ModuleSource::Inline {
+                source: source.to_string(),'''
+to = '''            ModuleSource::Inline {
+                source: String::new(),'''
+
+[[mutant]]
+name = "api: a module in order is as soon as possible"
+file = "crates/dom_api_next/src/script.rs"
+from = '''    let in_order = !deferred && !is_async && !flags.non_blocking;'''
+to = '''    let in_order = false;'''
+
+[[mutant]]
+name = "api: a module's graph isn't started"
+file = "crates/dom_api_next/src/script.rs"
+from = '''            host.start_module_graph(&document, start);'''
+to = '''            let _ = (document, start);'''
+
+[[mutant]]
+name = "api: a module's graph doesn't run"
+file = "crates/dom_api_next/src/script.rs"
+from = '''        ScriptResult::Module(root) => host.run_module_script(&document, root),'''
+to = '''        ScriptResult::Module(_) => {}'''
+
+[[mutant]]
+name = "js: a parse error is a SyntaxError"
+file = "crates/dom_js_next/src/modules.rs"
+from = '''            ModuleParseError::Type(_) => v8::Exception::type_error(scope, message),'''
+to = '''            ModuleParseError::Type(_) => v8::Exception::syntax_error(scope, message),'''
+
+[[mutant]]
+name = "js: a graph fetched isn't told"
+file = "crates/dom_js_next/src/modules.rs"
+from = '''                cx.module_graph_fetched(key, done.root.map(ModuleScriptId::index));'''
+to = '''                let _ = key;'''
+
+[[mutant]]
+name = "js: a failed graph runs its root"
+file = "crates/dom_js_next/src/modules.rs"
+from = '''                cx.module_graph_fetched(key, done.root.map(ModuleScriptId::index));'''
+to = '''                cx.module_graph_fetched(key, Some(done.root.map_or(0, ModuleScriptId::index)));'''
+
+[[mutant]]
+name = "js: a rejection isn't reported"
+file = "crates/dom_js_next/src/modules.rs"
+from = '''    let _ = promise.catch(scope, report);'''
+to = '''    let _ = (promise, report);'''
+
+[[mutant]]
+name = "js: an inline module's base URL its URL"
+file = "crates/dom_js_next/src/modules.rs"
+from = '''            map.fetch_inline_tree(host, &source, &url, &base, line, start.key, start.credentials)'''
+to = '''            let _ = base;
+            let base = Url::parse("https://example.test/elsewhere/").expect("a URL");
+            map.fetch_inline_tree(host, &source, &url, &base, line, start.key, start.credentials)'''
+
+[[mutant]]
+name = "js: a module asked for no-cors"
+file = "crates/dom_js_next/src/modules.rs"
+from = '''            cors: Some(credentials),'''
+to = '''            cors: { let _ = credentials; None },'''

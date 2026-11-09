@@ -1,0 +1,354 @@
+# Stage 2b-2: listeners and the DOM's dispatch: the new DOM's listeners
+# and an event's dispatch state (its path and snapshot reused), gc's
+# HeapVector::clear, EventTarget's members and Event's rest, the bindings'
+# callbacks (strong references), union, sequence and object arguments and
+# results, members calling script (ScriptHost), and bench.py calls' event
+# cases.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_next"]
+timeout = 900
+
+[[mutant]]
+name = "a cleared vector keeps its edges"
+file = "crates/gc/src/vector.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--test", "it", "cleared"]
+from = '''        for i in 0..self.len() {
+            store.write(cx, i, 0);
+        }
+        self.len.set(0);'''
+to = '''        let _ = store;
+        self.len.set(0);'''
+
+[[mutant]]
+name = "a cleared vector keeps its length"
+file = "crates/gc/src/vector.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--test", "it", "cleared"]
+from = '''            store.write(cx, i, 0);
+        }
+        self.len.set(0);'''
+to = '''            store.write(cx, i, 0);
+        }'''
+
+[[mutant]]
+name = "a node's listener flag is never set"
+file = "crates/dom_next/src/event.rs"
+from = '''                self.set_flag(node, HAS_LISTENERS, true);'''
+to = '''                self.set_flag(node, HAS_LISTENERS, false);'''
+
+[[mutant]]
+name = "the snapshot takes every type's listeners"
+file = "crates/dom_next/src/event.rs"
+from = '''                if DomString::ptr_eq(listener.into_ref().event_type.get(), &event_type) {'''
+to = '''                if true || DomString::ptr_eq(listener.into_ref().event_type.get(), &event_type) {'''
+
+[[mutant]]
+name = "a removed listener isn't marked"
+file = "crates/dom_next/src/event.rs"
+from = '''            listener.flags.set(listener.flags.get() | REMOVED);'''
+to = '''            let _ = REMOVED;'''
+
+[[mutant]]
+name = "a listener is found whatever its capture"
+file = "crates/dom_next/src/event.rs"
+from = '''                    && (listener.flags.get() & CAPTURE != 0) == capture'''
+to = '''                    && { let _ = capture; true }'''
+
+[[mutant]]
+name = "initEvent keeps trusted"
+file = "crates/dom_next/src/event.rs"
+from = '''        let kept = event.flags.get() & (COMPOSED | PHASE_MASK);'''
+to = '''        let kept = event.flags.get() & (COMPOSED | PHASE_MASK | TRUSTED);'''
+
+[[mutant]]
+name = "initEvent keeps the target"
+file = "crates/dom_next/src/event.rs"
+from = '''            }),
+        );
+        event.target.set(self.gc, None);'''
+to = '''            }),
+        );'''
+
+[[mutant]]
+name = "a path set again keeps the old"
+file = "crates/dom_next/src/event.rs"
+from = '''            Some(path) => {
+                path.clear(self.gc);
+                path
+            }'''
+to = '''            Some(path) => path,'''
+
+[[mutant]]
+name = "a snapshot taken again keeps the old"
+file = "crates/dom_next/src/event.rs"
+from = '''            Some(snapshot) => {
+                snapshot.clear(self.gc);
+                snapshot
+            }'''
+to = '''            Some(snapshot) => snapshot,'''
+
+[[mutant]]
+name = "the phase overlaps the passive flag"
+file = "crates/dom_next/src/event.rs"
+from = '''const PHASE_SHIFT: u16 = 9;'''
+to = '''const PHASE_SHIFT: u16 = 8;'''
+
+[[mutant]]
+name = "a callback added again is another listener"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''    if same.is_none() {'''
+to = '''    if { let _ = same; true } {'''
+
+[[mutant]]
+name = "addEventListener's capture option is ignored"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''            capture: options.capture,
+            once: options.once,'''
+to = '''            capture: false,
+            once: options.once,'''
+
+[[mutant]]
+name = "addEventListener's boolean is ignored"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''            capture: *capture,
+            ..ListenerFlags::default()'''
+to = '''            capture: { let _ = capture; false },
+            ..ListenerFlags::default()'''
+
+[[mutant]]
+name = "removeEventListener's boolean is ignored"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        DictOrBool::Bool(capture) => *capture,
+    };
+    if let Some(listener)'''
+to = '''        DictOrBool::Bool(_) => false,
+    };
+    if let Some(listener)'''
+
+[[mutant]]
+name = "a dispatched event stays trusted"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''            cx.set_event_trusted(event, false);'''
+to = '''            let _ = event;'''
+
+[[mutant]]
+name = "an event being dispatched dispatches again"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''    if dispatching {
+        return Err(ApiError::dom(ExceptionName::InvalidState));
+    }'''
+to = '''    if dispatching && false {
+        return Err(ApiError::dom(ExceptionName::InvalidState));
+    }'''
+
+[[mutant]]
+name = "the capture pass goes up"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''    for index in (0..len).rev() {'''
+to = '''    for index in 0..len {'''
+
+[[mutant]]
+name = "the target is captured, not at target"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        let phase = if index == 0 { AT_TARGET } else { CAPTURING_PHASE };'''
+to = '''        let phase = CAPTURING_PHASE;'''
+
+[[mutant]]
+name = "an event that doesn't bubble bubbles"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        } else if bubbles {'''
+to = '''        } else if { let _ = bubbles; true } {'''
+
+[[mutant]]
+name = "the current target stays after a dispatch"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        cx.set_event_current_target(event, None);
+        cx.clear_event_path(event);'''
+to = '''        cx.clear_event_path(event);'''
+
+[[mutant]]
+name = "the path stays after a dispatch"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        cx.set_event_current_target(event, None);
+        cx.clear_event_path(event);'''
+to = '''        cx.set_event_current_target(event, None);'''
+
+[[mutant]]
+name = "stopping propagation outlives a dispatch"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        state.stop_propagation = false;
+        state.stop_immediate_propagation = false;
+        cx.set_event_state(event, state);
+        !canceled'''
+to = '''        state.stop_immediate_propagation = false;
+        cx.set_event_state(event, state);
+        !canceled'''
+
+[[mutant]]
+name = "stopping propagation doesn't stop"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        if cx.event_state(event).stop_propagation {
+            return 0;
+        }'''
+to = '''        if false {
+            return 0;
+        }'''
+
+[[mutant]]
+name = "a once listener stays"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''            if flags.once {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "a passive listener isn't passive"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''            if flags.passive {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "stopping propagation immediately doesn't"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        if stop {
+            return;
+        }'''
+to = '''        let _ = stop;'''
+
+[[mutant]]
+name = "a removed listener is called"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''            if cx.listener_removed(listener) || flags.capture != capture {'''
+to = '''            if flags.capture != capture {'''
+
+[[mutant]]
+name = "the user agent's event isn't trusted"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''                composed: false,
+                trusted: true,'''
+to = '''                composed: false,
+                trusted: false,'''
+
+[[mutant]]
+name = "a passive listener cancels"
+file = "crates/dom_api_next/src/event.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        if cancelable && !state.in_passive_listener {'''
+to = '''        if cancelable {'''
+
+[[mutant]]
+name = "an event that isn't cancelable cancels"
+file = "crates/dom_api_next/src/event.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        if cancelable && !state.in_passive_listener {'''
+to = '''        if !state.in_passive_listener {'''
+
+[[mutant]]
+name = "cancelBubble = false clears it"
+file = "crates/dom_api_next/src/event.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''    if value {
+        update(cx, this, |state| state.stop_propagation = true);
+    }'''
+to = '''    update(cx, this, |state| state.stop_propagation = value);'''
+
+[[mutant]]
+name = "returnValue = true cancels"
+file = "crates/dom_api_next/src/event.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''    if !value {
+        cancel(cx, this);
+    }'''
+to = '''    if value {
+        cancel(cx, this);
+    }'''
+
+[[mutant]]
+name = "initEvent changes an event being dispatched"
+file = "crates/dom_api_next/src/event.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''    if !cx.event_state(this).dispatching {'''
+to = '''    if true {'''
+
+[[mutant]]
+name = "a script calling member gives no result"
+file = "crates/dom_api_next_macros/src/lib.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next", "-p", "dom_api_next_macros", "-p", "dom_js_next", "--test", "it"]
+from = '''                        <#ret as #api::typed::RetType>::give(#front, #cx, ::std::convert::Into::into(#value));
+                    });
+                    #front.finish(#dom);'''
+to = '''                        let _ = (#cx, #value);
+                    });
+                    #front.finish(#dom);'''
+
+[[mutant]]
+name = "callbacks are never the same"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        bindings::strong(self.scope, edge).is_some_and(|held| held == self.callbacks[callback.0])'''
+to = '''        { let _ = (edge, callback); false }'''
+
+[[mutant]]
+name = "a callback is held droppable"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        bindings::set_strong(self.scope, edge, self.callbacks[callback.0]);'''
+to = '''        bindings::set_wrapper(self.scope, edge, self.callbacks[callback.0]);'''
+
+[[mutant]]
+name = "handleEvent's this is the target"
+file = "crates/dom_js_next/src/listeners.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''                    Ok(handler) => handler.call(scope, callback.into(), &[argument.into()]),'''
+to = '''                    Ok(handler) => handler.call(scope, this.into(), &[argument.into()]),'''
+
+[[mutant]]
+name = "a listener's exception isn't counted"
+file = "crates/dom_js_next/src/listeners.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''            .set(state.listener_exceptions.get().wrapping_add(1));'''
+to = '''            .set(state.listener_exceptions.get());'''
+
+[[mutant]]
+name = "a sequence is an empty array"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''                let array = v8::Array::new_with_elements(self.scope, &wrappers);'''
+to = '''                let array = v8::Array::new_with_elements(self.scope, &wrappers[..0]);'''
+
+[[mutant]]
+name = "an object argument is any wrapper"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        if bindings::is_wrapper::<T>(self.scope, value) {
+            return v8::Local::<v8::Object>::try_from(value).ok().map(Some);
+        }
+        self.throw_type_error(&format!(
+            "parameter {} is not of type '{interface}'.",'''
+to = '''        if bindings::is_wrapper::<T>(self.scope, value) || value.is_object() {
+            return v8::Local::<v8::Object>::try_from(value).ok().map(Some);
+        }
+        self.throw_type_error(&format!(
+            "parameter {} is not of type '{interface}'.",'''
+
+[[mutant]]
+name = "a guest runs JS's cases"
+file = "scripts/bench/calls/calls.py"
+test = ["python3", "scripts/bench/calls/calls_test.py"]
+from = '''        engine_cases = [case for case in cases if not (engine.startswith("wasm") and case in JS_ONLY_CASES)]'''
+to = '''        engine_cases = list(cases)'''

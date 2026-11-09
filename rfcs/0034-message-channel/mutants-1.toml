@@ -1,0 +1,128 @@
+# Mutation test of stage 1 (ports and structuredClone(), no transfer):
+# python3 scripts/test.py mutate rfcs/0034-message-channel/mutants-1.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "messaging::"]
+timeout = 1200
+
+[[mutant]]
+name = "timers run before the DOM's tasks"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                (Some(t), Some(d)) => Some(if (t.0, t.1) < (d.0, d.1) { t } else { d }),'''
+to = '''                (Some(t), Some(_)) => Some(t),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "messaging::"]
+
+[[mutant]]
+name = "the DOM's tasks are queued after every timer"
+file = "crates/dom/src/scope.rs"
+from = '''        let queued = self.timers.sequence();
+        self.tasks.queue('''
+to = '''        let queued = self.timers.sequence() + 1_000_000;
+        self.tasks.queue('''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "messaging::"]
+
+[[mutant]]
+name = "an interval keeps its first place in the order"
+file = "crates/dom/src/timers.rs"
+from = '''                next.queued = queued;'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "timers::"]
+
+[[mutant]]
+name = "a started port isn't rooted"
+file = "crates/dom/src/message_port.rs"
+from = '''        if entangled {
+            self.root_active_port(port);
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "message_ports::"]
+
+[[mutant]]
+name = "closing leaves the other port entangled"
+file = "crates/dom/src/message_port.rs"
+from = '''        self.disentangle(port);
+        if let Some(other) = other {
+            self.disentangle(&other);
+        }'''
+to = '''        self.disentangle(port);
+        let _ = other;'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "message_ports::"]
+
+[[mutant]]
+name = "a closed port starts"
+file = "crates/dom/src/message_port.rs"
+from = '''            if state.enabled || state.closed {'''
+to = '''            if state.enabled {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "message_ports::"]
+
+[[mutant]]
+name = "disentangling keeps the root"
+file = "crates/dom/src/message_port.rs"
+from = '''        if active != 0 {
+            self.tasks.remove_active_port(active);
+        }'''
+to = '''        let _ = active;'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "message_ports::"]
+
+[[mutant]]
+name = "a discarded document keeps its ports rooted"
+file = "crates/dom/src/tasks.rs"
+from = '''        self.active_ports
+            .retain(|_, (port_owner, _)| *port_owner != Some(owner));'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "message_ports::"]
+
+[[mutant]]
+name = "the DOM goes with ports rooted"
+file = "crates/dom/src/tasks.rs"
+from = '''        self.abort_steps.clear();
+        self.active_ports.clear();'''
+to = '''        self.abort_steps.clear();'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "message_ports::"]
+
+[[mutant]]
+name = "a message goes before the queue is enabled"
+file = "crates/dom_api/src/message_port.rs"
+from = '''    if cx.read().message_port_enabled(&target) {'''
+to = '''    if true {'''
+
+[[mutant]]
+name = "a transfer list is let through"
+file = "crates/dom_api/src/message_port.rs"
+from = '''    if transfer.is_empty() {
+        return Ok(());
+    }'''
+to = '''    if transfer.is_empty() || !transfer.is_empty() {
+        return Ok(());
+    }'''
+
+[[mutant]]
+name = "setting onmessage doesn't start the port"
+file = "crates/dom_api/src/handlers.rs"
+from = '''    crate::message_port::start(cx, this)
+}'''
+to = '''    Ok(())
+}'''
+
+[[mutant]]
+name = "a closed port still gets messages"
+file = "crates/dom_api/src/message_port.rs"
+from = '''    if cx.read().message_port_closed(&port) {
+        return;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a port is a plain event target"
+file = "crates/dom_api/src/object.rs"
+from = '''            Self::EventTarget(target) if target.is_message_port() => ObjectKind::MessagePort,'''
+to = ''''''
+
+[[mutant]]
+name = "structuredClone copies into the caller's realm"
+file = "crates/dom_js/src/serialize.rs"
+from = '''    let context = holder
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    deserialize(scope, state.bytes())'''
+to = '''    let _ = holder;
+    deserialize(scope, state.bytes())'''

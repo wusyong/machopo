@@ -1,0 +1,40 @@
+[package]
+name = "layout"
+description = "Box tree, taffy block layout, parley inline layout, immutable fragment tree (blink/renderer/core/layout)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+base.workspace = true
+rustc-hash.workspace = true
+computed_style.workspace = true
+# A `url(#id)`'s id (`svg_gradient`).
+css.workspace = true
+# The DOM the box tree is built from (`next`).
+dom.workspace = true
+gfx.workspace = true
+kurbo.workspace = true
+svgtypes.workspace = true
+icu_segmenter.workspace = true
+taffy.workspace = true
+parley.workspace = true
+read-fonts.workspace = true
+tracing.workspace = true
+trace_event.workspace = true
+
+[dev-dependencies]
+html.workspace = true
+# The style the box trees are built from.
+style.workspace = true
+# Fonts with one rule each, for how far shaping reaches across a space.
+write-fonts.workspace = true

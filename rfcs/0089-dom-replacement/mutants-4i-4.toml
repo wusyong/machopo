@@ -1,0 +1,80 @@
+# Stage 4i-4: the new DOM's system colors, child frames' sticky boxes in
+# the frame tree's paint, the counters skipping replaced elements.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p layout --test it next_update:: && cargo test -q -p renderer --lib next_frame_view:: && python3 scripts/test.py reftest --next-dom frames/ > /dev/null 2>&1 && python3 scripts/test.py wpt --next-dom css/css-position/sticky/position-sticky-fixed-ancestor-iframe.html css/css-pseudo/marker-content-017.html 2>&1 | grep -q 'expects 2, gaps 0'"]
+timeout = 1800
+
+[[mutant]]
+name = "layout: counters into replaced elements"
+file = "crates/layout/src/counters/next.rs"
+from = '''        if crate::next::is_replaced(dom.dom, element) {
+            return Some(set);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "layout: an image not replaced for the counters"
+file = "crates/layout/src/next.rs"
+from = '''    dom.is_img(element)
+        || dom.is_canvas(element)'''
+to = '''    dom.is_canvas(element)'''
+
+[[mutant]]
+name = "layout: a canvas not replaced for the counters"
+file = "crates/layout/src/next.rs"
+from = '''    dom.is_img(element)
+        || dom.is_canvas(element)
+        || dom.is_iframe(element)'''
+to = '''    dom.is_img(element)
+        || dom.is_iframe(element)'''
+
+[[mutant]]
+name = "renderer: pre-paint without the children's sticky"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''                &self.stuck(),
+                &children,'''
+to = '''                &self.scroll.stuck,
+                &children,'''
+
+[[mutant]]
+name = "renderer: painted sticky without the children's"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        let mut sticky = self.stuck().offsets;'''
+to = '''        let mut sticky = self.scroll.stuck.offsets.clone();'''
+
+[[mutant]]
+name = "renderer: grandchildren's sticky not collected"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            stuck.reaches.extend(&child.scroll.stuck.reaches);
+            child.collect_child_stuck(stuck);'''
+to = '''            stuck.reaches.extend(&child.scroll.stuck.reaches);'''
+
+[[mutant]]
+name = "renderer: children's sticky reaches not collected"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            stuck.reaches.extend(&child.scroll.stuck.reaches);
+            child.collect_child_stuck(stuck);'''
+to = '''            child.collect_child_stuck(stuck);'''
+
+[[mutant]]
+name = "renderer: style without the system colors"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        style.set_system_colors(system_colors);'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: selection in the default colors"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            paint::SelectionColors::inactive(&self.system_colors)'''
+to = '''            paint::SelectionColors::inactive(&gfx::SystemColors::DEFAULT)'''
+
+[[mutant]]
+name = "renderer: a child frame's scroll paints the tree again"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            if laid_out || child.paint_dirty {
+                self.needs_pre_paint = true;
+                self.paint_dirty = true;
+            }'''
+to = '''            if laid_out || child.paint_dirty || child.scroll.needs_pre_paint {
+                self.needs_pre_paint = true;
+                self.paint_dirty = true;
+            }'''

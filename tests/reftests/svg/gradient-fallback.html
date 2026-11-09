@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<title>A url() that isn't to a usable gradient paints its fallback; one without stops paints nothing; one stop, or no length, is one color; one in a box with no height paints the fallback</title>
+<link rel="match" href="rect-ref.html">
+<style>body { margin: 0 } svg { display: block }</style>
+<svg width="100" height="60">
+  <defs>
+    <linearGradient id="none"/>
+    <linearGradient id="one"><stop stop-color="lime"/></linearGradient>
+    <linearGradient id="flat" x2="0"><stop stop-color="red"/><stop offset="1" stop-color="lime"/></linearGradient>
+    <radialGradient id="dot" r="0"><stop stop-color="red"/><stop offset="1" stop-color="lime"/></radialGradient>
+    <linearGradient id="red"><stop stop-color="red"/><stop offset="1" stop-color="red"/></linearGradient>
+    <rect id="shape"/>
+  </defs>
+  <rect x="10" y="10" width="10" height="20" fill="url(#missing) lime"/>
+  <rect x="20" y="10" width="10" height="20" fill="url(#shape) lime"/>
+  <rect x="10" y="10" width="20" height="20" fill="url(#shape)"/>
+  <rect x="10" y="10" width="20" height="20" fill="url(#none) red"/>
+  <rect x="30" y="10" width="5" height="20" fill="url(#one)"/>
+  <rect x="35" y="10" width="5" height="20" fill="url(#flat)"/>
+  <rect x="40" y="10" width="5" height="20" fill="url(#dot)"/>
+  <!-- A horizontal line's box has no height: the gradient can't be used. -->
+  <line x1="45" y1="20" x2="50" y2="20" stroke="url(#red) lime" stroke-width="20"/>
+</svg>

@@ -1,0 +1,39 @@
+# 4b, L1: a child frame styled before its first layout takes its iframe's
+# size first (the renderer's `render_thread.rs`, `frame_view.rs`).
+#   python3 scripts/test.py mutate rfcs/0059-style-performance/mutants-4b2.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "geometry::a_child_frames_first_style_sees_its_iframes_size"]
+timeout = 1800
+
+[[mutant]]
+name = "no size before the style"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                self.size_before_style(frame, &links);'''
+to = ""
+
+[[mutant]]
+name = "the size not taken"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        self.take_environment(size, device_scale_factor);
+    }'''
+to = '''    }'''
+
+[[mutant]]
+name = "a frame laid out sized again"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        self.owner.is_some() && !self.is_laid_out() && !self.waits_for_style_sheets(scope, links)'''
+to = '''        self.owner.is_some() && !self.waits_for_style_sheets(scope, links)'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "frame_view::tests::a_child_frame_styled_before_its_layout_is_sized_first"]
+
+[[mutant]]
+name = "a waiting frame sized"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        self.owner.is_some() && !self.is_laid_out() && !self.waits_for_style_sheets(scope, links)'''
+to = '''        self.owner.is_some() && !self.is_laid_out()'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "frame_view::tests::a_child_frame_styled_before_its_layout_is_sized_first"]
+
+[[mutant]]
+name = "the main frame sized"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        self.owner.is_some() && !self.is_laid_out() && !self.waits_for_style_sheets(scope, links)'''
+to = '''        !self.is_laid_out() && !self.waits_for_style_sheets(scope, links)'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "frame_view::tests::a_child_frame_styled_before_its_layout_is_sized_first"]

@@ -1,0 +1,194 @@
+# Stage 2c-3: getElementsByTagName's live HTMLCollection (its matching,
+# tree order, item and namedItem), HTML elements' interfaces by local name
+# (the tables, accepts_node, the wrapper made ahead), HTMLMetaElement's
+# reflected attributes, and V8's indexed getter and @@iterator.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_next"]
+timeout = 900
+
+[[mutant]]
+name = "`*` matches nothing more"
+file = "crates/dom_next/src/collection.rs"
+from = '''                all: Cell::new(qualified == "*"),'''
+to = '''                all: Cell::new(false),'''
+
+[[mutant]]
+name = "an HTML document's HTML element isn't lowercased"
+file = "crates/dom_next/src/collection.rs"
+from = '''        let (prefix, local) = if html && element.namespace.get() == names::HTML_NAMESPACE {'''
+to = '''        let (prefix, local) = if false && html {'''
+
+[[mutant]]
+name = "an XML document's HTML element is lowercased"
+file = "crates/dom_next/src/collection.rs"
+from = '''        let (prefix, local) = if html && element.namespace.get() == names::HTML_NAMESPACE {'''
+to = '''        let (prefix, local) = if element.namespace.get() == names::HTML_NAMESPACE && (html || true) {'''
+
+[[mutant]]
+name = "a prefix isn't compared"
+file = "crates/dom_next/src/collection.rs"
+from = '''        element.local.get() == local && element.prefix.get() == prefix'''
+to = '''        element.local.get() == local && { let _ = prefix; true }'''
+
+[[mutant]]
+name = "a collection has its root"
+file = "crates/dom_next/src/collection.rs"
+from = '''        let mut at = self.first_child(root);'''
+to = '''        let mut at = Some(root);'''
+
+[[mutant]]
+name = "a collection walks past its root"
+file = "crates/dom_next/src/collection.rs"
+from = '''            if Gc::ptr_eq(at, root) {
+                return None;
+            }'''
+to = '''            if false && Gc::ptr_eq(at, root) {
+                return None;
+            }'''
+
+[[mutant]]
+name = "an item is the next"
+file = "crates/dom_next/src/collection.rs"
+from = '''        let mut left = index;'''
+to = '''        let mut left = index.saturating_add(1);'''
+
+[[mutant]]
+name = "namedItem doesn't read ids"
+file = "crates/dom_next/src/collection.rs"
+from = '''            if id.is_some_and(|value| *value.borrow() == key) || by_name {'''
+to = '''            if { let _ = id; false } || by_name {'''
+
+[[mutant]]
+name = "namedItem reads any element's name"
+file = "crates/dom_next/src/collection.rs"
+from = '''            let by_name = element.namespace.get() == names::HTML_NAMESPACE
+                && self'''
+to = '''            let by_name = true
+                && self'''
+
+[[mutant]]
+name = "namedItem finds the empty key"
+file = "crates/dom_next/src/collection.rs"
+from = '''        if key.is_empty() {
+            return None;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "an HTML element's interface is by its kind"
+file = "crates/dom_api_next/src/typed.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        Some(name) if name.namespace == dom_next::names::HTML_NAMESPACE => html_element_interface(name.local),'''
+to = '''        Some(name) if false => html_element_interface(name.local),'''
+
+[[mutant]]
+name = "no tag has an interface of its own"
+file = "crates/dom_api_next/src/typed.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        Some(&interface) if interface != usize::MAX => interface,'''
+to = '''        Some(&interface) if false => interface,'''
+
+[[mutant]]
+name = "an element interface doesn't check names"
+file = "crates/dom_api_next/src/typed.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''    !crate::declare::BY_NAME[interface]
+        ||'''
+to = '''    true
+        ||'''
+
+[[mutant]]
+name = "an interface's descendants are itself alone"
+file = "crates/dom_api_next/src/declare.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''                table[ancestor] |= 1 << interface;'''
+to = '''                table[ancestor] |= 1 << ancestor;'''
+
+[[mutant]]
+name = "no interface checks names"
+file = "crates/dom_api_next/src/declare.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''            if interfaces[ancestor].element.is_some() && is_ancestor_or_self(ancestor, interface) {
+                table[interface] = true;'''
+to = '''            if false && is_ancestor_or_self(ancestor, interface) {
+                table[interface] = true;'''
+
+[[mutant]]
+name = "an element interface accepts no element"
+file = "crates/dom_api_next/src/declare.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''                if interfaces[interface].element.is_some() {
+                    table[ancestor] |= kind_bit(NodeKind::Element);'''
+to = '''                if false {
+                    table[ancestor] |= kind_bit(NodeKind::Element);'''
+
+[[mutant]]
+name = "a new element's wrapper is made as an Element"
+file = "crates/dom_api_next/src/interfaces.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''-> NewObject<Element, HTMLElement> = document::create_element;'''
+to = '''-> NewObject<Element> = document::create_element;'''
+
+[[mutant]]
+name = "content reflects name"
+file = "crates/dom_api_next/src/html.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''    Ok(reflected(cx, this, names::CONTENT))'''
+to = '''    Ok(reflected(cx, this, names::NAME))'''
+
+[[mutant]]
+name = "setting content sets name"
+file = "crates/dom_api_next/src/html.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''    cx.set_attribute_ns(this, QualName::local("content"), value);'''
+to = '''    cx.set_attribute_ns(this, QualName::local("name"), value);'''
+
+[[mutant]]
+name = "an index past the last is a property"
+file = "crates/dom_js_next/src/templates.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''    if front.returned_null() {
+        v8::Intercepted::kNo'''
+to = '''    if false && front.returned_null() {
+        v8::Intercepted::kNo'''
+
+[[mutant]]
+name = "no @@iterator"
+file = "crates/dom_js_next/src/templates.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''    let iterator = v8::Symbol::get_iterator(scope);
+    prototype.set_intrinsic_data_property(
+        iterator.into(),
+        v8::Intrinsic::ArrayProtoValues,
+        v8::PropertyAttribute::DONT_ENUM,
+    );'''
+to = '''    let _ = (scope, prototype);'''
+
+[[mutant]]
+name = "no indexed getter"
+file = "crates/dom_js_next/src/templates.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''                if desc.indexed {
+                    install_indexed::<M>'''
+to = '''                if false {
+                    install_indexed::<M>'''
+
+[[mutant]]
+name = "an indexed getter's index is undefined"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        if index == 0 { self.index } else { self.undefined }'''
+to = '''        { let _ = index; self.undefined }'''
+
+[[mutant]]
+name = "an unsigned long is 0"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        arg(self.args, index).uint32_value(self.scope)'''
+to = '''        arg(self.args, index).uint32_value(self.scope).map(|_| 0)'''
+
+[[mutant]]
+name = "a node's wrapper is its kind's"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''    dom_api_next::node_interface_of(cx, node)'''
+to = '''    dom_api_next::node_interface(cx.kind(node))'''

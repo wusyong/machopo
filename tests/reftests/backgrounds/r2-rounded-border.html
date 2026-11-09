@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<title>Border radius 2: a rounded border is the ring between its outer curve and the padding edge's</title>
+<link rel="match" href="r2-rounded-border-ref.html">
+<!-- One ring against two rounded boxes: only the curves' anti-aliasing
+     differs. -->
+<meta name="fuzzy" content="maxDifference=0-40;totalPixels=0-290">
+<style>
+  html, body { margin: 0 }
+</style>
+<div style="margin: 10px; width: 100px; height: 60px; border: 10px solid green;
+            border-radius: 30px"></div>

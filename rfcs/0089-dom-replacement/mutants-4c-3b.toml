@@ -1,0 +1,141 @@
+# Stage 4c-3b: scenarios on the new DOM: `dom_api_next`'s `Probe` and
+# `document_title`, the renderer's `QueryElement`, `ScrollIntoViewIfNeeded`
+# and title for the new DOM, `NextFrameView`'s scroll target, the
+# scenario runner's `--next-dom` and `--automation`'s.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_api_next --test it -- webdriver document && cargo test -q -p shell --test it -- windowless:: && cargo test -q -p shell --lib -- windowless && cargo test -q -p shell --bin kun -- next_dom"]
+timeout = 3000
+
+[[mutant]]
+name = "a probe's rect without a box"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''                    rect: (!rects.is_empty()).then(|| crate::geometry::bounding_rect(&rects)),'''
+to = '''                    rect: Some(crate::geometry::bounding_rect(&rects)),'''
+
+[[mutant]]
+name = "a probe's text empty"
+file = "crates/dom_api_next/src/webdriver.rs"
+from = '''                    text: cx.text_content(element).map(|text| text.to_string()).unwrap_or_default(),'''
+to = '''                    text: String::new(),'''
+
+[[mutant]]
+name = "another namespace's title"
+file = "crates/dom_api_next/src/document.rs"
+from = '''                .is_some_and(|name| name.namespace == names::HTML_NAMESPACE && name.local == local::TITLE)'''
+to = '''                .is_some_and(|name| name.local == local::TITLE)'''
+
+[[mutant]]
+name = "the title's descendants' text"
+file = "crates/dom_api_next/src/document.rs"
+from = '''        .filter(|&child| cx.kind(child) == NodeKind::Text)
+        .filter_map(|child| cx.data(child))'''
+to = '''        .filter_map(|child| cx.text_content(child))'''
+
+[[mutant]]
+name = "the title's whitespace kept"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    text.split_ascii_whitespace().collect::<Vec<_>>().join(" ")'''
+to = '''    text'''
+
+[[mutant]]
+name = "the title looked for among the children alone"
+file = "crates/dom_api_next/src/document.rs"
+from = '''        node = cx.first_child(at).or_else(|| {'''
+to = '''        node = None.or_else(|| {'''
+
+[[mutant]]
+name = "a child frame's query in the top-level one"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''        if !frames.is_empty() {
+            return None;
+        }
+        match self.next_query(&WebDriverQuery::Probe(selector)).ok()? {'''
+to = '''        match self.next_query(&WebDriverQuery::Probe(selector)).ok()? {'''
+
+[[mutant]]
+name = "never scrolled into view"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''        frame.view.scroll_into_view_after_layout(element);'''
+to = '''        let _ = element;'''
+
+[[mutant]]
+name = "scrolled though in view"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''        if (0.0..port.width).contains(&center.x) && (0.0..port.height).contains(&center.y) {
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the scroll waits for no frame"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''        frame.view.scroll_into_view_after_layout(element);
+        self.request_main_frame();'''
+to = '''        frame.view.scroll_into_view_after_layout(element);'''
+
+[[mutant]]
+name = "the scroll target dropped"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        if let Some(target) = self.scroll_target.take()
+            && let Some(fragment) = &self.fragment'''
+to = '''        if let Some(target) = self.scroll_target.take().filter(|_| false)
+            && let Some(fragment) = &self.fragment'''
+
+[[mutant]]
+name = "a scroll not painted"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''                .scroll_into_view(fragment, target, None, scroll::FRAGMENT_ANCHOR)
+                .is_some()
+        {
+            self.paint_dirty = true;
+        }'''
+to = '''                .scroll_into_view(fragment, target, None, scroll::FRAGMENT_ANCHOR)
+                .is_some()
+        {
+        }'''
+
+[[mutant]]
+name = "the title read once"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        if next.sent_title.is_some() && version == next.title_version {'''
+to = '''        if next.sent_title.is_some() {'''
+
+[[mutant]]
+name = "the title never sent"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            let _ = self.to_browser.send(RendererHostMsg::UpdateTitle(title.clone()));'''
+to = '''            let _ = title.clone();'''
+
+[[mutant]]
+name = "the new DOM's checks on today's DOM"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if self.next_dom {
+            self.next_query_element(query_id, frames, selector);
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the new DOM's scroll on today's DOM"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if self.next_dom {
+            self.next_scroll_into_view_if_needed(frames, selector);
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the new DOM's title on today's DOM"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if self.next_dom {
+            self.update_next_title();
+            return;
+        }
+        let changed = self.dom.borrow_mut().mutate().take_title_changes();'''
+to = '''        let changed = self.dom.borrow_mut().mutate().take_title_changes();'''
+
+[[mutant]]
+name = "a scenario's window on today's DOM"
+file = "crates/shell/src/windowless.rs"
+from = '''        next_dom: options.next_dom,
+        caret_blink_interval: window.caret_blink,'''
+to = '''        caret_blink_interval: window.caret_blink,'''

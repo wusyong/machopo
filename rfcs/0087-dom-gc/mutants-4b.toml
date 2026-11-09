@@ -1,0 +1,169 @@
+# Step 4b: weak edges and weak roots. The layout's weak offsets, the
+# marker recording weak edges and the end clearing them, a scavenge's
+# weak edges (the copies', the weak slot sets', the weak roots'), the
+# barriers (the weak slot set's, the weak read's), and the verifier's
+# checks. Run with `RUSTY_V8_ARCHIVE` (`test.py` checks the third-party
+# pins).
+test = ["cargo", "test", "-q", "-p", "gc"]
+timeout = 900
+
+# The layout.
+
+[[mutant]]
+name = "the weak offsets aren't listed"
+file = "crates/gc/src/types.rs"
+from = '''        weak: edge_offsets(slot.info, FieldKind::weak_edges),'''
+to = '''        weak: Box::new([]),'''
+
+[[mutant]]
+name = "a weak edge is a strong one"
+file = "crates/gc/src/member.rs"
+from = '''    const KIND: FieldKind = FieldKind::Weak;'''
+to = '''    const KIND: FieldKind = FieldKind::Member;'''
+
+[[mutant]]
+name = "a row of weak edges counts one"
+file = "crates/gc/src/types.rs"
+from = '''            FieldKind::Weaks(count) => count as usize,'''
+to = '''            FieldKind::Weaks(_) => 1,'''
+
+# The marker and the end.
+
+[[mutant]]
+name = "the marker records no weak edge"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''                            weak.push(data.saturating_add(at));'''
+to = '''                            let _ = at;'''
+
+[[mutant]]
+name = "a run's weak edges are dropped"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''            sync::lock(&self.weak_slots).append(&mut weak);'''
+to = '''            weak.clear();'''
+
+[[mutant]]
+name = "the end clears no weak edge"
+file = "crates/gc/src/heap.rs"
+from = '''        self.clear_weak(weak);'''
+to = '''        drop(weak);'''
+
+[[mutant]]
+name = "the end clears weak edges to young objects"
+file = "crates/gc/src/heap.rs"
+from = '''            raw != 0 && !self.is_young(data) && !self.mark_table.is_marked(data)'''
+to = '''            raw != 0 && !self.mark_table.is_marked(data)'''
+
+[[mutant]]
+name = "the end clears no weak root"
+file = "crates/gc/src/heap.rs"
+from = '''        for entry in self.shared.weak_roots.borrow_mut().entries_mut() {
+            if dead(*entry) {
+                *entry = 0;
+            }
+        }'''
+to = '''        let _ = dead;'''
+
+# A scavenge.
+
+[[mutant]]
+name = "a scavenge leaves the copies' weak edges"
+file = "crates/gc/src/heap/young.rs"
+from = '''                copier.weak.extend('''
+to = '''                Vec::new().extend('''
+
+[[mutant]]
+name = "a promoted copy's weak edge to a young object isn't remembered"
+file = "crates/gc/src/heap/young.rs"
+from = '''            if old && moved != 0 && self.is_young(moved as usize) {
+                kept.push(slot);
+            }'''
+to = '''            let _ = (old, moved);'''
+
+[[mutant]]
+name = "a weak slot set's young edges aren't put back"
+file = "crates/gc/src/heap/young.rs"
+from = '''                if moved != 0 && self.is_young(moved as usize) {
+                    kept.push(slot);
+                }'''
+to = '''                let _ = moved;'''
+
+[[mutant]]
+name = "a scavenge leaves the weak roots"
+file = "crates/gc/src/heap/young.rs"
+from = '''        for entry in self.shared.weak_roots.borrow_mut().entries_mut() {
+            *entry = after(*entry);
+        }'''
+to = '''        let _ = &after;'''
+
+[[mutant]]
+name = "a weak edge to a dead young object is kept"
+file = "crates/gc/src/heap/young.rs"
+from = '''            self.forwarded(data).map_or(0, |to| to as u32)'''
+to = '''            self.forwarded(data).map_or(raw, |to| to as u32)'''
+
+[[mutant]]
+name = "the weak slot sets aren't taken"
+file = "crates/gc/src/heap/young.rs"
+from = '''            let Some(bits) = self.remembered_weak[number].take() else {'''
+to = '''            let Some(bits) = None::<Box<crate::page::Bits>> else {'''
+
+# The barriers.
+
+[[mutant]]
+name = "an old weak edge to a young object isn't remembered"
+file = "crates/gc/src/heap/young.rs"
+from = '''    pub(crate) fn weak_barrier(&self, slot: *const u8, value: u32) {
+        if value != 0 && self.is_young(value as usize) {'''
+to = '''    pub(crate) fn weak_barrier(&self, slot: *const u8, value: u32) {
+        if false && value != 0 && self.is_young(value as usize) {'''
+
+[[mutant]]
+name = "a weak read marks nothing"
+file = "crates/gc/src/heap.rs"
+from = '''            self.satb(raw);
+        }
+    }'''
+to = '''            let _ = raw;
+        }
+    }'''
+
+[[mutant]]
+name = "WeakMember::get skips the read barrier"
+file = "crates/gc/src/member.rs"
+from = '''        let raw = self.checked(cx).load(Ordering::Relaxed);
+        cx.inner.read_weak(raw);'''
+to = '''        let raw = self.checked(cx).load(Ordering::Relaxed);'''
+
+[[mutant]]
+name = "WeakPersistent::get skips the read barrier"
+file = "crates/gc/src/persistent.rs"
+from = '''        cx.inner.read_weak(offset);'''
+to = '''        let _ = offset;'''
+
+# The verifier.
+
+[[mutant]]
+name = "the verifier lets a weak edge be to anything"
+file = "crates/gc/src/heap/verify.rs"
+from = '''        check_object(states, weak, true).map_err(|problem| {'''
+to = '''        check_object(states, weak, false).map_err(|problem| {'''
+
+[[mutant]]
+name = "the verifier skips the slot sets' holders"
+file = "crates/gc/src/heap/verify.rs"
+from = '''                    if !live {'''
+to = '''                    if false && !live {'''
+
+[[mutant]]
+name = "the verifier skips old weak edges to young objects"
+file = "crates/gc/src/heap/verify.rs"
+from = '''                    if !young_host && !remembered {'''
+to = '''                    if false && !young_host && !remembered {'''
+
+[[mutant]]
+name = "a weak read's objects don't float"
+file = "crates/gc/src/heap.rs"
+from = '''            if self.verifies() {
+                self.floats(raw);
+            }'''
+to = '''            let _ = self.verifies();'''

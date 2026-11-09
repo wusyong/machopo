@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<title>Backgrounds 2: gradients with hard stops are sharp bands, along their line, repeated, and as tiles</title>
+<link rel="match" href="b2-gradient-stops-ref.html">
+<style>
+  html, body { margin: 0 }
+  div { width: 100px; height: 40px; margin-bottom: 10px }
+</style>
+<!-- Two halves across. -->
+<div style="background-image: linear-gradient(to right, green 50%, blue 50%)"></div>
+<!-- Down, by default; stops without a position fixed up to the one before. -->
+<div style="background-image: linear-gradient(green 25%, blue 0, blue 75%, green 0)"></div>
+<!-- Repeated stripes, 20px each. -->
+<div style="background-image: repeating-linear-gradient(90deg, green 0 20px, blue 20px 40px)"></div>
+<!-- A two-color tile, 25x40, repeated across. -->
+<div style="background: linear-gradient(to right, green 60%, blue 60%) 0 0 / 25px 40px"></div>

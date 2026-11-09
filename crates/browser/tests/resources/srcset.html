@@ -1,0 +1,41 @@
+<!-- What <img srcset> and <picture> select, as Chrome 152 does: the `srcset_and_picture` test of navigation.rs compares the title with what Chrome gave. -->
+<!doctype html><html><head><style>body{margin:0}</style></head><body>
+<img id=c1 srcset="x1.png 1x, x2.png 2x, x3.png 3x">
+<img id=c2 src="s.png" srcset="x2.png 2x">
+<img id=c3 srcset="w200.png 200w, w400.png 400w, w800.png 800w, w1600.png 1600w">
+<img id=c4 srcset="w200.png 200w, w400.png 400w, w800.png 800w, w1600.png 1600w" sizes="(max-width: 500px) 100px, 50vw">
+<img id=c5 srcset="w200.png 200w, w400.png 400w, w800.png 800w" sizes="150px">
+<picture><source media="(min-width: 600px)" srcset="wide.png"><source media="(max-width: 599px)" srcset="narrow.png"><img id=c6 src="fallback.png"></picture>
+<picture><source type="image/avif" srcset="avif.png"><source type="image/png" srcset="png.png"><img id=c7 src="fallback.png"></picture>
+<picture><source srcset="p100.png 100w, p300.png 300w, p600.png 600w" sizes="(min-width: 700px) 300px, 100px"><img id=c8 src="fallback.png"></picture>
+<img id=c9 srcset="bogus 1q" src="s.png">
+<img id=c10 srcset="">
+<img id=c11 srcset="big.png 2x, small.png 0.5x">
+<picture><source media="(min-width: 99999px)" srcset="wide.png"><img id=c12 src="fallback.png" srcset="x2.png 2x"></picture>
+<script>
+let first;
+const out=[];
+const st=i=>[(i.currentSrc.split('/').pop()),i.naturalWidth,i.naturalHeight,i.width,i.height,i.complete];
+const report=(prefix)=>{
+  const out=[JSON.stringify([innerWidth,innerHeight,devicePixelRatio])];
+  for(const id of ['c1','c2','c3','c4','c5','c6','c7','c8','c9','c10','c11','c12']) out.push(id+'='+JSON.stringify(st(document.getElementById(id))));
+  document.title=prefix+out.join(' | ');
+};
+addEventListener('load',()=>{
+  first=innerWidth;
+  report('1 ');
+  // Resized (the test does it): the environment changed, they select again.
+  const poll=setInterval(()=>{
+    if(innerWidth===first) return;
+    clearInterval(poll);
+    setTimeout(()=>{
+      report('2 ');
+      // Relevant mutations: a source's media.
+      const c6=document.getElementById('c6');
+      c6.previousElementSibling.previousElementSibling.setAttribute('media','(min-width: 99999px)');
+      c6.previousElementSibling.setAttribute('media','(min-width: 99999px)');
+      setTimeout(()=>{document.title='3 c6 after media='+JSON.stringify(st(c6));},500);
+    },500);
+  },50);
+});
+</script>

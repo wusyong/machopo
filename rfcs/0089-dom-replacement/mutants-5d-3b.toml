@@ -1,0 +1,154 @@
+# Stage 5d-3b: layout's in-place updates and style_next's correctness.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p style_next --test it && cargo test -q -p layout --test it"]
+timeout = 2400
+
+[[mutant]]
+name = "layout: a control's box restyled in place"
+file = "crates/layout/src/next.rs"
+from = '''            StyleDifference::Layout
+                if self.boxes[index].control.is_some()
+                    || self.boxes[index].button
+                    || self.boxes[index].empty_line.is_some() =>'''
+to = '''            StyleDifference::Layout
+                if false
+                    && (self.boxes[index].control.is_some()
+                        || self.boxes[index].button
+                        || self.boxes[index].empty_line.is_some()) =>'''
+
+[[mutant]]
+name = "layout: a replaced box restyled as a block"
+file = "crates/layout/src/next.rs"
+from = '''                    Some(replaced) => {
+                        crate::replaced_taffy_style(&style, replaced, container.as_deref(), calcs)
+                    }'''
+to = '''                    Some(_) => role_taffy_style(&style, b.role, calcs),'''
+
+[[mutant]]
+name = "dom_next: a control's size isn't its box's"
+file = "crates/dom_next/src/style.rs"
+from = '''        } else if is(local::INPUT) || is(local::SELECT) {
+            name == QualifiedName::plain(local::SIZE)'''
+to = '''        } else if is(local::INPUT) || is(local::SELECT) {
+            false'''
+
+[[mutant]]
+name = "dom_next: a text area's cols aren't its box's"
+file = "crates/dom_next/src/style.rs"
+from = '''            name == QualifiedName::plain(local::ROWS) || name == QualifiedName::plain(local::COLS)'''
+to = '''            name == QualifiedName::plain(local::ROWS)'''
+
+[[mutant]]
+name = "style_next: attr() as written"
+file = "crates/style_next/src/lib.rs"
+from = '''        if html && name.bytes().any(|b| b.is_ascii_uppercase()) {'''
+to = '''        if false && html && name.bytes().any(|b| b.is_ascii_uppercase()) {'''
+
+[[mutant]]
+name = "style_next: a host's unassigned children not styled"
+file = "crates/style_next/src/lib.rs"
+from = '''            .filter(|&node| cx.assigned_slot(node).is_none())
+            .map(|node| (node, true));'''
+to = '''            .filter(|_| false)
+            .map(|node| (node, true));'''
+
+[[mutant]]
+name = "style_next: unassigned children's siblings go on from the flat tree's"
+file = "crates/style_next/src/lib.rs"
+from = '''                in_flat_tree = false;
+                siblings = Siblings::default();'''
+to = '''                in_flat_tree = false;'''
+
+[[mutant]]
+name = "dom_next: an unassigned child's change doesn't reach its host"
+file = "crates/dom_next/src/style.rs"
+from = '''        self.flat_tree_parent(node).or_else(|| {
+            self.parent(node)
+                .filter(|&parent| parent.scope.get() & crate::shadow::SHADOW_HOST != 0)
+        })'''
+to = '''        self.flat_tree_parent(node)'''
+
+[[mutant]]
+name = "dom_next: an element taken out of its slot not styled again"
+file = "crates/dom_next/src/slot.rs"
+from = '''                self.set_needs_style_recalc(node);
+            }
+        }
+    }'''
+to = '''                let _ = node;
+            }
+        }
+    }'''
+
+[[mutant]]
+name = "style_next: an edited shadow sheet's old index kept"
+file = "crates/style_next/src/shadow_sheets.rs"
+from = '''            if !used {
+                self.indexes.remove(&key);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "style_next: a passed-over animated element checked without its animations"
+file = "crates/style_next/src/lib.rs"
+from = '''            *again == **base.as_ref().unwrap_or(style),'''
+to = '''            *again == **style,'''
+
+[[mutant]]
+name = "dom_next: a removed text noted"
+file = "crates/dom_next/src/animations.rs"
+from = '''        if state.seen.get() && self.kind(node) == crate::NodeKind::Element {'''
+to = '''        if state.seen.get() {'''
+
+[[mutant]]
+name = "style_next: :window-inactive never matches"
+file = "crates/style_next/src/selector.rs"
+from = '''            PseudoClass::WindowInactive => !self'''
+to = '''            PseudoClass::WindowInactive => false && !self'''
+
+[[mutant]]
+name = "style_next: :window-inactive not noted"
+file = "crates/style_next/src/rule_index.rs"
+from = '''                    self.window_inactive = true;'''
+to = ''''''
+
+[[mutant]]
+name = "style_next: the page's focus change restyles nothing"
+file = "crates/style_next/src/lib.rs"
+from = '''        if self.page_focused.replace(focused).is_some_and(|was| was != focused) {'''
+to = '''        if self.page_focused.replace(focused).is_some_and(|was| was != focused) && false {'''
+
+[[mutant]]
+name = "style_next: an engine given another document styles as before"
+file = "crates/style_next/src/lib.rs"
+from = '''        if self.document.replace(id).is_some_and(|was| was != id) {
+            self.environment_changed = true;
+        }'''
+to = '''        let _ = self.document.replace(id);'''
+
+[[mutant]]
+name = "dom_next: a shadow root's wheel listener not over its tree"
+file = "crates/dom_next/src/event.rs"
+from = '''            return self.is_shadow_root(parent)
+                && self.has_blocking_wheel_listener(TargetRef::Node(parent));'''
+to = '''            return false;'''
+
+[[mutant]]
+name = "dom_next: a shadow root's wheel listener styles nothing"
+file = "crates/dom_next/src/event.rs"
+from = '''                    if self.kind(at) == NodeKind::Element {
+                        self.wheel_listener_styled(at);
+                    }'''
+to = ''''''
+
+[[mutant]]
+name = "style_next: an explicit inherit not followed"
+file = "crates/style_next/src/lib.rs"
+from = '''                            || (**old != *style
+                                && self.a_child_inherits_explicitly(element, token)))'''
+to = '''                            || (**old != *style && false))'''
+
+[[mutant]]
+name = "style_next: display: contents passes nothing on"
+file = "crates/style_next/src/lib.rs"
+from = '''                }) || (style.display == Display::Contents && down.mode != Mode::Clean);'''
+to = '''                });'''

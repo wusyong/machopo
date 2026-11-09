@@ -1,0 +1,97 @@
+# Stage 2a: the parley fork shares a layout's shaped text (the kept
+# shapings too), copies it before breaking lines changes a tab's advance
+# where it is held elsewhere, and walks a glyph run's glyphs from it
+# (`GlyphSpan`); kun's text fragments take their glyphs that way.
+#
+# python3 scripts/test.py mutate rfcs/0083-text-layout-work/mutants-2a.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it"]
+timeout = 600
+
+# Sharing the shaped text.
+
+[[mutant]]
+name = "a kept shaping is copied"
+file = "../third_party/parley/parley/src/shape/mod.rs"
+from = '''        layout.data.shaped_text = Arc::clone(shaped);'''
+to = '''        layout.data.shaped_text = Arc::new(parley_engine::ShapedText::clone(shaped));'''
+
+[[mutant]]
+name = "the shaping kept is a copy"
+file = "../third_party/parley/parley/src/shape/mod.rs"
+from = '''        cache.insert(key, Arc::clone(&layout.data.shaped_text));'''
+to = '''        cache.insert(key, Arc::new(parley_engine::ShapedText::clone(&layout.data.shaped_text)));'''
+
+[[mutant]]
+name = "a kept shaping keeps its styles"
+file = "../third_party/parley/parley/src/shape/mod.rs"
+from = '''        if !styled_alike {'''
+to = '''        if false && !styled_alike {'''
+
+[[mutant]]
+name = "a kept shaping is always restyled"
+file = "../third_party/parley/parley/src/shape/mod.rs"
+from = '''        if !styled_alike {'''
+to = '''        if true || !styled_alike {'''
+
+[[mutant]]
+name = "a held shaped text isn't cleared"
+file = "../third_party/parley/parley/src/layout/data.rs"
+from = '''            None => self.shaped_text = Arc::default(),'''
+to = '''            None => {}'''
+
+[[mutant]]
+name = "a held shaped text isn't retabbed"
+file = "../third_party/parley/parley/src/layout/line_break.rs"
+from = '''                        Arc::make_mut(&mut self.layout.data.shaped_text)
+                            .set_cluster_advance(cluster, advance);'''
+to = '''                        if let Some(shaped_text) = Arc::get_mut(&mut self.layout.data.shaped_text) {
+                            shaped_text.set_cluster_advance(cluster, advance);
+                        }'''
+
+# A glyph run's span.
+
+[[mutant]]
+name = "a span is of the first run"
+file = "../third_party/parley/parley/src/layout/line.rs"
+from = '''            run: self.run.shaped_text_run_index,'''
+to = '''            run: 0,'''
+
+[[mutant]]
+name = "a span is left to right"
+file = "../third_party/parley/parley/src/layout/line.rs"
+from = '''            is_rtl: self.run.is_rtl(),'''
+to = '''            is_rtl: false,'''
+
+[[mutant]]
+name = "a span isn't justified"
+file = "../third_party/parley/parley/src/layout/line.rs"
+from = '''            spacing: self.run.line_spacing(),'''
+to = '''            spacing: EffectiveSpacing::new(
+                self.run.data.spacing,
+                crate::layout::spacing::Justification::NONE,
+            ),'''
+
+[[mutant]]
+name = "a span is its run's whole line"
+file = "../third_party/parley/parley/src/layout/line.rs"
+from = '''            shaped_clusters: self.shaped_clusters.clone(),'''
+to = '''            shaped_clusters: self.run.line_slice().shaped_clusters_range(),'''
+
+# kun's text fragments.
+
+[[mutant]]
+name = "a fragment's glyphs don't advance"
+file = "crates/layout/src/text.rs"
+from = '''                        offset += g.advance;
+                        (g.id, at)'''
+to = '''                        (g.id, at)'''
+
+[[mutant]]
+name = "a fragment's glyphs are off the baseline"
+file = "crates/layout/src/text.rs"
+from = '''                let baseline = glyph_run.baseline();
+                glyph_run
+                    .span()'''
+to = '''                let baseline = 0.0;
+                glyph_run
+                    .span()'''

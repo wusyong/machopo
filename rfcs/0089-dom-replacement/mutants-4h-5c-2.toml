@@ -1,0 +1,224 @@
+# Stage 4h-5c-2: Request, Response, the body mixin and fetch() on the new DOM (its
+# requests as frame requests, its responses by number, its abort).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it -- fetch:: abort:: wrappers:: && cargo test -q -p dom_api_next --test it -- table::"]
+timeout = 1500
+
+[[mutant]]
+name = "api: a URL with credentials"
+file = "crates/dom_api_next/src/request.rs"
+from = '''            if !parsed.username().is_empty() || parsed.password().is_some() {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "api: a forbidden method"
+file = "crates/dom_api_next/src/request.rs"
+from = '''        if network::is_forbidden_method(method) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "api: a method not normalized"
+file = "crates/dom_api_next/src/request.rs"
+from = '''        data.method = normalize_method(method);'''
+to = '''        method.clone_into(&mut data.method);'''
+
+[[mutant]]
+name = "api: a GET with a body"
+file = "crates/dom_api_next/src/request.rs"
+from = '''    if (init_body.is_some() || input_body.is_some()) && matches!(data.method.as_str(), "GET" | "HEAD") {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: the input's body not moved"
+file = "crates/dom_api_next/src/request.rs"
+from = '''        cx.with_request_data(input, |data| data.body_used = true);'''
+to = ''''''
+
+[[mutant]]
+name = "api: the given signal not followed"
+file = "crates/dom_api_next/src/request.rs"
+from = '''    let signal = cx.create_dependent_abort_signal(window, &sources);'''
+to = '''    let _ = sources;
+    let signal = cx.create_dependent_abort_signal(window, &[]);'''
+
+[[mutant]]
+name = "api: a body's Content-Type not added"
+file = "crates/dom_api_next/src/request.rs"
+from = '''                if !header_list::contains(list, "Content-Type") {
+                    header_list::append(list, "Content-Type", &content_type);
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "api: the window member not checked"
+file = "crates/dom_api_next/src/request.rs"
+from = '''    if init.window.is_some_and(|window| !window.0) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: a status out of range"
+file = "crates/dom_api_next/src/response.rs"
+from = '''    if !(200..=599).contains(&init.status) {'''
+to = '''    if !(100..=599).contains(&init.status) {'''
+
+[[mutant]]
+name = "api: a null body status with a body"
+file = "crates/dom_api_next/src/response.rs"
+from = '''        if is_null_body_status(init.status) {
+            return Err(ApiError::type_error(format!('''
+to = '''        if false {
+            return Err(ApiError::type_error(format!('''
+
+[[mutant]]
+name = "api: a redirect of any status"
+file = "crates/dom_api_next/src/response.rs"
+from = '''    if !is_redirect_status(status) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: a body read twice"
+file = "crates/dom_api_next/src/body.rs"
+from = '''    if body_used(cx, body) {
+        let interface'''
+to = '''    if false {
+        let interface'''
+
+[[mutant]]
+name = "api: an aborted fetch's body read"
+file = "crates/dom_api_next/src/body.rs"
+from = '''        return Err(op.rethrow(cx, reason));
+    }
+    Ok(body.take(cx)'''
+to = '''        let _ = reason;
+    }
+    Ok(body.take(cx)'''
+
+[[mutant]]
+name = "api: a BOM kept"
+file = "crates/dom_api_next/src/body.rs"
+from = '''    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);'''
+to = ''''''
+
+[[mutant]]
+name = "api: a file URL fetched"
+file = "crates/dom_api_next/src/fetch.rs"
+from = '''        "file" => {
+            return Err(ApiError::type_error(format!('''
+to = '''        "file" => {
+            return Ok(0);
+        }
+        "never" => {
+            return Err(ApiError::type_error(format!('''
+
+[[mutant]]
+name = "api: an aborted signal's fetch goes"
+file = "crates/dom_api_next/src/fetch.rs"
+from = '''    if let Some(reason) = cx.abort_reason(signal) {
+        return Err(op.rethrow(cx, reason));
+    }
+    let data'''
+to = '''    let data'''
+
+[[mutant]]
+name = "api: headers of a name not joined"
+file = "crates/dom_api_next/src/fetch.rs"
+from = '''        for (name, _) in list.iter() {
+            if !header_list::contains(&headers, name) {
+                let value = header_list::get(list, name).expect("a name of the list");
+                headers.push((name.clone(), value));
+            }
+        }'''
+to = '''        headers.extend(list.iter().cloned());'''
+
+[[mutant]]
+name = "api: an aborted fetch not cancelled"
+file = "crates/dom_api_next/src/fetch.rs"
+from = '''        cx.request_fetch(FetchHostRequest::Cancel(state.id));'''
+to = ''''''
+
+[[mutant]]
+name = "api: an aborted fetch not rejected"
+file = "crates/dom_api_next/src/fetch.rs"
+from = '''        host.reject_promise_with_reason(promise, signal);'''
+to = '''        let _ = (promise, signal);'''
+
+[[mutant]]
+name = "api: a response answered twice"
+file = "crates/dom_api_next/src/fetch.rs"
+from = '''        let record = cx.window_fetch(window, id)?;
+        cx.finish_fetch(record);'''
+to = '''        let record = cx.window_fetch(window, id)?;'''
+
+[[mutant]]
+name = "api: Set-Cookie kept"
+file = "crates/dom_api_next/src/fetch.rs"
+from = '''        .filter(|(name, _)| !header_list::is_forbidden_response_header_name(name))'''
+to = '''        .filter(|_| true)'''
+
+[[mutant]]
+name = "api: a CORS response's headers not filtered"
+file = "crates/dom_api_next/src/fetch.rs"
+from = '''        ResponseTainting::Cors => cors_filtered_headers('''
+to = '''        ResponseTainting::Opaque => cors_filtered_headers('''
+
+[[mutant]]
+name = "api: an opaque response's own"
+file = "crates/dom_api_next/src/fetch.rs"
+from = '''    if response.tainting == ResponseTainting::Opaque {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: a manual redirect followed"
+file = "crates/dom_api_next/src/fetch.rs"
+from = '''    if redirect == RequestRedirect::Manual && crate::response::is_redirect_status(response.status) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: a null body status's body"
+file = "crates/dom_api_next/src/fetch.rs"
+from = '''        body: (!crate::response::is_null_body_status(response.status)).then_some(response.body),'''
+to = '''        body: Some(response.body),'''
+
+[[mutant]]
+name = "api: a response's signal not kept"
+file = "crates/dom_api_next/src/fetch.rs"
+from = '''            cx.set_response_signal(response, signal);'''
+to = '''            let _ = signal;'''
+
+[[mutant]]
+name = "js: the requests not taken from the DOM"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        let fetches = state.dom.mutate(|cx| cx.take_fetch_requests());'''
+to = '''        let fetches: Vec<dom_next::FetchHostRequest> = Vec::new();'''
+
+[[mutant]]
+name = "js: JSON's errors not rejected"
+file = "crates/dom_js_next/src/front.rs"
+from = '''                    Err(Some(thrown)) => {
+                        resolver.reject(scope, thrown);
+                    }'''
+to = '''                    Err(Some(_)) => {}'''
+
+[[mutant]]
+name = "js: undefined JSON data"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        if json == "undefined" {'''
+to = '''        if json == "never" {'''
+
+[[mutant]]
+name = "api: a static and a regular operation one overload"
+file = "crates/dom_api_next/src/declare.rs"
+from = '''        if same_kind && other.is_static == this.is_static && eq(other.name.as_bytes(), this.name.as_bytes()) {'''
+to = '''        if same_kind && eq(other.name.as_bytes(), this.name.as_bytes()) {'''
+
+[[mutant]]
+name = "js: an accessor's function unnamed"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''    let name = string(scope, &format!("{prefix} {name}"));
+    function.set_class_name(name);'''
+to = '''    let _ = (scope, function, prefix, name);'''
+
+[[mutant]]
+name = "dom: an about:blank's base URL not kept"
+file = "crates/dom_next/src/frame.rs"
+from = '''            self.keep_about_base_url(old);'''
+to = ''''''

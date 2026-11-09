@@ -1,0 +1,77 @@
+# Stage 2: the names a font-family list asks the font collection for.
+test = ["cargo", "test", "-q", "-p", "layout", "--lib", "font_families"]
+timeout = 600
+
+[[mutant]]
+name = "no alternate name"
+file = "crates/layout/src/font_families.rs"
+from = '''        if let Some(alternate) = alternate(name, platform) {'''
+to = '''        if let Some(alternate) = alternate(name, platform).filter(|_| false) {'''
+
+[[mutant]]
+name = "metric-compatible fonts on every platform"
+file = "crates/layout/src/font_families.rs"
+from = '''        self.push(name);
+        if platform == Platform::Linux {'''
+to = '''        self.push(name);
+        if platform == Platform::Linux || true {'''
+
+[[mutant]]
+name = "classes case-sensitive"
+file = "crates/layout/src/font_families.rs"
+from = '''        .find(|(_, font)| font.eq_ignore_ascii_case(name))'''
+to = '''        .find(|(_, font)| *font == name)'''
+
+[[mutant]]
+name = "Courier New's alternate on Windows"
+file = "crates/layout/src/font_families.rs"
+from = '''        .filter(|to| !(platform == Platform::Windows && *to == "Courier"))'''
+to = '''        .filter(|_| true)'''
+
+[[mutant]]
+name = "fontique's generic families on Linux"
+file = "crates/layout/src/font_families.rs"
+from = '''        if platform == Platform::Linux
+            && let Some(named) = named'''
+to = '''        if platform == Platform::MacOs
+            && let Some(named) = named'''
+
+[[mutant]]
+name = "no standard font at the end on Linux"
+file = "crates/layout/src/font_families.rs"
+from = '''    if platform == Platform::Linux {
+        stack.named(STANDARD, platform);
+    }'''
+to = '''    if platform == Platform::MacOs {
+        stack.named(STANDARD, platform);
+    }'''
+
+[[mutant]]
+name = "a name twice"
+file = "crates/layout/src/font_families.rs"
+from = '''        if !seen {
+            self.out
+                .push('''
+to = '''        if !seen || true {
+            self.out
+                .push('''
+
+[[mutant]]
+name = "sans-serif as Helvetica"
+file = "crates/layout/src/font_families.rs"
+from = '''            GenericFamily::SansSerif => Some("Arial"),'''
+to = '''            GenericFamily::SansSerif => Some("Helvetica"),'''
+
+[[mutant]]
+name = "a class of other fonts"
+file = "crates/layout/src/font_families.rs"
+from = '''            class.is_some() && class_of(font) == class && !font.eq_ignore_ascii_case(name)'''
+to = '''            class.is_some() && !font.eq_ignore_ascii_case(name)'''
+
+[[mutant]]
+name = "the class's fonts in reverse"
+file = "crates/layout/src/font_families.rs"
+from = '''    ("sans", "Arimo"),
+    ("sans", "Liberation Sans"),'''
+to = '''    ("sans", "Liberation Sans"),
+    ("sans", "Arimo"),'''

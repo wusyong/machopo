@@ -1,0 +1,409 @@
+# Stage 4h-1a: the DOM's core members on the new DOM: CharacterData's edits by UTF-16
+# offsets, splitText and wholeText, the constructors, Element's attribute names, toggling and
+# adjacent insertion, the documents' collections by namespace and name, links and anchors,
+# metadata, dir and visibility, a shadow root's active element, Attr and NamedNodeMap,
+# CDATASection and XMLDocument, DOMParser.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "sh", "-c", "cargo test -q -p dom_js_next --test it -- dom_core frames::the_pages_visibility && cargo test -q -p dom_api_next --test it -- focus"]
+timeout = 900
+
+[[mutant]]
+name = "string: a substring of non-ASCII to its end"
+file = "crates/dom_next/src/string.rs"
+from = '''        let end = start.saturating_add(count).min(units.len());
+        String::from_utf16_lossy(&units[start..end])'''
+to = '''        let end = units.len();
+        String::from_utf16_lossy(&units[start..end])'''
+
+[[mutant]]
+name = "string: a splice without the new data"
+file = "crates/dom_next/src/string.rs"
+from = '''            return [&self.text[..start], data, &self.text[end..]].concat();'''
+to = '''            return [&self.text[..start], &self.text[end..]].concat();'''
+
+[[mutant]]
+name = "string: a non-ASCII splice keeps what it cut"
+file = "crates/dom_next/src/string.rs"
+from = '''        spliced.push_str(&String::from_utf16_lossy(&units[end..]));'''
+to = '''        spliced.push_str(&String::from_utf16_lossy(&units[start..]));'''
+
+[[mutant]]
+name = "dom: replacing data queues no record"
+file = "crates/dom_next/src/lib.rs"
+from = '''        let old = self.character_data_of(node).data.get().borrow().clone();
+        if self.observed() {
+            self.queue_character_data_record(node, &old.to_str());
+        }'''
+to = '''        let old = self.character_data_of(node).data.get().borrow().clone();'''
+
+[[mutant]]
+name = "api: the offset at the length is out of range"
+file = "crates/dom_api_next/src/character_data.rs"
+from = '''    if at > length {'''
+to = '''    if at >= length {'''
+
+[[mutant]]
+name = "api: appendData at the start"
+file = "crates/dom_api_next/src/character_data.rs"
+from = '''    cx.replace_data(this, end, 0, data);'''
+to = '''    let _ = end;
+    cx.replace_data(this, 0, 0, data);'''
+
+[[mutant]]
+name = "api: splitText leaves the new text out of the parent"
+file = "crates/dom_api_next/src/character_data.rs"
+from = '''    if let Some(parent) = cx.parent(this) {
+        cx.insert(parent, new, cx.next_sibling(this));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: splitText keeps the moved data"
+file = "crates/dom_api_next/src/character_data.rs"
+from = '''    cx.replace_data(this, at, usize::MAX, "");
+    Ok(new)'''
+to = '''    Ok(new)'''
+
+[[mutant]]
+name = "api: splitText of a CDATA section makes a text"
+file = "crates/dom_api_next/src/character_data.rs"
+from = '''    let new = if cx.is_cdata_section(this) {'''
+to = '''    let new = if false {'''
+
+[[mutant]]
+name = "api: wholeText starts at itself"
+file = "crates/dom_api_next/src/character_data.rs"
+from = '''    while let Some(before) = cx.previous_sibling(first).filter(is_text) {
+        first = before;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: wholeText leaves CDATA sections out"
+file = "crates/dom_api_next/src/character_data.rs"
+from = '''    let is_text = |node: &NodeRef<'gc>| cx.kind(*node) == dom_next::NodeKind::Text;'''
+to = '''    let is_text = |node: &NodeRef<'gc>| cx.is_exclusive_text(*node);'''
+
+[[mutant]]
+name = "api: new Text ignores its data"
+file = "crates/dom_api_next/src/character_data.rs"
+from = '''    Ok(cx.create_text(realm_document(op, cx)?, data.unwrap_or("")))'''
+to = '''    let _ = data;
+    Ok(cx.create_text(realm_document(op, cx)?, ""))'''
+
+[[mutant]]
+name = "api: getAttributeNames gives local names"
+file = "crates/dom_api_next/src/element.rs"
+from = '''    if name.prefix == dom_next::names::NONE {
+        local.to_string()'''
+to = '''    if true {
+        local.to_string()'''
+
+[[mutant]]
+name = "api: toggleAttribute without force keeps what is there"
+file = "crates/dom_api_next/src/element.rs"
+from = '''        (true, None | Some(false)) => {'''
+to = '''        (true, None) => Ok(true),
+        (true, Some(false)) => {'''
+
+[[mutant]]
+name = "api: toggleAttribute forced off adds"
+file = "crates/dom_api_next/src/element.rs"
+from = '''        (false, Some(false)) => Ok(false),'''
+to = '''        (false, Some(false)) => {
+            cx.set_attribute(this, &name, "");
+            Ok(false)
+        }'''
+
+[[mutant]]
+name = "api: insertAdjacent case-sensitive"
+file = "crates/dom_api_next/src/element.rs"
+from = '''    let (parent, child) = match position.to_ascii_lowercase().as_str() {'''
+to = '''    let (parent, child) = match position {'''
+
+[[mutant]]
+name = "api: afterbegin at the end"
+file = "crates/dom_api_next/src/element.rs"
+from = '''        "afterbegin" => (this, cx.first_child(this)),'''
+to = '''        "afterbegin" => (this, None),'''
+
+[[mutant]]
+name = "api: afterend before it"
+file = "crates/dom_api_next/src/element.rs"
+from = '''            Some(parent) => (parent, cx.next_sibling(this)),'''
+to = '''            Some(parent) => (parent, Some(this)),'''
+
+[[mutant]]
+name = "collection: by namespace, any local name never"
+file = "crates/dom_next/src/collection.rs"
+from = '''        collection.all.set(local == "*");'''
+to = '''        collection.all.set(false);'''
+
+[[mutant]]
+name = "collection: by namespace, any namespace never"
+file = "crates/dom_next/src/collection.rs"
+from = '''        (namespace == names::intern("*") || name.namespace == namespace)'''
+to = '''        (name.namespace == namespace)'''
+
+[[mutant]]
+name = "collection: links without area"
+file = "crates/dom_next/src/collection.rs"
+from = '''                (name.local == names::local::A || name.local == names::local::AREA)'''
+to = '''                (name.local == names::local::A)'''
+
+[[mutant]]
+name = "collection: anchors without a name"
+file = "crates/dom_next/src/collection.rs"
+from = '''                name.local == names::local::A
+                    && self.attribute_value_by_id(element, names::local::NAME).is_some()'''
+to = '''                name.local == names::local::A'''
+
+[[mutant]]
+name = "collection: by name, any name"
+file = "crates/dom_next/src/collection.rs"
+from = '''                .is_some_and(|value| *value.borrow().to_str() == *names::get(collection.local.get())),'''
+to = '''                .is_some(),'''
+
+[[mutant]]
+name = "api: dir keeps an unknown value"
+file = "crates/dom_api_next/src/document.rs"
+from = '''        .filter(|value| matches!(value.as_str(), "ltr" | "rtl" | "auto"))'''
+to = ''''''
+
+[[mutant]]
+name = "api: dir as written"
+file = "crates/dom_api_next/src/document.rs"
+from = '''        .map(|value| value.borrow().to_str().to_ascii_lowercase())'''
+to = '''        .map(|value| value.borrow().to_str().to_string())'''
+
+[[mutant]]
+name = "api: visibilityState always visible"
+file = "crates/dom_api_next/src/document.rs"
+from = '''        if page_hidden(cx, this) { "hidden" } else { "visible" }.into(),'''
+to = '''        "visible".into(),'''
+
+[[mutant]]
+name = "api: the visibility set again fires again"
+file = "crates/dom_api_next/src/document.rs"
+from = '''        if cx.window_of(top).is_none_or(|window| cx.page_hidden(window) == !visible) {'''
+to = '''        if cx.window_of(top).is_none() {'''
+
+[[mutant]]
+name = "api: the visibility of the top document alone"
+file = "crates/dom_api_next/src/document.rs"
+from = '''        let documents = crate::documents_in_tree_order(cx, top);'''
+to = '''        let documents = vec![top];'''
+
+[[mutant]]
+name = "js: a child window made visible"
+file = "crates/dom_js_next/src/frames.rs"
+from = '''        cx.set_page_hidden(window, parent.is_some_and(|parent| cx.page_hidden(parent)));'''
+to = '''        cx.set_page_hidden(window, false);'''
+
+[[mutant]]
+name = "api: createCDATASection in an HTML document"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    if cx.is_html_document(this) {
+        return Err(ApiError::dom(ExceptionName::NotSupported));
+    }
+    if data.contains("]]>") {'''
+to = '''    if data.contains("]]>") {'''
+
+[[mutant]]
+name = "api: createCDATASection with ]]>"
+file = "crates/dom_api_next/src/document.rs"
+from = '''    if data.contains("]]>") {
+        return Err(ApiError::dom(ExceptionName::InvalidCharacter));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a shadow root's active element outside it"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    Ok(Gc::ptr_eq(cx.root_node(candidate, false), this).then_some(candidate))'''
+to = '''    Ok(Some(candidate))'''
+
+[[mutant]]
+name = "api: document.activeElement not retargeted"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        .map(|focused| cx.retarget(focused, Some(this)))
+        .or_else(|| crate::geometry::body(cx, this))'''
+to = '''        .or_else(|| crate::geometry::body(cx, this))'''
+
+[[mutant]]
+name = "api: an Attr's namespaces looked up from none"
+file = "crates/dom_api_next/src/node.rs"
+from = '''        NodeKind::Attr => cx.attr_owner(node),'''
+to = '''        NodeKind::Attr => None,'''
+
+[[mutant]]
+name = "api: an Attr's nodeValue none"
+file = "crates/dom_api_next/src/node.rs"
+from = '''    if cx.kind(this) == NodeKind::Attr {
+        return Ok(Some(cx.attr_value_string(this)));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: createDocument a Document"
+file = "crates/dom_api_next/src/dom_implementation.rs"
+from = '''    cx.set_xml_document_interface(document);'''
+to = ''''''
+
+[[mutant]]
+name = "api: createDocument's SVG content type"
+file = "crates/dom_api_next/src/dom_implementation.rs"
+from = '''            Some("http://www.w3.org/2000/svg") => "image/svg+xml",'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an Attr appended as a child"
+file = "crates/dom_next/src/lib.rs"
+from = '''            && !self.parent(child).is_some_and(|of| Gc::ptr_eq(of, parent))
+        {
+            return Err(DomError::NotFound);
+        }
+        let kind = self.kind(node);
+        match kind {
+            // A document or an `Attr` is no child.
+            NodeKind::Document | NodeKind::Attr => return Err(DomError::HierarchyRequest),'''
+to = '''            && !self.parent(child).is_some_and(|of| Gc::ptr_eq(of, parent))
+        {
+            return Err(DomError::NotFound);
+        }
+        let kind = self.kind(node);
+        match kind {
+            NodeKind::Document => return Err(DomError::HierarchyRequest),'''
+
+[[mutant]]
+name = "dom: an Attr put in by replaceChild"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if !self.parent(child).is_some_and(|of| Gc::ptr_eq(of, parent)) {
+            return Err(DomError::NotFound);
+        }
+        let kind = self.kind(node);
+        match kind {
+            // A document or an `Attr` is no child.
+            NodeKind::Document | NodeKind::Attr => return Err(DomError::HierarchyRequest),'''
+to = '''        if !self.parent(child).is_some_and(|of| Gc::ptr_eq(of, parent)) {
+            return Err(DomError::NotFound);
+        }
+        let kind = self.kind(node);
+        match kind {
+            NodeKind::Document => return Err(DomError::HierarchyRequest),'''
+
+[[mutant]]
+name = "dom: an adopted element's Attrs stay in the old document"
+file = "crates/dom_next/src/lib.rs"
+from = '''            self.adopt_attr_nodes(at, document);'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a removed attribute's Attr keeps its element"
+file = "crates/dom_next/src/lib.rs"
+from = '''        let attribute = attributes.remove(self.gc, index);
+        self.detach_attr_node(element, attribute);'''
+to = '''        let attribute = attributes.remove(self.gc, index);'''
+
+[[mutant]]
+name = "dom: a cloned document a Document"
+file = "crates/dom_next/src/lib.rs"
+from = '''                if self.is_xml_document_interface(node) {
+                    self.set_xml_document_interface(copy);
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a cloned document's content type the default"
+file = "crates/dom_next/src/lib.rs"
+from = '''                self.set_document_content_type(copy, &self.document_content_type(node).to_str());'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a cloned CDATA section a text"
+file = "crates/dom_next/src/lib.rs"
+from = '''                if self.flag(node, CDATA_SECTION) {
+                    copy.flags.set(copy.flags.get() | CDATA_SECTION);
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a CDATA section's nodeType a text's"
+file = "crates/dom_next/src/lib.rs"
+from = '''            NodeKind::Text if self.flag(node, CDATA_SECTION) => 4,'''
+to = ''''''
+
+[[mutant]]
+name = "dom: normalize joins CDATA sections"
+file = "crates/dom_next/src/lib.rs"
+from = '''    pub fn is_exclusive_text(&self, node: NodeRef<'gc>) -> bool {
+        self.kind(node) == NodeKind::Text && !self.flag(node, CDATA_SECTION)'''
+to = '''    pub fn is_exclusive_text(&self, node: NodeRef<'gc>) -> bool {
+        self.kind(node) == NodeKind::Text'''
+
+[[mutant]]
+name = "attr: a new Attr each time"
+file = "crates/dom_next/src/attr.rs"
+from = '''        if let Some(attr) = self.kept_attr_node(element, attribute) {
+            return attr;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "attr: a detached Attr keeps its element"
+file = "crates/dom_next/src/attr.rs"
+from = '''            let attr = kept.remove(self.gc, at);
+            self.attr_data(attr).element.set(self.gc, None);'''
+to = '''            let _ = kept.remove(self.gc, at);'''
+
+[[mutant]]
+name = "attr: a detached Attr's value set on nothing"
+file = "crates/dom_next/src/attr.rs"
+from = '''            None => *attribute.value.get().borrow_mut() = string::intern_value(value),'''
+to = '''            None => {}'''
+
+[[mutant]]
+name = "attr: another element's Attr taken"
+file = "crates/dom_next/src/attr.rs"
+from = '''            Some(_) => return Err(DomError::InUseAttribute),'''
+to = '''            Some(_) => {}'''
+
+[[mutant]]
+name = "attr: a set Attr of its old document"
+file = "crates/dom_next/src/attr.rs"
+from = '''        attr.owner.set(self.gc, Some(self.document_of(element)));'''
+to = ''''''
+
+[[mutant]]
+name = "attr: the replaced Attr keeps its element"
+file = "crates/dom_next/src/attr.rs"
+from = '''        self.detach_attr_node(element, old_attribute);
+        self.keep_attr_node(element, attr);'''
+to = '''        self.keep_attr_node(element, attr);'''
+
+[[mutant]]
+name = "attr: removeAttributeNode of another element's"
+file = "crates/dom_next/src/attr.rs"
+from = '''        if !self.attr_owner(attr).is_some_and(|owner| Gc::ptr_eq(owner, element)) {
+            return Err(DomError::NotFound);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "api: DOMParser at no URL"
+file = "crates/dom_api_next/src/attr.rs"
+from = '''    if let Some(url) = url {
+        cx.set_document_url(document, &url.to_str());
+    }'''
+to = '''    let _ = url;'''
+
+[[mutant]]
+name = "api: DOMParser's XML types a TypeError"
+file = "crates/dom_api_next/src/attr.rs"
+from = '''        "text/xml" | "application/xml" | "application/xhtml+xml" | "image/svg+xml" => {'''
+to = '''        "application/xml" | "application/xhtml+xml" | "image/svg+xml" => {'''
+
+[[mutant]]
+name = "html: a DOMParser's document attaches declarative shadow roots"
+file = "crates/html/src/next.rs"
+from = '''    parse_document_in(cx, input, false)'''
+to = '''    parse_document_in(cx, input, true)'''

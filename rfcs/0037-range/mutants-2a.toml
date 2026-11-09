@@ -1,0 +1,177 @@
+# Mutation test of step 2a (deleteContents, extractContents,
+# cloneContents):
+# python3 scripts/test.py mutate rfcs/0037-range/mutants-2a.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "ranges::"]
+timeout = 600
+
+[[mutant]]
+name = "deleting within one text node deletes to its end"
+file = "crates/dom_api/src/range.rs"
+from = '''        let count = points.end_offset - points.start_offset;
+        cx.mutate()
+            .replace_data(&points.start, points.start_offset, count, "")?;
+        return Ok(());
+    }
+    // Every node wholly in it'''
+to = '''        let count = points.end_offset - points.start_offset;
+        let _ = count;
+        cx.mutate()
+            .replace_data(&points.start, points.start_offset, u32::MAX, "")?;
+        return Ok(());
+    }
+    // Every node wholly in it'''
+
+[[mutant]]
+name = "deleting leaves the start's text"
+file = "crates/dom_api/src/range.rs"
+from = '''    if is_character_data(points.start.kind()) {
+        cx.mutate()
+            .replace_data(&points.start, points.start_offset, u32::MAX, "")?;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "deleting leaves the end's text"
+file = "crates/dom_api/src/range.rs"
+from = '''    if is_character_data(points.end.kind()) {
+        cx.mutate()
+            .replace_data(&points.end, 0, points.end_offset, "")?;
+    }
+    let (node, offset) = collapse_to;'''
+to = '''    let (node, offset) = collapse_to;'''
+
+[[mutant]]
+name = "deleting removes no node"
+file = "crates/dom_api/src/range.rs"
+from = '''    for node in &to_remove {
+        cx.mutate().remove(node);
+    }'''
+to = '''    let _ = to_remove;'''
+
+[[mutant]]
+name = "deleting removes a removed node's children too"
+file = "crates/dom_api/src/range.rs"
+from = '''            if contained(node) {
+                to_remove.push(node.to_handle());
+                continue;
+            }'''
+to = '''            if contained(node) {
+                to_remove.push(node.to_handle());
+            }'''
+
+[[mutant]]
+name = "deleting doesn't collapse the range"
+file = "crates/dom_api/src/range.rs"
+from = '''    let (node, offset) = collapse_to;
+    cx.mutate()
+        .set_range(this, (&node, offset), (&node, offset));
+    Ok(())
+}'''
+to = '''    let _ = collapse_to;
+    Ok(())
+}'''
+
+[[mutant]]
+name = "an extracted range collapses before the start's ancestor"
+file = "crates/dom_api/src/range.rs"
+from = '''        (parent.to_handle(), index(reference) + 1)
+    };
+    Parts {'''
+to = '''        (parent.to_handle(), index(reference))
+    };
+    Parts {'''
+
+[[mutant]]
+name = "an extracted range collapses after the start's ancestor when it holds the end"
+file = "crates/dom_api/src/range.rs"
+from = '''    let collapse_to = if start_contains_end {'''
+to = '''    let collapse_to = if false && start_contains_end {'''
+
+[[mutant]]
+name = "no first partly selected child"
+file = "crates/dom_api/src/range.rs"
+from = '''        .then(|| common.children().find(|c| partial(*c)))'''
+to = '''        .then(|| common.children().find(|c| partial(*c) && false))'''
+
+[[mutant]]
+name = "the last partly selected child is the first"
+file = "crates/dom_api/src/range.rs"
+from = '''        .then(|| common.children().filter(|c| partial(*c)).last())'''
+to = '''        .then(|| common.children().find(|c| partial(*c)))'''
+
+[[mutant]]
+name = "a doctype extracted"
+file = "crates/dom_api/src/range.rs"
+from = '''        .any(|n| n.kind() == NodeKind::Doctype)'''
+to = '''        .any(|n| n.kind() == NodeKind::Doctype && false)'''
+
+[[mutant]]
+name = "a wholly selected node cloned shallow"
+file = "crates/dom_api/src/range.rs"
+from = '''            crate::node::clone_node(cx, &child, true)?'''
+to = '''            crate::node::clone_node(cx, &child, false)?'''
+
+[[mutant]]
+name = "extracting leaves the end's text"
+file = "crates/dom_api/src/range.rs"
+from = '''            if extract {
+                cx.mutate()
+                    .replace_data(&points.end, 0, points.end_offset, "")?;
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "extracting leaves the start's text"
+file = "crates/dom_api/src/range.rs"
+from = '''            if extract {
+                cx.mutate()
+                    .replace_data(&points.start, points.start_offset, u32::MAX, "")?;
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "a partly selected element's copy is empty"
+file = "crates/dom_api/src/range.rs"
+from = '''            let (subfragment, _) = clone_or_extract(cx, &inner, extract)?;
+            append(cx, &clone, subfragment)?;
+        }
+    }
+    for child'''
+to = '''            let _ = inner;
+        }
+    }
+    for child'''
+
+[[mutant]]
+name = "an extracted range doesn't collapse"
+file = "crates/dom_api/src/range.rs"
+from = '''    let (fragment, collapse_to) = clone_or_extract(cx, &points, true)?;
+    if let Some((node, offset)) = collapse_to {
+        cx.mutate()
+            .set_range(this, (&node, offset), (&node, offset));
+    }
+    Ok(fragment)'''
+to = '''    let (fragment, collapse_to) = clone_or_extract(cx, &points, true)?;
+    let _ = collapse_to;
+    Ok(fragment)'''
+
+[[mutant]]
+name = "a clone's data from the start"
+file = "crates/dom_api/src/range.rs"
+from = '''        let clone = clone_with_data(cx, &points.start, points.start_offset, u32::MAX)?;'''
+to = '''        let clone = clone_with_data(cx, &points.start, 0, u32::MAX)?;'''
+
+[[mutant]]
+name = "a node at the start counts as wholly selected"
+file = "crates/dom_api/src/range.rs"
+from = '''            position((*c, 0), (start, points.start_offset)) == Ordering::Greater
+                && position((*c, node_length(*c)), (end, points.end_offset)) == Ordering::Less'''
+to = '''            position((*c, 0), (start, points.start_offset)) != Ordering::Less
+                && position((*c, node_length(*c)), (end, points.end_offset)) == Ordering::Less'''
+test = ["python3", "scripts/test.py", "wpt", "dom/ranges/Range-extractContents.html", "dom/ranges/Range-cloneContents.html"]
+
+[[mutant]]
+name = "deleteContents isn't [CEReactions]"
+file = "crates/dom_api/src/interfaces/core_dom.rs"
+from = '''        [CEReactions] method deleteContents() = range::delete_contents;'''
+to = '''        method deleteContents() = range::delete_contents;'''

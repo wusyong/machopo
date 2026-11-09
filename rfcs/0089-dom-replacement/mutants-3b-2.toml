@@ -1,0 +1,404 @@
+# Stage 3b-2: the box tree from the new DOM updated (`layout`'s `next`):
+# the layout tree flags' walk, restyling in place, collecting again,
+# markers, the counters' pass and the lists' numbers over the new DOM, and
+# what a change means for scroll anchoring; the UA sheet's ancestors in
+# `style_next`'s bloom filter.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "layout", "--test", "it", "next"]
+timeout = 900
+
+[[mutant]]
+name = "changed text not collected again"
+file = "crates/layout/src/next.rs"
+from = '''                if flags.contains(LayoutTreeFlags::NEEDS_REATTACH) {
+                    walk.collect(container);'''
+to = '''                if false {
+                    walk.collect(container);'''
+
+[[mutant]]
+name = "flagged descendants not walked"
+file = "crates/layout/src/next.rs"
+from = '''        if !flags.contains(LayoutTreeFlags::CHILD_NEEDS_UPDATE) {
+            return;
+        }
+        for child in dom.children(node) {'''
+to = '''        if true {
+            return;
+        }
+        for child in dom.children(node) {'''
+
+[[mutant]]
+name = "a reattached element's old box kept"
+file = "crates/layout/src/next.rs"
+from = '''            walk.rebuild.insert(id);
+'''
+to = ''''''
+
+[[mutant]]
+name = "a reattached element's container not collected"
+file = "crates/layout/src/next.rs"
+from = '''            self.scroll_anchoring.rebuilt.push(id);
+            walk.collect(container);'''
+to = '''            self.scroll_anchoring.rebuilt.push(id);'''
+
+[[mutant]]
+name = "what comes with counters in it isn't counted"
+file = "crates/layout/src/next.rs"
+from = '''                walk.counters_changed = counters_below(dom, element, lists);'''
+to = '''                walk.counters_changed = false;'''
+
+[[mutant]]
+name = "an element built again changes no list"
+file = "crates/layout/src/next.rs"
+from = '''            if lists {
+                walk.lists_changed.push(element);
+            }
+            return None;'''
+to = '''            return None;'''
+
+[[mutant]]
+name = "another part in the counters isn't counted"
+file = "crates/layout/src/next.rs"
+from = '''                walk.counters_changed = counters::next::directives(dom, element, lists).as_ref()
+                    != self.counters.relevant.get(&id);'''
+to = '''                walk.counters_changed = false;'''
+
+[[mutant]]
+name = "a pseudo-element using list-item isn't irregular"
+file = "crates/layout/src/next.rs"
+from = '''                && !list_items::next::regular(dom, element, &style)
+            {
+                walk.irregular = true;'''
+to = '''                && !list_items::next::regular(dom, element, &style)
+            {'''
+
+[[mutant]]
+name = "an inline element's content isn't its container's"
+file = "crates/layout/src/next.rs"
+from = '''                matches!(style.display, Display::Inline | Display::Contents)'''
+to = '''                matches!(style.display, Display::Contents)'''
+
+[[mutant]]
+name = "new pseudo-styles collect nothing"
+file = "crates/layout/src/next.rs"
+from = '''        if (flags.contains(LayoutTreeFlags::CHILDREN_CHANGED) || pseudo_styles_changed)'''
+to = '''        if (flags.contains(LayoutTreeFlags::CHILDREN_CHANGED))'''
+
+[[mutant]]
+name = "an inline element's new paint not in its content"
+file = "crates/layout/src/next.rs"
+from = '''                        if let Some(inline) = &mut self.boxes[i].inline {
+                            inline.set_style(id, &style);
+                            self.mark_needs_fragment(i);'''
+to = '''                        if let Some(inline) = &mut self.boxes[i].inline {
+                            self.mark_needs_fragment(i);'''
+
+[[mutant]]
+name = "an inline element's new layout collects nothing"
+file = "crates/layout/src/next.rs"
+from = '''                Some(StyleDifference::Layout) => walk.collect(container),'''
+to = '''                Some(StyleDifference::Layout) => {}'''
+
+[[mutant]]
+name = "a block's new layout keeps its content"
+file = "crates/layout/src/next.rs"
+from = '''                walk.collect(Container::Box(element, index));
+                walk.restyled = walk.restyled.wrapping_add(1);
+            }
+            StyleDifference::Paint => {'''
+to = '''                walk.restyled = walk.restyled.wrapping_add(1);
+            }
+            StyleDifference::Paint => {'''
+
+[[mutant]]
+name = "an anonymous block keeps its old paint"
+file = "crates/layout/src/next.rs"
+from = '''                    if b.role == BoxRole::AnonymousBlock {
+                        b.style = anonymous.clone();
+                    }'''
+to = ''''''
+
+[[mutant]]
+name = "a restyled block's own paint not taken"
+file = "crates/layout/src/next.rs"
+from = '''                self.boxes[index].style = style;
+                self.mark_needs_fragment(index);'''
+to = '''                self.mark_needs_fragment(index);'''
+
+[[mutant]]
+name = "the propagated overflow restyled visible"
+file = "crates/layout/src/next.rs"
+from = '''        let style = if self.document.propagated == Some(id) {'''
+to = '''        let style = if false {'''
+
+[[mutant]]
+name = "another document's boxes kept"
+file = "crates/layout/src/next.rs"
+from = '''        if document_boxes(dom, document) != self.document {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "what the LayoutView holds updated in place"
+file = "crates/layout/src/next.rs"
+from = '''        if walk.full {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a collected box keeps its old marker"
+file = "crates/layout/src/next.rs"
+from = '''        self.set_content(cx, index, content);
+        cx.in_line_clamp = in_line_clamp;
+        self.set_marker(cx, element, index);
+        self.mark_needs_layout(index);'''
+to = '''        self.set_content(cx, index, content);
+        cx.in_line_clamp = in_line_clamp;
+        self.mark_needs_layout(index);'''
+
+[[mutant]]
+name = "a box in what is built again kept"
+file = "crates/layout/src/next.rs"
+from = '''            Some(&index) if !cx.fresh && !cx.rebuild.contains(&id) => Some(index.into()),'''
+to = '''            Some(&index) if !cx.rebuild.contains(&id) => Some(index.into()),'''
+
+[[mutant]]
+name = "below an element built again isn't fresh"
+file = "crates/layout/src/next.rs"
+from = '''        let fresh = cx.fresh;
+        cx.fresh |= cx.rebuild.contains(&id);
+        let in_line_clamp'''
+to = '''        let fresh = cx.fresh;
+        let in_line_clamp'''
+
+[[mutant]]
+name = "the counters never worked out again"
+file = "crates/layout/src/next.rs"
+from = '''        if pass {
+            self.counter_passes'''
+to = '''        if false {
+            self.counter_passes'''
+
+[[mutant]]
+name = "what went isn't looked for"
+file = "crates/layout/src/next.rs"
+from = '''        let structure = walk.children_changed || !walk.rebuild.is_empty();'''
+to = '''        let structure = false;'''
+
+[[mutant]]
+name = "a counter's new text collects nothing"
+file = "crates/layout/src/next.rs"
+from = '''            let lists = self.counters.lists;
+            self.set_counters(dom, found, lists);
+            for element in changed {'''
+to = '''            let lists = self.counters.lists;
+            self.set_counters(dom, found, lists);
+            for element in changed.into_iter().take(0) {'''
+
+[[mutant]]
+name = "the list a change is in not numbered again"
+file = "crates/layout/src/next.rs"
+from = '''            if let Some(list) = list_items::next::enclosing_list(dom, element) {
+                changed_lists.insert(dom.id(list));
+            }'''
+to = '''            if let Some(_list) = list_items::next::enclosing_list(dom, element) {}'''
+
+[[mutant]]
+name = "a changed list's old numbers kept"
+file = "crates/layout/src/next.rs"
+from = '''            self.lists.forget(list);
+'''
+to = ''''''
+
+[[mutant]]
+name = "a marker's new number collects nothing"
+file = "crates/layout/src/next.rs"
+from = '''            if self.marker_texts.get(&item).map(|text| &**text) != text.as_deref()'''
+to = '''            if false'''
+
+[[mutant]]
+name = "the whole document's pass changes no marker"
+file = "crates/layout/src/next.rs"
+from = '''        self.set_counters(dom, found, false);
+        for element in changed {'''
+to = '''        self.set_counters(dom, found, false);
+        for element in changed.into_iter().take(0) {'''
+
+[[mutant]]
+name = "a container in what is built again"
+file = "crates/layout/src/next.rs"
+from = '''            if rebuild.contains(&id) {
+                return None;
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "a node in another document isn't gone"
+file = "crates/layout/src/next.rs"
+from = '''                return dom.id(n) != dom.id(document);'''
+to = '''                return false;'''
+
+[[mutant]]
+name = "counters below an element not looked for"
+file = "crates/layout/src/next.rs"
+from = '''    counters::next::is_relevant(dom, element, lists)
+        || dom'''
+to = '''    counters::next::is_relevant(dom, element, lists)
+        || false && dom'''
+
+[[mutant]]
+name = "a whole tree built again notes no style change"
+file = "crates/layout/src/next.rs"
+from = '''                self.note_scroll_anchoring_changes(dom, element, &old.boxes[index].style, &new);'''
+to = ''''''
+
+[[mutant]]
+name = "a suppression trigger not noted"
+file = "crates/layout/src/next.rs"
+from = '''        if crate::disables_scroll_anchoring(old, new) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "overflow-anchor not noted"
+file = "crates/layout/src/next.rs"
+from = '''        if old.rare.overflow_anchor != new.rare.overflow_anchor {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "going out of flow notes no scroller"
+file = "crates/layout/src/next.rs"
+from = '''        if old.is_out_of_flow() == new.is_out_of_flow() {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "an inside marker not built"
+file = "crates/layout/src/next.rs"
+from = '''            && let Some((style, text)) = self.marker_content(dom, parent)'''
+to = '''            && let Some((style, text)) = self.marker_content(dom, parent).filter(|_| false)'''
+
+[[mutant]]
+name = "the lists' number not the marker's"
+file = "crates/layout/src/next.rs"
+from = '''        let value = self.lists.value_next(dom, element)?;'''
+to = '''        let value = 0;'''
+
+[[mutant]]
+name = "an irregular marker's text not the pass's"
+file = "crates/layout/src/next.rs"
+from = '''                self.set_counters(dom, counters::next::compute(dom, root, false), false);
+                self.counters'''
+to = '''                self.counters'''
+
+[[mutant]]
+name = "what has no box counts"
+file = "crates/layout/src/counters/next.rs"
+from = '''        if !dom.has_boxes(element, &style) {
+            return None;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "display: contents counts as a box"
+file = "crates/layout/src/counters/next.rs"
+from = '''        if style.display == Display::Contents {
+            let mut sibling'''
+to = '''        if false {
+            let mut sibling'''
+
+[[mutant]]
+name = "style containment scopes nothing"
+file = "crates/layout/src/counters/next.rs"
+from = '''            self.contained_from = self.instances.len();'''
+to = ''''''
+
+[[mutant]]
+name = "a normal marker shows no counter"
+file = "crates/layout/src/counters/next.rs"
+from = '''                    marker_pieces(&marker.rare_inherited.list_style_type, list_item)'''
+to = '''                    None'''
+
+[[mutant]]
+name = "no ::after counted"
+file = "crates/layout/src/counters/next.rs"
+from = '''        let after_set = self.inherit(&set, &sibling);
+        self.pseudo(dom, element, PseudoId::After, &after_set);'''
+to = '''        let after_set = self.inherit(&set, &sibling);'''
+
+[[mutant]]
+name = "no ::before counted"
+file = "crates/layout/src/counters/next.rs"
+from = '''        if let Some(before) = self.pseudo(dom, element, PseudoId::Before, &set) {
+            sibling = before;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a pass finds list-item regular"
+file = "crates/layout/src/counters/next.rs"
+from = '''            self.irregular = true;'''
+to = ''''''
+
+[[mutant]]
+name = "a child's counters its grandparent's"
+file = "crates/layout/src/counters/next.rs"
+from = '''                && let Some(child_set) = self.element(dom, child, id, &set, &sibling)'''
+to = '''                && let Some(child_set) = self.element(dom, child, parent, &set, &sibling)'''
+
+[[mutant]]
+name = "a list's values never kept"
+file = "crates/layout/src/list_items/next.rs"
+from = '''            .and_then(|values| values.get(&id))
+        {
+            return Ok(*value);'''
+to = '''            .and_then(|values| values.get(&id))
+            .filter(|_| false)
+        {
+            return Ok(*value);'''
+
+[[mutant]]
+name = "any ancestor a list"
+file = "crates/layout/src/list_items/next.rs"
+from = '''        if dom.style(a).is_some_and(|style| is_list(&style)) {'''
+to = '''        if dom.style(a).is_some() {'''
+
+[[mutant]]
+name = "what has no box numbered"
+file = "crates/layout/src/list_items/next.rs"
+from = '''            if !dom.has_boxes(child, &style) {
+                continue;
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "an irregular child numbered"
+file = "crates/layout/src/list_items/next.rs"
+from = '''            if !regular(dom, child, &style) {
+                return Err(Irregular);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "a list in a list numbers its items"
+file = "crates/layout/src/list_items/next.rs"
+from = '''            if is_list(&style) {
+                if style.display'''
+to = '''            if false {
+                if style.display'''
+
+[[mutant]]
+name = "an item not numbered"
+file = "crates/layout/src/list_items/next.rs"
+from = '''                self.item(dom.id(child), &style);'''
+to = ''''''
+
+[[mutant]]
+name = "what is in a child not numbered"
+file = "crates/layout/src/list_items/next.rs"
+from = '''            self.children_next(dom, child)?;
+'''
+to = ''''''
+
+[[mutant]]
+name = "the ancestors' namespaces not in the bloom filter"
+file = "crates/style_next/src/bloom.rs"
+from = '''        f(name_hash(&names::get(name.namespace())));
+'''
+to = ''''''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "style_next", "--test", "it"]

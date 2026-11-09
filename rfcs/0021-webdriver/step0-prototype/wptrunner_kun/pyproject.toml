@@ -1,0 +1,12 @@
+# RFC 0021's step 0: machopo as a wptrunner product, registered through the
+# `wptrunner.products` entry point so the WPT checkout stays as it is.
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wptrunner-machopo"
+version = "0.0.0"
+
+[project.entry-points."wptrunner.products"]
+machopo = "wptrunner_machopo:get_product"

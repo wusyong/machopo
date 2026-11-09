@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<title>J7: inline scripts, then deferred ones, then DOMContentLoaded at the document, then load at the window with the document as its target</title>
+<link rel="match" href="j7-load-events-ref.html">
+<style>
+  html, body { margin: 0 }
+  div { height: 20px; width: 100px }
+</style>
+<div id="log"></div>
+<script>
+  // Each step writes a row of its color; one out of place, or seeing the
+  // wrong target, is out of order in the picture.
+  const row = (color) => {
+    const div = document.createElement("div");
+    div.setAttribute("style", `background-color: ${color}`);
+    document.getElementById("log").appendChild(div);
+  };
+  document.addEventListener("DOMContentLoaded", (e) => {
+    // The whole document is parsed by now.
+    const parsed = document.getElementById("last") !== null;
+    row(e.target === document && e.bubbles && e.isTrusted && parsed ? "gray" : "red");
+  });
+  addEventListener("load", (e) => {
+    row(e.target === document && e.currentTarget === window && e.isTrusted ? "green" : "red");
+  });
+  // `load` doesn't go from the document to the window's listeners twice.
+  document.addEventListener("load", () => row("red"));
+  row("blue");
+</script>
+<script defer src="resources/j7-defer.js"></script>
+<img src="../images/resources/green-40x30.png" alt="">
+<p id="last"></p>

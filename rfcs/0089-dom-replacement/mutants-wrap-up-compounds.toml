@@ -1,0 +1,94 @@
+# After the wrap-up's measurements: selector queries matched compound by
+# compound (Blink's `SelectorQuery::MatchCompound`), which
+# TodoMVC-ES6-Webpack's `[data-id="…"]` matched in full each element
+# without. `style`'s query tests: the results, as the full match's, and
+# the debug build's count of the elements matched in full.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "style", "--test", "it", "query"]
+timeout = 1800
+
+[[mutant]]
+name = "style: an element that matched a compound gives its children the same one"
+file = "crates/style/src/query.rs"
+from = '''                    if compound.matches(cx, node, modes) {
+                        below = next.saturating_add(1);
+                    }'''
+to = '''                    if compound.matches(cx, node, modes) {
+                        below = next;
+                    }'''
+
+[[mutant]]
+name = "style: the root's ancestors match no compound"
+file = "crates/style/src/query.rs"
+from = '''        let mut next = self.matched_above(cx, root, modes);'''
+to = '''        let mut next = 0;'''
+
+[[mutant]]
+name = "style: a sibling's compound to match not the level's again"
+file = "crates/style/src/query.rs"
+from = '''                        next = levels
+                            .pop()
+                            .expect("a level for each element gone down from");'''
+to = '''                        let _ = levels.pop();'''
+
+[[mutant]]
+name = "style: a child combinator taken as a descendant without the full match"
+file = "crates/style/src/query.rs"
+from = '''                Component::Combinator(Combinator::Child) => {
+                    compounds.push(std::mem::take(&mut current));
+                    full = true;
+                }'''
+to = '''                Component::Combinator(Combinator::Child) => {
+                    compounds.push(std::mem::take(&mut current));
+                }'''
+
+[[mutant]]
+name = "style: the full match skipped when it is needed"
+file = "crates/style/src/query.rs"
+from = '''compound.matches(cx, node, modes) && (!self.full || counted(full)(node))'''
+to = '''compound.matches(cx, node, modes)'''
+
+[[mutant]]
+name = "style: the full match each time"
+file = "crates/style/src/query.rs"
+from = '''compound.matches(cx, node, modes) && (!self.full || counted(full)(node))'''
+to = '''compound.matches(cx, node, modes) && counted(full)(node)'''
+
+[[mutant]]
+name = "style: a second class overwrites the first"
+file = "crates/style/src/query.rs"
+from = '''                Component::Class(class) if current.class.is_none() => {'''
+to = '''                Component::Class(class) => {'''
+
+[[mutant]]
+name = "style: HTML's attributes compared without case kept in the compound"
+file = "crates/style/src/query.rs"
+from = '''                } if current.attribute.is_none()
+                    && !matches!('''
+to = '''                } if current.attribute.is_none()
+                    && matches!('''
+
+[[mutant]]
+name = "style: an attribute's `i` ignored"
+file = "crates/style/src/query.rs"
+from = '''                        *case_sensitivity == ParsedCaseSensitivity::AsciiCaseInsensitive,'''
+to = '''                        false,'''
+
+[[mutant]]
+name = "style: an id as written in quirks mode"
+file = "crates/style/src/query.rs"
+from = '''            let same = if modes.quirks {
+                value.eq_ignore_ascii_case(id)'''
+to = '''            let same = if false {
+                value.eq_ignore_ascii_case(id)'''
+
+[[mutant]]
+name = "style: a class as written in quirks mode"
+file = "crates/style/src/query.rs"
+from = '''            let has = if modes.quirks {'''
+to = '''            let has = if false {'''
+
+[[mutant]]
+name = "style: an HTML element's type as written"
+file = "crates/style/src/query.rs"
+from = '''            let html = modes.html && qualified.namespace() == names::HTML_NAMESPACE;'''
+to = '''            let html = false;'''

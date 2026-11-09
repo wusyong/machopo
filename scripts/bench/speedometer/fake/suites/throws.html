@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>An exception nobody catches</title>
+<script>
+  // The test itself finishes once the timer has thrown, and the runner goes
+  // on.
+  window.tests = [
+    {
+      name: "Throwing",
+      run() {
+        return new Promise((resolve) => {
+          setTimeout(() => {
+            setTimeout(resolve);
+            throw new Error("thrown by the suite");
+          });
+        });
+      },
+    },
+  ];
+</script>

@@ -1,0 +1,31 @@
+[package]
+name = "paint"
+description = "Pre-paint, property trees, PaintArtifact, paint chunks to cc (blink/renderer/core/paint)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+base.workspace = true
+computed_style.workspace = true
+rustc-hash.workspace = true
+compositor_paint.workspace = true
+gfx.workspace = true
+kurbo.workspace = true
+layout.workspace = true
+tracing.workspace = true
+trace_event.workspace = true
+
+[dev-dependencies]
+dom.workspace = true
+html.workspace = true
+style.workspace = true

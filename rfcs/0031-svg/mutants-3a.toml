@@ -1,0 +1,121 @@
+# Mutation test of step 3a (SVGMatrix, SVGPoint, SVGRect and createSVG*):
+# python3 scripts/test.py mutate rfcs/0031-svg/mutants-3a.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "api::svg_matrices"]
+timeout = 900
+
+[[mutant]]
+name = "a matrix multiplies on the left"
+file = "crates/dom_api/src/svg_geometry.rs"
+from = '''    let values = multiply(matrix_values(cx, this), by);'''
+to = '''    let values = multiply(by, matrix_values(cx, this));'''
+
+[[mutant]]
+name = "multiply's translation leaves out the first matrix's"
+file = "crates/dom_api/src/svg_geometry.rs"
+from = '''        a * e2 + c * f2 + e,'''
+to = '''        a * e2 + c * f2,'''
+
+[[mutant]]
+name = "a matrix with no determinant is inverted"
+file = "crates/dom_api/src/svg_geometry.rs"
+from = '''    if det == 0.0 || !det.is_finite() {'''
+to = '''    if !det.is_finite() {'''
+
+[[mutant]]
+name = "the inverse's translation has the wrong sign"
+file = "crates/dom_api/src/svg_geometry.rs"
+from = '''        (c * f - d * e) / det,'''
+to = '''        (d * e - c * f) / det,'''
+
+[[mutant]]
+name = "rotate turns the other way"
+file = "crates/dom_api/src/svg_geometry.rs"
+from = '''    [cos, sin, -sin, cos, 0.0, 0.0]'''
+to = '''    [cos, -sin, sin, cos, 0.0, 0.0]'''
+
+[[mutant]]
+name = "rotateFromVector takes x of 0"
+file = "crates/dom_api/src/svg_geometry.rs"
+from = '''    if x == 0.0 || y == 0.0 {'''
+to = '''    if y == 0.0 {'''
+
+[[mutant]]
+name = "rotateFromVector takes y of 0"
+file = "crates/dom_api/src/svg_geometry.rs"
+from = '''    if x == 0.0 || y == 0.0 {'''
+to = '''    if x == 0.0 {'''
+
+[[mutant]]
+name = "rotateFromVector's angle is of x over y"
+file = "crates/dom_api/src/svg_geometry.rs"
+from = '''    then(cx, this, rotation(y.atan2(x).to_degrees()))'''
+to = '''    then(cx, this, rotation(x.atan2(y).to_degrees() + 1.0))'''
+
+[[mutant]]
+name = "flipX flips y"
+file = "crates/dom_api/src/svg_geometry.rs"
+from = '''    then(cx, this, [-1.0, 0.0, 0.0, 1.0, 0.0, 0.0])'''
+to = '''    then(cx, this, [1.0, 0.0, 0.0, -1.0, 0.0, 0.0])'''
+
+[[mutant]]
+name = "skewX skews y"
+file = "crates/dom_api/src/svg_geometry.rs"
+from = '''        [1.0, 0.0, float(angle).to_radians().tan(), 1.0, 0.0, 0.0],'''
+to = '''        [1.0, float(angle).to_radians().tan(), 0.0, 1.0, 0.0, 0.0],'''
+
+[[mutant]]
+name = "scaleNonUniform scales y by x"
+file = "crates/dom_api/src/svg_geometry.rs"
+from = '''    then(cx, this, [float(x), 0.0, 0.0, float(y), 0.0, 0.0])'''
+to = '''    then(cx, this, [float(x), 0.0, 0.0, float(x), 0.0, 0.0])'''
+
+[[mutant]]
+name = "a point keeps doubles"
+file = "crates/dom_api/src/svg_geometry.rs"
+from = '''    cx.mutate().set_svg_point(this, 0, float(value));'''
+to = '''    cx.mutate().set_svg_point(this, 0, value);'''
+
+[[mutant]]
+name = "matrixTransform leaves out c"
+file = "crates/dom_api/src/svg_geometry.rs"
+from = '''    let point = [float(a * x + c * y + e), float(b * x + d * y + f)];'''
+to = '''    let point = [float(a * x + e), float(b * x + d * y + f)];'''
+
+[[mutant]]
+name = "matrixTransform keeps doubles"
+file = "crates/dom_api/src/svg_geometry.rs"
+from = '''    let point = [float(a * x + c * y + e), float(b * x + d * y + f)];'''
+to = '''    let point = [a * x + c * y + e, b * x + d * y + f];'''
+
+[[mutant]]
+name = "a rect keeps doubles"
+file = "crates/dom_api/src/svg_geometry.rs"
+from = '''                cx.mutate().set_svg_rect(this, $index, float(value));'''
+to = '''                cx.mutate().set_svg_rect(this, $index, value);'''
+
+[[mutant]]
+name = "createSVGMatrix isn't the identity"
+file = "crates/dom_api/src/svg_geometry.rs"
+from = '''        .create_svg_matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]))'''
+to = '''        .create_svg_matrix([1.0, 0.0, 0.0, 0.0, 0.0, 0.0]))'''
+
+[[mutant]]
+name = "a matrix's b and c swap"
+file = "crates/dom/src/svg.rs"
+from = '''        [&self.a, &self.b, &self.c, &self.d, &self.e, &self.f]'''
+to = '''        [&self.a, &self.c, &self.b, &self.d, &self.e, &self.f]'''
+
+[[mutant]]
+name = "a rect's width is its height"
+file = "crates/dom/src/svg.rs"
+from = '''        [&self.x, &self.y, &self.width, &self.height]'''
+to = '''        [&self.x, &self.y, &self.height, &self.height]'''
+
+[[mutant]]
+name = "SVG's numbers may be non-finite"
+file = "crates/dom_api/src/interfaces/core_svg.rs"
+from = '''        attribute width: f64,
+            get = svg_geometry::rect_width, set = svg_geometry::set_rect_width;'''
+to = '''        attribute width: crate::UnrestrictedF64,
+            get = svg_geometry::rect_width, set = svg_geometry::set_rect_width;'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::svg_matrices"]

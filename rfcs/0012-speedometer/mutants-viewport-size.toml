@@ -1,0 +1,54 @@
+# `innerWidth` and `innerHeight` lay out only the frames around a child
+# frame, and a main frame only before its first layout
+# (`LayoutClient::viewport_size`, Blink's `LocalDOMWindow::GetViewportSize`);
+# NewsSite-Next's `resize` handler styled and laid out its whole document
+# with each read.
+#
+# python3 scripts/test.py mutate rfcs/0012-speedometer/mutants-viewport-size.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "geometry::reading_the_size_styles_nothing"]
+timeout = 1800
+
+[[mutant]]
+name = "innerWidth lays its frame out"
+file = "crates/dom_api/src/geometry.rs"
+from = '''    Ok(viewport_size(cx, this).map_or(0, |size| size.width as i32))'''
+to = '''    Ok(viewport(cx, this).map_or(0, |v| v.size.width as i32))'''
+
+[[mutant]]
+name = "innerHeight lays its frame out"
+file = "crates/dom_api/src/geometry.rs"
+from = '''    Ok(viewport_size(cx, this).map_or(0, |size| size.height as i32))'''
+to = '''    Ok(viewport(cx, this).map_or(0, |v| v.size.height as i32))'''
+
+[[mutant]]
+name = "the renderer lays out the frame itself"
+file = "crates/renderer/src/layout_client.rs"
+from = '''        if first {
+            self.update_style_and_layout(scope, document);
+        }'''
+to = '''        let _ = first;
+        self.update_style_and_layout(scope, document);'''
+
+[[mutant]]
+name = "a main frame not laid out yet isn't laid out"
+file = "crates/renderer/src/layout_client.rs"
+from = '''        if first {
+            self.update_style_and_layout(scope, document);
+        }'''
+to = '''        if first && false {
+            self.update_style_and_layout(scope, document);
+        }'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "the_main_frames_viewport_size"]
+
+[[mutant]]
+name = "a main frame laid out lays out again"
+file = "crates/renderer/src/layout_client.rs"
+from = '''            .is_some_and(|frame| frame.owner().is_none() && !frame.is_laid_out());'''
+to = '''            .is_some_and(|frame| frame.owner().is_none());'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "the_main_frames_viewport_size"]
+
+[[mutant]]
+name = "a child frame not laid out lays itself out"
+file = "crates/renderer/src/layout_client.rs"
+from = '''            .is_some_and(|frame| frame.owner().is_none() && !frame.is_laid_out());'''
+to = '''            .is_some_and(|frame| !frame.is_laid_out());'''

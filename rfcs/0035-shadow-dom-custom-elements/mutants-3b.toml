@@ -1,0 +1,55 @@
+# Mutation test of step 3b (manual slot assignment, `assign()`):
+# python3 scripts/test.py mutate rfcs/0035-shadow-dom-custom-elements/mutants-3b.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "slots::"]
+timeout = 600
+
+[[mutant]]
+name = "a manual shadow root assigns by name"
+file = "crates/dom/src/slot.rs"
+from = '''            .is_some_and(|init| init.slot_assignment == SlotAssignmentMode::Manual);'''
+to = '''            .is_some_and(|init| init.slot_assignment == SlotAssignmentMode::Named && false);'''
+
+[[mutant]]
+name = "manually assigned nodes not the host's children assigned"
+file = "crates/dom/src/slot.rs"
+from = '''                    if child.parent().map(|parent| parent.id()) == host {'''
+to = '''                    if true {'''
+
+[[mutant]]
+name = "assign() doesn't empty the slot's set first"
+file = "crates/dom/src/slot.rs"
+from = '''        if let Some(rare) = self.rare_data_if_any(slot) {
+            rare.manually_assigned.clear(self);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "assign() keeps duplicates"
+file = "crates/dom/src/slot.rs"
+from = '''        for node in nodes.iter().filter(|node| seen.insert(node.id())) {'''
+to = '''        for node in nodes.iter().filter(|node| seen.insert(node.id()) || true) {'''
+
+[[mutant]]
+name = "a node stays in its old slot's set"
+file = "crates/dom/src/slot.rs"
+from = '''                rare.manually_assigned.remove(self, self.own(node));'''
+to = '''                let _ = rare;'''
+
+[[mutant]]
+name = "a node's manual slot not kept"
+file = "crates/dom/src/slot.rs"
+from = '''            rare.manual_slot.set(self, slot.persistent());'''
+to = '''            let _ = rare;'''
+
+[[mutant]]
+name = "assign() doesn't make the assignment stale"
+file = "crates/dom/src/slot.rs"
+from = '''        *self.dom_tree_version += 1;
+        self.signal_slot_changes(slot_changes);'''
+to = '''        self.signal_slot_changes(slot_changes);'''
+
+[[mutant]]
+name = "assign() does nothing"
+file = "crates/dom_api/src/slot.rs"
+from = '''    cx.mutate().assign_slottables(this, &nodes);'''
+to = '''    let _ = nodes;'''

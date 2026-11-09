@@ -1,0 +1,61 @@
+# Mutation test of stage 2 (names compared as atoms, the parser carrying
+# html5ever's atoms over, the hot lists as atoms):
+# python3 scripts/test.py mutate rfcs/0040-name-atoms/mutants-2.toml
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "names::"]
+timeout = 900
+
+# dom: a name against an atom.
+
+[[mutant]]
+name = "a name is never its atom"
+file = "crates/dom/src/name.rs"
+from = '''            Repr::Atom(atom) => atom == other,'''
+to = '''            Repr::Atom(_) => false,'''
+
+[[mutant]]
+name = "a string name is any dynamic atom"
+file = "crates/dom/src/name.rs"
+from = '''            Repr::Text(text) => other.is_dynamic() && **text == **other,'''
+to = '''            Repr::Text(_) => other.is_dynamic(),'''
+
+# Not here, equivalent: a string name compared with a static atom of the
+# same text (no string name has a static atom's text; docs/testing.md).
+
+[[mutant]]
+name = "an attribute name of any namespace"
+file = "crates/dom/src/node.rs"
+from = '''        self.local == *local && self.namespace.is_none() && self.prefix.is_none()'''
+to = '''        self.local == *local && self.prefix.is_none()'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::names_are_of_their_namespace"]
+
+# dom_api: the event handler attributes and the lists.
+
+[[mutant]]
+name = "only attributes not starting with on are event handlers"
+file = "crates/dom_api/src/handlers.rs"
+from = '''|| !name.local().starts_with("on") {'''
+to = '''|| name.local().starts_with("on") {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "dispatch::"]
+
+[[mutant]]
+name = "an event handler attribute in a namespace counts"
+file = "crates/dom_api/src/handlers.rs"
+from = '''    if !name.namespace().is_none() || name.prefix().is_some() || !name.local().starts_with("on") {'''
+to = '''    if !name.local().starts_with("on") {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "dispatch::"]
+
+[[mutant]]
+name = "a form state's attribute list misses value"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        local_name!("selected"),
+        local_name!("value"),'''
+to = '''        local_name!("selected"),'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "forms::"]
+
+[[mutant]]
+name = "an img's srcset isn't relevant"
+file = "crates/dom_api/src/image.rs"
+from = '''    local_name!("src"),
+    local_name!("srcset"),'''
+to = '''    local_name!("src"),'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "api::an_images_attribute_changes_are_recorded"]

@@ -1,0 +1,369 @@
+# Stage 4e-1: shadow roots on the new DOM: `dom_next`'s shadow root and
+# tree scope (owners, adoption, connected through hosts, ids, clone,
+# retarget, roots), `dom_api_next`'s `attachShadow`, `shadowRoot`, the
+# dispatch through hosts, `composedPath()` and the related target.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it -- shadow && cargo test -q -p dom_api_next --test it -- shadow && cargo test -q -p dom_js_next --test it -- shadow_dom events"]
+timeout = 3000
+
+[[mutant]]
+name = "a shadow tree's node its shadow root's document"
+file = "crates/dom_next/src/lib.rs"
+from = '''            Some(root) if node.scope.get() & shadow::IN_SHADOW_TREE != 0 => {
+                root.owner.get(self.gc).expect("a shadow root's document")
+            }
+'''
+to = ''''''
+
+[[mutant]]
+name = "ownerDocument its owner"
+file = "crates/dom_next/src/lib.rs"
+from = '''        node.owner.get(self.gc).map(|_| self.document_of(node))'''
+to = '''        node.owner.get(self.gc)'''
+
+[[mutant]]
+name = "adoption moves shadow trees' owners"
+file = "crates/dom_next/src/lib.rs"
+from = '''            if at.scope.get() & shadow::IN_SHADOW_TREE == 0 {
+                at.owner.set(self.gc, Some(document));
+            }'''
+to = '''            at.owner.set(self.gc, Some(document));'''
+
+[[mutant]]
+name = "adoption leaves shadow trees"
+file = "crates/dom_next/src/lib.rs"
+from = '''            if let Some(shadow) = self.shadow_root(at) {
+                self.adopt_tree(shadow, document);
+            }
+'''
+to = ''''''
+
+[[mutant]]
+name = "a node inserted keeps its scope"
+file = "crates/dom_next/src/lib.rs"
+from = '''        self.set_shadow_scope(node, self.shadow_scope(parent));
+'''
+to = ''''''
+
+[[mutant]]
+name = "a fragment's children keep their scope"
+file = "crates/dom_next/src/lib.rs"
+from = '''                self.set_shadow_scope(first, scope);
+'''
+to = ''''''
+
+[[mutant]]
+name = "a node removed stays in its shadow tree"
+file = "crates/dom_next/src/lib.rs"
+from = '''        // Out of a shadow tree: into its document's.
+        self.set_shadow_scope(node, None);
+'''
+to = ''''''
+
+[[mutant]]
+name = "a subtree already in a scope moved again never"
+file = "crates/dom_next/src/shadow.rs"
+from = '''            (Some(a), Some(b)) => Gc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,'''
+to = '''            _ => true,'''
+
+[[mutant]]
+name = "any shadow root cloned"
+file = "crates/dom_next/src/lib.rs"
+from = '''            && let Some(init) = self.shadow_root_init(shadow).filter(|init| init.clonable)'''
+to = '''            && let Some(init) = self.shadow_root_init(shadow)'''
+
+[[mutant]]
+name = "a cloned shadow root empty"
+file = "crates/dom_next/src/lib.rs"
+from = '''                self.insert(root, cloned, None);
+'''
+to = '''                let _ = cloned;
+'''
+
+[[mutant]]
+name = "a connected host's new root not connected"
+file = "crates/dom_next/src/shadow.rs"
+from = '''        if self.is_connected(host) {
+            self.set_flag(root, style::CONNECTED, true);
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "retargeting into the trees b is in"
+file = "crates/dom_next/src/shadow.rs"
+from = '''            if b.is_some_and(|b| self.is_in_shadow_tree_of(root, b)) {
+                return a;
+            }
+'''
+to = ''''''
+
+[[mutant]]
+name = "a shadow tree of its own scope only"
+file = "crates/dom_next/src/shadow.rs"
+from = '''            scope = self.shadow_host(at).and_then(|host| self.shadow_scope(host));
+        }
+        false
+    }
+
+    /// DOM's "retarget"'''
+to = '''            scope = None;
+        }
+        false
+    }
+
+    /// DOM's "retarget"'''
+
+[[mutant]]
+name = "no tree closed-shadow-hidden"
+file = "crates/dom_next/src/shadow.rs"
+from = '''                .is_some_and(|init| init.mode != ShadowRootMode::Open)
+            {
+                return true;'''
+to = '''                .is_some_and(|_| false)
+            {
+                return true;'''
+
+[[mutant]]
+name = "the composed root the shadow root"
+file = "crates/dom_next/src/shadow.rs"
+from = '''        if composed {
+            while let Some(root) = self.shadow_scope(node) {
+                node = self.shadow_host(root).expect("a shadow root has its host");
+            }
+        } else if let Some(root) = self.shadow_scope(node) {'''
+to = '''        if let Some(root) = self.shadow_scope(node) {'''
+
+[[mutant]]
+name = "a host's shadow tree not connected with it"
+file = "crates/dom_next/src/style.rs"
+from = '''        self.for_each_shadow_including_inclusive_descendant(node, |at, in_shadow| {
+            self.set_flags(at, CONNECTED);'''
+to = '''        self.for_each_inclusive_descendant(node, |at| {
+            let in_shadow = false;
+            self.set_flags(at, CONNECTED);'''
+
+[[mutant]]
+name = "a shadow tree's ids its document's"
+file = "crates/dom_next/src/style.rs"
+from = '''            self.set_flags(at, CONNECTED);
+            if in_shadow {
+                return;
+            }'''
+to = '''            let _ = in_shadow;
+            self.set_flags(at, CONNECTED);'''
+
+[[mutant]]
+name = "a shadow tree's changed id its document's"
+file = "crates/dom_next/src/style.rs"
+from = '''        // One in a shadow tree is its shadow root's, not its document's.
+        if self.shadow_scope(element).is_some() {
+            return;
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "a host's shadow tree connected without it"
+file = "crates/dom_next/src/style.rs"
+from = '''        self.for_each_shadow_including_inclusive_descendant(node, |at, in_shadow| {
+            at.flags.set(at.flags.get() & !(CONNECTED'''
+to = '''        self.for_each_inclusive_descendant(node, |at| {
+            let in_shadow = false;
+            at.flags.set(at.flags.get() & !(CONNECTED'''
+
+[[mutant]]
+name = "a span no host"
+file = "crates/dom_api_next/src/shadow_root.rs"
+from = '''        && (local_name == "span" || SHADOW_HOSTS'''
+to = '''        && (SHADOW_HOSTS'''
+
+[[mutant]]
+name = "a custom element no host"
+file = "crates/dom_api_next/src/shadow_root.rs"
+from = '''SHADOW_HOSTS.contains(&name.local) || is_valid_custom_element_name(&local_name));'''
+to = '''SHADOW_HOSTS.contains(&name.local));'''
+
+[[mutant]]
+name = "any namespace's element a host"
+file = "crates/dom_api_next/src/shadow_root.rs"
+from = '''    let allowed = name.namespace == names::HTML_NAMESPACE
+        && ('''
+to = '''    let allowed = (
+        '''
+
+[[mutant]]
+name = "a host gets a second root"
+file = "crates/dom_api_next/src/shadow_root.rs"
+from = '''    if cx.shadow_root(this).is_some() {
+        return Err(not_supported("Shadow root cannot be created on a host which already hosts a shadow tree."));
+    }
+'''
+to = ''''''
+
+[[mutant]]
+name = "a missing mode open"
+file = "crates/dom_api_next/src/shadow_root.rs"
+from = '''        "open" => ShadowRootMode::Open,'''
+to = '''        "open" | "" => ShadowRootMode::Open,'''
+
+[[mutant]]
+name = "a closed root its host's shadowRoot"
+file = "crates/dom_api_next/src/shadow_root.rs"
+from = '''    Ok(cx.shadow_root(this).filter(|&root| {
+        cx.shadow_root_init(root)
+            .is_some_and(|init| init.mode == ShadowRootMode::Open)
+    }))'''
+to = '''    Ok(cx.shadow_root(this))'''
+
+[[mutant]]
+name = "an uncomposed event out of its shadow tree"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''                if first && !cx.event_flags(event).composed {
+                    return None;
+                }
+'''
+to = ''''''
+
+[[mutant]]
+name = "a shadow root's event a light one"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''    matches!(target, TargetRef::Node(node) if cx.is_shadow_root(node) || cx.containing_shadow_root(node).is_some())'''
+to = '''    matches!(target, TargetRef::Node(node) if cx.containing_shadow_root(node).is_some())'''
+
+[[mutant]]
+name = "the path past the related target's host"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''            if related.is_some_and(|related| retarget_target(cx, related, parent).ptr_eq(parent)) {
+                break;
+            }
+'''
+to = ''''''
+
+[[mutant]]
+name = "a target its retargeted related target dispatched"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''    if let Some(related) = related
+        && retarget_target(cx, related, target).ptr_eq(target)
+        && !related.ptr_eq(target)
+    {
+        return Vec::new();
+    }
+'''
+to = ''''''
+
+[[mutant]]
+name = "the path's target never the host"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''            current = parent;
+        }
+        path.push(parent);'''
+to = '''        }
+        path.push(parent);'''
+
+[[mutant]]
+name = "an unbubbling event bubbles past the hosts"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''                    if !at_target && !others {
+                        continue;
+                    }
+'''
+to = ''''''
+
+[[mutant]]
+name = "each entry the target unretargeted"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''                    cx.set_event_target(event, Some(shown));
+                    at_target'''
+to = '''                    at_target'''
+
+[[mutant]]
+name = "a shadow tree's targets kept"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''    if in_shadow_tree(cx, shown) || related.is_some_and(|related| in_shadow_tree(cx, related)) {
+        cx.set_event_target(event, None);
+        cx.set_event_related_target(event, None);
+    } else {'''
+to = '''    if false {
+    } else {'''
+
+[[mutant]]
+name = "the related target left as given"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''        if related.is_some() {
+            cx.set_event_related_target(event, related);
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "no closed root in a path"
+file = "crates/dom_api_next/src/event.rs"
+from = '''            .is_some_and(|init| init.mode != dom_next::ShadowRootMode::Open))'''
+to = '''            .is_some_and(|_| false))'''
+
+[[mutant]]
+name = "composedPath into deeper trees"
+file = "crates/dom_api_next/src/event.rs"
+from = '''        if level <= current_level {
+            composed.push_front(target);'''
+to = '''        if level <= i32::MAX {
+            composed.push_front(target);'''
+
+[[mutant]]
+name = "composedPath past a closed tree left"
+file = "crates/dom_api_next/src/event.rs"
+from = '''            max_level = max_level.min(level);
+'''
+to = ''''''
+
+[[mutant]]
+name = "the related target unretargeted"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''        (TargetRef::Node(related), Some(TargetRef::Node(current))) => TargetRef::Node(cx.retarget(related, Some(current))),
+'''
+to = ''''''
+
+[[mutant]]
+name = "a shadow root a fragment's interface"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        None if cx.is_shadow_root(node) => SHADOW_ROOT,
+'''
+to = ''''''
+
+[[mutant]]
+name = "a host's shadow tree not walked"
+file = "crates/dom_next/src/shadow.rs"
+from = '''            f(at, in_shadow);
+            if at.scope.get() & SHADOW_HOST != 0 {
+                self.for_each_in_shadow_trees(at, &mut f);
+            }'''
+to = '''            f(at, in_shadow);'''
+
+[[mutant]]
+name = "a nested host's shadow tree not walked"
+file = "crates/dom_next/src/shadow.rs"
+from = '''            f(at, true);
+            if at.scope.get() & SHADOW_HOST != 0 {
+                self.for_each_in_shadow_trees(at, f);
+            }'''
+to = '''            f(at, true);'''
+
+[[mutant]]
+name = "a shadow tree's subtree inserted as light"
+file = "crates/dom_next/src/shadow.rs"
+from = '''        let in_shadow = self.shadow_scope(root).is_some();
+        self.for_each_inclusive_descendant(root, |at| {'''
+to = '''        let in_shadow = false;
+        self.for_each_inclusive_descendant(root, |at| {'''
+
+[[mutant]]
+name = "a shadow tree's scope never moved"
+file = "crates/dom_next/src/shadow.rs"
+from = '''        if scope.is_none() && root.scope.get() & IN_SHADOW_TREE == 0 {
+            return;
+        }'''
+to = '''        if scope.is_none() {
+            return;
+        }'''

@@ -1,0 +1,238 @@
+# Mutation test of step 1d (fetch(): the request, the network, the
+# response):
+# python3 scripts/test.py mutate rfcs/0027-fetch/mutants-1d.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "fetch"]
+timeout = 900
+
+# --- dom_api: fetch() -------------------------------------------------------
+
+[[mutant]]
+name = "the URL isn't resolved against the base URL"
+file = "crates/dom_api/src/fetch.rs"
+from = '''        .base_url(base.as_ref())
+        .parse(input.as_str())
+        .map_err(|_| {
+            ApiError::Type(format!(
+                "Failed to execute 'fetch' on 'Window': Failed to parse URL from {}",'''
+to = '''        .base_url(None.or(None::<&Url>).or(base.as_ref().filter(|_| false)))
+        .parse(input.as_str())
+        .map_err(|_| {
+            ApiError::Type(format!(
+                "Failed to execute 'fetch' on 'Window': Failed to parse URL from {}",'''
+
+[[mutant]]
+name = "a URL with credentials"
+file = "crates/dom_api/src/fetch.rs"
+from = '''    if !url.username().is_empty() || url.password().is_some() {'''
+to = '''    if false {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "fetch"]
+
+[[mutant]]
+name = "any method"
+file = "crates/dom_api/src/fetch.rs"
+from = '''        if method != "GET" {'''
+to = '''        if method == "PATCH" {'''
+
+[[mutant]]
+name = "methods aren't normalized"
+file = "crates/dom_api/src/fetch.rs"
+from = '''        let method = normalize_method(method.as_str());'''
+to = '''        let method = method.as_str().to_owned();'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "fetch"]
+
+[[mutant]]
+name = "headers of one name go apart"
+file = "crates/dom_api/src/fetch.rs"
+from = '''        if !headers::contains(&headers, name) {
+            let value = headers::get(&list, name).expect("a name of the list");
+            headers.push((name.clone(), value));
+        }'''
+to = '''        let _ = &headers;
+        headers.push((name.clone(), headers::get(&list, name).unwrap()));'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "fetch"]
+
+[[mutant]]
+name = "another origin is sent"
+file = "crates/dom_api/src/fetch.rs"
+from = '''        "http" | "https" if url.origin().ascii_serialization() == initiator => {}'''
+to = '''        "http" | "https" => {}'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "fetch"]
+
+[[mutant]]
+name = "the initiator is the URL's origin"
+file = "crates/dom_api/src/fetch.rs"
+from = '''        Origin::Opaque(_) => "null".to_owned(),'''
+to = '''        Origin::Opaque(_) => url.origin().ascii_serialization(),'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "fetch"]
+
+[[mutant]]
+name = "file: is a network error"
+file = "crates/dom_api/src/fetch.rs"
+from = '''        "file" => {
+            return Err(ApiError::Type(format!(
+                "Failed to fetch: URL scheme \"file\" is not supported ({url})"
+            )));
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "fetch"]
+
+[[mutant]]
+name = "Set-Cookie reaches script"
+file = "crates/dom_api/src/fetch.rs"
+from = '''        .filter(|(name, _)| !headers::is_forbidden_response_header_name(name))'''
+to = '''        .filter(|(name, _)| !name.is_empty())'''
+
+[[mutant]]
+name = "a response's headers can change"
+file = "crates/dom_api/src/fetch.rs"
+from = '''    let headers = cx.mutate().create_headers(headers, HeadersGuard::Immutable);'''
+to = '''    let headers = cx.mutate().create_headers(headers, HeadersGuard::Response);'''
+
+[[mutant]]
+name = "a null body status has a body"
+file = "crates/dom_api/src/fetch.rs"
+from = '''    let null_body = matches!(response.status, 101 | 103 | 204 | 205 | 304);'''
+to = '''    let null_body = matches!(response.status, 101 | 103);'''
+
+[[mutant]]
+name = "a fetched response is default"
+file = "crates/dom_api/src/fetch.rs"
+from = '''        response_type: ResponseType::Basic,'''
+to = '''        response_type: ResponseType::Default,'''
+
+[[mutant]]
+name = "a fetched response isn't redirected"
+file = "crates/dom_api/src/fetch.rs"
+from = '''        redirected: response.redirected,'''
+to = '''        redirected: false,'''
+
+[[mutant]]
+name = "a response's url keeps its fragment"
+file = "crates/dom_api/src/response.rs"
+from = '''    let without_fragment = url.split_once('#').map_or(url.as_str(), |(url, _)| url);'''
+to = '''    let without_fragment = url.as_str();'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "fetch", "where_a_fetch_may_go"]
+
+[[mutant]]
+name = "redirected reads false"
+file = "crates/dom_api/src/response.rs"
+from = '''    Ok(cx.read().response_data(this).redirected)'''
+to = '''    Ok(cx.read().response_data(this).redirected && false)'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "fetch", "where_a_fetch_may_go"]
+
+# --- renderer: sending and answering --------------------------------------------
+
+[[mutant]]
+name = "a response isn't a fetch's"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if let Some(fetch) = self.fetches.take(request_id) {'''
+to = '''        if let Some(fetch) = self.fetches.take(request_id).filter(|_| false) {'''
+timeout = 120
+
+[[mutant]]
+name = "a fetch isn't kept"
+file = "crates/renderer/src/loader.rs"
+from = '''        if sent {
+            self.pending.borrow_mut().insert('''
+to = '''        if !sent {
+            self.pending.borrow_mut().insert('''
+timeout = 120
+
+[[mutant]]
+name = "fetch() counts its own ids"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let fetches = FetchLoader::new(next_request_id.clone(), to_browser.clone());'''
+to = '''        let fetches = FetchLoader::new(RequestIds::new(), to_browser.clone());'''
+timeout = 120
+
+[[mutant]]
+name = "the request has no initiator"
+file = "crates/renderer/src/loader.rs"
+from = '''        resource.initiator = Some(request.initiator);'''
+to = '''        let _ = request.initiator;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "fetch", "where_a_fetch_may_go"]
+
+[[mutant]]
+name = "the request has no headers"
+file = "crates/renderer/src/loader.rs"
+from = '''        resource.headers = request.headers;'''
+to = '''        let _ = request.headers;'''
+
+# --- net ---------------------------------------------------------------------
+
+[[mutant]]
+name = "forbidden headers go out"
+file = "crates/net/src/url_loader.rs"
+from = '''        .find(|(name, value)| is_forbidden_request_header(name, value))'''
+to = '''        .find(|(name, value)| is_forbidden_request_header(name, value) && false)'''
+test = ["cargo", "test", "-q", "-p", "net", "--test", "load"]
+
+[[mutant]]
+name = "a fetch goes to another origin"
+file = "crates/net/src/url_loader.rs"
+from = '''    check_initiator(request, &url)?;
+    match url.scheme() {'''
+to = '''    match url.scheme() {'''
+test = ["cargo", "test", "-q", "-p", "net", "--test", "load"]
+
+[[mutant]]
+name = "a fetch is redirected to another origin"
+file = "crates/net/src/url_loader.rs"
+from = '''                check_initiator(request, &next)?;'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "net", "--test", "load"]
+
+[[mutant]]
+name = "a data: URL isn't of the initiator"
+file = "crates/net/src/url_loader.rs"
+from = '''    if url.scheme() == "data" || url.origin().ascii_serialization() == *initiator {'''
+to = '''    if url.origin().ascii_serialization() == *initiator {'''
+test = ["cargo", "test", "-q", "-p", "net", "--test", "load"]
+
+[[mutant]]
+name = "script's Accept doesn't count"
+file = "crates/net/src/http.rs"
+from = '''        if !headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("accept"))
+        {'''
+to = '''        if true {'''
+test = ["cargo", "test", "-q", "-p", "net", "--test", "load"]
+
+[[mutant]]
+name = "never redirected"
+file = "crates/net/src/url_loader.rs"
+from = '''            None => return Ok(finish(url, raw, hops > 0)),'''
+to = '''            None => return Ok(finish(url, raw, hops > 20)),'''
+test = ["cargo", "test", "-q", "-p", "net", "--test", "load"]
+
+[[mutant]]
+name = "a data: URL has no Content-Type"
+file = "crates/net/src/data.rs"
+from = '''        headers: vec![("content-type".to_owned(), mime.to_string())],'''
+to = '''        headers: Vec::new(),'''
+test = ["cargo", "test", "-q", "-p", "net", "--test", "load"]
+
+[[mutant]]
+name = "a Location is Latin-1"
+file = "crates/net/src/url_loader.rs"
+from = '''    let location = String::from_utf8_lossy(&location);'''
+to = '''    let location: String = location.iter().map(|&b| char::from(b)).collect();'''
+test = ["cargo", "test", "-q", "-p", "net", "--test", "load"]
+
+[[mutant]]
+name = "header values are UTF-8"
+file = "crates/net/src/http.rs"
+from = '''                    value.as_bytes().iter().map(|&b| char::from(b)).collect(),'''
+to = '''                    String::from_utf8_lossy(value.as_bytes()).into_owned(),'''
+test = ["python3", "scripts/test.py", "wpt", "fetch/api/basic/request-headers-nonascii"]
+
+# --- the WPT runner ----------------------------------------------------------
+
+[[mutant]]
+name = "a baseline's own CRLF is taken for a line ending"
+file = "crates/shell/src/testharness.rs"
+from = '''        Some(expected) => results == expected || results == expected.replace("\r\n", "\n"),'''
+to = '''        Some(expected) => results == expected.replace("\r\n", "\n"),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "comparing_and_recording"]
+timeout = 300

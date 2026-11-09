@@ -1,0 +1,183 @@
+# Stage 1b: the JS entry (`kunNextDom` in dom_js), the wrappers' carried
+# values in bindings, the thread's new DOM in dom_next, and the JS rows of
+# `bench.py blink-perf --next-dom`.
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "next_dom"]
+timeout = 600
+
+# --- bindings: a wrapper's carried value -------------------------------------
+
+[[mutant]]
+name = "any type carried"
+file = "crates/bindings/src/carried.rs"
+from = '''        *CARRIED.get_or_init(|| id) == id,'''
+to = '''        *CARRIED.get_or_init(|| id) == id || true,'''
+test = ["cargo", "test", "-q", "-p", "bindings", "--test", "it", "carried"]
+
+[[mutant]]
+name = "a wrapper wrapping something already carries"
+file = "crates/bindings/src/carried.rs"
+from = '''        wrapper.is_api_wrapper() && !v8::Object::is_wrapping(isolate, wrapper),'''
+to = '''        wrapper.is_api_wrapper(),'''
+test = ["cargo", "test", "-q", "-p", "bindings", "--test", "it", "carried"]
+
+[[mutant]]
+name = "a carried value never read back"
+file = "crates/bindings/src/carried.rs"
+from = '''        Some(&(*carried).0)'''
+to = '''        let _ = carried;
+        None'''
+test = ["cargo", "test", "-q", "-p", "bindings", "--test", "it", "carried"]
+
+# --- dom_next: the thread's DOM and ids --------------------------------------
+
+[[mutant]]
+name = "a new DOM every time"
+file = "crates/dom_next/src/lib.rs"
+from = '''    THREAD_DOM.with(|dom| f(dom.borrow_mut().get_or_insert_with(Dom::new)))'''
+to = '''    let _ = &THREAD_DOM;
+    f(&mut Dom::new())'''
+
+[[mutant]]
+name = "a node's id not kept"
+file = "crates/dom_next/src/lib.rs"
+from = '''                node.id.set(id.get());'''
+to = ""
+
+[[mutant]]
+name = "the new DOM on without MACHOPO_NEXT_DOM"
+file = "crates/dom_next/src/lib.rs"
+from = '''    value.is_some_and(|value| value == "1")'''
+to = '''    value.is_none_or(|value| value == "1")'''
+test = ["cargo", "test", "-q", "-p", "dom_next", "--lib"]
+
+# --- dom_js: kunNextDom ------------------------------------------------------
+
+[[mutant]]
+name = "kunNextDom always installed"
+file = "crates/dom_js/src/next.rs"
+from = '''    if !dom_next::enabled() && !ENABLED_HERE.get() {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a new wrapper every time"
+file = "crates/dom_js/src/next.rs"
+from = '''    if let Some(wrapper) = existing {
+        return wrapper;
+    }'''
+to = '''    let _ = existing;'''
+
+[[mutant]]
+name = "dead wrappers stay in the table"
+file = "crates/dom_js/src/next.rs"
+from = '''            if wrappers.by_id.get(&id).is_some_and(|wrapper| wrapper.generation == generation) {
+                wrappers.by_id.remove(&id);
+            }'''
+to = '''            let _ = (id, generation);'''
+
+[[mutant]]
+name = "a dead wrapper's finalizer takes its node's next wrapper out"
+file = "crates/dom_js/src/next.rs"
+from = '''            if wrappers.by_id.get(&id).is_some_and(|wrapper| wrapper.generation == generation) {'''
+to = '''            if wrappers.by_id.contains_key(&id) || generation == 0 {'''
+
+[[mutant]]
+name = "a dead wrapper isn't noted"
+file = "crates/dom_js/src/next.rs"
+from = '''            WRAPPERS.with(|wrappers| wrappers.borrow_mut().dead.push((id, generation)));'''
+to = '''            let _ = (id, generation);'''
+
+[[mutant]]
+name = "a wrapper carries another node's root"
+file = "crates/dom_js/src/next.rs"
+from = '''    bindings::carry(scope, wrapper, cx.root(node));'''
+to = '''    bindings::carry(scope, wrapper, cx.root(cx.create_document()));'''
+
+[[mutant]]
+name = "the receiver isn't checked"
+file = "crates/dom_js/src/next.rs"
+from = '''    let node = bindings::carried::<NodeRoot>(scope, args.this().into());
+    if node.is_none() {
+        exception::throw_type_error(scope, "Illegal invocation");
+    }
+    node'''
+to = '''    bindings::carried::<NodeRoot>(scope, args.this().into())'''
+
+[[mutant]]
+name = "undefined isn't no reference child"
+file = "crates/dom_js/src/next.rs"
+from = '''    let before = if before.is_null_or_undefined() {'''
+to = '''    let before = if before.is_null() {'''
+
+[[mutant]]
+name = "errors' names swapped"
+file = "crates/dom_js/src/next.rs"
+from = '''        DomError::NotFound => ExceptionName::NotFoundError,'''
+to = '''        DomError::NotFound => ExceptionName::HierarchyRequestError,'''
+
+[[mutant]]
+name = "an error isn't thrown"
+file = "crates/dom_js/src/next.rs"
+from = '''        Err(error) => throw(scope, error),
+    }
+}'''
+to = '''        Err(_) => rv.set_null(),
+    }
+}'''
+
+[[mutant]]
+name = "the reference child ignored"
+file = "crates/dom_js/src/next.rs"
+from = '''        let before = before.map(|before| before.get(cx.gc));'''
+to = '''        let before = before.map(|before| before.get(cx.gc)).filter(|_| false);'''
+
+[[mutant]]
+name = "previousSibling walks forward"
+file = "crates/dom_js/src/next.rs"
+from = '''    walk(scope, &args, rv, |cx, node| cx.previous_sibling(node));'''
+to = '''    walk(scope, &args, rv, |cx, node| cx.next_sibling(node));'''
+
+# --- bench.py blink-perf --next-dom: the JS rows -----------------------------
+
+[[mutant]]
+name = "JS today with the new DOM"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''        ("JS today", "kun", NEXT + page, False),'''
+to = '''        ("JS today", "kun", NEXT + page, True),'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-q", "-k", "NextDom"]
+
+[[mutant]]
+name = "a page without its JS version measured"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''            and (NEXT_PAGES / name).is_file()]'''
+to = ''']'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-q", "-k", "variants"]
+
+[[mutant]]
+name = "Chrome's runs read a trace"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''                        if browser == "Chrome":'''
+to = '''                        if browser == "Chromium":'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-q", "-k", "NextDom"]
+
+[[mutant]]
+name = "the JS next against Chrome not inverted for ms"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    return number(ratio if unit in MORE_IS_BETTER else 1 / ratio)
+'''
+to = '''    return number(ratio)
+'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-q", "-k", "NextDom"]
+
+[[mutant]]
+name = "no Chrome column"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''            if name.startswith("JS") and name != "JS Chrome":'''
+to = '''            if False:'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-q", "-k", "NextDom"]
+
+[[mutant]]
+name = "the JS versions aren't served"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''        for prefix, folder in ((WASM, GUESTS), (NEXT, NEXT_PAGES)):'''
+to = '''        for prefix, folder in ((WASM, GUESTS),):'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-q", "-k", "new_doms_js"]

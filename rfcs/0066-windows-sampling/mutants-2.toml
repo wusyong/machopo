@@ -1,0 +1,143 @@
+# Both browsers on the fastest CPUs on Windows: the CPUs of the highest
+# efficiency class, this process's affinity set to them while a browser
+# starts and set back after (`scripts/bench/common.py`).
+#   python3 scripts/test.py mutate rfcs/0066-windows-sampling/mutants-2.toml
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "CpuTests"]
+timeout = 120
+
+[[mutant]]
+name = "the slowest"
+file = "scripts/bench/common.py"
+from = '''    top = max(speeds[cpu] for cpu in allowed)'''
+to = '''    top = min(speeds[cpu] for cpu in allowed)'''
+
+[[mutant]]
+name = "all of them when alike"
+file = "scripts/bench/common.py"
+from = '''    return fastest if len(fastest) < len(allowed) else None'''
+to = '''    return fastest if len(fastest) <= len(allowed) else None'''
+
+[[mutant]]
+name = "a CPU of no known speed skipped"
+file = "scripts/bench/common.py"
+from = '''    if not allowed or any(cpu not in speeds for cpu in allowed):
+        return None
+    top = max(speeds[cpu] for cpu in allowed)'''
+to = '''    allowed = [cpu for cpu in allowed if cpu in speeds]
+    if not allowed:
+        return None
+    top = max(speeds[cpu] for cpu in allowed)'''
+
+[[mutant]]
+name = "other groups taken"
+file = "scripts/bench/common.py"
+from = '''            if group != 0:
+                return None'''
+to = '''            if group > 1:
+                return None'''
+
+[[mutant]]
+name = "every type an entry"
+file = "scripts/bench/common.py"
+from = '''        if kind == CPU_SET_TYPE:'''
+to = '''        if True:'''
+
+[[mutant]]
+name = "entries of a fixed size"
+file = "scripts/bench/common.py"
+from = '''        offset += size'''
+to = '''        offset += CPU_SET.size'''
+
+[[mutant]]
+name = "the efficiency class's byte"
+file = "scripts/bench/common.py"
+from = '''            _, _, _, group, index, _, _, _, efficiency = CPU_SET.unpack_from(info, offset)'''
+to = '''            _, _, _, group, index, _, _, efficiency, _ = CPU_SET.unpack_from(info, offset)'''
+
+[[mutant]]
+name = "every CPU allowed"
+file = "scripts/bench/common.py"
+from = '''        allowed = [cpu for cpu in range(mask.bit_length()) if mask >> cpu & 1]'''
+to = '''        allowed = list(range(mask.bit_length()))'''
+
+[[mutant]]
+name = "the affinity not set"
+file = "scripts/bench/common.py"
+from = '''    if mask is not None and not kernel32.SetProcessAffinityMask(process, mask):'''
+to = '''    if False:'''
+
+[[mutant]]
+name = "the affinity from before not returned"
+file = "scripts/bench/common.py"
+from = '''        raise ctypes.WinError(ctypes.get_last_error())
+    return current.value'''
+to = '''        raise ctypes.WinError(ctypes.get_last_error())
+    return mask if mask is not None else current.value'''
+
+[[mutant]]
+name = "Windows by taskset"
+file = "scripts/bench/common.py"
+from = '''        if sys.platform == "win32":
+            _browser_cpus.append(fastest_windows_cpus())'''
+to = '''        if False:
+            _browser_cpus.append(fastest_windows_cpus())'''
+
+[[mutant]]
+name = "taskset on Windows"
+file = "scripts/bench/common.py"
+from = '''if cpus and sys.platform != "win32" else command'''
+to = '''if cpus else command'''
+
+[[mutant]]
+name = "no affinity on Windows"
+file = "scripts/bench/common.py"
+from = '''    cpus = browser_cpus() if sys.platform == "win32" else None'''
+to = '''    cpus = None'''
+
+[[mutant]]
+name = "the affinity elsewhere too"
+file = "scripts/bench/common.py"
+from = '''    cpus = browser_cpus() if sys.platform == "win32" else None'''
+to = '''    cpus = browser_cpus()'''
+
+[[mutant]]
+name = "a CPU off by one"
+file = "scripts/bench/common.py"
+from = '''    before = process_affinity(sum(1 << cpu for cpu in cpus))'''
+to = '''    before = process_affinity(sum(1 << (cpu + 1) for cpu in cpus))'''
+
+[[mutant]]
+name = "not set back"
+file = "scripts/bench/common.py"
+from = '''    finally:
+        process_affinity(before)'''
+to = '''    finally:
+        pass'''
+
+[[mutant]]
+name = "not set back when it fails"
+file = "scripts/bench/common.py"
+from = '''    try:
+        yield
+    finally:
+        process_affinity(before)'''
+to = '''    yield
+    process_affinity(before)'''
+
+[[mutant]]
+name = "kun not in it"
+file = "scripts/bench/common.py"
+from = '''        with browser_affinity():
+            process = subprocess.Popen(
+                on_browser_cpus('''
+to = '''        with contextlib.nullcontext():
+            process = subprocess.Popen(
+                on_browser_cpus('''
+
+[[mutant]]
+name = "Chrome not in it"
+file = "scripts/bench/common.py"
+from = '''            with browser_affinity():
+                process = subprocess.Popen(command'''
+to = '''            with contextlib.nullcontext():
+                process = subprocess.Popen(command'''

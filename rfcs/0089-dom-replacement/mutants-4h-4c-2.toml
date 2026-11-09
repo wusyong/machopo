@@ -1,0 +1,151 @@
+# Stage 4h-4c-2: the window's named properties object and the document's tables of
+# names, `Navigator` and `UserActivation` on the new DOM.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it -- ids:: && cargo test -q -p dom_js_next --test it -- window_named:: navigator::"]
+timeout = 1500
+
+[[mutant]]
+name = "dom: a connected subtree's names not kept"
+file = "crates/dom_next/src/style.rs"
+from = '''            if names {
+                self.name_added(self.document_of(parent), at);
+            }'''
+to = '''            let _ = names;'''
+
+[[mutant]]
+name = "dom: a removed subtree's names kept"
+file = "crates/dom_next/src/style.rs"
+from = '''            if names {
+                self.name_removed(self.document_of(parent), at);
+            }'''
+to = '''            let _ = names;'''
+
+[[mutant]]
+name = "dom: names looked at without one seen"
+file = "crates/dom_next/src/style.rs"
+from = '''        self.see(crate::form::NAMES_SEEN);'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a name changed in a shadow tree is the document's"
+file = "crates/dom_next/src/style.rs"
+from = '''        if self.is_connected(element) && self.shadow_scope(element).is_none() {
+            self.connected_name_changed('''
+to = '''        if self.is_connected(element) {
+            self.connected_name_changed('''
+
+[[mutant]]
+name = "dom: a changed name's old key kept"
+file = "crates/dom_next/src/ids.rs"
+from = '''            self.key_removed(document, element, table, old.addr());
+        }
+        if let Some(key) = self.value_key(element, names::local::NAME) {'''
+to = '''            let _ = old;
+        }
+        if let Some(key) = self.value_key(element, names::local::NAME) {'''
+
+[[mutant]]
+name = "dom: a changed name's new key not kept"
+file = "crates/dom_next/src/ids.rs"
+from = '''        if let Some(key) = self.value_key(element, names::local::NAME) {
+            self.key_added(document, element, table, key);
+        }
+    }
+
+    /// The first element in tree order in `root`'s subtree whose id is'''
+to = '''    }
+
+    /// The first element in tree order in `root`'s subtree whose id is'''
+
+[[mutant]]
+name = "dom: any element's name is kept"
+file = "crates/dom_next/src/ids.rs"
+from = '''        .then_some(Table::Names)'''
+to = '''        .then_some(Table::Names)
+        .or(Some(Table::Names))'''
+
+[[mutant]]
+name = "dom: an iframe without a document is the window's"
+file = "crates/dom_next/src/ids.rs"
+from = '''                .filter(|iframe| self.content_document(*iframe).is_some());'''
+to = ''';'''
+
+[[mutant]]
+name = "dom: an element by its id and its name is several"
+file = "crates/dom_next/src/ids.rs"
+from = '''                (Some(a), Some(b)) if gc::Gc::ptr_eq(a, b) => WindowNamed::One(a),'''
+to = '''                (Some(a), Some(b)) if gc::Gc::ptr_eq(a, b) && false => WindowNamed::One(a),'''
+
+[[mutant]]
+name = "dom: one by id isn't found"
+file = "crates/dom_next/src/ids.rs"
+from = '''            (1, 0) => one(first(Table::Ids)),'''
+to = '''            (1, 0) => WindowNamed::None,'''
+
+[[mutant]]
+name = "dom: the window's collection takes any element's name"
+file = "crates/dom_next/src/ids.rs"
+from = '''        is(names::ID) || self.name_table(element) == Some(Table::Names) && is(names::local::NAME)'''
+to = '''        is(names::ID) || is(names::local::NAME)'''
+
+[[mutant]]
+name = "js: no named properties object"
+file = "crates/dom_js_next/src/window.rs"
+from = '''    crate::window_properties::install_in_realm(
+        &mut state::scope(scope).expect("installed"),
+        proxy,
+    );'''
+to = ''''''
+
+[[mutant]]
+name = "js: the named properties mask the prototypes'"
+file = "crates/dom_js_next/src/window_properties.rs"
+from = '''                v8::PropertyHandlerFlags::NON_MASKING
+                    | v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS,'''
+to = '''                v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS,'''
+
+[[mutant]]
+name = "js: a named property is deleted"
+file = "crates/dom_js_next/src/window_properties.rs"
+from = '''        Some(_) => {
+            rv.set_bool(false);
+            v8::Intercepted::kYes
+        }'''
+to = '''        Some(_) => v8::Intercepted::kNo,'''
+
+[[mutant]]
+name = "js: a property is defined on the named properties object"
+file = "crates/dom_js_next/src/window_properties.rs"
+from = '''    rv.set_bool(false);
+    v8::Intercepted::kYes
+}
+
+/// Deleting a named property fails'''
+to = '''    let _ = rv;
+    v8::Intercepted::kNo
+}
+
+/// Deleting a named property fails'''
+
+[[mutant]]
+name = "api: a new navigator each time"
+file = "crates/dom_next/src/navigator.rs"
+from = '''        window.navigator.set(self.gc, Some(navigator));'''
+to = ''''''
+
+[[mutant]]
+name = "api: a new userActivation each time"
+file = "crates/dom_next/src/navigator.rs"
+from = '''        navigator.user_activation.set(self.gc, Some(activation));'''
+to = ''''''
+
+[[mutant]]
+name = "api: languages one"
+file = "crates/dom_api_next/src/navigator.rs"
+from = '''    Ok(vec![DomString::new("en-US"), DomString::new("en")])'''
+to = '''    Ok(vec![DomString::new("en-US")])'''
+
+[[mutant]]
+name = "api: sticky activation from the start"
+file = "crates/dom_next/src/window.rs"
+from = '''        window.last_activation.get() != f64::INFINITY'''
+to = '''        window.last_activation.get() == f64::INFINITY'''

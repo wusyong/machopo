@@ -1,0 +1,65 @@
+<!doctype html>
+<div id=a></div><img name=a><div name=b></div><form name=f id=g></form><p id=0x></p><span id=5></span>
+<script>
+function attempt(f) { try { const v = f(); return v === undefined ? 'undefined' : v === null ? 'null' : typeof v === 'object' || typeof v === 'function' ? (v === document.all ? 'all' : Object.prototype.toString.call(v) + (v.length !== undefined ? ':' + v.length : '') + (v.id ? '#' + v.id : '') + (v.tagName ? '<' + v.tagName : '')) : String(v); } catch (e) { return e.name + ': ' + e.message; } }
+function run() {
+  const all = document.all;
+  const r = [];
+  const add = (label, f) => r.push(label + ' = ' + attempt(f));
+  add('typeof', () => typeof all);
+  add('==null', () => all == null);
+  add('===undefined', () => all === undefined);
+  add('!', () => !all);
+  add('??', () => all ?? 1);
+  add('?.length', () => all?.length);
+  add('same', () => all === document.all);
+  add('toString', () => Object.prototype.toString.call(all));
+  add('proto', () => Object.getPrototypeOf(all) === HTMLAllCollection.prototype);
+  add('HTMLCollection?', () => all instanceof HTMLCollection);
+  add('length', () => all.length);
+  add('[0]', () => all[0]);
+  add('(0)', () => all(0));
+  add('("0")', () => all("0"));
+  add('item(0)', () => all.item(0));
+  add('item("0")', () => all.item("0"));
+  add('item()', () => all.item());
+  add('()', () => all());
+  add('(null)', () => all(null));
+  add('(undefined)', () => all(undefined));
+  add('item(-1)', () => all.item(-1));
+  add('item(1e10)', () => all.item(1e10));
+  add('item(4294967295)', () => all.item(4294967295));
+  add('item("5")', () => all.item("5"));
+  add('["5"]', () => all["5"]);
+  add('("a")', () => all("a"));
+  add('a', () => all.a);
+  add('a same', () => all.a === all.a);
+  add('namedItem(a) same', () => all.namedItem('a') === all.namedItem('a'));
+  add('a item same', () => all.item('a') === all.a);
+  add('b', () => all.b);
+  add('f', () => all.f);
+  add('g', () => all.g);
+  add('namedItem()', () => all.namedItem());
+  add('namedItem(null)', () => all.namedItem(null));
+  add('0x', () => all['0x']);
+  add('nope', () => all.nope);
+  add('item(nope)', () => all.item('nope'));
+  add('namedItem(nope)', () => all.namedItem('nope'));
+  add('keys', () => Object.keys(all).join());
+  add('ownNames', () => Object.getOwnPropertyNames(all).join());
+  add('"a" in', () => 'a' in all);
+  add('new', () => new all(0));
+  add('call', () => Function.prototype.call.call(all, null, 0));
+  add('protoNames', () => Object.getOwnPropertyNames(HTMLAllCollection.prototype).join());
+  add('item.length', () => all.item.length);
+  add('namedItem.length', () => all.namedItem.length);
+  const before = all.length; document.body.append(document.createElement('i'));
+  add('live', () => all.length - before);
+  const c = all.a; document.body.append(Object.assign(document.createElement('div'), {id: 'a'}));
+  add('named live', () => c.length);
+  add('JSON', () => JSON.stringify({x: all}));
+  add('String', () => String(all));
+  add('typeof item', () => typeof all.item);
+  return r.join('\n');
+}
+</script>

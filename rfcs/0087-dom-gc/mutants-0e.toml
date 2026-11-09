@@ -1,0 +1,361 @@
+# Step 0e: the recording of the DOM's heap (`dom::recording`, its hooks in
+# `dom`, the edge counts of `dom_macros`' derives), the fork's GC count of
+# a standalone heap, and `gc_bench inspect`. Run with RUSTY_V8_ARCHIVE
+# pointing at a V8 built from the fork (`ci.py v8`).
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "recording::"]
+# A mutant takes seconds (a minute or so to rebuild V8); one that hangs
+# waits this long.
+timeout = 600
+
+# The recorder: objects by address, and where a write is.
+
+[[mutant]]
+name = "an object over a dead one's start keeps the dead one"
+file = "crates/dom/src/recording.rs"
+from = '''            && old.end > start'''
+to = '''            && false'''
+
+[[mutant]]
+name = "an object keeps the dead ones inside its range"
+file = "crates/dom/src/recording.rs"
+from = '''        let reused: Vec<usize> = self.objects.range(start..end).map(|(&at, _)| at).collect();'''
+to = '''        let reused: Vec<usize> = self.objects.range(start..start).map(|(&at, _)| at).collect();'''
+
+[[mutant]]
+name = "a write's offset counts from cppgc's object"
+file = "crates/dom/src/recording.rs"
+from = '''        let offset = slot.checked_sub(object.data)?;'''
+to = '''        let offset = slot.checked_sub(object.data.saturating_sub(8))?;'''
+
+[[mutant]]
+name = "a slot past an object's end is in it"
+file = "crates/dom/src/recording.rs"
+from = '''        if slot >= object.end {'''
+to = '''        if slot > object.end.saturating_add(4096) {'''
+
+[[mutant]]
+name = "a recorded target is unknown"
+file = "crates/dom/src/recording.rs"
+from = '''            Some(target) => self.object(target).map_or(Target::Unknown, Target::Object),'''
+to = '''            Some(target) => self.object(target).map_or(Target::Unknown, |_| Target::Unknown),'''
+
+[[mutant]]
+name = "a weak edge's write is strong"
+file = "crates/dom/src/recording.rs"
+from = '''        self.write(&Record::Write {
+            object,
+            offset,
+            target,
+            weak,
+        });'''
+to = '''        self.write(&Record::Write {
+            object,
+            offset,
+            target,
+            weak: false,
+        });'''
+
+[[mutant]]
+name = "a type has no edges"
+file = "crates/dom/src/recording.rs"
+from = '''                    edges: T::EDGES as u64,'''
+to = '''                    edges: 0,'''
+
+[[mutant]]
+name = "a type's allocation is its data only"
+file = "crates/dom/src/recording.rs"
+from = '''                    allocated: end.saturating_sub(start) as u64,'''
+to = '''                    allocated: end.saturating_sub(data) as u64,'''
+
+# Wrappers and GCs.
+
+[[mutant]]
+name = "the dead wrappers are the live ones"
+file = "crates/dom/src/recording.rs"
+from = '''                std::mem::take(&mut self.wrapped).into_iter().partition(|w| (w.alive)());'''
+to = '''                std::mem::take(&mut self.wrapped).into_iter().partition(|w| !(w.alive)());'''
+
+[[mutant]]
+name = "a safepoint never looks for dead wrappers"
+file = "crates/dom/src/recording.rs"
+from = '''        if self.gcs.majors.get() != self.majors_seen {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a minor GC counts as full"
+file = "crates/dom/src/recording.rs"
+from = '''        if kind == GcKind::Major {
+            self.majors.set(self.majors.get().wrapping_add(1));'''
+to = '''        if kind == GcKind::Minor {
+            self.majors.set(self.majors.get().wrapping_add(1));'''
+
+[[mutant]]
+name = "a GC's end comes before V8's inside it"
+file = "crates/dom/src/recording.rs"
+from = '''    pub(crate) fn gc_end(&mut self, kind: GcKind) {
+        self.flush_gcs();'''
+to = '''    pub(crate) fn gc_end(&mut self, kind: GcKind) {'''
+
+[[mutant]]
+name = "every V8 GC is minor"
+file = "crates/dom/src/v8_engine.rs"
+from = '''    } else {
+        GcKind::Major
+    }'''
+to = '''    } else {
+        GcKind::Minor
+    }'''
+
+[[mutant]]
+name = "V8's GC ends aren't recorded"
+file = "crates/dom/src/v8_engine.rs"
+from = '''    log.end(gc_kind(ty));'''
+to = '''    let _ = (log, ty);'''
+
+# The format.
+
+[[mutant]]
+name = "an integer's bytes hold eight bits"
+file = "crates/dom/src/recording.rs"
+from = '''        value = value.wrapping_shr(7);'''
+to = '''        value = value.wrapping_shr(8);'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it", "recording::"]
+
+[[mutant]]
+name = "an integer may run past 64 bits"
+file = "crates/dom/src/recording.rs"
+from = '''        if shift == 63 && bits > 1 {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "any version is read"
+file = "crates/dom/src/recording.rs"
+from = '''        if version != VERSION {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "any magic is read"
+file = "crates/dom/src/recording.rs"
+from = '''        if &magic != MAGIC {'''
+to = '''        if false {'''
+
+# The hooks.
+
+[[mutant]]
+name = "allocations aren't recorded"
+file = "crates/dom/src/scope.rs"
+from = '''            recorder.allocate(v8::cppgc::GetRustObj::get_rust_obj(&ptr).addr(), object);'''
+to = '''            let _ = object;'''
+
+[[mutant]]
+name = "the anchor isn't recorded rooted"
+file = "crates/dom/src/handle.rs"
+from = '''            recorder.root(self.anchor.get_rust_obj().addr(), false);'''
+to = ''''''
+
+[[mutant]]
+name = "a root isn't recorded"
+file = "crates/dom/src/handle.rs"
+from = '''        roots.note_root(&cell.persistent, false);'''
+to = ''''''
+
+[[mutant]]
+name = "a root's drop isn't recorded"
+file = "crates/dom/src/handle.rs"
+from = '''            roots.note_unroot(&cell.persistent, false);'''
+to = ''''''
+
+[[mutant]]
+name = "a listener's root isn't recorded"
+file = "crates/dom/src/handle.rs"
+from = '''        roots.note_root(&listener, false);'''
+to = ''''''
+
+[[mutant]]
+name = "a listener's root drop isn't recorded"
+file = "crates/dom/src/handle.rs"
+from = '''        self.roots.note_unroot(&self.listener, false);'''
+to = ''''''
+
+[[mutant]]
+name = "a store's weak handle isn't recorded"
+file = "crates/dom/src/foreign.rs"
+from = '''        self.roots.note_root(&ptr, true);'''
+to = ''''''
+
+[[mutant]]
+name = "a store's root isn't recorded"
+file = "crates/dom/src/foreign.rs"
+from = '''        self.roots.note_root(&ptr, false);'''
+to = ''''''
+
+[[mutant]]
+name = "a store kept alive again isn't recorded"
+file = "crates/dom/src/foreign.rs"
+from = '''            self.roots.note_root(&entry.holder, false);'''
+to = ''''''
+
+[[mutant]]
+name = "a store let go isn't recorded"
+file = "crates/dom/src/foreign.rs"
+from = '''            self.roots.note_unroot(&root, false);'''
+to = '''            drop(root);'''
+
+[[mutant]]
+name = "an edge's write isn't recorded"
+file = "crates/dom/src/gc.rs"
+from = '''            recorder.write_edge(slot_address(&self.slot), Some(target.get_rust_obj().addr()), false);'''
+to = '''            let _ = (&mut recorder, target);'''
+
+[[mutant]]
+name = "an edge's copy isn't recorded"
+file = "crates/dom/src/gc.rs"
+from = '''            recorder.write_edge(slot_address(&self.slot), target, false);'''
+to = '''            let _ = target;'''
+
+[[mutant]]
+name = "an edge's clearing isn't recorded"
+file = "crates/dom/src/gc.rs"
+from = '''            recorder.write_edge(slot_address(&self.slot), None, false);
+        }
+        // SAFETY: as for `set`.'''
+to = '''        }
+        // SAFETY: as for `set`.'''
+
+[[mutant]]
+name = "a weak edge's write is recorded strong"
+file = "crates/dom/src/gc.rs"
+from = '''            recorder.write_edge(slot_address(&self.slot), Some(target.get_rust_obj().addr()), true);'''
+to = '''            recorder.write_edge(slot_address(&self.slot), Some(target.get_rust_obj().addr()), false);'''
+
+[[mutant]]
+name = "a tagged edge's write isn't recorded"
+file = "crates/dom/src/gc.rs"
+from = '''            recorder.write_edge(slot_address(&self.slot), Some(target.addr()), false);'''
+to = '''            let _ = &mut recorder;'''
+
+[[mutant]]
+name = "a JS value's write isn't recorded"
+file = "crates/dom/src/v8_engine.rs"
+from = '''            recorder.write_external(slot_address(&self.slot), value.is_some());'''
+to = '''            let _ = &mut recorder;'''
+
+[[mutant]]
+name = "a wrapper isn't recorded"
+file = "crates/dom/src/v8_engine.rs"
+from = '''            recorder.wrapper(
+                value.get_rust_obj().addr(),
+                Box::new(move || alive.get().is_some()),
+            );'''
+to = '''            let _ = (&mut recorder, alive);'''
+
+[[mutant]]
+name = "a mutation scope isn't a safepoint"
+file = "crates/dom/src/isolate.rs"
+from = '''    pub(crate) fn mutation_scope<'s>(&'s mut self, heap: HeapAccess<'s>) -> DomMutationScope<'s> {
+        if let Some(mut recorder) = self.roots.recorder() {
+            recorder.safepoint();
+        }'''
+to = '''    pub(crate) fn mutation_scope<'s>(&'s mut self, heap: HeapAccess<'s>) -> DomMutationScope<'s> {'''
+
+[[mutant]]
+name = "a read scope isn't a safepoint"
+file = "crates/dom/src/isolate.rs"
+from = '''    pub(crate) fn read_scope(&self) -> DomReadScope<'_> {
+        if let Some(mut recorder) = self.roots.recorder() {
+            recorder.safepoint();
+        }'''
+to = '''    pub(crate) fn read_scope(&self) -> DomReadScope<'_> {'''
+
+[[mutant]]
+name = "a forced GC's start isn't recorded"
+file = "crates/dom/src/isolate.rs"
+from = '''            recorder.gc_begin(GcKind::Forced);'''
+to = ''''''
+
+[[mutant]]
+name = "a standalone heap's GC in a task isn't recorded"
+file = "crates/dom/src/isolate.rs"
+from = '''                if self.heap.gc_count() != gcs {'''
+to = '''                if self.heap.gc_count() != gcs && step {'''
+
+[[mutant]]
+name = "a marking step's start isn't recorded"
+file = "crates/dom/src/isolate.rs"
+from = '''                recorder.gc_begin(GcKind::Step);'''
+to = ''''''
+
+[[mutant]]
+name = "a standalone heap's marking isn't recorded"
+file = "crates/dom/src/isolate.rs"
+from = '''        if let Some(mut recorder) = roots.recorder() {
+            recorder.marking(self.heap.is_marking());
+        }
+        if self.heap.is_marking() {'''
+to = '''        if self.heap.is_marking() {'''
+
+# The edge counts.
+
+[[mutant]]
+name = "a struct's edges are its largest field's"
+file = "crates/dom_macros/src/lib.rs"
+from = '''sum_edges(&['''
+to = '''most_edges(&['''
+
+[[mutant]]
+name = "an enum's edges are all its variants'"
+file = "crates/dom_macros/src/lib.rs"
+from = '''most_edges(&[#(#arm_edges),*])'''
+to = '''sum_edges(&[#(#arm_edges),*])'''
+
+[[mutant]]
+name = "an array's edges are one element's"
+file = "crates/dom/src/gc.rs"
+from = '''    const EDGES: usize = match T::EDGES.checked_mul(N) {'''
+to = '''    const EDGES: usize = match T::EDGES.checked_mul(1) {'''
+
+# The fork's GC count.
+
+[[mutant]]
+name = "the GC count's Rust reads nothing"
+file = "../third_party/rusty_v8/src/cppgc/standalone.rs"
+from = '''    unsafe { cppgc__StandaloneHeap__GcCount(self.heap.as_ptr()) }'''
+to = '''    0'''
+
+# C++: rebuilds V8 from the fork (`ci.py v8`, a minute or so for one file).
+[[mutant]]
+name = "the fork counts no GC"
+file = "../third_party/rusty_v8/src/binding.cc"
+from = '''  void ResetAllocatedObjectSize(size_t) override { count_++; }'''
+to = '''  void ResetAllocatedObjectSize(size_t) override {}'''
+test = ["python3", "-c", "import subprocess, sys; sys.exit(subprocess.call([sys.executable, 'scripts/ci.py', 'v8', '--profile', 'release']) or subprocess.call(['cargo', 'test', '-q', '-p', 'dom', '--test', 'it', 'recording::']))"]
+
+# `gc_bench inspect`.
+
+[[mutant]]
+name = "a type's bytes are its objects"
+file = "crates/gc_bench/src/inspect.rs"
+from = '''        self.objects.saturating_mul(self.allocated)'''
+to = '''        self.objects'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it", "recording::"]
+
+[[mutant]]
+name = "every write is outside any object"
+file = "crates/gc_bench/src/inspect.rs"
+from = '''                if object == 0 {'''
+to = '''                if object != 0 {'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it", "recording::"]
+
+[[mutant]]
+name = "an object counts as no type's"
+file = "crates/gc_bench/src/inspect.rs"
+from = '''                bump(&mut ty.objects);'''
+to = '''                let _ = ty;'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it", "recording::"]
+
+[[mutant]]
+name = "inspect reads no file"
+file = "crates/gc_bench/src/main.rs"
+from = '''            [path] => inspect(path),'''
+to = '''            [_] => ExitCode::SUCCESS,'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it", "recording::"]

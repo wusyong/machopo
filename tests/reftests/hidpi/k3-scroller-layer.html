@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<title>K3: at 2x, a scroll container at a fractional position is a layer whose content lands on device pixels</title>
+<link rel="match" href="k3-scroller-layer-ref.html">
+<style>
+  html, body { margin: 0 }
+  .box { margin: 10.25px 0 0 10.25px; width: 100px; height: 50px }
+  .box div { height: 20px }
+  .a { background-color: green } .b { background-color: blue }
+</style>
+<!-- A scroll container (it overflows): a layer of its own, whose origin
+     is at 20.5 device px. Its content must snap as it would in the
+     document, not half a device pixel off. -->
+<div class="box" style="overflow: auto">
+  <div class="a"></div><div class="b"></div><div class="a"></div>
+  <div class="b"></div><div class="a"></div><div class="b"></div>
+  <div class="a"></div><div class="b"></div><div class="a"></div><div class="b"></div>
+</div>

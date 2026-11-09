@@ -1,0 +1,197 @@
+# Mutation test of stage 2 (transfer):
+# python3 scripts/test.py mutate rfcs/0034-message-channel/mutants-2.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "messaging::"]
+timeout = 1200
+
+[[mutant]]
+name = "a queued message's ports aren't kept"
+file = "crates/dom/src/message_port.rs"
+from = '''            append(self, &data.queued_ports, &data.queued_port_count, carried);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "message_ports::"]
+
+[[mutant]]
+name = "giving the queue back keeps its ports"
+file = "crates/dom/src/message_port.rs"
+from = '''            slot.clear(self);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "message_ports::"]
+
+[[mutant]]
+name = "a detached port starts"
+file = "crates/dom/src/message_port.rs"
+from = '''            if state.enabled || state.closed || state.detached {'''
+to = '''            if state.enabled || state.closed {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "message_ports::"]
+
+[[mutant]]
+name = "a detached port closes"
+file = "crates/dom/src/message_port.rs"
+from = '''        if self.read().message_port_detached(port) {
+            return;
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "message_ports::"]
+
+[[mutant]]
+name = "a detached port's queue stays enabled"
+file = "crates/dom/src/message_port.rs"
+from = '''            state.enabled = false;'''
+to = ''''''
+
+[[mutant]]
+name = "detaching keeps the root"
+file = "crates/dom/src/message_port.rs"
+from = '''        if active != 0 {
+            self.tasks.remove_active_port(active);
+        }
+        let waiting = self.take_queue(port);'''
+to = '''        let _ = active;
+        let waiting = self.take_queue(port);'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "message_ports::"]
+
+[[mutant]]
+name = "messages taken back go after the waiting ones"
+file = "crates/dom/src/message_port.rs"
+from = '''        for message in in_flight.into_iter().chain(waiting) {'''
+to = '''        for message in waiting.into_iter().chain(in_flight) {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "message_ports::"]
+
+[[mutant]]
+name = "the received port isn't entangled"
+file = "crates/dom/src/message_port.rs"
+from = '''            self.entangle(&new, &other);'''
+to = ''''''
+
+[[mutant]]
+name = "a new message event has no ports"
+file = "crates/dom/src/scope.rs"
+from = '''        if let EventKind::Message { ports: list, .. } = &event.object().kind {
+            for port in &ports {
+                crate::abort::append(self, &list.list, &list.count, port);
+            }
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "initMessageEvent keeps the old ports"
+file = "crates/dom/src/scope.rs"
+from = '''            old.clear(self);
+        }
+        list.count.store(0, std::sync::atomic::Ordering::Relaxed);'''
+to = '''            let _ = old;
+        }'''
+
+[[mutant]]
+name = "a transferred port's tasks aren't taken back"
+file = "crates/dom_api/src/message_port.rs"
+from = '''        m.detach_message_port(port, in_flight);'''
+to = '''        let _: Vec<PortMessage> = in_flight;
+        m.detach_message_port(port, Vec::new());'''
+
+[[mutant]]
+name = "a transferred port isn't detached"
+file = "crates/dom_api/src/message_port.rs"
+from = '''        m.detach_message_port(port, in_flight);'''
+to = '''        let _: Vec<PortMessage> = in_flight;'''
+
+[[mutant]]
+name = "a detached port still posts"
+file = "crates/dom_api/src/message_port.rs"
+from = '''    if cx.read().message_port_detached(this) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a doomed message goes"
+file = "crates/dom_api/src/message_port.rs"
+from = '''    if message.1.iter().any(|port| port.ptr_eq(&target)) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a port's message brings its ports in no realm"
+file = "crates/dom_api/src/message_port.rs"
+from = '''    let ports = receive_ports(cx, &ports, realm.as_ref());'''
+to = '''    let _ = realm;
+    let ports = receive_ports(cx, &ports, None);'''
+
+[[mutant]]
+name = "window.postMessage ignores the options' transfer"
+file = "crates/dom_api/src/window.rs"
+from = '''            (options.target_origin, options.transfer)'''
+to = '''            (options.target_origin, transfer)'''
+
+[[mutant]]
+name = "window.postMessage brings its ports into the caller's realm"
+file = "crates/dom_api/src/window.rs"
+from = '''    let ports = crate::message_port::receive_ports(cx, &posted.ports, Some(&posted.target));'''
+to = '''    let ports = crate::message_port::receive_ports(cx, &posted.ports, Some(&posted.source));'''
+
+[[mutant]]
+name = "structuredClone brings its ports in no realm"
+file = "crates/dom_api/src/window.rs"
+from = '''    let ports = crate::message_port::receive_ports(cx, &ports, Some(this));'''
+to = '''    let ports = crate::message_port::receive_ports(cx, &ports, None);'''
+
+[[mutant]]
+name = "the source port can be transferred"
+file = "crates/dom_js/src/serialize.rs"
+from = '''        let problem = if source.is_some_and(|source| source.ptr_eq(&port)) {'''
+to = '''        let problem = if false {'''
+
+[[mutant]]
+name = "a port can be transferred twice"
+file = "crates/dom_js/src/serialize.rs"
+from = '''            Some("is a duplicate of an earlier port")'''
+to = '''            None'''
+
+[[mutant]]
+name = "a buffer can be transferred twice"
+file = "crates/dom_js/src/serialize.rs"
+from = '''            if buffers.iter().any(|(_, b)| b.strict_equals(item)) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "a detached buffer can be transferred"
+file = "crates/dom_js/src/serialize.rs"
+from = '''            let problem = if buffer.was_detached() {'''
+to = '''            let problem = if false {'''
+
+[[mutant]]
+name = "a closed port can be transferred"
+file = "crates/dom_js/src/serialize.rs"
+from = '''            (read.message_port_detached(port) || read.message_port_closed(port))'''
+to = '''            read.message_port_detached(port)'''
+
+[[mutant]]
+name = "a transferred buffer isn't detached"
+file = "crates/dom_js/src/serialize.rs"
+from = '''            buffer.detach(None);'''
+to = ''''''
+
+[[mutant]]
+name = "a host object reads the last port"
+file = "crates/dom_js/src/serialize.rs"
+from = '''        let port = self.ports.get(place as usize)?;'''
+to = '''        let _ = place;
+        let port = self.ports.last()?;'''
+
+[[mutant]]
+name = "object takes any value"
+file = "crates/dom_js/src/convert.rs"
+from = '''        Base::Object if !value.is_object() => Err(Failed::Type("is not an object".into())),'''
+to = ''''''
+
+[[mutant]]
+name = "a port's wrapper is made in the current realm"
+file = "crates/dom_api/src/object.rs"
+from = '''            && (target.is_performance() || target.is_message_port())'''
+to = '''            && target.is_performance()'''
+
+[[mutant]]
+name = "a JsOnly argument is in kun:dom"
+file = "crates/dom_api/src/wit.rs"
+from = '''    if ty.js_only {
+        return true;
+    }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "wit::"]

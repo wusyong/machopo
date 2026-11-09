@@ -1,0 +1,21 @@
+[package]
+name = "trace_event"
+description = "machopo's spans in the trace, made only when the trace takes them; Chromium's base/trace_event: trace_event! and info_event!."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+tracing.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true

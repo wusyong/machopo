@@ -1,0 +1,230 @@
+# Mutation test of stage 2: the requests' initiators (the parser's, the
+# stylesheets', the modules', script's stacks) and `frameAttached`'s stack,
+# `Log`, and Sources' subresources:
+# python3 scripts/test.py mutate rfcs/0082-devtools-network/mutants-2.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools"]
+timeout = 600
+
+# `Log`.
+
+[[mutant]]
+name = "a 404 isn't logged"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            Ok(response) if response.status >= 400 => {'''
+to = '''            Ok(response) if response.status >= 500 => {'''
+
+[[mutant]]
+name = "a failed load isn't logged"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            Err(error) => format!("Failed to load resource: net::{}", error.code.name()),'''
+to = '''            Err(_) => return,'''
+
+[[mutant]]
+name = "a log entry isn't linked to its request"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            self.network_agent.request_id(request_id),'''
+to = '''            request_id.to_string(),'''
+
+[[mutant]]
+name = "a document's 404 isn't logged"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    if loaded.status >= 400 {'''
+to = '''                    if loaded.status >= 500 {'''
+
+[[mutant]]
+name = "a new document keeps the old one's log"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.log_agent.main_frame_navigated();'''
+to = ''''''
+
+[[mutant]]
+name = "the kept entries aren't replayed"
+file = "crates/renderer/src/render_thread/log_agent.rs"
+from = '''                    self.replay(session);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "log_agent"]
+
+[[mutant]]
+name = "the log isn't printed"
+file = "crates/renderer/src/render_thread/log_agent.rs"
+from = '''            eprintln!("[console] {} ({})", entry.text, entry.url);'''
+to = ''''''
+
+[[mutant]]
+name = "a session without Log is warned"
+file = "crates/renderer/src/render_thread/log_agent.rs"
+from = '''        if self.enabled.borrow().iter().any(|on| on == session) {'''
+to = '''        if !session.is_empty() {'''
+
+[[mutant]]
+name = "the renderer doesn't warn"
+file = "crates/renderer/src/render_thread/network_agent.rs"
+from = '''        self.log_agent.warn(session, format!("{method}: {message}"));'''
+to = ''''''
+
+[[mutant]]
+name = "the browser doesn't warn"
+file = "crates/shell/src/automation_session.rs"
+from = '''                    self.warn(client, command, &format!("{name}: {}", error.message));'''
+to = ''''''
+
+[[mutant]]
+name = "the browser warns a session without Log"
+file = "crates/shell/src/automation_session.rs"
+from = '''            .is_some_and(|attached| attached.client == client && attached.log)'''
+to = '''            .is_some_and(|attached| attached.client == client)'''
+
+# Sources' subresources.
+
+[[mutant]]
+name = "the resources aren't recorded"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        view.record_resource(request_id, url.as_deref(), &result);'''
+to = ''''''
+
+[[mutant]]
+name = "the tree lists no resources"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''        tree["resources"] = listed.into();'''
+to = '''        tree["resources"] = json!([]);'''
+
+[[mutant]]
+name = "a URL loaded again is listed twice"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            Some(&at) => self.list[at] = resource,'''
+to = '''            Some(_) => self.list.push(resource),'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "resources_are_one_per_url"]
+
+[[mutant]]
+name = "a resource's content is any kept body"
+file = "crates/renderer/src/render_thread/network_agent.rs"
+from = '''                    .is_some_and(|(frame, kept)| frame == frame_id && kept == url)'''
+to = '''                    .is_some_and(|(frame, _)| frame == frame_id)'''
+
+# Initiators: script's stacks.
+
+[[mutant]]
+name = "an image keeps no stack as its update is queued"
+file = "crates/renderer/src/frame_view.rs"
+from = '''    fn image_update_queued(&self, element: &NodeHandle) {
+        self.note_request_stack(element.id());
+    }'''
+to = '''    fn image_update_queued(&self, element: &NodeHandle) {
+        let _ = element;
+    }'''
+
+[[mutant]]
+name = "a link keeps no stack"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        self.note_request_stack(link.id());'''
+to = ''''''
+
+[[mutant]]
+name = "a script keeps no stack"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        self.note_request_stack(script.id());'''
+to = ''''''
+
+[[mutant]]
+name = "an iframe's navigation keeps no stack"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        self.note_request_stack(owner.id());'''
+to = ''''''
+
+[[mutant]]
+name = "an import() keeps no stack"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            self.import_stacks.borrow_mut().insert(import.import, stack);'''
+to = '''            let _ = stack;'''
+
+[[mutant]]
+name = "fetch() has no stack"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        let initiator = self.settings.stacks.for_request().map(Initiator::Script);'''
+to = '''        let initiator = None;'''
+
+[[mutant]]
+name = "the stacks no load took stay"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        self.requests.clear_request_stacks();'''
+to = ''''''
+
+[[mutant]]
+name = "stacks are always captured"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''            .set_wanted(self.network_agent.wants_stacks(), self.page_agent.any_enabled());'''
+to = '''            .set_wanted(true, self.page_agent.any_enabled());'''
+
+[[mutant]]
+name = "an empty stack is one"
+file = "crates/bindings/src/devtools.rs"
+from = '''        let stack = stack.as_ref().filter(|stack| !stack.is_empty())?;'''
+to = '''        let stack = stack.as_ref()?;'''
+test = ["cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "stack_traces"]
+
+# Initiators: the parser's, the stylesheets', the modules'.
+
+[[mutant]]
+name = "the parser's line is 1-based"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            line: line.saturating_sub(1),'''
+to = '''            line,'''
+
+[[mutant]]
+name = "the parser's lines go as it finishes"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            self.finished_parser_lines = parser.take_load_lines();'''
+to = ''''''
+
+[[mutant]]
+name = "a stylesheet's image has no initiator"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                let initiator = image.referrer.filter(|_| watched).map(Initiator::Css);'''
+to = '''                let initiator = None;'''
+
+[[mutant]]
+name = "a url() keeps no referrer"
+file = "crates/css/src/css_url_data.rs"
+from = '''            self.referrer = Some(context.referrer.clone());'''
+to = ''''''
+
+[[mutant]]
+name = "a computed image drops its referrer"
+file = "crates/css/src/background.rs"
+from = '''                referrer: url.referrer().cloned(),'''
+to = '''                referrer: None,'''
+
+[[mutant]]
+name = "a linked sheet's url()s are the document's"
+file = "crates/style/src/lib.rs"
+from = '''            if let Some(context) = text.url.clone().map(UrlContext::of_sheet).or_else(|| base.clone()) {'''
+to = '''            if let Some(context) = text.url.clone().map(|url| UrlContext::new(url, "")).or_else(|| base.clone()) {'''
+
+[[mutant]]
+name = "a style attribute's referrer is the base URL"
+file = "crates/dom/src/scope.rs"
+from = '''        Some(css::UrlContext::new(base, &url))'''
+to = '''        let _ = url;
+        let referrer = base.to_string();
+        Some(css::UrlContext::new(base, &referrer))'''
+
+[[mutant]]
+name = "a static import has no initiator"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                .then(|| Initiator::Import(importer.as_str().to_owned())),'''
+to = '''                .then(|| None)
+                .flatten(),'''
+
+# `frameAttached`'s stack.
+
+[[mutant]]
+name = "a frame keeps no creation stack"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        *requests.creation_stack.borrow_mut() = self.settings.stacks.for_frame();'''
+to = ''''''
+
+[[mutant]]
+name = "a frame's new document drops its creation stack"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        requests.set_creation_stack(creation_stack);'''
+to = ''''''

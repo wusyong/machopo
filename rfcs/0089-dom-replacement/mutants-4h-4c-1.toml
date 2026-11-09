@@ -1,0 +1,174 @@
+# Stage 4h-4c-1: HTML's element interfaces on the new DOM: by their local names, their reflections,
+# HTMLElement's global attributes, tables, the document's kept collections.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it -- html_elements:: wrappers::create_element_foresees_its_wrapper"]
+timeout = 1500
+
+[[mutant]]
+name = "api: an interface's first local name only"
+file = "crates/dom_api_next/src/declare.rs"
+from = '''        if let Some(ElementDesc { svg: false, locals }) = interfaces[interface].element {
+            let mut at = 0;
+            while at < locals.len() {'''
+to = '''        if let Some(ElementDesc { svg: false, locals }) = interfaces[interface].element {
+            let mut at = 0;
+            while at < locals.len() && at < 1 {'''
+
+[[mutant]]
+name = "api: clamped not clamped"
+file = "crates/dom_api_next/src/reflect.rs"
+from = '''        .map_or(D, |value| u32::try_from(value).unwrap_or(u32::MAX).clamp(MIN, MAX)))'''
+to = '''        .map_or(D, |value| u32::try_from(value).unwrap_or(u32::MAX).min(MAX).max(MIN.min(0))))'''
+
+[[mutant]]
+name = "api: a huge value not saturated"
+file = "crates/dom_api_next/src/reflect.rs"
+from = '''    Some(digits.parse().unwrap_or(u64::MAX))'''
+to = '''    digits.parse().ok()'''
+
+[[mutant]]
+name = "api: translate not inherited"
+file = "crates/dom_api_next/src/html.rs"
+from = '''    std::iter::successors(Some(node), |&at| cx.parent(at))'''
+to = '''    std::iter::successors(Some(node), |_| None)'''
+
+[[mutant]]
+name = "api: hidden's until-found not read"
+file = "crates/dom_api_next/src/html.rs"
+from = '''        Some(value) if value.borrow().to_str().eq_ignore_ascii_case("until-found") => {'''
+to = '''        Some(value) if value.borrow().to_str() == "until-found" && false => {'''
+
+[[mutant]]
+name = "api: hidden = 0 keeps it"
+file = "crates/dom_api_next/src/html.rs"
+from = '''        Some(HiddenValue::Number(number)) => (number != 0.0 && !number.is_nan()).then_some(""),'''
+to = '''        Some(HiddenValue::Number(_)) => Some(""),'''
+
+[[mutant]]
+name = "api: no draggable default"
+file = "crates/dom_api_next/src/html.rs"
+from = '''            name == Some(dom_next::QualifiedName::html(names::local::IMG))
+                || (name'''
+to = '''            false
+                && (name'''
+
+[[mutant]]
+name = "api: autocapitalize not the form owner's"
+file = "crates/dom_api_next/src/html.rs"
+from = '''                Some(form) if inherits => own_autocapitalization_hint(cx, form),'''
+to = '''                Some(form) if inherits && false => own_autocapitalization_hint(cx, form),'''
+
+[[mutant]]
+name = "dom: a table's rows in tree order"
+file = "crates/dom_next/src/collection.rs"
+from = '''            TABLE_ROWS => {
+                self.for_each_table_row(root, found);
+                return;
+            }'''
+to = '''            TABLE_ROWS => {
+                let mut found = found;
+                let mut at = self.first_child(root);
+                while let Some(node) = at {
+                    if node.qualified_name() == QualifiedName::html(names::local::TR) && !found(node) {
+                        return;
+                    }
+                    at = self.following_within(node, root);
+                }
+                return;
+            }'''
+
+[[mutant]]
+name = "dom: a kept collection made each time"
+file = "crates/dom_next/src/collection.rs"
+from = '''            if let Some(collection) = kept.get(self.gc, index)
+                && collection.kind.get() == kind
+            {'''
+to = '''            if let Some(collection) = kept.get(self.gc, index)
+                && collection.kind.get() == kind
+                && false
+            {'''
+
+[[mutant]]
+name = "api: insertRow(-1) at the first row"
+file = "crates/dom_api_next/src/table.rs"
+from = '''        (None, last_row(cx, this))'''
+to = '''        (rows.first().copied(), None)'''
+
+[[mutant]]
+name = "api: insertRow past the rows allowed"
+file = "crates/dom_api_next/src/table.rs"
+from = '''            None => return Err(index_size_error("the index is past the number of rows")),'''
+to = '''            None => (None, rows.last().copied()),'''
+
+[[mutant]]
+name = "api: no tbody made for a table without rows"
+file = "crates/dom_api_next/src/table.rs"
+from = '''                let body = create(cx, this, "tbody");
+                insert(cx, body, row, None)?;
+                insert(cx, this, body, None)?;
+                Ok(row)'''
+to = '''                insert(cx, this, row, None)'''
+
+[[mutant]]
+name = "api: a thead appended"
+file = "crates/dom_api_next/src/table.rs"
+from = '''    let head = create(cx, this, "thead");
+    insert(cx, this, head, head_position(cx, this))'''
+to = '''    let head = create(cx, this, "thead");
+    insert(cx, this, head, None)'''
+
+[[mutant]]
+name = "api: any element a table's head"
+file = "crates/dom_api_next/src/table.rs"
+from = '''    if let Some(section) = section
+        && !is(cx, section, name)
+    {'''
+to = '''    if let Some(section) = section
+        && !is(cx, section, name)
+        && false
+    {'''
+
+[[mutant]]
+name = "api: rowIndex in a section 0"
+file = "crates/dom_api_next/src/table.rs"
+from = '''            cx.parent(parent).filter(|&up| is(cx, up, local::TABLE))'''
+to = '''            None'''
+
+[[mutant]]
+name = "api: cellIndex counts any child"
+file = "crates/dom_api_next/src/table.rs"
+from = '''        Some(row) if is_row(cx, row) => position(children(cx, row).filter(|&child| is_cell(cx, child)), this),'''
+to = '''        Some(row) if is_row(cx, row) => position(children(cx, row), this),'''
+
+[[mutant]]
+name = "api: body's window handlers its own"
+file = "crates/dom_api_next/src/handlers.rs"
+from = '''        || names::WINDOW_EVENT_HANDLERS.iter().any(|&(_, of)| of == event_type))'''
+to = '''        || names::WINDOW_EVENT_HANDLERS.iter().any(|&(_, of)| of == event_type) && false)'''
+
+[[mutant]]
+name = "js: createElement foresees HTMLElement"
+file = "crates/dom_js_next/src/front.rs"
+from = '''                    Some(id) => (Some(id), dom_api_next::html_element_interface(id)),'''
+to = '''                    Some(id) => (Some(id), dom_api_next::declare::HTML_ELEMENT),'''
+
+[[mutant]]
+name = "js: an unknown name foreseen as HTMLElement"
+file = "crates/dom_js_next/src/front.rs"
+from = '''                    None => (None, dom_api_next::declare::HTML_UNKNOWN_ELEMENT),'''
+to = '''                    None => (None, dom_api_next::declare::HTML_ELEMENT),'''
+
+[[mutant]]
+name = "js: an uppercase name foreseen by its number"
+file = "crates/dom_js_next/src/front.rs"
+from = '''                if text.bytes().any(|byte| byte.is_ascii_uppercase()) {
+                    return None;
+                }
+                Some(match dom_next::names::find(text) {'''
+to = '''                Some(match dom_next::names::find(&text.to_ascii_lowercase()) {'''
+
+[[mutant]]
+name = "api: a custom element's name made by its number"
+file = "crates/dom_api_next/src/document.rs"
+from = '''        && !local_name.contains('-')
+    {'''
+to = '''    {'''

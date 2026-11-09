@@ -1,0 +1,12 @@
+<!doctype html><script>
+let early;
+try { performance.measure('x', 'loadEventEnd'); } catch (e) { early = e.name + ': ' + e.message; }
+const m = performance.measure('y', 'fetchStart', 'responseEnd');
+const t = performance.timing;
+const viaEntry = performance.getEntriesByType('navigation')[0];
+const r = [early, `y start=${m.startTime} expected=${t.fetchStart - t.navigationStart} duration=${m.duration} expected=${t.responseEnd - t.fetchStart}`];
+try { performance.measure('z', 'unloadEventStart'); r.push('unload ok'); } catch (e) { r.push('unload ' + e.name); }
+try { performance.mark('fetchStart'); } catch (e) { r.push('mark ' + e.name + ': ' + e.message); }
+try { performance.measure('w', { start: 'domLoading' }); r.push('domLoading ok ' + performance.getEntriesByName('w')[0].startTime); } catch (e) { r.push('domLoading ' + e.name); }
+function run() { return r.join('\n'); }
+</script>

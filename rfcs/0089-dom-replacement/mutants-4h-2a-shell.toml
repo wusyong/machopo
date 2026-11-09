@@ -1,0 +1,29 @@
+# Stage 4h-2a, through the renderer: a <link>'s sheet given to the DOM with its href, origin-clean
+# or not (another origin's no-cors response, a network error from another origin), fetched by
+# CORS with crossorigin.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it -- next_dom::"]
+timeout = 1800
+
+[[mutant]]
+name = "renderer: another origin's no-cors sheet is origin-clean"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            Ok(response) => response.tainting != ResponseTainting::Opaque,'''
+to = '''            Ok(_) => true,'''
+
+[[mutant]]
+name = "renderer: a network error from another origin is origin-clean"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            Err(_) => sheet.url.scheme() == "data" || sheet.url.origin() == next.url.origin(),'''
+to = '''            Err(_) => true,'''
+
+[[mutant]]
+name = "renderer: crossorigin isn't CORS"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                request.mode = RequestMode::Cors;'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: a sheet's href isn't the URL asked for"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            cx.set_link_sheet(sheet.link.get(cx.gc), contents, sheet.url.as_str(), origin_clean);'''
+to = '''            cx.set_link_sheet(sheet.link.get(cx.gc), contents, "", origin_clean);'''

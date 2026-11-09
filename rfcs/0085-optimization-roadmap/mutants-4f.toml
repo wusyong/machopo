@@ -1,0 +1,52 @@
+# Stage 4f: `element.style`'s setter asks for the base URL only when what
+# it parses has a `url()` (and `cssText`'s too); a document's base URL is
+# found in its cache before its URL is parsed (but for an `about:` one);
+# a number that is an integer below 1e6 written with no exact formatting.
+# `css`'s tests, `dom_js`'s, then WPT's `css/cssom/` and
+# `css/css-backgrounds/` (`url()`s resolved against the document's).
+test = ["sh", "-c", "export RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts; systemd-run --user --scope -q -p MemoryMax=24G -p MemorySwapMax=0 --setenv=RUSTY_V8_ARCHIVE=$RUSTY_V8_ARCHIVE sh -c 'cargo test -q -p css && cargo test -q -p dom_api --test it css_style:: && cargo test -q -p dom_js --test it' && python3 scripts/test.py wpt css/cssom/ css/css-backgrounds/"]
+timeout = 1500
+
+[[mutant]]
+name = "css: a url() never resolved"
+file = "crates/css/src/property_set.rs"
+from = '''            if declaration.has_unresolved_urls() {'''
+to = '''            if declaration.has_unresolved_urls() && false {'''
+
+[[mutant]]
+name = "css: only the first url() resolved"
+file = "crates/css/src/property_set.rs"
+from = '''                if let Some(base) = &resolved {
+                    declaration.resolve_urls(base, &mut unparsed);
+                }'''
+to = '''                if let Some(base) = resolved.take() {
+                    declaration.resolve_urls(&base, &mut unparsed);
+                }'''
+
+[[mutant]]
+name = "dom_api: cssText's url()s never resolved"
+file = "crates/dom_api/src/css_style.rs"
+from = '''    if block.has_unresolved_urls()
+        && let Some(base) = base_url(cx, this)'''
+to = '''    if !block.has_unresolved_urls()
+        && let Some(base) = base_url(cx, this)'''
+
+[[mutant]]
+name = "dom: an about: document's base URL from the cache"
+file = "crates/dom/src/base.rs"
+from = '''        if !about
+            && let Some(data) = self.document_data(document)'''
+to = '''        if (!about || true)
+            && let Some(data) = self.document_data(document)'''
+
+[[mutant]]
+name = "css: an integer written without its sign"
+file = "crates/css/src/values.rs"
+from = '''        let integer = value as i32;'''
+to = '''        let integer = value.abs() as i32;'''
+
+[[mutant]]
+name = "css: a big integer written whole"
+file = "crates/css/src/values.rs"
+from = '''    if value.fract() == 0.0 && value.abs() < 1e6 {'''
+to = '''    if value.fract() == 0.0 && value.abs() < 1e9 {'''

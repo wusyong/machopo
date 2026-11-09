@@ -1,0 +1,48 @@
+# Mutation test of stage 3's roots: an insertion within one document roots
+# nothing, and a dropped node root's `Persistent` is cleared and reused:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-3-roots.toml
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::"]
+timeout = 900
+
+[[mutant]]
+name = "an insertion roots the documents to compare them"
+file = "crates/dom/src/scope.rs"
+from = '''        let adoption = if self.in_document(child, parent_document) {'''
+to = '''        let adoption = if false {'''
+
+[[mutant]]
+name = "an insertion into another document's tree doesn't adopt"
+file = "crates/dom/src/scope.rs"
+from = '''        let adoption = if self.in_document(child, parent_document) {'''
+to = '''        let adoption = if true {'''
+
+[[mutant]]
+name = "a node in another document is taken as in this one"
+file = "crates/dom/src/scope.rs"
+from = '''        unsafe { self.own(node).document.get() }.is_some_and(|d| std::ptr::eq(d, document))'''
+to = '''        unsafe { self.own(node).document.get() }.is_some()'''
+
+[[mutant]]
+name = "a spare Persistent isn't cleared"
+file = "crates/dom/src/handle.rs"
+from = '''            node.set(&self.nothing);'''
+to = ''''''
+
+[[mutant]]
+name = "a dropped root's Persistent isn't kept"
+file = "crates/dom/src/handle.rs"
+from = '''            if spare.len() < SPARE_LIMIT {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "a spare Persistent is never taken"
+file = "crates/dom/src/handle.rs"
+from = '''            *node = self.spare.borrow_mut().pop();'''
+to = ''''''
+
+[[mutant]]
+name = "a spare Persistent is taken but not set"
+file = "crates/dom/src/handle.rs"
+from = '''                object.set(source);
+                object'''
+to = '''                object'''

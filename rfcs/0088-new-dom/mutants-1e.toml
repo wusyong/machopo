@@ -1,0 +1,50 @@
+# Stage 1e: the new heap's share of V8's GC in the trace (gc's spans in the
+# engine's steps and pause) and in the reports (gc_bench's window, the
+# next-dom report).
+test = ["cargo", "test", "-q", "-p", "gc", "--test", "it", "js::the_engines_steps"]
+timeout = 900
+
+[[mutant]]
+name = "the engine's steps aren't in the trace"
+file = "crates/gc/src/heap.rs"
+from = '''            platform.trace_begin("Gc.Step");
+'''
+to = '''            platform.trace_begin("Gc");
+'''
+
+[[mutant]]
+name = "the engine's pause's marking isn't in the trace"
+file = "crates/gc/src/heap.rs"
+from = '''            platform.trace_begin("Gc.Mark");
+            driven.before_pause.get_or_insert(marked);'''
+to = '''            platform.trace_begin("Gc");
+            driven.before_pause.get_or_insert(marked);'''
+
+[[mutant]]
+name = "the gc crate's slices inside its own GC count as the engine's"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''        elif (name.startswith("Gc.") and not any(name.startswith("Gc.") for name in outer)):'''
+to = '''        elif name.startswith("Gc."):'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests"]
+
+[[mutant]]
+name = "the slices inside an engine's aren't cut at the window"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''            in_engine += min(end, last) - max(begin, first)'''
+to = '''            in_engine += end - begin'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests"]
+
+[[mutant]]
+name = "the report doesn't show the new heap's share"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''                in_engine = common.median([gc.get("in_engine_ns", 0) for gc in gcs])'''
+to = '''                in_engine = 0'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "NextDomTests"]
+
+[[mutant]]
+name = "dom_next's platform doesn't name the steps"
+file = "crates/dom_next/src/lib.rs"
+from = '''            "Gc.Step" => tracing::trace_span!("Gc.Step"),
+'''
+to = ""
+test = ["cargo", "test", "-q", "-p", "dom_next", "--lib"]

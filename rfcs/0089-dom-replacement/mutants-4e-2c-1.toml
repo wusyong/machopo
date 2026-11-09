@@ -1,0 +1,186 @@
+# Stage 4e-2c-1: the flat tree on the new DOM: its walk and parents
+# (`dom_next`'s `flat.rs`), the dirty bits up it, the slots' changes
+# marking it, the stale assignments worked out before style, and
+# `style_next` walking it (the document's sheets not into shadow trees).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it -- shadow slot && cargo test -q -p style_next --test it && cargo test -q -p dom_js_next --test it -- shadow_dom"]
+timeout = 3000
+
+[[mutant]]
+name = "parent: any parent"
+file = "crates/dom_next/src/flat.rs"
+from = '''            Some(parent) if parent.scope.get() & (SHADOW_HOST | SHADOW_ROOT) == 0 => Some(parent),'''
+to = '''            Some(parent) if true => Some(parent),'''
+
+[[mutant]]
+name = "parent: a host's child's host"
+file = "crates/dom_next/src/flat.rs"
+from = '''        if parent.scope.get() & SHADOW_HOST != 0 {
+            return self.assigned_slot(node);
+        }'''
+to = '''        if parent.scope.get() & SHADOW_HOST != 0 {
+            return Some(parent);
+        }'''
+
+[[mutant]]
+name = "parent: a shadow root's child's root"
+file = "crates/dom_next/src/flat.rs"
+from = '''        self.shadow_host(parent)
+    }'''
+to = '''        Some(parent)
+    }'''
+
+[[mutant]]
+name = "parent: a shadow root's none"
+file = "crates/dom_next/src/flat.rs"
+from = '''            None if node.scope.get() & SHADOW_ROOT != 0 => self.shadow_host(node),
+'''
+to = ''''''
+
+[[mutant]]
+name = "children: a host's own"
+file = "crates/dom_next/src/flat.rs"
+from = '''        let at = if node.scope.get() & SHADOW_HOST != 0 {'''
+to = '''        let at = if false {'''
+
+[[mutant]]
+name = "children: a slot's own"
+file = "crates/dom_next/src/flat.rs"
+from = '''        } else if self.is_slot(node) {'''
+to = '''        } else if false {'''
+
+[[mutant]]
+name = "children: stale, the old lists"
+file = "crates/dom_next/src/flat.rs"
+from = '''        if stale {
+            let mut found'''
+to = '''        if false {
+            let mut found'''
+
+[[mutant]]
+name = "children: found, any of the host's"
+file = "crates/dom_next/src/flat.rs"
+from = '''                    if cx.assigned_slot(node).is_some_and(|of| Gc::ptr_eq(of, *slot)) {'''
+to = '''                    if true {'''
+
+[[mutant]]
+name = "children: stale, no fallback"
+file = "crates/dom_next/src/flat.rs"
+from = '''                None => FlatAt::Siblings(self.first_child(slot)),
+            };'''
+to = '''                None => FlatAt::Siblings(None),
+            };'''
+
+[[mutant]]
+name = "children: an empty list, no fallback"
+file = "crates/dom_next/src/flat.rs"
+from = '''            None => FlatAt::Siblings(self.first_child(slot)),
+        }
+    }
+}'''
+to = '''            None => FlatAt::Siblings(None),
+        }
+    }
+}'''
+
+[[mutant]]
+name = "style marks: the DOM's parents"
+file = "crates/dom_next/src/style.rs"
+from = '''        let child_needs = StyleFlags::CHILD_NEEDS_STYLE_RECALC.0 << STYLE_SHIFT;
+        let mut at = self.flat_tree_parent(node);
+        while let Some(ancestor) = at.filter(|ancestor| ancestor.flags.get() & child_needs == 0) {
+            self.set_flags(ancestor, child_needs);
+            at = self.flat_tree_parent(ancestor);'''
+to = '''        let child_needs = StyleFlags::CHILD_NEEDS_STYLE_RECALC.0 << STYLE_SHIFT;
+        let mut at = self.parent(node);
+        while let Some(ancestor) = at.filter(|ancestor| ancestor.flags.get() & child_needs == 0) {
+            self.set_flags(ancestor, child_needs);
+            at = self.parent(ancestor);'''
+
+[[mutant]]
+name = "both marks: the DOM's parents"
+file = "crates/dom_next/src/style.rs"
+from = '''        let mut at = self.flat_tree_parent(node);
+        while let Some(ancestor) = at.filter(|ancestor| ancestor.flags.get() & both != both) {
+            self.set_flags(ancestor, both);
+            at = self.flat_tree_parent(ancestor);'''
+to = '''        let mut at = self.parent(node);
+        while let Some(ancestor) = at.filter(|ancestor| ancestor.flags.get() & both != both) {
+            self.set_flags(ancestor, both);
+            at = self.parent(ancestor);'''
+
+[[mutant]]
+name = "flat change: not styled again"
+file = "crates/dom_next/src/style.rs"
+from = '''        if self.is_connected(slot) {
+            self.mark_style(slot, StyleFlags::NEEDS_STYLE_RECALC);'''
+to = '''        if self.is_connected(slot) {'''
+
+[[mutant]]
+name = "signal: the flat tree not marked"
+file = "crates/dom_next/src/slot.rs"
+from = '''        self.add_signal_slot(slot);
+        self.flat_tree_children_changed(slot);'''
+to = '''        self.add_signal_slot(slot);'''
+
+[[mutant]]
+name = "manual insertion: not marked"
+file = "crates/dom_next/src/slot.rs"
+from = '''                // DOM signals none, but the flat tree changed.
+                self.flat_tree_children_changed(slot);'''
+to = '''                // DOM signals none, but the flat tree changed.'''
+
+[[mutant]]
+name = "stale: not listed"
+file = "crates/dom_next/src/slot.rs"
+from = '''        if state & LISTED == 0 {
+            let roots'''
+to = '''        if false {
+            let roots'''
+
+[[mutant]]
+name = "stale: listed each time"
+file = "crates/dom_next/src/slot.rs"
+from = '''        if state & LISTED == 0 {
+            let roots'''
+to = '''        if true {
+            let roots'''
+
+[[mutant]]
+name = "recalc: still listed"
+file = "crates/dom_next/src/slot.rs"
+from = '''                data.slot_state.set(data.slot_state.get() & !LISTED);
+'''
+to = ''''''
+
+[[mutant]]
+name = "recalc: not worked out"
+file = "crates/dom_next/src/slot.rs"
+from = '''            self.recalc_slot_assignment(root);
+        }
+    }
+
+    /// `slot`'s assigned nodes' list'''
+to = '''        }
+    }
+
+    /// `slot`'s assigned nodes' list'''
+
+[[mutant]]
+name = "style: assignments not worked out"
+file = "crates/style_next/src/lib.rs"
+from = '''        cx.recalc_slot_assignments();
+'''
+to = ''''''
+
+[[mutant]]
+name = "style: the DOM's children"
+file = "crates/style_next/src/lib.rs"
+from = '''        for node in cx.flat_tree_children(parent) {'''
+to = '''        for node in std::iter::successors(cx.first_child(parent), |node| cx.next_sibling(*node)) {'''
+
+[[mutant]]
+name = "style: the document's sheets into shadow trees"
+file = "crates/style_next/src/lib.rs"
+from = '''                .filter(|_| self.cx.containing_shadow_root(element).is_none())
+'''
+to = ''''''

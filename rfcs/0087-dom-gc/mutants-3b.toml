@@ -1,0 +1,120 @@
+# Step 3b: the parallel scavenge. The forwarding protocol (loom's model and
+# shuttle's schedules: run with `test.py gc-models`), the threads' buffers
+# and what they give back, the slot sets' order, the to-space pages' flags,
+# the roots handed to the joining thread, and the promoted published after.
+# Run with `RUSTY_V8_ARCHIVE` (`test.py` checks the third-party pins).
+test = ["cargo", "test", "-q", "-p", "gc"]
+timeout = 900
+
+# The forwarding protocol.
+
+[[mutant]]
+name = "a thread that lost the race takes its own copy"
+file = "crates/gc/src/heap/young.rs"
+from = '''            Forward::Lost { winner, ours }
+        }
+    }
+}'''
+to = '''            let _ = winner;
+            Forward::Won(ours)
+        }
+    }
+}'''
+test = ["python3", "scripts/test.py", "gc-models"]
+
+[[mutant]]
+name = "a forwarded object is copied again"
+file = "crates/gc/src/heap/young.rs"
+from = '''    if flags & FORWARDED != 0 {
+        return Forward::Already(index);
+    }'''
+to = '''    if flags & FORWARDED != 0 && false {
+        return Forward::Already(index);
+    }'''
+
+[[mutant]]
+name = "the abandoned aren't counted"
+file = "crates/gc/src/heap/young.rs"
+from = '''                .saturating_add(counts.copies_abandoned);'''
+to = '''                .saturating_add(0 * counts.copies_abandoned);'''
+test = ["python3", "scripts/test.py", "gc-models"]
+
+# The threads' buffers.
+
+[[mutant]]
+name = "a LAB's end is never given back"
+file = "crates/gc/src/heap/young.rs"
+from = '''        if limit == source.to.next && limit > next {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a LAB's end is left without a filler"
+file = "crates/gc/src/heap/young.rs"
+from = '''        } else {
+            fill(self.base.0, next, limit.saturating_sub(next));
+        }'''
+to = '''        } else {
+            let _ = (next, limit);
+        }'''
+test = ["python3", "scripts/test.py", "gc-models"]
+
+[[mutant]]
+name = "to-space's pages aren't young"
+file = "crates/gc/src/heap/young.rs"
+from = '''            self.young_pages[number].store(true, StdOrdering::Relaxed);
+            self.to_pages.push(number);'''
+to = '''            self.to_pages.push(number);'''
+
+# The slot sets, the roots, the promoted.
+
+[[mutant]]
+name = "a to-space edge is taken for an old one"
+file = "crates/gc/src/heap/young.rs"
+from = '''            return (value, self.is_young(data));'''
+to = '''            return (value, false);'''
+test = ["python3", "scripts/test.py", "gc-models"]
+
+[[mutant]]
+name = "a slot set's young edges aren't put back"
+file = "crates/gc/src/heap/young.rs"
+from = '''            if young {
+                self.remembered[number].insert(at, bytes);
+            }'''
+to = '''            if young && false {
+                self.remembered[number].insert(at, bytes);
+            }'''
+
+[[mutant]]
+name = "the roots aren't put back"
+file = "crates/gc/src/heap/young.rs"
+from = '''        self.shared.roots.borrow_mut().put_entries(roots);'''
+to = '''        drop(roots);'''
+
+[[mutant]]
+name = "the promoted aren't published"
+file = "crates/gc/src/heap/young.rs"
+from = '''            self.publish(data, index, types::info(index).drop_fn().is_some());'''
+to = '''            let _ = (data, index);'''
+
+[[mutant]]
+name = "the old bytes a scavenge took aren't counted"
+file = "crates/gc/src/heap/young.rs"
+from = '''        self.used.set(self.used.get().saturating_add(old_bytes));'''
+to = '''        let _ = old_bytes;'''
+
+[[mutant]]
+name = "a slot set lost to another thread is used anyway"
+file = "crates/gc/src/page.rs"
+from = '''                Err(winner) => {
+                    // SAFETY: made just above, never shared.
+                    drop(unsafe { Box::from_raw(new) });
+                    winner
+                }'''
+to = '''                Err(_) => new,'''
+test = ["python3", "scripts/test.py", "gc-models"]
+
+[[mutant]]
+name = "HeapVector::new skips the barrier"
+file = "crates/gc/src/vector.rs"
+from = '''        cx.inner.write_barrier(edge.cast(), raw);'''
+to = '''        let _ = (edge, raw);'''

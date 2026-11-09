@@ -1,0 +1,130 @@
+# Mutation test of step 1a (the SVG element interfaces):
+# python3 scripts/test.py mutate rfcs/0031-svg/mutants-1a.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "api::svg"]
+timeout = 900
+
+# --- dom_api: which interface ---------------------------------------------------
+
+[[mutant]]
+name = "SVG elements are Element"
+file = "crates/dom_api/src/html_element.rs"
+from = '''    if name.namespace.url() == Namespace::SVG {'''
+to = '''    if name.namespace.url() == Namespace::SVG && false {'''
+
+[[mutant]]
+name = "an unknown SVG element is an Element"
+file = "crates/dom_api/src/html_element.rs"
+from = '''            .unwrap_or(ObjectKind::SvgElement);'''
+to = '''            .unwrap_or(ObjectKind::Element);'''
+
+[[mutant]]
+name = "SVG's names are read from tags(...)"
+file = "crates/dom_api/src/html_element.rs"
+from = '''                    .svg_tags
+                    .iter()'''
+to = '''                    .html_tags
+                    .iter()'''
+
+[[mutant]]
+name = "svg_tags isn't recorded"
+file = "crates/dom_api/src/declare.rs"
+from = '''                    svg_tags: &[$($($svg_tag),+)?],'''
+to = '''                    svg_tags: &[],'''
+
+# --- dom_api: SVGElement's members ------------------------------------------------
+
+[[mutant]]
+name = "no outermost svg"
+file = "crates/dom_api/src/svg_element.rs"
+from = '''    if is_outermost_svg(node) {
+        return Ok(None);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "an svg in foreignObject isn't outermost"
+file = "crates/dom_api/src/svg_element.rs"
+from = '''                || is_svg(parent, "foreignObject")'''
+to = '''                || false'''
+
+[[mutant]]
+name = "an svg in HTML isn't outermost"
+file = "crates/dom_api/src/svg_element.rs"
+from = '''                .is_none_or(|name| name.namespace.url() != dom::Namespace::SVG)'''
+to = '''                .is_none_or(|_| false)'''
+
+[[mutant]]
+name = "the viewport is only an svg"
+file = "crates/dom_api/src/svg_element.rs"
+from = '''        ["svg", "symbol", "image"]'''
+to = '''        ["svg"]'''
+
+[[mutant]]
+name = "an element is its own ancestor"
+file = "crates/dom_api/src/svg_element.rs"
+from = '''    let mut ancestor = node.parent();'''
+to = '''    let mut ancestor = Some(node);'''
+
+# --- dom_api: focus ----------------------------------------------------------------
+
+[[mutant]]
+name = "SVG's a isn't focusable by default"
+file = "crates/dom_api/src/focus.rs"
+from = '''            || name.is_svg("a")
+    });'''
+to = '''    });'''
+
+[[mutant]]
+name = "an SVG link isn't focusable"
+file = "crates/dom_api/src/focus.rs"
+from = '''        || (name.is_svg("a")
+            && (node.attribute(&QualName::attr("href")).is_some()'''
+to = '''        || (name.is_svg("a") && false
+            && (node.attribute(&QualName::attr("href")).is_some()'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "focus::svg"]
+
+[[mutant]]
+name = "xlink:href isn't a link"
+file = "crates/dom_api/src/focus.rs"
+from = '''                || node
+                    .attribute(&QualName::new(Namespace::new(Namespace::XLINK), "href"))
+                    .is_some()))'''
+to = '''                || false))'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "focus::svg"]
+
+# --- kun:dom ---------------------------------------------------------------------------
+
+[[mutant]]
+name = "a JS-only interface is a resource"
+file = "crates/dom_api/src/wit.rs"
+from = '''    for &resource in INTERFACES.iter().filter(|resource| !resource.js_only) {
+        let name = kebab_case(resource.name);
+        let this'''
+to = '''    for &resource in INTERFACES.iter() {
+        let name = kebab_case(resource.name);
+        let this'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "wit::"]
+
+[[mutant]]
+name = "a JS-only interface's type is its own"
+file = "crates/dom_api/src/wit.rs"
+from = '''    while interface.js_only {'''
+to = '''    while interface.js_only && false {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "wit::"]
+
+[[mutant]]
+name = "JsOnly isn't recorded"
+file = "crates/dom_api/src/declare.rs"
+from = '''    (@js_only JsOnly) => { true };'''
+to = '''    (@js_only JsOnly) => { false };'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "wit::"]
+
+[[mutant]]
+name = "a guest gets a JS-only interface's object as its own"
+file = "crates/dom_wasm/src/host.rs"
+from = '''            own(store, &object, wit::resource_of(name))?'''
+to = '''            own(store, &object, INTERFACES.iter().copied().find(|i| i.name == name).unwrap())?'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "wasm_reftests::w9"]
+
+# Equivalent, not listed: the linker defining resources for the JS-only
+# interfaces too (no guest imports them).

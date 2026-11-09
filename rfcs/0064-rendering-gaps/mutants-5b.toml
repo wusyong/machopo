@@ -1,0 +1,260 @@
+# 5b: the compositor moves sticky boxes (`compositor`, `paint`, `layout`,
+# `renderer`).
+#   python3 scripts/test.py mutate rfcs/0064-rendering-gaps/mutants-5b.toml
+test = ["cargo", "test", "-q", "-p", "compositor", "--lib", "--", "sticky"]
+timeout = 900
+
+[[mutant]]
+name = "a sticky node unmoved"
+file = "crates/compositor/src/property_trees.rs"
+from = '''                let by = sticky.snapped(self.sticky_offset(node, offsets));
+                at = PointF::new(at.x + by.x, at.y + by.y);'''
+to = '''                let by = sticky.snapped(PointF::new(0.0, 0.0));
+                at = PointF::new(at.x + by.x, at.y + by.y);'''
+
+[[mutant]]
+name = "the offset snapped alone"
+file = "crates/compositor/src/property_trees.rs"
+from = '''            snap(at.x + by.x) - snap(at.x),
+            snap(at.y + by.y) - snap(at.y),'''
+to = '''            snap(by.x) + 0.0 * at.x,
+            snap(by.y) + 0.0 * at.y,'''
+
+[[mutant]]
+name = "its scroller unscrolled"
+file = "crates/compositor/src/property_trees.rs"
+from = '''        let scrolled = offsets.get(&c.scroller).copied().unwrap_or_default();'''
+to = '''        let scrolled = PointF::new(0.0, 0.0);'''
+
+[[mutant]]
+name = "the box around unmoved"
+file = "crates/compositor/src/property_trees.rs"
+from = '''        let ancestor = c
+            .shifting_containing_block
+            .map_or(PointF::new(0.0, 0.0), |n| {
+                self.total_sticky_offset(n, offsets)
+            });'''
+to = '''        let ancestor = PointF::new(0.0, 0.0);'''
+
+[[mutant]]
+name = "a total without the boxes around"
+file = "crates/compositor/src/property_trees.rs"
+from = '''        PointF::new(own.x + around.x, own.y + around.y)'''
+to = '''        PointF::new(own.x + 0.0 * around.x, own.y)'''
+
+[[mutant]]
+name = "no end inset"
+file = "crates/compositor/src/property_trees.rs"
+from = '''        let wanted = (content.1 - max - sticky_box.1).min(0.0);'''
+to = '''        let wanted = 0.0 * (content.1 - max - sticky_box.1).min(0.0);'''
+
+[[mutant]]
+name = "no start inset"
+file = "crates/compositor/src/property_trees.rs"
+from = '''        let wanted = (content.0 + min - sticky_box.0).max(0.0);'''
+to = '''        let wanted = 0.0 * (content.0 + min - sticky_box.0).max(0.0);'''
+
+[[mutant]]
+name = "past its containing block's start"
+file = "crates/compositor/src/property_trees.rs"
+from = '''        delta += wanted.max(available);'''
+to = '''        delta += wanted.max(available.min(wanted));'''
+
+[[mutant]]
+name = "past its containing block's end"
+file = "crates/compositor/src/property_trees.rs"
+from = '''        delta += wanted.min(available);'''
+to = '''        delta += wanted.min(available.max(wanted));'''
+
+[[mutant]]
+name = "a sticky box's regions not looked at"
+file = "crates/compositor/src/property_trees.rs"
+from = '''        for sticky in &self.sticky_regions {'''
+to = '''        for sticky in self.sticky_regions.iter().filter(|_| false) {'''
+
+[[mutant]]
+name = "the viewport's offset left out"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''            .chain([(ElementId::VIEWPORT, viewport)])'''
+to = '''            .chain([(ElementId::VIEWPORT, viewport)].into_iter().filter(|_| false))'''
+
+[[mutant]]
+name = "the viewport's sticky boxes painted"
+file = "crates/paint/src/layerize.rs"
+from = '''                    StickyScroll::Viewport => true,'''
+to = '''                    StickyScroll::Viewport => false,'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "layerize::"]
+
+[[mutant]]
+name = "a painted container's sticky boxes moved"
+file = "crates/paint/src/layerize.rs"
+from = '''                    StickyScroll::Scroller(scroller) => composited[scroller.0],'''
+to = '''                    StickyScroll::Scroller(scroller) => composited[scroller.0] || true,'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "layerize::"]
+
+[[mutant]]
+name = "a fixed box's sticky boxes moved"
+file = "crates/paint/src/layerize.rs"
+from = '''                    StickyScroll::Fixed => false,'''
+to = '''                    StickyScroll::Fixed => true,'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "layerize::"]
+
+[[mutant]]
+name = "a sticky box under an opacity moved"
+file = "crates/paint/src/layerize.rs"
+from = '''                scrolls && can_be_layer(trees, TransformNodeId(index), sticky.effect, sticky.clip)'''
+to = '''                scrolls'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "layerize::"]
+
+[[mutant]]
+name = "a sticky box in the layer around it"
+file = "crates/paint/src/layerize.rs"
+from = '''                    && last.sticky == sticky'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "layerize::"]
+
+[[mutant]]
+name = "a sticky layer cut by the clips around it"
+file = "crates/paint/src/layerize.rs"
+from = '''            let around = layer.clip(trees);'''
+to = '''            let around = ClipNodeId(0 * layer.clip(trees).0);'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "layerize::"]
+
+[[mutant]]
+name = "a sticky layer in its container's space"
+file = "crates/paint/src/layerize.rs"
+from = '''        if let Some(sticky) = self.sticky {
+            return sticky;
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "layerize::"]
+
+[[mutant]]
+name = "a sticky layer under its container's clip"
+file = "crates/paint/src/layerize.rs"
+from = '''        if let Some(sticky) = self.sticky {
+            return trees.transform[sticky.0]'''
+to = '''        if let Some(sticky) = self.sticky.filter(|_| false) {
+            return trees.transform[sticky.0]'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "layerize::"]
+
+[[mutant]]
+name = "a container in a sticky box its layer"
+file = "crates/paint/src/layerize.rs"
+from = '''            scroller_of[index] == scroller_of[s.0]'''
+to = '''            scroller_of[index] == scroller_of[s.0] || true'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "layerize::"]
+
+[[mutant]]
+name = "painted where they stick"
+file = "crates/paint/src/lib.rs"
+from = '''            if sticky {
+                trees.transform[index].matrix = Transform::IDENTITY;
+            }'''
+to = '''            if sticky && false {
+                trees.transform[index].matrix = Transform::IDENTITY;
+            }'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "layerize::"]
+
+[[mutant]]
+name = "a child frame's fixed box's sticky boxes scrolled by the viewport"
+file = "crates/paint/src/lib.rs"
+from = '''                    None if context.frame.is_some() || self.trees.is_fixed(parent.transform) => {'''
+to = '''                    None if self.trees.is_fixed(parent.transform) => {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "child_frames::"]
+
+[[mutant]]
+name = "an outer frame's container scrolls a fixed box's sticky boxes"
+file = "crates/paint/src/lib.rs"
+from = '''                    Some(s) if self.trees.scroll(s).frame != context.frame => StickyScroll::Fixed,'''
+to = '''                    Some(s) if false && self.trees.scroll(s).frame != context.frame => StickyScroll::Fixed,'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "child_frames::"]
+
+[[mutant]]
+name = "no reach"
+file = "crates/paint/src/lib.rs"
+from = '''                *reach = sticky.reaches.get(key).copied().unwrap_or_default();'''
+to = '''                *reach = RectF::default();'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "hit_test::a_sticky"]
+
+[[mutant]]
+name = "a sticky box's regions in its container's"
+file = "crates/paint/src/hit_test.rs"
+from = '''            (Some(sticky), _) => Mover::Sticky(*sticky),'''
+to = '''            (Some(_), Some(scroller)) => Mover::Scroller(*scroller),
+            (Some(_), None) => Mover::Document,'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "hit_test::a_sticky"]
+
+[[mutant]]
+name = "a sticky box covers a container"
+file = "crates/paint/src/hit_test.rs"
+from = '''                if !only_it.is_empty() || !only_target.is_empty() {'''
+to = '''                if false && (!only_it.is_empty() || !only_target.is_empty()) {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "hit_test::a_sticky"]
+
+[[mutant]]
+name = "a sticky box only where it is"
+file = "crates/paint/src/hit_test.rs"
+from = '''                        && overlap(spread(target_at, &only_target), spread(it_at, &only_it))'''
+to = '''                        && overlap(target_at, it_at)'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "hit_test::a_sticky"]
+
+[[mutant]]
+name = "no reach from layout"
+file = "crates/layout/src/sticky.rs"
+from = '''                let reach = |has: bool, by: f32| if has { by } else { 0.0 };'''
+to = '''                let reach = |has: bool, by: f32| if has { by * 0.0 } else { 0.0 };'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "hit_test::a_sticky"]
+
+[[mutant]]
+name = "no constraints for the compositor"
+file = "crates/renderer/src/compositing.rs"
+from = '''        if !self.composited_sticky[id.0] {
+            return None;
+        }'''
+to = '''        if !self.composited_sticky[id.0] || true {
+            return None;
+        }'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "a_sticky"]
+
+[[mutant]]
+name = "the viewport no scroller"
+file = "crates/renderer/src/compositing.rs"
+from = '''            paint::StickyScroll::Viewport => ElementId::VIEWPORT,'''
+to = '''            paint::StickyScroll::Viewport => ElementId(0),'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "a_sticky"]
+
+[[mutant]]
+name = "no box around for the compositor"
+file = "crates/renderer/src/compositing.rs"
+from = '''            .filter(|&n| self.composited_sticky[n.0])'''
+to = '''            .filter(|&n| self.composited_sticky[n.0] && false)'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "a_sticky"]
+
+[[mutant]]
+name = "the compositor's regions empty"
+file = "crates/renderer/src/compositing.rs"
+from = '''                main_thread_scroll_hit_test_region: sticky_region(region, node).into(),'''
+to = '''                main_thread_scroll_hit_test_region: Arc::from([]),'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "a_sticky"]
+
+[[mutant]]
+name = "painted again as the compositor moves it"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        sticky.retain(|key, _| !moved.contains(key));'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "a_sticky"]
+
+[[mutant]]
+name = "painted where it stuck with only sticky boxes to move"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            let unscrolled = (!composited.is_empty() || !moved.is_empty()).then(|| {'''
+to = '''            let unscrolled = (!composited.is_empty()).then(|| {'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "a_sticky"]
+
+[[mutant]]
+name = "debug's unscrolled pre-paint stuck"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        stuck.offsets.retain(|key, _| !moved.contains(key));'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "a_sticky"]

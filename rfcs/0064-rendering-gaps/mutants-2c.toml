@@ -1,0 +1,370 @@
+# 2c: line clamp, -webkit-box and flow-root (`computed_style`, `css`,
+# `style`, `layout`, `paint`).
+#   python3 scripts/test.py mutate rfcs/0064-rendering-gaps/mutants-2c.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "line_clamp::"]
+timeout = 1800
+
+[[mutant]]
+name = "flow-root parsed as block"
+file = "crates/css/src/properties.rs"
+from = '''                    "flow-root" => computed_style::Display::FlowRoot,'''
+to = '''                    "flow-root" => computed_style::Display::Block,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cssom::"]
+
+[[mutant]]
+name = "-webkit-box parsed as flex"
+file = "crates/css/src/properties.rs"
+from = '''                    "-webkit-box" => computed_style::Display::WebkitBox,'''
+to = '''                    "-webkit-box" => computed_style::Display::Flex,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cssom::"]
+
+[[mutant]]
+name = "vertical parsed as horizontal"
+file = "crates/css/src/properties.rs"
+from = '''                    "vertical" => computed_style::BoxOrient::Vertical,'''
+to = '''                    "vertical" => computed_style::BoxOrient::Horizontal,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cssom::"]
+
+[[mutant]]
+name = "negative box-flex invalid"
+file = "crates/css/src/properties.rs"
+from = '''            WebkitBoxFlex => Value::Number(parse_number(input)?),'''
+to = '''            WebkitBoxFlex => Value::Number(parse_non_negative_number(input)?),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cssom::"]
+
+[[mutant]]
+name = "0 a positive integer"
+file = "crates/css/src/properties.rs"
+from = '''    if value < 1 {
+        return Err(input.new_custom_error(()));'''
+to = '''    if value < 0 {
+        return Err(input.new_custom_error(()));'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cssom::"]
+
+[[mutant]]
+name = "box-orient serialized wrong"
+file = "crates/css/src/serialize.rs"
+from = '''        computed_style::BoxOrient::Horizontal => "horizontal",'''
+to = '''        computed_style::BoxOrient::Horizontal => "vertical",'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+[[mutant]]
+name = "box-align initial start"
+file = "crates/computed_style/src/lib.rs"
+from = '''                box_align: BoxAlign::Stretch,'''
+to = '''                box_align: BoxAlign::Start,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+[[mutant]]
+name = "box-flex interpolated"
+file = "crates/css/src/interpolate.rs"
+from = '''        WebkitBoxFlex => field!(@step [rare.box_flex] [rare_mut().box_flex]),'''
+to = '''        WebkitBoxFlex => field!(rare.box_flex),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "interpolation::"]
+
+[[mutant]]
+name = "clamp container stays a -webkit-box"
+file = "crates/style/src/lib.rs"
+from = '''            Display::WebkitBox => Display::FlowRoot,'''
+to = '''            Display::WebkitBox => Display::WebkitBox,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+[[mutant]]
+name = "specified -webkit-box not remembered"
+file = "crates/style/src/lib.rs"
+from = '''        style.rare_mut().specified_display_webkit_box = true;'''
+to = '''        let _ = style.rare_mut();'''
+
+[[mutant]]
+name = "clamp whatever the orient"
+file = "crates/style/src/lib.rs"
+from = '''    if style.rare.box_orient == BoxOrient::Vertical
+        && style.rare.line_clamp.is_some()'''
+to = '''    if style.rare.box_orient != BoxOrient::Vertical
+        || style.rare.line_clamp.is_some()'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+[[mutant]]
+name = "-webkit-box children blockified"
+file = "crates/style/src/lib.rs"
+from = '''                in_flex_or_grid: self.layout_parent.display.blockifies_children(),'''
+to = '''                in_flex_or_grid: self.layout_parent.display.is_flexible_or_grid(),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+[[mutant]]
+name = "no z-index in a -webkit-box"
+file = "crates/style/src/lib.rs"
+from = '''    style.effective_z_index = if style.is_positioned() || in_flex_or_grid || in_webkit_box {'''
+to = '''    style.effective_z_index = if style.is_positioned() || in_flex_or_grid {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+[[mutant]]
+name = "-webkit-box has no items"
+file = "crates/computed_style/src/lib.rs"
+from = '''        self.blockifies_children() || self.is_webkit_box()'''
+to = '''        self.blockifies_children()'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "flex::"]
+
+[[mutant]]
+name = "specified flow-root clamps"
+file = "crates/computed_style/src/lib.rs"
+from = '''            .line_clamp
+            .filter(|_| self.rare.specified_display_webkit_box)'''
+to = '''            .line_clamp'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+[[mutant]]
+name = "vertical box is a row"
+file = "crates/layout/src/lib.rs"
+from = '''            (BoxOrient::Vertical, BoxDirection::Normal) => taffy::FlexDirection::Column,'''
+to = '''            (BoxOrient::Vertical, BoxDirection::Normal) => taffy::FlexDirection::Row,'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "flex::"]
+
+[[mutant]]
+name = "-webkit-box wraps"
+file = "crates/layout/src/lib.rs"
+from = '''        taffy_style.flex_wrap = taffy::FlexWrap::NoWrap;'''
+to = '''        let _ = taffy::FlexWrap::NoWrap;'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "flex::"]
+
+[[mutant]]
+name = "justify packs at the start"
+file = "crates/layout/src/lib.rs"
+from = '''            BoxPack::Justify => taffy::JustifyContent::SPACE_BETWEEN,'''
+to = '''            BoxPack::Justify => taffy::JustifyContent::FLEX_START,'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "flex::"]
+
+[[mutant]]
+name = "center aligns at the start"
+file = "crates/layout/src/lib.rs"
+from = '''            BoxAlign::Center => taffy::AlignItems::CENTER,'''
+to = '''            BoxAlign::Center => taffy::AlignItems::FLEX_START,'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "flex::"]
+
+[[mutant]]
+name = "items grow by flex-grow"
+file = "crates/layout/src/lib.rs"
+from = '''    taffy_style.flex_grow = flex;'''
+to = '''    taffy_style.flex_grow = style.flex_grow;'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "flex::"]
+
+[[mutant]]
+name = "items keep align-self"
+file = "crates/layout/src/lib.rs"
+from = '''    taffy_style.align_self = None;'''
+to = '''    let _ = taffy_style.align_self;'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "flex::"]
+
+[[mutant]]
+name = "items keep an automatic minimum size"
+file = "crates/layout/src/lib.rs"
+from = '''    zero(&mut taffy_style.min_size.width);'''
+to = '''    let _ = zero;'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "flex::"]
+
+[[mutant]]
+name = "ordered by order"
+file = "crates/layout/src/lib.rs"
+from = '''                style.rare.box_ordinal_group as i32 - 1'''
+to = '''                style.order'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "flex::"]
+
+[[mutant]]
+name = "built items unchanged"
+file = "crates/layout/src/lib.rs"
+from = '''            if webkit_box && let Some(container) = &container {'''
+to = '''            if false && let Some(container) = &container {'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "flex::"]
+
+[[mutant]]
+name = "restyled items unchanged"
+file = "crates/layout/src/lib.rs"
+from = '''                if b.webkit_box_item
+                    && let Some(container) = &container
+                {
+                    webkit_box_item(&style, container, &mut b.taffy_style);'''
+to = '''                if false
+                    && let Some(container) = &container
+                {
+                    webkit_box_item(&style, container, &mut b.taffy_style);'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "update::"]
+
+[[mutant]]
+name = "flow-root shares its block formatting context"
+file = "crates/layout/src/lib.rs"
+from = '''    if style.display == Display::FlowRoot {
+        taffy_style.contain = taffy::Contain::PAINT;'''
+to = '''    if false {
+        taffy_style.contain = taffy::Contain::PAINT;'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "block::"]
+
+[[mutant]]
+name = "measured without its clamp"
+file = "crates/layout/src/lib.rs"
+from = '''        if inputs.run_mode == RunMode::ComputeSize
+            && inputs.axis != RequestedAxis::Horizontal
+            && self.boxes[index].style.line_clamp().is_some()'''
+to = '''        if false
+            && inputs.axis != RequestedAxis::Horizontal
+            && self.boxes[index].style.line_clamp().is_some()'''
+
+[[mutant]]
+name = "height not clamped"
+file = "crates/layout/src/lib.rs"
+from = '''        output.size.height = height;
+    }'''
+to = '''        let _ = height;
+    }'''
+
+[[mutant]]
+name = "no padding and border below the clamp"
+file = "crates/layout/src/lib.rs"
+from = '''        let mut height = bottom + inset.bottom;'''
+to = '''        let mut height = bottom;'''
+
+[[mutant]]
+name = "a height of its own clamped"
+file = "crates/layout/src/lib.rs"
+from = '''        if inputs.known_dimensions.height.is_some()
+            || style.size.height.maybe_resolve(parent, calc).is_some()
+        {
+            return;
+        }'''
+to = '''        if inputs.known_dimensions.height.is_some() {
+            return;
+        }'''
+
+[[mutant]]
+name = "min-height ignored"
+file = "crates/layout/src/lib.rs"
+from = '''            height = height.max(min + extra);'''
+to = '''            height = height.max(min * 0.0);'''
+
+[[mutant]]
+name = "max-height ignored"
+file = "crates/layout/src/lib.rs"
+from = '''            height = height.min(max + extra);'''
+to = '''            height = height.min(max + 1e9);'''
+
+[[mutant]]
+name = "clamps with nothing after"
+file = "crates/layout/src/lib.rs"
+from = '''        let point = find.point.filter(|_| find.more);'''
+to = '''        let point = find.point;'''
+
+[[mutant]]
+name = "counts into a scroll container"
+file = "crates/layout/src/lib.rs"
+from = '''        && !style.is_scroll_container()
+        && b.replaced.is_none()'''
+to = '''        && b.replaced.is_none()'''
+
+[[mutant]]
+name = "nothing hidden after the clamp"
+file = "crates/layout/src/lib.rs"
+from = '''            *past |= clamp.is_some();'''
+to = '''            let _ = clamp;'''
+
+[[mutant]]
+name = "blocks around keep their height"
+file = "crates/layout/src/lib.rs"
+from = '''            layout.size.height = bottom - top;'''
+to = '''            let _ = (bottom, top);'''
+
+[[mutant]]
+name = "blocks around without their padding"
+file = "crates/layout/src/lib.rs"
+from = '''            bottom += layout.padding.bottom + layout.border.bottom;'''
+to = '''            bottom += layout.border.bottom;'''
+
+[[mutant]]
+name = "clamped boxes not hidden"
+file = "crates/layout/src/lib.rs"
+from = '''            hidden: b.hidden || b.clamped,'''
+to = '''            hidden: b.hidden,'''
+
+[[mutant]]
+name = "no ellipsis shaped in a clamp container"
+file = "crates/layout/src/lib.rs"
+from = '''        cx.in_line_clamp |= style.line_clamp().is_some();'''
+to = '''        cx.in_line_clamp |= false;'''
+
+[[mutant]]
+name = "no ellipsis shaped when built again"
+file = "crates/layout/src/lib.rs"
+from = '''            cx.in_line_clamp |= self.boxes[i].style.line_clamp().is_some();'''
+to = '''            cx.in_line_clamp |= false;'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "update::"]
+
+[[mutant]]
+name = "ellipsis only for text-overflow"
+file = "crates/layout/src/text.rs"
+from = '''        let ellipsis = (truncates || clamped).then(|| ellipsis_fragment(cx, container));'''
+to = '''        let ellipsis = truncates.then(|| ellipsis_fragment(cx, container));'''
+
+[[mutant]]
+name = "clamped line only truncated when it overflows"
+file = "crates/layout/src/text.rs"
+from = '''                && (clamped
+                    || (self.truncates'''
+to = '''                && (false
+                    || (self.truncates'''
+
+[[mutant]]
+name = "overflowing lines truncated without text-overflow"
+file = "crates/layout/src/text.rs"
+from = '''                    || (self.truncates
+                        && matches!'''
+to = '''                    || (true
+                        && matches!'''
+
+[[mutant]]
+name = "no ellipsis on a blank line"
+file = "crates/layout/src/text.rs"
+from = '''                if clamped && children.is_empty() {'''
+to = '''                if false && children.is_empty() {'''
+
+[[mutant]]
+name = "lines after the clamp shown"
+file = "crates/layout/src/text.rs"
+from = '''                hidden: self.clamp.is_some_and(|clamp| index > clamp),'''
+to = '''                hidden: false,'''
+
+[[mutant]]
+name = "ellipsis after the aligned line"
+file = "crates/layout/src/text.rs"
+from = '''                if metrics.offset > 0.0 && free > 0.0 {'''
+to = '''                if false && free > 0.0 {'''
+
+[[mutant]]
+name = "an exact fit doesn't fit"
+file = "crates/layout/src/text.rs"
+from = '''        if space + BREAK_TOLERANCE >= child_right - left {'''
+to = '''        if space >= child_right - left {'''
+test = ["python3", "scripts/test.py", "wpt", "css/css-overflow/line-clamp/webkit-line-clamp-051.html"]
+
+[[mutant]]
+name = "hidden lines painted"
+file = "crates/paint/src/lib.rs"
+from = '''    if line.hidden {
+        return parts;
+    }'''
+to = '''    if false {
+        return parts;
+    }'''
+test = ["python3", "scripts/test.py", "wpt", "css/css-overflow/line-clamp/webkit-line-clamp-040.html"]
+
+[[mutant]]
+name = "items' basis their max-content"
+file = "crates/layout/src/lib.rs"
+from = '''        taffy_style.flex_basis = taffy::Dimension::fit_content();'''
+to = '''        let _ = taffy::Dimension::fit_content();'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "flex::"]
+
+[[mutant]]
+name = "a width of its own fit-content"
+file = "crates/layout/src/lib.rs"
+from = '''    if container.rare.box_orient == computed_style::BoxOrient::Horizontal
+        && style.width == Size::Auto'''
+to = '''    if container.rare.box_orient == computed_style::BoxOrient::Horizontal'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "flex::"]

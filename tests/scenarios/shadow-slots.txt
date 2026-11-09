@@ -1,0 +1,16 @@
+# A page's own shadow tree (tests/scenarios/pages/shadow-slots.html): drawn
+# in place of the host's children, the slotted text in the blue frame (slot
+# "a"), "NOT DRAWN" nowhere; over the slotted text the host turns light
+# green (its `:hover` goes up the flat tree, through the slot); a click
+# moves the text into the orange frame (slot "b").
+window size=400x300
+navigate pages/shadow-slots.html
+wait-loaded
+screenshot slots
+capture before-hover
+hover #slotted
+expect-differs before-hover #host
+screenshot hovered
+click #slotted
+wait-text #note "at b"
+screenshot moved

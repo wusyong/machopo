@@ -1,0 +1,168 @@
+# Step 4a's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0033-canvas-2d/mutations-4a.toml`. Each names the tests closest to
+# what it breaks.
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_export"]
+timeout = 1500
+
+# raster: the encoders.
+
+[[mutant]]
+name = "a PNG at the default level"
+file = "crates/raster/src/encode.rs"
+from = '''        encoder.set_deflate_compression(png::DeflateCompression::Level(1));'''
+to = '''        encoder.set_deflate_compression(png::DeflateCompression::Level(6));'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "encode"]
+
+[[mutant]]
+name = "a PNG unfiltered"
+file = "crates/raster/src/encode.rs"
+from = '''        encoder.set_filter(png::Filter::Up);'''
+to = '''        encoder.set_filter(png::Filter::NoFilter);'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "encode"]
+
+[[mutant]]
+name = "an opaque PNG with alpha"
+file = "crates/raster/src/encode.rs"
+from = '''    let (color, data) = if opaque {'''
+to = '''    let (color, data) = if opaque && false {'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "encode"]
+
+[[mutant]]
+name = "the pixels left premultiplied"
+file = "crates/raster/src/encode.rs"
+from = '''    let target_info = image_info(size, sk::AlphaType::Unpremul);'''
+to = '''    let target_info = image_info(size, alpha);'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "encode"]
+
+[[mutant]]
+name = "a JPEG's alpha ignored"
+file = "crates/raster/src/encode.rs"
+from = '''        alpha_option: sk::jpeg_encoder::AlphaOption::BlendOnBlack,'''
+to = '''        alpha_option: sk::jpeg_encoder::AlphaOption::Ignore,'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "encode"]
+
+[[mutant]]
+name = "a JPEG's quality ignored"
+file = "crates/raster/src/encode.rs"
+from = '''        quality: u32::from(quality),'''
+to = '''        quality: 92 + 0 * u32::from(quality),'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "encode"]
+
+[[mutant]]
+name = "a JPEG at 100 subsampled"
+file = "crates/raster/src/encode.rs"
+from = '''        downsample: if quality == 100 {'''
+to = '''        downsample: if quality == 101 {'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "encode"]
+
+# renderer: the client's encoders.
+
+[[mutant]]
+name = "a JPEG asked for, a PNG made"
+file = "crates/renderer/src/layout_client.rs"
+from = '''                raster::encode_jpeg(pixels, size, opaque, quality)'''
+to = '''                let _ = quality;
+                raster::encode_png(pixels, size, opaque)'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "canvas_export"]
+
+# dom_js: a number as it is.
+
+[[mutant]]
+name = "no number in an any"
+file = "crates/dom_js/src/host.rs"
+from = '''        v8::Local::<v8::Number>::try_from(value)
+            .ok()
+            .map(|n| n.value())'''
+to = '''        v8::Local::<v8::Number>::try_from(value)
+            .ok()
+            .map(|n| n.value())
+            .filter(|_| false)'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "canvas_export"]
+
+# dom_api: toDataURL.
+
+[[mutant]]
+name = "a tainted canvas exported"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if let Some(context) = &context
+        && !with_data(cx, context, |data| data.origin_clean)'''
+to = '''    if let Some(context) = &context
+        && false
+        && !with_data(cx, context, |data| data.origin_clean)'''
+
+[[mutant]]
+name = "a bitmap of no pixels encoded"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if !dom::is_valid_bitmap_size(size) {
+        return Ok(None);
+    }
+    let len'''
+to = '''    if size.0 == 0 && size.1 == 0 {
+        return Ok(None);
+    }
+    let len'''
+
+[[mutant]]
+name = "a canvas without a context opaque white"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        pixels.resize(len, 0);
+        return Ok(Some((pixels, size, false)));'''
+to = '''        pixels.resize(len, 255);
+        return Ok(Some((pixels, size, false)));'''
+
+[[mutant]]
+name = "the recording not drawn first"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    flush(cx, &context);
+    let settings = cx.read().canvas_context_settings(&context);
+    let background = background(settings);
+    let pixels = with_data(cx, &context, |data| data.pixels.clone())'''
+to = '''    let settings = cx.read().canvas_context_settings(&context);
+    let background = background(settings);
+    let pixels = with_data(cx, &context, |data| data.pixels.clone())'''
+
+[[mutant]]
+name = "a blank opaque bitmap transparent"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        .unwrap_or_else(|| background.repeat(len / 4));'''
+to = '''        .unwrap_or_else(|| vec![0; len + 0 * background.len()]);'''
+
+[[mutant]]
+name = "an opaque canvas's bitmap not opaque"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    Ok(Some((pixels, size, !settings.alpha)))'''
+to = '''    Ok(Some((pixels, size, false && !settings.alpha)))'''
+
+[[mutant]]
+name = "the type's case kept"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if mime_type.to_ascii_lowercase() != "image/jpeg" {'''
+to = '''    if mime_type != "image/jpeg" {'''
+
+[[mutant]]
+name = "a quality outside 0 to 1 taken"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        .filter(|q| (0.0..=1.0).contains(q))
+        .map_or(92, |q| (q * 100.0 + 0.5) as u8)'''
+to = '''        .filter(|q| q.is_finite())
+        .map_or(92, |q| (q * 100.0 + 0.5) as u8)'''
+
+[[mutant]]
+name = "a quality not rounded"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        .map_or(92, |q| (q * 100.0 + 0.5) as u8)'''
+to = '''        .map_or(92, |q| (q * 100.0) as u8)'''
+
+[[mutant]]
+name = "a JPEG called a PNG"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    (ImageEncoding::Jpeg { quality }, "image/jpeg")'''
+to = '''    (ImageEncoding::Jpeg { quality }, "image/png")'''
+
+[[mutant]]
+name = "nothing encoded an empty data URL with a type"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        None => "data:,".into(),
+    })'''
+to = '''        None => format!("data:{mime_type},").into(),
+    })'''

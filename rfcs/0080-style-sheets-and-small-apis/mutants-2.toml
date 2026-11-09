@@ -1,0 +1,255 @@
+# Stage 2: css-values-4's other math functions.
+test = ["sh", "-c", "cargo test -q -p style --test it calc:: && cargo test -q -p gfx --lib a_product_stays_finite && cargo test -q -p css --lib"]
+timeout = 900
+
+# --- parsing ---
+
+[[mutant]]
+name = "no round()"
+file = "crates/css/src/calc.rs"
+from = '''            | "round"'''
+to = '''            | "roundx"'''
+
+[[mutant]]
+name = "a number's step not 1 by default"
+file = "crates/css/src/calc.rs"
+from = '''            if args.len() == 1 && args[0].1 == Kind::Number {'''
+to = '''            if args.len() == 1 && args[0].1 == Kind::Number && false {'''
+
+[[mutant]]
+name = "any number of arguments"
+file = "crates/css/src/calc.rs"
+from = '''    if !arity.contains(&args.len()) {'''
+to = '''    if !arity.contains(&args.len()) && false {'''
+
+[[mutant]]
+name = "any kind of argument"
+file = "crates/css/src/calc.rs"
+from = '''    if !function.takes(kind) {'''
+to = '''    if !function.takes(kind) && false {'''
+
+[[mutant]]
+name = "the trigonometric ones take any kind"
+file = "crates/css/src/calc.rs"
+from = '''            Self::Sin | Self::Cos | Self::Tan => matches!(kind, Kind::Number | Kind::Angle),'''
+to = '''            Self::Sin | Self::Cos | Self::Tan => true,'''
+
+[[mutant]]
+name = "the inverse and exponential ones take an angle"
+file = "crates/css/src/calc.rs"
+from = '''            Self::Asin | Self::Acos | Self::Atan | Self::Pow | Self::Sqrt | Self::Log | Self::Exp => {
+                kind == Kind::Number'''
+to = '''            Self::Asin | Self::Acos | Self::Atan | Self::Pow | Self::Sqrt | Self::Log | Self::Exp => {
+                matches!(kind, Kind::Number | Kind::Angle)'''
+
+[[mutant]]
+name = "nothing worked out as parsed"
+file = "crates/css/src/calc.rs"
+from = '''    if nodes.iter().all(is_canonical_leaf) {'''
+to = '''    if nodes.iter().all(is_canonical_leaf) && false {'''
+
+[[mutant]]
+name = "a relative length worked out as parsed"
+file = "crates/css/src/calc.rs"
+from = '''            | Node::Length(_, LengthUnit::Px)'''
+to = '''            | Node::Length(..)'''
+
+[[mutant]]
+name = "a percentage worked out as parsed"
+file = "crates/css/src/calc.rs"
+from = '''            | Node::Length(_, LengthUnit::Px)'''
+to = '''            | Node::Length(_, LengthUnit::Px)
+            | Node::Percent(_)'''
+
+[[mutant]]
+name = "round() of a length is a number"
+file = "crates/css/src/calc.rs"
+from = '''            Self::Round(_) | Self::Mod | Self::Rem | Self::Abs | Self::Hypot => arg,'''
+to = '''            Self::Mod | Self::Rem | Self::Abs | Self::Hypot => arg,'''
+
+[[mutant]]
+name = "a number only an element works out isn't a factor"
+file = "crates/css/src/calc.rs"
+from = '''                (node, other) if kind == Kind::Number || other_kind == Kind::Number => {'''
+to = '''                (node, other) if false => {'''
+
+[[mutant]]
+name = "no quotient by such a number"
+file = "crates/css/src/calc.rs"
+from = '''                other if other_kind == Kind::Number => {
+                    (Node::Divide(Box::new([node, other])), kind)'''
+to = '''                other if other_kind == Kind::Number && false => {
+                    (Node::Divide(Box::new([node, other])), kind)'''
+
+[[mutant]]
+name = "a function's number where a number is taken"
+file = "crates/css/src/calc.rs"
+from = '''    if needs_element(&calc.node, true) {'''
+to = '''    if needs_element(&calc.node, true) && false {'''
+
+[[mutant]]
+name = "a relative length needs no element"
+file = "crates/css/src/calc.rs"
+from = '''        Node::Length(_, unit) => *unit != LengthUnit::Px,'''
+to = '''        Node::Length(..) => false,'''
+
+[[mutant]]
+name = "no function of percentages where a percentage goes"
+file = "crates/css/src/calc.rs"
+from = '''        ref node if !needs_element(node, false) => {'''
+to = '''        ref node if !needs_element(node, true) => {'''
+
+# --- values ---
+
+[[mutant]]
+name = "a tie rounds down"
+file = "crates/css/src/calc.rs"
+from = '''        Rounding::Nearest if a - lower < upper - a => lower,'''
+to = '''        Rounding::Nearest if a - lower <= upper - a => lower,'''
+
+[[mutant]]
+name = "to-zero of a negative is the lower"
+file = "crates/css/src/calc.rs"
+from = '''        Rounding::ToZero if a < 0.0 => upper,'''
+to = '''        Rounding::ToZero if a < 0.0 => lower,'''
+
+[[mutant]]
+name = "a 0 rounded up to is +0"
+file = "crates/css/src/calc.rs"
+from = '''    } else if rounded == upper {
+        -0.0'''
+to = '''    } else if rounded == upper {
+        0.0'''
+
+[[mutant]]
+name = "mod() is rem()"
+file = "crates/css/src/calc.rs"
+from = '''            Self::Mod => modulus(a, b.unwrap_or(f64::NAN), true),'''
+to = '''            Self::Mod => modulus(a, b.unwrap_or(f64::NAN), false),'''
+
+[[mutant]]
+name = "mod()'s 0 has the value's sign"
+file = "crates/css/src/calc.rs"
+from = '''        0.0_f64.copysign(b)'''
+to = '''        r'''
+
+[[mutant]]
+name = "a sign of 0 is 1"
+file = "crates/css/src/calc.rs"
+from = '''                if a == 0.0 || a.is_nan() {'''
+to = '''                if a.is_nan() {'''
+
+[[mutant]]
+name = "degrees taken as radians"
+file = "crates/css/src/calc.rs"
+from = '''        let radians = |v: f64| if arg == Kind::Angle { v.to_radians() } else { v };'''
+to = '''        let radians = |v: f64| v;'''
+
+[[mutant]]
+name = "no infinity at tan()'s asymptote"
+file = "crates/css/src/calc.rs"
+from = '''                if degrees == Some(90.0) {'''
+to = '''                if degrees == Some(91.0) {'''
+
+[[mutant]]
+name = "hypot() a sum"
+file = "crates/css/src/calc.rs"
+from = '''            Self::Hypot => values.iter().fold(0.0, |sum: f64, v| sum.hypot(*v)),'''
+to = '''            Self::Hypot => values.iter().fold(0.0, |sum: f64, v| sum + v.abs()),'''
+
+[[mutant]]
+name = "log()'s base ignored"
+file = "crates/css/src/calc.rs"
+from = '''                Some(base) => a.ln() / base.ln(),'''
+to = '''                Some(_) => a.ln(),'''
+
+[[mutant]]
+name = "a computed -0 is +0"
+file = "crates/css/src/calc.rs"
+from = '''    let negative_zero = |part: f32| part == 0.0 && part.is_sign_negative();'''
+to = '''    let negative_zero = |part: f32| part == 0.0 && false;'''
+
+[[mutant]]
+name = "min() of zeros not -0, computed"
+file = "crates/css/src/calc.rs"
+from = '''                        y.is_sign_negative().cmp(&x.is_sign_negative())'''
+to = '''                        Ordering::Equal'''
+
+[[mutant]]
+name = "min() of zeros not -0"
+file = "crates/css/src/calc.rs"
+from = '''        if a.is_sign_negative() { a } else { b }'''
+to = '''        b'''
+
+[[mutant]]
+name = "max() of zeros not +0"
+file = "crates/css/src/calc.rs"
+from = '''        if a.is_sign_positive() { a } else { b }'''
+to = '''        b'''
+
+[[mutant]]
+name = "a quotient scaled in its denominator"
+file = "crates/css/src/calc.rs"
+from = '''            Node::Divide(Box::new([scale(numerator, k), denominator]))'''
+to = '''            Node::Divide(Box::new([numerator, scale(denominator, k)]))'''
+
+# --- writing back ---
+
+[[mutant]]
+name = "a product's leaves last"
+file = "crates/css/src/calc.rs"
+from = '''    let mut factors: Vec<Node> = leaf
+        .filter(|leaf| *leaf != Node::Number(1.0) || others.is_empty())
+        .into_iter()
+        .collect();
+    factors.extend(others);'''
+to = '''    let mut factors: Vec<Node> = others;
+    factors.extend(leaf.filter(|leaf| *leaf != Node::Number(1.0) || factors.is_empty()));'''
+
+[[mutant]]
+name = "a number 1 kept as a factor"
+file = "crates/css/src/calc.rs"
+from = '''        .filter(|leaf| *leaf != Node::Number(1.0) || others.is_empty())'''
+to = '''        .filter(|_| true)'''
+
+[[mutant]]
+name = "no parentheses around a product in a sum"
+file = "crates/css/src/calc.rs"
+from = '''                if matches!(term, Node::Product(..) | Node::Multiply(_) | Node::Divide(_)) {'''
+to = '''                if false {'''
+
+[[mutant]]
+name = "no parentheses around a sum in a product"
+file = "crates/css/src/calc.rs"
+from = '''    if matches!(node, Node::Sum(_)) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a subtracted term added, negated"
+file = "crates/css/src/calc.rs"
+from = '''        node => Node::Negate(Box::new(node)),'''
+to = '''        node => scale(node, -1.0),'''
+
+[[mutant]]
+name = "a rounding strategy written as nearest"
+file = "crates/css/src/calc.rs"
+from = '''                Function::Round(Rounding::Up) => Some("up"),'''
+to = '''                Function::Round(Rounding::Up) => None,'''
+
+# --- gfx ---
+
+[[mutant]]
+name = "an overflowing product infinite"
+file = "crates/gfx/src/lib.rs"
+from = '''        if product.0.iter().all(|v| v.is_finite())
+            || self.0.iter().chain(&inner.0).any(|v| !v.is_finite())
+        {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "an infinity given kept to the biggest f32"
+file = "crates/gfx/src/lib.rs"
+from = '''        if product.0.iter().all(|v| v.is_finite())
+            || self.0.iter().chain(&inner.0).any(|v| !v.is_finite())
+        {'''
+to = '''        if product.0.iter().all(|v| v.is_finite()) {'''

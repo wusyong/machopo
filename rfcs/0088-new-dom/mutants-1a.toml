@@ -1,0 +1,377 @@
+# Stage 1a: the new DOM's minimal slice (dom_next), kun:next-dom in
+# dom_wasm, and `bench.py blink-perf --next-dom`.
+test = ["cargo", "test", "-q", "-p", "dom_next"]
+timeout = 300
+
+# --- dom_next: the tree ------------------------------------------------------
+
+[[mutant]]
+name = "an ancestor goes into its descendant"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if self.is_inclusive_ancestor(node, parent) {
+            return Err(DomError::HierarchyRequest);
+        }'''
+to = ""
+
+[[mutant]]
+name = "a reference child that isn't a child"
+file = "crates/dom_next/src/lib.rs"
+from = '''                .is_some_and(|of| Gc::ptr_eq(of, parent))
+        {
+            return Err(DomError::NotFound);
+        }
+        match (parent_kind, self.kind(node)) {'''
+to = '''                .is_some_and(|of| Gc::ptr_eq(of, parent))
+            && false
+        {
+            return Err(DomError::NotFound);
+        }
+        match (parent_kind, self.kind(node)) {'''
+
+[[mutant]]
+name = "a document takes a second element"
+file = "crates/dom_next/src/lib.rs"
+from = '''                if self.first_element_child(parent).is_some() =>'''
+to = '''                if false =>'''
+
+[[mutant]]
+name = "a text goes into a document"
+file = "crates/dom_next/src/lib.rs"
+from = '''            | (NodeKind::Document, NodeKind::Text) => return Err(DomError::HierarchyRequest),'''
+to = '''            => return Err(DomError::HierarchyRequest),'''
+
+[[mutant]]
+name = "a child removed from another parent"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if !self
+            .parent(child)
+            .is_some_and(|of| Gc::ptr_eq(of, parent))
+        {
+            return Err(DomError::NotFound);
+        }
+        self.detach(child);'''
+to = '''        self.detach(child);'''
+
+[[mutant]]
+name = "inserted before itself: before its own place"
+file = "crates/dom_next/src/lib.rs"
+from = '''            Some(child) if Gc::ptr_eq(child, node) => self.next_sibling(node),'''
+to = '''            Some(child) if Gc::ptr_eq(child, node) => Some(child),'''
+
+[[mutant]]
+name = "detach leaves the next sibling's back link"
+file = "crates/dom_next/src/lib.rs"
+from = '''            Some(next) => next.previous_sibling.set(self.gc, previous),'''
+to = '''            Some(_) => {}'''
+
+[[mutant]]
+name = "detach leaves the parent's last child"
+file = "crates/dom_next/src/lib.rs"
+from = '''            None => parent.last_child.set(self.gc, previous),'''
+to = '''            None => {}'''
+
+[[mutant]]
+name = "a detached node keeps its parent"
+file = "crates/dom_next/src/lib.rs"
+from = '''        node.parent.set(self.gc, None);
+        node.previous_sibling.set(self.gc, None);'''
+to = '''        node.previous_sibling.set(self.gc, None);'''
+
+[[mutant]]
+name = "link before a child leaves its back link"
+file = "crates/dom_next/src/lib.rs"
+from = '''            Some(child) => child.previous_sibling.set(self.gc, Some(node)),'''
+to = '''            Some(_) => {}'''
+
+[[mutant]]
+name = "first element child takes a text"
+file = "crates/dom_next/src/lib.rs"
+from = '''            if self.kind(node) == NodeKind::Element {
+                return Some(node);'''
+to = '''            if self.kind(node) != NodeKind::Comment {
+                return Some(node);'''
+
+[[mutant]]
+name = "element names keep their case"
+file = "crates/dom_next/src/lib.rs"
+from = '''        Ok(self.element(LocalName::from(name.to_ascii_lowercase())))'''
+to = '''        Ok(self.element(LocalName::from(name)))'''
+
+# --- dom_next: names and attributes ------------------------------------------
+
+[[mutant]]
+name = "an element name may start with anything"
+file = "crates/dom_next/src/names.rs"
+from = '''    name_char(first)
+        && chars.all'''
+to = '''    chars.all'''
+
+[[mutant]]
+name = "after a letter, a delimiter is fine"
+file = "crates/dom_next/src/names.rs"
+from = '''        return !chars.any(is_delimiter);'''
+to = '''        return true;'''
+
+[[mutant]]
+name = "an attribute name may have ="
+file = "crates/dom_next/src/names.rs"
+from = '''    !name.is_empty() && !name.chars().any(|c| is_delimiter(c) || c == '=')'''
+to = '''    !name.is_empty() && !name.chars().any(is_delimiter)'''
+
+[[mutant]]
+name = "NUL isn't a delimiter"
+file = "crates/dom_next/src/names.rs"
+from = '''    c.is_ascii_whitespace() || matches!(c, '\0' | '/' | '>')'''
+to = '''    c.is_ascii_whitespace() || matches!(c, '/' | '>')'''
+
+[[mutant]]
+name = "an attribute set twice is two"
+file = "crates/dom_next/src/lib.rs"
+from = '''            *attribute.value.get().borrow_mut() = value.into();
+            return;'''
+to = '''            *attribute.value.get().borrow_mut() = value.into();'''
+
+[[mutant]]
+name = "an attribute of a text"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if self.kind(element) != NodeKind::Element {
+            return Err(DomError::NotSupported);
+        }
+        let name = self'''
+to = '''        let name = self'''
+
+[[mutant]]
+name = "getAttribute's name keeps its case"
+file = "crates/dom_next/src/lib.rs"
+from = '''            .find(&LocalName::from(name.to_ascii_lowercase()))?;'''
+to = '''            .find(&LocalName::from(name))?;'''
+
+# --- dom_next: innerHTML -----------------------------------------------------
+
+[[mutant]]
+name = "innerHTML keeps the old children"
+file = "crates/dom_next/src/lib.rs"
+from = '''        while let Some(child) = self.first_child(element) {
+            self.detach(child);
+        }
+        parse::fragment(self, element, markup);'''
+to = '''        parse::fragment(self, element, markup);'''
+
+[[mutant]]
+name = "innerHTML on a text"
+file = "crates/dom_next/src/lib.rs"
+from = '''    pub fn set_inner_html(&self, element: NodeRef<'gc>, markup: &str) -> Result<(), DomError> {
+        if self.kind(element) != NodeKind::Element {
+            return Err(DomError::NotSupported);
+        }'''
+to = '''    pub fn set_inner_html(&self, element: NodeRef<'gc>, markup: &str) -> Result<(), DomError> {'''
+
+[[mutant]]
+name = "the parser's texts don't join"
+file = "crates/dom_next/src/parse.rs"
+from = '''        if let Some(before) = before
+            && let Some(data) = before.text.get(self.cx.gc)'''
+to = '''        if let Some(before) = before
+            && false
+            && let Some(data) = before.text.get(self.cx.gc)'''
+
+[[mutant]]
+name = "text joins the node after it"
+file = "crates/dom_next/src/parse.rs"
+from = '''            Some(child) => self.cx.previous_sibling(child),'''
+to = '''            Some(child) => Some(child),'''
+
+[[mutant]]
+name = "comments go in the tree"
+file = "crates/dom_next/src/parse.rs"
+from = '''                if self.cx.kind(node) == NodeKind::Comment {
+                    return;
+                }'''
+to = ""
+
+[[mutant]]
+name = "the parser inserts last, not before the sibling"
+file = "crates/dom_next/src/parse.rs"
+from = '''        self.insert(parent, Some(*sibling), new_node);'''
+to = '''        self.insert(parent, None, new_node);'''
+
+[[mutant]]
+name = "an existing attribute replaced by the parser's"
+file = "crates/dom_next/src/parse.rs"
+from = '''    fn add_attrs_if_missing(&self, target: &NodeRef<'gc>, attrs: Vec<Attribute>) {
+        for attribute in attrs {
+            let name = self.cx.names.borrow_mut().intern(attribute.name.local);
+            if self.cx.attribute(*target, name).is_none() {'''
+to = '''    fn add_attrs_if_missing(&self, target: &NodeRef<'gc>, attrs: Vec<Attribute>) {
+        for attribute in attrs {
+            let name = self.cx.names.borrow_mut().intern(attribute.name.local);
+            if true {'''
+
+[[mutant]]
+name = "the fragment stays in the parser's document"
+file = "crates/dom_next/src/parse.rs"
+from = '''    while let Some(node) = cx.first_child(root) {
+        cx.detach(node);
+        cx.link(context, node, None);
+    }'''
+to = ""
+
+# --- dom_next: the trace -----------------------------------------------------
+
+[[mutant]]
+name = "a worker's run isn't traced"
+file = "crates/dom_next/src/lib.rs"
+from = '''            let _span = tracing::trace_span!("Gc.Worker").entered();'''
+to = ""
+
+[[mutant]]
+name = "the joining thread's run is traced as a worker's"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if delegate.is_joining_thread() {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "posted jobs aren't wrapped"
+file = "crates/dom_next/src/lib.rs"
+from = '''        self.0.post_job(Arc::new(TracedJob(job)))'''
+to = '''        self.0.post_job(job)'''
+
+[[mutant]]
+name = "jobs run with the caller aren't wrapped"
+file = "crates/dom_next/src/lib.rs"
+from = '''        self.0.run(&TracedJob(job));'''
+to = '''        self.0.run(job);'''
+
+[[mutant]]
+name = "the heap's phases aren't traced"
+file = "crates/dom_next/src/lib.rs"
+from = '''        PHASES.with(|phases| phases.borrow_mut().push(span.entered()));'''
+to = '''        drop(span);'''
+
+# --- dom_wasm: kun:next-dom --------------------------------------------------
+
+[[mutant]]
+name = "a dropped handle keeps its root"
+file = "crates/dom_wasm/src/next.rs"
+from = '''            && slot.take().is_some()'''
+to = '''            && slot.is_some()'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "it", "new_dom"]
+
+[[mutant]]
+name = "errors' names swapped"
+file = "crates/dom_wasm/src/next.rs"
+from = '''            DomError::NotFound => Self::NotFound,'''
+to = '''            DomError::NotFound => Self::HierarchyRequest,'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "it", "new_dom"]
+
+[[mutant]]
+name = "previous-sibling walks forward"
+file = "crates/dom_wasm/src/next.rs"
+from = '''walk(|cx, node| cx.previous_sibling(node))'''
+to = '''walk(|cx, node| cx.next_sibling(node))'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "it", "new_dom"]
+
+[[mutant]]
+name = "insert-before appends"
+file = "crates/dom_wasm/src/next.rs"
+from = '''                let result = cx.insert_before(slots.node(cx, &this)?, slots.node(cx, &child)?, before);'''
+to = '''                let _ = before;
+                let result = cx.insert_before(slots.node(cx, &this)?, slots.node(cx, &child)?, None);'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "it", "new_dom"]
+
+[[mutant]]
+name = "a freed slot isn't reused but another's is overwritten"
+file = "crates/dom_wasm/src/next.rs"
+from = '''                let slot = usize::try_from(rep).expect("a slot index fits a usize");
+                self.roots[slot] = root;'''
+to = '''                let slot = usize::try_from(rep).expect("a slot index fits a usize");
+                self.roots[0] = root;'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "it", "new_dom"]
+
+[[mutant]]
+name = "kun:next-dom always linked"
+file = "crates/dom_wasm/src/lib.rs"
+from = '''        Self::with_next_dom(next::enabled())'''
+to = '''        Self::with_next_dom(true)'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "it", "new_dom"]
+
+[[mutant]]
+name = "kun:next-dom linked when not asked for"
+file = "crates/dom_wasm/src/lib.rs"
+from = '''        if next_dom {'''
+to = '''        if true {'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "it", "new_dom"]
+
+# --- bench.py blink-perf --next-dom ------------------------------------------
+
+[[mutant]]
+name = "the variants are pages too"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    return any(page.endswith(f"-{variant}.html") for variant in NEXT_DOM_VARIANTS)'''
+to = '''    return False'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-q", "-k", "NextDom", "-k", "variants", "-k", "wasm_version"]
+
+[[mutant]]
+name = "a page with one variant is measured"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''            if all((GUESTS / variant(name, which)).is_file() for which in NEXT_DOM_VARIANTS)]'''
+to = '''            if any((GUESTS / variant(name, which)).is_file() for which in NEXT_DOM_VARIANTS)]'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-q", "-k", "NextDom", "-k", "variants"]
+
+[[mutant]]
+name = "a variant's runs together, not in turn"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''                for run in range(runs):
+                    for which in NEXT_DOM_VARIANTS:'''
+to = '''                for which in NEXT_DOM_VARIANTS:
+                    for run in range(runs):'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-q", "-k", "NextDom"]
+
+[[mutant]]
+name = "no MACHOPO_NEXT_DOM"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''                                                       env=NEXT_DOM_ENV))'''
+to = '''                                                       env=None))'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-q", "-k", "NextDom"]
+
+[[mutant]]
+name = "a failed run's GC read"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''                        ran["gc"] = trace_gc(trace) if "values" in ran else None'''
+to = '''                        ran["gc"] = trace_gc(trace)'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-q", "-k", "NextDom"]
+
+[[mutant]]
+name = "ms not inverted"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''                better = number(ratio if unit in MORE_IS_BETTER else 1 / ratio)'''
+to = '''                better = number(ratio)'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-q", "-k", "NextDom"]
+
+[[mutant]]
+name = "the GC of the runs whose trace failed"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''            gcs = [ran["gc"] for ran in got[which] if ran.get("gc") and "error" not in ran["gc"]]'''
+to = '''            gcs = [ran["gc"] for ran in got[which] if ran.get("gc")]'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-q", "-k", "NextDom"]
+
+[[mutant]]
+name = "pauses per run counted over one"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''                          f"{len(pauses) / len(gcs):g}", ms(gc_bench.percentile(pauses, 0.5)),'''
+to = '''                          f"{len(pauses):g}", ms(gc_bench.percentile(pauses, 0.5)),'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-q", "-k", "NextDom"]
+
+[[mutant]]
+name = "the median of all iterations, not of the runs' medians"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    return common.median([common.median(ran["values"]) for ran in runs if "values" in ran])'''
+to = '''    return common.median([value for ran in runs if "values" in ran for value in ran["values"]])'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-q", "-k", "NextDom"]
+
+[[mutant]]
+name = "--next-dom runs --gc"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''        return cmd_next_dom(args, asked, root) if args.next_dom else cmd_gc(args, asked, root)'''
+to = '''        return cmd_gc(args, asked, root)'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-q", "-k", "variants"]

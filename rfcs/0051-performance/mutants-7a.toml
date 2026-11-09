@@ -1,0 +1,37 @@
+# Mutation test of stage 7a: a member's `this` is unwrapped as the types
+# its interface's objects are:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-7a.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "-p", "dom_api"]
+timeout = 2400
+
+[[mutant]]
+name = "this is tried as every type"
+file = "crates/dom_js/src/templates.rs"
+from = '''        (args.this().into(), receiver_tags(cx.scope(), index))'''
+to = '''        (args.this().into(), Rc::from(ObjectTag::ALL))'''
+
+[[mutant]]
+name = "an interface's types are every type"
+file = "crates/dom_js/src/templates.rs"
+from = '''        .filter(|&&kind| accepts(kind))
+'''
+to = '''        .filter(|&&kind| { let _ = accepts; let _ = kind; true })
+'''
+
+[[mutant]]
+name = "a static NodeList isn't one"
+file = "crates/dom_api/src/object.rs"
+from = '''Self::NodeList => &[ObjectTag::Collection, ObjectTag::StaticNodeList],'''
+to = '''Self::NodeList => &[ObjectTag::Collection],'''
+
+[[mutant]]
+name = "a static operation's this isn't the window"
+file = "crates/dom_js/src/templates.rs"
+from = '''        (global, Rc::from([ObjectTag::Window]))'''
+to = '''        (global, Rc::from([ObjectTag::Node]))'''
+
+[[mutant]]
+name = "anything is taken for an API wrapper"
+file = "crates/dom/src/v8_engine.rs"
+from = '''        object.is_api_wrapper().then_some(ApiWrapper(object))'''
+to = '''        Some(ApiWrapper(object))'''

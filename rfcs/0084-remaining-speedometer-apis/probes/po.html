@@ -1,0 +1,57 @@
+<!doctype html>
+<script>
+const log = [];
+const attempt = f => { try { const v = f(); return v === undefined ? 'ok' : String(v); } catch (e) { return `${e.name}: ${e.message}`; } };
+const names = l => l.map(e => `${e.entryType}:${e.name}`).join(',');
+function run() {
+  return new Promise(done => {
+    performance.mark('early');
+    log.push('supported ' + PerformanceObserver.supportedEntryTypes.join(','));
+    log.push('frozen ' + Object.isFrozen(PerformanceObserver.supportedEntryTypes) + ' same ' + (PerformanceObserver.supportedEntryTypes === PerformanceObserver.supportedEntryTypes));
+    const o = new PerformanceObserver(() => {});
+    log.push('noargs ' + attempt(() => o.observe()));
+    log.push('empty ' + attempt(() => o.observe({})));
+    log.push('both ' + attempt(() => o.observe({ entryTypes: ['mark'], type: 'mark' })));
+    log.push('entryTypes+buffered ' + attempt(() => o.observe({ entryTypes: ['mark'], buffered: true })));
+    log.push('then type ' + attempt(() => o.observe({ type: 'mark' })));
+    const o2 = new PerformanceObserver(() => {});
+    log.push('type ' + attempt(() => o2.observe({ type: 'mark' })));
+    log.push('then entryTypes ' + attempt(() => o2.observe({ entryTypes: ['mark'] })));
+    log.push('unknown ' + attempt(() => new PerformanceObserver(() => {}).observe({ type: 'nope' })));
+    log.push('unknown list ' + attempt(() => new PerformanceObserver(() => {}).observe({ entryTypes: ['nope'] })));
+    log.push('empty list ' + attempt(() => new PerformanceObserver(() => {}).observe({ entryTypes: [] })));
+    log.push('ctor no new ' + attempt(() => PerformanceObserver(() => {})));
+    log.push('ctor no cb ' + attempt(() => new PerformanceObserver()));
+    log.push('ctor not fn ' + attempt(() => new PerformanceObserver({})));
+    log.push('proto ' + Object.getOwnPropertyNames(PerformanceObserver.prototype).join(','));
+    log.push('static ' + Object.getOwnPropertyNames(PerformanceObserver).join(','));
+    log.push('list proto ' + Object.getOwnPropertyNames(PerformanceObserverEntryList.prototype).join(','));
+    o.disconnect(); o2.disconnect();
+    const calls = [];
+    const obs = new PerformanceObserver(function (list, observer, options) {
+      calls.push(`cb this=${this === obs} obs=${observer === obs} args=${arguments.length} opts=${JSON.stringify(options)} entries=${names(list.getEntries())} byType=${names(list.getEntriesByType('measure'))} byName=${names(list.getEntriesByName('b'))} byNameType=${names(list.getEntriesByName('b', 'measure'))} listSame=${list.getEntries() === list.getEntries()}`);
+    });
+    obs.observe({ type: 'mark', buffered: true });
+    obs.observe({ type: 'measure' });
+    performance.mark('b', { startTime: 5 });
+    performance.mark('a');
+    performance.measure('b');
+    calls.push('sync takeRecords ' + names(obs.takeRecords()));
+    performance.mark('c');
+    queueMicrotask(() => calls.push('microtask'));
+    setTimeout(() => calls.push('timeout0'), 0);
+    const obs3 = new PerformanceObserver((list, o, opts) => calls.push(`obs3 ${names(list.getEntries())} ${JSON.stringify(opts)}`));
+    obs3.observe({ entryTypes: ['mark', 'measure', 'nope'] });
+    performance.mark('d');
+    setTimeout(() => {
+      obs.disconnect();
+      performance.mark('after-disconnect');
+      const obs4 = new PerformanceObserver(() => calls.push('obs4'));
+      obs4.observe({ type: 'mark' }); performance.mark('x'); obs4.disconnect();
+      const obs5 = new PerformanceObserver(() => calls.push('obs5'));
+      obs5.observe({ type: 'mark' }); obs5.observe({ type: 'mark', buffered: true });
+      setTimeout(() => { log.push(...calls); done(log.join('\n')); }, 100);
+    }, 50);
+  });
+}
+</script>

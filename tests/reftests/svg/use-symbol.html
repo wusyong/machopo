@@ -1,0 +1,6 @@
+<!DOCTYPE html>
+<title>An icon sprite: a symbol in another svg, its viewBox in the use's width and height, currentColor from where it is used</title>
+<link rel="match" href="rect-ref.html">
+<style>body { margin: 0 } svg { display: block } .sprite { position: absolute; width: 0; height: 0 }</style>
+<svg class="sprite"><symbol id="icon" viewBox="0 0 4 2"><rect width="4" height="2" fill="currentColor"/></symbol></svg>
+<svg width="100" height="60" style="color: lime"><use href="#icon" x="10" y="10" width="40" height="20"/></svg>

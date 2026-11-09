@@ -1,0 +1,153 @@
+# Stage 4g-2c-2: on the new DOM, a 2D context's text: its drawing styles, font (through the
+# document's cache), fillText, strokeText, measureText and TextMetrics, the direction an element's
+# dir gives; the canvas crate's text steps, which today's DOM shares; the renderer's shaping.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p canvas && cargo test -q -p dom_js_next --test it -- canvas && cargo test -q -p dom_api --test it canvas && cargo test -q -p dom_js --test it canvas && cargo test -q -p shell --test it next_dom_canvas"]
+timeout = 3000
+
+[[mutant]]
+name = "text: a carriage return kept"
+file = "crates/canvas/src/text.rs"
+from = '''            '\t' | '\n' | '\u{c}' | '\r' => ' ','''
+to = '''            '\t' | '\n' | '\u{c}' => ' ','''
+
+[[mutant]]
+name = "text: top the ascent"
+file = "crates/canvas/src/text.rs"
+from = '''        TextBaseline::Top => metrics.typo_ascent,'''
+to = '''        TextBaseline::Top => metrics.ascent,'''
+
+[[mutant]]
+name = "text: bottom the descent"
+file = "crates/canvas/src/text.rs"
+from = '''        TextBaseline::Bottom => -metrics.typo_descent,'''
+to = '''        TextBaseline::Bottom => -metrics.descent,'''
+
+[[mutant]]
+name = "text: hanging at half the ascent"
+file = "crates/canvas/src/text.rs"
+from = '''metrics.hanging.unwrap_or(metrics.ascent * 0.8)'''
+to = '''metrics.hanging.unwrap_or(metrics.ascent * 0.5)'''
+
+[[mutant]]
+name = "text: ideographic above"
+file = "crates/canvas/src/text.rs"
+from = '''metrics.ideographic.unwrap_or(-metrics.descent)'''
+to = '''metrics.ideographic.unwrap_or(metrics.descent)'''
+
+[[mutant]]
+name = "text: center all the way"
+file = "crates/canvas/src/text.rs"
+from = '''        (TextAlign::Center, _) => width / 2.0,'''
+to = '''        (TextAlign::Center, _) => width,'''
+
+[[mutant]]
+name = "text: start always left"
+file = "crates/canvas/src/text.rs"
+from = '''    let rtl = direction == Direction::Rtl;'''
+to = '''    let rtl = false && direction == Direction::Rtl;'''
+
+[[mutant]]
+name = "text: a maxWidth of 0 drawn"
+file = "crates/canvas/src/text.rs"
+from = '''width.is_finite() && width > 0.0'''
+to = '''width.is_finite()'''
+
+[[mutant]]
+name = "text: never squeezed"
+file = "crates/canvas/src/text.rs"
+from = '''    let squeeze = max_width.filter(|&width| width < font_width);'''
+to = '''    let squeeze = max_width.filter(|_| false);'''
+
+[[mutant]]
+name = "text: the squeezed start not scaled back"
+file = "crates/canvas/src/text.rs"
+from = '''    let origin = PointF::new(f32_from_f64(left / scale), baseline);'''
+to = '''    let origin = PointF::new(f32_from_f64(left), baseline);'''
+
+[[mutant]]
+name = "metrics: the left edge the other way"
+file = "crates/canvas/src/text.rs"
+from = '''        actual_bounding_box_left: dx - f64::from(ink.x),'''
+to = '''        actual_bounding_box_left: dx + f64::from(ink.x),'''
+
+[[mutant]]
+name = "metrics: the font's ascent from the alphabetic baseline"
+file = "crates/canvas/src/text.rs"
+from = '''        font_bounding_box_ascent: f64::from(metrics.ascent) - below,'''
+to = '''        font_bounding_box_ascent: f64::from(metrics.ascent),'''
+
+[[mutant]]
+name = "dir: auto as ltr"
+file = "crates/dom_next/src/directionality.rs"
+from = '''                Some(DirState::Auto) => true,'''
+to = '''                Some(DirState::Auto) => return Direction::Ltr,'''
+
+[[mutant]]
+name = "dir: in one case only"
+file = "crates/dom_next/src/directionality.rs"
+from = '''        let dir = dir.borrow().to_str().to_ascii_lowercase();'''
+to = '''        let dir = dir.borrow().to_str().into_owned();'''
+
+[[mutant]]
+name = "dir: a textarea's text counted"
+file = "crates/dom_next/src/directionality.rs"
+from = '''                names::local::TEXTAREA,'''
+to = '''                names::local::BDI,'''
+
+[[mutant]]
+name = "font cache: no limit"
+file = "crates/dom_next/src/canvas.rs"
+from = '''                if cache.order.len() >= MAX_CACHED_FONTS'''
+to = '''                if false'''
+
+[[mutant]]
+name = "font cache: nothing kept"
+file = "crates/dom_next/src/canvas.rs"
+from = '''                cache.fonts.insert(text.to_owned(), parsed.clone());'''
+to = '''                let _ = &cache.fonts;'''
+
+[[mutant]]
+name = "font: set with no frame"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    cx.lend_frame_layout(|layout| layout.document() == document)
+        .unwrap_or(false)'''
+to = '''    cx.lend_frame_layout(|layout| layout.document() == document)
+        .unwrap_or(true)'''
+
+[[mutant]]
+name = "text: inherit always ltr"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    let direction = state.direction.unwrap_or_else(|| cx.directionality(canvas));'''
+to = '''    let direction = state.direction.unwrap_or(computed_style::Direction::Ltr);'''
+
+[[mutant]]
+name = "text: no letter spacing"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''        letter_spacing: spacing(&state.letter_spacing),'''
+to = '''        letter_spacing: 0.0,'''
+
+[[mutant]]
+name = "text: nothing recorded"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    if !ops.is_empty() {
+        record_ops_with(cx, this, local, ops, true);'''
+to = '''    if false {
+        record_ops_with(cx, this, local, ops, true);'''
+
+[[mutant]]
+name = "text: a squeeze not recorded"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    record_ops_under(cx, this, [scale, 0.0, 0.0, 1.0, 0.0, 0.0], ops);'''
+to = '''    record_ops_under(cx, this, [1.0 + 0.0 * scale, 0.0, 0.0, 1.0, 0.0, 0.0], ops);'''
+
+[[mutant]]
+name = "font: relative to no style"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''        let style = connected.then(|| layout.computed_style(cx, canvas)).flatten();'''
+to = '''        let style = None::<Arc<computed_style::ComputedStyle>>.filter(|_| connected);'''
+
+[[mutant]]
+name = "renderer: no ink"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            shaped.ink = raster::ink_bounds(self.canvas_raster.cache(), &shaped.runs);'''
+to = '''            let _ = &self.canvas_raster;'''

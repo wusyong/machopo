@@ -1,0 +1,80 @@
+[package]
+name = "shell"
+description = "Browser window / UI, headless mode, the automation pipe and the `machopo` binary (//chrome/browser/ui)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "machopo"
+path = "src/main.rs"
+
+# WPT-style reftests under `tests/reftests/`; its own `main`, not libtest.
+# The scenarios under `tests/scenarios/`; its own `main`, not libtest.
+[[test]]
+name = "scenarios"
+harness = false
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+base.workspace = true
+gfx.workspace = true
+# The `machopo` executable's `#[global_allocator]`.
+mimalloc.workspace = true
+compositor.workspace = true
+compositor_paint.workspace = true
+parley.workspace = true
+url.workspace = true
+arboard.workspace = true
+protocol.workspace = true
+browser.workspace = true
+# The clock DevTools' events are told on (`TimeTicks`).
+ipc.workspace = true
+# Picks the renderer's script engine.
+dom_js.workspace = true
+# V8's trace events, beside the spans (`trace`).
+html.workspace = true
+viz.workspace = true
+winit.workspace = true
+wgpu.workspace = true
+png.workspace = true
+tracing.workspace = true
+crossbeam-channel.workspace = true
+tracing-subscriber.workspace = true
+tracing-log.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+# The browser's id in its websocket's URL, which a page can't guess.
+getrandom.workspace = true
+# `--remote-debugging-port`: HTTP and websockets on a thread of its own.
+tokio = { workspace = true, features = ["net", "macros", "time"] }
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+percent-encoding.workspace = true
+
+# The system's double-click interval (`mouse`): a safe class method.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSEvent"] }
+
+# The system colors (`system_colors`): the registry, through a safe API.
+[target.'cfg(windows)'.dependencies]
+windows-registry = "0.6"
+
+[dev-dependencies]
+base.workspace = true
+# Its statistics, for the test that machopo's Rust allocations are mimalloc's
+# (only test builds have the feature).
+mimalloc = { workspace = true, features = ["extended"] }
+net.workspace = true
+driver.workspace = true

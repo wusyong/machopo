@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>A child frame's location set to a fragment of its document scrolls it there, not loading it again</title>
+<link rel=match href=f4-child-fragment-ref.html>
+<style>
+  body { margin: 0; }
+  iframe { display: block; width: 100px; height: 50px; border: 0; }
+</style>
+<iframe src="support/f9-child.html"></iframe>
+<script>
+  onload = () => {
+    // Loaded again, the target would be red.
+    frames[0].document.getElementById("target").style.background = "green";
+    // Resolved against this document's URL: the child's, with a fragment.
+    frames[0].location.href = "support/f9-child.html#target";
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      // Its URL the one with the fragment.
+      if (!frames[0].location.href.endsWith("/support/f9-child.html#target"))
+        frames[0].document.getElementById("target").style.background = "red";
+      document.documentElement.classList.remove("reftest-wait");
+    }));
+  };
+</script>

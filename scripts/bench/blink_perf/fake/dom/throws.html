@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<script src="../resources/runner.js"></script>
+<script>
+  // What a page whose browser lacks an API it calls does: the runner logs
+  // the exception as fatal and ends the test with no values.
+  PerfTestRunner.measureTime({
+    run() {
+      notDefinedAnywhere();
+    },
+  });
+</script>

@@ -1,0 +1,45 @@
+# Mutation test of step 4a (`customElements` for wasm guests: the
+# record-taking `define`, `get`, `get-name`, kun:dom 0.13's exports):
+# python3 scripts/test.py mutate rfcs/0035-shadow-dom-custom-elements/mutants-4a.toml
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "it", "engine::a_guest_defines_a_custom_element"]
+timeout = 600
+
+[[mutant]]
+name = "a JS-only and a WIT-only method of a name are overloads"
+file = "crates/dom_api/src/declare.rs"
+from = '''                    .filter(|m| m.name == first.name && m.exposure.meets(first.exposure))'''
+to = '''                    .filter(|m| m.name == first.name)'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "api::"]
+
+[[mutant]]
+name = "every front end has both"
+file = "crates/dom_api/src/declare.rs"
+from = '''        self == Self::Both || other == Self::Both || self == other'''
+to = '''        true'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "api::"]
+
+[[mutant]]
+name = "a guest's definition not added"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''        attribute_changed: definition.attribute_changed,
+        form_associated: false,
+    };
+    add_definition(cx, this, init);'''
+to = '''        attribute_changed: definition.attribute_changed,
+        form_associated: false,
+    };
+    let _ = init;'''
+
+[[mutant]]
+name = "a guest's define unchecked"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    check_definition(cx, this, name, &definition.construct)?;'''
+to = ''''''
+
+[[mutant]]
+name = "constructor not escaped in WIT"
+file = "crates/dom_api/src/wit.rs"
+from = '''    "constructor",
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "wit::"]

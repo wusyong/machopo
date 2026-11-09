@@ -1,0 +1,120 @@
+test = ["sh", "-c", "cargo test -q -p compositor --lib && cargo test -q -p paint --test it -- child_frames:: && cargo test -q -p shell --test it -- scheduling::"]
+timeout = 2400
+
+[[mutant]]
+name = "a masked frame's input is that frame's"
+file = "crates/compositor/src/property_trees.rs"
+from = '''        if top.masked {'''
+to = '''        if false && top.masked {'''
+
+[[mutant]]
+name = "input over another frame is the top one's"
+file = "crates/compositor/src/property_trees.rs"
+from = '''        if hits.iter().any(|r| !path.contains(&r.frame)) {'''
+to = '''        if false && hits.iter().any(|r| !path.contains(&r.frame)) {'''
+
+[[mutant]]
+name = "the frames around the top one are other frames"
+file = "crates/compositor/src/property_trees.rs"
+from = '''        while let Some(Some(frame)) = path.last().copied() {
+            path.push(attribution.frames[frame].parent);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the bottom one is on top"
+file = "crates/compositor/src/property_trees.rs"
+from = '''        let Some(top) = hits.iter().max_by_key(|r| r.order) else {'''
+to = '''        let Some(top) = hits.iter().min_by_key(|r| r.order) else {'''
+
+[[mutant]]
+name = "a container's rects aren't clipped by it"
+file = "crates/compositor/src/property_trees.rs"
+from = '''                    if !picked_at.contains(at) {
+                        return None;
+                    }'''
+to = ''''''
+
+[[mutant]]
+name = "a container's rects don't scroll"
+file = "crates/compositor/src/property_trees.rs"
+from = '''                    Some(PointF::new(at.x - content.x, at.y - content.y))'''
+to = '''                    let _ = content;
+                    Some(at)'''
+
+[[mutant]]
+name = "a sticky box's rects don't move"
+file = "crates/compositor/src/property_trees.rs"
+from = '''                    Some(PointF::new(at.x - origin.x, at.y - origin.y))'''
+to = '''                    let _ = origin;
+                    Some(at)'''
+
+[[mutant]]
+name = "a key is the frame's under the pointer"
+file = "crates/compositor/src/proxy_impl.rs"
+from = '''            InputEvent::Key(_) => Self::FocusedFrame,'''
+to = '''            InputEvent::Key(_) => Self::TargetedFrame(None),'''
+
+[[mutant]]
+name = "the viewport's scroll is left out"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''        let at = PointF::new(point.x + offset.x, point.y + offset.y);
+        tree.property_trees
+            .frame_attribution(at,'''
+to = '''        let at = PointF::new(point.x + 0.0 * offset.x, point.y + 0.0 * offset.y);
+        tree.property_trees
+            .frame_attribution(at,'''
+
+[[mutant]]
+name = "paint masks nothing"
+file = "crates/paint/src/hit_test.rs"
+from = '''        let masked = canvas
+            && chain'''
+to = '''        let masked = false
+            && chain'''
+
+[[mutant]]
+name = "what a frame's child frames paint covers it"
+file = "crates/paint/src/hit_test.rs"
+from = '''                !around(under, frame) && (mover != moved_by'''
+to = '''                (under != frame || !around(under, frame)) && (mover != moved_by'''
+
+[[mutant]]
+name = "what doesn't overlap a frame covers it"
+file = "crates/paint/src/hit_test.rs"
+from = '''(mover != moved_by || !at.intersect(&rect).is_empty())'''
+to = '''(mover != moved_by || !at.is_empty())'''
+
+[[mutant]]
+name = "what moves apart from a frame doesn't cover it"
+file = "crates/paint/src/hit_test.rs"
+from = '''(mover != moved_by || !at.intersect(&rect).is_empty())'''
+to = '''(mover != mover || !at.intersect(&rect).is_empty())'''
+
+[[mutant]]
+name = "rects stay in the root's space"
+file = "crates/paint/src/hit_test.rs"
+from = '''            place(&mut attributed, trees, &to_root, moved_by);'''
+to = ''''''
+
+[[mutant]]
+name = "rects aren't clipped"
+file = "crates/paint/src/hit_test.rs"
+from = '''            for clip in &clips {
+                rect = rect.intersect(clip);
+            }
+            if rect.is_empty() {
+                continue;
+            }
+            if canvas {'''
+to = '''            let _ = &clips;
+            if rect.is_empty() {
+                continue;
+            }
+            if canvas {'''
+
+[[mutant]]
+name = "a frame has no parent frame"
+file = "crates/paint/src/hit_test.rs"
+from = '''        let parent = outer.and_then(|o| frame_index(&frame_of_iframe, o));'''
+to = '''        let parent = outer.and_then(|_| None);'''

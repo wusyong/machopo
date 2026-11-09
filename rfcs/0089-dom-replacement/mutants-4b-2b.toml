@@ -1,0 +1,148 @@
+# Stage 4b-2b: `KeyboardEvent` (string dictionary members), the keys'
+# events at the body (`EventHandler::handle_key`), the renderer handing
+# keys to the new DOM, `kun --next-dom` in a window.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_api_next --test it -- input && cargo test -q -p dom_js_next --test it -- ui_events && cargo test -q -p shell --test it -- next_dom && cargo test -q -p shell --bin kun"]
+timeout = 3000
+
+[[mutant]]
+name = "no keypress"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        if input.down && not_canceled && input.types_text() {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a canceled keydown types"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        if input.down && not_canceled && input.types_text() {'''
+to = '''        if input.down && input.types_text() {'''
+
+[[mutant]]
+name = "a control character types"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        let printable = self.text == "\r" || !self.text.chars().any(char::is_control);'''
+to = '''        let printable = true;'''
+
+[[mutant]]
+name = "Enter types nothing"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        let printable = self.text == "\r" || !self.text.chars().any(char::is_control);'''
+to = '''        let printable = !self.text.chars().any(char::is_control);'''
+
+[[mutant]]
+name = "Ctrl types"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        !self.text.is_empty() && printable && !(ctrl && !alt) && !meta'''
+to = '''        !self.text.is_empty() && printable && !meta'''
+
+[[mutant]]
+name = "AltGr types nothing"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        !self.text.is_empty() && printable && !(ctrl && !alt) && !meta'''
+to = '''        !self.text.is_empty() && printable && !ctrl && !meta'''
+
+[[mutant]]
+name = "keypress's codes the key's"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            let info = KeyboardEventInfo {
+                char_code,
+                key_code: char_code,
+                ..info
+            };'''
+to = '''            let info = KeyboardEventInfo { char_code, ..info };'''
+
+[[mutant]]
+name = "keys at the root"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        crate::geometry::body(cx, document)
+            .or_else(|| crate::geometry::document_element(cx, document))'''
+to = '''        crate::geometry::document_element(cx, document)'''
+
+[[mutant]]
+name = "every key a keyup"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        let event_type = if input.down { "keydown" } else { "keyup" };'''
+to = '''        let event_type = "keyup";'''
+
+[[mutant]]
+name = "a key event not cancelable"
+file = "crates/dom_api_next/src/input.rs"
+from = '''                bubbles: true,
+                cancelable: true,
+                composed: true,
+                trusted: true,
+            },
+            window,
+        );
+        cx.set_keyboard_event_data(event, window, info);'''
+to = '''                bubbles: true,
+                cancelable: false,
+                composed: true,
+                trusted: true,
+            },
+            window,
+        );
+        cx.set_keyboard_event_data(event, window, info);'''
+
+[[mutant]]
+name = "which isn't keyCode"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''    if let Some(data) = cx.keyboard_event_data(this) {
+        return Ok(cx.keyboard_event_info(data).key_code);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a keyboard event's modifiers aren't its own"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''        Some(data) => cx.keyboard_event_info(data).modifiers,'''
+to = '''        Some(_) => 0,'''
+
+[[mutant]]
+name = "the key is the code"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''        key: DomString::new(&init.key),'''
+to = '''        key: DomString::new(&init.code),'''
+
+[[mutant]]
+name = "a KeyboardEvent is a plain event"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''            } else if cx.keyboard_event_data(event).is_some() {'''
+to = '''            } else if false {'''
+
+[[mutant]]
+name = "a keyboard event's view none"
+file = "crates/dom_next/src/ui_event.rs"
+from = '''            Some(key) => (key.view.get(self.gc), key.detail.get()),'''
+to = '''            Some(key) => (None, key.detail.get()),'''
+
+[[mutant]]
+name = "a keyboard event isn't a UI event"
+file = "crates/dom_next/src/ui_event.rs"
+from = '''                    || data.downcast::<KeyboardEventData>().is_some()'''
+to = ''''''
+
+[[mutant]]
+name = "a dictionary's string not converted"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        let string = value.to_string(scope)?;
+        Some(Some(string.to_rust_string_lossy(scope)))'''
+to = '''        let _ = value;
+        Some(None)'''
+
+[[mutant]]
+name = "keys not the new DOM's"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        if let InputEvent::Key(key) = event {'''
+to = '''        if let (InputEvent::Key(key), false) = (event, true) {'''
+
+[[mutant]]
+name = "a window never the new DOM's"
+file = "crates/shell/src/main.rs"
+from = '''    let window_next_dom = next_dom && out.is_none();'''
+to = '''    let window_next_dom = false;'''
+
+[[mutant]]
+name = "automation takes --next-dom"
+file = "crates/shell/src/main.rs"
+from = '''    if next_dom && (automation.is_some() || automation_pipe) {'''
+to = '''    if false {'''

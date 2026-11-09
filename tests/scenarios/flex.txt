@@ -1,0 +1,18 @@
+# about:demo's flex row: `order` moves an item to the end and
+# back. The row is at the end of the page: scrolled to first, so that what
+# is captured shows it.
+navigate about:demo
+wait-loaded
+scroll-to #flex-a
+screenshot flex-first
+# Where A is: the frame there changes once it moves (A's box may move
+# before a wait for it to begin).
+capture first
+click #flex-order
+wait-text #flex-note "A comes last (order: 1)."
+expect-differs first #flex-a
+screenshot flex-last
+capture last
+click #flex-order
+wait-text #flex-note "A comes first."
+expect-differs last #flex-a

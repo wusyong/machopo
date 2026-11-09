@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<style>body { margin: 0 } .t, .o { position: absolute; width: 20px; height: 20px }</style>
+<div class="t" id="covered" style="left: 0; top: 0"></div>
+<div class="o" style="left: 10px; top: 10px"></div>
+<div class="t" id="through" style="left: 100px; top: 0"></div>
+<div class="o" style="left: 110px; top: 10px; pointer-events: none"></div>
+<div class="t" id="shadowed" style="left: 200px; top: 0"></div>
+<div class="o" id="caster" style="left: 250px; top: 0"></div>
+<script>
+const seen = [];
+let finished;
+const result = new Promise(r => finished = r);
+const el = id => document.getElementById(id);
+const observer = new IntersectionObserver(entries => {
+  for (const e of entries) seen.push(`${e.target.id} ${e.isVisible}`);
+  if (seen.length == 3) el('caster').style.boxShadow = '-40px 0 0 red';
+  if (seen.length == 4) finished(seen.join(', '));
+}, {trackVisibility: true, delay: 100});
+for (const id of ['covered', 'through', 'shadowed']) observer.observe(el(id));
+function run() { return Promise.race([result, new Promise(r => setTimeout(() => r('timeout ' + seen.join(', ')), 2000))]); }
+</script>

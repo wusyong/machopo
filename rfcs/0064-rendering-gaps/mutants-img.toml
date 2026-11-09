@@ -1,0 +1,40 @@
+# A loading `<img>` rooted until its image comes (`renderer`).
+#   python3 scripts/test.py mutate rfcs/0064-rendering-gaps/mutants-img.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "images::"]
+timeout = 900
+
+[[mutant]]
+name = "a loading image not rooted"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        self.loading_images
+            .borrow_mut()
+            .insert(element.id(), (element.clone(), url.clone()));'''
+to = ''''''
+
+[[mutant]]
+name = "every loading image told of another's"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                        if *img_url != url {
+                            return true;
+                        }'''
+to = '''                        if false {
+                            return true;
+                        }'''
+
+[[mutant]]
+name = "a loading image kept after its image came"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                        self.images_fetched
+                            .push((img.clone(), url.clone(), available));
+                        false
+                    });'''
+to = '''                        self.images_fetched
+                            .push((img.clone(), url.clone(), available));
+                        true
+                    });'''
+
+[[mutant]]
+name = "a document gone keeps its loading images"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        self.loading_images.take();'''
+to = ''''''

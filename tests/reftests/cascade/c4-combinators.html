@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<title>C4: descendant, child, next-sibling and subsequent-sibling combinators</title>
+<link rel="match" href="c4-combinators-ref.html">
+<style>html, body { margin: 0 }</style>
+<style>
+  div { width: 100px; height: 20px; background-color: red }
+  .g { background-color: green }
+  section div { background-color: green }
+  .child > div { background-color: green }
+  .next + div { background-color: green }
+  .later ~ div { background-color: green }
+  /* Red if `>` matched a grandchild, or `+` a later sibling. */
+  .not-child > div { background-color: red }
+  .not-next + div { background-color: red }
+</style>
+<section><article><div></div></article></section>
+<article class="child"><div></div></article>
+<div class="g next"></div><div></div>
+<div class="g later"></div><aside></aside><div></div>
+<article class="not-child"><aside><div class="g"></div></aside></article>
+<div class="g not-next"></div><aside></aside><div class="g"></div>

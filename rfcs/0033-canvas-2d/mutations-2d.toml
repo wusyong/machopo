@@ -1,0 +1,50 @@
+# Step 2d's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0033-canvas-2d/mutations-2d.toml`. Whether the canvas text reftest
+# and WPT's `text/` catch what the unit tests do: each breaks something
+# they draw or measure.
+test = ["python3", "scripts/test.py", "reftest", "canvas/c5-text.html"]
+timeout = 2400
+
+[[mutant]]
+name = "the baseline not moved"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let baseline = y as f32 + baseline_offset(state.text_baseline, &shaped.metrics);'''
+to = '''    let baseline = y as f32;'''
+
+[[mutant]]
+name = "centered at the start"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        (TextAlign::Center, _) => width / 2.0,'''
+to = '''        (TextAlign::Center, _) => 0.0,'''
+
+[[mutant]]
+name = "no scale for maxWidth"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    record_under(cx, this, [scale, 0.0, 0.0, 1.0, 0.0, 0.0], ops);'''
+to = '''    record_under(cx, this, IDENTITY, ops);'''
+
+[[mutant]]
+name = "no letter spacing"
+file = "crates/layout/src/canvas_text.rs"
+from = '''        StyleProperty::LetterSpacing(style.letter_spacing),'''
+to = '''        StyleProperty::LetterSpacing(0.0),'''
+
+[[mutant]]
+name = "the font's descent its ascent"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                font_bounding_box_descent: f64::from(metrics.descent) + below,'''
+to = '''                font_bounding_box_descent: f64::from(metrics.ascent) + below,'''
+
+[[mutant]]
+name = "the ink's left edge the wrong way"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                actual_bounding_box_left: dx - f64::from(ink.x),'''
+to = '''                actual_bounding_box_left: f64::from(ink.x) - dx,'''
+test = ["python3", "scripts/test.py", "wpt", "html/canvas/element/text/2d.text.drawing.style.measure.textAlign.html", "html/canvas/element/text/2d.text.drawing.style.measure.direction.html", "html/canvas/element/text/2d.text.drawing.style.measure.rtl.text.html"]
+
+[[mutant]]
+name = "no word spacing"
+file = "crates/layout/src/canvas_text.rs"
+from = '''        StyleProperty::WordSpacing(style.word_spacing),'''
+to = '''        StyleProperty::WordSpacing(0.0),'''
+test = ["python3", "scripts/test.py", "wpt", "html/canvas/element/text/2d.text.drawing.style.wordSpacing.measure.html"]

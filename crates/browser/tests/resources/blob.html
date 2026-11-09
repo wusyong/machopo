@@ -1,0 +1,89 @@
+<!-- What Blob, bodies of bytes and blob: URLs do, as Chrome 152 does: the `blobs` test of navigation.rs compares the title of the blob: document this page ends at with what Chrome gave. -->
+<!doctype html><meta charset=utf-8><body><script>
+const out = [];
+const show = (b) => Array.from(new Uint8Array(b)).join(',');
+// A 1x2 PNG.
+const png = new Uint8Array([137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,1,0,0,0,2,8,6,0,0,0,153,129,182,39,0,0,0,16,73,68,65,84,120,156,99,248,207,192,240,159,1,68,0,0,19,246,3,253,184,166,241,202,0,0,0,0,73,69,78,68,174,66,96,130]);
+async function run() {
+  // 1. Reading a blob: in a task, after the microtasks queued before.
+  const blob = new Blob(['\ufeffh\u00e9', new Uint8Array([33])], {type: 'Text/Plain'});
+  const order = [];
+  const text = blob.text().then(t => { order.push('text'); return t; });
+  Promise.resolve().then(() => order.push('micro'));
+  out.push('text ' + JSON.stringify(await text) + ' ' + order.join(','));
+  const buffer = await blob.slice(1, 4).arrayBuffer();
+  out.push('arrayBuffer ' + buffer.constructor.name + ' ' + show(buffer));
+  const bytes = await blob.bytes();
+  out.push('bytes ' + bytes.constructor.name + ' ' + bytes.length + ' ' + (await blob.bytes() !== bytes));
+  // 2. Bodies.
+  const r = new Response(new Uint8Array([104, 105]), {headers: {'Content-Type': 'Text/HTML; Charset="UTF-8"'}});
+  const rb = await r.blob();
+  out.push('response blob ' + rb.size + ' ' + rb.type + ' ' + r.bodyUsed);
+  out.push('response bytes ' + show(await new Response('ab').bytes()) + ' ' + show(await new Response(blob).arrayBuffer()));
+  out.push('blob of no type ' + JSON.stringify((await new Response(new ArrayBuffer(2)).blob()).type));
+  const q = new Request('/x', {method: 'POST', body: new Blob(['q'], {type: 'a/b'})});
+  out.push('request blob ' + (await q.blob()).type + ' ' + show(await new Request('/x', {method: 'POST', body: new Uint16Array([258])}).arrayBuffer()));
+  // 3. fetch() of a blob URL.
+  const url = URL.createObjectURL(new Blob(['hello'], {type: 'text/plain;charset=utf-8'}));
+  const f = await fetch(url);
+  out.push('fetch ' + f.status + ' ' + JSON.stringify(f.statusText) + ' ' + f.headers.get('content-type') + ' ' + f.headers.get('content-length') + ' ' + f.type + ' ' + (f.url === url) + ' ' + await f.text());
+  const ranged = await fetch(url, {headers: {Range: 'bytes=1-3'}});
+  out.push('range ' + ranged.status + ' ' + ranged.headers.get('content-range') + ' ' + await ranged.text());
+  out.push('fragment ' + await (await fetch(url + '#x')).text());
+  out.push('post ' + await fetch(url, {method: 'POST'}).then(() => 'ok', e => e.name));
+  const empty = await fetch(URL.createObjectURL(new Blob(['x'])));
+  out.push('no type ' + JSON.stringify(empty.headers.get('content-type')));
+  // Revoked after the fetch: it has the blob; before: a network error.
+  const late = fetch(url);
+  URL.revokeObjectURL(url);
+  out.push('revoked after ' + await late.then(r => r.text(), e => e.name));
+  out.push('revoked before ' + await fetch(url).then(() => 'ok', e => e.name));
+  out.push('other origin ' + (URL.revokeObjectURL('blob:http://other.test/x') === undefined));
+  // 4. An image, a script and an iframe of a blob URL, revoked at once.
+  const img = new Image();
+  const imgUrl = URL.createObjectURL(new Blob([png], {type: 'image/png'}));
+  img.src = imgUrl;
+  URL.revokeObjectURL(imgUrl);
+  await new Promise(r => { img.onload = img.onerror = r; });
+  out.push('img ' + img.naturalWidth + 'x' + img.naturalHeight);
+  const script = document.createElement('script');
+  const scriptUrl = URL.createObjectURL(new Blob(['window.fromBlob = 42;']));
+  script.src = scriptUrl;
+  document.body.append(script);
+  URL.revokeObjectURL(scriptUrl);
+  await new Promise(r => { script.onload = script.onerror = r; });
+  out.push('script ' + window.fromBlob);
+  // A script of a blob URL revoked in an earlier task doesn't load.
+  const stale = document.createElement('script');
+  stale.src = scriptUrl;
+  document.body.append(stale);
+  out.push('script revoked before ' + await new Promise(r => { stale.onload = stale.onerror = e => r(e.type); }));
+  const frame = document.createElement('iframe');
+  const frameUrl = URL.createObjectURL(new Blob(['<title>child</title><p>x'], {type: 'text/html'}));
+  frame.src = frameUrl;
+  document.body.append(frame);
+  URL.revokeObjectURL(frameUrl);
+  await new Promise(r => { frame.onload = r; });
+  out.push('iframe ' + frame.contentDocument.title + ' ' + (frame.contentWindow.location.href === frameUrl));
+  // A child frame's blob URLs go with its document; another document of
+  // the origin may revoke one.
+  const child = document.createElement('iframe');
+  document.body.append(child);
+  const childUrl = child.contentWindow.URL.createObjectURL(new child.contentWindow.Blob(['x']));
+  const alive = await fetch(childUrl).then(r => r.text(), e => e.name);
+  child.remove();
+  out.push('discarded ' + alive + ' ' + await fetch(childUrl).then(r => r.text(), e => e.name));
+  const sibling = document.createElement('iframe');
+  document.body.append(sibling);
+  const siblingUrl = sibling.contentWindow.URL.createObjectURL(new Blob(['y']));
+  URL.revokeObjectURL(siblingUrl);
+  out.push('revoked by another ' + await fetch(siblingUrl).then(r => r.text(), e => e.name));
+  // 5. This page goes to a blob URL, revoked at once.
+  const next = '<title>' + out.join(' | ') + '</title><script>document.title += " | navigated " + (location.origin === ' +
+    JSON.stringify(location.origin) + ') + " " + (location.protocol);</scr' + 'ipt>';
+  const nextUrl = URL.createObjectURL(new Blob([next], {type: 'text/html;charset=utf-8'}));
+  location.href = nextUrl;
+  URL.revokeObjectURL(nextUrl);
+}
+addEventListener('load', () => run().catch(e => { document.title = 'error ' + e; }));
+</script>

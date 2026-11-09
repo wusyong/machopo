@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<title>Border styles 1: double is two lines of a third each; inset darkens the top and left and lightens the bottom and right; hidden is none, and takes no room</title>
+<link rel="match" href="t1-border-styles-ref.html">
+<style>
+  html, body { margin: 0 }
+  div { width: 60px; height: 30px; margin: 10px }
+</style>
+<div style="border: 6px double red"></div>
+<!-- Black: as dark as can be, its top and left stay black; its bottom and
+     right are lightened to rgb(84, 84, 84) (Blink's Color::Light). -->
+<div style="border: 6px inset black"></div>
+<div style="border: 10px hidden red; background: green"></div>

@@ -1,0 +1,45 @@
+<!-- What requestIdleCallback does, as Chrome 152 does: the `idle_callbacks` test of navigation.rs compares the title with what Chrome gave. -->
+<!doctype html><body><script>
+const out=[];
+const t0=performance.now();
+// 1. Nothing to draw: long idle periods, up to 50 ms each; a callback
+// requested in one runs in a later one.
+let n=0;
+function chain(d){
+  const rem=d.timeRemaining();
+  out.push('chain '+(rem>0&&rem<=50)+' '+d.didTimeout+' '+(d instanceof IdleDeadline));
+  if(++n<3) requestIdleCallback(chain); else animated();
+}
+addEventListener('load',()=>{ out.push('handle '+typeof requestIdleCallback(chain)); });
+// 2. While frames are drawn (for 300 ms): up to the next frame.
+function animated(){
+  const until=performance.now()+300; const raf=()=>{ if(performance.now()<until) requestAnimationFrame(raf); }; requestAnimationFrame(raf);
+  let k=0; const idle=(d)=>{ out.push('animated '+(d.timeRemaining()<17)); if(++k<2) requestIdleCallback(idle); else setTimeout(busy,300); };
+  requestIdleCallback(idle);
+}
+// 3. A timeout while tasks keep the loop busy: run without an idle period.
+function busy(){
+  const s=performance.now();
+  let spinning=true;
+  requestIdleCallback((d)=>{ out.push('timeout '+(performance.now()-s>=100)+' '+d.didTimeout+' '+d.timeRemaining()+' '+spinning); order(); }, {timeout: 100});
+  const spin=()=>{ const e=performance.now()+20; while(performance.now()<e){} if(performance.now()-s<300) setTimeout(spin,0); else spinning=false; };
+  spin();
+}
+// 4. In the order requested, but for a cancelled one.
+function order(){
+  const seen=[];
+  requestIdleCallback(()=>seen.push('a'));
+  requestIdleCallback(()=>seen.push('b'));
+  const c=requestIdleCallback(()=>seen.push('c'));
+  cancelIdleCallback(c);
+  requestIdleCallback(()=>{
+    seen.push('d');
+    out.push('order '+seen.join(''));
+    out.push('proto '+Object.getOwnPropertyNames(IdleDeadline.prototype).sort().join(' '));
+    let ctor; try { new IdleDeadline(); ctor='made'; } catch (e) { ctor=e.constructor.name; }
+    out.push('new '+ctor+' length '+requestIdleCallback.length+' '+IdleDeadline.length);
+    out.push('toString '+Object.prototype.toString.call(IdleDeadline.prototype));
+    document.title=out.join(' | ');
+  });
+}
+</script>

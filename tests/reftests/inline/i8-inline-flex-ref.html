@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<title>I8 reference</title>
+<style>
+  html, body { margin: 0 }
+  .row { display: flex; align-items: flex-start }
+  .row > div { flex: none }
+  .glyph { width: 20px; height: 20px; background-color: black }
+</style>
+<!-- The baseline 21px down: each glyph 16px above it. -->
+<div class="row" style="height: 30px">
+  <div class="glyph" style="margin-top: 5px"></div>
+  <div style="display: flex; align-items: flex-start; padding: 5px; background-color: blue">
+    <div style="width: 40px; height: 20px; background-color: white"></div>
+    <div style="width: 10px; height: 10px; margin: 5px 0 0 5px; background-color: yellow"></div>
+  </div>
+  <div class="glyph" style="margin-top: 5px"></div>
+</div>
+<!-- The baseline 20px down, the line 4px deeper for the descent. -->
+<div class="row" style="height: 24px">
+  <div class="glyph" style="margin-top: 4px"></div>
+  <div style="display: flex; width: 50px; height: 20px; background-color: lime">
+    <div class="glyph"></div>
+    <div class="glyph" style="margin-left: 10px"></div>
+  </div>
+  <div class="glyph" style="margin-top: 4px"></div>
+</div>

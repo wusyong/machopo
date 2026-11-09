@@ -1,0 +1,184 @@
+# 1: rotate, skew, transform-origin, transform-box, their interpolation
+# (`gfx`, `computed_style`, `css`, `style`, `layout`, `dom_api`).
+#   python3 scripts/test.py mutate rfcs/0064-rendering-gaps/mutants-1.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it"]
+timeout = 1800
+
+[[mutant]]
+name = "rotate() not parsed"
+file = "crates/css/src/effects.rs"
+from = '''            "rotate" => Ok(TransformFunction::Rotate(Angle::parse_or_zero(input)?, false)),'''
+to = '''            "rotate" => Err(input.new_custom_error(())),'''
+
+[[mutant]]
+name = "rotateZ() written as rotate()"
+file = "crates/css/src/effects.rs"
+from = '''                dest.push_str(if *z { "rotateZ(" } else { "rotate(" });'''
+to = '''                dest.push_str(if false { "rotateZ(" } else { "rotate(" });'''
+
+[[mutant]]
+name = "a unitless 0 not an angle"
+file = "crates/css/src/background.rs"
+from = '''                Token::Number { value: 0.0, .. } => Ok(()),'''
+to = '''                Token::Number { value: 1234.0, .. } => Ok(()),'''
+
+[[mutant]]
+name = "rotation the other way"
+file = "crates/gfx/src/lib.rs"
+from = '''        Self([cos, sin, -sin, cos, 0.0, 0.0])
+    }'''
+to = '''        Self([cos, -sin, sin, cos, 0.0, 0.0])
+    }'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "geometry::"]
+
+[[mutant]]
+name = "skew's axes swapped"
+file = "crates/gfx/src/lib.rs"
+from = '''        Self([1.0, tan(y), tan(x), 1.0, 0.0, 0.0])'''
+to = '''        Self([1.0, tan(x), tan(y), 1.0, 0.0, 0.0])'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "geometry::"]
+
+[[mutant]]
+name = "quarter turns not exact"
+file = "crates/gfx/src/lib.rs"
+from = '''    if quarter.fract() == 0.0 {
+        return match quarter.rem_euclid(4.0) as u8 {'''
+to = '''    if false {
+        return match quarter.rem_euclid(4.0) as u8 {'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+[[mutant]]
+name = "transform-origin left out"
+file = "crates/computed_style/src/lib.rs"
+from = '''        let x = reference.x + origin.x.resolve(reference.width);'''
+to = '''        let x = reference.x + reference.width / 2.0;'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "geometry::"]
+
+[[mutant]]
+name = "a CSS box's content box not its reference box"
+file = "crates/layout/src/geometry.rs"
+from = '''    let reference = match fragment.style.rare.transform_box {'''
+to = '''    let reference = match TransformBox::BorderBox {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "geometry::"]
+
+[[mutant]]
+name = "an SVG element's reference box always its viewport"
+file = "crates/layout/src/svg.rs"
+from = '''    match node.style.rare.transform_box {'''
+to = '''    match TransformBox::ViewBox {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "geometry::transform_origins"]
+
+[[mutant]]
+name = "a rect's stroke box as far as a miter"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''            let reach = if shape.simple_stroke {'''
+to = '''            let reach = if false {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "geometry::transform_origins"]
+
+[[mutant]]
+name = "a path's stroke box not as far as a miter"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''        reach = reach.max(style.svg.stroke_miterlimit);'''
+to = '''        reach = reach.max(1.0);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "geometry::transform_origins"]
+
+[[mutant]]
+name = "an SVG attribute's plain numbers not px but for one alone"
+file = "crates/style/src/hints.rs"
+from = '''                numbers = true;'''
+to = '''                numbers = value.split_ascii_whitespace().count() == 1;'''
+
+[[mutant]]
+name = "the UA stylesheet without svg|"
+file = "crates/css/src/selector.rs"
+from = '''        (self.user_agent && prefix.0 == "svg").then(|| CssIdent::from("http://www.w3.org/2000/svg"))'''
+to = '''        (false && prefix.0 == "svg").then(|| CssIdent::from("http://www.w3.org/2000/svg"))'''
+
+[[mutant]]
+name = "no prefix interpolated one by one"
+file = "crates/css/src/interpolate.rs"
+from = '''    let prefix = matching_prefix(self, other);'''
+to = '''    let prefix = 0;'''
+
+[[mutant]]
+name = "the shorter list's end not identities"
+file = "crates/css/src/interpolate.rs"
+from = '''            a.len().max(b.len())
+        }'''
+to = '''            shorter
+        }'''
+
+[[mutant]]
+name = "a rest with a percentage made a matrix without the box"
+file = "crates/css/src/interpolate.rs"
+from = '''            if from.iter().chain(to.iter()).any(depends_on_box) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "skewX and skewY one kind"
+file = "crates/css/src/interpolate.rs"
+from = '''        && std::mem::discriminant(a) == std::mem::discriminant(b)'''
+to = '''        && (std::mem::discriminant(a) == std::mem::discriminant(b)
+            || matches!(
+                (a, b),
+                (TransformOperation::SkewX(_), TransformOperation::SkewY(_))
+                    | (TransformOperation::SkewY(_), TransformOperation::SkewX(_))
+            ))'''
+
+[[mutant]]
+name = "a turn as a matrix"
+file = "crates/css/src/interpolate.rs"
+from = '''            (Self::Rotate(a), Self::Rotate(b)) => Self::Rotate(a.animate(b, progress, cx)?),'''
+to = '''            (Self::Rotate(_), Self::Rotate(_)) => return None,'''
+
+[[mutant]]
+name = "a top keyword first not put on its axis"
+file = "crates/css/src/effects.rs"
+from = '''    let (x, y) = if first.is_vertical_keyword()
+        || (first == OriginComponent::Center && second.is_horizontal_keyword())'''
+to = '''    let (x, y) = if false
+        || (first == OriginComponent::Center && second.is_horizontal_keyword())'''
+
+[[mutant]]
+name = "a length after a vertical keyword taken"
+file = "crates/css/src/effects.rs"
+from = '''        if !keyword(&second) || second.is_vertical_keyword() {'''
+to = '''        if second.is_vertical_keyword() {'''
+
+[[mutant]]
+name = "no -webkit-transform"
+file = "crates/css/src/properties.rs"
+from = '''            "transform" | "-webkit-transform" => Transform,'''
+to = '''            "transform" => Transform,'''
+
+[[mutant]]
+name = "the resolved origin's zero depth written"
+file = "crates/css/src/computed.rs"
+from = '''        if i == 2 && value == 0.0 {
+            break;
+        }'''
+to = '''        if i == 3 && value == 0.0 {
+            break;
+        }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "geometry::transform_origins"]
+
+[[mutant]]
+name = "the resolved origin of the border box with content-box"
+file = "crates/dom_api/src/computed_style.rs"
+from = '''                    size.width = (size.width - left - right).max(0.0);'''
+to = '''                    size.width = size.width.max(0.0);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "geometry::transform_origins"]
+
+[[mutant]]
+name = "a new transform-origin laid out again"
+file = "crates/layout/src/lib.rs"
+from = '''                    transform_origin: old.rare.transform_origin,'''
+to = '''                    transform_origin: new.rare.transform_origin,'''
+test = ["cargo", "test", "-q", "-p", "layout"]
+
+[[mutant]]
+name = "a pause's hold time not in whole microseconds"
+file = "crates/animation/src/playback.rs"
+from = '''                    self.hold_time = Some(from_start(ready_time, start, self.playback_rate));'''
+to = '''                    self.hold_time = Some((ready_time - start) * self.playback_rate);'''
+test = ["cargo", "test", "-q", "-p", "animation"]

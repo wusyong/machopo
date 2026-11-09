@@ -1,0 +1,519 @@
+# Stage 4e-2a: slots on the new DOM: `dom_next`'s slot assignment (named
+# and manual, the slots' list, lazily worked out), DOM's signal slots and
+# the tree and attribute steps that signal them, the flattened
+# slottables; `dom_api_next`'s `HTMLSlotElement`, `assignedSlot`, `slot`,
+# `slotchange` with the observers' delivery, the dispatch through slots
+# and `composedPath()`'s slots in closed trees; the `GcObject` derive's
+# parameter names.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it -- slot shadow && cargo test -q -p dom_api_next --test it && cargo test -q -p dom_js_next --test it -- shadow_dom events mutation_observer && cargo test -q -p gc --test it -- fields_may"]
+timeout = 3000
+
+[[mutant]]
+name = "a slot needs a shadow tree"
+file = "crates/dom_next/src/slot.rs"
+from = '''self.containing_shadow_root(node).is_some() && self.is_slot_element(node)'''
+to = '''self.is_slot_element(node)'''
+
+[[mutant]]
+name = "a slot is any HTML element"
+file = "crates/dom_next/src/slot.rs"
+from = '''name.namespace == names::HTML_NAMESPACE && name.local == names::local::SLOT'''
+to = '''name.namespace == names::HTML_NAMESPACE'''
+
+[[mutant]]
+name = "the slots' list never made again"
+file = "crates/dom_next/src/slot.rs"
+from = '''if data.slot_state.get() & SLOTS_STALE != 0 || data.slots.get(self.gc).is_none() {'''
+to = '''if data.slots.get(self.gc).is_none() {'''
+
+[[mutant]]
+name = "the slots' list kept stale"
+file = "crates/dom_next/src/slot.rs"
+from = '''            data.slot_state.set(data.slot_state.get() & !SLOTS_STALE);
+'''
+to = ''''''
+
+[[mutant]]
+name = "manual: any slot of the node's"
+file = "crates/dom_next/src/slot.rs"
+from = '''.filter(|&scope| Gc::ptr_eq(scope, root) && self.is_slot_element(slot))'''
+to = '''.filter(|_| true)'''
+
+[[mutant]]
+name = "named: the last slot of a name"
+file = "crates/dom_next/src/slot.rs"
+from = '''Some(slots) => slots.iter().copied().find(|&slot| matches(slot)),'''
+to = '''Some(slots) => slots.iter().copied().rev().find(|&slot| matches(slot)),'''
+
+[[mutant]]
+name = "named walk: the last slot of a name"
+file = "crates/dom_next/src/slot.rs"
+from = '''if found.is_none() && self.is_slot(at) && matches(at) {'''
+to = '''if self.is_slot(at) && matches(at) {'''
+
+[[mutant]]
+name = "a comment slottable"
+file = "crates/dom_next/src/slot.rs"
+from = '''matches!(self.kind(node), NodeKind::Element | NodeKind::Text)'''
+to = '''!matches!(self.kind(node), NodeKind::Document)'''
+
+[[mutant]]
+name = "assignedSlot: a host's child only"
+file = "crates/dom_next/src/slot.rs"
+from = '''if host.scope.get() & SHADOW_HOST == 0 || !self.is_slottable(slottable) {'''
+to = '''if host.scope.get() & SHADOW_HOST == 0 {'''
+
+[[mutant]]
+name = "assignedSlot: the stale assignment read"
+file = "crates/dom_next/src/slot.rs"
+from = '''        if data.slot_state.get() & ASSIGNMENT_STALE != 0 {
+            return self.find_slot_in(root, slottable, None);
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "assignedNodes: a slot out of a shadow tree"
+file = "crates/dom_next/src/slot.rs"
+from = '''        if !self.is_slot(slot) {
+            return Vec::new();
+        }
+        let root'''
+to = '''        let Some(_) = self.containing_shadow_root(slot) else {
+            return Vec::new();
+        };
+        let root'''
+
+[[mutant]]
+name = "assignedNodes not worked out"
+file = "crates/dom_next/src/slot.rs"
+from = '''        self.recalc_slot_assignment(root);
+        self.assigned_list(slot)'''
+to = '''        self.assigned_list(slot)'''
+
+[[mutant]]
+name = "flatten: no fallback"
+file = "crates/dom_next/src/slot.rs"
+from = '''        if nodes.is_empty() {
+            nodes = self.children(slot)'''
+to = '''        if false {
+            nodes = self.children(slot)'''
+
+[[mutant]]
+name = "flatten: a slot not gone into"
+file = "crates/dom_next/src/slot.rs"
+from = '''            if self.is_slot(node) {
+                self.flatten_into(node, out);'''
+to = '''            if false {
+                self.flatten_into(node, out);'''
+
+[[mutant]]
+name = "recalc: never again"
+file = "crates/dom_next/src/slot.rs"
+from = '''        self.assign_slottables(root);
+        data.slot_state.set(data.slot_state.get() & !ASSIGNMENT_STALE);'''
+to = '''        if data.slots.get(self.gc).is_none() {
+            self.assign_slottables(root);
+        }
+        data.slot_state.set(data.slot_state.get() & !ASSIGNMENT_STALE);'''
+
+[[mutant]]
+name = "recalc: the old slots kept"
+file = "crates/dom_next/src/slot.rs"
+from = '''            if let Some(rare) = self.node_rare(at, false) {
+                rare.assigned_slot.set(self.gc, None);
+            }
+            child = self.next_sibling(at);
+        }
+        for (slot'''
+to = '''            child = self.next_sibling(at);
+        }
+        for (slot'''
+
+[[mutant]]
+name = "manual: nodes not the host's assigned"
+file = "crates/dom_next/src/slot.rs"
+from = '''.filter(|&node| self.parent(node).is_some_and(|parent| Gc::ptr_eq(parent, host)))'''
+to = '''.filter(|_| true)'''
+
+[[mutant]]
+name = "named: a slot's own name for the renamed"
+file = "crates/dom_next/src/slot.rs"
+from = '''Some((renamed, name)) if Gc::ptr_eq(renamed, slot) => crate::DomString::new(name),'''
+to = '''Some((_, name)) if false => crate::DomString::new(name),'''
+
+[[mutant]]
+name = "named: a comment's name"
+file = "crates/dom_next/src/slot.rs"
+from = '''            if self.is_slottable(at) {
+                let name = self.slottable_name(at);'''
+to = '''            if true {
+                let name = self.slottable_name(at);'''
+
+[[mutant]]
+name = "an emptied slot keeps its list"
+file = "crates/dom_next/src/slot.rs"
+from = '''        if nodes.is_empty() {
+            if let Some(list) = self.slot_data(slot, false).and_then(|data| data.assigned.get(self.gc)) {
+                list.clear(self.gc);
+            }
+            return;
+        }'''
+to = '''        if nodes.is_empty() {
+            return;
+        }'''
+
+[[mutant]]
+name = "assign: a node twice"
+file = "crates/dom_next/src/slot.rs"
+from = '''            if !unique.iter().any(|&at| Gc::ptr_eq(at, node)) {
+                unique.push(node);
+            }'''
+to = '''            unique.push(node);'''
+
+[[mutant]]
+name = "assign: the old nodes keep the slot"
+file = "crates/dom_next/src/slot.rs"
+from = '''        for &old in &self.manually_assigned(slot) {
+            if let Some(rare) = self.node_rare(old, false) {
+                rare.manual_slot.set(self.gc, None);
+            }
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "assign: the previous slot keeps the node"
+file = "crates/dom_next/src/slot.rs"
+from = '''                self.remove_manual(previous, node);
+'''
+to = ''''''
+
+[[mutant]]
+name = "assign: no signal"
+file = "crates/dom_next/src/slot.rs"
+from = '''            for (&slot, had) in slots.iter().zip(&had) {
+                if !same_nodes(had, &self.assigned_list(slot)) {
+                    self.signal_slot_change(slot);
+                }
+            }
+        }
+    }'''
+to = '''        }
+    }'''
+
+[[mutant]]
+name = "assign: the previous slot's tree left out"
+file = "crates/dom_next/src/slot.rs"
+from = '''        for at in std::iter::once(slot).chain(previous) {'''
+to = '''        let _ = previous.count();
+        for at in std::iter::once(slot) {'''
+
+[[mutant]]
+name = "slots changed: a signal for each slot"
+file = "crates/dom_next/src/slot.rs"
+from = '''            if !same_nodes(had, &self.assigned_list(slot)) {
+                self.signal_slot_change(slot);
+            }
+        }
+        // A slot that left'''
+to = '''            let _ = had;
+            self.signal_slot_change(slot);
+        }
+        // A slot that left'''
+
+[[mutant]]
+name = "slots changed: the stale lists as what they had"
+file = "crates/dom_next/src/slot.rs"
+from = '''        let before = self.assignment(root, &old_slots, renamed);'''
+to = '''        let before: Vec<Vec<NodeRef<'gc>>> = old_slots.iter().map(|&slot| self.assigned_list(slot)).collect();'''
+
+[[mutant]]
+name = "slots changed: a slot that left not signaled"
+file = "crates/dom_next/src/slot.rs"
+from = '''                if !had.is_empty() {
+                    self.signal_slot_change(slot);
+                }'''
+to = '''                let _ = had;'''
+
+[[mutant]]
+name = "slots changed: a slot that left keeps its nodes"
+file = "crates/dom_next/src/slot.rs"
+from = '''                self.set_assigned(slot, &[]);
+                if !had'''
+to = '''                if !had'''
+
+[[mutant]]
+name = "a slottable: manual on insertion signals"
+file = "crates/dom_next/src/slot.rs"
+from = '''        if !(inserted && manual) {'''
+to = '''        if !manual || inserted {'''
+
+[[mutant]]
+name = "a slottable: no signal"
+file = "crates/dom_next/src/slot.rs"
+from = '''            if let Some(slot) = self.find_slot_in(root, slottable, Some(&slots)) {
+                self.signal_slot_change(slot);
+            }
+        }
+        data.slot_state'''
+to = '''            let _ = self.find_slot_in(root, slottable, Some(&slots));
+        }
+        data.slot_state'''
+
+[[mutant]]
+name = "a slottable: the assignment not stale"
+file = "crates/dom_next/src/slot.rs"
+from = '''        data.slot_state.set(data.slot_state.get() | ASSIGNMENT_STALE);
+    }
+
+    /// `node` put in'''
+to = '''    }
+
+    /// `node` put in'''
+
+[[mutant]]
+name = "fallback: signaled with assigned nodes"
+file = "crates/dom_next/src/slot.rs"
+from = '''if self.is_slot(parent) && self.assigned_nodes(parent).is_empty() {'''
+to = '''if self.is_slot(parent) {'''
+
+[[mutant]]
+name = "fallback: not signaled"
+file = "crates/dom_next/src/slot.rs"
+from = '''if self.is_slot(parent) && self.assigned_nodes(parent).is_empty() {'''
+to = '''if false {'''
+
+[[mutant]]
+name = "a slot coming: its tree not worked out"
+file = "crates/dom_next/src/slot.rs"
+from = '''        if has_slot {
+            self.slots_changed(root, None);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "slot name: an unchanged name"
+file = "crates/dom_next/src/slot.rs"
+from = '''        if old.unwrap_or("") == new.unwrap_or("") {
+            return;
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "slot name: the old name not signaled"
+file = "crates/dom_next/src/slot.rs"
+from = '''        for name in [old, new] {'''
+to = '''        for name in [new] {'''
+
+[[mutant]]
+name = "slot name: the new name not signaled"
+file = "crates/dom_next/src/slot.rs"
+from = '''        for name in [old, new] {'''
+to = '''        for name in [old] {'''
+
+[[mutant]]
+name = "slot name: manual signals"
+file = "crates/dom_next/src/slot.rs"
+from = '''        {
+            return;
+        }
+        let slots = self.slots_of(root);
+        for name in'''
+to = '''        {
+        }
+        let slots = self.slots_of(root);
+        for name in'''
+
+[[mutant]]
+name = "slot name: the assignment not stale"
+file = "crates/dom_next/src/slot.rs"
+from = '''        let data = self.shadow_data(root).expect("a shadow root's data");
+        data.slot_state.set(data.slot_state.get() | ASSIGNMENT_STALE);
+    }
+}'''
+to = '''    }
+}'''
+
+[[mutant]]
+name = "a slot renamed: as though not"
+file = "crates/dom_next/src/slot.rs"
+from = '''self.slots_changed(root, Some((element, old.unwrap_or(""))));'''
+to = '''self.slots_changed(root, None);'''
+
+[[mutant]]
+name = "insert: no slot steps"
+file = "crates/dom_next/src/lib.rs"
+from = '''        self.link(parent, node, child);
+        if parent.scope.get() & slot::SLOT_SCOPES != 0 {
+            self.slots_inserted(parent, node);
+        }'''
+to = '''        self.link(parent, node, child);'''
+
+[[mutant]]
+name = "insert a fragment: no slot steps"
+file = "crates/dom_next/src/lib.rs"
+from = '''                if parent.scope.get() & slot::SLOT_SCOPES != 0 {
+                    self.slots_inserted(parent, first);
+                }
+'''
+to = ''''''
+
+[[mutant]]
+name = "remove: no slot steps"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if parent.scope.get() & slot::SLOT_SCOPES != 0 {
+            self.slots_removed(parent, node);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "attributes: no slot steps"
+file = "crates/dom_next/src/style.rs"
+from = '''        if name == crate::slot::SLOT_ATTRIBUTE || name == crate::slot::NAME_ATTRIBUTE {'''
+to = '''        if name == crate::slot::SLOT_ATTRIBUTE {'''
+
+[[mutant]]
+name = "signal slots: twice"
+file = "crates/dom_next/src/mutation.rs"
+from = '''        if !(0..list.len()).any(|index| list.get(self.gc, index).is_some_and(|at| Gc::ptr_eq(at, slot))) {
+            list.push(self.gc, slot);
+        }'''
+to = '''        list.push(self.gc, slot);'''
+
+[[mutant]]
+name = "signal slots: no microtask"
+file = "crates/dom_next/src/mutation.rs"
+from = '''        state.signal_slots.set(Some(slots));
+        if !state.queued.replace(true) {
+            state.to_queue.set(true);
+        }'''
+to = '''        state.signal_slots.set(Some(slots));'''
+
+[[mutant]]
+name = "signal slots: kept when taken"
+file = "crates/dom_next/src/mutation.rs"
+from = '''        let taken = (0..list.len()).filter_map(|index| list.get(self.gc, index)).collect();
+        list.clear(self.gc);'''
+to = '''        let taken = (0..list.len()).filter_map(|index| list.get(self.gc, index)).collect();'''
+
+[[mutant]]
+name = "the path: no slot"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''                Some(TargetRef::Node(cx.assigned_slot(node).unwrap_or(parent)))'''
+to = '''                Some(TargetRef::Node(parent))'''
+
+[[mutant]]
+name = "composedPath: no closed slot"
+file = "crates/dom_api_next/src/event.rs"
+from = '''        cx.is_slot(*slot)
+            && !cx.parent(*before)'''
+to = '''        false
+            && !cx.parent(*before)'''
+
+[[mutant]]
+name = "composedPath: a slot's child a closed slot's"
+file = "crates/dom_api_next/src/event.rs"
+from = '''            && !cx.parent(*before).is_some_and(|parent| Gc::ptr_eq(parent, *slot))'''
+to = ''''''
+
+[[mutant]]
+name = "composedPath: an open slot closed"
+file = "crates/dom_api_next/src/event.rs"
+from = '''                .is_some_and(|init| init.mode != dom_next::ShadowRootMode::Open)
+    };
+    // The current'''
+to = '''                .is_some()
+    };
+    // The current'''
+
+[[mutant]]
+name = "composedPath: toward the target, the max level kept"
+file = "crates/dom_api_next/src/event.rs"
+from = '''            level = level.saturating_sub(1);
+            max_level = max_level.min(level);
+        }
+    }
+    // Away'''
+to = '''            level = level.saturating_sub(1);
+        }
+    }
+    // Away'''
+
+[[mutant]]
+name = "composedPath: away, a closed slot not deeper"
+file = "crates/dom_api_next/src/event.rs"
+from = '''        if closed_slot(index) {
+            level = level.saturating_add(1);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "composedPath: away, the max level kept"
+file = "crates/dom_api_next/src/event.rs"
+from = '''            max_level = max_level.min(level);
+        }
+    }
+    Ok(composed.into())'''
+to = '''        }
+    }
+    Ok(composed.into())'''
+
+[[mutant]]
+name = "assignedSlot: a closed tree's shown"
+file = "crates/dom_api_next/src/slot.rs"
+from = '''.is_some_and(|init| init.mode == ShadowRootMode::Open)'''
+to = '''.is_some()'''
+
+[[mutant]]
+name = "assignedNodes: flatten ignored"
+file = "crates/dom_api_next/src/slot.rs"
+from = '''    if options.flatten {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "assignedElements: texts too"
+file = "crates/dom_api_next/src/slot.rs"
+from = '''    nodes.retain(|&node| cx.kind(node) == NodeKind::Element);
+'''
+to = ''''''
+
+[[mutant]]
+name = "slotchange: not fired"
+file = "crates/dom_api_next/src/mutation_observer.rs"
+from = '''        crate::event_target::fire_event(host, slot, names::event::SLOTCHANGE, true, false);'''
+to = '''        let _ = slot;'''
+
+[[mutant]]
+name = "slotchange: not bubbling"
+file = "crates/dom_api_next/src/mutation_observer.rs"
+from = '''names::event::SLOTCHANGE, true, false);'''
+to = '''names::event::SLOTCHANGE, false, false);'''
+
+[[mutant]]
+name = "assign(): any node"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''                    NodeKind::Element | NodeKind::Text => Ok(node),
+                    _ => Err(slottable_error(index)),'''
+to = '''                    _ => Ok(node),'''
+
+[[mutant]]
+name = "assign(): null taken"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''                None => {
+                    front.throw(slottable_error(index));
+                    None
+                }
+            })
+            .collect()'''
+to = '''                None => Some(front.node_arg(0)??),
+            })
+            .collect()'''
+
+[[mutant]]
+name = "the derive: a field's binding shadows the slot"
+file = "crates/gc_macros/src/lib.rs"
+from = '''                #( __gc_slot.field::<#types>(::core::mem::offset_of!(#name, #names), #names); )*'''
+to = '''                let slot = __gc_slot;
+                #( slot.field::<#types>(::core::mem::offset_of!(#name, #names), #names); )*'''

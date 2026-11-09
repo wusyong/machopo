@@ -1,0 +1,93 @@
+# Mutation test of step 4a (the XML parser):
+# python3 scripts/test.py mutate rfcs/0031-svg/mutants-4a.toml
+test = ["cargo", "test", "-q", "-p", "html", "--test", "it", "xml::"]
+timeout = 900
+
+[[mutant]]
+name = "the byte order mark stays"
+file = "crates/html/src/xml.rs"
+from = '''    let mut rest = input.strip_prefix('\u{FEFF}').unwrap_or(input);'''
+to = '''    let mut rest = input;'''
+
+[[mutant]]
+name = "the XML declaration stays"
+file = "crates/html/src/xml.rs"
+from = '''    if rest.starts_with("<?xml")'''
+to = '''    if rest.starts_with("<?xmlnothing")'''
+
+[[mutant]]
+name = "a comment before the DOCTYPE ends the prolog"
+file = "crates/html/src/xml.rs"
+from = '''        if trimmed.starts_with("<!--") {'''
+to = '''        if trimmed.starts_with("<!--nothing") {'''
+
+[[mutant]]
+name = "a processing instruction before the DOCTYPE ends the prolog"
+file = "crates/html/src/xml.rs"
+from = '''        } else if trimmed.starts_with("<?") {'''
+to = '''        } else if trimmed.starts_with("<?nothing") {'''
+
+[[mutant]]
+name = "a quoted [ starts the subset"
+file = "crates/html/src/xml.rs"
+from = '''            (None, b @ (b'"' | b'\'')) => quote = Some(b),'''
+to = '''            (None, b'\0') => quote = Some(0),'''
+
+[[mutant]]
+name = "a ] in a comment in the subset ends it"
+file = "crates/html/src/xml.rs"
+from = '''            None if rest.starts_with("<!--") => {'''
+to = '''            None if rest.starts_with("<!--nothing") => {'''
+
+[[mutant]]
+name = "a quoted ] in the subset ends it"
+file = "crates/html/src/xml.rs"
+from = '''            None if bytes[i] == b'"' || bytes[i] == b'\'' => quote = Some(bytes[i]),'''
+to = '''            None if bytes[i] == b'\0' => quote = Some(bytes[i]),'''
+
+[[mutant]]
+name = "only double quoted values are read"
+file = "crates/html/src/xml.rs"
+from = '''        let Some(quote) = value.chars().next().filter(|&c| c == '"' || c == '\'') else {'''
+to = '''        let Some(quote) = value.chars().next().filter(|&c| c == '"') else {'''
+
+[[mutant]]
+name = "the last declaration wins"
+file = "crates/html/src/xml.rs"
+from = '''                .or_insert_with(|| value[1..1 + len].to_owned());'''
+to = '''                .and_modify(|v| *v = value[1..1 + len].to_owned())
+                .or_insert_with(|| value[1..1 + len].to_owned());'''
+
+[[mutant]]
+name = "references in comments expand"
+file = "crates/html/src/xml.rs"
+from = '''            let end = if rest.starts_with("<!--") {'''
+to = '''            let end = if rest.starts_with("<!--nothing") {'''
+
+[[mutant]]
+name = "references in CDATA sections expand"
+file = "crates/html/src/xml.rs"
+from = '''            } else if rest.starts_with("<![CDATA[") {'''
+to = '''            } else if rest.starts_with("<![CDATA[nothing") {'''
+
+[[mutant]]
+name = "references in processing instructions expand"
+file = "crates/html/src/xml.rs"
+from = '''            } else if rest.starts_with("<?") {
+                rest.find("?>").map(|i| i + 2)'''
+to = '''            } else if rest.starts_with("<?nothing") {
+                rest.find("?>").map(|i| i + 2)'''
+
+[[mutant]]
+name = "expanding has no budget"
+file = "crates/html/src/xml.rs"
+from = '''            (Some(name), Some(value)) if depth < MAX_DEPTH && value.len() <= *budget => {
+                *budget -= value.len();'''
+to = '''            (Some(name), Some(value)) if depth < MAX_DEPTH => {
+                *budget = budget.saturating_sub(value.len());'''
+
+[[mutant]]
+name = "processing instructions are comments"
+file = "crates/html/src/sink.rs"
+from = '''            .with(|m| m.create_processing_instruction(&self.document, &target, &data))'''
+to = '''            .with(|m| m.create_comment(&self.document, &format!("{target} {data}")))'''

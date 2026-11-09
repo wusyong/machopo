@@ -1,0 +1,7 @@
+<!DOCTYPE html>
+<title>T15: break-spaces wraps preserved spaces; the longhands of white-space work alone</title>
+<link rel="match" href="t15-white-space-longhands-ref.html">
+<style>html, body { margin: 0 } div { font: 20px/1 Ahem; color: green } .r { position: absolute; width: 20px; height: 20px; background: green }</style>
+<div style="width: 40px; white-space: break-spaces">X     X</div>
+<div style="width: 40px; text-wrap-mode: nowrap">XX XX</div>
+<div style="white-space-collapse: preserve">X  X</div>

@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<title>Backgrounds 3: layers paint bottom first, each clipped to its box, the color under the bottom one's; positions from either side; space and round fit whole tiles</title>
+<link rel="match" href="b3-layers-and-boxes-ref.html">
+<!-- Stretched `round` tiles are smoothed across their seams, as one
+     repeated image (separate images in the reference aren't). -->
+<meta name="fuzzy" content="maxDifference=0-16;totalPixels=0-60">
+<style>
+  html, body { margin: 0 }
+</style>
+<!-- 100x50 content, 10px padding, 10px border. The color is clipped to
+     the padding box (the bottom layer's), a gradient over the content box
+     on it, and a 20x10 image at the right bottom of the border box. -->
+<div style="width: 100px; height: 50px; padding: 10px; border: 10px solid transparent;
+            background: url(../images/resources/green-blue-20x10.png) right 0 bottom 0 no-repeat border-box,
+                        linear-gradient(blue, blue) content-box,
+                        padding-box green"></div>
+<!-- `space`: 20x10 tiles, four across 86px with 2px between them;
+     `round`: three across 66px, stretched to 22px, and to 11px high to
+     keep their ratio (`auto` height), cut at the box's 10px. -->
+<div style="margin-top: 10px; width: 86px; height: 10px;
+            background: url(../images/resources/green-blue-20x10.png) space no-repeat"></div>
+<div style="margin-top: 10px; width: 66px; height: 10px;
+            background: url(../images/resources/green-blue-20x10.png) round no-repeat"></div>

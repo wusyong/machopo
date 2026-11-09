@@ -1,0 +1,112 @@
+test = ["sh", "-c", "cargo test -q -p paint --test it -- intersection:: && cargo test -q -p shell --test it -- intersection_observers::"]
+timeout = 2400
+
+[[mutant]]
+name = "nothing covers"
+file = "crates/paint/src/intersection.rs"
+from = '''                !crate::hit_test::occluded('''
+to = '''                true || !crate::hit_test::occluded('''
+
+[[mutant]]
+name = "the target's rect is in the viewport, not the document"
+file = "crates/paint/src/intersection.rs"
+from = '''                let rect = self.to_document(target_rect, state.transform);'''
+to = '''                let rect = self.to_viewport(target_rect, state.transform);'''
+
+[[mutant]]
+name = "pointer-events: none doesn't cover"
+file = "crates/paint/src/hit_test.rs"
+from = '''        pointer_events_none: true,'''
+to = '''        pointer_events_none: false,'''
+
+[[mutant]]
+name = "an opacity of 0 covers"
+file = "crates/paint/src/hit_test.rs"
+from = '''            if effects(pre, found.state.effect).any(|e| pre.trees.effect[e.0].opacity == 0.0) {'''
+to = '''            if effects(pre, found.state.effect).any(|e| pre.trees.effect[e.0].opacity < 0.0) {'''
+
+[[mutant]]
+name = "what a clip cuts away covers"
+file = "crates/paint/src/hit_test.rs"
+from = '''                Some(clip) => rect.intersect(&clip),'''
+to = '''                Some(_) => rect,'''
+
+[[mutant]]
+name = "what an element paints past its boxes doesn't cover"
+file = "crates/paint/src/hit_test.rs"
+from = '''            (!shape && !area.is_empty() && overlaps(corners, area))
+                || (overflow_seen.insert(node)'''
+to = '''            (!shape && !area.is_empty() && overlaps(corners, area))
+                || (false && overflow_seen.insert(node)'''
+
+[[mutant]]
+name = "an SVG shape covers by the room hit testing gives it"
+file = "crates/paint/src/hit_test.rs"
+from = '''            (!shape && !area.is_empty() && overlaps(corners, area))'''
+to = '''            (!area.is_empty() && overlaps(corners, area))'''
+
+[[mutant]]
+name = "what is in the target covers it"
+file = "crates/paint/src/hit_test.rs"
+from = '''        .is_some_and(|node| !contains(target, node))'''
+to = '''        .is_some_and(|node| node != target)'''
+
+[[mutant]]
+name = "an edge in common covers"
+file = "crates/paint/src/hit_test.rs"
+from = '''    if around.right() <= rect.x'''
+to = '''    if around.right() < rect.x'''
+
+[[mutant]]
+name = "a turned box covers by the rect around it"
+file = "crates/paint/src/hit_test.rs"
+from = '''    corners[..3].windows(2).all(|edge| {'''
+to = '''    corners[..3].windows(2).all(|edge| true || {'''
+
+[[mutant]]
+name = "a filter's reach doesn't count"
+file = "crates/paint/src/hit_test.rs"
+from = '''                by_element.entry(client).or_default().push(rect.inset(-reach));'''
+to = '''                by_element.entry(client).or_default().push(rect.inset(0.0 * reach));'''
+
+[[mutant]]
+name = "a run's glyphs cover by their item's room"
+file = "crates/paint/src/hit_test.rs"
+from = '''                    (crate::DisplayItemKind::Text, Some(size)) => crate::glyph_reach(size),'''
+to = '''                    (crate::DisplayItemKind::Text, Some(size)) => (0.0 * size, 0.0),'''
+
+[[mutant]]
+name = "an SVG run's glyphs cover by their item's room"
+file = "crates/paint/src/hit_test.rs"
+from = '''                        let reach = crate::svg::svg_glyph_reach(size);'''
+to = '''                        let reach = 0.0 * crate::svg::svg_glyph_reach(size);'''
+
+[[mutant]]
+name = "a fixed box is where it is laid out"
+file = "crates/paint/src/hit_test.rs"
+from = '''        PointF::new(p.x + scroll.x, p.y + scroll.y)'''
+to = '''        PointF::new(p.x + 0.0 * scroll.x, p.y + 0.0 * scroll.y)'''
+
+[[mutant]]
+name = "a shadow tree isn't in its host"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            at = n.parent().or_else(|| n.host()).or_else(|| {'''
+to = '''            at = n.parent().or_else(|| {'''
+
+[[mutant]]
+name = "a child frame isn't in its iframe"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                let owner = read.frame_owner(&n.to_handle())?;'''
+to = '''                let owner = read.frame_owner(&n.to_handle()).filter(|_| false)?;'''
+
+[[mutant]]
+name = "a paint alone doesn't compute again"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        view.last_paint().filter(|_| tracked),'''
+to = '''        view.last_paint().filter(|_| false && tracked),'''
+
+[[mutant]]
+name = "tracking visibility isn't remembered"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                tracking |= options.track_visibility;'''
+to = '''                tracking |= false && options.track_visibility;'''

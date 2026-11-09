@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<!-- iframe-loads.txt's page: iframes load their `src` and `srcdoc`, fire
+     `load` at the iframe, and delay the window's `load`. Each check writes
+     its result into its own element. -->
+<title>iframe loads</title>
+<p id="blank">not checked</p>
+<p id="window">no load yet</p>
+<p id="src">not loaded</p>
+<p id="srcdoc">not loaded</p>
+<p id="srcdoc-script">not run</p>
+<p id="srcdoc-onload">not run</p>
+<p id="again">not navigated again</p>
+<p id="missing">not loaded</p>
+<p id="replaced">not loaded</p>
+<p id="nested">not loaded</p>
+<p id="blank-later">not navigated</p>
+<p id="relative">not loaded</p>
+<p id="relative-blank">not loaded</p>
+<p id="removed">not checked</p>
+<iframe id="from-src" src="iframe-child.html"></iframe>
+<iframe id="from-srcdoc"
+  srcdoc="<body onload='parent.document.getElementById(&quot;srcdoc-onload&quot;).textContent = &quot;the srcdoc document ran its onload attribute&quot;'><p id=inside>inside</p><script>parent.document.getElementById('srcdoc-script').textContent = 'the srcdoc document ran its script'</script>"></iframe>
+<iframe id="from-missing" src="no-such-file.html"></iframe>
+<iframe id="outer"
+  srcdoc="<iframe srcdoc='<p>deep</p>'></iframe>"></iframe>
+<script>
+  const text = (id, value) => (document.getElementById(id).textContent = value);
+  const loaded = new Set();
+
+  // An iframe without `src` fires `load` while `appendChild` runs.
+  const blank = document.createElement("iframe");
+  let sync = false;
+  blank.onload = () => (sync = true);
+  document.body.appendChild(blank);
+  text("blank", sync ? "about:blank loaded at once" : "about:blank didn't load at once");
+
+  const fromSrc = document.getElementById("from-src");
+  fromSrc.onload = () => {
+    loaded.add("src");
+    // Another origin: the window is there, its document isn't reachable.
+    text(
+      "src",
+      fromSrc.contentDocument === null && fromSrc.contentWindow !== null
+        ? "the src document loaded, of another origin"
+        : "the src document loaded, of this origin"
+    );
+  };
+
+  const fromSrcdoc = document.getElementById("from-srcdoc");
+  let firstWindow = null;
+  let firstDocument = null;
+  fromSrcdoc.onload = () => {
+    if (firstWindow === null) {
+      loaded.add("srcdoc");
+      firstWindow = fromSrcdoc.contentWindow;
+      firstDocument = fromSrcdoc.contentDocument;
+      const inside = fromSrcdoc.contentDocument.getElementById("inside");
+      text(
+        "srcdoc",
+        inside && fromSrcdoc.contentDocument.URL === "about:srcdoc" &&
+          fromSrcdoc.contentDocument.compatMode === "CSS1Compat"
+          ? "the srcdoc document loaded"
+          : "the srcdoc document is wrong"
+      );
+      return;
+    }
+    // Navigated again: a new document, behind the same WindowProxy
+    // (`contentWindow` is the same object, as in Chrome, its document the
+    // new one).
+    text(
+      "again",
+      fromSrcdoc.contentWindow === firstWindow &&
+        fromSrcdoc.contentDocument !== firstDocument &&
+        firstWindow.document === fromSrcdoc.contentDocument &&
+        fromSrcdoc.contentDocument.getElementById("again-inside") !== null
+        ? "navigated again"
+        : "navigated again, wrongly"
+    );
+  };
+
+  // Set to `about:blank` later: a new document of this origin, not fetched.
+  // (Its `load` as it was inserted fired before the listener was there.)
+  const blankLater = document.body.appendChild(document.createElement("iframe"));
+  let blankLaterSet = false;
+  blankLater.onload = () => {
+    if (blankLaterSet) {
+      text(
+        "blank-later",
+        blankLater.contentDocument !== null && blankLater.contentDocument.URL === "about:blank"
+          ? "navigated to about:blank"
+          : "navigated to about:blank, wrongly"
+      );
+    }
+  };
+
+  const fromMissing = document.getElementById("from-missing");
+  fromMissing.onload = () => {
+    loaded.add("missing");
+    text("missing", "a missing document still fires load");
+  };
+
+  // Navigated again before its `src` responded: that response is dropped.
+  const replaced = document.body.appendChild(document.createElement("iframe"));
+  replaced.src = "iframe-child.html";
+  replaced.srcdoc = "<p id=replacement>replacement</p>";
+  replaced.onload = () => {
+    loaded.add("replaced");
+    const document = replaced.contentDocument;
+    text(
+      "replaced",
+      document !== null && document.getElementById("replacement") !== null
+        ? "the later navigation won"
+        : "the earlier navigation won"
+    );
+  };
+
+  // Its own iframe loaded before it did.
+  const nested = document.getElementById("outer");
+  nested.onload = () => {
+    loaded.add("nested");
+    const inner = nested.contentDocument.querySelector("iframe");
+    text(
+      "nested",
+      inner.contentDocument.body.textContent === "deep"
+        ? "the nested iframe loaded first"
+        : "the nested iframe hadn't loaded"
+    );
+  };
+
+  // A srcdoc document's relative URLs resolve against this page's URL:
+  // its iframe loads the child file (of another origin), not about:blank.
+  const relativeHost = document.body.appendChild(document.createElement("iframe"));
+  relativeHost.onload = () => {
+    loaded.add("relative");
+    const inner = relativeHost.contentDocument.querySelector("iframe");
+    text(
+      "relative",
+      inner.contentDocument === null && inner.contentWindow !== null
+        ? "a srcdoc document's src resolved against the page"
+        : "a srcdoc document's src resolved against about:srcdoc"
+    );
+  };
+  relativeHost.srcdoc = "<iframe src=iframe-child.html></iframe>";
+
+  // So do an initial about:blank document's.
+  const blankHost = document.body.appendChild(document.createElement("iframe"));
+  const blankDocument = blankHost.contentDocument;
+  const viaBlank = blankDocument.body.appendChild(blankDocument.createElement("iframe"));
+  viaBlank.onload = () =>
+    text(
+      "relative-blank",
+      viaBlank.contentDocument === null && viaBlank.contentWindow !== null
+        ? "an about:blank document's src resolved against the page"
+        : "an about:blank document's src resolved against about:blank"
+    );
+  viaBlank.src = "iframe-child.html";
+
+  // Removed while loading: it no longer delays the window's load, nor
+  // loads at all.
+  const removed = document.body.appendChild(document.createElement("iframe"));
+  let removedLoaded = false;
+  removed.onload = () => (removedLoaded = true);
+  removed.src = "iframe-child.html";
+  removed.remove();
+
+  window.onload = () => {
+    text(
+      "window",
+      ["src", "srcdoc", "missing", "replaced", "nested", "relative"].every((which) => loaded.has(which))
+        ? "the window loaded after its iframes"
+        : "the window loaded before its iframes"
+    );
+    text(
+      "removed",
+      !removedLoaded && removed.contentDocument === null
+        ? "the removed iframe didn't load"
+        : "the removed iframe loaded"
+    );
+    fromSrcdoc.srcdoc = "<p id=again-inside>again</p>";
+    blankLaterSet = true;
+    blankLater.src = "about:blank";
+  };
+</script>

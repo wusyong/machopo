@@ -1,0 +1,89 @@
+# 1: `--against` without `--sample` times both versions in turn and reads
+# kun's peak memory (`scripts/speedometer.py`).
+#   python3 scripts/test.py mutate rfcs/0053-allocator/mutants-1.toml
+test = ["python3", "scripts/speedometer_test.py", "CompareTests", "MemoryTests",
+        "KunTests.test_kuns_peak_memory_with_its_run"]
+timeout = 900
+
+[[mutant]]
+name = "no memory with the run"
+file = "scripts/speedometer.py"
+from = '''            return {"body": body, "memory": None if wrapper else peak_memory(kun.process.pid)}'''
+to = '''            return {"body": body, "memory": None}'''
+
+[[mutant]]
+name = "macOS's current footprint, not its peak"
+file = "scripts/speedometer.py"
+from = '''LIFETIME_MAX_PHYS_FOOTPRINT = 28'''
+to = '''LIFETIME_MAX_PHYS_FOOTPRINT = 7'''
+
+[[mutant]]
+name = "Linux's kB as bytes"
+file = "scripts/speedometer.py"
+from = '''    return int(found[1]) * 1024 if found else None'''
+to = '''    return int(found[1]) if found else None'''
+
+[[mutant]]
+name = "macOS's memory not read"
+file = "scripts/speedometer.py"
+from = '''        if sys.platform == "darwin":
+            return macos_peak_footprint(pid)'''
+to = '''        if sys.platform == "darwin":
+            return None'''
+
+[[mutant]]
+name = "an invalid run's times compared"
+file = "scripts/speedometer.py"
+from = '''            problems = run_problems(run, None)
+            if problems:
+                return f"{side}: {problems[0]}"'''
+to = '''            problems = run_problems(run, None)'''
+
+[[mutant]]
+name = "only the first run's times"
+file = "scripts/speedometer.py"
+from = '''        totals = {side: [total for run, _ in timed for total in suite_samples(run, name)]'''
+to = '''        totals = {side: [total for run, _ in timed[:1] for total in suite_samples(run, name)]'''
+
+[[mutant]]
+name = "only the first run's memory"
+file = "scripts/speedometer.py"
+from = '''        cells = [f"{median(memory[side]) / 2**20:.0f} MB" if memory[side] else "–" for side in ("against", "current")]'''
+to = '''        cells = [f"{memory[side][0] / 2**20:.0f} MB" if memory[side] else "–" for side in ("against", "current")]'''
+
+[[mutant]]
+name = "the suites' changes' arithmetic mean"
+file = "scripts/speedometer.py"
+from = '''        mean = math.exp(sum(math.log(r) for r in ratios) / len(ratios))'''
+to = '''        mean = sum(ratios) / len(ratios)'''
+
+[[mutant]]
+name = "the working tree's first"
+file = "scripts/speedometer.py"
+from = '''            print(f"{side}, run {run} of {args.runs}:")
+            for name, timed in time_suites(binaries[side], names, args.iterations).items():'''
+to = '''            side = "current" if side == "against" else "against"
+            print(f"{side}, run {run} of {args.runs}:")
+            for name, timed in time_suites(binaries[side], names, args.iterations).items():'''
+
+[[mutant]]
+name = "a run short"
+file = "scripts/speedometer.py"
+from = '''    by_suite: dict[str, dict[str, list]] = {name: {"against": [], "current": []} for name in names}
+    for run in range(1, args.runs + 1):'''
+to = '''    by_suite: dict[str, dict[str, list]] = {name: {"against": [], "current": []} for name in names}
+    for run in range(1, args.runs):'''
+
+[[mutant]]
+name = "--against without --sample measures instead"
+file = "scripts/speedometer.py"
+from = '''    if getattr(args, "against", None):
+        return cmd_time_compare('''
+to = '''    if False:
+        return cmd_time_compare('''
+
+[[mutant]]
+name = "big counts in exponents"
+file = "scripts/speedometer.py"
+from = '''    return f"{value:.1f}".removesuffix(".0")'''
+to = '''    return f"{value:g}"'''

@@ -1,0 +1,281 @@
+# Stage 1: a single-line column flexbox's width from its items'
+# contributions, inline content measured for its width without breaking
+# lines, and the count of lines broken.
+#
+# python3 scripts/test.py mutate rfcs/0083-text-layout-work/mutants-1.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it"]
+timeout = 300
+
+# The column flexbox's width.
+
+[[mutant]]
+name = "taffy sizes every column"
+file = "crates/layout/src/lib.rs"
+from = '''            match self.column_flex_width(id, inputs) {'''
+to = '''            match None::<LayoutOutput> {'''
+
+[[mutant]]
+name = "laid out, not only measured"
+file = "crates/layout/src/lib.rs"
+from = '''        if inputs.run_mode != RunMode::ComputeSize
+            || inputs.axis != RequestedAxis::Horizontal
+            || inputs.known_dimensions.width.is_some()'''
+to = '''        if inputs.axis != RequestedAxis::Horizontal
+            || inputs.known_dimensions.width.is_some()'''
+
+[[mutant]]
+name = "measured for its height too"
+file = "crates/layout/src/lib.rs"
+from = '''            || inputs.axis != RequestedAxis::Horizontal
+            || inputs.known_dimensions.width.is_some()'''
+to = '''            || inputs.known_dimensions.width.is_some()'''
+
+[[mutant]]
+name = "a known width measured"
+file = "crates/layout/src/lib.rs"
+from = '''            || inputs.known_dimensions.width.is_some()
+            || !matches!('''
+to = '''            || !matches!('''
+
+[[mutant]]
+name = "a row too"
+file = "crates/layout/src/lib.rs"
+from = '''                taffy::FlexDirection::Column | taffy::FlexDirection::ColumnReverse
+            )
+            || style.flex_wrap'''
+to = '''                taffy::FlexDirection::Column
+                    | taffy::FlexDirection::ColumnReverse
+                    | taffy::FlexDirection::Row
+            )
+            || style.flex_wrap'''
+
+[[mutant]]
+name = "column-reverse handed back"
+file = "crates/layout/src/lib.rs"
+from = '''                taffy::FlexDirection::Column | taffy::FlexDirection::ColumnReverse
+            )
+            || style.flex_wrap'''
+to = '''                taffy::FlexDirection::Column
+            )
+            || style.flex_wrap'''
+
+[[mutant]]
+name = "wrapped lines too"
+file = "crates/layout/src/lib.rs"
+from = '''            || style.flex_wrap != taffy::FlexWrap::NoWrap
+            || style.aspect_ratio.is_some()'''
+to = '''            || style.aspect_ratio.is_some()'''
+
+[[mutant]]
+name = "its own ratio not handed back"
+file = "crates/layout/src/lib.rs"
+from = '''            || style.flex_wrap != taffy::FlexWrap::NoWrap
+            || style.aspect_ratio.is_some()'''
+to = '''            || style.flex_wrap != taffy::FlexWrap::NoWrap'''
+
+[[mutant]]
+name = "an item's ratio not handed back"
+file = "crates/layout/src/lib.rs"
+from = '''                && s.aspect_ratio.is_some()
+        }) {'''
+to = '''                && s.aspect_ratio.is_some()
+                && false
+        }) {'''
+
+[[mutant]]
+name = "a width of its own measured"
+file = "crates/layout/src/lib.rs"
+from = '''        if (inputs.sizing_mode == SizingMode::InherentSize
+            && style.size.width.maybe_resolve(parent, calc).is_some())
+            || matches!'''
+to = '''        if matches!'''
+
+[[mutant]]
+name = "a max-width under its min-width measured"
+file = "crates/layout/src/lib.rs"
+from = '''            || matches!((min, max), (Some(min), Some(max)) if max <= min)'''
+to = ''''''
+
+[[mutant]]
+name = "no padding or border of its own"
+file = "crates/layout/src/lib.rs"
+from = '''        let inset = edges + gutter(style.overflow.y);'''
+to = '''        let inset = gutter(style.overflow.y);'''
+
+[[mutant]]
+name = "no scrollbar gutter"
+file = "crates/layout/src/lib.rs"
+from = '''        let inset = edges + gutter(style.overflow.y);'''
+to = '''        let inset = edges;'''
+
+[[mutant]]
+name = "its min-width and max-width as border boxes"
+file = "crates/layout/src/lib.rs"
+from = '''        let (min, max) = (min.maybe_add(adjust), max.maybe_add(adjust));'''
+to = '''        let (min, max) = (min, max);'''
+
+[[mutant]]
+name = "a definite width measures in the room"
+file = "crates/layout/src/lib.rs"
+from = '''            AvailableSpace::Definite(room) => {
+                let min = widest(self, AvailableSpace::MinContent);
+                let max = widest(self, AvailableSpace::MaxContent);
+                room.min(max).max(min)
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "the room under its min-content width"
+file = "crates/layout/src/lib.rs"
+from = '''                room.min(max).max(min)'''
+to = '''                room.min(max)'''
+
+[[mutant]]
+name = "the room past its max-content width"
+file = "crates/layout/src/lib.rs"
+from = '''                room.min(max).max(min)'''
+to = '''                room.max(min)'''
+
+[[mutant]]
+name = "not clamped by its min-width and max-width"
+file = "crates/layout/src/lib.rs"
+from = '''        let width = (widest + inset).maybe_clamp(min, max).max(edges);'''
+to = '''        let width = (widest + inset).max(edges);'''
+
+[[mutant]]
+name = "the cross-check counts what taffy lays out"
+file = "crates/layout/src/lib.rs"
+from = '''            self.last_layout = counts;
+            assert!('''
+to = '''            let _ = counts;
+            assert!('''
+
+# Its items' contributions.
+
+[[mutant]]
+name = "out-of-flow items count"
+file = "crates/layout/src/lib.rs"
+from = '''            if s.position.is_out_of_flow() || s.display == taffy::Display::None {
+                continue;
+            }'''
+to = '''            if s.display == taffy::Display::None {
+                continue;
+            }'''
+
+[[mutant]]
+name = "an item's padding and border as part of its width"
+file = "crates/layout/src/lib.rs"
+from = '''            let size = s.size.width.maybe_resolve(None, calc).maybe_add(adjust);'''
+to = '''            let size = s.size.width.maybe_resolve(None, calc);'''
+
+[[mutant]]
+name = "an item's min-width and max-width left out"
+file = "crates/layout/src/lib.rs"
+from = '''                measured.size.width.maybe_clamp(min, max).max(edges)'''
+to = '''                measured.size.width.max(edges)'''
+
+[[mutant]]
+name = "an item's margins left out"
+file = "crates/layout/src/lib.rs"
+from = '''            widest = widest.max(size + margin);'''
+to = '''            widest = widest.max(size);'''
+
+[[mutant]]
+name = "an item's min-content keyword left out"
+file = "crates/layout/src/lib.rs"
+from = '''                taffy::CompactLength::MIN_CONTENT_TAG => AvailableSpace::MinContent,'''
+to = ''''''
+
+[[mutant]]
+name = "an item's max-content keyword left out"
+file = "crates/layout/src/lib.rs"
+from = '''                taffy::CompactLength::MAX_CONTENT_TAG => AvailableSpace::MaxContent,'''
+to = ''''''
+
+[[mutant]]
+name = "an item's vertical margins kept in the room below"
+file = "crates/layout/src/lib.rs"
+from = '''                            height: height.map_definite_value(|room| (room - margin_y).max(0.0)),'''
+to = '''                            height,'''
+
+# Inline content measured for its width.
+
+[[mutant]]
+name = "lines broken for a width"
+file = "crates/layout/src/lib.rs"
+from = '''                    && !floats
+                    && !inline.indented()
+                {'''
+to = '''                    && false
+                {'''
+
+[[mutant]]
+name = "floats not placed for a width"
+file = "crates/layout/src/lib.rs"
+from = '''                    && !floats
+                    && !inline.indented()
+                {'''
+to = '''                    && !inline.indented()
+                {'''
+
+[[mutant]]
+name = "an indent not broken for a width"
+file = "crates/layout/src/lib.rs"
+from = '''                    && !floats
+                    && !inline.indented()
+                {'''
+to = '''                    && !floats
+                {'''
+
+[[mutant]]
+name = "every width its max-content one"
+file = "crates/layout/src/lib.rs"
+from = '''                            AvailableSpace::MinContent => min,'''
+to = '''                            AvailableSpace::MinContent => max,'''
+
+[[mutant]]
+name = "a fit-content width left out"
+file = "crates/layout/src/lib.rs"
+from = '''                    let width = known.width.or(fit).unwrap_or_else(|| {'''
+to = '''                    let width = known.width.unwrap_or_else(|| {'''
+
+[[mutant]]
+name = "a percentage indent counts"
+file = "crates/layout/src/text.rs"
+from = '''        indent_px(self.text_indent, None) != 0.0'''
+to = '''        indent_px(self.text_indent, Some(1.0)) != 0.0'''
+
+[[mutant]]
+name = "never indented"
+file = "crates/layout/src/text.rs"
+from = '''        indent_px(self.text_indent, None) != 0.0'''
+to = '''        false'''
+
+# The count of lines broken.
+
+[[mutant]]
+name = "lines broken uncounted"
+file = "crates/layout/src/text.rs"
+from = '''        atomics.count_line_break();'''
+to = ''''''
+
+[[mutant]]
+name = "a remembered break counted"
+file = "crates/layout/src/text.rs"
+from = '''        {
+            return *size;
+        }
+        atomics.count_line_break();'''
+to = '''        {
+            atomics.count_line_break();
+            return *size;
+        }
+        atomics.count_line_break();'''
+
+[[mutant]]
+name = "an atomic inline's lines uncounted"
+file = "crates/layout/src/lib.rs"
+from = '''    fn count_line_break(&mut self) {
+        self.tree.count_line_break();
+    }'''
+to = '''    fn count_line_break(&mut self) {}'''

@@ -1,0 +1,176 @@
+# Stage 4g-3a: on the new DOM, an outermost <svg>'s box and its content captured (the capture
+# shared with today's DOM through a reading trait) and captured again on a change; SVG's
+# presentation attributes (the table and parse shared with today's DOM); the SVG element
+# interfaces by name and SVGElement's members; an SVG element's event handlers and <style>.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p style_next --test it && cargo test -q -p layout --test it -- next svg && cargo test -q -p dom_next --test it events && cargo test -q -p dom_api_next --test it && cargo test -q -p dom_js_next --test it svg && cargo test -q -p style --test it"]
+timeout = 3000
+
+[[mutant]]
+name = "next svg: xml:space in no namespace"
+file = "crates/layout/src/next.rs"
+from = '''            SvgAttr::XmlSpace => dom.attribute_value_ns(
+                self.node,
+                Some("http://www.w3.org/XML/1998/namespace"),
+                "space",
+            ),'''
+to = '''            SvgAttr::XmlSpace => dom.attribute_value_by_id(self.node, names::local::SPACE),'''
+
+[[mutant]]
+name = "next svg: viewBox another attribute"
+file = "crates/layout/src/next.rs"
+from = '''        SvgAttr::ViewBox => local::VIEW_BOX,'''
+to = '''        SvgAttr::ViewBox => local::WIDTH,'''
+
+[[mutant]]
+name = "next svg: points another attribute"
+file = "crates/layout/src/next.rs"
+from = '''        SvgAttr::Points => local::POINTS,'''
+to = '''        SvgAttr::Points => local::D,'''
+
+[[mutant]]
+name = "next svg: an outermost svg not atomic"
+file = "crates/layout/src/next.rs"
+from = '''    if is_svg_root(dom, element) {
+        return true;
+    }'''
+to = '''    if false && is_svg_root(dom, element) {
+        return true;
+    }'''
+
+[[mutant]]
+name = "next svg: an outermost svg no box"
+file = "crates/layout/src/next.rs"
+from = '''                    if dom.is_svg(child) && !is_svg_root(dom.dom, child) {'''
+to = '''                    if dom.is_svg(child) {'''
+
+[[mutant]]
+name = "next svg: has_boxes for none"
+file = "crates/layout/src/next.rs"
+from = '''            || (self.is_svg(element) && !is_svg_root(self.dom, element)))'''
+to = '''            || self.is_svg(element))'''
+
+[[mutant]]
+name = "next svg: not captured again"
+file = "crates/layout/src/next.rs"
+from = '''            if replaced.svg.is_some() {
+                let replaced = svg_replaced(cx.dom, element, cx.text);'''
+to = '''            if false {
+                let replaced = svg_replaced(cx.dom, element, cx.text);'''
+
+[[mutant]]
+name = "next svg: a change in it not collected"
+file = "crates/layout/src/next.rs"
+from = '''            if changed.into_iter().any(|flag| flags.contains(flag)) {
+                walk.collect(container);
+            }'''
+to = '''            if changed.into_iter().any(|flag| flags.contains(flag)) && false {
+                walk.collect(container);
+            }'''
+
+[[mutant]]
+name = "dom: an SVG attribute's change not marked"
+file = "crates/dom_next/src/style.rs"
+from = '''            if self
+                .qualified_name(element)
+                .is_some_and(|name| name.namespace() == names::SVG_NAMESPACE)'''
+to = '''            if self
+                .qualified_name(element)
+                .is_some_and(|_| false)'''
+
+[[mutant]]
+name = "dom: an SVG style element owns no sheet"
+file = "crates/dom_next/src/style.rs"
+from = '''        name == STYLE_ELEMENT || name == SVG_STYLE_ELEMENT || name == LINK_ELEMENT'''
+to = '''        name == STYLE_ELEMENT || name == LINK_ELEMENT'''
+
+[[mutant]]
+name = "dom: an SVG element no handlers"
+file = "crates/dom_next/src/event.rs"
+from = '''        if !html && name.namespace != names::SVG_NAMESPACE {'''
+to = '''        if !html {'''
+
+[[mutant]]
+name = "hints: r on any element"
+file = "crates/style/src/hints.rs"
+from = '''        "r" => local == "circle",'''
+to = '''        "r" => true,'''
+
+[[mutant]]
+name = "hints: an animation's fill the property"
+file = "crates/style/src/hints.rs"
+from = '''        || (SVG_PRESENTATION_ATTRIBUTES.contains(&attribute) && !(animation && attribute == "fill"))'''
+to = '''        || SVG_PRESENTATION_ATTRIBUTES.contains(&attribute)'''
+
+[[mutant]]
+name = "hints: no transform"
+file = "crates/style/src/hints.rs"
+from = '''    } else if Some(attribute) == transform {'''
+to = '''    } else if false {'''
+
+[[mutant]]
+name = "hints: no d"
+file = "crates/style/src/hints.rs"
+from = '''    if attribute == "d" && local == "path" {
+        Some(SvgHint::D)'''
+to = '''    if false {
+        Some(SvgHint::D)'''
+
+[[mutant]]
+name = "style_next: SVG attributes' changes not noted"
+file = "crates/style_next/src/lib.rs"
+from = '''            .extend(style::svg_hint_attribute_names().map(names::intern));'''
+to = '''            .extend(style::svg_hint_attribute_names().map(names::intern).take(0));'''
+
+[[mutant]]
+name = "style_next: no SVG presentation attributes"
+file = "crates/style_next/src/hints.rs"
+from = '''        None => svg_declarations(cx, element, cache)?,'''
+to = '''        None => return None,'''
+
+[[mutant]]
+name = "interfaces: SVG elements' by name all SVGElement"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        .map_or(crate::declare::SVG_ELEMENT, |&interface| usize::from(interface))'''
+to = '''        .map_or(crate::declare::SVG_ELEMENT, |_| crate::declare::SVG_ELEMENT)'''
+
+[[mutant]]
+name = "interfaces: an SVG element an Element"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        Some(name) if name.namespace == dom_next::names::SVG_NAMESPACE => {
+            svg_element_interface(name.local)
+        }'''
+to = '''        Some(name) if name.namespace == dom_next::names::SVG_NAMESPACE && false => {
+            svg_element_interface(name.local)
+        }'''
+
+[[mutant]]
+name = "interfaces: descendants past 128 in the first word"
+file = "crates/dom_api_next/src/declare.rs"
+from = '''                table[ancestor][interface / 128] |= 1 << (interface % 128);'''
+to = '''                table[ancestor][0] |= 1 << (interface % 128);'''
+
+[[mutant]]
+name = "interfaces: the macro's SVG elements HTML's"
+file = "crates/dom_api_next_macros/src/lib.rs"
+from = '''            Objects::Element(namespace == "svg", objects.parse()?)'''
+to = '''            Objects::Element(false, objects.parse()?)'''
+
+[[mutant]]
+name = "svg: a symbol not a viewport"
+file = "crates/dom_api_next/src/svg.rs"
+from = '''        [names::local::SVG, names::local::SYMBOL, names::local::IMAGE]'''
+to = '''        [names::local::SVG, names::local::IMAGE]'''
+
+[[mutant]]
+name = "svg: baseVal not set"
+file = "crates/dom_api_next/src/svg.rs"
+from = '''    cx.set_attribute(element, &name.to_str(), value);'''
+to = '''    let _ = (element, name, value);'''
+
+[[mutant]]
+name = "svg: ownerSVGElement of no svg"
+file = "crates/dom_api_next/src/svg.rs"
+from = '''        is_svg(cx, ancestor, names::local::SVG)
+    }))'''
+to = '''        is_svg(cx, ancestor, names::local::SYMBOL)
+    }))'''

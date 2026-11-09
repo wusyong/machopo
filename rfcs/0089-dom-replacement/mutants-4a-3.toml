@@ -1,0 +1,108 @@
+# Stage 4a-3: `element.style`: the element's one copy of its declarations
+# (`dom_next`'s `inline_style`, copy on write), the `style` attribute
+# written from them as it is read, CSSOM's members and named properties.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_next", "-p", "style_next", "-p", "dom_api_next", "-p", "dom_js_next"]
+timeout = 1800
+
+[[mutant]]
+name = "the parsed declarations aren't kept"
+file = "crates/dom_next/src/style.rs"
+from = '''        self.element_data(element).inline_style.get().set(Some(block.clone()));
+        element.flags.set(element.flags.get() | HAS_INLINE_STYLE);
+        Some(block)'''
+to = '''        Some(block)'''
+
+[[mutant]]
+name = "kept declarations not flagged"
+file = "crates/dom_next/src/style.rs"
+from = '''        self.element_data(element).inline_style.get().set(Some(block.clone()));
+        element.flags.set(element.flags.get() | HAS_INLINE_STYLE);'''
+to = '''        self.element_data(element).inline_style.get().set(Some(block.clone()));'''
+
+[[mutant]]
+name = "CSSOM's change leaves the attribute as it was"
+file = "crates/dom_next/src/style.rs"
+from = '''            .set(element.flags.get() | HAS_INLINE_STYLE | STYLE_ATTRIBUTE_DIRTY);'''
+to = '''            .set(element.flags.get() | HAS_INLINE_STYLE);'''
+
+[[mutant]]
+name = "CSSOM's change not styled"
+file = "crates/dom_next/src/style.rs"
+from = '''            self.connected_attribute_changed(element, STYLE_ATTRIBUTE, None, None);'''
+to = ''''''
+
+[[mutant]]
+name = "the attribute's change keeps the declarations"
+file = "crates/dom_next/src/style.rs"
+from = '''        if let Some(data) = self.existing_element_data(element) {
+            drop(data.into_ref().inline_style.get().take());
+        }
+    }
+
+    /// An attribute named `name` was added to `element`: an `id` flags it.'''
+to = '''    }
+
+    /// An attribute named `name` was added to `element`: an `id` flags it.'''
+
+[[mutant]]
+name = "an unchanged declaration rewrites the attribute"
+file = "crates/dom_api_next/src/css_style.rs"
+from = '''        cx.restore_inline_style(element, block);'''
+to = '''        cx.set_inline_style(element, block);'''
+
+[[mutant]]
+name = "attributes found unsynchronized"
+file = "crates/dom_next/src/lib.rs"
+from = '''        self.synchronize_attributes(element);
+        let attributes = element.attributes.get(self.gc)?;'''
+to = '''        let attributes = element.attributes.get(self.gc)?;'''
+
+[[mutant]]
+name = "attributes counted unsynchronized"
+file = "crates/dom_next/src/lib.rs"
+from = '''        self.synchronize_attributes(element);
+        element
+            .attributes'''
+to = '''        element
+            .attributes'''
+
+[[mutant]]
+name = "a lazy attribute always appended"
+file = "crates/dom_next/src/lib.rs"
+from = '''                    *attribute.value.get().borrow_mut() = value;
+                    return;'''
+to = '''                    let _ = attribute;'''
+
+[[mutant]]
+name = "any name is a property's"
+file = "crates/dom_api_next/src/css_style.rs"
+from = '''    let Some(property) = css::css_property_for_attribute(name) else {
+        return Ok(None);
+    };'''
+to = '''    let Some(property) = css::css_property_for_attribute(name) else {
+        return Ok(Some(DomStr::Owned(DomString::from(""))));
+    };'''
+
+[[mutant]]
+name = "the setter takes any name"
+file = "crates/dom_api_next/src/css_style.rs"
+from = '''        return Ok(false);'''
+to = '''        return Ok(true);'''
+
+[[mutant]]
+name = "a declined name intercepted"
+file = "crates/dom_js_next/src/named.rs"
+from = '''            Assigned::Declined => v8::Intercepted::kNo,'''
+to = '''            Assigned::Declined => v8::Intercepted::kYes,'''
+
+[[mutant]]
+name = "indices are names over the indexed getter"
+file = "crates/dom_js_next/src/named.rs"
+from = '''            indices: !indexed,'''
+to = '''            indices: true,'''
+
+[[mutant]]
+name = "an empty string is an item"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        value.is_null() || v8::Local::<v8::String>::try_from(value).is_ok_and(|string| string.length() == 0)'''
+to = '''        value.is_null()'''

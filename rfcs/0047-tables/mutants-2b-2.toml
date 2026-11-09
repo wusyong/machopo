@@ -1,0 +1,167 @@
+# Mutation test of stage 2b-2: collapsed borders painted (2026-10-15):
+# python3 scripts/test.py mutate rfcs/0047-tables/mutants-2b-2.toml
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "tables::", "hit_test::", "paint_controller::"]
+timeout = 900
+
+# --- paint ---
+
+[[mutant]]
+name = "no collapsed borders"
+file = "crates/paint/src/lib.rs"
+from = '''            self.collapsed_borders(fragment, borders);'''
+to = ''''''
+
+[[mutant]]
+name = "a collapsed cell draws its own border"
+file = "crates/paint/src/lib.rs"
+from = '''            if !fragment.border_collapsed {'''
+to = '''            if true {'''
+
+[[mutant]]
+name = "empty-cells hides a collapsed cell"
+file = "crates/paint/src/lib.rs"
+from = '''    !fragment.border_collapsed
+        && fragment.style.empty_cells == EmptyCells::Hide'''
+to = '''    fragment.style.empty_cells == EmptyCells::Hide'''
+
+[[mutant]]
+name = "an invisible table draws its collapsed borders"
+file = "crates/paint/src/lib.rs"
+from = '''        if !fragment.style.is_visible()
+            || borders.row_offsets.len() != rows + 1'''
+to = '''        if borders.row_offsets.len() != rows + 1'''
+
+[[mutant]]
+name = "a horizontal edge takes its start joint the other way"
+file = "crates/paint/src/lib.rs"
+from = '''                left += if start.wins {
+                    -start.vertical / 2.0
+                } else {
+                    start.vertical / 2.0
+                };'''
+to = '''                left += if start.wins {
+                    start.vertical / 2.0
+                } else {
+                    -start.vertical / 2.0
+                };'''
+
+[[mutant]]
+name = "a horizontal edge ignores its end joint"
+file = "crates/paint/src/lib.rs"
+from = '''                right += if end.wins {
+                    end.vertical / 2.0
+                } else {
+                    -end.vertical / 2.0
+                };'''
+to = '''                right += 0.0 * end.vertical;'''
+
+[[mutant]]
+name = "a vertical edge ignores its start joint"
+file = "crates/paint/src/lib.rs"
+from = '''                top += if start.wins {
+                    -start.horizontal / 2.0
+                } else {
+                    start.horizontal / 2.0
+                };'''
+to = '''                top += 0.0 * start.horizontal;'''
+
+[[mutant]]
+name = "the narrower edge draws at a joint"
+file = "crates/paint/src/lib.rs"
+from = '''                return if l.width > r.width { 1 } else { -1 };'''
+to = '''                return if l.width > r.width { -1 } else { 1 };'''
+
+[[mutant]]
+name = "the later box draws at a joint"
+file = "crates/paint/src/lib.rs"
+from = '''                    std::cmp::Ordering::Less => 1,
+                    std::cmp::Ordering::Greater => -1,'''
+to = '''                    std::cmp::Ordering::Less => -1,
+                    std::cmp::Ordering::Greater => 1,'''
+
+[[mutant]]
+name = "the lower style draws at a joint"
+file = "crates/paint/src/lib.rs"
+from = '''            if style_rank(l.style) > style_rank(r.style) {
+                1
+            } else {
+                -1
+            }'''
+to = '''            if style_rank(l.style) > style_rank(r.style) {
+                -1
+            } else {
+                1
+            }'''
+
+[[mutant]]
+name = "an edge takes a joint its neighbor won"
+file = "crates/paint/src/lib.rs"
+from = '''                both != -1 && inline != lost'''
+to = '''                both != -1'''
+
+[[mutant]]
+name = "a side's bands go the other way"
+file = "crates/paint/src/lib.rs"
+from = '''                    let band = if i == 0 {'''
+to = '''                    let band = if i != 0 {'''
+
+[[mutant]]
+name = "a positioned cell's background covers its border"
+file = "crates/paint/src/lib.rs"
+from = '''                    .then(|| inside_border(rect, fragment.border));'''
+to = '''                    .then_some(rect);'''
+
+[[mutant]]
+name = "a table part's background covers a positioned cell's border"
+file = "crates/paint/src/lib.rs"
+from = '''                out.push(if part.background_inside_border {'''
+to = '''                out.push(if false {'''
+
+# --- layout ---
+
+[[mutant]]
+name = "inset is inset when collapsed"
+file = "crates/layout/src/table.rs"
+from = '''        BorderStyle::Inset => BorderStyle::Ridge,'''
+to = '''        BorderStyle::Inset => BorderStyle::Inset,'''
+
+[[mutant]]
+name = "the higher style doesn't win an edge"
+file = "crates/layout/src/table.rs"
+from = '''    style_rank(style) > style_rank(edge_style)
+}'''
+to = '''    false && style_rank(style) > style_rank(edge_style)
+}'''
+
+[[mutant]]
+name = "a spanning cell's inside edges are filled"
+file = "crates/layout/src/table.rs"
+from = '''                    self.edges[index].side = EdgeSide::DoNotFill;'''
+to = ''''''
+
+[[mutant]]
+name = "a positioned cell's background isn't kept inside"
+file = "crates/layout/src/table.rs"
+from = '''                let inside = border.is_some() && layered;'''
+to = '''                let inside = false && border.is_some() && layered;'''
+
+[[mutant]]
+name = "a collapsed part's paint-only change keeps the table's fragment"
+file = "crates/layout/src/lib.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''                ) || (table::TablePart::of(style.display).is_some()
+                    && style.border_collapse == BorderCollapse::Collapse) =>'''
+to = '''                ) =>'''
+
+[[mutant]]
+name = "a cell's max-width is under its min-width"
+file = "crates/layout/src/table.rs"
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "tables::", "update::"]
+from = '''                .map(|max| max.max(min_width.unwrap_or(0.0))),'''
+to = '''                .map(|max| max),'''
+
+[[mutant]]
+name = "a top edge has its style's left color"
+file = "crates/layout/src/table.rs"
+from = '''                        EdgeSide::Top => c.top,'''
+to = '''                        EdgeSide::Top => c.left,'''

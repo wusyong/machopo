@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>An exception the runner catches</title>
+<script>
+  // Throws in the test itself: the runner gives up (`handleError`).
+  window.tests = [
+    {
+      name: "Breaking",
+      run() {
+        throw new Error("thrown in the test");
+      },
+    },
+  ];
+</script>

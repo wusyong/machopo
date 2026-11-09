@@ -1,0 +1,18 @@
+# Stage 4h-2b-2, through the renderer: the rendering update's evaluate media queries and report
+# changes, and a frame asked for once a child frame was resized.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it -- next_dom::media_queries_follow_the_frames_viewport"]
+timeout = 1800
+
+[[mutant]]
+name = "renderer: no frame asked for once a child frame resized"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            if any {
+                self.request_main_frame();
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: the step not run"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            self.report_next_media_query_changes();'''
+to = ''''''

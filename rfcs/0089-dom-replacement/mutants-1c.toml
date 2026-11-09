@@ -1,0 +1,251 @@
+# Stage 1c: the new DOM's node tree (dom_next): the tree's algorithms,
+# names, attributes, text, the DOM's strings and the table of interned
+# attribute values. Each test command in a scope of at most 24 GB
+# (docs/testing.md: a mutation that makes a loop can grow a test without end).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_next", "--test", "it"]
+timeout = 60
+
+[[mutant]]
+name = "a text may have children"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if !matches!(parent_kind, NodeKind::Document | NodeKind::Element) {
+            return Err(DomError::HierarchyRequest);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a node may go into its descendant"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if self.is_inclusive_ancestor(node, parent) {
+            return Err(DomError::HierarchyRequest);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the reference child needn't be a child"
+file = "crates/dom_next/src/lib.rs"
+from = '''            && !self.parent(child).is_some_and(|of| Gc::ptr_eq(of, parent))
+        {
+            return Err(DomError::NotFound);'''
+to = '''            && false
+        {
+            return Err(DomError::NotFound);'''
+
+[[mutant]]
+name = "a document may hold a text"
+file = "crates/dom_next/src/lib.rs"
+from = '''            (_, NodeKind::Document) | (NodeKind::Document, NodeKind::Text) => {'''
+to = '''            (_, NodeKind::Document) => {'''
+
+[[mutant]]
+name = "a document may hold two elements"
+file = "crates/dom_next/src/lib.rs"
+from = '''            (NodeKind::Document, NodeKind::Element) if self.has_element_child(parent) => {'''
+to = '''            (NodeKind::Document, NodeKind::Element) if false => {'''
+
+[[mutant]]
+name = "before itself isn't before its next"
+file = "crates/dom_next/src/lib.rs"
+from = '''            Some(child) if Gc::ptr_eq(child, node) => self.next_sibling(node),'''
+to = '''            Some(child) if false => self.next_sibling(node),'''
+
+[[mutant]]
+name = "pre-remove of a stranger removes it"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if !self.parent(child).is_some_and(|of| Gc::ptr_eq(of, parent)) {
+            return Err(DomError::NotFound);
+        }
+        self.remove(child);'''
+to = '''        self.remove(child);'''
+
+[[mutant]]
+name = "removing doesn't relink the previous sibling"
+file = "crates/dom_next/src/lib.rs"
+from = '''            Some(previous) => previous.next_sibling.set(self.gc, next),'''
+to = '''            Some(_) => {}'''
+
+[[mutant]]
+name = "removing doesn't move the last child"
+file = "crates/dom_next/src/lib.rs"
+from = '''            None => parent.last_child.set(self.gc, previous),
+        }
+        node.parent.set(self.gc, None);'''
+to = '''            None => {}
+        }
+        node.parent.set(self.gc, None);'''
+
+[[mutant]]
+name = "a removed node keeps its siblings"
+file = "crates/dom_next/src/lib.rs"
+from = '''        node.previous_sibling.set(self.gc, None);
+        node.next_sibling.set(self.gc, None);
+    }'''
+to = '''    }'''
+
+[[mutant]]
+name = "linking doesn't set the next's back link"
+file = "crates/dom_next/src/lib.rs"
+from = '''            Some(child) => child.previous_sibling.set(self.gc, Some(node)),'''
+to = '''            Some(_) => {}'''
+
+[[mutant]]
+name = "insert doesn't take the node from its parent"
+file = "crates/dom_next/src/lib.rs"
+from = '''        self.remove(node);
+        self.adopt(node, self.document_of(parent));'''
+to = '''        self.adopt(node, self.document_of(parent));'''
+
+[[mutant]]
+name = "no adoption"
+file = "crates/dom_next/src/lib.rs"
+from = '''        self.adopt(node, self.document_of(parent));
+        self.link(parent, node, child);'''
+to = '''        self.link(parent, node, child);'''
+
+[[mutant]]
+name = "adoption leaves the descendants"
+file = "crates/dom_next/src/lib.rs"
+from = '''        self.for_each_inclusive_descendant(node, |at| at.owner.set(self.gc, Some(document)));'''
+to = '''        node.owner.set(self.gc, Some(document));'''
+
+[[mutant]]
+name = "a walk goes past its root"
+file = "crates/dom_next/src/lib.rs"
+from = '''                while let Some(from) = up.filter(|from| !Gc::ptr_eq(*from, root)) {'''
+to = '''                while let Some(from) = up {'''
+
+[[mutant]]
+name = "HTML names aren't uppercased"
+file = "crates/dom_next/src/lib.rs"
+from = '''                if uppercase {
+                    qualified.make_ascii_uppercase();
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "HTML names are uppercased in XML documents too"
+file = "crates/dom_next/src/lib.rs"
+from = '''                let uppercase = name.namespace == names::HTML_NAMESPACE
+                    && self.is_html_document(self.document_of(node));'''
+to = '''                let uppercase = name.namespace == names::HTML_NAMESPACE;'''
+
+[[mutant]]
+name = "nodeName has no prefix"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if name.prefix == names::NONE {
+            return local.to_string();
+        }'''
+to = '''        if true {
+            return local.to_string();
+        }'''
+
+[[mutant]]
+name = "by name ignores the prefix"
+file = "crates/dom_next/src/lib.rs"
+from = '''                    .is_some_and(|(p, l)| names.get(prefix) == p && local == l),'''
+to = '''                    .is_some_and(|(_, l)| local == l),'''
+
+[[mutant]]
+name = "by namespace ignores the namespace"
+file = "crates/dom_next/src/lib.rs"
+from = '''            attribute.namespace.get() == namespace && attribute.local.get() == local'''
+to = '''            attribute.local.get() == local'''
+
+[[mutant]]
+name = "setting an attribute again appends one"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if let Some((_, attribute)) = self.attribute_ns(element, name.namespace, name.local) {
+            self.change_attribute(attribute, value);
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a changed value isn't interned"
+file = "crates/dom_next/src/lib.rs"
+from = '''        *attribute.value.get().borrow_mut() = self.values.borrow_mut().intern(value);'''
+to = '''        *attribute.value.get().borrow_mut() = DomString::new(value);'''
+
+[[mutant]]
+name = "removing an attribute leaves it"
+file = "crates/dom_next/src/lib.rs"
+from = '''        let attribute = attributes.remove(self.gc, index);'''
+to = '''        let attribute = attributes.get(self.gc, index).expect("it");'''
+
+[[mutant]]
+name = "textContent reads only the children"
+file = "crates/dom_next/src/lib.rs"
+from = '''                self.for_each_inclusive_descendant(node, |at| {
+                    if let Some(text) = at.text.get(self.gc) {
+                        joined.push_str(&text.data.get().borrow().to_str());
+                    }
+                });'''
+to = '''                let mut at = self.first_child(node);
+                while let Some(child) = at {
+                    if let Some(text) = child.text.get(self.gc) {
+                        joined.push_str(&text.data.get().borrow().to_str());
+                    }
+                    at = self.next_sibling(child);
+                }'''
+
+[[mutant]]
+name = "an empty textContent makes a text"
+file = "crates/dom_next/src/lib.rs"
+from = '''                if !value.is_empty() {
+                    let text = self.create_text(node, value);'''
+to = '''                if true {
+                    let text = self.create_text(node, value);'''
+
+[[mutant]]
+name = "textContent of a document is empty"
+file = "crates/dom_next/src/lib.rs"
+from = '''            NodeKind::Document => None,
+            NodeKind::Text => self.data(node),'''
+to = '''            NodeKind::Document => Some(DomString::new("")),
+            NodeKind::Text => self.data(node),'''
+
+[[mutant]]
+name = "the table doesn't look up a value"
+file = "crates/dom_next/src/string.rs"
+from = '''        if let Some(string) = self.strings.get(text) {
+            return string.clone();
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the table drops nothing"
+file = "crates/dom_next/src/string.rs"
+from = '''            self.strings.retain(|string| !string.is_unique());'''
+to = ''''''
+
+[[mutant]]
+name = "the table drops what attributes hold"
+file = "crates/dom_next/src/string.rs"
+from = '''            self.strings.retain(|string| !string.is_unique());'''
+to = '''            self.strings.clear();'''
+
+[[mutant]]
+name = "the table's limit doesn't grow"
+file = "crates/dom_next/src/string.rs"
+from = '''            self.limit = self.strings.len().saturating_mul(2).max(MIN_LIMIT);'''
+to = ''''''
+
+[[mutant]]
+name = "every string is ASCII"
+file = "crates/dom_next/src/string.rs"
+from = '''            ascii: text.is_ascii(),'''
+to = '''            ascii: true,'''
+
+[[mutant]]
+name = "equal strings aren't equal"
+file = "crates/dom_next/src/string.rs"
+from = '''        Self::ptr_eq(self, other) || self.text == other.text'''
+to = '''        Self::ptr_eq(self, other)'''
+
+[[mutant]]
+name = "the empty string isn't none in the names' table"
+file = "crates/dom_next/src/names.rs"
+from = '''const FIXED: [&str; 9] = [
+    "",'''
+to = '''const FIXED: [&str; 9] = [
+    "(none)",'''

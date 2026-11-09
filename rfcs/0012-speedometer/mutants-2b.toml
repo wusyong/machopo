@@ -1,0 +1,71 @@
+# Mutation test of step 2b (rounds in turn, the statistics and the table):
+# python3 scripts/test.py mutate rfcs/0012-speedometer/mutants-2b.toml
+test = ["python3", "scripts/speedometer_test.py"]
+timeout = 600
+
+[[mutant]]
+name = "the same browser always goes first"
+file = "scripts/speedometer.py"
+from = '''        turn = browsers if number % 2 == 0 else browsers[::-1]'''
+to = '''        turn = browsers'''
+
+[[mutant]]
+name = "the browsers take turns round by round"
+file = "scripts/speedometer.py"
+from = '''        order += [(number, name, browser) for name in names for browser in turn]'''
+to = '''        order += [(number, name, browser) for browser in turn for name in names]'''
+
+[[mutant]]
+name = "an even count's median is the upper middle"
+file = "scripts/speedometer.py"
+from = '''    return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2'''
+to = '''    return ordered[middle]'''
+
+[[mutant]]
+name = "the interval is one order statistic narrower"
+file = "scripts/speedometer.py"
+from = '''        low = k + 1'''
+to = '''        low = k + 2'''
+
+[[mutant]]
+name = "the interval's tails are twice as wide"
+file = "scripts/speedometer.py"
+from = '''    tail = (1 - confidence) / 2'''
+to = '''    tail = 1 - confidence'''
+
+[[mutant]]
+name = "the first iteration is the last"
+file = "scripts/speedometer.py"
+from = '''        for iteration in (run["iterations"][:1] if first_only else run["iterations"])'''
+to = '''        for iteration in (run["iterations"][-1:] if first_only else run["iterations"])'''
+
+[[mutant]]
+name = "only the first round is checked"
+file = "scripts/speedometer.py"
+from = '''        for number, run in enumerate(rounds):'''
+to = '''        for number, run in enumerate(rounds[:1]):'''
+
+[[mutant]]
+name = "Chrome's last round is the reference"
+file = "scripts/speedometer.py"
+from = '''        problem = suite_problem(reference[name][0] if reference else None, measured)'''
+to = '''        problem = suite_problem(reference[name][-1] if reference else None, measured)'''
+
+[[mutant]]
+name = "the ratio is Chrome's over kun's"
+file = "scripts/speedometer.py"
+from = '''                median(suite_samples(runs["kun"], row["suite"])) / median(suite_samples(runs["Chrome"], row["suite"]))'''
+to = '''                median(suite_samples(runs["Chrome"], row["suite"])) / median(suite_samples(runs["kun"], row["suite"]))'''
+
+[[mutant]]
+name = "Chrome's runs aren't the reference when measured"
+file = "scripts/speedometer.py"
+from = '''    if "Chrome" in results:
+        reference = results["Chrome"]'''
+to = ''''''
+
+[[mutant]]
+name = "the runs aren't saved"
+file = "scripts/speedometer.py"
+from = '''            file.write_text(json.dumps(saved), encoding="utf-8")'''
+to = '''            pass'''

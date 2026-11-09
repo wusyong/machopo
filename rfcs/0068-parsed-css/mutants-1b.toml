@@ -1,0 +1,112 @@
+# 1b: the properties kun parses but doesn't act on yet (`css`, `style`,
+# `layout`).
+#   python3 scripts/test.py mutate rfcs/0068-parsed-css/mutants-1b.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "the_properties_parsed_only"]
+timeout = 900
+
+[[mutant]]
+name = "no -webkit-user-select"
+file = "crates/css/src/properties.rs"
+from = '''            "user-select" | "-webkit-user-select" => UserSelect,'''
+to = '''            "user-select" => UserSelect,'''
+
+[[mutant]]
+name = "no -webkit-text-size-adjust"
+file = "crates/css/src/properties.rs"
+from = '''            "text-size-adjust" | "-webkit-text-size-adjust" => TextSizeAdjust,'''
+to = '''            "text-size-adjust" => TextSizeAdjust,'''
+
+[[mutant]]
+name = "user-select not inherited"
+file = "crates/css/src/properties.rs"
+from = '''                | EmptyCells
+                | UserSelect
+'''
+to = '''                | EmptyCells
+'''
+
+[[mutant]]
+name = "text-size-adjust: none computed as auto"
+file = "crates/css/src/properties.rs"
+from = '''                SpecifiedTextSizeAdjust::None => computed_style::TextSizeAdjust::Percent(100.0),'''
+to = '''                SpecifiedTextSizeAdjust::None => computed_style::TextSizeAdjust::Auto,'''
+
+[[mutant]]
+name = "a negative text-size-adjust"
+file = "crates/css/src/properties.rs"
+from = '''    if percent < 0.0 {
+        return Err(location.new_custom_error(()));
+    }
+    Ok(SpecifiedTextSizeAdjust::Percent(percent))'''
+to = '''    let _ = location;
+    Ok(SpecifiedTextSizeAdjust::Percent(percent))'''
+
+[[mutant]]
+name = "resize: auto computed as auto"
+file = "crates/css/src/computed.rs"
+from = '''            computed_style::Resize::Auto => "both",'''
+to = '''            computed_style::Resize::Auto => "auto",'''
+
+[[mutant]]
+name = "a textarea not resizable"
+file = "crates/style/resources/html.css"
+from = '''  overflow: auto;
+  resize: auto;
+}'''
+to = '''  overflow: auto;
+}'''
+
+[[mutant]]
+name = "an opaque tap highlight"
+file = "crates/computed_style/src/lib.rs"
+from = '''                tap_highlight_color: StyleColor::Rgba(Color::rgba(0, 0, 0, 46)),'''
+to = '''                tap_highlight_color: StyleColor::Rgba(Color::rgba(0, 0, 0, 255)),'''
+
+[[mutant]]
+name = "text-rendering in camel case"
+file = "crates/css/src/serialize.rs"
+from = '''        OptimizeLegibility => "optimizelegibility",'''
+to = '''        OptimizeLegibility => "optimizeLegibility",'''
+
+[[mutant]]
+name = "text-size-adjust steps"
+file = "crates/css/src/interpolate.rs"
+from = '''        match (self, other) {
+            (Percent(a), Percent(b)) => Some(Percent(a.animate(b, progress, cx)?)),'''
+to = '''        match (self, other) {
+            (Percent(_), Percent(_)) => None,'''
+
+[[mutant]]
+name = "text-size-adjust below 0"
+file = "crates/css/src/interpolate.rs"
+from = '''                *percent = percent.max(0.0);
+            }'''
+to = '''                *percent = percent.max(-1e9);
+            }'''
+
+[[mutant]]
+name = "a user-select laid out"
+file = "crates/layout/src/lib.rs"
+from = '''                && new.rare_inherited.user_select == old.rare_inherited.user_select
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::"]
+
+# `-webkit-font-smoothing` moved into the font group in 2a: its mutant is in
+# `mutants-2a.toml`.
+
+[[mutant]]
+name = "a resize laid out"
+file = "crates/layout/src/lib.rs"
+from = '''                && new.rare.resize == old.rare.resize
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::"]
+
+[[mutant]]
+name = "a scroll behavior laid out"
+file = "crates/layout/src/lib.rs"
+from = '''                    scroll_behavior: old.rare.scroll_behavior,
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::"]

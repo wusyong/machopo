@@ -1,0 +1,299 @@
+# Stage 4e-3a-1: invalidation sets in `style_next` (`invalidation.rs`):
+# descendant, sibling and state sets built from the rule indexes, handed
+# down and along the style walk; the reach of a change of position.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p style_next --test it"]
+timeout = 3000
+
+[[mutant]]
+name = "features: no id"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        if let Some(id) = id {
+            features.ids.push(id);
+        } else if'''
+to = '''        if let Some(id) = id.filter(|_| false) {
+            features.ids.push(id);
+        } else if'''
+
+[[mutant]]
+name = "features: no class"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        } else if let Some(class) = class() {'''
+to = '''        } else if let Some(class) = class().filter(|_| false) {'''
+
+[[mutant]]
+name = "features: no attribute"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        } else if let Some(attribute) = attribute() {'''
+to = '''        } else if let Some(attribute) = attribute().filter(|_| false) {'''
+
+[[mutant]]
+name = "features: no name"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        } else if let Some(name) = name() {'''
+to = '''        } else if let Some(name) = name().filter(|_| false) {'''
+
+[[mutant]]
+name = "features: a list's subjects not taken"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        if !features.any {
+            return Some(features);
+        }
+        compound.iter()'''
+to = '''        if true {
+            return Some(features);
+        }
+        compound.iter()'''
+
+[[mutant]]
+name = "matches: no ids"
+file = "crates/style_next/src/invalidation.rs"
+from = '''                .is_some_and(|id| self.ids.iter().any(|f| id.borrow().to_str().eq_ignore_ascii_case(f)))'''
+to = '''                .is_some_and(|_| false)'''
+
+[[mutant]]
+name = "matches: no classes"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        if !self.classes.is_empty() && cx.class_names(element).iter().any(|class| self.classes.contains(&class.lower)) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "matches: no attributes"
+file = "crates/style_next/src/invalidation.rs"
+from = '''                    .is_some_and(|name| self.attributes.contains(&name.local()))'''
+to = '''                    .is_some_and(|_| false)'''
+
+[[mutant]]
+name = "matches: no names"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        !self.names.is_empty() && cx.element_name(element).is_some_and(|name| self.names.contains(&name.local))'''
+to = '''        false'''
+
+[[mutant]]
+name = "ancestors: the subject's as others'"
+file = "crates/style_next/src/invalidation.rs"
+from = '''                component if subject => self.add_nested(component, false),'''
+to = '''                component if subject => self.add_component(component),'''
+
+[[mutant]]
+name = "ancestors: no classes"
+file = "crates/style_next/src/invalidation.rs"
+from = '''            Component::Class(class) => {
+                self.classes.insert(lower(&class.0));
+            }'''
+to = '''            Component::Class(_) => {}'''
+
+[[mutant]]
+name = "ancestors: no ids"
+file = "crates/style_next/src/invalidation.rs"
+from = '''            Component::ID(id) => {
+                self.ids.insert(id.0.to_ascii_lowercase());
+            }'''
+to = '''            Component::ID(_) => {}'''
+
+[[mutant]]
+name = "ancestors: no states"
+file = "crates/style_next/src/invalidation.rs"
+from = '''                self.states |= pseudo_class_state(class);'''
+to = '''                let _ = pseudo_class_state(class);'''
+
+[[mutant]]
+name = "ancestors: no href"
+file = "crates/style_next/src/invalidation.rs"
+from = '''                    PseudoClass::Link | PseudoClass::AnyLink | PseudoClass::Visited => {
+                        self.attributes.insert(names::local::HREF);
+                    }'''
+to = '''                    PseudoClass::Link | PseudoClass::AnyLink | PseudoClass::Visited => {}'''
+
+[[mutant]]
+name = "descendant sets: no attributes"
+file = "crates/style_next/src/invalidation.rs"
+from = '''                if let Some(set) = self.attributes.get(name) {
+                    below.add(set);
+                }'''
+to = '''                let _ = name;'''
+
+[[mutant]]
+name = "descendant sets: no classes"
+file = "crates/style_next/src/invalidation.rs"
+from = '''                if let Some(set) = names::find(&class.to_ascii_lowercase()).and_then(|name| self.classes.get(&name)) {
+                    below.add(set);
+                }'''
+to = '''                let _ = class;'''
+
+[[mutant]]
+name = "descendant sets: no ids"
+file = "crates/style_next/src/invalidation.rs"
+from = '''                if let Some(set) = self.ids.get(&id.to_ascii_lowercase()) {
+                    below.add(set);
+                }'''
+to = '''                let _ = id;'''
+
+[[mutant]]
+name = "descendant sets: no states"
+file = "crates/style_next/src/invalidation.rs"
+from = '''            if changes.states & states != 0 {
+                below.add(set);
+            }'''
+to = '''            let _ = (states, set);'''
+
+[[mutant]]
+name = "sibling sets: no classes"
+file = "crates/style_next/src/invalidation.rs"
+from = '''            if let Some(found) = names::find(&class.to_ascii_lowercase()).and_then(|name| self.classes.get(&name)) {
+                sets.extend(found);
+            }'''
+to = '''            let _ = class;'''
+
+[[mutant]]
+name = "sibling sets: no ids"
+file = "crates/style_next/src/invalidation.rs"
+from = '''            if let Some(found) = self.ids.get(&id.to_ascii_lowercase()) {
+                sets.extend(found);
+            }'''
+to = '''            let _ = id;'''
+
+[[mutant]]
+name = "sibling sets: no attributes"
+file = "crates/style_next/src/invalidation.rs"
+from = '''            if let Some(found) = self.attributes.get(name) {
+                sets.extend(found);
+            }'''
+to = '''            let _ = name;'''
+
+[[mutant]]
+name = "sibling sets: href and lang not attributes'"
+file = "crates/style_next/src/invalidation.rs"
+from = '''                    PseudoClass::Link | PseudoClass::AnyLink | PseudoClass::Visited => attribute(names::local::HREF),
+                    PseudoClass::Lang(_) => attribute(names::local::LANG),'''
+to = '''                    PseudoClass::Link | PseudoClass::AnyLink | PseudoClass::Visited => {}
+                    PseudoClass::Lang(_) => {}'''
+
+[[mutant]]
+name = "sibling sets: no empty"
+file = "crates/style_next/src/invalidation.rs"
+from = '''            Component::Empty => push(&mut self.empty, set),'''
+to = '''            Component::Empty => {}'''
+
+[[mutant]]
+name = "sets: a shadow tree's as plain"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        if !plain {
+            self.any.add_selector(selector, false);'''
+to = '''        if false {
+            self.any.add_selector(selector, false);'''
+
+[[mutant]]
+name = "sets: the reach of a run unlimited"
+file = "crates/style_next/src/invalidation.rs"
+from = '''                    .then(|| u8::try_from(run.len()).unwrap_or(u8::MAX)),'''
+to = '''                    .then_some(u8::MAX),'''
+
+[[mutant]]
+name = "sets: the reach one"
+file = "crates/style_next/src/invalidation.rs"
+from = '''                    .then(|| u8::try_from(run.len()).unwrap_or(u8::MAX)),'''
+to = '''                    .then_some(1),'''
+
+[[mutant]]
+name = "sets: the target the nearest"
+file = "crates/style_next/src/invalidation.rs"
+from = '''            let mut target = left;
+            while let Some(before) = target.checked_sub(1)
+                && combinators[before].is_sibling()
+            {
+                target = before;
+            }'''
+to = '''            let target = left;'''
+
+[[mutant]]
+name = "sets: the subject's descendants not styled"
+file = "crates/style_next/src/invalidation.rs"
+from = '''                descendants: if target == 0 {
+                    InvalidationFeatures::default()
+                } else {
+                    subject.clone()
+                },'''
+to = '''                descendants: InvalidationFeatures::default(),'''
+
+[[mutant]]
+name = "sets: a nested list as a feature"
+file = "crates/style_next/src/invalidation.rs"
+from = '''                if !self.siblings.add(component, &set) {'''
+to = '''                if !self.siblings.add(component, &set) && false {'''
+
+[[mutant]]
+name = "invalidated: lang not below"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        out.subtree |= self.any.uses(changes) || changes.attributes.iter().any(|name| for_descendants(*name));'''
+to = '''        out.subtree |= self.any.uses(changes);'''
+
+[[mutant]]
+name = "invalidated: no fallback"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        out.later |= self.sibling_fallback.uses(changes);'''
+to = '''        let _ = &self.sibling_fallback;'''
+
+[[mutant]]
+name = "walk: a sibling set's subject not styled"
+file = "crates/style_next/src/lib.rs"
+from = '''                    if set.restyle {
+                        own = own.max(Mode::Element);
+                    }'''
+to = ''''''
+
+[[mutant]]
+name = "walk: a sibling set's descendants not handed down"
+file = "crates/style_next/src/lib.rs"
+from = '''                        from_siblings.get_or_insert_default().add(&set.descendants);'''
+to = '''                        let _ = &set.descendants;'''
+
+[[mutant]]
+name = "walk: a sibling set reaches on"
+file = "crates/style_next/src/lib.rs"
+from = '''                if let Some(left) = left {
+                    *left = left.saturating_sub(1);
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "walk: a change of position not on with ~"
+file = "crates/style_next/src/lib.rs"
+from = '''            if visited.positional && self.features().any(|features| features.later_siblings) {
+                later = later.max(self.sibling_mode());
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "walk: what the sets don't say not on"
+file = "crates/style_next/src/lib.rs"
+from = '''            if visited.later {
+                later = later.max(self.sibling_mode());
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "walk: below not matched"
+file = "crates/style_next/src/lib.rs"
+from = '''            || below.is_some_and(|below| below.matches(self.cx, element));'''
+to = ''';'''
+
+[[mutant]]
+name = "walk: its own set not handed down"
+file = "crates/style_next/src/lib.rs"
+from = '''        let own_below = (!invalidated.below.is_empty()).then_some(&invalidated.below);'''
+to = '''        let own_below: Option<&InvalidationFeatures> = None;'''
+
+[[mutant]]
+name = "walk: not down for a set"
+file = "crates/style_next/src/lib.rs"
+from = '''            || children_below.is_some()
+'''
+to = ''''''
+
+[[mutant]]
+name = "walk: the empty sets not taken"
+file = "crates/style_next/src/lib.rs"
+from = '''            for index in self.indexes() {
+                index.sets.empty_changed(&mut invalidated);
+            }'''
+to = '''            let _ = &mut invalidated;'''

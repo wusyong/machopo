@@ -1,0 +1,11 @@
+# iframes' windows: the parser's iframe gets its browsing context before the
+# next script, and the timers of child
+# windows run in their frames: the parser's iframe's, a script's iframe's,
+# and that one's own iframe's; and the parser's iframe's animation frames.
+navigate pages/iframes.html
+wait-loaded
+wait-text #parsed "the parser's iframe has its window"
+wait-text #timer "the timer ran"
+wait-text #animation-frame "the animation frame ran"
+wait-text #script-timer "the timer ran"
+wait-text #nested-timer "the timer ran"

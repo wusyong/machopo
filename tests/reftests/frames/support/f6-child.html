@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<!-- f6-child-container-fragment.html's child frame: its scroll container
+     shows green only from #target down. -->
+<style>
+  body { margin: 0; }
+</style>
+<div style="height: 50px; overflow: auto">
+  <div style="height: 200px; background: red"></div>
+  <div id="target" style="height: 50px; background: green"></div>
+  <div style="height: 200px; background: red"></div>
+</div>

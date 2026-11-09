@@ -1,0 +1,128 @@
+# Step 1c's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0033-canvas-2d/mutations-1c.toml`. The last ones go through the
+# canvas reftests (wptrunner) or the canvas scenario, so they take longer.
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "canvas"]
+timeout = 1500
+
+# paint and layout.
+
+[[mutant]]
+name = "a canvas paints nothing"
+file = "crates/paint/src/lib.rs"
+from = '''        if fragment.canvas
+            && let Some(snapshot)'''
+to = '''        if false
+            && let Some(snapshot)'''
+
+[[mutant]]
+name = "a canvas's item shares its chunk"
+file = "crates/paint/src/lib.rs"
+from = '''        let alone = item.kind == DisplayItemKind::Canvas;'''
+to = '''        let alone = false;'''
+
+[[mutant]]
+name = "what follows a canvas shares its chunk"
+file = "crates/paint/src/lib.rs"
+from = '''                    && items[chunk.items.end - 1].kind != DisplayItemKind::Canvas =>'''
+to = '''                    && true =>'''
+
+[[mutant]]
+name = "a canvas sampled with mipmaps"
+file = "crates/paint/src/lib.rs"
+from = '''                &snapshot,
+                FilterQuality::Low,'''
+to = '''                &snapshot,
+                FilterQuality::Medium,'''
+
+[[mutant]]
+name = "a canvas isn't cut to its rounded content box"
+file = "crates/paint/src/lib.rs"
+from = '''        let replaced = fragment.image.is_some()
+            || fragment.canvas
+            || fragment'''
+to = '''        let replaced = fragment.image.is_some()
+            || fragment'''
+
+[[mutant]]
+name = "layout doesn't mark a canvas's box"
+file = "crates/layout/src/lib.rs"
+from = '''            canvas: b.replaced.as_ref().is_some_and(replaced::Replaced::is_canvas),'''
+to = '''            canvas: false,'''
+
+# dom's snapshot.
+
+[[mutant]]
+name = "a new snapshot each time"
+file = "crates/dom/src/canvas.rs"
+from = '''        if let Some(snapshot) = &self.snapshot {
+            return Some(snapshot.clone());
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--lib", "canvas"]
+
+[[mutant]]
+name = "drawing keeps the old snapshot"
+file = "crates/dom/src/canvas.rs"
+from = '''    pub fn pixels_mut(&mut self, background: [u8; 4]) -> Option<&mut Vec<u8>> {
+        self.snapshot = None;'''
+to = '''    pub fn pixels_mut(&mut self, background: [u8; 4]) -> Option<&mut Vec<u8>> {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--lib", "canvas"]
+
+[[mutant]]
+name = "an opaque canvas with nothing drawn shows nothing"
+file = "crates/dom/src/canvas.rs"
+from = '''        if self.pixels.is_none() && background[3] == 0 {'''
+to = '''        if self.pixels.is_none() {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--lib", "canvas"]
+
+# raster.
+
+[[mutant]]
+name = "decoded pixels taken for a file"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        let image = match data.decoded {'''
+to = '''        let image = match None::<gfx::Size> {'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib"]
+
+[[mutant]]
+name = "a low filter with mipmaps"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        FilterQuality::Low => sk::MipmapMode::None,'''
+to = '''        FilterQuality::Low => sk::MipmapMode::Linear,'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib"]
+
+# The renderer, through the reftests and the scenario.
+
+[[mutant]]
+name = "the renderer gives paint no snapshot"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        self.scope
+            .canvas_data(&context)
+            .snapshot(dom_api::canvas::background(settings))'''
+to = '''        let _ = (context, settings);
+        None'''
+test = ["python3", "scripts/test.py", "reftest", "canvas/"]
+
+[[mutant]]
+name = "the rendering update draws no canvas"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let drawn = crate::canvas::flush_shown(&mut self.dom.borrow_mut().mutate());'''
+to = '''        let drawn: Vec<dom::NodeId> = Vec::new();'''
+test = ["python3", "scripts/test.py", "reftest", "canvas/"]
+
+[[mutant]]
+name = "a drawn canvas isn't painted again"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        if !canvases.is_empty() {
+            self.paint_controller.invalidate(canvases);
+            self.paint_dirty = true;
+        }'''
+to = '''        let _ = canvases;'''
+test = ["python3", "scripts/test.py", "scenarios", "canvas"]
+
+[[mutant]]
+name = "a draw asks for no frame"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let drawn = canvases != self.rendered_canvas_draws_version;'''
+to = '''        let drawn = canvases != self.rendered_canvas_draws_version && false;'''
+test = ["python3", "scripts/test.py", "scenarios", "canvas"]

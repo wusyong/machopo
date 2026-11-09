@@ -1,0 +1,238 @@
+# Stage 5a: a node's data allocated in its node's generation
+# (`Mutation::alloc_beside`, `HeapVector::new_beside`), and a vector's grown
+# store in the vector's. `gc`'s tests: `young`'s (an owner's generation,
+# a vector's and its store's); `dom`'s: a driven heap's node data never in
+# the nursery.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "gc", "--test", "it", "young::"]
+timeout = 300
+
+[[mutant]]
+name = "gc: alloc_beside never old"
+file = "crates/gc/src/heap.rs"
+from = '''        let old = self.is_old(owner);
+        self.alloc_at(site.index(), old, init)'''
+to = '''        let old = self.is_old(owner);
+        self.alloc_at(site.index(), false && old, init)'''
+
+[[mutant]]
+name = "gc: alloc_beside always old"
+file = "crates/gc/src/heap.rs"
+from = '''        let old = self.is_old(owner);
+        self.alloc_at(site.index(), old, init)'''
+to = '''        let old = self.is_old(owner);
+        self.alloc_at(site.index(), true || old, init)'''
+
+[[mutant]]
+name = "gc: alloc_at drops its old"
+file = "crates/gc/src/heap.rs"
+from = '''        let old = old || self.inner.options.driven && info.has_js_edges();'''
+to = '''        let old = self.inner.options.driven && info.has_js_edges();'''
+
+[[mutant]]
+name = "gc: new_beside young"
+file = "crates/gc/src/vector.rs"
+from = '''        Self::new_in(cx, capacity, cx.is_old(owner))'''
+to = '''        Self::new_in(cx, capacity, false)'''
+
+[[mutant]]
+name = "gc: a vector beside its owner, its store young"
+file = "crates/gc/src/vector.rs"
+from = '''        let store = MemberArray::new(cx, capacity, old);'''
+to = '''        let store = MemberArray::new(cx, capacity, false);'''
+
+[[mutant]]
+name = "gc: a vector beside its owner young, its store old"
+file = "crates/gc/src/vector.rs"
+from = '''        let data = cx.inner.allocate(size_of::<Self>(), 0, old);'''
+to = '''        let data = cx.inner.allocate(size_of::<Self>(), 0, false);'''
+
+[[mutant]]
+name = "gc: an old vector's grown store young"
+file = "crates/gc/src/vector.rs"
+from = '''            let grown = MemberArray::new(cx, len.saturating_mul(2).max(4), old);'''
+to = '''            let grown = MemberArray::new(cx, len.saturating_mul(2).max(4), false);'''
+
+[[mutant]]
+name = "dom: a text's data young"
+file = "crates/dom/src/lib.rs"
+from = '''        let data = self.gc.alloc_beside(
+            node,
+            &sites::TEXT_DATA,'''
+to = '''        let data = self.gc.alloc_in(
+            &sites::TEXT_DATA,'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom", "--test", "it", "gc::"]
+
+[[mutant]]
+name = "dom: a new attribute young"
+file = "crates/dom/src/lib.rs"
+from = '''        let attribute = self.gc.alloc_beside(
+            element,
+            &sites::ATTRIBUTE,
+            AttributeInit {
+                name: Cell::new(name.raw()),
+                value: LocalExternal::new(RefCell::new(string::intern_value(value))),
+            },
+        );
+        self.append_attribute_object(element, attribute);'''
+to = '''        let attribute = self.gc.alloc_in(
+            &sites::ATTRIBUTE,
+            AttributeInit {
+                name: Cell::new(name.raw()),
+                value: LocalExternal::new(RefCell::new(string::intern_value(value))),
+            },
+        );
+        self.append_attribute_object(element, attribute);'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom", "--test", "it", "gc::"]
+
+[[mutant]]
+name = "dom: an element's first attribute list young"
+file = "crates/dom/src/lib.rs"
+from = '''                let attributes = HeapVector::new_beside(self.gc, element, 1);
+                element.attributes.set(self.gc, Some(attributes));
+                attributes
+            }
+        };
+        attributes.push(self.gc, attribute);
+        let name = attribute.qualified_name();'''
+to = '''                let attributes = HeapVector::new(self.gc, 1);
+                element.attributes.set(self.gc, Some(attributes));
+                attributes
+            }
+        };
+        attributes.push(self.gc, attribute);
+        let name = attribute.qualified_name();'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom", "--test", "it", "gc::"]
+
+[[mutant]]
+name = "dom: element data young"
+file = "crates/dom/src/style.rs"
+from = '''        let data = self.gc.alloc_beside(
+            element,
+            &sites::OTHER,
+            ElementDataInit {'''
+to = '''        let data = self.gc.alloc_in(
+            &sites::OTHER,
+            ElementDataInit {'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom", "--test", "it", "gc::"]
+
+[[mutant]]
+name = "dom: classes young"
+file = "crates/dom/src/style.rs"
+from = '''            self.gc.alloc_beside(
+                element,
+                &sites::OTHER,'''
+to = '''            self.gc.alloc_in(
+                &sites::OTHER,'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom", "--test", "it", "gc::"]
+
+[[mutant]]
+name = "dom: the children's list young"
+file = "crates/dom/src/lists.rs"
+from = '''        let children = self.gc.alloc_beside(
+            node,
+            &sites::OTHER,'''
+to = '''        let children = self.gc.alloc_in(
+            &sites::OTHER,'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom", "--test", "it", "gc::"]
+
+[[mutant]]
+name = "dom: rare data young"
+file = "crates/dom/src/event.rs"
+from = '''        self.gc.alloc_beside(
+            node,
+            &sites::OTHER,
+            NodeRareDataInit {'''
+to = '''        self.gc.alloc_in(
+            &sites::OTHER,
+            NodeRareDataInit {'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom", "--test", "it", "gc::"]
+
+[[mutant]]
+name = "dom: an input's type young"
+file = "crates/dom/src/input.rs"
+from = '''        let input = self.gc.alloc_beside(
+            element,
+            &sites::OTHER,'''
+to = '''        let input = self.gc.alloc_in(
+            &sites::OTHER,'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom", "--test", "it", "gc::"]
+
+[[mutant]]
+name = "dom: a form association young"
+file = "crates/dom/src/form.rs"
+from = '''        let association = self.gc.alloc_beside(
+            element,
+            &sites::OTHER,'''
+to = '''        let association = self.gc.alloc_in(
+            &sites::OTHER,'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom", "--test", "it", "gc::"]
+
+[[mutant]]
+name = "dom: the parser's attribute list young"
+file = "crates/dom/src/lib.rs"
+from = '''        let list = HeapVector::new_beside(self.gc, element, attributes.len());'''
+to = '''        let list = HeapVector::new(self.gc, attributes.len());'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom", "--test", "it", "gc::"]
+
+[[mutant]]
+name = "dom: the parser's attributes young"
+file = "crates/dom/src/lib.rs"
+from = '''            let attribute = self.gc.alloc_beside(
+                element,
+                &sites::ATTRIBUTE,'''
+to = '''            let attribute = self.gc.alloc_in(
+                &sites::ATTRIBUTE,'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom", "--test", "it", "gc::"]
+
+[[mutant]]
+name = "dom: an Attr's data young"
+file = "crates/dom/src/attr.rs"
+from = '''        let data = self.gc.alloc_beside(
+            node,
+            &sites::OTHER,'''
+to = '''        let data = self.gc.alloc_in(
+            &sites::OTHER,'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom", "--test", "it", "gc::"]
+
+[[mutant]]
+name = "dom: the kept Attrs' list young"
+file = "crates/dom/src/attr.rs"
+from = '''                let kept = HeapVector::new_beside(self.gc, element, 1);'''
+to = '''                let kept = HeapVector::new(self.gc, 1);'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom", "--test", "it", "gc::"]
+
+[[mutant]]
+name = "dom: a doctype's data young"
+file = "crates/dom/src/lib.rs"
+from = '''        let data = self.gc.alloc_beside(
+            node,
+            &sites::OTHER,
+            DoctypeDataInit {'''
+to = '''        let data = self.gc.alloc_in(
+            &sites::OTHER,
+            DoctypeDataInit {'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom", "--test", "it", "gc::"]
+
+[[mutant]]
+name = "dom: a template's content data young"
+file = "crates/dom/src/lib.rs"
+from = '''            let data = self.gc.alloc_beside(
+                content,
+                &sites::OTHER,'''
+to = '''            let data = self.gc.alloc_in(
+                &sites::OTHER,'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom", "--test", "it", "gc::"]
+
+[[mutant]]
+name = "dom: a template document's owner's data young"
+file = "crates/dom/src/lib.rs"
+from = '''                    .alloc_beside(document, &sites::OTHER, window::new_document_data());'''
+to = '''                    .alloc_in(&sites::OTHER, window::new_document_data());'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom", "--test", "it", "gc::"]
+
+[[mutant]]
+name = "dom: a document's data young"
+file = "crates/dom/src/window.rs"
+from = '''        let data = self.gc.alloc_beside(document, &sites::OTHER, new_document_data());'''
+to = '''        let data = self.gc.alloc_in(&sites::OTHER, new_document_data());'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom", "--test", "it", "gc::"]

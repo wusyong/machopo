@@ -1,0 +1,128 @@
+# Stage 2h-1a: the isolate's state borrowed only through the isolate (no
+# RefCell), the front end split in and out of the operation.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+timeout = 1800
+
+[[mutant]]
+name = "the state's type isn't checked by a scope"
+file = "crates/bindings/src/isolate_state.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "isolate_state", "unified_heap"]
+from = '''        checked::<T>(scope)?;
+        Some(Self {'''
+to = '''        let _ = checked::<T>(scope);
+        Some(Self {'''
+
+[[mutant]]
+name = "a state callback's template needs no state"
+file = "crates/bindings/src/isolate_state.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "isolate_state", "unified_heap"]
+from = '''    assert!(
+        checked::<T>(scope).is_some(),
+        "a state callback's template is made where the state is one"
+    );
+    configure('''
+to = '''    configure('''
+
+[[mutant]]
+name = "the owner's borrow ignores the type"
+file = "crates/bindings/src/isolate_state.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "isolate_state", "unified_heap"]
+from = '''    checked::<T>(isolate).map(|mut state| unsafe { state.as_mut() })'''
+to = '''    Some(unsafe { unchecked::<T>(isolate).as_mut() })'''
+
+[[mutant]]
+name = "the registration isn't kept"
+file = "crates/bindings/src/unified_heap.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "isolate_state", "unified_heap"]
+from = '''    crate::isolate_state::keep_registration(isolate, registration);'''
+to = '''    drop(registration);'''
+
+[[mutant]]
+name = "the state drops before its registration"
+file = "crates/bindings/src/isolate_state.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "unified_heap_marking"]
+from = '''    let registration = unsafe { (*slot).registration.take() };
+    drop(registration);
+    isolate.set_data(STATE_SLOT, ptr::null_mut());'''
+to = '''    isolate.set_data(STATE_SLOT, ptr::null_mut());
+    let registration = unsafe { (*slot).registration.take() };
+    std::mem::forget(registration);'''
+
+[[mutant]]
+name = "a reported exception isn't stored"
+file = "crates/dom_api_next/src/timer.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next", "--test", "it"]
+from = '''        store(cx.error_edge(data), error.take().expect("stored once"));'''
+to = '''        let _ = error.take();'''
+
+[[mutant]]
+name = "a rejection's promise and reason swap"
+file = "crates/dom_api_next/src/lifecycle.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        store(cx.promise_edge(data), promise);
+        store(cx.reason_edge(data), reason);'''
+to = '''        store(cx.promise_edge(data), reason);
+        store(cx.reason_edge(data), promise);'''
+
+[[mutant]]
+name = "templates aren't cached"
+file = "crates/dom_js_next/src/templates.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''    let global = v8::Global::new(scope.scope(), template);
+    scope.state_mut().0.templates[interface] = Some(global);'''
+to = '''    let _ = v8::Global::new(scope.scope(), template);'''
+
+[[mutant]]
+name = "the DOM's growth isn't reported"
+file = "crates/dom_js_next/src/state.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        if used.abs_diff(state.reported) < REPORT_BYTES {'''
+to = '''        if used.abs_diff(state.reported) < usize::MAX {'''
+
+[[mutant]]
+name = "the realm's window isn't found"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        let global = self.window?;
+        self.no_gc.unwrap::<dom_next::Window>(cx.gc, global)'''
+to = '''        let _ = self.window;
+        None'''
+
+[[mutant]]
+name = "a constructor doesn't prepare the window"
+file = "crates/dom_api_next_macros/src/lib.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''    let prepare_window = with_front.then(|| quote!(#front.prepare_window();));'''
+to = '''    let prepare_window = with_front.then(Tokens::new);'''
+
+[[mutant]]
+name = "a double is a Smi whole or not"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        if !(integer
+            && self'''
+to = '''        if !(true
+            && self'''
+
+[[mutant]]
+name = "the heap says it's done marking"
+file = "crates/dom_js_next/src/state.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "marking"]
+from = '''        self.dom.advance_marking(atomic, budget)
+    }'''
+to = '''        self.dom.advance_marking(atomic, budget);
+        true
+    }'''
+
+[[mutant]]
+name = "a listener's exception has no window"
+file = "crates/dom_js_next/src/listeners.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''    let Some(mut scope) = state::scope(tc) else {
+        return;
+    };
+    report(&mut scope, global, thrown);'''
+to = '''    let Some(mut scope) = state::scope(tc) else {
+        return;
+    };
+    report(&mut scope, None, thrown);'''

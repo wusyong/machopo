@@ -1,0 +1,13 @@
+# about:demo's fit-content label: as wide as its text, it grows
+# with it. The label is at the end of the page: scrolled to first, so that
+# what is captured shows it.
+navigate about:demo
+wait-loaded
+scroll-to #label
+screenshot one-word
+capture one-word
+click #grow
+wait-text #grow-note "2 words."
+# Wider: the frame changes where the label now reaches.
+expect-differs one-word #label
+screenshot two-words

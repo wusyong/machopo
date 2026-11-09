@@ -1,0 +1,319 @@
+# Mutation test of step 2b: CSS animations (the `animation` crate's
+# model, keyframes computed on the element, the animation origin) in style
+# recalc (2026-10-15):
+# python3 scripts/test.py mutate rfcs/0048-css-animations/mutants-2b.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "css_animations::", "animations::"]
+timeout = 900
+
+# --- keyframes
+[[mutant]]
+name = "keyframes kept over a new base style"
+file = "crates/animation/src/css_animation.rs"
+from = '''            && *self.base == *base
+'''
+to = '''
+'''
+
+[[mutant]]
+name = "keyframes kept over a new parent style"
+file = "crates/animation/src/css_animation.rs"
+from = '''            && *self.parent == *parent
+'''
+to = '''
+'''
+
+[[mutant]]
+name = "keyframes kept over a new root font size"
+file = "crates/animation/src/css_animation.rs"
+from = '''            && self.root_font_size == root_font_size
+'''
+to = '''
+'''
+
+[[mutant]]
+name = "keyframes kept over a new viewport"
+file = "crates/animation/src/css_animation.rs"
+from = '''            && self.viewport == viewport
+'''
+to = '''
+'''
+
+[[mutant]]
+name = "keyframes never kept"
+file = "crates/style/src/animations.rs"
+from = '''    {
+        return previous.clone();
+    }'''
+to = '''    {
+        let _ = previous;
+    }'''
+
+[[mutant]]
+name = "a keyframe's vw doesn't mark the style"
+file = "crates/style/src/animations.rs"
+from = '''        style.has_viewport_units |= entry.animations.css_animations.uses_viewport();'''
+to = '''        style.has_viewport_units |= false;'''
+
+[[mutant]]
+name = "a logical property in a keyframe"
+file = "crates/animation/src/css_animation.rs"
+from = '''                let id = id.physical();
+                if id.animation_type()'''
+to = '''                let id = *id;
+                if id.animation_type()'''
+
+[[mutant]]
+name = "animation-timing-function in a keyframe animated"
+file = "crates/animation/src/css_animation.rs"
+from = '''                if id.animation_type() == AnimationType::NotAnimatable {
+                    continue;
+                }
+                let frame = PropertyKeyframe {'''
+to = '''                if false {
+                    continue;
+                }
+                let frame = PropertyKeyframe {'''
+
+[[mutant]]
+name = "the first keyframe at an offset wins"
+file = "crates/animation/src/css_animation.rs"
+from = '''                    Some(same) => *same = frame,'''
+to = '''                    Some(_) => {}'''
+
+[[mutant]]
+name = "keyframes not sorted"
+file = "crates/animation/src/css_animation.rs"
+from = '''            frames.sort_by(|a, b| a.offset.total_cmp(&b.offset));'''
+to = '''            frames.sort_by(|_, _| std::cmp::Ordering::Equal);'''
+
+[[mutant]]
+name = "no 0% from the base style"
+file = "crates/animation/src/css_animation.rs"
+from = '''            if frames.first().is_none_or(|f| f.offset != 0.0) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "no 100% from the base style"
+file = "crates/animation/src/css_animation.rs"
+from = '''            if frames.last().is_none_or(|f| f.offset != 1.0) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "a keyframe without easing is linear"
+file = "crates/animation/src/css_animation.rs"
+from = '''                    easing: keyframe.easing.clone().unwrap_or_else(|| easing.clone()),'''
+to = '''                    easing: keyframe.easing.clone().unwrap_or(EasingFunction::Linear),'''
+
+[[mutant]]
+name = "a keyframe's own easing ignored"
+file = "crates/style/src/animations.rs"
+from = '''            .then(|| style.animations.timing_function[0].clone());'''
+to = '''            .then(|| style.animations.timing_function[0].clone())
+            .filter(|_| false);'''
+
+[[mutant]]
+name = "eased as the next keyframe says"
+file = "crates/animation/src/css_animation.rs"
+from = '''            let eased = from.easing.evaluate(local, before);'''
+to = '''            let eased = to.easing.evaluate(local, before);'''
+
+[[mutant]]
+name = "the segment after the progress"
+file = "crates/animation/src/css_animation.rs"
+from = '''                .rposition(|f| f.offset <= progress)'''
+to = '''                .position(|f| f.offset > progress)'''
+
+[[mutant]]
+name = "never before, for a step"
+file = "crates/animation/src/animation.rs"
+from = '''        let timing = self.computed(now);
+        if let Some(progress) = timing.progress {
+            self.effect.apply(progress, timing.before_flag, style);'''
+to = '''        let timing = self.computed(now);
+        if let Some(progress) = timing.progress {
+            self.effect.apply(progress, false, style);'''
+
+# --- the animation
+[[mutant]]
+name = "a held time isn't the current time"
+file = "crates/animation/src/playback.rs"
+from = '''            return Some(hold);'''
+to = '''            return Some(hold * 0.0);'''
+
+[[mutant]]
+name = "a paused animation runs"
+file = "crates/animation/src/animation.rs"
+from = '''            || (self.playback.start_time.is_some() && self.last_phase != Some(done))'''
+to = '''            || self.last_phase != Some(done)'''
+
+[[mutant]]
+name = "a done animation runs"
+file = "crates/animation/src/animation.rs"
+from = '''            || (self.playback.start_time.is_some() && self.last_phase != Some(done))'''
+to = '''            || self.playback.start_time.is_some()'''
+
+[[mutant]]
+name = "pausing holds 0"
+file = "crates/animation/src/playback.rs"
+from = '''                    self.hold_time = Some((ready_time - start) * self.playback_rate);'''
+to = '''                    self.hold_time = Some(0.0);'''
+
+[[mutant]]
+name = "playing again starts from 0"
+file = "crates/animation/src/playback.rs"
+from = '''                        ready_time - hold / rate'''
+to = '''                        ready_time'''
+
+[[mutant]]
+name = "a paused animation starts"
+file = "crates/animation/src/playback.rs"
+from = '''        self.pending = Some(PendingTask::Pause);'''
+to = '''        self.pending = Some(PendingTask::Play);'''
+
+[[mutant]]
+name = "never ticked"
+file = "crates/animation/src/animation.rs"
+from = '''        self.last_phase = Some(timing.phase);'''
+to = '''        let _ = &timing.phase;'''
+
+[[mutant]]
+name = "the delay in seconds"
+file = "crates/animation/src/css_animation.rs"
+from = '''        delay: milliseconds(timing.delay),'''
+to = '''        delay: f64::from(timing.delay),'''
+
+[[mutant]]
+name = "no fill"
+file = "crates/animation/src/css_animation.rs"
+from = '''        fill: timing.fill_mode,'''
+to = '''        fill: computed_style::FillMode::None,'''
+
+[[mutant]]
+name = "one iteration"
+file = "crates/animation/src/css_animation.rs"
+from = '''        iterations: f64::from(timing.iteration_count),'''
+to = '''        iterations: 1.0,'''
+
+[[mutant]]
+name = "always forwards"
+file = "crates/animation/src/css_animation.rs"
+from = '''        direction: timing.direction,'''
+to = '''        direction: computed_style::PlaybackDirection::Normal,'''
+
+[[mutant]]
+name = "the effect eases too"
+file = "crates/animation/src/css_animation.rs"
+from = '''        easing: EasingFunction::Linear,
+    }
+}'''
+to = '''        easing: timing.timing_function.clone(),
+    }
+}'''
+
+[[mutant]]
+name = "a new name list starts every animation again"
+file = "crates/animation/src/css_animation.rs"
+from = '''                && let Some(at) = old.iter().rposition(|a| owner(a).name == *name)'''
+to = '''                && let Some(at) = old.iter().rposition(|a| owner(a).name == *name && false)'''
+
+[[mutant]]
+name = "a kept animation keeps its timing"
+file = "crates/animation/src/css_animation.rs"
+from = '''                    if animation.timing != timing {
+                        animation.timing = timing;'''
+to = '''                    if animation.timing != timing {
+                        let _ = timing;'''
+
+[[mutant]]
+name = "a new timing doesn't wake a done animation"
+file = "crates/animation/src/css_animation.rs"
+from = '''                        animation.timing = timing;
+                        let _ = animation.control(now, events, |playback, at, end, notices| {
+                            playback.update_finished_state(false, false, at, end, notices);
+                            Ok(())
+                        });'''
+to = '''                        animation.timing = timing;'''
+
+[[mutant]]
+name = "a kept animation keeps its play state"
+file = "crates/animation/src/css_animation.rs"
+from = '''                    if play_state_changed && !owner.play_state_overridden {'''
+to = '''                    if false {'''
+
+[[mutant]]
+name = "a new paused animation plays"
+file = "crates/animation/src/css_animation.rs"
+from = '''                        *order, keyframes, timing, owner, paused, now, events,'''
+to = '''                        *order, keyframes, timing, owner, false, now, events,'''
+
+# --- the element's animations and style
+[[mutant]]
+name = "CSS animations don't run"
+file = "crates/animation/src/transition.rs"
+from = '''        self.transitions.iter().any(Animation::is_running)
+            || self.css_animations.is_running()'''
+to = '''        self.transitions.iter().any(Animation::is_running)'''
+
+[[mutant]]
+name = "CSS animations don't animate font-size"
+file = "crates/animation/src/transition.rs"
+from = '''            .chain(self.css_animations.properties())'''
+to = '''            .chain(std::iter::empty())'''
+
+[[mutant]]
+name = "CSS animations' properties not inherited"
+file = "crates/animation/src/transition.rs"
+from = '''            .chain(self.css_animations.properties())'''
+to = '''            .chain(self.css_animations.properties().filter(|_| false))'''
+
+[[mutant]]
+name = "CSS animations never start"
+file = "crates/animation/src/transition.rs"
+from = '''        let mut started = self.css_animations.commit_pending(now, events);'''
+to = '''        let mut started = false;'''
+
+[[mutant]]
+name = "CSS animations never ticked"
+file = "crates/animation/src/transition.rs"
+from = '''        self.css_animations.tick(now, events);'''
+to = '''        let _ = &self.css_animations;'''
+
+[[mutant]]
+name = "CSS animations not applied"
+file = "crates/animation/src/transition.rs"
+from = '''        self.css_animations.apply(now, &mut style);'''
+to = '''        let _ = now;'''
+
+[[mutant]]
+name = "the after-change style without CSS animations"
+file = "crates/style/src/animations.rs"
+from = '''            Arc::new(entry.animations.apply_css_animations(self.now, &base))'''
+to = '''            base.clone()'''
+
+[[mutant]]
+name = "an element with animation-name and no entry isn't animated"
+file = "crates/style/src/animations.rs"
+from = '''            && !may_animate(&base)'''
+to = '''            && true'''
+
+[[mutant]]
+name = "a done CSS animation with fill forwards not applied"
+file = "crates/style/src/animations.rs"
+from = '''        let style = if entry.animations.is_running() || !entry.animations.css_animations.is_empty()'''
+to = '''        let style = if entry.animations.is_running()'''
+
+[[mutant]]
+name = "keyframes under author normal"
+file = "crates/style/src/lib.rs"
+from = '''    const ANIMATION: Self = Self {
+        level: 2,'''
+to = '''    const ANIMATION: Self = Self {
+        level: 0,'''
+
+[[mutant]]
+name = "keyframes over author !important"
+file = "crates/style/src/lib.rs"
+from = '''    const ANIMATION: Self = Self {
+        level: 2,'''
+to = '''    const ANIMATION: Self = Self {
+        level: 5,'''

@@ -1,0 +1,160 @@
+# Mutation test of the fourth stage: the renderer's Page agent (the frame
+# tree, the documents' markup, the frames told as they come and go) and
+# the browser passing Page.enable and disable on:
+# python3 scripts/test.py mutate rfcs/0075-remote-debugging/mutants-4.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools::"]
+timeout = 900
+
+# The agent (renderer).
+
+[[mutant]]
+name = "Page.enable doesn't turn the events on"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''                if !enabled.iter().any(|known| known == session) {
+                    enabled.push(session.to_owned());
+                }'''
+to = '''                let _ = &mut enabled;'''
+
+[[mutant]]
+name = "Page.disable doesn't turn them off"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''                self.enabled.borrow_mut().retain(|known| known != session);
+                Ok(json!({}))'''
+to = '''                Ok(json!({}))'''
+
+[[mutant]]
+name = "a document's markup without Page on"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''                if self.enabled.borrow().iter().any(|known| known == session) {
+                    self.resource_content(&params)'''
+to = '''                if !session.is_empty() {
+                    self.resource_content(&params)'''
+
+[[mutant]]
+name = "a URL with a fragment isn't the document's"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''        if without_fragment(url) != without_fragment(&frame.url) {'''
+to = '''        if url != frame.url {'''
+
+[[mutant]]
+name = "the resource tree has no resources"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''    if resources {
+        tree["resources"] = json!([]);
+    }'''
+to = '''    let _ = resources;'''
+
+[[mutant]]
+name = "a frame gone isn't told"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''            if !new.iter().any(|frame| frame.id == gone.id) {'''
+to = '''            if new.is_empty() && !new.iter().any(|frame| frame.id == gone.id) {'''
+
+[[mutant]]
+name = "a frame attached isn't told"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''                    if let Some(parent) = &frame.parent_id {
+                        self.tell('''
+to = '''                    if let Some(parent) = frame.parent_id.as_ref().filter(|_| false) {
+                        self.tell('''
+
+[[mutant]]
+name = "an initial about:blank is told as navigated to"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''                    if !frame.initial {'''
+to = '''                    if !frame.initial || frame.initial {'''
+
+[[mutant]]
+name = "a new document isn't told"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''                Some(known) if known.document != frame.document => self.navigated(frame),'''
+to = '''                Some(known) if known.document != frame.document && known.id.is_empty() => {
+                    self.navigated(frame)
+                }'''
+
+[[mutant]]
+name = "a child frame has no parent"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''        if let Some(parent) = &self.parent_id {
+            frame["parentId"] = parent.as_str().into();
+        }'''
+to = '''        let _ = &self.parent_id;'''
+
+[[mutant]]
+name = "the main frame has a name"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        if let Some(main) = &self.frame_view {
+            self.add_frame_infos(main, None, None, &mut frames);
+        }'''
+to = '''        if let Some(main) = &self.frame_view {
+            self.add_frame_infos(main, None, Some(String::new()), &mut frames);
+        }'''
+
+[[mutant]]
+name = "an iframe's name isn't its frame's"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''                    .attribute(&QualName::attr(local_name!("name")))'''
+to = '''                    .attribute(&QualName::attr(local_name!("id")))'''
+
+[[mutant]]
+name = "the machine itself isn't localhost"
+file = "crates/renderer/src/render_thread/page_agent.rs"
+from = '''        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),'''
+to = '''        Some(url::Host::Ipv4(ip)) => ip.is_unspecified(),'''
+
+[[mutant]]
+name = "a data: frame is insecure"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        "about" | "data" => parent.unwrap_or("Secure"),'''
+to = '''        "about" => parent.unwrap_or("Secure"),'''
+
+[[mutant]]
+name = "HTTP on the machine itself is insecure"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''            Some(url::Host::Ipv4(ip)) if ip.is_loopback() => "SecureLocalhost",'''
+to = '''            Some(url::Host::Ipv4(ip)) if ip.is_unspecified() => "SecureLocalhost",'''
+
+[[mutant]]
+name = "the main frame's new document is told after its realm"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if !self.devtools_sessions.is_empty() && !token.is_empty() {'''
+to = '''        if self.devtools_sessions.is_empty() && !token.is_empty() {'''
+
+[[mutant]]
+name = "the frames aren't told between tasks"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            // The frames the tasks attached, navigated and removed, to
+            // DevTools.
+            self.tell_frames();'''
+to = ''''''
+
+[[mutant]]
+name = "the agent answers from the frames of before"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        // The `Page` agent's, with the frames as they are now.
+        self.tell_frames();'''
+to = ''''''
+
+[[mutant]]
+name = "the pause doesn't ask the agent"
+file = "crates/bindings/src/devtools.rs"
+from = '''                    } else if !queue.answer_here(&session, &message) {'''
+to = '''                    } else if session.len() < usize::MAX || !queue.answer_here(&session, &message) {'''
+
+# The browser.
+
+[[mutant]]
+name = "the browser answers Page.enable itself"
+file = "crates/shell/src/automation_session.rs"
+from = '''            return self.forward(client, command, "Page.enable", &json!({}), browser);'''
+to = '''            return Dispatched::Now(Ok(json!({})));'''
+
+[[mutant]]
+name = "Page.disable leaves the browser's events on"
+file = "crates/shell/src/automation_session.rs"
+from = '''                attached.page = false;
+            }
+            return self.forward(client, command, name, params, browser);'''
+to = '''                let _ = attached;
+            }
+            return self.forward(client, command, name, params, browser);'''

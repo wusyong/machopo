@@ -1,0 +1,99 @@
+# Stage 3d: `test.py reftest-next`: `kun --run-web-tests`'s screenshot
+# lines, and `reftest_next.py`'s results (references, fuzziness as
+# wptrunner has it, pages not screenshot, categories, the server's alias
+# for kun's reftests, what is excluded).
+test = ["python3", "scripts/reftest_next_test.py"]
+timeout = 1200
+
+[[mutant]]
+name = "a screenshot line a test's"
+file = "crates/shell/src/web_tests.rs"
+from = '''        if let Some(screenshot) = line.strip_prefix("screenshot ") {'''
+to = '''        if let Some(screenshot) = line.strip_prefix("screenshots ") {'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "web_tests::"]
+
+[[mutant]]
+name = "reftest-wait's timeout an error"
+file = "crates/shell/src/web_tests.rs"
+from = '''        Err(error) if error.starts_with("reftest-wait was still on") => {'''
+to = '''        Err(error) if false => {'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "web_tests::"]
+
+[[mutant]]
+name = "no PNG written"
+file = "crates/shell/src/web_tests.rs"
+from = '''        Ok(frame) => match headless::write_png(std::path::Path::new(path), frame.size, &frame.pixels) {'''
+to = '''        Ok(frame) => match Ok::<(), std::io::Error>(()).map(|()| (frame.size, &frame.pixels)).map(drop) {'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "web_tests::"]
+
+[[mutant]]
+name = "a line short of a path a screenshot"
+file = "crates/shell/src/web_tests.rs"
+from = '''    let (url, path) = rest.trim().split_once(' ')?;'''
+to = '''    let (url, path) = rest.trim().split_once(' ').unwrap_or((rest.trim(), "x.png"));'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "web_tests::"]
+
+[[mutant]]
+name = "a reference's relation ignored"
+file = "scripts/reftest_next.py"
+from = '''        if same != (relation == "=="):'''
+to = '''        if not same:'''
+
+[[mutant]]
+name = "identical files compared by pixels"
+file = "scripts/reftest_next.py"
+from = '''    if lhs.read_bytes() == rhs.read_bytes():
+        return True
+'''
+to = ''''''
+
+[[mutant]]
+name = "fuzzy's ranges exclusive"
+file = "scripts/reftest_next.py"
+from = '''        or (allowed_per_channel[0] <= per_channel <= allowed_per_channel[1]'''
+to = '''        or (allowed_per_channel[0] <= per_channel < allowed_per_channel[1]'''
+
+[[mutant]]
+name = "the test's fuzziness for any reference first"
+file = "scripts/reftest_next.py"
+from = '''    for key in ((test["url"], reference, relation), reference, None):'''
+to = '''    for key in (None, (test["url"], reference, relation), reference):'''
+
+[[mutant]]
+name = "nothing under everything"
+file = "scripts/reftest_next.py"
+from = '''    return any(not base or path == base or path.startswith(base + "/") for base in bases)'''
+to = '''    return any(path == base or path.startswith(base + "/") for base in bases)'''
+
+[[mutant]]
+name = "a page not screenshot passes"
+file = "scripts/reftest_next.py"
+from = '''        if status != "OK":
+            return status'''
+to = '''        if False:
+            return status'''
+
+[[mutant]]
+name = "a gap counted as the new DOM's"
+file = "scripts/reftest_next.py"
+from = '''        "both" if today == new == "PASS" else "new" if new == "PASS" else "gap" if today == "PASS" else "neither"'''
+to = '''        "both" if today == new == "PASS" else "new" if today == "PASS" else "gap" if new == "PASS" else "neither"'''
+
+[[mutant]]
+name = "a whole URL on the server"
+file = "scripts/reftest_next.py"
+from = '''    return f"http://web-platform.test:{wpt_next.HTTP_PORT}{url}" if url.startswith("/") else url'''
+to = '''    return f"http://web-platform.test:{wpt_next.HTTP_PORT}{url}"'''
+
+[[mutant]]
+name = "kun's reftests not served"
+file = "scripts/reftest_next.py"
+from = '''    config["aliases"].append({"url-path": "/_kun/", "local-dir": str(MACHOPO_REFTESTS)})
+'''
+to = ''''''
+
+[[mutant]]
+name = "the excludes run"
+file = "scripts/reftest_next.py"
+from = '''MACHOPO_EXCLUDES = ["hidpi", "wasm"]'''
+to = '''MACHOPO_EXCLUDES = ["hidpi/", "wasm/"]'''

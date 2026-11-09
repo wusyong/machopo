@@ -1,0 +1,3 @@
+# The scenarios known to fail: `test.py scenarios` doesn't fail on them,
+# and fails if one of them passes (take it off then). One name a line (the
+# file's, without `.txt`), `#` comments saying why.

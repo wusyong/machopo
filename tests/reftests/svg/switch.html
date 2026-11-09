@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<title>switch draws its first child whose conditions hold; a failing condition hides an element anywhere</title>
+<link rel="match" href="rect-ref.html">
+<style>body { margin: 0 } svg { display: block }</style>
+<svg width="100" height="60">
+  <switch>
+    <rect systemLanguage="fr" x="10" y="10" width="40" height="20" fill="red"/>
+    <rect systemLanguage="en-GB, de" x="10" y="10" width="40" height="20" fill="lime"/>
+    <rect x="10" y="10" width="40" height="20" fill="red"/>
+  </switch>
+  <rect systemLanguage="ja" x="60" y="10" width="20" height="20" fill="red"/>
+  <rect requiredExtensions="" x="60" y="10" width="20" height="20" fill="red"/>
+  <rect requiredExtensions="http://example.com/x" x="60" y="10" width="20" height="20" fill="red"/>
+</svg>

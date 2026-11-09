@@ -1,0 +1,5 @@
+<!DOCTYPE html>
+<title>I9: vertical-align puts inline boxes (and their backgrounds) at the line's top and bottom, raises them by a length, and moves an inline-block</title>
+<link rel="match" href="i9-vertical-align-ref.html">
+<style>html, body { margin: 0 } div { font: 20px/1 Ahem; color: green } .r { position: absolute; width: 20px; height: 20px; background: green }</style>
+<div style="line-height: 60px">X<span style="vertical-align: top; line-height: 20px; color: transparent; background: green">X</span><span style="vertical-align: bottom; line-height: 20px">X</span><span style="vertical-align: 10px; line-height: 20px">X</span><div style="display: inline-block; vertical-align: top; width: 20px; height: 20px; background: green"></div></div>

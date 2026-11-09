@@ -1,0 +1,181 @@
+# Stage 4h-5b-2: idle callbacks, the navigator's geolocation, wakeLock, connection and
+# scheduling on the new DOM; a time origin before the DOM was made, and a document its iframe
+# navigated from no longer fully active.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it -- idle:: navigator_apis:: performance:: frames:: wrappers::"]
+timeout = 1500
+
+[[mutant]]
+name = "api: an idle callback's timeout ignored"
+file = "crates/dom_api_next/src/idle.rs"
+from = '''    let idle = cx.add_idle_callback(this, options.timeout);'''
+to = '''    let idle = cx.add_idle_callback(this, 0);'''
+
+[[mutant]]
+name = "api: a timed-out callback's deadline not the time it ran"
+file = "crates/dom_api_next/src/idle.rs"
+from = '''        let deadline = cx.create_idle_deadline(window, crate::event::coarsen(now), true);'''
+to = '''        let deadline = cx.create_idle_deadline(window, crate::event::coarsen(now) + 50.0, true);'''
+
+[[mutant]]
+name = "api: negative time remaining"
+file = "crates/dom_api_next/src/idle.rs"
+from = '''    Ok(if remaining > 0.0 {'''
+to = '''    Ok(if true {'''
+
+[[mutant]]
+name = "api: an idle timeout after a later timer"
+file = "crates/dom_api_next/src/timer.rs"
+from = '''cx.next_script_timer_due(window).is_none_or(|timer| idle < timer)'''
+to = '''cx.next_script_timer_due(window).is_none()'''
+
+[[mutant]]
+name = "dom: idle timeouts don't make a timer due"
+file = "crates/dom_next/src/window.rs"
+from = '''        [self.next_script_timer_due(window), native, self.next_idle_timeout(window)]'''
+to = '''        [self.next_script_timer_due(window), native, None]'''
+
+[[mutant]]
+name = "dom: a callback runs in a period that started before it"
+file = "crates/dom_next/src/idle.rs"
+from = '''        let index = self.idle_callback_index(window, |callback| callback.runnable.get())?;'''
+to = '''        let index = self.idle_callback_index(window, |_| true)?;'''
+
+[[mutant]]
+name = "dom: cancelIdleCallback does nothing"
+file = "crates/dom_next/src/idle.rs"
+from = '''        if let Some(index) = self.idle_callback_index(window, |callback| callback.handle.get() == handle) {
+            self.remove_idle_callback(window, index);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a timeout of 0 has no timer"
+file = "crates/dom_api_next/src/geolocation.rs"
+from = '''    if timeout == 0 {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: a negative timeout not clamped to 0"
+file = "crates/dom_api_next/src/geolocation.rs"
+from = '''    let value = value.clamp(0.0, f64::from(u32::MAX)).round_ties_even();'''
+to = '''    let value = value.abs().clamp(0.0, f64::from(u32::MAX)).round_ties_even();'''
+
+[[mutant]]
+name = "api: no timeout given is 0"
+file = "crates/dom_api_next/src/geolocation.rs"
+from = '''        return u32::MAX;'''
+to = '''        return 0;'''
+
+[[mutant]]
+name = "dom: the watches failed first"
+file = "crates/dom_next/src/geolocation.rs"
+from = '''all.into_iter().partition(|r| r.watch_id.get() == 0);'''
+to = '''all.into_iter().partition(|r| r.watch_id.get() != 0);'''
+
+[[mutant]]
+name = "dom: clearWatch does nothing"
+file = "crates/dom_next/src/geolocation.rs"
+from = '''            (0..requests.len()).find(|&index| requests.get(self.gc, index).is_some_and(|r| r.watch_id.get() == watch_id))
+        {
+            requests.remove(self.gc, index);
+        }'''
+to = '''            (0..requests.len()).find(|&index| requests.get(self.gc, index).is_some_and(|r| r.watch_id.get() == watch_id))
+        {
+            let _ = index;
+        }'''
+
+[[mutant]]
+name = "api: a hidden page's request starts"
+file = "crates/dom_api_next/src/geolocation.rs"
+from = '''    let visible = !cx.page_hidden(window);'''
+to = '''    let visible = true;'''
+
+[[mutant]]
+name = "api: shown, the waiting requests don't start"
+file = "crates/dom_api_next/src/document.rs"
+from = '''                    crate::geolocation::page_shown(cx, window);'''
+to = ''''''
+
+[[mutant]]
+name = "api: the denial's message the timeout's"
+file = "crates/dom_api_next/src/geolocation.rs"
+from = '''        PERMISSION_DENIED => "User denied Geolocation",'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a watch's id 0"
+file = "crates/dom_next/src/geolocation.rs"
+from = '''        let watch_id = if watch {'''
+to = '''        let watch_id = if false {'''
+
+[[mutant]]
+name = "front: the error callback the success's"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        let taken = if callback.0 == 1 {'''
+to = '''        let taken = if false {'''
+
+[[mutant]]
+name = "api: a hidden page's wake lock asked for"
+file = "crates/dom_api_next/src/wake_lock.rs"
+from = '''    if cx.page_hidden(window) {
+        return Err(not_allowed(NOT_VISIBLE));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a lock granted to a page hidden meanwhile"
+file = "crates/dom_api_next/src/wake_lock.rs"
+from = '''        Some((!cx.page_hidden(window)).then('''
+to = '''        Some(true.then('''
+
+[[mutant]]
+name = "dom: a sentinel released twice"
+file = "crates/dom_next/src/wake_lock.rs"
+from = '''        if data.released.replace(true) {'''
+to = '''        if { data.released.set(true); false } {'''
+
+[[mutant]]
+name = "api: hidden, the locks stay"
+file = "crates/dom_api_next/src/document.rs"
+from = '''        crate::wake_lock::page_hidden(host, window);'''
+to = ''''''
+
+[[mutant]]
+name = "api: a system lock"
+file = "crates/dom_api_next/src/wake_lock.rs"
+from = '''lock_type.filter(|&lock_type| lock_type != "screen")'''
+to = '''lock_type.filter(|&lock_type| lock_type == "nothing")'''
+
+[[mutant]]
+name = "api: the connection's effective type"
+file = "crates/dom_api_next/src/navigator.rs"
+from = '''    string("4g")'''
+to = '''    string("3g")'''
+
+[[mutant]]
+name = "api: isInputPending always with the continuous ones"
+file = "crates/dom_api_next/src/navigator.rs"
+from = '''    let pending = host.pending_input(options.includeContinuous);'''
+to = '''    let pending = host.pending_input(true);'''
+
+[[mutant]]
+name = "api: an element's id a document's"
+file = "crates/dom_api_next/src/navigator.rs"
+from = '''            .filter(|&target| cx.kind(target) == dom_next::NodeKind::Document && cx.window_of(target).is_some())'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a time origin before the DOM its start"
+file = "crates/dom_next/src/window.rs"
+from = '''            None => -self.origin.saturating_duration_since(origin).as_secs_f64() * 1000.0,'''
+to = '''            None => 0.0,'''
+
+[[mutant]]
+name = "dom: a document its iframe navigated from still fully active"
+file = "crates/dom_next/src/frame.rs"
+from = '''            if let Some(document) = document
+                && !Gc::ptr_eq(old, document)
+            {
+                self.discard_document_tree(old);
+            }'''
+to = ''''''

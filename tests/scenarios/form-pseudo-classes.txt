@@ -1,0 +1,15 @@
+# The form pseudo-classes follow the user: a click on a label checks its
+# checkbox, and `input:checked ~ #mark` widens the mark; the reset button
+# unchecks it, and the mark is narrow again. Both change the checkbox outside
+# script's calls, which the renderer catches up with before it draws the next
+# frame (the frames are compared, not the boxes, which a query would bring up
+# to date itself).
+navigate pages/form-pseudo-classes.html
+wait-loaded
+capture unchecked
+click #label
+expect-differs unchecked
+screenshot checked
+capture checked
+click #reset
+expect-differs checked

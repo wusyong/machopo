@@ -1,0 +1,453 @@
+# Stage 1: overflow-anchor, picking the anchor, the adjustment, the
+# suppression triggers.
+test = ["sh", "-c", "cargo test -q -p layout --test it scroll_anchor && cargo test -q -p renderer --lib -- content_above at_the_top a_scroll_picks a_scroll_container_keeps the_scroll_is_in a_change_on_the_way a_box_leaving an_anchor_without overflow_anchor_none an_anchor_stays what_keeps the_move_is_clamped a_containers_anchor the_whole_box_tree"]
+timeout = 900
+
+# --- layout: picking the anchor ---
+
+[[mutant]]
+name = "a box with no height is looked at"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''    if rect.width <= 0.0 || rect.height <= 0.0 {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "all in view is never it"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''    if inside {
+        Examined::Return'''
+to = '''    if false {
+        Examined::Return'''
+
+[[mutant]]
+name = "touching the top is in view"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''        && visible.y < rect.bottom();'''
+to = '''        && visible.y <= rect.bottom();'''
+
+[[mutant]]
+name = "text with overflow-anchor: none is looked at"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''                if run.style.rare.overflow_anchor == computed_style::OverflowAnchor::None {'''
+to = '''                if false {'''
+
+[[mutant]]
+name = "a box with overflow-anchor: none is looked at"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''                if style.rare.overflow_anchor == computed_style::OverflowAnchor::None
+                    ||'''
+to = '''                if false
+                    ||'''
+
+[[mutant]]
+name = "a sticky box is looked at"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''matches!(style.position, Position::Fixed | Position::Sticky)'''
+to = '''matches!(style.position, Position::Fixed)'''
+
+[[mutant]]
+name = "a fixed box is looked at unless fixed to the viewport"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''matches!(style.position, Position::Fixed | Position::Sticky)'''
+to = '''matches!(style.position, Position::Sticky)'''
+
+[[mutant]]
+name = "an anonymous box isn't gone through"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''                    return self
+                        .content(child, place.offset, &place.contents)
+                        .then_some(true);'''
+to = '''                    return None;'''
+
+[[mutant]]
+name = "a box partly in view isn't gone into"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''                        self.found = Some((ScrollAnchorNode::Box(node), rect));
+                        self.content(child, place.offset, &place.contents);
+                        Some(true)'''
+to = '''                        self.found = Some((ScrollAnchorNode::Box(node), rect));
+                        Some(true)'''
+
+[[mutant]]
+name = "the search goes on after a box partly in view"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''                        self.content(child, place.offset, &place.contents);
+                        Some(true)'''
+to = '''                        self.content(child, place.offset, &place.contents);
+                        None'''
+
+[[mutant]]
+name = "what overflows a box isn't part of it"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''        let height = fragment.size.height.max(overflow.height);'''
+to = '''        let height = fragment.size.height + 0.0 * overflow.height;'''
+
+[[mutant]]
+name = "out-of-flow boxes not where their parent is"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''                    candidates.push(self.box_candidate(&place.fragment, at, to_root));'''
+to = '''                    let _ = (at, to_root);'''
+
+[[mutant]]
+name = "no out-of-flow boxes from the containing block"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''            link.fragment.style.is_out_of_flow()
+                && !fragment'''
+to = '''            false
+                && !fragment'''
+
+[[mutant]]
+name = "out-of-flow boxes among the in-flow ones too"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''            .filter(|(_, link)| !link.fragment.style.is_out_of_flow());'''
+to = '''            .filter(|_| true);'''
+
+[[mutant]]
+name = "a line's candidates top to bottom"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''            (line_of(&a.1), a.1.x)
+                .partial_cmp(&(line_of(&b.1), b.1.x))'''
+to = '''            (a.1.y, a.1.x)
+                .partial_cmp(&(b.1.y, b.1.x))'''
+
+[[mutant]]
+name = "a line's candidates boxes first"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''            (line_of(&a.1), a.1.x)
+                .partial_cmp(&(line_of(&b.1), b.1.x))'''
+to = '''            (0, 0)
+                .partial_cmp(&(0, 0))'''
+
+[[mutant]]
+name = "a container shows from its border"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''                place.offset.y + b.top,'''
+to = '''                place.offset.y,'''
+
+[[mutant]]
+name = "a container's content not where it scrolled"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''                to_root.then(&Transform::translate(-at.x, -at.y))'''
+to = '''                to_root'''
+
+[[mutant]]
+name = "transforms ignored"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''        if let Some(transform) = box_transform(fragment) {'''
+to = '''        if let Some(transform) = box_transform(fragment).filter(|_| false) {'''
+
+[[mutant]]
+name = "a box gone is looked at"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''                if (self.skip)(node) {
+                    return None;'''
+to = '''                if false {
+                    return None;'''
+
+[[mutant]]
+name = "text gone is looked at"
+file = "crates/layout/src/scroll_anchor.rs"
+from = '''            Candidate::Text(node, _) if (self.skip)(node) => None,'''
+to = '''            Candidate::Text(node, _) if (self.skip)(node) && false => None,'''
+
+# --- renderer: keeping the anchors, the adjustment ---
+
+[[mutant]]
+name = "anchored at the top"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''            if offset.y == 0.0 || opted_out {'''
+to = '''            if opted_out {'''
+
+[[mutant]]
+name = "picked again before every layout"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''            if self.anchors.contains_key(&scroller) {
+                continue;'''
+to = '''            if false {
+                continue;'''
+
+[[mutant]]
+name = "overflow-anchor changing keeps the anchors"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''        for &changed in &changes.overflow_anchor {'''
+to = '''        for &changed in changes.overflow_anchor.iter().take(0) {'''
+
+[[mutant]]
+name = "an anchor gone is kept"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''        self.anchors.retain(|_, anchor| !gone(anchor.node.node()));'''
+to = ''''''
+
+[[mutant]]
+name = "the old style's overflow-anchor"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''            let skip = |node: NodeId| gone(node) || !anchors_now(scope, node, scroller);'''
+to = '''            let skip = |node: NodeId| gone(node) || !anchors_now(scope, node, scroller) && false;'''
+
+[[mutant]]
+name = "what is gone may be picked"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''            let skip = |node: NodeId| gone(node) || !anchors_now(scope, node, scroller);'''
+to = '''            let skip = |node: NodeId| gone(node) && false || !anchors_now(scope, node, scroller);'''
+
+[[mutant]]
+name = "not in device pixels"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''            let snap = |y: f32| (y * device_scale_factor).round();'''
+to = '''            let snap = |y: f32| y * device_scale_factor;'''
+
+[[mutant]]
+name = "a change on the way clears an anchor that didn't move"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''            if adjustment == 0.0 {
+                continue;
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "a change on the way is followed"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''            if changed_on_the_way(scope, anchor.node.node(), scroller, disabled) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "a change on the way keeps the anchor"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''            if changed_on_the_way(scope, anchor.node.node(), scroller, disabled) {
+                self.anchors.remove(&scroller);'''
+to = '''            if changed_on_the_way(scope, anchor.node.node(), scroller, disabled) {'''
+
+[[mutant]]
+name = "an anchor without a box after layout is kept"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''            ) else {
+                self.anchors.remove(&scroller);
+                continue;
+            };'''
+to = '''            ) else {
+                continue;
+            };'''
+
+[[mutant]]
+name = "containers before the viewport"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''        let anchors: Vec<(Option<NodeId>, ScrollAnchor)> = order
+            .into_iter()'''
+to = '''        let anchors: Vec<(Option<NodeId>, ScrollAnchor)> = order
+            .into_iter()
+            .rev()'''
+
+[[mutant]]
+name = "containers not adjusted"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''        if self.anchors.len() > usize::from(self.anchors.contains_key(&None)) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "built again has the box it had"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''        if rebuilt.contains(&n.id()) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "out of the document has a box"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''            None => return n.id() == document,'''
+to = '''            None => return true,'''
+
+[[mutant]]
+name = "the way up stops below the scroller"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''        if disabled.contains(&n.id()) {
+            return true;
+        }
+        if Some(n.id()) == scroller {
+            return false;
+        }'''
+to = '''        if Some(n.id()) == scroller {
+            return false;
+        }
+        if disabled.contains(&n.id()) {
+            return true;
+        }'''
+
+[[mutant]]
+name = "the way up goes past the scroller"
+file = "crates/renderer/src/scroll_anchor.rs"
+from = '''        if Some(n.id()) == scroller {
+            return false;
+        }'''
+to = ''''''
+
+# --- renderer: what clears the anchor ---
+
+[[mutant]]
+name = "a script scroll keeps the viewport's anchor"
+file = "crates/renderer/src/scroll.rs"
+from = '''            self.anchors.remove(&None);'''
+to = ''''''
+
+[[mutant]]
+name = "a script scroll keeps a container's anchor"
+file = "crates/renderer/src/scroll.rs"
+from = '''            self.anchors.remove(&Some(element));'''
+to = ''''''
+
+[[mutant]]
+name = "the clamp clears the viewport's anchor"
+file = "crates/renderer/src/scroll.rs"
+from = '''            self.move_viewport(node.clamp_scroll_offset(self.viewport));'''
+to = '''            self.set_viewport(node.clamp_scroll_offset(self.viewport));'''
+
+[[mutant]]
+name = "the clamp clears a container's anchor"
+file = "crates/renderer/src/scroll.rs"
+from = '''            self.move_container(element, containers[&element].clamp_scroll_offset(offset));'''
+to = '''            self.set_container(element, containers[&element].clamp_scroll_offset(offset));'''
+
+[[mutant]]
+name = "not picked before layout"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            if let Some(last) = &self.fragment {
+                self.scroll.pick_scroll_anchors('''
+to = '''            if let Some(last) = self.fragment.as_ref().filter(|_| false) {
+                self.scroll.pick_scroll_anchors('''
+
+[[mutant]]
+name = "the move not clamped"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                    device_scale_factor,
+                );
+                self.scroll.clamp(&fragment);'''
+to = '''                    device_scale_factor,
+                );'''
+
+# --- layout: what keeps a move from being followed ---
+
+[[mutant]]
+name = "insets"
+file = "crates/layout/src/lib.rs"
+from = '''    old.inset != new.inset
+        ||'''
+to = '''    false
+        ||'''
+
+[[mutant]]
+name = "margins"
+file = "crates/layout/src/lib.rs"
+from = '''        || old.margin != new.margin'''
+to = ''''''
+
+[[mutant]]
+name = "padding"
+file = "crates/layout/src/lib.rs"
+from = '''        || old.padding != new.padding'''
+to = ''''''
+
+[[mutant]]
+name = "width"
+file = "crates/layout/src/lib.rs"
+from = '''        || old.width != new.width'''
+to = ''''''
+
+[[mutant]]
+name = "height"
+file = "crates/layout/src/lib.rs"
+from = '''        || old.height != new.height'''
+to = ''''''
+
+[[mutant]]
+name = "min-width"
+file = "crates/layout/src/lib.rs"
+from = '''        || old.min_width != new.min_width'''
+to = ''''''
+
+[[mutant]]
+name = "min-height"
+file = "crates/layout/src/lib.rs"
+from = '''        || old.min_height != new.min_height'''
+to = ''''''
+
+[[mutant]]
+name = "max-width"
+file = "crates/layout/src/lib.rs"
+from = '''        || old.max_width != new.max_width'''
+to = ''''''
+
+[[mutant]]
+name = "max-height"
+file = "crates/layout/src/lib.rs"
+from = '''        || old.max_height != new.max_height'''
+to = ''''''
+
+[[mutant]]
+name = "position"
+file = "crates/layout/src/lib.rs"
+from = '''        || old.position != new.position'''
+to = ''''''
+
+[[mutant]]
+name = "transform"
+file = "crates/layout/src/lib.rs"
+from = '''        || old.transform != new.transform'''
+to = ''''''
+
+[[mutant]]
+name = "an inline element's style"
+file = "crates/layout/src/lib.rs"
+from = '''            if let Some(old) = &old {
+                self.note_scroll_anchoring_changes(walk.scope, element, old, &style);'''
+to = '''            if let Some(old) = old.as_ref().filter(|_| false) {
+                self.note_scroll_anchoring_changes(walk.scope, element, old, &style);'''
+
+[[mutant]]
+name = "a block's style"
+file = "crates/layout/src/lib.rs"
+from = '''        self.note_scroll_anchoring_changes(walk.scope, element, &old, &style);'''
+to = ''''''
+
+[[mutant]]
+name = "into or out of the flow"
+file = "crates/layout/src/lib.rs"
+from = '''        if old.is_out_of_flow() == new.is_out_of_flow() {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "into or out of the flow notes the element"
+file = "crates/layout/src/lib.rs"
+from = '''        let mut node = scope.flat_tree_parent(element);
+        while let Some(n) = node {
+            let parent = scope.flat_tree_parent(n);'''
+to = '''        let mut node = Some(element);
+        while let Some(n) = node {
+            let parent = scope.flat_tree_parent(n);'''
+
+[[mutant]]
+name = "into or out of the flow notes the root"
+file = "crates/layout/src/lib.rs"
+from = '''            if scrolls || parent.is_none_or(|p| p.element_name().is_none()) {'''
+to = '''            if parent.is_none_or(|p| p.element_name().is_none()) {'''
+
+[[mutant]]
+name = "overflow-anchor not noted"
+file = "crates/layout/src/lib.rs"
+from = '''            self.scroll_anchoring.overflow_anchor.push(element.id());'''
+to = ''''''
+
+[[mutant]]
+name = "built again not noted"
+file = "crates/layout/src/lib.rs"
+from = '''            self.scroll_anchoring.rebuilt.push(element.id());'''
+to = ''''''
+
+[[mutant]]
+name = "the root built again keeps the anchors"
+file = "crates/layout/src/lib.rs"
+from = '''                self.scroll_anchoring.rebuilt.push(root.id());'''
+to = ''''''
+
+[[mutant]]
+name = "built again whole compares no styles"
+file = "crates/layout/src/lib.rs"
+from = '''        for (&id, &index) in &old.elements {'''
+to = '''        for (&id, &index) in old.elements.iter().take(0) {'''

@@ -1,0 +1,37 @@
+# The last segment, a: the renames. No behavior is new; these break the
+# calls whose names collided as `next_` came off (an outer method checking
+# and calling the document's), to check the tests still reach each.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it -- windowless:: documents:: devtools_initiators:: scheduling:: script:: devtools:: && cargo test -q -p renderer --lib"]
+timeout = 2400
+
+[[mutant]]
+name = "renderer: Shift+Tab into the page focuses nothing"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.set_document_initial_focus(reverse);'''
+to = '''        let _ = reverse;'''
+
+[[mutant]]
+name = "renderer: the compositor's scroll isn't given to the document"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            self.apply_document_compositor_scroll(scroll);'''
+to = '''            let _ = scroll;'''
+
+[[mutant]]
+name = "renderer: an idle callback doesn't run"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.run_document_idle_callback(deadline);'''
+to = '''        let _ = deadline;'''
+
+[[mutant]]
+name = "renderer: a request's initiator isn't asked"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        self.send_request_with_initiator(frame, fetching, |this| this.initiator(frame, &asker))'''
+to = '''        self.send_request_with_initiator(frame, fetching, |_| None)'''
+
+[[mutant]]
+name = "renderer: DevTools' frames before a document are the document's"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        if self.document.is_some() {
+            return self.document_frame_infos();'''
+to = '''        if self.document.is_some() || self.document.is_none() {
+            return self.document_frame_infos();'''

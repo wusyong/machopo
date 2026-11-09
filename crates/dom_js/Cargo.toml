@@ -1,0 +1,49 @@
+[package]
+name = "dom_js"
+description = "The DOM's JS front end (V8): the declaration table's templates, each member's call, DOMException and the DOM's strings, on a heap V8's major GCs mark."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+# A keyframes argument as read, for `animate()`.
+animation.workspace = true
+base.workspace = true
+bindings.workspace = true
+dom_api.workspace = true
+dom.workspace = true
+elise.workspace = true
+# The string cache's map, by a string's address: no attacker chooses it.
+rustc-hash.workspace = true
+tracing.workspace = true
+trace_event.workspace = true
+url.workspace = true
+v8.workspace = true
+
+[dev-dependencies]
+# `toDataURL`'s URLs, which the canvas tests decode.
+base64.workspace = true
+# A 2D context's data, which the canvas tests read.
+canvas.workspace = true
+# The ops a 2D context records, which the canvas tests look at.
+compositor_paint.workspace = true
+# A layout of the tests' own (`dom_api::FrameLayout`) names their types.
+computed_style.workspace = true
+# A `<link>`'s sheet, parsed as the renderer gives it.
+css.workspace = true
+gfx.workspace = true
+# A fetch's response's tainting, as the tests give one.
+protocol.workspace = true
+# Markup parsed into a window's document: its event handlers' lines.
+html.workspace = true
+# The inspector's DevTools messages, which the tests read.
+serde_json.workspace = true

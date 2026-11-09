@@ -1,0 +1,267 @@
+# 4b: `filter` and `isolation` (`computed_style`, `css`, `layout`, `paint`,
+# `raster`).
+#   python3 scripts/test.py mutate rfcs/0064-rendering-gaps/mutants-4b.toml
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "--", "artifact::filters", "raster_invalidation::a_changed_filter"]
+timeout = 900
+
+[[mutant]]
+name = "an amount past 100% kept"
+file = "crates/css/src/filter.rs"
+from = '''    let value = if function.at_most_one() {
+        value.min(1.0)
+    } else {
+        value
+    };
+    Ok(Amount { value, percent })'''
+to = '''    Ok(Amount { value, percent })'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cssom::filters"]
+
+[[mutant]]
+name = "a negative amount taken"
+file = "crates/css/src/filter.rs"
+from = '''    if value < 0.0 {
+        return Err(location.new_custom_error(()));
+    }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cssom::filters"]
+
+[[mutant]]
+name = "a negative amount computed"
+file = "crates/css/src/filter.rs"
+from = '''                let value = amount.map_or(1.0, |amount| amount.value).max(0.0);'''
+to = '''                let value = amount.map_or(1.0, |amount| amount.value);'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "computed::filters"]
+
+[[mutant]]
+name = "a computed amount past 1"
+file = "crates/css/src/filter.rs"
+from = '''                let value = if function.at_most_one() {
+                    value.min(1.0)
+                } else {
+                    value
+                };
+                match function {'''
+to = '''                match function {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "computed::filters"]
+
+[[mutant]]
+name = "a drop shadow's spread"
+file = "crates/css/src/filter.rs"
+from = '''SpecifiedShadow::parse(input, true)?'''
+to = '''SpecifiedShadow::parse(input, false)?'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cssom::filters"]
+
+[[mutant]]
+name = "an unturned zero"
+file = "crates/css/src/filter.rs"
+from = '''                input.try_parse(Angle::parse_or_zero).ok(),'''
+to = '''                input.try_parse(Angle::parse).ok(),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cssom::filters"]
+
+[[mutant]]
+name = "the shorter filter list not padded"
+file = "crates/css/src/interpolate.rs"
+from = '''                    (Some(a), None) => (*a, initial(a)),
+                    (None, Some(b)) => (initial(b), *b),
+                    (None, None) => unreachable!("within the longer list"),
+                };
+                let amount'''
+to = '''                    _ => return None,
+                };
+                let amount'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "interpolation::filters"]
+
+[[mutant]]
+name = "an interpolated amount out of range"
+file = "crates/css/src/interpolate.rs"
+from = '''Some((a.animate(&b, progress, cx)?).clamp(0.0, max))'''
+to = '''Some(a.animate(&b, progress, cx)?)'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "interpolation::filters"]
+
+[[mutant]]
+name = "a filter no stacking context"
+file = "crates/computed_style/src/lib.rs"
+from = '''            || !self.rare.filter.is_empty()
+            || self.rare.isolation == Isolation::Isolate'''
+to = '''            || self.rare.isolation == Isolation::Isolate'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cascade::filters"]
+
+[[mutant]]
+name = "isolation no stacking context"
+file = "crates/computed_style/src/lib.rs"
+from = '''            || self.rare.isolation == Isolation::Isolate
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cascade::filters"]
+
+[[mutant]]
+name = "a filter no containing block"
+file = "crates/layout/src/lib.rs"
+from = '''        || (!style.rare.filter.is_empty() && !root)
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "contain::"]
+
+[[mutant]]
+name = "the root's filter a containing block"
+file = "crates/layout/src/lib.rs"
+from = '''        || (!style.rare.filter.is_empty() && !root)'''
+to = '''        || !style.rare.filter.is_empty()'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "contain::"]
+
+[[mutant]]
+name = "a filter lays out"
+file = "crates/layout/src/lib.rs"
+from = '''                    filter: old.rare.filter.clone(),
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::a_transform_origin_makes_fragments_only"]
+
+[[mutant]]
+name = "a filter's coming not laid out"
+file = "crates/layout/src/lib.rs"
+from = '''                if contains_changed && self.has_out_of_flow_below(index) {'''
+to = '''                if false && contains_changed && self.has_out_of_flow_below(index) {'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::containing"]
+
+[[mutant]]
+name = "a filter no effect"
+file = "crates/paint/src/lib.rs"
+from = '''        if style.opacity < 1.0 || filter.is_some() {'''
+to = '''        if style.opacity < 1.0 {'''
+
+[[mutant]]
+name = "an SVG element's filter no effect"
+file = "crates/paint/src/svg.rs"
+from = '''        if node.style.opacity < 1.0 || filter.is_some() {'''
+to = '''        if node.style.opacity < 1.0 {'''
+test = ["python3", "scripts/test.py", "wpt", "css/filter-effects/svg-shorthand-hue-rotate-001.html", "css/filter-effects/svg-shorthand-drop-shadow-001.html"]
+
+[[mutant]]
+name = "the output clip the root"
+file = "crates/paint/src/lib.rs"
+from = '''            output_clip: state.clip,'''
+to = '''            output_clip: crate::ClipNodeId(0),'''
+
+[[mutant]]
+name = "the filter in the root's space"
+file = "crates/paint/src/lib.rs"
+from = '''            transform: state.transform,
+            output_clip: state.clip,'''
+to = '''            transform: crate::TransformNodeId(0),
+            output_clip: state.clip,'''
+
+[[mutant]]
+name = "the output clips not set"
+file = "crates/paint/src/lib.rs"
+from = '''            push_clips(&mut list, &output_clips[outside..]);'''
+to = ''''''
+
+[[mutant]]
+name = "a drop shadow's sigma its radius"
+file = "crates/paint/src/filter.rs"
+from = '''            sigma: shadow.blur / 2.0,'''
+to = '''            sigma: shadow.blur,'''
+
+[[mutant]]
+name = "only the last function"
+file = "crates/paint/src/filter.rs"
+from = '''        1 => filters.into_iter().next(),
+        _ => Some(ImageFilter::Chain(filters.into())),'''
+to = '''        _ => filters.into_iter().last(),'''
+
+[[mutant]]
+name = "invert half way"
+file = "crates/paint/src/filter.rs"
+from = '''    scale_rgb(1.0 - 2.0 * a, a)'''
+to = '''    scale_rgb(1.0 - a, a)'''
+
+[[mutant]]
+name = "brightness adds"
+file = "crates/paint/src/filter.rs"
+from = '''        FilterFunction::Brightness(a) => ImageFilter::ColorMatrix(scale_rgb(a, 0.0)),'''
+to = '''        FilterFunction::Brightness(a) => ImageFilter::ColorMatrix(scale_rgb(1.0, a - 1.0)),'''
+test = ["python3", "scripts/test.py", "reftest", "effects/filter.html"]
+
+[[mutant]]
+name = "contrast not about the middle"
+file = "crates/paint/src/filter.rs"
+from = '''scale_rgb(a, 0.5 - 0.5 * a)'''
+to = '''scale_rgb(a, 0.0)'''
+test = ["python3", "scripts/test.py", "wpt", "css/filter-effects/filter-contrast-001.html", "css/filter-effects/filter-contrast-002.html", "css/filter-effects/filter-contrast-003.html"]
+
+[[mutant]]
+name = "grayscale the other way"
+file = "crates/paint/src/filter.rs"
+from = '''        FilterFunction::Grayscale(a) => ImageFilter::ColorMatrix(grayscale(1.0 - a)),'''
+to = '''        FilterFunction::Grayscale(a) => ImageFilter::ColorMatrix(grayscale(a)),'''
+test = ["python3", "scripts/test.py", "wpt", "css/filter-effects/filter-grayscale-001.html", "css/filter-effects/filters-grayscale-001-test.html"]
+
+[[mutant]]
+name = "sepia the other way"
+file = "crates/paint/src/filter.rs"
+from = '''        FilterFunction::Sepia(a) => ImageFilter::ColorMatrix(sepia(1.0 - a)),'''
+to = '''        FilterFunction::Sepia(a) => ImageFilter::ColorMatrix(sepia(a)),'''
+test = ["python3", "scripts/test.py", "wpt", "css/filter-effects/filters-sepia-001-test.html"]
+
+[[mutant]]
+name = "saturate unscaled"
+file = "crates/paint/src/filter.rs"
+from = '''        [0.213 + 0.787 * s, 0.715 - 0.715 * s, 0.072 - 0.072 * s],'''
+to = '''        [0.213 + 0.787, 0.715 - 0.715 * s, 0.072 - 0.072 * s],'''
+test = ["python3", "scripts/test.py", "wpt", "css/filter-effects/filter-saturate-001-test.html"]
+
+[[mutant]]
+name = "hue turned the other way"
+file = "crates/paint/src/filter.rs"
+from = '''    let (sin, cos) = degrees.to_radians().sin_cos();'''
+to = '''    let (sin, cos) = (-degrees).to_radians().sin_cos();'''
+test = ["python3", "scripts/test.py", "wpt", "css/filter-effects/filter-hue_rotate-001-test.html", "css/filter-effects/filter-hue_rotate-002-test.html"]
+
+[[mutant]]
+name = "opacity() no alpha"
+file = "crates/paint/src/filter.rs"
+from = '''            m[18] = a;'''
+to = ''''''
+test = ["python3", "scripts/test.py", "reftest", "effects/filter.html"]
+
+[[mutant]]
+name = "no reach"
+file = "crates/paint/src/raster_invalidator.rs"
+from = '''                        if reach > 0.0 && !rect.is_empty() {'''
+to = '''                        if false {'''
+
+[[mutant]]
+name = "a shadow's offset not reaching"
+file = "crates/paint/src/filter.rs"
+from = '''            offset.0.abs().max(offset.1.abs()) + 3.0 * sigma'''
+to = '''            3.0 * sigma'''
+
+[[mutant]]
+name = "a filter's reach unscaled"
+file = "crates/paint/src/raster_invalidator.rs"
+from = '''                Some(crate::filter::reach(filter) * stretch)'''
+to = '''                Some(crate::filter::reach(filter))'''
+
+[[mutant]]
+name = "a filter not part of a chunk's state"
+file = "crates/paint/src/raster_invalidator.rs"
+from = '''                    (node.opacity, node.filter.clone(), matrix_of(node.transform))'''
+to = '''                    (node.opacity, None, matrix_of(node.transform))'''
+
+[[mutant]]
+name = "a chain backwards"
+file = "crates/raster/src/skia_backend.rs"
+from = '''            .iter()
+            .try_fold(input, |input, filter| {'''
+to = '''            .iter()
+            .rev()
+            .try_fold(input, |input, filter| {'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "--", "layer_filters"]
+
+[[mutant]]
+name = "a blur unblurred"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        &ImageFilter::Blur { sigma } => sk::image_filters::blur((sigma, sigma), None, input, None),'''
+to = '''        &ImageFilter::Blur { sigma: _ } => input,'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "--", "layer_filters"]

@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<title>object-fit sizes a 40x30 image in a 120x60 box and object-position places it; what reaches past the box is cut</title>
+<link rel="match" href="object-fit-ref.html">
+<style>html, body { margin: 0 } img { display: block; width: 120px; height: 60px; margin-bottom: 10px; background-color: blue }</style>
+<img src="resources/green-40x30.png" style="object-fit: contain">
+<img src="resources/green-40x30.png" style="object-fit: cover">
+<img src="resources/green-40x30.png" style="object-fit: none">
+<img src="resources/green-40x30.png" style="object-fit: scale-down; object-position: left top">
+<img src="resources/green-40x30.png" style="object-fit: none; object-position: right 10px bottom 5px">

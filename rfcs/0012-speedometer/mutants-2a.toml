@@ -1,0 +1,130 @@
+# Mutation test of step 2a (the measurement's server, scripts and checks):
+# python3 scripts/test.py mutate rfcs/0012-speedometer/mutants-2a.toml
+test = ["python3", "scripts/speedometer_test.py"]
+timeout = 600
+
+[[mutant]]
+name = "classes aren't compared"
+file = "scripts/speedometer.py"
+from = '''    for kind, noun in (("elements", "elements"), ("classes", "with the class")):'''
+to = '''    for kind, noun in (("elements", "elements"),):'''
+
+[[mutant]]
+name = "text isn't compared"
+file = "scripts/speedometer.py"
+from = '''    if got["text"] != want["text"]:'''
+to = '''    if False:'''
+
+[[mutant]]
+name = "any run of hex digits is made up"
+file = "scripts/speedometer.py"
+from = '''RANDOM_IN_CLASS = re.compile(r"[0-9a-f]{10,}")'''
+to = '''RANDOM_IN_CLASS = re.compile(r"[0-9a-f]{1,}")'''
+
+[[mutant]]
+name = "made-up classes aren't merged"
+file = "scripts/speedometer.py"
+from = '''        merged[name] = merged.get(name, 0) + count'''
+to = '''        merged[name] = count'''
+
+[[mutant]]
+name = "a run that didn't finish is valid"
+file = "scripts/speedometer.py"
+from = '''    if run["status"] != "done":'''
+to = '''    if False:'''
+
+[[mutant]]
+name = "exceptions don't count"
+file = "scripts/speedometer.py"
+from = '''    for error in run["errors"]:'''
+to = '''    for error in []:'''
+
+[[mutant]]
+name = "only the first iteration is compared"
+file = "scripts/speedometer.py"
+from = '''    for iteration, summaries in enumerate(run["summaries"]):'''
+to = '''    for iteration, summaries in enumerate(run["summaries"][:1]):'''
+
+[[mutant]]
+name = "Chrome's last iteration is the reference"
+file = "scripts/speedometer.py"
+from = '''    first = reference["summaries"][0]'''
+to = '''    first = reference["summaries"][-1]'''
+
+[[mutant]]
+name = "a test Chrome has no summary of is fine"
+file = "scripts/speedometer.py"
+from = '''            difference = "Chrome has no summary" if want is None else summary_difference(summary, want)'''
+to = '''            difference = None if want is None else summary_difference(summary, want)'''
+
+[[mutant]]
+name = "late posts are kept"
+file = "scripts/speedometer.py"
+from = '''        while not self.posted.empty():'''
+to = '''        while False:'''
+
+[[mutant]]
+name = "suite pages don't collect their errors"
+file = "scripts/speedometer.py"
+from = '''        at = head.end() if head else 0
+        html = html[:at] + first + html[at:]'''
+to = '''        at = head.end() if head else 0
+        if path == "/index.html":
+            html = html[:at] + first + html[at:]'''
+
+[[mutant]]
+name = "the deadline isn't written"
+file = "scripts/speedometer.py"
+from = '''.replace("__DEADLINE__", str(self.deadline))'''
+to = '''.replace("__DEADLINE__", "600000")'''
+
+[[mutant]]
+name = "kun's window isn't set"
+file = "scripts/speedometer.py"
+from = '''        self.call("Browser.setWindowBounds", {"windowId": 1, "bounds": {"width": WINDOW[0], "height": WINDOW[1]}})
+'''
+to = '''
+'''
+
+[[mutant]]
+name = "style and script text counts"
+file = "scripts/speedometer/measure.mjs"
+from = '''      if (parent !== "style" && parent !== "script") text += walker.currentNode.data.length;'''
+to = '''      text += walker.currentNode.data.length;'''
+
+[[mutant]]
+name = "classes aren't counted"
+file = "scripts/speedometer/measure.mjs"
+from = '''      for (const name of element.classList) classes[name] = (classes[name] || 0) + 1;'''
+to = ''''''
+
+[[mutant]]
+name = "shadow roots aren't followed"
+file = "scripts/speedometer/measure.mjs"
+from = '''      if (element.shadowRoot) roots.push(element.shadowRoot);'''
+to = ''''''
+
+[[mutant]]
+name = "every iteration's summaries in one"
+file = "scripts/speedometer/measure.mjs"
+from = '''  iterations.push(JSON.parse(JSON.stringify(measuredValues.tests)));
+  summaries.push({});'''
+to = '''  iterations.push(JSON.parse(JSON.stringify(measuredValues.tests)));'''
+
+[[mutant]]
+name = "no stall after an exception"
+file = "scripts/speedometer/measure.mjs"
+from = '''  if ((window.__kunErrors ?? []).length && now - lastProgress > STALL) report("stalled");'''
+to = '''  if (false) report("stalled");'''
+
+[[mutant]]
+name = "the inventory's runs don't count what they finished"
+file = "scripts/speedometer/machopo.mjs"
+from = '''  completed.push(current);'''
+to = ''''''
+
+[[mutant]]
+name = "the probe says kun has everything"
+file = "scripts/speedometer/probe.js"
+from = '''  fetch("/__kun__/results", { method: "POST", body: JSON.stringify(missing) });'''
+to = '''  fetch("/__kun__/results", { method: "POST", body: JSON.stringify({ api: [], declarations: [], selectors: [], elements: [] }) });'''

@@ -1,0 +1,102 @@
+# Stage 4h-3a: script's scrolling on the new DOM (`scrollTop`, `scrollLeft`, `scroll`, `scrollTo`,
+# `scrollBy`, `scrollIntoView`), always instant, the promises they give.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_api_next --test it scroll && cargo test -q -p dom_js_next --test it scrolling"]
+timeout = 1200
+
+[[mutant]]
+name = "api: a non-finite offset kept"
+file = "crates/dom_api_next/src/scroll.rs"
+from = '''    if value.is_finite() {'''
+to = '''    if true {'''
+
+[[mutant]]
+name = "api: by sets"
+file = "crates/dom_api_next/src/scroll.rs"
+from = '''        Some(v) if by => current + finite(v),'''
+to = '''        Some(v) if by => finite(v),'''
+
+[[mutant]]
+name = "api: a missing axis is 0"
+file = "crates/dom_api_next/src/scroll.rs"
+from = '''        None => current,'''
+to = '''        None => 0.0,'''
+
+[[mutant]]
+name = "api: not snapped"
+file = "crates/dom_api_next/src/scroll.rs"
+from = '''        let snap = |v: f32| (v * scale).round() / scale;'''
+to = '''        let snap = |v: f32| v + 0.0 * scale;'''
+
+[[mutant]]
+name = "api: the scrolling element scrolls itself"
+file = "crates/dom_api_next/src/scroll.rs"
+from = '''            return Some((document, layout.viewport().scroll));'''
+to = '''            return Some((element, layout.viewport().scroll));'''
+
+[[mutant]]
+name = "api: the viewport scrolled without a layout"
+file = "crates/dom_api_next/src/scroll.rs"
+from = '''    let Some(current) = cx.with_layout(document, |layout| layout.viewport().scroll) else {'''
+to = '''    let Some(current) = cx.peek_layout(document, |layout| layout.viewport().scroll) else {'''
+
+[[mutant]]
+name = "api: the window to (0, 0) laid out"
+file = "crates/dom_api_next/src/scroll.rs"
+from = '''    if left == Some(0.0) && top == Some(0.0) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: scrollBy's behavior not checked"
+file = "crates/dom_api_next/src/scroll.rs"
+from = '''    check_behavior(&options.behavior)?;
+    scroll_viewport(cx, cx.window_document(this), options.left, options.top, true);'''
+to = '''    scroll_viewport(cx, cx.window_document(this), options.left, options.top, true);'''
+
+[[mutant]]
+name = "api: smooth isn't a behavior"
+file = "crates/dom_api_next/src/scroll.rs"
+from = '''    check_enum(behavior, &["auto", "instant", "smooth"], "ScrollBehavior")'''
+to = '''    check_enum(behavior, &["auto", "instant"], "ScrollBehavior")'''
+
+[[mutant]]
+name = "api: false aligns the start"
+file = "crates/dom_api_next/src/scroll.rs"
+from = '''                ScrollAlignment::End
+            },'''
+to = '''                ScrollAlignment::Start
+            },'''
+
+[[mutant]]
+name = "api: the container not checked"
+file = "crates/dom_api_next/src/scroll.rs"
+from = '''            check_enum(&options.container, &["all", "nearest"], "ScrollIntoViewContainer")?;'''
+to = ''''''
+
+[[mutant]]
+name = "api: nearest only never"
+file = "crates/dom_api_next/src/scroll.rs"
+from = '''                nearest_only: options.container == "nearest",'''
+to = '''                nearest_only: false,'''
+
+[[mutant]]
+name = "api: block and inline swapped"
+file = "crates/dom_api_next/src/scroll.rs"
+from = '''                block: alignment(&options.block)?,
+                inline: alignment(&options.inline)?,'''
+to = '''                block: alignment(&options.inline)?,
+                inline: alignment(&options.block)?,'''
+
+[[mutant]]
+name = "api: scrollIntoView not laid out"
+file = "crates/dom_api_next/src/scroll.rs"
+from = '''    cx.with_layout(this, |layout| layout.scroll_into_view(cx, this, params));'''
+to = '''    cx.peek_layout(this, |_| ());
+    cx.lend_layout(this, |layout| layout.scroll_into_view(cx, this, params));'''
+
+[[mutant]]
+name = "js: the promise not resolved"
+file = "crates/dom_js_next/src/front.rs"
+from = '''                let undefined = v8::undefined(self.scope.scope());
+                self.resolve(undefined.into());'''
+to = '''                let undefined = v8::null(self.scope.scope());
+                self.resolve(undefined.into());'''

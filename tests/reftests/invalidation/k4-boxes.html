@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html class="reftest-wait">
+<title>K4: boxes built again for other displays, new and removed nodes, and boxes kept, look as if all were built again</title>
+<link rel="match" href="k4-boxes-ref.html">
+<style>
+  html, body { margin: 0 }
+  body { font: 20px/1 Ahem }
+  p { margin: 0 0 10px }
+  .hidden { display: none }
+</style>
+<p id="gone">Gone</p>
+<p id="shown" class="hidden">Shown</p>
+<p>Before <span id="split">split</span> after</p>
+<div id="list"><p>One</p><p id="three">Three</p><p id="removed">Removed</p></div>
+<p id="text">Old</p>
+<script src="after-frames.js"></script>
+<script>afterFrames(() => {
+  document.getElementById("gone").setAttribute("class", "hidden");
+  document.getElementById("shown").setAttribute("class", "");
+  document.getElementById("split").setAttribute("style", "display: block; color: green");
+  const list = document.getElementById("list");
+  const two = document.createElement("p");
+  two.textContent = "Two";
+  list.insertBefore(two, document.getElementById("three"));
+  list.removeChild(document.getElementById("removed"));
+  document.getElementById("text").textContent = "New text";
+});</script>
+</html>

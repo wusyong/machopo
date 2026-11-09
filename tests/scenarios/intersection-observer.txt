@@ -1,0 +1,15 @@
+# about:demo's IntersectionObserver: the note under the list says how much
+# of its last box shows in it, as the observer last said (its thresholds:
+# none, half and all of it). The box starts below the list's bottom; the
+# wheel scrolls the list (the compositor moves it, the main thread hears
+# of it) until half of the box shows, then all of it.
+window size=800x600
+navigate about:demo
+wait-loaded
+scroll-to #io-list
+wait-text #io-note "Out of view."
+wheel #io-list 0 70
+wait-text #io-note "In view: 50%."
+wheel #io-list 0 30
+wait-text #io-note "In view: 100%."
+screenshot shown

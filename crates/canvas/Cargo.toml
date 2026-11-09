@@ -1,0 +1,21 @@
+[package]
+name = "canvas"
+description = "A <canvas> 2D context apart from any DOM, shared by both: its data (drawing state, the ops recorded, its bitmap) and the steps of its members (transforms, compositing, rects, paths), blink/renderer/modules/canvas/canvas2d's."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+base.workspace = true
+compositor_paint.workspace = true
+computed_style.workspace = true
+gfx.workspace = true

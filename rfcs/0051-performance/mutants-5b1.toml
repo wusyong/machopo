@@ -1,0 +1,48 @@
+# Mutation test of stage 5b1: a control's UA shadow tree is built or
+# brought up to date before style next runs, not as each call ends:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-5b1.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+timeout = 900
+
+[[mutant]]
+name = "a control's tree isn't noted"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        m.record_ua_tree_update(element.id());
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+
+[[mutant]]
+name = "a menu list isn't noted"
+file = "crates/dom_api/src/form_states.rs"
+from = '''        m.record_ua_tree_update(select.id());
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+
+[[mutant]]
+name = "the trees noted aren't built"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''    for element in &elements {
+        update(m, element, false);
+    }'''
+to = '''    let _ = elements;'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it"]
+
+[[mutant]]
+name = "script's geometry doesn't build the trees"
+file = "crates/dom_api/src/text_control_tree.rs"
+from = '''    update_pending(m);
+    m.with_layout_client(f)'''
+to = '''    m.with_layout_client(f)'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]
+
+[[mutant]]
+name = "a frame doesn't build the trees"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            dom_api::update_form_states(&mut dom.mutate());
+            dom_api::text_control_tree::update_pending(&mut dom.mutate());
+        });'''
+to = '''            dom_api::update_form_states(&mut dom.mutate());
+        });'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it"]

@@ -1,0 +1,137 @@
+# Step 4c: ephemerons. The layout's ephemeron offsets, the marker marking
+# a value through its pair or discovering it, the fixpoint (the end's
+# loop), the end clearing a dead key's pair, a scavenge keeping values as
+# edges and clearing dead keys' pairs (the copies', the ephemeron slot
+# sets'), the barriers (the key's slot set, the value's SATB, the value
+# read's key barrier), and the verifier's checks. Run with
+# `RUSTY_V8_ARCHIVE` (`test.py` checks the third-party pins).
+test = ["cargo", "test", "-q", "-p", "gc"]
+timeout = 900
+
+# The layout.
+
+[[mutant]]
+name = "the ephemeron offsets aren't listed"
+file = "crates/gc/src/types.rs"
+from = '''        ephemerons: edge_offsets(slot.info, FieldKind::ephemerons, 8),'''
+to = '''        ephemerons: Box::new([]),'''
+
+[[mutant]]
+name = "ephemerons in a row are 4 bytes apart"
+file = "crates/gc/src/types.rs"
+from = '''        ephemerons: edge_offsets(slot.info, FieldKind::ephemerons, 8),'''
+to = '''        ephemerons: edge_offsets(slot.info, FieldKind::ephemerons, 4),'''
+
+[[mutant]]
+name = "an ephemeron is a weak edge"
+file = "crates/gc/src/ephemeron.rs"
+from = '''    const KIND: FieldKind = FieldKind::Ephemeron;'''
+to = '''    const KIND: FieldKind = FieldKind::Weak;'''
+
+# Marking.
+
+[[mutant]]
+name = "a value is marked whatever its key"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''                        Some(k) if (YOUNG && self.is_young(k)) || self.marks.is_marked(k) => {'''
+to = '''                        Some(k) if k != 0 || self.marks.is_marked(k) => {'''
+
+[[mutant]]
+name = "a discovered pair's value is never marked"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''                if value != 0 && !self.is_young(value) && self.marks.mark(value) {'''
+to = '''                if false && value != 0 && !self.is_young(value) && self.marks.mark(value) {'''
+
+[[mutant]]
+name = "the end marks from the resolved values once"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''            self.worklist.reseed(values);'''
+to = '''            let _ = values;
+            return;'''
+
+# The end.
+
+[[mutant]]
+name = "the end clears no pair"
+file = "crates/gc/src/heap.rs"
+from = '''        self.clear_weak(weak, pairs);'''
+to = '''        self.clear_weak(weak, Vec::new());
+        drop(pairs);'''
+
+[[mutant]]
+name = "the end clears a dead key's pair but its value"
+file = "crates/gc/src/heap.rs"
+from = '''                value.store(0, std::sync::atomic::Ordering::Relaxed);'''
+to = '''                let _ = &value;'''
+
+# A scavenge.
+
+[[mutant]]
+name = "a scavenge leaves the copies' values"
+file = "crates/gc/src/heap/young.rs"
+from = '''                    self.update(pair.saturating_add(4), old, copier, local, worklist);'''
+to = '''                    let _ = &local;'''
+
+[[mutant]]
+name = "a scavenge leaves the copies' keys"
+file = "crates/gc/src/heap/young.rs"
+from = '''                    copier.pairs.push((pair, old));'''
+to = '''                    let _ = (pair, old);'''
+
+[[mutant]]
+name = "a scavenge clears a dead key but its value"
+file = "crates/gc/src/heap/young.rs"
+from = '''                unsafe { self.ptr(pair.saturating_add(4)).cast::<u32>().write(0) };'''
+to = '''                let _ = pair;'''
+
+[[mutant]]
+name = "the ephemeron slot sets aren't taken"
+file = "crates/gc/src/heap/young.rs"
+from = '''            let Some(bits) = self.remembered_ephemeron[number].take() else {'''
+to = '''            let Some(bits) = None::<Box<crate::page::Bits>> else {'''
+
+# The barriers.
+
+[[mutant]]
+name = "an old key to a young object isn't remembered"
+file = "crates/gc/src/heap/young.rs"
+from = '''        if key != 0 && self.is_young(key as usize) {'''
+to = '''        if false && key != 0 && self.is_young(key as usize) {'''
+
+[[mutant]]
+name = "a value's write skips the SATB barrier"
+file = "crates/gc/src/ephemeron.rs"
+from = '''        cx.inner.write_edge(&self.value, value);'''
+to = '''        self.value.store(value, Ordering::Release);
+        cx.inner.write_barrier(self.value.as_ptr().cast(), value);'''
+
+[[mutant]]
+name = "a value's read skips its key's barrier"
+file = "crates/gc/src/ephemeron.rs"
+from = '''        self.key(cx)?;'''
+to = '''        if self.checked(cx).load(Ordering::Relaxed) == 0 {
+            return None;
+        }'''
+
+# The verifier.
+
+[[mutant]]
+name = "the verifier lets a live key's value be unmarked"
+file = "crates/gc/src/heap/verify.rs"
+from = '''            .map_err(|problem| format!("{problem}: a live key's value, not marked"))'''
+to = '''            .or(Ok(()))
+            .map_err(|problem: String| format!("{problem}: a live key's value, not marked"))'''
+
+[[mutant]]
+name = "the verifier lets a value be without a key"
+file = "crates/gc/src/heap/verify.rs"
+from = '''            return if value == 0 {'''
+to = '''            return if true || value == 0 {'''
+
+[[mutant]]
+name = "the verifier skips an old key to a young object"
+file = "crates/gc/src/heap/verify.rs"
+from = '''                    let remembered = self.remembered_in(&self.remembered_ephemeron, states, slot);
+                    if !young_host && !remembered {'''
+to = '''                    let remembered = self.remembered_in(&self.remembered_ephemeron, states, slot);
+                    if false && !young_host && !remembered {'''

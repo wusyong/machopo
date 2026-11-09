@@ -1,0 +1,424 @@
+# Step 3b's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0033-canvas-2d/mutations-3b.toml`. Each names the tests closest to
+# what it breaks.
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_images"]
+timeout = 1500
+
+# dom_api: drawImage.
+
+[[mutant]]
+name = "a number that isn't finite draws"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if numbers.clone().any(|n| !n.is_finite()) {'''
+to = '''    if numbers.clone().any(|n| n.is_nan() && false) {'''
+
+[[mutant]]
+name = "a broken img draws nothing"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                ImageRequestState::Broken => {
+                    return Err(DomException::new('''
+to = '''                ImageRequestState::Broken => {
+                    return Ok(None);
+                    #[allow(unreachable_code)]
+                    return Err(DomException::new('''
+
+[[mutant]]
+name = "an img's density ignored"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                size: (f64::from(width) / density, f64::from(height) / density),'''
+to = '''                size: (f64::from(width), f64::from(height)),'''
+
+[[mutant]]
+name = "the source rect not in the image's pixels"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            src: Some(rect(src, image.density)),'''
+to = '''            src: Some(rect(src, 1.0)),'''
+
+[[mutant]]
+name = "a canvas of no width draws nothing"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            if width == 0 || height == 0 {
+                return Err(DomException::new('''
+to = '''            if width == 0 || height == 0 {
+                return Ok(None);
+                #[allow(unreachable_code)]
+                return Err(DomException::new('''
+
+[[mutant]]
+name = "a canvas not flushed before it is drawn"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                    .with_layout_client(|client, scope| client.flush_canvas(scope, id));
+            }
+            let read = cx.read();'''
+to = '''                    .with_layout_client(|_, _| {
+                        let _ = id;
+                    });
+            }
+            let read = cx.read();'''
+
+[[mutant]]
+name = "a tainted canvas drawn as clean"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                    (data.snapshot(background), background, data.origin_clean)'''
+to = '''                    (data.snapshot(background), background, true)'''
+
+[[mutant]]
+name = "a blank opaque canvas transparent"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                    let background = background(read.canvas_context_settings(context));
+                    let mut data = read.canvas_data(context);'''
+to = '''                    let _ = read.canvas_context_settings(context);
+                    let background = [0; 4];
+                    let mut data = read.canvas_data(context);'''
+
+[[mutant]]
+name = "a negative width not normalized"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let (x, w) = if w < 0.0 { (x + w, -w) } else { (x, w) };'''
+to = '''    let (x, w) = (x, w);'''
+
+[[mutant]]
+name = "a negative height not normalized"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let (y, h) = if h < 0.0 { (y + h, -h) } else { (y, h) };'''
+to = '''    let (y, h) = (y, h);'''
+
+[[mutant]]
+name = "rects not clipped to the image"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let (src, dst) = clip_to_image([width, height], src, dst);'''
+to = '''    let (src, dst) = (src, dst);
+    let _ = clip_to_image;'''
+
+[[mutant]]
+name = "a clipped dst not moved"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        src[0] * scale_x + offset_x,'''
+to = '''        src[0] * scale_x + 0.0 * offset_x,'''
+
+[[mutant]]
+name = "a rect of no size draws"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if src[2] == 0.0 || src[3] == 0.0 || dst[2] == 0.0 || dst[3] == 0.0 {'''
+to = '''    if src[2] == 0.0 && src[3] == 0.0 && dst[2] == 0.0 && dst[3] == 0.0 {'''
+
+[[mutant]]
+name = "drawing another origin's image keeps the canvas clean"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        if !image.origin_clean {
+            data.origin_clean = false;
+        }
+        (data.state().image_filter(), data.state().global_alpha)'''
+to = '''        (data.state().image_filter(), data.state().global_alpha)'''
+
+[[mutant]]
+name = "drawImage without globalAlpha"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            flags: Some(PaintFlags::fill(with_global_alpha(Color::BLACK, alpha))),'''
+to = '''            flags: Some(PaintFlags::fill(with_global_alpha(Color::BLACK, alpha.max(1.0)))),'''
+
+[[mutant]]
+name = "drawImage without the smoothing"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        (data.state().image_filter(), data.state().global_alpha)'''
+to = '''        (FilterQuality::Low, data.state().global_alpha)'''
+
+# dom_api and dom: image smoothing.
+
+[[mutant]]
+name = "smoothing never off"
+file = "crates/dom/src/canvas.rs"
+from = '''        if self.image_smoothing_enabled {
+            self.image_smoothing_quality'''
+to = '''        if true {
+            self.image_smoothing_quality'''
+
+[[mutant]]
+name = "high quality reads back as medium"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            FilterQuality::High => ImageSmoothingQuality::High,'''
+to = '''            FilterQuality::High => ImageSmoothingQuality::Medium,'''
+
+[[mutant]]
+name = "high quality set as medium"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        ImageSmoothingQuality::High => FilterQuality::High,'''
+to = '''        ImageSmoothingQuality::High => FilterQuality::Medium,'''
+
+# dom_api: patterns.
+
+[[mutant]]
+name = "the empty repetition a SyntaxError"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        "repeat" | "" => (true, true),'''
+to = '''        "repeat" => (true, true),'''
+
+[[mutant]]
+name = "repeat-x repeats down too"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        "repeat-x" => (true, false),'''
+to = '''        "repeat-x" => (true, true),'''
+
+[[mutant]]
+name = "repetition checked after the image"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    let (repeat_x, repeat_y) = match repetition.as_str() {'''
+to = '''    let _early = source_image(cx, &image)?;
+    let (repeat_x, repeat_y) = match repetition.as_str() {'''
+
+[[mutant]]
+name = "a pattern of another origin's image clean"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        origin_clean: source.origin_clean,'''
+to = '''        origin_clean: source.origin_clean || true,'''
+
+[[mutant]]
+name = "a tainted pattern as the style keeps the canvas clean"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            if !cx.read().canvas_pattern(&pattern).origin_clean {
+                with_data(cx, this, |data| data.origin_clean = false);'''
+to = '''            if false && !cx.read().canvas_pattern(&pattern).origin_clean {
+                with_data(cx, this, |data| data.origin_clean = false);'''
+
+[[mutant]]
+name = "a pattern's transform not given"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        transform: to_gfx(pattern.transform),'''
+to = '''        transform: to_gfx(IDENTITY),'''
+
+[[mutant]]
+name = "a pattern's setTransform does nothing"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    cx.mutate().set_canvas_pattern_transform(this, matrix);'''
+to = '''    let _ = (this, matrix);'''
+
+[[mutant]]
+name = "a pattern sampled without the smoothing"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        transform: to_gfx(pattern.transform),
+        filter,'''
+to = '''        transform: to_gfx(pattern.transform),
+        filter: {
+            let _ = filter;
+            FilterQuality::Medium
+        },'''
+
+# dom_api: origin-clean.
+
+[[mutant]]
+name = "a tainted canvas readable"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if !with_data(cx, this, |data| data.origin_clean) {'''
+to = '''    if false && !with_data(cx, this, |data| data.origin_clean) {'''
+
+[[mutant]]
+name = "a reset makes the canvas clean"
+file = "crates/dom/src/canvas.rs"
+from = '''        *self = Self {
+            origin_clean,
+            ..Self::new(size)
+        };'''
+to = '''        let _ = origin_clean;
+        *self = Self::new(size);'''
+
+# dom: a slot holds a gradient or a pattern.
+
+[[mutant]]
+name = "a pattern keeps the gradient it replaces"
+file = "crates/dom/src/canvas.rs"
+from = '''                slot.gradient.clear(self);
+                slot.pattern.set(self, pattern.persistent());'''
+to = '''                slot.pattern.set(self, pattern.persistent());'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "script_objects::a_contexts_style"]
+
+[[mutant]]
+name = "a gradient keeps the pattern it replaces"
+file = "crates/dom/src/canvas.rs"
+from = '''                slot.pattern.clear(self);
+                slot.gradient.set(self, gradient.persistent());'''
+to = '''                slot.gradient.set(self, gradient.persistent());'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "script_objects::a_contexts_style"]
+
+# dom_api: DOMMatrix2DInit.
+
+[[mutant]]
+name = "a dictionary's short names ignored"
+file = "crates/dom_api/src/geometry.rs"
+from = '''        *value = long_value.or(short_value).unwrap_or(identity);'''
+to = '''        *value = long_value.unwrap_or(identity);
+        let _ = short_value;'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_"]
+
+[[mutant]]
+name = "two names that differ accepted"
+file = "crates/dom_api/src/geometry.rs"
+from = '''        if let (Some(x), Some(y)) = (short_value, long_value)
+            && !(x == y || (x.is_nan() && y.is_nan()))'''
+to = '''        if let (Some(x), Some(y)) = (short_value, long_value)
+            && false
+            && !(x == y || (x.is_nan() && y.is_nan()))'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_"]
+
+[[mutant]]
+name = "two NaNs differ"
+file = "crates/dom_api/src/geometry.rs"
+from = '''            && !(x == y || (x.is_nan() && y.is_nan()))'''
+to = '''            && !(x == y)'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_"]
+
+# dom_api: overloads.
+
+[[mutant]]
+name = "more arguments than the longest form takes a TypeError"
+file = "crates/dom_api/src/declare.rs"
+from = '''    let count = given.min(most);'''
+to = '''    let count = given.min(most + usize::from(given > most));'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "api::an_overload"]
+
+[[mutant]]
+name = "a form taken with too few arguments"
+file = "crates/dom_api/src/declare.rs"
+from = '''        required_params(form.params) <= count && count <= form.params.len()
+    };'''
+to = '''        count <= form.params.len()
+    };'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "api::an_overload"]
+
+[[mutant]]
+name = "the arities not listed"
+file = "crates/dom_api/src/declare.rs"
+from = '''                .flat_map(|form| required_params(form.params)..=form.params.len())'''
+to = '''                .flat_map(|form| form.params.len()..=form.params.len())'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "api::an_overload"]
+
+[[mutant]]
+name = "forms told apart at the first argument"
+file = "crates/dom_api/src/declare.rs"
+from = '''                .unwrap_or(0);
+            Ok(several'''
+to = '''                .map(|_| 0)
+                .unwrap_or(0);
+            Ok(several'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "api::an_overload"]
+
+[[mutant]]
+name = "an object never of the interface"
+file = "crates/dom_api/src/declare.rs"
+from = '''                .find(|form| interface(form, index).is_some_and(|name| implements(index, name)))'''
+to = '''                .find(|form| interface(form, index).is_some_and(|name| implements(index, name) && false))'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "api::an_overload"]
+
+[[mutant]]
+name = "any other value picks the first form"
+file = "crates/dom_api/src/declare.rs"
+from = '''                .or_else(|| several.iter().find(|form| interface(form, index).is_none()))'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "api::an_overload"]
+
+[[mutant]]
+name = "an overload's later forms in kun:dom under the first's name"
+file = "crates/dom_api/src/wit.rs"
+from = '''member.wit_name.unwrap_or(member.name)'''
+to = '''member.name'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "wit::"]
+
+# dom_js: one function for the forms.
+
+[[mutant]]
+name = "JS's length the longest form's"
+file = "crates/dom_js/src/templates.rs"
+from = '''            .map(|form| length(form.params))
+            .min()'''
+to = '''            .map(|form| length(form.params))
+            .max()'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "canvas::"]
+
+[[mutant]]
+name = "JS calls only the first form"
+file = "crates/dom_js/src/templates.rs"
+from = '''    let member = match dom_api::overloads(interface, member) {'''
+to = '''    let member = match None::<&[&'static dom_api::Member]>.and(dom_api::overloads(interface, member)) {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "canvas::"]
+
+# JS's interface check (`implements` in `call_member`) waits for 3d: no
+# overload in the table has forms of one count told apart by an interface
+# until Path2D's `fill(path)` and `fill(fillRule)`.
+
+# raster: sampling, the source rect and the pattern's transform.
+
+[[mutant]]
+name = "nearest sampled bilinear"
+file = "crates/raster/src/skia_backend.rs"
+from = '''            sk::SamplingOptions::new(sk::FilterMode::Nearest, sk::MipmapMode::None)'''
+to = '''            sk::SamplingOptions::new(sk::FilterMode::Linear, sk::MipmapMode::None)'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "--", "an_images_source_rect_alpha_and_filter", "a_tiled_shader"]
+
+[[mutant]]
+name = "high never cubic"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        FilterQuality::High if upscale => sk::SamplingOptions::from(sk::CubicResampler::mitchell()),'''
+to = '''        FilterQuality::High if upscale && false => sk::SamplingOptions::from(sk::CubicResampler::mitchell()),'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "--", "an_images_source_rect_alpha_and_filter", "a_tiled_shader"]
+
+[[mutant]]
+name = "a source rect sampled past its edge"
+file = "crates/raster/src/skia_backend.rs"
+from = '''                Some(src) => (sk_rect(*src), sk::canvas::SrcRectConstraint::Strict),'''
+to = '''                Some(src) => (sk_rect(*src), sk::canvas::SrcRectConstraint::Fast),'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "--", "an_images_source_rect_alpha_and_filter", "a_tiled_shader"]
+
+[[mutant]]
+name = "an image drawn without its flags"
+file = "crates/raster/src/skia_backend.rs"
+from = '''                .map_or_else(sk::Paint::default, |flags| sk_paint(flags, cache));'''
+to = '''                .map_or_else(sk::Paint::default, |flags| {
+                    let _ = sk_paint(flags, cache);
+                    sk::Paint::default()
+                });'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "--", "an_images_source_rect_alpha_and_filter", "a_tiled_shader"]
+
+[[mutant]]
+name = "scaling up never seen"
+file = "crates/raster/src/skia_backend.rs"
+from = '''                scale((dst.width, 0.0)) >= src.width() && scale((0.0, dst.height)) >= src.height();'''
+to = '''                scale((dst.width, 0.0)) < 0.0 && scale((0.0, dst.height)) >= src.height();'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "--", "an_images_source_rect_alpha_and_filter", "a_tiled_shader"]
+
+[[mutant]]
+name = "a tiled shader without its transform"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        &sk_matrix(&shader.transform),
+        &sk::Matrix::translate((tile.x, tile.y)),'''
+to = '''        &sk::Matrix::default(),
+        &sk::Matrix::translate((tile.x, tile.y)),'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "--", "an_images_source_rect_alpha_and_filter", "a_tiled_shader"]
+
+[[mutant]]
+name = "a tiled shader sampled at medium"
+file = "crates/raster/src/skia_backend.rs"
+from = '''    let sampling = image_sampling(shader.filter, false);'''
+to = '''    let sampling = image_sampling(FilterQuality::Medium, false);'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "--", "an_images_source_rect_alpha_and_filter", "a_tiled_shader"]
+
+# renderer: another origin's image.
+
+[[mutant]]
+name = "an image request without the document's origin"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            request.initiator = initiator.clone();'''
+to = '''            let _ = &initiator;'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::links::canvas_images"]
+
+[[mutant]]
+name = "an opaque response not remembered"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                    Ok(response) if response.tainting == ResponseTainting::Opaque'''
+to = '''                    Ok(response) if response.tainting == ResponseTainting::Opaque && false'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::links::canvas_images"]
+
+[[mutant]]
+name = "an opaque image given as clean"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                origin_clean: !self.images.opaque.contains(&url),'''
+to = '''                origin_clean: true || !self.images.opaque.contains(&url),'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "navigation::links::canvas_images"]

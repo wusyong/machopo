@@ -1,0 +1,26 @@
+# An SVG image is styled with the page's UA stylesheet, not one parsed
+# again for each image (`SvgImage::new` takes the frame's). Each parse
+# costs about a millisecond; TodoMVC's checkboxes are SVG images.
+#
+# python3 scripts/test.py mutate rfcs/0012-speedometer/mutants-svg-user-agent.toml
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "an_svg_image_shares"]
+timeout = 900
+
+[[mutant]]
+name = "the frame passes a UA stylesheet parsed again"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                    self.style_engine.user_agent_style_sheet().clone(),'''
+to = '''                    style::UserAgentStyleSheet::new(),'''
+
+[[mutant]]
+name = "the SVG image parses its own"
+file = "crates/renderer/src/svg_image.rs"
+from = '''        StyleEngine::with_user_agent_style_sheet(ua).recalc_style('''
+to = '''        let _ = ua;
+        StyleEngine::new().recalc_style('''
+
+[[mutant]]
+name = "the parses aren't counted"
+file = "crates/style/src/lib.rs"
+from = '''            USER_AGENT_PARSES.set(USER_AGENT_PARSES.get() + 1);'''
+to = '''            USER_AGENT_PARSES.set(USER_AGENT_PARSES.get());'''

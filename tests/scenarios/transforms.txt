@@ -1,0 +1,18 @@
+# A bar turned a quarter about its center stands where it is turned to:
+# a click above where it lay (it now stands from 10 to 210 down, 190 to
+# 210 across, in the page, which starts 74 px down the window) hits it;
+# one where it lay but no longer is hits the page. "Turn" makes it turn
+# about its top left corner by a transition (`transform-origin` and
+# `rotate()` both change), which ends; where it ends is for a person to
+# look at in the screenshot.
+window size=800x600
+navigate pages/transforms.html
+wait-loaded
+screenshot turned
+click-at 200 104
+wait-text #note "Clicked the turned bar."
+click-at 120 184
+wait-text #note "Clicked the page."
+click #turn
+wait-text #note "Turned about its corner."
+screenshot turned-about-the-corner

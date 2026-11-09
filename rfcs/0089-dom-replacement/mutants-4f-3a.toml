@@ -1,0 +1,553 @@
+# Stage 4f-3a: on the new DOM, a textarea's value (its child text
+# content until dirty, its newlines normalized, its reset and copy), the
+# selection API of a textarea and the text inputs (the selection within
+# the value, a changed value's cursor, a type change's, setRangeText's
+# modes, select() and its focus), `select` queued as an element task and
+# run by the engine, the form controls focusable, a textarea's
+# `:placeholder-shown` noted, `childNodes`' bit apart from the custom
+# element state's.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it -- text_controls:: engine::element custom_elements:: && cargo test -q -p dom_api_next --test it focus:: && cargo test -q -p style_next --test it form_states"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: a textarea's children not watched"
+file = "crates/dom_next/src/text_control.rs"
+from = '''        element.scope.set(element.scope.get() | TEXTAREA_CHILDREN);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a textarea has no selection"
+file = "crates/dom_next/src/text_control.rs"
+from = '''        self.is_textarea(element)
+            || matches!(
+                self.input_kind(element),
+                Some(InputKind::Text'''
+to = '''        false
+            || matches!(
+                self.input_kind(element),
+                Some(InputKind::Text'''
+
+[[mutant]]
+name = "dom: a password has no selection"
+file = "crates/dom_next/src/text_control.rs"
+from = '''InputKind::Tel | InputKind::Password)'''
+to = '''InputKind::Tel)'''
+
+[[mutant]]
+name = "dom: select() doesn't apply to a number"
+file = "crates/dom_next/src/text_control.rs"
+from = '''                    InputKind::Email
+                        | InputKind::Number
+'''
+to = '''                    InputKind::Email
+'''
+
+[[mutant]]
+name = "dom: every input has a selection"
+file = "crates/dom_next/src/text_control.rs"
+from = '''        if !self.selection_applies(element) {
+            return None;
+        }
+        if let Some(textarea)'''
+to = '''        if let Some(textarea)'''
+
+[[mutant]]
+name = "dom: a textarea's selection of its input value"
+file = "crates/dom_next/src/text_control.rs"
+from = '''        if self.is_textarea(element) {
+            self.textarea_value(element)
+        } else {'''
+to = '''        if false {
+            self.textarea_value(element)
+        } else {'''
+
+[[mutant]]
+name = "dom: a comment's data in the child text content"
+file = "crates/dom_next/src/text_control.rs"
+from = '''            if self.kind(at) == NodeKind::Text
+                && let'''
+to = '''            if self.kind(at) != NodeKind::Element
+                && let'''
+
+[[mutant]]
+name = "dom: a dirty textarea's own value not read"
+file = "crates/dom_next/src/text_control.rs"
+from = '''        kept.unwrap_or_else(|| self.child_text_content(element))'''
+to = '''        self.child_text_content(element)'''
+
+[[mutant]]
+name = "dom: a textarea's newlines not normalized"
+file = "crates/dom_next/src/text_control.rs"
+from = '''        if !raw.to_str().contains('\r') {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "dom: a lone CR not normalized"
+file = "crates/dom_next/src/text_control.rs"
+from = '''    value.replace("\r\n", "\n").replace('\r', "\n")'''
+to = '''    value.replace("\r\n", "\n")'''
+
+[[mutant]]
+name = "dom: a textarea's value set not noted"
+file = "crates/dom_next/src/text_control.rs"
+from = '''        textarea.into_ref().value.get().set(Some(DomString::new(value)));
+        self.state_changed(element, AttributeChanges::VALUE);
+'''
+to = '''        textarea.into_ref().value.get().set(Some(DomString::new(value)));
+'''
+
+[[mutant]]
+name = "dom: a textarea's cursor moved for the same value"
+file = "crates/dom_next/src/text_control.rs"
+from = '''        if *normalize_newlines(value) != *old.to_str() {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "dom: a textarea's cursor stays for a new value"
+file = "crates/dom_next/src/text_control.rs"
+from = '''        if *normalize_newlines(value) != *old.to_str() {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "dom: a textarea's value compared unnormalized"
+file = "crates/dom_next/src/text_control.rs"
+from = '''        if *normalize_newlines(value) != *old.to_str() {'''
+to = '''        if *value != *old.to_str() {'''
+
+[[mutant]]
+name = "dom: a textarea's reset keeps its value"
+file = "crates/dom_next/src/text_control.rs"
+from = '''            textarea.into_ref().value.get().set(None);
+            self.state_changed(element, AttributeChanges::VALUE);
+        }
+    }
+
+    /// HTML's cloning'''
+to = '''            self.state_changed(element, AttributeChanges::VALUE);
+        }
+    }
+
+    /// HTML's cloning'''
+
+[[mutant]]
+name = "dom: a textarea's reset not noted"
+file = "crates/dom_next/src/text_control.rs"
+from = '''            textarea.into_ref().value.get().set(None);
+            self.state_changed(element, AttributeChanges::VALUE);
+'''
+to = '''            textarea.into_ref().value.get().set(None);
+'''
+
+[[mutant]]
+name = "dom: a textarea's copy not dirty"
+file = "crates/dom_next/src/text_control.rs"
+from = '''        to.into_ref().value.get().set(value);'''
+to = '''        to.into_ref().value.get().set(None);'''
+
+[[mutant]]
+name = "dom: a textarea's children's change not noted"
+file = "crates/dom_next/src/text_control.rs"
+from = '''        if !dirty {
+            self.state_changed(element, AttributeChanges::VALUE);
+        }'''
+to = '''        let _ = dirty;'''
+
+[[mutant]]
+name = "dom: a selection's start not within the value"
+file = "crates/dom_next/src/text_control.rs"
+from = '''            start: cells.start.get().min(length),'''
+to = '''            start: cells.start.get(),'''
+
+[[mutant]]
+name = "dom: a selection's end not within the value"
+file = "crates/dom_next/src/text_control.rs"
+from = '''            end: cells.end.get().min(length),'''
+to = '''            end: cells.end.get(),'''
+
+[[mutant]]
+name = "dom: a selection's end set past the value"
+file = "crates/dom_next/src/text_control.rs"
+from = '''        let end = end.min(length);
+        let new = TextSelection {'''
+to = '''        let new = TextSelection {'''
+
+[[mutant]]
+name = "dom: a selection's start set after its end"
+file = "crates/dom_next/src/text_control.rs"
+from = '''            start: start.min(end),'''
+to = '''            start,'''
+
+[[mutant]]
+name = "dom: a selection always changed"
+file = "crates/dom_next/src/text_control.rs"
+from = '''        new != old
+'''
+to = '''        true
+'''
+
+[[mutant]]
+name = "dom: a selection's direction not kept"
+file = "crates/dom_next/src/text_control.rs"
+from = '''        cells.direction.set(new.direction.raw());'''
+to = '''        cells.direction.set(0);'''
+
+[[mutant]]
+name = "dom: the cursor to the end keeps the direction"
+file = "crates/dom_next/src/text_control.rs"
+from = '''            cells.end.set(length);
+            cells.direction.set(SelectionDirection::None.raw());'''
+to = '''            cells.end.set(length);'''
+
+[[mutant]]
+name = "dom: a type change leaves the cursor"
+file = "crates/dom_next/src/text_control.rs"
+from = '''            cells.start.set(0);
+            cells.end.set(0);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: setRangeText's range ignored"
+file = "crates/dom_next/src/text_control.rs"
+from = '''        let (start, end) = range.unwrap_or((current.start, current.end));'''
+to = '''        let (start, end) = (current.start, current.end);'''
+
+[[mutant]]
+name = "dom: setRangeText's select mode selects nothing"
+file = "crates/dom_next/src/text_control.rs"
+from = '''            SelectionMode::Select => (start, new_end),'''
+to = '''            SelectionMode::Select => (start, start),'''
+
+[[mutant]]
+name = "dom: setRangeText's end mode at the start"
+file = "crates/dom_next/src/text_control.rs"
+from = '''            SelectionMode::End => (new_end, new_end),'''
+to = '''            SelectionMode::End => (start, start),'''
+
+[[mutant]]
+name = "dom: setRangeText's preserve doesn't move a position after"
+file = "crates/dom_next/src/text_control.rs"
+from = '''                    if position > end {
+                        position.saturating_sub(end.saturating_sub(start)).saturating_add(inserted_length)'''
+to = '''                    if position > end {
+                        position'''
+
+[[mutant]]
+name = "dom: setRangeText's preserve leaves a position within"
+file = "crates/dom_next/src/text_control.rs"
+from = '''                    } else if position > start {
+                        within
+'''
+to = '''                    } else if position > start {
+                        position
+'''
+
+[[mutant]]
+name = "dom: setRangeText leaves a textarea's value"
+file = "crates/dom_next/src/text_control.rs"
+from = '''            textarea.into_ref().value.get().set(Some(DomString::from(value)));
+            self.state_changed(element, AttributeChanges::VALUE);
+        } else {'''
+to = '''            self.state_changed(element, AttributeChanges::VALUE);
+        } else {'''
+
+[[mutant]]
+name = "dom: setRangeText's textarea value not noted"
+file = "crates/dom_next/src/text_control.rs"
+from = '''            textarea.into_ref().value.get().set(Some(DomString::from(value)));
+            self.state_changed(element, AttributeChanges::VALUE);
+        } else {'''
+to = '''            textarea.into_ref().value.get().set(Some(DomString::from(value)));
+        } else {'''
+
+[[mutant]]
+name = "dom: setRangeText leaves an input's value"
+file = "crates/dom_next/src/text_control.rs"
+from = '''            self.set_input_value_keeping_selection(element, &value);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a selection mode not the enum's preserves"
+file = "crates/dom_next/src/text_control.rs"
+from = '''            "preserve" => Some(Self::Preserve),
+            _ => None,'''
+to = '''            "preserve" => Some(Self::Preserve),
+            _ => Some(Self::Preserve),'''
+
+[[mutant]]
+name = "dom: every type change puts the cursor at the start"
+file = "crates/dom_next/src/input.rs"
+from = '''        if !was_selectable && self.selection_applies(element) {'''
+to = '''        if self.selection_applies(element) {'''
+
+[[mutant]]
+name = "dom: an input's cursor moved for the same value"
+file = "crates/dom_next/src/input.rs"
+from = '''                if self.set_input_value_keeping_selection(element, value) != *old.to_str() {'''
+to = '''                if { self.set_input_value_keeping_selection(element, value); true } {'''
+
+[[mutant]]
+name = "dom: an input's value compared unsanitized"
+file = "crates/dom_next/src/input.rs"
+from = '''                if self.set_input_value_keeping_selection(element, value) != *old.to_str() {'''
+to = '''                if { self.set_input_value_keeping_selection(element, value); *value != *old.to_str() } {'''
+
+[[mutant]]
+name = "dom: a textarea has no state"
+file = "crates/dom_next/src/form.rs"
+from = '''        if kind & TEXTAREA != 0 {
+            self.textarea_made(element);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a form's reset leaves a textarea"
+file = "crates/dom_next/src/form.rs"
+from = '''            self.textarea_reset(element);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a textarea made like any element"
+file = "crates/dom_next/src/lib.rs"
+from = '''form::INPUT | form::TEXTAREA);'''
+to = '''form::INPUT);'''
+
+[[mutant]]
+name = "dom: a textarea's children's hook not looked at"
+file = "crates/dom_next/src/lib.rs"
+from = '''lists::HAS_CHILD_LIST | text_control::TEXTAREA_CHILDREN;'''
+to = '''lists::HAS_CHILD_LIST;'''
+
+[[mutant]]
+name = "dom: a textarea's children's change not told"
+file = "crates/dom_next/src/lib.rs"
+from = '''        if parent.scope.get() & text_control::TEXTAREA_CHILDREN != 0 {
+            self.textarea_children_changed(parent);
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a textarea's copy not copied"
+file = "crates/dom_next/src/lib.rs"
+from = '''                self.textarea_cloned(node, copy);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a textarea's text child's data not told"
+file = "crates/dom_next/src/style.rs"
+from = '''        if parent.scope.get() & crate::text_control::TEXTAREA_CHILDREN != 0 {
+            self.textarea_children_changed(parent);
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: childNodes' bit within the custom element state"
+file = "crates/dom_next/src/lists.rs"
+from = '''pub(crate) const HAS_CHILD_LIST: u8 = 1 << 6;'''
+to = '''pub(crate) const HAS_CHILD_LIST: u8 = 1 << 3;'''
+
+[[mutant]]
+name = "dom: a textarea's placeholder never shown"
+file = "crates/dom_next/src/form_state.rs"
+from = '''                && self.textarea_value(element).is_empty();'''
+to = '''                && false;'''
+
+[[mutant]]
+name = "dom: an element task not queued"
+file = "crates/dom_next/src/window.rs"
+from = '''        tasks.push(self.gc, task);
+    }
+
+    /// Whether `window` has an element task queued.'''
+to = '''        let _ = (tasks, task);
+    }
+
+    /// Whether `window` has an element task queued.'''
+
+[[mutant]]
+name = "dom: an element task never queued for the engine"
+file = "crates/dom_next/src/window.rs"
+from = '''        window.element_tasks.get(self.gc).is_some_and(|tasks| tasks.len() > 0)'''
+to = '''        false'''
+
+[[mutant]]
+name = "api: a selection's change not queued"
+file = "crates/dom_api_next/src/text_control.rs"
+from = '''    if cx.set_selection_range(this, start, end, direction) {
+        cx.queue_element_task(this, names::event::SELECT);
+    }'''
+to = '''    cx.set_selection_range(this, start, end, direction);'''
+
+[[mutant]]
+name = "api: selectionStart's setter leaves the end"
+file = "crates/dom_api_next/src/text_control.rs"
+from = '''    set_selection_range(cx, this, start, current.end.max(start), current.direction);'''
+to = '''    set_selection_range(cx, this, start, current.end, current.direction);'''
+
+[[mutant]]
+name = "api: selectionStart's null not 0"
+file = "crates/dom_api_next/src/text_control.rs"
+from = '''    let start = start.unwrap_or(0);'''
+to = '''    let start = start.unwrap_or(1);'''
+
+[[mutant]]
+name = "api: selectionStart's setter loses the direction"
+file = "crates/dom_api_next/src/text_control.rs"
+from = '''    set_selection_range(cx, this, start, current.end.max(start), current.direction);'''
+to = '''    set_selection_range(cx, this, start, current.end.max(start), SelectionDirection::None);'''
+
+[[mutant]]
+name = "api: selectionEnd's setter loses the direction"
+file = "crates/dom_api_next/src/text_control.rs"
+from = '''    set_selection_range(cx, this, current.start, end.unwrap_or(0), current.direction);'''
+to = '''    set_selection_range(cx, this, current.start, end.unwrap_or(0), SelectionDirection::None);'''
+
+[[mutant]]
+name = "api: selectionDirection's setter ignored"
+file = "crates/dom_api_next/src/text_control.rs"
+from = '''    set_selection_range(cx, this, current.start, current.end, direction);'''
+to = '''    set_selection_range(cx, this, current.start, current.end, current.direction);'''
+
+[[mutant]]
+name = "api: setSelectionRange applies everywhere"
+file = "crates/dom_api_next/src/text_control.rs"
+from = '''    if !cx.selection_applies(this) {
+        return Err(not_applicable());
+    }
+    set_selection_range(cx, this, start, end,'''
+to = '''    set_selection_range(cx, this, start, end,'''
+
+[[mutant]]
+name = "api: select() selects nothing"
+file = "crates/dom_api_next/src/text_control.rs"
+from = '''            set_selection_range(cx, element, 0, u32::MAX, SelectionDirection::None);'''
+to = '''            set_selection_range(cx, element, 0, 0, SelectionDirection::None);'''
+
+[[mutant]]
+name = "api: select() of a number queues nothing"
+file = "crates/dom_api_next/src/text_control.rs"
+from = '''        } else if cx.select_applies(element) {
+            cx.queue_element_task(element, names::event::SELECT);
+        }'''
+to = '''        }'''
+
+[[mutant]]
+name = "api: select() doesn't focus"
+file = "crates/dom_api_next/src/text_control.rs"
+from = '''    crate::focus::focus(
+        host,
+        this,
+        FocusOptions {
+            focusVisible: None,
+            preventScroll: true,
+        },
+    )'''
+to = '''    let _ = (host, this);
+    Ok(())'''
+
+[[mutant]]
+name = "api: setRangeText with two arguments"
+file = "crates/dom_api_next/src/text_control.rs"
+from = '''        (None, None) => None,'''
+to = '''        (None, _) | (_, None) => None,'''
+
+[[mutant]]
+name = "api: setRangeText's mode by default selects"
+file = "crates/dom_api_next/src/text_control.rs"
+from = '''        None => SelectionMode::Preserve,'''
+to = '''        None => SelectionMode::Select,'''
+
+[[mutant]]
+name = "api: setRangeText applies everywhere"
+file = "crates/dom_api_next/src/text_control.rs"
+from = '''    if !cx.selection_applies(this) {
+        return Err(not_applicable());
+    }
+    if range.is_some_and'''
+to = '''    if range.is_some_and'''
+
+[[mutant]]
+name = "api: setRangeText's start after its end"
+file = "crates/dom_api_next/src/text_control.rs"
+from = '''    if range.is_some_and(|(start, end)| start > end) {'''
+to = '''    if range.is_some_and(|(start, end)| start > end && false) {'''
+
+[[mutant]]
+name = "api: setRangeText's selection not queued"
+file = "crates/dom_api_next/src/text_control.rs"
+from = '''    if cx.set_range_text(this, replacement, range, mode) {
+        cx.queue_element_task(this, names::event::SELECT);
+    }'''
+to = '''    cx.set_range_text(this, replacement, range, mode);'''
+
+[[mutant]]
+name = "api: select doesn't bubble"
+file = "crates/dom_api_next/src/text_control.rs"
+from = '''            event_type == names::event::SELECT,'''
+to = '''            false,'''
+
+[[mutant]]
+name = "api: no checkpoint after an element task"
+file = "crates/dom_api_next/src/text_control.rs"
+from = '''        host.perform_microtask_checkpoint();
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: a disabled control focusable"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        && !cx.is_disabled_form_control(element)
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: a form control not focusable"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''            || is_html(cx, element, &[local::BUTTON, local::SELECT, local::TEXTAREA])
+            || cx.input_kind(element).is_some_and(|kind| kind != dom_next::InputKind::Hidden))'''
+to = ''')'''
+
+[[mutant]]
+name = "api: a textarea not focusable"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''&[local::BUTTON, local::SELECT, local::TEXTAREA]'''
+to = '''&[local::BUTTON, local::SELECT]'''
+
+[[mutant]]
+name = "api: a hidden input focusable"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''            || cx.input_kind(element).is_some_and(|kind| kind != dom_next::InputKind::Hidden))'''
+to = '''            || cx.input_kind(element).is_some())'''
+
+[[mutant]]
+name = "api: a nullable number's none given as 0"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        match value {
+            Some(value) => op.ret_u32(value),
+            None => op.ret_null(),
+        }'''
+to = '''        op.ret_u32(value.unwrap_or(0));'''
+
+[[mutant]]
+name = "api: an optional number's undefined 0"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        if front.is_undefined(index) {
+            return Some(None);
+        }
+        front.u32_arg(index).map(Some)'''
+to = '''        front.u32_arg(index).map(Some)'''
+
+[[mutant]]
+name = "js: an element task not due at once"
+file = "crates/dom_js_next/src/window.rs"
+from = '''        if cx.has_element_task(window) {
+            return Some(0.0);
+        }
+'''
+to = ''''''

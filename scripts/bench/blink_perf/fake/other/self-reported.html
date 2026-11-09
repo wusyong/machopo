@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<script src="../resources/runner.js"></script>
+<script>
+  // Measures by itself and logs its statistics without the title the hook
+  // takes: left out, not run.
+  var times = [];
+  for (var i = 0; i < 4; i++) {
+    var begin = Date.now();
+    document.createElement("div");
+    times.push(Date.now() - begin);
+  }
+  PerfTestRunner.logStatistics(times);
+</script>

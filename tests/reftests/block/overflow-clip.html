@@ -1,0 +1,6 @@
+<!DOCTYPE html>
+<title>overflow: clip cuts at the padding box, one axis only next to visible</title>
+<link rel="match" href="overflow-clip-ref.html">
+<style>html, body { margin: 0 } .c { margin: 50px; width: 100px; height: 50px } .c div { width: 300px; height: 100px; background-color: green }</style>
+<div class="c" style="overflow: clip"><div></div></div>
+<div class="c" style="overflow-x: clip"><div></div></div>

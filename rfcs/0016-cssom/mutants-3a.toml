@@ -1,0 +1,104 @@
+# Mutation test of step 3a (`style`'s stylesheet contents and the adopted
+# sheets in the cascade):
+# python3 scripts/test.py mutate rfcs/0016-cssom/mutants-3a.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it"]
+timeout = 600
+
+[[mutant]]
+name = "the adopted sheets aren't cascaded"
+file = "crates/style/src/lib.rs"
+from = '''                adopted: adopted.clone(),'''
+to = '''                adopted: Vec::new(),'''
+
+[[mutant]]
+name = "the adopted sheets cascade in reverse order"
+file = "crates/style/src/lib.rs"
+from = '''        let adopted_rules = author.adopted.iter().flat_map(|contents| {'''
+to = '''        let adopted_rules = author.adopted.iter().rev().flat_map(|contents| {'''
+
+[[mutant]]
+name = "the adopted sheets cascade before the document's own"
+file = "crates/style/src/lib.rs"
+from = '''            .chain(adopted_rules)
+            .collect();'''
+to = '''            .collect();
+        let rules: Vec<CascadeRule<'_>> = adopted_rules.chain(rules.iter().copied()).collect();'''
+
+[[mutant]]
+name = "an adopted sheet's url() resolves against the document's base URL"
+file = "crates/style/src/lib.rs"
+from = '''            let base = contents.base_url().or(base_url);'''
+to = '''            let base = base_url;'''
+
+[[mutant]]
+name = "other adopted sheets don't count as a change"
+file = "crates/style/src/lib.rs"
+from = '''            author.texts != texts || !same_contents(&author.adopted, &adopted)'''
+to = '''            author.texts != texts'''
+
+[[mutant]]
+name = "contents of the same length are the same"
+file = "crates/style/src/lib.rs"
+from = '''    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| Arc::ptr_eq(a, b))'''
+to = '''    a.len() == b.len()'''
+
+[[mutant]]
+name = "one more adopted sheet isn't a change"
+file = "crates/style/src/lib.rs"
+from = '''    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| Arc::ptr_eq(a, b))'''
+to = '''    a.iter().zip(b).all(|(a, b)| Arc::ptr_eq(a, b))'''
+
+[[mutant]]
+name = "an adopted sheet's selectors don't count for invalidation"
+file = "crates/style/src/lib.rs"
+from = '''                    .flat_map(|sheet| &sheet.rules)
+                    .chain(
+                        adopted
+                            .iter()
+                            .flat_map(|contents| contents.rules())
+                            .map(|rule| &**rule),
+                    ),'''
+to = '''                    .flat_map(|sheet| &sheet.rules),'''
+
+[[mutant]]
+name = "insertRule parses before it checks the index"
+file = "crates/css/src/stylesheet.rs"
+from = '''        if index > self.rules.len() {
+            return Err(InsertRuleError::IndexSize);
+        }
+        let rule = parse_rule(rule).ok_or(InsertRuleError::Syntax)?;'''
+to = '''        let rule = parse_rule(rule).ok_or(InsertRuleError::Syntax)?;
+        if index > self.rules.len() {
+            return Err(InsertRuleError::IndexSize);
+        }'''
+
+[[mutant]]
+name = "insertRule takes the first rule of several"
+file = "crates/css/src/stylesheet.rs"
+from = '''    let rule = cssparser::parse_one_rule(&mut input, &mut TopLevelParser { log: &mut log }).ok();'''
+to = '''    let rule = StyleSheetParser::new(&mut input, &mut TopLevelParser { log: &mut log })
+        .next()
+        .and_then(|rule| rule.ok());'''
+
+[[mutant]]
+name = "replace_rule finds a rule by its selectors"
+file = "crates/css/src/stylesheet.rs"
+from = '''        let index = self.rules.iter().position(|rule| Arc::ptr_eq(rule, old))?;'''
+to = '''        let index = self
+            .rules
+            .iter()
+            .position(|rule| rule.selector_text() == old.selector_text())?;'''
+
+[[mutant]]
+name = "an empty rule serializes without its space"
+file = "crates/css/src/stylesheet.rs"
+from = '''            format!("{} {{ }}", self.selector_text())'''
+to = '''            format!("{} {{}}", self.selector_text())'''
+
+[[mutant]]
+name = "an edit loses the base URL"
+file = "crates/css/src/stylesheet.rs"
+from = '''            rules,
+            base_url: self.base_url.clone(),'''
+to = '''            rules,
+            base_url: None,'''

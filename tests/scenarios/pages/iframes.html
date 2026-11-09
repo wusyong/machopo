@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<!-- iframes.txt's page: an iframe the parser inserts has its browsing
+     context before the next script runs; the timers of its window, of a
+     script's iframe's and of an iframe's in that one's document run, and
+     its window's animation frames. -->
+<title>iframes</title>
+<iframe></iframe>
+<p id="parsed">not checked</p>
+<p id="timer">no timer yet</p>
+<p id="animation-frame">no animation frame yet</p>
+<p id="script-timer">no timer yet</p>
+<p id="nested-timer">no timer yet</p>
+<script>
+  // Getters only, up to the check: a method call would make the child frame
+  // as it ends, if the parser hadn't (the left side of an assignment comes
+  // first).
+  const iframe = document.body.firstElementChild;
+  const parsed =
+    iframe.contentDocument !== null && frames.length === 1 && window[0] === iframe.contentWindow;
+  document.getElementById("parsed").textContent = parsed
+    ? "the parser's iframe has its window"
+    : "the parser's iframe has no window";
+  // A timer each child window's own script sets: it runs in that window's
+  // frame. `id` is an element of the top document.
+  function setTimer(window, id) {
+    window.eval(
+      "setTimeout(() => { top.document.getElementById('" + id + "').textContent = " +
+        "'the timer ran'; }, 0);"
+    );
+  }
+  setTimer(iframe.contentWindow, "timer");
+  iframe.contentWindow.eval(
+    "requestAnimationFrame(() => { top.document.getElementById('animation-frame').textContent = " +
+      "'the animation frame ran'; });"
+  );
+  const added = document.body.appendChild(document.createElement("iframe"));
+  setTimer(added.contentWindow, "script-timer");
+  const nested = added.contentDocument.body.appendChild(added.contentDocument.createElement("iframe"));
+  setTimer(nested.contentWindow, "nested-timer");
+</script>

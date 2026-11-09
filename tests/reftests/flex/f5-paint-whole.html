@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<title>F5: a flex item is painted whole: the next item's background covers its text, and a block after them is under both</title>
+<link rel="match" href="f5-paint-whole-ref.html">
+<style>
+  html, body { margin: 0 }
+  .c { display: flex; font: 20px/1 Ahem; color: green }
+  .c div { width: 60px; height: 20px }
+</style>
+<div class="c">
+  <div style="background-color: red; margin-right: -40px">XX</div>
+  <div style="background-color: blue"></div>
+</div>
+<div style="height: 20px; margin-top: -10px; background-color: orange"></div>

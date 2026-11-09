@@ -1,0 +1,114 @@
+# Stage 3b-3: presentational hints in the new DOM (`style_next`'s
+# `hints`, parsed by `style`'s), the link colors from `<body>`, a table's
+# cells styled again with it; table spans read from the new DOM, and a
+# span's change building the box again.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "style_next", "--test", "it"]
+timeout = 900
+
+[[mutant]]
+name = "any attribute the first wanted"
+file = "crates/style_next/src/hints.rs"
+from = '''                let &(_, attribute) = wanted.iter().find(|(wanted, _)| *wanted == name)?;'''
+to = '''                let &(_, attribute) = wanted.first()?;'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "layout", "--test", "it", "next"]
+
+[[mutant]]
+name = "a cell in a row group finds no table"
+file = "crates/style_next/src/hints.rs"
+from = '''        if is(parent, &[local::THEAD, local::TBODY, local::TFOOT]) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a cell outside a row has a table"
+file = "crates/style_next/src/hints.rs"
+from = '''        let row = cx.parent(self.element).filter(|&row| is(row, &[local::TR]))?;'''
+to = '''        let row = cx.parent(self.element)?;'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "style_next", "--test", "it"]
+
+[[mutant]]
+name = "any namespace's element has HTML's hints"
+file = "crates/style_next/src/hints.rs"
+from = '''    if name.namespace() != names::HTML_NAMESPACE {
+        return None;
+    }
+'''
+to = ''''''
+
+[[mutant]]
+name = "a table's attributes don't reach its cells"
+file = "crates/style_next/src/hints.rs"
+from = '''            .any(|attribute| name(attribute) == Some(changed))'''
+to = '''            .any(|_| false)'''
+
+[[mutant]]
+name = "a body's link not the link color"
+file = "crates/style_next/src/hints.rs"
+from = '''        link: color(local::LINK).unwrap_or(defaults.link),'''
+to = '''        link: defaults.link,'''
+
+[[mutant]]
+name = "new link colors style nothing again"
+file = "crates/style_next/src/lib.rs"
+from = '''        force |= std::mem::replace(&mut self.link_colors, link_colors) != link_colors;'''
+to = '''        self.link_colors = link_colors;'''
+
+[[mutant]]
+name = "the link colors not the cascade's"
+file = "crates/style_next/src/lib.rs"
+from = '''                link_colors,
+            },
+            quirks'''
+to = '''                link_colors: css::values::TextLinkColors::DEFAULT,
+            },
+            quirks'''
+
+[[mutant]]
+name = "no hints in the cascade"
+file = "crates/style_next/src/lib.rs"
+from = '''        if let Some((hints, digest)) = presentation {'''
+to = '''        if let Some((hints, digest)) = presentation.filter(|_| false) {'''
+
+[[mutant]]
+name = "a box without its span"
+file = "crates/layout/src/next.rs"
+from = '''        layout_box.span = span(cx.dom, element);
+'''
+to = ''''''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "layout", "--test", "it", "next"]
+
+[[mutant]]
+name = "a column without its span"
+file = "crates/layout/src/next.rs"
+from = '''    let part = if is_html(cx, element, local::COL) || is_html(cx, element, local::COLGROUP) {'''
+to = '''    let part = if false {'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "layout", "--test", "it", "next"]
+
+[[mutant]]
+name = "a cell without its span"
+file = "crates/layout/src/next.rs"
+from = '''    } else if is_html(cx, element, local::TD) || is_html(cx, element, local::TH) {
+        table::SpanPart::Cell'''
+to = '''    } else if false {
+        table::SpanPart::Cell'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "layout", "--test", "it", "next"]
+
+[[mutant]]
+name = "a span's change builds no box"
+file = "crates/dom_next/src/style.rs"
+from = '''        if self.is_box_attribute(element, name) {'''
+to = '''        if false {'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "layout", "--test", "it", "next"]
+
+[[mutant]]
+name = "a rowspan's change builds no box"
+file = "crates/dom_next/src/style.rs"
+from = '''            name == QualifiedName::plain(local::COLSPAN) || name == QualifiedName::plain(local::ROWSPAN)'''
+to = '''            name == QualifiedName::plain(local::COLSPAN)'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "layout", "--test", "it", "next"]
+
+[[mutant]]
+name = "a column's span's change builds no box"
+file = "crates/dom_next/src/style.rs"
+from = '''            name == QualifiedName::plain(local::SPAN)'''
+to = '''            false'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "layout", "--test", "it", "next"]

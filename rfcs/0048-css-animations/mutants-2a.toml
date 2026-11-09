@@ -1,0 +1,332 @@
+# Mutation test of step 2a: the `animation-*` properties and the
+# `animation` shorthand, `@keyframes` (parsing, `RuleSet`, the lookup by
+# tree scope) and its CSSOM (2026-10-15):
+# python3 scripts/test.py mutate rfcs/0048-css-animations/mutants-2a.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "animation_properties::", "keyframes::"]
+timeout = 900
+
+# --- animation-*
+[[mutant]]
+name = "animation-name's none is a name"
+file = "crates/css/src/animation.rs"
+from = '''        Token::Ident(ident) if ident.eq_ignore_ascii_case("none") => Ok(AnimationName::None),'''
+to = '''        Token::Ident(ident) if false && ident.eq_ignore_ascii_case("none") => Ok(AnimationName::None),'''
+
+[[mutant]]
+name = "a CSS-wide keyword is an animation name"
+file = "crates/css/src/animation.rs"
+from = '''        Token::Ident(ident) if !is_reserved(ident) => Ok(AnimationName::Name(Arc::from(&**ident))),'''
+to = '''        Token::Ident(ident) if true => Ok(AnimationName::Name(Arc::from(&**ident))),'''
+
+[[mutant]]
+name = "an empty string is an animation name"
+file = "crates/css/src/animation.rs"
+from = '''        Token::QuotedString(name) if !name.is_empty() => {
+            Ok(AnimationName::Name(Arc::from(&**name)))'''
+to = '''        Token::QuotedString(name) if true => {
+            Ok(AnimationName::Name(Arc::from(&**name)))'''
+
+[[mutant]]
+name = "a name that reads as a keyword written bare"
+file = "crates/css/src/animation.rs"
+from = '''        AnimationName::Name(name) if name.eq_ignore_ascii_case("none") || is_reserved(name) => {'''
+to = '''        AnimationName::Name(name) if is_reserved(name) => {'''
+
+[[mutant]]
+name = "a CSS-wide keyword name written bare"
+file = "crates/css/src/animation.rs"
+from = '''        AnimationName::Name(name) if name.eq_ignore_ascii_case("none") || is_reserved(name) => {'''
+to = '''        AnimationName::Name(name) if name.eq_ignore_ascii_case("none") => {'''
+
+[[mutant]]
+name = "default is a custom-ident"
+file = "crates/css/src/animation.rs"
+from = '''        "initial" | "inherit" | "unset" | "revert" | "revert-layer" | "default" => true,'''
+to = '''        "initial" | "inherit" | "unset" | "revert" | "revert-layer" => true,'''
+
+[[mutant]]
+name = "no auto duration"
+file = "crates/css/src/animation.rs"
+from = '''    if input.try_parse(|i| i.expect_ident_matching("auto")).is_ok() {
+        return Ok(None);'''
+to = '''    if input.try_parse(|i| i.expect_ident_matching("autox")).is_ok() {
+        return Ok(None);'''
+
+[[mutant]]
+name = "a negative animation duration"
+file = "crates/css/src/animation.rs"
+from = '''    Ok(Some(parse_time(input, true)?))'''
+to = '''    Ok(Some(parse_time(input, false)?))'''
+
+[[mutant]]
+name = "a negative iteration count"
+file = "crates/css/src/animation.rs"
+from = '''    parse_number_at_least(input, 0.0)
+}'''
+to = '''    parse_number_at_least(input, -1e9)
+}'''
+
+[[mutant]]
+name = "infinite written as a number"
+file = "crates/css/src/animation.rs"
+from = '''    if count.is_infinite() {
+        dest.push_str("infinite");'''
+to = '''    if false {
+        dest.push_str("infinite");'''
+
+[[mutant]]
+name = "reverse is normal"
+file = "crates/css/src/animation.rs"
+from = '''        "reverse" => Ok(PlaybackDirection::Reverse),'''
+to = '''        "reverse" => Ok(PlaybackDirection::Normal),'''
+
+[[mutant]]
+name = "backwards is forwards"
+file = "crates/css/src/animation.rs"
+from = '''        "backwards" => Ok(FillMode::Backwards),'''
+to = '''        "backwards" => Ok(FillMode::Forwards),'''
+
+[[mutant]]
+name = "paused is running"
+file = "crates/css/src/animation.rs"
+from = '''        "paused" => Ok(AnimationPlayState::Paused),'''
+to = '''        "paused" => Ok(AnimationPlayState::Running),'''
+
+[[mutant]]
+name = "the shorthand's delay not negative"
+file = "crates/css/src/animation.rs"
+from = '''            && let Ok(delay) = input.try_parse(|i| parse_time(i, false))'''
+to = '''            && let Ok(delay) = input.try_parse(|i| parse_time(i, true))'''
+
+[[mutant]]
+name = "an empty single animation"
+file = "crates/css/src/animation.rs"
+from = '''    if !any {
+        return invalid(input);
+    }
+    Ok(single)'''
+to = '''    if false {
+        return invalid(input);
+    }
+    Ok(single)'''
+
+[[mutant]]
+name = "the duration left out before a delay"
+file = "crates/css/src/animation.rs"
+from = '''        if durations[i].is_some_and(|d| d.seconds() != 0.0) || delayed || needed(0) {'''
+to = '''        if durations[i].is_some_and(|d| d.seconds() != 0.0) || needed(0) {'''
+
+[[mutant]]
+name = "a 0s duration written"
+file = "crates/css/src/animation.rs"
+from = '''        if durations[i].is_some_and(|d| d.seconds() != 0.0) || delayed || needed(0) {'''
+to = '''        if durations[i].is_some() || delayed || needed(0) {'''
+
+[[mutant]]
+name = "a keyword name's value left out"
+file = "crates/css/src/animation.rs"
+from = '''        let needed = |index: usize| taken == Some(index);'''
+to = '''        let needed = |index: usize| taken == Some(index) && false;'''
+
+[[mutant]]
+name = "ease isn't taken by the easing function"
+file = "crates/css/src/animation.rs"
+from = '''        "linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out" | "step-start" | "step-end" => 1,'''
+to = '''        "linear" | "ease-in" | "ease-out" | "ease-in-out" | "step-start" | "step-end" => 1,'''
+
+[[mutant]]
+name = "nothing written for an initial animation"
+file = "crates/css/src/animation.rs"
+from = '''        if names[i] != AnimationName::None || text.is_empty() {'''
+to = '''        if names[i] != AnimationName::None {'''
+
+[[mutant]]
+name = "lists of different lengths written"
+file = "crates/css/src/animation.rs"
+from = '''        states.len(),
+    ]
+    .iter()
+    .any(|&len| len != n)'''
+to = '''        states.len(),
+    ]
+    .iter()
+    .any(|&len| len != n && false)'''
+
+[[mutant]]
+name = "auto computes to 1s"
+file = "crates/css/src/properties.rs"
+from = '''            style.animations.duration = v.iter().map(|t| t.map_or(0.0, |t| t.seconds())).collect();'''
+to = '''            style.animations.duration = v.iter().map(|t| t.map_or(1.0, |t| t.seconds())).collect();'''
+
+[[mutant]]
+name = "iteration counts not applied"
+file = "crates/css/src/properties.rs"
+from = '''            style.animations.iteration_count = v;'''
+to = '''            style.animations.iteration_count = v.iter().map(|_| 1.0).collect();'''
+
+[[mutant]]
+name = "animation-duration not inherited when asked"
+file = "crates/css/src/properties.rs"
+from = '''        AnimationDuration => to.animations.duration = from.animations.duration.clone(),'''
+to = '''        AnimationDuration => {}'''
+
+# --- @keyframes
+[[mutant]]
+name = "@keyframes none"
+file = "crates/css/src/stylesheet.rs"
+from = '''            if !ident.eq_ignore_ascii_case("none") && !is_reserved(ident) =>'''
+to = '''            if !is_reserved(ident) =>'''
+
+[[mutant]]
+name = "@keyframes initial"
+file = "crates/css/src/stylesheet.rs"
+from = '''            if !ident.eq_ignore_ascii_case("none") && !is_reserved(ident) =>'''
+to = '''            if !ident.eq_ignore_ascii_case("none") =>'''
+
+[[mutant]]
+name = "@keyframes with an empty string"
+file = "crates/css/src/stylesheet.rs"
+from = '''        cssparser::Token::QuotedString(name) if !name.is_empty() => Arc::from(&**name),'''
+to = '''        cssparser::Token::QuotedString(name) if true => Arc::from(&**name),'''
+
+[[mutant]]
+name = "keyframe offsets past 0% to 100%"
+file = "crates/css/src/stylesheet.rs"
+from = '''        if !(0.0..=100.0).contains(&percent) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "to is 0%"
+file = "crates/css/src/stylesheet.rs"
+from = '''                cssparser::Token::Ident(ident) if ident.eq_ignore_ascii_case("to") => 100.0,'''
+to = '''                cssparser::Token::Ident(ident) if ident.eq_ignore_ascii_case("to") => 0.0,'''
+
+[[mutant]]
+name = "no calc() keyframe offsets"
+file = "crates/css/src/stylesheet.rs"
+from = '''        let percent = if let Ok(percent) = input.try_parse(crate::calc::parse_percentage) {'''
+to = '''        let percent = if let Some(percent) = None::<f32> {'''
+
+[[mutant]]
+name = "a keyframe keeps !important"
+file = "crates/css/src/stylesheet.rs"
+from = '''                        .any(|value| value.important || is_invalid_for_keyframe(value));'''
+to = '''                        .any(|value| is_invalid_for_keyframe(value));'''
+
+[[mutant]]
+name = "a keyframe keeps animation-*"
+file = "crates/css/src/stylesheet.rs"
+from = '''                        .any(|value| value.important || is_invalid_for_keyframe(value));'''
+to = '''                        .any(|value| value.important);'''
+
+[[mutant]]
+name = "a keyframe keeps the animation shorthand's timing function"
+file = "crates/css/src/stylesheet.rs"
+from = '''    if value.shorthand == Some(Shorthand::Animation) {
+        return true;'''
+to = '''    if value.shorthand == Some(Shorthand::Animation) {
+        return false;'''
+
+[[mutant]]
+name = "a keyframe's block as a style rule's"
+file = "crates/css/src/stylesheet.rs"
+from = '''            log: self.log,
+            keyframe: true,'''
+to = '''            log: self.log,
+            keyframe: false,'''
+
+[[mutant]]
+name = "@keyframes written without its space"
+file = "crates/css/src/stylesheet.rs"
+from = '''                out.push_str(" { \n");'''
+to = '''                out.push_str(" {\n");'''
+
+[[mutant]]
+name = "keyText as a fraction"
+file = "crates/css/src/stylesheet.rs"
+from = '''            crate::values::write_number(&mut out, f64::from(*offset) * 100.0);'''
+to = '''            crate::values::write_number(&mut out, f64::from(*offset));'''
+
+[[mutant]]
+name = "the first @keyframes of a name wins"
+file = "crates/css/src/rule_set.rs"
+from = '''                    self.keyframes
+                        .insert(keyframes.name.clone(), (keyframes.clone(), sheet));'''
+to = '''                    self.keyframes
+                        .entry(keyframes.name.clone())
+                        .or_insert((keyframes.clone(), sheet));'''
+
+[[mutant]]
+name = "the element's own shadow tree not looked in"
+file = "crates/style/src/lib.rs"
+from = '''        if let Some(found) = element
+            .shadow_root()
+            .and_then(shadow)'''
+to = '''        if let Some(found) = None::<NodeRef<'_>>
+            .and_then(shadow)'''
+
+[[mutant]]
+name = "only the element's tree scope and the document's"
+file = "crates/style/src/lib.rs"
+from = '''            root = host.root();
+        }
+        let author = self.author.borrow();'''
+to = '''            let _ = host;
+            break;
+        }
+        let author = self.author.borrow();'''
+
+[[mutant]]
+name = "a tree scope's first sheet first"
+file = "crates/style/src/lib.rs"
+from = '''        self.sheets
+            .iter()
+            .rev()
+            .filter(|sheet| sheet.origin == Origin::Author)'''
+to = '''        self.sheets
+            .iter()
+            .filter(|sheet| sheet.origin == Origin::Author)'''
+
+# --- CSSOM
+[[mutant]]
+name = "a @keyframes has no rules"
+file = "crates/css/src/stylesheet.rs"
+from = '''            Self::Keyframes(rule) => Some(&rule.rules),'''
+to = '''            Self::Keyframes(_) => None,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "css_style_sheet::"]
+
+[[mutant]]
+name = "a @keyframes is a keyframe's kind"
+file = "crates/dom/src/css_style_sheet.rs"
+from = '''            Rule::Keyframes(_) => Self::Keyframes,'''
+to = '''            Rule::Keyframes(_) => Self::Keyframe,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "css_style_sheet::"]
+
+[[mutant]]
+name = "KEYFRAMES_RULE is KEYFRAME_RULE"
+file = "crates/dom_api/src/css_style_sheet.rs"
+from = '''        CssRuleKind::Keyframes => 7,'''
+to = '''        CssRuleKind::Keyframes => 8,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "css_style_sheet::"]
+
+[[mutant]]
+name = "a keyframe is a CSSKeyframesRule"
+file = "crates/dom_api/src/object.rs"
+from = '''                CssRuleKind::Keyframe => ObjectKind::CssKeyframeRule,'''
+to = '''                CssRuleKind::Keyframe => ObjectKind::CssKeyframesRule,'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "css_style_sheet::"]
+
+[[mutant]]
+name = "the name not the rule's"
+file = "crates/dom_api/src/css_style_sheet.rs"
+from = '''    Ok((*rule.name).into())'''
+to = '''    Ok(rule.name[..1].into())'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "css_style_sheet::"]
+
+[[mutant]]
+name = "a keyframe's style reads nothing"
+file = "crates/dom_api/src/css_style_declaration.rs"
+from = '''                style::CssRule::Keyframe(keyframe) => keyframe.block.clone(),'''
+to = '''                style::CssRule::Keyframe(_) => CssPropertyValueSet::default(),'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "css_style_sheet::"]
+

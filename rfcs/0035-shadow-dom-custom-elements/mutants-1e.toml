@@ -1,0 +1,11 @@
+# Mutation test of step 1e's fix (`currentScript` of a script in a shadow
+# tree):
+# python3 scripts/test.py mutate rfcs/0035-shadow-dom-custom-elements/mutants-1e.toml
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::current_scripts_stack_per_document"]
+timeout = 600
+
+[[mutant]]
+name = "a script in a shadow tree is currentScript"
+file = "crates/dom/src/scope.rs"
+from = '''            !root.is_shadow_root()'''
+to = '''            true'''

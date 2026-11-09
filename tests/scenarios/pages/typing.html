@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<title>typing</title>
+<style>
+  /* Text controls aren't drawn yet: the page gives them a box to click. */
+  textarea, input { display: block; width: 200px; height: 30px; border: 1px solid; }
+  #tall { height: 2000px; }
+  #space { height: 150px; }
+</style>
+<div id="space"></div>
+<textarea id="t"></textarea>
+<input id="i">
+<button id="b">next</button>
+<p id="out"></p>
+<p id="log"></p>
+<p id="scroll"></p>
+<div id="tall"></div>
+<script>
+const t = document.getElementById('t');
+const i = document.getElementById('i');
+const log = [];
+// What each control holds, the textarea's newlines shown as `|`.
+const show = () => {
+  document.getElementById('out').textContent =
+    `${t.value.replaceAll('\n', '|')}/${i.value}/${i.selectionStart}-${i.selectionEnd}`;
+  document.getElementById('scroll').textContent = `scrolled ${Math.round(scrollY)}`;
+};
+for (const el of [t, i]) {
+  el.addEventListener('input', show);
+  el.addEventListener('select', show);
+  el.addEventListener('change', () => {
+    log.push(`change ${el.id} ${el.value}`);
+    document.getElementById('log').textContent = log.join(', ');
+  });
+}
+addEventListener('scroll', show);
+show();
+</script>

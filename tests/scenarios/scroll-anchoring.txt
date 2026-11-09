@@ -1,0 +1,16 @@
+# Scroll anchoring on about:demo: at the top of its box, a line added
+# above shows; scrolled down the box, one added above scrolls it down by
+# as much (its 40 px), so the row at its top stays there.
+window size=800x600
+navigate about:demo
+wait-loaded
+scroll-to #anchor-add
+click #anchor-add
+wait-text #anchor-note "Added 1 line above: New 1 is at the top now, not C1."
+# Two and a half rows down: C2's bottom half at the top.
+wheel #anchor-box 0 100
+wait-text #anchor-scroll "The box is scrolled 100px."
+click #anchor-add
+wait-text #anchor-note "Added 2 lines above: C2 is still at the top."
+wait-text #anchor-scroll "The box is scrolled 140px."
+screenshot anchored

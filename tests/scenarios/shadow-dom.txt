@@ -1,0 +1,19 @@
+# about:demo's custom element: its shadow tree is drawn, with its title in
+# the title slot (it has a box there, at the top of the frame), and the
+# button moves the title to the footer slot, below the rest. The screenshots
+# show the frame (`:host` in the shadow tree's own style, with the page's
+# rounded corners over its square ones) and the title, underlined by
+# `::slotted(b)`, blue at the top, then green (the adopted sheet's) at the
+# bottom.
+window size=800x1000
+navigate about:demo
+wait-loaded
+scroll-to #card-title
+screenshot card
+click #card-move
+wait-change #card-title
+wait-text #card-note "The title is at the bottom."
+screenshot card-moved
+click #card-move
+wait-change #card-title
+wait-text #card-note "The title is at the top."

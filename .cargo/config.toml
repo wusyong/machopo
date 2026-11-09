@@ -1,0 +1,24 @@
+[env]
+# The V8 static library and its generated binding, prebuilt from our rusty_v8
+# fork by its CI and downloaded from the fork's GitHub Release of this tag
+# (cached in ~/.cargo/.rusty_v8). The fork at ../third_party/rusty_v8 must be
+# checked out at the same tag. Without a fallback, a missing file fails the
+# build instead of linking upstream's prebuilt, which lacks our patches. See
+# ../third_party/rusty_v8/README.machopo.md, "Releases".
+#
+# To link a V8 built locally from the fork instead, set RUSTY_V8_ARCHIVE in
+# the environment (`python scripts/ci.py v8` prints how); it wins over the
+# mirror.
+RUSTY_V8_MIRROR = "https://github.com/wusyong/rusty_v8/releases/download"
+RUSTY_V8_MIRROR_TAG = "machopo-v152.2.0-29"
+
+# V8 is built with the static CRT (/MT, Chromium's default for non-component
+# builds), so its objects ask for libcmt.lib; Rust, Skia and aws-lc use the
+# dynamic one (msvcrt.lib), and the link warns (LNK4098). Every CRT symbol
+# resolves to the dynamic CRT either way (the imports are the same with and
+# without libcmt.lib), so drop it.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/NODEFAULTLIB:libcmt.lib"]
+# LLVM's lld-link (rustup ships it), as Chromium links on Windows: it links
+# a test binary with V8 in it in about two thirds of link.exe's time.
+linker = "rust-lld"

@@ -1,0 +1,87 @@
+# Stage 2a: a rendering update finds its documents once
+# (`ScriptEngine::begin_rendering_update`) and each of its steps goes
+# through them; the host's loop asks whether animations want a frame of the
+# frames as made, walking no frame tree. `dom_js`'s frame tests (the debug
+# build's count of the walks, the documents kept and left out), then
+# `shell`'s (the renderer's rendering update: child frames' intersection
+# observers, animations, animation frames).
+test = ["sh", "-c", "systemd-run --user --scope -q -p MemoryMax=24G -p MemorySwapMax=0 sh -c 'cargo test -q -p dom_js --test it frames:: && cargo test -q -p shell'"]
+timeout = 1200
+
+[[mutant]]
+name = "dom_js: the update's documents not kept"
+file = "crates/dom_js/src/engine.rs"
+from = '''        self.rendering_documents = Some(self.walk_documents());'''
+to = '''        let _ = self.walk_documents();'''
+
+[[mutant]]
+name = "dom_js: the update's steps walk again"
+file = "crates/dom_js/src/engine.rs"
+from = '''        let documents = match &self.rendering_documents {
+            Some(documents) => documents.clone(),
+            None => self.walk_documents(),
+        };
+        let state = self.state();
+        documents
+            .into_iter()
+            .filter_map(|document| {'''
+to = '''        let documents = self.walk_documents();
+        let state = self.state();
+        documents
+            .into_iter()
+            .filter_map(|document| {'''
+
+[[mutant]]
+name = "dom_js: a frame gone during the update still given"
+file = "crates/dom_js/src/engine.rs"
+from = '''            .filter(|&document| state.frames.of_document(document).is_some())'''
+to = '''            .filter(|_| state.frames.iter().next().is_some())'''
+
+[[mutant]]
+name = "dom_js: the update's documents kept after it"
+file = "crates/dom_js/src/engine.rs"
+from = '''        self.rendering_documents = None;'''
+to = '''        let _ = &self.rendering_documents;'''
+
+[[mutant]]
+name = "dom_js: the loop's question walks the frame tree"
+file = "crates/dom_js/src/engine.rs"
+from = '''        let documents: Vec<NodeRoot> = self
+            .frames_as_made()
+            .into_iter()
+            .map(|(_, _, document)| document)
+            .collect();'''
+to = '''        let documents: Vec<NodeRoot> = self
+            .frames_with_contexts()
+            .into_iter()
+            .map(|(_, _, document)| document)
+            .collect();'''
+
+[[mutant]]
+name = "dom_js: the loop's question of the top-level frame alone"
+file = "crates/dom_js/src/engine.rs"
+from = '''            .frames_as_made()
+            .into_iter()
+            .map(|(_, _, document)| document)'''
+to = '''            .frames_as_made()
+            .into_iter()
+            .take(1)
+            .map(|(_, _, document)| document)'''
+
+[[mutant]]
+name = "renderer: the rendering update never over"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if let Some(engine) = &mut self.engine {
+            engine.end_rendering_update();
+        }'''
+to = '''        if let Some(engine) = &mut self.engine.as_mut().filter(|_| false) {
+            engine.end_rendering_update();
+        }'''
+
+[[mutant]]
+name = "renderer: the intersections of no document"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            .map(|engine| engine.documents_in_tree_order())
+            .unwrap_or_default();'''
+to = '''            .map(|_| Vec::new())
+            .unwrap_or_default();'''

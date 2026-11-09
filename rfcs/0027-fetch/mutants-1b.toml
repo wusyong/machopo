@@ -1,0 +1,147 @@
+# Mutation test of step 1b (ByteString and Headers):
+# python3 scripts/test.py mutate rfcs/0027-fetch/mutants-1b.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "headers"]
+timeout = 900
+
+# --- dom_api: the header list and the guards --------------------------------
+
+[[mutant]]
+name = "an empty name"
+file = "crates/dom_api/src/headers.rs"
+from = '''    !name.is_empty()
+        && name.bytes().all(|b| {'''
+to = '''    name.bytes().all(|b| {'''
+
+[[mutant]]
+name = "a name of any byte"
+file = "crates/dom_api/src/headers.rs"
+from = '''            b.is_ascii_alphanumeric()
+                || matches!('''
+to = '''            b.is_ascii() || b.is_ascii_alphanumeric()
+                || matches!('''
+test = ["python3", "scripts/test.py", "wpt", "fetch/api/headers/"]
+
+[[mutant]]
+name = "values keep their whitespace"
+file = "crates/dom_api/src/headers.rs"
+from = '''    value.trim_matches(is_http_whitespace)'''
+to = '''    value'''
+
+[[mutant]]
+name = "a value with a CR"
+file = "crates/dom_api/src/headers.rs"
+from = '''    !value.contains(['\0', '\n', '\r'])'''
+to = '''    !value.contains(['\0', '\n'])'''
+test = ["python3", "scripts/test.py", "wpt", "fetch/api/headers/"]
+
+[[mutant]]
+name = "Proxy- and Sec- are allowed"
+file = "crates/dom_api/src/headers.rs"
+from = '''    if NAMES.contains(&lower.as_str()) || lower.starts_with("proxy-") || lower.starts_with("sec-")'''
+to = '''    if NAMES.contains(&lower.as_str())'''
+
+[[mutant]]
+name = "any method override"
+file = "crates/dom_api/src/headers.rs"
+from = '''        ["connect", "trace", "track"]'''
+to = '''        ["connect", "trace"]'''
+
+[[mutant]]
+name = "Set-Cookie2 on a response"
+file = "crates/dom_api/src/headers.rs"
+from = '''    name.eq_ignore_ascii_case("set-cookie") || name.eq_ignore_ascii_case("set-cookie2")'''
+to = '''    name.eq_ignore_ascii_case("set-cookie")'''
+
+[[mutant]]
+name = "immutable headers change"
+file = "crates/dom_api/src/headers.rs"
+from = '''            return Err(ApiError::Type("Headers are immutable".into()));'''
+to = '''            true'''
+
+[[mutant]]
+name = "a request takes forbidden headers"
+file = "crates/dom_api/src/headers.rs"
+from = '''        HeadersGuard::Request => !is_forbidden_request_header(name, value),'''
+to = '''        HeadersGuard::Request => true,'''
+
+[[mutant]]
+name = "a name takes its own case"
+file = "crates/dom_api/src/headers.rs"
+from = '''        .map_or_else(|| name.to_owned(), |(first, _)| first.clone());'''
+to = '''        .map_or_else(|| name.to_owned(), |_| name.to_owned());'''
+
+[[mutant]]
+name = "set keeps the others"
+file = "crates/dom_api/src/headers.rs"
+from = '''                let keep = index <= first || !matches_name(entry, name);'''
+to = '''                let keep = true || index <= first || !matches_name(entry, name);'''
+
+[[mutant]]
+name = "set-cookie combines"
+file = "crates/dom_api/src/headers.rs"
+from = '''        if name == "set-cookie" {'''
+to = '''        if name == "set-cookie2" {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "fetch", "headers"]
+
+[[mutant]]
+name = "iteration isn't sorted"
+file = "crates/dom_api/src/headers.rs"
+from = '''    names.sort_unstable();
+    names.dedup();'''
+to = '''    let mut seen = std::collections::HashSet::new();
+    names.retain(|name| seen.insert(name.clone()));'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "fetch", "headers"]
+
+[[mutant]]
+name = "a pair of any length"
+file = "crates/dom_api/src/headers.rs"
+from = '''                let [name, value] = <[DomString; 2]>::try_from(pair).map_err(|pair| {'''
+to = '''                let mut pair = pair;
+                pair.resize(2, DomString::default());
+                let [name, value] = <[DomString; 2]>::try_from(pair).map_err(|pair| {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "fetch", "headers"]
+
+[[mutant]]
+name = "values join with a comma alone"
+file = "crates/dom_api/src/headers.rs"
+from = '''    (!values.is_empty()).then(|| values.join(", "))'''
+to = '''    (!values.is_empty()).then(|| values.join(","))'''
+
+[[mutant]]
+name = "delete deletes on a response what it may not"
+file = "crates/dom_api/src/headers.rs"
+from = '''    if !validate(guard, name.as_str(), "")? {
+        return Ok(());
+    }
+    let mut list = cx.read().headers_list(this);
+    if !contains(&list, name.as_str()) {'''
+to = '''    validate(guard, name.as_str(), "")?;
+    let mut list = cx.read().headers_list(this);
+    if !contains(&list, name.as_str()) {'''
+
+# --- ByteString ---------------------------------------------------------------
+
+[[mutant]]
+name = "the entry takes any string as a ByteString"
+file = "crates/dom_api/src/value.rs"
+from = '''            Value::String(s) if s.as_str().chars().all(|c| u32::from(c) <= 0xFF) => Ok(s),'''
+to = '''            Value::String(s) if true => Ok(s),'''
+
+[[mutant]]
+name = "JS checks a ByteString only at the entry"
+file = "crates/dom_js/src/convert.rs"
+from = '''            if string.chars().any(|c| u32::from(c) > 0xFF) {'''
+to = '''            if false {'''
+test = ["python3", "scripts/test.py", "wpt", "fetch/api/headers/"]
+
+[[mutant]]
+name = "a record's key isn't checked as its type"
+file = "crates/dom_js/src/convert.rs"
+from = '''        let Value::String(typed_key) = from_js(cx, key, key_type)? else {'''
+to = '''        let _ = key_type;
+        let Value::String(typed_key) = from_js(cx, key, Type::new(dom_api::Base::DomString))? else {'''
+test = ["python3", "scripts/test.py", "wpt", "fetch/api/headers/"]
+
+# Not listed: the entry not checking a record's keys as `ByteString`s is
+# equivalent for now. Headers' record is the only one keyed so, and each
+# key is then checked as a header name, a token, which is ASCII.

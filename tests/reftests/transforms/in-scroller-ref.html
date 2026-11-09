@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<title>Turned boxes in a scroller reference</title>
+<style>
+  html, body { margin: 0 }
+  #scroller { width: 300px; height: 200px; overflow: auto }
+  .standing { width: 20px; height: 100px; margin: 0 0 0 80px; background-color: green }
+</style>
+<div id="scroller"><div style="height: 100px"></div><div class="standing"></div><div class="standing" style="margin-top: -40px"></div><div style="height: 600px"></div></div>
+<script>document.getElementById("scroller").scrollTop = 60;</script>

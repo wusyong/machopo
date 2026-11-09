@@ -1,0 +1,298 @@
+# Stage 4f-3c-2: on the new DOM, the keys that click a check box, a radio
+# button and a button; a number's and a range's keys and the user's
+# steps; a search field's Escape and clear button; a number's spin
+# button held, its repeat by the window's native timers.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_api_next --test it -- controls:: editing"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: a number's step base not its value attribute"
+file = "crates/dom_next/src/step_range.rs"
+from = '''            base: min.or_else(|| attribute(names::local::VALUE)).unwrap_or(0.0),'''
+to = '''            base: min.unwrap_or(0.0),'''
+
+[[mutant]]
+name = "dom: an empty number not first 0"
+file = "crates/dom_next/src/step_range.rs"
+from = '''            0.0f64.max(range.min - next).min(range.max - next)'''
+to = '''            range.min.max(-1e9)'''
+
+[[mutant]]
+name = "dom: a number below its minimum not to it"
+file = "crates/dom_next/src/step_range.rs"
+from = '''            Some(if n > 0.0 { range.min } else { range.max })'''
+to = '''            range.apply(step, exact, current, n)'''
+
+[[mutant]]
+name = "dom: a number at its end steps past"
+file = "crates/dom_next/src/step_range.rs"
+from = '''        } else if (n > 0.0 && current >= range.max) || (n < 0.0 && current <= range.min) {
+            None
+        } else {'''
+to = '''        } else if false {
+            None
+        } else {'''
+
+[[mutant]]
+name = "dom: a number's step not aligned"
+file = "crates/dom_next/src/step_range.rs"
+from = '''        if !exact && value < 1e21 && !self.mismatch(current, step) {
+            value = base + ((value - base) / step).round() * step;
+        }'''
+to = '''        let _ = exact;'''
+
+[[mutant]]
+name = "dom: a range's page keys by a step"
+file = "crates/dom_next/src/step_range.rs"
+from = '''            RangeKey::PageUp => current + big_step,'''
+to = '''            RangeKey::PageUp => current + step,'''
+
+[[mutant]]
+name = "dom: a range's Home not its minimum"
+file = "crates/dom_next/src/step_range.rs"
+from = '''            RangeKey::Home => range.min,'''
+to = '''            RangeKey::Home => current,'''
+
+[[mutant]]
+name = "dom: a range's unchanged value set"
+file = "crates/dom_next/src/step_range.rs"
+from = '''        (value != current).then(|| number_to_string(value))
+    }
+}'''
+to = '''        Some(number_to_string(value))
+    }
+}'''
+
+[[mutant]]
+name = "dom: a native timer never due"
+file = "crates/dom_next/src/window.rs"
+from = '''            if timer.due.get() <= now && next.is_none_or(|(_, best)| timer.due.get() < best.due.get()) {'''
+to = '''            if timer.due.get() <= now - 1e12 && next.is_none_or(|(_, best)| timer.due.get() < best.due.get()) {'''
+
+[[mutant]]
+name = "dom: a native timer's from ignored"
+file = "crates/dom_next/src/window.rs"
+from = '''                due: Cell::new(from.unwrap_or_else(|| self.now_since(Some(window))) + delay),'''
+to = '''                due: Cell::new({ let _ = from; self.now_since(Some(window)) } + delay),'''
+
+[[mutant]]
+name = "dom: native timers not in the next due"
+file = "crates/dom_next/src/window.rs"
+from = '''        match (script, native) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }'''
+to = '''        let _ = native;
+        script'''
+
+[[mutant]]
+name = "api: a number's keys when read-only"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''        Some(InputKind::Number) if mutable => {'''
+to = '''        Some(InputKind::Number) => {'''
+
+[[mutant]]
+name = "api: a number's key not committed"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''            step_for_user(host, element, n);
+            crate::editing::commit(host, element);'''
+to = '''            step_for_user(host, element, n);'''
+
+[[mutant]]
+name = "api: a disabled range's keys"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''        Some(InputKind::Range) if !disabled => {'''
+to = '''        Some(InputKind::Range) => {'''
+
+[[mutant]]
+name = "api: a range's ArrowLeft up"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''                "ArrowDown" | "ArrowLeft" => RangeKey::Down,'''
+to = '''                "ArrowDown" => RangeKey::Down,
+                "ArrowLeft" => RangeKey::Up,'''
+
+[[mutant]]
+name = "api: a range's move fires nothing"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''            if changed {
+                crate::editing::fire_plain_input(host, element);
+                crate::editing::fire_change(host, element);
+            }'''
+to = '''            let _ = changed;'''
+
+[[mutant]]
+name = "api: an empty search field's Escape taken"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''            if empty {
+                return false;
+            }
+            clear_and_search(host, element);'''
+to = '''            if empty {
+                return true;
+            }
+            clear_and_search(host, element);'''
+
+[[mutant]]
+name = "api: no search event"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''    set_value_for_user(host, field, "");
+    fire(host, field, event::SEARCH, false);'''
+to = '''    set_value_for_user(host, field, "");'''
+
+[[mutant]]
+name = "api: the user's value change fires change while focused"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''        Some(true) => crate::editing::fire_plain_input(host, field),'''
+to = '''        Some(true) => crate::editing::fire_change(host, field),'''
+
+[[mutant]]
+name = "api: the user's change before not kept"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''        if focused {
+            cx.note_edit(node, before);
+        }'''
+to = '''        let _ = before;'''
+
+[[mutant]]
+name = "api: Enter clicks a check box"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''    button || (checkable && !enter)'''
+to = '''    button || checkable'''
+
+[[mutant]]
+name = "api: Space doesn't click a radio button"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''    let checkable = matches!(cx.input_kind(element), Some(InputKind::Checkbox | InputKind::Radio));'''
+to = '''    let checkable = matches!(cx.input_kind(element), Some(InputKind::Checkbox));'''
+
+[[mutant]]
+name = "api: the key's click untrusted"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''    crate::activation::simulated_click(host, element, true, 0);'''
+to = '''    crate::activation::simulated_click(host, element, false, 0);'''
+
+[[mutant]]
+name = "api: the spin button's lower half up"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''    point.y < rect.y + rect.height / 2.0'''
+to = '''    point.y < rect.y + rect.height * 2.0'''
+
+[[mutant]]
+name = "api: the press doesn't step at once"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''    step_for_user(host, &field, if up { 1 } else { -1 });
+    Some((field, target.clone()))'''
+to = '''    let _ = up;
+    Some((field, target.clone()))'''
+
+[[mutant]]
+name = "api: the press starts no repeat"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''        cx.add_native_timer(field, NativeAction::SpinRepeat, state.press, SPIN_FIRST_REPEAT_MS, None);
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: a read-only spin button steps"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''        let field = cx.spin_button_field(part).filter(|field| mutable(cx, *field))?;'''
+to = '''        let field = cx.spin_button_field(part)?;'''
+
+[[mutant]]
+name = "api: the pointer's half not followed"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''            state.up = Some(upper_half(cx, part.get(cx.gc), point));
+            cx.set_spin_state(field, state);'''
+to = '''            let _ = (point, part);'''
+
+[[mutant]]
+name = "api: the release doesn't commit"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''    release(host, field);
+    crate::editing::commit(host, field);'''
+to = '''    release(host, field);'''
+
+[[mutant]]
+name = "api: the release keeps the press"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''                SpinState {
+                    press: state.press.wrapping_add(1),'''
+to = '''                SpinState {
+                    press: state.press,'''
+
+[[mutant]]
+name = "api: the repeat in either half"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''        state.up.filter(|up| *up == pressed_up)'''
+to = '''        state.up'''
+
+[[mutant]]
+name = "api: the repeat doesn't repeat"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''        if cx.spin_state(node).press == press {
+            cx.add_native_timer(node, NativeAction::SpinRepeat, press, SPIN_REPEAT_MS, Some(now));
+        }'''
+to = '''        let _ = (node, now);'''
+
+[[mutant]]
+name = "api: the clear button does nothing"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''    if let Some(field) = field {
+        clear_and_search(host, &field);
+    }'''
+to = '''    let _ = field;'''
+
+[[mutant]]
+name = "api: Space's release clicks whatever has the focus"
+file = "crates/dom_api_next/src/input.rs"
+from = '''                && space.as_ref().is_some_and(|space| host.read(|cx| gc::Gc::ptr_eq(space.get(cx.gc), target.get(cx.gc))))'''
+to = '''                && space.is_some()'''
+
+[[mutant]]
+name = "api: a canceled keyup clicks"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            if not_canceled
+                && space.as_ref()'''
+to = '''            if space.as_ref()'''
+
+[[mutant]]
+name = "api: Enter doesn't click"
+file = "crates/dom_api_next/src/input.rs"
+from = '''                && input.text == "\r"
+                && host.read(|cx| crate::controls::clicked_by(cx, target.get(cx.gc), true))'''
+to = '''                && input.text == "\r"
+                && false'''
+
+[[mutant]]
+name = "api: the spin's moves not followed"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        if let Some((field, part)) = &self.spin {
+            crate::controls::spin_moved(host, field, part, input.point);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "api: the spin's release not seen"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        if button == MouseButton::Primary
+            && let Some((field, _)) = self.spin.take()
+        {
+            crate::controls::spin_released(host, &field);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a click's default not looked at"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            if fire_mouse(host, click, if primary { event::CLICK } else { event::AUXCLICK }, &info, None) && primary {
+                crate::controls::click(host, click);
+            }'''
+to = '''            fire_mouse(host, click, if primary { event::CLICK } else { event::AUXCLICK }, &info, None);'''
+
+[[mutant]]
+name = "api: native timers not run"
+file = "crates/dom_api_next/src/timer.rs"
+from = '''            let (element, action, data) = cx.take_due_native_timer(window.get(cx.gc), now)?;
+            Some((cx.root(element), action, data))'''
+to = '''            let _ = now;
+            None::<(dom_next::NodeRoot, dom_next::NativeAction, u64)>'''

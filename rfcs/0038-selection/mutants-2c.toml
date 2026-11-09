@@ -1,0 +1,34 @@
+# Mutation test of step 2c's fix (the documents run their animation frame
+# callbacks in tree order, each taking its own when its turn comes; child
+# frames in the tree order of their iframes):
+# python3 scripts/test.py mutate rfcs/0038-selection/mutants-2c.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "script::a_"]
+timeout = 900
+
+[[mutant]]
+name = "every document's callbacks are taken at the frame's start"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        for (document, realm, time_origin) in &documents {
+            let handles = self
+                .dom
+                .borrow_mut()
+                .timers()
+                .animation_frame_handles_of(*document);'''
+to = '''        let taken: Vec<_> = documents
+            .iter()
+            .map(|(document, ..)| self.dom.borrow_mut().timers().animation_frame_handles_of(*document))
+            .collect();
+        for ((_, realm, time_origin), handles) in documents.iter().zip(taken) {'''
+
+[[mutant]]
+name = "a document takes every document's callbacks"
+file = "crates/dom/src/timers.rs"
+from = '''            .filter(|(_, (of, _))| *of == owner)'''
+to = '''            .filter(|(_, (of, _))| *of == owner || true)'''
+
+[[mutant]]
+name = "child frames go in the order they were made"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        children.sort_by(|a, b| a.0.cmp(&b.0));'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "script::child_frames_go"]

@@ -1,0 +1,267 @@
+# Stage 4b-2a: `UIEvent`, `MouseEvent` (dictionary numbers); `:hover` and
+# `:active` (the document's chains, the nodes' bits, the style phase's
+# invalidation); the mouse in `dom_api_next` (`EventHandler`: hit test,
+# boundary events, clicks, a checkpoint after each event); the renderer
+# routing input to the new DOM.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next -p style_next -p dom_api_next && cargo test -q -p dom_js_next --test it -- ui_events && cargo test -q -p shell --test it -- next_dom"]
+timeout = 3000
+
+[[mutant]]
+name = "the shared ancestors noted again"
+file = "crates/dom_next/src/user_action.rs"
+from = '''            .take_while(|&(&a, &b)| Gc::ptr_eq(a, b))'''
+to = '''            .take_while(|_| false)'''
+
+[[mutant]]
+name = "the old chain keeps the state"
+file = "crates/dom_next/src/user_action.rs"
+from = '''            element.flags.set(element.flags.get() & !bit);'''
+to = ''''''
+
+[[mutant]]
+name = "a change of state not noted"
+file = "crates/dom_next/src/user_action.rs"
+from = '''        for &element in &new[..new.len().saturating_sub(shared)] {
+            element.flags.set(element.flags.get() | bit);
+            self.state_changed(element, state);'''
+to = '''        for &element in &new[..new.len().saturating_sub(shared)] {
+            element.flags.set(element.flags.get() | bit);'''
+
+[[mutant]]
+name = "the hover element stays with a subtree taken out"
+file = "crates/dom_next/src/user_action.rs"
+from = '''        if states & HOVERED != 0 {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "the active element stays with a subtree taken out"
+file = "crates/dom_next/src/user_action.rs"
+from = '''        if states & ACTIVE != 0 {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a subtree taken out keeps its states"
+file = "crates/dom_next/src/style.rs"
+from = '''            at.flags.set(at.flags.get() & !(CONNECTED | HOVERED | ACTIVE));'''
+to = '''            at.flags.set(at.flags.get() & !CONNECTED);'''
+
+[[mutant]]
+name = "the state isn't in the changes"
+file = "crates/dom_next/src/style.rs"
+from = '''        self.note_for_style(element, |changes| changes.states |= state);'''
+to = '''        self.note_for_style(element, |_| {});'''
+
+[[mutant]]
+name = "a change of state asks for no frame"
+file = "crates/dom_next/src/style.rs"
+from = '''    pub(crate) fn state_changed(&self, element: NodeRef<'gc>, state: u8) {
+        self.tree_changed();'''
+to = '''    pub(crate) fn state_changed(&self, element: NodeRef<'gc>, state: u8) {'''
+
+[[mutant]]
+name = ":hover never matches"
+file = "crates/style_next/src/selector.rs"
+from = '''            PseudoClass::Hover => self.cx.is_hovered(self.node),'''
+to = '''            PseudoClass::Hover => false,'''
+
+[[mutant]]
+name = ":active is :hover"
+file = "crates/style_next/src/selector.rs"
+from = '''            PseudoClass::Active => self.cx.is_active(self.node),'''
+to = '''            PseudoClass::Active => self.cx.is_hovered(self.node),'''
+
+[[mutant]]
+name = ":hover asked of an ancestor not a feature"
+file = "crates/style_next/src/rule_index.rs"
+from = '''                    self.states |= dom_next::AttributeChanges::HOVER;'''
+to = ''''''
+
+[[mutant]]
+name = "a state change never touches the subtree"
+file = "crates/style_next/src/rule_index.rs"
+from = '''            || changes.states & self.states != 0'''
+to = ''''''
+
+[[mutant]]
+name = "hover doesn't keep to the active chain"
+file = "crates/dom_api_next/src/input.rs"
+from = '''                (Some(element), Some(active)) => common_ancestor(cx, element, active),'''
+to = '''                (Some(element), Some(_)) => Some(element),'''
+
+[[mutant]]
+name = "a press makes nothing active"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            host.mutate(|cx| cx.set_active_element(document.get(cx.gc), Some(target.get(cx.gc))));'''
+to = ''''''
+
+[[mutant]]
+name = "a release keeps it active"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        if input.buttons == 0 {
+            host.mutate(|cx| cx.set_active_element(document.get(cx.gc), None));'''
+to = '''        if false {
+            host.mutate(|cx| cx.set_active_element(document.get(cx.gc), None));'''
+
+[[mutant]]
+name = "a click at where it went up"
+file = "crates/dom_api_next/src/input.rs"
+from = '''                host.mutate(|cx| common_ancestor(cx, pressed.get(cx.gc), released.get(cx.gc)).map(|node| cx.root(node)))'''
+to = '''                Some(released.clone())'''
+
+[[mutant]]
+name = "dblclick after every click"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            if primary && click_count == 2 {'''
+to = '''            if primary {'''
+
+[[mutant]]
+name = "the auxiliary button clicks"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            let primary = button == MouseButton::Primary;'''
+to = '''            let primary = button != MouseButton::Secondary;'''
+
+[[mutant]]
+name = "no contextmenu"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        if button == MouseButton::Secondary && CONTEXT_MENU_ON_PRESS {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "the move goes to a target taken out"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            Some((still, true)) => Some(still),'''
+to = '''            Some((_, true)) => Some(target),'''
+
+[[mutant]]
+name = "mouseout at a node taken out"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            (cx.is_connected(at) && Gc::ptr_eq(cx.document_of(at), document)).then(|| (node.clone(), index > 0))'''
+to = '''            (cx.is_connected(at) && Gc::ptr_eq(cx.document_of(at), document)).then(|| (node.clone(), false))'''
+
+[[mutant]]
+name = "boundary events for the same element"
+file = "crates/dom_api_next/src/input.rs"
+from = '''    if same && !removed {
+        return;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "the shared ancestors get mouseleave"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            .take_while(|(a, b)| Gc::ptr_eq(a.get(cx.gc), b.get(cx.gc)))'''
+to = '''            .take_while(|_| false)'''
+
+[[mutant]]
+name = "mouseenter child first"
+file = "crates/dom_api_next/src/input.rs"
+from = '''    for node in entered_ancestors[..came].iter().rev() {'''
+to = '''    for node in entered_ancestors[..came].iter() {'''
+
+[[mutant]]
+name = "no related target"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        let related = related.map(|related| TargetRef::Node(related.get(cx.gc)));'''
+to = '''        let related = related.and(None);'''
+
+[[mutant]]
+name = "the movement from where it first was"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        self.last_point = Some(input.point);'''
+to = '''        self.last_point = self.last_point.or(Some(input.point));'''
+
+[[mutant]]
+name = "mouseenter bubbles"
+file = "crates/dom_api_next/src/input.rs"
+from = '''    let boundary_only = matches!(event_type, "mouseenter" | "mouseleave");'''
+to = '''    let boundary_only = false;'''
+
+[[mutant]]
+name = "no checkpoint after an event"
+file = "crates/dom_api_next/src/input.rs"
+from = '''    host.perform_microtask_checkpoint();
+    not_canceled'''
+to = '''    not_canceled'''
+
+[[mutant]]
+name = "V8's checkpoint runs no microtask"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''        self.scope.scope().perform_microtask_checkpoint();'''
+to = ''''''
+
+[[mutant]]
+name = "nothing hit: nothing under the mouse"
+file = "crates/dom_api_next/src/geometry.rs"
+from = '''            None => document_element(cx, document),'''
+to = '''            None => None,'''
+
+[[mutant]]
+name = "the shift key is the control key"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''        (init.shiftKey, modifiers::SHIFT),'''
+to = '''        (init.shiftKey, modifiers::CTRL),'''
+
+[[mutant]]
+name = "getModifierState ignores case"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''        .any(|&(name, bit)| name == key && down & bit != 0))'''
+to = '''        .any(|&(name, bit)| name.eq_ignore_ascii_case(key) && down & bit != 0))'''
+
+[[mutant]]
+name = "which is the button"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''i32::from(cx.mouse_event_info(data).button).wrapping_add(1).cast_unsigned()'''
+to = '''i32::from(cx.mouse_event_info(data).button).cast_unsigned()'''
+
+[[mutant]]
+name = "offsetX from the border edge"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''            border_box.x + border[3] - scroll.x,'''
+to = '''            border_box.x - scroll.x,'''
+
+[[mutant]]
+name = "a short's modulo unsigned"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''    if signed && unsigned >= modulus / 2.0 {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a dictionary's double takes NaN"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        if !value.is_finite() {
+            front.throw(ApiError::type_error(format!(
+                "The provided double value for '{member}' is non-finite."'''
+to = '''        if false {
+            front.throw(ApiError::type_error(format!(
+                "The provided double value for '{member}' is non-finite."'''
+
+[[mutant]]
+name = "a UIEvent is a plain event"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''            } else if cx.is_ui_event(event) {'''
+to = '''            } else if false {'''
+
+[[mutant]]
+name = "input to the new DOM's document is stale"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let current = if self.next_dom {
+            self.next_frame_document_id()'''
+to = '''        let current = if false {
+            self.next_frame_document_id()'''
+
+[[mutant]]
+name = "the move waiting for the frame not the new DOM's"
+file = "crates/renderer/src/render_thread.rs"
+from = '''    fn dispatch_pending_mouse_move(&mut self, point: PointF, buttons: u16, modifiers: Modifiers) {
+        if self.next_dom {'''
+to = '''    fn dispatch_pending_mouse_move(&mut self, point: PointF, buttons: u16, modifiers: Modifiers) {
+        if false {'''
+
+[[mutant]]
+name = "no frame after input"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            modifiers: next_modifiers(modifiers),
+        });
+        self.request_next_frame_if_dom_changed();'''
+to = '''            modifiers: next_modifiers(modifiers),
+        });'''

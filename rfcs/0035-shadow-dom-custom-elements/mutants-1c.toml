@@ -1,0 +1,135 @@
+# Mutation test of step 1c (the event path through shadow roots,
+# retargeting, `composedPath()`, `relatedTarget`, `window.event`):
+# python3 scripts/test.py mutate rfcs/0035-shadow-dom-custom-elements/mutants-1c.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "shadow_dom"]
+timeout = 900
+
+[[mutant]]
+name = "nothing is retargeted"
+file = "crates/dom_api/src/shadow_root.rs"
+from = '''        if !root.is_shadow_root()
+            || b.is_some_and(|b| is_shadow_including_inclusive_ancestor(root, b))
+        {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "retargeting ignores what it is against"
+file = "crates/dom_api/src/shadow_root.rs"
+from = '''        if !root.is_shadow_root()
+            || b.is_some_and(|b| is_shadow_including_inclusive_ancestor(root, b))
+        {'''
+to = '''        if !root.is_shadow_root() {'''
+
+[[mutant]]
+name = "an uncomposed event leaves its shadow tree"
+file = "crates/dom_api/src/event.rs"
+from = '''        if !event.composed() && first_root == Some(node.id()) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a composed event stops at the shadow root"
+file = "crates/dom_api/src/event.rs"
+from = '''        if !event.composed() && first_root == Some(node.id()) {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "a host is in its shadow tree's tree"
+file = "crates/dom_api/src/event.rs"
+from = '''                (Object::Node(node), Object::Node(target)) => {
+                    is_shadow_including_inclusive_ancestor(
+                        tree_root(target.get(read)),
+                        node.get(read),
+                    )
+                }'''
+to = '''                (Object::Node(_), Object::Node(_)) => true,'''
+
+[[mutant]]
+name = "the path goes past its related target"
+file = "crates/dom_api/src/event.rs"
+from = '''            } else if related.as_ref() == Some(&object) {'''
+to = '''            } else if false {'''
+
+[[mutant]]
+name = "a target that is its related target gets a path"
+file = "crates/dom_api/src/event.rs"
+from = '''    if related.as_ref() != Some(target) || original_related.as_ref() == Some(target) {'''
+to = '''    if true {'''
+
+[[mutant]]
+name = "the targets aren't cleared"
+file = "crates/dom_api/src/event.rs"
+from = '''        if clear_targets {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "only a related target in a shadow tree clears them"
+file = "crates/dom_api/src/event.rs"
+from = '''            in_shadow_tree(&item.shadow_adjusted_target) || in_shadow_tree(&item.related_target)'''
+to = '''            in_shadow_tree(&item.related_target)'''
+
+[[mutant]]
+name = "every listener sees the first target"
+file = "crates/dom_api/src/event.rs"
+from = '''        let shown = path[..=index]
+            .iter()
+            .rev()'''
+to = '''        let shown = path[..=index]
+            .iter()'''
+
+[[mutant]]
+name = "the related target isn't retargeted for each item"
+file = "crates/dom_api/src/event.rs"
+from = '''        if let Some(related) = &item.related_target {
+            m.set_event_related_target(event, Some(target_of(related)));
+        }'''
+to = '''        let _ = &item.related_target;'''
+
+[[mutant]]
+name = "window.event is set in shadow trees"
+file = "crates/dom_api/src/event.rs"
+from = '''    if let Some(window) = &global
+        && !in_shadow_tree
+    {'''
+to = '''    if let Some(window) = &global {'''
+
+[[mutant]]
+name = "no node is in a shadow tree for window.event"
+file = "crates/dom_api/src/event.rs"
+from = '''                tree_root(node).is_shadow_root(),'''
+to = '''                false,'''
+
+[[mutant]]
+name = "no shadow root is closed for composedPath"
+file = "crates/dom_api/src/event.rs"
+from = '''                    .is_some_and(|init| init.mode == dom::ShadowRootMode::Closed),'''
+to = '''                    .is_some_and(|_| false),'''
+
+[[mutant]]
+name = "composedPath shows everything toward the target"
+file = "crates/dom_api/src/event.rs"
+from = '''        if level <= max_level {
+            composed.push_front('''
+to = '''        if true {
+            composed.push_front('''
+
+[[mutant]]
+name = "composedPath shows everything outward"
+file = "crates/dom_api/src/event.rs"
+from = '''        if level <= max_level {
+            composed.push_back('''
+to = '''        if true {
+            composed.push_back('''
+# Seen only once slots can take the path back into a closed tree.
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "slots::"]
+
+[[mutant]]
+name = "the activation target isn't looked for up the tree"
+file = "crates/dom_api/src/event.rs"
+from = '''                if is_activation && event.bubbles() && activation.is_none() {'''
+to = '''                if false {'''
+
+[[mutant]]
+name = "the activation target isn't looked for at a retargeted host"
+file = "crates/dom_api/src/event.rs"
+from = '''                if is_activation && activation.is_none() {'''
+to = '''                if false {'''

@@ -1,0 +1,172 @@
+# Stage 4f-5: on the new DOM, a number's and a range's `valueAsNumber`,
+# `stepUp()` and `stepDown()`; the URL and enumerated reflections; a
+# form's `relList` and an output's `htmlFor` (a `DOMTokenList` of any
+# attribute).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it form_values"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: a text input steps"
+file = "crates/dom_next/src/step_range.rs"
+from = '''        if !self.steps(element) {
+            return Err(StepError::NotSteppable);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: step any steps"
+file = "crates/dom_next/src/step_range.rs"
+from = '''        let step = range.step.ok_or(StepError::NoAllowedStep)?;'''
+to = '''        let step = range.step.unwrap_or(DEFAULT_STEP);'''
+
+[[mutant]]
+name = "dom: no value not 0"
+file = "crates/dom_next/src/step_range.rs"
+from = '''        let current = number(&self.input_value(element).to_str()).unwrap_or(0.0);
+        Ok(range.apply'''
+to = '''        let current = number(&self.input_value(element).to_str()).unwrap_or(1.0);
+        Ok(range.apply'''
+
+[[mutant]]
+name = "dom: a text input's number"
+file = "crates/dom_next/src/step_range.rs"
+from = '''        if !self.steps(element) {
+            return f64::NAN;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a range not steppable"
+file = "crates/dom_next/src/step_range.rs"
+from = '''        matches!(self.input_kind(element), Some(InputKind::Number | InputKind::Range))'''
+to = '''        matches!(self.input_kind(element), Some(InputKind::Number))'''
+
+[[mutant]]
+name = "api: an infinite valueAsNumber set"
+file = "crates/dom_api_next/src/forms.rs"
+from = '''    if value.is_infinite() {
+        return Err(ApiError::type_error("The value provided is infinite."));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a text input's valueAsNumber set"
+file = "crates/dom_api_next/src/forms.rs"
+from = '''    if !cx.steps(this) {
+        return Err(ApiError::Dom(crate::exception::DomException {'''
+to = '''    if false {
+        return Err(ApiError::Dom(crate::exception::DomException {'''
+
+[[mutant]]
+name = "api: NaN not empty"
+file = "crates/dom_api_next/src/forms.rs"
+from = '''    let value = if value.is_nan() { String::new() } else { dom_next::number_to_string(value) };'''
+to = '''    let value = dom_next::number_to_string(value);'''
+
+[[mutant]]
+name = "api: stepDown up"
+file = "crates/dom_api_next/src/forms.rs"
+from = '''    step(cx, this, -f64::from(n))'''
+to = '''    step(cx, this, f64::from(n))'''
+
+[[mutant]]
+name = "api: a submitter's method defaults"
+file = "crates/dom_api_next/src/forms.rs"
+from = '''enumerated!(form_method, FORMMETHOD, METHODS, None, "get");'''
+to = '''enumerated!(form_method, FORMMETHOD, METHODS, Some("get"), "get");'''
+
+[[mutant]]
+name = "api: a method's invalid one kept"
+file = "crates/dom_api_next/src/forms.rs"
+from = '''enumerated!(method, METHOD, METHODS, Some("get"), "get");'''
+to = '''enumerated!(method, METHOD, METHODS, Some("get"), "put");'''
+
+[[mutant]]
+name = "api: a URL not resolved"
+file = "crates/dom_api_next/src/reflect.rs"
+from = '''    Ok(DomStr::Owned(dom_next::DomString::new(&resolved.unwrap_or(value))))'''
+to = '''    let _ = resolved;
+    Ok(DomStr::Owned(dom_next::DomString::new(&value)))'''
+
+[[mutant]]
+name = "api: no src a URL"
+file = "crates/dom_api_next/src/reflect.rs"
+from = '''    let Some(value) = cx.attribute_value_by_id(this, N) else {
+        return Ok(DomStr::Name(names::NONE));
+    };
+    let value = value.borrow().to_str().into_owned();'''
+to = '''    let value = cx.attribute_value_by_id(this, N).map(|value| value.borrow().to_str().into_owned()).unwrap_or_default();'''
+
+[[mutant]]
+name = "api: an empty action not the document's"
+file = "crates/dom_api_next/src/reflect.rs"
+from = '''    if cx.attribute_value_by_id(this, N).is_none_or(|value| value.borrow().to_str().is_empty()) {'''
+to = '''    if cx.attribute_value_by_id(this, N).is_none() {'''
+
+[[mutant]]
+name = "api: an enumerated value's case"
+file = "crates/dom_api_next/src/reflect.rs"
+from = '''                .find(|keyword| keyword.eq_ignore_ascii_case(&value))'''
+to = '''                .find(|keyword| **keyword == value)'''
+
+[[mutant]]
+name = "api: an enumerated missing value its invalid one"
+file = "crates/dom_api_next/src/reflect.rs"
+from = '''        None => missing.unwrap_or(""),'''
+to = '''        None => missing.unwrap_or(invalid),'''
+
+[[mutant]]
+name = "api: stepUp(undefined) 0"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        if front.is_undefined(index) {
+            return Some(1);
+        }
+        front.i32_arg(index)'''
+to = '''        front.i32_arg(index)'''
+
+[[mutant]]
+name = "api: a token list's attribute class"
+file = "crates/dom_api_next/src/token_list.rs"
+from = '''    cx.token_list_attribute(this) == names::CLASS'''
+to = '''    true'''
+
+[[mutant]]
+name = "api: a token list's tokens twice"
+file = "crates/dom_api_next/src/token_list.rs"
+from = '''            if !token.is_empty() && !tokens.iter().any(|have| have == token) {'''
+to = '''            if !token.is_empty() {'''
+
+[[mutant]]
+name = "api: a token list's update the class"
+file = "crates/dom_api_next/src/token_list.rs"
+from = '''    cx.set_attribute_ns(element, QualName::local(&names::get(attribute)), &tokens.join(" "));'''
+to = '''    let _ = attribute;
+    cx.set_attribute_ns(element, QualName::local("class"), &tokens.join(" "));'''
+
+[[mutant]]
+name = "api: a token list's value the class"
+file = "crates/dom_api_next/src/token_list.rs"
+from = '''    Ok(crate::element::reflected(cx, element(cx, this), cx.token_list_attribute(this)))'''
+to = '''    Ok(crate::element::reflected(cx, element(cx, this), names::CLASS))'''
+
+[[mutant]]
+name = "api: a token list's set value the class"
+file = "crates/dom_api_next/src/token_list.rs"
+from = '''    cx.set_attribute_ns(element(cx, this), QualName::local(&names::get(cx.token_list_attribute(this))), value);'''
+to = '''    cx.set_attribute_ns(element(cx, this), QualName::local("class"), value);'''
+
+[[mutant]]
+name = "api: a token list's contains the class's"
+file = "crates/dom_api_next/src/token_list.rs"
+from = '''    if !is_class(cx, this) {
+        return Ok(parsed(cx, this).iter().any(|have| have == token));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a token list made each time"
+file = "crates/dom_next/src/lists.rs"
+from = '''        if let Some(list) = association.token_list.get(self.gc) {
+            return list;
+        }'''
+to = ''''''

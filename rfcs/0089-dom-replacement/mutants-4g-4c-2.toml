@@ -1,0 +1,137 @@
+# Stage 4g-4c-2: postMessage, MessageEvent, MessageChannel and MessagePort on the new DOM:
+# messages queued as tasks and delivered with structured clone (V8's ValueSerializer:
+# ports by place, ArrayBuffers transferred), targetOrigin, the incumbent's source and
+# origin, ports started, closed, shipped and kept alive by their window.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "sh", "-c", "cargo test -q -p dom_js_next --test it messages"]
+timeout = 900
+
+[[mutant]]
+name = "dom: start enables nothing"
+file = "crates/dom_next/src/message.rs"
+from = '''        data.state.set(state | ENABLED);'''
+to = '''        data.state.set(state);'''
+
+[[mutant]]
+name = "dom: close doesn't disentangle"
+file = "crates/dom_next/src/message.rs"
+from = '''        data.state.set(data.state.get() | CLOSED);
+        self.disentangle(port);'''
+to = '''        data.state.set(data.state.get() | CLOSED);'''
+
+[[mutant]]
+name = "dom: a closed port's other end drops its messages"
+file = "crates/dom_next/src/message.rs"
+from = '''        if data.entangled.get(self.gc).is_none() && !waiting {'''
+to = '''        if data.entangled.get(self.gc).is_none() {'''
+
+[[mutant]]
+name = "dom: a shipped port's queue left behind"
+file = "crates/dom_next/src/message.rs"
+from = '''        new.queue.set(self.gc, data.queue.get(self.gc));'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a shipped port's other end not entangled with its new one"
+file = "crates/dom_next/src/message.rs"
+from = '''        if let Some(other) = other {
+            self.entangle(shipped, other);
+        }'''
+to = '''        let _ = other;'''
+
+[[mutant]]
+name = "dom: received ports have no window"
+file = "crates/dom_next/src/message.rs"
+from = '''                data.owner.set(self.gc, Some(window));'''
+to = '''                let _ = window;'''
+
+[[mutant]]
+name = "dom: no message is waiting"
+file = "crates/dom_next/src/message.rs"
+from = '''        window.posted_messages.get(self.gc).is_some_and(|queue| queue.len() > 0)
+            ||'''
+to = '''        false &&'''
+
+[[mutant]]
+name = "api: a message to another origin delivered"
+file = "crates/dom_api_next/src/message.rs"
+from = '''        && crate::origin(cx, cx.window_document(this)).as_ref() != Some(target)'''
+to = '''        && false'''
+
+[[mutant]]
+name = "api: a target origin that isn't a URL any"
+file = "crates/dom_api_next/src/message.rs"
+from = '''                .map_err(|_| {'''
+to = '''                .or_else(|_| url::Url::parse("https://example.test")).map_err(|_: url::ParseError| {'''
+
+[[mutant]]
+name = "api: the ports transferred not shipped"
+file = "crates/dom_api_next/src/message.rs"
+from = '''    let ports: Vec<_> = message
+        .ports
+        .iter()
+        .map(|&port| cx.ship_message_port(port))
+        .collect();
+    let Some(payload) = message.payload.take() else {
+        return Ok(());
+    };'''
+to = '''    let ports: Vec<_> = message.ports.clone();
+    let Some(payload) = message.payload.take() else {
+        return Ok(());
+    };'''
+
+[[mutant]]
+name = "api: the source the current realm's"
+file = "crates/dom_api_next/src/message.rs"
+from = '''        front.prepare_incumbent_window();'''
+to = '''        front.prepare_window();'''
+
+[[mutant]]
+name = "api: a constructed event's data not stored"
+file = "crates/dom_api_next/src/message.rs"
+from = '''        op.store_any(cx, edge, data);'''
+to = '''        let _ = (edge, data);'''
+
+[[mutant]]
+name = "api: onmessage doesn't start"
+file = "crates/dom_api_next/src/handlers.rs"
+from = '''    set_handler(op, cx, TargetRef::EventTarget(this), T, value)?;
+    cx.start_message_port(this);'''
+to = '''    set_handler(op, cx, TargetRef::EventTarget(this), T, value)?;'''
+
+[[mutant]]
+name = "js: the source port transferred"
+file = "crates/dom_js_next/src/serialize.rs"
+from = '''        let problem = if source.is_some_and(|source| source.strict_equals(item)) {'''
+to = '''        let problem = if false {'''
+
+[[mutant]]
+name = "js: a buffer transferred twice"
+file = "crates/dom_js_next/src/serialize.rs"
+from = '''            if buffers.iter().any(|(_, other)| other.strict_equals(item)) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "js: a transferred buffer not detached"
+file = "crates/dom_js_next/src/serialize.rs"
+from = '''            buffer.detach(None);'''
+to = ''''''
+
+[[mutant]]
+name = "js: a shipped port transferred again"
+file = "crates/dom_js_next/src/serialize.rs"
+from = '''        if unusable {'''
+to = '''        if false && unusable {'''
+
+[[mutant]]
+name = "js: a port in the data not read as its place"
+file = "crates/dom_js_next/src/serialize.rs"
+from = '''        let port = self.ports.get(usize::try_from(place).ok()?)?;
+        Some(v8::Local::new(scope, port))'''
+to = '''        let _ = (&self.ports, place);
+        Some(v8::Object::new(scope))'''
+
+[[mutant]]
+name = "js: a transfer list that isn't a sequence taken as options"
+file = "crates/dom_js_next/src/serialize.rs"
+from = '''        TransferForm::Sequence => false,'''
+to = '''        TransferForm::Sequence => true,'''

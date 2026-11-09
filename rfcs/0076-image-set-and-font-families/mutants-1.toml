@@ -1,0 +1,178 @@
+# Stage 1: `image-set()`'s parsing, computing, serializing, the image it
+# shows, and the scale changing.
+timeout = 900
+
+[[mutant]]
+name = "the lowest resolution, not the lowest at least the scale"
+file = "crates/computed_style/src/lib.rs"
+from = '''new >= device_scale_factor && new < old'''
+to = '''new < old'''
+test = ["cargo", "test", "-q", "-p", "computed_style", "--lib", "an_image_set"]
+
+[[mutant]]
+name = "the last written of equal highest"
+file = "crates/computed_style/src/lib.rs"
+from = '''                        new > old
+'''
+to = '''                        new >= old
+'''
+test = ["cargo", "test", "-q", "-p", "computed_style", "--lib", "an_image_set"]
+
+[[mutant]]
+name = "every type supported"
+file = "crates/computed_style/src/lib.rs"
+from = '''            option.mime_type.as_deref().is_none_or(|mime| {'''
+to = '''            option.mime_type.as_deref().is_none_or(|_mime| true) || option.mime_type.as_deref().is_none_or(|mime| {'''
+test = ["cargo", "test", "-q", "-p", "computed_style", "--lib", "an_image_set"]
+
+[[mutant]]
+name = "types case-sensitive"
+file = "crates/computed_style/src/lib.rs"
+from = '''.any(|supported| mime.eq_ignore_ascii_case(supported))'''
+to = '''.any(|supported| mime == *supported)'''
+test = ["cargo", "test", "-q", "-p", "computed_style", "--lib", "an_image_set"]
+
+[[mutant]]
+name = "0dppx shown"
+file = "crates/computed_style/src/lib.rs"
+from = '''        best.filter(|option| option.resolution > 0.0)'''
+to = '''        best.filter(|option| option.resolution >= 0.0)'''
+test = ["cargo", "test", "-q", "-p", "computed_style", "--lib", "an_image_set"]
+
+[[mutant]]
+name = "the natural size not divided by the resolution"
+file = "crates/paint/src/background.rs"
+from = '''        width: natural.width.map(|w| w / resolution),'''
+to = '''        width: natural.width,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "network::an_image_set"]
+
+[[mutant]]
+name = "the style loads the 1x image"
+file = "crates/style/src/lib.rs"
+from = '''                    let scale = self.device_pixel_ratio.get();'''
+to = '''                    let scale = 1.0;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "network::an_image_set"]
+
+[[mutant]]
+name = "the first loads before the window's scale"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        self.take_device_scale_factor(window.1);
+'''
+to = '''
+'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "network::an_image_set"]
+
+[[mutant]]
+name = "a new scale loads nothing"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        if std::mem::take(&mut self.image_sets_unloaded) {'''
+to = '''        if std::mem::take(&mut self.image_sets_unloaded) && false {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "browser_view::a_new_scale_factor_shows"]
+
+[[mutant]]
+name = "a loaded image paints what shows it at 1x"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                        url.as_str(),
+                        self.device_scale_factor,'''
+to = '''                        url.as_str(),
+                        1.0,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "browser_view::a_new_scale_factor_shows"]
+
+[[mutant]]
+name = "a math function's negative resolution kept"
+file = "crates/css/src/background.rs"
+from = '''            .expect("a resolution unit")
+            .max(0.0)'''
+to = '''            .expect("a resolution unit")'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "image_set"]
+
+[[mutant]]
+name = "dpi as dppx"
+file = "crates/css/src/calc.rs"
+from = '''        "dpi" => value / 96.0,'''
+to = '''        "dpi" => value,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "image_set"]
+
+[[mutant]]
+name = "a resolution added to a length"
+file = "crates/css/src/calc.rs"
+from = '''            | (Resolution, _)
+            | (_, Resolution) => None,'''
+to = '''            | (Resolution, Resolution) => None,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "image_set"]
+
+[[mutant]]
+name = "no -webkit-image-set"
+file = "crates/css/src/background.rs"
+from = '''                    || name.eq_ignore_ascii_case("-webkit-image-set")'''
+to = '''                    || name.eq_ignore_ascii_case("-kun-image-set")'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "image_set"]
+
+[[mutant]]
+name = "an image-set in an image-set"
+file = "crates/css/src/background.rs"
+from = '''            if set
+                && (name'''
+to = '''            if (set || true)
+                && (name'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "image_set"]
+
+[[mutant]]
+name = "no string option"
+file = "crates/css/src/background.rs"
+from = '''        Ok(url) => SpecifiedImage::Url(CssUrlData::new(&url)),
+        Err(_) => parse_image_value(input, false)?,'''
+to = '''        Ok(_) => return invalid(input),
+        Err(_) => parse_image_value(input, false)?,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "image_set"]
+
+[[mutant]]
+name = "two resolutions"
+file = "crates/css/src/background.rs"
+from = '''        if resolution.is_none()
+            && let Ok(r)'''
+to = '''        if let Ok(r)'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "image_set"]
+
+[[mutant]]
+name = "two types"
+file = "crates/css/src/background.rs"
+from = '''        if mime_type.is_none()
+            && let Ok(t)'''
+to = '''        if let Ok(t)'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "image_set"]
+
+[[mutant]]
+name = "a cursor's image-set of gradients"
+file = "crates/css/src/cursor.rs"
+from = '''    if !image.is_urls() {'''
+to = '''    if false {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cssom::invalid_values"]
+
+[[mutant]]
+name = "the type not written"
+file = "crates/css/src/background.rs"
+from = '''                    option.resolution.to_css(dest);
+                    if let Some(mime_type) = &option.mime_type {
+                        type_to_css(mime_type, dest);
+                    }'''
+to = '''                    option.resolution.to_css(dest);'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "image_set"]
+
+[[mutant]]
+name = "a set's URLs not resolved"
+file = "crates/css/src/background.rs"
+from = '''            Self::Set(options) => Arc::make_mut(options)
+                .iter_mut()
+                .flat_map(|option| option.image.urls_mut())
+                .collect(),
+            Self::None | Self::Gradient(_) => Vec::new(),'''
+to = '''            Self::None | Self::Gradient(_) | Self::Set(_) => Vec::new(),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "an_image_sets_urls"]
+
+[[mutant]]
+name = "a set's unresolved URLs not seen"
+file = "crates/css/src/background.rs"
+from = '''            Self::Set(options) => options.iter().any(|o| o.image.has_unresolved_urls()),'''
+to = '''            Self::Set(_) => false,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "an_image_sets_urls"]

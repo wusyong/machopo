@@ -1,0 +1,100 @@
+# Mutation test of step 4b (SVG images in <img>, SVG's <style>):
+# python3 scripts/test.py mutate rfcs/0031-svg/mutants-4b.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "images::"]
+timeout = 900
+
+[[mutant]]
+name = "an SVG image's missing height doesn't come through its ratio"
+file = "crates/layout/src/replaced.rs"
+from = '''        let height = height.or_else(|| Some(width? / ratio?));'''
+to = '''        let height = height.or_else(|| None::<f32>.filter(|_| width.is_some()));'''
+
+[[mutant]]
+name = "an SVG image with one natural dimension fills the width"
+file = "crates/layout/src/replaced.rs"
+from = '''        self.natural_dimensions() == (None, None)'''
+to = '''        self.natural_size().is_none()'''
+
+[[mutant]]
+name = "an SVG image has no ratio"
+file = "crates/layout/src/replaced.rs"
+from = '''            .or_else(|| self.svg_image?.1.ratio)'''
+to = '''            .or_else(|| self.svg_image?.1.ratio.filter(|_| false))'''
+
+[[mutant]]
+name = "an SVG image has no default size"
+file = "crates/layout/src/replaced.rs"
+from = '''            default_size: svg_image.map(|_| DEFAULT_OBJECT_SIZE),'''
+to = '''            default_size: None,'''
+
+[[mutant]]
+name = "em is 10px in an SVG image"
+file = "crates/layout/src/svg.rs"
+from = '''    let font_size = root.computed_style().map_or(16.0, |style| style.font_size);'''
+to = '''    let font_size = 10.0;'''
+
+[[mutant]]
+name = "a percentage is a natural dimension"
+file = "crates/layout/src/svg.rs"
+from = '''        Some(LengthPercentage::Px(px)) => Some(px),'''
+to = '''        Some(LengthPercentage::Px(px) | LengthPercentage::Percent(px)) => Some(px),'''
+
+[[mutant]]
+name = "SVG images aren't taken for their MIME type"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            (PendingLoad::Image { .. }, Ok(response)) if response.mime_type == "image/svg+xml" => {'''
+to = '''            (PendingLoad::Image { .. }, Ok(response)) if response.mime_type == "image/svg+xml-not" => {'''
+
+[[mutant]]
+name = "a root out of the SVG namespace is an image"
+file = "crates/renderer/src/svg_image.rs"
+from = '''        if name.namespace.url() != Namespace::SVG || &*name.local != "svg" {'''
+to = '''        if &*name.local != "svg" {'''
+
+[[mutant]]
+name = "naturalHeight doesn't come through the ratio"
+file = "crates/renderer/src/svg_image.rs"
+from = '''        .or_else(|| Some(natural.width? / natural.ratio?));'''
+to = '''        .or_else(|| None::<f32>.filter(|_| natural.width.is_some()));'''
+
+[[mutant]]
+name = "an SVG image is laid out at its box's size"
+file = "crates/renderer/src/svg_image.rs"
+from = '''        SizeF::new(width.unwrap_or(size.width), height.unwrap_or(size.height))'''
+to = '''        let _ = (width, height);
+        size'''
+test = ["python3", "scripts/test.py", "reftest", "images/m7-svg.html"]
+
+[[mutant]]
+name = "a record isn't scaled to its box"
+file = "crates/raster/src/skia_backend.rs"
+from = '''            canvas.scale((dst.width / size.width, dst.height / size.height));'''
+to = '''            let _ = size;'''
+test = ["python3", "scripts/test.py", "reftest", "images/m7-svg.html"]
+
+[[mutant]]
+name = "SVG's style element isn't read"
+file = "crates/style/src/lib.rs"
+from = '''        if !(name.is_html("style") || name.is_svg("style")) || !is_css_type(node) {'''
+to = '''        if !name.is_html("style") || !is_css_type(node) {'''
+test = ["python3", "scripts/test.py", "reftest", "svg/style-element.html", "images/m7-svg.html"]
+
+[[mutant]]
+name = "picture skips SVG sources"
+file = "crates/dom_api/src/image.rs"
+from = '''    "image/svg+xml",'''
+to = '''    "image/svg+xml-not",'''
+
+[[mutant]]
+name = "the viewBox's ratio wins over width and height"
+file = "crates/layout/src/replaced.rs"
+from = '''        self.natural_size()
+            .filter(|s| s.width > 0.0 && s.height > 0.0)
+            .map(|s| s.width / s.height)
+            .or_else(|| self.svg.as_ref()?.ratio())
+            .or_else(|| self.svg_image?.1.ratio)'''
+to = '''        self.svg_image.and_then(|(_, n)| n.ratio)
+            .or(self.natural_size()
+            .filter(|s| s.width > 0.0 && s.height > 0.0)
+            .map(|s| s.width / s.height))
+            .or_else(|| self.svg.as_ref()?.ratio())'''

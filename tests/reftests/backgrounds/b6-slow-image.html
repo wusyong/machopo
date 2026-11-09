@@ -1,0 +1,9 @@
+<!DOCTYPE html>
+<title>Backgrounds 6: the window's load waits for a background's image, here sent a second late</title>
+<link rel="match" href="b6-slow-image-ref.html">
+<style>
+  html, body { margin: 0 }
+  div { width: 100px; height: 50px; background: url("/images/green.png?pipe=trickle(d1)") no-repeat }
+</style>
+<!-- The screenshot is taken once the window has loaded: the image is in it. -->
+<div></div>

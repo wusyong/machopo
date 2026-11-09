@@ -1,0 +1,295 @@
+# Stage 2c-2: a window's timers (made, cleared, run by the host, nested),
+# exceptions reported at a window as a cancelable ErrorEvent, and the
+# bindings' long, TimerHandler, rest arguments and any.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_next"]
+timeout = 900
+
+[[mutant]]
+name = "timer ids start at 0"
+file = "crates/dom_next/src/window.rs"
+from = '''.checked_add(1)
+            .expect("fewer than 2^31 timers a window");'''
+to = '''.checked_add(0)
+            .expect("fewer than 2^31 timers a window");'''
+
+[[mutant]]
+name = "a negative timeout stays negative"
+file = "crates/dom_next/src/window.rs"
+from = '''    let timeout = if timeout > 0.0 { timeout } else { 0.0 };'''
+to = '''    let timeout = if timeout.is_nan() { 0.0 } else { timeout };'''
+
+[[mutant]]
+name = "timers clamp from a nesting level of 5"
+file = "crates/dom_next/src/window.rs"
+from = '''    if running > 5 { timeout.max(4.0) } else { timeout }'''
+to = '''    if running >= 5 { timeout.max(4.0) } else { timeout }'''
+
+[[mutant]]
+name = "nested timers aren't clamped"
+file = "crates/dom_next/src/window.rs"
+from = '''    if running > 5 { timeout.max(4.0) } else { timeout }'''
+to = '''    { let _ = running; timeout }'''
+
+[[mutant]]
+name = "a new timer isn't nested deeper"
+file = "crates/dom_next/src/window.rs"
+from = '''                nesting: Cell::new(running.saturating_add(1)),'''
+to = '''                nesting: Cell::new(running),'''
+
+[[mutant]]
+name = "clearing a timer does nothing"
+file = "crates/dom_next/src/window.rs"
+from = '''        if let Some(index) = found {
+            timers.remove(self.gc, index);
+        }'''
+to = '''        let _ = found;'''
+
+[[mutant]]
+name = "a timer not yet due is taken"
+file = "crates/dom_next/src/window.rs"
+from = '''            if due > now {
+                continue;
+            }'''
+to = '''            let _ = now;'''
+
+[[mutant]]
+name = "of timers due at once the last made goes first"
+file = "crates/dom_next/src/window.rs"
+from = '''            if next.is_none_or(|(_, best)| due < best.due.get()) {'''
+to = '''            if next.is_none_or(|(_, best)| due <= best.due.get()) {'''
+
+[[mutant]]
+name = "an interval is taken out as a timeout"
+file = "crates/dom_next/src/window.rs"
+from = '''        match timer.interval.get() {
+            Some(interval) => {'''
+to = '''        match None::<f64> {
+            Some(interval) => {'''
+
+[[mutant]]
+name = "an interval is due again from when it was due"
+file = "crates/dom_next/src/window.rs"
+from = '''                timer.due.set(now + interval);'''
+to = '''                timer.due.set(timer.due.get() + interval);'''
+
+[[mutant]]
+name = "an interval isn't nested deeper"
+file = "crates/dom_next/src/window.rs"
+from = '''                timer.nesting.set(running.saturating_add(1));'''
+to = '''                timer.nesting.set(running);'''
+
+[[mutant]]
+name = "a timer runs at its next level"
+file = "crates/dom_next/src/window.rs"
+from = '''        Some((timer, running))'''
+to = '''        Some((timer, timer.nesting.get()))'''
+
+[[mutant]]
+name = "the next due is the last"
+file = "crates/dom_next/src/window.rs"
+from = '''            .reduce(f64::min)'''
+to = '''            .reduce(f64::max)'''
+
+[[mutant]]
+name = "reporting isn't remembered"
+file = "crates/dom_next/src/window.rs"
+from = '''        window.reporting.set(reporting);'''
+to = '''        let _ = reporting;'''
+
+[[mutant]]
+name = "an error event isn't cancelable"
+file = "crates/dom_next/src/event.rs"
+from = '''            EventFlags {
+                cancelable: true,
+                trusted: true,'''
+to = '''            EventFlags {
+                cancelable: false,
+                trusted: true,'''
+
+[[mutant]]
+name = "an error event has no data"
+file = "crates/dom_next/src/event.rs"
+from = '''        event.data.set(self.gc, Some(data.erase()));'''
+to = '''        let _ = data;'''
+
+[[mutant]]
+name = "a timer runs out of its level"
+file = "crates/dom_api_next/src/timer.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''            cx.set_timer_nesting(window, nesting);'''
+to = '''            let _ = nesting;'''
+
+[[mutant]]
+name = "the level stays after a timer"
+file = "crates/dom_api_next/src/timer.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        dom.borrow_mut()
+            .read(|cx| cx.set_timer_nesting(window.get(cx.gc), 0));'''
+to = '''        let _ = &dom;'''
+
+[[mutant]]
+name = "an exception while reporting is reported"
+file = "crates/dom_api_next/src/timer.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''        if cx.reporting(window) {
+            return None;
+        }'''
+to = '''        if false {
+            return None;
+        }'''
+
+[[mutant]]
+name = "a window stays reporting"
+file = "crates/dom_api_next/src/timer.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''    dom.borrow_mut()
+        .read(|cx| cx.set_reporting(window.get(cx.gc), false));'''
+to = '''    let _ = &window;'''
+
+[[mutant]]
+name = "canceled is not canceled"
+file = "crates/dom_api_next/src/timer.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''    if not_canceled {
+        Reported::NotCanceled
+    } else {
+        Reported::Canceled
+    }'''
+to = '''    if not_canceled {
+        Reported::Canceled
+    } else {
+        Reported::NotCanceled
+    }'''
+
+[[mutant]]
+name = "a timer's rest arguments aren't kept"
+file = "crates/dom_api_next/src/timer.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''    if let Some(arguments) = arguments {
+        front.store_rest(cx, cx.timer_arguments_edge(timer), arguments);
+    }'''
+to = '''    let _ = arguments;'''
+
+[[mutant]]
+name = "clearTimeout does nothing"
+file = "crates/dom_api_next/src/timer.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''    cx.remove_timer(this, id);'''
+to = '''    let _ = (this, id);'''
+
+[[mutant]]
+name = "setInterval doesn't repeat"
+file = "crates/dom_api_next/src/timer.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''    Ok(add(front, cx, this, (handler, arguments), timeout, true))'''
+to = '''    Ok(add(front, cx, this, (handler, arguments), timeout, false))'''
+
+[[mutant]]
+name = "an error event's interface is Event"
+file = "crates/dom_api_next/src/typed.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''            if cx.error_event_data(event).is_some() {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "lineno is colno"
+file = "crates/dom_api_next/src/event.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''    Ok(cx.error_info(error_data(cx, this)).lineno)'''
+to = '''    Ok(cx.error_info(error_data(cx, this)).colno)'''
+
+[[mutant]]
+name = "a handler may be any object"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        if let Ok(function) = v8::Local::<v8::Function>::try_from(value) {
+            assert!(self.callback.is_none(), "a member takes one callback");
+            self.callback = Some(function.into());
+            return Some(CallbackArg(0));
+        }'''
+to = '''        if let Ok(function) = v8::Local::<v8::Object>::try_from(value) {
+            assert!(self.callback.is_none(), "a member takes one callback");
+            self.callback = Some(function);
+            return Some(CallbackArg(0));
+        }'''
+
+[[mutant]]
+name = "the rest skip their first"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        let values: Vec<_> = (index..len).map(|index| arg(self.args, index)).collect();'''
+to = '''        let values: Vec<_> = (index.saturating_add(1)..len).map(|index| arg(self.args, index)).collect();'''
+
+[[mutant]]
+name = "any value is undefined"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''            Some(value) => self.rv.set(value),
+            None => self.rv.set_undefined(),'''
+to = '''            Some(_) => self.rv.set_undefined(),
+            None => self.rv.set_undefined(),'''
+
+[[mutant]]
+name = "a timeout's long is truncated to 0"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        arg(self.args, index).int32_value(self.scope)'''
+to = '''        arg(self.args, index).int32_value(self.scope).map(|_| 0)'''
+
+[[mutant]]
+name = "a timer's this is undefined"
+file = "crates/dom_js_next/src/listeners.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        if function.call(scope, this.into(), &arguments).is_none() {'''
+to = '''        if function.call(scope, v8::undefined(scope).into(), &arguments).is_none() {'''
+
+[[mutant]]
+name = "no microtask checkpoint after a timer"
+file = "crates/dom_js_next/src/listeners.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''    scope.perform_microtask_checkpoint();
+}'''
+to = '''}'''
+
+[[mutant]]
+name = "exceptions aren't fired at the window"
+file = "crates/dom_js_next/src/listeners.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''    let reported = match window {'''
+to = '''    let reported = match window.filter(|_| false) {'''
+
+[[mutant]]
+name = "the error isn't stored"
+file = "crates/dom_js_next/src/listeners.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''            |host, _, edge| bindings::set_strong_value(host.scope, edge, exception),'''
+to = '''            |_, _, _| { let _ = exception; },'''
+
+[[mutant]]
+name = "colno is 0-based"
+file = "crates/dom_js_next/src/listeners.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''                .map_or(0, |column| column.saturating_add(1)),'''
+to = '''                .map_or(0, |column| column),'''
+
+[[mutant]]
+name = "a canceled exception is logged"
+file = "crates/dom_js_next/src/listeners.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''    if reported != Reported::Canceled {'''
+to = '''    if { let _ = reported; true } {'''
+
+[[mutant]]
+name = "a listener's exception is reported at the callback"
+file = "crates/dom_js_next/src/listeners.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        report_caught(scope, state, dom, ReportAt::RealmOf(callback));'''
+to = '''        report_caught(scope, state, dom, ReportAt::Global(callback));'''
+[[mutant]]
+name = "a target's one listener isn't invoked"
+file = "crates/dom_api_next/src/event_target.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+from = '''    if count > 0 {
+        invoke_listeners(host, dom, event, count, capture);'''
+to = '''    if count > 1 {
+        invoke_listeners(host, dom, event, count, capture);'''

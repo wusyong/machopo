@@ -1,0 +1,18 @@
+<!doctype html>
+<script>
+const log = [];
+function run() {
+  return new Promise(done => {
+    onerror = () => { log.push("error"); queueMicrotask(() => log.push("error:m")); };
+    const { port1, port2 } = new MessageChannel();
+    port1.addEventListener("message", () => { queueMicrotask(() => log.push("a:m")); log.push("a"); throw 1; });
+    port1.addEventListener("message", () => log.push("b"));
+    port1.start();
+    port2.postMessage(0);
+    // A timer callback that throws, then a rAF that throws.
+    setTimeout(() => { queueMicrotask(() => log.push("t:m")); throw 2; }, 50);
+    // Custom element constructors from the parser.
+    setTimeout(() => done(log.join(" ")), 300);
+  });
+}
+</script>

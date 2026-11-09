@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>A random number of items</title>
+<script>
+  // Between 1 and 1000 items: a different document each iteration.
+  window.tests = [
+    {
+      name: "AddingSome",
+      run(doc) {
+        const count = 1 + Math.floor(Math.random() * 1000);
+        for (let i = 0; i < count; i++) doc.body.append(doc.createElement("p"));
+      },
+    },
+  ];
+</script>

@@ -1,0 +1,143 @@
+# Stage 2: the window's named properties object and its getter.
+test = ["sh", "-c", "cargo test -q -p dom_js --test it -- window_named iframes::a_child_browsing bindings::interface_objects_and_prototype_chains && cargo test -q -p dom --test it tree_scopes"]
+timeout = 900
+
+# --- dom: the names ---
+
+[[mutant]]
+name = "an iframe's name not kept"
+file = "crates/dom/src/scope.rs"
+from = '''    } else if is_iframe(node) {
+        Table::Frames'''
+to = '''    } else if is_iframe(node) && false {
+        Table::Frames'''
+
+[[mutant]]
+name = "an iframe's name change not followed"
+file = "crates/dom/src/scope.rs"
+from = '''                && (is_named_element(element) || is_iframe(element));'''
+to = '''                && is_named_element(element);'''
+
+[[mutant]]
+name = "elements before a child browsing context"
+file = "crates/dom/src/scope.rs"
+from = '''        let found = match frame {
+            Some(iframe) => WindowNamed::Frame(iframe),'''
+to = '''        let found = match frame.filter(|_| false) {
+            Some(iframe) => WindowNamed::Frame(iframe),'''
+
+[[mutant]]
+name = "an iframe without a document is a frame"
+file = "crates/dom/src/scope.rs"
+from = '''        let has_content = |iframe: NodeRef<'_>| {
+            self.frames.content_documents.contains_key(&iframe.id())
+        };'''
+to = '''        let has_content = |iframe: NodeRef<'_>| {
+            self.frames.content_documents.contains_key(&iframe.id()) || true
+        };'''
+
+[[mutant]]
+name = "an element by id and by name counts twice"
+file = "crates/dom/src/scope.rs"
+from = '''                    (Found::One(a), Found::One(b)) if a == b => {'''
+to = '''                    (Found::One(a), Found::One(b)) if a == b && false => {'''
+
+[[mutant]]
+name = "only an element by id"
+file = "crates/dom/src/scope.rs"
+from = '''                    (Found::One(one), Found::None) | (Found::None, Found::One(one)) => {'''
+to = '''                    (Found::One(one), Found::None) => {'''
+
+# --- dom_api: the getter ---
+
+[[mutant]]
+name = "the collection's ids HTML only"
+file = "crates/dom_api/src/collection.rs"
+from = '''            element.id_for_style().as_deref() == Some(&**wanted)
+                || ["embed", "form", "img", "object"]'''
+to = '''            name.namespace().is_html() && element.id_for_style().as_deref() == Some(&**wanted)
+                || ["embed", "form", "img", "object"]'''
+
+[[mutant]]
+name = "the collection without names"
+file = "crates/dom_api/src/collection.rs"
+from = '''                    .any(|tag| name.namespace().is_html() && name.local().as_str() == *tag)
+                    && element.attr_ref(&local_name!("name")).as_deref() == Some(&**wanted)'''
+to = '''                    .any(|tag| name.namespace().is_html() && name.local().as_str() == *tag)
+                    && false'''
+
+[[mutant]]
+name = "one left still a collection"
+file = "crates/dom_api/src/window.rs"
+from = '''        1 => crate::collection::item(cx, &collection, 0)'''
+to = '''        9 => crate::collection::item(cx, &collection, 0)'''
+
+[[mutant]]
+name = "a frame's iframe, not its window"
+file = "crates/dom_api/src/window.rs"
+from = '''                let child = read.content_document(&iframe.to_handle())?;
+                return read.document_window(child.as_node()).map(Object::Window);'''
+to = '''                return Some(Object::Node(iframe.to_handle()));'''
+
+[[mutant]]
+name = "no iframe name member"
+file = "crates/dom_api/src/html_element.rs"
+from = '''pub fn set_iframe_name(
+    cx: &mut dyn ScriptHost,
+    this: &NodeHandle,
+    value: DomString,
+) -> Result<(), DomException> {
+    set_reflected(cx, this, &local_name!("name"), value)'''
+to = '''pub fn set_iframe_name(
+    cx: &mut dyn ScriptHost,
+    this: &NodeHandle,
+    value: DomString,
+) -> Result<(), DomException> {
+    let _ = (cx, this, value);
+    Ok(())'''
+
+# --- dom_js: the named properties object ---
+
+[[mutant]]
+name = "not under Window.prototype"
+file = "crates/dom_js/src/window_properties.rs"
+from = '''    window_prototype.set_prototype(scope, object.into());'''
+to = '''    let _ = object;'''
+
+[[mutant]]
+name = "a masking interceptor"
+file = "crates/dom_js/src/window_properties.rs"
+from = '''                v8::PropertyHandlerFlags::NON_MASKING
+                    | v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS,'''
+to = '''                v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS,'''
+
+[[mutant]]
+name = "no class string"
+file = "crates/dom_js/src/window_properties.rs"
+from = '''    let name = crate::templates::string(scope, "WindowProperties");'''
+to = '''    let name = crate::templates::string(scope, "Object");'''
+
+[[mutant]]
+name = "defining on it allowed"
+file = "crates/dom_js/src/window_properties.rs"
+from = '''            .getter(getter)
+            .definer(definer)'''
+to = '''            .getter(getter)'''
+
+[[mutant]]
+name = "deleting a named property succeeds"
+file = "crates/dom_js/src/window_properties.rs"
+from = '''        Some(_) => {
+            rv.set_bool(false);
+            v8::Intercepted::kYes
+        }
+        None => v8::Intercepted::kNo,
+    }
+}'''
+to = '''        Some(_) => {
+            rv.set_bool(true);
+            v8::Intercepted::kYes
+        }
+        None => v8::Intercepted::kNo,
+    }
+}'''

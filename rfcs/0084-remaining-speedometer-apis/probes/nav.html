@@ -1,0 +1,29 @@
+<!doctype html>
+<p>nav</p>
+<script>
+const early = performance.getEntriesByType('navigation')[0];
+const earlyVals = early ? ['domInteractive','domContentLoadedEventStart','domComplete','loadEventStart','loadEventEnd','duration','responseEnd'].map(k => `${k}=${early[k]}`).join(' ') : 'none';
+function run() {
+  return new Promise(done => setTimeout(() => {
+    const e = performance.getEntriesByType('navigation')[0];
+    const out = ['early ' + earlyVals, 'same ' + (e === early)];
+    out.push('proto chain ' + [Object.getPrototypeOf(e), Object.getPrototypeOf(Object.getPrototypeOf(e)), Object.getPrototypeOf(Object.getPrototypeOf(Object.getPrototypeOf(e)))].map(p => p.constructor.name).join(' > '));
+    out.push('nav own ' + Object.getOwnPropertyNames(PerformanceNavigationTiming.prototype).join(','));
+    out.push('res own ' + Object.getOwnPropertyNames(PerformanceResourceTiming.prototype).join(','));
+    const j = e.toJSON();
+    for (const k of Object.keys(j)) {
+      const v = e[k];
+      out.push(`${k}: ${typeof v} ${typeof v === 'object' && v !== null ? JSON.stringify(v) + ' ' + Object.prototype.toString.call(v) : (typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(1)) : JSON.stringify(v))}`);
+    }
+    out.push('serverTiming frozen ' + Object.isFrozen(e.serverTiming) + ' same ' + (e.serverTiming === e.serverTiming));
+    out.push('confidence ' + (e.confidence && Object.getOwnPropertyNames(Object.getPrototypeOf(e.confidence)).join(',')) + ' same ' + (e.confidence === e.confidence));
+    const t = performance.timing, n = performance.navigation;
+    out.push('timing proto ' + Object.getOwnPropertyNames(PerformanceTiming.prototype).join(','));
+    out.push('timing ' + Object.getOwnPropertyNames(PerformanceTiming.prototype).filter(k => k !== 'constructor' && k !== 'toJSON').map(k => `${k}=${t[k] ? t[k] - t.navigationStart : 0}`).join(' '));
+    out.push('navigation ' + Object.getOwnPropertyNames(PerformanceNavigation.prototype).join(',') + ' ' + n.type + ' ' + n.redirectCount + ' ' + [n.TYPE_NAVIGATE, n.TYPE_RELOAD, n.TYPE_BACK_FORWARD, n.TYPE_RESERVED].join());
+    out.push('timing same ' + (performance.timing === performance.timing) + ' nav same ' + (performance.navigation === performance.navigation));
+    out.push('perf own ' + Object.getOwnPropertyNames(Performance.prototype).join(','));
+    done(out.join('\n'));
+  }, 300));
+}
+</script>

@@ -1,0 +1,251 @@
+# Mutation test of 1a: response bodies as `Bytes`, load timing, and loads
+# that wait at redirects (in `net`, through the IO thread and the
+# renderer, and for navigations on the UI thread):
+# python3 scripts/test.py mutate rfcs/0082-devtools-network/mutants-1a.toml
+test = ["cargo", "test", "-q", "-p", "net"]
+timeout = 600
+
+# Bodies as `Bytes`.
+
+[[mutant]]
+name = "a whole blob's body is empty"
+file = "crates/net/src/blob.rs"
+from = '''None => (200, "OK", bytes.clone(), None),'''
+to = '''None => (200, "OK", Bytes::new(), None),'''
+
+[[mutant]]
+name = "a blob's range loses its last byte"
+file = "crates/net/src/blob.rs"
+from = '''let body = bytes.slice(start as usize..=end as usize);'''
+to = '''let body = bytes.slice(start as usize..end as usize);'''
+
+[[mutant]]
+name = "a shared image has no bytes"
+file = "crates/gfx/src/lib.rs"
+from = '''    pub fn shared(bytes: impl AsRef<[u8]> + Send + Sync + 'static) -> Self {
+        Self {
+            bytes: Arc::new(bytes),'''
+to = '''    pub fn shared(bytes: impl AsRef<[u8]> + Send + Sync + 'static) -> Self {
+        let _ = bytes;
+        Self {
+            bytes: Arc::new(Vec::<u8>::new()),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::a_new_scale_factor_shows_an_image_sets_image_for_it"]
+
+[[mutant]]
+name = "a wasm script's bytes are lost"
+file = "crates/renderer/src/frame_view.rs"
+from = '''    Some(response.body.into())
+}'''
+to = '''    let _ = response;
+    Some(Vec::new())
+}'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "wasm_scripts::"]
+
+[[mutant]]
+name = "fetch()'s body is lost"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    body: response.body.into(),'''
+to = '''                    body: Vec::new(),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "fetch::"]
+
+# Timing.
+
+[[mutant]]
+name = "resolving isn't recorded"
+file = "crates/net/src/http.rs"
+from = '''            record(|connecting| connecting.dns = Some((start, end)));'''
+to = '''            let _ = (start, end);'''
+
+[[mutant]]
+name = "connecting isn't recorded"
+file = "crates/net/src/http.rs"
+from = '''            record(|connecting| connecting.connect = Some((start, end)));'''
+to = '''            let _ = (start, end);'''
+
+[[mutant]]
+name = "a lookup without a connection counts"
+file = "crates/net/src/http.rs"
+from = '''    let Some((connect_start, connect_end)) = connecting.connect else {
+        return (None, None);
+    };'''
+to = '''    let Some((connect_start, connect_end)) = connecting.connect else {
+        return (
+            connecting.dns.map(|(start, end)| TimeSpan {
+                start: origin.since(start),
+                end: origin.since(end),
+            }),
+            None,
+        );
+    };'''
+
+[[mutant]]
+name = "connecting is timed from its start, lookup and all"
+file = "crates/net/src/http.rs"
+from = '''    let start = connecting.dns.map_or(connect_start, |(_, end)| end);'''
+to = '''    let start = connect_start;'''
+
+[[mutant]]
+name = "the request starts at the origin"
+file = "crates/net/src/http.rs"
+from = '''            request_start: self.origin.since(request_start),'''
+to = '''            request_start: Duration::ZERO,'''
+
+[[mutant]]
+name = "the head comes when the request starts"
+file = "crates/net/src/http.rs"
+from = '''            receive_headers_end: self.origin.since(receive_headers_end),'''
+to = '''            receive_headers_end: self.origin.since(request_start),'''
+
+[[mutant]]
+name = "the body ends when the head came"
+file = "crates/net/src/http.rs"
+from = '''            response_end: self.origin.since(Instant::now()),'''
+to = '''            response_end: self.origin.since(receive_headers_end),'''
+
+[[mutant]]
+name = "no remote address"
+file = "crates/net/src/http.rs"
+from = '''        let remote_address = response.remote_addr();'''
+to = '''        let remote_address = None;'''
+
+[[mutant]]
+name = "no protocol"
+file = "crates/net/src/url_loader.rs"
+from = '''        protocol: raw.protocol.to_owned(),'''
+to = '''        protocol: String::new(),'''
+
+[[mutant]]
+name = "a local load's head comes when it starts"
+file = "crates/net/src/url_loader.rs"
+from = '''        receive_headers_end: end,'''
+to = '''        receive_headers_end: start,'''
+
+[[mutant]]
+name = "a data: URL isn't timed"
+file = "crates/net/src/url_loader.rs"
+from = '''        "data" => return head(local(data::load(&url))),'''
+to = '''        "data" => return head(data::load(&url)),'''
+
+[[mutant]]
+name = "a blob URL isn't timed"
+file = "crates/net/src/lib.rs"
+from = '''            response.timing = url_loader::local_timing(start, self.origin);'''
+to = '''            let _ = start;'''
+
+[[mutant]]
+name = "the browser's time origin is ignored"
+file = "crates/net/src/lib.rs"
+from = '''        let origin = TimeOrigin(params.time_origin.unwrap_or_else(Instant::now));'''
+to = '''        let origin = TimeOrigin(Instant::now());'''
+
+# Waiting at redirects, in `net`.
+
+[[mutant]]
+name = "a load doesn't wait at redirects"
+file = "crates/net/src/url_loader.rs"
+from = '''                if let Some(redirects) = &mut redirects {'''
+to = '''                if let Some(redirects) = redirects.as_mut().filter(|_| false) {'''
+
+[[mutant]]
+name = "following doesn't let the load go"
+file = "crates/net/src/lib.rs"
+from = '''        if let Some(follow) = follow {
+            let _ = follow.send(());
+        }'''
+to = '''        if let Some(follow) = follow {
+            self.state.lock().expect("a load's state").follow = Some(follow);
+        }'''
+timeout = 300
+
+[[mutant]]
+name = "the next request's method is the first's"
+file = "crates/net/src/url_loader.rs"
+from = '''                            new_method: method.clone(),'''
+to = '''                            new_method: request.method.clone(),'''
+
+[[mutant]]
+name = "a redirect keeps its body"
+file = "crates/net/src/url_loader.rs"
+from = '''                    let mut response = finish(url.clone(), raw, hops > 0);
+                    response.body.clear();'''
+to = '''                    let response = finish(url.clone(), raw, hops > 0);'''
+
+[[mutant]]
+name = "a load that follows by itself waits at redirects"
+file = "crates/net/src/lib.rs"
+from = '''        self.start_load(request, None, Box::new(done))'''
+to = '''        self.start_load(request, Some(Box::new(|_| {})), Box::new(done))'''
+timeout = 300
+
+# Through the IO thread and the renderer.
+
+[[mutant]]
+name = "the IO thread doesn't follow"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                                    load.follow_redirect();'''
+to = '''                                    let _ = load;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "fetch::"]
+timeout = 300
+
+[[mutant]]
+name = "the IO thread follows without the renderer"
+file = "crates/browser/src/render_process_host.rs"
+from = '''    let redirected = to_renderer.clone();
+    let load = network.fetch_with_redirects(
+        request,
+        move |redirect| {
+            let _ = redirected.send(RendererMsg::ReceivedRedirect {
+                request_id,
+                redirect,
+            });
+        },
+        move |result| {'''
+to = '''    let load = network.fetch(
+        request,
+        move |result| {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "fetch::a_redirect_waits_for_the_renderer"]
+
+[[mutant]]
+name = "the renderer doesn't answer a redirect"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            .send(RendererHostMsg::FollowRedirect { request_id });'''
+to = '''            .send(RendererHostMsg::CancelResource { request_id });'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "fetch::"]
+timeout = 300
+
+# Navigations, on the UI thread.
+
+[[mutant]]
+name = "the tab doesn't follow a navigation's redirect"
+file = "crates/browser/src/web_contents.rs"
+from = '''            load.follow_redirect();
+        }
+    }'''
+to = '''            let _ = load;
+        }
+    }'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "redirect"]
+timeout = 300
+
+[[mutant]]
+name = "the tab follows a replaced navigation's redirect"
+file = "crates/browser/src/web_contents.rs"
+from = '''            && *id == navigation_id'''
+to = '''            && *id != 0'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "redirect"]
+
+[[mutant]]
+name = "the view doesn't hand its tab a redirect"
+file = "crates/shell/src/browser_view.rs"
+from = '''            contents.on_navigation_redirected(navigation_id, redirect);'''
+to = '''            let _ = (contents, navigation_id, redirect);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::a_navigation_through_a_redirect"]
+timeout = 300
+
+[[mutant]]
+name = "headless doesn't hand its tab a redirect"
+file = "crates/shell/src/headless.rs"
+from = '''                web_contents.on_navigation_redirected(navigation_id, &redirect);'''
+to = '''                let _ = (navigation_id, redirect);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "network::a_page_reached_through_a_redirect"]
+timeout = 300

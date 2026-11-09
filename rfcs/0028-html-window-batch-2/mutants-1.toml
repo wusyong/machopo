@@ -1,0 +1,260 @@
+# Mutation test of stage 1 (console):
+# python3 scripts/test.py mutate rfcs/0028-html-window-batch-2/mutants-1.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "console"]
+timeout = 900
+
+# --- dom ---------------------------------------------------------------
+
+[[mutant]]
+name = "count doesn't count"
+file = "crates/dom/src/console.rs"
+from = '''        *count += 1;'''
+to = ''''''
+
+[[mutant]]
+name = "countReset of a label never counted is quiet"
+file = "crates/dom/src/console.rs"
+from = '''            None => false,'''
+to = '''            None => true,'''
+
+[[mutant]]
+name = "time restarts a running timer"
+file = "crates/dom/src/console.rs"
+from = '''        if timers.contains_key(label) {
+            return false;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "timeEnd doesn't stop the timer"
+file = "crates/dom/src/console.rs"
+from = '''            timers.remove(label)'''
+to = '''            timers.get(label).copied()'''
+
+# --- dom_api -----------------------------------------------------------
+
+[[mutant]]
+name = "no arguments print an empty line"
+file = "crates/dom_api/src/console.rs"
+from = '''    if !data.is_empty() {
+        let message = text(cx, &data);'''
+to = '''    if true {
+        let message = text(cx, &data);'''
+
+[[mutant]]
+name = "an assertion that holds prints"
+file = "crates/dom_api/src/console.rs"
+from = '''    if !condition {'''
+to = '''    if condition {'''
+
+[[mutant]]
+name = "no arguments print nothing for group"
+file = "crates/dom_api/src/console.rs"
+from = '''        name.to_owned()'''
+to = '''        String::new()'''
+
+[[mutant]]
+name = "undefined is written as nothing"
+file = "crates/dom_api/src/console.rs"
+from = '''            None => "undefined".to_owned(),'''
+to = '''            None => String::new(),'''
+
+[[mutant]]
+name = "count without the label"
+file = "crates/dom_api/src/console.rs"
+from = '''    print(cx, window, ConsoleLevel::Info, &format!("{label}: {count}"));'''
+to = '''    print(cx, window, ConsoleLevel::Info, &format!("{count}"));'''
+
+[[mutant]]
+name = "timeLog drops its data"
+file = "crates/dom_api/src/console.rs"
+from = '''    if !data.is_empty() {
+        message.push(' ');'''
+to = '''    if false {
+        message.push(' ');'''
+
+[[mutant]]
+name = "timeEnd doesn't end"
+file = "crates/dom_api/src/console.rs"
+from = '''    time_message(cx, window, &label, &Vec::new(), true);'''
+to = '''    time_message(cx, window, &label, &Vec::new(), false);'''
+
+[[mutant]]
+name = "a timer's time is the clock's"
+file = "crates/dom_api/src/console.rs"
+from = '''number_to_string(now - start)'''
+to = '''number_to_string(now)'''
+
+[[mutant]]
+name = "the timer starts at 0"
+file = "crates/dom_api/src/console.rs"
+from = '''    if !cx.mutate().console_time(window, label.as_str(), now) {'''
+to = '''    if !cx.mutate().console_time(window, label.as_str(), now * 0.0) {'''
+
+[[mutant]]
+name = "console is in kun:dom"
+file = "crates/dom_api/src/declare.rs"
+from = '''    (@exposure JsOnly) => { $crate::Exposure::Js };'''
+to = '''    (@exposure JsOnly) => { $crate::Exposure::Both };'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "wit"]
+
+[[mutant]]
+name = "the spec test ignores a namespace's differences"
+file = "crates/dom_api/tests/spec.rs"
+from = '''                    differences.insert(key, format!("{shape}, not in the IDL's {name}"));
+                }
+                Some(spec_shape) if *spec_shape != shape => {'''
+to = '''                    let _ = (key, shape);
+                }
+                Some(spec_shape) if *spec_shape != shape => {'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "spec"]
+
+[[mutant]]
+name = "the spec test ignores what a namespace lacks"
+file = "crates/dom_api/tests/spec.rs"
+from = '''            if !table.contains_key(key) {
+                missing.insert(key.clone());'''
+to = '''            if !table.contains_key(key) {
+                let _ = &missing;'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "spec"]
+
+[[mutant]]
+name = "the WebIDL reader skips namespaces"
+file = "crates/dom_api/tests/webidl/mod.rs"
+from = '''                idl.namespaces.entry(name).or_default().extend(members);'''
+to = '''                let _ = (name, members);'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "spec"]
+
+# --- dom_js ------------------------------------------------------------
+
+[[mutant]]
+name = "a symbol is written without Symbol"
+file = "crates/dom_js/src/console.rs"
+from = '''        out.push_str("Symbol(");'''
+to = '''        out.push('(');'''
+
+[[mutant]]
+name = "a BigInt without n"
+file = "crates/dom_js/src/console.rs"
+from = '''        out.push('n');'''
+to = ''''''
+
+[[mutant]]
+name = "an array's null and undefined are written"
+file = "crates/dom_js/src/console.rs"
+from = '''                && !element.is_null_or_undefined()'''
+to = ''''''
+
+[[mutant]]
+name = "a cyclic array is followed"
+file = "crates/dom_js/src/console.rs"
+from = '''        if arrays.iter().any(|a| a.strict_equals(array.into())) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "an object is written by its toString"
+file = "crates/dom_js/src/console.rs"
+from = '''    } else if value.is_object()
+        && !value.is_function()'''
+to = '''    } else if false
+        && !value.is_function()'''
+
+[[mutant]]
+name = "an error is written as an object"
+file = "crates/dom_js/src/console.rs"
+from = '''        && !value.is_native_error()'''
+to = ''''''
+
+[[mutant]]
+name = "an object is Object whatever its constructor"
+file = "crates/dom_js/src/console.rs"
+from = '''        .map(|object| object.get_constructor_name().to_rust_string_lossy(scope))'''
+to = '''        .map(|_| "Object".to_owned())'''
+
+[[mutant]]
+name = "the namespace object's prototype is Object.prototype"
+file = "crates/dom_js/src/templates.rs"
+from = '''    object.set_prototype(scope, prototype.into());'''
+to = '''    let _ = prototype;'''
+
+[[mutant]]
+name = "the class string is writable"
+file = "crates/dom_js/src/templates.rs"
+from = '''            v8::PropertyAttribute::READ_ONLY | v8::PropertyAttribute::DONT_ENUM,
+        );
+        namespaces.push'''
+to = '''            v8::PropertyAttribute::NONE,
+        );
+        namespaces.push'''
+
+[[mutant]]
+name = "console is enumerable"
+file = "crates/dom_js/src/lib.rs"
+from = '''            let object = templates::namespace(scope, index);
+            let name = templates::string(scope, namespace.name);
+            global.define_own_property(
+                scope,
+                name.into(),
+                object.into(),
+                v8::PropertyAttribute::DONT_ENUM,'''
+to = '''            let object = templates::namespace(scope, index);
+            let name = templates::string(scope, namespace.name);
+            global.define_own_property(
+                scope,
+                name.into(),
+                object.into(),
+                v8::PropertyAttribute::NONE,'''
+
+[[mutant]]
+name = "a namespace's member decodes as the one before it"
+file = "crates/dom_js/src/templates.rs"
+from = '''        None => &NAMESPACES[index - INTERFACES.len()].members[member],'''
+to = '''        None => &NAMESPACES[index - INTERFACES.len()].members[member.saturating_sub(1)],'''
+
+# --- renderer ----------------------------------------------------------
+
+[[mutant]]
+name = "the renderer drops console messages"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        eprintln!("[console] {message}");'''
+to = '''        let _ = message;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "automation_pipe", "the_pages_output_stays_off_the_pipe"]
+
+# --- The inspector's limits (found by wptrunner's run of `console/`) ------------
+
+[[mutant]]
+name = "no limit on array elements"
+file = "crates/dom_js/src/console.rs"
+from = '''        if length > *items || arrays.len() > MAX_DEPTH {'''
+to = '''        if arrays.len() > MAX_DEPTH {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "console"]
+
+[[mutant]]
+name = "the element limit is per array"
+file = "crates/dom_js/src/console.rs"
+from = '''        *items -= length;'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "console"]
+
+[[mutant]]
+name = "too deep leaves out the rest"
+file = "crates/dom_js/src/console.rs"
+from = '''        if length > *items || arrays.len() > MAX_DEPTH {
+            return false;
+        }'''
+to = '''        if arrays.len() > MAX_DEPTH {
+            return true;
+        }
+        if length > *items {
+            return false;
+        }'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "console"]
+
+[[mutant]]
+name = "an empty message is printed"
+file = "crates/dom_api/src/console.rs"
+from = '''    if message.is_empty() {
+        return;
+    }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "console"]

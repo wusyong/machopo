@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<body style="margin: 0">
+<div id=t style="position: absolute; left: 10px; top: 10px; width: 50px; height: 50px; background: green"></div>
+<script>
+let last = null;
+new IntersectionObserver(entries => { last = entries[entries.length - 1]; },
+  { trackVisibility: true, delay: 100 }).observe(t);
+setTimeout(() => parent.postMessage({ name: location.hash.slice(1),
+  visible: last && last.isVisible, intersecting: last && last.isIntersecting }, '*'), 800);
+</script>

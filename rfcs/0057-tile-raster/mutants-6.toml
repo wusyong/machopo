@@ -1,0 +1,45 @@
+# 6: after the measurements, raster threads only when asked for, each tile
+# finished (uploaded, or its pixels copied out) on the thread that rastered
+# it, into a buffer it reuses (`raster::playback_into`,
+# `LayerTreeHostImpl::prepare_tiles`, the renderer's default).
+#   python3 scripts/test.py mutate rfcs/0057-tile-raster/mutants-6.toml
+test = ["cargo", "test", "-q", "-p", "raster", "-p", "compositor"]
+timeout = 900
+
+[[mutant]]
+name = "the buffer not made the tile's size"
+file = "crates/raster/src/lib.rs"
+from = '''    pixels.resize(size.width as usize * size.height as usize * 4, 0);'''
+to = ''''''
+
+[[mutant]]
+name = "the buffer cut short"
+file = "crates/raster/src/lib.rs"
+from = '''    pixels.resize(size.width as usize * size.height as usize * 4, 0);'''
+to = '''    pixels.resize(size.width as usize * size.height as usize * 4, 0);
+    pixels.truncate(pixels.len().saturating_sub(4));'''
+
+[[mutant]]
+name = "tiles not put on the GPU"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                let shared_image = gpu.and_then(|gpu| gpu.create_shared_image(size, drawn));'''
+to = '''                let shared_image = gpu.and(None::<protocol::viz::SharedImage>);'''
+
+[[mutant]]
+name = "a tile's pixels not all kept"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                    None => Arc::from(drawn),'''
+to = '''                    None => Arc::from(&drawn[..drawn.len() / 2]),'''
+
+[[mutant]]
+name = "raster threads by default"
+file = "crates/compositor/src/layer_tree_host.rs"
+from = '''            num_raster_threads: 1,'''
+to = '''            num_raster_threads: 4,'''
+
+[[mutant]]
+name = "the renderer's own default"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                .unwrap_or(defaults.num_raster_threads),'''
+to = '''                .unwrap_or(4),'''
+test = ["sh", "-c", "cargo build -q -p shell && python3 scripts/raster_test.py RunTests"]

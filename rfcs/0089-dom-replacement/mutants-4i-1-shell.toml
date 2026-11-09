@@ -1,0 +1,16 @@
+# Stage 4i-1: MouseEvent's layerX and layerY on the new DOM, which only a
+# whole browser's layout tests.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it -- geometry::mouse_event_layer_coordinates"]
+timeout = 1500
+
+[[mutant]]
+name = "api: a stacking context no layer"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''.is_some_and(|style| style.is_positioned() || style.is_stacking_context())'''
+to = '''.is_some_and(|style| style.is_positioned())'''
+
+[[mutant]]
+name = "api: a layer coordinate not snapped"
+file = "crates/dom_api_next/src/ui_event.rs"
+from = '''    saturated_cast((coordinate * 64.0).round().div_euclid(64.0))'''
+to = '''    saturated_cast(coordinate.floor())'''

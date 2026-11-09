@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>A list</title>
+<style>.item {}</style>
+<ul class="list"></ul>
+<script>
+  // Three items, then one fewer: the same each time. The style sheet's text
+  // grows too, which isn't the document's text.
+  window.tests = [
+    {
+      name: "Adding3Items",
+      run(doc) {
+        for (let i = 0; i < 3; i++) {
+          const item = doc.createElement("li");
+          item.className = "item";
+          item.textContent = "abc";
+          doc.querySelector("ul").append(item);
+        }
+      },
+    },
+    {
+      name: "RemovingOne",
+      run(doc) {
+        doc.querySelector("li").remove();
+        doc.querySelector("style").append(".list {}");
+      },
+    },
+  ];
+</script>

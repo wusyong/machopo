@@ -1,0 +1,170 @@
+# Stage 1c: the new DOM's heap marking with V8's major GCs (gc's wrapper
+# roots, JS edges and driven marking; bindings' and dom_js's side). The V8
+# patch isn't mutated here: each mutant would rebuild V8 (the dom_js tests
+# exercise it).
+test = ["cargo", "test", "-q", "-p", "gc", "--test", "it", "js::"]
+timeout = 900
+
+# --- gc: wrapper roots --------------------------------------------------------
+
+[[mutant]]
+name = "wrapper roots aren't a scavenge's roots"
+file = "crates/gc/src/heap/young.rs"
+from = '''        roots.extend(self.wrappers.get_mut().young_objects());'''
+to = '''        let _ = &self.wrappers;'''
+
+[[mutant]]
+name = "a wrapper root handed over isn't kept"
+file = "crates/gc/src/js.rs"
+from = '''        chunk.handed[at / 64].fetch_or(1 << (at % 64), Ordering::Relaxed);
+        true'''
+to = '''        let _ = chunk;
+        true'''
+
+[[mutant]]
+name = "a wrapper root made while marking isn't handed over"
+file = "crates/gc/src/heap.rs"
+from = '''        let handed = self.inner.driven_marking.get();'''
+to = '''        let handed = false;'''
+
+[[mutant]]
+name = "the end frees no wrapper root"
+file = "crates/gc/src/js.rs"
+from = '''            if !handed && chunk.offsets[at].load(Ordering::Relaxed) != 0 {'''
+to = '''            if false && !handed && chunk.offsets[at].load(Ordering::Relaxed) != 0 {'''
+
+[[mutant]]
+name = "no barrier reading a wrapper root"
+file = "crates/gc/src/heap.rs"
+from = '''        self.inner.read_weak(offset);
+        // SAFETY: a live object of `cx`'s heap, a `T` (its header says so,
+        // or `T` is `Erased`), marked just now if a marking runs.
+        Some(unsafe {
+            crate::Gc::from_raw(NonNull::new_unchecked(
+                self.inner.ptr(offset as usize).cast(),
+            ))
+        })
+    }
+
+    /// A new index for a JS edge'''
+to = '''        // SAFETY: a live object of `cx`'s heap, a `T` (its header says so,
+        // or `T` is `Erased`), marked just now if a marking runs.
+        Some(unsafe {
+            crate::Gc::from_raw(NonNull::new_unchecked(
+                self.inner.ptr(offset as usize).cast(),
+            ))
+        })
+    }
+
+    /// A new index for a JS edge'''
+
+[[mutant]]
+name = "a handed-over wrapper root's object isn't marked"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''            if data == 0 || self.is_young(data) || !self.marks.mark(data) {'''
+to = '''            if data == 0 || self.is_young(data) || !self.marks.is_marked(data) {'''
+
+[[mutant]]
+name = "a driven marking takes the wrapper roots as roots"
+file = "crates/gc/src/heap.rs"
+from = '''        let driven = js.is_some();'''
+to = '''        let driven = false;'''
+
+[[mutant]]
+name = "the heap's own full GC doesn't take the wrapper roots as roots"
+file = "crates/gc/src/heap.rs"
+from = '''            .chain(wrapped)
+            .filter(|&offset| self.mark_table.mark(offset))'''
+to = '''            .chain(wrapped.into_iter().filter(|_| false))
+            .filter(|&offset| self.mark_table.mark(offset))'''
+
+# --- gc: JS edges -------------------------------------------------------------
+
+[[mutant]]
+name = "the marker gives the engine no JS edge"
+file = "crates/gc/src/heap/concurrent.rs"
+from = '''                            if edge != 0 {
+                                local.mark(edge);
+                            }'''
+to = '''                            let _ = (edge, &local);'''
+
+[[mutant]]
+name = "a full GC gives back no dead JS edge"
+file = "crates/gc/src/js.rs"
+from = '''            if *holder != 0 && dead(*holder) {
+                *holder = 0;
+                self.dead
+                    .push(u32::try_from(index).expect("an index given"));
+            }'''
+to = '''            if *holder != 0 && dead(*holder) {
+                *holder = 0;
+            }'''
+
+[[mutant]]
+name = "a scavenge gives back no dead JS edge"
+file = "crates/gc/src/js.rs"
+from = '''            if *holder == 0 {
+                self.dead.push(index);
+            } else if young(*holder) {'''
+to = '''            if *holder == 0 {
+            } else if young(*holder) {'''
+
+# --- gc: driven marking -------------------------------------------------------
+
+[[mutant]]
+name = "a driven heap starts its markings itself"
+file = "crates/gc/src/heap.rs"
+from = '''        if self.options.driven {
+            // The engine starts and finishes markings (`Heap::start_marking`);'''
+to = '''        if false {
+            // The engine starts and finishes markings (`Heap::start_marking`);'''
+
+[[mutant]]
+name = "a full GC of the heap's own in the engine's marking"
+file = "crates/gc/src/heap.rs"
+from = '''        assert!(
+            !self.inner.driven_marking.get(),
+            "the engine finishes the marking it drives"
+        );'''
+to = ""
+
+[[mutant]]
+name = "wrapper roots in a heap no engine drives"
+file = "crates/gc/src/heap.rs"
+from = '''        assert!(
+            self.inner.options.driven,
+            "wrapper roots are a driven heap's"
+        );'''
+to = ""
+
+# --- dom_js: kunNextDom on the driven heap ------------------------------------
+
+[[mutant]]
+name = "a node doesn't keep its wrapper"
+file = "crates/dom_js/src/next.rs"
+from = '''            state.table.set(scope, edge, wrapper);'''
+to = '''            let _ = edge;'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "next_dom"]
+
+[[mutant]]
+name = "a node's JS edge isn't kept"
+file = "crates/dom_next/src/lib.rs"
+from = '''        node.wrapper.set(self.gc, Some(edge));'''
+to = ""
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "next_dom"]
+
+[[mutant]]
+name = "V8's marking doesn't reach the new DOM's"
+file = "crates/dom_js/src/next.rs"
+from = '''        let marker = state.dom.borrow_mut().start_marking(sink);
+        *lock(&state.handoff.marker) = Some(marker);'''
+to = '''        let marker = state.dom.borrow_mut().start_marking(sink);
+        let _ = marker;'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "next_dom"]
+
+[[mutant]]
+name = "the receiver's root isn't read"
+file = "crates/dom_js/src/next.rs"
+from = '''    let root = bindings::wrapped_root(scope, args.this().into()).map(WrapperRoot::from_raw);'''
+to = '''    let root = bindings::wrapped_root(scope, args.get(0)).map(WrapperRoot::from_raw);'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "next_dom"]

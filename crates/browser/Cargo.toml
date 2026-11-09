@@ -1,0 +1,34 @@
+[package]
+name = "browser"
+description = "Navigation, per-tab host, input routing (//content/browser)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+base.workspace = true
+bytes.workspace = true
+ipc.workspace = true
+gfx.workspace = true
+net.workspace = true
+protocol.workspace = true
+renderer.workspace = true
+tracing.workspace = true
+crossbeam-channel.workspace = true
+# A tab's DevTools id, which a page can't guess.
+getrandom.workspace = true
+
+[dev-dependencies]
+# The tests pick the renderer's script engine.
+dom_js.workspace = true
+# The tests send the renderer its `BeginFrame`s.
+viz.workspace = true

@@ -1,0 +1,50 @@
+# `Window.scrollTo` to (0, 0) doesn't lay the frame out (Blink's
+# `LocalDOMWindow::scrollTo`: (0, 0) is never clamped); NewsSite-Nuxt
+# scrolls there on every page change.
+#
+# python3 scripts/test.py mutate rfcs/0012-speedometer/mutants-scroll-origin.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "geometry::"]
+timeout = 900
+
+[[mutant]]
+name = "always lays out"
+file = "crates/dom_api/src/scroll.rs"
+from = '''    if options.left == Some(0.0) && options.top == Some(0.0) {'''
+to = '''    if false && options.left == Some(0.0) && options.top == Some(0.0) {'''
+
+[[mutant]]
+name = "only the left axis decides"
+file = "crates/dom_api/src/scroll.rs"
+from = '''    if options.left == Some(0.0) && options.top == Some(0.0) {'''
+to = '''    if options.left == Some(0.0) {'''
+
+[[mutant]]
+name = "only the top axis decides"
+file = "crates/dom_api/src/scroll.rs"
+from = '''    if options.left == Some(0.0) && options.top == Some(0.0) {'''
+to = '''    if options.top == Some(0.0) {'''
+
+[[mutant]]
+name = "either axis at 0"
+file = "crates/dom_api/src/scroll.rs"
+from = '''    if options.left == Some(0.0) && options.top == Some(0.0) {'''
+to = '''    if options.left == Some(0.0) || options.top == Some(0.0) {'''
+
+[[mutant]]
+name = "a missing axis counts as 0"
+file = "crates/dom_api/src/scroll.rs"
+from = '''    if options.left == Some(0.0) && options.top == Some(0.0) {'''
+to = '''    if options.left.unwrap_or(0.0) == 0.0 && options.top.unwrap_or(0.0) == 0.0 {'''
+
+[[mutant]]
+name = "scrolls somewhere else"
+file = "crates/dom_api/src/scroll.rs"
+from = '''        set_scroll_offset(cx, document.as_node().id(), PointF::default());'''
+to = '''        set_scroll_offset(cx, document.as_node().id(), PointF::new(0.0, 1.0));'''
+
+[[mutant]]
+name = "doesn't scroll"
+file = "crates/dom_api/src/scroll.rs"
+from = '''        set_scroll_offset(cx, document.as_node().id(), PointF::default());'''
+to = '''        let _ = document;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "geometry::scrolling_the_window_to_its_top_before_a_layout"]

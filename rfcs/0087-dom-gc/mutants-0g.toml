@@ -1,0 +1,226 @@
+# Step 0g: `bench.py blink-perf --gc` (the pages' wasm versions served
+# from `guests/`, the runner's timer as User Timing in `hook.js`, the GC
+# in the measured iterations from kun's trace, the recordings, the report)
+# and `gc_bench.window_gc`. The runs of pages use kun's dev build and
+# Chrome for Testing; run with RUSTY_V8_ARCHIVE pointing at a V8 built from
+# the fork (`ci.py v8`).
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py"]
+timeout = 900
+
+# The runner's timer as User Timing.
+
+[[mutant]]
+name = "the timer's start isn't marked"
+file = "scripts/bench/blink_perf/hook.js"
+from = '''      performance.mark("blink_perf");'''
+to = '''      void 0;'''
+
+[[mutant]]
+name = "the timer's end isn't measured"
+file = "scripts/bench/blink_perf/hook.js"
+from = '''    if (label === "blink_perf" && timing) performance.measure("blink_perf", "blink_perf");'''
+to = '''    if (label === "blink_perf" && timing) void 0;'''
+
+[[mutant]]
+name = "each iteration is marked"
+file = "scripts/bench/blink_perf/hook.js"
+from = '''    if (label === "blink_perf" && !timing) {'''
+to = '''    if (label === "blink_perf") {'''
+
+# The GC from the trace.
+
+[[mutant]]
+name = "the main thread is the measure's track"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    main = next((event[0] for event in events if event[3] == 3 and event[4] == "blink_perf"), None)'''
+to = '''    main = next((event[0] for event in events if event[4] == "blink_perf"), None)'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-k", "GcTests"]
+
+[[mutant]]
+name = "the window is any slice"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''                   for begin, end, name, _ in gc_bench.slices(events, track) if name == "blink_perf"), None)'''
+to = '''                   for begin, end, name, _ in gc_bench.slices(events, track)), None)'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-k", "GcTests"]
+
+[[mutant]]
+name = "the window's GC isn't cut at its ends"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''            outermost.append((max(begin, first), min(end, last), name))'''
+to = '''            outermost.append((begin, end, name))'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "-k", "window"]
+
+[[mutant]]
+name = "the window's nested GC slices count"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''        if is_gc(name) and not any(is_gc(name) for name in outer) and end > first and begin < last:'''
+to = '''        if is_gc(name) and end > first and begin < last:'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "-k", "window"]
+
+[[mutant]]
+name = "the window's GC after it counts"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''        if is_gc(name) and not any(is_gc(name) for name in outer) and end > first and begin < last:'''
+to = '''        if is_gc(name) and not any(is_gc(name) for name in outer) and end > first:'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "-k", "window"]
+
+[[mutant]]
+name = "the other threads' GC is the whole trace's"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''        "background_gc_ns": background_gc_between(events, main, first, last),'''
+to = '''        "background_gc_ns": background_gc_between(events, main, 0, 2**62),'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "-k", "window"]
+
+[[mutant]]
+name = "the span's other threads are cut nowhere"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''    return background_gc_between(events, span_track(events, span), first, last)'''
+to = '''    return background_gc_between(events, span_track(events, span), 0, 2**62)'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py"]
+
+# The wasm versions.
+
+[[mutant]]
+name = "the guests' path isn't kept under them"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''            if GUESTS.resolve() not in file.parents or not file.is_file():'''
+to = '''            if not file.is_file():'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-k", "ServerTests"]
+
+[[mutant]]
+name = "a wasm version's scripts are compared"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    ours = {name: n for name, n in wasm["summary"]["elements"].items() if name not in NOT_COMPARED}'''
+to = '''    ours = dict(wasm["summary"]["elements"])'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-k", "GcTests"]
+
+[[mutant]]
+name = "a wasm version in another unit is valid"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    if wasm["unit"] != js["unit"]:'''
+to = '''    if False:'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-k", "GcTests"]
+
+[[mutant]]
+name = "the pages with a wasm version are all"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    return [name for name in names if (GUESTS / name).is_file()]'''
+to = '''    return list(names)'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-k", "GcTests"]
+
+[[mutant]]
+name = "the paths aren't asked for"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''        return cmd_gc(args, under(asked, args.areas) if args.areas else asked, root)'''
+to = '''        return cmd_gc(args, asked, root)'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-k", "CommandTests"]
+
+# The runs and the recordings.
+
+[[mutant]]
+name = "the wasm version is the JS page"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''                urls = {"js": server.url("/" + page), "wasm": server.url(WASM + page)}'''
+to = '''                urls = {"js": server.url("/" + page), "wasm": server.url("/" + page)}'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-k", "GcTests"]
+
+[[mutant]]
+name = "the recording kept is the smallest"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    files[-1].replace(target)'''
+to = '''    files[0].replace(target)'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-k", "GcTests"]
+
+[[mutant]]
+name = "a failed run's recording is kept"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    if "error" in got or not files:'''
+to = '''    if not files:'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-k", "GcTests"]
+
+[[mutant]]
+name = "the other recordings stay"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    files[-1].replace(target)
+    shutil.rmtree(folder, ignore_errors=True)'''
+to = '''    files[-1].replace(target)'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-k", "GcTests"]
+
+[[mutant]]
+name = "a missing recording isn't said"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''                    if missing:
+                        run[f"{engine}_recording"] = missing'''
+to = '''                    pass'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-k", "GcTests"]
+
+# The report.
+
+[[mutant]]
+name = "the GC's share is of the GC's time"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''                          f"{100 * gc['gc_ns'] / window:.1f}" if window else "", *kinds, str(len(pauses)),'''
+to = '''                          f"{100 * gc['gc_ns'] / gc['gc_ns']:.1f}" if window else "", *kinds, str(len(pauses)),'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-k", "GcTests"]
+
+[[mutant]]
+name = "the pauses' p95 is their median"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''                          ms(gc_bench.percentile(pauses, 0.5)), ms(gc_bench.percentile(pauses, 0.95)),'''
+to = '''                          ms(gc_bench.percentile(pauses, 0.5)), ms(gc_bench.percentile(pauses, 0.5)),'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-k", "GcTests"]
+
+[[mutant]]
+name = "Chrome's median is on the wasm row"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''            chrome_median = number(common.median(chrome["values"])) if browser == "kun" and "values" in chrome else ""'''
+to = '''            chrome_median = number(common.median(chrome["values"])) if "values" in chrome else ""'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-k", "GcTests"]
+
+[[mutant]]
+name = "a page not valid isn't listed"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''        why = problems(run) + wasm_problems(run)
+        if why:'''
+to = '''        why = problems(run)
+        if why:'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-k", "GcTests"]
+
+[[mutant]]
+name = "V8's incremental marking's start is another kind"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''INCREMENTAL_MARKING = {"V8.GCIncrementalMarking", "V8.GCIncrementalMarkingStart"}'''
+to = '''INCREMENTAL_MARKING = {"V8.GCIncrementalMarking"}'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "-k", "kinds"]
+
+# A trace that lost events.
+
+[[mutant]]
+name = "a sequence's first packet counts as a loss"
+file = "scripts/bench/common.py"
+from = '''        if fields.get(42) and not first:  # previous_packet_dropped'''
+to = '''        if fields.get(42):  # previous_packet_dropped'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "-k", "lost"]
+
+[[mutant]]
+name = "a loss isn't seen"
+file = "scripts/bench/common.py"
+from = '''            state["dropped"] = True'''
+to = '''            pass'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "-k", "lost"]
+
+[[mutant]]
+name = "gc_bench reads a trace that lost events"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''    if lost:
+        raise SystemExit(f"{trace} lost events on {', '.join(lost)}")'''
+to = '''    pass'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "-k", "lost"]
+
+[[mutant]]
+name = "blink-perf reads a trace that lost events"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    if lost:
+        return {"error": f"the trace lost events on {', '.join(lost)}"}'''
+to = '''    pass'''
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py", "-k", "GcTests"]

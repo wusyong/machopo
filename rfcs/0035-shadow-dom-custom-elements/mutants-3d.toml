@@ -1,0 +1,52 @@
+# Mutation test of step 3d (event paths through slots):
+# python3 scripts/test.py mutate rfcs/0035-shadow-dom-custom-elements/mutants-3d.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "slots::"]
+timeout = 600
+
+[[mutant]]
+name = "an assigned slottable's parent its parent"
+file = "crates/dom_api/src/event.rs"
+from = '''    if let Some(slot) = read.assigned_slot(node) {
+        return Some(Object::Node(slot));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a closed tree's slot shown"
+file = "crates/dom_api/src/event.rs"
+from = '''                    .is_some_and(|init| init.mode == dom::ShadowRootMode::Closed);'''
+to = '''                    .is_some_and(|init| init.mode == dom::ShadowRootMode::Open);'''
+
+[[mutant]]
+name = "the target never a slottable"
+file = "crates/dom_api/src/event.rs"
+from = '''            Object::Node(node) => read.assigned_slot(node).is_some(),
+            _ => false,
+        };'''
+to = '''            Object::Node(_) => false,
+            _ => false,
+        };'''
+
+[[mutant]]
+name = "the slot flag not on a target's item"
+file = "crates/dom_api/src/event.rs"
+from = '''                    Some(object.clone()),
+                    related,
+                    slot_in_closed_tree,
+                );'''
+to = '''                    Some(object.clone()),
+                    related,
+                    false,
+                );'''
+
+[[mutant]]
+name = "the slot flag not on an item in the target's tree"
+file = "crates/dom_api/src/event.rs"
+from = '''                    None,
+                    related,
+                    slot_in_closed_tree,
+                );'''
+to = '''                    None,
+                    related,
+                    false,
+                );'''

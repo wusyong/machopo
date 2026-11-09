@@ -1,0 +1,218 @@
+# Mutation test of step 2d-2 (spans named and nested as Chrome's trace has
+# them: calls into script, HTML's parse, custom element reactions, the main
+# frame's steps):
+# python3 scripts/test.py mutate rfcs/0012-speedometer/mutants-2d-2.toml
+test = ["python3", "scripts/speedometer_test.py", "MeasureTests.test_traces_of_both"]
+timeout = 900
+
+[[mutant]]
+name = "every call is a FunctionCall"
+file = "crates/dom_js/src/host.rs"
+from = '''        let _outermost = entry
+            .is_outermost()'''
+to = '''        let _outermost = (entry.is_outermost() || true)'''
+
+[[mutant]]
+name = "a call isn't a v8.callFunction"
+file = "crates/dom_js/src/host.rs"
+from = '''        let _span = tracing::trace_span!("v8.callFunction").entered();'''
+to = ''''''
+
+[[mutant]]
+name = "script a call runs isn't script on the stack"
+file = "crates/dom_js/src/host.rs"
+from = '''        let entry = bindings::trace::enter_script();
+        let _outermost = entry
+            .is_outermost()'''
+to = '''        let outermost = bindings::trace::enter_script().is_outermost();
+        let _outermost = outermost'''
+
+[[mutant]]
+name = "a construction isn't a v8.callAsConstructor"
+file = "crates/dom_js/src/host.rs"
+from = '''        let _span = tracing::trace_span!("v8.callAsConstructor").entered();'''
+to = ''''''
+
+[[mutant]]
+name = "script a construction runs isn't script on the stack"
+file = "crates/dom_js/src/host.rs"
+from = '''        let _entry = bindings::trace::enter_script();'''
+to = ''''''
+
+[[mutant]]
+name = "microtasks aren't script on the stack"
+file = "crates/dom_js/src/engine.rs"
+from = '''        let _entry = bindings::trace::enter_script();'''
+to = ''''''
+
+[[mutant]]
+name = "a classic script isn't script on the stack"
+file = "crates/bindings/src/script_state.rs"
+from = '''        let _entry = crate::trace::enter_script();'''
+to = ''''''
+
+[[mutant]]
+name = "a module isn't script on the stack"
+file = "crates/bindings/src/module_record.rs"
+from = '''        let _entry = crate::trace::enter_script();'''
+to = ''''''
+
+[[mutant]]
+name = "leaving script doesn't lower the depth"
+file = "crates/bindings/src/trace.rs"
+from = '''        SCRIPT_DEPTH.with(|depth| depth.set(depth.get() - 1));'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "bindings", "--lib", "trace::"]
+
+[[mutant]]
+name = "every entry into script is the outermost"
+file = "crates/bindings/src/trace.rs"
+from = '''        outermost: depth == 0,'''
+to = '''        outermost: depth == depth,'''
+test = ["cargo", "test", "-q", "-p", "bindings", "--lib", "trace::"]
+
+[[mutant]]
+name = "markup script sets isn't a ParseHTML"
+file = "crates/dom_api/src/markup.rs"
+from = '''    let _span = tracing::trace_span!("ParseHTML").entered();'''
+to = ''''''
+
+[[mutant]]
+name = "a run of the parser isn't a ParseHTML"
+file = "crates/html/src/parser.rs"
+from = '''        let _span = tracing::trace_span!("ParseHTML").entered();
+        loop {'''
+to = '''        loop {'''
+test = ["cargo", "test", "-q", "-p", "html", "--test", "it", "spans::"]
+
+[[mutant]]
+name = "the parser's end isn't a ParseHTML"
+file = "crates/html/src/parser.rs"
+from = '''        let _span = tracing::trace_span!("ParseHTML").entered();
+        self.tokenizer.end();'''
+to = '''        self.tokenizer.end();'''
+test = ["cargo", "test", "-q", "-p", "html", "--test", "it", "spans::"]
+
+[[mutant]]
+name = "a document parsed at once isn't a ParseHTML"
+file = "crates/html/src/lib.rs"
+from = '''    let _span = tracing::trace_span!("ParseHTML").entered();'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "html", "--test", "it", "spans::"]
+
+[[mutant]]
+name = "an element's reactions aren't a span"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''        let _span = tracing::trace_span!("CustomElementReactionQueue::invokeReactions").entered();'''
+to = ''''''
+
+[[mutant]]
+name = "define isn't a span"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''    let _span = tracing::trace_span!("CustomElementRegistry::define").entered();'''
+to = ''''''
+
+[[mutant]]
+name = "a dispatch script starts isn't an EventDispatch"
+file = "crates/dom_api/src/event.rs"
+from = '''        .instrument(tracing::trace_span!("EventDispatch"))'''
+to = '''        .instrument(tracing::Span::none())'''
+
+[[mutant]]
+name = "the main frame isn't a span"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let _span = tracing::trace_span!("ProxyMain::BeginMainFrame").entered();'''
+to = ''''''
+
+[[mutant]]
+name = "the frame's callbacks aren't a span"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            let _span = tracing::trace_span!("WebFrameWidgetImpl::BeginMainFrame").entered();'''
+to = ''''''
+
+[[mutant]]
+name = "the resize observers aren't a span"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let _span = tracing::trace_span!("LocalFrameView::NotifyResizeObservers").entered();'''
+to = ''''''
+
+[[mutant]]
+name = "the lifecycle update isn't a span"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let lifecycle = tracing::trace_span!("WebFrameWidgetImpl::UpdateLifecycle").entered();'''
+to = '''        let lifecycle = ();'''
+
+[[mutant]]
+name = "the lifecycle update's span lasts the whole frame"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        drop(lifecycle);'''
+to = '''        let _lifecycle = lifecycle;'''
+
+[[mutant]]
+name = "the form states aren't a span"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        tracing::trace_span!("dom_api::update_form_states")
+            .in_scope(|| dom_api::update_form_states(&mut self.dom.borrow_mut().mutate()));'''
+to = '''        dom_api::update_form_states(&mut self.dom.borrow_mut().mutate());'''
+
+[[mutant]]
+name = "the canvases' flush isn't a span"
+file = "crates/renderer/src/render_thread.rs"
+from = '''tracing::trace_span!("canvas::flush_shown").in_scope('''
+to = '''tracing::Span::none().in_scope('''
+
+[[mutant]]
+name = "starting the pending animations isn't a span"
+file = "crates/renderer/src/render_thread.rs"
+from = '''tracing::trace_span!("PendingAnimations::Update")'''
+to = '''tracing::Span::none()'''
+
+[[mutant]]
+name = "the intersections aren't a span"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let (lazy_images, intersections) = tracing::trace_span!(
+            "LocalFrameView::UpdateViewportIntersectionsForSubtree"
+        )'''
+to = '''        let (lazy_images, intersections) = tracing::Span::none()'''
+
+[[mutant]]
+name = "the layers' update isn't a span"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let update_layers = tracing::trace_span!("LayerTreeHost::DoUpdateLayers").entered();'''
+to = '''        let update_layers = ();'''
+
+[[mutant]]
+name = "the commit isn't a span"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let commit = tracing::trace_span!("ProxyMain::BeginMainFrame::commit").entered();'''
+to = '''        let commit = ();'''
+
+[[mutant]]
+name = "the commit's span lasts the whole frame"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        drop(commit);'''
+to = '''        let _commit = commit;'''
+
+[[mutant]]
+name = "the lazy images due aren't a span"
+file = "crates/renderer/src/render_thread.rs"
+from = '''tracing::trace_span!("RenderThread::lazy_images_due")'''
+to = '''tracing::Span::none()'''
+
+[[mutant]]
+name = "the intersections' updates aren't a span"
+file = "crates/renderer/src/render_thread.rs"
+from = '''tracing::trace_span!("RenderThread::update_intersections")'''
+to = '''tracing::Span::none()'''
+
+[[mutant]]
+name = "the animations' notices aren't a span"
+file = "crates/renderer/src/render_thread.rs"
+from = '''tracing::trace_span!("RenderThread::settle_animation_notices")'''
+to = '''tracing::Span::none()'''
+
+[[mutant]]
+name = "the hover states' update isn't a span"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let _span = tracing::trace_span!("MouseEventManager::RecomputeMouseHoverState").entered();'''
+to = ''''''

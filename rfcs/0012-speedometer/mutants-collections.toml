@@ -1,0 +1,45 @@
+# Mutation test of the live collections' length and item from the kept
+# ids (jQuery's quadratic walk), 2026-10-13:
+# python3 scripts/test.py mutate rfcs/0012-speedometer/mutants-collections.toml
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "collections::"]
+timeout = 600
+
+[[mutant]]
+name = "the kept items are never fresh"
+file = "crates/dom/src/scope.rs"
+from = '''            .is_some_and(|cache| cache.version == self.dom_tree_version);'''
+to = '''            .is_some_and(|_| false);'''
+
+[[mutant]]
+name = "the kept items are always fresh"
+file = "crates/dom/src/scope.rs"
+from = '''            .is_some_and(|cache| cache.version == self.dom_tree_version);'''
+to = '''            .is_some();'''
+
+[[mutant]]
+name = "an item is the next one"
+file = "crates/dom/src/scope.rs"
+from = '''        let id = *self.collection_item_ids(collection, compute).get(index)?;'''
+to = '''        let id = *self.collection_item_ids(collection, compute).get(index + 1)?;'''
+
+[[mutant]]
+name = "the length counts one more"
+file = "crates/dom/src/scope.rs"
+from = '''        self.collection_item_ids(collection, compute).len()
+    }'''
+to = '''        self.collection_item_ids(collection, compute).len() + 1
+    }'''
+
+[[mutant]]
+name = "the script's item is the next one"
+file = "crates/dom_api/src/collection.rs"
+from = '''        .collection_item(this, index as usize, |root| compute_items(this, root))'''
+to = '''        .collection_item(this, index as usize + 1, |root| compute_items(this, root))'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::html_collections"]
+
+[[mutant]]
+name = "the script's length is the first item's"
+file = "crates/dom_api/src/collection.rs"
+from = '''    let length = read.collection_length(this, |root| compute_items(this, root));'''
+to = '''    let length = read.collection_length(this, |root| compute_items(this, root)).min(1);'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "bindings::html_collections"]

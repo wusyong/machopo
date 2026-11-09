@@ -1,0 +1,250 @@
+# Stage 4g-2b-1: on the new DOM, ImageData (both constructors), getImageData, putImageData and
+# createImageData, gradients, shadows, setTransform's dictionary and getContextAttributes; the
+# table's overloads (resolved by count, then by an interface's object), `[EnforceRange] long`,
+# typed arrays, dictionary results; the canvas crate's pixel steps.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p canvas && cargo test -q -p dom_js_next --test it canvas && cargo test -q -p dom_js_next --test it wrappers && cargo test -q -p shell --test it next_dom_canvas"]
+timeout = 3000
+
+[[mutant]]
+name = "declare: a form takes more than it has"
+file = "crates/dom_api_next/src/declare.rs"
+from = '''forms[form].required() <= count && count <= forms[form].params.len()'''
+to = '''forms[form].required() <= count'''
+
+[[mutant]]
+name = "declare: extra arguments count"
+file = "crates/dom_api_next/src/declare.rs"
+from = '''let count = given.min(most);'''
+to = '''let count = given;'''
+
+[[mutant]]
+name = "declare: no form is an interface's"
+file = "crates/dom_api_next/src/declare.rs"
+from = '''.find(|&form| interface(form, index).is_some_and(|name| implements(index, name)))'''
+to = '''.find(|_| false)'''
+
+[[mutant]]
+name = "js: the first form always"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''Ok(form) => (set.calls[form])(scope, args, rv),'''
+to = '''Ok(_) => (set.calls[0])(scope, args, rv),'''
+
+[[mutant]]
+name = "js: an overload's length the most"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''        .min()
+'''
+to = '''        .max()
+'''
+
+[[mutant]]
+name = "js: the result after pixels dropped"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        if let Some(pixels) = &mut self.call.kept
+            && let Kept::Pixels(_, _, then) = &mut **pixels
+        {
+            *then = Some(Box::new(kept));
+            return;
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "js: the pixels' array not kept"
+file = "crates/dom_js_next/src/front.rs"
+from = '''                    no_gc.set_strong_value(edge, array.into());
+'''
+to = ''''''
+
+[[mutant]]
+name = "js: an array's bytes never read"
+file = "crates/dom_js_next/src/front.rs"
+from = '''f(Some(array.get_contents(&mut storage)));'''
+to = '''let _ = &mut storage;
+                f(None);'''
+
+[[mutant]]
+name = "js: the array given not kept"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        self.no_gc.set_strong_value(edge, taken.into());
+'''
+to = ''''''
+
+[[mutant]]
+name = "pixels: premultiplying rounds down"
+file = "crates/canvas/src/pixels.rs"
+from = '''((product + (product >> 8)) >> 8) as u8'''
+to = '''(product >> 8) as u8'''
+
+[[mutant]]
+name = "pixels: a negative size forward"
+file = "crates/canvas/src/pixels.rs"
+from = '''        if size < 0 {'''
+to = '''        if size > 0 {'''
+
+[[mutant]]
+name = "pixels: rows outside read"
+file = "crates/canvas/src/pixels.rs"
+from = '''        if !(0..bh).contains(&by) {
+            continue;
+        }'''
+to = '''        if by >= bh {
+            continue;
+        }'''
+
+[[mutant]]
+name = "pixels: columns outside read"
+file = "crates/canvas/src/pixels.rs"
+from = '''            if !(0..bw).contains(&bx) {
+                continue;
+            }'''
+to = '''            if bx >= bw {
+                continue;
+            }'''
+
+[[mutant]]
+name = "pixels: an opaque canvas keeps alpha"
+file = "crates/canvas/src/pixels.rs"
+from = '''        if settings.alpha {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "api: a flush only for a shown canvas"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    cx.lend_frame_layout(|layout| layout.flush_canvas(cx, id, flush));'''
+to = '''    let canvas = cx.canvas_context_canvas(this);
+    cx.lend_layout(canvas, |layout| layout.flush_canvas(cx, id, flush));'''
+
+[[mutant]]
+name = "api: a gradient style without its gradient"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''cx.set_canvas_style(this, target, CanvasStyle::Gradient, Some(gradient));'''
+to = '''cx.set_canvas_style(this, target, CanvasStyle::Gradient, { let _ = gradient; None });'''
+
+[[mutant]]
+name = "api: a gradient drawn without its shader"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''(Color::BLACK, Some(Arc::new(shader)))'''
+to = '''(Color::BLACK, { let _ = shader; None })'''
+
+[[mutant]]
+name = "api: a stop's offset unchecked"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    if !(0.0..=1.0).contains(&offset) {'''
+to = '''    if offset > 2.0 {'''
+
+[[mutant]]
+name = "api: shadowOffsetX sets y"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''context::set_shadow_offset(data, Some(value), None)'''
+to = '''context::set_shadow_offset(data, None, Some(value))'''
+
+[[mutant]]
+name = "api: float16 reported as unorm8"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''            CanvasColorType::Float16 => "float16",'''
+to = '''            CanvasColorType::Float16 => "unorm8",'''
+
+[[mutant]]
+name = "api: an ImageData's pixels not given"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    op.set_image_data_pixels(cx, image_data, bytes);
+'''
+to = '''    let _ = (op, bytes);
+'''
+
+[[mutant]]
+name = "api: past 32 bits of bytes"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''bytes.is_none_or(|bytes| bytes > u64::from(u32::MAX))'''
+to = '''bytes.is_none()'''
+
+[[mutant]]
+name = "api: a length not a multiple of 4"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''if data.len == 0 || data.len % 4 != 0 {'''
+to = '''if data.len == 0 {'''
+
+[[mutant]]
+name = "api: a length not a multiple of the width"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    if pixels % width != 0 {'''
+to = '''    if pixels % width == usize::MAX {'''
+
+[[mutant]]
+name = "api: sh unchecked"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''sh.is_some_and(|sh| sh != height)'''
+to = '''sh.is_some_and(|sh| sh == u32::MAX)'''
+
+[[mutant]]
+name = "api: the array not stored"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    op.store_array(cx, cx.image_data_array_edge(image_data), data);
+'''
+to = '''    let _ = (op, data);
+'''
+
+[[mutant]]
+name = "api: createImageData's sizes signed"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''let (width, height) = (sw.unsigned_abs(), sh.unsigned_abs());'''
+to = '''let (width, height) = (sw.unsigned_abs(), sh.max(0).unsigned_abs());'''
+
+[[mutant]]
+name = "api: createImageData(imageData) in sRGB"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    let space = cx.image_data_color_space(image_data);'''
+to = '''    let space = { let _ = image_data; PredefinedColorSpace::Srgb };'''
+
+[[mutant]]
+name = "api: getImageData's height of 0"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    if sw == 0 || sh == 0 {'''
+to = '''    if sw == 0 {'''
+
+[[mutant]]
+name = "api: getImageData in sRGB"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    let space = space.unwrap_or(context_settings.color_space);'''
+to = '''    let space = space.unwrap_or(PredefinedColorSpace::Srgb);'''
+
+[[mutant]]
+name = "api: putImageData drawn after what was recorded"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''        } else if with_data(cx, this, |data| data.resource.is_none()) {
+            flush(cx, this, CanvasFlush::Draw);
+        }'''
+to = '''        }'''
+
+[[mutant]]
+name = "api: a detached array read"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''bytes.filter(|bytes| Some(bytes.len()) == expected)'''
+to = '''bytes.filter(|bytes| Some(bytes.len()) == expected || bytes.is_empty())'''
+
+[[mutant]]
+name = "typed: a gradient taken as a string"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''if let Some(object) = front.object_if::<dom_next::CanvasGradient>(index) {'''
+to = '''if let Some(object) = front.object_if::<dom_next::CanvasGradient>(index).filter(|_| false) {'''
+
+[[mutant]]
+name = "typed: EnforceRange's range"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''if !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&value) {'''
+to = '''if value.is_nan() {'''
+
+[[mutant]]
+name = "dom: a save drops the gradients"
+file = "crates/dom_next/src/canvas.rs"
+from = '''            self.slot(slots, level, target)
+                .gradient
+                .set(self.gc, gradient);'''
+to = '''            let _ = gradient;'''
+
+[[mutant]]
+name = "dom: an ImageData's color space sRGB"
+file = "crates/dom_next/src/canvas.rs"
+from = '''        if image_data.into_ref().color_space == color_space_code(PredefinedColorSpace::DisplayP3) {'''
+to = '''        if image_data.into_ref().color_space == u8::MAX {'''

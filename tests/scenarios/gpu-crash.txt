@@ -1,0 +1,16 @@
+# about:gpucrash typed in the address field: Viz loses the GPU device,
+# as a driver reset would, and makes a new one; the page and the toolbar are
+# drawn on it, input still works, and frames can still be read back. The
+# device is the process's: without a real window, the scenarios running
+# beside this one lose it too, and copy again on the new one.
+navigate about:demo
+wait-loaded
+key F6
+type "about:gpucrash"
+key Enter
+# The blue square keeps moving, drawn on the new device.
+capture after
+expect-differs after #mover
+click #clicker
+wait-text #count "Clicked 1 time (onclick)."
+screenshot recovered

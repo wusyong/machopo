@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<script src="../resources/runner.js"></script>
+<script>
+  // Does more in Chrome (which has `window.chrome`) than in machopo: the
+  // summaries differ.
+  if (window.chrome) document.documentElement.appendChild(document.createElement("aside"));
+  PerfTestRunner.measureRunsPerSecond({
+    run() {
+      document.createElement("span");
+    },
+  });
+</script>

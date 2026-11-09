@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<title>Sticky</title>
+<style>
+  body { margin: 0; font: 16px sans-serif }
+  /* NewsSite's navigation: it stays at the top as the page scrolls. */
+  nav { position: sticky; top: 0; height: 40px; background: #234; color: white; line-height: 40px; padding: 0 12px }
+  /* CodeMirror's gutters: they stay at the editor's left as its lines
+     scroll across. */
+  #code { overflow: auto; width: 400px; height: 120px; margin: 20px; border: 1px solid; font: 14px/20px monospace }
+  #lines { display: flex; width: 1200px }
+  #gutter { position: sticky; left: 0; flex: none; width: 36px; padding-right: 4px; background: #eee; color: #888; text-align: right; white-space: pre }
+  #text { flex: none; padding-left: 8px; white-space: pre }
+  #frame { display: block; margin: 0 20px; width: 300px; height: 100px; border: 1px solid }
+  #note { margin: 20px }
+  .filler { height: 1500px; background: linear-gradient(white, #9cf) }
+</style>
+<body>
+<nav id="nav" onclick="note('Clicked the navigation (' + ++navClicks + '), ' + topOf('nav') + ' from the top.')">Navigation</nav>
+<div id="code">
+  <div id="lines">
+    <div id="gutter" onclick="note('Clicked the gutter, ' + Math.round(leftOf('gutter') - leftOf('code')) + ' from the left.')">1
+2
+3
+4
+5
+6
+7</div>
+    <div id="text">function sticky() { return "a line long enough to scroll across, and then some more of it" }
+// two
+// three
+// four
+// five
+// six
+// seven</div>
+  </div>
+</div>
+<!-- A child frame's sticky header, which its own viewport scrolls. -->
+<iframe id="frame" srcdoc="<style>body { margin: 0; font: 14px sans-serif } #head { position: sticky; top: 0; height: 20px; background: #fc9 }</style>
+<div id=head onclick=&quot;parent.note('Clicked the frame\'s header, ' + this.getBoundingClientRect().top + ' from its top.')&quot;>A header in a frame</div>
+<div style='height: 600px; background: linear-gradient(white, #fc9)'></div>"></iframe>
+<p id="note" onclick="note('Cleared.')">Nothing clicked yet.</p>
+<div class="filler"></div>
+<script>
+  let navClicks = 0;
+  function note(text) { document.getElementById("note").textContent = text; }
+  function topOf(id) { return document.getElementById(id).getBoundingClientRect().top; }
+  function leftOf(id) { return document.getElementById(id).getBoundingClientRect().left; }
+</script>

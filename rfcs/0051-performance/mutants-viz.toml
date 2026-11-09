@@ -1,0 +1,75 @@
+# Mutation test of the software renderer's shortcuts: a tile taken texel by
+# texel and a solid colour row by row draw what sampling every pixel does:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-viz.toml
+test = ["cargo", "test", "-q", "-p", "viz", "--lib"]
+timeout = 600
+
+[[mutant]]
+name = "the shortcut is taken when sampling is asked for"
+file = "crates/viz/src/software_renderer.rs"
+from = '''                if !sampled
+                    && rounded.is_none()'''
+to = '''                if rounded.is_none()'''
+
+[[mutant]]
+name = "a tile in rounded corners is taken texel by texel"
+file = "crates/viz/src/software_renderer.rs"
+from = '''                    && rounded.is_none()
+                    && tex_coord_rect.width == quad.rect.width'''
+to = '''                    && tex_coord_rect.width == quad.rect.width'''
+
+[[mutant]]
+name = "a scaled tile is taken texel by texel"
+file = "crates/viz/src/software_renderer.rs"
+from = '''                    && tex_coord_rect.width == quad.rect.width
+'''
+to = ''''''
+
+[[mutant]]
+name = "a tile off whole pixels is taken texel by texel"
+file = "crates/viz/src/software_renderer.rs"
+from = '''                        .all(whole)'''
+to = '''                        .all(|_| true)'''
+
+[[mutant]]
+name = "the offset into the resource is lost"
+file = "crates/viz/src/software_renderer.rs"
+from = '''let dx = (tex_coord_rect.x - quad.rect.x) as isize;'''
+to = '''let dx = 0;'''
+
+[[mutant]]
+name = "the offset down the resource is lost"
+file = "crates/viz/src/software_renderer.rs"
+from = '''let dy = (tex_coord_rect.y - quad.rect.y) as isize;'''
+to = '''let dy = 0;'''
+
+[[mutant]]
+name = "a tile's opacity is lost"
+file = "crates/viz/src/software_renderer.rs"
+from = '''                            if opacity == 1.0 {
+                                t
+'''
+to = '''                            if true {
+                                t
+'''
+
+[[mutant]]
+name = "an opaque source leaves the pixel"
+file = "crates/viz/src/software_renderer.rs"
+from = '''                255 => *dst = src,'''
+to = '''                255 => {}'''
+
+[[mutant]]
+name = "a solid colour in rounded corners takes the shortcut"
+file = "crates/viz/src/software_renderer.rs"
+from = '''            Material::SolidColor { color } if rounded.is_none() && !sampled => {'''
+to = '''            Material::SolidColor { color } if true => {'''
+
+[[mutant]]
+name = "a solid colour's opacity is lost"
+file = "crates/viz/src/software_renderer.rs"
+from = '''                    op(p[3], opacity),
+                ];'''
+to = '''                    p[3],
+                ];'''
+

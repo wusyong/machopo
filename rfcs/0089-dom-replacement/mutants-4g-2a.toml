@@ -1,0 +1,313 @@
+# Stage 4g-2a: on the new DOM, <canvas> and its 2D context's state, transforms, compositing,
+# colors, rects, paths and line styles (the canvas crate's steps, shared with today's DOM), the
+# draws drawn at once and before each frame, the layer's texture swapped, the canvas replaced;
+# interface objects' read-only prototype.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it canvas && cargo test -q -p dom_js_next --test it wrappers && cargo test -q -p dom_js_next --test it exceptions && cargo test -q -p renderer --lib canvas && cargo test -q -p shell --test it next_dom_canvas"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: the default width is the height's"
+file = "crates/dom_next/src/canvas.rs"
+from = '''dimension(names::local::WIDTH, DEFAULT_CANVAS_WIDTH),'''
+to = '''dimension(names::local::WIDTH, DEFAULT_CANVAS_HEIGHT),'''
+
+[[mutant]]
+name = "dom: a context not kept"
+file = "crates/dom_next/src/canvas.rs"
+from = '''        self.element_data(canvas)
+            .canvas_context
+            .set(self.gc, Some(context));
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: draws not deduplicated"
+file = "crates/dom_next/src/canvas.rs"
+from = '''        let mut draws = self.changes.canvas_draws.borrow_mut();
+        if !draws.contains(&id) {
+            draws.push(id);
+        }'''
+to = '''        let mut draws = self.changes.canvas_draws.borrow_mut();
+        draws.push(id);'''
+
+[[mutant]]
+name = "dom: a draw doesn't bump the version"
+file = "crates/dom_next/src/canvas.rs"
+from = '''version.set(version.get().wrapping_add(1));'''
+to = ''''''
+
+[[mutant]]
+name = "dom: kept draws dropped"
+file = "crates/dom_next/src/canvas.rs"
+from = '''let since = std::mem::replace(&mut *draws, canvases);'''
+to = '''let since = std::mem::take(&mut *draws);
+        drop(canvases);'''
+
+[[mutant]]
+name = "dom: a size change doesn't reset"
+file = "crates/dom_next/src/canvas.rs"
+from = '''                data.reset(size);
+                data.origin_clean = true;'''
+to = '''                let _ = size;
+                data.origin_clean = true;'''
+
+[[mutant]]
+name = "dom: a size change doesn't draw"
+file = "crates/dom_next/src/canvas.rs"
+from = '''            self.record_canvas_draw(canvas);
+        }
+        self.set_needs_reattach(canvas);'''
+to = '''        }
+        self.set_needs_reattach(canvas);'''
+
+[[mutant]]
+name = "dom: a size change isn't laid out"
+file = "crates/dom_next/src/canvas.rs"
+from = '''        self.set_needs_reattach(canvas);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: no element is a canvas"
+file = "crates/dom_next/src/canvas.rs"
+from = '''self.is_html_named(element, names::local::CANVAS)'''
+to = '''self.is_html_named(element, names::local::IMG) && false'''
+
+[[mutant]]
+name = "dom: width and height change nothing"
+file = "crates/dom_next/src/image.rs"
+from = '''            self.canvas_size_changed(element);
+'''
+to = ''''''
+
+[[mutant]]
+name = "layout: an inline canvas isn't atomic"
+file = "crates/layout/src/next.rs"
+from = '''        local::IMG,
+        local::CANVAS,
+'''
+to = '''        local::IMG,
+'''
+
+[[mutant]]
+name = "layout: a canvas's size is an image's"
+file = "crates/layout/src/next.rs"
+from = '''                Replaced::canvas(dom.canvas_size(element))'''
+to = '''                image_replaced(dom, element)'''
+
+[[mutant]]
+name = "api: another id gets the 2D context"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''if context_id != "2d" {'''
+to = '''if context_id == "webgl" {'''
+
+[[mutant]]
+name = "api: a new context each time"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    if let Some(context) = cx.canvas_context(this) {
+        return Ok(Some(context));
+    }
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: any colorSpace"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''other => return Err(invalid(other, "PredefinedColorSpace")),'''
+to = '''_ => PredefinedColorSpace::Srgb,'''
+
+[[mutant]]
+name = "api: display-p3 as srgb"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''"display-p3" => PredefinedColorSpace::DisplayP3,'''
+to = '''"display-p3" => PredefinedColorSpace::Srgb,'''
+
+[[mutant]]
+name = "api: float16 as unorm8"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''"float16" => CanvasColorType::Float16,'''
+to = '''"float16" => CanvasColorType::Unorm8,'''
+
+[[mutant]]
+name = "api: willReadFrequently dropped"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''will_read_frequently: options.willReadFrequently,'''
+to = '''will_read_frequently: false,'''
+
+[[mutant]]
+name = "api: opaque ignored"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''let opaque = !cx.canvas_context_settings(this).alpha;'''
+to = '''let opaque = false;'''
+
+[[mutant]]
+name = "api: a draw not recorded"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    cx.record_canvas_draw(canvas);
+    if count >= MAX_RECORDED_OPS {'''
+to = '''    if count >= MAX_RECORDED_OPS {'''
+
+[[mutant]]
+name = "api: never drawn at once"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''if count >= MAX_RECORDED_OPS {'''
+to = '''if false && count >= MAX_RECORDED_OPS {'''
+
+[[mutant]]
+name = "api: reset doesn't draw"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    cx.record_canvas_draw(cx.canvas_context_canvas(this));
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: clearRect composited"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''record_ops(cx, this, vec![op], false);'''
+to = '''record_ops(cx, this, vec![op], true);'''
+
+[[mutant]]
+name = "api: the fill style is the stroke's"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''CanvasStyleTarget::Fill => state.fill_style,'''
+to = '''CanvasStyleTarget::Fill => state.stroke_style,'''
+
+[[mutant]]
+name = "api: not a color sets black"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''        None => return,
+'''
+to = '''        None => Color::BLACK,
+'''
+
+[[mutant]]
+name = "api: currentcolor black"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''css::canvas::canvas_current_color(inline.as_deref(), &system_colors)'''
+to = '''Color::BLACK'''
+
+[[mutant]]
+name = "api: currentcolor of a disconnected canvas"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''            let inline = cx
+                .is_connected(canvas)
+                .then('''
+to = '''            let inline = true
+                .then('''
+
+[[mutant]]
+name = "api: lineCap any case"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''context::LINE_CAPS.iter().find(|(name, _)| *name == value)'''
+to = '''context::LINE_CAPS.iter().find(|(name, _)| name.eq_ignore_ascii_case(value))'''
+
+[[mutant]]
+name = "api: lineWidth not checked"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    if let Some(value) = context::positive(value) {
+        with_data(cx, this, |data| data.state_mut().line_width = value);'''
+to = '''    if let Some(value) = Some(value) {
+        with_data(cx, this, |data| data.state_mut().line_width = value);'''
+
+[[mutant]]
+name = "api: lineDashOffset infinite"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''    if value.is_finite() {
+        with_data(cx, this, |data| data.state_mut().line_dash_offset = value);'''
+to = '''    if !value.is_nan() {
+        with_data(cx, this, |data| data.state_mut().line_dash_offset = value);'''
+
+[[mutant]]
+name = "api: evenodd as nonzero"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''"evenodd" => Ok(FillRule::EvenOdd),'''
+to = '''"evenodd" => Ok(FillRule::NonZero),'''
+
+[[mutant]]
+name = "api: a bad fill rule nonzero"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''match rule.unwrap_or("nonzero") {'''
+to = '''match rule.filter(|rule| *rule == "evenodd").unwrap_or("nonzero") {'''
+
+[[mutant]]
+name = "api: a path error not an IndexSizeError"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''name: ExceptionName::IndexSize,'''
+to = '''name: ExceptionName::NotFound,'''
+
+[[mutant]]
+name = "api: beginPath keeps the path"
+file = "crates/dom_api_next/src/canvas.rs"
+from = '''with_data(cx, this, |data| data.path = gfx::Path::new());'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: a shown canvas not drawn"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''                if shown {
+                    drawn.push('''
+to = '''                if shown && false {
+                    drawn.push('''
+
+[[mutant]]
+name = "renderer: what isn't shown dropped"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            cx.keep_canvas_draws(kept);
+'''
+to = '''            drop(kept);
+'''
+
+[[mutant]]
+name = "renderer: a layer's canvas painted again"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''let layer = snapshot.is_some() && self.compositor.canvas_layer(canvas).is_some();'''
+to = '''let layer = false;'''
+
+[[mutant]]
+name = "renderer: textures not swapped"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            swap_canvas_textures(
+                std::mem::take(&mut self.canvas_textures),
+                &self.compositor,
+                &self.canvases,
+                &mut self.output,
+            );'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: a texture keeps its snapshot"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''                    snapshot: snapshot.clone(),'''
+to = '''                    snapshot: texture.snapshot.clone(),'''
+
+[[mutant]]
+name = "renderer: the gone ones kept"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''self.canvases.retain(|&canvas, _| !gone(canvas));'''
+to = '''self.canvases.retain(|&canvas, _| gone(canvas) || true);'''
+
+[[mutant]]
+name = "renderer: a draw asks for no frame"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            || canvas_draws != next.rendered_canvas_draws;'''
+to = '''            || canvas_draws != canvas_draws;'''
+
+[[mutant]]
+name = "renderer: no flush before the lifecycle"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        tracing::trace_span!("canvas::flush_shown").in_scope(|| frame.flush_shown_canvases(dom));'''
+to = ''''''
+
+[[mutant]]
+name = "js: an interface's prototype writable"
+file = "crates/dom_js_next/src/templates.rs"
+from = '''    template.read_only_prototype();
+'''
+to = ''''''
+
+[[mutant]]
+name = "js: DOMException's prototype writable"
+file = "crates/dom_js_next/src/exception.rs"
+from = '''    template.read_only_prototype();
+'''
+to = ''''''

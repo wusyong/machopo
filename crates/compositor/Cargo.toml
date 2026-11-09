@@ -1,0 +1,26 @@
+[package]
+name = "compositor"
+description = "Chromium-style compositor: layer tree, tiling, raster scheduling, draw (//cc)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+base.workspace = true
+gfx.workspace = true
+compositor_paint.workspace = true
+raster.workspace = true
+protocol.workspace = true
+tracing.workspace = true
+trace_event.workspace = true
+crossbeam-channel.workspace = true
+rayon.workspace = true

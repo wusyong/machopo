@@ -1,0 +1,165 @@
+# Stage 5d-1: input and the cursor on the DOM's engine. Run with
+# RUSTY_V8_ARCHIVE set until the fork's release with the embedder graph
+# is out.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "sh", "-c", "cargo test -q -p dom_api_next --test it && cargo test -q -p renderer --lib && cargo test -q -p browser --test it && cargo test -q -p dom_js_next --test it svg:: && cargo test -q -p shell --test it -- browser_view:: keys:: forms:: scheduling:: wheel:: focus:: selections:: network:: windowless::"]
+timeout = 1500
+
+[[mutant]]
+name = "dom_api_next: no hit outside the viewport while dragging"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        let dragging = input.buttons != 0 || matches!(input.action, MouseAction::Up { .. });'''
+to = '''        let dragging = false;'''
+
+[[mutant]]
+name = "dom_api_next: a key doesn't update the modifiers under a still pointer"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        if let Some(last) = &mut self.last_mouse {
+            last.modifiers = input.modifiers;'''
+to = '''        if let Some(last) = &mut self.last_mouse {
+            let _ = (last, input.modifiers);'''
+
+[[mutant]]
+name = "dom_api_next: Enter doesn't follow the focused link"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            && input.key == "Enter"
+            && host.read(|cx| {'''
+to = '''            && input.key == "Enter!"
+            && host.read(|cx| {'''
+
+[[mutant]]
+name = "dom_api_next: Space a control takes scrolls too"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            input.down && not_canceled && !shortcut && !(input.key == " " && self.space.is_some());'''
+to = '''            input.down && not_canceled && !shortcut;'''
+
+[[mutant]]
+name = "dom_api_next: a handled keypress scrolls too"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            scrolls &= !handled;'''
+to = '''            let _ = handled;'''
+
+[[mutant]]
+name = "dom_api_next: the spin button doesn't keep the mouse"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            (Some((_, part)), MouseAction::Move | MouseAction::Up { .. }) => Some(part.clone()),'''
+to = '''            (Some((_, part)), MouseAction::Up { .. }) => Some(part.clone()),'''
+
+[[mutant]]
+name = "dom_api_next: a recompute under a still pointer fires mousemove"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        if !moves {
+            return;'''
+to = '''        if false {
+            return;'''
+
+[[mutant]]
+name = "dom_api_next: the press node not kept for key scrolling"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        self.press_node = Some(target.clone());'''
+to = ''''''
+
+[[mutant]]
+name = "dom_api_next: a middle click doesn't follow its link"
+file = "crates/dom_api_next/src/input.rs"
+from = '''                && button == MouseButton::Auxiliary
+                && let Some(link) = host.read(|cx| {'''
+to = '''                && button == MouseButton::Secondary
+                && let Some(link) = host.read(|cx| {'''
+
+[[mutant]]
+name = "dom_api_next: the hand only over the link element itself"
+file = "crates/dom_api_next/src/input.rs"
+from = '''                if std::iter::successors(Some(element), |&node| cx.flat_tree_parent(node))
+                    .any(|node| crate::hyperlink::is_hyperlink(cx, node))'''
+to = '''                if std::iter::successors(Some(element), |_| None)
+                    .any(|node| crate::hyperlink::is_hyperlink(cx, node))'''
+
+[[mutant]]
+name = "dom_api_next: the I-beam over unselectable text"
+file = "crates/dom_api_next/src/input.rs"
+from = '''                } else if text && style.rare_inherited.user_select != UserSelect::None {'''
+to = '''                } else if text {'''
+
+[[mutant]]
+name = "dom_api_next: a disabled button an ancestor key clicks"
+file = "crates/dom_api_next/src/controls.rs"
+from = '''        .filter(|&clicked| !cx.is_disabled_form_control(clicked))'''
+to = ''''''
+
+[[mutant]]
+name = "dom_api_next: SVG's xlink:href not a link"
+file = "crates/dom_api_next/src/hyperlink.rs"
+from = '''        .or_else(|| cx.attribute_value_ns(node, Some(XLINK_NAMESPACE), "href"))'''
+to = ''''''
+
+[[mutant]]
+name = "dom_api_next: SVG's <a> not focusable by default"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    ) || cx.qualified_name(this) == Some(dom_next::QualifiedName::svg(local::A));'''
+to = '''    );'''
+
+[[mutant]]
+name = "renderer: scrolling=no ignored"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''                        user_scrollable_x: !child.scrolling_off
+                            && child'''
+to = '''                        user_scrollable_x: child'''
+
+[[mutant]]
+name = "renderer: the top of the document not scrolled to"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            Some(target) if target == self.document_node => {
+                self.scroll.set_viewport(PointF::new(0.0, 0.0));'''
+to = '''            Some(target) if target == self.document_node => {'''
+
+[[mutant]]
+name = "renderer: a key scroll asks for no frame"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        self.scrolled_by_script |= moved;
+        moved'''
+to = '''        moved'''
+
+[[mutant]]
+name = "renderer: a key scrolls every box in the chain"
+file = "crates/renderer/src/scroll.rs"
+from = '''            if moved {
+                scrolled.containers = true;'''
+to = '''            if moved && false {
+                scrolled.containers = true;'''
+
+[[mutant]]
+name = "renderer: the cursor not reset at a commit"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        self.set_cursor(CursorType::Pointer);
+        self.advance_next_document(top);'''
+to = '''        self.advance_next_document(top);'''
+
+[[mutant]]
+name = "renderer: an empty fragment not the top"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                fragment.is_empty() || fragment.eq_ignore_ascii_case("top")'''
+to = '''                fragment.eq_ignore_ascii_case("top")'''
+
+[[mutant]]
+name = "renderer: the cursor sent every time"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        if cursor != self.cursor {
+            self.cursor = cursor;'''
+to = '''        if true {
+            self.cursor = cursor;'''
+
+[[mutant]]
+name = "renderer: no recompute after a commit"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        self.recompute_next_under_mouse();
+        true'''
+to = '''        true'''
+
+[[mutant]]
+name = "renderer: an input's navigation after its ack"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.handle_next_popup_requests();
+        self.handle_next_frame_requests();
+        self.next_popup_closed_by_press = None;'''
+to = '''        self.handle_next_popup_requests();
+        self.next_popup_closed_by_press = None;'''

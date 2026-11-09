@@ -1,0 +1,151 @@
+# 4c: a change of the document's rules styles again what their features
+# find (`style`'s `rule_set_invalidation.rs`, `lib.rs`).
+#   python3 scripts/test.py mutate rfcs/0059-style-performance/mutants-4c.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "invalidation::"]
+timeout = 1800
+
+[[mutant]]
+name = "what a subject's features find not styled"
+file = "crates/style/src/lib.rs"
+from = '''                || descendants.as_ref().is_some_and(|set| set.matches(node))
+                || found.own;'''
+to = '''                || descendants.as_ref().is_some_and(|set| set.matches(node));'''
+
+[[mutant]]
+name = "an ancestor's subtree not styled"
+file = "crates/style/src/lib.rs"
+from = '''                || for_below
+                || found.subtree;'''
+to = '''                || for_below;'''
+
+[[mutant]]
+name = "the walk doesn't go down for the rules"
+file = "crates/style/src/lib.rs"
+from = '''                || viewport_changed
+                || (tree_scope == 0 && rules_changed.is_some());'''
+to = '''                || viewport_changed;'''
+
+[[mutant]]
+name = "shadow trees' elements looked up too"
+file = "crates/style/src/lib.rs"
+from = '''                Some(rules) if tree_scope == 0 => rules.find(node, &mut pending_siblings),'''
+to = '''                Some(rules) => rules.find(node, &mut pending_siblings),'''
+
+[[mutant]]
+name = "everything styled for any change"
+file = "crates/style/src/lib.rs"
+from = '''            SheetsChange::Rules(invalidation) if !everything => Some(invalidation),'''
+to = '''            SheetsChange::Rules(invalidation) if false => Some(invalidation),'''
+
+[[mutant]]
+name = "another order not everything"
+file = "crates/style/src/lib.rs"
+from = '''        let mut in_order = kept.is_sorted_by(|a, b| a < b);'''
+to = '''        let mut in_order = true;'''
+
+[[mutant]]
+name = "the removed sheets' rules left out"
+file = "crates/style/src/lib.rs"
+from = '''            .chain(added.iter().map(|&index| &sheets[index]))'''
+to = '''            .take(0)
+            .chain(added.iter().map(|&index| &sheets[index]))'''
+
+[[mutant]]
+name = "a sheet's media not looked at"
+file = "crates/style/src/lib.rs"
+from = '''            .filter(|(_, media)| applies(media))'''
+to = '''            .filter(|(_, media)| applies(media) || true)'''
+
+[[mutant]]
+name = "the removed adopted sheets' rules left out"
+file = "crates/style/src/lib.rs"
+from = '''            if !taken && media.matches(environment) {'''
+to = '''            if false && !taken && media.matches(environment) {'''
+
+[[mutant]]
+name = "the added adopted sheets' rules left out"
+file = "crates/style/src/lib.rs"
+from = '''                None if media.matches(environment) => rules.extend(contents.rules()),'''
+to = '''                None if false => rules.extend(contents.rules()),'''
+
+[[mutant]]
+name = "has() found by features"
+file = "crates/style/src/rule_set_invalidation.rs"
+from = '''            .any(|component| nests(component, |c| matches!(c, Component::Has(_))))'''
+to = '''            .any(|component| nests(component, |c| matches!(c, Component::Nth(_))))'''
+
+[[mutant]]
+name = "keyframes found by features"
+file = "crates/style/src/rule_set_invalidation.rs"
+from = '''            CssRule::Keyframes(_) | CssRule::Keyframe(_) => false,'''
+to = '''            CssRule::Keyframes(_) | CssRule::Keyframe(_) => true,'''
+
+[[mutant]]
+name = "a group rule's condition not looked at"
+file = "crates/style/src/rule_set_invalidation.rs"
+from = '''                !rule.media.matches(environment)
+                    || rule'''
+to = '''                rule'''
+
+[[mutant]]
+name = "a subject without features finds nothing"
+file = "crates/style/src/rule_set_invalidation.rs"
+from = '''        else {
+            return false;
+        };'''
+to = '''        else {
+            return true;
+        };'''
+
+[[mutant]]
+name = "an ancestor taken as a sibling"
+file = "crates/style/src/rule_set_invalidation.rs"
+from = '''        if !combinators[index - 1].is_sibling() {'''
+to = '''        if false && !combinators[index - 1].is_sibling() {'''
+
+[[mutant]]
+name = "a run of + reaches every sibling"
+file = "crates/style/src/rule_set_invalidation.rs"
+from = '''                .then(|| u8::try_from(index - target).unwrap_or(u8::MAX)),
+            siblings: InvalidationFeatures::of(&compounds[target]),'''
+to = '''                .then(|| u8::MAX),
+            siblings: InvalidationFeatures::of(&compounds[target]),'''
+
+[[mutant]]
+name = "the siblings not scheduled"
+file = "crates/style/src/rule_set_invalidation.rs"
+from = '''            if features.matches(node) {
+                set.schedule('''
+to = '''            if false && features.matches(node) {
+                set.schedule('''
+
+[[mutant]]
+name = "is() not looked into"
+file = "crates/style/src/rule_set_invalidation.rs"
+from = '''    if !features.any {
+        return Some(features);
+    }
+    compound'''
+to = '''    if !features.any {
+        return Some(features);
+    }
+    return None;
+    #[allow(unreachable_code)]
+    compound'''
+
+[[mutant]]
+name = "names not lowered"
+file = "crates/style/src/rule_set_invalidation.rs"
+from = '''    if name.bytes().any(|byte| byte.is_ascii_uppercase()) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a UA shadow tree's part as its host alone"
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "form_controls::a_changed_sheet"]
+file = "crates/style/src/rule_set_invalidation.rs"
+from = '''            if shadow_part {
+                self.subtree.add(&features);
+            } else {'''
+to = '''            if false {
+                self.subtree.add(&features);
+            } else {'''

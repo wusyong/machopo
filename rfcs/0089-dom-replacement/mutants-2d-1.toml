@@ -1,0 +1,163 @@
+# Stage 2d-1: --next-dom's side of the renderer: the new DOM's engine
+# (NextEngine on V8), the parser that pauses at scripts, parser-blocking
+# classic scripts (inline and external) run in order, the flag's
+# plumbing.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom"]
+timeout = 1200
+
+[[mutant]]
+name = "a script's line isn't recorded"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "next"]
+from = '''        if is_script {
+            self.script_line.set(self.current_line.get());
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the tokenizer's line is ignored"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "--test", "it", "next"]
+from = '''    fn set_current_line(&self, line_number: u64) {
+        self.current_line.set(line_number);
+    }'''
+to = '''    fn set_current_line(&self, line_number: u64) {
+        let _ = line_number;
+    }'''
+
+[[mutant]]
+name = "the parser doesn't stop at scripts"
+file = "crates/html/src/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom"]
+from = '''                html5ever::interface::TokenizerResult::Script(element) => {
+                    let line = self.tokenizer.sink.sink.script_line.get();
+                    return NextParserState::Script { element, line };
+                }'''
+to = '''                html5ever::interface::TokenizerResult::Script(_) => {}'''
+
+[[mutant]]
+name = "any type is a classic script"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom"]
+from = '''                .map_or(true, |kind| is_javascript_mime_type(&kind.to_str()));'''
+to = '''                .map_or(true, |_| true);'''
+
+[[mutant]]
+name = "a type isn't trimmed or lowercased"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom"]
+from = '''    let kind = kind.trim().to_ascii_lowercase();'''
+to = '''    let kind = kind.to_owned();'''
+
+[[mutant]]
+name = "nomodule runs"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom"]
+from = '''            if !classic || cx.get_attribute(script, "nomodule").is_some() {'''
+to = '''            if !classic {'''
+
+[[mutant]]
+name = "an empty src is fetched"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom"]
+from = '''                    Ok(url) if !src.to_str().trim().is_empty() => Prepared::External(url),'''
+to = '''                    Ok(url) => Prepared::External(url),'''
+
+[[mutant]]
+name = "an external script doesn't block the parser"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom"]
+from = '''                            if let Some(next) = &mut self.next_document {
+                                next.pending_script = Some(PendingScript {'''
+to = '''                            if let Some(next) = None::<&mut NextDocument> {
+                                next.pending_script = Some(PendingScript {'''
+
+[[mutant]]
+name = "a script that didn't load runs"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom"]
+from = '''        if let Ok(response) = result
+            && response.status < 400
+        {
+            let source = String::from_utf8_lossy(&response.body).into_owned();'''
+to = '''        if true {
+            let source = result.as_ref().map(|response| String::from_utf8_lossy(&response.body).into_owned()).unwrap_or_default();'''
+
+[[mutant]]
+name = "no microtask checkpoint after a script"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom"]
+from = '''        engine.run_classic_script(&ClassicScript { source, url, line });
+        engine.perform_microtask_checkpoint();'''
+to = '''        engine.run_classic_script(&ClassicScript { source, url, line });'''
+
+[[mutant]]
+name = "an inline script's line is 1"
+file = "crates/renderer/src/render_thread/next.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom"]
+from = '''                            let line = u32::try_from(line).unwrap_or(u32::MAX);'''
+to = '''                            let line = { let _ = line; 1 };'''
+
+[[mutant]]
+name = "a script's exception isn't reported"
+file = "crates/dom_js_next/src/engine.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it", "engine"]
+from = '''        if ran.is_none() {
+            report_caught(scope, &state, &state.dom, ReportAt::Global(global));
+        }'''
+to = '''        let _ = (ran, global);'''
+
+[[mutant]]
+name = "a script's line is off by one"
+file = "crates/dom_js_next/src/engine.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it", "engine"]
+from = '''        let line_offset = i32::try_from(script.line.saturating_sub(1)).unwrap_or(i32::MAX);'''
+to = '''        let line_offset = i32::try_from(script.line).unwrap_or(i32::MAX);'''
+
+[[mutant]]
+name = "testRunner without web tests"
+file = "crates/dom_js_next/src/engine.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it", "engine"]
+from = '''        if web_tests {
+            let scope = &mut v8::ContextScope::new(scope, context);'''
+to = '''        if web_tests || true {
+            let scope = &mut v8::ContextScope::new(scope, context);'''
+
+[[mutant]]
+name = "the time origin isn't given"
+file = "crates/dom_js_next/src/engine.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it", "engine"]
+from = '''            cx.set_window_time_origin(window, time_origin);'''
+to = '''            let _ = time_origin;'''
+
+[[mutant]]
+name = "a time origin counts the wrong way"
+file = "crates/dom_next/src/window.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it", "engine"]
+from = '''        let since = origin.saturating_duration_since(self.origin);'''
+to = '''        let since = self.origin.saturating_duration_since(origin);'''
+
+[[mutant]]
+name = "a window takes --next-dom"
+file = "crates/shell/src/main.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--bin", "kun"]
+from = '''    if next_dom && out.is_none() {'''
+to = '''    if false && next_dom && out.is_none() {'''
+
+[[mutant]]
+name = "headless writes a next-dom frame"
+file = "crates/shell/src/headless.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom"]
+from = '''    if opts.next_dom {
+        return Err('''
+to = '''    if false && opts.next_dom {
+        return Err('''
+
+[[mutant]]
+name = "a new-DOM commit takes the old path"
+file = "crates/renderer/src/render_thread.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom"]
+from = '''        if self.next_dom {
+            if self'''
+to = '''        if false && self.next_dom {
+            if self'''

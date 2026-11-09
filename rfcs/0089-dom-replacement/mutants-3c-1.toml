@@ -1,0 +1,110 @@
+# Stage 3c-1: the new DOM's frame view (`renderer`'s `next_frame_view`):
+# style, layout, pre-paint and paint as each is due; the render thread's
+# frames for it (asked for by a DOM change and the load, `DidFinishLoad`
+# and `ReftestWaitEnded` with them, the compositor's scrolling taken).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "renderer", "--lib", "next_frame_view"]
+timeout = 1200
+
+[[mutant]]
+name = "the viewport not style's"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            self.style.set_viewport(viewport, device_scale_factor);
+'''
+to = ''''''
+
+[[mutant]]
+name = "another viewport not laid out"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            layout_dirty |= viewport != self.viewport;
+'''
+to = ''''''
+
+[[mutant]]
+name = "another scale not painted"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            if device_scale_factor != self.device_scale_factor {
+                self.paint_dirty = true;'''
+to = '''            if false {
+                self.paint_dirty = true;'''
+
+[[mutant]]
+name = "a changed box tree not laid out"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        layout_dirty |= updated;
+'''
+to = ''''''
+
+[[mutant]]
+name = "a new layout not painted"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''            self.paint_dirty = true;
+            self.needs_pre_paint = true;
+        }
+        self.fragment = Some(fragment);'''
+to = '''            self.needs_pre_paint = true;
+        }
+        self.fragment = Some(fragment);'''
+
+[[mutant]]
+name = "painted when nothing changed"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        if !(self.paint_dirty || self.output.is_none() || sticky != self.painted_sticky) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a DOM change asks for no frame"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        if version != next.rendered_version {
+            next.rendered_version = version;
+            self.request_main_frame();'''
+to = '''        if false {
+            next.rendered_version = version;
+            self.request_main_frame();'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom::"]
+
+[[mutant]]
+name = "no DidFinishLoad"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        if std::mem::take(&mut next.load_finished) {'''
+to = '''        if false {'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom::"]
+
+[[mutant]]
+name = "no ReftestWaitEnded"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        } else if next.waiting_for_reftest && !reftest_wait {'''
+to = '''        } else if false {'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom::"]
+
+[[mutant]]
+name = "reftest-wait never on"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        let reftest_wait = self.web_tests && {'''
+to = '''        let reftest_wait = false && {'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom::"]
+
+[[mutant]]
+name = "the load asks for no frame"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            next.load_finished = true;
+        }
+        self.request_main_frame();'''
+to = '''            next.load_finished = true;
+        }'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom::"]
+
+[[mutant]]
+name = "the layers not given"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''            self.layer_tree_host
+                .set_layers(output.layers.clone(), output.property_trees.clone());
+            self.painted = Some(output);'''
+to = '''            self.painted = Some(output);'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom::"]
+
+[[mutant]]
+name = "the new DOM never rendered"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            if !self.update_next_rendering() {'''
+to = '''            if true {'''
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "next_dom::"]

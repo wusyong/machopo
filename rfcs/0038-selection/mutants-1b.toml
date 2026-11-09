@@ -1,0 +1,154 @@
+# Mutation test of step 1b (selectionchange; an editing host taking the
+# focus, and the selection with it):
+# python3 scripts/test.py mutate rfcs/0038-selection/mutants-1b.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "selections::"]
+timeout = 900
+
+# dom: scheduling, and the character data primitives.
+
+[[mutant]]
+name = "selectionchange is scheduled again before its task runs"
+file = "crates/dom/src/selection.rs"
+from = '''        if selection.change_scheduled.swap(true, Ordering::Relaxed) {
+            return;
+        }'''
+to = '''        selection.change_scheduled.store(true, Ordering::Relaxed);'''
+
+[[mutant]]
+name = "the task doesn't let selectionchange be scheduled again"
+file = "crates/dom/src/selection.rs"
+from = '''            selection.change_scheduled.store(false, Ordering::Relaxed);'''
+to = ''''''
+
+[[mutant]]
+name = "a moved range is never the selection's"
+file = "crates/dom/src/selection.rs"
+from = '''                        .is_some_and(|selected| std::ptr::eq(selected, range))'''
+to = '''                        .is_some_and(|selected| std::ptr::eq(selected, range) && false)'''
+
+[[mutant]]
+name = "any moved range is the selection's"
+file = "crates/dom/src/selection.rs"
+from = '''                        .is_some_and(|selected| std::ptr::eq(selected, range))'''
+to = '''                        .is_some_and(|selected| std::ptr::eq(selected, range) || true)'''
+
+[[mutant]]
+name = "replacing data moves the selection without scheduling"
+file = "crates/dom/src/range.rs"
+from = '''                point.store(to, Ordering::Relaxed);
+                moved |= to != at;'''
+to = '''                point.store(to, Ordering::Relaxed);'''
+
+[[mutant]]
+name = "replacing data after the selection schedules"
+file = "crates/dom/src/range.rs"
+from = '''                moved |= to != at;'''
+to = '''                moved = true;'''
+
+[[mutant]]
+name = "splitting moves the selection without scheduling"
+file = "crates/dom/src/range.rs"
+from = '''                    point.store(at - offset, Ordering::Relaxed);
+                    moved = true;'''
+to = '''                    point.store(at - offset, Ordering::Relaxed);'''
+
+[[mutant]]
+name = "normalizing moves the selection without scheduling"
+file = "crates/dom/src/range.rs"
+from = '''                    point.fetch_add(length, Ordering::Relaxed);
+                    moved = true;'''
+to = '''                    point.fetch_add(length, Ordering::Relaxed);'''
+
+# dom_api: changes, the task.
+
+[[mutant]]
+name = "setting the selection as it was schedules"
+file = "crates/dom_api/src/selection.rs"
+from = '''    if seen(cx, this) != before {
+        cx.mutate().schedule_selectionchange(this);'''
+to = '''    if seen(cx, this) == seen(cx, this) || before.is_none() {
+        cx.mutate().schedule_selectionchange(this);'''
+
+[[mutant]]
+name = "a change isn't queued right away"
+file = "crates/dom_api/src/selection.rs"
+from = '''        cx.mutate().schedule_selectionchange(this);
+        queue_selectionchange_tasks(cx);'''
+to = '''        cx.mutate().schedule_selectionchange(this);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "keys::tab_reaches"]
+
+[[mutant]]
+name = "script setting the selection's range doesn't schedule"
+file = "crates/dom_api/src/range.rs"
+from = '''    let before = selection
+        .as_ref()
+        .and_then(|selection| crate::selection::seen(cx, selection));
+    cx.mutate().set_range(this, start, end);'''
+to = '''    cx.mutate().set_range(this, start, end);
+    let before = selection
+        .as_ref()
+        .and_then(|selection| crate::selection::seen(cx, selection));'''
+
+[[mutant]]
+name = "no selectionchange task is queued"
+file = "crates/dom_api/src/selection.rs"
+from = '''    let documents = cx.mutate().take_selectionchanges();'''
+to = '''    let documents: Vec<dom::NodeId> = Vec::new();'''
+
+[[mutant]]
+name = "selectionchange bubbles"
+file = "crates/dom_api/src/selection.rs"
+from = '''        "selectionchange",
+        false,'''
+to = '''        "selectionchange",
+        true,'''
+
+# dom_api: an editing host and the focus.
+
+[[mutant]]
+name = "an editable element inside another is an editing host"
+file = "crates/dom_api/src/html_element.rs"
+from = '''    is_editable(node) && !node.parent().is_some_and(is_editable)'''
+to = '''    is_editable(node)'''
+
+[[mutant]]
+name = "contenteditable=false is an editing host"
+file = "crates/dom_api/src/html_element.rs"
+from = '''        && inherited_state(node, "contenteditable", content_editable_state).unwrap_or(false)'''
+to = '''        && inherited_state(node, "contenteditable", content_editable_state).is_some()'''
+
+[[mutant]]
+name = "an editing host can't be focused"
+file = "crates/dom_api/src/focus.rs"
+from = '''    crate::html_element::is_editing_host(node)
+        || (name.is_html("a")'''
+to = '''    (name.is_html("a")'''
+
+[[mutant]]
+name = "the focus leaves the selection"
+file = "crates/dom_api/src/focus.rs"
+from = '''    crate::selection::focused(cx, element);
+    if focused {'''
+to = '''    if focused {'''
+
+[[mutant]]
+name = "the selection goes to the host itself"
+file = "crates/dom_api/src/selection.rs"
+from = '''        if leaf.kind() == NodeKind::Text {'''
+to = '''        if leaf.kind() == NodeKind::Text && false {'''
+
+[[mutant]]
+name = "a selection already in the host moves"
+file = "crates/dom_api/src/selection.rs"
+from = '''    if !inside {
+        select(cx, &this, (&start, 0), (&start, 0), false);
+    }'''
+to = '''    select(cx, &this, (&start, 0), (&start, 0), false);'''
+
+[[mutant]]
+name = "the selection goes into any element taking the focus"
+file = "crates/dom_api/src/selection.rs"
+from = '''        if !crate::html_element::is_editing_host(node) {
+            return;
+        }'''
+to = ''''''

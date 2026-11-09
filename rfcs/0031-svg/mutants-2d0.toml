@@ -1,0 +1,122 @@
+# Mutation test of step 2d-0 (gradients over the plane, local matrices,
+# tile modes, two-point conical gradients, color interpolation):
+# python3 scripts/test.py mutate rfcs/0031-svg/mutants-2d0.toml
+test = ["cargo", "test", "-q", "-p", "raster", "--lib"]
+timeout = 900
+
+# --- raster -------------------------------------------------------------------
+
+[[mutant]]
+name = "a gradient over the plane draws nothing"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        PaintShader::Gradient(gradient) => gradient_shader(gradient, None),'''
+to = '''        PaintShader::Gradient(_) => None,'''
+
+[[mutant]]
+name = "mirror repeats"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        TileMode::Mirror => sk::TileMode::Mirror,'''
+to = '''        TileMode::Mirror => sk::TileMode::Repeat,'''
+
+[[mutant]]
+name = "repeat extends"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        TileMode::Repeat => sk::TileMode::Repeat,'''
+to = '''        TileMode::Repeat => sk::TileMode::Clamp,'''
+
+[[mutant]]
+name = "clamp repeats"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        TileMode::Clamp => sk::TileMode::Clamp,'''
+to = '''        TileMode::Clamp => sk::TileMode::Repeat,'''
+
+[[mutant]]
+name = "unpremultiplied mixes premultiplied"
+file = "crates/raster/src/skia_backend.rs"
+from = '''            ColorInterpolation::Unpremultiplied => interpolation::InPremul::No,'''
+to = '''            ColorInterpolation::Unpremultiplied => interpolation::InPremul::Yes,'''
+
+[[mutant]]
+name = "premultiplied mixes unpremultiplied"
+file = "crates/raster/src/skia_backend.rs"
+from = '''            ColorInterpolation::Premultiplied => interpolation::InPremul::Yes,'''
+to = '''            ColorInterpolation::Premultiplied => interpolation::InPremul::No,'''
+
+[[mutant]]
+name = "the gradient's transform is ignored"
+file = "crates/raster/src/skia_backend.rs"
+from = '''    let own = sk_matrix(&gradient.transform);'''
+to = '''    let own = sk::Matrix::new_identity();'''
+
+[[mutant]]
+name = "the tile's place is ignored"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        Some(outer) => sk::Matrix::concat(outer, &own),'''
+to = '''        Some(_) => own,'''
+
+[[mutant]]
+name = "the transform is before the tile's place"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        Some(outer) => sk::Matrix::concat(outer, &own),'''
+to = '''        Some(outer) => sk::Matrix::concat(&own, outer),'''
+
+[[mutant]]
+name = "both circles are around the end's center"
+file = "crates/raster/src/skia_backend.rs"
+from = '''            ((start.x, start.y), start_radius),
+            ((end.x, end.y), end_radius),'''
+to = '''            ((end.x, end.y), start_radius),
+            ((end.x, end.y), end_radius),'''
+
+[[mutant]]
+name = "both circles are around the start's center"
+file = "crates/raster/src/skia_backend.rs"
+from = '''            ((start.x, start.y), start_radius),
+            ((end.x, end.y), end_radius),'''
+to = '''            ((start.x, start.y), start_radius),
+            ((start.x, start.y), end_radius),'''
+
+# --- paint: CSS's gradients ---------------------------------------------------
+
+[[mutant]]
+name = "repeating gradients extend"
+file = "crates/paint/src/background.rs"
+from = '''    if gradient.repeating {
+        TileMode::Repeat
+    } else {'''
+to = '''    if false {
+        TileMode::Repeat
+    } else {'''
+test = ["cargo", "test", "-q", "-p", "paint", "--lib"]
+
+[[mutant]]
+name = "an ellipse is a circle"
+file = "crates/paint/src/background.rs"
+from = '''                transform: ellipse,'''
+to = '''                transform: Transform::IDENTITY,'''
+test = ["cargo", "test", "-q", "-p", "paint", "--lib"]
+
+[[mutant]]
+name = "an ellipse scales about the origin"
+file = "crates/paint/src/background.rs"
+from = '''                .then(&Transform::translate(-center.x, -center.y));'''
+to = ''';'''
+test = ["cargo", "test", "-q", "-p", "paint", "--lib"]
+
+[[mutant]]
+name = "a CSS radial gradient mixes unpremultiplied"
+file = "crates/paint/src/background.rs"
+from = '''                transform: ellipse,
+                interpolation: ColorInterpolation::Premultiplied,'''
+to = '''                transform: ellipse,
+                interpolation: ColorInterpolation::Unpremultiplied,'''
+test = ["cargo", "test", "-q", "-p", "paint", "--lib"]
+
+[[mutant]]
+name = "a CSS linear gradient mixes unpremultiplied"
+file = "crates/paint/src/background.rs"
+from = '''                transform: Transform::IDENTITY,
+                interpolation: ColorInterpolation::Premultiplied,'''
+to = '''                transform: Transform::IDENTITY,
+                interpolation: ColorInterpolation::Unpremultiplied,'''
+test = ["cargo", "test", "-q", "-p", "paint", "--lib"]

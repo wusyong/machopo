@@ -1,0 +1,73 @@
+# Stage 4h-4c-2 in a whole browser: the user agent the frame gives the new DOM, user
+# activation, and `autofocus` at the rendering update.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it -- the_new_doms_navigator autofocus_on_the_new_dom"]
+timeout = 2400
+
+[[mutant]]
+name = "renderer: the new DOM gets no user agent"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''    fn user_agent(&self) -> &str {
+        &self.user_agent
+    }'''
+to = '''    fn user_agent(&self) -> &str {
+        let _ = &self.user_agent;
+        ""
+    }'''
+
+[[mutant]]
+name = "api: appVersion keeps Mozilla/"
+file = "crates/dom_api_next/src/navigator.rs"
+from = '''    string(agent.strip_prefix("Mozilla/").unwrap_or(&agent))'''
+to = '''    string(&agent)'''
+
+[[mutant]]
+name = "api: transient activation never"
+file = "crates/dom_api_next/src/navigator.rs"
+from = '''    Ok(cx.has_transient_activation(cx.user_activation_window(this)))'''
+to = '''    let _ = cx.user_activation_window(this);
+    Ok(false)'''
+
+[[mutant]]
+name = "renderer: autofocus not flushed"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            self.flush_next_autofocus_candidates();
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: autofocus attributes not seen"
+file = "crates/dom_next/src/style.rs"
+from = '''            self.see(crate::form::AUTOFOCUS_SEEN);'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an autofocus element connected isn't recorded"
+file = "crates/dom_next/src/frame.rs"
+from = '''            self.record_element_change(ElementChange::Autofocus(self.node_id(node)));'''
+to = ''''''
+
+[[mutant]]
+name = "api: a candidate without a box isn't skipped"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''                && is_focusable_area(cx, candidate))'''
+to = '''                && true)'''
+
+[[mutant]]
+name = "api: autofocus runs again"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        host.mutate(|cx| cx.set_autofocus_processed(top.get(cx.gc)));
+        focusing_steps('''
+to = '''        focusing_steps('''
+
+[[mutant]]
+name = "api: autofocus over a focused element"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        if cx.focused_element(cx.focused_frame(top)).is_some() {'''
+to = '''        if cx.focused_element(cx.focused_frame(top)).is_some() && false {'''
+
+[[mutant]]
+name = "api: autofocus once processed takes candidates"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        if cx.autofocus_processed(top)
+            || (!Gc::ptr_eq(top, document)'''
+to = '''        if (!Gc::ptr_eq(top, document)'''

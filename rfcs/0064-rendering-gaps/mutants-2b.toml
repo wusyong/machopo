@@ -1,0 +1,200 @@
+# 2b: tab-size (`computed_style`, `css`, `layout`, and the parley fork's
+# tab stops), and an atomic inline's intrinsic size keywords (`layout`).
+#   python3 scripts/test.py mutate rfcs/0064-rendering-gaps/mutants-2b.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "inline::"]
+timeout = 1800
+
+[[mutant]]
+name = "negative numbers parsed"
+file = "crates/css/src/properties.rs"
+from = '''            TabSize => Value::TabSize(match input.try_parse(|i| parse_number_at_least(i, 0.0)) {'''
+to = '''            TabSize => Value::TabSize(match input.try_parse(|i| parse_number_at_least(i, -1.0e9)) {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cssom::"]
+
+[[mutant]]
+name = "negative lengths parsed"
+file = "crates/css/src/properties.rs"
+from = '''                Err(_) => SpecifiedTabSize::Length(Length::parse(input, false)?),'''
+to = '''                Err(_) => SpecifiedTabSize::Length(Length::parse(input, true)?),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cssom::"]
+
+[[mutant]]
+name = "not inherited"
+file = "crates/computed_style/src/lib.rs"
+from = '''            word_spacing,
+            tab_size,
+            text_indent,'''
+to = '''            word_spacing,
+            text_indent,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+[[mutant]]
+name = "initial value 4"
+file = "crates/computed_style/src/lib.rs"
+from = '''            tab_size: TabSize::Spaces(8.0),'''
+to = '''            tab_size: TabSize::Spaces(4.0),'''
+
+[[mutant]]
+name = "number written as px"
+file = "crates/css/src/computed.rs"
+from = '''            computed_style::TabSize::Spaces(spaces) => write_number(dest, spaces.into()),'''
+to = '''            computed_style::TabSize::Spaces(spaces) => px_to_css(spaces, dest),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+[[mutant]]
+name = "interpolated below 0"
+file = "crates/css/src/interpolate.rs"
+from = '''            (Spaces(a), Spaces(b)) => Some(Spaces(a.animate(b, progress, cx)?.max(0.0))),'''
+to = '''            (Spaces(a), Spaces(b)) => Some(Spaces(a.animate(b, progress, cx)?)),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "interpolation::"]
+
+[[mutant]]
+name = "number and length interpolated"
+file = "crates/css/src/interpolate.rs"
+from = '''            (Spaces(a), Spaces(b)) => Some(Spaces(a.animate(b, progress, cx)?.max(0.0))),'''
+to = '''            (Spaces(a), Spaces(b) | Px(b)) => Some(Spaces(a.animate(b, progress, cx)?.max(0.0))),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "interpolation::"]
+
+[[mutant]]
+name = "no tab stops"
+file = "crates/layout/src/text.rs"
+from = '''        let tabs = text.contains('\t').then(|| BlockTabs::new(cx, container));'''
+to = '''        let tabs = text.contains('\u{0}').then(|| BlockTabs::new(cx, container));'''
+
+[[mutant]]
+name = "space without letter spacing"
+file = "crates/layout/src/text.rs"
+from = '''            space: advance + container.letter_spacing.unwrap_or(0.0) + container.word_spacing,'''
+to = '''            space: advance + container.word_spacing,'''
+
+[[mutant]]
+name = "space without word spacing"
+file = "crates/layout/src/text.rs"
+from = '''            space: advance + container.letter_spacing.unwrap_or(0.0) + container.word_spacing,'''
+to = '''            space: advance + container.letter_spacing.unwrap_or(0.0),'''
+
+[[mutant]]
+name = "space shaped with its spacing"
+file = "crates/layout/src/text.rs"
+from = '''        unspaced.letter_spacing = None;'''
+to = '''        let _ = &mut unspaced;'''
+
+[[mutant]]
+name = "no least advance"
+file = "crates/layout/src/text.rs"
+from = '''            min_advance: advance / 2.0,'''
+to = '''            min_advance: 0.0,'''
+
+[[mutant]]
+name = "length counted in spaces"
+file = "crates/layout/src/text.rs"
+from = '''                computed_style::TabSize::Px(px) => px,'''
+to = '''                computed_style::TabSize::Px(px) => px * self.space,'''
+
+[[mutant]]
+name = "element span without tab stops"
+file = "crates/layout/src/text.rs"
+from = '''            let mut properties = text_properties(&elements[element].style, 0, tabs);'''
+to = '''            let mut properties = text_properties(&elements[element].style, 0, None);'''
+
+[[mutant]]
+name = "run without tab stops"
+file = "crates/layout/src/text.rs"
+from = '''            let mut properties = text_properties(style, index as u32, tabs);'''
+to = '''            let mut properties = text_properties(style, index as u32, None);'''
+
+[[mutant]]
+name = "stop nearer than the least advance taken"
+file = "../third_party/parley/parley/src/layout/spacing.rs"
+from = '''    if distance < stops.min_advance {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "no letter spacing without tab stops"
+file = "../third_party/parley/parley/src/layout/spacing.rs"
+from = '''        return spacing.letter;
+    }
+    let mut distance'''
+to = '''        return 0.;
+    }
+    let mut distance'''
+
+[[mutant]]
+name = "remainder of a negative position"
+file = "../third_party/parley/parley/src/layout/spacing.rs"
+from = '''    let mut distance = interval - position.rem_euclid(interval);'''
+to = '''    let mut distance = interval - position % interval;'''
+
+[[mutant]]
+name = "floats left out of the position"
+file = "../third_party/parley/parley/src/layout/line_break.rs"
+from = '''                            let position = self.state.line_x + line_indent + self.state.line.x;'''
+to = '''                            let position = line_indent + self.state.line.x;'''
+
+[[mutant]]
+name = "indent left out of the position"
+file = "../third_party/parley/parley/src/layout/line_break.rs"
+from = '''                            let position = self.state.line_x + line_indent + self.state.line.x;'''
+to = '''                            let position = self.state.line_x + self.state.line.x;'''
+
+[[mutant]]
+name = "tabs keep their shaped advance"
+file = "../third_party/parley/parley/src/layout/line_break.rs"
+from = '''                            if (advance - wanted).abs() > 1e-3 {'''
+to = '''                            if false {'''
+
+[[mutant]]
+name = "min-content tab from the max-content position"
+file = "../third_party/parley/parley/src/layout/data.rs"
+from = '''                let min = tab(self.running_min_width);'''
+to = '''                let min = tab(self.running_max_width);'''
+
+[[mutant]]
+name = "intrinsic widths without tab stops"
+file = "../third_party/parley/parley/src/layout/data.rs"
+from = '''            let tab_stops = if whitespace == Whitespace::Tab {'''
+to = '''            let tab_stops = if false {'''
+
+[[mutant]]
+name = "tab shaped as itself"
+file = "../third_party/parley/parley_engine/src/shape/shaper.rs"
+from = '''            let ch = if ch == '\t' { ' ' } else { ch };'''
+to = '''            let ch = if ch == '\u{0}' { ' ' } else { ch };'''
+test = ["python3", "scripts/test.py", "wpt", "css/css-text/tab-size/tab-size-block-ancestor.html"]
+
+[[mutant]]
+name = "min-content width as auto"
+file = "crates/layout/src/lib.rs"
+from = '''        Size::MinContent => AvailableSpace::MinContent,'''
+to = '''        Size::MinContent => space,'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "inline_block::"]
+
+[[mutant]]
+name = "max-content width as auto"
+file = "crates/layout/src/lib.rs"
+from = '''        Size::MaxContent => AvailableSpace::MaxContent,'''
+to = '''        Size::MaxContent => space,'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "inline_block::"]
+
+[[mutant]]
+name = "fit-content width as max-content"
+file = "crates/layout/src/lib.rs"
+from = '''        Size::MaxContent => AvailableSpace::MaxContent,
+        _ => space,'''
+to = '''        Size::MaxContent | Size::FitContent => AvailableSpace::MaxContent,
+        _ => space,'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "inline_block::"]
+
+[[mutant]]
+name = "contribution without the keyword"
+file = "crates/layout/src/lib.rs"
+from = '''                    width: keyword_space(&style, space),'''
+to = '''                    width: space,'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "inline_block::"]
+
+[[mutant]]
+name = "laid out without the keyword"
+file = "crates/layout/src/lib.rs"
+from = '''                width: match keyword_space(&style, space) {'''
+to = '''                width: match space {'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "inline_block::"]

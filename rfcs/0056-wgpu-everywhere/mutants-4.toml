@@ -1,0 +1,24 @@
+# 4: what `SoftwareRenderer`'s tests of the `Display` checked, now with a
+# fake renderer in `display.rs`: a new frame from an embedded surface is
+# drawn, other sinks' frames and stale surfaces aren't.
+#   python3 scripts/test.py mutate rfcs/0056-wgpu-everywhere/mutants-4.toml
+test = ["cargo", "test", "-q", "-p", "viz", "--lib", "display::"]
+timeout = 600
+
+[[mutant]]
+name = "an embedded surface's new frame not drawn"
+file = "crates/viz/src/display.rs"
+from = '''            && (sink == self.root_frame_sink || self.embedded.contains(&sink))'''
+to = '''            && sink == self.root_frame_sink'''
+
+[[mutant]]
+name = "any sink's frame drawn"
+file = "crates/viz/src/display.rs"
+from = '''            && (sink == self.root_frame_sink || self.embedded.contains(&sink))'''
+to = '''            && true'''
+
+[[mutant]]
+name = "a stale surface taken"
+file = "crates/viz/src/surface_aggregator.rs"
+from = '''            && local_surface_id < *current'''
+to = '''            && false'''

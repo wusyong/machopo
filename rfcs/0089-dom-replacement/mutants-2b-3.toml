@@ -1,0 +1,48 @@
+# Stage 2b-3: the calls' costs stage 2 added, taken back: an interface's
+# node kinds and a kind's interface worked out at compile time, a
+# template's name compared by number, one callback a call kept in a word.
+# The inline hints only make code faster: no test tells them.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_api_next"]
+timeout = 900
+
+[[mutant]]
+name = "an interface accepts its ancestors' kinds"
+file = "crates/dom_api_next/src/declare.rs"
+from = '''            if is_ancestor_or_self(ancestor, interface) {'''
+to = '''            if is_ancestor_or_self(interface, ancestor) {'''
+
+[[mutant]]
+name = "two kinds share a bit"
+file = "crates/dom_api_next/src/declare.rs"
+from = '''    1 << kind as u8
+}'''
+to = '''    1 << (kind as u8 / 2)
+}'''
+
+[[mutant]]
+name = "an interface accepts only its own kinds"
+file = "crates/dom_api_next/src/declare.rs"
+from = '''            if is_ancestor_or_self(ancestor, interface) {'''
+to = '''            if ancestor == interface {'''
+
+[[mutant]]
+name = "a kind's wrapper is the next interface's"
+file = "crates/dom_api_next/src/declare.rs"
+from = '''            table[kinds[at] as usize] = interface;'''
+to = '''            table[kinds[at] as usize] = interface + 1;'''
+
+[[mutant]]
+name = "a template is told by another name"
+file = "crates/dom_next/src/lib.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_next"]
+from = '''        if name.namespace == names::HTML_NAMESPACE && name.local == names::TEMPLATE {'''
+to = '''        if name.namespace == names::HTML_NAMESPACE && name.local == names::CLASS {'''
+
+[[mutant]]
+name = "the callback compared is none"
+file = "crates/dom_js_next/src/front.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next", "--test", "it"]
+from = '''        let taken = self.callback.expect("the callback taken");
+        bindings::strong(self.scope, edge).is_some_and(|held| held == taken)'''
+to = '''        let _ = self.callback;
+        bindings::strong(self.scope, edge).is_some_and(|_| false)'''

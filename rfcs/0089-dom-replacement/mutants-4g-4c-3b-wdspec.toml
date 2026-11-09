@@ -1,0 +1,77 @@
+# Stage 4g-4c-3b: what the renderer's WebDriver for the new DOM does in child frames, which
+# WPT's WebDriver tests reach (frame ids, Switch To Frame, references, a window's value, the
+# top-level points through the frames): those that switch into frames, as they were.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "-E", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "sh", "-c", "python3 scripts/test.py wdspec --next-dom webdriver/tests/classic/switch_to_frame webdriver/tests/classic/switch_to_parent_frame webdriver/tests/classic/get_current_url/iframe.py webdriver/tests/classic/get_title/iframe.py webdriver/tests/classic/take_element_screenshot/iframe.py webdriver/tests/classic/take_screenshot/iframe.py webdriver/tests/classic/element_click/click.py webdriver/tests/classic/execute_script/arguments.py webdriver/tests/classic/execute_script/node.py webdriver/tests/classic/element_send_keys/send_keys.py webdriver/tests/classic/element_send_keys/interactability.py webdriver/tests/classic/get_element_rect/get.py webdriver/tests/classic/perform_actions/pointer_mouse.py | grep -q 'expects 212, gaps 4 '"]
+timeout = 3000
+
+[[mutant]]
+name = "a child frame's context the top-level one"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''        let document = if id == top {
+            next.view.document_id()
+        } else {
+            next.view.child_mut(id).ok_or_else(gone)?.document_id()
+        };
+        Ok(NextContext {
+            frame: id,'''
+to = '''        let id = top;
+        let document = next.view.document_id();
+        Ok(NextContext {
+            frame: id,'''
+
+[[mutant]]
+name = "a frame id of another renderer taken"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''        (prefix == self.webdriver_state.prefix).then_some(FrameId(number))'''
+to = '''        let _ = prefix;
+        Some(FrameId(number))'''
+
+[[mutant]]
+name = "Switch To Frame by index one off"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''                        let child = *dom_api_next::child_windows(cx, window).get(usize::from(index))?;'''
+to = '''                        let child = *dom_api_next::child_windows(cx, window).get(usize::from(index) + 1)?;'''
+
+[[mutant]]
+name = "Switch To Frame by an element that isn't an iframe's"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''        let frame = next.view.frame_owned_by(owner).ok_or_else(no_frame)?;'''
+to = '''        let frame = next.view.frame_owned_by(owner).or(Some(cx.frame)).ok_or_else(no_frame)?;'''
+
+[[mutant]]
+name = "the parent's check always the top-level one"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''                return Ok(if cx.frame == cx.top {'''
+to = '''                return Ok(if true {'''
+
+[[mutant]]
+name = "a child frame's window the top-level one"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''                match view.child_frame() {
+                    None => WebDriverValue::Window,'''
+to = '''                match None::<FrameId> {
+                    None => WebDriverValue::Window,'''
+
+[[mutant]]
+name = "a frame argument the top-level window"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''                let document = next.view.child_mut(frame).ok_or_else(no_frame)?.document().clone();'''
+to = '''                let _ = frame;
+                let document = next.view.document().clone();'''
+
+[[mutant]]
+name = "another frame's element stale"
+file = "crates/renderer/src/render_thread/next_webdriver.rs"
+from = '''                if self.webdriver_state.next_documents.get(&of) == Some(&cx.frame) {'''
+to = '''                if self.webdriver_state.next_documents.contains_key(&of) {'''
+
+[[mutant]]
+name = "the frame tree's point from a child frame none"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''    fn point_from_frame(&mut self, document: NodeId, point: PointF) -> Option<PointF> {
+        self.view.point_from_frame(document, point)
+    }'''
+to = '''    fn point_from_frame(&mut self, document: NodeId, point: PointF) -> Option<PointF> {
+        let _ = (document, point);
+        None
+    }'''

@@ -1,0 +1,44 @@
+# Mutation test of stage 7b: a selector query matches its whole walk with
+# what matching needs made once:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-7b.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "-p", "style"]
+timeout = 2400
+
+[[mutant]]
+name = "querySelector makes a matcher for each element"
+file = "crates/dom_api/src/parent_node.rs"
+from = '''        |matches| descendants(node).find(|n| n.kind() == NodeKind::Element && matches(*n)),'''
+to = '''        |_| {
+            descendants(node).find(|n| {
+                n.kind() == NodeKind::Element
+                    && query.matches_in_scope(
+                        &read,
+                        &crate::form_states::HTML_FORM_STATES,
+                        *n,
+                        scope(node),
+                        quirks_mode(node),
+                    )
+            })
+        },'''
+
+[[mutant]]
+name = "closest makes a matcher for each ancestor"
+file = "crates/dom_api/src/element.rs"
+from = '''                .find(|n| matches(*n))'''
+to = '''                .find(|n| {
+                    let _ = &matches;
+                    query.matches_in_scope(
+                        &read,
+                        &crate::form_states::HTML_FORM_STATES,
+                        *n,
+                        Some(element),
+                        quirks_mode,
+                    )
+                })'''
+
+[[mutant]]
+name = ":scope is nothing"
+file = "crates/style/src/lib.rs"
+from = '''        context.scope_element =
+            scope.map(|scope| selectors::Element::opaque(&StyleElement::new(scope, form)));'''
+to = '''        let _ = scope;'''

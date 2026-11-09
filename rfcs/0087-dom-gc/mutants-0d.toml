@@ -1,0 +1,194 @@
+# Step 0d: the plain objects of `dom::bench` and their groups, the
+# allocation patterns of `gc_bench` (in Rust and in JS, on V8's heap too),
+# and what `bench.py gc` reads of V8's GC. Run with RUSTY_V8_ARCHIVE
+# pointing at a V8 built from the fork (`ci.py v8`) until the fork's
+# release has the heap statistics.
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "bench::"]
+# A mutant takes seconds; one that hangs waits this long.
+timeout = 300
+
+# `dom::bench`: how a group's objects are linked.
+
+[[mutant]]
+name = "a chain's objects all hang off the first"
+file = "crates/dom/src/bench.rs"
+from = '''            Shape::Chain | Shape::RandomGraph => (index.saturating_sub(1), 0),'''
+to = '''            Shape::Chain | Shape::RandomGraph => (0, 0),'''
+
+[[mutant]]
+name = "a tree's objects are all left children"
+file = "crates/dom/src/bench.rs"
+from = '''            Shape::BinaryTree => (index.saturating_sub(1) / 2, index.saturating_sub(1) % 2),'''
+to = '''            Shape::BinaryTree => (index.saturating_sub(1) / 2, 0),'''
+
+[[mutant]]
+name = "a random graph gets no random edges"
+file = "crates/dom/src/bench.rs"
+from = '''    if shape == Shape::RandomGraph {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a random graph's edges overwrite its chain"
+file = "crates/dom/src/bench.rs"
+from = '''            for slot in 1..N {'''
+to = '''            for slot in 0..N {'''
+
+[[mutant]]
+name = "a group's attach is its first object"
+file = "crates/dom/src/bench.rs"
+from = '''    let last = objects.last().expect("a group has objects");'''
+to = '''    let last = objects.first().expect("a group has objects");'''
+
+[[mutant]]
+name = "link always sets edge 0"
+file = "crates/dom/src/bench.rs"
+from = '''    from.object(scope.roots).edges[slot].set(scope, &to);'''
+to = '''    from.object(scope.roots).edges[0].set(scope, &to);'''
+
+[[mutant]]
+name = "reachable follows only the first edge"
+file = "crates/dom/src/bench.rs"
+from = '''        for edge in &object.edges {'''
+to = '''        for edge in object.edges.iter().take(1) {'''
+
+# `gc_bench`: the same choices and objects on every heap.
+
+[[mutant]]
+name = "Rust's generator differs from JS's"
+file = "crates/gc_bench/src/lib.rs"
+from = '''        self.0 ^= self.0 >> 17;'''
+to = '''        self.0 ^= self.0 >> 16;'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it"]
+
+[[mutant]]
+name = "JS's generator differs from Rust's"
+file = "crates/gc_bench/src/patterns.js"
+from = '''  seed ^= seed >>> 17;'''
+to = '''  seed ^= seed >>> 16;'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it"]
+
+[[mutant]]
+name = "JS's tree has only left children"
+file = "crates/gc_bench/src/patterns.js"
+from = '''      if ((i - 1) % 2 === 0) {'''
+to = '''      if (true) {'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it"]
+
+[[mutant]]
+name = "JS's graph draws one edge fewer"
+file = "crates/gc_bench/src/patterns.js"
+from = '''    object.e3 = scratch[below(groupSize)];'''
+to = '''    object.e3 = null;'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it"]
+
+[[mutant]]
+name = "JS links the next group from the kept group's entry"
+file = "crates/gc_bench/src/patterns.js"
+from = '''      attach = last;'''
+to = '''      attach = entry;'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it"]
+
+[[mutant]]
+name = "Rust keeps 90% whatever the survival"
+file = "crates/gc_bench/src/lib.rs"
+from = '''                if rng.below(100) < survival.percent() {'''
+to = '''                if rng.below(100) < 90 {'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it"]
+
+[[mutant]]
+name = "V8's used size is its committed size"
+file = "crates/gc_bench/src/lib.rs"
+from = '''                    used_size_bytes: stats.used_heap_size(),'''
+to = '''                    used_size_bytes: stats.total_heap_size(),'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it"]
+
+[[mutant]]
+name = "no baseline"
+file = "crates/gc_bench/src/lib.rs"
+from = '''    heap.sizes(dom).used_size_bytes
+}'''
+to = '''    let _ = heap.sizes(dom);
+    0
+}'''
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it"]
+
+# `bench.py gc`: V8's scavenges and the other threads' GC.
+
+[[mutant]]
+name = "the main thread counts as another"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''    for track in {event[0] for event in events} - {main}:'''
+to = '''    for track in {event[0] for event in events}:'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "SummaryTests"]
+
+[[mutant]]
+name = "the other threads' slices aren't cut at the span"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''                total += max(0, min(end, last) - max(begin, first))'''
+to = '''                total += end - begin'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "SummaryTests"]
+
+[[mutant]]
+name = "every scavenge counts, not only the turns'"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''if first <= begin and end <= last]'''
+to = '''if True]'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "SummaryTests"]
+
+[[mutant]]
+name = "the promoted bytes don't count as survived"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''record["new_space_survived"] + record["promoted"]'''
+to = '''record["new_space_survived"]'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "SummaryTests"]
+
+[[mutant]]
+name = "V8's lines aren't checked against the trace"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''    if len(minor) != len(scavenges):'''
+to = '''    if False:'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "SummaryTests"]
+
+[[mutant]]
+name = "every GC line counts as a scavenge"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''            if record.get("gc") == "s":'''
+to = '''            if True:'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "SummaryTests"]
+
+[[mutant]]
+name = "a scavenge counts as an atomic pause"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''    if name == "MinorGC" or "SCAVENGER" in name:'''
+to = '''    if False:'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "SummaryTests"]
+
+[[mutant]]
+name = "cppgc's marking inside V8's counts twice"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''        if name in MARK_SLICES and not any(name in MARK_SLICES for name in outer):'''
+to = '''        if name in MARK_SLICES:'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "SummaryTests"]
+
+[[mutant]]
+name = "the live bytes include the heap's own"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''    live = max(0, runs[0]["after_forced_gc"]["used"] - runs[0]["baseline_used"])'''
+to = '''    live = runs[0]["after_forced_gc"]["used"]'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "ReadingTests", "SummaryTests"]
+
+[[mutant]]
+name = "V8 runs without its GC lines"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''    "v8": ["--heap", "v8", "--v8-flags", "--trace-gc-nvp"],'''
+to = '''    "v8": ["--heap", "v8"],'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "RunTests"]
+
+# Expected missed, left to review: nothing checks that the single-threaded
+# runs are (docs/test-gaps.md).
+[[mutant]]
+name = "v8-single runs V8's GC on every thread"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''    "v8-single": ["--heap", "v8", "--v8-flags", "--trace-gc-nvp --single-threaded-gc"],'''
+to = '''    "v8-single": ["--heap", "v8", "--v8-flags", "--trace-gc-nvp"],'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py", "RunTests"]

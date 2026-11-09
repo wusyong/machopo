@@ -1,0 +1,194 @@
+# Stage 4d-3: HTML's event handlers on the new DOM: `dom_next`'s handler
+# listeners and their content attributes' hook, the parser's line,
+# `dom_api_next`'s IDL attributes and the dispatch's compile, the V8
+# engine's compile and call.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it -- events && cargo test -q -p dom_js_next --test it -- handlers && cargo test -q -p dom_api_next --test it -- dispatch table"]
+timeout = 3000
+
+[[mutant]]
+name = "a handler found as a listener"
+file = "crates/dom_next/src/event.rs"
+from = '''                    && bits & HANDLER == 0'''
+to = ''''''
+
+[[mutant]]
+name = "a handler set again comes last"
+file = "crates/dom_next/src/event.rs"
+from = '''        match self.event_handler(target, event_type) {
+            Some(listener) => listener,
+            None => self.push_listener(target, event_type | HANDLER),
+        }'''
+to = '''        self.remove_event_handler(target, event_type);
+        self.push_listener(target, event_type | HANDLER)'''
+
+[[mutant]]
+name = "a compiled handler keeps its source"
+file = "crates/dom_next/src/event.rs"
+from = '''        let listener = self.activate_handler(target, event_type);
+        listener.uncompiled.set(self.gc, None);
+        listener'''
+to = '''        self.activate_handler(target, event_type)'''
+
+[[mutant]]
+name = "a removed attribute leaves its handler"
+file = "crates/dom_next/src/event.rs"
+from = '''            None => self.remove_event_handler(target, handler.event_type),
+        }'''
+to = '''            None => {}
+        }'''
+
+[[mutant]]
+name = "an SVG element's attribute a handler"
+file = "crates/dom_next/src/event.rs"
+from = '''        if name.namespace != names::HTML_NAMESPACE {
+            return;
+        }
+        let body'''
+to = '''        let body'''
+
+[[mutant]]
+name = "a body's load its own"
+file = "crates/dom_next/src/event.rs"
+from = '''        let target = if body && (handler.window || handler.reflecting) {'''
+to = '''        let target = if body && handler.window {'''
+
+[[mutant]]
+name = "a window-only handler on any element"
+file = "crates/dom_next/src/event.rs"
+from = '''        } else if handler.global {
+            TargetRef::Node(element)
+        } else {
+            return;
+        };'''
+to = '''        } else {
+            TargetRef::Node(element)
+        };'''
+
+[[mutant]]
+name = "every handler at line 1"
+file = "crates/dom_next/src/event.rs"
+from = '''                let line = self.changes.parser_line.get().max(1);'''
+to = '''                let line = 1;'''
+
+[[mutant]]
+name = "the parser gives no line"
+file = "crates/html/src/next.rs"
+from = '''            // Where its event handlers' sources are.
+            cx.set_parser_line(line);'''
+to = '''            let _ = line;'''
+
+[[mutant]]
+name = "a namespaced attribute a handler"
+file = "crates/dom_next/src/style.rs"
+from = '''        if names::handler_entry(name.raw()) != 0 {
+            self.handler_attribute_changed(element, name.raw());'''
+to = '''        if names::handler_entry(name.ids().local) != 0 {
+            self.handler_attribute_changed(element, name.ids().local);'''
+
+[[mutant]]
+name = "an uncompiled handler called as it is"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''        if compile {
+            compile_handler(host, event, at);
+        }'''
+to = '''        let _ = compile;'''
+
+[[mutant]]
+name = "the getter compiles nothing"
+file = "crates/dom_api_next/src/handlers.rs"
+from = '''    if uncompiled {
+        host.compile_event_handler(target, event_type);
+    }'''
+to = '''    let _ = uncompiled;'''
+
+[[mutant]]
+name = "a body's handler its own in IDL"
+file = "crates/dom_api_next/src/handlers.rs"
+from = '''    if reflects {
+        return cx.window_of(cx.document_of(element)).map(TargetRef::Window);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "null sets nothing"
+file = "crates/dom_api_next/src/handlers.rs"
+from = '''        None => cx.remove_event_handler(target, event_type),
+    }
+    Ok(())'''
+to = '''        None => {}
+    }
+    Ok(())'''
+
+[[mutant]]
+name = "a string an event handler"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        if !value.is_object() {
+            return None;
+        }'''
+to = '''        if value.is_null_or_undefined() {
+            return None;
+        }'''
+
+[[mutant]]
+name = "an element's handler compiled with no scopes"
+file = "crates/dom_js_next/src/handlers.rs"
+from = '''        Some((document, element)) => vec![wrap(scope, document), wrap(scope, element)],'''
+to = '''        Some((document, element)) => {
+            let _ = (document, element);
+            Vec::new()
+        }'''
+
+[[mutant]]
+name = "a syntax error leaves the handler"
+file = "crates/dom_js_next/src/handlers.rs"
+from = '''        None => cx.remove_event_handler(target.get(cx.gc), event_type),
+    });'''
+to = '''        None => {}
+    });'''
+
+[[mutant]]
+name = "a syntax error not reported"
+file = "crates/dom_js_next/src/handlers.rs"
+from = '''        if function.is_none() {
+            report_caught(tc, ReportAt::Global(window));
+        }'''
+to = '''        let _ = window;'''
+
+[[mutant]]
+name = "the handler's line not its own"
+file = "crates/dom_js_next/src/handlers.rs"
+from = '''    let line_offset = i32::try_from(line.saturating_sub(1)).unwrap_or(i32::MAX);'''
+to = '''    let line_offset = i32::try_from(line.saturating_sub(1)).unwrap_or(i32::MAX) * 0;'''
+
+[[mutant]]
+name = "onerror with the event"
+file = "crates/dom_js_next/src/handlers.rs"
+from = '''    let on_error = matches!(target, TargetRoot::Window(_)) && event_type == names::event::ERROR;'''
+to = '''    let on_error = false;'''
+
+[[mutant]]
+name = "onerror called with the event"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''                    Some(data) => HandlerCall::OnError(cx.error_info(data), no_gc.strong_value(cx.error_edge(data))),'''
+to = '''                    Some(_) => HandlerCall::Event,'''
+
+[[mutant]]
+name = "a handler's false cancels nothing"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''                    returned.is_false()'''
+to = '''                    false'''
+
+[[mutant]]
+name = "onerror's true cancels nothing"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''                    returned.is_true()'''
+to = '''                    false'''
+
+[[mutant]]
+name = "a handler called as a listener"
+file = "crates/dom_js_next/src/listeners.rs"
+from = '''    if let Some(handler) = handler {
+        call_handler(scope, event, callback, this, argument, handler);
+        return;
+    }'''
+to = '''    let _ = handler;'''

@@ -1,0 +1,22 @@
+# The mouse into a child frame: a click on its button (its document's
+# `elementFromPoint` there finds it), the pointer over
+# it and a wheel there have their events in it, at the point in its
+# viewport (the iframe is at 20, 30 in the page, the page 74 px down the
+# window); the page has the pointer over the iframe and leaving it. The
+# keys go to the child frame once one of its elements has the focus.
+navigate pages/frame-input.html
+wait-loaded
+click-at 70 124
+wait-text #log "clicked at 50 20 on press"
+wait-text #hovered "over the iframe"
+hover-at 30 400
+wait-text #hovered "left the iframe"
+hover-at 75 129
+wait-text #log "over at 55 25"
+wait-text #hovered "over the iframe"
+# Its field clicked: the keys go to the child frame's focused element.
+click-at 50 154
+type "hi"
+wait-text #log "typed hi"
+wheel-at 80 134 0 40
+wait-text #log "wheel at 60 30"

@@ -1,0 +1,65 @@
+# After the wrap-up's measurements: a node's subtree's bloom filter of
+# attribute names and classes (Blink's `attribute_or_class_bloom_`), and
+# selector queries skipping the subtrees it says have no match. `dom`'s
+# tests of its bits, `style`'s of the queries (their results, the debug
+# build's count of the elements matched against a compound). Built
+# first, then run under a low memory cap (a mutant shouldn't, but could,
+# make a walk not end).
+test = ["sh", "-c", "systemd-run --user --scope -q -p MemoryMax=24G -p MemorySwapMax=0 cargo test --no-run -q -p dom -p style --test it && systemd-run --user --scope -q -p MemoryMax=2G -p MemorySwapMax=0 sh -c 'cargo test -q -p dom --test it bloom && cargo test -q -p style --test it query'"]
+timeout = 300
+
+[[mutant]]
+name = "dom: an inserted subtree's bits not its new ancestors'"
+file = "crates/dom/src/lib.rs"
+from = '''        if bloom != 0 {
+            self.add_to_bloom(parent, bloom);
+        }'''
+to = '''        if bloom != 0 && false {
+            self.add_to_bloom(parent, bloom);
+        }'''
+
+[[mutant]]
+name = "dom: an attribute set adds no bits"
+file = "crates/dom/src/style.rs"
+from = '''            self.attribute_bloomed(element, name, new);'''
+to = '''            let _ = (element, name, new);'''
+
+[[mutant]]
+name = "dom: a class attribute's classes add no bits"
+file = "crates/dom/src/bloom.rs"
+from = '''                bits |= class_bloom(class);'''
+to = '''                let _ = class;'''
+
+[[mutant]]
+name = "dom: the bits stop going up at an ancestor with any"
+file = "crates/dom/src/bloom.rs"
+from = '''            if had & bits == bits {'''
+to = '''            if had != 0 {'''
+
+[[mutant]]
+name = "style: a subtree without what it takes walked"
+file = "crates/style/src/query.rs"
+from = '''                cx.kind(node) == NodeKind::Element && !has(cx.subtree_bloom(node), need(next));'''
+to = '''                cx.kind(node) == NodeKind::Element && false;'''
+
+[[mutant]]
+name = "style: a compound's need not those after it"
+file = "crates/style/src/query.rs"
+from = '''            *need = after;'''
+to = '''            *need = (
+                compound.attribute_bits | compound.class_bits,
+                compound.attribute_bits,
+            );'''
+
+[[mutant]]
+name = "style: the lazily written style attribute looked for"
+file = "crates/style/src/query.rs"
+from = '''    if local == names::local::STYLE {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "style: classes looked for in quirks mode"
+file = "crates/style/src/query.rs"
+from = '''            if modes.quirks { no_classes } else { all }'''
+to = '''            let _ = no_classes;
+            all'''

@@ -1,0 +1,46 @@
+# Stage 4a: the global's `document` and `window` are V8's cached accessors
+# (Blink's `[CachedAccessor]`): their getters' templates made with the
+# private property V8 reads, set as a realm is made and again as its window
+# gets another document. `dom_js`'s frames tests (the debug build's count of
+# the `document` getter's calls; the document after the window is reused,
+# in optimized code too; the getter no constructor). The V8 to link is the
+# local build until the fork's next release.
+test = ["sh", "-c", "systemd-run --user --scope -q -p MemoryMax=24G -p MemorySwapMax=0 --setenv=RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts sh -c 'cargo test -q -p dom_js --test it frames::'"]
+timeout = 1800
+
+[[mutant]]
+name = "dom_js: the getters' templates without the cache"
+file = "crates/dom_js/src/templates.rs"
+from = '''            .then(|| CachedAccessor::of(INTERFACES[M::INTERFACE].name, M::NAME))'''
+to = '''            .then(|| CachedAccessor::of(INTERFACES[M::INTERFACE].name, M::NAME).filter(|_| false))'''
+
+[[mutant]]
+name = "dom_js: the document's value not set"
+file = "crates/dom_js/src/window.rs"
+from = '''        (CachedAccessor::WindowDocument, wrapper),
+    ] {'''
+to = '''    ] {
+        let _ = wrapper;'''
+
+[[mutant]]
+name = "dom_js: the reused window's document not updated"
+file = "crates/dom_js/src/engine.rs"
+from = '''        crate::window::update_cached_accessors(&mut scope, global);'''
+to = '''        let _ = global;'''
+
+[[mutant]]
+name = "dom_js: window and document swapped"
+file = "crates/dom_js/src/window.rs"
+from = '''            ("Window", "window") => Some(Self::WindowProxy),
+            ("Window", "document") => Some(Self::WindowDocument),'''
+to = '''            ("Window", "window") => Some(Self::WindowDocument),
+            ("Window", "document") => Some(Self::WindowProxy),'''
+
+[[mutant]]
+name = "bindings: a cached getter a constructor"
+file = "crates/bindings/src/isolate_state.rs"
+from = '''    template.remove_prototype();
+    template
+}'''
+to = '''    template
+}'''

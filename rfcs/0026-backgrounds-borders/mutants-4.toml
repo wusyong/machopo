@@ -1,0 +1,216 @@
+# Mutation test of stage 4 (border styles):
+# python3 scripts/test.py mutate rfcs/0026-backgrounds-borders/mutants-4.toml
+test = ["cargo", "test", "-q", "-p", "paint"]
+timeout = 900
+
+# --- style -------------------------------------------------------------
+
+[[mutant]]
+name = "hidden keeps its width"
+file = "crates/style/src/properties.rs"
+from = '''        if !side_mut(&mut style.border_style, i).is_drawn() {'''
+to = '''        if *side_mut(&mut style.border_style, i) == computed_style::BorderStyle::None {'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "an outline takes hidden"
+file = "crates/style/src/properties.rs"
+from = '''                    Some(BorderStyle::Hidden) => None,'''
+to = '''                    Some(BorderStyle::Hidden) => Some(OutlineStyle::Line(BorderStyle::Hidden)),'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "groove reads back as ridge"
+file = "crates/style/src/serialize.rs"
+from = '''        BorderStyle::Groove => "groove",'''
+to = '''        BorderStyle::Groove => "ridge",'''
+test = ["cargo", "test", "-q", "-p", "style"]
+
+[[mutant]]
+name = "a hidden border is drawn"
+file = "crates/computed_style/src/lib.rs"
+from = '''        !matches!(self, Self::None | Self::Hidden)'''
+to = '''        !matches!(self, Self::None)'''
+test = ["python3", "scripts/test.py", "reftest", "backgrounds/t1"]
+
+[[mutant]]
+name = "a dashed border hides the background's edge"
+file = "crates/computed_style/src/lib.rs"
+from = '''            Self::Solid | Self::Groove | Self::Ridge | Self::Inset | Self::Outset'''
+to = '''            Self::Solid | Self::Groove | Self::Ridge | Self::Inset | Self::Outset | Self::Dashed'''
+
+# --- raster --------------------------------------------------------------
+
+[[mutant]]
+name = "no dashes"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        paint.set_path_effect(sk::PathEffect::dash(&[dash.on, dash.off], 0.0));'''
+to = '''        let _ = dash.off;'''
+test = ["cargo", "test", "-q", "-p", "raster"]
+
+[[mutant]]
+name = "square dots"
+file = "crates/raster/src/skia_backend.rs"
+from = '''            paint.set_stroke_cap(sk::PaintCap::Round);'''
+to = '''            paint.set_stroke_cap(sk::PaintCap::Butt);'''
+test = ["cargo", "test", "-q", "-p", "raster"]
+
+[[mutant]]
+name = "a clipped op isn't clipped"
+file = "crates/raster/src/skia_backend.rs"
+from = '''            canvas.clip_path(&polygon_path(polygon), sk::ClipOp::Intersect, true);
+            draw_op(canvas, op, base, cache);'''
+to = '''            let _ = polygon;
+            draw_op(canvas, op, base, cache);'''
+test = ["cargo", "test", "-q", "-p", "raster"]
+
+[[mutant]]
+name = "a clipped op's bounds are none"
+file = "crates/compositor_paint/src/lib.rs"
+from = '''        PaintOp::DrawClipped { op, .. } => op_bounds(op),'''
+to = '''        PaintOp::DrawClipped { .. } => None,'''
+test = ["cargo", "test", "-q", "-p", "compositor_paint"]
+
+# --- paint ---------------------------------------------------------------
+
+[[mutant]]
+name = "inset darkens the bottom and right"
+file = "crates/paint/src/lib.rs"
+from = '''        let top_left = i == 0 || i == 3;'''
+to = '''        let top_left = i == 1 || i == 2;'''
+
+[[mutant]]
+name = "groove is ridge"
+file = "crates/paint/src/lib.rs"
+from = '''                let groove = side.style == Groove;'''
+to = '''                let groove = side.style == Ridge;'''
+
+[[mutant]]
+name = "outset is inset"
+file = "crates/paint/src/lib.rs"
+from = '''            Outset => bands(&[(0.0, 1.0, shaded(false))]),'''
+to = '''            Outset => bands(&[(0.0, 1.0, shaded(true))]),'''
+
+[[mutant]]
+name = "double's lines are thirds of the CSS width"
+file = "crates/paint/src/lib.rs"
+from = '''                let outer = d / 3 + i32::from(d % 3 == 2);'''
+to = '''                let outer = d / 3;'''
+
+[[mutant]]
+name = "a thin double is two lines"
+file = "crates/paint/src/lib.rs"
+from = '''                if d < 3 {
+                    return bands(&[(0.0, 1.0, side.color)]);
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "a dark color is darkened further"
+file = "crates/paint/src/lib.rs"
+from = '''        if distance(color, 0) <= 3 * 0x20 * 0x20 {'''
+to = '''        if distance(color, 0) <= 0 {'''
+
+[[mutant]]
+name = "a light color is lightened further"
+file = "crates/paint/src/lib.rs"
+from = '''    } else if distance(color, 255) <= 3 * (255 - 0xEB) * (255 - 0xEB) {'''
+to = '''    } else if distance(color, 255) <= 0 {'''
+
+[[mutant]]
+name = "black lightens to black"
+file = "crates/paint/src/lib.rs"
+from = '''    } else if v == 0.0 {
+        gray(0x54)'''
+to = '''    } else if v == 0.0 {
+        gray(0)'''
+
+[[mutant]]
+name = "a ring with a side missing isn't whole"
+file = "crates/paint/src/lib.rs"
+from = '''        let uniform = looks.len() == present'''
+to = '''        let uniform = looks.len() == 4'''
+
+[[mutant]]
+name = "a transparent side with a width is part of a whole ring"
+file = "crates/paint/src/lib.rs"
+from = '''        let present = sides.iter().filter(|side| side.width > 0.0).count();'''
+to = '''        let present = sides.iter().filter(|side| side.is_visible()).count();'''
+test = ["python3", "scripts/test.py", "reftest", "wpt/css/CSS2/borders", "wpt/css/css-backgrounds/border-", "wpt/css/CSS2/"]
+
+[[mutant]]
+name = "a rounded ring with a side missing is whole"
+file = "crates/paint/src/lib.rs"
+from = '''            && (outer.is_rect() || present == 4)'''
+to = ''''''
+
+[[mutant]]
+name = "a dashed side isn't clipped to its trapezoid"
+file = "crates/paint/src/lib.rs"
+from = '''                        item(PaintOp::DrawClipped {
+                            polygon: polygons[i].clone(),
+                            op: Box::new(op),
+                        }),'''
+to = '''                        item(op),'''
+
+[[mutant]]
+name = "dots start at the corners"
+file = "crates/paint/src/lib.rs"
+from = '''        if style == BorderStyle::Dotted && length > width {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a rounded dashed side follows the outer curve"
+file = "crates/paint/src/lib.rs"
+from = '''            let middle = outer.inset(top / 2.0, right / 2.0, bottom / 2.0, left / 2.0);'''
+to = '''            let middle = outer;'''
+
+[[mutant]]
+name = "a dash isn't fitted"
+file = "crates/paint/src/lib.rs"
+from = '''                off: best_dash_gap(length, dash, gap, closed),'''
+to = '''                off: gap,'''
+
+[[mutant]]
+name = "thin dashes are thick ones' lengths"
+file = "crates/paint/src/lib.rs"
+from = '''                (3.0 * width, 2.0 * width)'''
+to = '''                (2.0 * width, width)'''
+
+[[mutant]]
+name = "dashes on a side too short for them"
+file = "crates/paint/src/lib.rs"
+from = '''            (length >= 2.0 * dash + gap).then(|| Dash {'''
+to = '''            (length >= 0.0).then(|| Dash {'''
+
+[[mutant]]
+name = "dots one width apart"
+file = "crates/paint/src/lib.rs"
+from = '''                let gaps = (span / (2.0 * width)).round().max(1.0);'''
+to = '''                let gaps = (span / width).round().max(1.0);'''
+
+[[mutant]]
+name = "the dash gap that fits more dashes always"
+file = "crates/paint/src/lib.rs"
+from = '''    if max_gap <= 0.0 || (min_gap - gap).abs() < (max_gap - gap).abs() {'''
+to = '''    if max_gap <= 0.0 {'''
+
+[[mutant]]
+name = "a closed path has a gap fewer"
+file = "crates/paint/src/lib.rs"
+from = '''    let gaps = |dashes: f32| if closed { dashes } else { dashes - 1.0 };'''
+to = '''    let gaps = |dashes: f32| dashes - 1.0;'''
+
+[[mutant]]
+name = "an outline's line is solid"
+file = "crates/paint/src/lib.rs"
+from = '''                    let side = BorderSide {
+                        width,
+                        style: line,
+                        color,
+                    };'''
+to = '''                    let side = BorderSide {
+                        width,
+                        style: if line == BorderStyle::Solid { line } else { BorderStyle::Solid },
+                        color,
+                    };'''

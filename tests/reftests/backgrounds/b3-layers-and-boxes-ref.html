@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<title>Backgrounds 3 reference</title>
+<style>
+  html, body { margin: 0 }
+  .box { position: relative; width: 140px; height: 90px }
+  .row { position: relative; margin-top: 10px; width: 100px; height: 10px }
+  .row img, .box img, .box div { position: absolute; display: block }
+</style>
+<div class="box">
+  <div style="left: 10px; top: 10px; width: 120px; height: 70px; background-color: green"></div>
+  <div style="left: 20px; top: 20px; width: 100px; height: 50px; background-color: blue"></div>
+  <img src="../images/resources/green-blue-20x10.png" style="left: 120px; top: 80px">
+</div>
+<div class="row">
+  <img src="../images/resources/green-blue-20x10.png" style="left: 0">
+  <img src="../images/resources/green-blue-20x10.png" style="left: 22px">
+  <img src="../images/resources/green-blue-20x10.png" style="left: 44px">
+  <img src="../images/resources/green-blue-20x10.png" style="left: 66px">
+</div>
+<div class="row" style="overflow: hidden">
+  <img src="../images/resources/green-blue-20x10.png" style="left: 0; width: 22px; height: 11px">
+  <img src="../images/resources/green-blue-20x10.png" style="left: 22px; width: 22px; height: 11px">
+  <img src="../images/resources/green-blue-20x10.png" style="left: 44px; width: 22px; height: 11px">
+</div>

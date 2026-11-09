@@ -1,0 +1,24 @@
+# Stage 4h-2b-1, through the renderer: getComputedStyle's style-only update, ::selection's computed
+# style and its painting.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p shell --test it -- next_dom::computed_styles_and_selection"]
+timeout = 1800
+
+[[mutant]]
+name = "renderer: no style-only update"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        frame.update_style(cx, token);'''
+to = ''''''
+
+[[mutant]]
+name = "api: ::selection's style without its highlight"
+file = "crates/dom_api_next/src/computed_style.rs"
+from = '''                highlight.apply_to(&mut selection);'''
+to = ''''''
+
+[[mutant]]
+name = "style: no highlight cascaded"
+file = "crates/style_next/src/lib.rs"
+from = '''        if !selection.is_empty() {
+            let inherited = style.rare_inherited.highlight.clone();'''
+to = '''        if false {
+            let inherited = style.rare_inherited.highlight.clone();'''

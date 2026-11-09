@@ -1,0 +1,34 @@
+# Resizing the window: the page is laid out again at the new size,
+# so the text in about:demo's first box wraps at the new width. In a real
+# window the system resizes it.
+navigate about:demo
+wait-loaded
+capture wide
+resize 600 600
+expect-differs wide .hero
+screenshot narrow
+capture narrow
+resize 1000 700
+expect-differs narrow .hero
+screenshot wide-again
+# The page still takes input at its new size.
+click #clicker
+wait-text #count "Clicked 1 time (onclick)."
+# calc(10vw - 20px) follows the window: styled again with the viewport.
+click #measure-calc
+wait-text #calc-note "80px wide in a 1000px wide window: calc(10vw - 20px)."
+capture bar-wide
+resize 600 700
+# Anywhere: scroll anchoring keeps what shows where it was, and the bar's
+# new box (its left half) looked the same before.
+expect-differs bar-wide
+click #measure-calc
+wait-text #calc-note "40px wide in a 600px wide window: calc(10vw - 20px)."
+# @media and matchMedia() follow the window: a narrow one, then a wide one,
+# whose swatch is wider than the narrow window's (compared where it is
+# now: what shows stays in place as the window resizes).
+wait-text #media-note "matchMedia('(min-width: 800px)') doesn't match: a narrow window (changes: 3)."
+capture swatch-narrow
+resize 1000 700
+wait-text #media-note "matchMedia('(min-width: 800px)') matches: a wide window (changes: 4)."
+expect-differs swatch-narrow #media-swatch

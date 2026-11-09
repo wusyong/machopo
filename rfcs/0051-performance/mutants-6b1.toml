@@ -1,0 +1,92 @@
+# Mutation test of stage 6b1: a stacking context nothing in which changed
+# takes all its items from the last paint, without being walked; the
+# boxes' and stacking contexts' paints are kept across paints:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-6b1.toml
+test = ["cargo", "test", "-q", "-p", "paint"]
+timeout = 1800
+
+[[mutant]]
+name = "no stacking context is taken whole"
+file = "crates/paint/src/paint_controller.rs"
+from = '''        (subsequence.paint == self.artifact.id
+            && subsequence.skip_background == skip_background'''
+to = '''        (false
+            && subsequence.skip_background == skip_background'''
+
+[[mutant]]
+name = "the canvas background's source isn't compared"
+file = "crates/paint/src/paint_controller.rs"
+from = '''            && subsequence.skip_background == skip_background
+            && pre.unchanged_since(root, self.pre))'''
+to = '''            && pre.unchanged_since(root, self.pre))'''
+
+[[mutant]]
+name = "pre-paint walking it again doesn't count"
+file = "crates/paint/src/paint_controller.rs"
+from = '''            && pre.unchanged_since(root, self.pre))'''
+to = '''            && { let _ = pre; true })'''
+
+[[mutant]]
+name = "a pre-paint of another line counts as the same"
+file = "crates/paint/src/lib.rs"
+from = '''        self.lineage == generation.0
+            && self'''
+to = '''        self'''
+
+[[mutant]]
+name = "an element to paint anew doesn't count"
+file = "crates/paint/src/paint_controller.rs"
+from = '''            .is_none_or(|repaint| repaint.contains(&address))'''
+to = '''            .is_none_or(|repaint| repaint.is_empty() && false)'''
+
+[[mutant]]
+name = "only the innermost stacking context paints anew"
+file = "crates/paint/src/paint_controller.rs"
+from = '''                at = self.subsequences.get(&address).and_then(|s| s.parent);'''
+to = '''                at = None;'''
+
+[[mutant]]
+name = "an element without a box of its own counts for none"
+file = "crates/paint/src/paint_controller.rs"
+from = '''            let painted = self.boxes.get(self.by_node.get(node)?)?;'''
+to = '''            let Some(painted) = self.by_node.get(node).and_then(|a| self.boxes.get(a)) else {
+                continue;
+            };'''
+
+[[mutant]]
+name = "the stacking contexts in one taken whole aren't moved"
+file = "crates/paint/src/paint_controller.rs"
+from = '''        for nested in subsequence.nested.clone() {
+            self.moved(nested, Some(root), paint, by);
+        }'''
+to = '''        let _ = &subsequence.nested;'''
+
+[[mutant]]
+name = "a stacking context taken whole keeps its old parent"
+file = "crates/paint/src/paint_controller.rs"
+from = '''        subsequence.parent = parent;'''
+to = '''        let _ = parent;'''
+
+[[mutant]]
+name = "items taken whole are in the root's state"
+file = "crates/paint/src/lib.rs"
+from = '''            self.push_cached(chunks[chunk].state, index);'''
+to = '''            self.push_cached(PropertyTreeState::ROOT, index);'''
+
+[[mutant]]
+name = "a box's line-phase items aren't placed from its stacking context's start"
+file = "crates/paint/src/lib.rs"
+from = '''                .text = start - from..end - from;'''
+to = '''                .text = start..end;'''
+
+[[mutant]]
+name = "a box's background items aren't placed from its stacking context's start"
+file = "crates/paint/src/lib.rs"
+from = '''                backgrounds: start - from..end - from,'''
+to = '''                backgrounds: start..end,'''
+
+[[mutant]]
+name = "an element's box isn't found by its element"
+file = "crates/paint/src/lib.rs"
+from = '''            self.cache.by_node.insert(node, Arc::as_ptr(fragment));'''
+to = '''            let _ = node;'''

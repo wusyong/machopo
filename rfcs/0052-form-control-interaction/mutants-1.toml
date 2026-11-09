@@ -1,0 +1,416 @@
+# 1: a list box's mouse and keys and a menu list's keys (`dom_api`'s
+# `select_type`), the option the keys moved to (`dom`'s state, `css` and
+# `style`'s pseudo-class, the UA's ring), and the scroll once laid out
+# (`renderer`).
+#   python3 scripts/test.py mutate rfcs/0052-form-control-interaction/mutants-1.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "select_type::"]
+timeout = 900
+
+[[mutant]]
+name = "a disabled select takes the events"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        if disabled {
+            return false;
+        }'''
+to = '''        if disabled && false {
+            return false;
+        }'''
+
+[[mutant]]
+name = "a menu list takes Alt's keys"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    if key.shift_key || key.ctrl_key || key.alt_key || key.meta_key {'''
+to = '''    if key.shift_key || key.ctrl_key || key.meta_key {'''
+
+[[mutant]]
+name = "a menu list takes every event's key"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        "keydown" => menu_list_keydown(cx, select, &key),
+        "keypress" if'''
+to = '''        _ if event_type != "keypress" => menu_list_keydown(cx, select, &key),
+        "keypress" if'''
+
+[[mutant]]
+name = "a menu list's right arrow isn't the next"
+file = "crates/dom_api/src/select_type.rs"
+from = '''            "ArrowDown" | "ArrowRight" => next_valid_option(&items, index, true, 1),'''
+to = '''            "ArrowDown" => next_valid_option(&items, index, true, 1),'''
+
+[[mutant]]
+name = "a menu list's page is 2"
+file = "crates/dom_api/src/select_type.rs"
+from = '''const MENU_LIST_PAGE: i32 = 3;'''
+to = '''const MENU_LIST_PAGE: i32 = 2;'''
+
+[[mutant]]
+name = "a menu list fires for the option selected already"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    if before != Some(option.id()) {
+        crate::input::fire_input_and_change(cx, select);'''
+to = '''    if true {
+        crate::input::fire_input_and_change(cx, select);'''
+
+[[mutant]]
+name = "a menu list's key keeps the others selected"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        deselect_others(&mut m, select, Some(option));
+        select_dirty(&mut m, option, true);
+    }
+    if before'''
+to = '''        select_dirty(&mut m, option, true);
+    }
+    if before'''
+
+[[mutant]]
+name = "the keys go to disabled options"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        if is_option(*item) && !option_disabled(*item) {'''
+to = '''        if is_option(*item) {'''
+
+[[mutant]]
+name = "the keys go no further than one"
+file = "crates/dom_api/src/select_type.rs"
+from = '''            if skip <= 0 {
+                break;
+            }'''
+to = '''            break;'''
+
+[[mutant]]
+name = "the keys start at the option they go from"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    let mut last_good = None;
+    index += step;'''
+to = '''    let mut last_good = None;'''
+
+[[mutant]]
+name = "a page is the rows"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    let page = size - 1;'''
+to = '''    let page = size;'''
+
+[[mutant]]
+name = "a page counts from where it goes from"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    let skip = page + if forwards { start } else { edge - start };'''
+to = '''    let skip = page + if forwards { start } else { start };'''
+
+[[mutant]]
+name = "an hr is no list item"
+file = "crates/dom_api/src/select_type.rs"
+from = '''                local_name!("optgroup"),
+                local_name!("hr"),
+            ]'''
+to = '''                local_name!("optgroup"),
+            ]'''
+
+[[mutant]]
+name = "a list box without size is a row"
+file = "crates/dom_api/src/select_type.rs"
+from = '''const DEFAULT_LIST_BOX_SIZE: i32 = 4;'''
+to = '''const DEFAULT_LIST_BOX_SIZE: i32 = 1;'''
+
+[[mutant]]
+name = "a single list box's Shift selects a range"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    if !multiple {
+        mode = SelectionMode::DeselectOthers;
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "Ctrl's press keeps a selected option"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    if was_selected && mode == SelectionMode::NotChangeOthers {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a press keeps the others selected"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    if mode == SelectionMode::DeselectOthers {
+        deselect_others(m, select, Some(clicked));
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "Shift's first press isn't from the first selected"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    if state.anchor.is_none() && mode != SelectionMode::NotChangeOthers {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "Shift's press with no anchor leaves none"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    if state.anchor.is_none() || mode != SelectionMode::Range {'''
+to = '''    if mode != SelectionMode::Range {'''
+
+[[mutant]]
+name = "a range selects disabled options"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        if *disabled {
+            continue;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a range always selects"
+file = "crates/dom_api/src/select_type.rs"
+from = '''            select_dirty(m, option, state.range_selects);'''
+to = '''            select_dirty(m, option, true);'''
+
+[[mutant]]
+name = "out of the range, options aren't as they were"
+file = "crates/dom_api/src/select_type.rs"
+from = '''            set_selectedness(m, option, state.anchor_selection[i]);'''
+to = '''            set_selectedness(m, option, false);'''
+
+[[mutant]]
+name = "an option added since the anchor goes back to what it never was"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        } else if deselect_others || i >= state.anchor_selection.len() {'''
+to = '''        } else if deselect_others {'''
+
+[[mutant]]
+name = "the release always fires"
+file = "crates/dom_api/src/select_type.rs"
+from = '''            let fire = state.change_selection != now;'''
+to = '''            let fire = true;'''
+
+[[mutant]]
+name = "another number of options fires input too"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        if state.change_selection.is_empty() || state.change_selection.len() != now.len() {'''
+to = '''        if state.change_selection.is_empty() {'''
+
+[[mutant]]
+name = "nothing is scrolled into view"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    if let Some(option) = option {
+        let container = select.id();'''
+to = '''    if let Some(option) = option.filter(|_| false) {
+        let container = select.id();'''
+
+[[mutant]]
+name = "an option's label isn't its option"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    std::iter::successors(Some(target.get(read)), NodeRef::parent_or_shadow_host)'''
+to = '''    std::iter::successors(Some(target.get(read)), NodeRef::parent)'''
+
+[[mutant]]
+name = "any button's press selects"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        "mousedown" if mouse.button == 0 => {'''
+to = '''        "mousedown" => {'''
+
+[[mutant]]
+name = "a press doesn't focus"
+file = "crates/dom_api/src/select_type.rs"
+from = '''            crate::focus::focus_by_mouse(cx, select);'''
+to = ''''''
+
+[[mutant]]
+name = "Shift's press isn't a range"
+file = "crates/dom_api/src/select_type.rs"
+from = '''                let mode = if mouse.shift_key {
+                    SelectionMode::Range'''
+to = '''                let mode = if mouse.shift_key {
+                    SelectionMode::DeselectOthers'''
+
+[[mutant]]
+name = "Cmd adds off a Mac"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    } else {
+        ctrl
+    }'''
+to = '''    } else {
+        meta
+    }'''
+
+[[mutant]]
+name = "a drag from elsewhere moves the end"
+file = "crates/dom_api/src/select_type.rs"
+from = '''            // The press wasn't in it.
+            if state.change_selection.is_empty() {
+                return false;
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "a move without the button drags"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        "mousemove" if mouse.buttons & 1 != 0 => {'''
+to = '''        "mousemove" => {'''
+
+[[mutant]]
+name = "a single list box's drag keeps the option it left"
+file = "crates/dom_api/src/select_type.rs"
+from = '''                state.end = Some(option.id());
+                update_list_box_selection(&mut m, select, &state, true);'''
+to = '''                state.end = Some(option.id());
+                update_list_box_selection(&mut m, select, &state, false);'''
+
+[[mutant]]
+name = "a release after a press elsewhere fires"
+file = "crates/dom_api/src/select_type.rs"
+from = '''            if !state(select.get(&cx.read())).change_selection.is_empty() {'''
+to = '''            if true {'''
+
+[[mutant]]
+name = "Ctrl's keys select"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    let select_new_item = !multiple || key.shift_key || !state.non_contiguous;'''
+to = '''    let select_new_item = true;'''
+
+[[mutant]]
+name = "Ctrl's keys unselect the others"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    let deselect = !multiple || (!key.shift_key && select_new_item);'''
+to = '''    let deselect = !multiple || !key.shift_key;'''
+
+[[mutant]]
+name = "Shift's first key leaves no anchor"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    if state.anchor.is_none() || deselect {'''
+to = '''    if deselect {'''
+
+[[mutant]]
+name = "a key keeps no selection to compare with"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    state.change_selection = list_selection(select.get(&m.read()));
+    state.end = Some(end_option.id());'''
+to = '''    state.end = Some(end_option.id());'''
+
+[[mutant]]
+name = "up goes from the last selected"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        let from_up = end.or_else(|| selected_options.first().copied());'''
+to = '''        let from_up = end.or_else(|| selected_options.last().copied());'''
+
+[[mutant]]
+name = "Enter is the page's"
+file = "crates/dom_api/src/select_type.rs"
+from = '''            0x0d => true,'''
+to = '''            0x0d => false,'''
+
+[[mutant]]
+name = "Ctrl+Space doesn't toggle"
+file = "crates/dom_api/src/select_type.rs"
+from = '''            if key.key == " " && adds(key.ctrl_key, key.meta_key) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "Space toggles without Ctrl's move"
+file = "crates/dom_api/src/select_type.rs"
+from = '''    if !(is_multiple(select.get(&m.read())) && state.non_contiguous) {'''
+to = '''    if !is_multiple(select.get(&m.read())) {'''
+
+[[mutant]]
+name = "the end always has the multi-select focus"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        Some(FormControlData::Select(state)) if state.non_contiguous => state.end,'''
+to = '''        Some(FormControlData::Select(state)) => state.end,'''
+
+[[mutant]]
+name = "a blur keeps the selection to compare with"
+file = "crates/dom_api/src/select_type.rs"
+from = '''        state.change_selection.clear();'''
+to = ''''''
+
+[[mutant]]
+name = "the focus moving away doesn't tell the select"
+file = "crates/dom_api/src/focus.rs"
+from = '''        crate::select_type::did_blur(cx, old);'''
+to = ''''''
+
+[[mutant]]
+name = "a press's focus has a ring"
+file = "crates/dom_api/src/focus.rs"
+from = '''    if let Some(page) = page_of(cx, &document) {
+        page.set_focus_visible(false);
+    }
+    if is_focusable_area(cx, element) {'''
+to = '''    if is_focusable_area(cx, element) {'''
+
+[[mutant]]
+name = "no option has the multi-select focus"
+file = "crates/dom_api/src/form_states.rs"
+from = '''            crate::select_type::has_multi_select_focus(element),'''
+to = '''            false,'''
+
+[[mutant]]
+name = "the multi-select focus isn't a form state"
+file = "crates/dom/src/node.rs"
+from = '''            | Self::MULTI_SELECT_FOCUS.0
+            | Self::OPEN.0,'''
+to = '''            | Self::OPEN.0,'''
+
+[[mutant]]
+name = "the UA's sheet drops the internal pseudo-class"
+file = "crates/css/src/selector.rs"
+from = '''            if name.eq_ignore_ascii_case("-internal-multi-select-focus") {'''
+to = '''            if false {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::a_list_boxs_multi"]
+
+[[mutant]]
+name = "the internal pseudo-class is anyone's"
+file = "crates/css/src/selector.rs"
+from = '''        if self.user_agent {
+            if name.eq_ignore_ascii_case("-internal-list-box") {'''
+to = '''        if true {
+            if name.eq_ignore_ascii_case("-internal-list-box") {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "stylesheet::internal"]
+
+[[mutant]]
+name = "the pseudo-class matches no state"
+file = "crates/style/src/selector.rs"
+from = '''        PseudoClass::InternalMultiSelectFocus => ElementState::MULTI_SELECT_FOCUS,'''
+to = '''        PseudoClass::InternalMultiSelectFocus => ElementState::FOCUS,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::a_list_boxs_multi", "invalidation::a_multi"]
+
+[[mutant]]
+name = "the UA has no ring for it"
+file = "crates/style/resources/html.css"
+from = '''select:-internal-list-box:focus-visible option:-internal-multi-select-focus {
+  outline: auto 1px -webkit-focus-ring-color;'''
+to = '''select:-internal-list-box:focus-visible option:-internal-multi-select-focus {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::a_list_boxs_multi"]
+
+[[mutant]]
+name = "the ring isn't only while the list box shows its focus"
+file = "crates/style/resources/html.css"
+from = '''select:-internal-list-box:focus-visible option:-internal-multi-select-focus {'''
+to = '''select:-internal-list-box option:-internal-multi-select-focus {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "form_controls::a_list_boxs_multi"]
+
+[[mutant]]
+name = "every scroll asked for a container is made"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        frame.container_scrolls.retain(|(c, _)| *c != container);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "a_scroll_after_layout"]
+
+[[mutant]]
+name = "the scrolls asked for aren't made"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        for (_, element) in std::mem::take(&mut self.container_scrolls) {'''
+to = '''        for (_, element) in std::mem::take(&mut self.container_scrolls).into_iter().take(0) {'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "a_scroll_after_layout"]
+
+[[mutant]]
+name = "the scroll goes on past the container"
+file = "crates/renderer/src/scroll.rs"
+from = '''    inline: ScrollAlignment::Nearest,
+    nearest_only: true,
+};'''
+to = '''    inline: ScrollAlignment::Nearest,
+    nearest_only: false,
+};'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "a_scroll_after_layout"]
+
+[[mutant]]
+name = "a copy keeps what the press kept"
+file = "crates/dom_api/src/input.rs"
+from = '''            FormControlData::Output(_) | FormControlData::Form(_) | FormControlData::Select(_) => {
+                None
+            }'''
+to = '''            FormControlData::Select(state) => Some(FormControlData::Select(state)),
+            FormControlData::Output(_) | FormControlData::Form(_) => None,'''

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<script>
+const read = (blob, how, ...args) => new Promise(resolve => {
+  const r = new FileReader(); r.onloadend = () => resolve(r.result); r[how](blob, ...args);
+});
+async function run() {
+  const out = [];
+  const latin = new Blob([new Uint8Array([0xe9, 0x41])], {type: 'text/plain;charset=windows-1252'});
+  out.push('label 1252: ' + await read(latin, 'readAsText', 'windows-1252'));
+  out.push('label latin1: ' + await read(latin, 'readAsText', 'latin1'));
+  out.push('label  utf-16le: ' + JSON.stringify(await read(new Blob([new Uint8Array([0x41,0,0x42,0])]), 'readAsText', ' UTF-16LE ')));
+  out.push('label utf-16be bom le: ' + JSON.stringify(await read(new Blob([new Uint8Array([0xff,0xfe,0x41,0])]), 'readAsText', 'utf-16be')));
+  out.push('shift_jis label: ' + await read(new Blob([new Uint8Array([0x82,0xa0])]), 'readAsText', 'shift_jis'));
+  out.push('type only sjis: ' + await read(new Blob([new Uint8Array([0x82,0xa0])], {type: 'text/plain;charset=shift_jis'}), 'readAsText'));
+  out.push('invalid utf8: ' + JSON.stringify(await read(new Blob([new Uint8Array([0xc3, 0x28, 0x41])]), 'readAsText')));
+  out.push('binary: ' + JSON.stringify(await read(new Blob([new Uint8Array([0, 0xff, 0x80])]), 'readAsBinaryString')));
+  const f = new File([], 'x', {lastModified: 1e3});
+  out.push('lmd: ' + (f.lastModifiedDate instanceof Date) + ' ' + f.lastModifiedDate.getTime() + ' same ' + (f.lastModifiedDate === f.lastModifiedDate));
+  out.push('lm huge: ' + new File([], 'x', {lastModified: 1e20}).lastModified + ' nan: ' + (() => { try { return new File([], 'x', {lastModified: NaN}).lastModified } catch (e) { return e.name } })());
+  out.push('file of file: ' + new File([new File(['ab'], 'a', {type: 'x/y'})], 'b').size + ' type ' + JSON.stringify(new File(['a'], 'b', {type: 'TEXT/Plain'}).type));
+  out.push('file slice: ' + Object.prototype.toString.call(new File(['abc'], 'n').slice(1)));
+  out.push('blob of file ctor: ' + (new File(['a'], 'n') instanceof Blob) + ' ' + String(new File(['a'], 'n')));
+  out.push('endings: ' + JSON.stringify(await new File(['a\nb'], 'n', {endings: 'native'}).text()));
+  // re-read same reader after done
+  const r = new FileReader(); const evs = [];
+  await new Promise(done => { r.onloadend = done; r.readAsText(new Blob(['one'])); });
+  const firstResult = r.result;
+  await new Promise(done => { r.onloadend = done; r.readAsArrayBuffer(new Blob(['two!'])); });
+  out.push('reuse: ' + firstResult + ' then ' + r.result.byteLength);
+  // abort during loading: events and later
+  const ra = new FileReader(); const ev = [];
+  for (const t of ['loadstart', 'progress', 'load', 'loadend', 'error', 'abort']) ra.addEventListener(t, () => ev.push(t + ra.readyState));
+  ra.readAsText(new Blob(['zz'])); ra.abort(); ev.push('after abort ' + ra.readyState + ' ' + ra.result);
+  await new Promise(r => setTimeout(r, 50));
+  out.push('abort loading: ' + ev.join(','));
+  // read inside loadend handler
+  const rr = new FileReader(); const ev2 = [];
+  let restarted = false;
+  rr.onload = () => { ev2.push('load ' + rr.result); if (restarted) return; restarted = true; try { rr.readAsText(new Blob(['in-load'])); ev2.push('restarted'); } catch (e) { ev2.push(e.name); } };
+  rr.onloadend = () => ev2.push('loadend ' + rr.readyState + ' ' + rr.result);
+  rr.readAsText(new Blob(['first']));
+  await new Promise(r => setTimeout(r, 100));
+  out.push('read in load: ' + ev2.join(', '));
+  // abort in loadstart
+  const rs = new FileReader(); const ev3 = [];
+  rs.onloadstart = () => { ev3.push('loadstart'); rs.abort(); };
+  for (const t of ['progress', 'load', 'loadend', 'abort']) rs.addEventListener(t, () => ev3.push(t));
+  rs.readAsText(new Blob(['q']));
+  await new Promise(r => setTimeout(r, 50));
+  out.push('abort in loadstart: ' + ev3.join(','));
+  return out.join('\n');
+}
+</script>

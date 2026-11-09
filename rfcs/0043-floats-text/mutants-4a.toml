@@ -1,0 +1,149 @@
+# Mutation test of stage 4a: `float` and `clear`, block-level floats,
+# their paint and hit testing, and the cache next to floats (2026-10-13):
+# python3 scripts/test.py mutate rfcs/0043-floats-text/mutants-4a.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "float::", "update::"]
+timeout = 900
+
+# Style
+
+[[mutant]]
+name = "float isn't applied"
+file = "crates/css/src/properties.rs"
+from = '''        (Float, Value::Float(v)) => style.float = v,'''
+to = '''        (Float, Value::Float(_)) => {}'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+[[mutant]]
+name = "clear isn't applied"
+file = "crates/css/src/properties.rs"
+from = '''        (Clear, Value::Clear(v)) => style.clear = v,'''
+to = '''        (Clear, Value::Clear(_)) => {}'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+[[mutant]]
+name = "an out-of-flow box floats"
+file = "crates/style/src/lib.rs"
+from = '''    if style.is_out_of_flow() {
+        style.float = Float::None;
+    }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+[[mutant]]
+name = "a float isn't blockified"
+file = "crates/style/src/lib.rs"
+from = '''        || style.is_out_of_flow()
+        || style.float != Float::None'''
+to = '''        || style.is_out_of_flow()'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+[[mutant]]
+name = "there is no cssFloat"
+file = "crates/css/src/property_set.rs"
+from = '''    if name == "cssFloat" {'''
+to = '''    if name == "cssFloat-" {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cssom::"]
+
+# Layout
+
+[[mutant]]
+name = "a left float doesn't float"
+file = "crates/layout/src/lib.rs"
+from = '''            Float::Left => taffy::Float::Left,'''
+to = '''            Float::Left => taffy::Float::None,'''
+
+[[mutant]]
+name = "clear: left clears nothing"
+file = "crates/layout/src/lib.rs"
+from = '''            Clear::Left => taffy::Clear::Left,'''
+to = '''            Clear::Left => taffy::Clear::None,'''
+
+[[mutant]]
+name = "a flex item floats"
+file = "crates/layout/src/lib.rs"
+from = '''            && b.parent
+                .is_some_and(|parent| !self.boxes[parent].style.display.is_flexible_or_grid());'''
+to = ''';'''
+
+[[mutant]]
+name = "a box holding floats is taken from the cache"
+file = "crates/layout/src/lib.rs"
+from = '''            .is_some_and(|ctx| self.boxes[index].places_floats || ctx.has_active_floats(0.0));'''
+to = '''            .is_some_and(|ctx| ctx.has_active_floats(0.0));'''
+
+[[mutant]]
+name = "a box next to floats is taken from the cache"
+file = "crates/layout/src/lib.rs"
+from = '''            .is_some_and(|ctx| self.boxes[index].places_floats || ctx.has_active_floats(0.0));'''
+to = '''            .is_some_and(|_| self.boxes[index].places_floats);'''
+
+[[mutant]]
+name = "no box remembers holding floats"
+file = "crates/layout/src/lib.rs"
+from = '''            .is_some_and(|ctx| ctx.floated_content_height_contribution() > f32::NEG_INFINITY);'''
+to = '''            .is_some_and(|_| false);'''
+
+# Paint
+
+[[mutant]]
+name = "a float's background is painted with the blocks'"
+file = "crates/paint/src/lib.rs"
+from = '''        if fragment.style.is_stacked() || fragment.floating {
+            return;
+        }
+        self.background(fragment);'''
+to = '''        if fragment.style.is_stacked() {
+            return;
+        }
+        self.background(fragment);'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "artifact::"]
+
+[[mutant]]
+name = "a stacking context paints no float phase"
+file = "crates/paint/src/lib.rs"
+from = '''        self.child_backgrounds(root);
+        self.floats(root);'''
+to = '''        self.child_backgrounds(root);'''
+test = ["python3", "scripts/test.py", "reftest", "floats/fl1-paint-order.html"]
+
+[[mutant]]
+name = "a float's own blocks aren't painted"
+file = "crates/paint/src/lib.rs"
+from = '''                self.background(child);
+                self.child_backgrounds(child);
+                self.floats(child);'''
+to = '''                self.background(child);
+                self.floats(child);'''
+test = ["python3", "scripts/test.py", "reftest", "floats/fl1-paint-order.html"]
+
+[[mutant]]
+name = "an atomic inline's floats aren't painted"
+file = "crates/paint/src/lib.rs"
+from = '''                        self.backgrounds(child);
+                        self.floats(child);'''
+to = '''                        self.backgrounds(child);'''
+test = ["python3", "scripts/test.py", "reftest", "floats/fl1-paint-order.html"]
+
+[[mutant]]
+name = "a flex item's floats aren't painted"
+file = "crates/paint/src/lib.rs"
+from = '''                self.backgrounds(&child.fragment);
+                self.floats(&child.fragment);'''
+to = '''                self.backgrounds(&child.fragment);'''
+test = ["python3", "scripts/test.py", "reftest", "floats/fl1-paint-order.html"]
+
+[[mutant]]
+name = "floats aren't hit"
+file = "crates/paint/src/hit_test.rs"
+from = '''            .lines(root, true, around)
+            .or_else(|| self.floats(root, node))'''
+to = '''            .lines(root, true, around)'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "hit_test::"]
+
+[[mutant]]
+name = "what is in a float isn't hit"
+file = "crates/paint/src/hit_test.rs"
+from = '''                    .or_else(|| self.floats(child, inner))
+                    .or_else(|| self.child_backgrounds(child, inner))'''
+to = '''                    .or_else(|| self.floats(child, inner))'''
+test = ["cargo", "test", "-q", "-p", "paint", "--test", "it", "hit_test::"]

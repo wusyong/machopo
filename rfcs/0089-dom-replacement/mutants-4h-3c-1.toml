@@ -1,0 +1,116 @@
+# Stage 4h-3c-1: Web Animations on the new DOM: `animate()`, `Animation` and its CSS subclasses,
+# `getAnimations()`, `document.timeline`, the promises on the objects, `AnimationPlaybackEvent`.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it web_animations && cargo test -q -p style_next --test it animations"]
+timeout = 1500
+
+[[mutant]]
+name = "dom: a new object each time"
+file = "crates/dom_next/src/animation_objects.rs"
+from = '''            .find(|&object| self.animation_data(object).is_some_and(|data| data.id.get() == id))
+    }'''
+to = '''            .find(|&object| self.animation_data(object).is_some_and(|data| data.id.get() == id && false))
+    }'''
+
+[[mutant]]
+name = "dom: notices not settled before the call returns"
+file = "crates/dom_next/src/animation_objects.rs"
+from = '''        self.changes
+            .microtasks
+            .set(self.changes.microtasks.get() | crate::Microtasks::ANIMATIONS);'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an animation off its element not found"
+file = "crates/dom_next/src/animations.rs"
+from = '''            .then_some(AnimationPlace::Detached)'''
+to = '''            .then_some(AnimationPlace::Detached)
+            .filter(|_| false)'''
+
+[[mutant]]
+name = "dom: those leaving their element dropped"
+file = "crates/dom_next/src/animations.rs"
+from = '''            .filter(|animation| self.existing_animation_object(document, animation.id).is_some())'''
+to = '''            .filter(|_| false)'''
+
+[[mutant]]
+name = "dom: those off any element don't move on"
+file = "crates/dom_next/src/animations.rs"
+from = '''                animation.tick_detached(now, &mut sent);'''
+to = ''''''
+
+[[mutant]]
+name = "api: finish and cancel events not queued"
+file = "crates/dom_api_next/src/animation.rs"
+from = '''            if !matches!(playback.notice, Notice::Finished { .. } | Notice::Canceled { .. }) {
+                continue;
+            }'''
+to = '''            continue;'''
+
+[[mutant]]
+name = "api: a settled promise made pending"
+file = "crates/dom_api_next/src/animation.rs"
+from = '''            !a.playback.is_ready_pending()'''
+to = '''            a.playback.is_ready_pending()'''
+
+[[mutant]]
+name = "api: done ones listed"
+file = "crates/dom_api_next/src/animation.rs"
+from = '''    current || timing.active_time.is_some()'''
+to = '''    current || timing.active_time.is_some() || true'''
+
+[[mutant]]
+name = "api: the id not given"
+file = "crates/dom_api_next/src/animation.rs"
+from = '''    if !options.id.is_empty() {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "api: animate doesn't play"
+file = "crates/dom_api_next/src/animation.rs"
+from = '''    play(cx, object)?;
+    Ok(object)'''
+to = '''    Ok(object)'''
+
+[[mutant]]
+name = "api: a pseudo-element no error"
+file = "crates/dom_api_next/src/animation.rs"
+from = '''        other if other.starts_with("::") && other.len() > 2 => None,'''
+to = '''        _ => None,'''
+
+[[mutant]]
+name = "api: currentTime null always taken"
+file = "crates/dom_api_next/src/animation.rs"
+from = '''        if read_animation(cx, this, |a, now| a.current_time(now).is_some()) == Some(true) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "api: the promises settle the other way"
+file = "crates/dom_api_next/src/animation.rs"
+from = '''        Notice::ReadyResolved => (true, Some(None), false),'''
+to = '''        Notice::ReadyResolved => (false, Some(None), false),'''
+
+[[mutant]]
+name = "js: the promises not marked handled"
+file = "crates/dom_js_next/src/front.rs"
+from = '''    promise.mark_as_handled();'''
+to = ''''''
+
+[[mutant]]
+name = "js: a null timeline its document's"
+file = "crates/dom_js_next/src/keyframes.rs"
+from = '''    if value.is_null() {
+        return Some(false);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "js: a number not a duration"
+file = "crates/dom_js_next/src/keyframes.rs"
+from = '''        options.timing.duration = Some(animation::DurationInput::Number(duration));'''
+to = '''        let _ = duration;'''
+
+[[mutant]]
+name = "js: started ones' ready waits for the next update"
+file = "crates/dom_js_next/src/engine.rs"
+from = '''        if started {'''
+to = '''        if false {'''

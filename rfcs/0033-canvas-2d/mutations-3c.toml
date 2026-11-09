@@ -1,0 +1,332 @@
+# Step 3c's mutation tests: `python3 scripts/test.py mutate
+# rfcs/0033-canvas-2d/mutations-3c.toml`. Each names the tests closest to
+# what it breaks.
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "canvas_compositing"]
+timeout = 1500
+
+# dom_api: the attributes.
+
+[[mutant]]
+name = "normal read back by its own name"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        .find(|(_, m)| *m == mode)'''
+to = '''        .rfind(|(_, m)| *m == mode)'''
+
+[[mutant]]
+name = "a name in another case taken"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        .find(|(name, _)| *name == value.as_str())'''
+to = '''        .find(|(name, _)| name.eq_ignore_ascii_case(value.as_str()))'''
+
+[[mutant]]
+name = "an infinite x offset taken"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if value.is_finite() {
+        with_data(cx, this, |data| data.state_mut().shadow_offset.0 = value);'''
+to = '''    if !value.is_nan() {
+        with_data(cx, this, |data| data.state_mut().shadow_offset.0 = value);'''
+
+[[mutant]]
+name = "an infinite y offset taken"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if value.is_finite() {
+        with_data(cx, this, |data| data.state_mut().shadow_offset.1 = value);'''
+to = '''    if !value.is_nan() {
+        with_data(cx, this, |data| data.state_mut().shadow_offset.1 = value);'''
+
+[[mutant]]
+name = "a negative blur taken"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if value.is_finite() && value >= 0.0 {'''
+to = '''    if value.is_finite() {'''
+
+[[mutant]]
+name = "a color that isn't one taken as transparent"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if let Some(color) = parse_color(cx, this, &value) {
+        with_data(cx, this, |data| data.state_mut().shadow_color = color);'''
+to = '''    if let Some(color) = parse_color(cx, this, &value).or(Some(Color::TRANSPARENT)) {
+        with_data(cx, this, |data| data.state_mut().shadow_color = color);'''
+
+# dom: whether there is a shadow.
+
+[[mutant]]
+name = "a transparent shadow drawn"
+file = "crates/dom/src/canvas.rs"
+from = '''        self.shadow_color.a != 0
+            && '''
+to = '''        self.shadow_color.a != 0 || true
+            && '''
+
+[[mutant]]
+name = "a shadow neither blurred nor moved drawn"
+file = "crates/dom/src/canvas.rs"
+from = '''            && (self.shadow_blur != 0.0 || self.shadow_offset != (0.0, 0.0))'''
+to = '''            && (self.shadow_blur != 0.0 || self.shadow_offset != (0.0, 0.0) || true)'''
+
+[[mutant]]
+name = "a shadow moved one way only not drawn"
+file = "crates/dom/src/canvas.rs"
+from = '''            && (self.shadow_blur != 0.0 || self.shadow_offset != (0.0, 0.0))'''
+to = '''            && (self.shadow_blur != 0.0 || (self.shadow_offset.0 != 0.0 && self.shadow_offset.1 != 0.0))'''
+
+# dom_api: what a draw records.
+
+[[mutant]]
+name = "the blur's sigma the radius"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            clamp_f32(state.shadow_blur / 2.0),'''
+to = '''            clamp_f32(state.shadow_blur),'''
+
+[[mutant]]
+name = "the y offset the x one"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                clamp_f32(state.shadow_offset.1),'''
+to = '''                clamp_f32(state.shadow_offset.0),'''
+
+[[mutant]]
+name = "source-in drawn only where it draws"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        BlendMode::SrcIn | BlendMode::SrcOut | BlendMode::DstIn | BlendMode::DstATop
+    );'''
+to = '''        BlendMode::SrcOut | BlendMode::DstIn | BlendMode::DstATop
+    );'''
+
+[[mutant]]
+name = "destination-atop drawn only where it draws"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        BlendMode::SrcIn | BlendMode::SrcOut | BlendMode::DstIn | BlendMode::DstATop
+    );'''
+to = '''        BlendMode::SrcIn | BlendMode::SrcOut | BlendMode::DstIn
+    );'''
+
+[[mutant]]
+name = "copy clears nothing"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        data.ops.push(PaintOp::DrawColor {
+            color: if opaque {
+                Color::BLACK
+            } else {
+                Color::TRANSPARENT
+            },
+            blend_mode: BlendMode::Src,
+        });'''
+to = '''        let _ = opaque;'''
+
+[[mutant]]
+name = "copy clears an opaque canvas to transparent"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            color: if opaque {
+                Color::BLACK
+            } else {'''
+to = '''            color: if opaque && false {
+                Color::BLACK
+            } else {'''
+
+[[mutant]]
+name = "copy draws over"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            blend_mode: BlendMode::Src,
+        });
+        for op in ops {
+            record_op_under(data, matrix, blended(op, mode));'''
+to = '''            blend_mode: BlendMode::Src,
+        });
+        for op in ops {
+            record_op_under(data, matrix, op);'''
+
+[[mutant]]
+name = "copy casts a shadow"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if mode == BlendMode::Src {'''
+to = '''    if mode == BlendMode::Src && shadow.is_none() {'''
+
+[[mutant]]
+name = "source-atop's shadow in a layer of its own"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            BlendMode::SrcOver | BlendMode::SrcATop | BlendMode::DstOut
+        )
+    {'''
+to = '''            BlendMode::SrcOver | BlendMode::DstOut
+        )
+    {'''
+
+[[mutant]]
+name = "every mode's shadow with the ops"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    } else if shadow.is_some()
+        && matches!('''
+to = '''    } else if shadow.is_some()
+        && !whole
+        || shadow.is_some() && matches!('''
+
+[[mutant]]
+name = "the shadow and the ops in one layer"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            record_layer(data, matrix, ops.clone(), mode, drop_shadow(true));'''
+to = '''            record_layer(data, matrix, ops.clone(), mode, drop_shadow(false));'''
+
+[[mutant]]
+name = "no shadow with another mode"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        if shadow.is_some() {
+            record_layer(data, matrix, ops.clone(), mode, drop_shadow(true));
+        }'''
+to = '''        let _ = drop_shadow;'''
+
+[[mutant]]
+name = "a mode's draw by source-over"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    } else {
+        for op in ops {
+            record_op_under(data, matrix, blended(op, mode));
+        }
+    }'''
+to = '''    } else {
+        for op in ops {
+            record_op_under(data, matrix, op);
+        }
+    }'''
+
+[[mutant]]
+name = "a layer by source-over"
+file = "crates/dom_api/src/canvas.rs"
+from = '''                blend_mode: mode,
+                image_filter: filter,'''
+to = '''                blend_mode: BlendMode::SrcOver,
+                image_filter: filter,'''
+
+[[mutant]]
+name = "a layer under the transform"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    record_op_under(
+        data,
+        IDENTITY,
+        PaintOp::SaveLayer {'''
+to = '''    record_op_under(
+        data,
+        matrix,
+        PaintOp::SaveLayer {'''
+
+[[mutant]]
+name = "the matrix after a layer taken as set"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    data.ops.push(PaintOp::Restore);
+    // The matrix is the one the layer was saved under.
+    data.matrix = None;'''
+to = '''    data.ops.push(PaintOp::Restore);'''
+
+[[mutant]]
+name = "xor keeps an opaque canvas's alpha"
+file = "crates/dom_api/src/canvas.rs"
+from = '''            | BlendMode::DstATop
+            | BlendMode::Xor
+    );'''
+to = '''            | BlendMode::DstATop
+    );'''
+
+[[mutant]]
+name = "a canvas with alpha made opaque"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    if opaque && lowers_alpha {'''
+to = '''    if lowers_alpha {'''
+
+[[mutant]]
+name = "a path not drawn by the mode"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        PaintOp::DrawRect { flags, .. }
+        | PaintOp::DrawPath { flags, .. }
+        | PaintOp::DrawGlyphs { flags, .. }'''
+to = '''        PaintOp::DrawRect { flags, .. }
+        | PaintOp::DrawGlyphs { flags, .. }'''
+
+[[mutant]]
+name = "text not drawn by the mode"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        | PaintOp::DrawPath { flags, .. }
+        | PaintOp::DrawGlyphs { flags, .. }
+        | PaintOp::DrawImage {'''
+to = '''        | PaintOp::DrawPath { flags, .. }
+        | PaintOp::DrawImage {'''
+
+[[mutant]]
+name = "an image not drawn by the mode"
+file = "crates/dom_api/src/canvas.rs"
+from = '''        | PaintOp::DrawGlyphs { flags, .. }
+        | PaintOp::DrawImage {
+            flags: Some(flags), ..
+        } => flags.blend_mode = mode,'''
+to = '''        | PaintOp::DrawGlyphs { flags, .. } => flags.blend_mode = mode,'''
+
+[[mutant]]
+name = "clearRect composited"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    record_plain(cx, this, op);
+    Ok(())'''
+to = '''    record(cx, this, op);
+    Ok(())'''
+
+# raster.
+
+[[mutant]]
+name = "a draw by source-over"
+file = "crates/raster/src/skia_backend.rs"
+from = '''    paint.set_blend_mode(sk_blend_mode(flags.blend_mode));
+    paint
+}'''
+to = '''    paint
+}'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "--", "blend_mode", "a_layer", "draw_color"]
+
+[[mutant]]
+name = "a mode Skia's other"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        BlendMode::Saturation => sk::BlendMode::Saturation,'''
+to = '''        BlendMode::Saturation => sk::BlendMode::Hue,'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "--", "blend_mode", "a_layer", "draw_color"]
+
+[[mutant]]
+name = "the shadow alone with the ops"
+file = "crates/raster/src/skia_backend.rs"
+from = '''            if shadow_only {'''
+to = '''            if !shadow_only {'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "--", "blend_mode", "a_layer", "draw_color"]
+
+[[mutant]]
+name = "a layer without its alpha"
+file = "crates/raster/src/skia_backend.rs"
+from = '''    paint.set_alpha_f(flags.alpha);'''
+to = '''    let _ = flags.alpha;'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "--", "blend_mode", "a_layer", "draw_color"]
+
+[[mutant]]
+name = "a layer by source-over in raster"
+file = "crates/raster/src/skia_backend.rs"
+from = '''    paint.set_alpha_f(flags.alpha);
+    paint.set_blend_mode(sk_blend_mode(flags.blend_mode));'''
+to = '''    paint.set_alpha_f(flags.alpha);'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "--", "blend_mode", "a_layer", "draw_color"]
+
+[[mutant]]
+name = "a layer without its filter"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        paint.set_image_filter(sk_image_filter(filter));'''
+to = '''        let _ = sk_image_filter(filter);'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "--", "blend_mode", "a_layer", "draw_color"]
+
+[[mutant]]
+name = "a layer without its bounds"
+file = "crates/raster/src/skia_backend.rs"
+from = '''            if let Some(bounds) = &bounds {
+                rec = rec.bounds(bounds);
+            }'''
+to = '''            let _ = &bounds;'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "--", "blend_mode", "a_layer", "draw_color"]
+
+[[mutant]]
+name = "a color by source-over"
+file = "crates/raster/src/skia_backend.rs"
+from = '''            canvas.draw_color(sk_color(*color), sk_blend_mode(*blend_mode));'''
+to = '''            canvas.draw_color(sk_color(*color), sk_blend_mode(BlendMode::SrcOver));
+            let _ = blend_mode;'''
+test = ["cargo", "test", "-q", "-p", "raster", "--lib", "--", "blend_mode", "a_layer", "draw_color"]

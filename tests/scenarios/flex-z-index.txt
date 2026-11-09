@@ -1,0 +1,19 @@
+# about:demo's overlapping flex items: the later card is on top
+# where they overlap, until `z-index` raises the first. Card 1's center is
+# where card 2 overlaps it. The cards are at the end of the page: scrolled
+# to first, so that what is captured shows them.
+navigate about:demo
+wait-loaded
+scroll-to #card-1
+click #card-1
+wait-text #picked "Clicked card 2."
+screenshot cards-in-order
+capture in-order
+click #raise
+wait-text #raise-note "Card 1 is over card 2 (z-index: 1)."
+# A click is hit tested against what was last painted: wait for card 1
+# to be drawn on top.
+expect-differs in-order #card-1
+click #card-1
+wait-text #picked "Clicked card 1."
+screenshot card-1-raised

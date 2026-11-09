@@ -1,0 +1,7 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Nothing, for ever</title>
+<script>
+  // Never finishes, and throws nothing.
+  window.tests = [{ name: "Hanging", run: () => new Promise(() => {}) }];
+</script>

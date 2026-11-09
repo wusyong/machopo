@@ -1,0 +1,79 @@
+# Mutation test of step 1b (className, SVGAnimatedString):
+# python3 scripts/test.py mutate rfcs/0031-svg/mutants-1b.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "api::svg_class_name"]
+timeout = 900
+
+# --- dom: the GC type ---------------------------------------------------------------
+
+[[mutant]]
+name = "a new SVGAnimatedString each time"
+file = "crates/dom/src/scope.rs"
+from = '''        if let Some(string) = unsafe { rare.svg_class_name.get_ptr() } {'''
+to = '''        if let Some(string) = unsafe { rare.svg_class_name.get_ptr() }.filter(|_| false) {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::svg_class_names"]
+
+[[mutant]]
+name = "the element doesn't keep it"
+file = "crates/dom/src/scope.rs"
+from = '''        rare.svg_class_name.set(self, string.persistent());'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::svg_class_names"]
+
+[[mutant]]
+name = "it doesn't know its element"
+file = "crates/dom/src/scope.rs"
+from = '''        string.object().element.set(self, element.persistent());
+        rare.svg_class_name.set'''
+to = '''        rare.svg_class_name.set'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::svg_class_names"]
+
+[[mutant]]
+name = "className's attribute isn't class"
+file = "crates/dom/src/scope.rs"
+from = '''                SvgAnimatedString::new(QualName::attr("class")),'''
+to = '''                SvgAnimatedString::new(QualName::attr("id")),'''
+
+# --- dom_api: the members --------------------------------------------------------------
+
+[[mutant]]
+name = "baseVal is empty"
+file = "crates/dom_api/src/svg_element.rs"
+from = '''    Ok(DomString::from(element.attribute(attribute).unwrap_or_default()))'''
+to = '''    let _ = (element, attribute);
+    Ok(DomString::default())'''
+
+[[mutant]]
+name = "setting baseVal does nothing"
+file = "crates/dom_api/src/svg_element.rs"
+from = '''    crate::element::set_attribute_ns(cx, &element, namespace, DomString::from(&*attribute.local), value)'''
+to = '''    let _ = (element, namespace, value);
+    Ok(())'''
+
+[[mutant]]
+name = "baseVal is set in SVG's namespace"
+file = "crates/dom_api/src/svg_element.rs"
+from = '''    let namespace = (!namespace.is_empty()).then(|| DomString::from(namespace));'''
+to = '''    let _ = namespace;
+    let namespace = Some(DomString::from(dom::Namespace::SVG));'''
+
+[[mutant]]
+name = "animVal is empty"
+file = "crates/dom_api/src/svg_element.rs"
+from = '''    base_val(cx, this)
+}'''
+to = '''    let _ = (cx, this);
+    Ok(DomString::default())
+}'''
+
+[[mutant]]
+name = "an SVGAnimatedString is a DOMStringMap"
+file = "crates/dom_api/src/object.rs"
+from = '''            Self::SvgAnimatedString(_) => ObjectKind::SvgAnimatedString,'''
+to = '''            Self::SvgAnimatedString(_) => ObjectKind::DomStringMap,'''
+
+[[mutant]]
+name = "an SVGAnimatedString has no realm"
+file = "crates/dom_api/src/object.rs"
+from = '''            Self::SvgAnimatedString(string) => read.svg_animated_string_element(string).0.to_handle(),'''
+to = '''            Self::SvgAnimatedString(_) => return None,'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "realms::wrappers_are_made_in_their_objects_realm"]

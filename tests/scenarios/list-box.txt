@@ -1,0 +1,39 @@
+# A list box: a click selects the option under it, Shift+ArrowDown
+# extends the range from it, and the option it goes to below the 3 rows
+# shown scrolls into view in the list box (the page doesn't scroll); each
+# change fires `input` then `change`. Home selects the first alone and
+# scrolls back. A click on a menu list opens its list (drawn by the
+# browser, over the page), ArrowDown moves to the next option and Enter
+# picks it; a click on a row picks it, a press elsewhere closes it. Ctrl's
+# keys and presses are in `dom_api`'s tests (which key adds to the
+# selection is the system's, not the shortcuts').
+navigate pages/list-box.html
+wait-loaded
+click #b
+wait-text #out "b (1 inputs)"
+key shift+ArrowDown
+wait-text #out "b c (2 inputs)"
+key shift+ArrowDown
+wait-text #out "b c d (3 inputs)"
+wait-text #scroll "scrolled"
+screenshot range
+key Home
+wait-text #out "a (4 inputs)"
+wait-text #scroll "top"
+click #menu
+screenshot menu-open
+key ArrowDown
+key Enter
+wait-text #menu-out "two"
+click #menu
+capture menu-again
+# Its third row ("three"), as the list is drawn below the select.
+click-at 60 183
+wait-text #menu-out "three"
+# A press elsewhere closes it without a pick.
+click #menu
+capture menu-open-again
+click-at 400 400
+capture menu-closed
+wait-text #menu-out "three"
+screenshot menu

@@ -1,0 +1,151 @@
+# Mutation test of step 1c (live ranges moving with character data: replace
+# data, split a Text node, normalize):
+# python3 scripts/test.py mutate rfcs/0037-range/mutants-1c.toml
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "ranges::"]
+timeout = 600
+
+# dom: replace data.
+
+[[mutant]]
+name = "replacing data moves no range"
+file = "crates/dom/src/scope.rs"
+from = '''        self.live_ranges_replaced(node, offset, count, added);
+'''
+to = ''''''
+
+[[mutant]]
+name = "replacing data moves no range, under the workload"
+file = "crates/dom/src/scope.rs"
+from = '''        self.live_ranges_replaced(node, offset, count, added);
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "standalone_heap::"]
+
+[[mutant]]
+name = "a point at the replaced units' end moves by the difference"
+file = "crates/dom/src/range.rs"
+from = '''                if at > end {
+                    point.store(at - count + added, Ordering::Relaxed);'''
+to = '''                if at >= end {
+                    point.store(at - count + added, Ordering::Relaxed);'''
+
+[[mutant]]
+name = "a point past the replaced units keeps the removed count"
+file = "crates/dom/src/range.rs"
+from = '''                    point.store(at - count + added, Ordering::Relaxed);'''
+to = '''                    point.store(at + added, Ordering::Relaxed);'''
+
+[[mutant]]
+name = "a point inside the replaced units stays"
+file = "crates/dom/src/range.rs"
+from = '''                } else if at > offset {
+                    point.store(offset, Ordering::Relaxed);
+                }'''
+to = '''                }'''
+
+# dom: split a Text node.
+
+[[mutant]]
+name = "splitting moves no range"
+file = "crates/dom/src/scope.rs"
+from = '''            self.live_ranges_split(node, &new_node, offset);
+'''
+to = ''''''
+
+[[mutant]]
+name = "a point at the split moves into the new node"
+file = "crates/dom/src/range.rs"
+from = '''                if std::ptr::eq(container, node_ref) && at > offset {'''
+to = '''                if std::ptr::eq(container, node_ref) && at >= offset {'''
+
+[[mutant]]
+name = "a point moved into the new node keeps its offset"
+file = "crates/dom/src/range.rs"
+from = '''                    point.store(at - offset, Ordering::Relaxed);'''
+to = ''''''
+
+[[mutant]]
+name = "a point right after the split node stays before the new one"
+file = "crates/dom/src/range.rs"
+from = '''                } else if std::ptr::eq(container, parent) && at == after {
+                    point.store(at + 1, Ordering::Relaxed);
+                }'''
+to = '''                }'''
+
+[[mutant]]
+name = "every point in the parent past the split node moves again"
+file = "crates/dom/src/range.rs"
+from = '''                } else if std::ptr::eq(container, parent) && at == after {'''
+to = '''                } else if std::ptr::eq(container, parent) && at >= after {'''
+
+# dom: normalize's merging; dom_api: the members on the primitives.
+
+[[mutant]]
+name = "a merged node's points don't move"
+file = "crates/dom/src/range.rs"
+from = '''                if std::ptr::eq(container, current_ref) {
+                    edge.set(self, into.persistent());
+                    point.fetch_add(length, Ordering::Relaxed);'''
+to = '''                if std::ptr::eq(container, current_ref) && length == u32::MAX {
+                    edge.set(self, into.persistent());
+                    point.fetch_add(length, Ordering::Relaxed);'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "ranges::"]
+
+[[mutant]]
+name = "a merged node's points go to the start"
+file = "crates/dom/src/range.rs"
+from = '''                    point.fetch_add(length, Ordering::Relaxed);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "ranges::"]
+
+[[mutant]]
+name = "a point in the parent at a merged node stays"
+file = "crates/dom/src/range.rs"
+from = '''                        == *index.get_or_insert_with(|| index_in_parent(current_ref))'''
+to = '''                        == *index.get_or_insert_with(|| u32::MAX)'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "ranges::"]
+
+[[mutant]]
+name = "normalize merges no ranges"
+file = "crates/dom_api/src/node.rs"
+from = '''            m.merge_text_ranges(merged, &text, length);
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "ranges::"]
+
+[[mutant]]
+name = "normalize doesn't count the merged lengths"
+file = "crates/dom_api/src/node.rs"
+from = '''            length +=
+                crate::text_control::utf16_len(&merged.get(&m.read()).text().unwrap_or_default());'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "ranges::"]
+
+[[mutant]]
+name = "normalize sets the whole data"
+file = "crates/dom_api/src/node.rs"
+from = '''        m.replace_data(&text, length, 0, &data)?;'''
+to = '''        m.set_character_data(&text, &format!("{own}{data}"))?;'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "ranges::"]
+
+[[mutant]]
+name = "replaceData past the length isn't an IndexSizeError"
+file = "crates/dom_api/src/character_data.rs"
+from = '''    let length = units(cx, this).len();
+    if offset as usize > length {
+        return Err(index_size(offset, length));
+    }
+    cx.mutate().replace_data(this, offset, count, data)?;'''
+to = '''    cx.mutate().replace_data(this, offset, count, data)?;'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "api::character_data_methods"]
+
+[[mutant]]
+name = "splitText past the length isn't an IndexSizeError"
+file = "crates/dom_api/src/character_data.rs"
+from = '''    let length = units(cx, this).len();
+    if offset as usize > length {
+        return Err(index_size(offset, length));
+    }
+    Ok(cx.mutate().split_text(this, offset))'''
+to = '''    Ok(cx.mutate().split_text(this, offset))'''
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "api::text_nodes"]

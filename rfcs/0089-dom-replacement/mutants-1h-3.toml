@@ -1,0 +1,96 @@
+# Stage 1h-3: members' string arguments read in the DOM's operation, an
+# ASCII flat one-byte string's characters in place (the fork's
+# one_byte_chars, debug builds checking it against ValueView; bindings'
+# LentString, whose loans V8PerIsolateData's GC prologue checks), another
+# copied before the operation; dom_api_next's front releasing a call's
+# arguments before V8 allocates again. Run with RUSTY_V8_ARCHIVE pointing
+# at ../third_party/rusty_v8_artifacts. Each test command in a scope of at
+# most 24 GB (docs/testing.md); the baselines take seconds, plus a relink.
+timeout = 300
+
+[[mutant]]
+name = "a sequential string's characters start at its length"
+file = "../third_party/rusty_v8/src/machopo.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "v8_text"]
+from = '''            field(object, STRING_HEADER_SIZE) as *const u8,'''
+to = '''            field(object, STRING_LENGTH_OFFSET) as *const u8,'''
+
+[[mutant]]
+name = "any string is read as a sequential one-byte one"
+file = "../third_party/rusty_v8/src/machopo.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "v8_text"]
+from = '''        SEQ_ONE_BYTE_STRING => {'''
+to = '''        _ if true => {'''
+
+[[mutant]]
+name = "a thin string isn't followed"
+file = "../third_party/rusty_v8/src/machopo.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "v8_text"]
+from = '''        tag if tag & STRING_REPRESENTATION == THIN_STRING && !forwarded => {'''
+to = '''        tag if tag & STRING_REPRESENTATION == THIN_STRING && forwarded => {'''
+
+[[mutant]]
+name = "a GC doesn't check loans"
+file = "crates/bindings/src/v8_text.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "v8_text"]
+from = '''    if BORROWED.get() != 0 {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a loan isn't counted"
+file = "crates/bindings/src/v8_text.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "v8_text"]
+from = '''            BORROWED.set(BORROWED.get().checked_add(1).expect("fewer than usize::MAX loans"));
+'''
+to = ''''''
+
+[[mutant]]
+name = "a loan is never over"
+file = "crates/bindings/src/v8_text.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "v8_text"]
+from = '''            BORROWED.set(BORROWED.get().saturating_sub(1));
+'''
+to = ''''''
+
+[[mutant]]
+name = "an unguarded isolate lends"
+file = "crates/bindings/src/v8_text.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "v8_text"]
+from = '''        if isolate.get_data(GUARDED_SLOT).is_null() {
+            return None;
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "Latin-1 text is lent as UTF-8"
+file = "crates/bindings/src/v8_text.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "v8_text"]
+from = '''            .is_ascii()
+'''
+to = '''            .iter()
+            .all(|_| true)
+'''
+
+[[mutant]]
+name = "kun's isolates' GCs don't check loans"
+file = "crates/bindings/src/script_state.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "bindings", "--test", "it", "--", "v8_text"]
+from = '''        crate::v8_text::guard_gcs(&mut isolate);
+'''
+to = ''''''
+
+[[mutant]]
+name = "a string V8 can't lend isn't copied"
+file = "crates/dom_js_next/src/strings.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''    let copied = (!string.lends(scope)).then(|| string.string().to_rust_string_lossy(scope));'''
+to = '''    let copied: Option<String> = None;'''
+
+[[mutant]]
+name = "a call's arguments are kept past its operation"
+file = "crates/dom_api_next/src/declare.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_js_next"]
+from = '''                $($crate::typed::release($arg);)*
+'''
+to = ''''''

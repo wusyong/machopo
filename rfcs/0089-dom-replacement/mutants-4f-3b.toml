@@ -1,0 +1,499 @@
+# Stage 4f-3b: on the new DOM, form controls' UA shadow trees (built at
+# the next style update for a control connected to a document with a
+# window, following the control at once), their parts matched as their
+# host's pseudo-elements, the controls' native looks, their boxes as
+# the build from `dom` makes them (`control`'s `ControlNode`), the
+# native look's states painted again.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_next --test it ua_shadow && cargo test -q -p style_next --test it -- parts form_states && cargo test -q -p layout --test it -- next:: next_update::a_controls && cargo test -q -p shell --test it a_controls_tree"]
+timeout = 3000
+
+[[mutant]]
+name = "dom: a search field undecorated"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''InputKind::Search => Tree::Field(Some(CANCEL_BUTTON)),'''
+to = '''InputKind::Search => Tree::Field(None),'''
+
+[[mutant]]
+name = "dom: a number field undecorated"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''InputKind::Number => Tree::Field(Some(SPIN_BUTTON)),'''
+to = '''InputKind::Number => Tree::Field(None),'''
+
+[[mutant]]
+name = "dom: an input button has no tree"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''InputKind::Submit | InputKind::Reset | InputKind::Button => Tree::Button,'''
+to = '''InputKind::Reset | InputKind::Button => Tree::Button,'''
+
+[[mutant]]
+name = "dom: a range has no tree"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''            InputKind::Range => Tree::Slider,
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an email field has no tree"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''InputKind::Text | InputKind::Url | InputKind::Tel | InputKind::Email | InputKind::Password'''
+to = '''InputKind::Text | InputKind::Url | InputKind::Tel | InputKind::Password'''
+
+[[mutant]]
+name = "dom: a button's tree not told apart"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''        if self.kind(first) == NodeKind::Text {
+            return Some(Tree::Button);
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an author's pseudo attribute a shadow pseudo id"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''        if self.shadow_root_init(root)?.mode != ShadowRootMode::UserAgent {
+            return None;
+        }
+        self.attribute_value_by_id'''
+to = '''        self.attribute_value_by_id'''
+
+[[mutant]]
+name = "dom: a disconnected control gets its tree"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''            if self.is_connected(element) && self.window_of(self.document_of(element)).is_some() {'''
+to = '''            if self.window_of(self.document_of(element)).is_some() {'''
+
+[[mutant]]
+name = "dom: a control of a document without a window gets its tree"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''            if self.is_connected(element) && self.window_of(self.document_of(element)).is_some() {'''
+to = '''            if self.is_connected(element) {'''
+
+[[mutant]]
+name = "dom: the tree built each time"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''        if self.first_child(root).is_none() {
+            self.build_shadow_tree(root, tree);
+        }'''
+to = '''        self.build_shadow_tree(root, tree);'''
+
+[[mutant]]
+name = "dom: a stale tree kept"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''        if made.is_some() && made != tree {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "dom: a control that comes to need a tree not scheduled"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''            if self.is_connected(element) {
+                self.schedule_shadow_tree(element);
+            }
+            return;'''
+to = '''            return;'''
+
+[[mutant]]
+name = "dom: a decorated field's part left out"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''                    append(container, self.part(document, part));
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a submit button's label empty"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''                Some(InputKind::Submit) => "Submit",
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an empty label no line"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''        if label.is_empty() {
+            label.push('\u{200B}');
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: the thumb's ratio not given"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''        self.set_attribute_if_changed(thumb, "ratio", Some(&ratio));'''
+to = '''        let _ = (thumb, ratio);'''
+
+[[mutant]]
+name = "dom: the inner editor's text not kept"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''        self.set_data_if_changed(text, &value);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: the clear button shown while empty"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''value.is_empty().then_some(CANCEL_HIDDEN)'''
+to = '''(!value.is_empty()).then_some(CANCEL_HIDDEN)'''
+
+[[mutant]]
+name = "dom: a text field's placeholder keeps its newlines"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''            if tree == Tree::Area {
+                text
+            } else {'''
+to = '''            if true {
+                text
+            } else {'''
+
+[[mutant]]
+name = "dom: the placeholder shown whatever the value"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''let display = if value.is_empty() { PLACEHOLDER_SHOWN } else { PLACEHOLDER_HIDDEN };'''
+to = '''let display = PLACEHOLDER_SHOWN;'''
+
+[[mutant]]
+name = "dom: a placeholder left without its attribute"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''            (None, Some(holder)) => self.remove(holder),'''
+to = '''            (None, Some(_)) => {}'''
+
+[[mutant]]
+name = "dom: a placeholder's text not kept"
+file = "crates/dom_next/src/ua_shadow.rs"
+from = '''                    self.set_data_if_changed(text, &placeholder);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: min not followed"
+file = "crates/dom_next/src/input.rs"
+from = '''            | names::local::MIN
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: placeholder not followed"
+file = "crates/dom_next/src/input.rs"
+from = '''            | names::local::PLACEHOLDER
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: the value attribute not followed"
+file = "crates/dom_next/src/input.rs"
+from = '''            names::local::VALUE
+            | names::local::PLACEHOLDER'''
+to = '''            names::local::PLACEHOLDER'''
+
+[[mutant]]
+name = "dom: a new type's tree not made"
+file = "crates/dom_next/src/input.rs"
+from = '''        self.shadow_tree_type_changed(element);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: an input's value set not shown"
+file = "crates/dom_next/src/input.rs"
+from = '''        self.state_changed(element, AttributeChanges::VALUE);
+        self.shadow_tree_changed(element);
+        sanitized'''
+to = '''        self.state_changed(element, AttributeChanges::VALUE);
+        sanitized'''
+
+[[mutant]]
+name = "dom: an input's reset not shown"
+file = "crates/dom_next/src/input.rs"
+from = '''        self.state_changed(element, AttributeChanges::VALUE);
+        self.shadow_tree_changed(element);
+        input.dirty_checked.set(false);'''
+to = '''        self.state_changed(element, AttributeChanges::VALUE);
+        input.dirty_checked.set(false);'''
+
+[[mutant]]
+name = "dom: a textarea's value set not shown"
+file = "crates/dom_next/src/text_control.rs"
+from = '''        self.state_changed(element, AttributeChanges::VALUE);
+        self.shadow_tree_changed(element);
+        if *normalize_newlines'''
+to = '''        self.state_changed(element, AttributeChanges::VALUE);
+        if *normalize_newlines'''
+
+[[mutant]]
+name = "dom: a textarea's children not shown"
+file = "crates/dom_next/src/text_control.rs"
+from = '''            self.state_changed(element, AttributeChanges::VALUE);
+            self.shadow_tree_changed(element);
+        }
+    }
+
+    /// A text control's selection'''
+to = '''            self.state_changed(element, AttributeChanges::VALUE);
+        }
+    }
+
+    /// A text control's selection'''
+
+[[mutant]]
+name = "dom: setRangeText on a textarea not shown"
+file = "crates/dom_next/src/text_control.rs"
+from = '''            textarea.into_ref().value.get().set(Some(DomString::from(value)));
+            self.state_changed(element, AttributeChanges::VALUE);
+            self.shadow_tree_changed(element);'''
+to = '''            textarea.into_ref().value.get().set(Some(DomString::from(value)));
+            self.state_changed(element, AttributeChanges::VALUE);'''
+
+[[mutant]]
+name = "dom: a textarea's reset not shown"
+file = "crates/dom_next/src/text_control.rs"
+from = '''            textarea.into_ref().value.get().set(None);
+            self.state_changed(element, AttributeChanges::VALUE);
+            self.shadow_tree_changed(element);'''
+to = '''            textarea.into_ref().value.get().set(None);
+            self.state_changed(element, AttributeChanges::VALUE);'''
+
+[[mutant]]
+name = "dom: controls never seen"
+file = "crates/dom_next/src/form.rs"
+from = '''        if kind & INPUT != 0 {
+            self.see(CONTROLS_SEEN);'''
+to = '''        if kind & INPUT != 0 {'''
+
+[[mutant]]
+name = "dom: a textarea's placeholder not followed"
+file = "crates/dom_next/src/form.rs"
+from = '''            names::local::PLACEHOLDER if kind & TEXTAREA != 0 => self.shadow_tree_changed(element),
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: its own disabled not on its look"
+file = "crates/dom_next/src/form.rs"
+from = '''            names::local::DISABLED if kind & DISABLABLE != 0 => {
+                if self.is_connected(element) {
+                    self.control_look_changed(element);
+                }
+            }
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: readonly not on its look"
+file = "crates/dom_next/src/form.rs"
+from = '''            names::local::READONLY if kind & (INPUT | TEXTAREA) != 0 => {
+                if self.is_connected(element) {
+                    self.control_look_changed(element);
+                }
+            }
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a connected control not scheduled"
+file = "crates/dom_next/src/style.rs"
+from = '''            if controls && self.form_kind(at) & (crate::form::INPUT | crate::form::TEXTAREA) != 0 {
+                self.schedule_shadow_tree(at);
+            }
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a look's state not noted"
+file = "crates/dom_next/src/style.rs"
+from = '''        if state & AttributeChanges::LOOK != 0 {
+            self.control_look_changed(element);
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: any element's look noted"
+file = "crates/dom_next/src/style.rs"
+from = '''        let control = self.form_kind(element) & crate::form::LISTED != 0
+            || (element.scope.get() & crate::shadow::IN_SHADOW_TREE != 0 && self.shadow_pseudo_id(element).is_some());'''
+to = '''        let control = true;'''
+
+[[mutant]]
+name = "dom: a part's look not noted"
+file = "crates/dom_next/src/style.rs"
+from = '''        let control = self.form_kind(element) & crate::form::LISTED != 0
+            || (element.scope.get() & crate::shadow::IN_SHADOW_TREE != 0 && self.shadow_pseudo_id(element).is_some());'''
+to = '''        let control = self.form_kind(element) & crate::form::LISTED != 0;'''
+
+[[mutant]]
+name = "dom: hover not a look's"
+file = "crates/dom_next/src/style.rs"
+from = '''    pub(crate) const LOOK: u16 = Self::HOVER | Self::ACTIVE'''
+to = '''    pub(crate) const LOOK: u16 = Self::ACTIVE'''
+
+[[mutant]]
+name = "dom: checked not a look's"
+file = "crates/dom_next/src/style.rs"
+from = '''Self::FOCUS | Self::CHECKED | Self::INDETERMINATE'''
+to = '''Self::FOCUS | Self::INDETERMINATE'''
+
+[[mutant]]
+name = "style: a part's author rules not matched"
+file = "crates/style_next/src/lib.rs"
+from = '''                        None => sources.extend(self.author.map(|author| tree(author, 0, Which::Part, None, 0))),'''
+to = '''                        None => {}'''
+
+[[mutant]]
+name = "style: a part's UA rules not matched"
+file = "crates/style_next/src/lib.rs"
+from = '''                    sources.push(tree(self.ua, 0, Which::Part, None, 0));
+'''
+to = ''''''
+
+[[mutant]]
+name = "style: a part in a shadow tree matches the document's"
+file = "crates/style_next/src/lib.rs"
+from = '''                            sources.extend(
+                                scope(outer).iter().map(|(index, first)| tree(index, *first, Which::Part, outer_host, 0)),
+                            );'''
+to = '''                            let _ = outer_host;
+                            sources.extend(self.author.map(|author| tree(author, 0, Which::Part, None, 0)));'''
+
+[[mutant]]
+name = "style: a host's parts not styled again"
+file = "crates/style_next/src/lib.rs"
+from = '''        let subtree = subtree || (own && self.cx.user_agent_shadow_root(element).is_some());
+'''
+to = ''''''
+
+[[mutant]]
+name = "style: a part has no native look"
+file = "crates/style_next/src/lib.rs"
+from = '''    if let Some(id) = cx.shadow_pseudo_id(element) {
+        return style::FormControl::for_part(&id.to_str());
+    }
+'''
+to = ''''''
+
+[[mutant]]
+name = "style: no control has a native look"
+file = "crates/style_next/src/lib.rs"
+from = '''            control: control.filter(|_| pseudo.is_none()),'''
+to = '''            control: None,'''
+
+[[mutant]]
+name = "style: a select's list box a menu list"
+file = "crates/style_next/src/lib.rs"
+from = '''    if cx.attribute_value_by_id(select, local::MULTIPLE).is_some() {
+        size == Some(1)
+    } else {
+        size.is_none_or(|size| size <= 1)
+    }'''
+to = '''    true'''
+
+[[mutant]]
+name = "style: the parts' rules dropped"
+file = "crates/style_next/src/rule_index.rs"
+from = '''                Bucket::ShadowPart => index.parts.push(data),'''
+to = '''                Bucket::ShadowPart => {}'''
+
+[[mutant]]
+name = "style: any part matches any part's rule"
+file = "crates/style_next/src/selector.rs"
+from = '''        self.shadow_pseudo
+            && pseudo
+                .shadow_pseudo_id()
+                .is_some_and(|id| self.cx.is_part(self.node, id))'''
+to = '''        self.shadow_pseudo && pseudo.shadow_pseudo_id().is_some()'''
+
+[[mutant]]
+name = "style: an element after a part matched as one too"
+file = "crates/style_next/src/selector.rs"
+from = '''            node,
+            shadow_pseudo: false,
+            ..*self'''
+to = '''            node,
+            ..*self'''
+
+[[mutant]]
+name = "layout: no part told"
+file = "crates/layout/src/next.rs"
+from = '''        self.dom
+            .shadow_pseudo_id(self.node)
+            .map(|id| id.to_str().into_owned())'''
+to = '''        None'''
+
+[[mutant]]
+name = "layout: every input a text field"
+file = "crates/layout/src/next.rs"
+from = '''            .map_or("text", dom_next::InputKind::keyword)'''
+to = '''            .map_or("text", |_| "text")'''
+
+[[mutant]]
+name = "layout: a part's states its own"
+file = "crates/layout/src/next.rs"
+from = '''    let host = control(dom, element)
+        .user_agent_host()
+        .map_or(element, |host| host.node);'''
+to = '''    let host = element;'''
+
+[[mutant]]
+name = "layout: read-only the other way"
+file = "crates/layout/src/next.rs"
+from = '''        read_only: !dom.matches_read_write(host),'''
+to = '''        read_only: dom.matches_read_write(host),'''
+
+[[mutant]]
+name = "layout: an input button's display kept"
+file = "crates/layout/src/next.rs"
+from = '''            style = box_style(control(dom, element), style);'''
+to = '''            let _ = control(dom, element);'''
+
+[[mutant]]
+name = "layout: an inline control not atomic"
+file = "crates/layout/src/next.rs"
+from = '''                        Display::Inline if is_atomic_when_inline(dom.dom, child) => {'''
+to = '''                        Display::Inline if false => {'''
+
+[[mutant]]
+name = "layout: every control's pseudo-elements"
+file = "crates/layout/src/next.rs"
+from = '''        if !control::has_generated_children(control(cx.dom.dom, element)) {
+            return;
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "layout: a look's change not painted"
+file = "crates/layout/src/next.rs"
+from = '''        if (style_changed || flags.contains(LayoutTreeFlags::CONTROL_STATE_CHANGED)) && !reattach {'''
+to = '''        if style_changed && !reattach {'''
+
+[[mutant]]
+name = "dom: the look's flag not set"
+file = "crates/dom_next/src/style.rs"
+from = '''        if flags.0 & LayoutTreeFlags::CONTROL_STATE_CHANGED.0 != 0 {
+            node.layout_more.set(1);
+        }
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: the look's flag not read"
+file = "crates/dom_next/src/style.rs"
+from = '''                | (u32::from(node.layout_more.get()) << 5),'''
+to = '''                | 0,'''
+
+[[mutant]]
+name = "dom: the look's flag not cleared"
+file = "crates/dom_next/src/style.rs"
+from = '''        node.layout_more.set(0);
+'''
+to = ''''''
+
+[[mutant]]
+name = "layout: a control's size its own"
+file = "crates/layout/src/next.rs"
+from = '''        let own = control::Control::of(control(dom, element), &style, cx.text);'''
+to = '''        let own = None::<control::Control>;'''
+
+[[mutant]]
+name = "renderer: the scheduled trees not built"
+file = "crates/renderer/src/next_frame_view.rs"
+from = '''        cx.create_scheduled_shadow_trees();
+'''
+to = ''''''

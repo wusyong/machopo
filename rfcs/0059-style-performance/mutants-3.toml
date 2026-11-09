@@ -1,0 +1,104 @@
+# 3: the ancestor bloom filter (`style`'s `bloom.rs`, `lib.rs`,
+# `selector.rs`), names' hashes and the rule sets' buckets by them (`css`'s
+# `selector.rs`, `rule_set.rs`; `dom`'s id and class hashes).
+#   python3 scripts/test.py mutate rfcs/0059-style-performance/mutants-3.toml
+test = ["cargo", "test", "-q", "-p", "style"]
+timeout = 1800
+
+[[mutant]]
+name = "a name's hash minds its case"
+file = "crates/css/src/selector.rs"
+from = '''        hasher.write_u8(byte.to_ascii_lowercase());'''
+to = '''        hasher.write_u8(byte);'''
+
+[[mutant]]
+name = "selectors' ancestor hashes without ids and classes"
+file = "crates/css/src/rule_set.rs"
+from = '''                ancestor_hashes: AncestorHashes::new(selector, QuirksMode::NoQuirks).packed_hashes,'''
+to = '''                ancestor_hashes: AncestorHashes::new(selector, QuirksMode::Quirks).packed_hashes,'''
+
+[[mutant]]
+name = "a bucket's name minds its case"
+file = "crates/css/src/rule_set.rs"
+from = '''                names
+                    .iter()
+                    .find(|(other, _)| other.eq_ignore_ascii_case(name))'''
+to = '''                names.iter().find(|(other, _)| **other == *name)'''
+
+[[mutant]]
+name = "no id bucket looked in"
+file = "crates/style/src/lib.rs"
+from = '''                    id.as_deref().zip(id_hash),'''
+to = '''                    id.as_deref().zip(id_hash).filter(|_| false),'''
+
+[[mutant]]
+name = "every source's rules passed over by the bloom filter"
+file = "crates/style/src/lib.rs"
+from = '''            bloom.filter(|_| source.which == Which::Tree),'''
+to = '''            bloom,'''
+
+[[mutant]]
+name = "no rule passed over"
+file = "crates/style/src/lib.rs"
+from = '''                    if bloom.is_some_and(|bloom| !selector_may_match(&hashes, bloom)) {'''
+to = '''                    if bloom.is_some_and(|bloom| !selector_may_match(&hashes, bloom) && false) {'''
+
+[[mutant]]
+name = "only the parent pushed"
+file = "crates/style/src/bloom.rs"
+from = '''            missing.push(node);
+            ancestor = parent_element(node);'''
+to = '''            missing.push(node);
+            ancestor = None;'''
+
+[[mutant]]
+name = "what is behind not popped"
+file = "crates/style/src/bloom.rs"
+from = '''        for hash in self.hashes.drain(start..) {
+            self.filter.remove_hash(hash);
+        }'''
+to = '''        self.hashes.truncate(start);'''
+
+[[mutant]]
+name = "an element's classes left out"
+file = "crates/style/src/bloom.rs"
+from = '''    for &class in element.class_hashes().iter() {
+        f(class);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "an element's id left out"
+file = "crates/style/src/bloom.rs"
+from = '''    if let Some(id) = element.id_hash() {
+        f(id);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "an element's local name left out"
+file = "crates/style/src/bloom.rs"
+from = '''        f(name_hash(name.local()));'''
+to = ''''''
+
+[[mutant]]
+name = ":has()'s filter gets no names"
+file = "crates/style/src/selector.rs"
+from = '''        crate::bloom::each_hash(self.0, |hash| filter.insert_hash(hash));
+        true'''
+to = '''        let _ = filter;
+        true'''
+
+[[mutant]]
+name = "a class's hash not kept as it changes"
+file = "crates/dom/src/scope.rs"
+from = '''                *class_hashes = crate::node::name_hashes(&new);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "invalidation::"]
+
+[[mutant]]
+name = "an id's hash not kept as it changes"
+file = "crates/dom/src/scope.rs"
+from = '''                *id_hash = new.as_deref().map_or(0, css::selector::name_hash);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "invalidation::"]

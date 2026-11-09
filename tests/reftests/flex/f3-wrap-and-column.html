@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<title>F3: flex-wrap with gap, and a column with align-items</title>
+<link rel="match" href="f3-wrap-and-column-ref.html">
+<style>
+  html, body { margin: 0 }
+  .wrap { display: flex; flex-wrap: wrap; width: 100px; gap: 10px 20px; background-color: silver }
+  .wrap div { width: 40px; height: 30px; background-color: green }
+  .column { display: flex; flex-direction: column; align-items: flex-end; width: 100px }
+</style>
+<div class="wrap"><div></div><div></div><div></div></div>
+<div class="column">
+  <div style="width: 30px; height: 20px; background-color: blue"></div>
+  <div style="width: 50px; height: 20px; background-color: orange"></div>
+</div>

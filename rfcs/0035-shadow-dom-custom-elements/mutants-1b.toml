@@ -1,0 +1,116 @@
+# Mutation test of step 1b (shadow-including connected and root, the
+# insertion and removing records into shadow trees, cloning clonable
+# shadow roots):
+# python3 scripts/test.py mutate rfcs/0035-shadow-dom-custom-elements/mutants-1b.toml
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "tree::"]
+timeout = 900
+
+[[mutant]]
+name = "a shadow tree's browsing context stops at its root"
+file = "crates/dom/src/scope.rs"
+from = '''unsafe fn browsing_context_document(node: &Node) -> Option<&Node> {
+    let mut current = node;
+    // SAFETY: per the caller.
+    while let Some(up) = unsafe { parent_or_shadow_host(current) } {'''
+to = '''unsafe fn browsing_context_document(node: &Node) -> Option<&Node> {
+    let mut current = node;
+    // SAFETY: per the caller.
+    while let Some(up) = unsafe { current.parent.get() } {'''
+
+[[mutant]]
+name = "the records don't go into shadow trees"
+file = "crates/dom/src/scope.rs"
+from = '''                stack.push((shadow, true));'''
+to = '''                let _ = shadow;'''
+
+[[mutant]]
+name = "a shadow tree comes after its host's children"
+file = "crates/dom/src/scope.rs"
+from = '''                stack.push((shadow, true));'''
+to = '''                stack.insert(0, (shadow, true));'''
+
+[[mutant]]
+name = "a shadow tree's title is the document's"
+file = "crates/dom/src/scope.rs"
+from = '''        titles |= !in_shadow && is_title(node);'''
+to = '''        titles |= is_title(node);'''
+
+[[mutant]]
+name = "a template's content goes on to its template (dom)"
+file = "crates/dom/src/scope.rs"
+from = '''        NodeKindData::DocumentFragment {
+            host,
+            shadow: Some(_),
+        } => {'''
+to = '''        NodeKindData::DocumentFragment { host, .. } => {'''
+
+[[mutant]]
+name = "a template's content goes on to its template (NodeRef)"
+file = "crates/dom/src/scope.rs"
+from = '''            .or_else(|| self.host().filter(|_| self.is_shadow_root()))'''
+to = '''            .or_else(|| self.host())'''
+
+[[mutant]]
+name = "a node in a shadow tree isn't connected"
+file = "crates/dom_api/src/script.rs"
+from = '''    el.shadow_including_root().kind() == NodeKind::Document'''
+to = '''    std::iter::successors(Some(el), |n| n.parent()).last().unwrap().kind() == NodeKind::Document'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "shadow"]
+
+[[mutant]]
+name = "getRootNode ignores composed"
+file = "crates/dom_api/src/node.rs"
+from = '''    let root = if options.composed {'''
+to = '''    let root = if false {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "shadow"]
+
+[[mutant]]
+name = "getRootNode is always composed"
+file = "crates/dom_api/src/node.rs"
+from = '''    let root = if options.composed {'''
+to = '''    let root = if true {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "shadow"]
+
+[[mutant]]
+name = "every shadow root is cloned"
+file = "crates/dom_api/src/node.rs"
+from = '''            init.clonable.then(|| {'''
+to = '''            true.then(|| {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "shadow"]
+
+[[mutant]]
+name = "no shadow root is cloned"
+file = "crates/dom_api/src/node.rs"
+from = '''            init.clonable.then(|| {'''
+to = '''            false.then(|| {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "shadow"]
+
+[[mutant]]
+name = "a cloned shadow root is empty"
+file = "crates/dom_api/src/node.rs"
+from = '''        for child in &shadow_children {'''
+to = '''        for child in shadow_children.iter().take(0) {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "shadow"]
+
+[[mutant]]
+name = "a cloned shadow root's contents are as deep as the host's"
+file = "crates/dom_api/src/node.rs"
+from = '''            let copy = copy_node(cx, child, true, Some(document.clone()))?;
+            cx.mutate().append_child(&root, &copy)?;'''
+to = '''            let copy = copy_node(cx, child, deep, Some(document.clone()))?;
+            cx.mutate().append_child(&root, &copy)?;'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "shadow"]
+
+[[mutant]]
+name = "WebDriver's elements in shadow trees are stale"
+file = "crates/renderer/src/render_thread/webdriver.rs"
+from = '''    node.shadow_including_root()'''
+to = '''    std::iter::successors(Some(node), |n| n.parent()).last().unwrap()'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "webdriver::elements_in_shadow_trees_are_referenced"]
+
+[[mutant]]
+name = "scripts in shadow trees don't run"
+file = "crates/dom/src/scope.rs"
+from = '''            Some(name) if scripts && name.is_html("script") => {'''
+to = '''            Some(name) if scripts && !in_shadow && name.is_html("script") => {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "inserted_scripts::scripts_in_shadow_trees_run"]

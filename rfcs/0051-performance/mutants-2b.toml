@@ -1,0 +1,60 @@
+# Mutation test of stage 2b: another document base URL styles again only
+# the elements whose `url()`s may have resolved against it:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-2b.toml
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it"]
+timeout = 600
+
+[[mutant]]
+name = "another base URL styles nothing again"
+file = "crates/style/src/lib.rs"
+from = '''                || (url_changed && old.as_ref().is_some_and(|old| old.uses_document_url))'''
+to = ''''''
+
+[[mutant]]
+name = "another base URL doesn't go down to the elements"
+file = "crates/style/src/lib.rs"
+from = '''                || viewport_changed
+                || url_changed;'''
+to = '''                || viewport_changed;'''
+
+[[mutant]]
+name = "no element is noted as using the document's URL"
+file = "crates/style/src/lib.rs"
+from = '''    style.uses_document_url = uses_document_url;'''
+to = '''    style.uses_document_url = uses_document_url && false;'''
+
+[[mutant]]
+name = "a url() left as written while there is no base URL isn't noted"
+file = "crates/style/src/lib.rs"
+from = '''        base.is_none_or(|base| base_url.is_some_and(|document| std::ptr::eq(base, document)))'''
+to = '''        base.is_some_and(|base| base_url.is_some_and(|document| std::ptr::eq(base, document)))'''
+
+[[mutant]]
+name = "a sheet of its own is taken as the document's"
+file = "crates/style/src/lib.rs"
+from = '''        base.is_none_or(|base| base_url.is_some_and(|document| std::ptr::eq(base, document)))'''
+to = '''        base.is_none_or(|_| true)'''
+
+[[mutant]]
+name = "every value is taken to have a url()"
+file = "crates/css/src/properties.rs"
+from = '''            _ => false,
+        }
+    }
+}'''
+to = '''            _ => true,
+        }
+    }
+}'''
+
+[[mutant]]
+name = "a paint's url() is missed"
+file = "crates/css/src/properties.rs"
+from = '''            Value::Paint(paint) => matches!(paint, SpecifiedPaint::Url(..)),'''
+to = '''            Value::Paint(_) => false,'''
+
+[[mutant]]
+name = "any var() is taken to have a url()"
+file = "crates/css/src/properties.rs"
+from = '''            Value::Unparsed(_) => matches!('''
+to = '''            Value::Unparsed(_) => true || matches!('''

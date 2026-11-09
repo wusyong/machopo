@@ -1,0 +1,74 @@
+# Stage 1f-3: the new DOM in today's dom_wasm (MACHOPO_NEXT_DOM=1), a
+# NextDom's serial that its stores check, and the measurements' tools: the
+# wasm versions of blink-perf --next-dom and the wasm-next engine of
+# bench.py calls. ci.py's builds of the guests aren't mutated: the guests
+# are built already, and building them is checked by building them (the
+# tests load what they built).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_wasm", "--test", "it", "--", "the_new_dom"]
+timeout = 600
+
+[[mutant]]
+name = "a store of an engine with the new DOM has no place in it"
+file = "crates/dom_wasm/src/store.rs"
+from = '''        next: next.then(dom_wasm_next::NextStore::new),'''
+to = '''        next: { let _ = next; None },'''
+
+[[mutant]]
+name = "an engine has the new DOM whatever it's asked"
+file = "crates/dom_wasm/src/lib.rs"
+from = '''        let next = next.then(|| {'''
+to = '''        let next = true.then(|| { let _ = next;'''
+
+[[mutant]]
+name = "the new DOM's variable is never read"
+file = "crates/dom_wasm/src/lib.rs"
+from = '''    std::env::var_os("MACHOPO_NEXT_DOM").is_some_and(|value| value == "1")'''
+to = '''    false'''
+
+[[mutant]]
+name = "bench_calls runs today's guest with the new DOM"
+file = "crates/dom_wasm/tests/it/engine.rs"
+from = '''            "next_calls"'''
+to = '''            "calls"'''
+
+[[mutant]]
+name = "a store's DOM is any of the thread's"
+file = "crates/dom_wasm_next/src/lib.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "dom_wasm_next"]
+from = '''        self.state.as_ref().filter(|state| state.serial == key.dom)'''
+to = '''        { let _ = key; self.state.as_ref() }'''
+
+[[mutant]]
+name = "the wasm today version runs the page's guest on its own document"
+file = "scripts/bench/blink_perf/blink_perf.py"
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py"]
+from = '''        ("wasm today", "kun", WASM + variant(page, "detached"), True),'''
+to = '''        ("wasm today", "kun", WASM + page, True),'''
+
+[[mutant]]
+name = "no page has wasm versions"
+file = "scripts/bench/blink_perf/blink_perf.py"
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py"]
+from = '''    return (wasm if has_wasm_versions(page) else []) + ['''
+to = '''    return [] + ['''
+
+[[mutant]]
+name = "the wasm versions aren't compared"
+file = "scripts/bench/blink_perf/blink_perf.py"
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py"]
+from = '''            today = NEXT_DOM_PAIRS.get(name)'''
+to = '''            today = {"JS next": "JS today"}.get(name)'''
+
+[[mutant]]
+name = "--gc runs the new DOM's variants as pages"
+file = "scripts/bench/blink_perf/blink_perf.py"
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py"]
+from = '''                       if not is_variant(page))'''
+to = '''                       if True)'''
+
+[[mutant]]
+name = "wasm-next runs without the new DOM"
+file = "scripts/bench/calls/calls.py"
+test = ["python3", "scripts/bench/calls/calls_test.py"]
+from = '''    if engine == "wasm-next":'''
+to = '''    if engine == "wasm-nothing":'''

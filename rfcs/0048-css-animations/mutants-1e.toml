@@ -1,0 +1,130 @@
+# Mutation test of step 1e: the rendering update's "update animations and
+# send events", the frames transitions ask for, and `TransitionEvent`
+# (2026-10-15):
+# python3 scripts/test.py mutate rfcs/0048-css-animations/mutants-1e.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "transitions::"]
+timeout = 600
+
+[[mutant]]
+name = "transitions ask for no frames"
+file = "crates/dom/src/animations.rs"
+from = '''        !self.events.is_empty()
+            || self.targets.values().any(|t| t.animations.is_running())
+            || self.detached.values().any(|(_, a)| a.is_running())'''
+to = '''        !self.events.is_empty()
+            || self.detached.values().any(|(_, a)| a.is_running())'''
+
+[[mutant]]
+name = "the transitions don't tick"
+file = "crates/dom/src/animations.rs"
+from = '''            entry.animations.tick(now, &mut sent);'''
+to = '''            let _ = now;'''
+
+[[mutant]]
+name = "the elements aren't styled again at a frame"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    element.set_animations_changed();'''
+to = '''                    let _ = element;'''
+
+[[mutant]]
+name = "the timeline isn't set"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    table.timelines.insert(*document, frame_time - time_origin);'''
+to = '''                    table.timelines.insert(*document, 0.0);'''
+
+[[mutant]]
+name = "the timeline is the clock's, not the document's"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    let (ran, detached) = table.tick(*document, frame_time - time_origin);'''
+to = '''                    let (ran, detached) = table.tick(*document, frame_time - time_origin + 100_000.0);'''
+
+[[mutant]]
+name = "the events go in the order they were queued"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            dom_api::animation::sort_events(&self.dom.borrow_mut().read(), *document, &mut events);'''
+to = '''            let _ = &events;'''
+
+[[mutant]]
+name = "a pseudo-element's events say none"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    Some(computed_style::PseudoId::Before) => "::before",'''
+to = '''                    Some(computed_style::PseudoId::Before) => "",'''
+
+[[mutant]]
+name = "the events don't bubble"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    .create_event(event_type, true, true, true, kind);'''
+to = '''                    .create_event(event_type, false, true, true, kind);'''
+
+[[mutant]]
+name = "the events aren't trusted"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    .create_event(event_type, true, true, true, kind);'''
+to = '''                    .create_event(event_type, true, true, false, kind);'''
+
+[[mutant]]
+name = "an element gone stays animated"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                                element.shadow_including_root().id() != entry.document'''
+to = '''                                element.shadow_including_root().id() != entry.document && false'''
+
+[[mutant]]
+name = "elapsedTime is the property name's"
+file = "crates/dom_api/src/event.rs"
+from = '''    Ok(transition_data(this).elapsed_time)'''
+to = '''    Ok(transition_data(this).elapsed_time * 0.0)'''
+
+[[mutant]]
+name = "removals aren't recorded"
+file = "crates/dom/src/scope.rs"
+from = '''            if animations.seen {
+                animations.removed.insert(node.id);'''
+to = '''            if false {
+                animations.removed.insert(node.id);'''
+
+[[mutant]]
+name = "a moved element keeps its transitions"
+file = "crates/style/src/animations.rs"
+from = '''        if moved && let Some(entry) = targets.get_mut(&target) {'''
+to = '''        if false && let Some(entry) = targets.get_mut(&target) {'''
+
+[[mutant]]
+name = "a moved element stays moved"
+file = "crates/style/src/animations.rs"
+from = '''            scope.node_by_id(*id).is_none_or(|node| {'''
+to = '''            true || scope.node_by_id(*id).is_none_or(|node| {'''
+
+[[mutant]]
+name = "the before-change style is the last frame's"
+file = "crates/style/src/animations.rs"
+from = '''            resampled.as_ref().or(old)'''
+to = '''            old.or(resampled.as_ref())'''
+
+[[mutant]]
+name = "a transition done isn't styled again"
+file = "crates/dom/src/animations.rs"
+from = '''            if was_running {
+                running.push(target.element);'''
+to = '''            if entry.animations.is_running() {
+                running.push(target.element);'''
+
+[[mutant]]
+name = "a removed element's transitions stop silently"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    entry.animations.cancel_all(now, &mut sent);
+                    let document = entry.document;'''
+to = '''                    let _ = now;
+                    let document = entry.document;'''
+
+[[mutant]]
+name = "the pending transitions don't start"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let started = tracing::trace_span!("PendingAnimations::Update")
+            .in_scope(|| self.dom.borrow_mut().read().animations().start_pending());'''
+to = '''        let started: Vec<dom::PendingAnimationEvent> = Vec::new();'''
+
+[[mutant]]
+name = "a frame that only moves transitions isn't drawn"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        if !due.is_empty() || animating {'''
+to = '''        if !due.is_empty() || (animating && false) {'''

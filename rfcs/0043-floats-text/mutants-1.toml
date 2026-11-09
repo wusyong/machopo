@@ -1,0 +1,155 @@
+# Mutation test of the first stage: the text properties (2026-10-13):
+# python3 scripts/test.py mutate rfcs/0043-floats-text/mutants-1.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "inline::", "text_rects::"]
+timeout = 900
+
+# css: parsing and the white-space shorthand.
+
+[[mutant]]
+name = "the white-space keyword pre doesn't stop wrapping"
+file = "crates/computed_style/src/lib.rs"
+from = '''            Self::Pre => (Preserve, Nowrap),'''
+to = '''            Self::Pre => (Preserve, Wrap),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cssom::"]
+
+[[mutant]]
+name = "a white-space keyword isn't parsed"
+file = "crates/css/src/properties.rs"
+from = '''                if let Ok(keyword) = keyword {
+                    let (collapse, wrap) = keyword.longhands();'''
+to = '''                if let Ok(keyword) = keyword
+                    && false
+                {
+                    let (collapse, wrap) = keyword.longhands();'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cssom::"]
+
+[[mutant]]
+name = "word-wrap isn't an alias of overflow-wrap"
+file = "crates/css/src/properties.rs"
+from = '''            "overflow-wrap" | "word-wrap" => OverflowWrap,'''
+to = '''            "overflow-wrap" => OverflowWrap,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cssom::"]
+
+[[mutant]]
+name = "word-spacing takes a percentage"
+file = "crates/css/src/properties.rs"
+from = '''                    Err(_) => Some(Length::parse(input, true)?),'''
+to = '''                    Err(_) => Some(match input.try_parse(|i| i.expect_percentage()) {
+                        Ok(_) => Length::px(0.0),
+                        Err(_) => Length::parse(input, true)?,
+                    }),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "cssom::"]
+
+[[mutant]]
+name = "letter-spacing: normal computes to 0"
+file = "crates/css/src/computed.rs"
+from = '''            None => dest.push_str("normal"),
+            Some(px) => px_to_css(px, dest),'''
+to = '''            None => px_to_css(0.0, dest),
+            Some(px) => px_to_css(px, dest),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+[[mutant]]
+name = "letter-spacing isn't computed"
+file = "crates/css/src/properties.rs"
+from = '''            style.letter_spacing = v.map(|l| l.to_px(cx)).filter(|px| *px != 0.0);'''
+to = '''            let _ = v;'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+[[mutant]]
+name = "letter-spacing: 0 isn't normal"
+file = "crates/css/src/properties.rs"
+from = '''            style.letter_spacing = v.map(|l| l.to_px(cx)).filter(|px| *px != 0.0);'''
+to = '''            style.letter_spacing = v.map(|l| l.to_px(cx));'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "computed::"]
+
+# layout: parley gets the properties.
+
+[[mutant]]
+name = "letter-spacing isn't given to parley"
+file = "crates/layout/src/text.rs"
+from = '''        StyleProperty::LetterSpacing(s.letter_spacing),'''
+to = ''''''
+
+[[mutant]]
+name = "word-spacing isn't given to parley"
+file = "crates/layout/src/text.rs"
+from = '''        StyleProperty::WordSpacing(s.word_spacing),'''
+to = ''''''
+
+[[mutant]]
+name = "a percentage text-indent is 0"
+file = "crates/layout/src/text.rs"
+from = '''    match indent {
+        LengthPercentage::Px(px) => px,
+        LengthPercentage::Percent(p) => percent(p),'''
+to = '''    match indent {
+        LengthPercentage::Px(px) => px,
+        LengthPercentage::Percent(_) => 0.0,'''
+
+[[mutant]]
+name = "the lines aren't indented"
+file = "crates/layout/src/text.rs"
+from = '''        self.layout
+            .set_text_indent(indent_px(self.text_indent, width), IndentOptions::default());
+        let mut breaker = self.layout.break_lines();'''
+to = '''        let mut breaker = self.layout.break_lines();'''
+
+[[mutant]]
+name = "break-spaces hangs its spaces"
+file = "crates/layout/src/text.rs"
+from = '''            WhiteSpaceCollapse::BreakSpaces => parley::WhiteSpaceCollapse::BreakSpaces,'''
+to = '''            WhiteSpaceCollapse::BreakSpaces => parley::WhiteSpaceCollapse::Preserve,'''
+
+[[mutant]]
+name = "word-break: break-word doesn't break anywhere"
+file = "crates/layout/src/text.rs"
+from = '''            (OverflowWrap::Normal, WordBreak::BreakWord) => parley::OverflowWrap::Anywhere,'''
+to = '''            (OverflowWrap::Normal, WordBreak::BreakWord) => parley::OverflowWrap::Normal,'''
+
+[[mutant]]
+name = "nowrap wraps"
+file = "crates/layout/src/text.rs"
+from = '''            computed_style::TextWrapMode::Nowrap => TextWrapMode::NoWrap,'''
+to = '''            computed_style::TextWrapMode::Nowrap => TextWrapMode::Wrap,'''
+
+# layout: text-transform.
+
+[[mutant]]
+name = "capitalize uppercases every character"
+file = "crates/layout/src/text.rs"
+from = '''        TextTransform::Capitalize if starts_word => CaseChars::Upper(c.to_uppercase()),'''
+to = '''        TextTransform::Capitalize => CaseChars::Upper(c.to_uppercase()),'''
+test = ["cargo", "test", "-q", "-p", "layout", "--lib"]
+
+[[mutant]]
+name = "a word going on from the previous text node starts again"
+file = "crates/layout/src/text.rs"
+from = '''        if start >= offset {
+            starts.push(start - offset);
+        }'''
+to = '''        starts.push((start as usize).saturating_sub(offset));'''
+test = ["cargo", "test", "-q", "-p", "layout", "--lib"]
+
+[[mutant]]
+name = "a break doesn't start a word"
+file = "crates/layout/src/text.rs"
+from = '''                chars.push(('\n', index, 0, 0));
+                last_collapsible = false;
+                line_start = true;
+                previous = None;'''
+to = '''                chars.push(('\n', index, 0, 0));
+                last_collapsible = false;
+                line_start = true;'''
+test = ["cargo", "test", "-q", "-p", "layout", "--lib"]
+
+[[mutant]]
+name = "an expanded character maps only its first character"
+file = "crates/layout/src/text.rs"
+from = '''                        for c in transformed(c, transform, starts_word) {
+                            chars.push((c, index, at, utf16));
+                        }'''
+to = '''                        for (i, c) in transformed(c, transform, starts_word).enumerate() {
+                            chars.push((c, index, at + i as u32, utf16 + i as u32));
+                        }'''
+test = ["cargo", "test", "-q", "-p", "layout", "--lib"]

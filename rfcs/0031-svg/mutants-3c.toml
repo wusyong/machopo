@@ -1,0 +1,203 @@
+# Mutation test of step 3c (SVGGeometryElement's and SVGTextContentElement's
+# methods): python3 scripts/test.py mutate rfcs/0031-svg/mutants-3c.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "geometry::svg_shapes_lengths_and_points", "geometry::svg_text_methods"]
+timeout = 900
+
+[[mutant]]
+name = "Skia's tolerance is finer"
+file = "crates/gfx/src/path_measure.rs"
+from = '''const TOLERANCE: f32 = 0.5;'''
+to = '''const TOLERANCE: f32 = 0.25;'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+[[mutant]]
+name = "a conic's middle is checked against an end"
+file = "crates/gfx/src/path_measure.rs"
+from = '''    let mid = PointF::new((min_p.x + max_p.x) * 0.5, (min_p.y + max_p.y) * 0.5);'''
+to = '''    let mid = PointF::new(min_p.x, min_p.y);'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+[[mutant]]
+name = "a point's t starts over at each piece"
+file = "crates/gfx/src/path_measure.rs"
+from = '''                start_t = previous.scalar_t();'''
+to = '''                start_t = 0.0;'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+[[mutant]]
+name = "a point is in the piece before the one reaching it"
+file = "crates/gfx/src/path_measure.rs"
+from = '''            .partition_point(|segment| segment.distance < distance)'''
+to = '''            .partition_point(|segment| segment.distance < distance)
+            .saturating_sub(1)'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+[[mutant]]
+name = "a closed contour leaves out the line back"
+file = "crates/gfx/src/path_measure.rs"
+from = '''                contour.line(current, start);'''
+to = '''                let _ = start;'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+[[mutant]]
+name = "a later contour's point counts from the start"
+file = "crates/gfx/src/path_measure.rs"
+from = '''            length -= contour.length;'''
+to = '''            let _ = contour.length;'''
+
+[[mutant]]
+name = "with no contour, the origin"
+file = "crates/gfx/src/path_measure.rs"
+from = '''            Some(PathElement::MoveTo(p)) => *p,'''
+to = '''            Some(PathElement::MoveTo(_)) => PointF::new(0.0, 0.0),'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+[[mutant]]
+name = "a quadratic's cubic has the wrong controls"
+file = "crates/gfx/src/path_measure.rs"
+from = '''                        |a: PointF| PointF::new((a.x + 2.0 * c.x) / 3.0, (a.y + 2.0 * c.y) / 3.0);'''
+to = '''                        |a: PointF| PointF::new((2.0 * a.x + c.x) / 3.0, (2.0 * a.y + c.y) / 3.0);'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+[[mutant]]
+name = "an arc's cubic has the wrong controls"
+file = "crates/gfx/src/path_measure.rs"
+from = '''                    let k = 4.0 * w / (3.0 * (1.0 + w));'''
+to = '''                    let k = w;'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+[[mutant]]
+name = "a close doesn't go back"
+file = "crates/gfx/src/path_measure.rs"
+from = '''                    state.current = state.start;'''
+to = '''                    let _ = state.start;'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+[[mutant]]
+name = "the traversal's tolerance is coarser"
+file = "crates/gfx/src/path_measure.rs"
+from = '''            if polygon - chord > TRAVERSAL_TOLERANCE && top.depth < TRAVERSAL_DEPTH {'''
+to = '''            if polygon - chord > 0.01 && top.depth < TRAVERSAL_DEPTH {'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+[[mutant]]
+name = "a piece's length is its polygon's"
+file = "crates/gfx/src/path_measure.rs"
+from = '''                total += (polygon + chord) / 2.0;'''
+to = '''                total += polygon;'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+[[mutant]]
+name = "the traversal looks past the piece reaching the point"
+file = "crates/gfx/src/path_measure.rs"
+from = '''                    if self.total + total > desired {'''
+to = '''                    if self.total + total > desired + 1.0 {'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+[[mutant]]
+name = "the point is at the chord's end"
+file = "crates/gfx/src/path_measure.rs"
+from = '''            let offset = desired - self.total;'''
+to = '''            let offset = 0.0 * (desired - self.total);'''
+test = ["cargo", "test", "-q", "-p", "gfx", "--lib"]
+
+[[mutant]]
+name = "a <path> is measured as the other shapes"
+file = "crates/dom_api/src/svg_geometry.rs"
+from = '''    let length = if is_path(cx, this) {
+        path.traversal_length()'''
+to = '''    let length = if false {
+        path.traversal_length()'''
+
+[[mutant]]
+name = "a shape is measured as a <path>"
+file = "crates/dom_api/src/svg_geometry.rs"
+from = '''    let length = if is_path(cx, this) {
+        path.traversal_length()
+    } else {
+        path.length()
+    };'''
+to = '''    let length = if is_path(cx, this) || true {
+        path.traversal_length()
+    } else {
+        path.length()
+    };'''
+
+[[mutant]]
+name = "an empty path has a point"
+file = "crates/dom_api/src/svg_geometry.rs"
+from = '''    if path.elements().is_empty() {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a rect with no width has no path"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''        .filter(|b| is_rect && (b.width > 0.0 || b.height > 0.0))'''
+to = '''        .filter(|b| is_rect && b.width > 0.0 && b.height > 0.0)'''
+
+[[mutant]]
+name = "a shape not rendered resolves percentages against something"
+file = "crates/layout/src/svg.rs"
+from = '''        viewport: SizeF::default(),'''
+to = '''        viewport: SizeF::new(100.0, 100.0),'''
+
+[[mutant]]
+name = "a detached <path> has no data"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        Some(segments.map_or_else(gfx::Path::new, |s| layout::svg_path_from_data(&s)))'''
+to = '''        Some(segments.map_or_else(gfx::Path::new, |_| gfx::Path::new()))'''
+
+[[mutant]]
+name = "a detached <rect> gives an empty path"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        if element.computed_style().is_some()
+            || !element.element_name().is_some_and(|n| n.is_svg("path"))'''
+to = '''        if element.computed_style().is_some()'''
+
+[[mutant]]
+name = "a cluster is one character number"
+file = "crates/layout/src/svg_text.rs"
+from = '''                        units: content[cluster.text_range()].encode_utf16().count(),'''
+to = '''                        units: content[cluster.text_range()].chars().count(),'''
+
+[[mutant]]
+name = "the end position isn't turned"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''                    cell.origin.x + cell.advance * cos,'''
+to = '''                    cell.origin.x + cell.advance,'''
+
+[[mutant]]
+name = "a <tspan>'s text isn't laid out with the <text>"
+file = "crates/layout/src/svg_geometry.rs"
+from = '''        .is_some_and(|name| name.is_svg("tspan") || name.is_svg("a"))'''
+to = '''        .is_some_and(|name| name.is_svg("a"))'''
+
+[[mutant]]
+name = "getSubStringLength counts only characters starting in the range"
+file = "crates/dom_api/src/svg_text.rs"
+from = '''        .filter(|(range, _)| range.start < end && start < range.end)'''
+to = '''        .filter(|(range, _)| range.start < end && start <= range.start)'''
+
+[[mutant]]
+name = "getSubStringLength takes the last character number"
+file = "crates/dom_api/src/svg_text.rs"
+from = '''    if start >= total {'''
+to = '''    if start > total {'''
+
+[[mutant]]
+name = "getCharNumAtPosition gives a cluster's last number"
+file = "crates/dom_api/src/svg_text.rs"
+from = '''        .map(|(range, _)| range.start);'''
+to = '''        .map(|(range, _)| range.end - 1);'''
+
+[[mutant]]
+name = "selectSubString takes any number"
+file = "crates/dom_api/src/svg_text.rs"
+from = '''    if charnum as usize >= count(&chars(cx, this)) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a cell is found turned the other way"
+file = "crates/dom_api/src/svg_text.rs"
+from = '''    (0..4).all(|i| side(corners[i], corners[(i + 1) % 4]) >= 0.0)'''
+to = '''    (0..4).all(|i| side(corners[i], corners[(i + 1) % 4]) <= 0.0)'''

@@ -1,0 +1,21 @@
+[package]
+name = "dom_api_macros"
+description = "declare!: the DOM's declaration table, its interfaces' descriptions, each member's typed path and the list of them engines bind (for_each_member!). Used by `dom_api`."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lib]
+proc-macro = true
+# No doc examples: skip rustdoc's pass in `cargo test`.
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+syn.workspace = true
+quote.workspace = true
+proc-macro2.workspace = true

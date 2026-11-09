@@ -1,0 +1,232 @@
+# Mutation test of step 1a (Range and StaticRange: the GC type, the
+# document's set, the boundary points set with the DOM's checks):
+# python3 scripts/test.py mutate rfcs/0037-range/mutants-1a.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "ranges::"]
+timeout = 600
+
+# dom: the type and the document's set.
+
+[[mutant]]
+name = "a live range isn't its document's"
+file = "crates/dom/src/range.rs"
+from = '''        let range = self.make_range(start, end, false);
+        self.add_live_range(&range, start.0);'''
+to = '''        let range = self.make_range(start, end, false);'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "ranges::"]
+
+[[mutant]]
+name = "a static range is a document's"
+file = "crates/dom/src/range.rs"
+from = '''        self.make_range(start, end, true)
+    }'''
+to = '''        let range = self.make_range(start, end, true);
+        self.add_live_range(&range, start.0);
+        range
+    }'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "ranges::"]
+
+[[mutant]]
+name = "a range set into another document stays in the old set"
+file = "crates/dom/src/range.rs"
+from = '''        if !self.document_of(start.0).ptr_eq(&old_document) {'''
+to = '''        if false {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "ranges::"]
+
+[[mutant]]
+name = "a moved range isn't taken out of the old set"
+file = "crates/dom/src/range.rs"
+from = '''                rare.live_ranges.remove(self, range.object());
+            }
+            self.add_live_range(range, start.0);'''
+to = '''                let _ = rare;
+            }
+            self.add_live_range(range, start.0);'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "ranges::"]
+
+[[mutant]]
+name = "the end offset isn't set"
+file = "crates/dom/src/range.rs"
+from = '''        object.end_offset.store(end.1, Ordering::Relaxed);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "ranges::"]
+
+[[mutant]]
+name = "the end read from the start"
+file = "crates/dom/src/range.rs"
+from = '''            self.boundary_node(&object.end),
+            object.end_offset.load(Ordering::Relaxed),'''
+to = '''            self.boundary_node(&object.start),
+            object.start_offset.load(Ordering::Relaxed),'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "ranges::"]
+
+[[mutant]]
+name = "insert_unordered never takes a free slot"
+file = "crates/dom/src/weak_set.rs"
+from = '''        if len >= self.rescan_at.load(Ordering::Relaxed) {'''
+to = '''        if false {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "ranges::"]
+
+[[mutant]]
+name = "insert_unordered never looks again"
+file = "crates/dom/src/weak_set.rs"
+from = '''                .store(len.saturating_mul(2), Ordering::Relaxed);'''
+to = '''                .store(u32::MAX, Ordering::Relaxed);'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "ranges::"]
+
+# dom_api: setting and comparing boundary points.
+
+[[mutant]]
+name = "a text's length in bytes"
+file = "crates/dom_api/src/range.rs"
+from = '''            crate::text_control::utf16_len(&node.text().unwrap_or_default())'''
+to = '''            u32::try_from(node.text().unwrap_or_default().len()).unwrap_or(u32::MAX)'''
+
+[[mutant]]
+name = "an offset past the length taken"
+file = "crates/dom_api/src/range.rs"
+from = '''    if offset > node_length(point) {
+        return Err(DomException::new(
+            ExceptionName::IndexSizeError,
+            format!("the offset {offset} is past the node's length"),
+        ));
+    }
+    let (start_node, start_offset)'''
+to = '''    let (start_node, start_offset)'''
+
+[[mutant]]
+name = "a doctype taken as a boundary point"
+file = "crates/dom_api/src/range.rs"
+from = '''    if point.kind() == NodeKind::Doctype {
+        return Err(invalid_node_type(
+            "a range's boundary point can't be in a doctype",
+        ));
+    }
+    if offset > node_length(point) {'''
+to = '''    if offset > node_length(point) {'''
+
+[[mutant]]
+name = "another tree doesn't collapse the range"
+file = "crates/dom_api/src/range.rs"
+from = '''    let other_tree = !tree_root(point).ptr_eq(&tree_root(start_node.get(&read)));'''
+to = '''    let other_tree = false;'''
+
+[[mutant]]
+name = "the end doesn't follow a start past it"
+file = "crates/dom_api/src/range.rs"
+from = '''        let past_end = other_tree
+            || position((point, offset), (end_node.get(&read), end_offset)) == Ordering::Greater;'''
+to = '''        let past_end = other_tree;'''
+
+[[mutant]]
+name = "the start doesn't follow an end before it"
+file = "crates/dom_api/src/range.rs"
+from = '''        let before_start = other_tree
+            || position((point, offset), (start_node.get(&read), start_offset)) == Ordering::Less;'''
+to = '''        let before_start = other_tree;'''
+
+[[mutant]]
+name = "a point at an ancestor's child's index is after it"
+file = "crates/dom_api/src/range.rs"
+from = '''        && index(child) < a_offset'''
+to = '''        && index(child) <= a_offset'''
+
+[[mutant]]
+name = "siblings in reverse order"
+file = "crates/dom_api/src/range.rs"
+from = '''        if child.id() == a_child {
+            return Ordering::Less;
+        }
+        if child.id() == b_child {
+            return Ordering::Greater;
+        }'''
+to = '''        if child.id() == a_child {
+            return Ordering::Greater;
+        }
+        if child.id() == b_child {
+            return Ordering::Less;
+        }'''
+
+[[mutant]]
+name = "an ancestor after its descendants"
+file = "crates/dom_api/src/range.rs"
+from = '''    if common == a_chain.len() {
+        return Ordering::Less;
+    }'''
+to = '''    if common == a_chain.len() {
+        return Ordering::Greater;
+    }'''
+
+[[mutant]]
+name = "after a node is before it"
+file = "crates/dom_api/src/range.rs"
+from = '''    Ok((parent.to_handle(), index(node) + u32::from(after)))'''
+to = '''    Ok((parent.to_handle(), index(node)))'''
+
+[[mutant]]
+name = "a node's index counts the following siblings"
+file = "crates/dom_api/src/range.rs"
+from = '''    let before = std::iter::successors(node.previous_sibling(), |n| n.previous_sibling()).count();'''
+to = '''    let before = std::iter::successors(node.next_sibling(), |n| n.next_sibling()).count();'''
+
+[[mutant]]
+name = "collapse to the start by default"
+file = "crates/dom_api/src/range.rs"
+from = '''    let point = if to_start {
+        read.range_start(this)'''
+to = '''    let point = if !to_start {
+        read.range_start(this)'''
+
+[[mutant]]
+name = "selectNode selects nothing"
+file = "crates/dom_api/src/range.rs"
+from = '''        .set_range(this, (&parent, index), (&parent, index + 1));'''
+to = '''        .set_range(this, (&parent, index), (&parent, index));'''
+
+[[mutant]]
+name = "selectNodeContents to its start"
+file = "crates/dom_api/src/range.rs"
+from = '''    cx.mutate().set_range(this, (&node, 0), (&node, length));'''
+to = '''    cx.mutate().set_range(this, (&node, 0), (&node, 0));'''
+
+[[mutant]]
+name = "selectNodeContents takes a doctype"
+file = "crates/dom_api/src/range.rs"
+from = '''    if contents.kind() == NodeKind::Doctype {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "cloneRange is the range"
+file = "crates/dom_api/src/range.rs"
+from = '''    Ok(cx
+        .mutate()
+        .create_range((&start.0, start.1), (&end.0, end.1)))
+}'''
+to = '''    let _ = (start, end);
+    Ok(this.clone())
+}'''
+
+[[mutant]]
+name = "collapsed compares only the nodes"
+file = "crates/dom_api/src/range.rs"
+from = '''    Ok(start.ptr_eq(&end) && start_offset == end_offset)'''
+to = '''    let _ = (start_offset, end_offset);
+    Ok(start.ptr_eq(&end))'''
+
+[[mutant]]
+name = "a static range takes an attr"
+file = "crates/dom_api/src/range.rs"
+from = '''        if matches!(node.kind(), NodeKind::Doctype | NodeKind::Attr) {'''
+to = '''        if matches!(node.kind(), NodeKind::Doctype) {'''
+
+[[mutant]]
+name = "a static range is a Range"
+file = "crates/dom_api/src/object.rs"
+from = '''            Self::Range(range) if range.is_static() => ObjectKind::StaticRange,'''
+to = '''            Self::Range(range) if range.is_static() => ObjectKind::Range,'''
+
+[[mutant]]
+name = "InvalidNodeTypeError's code"
+file = "crates/dom_api/src/wit.rs"
+from = '''        ExceptionName::InvalidNodeTypeError => 22,'''
+to = '''        ExceptionName::InvalidNodeTypeError => 7,'''
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "it", "engine::a_guest_uses_ranges"]

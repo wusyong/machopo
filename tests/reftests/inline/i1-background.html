@@ -1,0 +1,6 @@
+<!DOCTYPE html>
+<title>I1: an inline element's background covers its text's content area, and only that</title>
+<link rel="match" href="i1-background-ref.html">
+<style>html, body { margin: 0 } body { font: 20px/1 Ahem; color: black }</style>
+<!-- Ahem: ascent 16px and descent 4px, so the content area is the 20px line. -->
+<div>XX<span style="background-color: green">&nbsp;&nbsp;</span>XX</div>

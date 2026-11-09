@@ -1,0 +1,123 @@
+# Stage 5c-3: the DOM's objects in DevTools' heap snapshots. Run with
+# RUSTY_V8_ARCHIVE set to a V8 built from the fork's commit that binds the
+# embedder graph, until a release has it; in a target directory of its
+# own, which an editor's `cargo check` (without RUSTY_V8_ARCHIVE) doesn't
+# overwrite with the released V8.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "env", "RUSTY_V8_ARCHIVE=/home/wusyong/Desktop/kun/third_party/rusty_v8_artifacts", "CARGO_TARGET_DIR=/home/wusyong/Desktop/kun/kun/target/v8-local", "sh", "-c", "cargo test -q -p gc --test it walk:: && cargo test -q -p bindings --test it heap_snapshot:: && cargo test -q -p shell --test it devtools::a_heap_snapshot_has_the_dom"]
+timeout = 1500
+
+[[mutant]]
+name = "gc: a walked object not marked while a marking runs"
+file = "crates/gc/src/heap/walk.rs"
+from = '''            inner.read_weak(data as u32);'''
+to = '''            let _ = data as u32;'''
+
+[[mutant]]
+name = "gc: a weak edge walked as strong"
+file = "crates/gc/src/heap/walk.rs"
+from = '''                            edges.push(Edge {
+                                name,
+                                kind: EdgeKind::Weak,
+                                to,
+                            });'''
+to = '''                            edges.push(Edge {
+                                name,
+                                kind: EdgeKind::Strong,
+                                to,
+                            });'''
+
+[[mutant]]
+name = "gc: an ephemeron's key walked as strong"
+file = "crates/gc/src/heap/walk.rs"
+from = '''                                kind: EdgeKind::Weak,
+                                to: key,'''
+to = '''                                kind: EdgeKind::Strong,
+                                to: key,'''
+
+[[mutant]]
+name = "gc: an ephemeron's value without its key"
+file = "crates/gc/src/heap/walk.rs"
+from = '''                                kind: key.map_or(EdgeKind::Weak, |key| EdgeKind::Ephemeron { key }),'''
+to = '''                                kind: EdgeKind::Weak,'''
+
+[[mutant]]
+name = "gc: a page's free ranges walked as objects"
+file = "crates/gc/src/heap/walk.rs"
+from = '''                    for &(first, end) in &page.ranges {
+                        set(first as usize, end as usize);'''
+to = '''                    for &(first, end) in page.ranges.iter().take(0) {
+                        set(first as usize, end as usize);'''
+
+[[mutant]]
+name = "gc: the cursor's rest walked as objects"
+file = "crates/gc/src/heap/walk.rs"
+from = '''                        set(slot(cursor.next), slot(cursor.limit));'''
+to = ''''''
+
+[[mutant]]
+name = "gc: large objects not walked"
+file = "crates/gc/src/heap/walk.rs"
+from = '''                PageState::Large(_) => self.push_object(&mut objects, large_data(number)),'''
+to = '''                PageState::Large(_) => {}'''
+
+[[mutant]]
+name = "gc: a young filler walked as an object"
+file = "crates/gc/src/heap/walk.rs"
+from = '''                if unsafe { self.header(data).read() } != young::FILLER {'''
+to = '''                if true {'''
+
+[[mutant]]
+name = "gc: the walk doesn't finish the sweep"
+file = "crates/gc/src/heap.rs"
+from = '''        self.inner.finish_sweeping(&*platform);
+        let walk = Walk::new(&self.inner);'''
+to = '''        let _ = platform;
+        let walk = Walk::new(&self.inner);'''
+
+[[mutant]]
+name = "bindings: no detachedness in the snapshot"
+file = "crates/bindings/src/unified_heap.rs"
+from = '''                detachedness: detachedness(object).into(),'''
+to = '''                detachedness: { let _ = detachedness(object); v8::kun::Detachedness::Unknown },'''
+
+[[mutant]]
+name = "bindings: an object not merged with its wrapper"
+file = "crates/bindings/src/unified_heap.rs"
+from = '''                detachedness: detachedness(object).into(),
+                wrapper,'''
+to = '''                detachedness: detachedness(object).into(),
+                wrapper: { let _ = wrapper; None },'''
+
+[[mutant]]
+name = "bindings: a weak edge given as strong"
+file = "crates/bindings/src/unified_heap.rs"
+from = '''                    gc::EdgeKind::Weak => self.graph.add_weak_edge(from, to, edge.name),'''
+to = '''                    gc::EdgeKind::Weak => self.graph.add_edge(from, to, edge.name),'''
+
+[[mutant]]
+name = "bindings: an ephemeron's key doesn't hold its value"
+file = "crates/bindings/src/unified_heap.rs"
+from = '''                            self.graph.add_edge(key, to, edge.name);'''
+to = ''''''
+
+[[mutant]]
+name = "bindings: the roots node not a root"
+file = "crates/bindings/src/unified_heap.rs"
+from = '''                wrapper: None,
+                is_root: true,'''
+to = '''                wrapper: None,
+                is_root: false,'''
+
+[[mutant]]
+name = "bindings: any JS edge taken as the wrapper"
+file = "crates/bindings/src/unified_heap.rs"
+from = '''        (wrapped.cast() == object.address()).then_some(value)'''
+to = '''        { let _ = wrapped; Some(value) }'''
+
+[[mutant]]
+name = "dom_js_next: detached and attached swapped"
+file = "crates/dom_js_next/src/state.rs"
+from = '''                Some(true) => bindings::Detachedness::Detached,
+                Some(false) => bindings::Detachedness::Attached,'''
+to = '''                Some(true) => bindings::Detachedness::Attached,
+                Some(false) => bindings::Detachedness::Detached,'''

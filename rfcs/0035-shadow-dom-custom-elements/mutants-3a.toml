@@ -1,0 +1,138 @@
+# Mutation test of step 3a (named slot assignment, `HTMLSlotElement`,
+# `assignedSlot`, `Element.slot`):
+# python3 scripts/test.py mutate rfcs/0035-shadow-dom-custom-elements/mutants-3a.toml
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "slots::"]
+timeout = 600
+
+# dom: the assignment.
+
+[[mutant]]
+name = "a slot of any namespace"
+file = "crates/dom/src/slot.rs"
+from = '''        self.element_name().is_some_and(|name| name.is_html("slot"))'''
+to = '''        self.element_name().is_some_and(|name| &*name.local == "slot")'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "slots::"]
+
+[[mutant]]
+name = "a comment a slottable"
+file = "crates/dom/src/slot.rs"
+from = '''        matches!(self.kind(), NodeKind::Element | NodeKind::Text)'''
+to = '''        matches!(self.kind(), NodeKind::Element | NodeKind::Text | NodeKind::Comment)'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "slots::"]
+
+[[mutant]]
+name = "a slot outside a shadow tree assigned"
+file = "crates/dom/src/slot.rs"
+from = '''        let root = node.root();
+        if !root.is_shadow_root() {
+            return Vec::new();
+        }'''
+to = '''        let root = node.root();'''
+
+[[mutant]]
+name = "the assignment never computed again"
+file = "crates/dom/src/slot.rs"
+from = '''            .is_some_and(|assignment| assignment.version == self.dom_tree_version);'''
+to = '''            .is_some();'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "slots::"]
+
+[[mutant]]
+name = "the last slot of a name"
+file = "crates/dom/src/slot.rs"
+from = '''                    slots.iter_mut().find(|(slot_name, ..)| *slot_name == name)'''
+to = '''                    slots.iter_mut().rev().find(|(slot_name, ..)| *slot_name == name)'''
+
+[[mutant]]
+name = "the slots out of tree order"
+file = "crates/dom/src/slot.rs"
+from = '''        let mut stack: Vec<NodeRef<'_>> = root.children().collect();
+        stack.reverse();'''
+to = '''        let mut stack: Vec<NodeRef<'_>> = root.children().collect();'''
+
+[[mutant]]
+name = "a slot named by its slot attribute"
+file = "crates/dom/src/slot.rs"
+from = '''                slots.push((node.slot_name("name"), node.id(), Vec::new()));'''
+to = '''                slots.push((node.slot_name("slot"), node.id(), Vec::new()));'''
+
+[[mutant]]
+name = "a slottable named by its name attribute"
+file = "crates/dom/src/slot.rs"
+from = '''                    child.slot_name("slot")
+                } else {'''
+to = '''                    child.slot_name("name")
+                } else {'''
+
+[[mutant]]
+name = "no slottable's slot"
+file = "crates/dom/src/slot.rs"
+from = '''                {
+                    assigned.push(child.id());
+                    slot_of.insert(child.id(), *slot);'''
+to = '''                {
+                    assigned.push(child.id());
+                    let _ = slot;'''
+
+# dom_api: on top.
+
+[[mutant]]
+name = "assignedSlot of a closed shadow root"
+file = "crates/dom_api/src/slot.rs"
+from = '''    Ok(open.then_some(slot))'''
+to = '''    Ok({
+        let _ = open;
+        Some(slot)
+    })'''
+
+[[mutant]]
+name = "no fallback when flattening"
+file = "crates/dom_api/src/slot.rs"
+from = '''    if slottables.is_empty() {
+        slottables = node'''
+to = '''    if false {
+        slottables = node'''
+
+[[mutant]]
+name = "slots not flattened"
+file = "crates/dom_api/src/slot.rs"
+from = '''            result.extend(flattened(read, &slottable));'''
+to = '''            result.push(slottable);'''
+
+[[mutant]]
+name = "a light tree's slot flattened"
+file = "crates/dom_api/src/slot.rs"
+from = '''        if inner.is_slot() && inner.root().is_shadow_root() {'''
+to = '''        if inner.is_slot() {'''
+
+[[mutant]]
+name = "flatten's slot outside a shadow tree"
+file = "crates/dom_api/src/slot.rs"
+from = '''    if !node.root().is_shadow_root() {
+        return Vec::new();
+    }
+    let mut slottables'''
+to = '''    let mut slottables'''
+
+[[mutant]]
+name = "assignedElements with text"
+file = "crates/dom_api/src/slot.rs"
+from = '''        .filter(|node| node.get(&read).kind() == NodeKind::Element)'''
+to = '''        .filter(|node| node.get(&read).kind() != NodeKind::Comment)'''
+
+[[mutant]]
+name = "flatten ignored"
+file = "crates/dom_api/src/slot.rs"
+from = '''    Ok(if options.flatten {'''
+to = '''    Ok(if false {'''
+
+[[mutant]]
+name = "Element.slot reflects name"
+file = "crates/dom_api/src/slot.rs"
+from = '''    Ok(reflect(cx, this, "slot"))'''
+to = '''    Ok(reflect(cx, this, "name"))'''
+
+[[mutant]]
+name = "<slot> an HTMLElement"
+file = "crates/dom_api/src/interfaces/core_html.rs"
+from = '''    interface HTMLSlotElement : HTMLElement [HtmlSlotElement] tags("slot") as NodeHandle {'''
+to = '''    interface HTMLSlotElement : HTMLElement [HtmlSlotElement] tags("slot-") as NodeHandle {'''

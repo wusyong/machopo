@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<title>T16: text-overflow: ellipsis cuts an overflowing line and ends it with an ellipsis in the block's style (hiding text and atomic inlines after it, the decorations stopping with the text); clip doesn't</title>
+<link rel="match" href="t16-text-overflow-ref.html">
+<style>html, body { margin: 0 } div { font: 20px/1 Ahem; color: green; width: 100px; overflow: hidden; white-space: nowrap }
+  .e { text-overflow: ellipsis } span { color: red } .b { display: inline-block; width: 60px; height: 20px; background: red; vertical-align: top }</style>
+<div class=e style="width: 110px"><span>XXXXXXXX</span></div>
+<div class=e>XX<span class=b></span>XXXX</div>
+<div class=e>XXXXX</div>
+<div><span>XXXXXXXX</span></div>
+<div class=e style="width: 110px"><span style="text-decoration: underline">XXXXXXXX</span></div>

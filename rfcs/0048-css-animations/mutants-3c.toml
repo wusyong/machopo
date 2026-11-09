@@ -1,0 +1,224 @@
+# Mutation test of step 3c: `@keyframes`' CSSOM completed (`css`'s
+# `stylesheet`, `dom_api`'s `css_style_sheet` and `css_style_declaration`),
+# and what WPT's `web-animations/` turned up (`style`'s after-change style,
+# `dom_api`'s `effect`, `animation`'s `cancel_all`, keyframes' computed
+# offsets) (2026-10-16):
+# python3 scripts/test.py mutate rfcs/0048-css-animations/mutants-3c.toml
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "--", "css_style_sheet::"]
+timeout = 900
+
+[[mutant]]
+name = "appendRule takes a keyframe with more after it"
+file = "crates/css/src/stylesheet.rs"
+from = '''    let rule =
+        cssparser::parse_one_rule(&mut input, &mut KeyframeListParser { log: &mut log }).ok();'''
+to = '''    let rule = cssparser::StyleSheetParser::new(&mut input, &mut KeyframeListParser { log: &mut log })
+        .next()
+        .and_then(|rule| rule.ok());'''
+
+[[mutant]]
+name = "appendRule puts the keyframe first"
+file = "crates/css/src/stylesheet.rs"
+from = '''        rules.push(keyframe);
+        Some(self.with_child_rules(rules))'''
+to = '''        rules.insert(0, keyframe);
+        Some(self.with_child_rules(rules))'''
+
+[[mutant]]
+name = "findRule finds the first"
+file = "crates/css/src/stylesheet.rs"
+from = '''        keyframes.rules.iter().rposition(|rule| match rule {'''
+to = '''        keyframes.rules.iter().position(|rule| match rule {'''
+
+[[mutant]]
+name = "findRule matches any keyframe"
+file = "crates/css/src/stylesheet.rs"
+from = '''            CssRule::Keyframe(keyframe) => keyframe.offsets == offsets,'''
+to = '''            CssRule::Keyframe(keyframe) => keyframe.offsets.first() == offsets.first(),'''
+
+[[mutant]]
+name = "a keyText that doesn't parse is taken"
+file = "crates/css/src/stylesheet.rs"
+from = '''            offsets: parse_key_text(key)?,'''
+to = '''            offsets: parse_key_text(key).unwrap_or_default(),'''
+
+[[mutant]]
+name = "a keyframe's new block is dropped"
+file = "crates/css/src/stylesheet.rs"
+from = '''        Self::Keyframe(Arc::new(KeyframeRule {
+            offsets: keyframe.offsets.clone(),
+            block,
+        }))'''
+to = '''        let _ = block;
+        Self::Keyframe(keyframe.clone())'''
+
+[[mutant]]
+name = "the name isn't changed"
+file = "crates/css/src/stylesheet.rs"
+from = '''            name: Arc::from(name),
+            rules: rule.rules.clone(),'''
+to = '''            name: rule.name.clone(),
+            rules: rule.rules.clone(),'''
+
+[[mutant]]
+name = "deleteRule deletes the first keyframe"
+file = "crates/dom_api/src/css_style_sheet.rs"
+from = '''    let deleted = keyframes
+        .delete_rule(index)'''
+to = '''    let index = 0;
+    let deleted = keyframes
+        .delete_rule(index)'''
+
+[[mutant]]
+name = "length counts one fewer"
+file = "crates/dom_api/src/css_style_sheet.rs"
+from = '''        .map_or(0, <[CssRule]>::len);
+    Ok(u32::try_from(len).unwrap_or(u32::MAX))'''
+to = '''        .map_or(0, <[CssRule]>::len);
+    Ok(u32::try_from(len.saturating_sub(1)).unwrap_or(u32::MAX))'''
+
+[[mutant]]
+name = "the indexed getter reads past the end"
+file = "crates/dom_api/src/css_style_sheet.rs"
+from = '''    let parent = CssRuleParent::Rule(this.clone());
+    let len = cx.read().css_rules_of(&parent).len();
+    if index as usize >= len {
+        return Ok(None);
+    }'''
+to = '''    let parent = CssRuleParent::Rule(this.clone());
+    let len = cx.read().css_rules_of(&parent).len();
+    if index as usize > len {
+        return Ok(None);
+    }'''
+
+[[mutant]]
+name = "a keyframe's style change goes nowhere"
+file = "crates/dom_api/src/css_style_declaration.rs"
+from = '''                style::CssRule::Keyframe(_) => rule_now.with_keyframe_block(block.clone()),'''
+to = '''                style::CssRule::Keyframe(_) => rule_now.clone(),'''
+
+[[mutant]]
+name = "an animation doesn't follow its changed keyframes"
+file = "crates/animation/src/css_animation.rs"
+from = '''            (Self::Rule(a), Self::Rule(b)) => Arc::ptr_eq(a, b),'''
+to = '''            (Self::Rule(a), Self::Rule(b)) => a.name == b.name,'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "animations::keyframes_changed_by_script"]
+
+# --- What WPT's web-animations/ turned up
+[[mutant]]
+name = "the after-change style leaves out script's animations"
+file = "crates/style/src/animations.rs"
+from = '''            if entry.animations.css_animations.is_empty() && entry.animations.others.is_empty() {'''
+to = '''            if entry.animations.css_animations.is_empty() {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "animations::"]
+
+[[mutant]]
+name = "script's effects style the page"
+file = "crates/dom_api/src/effect.rs"
+from = '''    if css {
+        crate::animation::update_style(cx, document);
+    }'''
+to = '''    let _ = css;
+    crate::animation::update_style(cx, document);'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "animations::"]
+
+[[mutant]]
+name = "a CSS animation's effect doesn't style the page"
+file = "crates/dom_api/src/effect.rs"
+from = '''    if css {
+        crate::animation::update_style(cx, document);
+    }'''
+to = '''    let _ = (css, document);'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "animations::"]
+
+[[mutant]]
+name = "script's animations are canceled with their element"
+file = "crates/animation/src/transition.rs"
+from = '''            if !matches!(animation.owner, Owner::Script) && animation.owning {
+                animation.cancel(now, events);
+                animation.disassociate();
+            }'''
+to = '''            animation.cancel(now, events);
+            animation.disassociate();'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "animations::"]
+
+[[mutant]]
+name = "a property-indexed keyframe's easings no keyframe takes aren't checked"
+file = "crates/dom_api/src/effect.rs"
+from = '''    for easing in &easings {'''
+to = '''    for easing in easings.iter().take(by_offset.len()) {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "animations::"]
+
+[[mutant]]
+name = "a property-indexed keyframe's composites aren't checked"
+file = "crates/dom_api/src/effect.rs"
+from = '''    if !composites.iter().all(|c| is_composite(c)) {'''
+to = '''    if !composites.iter().take(by_offset.len()).all(|c| is_composite(c)) {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "animations::"]
+
+[[mutant]]
+name = "a moved element's script animations are canceled"
+file = "crates/animation/src/transition.rs"
+from = '''            .partition(|a| matches!(a.owner, Owner::Script) || !a.owning);'''
+to = '''            .partition(|_| false);'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "animations::"]
+
+# --- What the interpolation tests turned up
+[[mutant]]
+name = "a zero percentage is a length"
+file = "crates/css/src/interpolate.rs"
+from = '''        Some(animate_length_percentage(self, other, progress, false))'''
+to = '''        Some(animate_length_percentage(self, other, progress, true))'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "interpolation::"]
+
+[[mutant]]
+name = "translate()'s zero percentage is a percentage"
+file = "crates/css/src/interpolate.rs"
+from = '''                animate_length_percentage(ay, by, progress, true),'''
+to = '''                animate_length_percentage(ay, by, progress, false),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "interpolation::"]
+
+[[mutant]]
+name = "normal spacing is 0 at the start"
+file = "crates/css/src/interpolate.rs"
+from = '''        if progress == 0.0 {
+            return Some(*self);
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "interpolation::"]
+
+[[mutant]]
+name = "the same background-size keyword steps"
+file = "crates/css/src/interpolate.rs"
+from = '''            _ if self == other => Some(*self),'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "interpolation::"]
+
+[[mutant]]
+name = "a cubic-bezier() control point is an f32"
+file = "crates/css/src/animation.rs"
+from = '''        let value = as_written(input.slice_from(start), ' ').unwrap_or(value.into());'''
+to = '''        let _ = start;
+        let value = f64::from(value);'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "transitions::linear_easing"]
+
+[[mutant]]
+name = "a linear() stop's percentage is an f32"
+file = "crates/css/src/animation.rs"
+from = '''        percent: as_written(input.slice_from(start), '%').unwrap_or(f64::from(fraction) * 100.0),'''
+to = '''        percent: f64::from(fraction * 100.0),'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "transitions::linear_easing"]
+
+[[mutant]]
+name = "a current time isn't whole microseconds"
+file = "crates/animation/src/playback.rs"
+from = '''    ((timeline - start) * rate * 1000.0).round() / 1000.0'''
+to = '''    (timeline - start) * rate'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "animations::"]
+
+[[mutant]]
+name = "an end not in whole microseconds isn't reached"
+file = "crates/animation/src/playback.rs"
+from = '''    time >= limit - 0.001'''
+to = '''    time >= limit'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "animations::"]

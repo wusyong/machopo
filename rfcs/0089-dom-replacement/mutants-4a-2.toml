@@ -1,0 +1,148 @@
+# Stage 4a-2: `innerHTML`, `outerHTML`, `insertAdjacentHTML` on the new
+# DOM: the fragment parse in the member's operation (`html`'s
+# `FragmentSink`), the fast path, the serializer, replace all.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "html", "-p", "dom_next", "-p", "dom_api_next", "-p", "dom_js_next"]
+timeout = 1800
+
+[[mutant]]
+name = "scripting is never enabled"
+file = "crates/dom_api_next/src/markup.rs"
+from = '''    cx.window_of(cx.document_of(node)).is_some()'''
+to = '''    false'''
+
+[[mutant]]
+name = "markup in an XML document"
+file = "crates/dom_api_next/src/markup.rs"
+from = '''    if cx.is_html_document(cx.document_of(node)) {
+        return Ok(());
+    }'''
+to = '''    return Ok(());'''
+
+[[mutant]]
+name = "a template's children, not its contents"
+file = "crates/dom_api_next/src/markup.rs"
+from = '''    let parent = cx.template_content(this).unwrap_or(this);
+    cx.replace_all(parent, Some(fragment));'''
+to = '''    cx.replace_all(this, Some(fragment));'''
+
+[[mutant]]
+name = "positions are case-sensitive"
+file = "crates/dom_api_next/src/markup.rs"
+from = '''    let position = match position.to_ascii_lowercase().as_str() {'''
+to = '''    let position = match position {'''
+
+[[mutant]]
+name = "an HTML document's html is a context"
+file = "crates/dom_api_next/src/markup.rs"
+from = '''    }) && cx.is_html_document(cx.document_of(context));'''
+to = '''    }) && false;'''
+
+[[mutant]]
+name = "a document parent takes adjacent markup"
+file = "crates/dom_api_next/src/markup.rs"
+from = '''            Some(parent) if cx.kind(parent) != NodeKind::Document => parent,'''
+to = '''            Some(parent) => parent,'''
+
+[[mutant]]
+name = "afterbegin is beforeend"
+file = "crates/dom_api_next/src/markup.rs"
+from = '''            cx.pre_insert(this, fragment, cx.first_child(this))?;'''
+to = '''            cx.pre_insert(this, fragment, None)?;'''
+
+[[mutant]]
+name = "afterend is before"
+file = "crates/dom_api_next/src/markup.rs"
+from = '''            cx.pre_insert(parent.expect("checked"), fragment, cx.next_sibling(this))?;'''
+to = '''            cx.pre_insert(parent.expect("checked"), fragment, Some(this))?;'''
+
+[[mutant]]
+name = "replace all keeps the old children"
+file = "crates/dom_next/src/lib.rs"
+from = '''        while let Some(child) = self.first_child(parent) {
+            self.remove(child);
+        }
+        if let Some(node) = node {'''
+to = '''        if let Some(node) = node {'''
+
+[[mutant]]
+name = "the replacement goes last"
+file = "crates/dom_next/src/lib.rs"
+from = '''        self.insert(parent, node, next);
+    }'''
+to = '''        let _ = next;
+        self.insert(parent, node, None);
+    }'''
+
+[[mutant]]
+name = "html5ever's root not taken out of the tree"
+file = "crates/html/src/next.rs"
+from = '''            Some(root) if gc::Gc::ptr_eq(root, parent) => self.fragment,'''
+to = '''            Some(root) if false && gc::Gc::ptr_eq(root, parent) => self.fragment,'''
+
+[[mutant]]
+name = "the context's integration point unknown"
+file = "crates/html/src/next.rs"
+from = '''        self.integration_point
+            .is_some_and(|context| gc::Gc::ptr_eq(context, *handle))
+            || self.cx.is_integration_point(*handle)'''
+to = '''        self.cx.is_integration_point(*handle)'''
+
+[[mutant]]
+name = "the fast path takes any context"
+file = "crates/html/src/fast_path_next.rs"
+from = '''    if name.namespace != names::HTML_NAMESPACE || !is_context(&names::get(name.local)) {'''
+to = '''    if name.namespace != names::HTML_NAMESPACE {'''
+
+[[mutant]]
+name = "the fast path opens void elements"
+file = "crates/html/src/fast_path_next.rs"
+from = '''                if !is_void(name) {
+                    stack.push(element);
+                }'''
+to = '''                stack.push(element);'''
+
+[[mutant]]
+name = "the fast path's text not decoded"
+file = "crates/html/src/fast_path_next.rs"
+from = '''                let node = cx.create_text(document, &decode(text).expect("scanned"));'''
+to = '''                let node = cx.create_text(document, text);'''
+
+[[mutant]]
+name = "the fast path never taken"
+file = "crates/html/src/next.rs"
+from = '''    if crate::fast_path_next::parse_fragment(cx, document, fragment, context, input) {'''
+to = '''    if false {'''
+
+[[mutant]]
+name = "a void element's contents serialized"
+file = "crates/html/src/serialize_next.rs"
+from = '''    if is_void(cx, node) {
+        return String::new();
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a template's children serialized"
+file = "crates/html/src/serialize_next.rs"
+from = '''    let mut child = cx.first_child(cx.template_content(node).unwrap_or(node));'''
+to = '''    let mut child = cx.first_child(node);'''
+
+[[mutant]]
+name = "another namespace's element by its local name"
+file = "crates/html/src/serialize_next.rs"
+from = '''        _ => ParserQualName::new(None, ns!(svg), LocalName::from(qualified(name))),'''
+to = '''        _ => ParserQualName::new(None, ns!(svg), LocalName::from(&*names::get(name.local))),'''
+
+[[mutant]]
+name = "another namespace's attribute by its local name"
+file = "crates/html/src/serialize_next.rs"
+from = '''        _ => ParserQualName::new(None, ns!(), LocalName::from(qualified(name))),'''
+to = '''        _ => ParserQualName::new(None, ns!(), LocalName::from(&*names::get(name.local))),'''
+
+[[mutant]]
+name = "no raw text in an HTML element"
+file = "crates/html/src/serialize_next.rs"
+from = '''        .filter(|name| name.namespace == names::HTML_NAMESPACE)
+        .map(|name| element_name(&name));'''
+to = '''        .filter(|_| false)
+        .map(|name| element_name(&name));'''

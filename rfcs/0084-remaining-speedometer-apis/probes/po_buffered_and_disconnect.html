@@ -1,0 +1,35 @@
+<!doctype html><script>
+globalThis.log = [];
+globalThis.attempt = f => {
+    try { const v = f(); return v === undefined ? 'ok' : String(v); }
+    catch (e) { return `${e.name}: ${e.message}`; }
+};
+globalThis.names = l => l.map(e => `${e.entryType}:${e.name}@${Math.round(e.startTime)}`).join(',');
+const wait = () => new Promise(r => setTimeout(r, 50));
+async function steps() {
+{ performance.mark('m50', { startTime: 50 });
+         performance.mark('m10', { startTime: 10 });
+         performance.mark('m20', { startTime: 20 });
+         performance.measure('all', { start: 10, end: 30 });
+         const a = new PerformanceObserver(() => {});
+         a.observe({ type: 'mark', buffered: true });
+         log.push(names(a.takeRecords()), names(a.takeRecords()));
+         globalThis.calls = [];
+         const b = new PerformanceObserver(list => calls.push('b ' + names(list.getEntries())));
+         b.observe({ type: 'mark' });
+         b.observe({ type: 'mark', buffered: true });
+         const d = new PerformanceObserver(list => calls.push('d ' + names(list.getEntries())));
+         d.observe({ type: 'mark' });
+         performance.mark('m30', { startTime: 30 });
+         // Neither observes measures.
+         performance.measure('skipped', { start: 31, end: 32 });
+         d.disconnect();
+         performance.mark('after', { startTime: 60 });
+         log.push(attempt(() => d.observe({ entryTypes: ['mark'] })).split(':')[0]);
+         d.observe({ type: 'mark' });
+         performance.mark('again', { startTime: 70 }); }
+await wait();
+{ log.push(...calls) }
+}
+function run() { return steps().then(() => log.join(' / ')); }
+</script>

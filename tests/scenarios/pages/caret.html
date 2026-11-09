@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<!-- A text field to type in (#field); #out says what it holds and
+     whether it has the focus. #blank takes a click without the focus. -->
+<title>caret</title>
+<style>
+  html, body { margin: 0 }
+  body { padding: 20px; font: 24px sans-serif }
+  #field { font: inherit; width: 300px }
+  #blank { height: 200px }
+</style>
+<input id="field" value="">
+<div id="blank"></div>
+<div id="out"></div>
+<script>
+  const field = document.getElementById('field');
+  const out = document.getElementById('out');
+  const show = () =>
+    out.textContent = (document.activeElement === field ? 'focused ' : 'not focused ') + field.value;
+  for (const type of ['focus', 'blur', 'input']) field.addEventListener(type, show);
+  show();
+</script>

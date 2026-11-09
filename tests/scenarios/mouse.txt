@@ -1,0 +1,16 @@
+# The mouse in the page: each click is the first of
+# its series however soon it comes, a double click's second click has a
+# dblclick, and a press moves the focus (to the document where nothing
+# can take it).
+navigate pages/mouse.html
+wait-loaded
+click #target
+wait-text #log "mousedown:1 mouseup:1 click:1"
+click #target
+wait-text #log "mousedown:1 mouseup:1 click:1"
+dblclick #target
+wait-text #log "mousedown:1 mouseup:1 click:1 mousedown:2 mouseup:2 click:2 dblclick:2"
+click #f
+wait-text #focus "f"
+click #plain
+wait-text #focus "BODY"

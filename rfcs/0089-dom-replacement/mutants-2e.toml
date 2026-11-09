@@ -1,0 +1,80 @@
+# Stage 2e: kun --run-web-tests (a line a test, a record a line of JSON)
+# and test.py wpt-next's comparison (scripts/wpt_next.py).
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "web_tests"]
+timeout = 1200
+
+[[mutant]]
+name = "a timeout is an error"
+file = "crates/shell/src/web_tests.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "web_tests"]
+from = '''        Err(error) if error == headless::NO_TESTHARNESS_RESULTS => {'''
+to = '''        Err(error) if error.is_empty() => {'''
+
+[[mutant]]
+name = "a report is always text"
+file = "crates/shell/src/web_tests.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "web_tests"]
+from = '''            let results = serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text));'''
+to = '''            let results = serde_json::Value::String(text);'''
+
+[[mutant]]
+name = "a line that isn't a test is skipped"
+file = "crates/shell/src/web_tests.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--test", "it", "web_tests"]
+from = '''            None => serde_json::json!({
+                "url": line,'''
+to = '''            None => continue,
+            #[allow(unreachable_code)]
+            _ if false => serde_json::json!({
+                "url": line,'''
+
+[[mutant]]
+name = "--run-web-tests takes a URL"
+file = "crates/shell/src/main.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--bin", "kun"]
+from = '''    if run_web_tests && (out.is_some() || automation.is_some() || automation_pipe || url.is_some()) {'''
+to = '''    if run_web_tests && (out.is_some() || automation.is_some() || automation_pipe) {'''
+
+[[mutant]]
+name = "--run-web-tests drops --next-dom"
+file = "crates/shell/src/main.rs"
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "cargo", "test", "-q", "-p", "shell", "--bin", "kun"]
+from = '''        return Ok(Command::RunWebTests(WebTests {
+            next_dom,'''
+to = '''        return Ok(Command::RunWebTests(WebTests {
+            next_dom: false && next_dom,'''
+
+[[mutant]]
+name = "a harness not OK passes"
+file = "scripts/wpt_next.py"
+test = ["python3", "scripts/wpt_next_test.py"]
+from = '''    return results.get("status") == HARNESS_OK, subtests'''
+to = '''    return True, subtests'''
+
+[[mutant]]
+name = "a gap counts as both"
+file = "scripts/wpt_next.py"
+test = ["python3", "scripts/wpt_next_test.py"]
+from = '''            category = "both" if old and now else "new" if now else "gap" if old else "neither"'''
+to = '''            category = "both" if old else "new" if now else "neither"'''
+
+[[mutant]]
+name = "the harness isn't a subtest"
+file = "scripts/wpt_next.py"
+test = ["python3", "scripts/wpt_next_test.py"]
+from = '''        for name, old, now in [("<harness>", today_ok, new_ok)] + ['''
+to = '''        for name, old, now in [] + ['''
+
+[[mutant]]
+name = "the list's comments are paths"
+file = "scripts/wpt_next.py"
+test = ["python3", "scripts/wpt_next_test.py"]
+from = '''    lines = [line.split("#", 1)[0].strip().strip("/") for line in NEXT_INCLUDE.read_text(encoding="utf-8").splitlines()]'''
+to = '''    lines = [line.strip().strip("/") for line in NEXT_INCLUDE.read_text(encoding="utf-8").splitlines()]'''
+
+[[mutant]]
+name = "subdomains are probed"
+file = "scripts/wpt_next.py"
+test = ["python3", "scripts/wpt_next_test.py"]
+from = '''        "check_subdomains": False,'''
+to = '''        "check_subdomains": True,'''

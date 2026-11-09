@@ -1,0 +1,129 @@
+# Stage 4b-4b: the mouse's focus, Tab's sequential navigation (the order,
+# past the ends the browser's), Tab from the toolbar, the keys' target the
+# focused element, the rings' heuristic; the renderer's `TakeFocus` and
+# `SetInitialFocus`.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_api_next --test it -- focus input && cargo test -q -p shell --test it -- next_dom"]
+timeout = 3000
+
+[[mutant]]
+name = "a negative tabindex in the order"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''            if let Some(index) = index.filter(|&index| index >= 0) {'''
+to = '''            if let Some(index) = index {'''
+
+[[mutant]]
+name = "a link not in the order"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''            let index = tabindex(cx, node).or_else(|| focusable_by_default(cx, node).then_some(0));'''
+to = '''            let index = tabindex(cx, node);'''
+
+[[mutant]]
+name = "0 first"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    entries.sort_by_key(|&(index, _)| if index == 0 { i32::MAX } else { index });'''
+to = '''    entries.sort_by_key(|&(index, _)| index);'''
+
+[[mutant]]
+name = "only the children in the order"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        let first = stack.len();
+        stack.extend(std::iter::successors(cx.first_child(node), |&child| cx.next_sibling(child)));'''
+to = '''        let first = stack.len();'''
+
+[[mutant]]
+name = "Tab from the focused element itself"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''            .map_or(0, |index| index.saturating_add(1));'''
+to = '''            .map_or(0, |index| index);'''
+
+[[mutant]]
+name = "Tab takes one that can't have the focus"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''            .find(|&element| is_focusable_area(cx, element))'''
+to = '''            .next()'''
+
+[[mutant]]
+name = "Tab shows no ring"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    focusing_steps(host, document, Some(&candidate), Some(true));'''
+to = '''    focusing_steps(host, document, Some(&candidate), Some(false));'''
+
+[[mutant]]
+name = "the mouse focuses the target only"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        std::iter::successors(Some(target.get(cx.gc)), |&node| cx.parent(node))
+            .find('''
+to = '''        std::iter::successors(Some(target.get(cx.gc)), |_| None)
+            .find('''
+
+[[mutant]]
+name = "the mouse shows a ring"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''    focusing_steps(host, document, element.as_ref(), Some(false));'''
+to = '''    focusing_steps(host, document, element.as_ref(), Some(true));'''
+
+[[mutant]]
+name = "script's focus after the mouse shows a ring"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''            cx.set_focus_visible(window, false);
+        }
+        std::iter::successors'''
+to = '''        }
+        std::iter::successors'''
+
+[[mutant]]
+name = "a key shows no ring"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''pub(crate) fn key_shows_rings<H: ScriptHost>(host: &mut H, document: &NodeRoot) {
+    host.mutate(|cx| {'''
+to = '''pub(crate) fn key_shows_rings<H: ScriptHost>(host: &mut H, document: &NodeRoot) {
+    return;
+    host.mutate(|cx| {'''
+
+[[mutant]]
+name = "a canceled mousedown focuses"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        if fire_mouse(host, &target, "mousedown", &event_info(input, button.dom(), click_count), None) {'''
+to = '''        fire_mouse(host, &target, "mousedown", &event_info(input, button.dom(), click_count), None);
+        if true {'''
+
+[[mutant]]
+name = "keys at the body with a focused element"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        cx.focused_element(document)
+            .or_else(|| crate::geometry::body(cx, document))'''
+to = '''        crate::geometry::body(cx, document)'''
+
+[[mutant]]
+name = "a canceled Tab moves"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        if input.down && not_canceled && input.key == "Tab" && !shortcut {'''
+to = '''        if input.down && input.key == "Tab" && !shortcut {'''
+
+[[mutant]]
+name = "Ctrl+Tab moves"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        if input.down && not_canceled && input.key == "Tab" && !shortcut {'''
+to = '''        if input.down && not_canceled && input.key == "Tab" {'''
+
+[[mutant]]
+name = "Shift+Tab forwards"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            let reverse = input.modifiers & dom_next::modifiers::SHIFT != 0;'''
+to = '''            let reverse = false;'''
+
+[[mutant]]
+name = "the browser never takes the focus back"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            if !crate::focus::sequential_navigation(host, document, reverse) {
+                return KeyResult::TakeFocus { reverse };
+            }'''
+to = '''            crate::focus::sequential_navigation(host, document, reverse);'''
+
+[[mutant]]
+name = "Tab from the toolbar starts at the focused element"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''pub fn set_initial_focus<H: ScriptHost>(host: &mut H, document: &NodeRoot, reverse: bool) -> bool {
+    advance(host, document, None, reverse)'''
+to = '''pub fn set_initial_focus<H: ScriptHost>(host: &mut H, document: &NodeRoot, reverse: bool) -> bool {
+    sequential_navigation(host, document, reverse)'''

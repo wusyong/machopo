@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<!-- frame-input.txt's page: an iframe at a known place whose document
+     tells the page where its button was clicked (and what its
+     elementFromPoint finds there), a wheel turned and the
+     pointer came over its button (in the child frame's viewport), and
+     what is typed into its field; the
+     page, the pointer coming over and leaving the iframe. -->
+<title>frame input</title>
+<style>
+  body { margin: 0; }
+  iframe { position: absolute; left: 20px; top: 30px; width: 200px; height: 100px; border: 0; }
+  #log { margin-top: 200px; }
+</style>
+<iframe onmouseover="document.getElementById('hovered').textContent = 'over the iframe'" onmouseout="document.getElementById('hovered').textContent = 'left the iframe'" srcdoc="<body style='margin: 0; height: 400px' onwheel='parent.document.getElementById(&quot;log&quot;).textContent = &quot;wheel at &quot; + event.clientX + &quot; &quot; + event.clientY'><button id=press style='width: 100px; height: 40px' onmouseover='parent.document.getElementById(&quot;log&quot;).textContent = &quot;over at &quot; + event.clientX + &quot; &quot; + event.clientY' onclick='parent.document.getElementById(&quot;log&quot;).textContent = &quot;clicked at &quot; + event.clientX + &quot; &quot; + event.clientY + &quot; on &quot; + document.elementFromPoint(event.clientX, event.clientY).id'>press</button><input id=field style='display: block; width: 100px; height: 20px' oninput='parent.document.getElementById(&quot;log&quot;).textContent = &quot;typed &quot; + this.value'></body>"></iframe>
+<p id="hovered"></p>
+<p id="log">nothing yet</p>

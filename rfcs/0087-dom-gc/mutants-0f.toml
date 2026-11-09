@@ -1,0 +1,281 @@
+# Step 0f: replaying a recording of the DOM's heap (`dom::bench`'s replay
+# classes, `AnyEdge`, the recording's turns, `gc_bench replay` and
+# `bench.py gc --replay`) and simulating a generational GC on it
+# (`gc_bench analyze`). Run with RUSTY_V8_ARCHIVE pointing at a V8 built
+# from the fork (`ci.py v8`).
+test = ["cargo", "test", "-q", "-p", "gc_bench", "--test", "it", "--", "replay::", "analyze::"]
+timeout = 600
+
+# The recording's turns.
+
+[[mutant]]
+name = "a turn isn't written"
+file = "crates/dom/src/recording.rs"
+from = '''        self.flush_gcs();
+        self.write(&Record::Turn);'''
+to = '''        self.flush_gcs();'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "recording::"]
+
+[[mutant]]
+name = "the event loop's turn isn't recorded"
+file = "crates/dom/src/isolate.rs"
+from = '''            recorder.turn();'''
+to = '''            let _ = &mut recorder;'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "recording::"]
+
+[[mutant]]
+name = "an older recording isn't told to be made again"
+file = "crates/dom/src/recording.rs"
+from = '''        if version < VERSION {'''
+to = '''        if version < 1 {'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "recording::"]
+
+# The classes, and the replay's objects.
+
+[[mutant]]
+name = "a class's size leaves out its edges"
+file = "crates/dom/src/bench.rs"
+from = '''        let needed = size.max(edges.saturating_mul(EDGE_BYTES));'''
+to = '''        let needed = size;'''
+
+[[mutant]]
+name = "a type of more edges than any class isn't counted"
+file = "crates/dom/src/bench.rs"
+from = '''        (Self { edges, size }, edges_class.is_none() || size_class.is_none())'''
+to = '''        (Self { edges, size }, size_class.is_none())'''
+
+[[mutant]]
+name = "a class's data leaves out its edges"
+file = "crates/dom/src/bench.rs"
+from = '''    size.saturating_sub(edges.saturating_mul(EDGE_BYTES)) / 8'''
+to = '''    size / 8'''
+test = ["cargo", "test", "-q", "-p", "dom", "--lib", "bench::"]
+
+[[mutant]]
+name = "an edge set points at its own object"
+file = "crates/dom/src/bench.rs"
+from = '''    to.check(scope.roots).point(scope, edge);'''
+to = '''    from.check(scope.roots).point(scope, edge);'''
+
+[[mutant]]
+name = "an edge cleared stays"
+file = "crates/dom/src/bench.rs"
+from = '''    from.check(scope.roots).edge(slot).expect("an edge the class has").clear(scope);'''
+to = '''    let _ = from.check(scope.roots).edge(slot).expect("an edge the class has");'''
+
+[[mutant]]
+name = "an untyped edge isn't traced"
+file = "crates/dom/src/gc.rs"
+from = '''unsafe impl Trace for AnyEdge {
+    const EDGES: usize = 1;
+
+    fn trace(&self, visitor: &mut Visitor) {
+        #[cfg(debug_assertions)]
+        crate::testing::note_trace();
+        // SAFETY: as for `Edge`.
+        unsafe { self.slot.trace(visitor) }'''
+to = '''unsafe impl Trace for AnyEdge {
+    const EDGES: usize = 1;
+
+    fn trace(&self, visitor: &mut Visitor) {
+        #[cfg(debug_assertions)]
+        crate::testing::note_trace();
+        let _ = visitor;'''
+
+# The replay's plan.
+
+[[mutant]]
+name = "a weak write is replayed"
+file = "crates/gc_bench/src/replay.rs"
+from = '''                if weak {
+                    bump(&mut plan.skipped.weak_writes);
+                    continue;
+                }'''
+to = '''                if weak {
+                    bump(&mut plan.skipped.weak_writes);
+                }'''
+
+[[mutant]]
+name = "a write to an object from before is left out, not a clear"
+file = "crates/gc_bench/src/replay.rs"
+from = '''                        bump(&mut plan.skipped.unknown_writes);
+                        None'''
+to = '''                        bump(&mut plan.skipped.unknown_writes);
+                        continue'''
+
+[[mutant]]
+name = "a slot past its class is replayed"
+file = "crates/gc_bench/src/replay.rs"
+from = '''                if slot as usize >= replay_type.class.edges {'''
+to = '''                if slot as usize > replay_type.class.edges {'''
+
+[[mutant]]
+name = "an unbalanced root isn't counted"
+file = "crates/gc_bench/src/replay.rs"
+from = '''                    bump(&mut plan.skipped.unbalanced_roots);'''
+to = '''                    let _ = &plan.skipped.unbalanced_roots;'''
+
+[[mutant]]
+name = "the recorded GCs aren't counted"
+file = "crates/gc_bench/src/replay.rs"
+from = '''                bump(plan.recorded_gcs.entry(gc_name(kind)).or_default());'''
+to = '''                let _ = gc_name(kind);'''
+
+[[mutant]]
+name = "an object is held forever"
+file = "crates/gc_bench/src/replay.rs"
+from = '''            plan.last_use[object as usize] = at;'''
+to = '''            plan.last_use[object as usize] = u32::MAX;'''
+
+# The replay itself.
+
+[[mutant]]
+name = "an object never used isn't let go of"
+file = "crates/gc_bench/src/replay.rs"
+from = '''                if plan.last_use[*next] as usize == at {
+                    self.let_go(*next);
+                }'''
+to = '''                let _ = at;'''
+
+[[mutant]]
+name = "the objects held at once aren't counted"
+file = "crates/gc_bench/src/replay.rs"
+from = '''                self.held_most = self.held_most.max(self.held_now);'''
+to = ''''''
+
+[[mutant]]
+name = "the objects held at a turn aren't counted"
+file = "crates/gc_bench/src/replay.rs"
+from = '''                held_at_turns = held_at_turns.saturating_add(objects.held_now);'''
+to = '''                let _ = &mut held_at_turns;'''
+
+[[mutant]]
+name = "a root dropped once of two drops both"
+file = "crates/gc_bench/src/replay.rs"
+from = '''                if *count == 0 {
+                    self.rooted.remove(&object);'''
+to = '''                if *count <= 1 {
+                    self.rooted.remove(&object);'''
+
+[[mutant]]
+name = "the heap's tasks don't run at a turn"
+file = "crates/gc_bench/src/replay.rs"
+from = '''                event_loop.turn(dom);'''
+to = '''                let _ = &event_loop;'''
+
+# The simulated generational GC.
+
+[[mutant]]
+name = "a minor GC as soon as the nursery is full"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''                if self.young_bytes >= self.nursery_bytes {
+                    self.pending = true;
+                }'''
+to = '''                if self.young_bytes >= self.nursery_bytes {
+                    self.minor_gc();
+                }'''
+
+[[mutant]]
+name = "the nursery is full past its size"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''                if self.young_bytes >= self.nursery_bytes {'''
+to = '''                if self.young_bytes > self.nursery_bytes {'''
+
+[[mutant]]
+name = "a weak root keeps"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''            Record::Root { object, weak: false } | Record::Wrapper { object } if object != 0 => {'''
+to = '''            Record::Root { object, .. } | Record::Wrapper { object } if object != 0 => {'''
+
+[[mutant]]
+name = "a use of a dead object isn't counted"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''                    self.analysis.dead_used = self.analysis.dead_used.saturating_add(1);
+                    return Ok(());
+                }
+                let edges'''
+to = '''                    return Ok(());
+                }
+                let edges'''
+
+[[mutant]]
+name = "the write barrier misses an old object's edge"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''                    self.remembered.insert((from, offset));
+                }
+            }
+            Record::Root'''
+to = '''                }
+            }
+            Record::Root'''
+
+[[mutant]]
+name = "a promoted object's edges to young ones aren't remembered"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''                if matches!(self.objects[to as usize].generation, Generation::Young(_)) {
+                    self.remembered.insert((from, offset));'''
+to = '''                if false {
+                    self.remembered.insert((from, offset));'''
+
+[[mutant]]
+name = "a remembered edge pointed elsewhere is scanned"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''                matches!(self.generation(to), Generation::Young(_)).then_some((from, to))'''
+to = '''                Some((from, to))'''
+
+[[mutant]]
+name = "a minor GC keeps no rooted young object"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''        left.extend(self.young.iter().copied().filter(|&young| self.objects[young as usize].roots > 0));'''
+to = '''        left.extend(self.young.iter().copied().filter(|&young| self.objects[young as usize].roots > 1));'''
+
+[[mutant]]
+name = "promotion after one survival"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''                Generation::Young(0) => {'''
+to = '''                Generation::Young(9) => {'''
+
+[[mutant]]
+name = "a full GC once the old generation is past its limit"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''                if self.old_bytes >= self.old_limit {'''
+to = '''                if self.old_bytes > self.old_limit {'''
+
+[[mutant]]
+name = "a full GC keeps the dead old objects"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''            if object.marked != mark {
+                object.generation = Generation::Dead;
+                object.edges = Vec::new();
+            } else if'''
+to = '''            if object.marked != mark {
+            } else if'''
+
+[[mutant]]
+name = "a full GC frees what one root keeps"
+file = "crates/gc_bench/src/analyze.rs"
+from = '''            .filter(|&at| self.objects[at].roots > 0 && self.objects[at].generation != Generation::Dead)'''
+to = '''            .filter(|&at| self.objects[at].roots > 1 && self.objects[at].generation != Generation::Dead)'''
+
+# `bench.py gc --replay`.
+
+[[mutant]]
+name = "a replay runs on the default heap"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''        what = ["replay", workload.removeprefix(REPLAY), *HEAP_ARGS[heap]]'''
+to = '''        what = ["replay", workload.removeprefix(REPLAY)]'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py"]
+
+[[mutant]]
+name = "a replay's own fields are left out"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''        "replay": replay_fields(runs[0]) if runs[0]["workload"] == "replay" else None,'''
+to = '''        "replay": None,'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py"]
+
+[[mutant]]
+name = "what rounding up added is the whole"
+file = "scripts/bench/gc/gc_bench.py"
+from = '''            added = 100 * (replayed - recorded) / recorded if recorded else 0'''
+to = '''            added = 100 * replayed / recorded if recorded else 0'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py"]

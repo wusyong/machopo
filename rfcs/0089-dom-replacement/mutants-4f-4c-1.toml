@@ -1,0 +1,338 @@
+# Stage 4f-4c-1: on the new DOM, a menu list's keys, its popup asked for
+# (`request_popup`), shown by the renderer and closed with the user's pick,
+# `:open`, `showPicker()` and the user activation it needs.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_api_next --test it controls:: && cargo test -q -p style_next --test it form_states && cargo test -q -p shell --test it browser_view::a_"]
+timeout = 3000
+
+[[mutant]]
+name = "api: a disabled menu list works"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''    (cx.select_uses_menu_list(select) && !cx.is_disabled_form_control(select)).then_some(select)'''
+to = '''    cx.select_uses_menu_list(select).then_some(select)'''
+
+[[mutant]]
+name = "api: the inner element isn't its select's"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''        (cx.user_agent_shadow_root(host).is_some_and(|ua| Gc::ptr_eq(ua, root)) && cx.is_select(host))
+            .then_some(host)?'''
+to = '''        let _ = host;
+        return None;'''
+
+[[mutant]]
+name = "api: a disabled option a key's"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''        if cx.is_option(*item) && !cx.option_disabled(*item) {
+            last_good = Some(*item);'''
+to = '''        if cx.is_option(*item) {
+            last_good = Some(*item);'''
+
+[[mutant]]
+name = "api: the keys go one at a time"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''            if skip <= 0 {
+                break;
+            }'''
+to = '''            break;'''
+
+[[mutant]]
+name = "api: Alt+arrow not the popup's"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''        "ArrowDown" | "ArrowUp" => alt && !ctrl,'''
+to = '''        "ArrowDown" | "ArrowUp" => false,'''
+
+[[mutant]]
+name = "api: F4 not the popup's"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''        "F4" => !alt && !ctrl,'''
+to = '''        "F4" => false,'''
+
+[[mutant]]
+name = "api: a modifier's arrow selects"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''    if modifiers & any != 0 {
+        return false;
+    }'''
+to = '''    let _ = any;'''
+
+[[mutant]]
+name = "api: ArrowRight not the next"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''            "ArrowDown" | "ArrowRight" => next_valid_option(cx, &items, index, true, 1),'''
+to = '''            "ArrowDown" => next_valid_option(cx, &items, index, true, 1),'''
+
+[[mutant]]
+name = "api: PageDown one away"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''            "PageDown" => next_valid_option(cx, &items, index, true, PAGE),'''
+to = '''            "PageDown" => next_valid_option(cx, &items, index, true, 1),'''
+
+[[mutant]]
+name = "api: Home not the first"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''            "Home" => next_valid_option(cx, &items, -1, true, 1),'''
+to = '''            "Home" => next_valid_option(cx, &items, index, false, 1),'''
+
+[[mutant]]
+name = "api: Space doesn't open it"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''    if text != " " && text != "\r" {
+        return false;
+    }'''
+to = '''    if text != "\r" {
+        return false;
+    }'''
+
+[[mutant]]
+name = "api: a press doesn't close it"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''    if host.read(|cx| cx.select_popup_open(select.get(cx.gc))) {
+        hide_popup(host, &select);
+    } else {
+        show_popup(host, &select);
+    }'''
+to = '''    show_popup(host, &select);'''
+
+[[mutant]]
+name = "api: the same option fires change"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''        let changed = !cx.first_selected_option(node).is_some_and(|before| Gc::ptr_eq(before, option));'''
+to = '''        let changed = true;'''
+
+[[mutant]]
+name = "api: the user's pick fires nothing"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''    if changed {
+        crate::editing::fire_plain_input(host, select);
+        crate::editing::fire_change(host, select);
+    }'''
+to = '''    let _ = changed;'''
+
+[[mutant]]
+name = "api: an open popup asked again"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''        if cx.select_popup_open(node) || cx.select_is_multiple(node) {
+            return;
+        }
+        cx.set_select_popup_open(node, true);'''
+to = '''        if cx.select_is_multiple(node) {
+            return;
+        }
+        cx.set_select_popup_open(node, true);'''
+
+[[mutant]]
+name = "api: a multiple select's popup"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''        if cx.select_popup_open(node) || cx.select_is_multiple(node) {
+            return;
+        }
+        cx.set_select_popup_open(node, true);'''
+to = '''        if cx.select_popup_open(node) {
+            return;
+        }
+        cx.set_select_popup_open(node, true);'''
+
+[[mutant]]
+name = "api: a popup asked but not open"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''        cx.set_select_popup_open(node, true);
+        cx.request_popup(node, true);'''
+to = '''        cx.request_popup(node, true);'''
+
+[[mutant]]
+name = "api: a hidden popup not asked"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''            cx.set_select_popup_open(node, false);
+            cx.request_popup(node, false);'''
+to = '''            cx.set_select_popup_open(node, false);'''
+
+[[mutant]]
+name = "api: a popup's selected item none"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''                    chosen = u32::try_from(index).ok();'''
+to = '''                    let _ = index;'''
+
+[[mutant]]
+name = "api: a popup's disabled option enabled"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''                    enabled: !cx.option_disabled(item),'''
+to = '''                    enabled: true,'''
+
+[[mutant]]
+name = "api: a closed popup not open's result taken"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''    if !open {
+        return;
+    }
+    let PopupResult::Accepted'''
+to = '''    let _ = open;
+    let PopupResult::Accepted'''
+
+[[mutant]]
+name = "api: a disabled pick selected"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''            .filter(|item| cx.is_option(*item) && !cx.option_disabled(*item))'''
+to = '''            .filter(|item| cx.is_option(*item))'''
+
+[[mutant]]
+name = "api: a key's pick fires mouseup"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''    if !by_keyboard {
+        crate::input::fire_plain_mouse'''
+to = '''    if !by_keyboard || true {
+        crate::input::fire_plain_mouse'''
+
+[[mutant]]
+name = "api: a pick fires no click"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''    crate::input::fire_plain_mouse(host, select, dom_next::names::event::CLICK);
+}'''
+to = '''}'''
+
+[[mutant]]
+name = "api: a disabled select keeps its popup"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''        && !cx.is_disabled_form_control(select)
+        && cx.select_uses_menu_list(select)'''
+to = '''        && cx.select_uses_menu_list(select)'''
+
+[[mutant]]
+name = "api: showPicker on a disabled select"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''        if cx.is_disabled_form_control(node) {
+            return Err(error(ExceptionName::InvalidState'''
+to = '''        if false {
+            return Err(error(ExceptionName::InvalidState'''
+
+[[mutant]]
+name = "api: showPicker without activation"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''        if !window.is_some_and(|window| cx.has_transient_activation(window)) {'''
+to = '''        if window.is_none() {'''
+
+[[mutant]]
+name = "api: showPicker keeps the activation"
+file = "crates/dom_api_next/src/menu_list.rs"
+from = '''        if let Some(window) = window {
+            cx.consume_activation(window);
+        }'''
+to = '''        let _ = window;'''
+
+[[mutant]]
+name = "api: Escape activates"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        if input.down && input.key != "Escape" {
+            notify_activation(host, &target);'''
+to = '''        if input.down {
+            notify_activation(host, &target);'''
+
+[[mutant]]
+name = "api: a key doesn't activate"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        if input.down && input.key != "Escape" {
+            notify_activation(host, &target);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a press doesn't activate"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        // HTML's activation-triggering input event.
+        notify_activation(host, &target);'''
+to = ''''''
+
+[[mutant]]
+name = "api: a press not the menu list's"
+file = "crates/dom_api_next/src/input.rs"
+from = '''            if button == MouseButton::Primary && !crate::menu_list::mouse_down(host, &target) {'''
+to = '''            if button == MouseButton::Primary {'''
+
+[[mutant]]
+name = "api: a keypress not the menu list's"
+file = "crates/dom_api_next/src/input.rs"
+from = '''                && !crate::menu_list::keypress(host, &target, &input.text)
+'''
+to = ''''''
+
+[[mutant]]
+name = "api: a keydown not the menu list's"
+file = "crates/dom_api_next/src/input.rs"
+from = '''        if input.down && not_canceled && crate::menu_list::keydown(host, &target, &input.key, input.modifiers) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "api: a blur keeps the popup"
+file = "crates/dom_api_next/src/focus.rs"
+from = '''        crate::menu_list::hide_popup(host, old);
+'''
+to = ''''''
+
+[[mutant]]
+name = "dom: :open not noted"
+file = "crates/dom_next/src/select.rs"
+from = '''        self.association_or_new(select).popup_open.set(open);
+        self.state_changed(select, AttributeChanges::OPEN);'''
+to = '''        self.association_or_new(select).popup_open.set(open);'''
+
+[[mutant]]
+name = "dom: activation forever"
+file = "crates/dom_next/src/window.rs"
+from = '''        last <= now && now < last + TRANSIENT_ACTIVATION_DURATION'''
+to = '''        last <= now'''
+
+[[mutant]]
+name = "dom: consuming keeps it"
+file = "crates/dom_next/src/window.rs"
+from = '''            window.last_activation.set(f64::NEG_INFINITY);'''
+to = ''''''
+
+[[mutant]]
+name = "style: a select never open"
+file = "crates/style_next/src/selector.rs"
+from = '''            PseudoClass::Open => self.cx.select_popup_open(self.node),'''
+to = '''            PseudoClass::Open => false,'''
+
+[[mutant]]
+name = "style: :open's state not looked at"
+file = "crates/style_next/src/invalidation.rs"
+from = '''        PseudoClass::Open => AttributeChanges::OPEN,'''
+to = '''        PseudoClass::Open => 0,'''
+
+[[mutant]]
+name = "renderer: a press keeps the popup"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        if matches!(action, MouseAction::Down { button: dom_api_next::MouseButton::Primary, .. })
+            && let Some(select) = self.next_popup.take()'''
+to = '''        if false
+            && let Some(select) = self.next_popup.take()'''
+
+[[mutant]]
+name = "renderer: a press's close opens it again"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        if self.next_popup_closed_by_press == Some(select) {
+            self.close_next_popup(select, canceled);
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "renderer: a gone select keeps its popup"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''        if gone && let Some(select) = self.next_popup.take() {'''
+to = '''        if false && let Some(select) = self.next_popup.take() {'''
+
+[[mutant]]
+name = "renderer: a hide not sent"
+file = "crates/renderer/src/render_thread/next.rs"
+from = '''                        if self.next_popup == Some(select) {
+                            self.next_popup = None;
+                            let _ = self.to_browser.send(RendererHostMsg::HidePopupMenu);
+                        }'''
+to = '''                        let _ = select;'''
+
+[[mutant]]
+name = "renderer: a popup's result not the new DOM's"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                } else if let Some(select) = self.next_popup.take() {
+                    self.close_next_popup(select, result);'''
+to = '''                } else if let Some(select) = self.next_popup.take() {
+                    let _ = (select, result);'''

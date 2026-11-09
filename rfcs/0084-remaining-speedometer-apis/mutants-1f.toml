@@ -1,0 +1,33 @@
+test = ["cargo", "test", "-p", "dom_js", "--test", "it", "--", "bindings::a_document_is_never_prerendering"]
+timeout = 1200
+
+[[mutant]]
+name = "a document is prerendering"
+file = "crates/dom_api/src/document.rs"
+from = '''pub fn prerendering(_: &mut dyn ScriptHost, _: &NodeHandle) -> Result<bool, DomException> {
+    Ok(false)'''
+to = '''pub fn prerendering(_: &mut dyn ScriptHost, _: &NodeHandle) -> Result<bool, DomException> {
+    Ok(true)'''
+
+[[mutant]]
+name = "onprerenderingchange handles another event"
+file = "crates/dom_api/src/interfaces/core_dom.rs"
+from = '''        [EventHandlers] attribute { onprerenderingchange = "prerenderingchange" },'''
+to = '''        [EventHandlers] attribute { onprerenderingchange = "prerender" },'''
+
+[[mutant]]
+name = "a document has no visibilitychange handler"
+file = "crates/dom_api/src/handlers.rs"
+from = '''    ("onvisibilitychange", "visibilitychange"),
+];'''
+to = '''];'''
+
+[[mutant]]
+name = "a document's handlers are GlobalEventHandlers' only"
+file = "crates/dom_api/src/handlers.rs"
+from = '''    check_handler(GLOBAL_EVENT_HANDLERS, DOCUMENT_EVENT_HANDLERS, event_type)?;
+    let target = node_target(cx, this, event_type);
+    set(cx, target, event_type, callback);'''
+to = '''    check_handler(GLOBAL_EVENT_HANDLERS, &[], event_type)?;
+    let target = node_target(cx, this, event_type);
+    set(cx, target, event_type, callback);'''

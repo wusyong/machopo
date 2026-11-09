@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [
+	<!ENTITY ns_svg "http://www.w3.org/2000/svg">
+]>
+<!-- As Illustrator writes it: the namespace an entity, the colors classes. -->
+<svg xmlns="&ns_svg;" viewBox="0 0 2 2">
+  <style>.a { fill: lime } .b { fill: blue }</style>
+  <rect class="a" width="1" height="1"/>
+  <rect class="b" x="1" width="1" height="1"/>
+  <rect class="b" y="1" width="1" height="1"/>
+  <rect class="a" x="1" y="1" width="1" height="1"/>
+</svg>

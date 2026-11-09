@@ -1,0 +1,45 @@
+# The end padding of a scrollable overflow goes around the in-flow content
+# only, not an absolute box (`layout`).
+#   python3 scripts/test.py mutate rfcs/0064-rendering-gaps/mutants-abspos-overflow.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "block::scrollable_overflow"]
+timeout = 900
+
+[[mutant]]
+name = "an absolute box padded"
+file = "crates/layout/src/lib.rs"
+from = '''        if child.style.is_out_of_flow() {
+            extend_overflow(child, at, &mut overflow);
+            continue;
+        }
+        // A box with no area at all'''
+to = '''        // A box with no area at all'''
+
+[[mutant]]
+name = "an absolute box reaching nowhere"
+file = "crates/layout/src/lib.rs"
+from = '''        if child.style.is_out_of_flow() {
+            extend_overflow(child, at, &mut overflow);
+            continue;
+        }'''
+to = '''        if child.style.is_out_of_flow() {
+            continue;
+        }'''
+
+[[mutant]]
+name = "a float not padded"
+file = "crates/layout/src/lib.rs"
+from = '''        if child.style.is_out_of_flow() {
+            extend_overflow(child, at, &mut overflow);'''
+to = '''        if child.style.is_out_of_flow() || child.floating {
+            extend_overflow(child, at, &mut overflow);'''
+
+[[mutant]]
+name = "the sticky reftests' scroller padded"
+file = "crates/layout/src/lib.rs"
+from = '''        if child.style.is_out_of_flow() {
+            extend_overflow(child, at, &mut overflow);
+            continue;
+        }
+        // A box with no area at all'''
+to = '''        // A box with no area at all'''
+test = ["python3", "scripts/test.py", "wpt", "css/css-position/sticky/position-sticky-padding-001.html", "css/css-position/sticky/position-sticky-padding-002.html"]

@@ -1,0 +1,130 @@
+# Mutation test of stage 5d1: the lists number their own items (Blink's
+# ListItemOrdinal); the other counters are worked out over the whole
+# document only when what takes part in them changes:
+# python3 scripts/test.py mutate rfcs/0051-performance/mutants-5d1.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it"]
+timeout = 900
+
+[[mutant]]
+name = "another element changing list-item is regular"
+file = "crates/layout/src/list_items.rs"
+from = '''    (item || !changes_list_item(style))'''
+to = '''    true'''
+
+[[mutant]]
+name = "a pseudo-element changing list-item is regular"
+file = "crates/layout/src/list_items.rs"
+from = '''                !changes_list_item(&pseudo)
+                    && !shows_list_item(&pseudo)'''
+to = '''                !shows_list_item(&pseudo)'''
+
+[[mutant]]
+name = "a pseudo-element showing list-item is regular"
+file = "crates/layout/src/list_items.rs"
+from = '''                !changes_list_item(&pseudo)
+                    && !shows_list_item(&pseudo)'''
+to = '''                !changes_list_item(&pseudo)'''
+
+[[mutant]]
+name = "a reversed list counts up"
+file = "crates/layout/src/list_items.rs"
+from = '''            increments.push(if self.reversed { -1 } else { 1 });'''
+to = '''            increments.push(1);'''
+
+[[mutant]]
+name = "a value isn't set"
+file = "crates/layout/src/list_items.rs"
+from = '''            self.value = Value::Known(change.value);'''
+to = '''            let _ = change;'''
+
+[[mutant]]
+name = "a reversed list without a start starts at 0"
+file = "crates/layout/src/list_items.rs"
+from = '''        None => crate::counters::reversed_start(&numbering.changes),'''
+to = '''        None => 0,'''
+
+[[mutant]]
+name = "a list's items are counted in the list around it"
+file = "crates/layout/src/list_items.rs"
+from = '''            if is_list(&style) {
+                if style.display == Display::ListItem {
+                    return Err(Irregular);
+                }
+                continue;
+            }'''
+to = '''            if is_list(&style) && style.display == Display::ListItem {
+                return Err(Irregular);
+            }'''
+
+[[mutant]]
+name = "an element without boxes counts"
+file = "crates/layout/src/list_items.rs"
+from = '''            if style.display.generates_no_box()'''
+to = '''            if false'''
+
+[[mutant]]
+name = "a reset of list-item isn't a part"
+file = "crates/layout/src/list_items.rs"
+from = '''        && resets(old) == resets(new)'''
+to = ''''''
+
+[[mutant]]
+name = "a set of list-item isn't a part"
+file = "crates/layout/src/list_items.rs"
+from = '''        && changes(&old.counter_set) == changes(&new.counter_set)'''
+to = ''''''
+
+[[mutant]]
+name = "what is built again doesn't number its list again"
+file = "crates/layout/src/lib.rs"
+from = '''            if lists {
+                walk.lists_changed.push(element);
+            }
+            return None;'''
+to = '''            return None;'''
+
+[[mutant]]
+name = "a block's new part doesn't number its list again"
+file = "crates/layout/src/lib.rs"
+from = '''        if !list_items::same_part(&self.boxes[index].style, &style) {
+            walk.lists_changed.push(element);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a list's numbers are kept"
+file = "crates/layout/src/lib.rs"
+from = '''            self.lists.forget(list);'''
+to = ''''''
+
+[[mutant]]
+name = "a marker showing another number isn't collected"
+file = "crates/layout/src/lib.rs"
+from = '''            if self.marker_texts.get(&item).map(|text| &**text) != text.as_deref()'''
+to = '''            if false'''
+
+[[mutant]]
+name = "a pseudo-element's new irregular style isn't noticed"
+file = "crates/layout/src/lib.rs"
+from = '''                walk.irregular = true;'''
+to = ''''''
+
+[[mutant]]
+name = "a marker showing no number numbers its list"
+file = "crates/layout/src/lib.rs"
+from = '''            return Ok(counters::marker_text(&style.list_style_type, 0));'''
+to = '''            let _ = 0;'''
+
+[[mutant]]
+name = "list items take part in the other counters"
+file = "crates/layout/src/lib.rs"
+from = '''                walk.counters_changed = counters::directives(element, lists).as_ref()'''
+to = '''                walk.counters_changed = counters::directives(element, false).as_ref()'''
+
+[[mutant]]
+name = "a marker's strings come from the last pass"
+file = "crates/layout/src/lib.rs"
+from = '''                if lists
+                    && !items.iter().any(|item| {'''
+to = '''                if false
+                    && !items.iter().any(|item| {'''

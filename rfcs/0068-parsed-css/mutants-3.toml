@@ -1,0 +1,183 @@
+# 3: `cursor` (`css`, `style`'s UA stylesheet, `layout`, `renderer`,
+# `shell`), and a shorthand's keyframe read back (`css`).
+#   python3 scripts/test.py mutate rfcs/0068-parsed-css/mutants-3.toml
+# Left out as equivalent (`docs/test-gaps.md`): a hot spot's second number
+# made optional.
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "cursors"]
+timeout = 900
+
+[[mutant]]
+name = "the alias written without its prefix"
+file = "crates/css/src/cursor.rs"
+from = '''        if self.prefixed {'''
+to = '''        if false && self.prefixed {'''
+
+[[mutant]]
+name = "an alias isn't one"
+file = "crates/css/src/cursor.rs"
+from = '''        "-webkit-grab" => (Grab, true),'''
+to = '''        "-webkit-grab" => (Grab, false),'''
+
+[[mutant]]
+name = "the hot spot rounded"
+file = "crates/css/src/cursor.rs"
+from = '''                Ok((x as i32, y as i32))'''
+to = '''                Ok((x.round() as i32, y.round() as i32))'''
+
+[[mutant]]
+name = "an empty URL resolved"
+file = "crates/css/src/cursor.rs"
+from = '''                    url: if url.specified().is_empty() || url.is_local() {'''
+to = '''                    url: if url.is_local() {'''
+
+[[mutant]]
+name = "a fragment resolved"
+file = "crates/css/src/cursor.rs"
+from = '''                    url: if url.specified().is_empty() || url.is_local() {'''
+to = '''                    url: if url.specified().is_empty() {'''
+
+[[mutant]]
+name = "the URLs not resolved"
+file = "crates/css/src/properties.rs"
+from = '''            Value::Cursor(cursor) if cursor.has_unresolved_urls() => cursor.resolve_urls(base),'''
+to = ''''''
+
+[[mutant]]
+name = "not inherited"
+file = "crates/css/src/properties.rs"
+from = '''                | WebkitFontSmoothing
+                | Cursor
+        )'''
+to = '''                | WebkitFontSmoothing
+        )'''
+
+[[mutant]]
+name = "not applied"
+file = "crates/css/src/properties.rs"
+from = '''            if style.rare_inherited.cursor != cursor {'''
+to = '''            if false && style.rare_inherited.cursor != cursor {'''
+
+[[mutant]]
+name = "a new cursor lays out again"
+file = "crates/layout/src/lib.rs"
+from = '''                    cursor: old.rare_inherited.cursor.clone(),
+'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "update::"]
+
+[[mutant]]
+name = "a keyframe's longhands all written"
+file = "crates/css/src/property_set.rs"
+from = '''                important: false,
+                implicit,
+                shorthand,
+            })'''
+to = '''                important: false,
+                implicit: false,
+                shorthand,
+            })'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "a_shorthands_keyframe"]
+
+[[mutant]]
+name = "no hand over a link"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                if document::enclosing_link(scope, node).is_some() {'''
+to = '''                if false && document::enclosing_link(scope, node).is_some() {'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "the_cursor"]
+
+[[mutant]]
+name = "the I-beam off text"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                } else if hit.text.is_some()
+                    && style'''
+to = '''                } else if true
+                    && style'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "the_cursor"]
+
+[[mutant]]
+name = "the I-beam where nothing can be selected"
+file = "crates/renderer/src/frame_view.rs"
+from = '''                    && style.rare_inherited.user_select != computed_style::UserSelect::None'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "the_cursor"]
+
+[[mutant]]
+name = "the keyword not looked at"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            keyword => cursor_type(keyword),'''
+to = '''            _ => CursorType::Pointer,'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "the_cursor"]
+
+[[mutant]]
+name = "crosshair as the arrow"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        K::Crosshair => CursorType::Cross,'''
+to = '''        K::Crosshair => CursorType::Pointer,'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "the_cursor"]
+
+[[mutant]]
+name = "none shown"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        K::None => CursorType::None,'''
+to = '''        K::None => CursorType::Pointer,'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "the_cursor"]
+
+[[mutant]]
+name = "no cursor on a move"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        let target = self.mouse_target(point);
+        self.update_cursor(point);'''
+to = '''        let target = self.mouse_target(point);'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "the_cursor"]
+
+[[mutant]]
+name = "no cursor under a still pointer"
+file = "crates/renderer/src/render_thread.rs"
+from = '''        self.update_under_mouse(target.as_ref(), point, &mouse);
+        self.update_cursor(point);'''
+to = '''        self.update_under_mouse(target.as_ref(), point, &mouse);'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "the_cursor"]
+
+[[mutant]]
+name = "a text field's arrow"
+file = "crates/style/resources/html.css"
+from = '''input {
+  appearance: auto;
+  cursor: text;'''
+to = '''input {
+  appearance: auto;'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "the_cursor"]
+
+[[mutant]]
+name = "a button's I-beam"
+file = "crates/style/resources/html.css"
+from = '''input[type=button i], input[type=submit i], input[type=reset i], button {
+  appearance: auto;
+  cursor: default;'''
+to = '''input[type=button i], input[type=submit i], input[type=reset i], button {
+  appearance: auto;'''
+test = ["cargo", "test", "-q", "-p", "browser", "--test", "it", "--", "the_cursor"]
+
+[[mutant]]
+name = "the page's cursor not shown"
+file = "crates/shell/src/browser_view.rs"
+from = '''                .copied()
+                .unwrap_or(CursorType::Pointer),'''
+to = '''                .copied()
+                .map(|_| CursorType::Pointer)
+                .unwrap_or(CursorType::Pointer),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::the_cursor"]
+
+[[mutant]]
+name = "the hand named as the arrow"
+file = "crates/shell/src/browser_view.rs"
+from = '''        C::Hand => "pointer",'''
+to = '''        C::Hand => "default",'''
+test = ["python3", "scripts/test.py", "scenarios", "cursor"]
+
+[[mutant]]
+name = "a hover moves nothing"
+file = "crates/shell/src/windowless.rs"
+from = '''        Input::Move(at) => browser.view_mut().pointer_moved(at),'''
+to = '''        Input::Move(_) => {}'''
+test = ["python3", "scripts/test.py", "scenarios", "cursor"]

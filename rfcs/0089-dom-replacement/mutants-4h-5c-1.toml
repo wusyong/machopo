@@ -1,0 +1,200 @@
+# Stage 4h-5c-1: AbortController and AbortSignal (abort, timeout, any and its weak
+# dependents, addEventListener's signal) and Headers on the new DOM.
+test = ["systemd-run", "--user", "--scope", "-q", "-p", "MemoryMax=24G", "-p", "MemorySwapMax=0", "sh", "-c", "cargo test -q -p dom_js_next --test it -- abort:: headers:: events:: wrappers:: && cargo test -q -p protocol header_list"]
+timeout = 1500
+
+[[mutant]]
+name = "api: abort() aborts twice"
+file = "crates/dom_api_next/src/abort.rs"
+from = '''    let signal = cx.abort_controller_signal(this);
+    if cx.abort_signal_aborted(signal) {
+        return Ok(None);
+    }'''
+to = '''    let signal = cx.abort_controller_signal(this);'''
+
+[[mutant]]
+name = "api: no abort event"
+file = "crates/dom_api_next/src/abort.rs"
+from = '''            dom_next::names::event::ABORT,
+            false,
+            false,
+        );'''
+to = '''            dom_next::names::NONE,
+            false,
+            false,
+        );'''
+
+[[mutant]]
+name = "api: the algorithms not run"
+file = "crates/dom_api_next/src/abort.rs"
+from = '''        host.mutate(|cx| cx.run_abort_algorithms(signal.get(cx.gc)));'''
+to = ''''''
+
+[[mutant]]
+name = "api: AbortSignal.abort() not aborted"
+file = "crates/dom_api_next/src/abort.rs"
+from = '''    op.store_any(cx, cx.abort_reason_edge(signal), reason);
+    cx.signal_abort(signal);
+    Ok(signal)'''
+to = '''    op.store_any(cx, cx.abort_reason_edge(signal), reason);
+    Ok(signal)'''
+
+[[mutant]]
+name = "api: throwIfAborted doesn't throw"
+file = "crates/dom_api_next/src/abort.rs"
+from = '''        Some(reason) => Err(op.rethrow(cx, reason)),'''
+to = '''        Some(_) => Ok(()),'''
+
+[[mutant]]
+name = "dom: a dependent of a source aborted already isn't"
+file = "crates/dom_next/src/abort.rs"
+from = '''        if let Some(&aborted) = sources.iter().find(|&&source| self.abort_signal_aborted(source)) {'''
+to = '''        if let Some(&aborted) = sources.iter().find(|_| false) {'''
+
+[[mutant]]
+name = "dom: a dependent's sources not flattened"
+file = "crates/dom_next/src/abort.rs"
+from = '''            let of = if source_data.dependent.get() {'''
+to = '''            let of = if false {'''
+
+[[mutant]]
+name = "dom: a dependent not aborted with its source"
+file = "crates/dom_next/src/abort.rs"
+from = '''                dependent_data.aborted.set(true);
+                dependent_data.reason_from.set(self.gc, Some(signal));
+                aborted.push(dependent);'''
+to = '''                let _ = aborted.len();'''
+
+[[mutant]]
+name = "dom: a dependent's reason its own"
+file = "crates/dom_next/src/abort.rs"
+from = '''        while let Some(source) = data.reason_from.get(self.gc) {
+            data = self.signal_data(source);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "dom: a dependent with listeners not kept"
+file = "crates/dom_next/src/abort.rs"
+from = '''                (true, None) => kept.push(self.gc, signal),'''
+to = '''                (true, None) => {}'''
+
+[[mutant]]
+name = "dom: every dependent kept"
+file = "crates/dom_next/src/abort.rs"
+from = '''        let keep = self.must_be_kept(signal);'''
+to = '''        let keep = true;'''
+
+[[mutant]]
+name = "dom: a handler removed still keeps it"
+file = "crates/dom_next/src/event.rs"
+from = '''            self.abort_listeners_changed(target, bits & LISTENER_TYPE);'''
+to = ''''''
+
+[[mutant]]
+name = "api: a listener's signal ignored"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''        if let Some(signal) = signal {
+            cx.add_listener_abort_algorithm(signal, this, listener);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "api: a listener added with an aborted signal"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''            if cx.abort_signal_aborted(signal) {
+                return Ok(());
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "api: any event target a listener's signal"
+file = "crates/dom_api_next/src/event_target.rs"
+from = '''            if !cx.is_abort_signal(signal) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "api: any event target in any()"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''                if cx.is_abort_signal(signal) {
+                    Ok(signal)'''
+to = '''                if true {
+                    Ok(signal)'''
+
+[[mutant]]
+name = "api: a negative timeout"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        if !(0.0..=MAX_SAFE_INTEGER).contains(&value) {'''
+to = '''        if !(-MAX_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(&value) {'''
+
+[[mutant]]
+name = "api: a ByteString past U+00FF"
+file = "crates/dom_api_next/src/typed.rs"
+from = '''        if string.chars().any(|c| u32::from(c) > 0xFF) {
+            return Err(ApiError::type_error(format!('''
+to = '''        if string.chars().any(|c| u32::from(c) > 0x10FFFF) {
+            return Err(ApiError::type_error(format!('''
+
+[[mutant]]
+name = "front: a string a HeadersInit"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        if !value.is_object() {
+            self.throw_type_error(
+                "The provided value is not of type '(record<ByteString, ByteString> or sequence<sequence<ByteString>>)'.",'''
+to = '''        if false {
+            self.throw_type_error(
+                "The provided value is not of type '(record<ByteString, ByteString> or sequence<sequence<ByteString>>)'.",'''
+
+[[mutant]]
+name = "api: a pair of three"
+file = "crates/dom_api_next/src/headers.rs"
+from = '''                let [name, value] = pair.as_slice() else {'''
+to = '''                let [name, value, ..] = pair.as_slice() else {'''
+
+[[mutant]]
+name = "api: an invalid header name"
+file = "crates/dom_api_next/src/headers.rs"
+from = '''    if !list::is_header_name(name) {
+        return Err(ApiError::type_error(format!("Invalid name: {name:?}")));
+    }
+    if !list::is_header_value(value) {'''
+to = '''    if !list::is_header_value(value) {'''
+
+[[mutant]]
+name = "api: a value not normalized"
+file = "crates/dom_api_next/src/headers.rs"
+from = '''pub(crate) fn append_to<'gc>(cx: &ApiCx<'_, 'gc>, headers: Gc<'gc, Headers>, name: &str, value: &str) -> Result<(), ApiError> {
+    let value = list::normalize(value);'''
+to = '''pub(crate) fn append_to<'gc>(cx: &ApiCx<'_, 'gc>, headers: Gc<'gc, Headers>, name: &str, value: &str) -> Result<(), ApiError> {'''
+
+[[mutant]]
+name = "api: pairs not sorted and combined"
+file = "crates/dom_api_next/src/headers.rs"
+from = '''    let pairs: HeaderList = cx.with_header_list(this, |headers| list::sort_and_combine(headers));'''
+to = '''    let pairs: HeaderList = cx.with_header_list(this, |headers| headers.clone());'''
+
+[[mutant]]
+name = "shared: set leaves the others"
+file = "crates/protocol/src/header_list.rs"
+from = '''                let keep = index <= first || !matches_name(entry, name);'''
+to = '''                let keep = true || index <= first || !matches_name(entry, name);'''
+
+[[mutant]]
+name = "shared: append's name its own case"
+file = "crates/protocol/src/header_list.rs"
+from = '''        .map_or_else(|| name.to_owned(), |(first, _)| first.clone());'''
+to = '''        .map_or_else(|| name.to_owned(), |_| name.to_owned());'''
+
+[[mutant]]
+name = "front: a record's values read before the descriptors"
+file = "crates/dom_js_next/src/front.rs"
+from = '''        let descriptor = object.get_own_property_descriptor(scope, property)?;
+        // Gone since the keys were read.
+        let Ok(descriptor) = v8::Local::<v8::Object>::try_from(descriptor) else {
+            continue;
+        };
+        let enumerable = crate::templates::string(scope, "enumerable");
+        if !descriptor.get(scope, enumerable.into())?.boolean_value(scope) {
+            continue;
+        }'''
+to = '''        let _ = property;'''
