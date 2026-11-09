@@ -1,7 +1,8 @@
 # RFC 0091：DevTools 的 Elements：`DOM`、`CSS` 和 `Overlay`
 
 - 開始日期：2026-11-09
-- 狀態：👍 已接受：2026-11-09（「已決定的事項」第 1 到 7 條：整份的範圍和分段、第 1 段；第 2、3 段的待決定在那一段開始前決定）
+- 狀態：🚧 已排程：2026-11-09（接受：2026-11-09；「已決定的事項」第 1 到 7 條：整份的範圍和分段、第 1 段；第 2、3 段的待決定在那一段開始前決定）
+- 進度和驗收：`progress.md`
 - 細節：`details.md`（RFC 開始前（2026-11-09）machopo 的 DevTools、DOM、style 和 paint 有什麼；Chromium 的對照；DevTools 前端送的命令；各個選項的完整比較；其他實作）
 
 ## 摘要
@@ -136,7 +137,7 @@ Chrome 的 DevTools 連上 machopo 之後，Elements 面板能用：
 - **`nodeId`**：每個 session 一份，節點第一次送給前端時才發（Blink 的 `Bind`）。從 1 開始，同一個 session 裡不重用。
 - **什麼時候清掉**：照 Blink 的 `DiscardFrontendBindings`：`getDocument`、`documentUpdated`、`disable` 時全部清掉；節點從樹上移除時，它和送過的子孫都解除（Blink 的 `Unbind`）。
 - **節點怎麼留住**：照 Blink 用 strong 的（「已決定的事項」第 3 條）。
-  - 每個 session 一個 `Persistent<HeapVector<Node>>` 留住綁著的節點，加上 nodeId 和 `NodeId` 兩張 FxHash 的表。
+  - 原本寫每個 session 一個 `Persistent<HeapVector<Node>>` 留住綁著的節點；做的時候（1a）改成只留住不在文件的樹裡的子樹的根（每個一個 `NodeRoot`），加上 nodeId 和 `NodeId` 兩張表。行為一樣：綁著的節點不是在文件的樹裡（文件留著它），就是在這樣一個子樹裡（根留著它），從樹上移除時就解除；但 `HeapVector` 解除一個節點要搬動後面的（O(n)），這樣不用，root 的數量也只有前端要過的 detached 的子樹那麼多。
   - 還在樹上的節點本來就活著，所以實際多留住的只有不在樹上的節點：`requestNode` 一個 detached 的物件，或在 Console 裡 `inspect()` 一個拿掉的元素。它們（連同子樹和 wrapper）活到解除為止，和 Blink 的 `Member<Node>` 一樣。
   - root 要比 heap 早 drop（elise 的規則）：session detach 時清掉，engine 收掉之前 agent 先放手。
 - **pseudo element**：`::before`、`::after`、`::marker` 只在 style 和 layout 裡，不是 DOM 的物件，沒有 `NodeId`。agent 給（元素, `PseudoId`）一個 nodeId 和 `backendNodeId`，`backendNodeId` 從另一段數字發，和 `NodeId` 不重疊。
@@ -194,8 +195,13 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 照 Chrome，停住時 `DOM`、`CSS` 的命令都回答，包括要 layout 和 style 的（P1+，「已決定的事項」第 5 條，比較在 `details.md` 的「停在斷點時的選項」）：
 - **樹**：engine 在 `run_paused` 裡把 `Dom` 借給 `answer_here`，dom agent 照常回答。
 - **layout 和 style**（`getBoxModel`、`getContentQuads`、`getNodeForLocation`，第 2、3 段的 Computed、Styles）：停住的迴圈也要拿得到 `FrameView`，必要時當場重算 style 和 layout（Blink 也會）。要重新安排 `RenderThread` 的擁有權，例如停住時由外層的呼叫把 `FrameView` 一起交給 engine，或把它從 `RenderThread` 裡拆出來另外借；還要確認 script 執行到一半時跑 lifecycle 是安全的（machopo 的 lifecycle 有沒有假設 engine 呼叫期間不重算）。
-- **第 1 段一開始的原型**回答三件事：停住時 `Dom` 一定借得出來（包括停在 custom element、MutationObserver 的 callback 裡）；`FrameView` 怎麼交給停住的迴圈；停住時重算 style 和 layout 有沒有問題。
-- **太大時拆開**：原型之後看規模，layout 和 style 的那部分可以拆成第 1 段的另一小段，先做樹；拆的時候寫進「分階段」和「已決定的事項」第 5 條。
+- **做法**（2026-11-09 的原型）：`Dom` 和 layout（renderer 的 `Frame`，裡面是 `FrameView`）都在 engine 的 isolate 的狀態裡，不在 `RenderThread` 上，所以不用重新安排 `RenderThread` 的擁有權。
+  - `bindings` 的 `run_message_loop_on_pause` 把 isolate 交給停住的迴圈，`answer_here` 和 `paused` 帶著它；`dom_js` 用它做一個 page（`dom_api::DevToolsPage`）交給 renderer 的 `DevToolsQueueHandle`。不停住時 renderer 的命令也用同樣的 page（`ScriptEngine::devtools_page`）。
+  - page 給 `dom_and_layout`（DOM 和 layout）和 `objects`（`DevToolsObjects`：第 6 節的 `resolveNode`、`requestNode`、`$0`、Event Listeners）；兩者都從 isolate 的狀態借，借用跟著 page 的 `&mut self`，agent 拿著 DOM 時不能呼叫 inspector。原型（1a）是一個帶著 `&mut Dom` 和 layout 的 struct（`PausedPage`）；1b 要停住時也呼叫 inspector，struct 拿著 DOM 的借用就不能再經過 isolate 借，改成 trait。
+  - layout 照 operation 借它的方式（`LayoutCell` 的 take 和 set）拿出來、回答完放回去；呼叫停住的 script 的 operation 拿著它時是空的，那時要 layout 的命令照 P2 排著。查過 `dom_api` 借 layout 的地方（`with_layout`、`with_style`、`lend_layout`），沒有一個在借著時執行 JS，所以實際上一直拿得到。
+  - script 執行到一半時重算 style 和 layout 本來就有：`getBoundingClientRect` 這類 API 在 script 中途經過 `ApiCx::with_layout` 強制 layout，停住時重算是同一條路。
+  - 論證寫在 `crates/bindings/soundness.md` 的「停在斷點和打斷時的 DevTools 命令」：停在 JS 的敘述時，外層的 Rust 手上沒有狀態的借用；借用在 `answer_here` 回來時結束，在下一則交給 session 之前。
+- **原型確認了**（測試在 `progress.md`）：停在一般的 script、`click()` 呼叫的 listener、`focus()` 呼叫的 `focus` listener、`createElement` 裡的 custom element constructor、MutationObserver 的 callback、`setTimeout`、`requestAnimationFrame` 和 ResizeObserver 的 callback 時，都讀得到當時的 DOM、拿得到 layout，重算之後的 box 跟著 script 的改動。所以不拆（「已決定的事項」第 5 條）。
 - **借不到的東西**：停住時 renderer 不畫新的 frame（`LayerTreeHost` 在 render thread 上），所以停住時框出節點、「Paused in debugger」另外處理（第 8 節）。
 
 ### 6. 和 JS 的連接
@@ -210,6 +216,8 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
   - capture 的排在前面，和 Blink 一樣。
   - 還沒編譯的屬性 handler，先編譯再回答，和 Blink 的 `GetListenerObject` 一樣。
 - **Console 顯示節點**：`V8InspectorClient::valueSubtype` 對 DOM 的 wrapper 回答 `node`，`descriptionForValueSubtype` 回答 `div#app.main` 的形式（Blink 的 `ThreadDebugger`）。Console 才把它顯示成節點，滑過時送 `Overlay.highlightNode`；Console 的 `inspect()` 經過 V8 的 `Runtime.inspectRequested` 和 `requestNode` 跳到 Elements。
+
+`resolveNode` 不管前端給的 `executionContextId`，一律在節點的 frame 的 main world 裡包：machopo 沒有 isolated world，每個 frame 只有那一個 context；rusty_v8 也沒有 `contextById` 的 binding（記在 `docs/limitations.md`）。
 
 這些 inspector 的 API 在 rusty_v8 裡已經有 binding（`wrap_object`、`unwrap_object`、`add_inspected_object`、`value_subtype`、`description_for_value_subtype`），預計不用改 fork；第 1 段的原型一起確認。
 
@@ -307,8 +315,11 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 ### 分階段
 
 1. **DOM 樹和 JS 的連接**（第 1 到 6 節，加上 Event Listeners）。
-   - 一開始先做原型：停住時借得到 `Dom`、`FrameView` 交得到停住的迴圈、停住時重算 style 和 layout 沒有問題（第 5 節）；`valueSubtype` 讓 Console 顯示節點（第 6 節）。
-   - 原型之後看規模，停住時的 layout 和 style 可以拆成另一小段（「已決定的事項」第 5 條）。
+   - 一開始先做原型：停住時借得到 `Dom` 和 layout、停住時重算 style 和 layout 沒有問題（第 5 節）。做完了，不拆（「已決定的事項」第 5 條）。
+   - 分兩小段做（2026-11-09）：
+     - **1a 樹**：nodeId、lazy push、改動的掛點和事件、停住時回答，以及不用 JS 的查詢（`querySelector`、`describeNode`、`pushNodesByBackendIdsToFrontend`、`pushNodeByPathToFrontend`、`getAttributes`、`getOuterHTML`、`getFrameOwner`、`collectClassNamesFromSubtree`）。
+     - **1b 和 JS 的連接**：`resolveNode`、`requestNode`、`setInspectedNode`、Console 顯示節點、Event Listeners、`performSearch`。
+   - 移到後面的段：`getBoxModel`、`getContentQuads`、`getNodeForLocation` 和 `DOM.Node` 的 `isScrollable` 要 layout 的 quad 和 hit test，和 Overlay 用同樣的東西，放在第 2 段；pseudo element（第 2 節）要 style 知道它在不在，和 Styles 的 pseudo element 的規則一起放在第 3 段。
    - 驗收：Elements 面板列出樹、跟著 script 更新；`$0`；Console 的節點能跳回 Elements；Event Listeners；`test.py cdp` 的 `dom`。
 2. **Overlay 和 Computed**（第 8 節，加上第 7 節的 computed style 和字型）。
    - Computed 的部分：`CSS.enable` 回答成功、還不送 stylesheet；`getComputedStyleForNode`、`getPlatformFontsForNode`。
@@ -376,7 +387,7 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 2. **分三段：DOM → Overlay 和 Computed → Styles（X'）**（「分階段」）：DOM 一定第一個（其他段都要 nodeId）。Overlay 小，樹做完之後最先想要的就是滑過時框出節點。Computed 分頁和 box model 的圖只要 `CSS.enable` 回答成功（還不送 stylesheet）、`getComputedStyleForNode` 重用 `getComputedStyle`、`getPlatformFontsForNode`，不碰任何未決的事，查 machopo 和 Chrome 的 layout 差異時最常問的就是它，所以跟著 Overlay 提前到第 2 段；前端在 `CSS.enable` 失敗時 Styles 和 Computed 都是空的，所以那時就要回答成功。第 3 段的 `CSS.enable` 開始送 `styleSheetAdded`，只是增加，前端照樣接得住。Styles 要決定的事最多（原文要先量、說明的路、重新解析），排在最後，不擋前兩段。不選 X（DOM → Overlay → Styles，Computed 跟著 Styles）：Computed 要等到最後。不選 Y（DOM → Styles → Overlay）：第 2 段變成最大、最不確定的一段，期間滑過節點都沒有框。
 3. **nodeId 照 Blink 用 strong 的留住節點（K1）**（第 2 節）：每個 session 一個 `Persistent<HeapVector<Node>>` 加上 nodeId 和 `NodeId` 兩張 FxHash 的表；`backendNodeId` 是 weak 的 `NodeId`，兩層都和 Blink（`id_to_node_` 和 `DOMNodeIds`）一樣。還在樹上的節點本來就活著、移除時解除，所以實際多留住的只有前端要過的不在樹上的節點（`inspect()` 一個拿掉的元素、`requestNode` 一個還沒插入的元素），到 `getDocument`、`documentUpdated`、`disable` 或移除時解除。GC 多一個 root，綁著的節點絕大多數 marking 時本來就標過，沒有 DevTools 時沒有成本；root 要比 heap 早 drop，session detach 時清掉、engine 收掉之前 agent 先放手。不選 K2（只留 weak 的 `NodeId`）：GC 完全不多花、少一個 root，但 detached 的節點可能被收掉，Elements 回答找不到節點，和 Chrome 不同。
 4. **改動的事件從 `dom` 的掛點來（M1）**（第 4 節）：有 session 打開 `DOM` 時，`Cx` 的 `inserted`、`removed`、`attribute_changed`、`data_changed`、`shadow_attached`、`set_inline_style` 把改動的種類和相關節點的 `NodeId` 推進一個 buffer，renderer 經過 `ScriptEngine::dom_mut()` 拿走、轉成事件，和 DevTools 抓 stack 的做法（`dom/src/initiator.rs`）一樣；不經過 `dom_api`，不碰 V8。每個改動依序看得到，parser、innerHTML 的快路、clone、user-agent shadow tree 也都經過這些掛點；之後的 DOM 斷點在同樣的位置加同步的路。沒打開時每個掛點多讀一次 `Dom` 的旗標，盡量和現有的判斷放在一起；Chrome 的 probe 在同樣的地方判斷一個整個 process 共用的 atomic（`CoreProbeSink::HasAgentsGlobal`），所以這是 Chrome 本來就付的成本，machopo 的還只影響開了 DevTools 的分頁。不選 M2（每個 task 之後比對前後的樹）：`dom` 不用改、沒有 DevTools 時完全沒有成本，但開著時每個 task 都要走一遍前端展開過的節點、另存一份副本，看不到中間的改動（移動像沒變），也做不了 DOM 斷點。不選 M3（內部的 MutationObserver）：`observed()` 一打開就不關，DevTools 連上過一次之後整頁都付建 record 的成本；它不跨 shadow root、看不到 shadow root 的建立，callback 和頁面自己的 observer 排在一起，可能改變頁面看到的順序。
-5. **停在斷點時照 Chrome 全部回答（P1+）**（第 5 節）：停住的迴圈裡，engine 把 `Dom` 借給 renderer 的 agent，`FrameView` 也交得到那裡，`getBoxModel`、Computed、Styles 必要時當場重算 style 和 layout，和 Blink 在 pause 的巢狀迴圈裡分派 `DOM`、`CSS` 一樣。代價是重新安排 `RenderThread` 的擁有權（停住時 `FrameView` 怎麼交出去），並確認 script 執行到一半時跑 lifecycle 是安全的；第 1 段一開始先做原型。太大時可以拆開（使用者授權）：原型之後看規模，停住時的 layout 和 style 拆成第 1 段的另一小段，先做樹，拆的時候寫在這裡。不選 P1（停住時只回答樹，要 layout 和 style 的等繼續）：停住時 Styles、Computed 空著，查「script 跑到一半時頁面的樣子」做不到。不選 P2（停住時全部排著）：停住時 Elements 凍住，和現在一樣。
+5. **停在斷點時照 Chrome 全部回答（P1+）**（第 5 節）：停住的迴圈裡，engine 把 `Dom` 借給 renderer 的 agent，`FrameView` 也交得到那裡，`getBoxModel`、Computed、Styles 必要時當場重算 style 和 layout，和 Blink 在 pause 的巢狀迴圈裡分派 `DOM`、`CSS` 一樣。決定時估計的代價是重新安排 `RenderThread` 的擁有權（以為 `FrameView` 在 `RenderThread` 上，停住時拿不到），並確認 script 執行到一半時跑 lifecycle 是安全的，所以第 1 段一開始先做原型；太大時可以拆開（使用者授權），停住時的 layout 和 style 拆成第 1 段的另一小段，先做樹。2026-11-09 的原型之後決定不拆：`Dom` 和 layout（`FrameView` 在 renderer 交給 engine 的 `Frame` 裡）都在 engine 的 isolate 的狀態裡，停住的迴圈經過 isolate 就借得到；script 中途重算 style 和 layout 本來就有（`getBoundingClientRect` 的強制 layout），是同一條路（第 5 節）。不選 P1（停住時只回答樹，要 layout 和 style 的等繼續）：停住時 Styles、Computed 空著，查「script 跑到一半時頁面的樣子」做不到。不選 P2（停住時全部排著）：停住時 Elements 凍住，和現在一樣。
 6. **改動的事件一批一批地送（E1）**（第 4 節）：renderer 在每個 task 之後、microtask checkpoint 之後、回答 `DOM`、`CSS` 命令之前和進入停住的迴圈時拿走 buffer，照順序轉成事件，節點照轉的那一刻的樣子序列化。前端看到的樹和 Chrome 一樣；不同的是事件的細節：插入的節點帶著同一批裡之後的屬性，同一批裡插入又移除的節點不送，DOM 的事件排在那個 task 的 `console` 訊息之後、不交錯。`dom` 只記、renderer 來拿，和抓 stack 的做法一樣，不用往上呼叫。之後的 DOM 斷點也是這個形狀：在 `mutate` 裡停住會和第 5 條借出 `Dom` 衝突，斷點要在操作做完、回到 JS 之前停（V8 的 `schedulePauseOnNextStatement` 這一類），不像 Blink 在 probe 裡當場 `breakProgram`。不選 E2（在掛點當下就轉成事件，照 Blink）：順序和中間狀態和 Chrome 完全一樣，但 `dom` 要在改動中呼叫 renderer 的 agent（`Dom` 裡登記往上呼叫的 callback），agent 要在 `mutate` 裡、樹不一定完整時序列化節點，還要拆成從 engine 的呼叫裡也叫得到的形狀。
 7. **Event Listeners 放在第 1 段（L1）**（第 6 節）：`DOMDebugger.getEventListeners` 要的 `unwrapObject`、`wrapObject`、object group 和「JS 物件找回節點」正好是 `resolveNode`、`requestNode` 建起來的那條路，一起做、一起測，原型要確認的 inspector API 也一起確認；第 1 段做完時，樹、`$0`、Properties、Event Listeners 都有了。第 1 段照第 5 條拆成小段時，它放在樹和 JS 的連接那一小段。不選 L2（和 Styles 一起放第 3 段）：和 CSS 無關，只是延後，第 3 段本來就最大。不選 L3（之後另做）：和第 1 條的範圍衝突。
 

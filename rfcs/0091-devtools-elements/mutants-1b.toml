@@ -1,0 +1,224 @@
+# Mutation test of stage 1b: nodes and script's objects (`resolveNode`,
+# `requestNode`, `$0`, the console's names of nodes), the listeners, and
+# the search:
+# python3 scripts/test.py mutate rfcs/0091-devtools-elements/mutants-1b.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools_dom"]
+timeout = 600
+
+# The console's names of nodes.
+
+[[mutant]]
+name = "a node has no subtype"
+file = "crates/bindings/src/devtools.rs"
+from = '''        let subtype = (self.subtypes.borrow().as_ref()?)(scope, value)?;
+        Some(StringBuffer::create(StringView::from(subtype.subtype.as_bytes())))'''
+to = '''        let _ = (self.subtypes.borrow().as_ref()?)(scope, value)?;
+        None'''
+
+[[mutant]]
+name = "an element's description has no id"
+file = "crates/dom_js/src/devtools_page.rs"
+from = '''                        description.push('#');'''
+to = '''                        description.push(' ');'''
+
+[[mutant]]
+name = "an element's description has no classes"
+file = "crates/dom_js/src/devtools_page.rs"
+from = '''                        description.push('.');
+                        description.push_str(class);'''
+to = ''''''
+
+[[mutant]]
+name = "a doctype is described by its name"
+file = "crates/dom_js/src/devtools_page.rs"
+from = '''            NodeKind::DocumentType => format!("<!DOCTYPE {}>", cx.node_name(node).to_str()),'''
+to = '''            NodeKind::DocumentType => cx.node_name(node).to_str().into_owned(),'''
+
+# Nodes and their objects.
+
+[[mutant]]
+name = "an object of no node is a node"
+file = "crates/dom_js/src/devtools_page.rs"
+from = '''        let object = v8::Local::<v8::Object>::try_from(value).map_err(|_| not_a_node())?;'''
+to = '''        let object = v8::Local::<v8::Object>::try_from(value).map_err(|_| "no".to_owned())?;'''
+
+[[mutant]]
+name = "requestNode sends no path"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                Ok(json!({ "nodeId": self.push_path(node, document, events) }))
+            }
+            "performSearch" => {'''
+to = '''                let _ = (node, document);
+                Ok(json!({ "nodeId": 0 }))
+            }
+            "performSearch" => {'''
+
+[[mutant]]
+name = "describeNode doesn't take an object"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''            "DOM.describeNode" | "DOM.getOuterHTML"
+                if params.get("nodeId").is_none()'''
+to = '''            "DOM.getOuterHTML"
+                if params.get("nodeId").is_none()'''
+
+[[mutant]]
+name = "resolveNode takes no backend id"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''            (None, Some(backend)) => u32::try_from(backend).ok().map(NodeId::from_raw),'''
+to = '''            (None, Some(_)) => None,'''
+
+[[mutant]]
+name = "resolveNode of a node gone"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''        node.filter(|node| dom.read(|cx| cx.node_by_id(*node).is_some()))
+            .ok_or_else(|| "No node with given id found".to_owned())'''
+to = '''        node.ok_or_else(|| "No node with given id found".to_owned())'''
+
+[[mutant]]
+name = "$0 isn't set"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                page.objects().inspect_node(name, node);'''
+to = ''''''
+
+[[mutant]]
+name = "$0 is undefined"
+file = "crates/dom_js/src/devtools_page.rs"
+from = '''            Some(wrapper) => v8::Local::new(scope, wrapper).into(),'''
+to = '''            Some(_) => v8::undefined(scope).into(),'''
+
+[[mutant]]
+name = "a detached subtree isn't kept"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''            self.session.kept.push(self.cx.root(root));'''
+to = ''''''
+
+[[mutant]]
+name = "a detached subtree's root isn't sent"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''            events.push(("DOM.setChildNodes", json!({ "parentId": 0, "nodes": [built] })));'''
+to = '''            let _ = built;'''
+
+[[mutant]]
+name = "the layout isn't put back"
+file = "crates/dom_js/src/devtools_page.rs"
+from = '''impl Drop for Page<'_> {
+    fn drop(&mut self) {
+        if self.taken'''
+to = '''impl Drop for Page<'_> {
+    fn drop(&mut self) {
+        if false && self.taken'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools"]
+
+# The listeners.
+
+[[mutant]]
+name = "capturing listeners don't come first"
+file = "crates/dom_js/src/devtools_page.rs"
+from = '''            listeners.into_iter().partition(|listener| listener.capture);'''
+to = '''            listeners.into_iter().partition(|_| true);'''
+
+[[mutant]]
+name = "listeners aren't grouped by type"
+file = "crates/dom_js/src/devtools_page.rs"
+from = '''        for (_, flags, handler) in found.iter().filter(|(at, ..)| *at == event_type) {'''
+to = '''        for (_, flags, handler) in found.iter().filter(|_| true) {'''
+
+[[mutant]]
+name = "a content attribute's handler isn't compiled"
+file = "crates/dom_js/src/devtools_page.rs"
+from = '''        crate::handlers::compile_event_handler(scope, target, event_type);'''
+to = '''        let _ = event_type;'''
+
+[[mutant]]
+name = "an object's handleEvent isn't what is called"
+file = "crates/dom_js/src/devtools_page.rs"
+from = '''    let key = v8::String::new(tc, "handleEvent")?;'''
+to = '''    let key = v8::String::new(tc, "handle")?;'''
+
+[[mutant]]
+name = "a listener has no node"
+file = "crates/dom_js/src/devtools_page.rs"
+from = '''        if let Some(backend) = self.backend {
+            built["backendNodeId"] = backend.into();
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a listener's handlers aren't wrapped"
+file = "crates/dom_js/src/devtools_page.rs"
+from = '''        if !group.is_empty() {
+            let v8_scope = scope.scope();'''
+to = '''        if group.is_empty() {
+            let v8_scope = scope.scope();'''
+
+[[mutant]]
+name = "the nodes below aren't listed"
+file = "crates/dom_js/src/devtools_page.rs"
+from = '''    let depth = depth.saturating_sub(1);
+    if depth <= 0 {
+        return;
+    }'''
+to = '''    let _ = depth;
+    return;'''
+
+[[mutant]]
+name = "a listener has no flags"
+file = "crates/dom_js/src/devtools_page.rs"
+from = '''                passive: flags.passive,
+                once: flags.once,'''
+to = '''                passive: false,
+                once: flags.once,'''
+
+[[mutant]]
+name = "a window's listeners aren't listed"
+file = "crates/dom_js/src/devtools_page.rs"
+from = '''        if let Some(window) = no_gc.unwrap::<Window>(cx.gc, object) {
+            return vec![(cx.root_target(TargetRef::Window(window)), None)];
+        }'''
+to = ''''''
+
+# The search.
+
+[[mutant]]
+name = "the search has no selectors"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''        if let Some(selector) = style::SelectorQuery::parse(query) {'''
+to = '''        if let Some(selector) = style::SelectorQuery::parse(query).filter(|_| false) {'''
+
+[[mutant]]
+name = "the search finds no text"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                        .is_some_and(|data| data.to_str().to_lowercase().contains(&lower))'''
+to = '''                        .is_some_and(|data| data.to_str().contains(query))'''
+
+[[mutant]]
+name = "a whole tag's name is a part"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                (true, true) => name == tag,'''
+to = '''                (true, true) => name.contains(&tag),'''
+
+[[mutant]]
+name = "a quoted value is a part"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''            if exact { text == value } else { text.contains(&value) }'''
+to = '''            text.contains(&value)'''
+
+[[mutant]]
+name = "an attribute's name isn't searched"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                                .contains(&lower)
+                                || value_matches(&attribute.value.to_str())'''
+to = '''                                .contains("\\u{0}")
+                                || value_matches(&attribute.value.to_str())'''
+
+[[mutant]]
+name = "a search result's range isn't checked"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                if to > found.len() || from >= to {'''
+to = '''                if from >= to {'''
+
+[[mutant]]
+name = "a search isn't discarded"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                self.session.searches.remove(id);'''
+to = ''''''

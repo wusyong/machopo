@@ -52,6 +52,12 @@ impl RenderThread {
         self.page_agent.detach(session);
         self.network_agent.detach(session);
         self.log_agent.detach(session);
+        self.dom_agent.detach(session);
+        if let Some(engine) = &mut self.engine {
+            engine
+                .dom_mut()
+                .set_dom_changes_wanted(self.dom_agent.any_enabled());
+        }
         self.devtools_sessions.retain(|known| known != session);
         self.update_stacks_wanted();
     }
@@ -62,6 +68,19 @@ impl RenderThread {
         if !self.devtools_sessions.is_empty() {
             let frames = self.frame_infos();
             self.page_agent.update(frames);
+            if self.dom_agent.any_enabled() {
+                let frames = self.dom_frames();
+                if let Some(engine) = &mut self.engine {
+                    self.dom_agent.set_frames(engine.dom_mut(), frames);
+                }
+            }
+        }
+    }
+
+    /// Tells the `DOM` agent's sessions of the DOM's changes since.
+    pub(super) fn tell_dom_changes(&mut self) {
+        if let Some(engine) = &mut self.engine {
+            self.dom_agent.take_changes(engine.dom_mut());
         }
     }
 
@@ -117,6 +136,13 @@ impl RenderThread {
         }
         if self.engine.is_none() {
             self.engine = Some(self.make_engine());
+        }
+        if let Some(engine) = &mut self.engine
+            && self
+                .dom_agent
+                .handle(session, message, &mut *engine.devtools_page())
+        {
+            return;
         }
         let handled = self
             .engine
@@ -178,6 +204,8 @@ impl RenderThread {
             page_agent: self.page_agent.clone(),
             network_agent: self.network_agent.clone(),
             log_agent: self.log_agent.clone(),
+            dom_agent: self.dom_agent.clone(),
+            to_browser: self.to_browser.clone(),
         }));
         self.devtools_queue.set_interrupter(interrupter);
         engine.set_devtools_frame_ids(self.devtools_frame_ids(engine.top_frame()));
@@ -253,6 +281,9 @@ struct DevToolsQueueHandle {
     page_agent: Rc<super::page_agent::PageAgent>,
     network_agent: Rc<super::network_agent::NetworkAgent>,
     log_agent: Rc<super::log_agent::LogAgent>,
+    dom_agent: Rc<super::dom_agent::DomAgent>,
+    // PROTOTYPE: for `Prototype.pausedPage`'s answer.
+    to_browser: crossbeam_channel::Sender<RendererHostMsg>,
 }
 
 impl dom_api::DevToolsQueue for DevToolsQueueHandle {
@@ -268,11 +299,72 @@ impl dom_api::DevToolsQueue for DevToolsQueueHandle {
         self.queue.put_back(queued);
     }
 
-    fn answer_here(&self, session: &str, message: &str) -> bool {
+    fn answer_here(
+        &self,
+        session: &str,
+        message: &str,
+        page: &mut dyn dom_api::DevToolsPage,
+    ) -> bool {
+        if let Some((id, method)) = command_of(message)
+            && method == "Prototype.pausedPage"
+        {
+            let result = paused_page_prototype(page);
+            let _ = self.to_browser.send(RendererHostMsg::DevToolsMessage {
+                session: session.to_owned(),
+                message: serde_json::json!({ "id": id, "result": result }).to_string(),
+            });
+            return true;
+        }
         self.page_agent.handle(session, message)
             || self.network_agent.handle(session, message)
             || self.log_agent.handle(session, message)
+            || self.dom_agent.handle(session, message, page)
     }
+
+    fn paused(&self, page: &mut dyn dom_api::DevToolsPage) {
+        self.dom_agent.take_changes(page.dom());
+    }
+}
+
+// PROTOTYPE: what DevTools' agents would answer from while script is
+// paused: the top-level document's elements, counted, and its root's box,
+// style and layout brought up to date first.
+fn paused_page_prototype(page: &mut dyn dom_api::DevToolsPage) -> serde_json::Value {
+    use dom_api::FrameLayout;
+    let (dom, layout) = page.dom_and_layout();
+    let Some(layout) = layout else {
+        return serde_json::json!({ "layout": false });
+    };
+    dom.read(|cx| {
+        layout.update_style_and_layout(cx);
+        let Some(frame) = layout
+            .as_any_mut()
+            .downcast_mut::<crate::frame_view::Frame>()
+        else {
+            return serde_json::json!({ "layout": "not a frame" });
+        };
+        let document = frame.view.document().get(cx.gc);
+        let mut elements = 0;
+        let mut root = None;
+        let mut stack = vec![document];
+        while let Some(node) = stack.pop() {
+            if cx.kind(node) == dom::NodeKind::Element {
+                elements = usize::saturating_add(elements, 1);
+                if root.is_none() {
+                    root = Some(node);
+                }
+            }
+            let mut child = cx.first_child(node);
+            while let Some(next) = child {
+                stack.push(next);
+                child = cx.next_sibling(next);
+            }
+        }
+        let height = root
+            .and_then(|root| frame.element_box(cx.node_id(root)))
+            .map(|element| element.border_box.height);
+        serde_json::json!({ "layout": true, "elements": elements, "rootHeight": height })
+    })
 }
 
 /// The `id` and `method` of a command, as JSON.

@@ -12,8 +12,8 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use dom_api::{
-    ClassicScript, DevToolsQueue, DevToolsQueued, EngineSettings, FrameId, FrameRequest,
-    ScriptEngine,
+    ClassicScript, DevToolsPage, DevToolsQueue, DevToolsQueued, EngineSettings, FrameId,
+    FrameRequest, ScriptEngine,
 };
 use dom_js::V8Engine;
 use serde_json::{Value, json};
@@ -331,6 +331,10 @@ struct Queue {
     queued: RefCell<VecDeque<DevToolsQueued>>,
     interrupting: RefCell<Vec<(String, String)>>,
     put_back: RefCell<Vec<DevToolsQueued>>,
+    /// The document `Test.countElements` counts the elements of.
+    document: std::cell::Cell<Option<dom::NodeId>>,
+    /// The elements `Test.countElements` counted while paused, in turn.
+    counted: RefCell<Vec<usize>>,
 }
 
 struct SharedQueue(Rc<Queue>);
@@ -352,9 +356,31 @@ impl DevToolsQueue for SharedQueue {
         self.0.put_back.borrow_mut().extend(queued);
     }
 
-    fn answer_here(&self, _session: &str, message: &str) -> bool {
+    fn answer_here(&self, _session: &str, message: &str, page: &mut dyn DevToolsPage) -> bool {
+        if message.contains("Test.countElements") {
+            let document = self.0.document.get().expect("the test's document");
+            let count = page.dom().read(|cx| {
+                let mut count = 0;
+                let mut stack: Vec<_> = cx.node_by_id(document).into_iter().collect();
+                while let Some(node) = stack.pop() {
+                    if cx.kind(node) == dom::NodeKind::Element {
+                        count += 1;
+                    }
+                    let mut child = cx.first_child(node);
+                    while let Some(next) = child {
+                        stack.push(next);
+                        child = cx.next_sibling(next);
+                    }
+                }
+                count
+            });
+            self.0.counted.borrow_mut().push(count);
+            return true;
+        }
         message.contains("Page.")
     }
+
+    fn paused(&self, _page: &mut dyn DevToolsPage) {}
 }
 
 /// The pauses and resumes told in `events`.
@@ -421,6 +447,55 @@ fn script_paused_takes_the_queue() {
         json!({ "expression": "after", "returnByValue": true }),
     );
     assert_eq!(answer["result"]["result"]["value"], 2, "{answer}");
+}
+
+/// The host reads the DOM while script is paused, wherever it pauses: in
+/// a script, in a listener a DOM call dispatched to (`click()`), in a
+/// custom element's constructor a DOM call ran (`createElement`), and in a
+/// mutation observer's callback at the microtask checkpoint; each time the
+/// DOM as script has made it so far.
+#[test]
+fn the_host_reads_the_dom_while_paused() {
+    let mut page = Inspected::new();
+    let queue = Rc::new(Queue::default());
+    let _interrupter = page
+        .engine
+        .set_devtools_queue(Box::new(SharedQueue(queue.clone())));
+    let top = page.engine.top_frame();
+    page.engine
+        .create_window(top, "https://example.test/a/", Instant::now())
+        .unwrap();
+    queue
+        .document
+        .set(page.engine.documents_in_tree_order().first().copied());
+    page.call("Debugger.enable", json!({}));
+    for round in 0..4 {
+        queue.queued.borrow_mut().extend([
+            message(100 + 2 * round, "Test.countElements"),
+            message(101 + 2 * round, "Debugger.resume"),
+        ]);
+    }
+    page.run(
+        top,
+        "if (!document.documentElement) document.append(document.createElement('html'));
+         const html = document.documentElement;
+         html.append(document.createElement('p'));
+         debugger;
+         const button = document.createElement('button');
+         button.onclick = () => { html.append(document.createElement('p')); debugger; };
+         html.append(button);
+         button.click();
+         new MutationObserver(() => { debugger; }).observe(html, { childList: true });
+         html.append(document.createElement('p'));
+         customElements.define('x-a', class extends HTMLElement {
+             constructor() { super(); debugger; }
+         });
+         document.createElement('x-a');",
+    );
+    // The host's checkpoint, as after any script.
+    page.engine.perform_microtask_checkpoint();
+    assert_eq!(*queue.counted.borrow(), [2, 4, 5, 5]);
+    assert!(queue.queued.borrow().is_empty());
 }
 
 /// A session detached while script is paused stops debugging: script goes

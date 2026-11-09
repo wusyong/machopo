@@ -1,0 +1,294 @@
+# Mutation test of stage 1a: the DOM's changes noted for DevTools, and the
+# `DOM` agent's tree, numbers and events:
+# python3 scripts/test.py mutate rfcs/0091-devtools-elements/mutants-1a.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools_dom"]
+timeout = 600
+
+# `dom`'s notes.
+
+[[mutant]]
+name = "an insertion isn't noted"
+file = "crates/dom/src/style.rs"
+from = '''            self.note_inserted(parent, node, previous);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "probes::"]
+
+[[mutant]]
+name = "a removal isn't noted"
+file = "crates/dom/src/style.rs"
+from = '''            self.note_removed(parent, node);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "probes::"]
+
+[[mutant]]
+name = "an attribute isn't noted"
+file = "crates/dom/src/style.rs"
+from = '''            self.note_attribute(element, name);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "probes::"]
+
+[[mutant]]
+name = "text isn't noted"
+file = "crates/dom/src/style.rs"
+from = '''            self.note_character_data(node);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "probes::"]
+
+[[mutant]]
+name = "an inline style isn't noted"
+file = "crates/dom/src/style.rs"
+from = '''            self.note_inline_style(element);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "probes::"]
+
+[[mutant]]
+name = "a shadow root isn't noted"
+file = "crates/dom/src/style.rs"
+from = '''            self.note_shadow_attached(host);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "probes::"]
+
+[[mutant]]
+name = "changes are noted when not wanted"
+file = "crates/dom/src/probe.rs"
+from = '''        self.changes.dom_changes.wanted.get()'''
+to = '''        true'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "probes::"]
+
+[[mutant]]
+name = "changes noted stay once not wanted"
+file = "crates/dom/src/probe.rs"
+from = '''        if !wanted {
+            changes.changes.borrow_mut().clear();
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "probes::"]
+
+[[mutant]]
+name = "an insertion has no sibling before"
+file = "crates/dom/src/probe.rs"
+from = '''            previous: previous.map(|previous| self.node_id(previous)),'''
+to = '''            previous: None,'''
+test = ["cargo", "test", "-q", "-p", "dom", "--test", "it", "--", "probes::"]
+
+# The agent: the tree.
+
+[[mutant]]
+name = "white space is sent"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''        !self.session.include_whitespace
+            && self.cx.kind(node) == NodeKind::Text'''
+to = '''        false
+            && self.cx.kind(node) == NodeKind::Text'''
+
+[[mutant]]
+name = "a lone text child isn't sent with its element"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                cx.kind(*child) == NodeKind::Text && cx.next_sibling(*child).is_none()'''
+to = '''                false'''
+
+[[mutant]]
+name = "getDocument's depth is one"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                let depth = depth(params, 2);'''
+to = '''                let depth = depth(params, 1);'''
+
+[[mutant]]
+name = "the root element has no frame"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                if cx.parent(node).is_some_and(|parent| cx.kind(parent) == NodeKind::Document)'''
+to = '''                if false'''
+
+[[mutant]]
+name = "a child has no parent id"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''            built["parentId"] = parent.into();'''
+to = ''''''
+
+[[mutant]]
+name = "children are sent after the answer"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''        let result = dom.read(|cx| {
+            let mut tree = Tree {
+                cx,
+                session,
+                frames: &frames,
+            };
+            let document = document.and_then(|document| cx.node_by_id(document));
+            tree.command(method, params, document, &mut events)
+        });
+        // Before the answer, as Blink's agent sends them while answering
+        // (`setChildNodes` above all: the front end reads the children
+        // once `requestChildNodes` is answered).
+        for (method, params) in events {
+            self.tell(name, method, params);
+        }
+        result'''
+to = '''        let result = dom.read(|cx| {
+            let mut tree = Tree {
+                cx,
+                session,
+                frames: &frames,
+            };
+            let document = document.and_then(|document| cx.node_by_id(document));
+            tree.command(method, params, document, &mut events)
+        });
+        let answer = result.clone();
+        let _ = answer;
+        drop(sessions);
+        let to = self.to_browser.clone();
+        let name = name.to_owned();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            for (method, params) in events {
+                let _ = to.send(RendererHostMsg::DevToolsMessage {
+                    session: name.clone(),
+                    message: json!({ "method": method, "params": params }).to_string(),
+                });
+            }
+        });
+        return result;'''
+
+[[mutant]]
+name = "children asked for again are sent again"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''        if self.session.children_sent.contains(&id) {
+            if depth <= 1 {
+                return;
+            }'''
+to = '''        if false {
+            if depth <= 1 {
+                return;
+            }'''
+
+[[mutant]]
+name = "a query sends no path"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''        for parent in path.into_iter().rev() {
+            if let Some(id) = self.bound(parent) {
+                self.push_children(id, 1, false, events);
+            }
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "describeNode numbers its node"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                Ok(json!({ "node": self.build(node, depth, pierce, false) }))'''
+to = '''                Ok(json!({ "node": self.build(node, depth, pierce, true) }))'''
+
+[[mutant]]
+name = "getDocument keeps the old numbers"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                let document = document.ok_or("Document is not available")?;
+                self.session.discard();'''
+to = '''                let document = document.ok_or("Document is not available")?;'''
+
+# The agent: the changes.
+
+[[mutant]]
+name = "an insertion follows the sibling before even if unsent"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''            if !self.skipped(at)
+                && let Some(id) = self.bound(at)
+            {
+                break id;
+            }
+            previous = cx.previous_sibling(at);'''
+to = '''            if !self.skipped(at) {
+                break self.bound(at).unwrap_or(0);
+            }
+            previous = cx.previous_sibling(at);'''
+
+[[mutant]]
+name = "a node put in and taken out in a batch is told"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''        if self.skipped(node) || cx.parent(node).map(|at| cx.node_id(at)) != Some(cx.node_id(parent)) {'''
+to = '''        if self.skipped(node) {'''
+
+[[mutant]]
+name = "a count isn't told"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''            if self.session.child_counts.insert(id, count) != Some(count) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "an attribute removed is told modified"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                        None => ("DOM.attributeRemoved", json!({ "nodeId": id, "name": name })),'''
+to = '''                        None => ("DOM.attributeModified", json!({ "nodeId": id, "name": name, "value": "" })),'''
+
+[[mutant]]
+name = "an inline style isn't told"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''        if !inline_styles.is_empty() {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a shadow root's host isn't sent its children first"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                    self.push_children(host_id, 1, false, &mut events);
+                    let root = self.build(root, 0, false, true);'''
+to = '''                    let root = self.build(root, 0, false, true);'''
+
+[[mutant]]
+name = "a removed node keeps its number"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''        match self.cx.node_by_id(node) {
+            Some(node) => self.unbind(node),'''
+to = '''        match self.cx.node_by_id(node) {
+            Some(_) => {}'''
+
+[[mutant]]
+name = "an iframe's new document isn't told"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                        .is_some_and(|before| before.document != frame.document)'''
+to = '''                        .is_some_and(|_| false)'''
+
+[[mutant]]
+name = "a new document isn't told"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                self.tell(name, "DOM.documentUpdated", json!({}));'''
+to = ''''''
+
+[[mutant]]
+name = "changes aren't told before an answer"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''        self.take_changes(dom);
+        let id = command.get("id").cloned().unwrap_or(Value::Null);'''
+to = '''        let id = command.get("id").cloned().unwrap_or(Value::Null);'''
+
+[[mutant]]
+name = "changes aren't told as script pauses"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''    fn paused(&self, dom: &dom::Dom) {
+        self.dom_agent.take_changes(dom);
+    }'''
+to = '''    fn paused(&self, _dom: &dom::Dom) {}'''
+
+[[mutant]]
+name = "the DOM isn't asked for its changes"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''        dom.set_dom_changes_wanted(self.any_enabled());
+        true'''
+to = '''        true'''
+
+[[mutant]]
+name = "the paused page isn't lent"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''            || self.dom_agent.handle(session, message, page.dom)'''
+to = ''''''
+
+[[mutant]]
+name = "a session gone stays"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''        self.sessions.borrow_mut().remove(session);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "dom_agent::"]
+
+[[mutant]]
+name = "every session's DOM is on"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''        self.sessions.borrow().values().any(|session| session.enabled)'''
+to = '''        !self.sessions.borrow().is_empty()'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "dom_agent::"]

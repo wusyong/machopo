@@ -510,6 +510,10 @@ pub trait ScriptEngine: ParserHost {
     /// `Runtime.StackTrace` JSON, with its async parents). An engine
     /// without an inspector captures none.
     fn set_stacks_wanted(&mut self, requests: bool, frames: bool);
+
+    /// The page as the host's DevTools agents read it (`DevToolsPage`),
+    /// while script doesn't run.
+    fn devtools_page(&mut self) -> Box<dyn DevToolsPage + '_>;
 }
 
 /// What DevTools calls a frame: `None` for one it has no name for (the
@@ -551,7 +555,54 @@ pub trait DevToolsQueue {
     /// end.
     fn put_back(&self, queued: Vec<DevToolsQueued>);
     /// Answers `message`, a command of `session`'s, if the host does
-    /// itself (its `Page` agent's), even while script is paused: whether it
-    /// did. The engine's inspector takes the others.
-    fn answer_here(&self, session: &str, message: &str) -> bool;
+    /// itself (its agents'), even while script is paused: whether it did.
+    /// The engine's inspector takes the others. `page` is what the engine
+    /// lends meanwhile.
+    fn answer_here(&self, session: &str, message: &str, page: &mut dyn DevToolsPage) -> bool;
+    /// Script paused: the host tells its sessions what it did up to there
+    /// (the DOM's changes), before the pause takes the first message.
+    fn paused(&self, page: &mut dyn DevToolsPage);
+}
+
+/// The page as an engine lends it to its host's DevTools agents, as they
+/// answer a command, script paused or not (Blink's agents answer from a
+/// pause's nested loop with the whole page): its DOM, the top-level
+/// frame's layout, and what its inspector knows of script's objects.
+pub trait DevToolsPage {
+    /// The DOM, and the layout unless an operation that called the paused
+    /// script holds it.
+    fn dom_and_layout(&mut self) -> (&mut Dom, Option<&mut dyn FrameLayout>);
+    fn dom(&mut self) -> &mut Dom {
+        self.dom_and_layout().0
+    }
+    fn objects(&mut self) -> &mut dyn DevToolsObjects;
+}
+
+/// What a host's DevTools agents ask of an engine's inspector about
+/// script's objects, for the browser's session `session` (Blink's
+/// `ResolveNode`, `NodeForRemoteObjectId`, `addInspectedObject` and
+/// `EventListenersInfoForTarget`). An engine with no inspector has none of
+/// them.
+pub trait DevToolsObjects {
+    /// `node`'s object in its frame's realm, as a `Runtime.RemoteObject`
+    /// (JSON) in the object `group`: none if no frame shows its document.
+    fn resolve_node(&mut self, session: &str, node: NodeId, group: &str) -> Option<String>;
+    /// The node `object_id` is the object of; the error to answer with if
+    /// it is none.
+    fn node_of_object(&mut self, session: &str, object_id: &str) -> Result<NodeId, String>;
+    /// `node` is what the console's `$0` is from now on.
+    fn inspect_node(&mut self, session: &str, node: NodeId);
+    /// The listeners on the target `object_id` is (and, a node, on those
+    /// below it `depth` levels down; -1 all, through frames and shadow
+    /// trees if `pierce`, text of white space alone left out unless
+    /// `include_whitespace`), as `DOMDebugger.EventListener`s (JSON);
+    /// the error to answer with if `object_id` is no object.
+    fn event_listeners(
+        &mut self,
+        session: &str,
+        object_id: &str,
+        depth: i64,
+        pierce: bool,
+        include_whitespace: bool,
+    ) -> Result<String, String>;
 }

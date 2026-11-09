@@ -45,8 +45,17 @@ impl bindings::devtools::Queue for Queue {
         );
     }
 
-    fn answer_here(&self, session: &str, message: &str) -> bool {
-        self.0.answer_here(session, message)
+    /// Lends the host the page through the isolate (`devtools_page`).
+    fn answer_here(&self, isolate: &mut v8::Isolate, session: &str, message: &str) -> bool {
+        self.0.answer_here(
+            session,
+            message,
+            &mut crate::devtools_page::Page::new(isolate),
+        )
+    }
+
+    fn paused(&self, isolate: &mut v8::Isolate) {
+        self.0.paused(&mut crate::devtools_page::Page::new(isolate));
     }
 }
 

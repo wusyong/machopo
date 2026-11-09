@@ -21,6 +21,7 @@
 mod cross_origin;
 mod custom_elements;
 mod devtools;
+mod devtools_page;
 mod engine;
 mod exception;
 mod frames;

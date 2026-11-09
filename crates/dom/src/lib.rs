@@ -78,6 +78,7 @@ pub mod names;
 mod navigator;
 mod numbers;
 mod performance;
+mod probe;
 mod range;
 mod reactions;
 mod resize;
@@ -221,6 +222,7 @@ pub use window::{
 pub use elise::LocalToken;
 pub use gfx::{NodeId, NodeIdHashMap, NodeIdHashSet};
 pub use names::{NameId, QualifiedName};
+pub use probe::DomChange;
 pub use string::{DomString, find_value, intern_value};
 pub use style::{
     AttributeChanges, ClassList, ClassName, ElementData, ElementStyle, LayoutTreeFlags, StyleFlags,
@@ -822,6 +824,8 @@ struct Changes {
     animations: animations::AnimationState,
     /// Who asked for loads, for DevTools (`initiator`).
     stacks: initiator::RequestStacks,
+    /// The trees' changes, for DevTools (`probe`).
+    dom_changes: probe::DomChanges,
     /// The console warnings script's calls earned, until the host takes
     /// them (`Dom::take_console_warnings`).
     console_warnings: Cell<Vec<String>>,

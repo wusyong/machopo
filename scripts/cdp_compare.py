@@ -1,9 +1,10 @@
-"""`test.py cdp`: machopo's answers to DevTools' JavaScript domains against
-Chrome's. Each case sends the same commands to machopo and to Chrome for
-Testing (the version `bench.py` pins, whose V8 is machopo's), on the same pages,
-and keeps the answers and the events it names; the values that differ from
-run to run (object, script, context and exception ids, times, the target's
-id) become placeholders, numbered as they first appear, so that which ones
+"""`test.py cdp`: machopo's answers to DevTools' domains (V8's, and the
+renderer's `Page`, `Network`, `Log` and `DOM`) against Chrome's. Each case
+sends the same commands to machopo and to Chrome for Testing (the version
+`bench.py` pins, whose V8 is machopo's), on the same pages, and keeps the
+answers and the events it names; the values that differ from run to run
+(object, script, context, exception and node ids, times, the target's id)
+become placeholders, numbered as they first appear, so that which ones
 are the same thing still counts. What differs is printed; the known
 differences, each with its reason, are left out.
 
@@ -45,6 +46,18 @@ PAGES = {
         "<!DOCTYPE html>\n<script>\nconsole.log('a', 1, {b: 2}, [1, 2]);\n"
         "console.warn('w'); console.error(new Error('e'));\n</script>"
     ),
+    "/dom.html": (
+        "<!DOCTYPE html><title>DOM</title><body>\n<div id=a class='x y'>text</div>\n<p></p>\n"
+        "<template><b>t</b></template><iframe src='/child.html'></iframe>\n"
+        "<svg><circle r=1></circle></svg></body>"
+    ),
+    "/listeners.html": (
+        "<!DOCTYPE html><body><button id=b class='x y'>x</button><p>Hello there</p>\n<script>\n"
+        "b.addEventListener('click', function f() {}, true);\n"
+        "b.addEventListener('mouseover', { handleEvent() {} });\n"
+        "document.body.addEventListener('keydown', () => {}, { passive: true, once: true });\n"
+        "window.addEventListener('load', function w() {});\n</script>"
+    ),
     "/life.html": (
         "<!DOCTYPE html>\n<title>Life</title>\n<link rel=stylesheet href='/style.css'>\n"
         "<img src='/missing.png'>\n<iframe src='/child.html'></iframe>"
@@ -73,6 +86,7 @@ PAINT_EVENTS = {
 
 # Keys whose values differ from run to run: placeholders, by key.
 VOLATILE = {
+    "searchId",
     "objectId",
     "scriptId",
     "executionContextId",
@@ -88,6 +102,11 @@ VOLATILE = {
     "hash",
 }
 
+# The keys whose values are a node's number in a session's `DOM`, and lists
+# of them: one placeholder for each number, whatever the key (a node's
+# `nodeId` is another's `parentId`); 0 (none) stays.
+NODE_IDS = {"nodeId", "parentId", "parentNodeId", "previousNodeId", "hostId"}
+
 # What machopo is known to do differently, by case and JSON path (a prefix):
 # left out of the comparison, each with why.
 KNOWN: dict[tuple[str, str], str] = {
@@ -99,6 +118,8 @@ KNOWN: dict[tuple[str, str], str] = {
     ("contexts", "[4]: machopo has none"): "the same",
     ("page", "[3]."): "machopo keeps every document's markup; Chrome answers from its caches, which the test server's "
     "responses don't go in",
+    ("dom_objects", "[1].result.result.className"): "machopo has no HTMLDocument: an HTML document's object is a "
+    "Document",
     ("debugger", "[2].params.hitBreakpoints[0]"): "Chrome's breakpoint ids start with br:, which the V8 source "
     "machopo builds doesn't put there; DevTools takes them as they are",
 }
@@ -435,6 +456,107 @@ def case_log(run: Run, url: Callable[[str], str]) -> list:
     ]
 
 
+# The events of `DOM` the `dom` case keeps.
+DOM_EVENTS = (
+    "DOM.setChildNodes",
+    "DOM.childNodeInserted",
+    "DOM.childNodeRemoved",
+    "DOM.childNodeCountUpdated",
+    "DOM.attributeModified",
+    "DOM.attributeRemoved",
+    "DOM.characterDataModified",
+    "DOM.inlineStyleInvalidated",
+    "DOM.shadowRootPushed",
+    "DOM.documentUpdated",
+)
+
+
+def case_dom(run: Run, url: Callable[[str], str]) -> list:
+    """A page's document as `DOM` sends it (two levels, the body's
+    children asked for), script's changes as it tells them, and queries."""
+    run.load(url("/dom.html"))
+    transcript = [run.call("DOM.enable")]
+    document = run.call("DOM.getDocument")
+    transcript.append(document)
+    root = document["result"]["root"]
+    html = next(node for node in root["children"] if node["nodeName"] == "HTML")
+    body = next(node for node in html["children"] if node["nodeName"] == "BODY")["nodeId"]
+    transcript.append(run.call("DOM.requestChildNodes", {"nodeId": body}))
+    transcript.append(run.events(DOM_EVENTS, settle=0.2))
+    # One change a task: machopo tells a task's changes once it is through,
+    # as the DOM is then, where Chrome tells each as it happens (a node put
+    # in and taken out in one task, Chrome tells twice and machopo not at
+    # all); `shell`'s `devtools_dom` tests the batches.
+    for expression in [
+        "document.body.append(document.createElement('span'), ' ')",
+        "document.getElementById('a').setAttribute('title', 'hi')",
+        "document.getElementById('a').removeAttribute('class')",
+        "document.getElementById('a').firstChild.data = 'changed'",
+        "document.querySelector('p').append('x')",
+        "document.getElementById('a').style.color = 'red'",
+        "window.root = document.querySelector('p').attachShadow({mode: 'open'})",
+        "root.append('in')",
+        "document.querySelector('span').remove()",
+    ]:
+        run.call("Runtime.evaluate", {"expression": expression})
+        transcript.append(run.events(DOM_EVENTS, settle=0.3))
+    found = run.call("DOM.querySelector", {"nodeId": root["nodeId"], "selector": "circle"})
+    transcript.append(found)
+    transcript.append(run.events(DOM_EVENTS, settle=0.2))
+    circle = found["result"]["nodeId"]
+    transcript.append(run.call("DOM.describeNode", {"nodeId": circle}))
+    transcript.append(run.call("DOM.getAttributes", {"nodeId": circle}))
+    transcript.append(run.call("DOM.getOuterHTML", {"nodeId": body}))
+    transcript.append(run.call("DOM.querySelectorAll", {"nodeId": root["nodeId"], "selector": "div, b, p"}))
+    transcript.append(run.call("DOM.collectClassNamesFromSubtree", {"nodeId": root["nodeId"]}))
+    transcript.append(run.call("DOM.requestChildNodes", {"nodeId": body, "depth": 0}))
+    transcript.append(run.call("DOM.querySelector", {"nodeId": 999999, "selector": "p"}))
+    return transcript
+
+
+def case_dom_objects(run: Run, url: Callable[[str], str]) -> list:
+    """Nodes and script's objects for them: the console's objects of
+    nodes, an object's node, a node's object, `$0`, a node no document
+    has; the listeners of a node, of those below it, of the window; the
+    Elements panel's search."""
+    run.load(url("/listeners.html"))
+    run.call("DOM.enable")
+    transcript = []
+
+    def evaluate(expression: str, **more) -> dict:
+        return run.call("Runtime.evaluate", {"expression": expression, "objectGroup": "g", **more})
+
+    for expression in ["b", "document", "document.doctype", "document.body.lastChild.previousSibling", "({})"]:
+        transcript.append(evaluate(expression))
+    root = run.call("DOM.getDocument")["result"]["root"]
+    button = evaluate("b")["result"]["result"]
+    requested = run.call("DOM.requestNode", {"objectId": button["objectId"]})
+    transcript.append(requested)
+    transcript.append(run.events(DOM_EVENTS, settle=0.2))
+    node = requested["result"]["nodeId"]
+    transcript.append(run.call("DOM.resolveNode", {"nodeId": node, "objectGroup": "g"}))
+    transcript.append(run.call("DOM.resolveNode", {}))
+    transcript.append(run.call("DOM.requestNode", {"objectId": evaluate("({})")["result"]["result"]["objectId"]}))
+    transcript.append(run.call("DOM.setInspectedNode", {"nodeId": node}))
+    transcript.append(evaluate("$0 === b", includeCommandLineAPI=True, returnByValue=True))
+    loose = evaluate("window.loose = document.createElement('section'); loose.append(document.createElement('i')); loose.firstChild")
+    transcript.append(run.call("DOM.requestNode", {"objectId": loose["result"]["result"]["objectId"]}))
+    transcript.append(run.events(DOM_EVENTS, settle=0.2))
+    for expression, params in [("b", {}), ("document.body", {"depth": -1}), ("window", {})]:
+        target = evaluate(expression)["result"]["result"]
+        transcript.append(run.call("DOMDebugger.getEventListeners", {"objectId": target["objectId"], **params}))
+    for query in ["hello", ".x", "<p>", "button"]:
+        found = run.call("DOM.performSearch", {"query": query})
+        transcript.append(found)
+        search = found["result"]["searchId"]
+        count = found["result"]["resultCount"]
+        transcript.append(run.call("DOM.getSearchResults", {"searchId": search, "fromIndex": 0, "toIndex": count}))
+        transcript.append(run.events(DOM_EVENTS, settle=0.2))
+        transcript.append(run.call("DOM.discardSearchResults", {"searchId": search}))
+    del root
+    return transcript
+
+
 CASES: dict[str, Callable[[Run, Callable[[str], str]], list]] = {
     "values": case_values,
     "properties": case_properties,
@@ -447,6 +569,8 @@ CASES: dict[str, Callable[[Run, Callable[[str], str]], list]] = {
     "lifecycle": case_lifecycle,
     "network": case_network,
     "log": case_log,
+    "dom": case_dom,
+    "dom_objects": case_dom_objects,
 }
 
 
@@ -476,6 +600,12 @@ def normalize(value, target: str, names: dict[tuple[str, str], str] | None = Non
             elif key == "frame" and isinstance(item, dict) and "id" in item:
                 frame = normalize({k: v for k, v in item.items() if k != "id"}, target, names)
                 out[key] = {"id": normalize({"frameId": item["id"]}, target, names)["frameId"], **frame}
+            elif key in NODE_IDS and isinstance(item, int):
+                out[key] = item if item == 0 else placeholder("nodeId", item)
+            elif key == "nodeIds" and isinstance(item, list):
+                out[key] = [id if id == 0 else placeholder("nodeId", id) for id in item]
+            elif key == "backendNodeId" and isinstance(item, int):
+                out[key] = placeholder("backendNodeId", item)
             elif key in ("frameId", "parentId", "parentFrameId") and item == target:
                 out[key] = "<target>"
             elif key in ("frameId", "parentId", "parentFrameId"):

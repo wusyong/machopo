@@ -188,7 +188,7 @@ devtools-frontend 的 `front_end/core/sdk/`（2026-11-09）：
 | | P1：只借 `Dom`（樹） | P1+：`Dom` 和 `FrameView`（樹、layout、style） | P2：繼續之後才回答 |
 | --- | --- | --- | --- |
 | 和 Chrome | 停住時看得到樹、`$0`；Styles、Computed、`getBoxModel` 等繼續 | 一樣：停住時看樹、看 style | 停住時 Elements 凍住 |
-| 要做的 | engine 在 `run_paused` 裡把 `Dom` 交給 renderer 的 agent；要先確認停住時沒有 Rust 的程式正借著 `Dom`；agent 分出停住時能答、要排著的命令 | P1 的全部，加上停住的迴圈拿得到 `FrameView`（重新安排 `RenderThread` 的擁有權） | 沒有：命令照現在排著 |
+| 要做的 | engine 在 `run_paused` 裡把 `Dom` 交給 renderer 的 agent；要先確認停住時沒有 Rust 的程式正借著 `Dom`；agent 分出停住時能答、要排著的命令 | P1 的全部，加上停住的迴圈拿得到 `FrameView`（決定時以為要重新安排 `RenderThread` 的擁有權；2026-11-09 的原型發現它在 engine 的 isolate 的狀態裡，和 `Dom` 一起借得到） | 沒有：命令照現在排著 |
 | 風險 | 小 | 停住時重算 style 和 layout：Chrome 也會，但 machopo 的 lifecycle 有沒有假設 engine 呼叫期間不重算要確認；碰到 render thread 和 engine 之間的介面 | 沒有 |
 
 ### Overlay 的選項

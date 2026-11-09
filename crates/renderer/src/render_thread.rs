@@ -29,6 +29,7 @@ use crate::task_queue::{DevToolsQueue, MainThreadTask, RendererReceiver};
 
 mod devtools;
 mod documents;
+mod dom_agent;
 mod log_agent;
 mod network_agent;
 mod page_agent;
@@ -327,6 +328,9 @@ struct RenderThread {
     /// The DOM's child frames: their documents loading, their `src`s
     /// being fetched.
     children: documents::ChildFrames,
+    /// DevTools' `DOM` domain (Blink's `InspectorDOMAgent`): before the
+    /// engine, as the nodes it keeps are roots of the engine's DOM.
+    dom_agent: Rc<dom_agent::DomAgent>,
     /// The DOM's engine, made at its first document, or at DevTools'
     /// first command for its inspector (`make_engine`).
     engine: Option<Box<dyn dom_api::ScriptEngine>>,
@@ -354,6 +358,14 @@ struct RenderThread {
     log_agent: Rc<log_agent::LogAgent>,
 }
 
+/// The nodes DevTools' `DOM` agent keeps go before the engine's DOM: the
+/// agent outlives the thread's own field in the engine's DevTools queue.
+impl Drop for RenderThread {
+    fn drop(&mut self) {
+        self.dom_agent.dom_gone();
+    }
+}
+
 impl RenderThread {
     fn new(
         to_browser: Sender<RendererHostMsg>,
@@ -376,6 +388,7 @@ impl RenderThread {
             to_browser.clone(),
             network_agent.clone(),
         ));
+        let dom_agent = Rc::new(dom_agent::DomAgent::new(to_browser.clone()));
         let blob_urls = BlobUrls::new(to_browser.clone());
         tracing::info!(raster = raster::BACKEND, "renderer main thread up");
         let _ = to_browser.send(RendererHostMsg::RendererReady);
@@ -425,6 +438,7 @@ impl RenderThread {
             page_agent,
             network_agent,
             log_agent,
+            dom_agent,
             devtools_queue,
             engine: None,
             images: std::collections::HashMap::new(),
@@ -510,6 +524,8 @@ impl RenderThread {
             // attached, navigated and removed, to DevTools.
             self.check_network_idle();
             self.tell_frames();
+            // The DOM's changes the tasks made, to DevTools.
+            self.tell_dom_changes();
             // The engine's platform tasks are tasks too, with a checkpoint
             // after them (Blink runs Oilpan's and V8's on the main thread's
             // scheduler): they may run script (FinalizationRegistry

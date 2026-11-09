@@ -351,6 +351,7 @@
 - 情境的查詢（`QueryElement`、`ScrollIntoViewIfNeeded`）之前先把 lifecycle 更新到 pre-paint（情境的查詢先等到畫出改變的那個 frame 才問，那時已經是最新的；照 Blink 留著）。
 - renderer 在任何 document 的標題可能變了時都重算主 frame 的標題（不只主 frame 的 document 在 `take_title_changes` 裡時）：重算的標題和上次送的一樣，不會再送。
 - animation frame callback 跑完之後，丟掉沒有 frame 顯示的 document 的（renderer 的 `run_animation_frame_callbacks`：被移除的 iframe、換掉的文件在丟棄時已經由 `Timers::clear_document` 清掉，留著這一步是照原本的做法，以防還有沒有 frame、又沒被丟棄的 document）。
+- DevTools 的 `DOM.requestNode` 對不是物件的值回答別的錯誤文字（`dom_js` 的 `devtools_page` 的 `node_of_object`，`v8::Object` 的 `try_from` 失敗的那一支）：V8 的 inspector 只給物件 `objectId`，`unwrapObject` 拿回來的一定是物件，這一支走不到；留著是因為 `unwrapObject` 的型別是 `Value`。
 
 **網路和載入**
 

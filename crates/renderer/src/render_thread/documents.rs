@@ -448,6 +448,8 @@ impl RenderThread {
         let document = engine
             .create_window(top, document_url.as_str(), origin)
             .expect("the top-level frame is the engine's");
+        let document_node = engine.dom_mut().read(|cx| cx.node_id(document.get(cx.gc)));
+        self.dom_agent.document_committed(document_node);
         engine.set_navigation_timing(
             top,
             crate::navigation_timing::document_timing(&timing, time_origin, self.clock.now()),
@@ -1563,6 +1565,7 @@ impl RenderThread {
         if top {
             self.send_harness_results();
             self.page_agent.dom_content_loaded();
+            self.dom_agent.dom_content_loaded();
         }
         // Its network watched for quiet from now on.
         if let Some(next) = self.doc_mut(frame) {
@@ -1952,6 +1955,47 @@ impl RenderThread {
             }
         }
         frames.into_iter().map(|(_, info)| info).collect()
+    }
+
+    /// The frames as DevTools' `DOM` agent knows them: the top-level one
+    /// first, then each child frame with its iframe; one whose iframe has
+    /// no document now left out.
+    pub(super) fn dom_frames(&mut self) -> Vec<super::dom_agent::DomFrame> {
+        let Some(top) = self.document.as_ref().map(|next| next.document.clone()) else {
+            return Vec::new();
+        };
+        let children: Vec<(FrameId, NodeRoot)> = self
+            .children
+            .frames
+            .iter()
+            .map(|(frame, (_, owner))| (*frame, owner.clone()))
+            .collect();
+        let ids: Vec<String> = children
+            .iter()
+            .map(|(frame, _)| self.frame_id(*frame))
+            .collect();
+        let main = self.devtools_main_frame_token.clone();
+        let Some(engine) = self.engine.as_mut() else {
+            return Vec::new();
+        };
+        engine.dom_mut().read(|cx| {
+            let mut frames = vec![super::dom_agent::DomFrame {
+                id: main,
+                document: cx.node_id(top.get(cx.gc)),
+                owner: None,
+            }];
+            for ((_, owner), id) in children.iter().zip(ids) {
+                let owner = owner.get(cx.gc);
+                if let Some(document) = cx.content_document(owner) {
+                    frames.push(super::dom_agent::DomFrame {
+                        id,
+                        document: cx.node_id(document),
+                        owner: Some(cx.node_id(owner)),
+                    });
+                }
+            }
+            frames
+        })
     }
 
     /// Child frame `frame` of `parent`'s, its iframe `owner`, as DevTools

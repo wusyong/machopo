@@ -1042,6 +1042,9 @@ impl<'gc> Cx<'_, 'gc> {
     ) {
         self.tree_changed();
         self.collections_children_changed();
+        if self.dom_changes_wanted() {
+            self.note_inserted(parent, node, previous);
+        }
         if self.is_connected(parent) {
             self.inserted_connected(parent, node, previous, next);
         }
@@ -1147,6 +1150,9 @@ impl<'gc> Cx<'_, 'gc> {
     ) {
         self.tree_changed();
         self.collections_children_changed();
+        if self.dom_changes_wanted() {
+            self.note_removed(parent, node);
+        }
         self.animations_removed(node);
         let connected = self.is_connected(node);
         if connected {
@@ -1240,6 +1246,9 @@ impl<'gc> Cx<'_, 'gc> {
         }
         if self.observed() {
             self.queue_attribute_record(element, name, old);
+        }
+        if self.dom_changes_wanted() {
+            self.note_attribute(element, name);
         }
         if self.is_custom_element(element) {
             self.custom_element_attribute_changed(element, name, old, new);
@@ -1359,6 +1368,9 @@ impl<'gc> Cx<'_, 'gc> {
     /// is next read; style is worked out again as for the attribute's
     /// change.
     pub fn set_inline_style(&self, element: NodeRef<'gc>, block: Arc<CssPropertyValueSet>) {
+        if self.dom_changes_wanted() {
+            self.note_inline_style(element);
+        }
         let custom = self.is_custom_element(element);
         if self.observed() || custom {
             // The attribute as it was (written from the declarations
@@ -1443,6 +1455,9 @@ impl<'gc> Cx<'_, 'gc> {
     /// again (as its flat tree's children are its shadow tree's).
     pub(crate) fn shadow_attached(&self, host: NodeRef<'gc>) {
         self.tree_changed();
+        if self.dom_changes_wanted() {
+            self.note_shadow_attached(host);
+        }
         // Its children in the flat tree are its shadow root's now, none
         // yet (each marks itself as it comes): its boxes made again.
         if self.is_connected(host) {
@@ -1711,6 +1726,9 @@ impl<'gc> Cx<'_, 'gc> {
     /// sheet, a textarea's may be a new value, an option's a new label.
     pub(crate) fn data_changed(&self, node: NodeRef<'gc>) {
         self.tree_changed();
+        if self.dom_changes_wanted() {
+            self.note_character_data(node);
+        }
         if !self.is_connected(node) {
             return;
         }

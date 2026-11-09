@@ -21,8 +21,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use v8::UniquePtr;
 use v8::inspector::{
-    Channel, ChannelImpl, StringBuffer, StringView, V8Inspector, V8InspectorClient,
-    V8InspectorClientImpl, V8InspectorClientTrustLevel, V8InspectorSession, V8StackTrace,
+    Channel, ChannelImpl, Inspectable, InspectableImpl, StringBuffer, StringView, V8Inspector,
+    V8InspectorClient, V8InspectorClientImpl, V8InspectorClientTrustLevel, V8InspectorSession,
+    V8StackTrace,
 };
 
 /// The renderer's tab: the inspector's one context group.
@@ -48,6 +49,22 @@ pub struct ConsoleMessage {
 
 /// Where the isolate's `console` messages go (the renderer prints them).
 pub type ConsoleSink = Box<dyn Fn(ConsoleMessage)>;
+
+/// What DevTools is to call a value of the embedder's: a `Runtime.RemoteObject`
+/// subtype (`node`) and its description (`div#app.main`), as Blink's
+/// `ThreadDebuggerCommonImpl::valueSubtype` and `descriptionForValueSubtype`
+/// tell them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Subtype {
+    pub subtype: &'static str,
+    pub description: String,
+}
+
+/// The embedder's `Subtype` of a value, if it has one: called as V8's
+/// inspector describes a value, with no state of the embedder's borrowed
+/// (the inspector describes values in a command, or as script pauses).
+pub type Subtypes =
+    Box<dyn for<'s> Fn(&mut v8::PinScope<'s, '_>, v8::Local<'s, v8::Value>) -> Option<Subtype>>;
 
 /// What the browser asked of the page's sessions, in order, as the
 /// renderer's DevTools queue holds it.
@@ -77,8 +94,13 @@ pub trait Queue {
     /// end.
     fn put_back(&self, queued: Vec<Queued>);
     /// Answers `message`, a command of `session`'s, if the renderer does
-    /// itself: whether it did.
-    fn answer_here(&self, session: &str, message: &str) -> bool;
+    /// itself: whether it did. Script is paused at a statement, so no one
+    /// borrows the isolate's state: it may (`isolate_state_mut`).
+    fn answer_here(&self, isolate: &mut v8::Isolate, session: &str, message: &str) -> bool;
+    /// Script paused, before the loop takes the first message: the
+    /// renderer's agents tell what script did up to there (the DOM's
+    /// changes), with the isolate's state as `answer_here` borrows it.
+    fn paused(&self, isolate: &mut v8::Isolate);
 }
 
 /// A session of the inspector's, and whether the browser still has it.
@@ -115,12 +137,14 @@ impl Shared {
     /// lets script go on if no other session debugs, and goes once the
     /// loop has returned, as V8 asks (the detach is put back too, for the
     /// renderer's own agents). The renderer ending lets script go on, to
-    /// its termination.
-    fn run_paused(&self) {
+    /// its termination. `isolate` is the paused one, for the renderer's
+    /// own agents to borrow its state through.
+    fn run_paused(&self, isolate: &mut v8::Isolate) {
         let Some(queue) = self.queue.get() else {
             return;
         };
         self.quit.set(false);
+        queue.paused(isolate);
         let mut after = Vec::new();
         let mut gone = Vec::new();
         while !self.quit.get() {
@@ -131,7 +155,7 @@ impl Shared {
                         .any(|queued| matches!(queued, Queued::Attach(s) if *s == session));
                     if waiting {
                         after.push(Queued::Message { session, message });
-                    } else if !queue.answer_here(&session, &message) {
+                    } else if !queue.answer_here(isolate, &session, &message) {
                         match self.session(&session) {
                             Some(attached) => dispatch(&attached, &message),
                             None => after.push(Queued::Message { session, message }),
@@ -201,6 +225,7 @@ fn dispatch(session: &V8InspectorSession, message: &str) {
 struct Client {
     shared: Rc<Shared>,
     console: Rc<RefCell<Option<ConsoleSink>>>,
+    subtypes: Rc<RefCell<Option<Subtypes>>>,
     /// The main frame's realm, which a command that names no context runs
     /// in (Blink's `MainThreadDebugger::ensureDefaultContextInGroup`).
     default_context: Rc<RefCell<Option<v8::Weak<v8::Context>>>>,
@@ -210,7 +235,12 @@ struct Client {
 
 impl V8InspectorClientImpl for Client {
     fn run_message_loop_on_pause(&self, _context_group_id: i32) {
-        self.shared.run_paused();
+        // SAFETY: V8 calls this on the isolate's thread as script pauses at
+        // a statement: the isolate is alive (the inspector goes before it),
+        // and the Rust around the script has handed its scope to V8, so it
+        // holds no borrow of the isolate's state while the loop lends it.
+        let mut isolate = unsafe { v8::Isolate::from_raw_isolate_ptr(self.isolate) };
+        self.shared.run_paused(&mut isolate);
     }
 
     fn quit_message_loop_on_pause(&self) {
@@ -238,6 +268,28 @@ impl V8InspectorClientImpl for Client {
         // SAFETY: the handle is in V8's handle scope, which outlives this
         // call (V8 reads it as it returns).
         Some(unsafe { context.extend_lifetime_unchecked() })
+    }
+
+    fn value_subtype<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+    ) -> Option<v8::UniquePtr<StringBuffer>> {
+        let subtype = (self.subtypes.borrow().as_ref()?)(scope, value)?;
+        Some(StringBuffer::create(StringView::from(
+            subtype.subtype.as_bytes(),
+        )))
+    }
+
+    fn description_for_value_subtype<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+    ) -> Option<v8::UniquePtr<StringBuffer>> {
+        let subtype = (self.subtypes.borrow().as_ref()?)(scope, value)?;
+        Some(StringBuffer::create(StringView::from(
+            subtype.description.as_bytes(),
+        )))
     }
 
     fn console_api_message(
@@ -301,6 +353,7 @@ pub(crate) struct DevTools {
     shared: Rc<Shared>,
     inspector: V8Inspector,
     console: Rc<RefCell<Option<ConsoleSink>>>,
+    subtypes: Rc<RefCell<Option<Subtypes>>>,
     default_context: Rc<RefCell<Option<v8::Weak<v8::Context>>>>,
     /// Promises reported as unhandled, oldest first.
     reported: RefCell<Vec<Reported>>,
@@ -310,10 +363,12 @@ impl DevTools {
     pub(crate) fn new(isolate: &mut v8::Isolate) -> Self {
         let shared = Rc::new(Shared::default());
         let console = Rc::new(RefCell::new(None));
+        let subtypes = Rc::new(RefCell::new(None));
         let default_context = Rc::new(RefCell::new(None));
         let client = V8InspectorClient::new(Box::new(Client {
             shared: shared.clone(),
             console: console.clone(),
+            subtypes: subtypes.clone(),
             default_context: default_context.clone(),
             // SAFETY: only used while the client is: the inspector, which
             // owns it, goes before the isolate.
@@ -323,6 +378,7 @@ impl DevTools {
             shared,
             inspector: V8Inspector::create(isolate, client),
             console,
+            subtypes,
             default_context,
             reported: RefCell::new(Vec::new()),
         }
@@ -383,6 +439,11 @@ impl DevTools {
         }
     }
 
+    /// The embedder's subtypes of values, from now on.
+    pub(crate) fn set_subtypes(&self, subtypes: Subtypes) {
+        *self.subtypes.borrow_mut() = Some(subtypes);
+    }
+
     /// [`capture_stack`], of this inspector's isolate.
     pub(crate) fn capture_stack(&self, max_async_depth: i32) -> Option<String> {
         let stack = self.inspector.capture_stack_trace(false);
@@ -425,6 +486,79 @@ unsafe extern "C" fn interrupted(isolate: v8::UnsafeRawIsolatePtr, _: *mut c_voi
 /// The isolate's inspector.
 fn devtools(isolate: &v8::Isolate) -> Option<Rc<DevTools>> {
     isolate.get_slot::<Rc<DevTools>>().cloned()
+}
+
+/// What DevTools is to call the embedder's values (`Subtypes`), from now
+/// on.
+pub fn set_subtypes(isolate: &v8::Isolate, subtypes: Subtypes) {
+    if let Some(devtools) = devtools(isolate) {
+        devtools.set_subtypes(subtypes);
+    }
+}
+
+/// `value`, in `context`, as the browser's `session` is to see it: a
+/// `Runtime.RemoteObject` (JSON) in its object `group`, with no preview
+/// (V8's `wrapObject`, as Blink's `ResolveNode` and
+/// `BuildObjectForEventListener` wrap theirs). None if there is no such
+/// session or `context` isn't told to the inspector.
+pub fn wrap_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    session: &str,
+    context: v8::Local<'s, v8::Context>,
+    value: v8::Local<'s, v8::Value>,
+    group: &str,
+) -> Option<String> {
+    let session = devtools(scope)?.session(session)?;
+    let wrapped = session.wrap_object(
+        scope,
+        context,
+        value,
+        StringView::from(group.as_bytes()),
+        false,
+    )?;
+    let json = v8::crdtp::cbor_to_json(&wrapped.to_bytes())?;
+    String::from_utf8(json).ok()
+}
+
+/// The value the browser's `session` has as `object_id`, its context and
+/// its object group (V8's `unwrapObject`); the inspector's error if it has
+/// none (Blink's `NodeForRemoteObjectId` answers with it).
+pub fn unwrap_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    session: &str,
+    object_id: &str,
+) -> Result<(v8::Local<'s, v8::Value>, v8::Local<'s, v8::Context>, String), String> {
+    let session = devtools(scope)
+        .and_then(|devtools| devtools.session(session))
+        .ok_or_else(|| "The agent has been detached".to_owned())?;
+    session
+        .unwrap_object(scope, StringView::from(object_id.as_bytes()))
+        .map(|(value, context, group)| {
+            let group = group
+                .as_ref()
+                .map(|group| group.string().to_string())
+                .unwrap_or_default();
+            (value, context, group)
+        })
+        .map_err(|error| {
+            error
+                .as_ref()
+                .map(|error| error.string().to_string())
+                .unwrap_or_default()
+        })
+}
+
+/// What `$0` is for the browser's `session` from now on, `$1` what it was
+/// (V8's `addInspectedObject`, as Blink's `setInspectedNode` gives its
+/// `InspectableNode`).
+pub fn add_inspected_object(
+    isolate: &v8::Isolate,
+    session: &str,
+    inspected: Box<dyn InspectableImpl>,
+) {
+    if let Some(session) = devtools(isolate).and_then(|devtools| devtools.session(session)) {
+        session.add_inspected_object(Inspectable::new(inspected));
+    }
 }
 
 /// Tells the inspector of `context`, a frame's realm (DevTools'

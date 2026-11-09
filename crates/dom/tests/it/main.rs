@@ -24,6 +24,7 @@ mod kinds;
 mod language;
 mod mutation;
 mod names;
+mod probes;
 mod resize;
 mod scripts;
 mod shadow;

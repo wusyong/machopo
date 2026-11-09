@@ -145,7 +145,8 @@ pub use document::{document_title, set_page_visible};
 pub use dom_api_macros::declare;
 pub use engine::{
     ClassicScript, ConsoleMessage, ConsoleSink, DevToolsFrameIds, DevToolsInterrupter,
-    DevToolsQueue, DevToolsQueued, DevToolsSend, EngineSettings, LoadSink, ScriptEngine,
+    DevToolsObjects, DevToolsPage, DevToolsQueue, DevToolsQueued, DevToolsSend, EngineSettings,
+    LoadSink, ScriptEngine,
 };
 pub use event::{cancel as cancel_event, coarsen};
 pub use event_target::{dispatch, fire_event};

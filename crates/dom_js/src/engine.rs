@@ -49,6 +49,8 @@ impl V8Engine {
         let mut data = V8PerIsolateData::new();
         // The isolate's DOM, made with the engine.
         state::install(data.isolate());
+        // What DevTools calls its nodes.
+        bindings::devtools::set_subtypes(data.isolate(), Box::new(crate::devtools_page::subtype));
         let bootstrap = {
             let isolate = data.isolate();
             v8::scope!(let scope, isolate);
@@ -1552,6 +1554,10 @@ impl ScriptEngine for V8Engine {
     /// as it runs.
     fn set_stacks_wanted(&mut self, requests: bool, frames: bool) {
         self.state().dom.set_stacks_wanted(requests, frames);
+    }
+
+    fn devtools_page(&mut self) -> Box<dyn dom_api::DevToolsPage + '_> {
+        Box::new(crate::devtools_page::Page::new(self.data.isolate()))
     }
 }
 

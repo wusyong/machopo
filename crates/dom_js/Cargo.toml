@@ -24,6 +24,8 @@ dom.workspace = true
 elise.workspace = true
 # The string cache's map, by a string's address: no attacker chooses it.
 rustc-hash.workspace = true
+# DevTools' `DOMDebugger.EventListener`s, as JSON.
+serde_json.workspace = true
 tracing.workspace = true
 trace_event.workspace = true
 url.workspace = true
@@ -45,5 +47,3 @@ gfx.workspace = true
 protocol.workspace = true
 # Markup parsed into a window's document: its event handlers' lines.
 html.workspace = true
-# The inspector's DevTools messages, which the tests read.
-serde_json.workspace = true
