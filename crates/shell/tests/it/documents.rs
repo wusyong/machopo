@@ -1236,6 +1236,9 @@ addEventListener('error', e => testRunner.reportHarnessResults(e.message + ' aft
 const [a, b, c] = ['a', 'b', 'c'].map(id => document.getElementById(id));
 const body = document.querySelector('body');
 const name = node => node ? (node.id || node.nodeName) : '-';
+// The secondary button's `auxclick` and `contextmenu`: the last event, in
+// either order (Windows sends `contextmenu` as the button goes up).
+let secondary = 0;
 for (const type of ['mouseover', 'mouseout', 'mouseenter', 'mouseleave', 'mousemove', 'mousedown', 'mouseup', 'click',
                     'dblclick', 'auxclick', 'contextmenu']) {
   document.addEventListener(type, e => {
@@ -1250,7 +1253,7 @@ for (const type of ['mouseover', 'mouseout', 'mouseenter', 'mouseleave', 'mousem
     if (type == 'click' || type == 'dblclick') entry += ' ' + e.detail;
     if (type == 'mouseup') entry += ' ' + e.target.matches(':active');
     log.push(entry);
-    if (type == 'auxclick') testRunner.reportHarnessResults(log.join('\n') + '\n' + (e instanceof MouseEvent && e.isTrusted && e.view === window));
+    if ((type == 'auxclick' || type == 'contextmenu') && ++secondary == 2) testRunner.reportHarnessResults(log.join('\n') + '\n' + (e instanceof MouseEvent && e.isTrusted && e.view === window));
   }, true);
 }
 </script>
@@ -1295,6 +1298,13 @@ for (const type of ['mouseover', 'mouseout', 'mouseenter', 'mouseleave', 'mousem
         Duration::from_secs(30),
     )
     .expect("the page reports");
+    // Blink's `WebFrameWidgetImpl`: the context menu as the secondary
+    // button goes down, or (Windows) as it goes up.
+    let secondary: &[&str] = if cfg!(windows) {
+        &["mouseup c false", "auxclick c", "contextmenu c"]
+    } else {
+        &["contextmenu c", "mouseup c false", "auxclick c"]
+    };
     let expected = [
         "mouseover b<-",
         "mouseenter #document<-",
@@ -1323,11 +1333,12 @@ for (const type of ['mouseover', 'mouseout', 'mouseenter', 'mouseleave', 'mousem
         "mousemove c 10 150 -65 5 47 10 50 false false",
         "mousedown c 2 2 1 true true true false",
         "micro",
-        "contextmenu c",
-        "mouseup c false",
-        "auxclick c",
-        "true",
-    ];
+    ]
+    .iter()
+    .chain(secondary)
+    .chain(&["true"])
+    .copied()
+    .collect::<Vec<_>>();
     assert_eq!(report, expected.join("\n"));
 }
 
@@ -1813,6 +1824,14 @@ fn module_scripts_run_in_their_turns() {
     use std::collections::HashMap;
 
     use net::test_server::{Route, TestServer};
+    // Another origin on the same server, mapped to its address rather than
+    // `localhost`: where that resolves to `::1` first, which the server
+    // doesn't listen on, each request waits out the failed attempt (on
+    // Windows a refused connection takes seconds) and comes out of turn.
+    let network = net::NetworkContextParams {
+        host_resolver_rules: net::HostMappingRules::parse("MAP other.test 127.0.0.1").unwrap(),
+        ..Default::default()
+    };
     let server = TestServer::start(HashMap::from([
         (
             "/index.html".to_owned(),
@@ -1831,11 +1850,11 @@ fn module_scripts_run_in_their_turns() {
                  const s = document.createElement('script'); s.type = 'module'; s.src = '/inserted.mjs';\
                  document.head.appendChild(s);\
                  const other = document.createElement('script'); other.type = 'module';\
-                 other.src = location.href.replace('127.0.0.1', 'localhost').replace('index.html', 'dep.mjs');\
+                 other.src = location.href.replace('127.0.0.1', 'other.test').replace('index.html', 'dep.mjs');\
                  other.onerror = () => log.push('error other');\
                  document.head.appendChild(other);\
                  const allowed = document.createElement('script'); allowed.type = 'module';\
-                 allowed.src = location.href.replace('127.0.0.1', 'localhost').replace('index.html', 'cors.mjs');\
+                 allowed.src = location.href.replace('127.0.0.1', 'other.test').replace('index.html', 'cors.mjs');\
                  document.head.appendChild(allowed);</script>",
             ),
         ),
@@ -1852,7 +1871,8 @@ fn module_scripts_run_in_their_turns() {
     ]))
     .expect("the test server starts");
     assert_eq!(
-        run(&server.url("/index.html")),
+        headless::run_testharness(&server.url("/index.html"), Duration::from_secs(30), network)
+            .expect("the page reports"),
         "parsed loading,error other,dep,main dep,classic defer,inline index.html,error plain,dcl,inserted,cors,async,load"
     );
 }

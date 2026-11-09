@@ -53,6 +53,8 @@ fn run(source: &str) -> String {
 /// `TypeError`.
 #[test]
 fn constructor() {
+    // `a\r\nb\rc` with native line endings: `\r\n` on Windows, `\n` elsewhere.
+    let native_size = if cfg!(windows) { 7 } else { 5 };
     assert_eq!(
         run("var empty = new Blob();
              log.push(typeof Blob, String(empty), empty.size, JSON.stringify(empty.type));
@@ -69,9 +71,12 @@ fn constructor() {
                       error(() => new Blob(window)), error(() => new Blob(document.createElement('div'))));
              var parts = ['a', {toString() { parts.pop(); return 'b'; }}, 'c'];
              new Blob(parts).text().then(text => log.push(text));"),
-        "function / [object Blob] / 0 / \"\" / 13 / text/plain;charset=utf-8 / 5 / 6 / TypeError / true / \
-         TypeError / TypeError / TypeError / TypeError / TypeError / TypeError / \
-         97,98,2,3,195,169,1,2,3,4,239,191,189 / ab"
+        format!(
+            "function / [object Blob] / 0 / \"\" / 13 / text/plain;charset=utf-8 / {native_size} / 6 / \
+             TypeError / true / \
+             TypeError / TypeError / TypeError / TypeError / TypeError / TypeError / \
+             97,98,2,3,195,169,1,2,3,4,239,191,189 / ab"
+        )
     );
 }
 
