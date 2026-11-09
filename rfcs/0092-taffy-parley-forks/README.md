@@ -1,7 +1,7 @@
 # RFC 0092：taffy 和 parley 的 fork：跟著上游、修改留成 patch、減少 workaround 的成本
 
 - 開始日期：2026-11-10
-- 狀態：🚧 已排程：2026-11-10（第 1 段完成；進度見 `progress.md`）
+- 狀態：🚧 已排程：2026-11-10（第 1、2 段完成；進度見 `progress.md`）
 - 細節：`details.md`（workaround 的清單和成本、parley fork 現在的 commit、上游 2026-09-30 之後的變化和進行中的 PR、patch 檔的幾種放法）
 
 ## 摘要
@@ -97,8 +97,8 @@ machopo 這邊只處理一種 workaround：繞在函式庫外面、因此有實�
 2. **計數**：加上「計數」那一節的計數，量出各個 workaround 實際的量，決定第 5、6 段的順序和範圍。
 3. **重寫 parley 的 fork**：舊的頂端打 tag；rebase 到上游最新的 main；拿掉上游已經有的（`hanging_advance`）；把相關的 commit 合在一起（`details.md` 的「parley fork 的重寫」）；commit 帶上 fork 自己的測試；匯出 patch；machopo 拿掉上游已經不需要的 workaround（`text-indent` 的 `indented()`）。可能分成 3a（rebase 和整理）、3b（fork 自己的測試和上游的草稿）。
 4. **taffy 跟上上游的 main**：rebase 到 main，處理 API 的變化（例如 `calc()` 的 handle、`ScrollableOverflow`），查 WPT 的變化，拿掉不再需要的 workaround（`float_bands` 自己找一段空間的底），刪掉修好的限制。
-5. **machopo 裡有成本的 workaround**：字型家族的清單和名稱解析（看第 3 段之後上游的 #943、#796 的狀態決定做法），做 fragment 時多斷的那一次行。
-6. **搬進 taffy 的 fork**：快取的 key 加上 float、`BlockContext` 可以撤回、column flexbox 的 intrinsic 寬度。每一項同時寫上游的草稿。
+5. **字型家族的清單和名稱解析**：第 2 段量到最多的（每頁都有）。做法看第 3 段之後上游的 #943、#796 的狀態決定（「待決定」）。
+6. **float 和 taffy 的快取，再來是做 fragment 時多斷的那一次行**：6a 在 taffy 的 fork 裡把 float 的狀態加進快取的 key（同時寫上游的草稿），連同 column flexbox 的 intrinsic 寬度；6b 在 machopo 裡拿掉做 fragment 時多斷的那一次行。`BlockContext` 可以撤回不排進來（第 20 條）。
 7. **上游的草稿**：parley 和 taffy 剩下的 patch，各寫一份 PR 或 issue 的草稿（本地，給人審核）。可以和第 3 到 6 段穿插著做。
 
 ## 缺點
@@ -144,6 +144,18 @@ machopo 這邊只處理一種 workaround：繞在函式庫外面、因此有實�
 12. **parley 在第 1 段就匯出現在的 16 個 commit**（2026-11-10）：第 3 段重寫之後，machopo 的審核看得到重寫前後的 patch 的 diff，重寫前的樣子也留在 machopo 的歷史裡。不選等第 3 段：少匯出一次，但看不到重寫前後的差別。
 13. **`README.machopo.md` 留在 fork 裡，是最後一個、只改它的 commit**（2026-11-10）：所以也是最後一個 patch；其他 commit 不碰它，才能直接送上游。和現有的規則、wasmtime 和 rusty_v8 的做法一樣。不選搬到 machopo 的 `patches/<名稱>/`：要改文件的規則，在 GitHub 上看 fork 也看不到說明。parley 現在的 commit 都改了它，第 3 段重寫時照這條分開。
 14. **taffy 的 fork 用 machopo 釘的 toolchain 編，送上游的 patch 守住 taffy 的 `rust-version`（1.71）**（2026-11-10）：taffy 沒有 `rust-toolchain.toml`。只在送上游前用 1.71 確認一次（上游的 CI 也檢查），平常不裝舊的 toolchain。
+
+第 2 段（2026-11-10 確認）：
+
+15. **四個計數，放在 `LayoutUpdate` 和建 box tree 的統計裡**（2026-11-10）：`laid_out_beside_floats`（`compute_box` 因為 float 沒用 taffy 的快取的盒子）、`lines_broken_for_fragments`（`inline_fragments` 在最後的寬度又真的斷了一次行，`lines_broken` 的一部分）、`lines_broken_again_beside_floats`（`break_beside_floats` 用 `revert_to` 重來的次數，四種原因合成一個數）、`font_family_names`（`text_style` 傳給 parley 的字型家族名稱，每個 span 每個名稱一次）。不選把字型名稱的計數放在 parley 的 fork 裡：那是只為計數、送不了上游的 commit。
+16. **每個計數都有測試守著**（2026-11-10）：`layout` 現有的整合測試的模組裡，構造會和不會觸發的例子；跑 mutation test。
+17. **量法：`RUST_LOG=layout=debug` 加上一次性的加總**（2026-11-10）：script 放在 scratchpad，不 commit，結果記進 `progress.md`。不選寫成 `bench.py` 的子指令：這一段只量一次，之後的驗收靠測試裡的計數。
+18. **量的頁面**（2026-11-10）：`tests/sites/` 的三個網站、blink_perf 的 `layout/` 裡相關的頁（`floats_*`、`chapter-reflow*`、`line-layout-line-height`、`flexbox-*`）和 Speedometer 3.1 的 suite（使用者同意：只數計數，不量時間）。
+19. **計數一直開著**（2026-11-10）：和 `lines_broken` 一樣，一般的 build 也數，每次加一個整數。不選只在 debug build 或測試裡數：release 的頁面量不到真正的工作量。
+
+第 2 段的量測之後（2026-11-10 確認）：
+
+20. **第 5、6 段的順序：字型家族、float 和 taffy 的快取、做 fragment 時的斷行；`BlockContext` 可以撤回延後**（2026-11-10）：照第 2 段量到的量（`progress.md` 的「第 2 段的量測」）。字型家族的名稱每頁都有，Speedometer 每個 inline formatting context 平均 8 個；float 旁邊不用快取的盒子只在有 float 的頁，但在那些頁佔 65% 到 96%；做 fragment 時再斷行只在 Perf-Dashboard 多（23%）。float 旁邊的行重斷在量的頁都是 0，所以 `BlockContext` 可以撤回不排進這份 RFC 的階段：要改 taffy 的 block layout 的核心，省不到量得到的工作；之後有頁面量到再做。不選照原本的分法（machopo 裡的先做、fork 裡的後做）：做 fragment 時的斷行會排在量比它大的 float 快取前面。
 
 ## 待決定
 

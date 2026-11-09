@@ -377,6 +377,11 @@ pub struct BoxTreeUpdate {
     /// Outermost `<svg>`s whose content an update captured again (one
     /// built is in `built`).
     pub svg_captured: usize,
+    /// Font family names the shaped inline formatting contexts gave
+    /// parley: each name of each span's list, aliases and Chrome's
+    /// metric-compatible fonts included. fontique looks each one up by
+    /// name.
+    pub font_family_names: usize,
 }
 
 /// What [`BoxTree::layout`] did, for tests and `RUST_LOG=layout=debug`.
@@ -389,6 +394,20 @@ pub struct LayoutUpdate {
     /// Inline formatting contexts broken into lines, not kept from the
     /// last break at the same width beside the same floats.
     pub lines_broken: usize,
+    /// Of `lines_broken`, those broken again at their final width as their
+    /// fragments were made: their last break was at another width or
+    /// beside other floats (taffy measured them since), and parley keeps
+    /// only the last.
+    pub lines_broken_for_fragments: usize,
+    /// Lines beside floats broken again from their start: lower down where
+    /// there is more room, in less room once taller, without the floats
+    /// that turned out on the next line, or beside the floats placed at
+    /// their top.
+    pub lines_broken_again_beside_floats: usize,
+    /// Of `laid_out`, the boxes laid out without taffy's cache because of
+    /// floats: next to some, or putting their own into the block
+    /// formatting context they share (the cache keys on its inputs alone).
+    pub laid_out_beside_floats: usize,
     /// Text clusters and glyphs placed (`text-overflow` needs them): the
     /// rest are placed when asked, by paint and hit testing.
     pub clusters_placed: usize,
@@ -1058,6 +1077,10 @@ impl BoxTree {
                 editor,
             );
             cx.stats.shaped = cx.stats.shaped.wrapping_add(usize::from(inline.is_some()));
+            cx.stats.font_family_names = cx
+                .stats
+                .font_family_names
+                .wrapping_add(cx.text.take_family_names());
             self.boxes[index].inline = inline;
             self.index_texts(index);
             self.adopt_atomics(index, &items);
@@ -1169,6 +1192,10 @@ impl BoxTree {
             inline.not_first_formatted_line();
         }
         cx.stats.shaped = cx.stats.shaped.wrapping_add(1);
+        cx.stats.font_family_names = cx
+            .stats
+            .font_family_names
+            .wrapping_add(cx.text.take_family_names());
         let mut anonymous = LayoutBox::new(None, BoxRole::AnonymousBlock, style, &self.calcs);
         anonymous.inline = Some(inline);
         cx.stats.built = cx.stats.built.wrapping_add(1);
@@ -1210,6 +1237,9 @@ impl BoxTree {
             laid_out = self.last_layout.laid_out,
             fragments = self.last_layout.fragments,
             lines_broken = self.last_layout.lines_broken,
+            lines_broken_for_fragments = self.last_layout.lines_broken_for_fragments,
+            lines_broken_again_beside_floats = self.last_layout.lines_broken_again_beside_floats,
+            laid_out_beside_floats = self.last_layout.laid_out_beside_floats,
             clusters_placed = self.last_layout.clusters_placed,
             glyphs_placed = self.last_layout.glyphs_placed,
             "layout"
@@ -1543,7 +1573,12 @@ impl BoxTree {
         let shift = self.boxes[index].content_shift;
         let width = size.width - padding.left - padding.right - border.left - border.right;
         let beside = inline.laid_out_beside().clone();
+        let broken = self.last_layout.lines_broken;
         inline.break_lines(Some(width.max(0.0)), &beside, self);
+        if self.last_layout.lines_broken != broken {
+            let update = &mut self.last_layout;
+            update.lines_broken_for_fragments = update.lines_broken_for_fragments.wrapping_add(1);
+        }
         let (lines, placed, text) = inline.fragments(PointF::new(
             border.left + padding.left,
             border.top + padding.top + shift,
@@ -1920,6 +1955,8 @@ impl BoxTree {
             .as_ref()
             .is_some_and(|ctx| self.boxes[index].places_floats || ctx.has_active_floats(0.0));
         let output = if floats {
+            let update = &mut self.last_layout;
+            update.laid_out_beside_floats = update.laid_out_beside_floats.wrapping_add(1);
             self.lay_out_box(id, inputs, block_ctx.as_deref_mut())
         } else {
             compute_cached_layout(self, id, inputs, |tree, id, inputs| {
@@ -3780,6 +3817,10 @@ impl AtomicInlines for InlineChildren<'_, '_, '_> {
         self.tree.count_line_break();
     }
 
+    fn count_line_broken_again(&mut self) {
+        self.tree.count_line_broken_again();
+    }
+
     fn lay_out(
         &mut self,
         id: taffy::NodeId,
@@ -3838,6 +3879,12 @@ fn keyword_space(style: &ComputedStyle, space: AvailableSpace) -> AvailableSpace
 impl AtomicInlines for BoxTree {
     fn count_line_break(&mut self) {
         self.last_layout.lines_broken = self.last_layout.lines_broken.wrapping_add(1);
+    }
+
+    fn count_line_broken_again(&mut self) {
+        let update = &mut self.last_layout;
+        update.lines_broken_again_beside_floats =
+            update.lines_broken_again_beside_floats.wrapping_add(1);
     }
 
     fn float_widths(&mut self, floats: &[taffy::NodeId], space: AvailableSpace) -> f32 {

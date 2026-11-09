@@ -354,3 +354,78 @@ fn a_float_narrower_than_nothing_takes_no_room() {
     ));
     assert_eq!(laid.lines("para")[0], RectF::new(0.0, 0.0, 100.0, 20.0));
 }
+
+/// A box beside floats, or putting its own floats into the block
+/// formatting context it shares, is laid out without taffy's cache, which
+/// keys on the box's inputs alone: one beside each float here.
+#[test]
+fn boxes_beside_floats_are_laid_out_without_the_cache() {
+    let beside = |html: &str| {
+        lay_out(&format!(
+            "{AHEM}<div style='width: 200px'>{html}<p>XX</p><p>XX</p></div>"
+        ))
+        .layout
+        .laid_out_beside_floats
+    };
+    assert_eq!(beside(""), 0);
+    assert_eq!(
+        beside("<div style='float: left; width: 100px; height: 40px'></div>"),
+        2
+    );
+    assert_eq!(
+        beside("<div style='float: left; width: 100px; height: 20px'></div>"),
+        1
+    );
+}
+
+/// A line beside floats is broken again from its start: lower down, where
+/// a band has room for its content; in less room once it turns out taller
+/// than its band; without a float that turned out on the next line; and
+/// beside the floats it placed at its top.
+#[test]
+fn lines_beside_floats_are_broken_again() {
+    let again = |html: &str| {
+        lay_out(&format!("{AHEM}{html}"))
+            .layout
+            .lines_broken_again_beside_floats
+    };
+    let float = "<div style='float: left; width: 100px; height: 40px'></div>";
+    assert_eq!(again("<div style='width: 200px'><p>XX XX</p></div>"), 0);
+    assert_eq!(
+        again(&format!("<div style='width: 200px'>{float}<p>XX</p></div>")),
+        0
+    );
+    // Lower down.
+    assert_eq!(
+        again(&format!(
+            "<div style='width: 200px'>{float}<p>XXXXXX XX</p></div>"
+        )),
+        1
+    );
+    // In less room.
+    assert_eq!(
+        again(
+            "<div style='width: 200px'><div style='height: 0'><div style='height: 15px'></div>\
+             <div style='float: right; width: 100px; height: 50px'></div></div>\
+             <p>XX XX XX XX XX XX</p></div>"
+        ),
+        1
+    );
+    // Without the float the line breaks before, then beside it at the
+    // next line's top.
+    assert_eq!(
+        again(
+            "<div style='width: 200px'>XX XXXX<span style='float: left; width: 40px; \
+             height: 40px'></span>XXXX</div>"
+        ),
+        2
+    );
+    // Beside the float it placed.
+    assert_eq!(
+        again(
+            "<div style='width: 200px'>XX <span style='float: left; width: 40px; \
+             height: 40px'></span>XX XX XX</div>"
+        ),
+        1
+    );
+}

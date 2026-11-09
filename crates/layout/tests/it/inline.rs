@@ -878,3 +878,32 @@ fn a_width_alone_breaks_no_lines() {
         assert_eq!(lines_broken, broken, "{html}");
     }
 }
+
+/// The lines are broken again as the fragments are made where the last
+/// break was at another width (parley keeps only the last): a float
+/// shrunk to fit no room has its lines broken in the room and is laid out
+/// as wide as its content.
+#[test]
+fn lines_are_broken_again_for_their_fragments() {
+    let ahem = "<style>body { margin: 0; font: 20px/1 Ahem }</style>";
+    for (html, broken, again) in [
+        ("<div style='width: 100px'>XX XX</div>", 1, 0),
+        (
+            "<div style='width: 100px'><div style='float: left'>XX XX</div></div>",
+            1,
+            0,
+        ),
+        (
+            "<div style='width: 0'><div style='float: left'>XX XX</div></div>",
+            2,
+            1,
+        ),
+    ] {
+        let layout = crate::page::lay_out(&format!("{ahem}{html}")).layout;
+        assert_eq!(
+            (layout.lines_broken, layout.lines_broken_for_fragments),
+            (broken, again),
+            "{html}"
+        );
+    }
+}

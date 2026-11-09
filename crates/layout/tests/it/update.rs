@@ -69,13 +69,30 @@ fn set(page: &mut Page, id: &str, name: &str, value: &str) -> BoxTreeUpdate {
     page.change(|cx, document| cx.set_attribute(find(cx, document, id), name, value))
 }
 
-fn update(built: usize, shaped: usize, restyled: usize) -> BoxTreeUpdate {
-    BoxTreeUpdate {
+/// An update that built `built` boxes, shaped `shaped` inline formatting
+/// contexts and restyled `restyled` boxes, whatever the font family names
+/// its shaping gave parley (`font_selection.rs` counts those).
+fn update(built: usize, shaped: usize, restyled: usize) -> Counts {
+    Counts(BoxTreeUpdate {
         full: false,
         built,
         shaped,
         restyled,
         svg_captured: 0,
+        font_family_names: 0,
+    })
+}
+
+#[derive(Debug)]
+struct Counts(BoxTreeUpdate);
+
+impl PartialEq<Counts> for BoxTreeUpdate {
+    fn eq(&self, other: &Counts) -> bool {
+        let update = BoxTreeUpdate {
+            font_family_names: 0,
+            ..*self
+        };
+        update == other.0
     }
 }
 

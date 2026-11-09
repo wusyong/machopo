@@ -1,0 +1,139 @@
+# Mutation test of stage 2: the counts of what the workarounds cost
+# (`LayoutUpdate`'s `laid_out_beside_floats`, `lines_broken_for_fragments`
+# and `lines_broken_again_beside_floats`, `BoxTreeUpdate`'s
+# `font_family_names`):
+# python3 scripts/test.py mutate rfcs/0092-taffy-parley-forks/mutants-2.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it"]
+timeout = 900
+
+# Boxes laid out without taffy's cache beside floats.
+
+[[mutant]]
+name = "boxes beside floats aren't counted"
+file = "crates/layout/src/lib.rs"
+from = '''            update.laid_out_beside_floats = update.laid_out_beside_floats.wrapping_add(1);'''
+to = '''            update.laid_out_beside_floats = update.laid_out_beside_floats.wrapping_add(0);'''
+
+# Lines broken again as the fragments are made.
+
+[[mutant]]
+name = "lines broken for the fragments aren't counted"
+file = "crates/layout/src/lib.rs"
+from = '''            update.lines_broken_for_fragments = update.lines_broken_for_fragments.wrapping_add(1);'''
+to = '''            update.lines_broken_for_fragments = update.lines_broken_for_fragments.wrapping_add(0);'''
+
+[[mutant]]
+name = "every fragment's lines are counted"
+file = "crates/layout/src/lib.rs"
+from = '''        if self.last_layout.lines_broken != broken {'''
+to = '''        if self.last_layout.lines_broken >= broken {'''
+
+# Lines beside floats broken again from their start.
+
+[[mutant]]
+name = "the box tree doesn't count the lines broken again"
+file = "crates/layout/src/lib.rs"
+from = '''            update.lines_broken_again_beside_floats.wrapping_add(1);'''
+to = '''            update.lines_broken_again_beside_floats.wrapping_add(0);'''
+
+[[mutant]]
+name = "the lines that place floats don't count theirs"
+file = "crates/layout/src/lib.rs"
+from = '''        self.tree.count_line_broken_again();'''
+to = ''''''
+
+[[mutant]]
+name = "a line going lower isn't counted"
+file = "crates/layout/src/text.rs"
+from = '''                    && let Some(lower) = bands.next_top(top)
+                {
+                    atomics.count_line_broken_again();'''
+to = '''                    && let Some(lower) = bands.next_top(top)
+                {'''
+
+[[mutant]]
+name = "a line in less room isn't counted"
+file = "crates/layout/src/text.rs"
+from = '''                if tall > height && bands.room(top, tall, width).1 + BREAK_TOLERANCE < room {
+                    atomics.count_line_broken_again();'''
+to = '''                if tall > height && bands.room(top, tall, width).1 + BREAK_TOLERANCE < room {'''
+
+[[mutant]]
+name = "a line without its rewound floats isn't counted"
+file = "crates/layout/src/text.rs"
+from = '''                    skipped.extend(rewound);
+                    atomics.count_line_broken_again();'''
+to = '''                    skipped.extend(rewound);'''
+
+[[mutant]]
+name = "a line beside the floats it placed isn't counted"
+file = "crates/layout/src/text.rs"
+from = '''                    *bands = atomics.float_bands();
+                    atomics.count_line_broken_again();'''
+to = '''                    *bands = atomics.float_bands();'''
+
+# Font family names given parley.
+
+[[mutant]]
+name = "the block's family names aren't counted"
+file = "crates/layout/src/text.rs"
+from = '''        let mut names = family_names(&root.font_family);'''
+to = '''        let mut names = 0;'''
+
+[[mutant]]
+name = "an inline element's family names aren't counted"
+file = "crates/layout/src/text.rs"
+from = '''                let mut properties = text_properties(&elements[element].style, 0, block);
+                *names = names.wrapping_add(property_family_names(&properties));'''
+to = '''                let mut properties = text_properties(&elements[element].style, 0, block);'''
+
+[[mutant]]
+name = "a run's family names aren't counted"
+file = "crates/layout/src/text.rs"
+from = '''            let mut properties = text_properties(style, brush, block);
+            *names = names.wrapping_add(property_family_names(&properties));'''
+to = '''            let mut properties = text_properties(style, brush, block);'''
+
+[[mutant]]
+name = "a list counts one name"
+file = "crates/layout/src/text.rs"
+from = '''        parley::FontFamily::List(list) => list.len(),'''
+to = '''        parley::FontFamily::List(_) => 1,'''
+
+[[mutant]]
+name = "properties other than the family count"
+file = "crates/layout/src/text.rs"
+from = '''            StyleProperty::FontFamily(family) => family_names(family),
+            _ => 0,'''
+to = '''            StyleProperty::FontFamily(family) => family_names(family),
+            _ => 1,'''
+
+[[mutant]]
+name = "the context's names aren't added"
+file = "crates/layout/src/text.rs"
+from = '''        cx.family_names = cx.family_names.wrapping_add(names);'''
+to = ''''''
+
+[[mutant]]
+name = "the names taken stay"
+file = "crates/layout/src/text.rs"
+from = '''        std::mem::take(&mut self.family_names)'''
+to = '''        self.family_names'''
+
+[[mutant]]
+name = "a block of inline content doesn't add its names"
+file = "crates/layout/src/lib.rs"
+from = '''            cx.stats.font_family_names = cx
+                .stats
+                .font_family_names
+                .wrapping_add(cx.text.take_family_names());'''
+to = ''''''
+
+[[mutant]]
+name = "an anonymous block doesn't add its names"
+file = "crates/layout/src/lib.rs"
+from = '''        cx.stats.font_family_names = cx
+            .stats
+            .font_family_names
+            .wrapping_add(cx.text.take_family_names());'''
+to = ''''''

@@ -7,6 +7,8 @@
 
 use layout::BoxFragment;
 
+use crate::page::{Page, find};
+
 /// The text runs of `html`'s lines, in order: each one's font (its data's
 /// id), skew and advance.
 fn runs(html: &str) -> Vec<(u64, f32, f32)> {
@@ -85,4 +87,38 @@ fn each_style_picks_its_own() {
         assert_ne!(skews[1], 0.0, "{display}: {skews:?}");
         assert_eq!(skews[2], 0.0, "{display}: {skews:?}");
     }
+}
+
+/// Each span of an inline formatting context shaped gives parley its font
+/// family list, every name of which fontique looks up: the block's, an
+/// inline element's, and a run's in an element with no box (`display:
+/// contents`); text in the style of the span it is in gives none of its
+/// own. Text beside a block, in an anonymous block, gives its block's list
+/// twice: as the anonymous block's, and as its run's, whose style is the
+/// block's, not the anonymous block's. An update that shapes nothing gives
+/// none.
+#[test]
+fn each_span_gives_parley_its_family_names() {
+    let mut page = Page::new(
+        "<div id=d>XX <span id=s style='font-family: f1'>XX</span> \
+         <span id=c style='display: contents; font-family: f1'>XX</span></div>\
+         <div id=b>XX<div style='display: flex'></div></div><div id=e>XX</div>",
+    );
+    let mut names = |id: &str, style: &str| {
+        let update = page.change(|cx, document| {
+            cx.set_attribute(find(cx, document, id), "style", style);
+        });
+        (update.shaped, update.font_family_names)
+    };
+    let (shaped, d) = names("d", "font-size: 30px");
+    assert_eq!(shaped, 1);
+    assert!(d > 0);
+    assert_eq!(names("s", "font-family: f1, f2"), (1, d + 1));
+    assert_eq!(
+        names("c", "display: contents; font-family: f1, f2, f3"),
+        (1, d + 3)
+    );
+    let (_, e) = names("e", "font-size: 30px");
+    assert_eq!(names("b", "font-size: 30px"), (1, 2 * e));
+    assert_eq!(page.update().font_family_names, 0);
 }

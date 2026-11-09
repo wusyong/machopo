@@ -47,6 +47,9 @@ static LATO: &[u8] = include_bytes!("../../../resources/test_fonts/Lato-Medium.t
 pub struct TextContext {
     fonts: FontContext,
     layout: LayoutContext<u32>,
+    /// Font family names given parley since [`Self::take_family_names`]
+    /// (`BoxTreeUpdate`'s `font_family_names`).
+    family_names: usize,
 }
 
 impl TextContext {
@@ -76,7 +79,16 @@ impl TextContext {
         // Nothing moves through this text by words with parley's clusters:
         // editing and `text-transform: capitalize` find words themselves.
         layout.set_word_boundaries(false);
-        Self { fonts, layout }
+        Self {
+            fonts,
+            layout,
+            family_names: 0,
+        }
+    }
+
+    /// The font family names given parley since the last call.
+    pub(crate) fn take_family_names(&mut self) -> usize {
+        std::mem::take(&mut self.family_names)
     }
 
     /// How many layouts took the shaping of one alike (parley keeps what
@@ -468,6 +480,10 @@ pub(crate) trait AtomicInlines {
     /// `lines_broken`).
     fn count_line_break(&mut self);
 
+    /// Counts a line beside floats broken again from its start
+    /// ([`crate::LayoutUpdate`]'s `lines_broken_again_beside_floats`).
+    fn count_line_broken_again(&mut self);
+
     /// Lays atomic inline `id` out in `space`: the containing block's
     /// width, or none for a max-content size; `height` is the containing
     /// block's height, if definite.
@@ -835,14 +851,17 @@ impl InlineContent {
             hyphens: &hyphen_advances,
         };
         let root = text_style(container, 0, block);
+        let mut names = family_names(&root.font_family);
         let mut builder = cx.layout.tree_builder(&mut cx.fonts, 1.0, true, &root);
-        let element_span = |builder: &mut TreeBuilder<'_, u32>, element: usize| {
-            let mut properties = text_properties(&elements[element].style, 0, block);
-            properties.push(StyleProperty::VerticalAlign(element_aligns[element]));
-            builder.push_style_modification_span(&properties);
-        };
+        let element_span =
+            |builder: &mut TreeBuilder<'_, u32>, names: &mut usize, element: usize| {
+                let mut properties = text_properties(&elements[element].style, 0, block);
+                *names = names.wrapping_add(property_family_names(&properties));
+                properties.push(StyleProperty::VerticalAlign(element_aligns[element]));
+                builder.push_style_modification_span(&properties);
+            };
         for &element in &open_at_start {
-            element_span(&mut builder, element);
+            element_span(&mut builder, &mut names, element);
         }
         // The elements whose spans are open, innermost last: a run whose
         // style isn't the innermost's (text in a `display: contents`
@@ -870,6 +889,7 @@ impl InlineContent {
                 block,
                 &mut styles,
                 &mut sources,
+                &mut names,
             );
             let (element, start) = match &items[item] {
                 InlineItem::Open(node, _) | InlineItem::Close(node, _) => (
@@ -933,7 +953,7 @@ impl InlineContent {
             // The element's span, its start edge inside it and its end
             // edge before it ends.
             if start {
-                element_span(&mut builder, element);
+                element_span(&mut builder, &mut names, element);
                 open.push(element);
             } else {
                 open.pop();
@@ -967,8 +987,10 @@ impl InlineContent {
             block,
             &mut styles,
             &mut sources,
+            &mut names,
         );
         let (mut layout, built) = builder.build();
+        cx.family_names = cx.family_names.wrapping_add(names);
         debug_assert_eq!(built, text, "parley keeps the processed text");
         layout.set_line_after_final_break(editor);
         Some(Self {
@@ -1402,6 +1424,7 @@ impl InlineContent {
                     && beside.is_empty()
                     && let Some(lower) = bands.next_top(top)
                 {
+                    atomics.count_line_broken_again();
                     breaker.revert_to(start.clone());
                     top = lower;
                     height = 0.0;
@@ -1411,6 +1434,7 @@ impl InlineContent {
                 // reaches only narrows as it grows, so this settles.
                 let tall = base::numerics::f32_from_f64(line.line_y_end - line.line_y_start);
                 if tall > height && bands.room(top, tall, width).1 + BREAK_TOLERANCE < room {
+                    atomics.count_line_broken_again();
                     breaker.revert_to(start.clone());
                     height = tall;
                     continue;
@@ -1424,6 +1448,7 @@ impl InlineContent {
                     .collect();
                 if !rewound.is_empty() {
                     skipped.extend(rewound);
+                    atomics.count_line_broken_again();
                     breaker.revert_to(start.clone());
                     continue;
                 }
@@ -1439,6 +1464,7 @@ impl InlineContent {
                         placed[index] = true;
                     }
                     *bands = atomics.float_bands();
+                    atomics.count_line_broken_again();
                     breaker.revert_to(start.clone());
                     continue;
                 }
@@ -2249,6 +2275,7 @@ fn push_runs<'a>(
     block: BlockText<'_>,
     styles: &mut Vec<(Arc<ComputedStyle>, Option<Owner>)>,
     sources: &mut Vec<Option<Arc<TextSource>>>,
+    names: &mut usize,
 ) {
     while runs
         .front()
@@ -2267,6 +2294,7 @@ fn push_runs<'a>(
             ]);
         } else {
             let mut properties = text_properties(style, brush, block);
+            *names = names.wrapping_add(property_family_names(&properties));
             properties.push(StyleProperty::VerticalAlign(VerticalAlign::BASELINE));
             builder.push_style_modification_span(&properties);
         }
@@ -2774,6 +2802,26 @@ impl BlockTabs {
             min_advance: self.min_advance,
         }
     }
+}
+
+/// How many font family names `family` has: each is looked up by name.
+fn family_names(family: &parley::FontFamily<'_>) -> usize {
+    match family {
+        parley::FontFamily::List(list) => list.len(),
+        parley::FontFamily::Single(_) => 1,
+        parley::FontFamily::Source(source) => source.split(',').count(),
+    }
+}
+
+/// How many font family names `properties` set.
+fn property_family_names(properties: &[StyleProperty<'_, u32>]) -> usize {
+    properties
+        .iter()
+        .map(|property| match property {
+            StyleProperty::FontFamily(family) => family_names(family),
+            _ => 0,
+        })
+        .fold(0, usize::wrapping_add)
 }
 
 /// The parley properties for text in `style`, as `text_style` has them;

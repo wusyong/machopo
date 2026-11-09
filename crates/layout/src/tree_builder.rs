@@ -502,7 +502,14 @@ impl BoxTree {
         document: NodeRef<'gc>,
         text: &mut TextContext,
     ) -> Self {
-        Self::build_document(Reader { dom, token }, document, text).0
+        let (tree, stats) = Self::build_document(Reader { dom, token }, document, text);
+        tracing::debug!(
+            built = stats.built,
+            shaped = stats.shaped,
+            font_family_names = stats.font_family_names,
+            "build box tree"
+        );
+        tree
     }
 
     /// Brings the tree up to date with the DOM after style recalc, going
@@ -532,6 +539,7 @@ impl BoxTree {
             built = stats.built,
             shaped = stats.shaped,
             restyled = stats.restyled,
+            font_family_names = stats.font_family_names,
             "update box tree"
         );
         stats
