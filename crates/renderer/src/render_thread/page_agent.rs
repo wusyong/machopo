@@ -435,6 +435,15 @@ impl PageAgent {
     /// realm is (as Chrome tells `Page.frameNavigated` before
     /// `Runtime.executionContextCreated`): its old document's frames go
     /// with it.
+    /// The markup of the document the frame `id` has, as it came.
+    pub(crate) fn source_of(&self, id: &str) -> Option<Rc<str>> {
+        self.frames
+            .borrow()
+            .iter()
+            .find(|frame| frame.id == id)
+            .map(|frame| frame.source.clone())
+    }
+
     pub(crate) fn update(&self, frames: Vec<FrameInfo>) {
         let old = std::mem::replace(&mut *self.frames.borrow_mut(), frames);
         let new = self.frames.borrow().clone();

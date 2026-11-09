@@ -556,6 +556,11 @@ impl<H: ?Sized + ParserHost> TreeSink for Sink<H> {
                     .borrow_mut()
                     .insert(cx.node_id(element), line);
             }
+            // Where its sheet's text is, for DevTools (one a `<style>`): the
+            // line its start tag ends on, html5ever's as it makes it.
+            if &*name.ns == HTML && &*name.local == "style" {
+                cx.set_style_parser_line(element, line);
+            }
             SinkHandle::new(cx, element)
         });
         if defined {

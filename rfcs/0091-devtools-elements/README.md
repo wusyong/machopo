@@ -229,7 +229,8 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
   - 每份文件和 shadow root 的 `<style>`、`<link>` 和 adopted stylesheet 各送一個 `styleSheetAdded`。
   - `styleSheetId` 是 `CssStyleSheet` 的 id 加上 renderer 的前綴。
   - 現在沒有 `@import` 的子 stylesheet。
-  - `<style>` 的文字改了、或元素被拿掉再放回去時，machopo 建新的 stylesheet 物件，所以送 `styleSheetRemoved` 再送 `styleSheetAdded`。Chrome 是同一個 id 的 `styleSheetChanged`，前端看到的結果一樣。
+  - `<style>` 的文字改了、或元素被拿掉再放回去時，machopo 建新的 stylesheet 物件，所以送 `styleSheetRemoved` 再送 `styleSheetAdded`。Chrome 也是這樣（2026-11-09 用 Chrome for Testing 152 試過：改 `<style>` 的 `textContent`，換一個新的 id）。
+  - constructed stylesheet 的原文是 CSSOM 序列化的（Chrome 的 `replaceSync('.c { color: blue }')` 給 `.c { color: blue; }\n`），所以第 11 條只有 `<link>` 要留原文。
   - UA 的規則和 Chrome 一樣不送 header，規則帶 `origin: user-agent`、不帶 `styleSheetId`。
 - **原文和位置**：
   - machopo 的 `css` 解析完不留原文（`<style>` 的在 DOM 的文字裡），也不記規則和宣告的位置。
@@ -322,6 +323,13 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 - 標籤的位置（第 1、2 段的手動確認之後改）：原本從 border box 的下緣往下放，margin 寬時壓在 margin 上。照 `inspector_overlay` 的 `drawElementTitle`：照所有框的範圍（包含 margin）放，放得下時在上面、放不下才在下面，左邊對齊元素、留在 viewport 裡，箭頭指著元素（窄的元素指中間），會蓋到元素又沒被它包住時不畫。
 - 框的畫法（2b 改）：2a 照 highlight 的資料把四個框依序整個填滿，margin 蓋住了裡面。2b 做標籤時和 Chrome 的截圖並排才發現不對：`inspector_overlay` 的 `drawHighlight` 從 margin 往內畫，每畫一個就用 `destination-out` 挖掉裡面那個框，所以每個顏色只在自己那一圈。machopo 用 even-odd 的路徑畫出同樣的一圈。2a 的測試把錯的畫法寫成預期（border 那一圈是 margin 的顏色），一起改了。
 
+**做的時候（3a）定下的細節**：
+- 列出 stylesheet 的時機：`style` 的 `StyleEngine` 每次收集文件或 shadow root 的 stylesheet 時把一個版本加一（`sheets_version`），renderer 在每次 lifecycle 之後比較每個 frame 的版本，變了才重新列出、和每個 session 上次知道的比，送少了的 `styleSheetRemoved`、多了的 `styleSheetAdded`。沒有 session 打開 `CSS` 時不比。Blink 在 `StyleEngine` 的 active stylesheet 變了時經過 probe 通知 agent，一樣是收集的時候。
+- header：照 Blink 的 `InspectorStyleSheet::BuildObjectForStyleSheetInfo`。`ownerNode` 是 `backendNodeId`；inline 的 `sourceURL` 是文件的網址，constructed 的是空的；`isMutable` 只有 constructed 的是 true；`loadingFailed` 只有不是 inline 的送。和 Chrome 比過（`test.py cdp` 的 `css_sheets`），不同的只有 script 建的 `<style>` 的位置（machopo 是 0、0，Chrome 給 fragment parser 的位置）。
+- 規則屬於哪一份（第 19 條）的做法：index 裡的每條規則記著它的 stylesheet 在那一串（併成一個 index 的幾份）裡的第幾份；說明的路 match 時另外記下每個 block 是從哪個 index 的第幾條來的（一般的 match 不記），找到那一串在文件的 stylesheet 裡從第幾份開始；shadow root 的一個 index 是一份，照套用的那幾份的順序找。內容一樣的 `<style>` 共用解析的結果；重新收集時 stylesheet 沒變的，留著的也換成現在的物件的 id（現在每個物件有自己的 media，沒變時一定是同一個物件，這是為了之後共用 media 時）。
+- `<style>` 的位置（第 20 條）：html5ever 建元素時給的行是開始標籤結束的那一行（跨行的標籤是最後一行），文字從那裡的 `>` 之後開始。那一行有幾個 `<style` 的開始標籤時，選接下來的原文和元素現在的文字一樣的那一個（原文的 CR LF 當成 LF）；都不一樣（文字被 script 改過）時用第一個：Blink 的位置是元素的，不管文字改了沒有。
+- `<link>` 的再抓（第 11 條）：照它的 `<link>`（`crossorigin` 時用 CORS，`use-credentials` 帶 credential，發起的是文件的 origin），destination 是 style。抓到的照它的 `<link>` 的方式解碼、對它的網址解析，序列化之後和現在的規則的序列化一樣才當成原文，不一樣（伺服器換了內容、script 改了規則）時給序列化的規則；結果記在那份 stylesheet 的內容上，之後不再抓。抓的時候又要的命令一起等那一次。請求在主迴圈的 task 之間送出，停在斷點時要等繼續。
+
 ### 測試
 
 - **`shell` 的整合測試**：
@@ -359,8 +367,11 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
    - **2b Computed**：`CSS.enable` 回答成功、還不送 stylesheet；`getComputedStyleForNode`、`getInlineStylesForNode`、`getPlatformFontsForNode`；`getMatchedStylesForNode` 回答元素自己的規則、inline 和 attribute 的 style（「已決定的事項」第 14 條）；`trackComputedStyleUpdatesForNode` 和 `computedStyleUpdated`（第 15 條）；標籤的樣式那幾列。
    - **2c 停住時照樣畫**：主執行緒的 scheduler（「已決定的事項」第 16 條）、畫 frame 的狀態搬進 `Frame`（第 17 條），停住的迴圈接 `BeginMainFrame`，「Paused in debugger」的提示。
    - 驗收：滑過樹裡的節點時頁面框出它；選取元素；停在斷點時的「Paused in debugger」；Computed 分頁和 box model 的圖和 Chrome 一樣；`test.py cdp` 的 `overlay` 和 `css` 的 computed 的部分。
-3. **Styles**（第 7 節的其他部分）。
-   - `CSS.enable` 開始送 `styleSheetAdded`。
+3. **Styles**（第 7 節的其他部分）。分四小段（2026-11-09）：
+   - **3a stylesheet**：`CSS.enable` 開始送 `styleSheetAdded`、之後送 `styleSheetRemoved`；規則帶 `styleSheetId`（「已決定的事項」第 19 條）；原文照第 11 條，`getStyleSheetText`；`<style>` 的位置照第 20 條。Sources 列出 stylesheet。
+   - **3b 位置**：`css` 的 parser 記位置的模式（第 12 條）；選擇器和宣告的 `range`，Styles 的「檔名:行」；解析時丟掉的宣告劃掉；包著規則的 `@media`、`@supports`。3b 要用 3a 的原文。
+   - **3c 其他的規則**：繼承來的規則、pseudo element 的規則和 DOM 樹裡的 pseudo element（第 1 段移過來的）、`getAnimatedStylesForNode`。
+   - **3d `:hov`**：`CSS.forcePseudoState`。它在 match 的熱路上多一次判斷，單獨一段，方便量和審。
    - `getAnimatedStylesForNode`（2026-11-09 手動確認時發現）：Chrome 回答元素正在跑的動畫和它們當下的值，前端拿來在 Styles 多一個動畫的區塊、在 Computed 的預設清單列出動畫給的 property；machopo 回答找不到方法，兩處都沒有（Computed 要勾「Show all」）。
    - 驗收：Styles 和 Chrome 一樣，除了 machopo 解析時丟掉的東西；Sources 列出 stylesheet；`:hov`；`test.py cdp` 的 `css`。
 
@@ -445,6 +456,16 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 
 18. **停住時 CSS 動畫不往前走，記成限制（A1）**（第 8 節）：Chrome 停住時照樣推進動畫（2026-11-09 用 Chrome for Testing 152 試過，`margin-left` 的動畫半秒走了將近兩百 px），machopo 停住時的 frame 不推進。哪一邊都沒有規範說它對：停在斷點不在 web 的規範裡，HTML 的「pause」只說不跑新的 task、如有需要更新畫面；Web Animations 的 timeline 在「update animations and send events」那一步前進，推進時間和發事件、settle promise 是同一步，Chrome 的是它停住時照樣跑 `BeginMainFrame`（推進時間在裡面）、只停 page 的 script 的 queue 的結果。動畫照時間算，繼續之後兩邊在同一個 frame 回到同一個位置，script 看到的一樣，差別只在停住時畫面上看到的。照 Chrome 做要把 engine 的 `update_animations` 拆成只推進時間和發事件、settle promise 兩段，改 `dom_api` 和 `dom_js` 的介面，換到的只是停住時的畫面；之後做 Animations 面板、或別處也要只推進時間時再一起拆。不選 A2（照 Chrome 往前走）：同上的代價。
 
+2026-11-09（使用者，第 3 段）：
+
+11. **stylesheet 的原文：連上之後留，連上之前載入的要用時才補抓（T5）**（第 7 節）：`<style>` 的原文本來就在 DOM 的文字裡，要決定的只有 `<link>` 的回應和 constructed stylesheet 的文字。2026-11-09 用 Chrome for Testing 152 量（`styleSheetAdded` 的 `length`）：`<link>` 和 constructed 的原文，Hacker News 7 KB、MDN 110 KB、docs.rs 206 KB、Wikipedia 213 KB、apple.com 703 KB、Stack Overflow 1282 KB、GitHub 的 repo 頁 3682 KB，中位數約 200 KB。DevTools 連上之後載入的留著原文（`<link>` 的 `Bytes` 共用不複製，constructed 的留給的文字）；連上之前載入的，前端第一次要用到那一份的原文時（Sources 打開它、Styles 要它的規則的位置）才重新抓，抓回來重新解析，和現在的規則一樣才用原文，不一樣（動態產生、改過）就退回 CSSOM 序列化。不開 DevTools 時不多花記憶體：原文對頁面沒有用途。對照 Chromium：Chrome 的 inspector 從資源的快取拿原文，那筆記憶體換到的是載入速度，DevTools 只是順便用；快取被清掉時也退回 CSSOM 序列化。machopo 有了 HTTP 快取之後，補抓改成從快取拿，設計不變。不選 T1（一律留著）：沒有 HTTP 快取時等於專門為 DevTools 付記憶體，大的頁面一個分頁幾 MB。不選 T2（連上之後留、不補抓）：最常見的用法是頁面載入之後才打開 DevTools，那時的 stylesheet 都對不上原檔。不選 T3（`CSS.enable` 時全部重新抓）：一次抓全部，Network 面板多出一串請求。不選 T4（一律 CSSOM 序列化）：永遠對不上原檔，也找不回解析時丟掉的宣告。
+
+12. **規則的位置：需要時對原文重新解析，順便記位置（R2）**（第 7 節）：前端第一次要一份 stylesheet 的位置時（Styles 的「檔名:行」、選擇器和宣告的 `range`），拿第 11 條的原文，用 `css` 的 parser 的記位置的模式再解析一次：每條規則、選擇器、宣告的範圍，連同一般的解析會丟掉的宣告和 at-rule，存在 session 裡。同一個 parser 對同樣的原文解析出同樣順序的規則，照順序對到現在的規則；原文退回 CSSOM 序列化時對序列化出來的文字做同樣的事。不開 DevTools 時不多花，parser 的一般模式不變；開了之後每份 stylesheet 多解析一次。對照 Chromium：Blink 的 `InspectorStyleSheet::ParseText` 用 `CSSParser::ParseSheetForInspector` 和 `InspectorCSSParserObserver` 對原文重新解析（`CSSRuleSourceData`），再用 cssText 的 LCS 對到 CSSOM 的規則（`InspectorDiff::FindLCSMapping`）；machopo 的 parser 兩種模式的行為一樣，照順序對就夠。不選 R1（parser 一律記位置）：不開 DevTools 時每條宣告也多存位置，規則多的頁面多出幾百 KB，和第 11 條的方向相反，丟掉的宣告也還是找不回來。不選 R3（不給位置）：Styles 沒有「檔名:行」、看不到丟掉的宣告，「Styles 和 Chrome 一樣」做不到。
+
+19. **規則屬於哪一份 stylesheet：建 index 時記下（S1）**（第 7 節）：Styles 的規則要帶 `styleSheetId`。style 把文件裡幾份小的 stylesheet（每份少於 512 條規則）併成一個 index，內容一樣的 `<style>` 共用解析的結果和規則物件（每個元件的 shadow root 放同樣的 `<style>`），只拿 `explain` 的規則物件分不出是哪一份。建 index 時 `RuleSet` 的每條規則填它是那個 index 裡的第幾份 stylesheet（`ActiveRule::sheet`，原本一律 0），每個 scope（文件、每個 shadow root）記一份它的 stylesheet 的 id 的清單（shadow root 的 index 照內容共用，id 記在 root 自己的清單上）；`explain` match 時記下規則來自哪個 index，照它查出確切的那一份。match 的熱路上不多東西，只有 `explain` 讀它。對照 Chromium：Blink 的 `MatchedRule` 帶著它來自第幾份 stylesheet，收集給 inspector 的規則時用 `MatchRequest` 的 stylesheet 清單找回 `CSSStyleSheet`。不選 S2（在元素的 scope 裡用規則物件比對每一份）：內容一樣的 `<style>`、`insertRule` 之後的 stylesheet 共用規則物件，會指到錯的那一份。不選 S3（每份分開 match）：慢，內容一樣的兩份都符合，還是分不出來。
+
+20. **`<style>` 在 HTML 檔裡的位置：parser 記行，要用時從原文找欄（L1）**（第 7 節）：`<style>` 的 header 帶著文字在 HTML 檔裡開始的行和欄（`startLine`、`startColumn`），Sources 和 Styles 的行號靠它。machopo 留著每份文件的原文，但 html5ever 只給行。parser 建 `<style>` 時記下開始標籤結束的那一行（一個 `<style>` 一筆）；DevTools 要 header 時在原文的那一行找它的開始標籤的 `>`，確認接下來的原文和元素現在的文字一樣，才用那個位置，不一樣、或沒有原文（script、`innerHTML` 建的）就是 0、0。不開 DevTools 時只多那幾筆行號。對照 Chromium：Blink 的 `<style>` 建立時記下 parser 的位置（`StyleElement::start_position_`，行和欄），inspector 直接用；machopo 的 tokenizer 沒有欄，用找的補上。不選 L2（完全不記，要用時掃整份原文配對）：原文裡註解、`<script>` 的字串、`<template>` 裡的 `<style` 會讓配對出錯，要重做一半的 tokenizer。不選 L3（一律 0、0）：Sources 把 inline 的 CSS 對到檔案的開頭，Styles 的行號全錯。
+
 ## 待決定
 
 每一段開始前只決定那一段的事。整份的兩條和第 1 段的先決定。
@@ -475,13 +496,13 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 
 **第 3 段**：
 
-11. **stylesheet 的原文從哪裡來**：
+11. **stylesheet 的原文從哪裡來**：已決定（「已決定的事項」第 11 條，T5）。
     - T1：一律留著 `<link>` 的回應的 `Bytes` 和 constructed stylesheet 的文字。`Bytes` 共用不複製，但要多留記憶體；0082 的「已決定的事項」第 18 條為了這個沒選一律留子資源的 body。
     - T2：只在有 DevTools 連上時留，連上之前載入的用 CSSOM 序列化。
     - T3：`CSS.enable` 時重新抓。Chrome 只從快取拿，machopo 沒有快取，會真的再發請求，內容也可能不同。
     - T4：一律用 CSSOM 序列化。行號對不上原檔。
     - 第 3 段開始前量一下典型頁面的 stylesheet 原文有多大，再決定。
-12. **規則的位置**：
+12. **規則的位置**：已決定（「已決定的事項」第 12 條，R2）。
     - R1：`css` 的 parser 一律記位置，每次解析都付記憶體。
     - R2：照 Blink，要的時候用 observer 對原文重新解析一次，順便找回 machopo 丟掉的宣告和 at-rule，讓 Styles 照 Chrome 把它們劃掉。
     - R3：不給位置，Styles 沒有「檔名:行」。

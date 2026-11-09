@@ -1,0 +1,205 @@
+# Mutation test of stage 3a: the sheet each rule is of (`style`), where a
+# `<style>`'s text starts (`html`, `CSS`), the sheets told as they come and
+# go, their texts, a `<link>`'s fetched again:
+# python3 scripts/test.py mutate rfcs/0091-devtools-elements/mutants-3a.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools_css"]
+timeout = 600
+
+# The sheet each rule is of (`style`).
+
+[[mutant]]
+name = "a run's sheets are counted from the document's first"
+file = "crates/style/src/lib.rs"
+from = '''                let at = group.sheets.start.checked_add(at)?;'''
+to = '''                let at = at;'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "explain"]
+
+[[mutant]]
+name = "each rule of a run is its first sheet's"
+file = "crates/style/src/lib.rs"
+from = '''                            set.add_rules(sheet.contents.rules(), environment, at);'''
+to = '''                            set.add_rules(sheet.contents.rules(), environment, 0);'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "explain"]
+
+[[mutant]]
+name = "a sheet of the same text keeps the old object's id"
+file = "crates/style/src/lib.rs"
+from = '''                    kept.id = now.id;'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "explain"]
+
+[[mutant]]
+name = "a shadow root's rules are of no sheet"
+file = "crates/style/src/lib.rs"
+from = '''            Some(root) => self.shadow.get(root)?.sheet_of(from.index),'''
+to = '''            Some(_) => None,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "explain"]
+
+[[mutant]]
+name = "a shadow root's sheet that doesn't apply is counted"
+file = "crates/style/src/shadow_sheets.rs"
+from = '''            .filter(|(_, applied)| **applied)'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "explain"]
+
+[[mutant]]
+name = "a rule's place is found by its tree alone"
+file = "crates/style/src/lib.rs"
+from = '''                    .find(|from| from.tree == priority.tree && from.order == priority.order)'''
+to = '''                    .find(|from| from.tree == priority.tree)'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "explain"]
+
+[[mutant]]
+name = "where the rules matched from isn't noted"
+file = "crates/style/src/lib.rs"
+from = '''                    if target == Target::Element
+                        && let Some(provenance) = provenance.as_deref_mut()'''
+to = '''                    if false
+                        && let Some(provenance) = provenance.as_deref_mut()'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "explain"]
+
+[[mutant]]
+name = "the document's sheets collected don't move the version"
+file = "crates/style/src/lib.rs"
+from = '''        self.sheets_version = self.sheets_version.wrapping_add(1);
+        self.testing.collected_tree_scopes'''
+to = '''        self.testing.collected_tree_scopes'''
+
+[[mutant]]
+name = "a shadow root's sheets collected don't move the version"
+file = "crates/style/src/lib.rs"
+from = '''            self.sheets_version = self.sheets_version.wrapping_add(1);
+            let Some(change)'''
+to = '''            let Some(change)'''
+
+[[mutant]]
+name = "the rule's sheet isn't told"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''        if let Some(sheet) = matched.sheet {'''
+to = '''        if let Some(sheet) = matched.sheet.filter(|_| false) {'''
+
+# Where a `<style>`'s text starts.
+
+[[mutant]]
+name = "the parser notes no line"
+file = "crates/html/src/parser.rs"
+from = '''                cx.set_style_parser_line(element, line);'''
+to = ''''''
+
+[[mutant]]
+name = "of several on a line, the first"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''        .find(|&at| follows(&markup[start.saturating_add(at).saturating_add(1)..], text))
+        .or_else(|| ends.first().copied())?;'''
+to = '''        .next()?;'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "css_agent"]
+
+[[mutant]]
+name = "a CR LF in the markup isn't a line break"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''        if want == '\n' && markup.peek() == Some(&'\r') {'''
+to = '''        if false {'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "css_agent"]
+
+[[mutant]]
+name = "a `>` in a `<style>`'s text ends its start tag"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                    && !tag.contains('>')'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "css_agent"]
+
+[[mutant]]
+name = "text of several lines ends on its first"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''            line.saturating_add(u32::try_from(breaks).unwrap_or(u32::MAX)),'''
+to = '''            line,'''
+
+# The sheets told as they come and go.
+
+[[mutant]]
+name = "the sheets' versions aren't read"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''        frame.view.sheets_versions(&mut versions);'''
+to = ''''''
+
+[[mutant]]
+name = "a frame's frames' versions aren't read"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            child.sheets_versions(versions);'''
+to = ''''''
+
+[[mutant]]
+name = "a sheet gone isn't told"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                .filter(|id| !sheets.iter().any(|sheet| sheet.id == **id))'''
+to = '''                .filter(|_| false)'''
+
+[[mutant]]
+name = "the sheets told aren't kept"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''            session.sheets = sheets.iter().map(|sheet| sheet.id).collect();'''
+to = ''''''
+
+[[mutant]]
+name = "a shadow root's sheets aren't listed"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                scopes.push(root);'''
+to = ''''''
+
+[[mutant]]
+name = "a `<style>`'s sheet is mutable"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                            "isMutable": constructed,'''
+to = '''                            "isMutable": true,'''
+
+[[mutant]]
+name = "a `<link>`'s sheet isn't told loaded"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                            header["loadingFailed"] = false.into();'''
+to = ''''''
+
+# A `<link>`'s text.
+
+[[mutant]]
+name = "a `<link>`'s text isn't kept while DevTools is there"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            && !self.devtools_sessions.is_empty()'''
+to = '''            && false'''
+
+[[mutant]]
+name = "a `<link>`'s text is kept with no DevTools"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            && !self.devtools_sessions.is_empty()'''
+to = ''''''
+
+[[mutant]]
+name = "a kept text is fetched again"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                            .filter(|_| self.link_text(contents).is_none())'''
+to = ''''''
+
+[[mutant]]
+name = "a second ask while fetching isn't answered"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                        Some(known) => known.waiting.push(waiting),'''
+to = '''                        Some(_) => {}'''
+
+[[mutant]]
+name = "what came again is taken whatever its rules"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''        let same = text.as_deref().is_some_and(|text| {'''
+to = '''        let same = true || text.as_deref().is_some_and(|text| {'''
+
+[[mutant]]
+name = "what came again is never taken"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''        let same = text.as_deref().is_some_and(|text| {'''
+to = '''        let same = false && text.as_deref().is_some_and(|text| {'''
+
+[[mutant]]
+name = "a `crossorigin` sheet is fetched again without CORS"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            if let Some(include) = cors {
+                request.mode = RequestMode::Cors;'''
+to = '''            if let Some(include) = cors.filter(|_| false) {
+                request.mode = RequestMode::Cors;'''

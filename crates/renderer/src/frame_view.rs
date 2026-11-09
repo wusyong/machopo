@@ -1473,6 +1473,15 @@ impl FrameView {
 
     /// `element`'s box model as last laid out, CSS px of the viewport, as
     /// `client_rects` places it (`layout::box_quads`).
+    /// Each document's (this view's and those below) style's count of its
+    /// sheets' collections (`style::StyleEngine::sheets_version`).
+    pub(crate) fn sheets_versions(&self, versions: &mut Vec<(NodeId, u64)>) {
+        versions.push((self.document_node, self.style.sheets_version()));
+        for child in &self.children {
+            child.sheets_versions(versions);
+        }
+    }
+
     /// The fonts of the text runs `counts` picks, as last laid out
     /// (`layout::platform_fonts`).
     pub(crate) fn platform_fonts(

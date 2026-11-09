@@ -76,6 +76,12 @@ PAGES = {
         "<div id=x class=a style='color: pink; border-top: solid'>text <b>bold</b></div>"
         "<font id=f color=red>f</font><div id=e></div>"
     ),
+    "/sheets.html": (
+        "<!DOCTYPE html><link rel=stylesheet href='/style.css'>\n<style media=screen\n title=t>\n"
+        ".a { color: red }\n</style><p class=a>p</p><div id=host></div>\n<script>\n"
+        "const s = new CSSStyleSheet(); s.replaceSync('.c { color: blue }'); document.adoptedStyleSheets = [s];\n"
+        "host.attachShadow({mode: 'open'}).innerHTML = '<style>.d { }</style>';\n</script>"
+    ),
     "/life.html": (
         "<!DOCTYPE html>\n<title>Life</title>\n<link rel=stylesheet href='/style.css'>\n"
         "<img src='/missing.png'>\n<iframe src='/child.html'></iframe>"
@@ -118,6 +124,7 @@ VOLATILE = {
     "breakpointId",
     "loaderId",
     "hash",
+    "styleSheetId",
 }
 
 # The keys whose values are a node's number in a session's `DOM`, and lists
@@ -151,6 +158,9 @@ KNOWN: dict[tuple[str, str], str] = {
     ("overlay", "[19].error.data"): "Chrome's message has where in its CBOR the field is missing",
     ("css", "[3].rules[2].style.longhands.color[0]"): "Chrome writes a rule's values from its text (`!important` "
     "with them); machopo keeps no sheet's text, and writes them as parsed, as Chrome writes a rule it has no text of",
+    ("css_sheets", "[1][1].end"): "a `<style>` innerHTML made: Chrome's place is where the document's parser was "
+    "as the script ran (after `</script>`); machopo's, none",
+    ("css_sheets", "[1][1].start"): "the same",
     ("debugger", "[2].params.hitBreakpoints[0]"): "Chrome's breakpoint ids start with br:, which the V8 source "
     "machopo builds doesn't put there; DevTools takes them as they are",
 }
@@ -734,6 +744,41 @@ def case_css(run: Run, url: Callable[[str], str]) -> list:
     return transcript
 
 
+def case_css_sheets(run: Run, url: Callable[[str], str]) -> list:
+    """The sheets `CSS` tells of: a `<link>`'s, a `<style>`'s (its place in
+    the markup), an adopted one's, a shadow root's; their texts; a
+    `<style>`'s text changed and a `<link>` taken out; a rule's sheet."""
+    run.load(url("/sheets.html"))
+    run.call("DOM.enable")
+    transcript = [run.call("CSS.enable")]
+    # In an order of their own (the two send them in another).
+    headers = sorted(
+        (event["params"]["header"] for event in run.events(("CSS.styleSheetAdded",), settle=0.5)),
+        key=lambda header: (header["isConstructed"], header["isInline"], header["title"], header["length"]),
+    )
+    transcript.append(headers)
+    for header in headers:
+        transcript.append(run.call("CSS.getStyleSheetText", {"styleSheetId": header["styleSheetId"]}))
+    root = run.call("DOM.getDocument")["result"]["root"]["nodeId"]
+    p = run.call("DOM.querySelector", {"nodeId": root, "selector": "p"})["result"]["nodeId"]
+    matched = run.call("CSS.getMatchedStylesForNode", {"nodeId": p})["result"]
+    transcript.append([
+        {"selector": rule["rule"]["selectorList"]["text"], "styleSheetId": rule["rule"].get("styleSheetId")}
+        for rule in matched["matchedCSSRules"]
+        if rule["rule"]["origin"] == "regular"
+    ])
+    sheet_events = ("CSS.styleSheetAdded", "CSS.styleSheetRemoved", "CSS.styleSheetChanged")
+    for expression in [
+        "document.querySelector('style').textContent = '.b { }'",
+        "document.querySelector('link').remove()",
+    ]:
+        run.call("Runtime.evaluate", {"expression": expression})
+        transcript.append(run.events(sheet_events, settle=0.5))
+    transcript.append(run.call("CSS.getStyleSheetText", {"styleSheetId": "nothing"}))
+    run.events(DOM_EVENTS, settle=0.2)
+    return transcript
+
+
 CASES: dict[str, Callable[[Run, Callable[[str], str]], list]] = {
     "values": case_values,
     "properties": case_properties,
@@ -750,6 +795,7 @@ CASES: dict[str, Callable[[Run, Callable[[str], str]], list]] = {
     "dom_objects": case_dom_objects,
     "overlay": case_overlay,
     "css": case_css,
+    "css_sheets": case_css_sheets,
 }
 
 
@@ -783,7 +829,7 @@ def normalize(value, target: str, names: dict[tuple[str, str], str] | None = Non
                 out[key] = item if item == 0 else placeholder("nodeId", item)
             elif key == "nodeIds" and isinstance(item, list):
                 out[key] = [id if id == 0 else placeholder("nodeId", id) for id in item]
-            elif key == "backendNodeId" and isinstance(item, int):
+            elif key in ("backendNodeId", "ownerNode") and isinstance(item, int):
                 out[key] = placeholder("backendNodeId", item)
             elif key in ("frameId", "parentId", "parentFrameId") and item == target:
                 out[key] = "<target>"

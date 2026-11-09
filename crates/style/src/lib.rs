@@ -128,6 +128,9 @@ pub struct Explained {
 pub struct ExplainedRule {
     pub rule: Arc<css::StyleRule>,
     pub origin: Origin,
+    /// The id of the sheet it is of (`dom::Cx::style_sheet_id`); none for
+    /// the UA's.
+    pub sheet: Option<u64>,
     /// The indexes of its selectors the element matches.
     pub matching_selectors: Vec<usize>,
 }
@@ -192,6 +195,10 @@ pub struct StyleEngine {
     /// What the DOM was last given of the names style reads is stale: the
     /// sheets changed, or `attr()` read another.
     names_stale: bool,
+    /// Counts the collections of its document's and its shadow roots'
+    /// sheets: DevTools lists the sheets again only once it moves
+    /// (`sheets_version`).
+    sheets_version: u64,
     /// The shadow trees' own sheets.
     shadow: ShadowScopes,
     /// What the change of a shadow tree's sheets styles again, by its
@@ -282,6 +289,10 @@ impl AuthorSheets {
 struct Sheet {
     contents: Arc<StyleSheetContents>,
     media: Arc<MediaQueryList>,
+    /// Its `CssStyleSheet`'s id (`dom::Cx::style_sheet_id`), for DevTools
+    /// (`StyleEngine::explain`): a `<style>` made again of the same text is
+    /// the same sheet to style, another object.
+    id: u64,
     /// An adopted sheet's number (`dom::Cx::style_sheet_id`).
     adopted: Option<u64>,
     /// A sheet that is disabled: kept (it may be enabled, and its scope
@@ -295,6 +306,7 @@ impl Sheet {
         Self {
             contents: cx.style_sheet_contents(sheet).clone(),
             media: cx.style_sheet_media(sheet).1.clone(),
+            id: cx.style_sheet_id(sheet),
             adopted: None,
             disabled: cx.style_sheet_disabled(sheet),
         }
@@ -379,6 +391,7 @@ impl StyleEngine {
             document: None,
             attr_names: rustc_hash::FxHashSet::default(),
             names_stale: true,
+            sheets_version: 0,
             shadow: ShadowScopes::default(),
             shadow_changes: rustc_hash::FxHashMap::default(),
             testing: Testing::default(),
@@ -903,7 +916,13 @@ impl StyleEngine {
             walk.url_context.as_ref(),
             &mut walk.presentation,
         );
-        let [own, ..] = walk.blocks(element, inline.as_ref(), presentation.as_ref());
+        let mut provenance = Vec::new();
+        let [own, ..] = walk.blocks(
+            element,
+            inline.as_ref(),
+            presentation.as_ref(),
+            Some(&mut provenance),
+        );
         // Each block once, at its normal declarations' place (its
         // `!important` ones' is another).
         let mut rules: Vec<(CascadePriority, Arc<css::StyleRule>)> = own
@@ -926,6 +945,12 @@ impl StyleEngine {
                 } else {
                     Origin::Author
                 };
+                // The sheet it is of: where it was matched from, a
+                // document's index's sheets or a shadow root's.
+                let sheet = provenance
+                    .iter()
+                    .find(|from| from.tree == priority.tree && from.order == priority.order)
+                    .and_then(|from| self.sheet_of(from));
                 let mut matching_selectors: Vec<usize> = matched
                     .iter()
                     .filter(|(matched, _)| Arc::ptr_eq(matched, &rule))
@@ -936,6 +961,7 @@ impl StyleEngine {
                 ExplainedRule {
                     rule,
                     origin,
+                    sheet,
                     matching_selectors,
                 }
             })
@@ -945,6 +971,37 @@ impl StyleEngine {
             presentation: presentation.map(|(hints, _)| hints),
             inline,
         })
+    }
+
+    /// The id of the sheet (`dom::Cx::style_sheet_id`) the rule matched from
+    /// `from` is of: of the document's sheets, the one its index's rules
+    /// say (an index has the rules of a run of sheets, each rule numbered
+    /// by its sheet in the run); of a shadow root's, the one of the index
+    /// (an index a sheet, among those that applied). None for the UA's.
+    fn sheet_of(&self, from: &Provenance<'_>) -> Option<u64> {
+        let rule = from.index.set.rules().get(from.rule)?;
+        let at = usize::try_from(rule.sheet).ok()?;
+        match from.scope {
+            None => {
+                let author = self.author.as_ref()?;
+                let group = author.groups.iter().find(|group| {
+                    group
+                        .index
+                        .as_ref()
+                        .is_some_and(|index| std::ptr::eq(&**index, from.index))
+                })?;
+                let at = group.sheets.start.checked_add(at)?;
+                author.sheets.get(at).map(|sheet| sheet.id)
+            }
+            Some(root) => self.shadow.get(root)?.sheet_of(from.index),
+        }
+    }
+
+    /// How many times it collected its document's or a shadow root's sheets
+    /// (the sheets may have changed since the last count, or not): what
+    /// DevTools' `CSS` lists the sheets again by.
+    pub fn sheets_version(&self) -> u64 {
+        self.sheets_version
     }
 
     /// Collects again the sheets of the shadow roots the DOM says may have
@@ -970,6 +1027,7 @@ impl StyleEngine {
                 continue;
             }
             self.testing.collected_tree_scopes = self.testing.collected_tree_scopes.wrapping_add(1);
+            self.sheets_version = self.sheets_version.wrapping_add(1);
             let Some(change) = self.shadow.collect(cx, root, &environment, self.serial) else {
                 continue;
             };
@@ -1031,6 +1089,7 @@ impl StyleEngine {
     /// came and went (or everything, if the environment their media queries
     /// see changed or those kept are in another order).
     fn collect_sheets<'gc>(&mut self, cx: &Cx<'_, 'gc>, document: NodeRef<'gc>) -> SheetsChange {
+        self.sheets_version = self.sheets_version.wrapping_add(1);
         self.testing.collected_tree_scopes = self.testing.collected_tree_scopes.wrapping_add(1);
         let mut owners = Vec::new();
         let mut walk = std::iter::successors(cx.first_child(document), |node| {
@@ -1064,6 +1123,13 @@ impl StyleEngine {
                 && !old.media_changed(&environment)
         });
         if same {
+            let mut old = old;
+            // The same sheets, which may be other objects now.
+            if let Some(old) = &mut old {
+                for (kept, now) in old.sheets.iter_mut().zip(&sheets) {
+                    kept.id = now.id;
+                }
+            }
             self.author = old;
             return SheetsChange::Unchanged;
         }
@@ -1154,11 +1220,12 @@ impl StyleEngine {
                 None if large(sheet) && !sheet.applies(environment) => None,
                 None => {
                     let mut set = RuleSet::default();
-                    for sheet in run {
+                    for (at, sheet) in (0u32..).zip(run) {
                         // A sheet's own `media` (its element's), remembered
                         // with the rest for when the environment changes.
+                        // Its rules numbered by where it is in the run.
                         if !sheet.disabled && set.match_media(&sheet.media, environment) {
-                            set.add_rules(sheet.contents.rules(), environment, 0);
+                            set.add_rules(sheet.contents.rules(), environment, at);
                         }
                     }
                     self.testing.document_rules_indexed = self
@@ -1535,6 +1602,20 @@ struct Source<'s, 'gc> {
     host: Option<NodeRef<'gc>>,
     tree_order: u32,
     first: usize,
+    /// The shadow root whose sheets the index is of (none: the document's,
+    /// or the UA's), which `StyleEngine::explain` finds a rule's sheet in.
+    scope: Option<gfx::NodeId>,
+}
+
+/// Where `StyleEngine::explain` matched a rule from: its cascade place
+/// (the block's `CascadePriority`'s `tree` and `order`), the index and its
+/// number there, and the shadow root whose sheets the index is of.
+pub(crate) struct Provenance<'s> {
+    tree: u32,
+    order: usize,
+    index: &'s RuleIndex,
+    rule: usize,
+    scope: Option<gfx::NodeId>,
 }
 
 /// The form control `element` is to its native look (`style_resolver`'s
@@ -2654,6 +2735,7 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
         element: NodeRef<'gc>,
         inline: Option<&'b Arc<CssPropertyValueSet>>,
         presentation: Option<&'b (Arc<CssPropertyValueSet>, u64)>,
+        mut provenance: Option<&mut Vec<Provenance<'s>>>,
     ) -> [Blocks<'b>; 5]
     where
         's: 'b,
@@ -2681,6 +2763,7 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
                 host,
                 tree_order,
                 first,
+                scope,
             } = source;
             let origin = if std::ptr::eq(index, self.ua) {
                 Origin::UserAgent
@@ -2708,6 +2791,17 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
                         &rule.block,
                         BlockSource::Rule(rule),
                     );
+                    if target == Target::Element
+                        && let Some(provenance) = provenance.as_deref_mut()
+                    {
+                        provenance.push(Provenance {
+                            tree: CascadePriority::tree(tree_order, false),
+                            order: first.saturating_add(order),
+                            index,
+                            rule: order,
+                            scope,
+                        });
+                    }
                 },
             );
         }
@@ -2738,7 +2832,8 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
         presentation: Option<&(Arc<CssPropertyValueSet>, u64)>,
         change: Option<StyleChangeOf<'_>>,
     ) -> (Arc<ComputedStyle>, PseudoStyles) {
-        let [own, before, after, marker, selection] = self.blocks(element, inline, presentation);
+        let [own, before, after, marker, selection] =
+            self.blocks(element, inline, presentation, None);
         // Its pseudo-elements inherit its own.
         let blocking_wheel = self.cx.has_own_blocking_wheel_listener(element);
         let cache = self.cache;
@@ -2923,13 +3018,20 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
             host: None,
             tree_order: 0,
             first: 0,
+            scope: None,
         }];
-        let tree = |index: &'s RuleIndex, first, which, host, tree_order| Source {
+        let tree = |index: &'s RuleIndex,
+                    first,
+                    which,
+                    host,
+                    tree_order,
+                    root: Option<NodeRef<'gc>>| Source {
             index,
             which,
             host,
             tree_order,
             first,
+            scope: root.map(|root| cx.node_id(root)),
         };
         // An element of a `<use>`'s copy matches the rules of the tree of
         // the `<use>` outside any copy, as itself (Blink's
@@ -2939,30 +3041,30 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
             None => sources.extend(
                 self.author
                     .iter()
-                    .map(|(index, first)| tree(index, *first, Which::Tree, None, 0)),
+                    .map(|(index, first)| tree(index, *first, Which::Tree, None, 0, None)),
             ),
             Some(root) => {
                 let host = cx.shadow_host(root);
                 sources.extend(
                     scope(root)
                         .iter()
-                        .map(|(index, first)| tree(index, *first, Which::Tree, host, 0)),
+                        .map(|(index, first)| tree(index, *first, Which::Tree, host, 0, Some(root))),
                 );
                 // A part of a UA shadow tree: its host's tree's rules for
                 // it, the UA's and the author's (css-scoping: the host's
                 // tree's context, before its own).
                 if let Some(control) = host.filter(|_| cx.shadow_pseudo_id(element).is_some()) {
-                    sources.push(tree(self.ua, 0, Which::Part, None, 0));
+                    sources.push(tree(self.ua, 0, Which::Part, None, 0, None));
                     match cx.containing_shadow_root(control) {
                         None => sources.extend(
                             self.author
                                 .iter()
-                                .map(|(index, first)| tree(index, *first, Which::Part, None, 0)),
+                                .map(|(index, first)| tree(index, *first, Which::Part, None, 0, None)),
                         ),
                         Some(outer) => {
                             let outer_host = cx.shadow_host(outer);
                             sources.extend(scope(outer).iter().map(|(index, first)| {
-                                tree(index, *first, Which::Part, outer_host, 0)
+                                tree(index, *first, Which::Part, outer_host, 0, Some(outer))
                             }));
                         }
                     }
@@ -2976,7 +3078,7 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
                 let host = cx.shadow_host(root);
                 sources.extend(
                     scope(root).iter().map(|(index, first)| {
-                        tree(index, *first, Which::Slotted, host, tree_order)
+                        tree(index, *first, Which::Slotted, host, tree_order, Some(root))
                     }),
                 );
             }
@@ -2986,7 +3088,7 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
         if let Some(root) = cx.shadow_root(element) {
             sources.extend(
                 scope(root).iter().map(|(index, first)| {
-                    tree(index, *first, Which::Host, Some(element), tree_order)
+                    tree(index, *first, Which::Host, Some(element), tree_order, Some(root))
                 }),
             );
         }

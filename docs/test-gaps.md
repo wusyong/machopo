@@ -294,6 +294,7 @@
 - 整棵子樹的後代 invalidation set 不強制重算整棵子樹（`any` 的 set 照樣帶下去，每個元素都重算）、debug build 的交叉檢查只為了檢查才走到的元素不套用 set 的那個條件（只在 `descend` 漏算 `below` 時才有差）。
 - matched properties cache 拿到別的位置的 entry（hash 已經含位置，只有 hash 碰撞時有作用）、menu list 的內層元素進快取（UA 的規則用了 `text-overflow: inherit`，這種 style 本來就不存；排除照樣留著當保險）。
 - DevTools 的「說明」的路（`style` 的 `StyleEngine::explain`）match 時設 selector 的 flag（`NeedsSelectorFlags::Yes`）：它說明的是上一次 recalc 照同一份 stylesheet match 過的元素，那時已經設過一樣的 flag，再設一次不改變什麼；不設是照「說明不影響之後的 style」。
+- 文件的 stylesheet 重新收集時沒變（`style` 的 `collect_sheets` 的 `same`），把留著的每一份換成現在的物件的 id（DevTools 的規則的 `styleSheetId` 照它）：現在每個 `CssStyleSheet` 有自己的 media（`Arc`），內容和 media 都是同一個才算沒變，所以沒變時一定是同一個物件，id 本來就一樣。留著是為了之後 media 共用時 id 不會停在舊的物件。
 
 **layout**
 

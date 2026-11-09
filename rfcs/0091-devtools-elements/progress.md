@@ -15,7 +15,10 @@
 | 2a Overlay：框節點、選取元素、`getBoxModel`、`getContentQuads`、`getNodeForLocation` | 完成 | 2026-11-09 |
 | 2b Computed：`CSS.enable`、`getComputedStyleForNode`、`getPlatformFontsForNode`、元素自己的規則、跟著更新、標籤的樣式 | 完成 | 2026-11-09 |
 | 2c 停住時照樣畫、「Paused in debugger」：scheduler、畫 frame 的狀態搬進 `Frame` | 完成 | 2026-11-09 |
-| 3 Styles | 還沒開始 | |
+| 3a stylesheet：`styleSheetAdded`、`styleSheetRemoved`、規則的 `styleSheetId`、`getStyleSheetText`、`<link>` 的原文和再抓、`<style>` 的位置 | 完成 | 2026-11-09 |
+| 3b 位置：`range`、劃掉的宣告、`@media`、`@supports` | 還沒開始 | |
+| 3c 其他的規則：繼承來的、pseudo element、`getAnimatedStylesForNode` | 還沒開始 | |
+| 3d `:hov`：`forcePseudoState` | 還沒開始 | |
 
 ## 驗收
 
@@ -54,6 +57,13 @@
 | 標籤的樣式：顏色一律 `#RRGGBBAA` 和分數、字型、padding、margin、背景；沒有文字的元素沒有顏色和字型；畫出那幾列（黑色的值） | `cargo test -p shell --test it devtools_css::labels_show_styles`、`cargo test -p renderer --lib overlay_agent` |
 | 停住時的 computed 和規則照 script 到那時為止的改動 | `cargo test -p shell --test it devtools_css::styles_are_there_while_paused` |
 | 和 Chrome 一樣：套用的規則（作者的照選擇器、specificity、符合的選擇器、longhand 的值；UA 的一條完整比）、inline style、presentational hint、layout 上的父元素、回答的 key、computed 的值、字型、`computedStyleUpdated`、標籤的樣式、錯誤（只差 `!important` 寫在值裡，已知） | `python3 scripts/test.py cdp css` |
+| 規則屬於哪一份 stylesheet：併成一個 index 的幾份小的各是各的、同樣文字的兩個 `<style>` 各是各的、adopted 的、拿掉再放回去的 `<style>` 是新的；大的（自己一個 index）、shadow tree 的、host 的 `:host`、slot 的 `::slotted()` 是它的 shadow root 的那一份（不套用的那份不算） | `cargo test -p style --test it -- explain::rules_know_their_sheets explain::large_and_shadow_sheets_are_known` |
+| parser 記下 `<style>` 的開始標籤結束的那一行（跨行的標籤是最後一行），script 建的沒有 | `cargo test -p html --test it sink::the_document_parser_notes_where_styles_start` |
+| `<style>` 的文字在原文裡的位置：那一行的 `<style` 的 `>` 之後（UTF-16 的欄），幾個裡選文字接得上的、都接不上時第一個，CR LF，文字裡的 `>`；結束的位置 | `cargo test -p renderer --lib css_agent` |
+| stylesheet 的 header 和原文：`<link>`（原文、`ownerNode`、`loadingFailed`）、`<style>`（位置、`title`）、adopted（序列化）、shadow root 的；同一個 frame、id 不重複；規則和它的 style 帶著它的 stylesheet 的 id，UA 的沒有；找不到的 id；連上時載入的 `<link>` 不再抓 | `cargo test -p shell --test it devtools_css::style_sheets_are_told_with_their_texts` |
+| stylesheet 的來去：`<style>` 的文字改了先送移除再送一份新的、`<link>` 拿掉、adopt 一份、iframe 的和它的改動；沒有改動不送；`disable` 之後不送，再 `enable` 送現在的 | `cargo test -p shell --test it devtools_css::sheets_coming_and_going_are_told` |
+| 連上之前載入的 `<link>`：第一次要時照它的 `<link>` 再抓（`crossorigin` 用 CORS），同時要的兩次一起等一次，規則一樣時給原文、改過時給序列化的，之後不再抓 | `cargo test -p shell --test it devtools_css::link_sheets_loaded_before_devtools_are_fetched_again` |
+| 和 Chrome 一樣：每份 stylesheet 的 header、原文、規則的 `styleSheetId`、`<style>` 的文字改了和 `<link>` 拿掉時的事件、找不到的 id（只差 `innerHTML` 建的 `<style>` 的位置，已知） | `python3 scripts/test.py cdp css_sheets` |
 | main thread 的 scheduler：每個 queue 的 task 照送進來的順序；停住時只取 DevTools 和 rendering 的（main frame、`RequestVisualState`），其他的（Browser 的訊息、輸入、canvas）留著、不亂順序；等的時候看得到之後送來的、有 timeout 的會放棄；要打斷 script 的照舊單獨取出；停住留下的放回最前面；main thread 走了之後送不進去 | `cargo test -p renderer --lib task_queue` |
 | 停住時照樣畫：Console 的改動、框的節點、拿掉的框；`setPausedInDebuggerMessage` 的提示（頁面蓋上一層、上方中間的淡黃色框），`Overlay` 關著的 session 的不畫、拿掉之後沒有；繼續之後照常畫 | `cargo test -p shell --test it devtools_overlay::the_page_is_drawn_while_paused` |
 | 停住時的輸入等到繼續才處理 | `cargo test -p shell --test it devtools_overlay::input_waits_for_the_pause` |
@@ -154,6 +164,22 @@
   - 重跑：12 條抓到、1 條卡住，漏的是上面記下的 4 條；補了 `Overlay` 關掉的情況之後那一條也抓到。
 - **第 2 段做完時的檢查**：`cargo test --workspace` 全部通過；`cargo fmt` 之後 `--check` 沒有差異；`cargo clippy --workspace --all-targets -- -D warnings` 修了兩處（測試沒用到的變數、`frame()` 不用寫出的 lifetime）之後通過；`test.py automation`：第一次 60 個情境過了 37 個，前面連續 23 個說沒畫出 frame（「is the window hidden?」），同樣的 commit 之前的版本照跑全過、那幾個重跑也過、整套重跑 60 個全過，pipe 的測試也過，是那時的顯示器（第一次跑時視窗畫不出來），不是程式；`sanity.py` 的 7 項都通過。
 
+### 3a stylesheet（2026-11-09，macOS）
+
+- **開始前定的事**：「已決定的事項」第 11 條（T5：`<link>` 的原文連上之後留、之前的要用時再抓）、第 12 條（R2，3b 用）、第 19 條（S1：建 index 時記下規則的 stylesheet）、第 20 條（L1：parser 記行、從原文找欄）；第 3 段分成 3a 到 3d。
+- **新的測試**：`style` 的 `explain::rules_know_their_sheets`、`large_and_shadow_sheets_are_known`；`html` 的 `sink::the_document_parser_notes_where_styles_start`；`renderer` 的 `css_agent::tests`（2 個）；`shell` 的 `devtools_css::style_sheets_are_told_with_their_texts`、`sheets_coming_and_going_are_told`、`link_sheets_loaded_before_devtools_are_fetched_again`；`test.py cdp` 加 `css_sheets` 一組。
+- **做的時候改掉的**：html5ever 給的行是開始標籤結束的那一行（跨行的標籤是最後一行，原本以為是 `<` 的那一行），文件和第 20 條照實寫；再抓的請求原本照清單的位置對回去，清單在抓的期間變了就對錯，改成照 stylesheet 的內容（它的位址）對。
+- **和 Chrome 比**（Chrome for Testing 152，`test.py cdp css_sheets`）：只剩已知的一項（`innerHTML` 建的 `<style>` 的位置：Chrome 給 fragment parser 的，machopo 是 0、0）。一開始比的時候：
+  - 改過文字的 `<style>` 的位置：原本用文字找 `>`，文字改了就找不到、給 0、0；Chrome 照樣給元素的位置，改成找 `<style` 的 `>`，文字只用來在同一行的幾個裡選。
+  - 比對本身的錯：規則的 `styleSheetId` 包在 tuple 裡時沒有換成佔位的字，改成 dict。
+- **mutation test**（`mutants-3a.toml`，29 條）：第一次抓到 25 條，漏了 4 條：
+  - 一串小的 stylesheet 從文件的第一份算起：測試裡的串都從第一份開始；大的後面加一份小的，抓到。
+  - 只有 shadow root 的 stylesheet 重新收集時版本不動：沒有測試只改 shadow root 的；補了改它的 `<style>` 的文字，抓到。
+  - `<style>` 的文字裡的 `>` 當成開始標籤的結尾：補了單元測試，抓到。
+  - 沒變的 stylesheet 不換成現在的物件的 id：等價（每個物件有自己的 media，沒變時一定是同一個物件），記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。
+  - 重跑漏的三條：都抓到。
+- **跑過的檢查**：`cargo test -p style -p html -p dom -p renderer -p shell` 全部通過；`test.py cdp css css_sheets` 只有已知的差異；`sanity.py` 的 7 項都通過。第 3 段做完時才跑 `cargo test --workspace`、`fmt`、clippy。
+
 ### 第 1、2 段的手動確認（2026-11-09，macOS）
 
 `machopo --remote-debugging-port=9222` 的視窗開一頁測試的頁面（卡片、有 padding 和 border 的 box、CSS 動畫、shadow root、iframe、加元素和切換屬性的按鈕、跑到 `debugger` 的按鈕），Chrome for Testing 152 的 `chrome://inspect` 打開 DevTools，兩個視窗並排（machopo 的視窗被蓋住時 Viz 不畫，看不到框）。
@@ -162,3 +188,12 @@
 - **2a**：滑過樹裡的節點時頁面框出四個顏色的圈和標籤（`div#box 150×90`）；選取元素的模式框跟著滑鼠、點下去選到元素、頁面收不到那次點擊；box model 的圖。都對。標籤的位置和 Chrome 不同：machopo 從 border 的下緣往下放，壓到 margin，Chrome 照包含 margin 的整個框放（放得下時在上面）。之後照 `drawElementTitle` 改（`place_label`）：`renderer` 的 `overlay_agent::tests::labels_are_placed_as_chrome_places_them`、`shell` 的 `devtools_overlay::labels_stay_off_the_margin`；mutation test 加 5 條（`mutants-2c.toml` 最後的「The label's place」），都抓到。
 - **2b**：Computed 的 box model、預設的清單、property 的來源、Show all、跟著動畫變的值、Rendered Fonts；選取元素時標籤的 Color、Font、Background、Margin、Padding。都對。和 Chrome 不同的一項：動畫給的 property（`#mover` 的 `margin-left`）不在 Computed 的預設清單裡，Styles 也沒有動畫的區塊，Chrome 經過 `getAnimatedStylesForNode` 拿（記進「分階段」的第 3 段）。
 - **2c**：按頁面的按鈕停在 `debugger`：頁面蓋上一層、「Paused in debugger」、Sources 停在那一行；停住時 Console 改的背景、滑過的節點照樣畫；繼續之後提示拿掉、背景變回去、動畫接著走。都對。
+
+### 3a 的手動確認（2026-11-09，macOS）
+
+和第 1、2 段同一個頁面，加上一個 `<link>`（開頭有一行註解）和一份 adopted 的 stylesheet；先載入、再用 Chrome for Testing 152 連上。
+
+- Sources 列出 `style.css`，打開是原檔（有註解，連上之前載入的、補抓的）；inline 的 `<style>` 在 `(index)` 裡，adopted 的沒有網址、不列（和 Chrome 一樣）。
+- Styles：adopted 的規則標著 `constructed stylesheet`；`<link>` 和 `<style>` 的規則標著 `<style>`，點下去分別選到 `<link>` 和 `<style>` 元素（規則還沒有位置，前端就這樣顯示；有了位置之後是「檔名:行」）。
+- Console 改 `<style>` 的文字、加一個 `<link>`、拿掉原本的 `<link>`：Styles 和 Sources 跟著變。
+- DevTools 連著時重新整理：`style.css` 照樣是原檔，伺服器只收到載入的那一次請求；連上之前載入的那次，打開時多一次請求（補抓）。

@@ -384,8 +384,10 @@ pub(super) fn update_lifecycle_and_layers(
     frame.widget.rendered_tree_version = dom.read(|cx| cx.tree_version());
     let output = frame.update_all_lifecycle_phases(dom);
     drop(lifecycle);
-    // The node DevTools' Computed pane follows, if its style changed.
+    // The node DevTools' Computed pane follows, if its style changed, and
+    // the sheets, if they did.
     css_agent.styles_updated(dom, frame);
+    css_agent.sheets_updated(dom, frame);
     let update_layers = trace_event::trace_event!("LayerTreeHost::DoUpdateLayers");
     let unchanged = frame
         .widget
@@ -3828,6 +3830,59 @@ impl RenderThread {
     /// no rules, as Chrome's), its `url()`s against where it ended up;
     /// then the link's `load` or `error`, the next frame, and the
     /// document's `load` if it waited for this.
+    /// The `<link>` sheets DevTools' `CSS` wants the texts of and hasn't
+    /// (loaded before it came), fetched again as their `<link>`s fetched
+    /// them; their responses go to it (`css_refetched`).
+    pub(super) fn start_css_refetches(&mut self) {
+        for (key, href, cors, document) in self.css_agent.take_refetches() {
+            let Some(frame) = self.frame_of_document(document) else {
+                self.css_agent.refetched(key, None, None);
+                continue;
+            };
+            let Ok(url) = Url::parse(&href) else {
+                self.css_agent.refetched(key, None, None);
+                continue;
+            };
+            let mut request = ResourceRequest::new(url.as_str(), RequestDestination::Style);
+            request.initiator = self.document_origin(frame);
+            if let Some(include) = cors {
+                request.mode = RequestMode::Cors;
+                request.credentials = if include {
+                    CredentialsMode::Include
+                } else {
+                    CredentialsMode::SameOrigin
+                };
+            }
+            let request_id = self.send_request_with_initiator(frame, request, |_| None);
+            self.css_refetches.insert(request_id, (key, frame));
+        }
+    }
+
+    /// A sheet DevTools' `CSS` fetched again came: decoded as its `<link>`'s
+    /// was, handed to the agent.
+    pub(super) fn css_refetched(&mut self, key: usize, frame: FrameId, result: &LoadResult) {
+        let Some(next) = self.doc(frame) else {
+            self.css_agent.refetched(key, None, None);
+            return;
+        };
+        let (document, encoding) = (next.document.clone(), next.encoding);
+        let quirks = self.engine.as_mut().is_some_and(|engine| {
+            engine
+                .dom_mut()
+                .read(|cx| cx.quirks_mode(document.get(cx.gc)) == dom::QuirksMode::Quirks)
+        });
+        let text = stylesheet_text(result, quirks, encoding);
+        let base = result
+            .as_ref()
+            .ok()
+            .and_then(|response| Url::parse(&response.url).ok())
+            .map(|url| {
+                let referrer = url.to_string();
+                css::UrlContext::new(url, &referrer)
+            });
+        self.css_agent.refetched(key, text, base);
+    }
+
     fn sheet_loaded(&mut self, frame: FrameId, sheet: PendingSheet, result: &LoadResult) {
         let Some(next) = self.doc(frame) else {
             return;
@@ -3853,9 +3908,6 @@ impl RenderThread {
             next.failed
                 .push(failed_url(result, Some(sheet.url.as_str())));
         }
-        let Some(engine) = &mut self.engine else {
-            return;
-        };
         let base = result
             .as_ref()
             .ok()
@@ -3868,6 +3920,16 @@ impl RenderThread {
             css.as_deref().unwrap_or_default(),
             base,
         ));
+        // Its text as it came, for DevTools (Chrome's from its cache); kept
+        // only while a session is attached.
+        if let Some(css) = &css
+            && !self.devtools_sessions.is_empty()
+        {
+            self.css_agent.keep_link_text(&contents, css);
+        }
+        let Some(engine) = &mut self.engine else {
+            return;
+        };
         engine.dom_mut().mutate(|cx| {
             cx.set_link_sheet(
                 sheet.link.get(cx.gc),

@@ -197,6 +197,20 @@ impl<'gc> Cx<'_, 'gc> {
 
     // --- An element's sheet.
 
+    /// `style`, a `<style>` the parser made, has its start tag end on `line`
+    /// of its document's markup, where its text starts (DevTools' `CSS`
+    /// tells where its sheet's text is from it).
+    pub fn set_style_parser_line(&self, style: NodeRef<'gc>, line: u32) {
+        self.element_data(style).parser_line.set(line);
+    }
+
+    /// The line `style`'s start tag ends on in its document's markup, if
+    /// the parser made it (`set_style_parser_line`).
+    pub fn style_parser_line(&self, style: NodeRef<'gc>) -> Option<u32> {
+        let data = style.data.get(self.gc)?.downcast::<crate::style::ElementData>()?;
+        Some(data.parser_line.get()).filter(|&line| line != 0)
+    }
+
     /// `link`'s sheet loaded: `contents`, asked for at `href`, origin-clean
     /// or not (another origin's, not by CORS, isn't: script can't read its
     /// rules). The sheet it had before is no longer its; its tree scope's

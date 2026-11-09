@@ -329,6 +329,9 @@ struct RenderThread {
     /// DevTools' `CSS` domain (Blink's `InspectorCSSAgent`): before the
     /// engine, as the styles it keeps are of the engine's DOM.
     css_agent: Rc<css_agent::CssAgent>,
+    /// The `<link>` sheets DevTools' `CSS` fetches again for their texts,
+    /// by request: the agent's key of each, and its frame.
+    css_refetches: std::collections::HashMap<u64, (usize, dom_api::FrameId)>,
     /// DevTools' `Overlay` domain (Blink's `InspectorOverlayAgent`).
     overlay_agent: Rc<overlay_agent::OverlayAgent>,
     /// The DOM's engine, made at its first document, or at DevTools'
@@ -393,6 +396,8 @@ impl RenderThread {
         let css_agent = Rc::new(css_agent::CssAgent::new(
             to_browser.clone(),
             dom_agent.clone(),
+            page_agent.clone(),
+            frame_id_prefix,
         ));
         let overlay_agent = Rc::new(overlay_agent::OverlayAgent::new(
             to_browser.clone(),
@@ -446,6 +451,7 @@ impl RenderThread {
             log_agent,
             dom_agent,
             css_agent,
+            css_refetches: std::collections::HashMap::new(),
             overlay_agent,
             scheduler,
             engine: None,
@@ -519,8 +525,10 @@ impl RenderThread {
             // attached, navigated and removed, to DevTools.
             self.check_network_idle();
             self.tell_frames();
-            // The DOM's changes the tasks made, to DevTools.
+            // The DOM's changes the tasks made, to DevTools; the sheets its
+            // `CSS` wants the texts of, asked for.
             self.tell_dom_changes();
+            self.start_css_refetches();
             // What DevTools' overlay shows follows its node at each frame,
             // and draws once it changes.
             if self.overlay_agent.showing()
@@ -1386,6 +1394,12 @@ impl RenderThread {
         let redirects = self.frame_redirects.remove(&request_id).unwrap_or_default();
         self.network_agent.did_finish(request_id, &result);
         let url = self.next_request_id.answered(request_id);
+        // DevTools' `CSS`'s: a sheet's text, its alone.
+        if let Some((key, frame)) = self.css_refetches.remove(&request_id) {
+            self.log_load(request_id, url.as_deref(), &result);
+            self.css_refetched(key, frame, &result);
+            return;
+        }
         self.log_load(request_id, url.as_deref(), &result);
         self.record_resource(request_id, url.as_deref(), &result);
         self.resource(request_id, url.as_deref(), &result, &redirects);

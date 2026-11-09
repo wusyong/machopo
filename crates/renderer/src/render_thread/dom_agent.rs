@@ -216,6 +216,11 @@ impl DomAgent {
     /// has another document than before is told as its iframe taken out
     /// and put back, with its new document (Blink's
     /// `InvalidateFrameOwnerElement`).
+    /// The frames as last told (`set_frames`), the top-level one first.
+    pub(crate) fn frames(&self) -> Vec<DomFrame> {
+        self.frames.borrow().clone()
+    }
+
     pub(crate) fn set_frames(&self, dom: &Dom, frames: Vec<DomFrame>) {
         let changed: Vec<NodeId> = {
             let known = self.frames.borrow();

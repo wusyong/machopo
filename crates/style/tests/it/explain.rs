@@ -219,3 +219,165 @@ fn a_rule_in_two_places_is_listed_twice() {
         [(".a".to_owned(), vec![0]), (".a".to_owned(), vec![0])]
     );
 }
+
+/// The sheets (their ids) of the author rules, by selector.
+fn author_sheets(explained: &Explained) -> Vec<(String, Option<u64>)> {
+    explained
+        .rules
+        .iter()
+        .filter(|rule| rule.origin == Origin::Author)
+        .map(|rule| (rule.rule.selector_text(), rule.sheet))
+        .collect()
+}
+
+/// The ids of the sheets of the elements `selector` finds, in tree order
+/// (a shadow host's shadow tree's before its children).
+fn sheet_ids(page: &mut Page, selector: &str) -> Vec<u64> {
+    let document = &page.document;
+    page.dom.mutate(|cx| {
+        let document = document.get(cx.gc);
+        let mut ids = Vec::new();
+        let mut at = cx.first_child(document);
+        let mut all = Vec::new();
+        while let Some(node) = at {
+            all.push(node);
+            let shadow = cx.shadow_root(node).and_then(|root| cx.first_child(root));
+            at = shadow.or_else(|| cx.first_child(node)).or_else(|| {
+                let mut up = Some(node);
+                while let Some(here) = up {
+                    if let Some(next) = cx.next_sibling(here) {
+                        return Some(next);
+                    }
+                    // Out of a shadow tree: its host's children, or on
+                    // from its host.
+                    if let Some(host) = cx.parent(here).and_then(|parent| cx.shadow_host(parent)) {
+                        if let Some(child) = cx.first_child(host) {
+                            return Some(child);
+                        }
+                        up = Some(host);
+                        continue;
+                    }
+                    up = cx.parent(here);
+                }
+                None
+            });
+        }
+        for node in all {
+            if cx.kind(node) == dom::NodeKind::Element
+                && cx.node_name(node).to_str().eq_ignore_ascii_case(selector)
+                && let Some(sheet) = cx.owner_sheet(node)
+            {
+                ids.push(cx.style_sheet_id(sheet));
+            }
+        }
+        ids
+    })
+}
+
+/// Each rule's sheet: of the small sheets one index has, each its own;
+/// two `<style>`s of the same text (one parse, the same rules) each theirs;
+/// an adopted sheet; once a `<style>` is taken out and put back (the same
+/// to style, another object), the new one.
+#[test]
+fn rules_know_their_sheets() {
+    let mut page = Page::new(
+        "<!doctype html><style>p { color: red }</style><style>.a { color: blue }</style>\
+         <style>#p { margin: 0 }</style><style>#p { margin: 0 }</style><p id=p class=a>p</p>",
+    );
+    let ids = sheet_ids(&mut page, "style");
+    assert_eq!(ids.len(), 4);
+    let explained = explain(&mut page, "p").unwrap();
+    assert_eq!(
+        author_sheets(&explained),
+        [
+            ("p".to_owned(), Some(ids[0])),
+            (".a".to_owned(), Some(ids[1])),
+            ("#p".to_owned(), Some(ids[2])),
+            ("#p".to_owned(), Some(ids[3])),
+        ]
+    );
+    assert!(explained.rules.iter().filter(|rule| rule.origin == Origin::UserAgent).all(|rule| rule.sheet.is_none()));
+
+    // Adopted, after the document's own.
+    let document = &page.document;
+    let adopted = page.dom.mutate(|cx| {
+        let document = document.get(cx.gc);
+        let sheet = cx.create_style_sheet(
+            document,
+            std::sync::Arc::new(css::StyleSheetContents::parse(".a { padding: 0 }", None)),
+            "",
+            false,
+        );
+        cx.set_adopted_style_sheet(document, 0, sheet);
+        cx.style_sheet_id(sheet)
+    });
+    page.recalc();
+    let explained = explain(&mut page, "p").unwrap();
+    let sheets = author_sheets(&explained);
+    // After the `<style>`'s `.a`, by where it comes (its specificity, the
+    // same, below the `#p`s').
+    let style_a = sheets.iter().position(|sheet| *sheet == (".a".to_owned(), Some(ids[1])));
+    let adopted_a = sheets.iter().position(|sheet| *sheet == (".a".to_owned(), Some(adopted)));
+    assert!(style_a.is_some() && adopted_a == style_a.map(|at| at + 1), "{sheets:?}");
+
+    // The first `<style>` taken out and put back: another object of the
+    // same contents.
+    page.with("p", |cx, p| {
+        // The `<style>`s are the `<head>`'s.
+        let html = cx.parent(cx.parent(p).unwrap()).unwrap();
+        let parent = cx.first_child(html).unwrap();
+        let style = cx.first_child(parent).unwrap();
+        let next = cx.next_sibling(style).unwrap();
+        cx.remove(style);
+        cx.insert(parent, style, Some(next));
+    });
+    page.recalc();
+    let again = sheet_ids(&mut page, "style");
+    assert_ne!(again[0], ids[0]);
+    let explained = explain(&mut page, "p").unwrap();
+    assert_eq!(author_sheets(&explained)[0], ("p".to_owned(), Some(again[0])));
+}
+
+/// A large sheet (an index of its own), a small one after it, and a shadow
+/// tree's sheets: a rule
+/// of its tree's, a host's `:host` rule, a slotted element's `::slotted()`
+/// rule, each of its root's sheet (one that doesn't apply not counted).
+#[test]
+fn large_and_shadow_sheets_are_known() {
+    let mut big = String::from("<!doctype html><style>");
+    for at in 0..600 {
+        big.push_str(&format!(".x{at} {{ color: red }} "));
+    }
+    // A small sheet after it, of an index of its own that starts there.
+    big.push_str(
+        "#host { color: blue }</style><style>#host { padding: 1px }</style>\
+         <div id=host><b id=light slot=s>b</b></div>",
+    );
+    let mut page = Page::with_shadows(
+        &big,
+        &[(
+            "host",
+            "<style media=print>i { color: black }</style><style>:host { color: green }</style>\
+             <style>::slotted(b) { color: gray } i { color: pink }</style>\
+             <i id=inner>i</i><slot name=s></slot>",
+        )],
+    );
+    let [document_sheet, small_sheet, _print, host_sheet, inner_sheet] =
+        sheet_ids(&mut page, "style")[..]
+    else {
+        panic!("five sheets");
+    };
+    let host = explain(&mut page, "host").unwrap();
+    assert_eq!(
+        author_sheets(&host),
+        [
+            (":host".to_owned(), Some(host_sheet)),
+            ("#host".to_owned(), Some(document_sheet)),
+            ("#host".to_owned(), Some(small_sheet))
+        ]
+    );
+    let inner = explain(&mut page, "inner").unwrap();
+    assert_eq!(author_sheets(&inner), [("i".to_owned(), Some(inner_sheet))]);
+    let light = explain(&mut page, "light").unwrap();
+    assert_eq!(author_sheets(&light)[0], ("::slotted(b)".to_owned(), Some(inner_sheet)));
+}

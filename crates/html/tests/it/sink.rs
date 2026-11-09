@@ -327,6 +327,47 @@ fn the_document_parser_knows_where_its_loads_start() {
     drop(document);
 }
 
+/// The document's parser notes the line each `<style>`'s start tag ends
+/// on, where its text starts (DevTools tells where its sheet's text is
+/// from it): of a tag over two lines, the second; its own only, not one
+/// script makes, nor an SVG `<style>`.
+#[test]
+fn the_document_parser_notes_where_styles_start() {
+    let mut dom = Dom::new();
+    let document = html::parser::parse_document(
+        &mut dom,
+        "<!DOCTYPE html>\n<style>a {}</style>\n\n<p>\n<style\n media=all>b {}</style>\
+         <svg><style>c {}</style></svg>",
+        true,
+    );
+    let lines: Vec<Option<u32>> = dom.mutate(|cx| {
+        let document = document.root().get(cx.gc);
+        let made = cx.create_element(document, QualName::html("style"));
+        let mut styles = Vec::new();
+        let mut at = cx.first_child(document);
+        while let Some(node) = at {
+            if cx.kind(node) == NodeKind::Element
+                && cx.node_name(node).to_str().eq_ignore_ascii_case("style")
+            {
+                styles.push(node);
+            }
+            at = cx.first_child(node).or_else(|| {
+                let mut up = Some(node);
+                while let Some(here) = up {
+                    if let Some(next) = cx.next_sibling(here) {
+                        return Some(next);
+                    }
+                    up = cx.parent(here);
+                }
+                None
+            });
+        }
+        styles.push(made);
+        styles.into_iter().map(|style| cx.style_parser_line(style)).collect()
+    });
+    assert_eq!(lines, [Some(2), Some(6), None, None]);
+}
+
 /// An HTML element whose name the document's window's registry defines,
 /// the document's parser asks its engine to construct (with its
 /// attributes) as it inserts it in the document, and puts the element it

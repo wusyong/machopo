@@ -4,7 +4,9 @@
 //! parent's); the rules it matches in cascade order with the selectors
 //! that match, its inline style and presentational hints, its layout
 //! parent; the fonts of its text; its style followed while Computed is
-//! open; the overlay label's styles; all of it while script is paused too.
+//! open; the overlay label's styles; all of it while script is paused too;
+//! the style sheets, with their texts, told as they come and go, and the
+//! sheet each rule is of.
 
 use net::test_server::Route;
 use serde_json::{Value, json};
@@ -28,7 +30,12 @@ fn error(answer: Value) -> String {
 
 /// `html` loaded, `DOM` and `CSS` on: the session and the document's node.
 fn css_page(html: &str) -> (Machopo, Client, Value, net::test_server::TestServer) {
-    let server = server(&[("/", Route::ok("text/html", html))]);
+    css_site(&[("/", Route::ok("text/html", html))])
+}
+
+/// `css_page` of a site with `routes`, its page at `/`.
+fn css_site(routes: &[(&str, Route)]) -> (Machopo, Client, Value, net::test_server::TestServer) {
+    let server = server(routes);
     let machopo = Machopo::start();
     let (mut page, _) = page(&machopo);
     load(&mut page, &server.url("/"));
@@ -498,4 +505,344 @@ fn styles_are_there_while_paused() {
     );
     page.call(None, "Debugger.resume", json!({}));
     page.answer(evaluated);
+}
+
+/// The `CSS.styleSheetAdded` events that came already, unread: their
+/// headers.
+fn added(page: &mut Client) -> Vec<Value> {
+    page.take_events("CSS.styleSheetAdded")
+        .into_iter()
+        .map(|event| event["params"]["header"].clone())
+        .collect()
+}
+
+/// `getStyleSheetText` of the sheet `id`.
+fn sheet_text(page: &mut Client, id: &Value) -> String {
+    let answer = result(page.call(
+        None,
+        "CSS.getStyleSheetText",
+        json!({ "styleSheetId": id }),
+    ));
+    answer["text"].as_str().unwrap().to_owned()
+}
+
+/// A header's place: its start's line and column, its end's, its length.
+fn place(header: &Value) -> [&Value; 5] {
+    [
+        &header["startLine"],
+        &header["startColumn"],
+        &header["endLine"],
+        &header["endColumn"],
+        &header["length"],
+    ]
+}
+
+const SHEETS: &str = "<!DOCTYPE html>
+<link rel=stylesheet href=/style.css>
+<style media=screen title=t>
+p { color: red }
+</style>
+<p class=a>p</p><div id=host></div>
+<script>
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync('.a { margin: 1px }');
+  document.adoptedStyleSheets = [sheet];
+  host.attachShadow({ mode: 'open' }).innerHTML = '<style>span { color: blue }</style><span>s</span>';
+</script>";
+
+/// Each sheet told as `CSS` comes on, before its answer: the document's
+/// (a `<link>`'s, a `<style>`'s, an adopted one's) and a shadow root's;
+/// with its URL, owner, title and place (a `<style>`'s text where it is in
+/// the markup); its text, a `<link>`'s as it came; and the sheet each rule
+/// an element matches is of.
+#[test]
+fn style_sheets_are_told_with_their_texts() {
+    let link = "/* as it came */\np { padding: 2px }\n";
+    let (_machopo, mut page, document, server) = css_site(&[
+        ("/", Route::ok("text/html", SHEETS)),
+        ("/style.css", Route::ok("text/css", link)),
+    ]);
+    let headers = added(&mut page);
+    assert_eq!(headers.len(), 4, "{headers:?}");
+    let [from_link, from_style, adopted, shadow] = &headers[..] else {
+        unreachable!()
+    };
+    let backend = |page: &mut Client, selector: &str| {
+        let element = node(page, &document, selector);
+        result(page.call(None, "DOM.describeNode", json!({ "nodeId": element })))["node"]
+            ["backendNodeId"]
+            .clone()
+    };
+    let page_url = server.url("/");
+
+    assert_eq!(from_link["sourceURL"], server.url("/style.css"));
+    assert_eq!(from_link["ownerNode"], backend(&mut page, "link"));
+    assert_eq!(
+        (&from_link["isInline"], &from_link["loadingFailed"]),
+        (&json!(false), &json!(false))
+    );
+    assert_eq!(sheet_text(&mut page, &from_link["styleSheetId"]), link);
+    // Kept as it came: not fetched again.
+    let fetched = server.requests().iter().filter(|request| request.target == "/style.css").count();
+    assert_eq!(fetched, 1);
+    assert_eq!(place(from_link), [&json!(0), &json!(0), &json!(2), &json!(0), &json!(36)]);
+
+    assert_eq!(from_style["sourceURL"], page_url);
+    assert_eq!(from_style["ownerNode"], backend(&mut page, "style"));
+    assert_eq!(
+        (&from_style["isInline"], &from_style["title"], &from_style["isMutable"]),
+        (&json!(true), &json!("t"), &json!(false))
+    );
+    assert!(from_style.get("loadingFailed").is_none(), "{from_style}");
+    assert_eq!(
+        sheet_text(&mut page, &from_style["styleSheetId"]),
+        "\np { color: red }\n"
+    );
+    // After `<style media=screen title=t>`, on the markup's third line.
+    assert_eq!(place(from_style), [&json!(2), &json!(28), &json!(4), &json!(0), &json!(18)]);
+
+    assert_eq!(
+        (&adopted["sourceURL"], &adopted["isConstructed"], &adopted["isMutable"]),
+        (&json!(""), &json!(true), &json!(true))
+    );
+    assert!(adopted.get("ownerNode").is_none(), "{adopted}");
+    assert_eq!(
+        sheet_text(&mut page, &adopted["styleSheetId"]),
+        ".a { margin: 1px; }\n"
+    );
+
+    assert_eq!(
+        (&shadow["sourceURL"], &shadow["isInline"]),
+        (&json!(page_url), &json!(true))
+    );
+    assert_eq!(
+        sheet_text(&mut page, &shadow["styleSheetId"]),
+        "span { color: blue }"
+    );
+    let ids: Vec<&Value> = headers.iter().map(|header| &header["styleSheetId"]).collect();
+    assert!(
+        ids.iter().enumerate().all(|(at, id)| !ids[..at].contains(id)),
+        "{ids:?}"
+    );
+    assert!(
+        headers.iter().all(|header| header["frameId"] == headers[0]["frameId"]),
+        "{headers:?}"
+    );
+
+    // The rules `p` matches, each with its sheet's id.
+    let p = node(&mut page, &document, "p");
+    let matched = result(page.call(None, "CSS.getMatchedStylesForNode", json!({ "nodeId": p })));
+    let of = |selector: &str, property: &str| {
+        let rule = matched["matchedCSSRules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|matched| &matched["rule"])
+            .find(|rule| {
+                rule["selectorList"]["text"] == selector
+                    && rule["style"]["cssProperties"][0]["name"] == property
+            })
+            .unwrap_or_else(|| panic!("{selector} {{ {property} }}: {matched}"));
+        assert_eq!(rule["style"]["styleSheetId"], rule["styleSheetId"]);
+        rule["styleSheetId"].clone()
+    };
+    assert_eq!(of("p", "padding-top"), from_link["styleSheetId"]);
+    assert_eq!(of("p", "color"), from_style["styleSheetId"]);
+    assert_eq!(of(".a", "margin-top"), adopted["styleSheetId"]);
+    // The UA's: of none.
+    let ua = matched["matchedCSSRules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|matched| matched["rule"]["origin"] == "user-agent")
+        .unwrap_or_else(|| panic!("a UA rule: {matched}"));
+    assert!(ua["rule"].get("styleSheetId").is_none(), "{ua}");
+
+    assert_eq!(
+        error(page.call(
+            None,
+            "CSS.getStyleSheetText",
+            json!({ "styleSheetId": "style-sheet-0-0" })
+        )),
+        "No style sheet with given id found"
+    );
+}
+
+/// A sheet that goes is told gone, one that comes told come: a `<style>`'s
+/// whose text changes both, as a new sheet; a `<link>` removed gone; a
+/// sheet adopted come; a shadow root's and a frame's too. A session with `CSS` off is told
+/// nothing.
+#[test]
+fn sheets_coming_and_going_are_told() {
+    let (_machopo, mut page, _document, _server) = css_site(&[
+        ("/", Route::ok("text/html", SHEETS)),
+        ("/style.css", Route::ok("text/css", "p { padding: 2px }")),
+    ]);
+    let headers = added(&mut page);
+    let id = |at: usize| headers[at]["styleSheetId"].clone();
+
+    evaluate(&mut page, "document.querySelector('style').textContent = 'p { color: blue }'", None);
+    let removed = page.event("CSS.styleSheetRemoved");
+    assert_eq!(removed["params"]["styleSheetId"], id(1));
+    let come = page.event("CSS.styleSheetAdded")["params"]["header"].clone();
+    assert_ne!(come["styleSheetId"], id(1));
+    assert_eq!(come["isInline"], true);
+    assert_eq!(sheet_text(&mut page, &come["styleSheetId"]), "p { color: blue }");
+
+    evaluate(&mut page, "document.querySelector('link').remove()", None);
+    assert_eq!(
+        page.event("CSS.styleSheetRemoved")["params"]["styleSheetId"],
+        id(0)
+    );
+    assert_eq!(
+        error(page.call(None, "CSS.getStyleSheetText", json!({ "styleSheetId": id(0) }))),
+        "No style sheet with given id found"
+    );
+
+    evaluate(
+        &mut page,
+        "const more = new CSSStyleSheet(); more.replaceSync('b { color: red }'); \
+         document.adoptedStyleSheets = [...document.adoptedStyleSheets, more]",
+        None,
+    );
+    let adopted = page.event("CSS.styleSheetAdded")["params"]["header"].clone();
+    assert_eq!(adopted["isConstructed"], true);
+    assert_eq!(sheet_text(&mut page, &adopted["styleSheetId"]), "b { color: red; }\n");
+    two_frames(&mut page);
+    assert!(page.take_events("CSS.styleSheet").is_empty());
+
+    // A shadow root's.
+    evaluate(
+        &mut page,
+        "host.shadowRoot.querySelector('style').textContent = 'span {}'",
+        None,
+    );
+    assert_eq!(
+        page.event("CSS.styleSheetRemoved")["params"]["styleSheetId"],
+        id(3)
+    );
+    let shadow = page.event("CSS.styleSheetAdded")["params"]["header"].clone();
+    assert_eq!(sheet_text(&mut page, &shadow["styleSheetId"]), "span {}");
+
+    // Off: nothing told.
+    result(page.call(None, "CSS.disable", json!({})));
+    evaluate(&mut page, "document.querySelector('style').remove()", None);
+    two_frames(&mut page);
+    assert!(page.take_events("CSS.styleSheet").is_empty());
+    // On again: what there is now.
+    result(page.call(None, "CSS.enable", json!({})));
+    assert_eq!(added(&mut page).len(), 3);
+
+    // A frame's: its sheet come with it, gone and come as its text changes.
+    evaluate(
+        &mut page,
+        "const frame = document.createElement('iframe'); \
+         frame.srcdoc = '<style>i { color: red }</style>'; document.body.append(frame)",
+        None,
+    );
+    let framed = page.event("CSS.styleSheetAdded")["params"]["header"].clone();
+    assert_ne!(framed["frameId"], headers[0]["frameId"]);
+    evaluate(
+        &mut page,
+        "document.querySelector('iframe').contentDocument.querySelector('style').textContent = 'i {}'",
+        None,
+    );
+    assert_eq!(
+        page.event("CSS.styleSheetRemoved")["params"]["styleSheetId"],
+        framed["styleSheetId"]
+    );
+    let again = page.event("CSS.styleSheetAdded")["params"]["header"].clone();
+    assert_eq!(sheet_text(&mut page, &again["styleSheetId"]), "i {}");
+}
+
+/// A `<link>`'s sheet loaded before DevTools came is fetched again as its
+/// text is first asked for, as its `<link>` fetched it (with CORS for one
+/// with `crossorigin`): the text as it came now if it has the sheet's
+/// rules, else the rules as CSSOM writes them; once, however many ask.
+#[test]
+fn link_sheets_loaded_before_devtools_are_fetched_again() {
+    let a = "/* a */\np { padding: 1px }\n";
+    let other = server(&[(
+        "/c.css",
+        Route::ok("text/css", "/* c */ p { color: blue }")
+            .with_header("Access-Control-Allow-Origin", "*"),
+    )]);
+    let html = format!(
+        "<!DOCTYPE html><link rel=stylesheet href=/a.css><link rel=stylesheet href=/b.css>\
+         <link rel=stylesheet crossorigin href={}>\
+         <p>p</p><script>onload = () => {{\
+           document.styleSheets[1].insertRule('p {{ margin: 0 }}');\
+           fetch('/loaded');\
+         }};</script>",
+        other.url("/c.css")
+    );
+    let server = server(&[
+        ("/", Route::ok("text/html", html)),
+        ("/a.css", Route::ok("text/css", a)),
+        ("/b.css", Route::ok("text/css", "/* b */ p { color: red }")),
+        ("/loaded", Route::ok("text/plain", "")),
+    ]);
+    let machopo = Machopo::start();
+    // A tab of its own, which no session has as it loads.
+    let (status, body) = machopo.http("PUT", &format!("/json/new?{}", server.url("/")));
+    assert_eq!(status, 200, "{body}");
+    let requests = |target: &str| {
+        server
+            .requests()
+            .iter()
+            .filter(|request| request.target == target)
+            .count()
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while requests("/loaded") == 0 {
+        assert!(std::time::Instant::now() < deadline, "the page loads");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let opened: Value = serde_json::from_str(&body).unwrap();
+    let url = format!(
+        "ws://127.0.0.1:{}/devtools/page/{}",
+        machopo.port,
+        opened["id"].as_str().unwrap()
+    );
+    let mut page = machopo.connect(&url, None).expect("connects");
+    result(page.call(None, "DOM.enable", json!({})));
+    result(page.call(None, "CSS.enable", json!({})));
+    let headers = added(&mut page);
+    let id = |url: &str| {
+        headers
+            .iter()
+            .find(|header| header["sourceURL"] == url)
+            .unwrap_or_else(|| panic!("{url}: {headers:?}"))["styleSheetId"]
+            .clone()
+    };
+    let (a_id, b_id) = (id(&server.url("/a.css")), id(&server.url("/b.css")));
+    assert_eq!(requests("/a.css"), 1);
+    // Asked twice before it comes: both answered, of one fetch.
+    let asked = [a_id.clone(), a_id.clone()].map(|id| {
+        page.send(None, "CSS.getStyleSheetText", json!({ "styleSheetId": id }))
+    });
+    for asked in asked {
+        assert_eq!(result(page.answer(asked))["text"], a);
+    }
+    assert_eq!(requests("/a.css"), 2);
+    // Its rules changed since: they.
+    let b = "p { margin: 0px; }\np { color: red; }\n";
+    assert_eq!(sheet_text(&mut page, &b_id), b);
+    assert_eq!(requests("/b.css"), 2);
+    // Asked again: kept.
+    assert_eq!(sheet_text(&mut page, &a_id), a);
+    assert_eq!(sheet_text(&mut page, &b_id), b);
+    assert_eq!((requests("/a.css"), requests("/b.css")), (2, 2));
+    // With CORS, as its `<link>`'s: the page's origin told.
+    assert_eq!(
+        sheet_text(&mut page, &id(&other.url("/c.css"))),
+        "/* c */ p { color: blue }"
+    );
+    let origin = server.url("");
+    let origins: Vec<Option<String>> = other
+        .requests()
+        .iter()
+        .map(|request| request.header("origin").map(str::to_owned))
+        .collect();
+    assert_eq!(origins, [Some(origin.clone()), Some(origin)]);
 }

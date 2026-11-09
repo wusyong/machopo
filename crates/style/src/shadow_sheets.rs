@@ -50,6 +50,23 @@ pub(crate) struct ShadowScopes {
     prune_at: usize,
 }
 
+impl ShadowScope {
+    /// The id of the sheet whose index is `index` (an index a sheet, of
+    /// those that applied, in order).
+    pub(crate) fn sheet_of(&self, index: &RuleIndex) -> Option<u64> {
+        let at = self
+            .indexes
+            .iter()
+            .position(|(known, _)| std::ptr::eq(&**known, index))?;
+        self.sheets
+            .iter()
+            .zip(&self.applied)
+            .filter(|(_, applied)| **applied)
+            .nth(at)
+            .map(|(sheet, _)| sheet.id)
+    }
+}
+
 impl ShadowScopes {
     /// The sheets of the shadow root whose id is `root`, if it has had any.
     pub(crate) fn get(&self, root: NodeId) -> Option<&ShadowScope> {
