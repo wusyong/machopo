@@ -24,7 +24,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # As ci.yml's: the disk is small, and every test binary links V8.
+  # As ci.yml's: less to link, in every test binary that links V8.
   CARGO_PROFILE_DEV_DEBUG: "0"
 
 jobs:
@@ -36,8 +36,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup
-        with:
-          free-disk: "true"
       - run: python3 scripts/test.py matrix
 
   # The 20 configurations of a fuzz run, split between two runners, each
@@ -55,8 +53,6 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup
-        with:
-          free-disk: "true"
       - run: python3 scripts/test.py fuzz --iterations 10 --minutes 270
       # The failures (with the seed that replays each) and their logs.
       - if: failure()

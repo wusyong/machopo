@@ -178,16 +178,25 @@ def third_party_pins() -> dict[str, Pin]:
 
 # What a folder downloaded from an archive holds of the commit it is of.
 ARCHIVE_REV = ".machopo-rev"
+# gitiles' tarballs now and then come back cut short (seen on CI's
+# runners, where another job's download of the same one was whole): an
+# archive is downloaded again, a few seconds apart, before giving up.
+ARCHIVE_ATTEMPTS = 3
+ARCHIVE_RETRY_SECONDS = 5
 
 
 def sync_archive(name: str, path: Path, pin: Pin) -> list[str]:
     """`path` as `pin.archive` (a folder of `pin.repository`) is at
     `pin.ref`: downloaded from gitiles' `+archive` when it is missing, or
     of another commit (its `ARCHIVE_REV`), into a folder of its own, then
-    put in place of the old one. A folder without `ARCHIVE_REV` isn't one
-    this made, so it is left as it is, with why. Why it couldn't, if it
-    couldn't."""
+    put in place of the old one; a download that fails or comes back cut
+    short is tried again (`ARCHIVE_ATTEMPTS`). A folder without
+    `ARCHIVE_REV` isn't one this made, so it is left as it is, with why.
+    Why it couldn't, if it couldn't."""
+    import http.client
     import io
+    import urllib.error
+    import zlib
 
     marker = path / ARCHIVE_REV
     # Named `.kun-rev` before the project was renamed: the same marker.
@@ -199,16 +208,31 @@ def sync_archive(name: str, path: Path, pin: Pin) -> list[str]:
         return [f"{name}: {path} isn't a download of {pin.archive} ({ARCHIVE_REV} is missing): move it aside"]
     url = f"{pin.repository}/+archive/{pin.ref}/{pin.archive}.tar.gz"
     print(f"{name}: downloading {pin.archive} at {pin.ref[:12]} into {path}")
-    try:
-        with urllib.request.urlopen(url, timeout=300) as response:
-            data = response.read()
-    except OSError as error:
-        return [f"{name}: couldn't download {url}: {error}"]
     fresh = path.with_name(path.name + ".new")
-    shutil.rmtree(fresh, ignore_errors=True)
-    fresh.mkdir(parents=True)
-    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
-        tar.extractall(fresh, filter="data")
+    for attempt in range(1, ARCHIVE_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(url, timeout=300) as response:
+                data = response.read()
+            shutil.rmtree(fresh, ignore_errors=True)
+            fresh.mkdir(parents=True)
+            # Reading the whole archive is what tells a cut-short one:
+            # gitiles sends no length to check the download against.
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+                tar.extractall(fresh, filter="data")
+            break
+        except urllib.error.HTTPError as error:
+            # Asked for what isn't there (a wrong `rev` or folder):
+            # asking again wouldn't change the answer.
+            if error.code < 500:
+                return [f"{name}: couldn't download {url}: {error}"]
+            failure: Exception = error
+        except (OSError, EOFError, tarfile.TarError, http.client.HTTPException, zlib.error) as error:
+            failure = error
+        shutil.rmtree(fresh, ignore_errors=True)
+        if attempt == ARCHIVE_ATTEMPTS:
+            return [f"{name}: couldn't download {url} in {attempt} tries: {failure}"]
+        print(f"{name}: download {attempt} of {ARCHIVE_ATTEMPTS} failed ({failure}); trying again in {ARCHIVE_RETRY_SECONDS}s")
+        time.sleep(ARCHIVE_RETRY_SECONDS)
     (fresh / ARCHIVE_REV).write_text(pin.ref + "\n", encoding="utf-8", newline="\n")
     if path.exists():
         shutil.rmtree(path)

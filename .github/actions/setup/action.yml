@@ -1,9 +1,9 @@
-# What every job does before it builds machopo: the pinned toolchain,
-# ../third_party at the commits machopo pins, and the build cache. Only for
-# the Linux runners for now (the disk clean-up and Mesa are apt and paths of
-# Ubuntu's image).
+# What every job does before it builds machopo: the system libraries the
+# build needs, the pinned toolchain, ../third_party at the commits machopo
+# pins, and the build cache. Only for the Linux runners for now (the
+# packages are Ubuntu's).
 name: Set up machopo's build
-description: Toolchain, ../third_party and the cargo cache for one job
+description: System libraries, toolchain, ../third_party and the cargo cache for one job
 
 inputs:
   cache:
@@ -19,31 +19,26 @@ inputs:
     default: "false"
   gpu:
     description: >-
-      Install Mesa's lavapipe, the CPU adapter wgpu draws with on a runner
-      (which has no GPU)
-    default: "false"
-  free-disk:
-    description: >-
-      Delete the image's SDKs machopo doesn't use, for room: every test
-      binary links V8 statically
+      Install Mesa's lavapipe too, the CPU adapter wgpu draws with on a
+      runner (which has no GPU)
     default: "false"
 
 runs:
   using: composite
   steps:
-    - if: inputs.free-disk == 'true'
-      name: Free disk space
+    # fontconfig's headers and .pc for `yeslogic-fontconfig-sys` (fonts,
+    # Skia), whose build script every job runs, clippy's too.
+    - name: Install system libraries
       shell: bash
+      env:
+        GPU: ${{ inputs.gpu }}
       run: |
-        df -h /
-        sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
-        df -h /
-    - if: inputs.gpu == 'true'
-      name: Install lavapipe
-      shell: bash
-      run: |
+        packages=(libfontconfig1-dev)
+        if [ "$GPU" = true ]; then
+          packages+=(libvulkan1 mesa-vulkan-drivers)
+        fi
         sudo apt-get update -q
-        sudo apt-get install -y -q --no-install-recommends libvulkan1 mesa-vulkan-drivers
+        sudo apt-get install -y -q --no-install-recommends "${packages[@]}"
     # The toolchain rust-toolchain.toml pins, with its components.
     - shell: bash
       run: rustup toolchain install
