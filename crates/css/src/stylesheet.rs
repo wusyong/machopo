@@ -404,6 +404,30 @@ impl StyleRule {
         self.selectors.to_css_string()
     }
 
+    /// Each selector of its list, serialized, with its specificity as
+    /// (ids, classes and the like, elements): DevTools' `SelectorList`
+    /// (Blink's `InspectorStyleSheet::BuildObjectForSelectorList`).
+    pub fn selectors_for_inspector(&self) -> Vec<(String, [u32; 3])> {
+        // How `selectors` packs a specificity: ten bits each, the ids
+        // highest.
+        const TEN_BITS: u32 = (1 << 10) - 1;
+        self.selectors
+            .slice()
+            .iter()
+            .map(|selector| {
+                let specificity = selector.specificity();
+                (
+                    selector.to_css_string(),
+                    [
+                        specificity >> 20,
+                        (specificity >> 10) & TEN_BITS,
+                        specificity & TEN_BITS,
+                    ],
+                )
+            })
+            .collect()
+    }
+
     /// `cssText` (Blink's `CSSStyleRule::cssText`): `.a { color: red; }`,
     /// and `.a { }` with no declarations.
     pub fn css_text(&self) -> String {

@@ -1032,62 +1032,6 @@ fn the_main_frame_before_its_first_document() {
 /// While script is paused, the frame tree and the documents' markup are
 /// still there (Sources opens the HTML a breakpoint is in).
 #[test]
-fn prototype_the_page_is_lent_while_paused() {
-    let html = "<!DOCTYPE html><style>body { margin: 0 } div { height: 10px }</style><body></body>";
-    let server = server(&[("/", Route::ok("text/html", html))]);
-    let machopo = Machopo::start();
-    let (mut page, _) = page(&machopo);
-    load(&mut page, &server.url("/"));
-    page.call(None, "Debugger.enable", json!({}));
-    let expression = "
-        const add = () => document.body.append(document.createElement('div'));
-        add(); debugger;
-        setTimeout(() => {
-            add(); debugger;
-            const button = document.createElement('button');
-            button.onclick = () => { add(); debugger; };
-            button.click();
-            const input = document.createElement('input');
-            input.style.display = 'block';
-            input.style.height = '0';
-            input.style.border = 'none';
-            input.style.padding = '0';
-            document.body.append(input);
-            input.onfocus = () => { add(); debugger; };
-            input.focus();
-            requestAnimationFrame(() => {
-                add(); debugger;
-                new ResizeObserver(() => {
-                    if (window.observed) return;
-                    window.observed = true;
-                    add(); debugger;
-                }).observe(document.body);
-            });
-        });
-        1";
-    let evaluated = page.send(
-        None,
-        "Runtime.evaluate",
-        json!({ "expression": expression }),
-    );
-    let mut seen = Vec::new();
-    for _ in 0..6 {
-        page.event("Debugger.paused");
-        let answer = page.call(None, "Prototype.pausedPage", json!({}));
-        seen.push(answer["result"].clone());
-        page.call(None, "Debugger.resume", json!({}));
-    }
-    page.answer(evaluated);
-    let expected: Vec<Value> = (1..=6)
-        .map(|n| {
-            let elements = 4 + n + u32::from(n > 3);
-            json!({ "layout": true, "elements": elements, "rootHeight": 10.0 * f64::from(n) })
-        })
-        .collect();
-    assert_eq!(seen, expected);
-}
-
-#[test]
 fn the_frames_are_there_while_paused() {
     let html = "<!DOCTYPE html><script>window.ready = true</script>";
     let server = server(&[("/", Route::ok("text/html", html))]);

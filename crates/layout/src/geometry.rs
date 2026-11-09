@@ -85,6 +85,145 @@ pub fn client_rects(
     rects
 }
 
+/// A box's four corners, clockwise from the top left as laid out, wherever
+/// transforms took them (Blink's `gfx::QuadF`).
+pub type Quad = [PointF; 4];
+
+/// An element's content, padding, border and margin boxes as quads, for
+/// DevTools' box model and highlight (Blink's
+/// `InspectorHighlightBase::BuildNodeQuads`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BoxQuads {
+    pub content: Quad,
+    pub padding: Quad,
+    pub border: Quad,
+    pub margin: Quad,
+}
+
+fn quad(rect: RectF, to: &Transform) -> Quad {
+    [
+        to.map_point(PointF::new(rect.x, rect.y)),
+        to.map_point(PointF::new(rect.x + rect.width, rect.y)),
+        to.map_point(PointF::new(rect.x + rect.width, rect.y + rect.height)),
+        to.map_point(PointF::new(rect.x, rect.y + rect.height)),
+    ]
+}
+
+/// `rect` less `sides`, never of a negative size.
+fn contract(rect: RectF, sides: &computed_style::Sides<f32>) -> RectF {
+    RectF::new(
+        rect.x + sides.left,
+        rect.y + sides.top,
+        (rect.width - sides.left - sides.right).max(0.0),
+        (rect.height - sides.top - sides.bottom).max(0.0),
+    )
+}
+
+/// `element`'s box model in the root fragment's space (as `client_rects`
+/// has it), through transforms and the scroll containers' offsets (Blink's
+/// `BuildNodeQuads`): a box's content, padding, border and margin boxes
+/// (the margins clamped to no negative size); an inline element's around
+/// its boxes on the lines (Blink's `PhysicalLinesBoundingBox`), its border
+/// and padding its first box's at the start and top and its last's at the
+/// end and bottom, its margin box its border box (machopo's inline boxes
+/// keep no margins; Blink's has the horizontal ones). None without a box.
+pub fn box_quads(
+    layout_view: &BoxFragment,
+    scroll: &ScrollOffsets,
+    sticky: &StickyOffsets,
+    element: NodeId,
+) -> Option<BoxQuads> {
+    if let Some((fragment, to_root)) = box_to_root(layout_view, scroll, sticky, element) {
+        let border = RectF::new(0.0, 0.0, fragment.size.width, fragment.size.height);
+        let padding = contract(border, &fragment.border);
+        let content = contract(padding, &fragment.padding);
+        let margins = &fragment.margin;
+        let margin = RectF::new(
+            -margins.left,
+            -margins.top,
+            (border.width + margins.left + margins.right).max(0.0),
+            (border.height + margins.top + margins.bottom).max(0.0),
+        );
+        return Some(BoxQuads {
+            content: quad(content, &to_root),
+            padding: quad(padding, &to_root),
+            border: quad(border, &to_root),
+            margin: quad(margin, &to_root),
+        });
+    }
+    let mut boxes = Vec::new();
+    walk(layout_view, scroll, sticky, &mut |fragment, offset, _, contents| {
+        for line in &fragment.lines {
+            for inline_box in line
+                .boxes
+                .iter()
+                .filter(|b| b.node == element && b.pseudo.is_none())
+            {
+                boxes.push((
+                    contents.map_rect(inline_box.rect.offset(offset.x, offset.y)),
+                    inline_box.border,
+                    inline_box.padding,
+                ));
+            }
+        }
+        true
+    });
+    let (first, last) = (boxes.first()?, boxes.last()?);
+    let border = bounding_rect(&boxes.iter().map(|(rect, ..)| *rect).collect::<Vec<_>>());
+    let border_sides = computed_style::Sides {
+        top: first.1.top,
+        right: last.1.right,
+        bottom: last.1.bottom,
+        left: first.1.left,
+    };
+    let padding_sides = computed_style::Sides {
+        top: first.2.top,
+        right: last.2.right,
+        bottom: last.2.bottom,
+        left: first.2.left,
+    };
+    let padding = contract(border, &border_sides);
+    let content = contract(padding, &padding_sides);
+    let identity = Transform::IDENTITY;
+    Some(BoxQuads {
+        content: quad(content, &identity),
+        padding: quad(padding, &identity),
+        border: quad(border, &identity),
+        margin: quad(border, &identity),
+    })
+}
+
+/// `element`'s border boxes as quads in the root fragment's space, in tree
+/// order, as `client_rects` finds them but not made rects: a box's border
+/// box through its transforms, an inline element's box on each line
+/// (DevTools' `getContentQuads`; Blink's `CollectQuads` goes into an
+/// inline element's children instead). Empty without a box.
+pub fn border_quads(
+    layout_view: &BoxFragment,
+    scroll: &ScrollOffsets,
+    sticky: &StickyOffsets,
+    element: NodeId,
+) -> Vec<Quad> {
+    let mut quads = Vec::new();
+    walk(layout_view, scroll, sticky, &mut |fragment, offset, to_root, contents| {
+        if fragment.node == Some(element) && fragment.pseudo.is_none() {
+            let border = RectF::new(offset.x, offset.y, fragment.size.width, fragment.size.height);
+            quads.push(quad(border, to_root));
+        }
+        for line in &fragment.lines {
+            for inline_box in line
+                .boxes
+                .iter()
+                .filter(|b| b.node == element && b.pseudo.is_none())
+            {
+                quads.push(quad(inline_box.rect.offset(offset.x, offset.y), contents));
+            }
+        }
+        true
+    });
+    quads
+}
+
 /// The boxes of text node `text`'s data from `start` to `end` (UTF-16 code
 /// units), in the space and order of `client_rects`'s (Blink's
 /// `LayoutText::AbsoluteQuadsForRange`): one for each of its runs on a

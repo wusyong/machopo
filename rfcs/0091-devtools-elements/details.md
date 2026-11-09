@@ -198,7 +198,7 @@ devtools-frontend 的 `front_end/core/sdk/`（2026-11-09）：
 | 畫出來的樣子 | machopo 自己畫，和 Chrome 接近（顏色由前端給） | 和 Chrome 一模一樣，包括 grid、flex 的 overlay | 同 O1 |
 | 要做的 | commit 時附加一個 layer，quad 從 fragment 算，標籤用 `shape_canvas_text` | 第二個頁面、內部的 context、host 的橋，帶著 devtools-frontend 的 bundle 和它的授權 | renderer 交出 quad 和標籤，browser 像 `<select>` 的選單那樣畫 |
 | 更新的成本 | 只重畫 overlay 的 layer | 跑 overlay 頁面的 JS 和 layout | 一個 IPC 加 browser 的 layer |
-| 停在斷點時 | 畫不出來（另外處理） | JS 跑不了 | 畫得出來 |
+| 停在斷點時 | 畫不出來：renderer 不 commit（另外處理） | 一樣畫不出來（JS 停住時照樣能跑，但 renderer 不 commit） | 畫得出來 |
 | 拆成 process 之後 | 不用改 | 不用改 | quad 是 renderer 給的，browser 照畫（不信任也只影響那個分頁的畫面） |
 
 「Paused in debugger」的 PM1 是 O3 的一小部分：只有那條提示和按鈕由 browser 畫。

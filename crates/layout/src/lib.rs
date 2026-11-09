@@ -63,6 +63,7 @@ mod font_features;
 mod fragment;
 mod geometry;
 mod list_items;
+mod platform_fonts;
 mod replaced;
 mod scroll_anchor;
 mod sticky;
@@ -108,8 +109,10 @@ pub use fragment::{
     TableColumn, TextCluster, TextFragment,
 };
 pub use geometry::{
-    ScrollOffsets, bounding_rect, box_transform, client_rects, element_box, is_fixed, text_rects,
+    BoxQuads, Quad, ScrollOffsets, border_quads, bounding_rect, box_quads, box_transform,
+    client_rects, element_box, is_fixed, text_rects,
 };
+pub use platform_fonts::{PlatformFont, platform_fonts};
 use replaced::Replaced;
 pub use replaced::{ImageState, Images};
 pub use scroll_anchor::{ScrollAnchorNode, find_scroll_anchor, scroll_anchor_offset};

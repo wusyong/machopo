@@ -17,6 +17,7 @@ mod calc;
 mod cascade;
 mod computed;
 mod css_animations;
+mod explain;
 mod fonts;
 mod form_controls;
 mod form_states;

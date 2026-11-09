@@ -97,7 +97,7 @@ use selectors::matching::{
 use selectors::parser::AncestorHashes;
 use style_resolver::animation_style::{self, Recascade, Restyle, StyleChange, Timeline};
 use style_resolver::cascade::{
-    BlockSource, Blocks, Environment, MatchedPropertiesCache, cascade_highlight, push_block,
+    BlockSource, Blocks, CascadePriority, Environment, MatchedPropertiesCache, cascade_highlight, push_block,
 };
 
 use crate::bloom::StyleBloom;
@@ -110,6 +110,26 @@ use crate::selector::StyleElement;
 use crate::shadow_sheets::ShadowScopes;
 
 pub use crate::query::{SelectorQuery, compound_elements_for_testing, full_matches_for_testing};
+
+/// What an element's own style is cascaded from (`StyleEngine::explain`).
+pub struct Explained {
+    /// The rules it matches, in cascade order: the UA's, then the author's,
+    /// each by specificity, then where it comes; the winner last.
+    pub rules: Vec<ExplainedRule>,
+    /// Its presentational hints (HTML's attributes and SVG's presentation
+    /// attributes, one block, as Blink's `attributesStyle`).
+    pub presentation: Option<Arc<CssPropertyValueSet>>,
+    /// Its `style` attribute's declarations.
+    pub inline: Option<Arc<CssPropertyValueSet>>,
+}
+
+/// A rule an element matches, and how.
+pub struct ExplainedRule {
+    pub rule: Arc<css::StyleRule>,
+    pub origin: Origin,
+    /// The indexes of its selectors the element matches.
+    pub matching_selectors: Vec<usize>,
+}
 
 /// A document's style (Blink's `StyleEngine` and `StyleResolver`): its
 /// sheets, what the cascade shares between elements, and the frame's
@@ -695,6 +715,8 @@ impl StyleEngine {
             met: Vec::new(),
             linear: self.testing.linear_matching,
             matched: 0,
+            selector_flags: NeedsSelectorFlags::Yes,
+            matched_selectors: None,
             #[cfg(debug_assertions)]
             restyled: Vec::new(),
             #[cfg(debug_assertions)]
@@ -794,6 +816,134 @@ impl StyleEngine {
         if self.names_stale {
             self.give_names(cx, document);
         }
+    }
+
+    /// What `element`'s own style is cascaded from, for DevTools' `CSS`
+    /// agent (Blink's `InspectorCSSAgent::getMatchedStylesForNode`, which
+    /// collects with `ElementRuleCollector`'s `kCollectingCSSRules`): the
+    /// rules it matches, in cascade order, the winner last; its
+    /// presentational hints; its `style` attribute's declarations. As the
+    /// last `recalc_style` matched them (its sheets): its rules matched
+    /// again as the walk matches them, with nothing kept or changed (no
+    /// selector flags set, caches of its own). None for a node that isn't
+    /// an element of this engine's document's.
+    pub fn explain<'gc>(&mut self, cx: &Cx<'_, 'gc>, element: NodeRef<'gc>) -> Option<Explained> {
+        let document = cx.document_of(element);
+        if cx.kind(element) != NodeKind::Element
+            || self.document != Some(cx.node_id(document))
+            || !cx.is_connected(element)
+        {
+            return None;
+        }
+        let initial = ComputedStyle::initial();
+        let cache = RefCell::new(MatchedPropertiesCache::default());
+        let shadow_changes = rustc_hash::FxHashMap::default();
+        // What only cascading reads (the environment, `rem`, animations)
+        // is left as it comes: the blocks are all it asks for.
+        let mut walk = Walk {
+            cx,
+            serial: self.serial,
+            ua: &self.ua,
+            author: self
+                .author
+                .as_ref()
+                .map_or(&[][..], |author| &author.indexes[..]),
+            author_features: self.author.as_ref().map(|author| &author.features),
+            shadow: &self.shadow,
+            shadow_changes: &shadow_changes,
+            rules: None,
+            env: Environment {
+                viewport: self.viewport,
+                system_colors: self.system_colors,
+                link_colors: self.link_colors,
+            },
+            quirks: cx.quirks_mode(document) == QuirksMode::Quirks,
+            cache: &cache,
+            candidates: Vec::new(),
+            bloom: StyleBloom::new(),
+            caches: SelectorCaches::default(),
+            pseudo_caches: SelectorCaches::default(),
+            root_font_size: initial.font.size,
+            initial_font_size: initial.font.size,
+            attr_names: Vec::new(),
+            device_pixel_ratio: self.device_pixel_ratio,
+            background_image_urls: Vec::new(),
+            url_context: self.url_context.clone(),
+            presentation: std::mem::take(&mut self.presentation_attributes),
+            now: 0.0,
+            met: Vec::new(),
+            linear: self.testing.linear_matching,
+            matched: 0,
+            selector_flags: NeedsSelectorFlags::No,
+            matched_selectors: Some(Vec::new()),
+            #[cfg(debug_assertions)]
+            restyled: Vec::new(),
+            #[cfg(debug_assertions)]
+            verify: false,
+            #[cfg(debug_assertions)]
+            passed_over: Vec::new(),
+            viewport_changed: false,
+            viewport_used: false,
+        };
+        // The bloom filter has its flat-tree ancestors, as in the walk.
+        let ancestors: Vec<NodeRef<'gc>> =
+            std::iter::successors(cx.flat_tree_parent(element), |&node| {
+                cx.flat_tree_parent(node)
+            })
+            .filter(|&node| cx.kind(node) == NodeKind::Element)
+            .collect();
+        for &ancestor in ancestors.iter().rev() {
+            walk.bloom.push(cx, ancestor);
+        }
+        let inline = cx.inline_style(element);
+        let presentation = hints::declarations(
+            cx,
+            element,
+            walk.url_context.as_ref(),
+            &mut walk.presentation,
+        );
+        let [own, ..] = walk.blocks(element, inline.as_ref(), presentation.as_ref());
+        // Each block once, at its normal declarations' place (its
+        // `!important` ones' is another).
+        let mut rules: Vec<(CascadePriority, Arc<css::StyleRule>)> = own
+            .iter()
+            .filter(|(_, _, important, _)| !important)
+            .filter_map(|(priority, _, _, source)| match source {
+                BlockSource::Rule(rule) => Some((*priority, Arc::clone(rule))),
+                BlockSource::Hints(_) | BlockSource::Own => None,
+            })
+            .collect();
+        rules.sort_by_key(|(priority, _)| *priority);
+        drop(own);
+        let matched = walk.matched_selectors.take().unwrap_or_default();
+        self.presentation_attributes = std::mem::take(&mut walk.presentation);
+        let rules = rules
+            .into_iter()
+            .map(|(priority, rule)| {
+                let origin = if priority.level == CascadePriority::level(Origin::UserAgent, false) {
+                    Origin::UserAgent
+                } else {
+                    Origin::Author
+                };
+                let mut matching_selectors: Vec<usize> = matched
+                    .iter()
+                    .filter(|(matched, _)| Arc::ptr_eq(matched, &rule))
+                    .map(|&(_, index)| index)
+                    .collect();
+                matching_selectors.sort_unstable();
+                matching_selectors.dedup();
+                ExplainedRule {
+                    rule,
+                    origin,
+                    matching_selectors,
+                }
+            })
+            .collect();
+        Some(Explained {
+            rules,
+            presentation: presentation.map(|(hints, _)| hints),
+            inline,
+        })
     }
 
     /// Collects again the sheets of the shadow roots the DOM says may have
@@ -1492,6 +1642,13 @@ struct Walk<'s, 'a, 'gc> {
     /// selectors matched in full (`matched_selectors_for_testing`).
     linear: bool,
     matched: usize,
+    /// Whether matching sets the elements' selector flags (what a change of
+    /// them restyles): not for `StyleEngine::explain`, which changes
+    /// nothing.
+    selector_flags: NeedsSelectorFlags,
+    /// For `StyleEngine::explain`: each selector the element matched as
+    /// itself, by its rule and its index in the rule's list.
+    matched_selectors: Option<Vec<(&'s Arc<css::StyleRule>, usize)>>,
     #[cfg(debug_assertions)]
     restyled: Vec<gfx::NodeId>,
     #[cfg(debug_assertions)]
@@ -2485,19 +2642,22 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
             .find_map(|(index, _)| Some(index.set.keyframes(name)?.0.clone()))
     }
 
-    /// `element`'s computed style and its pseudo-elements' (Blink's
-    /// `StyleResolver::ResolveStyle`): its rules matched once, each one
-    /// counting for what it is for.
-    fn cascade(
+    /// The declaration blocks `element` cascades (Blink's
+    /// `ElementRuleCollector`'s matched rules), for itself and each
+    /// pseudo-element it has rules for, in `TARGETS`' order: its
+    /// presentational hints, the rules it matches and its `style`
+    /// attribute's (its own only), unsorted. What `cascade` cascades, and
+    /// what `StyleEngine::explain` tells DevTools: the two can't differ.
+    fn blocks<'b>(
         &mut self,
         element: NodeRef<'gc>,
-        parent: &Arc<ComputedStyle>,
-        layout_parent: &ComputedStyle,
-        inline: Option<&Arc<CssPropertyValueSet>>,
-        presentation: Option<&(Arc<CssPropertyValueSet>, u64)>,
-        change: Option<StyleChangeOf<'_>>,
-    ) -> (Arc<ComputedStyle>, PseudoStyles) {
-        let mut blocks: [Blocks<'_>; 5] = Default::default();
+        inline: Option<&'b Arc<CssPropertyValueSet>>,
+        presentation: Option<&'b (Arc<CssPropertyValueSet>, u64)>,
+    ) -> [Blocks<'b>; 5]
+    where
+        's: 'b,
+    {
+        let mut blocks: [Blocks<'b>; 5] = Default::default();
         // Author level, specificity 0, and before every rule: order 0 is a
         // UA rule's at most, and those are a level below.
         if let Some((hints, digest)) = presentation {
@@ -2550,11 +2710,9 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
                 },
             );
         }
-        let [own, before, after, marker, selection] = blocks;
-        let mut own = own;
         if let Some(inline) = inline {
             push_block(
-                &mut own,
+                &mut blocks[0],
                 Origin::Author,
                 0,
                 true,
@@ -2564,6 +2722,23 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
                 BlockSource::Own,
             );
         }
+        blocks
+    }
+
+    /// `element`'s computed style and its pseudo-elements' (Blink's
+    /// `StyleResolver::ResolveStyle`): its rules matched once, each one
+    /// counting for what it is for.
+    fn cascade(
+        &mut self,
+        element: NodeRef<'gc>,
+        parent: &Arc<ComputedStyle>,
+        layout_parent: &ComputedStyle,
+        inline: Option<&Arc<CssPropertyValueSet>>,
+        presentation: Option<&(Arc<CssPropertyValueSet>, u64)>,
+        change: Option<StyleChangeOf<'_>>,
+    ) -> (Arc<ComputedStyle>, PseudoStyles) {
+        let [own, before, after, marker, selection] =
+            self.blocks(element, inline, presentation);
         // Its pseudo-elements inherit its own.
         let blocking_wheel = self.cx.has_own_blocking_wheel_listener(element);
         let cache = self.cache;
@@ -2916,7 +3091,7 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
             None,
             &mut self.caches,
             quirks,
-            NeedsSelectorFlags::Yes,
+            self.selector_flags,
             MatchingForInvalidation::No,
         );
         let mut pseudo_context = MatchingContext::new(
@@ -2924,7 +3099,7 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
             None,
             &mut self.pseudo_caches,
             quirks,
-            NeedsSelectorFlags::Yes,
+            self.selector_flags,
             MatchingForInvalidation::No,
         );
         let current_host = host.map(|host| selectors::OpaqueElement::new(host.into_ref()));
@@ -2990,6 +3165,11 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
                 if matches_selector(selector, 0, None, &matched_as, context) {
                     let slot = &mut specificity[target_index(target)];
                     *slot = (*slot).max(Some(data.specificity));
+                    if target == Target::Element
+                        && let Some(found) = &mut self.matched_selectors
+                    {
+                        found.push((rule, data.selector as usize));
+                    }
                 }
             }
             for (target, specificity) in TARGETS.into_iter().zip(specificity) {

@@ -2445,6 +2445,26 @@ impl RenderThread {
     }
 
     pub(super) fn handle_input(&mut self, event: &InputEvent) {
+        // DevTools' inspect mode takes the mouse: what it is over is
+        // highlighted, a click inspects it, and the page sees none of it
+        // (Blink's `InspectorOverlayAgent::HandleInputEvent`).
+        if self.overlay_agent.inspecting()
+            && let Some(engine) = &mut self.engine
+        {
+            let mut page = engine.devtools_page();
+            match *event {
+                InputEvent::MouseMove { x, y, .. } => {
+                    self.overlay_agent.mouse_moved(PointF::new(x, y), &mut *page);
+                    return;
+                }
+                InputEvent::MouseDown { x, y, .. } => {
+                    self.overlay_agent.clicked(PointF::new(x, y), &mut *page);
+                    return;
+                }
+                InputEvent::MouseUp { .. } => return,
+                _ => {}
+            }
+        }
         if let InputEvent::Key(key) = event {
             let Some(engine) = &mut self.engine else {
                 return;
@@ -2911,6 +2931,8 @@ impl RenderThread {
             dom.read(|cx| (cx.tree_version(), cx.canvas_draws_version()));
         let output = frame.update_all_lifecycle_phases(dom);
         drop(lifecycle);
+        // The node DevTools' Computed pane follows, if its style changed.
+        self.css_agent.styles_updated(dom, frame);
         // A caret that came or moved shows, then blinks from there.
         if frame.view.take_caret_moved() {
             self.next_caret_blink = self
@@ -2930,9 +2952,19 @@ impl RenderThread {
             .painted
             .as_ref()
             .is_some_and(|last| Arc::ptr_eq(last, &output));
-        if !unchanged {
+        // DevTools' overlay, over the page's layers, drawn again only as
+        // it changes.
+        self.overlay_version = self.overlay_agent.version();
+        let overlay = dom.read(|cx| self.overlay_agent.layer(cx, frame));
+        let overlay_changed = overlay.is_some();
+        if let Some(layer) = overlay {
+            self.overlay_layer = layer;
+        }
+        if !unchanged || overlay_changed {
+            let mut layers = output.layers.clone();
+            layers.extend(self.overlay_layer.clone().map(compositor::Layer::from));
             self.layer_tree_host
-                .set_layers(output.layers.clone(), output.property_trees.clone());
+                .set_layers(layers, output.property_trees.clone());
             self.painted = Some(output);
         }
         let view = &frame.view;

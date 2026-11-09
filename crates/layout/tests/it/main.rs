@@ -30,6 +30,7 @@ mod parley_line_breaks;
 mod parley_shaped_text;
 mod parley_space;
 mod parley_words;
+mod platform_fonts;
 mod position;
 mod scroll_anchor;
 mod shadow;

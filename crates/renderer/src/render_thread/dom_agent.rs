@@ -25,11 +25,13 @@ use std::collections::{HashMap, HashSet};
 use crossbeam_channel::Sender;
 use dom::{Cx, Dom, DomChange, NodeId, NodeIdHashMap, NodeKind, NodeRef, NodeRoot, QuirksMode};
 use dom_api::DevToolsPage;
+
+use crate::frame_view::Frame;
 use protocol::renderer::RendererHostMsg;
 use serde_json::{Value, json};
 
 /// DevTools' `DOM.NodeId`.
-type Id = i64;
+pub(crate) type Id = i64;
 
 /// The longest text a node's `nodeValue` is sent with (Blink's
 /// `kMaxTextSize`), what is past it cut and an ellipsis put in its place.
@@ -128,6 +130,40 @@ impl DomAgent {
         self.send(session, &json!({ "method": method, "params": params }));
     }
 
+    /// Whether `session` has `DOM` on.
+    pub(crate) fn enabled(&self, session: &str) -> bool {
+        self.sessions
+            .borrow()
+            .get(session)
+            .is_some_and(|session| session.enabled)
+    }
+
+    /// `node`'s number in `session`, the nodes above it it hasn't sent
+    /// first (`setChildNodes`, Blink's `PushNodePathToFrontend`); none if
+    /// the session hasn't asked for the document.
+    pub(crate) fn push_node(&self, name: &str, node: NodeId, dom: &Dom) -> Option<Id> {
+        let mut sessions = self.sessions.borrow_mut();
+        let session = sessions.get_mut(name).filter(|session| session.enabled)?;
+        let frames = self.frames.borrow();
+        let document = self.document.get()?;
+        let mut events = Vec::new();
+        let id = dom.read(|cx| {
+            let node = cx.node_by_id(node)?;
+            let document = cx.node_by_id(document)?;
+            let mut tree = Tree {
+                cx,
+                session,
+                frames: &frames,
+                layout: None,
+            };
+            Some(tree.push_path(node, document, &mut events))
+        })?;
+        for (method, params) in events {
+            self.tell(name, method, params);
+        }
+        (id != 0).then_some(id)
+    }
+
     /// Whether a session has `DOM` on: the DOM notes its changes while
     /// one has.
     pub(crate) fn any_enabled(&self) -> bool {
@@ -213,6 +249,7 @@ impl DomAgent {
                         cx,
                         session,
                         frames: &frames,
+                        layout: None,
                     };
                     for (method, params) in tree.frame_owner_changed(owner) {
                         self.tell(name, method, params);
@@ -240,6 +277,7 @@ impl DomAgent {
                     cx,
                     session,
                     frames: &frames,
+                    layout: None,
                 };
                 tree.changed(&changes)
             });
@@ -353,6 +391,25 @@ impl DomAgent {
                     serde_json::from_str(&listeners).unwrap_or_else(|_| json!([]));
                 return Ok(json!({ "listeners": listeners }));
             }
+            "DOM.getBoxModel" => {
+                let node = self.node_param(name, &params, page)?;
+                return box_model(page, node).ok_or_else(|| "Could not compute box model.".to_owned());
+            }
+            "DOM.getContentQuads" => {
+                let node = self.node_param(name, &params, page)?;
+                return content_quads(page, node)
+                    .ok_or_else(|| "Could not compute content quads.".to_owned());
+            }
+            "DOM.getNodeForLocation" => {
+                let point = gfx::PointF::new(
+                    base::numerics::f32_from_f64(params["x"].as_f64().unwrap_or(0.0)),
+                    base::numerics::f32_from_f64(params["y"].as_f64().unwrap_or(0.0)),
+                );
+                let user_agent = params["includeUserAgentShadowDOM"].as_bool().unwrap_or(false);
+                let node = node_at(page, point, true, user_agent)
+                    .ok_or("No node found at given location")?;
+                params["backendNodeId"] = node.get().into();
+            }
             "DOM.requestNode" => {
                 let object = params["objectId"].as_str().unwrap_or_default();
                 let node = page.objects().node_of_object(name, object)?;
@@ -373,11 +430,16 @@ impl DomAgent {
         let frames = self.frames.borrow();
         let document = self.document.get();
         let mut events = Vec::new();
-        let result = page.dom().read(|cx| {
+        let (dom, layout) = page.dom_and_layout();
+        let layout = layout
+            .and_then(|layout| layout.as_any_mut().downcast_mut::<Frame>())
+            .map(|frame| &*frame);
+        let result = dom.read(|cx| {
             let mut tree = Tree {
                 cx,
                 session,
                 frames: &frames,
+                layout,
             };
             let document = document.and_then(|document| cx.node_by_id(document));
             let method = method
@@ -392,6 +454,40 @@ impl DomAgent {
             self.tell(name, method, params);
         }
         result
+    }
+
+    /// The node a command names by its `nodeId`, `backendNodeId` or
+    /// `objectId` (Blink's `AssertNode`).
+    pub(crate) fn node_param(
+        &self,
+        name: &str,
+        params: &Value,
+        page: &mut dyn DevToolsPage,
+    ) -> Result<NodeId, String> {
+        let node = if let Some(id) = params["nodeId"].as_i64() {
+            self.sessions
+                .borrow()
+                .get(name)
+                .and_then(|session| session.nodes.get(&id).copied())
+                .ok_or("Could not find node with given id")?
+        } else if let Some(backend) = params["backendNodeId"].as_u64() {
+            u32::try_from(backend)
+                .ok()
+                .map(NodeId::from_raw)
+                .ok_or("No node found for given backend id")?
+        } else if let Some(object) = params["objectId"].as_str() {
+            page.objects().node_of_object(name, object)?
+        } else {
+            return Err("Either nodeId, backendNodeId or objectId must be specified".to_owned());
+        };
+        if page.dom().read(|cx| cx.node_by_id(node).is_none()) {
+            return Err(if params["nodeId"].is_i64() {
+                "Could not find node with given id".to_owned()
+            } else {
+                "No node found for given backend id".to_owned()
+            });
+        }
+        Ok(node)
     }
 
     /// The node `resolveNode` names, by its number or its backend id
@@ -436,6 +532,9 @@ const COMMANDS: &[&str] = &[
     "DOM.performSearch",
     "DOM.getSearchResults",
     "DOM.discardSearchResults",
+    "DOM.getBoxModel",
+    "DOM.getContentQuads",
+    "DOM.getNodeForLocation",
     "DOMDebugger.getEventListeners",
 ];
 
@@ -448,6 +547,10 @@ struct Tree<'a, 'cx, 'gc> {
     cx: &'a Cx<'cx, 'gc>,
     session: &'a mut Session,
     frames: &'a [DomFrame],
+    /// The layout as last laid out, if lent: what a node's `isScrollable`
+    /// reads (none for the changes' events: Blink's reads its layout
+    /// object as it is then too).
+    layout: Option<&'a Frame>,
 }
 
 impl<'gc> Tree<'_, '_, 'gc> {
@@ -585,6 +688,23 @@ impl<'gc> Tree<'_, '_, 'gc> {
                         document.filter(|document| self.bound(*document).is_some())
                 {
                     result["nodeId"] = self.push_path(owner, document, events).into();
+                }
+                Ok(result)
+            }
+            "getNodeForLocation" => {
+                let node = params["backendNodeId"]
+                    .as_u64()
+                    .and_then(|backend| u32::try_from(backend).ok())
+                    .and_then(|backend| self.cx.node_by_id(NodeId::from_raw(backend)))
+                    .ok_or("No node found at given location")?;
+                let mut result = json!({ "backendNodeId": self.cx.node_id(node).get() });
+                if let Some(frame) = self.frame_of_document(self.cx.document_of(node)) {
+                    result["frameId"] = frame.into();
+                }
+                if self.session.enabled
+                    && let Some(document) = document.filter(|document| self.bound(*document).is_some())
+                {
+                    result["nodeId"] = self.push_path(node, document, events).into();
                 }
                 Ok(result)
             }
@@ -887,6 +1007,12 @@ impl<'gc> Tree<'_, '_, 'gc> {
             if !children.is_empty() || depth != 0 {
                 value["children"] = children.into();
             }
+        }
+        if kind == NodeKind::Element
+            && let Some(layout) = self.layout
+            && layout.is_user_scrollable(cx.node_id(cx.document_of(node)), backend)
+        {
+            value["isScrollable"] = true.into();
         }
         value
     }
@@ -1502,6 +1628,112 @@ impl<'gc> Tree<'_, '_, 'gc> {
         ));
         events
     }
+}
+
+/// `quad` as DevTools has it: x and y of each corner in turn.
+pub(crate) fn quad_json(quad: &layout::Quad) -> Value {
+    quad.iter()
+        .flat_map(|point| [f64::from(point.x), f64::from(point.y)])
+        .collect()
+}
+
+/// `f` with the DOM and the page's frame tree (its layout brought up to
+/// date first), and `node` with its document's id; none if the page has no
+/// layout lent, or `node` is gone.
+pub(crate) fn with_layout<R>(
+    page: &mut dyn DevToolsPage,
+    node: NodeId,
+    f: impl for<'gc> FnOnce(&Cx<'_, 'gc>, &mut Frame, NodeRef<'gc>, NodeId) -> Option<R>,
+) -> Option<R> {
+    let (dom, layout) = page.dom_and_layout();
+    let layout = layout?;
+    dom.read(|cx| {
+        layout.update_style_and_layout(cx);
+        let frame = layout.as_any_mut().downcast_mut::<Frame>()?;
+        let element = cx.node_by_id(node)?;
+        let document = cx.node_id(cx.document_of(element));
+        f(cx, frame, element, document)
+    })
+}
+
+/// `DOM.getBoxModel`'s model of `node` (Blink's
+/// `InspectorHighlight::GetBoxModel`): its quads in the top-level frame's
+/// viewport, its border box's size as `offsetWidth` and `offsetHeight`
+/// have it. None for a node with no box.
+fn box_model(page: &mut dyn DevToolsPage, node: NodeId) -> Option<Value> {
+    with_layout(page, node, |_, frame, _, document| {
+        let quads = frame.box_quads_in_top(document, node)?;
+        let size = frame.view.view_of(document)?.element_box(node)?.border_box;
+        Some(json!({
+            "model": {
+                "content": quad_json(&quads.content),
+                "padding": quad_json(&quads.padding),
+                "border": quad_json(&quads.border),
+                "margin": quad_json(&quads.margin),
+                "width": size.width.round(),
+                "height": size.height.round(),
+            }
+        }))
+    })
+}
+
+/// `DOM.getContentQuads`' quads of `node`: its border boxes, empty with
+/// none (Blink's `GetContentQuads`).
+fn content_quads(page: &mut dyn DevToolsPage, node: NodeId) -> Option<Value> {
+    with_layout(page, node, |_, frame, _, document| {
+        let quads: Vec<Value> = frame
+            .border_quads_in_top(document, node)
+            .iter()
+            .map(quad_json)
+            .collect();
+        Some(json!({ "quads": quads }))
+    })
+}
+
+/// The node at `point`, CSS px of the top-level frame's document if
+/// `document_point` (`getNodeForLocation`), else of its viewport, through
+/// the frames (Blink's hit test for the inspector): a run of text's
+/// element; one in a user-agent shadow tree its host's unless
+/// `user_agent`. None outside the viewport, or what is laid out.
+pub(crate) fn node_at(
+    page: &mut dyn DevToolsPage,
+    point: gfx::PointF,
+    document_point: bool,
+    user_agent: bool,
+) -> Option<NodeId> {
+    let (dom, layout) = page.dom_and_layout();
+    let layout = layout?;
+    dom.read(|cx| {
+        layout.update_style_and_layout(cx);
+        let frame = layout.as_any_mut().downcast_mut::<Frame>()?;
+        let point = if document_point {
+            let scroll = frame.top_viewport_scroll();
+            gfx::PointF::new(point.x - scroll.x, point.y - scroll.y)
+        } else {
+            point
+        };
+        // Outside the viewport, nothing is hit (Blink hit tests the frame's
+        // visible rect).
+        let viewport = frame.viewport_size();
+        if !((0.0..viewport.width).contains(&point.x) && (0.0..viewport.height).contains(&point.y)) {
+            return None;
+        }
+        let hit = frame.hit_test_in_top(point);
+        let mut node = match hit.text.and_then(|text| cx.node_by_id(text)) {
+            Some(text) => cx.parent(text)?,
+            None => cx.node_by_id(hit.element?)?,
+        };
+        while !user_agent && let Some(root) = cx.containing_shadow_root(node) {
+            let user_agent_root = cx
+                .shadow_root_init(root)
+                .is_some_and(|init| init.mode == dom::ShadowRootMode::UserAgent);
+            if !user_agent_root {
+                break;
+            }
+            node = cx.shadow_host(root)?;
+        }
+        Some(cx.node_id(node))
+    })
 }
 
 /// `document`'s element child.

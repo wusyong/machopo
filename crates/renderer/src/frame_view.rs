@@ -1471,6 +1471,93 @@ impl FrameView {
         .collect()
     }
 
+    /// `element`'s box model as last laid out, CSS px of the viewport, as
+    /// `client_rects` places it (`layout::box_quads`).
+    /// The fonts of the text runs `counts` picks, as last laid out
+    /// (`layout::platform_fonts`).
+    pub(crate) fn platform_fonts(
+        &self,
+        counts: &dyn Fn(&layout::TextFragment) -> bool,
+    ) -> Vec<layout::PlatformFont> {
+        self.fragment
+            .as_ref()
+            .map(|fragment| layout::platform_fonts(fragment, counts))
+            .unwrap_or_default()
+    }
+
+    /// What `element`'s own style is cascaded from, as its document's
+    /// last style recalc matched it (`style::StyleEngine::explain`).
+    pub(crate) fn explain_style<'gc>(
+        &mut self,
+        cx: &Cx<'_, 'gc>,
+        element: NodeRef<'gc>,
+    ) -> Option<style::Explained> {
+        self.style.explain(cx, element)
+    }
+
+    pub(crate) fn box_quads(&self, element: NodeId) -> Option<layout::BoxQuads> {
+        let fragment = self.fragment.as_ref()?;
+        let quads = layout::box_quads(
+            fragment,
+            &self.scroll.containers,
+            &self.scroll.stuck.offsets,
+            element,
+        )?;
+        let at = self.viewport_origin_of(fragment, element);
+        let moved = |quad: layout::Quad| quad.map(|p| PointF::new(p.x - at.x, p.y - at.y));
+        Some(layout::BoxQuads {
+            content: moved(quads.content),
+            padding: moved(quads.padding),
+            border: moved(quads.border),
+            margin: moved(quads.margin),
+        })
+    }
+
+    /// `element`'s border boxes as quads as last laid out, CSS px of the
+    /// viewport (`layout::border_quads`).
+    pub(crate) fn border_quads(&self, element: NodeId) -> Vec<layout::Quad> {
+        let Some(fragment) = &self.fragment else {
+            return Vec::new();
+        };
+        let at = self.viewport_origin_of(fragment, element);
+        layout::border_quads(
+            fragment,
+            &self.scroll.containers,
+            &self.scroll.stuck.offsets,
+            element,
+        )
+        .into_iter()
+        .map(|quad| quad.map(|p| PointF::new(p.x - at.x, p.y - at.y)))
+        .collect()
+    }
+
+    /// Where the viewport is in the document for `element`'s boxes: its
+    /// scroll offset, or nowhere for a box fixed to it, which layout
+    /// placed where it shows.
+    fn viewport_origin_of(&self, fragment: &layout::BoxFragment, element: NodeId) -> PointF {
+        if layout::is_fixed(fragment, element) {
+            PointF::new(0.0, 0.0)
+        } else {
+            self.scroll.viewport
+        }
+    }
+
+    /// Whether `element` is a box the user scrolls: a scroll container
+    /// with more than its padding box to show (Blink's
+    /// `LayoutBox::IsUserScrollable`).
+    pub(crate) fn is_user_scrollable(&self, element: NodeId) -> bool {
+        let Some(found) = self.element_box(element) else {
+            return false;
+        };
+        let Some(block) = found.block.filter(|block| block.scroll.is_some()) else {
+            return false;
+        };
+        let border = found.border_box;
+        let width = border.width - block.border[1] - block.border[3];
+        let height = border.height - block.border[0] - block.border[2];
+        block.scroll_size.width > width || block.scroll_size.height > height
+    }
+
     /// The boxes of text `text`'s data from `start` to `end`, CSS px of the
     /// viewport (`layout::text_rects` less the viewport's scroll offset,
     /// unless `element`, the one it is in, is fixed to it, as
@@ -2119,6 +2206,92 @@ impl Frame {
     pub(crate) fn update_lifecycle_to_pre_paint(&mut self, cx: &Cx<'_, '_>) {
         dom_api::FrameLayout::update_style_and_layout(self, cx);
         self.view.update_pre_paint();
+    }
+
+    /// `element`'s box model, of `document`'s frame, in the top-level
+    /// frame's viewport (Blink's `FrameQuadToViewport`): as last laid out
+    /// and pre-painted; none without a box or a frame showing `document`.
+    pub(crate) fn box_quads_in_top(
+        &mut self,
+        document: NodeId,
+        element: NodeId,
+    ) -> Option<layout::BoxQuads> {
+        let quads = self.view.view_of(document)?.box_quads(element)?;
+        Some(layout::BoxQuads {
+            content: self.quad_in_top(document, quads.content)?,
+            padding: self.quad_in_top(document, quads.padding)?,
+            border: self.quad_in_top(document, quads.border)?,
+            margin: self.quad_in_top(document, quads.margin)?,
+        })
+    }
+
+    /// `element`'s border boxes, of `document`'s frame, as quads in the
+    /// top-level frame's viewport.
+    pub(crate) fn border_quads_in_top(&mut self, document: NodeId, element: NodeId) -> Vec<layout::Quad> {
+        let quads = self
+            .view
+            .view_of(document)
+            .map(|view| view.border_quads(element))
+            .unwrap_or_default();
+        quads
+            .into_iter()
+            .filter_map(|quad| self.quad_in_top(document, quad))
+            .collect()
+    }
+
+    /// `quad`, in the viewport of the frame showing `document`, in the
+    /// top-level frame's.
+    fn quad_in_top(&mut self, document: NodeId, quad: layout::Quad) -> Option<layout::Quad> {
+        let [a, b, c, d] = quad;
+        Some([
+            self.view.point_from_frame(document, a)?,
+            self.view.point_from_frame(document, b)?,
+            self.view.point_from_frame(document, c)?,
+            self.view.point_from_frame(document, d)?,
+        ])
+    }
+
+    /// Whether `element`, of `document`'s frame, is a box the user scrolls.
+    pub(crate) fn is_user_scrollable(&self, document: NodeId, element: NodeId) -> bool {
+        self.view
+            .view_of(document)
+            .is_some_and(|view| view.is_user_scrollable(element))
+    }
+
+    /// What is at `point`, CSS px of the top-level frame's viewport, through
+    /// the frames in it: pre-painted first.
+    pub(crate) fn hit_test_in_top(&mut self, point: PointF) -> dom_api::Hit {
+        self.view.hit_test(point)
+    }
+
+    /// The top-level frame's viewport's scroll offset.
+    pub(crate) fn top_viewport_scroll(&self) -> PointF {
+        self.view.viewport_scroll_offset()
+    }
+
+    /// The top-level frame's viewport's size, CSS px.
+    pub(crate) fn viewport_size(&self) -> SizeF {
+        self.viewport
+    }
+
+    /// `text` on one line in the UI's font (sans-serif), `size` px, bold
+    /// or not: DevTools' overlay's labels.
+    pub(crate) fn shape_label(&mut self, text: &str, size: f32, bold: bool) -> Option<gfx::ShapedText> {
+        let style = computed_style::CanvasTextStyle {
+            font: computed_style::CanvasFont {
+                family: Arc::new([computed_style::FontFamily::Generic(
+                    computed_style::GenericFamily::SansSerif,
+                )]),
+                size,
+                weight: if bold { 600.0 } else { 400.0 },
+                ..computed_style::CanvasFont::default()
+            },
+            direction: computed_style::Direction::Ltr,
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
+            kerning: computed_style::FontKerning::Auto,
+        };
+        Some(layout::shape_canvas_text(&mut self.text, text, &style))
     }
 
     /// `FrameView::wheel`, style and layout brought up to date first

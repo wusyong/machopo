@@ -2005,7 +2005,7 @@ fn the_outer_size_is_the_windows() {
 }
 
 /// A PNG in base64: its size and its pixels, RGBA.
-fn png(data: &str) -> ((u32, u32), Vec<u8>) {
+pub(crate) fn png(data: &str) -> ((u32, u32), Vec<u8>) {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(data)
         .expect("base64");
@@ -2019,7 +2019,7 @@ fn png(data: &str) -> ((u32, u32), Vec<u8>) {
 }
 
 /// The pixel at `x`, `y` of an RGBA image `width` wide, but its alpha.
-fn pixel(pixels: &[u8], width: u32, x: u32, y: u32) -> [u8; 3] {
+pub(crate) fn pixel(pixels: &[u8], width: u32, x: u32, y: u32) -> [u8; 3] {
     let i = ((y * width + x) * 4) as usize;
     [pixels[i], pixels[i + 1], pixels[i + 2]]
 }

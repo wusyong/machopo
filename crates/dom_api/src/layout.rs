@@ -325,3 +325,39 @@ pub trait FrameLayout: Any {
 /// Where the engine keeps the host's layout, lent to an operation by a
 /// move (taken out and put back: no borrow flag), shared or whole alike.
 pub type LayoutCell = Cell<Option<Box<dyn FrameLayout>>>;
+
+/// What an operation borrows the host's layout from (`ApiCx`): the
+/// engine's cell, or a layout the host lends for one call of its own.
+/// Either lends it by a move, so a borrow inside another finds none.
+pub(crate) trait LendLayout {
+    /// `f` with the layout, if it isn't lent already.
+    fn lend(&self, f: &mut dyn FnMut(&mut dyn FrameLayout));
+}
+
+impl LendLayout for LayoutCell {
+    fn lend(&self, f: &mut dyn FnMut(&mut dyn FrameLayout)) {
+        if let Some(mut layout) = self.take() {
+            f(&mut *layout);
+            self.set(Some(layout));
+        }
+    }
+}
+
+/// A layout the host lends an operation of its own (DevTools' `CSS`
+/// agent reading what `getComputedStyle` reads).
+pub(crate) struct LentLayout<'l>(Cell<Option<&'l mut dyn FrameLayout>>);
+
+impl<'l> LentLayout<'l> {
+    pub(crate) fn new(layout: &'l mut dyn FrameLayout) -> Self {
+        Self(Cell::new(Some(layout)))
+    }
+}
+
+impl LendLayout for LentLayout<'_> {
+    fn lend(&self, f: &mut dyn FnMut(&mut dyn FrameLayout)) {
+        if let Some(layout) = self.0.take() {
+            f(&mut *layout);
+            self.0.set(Some(layout));
+        }
+    }
+}

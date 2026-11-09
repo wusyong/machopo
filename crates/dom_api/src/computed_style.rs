@@ -15,12 +15,13 @@
 use std::sync::Arc;
 
 use computed_style::{ComputedStyle, PseudoId};
-use dom::{CssStyleDeclaration, NodeRef, StyleTarget, Window};
+use dom::{CssStyleDeclaration, Cx, NodeRef, StyleTarget, Window};
 use elise::Gc;
 use gfx::ElementBox;
 
 use crate::exception::{DomException, ExceptionName};
-use crate::{ApiCx, ApiError};
+use crate::layout::LentLayout;
+use crate::{ApiCx, ApiError, FrameLayout};
 
 /// The pseudo-elements a selector may name. A declaration asked for one
 /// machopo doesn't have has no style at all, as Blink's has when it has no
@@ -113,6 +114,50 @@ pub(crate) fn property_names<'gc>(
         .into_iter()
         .map(str::to_owned)
         .chain(custom)
+        .collect()
+}
+
+/// Each property `getComputedStyle(element)` lists, with its value, as
+/// it reads them (`property_names`, `property_value`): DevTools' `CSS`
+/// agent's `getComputedStyleForNode` (Blink's reads its
+/// `CSSComputedStyleDeclaration`), the host lending its layout. Empty for
+/// an element no frame of `layout`'s renders.
+pub fn computed_style_for_devtools<'gc>(
+    cx: &Cx<'_, 'gc>,
+    layout: &mut dyn FrameLayout,
+    element: NodeRef<'gc>,
+) -> Vec<(String, String)> {
+    let layout = LentLayout::new(layout);
+    let cx = ApiCx {
+        dom: cx,
+        layout: Some(&layout),
+    };
+    property_names(&cx, element, StyleTarget::Element)
+        .into_iter()
+        .map(|name| {
+            let value = property_value(&cx, element, StyleTarget::Element, &name);
+            (name, value)
+        })
+        .collect()
+}
+
+/// The values `getComputedStyle(element)` reads of `properties`, in order,
+/// the host lending its layout: what DevTools' overlay shows of an
+/// element's style in its label (Blink's `BuildStyleInfo`).
+pub fn computed_values_for_devtools<'gc>(
+    cx: &Cx<'_, 'gc>,
+    layout: &mut dyn FrameLayout,
+    element: NodeRef<'gc>,
+    properties: &[&str],
+) -> Vec<String> {
+    let layout = LentLayout::new(layout);
+    let cx = ApiCx {
+        dom: cx,
+        layout: Some(&layout),
+    };
+    properties
+        .iter()
+        .map(|property| property_value(&cx, element, StyleTarget::Element, property))
         .collect()
 }
 

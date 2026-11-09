@@ -475,3 +475,18 @@ fn placeholder_selectors_read_back_as_written() {
         ]
     );
 }
+
+/// What DevTools lists of a rule's selectors: each one's text and its
+/// specificity, ids, classes and elements apart.
+#[test]
+fn selectors_are_listed_with_their_specificity() {
+    let contents = StyleSheetContents::parse("#a .b > p, div::before, :is(#x, y) .c.d { }", None);
+    assert_eq!(
+        style(&contents.rules()[0]).selectors_for_inspector(),
+        [
+            ("#a .b > p".to_owned(), [1, 1, 1]),
+            ("div::before".to_owned(), [0, 0, 2]),
+            (":is(#x, y) .c.d".to_owned(), [1, 2, 0]),
+        ]
+    );
+}

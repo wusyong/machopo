@@ -1,0 +1,309 @@
+# Mutation test of stage 2b: what an element's style is cascaded from
+# (`style`), the rules' selectors and declarations as DevTools lists them
+# (`css`), the fonts of text (`layout`), the `CSS` agent, the overlay's
+# rings and its label's styles:
+# python3 scripts/test.py mutate rfcs/0091-devtools-elements/mutants-2b.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools_css"]
+timeout = 600
+
+# What an element's style is cascaded from (`style`).
+
+[[mutant]]
+name = "an important block is listed twice"
+file = "crates/style/src/lib.rs"
+from = '''            .filter(|(_, _, important, _)| !important)
+            .filter_map(|(priority, _, _, source)| match source {'''
+to = '''            .filter_map(|(priority, _, _, source)| match source {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "explain::"]
+
+[[mutant]]
+name = "the rules aren't in cascade order"
+file = "crates/style/src/lib.rs"
+from = '''        rules.sort_by_key(|(priority, _)| *priority);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "explain::"]
+
+[[mutant]]
+name = "every rule is the author's"
+file = "crates/style/src/lib.rs"
+from = '''                let origin = if priority.level == CascadePriority::level(Origin::UserAgent, false) {'''
+to = '''                let origin = if false {'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "explain::"]
+
+[[mutant]]
+name = "a pseudo-element's selector is the element's"
+file = "crates/style/src/lib.rs"
+from = '''                    if target == Target::Element
+                        && let Some(found) = &mut self.matched_selectors'''
+to = '''                    if let Some(found) = &mut self.matched_selectors'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "explain::"]
+
+[[mutant]]
+name = "a selector matched twice is listed twice"
+file = "crates/style/src/lib.rs"
+from = '''                matching_selectors.dedup();'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "explain::"]
+
+[[mutant]]
+name = "explaining sets the selector flags"
+file = "crates/style/src/lib.rs"
+from = '''            selector_flags: NeedsSelectorFlags::No,'''
+to = '''            selector_flags: NeedsSelectorFlags::Yes,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "explain::"]
+
+[[mutant]]
+name = "the bloom filter has no ancestors"
+file = "crates/style/src/lib.rs"
+from = '''        for &ancestor in ancestors.iter().rev() {
+            walk.bloom.push(cx, ancestor);
+        }
+        let inline = cx.inline_style(element);'''
+to = '''        let inline = cx.inline_style(element);'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "explain::"]
+
+[[mutant]]
+name = "a node out of the tree is explained"
+file = "crates/style/src/lib.rs"
+from = '''            || self.document != Some(cx.node_id(document))
+            || !cx.is_connected(element)'''
+to = '''            || self.document != Some(cx.node_id(document))'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "explain::"]
+
+[[mutant]]
+name = "another document's element is explained"
+file = "crates/style/src/lib.rs"
+from = '''            || self.document != Some(cx.node_id(document))
+            || !cx.is_connected(element)'''
+to = '''            || !cx.is_connected(element)'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "explain::"]
+
+[[mutant]]
+name = "the presentational hints aren't told"
+file = "crates/style/src/lib.rs"
+from = '''            presentation: presentation.map(|(hints, _)| hints),'''
+to = '''            presentation: None,'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "explain::"]
+
+# The rules' selectors and declarations (`css`).
+
+[[mutant]]
+name = "a selector's ids and classes are swapped"
+file = "crates/css/src/stylesheet.rs"
+from = '''                        specificity >> 20,
+                        (specificity >> 10) & TEN_BITS,'''
+to = '''                        (specificity >> 10) & TEN_BITS,
+                        specificity >> 20,'''
+test = ["cargo", "test", "-q", "-p", "style_resolver", "--test", "it", "--", "selectors_are_listed"]
+
+[[mutant]]
+name = "a declaration is never implicit"
+file = "crates/css/src/property_set.rs"
+from = '''                    implicit: value.implicit,'''
+to = '''                    implicit: false,'''
+test = ["cargo", "test", "-q", "-p", "style_resolver", "--test", "it", "--", "declarations_are_listed"]
+
+[[mutant]]
+name = "no shorthand set a declaration"
+file = "crates/css/src/property_set.rs"
+from = '''                    shorthand: value.shorthand.map(Shorthand::name),'''
+to = '''                    shorthand: None,'''
+test = ["cargo", "test", "-q", "-p", "style_resolver", "--test", "it", "--", "declarations_are_listed"]
+
+# The fonts of text (`layout`).
+
+[[mutant]]
+name = "every run's font is counted"
+file = "crates/layout/src/platform_fonts.rs"
+from = '''            .filter(|run| counts(run))'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "platform_fonts::"]
+
+[[mutant]]
+name = "a run's glyphs aren't counted"
+file = "crates/layout/src/platform_fonts.rs"
+from = '''            run.for_each_glyph(usize::MAX, |_, _| glyphs = glyphs.saturating_add(1));'''
+to = '''            run.for_each_glyph(usize::MAX, |_, _| glyphs = 1);'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "platform_fonts::"]
+
+[[mutant]]
+name = "the fonts come in reverse tree order"
+file = "crates/layout/src/platform_fonts.rs"
+from = '''        fragments.extend(fragment.children.iter().rev().map(|child| &*child.fragment));'''
+to = '''        fragments.extend(fragment.children.iter().map(|child| &*child.fragment));'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "platform_fonts::"]
+
+[[mutant]]
+name = "the typographic family isn't looked for first"
+file = "crates/layout/src/platform_fonts.rs"
+from = '''                family_name: name(&[NameId::TYPOGRAPHIC_FAMILY_NAME, NameId::FAMILY_NAME]),'''
+to = '''                family_name: name(&[NameId::FULL_NAME]),'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "platform_fonts::"]
+
+[[mutant]]
+name = "a font with Macintosh names only has none"
+file = "crates/layout/src/platform_fonts.rs"
+from = '''            .or_else(|| records.iter().find(|record| mac_english(record)))
+            .or_else(|| records.first())?;'''
+to = '''            ?;'''
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "--", "platform_fonts::"]
+
+# The `CSS` agent.
+
+[[mutant]]
+name = "CSS is on without DOM"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                if !self.dom_agent.enabled(name) {
+                    return Err("DOM agent needs to be enabled first.".to_owned());
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "CSS answers while off"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''            _ if !self.sessions.borrow().contains_key(name) => {'''
+to = '''            _ if false => {'''
+
+[[mutant]]
+name = "a text node has no style"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''        NodeKind::Text => cx
+            .flat_tree_parent(node)
+            .filter(|&parent| cx.kind(parent) == NodeKind::Element),'''
+to = '''        NodeKind::Text => None,'''
+
+[[mutant]]
+name = "a text node's rules are asked for"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''        if !element {
+            return Err("Node is not an Element".to_owned());
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "an element with no style attribute has no inline style"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''        None => json!({ "cssProperties": [], "shorthandEntries": [] }),'''
+to = '''        None => Value::Null,'''
+
+[[mutant]]
+name = "the layout parent is a display: contents one"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                        if !contents {'''
+to = '''                        if true {'''
+
+[[mutant]]
+name = "a shorthand is said not to be important"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''            if block.property_priority(shorthand) == "important" {
+                entry["important"] = json!(true);
+            }'''
+to = '''            entry["important"] = json!(false);'''
+
+[[mutant]]
+name = "a declaration's priority isn't told"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''            if declaration.important {
+                property["important"] = json!(true);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "a style that changed isn't told"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                (Some(new), Some(old)) => Arc::ptr_eq(new, old),'''
+to = '''                (Some(_), Some(_)) => true,'''
+
+[[mutant]]
+name = "every frame tells the style changed"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                (Some(new), Some(old)) => Arc::ptr_eq(new, old),'''
+to = '''                (Some(_), Some(_)) => false,'''
+
+[[mutant]]
+name = "the frame doesn't look at the followed style"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        self.css_agent.styles_updated(dom, frame);'''
+to = ''''''
+
+[[mutant]]
+name = "Computed is followed after it stops"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                if let Some(session) = self.sessions.borrow_mut().get_mut(name) {
+                    session.tracked = tracked;
+                }'''
+to = '''                if let Some(session) = self.sessions.borrow_mut().get_mut(name) {
+                    if tracked.is_some() {
+                        session.tracked = tracked;
+                    }
+                }'''
+
+[[mutant]]
+name = "a child's children's fonts aren't counted"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''            NodeKind::Element => counted.extend(
+                children(child)
+                    .filter(|&grandchild| cx.kind(grandchild) == NodeKind::Text)
+                    .map(|grandchild| cx.node_id(grandchild)),
+            ),'''
+to = ''''''
+
+[[mutant]]
+name = "generated content's fonts aren't counted"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                            None => run.pseudo.is_some() && run.node == element && element.is_some(),'''
+to = '''                            None => false,'''
+
+# The overlay's rings and its label's styles.
+
+[[mutant]]
+name = "a box's ring has the box inside it too"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''        inner = Some(points);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools_overlay"]
+
+[[mutant]]
+name = "an element without text has its color and font in the label"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''    if has_text {
+        names.extend(["color", "font-family", "font-size", "line-height"]);
+    }'''
+to = '''    names.extend(["color", "font-family", "font-size", "line-height"]);'''
+
+[[mutant]]
+name = "the label's colors are as computed"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''            style[name] = format!("#{:02X}{:02X}{:02X}{:02X}", color.r, color.g, color.b, color.a).into();
+            continue;'''
+to = '''            style[name] = value.into();
+            continue;'''
+
+[[mutant]]
+name = "the label's rows aren't drawn"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''        draw_text(list, value, PointF::new(value_at, baseline), Color::BLACK, rect);'''
+to = ''''''
+
+[[mutant]]
+name = "an opaque color is written with its alpha"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''        _ if color.a == 255 => format!("#{:02X}{:02X}{:02X}", color.r, color.g, color.b),'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "overlay_agent"]
+
+[[mutant]]
+name = "a transparent background has a row"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''            if color.a > 0 {
+                rows.push((name, format_color(color, format), Some(color)));
+            }'''
+to = '''            rows.push((name, format_color(color, format), Some(color)));'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "overlay_agent"]
+
+[[mutant]]
+name = "the margin comes after the padding"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''    for (name, property) in [("Margin", "margin"), ("Padding", "padding")] {'''
+to = '''    for (name, property) in [("Padding", "padding"), ("Margin", "margin")] {'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "overlay_agent"]

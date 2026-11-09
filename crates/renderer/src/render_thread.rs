@@ -29,9 +29,11 @@ use crate::task_queue::{DevToolsQueue, MainThreadTask, RendererReceiver};
 
 mod devtools;
 mod documents;
+mod css_agent;
 mod dom_agent;
 mod log_agent;
 mod network_agent;
+mod overlay_agent;
 mod page_agent;
 mod webdriver;
 mod webdriver_commands;
@@ -331,6 +333,14 @@ struct RenderThread {
     /// DevTools' `DOM` domain (Blink's `InspectorDOMAgent`): before the
     /// engine, as the nodes it keeps are roots of the engine's DOM.
     dom_agent: Rc<dom_agent::DomAgent>,
+    /// DevTools' `CSS` domain (Blink's `InspectorCSSAgent`): before the
+    /// engine, as the styles it keeps are of the engine's DOM.
+    css_agent: Rc<css_agent::CssAgent>,
+    /// DevTools' `Overlay` domain (Blink's `InspectorOverlayAgent`), its
+    /// layer as last committed, and the count of what it showed then.
+    overlay_agent: Rc<overlay_agent::OverlayAgent>,
+    overlay_layer: Option<compositor::PictureLayer>,
+    overlay_version: u64,
     /// The DOM's engine, made at its first document, or at DevTools'
     /// first command for its inspector (`make_engine`).
     engine: Option<Box<dyn dom_api::ScriptEngine>>,
@@ -363,6 +373,8 @@ struct RenderThread {
 impl Drop for RenderThread {
     fn drop(&mut self) {
         self.dom_agent.dom_gone();
+        self.css_agent.dom_gone();
+        self.overlay_agent.dom_gone();
     }
 }
 
@@ -389,6 +401,14 @@ impl RenderThread {
             network_agent.clone(),
         ));
         let dom_agent = Rc::new(dom_agent::DomAgent::new(to_browser.clone()));
+        let css_agent = Rc::new(css_agent::CssAgent::new(
+            to_browser.clone(),
+            dom_agent.clone(),
+        ));
+        let overlay_agent = Rc::new(overlay_agent::OverlayAgent::new(
+            to_browser.clone(),
+            dom_agent.clone(),
+        ));
         let blob_urls = BlobUrls::new(to_browser.clone());
         tracing::info!(raster = raster::BACKEND, "renderer main thread up");
         let _ = to_browser.send(RendererHostMsg::RendererReady);
@@ -439,6 +459,10 @@ impl RenderThread {
             network_agent,
             log_agent,
             dom_agent,
+            css_agent,
+            overlay_agent,
+            overlay_layer: None,
+            overlay_version: 0,
             devtools_queue,
             engine: None,
             images: std::collections::HashMap::new(),
@@ -526,6 +550,11 @@ impl RenderThread {
             self.tell_frames();
             // The DOM's changes the tasks made, to DevTools.
             self.tell_dom_changes();
+            // What DevTools' overlay shows follows its node at each frame,
+            // and draws once it changes.
+            if self.overlay_agent.showing() || self.overlay_agent.version() != self.overlay_version {
+                self.request_main_frame();
+            }
             // The engine's platform tasks are tasks too, with a checkpoint
             // after them (Blink runs Oilpan's and V8's on the main thread's
             // scheduler): they may run script (FinalizationRegistry

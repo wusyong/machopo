@@ -1,0 +1,192 @@
+# Mutation test of stage 2a: the box model and the node at a point, and the
+# overlay (its highlight, its drawing, the inspect mode):
+# python3 scripts/test.py mutate rfcs/0091-devtools-elements/mutants-2a.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools_overlay"]
+timeout = 600
+
+# The box model (`layout`, `FrameView`).
+
+[[mutant]]
+name = "a box's margin isn't outside its border"
+file = "crates/layout/src/geometry.rs"
+from = '''            -margins.left,
+            -margins.top,'''
+to = '''            0.0,
+            0.0,'''
+
+[[mutant]]
+name = "a box's padding box is its border box"
+file = "crates/layout/src/geometry.rs"
+from = '''        let padding = contract(border, &fragment.border);'''
+to = '''        let padding = border;'''
+
+[[mutant]]
+name = "an inline box's padding isn't inside its border"
+file = "crates/layout/src/geometry.rs"
+from = '''    let padding = contract(border, &border_sides);'''
+to = '''    let padding = border;'''
+
+[[mutant]]
+name = "an inline box's margin box is its padding box"
+file = "crates/layout/src/geometry.rs"
+from = '''        margin: quad(border, &identity),
+    })'''
+to = '''        margin: quad(padding, &identity),
+    })'''
+
+[[mutant]]
+name = "a border quad isn't transformed"
+file = "crates/layout/src/geometry.rs"
+from = '''            quads.push(quad(border, to_root));'''
+to = '''            quads.push(quad(border, &Transform::IDENTITY));'''
+
+[[mutant]]
+name = "a fixed box is scrolled"
+file = "crates/renderer/src/frame_view.rs"
+from = '''    fn viewport_origin_of(&self, fragment: &layout::BoxFragment, element: NodeId) -> PointF {
+        if layout::is_fixed(fragment, element) {'''
+to = '''    fn viewport_origin_of(&self, fragment: &layout::BoxFragment, element: NodeId) -> PointF {
+        if false && layout::is_fixed(fragment, element) {'''
+
+[[mutant]]
+name = "a box that just fits scrolls"
+file = "crates/renderer/src/frame_view.rs"
+from = '''        block.scroll_size.width > width || block.scroll_size.height > height'''
+to = '''        block.scroll_size.width >= width || block.scroll_size.height >= height'''
+
+[[mutant]]
+name = "an iframe's quads stay in its viewport"
+file = "crates/renderer/src/frame_view.rs"
+from = '''            self.view.point_from_frame(document, a)?,'''
+to = '''            a,'''
+
+[[mutant]]
+name = "the box model's size is the content box's"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''        let size = frame.view.view_of(document)?.element_box(node)?.border_box;'''
+to = '''        let size = frame.view.view_of(document)?.element_box(node)?.border_box.inset(5.0);'''
+
+[[mutant]]
+name = "the node at a point isn't scrolled to"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''            gfx::PointF::new(point.x - scroll.x, point.y - scroll.y)'''
+to = '''            gfx::PointF::new(point.x, point.y + 0.0 * scroll.y)'''
+
+[[mutant]]
+name = "a point outside the viewport is hit"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''        if !((0.0..viewport.width).contains(&point.x) && (0.0..viewport.height).contains(&point.y)) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a user-agent shadow tree's node isn't its host"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''        while !user_agent && let Some(root) = cx.containing_shadow_root(node) {'''
+to = '''        while false && let Some(root) = cx.containing_shadow_root(node) {'''
+
+[[mutant]]
+name = "a node scrollable isn't told"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''            value["isScrollable"] = true.into();'''
+to = ''''''
+
+# The overlay.
+
+[[mutant]]
+name = "the overlay needs no DOM"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''                if !self.dom_agent.enabled(name) {'''
+to = '''                if false {'''
+
+[[mutant]]
+name = "a highlight with no config isn't refused as invalid"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''        if method == "highlightNode" && !params["highlightConfig"].is_object() {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "a highlight isn't hidden"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''            "hideHighlight" => {
+                self.show(None);'''
+to = '''            "hideHighlight" => {'''
+
+[[mutant]]
+name = "a highlight that moved isn't drawn again"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''        if *self.drawn.borrow() == highlight {'''
+to = '''        if self.drawn.borrow().is_some() && highlight.is_some() {'''
+
+[[mutant]]
+name = "a transparent red is no color"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''        self == Self::TRANSPARENT'''
+to = '''        self.a == 0.0'''
+
+[[mutant]]
+name = "the test's highlight has no outline"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''            content_outline: rgba(128, 0, 0),'''
+to = '''            content_outline: Rgba::TRANSPARENT,'''
+
+[[mutant]]
+name = "the paths aren't filled"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''        if fill.a > 0 {'''
+to = '''        if fill.a > 255 - 1 && false {'''
+
+[[mutant]]
+name = "the label isn't drawn"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''        paint_label(&mut list, info, border, viewport, shape);'''
+to = '''        let _ = (info, border, viewport, &shape);'''
+
+[[mutant]]
+name = "the label has no size"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''            info["nodeWidth"] = number(bounds.width).into();'''
+to = '''            info["nodeWidth"] = number(bounds.height).into();'''
+
+[[mutant]]
+name = "the overlay's mouse isn't followed"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''        self.show(Some(Shown {
+            node,
+            config,
+            inspecting: true,
+        }));'''
+to = ''''''
+
+[[mutant]]
+name = "a click doesn't inspect"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''            self.tell(
+                &name,
+                "Overlay.inspectNodeRequested",'''
+to = '''            self.tell(
+                &name,
+                "Overlay.inspectNodeRequestedNot",'''
+
+[[mutant]]
+name = "the inspect mode doesn't take the mouse"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                InputEvent::MouseUp { .. } => return,'''
+to = '''                InputEvent::MouseUp { .. } => {}'''
+
+[[mutant]]
+name = "an overlay asked for is answered as shown"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''                if asks {'''
+to = '''                if asks && false {'''
+
+[[mutant]]
+name = "the overlay isn't over the page's layers"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            layers.extend(self.overlay_layer.clone().map(compositor::Layer::from));'''
+to = ''''''
+
+[[mutant]]
+name = "the overlay asks for no frame"
+file = "crates/renderer/src/render_thread.rs"
+from = '''            if self.overlay_agent.showing() || self.overlay_agent.version() != self.overlay_version {'''
+to = '''            if false {'''

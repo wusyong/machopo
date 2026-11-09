@@ -58,6 +58,24 @@ PAGES = {
         "document.body.addEventListener('keydown', () => {}, { passive: true, once: true });\n"
         "window.addEventListener('load', function w() {});\n</script>"
     ),
+    "/boxes.html": (
+        "<!DOCTYPE html><style>html, body { margin: 0 } "
+        "#a { position: absolute; left: 10px; top: 20px; width: 100px; height: 50px; "
+        "padding: 5px; border: 2px solid black; margin: 3px } "
+        "#t { position: absolute; left: 200px; top: 200px; width: 100px; height: 100px; "
+        "transform: rotate(90deg) }</style>"
+        "<div id=a class='x y x'>a</div><div id=t></div><p style='margin-top: 400px'>x</p>"
+        "<div id=s style='overflow: auto; height: 20px'><div style='height: 100px'></div></div>"
+        "<div id=n style='overflow: auto; height: 200px'><div style='height: 100px'></div></div>"
+    ),
+    "/css.html": (
+        "<!DOCTYPE html><style>html, body { margin: 0; font-family: Times } div { color: green } "
+        ".a, p, div.a { color: blue; margin: 1px 2px } #x { color: red !important; padding: 3px; "
+        "width: 100px; line-height: 20px } "
+        "div::before { content: 'b' } span { color: gray }</style>"
+        "<div id=x class=a style='color: pink; border-top: solid'>text <b>bold</b></div>"
+        "<font id=f color=red>f</font><div id=e></div>"
+    ),
     "/life.html": (
         "<!DOCTYPE html>\n<title>Life</title>\n<link rel=stylesheet href='/style.css'>\n"
         "<img src='/missing.png'>\n<iframe src='/child.html'></iframe>"
@@ -120,6 +138,19 @@ KNOWN: dict[tuple[str, str], str] = {
     "responses don't go in",
     ("dom_objects", "[1].result.result.className"): "machopo has no HTMLDocument: an HTML document's object is a "
     "Document",
+    ("overlay", "[6].result.highlight.elementInfo.accessibleName"): "machopo has no accessibility tree: the "
+    "overlay's label has no accessibility info",
+    ("overlay", "[6].result.highlight.elementInfo.accessibleRole"): "the same",
+    ("overlay", "[6].result.highlight.elementInfo.isKeyboardFocusable"): "the same",
+    ("overlay", "[6].result.highlight.elementInfo.layoutObjectName"): "Blink's layout object's class "
+    "(LayoutBlockFlow...), which machopo's boxes have no names like",
+    ("overlay", "[9].result.highlight.elementInfo.accessibleName"): "the same as [6]'s",
+    ("overlay", "[9].result.highlight.elementInfo.accessibleRole"): "the same as [6]'s",
+    ("overlay", "[9].result.highlight.elementInfo.isKeyboardFocusable"): "the same as [6]'s",
+    ("overlay", "[9].result.highlight.elementInfo.layoutObjectName"): "the same as [6]'s",
+    ("overlay", "[19].error.data"): "Chrome's message has where in its CBOR the field is missing",
+    ("css", "[3].rules[2].style.longhands.color[0]"): "Chrome writes a rule's values from its text (`!important` "
+    "with them); machopo keeps no sheet's text, and writes them as parsed, as Chrome writes a rule it has no text of",
     ("debugger", "[2].params.hitBreakpoints[0]"): "Chrome's breakpoint ids start with br:, which the V8 source "
     "machopo builds doesn't put there; DevTools takes them as they are",
 }
@@ -557,6 +588,152 @@ def case_dom_objects(run: Run, url: Callable[[str], str]) -> list:
     return transcript
 
 
+def case_overlay(run: Run, url: Callable[[str], str]) -> list:
+    """Nodes' box models (absolutely positioned, transformed),
+    content quads, the nodes at points, and the highlight objects Blink
+    builds for the overlay; what `Overlay` answers without `DOM`, and to
+    a mode it doesn't have."""
+    run.load(url("/boxes.html"))
+    transcript = [run.call("Overlay.enable")]
+    run.call("DOM.enable")
+    transcript.append(run.call("Overlay.enable"))
+    root = run.call("DOM.getDocument")["result"]["root"]["nodeId"]
+    for selector in ["#s", "#n"]:
+        node = run.call("DOM.querySelector", {"nodeId": root, "selector": selector})["result"]["nodeId"]
+        transcript.append(run.call("DOM.describeNode", {"nodeId": node}))
+    for selector in ["#a", "#t", "head"]:
+        node = run.call("DOM.querySelector", {"nodeId": root, "selector": selector})["result"]["nodeId"]
+        transcript.append(run.call("DOM.getBoxModel", {"nodeId": node}))
+        transcript.append(run.call("DOM.getContentQuads", {"nodeId": node}))
+        transcript.append(run.call("Overlay.getHighlightObjectForTest", {"nodeId": node}))
+    # The viewports differ (Chrome's headless one is shorter): a point outside
+    # both, none inside one only.
+    for x, y in [(50, 50), (22, 33), (5, 5), (5, 2000)]:
+        transcript.append(run.call("DOM.getNodeForLocation", {"x": x, "y": y}))
+    transcript.append(run.events(DOM_EVENTS, settle=0.2))
+    transcript.append(run.call("Overlay.setInspectMode", {"mode": "lasso"}))
+    transcript.append(run.call("Overlay.highlightNode", {"nodeId": root}))
+    transcript.append(run.call("Overlay.setShowGridOverlays", {"gridNodeHighlightConfigs": []}))
+    return transcript
+
+
+# The computed values `css` compares: machopo lists the properties it has,
+# Chrome every one it has.
+COMPUTED = (
+    "color", "display", "width", "height", "margin-top", "margin-left", "padding-top",
+    "border-top-style", "border-top-width", "font-size", "background-color", "position",
+)
+
+
+def css_style(style: dict) -> dict:
+    """A `CSS.CSSStyle` as both have it: its longhands' values and
+    priorities, its shorthands' (Chrome lists a rule's declarations as
+    written too, from its text, which machopo doesn't keep)."""
+    return {
+        "longhands": {
+            p["name"]: [p["value"], p.get("important", False)]
+            for p in style["cssProperties"]
+            if "longhandProperties" not in p
+        },
+        "shorthands": {e["name"]: [e["value"], e.get("important", False)] for e in style["shorthandEntries"]},
+    }
+
+
+def matched_styles(answer: dict) -> dict:
+    """A `getMatchedStylesForNode` answer as both have it: its keys; its
+    author rules' selectors, their specificity, those that match and the
+    rules' declarations (`css_style`); the inline style's declarations;
+    the presentational hints (neither has their text) and the layout
+    parent; the first UA rule that sets `display: block`, in full (the UA
+    sheets differ, but neither has their text)."""
+    result = answer.get("result")
+    if result is None:
+        return answer
+    rules = result["matchedCSSRules"]
+    ua_block = next(
+        (
+            match["rule"]["style"]
+            for match in rules
+            if match["rule"]["origin"] == "user-agent"
+            and any(p == {"name": "display", "value": "block"} for p in match["rule"]["style"]["cssProperties"])
+        ),
+        None,
+    )
+    return {
+        "keys": sorted(result),
+        "rules": [
+            {
+                "selectors": match["rule"]["selectorList"]["text"],
+                "specificity": [
+                    [s["specificity"]["a"], s["specificity"]["b"], s["specificity"]["c"]]
+                    for s in match["rule"]["selectorList"]["selectors"]
+                ],
+                "matching": match["matchingSelectors"],
+                "style": css_style(match["rule"]["style"]),
+            }
+            for match in rules
+            if match["rule"]["origin"] == "regular"
+        ],
+        "inline": css_style(result["inlineStyle"]) if "inlineStyle" in result else None,
+        "attributes": result.get("attributesStyle"),
+        "parentLayoutNodeId": result.get("parentLayoutNodeId"),
+        "ua display: block": ua_block,
+    }
+
+
+def case_css(run: Run, url: Callable[[str], str]) -> list:
+    """What Styles and Computed read of an element: its computed values,
+    the rules it matches, its inline style and presentational hints, the
+    fonts of its text, its computed style followed as script changes it,
+    the overlay label's styles; what `CSS` answers without `DOM`, of a
+    text node, of a node no session has."""
+    run.load(url("/css.html"))
+    transcript = [run.call("CSS.enable")]
+    run.call("DOM.enable")
+    root = run.call("DOM.getDocument")["result"]["root"]["nodeId"]
+    transcript.append(run.call("CSS.getComputedStyleForNode", {"nodeId": root}))
+    transcript.append(run.call("CSS.enable"))
+
+    def node(selector: str) -> int:
+        return run.call("DOM.querySelector", {"nodeId": root, "selector": selector})["result"]["nodeId"]
+
+    x, font, empty = node("#x"), node("#f"), node("#e")
+    described = run.call("DOM.describeNode", {"nodeId": x, "depth": 1})["result"]["node"]
+    backend = described["children"][0]["backendNodeId"]
+    pushed = run.call("DOM.pushNodesByBackendIdsToFrontend", {"backendNodeIds": [backend]})
+    text = pushed["result"]["nodeIds"][0]
+    for element in [x, font, empty]:
+        transcript.append(matched_styles(run.call("CSS.getMatchedStylesForNode", {"nodeId": element})))
+        inline = run.call("CSS.getInlineStylesForNode", {"nodeId": element})["result"]
+        transcript.append({key: css_style(value) for key, value in inline.items()})
+    for target in [x, text]:
+        computed = run.call("CSS.getComputedStyleForNode", {"nodeId": target})
+        values = {entry["name"]: entry["value"] for entry in computed["result"]["computedStyle"]}
+        transcript.append({name: values.get(name) for name in COMPUTED})
+        transcript.append(computed["result"].get("extraFields"))
+    for target in [x, text, empty]:
+        fonts = run.call("CSS.getPlatformFontsForNode", {"nodeId": target})
+        # In no order (Chrome's is its hash table's): by glyphs.
+        transcript.append(sorted(fonts["result"]["fonts"], key=lambda font: font["glyphCount"]))
+    transcript.append(run.call("CSS.getMatchedStylesForNode", {"nodeId": text}))
+    transcript.append(run.call("CSS.getMatchedStylesForNode", {"nodeId": 999999}))
+    transcript.append(run.call("CSS.trackComputedStyleUpdatesForNode", {"nodeId": x}))
+    run.call("Runtime.evaluate", {"expression": "x.style.paddingLeft = '7px'"})
+    transcript.append(run.events(("CSS.computedStyleUpdated",), settle=0.5))
+    run.call("Runtime.evaluate", {"expression": "document.body.append('-')"})
+    transcript.append(run.events(("CSS.computedStyleUpdated",), settle=0.5))
+    transcript.append(run.call("CSS.trackComputedStyleUpdatesForNode", {}))
+    run.call("Runtime.evaluate", {"expression": "x.style.paddingLeft = '8px'"})
+    transcript.append(run.events(("CSS.computedStyleUpdated",), settle=0.5))
+    for target, color_format in [(x, "hex"), (empty, "hex"), (x, "rgb")]:
+        highlight = run.call(
+            "Overlay.getHighlightObjectForTest", {"nodeId": target, "includeStyle": True, "colorFormat": color_format}
+        )
+        transcript.append(highlight["result"]["highlight"]["elementInfo"].get("style"))
+    run.events(DOM_EVENTS, settle=0.2)
+    return transcript
+
+
 CASES: dict[str, Callable[[Run, Callable[[str], str]], list]] = {
     "values": case_values,
     "properties": case_properties,
@@ -571,6 +748,8 @@ CASES: dict[str, Callable[[Run, Callable[[str], str]], list]] = {
     "log": case_log,
     "dom": case_dom,
     "dom_objects": case_dom_objects,
+    "overlay": case_overlay,
+    "css": case_css,
 }
 
 

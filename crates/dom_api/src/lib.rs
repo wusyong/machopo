@@ -134,6 +134,7 @@ mod window;
 /// What `EventHandler` says the pointer looks like: `cursor`'s keyword,
 /// `auto` resolved.
 pub use ::computed_style::CursorKeyword;
+pub use computed_style::{computed_style_for_devtools, computed_values_for_devtools};
 pub use animation::{notice_steps, settle_animation_notices, settle_started_animations};
 pub use animation_frame::run_animation_frame_callbacks;
 pub use animations::{AnimationsUpdate, update_animations};
@@ -214,7 +215,7 @@ pub use window::{
 /// one (`layout::FrameLayout`).
 pub struct ApiCx<'a, 'gc> {
     dom: &'a Cx<'a, 'gc>,
-    layout: Option<&'a LayoutCell>,
+    layout: Option<&'a dyn layout::LendLayout>,
 }
 
 impl<'a, 'gc> ApiCx<'a, 'gc> {
@@ -283,11 +284,12 @@ impl<'a, 'gc> ApiCx<'a, 'gc> {
         &self,
         f: impl FnOnce(&mut dyn FrameLayout) -> R,
     ) -> Option<R> {
-        let cell = self.layout?;
-        let mut layout = cell.take()?;
-        let result = f(&mut *layout);
-        cell.set(Some(layout));
-        Some(result)
+        let mut f = Some(f);
+        let mut result = None;
+        self.layout?.lend(&mut |layout| {
+            result = f.take().map(|f| f(layout));
+        });
+        result
     }
 
     pub(crate) fn lend_layout<R>(
@@ -295,13 +297,12 @@ impl<'a, 'gc> ApiCx<'a, 'gc> {
         node: NodeRef<'gc>,
         f: impl FnOnce(&mut dyn FrameLayout) -> R,
     ) -> Option<R> {
-        let cell = self.layout?;
-        let mut layout = cell.take()?;
         let document = self.document_of(node);
-        let shown = self.is_connected(node) && layout.shows(self.node_id(document));
-        let result = shown.then(|| f(&mut *layout));
-        cell.set(Some(layout));
-        result
+        self.lend_frame_layout(|layout| {
+            let shown = self.is_connected(node) && layout.shows(self.node_id(document));
+            shown.then(|| f(layout))
+        })
+        .flatten()
     }
 
     /// Whether `element` is an HTML element in an HTML document: whose

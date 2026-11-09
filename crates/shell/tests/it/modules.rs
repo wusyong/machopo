@@ -778,6 +778,8 @@ fn subresources_from_another_origin_go_by_cors() {
         ),
     ]);
     let b = |path: &str| other.url(path);
+    // An inline module has no `load` to wait for: it says it ran, so the
+    // check waits for it too (it may run after the last event came).
     let page = format!(
         r#"{HEAD}
 <script>
@@ -786,7 +788,7 @@ const expected = [
   "open:load", "closed:error", "deep:error", "creds:error", "inline-creds:error",
   "classic-cors:load", "classic-closed:error", "classic-nocors:load", "classic-creds:error",
   "preload-open:load", "preload-closed:error", "preload-creds:error",
-  "import-open:ok", "import-closed:TypeError",
+  "import-open:ok", "import-closed:TypeError", "inline-anon:ran",
 ];
 const seen = [];
 const saw = what => {{
@@ -807,7 +809,7 @@ for (const [name, url] of [["import-open", "{import_open}"], ["import-closed", "
 <script id="deep" type="module" src="{deep_mjs}"></script>
 <script id="creds" type="module" src="{creds_mjs}" crossorigin="use-credentials"></script>
 <script id="inline-creds" type="module" crossorigin="use-credentials">import "{inline_creds}";</script>
-<script id="inline-anon" type="module" crossorigin="anonymous">import "{inline_anon}"; log.push("inline-anon");</script>
+<script id="inline-anon" type="module" crossorigin="anonymous">import "{inline_anon}"; log.push("inline-anon"); saw("inline-anon:ran");</script>
 <script id="classic-cors" src="{open_js}" crossorigin></script>
 <script id="classic-closed" src="{closed_js}" crossorigin></script>
 <script id="classic-nocors" src="{nocors_js}"></script>

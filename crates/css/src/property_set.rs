@@ -32,6 +32,17 @@ pub(crate) struct PropertyValue {
     pub(crate) shorthand: Option<Shorthand>,
 }
 
+/// A declaration as DevTools lists it
+/// (`CssPropertyValueSet::inspector_declarations`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InspectorDeclaration {
+    pub name: String,
+    pub value: String,
+    pub important: bool,
+    pub implicit: bool,
+    pub shorthand: Option<&'static str>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum PropertyDeclaration {
     Longhand(Declaration),
@@ -357,6 +368,35 @@ impl CssPropertyValueSet {
             Some(PropertyName::Shorthand(shorthand)) => self.shorthand_value(shorthand),
         };
         text.unwrap_or_default()
+    }
+
+    /// Its declarations as DevTools lists a block it has no text of
+    /// (Blink's `InspectorStyle::PopulateAllProperties` without source
+    /// data): each longhand and custom property in `item()`'s order, with its value,
+    /// whether it is important, whether a shorthand set it to its initial
+    /// value by leaving it out, and the shorthand that set it.
+    pub fn inspector_declarations(&self) -> Vec<InspectorDeclaration> {
+        self.values
+            .iter()
+            .map(|value| {
+                let (name, text) = match &value.declaration {
+                    PropertyDeclaration::Custom { name, value } => {
+                        (name.to_string(), value.to_string())
+                    }
+                    PropertyDeclaration::Longhand(declaration) => (
+                        declaration.id.name().to_owned(),
+                        value_text(&declaration.value),
+                    ),
+                };
+                InspectorDeclaration {
+                    name,
+                    value: text,
+                    important: value.important,
+                    implicit: value.implicit,
+                    shorthand: value.shorthand.map(Shorthand::name),
+                }
+            })
+            .collect()
     }
 
     /// `getPropertyPriority()`: `important`, or the empty string. A

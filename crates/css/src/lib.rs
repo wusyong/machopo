@@ -79,7 +79,7 @@ pub use crate::computed::{
 pub use crate::css_namespace::{escape_identifier, supports_condition, supports_declaration};
 pub use crate::css_url_data::UrlContext;
 pub use crate::property_set::{
-    CssPropertyValueSet, css_property_attributes, css_property_for_attribute,
+    CssPropertyValueSet, InspectorDeclaration, css_property_attributes, css_property_for_attribute,
 };
 pub use crate::stylesheet::{
     CssRule, InsertRuleError, KeyframeRule, KeyframesRule, MediaRule, StyleRule,
