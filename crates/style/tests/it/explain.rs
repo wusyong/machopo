@@ -88,7 +88,10 @@ fn rules_come_in_cascade_order() {
             .any(|rule| rule.rule.selector_text().contains("div"))
     );
     assert_eq!(
-        explained.inline.as_deref().map(css::CssPropertyValueSet::css_text),
+        explained
+            .inline
+            .as_deref()
+            .map(css::CssPropertyValueSet::css_text),
         Some("color: pink;".to_owned())
     );
     assert!(explained.presentation.is_none());

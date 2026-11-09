@@ -299,8 +299,19 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 - Chrome 停在斷點時照樣畫新的 frame，只是 script 的 task 不跑：2026-11-09 用 Chrome for Testing 152 試過，停住時在 Console 改 `document.body.style.background`，截圖跟著變；停住時 `Overlay.highlightNode` 也框得出節點。
 - machopo 照做：停住的迴圈除了 DevTools 的佇列，也接 compositor 的 `BeginMainFrame`，只跑 style、layout、paint 和 overlay，再 commit；不跑 rAF、ResizeObserver 這些 script 的步驟。
   - 現在做不到的原因：`BeginMainFrame` 進 main thread 的主佇列，停住的迴圈只等 DevTools 的佇列；compositor 只收它要的 main frame 裡的 commit（`main_frame_in_flight`）；`LayerTreeHost` 和上次 paint 的結果是 `RenderThread` 的欄位。要把這幾樣從 `RenderThread` 拆出來，讓停住的迴圈拿得到（layout 本來就拿得到，第 5 節）。
+  - 做法（「已決定的事項」第 16、17 條）：主執行緒的 task 合成一個 scheduler，停住的迴圈取 DevTools 和 compositor 的 main frame 的 queue；`LayerTreeHost` 等畫 frame 要的狀態搬進 `Frame`，停住的迴圈經過 isolate 拿。
+  - `Page.captureScreenshot` 要的 `RequestVisualState`（要一個 frame、掛一個 promise，不跑 script）停住時也取：Chrome 停住時截圖照樣拿到新的畫面。
   - 停在 rAF、ResizeObserver 的 callback 裡時，那個 main frame 停在半路，不再開新的：照樣不畫（做的時候用 Chrome 確認它是不是也這樣）。
 - 「Paused in debugger」由 overlay 畫成提示的文字（前端的 `setPausedInDebuggerMessage` 給的訊息）。Chrome 提示上的繼續、逐步執行的按鈕這份不做：停住時輸入也進主佇列，要另外接；DevTools 自己有這兩個按鈕。
+
+**做的時候（2c）定下的細節**：
+- engine 和 renderer 之間：DevTools 的佇列的 `next()` 多一種「有 frame 要畫」（`DevToolsQueued::Render`、bindings 的 `Queued::Render`），停住的迴圈收到時呼叫 `render(page)`，renderer 從 rendering 的 queue 取一個 task，用 engine 借出的 `Frame` 畫；每次等下一個之前呼叫 `waiting(page)`，renderer 把 DOM 的改動告訴 session，有東西要畫時才跟 compositor 要 frame。
+- 停住時什麼時候要 frame：上一個 frame 之後 DOM 變了（widget 記著畫的 tree version）、overlay 變了或框著東西、有等著 frame 的 `RequestVisualState`；都沒有時不要，停住而什麼都沒變的頁面不畫。少了最後一項時截圖偶爾等不到：`RequestVisualState` 要了 frame，下一個 `waiting` 看到沒有變就取消了（測試六次失敗一次，找到之後連跑二十次都過）。
+- 停住時的 frame 和一般的 frame 共用 lifecycle、overlay 和 layer 的那一段（`update_lifecycle_and_layers`）；不跑的是 rAF、ResizeObserver、IntersectionObserver、media query 的事件、動畫的推進、文件載入的 promise（`DidFinishLoad` 等下一個一般的 frame）。
+- 停住時 layout 被借出去（呼叫停住的 script 的 operation 拿著它）時那次停住不畫：`render` 碰不到 `Frame`，只等 DevTools 的 task。現在沒有一條 operation 拿著 layout 呼叫 script，這是防著的。
+- DevTools 的訊息一則一個 task：原本一個叫醒的 task 一次處理佇列裡的全部。
+- 和 Chrome 比（Chrome for Testing 152，2026-11-09）：停住時 CSS 動畫照樣往前走（`margin-left` 的動畫，main thread 的），machopo 的停住時的 frame 不推進動畫；停在 rAF 的 callback 裡時 Chrome 的 `Page.captureScreenshot` 也不回答（machopo 一樣，等到繼續）。
+- 「Paused in debugger」照 `inspector_overlay` 的 `tool_paused.css`：頁面蓋上 31% 的黑，訊息在上方中間的淡黃色框裡（`rgb(255 255 194)`、灰色的框線），沒有按鈕。訊息是開著 `Overlay` 的 session 給的。
 
 **其他命令**：前端連上時送的 `setShowViewportSizeOnResize`、`setShowGridOverlays`、`setShowFlexOverlays` 等，參數是空的或關掉時回答成功；要求 machopo 畫它沒有的 overlay 時，照 0082 的「已決定的事項」第 7 條（E1）回答錯誤（`Overlay.setShowPaintRects: machopo can't show it`）。Log 的警告沒有送：Overlay 的這些命令 DevTools 只在使用者打開對應的選項時送，錯誤留在它的 log。`setInspectMode` 的 `captureAreaScreenshot` 當成關掉。`highlightNode` 沒有 `highlightConfig` 時照 Chrome 回答 `-32602 Invalid parameters`：Chrome 的協定那一層在交給 Blink 的 agent 之前就擋下（Blink 自己的「Internal error: highlight configuration parameter is missing」走不到）。
 
@@ -345,7 +356,7 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 2. **Overlay 和 Computed**（第 8 節，加上第 7 節的 computed style 和字型）。分三小段（「已決定的事項」第 9 條）：
    - **2a Overlay**：框節點、選取元素、`getBoxModel`、`getContentQuads`、`getNodeForLocation`、`isScrollable`；原型的 `Prototype.pausedPage` 換成它們。
    - **2b Computed**：`CSS.enable` 回答成功、還不送 stylesheet；`getComputedStyleForNode`、`getInlineStylesForNode`、`getPlatformFontsForNode`；`getMatchedStylesForNode` 回答元素自己的規則、inline 和 attribute 的 style（「已決定的事項」第 14 條）；`trackComputedStyleUpdatesForNode` 和 `computedStyleUpdated`（第 15 條）；標籤的樣式那幾列。
-   - **2c 停住時照樣畫**：停住的迴圈接 `BeginMainFrame`，「Paused in debugger」的提示。
+   - **2c 停住時照樣畫**：主執行緒的 scheduler（「已決定的事項」第 16 條）、畫 frame 的狀態搬進 `Frame`（第 17 條），停住的迴圈接 `BeginMainFrame`，「Paused in debugger」的提示。
    - 驗收：滑過樹裡的節點時頁面框出它；選取元素；停在斷點時的「Paused in debugger」；Computed 分頁和 box model 的圖和 Chrome 一樣；`test.py cdp` 的 `overlay` 和 `css` 的 computed 的部分。
 3. **Styles**（第 7 節的其他部分）。
    - `CSS.enable` 開始送 `styleSheetAdded`。
@@ -425,6 +436,13 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 14. **2b 的 `getMatchedStylesForNode` 回答元素自己的規則（M2）**（第 7 節）：第 2 條以為 Computed 只要 `getComputedStyleForNode`，開始 2b 前讀 devtools-frontend 的 `ComputedStyleWidget.ts` 和 `ElementsPanel.ts`，Computed 也要 `getMatchedStylesForNode`：回答是 null 時整個分頁沒有資料；沒勾「Show all」時只列元素自己的規則和 inline style 設了的 property（加上 `display`、`width`、`height`），「哪條規則給的值」也從它來。所以把第 7 節「說明」的路裡元素自己的部分提前到 2b：符合的規則（選擇器、specificity、origin、從解析的結果序列化的宣告）、inline style 和 attribute style，規則還不帶 `styleSheetId` 和 `range`；繼承來的、pseudo element 的留在第 3 段。Computed 的預設清單和來源和 Chrome 一樣，Styles 也列出規則（沒有「檔名:行」）；它不碰第 11、12 條，第 3 段跟著變小。只在選了節點時對那個元素跑，熱路上不多東西；Blink 的這個命令一定帶 `matchedCSSRules`，走的是 `ElementRuleCollector` 收集規則的模式，和這條路一樣。不選 M1（只回答 inline 和 attribute 的 style）：Computed 預設只剩三個 property 和 inline 的，沒有來源，Styles 在第 3 段之前看起來像沒有規則套用，驗收的「Computed 和 Chrome 一樣」做不到。不選 M3（回答錯誤）：Computed 是空的。
 15. **Computed 跟著 style 的改動更新（U1）**（第 7 節）：前端在 Computed 打開時送 `trackComputedStyleUpdatesForNode`，Blink 之後在那個節點的 style 變了時送 `CSS.computedStyleUpdated`。machopo 在每次 lifecycle 之後比較被追蹤的節點的 `ComputedStyle` 換了沒有（指標），換了就送；重算成同樣的值也換指標，多送一次只讓前端重抓一次。Computed 打開時每個 frame 多查一次，不在重算的熱路上（Blink 在每個元素重算時經過 `DidUpdateComputedStyle` 的 probe 比較，再用計時器合併）。不選 U2（只回答成功、不送）：前端本來就在 DOM 改動、視窗大小改變時重抓，但 `:hover`、動畫和 transition、media query 改了時 Computed 停在舊的值。
 
+2026-11-09（使用者，2c）：
+
+16. **主執行緒的 task 合成一個 scheduler，停住的迴圈跑同一個（Q1）**（第 8 節）：停住時 compositor 的 `BeginMainFrame` 在主佇列（crossbeam 的 channel）裡，停住的迴圈只等 DevTools 的佇列（`Mutex` 加 `Condvar`），拿不到它；停住之前就排著的那一個 compositor 等它的回覆，不會再送，整個停住的期間沒有 frame。巢狀的迴圈本身躲不掉（V8 停住時 JS 的 stack 在主執行緒上，Chrome、Node、Deno 都是巢狀的 loop），問題在 task 分在兩個地方、各有各的等法。改成一個 `MainThreadScheduler`：照來源分成幾個 task queue（browser、compositor、DevTools、canvas……），一把鎖加一個 condvar，每個 task 帶一個遞增的序號，取的時候在允許的 queue 裡取序號最小的；主迴圈取全部（順序和現在的一條 channel 一樣），停住的迴圈只取 DevTools 和 compositor 的 main frame，其他的留在各自的 queue 裡、不亂順序；script 跑到一半要中斷的訊息照樣從 DevTools 的 queue 挑。DevTools 的訊息現在鎖一次再送一次 channel，之後每個 task 只走一把鎖。對照 Chromium：一個 `SequenceManager`、多個可以停用的 task queue，停在斷點時巢狀的 run loop 跑同一個 scheduler，只停用 page 的 script 的 queue。之後停住時處理某些輸入、task 的優先順序，都是 queue 的設定。不選 F1（`BeginMainFrame` 另外放進 DevTools 佇列旁的格子，兩邊誰先拿誰做）：改動最小，但每個 frame 多鎖一次，task 還是分在兩個地方。不選 Q2（每個來源一條 channel、用 `select!` 等）：沒有自己的鎖，但 `select!` 在幾條同時有東西時隨機挑，來源之間的順序沒了，receiver 也不能先看第一個。不選 F2（停住的迴圈定時看主佇列）：拿出來的其他 task 放不回去，還要輪詢。不選 F3（停住期間改送到 DevTools 佇列）：停住之前就排著的那一個照樣卡住。
+17. **畫 frame 要的狀態放進 `Frame`（S3）**（第 8 節）：停住的迴圈在 `RenderThread` 的 `&mut` 底下的 engine 的呼叫裡，碰不到 `RenderThread`，拿得到的只有 engine 經過 isolate 借出來的 `Dom` 和 layout（renderer 的 `Frame`）。`LayerTreeHost`、上次 paint 的結果、overlay 的 layer 和版本、等著 frame 的 swap promise 搬進 `Frame`，停住的迴圈照 agent 現在的路（`DevToolsPage` 的 `dom_and_layout`）拿，一般的 frame 照 `engine_frame` 拿；第一份文件之前還沒有 `Frame` 時 `RenderThread` 留著 `LayerTreeHost`，`Frame` 建立時交給它（`TextContext` 現在就是這樣）。對照 Chromium：`LayerTreeHost` 屬於 frame 的 widget（`WebFrameWidgetImpl` → `WidgetBase` → `LayerTreeView`），是 local root frame 的，不是 `RenderThread` 的。文件載入的狀態（`FrameDocument`）留在 `RenderThread`，停住時的 frame 不碰，下一個一般的 frame 再處理。layout 被借出去時停住（ResizeObserver 的 callback 在 layout 的半路），停住的迴圈拿不到 `Frame`，不畫，和停在 rAF 的 callback 裡一樣。不選 S1（拆成一個 struct，`RenderThread` 和 DevTools 的 handle 用 `Rc<RefCell<…>>` 共有）：不改擁有者，但多一個執行時的借用檢查和一份共享。
+
+18. **停住時 CSS 動畫不往前走，記成限制（A1）**（第 8 節）：Chrome 停住時照樣推進動畫（2026-11-09 用 Chrome for Testing 152 試過，`margin-left` 的動畫半秒走了將近兩百 px），machopo 停住時的 frame 不推進。哪一邊都沒有規範說它對：停在斷點不在 web 的規範裡，HTML 的「pause」只說不跑新的 task、如有需要更新畫面；Web Animations 的 timeline 在「update animations and send events」那一步前進，推進時間和發事件、settle promise 是同一步，Chrome 的是它停住時照樣跑 `BeginMainFrame`（推進時間在裡面）、只停 page 的 script 的 queue 的結果。動畫照時間算，繼續之後兩邊在同一個 frame 回到同一個位置，script 看到的一樣，差別只在停住時畫面上看到的。照 Chrome 做要把 engine 的 `update_animations` 拆成只推進時間和發事件、settle promise 兩段，改 `dom_api` 和 `dom_js` 的介面，換到的只是停住時的畫面；之後做 Animations 面板、或別處也要只推進時間時再一起拆。不選 A2（照 Chrome 往前走）：同上的代價。
+
 ## 待決定
 
 每一段開始前只決定那一段的事。整份的兩條和第 1 段的先決定。
@@ -449,6 +467,9 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 10. **標籤的內容**：已決定（「已決定的事項」第 10 條）。
 14. **2b 的 `getMatchedStylesForNode`**：已決定（「已決定的事項」第 14 條）。
 15. **Computed 跟不跟著更新**：已決定（「已決定的事項」第 15 條）。
+16. **停住的迴圈怎麼拿到 `BeginMainFrame`**：已決定（「已決定的事項」第 16 條）。
+17. **停住的迴圈怎麼拿到畫 frame 要的狀態**：已決定（「已決定的事項」第 17 條）。
+18. **停住時 CSS 動畫往不往前走**：已決定，記成限制（「已決定的事項」第 18 條）。
 
 **第 3 段**：
 

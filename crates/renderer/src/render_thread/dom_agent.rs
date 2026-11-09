@@ -393,7 +393,8 @@ impl DomAgent {
             }
             "DOM.getBoxModel" => {
                 let node = self.node_param(name, &params, page)?;
-                return box_model(page, node).ok_or_else(|| "Could not compute box model.".to_owned());
+                return box_model(page, node)
+                    .ok_or_else(|| "Could not compute box model.".to_owned());
             }
             "DOM.getContentQuads" => {
                 let node = self.node_param(name, &params, page)?;
@@ -405,7 +406,9 @@ impl DomAgent {
                     base::numerics::f32_from_f64(params["x"].as_f64().unwrap_or(0.0)),
                     base::numerics::f32_from_f64(params["y"].as_f64().unwrap_or(0.0)),
                 );
-                let user_agent = params["includeUserAgentShadowDOM"].as_bool().unwrap_or(false);
+                let user_agent = params["includeUserAgentShadowDOM"]
+                    .as_bool()
+                    .unwrap_or(false);
                 let node = node_at(page, point, true, user_agent)
                     .ok_or("No node found at given location")?;
                 params["backendNodeId"] = node.get().into();
@@ -702,7 +705,8 @@ impl<'gc> Tree<'_, '_, 'gc> {
                     result["frameId"] = frame.into();
                 }
                 if self.session.enabled
-                    && let Some(document) = document.filter(|document| self.bound(*document).is_some())
+                    && let Some(document) =
+                        document.filter(|document| self.bound(*document).is_some())
                 {
                     result["nodeId"] = self.push_path(node, document, events).into();
                 }
@@ -1715,7 +1719,8 @@ pub(crate) fn node_at(
         // Outside the viewport, nothing is hit (Blink hit tests the frame's
         // visible rect).
         let viewport = frame.viewport_size();
-        if !((0.0..viewport.width).contains(&point.x) && (0.0..viewport.height).contains(&point.y)) {
+        if !((0.0..viewport.width).contains(&point.x) && (0.0..viewport.height).contains(&point.y))
+        {
             return None;
         }
         let hit = frame.hit_test_in_top(point);

@@ -49,7 +49,11 @@ fn node(page: &mut Client, document: &Value, selector: &str) -> Value {
 
 /// The first child of `element`, pushed to the session: its number.
 fn first_child(page: &mut Client, element: &Value) -> Value {
-    let described = result(page.call(None, "DOM.describeNode", json!({ "nodeId": element, "depth": 1 })));
+    let described = result(page.call(
+        None,
+        "DOM.describeNode",
+        json!({ "nodeId": element, "depth": 1 }),
+    ));
     let backend = described["node"]["children"][0]["backendNodeId"].clone();
     result(page.call(
         None,
@@ -61,12 +65,21 @@ fn first_child(page: &mut Client, element: &Value) -> Value {
 
 /// `getComputedStyleForNode`'s values by name.
 fn computed(page: &mut Client, node: &Value) -> serde_json::Map<String, Value> {
-    let answer = result(page.call(None, "CSS.getComputedStyleForNode", json!({ "nodeId": node })));
+    let answer = result(page.call(
+        None,
+        "CSS.getComputedStyleForNode",
+        json!({ "nodeId": node }),
+    ));
     answer["computedStyle"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|entry| (entry["name"].as_str().unwrap().to_owned(), entry["value"].clone()))
+        .map(|entry| {
+            (
+                entry["name"].as_str().unwrap().to_owned(),
+                entry["value"].clone(),
+            )
+        })
         .collect()
 }
 
@@ -78,7 +91,11 @@ fn declarations(style: &Value) -> Vec<String> {
         .unwrap()
         .iter()
         .map(|property| {
-            let mut text = format!("{}: {}", property["name"].as_str().unwrap(), property["value"].as_str().unwrap());
+            let mut text = format!(
+                "{}: {}",
+                property["name"].as_str().unwrap(),
+                property["value"].as_str().unwrap()
+            );
             if property["important"] == true {
                 text.push('!');
             }
@@ -98,7 +115,10 @@ fn css_needs_dom_and_to_be_on() {
     let machopo = Machopo::start();
     let (mut page, _) = page(&machopo);
     load(&mut page, &server.url("/"));
-    assert_eq!(error(page.call(None, "CSS.enable", json!({}))), "DOM agent needs to be enabled first.");
+    assert_eq!(
+        error(page.call(None, "CSS.enable", json!({}))),
+        "DOM agent needs to be enabled first."
+    );
     result(page.call(None, "DOM.enable", json!({})));
     let root = result(page.call(None, "DOM.getDocument", json!({})))["root"]["nodeId"].clone();
     let p = node(&mut page, &root, "p");
@@ -143,7 +163,8 @@ fn computed_styles_are_read() {
         json!({ "expression": "document.querySelector('template').content.firstChild" }),
     );
     let object = object["result"]["result"]["objectId"].clone();
-    let i = result(page.call(None, "DOM.requestNode", json!({ "objectId": object })))["nodeId"].clone();
+    let i =
+        result(page.call(None, "DOM.requestNode", json!({ "objectId": object })))["nodeId"].clone();
     assert!(computed(&mut page, &i).is_empty());
 }
 
@@ -165,14 +186,24 @@ fn matched_rules_are_listed() {
     let x = node(&mut page, &document, "#x");
     let matched = result(page.call(None, "CSS.getMatchedStylesForNode", json!({ "nodeId": x })));
     let rules = matched["matchedCSSRules"].as_array().unwrap();
-    let first_author = rules.iter().position(|rule| rule["rule"]["origin"] == "regular").unwrap();
+    let first_author = rules
+        .iter()
+        .position(|rule| rule["rule"]["origin"] == "regular")
+        .unwrap();
     assert!(first_author > 0);
-    assert!(rules[..first_author].iter().all(|rule| rule["rule"]["origin"] == "user-agent"));
+    assert!(
+        rules[..first_author]
+            .iter()
+            .all(|rule| rule["rule"]["origin"] == "user-agent")
+    );
     let author: Vec<(String, Value)> = rules[first_author..]
         .iter()
         .map(|rule| {
             (
-                rule["rule"]["selectorList"]["text"].as_str().unwrap().to_owned(),
+                rule["rule"]["selectorList"]["text"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned(),
                 rule["matchingSelectors"].clone(),
             )
         })
@@ -192,13 +223,28 @@ fn matched_rules_are_listed() {
     );
     assert_eq!(
         declarations(&margin["style"]),
-        ["margin-top: 1px", "margin-right: 2px", "margin-bottom: 1px", "margin-left: 2px"]
+        [
+            "margin-top: 1px",
+            "margin-right: 2px",
+            "margin-bottom: 1px",
+            "margin-left: 2px"
+        ]
     );
-    assert_eq!(margin["style"]["shorthandEntries"], json!([{ "name": "margin", "value": "1px 2px" }]));
-    assert_eq!(declarations(&rules[first_author + 2]["rule"]["style"]), ["color: red!"]);
+    assert_eq!(
+        margin["style"]["shorthandEntries"],
+        json!([{ "name": "margin", "value": "1px 2px" }])
+    );
+    assert_eq!(
+        declarations(&rules[first_author + 2]["rule"]["style"]),
+        ["color: red!"]
+    );
     assert_eq!(
         declarations(&matched["inlineStyle"]),
-        ["border-top-width: medium?", "border-top-style: solid", "border-top-color: currentcolor?"]
+        [
+            "border-top-width: medium?",
+            "border-top-style: solid",
+            "border-top-color: currentcolor?"
+        ]
     );
     assert!(matched.get("attributesStyle").is_none());
     // The `<section>` is `display: contents`: the `<body>`, pushed first.
@@ -207,8 +253,14 @@ fn matched_rules_are_listed() {
 
     let f = node(&mut page, &document, "#f");
     let matched = result(page.call(None, "CSS.getMatchedStylesForNode", json!({ "nodeId": f })));
-    assert_eq!(declarations(&matched["attributesStyle"]), ["color: rgb(255, 0, 0)"]);
-    assert_eq!(matched["inlineStyle"], json!({ "cssProperties": [], "shorthandEntries": [] }));
+    assert_eq!(
+        declarations(&matched["attributesStyle"]),
+        ["color: rgb(255, 0, 0)"]
+    );
+    assert_eq!(
+        matched["inlineStyle"],
+        json!({ "cssProperties": [], "shorthandEntries": [] })
+    );
     let inline = result(page.call(None, "CSS.getInlineStylesForNode", json!({ "nodeId": f })));
     assert_eq!(inline["attributesStyle"], matched["attributesStyle"]);
     assert_eq!(inline["inlineStyle"], matched["inlineStyle"]);
@@ -219,7 +271,11 @@ fn matched_rules_are_listed() {
         None,
     );
     let host = node(&mut page, &document, "#host");
-    let matched = result(page.call(None, "CSS.getMatchedStylesForNode", json!({ "nodeId": host })));
+    let matched = result(page.call(
+        None,
+        "CSS.getMatchedStylesForNode",
+        json!({ "nodeId": host }),
+    ));
     let selectors: Vec<&str> = matched["matchedCSSRules"]
         .as_array()
         .unwrap()
@@ -230,9 +286,17 @@ fn matched_rules_are_listed() {
     assert_eq!(selectors, [":host", "div"]);
 
     let text = first_child(&mut page, &x);
-    let refused = page.call(None, "CSS.getMatchedStylesForNode", json!({ "nodeId": text }));
+    let refused = page.call(
+        None,
+        "CSS.getMatchedStylesForNode",
+        json!({ "nodeId": text }),
+    );
     assert_eq!(error(refused), "Node is not an Element");
-    let refused = page.call(None, "CSS.getMatchedStylesForNode", json!({ "nodeId": 999_999 }));
+    let refused = page.call(
+        None,
+        "CSS.getMatchedStylesForNode",
+        json!({ "nodeId": 999_999 }),
+    );
     assert_eq!(error(refused), "Could not find node with given id");
 }
 
@@ -246,7 +310,9 @@ fn fonts_are_counted() {
          <div id=a>abc <b>de</b> <span><i>far</i></span></div>",
     );
     let a = node(&mut page, &document, "#a");
-    let fonts = result(page.call(None, "CSS.getPlatformFontsForNode", json!({ "nodeId": a })))["fonts"].clone();
+    let fonts =
+        result(page.call(None, "CSS.getPlatformFontsForNode", json!({ "nodeId": a })))["fonts"]
+            .clone();
     assert_eq!(
         fonts,
         json!([
@@ -256,7 +322,12 @@ fn fonts_are_counted() {
         ])
     );
     let text = first_child(&mut page, &a);
-    let fonts = result(page.call(None, "CSS.getPlatformFontsForNode", json!({ "nodeId": text })))["fonts"].clone();
+    let fonts = result(page.call(
+        None,
+        "CSS.getPlatformFontsForNode",
+        json!({ "nodeId": text }),
+    ))["fonts"]
+        .clone();
     assert_eq!(fonts[0]["glyphCount"], 4);
     assert_eq!(fonts.as_array().unwrap().len(), 1);
 }
@@ -281,12 +352,19 @@ fn computed_style_updates_are_told() {
         "<!DOCTYPE html><style>.red { color: red }</style><div id=p><div id=x>x</div></div><div id=o></div>",
     );
     let x = node(&mut page, &document, "#x");
-    result(page.call(None, "CSS.trackComputedStyleUpdatesForNode", json!({ "nodeId": x })));
+    result(page.call(
+        None,
+        "CSS.trackComputedStyleUpdatesForNode",
+        json!({ "nodeId": x }),
+    ));
     evaluate(&mut page, "x.style.paddingLeft = '7px'", None);
     let told = page.event("CSS.computedStyleUpdated");
     assert_eq!(told["params"]["nodeId"], x);
     evaluate(&mut page, "p.className = 'red'", None);
-    assert_eq!(page.event("CSS.computedStyleUpdated")["params"]["nodeId"], x);
+    assert_eq!(
+        page.event("CSS.computedStyleUpdated")["params"]["nodeId"],
+        x
+    );
     // Another's: none.
     two_frames(&mut page);
     page.take_events("CSS.computedStyleUpdated");
@@ -306,7 +384,11 @@ fn black(page: &mut Client, from: (u32, u32), to: (u32, u32)) -> usize {
     let ((width, _), pixels) = png(shot["data"].as_str().unwrap());
     (from.1..to.1)
         .flat_map(|y| (from.0..to.0).map(move |x| (x, y)))
-        .filter(|&(x, y)| pixel(&pixels, width, x, y).iter().all(|&channel| channel < 50))
+        .filter(|&(x, y)| {
+            pixel(&pixels, width, x, y)
+                .iter()
+                .all(|&channel| channel < 50)
+        })
         .count()
 }
 
@@ -360,19 +442,32 @@ fn labels_show_styles() {
         })
     );
     // Without styles asked for, none.
-    let plain = result(page.call(None, "Overlay.getHighlightObjectForTest", json!({ "nodeId": a })))["highlight"].clone();
+    let plain = result(page.call(
+        None,
+        "Overlay.getHighlightObjectForTest",
+        json!({ "nodeId": a }),
+    ))["highlight"]
+        .clone();
     assert!(plain["elementInfo"].get("style").is_none());
 
     // Drawn: the rows under the label's first line, there only with them;
     // their values black (the names are gray, the header purple, blue and
     // gray).
     let mut config = json!({ "contentColor": rgba(255, 0, 0), "showInfo": true });
-    result(page.call(None, "Overlay.highlightNode", json!({ "nodeId": a, "highlightConfig": config })));
+    result(page.call(
+        None,
+        "Overlay.highlightNode",
+        json!({ "nodeId": a, "highlightConfig": config }),
+    ));
     let below = |page: &mut Client| non_white(page, (0, 70), (400, 200));
     let without = below(&mut page);
     assert_eq!(black(&mut page, (0, 40), (400, 200)), 0);
     config["showStyles"] = true.into();
-    result(page.call(None, "Overlay.highlightNode", json!({ "nodeId": a, "highlightConfig": config })));
+    result(page.call(
+        None,
+        "Overlay.highlightNode",
+        json!({ "nodeId": a, "highlightConfig": config }),
+    ));
     let with = below(&mut page);
     assert!(with > without + 100, "{with} against {without}");
     assert!(black(&mut page, (0, 40), (400, 200)) > 20);
@@ -382,9 +477,8 @@ fn labels_show_styles() {
 /// script left them.
 #[test]
 fn styles_are_there_while_paused() {
-    let (_machopo, mut page, document, _server) = css_page(
-        "<!DOCTYPE html><style>.wide { width: 30px }</style><div id=x>x</div>",
-    );
+    let (_machopo, mut page, document, _server) =
+        css_page("<!DOCTYPE html><style>.wide { width: 30px }</style><div id=x>x</div>");
     let x = node(&mut page, &document, "#x");
     page.call(None, "Debugger.enable", json!({}));
     let evaluated = page.send(

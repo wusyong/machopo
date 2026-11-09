@@ -6,34 +6,35 @@
 //! inspector answers the rest (V8's: `Runtime`, `Debugger`...), what it
 //! hasn't that it isn't there.
 
+use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use dom_api::{DevToolsQueued, EngineSettings, FrameId, ScriptEngine};
-use protocol::renderer::RendererHostMsg;
+use protocol::renderer::{RendererHostMsg, RendererMsg};
 use url::Url;
 
 use super::RenderThread;
 use super::page_agent::FrameInfo;
-use crate::task_queue::DevToolsQueue;
+use crate::frame_view::Frame;
+use crate::task_queue::{MainThreadScheduler, MainThreadTask, TaskQueue, TaskQueues};
 
 /// JSON-RPC's "method not found", as CDP answers a method no one has.
 const METHOD_NOT_FOUND: i64 = -32601;
 
 impl RenderThread {
-    /// What the browser put in the DevTools queue, in order: what script
-    /// paused or interrupted didn't take already.
-    pub(super) fn run_devtools_queue(&mut self) {
-        while let Some(queued) = self.devtools_queue.try_next() {
-            match queued {
-                DevToolsQueued::Attach(session) => self.devtools_attach(session),
-                DevToolsQueued::Detach(session) => self.devtools_detach(&session),
-                DevToolsQueued::Message { session, message } => {
-                    self.devtools_message(&session, &message);
-                }
-                // The main queue has the shutdown.
-                DevToolsQueued::Quit => {}
+    /// What the browser asked of DevTools' sessions, a task of the
+    /// scheduler's that script paused or interrupted didn't take already.
+    pub(super) fn run_devtools_task(&mut self, queued: DevToolsQueued) {
+        match queued {
+            DevToolsQueued::Attach(session) => self.devtools_attach(session),
+            DevToolsQueued::Detach(session) => self.devtools_detach(&session),
+            DevToolsQueued::Message { session, message } => {
+                self.devtools_message(&session, &message);
             }
+            // The browser's queue has the shutdown; a frame to draw is said
+            // only to script paused.
+            DevToolsQueued::Quit | DevToolsQueued::Render => {}
         }
     }
 
@@ -204,15 +205,18 @@ impl RenderThread {
             super::print_console(kind, &message.text, &message.url, message.line)
         }));
         let interrupter = engine.set_devtools_queue(Box::new(DevToolsQueueHandle {
-            queue: self.devtools_queue.clone(),
+            scheduler: self.scheduler.clone(),
             page_agent: self.page_agent.clone(),
             network_agent: self.network_agent.clone(),
             log_agent: self.log_agent.clone(),
             dom_agent: self.dom_agent.clone(),
             css_agent: self.css_agent.clone(),
             overlay_agent: self.overlay_agent.clone(),
+            to_browser: self.to_browser.clone(),
+            automation: self.automation,
+            cannot_render: Cell::new(false),
         }));
-        self.devtools_queue.set_interrupter(interrupter);
+        self.scheduler.set_interrupter(interrupter);
         engine.set_devtools_frame_ids(self.devtools_frame_ids(engine.top_frame()));
         for session in &self.devtools_sessions {
             engine.devtools_attach(session.clone(), devtools_send(&self.to_browser, session));
@@ -276,32 +280,66 @@ fn devtools_send(
     })
 }
 
-/// The DevTools queue and the `Page`, `Network` and `Log` agents, as the
-/// engine's inspector takes from them while script is paused or busy. The
-/// agents are the render thread's too, shared (`Rc`): the inspector answers
-/// with them while the render thread is inside a call of the engine's,
-/// which it can't be borrowed in.
+/// The scheduler and the renderer's DevTools agents, as the engine's
+/// inspector takes from them while script is paused or busy: DevTools'
+/// tasks, and while script is paused the rendering's, drawn with the frame
+/// the engine lends (Blink's nested loop runs its compositor's tasks too).
+/// The agents are the render thread's too, shared (`Rc`): the inspector
+/// answers with them while the render thread is inside a call of the
+/// engine's, which it can't be borrowed in.
 struct DevToolsQueueHandle {
-    queue: Arc<DevToolsQueue>,
+    scheduler: Arc<MainThreadScheduler>,
     page_agent: Rc<super::page_agent::PageAgent>,
     network_agent: Rc<super::network_agent::NetworkAgent>,
     log_agent: Rc<super::log_agent::LogAgent>,
     dom_agent: Rc<super::dom_agent::DomAgent>,
     css_agent: Rc<super::css_agent::CssAgent>,
     overlay_agent: Rc<super::overlay_agent::OverlayAgent>,
+    /// For a frame asked for (`RequestVisualState`) while paused.
+    to_browser: crossbeam_channel::Sender<RendererHostMsg>,
+    automation: bool,
+    /// The frame can't be drawn in this pause: the operation that called
+    /// the paused script holds the layout (script paused in a
+    /// `ResizeObserver` callback in the middle of the frame's layout).
+    cannot_render: Cell<bool>,
+}
+
+impl DevToolsQueueHandle {
+    /// The frame the engine lends, unless an operation holds it.
+    fn frame(page: &mut dyn dom_api::DevToolsPage) -> Option<(&mut dom::Dom, &mut Frame)> {
+        let (dom, layout) = page.dom_and_layout();
+        let frame = layout?.as_any_mut().downcast_mut::<Frame>()?;
+        Some((dom, frame))
+    }
 }
 
 impl dom_api::DevToolsQueue for DevToolsQueueHandle {
+    /// DevTools' next task, or the rendering's (`Render`) while the frame
+    /// can be drawn: whichever came first.
     fn next(&self) -> DevToolsQueued {
-        self.queue.wait_next()
+        let queues = if self.cannot_render.get() {
+            TaskQueues::DEVTOOLS
+        } else {
+            TaskQueues::PAUSED
+        };
+        loop {
+            if self.scheduler.wait_for(queues) == TaskQueue::Rendering {
+                return DevToolsQueued::Render;
+            }
+            if let Some(MainThreadTask::DevTools(queued)) =
+                self.scheduler.try_next(TaskQueues::DEVTOOLS)
+            {
+                return queued;
+            }
+        }
     }
 
     fn take_interrupting(&self) -> Vec<(String, String)> {
-        self.queue.take_interrupting()
+        self.scheduler.take_interrupting()
     }
 
     fn put_back(&self, queued: Vec<DevToolsQueued>) {
-        self.queue.put_back(queued);
+        self.scheduler.put_back(queued);
     }
 
     fn answer_here(
@@ -319,10 +357,76 @@ impl dom_api::DevToolsQueue for DevToolsQueueHandle {
     }
 
     fn paused(&self, page: &mut dyn dom_api::DevToolsPage) {
+        self.cannot_render.set(Self::frame(page).is_none());
         self.dom_agent.take_changes(page.dom());
     }
-}
 
+    /// What the last command changed told (the DOM's changes), and a frame
+    /// asked for if there is something to draw (the DOM changed since the
+    /// last, or the overlay) or a frame waited for (`RequestVisualState`'s);
+    /// none otherwise, so a pause with nothing changing draws nothing.
+    fn waiting(&self, page: &mut dyn dom_api::DevToolsPage) {
+        self.dom_agent.take_changes(page.dom());
+        let Some((dom, frame)) = Self::frame(page) else {
+            return;
+        };
+        let widget = &mut frame.widget;
+        let needs = dom.read(|cx| cx.tree_version()) != widget.rendered_tree_version
+            || self.overlay_agent.showing()
+            || self.overlay_agent.version() != widget.overlay_version
+            || !widget.pending_visual_states.is_empty();
+        widget.layer_tree_host.set_needs_begin_main_frame(needs);
+    }
+
+    /// The rendering's next task while script is paused: a main frame drawn
+    /// as the page is (its lifecycle, the overlay, the commit; none of the
+    /// steps that run script: animation frames, resize observers), or a
+    /// frame asked for.
+    fn render(&self, page: &mut dyn dom_api::DevToolsPage) {
+        let Some((dom, frame)) = Self::frame(page) else {
+            // Left for after the pause.
+            self.cannot_render.set(true);
+            return;
+        };
+        let Some(task) = self.scheduler.try_next(TaskQueues::RENDERING) else {
+            return;
+        };
+        match task {
+            MainThreadTask::Compositor(compositor::ToMainThread::BeginMainFrame {
+                scroll, ..
+            }) => {
+                let _span = trace_event::trace_event!("ProxyMain::BeginMainFrame", paused = true);
+                if let Some(scroll) = &scroll
+                    && frame.view.document_id() == scroll.document
+                {
+                    frame.view.apply_compositor_scroll(scroll);
+                }
+                super::documents::update_lifecycle_and_layers(
+                    dom,
+                    frame,
+                    &self.overlay_agent,
+                    &self.css_agent,
+                );
+                let widget = &mut frame.widget;
+                let mut promises = std::mem::take(&mut widget.pending_input_acks);
+                promises.append(&mut widget.pending_visual_states);
+                widget.layer_tree_host.commit(promises);
+            }
+            MainThreadTask::Browser(RendererMsg::RequestVisualState { request_id }) => {
+                if let Some(promise) =
+                    super::visual_state_promise(&self.to_browser, self.automation, request_id)
+                {
+                    frame.widget.pending_visual_states.push(promise);
+                    frame
+                        .widget
+                        .layer_tree_host
+                        .set_needs_begin_main_frame(true);
+                }
+            }
+            _ => unreachable!("the rendering's queue has main frames and frames asked for"),
+        }
+    }
+}
 
 /// The `id` and `method` of a command, as JSON.
 fn command_of(message: &str) -> Option<(serde_json::Value, String)> {

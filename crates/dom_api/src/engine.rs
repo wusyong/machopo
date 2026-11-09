@@ -541,6 +541,10 @@ pub enum DevToolsQueued {
     },
     /// The host is to end.
     Quit,
+    /// The host has a frame to draw (a main frame, a frame asked for),
+    /// which runs no script: drawn while script is paused
+    /// ([`DevToolsQueue::render`]). Never queued: `next` says it.
+    Render,
 }
 
 /// The host's DevTools queue, as an engine's inspector takes from it while
@@ -562,6 +566,12 @@ pub trait DevToolsQueue {
     /// Script paused: the host tells its sessions what it did up to there
     /// (the DOM's changes), before the pause takes the first message.
     fn paused(&self, page: &mut dyn DevToolsPage);
+    /// Script paused waits for the next: what the last command changed
+    /// (script the console ran) is told, and drawn at the next frame.
+    fn waiting(&self, page: &mut dyn DevToolsPage);
+    /// Script paused: the host draws the frame `next` said it has
+    /// ([`DevToolsQueued::Render`]) with the page as it is.
+    fn render(&self, page: &mut dyn DevToolsPage);
 }
 
 /// The page as an engine lends it to its host's DevTools agents, as they

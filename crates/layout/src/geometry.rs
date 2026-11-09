@@ -152,22 +152,27 @@ pub fn box_quads(
         });
     }
     let mut boxes = Vec::new();
-    walk(layout_view, scroll, sticky, &mut |fragment, offset, _, contents| {
-        for line in &fragment.lines {
-            for inline_box in line
-                .boxes
-                .iter()
-                .filter(|b| b.node == element && b.pseudo.is_none())
-            {
-                boxes.push((
-                    contents.map_rect(inline_box.rect.offset(offset.x, offset.y)),
-                    inline_box.border,
-                    inline_box.padding,
-                ));
+    walk(
+        layout_view,
+        scroll,
+        sticky,
+        &mut |fragment, offset, _, contents| {
+            for line in &fragment.lines {
+                for inline_box in line
+                    .boxes
+                    .iter()
+                    .filter(|b| b.node == element && b.pseudo.is_none())
+                {
+                    boxes.push((
+                        contents.map_rect(inline_box.rect.offset(offset.x, offset.y)),
+                        inline_box.border,
+                        inline_box.padding,
+                    ));
+                }
             }
-        }
-        true
-    });
+            true
+        },
+    );
     let (first, last) = (boxes.first()?, boxes.last()?);
     let border = bounding_rect(&boxes.iter().map(|(rect, ..)| *rect).collect::<Vec<_>>());
     let border_sides = computed_style::Sides {
@@ -205,22 +210,32 @@ pub fn border_quads(
     element: NodeId,
 ) -> Vec<Quad> {
     let mut quads = Vec::new();
-    walk(layout_view, scroll, sticky, &mut |fragment, offset, to_root, contents| {
-        if fragment.node == Some(element) && fragment.pseudo.is_none() {
-            let border = RectF::new(offset.x, offset.y, fragment.size.width, fragment.size.height);
-            quads.push(quad(border, to_root));
-        }
-        for line in &fragment.lines {
-            for inline_box in line
-                .boxes
-                .iter()
-                .filter(|b| b.node == element && b.pseudo.is_none())
-            {
-                quads.push(quad(inline_box.rect.offset(offset.x, offset.y), contents));
+    walk(
+        layout_view,
+        scroll,
+        sticky,
+        &mut |fragment, offset, to_root, contents| {
+            if fragment.node == Some(element) && fragment.pseudo.is_none() {
+                let border = RectF::new(
+                    offset.x,
+                    offset.y,
+                    fragment.size.width,
+                    fragment.size.height,
+                );
+                quads.push(quad(border, to_root));
             }
-        }
-        true
-    });
+            for line in &fragment.lines {
+                for inline_box in line
+                    .boxes
+                    .iter()
+                    .filter(|b| b.node == element && b.pseudo.is_none())
+                {
+                    quads.push(quad(inline_box.rect.offset(offset.x, offset.y), contents));
+                }
+            }
+            true
+        },
+    );
     quads
 }
 

@@ -14,10 +14,7 @@ fn fonts_are_counted_by_their_glyphs() {
         "<style>div { font: 20px Ahem } b { font: 20px Lato }</style>\
          <div id=a>ab  <b>cde</b> f</div><div id=other>xyz</div>",
     );
-    let (a, other) = page.read(|cx, document| {
-        let element = |id| cx.node_id(find(cx, document, id));
-        (element("a"), element("other"))
-    });
+    let other = page.read(|cx, document| cx.node_id(find(cx, document, "other")));
     let view = page.tree.layout(VIEWPORT);
     let ahem = |glyph_count| PlatformFont {
         family_name: "Ahem".to_owned(),
@@ -37,7 +34,10 @@ fn fonts_are_counted_by_their_glyphs() {
             },
         ]
     );
-    assert_eq!(platform_fonts(&view, &|run| run.node == Some(other)), [ahem(3)]);
+    assert_eq!(
+        platform_fonts(&view, &|run| run.node == Some(other)),
+        [ahem(3)]
+    );
     assert!(platform_fonts(&view, &|_| false).is_empty());
 }
 

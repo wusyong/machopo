@@ -78,6 +78,10 @@ pub enum Queued {
     },
     /// The renderer is to end.
     Quit,
+    /// The renderer has a frame to draw (a main frame, a frame asked for),
+    /// which runs no script: drawn while script is paused (`Queue::render`),
+    /// as Chrome draws the page while paused.
+    Render,
 }
 
 /// The renderer's DevTools queue, as the inspector takes from it while
@@ -101,6 +105,12 @@ pub trait Queue {
     /// renderer's agents tell what script did up to there (the DOM's
     /// changes), with the isolate's state as `answer_here` borrows it.
     fn paused(&self, isolate: &mut v8::Isolate);
+    /// Script paused waits for the next: what the last command changed
+    /// (script the console ran) is told, and drawn at the next frame.
+    fn waiting(&self, isolate: &mut v8::Isolate);
+    /// Script paused: the frame `next` said is to be drawn, with the
+    /// isolate's state as `answer_here` borrows it.
+    fn render(&self, isolate: &mut v8::Isolate);
 }
 
 /// A session of the inspector's, and whether the browser still has it.
@@ -148,7 +158,9 @@ impl Shared {
         let mut after = Vec::new();
         let mut gone = Vec::new();
         while !self.quit.get() {
+            queue.waiting(isolate);
             match queue.next() {
+                Queued::Render => queue.render(isolate),
                 Queued::Message { session, message } => {
                     let waiting = after
                         .iter()

@@ -381,6 +381,11 @@ impl DevToolsQueue for SharedQueue {
     }
 
     fn paused(&self, _page: &mut dyn DevToolsPage) {}
+
+    fn waiting(&self, _page: &mut dyn DevToolsPage) {}
+
+    // The queue says no frame to draw.
+    fn render(&self, _page: &mut dyn DevToolsPage) {}
 }
 
 /// The pauses and resumes told in `events`.

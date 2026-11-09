@@ -38,6 +38,7 @@ mod compositing;
 mod document;
 mod encoding;
 mod frame_view;
+mod frame_widget;
 mod idleness_detector;
 mod initiator;
 mod loader;

@@ -22,6 +22,7 @@ impl bindings::devtools::Queue for Queue {
             DevToolsQueued::Detach(session) => Queued::Detach(session),
             DevToolsQueued::Message { session, message } => Queued::Message { session, message },
             DevToolsQueued::Quit => Queued::Quit,
+            DevToolsQueued::Render => Queued::Render,
         }
     }
 
@@ -40,6 +41,7 @@ impl bindings::devtools::Queue for Queue {
                         DevToolsQueued::Message { session, message }
                     }
                     Queued::Quit => DevToolsQueued::Quit,
+                    Queued::Render => DevToolsQueued::Render,
                 })
                 .collect(),
         );
@@ -56,6 +58,15 @@ impl bindings::devtools::Queue for Queue {
 
     fn paused(&self, isolate: &mut v8::Isolate) {
         self.0.paused(&mut crate::devtools_page::Page::new(isolate));
+    }
+
+    fn waiting(&self, isolate: &mut v8::Isolate) {
+        self.0
+            .waiting(&mut crate::devtools_page::Page::new(isolate));
+    }
+
+    fn render(&self, isolate: &mut v8::Isolate) {
+        self.0.render(&mut crate::devtools_page::Page::new(isolate));
     }
 }
 

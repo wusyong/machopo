@@ -2023,22 +2023,26 @@ pub(crate) struct Frame {
     pub(crate) svg_images: SvgImages,
     /// The document whose frame the queries are of (`shows`).
     selected: NodeId,
+    /// The frame's widget (the thread's until the first frame takes it).
+    pub(crate) widget: crate::frame_widget::FrameWidget,
 }
 
 impl Frame {
     /// `view`, of the document whose id is `document`, with the thread's
-    /// token and text.
+    /// token, text and widget.
     pub(crate) fn new(
         view: FrameView,
         document: NodeId,
         token: LocalToken,
         text: TextContext,
+        widget: crate::frame_widget::FrameWidget,
     ) -> Self {
         Self {
             view,
             document,
             token,
             text,
+            widget,
             viewport: SizeF::default(),
             device_scale_factor: 1.0,
             window_screen_rect: None,
@@ -2227,7 +2231,11 @@ impl Frame {
 
     /// `element`'s border boxes, of `document`'s frame, as quads in the
     /// top-level frame's viewport.
-    pub(crate) fn border_quads_in_top(&mut self, document: NodeId, element: NodeId) -> Vec<layout::Quad> {
+    pub(crate) fn border_quads_in_top(
+        &mut self,
+        document: NodeId,
+        element: NodeId,
+    ) -> Vec<layout::Quad> {
         let quads = self
             .view
             .view_of(document)
@@ -2276,7 +2284,12 @@ impl Frame {
 
     /// `text` on one line in the UI's font (sans-serif), `size` px, bold
     /// or not: DevTools' overlay's labels.
-    pub(crate) fn shape_label(&mut self, text: &str, size: f32, bold: bool) -> Option<gfx::ShapedText> {
+    pub(crate) fn shape_label(
+        &mut self,
+        text: &str,
+        size: f32,
+        bold: bool,
+    ) -> Option<gfx::ShapedText> {
         let style = computed_style::CanvasTextStyle {
             font: computed_style::CanvasFont {
                 family: Arc::new([computed_style::FontFamily::Generic(

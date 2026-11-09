@@ -14,7 +14,7 @@
 | 1b 和 JS 的連接：`resolveNode`、`requestNode`、`$0`、Console 顯示節點、Event Listeners、`performSearch`（第 6 節） | 完成 | 2026-11-09 |
 | 2a Overlay：框節點、選取元素、`getBoxModel`、`getContentQuads`、`getNodeForLocation` | 完成 | 2026-11-09 |
 | 2b Computed：`CSS.enable`、`getComputedStyleForNode`、`getPlatformFontsForNode`、元素自己的規則、跟著更新、標籤的樣式 | 完成 | 2026-11-09 |
-| 2c 停住時照樣畫、「Paused in debugger」 | 還沒開始 | |
+| 2c 停住時照樣畫、「Paused in debugger」：scheduler、畫 frame 的狀態搬進 `Frame` | 完成 | 2026-11-09 |
 | 3 Styles | 還沒開始 | |
 
 ## 驗收
@@ -54,6 +54,11 @@
 | 標籤的樣式：顏色一律 `#RRGGBBAA` 和分數、字型、padding、margin、背景；沒有文字的元素沒有顏色和字型；畫出那幾列（黑色的值） | `cargo test -p shell --test it devtools_css::labels_show_styles`、`cargo test -p renderer --lib overlay_agent` |
 | 停住時的 computed 和規則照 script 到那時為止的改動 | `cargo test -p shell --test it devtools_css::styles_are_there_while_paused` |
 | 和 Chrome 一樣：套用的規則（作者的照選擇器、specificity、符合的選擇器、longhand 的值；UA 的一條完整比）、inline style、presentational hint、layout 上的父元素、回答的 key、computed 的值、字型、`computedStyleUpdated`、標籤的樣式、錯誤（只差 `!important` 寫在值裡，已知） | `python3 scripts/test.py cdp css` |
+| main thread 的 scheduler：每個 queue 的 task 照送進來的順序；停住時只取 DevTools 和 rendering 的（main frame、`RequestVisualState`），其他的（Browser 的訊息、輸入、canvas）留著、不亂順序；等的時候看得到之後送來的、有 timeout 的會放棄；要打斷 script 的照舊單獨取出；停住留下的放回最前面；main thread 走了之後送不進去 | `cargo test -p renderer --lib task_queue` |
+| 停住時照樣畫：Console 的改動、框的節點、拿掉的框；`setPausedInDebuggerMessage` 的提示（頁面蓋上一層、上方中間的淡黃色框），`Overlay` 關著的 session 的不畫、拿掉之後沒有；繼續之後照常畫 | `cargo test -p shell --test it devtools_overlay::the_page_is_drawn_while_paused` |
+| 停住時的輸入等到繼續才處理 | `cargo test -p shell --test it devtools_overlay::input_waits_for_the_pause` |
+| 停住時滾輪在 compositor 上捲動：停住時畫的 frame 留著捲動的位置、script 讀得到 | `cargo test -p shell --test it devtools_overlay::a_scroll_while_paused_stays` |
+| scheduler 和 widget 搬家之後，視窗裡的情境和 pipe 照舊 | `python3 scripts/test.py automation` |
 
 ## 做過的檢查
 
@@ -132,3 +137,19 @@
   - 重跑：37 條抓到，漏的是上面兩條。
   - 另外「同一個選擇器記兩次」第一次跑（停在第一個漏的）沒抓到：補了 adopt 兩次的測試，之後抓到。
 - **跑過的檢查**：`cargo test -p style -p style_resolver -p layout -p dom_api -p dom_js -p renderer -p shell` 全部通過；`test.py wpt css/cssom` 沒有不預期的結果（`getComputedStyle` 借 layout 的方式改了）；`test.py cdp css overlay dom dom_objects` 只有已知的差異；`sanity.py` 的 7 項都通過。
+
+### 2c 停住時照樣畫（2026-11-09，macOS）
+
+- **開始前定的事**：「已決定的事項」第 16 條（Q1：main thread 的 scheduler）、第 17 條（S3：畫 frame 的狀態搬進 `Frame`）。原本建議的 F1（另一個格子）使用者不想多一把鎖，問停住的迴圈是不是設計問題：巢狀的迴圈本身躲不掉，問題在 task 分在兩個地方，所以改成一個 scheduler。
+- **新的測試**：`renderer` 的 `task_queue` 的測試（4 個，取代原本 DevTools 佇列的 2 個）；`shell` 的 `devtools_overlay::the_page_is_drawn_while_paused`、`input_waits_for_the_pause`、`a_scroll_while_paused_stays`。
+- **找到的 bug**：停住時截圖偶爾等不到（六次失敗一次）：`RequestVisualState` 要了 frame，停住的迴圈等下一個之前（`waiting`）看到 DOM 和 overlay 都沒變，又把 frame 取消了。等著 frame 的 promise 也算要畫，之後連跑二十次都過。
+- **以為是 bug、其實不是**：測試停住時的輸入，按鈕一直沒收到 click，沒停住時也一樣：還沒畫過任何 frame 時 compositor 不知道輸入是哪份文件的（`document` 是 `None`），renderer 照 Chrome 丟掉對著別的文件的輸入。測試先截一張圖。
+- **和 Chrome 比**（Chrome for Testing 152）：停住時 Console 的改動、框的節點照樣畫（RFC 寫的）；停住時 CSS 動畫照樣往前走（`margin-left` 的動畫，半秒走了將近兩百 px），machopo 不推進，記成限制（「已決定的事項」第 18 條）；停在 rAF 的 callback 裡時 Chrome 的截圖也不回答（machopo 一樣）。`test.py cdp` 的每一組照舊（相同或已知）。
+- **mutation test**（`mutants-2c.toml`，18 條）：第一次抓到 10 條、1 條卡住（「有 timeout 的等永遠等下去」：測試卡住，算抓到），漏了 7 條：
+  - 停住時也取輸入：那條只跑 scheduler 的測試，測試裡沒有輸入；加進去，抓到。
+  - 停住時不套用 compositor 的捲動：沒有測試在停住時捲動；補了 `a_scroll_while_paused_stays`，抓到。
+  - 沒開 `Overlay` 的 session 的提示也畫：`disable` 整個拿掉 session，提示跟著沒了；補了關掉之後再給提示的情況，抓到。
+  - 停住時 DOM 改了不要 frame、新的提示不要 frame、不記畫過的 tree version：截圖自己就要 frame，蓋過了這幾條，和 2a 的「overlay 要 frame」同一列記進 `docs/test-gaps.md` 的「只靠審查」。
+  - 停住而 layout 被借出去時照樣畫：現在走不到，記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。
+  - 重跑：12 條抓到、1 條卡住，漏的是上面記下的 4 條；補了 `Overlay` 關掉的情況之後那一條也抓到。
+- **第 2 段做完時的檢查**：`cargo test --workspace` 全部通過；`cargo fmt` 之後 `--check` 沒有差異；`cargo clippy --workspace --all-targets -- -D warnings` 修了兩處（測試沒用到的變數、`frame()` 不用寫出的 lifetime）之後通過；`test.py automation`：第一次 60 個情境過了 37 個，前面連續 23 個說沒畫出 frame（「is the window hidden?」），同樣的 commit 之前的版本照跑全過、那幾個重跑也過、整套重跑 60 個全過，pipe 的測試也過，是那時的顯示器（第一次跑時視窗畫不出來），不是程式；`sanity.py` 的 7 項都通過。

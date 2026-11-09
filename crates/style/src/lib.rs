@@ -97,7 +97,8 @@ use selectors::matching::{
 use selectors::parser::AncestorHashes;
 use style_resolver::animation_style::{self, Recascade, Restyle, StyleChange, Timeline};
 use style_resolver::cascade::{
-    BlockSource, Blocks, CascadePriority, Environment, MatchedPropertiesCache, cascade_highlight, push_block,
+    BlockSource, Blocks, CascadePriority, Environment, MatchedPropertiesCache, cascade_highlight,
+    push_block,
 };
 
 use crate::bloom::StyleBloom;
@@ -2737,8 +2738,7 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
         presentation: Option<&(Arc<CssPropertyValueSet>, u64)>,
         change: Option<StyleChangeOf<'_>>,
     ) -> (Arc<ComputedStyle>, PseudoStyles) {
-        let [own, before, after, marker, selection] =
-            self.blocks(element, inline, presentation);
+        let [own, before, after, marker, selection] = self.blocks(element, inline, presentation);
         // Its pseudo-elements inherit its own.
         let blocking_wheel = self.cx.has_own_blocking_wheel_listener(element);
         let cache = self.cache;

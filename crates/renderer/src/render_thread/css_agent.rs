@@ -17,8 +17,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use computed_style::ComputedStyle;
-use css::CssPropertyValueSet;
 use crossbeam_channel::Sender;
+use css::CssPropertyValueSet;
 use dom::{Cx, Dom, NodeId, NodeKind, NodeRef};
 use dom_api::{DevToolsPage, FrameLayout};
 use protocol::renderer::RendererHostMsg;
@@ -129,7 +129,10 @@ impl CssAgent {
                 if !self.dom_agent.enabled(name) {
                     return Err("DOM agent needs to be enabled first.".to_owned());
                 }
-                self.sessions.borrow_mut().entry(name.to_owned()).or_default();
+                self.sessions
+                    .borrow_mut()
+                    .entry(name.to_owned())
+                    .or_default();
                 Ok(json!({}))
             }
             "disable" => {
@@ -195,10 +198,12 @@ impl CssAgent {
                 // and grid of (Blink's `LayoutParentElement`), sent first.
                 let parent = with_layout(page, node, |cx, frame, element, _| {
                     let mut at = cx.flat_tree_parent(element);
-                    while let Some(parent) = at.filter(|&parent| cx.kind(parent) == NodeKind::Element) {
-                        let contents = frame
-                            .computed_style(cx, parent)
-                            .is_some_and(|style| style.display == computed_style::Display::Contents);
+                    while let Some(parent) =
+                        at.filter(|&parent| cx.kind(parent) == NodeKind::Element)
+                    {
+                        let contents = frame.computed_style(cx, parent).is_some_and(|style| {
+                            style.display == computed_style::Display::Contents
+                        });
                         if !contents {
                             return Some(cx.node_id(parent));
                         }
@@ -206,7 +211,9 @@ impl CssAgent {
                     }
                     None
                 });
-                if let Some(id) = parent.and_then(|parent| self.dom_agent.push_node(name, parent, page.dom())) {
+                if let Some(id) =
+                    parent.and_then(|parent| self.dom_agent.push_node(name, parent, page.dom()))
+                {
                     result["parentLayoutNodeId"] = json!(id);
                 }
                 Ok(result)
@@ -222,7 +229,9 @@ impl CssAgent {
                             Some((text, _)) => counted.contains(text),
                             // Generated content's: the element's own
                             // pseudo-elements'.
-                            None => run.pseudo.is_some() && run.node == element && element.is_some(),
+                            None => {
+                                run.pseudo.is_some() && run.node == element && element.is_some()
+                            }
                         }
                     }))
                 })
@@ -281,9 +290,10 @@ impl CssAgent {
         page: &mut dyn DevToolsPage,
     ) -> Result<NodeId, String> {
         let node = self.node(name, params, page)?;
-        let element = page
-            .dom()
-            .read(|cx| cx.node_by_id(node).is_some_and(|node| cx.kind(node) == NodeKind::Element));
+        let element = page.dom().read(|cx| {
+            cx.node_by_id(node)
+                .is_some_and(|node| cx.kind(node) == NodeKind::Element)
+        });
         if !element {
             return Err("Node is not an Element".to_owned());
         }
@@ -360,7 +370,8 @@ fn counted_text<'gc>(cx: &Cx<'_, 'gc>, node: NodeRef<'gc>) -> Vec<NodeId> {
     if cx.kind(node) == NodeKind::Text {
         return vec![cx.node_id(node)];
     }
-    let children = |node| std::iter::successors(cx.first_child(node), |&child| cx.next_sibling(child));
+    let children =
+        |node| std::iter::successors(cx.first_child(node), |&child| cx.next_sibling(child));
     let mut counted = Vec::new();
     for child in children(node) {
         match cx.kind(child) {
@@ -411,7 +422,10 @@ fn inline_json(explained: Option<&style::Explained>) -> Value {
 fn style_json(block: &CssPropertyValueSet) -> Value {
     let declarations = block.inspector_declarations();
     let mut shorthands: Vec<&str> = Vec::new();
-    for shorthand in declarations.iter().filter_map(|declaration| declaration.shorthand) {
+    for shorthand in declarations
+        .iter()
+        .filter_map(|declaration| declaration.shorthand)
+    {
         if !shorthands.contains(&shorthand) {
             shorthands.push(shorthand);
         }

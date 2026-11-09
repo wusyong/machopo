@@ -134,10 +134,10 @@ mod window;
 /// What `EventHandler` says the pointer looks like: `cursor`'s keyword,
 /// `auto` resolved.
 pub use ::computed_style::CursorKeyword;
-pub use computed_style::{computed_style_for_devtools, computed_values_for_devtools};
 pub use animation::{notice_steps, settle_animation_notices, settle_started_animations};
 pub use animation_frame::run_animation_frame_callbacks;
 pub use animations::{AnimationsUpdate, update_animations};
+pub use computed_style::{computed_style_for_devtools, computed_values_for_devtools};
 pub use declare::{
     Interface, InterfaceDesc, Member, MemberKind, Named, Param, TypeDesc, overload_interfaces,
     resolve_overload,

@@ -1860,8 +1860,9 @@ fn box_shadow_and_outline_serialization() {
 /// the shorthand that set it, custom properties as written.
 #[test]
 fn declarations_are_listed_for_devtools() {
-    let block =
-        CssPropertyValueSet::parse("color: red !important; margin: 1px 2px; border-top: solid; --x: { a }");
+    let block = CssPropertyValueSet::parse(
+        "color: red !important; margin: 1px 2px; border-top: solid; --x: { a }",
+    );
     let listed: Vec<_> = block
         .inspector_declarations()
         .into_iter()
@@ -1876,7 +1877,13 @@ fn declarations_are_listed_for_devtools() {
         })
         .collect();
     let row = |name: &str, value: &str, important, implicit, shorthand| {
-        (name.to_owned(), value.to_owned(), important, implicit, shorthand)
+        (
+            name.to_owned(),
+            value.to_owned(),
+            important,
+            implicit,
+            shorthand,
+        )
     };
     assert_eq!(
         listed,
@@ -1885,9 +1892,27 @@ fn declarations_are_listed_for_devtools() {
             row("margin-right", "2px", false, false, Some("margin")),
             row("margin-bottom", "1px", false, false, Some("margin")),
             row("margin-left", "2px", false, false, Some("margin")),
-            row("border-top-width", "medium", false, true, Some("border-top")),
-            row("border-top-style", "solid", false, false, Some("border-top")),
-            row("border-top-color", "currentcolor", false, true, Some("border-top")),
+            row(
+                "border-top-width",
+                "medium",
+                false,
+                true,
+                Some("border-top")
+            ),
+            row(
+                "border-top-style",
+                "solid",
+                false,
+                false,
+                Some("border-top")
+            ),
+            row(
+                "border-top-color",
+                "currentcolor",
+                false,
+                true,
+                Some("border-top")
+            ),
             row("--x", "{ a }", false, false, None),
             row("color", "red", true, false, None),
         ]

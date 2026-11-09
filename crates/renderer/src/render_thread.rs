@@ -8,7 +8,7 @@ use compositor::{
     CompositorScrollDelta, DocumentId, InputDispatch, LayerTreeHost, LayerTreeSettings, ProxyMain,
     SwapPromise, ToMainThread,
 };
-use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError};
+use crossbeam_channel::Sender;
 use dom::NavigationType;
 use gfx::{NodeId, PointF, RectF, SizeF};
 use protocol::input::{InputEvent, Modifiers};
@@ -21,15 +21,15 @@ use layout::TextContext;
 
 use crate::canvas_encoder::CanvasEncoder;
 use crate::clock::Clock;
-use crate::frame_view::PaintOutput;
+use crate::frame_widget::FrameWidget;
 use crate::loader::{BlobUrls, RequestIds};
 use crate::navigation_timing::NavigationTiming;
 use crate::pending_user_input::{Pending, PendingUserInput};
-use crate::task_queue::{DevToolsQueue, MainThreadTask, RendererReceiver};
+use crate::task_queue::{MainThreadScheduler, MainThreadTask, RendererReceiver, TaskQueues};
 
+mod css_agent;
 mod devtools;
 mod documents;
-mod css_agent;
 mod dom_agent;
 mod log_agent;
 mod network_agent;
@@ -124,13 +124,11 @@ pub fn spawn_renderer_main_thread(
         gpu,
     } = endpoints;
     let RendererReceiver {
-        rx,
-        tx,
+        scheduler,
         compositor,
-        devtools,
     } = from_browser;
-    // For the canvas encoder's thread to post to the main thread.
-    let to_main = tx.clone();
+    // For the compositor thread to post to the main thread.
+    let to_main = scheduler.clone();
     // The impl side, with the frame sink to Viz, goes to the compositor
     // thread; it asks the main thread for main frames, and passes on the
     // input it doesn't handle, on the main queue, and acknowledges what it
@@ -162,7 +160,7 @@ pub fn spawn_renderer_main_thread(
             {
                 posted_input.enqueue(Pending::of(event, *attribution, *document));
             }
-            let _ = tx.send(MainThreadTask::Compositor(task));
+            to_main.post_compositor(task);
         },
         to_browser.clone(),
     );
@@ -179,14 +177,15 @@ pub fn spawn_renderer_main_thread(
         .spawn(move || {
             let mut thread = RenderThread::new(
                 to_browser,
-                to_main,
-                devtools,
+                scheduler.clone(),
                 layer_tree_host,
                 pending_input,
                 flags,
                 script_engine,
             );
-            thread.run(rx);
+            thread.run();
+            // Nothing is posted to the main thread from now on.
+            scheduler.close();
             // Drop V8 state, and the main side of the compositor, which
             // stops the compositor thread; wait for it to finish. The
             // browser hears we are gone when the last sender of the channel
@@ -209,10 +208,9 @@ struct RenderThread {
     /// The thread the DOM's `toBlob` files are encoded on, once one is.
     canvas_encoder: CanvasEncoder,
     to_browser: Sender<RendererHostMsg>,
-    layer_tree_host: LayerTreeHost<ProxyMain>,
-    /// The paint the layers are from: a frame that only scrolled keeps it,
-    /// so its commit keeps the tiles.
-    painted: Option<Arc<PaintOutput>>,
+    /// The widget, until the first document's frame takes it: the frame's
+    /// from then on (`widget`).
+    widget: Option<FrameWidget>,
     visual_properties: VisualProperties,
     needs_begin_main_frame: bool,
     /// The clock's time the last `BeginMainFrame` came at: the next is
@@ -248,13 +246,6 @@ struct RenderThread {
     /// compares it before and after, as Blink's `LatencyInfoSwapPromiseMonitor`
     /// watches for a commit request while an event is dispatched.
     main_frame_requests: u64,
-    /// The acks of input whose handling asked for a main frame: they go
-    /// with the next commit, so the browser hears them once the frame that
-    /// shows the change is drawn.
-    pending_input_acks: Vec<SwapPromise>,
-    /// `VisualStateReady`s waiting for the main frame they asked for: they
-    /// go with the next commit, as input acks do.
-    pending_visual_states: Vec<SwapPromise>,
     /// Subresource request ids are unique per renderer, so a response for
     /// a document that has gone is recognised and dropped.
     next_request_id: RequestIds,
@@ -321,8 +312,10 @@ struct RenderThread {
     webdriver_state: webdriver::WebDriverState,
     /// The browser's DevTools sessions.
     devtools_sessions: Vec<String>,
-    /// What the browser asks of them, in order (`DevToolsQueue`).
-    devtools_queue: Arc<DevToolsQueue>,
+    /// The main thread's tasks (`MainThreadScheduler`): what the browser,
+    /// the compositor and DevTools ask of it, which script paused takes some
+    /// of too.
+    scheduler: Arc<MainThreadScheduler>,
     /// The DOM's document committed (`render_thread::next`): before
     /// the engine, as fields drop in order and its roots go before their
     /// heap.
@@ -336,11 +329,8 @@ struct RenderThread {
     /// DevTools' `CSS` domain (Blink's `InspectorCSSAgent`): before the
     /// engine, as the styles it keeps are of the engine's DOM.
     css_agent: Rc<css_agent::CssAgent>,
-    /// DevTools' `Overlay` domain (Blink's `InspectorOverlayAgent`), its
-    /// layer as last committed, and the count of what it showed then.
+    /// DevTools' `Overlay` domain (Blink's `InspectorOverlayAgent`).
     overlay_agent: Rc<overlay_agent::OverlayAgent>,
-    overlay_layer: Option<compositor::PictureLayer>,
-    overlay_version: u64,
     /// The DOM's engine, made at its first document, or at DevTools'
     /// first command for its inspector (`make_engine`).
     engine: Option<Box<dyn dom_api::ScriptEngine>>,
@@ -381,8 +371,7 @@ impl Drop for RenderThread {
 impl RenderThread {
     fn new(
         to_browser: Sender<RendererHostMsg>,
-        to_main: Sender<MainThreadTask>,
-        devtools_queue: Arc<DevToolsQueue>,
+        scheduler: Arc<MainThreadScheduler>,
         layer_tree_host: LayerTreeHost<ProxyMain>,
         pending_input: PendingUserInput,
         flags: RendererFlags,
@@ -414,9 +403,9 @@ impl RenderThread {
         let _ = to_browser.send(RendererHostMsg::RendererReady);
         Self {
             text: TextContext::new(flags.test_fonts),
-            canvas_encoder: CanvasEncoder::new(to_main),
+            canvas_encoder: CanvasEncoder::new(scheduler.clone()),
             to_browser,
-            layer_tree_host,
+            widget: Some(FrameWidget::new(layer_tree_host)),
             visual_properties: VisualProperties::default(),
             needs_begin_main_frame: false,
             last_main_frame: 0.0,
@@ -428,8 +417,6 @@ impl RenderThread {
             resize_loop_error: false,
             animations_running: false,
             main_frame_requests: 0,
-            pending_input_acks: Vec::new(),
-            pending_visual_states: Vec::new(),
             next_request_id: RequestIds::new(),
             blob_urls,
             popup: None,
@@ -439,7 +426,6 @@ impl RenderThread {
             under_mouse_pre_paints: None,
             pending_move_input: None,
             mouse_move_acks: 0,
-            painted: None,
             web_tests: flags.web_tests,
             automation: flags.automation,
             user_agent: Rc::from(flags.user_agent.as_str()),
@@ -461,9 +447,7 @@ impl RenderThread {
             dom_agent,
             css_agent,
             overlay_agent,
-            overlay_layer: None,
-            overlay_version: 0,
-            devtools_queue,
+            scheduler,
             engine: None,
             images: std::collections::HashMap::new(),
             fetches: std::collections::HashMap::new(),
@@ -483,23 +467,14 @@ impl RenderThread {
     /// Frames are paced by Viz through the compositor thread: the loop
     /// tells it whether a main frame is needed, and runs the rendering
     /// update when it asks for one (`begin_main_frame`).
-    fn run(&mut self, rx: Receiver<MainThreadTask>) {
+    fn run(&mut self) {
         'run: loop {
             // Wait for a task, or until the next timer or heap task is due:
             // idle, for DevTools' profile of the script (as Blink tells V8's
             // inspector around each task).
             self.set_idle(true);
-            let first = match self.until_next_due() {
-                Some(wait) => match rx.recv_timeout(wait) {
-                    Ok(task) => Some(task),
-                    Err(RecvTimeoutError::Timeout) => None,
-                    Err(RecvTimeoutError::Disconnected) => break 'run,
-                },
-                None => match rx.recv() {
-                    Ok(task) => Some(task),
-                    Err(_) => break 'run,
-                },
-            };
+            let wait = self.until_next_due();
+            let first = self.scheduler.next(TaskQueues::ALL, wait);
             self.set_idle(false);
             let mut next = first;
             while let Some(task) = next.take() {
@@ -512,11 +487,7 @@ impl RenderThread {
                 // before the next task comes off the channel.
                 self.run_queued_tasks();
                 self.update_title();
-                next = match rx.try_recv() {
-                    Ok(m) => Some(m),
-                    Err(TryRecvError::Empty) => None,
-                    Err(TryRecvError::Disconnected) => break 'run,
-                };
+                next = self.scheduler.try_next(TaskQueues::ALL);
             }
             self.blink_caret();
             self.intersections_due_now();
@@ -552,7 +523,9 @@ impl RenderThread {
             self.tell_dom_changes();
             // What DevTools' overlay shows follows its node at each frame,
             // and draws once it changes.
-            if self.overlay_agent.showing() || self.overlay_agent.version() != self.overlay_version {
+            if self.overlay_agent.showing()
+                || self.overlay_agent.version() != self.widget().overlay_version
+            {
                 self.request_main_frame();
             }
             // The engine's platform tasks are tasks too, with a checkpoint
@@ -565,7 +538,7 @@ impl RenderThread {
             );
             // An idle period's callbacks, once no task waits (Blink's
             // scheduler runs idle tasks when it has nothing else to).
-            if rx.is_empty() {
+            if !self.scheduler.has_task(TaskQueues::ALL) {
                 trace_event::in_scope(
                     trace_event::trace_event!("RenderThread::run_idle_callback"),
                     || self.run_idle_callback(),
@@ -584,13 +557,14 @@ impl RenderThread {
             // Running transitions and CSS animations move on at each
             // frame (script played or canceled one).
             let animations = self.animations_want_frames();
-            self.layer_tree_host.set_needs_begin_main_frame(
-                self.needs_begin_main_frame
-                    || animation_frames
-                    || self.resize_loop_error
-                    || animations
-                    || self.pending_mouse_move.is_some(),
-            );
+            let needs = self.needs_begin_main_frame
+                || animation_frames
+                || self.resize_loop_error
+                || animations
+                || self.pending_mouse_move.is_some();
+            self.widget()
+                .layer_tree_host
+                .set_needs_begin_main_frame(needs);
         }
         tracing::debug!("renderer main thread exiting");
     }
@@ -603,8 +577,8 @@ impl RenderThread {
                 self.canvas_encoded(id, file);
                 true
             }
-            MainThreadTask::DevTools => {
-                self.run_devtools_queue();
+            MainThreadTask::DevTools(queued) => {
+                self.run_devtools_task(queued);
                 true
             }
             MainThreadTask::Compositor(task) => {
@@ -670,6 +644,19 @@ impl RenderThread {
     fn new_document_id(&mut self) -> DocumentId {
         self.last_document_id += 1;
         DocumentId(self.last_document_id)
+    }
+
+    /// The widget: the thread's until the first document's frame takes it,
+    /// the frame's from then on (the engine keeps the frame from then on,
+    /// and lends it out only within its own calls).
+    fn widget(&mut self) -> &mut FrameWidget {
+        if let Some(widget) = &mut self.widget {
+            return widget;
+        }
+        &mut documents::engine_frame(&mut self.engine)
+            .expect("the frame has the widget once the thread hasn't")
+            .1
+            .widget
     }
 
     /// `ScheduleAnimation`: the rendering needs updating, at the next main
@@ -874,7 +861,7 @@ impl RenderThread {
             RendererMsg::UpdateVisualProperties(props) => {
                 self.visual_properties = props;
                 self.set_viewport();
-                self.layer_tree_host.set_viewport_rect_and_scale(
+                self.widget().layer_tree_host.set_viewport_rect_and_scale(
                     props.viewport_size,
                     props.device_scale_factor,
                     props.local_surface_id,
@@ -941,10 +928,10 @@ impl RenderThread {
     /// before it commits anything (it opens a background tab hidden), so
     /// a document starts with its page's state.
     fn set_page_visible(&mut self, visible: bool) {
-        self.layer_tree_host.set_visible(visible);
+        self.widget().layer_tree_host.set_visible(visible);
         if !visible {
             self.dispatch_mouse_move();
-            for ack in self.pending_input_acks.drain(..) {
+            for ack in self.widget().pending_input_acks.drain(..) {
                 ack.did_not_swap();
             }
         }
@@ -989,16 +976,12 @@ impl RenderThread {
     /// with 32 at once). Chromium's queues a swap promise and asks for a
     /// commit too.
     fn request_visual_state(&mut self, request_id: u64) {
-        if !self.automation {
-            tracing::warn!("RequestVisualState without RendererFlags::automation; ignored");
+        let Some(promise) = visual_state_promise(&self.to_browser, self.automation, request_id)
+        else {
             return;
-        }
-        let ready = RendererHostMsg::VisualStateReady { request_id };
+        };
         self.request_main_frame();
-        let to_browser = self.to_browser.clone();
-        self.pending_visual_states.push(SwapPromise::new(move |_| {
-            let _ = to_browser.send(ready);
-        }));
+        self.widget().pending_visual_states.push(promise);
     }
 
     /// `RenderFrameImpl::CommitNavigation`: decode and parse the body into
@@ -1260,14 +1243,15 @@ impl RenderThread {
         self.handle_popup_requests();
         self.handle_frame_requests();
         self.popup_closed_by_press = None;
-        if self.main_frame_requests == requests || !self.layer_tree_host.is_visible() {
+        if self.main_frame_requests == requests || !self.widget().layer_tree_host.is_visible() {
             let _ = self
                 .to_browser
                 .send(RendererHostMsg::InputEventAck { frame_token: None });
             return;
         }
         let to_browser = self.to_browser.clone();
-        self.pending_input_acks
+        self.widget()
+            .pending_input_acks
             .push(SwapPromise::input_ack(move |frame_token| {
                 let _ = to_browser.send(RendererHostMsg::InputEventAck { frame_token });
             }));
@@ -1294,7 +1278,7 @@ impl RenderThread {
                 buttons,
                 modifiers,
             });
-            if !self.layer_tree_host.is_visible() {
+            if !self.widget().layer_tree_host.is_visible() {
                 self.dispatch_mouse_move();
             }
             return;
@@ -1448,7 +1432,7 @@ impl RenderThread {
         if self.needs_begin_main_frame {
             self.update_rendering();
         } else {
-            self.layer_tree_host.abort_main_frame();
+            self.widget().layer_tree_host.abort_main_frame();
         }
         if let Some(engine) = &mut self.engine {
             engine.end_rendering_update();
@@ -1461,9 +1445,27 @@ impl RenderThread {
     fn update_rendering(&mut self) {
         self.needs_begin_main_frame = false;
         if !self.update_document_rendering() {
-            self.layer_tree_host.abort_main_frame();
+            self.widget().layer_tree_host.abort_main_frame();
         }
     }
+}
+
+/// The promise of a `VisualStateReady` for the request `request_id`, with
+/// the frame's next commit; none without `RendererFlags::automation`, which
+/// is what asks.
+fn visual_state_promise(
+    to_browser: &Sender<RendererHostMsg>,
+    automation: bool,
+    request_id: u64,
+) -> Option<SwapPromise> {
+    if !automation {
+        tracing::warn!("RequestVisualState without RendererFlags::automation; ignored");
+        return None;
+    }
+    let to_browser = to_browser.clone();
+    Some(SwapPromise::new(move |_| {
+        let _ = to_browser.send(RendererHostMsg::VisualStateReady { request_id });
+    }))
 }
 
 /// The page's log's message for a response of `status`, 400 or more.

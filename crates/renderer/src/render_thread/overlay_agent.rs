@@ -19,10 +19,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use base::numerics::f32_from_f64;
 use compositor_paint::{DisplayItemList, PaintFlags, PaintOp};
 use crossbeam_channel::Sender;
 use dom::{Cx, NodeId, NodeKind, NodeRef};
-use base::numerics::f32_from_f64;
 use dom_api::DevToolsPage;
 use gfx::{Color, PointF, RRectF, RectF, SizeF};
 use protocol::renderer::RendererHostMsg;
@@ -179,8 +179,8 @@ pub(crate) struct OverlayAgent {
     /// Counts the changes of what is shown: the render thread asks for a
     /// frame once it moves.
     version: Cell<u64>,
-    /// The highlight as last drawn (`highlight`'s), to draw again only
-    /// when it moves.
+    /// What was last drawn (the highlight, `highlight`'s, and the paused
+    /// message), to draw again only when it changes.
     drawn: RefCell<Option<Value>>,
     /// The overlay's layer's id, the same for each drawing: the compositor
     /// takes a new drawing as the same layer's new content.
@@ -238,8 +238,21 @@ impl OverlayAgent {
 
     /// `session` has gone: what it showed goes with it.
     pub(crate) fn detach(&self, session: &str) {
-        self.sessions.borrow_mut().remove(session);
-        if !self.inspecting() && self.shown.borrow().as_ref().is_some_and(|shown| shown.inspecting) {
+        if self
+            .sessions
+            .borrow_mut()
+            .remove(session)
+            .is_some_and(|gone| gone.paused_message.is_some())
+        {
+            self.version.set(self.version.get().wrapping_add(1));
+        }
+        if !self.inspecting()
+            && self
+                .shown
+                .borrow()
+                .as_ref()
+                .is_some_and(|shown| shown.inspecting)
+        {
             self.show(None);
         }
     }
@@ -300,12 +313,21 @@ impl OverlayAgent {
                 if !self.dom_agent.enabled(name) {
                     return Err("DOM should be enabled first".to_owned());
                 }
-                self.sessions.borrow_mut().entry(name.to_owned()).or_default().enabled = true;
+                self.sessions
+                    .borrow_mut()
+                    .entry(name.to_owned())
+                    .or_default()
+                    .enabled = true;
                 Ok(json!({}))
             }
             "disable" => {
                 self.sessions.borrow_mut().remove(name);
-                if self.shown.borrow().as_ref().is_some_and(|shown| shown.inspecting) {
+                if self
+                    .shown
+                    .borrow()
+                    .as_ref()
+                    .is_some_and(|shown| shown.inspecting)
+                {
                     self.show(None);
                 }
                 Ok(json!({}))
@@ -344,7 +366,13 @@ impl OverlayAgent {
                     .entry(name.to_owned())
                     .or_default()
                     .inspect = inspect;
-                if !self.inspecting() && self.shown.borrow().as_ref().is_some_and(|shown| shown.inspecting) {
+                if !self.inspecting()
+                    && self
+                        .shown
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|shown| shown.inspecting)
+                {
                     self.show(None);
                 }
                 Ok(json!({}))
@@ -371,6 +399,7 @@ impl OverlayAgent {
                     .entry(name.to_owned())
                     .or_default()
                     .paused_message = params["message"].as_str().map(str::to_owned);
+                self.version.set(self.version.get().wrapping_add(1));
                 Ok(json!({}))
             }
             // The other overlays machopo doesn't draw: asked to show none,
@@ -405,7 +434,12 @@ impl OverlayAgent {
         let Some(node) = super::dom_agent::node_at(page, point, false, user_agent) else {
             return;
         };
-        if self.shown.borrow().as_ref().is_some_and(|shown| shown.node == node) {
+        if self
+            .shown
+            .borrow()
+            .as_ref()
+            .is_some_and(|shown| shown.node == node)
+        {
             return;
         }
         self.show(Some(Shown {
@@ -414,7 +448,11 @@ impl OverlayAgent {
             inspecting: true,
         }));
         if let Some(id) = self.dom_agent.push_node(&name, node, page.dom()) {
-            self.tell(&name, "Overlay.nodeHighlightRequested", json!({ "nodeId": id }));
+            self.tell(
+                &name,
+                "Overlay.nodeHighlightRequested",
+                json!({ "nodeId": id }),
+            );
         }
     }
 
@@ -449,6 +487,14 @@ impl OverlayAgent {
         cx: &Cx<'_, '_>,
         frame: &mut Frame,
     ) -> Option<Option<compositor::PictureLayer>> {
+        // The message of an enabled session's (Chrome shows the last
+        // command's: one, as DevTools has one session that sends it).
+        let paused = self
+            .sessions
+            .borrow()
+            .values()
+            .filter(|session| session.enabled)
+            .find_map(|session| session.paused_message.clone());
         let shown = self.shown.borrow().clone();
         let highlight = shown.and_then(|shown| {
             let element = cx.node_by_id(shown.node)?;
@@ -462,17 +508,34 @@ impl OverlayAgent {
                 shown.config.show_info,
             ))
         });
-        if *self.drawn.borrow() == highlight {
+        let drawing = (highlight.is_some() || paused.is_some())
+            .then(|| json!({ "highlight": highlight, "paused": paused }));
+        if *self.drawn.borrow() == drawing {
             return None;
         }
-        *self.drawn.borrow_mut() = highlight.clone();
-        let Some(highlight) = highlight else {
+        *self.drawn.borrow_mut() = drawing;
+        if highlight.is_none() && paused.is_none() {
             return Some(None);
-        };
+        }
         let viewport = frame.viewport_size();
-        let list = paint(&highlight, viewport, &mut |text, size, bold| {
-            frame.shape_label(text, size, bold)
-        });
+        let mut shape = |text: &str, size, bold| frame.shape_label(text, size, bold);
+        let mut list = DisplayItemList::new();
+        // Script paused: the page dimmed, the highlight over it, the
+        // message over both (Chrome's `PausedInDebuggerTool` is the
+        // overlay page's while paused; a highlight shows over it).
+        if paused.is_some() {
+            list.push_op(PaintOp::DrawRect {
+                rect: RectF::new(0.0, 0.0, viewport.width, viewport.height),
+                flags: PaintFlags::fill(PAUSED_DIM),
+            });
+        }
+        if let Some(highlight) = &highlight {
+            paint(&mut list, highlight, viewport, &mut shape);
+        }
+        if let Some(message) = &paused {
+            paint_paused_message(&mut list, message, viewport, &mut shape);
+        }
+        list.finalize();
         Some(Some(compositor::PictureLayer {
             id: self.layer_id,
             bounds: viewport,
@@ -519,7 +582,12 @@ fn highlight<'gc>(
     let mut paths = Vec::new();
     if let Some(quads) = frame.box_quads_in_top(document, node) {
         for (quad, fill, outline, name) in [
-            (quads.content, config.content, config.content_outline, "content"),
+            (
+                quads.content,
+                config.content,
+                config.content_outline,
+                "content",
+            ),
             (quads.padding, config.padding, Rgba::TRANSPARENT, "padding"),
             (quads.border, config.border, Rgba::TRANSPARENT, "border"),
             (quads.margin, config.margin, Rgba::TRANSPARENT, "margin"),
@@ -624,9 +692,17 @@ fn style_info<'gc>(cx: &Cx<'_, 'gc>, frame: &mut Frame, element: NodeRef<'gc>) -
             // swatch reads (Blink's `-unclamped-rgba`).
             let color = parse_css_color(&value);
             let fraction = |channel: u8| f64::from(channel) / 255.0;
-            style[format!("{name}-unclamped-rgba")] =
-                json!([fraction(color.r), fraction(color.g), fraction(color.b), fraction(color.a)]);
-            style[name] = format!("#{:02X}{:02X}{:02X}{:02X}", color.r, color.g, color.b, color.a).into();
+            style[format!("{name}-unclamped-rgba")] = json!([
+                fraction(color.r),
+                fraction(color.g),
+                fraction(color.b),
+                fraction(color.a)
+            ]);
+            style[name] = format!(
+                "#{:02X}{:02X}{:02X}{:02X}",
+                color.r, color.g, color.b, color.a
+            )
+            .into();
             continue;
         }
         style[name] = value.into();
@@ -649,7 +725,10 @@ fn number(value: f32) -> String {
     };
     let decimals = 6_usize.saturating_sub(digits);
     let written = format!("{value:.decimals$}");
-    written.trim_end_matches('0').trim_end_matches('.').to_owned()
+    written
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_owned()
 }
 
 /// A color a highlight's path has (`Rgba::css`'s), or a computed one, read
@@ -673,7 +752,9 @@ fn parse_css_color(text: &str) -> Color {
         .split(',')
         .filter_map(|part| part.trim().parse().ok())
         .collect();
-    let channel = |at: usize| base::numerics::saturated_cast::<u8, f32>(parts.get(at).copied().unwrap_or(0.0));
+    let channel = |at: usize| {
+        base::numerics::saturated_cast::<u8, f32>(parts.get(at).copied().unwrap_or(0.0))
+    };
     let alpha = parts.get(3).copied().unwrap_or(1.0);
     Color::rgba(
         channel(0),
@@ -695,21 +776,29 @@ const SWATCH: f32 = 10.0;
 const TAG_COLOR: Color = Color::rgb(0x88, 0x12, 0x80);
 const ID_COLOR: Color = Color::rgb(0x1a, 0x1a, 0xa6);
 const SIZE_COLOR: Color = Color::rgb(0x5f, 0x63, 0x68);
+
+/// Script paused's overlay, as `inspector_overlay`'s `tool_paused.css` has
+/// it: the page under 31% black, the message's box pale yellow with a gray
+/// border.
+const PAUSED_DIM: Color = Color::rgba(0, 0, 0, 79);
+const PAUSED_BOX: Color = Color::rgb(255, 255, 194);
+const PAUSED_BORDER: Color = Color::rgb(202, 202, 202);
+const PAUSED_TEXT_SIZE: f32 = 13.0;
 const SWATCH_BORDER: Color = Color::rgb(0xda, 0xdc, 0xe0);
 const LABEL_SIZE: f32 = 12.0;
 
-/// Draws `highlight` (`highlight`'s value) over a viewport of `viewport`
+/// Draws `highlight` (`highlight`'s value) into `list`, over a viewport of `viewport`
 /// CSS px (Chrome's overlay page draws the same JSON with
 /// `inspector_overlay`'s `drawHighlight`): each path filled with its color
 /// and outlined with its outline's; with the element's info, a label below
 /// the border box (above if it doesn't fit), kept in the viewport, its
 /// text laid out by `shape` (text, size, bold).
 fn paint(
+    list: &mut DisplayItemList,
     highlight: &Value,
     viewport: SizeF,
     shape: &mut dyn FnMut(&str, f32, bool) -> Option<gfx::ShapedText>,
-) -> DisplayItemList {
-    let mut list = DisplayItemList::new();
+) {
     let mut border = None;
     // The path before each, inside it, which its fill leaves out.
     let mut inner: Option<Vec<PointF>> = None;
@@ -735,7 +824,9 @@ fn paint(
         // page draws them (from the margin in, each cutting out the next:
         // `drawHighlight`'s `destination-out`).
         let ring = match &inner {
-            Some(inside) => gfx::Path::polygons([&points, inside]).with_fill_rule(gfx::FillRule::EvenOdd),
+            Some(inside) => {
+                gfx::Path::polygons([&points, inside]).with_fill_rule(gfx::FillRule::EvenOdd)
+            }
             None => shape_path.clone(),
         };
         let fill = parse_css_color(path["fillColor"].as_str().unwrap_or_default());
@@ -755,10 +846,45 @@ fn paint(
     }
     if let (Some(info), Some(border)) = (highlight.get("elementInfo"), border) {
         let format = highlight["colorFormat"].as_str().unwrap_or("hex");
-        paint_label(&mut list, info, format, border, viewport, shape);
+        paint_label(list, info, format, border, viewport, shape);
     }
-    list.finalize();
-    list
+}
+
+/// Script paused's message (`setPausedInDebuggerMessage`'s), as the overlay
+/// page's `PausedInDebuggerTool` draws it: in a pale yellow box at the
+/// viewport's top, in its middle. Chrome's has buttons to go on and step
+/// after it; DevTools has them too, machopo's has none.
+fn paint_paused_message(
+    list: &mut DisplayItemList,
+    message: &str,
+    viewport: SizeF,
+    shape: &mut dyn FnMut(&str, f32, bool) -> Option<gfx::ShapedText>,
+) {
+    const TOP: f32 = 10.0;
+    const HEIGHT: f32 = 22.0;
+    const SIDE: f32 = 5.0;
+    let Some(text) = shape(message, PAUSED_TEXT_SIZE, false) else {
+        return;
+    };
+    let width = text.width + 2.0 * SIDE;
+    let x = ((viewport.width - width) / 2.0).max(0.0);
+    let rect = RectF::new(x, TOP, width, HEIGHT);
+    list.push_op(PaintOp::DrawRect {
+        rect,
+        flags: PaintFlags::fill(PAUSED_BOX),
+    });
+    list.push_op(PaintOp::DrawRect {
+        rect,
+        flags: PaintFlags::stroke(PAUSED_BORDER, 1.0),
+    });
+    let baseline = TOP + (HEIGHT + text.metrics.ascent - text.metrics.descent) / 2.0;
+    draw_text(
+        list,
+        text,
+        PointF::new(x + SIDE, baseline),
+        Color::BLACK,
+        rect,
+    );
 }
 
 /// The element's label (Chrome's tooltip, `inspector_overlay`'s
@@ -773,8 +899,11 @@ fn paint_label(
     viewport: SizeF,
     shape: &mut dyn FnMut(&str, f32, bool) -> Option<gfx::ShapedText>,
 ) {
-    let mut parts: Vec<(String, Color, bool)> =
-        vec![(info["tagName"].as_str().unwrap_or_default().to_owned(), TAG_COLOR, true)];
+    let mut parts: Vec<(String, Color, bool)> = vec![(
+        info["tagName"].as_str().unwrap_or_default().to_owned(),
+        TAG_COLOR,
+        true,
+    )];
     let id = info["idValue"].as_str().unwrap_or_default();
     if !id.is_empty() {
         parts.push((format!("#{id}"), ID_COLOR, true));
@@ -797,14 +926,21 @@ fn paint_label(
         _ => None,
     };
     let name_width: f32 = shaped.iter().map(|(text, _)| text.width).sum();
-    let size_width = size_text.as_ref().map_or(0.0, |text| text.width + 2.0 * GAP);
+    let size_width = size_text
+        .as_ref()
+        .map_or(0.0, |text| text.width + 2.0 * GAP);
     let header_width = name_width + size_width;
-    let rows: Vec<(gfx::ShapedText, gfx::ShapedText, Option<Color>)> = style_rows(&info["style"], format)
-        .into_iter()
-        .filter_map(|(name, value, swatch)| {
-            Some((shape(name, LABEL_SIZE, false)?, shape(&value, LABEL_SIZE, false)?, swatch))
-        })
-        .collect();
+    let rows: Vec<(gfx::ShapedText, gfx::ShapedText, Option<Color>)> =
+        style_rows(&info["style"], format)
+            .into_iter()
+            .filter_map(|(name, value, swatch)| {
+                Some((
+                    shape(name, LABEL_SIZE, false)?,
+                    shape(&value, LABEL_SIZE, false)?,
+                    swatch,
+                ))
+            })
+            .collect();
     let swatch_room = |swatch: &Option<Color>| if swatch.is_some() { SWATCH + 4.0 } else { 0.0 };
     let rows_width = rows
         .iter()
@@ -817,7 +953,10 @@ fn paint_label(
     } else {
         ROW_GAP + rows.len() as f32 * (line + ROW_GAP)
     };
-    let size = SizeF::new(content_width + 2.0 * PADDING, line + rows_height + 2.0 * PADDING);
+    let size = SizeF::new(
+        content_width + 2.0 * PADDING,
+        line + rows_height + 2.0 * PADDING,
+    );
     let below = border.y + border.height + GAP;
     let y = if below + size.height <= viewport.height {
         below
@@ -850,7 +989,13 @@ fn paint_label(
     // end.
     let mut baseline = baseline + ROW_GAP + line + ROW_GAP;
     for (name, value, swatch) in rows {
-        draw_text(list, name, PointF::new(x + PADDING, baseline), SIZE_COLOR, rect);
+        draw_text(
+            list,
+            name,
+            PointF::new(x + PADDING, baseline),
+            SIZE_COLOR,
+            rect,
+        );
         let value_at = end - value.width;
         if let Some(color) = swatch {
             let swatch = RectF::new(value_at - SWATCH - 4.0, baseline - SWATCH, SWATCH, SWATCH);
@@ -863,7 +1008,13 @@ fn paint_label(
                 flags: PaintFlags::stroke(SWATCH_BORDER, 1.0),
             });
         }
-        draw_text(list, value, PointF::new(value_at, baseline), Color::BLACK, rect);
+        draw_text(
+            list,
+            value,
+            PointF::new(value_at, baseline),
+            Color::BLACK,
+            rect,
+        );
         baseline += line + ROW_GAP;
     }
 }
@@ -875,7 +1026,11 @@ fn paint_label(
 fn style_rows(style: &Value, format: &str) -> Vec<(&'static str, String, Option<Color>)> {
     let text = |name: &str| style[name].as_str().filter(|value| !value.is_empty());
     let mut rows = Vec::new();
-    for (name, property) in [("Color", "color"), ("Font", ""), ("Background", "background-color")] {
+    for (name, property) in [
+        ("Color", "color"),
+        ("Font", ""),
+        ("Background", "background-color"),
+    ] {
         if property.is_empty() {
             if let (Some(size), Some(family)) = (text("font-size"), text("font-family"))
                 && size != "0px"
@@ -903,7 +1058,8 @@ fn style_rows(style: &Value, format: &str) -> Vec<(&'static str, String, Option<
 /// (`formatColor`): `#RRGGBB`, with its alpha only if it has one, or
 /// `rgb(r g b / a)`, `hsl(…)`, `hwb(…)`.
 fn format_color(color: Color, format: &str) -> String {
-    let [r, g, b, a] = [color.r, color.g, color.b, color.a].map(|channel| f64::from(channel) / 255.0);
+    let [r, g, b, a] =
+        [color.r, color.g, color.b, color.a].map(|channel| f64::from(channel) / 255.0);
     let alpha = if color.a == 255 {
         String::new()
     } else {
@@ -934,11 +1090,24 @@ fn format_color(color: Color, format: &str) -> String {
             } else {
                 (max - min) / (1.0 - (2.0 * lightness - 1.0).abs())
             };
-            format!("hsl({}deg {} {}{alpha})", hue(), percent(saturation), percent(lightness))
+            format!(
+                "hsl({}deg {} {}{alpha})",
+                hue(),
+                percent(saturation),
+                percent(lightness)
+            )
         }
-        "hwb" => format!("hwb({}deg {} {}{alpha})", hue(), percent(min), percent(1.0 - max)),
+        "hwb" => format!(
+            "hwb({}deg {} {}{alpha})",
+            hue(),
+            percent(min),
+            percent(1.0 - max)
+        ),
         _ if color.a == 255 => format!("#{:02X}{:02X}{:02X}", color.r, color.g, color.b),
-        _ => format!("#{:02X}{:02X}{:02X}{:02X}", color.r, color.g, color.b, color.a),
+        _ => format!(
+            "#{:02X}{:02X}{:02X}{:02X}",
+            color.r, color.g, color.b, color.a
+        ),
     }
 }
 
@@ -994,7 +1163,11 @@ mod tests {
             (Color::rgba(128, 128, 128, 255), "hwb", "hwb(0deg 50 50)"),
         ];
         for (color, format, written) in cases {
-            assert_eq!(format_color(color, format), written, "{color:?} in {format}");
+            assert_eq!(
+                format_color(color, format),
+                written,
+                "{color:?} in {format}"
+            );
         }
     }
 
@@ -1015,9 +1188,17 @@ mod tests {
         assert_eq!(
             rows,
             [
-                ("Color", "#FF0000".to_owned(), Some(Color::rgba(255, 0, 0, 255))),
+                (
+                    "Color",
+                    "#FF0000".to_owned(),
+                    Some(Color::rgba(255, 0, 0, 255))
+                ),
                 ("Font", "12px Ahem".to_owned(), None),
-                ("Background", "#0000FF80".to_owned(), Some(Color::rgba(0, 0, 255, 128))),
+                (
+                    "Background",
+                    "#0000FF80".to_owned(),
+                    Some(Color::rgba(0, 0, 255, 128))
+                ),
                 ("Margin", "1px 2px".to_owned(), None),
                 ("Padding", "3px".to_owned(), None),
             ]

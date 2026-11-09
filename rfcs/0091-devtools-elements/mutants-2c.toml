@@ -1,0 +1,142 @@
+# Mutation test of stage 2c: the main thread's scheduler, the widget in the
+# frame, the page drawn while script is paused, and DevTools' paused
+# message:
+# python3 scripts/test.py mutate rfcs/0091-devtools-elements/mutants-2c.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools_overlay"]
+timeout = 600
+
+# The scheduler.
+
+[[mutant]]
+name = "the latest task comes first"
+file = "crates/renderer/src/task_queue.rs"
+from = '''            .min_by_key(|&(sequence, _)| sequence)'''
+to = '''            .max_by_key(|&(sequence, _)| sequence)'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "task_queue"]
+
+[[mutant]]
+name = "script paused takes input too"
+file = "crates/renderer/src/task_queue.rs"
+from = '''        (1 << TaskQueue::DevTools as u8) | (1 << TaskQueue::Rendering as u8),'''
+to = '''        (1 << TaskQueue::DevTools as u8) | (1 << TaskQueue::Rendering as u8) | (1 << TaskQueue::Input as u8),'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "task_queue"]
+
+[[mutant]]
+name = "a frame asked for is the browser's like any message"
+file = "crates/renderer/src/task_queue.rs"
+from = '''            msg @ RendererMsg::RequestVisualState { .. } => {
+                return scheduler.post(TaskQueue::Rendering, MainThreadTask::Browser(msg), false);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "what a pause leaves goes back last"
+file = "crates/renderer/src/task_queue.rs"
+from = '''                devtools.push_front(Queued {
+                    sequence: 0,'''
+to = '''                devtools.push_back(Queued {
+                    sequence: u64::MAX,'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "task_queue"]
+
+[[mutant]]
+name = "the scheduler takes tasks after the main thread has gone"
+file = "crates/renderer/src/task_queue.rs"
+from = '''        state.closed = true;'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "task_queue"]
+
+[[mutant]]
+name = "a wait with a timeout waits for ever"
+file = "crates/renderer/src/task_queue.rs"
+from = '''                    if left.is_zero() {
+                        return None;
+                    }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "task_queue"]
+
+# The page drawn while script is paused.
+
+[[mutant]]
+name = "script paused draws no frame"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''            if self.scheduler.wait_for(queues) == TaskQueue::Rendering {'''
+to = '''            if false && self.scheduler.wait_for(queues) == TaskQueue::Rendering {'''
+
+[[mutant]]
+name = "a paused frame doesn't update the lifecycle"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''                super::documents::update_lifecycle_and_layers(
+                    dom,
+                    frame,
+                    &self.overlay_agent,
+                    &self.css_agent,
+                );'''
+to = ''''''
+
+[[mutant]]
+name = "a paused frame doesn't commit"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''                widget.layer_tree_host.commit(promises);'''
+to = '''                widget.layer_tree_host.abort_main_frame();
+                drop(promises);'''
+
+[[mutant]]
+name = "a frame waited for while paused isn't asked for"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''            || !widget.pending_visual_states.is_empty();'''
+to = ''';'''
+
+[[mutant]]
+name = "a frame isn't asked for once the DOM changes while paused"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        let needs = dom.read(|cx| cx.tree_version()) != widget.rendered_tree_version
+            ||'''
+to = '''        let needs ='''
+
+[[mutant]]
+name = "the compositor's scroll isn't applied while paused"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''                    frame.view.apply_compositor_scroll(scroll);'''
+to = ''''''
+
+[[mutant]]
+name = "a pause that can't draw tries anyway"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''        self.cannot_render.set(Self::frame(page).is_none());'''
+to = '''        self.cannot_render.set(false);'''
+
+[[mutant]]
+name = "the frame's drawn version isn't kept"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''    frame.widget.rendered_tree_version = dom.read(|cx| cx.tree_version());'''
+to = ''''''
+
+# DevTools' paused message.
+
+[[mutant]]
+name = "the page isn't dimmed"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''        if paused.is_some() {
+            list.push_op(PaintOp::DrawRect {'''
+to = '''        if false {
+            list.push_op(PaintOp::DrawRect {'''
+
+[[mutant]]
+name = "the message isn't drawn"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''            paint_paused_message(&mut list, message, viewport, &mut shape);'''
+to = ''''''
+
+[[mutant]]
+name = "a disabled session's message is drawn"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''            .filter(|session| session.enabled)
+            .find_map(|session| session.paused_message.clone());'''
+to = '''            .find_map(|session| session.paused_message.clone());'''
+
+[[mutant]]
+name = "a new message asks for no frame"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''                    .paused_message = params["message"].as_str().map(str::to_owned);
+                self.version.set(self.version.get().wrapping_add(1));'''
+to = '''                    .paused_message = params["message"].as_str().map(str::to_owned);'''

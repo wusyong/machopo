@@ -365,6 +365,59 @@ fn main_frame_info(
     })
 }
 
+/// The frame's lifecycle brought up to date and its paint handed to its
+/// widget's layers, DevTools' overlay over them (Blink's
+/// `WebFrameWidgetImpl::UpdateLifecycle` and `LayerTreeHost::DoUpdateLayers`):
+/// what the event loop's rendering update and script paused's draw alike,
+/// before they commit.
+pub(super) fn update_lifecycle_and_layers(
+    dom: &mut Dom,
+    frame: &mut Frame,
+    overlay_agent: &super::overlay_agent::OverlayAgent,
+    css_agent: &super::css_agent::CssAgent,
+) {
+    let lifecycle = trace_event::trace_event!("WebFrameWidgetImpl::UpdateLifecycle");
+    // What the canvases shown recorded, onto their bitmaps.
+    trace_event::in_scope(trace_event::trace_event!("canvas::flush_shown"), || {
+        frame.flush_shown_canvases(dom)
+    });
+    frame.widget.rendered_tree_version = dom.read(|cx| cx.tree_version());
+    let output = frame.update_all_lifecycle_phases(dom);
+    drop(lifecycle);
+    // The node DevTools' Computed pane follows, if its style changed.
+    css_agent.styles_updated(dom, frame);
+    let update_layers = trace_event::trace_event!("LayerTreeHost::DoUpdateLayers");
+    let unchanged = frame
+        .widget
+        .painted
+        .as_ref()
+        .is_some_and(|last| Arc::ptr_eq(last, &output));
+    // DevTools' overlay, over the page's layers, drawn again only as it
+    // changes.
+    frame.widget.overlay_version = overlay_agent.version();
+    let overlay = dom.read(|cx| overlay_agent.layer(cx, frame));
+    let overlay_changed = overlay.is_some();
+    if let Some(layer) = overlay {
+        frame.widget.overlay_layer = layer;
+    }
+    let Frame { view, widget, .. } = frame;
+    if !unchanged || overlay_changed {
+        let mut layers = output.layers.clone();
+        layers.extend(widget.overlay_layer.clone().map(compositor::Layer::from));
+        widget
+            .layer_tree_host
+            .set_layers(layers, output.property_trees.clone());
+        widget.painted = Some(output);
+    }
+    let host = &mut widget.layer_tree_host;
+    host.set_scroll_offsets(view.compositor_scroll_offsets());
+    host.set_background_color(gfx::Color::WHITE);
+    host.set_root_scroll_offset(view.viewport_scroll_offset());
+    host.set_document_id(view.document_id());
+    host.set_viewport_scroll_node(view.viewport_scroll_node());
+    drop(update_layers);
+}
+
 pub(super) fn engine_frame(
     engine: &mut Option<Box<dyn ScriptEngine>>,
 ) -> Option<(&mut Dom, &mut Frame)> {
@@ -486,7 +539,11 @@ impl RenderThread {
                 // shows; the thread's text context is the frame's from now
                 // on.
                 let text = std::mem::replace(&mut self.text, layout::TextContext::new(true));
-                let frame = Frame::new(view, node, dom::LocalToken::new(), text);
+                let widget = self
+                    .widget
+                    .take()
+                    .expect("the thread's widget, before any frame");
+                let frame = Frame::new(view, node, dom::LocalToken::new(), text, widget);
                 engine.set_layout(Box::new(frame));
             }
         }
@@ -2454,7 +2511,8 @@ impl RenderThread {
             let mut page = engine.devtools_page();
             match *event {
                 InputEvent::MouseMove { x, y, .. } => {
-                    self.overlay_agent.mouse_moved(PointF::new(x, y), &mut *page);
+                    self.overlay_agent
+                        .mouse_moved(PointF::new(x, y), &mut *page);
                     return;
                 }
                 InputEvent::MouseDown { x, y, .. } => {
@@ -2922,17 +2980,9 @@ impl RenderThread {
         else {
             return false;
         };
-        let lifecycle = trace_event::trace_event!("WebFrameWidgetImpl::UpdateLifecycle");
-        // What the canvases shown recorded, onto their bitmaps.
-        trace_event::in_scope(trace_event::trace_event!("canvas::flush_shown"), || {
-            frame.flush_shown_canvases(dom)
-        });
         (next.rendered_version, next.rendered_canvas_draws) =
             dom.read(|cx| (cx.tree_version(), cx.canvas_draws_version()));
-        let output = frame.update_all_lifecycle_phases(dom);
-        drop(lifecycle);
-        // The node DevTools' Computed pane follows, if its style changed.
-        self.css_agent.styles_updated(dom, frame);
+        update_lifecycle_and_layers(dom, frame, &self.overlay_agent, &self.css_agent);
         // A caret that came or moved shows, then blinks from there.
         if frame.view.take_caret_moved() {
             self.next_caret_blink = self
@@ -2947,42 +2997,13 @@ impl RenderThread {
                     due
                 });
         }
-        let update_layers = trace_event::trace_event!("LayerTreeHost::DoUpdateLayers");
-        let unchanged = self
-            .painted
-            .as_ref()
-            .is_some_and(|last| Arc::ptr_eq(last, &output));
-        // DevTools' overlay, over the page's layers, drawn again only as
-        // it changes.
-        self.overlay_version = self.overlay_agent.version();
-        let overlay = dom.read(|cx| self.overlay_agent.layer(cx, frame));
-        let overlay_changed = overlay.is_some();
-        if let Some(layer) = overlay {
-            self.overlay_layer = layer;
-        }
-        if !unchanged || overlay_changed {
-            let mut layers = output.layers.clone();
-            layers.extend(self.overlay_layer.clone().map(compositor::Layer::from));
-            self.layer_tree_host
-                .set_layers(layers, output.property_trees.clone());
-            self.painted = Some(output);
-        }
-        let view = &frame.view;
-        self.layer_tree_host
-            .set_scroll_offsets(view.compositor_scroll_offsets());
-        self.layer_tree_host.set_background_color(gfx::Color::WHITE);
-        self.layer_tree_host
-            .set_root_scroll_offset(view.viewport_scroll_offset());
-        self.layer_tree_host.set_document_id(view.document_id());
-        self.layer_tree_host
-            .set_viewport_scroll_node(view.viewport_scroll_node());
+        let Frame { view, widget, .. } = frame;
         let reftest_wait = self.web_tests && {
             let document = view.document();
             dom.read(|cx| document::root_has_class(cx, document.get(cx.gc), "reftest-wait"))
         };
-        drop(update_layers);
-        let mut promises = std::mem::take(&mut self.pending_input_acks);
-        promises.append(&mut self.pending_visual_states);
+        let mut promises = std::mem::take(&mut widget.pending_input_acks);
+        promises.append(&mut widget.pending_visual_states);
         let to_browser = self.to_browser.clone();
         let navigation_id = next.navigation_id;
         if std::mem::take(&mut next.load_finished) {
@@ -3010,7 +3031,7 @@ impl RenderThread {
         self.start_pending_animations();
         trace_event::in_scope(
             trace_event::trace_event!("ProxyMain::BeginMainFrame::commit"),
-            || self.layer_tree_host.commit(promises),
+            || self.widget().layer_tree_host.commit(promises),
         );
         // The child frames laid out at another size: their documents'
         // environment changed (their `<img>`s select again), and the next

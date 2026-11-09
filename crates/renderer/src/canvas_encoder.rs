@@ -7,19 +7,19 @@
 //! main thread in the order the calls were made, each a task
 //! (`MainThreadTask::CanvasEncoded`), which hands it to the DOM.
 
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::thread::JoinHandle;
 
 use canvas::export::{ExportBitmap, ImageEncoding};
-use crossbeam_channel::Sender;
 use dom::CanvasEncode;
 
-use crate::task_queue::MainThreadTask;
+use crate::task_queue::MainThreadScheduler;
 
 /// The encoder thread, once started, and the main thread's queue it posts
 /// the files to.
 pub(crate) struct CanvasEncoder {
-    to_main: Sender<MainThreadTask>,
+    to_main: Arc<MainThreadScheduler>,
     thread: Option<EncoderThread>,
 }
 
@@ -29,7 +29,7 @@ struct EncoderThread {
 }
 
 impl CanvasEncoder {
-    pub(crate) fn new(to_main: Sender<MainThreadTask>) -> Self {
+    pub(crate) fn new(to_main: Arc<MainThreadScheduler>) -> Self {
         Self {
             to_main,
             thread: None,
@@ -45,10 +45,7 @@ impl CanvasEncoder {
             None => Err(encode),
         };
         if let Err(encode) = sent {
-            let _ = self.to_main.send(MainThreadTask::CanvasEncoded {
-                id: encode.id,
-                file: None,
-            });
+            self.to_main.post_canvas_encoded(encode.id, None);
         }
     }
 
@@ -87,18 +84,15 @@ impl Drop for CanvasEncoder {
     }
 }
 
-fn run(receiver: &Receiver<CanvasEncode>, to_main: &Sender<MainThreadTask>) {
+fn run(receiver: &Receiver<CanvasEncode>, to_main: &MainThreadScheduler) {
     while let Ok(encode) = receiver.recv() {
         let _span = trace_event::trace_event!("CanvasEncoder::encode", id = encode.id);
         let file = encode
             .bitmap
             .as_ref()
             .and_then(|bitmap| encode_bitmap(bitmap, encode.encoding));
-        // Gone if the renderer is shutting down.
-        let _ = to_main.send(MainThreadTask::CanvasEncoded {
-            id: encode.id,
-            file,
-        });
+        // Dropped if the renderer is shutting down.
+        to_main.post_canvas_encoded(encode.id, file);
     }
 }
 
