@@ -1,0 +1,50 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wu Yuwei <yuweiwu@pm.me>
+Date: Wed, 14 Oct 2026 10:58:17 +0900
+Subject: [PATCH] Fix line break
+
+---
+ README.kun.md                   | 4 +++-
+ parley/src/layout/line_break.rs | 5 +++++
+ 2 files changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/README.kun.md b/README.kun.md
+index a05fa12fd479e0cde6f8fd6f678f41b05d197244..a4119a3d7dbe3373b2916d15de65fe40732dfa38 100644
+--- a/README.kun.md
++++ b/README.kun.md
+@@ -37,9 +37,11 @@ The commits on `kun` after upstream's:
+ | Add InlineBox::line_break | `InlineBox::line_break` (`InlineBoxLineBreak`): `Auto` is upstream's behaviour (a soft wrap opportunity on each side of the box); `KeepWithNext` and `KeepWithPrevious` give the box no opportunity of its own and keep it on the line of the content after or before it. For `KeepWithNext`, an opportunity right before that content is taken before the box instead. Both the line breaker and the min/max-content measurer follow this. |
+ | Don't let inline box edges size the line | A `KeepWithNext` or `KeepWithPrevious` box (an inline's edge) takes up its width but adds nothing to the line's height, as an out-of-flow box doesn't. Upstream counts every in-flow box, so a 0px edge on the baseline made a line taller whenever the text's descent plus half-leading was negative (a `line-height` smaller than the font's), which WPT's `line-height-125` caught. |
+ | Wrap an atomic inline as the span it is in does | The line breaker and the min/max-content measurer only set the current `text-wrap-mode` from text, so an inline box first on a line (or in a layout) used the default, `Wrap`: in a `nowrap` span the line broke after it (WPT's `css/css-overflow/text-overflow-009.html`). An `Auto` box now takes the mode of its parent style (`parent_style_index`) before its opportunities are decided. A `KeepWithNext` or `KeepWithPrevious` box (an inline's edge) doesn't: the opportunity next to it belongs to the content beside it (WPT's `css/CSS2/linebox/inline-formatting-context-012.xht`). Marked `kun:` in `layout/line_break.rs` and `layout/data.rs`. |
++| Give a line break's hanging whitespace | `LineBreakData::hanging_advance`: the part of the line's `advance` that is whitespace hanging past its end, which `commit_line` works out already (`LineMetrics::hanging_advance`). kun breaks the lines beside floats one at a time, each in its own room, and moves a line down to where floats leave more room when its content doesn't fit: the `advance` alone counts the hanging space, so a line that fits looked too wide. Only known once the lines were all broken before, from the lines' metrics, so kun broke them all again; with floats in the lines placed into the block formatting context as each line is final, which can't take a float back, that no longer works. Marked `kun:` in `layout/line_break.rs`. |
+ | Add README.kun.md | This file. |
+ 
+-Their tests are in kun: `cargo test -p layout --test it parley_inline_box::`.
++Their tests are in kun: `cargo test -p layout --test it parley_inline_box::`,
++and for `hanging_advance` `float::` (the lines beside floats).
+ Each part of the changes was removed in turn to check that a test fails.
+ 
+ The vendored copy also trimmed the workspace (no `parley_dev`, upstream's
+diff --git a/parley/src/layout/line_break.rs b/parley/src/layout/line_break.rs
+index 2fb3d9e16b2ad406a0110838542c4af0cc7654ac..f26b93b4f19def2126f09dc9cb4fdccf0d71a950 100644
+--- a/parley/src/layout/line_break.rs
++++ b/parley/src/layout/line_break.rs
+@@ -427,6 +427,10 @@ pub struct LineBreakData {
+     pub reason: BreakReason,
+     /// The computed advance (width) of the line
+     pub advance: f32,
++    /// kun: the part of `advance` that is whitespace hanging past the line's end, as in
++    /// `LineMetrics::hanging_advance`: a caller placing each line in its own room (beside
++    /// floats) needs it to tell whether the line's content fit.
++    pub hanging_advance: f32,
+     /// The computed height of the line
+     pub line_height: f32,
+     /// The position of the top of the line
+@@ -826,6 +830,7 @@ impl<'a, B: Brush> BreakLines<'a, B> {
+         LineBreakData {
+             reason,
+             advance: line.metrics.advance,
++            hanging_advance: line.metrics.hanging_advance,
+             line_height: line.size(),
+             line_y_start,
+             line_y_end: self.state.line_y,

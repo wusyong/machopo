@@ -6,3 +6,6 @@
 # Byte for byte, as they were made: saved sites are as they were
 # downloaded (Project Gutenberg's page has CRLF line endings).
 tests/sites/** -text
+# The forks' patches carry upstream's files' bytes: a file with CRLF line
+# endings changed keeps them, or the patch no longer applies.
+patches/** -text

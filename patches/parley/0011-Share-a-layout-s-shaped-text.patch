@@ -1,0 +1,396 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wu Yuwei <yuweiwu@pm.me>
+Date: Sat, 24 Oct 2026 00:36:55 +0900
+Subject: [PATCH] Share a layout's shaped text
+
+What an embedder keeps of a layout (a line's glyph runs) copied their
+glyphs out of it, walking parley's iterators each time the lines were
+broken. Layout::shaped_text now gives the layout's ShapedText
+(re-exported) as an Arc, so what is kept of a layout can hold it and
+walk the glyphs later, as Blink's ShapeResultView does.
+
+It is never changed under whoever holds it: rebuilding the layout takes
+a new one where the old one is held (LayoutData::clear), and breaking
+the lines copies it before changing a tab's advance where it is held
+(Arc::make_mut). The kept shapings share it with their layouts instead
+of copying it, and a layout that takes one copies it only when its
+characters are styled otherwise.
+
+GlyphRun::span (GlyphSpan) gives where a glyph run's glyphs are in the
+shaped text (its shaped run and clusters), its direction and its line's
+spacing (EffectiveSpacing, now PartialEq); GlyphSpan::glyphs walks them
+from the shaped text alone, through the Glyphs iterator that
+GlyphRun::glyphs uses.
+---
+ README.kun.md                     |  5 +++-
+ parley/src/layout/data.rs         | 14 +++++++--
+ parley/src/layout/layout.rs       | 11 +++++++
+ parley/src/layout/line.rs         | 50 +++++++++++++++++++++++++++++--
+ parley/src/layout/line_break.rs   |  7 +++--
+ parley/src/layout/mod.rs          |  4 ++-
+ parley/src/layout/run.rs          |  2 +-
+ parley/src/layout/spacing.rs      |  3 +-
+ parley/src/shape/cache.rs         |  9 +++---
+ parley/src/shape/mod.rs           | 19 ++++++++----
+ parley/src/tests/utils/asserts.rs |  3 +-
+ 11 files changed, 105 insertions(+), 22 deletions(-)
+
+diff --git a/README.kun.md b/README.kun.md
+index 83ae085290d4953574eeadc8b1405307227d42ac..a575598ce5b90694f4410143e968a00c74e2f203 100644
+--- a/README.kun.md
++++ b/README.kun.md
+@@ -44,6 +44,7 @@ The commits on `kun` after upstream's:
+ | Lay out tabs at tab stops | `StyleProperty::TabStops` (`TabStops`; `TextStyle::tab_stops`, `None` by default: a tab keeps its shaped advance, as upstream has it): the distance between tab stops and the least a tab advances, which the embedder works out (CSS `tab-size`, counted in the block container's space, which parley doesn't know). The line breaker gives a tab the advance to the next tab stop from where it is on its line (past the floats beside the line, `line_x`, and the indent) and takes the run again from the tab (`ShapedText::set_cluster_advance` in `parley_engine`); the min/max-content measurer works it out on each of its two lines. A stop nearer than the least advance is passed for the one after it, and with no tab stops (an interval of 0) the tab has only its letter spacing (Blink's `Font::TabWidth`). The shaper also shapes a tab as a space, so that it draws nothing: few fonts map U+0009, and the .notdef box showed. Marked `kun:` in `style/mod.rs`, `resolve/mod.rs`, `layout/mod.rs`, `layout/spacing.rs`, `layout/line_break.rs`, `layout/data.rs` and `parley_engine`'s `shape/shaped_text.rs` and `shape/shaper.rs`. |
+ | Size the font optically | `StyleProperty::OpticalSizing` (`TextStyle::optical_sizing`, off by default, as upstream has it): CSS `font-optical-sizing: auto`. The shaper sets the `opsz` axis to the item's font size before the item's own variations (which win where they set it), so a font with the axis is shaped and its run's coordinates are taken at it; a font without it ignores the axis. Items split where it changes, and the kept shapings tell it apart (`RunStyle`). Marked `kun:` in `style/mod.rs`, `resolve/mod.rs`, `shape/mod.rs`, `shape/cache.rs` and `parley_engine`'s `shape/shaper.rs`. |
+ | Break lines after soft hyphens with a hyphen | `StyleProperty::SoftHyphens` (`SoftHyphens`; `TextStyle::soft_hyphens`, `Break` by default: the opportunity after a soft hyphen is like any other and nothing is drawn, as upstream has it): CSS `hyphens`, `NoBreak` for `none` (an emergency opportunity at most, as `overflow-wrap` gives one) and `Hyphen(advance)` for the others, with the advance of the hyphen the embedder shapes and draws. The line breaker takes the opportunity after a soft hyphen (`CharacterFlags::is_soft_hyphen`, cached as `ShapedCluster::is_soft_hyphen` in `parley_engine`) as its style has it, an inline's start edge taking it too (an atomic inline's own opportunities are its own): with the hyphen at the line's end where it fits, or where the line has no opportunity before it; `LineMetrics::hyphen_advance` is then the part of the line's `advance` that is the hyphen, and in an RTL paragraph the line's items leave room for it on the left of `offset`. The min/max-content measurer counts the hyphen at the end of the fragment it ends. Marked `kun:` in `style/mod.rs`, `resolve/mod.rs`, `layout/mod.rs`, `layout/line.rs`, `layout/line_break.rs`, `layout/data.rs`, `layout/alignment.rs` and `parley_engine`'s `shape/data.rs` and `shape/shaped_text.rs`. |
++| Share a layout's shaped text | `Layout::shaped_text`: a layout's `ShapedText` (re-exported) is an `Arc`, which what the embedder keeps of a layout holds, so it outlives the layout and is never changed under it: rebuilding the layout takes a new one where the old is held (`LayoutData::clear`), and breaking the lines copies it before changing a tab's advance where it is held (`Arc::make_mut`; a layout with tabs whose stops move pays one copy when its shaping is also kept). The kept shapings share it with their layouts instead of copying it, and a layout that takes one copies it only when its characters are styled otherwise. `GlyphRun::span` (`GlyphSpan`): where a glyph run's glyphs are in the shaped text (its shaped run and clusters), its direction and its line's spacing (`EffectiveSpacing`, now `PartialEq`), and `GlyphSpan::glyphs` walks them from the shaped text alone, as `GlyphRun::glyphs` does (`Glyphs`, which both use). kun keeps a line's runs as spans into the paragraph's shaped text instead of copying their glyphs (Blink's `ShapeResultView`). Marked `kun:` in `layout/data.rs`, `layout/layout.rs`, `layout/line.rs`, `layout/line_break.rs`, `layout/mod.rs`, `layout/spacing.rs`, `shape/mod.rs` (where it was), `shape/cache.rs` (likewise) and the tests' `canonicalize_layout_data`. |
+ | Add README.kun.md | This file. |
+ 
+ Their tests are in kun: `cargo test -p layout --test it parley_inline_box::`,
+@@ -60,7 +61,9 @@ taken for a layout without it); for the soft hyphens
+ `inline::a_line_breaks_after_a_soft_hyphen_with_a_hyphen`,
+ `inline::a_soft_hyphen_before_an_inline_element` and
+ `inline::the_measured_min_content_width_counts_the_hyphen`, and WPT's
+-`css/css-text/hyphens/` (the ones kun runs).
++`css/css-text/hyphens/` (the ones kun runs); for the shared shaped text
++`parley_shaped_text::` (and every text layout test: kun's fragments take
++their glyphs from the spans).
+ Each part of the changes was removed in turn to check that a test fails.
+ 
+ The vendored copy also trimmed the workspace (no `parley_dev`, upstream's
+diff --git a/parley/src/layout/data.rs b/parley/src/layout/data.rs
+index 0cb1aad6e1ca179a1e862446883ceafeebf574dd..7ea743df0eca76d184be09d5e01672a9233a8050 100644
+--- a/parley/src/layout/data.rs
++++ b/parley/src/layout/data.rs
+@@ -14,6 +14,7 @@ use crate::{
+ };
+ use core::ops::Range;
+ 
++use alloc::sync::Arc;
+ use alloc::vec::Vec;
+ use parlance::BidiLevel;
+ use parley_engine::shape::Whitespace;
+@@ -178,7 +179,10 @@ pub(crate) struct LayoutData<B: Brush> {
+     pub(crate) inline_boxes: Vec<LayoutInlineBox>,
+ 
+     // Output of shaping (input to line breaking)
+-    pub(crate) shaped_text: ShapedText,
++    // kun: shared with the shaping cache and with what the embedder keeps of
++    // the layout (`Layout::shaped_text`); changed only where no one else
++    // holds it (`Arc::make_mut`).
++    pub(crate) shaped_text: Arc<ShapedText>,
+     pub(crate) runs: Vec<RunData>,
+     pub(crate) items: Vec<LayoutItem>,
+ 
+@@ -226,7 +230,7 @@ impl<B: Brush> Default for LayoutData<B> {
+             styles: Vec::new(),
+             style_metrics: Vec::new(),
+             inline_boxes: Vec::new(),
+-            shaped_text: ShapedText::new(),
++            shaped_text: Arc::default(),
+             runs: Vec::new(),
+             items: Vec::new(),
+             lines: Vec::new(),
+@@ -257,7 +261,11 @@ impl<B: Brush> LayoutData<B> {
+         self.styles.clear();
+         self.style_metrics.clear();
+         self.inline_boxes.clear();
+-        self.shaped_text.clear();
++        // kun: one held elsewhere stays as it is.
++        match Arc::get_mut(&mut self.shaped_text) {
++            Some(shaped_text) => shaped_text.clear(),
++            None => self.shaped_text = Arc::default(),
++        }
+         self.runs.clear();
+         self.items.clear();
+         self.lines.clear();
+diff --git a/parley/src/layout/layout.rs b/parley/src/layout/layout.rs
+index 09a149b4a8b67d94c2da4b76240b482915eb0c14..127abe9e532ce50c18d52340c786920626c95323 100644
+--- a/parley/src/layout/layout.rs
++++ b/parley/src/layout/layout.rs
+@@ -5,8 +5,10 @@ use crate::InlineBox;
+ use crate::layout::alignment::align;
+ use crate::layout::data::LayoutData;
+ use crate::style::Brush;
++use alloc::sync::Arc;
+ use core::cmp::Ordering;
+ use core::fmt;
++use parley_engine::ShapedText;
+ 
+ use crate::IndentOptions;
+ use crate::layout::{
+@@ -61,6 +63,15 @@ impl<B: Brush> Layout<B> {
+         self.data.scale
+     }
+ 
++    /// kun: the layout's shaped text, shared: what is kept of it (a
++    /// [`GlyphSpan`]'s glyphs) outlives the layout, and breaking its lines
++    /// again leaves it as it is.
++    ///
++    /// [`GlyphSpan`]: crate::GlyphSpan
++    pub fn shaped_text(&self) -> &Arc<ShapedText> {
++        &self.data.shaped_text
++    }
++
+     /// Returns the style collection for the layout.
+     pub fn styles(&self) -> &[Style<B>] {
+         &self.data.styles
+diff --git a/parley/src/layout/line.rs b/parley/src/layout/line.rs
+index d3fb2719f5e063b74781f816eab87ffc2ce475a7..0715d1c6a627e7db415d9051ab175dcf476d5f47 100644
+--- a/parley/src/layout/line.rs
++++ b/parley/src/layout/line.rs
+@@ -5,13 +5,13 @@ use crate::layout::Style;
+ use crate::layout::data::BreakReason;
+ use crate::layout::data::{LayoutItemKind, LineData};
+ use crate::layout::layout::Layout;
+-use crate::layout::run::Run;
++use crate::layout::run::{Glyphs, Run};
+ use crate::layout::spacing::EffectiveSpacing;
+ use crate::style::Brush;
+ use crate::{BaselineShift, InlineBox, InlineBoxKind};
+ 
+ use core::ops::Range;
+-use parley_engine::{Atom, Atoms, Glyph};
++use parley_engine::{Atom, Atoms, Glyph, ShapedText};
+ 
+ /// Line in a text layout.
+ #[derive(Copy, Clone)]
+@@ -331,6 +331,19 @@ impl<'a, B: Brush> GlyphRun<'a, B> {
+         self.run.glyphs_in(self.shaped_clusters.clone())
+     }
+ 
++    /// kun: where the run's glyphs are in its layout's shaped text, and the
++    /// spacing they take on its line: [`GlyphSpan::glyphs`] with the
++    /// layout's [`shaped_text`](crate::Layout::shaped_text) is what
++    /// [`Self::glyphs`] gives.
++    pub fn span(&self) -> GlyphSpan {
++        GlyphSpan {
++            run: self.run.shaped_text_run_index,
++            shaped_clusters: self.shaped_clusters.clone(),
++            is_rtl: self.run.is_rtl(),
++            spacing: self.run.line_spacing(),
++        }
++    }
++
+     /// Returns an iterator over the fully positioned glyphs in the run.
+     pub fn positioned_glyphs(&'a self) -> impl Iterator<Item = Glyph> + 'a + Clone {
+         let mut offset = self.offset;
+@@ -344,6 +357,39 @@ impl<'a, B: Brush> GlyphRun<'a, B> {
+     }
+ }
+ 
++/// kun: a glyph run's glyphs without the layout: where they are in its
++/// shaped text, and the spacing they take on their line ([`GlyphRun::span`]).
++/// A layout's shaped text is shared ([`Layout::shaped_text`]), so what is kept
++/// of a layout can walk its glyphs once the layout has moved on (Blink's
++/// `ShapeResultView`).
++#[derive(Clone, Debug, PartialEq)]
++pub struct GlyphSpan {
++    /// The shaped run.
++    run: u32,
++    /// Its shaped clusters, atom boundaries both.
++    shaped_clusters: Range<u32>,
++    is_rtl: bool,
++    spacing: EffectiveSpacing,
++}
++
++impl GlyphSpan {
++    /// The glyphs in visual left-to-right order, with their spacing, as
++    /// [`GlyphRun::glyphs`]: `shaped_text` is the one of the layout the span
++    /// is from.
++    pub fn glyphs<'a>(
++        &self,
++        shaped_text: &'a ShapedText,
++    ) -> impl Iterator<Item = Glyph> + 'a + Clone {
++        Glyphs::new(
++            shaped_text
++                .run_slice(self.run)
++                .narrow(self.shaped_clusters.clone()),
++            self.is_rtl,
++            self.spacing,
++        )
++    }
++}
++
+ /// Peekable iterator over the atoms of a run in visual order, resumable across
+ /// [`GlyphRunIter::next`] calls.
+ ///
+diff --git a/parley/src/layout/line_break.rs b/parley/src/layout/line_break.rs
+index 993654e9f8f9a82c516f86147a0f563ee2fe6863..6404afa752bc3e48b3f68a334ff2fe02333dc00f 100644
+--- a/parley/src/layout/line_break.rs
++++ b/parley/src/layout/line_break.rs
+@@ -3,6 +3,7 @@
+ 
+ //! Greedy line breaking.
+ 
++use alloc::sync::Arc;
+ use alloc::vec::Vec;
+ 
+ #[cfg(feature = "libm")]
+@@ -1299,9 +1300,9 @@ impl<'a, B: Brush> BreakLines<'a, B> {
+                         self.state.line.soft_hyphen = soft_hyphen;
+                     }
+                     if let Some((cluster, advance)) = retab {
+-                        self.layout
+-                            .data
+-                            .shaped_text
++                        // A copy, if it is held elsewhere: what was laid
++                        // out of it stays as it was.
++                        Arc::make_mut(&mut self.layout.data.shaped_text)
+                             .set_cluster_advance(cluster, advance);
+                         continue;
+                     }
+diff --git a/parley/src/layout/mod.rs b/parley/src/layout/mod.rs
+index 9f5a27dff5b812144a7d18539bcb725461251a87..6e0eb966194c5ea68072e69ddc48f5e3beb1c378 100644
+--- a/parley/src/layout/mod.rs
++++ b/parley/src/layout/mod.rs
+@@ -27,10 +27,12 @@ pub use alignment::{Alignment, AlignmentOptions};
+ pub use cluster::{Affinity, Cluster, ClusterPath, ClusterSide};
+ pub use data::BreakReason;
+ pub use layout::Layout;
+-pub use line::{GlyphRun, Line, LineMetrics, PositionedInlineBox, PositionedLayoutItem};
++pub use line::{GlyphRun, GlyphSpan, Line, LineMetrics, PositionedInlineBox, PositionedLayoutItem};
++// kun: what `Layout::shaped_text` shares.
+ pub use line_break::{
+     BoxBreakData, BreakLines, BreakerState, LineBreakData, MaxHeightBreakData, YieldData,
+ };
++pub use parley_engine::ShapedText;
+ pub use run::Run;
+ 
+ pub(crate) use data::{LayoutData, LayoutItem, LayoutItemKind, LineData, LineItemData};
+diff --git a/parley/src/layout/run.rs b/parley/src/layout/run.rs
+index e5ee79e34a94430306049e32434ba2bce41cb1f0..2dc81af59689f8efc84456d2a642ad1687a94742 100644
+--- a/parley/src/layout/run.rs
++++ b/parley/src/layout/run.rs
+@@ -281,7 +281,7 @@ pub(crate) struct Glyphs<'a> {
+ }
+ 
+ impl<'a> Glyphs<'a> {
+-    fn new(slice: ShapedSlice<'a>, is_rtl: bool, spacing: EffectiveSpacing) -> Self {
++    pub(crate) fn new(slice: ShapedSlice<'a>, is_rtl: bool, spacing: EffectiveSpacing) -> Self {
+         let clusters = slice.shaped_clusters_range();
+         Self {
+             slice,
+diff --git a/parley/src/layout/spacing.rs b/parley/src/layout/spacing.rs
+index 7b0c75522d5053852c0eaed5b69e7e210c2269cb..3860319fa449d80acd419dbb4173346a477fe6aa 100644
+--- a/parley/src/layout/spacing.rs
++++ b/parley/src/layout/spacing.rs
+@@ -162,7 +162,8 @@ impl Default for Justification {
+ }
+ 
+ /// Additional spacing to apply, including justification (if any).
+-#[derive(Copy, Clone, Debug)]
++// kun: `PartialEq` for `GlyphSpan`.
++#[derive(Copy, Clone, Debug, PartialEq)]
+ pub(crate) struct EffectiveSpacing {
+     spacing: Spacing,
+     justification: Justification,
+diff --git a/parley/src/shape/cache.rs b/parley/src/shape/cache.rs
+index 4c54a91013f25a5d4f8b5a9fb6bb4a443d2ab17f..04c7117830e00c90d34fb48009e5cd1178cc2c7c 100644
+--- a/parley/src/shape/cache.rs
++++ b/parley/src/shape/cache.rs
+@@ -10,6 +10,7 @@
+ //! character takes the new layout's style.
+ 
+ use alloc::boxed::Box;
++use alloc::sync::Arc;
+ use alloc::vec::Vec;
+ use core::hash::{BuildHasher, Hash, Hasher};
+ 
+@@ -81,7 +82,7 @@ struct Entry {
+     char_info: Vec<CharInfo>,
+     bidi_levels: Vec<BidiLevel>,
+     paragraph_level: BidiLevel,
+-    shaped: ShapedText,
++    shaped: Arc<ShapedText>,
+ }
+ 
+ /// What a layout is shaped with, as `shape_text` has it.
+@@ -152,7 +153,7 @@ impl ShapeCache {
+     }
+ 
+     /// The shaping kept for `key`, if any.
+-    pub(crate) fn get(&self, key: &Key<'_>) -> Option<&ShapedText> {
++    pub(crate) fn get(&self, key: &Key<'_>) -> Option<&Arc<ShapedText>> {
+         self.entries
+             .get(&key.hash)?
+             .iter()
+@@ -161,7 +162,7 @@ impl ShapeCache {
+     }
+ 
+     /// Keeps `shaped`, what shaping `key` gave.
+-    pub(crate) fn insert(&mut self, key: Key<'_>, shaped: &ShapedText) {
++    pub(crate) fn insert(&mut self, key: Key<'_>, shaped: Arc<ShapedText>) {
+         let characters = key.analysis.char_info().len();
+         if self.characters + characters > CHARACTERS {
+             self.entries.clear();
+@@ -175,7 +176,7 @@ impl ShapeCache {
+             char_info: key.analysis.char_info().to_vec(),
+             bidi_levels: key.analysis.bidi_levels().to_vec(),
+             paragraph_level: key.analysis.paragraph_level(),
+-            shaped: shaped.clone(),
++            shaped,
+         });
+     }
+ }
+diff --git a/parley/src/shape/mod.rs b/parley/src/shape/mod.rs
+index 2b9687be97f433582e1d6e7f4f45c2a241c417e9..2f6097a2ce23d252a64326d0c7f25c08ee0af71d 100644
+--- a/parley/src/shape/mod.rs
++++ b/parley/src/shape/mod.rs
+@@ -8,6 +8,7 @@
+ mod cache;
+ pub(crate) use cache::ShapeCache;
+ 
++use alloc::sync::Arc;
+ use alloc::vec::Vec;
+ use parley_engine::shape::{CharCluster, Coverage};
+ use parley_engine::{
+@@ -201,11 +202,19 @@ pub(crate) fn shape_text<'a, B: Brush>(
+         cache.hasher(),
+     );
+     if let Some(shaped) = cache.get(&key) {
+-        layout.data.shaped_text.clone_from(shaped);
+-        layout
++        // The same shaping, shared, unless its characters were styled
++        // otherwise.
++        layout.data.shaped_text = Arc::clone(shaped);
++        let styled_alike = layout
+             .data
+             .shaped_text
+-            .set_style_indices(char_style_indices);
++            .characters()
++            .iter()
++            .map(|character| character.style_index)
++            .eq(char_style_indices.iter().copied());
++        if !styled_alike {
++            Arc::make_mut(&mut layout.data.shaped_text).set_style_indices(char_style_indices);
++        }
+         cache.reused += 1;
+         // What shaping it again gives.
+         #[cfg(debug_assertions)]
+@@ -234,9 +243,9 @@ pub(crate) fn shape_text<'a, B: Brush>(
+             char_style_indices,
+             items,
+             font_selector,
+-            &mut layout.data.shaped_text,
++            Arc::make_mut(&mut layout.data.shaped_text),
+         );
+-        cache.insert(key, &layout.data.shaped_text);
++        cache.insert(key, Arc::clone(&layout.data.shaped_text));
+     }
+ 
+     let mut inline_box_iter = inline_boxes
+diff --git a/parley/src/tests/utils/asserts.rs b/parley/src/tests/utils/asserts.rs
+index 20f826182d4646efa69bc64a4d3604e0525837a0..24b2fb9cb525c644a2c1798954c0febf3ec7b008 100644
+--- a/parley/src/tests/utils/asserts.rs
++++ b/parley/src/tests/utils/asserts.rs
+@@ -37,7 +37,8 @@ fn canonicalize_layout_data<B: Brush>(layout_data: &LayoutData<B>) -> LayoutData
+         }
+     }
+ 
+-    normalized.shaped_text.remap_styles(&remap);
++    // kun: the shaped text is shared.
++    alloc::sync::Arc::make_mut(&mut normalized.shaped_text).remap_styles(&remap);
+     normalized.styles = canonical_styles;
+     normalized.style_metrics = canonical_metrics;
+     normalized

@@ -49,6 +49,7 @@ jobs:
       - run: python3 scripts/sanity.py numerics
       - run: python3 scripts/sanity.py docs
       - run: python3 scripts/sanity_numerics_test.py
+      - run: python3 scripts/ci_patches_test.py
 
   test:
     runs-on: ubuntu-24.04

@@ -103,7 +103,8 @@ icu_properties = { version = "2.3", features = ["compiled_data"] }
 # Text layout (fontique finds fonts; DirectWrite on Windows). Our fork's
 # `machopo` branch (upstream main plus our changes), next to the repo
 # (`../third_party`, each project its own repository); see
-# ../third_party/parley/README.machopo.md.
+# ../third_party/parley/README.machopo.md; each change is a patch in
+# `patches/parley/`.
 parley = { path = "../third_party/parley/parley" }
 # SVG's own attribute syntax: path data and the `transform` attribute's
 # list (CSS values go through `cssparser`).
@@ -111,8 +112,10 @@ svgtypes = "0.16"
 # 2D geometry for SVG's layout: arcs to curves, path bounds (`svgtypes`
 # is built on it).
 kurbo = "0.13"
-# Block, flexbox and grid layout.
-taffy = { version = "0.15", default-features = false, features = ["std", "block_layout", "float_layout", "flexbox", "grid", "content_size", "calc"] }
+# Block, flexbox and grid layout. Our fork's `machopo` branch (upstream plus
+# our changes, each a patch in `patches/taffy/`), next to the repo; see
+# ../third_party/taffy/README.machopo.md.
+taffy = { path = "../third_party/taffy", default-features = false, features = ["std", "block_layout", "float_layout", "flexbox", "grid", "content_size", "calc"] }
 # Only to split faces out of font collections for Skia; the version parley
 # already pulls in.
 read-fonts = "0.41"

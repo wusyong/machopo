@@ -1,0 +1,955 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wu Yuwei <yuweiwu@pm.me>
+Date: Sat, 24 Oct 2026 13:08:54 +0900
+Subject: [PATCH] Look line breaks up in a table
+
+Finding line break opportunities with ICU4X took 1.53 ms of Speedometer's
+long text (French). Under the default rules (one segmenter
+configuration), analyze_text now looks them up in a table for characters
+up to U+017F and from U+2000 to U+203F (line_table.rs: Latin-1, Latin
+Extended-A and the commonest punctuation), by the class of the last
+character before each one that isn't a space, whether spaces are
+between them, and its class, as UAX #14's pair table does: 0.53 ms, with
+no word given to ICU4X.
+
+The table is what ICU4X's line segmenter gives, generated from it by a
+test that fails when it is out of date and prints it anew. A word with a
+character outside the table, or an entry that changes with the
+characters around the pair (quotation marks beside spaces), is given to
+ICU4X with the words on either side, and only its opportunities are
+kept. The tests compare every text of up to four characters of the
+classes and long random ones with ICU4X, and a debug build gives every
+text looked up to ICU4X whole too and compares. Blink's
+LazyLineBreakIterator looks pairs up to U+00AD in a table of its own.
+
+AnalysisOptions::skip_word_boundaries (LayoutContext::set_word_boundaries,
+on by default) leaves word boundaries out, a fifth of the analysis, for
+text no one moves through by words with parley's clusters.
+LayoutContext::line_breaks_looked_up counts the texts looked up and the
+words given to ICU4X, for tests.
+---
+ README.kun.md                   |   5 +-
+ parley/src/analysis.rs          |   1 +
+ parley/src/context.rs           |  20 +
+ parley_engine/src/analysis.rs   |  42 +-
+ parley_engine/src/analyzer.rs   |  19 +
+ parley_engine/src/lib.rs        |   1 +
+ parley_engine/src/line_table.rs | 667 ++++++++++++++++++++++++++++++++
+ 7 files changed, 749 insertions(+), 6 deletions(-)
+ create mode 100644 parley_engine/src/line_table.rs
+
+diff --git a/README.kun.md b/README.kun.md
+index 2860ad3077cd4bf4033bd3d6ec5c098066bebbac..b33c1569dc1eec88f4e58cf7dc465e3afc697fd9 100644
+--- a/README.kun.md
++++ b/README.kun.md
+@@ -47,6 +47,7 @@ The commits on `kun` after upstream's:
+ | Share a layout's shaped text | `Layout::shaped_text`: a layout's `ShapedText` (re-exported) is an `Arc`, which what the embedder keeps of a layout holds, so it outlives the layout and is never changed under it: rebuilding the layout takes a new one where the old is held (`LayoutData::clear`), and breaking the lines copies it before changing a tab's advance where it is held (`Arc::make_mut`; a layout with tabs whose stops move pays one copy when its shaping is also kept). The kept shapings share it with their layouts instead of copying it, and a layout that takes one copies it only when its characters are styled otherwise. `GlyphRun::span` (`GlyphSpan`): where a glyph run's glyphs are in the shaped text (its shaped run and clusters), its direction and its line's spacing (`EffectiveSpacing`, now `PartialEq`), and `GlyphSpan::glyphs` walks them from the shaped text alone, as `GlyphRun::glyphs` does (`Glyphs`, which both use). kun keeps a line's runs as spans into the paragraph's shaped text instead of copying their glyphs (Blink's `ShapeResultView`). Marked `kun:` in `layout/data.rs`, `layout/layout.rs`, `layout/line.rs`, `layout/line_break.rs`, `layout/mod.rs`, `layout/spacing.rs`, `shape/mod.rs` (where it was), `shape/cache.rs` (likewise) and the tests' `canonicalize_layout_data`. |
+ | Walk a glyph run's clusters from its span | `GlyphSpan::clusters` (`SpanCluster`): the clusters `Run::visual_clusters` gives of the glyph run's style on its line (glyphs or not, a newline's too: the span keeps the run's clusters on the line and the style), their text and advance with the line's spacing, from the shaped text alone; `GlyphSpan::text_range`: where their text starts (the visually first) and how far it reaches, from the characters alone, without walking the clusters. `Run`'s `Clusters` and `GlyphSpan::clusters` walk the same graphemes with their atoms (`AtomGraphemes`, out of `Clusters`). kun works a run's clusters out from its span only when asked (selection, hit testing, `text-overflow`), not for every line it lays out. Marked `kun:` in `layout/line.rs`, `layout/run.rs` and `layout/mod.rs`. |
+ | Shape text a word at a time | `Shaper` shapes a segment a word at a time and keeps what shaping a word gave (`shape/words.rs`, `Words`): text is split before each space and after it, where a grapheme starts, and a word of up to 32 characters is kept by its text, an id for what font selection takes from each character's style (`FontSelector::font_style`, which parley's selector gives from `ShapeCache::font_styles`: the font stack, width, weight and style), the segment's script and the item's options. A word kept takes its fonts and harfrust's glyphs (in font units, clusters from the start of each run of one font) without selecting fonts or shaping; words of one font are put together into one `ShapedRun`, converted as a run shaped whole is (`push_run` takes harfrust's glyphs from either, `HarfGlyph`), so the result is the same, bit for bit. Only where shaping a word on its own gives what shaping the segment whole does: left to right, not Arabic or Syriac (harfrust's Arabic shaper looks at the text around a run), without features that are off unless asked for (`dlig`, `ss01`, ...), and with fonts whose rules take a space with the glyph beside it at most (`shape/space.rs`, `space_reach`: a lookup of a feature that may be on matching the space with the glyph before it or a glyph after it that can be other than a mark, a `kern` pair with it, or AAT tables; Gecko's `gfxFont::CheckForFeaturesInvolvingSpace` does the like for the whole font through HarfBuzz's `collect_glyphs`, which harfrust lacks). Such a font (`SpaceReach::Beside`) has the glyphs its rules of two take beside a space told apart, with what substitutions may make of them, positioning's apart from substitutions'; where a word ends or starts with one of them beside a space, `WordRuns` shapes the words around the space again as one: the word on that side for positioning, the words on both sides for a substitution (what it makes of the space may be shaped with the other side too), and the words on both sides of a space after a grapheme of several characters where a lookup skips marks (the `kern` table always does). The words shaped again as one aren't kept. A font whose rules reach further (`SpaceReach::Across`: a rule of three with a space, class 0 of a pair, a lookup skipping base glyphs, cursive attachment, a space as a mark, AAT, over 256 glyphs on a side) shapes the segment whole again (`ShapedText::truncate`). Arial and Times New Roman kern a few letters with a space and are shaped a word at a time; Calibri and Lato have a `calt` reaching across one. Up to 2^15 words, then the cache starts again; the ids of options and of font styles (2^12 each) start again with it. `LayoutContext::clear_shapings` forgets the words and the kept shapings, for fonts added. In a debug build every layout that took or kept a word is also shaped whole and compared (`same_shaping`); a new font selector sets its query's attributes, as the query may have shaped with another. Text is mostly the same words again (Speedometer's long text has 39,003 words, 9,917 of them distinct), and selecting fonts and shaping took most of the time text takes; Blink keeps whole runs of up to 30 characters (`NGShapeCache`), Gecko words (`gfxShapedWord`, after font selection). fontique's `SourceCache` keeps a font it prunes weakly, and loading it again while something still holds it takes the same blob: a kept word holds its font, and the font loaded again under another blob id is another font to the runs put together (`same_shaping` failed on a long text with many fonts). Marked `kun:` in `parley_engine`'s `shape/shaper.rs`, `shape/shaped_text.rs` and `shape/mod.rs`, in parley's `shape/mod.rs`, `shape/cache.rs` and `context.rs`, and in fontique's `source_cache.rs`. |
++| Look line breaks up in a table | `analyze_text` finds the line break opportunities of a text under the default rules (one segmenter configuration, `SegmenterKey::DEFAULT`) in a table for characters up to U+017F and from U+2000 to U+203F (`line_table.rs`: Latin-1, Latin Extended-A and the commonest punctuation, `’ “ ” – — …`), by the class of the last character that isn't a space before each one, whether spaces are between them, and its class, as UAX #14's pair table does. The table is what ICU4X's line segmenter gives, generated from it by a test that fails when the table is out of date and prints it anew; an entry that changes with the characters around the pair (an opening quotation mark after spaces, LB15a; a closing one before them, LB15b) is left to ICU4X. A word (text between spaces) with a character outside the table, or such an entry, is given to ICU4X with the words on either side, and only its opportunities are kept. The tests compare every text of up to four characters of the classes, and long random ones, with ICU4X, and a debug build gives every text looked up to ICU4X whole too and compares. Speedometer's long text (French) takes 0.53 ms instead of 1.54 ms, giving no word to ICU4X. Blink's `LazyLineBreakIterator` looks pairs up to U+00AD in a table of its own, which differs from ICU in a few cases. `AnalysisOptions::skip_word_boundaries` (`LayoutContext::set_word_boundaries`, on by default): leaves word boundaries out, a fifth of the analysis, for text no one moves through by words with parley's clusters (kun's layout: its editing finds words itself; its address bar's `PlainEditor` keeps them). `LayoutContext::line_breaks_looked_up` counts the texts looked up and the words given to ICU4X, for tests. Marked `kun:` in `parley_engine`'s `analysis.rs`, `analyzer.rs` and `lib.rs`, and in parley's `analysis.rs` and `context.rs`. |
+ | Add README.kun.md | This file. |
+ 
+ Their tests are in kun: `cargo test -p layout --test it parley_inline_box::`,
+@@ -69,7 +70,9 @@ their glyphs and clusters from the spans); for the words `parley_words::`,
+ `parley_space::` (fonts made with a rule or two each, by `write-fonts`)
+ and `shaping::adding_fonts_forgets_what_shaping_gave` (and every layout
+ test in Ahem, in a debug build), and for the fonts pruned fontique's own
+-`source_cache::tests`, run in this repository.
++`source_cache::tests`, run in this repository; for the line break table
++`parley_line_breaks::` (and every layout test, in a debug build), and its
++own tests in `line_table.rs`, run in this repository.
+ Each part of the changes was removed in turn to check that a test fails.
+ 
+ The vendored copy also trimmed the workspace (no `parley_dev`, upstream's
+diff --git a/parley/src/analysis.rs b/parley/src/analysis.rs
+index b8ba1a9dd190258aed65557eeb534b3d880c4139..b0ecf51f8cd480e63a312b047ae69c18fbe2edc6 100644
+--- a/parley/src/analysis.rs
++++ b/parley/src/analysis.rs
+@@ -55,6 +55,7 @@ pub(crate) fn analyze_text<B: Brush>(
+         line_break: &lcx.line_break,
+         break_spaces: &lcx.break_spaces,
+         line_break_override,
++        skip_word_boundaries: lcx.skip_word_boundaries,
+     };
+     lcx.analyzer.analyze(text, &options, &mut lcx.analysis);
+ }
+diff --git a/parley/src/context.rs b/parley/src/context.rs
+index 66f2abccb2d62006d4cfbe88bc4bff1f8593bd8a..28c8118a6dabeb95d83c4fe084833ed1baade7e5 100644
+--- a/parley/src/context.rs
++++ b/parley/src/context.rs
+@@ -32,6 +32,8 @@ pub struct LayoutContext<B: Brush = [u8; 4]> {
+     pub(crate) analysis: Analysis,
+     pub(crate) line_break: Vec<(Range<usize>, LineBreakConfig)>,
+     pub(crate) break_spaces: Vec<Range<usize>>,
++    // kun: see `set_word_boundaries`.
++    pub(crate) skip_word_boundaries: bool,
+ 
+     // Reusable style builders (to amortise allocations)
+     pub(crate) ranged_style_builder: RangedStyleBuilder<B>,
+@@ -58,6 +60,7 @@ impl<B: Brush> LayoutContext<B> {
+             analysis: Analysis::new(),
+             line_break: Vec::new(),
+             break_spaces: Vec::new(),
++            skip_word_boundaries: false,
+             ranged_style_builder: RangedStyleBuilder::default(),
+             tree_style_builder: TreeStyleBuilder::default(),
+             char_style_indices: vec![],
+@@ -95,6 +98,23 @@ impl<B: Brush> LayoutContext<B> {
+         self.scx.set_shape_words(on);
+     }
+ 
++    // kun: whether layouts mark word boundaries (`Cluster::is_word_boundary`;
++    // they do unless turned off), which moving and selecting by words in an
++    // editor use: text no one moves through that way is analyzed faster
++    // without.
++    #[doc(hidden)]
++    pub fn set_word_boundaries(&mut self, on: bool) {
++        self.skip_word_boundaries = !on;
++    }
++
++    // kun: how many texts had their line break opportunities looked up in a
++    // table, and how many of their words the table couldn't decide and were
++    // given to ICU4X, for tests.
++    #[doc(hidden)]
++    pub fn line_breaks_looked_up(&self) -> (usize, usize) {
++        self.analyzer.line_breaks_looked_up()
++    }
++
+     // kun: forgets the shapings kept, as fonts were added to the font
+     // context: font selection may pick others.
+     #[doc(hidden)]
+diff --git a/parley_engine/src/analysis.rs b/parley_engine/src/analysis.rs
+index 7d871af0a21814b79d5e2d229af1f51709e6f8d9..3bd44466f05d02e5562b0372146b61a61c71704f 100644
+--- a/parley_engine/src/analysis.rs
++++ b/parley_engine/src/analysis.rs
+@@ -30,6 +30,7 @@ use parley_data::Properties;
+ 
+ use crate::bidi;
+ use crate::break_overrides::LineBreakContext;
++use crate::line_table;
+ use crate::{AnalysisOptions, Analyzer, LineBreakConfig};
+ 
+ /// The result of [`Analyzer::analyze`].
+@@ -150,6 +151,13 @@ impl AnalysisDataSources {
+     }
+ }
+ 
++// kun: the line segmenter for the default configuration, which the line
++// break table gives what of, for its tests.
++#[cfg(test)]
++pub(crate) fn default_line_segmenter() -> LineSegmenterBorrowed<'static> {
++    AnalysisDataSources::new().line_segmenter(SegmenterKey::DEFAULT)
++}
++
+ #[cfg(feature = "complex-scripts")]
+ #[inline(always)]
+ fn line_segmenter_impl(opt: LineBreakOptions<'_>) -> LineSegmenterBorrowed<'static> {
+@@ -558,6 +566,27 @@ pub(crate) fn analyze_text(
+     for (substring_index, (substring, segmenter_key, last)) in contiguous_substrings.enumerate() {
+         // Fast path for text with a single segmenter configuration.
+         if substring_index == 0 && last {
++            // kun: the default configuration's opportunities looked up in a
++            // table, where it can decide them.
++            if segmenter_key == SegmenterKey::DEFAULT {
++                analyzer.texts_looked_up += 1;
++                analyzer.words_given += line_table::line_breaks(
++                    substring,
++                    data_sources.line_segmenter(segmenter_key),
++                    &mut line_boundary_positions,
++                );
++                debug_assert_eq!(
++                    line_boundary_positions,
++                    data_sources
++                        .line_segmenter(segmenter_key)
++                        .segment_str(substring)
++                        .filter(|&position| position != 0 && position != substring.len())
++                        .collect::<Vec<_>>(),
++                    "the table gives what ICU4X gives for {substring:?}"
++                );
++                break;
++            }
++
+             let mut lb_iter = data_sources
+                 .line_segmenter(segmenter_key)
+                 .segment_str(substring);
+@@ -614,7 +643,9 @@ pub(crate) fn analyze_text(
+     }
+ 
+     // Collect boundary byte positions compactly
+-    let mut wb_iter = data_sources.word_segmenter().segment_str(text).peekable();
++    // kun: none when word boundaries are left out.
++    let mut wb_iter = (!options.skip_word_boundaries)
++        .then(|| data_sources.word_segmenter().segment_str(text).peekable());
+     let mut gb_iter = data_sources
+         .grapheme_segmenter()
+         .segment_str(text)
+@@ -638,9 +669,9 @@ pub(crate) fn analyze_text(
+         .peekable();
+     let boundary_iter = text.char_indices().map(|(byte_pos, ch)| {
+         // advance any stale word boundary positions
+-        while let Some(&w) = wb_iter.peek() {
++        while let Some(&w) = wb_iter.as_mut().and_then(|wb_iter| wb_iter.peek()) {
+             if w < byte_pos {
+-                _ = wb_iter.next();
++                _ = wb_iter.as_mut().and_then(Iterator::next);
+             } else {
+                 break;
+             }
+@@ -663,11 +694,11 @@ pub(crate) fn analyze_text(
+         }
+ 
+         let mut is_word = false;
+-        if let Some(&w) = wb_iter.peek()
++        if let Some(&w) = wb_iter.as_mut().and_then(|wb_iter| wb_iter.peek())
+             && w == byte_pos
+         {
+             is_word = true;
+-            _ = wb_iter.next();
++            _ = wb_iter.as_mut().and_then(Iterator::next);
+         }
+         let mut is_grapheme_start = false;
+         if let Some(&g) = gb_iter.peek()
+@@ -681,6 +712,7 @@ pub(crate) fn analyze_text(
+         // For characters requiring a dictionary for deciding word boundaries, apply
+         // UAX #29 Rule WB999 in case there's no dictionary (because ICU4X does not).
+         if !is_word
++            && !options.skip_word_boundaries
+             && is_grapheme_start
+             && properties.needs_dictionary_word_break()
+             && !has_word_dictionary(properties.script())
+diff --git a/parley_engine/src/analyzer.rs b/parley_engine/src/analyzer.rs
+index b9ae430ac5db11db159e0eefe7b3f17f1fdeb11a..14092e8d2a970e9db5d0ea51947bf2c18738d51a 100644
+--- a/parley_engine/src/analyzer.rs
++++ b/parley_engine/src/analyzer.rs
+@@ -15,6 +15,10 @@ use crate::analysis::{Analysis, analyze_text};
+ #[derive(Default)]
+ pub struct Analyzer {
+     pub(crate) bidi: BidiResolver,
++    // kun: how many texts had their line break opportunities looked up in
++    // the table, and how many of their words were given to ICU4X.
++    pub(crate) texts_looked_up: usize,
++    pub(crate) words_given: usize,
+ }
+ 
+ impl core::fmt::Debug for Analyzer {
+@@ -29,6 +33,14 @@ impl Analyzer {
+         Self::default()
+     }
+ 
++    // kun: how many texts had their line break opportunities looked up in a
++    // table, and how many of their words the table couldn't decide, for
++    // tests.
++    #[doc(hidden)]
++    pub fn line_breaks_looked_up(&self) -> (usize, usize) {
++        (self.texts_looked_up, self.words_given)
++    }
++
+     /// Analyze `text`, overwriting `analysis`.
+     ///
+     /// This reuses the allocations of `analysis`.
+@@ -90,6 +102,12 @@ pub struct AnalysisOptions<'a> {
+     ///
+     /// See [`LineBreakOverrideFn`] for more details.
+     pub line_break_override: Option<&'a LineBreakOverrideFn>,
++
++    // kun: whether to leave word boundaries out (`CharInfo::is_word_boundary`
++    // is false then), for text no one moves through by words: finding them
++    // is a fifth of the analysis.
++    #[doc(hidden)]
++    pub skip_word_boundaries: bool,
+ }
+ 
+ impl core::fmt::Debug for AnalysisOptions<'_> {
+@@ -98,6 +116,7 @@ impl core::fmt::Debug for AnalysisOptions<'_> {
+             .field("base_direction", &self.base_direction)
+             .field("line_break", &self.line_break)
+             .field("break_spaces", &self.break_spaces)
++            .field("skip_word_boundaries", &self.skip_word_boundaries)
+             .finish_non_exhaustive()
+     }
+ }
+diff --git a/parley_engine/src/lib.rs b/parley_engine/src/lib.rs
+index e1521a717e5fde79779971b52636de49d0d284d2..4aca16c1951ab731628d7d63b3caf83b5cb81d95 100644
+--- a/parley_engine/src/lib.rs
++++ b/parley_engine/src/lib.rs
+@@ -113,6 +113,7 @@ pub mod bidi;
+ pub mod break_overrides;
+ mod glyph;
+ pub mod itemize;
++mod line_table;
+ mod lru_cache;
+ pub mod shape;
+ 
+diff --git a/parley_engine/src/line_table.rs b/parley_engine/src/line_table.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..873e311ea1d3b7ee61d815cd6849e84e9490fe8a
+--- /dev/null
++++ b/parley_engine/src/line_table.rs
+@@ -0,0 +1,667 @@
++// Copyright 2026 the Parley Authors
++// SPDX-License-Identifier: Apache-2.0 OR MIT
++
++//! kun: line break opportunities looked up in a table for characters up to
++//! U+017F and from U+2000 to U+203F (Latin-1, Latin Extended-A and the
++//! commonest punctuation), giving what ICU4X's line segmenter gives under the
++//! default options; the words the table can't decide are given to ICU4X.
++
++use alloc::vec::Vec;
++
++use icu_segmenter::LineSegmenterBorrowed;
++
++/// No opportunity.
++const N: u8 = 0;
++/// An opportunity.
++const B: u8 = 1;
++/// The table can't decide: it depends on more than the two characters, or
++/// on a character outside the table.
++const S: u8 = 2;
++
++// GENERATED START
++// Printed by `tables_are_up_to_date` when they aren't.
++
++/// How many classes there are, with 0 for those the table doesn't decide.
++const CLASS_COUNT: usize = 23;
++
++/// [`ENTRIES`]'s previous class at the text's start.
++const SOT: u8 = 23;
++
++/// The class of each character up to U+017F:
++/// 1: BA ('\t'),
++/// 2: EX ('!'),
++/// 3: QU ('"'),
++/// 4: AL ('#'),
++/// 5: PR ('$'),
++/// 6: PO ('%'),
++/// 7: OP ('('),
++/// 8: CP (')'),
++/// 9: IS (','),
++/// 10: HY ('-'),
++/// 11: SY ('/'),
++/// 12: NU ('0'),
++/// 13: CL ('}'),
++/// 14: GL ('\u{a0}'),
++/// 15: AI ('§'),
++/// 16: QU Pi ('«'),
++/// 17: BB ('´'),
++/// 18: QU Pf ('»'),
++/// 19: HH ('‐'),
++/// 20: B2 ('—'),
++/// 21: IN ('․'),
++/// 22: NS ('‼'),
++/// 0: the others.
++#[rustfmt::skip]
++const CLASSES: [u8; 0x180] = [
++     0,  0,  0,  0,  0,  0,  0,  0,  0,  1,  0,  0,  0,  0,  0,  0,
++     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
++     0,  2,  3,  4,  5,  6,  4,  3,  7,  8,  4,  5,  9, 10,  9, 11,
++    12, 12, 12, 12, 12, 12, 12, 12, 12, 12,  9,  9,  4,  4,  4,  2,
++     4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,
++     4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  7,  5,  8,  4,  4,
++     4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,
++     4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  7,  1, 13,  4,  0,
++     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
++     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
++    14,  7,  6,  5,  5,  5,  4, 15, 15,  4, 15, 16,  4,  1,  4,  4,
++     6,  5, 15, 15, 17,  4, 15, 15, 15, 15, 15, 18, 15, 15, 15,  7,
++     4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,
++     4,  4,  4,  4,  4,  4,  4, 15,  4,  4,  4,  4,  4,  4,  4,  4,
++     4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,
++     4,  4,  4,  4,  4,  4,  4, 15,  4,  4,  4,  4,  4,  4,  4,  4,
++     4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,
++     4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,
++     4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,
++     4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,
++     4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,
++     4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,
++     4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,
++     4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,  4,
++];
++
++/// The class of each character from U+2000 to U+203F.
++#[rustfmt::skip]
++const PUNCTUATION_CLASSES: [u8; 0x40] = [
++     1,  1,  1,  1,  1,  1,  1, 14,  1,  1,  1,  0,  0,  0,  0,  0,
++    19, 14, 19, 19, 20, 15, 15,  4, 16, 18,  7, 16, 16, 18,  7, 16,
++    15, 15,  4,  4, 21, 21, 21,  1,  0,  0,  0,  0,  0,  0,  0, 14,
++     6,  6,  6,  6,  6,  6,  6,  6,  4, 16, 18, 15, 22, 22,  4,  4,
++];
++
++/// Whether there is an opportunity before a character, by the class of the
++/// last character before it that isn't a space (or [`SOT`]), whether there
++/// are spaces between them, and its class.
++#[rustfmt::skip]
++const ENTRIES: [[[u8; CLASS_COUNT]; 2]; CLASS_COUNT + 1] = [
++    // 0
++    [
++        [S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S],
++        [S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S, S],
++    ],
++    // 1: BA
++    [
++        [S, N, N, N, B, B, B, B, N, N, N, N, B, N, B, B, N, B, N, N, B, N, N],
++        [S, B, N, B, B, B, B, B, N, N, B, N, B, N, B, B, B, B, S, B, B, B, B],
++    ],
++    // 2: EX
++    [
++        [S, N, N, N, B, B, B, B, N, N, N, N, B, N, N, B, N, B, N, N, B, N, N],
++        [S, B, N, B, B, B, B, B, N, N, B, N, B, N, B, B, B, B, S, B, B, B, B],
++    ],
++    // 3: QU
++    [
++        [S, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N],
++        [S, B, N, B, B, B, B, B, N, N, B, N, B, N, B, B, B, B, S, B, B, B, B],
++    ],
++    // 4: AL
++    [
++        [S, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, B, N, N, B, N, N],
++        [S, B, N, B, B, B, B, B, N, N, B, N, B, N, B, B, B, B, S, B, B, B, B],
++    ],
++    // 5: PR
++    [
++        [S, N, N, N, N, B, B, N, N, N, N, N, N, N, N, N, N, B, N, N, B, N, N],
++        [S, B, N, B, B, B, B, B, N, N, B, N, B, N, B, B, B, B, S, B, B, B, B],
++    ],
++    // 6: PO
++    [
++        [S, N, N, N, N, B, B, N, N, N, N, N, N, N, N, N, N, B, N, N, B, N, N],
++        [S, B, N, B, B, B, B, B, N, N, B, N, B, N, B, B, B, B, S, B, B, B, B],
++    ],
++    // 7: OP
++    [
++        [S, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N],
++        [S, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N],
++    ],
++    // 8: CP
++    [
++        [S, N, N, N, N, N, N, B, N, N, N, N, N, N, N, N, N, B, N, N, B, N, N],
++        [S, B, N, B, B, B, B, B, N, N, B, N, B, N, B, B, B, B, S, B, B, B, N],
++    ],
++    // 9: IS
++    [
++        [S, N, N, N, N, B, B, B, N, N, N, N, N, N, N, N, N, B, N, N, B, N, N],
++        [S, B, N, B, B, B, B, B, N, N, B, N, B, N, B, B, B, B, S, B, B, B, B],
++    ],
++    // 10: HY
++    [
++        [S, N, N, N, B, B, B, B, N, N, N, N, N, N, B, B, N, B, N, N, B, N, N],
++        [S, B, N, B, B, B, B, B, N, N, B, N, B, N, B, B, B, B, S, B, B, B, B],
++    ],
++    // 11: SY
++    [
++        [S, N, N, N, B, B, B, B, N, N, N, N, N, N, N, B, N, B, N, N, B, N, N],
++        [S, B, N, B, B, B, B, B, N, N, B, N, B, N, B, B, B, B, S, B, B, B, B],
++    ],
++    // 12: NU
++    [
++        [S, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, B, N, N, B, N, N],
++        [S, B, N, B, B, B, B, B, N, N, B, N, B, N, B, B, B, B, S, B, B, B, B],
++    ],
++    // 13: CL
++    [
++        [S, N, N, N, B, N, N, B, N, N, N, N, B, N, N, B, N, B, N, N, B, N, N],
++        [S, B, N, B, B, B, B, B, N, N, B, N, B, N, B, B, B, B, S, B, B, B, N],
++    ],
++    // 14: GL
++    [
++        [S, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N],
++        [S, B, N, B, B, B, B, B, N, N, B, N, B, N, B, B, B, B, S, B, B, B, B],
++    ],
++    // 15: AI
++    [
++        [S, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, B, N, N, B, N, N],
++        [S, B, N, B, B, B, B, B, N, N, B, N, B, N, B, B, B, B, S, B, B, B, B],
++    ],
++    // 16: QU Pi
++    [
++        [S, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N],
++        [S, S, N, S, S, S, S, S, N, N, S, N, S, N, S, S, S, S, S, S, S, S, S],
++    ],
++    // 17: BB
++    [
++        [S, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N],
++        [S, B, N, B, B, B, B, B, N, N, B, N, B, N, B, B, B, B, S, B, B, B, B],
++    ],
++    // 18: QU Pf
++    [
++        [S, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N],
++        [S, B, N, B, B, B, B, B, N, N, B, N, B, N, B, B, B, B, S, B, B, B, B],
++    ],
++    // 19: HH
++    [
++        [S, N, N, N, B, B, B, B, N, N, N, N, B, N, B, B, N, B, N, N, B, N, N],
++        [S, B, N, B, B, B, B, B, N, N, B, N, B, N, B, B, B, B, S, B, B, B, B],
++    ],
++    // 20: B2
++    [
++        [S, N, N, N, B, B, B, B, N, N, N, N, B, N, N, B, N, B, N, N, N, N, N],
++        [S, B, N, B, B, B, B, B, N, N, B, N, B, N, B, B, B, B, S, B, N, B, B],
++    ],
++    // 21: IN
++    [
++        [S, N, N, N, B, B, B, B, N, N, N, N, B, N, N, B, N, B, N, N, B, N, N],
++        [S, B, N, B, B, B, B, B, N, N, B, N, B, N, B, B, B, B, S, B, B, B, B],
++    ],
++    // 22: NS
++    [
++        [S, N, N, N, B, B, B, B, N, N, N, N, B, N, N, B, N, B, N, N, B, N, N],
++        [S, B, N, B, B, B, B, B, N, N, B, N, B, N, B, B, B, B, S, B, B, B, B],
++    ],
++    // the text's start
++    [
++        [N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N, N],
++        [S, B, N, B, B, B, B, B, N, N, B, N, B, N, B, B, B, B, S, B, B, B, B],
++    ],
++];
++// GENERATED END
++
++/// The class of a character in [`ENTRIES`]; 0 when it is outside the table
++/// or of a class the table doesn't decide.
++#[inline(always)]
++fn class_of(c: char) -> u8 {
++    let code = u32::from(c);
++    let (classes, first): (&[u8], u32) = match code {
++        0..0x180 => (&CLASSES, 0),
++        0x2000..0x2040 => (&PUNCTUATION_CLASSES, 0x2000),
++        _ => return 0,
++    };
++    usize::try_from(code - first).map_or(0, |index| classes[index])
++}
++
++/// Appends the line break opportunities in `text` that ICU4X's line
++/// segmenter (`segmenter`, with the default options) gives, but those at its
++/// start and end; returns how many words (text between spaces) were given to
++/// ICU4X as the table couldn't decide them.
++///
++/// The opportunity before a character depends on the last character that
++/// isn't a space before it, whether there are spaces between them, and the
++/// character, as in UAX #14's pair table: the table holds what ICU4X gives
++/// for each of these where that doesn't change with the characters around
++/// them. There is never one before a space (LB7) but after a character
++/// outside the table, so only the opportunity at a word's start and those
++/// in it are looked up.
++pub(crate) fn line_breaks(
++    text: &str,
++    segmenter: LineSegmenterBorrowed<'_>,
++    out: &mut Vec<usize>,
++) -> usize {
++    let bytes = text.as_bytes();
++    let mut given = 0;
++    let mut prev = SOT;
++    let mut spaces = false;
++    let mut prev_word_start = None;
++    let mut at = 0;
++    loop {
++        while bytes.get(at) == Some(&b' ') {
++            at += 1;
++            spaces = true;
++        }
++        if at == bytes.len() {
++            return given;
++        }
++        let start = at;
++        let mark = out.len();
++        let mut decided = true;
++        while let Some(&byte) = bytes.get(at) {
++            if byte == b' ' {
++                break;
++            }
++            // The character's class and length: one byte up to U+007F, two
++            // (0xC2 to 0xC5, then one) up to U+017F, three (0xE2, 0x80, then
++            // one) from U+2000 to U+203F.
++            let (class, length) = match byte {
++                0..0x80 => (CLASSES[usize::from(byte)], 1),
++                0xC2..=0xC5 => match bytes.get(at + 1) {
++                    Some(&next) => {
++                        let index = (usize::from(byte & 0x7) << 6) | usize::from(next & 0x3F);
++                        (CLASSES[index], 2)
++                    }
++                    None => (0, 1),
++                },
++                0xE2 => match bytes.get(at + 1..at + 3) {
++                    Some(&[0x80, last]) => (PUNCTUATION_CLASSES[usize::from(last & 0x3F)], 3),
++                    _ => (0, 1),
++                },
++                _ => (0, 1),
++            };
++            // A character outside the table may make an opportunity after
++            // it, or before the next word, even at the text's start (where
++            // the table has none).
++            decided = class != 0
++                && match ENTRIES[usize::from(prev)][usize::from(spaces)][usize::from(class)] {
++                    N => true,
++                    B => {
++                        out.push(at);
++                        true
++                    }
++                    _ => false,
++                };
++            if !decided {
++                // The rest of the word is only looked through for its end,
++                // and its last character, which the next word looks up with.
++                at += bytes[at..]
++                    .iter()
++                    .position(|&byte| byte == b' ')
++                    .unwrap_or(bytes.len() - at);
++                prev = text[start..at].chars().next_back().map_or(0, class_of);
++                break;
++            }
++            prev = class;
++            spaces = false;
++            at += length;
++        }
++        let end = at;
++        let next_start = bytes[end..]
++            .iter()
++            .position(|&byte| byte != b' ')
++            .map_or(bytes.len(), |spaces| end + spaces);
++        if !decided {
++            // ICU4X on the word with the words on either side, which hold
++            // what the rules look at around it, keeping the opportunities
++            // from its start up to the next word's.
++            out.truncate(mark);
++            given += 1;
++            let window_start = prev_word_start.unwrap_or(0);
++            let window_end = bytes[next_start..]
++                .iter()
++                .position(|&byte| byte == b' ')
++                .map_or(bytes.len(), |word| next_start + word);
++            out.extend(
++                segmenter
++                    .segment_str(&text[window_start..window_end])
++                    .map(|position| window_start + position)
++                    .filter(|&position| {
++                        position >= start && position < next_start && position != 0
++                    }),
++            );
++        }
++        prev_word_start = Some(start);
++        at = end;
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use alloc::collections::BTreeMap;
++    use alloc::format;
++    use alloc::string::String;
++    use alloc::vec;
++    use alloc::vec::Vec;
++    use std::println;
++
++    use icu_properties::props::{GeneralCategory, LineBreak};
++    use icu_properties::{CodePointMapData, PropertyNamesShort};
++
++    use super::{B, CLASS_COUNT, CLASSES, ENTRIES, N, PUNCTUATION_CLASSES, S, SOT, line_breaks};
++    use crate::analysis::default_line_segmenter;
++
++    /// What ICU4X gives for `text`, but the opportunities at its start and
++    /// end.
++    fn icu(text: &str) -> Vec<usize> {
++        default_line_segmenter()
++            .segment_str(text)
++            .filter(|&position| position != 0 && position != text.len())
++            .collect()
++    }
++
++    fn looked_up(text: &str) -> Vec<usize> {
++        let mut out = Vec::new();
++        line_breaks(text, default_line_segmenter(), &mut out);
++        out
++    }
++
++    /// A character's line break class, with quotation marks split into
++    /// opening, closing and the others (UAX #14's rules 15a, 15b and 19 tell
++    /// them apart), or `None` for a space, which the lookup handles itself, and
++    /// for a class the table doesn't decide: those that take the class of
++    /// what's before them (CM, ZWJ), mandatory breaks, ZW, and those
++    /// resolved some other way (SA, SG, XX, CB).
++    fn key(c: char) -> Option<(LineBreak, Option<GeneralCategory>)> {
++        let class = CodePointMapData::<LineBreak>::new().get(c);
++        let slow = [
++            LineBreak::SP,
++            LineBreak::CM,
++            LineBreak::ZWJ,
++            LineBreak::BK,
++            LineBreak::CR,
++            LineBreak::LF,
++            LineBreak::NL,
++            LineBreak::ZW,
++            LineBreak::SA,
++            LineBreak::SG,
++            LineBreak::XX,
++            LineBreak::CB,
++        ];
++        if slow.contains(&class) {
++            return None;
++        }
++        let category = CodePointMapData::<GeneralCategory>::new().get(c);
++        let quote = matches!(
++            category,
++            GeneralCategory::InitialPunctuation | GeneralCategory::FinalPunctuation
++        );
++        Some((class, (class == LineBreak::QU && quote).then_some(category)))
++    }
++
++    struct Tables {
++        /// The first character of each class, from 1.
++        representatives: Vec<char>,
++        /// Up to U+017F.
++        classes: Vec<u8>,
++        /// From U+2000 to U+203F.
++        punctuation: Vec<u8>,
++        entries: Vec<[Vec<u8>; 2]>,
++    }
++
++    /// Characters tried around each pair: besides one of each class, the
++    /// text's start and end, a space, characters of the classes the table
++    /// doesn't decide, and some outside the table.
++    fn contexts(representatives: &[char]) -> Vec<String> {
++        let mut contexts = vec![String::new(), String::from(" ")];
++        contexts.extend(representatives.iter().skip(1).map(|&c| String::from(c)));
++        contexts.extend(
++            [
++                '\n', '\r', '\u{b}', '\u{85}', '\u{1}', '\u{301}', '\u{200d}', '\u{200b}',
++                '\u{2028}', '\u{2060}', '\u{20ac}', '\u{3001}', '中',
++            ]
++            .map(String::from),
++        );
++        contexts
++    }
++
++    fn generate() -> Tables {
++        let mut keys = Vec::new();
++        let mut representatives = vec!['\0'];
++        let mut classes = Vec::new();
++        let mut punctuation = Vec::new();
++        for code in (0..0x180).chain(0x2000..0x2040) {
++            let c = char::from_u32(code).unwrap();
++            let class = match key(c) {
++                None => 0,
++                Some(key) => match keys.iter().position(|&known| known == key) {
++                    Some(index) => index + 1,
++                    None => {
++                        keys.push(key);
++                        representatives.push(c);
++                        keys.len()
++                    }
++                },
++            };
++            let class = u8::try_from(class).unwrap();
++            if code < 0x180 {
++                classes.push(class);
++            } else {
++                punctuation.push(class);
++            }
++        }
++        let count = representatives.len();
++        let contexts = contexts(&representatives);
++        let mut entries = Vec::new();
++        for prev in 0..=count {
++            let mut row = [vec![S; count], vec![S; count]];
++            for (spaces, row) in row.iter_mut().enumerate() {
++                for (class, entry) in row.iter_mut().enumerate() {
++                    let gap = if spaces == 1 { " " } else { "" };
++                    if prev == count && spaces == 0 {
++                        // No opportunity at the text's start.
++                        *entry = N;
++                        continue;
++                    }
++                    if prev == 0 || class == 0 {
++                        continue;
++                    }
++                    let mut seen = BTreeMap::new();
++                    let before: &[String] = if prev == count {
++                        &[String::new()]
++                    } else {
++                        &contexts
++                    };
++                    for before in before {
++                        for after in &contexts {
++                            let mut text = before.clone();
++                            if prev != count {
++                                text.push(representatives[prev]);
++                            }
++                            text.push_str(gap);
++                            let position = text.len();
++                            text.push(representatives[class]);
++                            text.push_str(after);
++                            *seen.entry(icu(&text).contains(&position)).or_insert(0) += 1;
++                        }
++                    }
++                    *entry = match (seen.get(&false), seen.get(&true)) {
++                        (Some(_), None) => N,
++                        (None, Some(_)) => B,
++                        _ => S,
++                    };
++                }
++            }
++            entries.push(row);
++        }
++        Tables {
++            representatives,
++            classes,
++            punctuation,
++            entries,
++        }
++    }
++
++    fn name(c: char) -> String {
++        let (class, quote) = key(c).unwrap();
++        let name = PropertyNamesShort::<LineBreak>::new().get(class).unwrap();
++        match quote {
++            Some(GeneralCategory::InitialPunctuation) => format!("{name} Pi"),
++            Some(_) => format!("{name} Pf"),
++            None => String::from(name),
++        }
++    }
++
++    fn source(tables: &Tables) -> String {
++        let count = tables.representatives.len();
++        let mut source = String::from(
++            "// GENERATED START\n\
++             // Printed by `tables_are_up_to_date` when they aren't.\n\n\
++             /// How many classes there are, with 0 for those the table doesn't decide.\n",
++        );
++        source += &format!("const CLASS_COUNT: usize = {count};\n\n");
++        source += "/// [`ENTRIES`]'s previous class at the text's start.\n";
++        source += &format!("const SOT: u8 = {count};\n\n");
++        source += "/// The class of each character up to U+017F:\n";
++        for (class, &c) in tables.representatives.iter().enumerate().skip(1) {
++            source += &format!("/// {class}: {} ({c:?}),\n", name(c));
++        }
++        source += "/// 0: the others.\n#[rustfmt::skip]\nconst CLASSES: [u8; 0x180] = [\n";
++        let rows = |classes: &[u8]| {
++            let mut source = String::new();
++            for row in classes.chunks(16) {
++                let row: Vec<String> = row.iter().map(|class| format!("{class:2},")).collect();
++                source += &format!("    {}\n", row.join(" "));
++            }
++            source
++        };
++        source += &rows(&tables.classes);
++        source += "];\n\n";
++        source += "/// The class of each character from U+2000 to U+203F.\n\
++                   #[rustfmt::skip]\n\
++                   const PUNCTUATION_CLASSES: [u8; 0x40] = [\n";
++        source += &rows(&tables.punctuation);
++        source += "];\n\n";
++        source += "/// Whether there is an opportunity before a character, by the class of the\n\
++                   /// last character before it that isn't a space (or [`SOT`]), whether there\n\
++                   /// are spaces between them, and its class.\n\
++                   #[rustfmt::skip]\n";
++        source += "const ENTRIES: [[[u8; CLASS_COUNT]; 2]; CLASS_COUNT + 1] = [\n";
++        for (prev, row) in tables.entries.iter().enumerate() {
++            let label = if prev == count {
++                String::from("the text's start")
++            } else if prev == 0 {
++                String::from("0")
++            } else {
++                format!("{prev}: {}", name(tables.representatives[prev]))
++            };
++            source += &format!("    // {label}\n    [\n");
++            for row in row {
++                let row: Vec<&str> = row
++                    .iter()
++                    .map(|&entry| match entry {
++                        N => "N",
++                        B => "B",
++                        _ => "S",
++                    })
++                    .collect();
++                source += &format!("        [{}],\n", row.join(", "));
++            }
++            source += "    ],\n";
++        }
++        source += "];\n// GENERATED END\n";
++        source
++    }
++
++    #[test]
++    #[expect(
++        clippy::print_stdout,
++        reason = "prints the tables anew when out of date"
++    )]
++    fn tables_are_up_to_date() {
++        let tables = generate();
++        let entries: Vec<[Vec<u8>; 2]> = ENTRIES
++            .iter()
++            .map(|row| [row[0].to_vec(), row[1].to_vec()])
++            .collect();
++        let current = tables.representatives.len() == CLASS_COUNT
++            && usize::from(SOT) == CLASS_COUNT
++            && tables.classes == CLASSES
++            && tables.punctuation == PUNCTUATION_CLASSES
++            && tables.entries == entries;
++        if !current {
++            println!("{}", source(&tables));
++        }
++        assert!(
++            current,
++            "the tables are out of date: replace them with the source printed"
++        );
++    }
++
++    /// Every text of up to four characters of one of each class, a space, a
++    /// character of a class the table doesn't decide and one outside it.
++    #[test]
++    fn short_texts_break_as_icu4x_breaks_them() {
++        let tables = generate();
++        let mut alphabet = tables.representatives[1..].to_vec();
++        alphabet.extend([' ', '\n', '\u{2060}']);
++        let mut texts = vec![String::new()];
++        for _ in 0..4 {
++            texts = texts
++                .iter()
++                .flat_map(|text| {
++                    alphabet.iter().map(move |&c| {
++                        let mut text = text.clone();
++                        text.push(c);
++                        text
++                    })
++                })
++                .collect();
++            for text in &texts {
++                assert_eq!(looked_up(text), icu(text), "{text:?}");
++            }
++        }
++    }
++
++    /// Long texts of characters in the table, mostly letters and spaces,
++    /// with some outside it.
++    #[test]
++    fn long_texts_break_as_icu4x_breaks_them() {
++        let outside = [
++            '\u{2060}',
++            '\u{20ac}',
++            '\u{301}',
++            '\u{3001}',
++            '中',
++            '\u{1f600}',
++        ];
++        // xorshift64, for the same texts every time.
++        let mut state = 0x2545_f491_4f6c_dd1d_u64;
++        let mut next = move || {
++            state ^= state << 13;
++            state ^= state >> 7;
++            state ^= state << 17;
++            state
++        };
++        for _ in 0..50_000 {
++            let length = next() % 48;
++            let text: String = (0..length)
++                .map(|_| match next() % 32 {
++                    0..=7 => ' ',
++                    8..=15 => 'a',
++                    16 => outside[usize::try_from(next() % 6).unwrap()],
++                    17..=20 => {
++                        char::from_u32(0x2000 + u32::try_from(next() % 0x40).unwrap()).unwrap()
++                    }
++                    _ => char::from_u32(u32::try_from(next() % 0x180).unwrap()).unwrap(),
++                })
++                .collect();
++            assert_eq!(looked_up(&text), icu(&text), "{text:?}");
++        }
++    }
++}

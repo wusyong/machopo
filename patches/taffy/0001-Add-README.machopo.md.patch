@@ -1,0 +1,79 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wu Yuwei <yuweiwu@pm.me>
+Date: Tue, 10 Nov 2026 03:57:36 +0900
+Subject: [PATCH] Add README.machopo.md
+
+machopo's fork: why, its local modifications and their upstream status, the tests and how to update it.
+---
+ README.machopo.md | 62 +++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 62 insertions(+)
+ create mode 100644 README.machopo.md
+
+diff --git a/README.machopo.md b/README.machopo.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..a1d94bc52e481809bc28ea64b9c1cb1d43f4a4ee
+--- /dev/null
++++ b/README.machopo.md
+@@ -0,0 +1,62 @@
++# taffy (machopo's fork)
++
++| | |
++| --- | --- |
++| Upstream | https://github.com/DioxusLabs/taffy (fetched by URL; no remote) |
++| Fork | https://github.com/wusyong/taffy (remote `origin`) |
++| Branch | `machopo`, from upstream's tag `v0.15.0` (`eb6450694f`); the fork's `main` is upstream's, untouched |
++| Version | 0.15.0 |
++| License | MIT (`LICENSE`) |
++| Used by | machopo's `crates/layout` (block, flexbox and grid layout, through taffy's low-level traits on machopo's own box tree), by path |
++
++## Why a fork
++
++machopo follows upstream's main rather than its releases: upstream keeps
++fixing what a browser runs into (floats, baselines, `aspect-ratio`), and
++waiting for a release left machopo working around them or listing them as
++known limitations. A change machopo needs is made here as a commit that can
++go upstream as it is; it stays in the fork only until upstream has it, or,
++when upstream won't take it, with the reason in the table below.
++
++The branch starts at the tag machopo used from crates.io until then, so
++moving to the fork changed nothing; catching up with upstream's main is a
++step of its own.
++
++## Local modifications
++
++The commits on `machopo` after upstream's, each a patch in machopo's
++`patches/taffy/` (`python3 scripts/ci.py patches taffy` exports them;
++`python3 scripts/ci.py third-party` checks that they give this branch):
++
++| Commit | What | Upstream |
++| --- | --- | --- |
++| Add README.machopo.md | This file. Always the last commit, and the only one that changes it, so that the others can go upstream as they are. | Fork only |
++
++Changes are marked with `machopo:` comments. A change meant for upstream
++keeps taffy's `rust-version` (1.71), checked with that toolchain before it
++is sent; the fork itself builds with machopo's pinned toolchain (taffy pins
++none). Anything sent upstream is drafted first and reviewed before it goes
++out.
++
++## Tests
++
++```sh
++cargo test                       # taffy's own, in this checkout
++```
++
++and, in machopo, `cargo test -p layout` and the reftests and WPT of what
++the change touches.
++
++## Updating
++
++1. Fetch upstream by URL (`git fetch https://github.com/DioxusLabs/taffy
++   main`) and rebase `machopo` onto the new upstream commit, fixing any
++   conflicts. Drop the commits upstream now has; keep this file's commit
++   last.
++2. Update the start and version above, and the table.
++3. Push `machopo` (`--force-with-lease`); first tag the old tip
++   (`machopo-<date>`) so that machopo's older pins can still be fetched.
++4. In machopo: `third_party.toml`'s `rev` and `upstream_rev`, then
++   `python3 scripts/ci.py patches taffy`, then `cargo test --workspace`,
++   the reftests and WPT. Upstream's API changes show up as build errors in
++   `crates/layout`.

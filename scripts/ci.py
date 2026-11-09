@@ -4,6 +4,7 @@ wasm guests.
 
     python scripts/ci.py v8        # build V8 (debug and release) from our rusty_v8 fork, to work on the fork
     python scripts/ci.py third-party  # sync ../third_party (our forks, WPT) to the commits machopo pins
+    python scripts/ci.py patches NAME # export a fork's commits since its upstream to patches/NAME
     python scripts/ci.py guests    # rebuild the wasm guests (C) with wasi-sdk and wit-bindgen
 
 Everything runs against the V8 that `.cargo/config.toml` names: the prebuilt
@@ -37,6 +38,10 @@ ROOT = Path(__file__).resolve().parent.parent
 # Vendored and forked upstream code lives next to the repo, in
 # `../third_party`, each project its own repository.
 THIRD_PARTY = ROOT.parent / "third_party"
+# A fork's commits since its upstream (`upstream_rev`), one `git
+# format-patch` file each, in `patches/<name>/`: machopo's history keeps
+# each version of each change, and its reviews see them.
+PATCHES = ROOT / "patches"
 
 
 # --- v8 ---------------------------------------------------------------------
@@ -140,6 +145,10 @@ class Pin:
     # A folder of the repository rather than a checkout of it: what gitiles
     # gives of it at `ref` as a tarball (`sync_archive`).
     archive: str | None = None
+    # A fork's upstream and the upstream commit its branch starts from:
+    # `ref` is that commit and the patches in `patches/<name>/`.
+    upstream: str | None = None
+    upstream_rev: str | None = None
 
 
 # What the fork's commits past its release tag may change: its Rust and its
@@ -151,7 +160,7 @@ PAST_PREBUILT = re.compile(r"\.github/.*|.*\.(rs|md)")
 
 
 def third_party_pins() -> dict[str, Pin]:
-    """Each project in `../third_party`. parley's and WPT's from
+    """Each project in `../third_party`. The forks', elise's and WPT's from
     `third_party.toml`; rusty_v8's repository and release tag from
     `RUSTY_V8_MIRROR` and `RUSTY_V8_MIRROR_TAG` in `.cargo/config.toml`, so
     its source matches the prebuilt V8, and its commit from
@@ -163,7 +172,14 @@ def third_party_pins() -> dict[str, Pin]:
     pins = tomllib.loads((ROOT / "third_party.toml").read_text(encoding="utf-8"))
     rusty_v8 = pins.pop("rusty_v8", {})
     result = {
-        name: Pin(pin["repository"], pin["rev"], byte_exact=pin.get("byte_exact", False), archive=pin.get("archive"))
+        name: Pin(
+            pin["repository"],
+            pin["rev"],
+            byte_exact=pin.get("byte_exact", False),
+            archive=pin.get("archive"),
+            upstream=pin.get("upstream"),
+            upstream_rev=pin.get("upstream_rev"),
+        )
         for name, pin in pins.items()
     }
     config = (ROOT / ".cargo" / "config.toml").read_text(encoding="utf-8")
@@ -344,6 +360,145 @@ def origin_has(path: Path, commit: str) -> bool:
         return subprocess.run(fetch, cwd=empty, capture_output=True).returncode == 0
 
 
+# `git format-patch`'s options, and the configuration that would change its
+# output otherwise: the same commits give the same files on every machine
+# and every time, so a patch that didn't change shows no diff. Not numbered
+# (`[PATCH]`): a commit added doesn't change every subject. Full blob ids:
+# abbreviated ones grow with the repository (a shallow checkout's and a
+# whole one's differ). Binary files (fonts) are binary diffs, as
+# `format-patch` gives them unasked.
+FORMAT_PATCH = [
+    "-c", "diff.noprefix=false",
+    "-c", "diff.mnemonicPrefix=false",
+    "-c", "diff.algorithm=myers",
+    "-c", "diff.renames=true",
+    "-c", "core.quotePath=true",
+    "format-patch", "--quiet", "--zero-commit", "--no-signature", "--no-numbered",
+    "--full-index", "--no-color",
+]  # fmt: skip
+
+
+def patch_files(directory: Path) -> list[Path]:
+    """The patches in `directory`, in the order they apply."""
+    return sorted(directory.glob("*.patch")) if directory.is_dir() else []
+
+
+def has_commit(path: Path, commit: str) -> bool:
+    return subprocess.run(["git", "cat-file", "-e", f"{commit}^{{commit}}"], cwd=path, capture_output=True).returncode == 0
+
+
+def fetch_commit(path: Path, commit: str) -> None:
+    """`commit` from `origin` into the checkout at `path`, shallowly into a
+    shallow one. A fork on GitHub has its upstream's commits."""
+    shallow = git(path, "rev-parse", "--is-shallow-repository") == "true"
+    git(path, "fetch", "--quiet", *(["--depth", "1"] if shallow else []), "origin", commit)
+
+
+def shown(directory: Path) -> str:
+    return directory.relative_to(ROOT).as_posix() if directory.is_relative_to(ROOT) else str(directory)
+
+
+def patched_tree(path: Path, base: str, patches: list[Path]) -> tuple[str | None, str | None]:
+    """The tree `patches` make of `base`'s, in a scratch index of the
+    checkout at `path` (its own index and files stay as they are), or the
+    patch that doesn't apply and why."""
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as scratch:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
+
+        def run(*args: str) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(["git", *args], cwd=path, env=env, capture_output=True, text=True)
+
+        read = run("read-tree", base)
+        if read.returncode != 0:
+            return None, f"couldn't read {base[:12]}'s tree: {read.stderr.strip()}"
+        for patch in patches:
+            applied = run("apply", "--cached", "--whitespace=nowarn", str(patch))
+            if applied.returncode != 0:
+                return None, f"{patch.name} doesn't apply: {applied.stderr.strip()}"
+        written = run("write-tree")
+        if written.returncode != 0:
+            return None, f"couldn't write the tree: {written.stderr.strip()}"
+        return written.stdout.strip(), None
+
+
+def patch_problems(name: str, path: Path, pin: Pin, directory: Path) -> list[str]:
+    """Why the patches in `directory` on `pin.upstream_rev` don't give
+    `pin.ref`'s tree, if they don't. The upstream commit is fetched from the
+    fork's `origin` when the checkout hasn't it."""
+    patches = patch_files(directory)
+    if not pin.upstream_rev:
+        if patches:
+            return [f"{name}: {shown(directory)} has patches, but third_party.toml gives {name} no upstream_rev"]
+        return []
+    again = f"export them again from the checkout with `python scripts/ci.py patches {name}`"
+    if not has_commit(path, pin.upstream_rev):
+        try:
+            fetch_commit(path, pin.upstream_rev)
+        except SystemExit as error:
+            return [f"{name}: couldn't fetch upstream_rev {pin.upstream_rev[:12]} into {path}: {error}"]
+    tree, why = patched_tree(path, pin.upstream_rev, patches)
+    if why:
+        return [f"{name}: in {shown(directory)}, {why}; {again}"]
+    want = git(path, "rev-parse", f"{pin.ref}^{{tree}}")
+    if tree != want:
+        changed = git(path, "diff-tree", "-r", "--name-only", tree, want).splitlines()
+        more = f" and {len(changed) - 3} more" if len(changed) > 3 else ""
+        return [
+            f"{name}: upstream_rev {pin.upstream_rev[:12]} and the patches in {shown(directory)} don't give "
+            f"{pin.ref[:12]}'s files ({', '.join(changed[:3])}{more} differ); {again}"
+        ]
+    return []
+
+
+def export_patches(path: Path, base: str, head: str, directory: Path) -> list[Path]:
+    """The commits from `base` to `head` in the checkout at `path`, one patch
+    each, in `directory` in place of the ones there. A shallow checkout is
+    deepened first: the commits between are needed."""
+    if git(path, "rev-parse", "--is-shallow-repository") == "true":
+        git(path, "fetch", "--quiet", "--unshallow", "origin", head)
+    if subprocess.run(["git", "merge-base", "--is-ancestor", base, head], cwd=path, capture_output=True).returncode != 0:
+        raise SystemExit(
+            f"{head[:12]} doesn't descend from upstream_rev {base[:12]}: "
+            "rebase the fork onto it, or move upstream_rev to the commit it is on"
+        )
+    for old in patch_files(directory):
+        old.unlink()
+    directory.mkdir(parents=True, exist_ok=True)
+    git(path, *FORMAT_PATCH, "--output-directory", str(directory), f"{base}..{head}")
+    return patch_files(directory)
+
+
+def cmd_patches(args: argparse.Namespace) -> int:
+    """Exports a fork's commits since its upstream (`upstream_rev`) to
+    `patches/<name>/`, from its checkout, which must be at the commit machopo
+    pins: move the pin first, so that the patches and the pin go in the same
+    change. Then checks them, as `third-party` does."""
+    name = args.name
+    pin = third_party_pins().get(name)
+    if not pin or not pin.upstream_rev:
+        print(f"{name}: third_party.toml gives it no upstream_rev")
+        return 1
+    path = THIRD_PARTY / name
+    want = git(path, "rev-parse", "--verify", "--quiet", f"{pin.ref}^{{commit}}", check=False)
+    head = git(path, "rev-parse", "HEAD")
+    if want != head:
+        print(
+            f"{name}: {path} is at {head[:12]}, but third_party.toml pins {pin.ref[:12]}: "
+            "move the pin to the commit to export, or check that one out"
+        )
+        return 1
+    if not has_commit(path, pin.upstream_rev):
+        fetch_commit(path, pin.upstream_rev)
+    directory = PATCHES / name
+    files = export_patches(path, pin.upstream_rev, head, directory)
+    problems = patch_problems(name, path, pin, directory)
+    for problem in problems:
+        print(problem)
+    if not problems:
+        print(f"{name}: {len(files)} patch{'' if len(files) == 1 else 'es'} in {shown(directory)}, which give {head[:12]}")
+    return 1 if problems else 0
+
+
 def cmd_third_party(args: argparse.Namespace) -> int:
     """Syncs each project in `../third_party` to the commit machopo builds
     against (`third_party.toml` as it is in the working tree, committed or
@@ -354,9 +509,10 @@ def cmd_third_party(args: argparse.Namespace) -> int:
     work and move machopo's pin to it, or put it aside. Then checks that a
     rusty_v8 commit past the release tag changes only what the prebuilt V8
     doesn't hold (the fork's Rust and docs), unless `RUSTY_V8_ARCHIVE` is
-    set: builds then link a V8 built locally from the checkout. Every
-    `test.py` command runs this first: each builds machopo, which builds the
-    forks by path."""
+    set: builds then link a V8 built locally from the checkout; and that a
+    fork with an `upstream_rev` is that commit and its patches in
+    `patches/<name>/` (`patch_problems`). Every `test.py` command runs this
+    first: each builds machopo, which builds the forks by path."""
     problems = []
     for name, pin in third_party_pins().items():
         ref = pin.ref
@@ -391,6 +547,7 @@ def cmd_third_party(args: argparse.Namespace) -> int:
             print(f"{name}: switching {path} from {head[:12]} to {want[:12]}")
             git(path, "checkout", "--quiet", "--detach", want)
             update_submodules(path, pin)
+        problems += patch_problems(name, path, pin, PATCHES / name)
         if want and pin.prebuilt_tag:
             if os.environ.get("RUSTY_V8_ARCHIVE"):
                 # Builds link a V8 built locally (`ci.py v8`) instead of the
@@ -412,7 +569,7 @@ def cmd_third_party(args: argparse.Namespace) -> int:
     for problem in problems:
         print(problem)
     if not problems:
-        print("third_party matches third_party.toml and RUSTY_V8_MIRROR_TAG")
+        print("third_party matches third_party.toml, its patches and RUSTY_V8_MIRROR_TAG")
     return 1 if problems else 0
 
 
@@ -538,6 +695,12 @@ def main() -> int:
         help="sync ../third_party to the commits machopo pins (our forks, WPT, Speedometer), leaving work of its own",
     )
     third_party.set_defaults(func=cmd_third_party)
+    patches = sub.add_parser(
+        "patches",
+        help="export a fork's commits since its upstream_rev to patches/NAME, from its checkout at the pinned commit",
+    )
+    patches.add_argument("name", help="the fork, as third_party.toml names it (taffy, parley)")
+    patches.set_defaults(func=cmd_patches)
     guests = sub.add_parser("guests", help="rebuild dom_wasm's test guests (C) with wasi-sdk and wit-bindgen")
     guests.set_defaults(func=cmd_guests)
 

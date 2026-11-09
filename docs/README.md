@@ -17,7 +17,7 @@
 | `rfcs/pre-rfcs/` | MVP 時期的規劃、各階段的設計和進度。2026-10-04 起凍結，不再更新內容（見它的 README）；它的路徑和測試指令是當時的樣子，`sanity.py docs` 不檢查，只剩壞掉的章節引用要修 | 任何新的東西 |
 | `crates/*/README.md` | 那個 crate 的 API、使用規則、怎麼修改、測試怎麼跑；各子系統怎麼運作也寫在這裡。`crates/shell/README.md` 另外放視窗裡的鍵盤和滑鼠操作 | 進度 |
 | `crates/bindings/soundness.md` | `bindings` 的安全論證（DOM 的 GC 的在 elise 的 `docs/`）：假設、不變式、找到的漏洞、mutation test、人工審查清單 | API 教學 |
-| `../third_party/*/README.machopo.md` | 放在 machopo 旁邊、各自是 git repo 的第三方專案裡，上游的 fork（`machopo` 分支；`../third_party/wpt` 是上游本身、不改，沒有這個檔，見 `tests/wpt/README.md`）：上游和分支的起點、為什麼 fork、本地的修改（`machopo` 分支上的 commit）、怎麼更新。用英文 | 設計理由（寫在對應的 RFC） |
+| `../third_party/*/README.machopo.md` | 放在 machopo 旁邊、各自是 git repo 的第三方專案裡，上游的 fork（`machopo` 分支；`../third_party/wpt` 是上游本身、不改，沒有這個檔，見 `tests/wpt/README.md`）：上游和分支的起點、為什麼 fork、本地的修改（`machopo` 分支上的 commit；parley 和 taffy 的另外標明上游的狀態，每個也是 machopo 的 `patches/<名稱>/` 底下的 patch）、怎麼更新。用英文 | 設計理由（寫在對應的 RFC） |
 | repo 根目錄的 `README.md` | 入口，英文：這是什麼、從哪幾份文件讀起、怎麼放第三方的專案、怎麼 build 和跑、常用的測試指令、哪些部分用哪一種授權（條文在 `LICENSE-MIT`、`LICENSE-APACHE`） | 設計、細節（寫在各自的文件） |
 | repo 根目錄的 `CLAUDE.md` | 給 AI 助手的工作約定：先讀哪些文件、怎麼做決定、不要做的事、完成前要跑的檢查、fork 的規則。內容盡量指向其他文件；在 repo 裡，`sanity.py docs` 也檢查它（它寫到的 `../third_party/rusty_v8_artifacts` 是 `ci.py v8` 在本機產生的，不算錯） | 設計、進度、規則的完整內容（寫在它指向的文件裡） |
 | `tests/*/README.md`、`resources/*/README.md` | 測試和資源的格式、來源、固定的 commit、license、怎麼更新 | 結果統計以外的進度 |
@@ -89,7 +89,7 @@ RFC 的「分階段」裡的一步（或再細分的一段）做完時。那份 
 
 - **調整 Rust 版本**：`rust-toolchain.toml` 和 workspace 的 `rust-version` 一起調；elise 釘著同樣的版本，一起調（它的 compile-fail 預期輸出用 `TRYBUILD=overwrite` 重新產生，並檢查 diff）。釘住 toolchain，測的就是 `rust-version` 宣稱支援的版本（只寫 `rust-version`、實際用 rustup 預設的 nightly 編，最低版本就從來沒驗證過）；compile-fail 的預期輸出要確認每個檔案的錯誤種類和位置沒變，只有措辭和排版不同。
 - **升級 `v8` crate**：先把 `../third_party/rusty_v8` 的 `machopo` 分支 rebase 到新的版本（見它的 `README.machopo.md`），跑 `python scripts/ci.py v8` 在本機重編 V8、設 `RUSTY_V8_ARCHIVE` 測過，再照 `crates/bindings/soundness.md` 的「需要人工審查的地方」重新確認假設；最後在 fork 推新的 release tag，把 `.cargo/config.toml` 的 `RUSTY_V8_MIRROR_TAG` 換過去、拿掉 `third_party.toml` 的 `[rusty_v8]` 的 `rev`，跑 `python scripts/ci.py third-party` 確認 `../third_party/rusty_v8` 在同一個 tag。
-- **更新 parley 的 fork**：在 `../third_party/parley` 的 `machopo` 分支 commit 並 push，在同一次改動裡把 `third_party.toml` 的 `rev` 換成那個 commit（只改 `README.machopo.md` 的也一樣），先 push fork 再 push machopo。別台機器的 `ci.py third-party` 只拿得到 push 過的 commit。
+- **更新 parley 或 taffy 的 fork**：在 `../third_party/parley` 或 `../third_party/taffy` 的 `machopo` 分支 commit 並 push，在同一次改動裡把 `third_party.toml` 的 `rev` 換成那個 commit（只改 `README.machopo.md` 的也一樣；rebase 到上游的新 commit 時連同 `upstream_rev`），用 `python3 scripts/ci.py patches <名稱>` 重新匯出 `patches/<名稱>/`，先 push fork 再 push machopo。別台機器的 `ci.py third-party` 只拿得到 push 過的 commit，也檢查 patch 和 `rev` 一致。fork 的 `README.machopo.md` 的「Local modifications」跟著改，連同上游的狀態。
 - **rusty_v8 的 fork 只改了 Rust**（`.rs`，和 `.md`、`.github/` 的 CI 設定）：不用發新的 release，在 `machopo` 分支 commit 並 push，把 `third_party.toml` 的 `[rusty_v8]` 的 `rev` 換成那個 commit，跑 `python scripts/ci.py third-party` 確認 tag 之後沒有改到 prebuilt 裡的東西。動到 C++、`Cargo.toml` 或 `v8` submodule 時照上一條發新的 release；release 之前可以先在本機 commit、`rev` 指過去，設 `RUSTY_V8_ARCHIVE` 連結本機編的 V8（`ci.py third-party` 這時不檢查 prebuilt），發 release 時換 tag、拿掉 `rev`。
 - **換 WPT 的 commit、加跑 WPT 的測試**：照 `tests/wpt/README.md` 的「Updating」做（commit 在 `third_party.toml`），並更新那裡的 commit 和數字。
 - **新增或拿掉 crate、thread，改了 crate 之間的分工**：更新 `docs/architecture.md`。

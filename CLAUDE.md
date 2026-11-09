@@ -29,7 +29,7 @@
 - **不要 commit 或 push**，除非被要求；由人審核之後自己 commit。
 - **commit message 不要加 `Co-Authored-By`**（或其他署名 AI 的 trailer，例如 `Claude-Session`）：只寫改了什麼、為什麼。
 - **RFC 的實作不要做在 `main` 上**：在以編號命名的 branch（例如 `0013`）上做，RFC 完成、或「分階段」的一個階段做完並經過審核時才 merge 回 `main`，一律 fast-forward（先 `git fetch origin`、確認本地的 `main` 和 `origin/main` 一致，再 rebase 到最新的 `main`，再 `git merge --ff-only`，見 `rfcs/README.md` 的「流程」）；merge 也要等人要求。
-- **不要對上游開 issue、PR 或留言**（rusty_v8、parley、web-platform-tests、html5ever……）：要回報的事先在本地寫好草稿，給人審核。
+- **不要對上游開 issue、PR 或留言**（rusty_v8、parley、taffy、web-platform-tests、html5ever……）：要回報的事先在本地寫好草稿，給人審核。
 - 跑 mutation test 的期間，實作檔案會暫時被改壞：先告訴對方不要 stage 或 commit，跑完確認檔案都還原了。
 - 這個目錄可能有別人的未提交變更：開始前看 `git status`，不是你改的不要動、不要還原。
 
@@ -83,11 +83,13 @@
 
 ## 第三方的 fork
 
-- `../third_party/rusty_v8`、`../third_party/parley` 和 `../third_party/wasmtime` 是我們的 fork，用 `machopo` 分支；`../third_party/rusty_v8_artifacts` 是編好的 V8，大家共用。
+- `../third_party/rusty_v8`、`../third_party/parley`、`../third_party/taffy` 和 `../third_party/wasmtime` 是我們的 fork，用 `machopo` 分支；`../third_party/rusty_v8_artifacts` 是編好的 V8，大家共用。
+- **parley 和 taffy 緊跟上游的 main，上游優先**：fork 上每個 commit 只做一件事、帶 fork 自己的測試，寫成可以直接送上游的樣子，在 `README.machopo.md` 的「Local modifications」標明上游的狀態（只在 fork 的寫理由）。`README.machopo.md` 是最後一個、只改它的 commit。每個 commit 也是 machopo 的 `patches/<名稱>/` 底下的一個 patch：fork 每多一個 commit，在同一次改動裡更新 `third_party.toml` 的 `rev`（rebase 到上游的新 commit 時連同 `upstream_rev`），再用 `python3 scripts/ci.py patches <名稱>` 匯出；`ci.py third-party` 檢查 patch 套在 `upstream_rev` 上和 `rev` 一樣。rebase 之前在舊的頂端打 tag（`machopo-<日期>`），machopo 舊的 commit 釘的 rev 才拿得到。
+- **改 parley 或 taffy 的 fork 時，跑 fork 的測試**（它的 `README.machopo.md` 的「Tests」）和 machopo 相關的測試。taffy 沒有釘 toolchain，用 machopo 的編；要送上游的修改守住 taffy 的 `rust-version`，送出前用那個版本確認。
 - `../third_party/elise` 是 DOM 的 GC，machopo 自己的專案（MIT OR Apache-2.0，wasmtime 的 fork 也用它），不是 fork，用 `main`：改 GC 在那裡改，照 `../third_party/elise/docs/contributing.md`，跑它的 `cargo test --workspace`、`scripts/sanity.py` 和改到的部分的 `scripts/test.py`（models、fuzz、verus、miri），GC 自己的測試的缺口記在它的 `docs/testing.md`。**它每多一個 commit 也在同一次改動裡更新 `third_party.toml`**（下面的規則），只釘推到它的 `main` 上的 commit（它的 CI 測過的）。
 - **改 wasmtime 的 fork，或改 elise 的 `raw`（fork 接 elise 的那一層）時，跑 fork 的測試**（它的 `README.machopo.md` 的「Tests」：`cargo test --features gc-elise --test all elise::`、`python3 machopo/elise_tests.py` 和 clippy）：machopo 的 `dom_wasm` 只用到其中一部分（借 DOM 的 heap 的 Store），上游的 GC 測試、spec test 和 fuzz 用 elise 跑的結果只有 fork 的測試看得到，machopo 的 CI 不跑它們。
 - `../third_party/wpt` 是上游的 WPT，不是 fork，測試直接讀它：**不要改它**。要跑哪些測試、預期結果、怎麼換 commit，都在 `tests/wpt/`（見它的 README）。
-- **改 fork 要盡量小**，程式裡用 `machopo:` 註解標出來，並記在那個 fork 的 `README.machopo.md`（「Local modifications」）。fork 要用它自己 `rust-toolchain.toml` 釘住的版本也能編。
+- **改 fork 要盡量小**，程式裡用 `machopo:` 註解標出來，並記在那個 fork 的 `README.machopo.md`（「Local modifications」）。fork 要用它自己 `rust-toolchain.toml` 釘住的版本也能編（有釘的話）。
 - **fork 每多一個 commit（只改 `README.machopo.md` 的也算），就在同一次改動裡更新 machopo 的 `third_party.toml`**，先 push fork、再 push machopo：每台機器的 `python3 scripts/ci.py third-party`（`test.py` 的每個指令開始前也跑）把 `../third_party` 同步到 machopo 釘的 commit，fork 和 pin 對不上時會停下。
 - **改了 rusty_v8 的 C++（`src/binding.cc` 等）或 V8 的設定，要重編 V8**（`python3 scripts/ci.py v8`：第一次約 40 分鐘，之後只重編改過的檔案），並告訴其他人：共用的 artifact 會跟著換。只改 Rust 的部分不用重編。
 

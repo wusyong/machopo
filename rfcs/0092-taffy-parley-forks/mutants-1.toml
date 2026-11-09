@@ -1,0 +1,123 @@
+# Mutation test of stage 1: `ci.py`'s fork patches, exported by `patches`
+# and checked by `third-party`:
+# python3 scripts/test.py mutate rfcs/0092-taffy-parley-forks/mutants-1.toml
+test = ["python3", "scripts/ci_patches_test.py"]
+timeout = 300
+
+# Exporting.
+
+[[mutant]]
+name = "the patches name their commits"
+file = "scripts/ci.py"
+from = '''"--quiet", "--zero-commit", "--no-signature",'''
+to = '''"--quiet", "--no-signature",'''
+
+[[mutant]]
+name = "the patches are signed"
+file = "scripts/ci.py"
+from = '''"--quiet", "--zero-commit", "--no-signature",'''
+to = '''"--quiet", "--zero-commit",'''
+
+[[mutant]]
+name = "the patches are numbered"
+file = "scripts/ci.py"
+from = '''"--no-signature", "--no-numbered",'''
+to = '''"--no-signature",'''
+
+[[mutant]]
+name = "blob ids are abbreviated"
+file = "scripts/ci.py"
+from = '''    "--full-index", "--no-color",'''
+to = '''    "--no-color",'''
+
+[[mutant]]
+name = "a shallow checkout isn't deepened to export"
+file = "scripts/ci.py"
+from = '''        git(path, "fetch", "--quiet", "--unshallow", "origin", head)'''
+to = '''        pass'''
+
+[[mutant]]
+name = "a fork not on upstream_rev is exported"
+file = "scripts/ci.py"
+from = '''    if subprocess.run(["git", "merge-base", "--is-ancestor", base, head], cwd=path, capture_output=True).returncode != 0:
+        raise SystemExit('''
+to = '''    if False:
+        raise SystemExit('''
+
+[[mutant]]
+name = "the old patches stay"
+file = "scripts/ci.py"
+from = '''    for old in patch_files(directory):
+        old.unlink()'''
+to = '''    for old in patch_files(directory):
+        pass'''
+
+[[mutant]]
+name = "the patches are taken in another order"
+file = "scripts/ci.py"
+from = '''    return sorted(directory.glob("*.patch")) if directory.is_dir() else []'''
+to = '''    return sorted(directory.glob("*.patch"), reverse=True) if directory.is_dir() else []'''
+
+# Checking.
+
+[[mutant]]
+name = "the check uses the checkout's own index"
+file = "scripts/ci.py"
+from = '''        env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / "index")}'''
+to = '''        env = {**os.environ}'''
+
+[[mutant]]
+name = "a patch that doesn't apply is passed over"
+file = "scripts/ci.py"
+from = '''            if applied.returncode != 0:
+                return None, f"{patch.name} doesn't apply: {applied.stderr.strip()}"'''
+to = '''            if False:
+                return None, f"{patch.name} doesn't apply: {applied.stderr.strip()}"'''
+
+[[mutant]]
+name = "the trees aren't compared"
+file = "scripts/ci.py"
+from = '''    if tree != want:
+        changed = git(path, "diff-tree", "-r", "--name-only", tree, want).splitlines()'''
+to = '''    if False:
+        changed = git(path, "diff-tree", "-r", "--name-only", tree, want).splitlines()'''
+
+[[mutant]]
+name = "upstream_rev isn't fetched into a shallow checkout"
+file = "scripts/ci.py"
+from = '''    if not has_commit(path, pin.upstream_rev):
+        try:
+            fetch_commit(path, pin.upstream_rev)'''
+to = '''    if False:
+        try:
+            fetch_commit(path, pin.upstream_rev)'''
+
+[[mutant]]
+name = "upstream_rev is fetched with its history"
+file = "scripts/ci.py"
+from = '''    git(path, "fetch", "--quiet", *(["--depth", "1"] if shallow else []), "origin", commit)'''
+to = '''    git(path, "fetch", "--quiet", "origin", commit)'''
+
+[[mutant]]
+name = "patches without an upstream_rev pass"
+file = "scripts/ci.py"
+from = '''        if patches:
+            return [f"{name}: {shown(directory)} has patches, but third_party.toml gives {name} no upstream_rev"]'''
+to = '''        if False:
+            return [f"{name}: {shown(directory)} has patches, but third_party.toml gives {name} no upstream_rev"]'''
+
+# The commands.
+
+[[mutant]]
+name = "third-party doesn't check the patches"
+file = "scripts/ci.py"
+from = '''        problems += patch_problems(name, path, pin, PATCHES / name)'''
+to = '''        pass'''
+
+[[mutant]]
+name = "patches exports from another commit than the pin"
+file = "scripts/ci.py"
+from = '''    if want != head:
+        print('''
+to = '''    if False:
+        print('''

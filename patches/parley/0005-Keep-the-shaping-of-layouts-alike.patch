@@ -1,0 +1,413 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wu <yuweiwu@pm.me>
+Date: Sun, 18 Oct 2026 01:17:37 +0900
+Subject: [PATCH] Keep the shaping of layouts alike
+
+LayoutContext keeps what shaping a layout's text gave (ShapeCache). The
+next layout reuses it when it has the same text, the same inline box
+positions and the same analysis (scripts, breaks, bidi levels), and is
+styled the same in what changes shaping: the font stack, size, width,
+style, weight, variations, features, locale, letter and word spacing.
+
+Its other styles (colors, line height, line breaking) may differ. Each
+character and shaped cluster takes the new layout's style index
+(ShapedText::set_style_indices).
+
+A browser shapes the same text again as content is built again, and
+alike text in alike elements. The cache holds up to 2^18 characters,
+then starts again.
+
+In a debug build every kept shaping is also shaped again and compared,
+with fonts compared by their data: a kept shaping holds the copy of a
+font file it was made with, and fontique loads a file again once nothing
+holds its copy.
+---
+ README.kun.md                          |   4 +-
+ parley/src/builder.rs                  |   2 +
+ parley/src/context.rs                  |   9 ++
+ parley/src/shape/cache.rs              | 198 +++++++++++++++++++++++++
+ parley/src/shape/mod.rs                |  60 +++++++-
+ parley_engine/src/shape/shaped_text.rs |  16 ++
+ 6 files changed, 281 insertions(+), 8 deletions(-)
+ create mode 100644 parley/src/shape/cache.rs
+
+diff --git a/README.kun.md b/README.kun.md
+index a4119a3d7dbe3373b2916d15de65fe40732dfa38..23edc4a029197fc99a94111fad04abf29eaf94df 100644
+--- a/README.kun.md
++++ b/README.kun.md
+@@ -38,10 +38,12 @@ The commits on `kun` after upstream's:
+ | Don't let inline box edges size the line | A `KeepWithNext` or `KeepWithPrevious` box (an inline's edge) takes up its width but adds nothing to the line's height, as an out-of-flow box doesn't. Upstream counts every in-flow box, so a 0px edge on the baseline made a line taller whenever the text's descent plus half-leading was negative (a `line-height` smaller than the font's), which WPT's `line-height-125` caught. |
+ | Wrap an atomic inline as the span it is in does | The line breaker and the min/max-content measurer only set the current `text-wrap-mode` from text, so an inline box first on a line (or in a layout) used the default, `Wrap`: in a `nowrap` span the line broke after it (WPT's `css/css-overflow/text-overflow-009.html`). An `Auto` box now takes the mode of its parent style (`parent_style_index`) before its opportunities are decided. A `KeepWithNext` or `KeepWithPrevious` box (an inline's edge) doesn't: the opportunity next to it belongs to the content beside it (WPT's `css/CSS2/linebox/inline-formatting-context-012.xht`). Marked `kun:` in `layout/line_break.rs` and `layout/data.rs`. |
+ | Give a line break's hanging whitespace | `LineBreakData::hanging_advance`: the part of the line's `advance` that is whitespace hanging past its end, which `commit_line` works out already (`LineMetrics::hanging_advance`). kun breaks the lines beside floats one at a time, each in its own room, and moves a line down to where floats leave more room when its content doesn't fit: the `advance` alone counts the hanging space, so a line that fits looked too wide. Only known once the lines were all broken before, from the lines' metrics, so kun broke them all again; with floats in the lines placed into the block formatting context as each line is final, which can't take a float back, that no longer works. Marked `kun:` in `layout/line_break.rs`. |
++| Keep the shaping of layouts alike | `LayoutContext` keeps what shaping a layout's text gave (`shape/cache.rs`, `ShapeCache`), for the next layout with the same text, styled the same in what changes shaping (the font stack, size, width, style, weight, variations, features, locale, letter and word spacing), with its inline boxes at the same places and the same analysis (scripts, breaks, bidi levels); its other styles may differ, and each character and shaped cluster takes the new layout's style index (`ShapedText::set_style_indices` in `parley_engine`). A browser shapes the same text again as content is built again, and alike text in alike elements. Up to 2^18 characters, then it starts again. A kept shaping holds the copy of a font file it was made with (fontique loads a file again once nothing holds its copy, so two copies may be loaded). In a debug build every kept shaping is also shaped again and compared, fonts by their data (`same_shaping`). Marked `kun:` in `shape/mod.rs`, `shape/cache.rs`, `context.rs`, `builder.rs` and `parley_engine`'s `shape/shaped_text.rs`. |
+ | Add README.kun.md | This file. |
+ 
+ Their tests are in kun: `cargo test -p layout --test it parley_inline_box::`,
+-and for `hanging_advance` `float::` (the lines beside floats).
++for `hanging_advance` `float::` (the lines beside floats), and for the
++kept shapings `shaping::` (and every layout test, in a debug build).
+ Each part of the changes was removed in turn to check that a test fails.
+ 
+ The vendored copy also trimmed the workspace (no `parley_dev`, upstream's
+diff --git a/parley/src/builder.rs b/parley/src/builder.rs
+index c046574784f3c35ad2acb2a99fe3f1d89c9278d8..8d87f48f53adc31512995cc9d9ea8b12849cccf1 100644
+--- a/parley/src/builder.rs
++++ b/parley/src/builder.rs
+@@ -390,6 +390,8 @@ fn build_into_layout<B: Brush>(
+             text,
+             layout,
+             &lcx.analysis_data_sources,
++            // kun: the shapings kept.
++            &mut lcx.shape_cache,
+         );
+     }
+ 
+diff --git a/parley/src/context.rs b/parley/src/context.rs
+index 9aa2c89615ed20257ab81413a8532aad4351997f..cc0a3230dcf35c45525bbed66794f96238cf5b71 100644
+--- a/parley/src/context.rs
++++ b/parley/src/context.rs
+@@ -40,6 +40,8 @@ pub struct LayoutContext<B: Brush = [u8; 4]> {
+     /// Style index for each character, parallel to [`Analysis::char_info`].
+     pub(crate) char_style_indices: Vec<u16>,
+     pub(crate) scx: Shaper,
++    // kun: shapings kept for layouts alike.
++    pub(crate) shape_cache: super::shape::ShapeCache,
+ 
+     // Unicode analysis data sources (provided by icu)
+     pub(crate) analysis_data_sources: AnalysisDataSources,
+@@ -61,9 +63,16 @@ impl<B: Brush> LayoutContext<B> {
+             char_style_indices: vec![],
+             analysis_data_sources: AnalysisDataSources::new(),
+             scx: Shaper::default(),
++            shape_cache: super::shape::ShapeCache::default(),
+         }
+     }
+ 
++    // kun: how many layouts took the shaping of one alike, for tests.
++    #[doc(hidden)]
++    pub fn shapings_reused(&self) -> usize {
++        self.shape_cache.reused
++    }
++
+     fn resolve_style_set(
+         &mut self,
+         font_ctx: &mut FontContext,
+diff --git a/parley/src/shape/cache.rs b/parley/src/shape/cache.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..7735e3acaf7cab520393b710ab172f9a8f8d4f81
+--- /dev/null
++++ b/parley/src/shape/cache.rs
+@@ -0,0 +1,198 @@
++// Copyright 2026 the Parley Authors
++// SPDX-License-Identifier: Apache-2.0 OR MIT
++
++//! kun: what shaping a layout's text gave, kept for the next layout with
++//! the same text, styled the same in what changes shaping, with its inline
++//! boxes in the same places and the same analysis: a browser shapes the
++//! same text again as content is built again, and alike text in alike
++//! elements (a list's items, a page's repeated parts). Its other styles
++//! (colors, decorations, line height, line breaking) may differ: each
++//! character takes the new layout's style.
++
++use alloc::boxed::Box;
++use alloc::vec::Vec;
++use core::hash::{BuildHasher, Hash, Hasher};
++
++use fontique::{FamilyId, FontStyle, FontWeight, FontWidth};
++use hashbrown::HashMap;
++use parlance::BidiLevel;
++use parley_engine::{Analysis, CharInfo, ShapedText};
++
++use super::super::resolve::{ResolveContext, ResolvedStyle};
++use super::super::style::{Brush, FontFeature, FontVariation};
++use crate::inline_box::LayoutInlineBox;
++
++/// How many characters of shaped text the cache keeps before it starts
++/// again.
++const CHARACTERS: usize = 1 << 18;
++
++/// Shaped texts by what they were shaped with.
++#[derive(Default)]
++pub(crate) struct ShapeCache {
++    entries: HashMap<u64, Vec<Entry>>,
++    characters: usize,
++    /// How many layouts took a kept shaping (for tests).
++    pub(crate) reused: usize,
++}
++
++/// What shaping a text depends on but the text.
++#[derive(Clone, PartialEq)]
++struct RunStyle {
++    families: Vec<FamilyId>,
++    font_size: u32,
++    font_width: FontWidth,
++    font_style: FontStyle,
++    font_weight: FontWeight,
++    variations: Vec<FontVariation>,
++    features: Vec<FontFeature>,
++    locale: Option<parlance::Language>,
++    letter_spacing: u32,
++    word_spacing: u32,
++}
++
++impl RunStyle {
++    fn of<B: Brush>(rcx: &ResolveContext, style: &ResolvedStyle<B>) -> Self {
++        Self {
++            families: rcx.stack(style.font_family).unwrap_or(&[]).to_vec(),
++            font_size: style.font_size.to_bits(),
++            font_width: style.font_width,
++            font_style: style.font_style,
++            font_weight: style.font_weight,
++            variations: rcx
++                .variations(style.font_variations)
++                .unwrap_or(&[])
++                .to_vec(),
++            features: rcx.features(style.font_features).unwrap_or(&[]).to_vec(),
++            locale: style.locale,
++            letter_spacing: style.letter_spacing.to_bits(),
++            word_spacing: style.word_spacing.to_bits(),
++        }
++    }
++}
++
++/// A layout's text and what its shaping depends on.
++struct Entry {
++    text: Box<str>,
++    /// Each run of characters styled alike: where it ends, and its style.
++    runs: Vec<(usize, RunStyle)>,
++    boxes: Vec<usize>,
++    char_info: Vec<CharInfo>,
++    bidi_levels: Vec<BidiLevel>,
++    paragraph_level: BidiLevel,
++    shaped: ShapedText,
++}
++
++/// What a layout is shaped with, as `shape_text` has it.
++pub(crate) struct Key<'a> {
++    text: &'a str,
++    runs: Vec<(usize, RunStyle)>,
++    boxes: Vec<usize>,
++    analysis: &'a Analysis,
++    hash: u64,
++}
++
++impl<'a> Key<'a> {
++    pub(crate) fn new<B: Brush>(
++        rcx: &ResolveContext,
++        styles: &[ResolvedStyle<B>],
++        inline_boxes: &[LayoutInlineBox],
++        analysis: &'a Analysis,
++        char_style_indices: &[u16],
++        text: &'a str,
++        hasher: &impl BuildHasher,
++    ) -> Self {
++        let run_styles: Vec<RunStyle> = styles
++            .iter()
++            .map(|style| RunStyle::of(rcx, style))
++            .collect();
++        let mut runs: Vec<(usize, RunStyle)> = Vec::new();
++        for (i, &style_index) in char_style_indices.iter().enumerate() {
++            let style = &run_styles[usize::from(style_index)];
++            match runs.last_mut() {
++                Some((end, last)) if last == style => *end = i + 1,
++                _ => runs.push((i + 1, style.clone())),
++            }
++        }
++        let boxes: Vec<usize> = inline_boxes.iter().map(|b| b.inline_box.index).collect();
++        let mut state = hasher.build_hasher();
++        text.hash(&mut state);
++        boxes.hash(&mut state);
++        for (end, style) in &runs {
++            end.hash(&mut state);
++            style.families.hash(&mut state);
++            style.font_size.hash(&mut state);
++        }
++        Self {
++            text,
++            runs,
++            boxes,
++            analysis,
++            hash: state.finish(),
++        }
++    }
++}
++
++impl Entry {
++    fn matches(&self, key: &Key<'_>) -> bool {
++        &*self.text == key.text
++            && self.boxes == key.boxes
++            && self.runs == key.runs
++            && self.char_info == key.analysis.char_info()
++            && self.bidi_levels == key.analysis.bidi_levels()
++            && self.paragraph_level == key.analysis.paragraph_level()
++    }
++}
++
++impl ShapeCache {
++    /// The hasher keys are made with.
++    pub(crate) fn hasher(&self) -> &impl BuildHasher {
++        self.entries.hasher()
++    }
++
++    /// The shaping kept for `key`, if any.
++    pub(crate) fn get(&self, key: &Key<'_>) -> Option<&ShapedText> {
++        self.entries
++            .get(&key.hash)?
++            .iter()
++            .find(|entry| entry.matches(key))
++            .map(|entry| &entry.shaped)
++    }
++
++    /// Keeps `shaped`, what shaping `key` gave.
++    pub(crate) fn insert(&mut self, key: Key<'_>, shaped: &ShapedText) {
++        let characters = key.analysis.char_info().len();
++        if self.characters + characters > CHARACTERS {
++            self.entries.clear();
++            self.characters = 0;
++        }
++        self.characters += characters;
++        self.entries.entry(key.hash).or_default().push(Entry {
++            text: key.text.into(),
++            runs: key.runs,
++            boxes: key.boxes,
++            char_info: key.analysis.char_info().to_vec(),
++            bidi_levels: key.analysis.bidi_levels().to_vec(),
++            paragraph_level: key.analysis.paragraph_level(),
++            shaped: shaped.clone(),
++        });
++    }
++}
++
++/// Whether shapings `a` and `b` are the same, but for which loaded copy of
++/// a font file each holds: fontique loads a file again once nothing holds
++/// the copy it had, and a kept shaping holds the copy it was made with.
++#[cfg(debug_assertions)]
++pub(crate) fn same_shaping(a: &ShapedText, b: &ShapedText) -> bool {
++    a.runs() == b.runs()
++        && a.characters() == b.characters()
++        && a.shaped_clusters() == b.shaped_clusters()
++        && a.glyphs() == b.glyphs()
++        && a.normalized_coords() == b.normalized_coords()
++        && a.fonts().len() == b.fonts().len()
++        && a.fonts().iter().zip(b.fonts()).all(|(a, b)| {
++            let (data_a, data_b) = (a.font.data.data(), b.font.data.data());
++            a.font.index == b.font.index
++                && a.synthesis == b.synthesis
++                && (core::ptr::eq(data_a, data_b) || data_a == data_b)
++        })
++}
+diff --git a/parley/src/shape/mod.rs b/parley/src/shape/mod.rs
+index 42d827819d14105da92b9246fa4796f700b09a52..407c33725360eaf994469d575c598c0b930a5654 100644
+--- a/parley/src/shape/mod.rs
++++ b/parley/src/shape/mod.rs
+@@ -4,6 +4,10 @@
+ //! Text shaping implementation using `harfrust`for shaping
+ //! and `icu` for text analysis.
+ 
++// kun: shapings kept for layouts alike.
++mod cache;
++pub(crate) use cache::ShapeCache;
++
+ use alloc::vec::Vec;
+ use parley_engine::shape::{CharCluster, Coverage};
+ use parley_engine::{
+@@ -54,6 +58,8 @@ pub(crate) fn shape_text<'a, B: Brush>(
+     mut text: &str,
+     layout: &mut Layout<B>,
+     analysis_data_sources: &AnalysisDataSources,
++    // kun: the shapings kept (`cache`).
++    cache: &mut ShapeCache,
+ ) {
+     // If we have both empty text and no inline boxes, shape with a fake space
+     // to generate metrics that can be used to size a cursor.
+@@ -179,16 +185,56 @@ pub(crate) fn shape_text<'a, B: Brush>(
+         })
+     };
+ 
+-    let font_selector = FontSelector::new(&mut fq, rcx, styles, analysis_data_sources);
+-
+-    scx.shape_text(
+-        text,
++    // kun: the shaping of a layout with the same text, styled the same in
++    // what changes shaping, if one was kept; each character takes this
++    // layout's style.
++    let key = cache::Key::new(
++        rcx,
++        styles,
++        inline_boxes,
+         analysis,
+         char_style_indices,
+-        items,
+-        font_selector,
+-        &mut layout.data.shaped_text,
++        text,
++        cache.hasher(),
+     );
++    if let Some(shaped) = cache.get(&key) {
++        layout.data.shaped_text.clone_from(shaped);
++        layout
++            .data
++            .shaped_text
++            .set_style_indices(char_style_indices);
++        cache.reused += 1;
++        // What shaping it again gives.
++        #[cfg(debug_assertions)]
++        {
++            let mut fresh = parley_engine::ShapedText::new();
++            let font_selector = FontSelector::new(&mut fq, rcx, styles, analysis_data_sources);
++            scx.shape_text(
++                text,
++                analysis,
++                char_style_indices,
++                items,
++                font_selector,
++                &mut fresh,
++            );
++            debug_assert!(
++                cache::same_shaping(&fresh, &layout.data.shaped_text),
++                "a kept shaping is what shaping gives"
++            );
++        }
++    } else {
++        let font_selector = FontSelector::new(&mut fq, rcx, styles, analysis_data_sources);
++
++        scx.shape_text(
++            text,
++            analysis,
++            char_style_indices,
++            items,
++            font_selector,
++            &mut layout.data.shaped_text,
++        );
++        cache.insert(key, &layout.data.shaped_text);
++    }
+ 
+     let mut inline_box_iter = inline_boxes
+         .iter()
+diff --git a/parley_engine/src/shape/shaped_text.rs b/parley_engine/src/shape/shaped_text.rs
+index 45b438cd1f2277123890fea0e54119f78f60e1b8..7a499c9ed1114281a9a8b6ed935ce3b3ca6293fc 100644
+--- a/parley_engine/src/shape/shaped_text.rs
++++ b/parley_engine/src/shape/shaped_text.rs
+@@ -219,6 +219,22 @@ impl ShapedText {
+         }
+     }
+ 
++    // kun: for a layout that takes the shaping of another with the same
++    // text, styled otherwise in what doesn't change shaping (only its
++    // colors, say): each character takes this one's style, and each shaped
++    // cluster its first character's, as shaping gives them.
++    #[doc(hidden)]
++    pub fn set_style_indices(&mut self, style_indices: &[u16]) {
++        for (character, &style_index) in self.characters.iter_mut().zip(style_indices) {
++            character.style_index = style_index;
++        }
++        for shaped_cluster in self.shaped_clusters.iter_mut() {
++            if let Some(character) = self.characters.get(shaped_cluster.chars_range.0 as usize) {
++                shaped_cluster.style_index = character.style_index;
++            }
++        }
++    }
++
+     /// The character data of the text, in logical order.
+     ///
+     /// [`ShapedRun::characters_range`] indexes into this. The nth [`Character`] corresponds exactly

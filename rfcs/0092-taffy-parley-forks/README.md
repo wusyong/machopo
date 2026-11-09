@@ -1,7 +1,7 @@
 # RFC 0092：taffy 和 parley 的 fork：跟著上游、修改留成 patch、減少 workaround 的成本
 
 - 開始日期：2026-11-10
-- 狀態：👍 已接受：2026-11-10
+- 狀態：🚧 已排程：2026-11-10（第 1 段完成；進度見 `progress.md`）
 - 細節：`details.md`（workaround 的清單和成本、parley fork 現在的 commit、上游 2026-09-30 之後的變化和進行中的 PR、patch 檔的幾種放法）
 
 ## 摘要
@@ -136,10 +136,18 @@ machopo 這邊只處理一種 workaround：繞在函式庫外面、因此有實�
 7. **成本用計數驗收**（2026-11-10）：照 `docs/benchmarks.md`，不排 Speedometer 的量測。
 8. **一份 RFC**（2026-11-10）：fork 的規則和清單是共用的。第 5 段的字型家族如果變大，再拆出去。
 
+第 1 段（2026-11-10 確認）：
+
+9. **patch 放在 repo 根目錄的 `patches/<名稱>/`**（2026-11-10）：和 `third_party.toml` 放在一起。不選 `third_party/patches/`：machopo 現在沒有 `third_party/`，加一個容易和旁邊的 `../third_party` 搞混。Chromium 的 patch 放在每個依賴自己的資料夾底下（例如 `third_party/icu/patches/`）；machopo 的依賴不在 repo 裡，所以集中放一個資料夾。
+10. **上游的起點記在 `third_party.toml`**（2026-11-10）：有 patch 的 pin 多兩個欄位，`upstream`（上游的 repo）和 `upstream_rev`（起點的 commit）。不選在 patch 的資料夾放一個記起點的檔案：pin 分在兩個地方。
+11. **`ci.py patches <名稱>` 匯出，`ci.py third-party` 每次檢查**（2026-11-10）：匯出用 `git format-patch --zero-commit --no-signature`，沒改的 patch 重新匯出時不變。檢查在暫時的 index 上把 patch 套到 `upstream_rev` 的樹上，和 fork 的 rev 的樹比；`test.py` 的每個指令都先跑它，CI 也一樣。不選單獨的 `ci.py patches --check`：會漏跑。升級的輔助指令先不做：在 fork 上 rebase 再匯出就夠了。
+12. **parley 在第 1 段就匯出現在的 16 個 commit**（2026-11-10）：第 3 段重寫之後，machopo 的審核看得到重寫前後的 patch 的 diff，重寫前的樣子也留在 machopo 的歷史裡。不選等第 3 段：少匯出一次，但看不到重寫前後的差別。
+13. **`README.machopo.md` 留在 fork 裡，是最後一個、只改它的 commit**（2026-11-10）：所以也是最後一個 patch；其他 commit 不碰它，才能直接送上游。和現有的規則、wasmtime 和 rusty_v8 的做法一樣。不選搬到 machopo 的 `patches/<名稱>/`：要改文件的規則，在 GitHub 上看 fork 也看不到說明。parley 現在的 commit 都改了它，第 3 段重寫時照這條分開。
+14. **taffy 的 fork 用 machopo 釘的 toolchain 編，送上游的 patch 守住 taffy 的 `rust-version`（1.71）**（2026-11-10）：taffy 沒有 `rust-toolchain.toml`。只在送上游前用 1.71 確認一次（上游的 CI 也檢查），平常不裝舊的 toolchain。
+
 ## 待決定
 
 - **跟上游的頻率**：這份 RFC 的每段開始前一次；之後是每月一次、上游合了 machopo 需要的修改時，還是只在有需要時。做完第 4 段、知道一次 rebase 要多少工夫之後決定。
-- **patch 檔放在哪個資料夾、怎麼命名**：第 1 段決定（`details.md` 的「patch 檔的放法」）。
 - **parley 的 commit 怎麼合**：`details.md` 的「parley fork 的重寫」是建議的分組，rebase 到最新的 main 之後才知道衝突和上游的 API 改了多少。
 - **上游的 tab stop（#934）、軟連字號（#827）合併時**：改用上游的、在 machopo 這邊配合，還是保留 fork 的。看它們合併時的 API 和行為。
 - **字型家族的成本怎麼解**：machopo 自己快取、fork 加上接受解析好的 `FamilyId` 的 API，或等上游的 #943、#796。第 2 段的計數和第 3 段之後上游的狀態決定。

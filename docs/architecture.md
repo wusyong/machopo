@@ -149,8 +149,8 @@ canvas 的快照是沒有 mipmap 的雙線性，`<img>` 和背景有 mipmap；2D
 | `cssparser` | CSS tokenize / parse | 採用 | 只是 CSS Syntax 規範的實作，不帶架構 |
 | `selectors` | Selector matching | 採用 | Matching 函式庫，對架構影響很小 |
 | `svgtypes` | SVG 自己的 attribute 語法（`d` 的 path data、`transform` attribute 的 list） | 採用 | 只是語法；CSS 的值照樣由 `style` 解析，cascade 才一致。usvg、resvg 不用：它們把整份 SVG 一次轉成自己的樹再畫，和 DOM、layout 的增量更新對不上 |
-| `taffy` | Block / flex / grid layout | 採用 | 只有 layout 演算法；輸出轉成自己的 fragment tree |
-| `parley` | 文字 shaping 與排版 | 採用 | Shaping 用 HarfBuzz 系列，這點和 Blink 相同。用上游的 main 加上我們的修改：先是 vendor，2026-10-01 改成 fork 的 `machopo` 分支（machopo 旁邊的 `../third_party/parley`） |
+| `taffy` | Block / flex / grid layout | 採用（我們的 fork） | 只有 layout 演算法；輸出轉成自己的 fragment tree。原本用 crates.io 的版本；2026-11-10 起用我們的 fork（`../third_party/taffy` 的 `machopo` 分支，基底是上游的 v0.15.0），之後跟著上游的 main：上游修好的不用等發佈，machopo 要的修改先在 fork 裡做、送上游 |
+| `parley` | 文字 shaping 與排版 | 採用 | Shaping 用 HarfBuzz 系列，這點和 Blink 相同。用上游的 main 加上我們的修改：先是 vendor，2026-10-01 改成 fork 的 `machopo` 分支（machopo 旁邊的 `../third_party/parley`）。修改寫成可以送上游的樣子 |
 | `skia-safe` | Raster | 採用 | Chromium 本身就用 Skia，raster 模型完全一致；有 prebuilt binaries，不必自己 build Skia。之後可能換成 Vello 系列 |
 | `tiny-skia` | CPU raster | 不用 | 只用 Skia，raster 結果和 Chromium 一致；不維護第二個 backend |
 | `winit` + `wgpu` | 視窗與 present | 採用 | Viz 最後一步的輸出 |

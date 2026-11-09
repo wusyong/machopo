@@ -5,7 +5,9 @@
 # `python scripts/ci.py third-party` clones them there at these commits, or
 # checks that the existing checkouts match; a project with `archive` is the
 # folder of that path in the repository at `rev`, downloaded rather than
-# cloned.
+# cloned. A fork with `upstream_rev` is that upstream commit and the patches
+# in `patches/<name>/`, which `ci.py third-party` checks give `rev`'s tree
+# and `python scripts/ci.py patches <name>` exports from the checkout.
 #
 # rusty_v8's repository and release tag are `RUSTY_V8_MIRROR` and
 # `RUSTY_V8_MIRROR_TAG` in `.cargo/config.toml`: machopo links that release's
@@ -25,8 +27,19 @@ rev = "5c38af0828d403beeb7d09906ff6b97780330512"
 
 [parley]
 repository = "https://github.com/wusyong/parley"
-# The `machopo` branch.
+# The `machopo` branch: upstream's main at `upstream_rev` (2026-09-30) and
+# the commits in `patches/parley/`.
 rev = "cefcbc5d2bd6a05242bb94de1c01e9e9ea6ba5dd"
+upstream = "https://github.com/linebender/parley"
+upstream_rev = "97beea381d8afcaddf6b4c625b578e1a6cc60b7a"
+
+[taffy]
+repository = "https://github.com/wusyong/taffy"
+# The `machopo` branch: upstream's tag v0.15.0 at `upstream_rev` and the
+# commits in `patches/taffy/`.
+rev = "bfa9eda28bfb5facfc5f633fa7e706ecf15d64a4"
+upstream = "https://github.com/DioxusLabs/taffy"
+upstream_rev = "eb6450694f33e2b7413e40677f230ff63f0fc194"
 
 [wpt]
 # Upstream, not a fork: machopo never changes it. Its files must stay byte for

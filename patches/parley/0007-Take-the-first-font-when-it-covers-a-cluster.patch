@@ -1,0 +1,254 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wu <yuweiwu@pm.me>
+Date: Mon, 19 Oct 2026 08:57:59 +0900
+Subject: [PATCH] Take the first font when it covers a cluster
+
+FontSelector::select_font kept only whether the query yields a font with
+a charmap (query_yields_font), so every cluster ran the query again:
+fontique's family and attribute matching and each font's coverage. It
+keeps that font instead (first_font), cleared where the flag was (a new
+segment, a cluster of another family or emoji, other attributes), and a
+cluster it fully covers takes it without the query. A cluster it doesn't
+cover runs the query as before, so a missing glyph still falls back.
+
+In a debug build every cluster taking the first font also runs the
+query and checks it picks the same font: its data, index and synthesis.
+---
+ README.kun.md           |   4 +-
+ parley/src/shape/mod.rs | 140 ++++++++++++++++++++++++++--------------
+ 2 files changed, 95 insertions(+), 49 deletions(-)
+
+diff --git a/README.kun.md b/README.kun.md
+index 082fcf25155db85572fec33ae23ea0c68f63a1e1..c275f030be91cac11ec4f214e8dcc2c99fcf48bf 100644
+--- a/README.kun.md
++++ b/README.kun.md
+@@ -40,13 +40,15 @@ The commits on `kun` after upstream's:
+ | Give a line break's hanging whitespace | `LineBreakData::hanging_advance`: the part of the line's `advance` that is whitespace hanging past its end, which `commit_line` works out already (`LineMetrics::hanging_advance`). kun breaks the lines beside floats one at a time, each in its own room, and moves a line down to where floats leave more room when its content doesn't fit: the `advance` alone counts the hanging space, so a line that fits looked too wide. Only known once the lines were all broken before, from the lines' metrics, so kun broke them all again; with floats in the lines placed into the block formatting context as each line is final, which can't take a float back, that no longer works. Marked `kun:` in `layout/line_break.rs`. |
+ | Keep the shaping of layouts alike | `LayoutContext` keeps what shaping a layout's text gave (`shape/cache.rs`, `ShapeCache`), for the next layout with the same text, styled the same in what changes shaping (the font stack, size, width, style, weight, variations, features, locale, letter and word spacing), with its inline boxes at the same places and the same analysis (scripts, breaks, bidi levels); its other styles may differ, and each character and shaped cluster takes the new layout's style index (`ShapedText::set_style_indices` in `parley_engine`). A browser shapes the same text again as content is built again, and alike text in alike elements. Up to 2^18 characters, then it starts again. A kept shaping holds the copy of a font file it was made with (fontique loads a file again once nothing holds its copy, so two copies may be loaded). In a debug build every kept shaping is also shaped again and compared, fonts by their data (`same_shaping`). Marked `kun:` in `shape/mod.rs`, `shape/cache.rs`, `context.rs`, `builder.rs` and `parley_engine`'s `shape/shaped_text.rs`. |
+ | Make the line after a final break only where asked | `Layout::set_line_after_final_break`: whether the line after a forced break that ends the text (a newline last) is made. By default it is, as upstream has it: an editor puts the caret there. Made, it also counts in the layout's height: `finish_line` commits an empty run on it, so the height's check for an empty last line never sees one. CSS makes no line after the last forced break when nothing follows it (Blink's line breaker stops at the end of the content): `<div>a<br></div>` is one line tall, and Speedometer's Editor-CodeMirror (an empty line is `<div class="cm-line"><br></div>`) laid out one line less. kun makes it only in a text control's inner editor, where Blink adds a placeholder `<br>` to a value ending in a newline. Not made, the line is taken back once committed, before anything is yielded, so a caller breaking lines one at a time never sees it either. Marked `kun:` in `layout/line_break.rs`, `layout/data.rs` and `layout/layout.rs`. |
++| Take the first font when it covers a cluster | `FontSelector::select_font` remembers the first font its query yields with a charmap (`first_font`, where upstream remembers only whether there is one, `query_yields_font`), and forgets it where upstream did: a new segment (its fallbacks), other families (or an emoji cluster's), other attributes. When that font covers the cluster completely it is taken without the query: the query takes the first font that covers a cluster completely, and fonts without a charmap are skipped, so the answer is the same. Most clusters are in the first font, and the query went through the families and their fonts for each one (4% of Speedometer's Editor-TipTap in kun). Blink's `HarfBuzzShaper` shapes a run with its primary font first, too. The query is `best_font`, moved out of `select_font`, so that a debug build runs it again each time the first font is taken and checks it gives that font (data, index and synthesis). Taking a font without a charmap first fails no test in kun: none of its test fonts lacks one. Marked `kun:` in `shape/mod.rs`. |
+ | Add README.kun.md | This file. |
+ 
+ Their tests are in kun: `cargo test -p layout --test it parley_inline_box::`,
+ for `hanging_advance` `float::` (the lines beside floats), and for the
+ kept shapings `shaping::` (and every layout test, in a debug build);
+ for the line after a final break also `inline::a_final_forced_break_makes_no_line`
+-and `form_controls::a_text_areas_final_newline_has_a_line_after_it`.
++and `form_controls::a_text_areas_final_newline_has_a_line_after_it`;
++for the first font `font_selection::`.
+ Each part of the changes was removed in turn to check that a test fails.
+ 
+ The vendored copy also trimmed the workspace (no `parley_dev`, upstream's
+diff --git a/parley/src/shape/mod.rs b/parley/src/shape/mod.rs
+index 407c33725360eaf994469d575c598c0b930a5654..c620e9de69e70c4923707f34b5745909fcfeeb43 100644
+--- a/parley/src/shape/mod.rs
++++ b/parley/src/shape/mod.rs
+@@ -312,8 +312,10 @@ struct FontSelector<'a, 'b, B: Brush> {
+     variations: &'a [FontVariation],
+     features: &'a [FontFeature],
+ 
+-    /// Whether [`Self::query`] yields any font, cached.
+-    query_yields_font: Option<bool>,
++    /// The first font [`Self::query`] yields with a charmap, if any, cached.
++    ///
++    /// kun: upstream caches only whether there is one (`query_yields_font`).
++    first_font: Option<Option<QueryFont>>,
+ 
+     /// The font to use if [`Self::query`] doesn't return any font.
+     last_resort_font: LastResortFont,
+@@ -343,7 +345,7 @@ impl<'a, 'b, B: Brush> FontSelector<'a, 'b, B> {
+             attrs,
+             variations: &[],
+             features: &[],
+-            query_yields_font: None,
++            first_font: None,
+             last_resort_font: LastResortFont::Unresolved,
+ 
+             analysis_data_sources,
+@@ -361,7 +363,7 @@ impl<'a, 'b, B: Brush> parley_engine::FontSelector for FontSelector<'a, 'b, B> {
+             segment.script,
+             options.language.as_ref(),
+         ));
+-        self.query_yields_font = None;
++        self.first_font = None;
+     }
+ 
+     fn select_font(
+@@ -385,11 +387,11 @@ impl<'a, 'b, B: Brush> parley_engine::FontSelector for FontSelector<'a, 'b, B> {
+                 let emoji_family = QueryFamily::Generic(GenericFamily::Emoji);
+                 self.query.set_families(fonts.chain(once(emoji_family)));
+                 self.fonts_id = None;
+-                self.query_yields_font = None;
++                self.first_font = None;
+             } else if self.fonts_id != Some(fonts_id) {
+                 self.query.set_families(fonts);
+                 self.fonts_id = Some(fonts_id);
+-                self.query_yields_font = None;
++                self.first_font = None;
+             }
+ 
+             let attrs = fontique::Attributes {
+@@ -400,7 +402,7 @@ impl<'a, 'b, B: Brush> parley_engine::FontSelector for FontSelector<'a, 'b, B> {
+             if self.attrs != attrs {
+                 self.query.set_attributes(attrs);
+                 self.attrs = attrs;
+-                self.query_yields_font = None;
++                self.first_font = None;
+             }
+             self.variations = self.rcx.variations(style.font_variations).unwrap_or(&[]);
+             self.features = self.rcx.features(style.font_features).unwrap_or(&[]);
+@@ -412,19 +414,19 @@ impl<'a, 'b, B: Brush> parley_engine::FontSelector for FontSelector<'a, 'b, B> {
+         // this check and do the last-resort scan after the failed query:
+         // <https://blog.rust-lang.org/2026/08/04/enabling-polonius-alpha-on-nightly/>.
+         let query = &mut *self.query;
+-        let query_yields_font = *self.query_yields_font.get_or_insert_with(|| {
+-            let mut yields_font = false;
++        let first_font = self.first_font.get_or_insert_with(|| {
++            let mut first_font = None;
+             query.matches_with(|font| {
+                 if font.charmap().is_some() {
+-                    yields_font = true;
++                    first_font = Some(font.clone());
+                     fontique::QueryStatus::Stop
+                 } else {
+                     fontique::QueryStatus::Continue
+                 }
+             });
+-            yields_font
++            first_font
+         });
+-        if !query_yields_font {
++        if first_font.is_none() {
+             if matches!(self.last_resort_font, LastResortFont::Unresolved) {
+                 if let Some(font) = any_font(self.query) {
+                     self.last_resort_font = LastResortFont::Resolved(FontInstance {
+@@ -448,44 +450,38 @@ impl<'a, 'b, B: Brush> parley_engine::FontSelector for FontSelector<'a, 'b, B> {
+             };
+         }
+ 
+-        let mut selected_font = None;
+-        let mut best_coverage = Coverage::NONE;
+-
+-        self.query.matches_with(|font| {
+-            let Some(charmap) = font.charmap() else {
+-                return fontique::QueryStatus::Continue;
+-            };
+-
+-            let coverage = cluster.calculate_coverage(
+-                |ch| {
+-                    charmap
+-                        .map(ch)
+-                        .map(|g| {
+-                            // Any non-zero value indicates the existence of a glyph.
+-                            g != 0
+-                        })
+-                        .unwrap_or_default()
+-                },
+-                self.analysis_data_sources,
+-            );
+-            if coverage > best_coverage {
+-                selected_font = Some(font);
+-                best_coverage = coverage;
+-
+-                if coverage.is_complete() {
+-                    fontique::QueryStatus::Stop
+-                } else {
+-                    fontique::QueryStatus::Continue
+-                }
+-            } else {
+-                if selected_font.is_none() {
+-                    selected_font = Some(font);
+-                }
+-                fontique::QueryStatus::Continue
++        // kun: the query below picks the first font that covers the cluster completely, so when
++        // the first font with a charmap does, it is the answer: most clusters take it without
++        // going through the query (Blink shapes a run with its primary font first, too). A debug
++        // build checks it against the whole query.
++        if let Some(Some(first)) = &self.first_font
++            && let Some(charmap) = first.charmap()
++            && cluster
++                .calculate_coverage(
++                    |ch| charmap.map(ch).is_some_and(|g| g != 0),
++                    self.analysis_data_sources,
++                )
++                .is_complete()
++        {
++            #[cfg(debug_assertions)]
++            {
++                let queried = best_font(self.query, cluster, self.analysis_data_sources);
++                assert!(
++                    queried.is_some_and(|font| font.family == first.family
++                        && font.blob.id() == first.blob.id()
++                        && font.index == first.index
++                        && font.synthesis == first.synthesis),
++                    "the first font isn't the query's"
++                );
+             }
+-        });
++            return Some(FontInstanceRef {
++                data: &first.blob,
++                index: first.index,
++                synthesis: &first.synthesis,
++            });
++        }
+ 
+-        selected_font.map(|font| FontInstanceRef {
++        best_font(self.query, cluster, self.analysis_data_sources).map(|font| FontInstanceRef {
+             data: &font.blob,
+             index: font.index,
+             synthesis: &font.synthesis,
+@@ -493,6 +489,54 @@ impl<'a, 'b, B: Brush> parley_engine::FontSelector for FontSelector<'a, 'b, B> {
+     }
+ }
+ 
++// kun: the query's part of `select_font`, so that a debug build can run it again.
++/// The first font `query` yields that covers `cluster` completely, else the one that covers the
++/// most of it.
++fn best_font<'q>(
++    query: &'q mut Query<'_>,
++    cluster: &mut CharCluster,
++    analysis_data_sources: &AnalysisDataSources,
++) -> Option<&'q QueryFont> {
++    let mut selected_font = None;
++    let mut best_coverage = Coverage::NONE;
++
++    query.matches_with(|font| {
++        let Some(charmap) = font.charmap() else {
++            return fontique::QueryStatus::Continue;
++        };
++
++        let coverage = cluster.calculate_coverage(
++            |ch| {
++                charmap
++                    .map(ch)
++                    .map(|g| {
++                        // Any non-zero value indicates the existence of a glyph.
++                        g != 0
++                    })
++                    .unwrap_or_default()
++            },
++            analysis_data_sources,
++        );
++        if coverage > best_coverage {
++            selected_font = Some(font);
++            best_coverage = coverage;
++
++            if coverage.is_complete() {
++                fontique::QueryStatus::Stop
++            } else {
++                fontique::QueryStatus::Continue
++            }
++        } else {
++            if selected_font.is_none() {
++                selected_font = Some(font);
++            }
++            fontique::QueryStatus::Continue
++        }
++    });
++
++    selected_font
++}
++
+ /// Just query for any generic family's font from the font collection.
+ ///
+ /// This sets generic families on `query`, so callers need to make sure to set families back again.
