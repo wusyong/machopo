@@ -66,7 +66,7 @@ RFC 的「分階段」裡的一步（或再細分的一段）做完時。那份 
 
 依序做：
 
-1. **驗證**：在 `rust-toolchain.toml` 釘住的 toolchain 上跑 build、fmt、clippy、`cargo test --workspace`；整套的 `matrix`、`fuzz`、`wpt`、`wdspec`、`reftest`、`scenarios` 由每天的 CI 跑（`docs/testing.md` 的「CI」），動到 GC 的 RFC 在 merge 之後看 CI 的 `matrix`、`fuzz` 的結果，不在開發機上跑；動到 GC 或 `ComputedStyle` 時也跑 `python scripts/sanity.py unsafe`，動到 crate 的依賴或 V8 的程式時跑 `deps`。記下日期和平台。
+1. **驗證**：在 `rust-toolchain.toml` 釘住的 toolchain 上跑 build、fmt、clippy、`cargo test --workspace`；整套的 `wpt`、`wdspec`、`reftest`、`scenarios` 由每天的 CI 跑，`matrix`、`fuzz` 由每週的 CI 跑（`docs/testing.md` 的「CI」），動到 GC 的 RFC 在 merge 之後手動開始一次 `matrix`、`fuzz`、看它們的結果，不在開發機上跑；動到 GC 或 `ComputedStyle` 時也跑 `python scripts/sanity.py unsafe`，動到 crate 的依賴或 V8 的程式時跑 `deps`。記下日期和平台。
 2. **`progress.md`**：開頭寫上完成的日期和平台；把各步驟的段落**併成一段**：一份驗收表（依領域分組）、一份濃縮的「做過的檢查」。
 3. **RFC 改寫成完成時的樣子**（`rfcs/README.md` 的「流程」第 6 步）：狀態改成「已完成」；每一節直接描述最後的設計，把進行中追加的內容併進正文，拿掉已經不成立的中間狀態；保留設計決定的理由和踩過的坑；驗收結果指向 `progress.md`，限制寫在 `docs/limitations.md`。
 4. **`docs/` 的現況文件**：

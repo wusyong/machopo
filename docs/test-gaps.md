@@ -89,11 +89,11 @@
 
 | 項目 | 狀況 | 現在靠什麼 | 之後怎麼處理 |
 | --- | --- | --- | --- |
-| CI | 每天跑一次整套（`testing.md` 的「CI」），merge 不等它；沒有每次 push 跑的檢查，也沒有 CODEOWNERS | 開發機上照 `CLAUDE.md` 的清單跑改動相關的部分；Rust 的 `webdriver`、`automation_pipe` 測試跟著 `cargo test` | 每次 push 時跑一份快的（`cargo test --workspace`、`sanity.py`），merge 前等它；真視窗的情境（`test.py automation`：Fedora 的 runner 有 GPU，但 GitLab 的 shell executor 不開視窗，要 xvfb 或 headless 的 Wayland compositor，還沒試） |
+| CI | 整套每天跑一次，GC 的 `matrix`、`fuzz` 每週一次（`testing.md` 的「CI」），merge 不等它；CI 只在 Linux（x86-64）上跑，畫面只經過 lavapipe，沒有 GPU 的路；沒有 CODEOWNERS | 開發機上照 `CLAUDE.md` 的清單跑改動相關的部分；每次 push 跑 lint、`sanity.py` 和 Linux 的 `cargo test --workspace`（Rust 的 `webdriver`、`automation_pipe` 測試跟著它） | 之後加 Windows 的 `cargo test`、`reftest` 和 macOS（ARM64）的 `matrix`；真視窗的情境（`test.py automation`）：GitHub 的標準 runner 沒有 GPU 也沒有螢幕，要 xvfb 或 headless 的 Wayland compositor 加上 lavapipe，還沒試 |
 | TSan | 自己編 V8 之後做得到，但要另外的 V8 build 設定 | elise 的 heap verifier（`HeapOptions::verify`，每次 GC 之後走一遍 heap）抓不到只在特定記憶體順序下才出現的 race；cppgc 的 marking verifier（debug 的 V8 一律打開）只看 cppgc 上的物件，machopo 的不在那裡 | 之後（還沒排進任何階段）：DOM 的 heap 的 concurrent marking 已經是預設，marker 讀 `TracedReference`（C4）的記憶體順序的錯誤 stress 碰不上，目前只能靠審查 |
 | 效能的回歸 | 沒有自動的效能測試：優化（例如 style 照桶比對 selector）弄壞了，行為照樣對 | 多數的優化有計數的測試守著（`cargo test -p style --test it matching::few_selectors_are_matched` 數完整比對過的 selector）；沒有的列在下面的「沒有計數守著的優化」；時間只在使用者要求時量（`benchmarks.md`） | 補那裡的計數，大的先補；數字接近 Chrome 時，再考慮固定機器上的自動量測 |
 | Miri | 不能執行 FFI（V8 的 C++） | 審查；`crates/bindings/soundness.md` 開宗明義「這是論證，不是證明」 | 無計畫 |
-| 平常的 `cargo test` 沒有 V8 的 DCHECK | 平常連結 release 的 V8；用 debug 的 V8 跑全部測試的 `ci.py debug-v8` 2026-10-04 拿掉了，`browser`、`shell` 的端到端測試不再在 DCHECK 底下跑 | 每天的 CI 跑 `test.py matrix`、`fuzz`（`bindings`、`dom_js` 的測試，debug 的 V8）；2026-10-04 起動到這幾個 crate 的其他部分和階段驗收時不再必跑；兩種 V8 都沒開 `v8_enable_v8_checks`，V8 header 裡 inline API 的額外檢查都沒有 | — |
+| 平常的 `cargo test` 沒有 V8 的 DCHECK | 平常連結 release 的 V8；用 debug 的 V8 跑全部測試的 `ci.py debug-v8` 2026-10-04 拿掉了，`browser`、`shell` 的端到端測試不再在 DCHECK 底下跑 | 每週的 CI 跑 `test.py matrix`、`fuzz`（`bindings`、`dom_js` 的測試，debug 的 V8），動到 GC 時手動開始一次；2026-10-04 起動到這幾個 crate 的其他部分和階段驗收時不再必跑；兩種 V8 都沒開 `v8_enable_v8_checks`，V8 header 裡 inline API 的額外檢查都沒有 | — |
 | V8 的其他 stress 手段 | `--stress-marking` 在小 heap 上沒有作用；隨機延遲 task 要自訂 platform；JS heap 的 `--verify-heap` 只檢查 V8 自己的 JS 物件，而且它驗證每個新建的 `Global` 時要建立 handle，當時的 `dom` 在沒有 HandleScope 時建立 `Global`（V8 的 API 允許）就 abort，2026-10-05 試過後不用 | 無；cppgc 那一邊有 marking verifier | heap 變大時加回 `--stress-marking`（之後）；再考慮 `--verify-heap` 時，要先讓建立 `Global` 的地方都開 HandleScope |
 
 ## 能補、還沒補的測試空缺

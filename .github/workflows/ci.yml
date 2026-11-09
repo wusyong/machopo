@@ -1,0 +1,68 @@
+# Every push and pull request, and once a day (a new version of a
+# dependency can break what no commit changed): the lints, the repository's
+# checks and `cargo test --workspace`. The suites too slow for every push are
+# in nightly.yml.
+#
+# On GitHub's standard runners (4 CPUs, no GPU), pinned to one Ubuntu
+# release rather than `ubuntu-latest`: WPT's and the reftests' results
+# depend on the image's Mesa, and a new image shouldn't change them unseen.
+name: CI
+
+on:
+  push:
+  pull_request:
+  schedule:
+    # 02:17 UTC every day, off the hour, when GitHub's queue is busiest.
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+# A newer push to the same branch makes the older run moot.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # Every test binary links V8 statically, and the runner's disk and the
+  # cache are small: no debug info, not even line tables. Panic messages
+  # still give file and line (backtraces don't).
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      # `sanity.py docs` reads ../third_party too, so the setup syncs it.
+      - uses: ./.github/actions/setup
+        with:
+          cache: lint
+          save-cache: "true"
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: python3 scripts/sanity.py unsafe
+      - run: python3 scripts/sanity.py deps
+      - run: python3 scripts/sanity.py spans
+      - run: python3 scripts/sanity.py boundary
+      - run: python3 scripts/sanity.py tests
+      - run: python3 scripts/sanity.py numerics
+      - run: python3 scripts/sanity.py docs
+      - run: python3 scripts/sanity_numerics_test.py
+
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      # The cache nightly.yml's jobs that build machopo restore.
+      - uses: ./.github/actions/setup
+        with:
+          cache: linux-debug
+          save-cache: "true"
+          gpu: "true"
+          free-disk: "true"
+      # Every test binary, even after one fails.
+      - run: cargo test --workspace --no-fail-fast
+      - if: always()
+        run: df -h /

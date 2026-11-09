@@ -1,0 +1,58 @@
+# What every job does before it builds machopo: the pinned toolchain,
+# ../third_party at the commits machopo pins, and the build cache. Only for
+# the Linux runners for now (the disk clean-up and Mesa are apt and paths of
+# Ubuntu's image).
+name: Set up machopo's build
+description: Toolchain, ../third_party and the cargo cache for one job
+
+inputs:
+  cache:
+    description: >-
+      The build cache's key (`Swatinem/rust-cache`'s `shared-key`): jobs
+      that build the same thing share one entry, so the repository's 10 GB
+      of cache hold one copy of each. Empty: no build cache
+    default: ""
+  save-cache:
+    description: >-
+      Whether this job saves the cache, on `main` only: one job per key
+      does, the others restore what it saved
+    default: "false"
+  gpu:
+    description: >-
+      Install Mesa's lavapipe, the CPU adapter wgpu draws with on a runner
+      (which has no GPU)
+    default: "false"
+  free-disk:
+    description: >-
+      Delete the image's SDKs machopo doesn't use, for room: every test
+      binary links V8 statically
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - if: inputs.free-disk == 'true'
+      name: Free disk space
+      shell: bash
+      run: |
+        df -h /
+        sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+        df -h /
+    - if: inputs.gpu == 'true'
+      name: Install lavapipe
+      shell: bash
+      run: |
+        sudo apt-get update -q
+        sudo apt-get install -y -q --no-install-recommends libvulkan1 mesa-vulkan-drivers
+    # The toolchain rust-toolchain.toml pins, with its components.
+    - shell: bash
+      run: rustup toolchain install
+    # Before the cache: it runs `cargo metadata`, which needs the forks that
+    # Cargo.toml depends on by path.
+    - shell: bash
+      run: python3 scripts/ci.py third-party
+    - if: inputs.cache != ''
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: ${{ inputs.cache }}
+        save-if: ${{ inputs.save-cache == 'true' && github.ref == 'refs/heads/main' }}

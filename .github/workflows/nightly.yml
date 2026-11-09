@@ -1,0 +1,109 @@
+# The suites too slow for every push, every day: the scenarios, machopo's
+# reftests, WPT and its WebDriver tests (the GC's, slower still, are in
+# gc.yml, every week). Each is a job of its own, so they run side by side,
+# each in a runner's 6 hours, and wptserve's fixed port is never wanted by
+# two at once. Any of them can also be started by hand (Actions → this
+# workflow → Run workflow).
+#
+# The runners as ci.yml's: 4 CPUs, no GPU (wgpu draws with lavapipe), the
+# same Ubuntu release.
+name: Nightly
+
+on:
+  schedule:
+    - cron: "37 2 * * *" # every day, 02:37 UTC
+  workflow_dispatch:
+    inputs:
+      run:
+        description: Which suites
+        type: choice
+        options: [all, scenarios, reftest, wpt, wdspec]
+        default: all
+
+env:
+  CARGO_TERM_COLOR: always
+  # As ci.yml's, so these builds match the cache its `test` job saves.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  scenarios:
+    # A scheduled run has no inputs: then every suite runs.
+    if: contains(fromJSON('["all", "scenarios"]'), inputs.run || 'all')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+        with:
+          cache: linux-debug
+          gpu: "true"
+          free-disk: "true"
+      - run: python3 scripts/test.py scenarios
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenario-results
+          path: target/scenario-results/
+
+  # No MACHOPO_WPT_TIMEOUT_MULTIPLIER for wptrunner's: it stretches the
+  # harness's timers (`step_timeout`) but not wptserve's delays
+  # (`pipe=trickle`), and the tests that race one against the other then
+  # fail.
+  reftest:
+    if: contains(fromJSON('["all", "reftest"]'), inputs.run || 'all')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+        with:
+          cache: linux-debug
+          gpu: "true"
+          free-disk: "true"
+      - run: python3 scripts/test.py reftest
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reftest-results
+          path: target/reftest-results/
+
+  wpt:
+    if: contains(fromJSON('["all", "wpt"]'), inputs.run || 'all')
+    runs-on: ubuntu-24.04
+    # A warning, not a failure: the run passes with the rest green.
+    continue-on-error: true
+    # On lavapipe test.py runs a quarter of the CPUs' processes, so one
+    # here: every process draws on the CPU too.
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+        with:
+          cache: linux-debug
+          gpu: "true"
+          free-disk: "true"
+      - run: python3 scripts/test.py wpt
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wpt-results
+          path: target/wpt-results/
+
+  wdspec:
+    if: contains(fromJSON('["all", "wdspec"]'), inputs.run || 'all')
+    runs-on: ubuntu-24.04
+    continue-on-error: true # as wpt's
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+        with:
+          cache: linux-debug
+          gpu: "true"
+          free-disk: "true"
+      - run: python3 scripts/test.py wdspec
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wdspec-results
+          path: target/wdspec-results/

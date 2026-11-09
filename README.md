@@ -75,8 +75,8 @@ python3 scripts/sanity.py -h               # checks of the repository's rules
 ```
 
 Each script's `-h` describes its commands (`ci.py`, `test.py`, `bench.py`,
-`sanity.py`). The full suites (WPT, `matrix`, `fuzz` and the rest) run in CI
-every day.
+`sanity.py`). The full suites run in CI: WPT and the rest every day, the GC's
+`matrix` and `fuzz` every week.
 
 ## Working on the V8 fork
 

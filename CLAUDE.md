@@ -39,7 +39,7 @@
 - **新的整合測試是那個 crate 的 tests/it/ 的模組**（加一個檔案、在 `main.rs` 加一行 `mod`），不直接放在 `tests/` 底下：那會多一個要重新 link 的 binary（`docs/testing.md` 的「測試的種類」；`sanity.py tests` 檢查）。
 - 新的行為都要有測試，並且**跑 mutation test**：弄壞實作，確認有測試失敗；沒抓到的要補測試，或說明為什麼是等價的。用 `python3 scripts/test.py mutate <spec>` 跑（它先確認原本的程式通過、跑完還原檔案），做法見 `docs/testing.md` 的「Mutation test」。結果寫進那份 RFC 的 `progress.md` 的「做過的檢查」（`docs/README.md` 的「完成一步時」）。補不了測試、只能靠審查或手動確認的，記進 `docs/test-gaps.md` 的「測試守不住的地方」，寫明之後怎麼處理。
 - **Speedometer（`bench.py speedometer`）平常不量，只在使用者要求時跑**：RFC 的測試計畫也不排量測（`docs/benchmarks.md` 的「效能的量測」）。
-- **整套的測試由每天的 CI 跑**（使用者設定）：`test.py` 的 `matrix`、`fuzz`、`wpt`、`wdspec`、`reftest`、`scenarios` 和 `cargo test --workspace`。做 RFC 時本機只跑和改動相關的部分（下面幾條），**不跑 `matrix`、`fuzz`、`wdspec` 和整套的 `wpt`**；要重現 CI 的失敗時才跑那一項。merge 不等 CI，CI 上壞掉的看到就修。
+- **整套的測試由 CI 跑**（使用者設定）：每天跑 `test.py` 的 `wpt`、`wdspec`、`reftest`、`scenarios` 和 `cargo test --workspace`，每週跑 `matrix`、`fuzz`。做 RFC 時本機只跑和改動相關的部分（下面幾條），**不跑 `matrix`、`fuzz`、`wdspec` 和整套的 `wpt`**；要重現 CI 的失敗時才跑那一項。merge 不等 CI，CI 上壞掉的看到就修。
 - 完成一段工作前，跑改到的 crate 的測試和 sanity 檢查：
 
   ```sh
@@ -61,7 +61,7 @@
   cargo clippy --workspace --all-targets -- -D warnings
   ```
 
-  `python3 scripts/sanity.py -h`、`ci.py -h` 和 `test.py -h` 有每個指令的說明。**`test.py` 的 `matrix` 和 `fuzz` 由 CI 跑**，動到 GC 的 RFC 也不在本機跑：merge 之後看 CI 的結果（要在本機重現時：它們用 debug 的 V8（有 DCHECK）跑 GC 的測試，`fuzz` 跑 20 組設定（`--iterations 20`），用另一個 target 目錄（`target/v8-debug`），第一次要完整 build 一次）。
+  `python3 scripts/sanity.py -h`、`ci.py -h` 和 `test.py -h` 有每個指令的說明。**`test.py` 的 `matrix` 和 `fuzz` 由 CI 跑**，動到 GC 的 RFC 也不在本機跑：merge 之後看 CI 的結果（它們每週跑一次，動到 GC 時在 Actions 的網頁上手動開始 `gc.yml`；要在本機重現時：它們用 debug 的 V8（有 DCHECK）跑 GC 的測試，`fuzz` 跑 20 組設定（`--iterations 20`），用另一個 target 目錄（`target/v8-debug`），第一次要完整 build 一次）。
 - **`python3 scripts/test.py automation` 只在動到視窗那一層、或 RFC 和階段驗收時跑**（其他時候等使用者要求）：它在真的視窗（winit、wgpu）裡跑 `tests/scenarios/` 的情境，要顯示器和 GPU，跑的時候視窗會在最上層。視窗那一層是 `crates/shell/src/window.rs`、`browser_window.rs`、`automation.rs`、`windowless.rs`、`scenario.rs`，和 `viz` 的 `WgpuRenderer`、Viz thread。同樣的情境沒有平台視窗的版本是 `python3 scripts/test.py scenarios`（下一條）。跑完看 `target/automation-results/` 的截圖。
 - **改了 machopodriver（`crates/driver`）、`machopo --automation-pipe`（`shell` 的 `automation_pipe`、`automation_session`）、`protocol::automation` 或 `tests/wpt/wptrunner_machopo/` 時，用 `python3 scripts/test.py wpt` 跑一個小目錄**：WPT 的 testharness.js 測試、reftest 和 crashtest 經過上游的 wptrunner 和 machopodriver 跑，這條路壞了它會失敗。**`python3 scripts/test.py wdspec`（WPT 的 WebDriver 測試，`tests/wpt/README.md`）本機只在改了 wdspec 的清單或預期結果時跑那幾個**；machopodriver 平常由 `cargo test` 裡的 `webdriver`、`automation_pipe` 測試守著，整套由 CI 跑。
 - **`python3 scripts/test.py reftest`、`scenarios` 和 `wpt` 在本機只跑改到的部分**（`cargo test --workspace` 跳過情境，reftest 和 WPT 不在 `cargo test` 裡；整套由 CI 跑）：改了 style、layout、文字、paint、raster 時，跑相關的 `test.py reftest <路徑>`（machopo 自己的 reftest）和 `test.py wpt <目錄>`（WPT 的 reftest 在它裡面；兩者的篩選見 `-h`）；改了 machopo 自己的 reftest 或它的 expectations 時跑那幾份 `test.py reftest`；寫了或改了情境時，用 `test.py scenarios <名稱>` 跑那幾份；改了 DOM API、WPT 的清單或預期結果時，跑相關的目錄的 `test.py wpt`（預期結果要更新時照樣用 `MACHOPO_UPDATE_EXPECTATIONS` 跑那幾個）。

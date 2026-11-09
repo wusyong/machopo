@@ -1,0 +1,68 @@
+# The GC's suites, every week: `test.py matrix` and `fuzz` run the
+# `bindings` and `dom_js` tests (the two heaps marking together: V8's and the
+# DOM's, elise) with the debug V8, which has DCHECKs, under V8's GC flags and
+# the DOM's heap's own stress. Too slow for every day. Either can also be
+# started by hand (Actions → this workflow → Run workflow), as after a change
+# to the GC.
+#
+# The runners as ci.yml's: 4 CPUs, the same Ubuntu release. No build cache:
+# GitHub drops a cache nobody read for 7 days, so a weekly run would find
+# its own gone, and it would hold room in the repository's 10 GB that the
+# daily runs' caches use.
+name: GC
+
+on:
+  schedule:
+    - cron: "37 3 * * 0" # Sundays, 03:37 UTC
+  workflow_dispatch:
+    inputs:
+      run:
+        description: Which suites
+        type: choice
+        options: [all, matrix, fuzz]
+        default: all
+
+env:
+  CARGO_TERM_COLOR: always
+  # As ci.yml's: the disk is small, and every test binary links V8.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+
+jobs:
+  matrix:
+    # A scheduled run has no inputs: then both run.
+    if: contains(fromJSON('["all", "matrix"]'), inputs.run || 'all')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+        with:
+          free-disk: "true"
+      - run: python3 scripts/test.py matrix
+
+  # The 20 configurations of a fuzz run, split between two runners, each
+  # with a seed of its own; `--minutes` stops one starting new
+  # configurations before the runner's 6 hours are up.
+  fuzz:
+    name: fuzz (${{ matrix.part }}/2)
+    if: contains(fromJSON('["all", "fuzz"]'), inputs.run || 'all')
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+        with:
+          free-disk: "true"
+      - run: python3 scripts/test.py fuzz --iterations 10 --minutes 270
+      # The failures (with the seed that replays each) and their logs.
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gc-fuzz-failures-${{ matrix.part }}
+          path: |
+            target/gc-fuzz-failures.jsonl
+            target/gc-fuzz-failures/
