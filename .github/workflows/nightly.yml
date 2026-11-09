@@ -6,7 +6,10 @@
 # workflow → Run workflow).
 #
 # The runners as ci.yml's: 4 CPUs, no GPU (wgpu draws with lavapipe), the
-# same Ubuntu release.
+# same Ubuntu release. The scenarios are a `cargo test` of the debug build,
+# as ci.yml's tests; reftest, wpt and wdspec run the `ci` profile's machopo
+# and machopodriver (release, with the debug build's checks), built once by
+# `build` and handed to each.
 name: Nightly
 
 on:
@@ -26,6 +29,28 @@ env:
   CARGO_PROFILE_DEV_DEBUG: "0"
 
 jobs:
+  build:
+    if: contains(fromJSON('["all", "reftest", "wpt", "wdspec"]'), inputs.run || 'all')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      # Its own cache, saved by the scheduled runs (they run on main): no
+      # other workflow builds this profile.
+      - uses: ./.github/actions/setup
+        with:
+          cache: linux-ci
+          save-cache: "true"
+      - run: cargo build --profile ci -p shell --bin machopo -p driver --bin machopodriver
+      - uses: actions/upload-artifact@v4
+        with:
+          name: machopo-ci
+          path: |
+            target/ci/machopo
+            target/ci/machopodriver
+          if-no-files-found: error
+          retention-days: 1
+
   scenarios:
     # A scheduled run has no inputs: then every suite runs.
     if: contains(fromJSON('["all", "scenarios"]'), inputs.run || 'all')
@@ -38,7 +63,7 @@ jobs:
           cache: linux-debug
           gpu: "true"
       - run: python3 scripts/test.py scenarios
-      - if: failure()
+      - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: scenario-results
@@ -50,44 +75,92 @@ jobs:
   # fail.
   reftest:
     if: contains(fromJSON('["all", "reftest"]'), inputs.run || 'all')
+    needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup
         with:
-          cache: linux-debug
           gpu: "true"
-      - run: python3 scripts/test.py reftest
-      - if: failure()
+      - uses: actions/download-artifact@v4
+        with:
+          name: machopo-ci
+          path: target/ci
+      - run: chmod +x target/ci/machopo target/ci/machopodriver
+      - run: python3 scripts/test.py reftest --profile ci --no-build
+      - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: reftest-results
-          path: target/reftest-results/
+          path: |
+            target/reftest-results/raw.log
+            target/reftest-results/wptreport.json
+            target/reftest-results/screenshots/
 
+  # In chunks side by side, a runner each: one, on lavapipe's single
+  # process (test.py runs a quarter of the CPUs' processes, as every process
+  # draws on the CPU too), takes some 70 minutes. `wpt-check` then checks the
+  # chunks together.
   wpt:
     if: contains(fromJSON('["all", "wpt"]'), inputs.run || 'all')
+    needs: build
     runs-on: ubuntu-24.04
     # A warning, not a failure: the run passes with the rest green.
     continue-on-error: true
-    # On lavapipe test.py runs a quarter of the CPUs' processes, so one
-    # here: every process draws on the CPU too.
-    timeout-minutes: 340
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup
         with:
-          cache: linux-debug
           gpu: "true"
-      - run: python3 scripts/test.py wpt
-      - if: failure()
+      - uses: actions/download-artifact@v4
+        with:
+          name: machopo-ci
+          path: target/ci
+      - run: chmod +x target/ci/machopo target/ci/machopodriver
+      - run: python3 scripts/test.py wpt --chunk ${{ matrix.chunk }}/4 --profile ci --no-build
+      - if: always()
         uses: actions/upload-artifact@v4
         with:
+          name: wpt-results-${{ matrix.chunk }}
+          path: |
+            target/wpt-results/raw.log
+            target/wpt-results/wptreport.json
+            target/wpt-results/screenshots/
+
+  # The checks of the whole include list, which a chunk leaves out, over
+  # every chunk's log; then the chunks' results as one artifact.
+  wpt-check:
+    if: ${{ !cancelled() && contains(fromJSON('["all", "wpt"]'), inputs.run || 'all') }}
+    needs: wpt
+    runs-on: ubuntu-24.04
+    continue-on-error: true # as wpt's
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      # For ../third_party/wpt, where the include lines' directories are.
+      - uses: ./.github/actions/setup
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wpt-results-*
+          path: target/wpt-chunks
+      - run: python3 scripts/test.py wpt-check target/wpt-chunks/*/raw.log
+      - if: always()
+        uses: actions/upload-artifact/merge@v4
+        with:
           name: wpt-results
-          path: target/wpt-results/
+          pattern: wpt-results-*
+          separate-directories: true
+          delete-merged: true
 
   wdspec:
     if: contains(fromJSON('["all", "wdspec"]'), inputs.run || 'all')
+    needs: build
     runs-on: ubuntu-24.04
     continue-on-error: true # as wpt's
     timeout-minutes: 180
@@ -95,11 +168,18 @@ jobs:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup
         with:
-          cache: linux-debug
           gpu: "true"
-      - run: python3 scripts/test.py wdspec
-      - if: failure()
+      - uses: actions/download-artifact@v4
+        with:
+          name: machopo-ci
+          path: target/ci
+      - run: chmod +x target/ci/machopo target/ci/machopodriver
+      - run: python3 scripts/test.py wdspec --profile ci --no-build
+      - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: wdspec-results
-          path: target/wdspec-results/
+          path: |
+            target/wdspec-results/raw.log
+            target/wdspec-results/wptreport.json
+            target/wdspec-results/screenshots/

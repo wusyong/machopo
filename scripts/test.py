@@ -9,12 +9,14 @@
                                        # and the pipe's test with one (machopo --automation-pipe --window)
     python scripts/test.py scenarios [FILTER ...]
                                        # the scenarios without the platform's window (cargo test skips them)
-    python scripts/test.py wpt [TEST ...] [--processes N]
+    python scripts/test.py wpt [TEST ...] [--processes N] [--chunk I/N] [--profile NAME] [--no-build]
                                        # WPT's testharness.js tests, reftests and crashtests, against
                                        # machopodriver and machopo (wptrunner)
-    python scripts/test.py reftest [TEST ...] [--processes N]
+    python scripts/test.py wpt-check RAW_LOG ...
+                                       # wpt's checks of the whole list over the logs of a run in chunks
+    python scripts/test.py reftest [TEST ...] [--processes N] [--profile NAME] [--no-build]
                                        # our own reftests (wptrunner)
-    python scripts/test.py wdspec [TEST ...]
+    python scripts/test.py wdspec [TEST ...] [--profile NAME] [--no-build]
                                        # WPT's WebDriver tests, against machopodriver and machopo (wptrunner)
     python scripts/test.py mutate SPEC [--only NAME ...] [--keep-going] | --restore
                                        # mutation testing: break the code as SPEC lists, check a test fails
@@ -25,10 +27,11 @@
 of their own; `automation` needs a display and a GPU. `scenarios` is a
 test of `cargo test` that skips itself unless `MACHOPO_SLOW_TESTS` is set,
 which the command sets. `wpt`, `reftest` and `wdspec` run upstream's
-wptrunner, in a venv of its own. Every command first syncs ../third_party
-to the commits machopo pins (`ci.py third-party`), and runs nothing if it
-can't. The GC's own checks (loom, shuttle, its fuzzer, Verus, Miri) are
-elise's, in ../third_party/elise/scripts/test.py.
+wptrunner, in a venv of its own, against the debug build or another
+profile's (`--profile ci`, as the nightly CI). Every command first syncs
+../third_party to the commits machopo pins (`ci.py third-party`), and runs
+nothing if it can't. The GC's own checks (loom, shuttle, its fuzzer,
+Verus, Miri) are elise's, in ../third_party/elise/scripts/test.py.
 The checks of the repo's rules are in `sanity.py`, the tools around the build
 in `ci.py`. Each command's arguments are below, and in `test.py <command> -h`.
 
@@ -990,26 +993,28 @@ def stale_wpt_entries(include: list[str], root: TestRoot) -> list[str]:
     return stale
 
 
-def started_tests(raw_log: Path) -> set[str]:
-    """The ids of the tests that started in wptrunner's raw log (each test,
-    `disabled` ones too, starts), without their variants' queries."""
+def started_tests(raw_logs: list[Path]) -> set[str]:
+    """The ids of the tests that started in wptrunner's raw logs (each test,
+    `disabled` ones too, starts; a log a chunk of the run), without their
+    variants' queries."""
     ids = set()
-    with open(raw_log, encoding="utf-8") as log:
-        for line in log:
-            entry = json.loads(line)
-            if entry["action"] == "test_start":
-                ids.add(entry["test"].split("?", 1)[0])
+    for raw_log in raw_logs:
+        with open(raw_log, encoding="utf-8") as log:
+            for line in log:
+                entry = json.loads(line)
+                if entry["action"] == "test_start":
+                    ids.add(entry["test"].split("?", 1)[0])
     return ids
 
 
-def unmatched_includes(include: list[str], raw_log: Path, root: TestRoot) -> list[str]:
+def unmatched_includes(include: list[str], raw_logs: list[Path], root: TestRoot) -> list[str]:
     """The include lines that no test of the run came from: wptrunner
     takes a line it can't place as a URL prefix that matches nothing, and
     the run passes without the tests. A test's id is its URL: a
     directory's tests are under it, a `.any.js` file's are `x.any.html`,
     `x.any.worker.html` and so on, a `.window.js` file's `x.window.html`,
     and any test's variants add a query."""
-    ids = started_tests(raw_log)
+    ids = started_tests(raw_logs)
     unmatched = []
     for line in include:
         path = line.split("#", 1)[0].strip().lstrip("/")
@@ -1052,12 +1057,12 @@ def test_file(test_id: str, root: TestRoot) -> str | None:
     return path
 
 
-def unrun_expectations(include: list[str], raw_log: Path, root: TestRoot) -> list[str]:
+def unrun_expectations(include: list[str], raw_logs: list[Path], root: TestRoot) -> list[str]:
     """The root's `.ini` files under the include lines whose test file no
     test of the run came from: a kind of test that didn't run (wptrunner
     runs only the types it's given), or one wptrunner no longer finds.
     `__dir__.ini` files are left out."""
-    files = {test_file(test, root) for test in started_tests(raw_log)}
+    files = {test_file(test, root) for test in started_tests(raw_logs)}
     scope = [line.split("#", 1)[0].strip().lstrip("/") for line in include]
     # `""` is the whole of a root of ours; in WPT's lists, a blank line.
     scope = [path for path in scope if path or root is not WPT_ROOT]
@@ -1096,26 +1101,27 @@ def uncommented_intermittents(root: TestRoot) -> list[str]:
     return bare
 
 
-def intermittent_results(raw_log: Path) -> list[str]:
-    """The tests of the run that took one of their known intermittent
-    statuses, not the first one their expectations list: wptrunner counts
-    those as expected and says nothing of them. A line a test: its own
-    status if it was one, and how many of its subtests' were."""
+def intermittent_results(raw_logs: list[Path]) -> list[str]:
+    """The tests of the run (its chunks' logs) that took one of their known
+    intermittent statuses, not the first one their expectations list:
+    wptrunner counts those as expected and says nothing of them. A line a
+    test: its own status if it was one, and how many of its subtests' were."""
     harness: dict[str, str] = {}
     subtests: dict[str, int] = {}
-    with open(raw_log, encoding="utf-8") as log:
-        for line in log:
-            entry = json.loads(line)
-            if entry["action"] not in ("test_status", "test_end"):
-                continue
-            # The list holds the other statuses, not the first: a result in
-            # it is one of those, and mozlog keeps its `expected`.
-            if entry["status"] not in (entry.get("known_intermittent") or []):
-                continue
-            if entry["action"] == "test_end":
-                harness[entry["test"]] = f"{entry['status']} (expected {entry['expected']})"
-            else:
-                subtests[entry["test"]] = subtests.get(entry["test"], 0) + 1
+    for raw_log in raw_logs:
+        with open(raw_log, encoding="utf-8") as log:
+            for line in log:
+                entry = json.loads(line)
+                if entry["action"] not in ("test_status", "test_end"):
+                    continue
+                # The list holds the other statuses, not the first: a result
+                # in it is one of those, and mozlog keeps its `expected`.
+                if entry["status"] not in (entry.get("known_intermittent") or []):
+                    continue
+                if entry["action"] == "test_end":
+                    harness[entry["test"]] = f"{entry['status']} (expected {entry['expected']})"
+                else:
+                    subtests[entry["test"]] = subtests.get(entry["test"], 0) + 1
     lines = []
     for test in sorted(harness.keys() | subtests.keys()):
         parts = [harness[test]] if test in harness else []
@@ -1155,16 +1161,38 @@ def processes_for_gpu(machopo: Path) -> list[str]:
     return processes
 
 
+@dataclass
+class Build:
+    """Which `machopo` and `machopodriver` the wptrunner commands run: those
+    of a cargo profile (`dev`, or `ci`, release with the debug build's
+    checks, as the nightly CI runs them), built first unless `build` is off
+    (binaries built elsewhere, copied into the profile's directory)."""
+
+    profile: str = "dev"
+    build: bool = True
+
+    def binaries(self) -> Path:
+        # Cargo's directory for a profile is its name, but `dev`'s.
+        return ROOT / "target" / ("debug" if self.profile == "dev" else self.profile)
+
+    @staticmethod
+    def of(args: argparse.Namespace) -> Build:
+        return Build(args.profile, not args.no_build)
+
+
 def run_wptrunner(
     out: str,
     test_types: list[str],
     include: list[str] | None,
     tests: list[str],
     extra: list[str],
+    build: Build,
     root: TestRoot = WPT_ROOT,
+    chunk: tuple[int, int] | None = None,
 ) -> int:
     """`python -m wptrunner_machopo.run` in the venv, against the `machopo` and
-    `machopodriver` it builds first: the tests of `root` (WPT's, or one of ours
+    `machopodriver` of `build`'s profile, built first unless it says not to:
+    the tests of `root` (WPT's, or one of ours
     beside it), its expectations, the manifests shared by every command
     under `target/wptrunner/`, the logs and the wptreport under
     `target/<out>/`. `include` is the lines of an include list (paths under
@@ -1177,7 +1205,10 @@ def run_wptrunner(
     line or an expectation names a test that isn't there, or an `.ini`
     lists known intermittent statuses without a comment; and after a run
     of the include list, if a line brought no test or an expectation's test
-    didn't run. Names the tests that took a known intermittent status."""
+    didn't run. Names the tests that took a known intermittent status.
+    `chunk`, (I, N), runs the I-th of N chunks of the tests (wptrunner's,
+    by directory): then the checks of the whole list are left to
+    `wpt-check`, over every chunk's log."""
     if stale := stale_wpt_entries(include or [], root):
         print(f"these no longer fit {root.tests} (see tests/wpt/README.md, Updating):")
         for entry in stale:
@@ -1188,15 +1219,22 @@ def run_wptrunner(
         for path in bare:
             print(f"  {path}")
         return 1
-    build = ["cargo", "build", "-p", "shell", "--bin", "machopo", "-p", "driver", "--bin", "machopodriver"]
-    if subprocess.run(build, cwd=ROOT).returncode != 0:
-        return 1
+    binaries = build.binaries()
+    if build.build:
+        cargo = ["cargo", "build", "--profile", build.profile]
+        cargo += ["-p", "shell", "--bin", "machopo", "-p", "driver", "--bin", "machopodriver"]
+        if subprocess.run(cargo, cwd=ROOT).returncode != 0:
+            return 1
+    else:
+        missing = [name for name in ("machopo", "machopodriver") if not (binaries / f"{name}{EXE}").is_file()]
+        if missing:
+            print(f"--no-build, but {binaries} has no {' or '.join(missing)}")
+            return 1
     python = wptrunner_python()
     if python is None:
         return 1
     out_dir = ROOT / "target" / out
     out_dir.mkdir(parents=True, exist_ok=True)
-    binaries = ROOT / "target" / "debug"
     if "--processes" not in extra:
         extra = [*extra, *processes_for_gpu(binaries / f"machopo{EXE}")]
     cmd = [
@@ -1225,6 +1263,8 @@ def run_wptrunner(
             newline="\n",
         )
         cmd += ["--include-file", str(include_file)]
+    if chunk:
+        cmd += ["--this-chunk", str(chunk[0]), "--total-chunks", str(chunk[1])]
     # The tests first: `--test-types` takes a list.
     cmd += ["--test-types", *test_types]
     if os.environ.get("MACHOPO_UPDATE_EXPECTATIONS"):
@@ -1236,22 +1276,37 @@ def run_wptrunner(
     status = subprocess.run(cmd, cwd=WPTRUNNER, env=env).returncode
     if not checkout_untouched():
         return 1
-    if (out_dir / "raw.log").exists() and (intermittent := intermittent_results(out_dir / "raw.log")):
+    raw_logs = [out_dir / "raw.log"] if (out_dir / "raw.log").exists() else []
+    print_intermittent_results(raw_logs)
+    if include is not None and not tests:
+        if chunk:
+            print(f"chunk {chunk[0]} of {chunk[1]}: `wpt-check` checks the include list against every chunk's log")
+        elif include_list_unmet(include, raw_logs, root):
+            return 1
+    return status
+
+
+def print_intermittent_results(raw_logs: list[Path]) -> None:
+    if intermittent := intermittent_results(raw_logs):
         print("these took a known intermittent status, which their expectations list:")
         for line in intermittent:
             print(f"  {line}")
-    if include is not None and not tests:
-        if unmatched := unmatched_includes(include, out_dir / "raw.log", root):
-            print("no test ran for these include lines:")
-            for path in unmatched:
-                print(f"  {path}")
-            return 1
-        if unrun := unrun_expectations(include, out_dir / "raw.log", root):
-            print("these expectations are for tests that didn't run:")
-            for path in unrun:
-                print(f"  {path}")
-            return 1
-    return status
+
+
+def include_list_unmet(include: list[str], raw_logs: list[Path], root: TestRoot) -> bool:
+    """Whether a run of the include list (its chunks' logs) left a line
+    without a test, or an expectation's test unrun, saying which."""
+    if unmatched := unmatched_includes(include, raw_logs, root):
+        print("no test ran for these include lines:")
+        for path in unmatched:
+            print(f"  {path}")
+        return True
+    if unrun := unrun_expectations(include, raw_logs, root):
+        print("these expectations are for tests that didn't run:")
+        for path in unrun:
+            print(f"  {path}")
+        return True
+    return False
 
 
 def include_list(name: str) -> list[str]:
@@ -1308,7 +1363,46 @@ def cmd_wpt(args: argparse.Namespace) -> int:
         tests = listed_paths(tests, include, "include.txt")
         if not tests:
             return 1
-    return run_wptrunner("wpt-results", ["testharness", "reftest", "crashtest"], include, tests, extra)
+    if args.chunk and tests:
+        print("--chunk is for a run of the whole list, not of TEST paths")
+        return 1
+    return run_wptrunner(
+        "wpt-results", ["testharness", "reftest", "crashtest"], include, tests, extra, Build.of(args), chunk=args.chunk
+    )
+
+
+def cmd_wpt_check(args: argparse.Namespace) -> int:
+    """The checks `wpt` makes after a run of `tests/wpt/include.txt`, over
+    the raw logs of a run in chunks (`wpt --chunk I/N`, each chunk's
+    `target/wpt-results/raw.log`), which skips them: every log ended (a
+    chunk cut off by a cancel or a timeout leaves a log without its end),
+    every include line brought a test, every expectation's test ran. Names
+    the tests that took a known intermittent status, as `wpt` does."""
+    unended = [str(log) for log in args.raw_logs if not run_ended(log)]
+    if unended:
+        print("these logs are of runs that didn't end:")
+        for log in unended:
+            print(f"  {log}")
+    print_intermittent_results(args.raw_logs)
+    unmet = include_list_unmet(include_list("include.txt"), args.raw_logs, WPT_ROOT)
+    return 1 if unended or unmet else 0
+
+
+def run_ended(raw_log: Path) -> bool:
+    """Whether wptrunner's raw log has the run's end (`suite_end`)."""
+    with open(raw_log, encoding="utf-8") as log:
+        return any(json.loads(line)["action"] == "suite_end" for line in log if line.strip())
+
+
+def chunk_argument(value: str) -> tuple[int, int]:
+    """`I/N`: the I-th of N chunks, from 1."""
+    try:
+        this, total = (int(part) for part in value.split("/"))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} isn't I/N") from None
+    if not 1 <= this <= total:
+        raise argparse.ArgumentTypeError(f"{value!r}: I must be from 1 to N")
+    return this, total
 
 
 # Our reftests that don't run in the default subsuite: those at another scale
@@ -1332,7 +1426,9 @@ def cmd_reftest(args: argparse.Namespace) -> int:
     extra += ["--subsuite-file", str(MACHOPO_REFTESTS.tests / "subsuites.json")]
     for path in REFTEST_EXCLUDES:
         extra += ["--exclude", wptrunner_include(path, MACHOPO_REFTESTS)]
-    return run_wptrunner("reftest-results", ["reftest"], [""], args.tests, extra, root=MACHOPO_REFTESTS)
+    return run_wptrunner(
+        "reftest-results", ["reftest"], [""], args.tests, extra, Build.of(args), root=MACHOPO_REFTESTS
+    )
 
 
 def cmd_wdspec(args: argparse.Namespace) -> int:
@@ -1354,7 +1450,7 @@ def cmd_wdspec(args: argparse.Namespace) -> int:
         tests = listed_paths(tests, include, "wdspec-include.txt")
         if not tests:
             return 1
-    return run_wptrunner("wdspec-results", ["wdspec"], include, tests, [])
+    return run_wptrunner("wdspec-results", ["wdspec"], include, tests, [], Build.of(args))
 
 
 # --- mutate -----------------------------------------------------------------
@@ -1658,6 +1754,20 @@ def main() -> int:
         parser.set_defaults(func=func)
         return parser
 
+    def build_arguments(parser: argparse.ArgumentParser) -> None:
+        """The wptrunner commands' choice of machopo and machopodriver."""
+        parser.add_argument(
+            "--profile",
+            default="dev",
+            metavar="NAME",
+            help="the cargo profile to build and run them with (default: dev; the nightly CI's: ci)",
+        )
+        parser.add_argument(
+            "--no-build",
+            action="store_true",
+            help="run those already in the profile's target directory (built elsewhere), without cargo",
+        )
+
     command("matrix", cmd_matrix, "GC tests under each pool size, then under fixed stress flags")
 
     fuzz = command("fuzz", cmd_fuzz, "GC tests under random configurations (numfuzz-style)")
@@ -1762,6 +1872,16 @@ def main() -> int:
         metavar="N",
         help="tests at a time (default: 4 per CPU, at most 32)",
     )
+    wpt.add_argument(
+        "--chunk",
+        type=chunk_argument,
+        metavar="I/N",
+        help="run the I-th of N chunks of the list (by directory), leaving the checks of the whole list to wpt-check",
+    )
+    build_arguments(wpt)
+
+    wpt_check = command("wpt-check", cmd_wpt_check, "the checks of a wpt run of the whole list, over its chunks' logs")
+    wpt_check.add_argument("raw_logs", nargs="+", type=Path, metavar="RAW_LOG", help="each chunk's raw.log")
 
     reftest = command("reftest", cmd_reftest, "our own reftests (wptrunner)")
     reftest.add_argument(
@@ -1776,6 +1896,7 @@ def main() -> int:
         metavar="N",
         help="tests at a time (default: 4 per CPU, at most 32)",
     )
+    build_arguments(reftest)
 
     wdspec = command("wdspec", cmd_wdspec, "WPT's WebDriver tests, against machopodriver and machopo (wptrunner)")
     wdspec.add_argument(
@@ -1791,6 +1912,7 @@ def main() -> int:
         action="store_true",
         help="run the TEST paths whole, tests the list leaves out too (trying tests out for the list)",
     )
+    build_arguments(wdspec)
 
 
     cdp = command("cdp", cmd_cdp, "machopo's answers to DevTools' JavaScript domains against Chrome's")

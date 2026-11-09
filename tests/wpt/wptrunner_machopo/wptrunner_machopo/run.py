@@ -4,7 +4,8 @@
         --machopo MACHOPO --machopodriver MACHOPODRIVER [--manifest FILE] [--include-file FILE] \\
         [--root URL_BASE TESTS METADATA ...] [--subsuite-file FILE] \\
         [--exclude PREFIX ...] [--test-types TYPE ...] [--processes N] \\
-        [--timeout-multiplier N] [--machopo-arg ARG ...] [--update] [TEST ...]
+        [--timeout-multiplier N] [--this-chunk I --total-chunks N] \\
+        [--machopo-arg ARG ...] [--update] [TEST ...]
 
 `python3 scripts/test.py wpt` and `wdspec` run it in their venv. Not through
 `wpt run`, which checks the system's hosts file for WPT's domains for every
@@ -148,6 +149,14 @@ def wptrunner_kwargs(args, update_manifest):
         argv += ["--subsuite-file", args.subsuite_file]
     for prefix in args.exclude:
         argv += ["--exclude", prefix]
+    if args.total_chunks > 1:
+        # By directory: a chunk's tests are whole directories, the same ones
+        # every run, so a chunk's failures point at the directories it holds.
+        argv += [
+            "--this-chunk", str(args.this_chunk),
+            "--total-chunks", str(args.total_chunks),
+            "--chunk-type", "dir_hash",
+        ]
     # The tests first: `--test-types` takes a list.
     kwargs = vars(wptcommandline.create_parser().parse_args(args.tests + argv))
     wptcommandline.check_args(kwargs)
@@ -215,6 +224,8 @@ def main(argv=None):
         help=f"tests at a time (default: 4 per CPU, at most {MAX_PROCESSES}: {default_processes()} here)",
     )
     parser.add_argument("--timeout-multiplier", type=float, default=1, help="each test's timeout times this")
+    parser.add_argument("--this-chunk", type=int, default=1, metavar="I", help="run the I-th chunk of the tests")
+    parser.add_argument("--total-chunks", type=int, default=1, metavar="N", help="of N, by directory")
     parser.add_argument("--update", action="store_true", help="write the results as the expected ones")
     parser.add_argument("tests", nargs="*", help="only these tests (paths in the checkout)")
     args = parser.parse_args(argv)

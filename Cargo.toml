@@ -211,6 +211,18 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 opt-level = 2
 
+# What the nightly CI runs WPT and the reftests with: release, with the debug
+# build's checks kept, as Chromium's release bots keep their DCHECKs
+# (`dcheck_always_on`). Most of those checks are the caches' and the
+# incremental steps' against a run from scratch, and WPT's pages are where
+# they meet the most of what the web does; overflow still panics, as the
+# numerics rules expect of a test run. Line tables for a panic's backtrace.
+[profile.ci]
+inherits = "release"
+debug-assertions = true
+overflow-checks = true
+debug = "line-tables-only"
+
 # What `bench.py speedometer` measures machopo with: release, with the link-time
 # optimization Chrome's official build has (ThinLTO; not its PGO), and line
 # tables so that a profiler names functions and lines (no change to the

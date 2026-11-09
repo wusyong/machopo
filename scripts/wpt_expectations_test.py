@@ -1,7 +1,7 @@
 """Tests of how `test.py` reads WPT's expectations and results around a
 wptrunner run: the known intermittent statuses an `.ini` lists (each file
 with one has a comment), and the ones a run's raw log took; how many
-tests run at once.
+tests run at once; the checks of a run in chunks, over every chunk's log.
 
     python3 scripts/wpt_expectations_test.py [-k NAME]
 """
@@ -28,7 +28,7 @@ class IntermittentResults(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "raw.log"
             log.write_text("".join(json.dumps(entry) + "\n" for entry in entries), encoding="utf-8")
-            return test_py.intermittent_results(log)
+            return test_py.intermittent_results([log])
 
     def test_a_test_and_its_subtests_on_one_line(self):
         lines = self.results(
@@ -98,6 +98,68 @@ class UncommentedIntermittents(unittest.TestCase):
         })
         self.assertEqual(bare, [])
 
+
+class Chunks(unittest.TestCase):
+    """A run of the include list in chunks: each chunk's log holds some of
+    its tests, and only all of them together meet the list."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        tmp = Path(self.tmp.name)
+        for path in ("a/x.html", "b/y.html", "b/z.any.js"):
+            (tmp / "tests" / path).parent.mkdir(parents=True, exist_ok=True)
+            (tmp / "tests" / path).write_text("", encoding="utf-8")
+        # Under the repo, as the checks name an `.ini` by its path in it.
+        self.metadata = Path(tempfile.mkdtemp(dir=test_py.ROOT / "target"))
+        (self.metadata / "b").mkdir()
+        (self.metadata / "b" / "y.html.ini").write_text("[y.html]\n  expected: FAIL\n", encoding="utf-8")
+        self.root = test_py.TestRoot("/", tmp / "tests", self.metadata)
+        self.include = ["a/", "b/y.html", "b/z.any.js  # a comment"]
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        test_py.shutil.rmtree(self.metadata)
+
+    def log(self, name: str, *entries: dict) -> Path:
+        path = Path(self.tmp.name) / name
+        path.write_text("".join(json.dumps(entry) + "\n" for entry in entries), encoding="utf-8")
+        return path
+
+    def chunk(self, name: str, *tests: str, ended: bool = True) -> Path:
+        entries = [{"action": "test_start", "test": test} for test in tests]
+        return self.log(name, *entries, *([{"action": "suite_end"}] if ended else []))
+
+    def test_the_chunks_together_meet_the_list(self):
+        one = self.chunk("1.log", "/a/x.html")
+        two = self.chunk("2.log", "/b/y.html", "/b/z.any.html", "/b/z.any.worker.html?v=1")
+        self.assertEqual(test_py.unmatched_includes(self.include, [one, two], self.root), [])
+        self.assertEqual(test_py.unrun_expectations(self.include, [one, two], self.root), [])
+
+    def test_a_chunk_alone_leaves_the_others_lines(self):
+        one = self.chunk("1.log", "/a/x.html")
+        self.assertEqual(test_py.unmatched_includes(self.include, [one], self.root), ["b/y.html", "b/z.any.js"])
+        unrun = test_py.unrun_expectations(self.include, [one], self.root)
+        self.assertEqual([path.rsplit("/", 2)[-2:] for path in unrun], [["b", "y.html.ini"]])
+
+    def test_a_cut_off_chunk_didnt_end(self):
+        self.assertTrue(test_py.run_ended(self.chunk("1.log", "/a/x.html")))
+        self.assertFalse(test_py.run_ended(self.chunk("2.log", "/b/y.html", ended=False)))
+
+    def test_intermittent_results_of_every_chunk(self):
+        flaky = {"status": "ERROR", "expected": "OK", "known_intermittent": ["ERROR"]}
+        one = self.log("1.log", {"action": "test_end", "test": "/a/x.html", **flaky})
+        two = self.log("2.log", {"action": "test_end", "test": "/b/y.html", **flaky})
+        self.assertEqual(
+            test_py.intermittent_results([one, two]),
+            ["/a/x.html: ERROR (expected OK)", "/b/y.html: ERROR (expected OK)"],
+        )
+
+    def test_a_chunk_is_i_of_n(self):
+        self.assertEqual(test_py.chunk_argument("2/4"), (2, 4))
+        self.assertEqual(test_py.chunk_argument("4/4"), (4, 4))
+        for bad in ("0/4", "5/4", "2", "a/b", "1/2/3"):
+            with self.assertRaises(test_py.argparse.ArgumentTypeError, msg=bad):
+                test_py.chunk_argument(bad)
 
 
 class WptProcesses(unittest.TestCase):

@@ -37,12 +37,12 @@ machopo 有哪些測試、怎麼跑、CI 的現況、mutation test 的做法。�
 - 改動沒涵蓋到的部分壞掉，要到下一次 CI 才知道；merge 不等 CI，CI 上壞掉的看到就修。
 - `test.py automation`（真的視窗）不在 CI 上：它要螢幕和 GPU，照舊在開發機上、動到視窗那一層和驗收時跑。
 - 開發機和 CI 用過的平台以外沒有自動測試（「測試守不住的地方」的「各平台」）。
-- CI 在 GitHub Actions 的標準 runner 上跑（`.github/workflows/`）：`ubuntu-24.04`，4 個 CPU、沒有 GPU，畫面用 Mesa 的 lavapipe（wgpu 的 CPU adapter），所以 `test.py wpt` 一次只跑一個測試（CPU adapter 上 process 數是 CPU 的四分之一）。釘住 Ubuntu 的版本、不用 `ubuntu-latest`：WPT 和 reftest 的結果跟著 image 的 Mesa 變。`ci.yml` 在每次 push、PR 和每天跑 `cargo fmt --check`、clippy、`sanity.py` 的各項和 `numerics` 的檢查本身的測試，以及 `cargo test --workspace`；`nightly.yml` 每天跑 `scenarios`、`reftest`、`wpt`、`wdspec`；`gc.yml` 每週跑 `matrix`、`fuzz`（GC 的測試用 debug 的 V8，比其他的都慢；`fuzz` 的 20 組設定分在兩個 job，各用自己的 seed），動到 GC 時手動開始一次。每套一個 job、平行跑，也可以在 Actions 的網頁上手動開始、選要跑哪一套。一個 job 失敗不取消其他的；`wpt` 和 `wdspec` 失敗只算警告（`continue-on-error`），其餘都通過時整次照樣算通過。每個 job 的準備（系統的函式庫、toolchain、`ci.py third-party`、cargo 的快取）在 `.github/actions/setup/`：快取照建置的內容分成兩份（lint、平常的 debug build），每份只有 `main` 上的一個 job 存，其他的讀它，repo 的快取上限（10 GB）才放得下。`gc.yml` 不用快取：GitHub 刪掉 7 天沒人讀的快取，每週跑一次的會找不到自己存的，還佔著每天的快取要用的空間。
+- CI 在 GitHub Actions 的標準 runner 上跑（`.github/workflows/`）：`ubuntu-24.04`，4 個 CPU、沒有 GPU，畫面用 Mesa 的 lavapipe（wgpu 的 CPU adapter），所以 `test.py wpt` 一次只跑一個測試（CPU adapter 上 process 數是 CPU 的四分之一）。釘住 Ubuntu 的版本、不用 `ubuntu-latest`：WPT 和 reftest 的結果跟著 image 的 Mesa 變。`ci.yml` 在每次 push、PR 和每天跑 `cargo fmt --check`、clippy、`sanity.py` 的各項和 `numerics` 的檢查本身的測試，以及 `cargo test --workspace`；`nightly.yml` 每天跑 `scenarios`、`reftest`、`wpt`、`wdspec`：`scenarios` 是 `cargo test`，用 debug build；其他三套用 `ci` profile 的 machopo 和 machopodriver（`Cargo.toml`：release，留著 debug build 的檢查和溢位的 panic，像 Chromium 的 release bot 打開 `dcheck_always_on`），由一個 job 編一次、交給三套（`test.py` 的 `--profile ci --no-build`），測試的結果不論 job 怎麼結束（失敗、取消、逾時）都上傳。`wpt` 分成 4 份、各用一個 runner 同時跑（`test.py wpt --chunk I/4`，wptrunner 依目錄切：同一個目錄的測試在同一份），只跑一份時跳過整份清單的檢查，由下一個 job 的 `test.py wpt-check` 拿 4 份的 log 一起檢查（每份都跑完、清單的每一行都有測試跑到、每份預期結果的測試都有跑），再把 4 份的結果合成一個 artifact；`gc.yml` 每週跑 `matrix`、`fuzz`（GC 的測試用 debug 的 V8，比其他的都慢；`fuzz` 的 20 組設定分在兩個 job，各用自己的 seed），動到 GC 時手動開始一次。每套一個 job、平行跑，也可以在 Actions 的網頁上手動開始、選要跑哪一套。一個 job 失敗不取消其他的；`wpt` 和 `wdspec` 失敗只算警告（`continue-on-error`），其餘都通過時整次照樣算通過。每個 job 的準備（系統的函式庫、toolchain、`ci.py third-party`、cargo 的快取）在 `.github/actions/setup/`：快取照建置的內容分成三份（lint、平常的 debug build、`ci` profile），每份只有 `main` 上的一個 job 存，其他的讀它，repo 的快取上限（10 GB）才放得下。`gc.yml` 不用快取：GitHub 刪掉 7 天沒人讀的快取，每週跑一次的會找不到自己存的，還佔著每天的快取要用的空間。
 - WPT 的時間在 CI 上也不放寬（不設 `MACHOPO_WPT_TIMEOUT_MULTIPLIER`）：它只拉長 testharness 的計時（`step_timeout`），wptserve 的延遲（`pipe=trickle`）不變，拿兩者比先後的測試就會失敗（`module/dynamic-import/delay-load-event.html`、`moving-between-documents/ordering/in-order.html`）。
 
 ## 快取和增量的交叉檢查
 
-下面這些沿用上一次結果的做法，debug build 會從頭再算一次比對，不同就 panic（style 的 invalidation 範圍（invalidation set 和 stylesheet 改動的除外）、box tree 和 layout 的增量更新、paint 沿用的 item 和 raster invalidation 不在其中，靠測試守）。`cargo test`、reftest、情境和 WPT 都用 debug build 跑，所以新的功能漏改了這些做法（`docs/architecture.md` 的「快取和增量：加新東西時要跟著改的地方」）時，只要有測試踩到，多半當場失敗：
+下面這些沿用上一次結果的做法，debug build 會從頭再算一次比對，不同就 panic（style 的 invalidation 範圍（invalidation set 和 stylesheet 改動的除外）、box tree 和 layout 的增量更新、paint 沿用的 item 和 raster invalidation 不在其中，靠測試守）。`cargo test`、reftest、情境和 WPT 都用 debug build 跑（CI 的 reftest 和 WPT 用 `ci` profile：release 加上同樣的檢查），所以新的功能漏改了這些做法（`docs/architecture.md` 的「快取和增量：加新東西時要跟著改的地方」）時，只要有測試踩到，多半當場失敗：
 
 | 做法 | debug build 比對什麼 |
 | --- | --- |
@@ -60,7 +60,7 @@ machopo 有哪些測試、怎麼跑、CI 的現況、mutation test 的做法。�
 
 paint 的快取另外由測試的 harness 守著（`paint` 的 `paint_controller`）：每一步把沿用的結果（item、chunk、hit test 的目標、raster invalidation）和整個重畫、逐個比對的比對。
 
-守不住的：沒有測試踩到的輸入（新功能要有測試）；release build 不比對；只在特定時序出現的失效。
+守不住的：沒有測試踩到的輸入（新功能要有測試）；release build 不比對（`ci` profile 除外）；只在特定時序出現的失效。
 
 ## Mutation test
 
