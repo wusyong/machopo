@@ -153,3 +153,12 @@
   - 停住而 layout 被借出去時照樣畫：現在走不到，記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。
   - 重跑：12 條抓到、1 條卡住，漏的是上面記下的 4 條；補了 `Overlay` 關掉的情況之後那一條也抓到。
 - **第 2 段做完時的檢查**：`cargo test --workspace` 全部通過；`cargo fmt` 之後 `--check` 沒有差異；`cargo clippy --workspace --all-targets -- -D warnings` 修了兩處（測試沒用到的變數、`frame()` 不用寫出的 lifetime）之後通過；`test.py automation`：第一次 60 個情境過了 37 個，前面連續 23 個說沒畫出 frame（「is the window hidden?」），同樣的 commit 之前的版本照跑全過、那幾個重跑也過、整套重跑 60 個全過，pipe 的測試也過，是那時的顯示器（第一次跑時視窗畫不出來），不是程式；`sanity.py` 的 7 項都通過。
+
+### 第 1、2 段的手動確認（2026-11-09，macOS）
+
+`machopo --remote-debugging-port=9222` 的視窗開一頁測試的頁面（卡片、有 padding 和 border 的 box、CSS 動畫、shadow root、iframe、加元素和切換屬性的按鈕、跑到 `debugger` 的按鈕），Chrome for Testing 152 的 `chrome://inspect` 打開 DevTools，兩個視窗並排（machopo 的視窗被蓋住時 Viz 不畫，看不到框）。
+
+- **第 1 段**：樹（iframe 的文件、shadow root、不顯示只有空白的文字）；按鈕加的元素和切換的屬性跟著更新；`$0`；Console 印出的節點滑過時頁面框出它、「Reveal in Elements panel」跳回樹裡；Event Listeners（`click` 帶 Passive，勾 Ancestors 時有 window 的 `resize`）；搜尋 `needle`（1）、`.card`（2：`#card` 和 `<style>` 的文字，和 Chrome 一樣）、`<button`（3）；Properties。都對。
+- **2a**：滑過樹裡的節點時頁面框出四個顏色的圈和標籤（`div#box 150×90`）；選取元素的模式框跟著滑鼠、點下去選到元素、頁面收不到那次點擊；box model 的圖。都對。標籤的位置和 Chrome 不同：machopo 從 border 的下緣往下放，壓到 margin，Chrome 照包含 margin 的整個框放（放得下時在上面）。之後照 `drawElementTitle` 改（`place_label`）：`renderer` 的 `overlay_agent::tests::labels_are_placed_as_chrome_places_them`、`shell` 的 `devtools_overlay::labels_stay_off_the_margin`；mutation test 加 5 條（`mutants-2c.toml` 最後的「The label's place」），都抓到。
+- **2b**：Computed 的 box model、預設的清單、property 的來源、Show all、跟著動畫變的值、Rendered Fonts；選取元素時標籤的 Color、Font、Background、Margin、Padding。都對。和 Chrome 不同的一項：動畫給的 property（`#mover` 的 `margin-left`）不在 Computed 的預設清單裡，Styles 也沒有動畫的區塊，Chrome 經過 `getAnimatedStylesForNode` 拿（記進「分階段」的第 3 段）。
+- **2c**：按頁面的按鈕停在 `debugger`：頁面蓋上一層、「Paused in debugger」、Sources 停在那一行；停住時 Console 改的背景、滑過的節點照樣畫；繼續之後提示拿掉、背景變回去、動畫接著走。都對。

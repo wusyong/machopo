@@ -575,6 +575,32 @@ fn highlighted_nodes_are_drawn() {
     assert_eq!(highlight["colorFormat"], "hex");
 }
 
+/// The label goes by all of the element's boxes, as Chrome's: above its
+/// margin, not over it.
+#[test]
+fn labels_stay_off_the_margin() {
+    let html = "<!DOCTYPE html><style>html, body { margin: 0 } \
+                #m { position: absolute; left: 50px; top: 200px; width: 100px; height: 40px; margin: 30px }</style>\
+                <div id=m></div>";
+    let (_machopo, mut page, document, _server) = dom_page(&[("/", Route::ok("text/html", html))]);
+    result(page.call(None, "Overlay.enable", json!({})));
+    let m = node(&mut page, &document, "#m");
+    let config = json!({ "contentColor": rgba(255, 0, 0), "marginColor": rgba(255, 255, 0), "showInfo": true });
+    result(page.call(
+        None,
+        "Overlay.highlightNode",
+        json!({ "nodeId": m, "highlightConfig": config }),
+    ));
+    // The margin ring above the border box, all of it: the label is above
+    // it.
+    assert_eq!(non_white(&mut page, (50, 200), (210, 230)), 160 * 30);
+    assert_eq!(screen(&mut page, 60, 215), [255, 255, 0]);
+    assert!(
+        non_white(&mut page, (50, 160), (210, 192)) > 0,
+        "the label above"
+    );
+}
+
 /// The inspect mode: the mouse over the page highlights what it is over
 /// and tells DevTools (the path to it sent first); a press asks DevTools
 /// to inspect it; the page sees none of it; off again, the page does.

@@ -799,7 +799,9 @@ fn paint(
     viewport: SizeF,
     shape: &mut dyn FnMut(&str, f32, bool) -> Option<gfx::ShapedText>,
 ) {
-    let mut border = None;
+    // Around every path's points, rounded (the overlay page's `bounds`, which
+    // its `buildPath` grows): what the label goes by.
+    let mut bounds: Option<RectF> = None;
     // The path before each, inside it, which its fill leaves out.
     let mut inner: Option<Vec<PointF>> = None;
     for path in highlight["paths"].as_array().into_iter().flatten() {
@@ -812,12 +814,18 @@ fn paint(
                 points.push(PointF::new(x, y));
             }
         }
-        if path["name"] == "border" && !points.is_empty() {
-            let left = points.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
-            let top = points.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
-            let right = points.iter().map(|p| p.x).fold(f32::NEG_INFINITY, f32::max);
-            let bottom = points.iter().map(|p| p.y).fold(f32::NEG_INFINITY, f32::max);
-            border = Some(RectF::new(left, top, right - left, bottom - top));
+        for point in &points {
+            let (x, y) = (point.x.round(), point.y.round());
+            bounds = Some(match bounds {
+                None => RectF::new(x, y, 0.0, 0.0),
+                Some(around) => {
+                    let left = around.x.min(x);
+                    let top = around.y.min(y);
+                    let right = (around.x + around.width).max(x);
+                    let bottom = (around.y + around.height).max(y);
+                    RectF::new(left, top, right - left, bottom - top)
+                }
+            });
         }
         let shape_path = gfx::Path::polygons([&points]);
         // Each box's ring only, the box inside it left out, as the overlay
@@ -844,9 +852,9 @@ fn paint(
         }
         inner = Some(points);
     }
-    if let (Some(info), Some(border)) = (highlight.get("elementInfo"), border) {
+    if let (Some(info), Some(bounds)) = (highlight.get("elementInfo"), bounds) {
         let format = highlight["colorFormat"].as_str().unwrap_or("hex");
-        paint_label(list, info, format, border, viewport, shape);
+        paint_label(list, info, format, bounds, viewport, shape);
     }
 }
 
@@ -895,7 +903,7 @@ fn paint_label(
     list: &mut DisplayItemList,
     info: &Value,
     format: &str,
-    border: RectF,
+    bounds: RectF,
     viewport: SizeF,
     shape: &mut dyn FnMut(&str, f32, bool) -> Option<gfx::ShapedText>,
 ) {
@@ -957,13 +965,10 @@ fn paint_label(
         content_width + 2.0 * PADDING,
         line + rows_height + 2.0 * PADDING,
     );
-    let below = border.y + border.height + GAP;
-    let y = if below + size.height <= viewport.height {
-        below
-    } else {
-        (border.y - GAP - size.height).max(0.0)
+    let Some(place) = place_label(bounds, size, viewport) else {
+        return;
     };
-    let x = border.x.clamp(0.0, (viewport.width - size.width).max(0.0));
+    let (x, y) = (place.origin.x, place.origin.y);
     let rect = RectF::new(x, y, size.width, size.height);
     list.push_op(PaintOp::DrawRRect {
         rrect: RRectF::uniform(rect.offset(0.0, 1.0), 3.0),
@@ -973,6 +978,24 @@ fn paint_label(
         rrect: RRectF::uniform(rect, 3.0),
         flags: PaintFlags::fill(Color::WHITE),
     });
+    // The arrow at the element: under the label above it, over the label
+    // below it.
+    if let Some((arrow_x, above)) = place.arrow {
+        let (base, tip) = if above {
+            (y + size.height, y + size.height + ARROW_HALF_WIDTH)
+        } else {
+            (y, y - ARROW_HALF_WIDTH)
+        };
+        let triangle = [
+            PointF::new(arrow_x, base),
+            PointF::new(arrow_x + 2.0 * ARROW_HALF_WIDTH, base),
+            PointF::new(arrow_x + ARROW_HALF_WIDTH, tip),
+        ];
+        list.push_op(PaintOp::DrawPath {
+            path: gfx::Path::polygons([triangle]),
+            flags: PaintFlags::fill(Color::WHITE),
+        });
+    }
     let mut at = x + PADDING;
     let baseline = y + PADDING + ascent;
     for (text, color) in shaped {
@@ -1017,6 +1040,79 @@ fn paint_label(
         );
         baseline += line + ROW_GAP;
     }
+}
+
+/// The arrow's half width, and how far the label stays from the viewport's
+/// sides (`drawElementTitle`'s `arrowHalfWidth`, `pageMargin`).
+const ARROW_HALF_WIDTH: f32 = 8.0;
+const PAGE_MARGIN: f32 = 2.0;
+
+/// Where a label of `size` goes for an element `bounds` covers (all its
+/// boxes'), in a viewport of `viewport`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct LabelPlace {
+    origin: PointF,
+    /// The arrow's left edge, and whether the label is above the element
+    /// (the arrow under it, pointing down); none when it is hidden.
+    arrow: Option<(f32, bool)>,
+}
+
+/// Where the overlay page puts the label (`inspector_overlay`'s
+/// `drawElementTitle`): above the element if it fits, else below it; its
+/// left edge at the element's, kept in the viewport, the arrow at the
+/// element's left (in its middle if the element is narrow); none when it
+/// would overlap the element without being inside it.
+fn place_label(bounds: RectF, size: SizeF, viewport: SizeF) -> Option<LabelPlace> {
+    let arrow_width = 2.0 * ARROW_HALF_WIDTH;
+    let arrow_inset = ARROW_HALF_WIDTH + 2.0;
+    let container_min_x = PAGE_MARGIN + arrow_inset;
+    let container_max_x = viewport.width - PAGE_MARGIN - arrow_inset - arrow_width;
+    // `constrainNumber`: `value` kept from `min` to `max`, `min` winning.
+    let constrain = |value: f32, min: f32, max: f32| {
+        if value < min {
+            min
+        } else if value > max {
+            max
+        } else {
+            value
+        }
+    };
+    let (min_x, max_x) = (bounds.x, bounds.x + bounds.width);
+    let (min_y, max_y) = (bounds.y, bounds.y + bounds.height);
+    let arrow_x = if max_x - min_x < arrow_width + 2.0 * arrow_inset {
+        (min_x + max_x) * 0.5 - ARROW_HALF_WIDTH
+    } else {
+        let from_left = min_x + arrow_inset;
+        let from_right = max_x - arrow_inset - arrow_width;
+        if from_left > container_min_x && from_left < container_max_x {
+            from_left
+        } else {
+            constrain(container_min_x, from_left, from_right)
+        }
+    };
+    let arrow_hidden = arrow_x < container_min_x || arrow_x > container_max_x;
+    let x = constrain(
+        arrow_x - arrow_inset,
+        PAGE_MARGIN,
+        viewport.width - size.width - PAGE_MARGIN,
+    );
+    let mut y = min_y - ARROW_HALF_WIDTH - size.height;
+    let mut above = true;
+    if y < 0.0 {
+        y = (viewport.height - size.height).min(max_y + ARROW_HALF_WIDTH);
+        above = false;
+    } else if min_y > viewport.height {
+        y = viewport.height - ARROW_HALF_WIDTH - size.height;
+    }
+    let includes = x >= min_x && x + size.width <= max_x && y >= min_y && y + size.height <= max_y;
+    let overlaps = x < max_x && x + size.width > min_x && y < max_y && y + size.height > min_y;
+    if overlaps && !includes {
+        return None;
+    }
+    Some(LabelPlace {
+        origin: PointF::new(x, y),
+        arrow: (!arrow_hidden && !includes).then_some((arrow_x, above)),
+    })
 }
 
 /// The label's rows of an element's style (`elementInfo.style`), as
@@ -1169,6 +1265,51 @@ mod tests {
                 "{color:?} in {format}"
             );
         }
+    }
+
+    /// The label as the overlay page places it: above the element, its left
+    /// edge at the element's, the arrow under it; below an element too near
+    /// the top; kept in the viewport; the arrow in the middle of a narrow
+    /// element; inside a large element with no arrow; none where it would
+    /// overlap the element.
+    #[test]
+    fn labels_are_placed_as_chrome_places_them() {
+        use super::{LabelPlace, place_label};
+        use gfx::{PointF, RectF, SizeF};
+        let viewport = SizeF::new(800.0, 600.0);
+        let label = SizeF::new(100.0, 30.0);
+        let at = |x, y, arrow| {
+            Some(LabelPlace {
+                origin: PointF::new(x, y),
+                arrow,
+            })
+        };
+        assert_eq!(
+            place_label(RectF::new(100.0, 200.0, 150.0, 90.0), label, viewport),
+            at(100.0, 162.0, Some((110.0, true)))
+        );
+        assert_eq!(
+            place_label(RectF::new(100.0, 10.0, 150.0, 90.0), label, viewport),
+            at(100.0, 108.0, Some((110.0, false)))
+        );
+        assert_eq!(
+            place_label(RectF::new(750.0, 200.0, 40.0, 90.0), label, viewport),
+            at(698.0, 162.0, Some((760.0, true)))
+        );
+        assert_eq!(
+            place_label(RectF::new(0.0, 0.0, 800.0, 600.0), label, viewport),
+            at(2.0, 570.0, None)
+        );
+        // Below a tall element, overlapping it: none.
+        assert_eq!(
+            place_label(RectF::new(0.0, 20.0, 100.0, 570.0), label, viewport),
+            None
+        );
+        // A narrow element: the arrow in its middle.
+        assert_eq!(
+            place_label(RectF::new(300.0, 200.0, 20.0, 20.0), label, viewport),
+            at(292.0, 162.0, Some((302.0, true)))
+        );
     }
 
     /// The label's rows: color, font, background, margin, padding, in that

@@ -319,6 +319,7 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 - 行內元素的盒模型：它在每一行的 box 的外框，border 和 padding 取第一個 box 的起點那邊和最後一個的終點那邊，margin 和 border 一樣（machopo 的行內 box 不留 margin；Blink 有左右的 margin）。`getContentQuads` 是每一行的 box，Blink 往下拿子節點的（`CollectQuads`）。
 - `getNodeForLocation` 的點在 viewport 外面時找不到節點（用 Chrome for Testing 152 試過：同一頁 viewport 裡的照樣找到，外面的回答「No node found at given location」）。
 - 標籤的樣式那幾列（第 10 條）和 2b 的 computed style 一起做：2a 的標籤只有名字、id、class 和大小。
+- 標籤的位置（第 1、2 段的手動確認之後改）：原本從 border box 的下緣往下放，margin 寬時壓在 margin 上。照 `inspector_overlay` 的 `drawElementTitle`：照所有框的範圍（包含 margin）放，放得下時在上面、放不下才在下面，左邊對齊元素、留在 viewport 裡，箭頭指著元素（窄的元素指中間），會蓋到元素又沒被它包住時不畫。
 - 框的畫法（2b 改）：2a 照 highlight 的資料把四個框依序整個填滿，margin 蓋住了裡面。2b 做標籤時和 Chrome 的截圖並排才發現不對：`inspector_overlay` 的 `drawHighlight` 從 margin 往內畫，每畫一個就用 `destination-out` 挖掉裡面那個框，所以每個顏色只在自己那一圈。machopo 用 even-odd 的路徑畫出同樣的一圈。2a 的測試把錯的畫法寫成預期（border 那一圈是 margin 的顏色），一起改了。
 
 ### 測試
@@ -360,6 +361,7 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
    - 驗收：滑過樹裡的節點時頁面框出它；選取元素；停在斷點時的「Paused in debugger」；Computed 分頁和 box model 的圖和 Chrome 一樣；`test.py cdp` 的 `overlay` 和 `css` 的 computed 的部分。
 3. **Styles**（第 7 節的其他部分）。
    - `CSS.enable` 開始送 `styleSheetAdded`。
+   - `getAnimatedStylesForNode`（2026-11-09 手動確認時發現）：Chrome 回答元素正在跑的動畫和它們當下的值，前端拿來在 Styles 多一個動畫的區塊、在 Computed 的預設清單列出動畫給的 property；machopo 回答找不到方法，兩處都沒有（Computed 要勾「Show all」）。
    - 驗收：Styles 和 Chrome 一樣，除了 machopo 解析時丟掉的東西；Sources 列出 stylesheet；`:hov`；`test.py cdp` 的 `css`。
 
 每一段做完、經過審核就可以先 merge 回 `main`（`rfcs/README.md` 的「流程」的「階段的 merge」）。順序的理由見「已決定的事項」第 2 條：Overlay 小，第 1 段的樹做完之後最先想要的就是滑過時框出節點；Computed 不碰任何未決的事、查 layout 差異時最常看，跟著提前；Styles 要決定的事最多（第 11、12 條），排在最後，不擋前兩段。

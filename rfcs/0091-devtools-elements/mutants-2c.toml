@@ -140,3 +140,48 @@ file = "crates/renderer/src/render_thread/overlay_agent.rs"
 from = '''                    .paused_message = params["message"].as_str().map(str::to_owned);
                 self.version.set(self.version.get().wrapping_add(1));'''
 to = '''                    .paused_message = params["message"].as_str().map(str::to_owned);'''
+
+# The label's place (fixed after the manual check: it went by the border
+# box, under it, over the margin).
+
+[[mutant]]
+name = "the label goes below the element first"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''    let mut y = min_y - ARROW_HALF_WIDTH - size.height;'''
+to = '''    let mut y = -1.0;'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "overlay_agent"]
+
+[[mutant]]
+name = "a narrow element's arrow is at its left"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''    let arrow_x = if max_x - min_x < arrow_width + 2.0 * arrow_inset {'''
+to = '''    let arrow_x = if false {'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "overlay_agent"]
+
+[[mutant]]
+name = "a label over the element is drawn"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''    if overlaps && !includes {
+        return None;
+    }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "overlay_agent"]
+
+[[mutant]]
+name = "the label leaves the viewport"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''    let x = constrain(
+        arrow_x - arrow_inset,
+        PAGE_MARGIN,
+        viewport.width - size.width - PAGE_MARGIN,
+    );'''
+to = '''    let x = arrow_x - arrow_inset;'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "--", "overlay_agent"]
+
+[[mutant]]
+name = "the label goes by the border box"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''        for point in &points {
+            let (x, y) = (point.x.round(), point.y.round());'''
+to = '''        for point in points.iter().filter(|_| path["name"] == "border") {
+            let (x, y) = (point.x.round(), point.y.round());'''
