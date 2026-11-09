@@ -27,8 +27,11 @@ addEventListener('load', () => setTimeout(() => {
     'responseEnd', 'domInteractive', 'domContentLoadedEventStart', 'domContentLoadedEventEnd',
     'domComplete', 'loadEventStart', 'loadEventEnd'];
   const out = order.filter((k, i) => i > 0 && !(e[k] >= e[order[i - 1]])).map(k => 'early ' + k);
+  // Whether the redirect's start is exposed from `performance.timing` (since
+  // the epoch, 0 for none): the entry's counts from the time origin floored
+  // to 0.1 ms, which the first request on localhost can start within.
   const t = performance.timing;
-  out.push(e.redirectCount, e.redirectStart > 0, e.type, e.nextHopProtocol, e.responseStatus,
+  out.push(e.redirectCount, t.redirectStart > 0, e.type, e.nextHopProtocol, e.responseStatus,
            e.contentType, e.encodedBodySize === e.decodedBodySize,
            e.transferSize - e.encodedBodySize, e.duration === e.loadEventEnd,
            e.name.endsWith('/page'), Math.abs(t.navigationStart - performance.timeOrigin) < 1,

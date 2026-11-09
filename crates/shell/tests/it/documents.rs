@@ -1969,11 +1969,15 @@ fn navigation_timing() {
     let page = r#"<!DOCTYPE html><body><iframe src="/child"></iframe><script>
 onload = () => setTimeout(() => {
   const n = performance.getEntriesByType('navigation')[0];
-  const order = [n.fetchStart, n.requestStart, n.responseStart, n.responseEnd, n.domInteractive, n.domContentLoadedEventStart,
-                 n.domContentLoadedEventEnd, n.domComplete, n.loadEventStart, n.loadEventEnd];
+  const order = ['fetchStart', 'requestStart', 'responseStart', 'responseEnd', 'domInteractive', 'domContentLoadedEventStart',
+                 'domContentLoadedEventEnd', 'domComplete', 'loadEventStart', 'loadEventEnd'];
+  // Whether each is set from `performance.timing` (since the epoch, 0 for
+  // none): the entry's count from the time origin floored to 0.1 ms, which
+  // a fetch on localhost can start within.
+  const set = (k, i) => performance.timing[k] > 0 && (i == 0 || n[k] >= n[order[i - 1]]);
   const child = document.querySelector('iframe').contentWindow.performance.getEntriesByType('navigation')[0];
   testRunner.reportHarnessResults([
-    n.name.endsWith('/'), n.type, n.responseStatus, n.contentType, n.decodedBodySize > 0, order.every((t, i) => t > 0 && (i == 0 || t >= order[i - 1])),
+    n.name.endsWith('/'), n.type, n.responseStatus, n.contentType, n.decodedBodySize > 0, order.every(set),
     performance.timing.loadEventEnd >= performance.timing.navigationStart, child.name.endsWith('/child'), child.responseEnd > 0,
   ].join(' '));
 }, 0);
