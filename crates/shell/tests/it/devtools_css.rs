@@ -90,13 +90,15 @@ fn computed(page: &mut Client, node: &Value) -> serde_json::Map<String, Value> {
         .collect()
 }
 
-/// A `CSS.CSSStyle`'s declarations, as `name: value` (`!` when important,
-/// `?` when implicit).
+/// A `CSS.CSSStyle`'s declarations as parsed (those as written, with
+/// ranges, left out), as `name: value` (`!` when important, `?` when
+/// implicit).
 fn declarations(style: &Value) -> Vec<String> {
     style["cssProperties"]
         .as_array()
         .unwrap()
         .iter()
+        .filter(|property| property.get("range").is_none())
         .map(|property| {
             let mut text = format!(
                 "{}: {}",
@@ -224,9 +226,10 @@ fn matched_rules_are_listed() {
         ]
     );
     let margin = &rules[first_author + 1]["rule"];
+    let selector = &margin["selectorList"]["selectors"][2];
     assert_eq!(
-        margin["selectorList"]["selectors"][2],
-        json!({ "text": "div.a", "specificity": { "a": 0, "b": 1, "c": 1 } })
+        (&selector["text"], &selector["specificity"]),
+        (&json!("div.a"), &json!({ "a": 0, "b": 1, "c": 1 }))
     );
     assert_eq!(
         declarations(&margin["style"]),
@@ -243,14 +246,14 @@ fn matched_rules_are_listed() {
     );
     assert_eq!(
         declarations(&rules[first_author + 2]["rule"]["style"]),
-        ["color: red!"]
+        ["color: red !important!"]
     );
     assert_eq!(
         declarations(&matched["inlineStyle"]),
         [
-            "border-top-width: medium?",
+            "border-top-width: medium",
             "border-top-style: solid",
-            "border-top-color: currentcolor?"
+            "border-top-color: currentcolor"
         ]
     );
     assert!(matched.get("attributesStyle").is_none());
@@ -264,9 +267,10 @@ fn matched_rules_are_listed() {
         declarations(&matched["attributesStyle"]),
         ["color: rgb(255, 0, 0)"]
     );
+    let inline_style = &matched["inlineStyle"];
     assert_eq!(
-        matched["inlineStyle"],
-        json!({ "cssProperties": [], "shorthandEntries": [] })
+        (&inline_style["cssProperties"], &inline_style["cssText"]),
+        (&json!([]), &json!(""))
     );
     let inline = result(page.call(None, "CSS.getInlineStylesForNode", json!({ "nodeId": f })));
     assert_eq!(inline["attributesStyle"], matched["attributesStyle"]);
@@ -646,9 +650,9 @@ fn style_sheets_are_told_with_their_texts() {
         assert_eq!(rule["style"]["styleSheetId"], rule["styleSheetId"]);
         rule["styleSheetId"].clone()
     };
-    assert_eq!(of("p", "padding-top"), from_link["styleSheetId"]);
+    assert_eq!(of("p", "padding"), from_link["styleSheetId"]);
     assert_eq!(of("p", "color"), from_style["styleSheetId"]);
-    assert_eq!(of(".a", "margin-top"), adopted["styleSheetId"]);
+    assert_eq!(of(".a", "margin"), adopted["styleSheetId"]);
     // The UA's: of none.
     let ua = matched["matchedCSSRules"]
         .as_array()
@@ -758,7 +762,9 @@ fn sheets_coming_and_going_are_told() {
 /// A `<link>`'s sheet loaded before DevTools came is fetched again as its
 /// text is first asked for, as its `<link>` fetched it (with CORS for one
 /// with `crossorigin`): the text as it came now if it has the sheet's
-/// rules, else the rules as CSSOM writes them; once, however many ask.
+/// rules (not if nothing came), else the rules as CSSOM writes them; once,
+/// however many ask. One script edited is its rules as CSSOM writes them,
+/// not fetched.
 #[test]
 fn link_sheets_loaded_before_devtools_are_fetched_again() {
     let a = "/* a */\np { padding: 1px }\n";
@@ -767,14 +773,16 @@ fn link_sheets_loaded_before_devtools_are_fetched_again() {
         Route::ok("text/css", "/* c */ p { color: blue }")
             .with_header("Access-Control-Allow-Origin", "*"),
     )]);
+    let gone = server(&[("/d.css", Route::ok("text/css", "/* d */ p { top: 0 }"))]);
     let html = format!(
         "<!DOCTYPE html><link rel=stylesheet href=/a.css><link rel=stylesheet href=/b.css>\
-         <link rel=stylesheet crossorigin href={}>\
+         <link rel=stylesheet crossorigin href={}><link rel=stylesheet href={}>\
          <p>p</p><script>onload = () => {{\
            document.styleSheets[1].insertRule('p {{ margin: 0 }}');\
            fetch('/loaded');\
          }};</script>",
-        other.url("/c.css")
+        other.url("/c.css"),
+        gone.url("/d.css")
     );
     let server = server(&[
         ("/", Route::ok("text/html", html)),
@@ -808,6 +816,8 @@ fn link_sheets_loaded_before_devtools_are_fetched_again() {
     result(page.call(None, "DOM.enable", json!({})));
     result(page.call(None, "CSS.enable", json!({})));
     let headers = added(&mut page);
+    let d_url = gone.url("/d.css");
+    drop(gone);
     let id = |url: &str| {
         headers
             .iter()
@@ -817,6 +827,19 @@ fn link_sheets_loaded_before_devtools_are_fetched_again() {
     };
     let (a_id, b_id) = (id(&server.url("/a.css")), id(&server.url("/b.css")));
     assert_eq!(requests("/a.css"), 1);
+    // Where `a.css`'s rule is: in its rules as CSSOM writes them, until its
+    // text came again.
+    let document = result(page.call(None, "DOM.getDocument", json!({})))["root"]["nodeId"].clone();
+    let padding_at = |page: &mut Client| {
+        let (rules, _) = author_rules(page, &document, "p");
+        let rule = rules
+            .iter()
+            .find(|rule| rule["styleSheetId"] == a_id)
+            .unwrap_or_else(|| panic!("{rules:?}"))
+            .clone();
+        range(&rule["selectorList"]["selectors"][0]["range"])
+    };
+    assert_eq!(padding_at(&mut page), (0, 0, 0, 1));
     // Asked twice before it comes: both answered, of one fetch.
     let asked = [a_id.clone(), a_id.clone()].map(|id| {
         page.send(None, "CSS.getStyleSheetText", json!({ "styleSheetId": id }))
@@ -825,14 +848,15 @@ fn link_sheets_loaded_before_devtools_are_fetched_again() {
         assert_eq!(result(page.answer(asked))["text"], a);
     }
     assert_eq!(requests("/a.css"), 2);
-    // Its rules changed since: they.
+    assert_eq!(padding_at(&mut page), (1, 0, 1, 1));
+    // Script edited its rules since: they, not fetched.
     let b = "p { margin: 0px; }\np { color: red; }\n";
     assert_eq!(sheet_text(&mut page, &b_id), b);
-    assert_eq!(requests("/b.css"), 2);
+    assert_eq!(requests("/b.css"), 1);
     // Asked again: kept.
     assert_eq!(sheet_text(&mut page, &a_id), a);
     assert_eq!(sheet_text(&mut page, &b_id), b);
-    assert_eq!((requests("/a.css"), requests("/b.css")), (2, 2));
+    assert_eq!((requests("/a.css"), requests("/b.css")), (2, 1));
     // With CORS, as its `<link>`'s: the page's origin told.
     assert_eq!(
         sheet_text(&mut page, &id(&other.url("/c.css"))),
@@ -845,4 +869,272 @@ fn link_sheets_loaded_before_devtools_are_fetched_again() {
         .map(|request| request.header("origin").map(str::to_owned))
         .collect();
     assert_eq!(origins, [Some(origin.clone()), Some(origin)]);
+    // Nothing came: the rules.
+    assert_eq!(sheet_text(&mut page, &id(&d_url)), "p { top: 0px; }\n");
+}
+
+/// A `CSS.SourceRange` as (start line, start column, end line, end column).
+fn range(value: &Value) -> (u64, u64, u64, u64) {
+    let at = |key: &str| {
+        value[key]
+            .as_u64()
+            .unwrap_or_else(|| panic!("{key}: {value}"))
+    };
+    (at("startLine"), at("startColumn"), at("endLine"), at("endColumn"))
+}
+
+/// The author rules `selector` finds an element matching.
+fn author_rules(page: &mut Client, document: &Value, selector: &str) -> (Vec<Value>, Value) {
+    let element = node(page, document, selector);
+    let matched = result(page.call(
+        None,
+        "CSS.getMatchedStylesForNode",
+        json!({ "nodeId": element }),
+    ));
+    let rules = matched["matchedCSSRules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|rule| rule["rule"]["origin"] == "regular")
+        .map(|rule| rule["rule"].clone())
+        .collect();
+    (rules, matched["inlineStyle"].clone())
+}
+
+/// Where a rule is in its sheet's text (lines from 0, columns in UTF-16
+/// code units): each selector (to its comma) and the selector list as
+/// written; its block; each declaration as written, in order, with its
+/// text, a shorthand's longhands, `!important`, one that doesn't parse, one
+/// in a comment, then those parsed; the `@media` and `@supports` it is in,
+/// the innermost first, the sheet's own media last.
+#[test]
+fn rules_have_their_places() {
+    let (_machopo, mut page, document, _server) = css_page(
+        "<!DOCTYPE html><style media=screen>\n/* é */ .a ,\n p > i.a { margin: 1px 2px; color: red !important; \
+         foo: bar; /* gap: 1px; */ top: 0 }\n@media (min-width: 1px) {\n  @supports (display: grid) {\n    \
+         @media (max-width: 9999px) { .a { left: 1px } }\n  }\n}\n</style><p><i class=a>i</i></p>",
+    );
+    let (rules, _) = author_rules(&mut page, &document, "i");
+    assert_eq!(rules.len(), 2, "{rules:?}");
+    // In cascade order: the nested one's selector is less specific.
+    let [nested, first] = &rules[..] else {
+        unreachable!()
+    };
+    let selectors = first["selectorList"]["selectors"].as_array().unwrap();
+    let selectors: Vec<(&str, (u64, u64, u64, u64))> = selectors
+        .iter()
+        .map(|selector| (selector["text"].as_str().unwrap(), range(&selector["range"])))
+        .collect();
+    // `é` is one code unit; the first runs to its comma.
+    assert_eq!(selectors, [(".a", (1, 8, 1, 11)), ("p > i.a", (2, 1, 2, 8))]);
+    assert_eq!(first["selectorList"]["text"], ".a, p > i.a");
+    let style = &first["style"];
+    assert_eq!(range(&style["range"]), (2, 10, 2, 84));
+    assert!(style["cssText"].as_str().unwrap().starts_with(" margin: 1px 2px;"));
+    let written: Vec<Value> = style["cssProperties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|property| property.get("range").is_some())
+        .map(|property| {
+            let mut property = property.clone();
+            let place = range(&property["range"]);
+            property["range"] = json!([place.1, place.3]);
+            property
+        })
+        .collect();
+    let longhands = json!([
+        { "name": "margin-top", "value": "1px" },
+        { "name": "margin-right", "value": "2px" },
+        { "name": "margin-bottom", "value": "1px" },
+        { "name": "margin-left", "value": "2px" },
+    ]);
+    assert_eq!(
+        written,
+        [
+            json!({ "name": "margin", "value": "1px 2px", "text": "margin: 1px 2px;", "range": [11, 27],
+                    "implicit": false, "disabled": false, "longhandProperties": longhands }),
+            json!({ "name": "color", "value": "red !important", "text": "color: red !important;",
+                    "range": [28, 50], "implicit": false, "disabled": false, "important": true }),
+            json!({ "name": "foo", "value": "bar", "text": "foo: bar;", "range": [51, 60],
+                    "implicit": false, "disabled": false, "parsedOk": false }),
+            json!({ "name": "gap", "value": "1px", "text": "/* gap: 1px; */", "range": [61, 76],
+                    "disabled": true, "longhandProperties": [
+                        { "name": "row-gap", "value": "1px" }, { "name": "column-gap", "value": "1px" },
+                    ] }),
+            json!({ "name": "top", "value": "0", "text": "top: 0 ", "range": [77, 84],
+                    "implicit": false, "disabled": false }),
+        ]
+    );
+    // Then as parsed.
+    assert_eq!(
+        declarations(style),
+        [
+            "margin-top: 1px",
+            "margin-right: 2px",
+            "margin-bottom: 1px",
+            "margin-left: 2px",
+            "top: 0px",
+            "color: red !important!"
+        ]
+    );
+    assert_eq!(first["ruleTypes"], json!(["MediaRule"]));
+    assert_eq!(first["supports"], json!([]));
+    let own = &first["media"];
+    assert_eq!(
+        (&own[0]["text"], &own[0]["source"], own[0].get("range")),
+        (&json!("screen"), &json!("linkedSheet"), None)
+    );
+
+    assert_eq!(
+        nested["ruleTypes"],
+        json!(["MediaRule", "SupportsRule", "MediaRule", "MediaRule"])
+    );
+    let supports = &nested["supports"][0];
+    assert_eq!(
+        (&supports["text"], &supports["active"], range(&supports["range"])),
+        (&json!("(display: grid)"), &json!(true), (4, 12, 4, 27))
+    );
+    assert_eq!(supports["styleSheetId"], first["styleSheetId"]);
+    let media = &nested["media"];
+    assert_eq!(media[0]["text"], "(max-width: 9999px)");
+    assert_eq!(
+        (&media[1]["text"], &media[1]["source"], range(&media[1]["range"])),
+        (&json!("(min-width: 1px)"), &json!("mediaRule"), (3, 7, 3, 23))
+    );
+    assert_eq!(media[2]["text"], "screen");
+    assert_eq!(
+        range(&nested["selectorList"]["selectors"][0]["range"]),
+        (5, 33, 5, 35)
+    );
+}
+
+/// An element's `style` attribute is a sheet of its own, not told: an id
+/// that stays the element's, its text the attribute's, its declarations
+/// where they are in it; with no attribute, empty. Once script changes it,
+/// that is told.
+#[test]
+fn inline_styles_are_sheets_of_their_own() {
+    let (_machopo, mut page, document, _server) = css_page(
+        "<!DOCTYPE html><div id=a style='color: pink;  zz: 1'>a</div><div id=b>b</div>\
+         <div id=c style='margin: 1px; background: var(--x)'>c</div>",
+    );
+    let (_, inline) = author_rules(&mut page, &document, "#a");
+    let id = inline["styleSheetId"].clone();
+    assert!(id.is_string(), "{inline}");
+    assert_eq!(inline["cssText"], "color: pink;  zz: 1");
+    assert_eq!(range(&inline["range"]), (0, 0, 0, 19));
+    let written: Vec<(&str, &Value, (u64, u64, u64, u64))> = inline["cssProperties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|property| property.get("range").is_some())
+        .map(|property| {
+            (
+                property["text"].as_str().unwrap(),
+                &property["parsedOk"],
+                range(&property["range"]),
+            )
+        })
+        .collect();
+    assert_eq!(
+        written,
+        [
+            ("color: pink;", &Value::Null, (0, 0, 0, 12)),
+            ("zz: 1", &json!(false), (0, 14, 0, 19))
+        ]
+    );
+    assert_eq!(sheet_text(&mut page, &id), "color: pink;  zz: 1");
+    let a = node(&mut page, &document, "#a");
+    let again = result(page.call(None, "CSS.getInlineStylesForNode", json!({ "nodeId": a })));
+    assert_eq!(again["inlineStyle"]["styleSheetId"], id);
+    assert!(page.take_events("CSS.styleSheetAdded").is_empty());
+
+    let (_, none) = author_rules(&mut page, &document, "#b");
+    assert_ne!(none["styleSheetId"], id);
+    assert_eq!(
+        (&none["cssText"], &none["cssProperties"]),
+        (&json!(""), &json!([]))
+    );
+    assert_eq!(sheet_text(&mut page, &none["styleSheetId"]), "");
+    // A shorthand's longhands; none while a `var()` is in it.
+    let (_, c) = author_rules(&mut page, &document, "#c");
+    let longhands: Vec<(&Value, usize)> = c["cssProperties"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|property| property.get("range").is_some())
+        .map(|property| {
+            (
+                &property["name"],
+                property["longhandProperties"].as_array().map_or(0, Vec::len),
+            )
+        })
+        .collect();
+    assert_eq!(
+        longhands,
+        [(&json!("margin"), 4), (&json!("background"), 0)]
+    );
+
+    evaluate(&mut page, "a.style.color = 'blue'", None);
+    let changed = page.event("CSS.styleSheetChanged");
+    assert_eq!(changed["params"]["styleSheetId"], id);
+    assert_eq!(sheet_text(&mut page, &id), "color: blue;");
+    two_frames(&mut page);
+    assert!(page.take_events("CSS.styleSheetChanged").is_empty());
+}
+
+/// A sheet script edits is told changed, and its text is its rules as
+/// CSSOM writes them from then on (a `<link>`'s too), where its rules are
+/// found; a `<style>` script filled with `insertRule` (CSS-in-JS's) has them
+/// for its text.
+#[test]
+fn edited_sheets_are_their_rules() {
+    let (_machopo, mut page, document, _server) = css_site(&[
+        (
+            "/",
+            Route::ok(
+                "text/html",
+                "<!DOCTYPE html><style>/* c */ p { color: red }</style><style id=js></style>\
+                 <script>js.sheet.insertRule('p { top: 0 }')</script><p>p</p>\
+                 <link rel=stylesheet href=/l.css>",
+            ),
+        ),
+        ("/l.css", Route::ok("text/css", "/* l */ p { left: 1px }")),
+    ]);
+    let headers = added(&mut page);
+    // A `<link>`'s as it came, until script edits it.
+    let link = headers[2]["styleSheetId"].clone();
+    assert_eq!(sheet_text(&mut page, &link), "/* l */ p { left: 1px }");
+    evaluate(&mut page, "document.styleSheets[2].deleteRule(0)", None);
+    assert_eq!(
+        page.event("CSS.styleSheetChanged")["params"]["styleSheetId"],
+        link
+    );
+    assert_eq!(sheet_text(&mut page, &link), "");
+    assert_eq!(sheet_text(&mut page, &headers[1]["styleSheetId"]), "p { top: 0px; }\n");
+    assert_eq!(headers[1]["length"], 16);
+    let id = headers[0]["styleSheetId"].clone();
+    assert_eq!(sheet_text(&mut page, &id), "/* c */ p { color: red }");
+    evaluate(
+        &mut page,
+        "document.styleSheets[0].insertRule('p { left: 0 }', 0)",
+        None,
+    );
+    let changed = page.event("CSS.styleSheetChanged");
+    assert_eq!(changed["params"]["styleSheetId"], id);
+    assert!(page.take_events("CSS.styleSheetAdded").is_empty());
+    assert_eq!(
+        sheet_text(&mut page, &id),
+        "p { left: 0px; }\np { color: red; }\n"
+    );
+    let (rules, _) = author_rules(&mut page, &document, "p");
+    let color = rules
+        .iter()
+        .find(|rule| rule["styleSheetId"] == id && rule["style"]["cssText"] == " color: red; ")
+        .unwrap_or_else(|| panic!("{rules:?}"));
+    assert_eq!(
+        range(&color["selectorList"]["selectors"][0]["range"]),
+        (1, 0, 1, 1)
+    );
 }

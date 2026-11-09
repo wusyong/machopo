@@ -29,7 +29,8 @@ use crate::{Cx, Node, NodeKind, NodeRef, sites};
 /// sheets. Where it came from (constructed, or an element's: `cssom`), the
 /// element while it is its sheet, its `href` and whether it is
 /// origin-clean (a `<link>`'s). And its rules' objects, its `cssRules`
-/// and its `media`'s object, once script asked for them.
+/// and its `media`'s object, once script asked for them. Whether script
+/// edited its rules (DevTools' text of it is its source until then).
 #[derive(GcObject)]
 pub struct CssStyleSheet {
     document: Member<Node>,
@@ -38,6 +39,7 @@ pub struct CssStyleSheet {
     disabled: Cell<bool>,
     id: Cell<u64>,
     listed: Cell<bool>,
+    edited: Cell<bool>,
     wrapper: JsEdge,
     pub(crate) source: External<crate::cssom::SheetSource>,
     pub(crate) owner: Member<Node>,
@@ -112,6 +114,7 @@ impl<'gc> Cx<'_, 'gc> {
                 disabled: Cell::new(false),
                 id: Cell::new(id),
                 listed: Cell::new(false),
+                edited: Cell::new(false),
                 wrapper: (),
                 source: External::new(source),
                 owner: None,
@@ -236,8 +239,16 @@ impl<'gc> Cx<'_, 'gc> {
     ) {
         let contents = self.sheet_contents_object(contents);
         sheet.contents.set(self.gc, Some(contents));
+        sheet.edited.set(true);
         self.tree_changed();
         self.sheet_changed(sheet);
+    }
+
+    /// Whether script edited `sheet`'s rules (`insertRule`, `deleteRule`, a
+    /// rule's `style`, `replace`): until then its contents are what its
+    /// source (a `<style>`'s text, a `<link>`'s response) parsed to.
+    pub fn style_sheet_edited(&self, sheet: Gc<'gc, CssStyleSheet>) -> bool {
+        sheet.edited.get()
     }
 
     /// `sheet` changed (its contents, media or `disabled`): a constructed

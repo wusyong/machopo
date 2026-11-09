@@ -6,19 +6,22 @@
 //! was laid out in; and, while the Computed pane follows a node, word when
 //! its style changes.
 //!
-//! The rules come without the sheets they are in (no `styleSheetId`, no
-//! `range`): machopo keeps no sheet's text, and `enable` tells of no
-//! sheet. Their declarations are as parsed, as Chrome lists a rule it has
-//! no text of (a user-agent rule).
+//! The sheets are told as they come and go, with their texts; a rule an
+//! element matches comes with its sheet, where it and its declarations are
+//! in the sheet's text (the text parsed again, as Blink's
+//! `InspectorStyleSheet` does), and the `@media` and `@supports` it is in.
+//! An element's `style` attribute is a sheet of its own, not told.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::ops::Range;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
 use computed_style::ComputedStyle;
 use crossbeam_channel::Sender;
-use css::{CssPropertyValueSet, StyleSheetContents as CssStyleSheetContents};
+use css::inspector::{SourceDeclaration, SourceRule};
+use css::{CssPropertyValueSet, CssRule, StyleSheetContents as CssStyleSheetContents};
 use dom::{Cx, Dom, NodeId, NodeKind, NodeRef};
 use dom_api::{DevToolsPage, FrameLayout};
 use protocol::renderer::RendererHostMsg;
@@ -46,9 +49,10 @@ struct Session {
     /// by the session's id of it and the backend's, with its style as last
     /// seen.
     tracked: Option<Tracked>,
-    /// The ids of the sheets it was told of (`styleSheetAdded`), not gone
-    /// since.
-    sheets: Vec<u64>,
+    /// The sheets it was told of (`styleSheetAdded`), not gone since: their
+    /// ids and their contents' addresses as last told (others now: script
+    /// edited them, `styleSheetChanged`).
+    sheets: Vec<(u64, usize)>,
 }
 
 struct Tracked {
@@ -82,6 +86,71 @@ pub(crate) struct CssAgent {
     /// The `<link>` sheets to fetch again for their texts, and the commands
     /// that wait for them.
     refetches: RefCell<Vec<Refetch>>,
+    /// Sheets' texts parsed for where their rules are, as DevTools asked:
+    /// kept while their contents live and their texts stay.
+    sources: RefCell<Vec<Rc<SheetSource>>>,
+    /// The elements whose `style` attributes DevTools has as sheets (Blink's
+    /// `InspectorStyleSheetForInlineStyle`), and the last number given one.
+    inline_styles: RefCell<Vec<InlineStyle>>,
+    inline_count: Cell<u64>,
+}
+
+/// An element's `style` attribute as a sheet of its own: its id, and its
+/// text as DevTools last had it (`styleSheetChanged` once it changes).
+struct InlineStyle {
+    node: NodeId,
+    id: u64,
+    text: String,
+}
+
+/// A sheet's text and where its rules are in it (Blink's
+/// `CSSRuleSourceData`): its rules parsed again, which the parser keeps in
+/// the order its contents' are, rule for rule (its contents are what this
+/// text parsed to: script didn't edit them).
+struct SheetSource {
+    contents: Weak<CssStyleSheetContents>,
+    text: String,
+    rules: Vec<SourceRule>,
+    lines: Lines,
+}
+
+/// Where each line of a text starts, for DevTools' positions (lines from 0,
+/// columns in UTF-16 code units).
+struct Lines {
+    starts: Vec<usize>,
+}
+
+impl Lines {
+    fn new(text: &str) -> Self {
+        let mut starts = vec![0];
+        // After each line break: within the text, nothing to overflow.
+        starts.extend(text.match_indices('\n').map(|(at, _)| at.saturating_add(1)));
+        Self { starts }
+    }
+
+    /// `range` of `text` as a `CSS.SourceRange`.
+    fn range(&self, text: &str, range: &Range<usize>) -> Value {
+        let (start_line, start_column) = self.position(text, range.start);
+        let (end_line, end_column) = self.position(text, range.end);
+        json!({
+            "startLine": start_line,
+            "startColumn": start_column,
+            "endLine": end_line,
+            "endColumn": end_column,
+        })
+    }
+
+    fn position(&self, text: &str, offset: usize) -> (u32, u32) {
+        let line = self.starts.partition_point(|&start| start <= offset).saturating_sub(1);
+        let start = self.starts.get(line).copied().unwrap_or_default();
+        let column = text
+            .get(start..offset)
+            .map_or(0, |before| before.encode_utf16().count());
+        (
+            u32::try_from(line).unwrap_or(u32::MAX),
+            u32::try_from(column).unwrap_or(u32::MAX),
+        )
+    }
 }
 
 /// A `<link>` sheet loaded before DevTools came, fetched again for its text
@@ -115,6 +184,9 @@ impl CssAgent {
             sheets_versions: RefCell::new(Vec::new()),
             link_texts: RefCell::new(Vec::new()),
             refetches: RefCell::new(Vec::new()),
+            sources: RefCell::new(Vec::new()),
+            inline_styles: RefCell::new(Vec::new()),
+            inline_count: Cell::new(0),
         }
     }
 
@@ -169,10 +241,7 @@ impl CssAgent {
         let Some(contents) = refetch.contents.upgrade() else {
             return;
         };
-        let same = text.as_deref().is_some_and(|text| {
-            serialized(&CssStyleSheetContents::parse(text, base)) == serialized(&contents)
-        });
-        let kept = same.then(|| Rc::<str>::from(text.unwrap_or_default()));
+        let kept = text_if_same(text, base, &contents);
         {
             let mut texts = self.link_texts.borrow_mut();
             texts.retain(|(known, _)| known.strong_count() > 0);
@@ -216,11 +285,17 @@ impl CssAgent {
                         let href = cx.style_sheet_href(sheet);
                         let inline = owner.is_some() && href.is_none();
                         let contents = cx.style_sheet_contents(sheet);
+                        // Its source while script hasn't edited its rules;
+                        // after, as CSSOM writes them.
+                        let edited = cx.style_sheet_edited(sheet);
                         let text = match owner {
-                            Some(owner) if inline => cx.child_text_content(owner).to_string(),
-                            // A `<link>`'s as it came, if DevTools has it;
-                            // else, and a constructed one's (Chrome's too),
-                            // as CSSOM writes its rules.
+                            Some(owner) if inline && !edited => {
+                                cx.child_text_content(owner).to_string()
+                            }
+                            // A `<link>`'s as it came, if DevTools has it
+                            // (none of an edited one's: an edit's contents
+                            // are others); else, and a constructed one's
+                            // (Chrome's too), as CSSOM writes its rules.
                             _ => match self.link_text(contents) {
                                 Some(Some(text)) => text.to_string(),
                                 _ => serialized(contents),
@@ -230,7 +305,7 @@ impl CssAgent {
                         // fetch it again with.
                         let refetch = owner
                             .zip(href)
-                            .filter(|_| self.link_text(contents).is_none())
+                            .filter(|_| !edited && self.link_text(contents).is_none())
                             .map(|(link, href)| Refetch {
                                 contents: Arc::downgrade(contents),
                                 url: href.to_owned(),
@@ -284,11 +359,15 @@ impl CssAgent {
                         if !inline {
                             header["loadingFailed"] = false.into();
                         }
+                        let media = cx.style_sheet_media(sheet).0;
                         sheets.push(SheetInfo {
                             id,
                             header,
                             text,
                             refetch,
+                            contents: contents.clone(),
+                            media: (owner.is_some() && !media.is_empty())
+                                .then(|| media.to_owned()),
                         });
                     }
                 }
@@ -297,8 +376,30 @@ impl CssAgent {
         })
     }
 
-    /// A rule an element matches, as DevTools' `CSS.CSSRule`.
-    fn rule_json(&self, matched: &style::ExplainedRule) -> Value {
+    /// `sheet`'s text parsed for where its rules are: the one kept, if its
+    /// contents and text are the same.
+    fn source(&self, sheet: &SheetInfo) -> Rc<SheetSource> {
+        let mut sources = self.sources.borrow_mut();
+        if let Some(source) = sources.iter().find(|source| {
+            std::ptr::eq(source.contents.as_ptr(), Arc::as_ptr(&sheet.contents))
+                && source.text == sheet.text
+        }) {
+            return source.clone();
+        }
+        sources.retain(|source| source.contents.strong_count() > 0);
+        let source = Rc::new(SheetSource {
+            contents: Arc::downgrade(&sheet.contents),
+            rules: css::inspector::rules_for_inspector(&sheet.text),
+            lines: Lines::new(&sheet.text),
+            text: sheet.text.clone(),
+        });
+        sources.push(source.clone());
+        source
+    }
+
+    /// A rule an element matches, as DevTools' `CSS.CSSRule`: with where it
+    /// is in its sheet (one of `sheets`), and the group rules it is in.
+    fn rule_json(&self, matched: &style::ExplainedRule, sheets: &[SheetInfo]) -> Value {
         let selectors: Vec<Value> = matched
             .rule
             .selectors_for_inspector()
@@ -315,11 +416,150 @@ impl CssAgent {
             "style": style_json(matched.rule.style()),
         });
         // The sheet it is of: none for the UA's.
-        if let Some(sheet) = matched.sheet {
-            rule["styleSheetId"] = self.sheet_id(sheet).into();
-            rule["style"]["styleSheetId"] = self.sheet_id(sheet).into();
+        let Some(sheet) = matched.sheet else {
+            return rule;
+        };
+        let id = self.sheet_id(sheet);
+        rule["styleSheetId"] = id.clone().into();
+        rule["style"]["styleSheetId"] = id.clone().into();
+        let Some(sheet) = sheets.iter().find(|info| info.id == sheet) else {
+            return rule;
+        };
+        let Some(path) = rule_path(sheet.contents.rules(), &matched.rule) else {
+            return rule;
+        };
+        let source = self.source(sheet);
+        let source_url = sheet.header["sourceURL"].clone();
+        // The group rules it is in, the outermost first, and where it is.
+        let (mut media, mut supports, mut types) = (Vec::new(), Vec::new(), Vec::new());
+        let mut rules = sheet.contents.rules();
+        let mut sources = Some(&source.rules[..]);
+        let mut found = None;
+        for &at in &path {
+            let here = sources.and_then(|sources| sources.get(at));
+            let prelude = here.map(|here| (&source.text[here.prelude.clone()], &here.prelude));
+            match &rules[at] {
+                CssRule::Media(group) => {
+                    let mut entry = json!({
+                        "text": prelude.map_or_else(|| group.media.to_css(), |(text, _)| text.to_owned()),
+                        "source": "mediaRule",
+                        "sourceURL": source_url,
+                        "styleSheetId": id,
+                        "mediaList": [],
+                    });
+                    if let Some((_, range)) = prelude {
+                        entry["range"] = source.lines.range(&source.text, range);
+                    }
+                    media.push(entry);
+                    types.push("MediaRule");
+                    rules = &group.rules;
+                }
+                CssRule::Supports(group) => {
+                    let mut entry = json!({
+                        "text": prelude.map_or_else(|| group.condition.clone(), |(text, _)| text.to_owned()),
+                        "active": group.supported,
+                        "styleSheetId": id,
+                    });
+                    if let Some((_, range)) = prelude {
+                        entry["range"] = source.lines.range(&source.text, range);
+                    }
+                    supports.push(entry);
+                    types.push("SupportsRule");
+                    rules = &group.rules;
+                }
+                _ => found = here,
+            }
+            sources = here.map(|here| &here.rules[..]);
         }
+        // The innermost first, the sheet's own media last (Blink's
+        // `BuildMediaListChain`).
+        media.reverse();
+        supports.reverse();
+        types.reverse();
+        if let Some(text) = &sheet.media {
+            media.push(json!({
+                "text": text,
+                "source": "linkedSheet",
+                "sourceURL": source_url,
+            }));
+            types.push("MediaRule");
+        }
+        rule["media"] = media.into();
+        rule["supports"] = supports.into();
+        rule["ruleTypes"] = types.into();
+        let Some(found) = found else {
+            return rule;
+        };
+        // Its selectors as written, if the parser found as many.
+        let selectors = &mut rule["selectorList"]["selectors"];
+        if selectors.as_array().map(Vec::len) == Some(found.selectors.len()) {
+            for (selector, range) in selectors
+                .as_array_mut()
+                .into_iter()
+                .flatten()
+                .zip(&found.selectors)
+            {
+                selector["text"] = source.text[range.clone()].trim_end().into();
+                selector["range"] = source.lines.range(&source.text, range);
+            }
+            let texts: Vec<&str> = found
+                .selectors
+                .iter()
+                .map(|range| source.text[range.clone()].trim_end())
+                .collect();
+            rule["selectorList"]["text"] = texts.join(", ").into();
+        }
+        let style = &mut rule["style"];
+        sourced(style, &source.text, &found.block, &source.lines);
         rule
+    }
+
+    /// An element's inline style as DevTools' `CSS.CSSStyle`: its `style`
+    /// attribute a sheet of its own (one with no declarations without the
+    /// attribute: Blink's is its inline style sheet's, which every element
+    /// has), with where its declarations are in the attribute.
+    fn inline_json(
+        &self,
+        page: &mut dyn DevToolsPage,
+        node: NodeId,
+        explained: Option<&style::Explained>,
+    ) -> Value {
+        let text = page
+            .dom()
+            .read(|cx| {
+                let element = cx.node_by_id(node)?;
+                cx.get_attribute(element, "style")
+                    .map(|value| value.to_str().into_owned())
+            })
+            .unwrap_or_default();
+        let mut style = match explained.and_then(|explained| explained.inline.as_deref()) {
+            Some(inline) => style_json(inline),
+            None => json!({ "cssProperties": [], "shorthandEntries": [] }),
+        };
+        let lines = Lines::new(&text);
+        sourced(&mut style, &text, &(0..text.len()), &lines);
+        style["styleSheetId"] = self.inline_id(node, &text).into();
+        style
+    }
+
+    /// The id of `node`'s `style` attribute as a sheet (`<prefix>.<n>`, as
+    /// Chrome's are of its process), whose text is `text` now.
+    fn inline_id(&self, node: NodeId, text: &str) -> String {
+        let mut inline = self.inline_styles.borrow_mut();
+        let id = match inline.iter().find(|style| style.node == node) {
+            Some(style) => style.id,
+            None => {
+                let id = self.inline_count.get();
+                self.inline_count.set(id.wrapping_add(1));
+                inline.push(InlineStyle {
+                    node,
+                    id,
+                    text: text.to_owned(),
+                });
+                id
+            }
+        };
+        format!("{}.{id}", self.prefix)
     }
 
     /// The sheets now told to each session: those gone (`styleSheetRemoved`),
@@ -327,26 +567,31 @@ impl CssAgent {
     fn tell_sheets(&self, sheets: &[SheetInfo]) {
         let mut told = Vec::new();
         for (name, session) in self.sessions.borrow_mut().iter_mut() {
-            for gone in session
+            for (gone, _) in session
                 .sheets
                 .iter()
-                .filter(|id| !sheets.iter().any(|sheet| sheet.id == **id))
+                .filter(|(id, _)| !sheets.iter().any(|sheet| sheet.id == *id))
             {
                 told.push((
                     name.clone(),
                     json!({ "method": "CSS.styleSheetRemoved", "params": { "styleSheetId": self.sheet_id(*gone) } }),
                 ));
             }
-            for sheet in sheets
-                .iter()
-                .filter(|sheet| !session.sheets.contains(&sheet.id))
-            {
-                told.push((
-                    name.clone(),
-                    json!({ "method": "CSS.styleSheetAdded", "params": { "header": sheet.header } }),
-                ));
+            for sheet in sheets {
+                let method = match session.sheets.iter().find(|(id, _)| *id == sheet.id) {
+                    None => "CSS.styleSheetAdded",
+                    // Script edited its rules (Blink's `StyleSheetChanged`).
+                    Some(&(_, contents)) if contents != sheet.key() => "CSS.styleSheetChanged",
+                    Some(_) => continue,
+                };
+                let params = if method == "CSS.styleSheetAdded" {
+                    json!({ "header": sheet.header })
+                } else {
+                    json!({ "styleSheetId": self.sheet_id(sheet.id) })
+                };
+                told.push((name.clone(), json!({ "method": method, "params": params })));
             }
-            session.sheets = sheets.iter().map(|sheet| sheet.id).collect();
+            session.sheets = sheets.iter().map(|sheet| (sheet.id, sheet.key())).collect();
         }
         for (name, message) in told {
             self.send(&name, &message);
@@ -388,6 +633,30 @@ impl CssAgent {
         for session in self.sessions.borrow_mut().values_mut() {
             session.tracked = None;
         }
+        self.inline_styles.borrow_mut().clear();
+    }
+
+    /// The text of the `style` attribute whose sheet's id is `id`, if it is
+    /// one's.
+    fn inline_text(&self, id: &str, dom: &Dom) -> Option<String> {
+        let number = id
+            .strip_prefix(&format!("{}.", self.prefix))?
+            .parse::<u64>()
+            .ok()?;
+        let node = self
+            .inline_styles
+            .borrow()
+            .iter()
+            .find(|style| style.id == number)?
+            .node;
+        dom.read(|cx| {
+            let element = cx.node_by_id(node)?;
+            Some(
+                cx.get_attribute(element, "style")
+                    .map(|value| value.to_str().into_owned())
+                    .unwrap_or_default(),
+            )
+        })
     }
 
     /// Answers `message`, a command of `session`'s, if it is one of the
@@ -472,7 +741,8 @@ impl CssAgent {
             "getInlineStylesForNode" => {
                 let node = self.element(name, params, page)?;
                 let explained = explain(page, node);
-                let mut result = json!({ "inlineStyle": inline_json(explained.as_ref()) });
+                let inline = self.inline_json(page, node, explained.as_ref());
+                let mut result = json!({ "inlineStyle": inline });
                 if let Some(hints) = explained.as_ref().and_then(|e| e.presentation.as_deref()) {
                     result["attributesStyle"] = style_json(hints);
                 }
@@ -481,12 +751,13 @@ impl CssAgent {
             "getMatchedStylesForNode" => {
                 let node = self.element(name, params, page)?;
                 let explained = explain(page, node);
+                let sheets = self.list_sheets(page.dom());
                 let rules: Vec<Value> = explained
                     .iter()
                     .flat_map(|explained| &explained.rules)
                     .map(|matched| {
                         json!({
-                            "rule": self.rule_json(matched),
+                            "rule": self.rule_json(matched, &sheets),
                             "matchingSelectors": matched.matching_selectors,
                         })
                     })
@@ -501,7 +772,7 @@ impl CssAgent {
                     "cssPropertyRegistrations": [],
                     "cssAtRules": [],
                 });
-                result["inlineStyle"] = inline_json(explained.as_ref());
+                result["inlineStyle"] = self.inline_json(page, node, explained.as_ref());
                 if let Some(hints) = explained.as_ref().and_then(|e| e.presentation.as_deref()) {
                     result["attributesStyle"] = style_json(hints);
                 }
@@ -531,6 +802,10 @@ impl CssAgent {
             }
             "getStyleSheetText" => {
                 let id = params["styleSheetId"].as_str().unwrap_or_default();
+                // An element's `style` attribute's.
+                if let Some(text) = self.inline_text(id, page.dom()) {
+                    return Ok(json!({ "text": text }));
+                }
                 let sheets = self.list_sheets(page.dom());
                 let sheet = sheets
                     .into_iter()
@@ -667,6 +942,34 @@ impl CssAgent {
                 &json!({ "method": "CSS.computedStyleUpdated", "params": { "nodeId": id } }),
             );
         }
+        // The `style` attributes DevTools has as sheets, changed since.
+        let mut changed = Vec::new();
+        self.inline_styles.borrow_mut().retain_mut(|style| {
+            let Some(text) = dom.read(|cx| {
+                let element = cx.node_by_id(style.node)?;
+                Some(
+                    cx.get_attribute(element, "style")
+                        .map(|value| value.to_str().into_owned())
+                        .unwrap_or_default(),
+                )
+            }) else {
+                return false;
+            };
+            if text != style.text {
+                style.text = text;
+                changed.push(format!("{}.{}", self.prefix, style.id));
+            }
+            true
+        });
+        let names: Vec<String> = self.sessions.borrow().keys().cloned().collect();
+        for id in changed {
+            for name in &names {
+                self.send(
+                    name,
+                    &json!({ "method": "CSS.styleSheetChanged", "params": { "styleSheetId": id } }),
+                );
+            }
+        }
     }
 }
 
@@ -678,6 +981,108 @@ struct SheetInfo {
     text: String,
     /// A `<link>`'s whose text DevTools hasn't: to fetch it again with.
     refetch: Option<Refetch>,
+    /// Its rules: what its text is the source of, where its rules are found.
+    contents: Arc<CssStyleSheetContents>,
+    /// Its own media as written (an element's `media`), if any.
+    media: Option<String>,
+}
+
+impl SheetInfo {
+    /// Its contents' address: another once script edits its rules.
+    fn key(&self) -> usize {
+        Arc::as_ptr(&self.contents).addr()
+    }
+}
+
+/// `text`, a `<link>`'s fetched again (none: it failed), if it parses
+/// (against `base`) to the rules the sheet has, `contents`.
+fn text_if_same(
+    text: Option<String>,
+    base: Option<css::UrlContext>,
+    contents: &CssStyleSheetContents,
+) -> Option<Rc<str>> {
+    let text = text?;
+    (serialized(&CssStyleSheetContents::parse(&text, base)) == serialized(contents))
+        .then(|| Rc::from(text))
+}
+
+/// Where `target` is in `rules`: its index in each list down to it, through
+/// the group rules it is in. None if it isn't there.
+fn rule_path(rules: &[CssRule], target: &Arc<css::StyleRule>) -> Option<Vec<usize>> {
+    for (at, rule) in rules.iter().enumerate() {
+        let inner = match rule {
+            CssRule::Style(style) if Arc::ptr_eq(style, target) => return Some(vec![at]),
+            CssRule::Media(group) => &group.rules,
+            CssRule::Supports(group) => &group.rules,
+            _ => continue,
+        };
+        if let Some(mut path) = rule_path(inner, target) {
+            path.insert(0, at);
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// `style`, a `CSS.CSSStyle` of a block's declarations as parsed, with
+/// where the block is (`block` of `text`): its range and text, and its
+/// declarations as written first (Blink's `InspectorStyle::PopulateAllProperties`),
+/// those parsed after them.
+fn sourced(style: &mut Value, text: &str, block: &Range<usize>, lines: &Lines) {
+    let written = css::inspector::declarations_for_inspector(text, block.clone());
+    let mut properties: Vec<Value> = written
+        .iter()
+        .map(|declaration| declaration_json(declaration, text, lines))
+        .collect();
+    // Those parsed, not told implicit (Blink's, with the block's text).
+    if let Some(parsed) = style["cssProperties"].as_array() {
+        properties.extend(parsed.iter().cloned().map(|mut property| {
+            if let Some(property) = property.as_object_mut() {
+                property.remove("implicit");
+            }
+            property
+        }));
+    }
+    style["cssProperties"] = properties.into();
+    style["range"] = lines.range(text, block);
+    style["cssText"] = text.get(block.clone()).unwrap_or_default().into();
+}
+
+/// A declaration as written, as DevTools' `CSS.CSSProperty`: a shorthand's
+/// with the longhands it sets.
+fn declaration_json(declaration: &SourceDeclaration, text: &str, lines: &Lines) -> Value {
+    let mut property = json!({
+        "name": declaration.name,
+        "value": declaration.value,
+        "text": text.get(declaration.range.clone()).unwrap_or_default(),
+        "range": lines.range(text, &declaration.range),
+        "disabled": declaration.disabled,
+    });
+    // One turned off isn't told implicit or not (Blink's).
+    if !declaration.disabled {
+        property["implicit"] = false.into();
+    }
+    if declaration.important {
+        property["important"] = true.into();
+    }
+    if !declaration.parsed_ok {
+        property["parsedOk"] = false.into();
+    }
+    let parsed =
+        CssPropertyValueSet::parse(&format!("{}: {}", declaration.name, declaration.value));
+    let longhands = parsed.inspector_declarations();
+    // A shorthand's longhands; none while a `var()` keeps them from having
+    // values (Blink's).
+    if longhands.iter().any(|longhand| longhand.shorthand.is_some())
+        && longhands.iter().all(|longhand| !longhand.value.is_empty())
+    {
+        let longhands: Vec<Value> = longhands
+            .iter()
+            .map(|longhand| json!({ "name": longhand.name, "value": longhand.value }))
+            .collect();
+        property["longhandProperties"] = longhands.into();
+    }
+    property
 }
 
 /// `document` and the shadow roots in it, at any depth, in tree order: the
@@ -844,16 +1249,6 @@ fn counted_text<'gc>(cx: &Cx<'_, 'gc>, node: NodeRef<'gc>) -> Vec<NodeId> {
     counted
 }
 
-/// An element's inline style, as DevTools' `CSS.CSSStyle`: one with no
-/// declarations without a `style` attribute (Blink's is its inline style
-/// sheet's, which every element has).
-fn inline_json(explained: Option<&style::Explained>) -> Value {
-    match explained.and_then(|explained| explained.inline.as_deref()) {
-        Some(inline) => style_json(inline),
-        None => json!({ "cssProperties": [], "shorthandEntries": [] }),
-    }
-}
-
 /// A declaration block DevTools has no text of, as its `CSS.CSSStyle`
 /// (Blink's `InspectorStyle::BuildObjectForStyle` without source data):
 /// each declaration, and the shorthands that set them.
@@ -871,7 +1266,13 @@ fn style_json(block: &CssPropertyValueSet) -> Value {
     let properties: Vec<Value> = declarations
         .iter()
         .map(|declaration| {
-            let mut property = json!({ "name": declaration.name, "value": declaration.value });
+            // An important one's value with its `!important` (Blink's).
+            let value = if declaration.important {
+                format!("{} !important", declaration.value)
+            } else {
+                declaration.value.clone()
+            };
+            let mut property = json!({ "name": declaration.name, "value": value });
             if declaration.important {
                 property["important"] = json!(true);
             }
@@ -896,7 +1297,25 @@ fn style_json(block: &CssPropertyValueSet) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{text_end, text_position};
+    use super::{CssStyleSheetContents, text_end, text_if_same, text_position};
+
+    /// What came again is the text if it has the sheet's rules (its
+    /// comments and white space aside); not if they differ, or nothing
+    /// came.
+    #[test]
+    fn a_link_fetched_again_is_its_text_if_its_rules_are_the_same() {
+        let contents = CssStyleSheetContents::parse("p { color: red }", None);
+        let same = "/* again */\np {\n  color: red;\n}\n";
+        assert_eq!(
+            text_if_same(Some(same.to_owned()), None, &contents).as_deref(),
+            Some(same)
+        );
+        assert_eq!(
+            text_if_same(Some("p { color: blue }".to_owned()), None, &contents),
+            None
+        );
+        assert_eq!(text_if_same(None, None, &contents), None);
+    }
 
     /// After the `>` of a `<style` start tag on the line asked, in UTF-16
     /// columns; of several on that line, the one its text follows; one

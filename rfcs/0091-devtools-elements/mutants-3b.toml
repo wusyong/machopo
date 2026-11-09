@@ -1,0 +1,217 @@
+# Mutation test of stage 3b: where rules and declarations are in a sheet's
+# text (`css`), a sheet script edited (`dom`), the positions, `@media` and
+# `@supports`, declarations as written, inline styles as sheets, and
+# `styleSheetChanged` (`CSS`):
+# python3 scripts/test.py mutate rfcs/0091-devtools-elements/mutants-3b.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools_css"]
+timeout = 600
+
+# Where rules and declarations are (`css`).
+
+[[mutant]]
+name = "a style rule's prelude isn't noted"
+file = "crates/css/src/stylesheet.rs"
+from = '''            recorder.prelude_start = input.position().byte_index();'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "css", "--lib", "--", "inspector"]
+
+[[mutant]]
+name = "an at-rule's prelude isn't noted"
+file = "crates/css/src/stylesheet.rs"
+from = '''            recorder.prelude_start = start.byte_index();'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "css", "--lib", "--", "inspector"]
+
+[[mutant]]
+name = "a rule kept isn't kept in its list"
+file = "crates/css/src/stylesheet.rs"
+from = '''                    recorder.rules.push(source);'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "css", "--lib", "--", "inspector"]
+
+[[mutant]]
+name = "a group rule's rules are its list's"
+file = "crates/css/src/stylesheet.rs"
+from = '''                let outer = std::mem::take(&mut recorder.rules);'''
+to = '''                let outer = Vec::new();'''
+test = ["cargo", "test", "-q", "-p", "css", "--lib", "--", "inspector"]
+
+[[mutant]]
+name = "a prelude isn't trimmed"
+file = "crates/css/src/inspector.rs"
+from = '''        rule.prelude = trimmed(text, rule.prelude.clone());'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "css", "--lib", "--", "inspector"]
+
+[[mutant]]
+name = "a selector list is one selector"
+file = "crates/css/src/inspector.rs"
+from = '''        if input.next().is_err() {'''
+to = '''        if true {'''
+test = ["cargo", "test", "-q", "-p", "css", "--lib", "--", "inspector"]
+
+[[mutant]]
+name = "a selector starts with the white space after its comma"
+file = "crates/css/src/inspector.rs"
+from = '''        found.push(range.start..end);'''
+to = '''        found.push(start..end);'''
+
+[[mutant]]
+name = "a declaration in a comment isn't one"
+file = "crates/css/src/inspector.rs"
+from = '''                found.push(declaration);'''
+to = ''''''
+
+[[mutant]]
+name = "a comment of a property the parser doesn't know is one"
+file = "crates/css/src/inspector.rs"
+from = '''    if let Err((error, _)) = items.next()?
+        && matches!(
+            error.kind,
+            ParseErrorKind::Custom(DeclarationError::UnsupportedProperty)
+        )
+    {
+        return None;
+    }'''
+to = '''    items.next()?;'''
+test = ["cargo", "test", "-q", "-p", "css", "--lib", "--", "inspector"]
+
+[[mutant]]
+name = "every declaration parses"
+file = "crates/css/src/inspector.rs"
+from = '''            parsed_ok: result.is_ok(),'''
+to = '''            parsed_ok: true,'''
+
+[[mutant]]
+name = "none is important"
+file = "crates/css/src/inspector.rs"
+from = '''        .is_some_and(|(_, after)| after.trim().eq_ignore_ascii_case("important"))'''
+to = '''        .is_some_and(|_| false)'''
+
+[[mutant]]
+name = "the last declaration stops at its last token"
+file = "crates/css/src/inspector.rs"
+from = '''        let range = start..after;'''
+to = '''        let range = trimmed(slice, start..after);'''
+
+# A sheet script edited.
+
+[[mutant]]
+name = "an edit isn't noted"
+file = "crates/dom/src/style_sheet.rs"
+from = '''        sheet.edited.set(true);'''
+to = ''''''
+
+[[mutant]]
+name = "an edited <style>'s text is its element's"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                            Some(owner) if inline && !edited => {'''
+to = '''                            Some(owner) if inline => {'''
+
+[[mutant]]
+name = "an edited <link> is fetched again"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                            .filter(|_| !edited && self.link_text(contents).is_none())'''
+to = '''                            .filter(|_| self.link_text(contents).is_none())'''
+
+[[mutant]]
+name = "an edited sheet isn't told changed"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                    Some(&(_, contents)) if contents != sheet.key() => "CSS.styleSheetChanged",'''
+to = ''''''
+
+[[mutant]]
+name = "a text's places are kept when the text changes"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                && source.text == sheet.text'''
+to = ''''''
+
+# Positions, `@media` and `@supports`.
+
+[[mutant]]
+name = "columns are bytes"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''            .map_or(0, |before| before.encode_utf16().count());'''
+to = '''            .map_or(0, str::len);'''
+
+[[mutant]]
+name = "a line's start is the line before's"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''        let line = self.starts.partition_point(|&start| start <= offset).saturating_sub(1);'''
+to = '''        let line = self.starts.partition_point(|&start| start < offset).saturating_sub(1);'''
+
+[[mutant]]
+name = "a rule in @media isn't found"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''            CssRule::Media(group) => &group.rules,'''
+to = ''''''
+
+[[mutant]]
+name = "the outermost @media first"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''        media.reverse();'''
+to = ''''''
+
+[[mutant]]
+name = "the outermost group rule's type first"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''        types.reverse();'''
+to = ''''''
+
+[[mutant]]
+name = "a sheet's own media aren't told"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''        if let Some(text) = &sheet.media {'''
+to = '''        if let Some(text) = sheet.media.as_ref().filter(|_| false) {'''
+
+[[mutant]]
+name = "a selector's text is to its comma"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                selector["text"] = source.text[range.clone()].trim_end().into();'''
+to = '''                selector["text"] = source.text[range.clone()].into();'''
+
+# Declarations as written.
+
+[[mutant]]
+name = "those parsed are told implicit"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                property.remove("implicit");'''
+to = ''''''
+
+[[mutant]]
+name = "one turned off is told not implicit"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''    if !declaration.disabled {'''
+to = '''    if true {'''
+
+[[mutant]]
+name = "a var() shorthand has empty longhands"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''        && longhands.iter().all(|longhand| !longhand.value.is_empty())'''
+to = ''''''
+
+[[mutant]]
+name = "an important value parsed is without !important"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                format!("{} !important", declaration.value)'''
+to = '''                declaration.value.clone()'''
+
+# Inline styles as sheets.
+
+[[mutant]]
+name = "an element's inline style is another sheet each time"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''        let id = match inline.iter().find(|style| style.node == node) {'''
+to = '''        let id = match inline.iter().find(|_| false) {'''
+
+[[mutant]]
+name = "an inline style changed isn't told"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''            if text != style.text {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "an inline style has no text"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                if let Some(text) = self.inline_text(id, page.dom()) {'''
+to = '''                if let Some(text) = None::<String> {'''

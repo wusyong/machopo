@@ -20,6 +20,7 @@ use computed_style::AnimationName;
 
 use crate::animation::{animation_name_to_css, is_reserved};
 use crate::css_url_data::UrlContext;
+use crate::inspector::{Recorder, SourceRuleKind};
 use crate::media::{MediaEnvironment, MediaQueryList};
 use crate::properties::{DeclarationError, LonghandId, Shorthand};
 use crate::property_set::{CssPropertyValueSet, PropertyValue, parse_property};
@@ -664,6 +665,7 @@ fn parse_rule(css: &str) -> Option<CssRule> {
         &mut TopLevelParser {
             log: &mut log,
             user_agent: false,
+            recorder: None,
         },
     )
     .ok();
@@ -686,7 +688,7 @@ impl Stylesheet {
         let mut input = Parser::new(&mut input);
         Self {
             origin,
-            rules: parse_rule_list(&mut input, log, origin == Origin::UserAgent),
+            rules: parse_rule_list(&mut input, log, origin == Origin::UserAgent, None),
             base_url: None,
         }
     }
@@ -722,18 +724,33 @@ impl Stylesheet {
 }
 
 /// The rules of a sheet, or of a group rule's block (the UA
-/// stylesheet's, if `user_agent`).
-fn parse_rule_list(
+/// stylesheet's, if `user_agent`); where each one kept is in the text told
+/// `recorder`, if given.
+pub(crate) fn parse_rule_list(
     input: &mut Parser<'_, '_>,
     log: &mut ParseLog,
     user_agent: bool,
+    recorder: Option<&mut Recorder>,
 ) -> Vec<CssRule> {
-    let mut parser = TopLevelParser { log, user_agent };
+    let mut parser = TopLevelParser {
+        log,
+        user_agent,
+        recorder,
+    };
     let mut rules = Vec::new();
     let mut dropped = 0;
-    for result in StyleSheetParser::new(input, &mut parser) {
+    let mut sheet = StyleSheetParser::new(input, &mut parser);
+    while let Some(result) = sheet.next() {
         match result {
-            Ok(rule) => rules.push(rule),
+            Ok(rule) => {
+                rules.push(rule);
+                // Where it is: what its block's parse left.
+                if let Some(recorder) = sheet.parser.recorder.as_deref_mut()
+                    && let Some(source) = recorder.done.take()
+                {
+                    recorder.rules.push(source);
+                }
+            }
             Err((_, source)) => {
                 let what = if source.starts_with('@') {
                     "at-rule"
@@ -779,6 +796,9 @@ struct TopLevelParser<'a> {
     log: &'a mut ParseLog,
     /// Whether it parses the UA stylesheet.
     user_agent: bool,
+    /// What is told where the rules are, for DevTools: none but when it
+    /// asks.
+    recorder: Option<&'a mut Recorder>,
 }
 
 impl<'i> QualifiedRuleParser<'i> for TopLevelParser<'_> {
@@ -790,6 +810,9 @@ impl<'i> QualifiedRuleParser<'i> for TopLevelParser<'_> {
         &mut self,
         input: &mut Parser<'i, 't>,
     ) -> Result<Self::Prelude, ParseError<'i, Self::Error>> {
+        if let Some(recorder) = self.recorder.as_deref_mut() {
+            recorder.prelude_start = input.position().byte_index();
+        }
         let parser = if self.user_agent {
             SelectorParser::USER_AGENT
         } else {
@@ -804,10 +827,13 @@ impl<'i> QualifiedRuleParser<'i> for TopLevelParser<'_> {
         _: &ParserState,
         input: &mut Parser<'i, 't>,
     ) -> Result<Self::QualifiedRule, ParseError<'i, Self::Error>> {
-        Ok(CssRule::Style(Arc::new(StyleRule {
-            selectors,
-            block: parse_declaration_list(input, self.log),
-        })))
+        let start = input.position().byte_index();
+        let block = parse_declaration_list(input, self.log);
+        if let Some(recorder) = self.recorder.as_deref_mut() {
+            let end = input.position().byte_index();
+            recorder.done = Some(recorder.rule(SourceRuleKind::Style, start, end));
+        }
+        Ok(CssRule::Style(Arc::new(StyleRule { selectors, block })))
     }
 }
 
@@ -833,6 +859,9 @@ impl<'i> AtRuleParser<'i> for TopLevelParser<'_> {
         input: &mut Parser<'i, 't>,
     ) -> Result<Self::Prelude, ParseError<'i, Self::Error>> {
         let start = input.position();
+        if let Some(recorder) = self.recorder.as_deref_mut() {
+            recorder.prelude_start = start.byte_index();
+        }
         match_ignore_ascii_case! { &name,
             // A query that doesn't parse is `not all`: the rule stays.
             "media" => Ok(AtRulePrelude::Media(MediaQueryList::parse_from(input))),
@@ -859,11 +888,40 @@ impl<'i> AtRuleParser<'i> for TopLevelParser<'_> {
         _: &ParserState,
         input: &mut Parser<'i, 't>,
     ) -> Result<Self::AtRule, ParseError<'i, Self::Error>> {
+        let start = input.position().byte_index();
         if let AtRulePrelude::Keyframes(name) = prelude {
             let rules = parse_keyframe_list(input, self.log);
+            if let Some(recorder) = self.recorder.as_deref_mut() {
+                let end = input.position().byte_index();
+                recorder.done = Some(recorder.rule(SourceRuleKind::Keyframes, start, end));
+            }
             return Ok(CssRule::Keyframes(Arc::new(KeyframesRule { name, rules })));
         }
-        let rules = parse_rule_list(input, self.log, self.user_agent);
+        // Its rules' places, apart from those of the list it is in.
+        let (rules, sources) = match self.recorder.as_deref_mut() {
+            Some(recorder) => {
+                let mut source = recorder.rule(
+                    match prelude {
+                        AtRulePrelude::Media(_) => SourceRuleKind::Media,
+                        _ => SourceRuleKind::Supports,
+                    },
+                    start,
+                    start,
+                );
+                let outer = std::mem::take(&mut recorder.rules);
+                let rules = parse_rule_list(input, self.log, self.user_agent, Some(&mut *recorder));
+                source.rules = std::mem::replace(&mut recorder.rules, outer);
+                source.block.end = input.position().byte_index();
+                (rules, Some(source))
+            }
+            None => (
+                parse_rule_list(input, self.log, self.user_agent, None),
+                None,
+            ),
+        };
+        if let Some(recorder) = self.recorder.as_deref_mut() {
+            recorder.done = sources;
+        }
         Ok(match prelude {
             AtRulePrelude::Media(media) => CssRule::Media(Arc::new(MediaRule {
                 media: Arc::new(media),
@@ -1037,13 +1095,13 @@ fn simplify_white_space(text: &str) -> String {
         .join(" ")
 }
 
-struct DeclarationListParser<'a> {
+pub(crate) struct DeclarationListParser<'a> {
     /// In source order, duplicates and all.
-    parsed: Vec<PropertyValue>,
-    log: &'a mut ParseLog,
+    pub(crate) parsed: Vec<PropertyValue>,
+    pub(crate) log: &'a mut ParseLog,
     /// A keyframe's block: `!important` declarations, and those
     /// [`is_invalid_for_keyframe`], are dropped.
-    keyframe: bool,
+    pub(crate) keyframe: bool,
 }
 
 impl<'i> DeclarationParser<'i> for DeclarationListParser<'_> {

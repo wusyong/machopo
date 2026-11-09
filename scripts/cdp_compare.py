@@ -82,6 +82,13 @@ PAGES = {
         "const s = new CSSStyleSheet(); s.replaceSync('.c { color: blue }'); document.adoptedStyleSheets = [s];\n"
         "host.attachShadow({mode: 'open'}).innerHTML = '<style>.d { }</style>';\n</script>"
     ),
+    "/source.html": (
+        "<!DOCTYPE html><style>\n/* top */\n.a ,\n p.b > i { color: red !important; margin: 1px 2px; foo: bar; "
+        "color: blu; /* gap: 1px; */ --x: 1 }\n@media (min-width: 1px) {\n  @supports (display: grid) {\n"
+        "    .a { padding-left: 3px }\n  }\n}\n@media print { .a { top: 0 } }\n.a{background:var(--x)}\n"
+        "</style><style media=\"screen\">.a { left: 0 }</style>\n"
+        "<div class=a style='color: pink;  zz: 1; border-top: solid'>a</div><div id=e></div>"
+    ),
     "/life.html": (
         "<!DOCTYPE html>\n<title>Life</title>\n<link rel=stylesheet href='/style.css'>\n"
         "<img src='/missing.png'>\n<iframe src='/child.html'></iframe>"
@@ -156,8 +163,22 @@ KNOWN: dict[tuple[str, str], str] = {
     ("overlay", "[9].result.highlight.elementInfo.isKeyboardFocusable"): "the same as [6]'s",
     ("overlay", "[9].result.highlight.elementInfo.layoutObjectName"): "the same as [6]'s",
     ("overlay", "[19].error.data"): "Chrome's message has where in its CBOR the field is missing",
-    ("css", "[3].rules[2].style.longhands.color[0]"): "Chrome writes a rule's values from its text (`!important` "
-    "with them); machopo keeps no sheet's text, and writes them as parsed, as Chrome writes a rule it has no text of",
+    ("css_source", "[0][0].selectorList.selectors[0].specificity.components"): "Chrome 152 breaks a selector's "
+    "specificity down by its simple selectors, which DevTools' specificity tooltip reads; machopo doesn't",
+    **{
+        ("css_source", f"{rule}.selectorList.selectors[{selector}].specificity.components"): "the same"
+        for rule, selector in [
+            ("[0][0]", 1), ("[0][1]", 0), ("[0][2]", 0), ("[0][3]", 0),
+            ("[4][0]", 0), ("[4][0]", 1), ("[4][1]", 0), ("[4][2]", 0), ("[4][3]", 0),
+        ]
+    },
+    ("css_source", "[0][1].media[0].mediaList[0]"): "machopo doesn't break media queries down (only the device "
+    "toolbar's media query bar reads them, and machopo has no device emulation)",
+    ("css_source", "[4][1].media[0].mediaList[0]"): "the same",
+    ("css_source", "[4][4]."): "a rule of a sheet script edited: machopo's text of the sheet is its rules as "
+    "CSSOM writes them, Chrome's the text it had with the new rule written into it",
+    ("css_source", "[5][1]"): "Chrome tells an inline style changed twice (once for the attribute, once for the "
+    "style), machopo once",
     ("css_sheets", "[1][1].end"): "a `<style>` innerHTML made: Chrome's place is where the document's parser was "
     "as the script ran (after `</script>`); machopo's, none",
     ("css_sheets", "[1][1].start"): "the same",
@@ -779,6 +800,52 @@ def case_css_sheets(run: Run, url: Callable[[str], str]) -> list:
     return transcript
 
 
+# What a `CSS.CSSRule` of Chrome's has that machopo's never does (none of
+# these rules has any): left out of `css_source`.
+RULE_KEYS_MACHOPO_HAS_NONE_OF = (
+    "containerQueries", "layers", "navigations", "scopes", "startingStyles", "originTreeScopeNodeId",
+)
+
+
+def case_css_source(run: Run, url: Callable[[str], str]) -> list:
+    """Where the rules an element matches are in their sheets' texts: the
+    selectors, the block, each declaration as written (`!important`, ones
+    that don't parse, one in a comment) then as parsed, the `@media` and
+    `@supports` they are in (a sheet's own media too); an inline style's
+    the same, as a sheet of its own, with its text; once script edits a
+    sheet's rules and an inline style, what is told and the rules again."""
+    run.load(url("/source.html"))
+    run.call("DOM.enable")
+    run.call("CSS.enable")
+    run.events(("CSS.styleSheetAdded",), settle=0.5)
+    root = run.call("DOM.getDocument")["result"]["root"]["nodeId"]
+
+    def node(selector: str) -> int:
+        return run.call("DOM.querySelector", {"nodeId": root, "selector": selector})["result"]["nodeId"]
+
+    def rules(element: int) -> list:
+        matched = run.call("CSS.getMatchedStylesForNode", {"nodeId": element})["result"]
+        return [
+            {key: value for key, value in rule["rule"].items() if key not in RULE_KEYS_MACHOPO_HAS_NONE_OF}
+            for rule in matched["matchedCSSRules"]
+            if rule["rule"]["origin"] == "regular"
+        ] + [matched["inlineStyle"]]
+
+    a, e = node(".a"), node("#e")
+    transcript = [rules(a), rules(e)]
+    inline = run.call("CSS.getInlineStylesForNode", {"nodeId": a})["result"]["inlineStyle"]
+    transcript.append(run.call("CSS.getStyleSheetText", {"styleSheetId": inline["styleSheetId"]}))
+    sheet_events = ("CSS.styleSheetAdded", "CSS.styleSheetRemoved", "CSS.styleSheetChanged")
+    run.call("Runtime.evaluate", {"expression": "document.styleSheets[1].insertRule('.a { right: 0 }', 0)"})
+    transcript.append(run.events(sheet_events, settle=0.5))
+    transcript.append(rules(a)[:-1])
+    run.call("Runtime.evaluate", {"expression": "document.querySelector('.a').style.color = 'blue'"})
+    transcript.append(run.events(sheet_events, settle=0.5))
+    transcript.append(rules(a)[-1])
+    run.events(DOM_EVENTS, settle=0.2)
+    return transcript
+
+
 CASES: dict[str, Callable[[Run, Callable[[str], str]], list]] = {
     "values": case_values,
     "properties": case_properties,
@@ -796,6 +863,7 @@ CASES: dict[str, Callable[[Run, Callable[[str], str]], list]] = {
     "overlay": case_overlay,
     "css": case_css,
     "css_sheets": case_css_sheets,
+    "css_source": case_css_source,
 }
 
 

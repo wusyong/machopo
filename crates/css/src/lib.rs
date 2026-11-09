@@ -51,6 +51,7 @@ pub mod filter;
 pub mod font;
 pub mod font_features;
 pub mod grid;
+pub mod inspector;
 pub mod interpolate;
 pub mod masking;
 pub mod media;

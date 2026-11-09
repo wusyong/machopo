@@ -330,6 +330,13 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 - `<style>` 的位置（第 20 條）：html5ever 建元素時給的行是開始標籤結束的那一行（跨行的標籤是最後一行），文字從那裡的 `>` 之後開始。那一行有幾個 `<style` 的開始標籤時，選接下來的原文和元素現在的文字一樣的那一個（原文的 CR LF 當成 LF）；都不一樣（文字被 script 改過）時用第一個：Blink 的位置是元素的，不管文字改了沒有。
 - `<link>` 的再抓（第 11 條）：照它的 `<link>`（`crossorigin` 時用 CORS，`use-credentials` 帶 credential，發起的是文件的 origin），destination 是 style。抓到的照它的 `<link>` 的方式解碼、對它的網址解析，序列化之後和現在的規則的序列化一樣才當成原文，不一樣（伺服器換了內容、script 改了規則）時給序列化的規則；結果記在那份 stylesheet 的內容上，之後不再抓。抓的時候又要的命令一起等那一次。請求在主迴圈的 task 之間送出，停在斷點時要等繼續。
 
+**做的時候（3b）定下的細節**：
+- 第 21 條的 observer 做成 `css` 的 `TopLevelParser` 的 `Option<&mut Recorder>`：記每條留下的規則的 prelude 和區塊，group rule 的子規則另外一串，丟掉的規則在 `StyleSheetParser` 回答錯誤時不記。宣告不在整份的解析裡記：拿到區塊之後用同一個 `DeclarationListParser` 對區塊的文字再解析一次（`css::inspector::declarations_for_inspector`），記每個宣告的範圍、解析得了與否，和宣告之間的註解；inline style 用同一個函式。規則照它在 stylesheet 的規則樹裡的位置（每一層的第幾條）對到重新解析出來的那一條。
+- 第 22 條的「對得上」不用每次重新解析來比：`dom` 的 `CssStyleSheet` 記著 script 有沒有改過它的規則（`style_sheet_edited`，所有改動都經過 `set_style_sheet_rules`），沒改過時它的規則就是原文解析出來的，原文照用；改過就是序列化的。`<link>` 補抓的仍然要比（伺服器可能換了內容）。`styleSheetChanged` 在重新列出 stylesheet 時看同一個 id 的內容（`Arc`）換了沒有。
+- 和 Chrome 比對（`test.py cdp css_source`）時照 Chrome 改的細節：選擇器的範圍從它的第一個 token 到它的逗號（逗號前的空白算在內，最後一個到 prelude 的結尾），文字去掉結尾的空白；`selectorList.text` 是各個選擇器用 `, ` 接起來；最後一個沒有 `;` 的宣告的範圍到區塊的結尾；註解掉的宣告沒有 `implicit`；解析的結果那一部分沒有 `implicit`，`!important` 的值帶著 ` !important`（沒有原文的 UA 規則也是）；值裡有 `var()` 的 shorthand 沒有 `longhandProperties`；stylesheet 自己的 media 沒有 `mediaList`。
+- 沒有做、記成已知差異的：`specificity.components`（Chrome 152 把 specificity 拆到每個簡單選擇器，前端的提示用）、`@media` 的 `mediaList`（第 25 條）、inline style 改了時 Chrome 送兩次 `styleSheetChanged`。
+- inline style 的 id 是 `<renderer 的前綴>.<n>`，照 Chrome 的 `<process id>.<n>`；元素沒有 `style` 屬性時也給一個（原文是空的），和 Chrome 一樣。它改了沒有在每次 lifecycle 之後比屬性的值，只比 DevTools 要過的那幾個元素。
+
 ### 測試
 
 - **`shell` 的整合測試**：
@@ -466,6 +473,18 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 
 20. **`<style>` 在 HTML 檔裡的位置：parser 記行，要用時從原文找欄（L1）**（第 7 節）：`<style>` 的 header 帶著文字在 HTML 檔裡開始的行和欄（`startLine`、`startColumn`），Sources 和 Styles 的行號靠它。machopo 留著每份文件的原文，但 html5ever 只給行。parser 建 `<style>` 時記下開始標籤結束的那一行（一個 `<style>` 一筆）；DevTools 要 header 時在原文的那一行找它的開始標籤的 `>`，確認接下來的原文和元素現在的文字一樣，才用那個位置，不一樣、或沒有原文（script、`innerHTML` 建的）就是 0、0。不開 DevTools 時只多那幾筆行號。對照 Chromium：Blink 的 `<style>` 建立時記下 parser 的位置（`StyleElement::start_position_`，行和欄），inspector 直接用；machopo 的 tokenizer 沒有欄，用找的補上。不選 L2（完全不記，要用時掃整份原文配對）：原文裡註解、`<script>` 的字串、`<template>` 裡的 `<style` 會讓配對出錯，要重做一半的 tokenizer。不選 L3（一律 0、0）：Sources 把 inline 的 CSS 對到檔案的開頭，Styles 的行號全錯。
 
+2026-11-09（使用者，3b）：
+
+21. **記位置的解析：在同一個 parser 上掛 observer（P1）**（第 7 節，第 12 條的做法）：`css` 的 `TopLevelParser`、`DeclarationListParser` 多一個 `Option<&mut dyn Observer>`，解析到規則、選擇器、宣告和 at-rule 的開始、結束時把位置告訴它，連同丟掉的宣告和規則。平常解析時是 `None`，每條規則、每個宣告只多一次判斷；DevTools 要位置時才傳 observer。同一個 parser，留下和丟掉的規則一定和頁面的一樣，位置一條一條對得起來。對照 Chromium：Blink 的 `CSSParserImpl::ParseStyleSheetForInspector` 也是同一個 parser 多傳一個 `CSSParserObserver`，`InspectorStyleSheet` 的 `StyleSheetHandler` 收事件、建 `CSSRuleSourceData`。不選 P2（另外寫一個只記位置的 parser，宣告的有效與否另外問 `parse_property`）：平常的路不動，但兩套 parser 判斷丟掉哪些規則的邏輯要一直一致，不一致時位置對到別條規則，畫面正常、行號錯，很難發現。
+
+22. **原文和現在的規則對不上時：整份換成序列化（M2）**（第 7 節，第 12 條的做法）：script 用 CSSOM（`insertRule`、`deleteRule`、改規則的 `style`）改過的 stylesheet，原文重新解析出來的規則和現在的對不上。原文解析出來的規則序列化之後和現在的一樣時照順序一條一條對；不一樣時，那份 stylesheet 的原文換成 CSSOM 序列化的規則（一條一行），位置從它算。CSSOM 改了時送 `CSS.styleSheetChanged`（Chrome 也送）。也補上 3a 的缺口：script 用 `insertRule` 填的空的 `<style>`（CSS-in-JS 的做法）原本的原文是空的。對照 Chromium（2026-11-09 用 Chrome for Testing 152 試過）：Blink 的 `InspectorStyleSheet::MergeCSSOMRulesWithText` 用 cssText 的 LCS 把 CSSOM 的規則對到原文，對不到的規則把序列化插進原文、接在前一條對到的後面，對不到的原文留著：`deleteRule` 之後刪掉的規則還在原文裡，改了規則的 `style` 之後新舊兩份都在；`<link>` 的新規則不插、沒有位置；空的 `<style>` 給接在一起的序列化。不選 M1（照 Chrome）：Sources 看得到頁面已經沒有的規則，還要做 LCS 和插入的位置；兩者只在 script 改過 CSSOM 的 stylesheet 上不同，M2 的差別是那份的註解和排版不見。
+
+23. **宣告照原文列，連同註解掉的（D1）**（第 7 節）：有原文的規則和 inline style，`cssProperties` 先照原文的順序列每一條寫的宣告（`text`、`range`，值照寫的、`!important` 在值裡；解析不了的標 `parsedOk: false`；shorthand 帶 `longhandProperties`），宣告區塊裡的註解在記位置的模式下試著解析成宣告，解析得出來的列成 `disabled: true`；接著列解析後的每個 longhand，沒有 `text` 和 `range`；`shorthandEntries` 照解析的結果。沒有原文的（UA 的）照現在只列解析後的。對照 Chromium（2026-11-09 用 Chrome for Testing 152 試過）：Blink 的 `InspectorStyle::PopulateAllProperties` 就是這兩部分，註解掉的宣告由 `InspectorStyleSheet` 的 `StyleSheetHandler::ObserveComment` 解析。不選 D2（不列註解掉的宣告）：省掉註解那一段，但作者註解掉的宣告 Chrome 顯示成沒打勾的一條、machopo 沒有；註解只在記位置的那次解析時看，平常的路不受影響，省下的不多。
+
+24. **inline style 照 Chrome 有自己的 id 和原文（I1）**（第 7 節）：有 inline style 的元素各給一個 `styleSheetId`（元素還在時不變），不送 `styleSheetAdded`（Sources 不列）；原文是 `style` 屬性的值（`getStyleSheetText` 也給它），要的時候用第 21 條的模式解析、記位置，宣告照第 23 條列；inline style 改了時對要過那個 id 的 session 送 `styleSheetChanged`。對照 Chromium（2026-11-09 用 Chrome for Testing 152 試過）：Blink 的 `InspectorStyleSheetForInlineStyle` 就是這樣，id 不公告、原文是屬性值；script 改 `el.style` 時屬性值跟著改寫，送 `styleSheetChanged` 和 `DOM.inlineStyleInvalidated`。不選 I2（不做 inline style 的位置）：`element.style` 裡寫錯的宣告看不到，shorthand 照拆開的列，和規則的樣子不一致。
+
+25. **`@media`、`@supports`：Styles 用的都送，裝置模式用的先不做（A2）**（第 7 節）：每條規則帶 `media`（從裡到外的每個 `@media`，最後是 stylesheet 自己的 media；各帶 `text`、`source`，`@media` 的再帶 `range` 和 `styleSheetId`）、`supports`（`text`、`range`、`active`）和 `ruleTypes`，條件從 stylesheet 的規則樹往上找，位置從第 21 條記下的 at-rule 的範圍來。`mediaList` 送空的，不做 `CSS.getMediaQueries`：只有裝置模式的 media query 尺規用它們，machopo 還沒有 `Emulation`，裝置模式本來就不能用，做 `Emulation` 時再補。對照 Chromium（2026-11-09 用 Chrome for Testing 152 試過）：Blink 的 `InspectorCSSAgent::BuildMediaListChain` 建出整套，`mediaList` 是拆開的條件（feature、值、單位、換算成 px 的長度、成不成立）。不選 A1（連 `mediaList` 和 `getMediaQueries` 一起做）：要把 media query 拆成 feature 和值、換算長度，現在沒有東西用得到。
+
 ## 待決定
 
 每一段開始前只決定那一段的事。整份的兩條和第 1 段的先決定。
@@ -508,6 +527,14 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
     - R3：不給位置，Styles 沒有「檔名:行」。
     - 草稿的看法：R2。
 13. **`forcePseudoState` 放不放進這份**：已決定，放（「已決定的事項」第 1 條）。
+
+**3b**：
+
+21. **記位置的解析怎麼做**：已決定（「已決定的事項」第 21 條，P1）。
+22. **原文和現在的規則對不上時**：已決定（「已決定的事項」第 22 條，M2）。
+23. **宣告怎麼列**：已決定（「已決定的事項」第 23 條，D1）。
+24. **inline style 的位置**：已決定（「已決定的事項」第 24 條，I1）。
+25. **`@media`、`@supports` 怎麼送**：已決定（「已決定的事項」第 25 條，A2）。
 
 ## 之後的可能
 
