@@ -120,22 +120,25 @@ pub(crate) fn property_names<'gc>(
 /// Each property `getComputedStyle(element)` lists, with its value, as
 /// it reads them (`property_names`, `property_value`): DevTools' `CSS`
 /// agent's `getComputedStyleForNode` (Blink's reads its
-/// `CSSComputedStyleDeclaration`), the host lending its layout. Empty for
-/// an element no frame of `layout`'s renders.
+/// `CSSComputedStyleDeclaration`), the host lending its layout; of its
+/// pseudo-element `pseudo`, if given (`getComputedStyle(element,
+/// '::before')`). Empty for an element no frame of `layout`'s renders.
 pub fn computed_style_for_devtools<'gc>(
     cx: &Cx<'_, 'gc>,
     layout: &mut dyn FrameLayout,
     element: NodeRef<'gc>,
+    pseudo: Option<computed_style::PseudoId>,
 ) -> Vec<(String, String)> {
     let layout = LentLayout::new(layout);
     let cx = ApiCx {
         dom: cx,
         layout: Some(&layout),
     };
-    property_names(&cx, element, StyleTarget::Element)
+    let target = pseudo.map_or(StyleTarget::Element, StyleTarget::Pseudo);
+    property_names(&cx, element, target)
         .into_iter()
         .map(|name| {
-            let value = property_value(&cx, element, StyleTarget::Element, &name);
+            let value = property_value(&cx, element, target, &name);
             (name, value)
         })
         .collect()
@@ -143,11 +146,13 @@ pub fn computed_style_for_devtools<'gc>(
 
 /// The values `getComputedStyle(element)` reads of `properties`, in order,
 /// the host lending its layout: what DevTools' overlay shows of an
-/// element's style in its label (Blink's `BuildStyleInfo`).
+/// element's style in its label (Blink's `BuildStyleInfo`); of its
+/// pseudo-element `pseudo`, if given.
 pub fn computed_values_for_devtools<'gc>(
     cx: &Cx<'_, 'gc>,
     layout: &mut dyn FrameLayout,
     element: NodeRef<'gc>,
+    pseudo: Option<computed_style::PseudoId>,
     properties: &[&str],
 ) -> Vec<String> {
     let layout = LentLayout::new(layout);
@@ -155,9 +160,10 @@ pub fn computed_values_for_devtools<'gc>(
         dom: cx,
         layout: Some(&layout),
     };
+    let target = pseudo.map_or(StyleTarget::Element, StyleTarget::Pseudo);
     properties
         .iter()
-        .map(|property| property_value(&cx, element, StyleTarget::Element, property))
+        .map(|property| property_value(&cx, element, target, property))
         .collect()
 }
 

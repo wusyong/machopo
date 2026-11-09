@@ -133,7 +133,20 @@ pub fn box_quads(
     sticky: &StickyOffsets,
     element: NodeId,
 ) -> Option<BoxQuads> {
-    if let Some((fragment, to_root)) = box_to_root(layout_view, scroll, sticky, element) {
+    pseudo_box_quads(layout_view, scroll, sticky, element, None)
+}
+
+/// `box_quads` of `element`'s pseudo-element `pseudo` (its own, if none):
+/// its boxes are those of the element's marked as its (DevTools'
+/// `getBoxModel` of a `::before`).
+pub fn pseudo_box_quads(
+    layout_view: &BoxFragment,
+    scroll: &ScrollOffsets,
+    sticky: &StickyOffsets,
+    element: NodeId,
+    pseudo: Option<computed_style::PseudoId>,
+) -> Option<BoxQuads> {
+    if let Some((fragment, to_root)) = box_of(layout_view, scroll, sticky, element, pseudo) {
         let border = RectF::new(0.0, 0.0, fragment.size.width, fragment.size.height);
         let padding = contract(border, &fragment.border);
         let content = contract(padding, &fragment.padding);
@@ -161,7 +174,7 @@ pub fn box_quads(
                 for inline_box in line
                     .boxes
                     .iter()
-                    .filter(|b| b.node == element && b.pseudo.is_none())
+                    .filter(|b| b.node == element && b.pseudo == pseudo)
                 {
                     boxes.push((
                         contents.map_rect(inline_box.rect.offset(offset.x, offset.y)),
@@ -389,13 +402,25 @@ pub(crate) fn box_to_root<'a>(
     sticky: &StickyOffsets,
     element: NodeId,
 ) -> Option<(&'a BoxFragment, Transform)> {
+    box_of(layout_view, scroll, sticky, element, None)
+}
+
+/// `box_to_root` of `element`'s pseudo-element `pseudo`'s box (its own, if
+/// none).
+fn box_of<'a>(
+    layout_view: &'a BoxFragment,
+    scroll: &ScrollOffsets,
+    sticky: &StickyOffsets,
+    element: NodeId,
+    pseudo: Option<computed_style::PseudoId>,
+) -> Option<(&'a BoxFragment, Transform)> {
     fn find<'a>(
         fragment: &'a BoxFragment,
         offset: PointF,
         to_root: Transform,
         scroll: &ScrollOffsets,
         sticky: &StickyOffsets,
-        element: NodeId,
+        element: (NodeId, Option<computed_style::PseudoId>),
     ) -> Option<(&'a BoxFragment, Transform)> {
         let (mut to_root, mut offset) = (to_root, stuck(fragment, offset, sticky));
         if let Some(transform) = box_transform(fragment) {
@@ -404,7 +429,7 @@ pub(crate) fn box_to_root<'a>(
                 .then(&transform);
             offset = PointF::new(0.0, 0.0);
         }
-        if fragment.node == Some(element) && fragment.pseudo.is_none() {
+        if fragment.node == Some(element.0) && fragment.pseudo == element.1 {
             return Some((
                 fragment,
                 to_root.then(&Transform::translate(offset.x, offset.y)),
@@ -428,7 +453,7 @@ pub(crate) fn box_to_root<'a>(
         Transform::IDENTITY,
         scroll,
         sticky,
-        element,
+        (element, pseudo),
     )
 }
 

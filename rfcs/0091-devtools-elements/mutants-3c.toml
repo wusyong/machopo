@@ -1,0 +1,254 @@
+# Mutation test of stage 3c: pseudo-elements' rules (`style`), the
+# pseudo-elements as nodes (`dom`'s note, the `DOM` agent), a pseudo-element
+# node's styles, box and label, ancestors' rules, animations' values and the
+# `@keyframes` (`animation`, `css`, `CSS`):
+# python3 scripts/test.py mutate rfcs/0091-devtools-elements/mutants-3c.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools_css", "devtools_dom::pseudo"]
+timeout = 600
+
+# Pseudo-elements' rules (`style`).
+
+[[mutant]]
+name = "a pseudo-element's matched selector is the element's"
+file = "crates/style/src/lib.rs"
+from = '''                        found.push((rule, data.selector as usize, target_index(target)));'''
+to = '''                        found.push((rule, data.selector as usize, 0));'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "explain"]
+
+[[mutant]]
+name = "the pseudo-elements' rules aren't explained"
+file = "crates/style/src/lib.rs"
+from = '''        let pseudo = [(); 4].map(|()| explained.next().unwrap_or_default());'''
+to = '''        let pseudo = [(); 4].map(|()| Vec::new());'''
+test = ["cargo", "test", "-q", "-p", "style", "--test", "it", "--", "explain"]
+
+[[mutant]]
+name = "no @keyframes is found for DevTools"
+file = "crates/style/src/lib.rs"
+from = '''        find_keyframes(cx, &self.shadow, author, element, name)
+    }
+
+    /// How many times'''
+to = '''        let _ = (cx, author, element, name);
+        None
+    }
+
+    /// How many times'''
+
+# The pseudo-elements as nodes.
+
+[[mutant]]
+name = "a pseudo-element's style changing isn't noted"
+file = "crates/dom/src/style.rs"
+from = '''            self.note_pseudo_elements(node);'''
+to = ''''''
+
+[[mutant]]
+name = "a pseudo-element's change is taken without the layout"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                            pending.push(element);
+                        }
+                        false'''
+to = '''                            pending.push(element);
+                        }
+                        true'''
+
+[[mutant]]
+name = "the pseudo-elements' changes put off are dropped"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                Some(_) => changes.extend(
+                    pending
+                        .drain(..)'''
+to = '''                Some(_) => changes.extend(
+                    pending
+                        .drain(..)
+                        .filter(|_| false)'''
+
+[[mutant]]
+name = "a ::before without content is one"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                                || !matches!(style.rare.content, Content::Normal | Content::None))'''
+to = '''                                || true)'''
+
+[[mutant]]
+name = "a marker needs content"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                            && (pseudo == PseudoId::Marker
+                                ||'''
+to = '''                            && (false
+                                ||'''
+
+[[mutant]]
+name = "a ::before with display: none is one"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                        style.display != computed_style::Display::None
+                            &&'''
+to = '''                        true
+                            &&'''
+
+[[mutant]]
+name = "a pseudo-element's backend id is its element's"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''    (kind << 32) | u64::from(element.get())'''
+to = '''    kind | u64::from(element.get())'''
+
+[[mutant]]
+name = "a backend id of a ::before is an ::after's"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''        1 => PseudoId::Before,'''
+to = '''        1 => PseudoId::After,'''
+
+[[mutant]]
+name = "a gone element's pseudo-elements keep their numbers"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''            self.session.unbind_pseudo(cx.node_id(node), pseudo);'''
+to = ''''''
+
+[[mutant]]
+name = "a pseudo-element gone isn't told"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                (true, false) => {'''
+to = '''                (true, false) if false => {'''
+
+[[mutant]]
+name = "a pseudo-element come isn't told"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                (false, true) => {'''
+to = '''                (false, true) if false => {'''
+
+[[mutant]]
+name = "a pseudo-element isn't described"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''                if let Some((element, pseudo)) = pseudo {
+                    let element = self'''
+to = '''                if let Some((element, pseudo)) = pseudo.filter(|_| false) {
+                    let element = self'''
+
+[[mutant]]
+name = "a pseudo-element's box model is its element's"
+file = "crates/renderer/src/render_thread/dom_agent.rs"
+from = '''        let quads = frame.pseudo_box_quads_in_top(document, node, pseudo)?;'''
+to = '''        let quads = frame.pseudo_box_quads_in_top(document, node, None)?;'''
+
+# A pseudo-element node's styles, box and label; ancestors' rules.
+
+[[mutant]]
+name = "a div has a marker's rules"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                                && (*kind != "marker" || list_item)'''
+to = ''''''
+
+[[mutant]]
+name = "an ancestor's every pseudo-element's rules are inherited"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                                && (!highlights_only || *kind == "selection")'''
+to = ''''''
+
+[[mutant]]
+name = "a pseudo-element node's rules are its element's"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                        Some(at) => matches(&explained.pseudo[at]),'''
+to = '''                        Some(_) => matches(&explained.rules),'''
+
+[[mutant]]
+name = "a pseudo-element inherits from its element's parent"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                    let first = if of_pseudo.is_some() {
+                        Some(element)'''
+to = '''                    let first = if of_pseudo.is_some() {
+                        cx.flat_tree_parent(element)'''
+
+[[mutant]]
+name = "a pseudo-element node has an inline style"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                if of_pseudo.is_none() {
+                    result["inlineStyle"]'''
+to = '''                if true {
+                    result["inlineStyle"]'''
+
+[[mutant]]
+name = "a pseudo-element's layout parent is its element's"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                        return Some(cx.node_id(element));'''
+to = ''''''
+
+[[mutant]]
+name = "a pseudo-element's inline styles are asked for"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                    return Err("Element is not a style sheet".to_owned());'''
+to = ''''''
+
+[[mutant]]
+name = "a pseudo-element's fonts are every generated content's"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                                && run.pseudo == pseudo'''
+to = ''''''
+
+[[mutant]]
+name = "a pseudo-element's computed values are its element's"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                        cx, frame, element, pseudo,'''
+to = '''                        cx, frame, element, None,'''
+
+[[mutant]]
+name = "a highlighted pseudo-element is its element"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''    let quads = frame.pseudo_box_quads_in_top(document, node, pseudo);'''
+to = '''    let quads = frame.pseudo_box_quads_in_top(document, node, None);'''
+
+[[mutant]]
+name = "a pseudo-element's label has no ::before"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''        if let Some(pseudo) = pseudo {
+            class_name.push_str(match pseudo {'''
+to = '''        if let Some(pseudo) = pseudo.filter(|_| false) {
+            class_name.push_str(match pseudo {'''
+
+[[mutant]]
+name = "highlightNode of a pseudo-element highlights its element"
+file = "crates/renderer/src/render_thread/overlay_agent.rs"
+from = '''                let (node, pseudo) = self.dom_agent.inspected_param(name, params, page)?;'''
+to = '''                let (node, _) = self.dom_agent.inspected_param(name, params, page)?;
+                let pseudo = None;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools_overlay", "devtools_css"]
+
+# Animations' values and the `@keyframes`.
+
+[[mutant]]
+name = "an animation not in effect is listed"
+file = "crates/animation/src/transition.rs"
+from = '''                    && animation.computed(now).progress.is_some()'''
+to = ''''''
+
+[[mutant]]
+name = "an element with animations has no transitions' style"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''            Some(transitions) => style(&transitions.style, &transitions.properties),
+            None => json!({ "cssProperties": [], "shorthandEntries": [] }),'''
+to = '''            Some(transitions) => style(&transitions.style, &transitions.properties),
+            None => Value::Null,'''
+
+[[mutant]]
+name = "an animation has no name"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                entry["name"] = name.as_ref().into();'''
+to = ''''''
+
+[[mutant]]
+name = "a @keyframes is listed for each of its names"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                && !names.contains(&&**name)'''
+to = ''''''
+
+[[mutant]]
+name = "a keyframe's declarations have no places"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                        sourced(&mut style, &source.text, &of.block, &source.lines);'''
+to = ''''''
+
+[[mutant]]
+name = "a keyframe isn't kept in its @keyframes' list"
+file = "crates/css/src/stylesheet.rs"
+from = '''            recorder.done = Some(recorder.rule(SourceRuleKind::Keyframe, start, end));'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "css", "--lib", "--", "inspector"]

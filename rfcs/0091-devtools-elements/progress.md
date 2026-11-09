@@ -17,7 +17,7 @@
 | 2c 停住時照樣畫、「Paused in debugger」：scheduler、畫 frame 的狀態搬進 `Frame` | 完成 | 2026-11-09 |
 | 3a stylesheet：`styleSheetAdded`、`styleSheetRemoved`、規則的 `styleSheetId`、`getStyleSheetText`、`<link>` 的原文和再抓、`<style>` 的位置 | 完成 | 2026-11-09 |
 | 3b 位置：`range`、劃掉的宣告、`@media`、`@supports`、inline style 的 stylesheet、`styleSheetChanged` | 完成 | 2026-11-09 |
-| 3c 其他的規則：繼承來的、pseudo element、`getAnimatedStylesForNode` | 還沒開始 | |
+| 3c 其他的規則：繼承來的、pseudo element 的規則和節點、`getAnimatedStylesForNode`、`@keyframes` | 完成 | 2026-11-10 |
 | 3d `:hov`：`forcePseudoState` | 還沒開始 | |
 
 ## 驗收
@@ -70,6 +70,13 @@
 | script 改了 stylesheet 的規則：送 `styleSheetChanged`，原文從此是序列化的規則（`<link>` 的也是），位置照它；`insertRule` 填的空 `<style>` 的原文是它的規則 | `cargo test -p shell --test it devtools_css::edited_sheets_are_their_rules` |
 | 補抓的 `<link>`：抓到之前的位置照序列化的原文，抓到之後照原本的原文；script 改過的不抓；抓不到時是序列化的；抓到的規則和現在的一樣時才用 | `cargo test -p shell --test it devtools_css::link_sheets_loaded_before_devtools_are_fetched_again`、`cargo test -p renderer --lib css_agent` |
 | 和 Chrome 一樣：規則和 inline style 的位置、照原文的宣告、`@media`、`@supports`、`ruleTypes`、inline style 的原文、CSSOM 改了之後送的事件（只差 `specificity.components`、`mediaList`、改過的 stylesheet 的原文、inline style 改了時送的次數，已知）；套用的規則、computed 等 | `python3 scripts/test.py cdp css_source css` |
+| pseudo element 的規則：`::before`、`::after`、`::marker`、`::selection` 各自的規則、符合的選擇器和 stylesheet，和元素自己的分開 | `cargo test -p style --test it explain::pseudo_elements_rules_are_apart` |
+| `@keyframes` 的每個 keyframe 在原文裡的位置 | `cargo test -p css --lib inspector` |
+| pseudo element 是節點：list item 的 `::marker` 在前，有 `content` 的 `::before`、`::after`（沒有 `content`、`display: none` 的不是），編號、backend id 在所有節點之上、照兩者都描述得出；樣式變了時送來去（只送 session 有的元素的），在 task 裡重算 style（`getComputedStyle`）的照 frame 之後的樣子送；元素拿掉之後就沒了 | `cargo test -p shell --test it devtools_dom::pseudo_elements_are_nodes` |
+| 元素的 pseudo element 的規則（`::marker` 只有 list item 的）、祖先的規則和 inline style（近的先）、祖先的 `::selection` 的規則 | `cargo test -p shell --test it devtools_css::pseudo_elements_and_ancestors_rules_are_listed` |
+| 選了 pseudo element：它的規則、從它的元素開始繼承、沒有 inline style、layout 上的父元素是它的元素、computed 是它的、字型、`getBoxModel` 是它的盒子、`getInlineStylesForNode` 是錯誤、框和標籤是它的 | `cargo test -p shell --test it devtools_css::a_pseudo_element_is_styled_as_itself` |
+| 動畫的樣式：每個動畫各自的值和名字（只有生效中的），transition 合成一組（沒有在跑的時是空的），祖先各一份；`@keyframes` 每個名字一次，名字、keyframe 和宣告的位置 | `cargo test -p shell --test it devtools_css::animations_are_listed` |
+| 和 Chrome 一樣：pseudo element 和祖先的規則、pseudo element 的節點、它的樣式和框、來去的事件、`@keyframes`、動畫的樣式的名字和 property（只差 inline box 的高度，已知） | `python3 scripts/test.py cdp css_pseudo` |
 | main thread 的 scheduler：每個 queue 的 task 照送進來的順序；停住時只取 DevTools 和 rendering 的（main frame、`RequestVisualState`），其他的（Browser 的訊息、輸入、canvas）留著、不亂順序；等的時候看得到之後送來的、有 timeout 的會放棄；要打斷 script 的照舊單獨取出；停住留下的放回最前面；main thread 走了之後送不進去 | `cargo test -p renderer --lib task_queue` |
 | 停住時照樣畫：Console 的改動、框的節點、拿掉的框；`setPausedInDebuggerMessage` 的提示（頁面蓋上一層、上方中間的淡黃色框），`Overlay` 關著的 session 的不畫、拿掉之後沒有；繼續之後照常畫 | `cargo test -p shell --test it devtools_overlay::the_page_is_drawn_while_paused` |
 | 停住時的輸入等到繼續才處理 | `cargo test -p shell --test it devtools_overlay::input_waits_for_the_pause` |
@@ -196,6 +203,17 @@
   - `@media` 從外到裡：測試的規則外面只有一個 `@media`；多包一層，抓到。
   - 改成飽和的位移運算之後，那兩行的 mutant 重跑也抓到。
 - **跑過的檢查**：`cargo test -p css -p dom -p renderer -p shell -p style` 全部通過；`test.py cdp css css_sheets css_source overlay` 只有已知的差異；`sanity.py` 的 7 項都通過。第 3 段做完時才跑 `cargo test --workspace`、`fmt`、clippy。
+
+### 3c 其他的規則（2026-11-10，macOS）
+
+- **開始前定的事**：「已決定的事項」第 26 條（N1，掛點：DOM agent 替 pseudo element 編號，style 的掛點告訴它來去）、第 27 條（G1：每個動畫各自算）。決定前用 Chrome for Testing 152 試過繼承來的規則、pseudo element 的規則和節點、`getAnimatedStylesForNode`。
+- **新的測試**：`style` 的 `explain::pseudo_elements_rules_are_apart`；`css` 的 `inspector` 的測試加了 keyframe；`shell` 的 `devtools_dom::pseudo_elements_are_nodes`、`devtools_css::pseudo_elements_and_ancestors_rules_are_listed`、`a_pseudo_element_is_styled_as_itself`、`animations_are_listed`；`test.py cdp` 加 `css_pseudo` 一組。
+- **和 Chrome 比**（`test.py cdp css_pseudo`）：照 Chrome 改了 `::marker` 只有 list item 的（machopo 的 UA 的 `::marker` 規則每個元素都符合）、`transitionsStyle` 在元素有動畫時一律送；UA 的 stylesheet 兩邊不同，比對只比作者的規則。剩下的一項是 inline box 的高度（20px 的 Times 的 `<span>`，machopo 20、Chrome 23），不是 pseudo element 的問題，記成 layout 的限制。比對本身的錯：一開始設了 `left` 就馬上問動畫的樣式，兩個命令之間有沒有畫一個 frame 決定 transition 開始了沒有，有一次多了一處不同（沒有留下內容，十幾次重跑沒再出現，這是最可能的原因）；改成等兩個 frame 再問。
+- **mutation test**（`mutants-3c.toml`，36 條）：第一次抓到 32 條，漏了 4 條：
+  - 找規則的 stylesheet 時不看它是為誰 match 的：等價（規則的位置就決定了它是哪一條、哪一份），拿掉了多餘的欄位和條件，那兩條 mutant 也拿掉。
+  - 沒有 layout 時就處理 pseudo element 的改動、放著的改動丟掉：測試的 style 都在 lifecycle 裡重算；補了 script 改了 class 之後馬上 `getComputedStyle` 的情況，兩條都抓到。
+  - `highlightNode` 選 pseudo element 時框它的元素：只測了 `getHighlightObjectForTest`；補了截圖，抓到。
+- **跑過的檢查**：`cargo test -p css -p dom -p style -p layout -p animation -p dom_api -p renderer -p shell` 全部通過；`test.py cdp css css_sheets css_source css_pseudo overlay dom` 只有已知的差異；`test.py wpt css/cssom css/cssom-view` 有一個不預期的失敗（`scrollIntoView-should-treat-slot-as-scroll-container.html`，reftest），連跑三次都失敗，但 3b 的 commit 上也一樣失敗，不是這一段造成的，還沒查；`sanity.py` 的 7 項都通過。第 3 段做完時才跑 `cargo test --workspace`、`fmt`、clippy。
 
 ### 第 1、2 段的手動確認（2026-11-09，macOS）
 

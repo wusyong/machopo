@@ -4,7 +4,8 @@
 //! session; script's changes told for the nodes the session has, in
 //! order; queries that send the nodes above what they find; iframes'
 //! documents, and an iframe told again with its next one; a new document
-//! told; answers while script is paused, with what script did up to there.
+//! told; answers while script is paused, with what script did up to there;
+//! an element's pseudo-elements as nodes, told as they come and go.
 
 use net::test_server::Route;
 use serde_json::{Value, json};
@@ -836,5 +837,121 @@ fn the_document_is_searched() {
             json!({ "searchId": id, "fromIndex": 0, "toIndex": 1 }),
         )),
         "No search session with given id found"
+    );
+}
+
+/// An element's pseudo-elements with boxes are nodes sent with it: a list
+/// item's marker first, then `::before` and `::after` with content (none
+/// without, nor with `display: none`), each numbered, with a backend id past every node's; one
+/// described by either. Those that come and go with style are told, for an
+/// element the session has; those of one it hasn't, not; one whose element
+/// goes, gone.
+#[test]
+fn pseudo_elements_are_nodes() {
+    let (_machopo, mut page, _, _server) = dom_page(&[(
+        "/",
+        Route::ok(
+            "text/html",
+            "<!DOCTYPE html><style>.x::before { content: 'b' } .x::after { content: 'a' } \
+             .x.gone::after { content: none } #y.on::before, #z.on::before { content: 'y' } \
+             .none::before { color: red } .dn::before { content: 'd'; display: none }</style>\
+             <div class=x id=x>x</div><div class=x id=w>w</div><ul><li id=li class=x>l</li></ul><div id=y>y</div>\
+             <section><div id=z>z</div></section><div class=none id=n>n</div><div class=dn id=d>d</div>",
+        ),
+    )]);
+    let document = result(page.call(None, "DOM.getDocument", json!({})))["root"]["nodeId"].clone();
+    let query = |page: &mut Client, selector: &str| {
+        result(page.call(
+            None,
+            "DOM.querySelector",
+            json!({ "nodeId": document, "selector": selector }),
+        ))["nodeId"]
+            .clone()
+    };
+    let describe = |page: &mut Client, id: &Value| {
+        result(page.call(None, "DOM.describeNode", json!({ "nodeId": id })))["node"].clone()
+    };
+    let x = query(&mut page, "#x");
+    let pseudo = describe(&mut page, &x)["pseudoElements"].clone();
+    let kinds: Vec<(&Value, &Value, &Value)> = pseudo
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|node| (&node["pseudoType"], &node["nodeName"], &node["childNodeCount"]))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            (&json!("before"), &json!("::before"), &json!(0)),
+            (&json!("after"), &json!("::after"), &json!(0))
+        ]
+    );
+    let (before, after) = (&pseudo[0], &pseudo[1]);
+    assert!(before["nodeId"].as_i64().unwrap() > 0);
+    assert!(before["backendNodeId"].as_u64().unwrap() > u64::from(u32::MAX));
+    assert_ne!(before["backendNodeId"], after["backendNodeId"]);
+    assert_eq!(describe(&mut page, &before["nodeId"]), *before);
+    let by_backend = result(page.call(
+        None,
+        "DOM.describeNode",
+        json!({ "backendNodeId": before["backendNodeId"] }),
+    ));
+    assert_eq!(by_backend["node"]["pseudoType"], "before");
+    // A list item's marker first; none without content.
+    let li = query(&mut page, "#li");
+    let li_kinds: Vec<Value> = describe(&mut page, &li)["pseudoElements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|node| node["pseudoType"].clone())
+        .collect();
+    assert_eq!(li_kinds, ["marker", "before", "after"]);
+    let n = query(&mut page, "#n");
+    assert!(describe(&mut page, &n).get("pseudoElements").is_none());
+    // None with `display: none`.
+    let d = query(&mut page, "#d");
+    assert!(describe(&mut page, &d).get("pseudoElements").is_none());
+
+    // Come and gone.
+    let y = query(&mut page, "#y");
+    dom_events(&mut page);
+    evaluate(&mut page, "x.classList.add('gone'); y.classList.add('on')", None);
+    let removed = page.event("DOM.pseudoElementRemoved");
+    assert_eq!(
+        removed["params"],
+        json!({ "parentId": x, "pseudoElementId": after["nodeId"] })
+    );
+    let added = page.event("DOM.pseudoElementAdded");
+    assert_eq!(added["params"]["parentId"], y);
+    assert_eq!(added["params"]["pseudoElement"]["pseudoType"], "before");
+    assert!(added["params"]["pseudoElement"]["nodeId"].as_i64().unwrap() > 0);
+    // Styled in a task (`getComputedStyle`), with no layout to tell by yet:
+    // told after the frame, as it is then.
+    let w = query(&mut page, "#w");
+    let w_after = describe(&mut page, &w)["pseudoElements"][1]["nodeId"].clone();
+    evaluate(&mut page, "w.classList.add('gone'); getComputedStyle(w).color", None);
+    let removed = page.event("DOM.pseudoElementRemoved");
+    assert_eq!(
+        removed["params"],
+        json!({ "parentId": w, "pseudoElementId": w_after })
+    );
+    // `#z` isn't the session's (its parent's children weren't sent):
+    // nothing told.
+    evaluate(&mut page, "z.classList.add('on')", None);
+    result(page.call(
+        None,
+        "Runtime.evaluate",
+        json!({
+            "expression": "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+            "awaitPromise": true,
+        }),
+    ));
+    assert!(page.take_events("DOM.pseudoElement").is_empty());
+    // Its element gone: gone.
+    evaluate(&mut page, "x.remove()", None);
+    dom_events(&mut page);
+    assert_eq!(
+        error(page.call(None, "DOM.describeNode", json!({ "nodeId": before["nodeId"] }))),
+        "Could not find node with given id"
     );
 }

@@ -2,9 +2,9 @@
 //! (`StyleEngine::explain`): the rules it matches, the UA's and the
 //! author's, in cascade order with the winner last (an `!important`
 //! block where its normal declarations are), each with the selectors of
-//! its list it matches; none of its pseudo-elements' or of rules it
-//! doesn't match; its presentational hints and its `style` attribute's
-//! declarations apart. A shadow tree's element its tree's rules, a host
+//! its list it matches; none of rules it doesn't match; its
+//! pseudo-elements' the same way, each apart; its presentational hints and
+//! its `style` attribute's declarations apart. A shadow tree's element its tree's rules, a host
 //! its shadow tree's `:host` rules, a slotted one its slot's tree's
 //! `::slotted()`. Nothing for a node that isn't an element of the engine's
 //! document's; nothing kept of the explaining.
@@ -380,4 +380,54 @@ fn large_and_shadow_sheets_are_known() {
     assert_eq!(author_sheets(&inner), [("i".to_owned(), Some(inner_sheet))]);
     let light = explain(&mut page, "light").unwrap();
     assert_eq!(author_sheets(&light)[0], ("::slotted(b)".to_owned(), Some(inner_sheet)));
+}
+
+/// Each pseudo-element's rules the same way, apart from the element's own:
+/// its `::before`, `::after`, `::marker` and `::selection`, each with the
+/// selectors of its list it matches as that pseudo-element and its sheet.
+#[test]
+fn pseudo_elements_rules_are_apart() {
+    let mut page = Page::new(
+        "<!doctype html><style>\
+         .a::before { content: 'b' }\
+         div::after, .a::before, .a { color: blue }\
+         .a::marker { color: green }\
+         .a::selection { color: pink }\
+         </style><div id=x class=a>x</div>",
+    );
+    let explained = explain(&mut page, "x").expect("an element");
+    let author = |rules: &[style::ExplainedRule]| -> Vec<(String, Vec<usize>, bool)> {
+        rules
+            .iter()
+            .filter(|rule| rule.origin == Origin::Author)
+            .map(|rule| {
+                (
+                    rule.rule.selector_text(),
+                    rule.matching_selectors.clone(),
+                    rule.sheet.is_some(),
+                )
+            })
+            .collect()
+    };
+    assert_eq!(
+        author(&explained.rules),
+        [("div::after, .a::before, .a".to_owned(), vec![2], true)]
+    );
+    let [before, after, marker, selection] = &explained.pseudo;
+    assert_eq!(
+        author(before),
+        [
+            (".a::before".to_owned(), vec![0], true),
+            ("div::after, .a::before, .a".to_owned(), vec![1], true)
+        ]
+    );
+    assert_eq!(
+        author(after),
+        [("div::after, .a::before, .a".to_owned(), vec![0], true)]
+    );
+    assert_eq!(author(marker), [(".a::marker".to_owned(), vec![0], true)]);
+    assert_eq!(
+        author(selection),
+        [(".a::selection".to_owned(), vec![0], true)]
+    );
 }

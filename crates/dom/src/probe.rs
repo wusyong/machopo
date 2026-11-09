@@ -1,7 +1,8 @@
 //! What changed in the DOM's trees, for DevTools' `DOM` agent (Blink's
 //! `probe::DidInsertDOMNode`, `WillRemoveDOMNode`, `DidModifyDOMAttr`,
-//! `CharacterDataModified`, `DidInvalidateStyleAttr` and
-//! `DidPushShadowRoot`, which `InspectorDOMAgent` hears): while the host
+//! `CharacterDataModified`, `DidInvalidateStyleAttr`, `DidPushShadowRoot`
+//! and `PseudoElementCreated` and `PseudoElementDestroyed`, which
+//! `InspectorDOMAgent` hears): while the host
 //! wants them (`Dom::set_dom_changes_wanted`), each change's kind and
 //! nodes, in order, until it takes them (`Dom::take_dom_changes`).
 //!
@@ -40,6 +41,9 @@ pub enum DomChange {
     InlineStyle { element: NodeId },
     /// `host` got the shadow root `root`.
     ShadowAttached { host: NodeId, root: NodeId },
+    /// The style phase worked out `element`'s pseudo-elements' styles
+    /// otherwise: one may have come or gone.
+    PseudoElements { element: NodeId },
 }
 
 /// Whether the host wants the changes, and those since it last took them.
@@ -121,6 +125,13 @@ impl<'gc> Cx<'_, 'gc> {
     #[cold]
     pub(crate) fn note_inline_style(&self, element: NodeRef<'gc>) {
         self.note_dom_change(DomChange::InlineStyle {
+            element: self.node_id(element),
+        });
+    }
+
+    #[cold]
+    pub(crate) fn note_pseudo_elements(&self, element: NodeRef<'gc>) {
+        self.note_dom_change(DomChange::PseudoElements {
             element: self.node_id(element),
         });
     }

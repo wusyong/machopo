@@ -23,8 +23,8 @@ pub struct SourceRule {
     pub selectors: Vec<Range<usize>>,
     /// Its block's contents, between its braces.
     pub block: Range<usize>,
-    /// A group rule's rules (`@media`'s, `@supports`'), those kept; none of
-    /// a `@keyframes`' (its keyframes aren't style rules).
+    /// A group rule's rules (`@media`'s, `@supports`'), a `@keyframes`'
+    /// keyframes, those kept.
     pub rules: Vec<SourceRule>,
 }
 
@@ -34,6 +34,8 @@ pub enum SourceRuleKind {
     Media,
     Supports,
     Keyframes,
+    /// One of a `@keyframes`' keyframes: its prelude its selectors.
+    Keyframe,
 }
 
 /// What the parser tells of the rules it keeps, as it parses (Blink's
@@ -283,9 +285,10 @@ mod tests {
         &text[range.clone()]
     }
 
-    /// The rules kept, in the parser's order, nested in their group rules:
-    /// each prelude, selector and block where it is; a rule the parser
-    /// drops (an at-rule it doesn't know, a selector it can't parse) none.
+    /// The rules kept, in the parser's order, nested in their group rules
+    /// (a `@keyframes`' keyframes in it): each prelude, selector and block
+    /// where it is; a rule the parser drops (an at-rule it doesn't know, a
+    /// selector it can't parse) none.
     #[test]
     fn rules_are_found_where_they_are() {
         let text = "/* c */ .a ,  b > i { color: red }\n@font-face { font-family: x }\n\
@@ -314,6 +317,12 @@ mod tests {
         assert_eq!(at(text, &nested.block), "");
         assert!(at(text, &media.block).ends_with("{} }\n"));
         assert_eq!(at(text, &rules[2].prelude), "k");
+        // Its keyframes.
+        let keyframes = &rules[2].rules;
+        assert_eq!(keyframes.len(), 1);
+        assert_eq!(keyframes[0].kind, Keyframe);
+        assert_eq!(at(text, &keyframes[0].prelude), "from");
+        assert_eq!(at(text, &keyframes[0].block), " top: 0 ");
         assert_eq!(at(text, &rules[3].prelude), ".z");
         // As many as the page's parse keeps.
         let contents = crate::StyleSheetContents::parse(text, None);

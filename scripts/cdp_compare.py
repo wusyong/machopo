@@ -89,6 +89,15 @@ PAGES = {
         "</style><style media=\"screen\">.a { left: 0 }</style>\n"
         "<div class=a style='color: pink;  zz: 1; border-top: solid'>a</div><div id=e></div>"
     ),
+    "/pseudo.html": (
+        "<!DOCTYPE html><style>\nbody { color: red; margin: 0; font-family: Times }\n.p { font-size: 20px; padding: 1px }\n"
+        ".p::selection { color: navy }\n.x::before { content: 'b'; color: blue }\n.x::after { content: 'a' }\n"
+        "li::marker { color: green }\n.x::selection { color: pink }\n"
+        "@keyframes k { from { opacity: 0 } to { opacity: 1 } }\n"
+        ".x { animation: k 1000s linear; transition: left 1000s; left: 0; position: relative }\n"
+        ".x.gone::after { content: none }\n#li.n::before { content: 'n' }\n"
+        "</style><div class=p style='letter-spacing: 1px'><div class=x>x</div><ul><li id=li>l</li></ul></div>"
+    ),
     "/life.html": (
         "<!DOCTYPE html>\n<title>Life</title>\n<link rel=stylesheet href='/style.css'>\n"
         "<img src='/missing.png'>\n<iframe src='/child.html'></iframe>"
@@ -179,6 +188,9 @@ KNOWN: dict[tuple[str, str], str] = {
     "CSSOM writes them, Chrome's the text it had with the new rule written into it",
     ("css_source", "[5][1]"): "Chrome tells an inline style changed twice (once for the attribute, once for the "
     "style), machopo once",
+    ("css_pseudo", "[8]"): "an inline box's height differs from Chrome's (a `<span>` of 20px Times: machopo 20, "
+    "Chrome 23)",
+    ("css_pseudo", "[9].nodeHeight"): "the same",
     ("css_sheets", "[1][1].end"): "a `<style>` innerHTML made: Chrome's place is where the document's parser was "
     "as the script ran (after `</script>`); machopo's, none",
     ("css_sheets", "[1][1].start"): "the same",
@@ -846,6 +858,116 @@ def case_css_source(run: Run, url: Callable[[str], str]) -> list:
     return transcript
 
 
+def case_css_pseudo(run: Run, url: Callable[[str], str]) -> list:
+    """What Styles shows of an element beyond its own rules: its
+    pseudo-elements' rules (those it can have: a list item's marker), its
+    ancestors' rules and inline styles, and their highlight
+    pseudo-elements' rules; the author's rules of each (the UA sheets
+    differ). The pseudo-elements as nodes: an element's, a `::before`'s
+    styles, Computed, box and label; those that come and go."""
+    run.load(url("/pseudo.html"))
+    run.call("DOM.enable")
+    run.call("CSS.enable")
+    run.events(("CSS.styleSheetAdded",), settle=0.5)
+    root = run.call("DOM.getDocument")["result"]["root"]["nodeId"]
+
+    def node(selector: str) -> int:
+        return run.call("DOM.querySelector", {"nodeId": root, "selector": selector})["result"]["nodeId"]
+
+    def rules(matches: list) -> list:
+        # The author's (the UA sheets differ), and how many of the UA's
+        # there are for a pseudo-element (whether it has any).
+        return [
+            {
+                "selectors": match["rule"]["selectorList"]["text"],
+                "matching": match["matchingSelectors"],
+                "styleSheetId": match["rule"].get("styleSheetId"),
+            }
+            for match in matches
+            if match["rule"]["origin"] == "regular"
+        ]
+
+    transcript = []
+    for selector in [".x", "#li"]:
+        matched = run.call("CSS.getMatchedStylesForNode", {"nodeId": node(selector)})["result"]
+        transcript.append({
+            "pseudoElements": [
+                {"pseudoType": p["pseudoType"], "matches": rules(p["matches"])} for p in matched["pseudoElements"]
+            ],
+            "inherited": [
+                {
+                    "rules": rules(i["matchedCSSRules"]),
+                    "inline": i.get("inlineStyle", {}).get("cssText"),
+                }
+                for i in matched["inherited"]
+            ],
+            "inheritedPseudoElements": [
+                [{"pseudoType": p["pseudoType"], "matches": rules(p["matches"])} for p in i["pseudoElements"]]
+                for i in matched["inheritedPseudoElements"]
+            ],
+        })
+    # The pseudo-elements as nodes: an element's, a `::before`'s styles,
+    # box and label; those that come and go.
+    x, li = node(".x"), node("#li")
+    described = run.call("DOM.describeNode", {"nodeId": x})["result"]["node"]
+    transcript.append(described.get("pseudoElements"))
+    transcript.append(run.call("DOM.describeNode", {"nodeId": li})["result"]["node"].get("pseudoElements"))
+    before = described["pseudoElements"][0]["nodeId"]
+    matched = run.call("CSS.getMatchedStylesForNode", {"nodeId": before})["result"]
+    transcript.append({
+        "keys": sorted(matched),
+        "rules": rules(matched["matchedCSSRules"]),
+        "inherited": [
+            {"rules": rules(i["matchedCSSRules"]), "inline": i.get("inlineStyle", {}).get("cssText")}
+            for i in matched["inherited"]
+        ],
+        "inheritedPseudoElements": [len(i["pseudoElements"]) for i in matched["inheritedPseudoElements"]],
+        "parentLayoutNodeId": matched.get("parentLayoutNodeId") == x,
+    })
+    transcript.append(run.call("CSS.getInlineStylesForNode", {"nodeId": before}))
+    computed = run.call("CSS.getComputedStyleForNode", {"nodeId": before})["result"]["computedStyle"]
+    transcript.append([entry for entry in computed if entry["name"] in ("content", "color", "display")])
+    transcript.append(run.call("DOM.describeNode", {"nodeId": before}))
+    transcript.append(run.call("DOM.getBoxModel", {"nodeId": before}).get("result", {}).get("model", {}).get("height"))
+    info = run.call("Overlay.getHighlightObjectForTest", {"nodeId": before})["result"]["highlight"]["elementInfo"]
+    transcript.append({key: info.get(key) for key in ("tagName", "idValue", "className", "nodeHeight")})
+    # The `@keyframes` its animations run, and its animations' values (by
+    # name and property: the values move with the time).
+    transcript.append(run.call("CSS.getMatchedStylesForNode", {"nodeId": x})["result"]["cssKeyframesRules"])
+    # A transition started (two frames on: without, whether one ran
+    # between the two commands decides whether it has).
+    run.call("Runtime.evaluate", {
+        "expression": "document.querySelector('.x').style.left = '5px';"
+        " new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
+        "awaitPromise": True,
+    })
+    animated = run.call("CSS.getAnimatedStylesForNode", {"nodeId": x})["result"]
+
+    def animated_style(entry: dict) -> list:
+        return [property["name"] for property in entry["cssProperties"]]
+
+    def animated_styles(styles: dict) -> dict:
+        return {
+            "animations": [
+                {"name": entry.get("name"), "properties": animated_style(entry["style"])}
+                for entry in styles["animationStyles"]
+            ],
+            "transitions": animated_style(styles["transitionsStyle"]) if "transitionsStyle" in styles else None,
+        }
+
+    transcript.append({
+        "own": animated_styles(animated),
+        "inherited": [animated_styles(entry) for entry in animated["inherited"]],
+    })
+    pseudo_events = ("DOM.pseudoElementAdded", "DOM.pseudoElementRemoved")
+    run.call("Runtime.evaluate", {"expression": "document.querySelector('.x').classList.add('gone')"})
+    transcript.append(run.events(pseudo_events, settle=0.5))
+    run.call("Runtime.evaluate", {"expression": "li.classList.add('n')"})
+    transcript.append(run.events(pseudo_events, settle=0.5))
+    run.events(DOM_EVENTS, settle=0.2)
+    return transcript
+
+
 CASES: dict[str, Callable[[Run, Callable[[str], str]], list]] = {
     "values": case_values,
     "properties": case_properties,
@@ -864,6 +986,7 @@ CASES: dict[str, Callable[[Run, Callable[[str], str]], list]] = {
     "css": case_css,
     "css_sheets": case_css_sheets,
     "css_source": case_css_source,
+    "css_pseudo": case_css_pseudo,
 }
 
 

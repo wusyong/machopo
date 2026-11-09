@@ -15,13 +15,24 @@
 //!
 //! The DOM notes its trees' changes while a session has `DOM` on
 //! (`Dom::set_dom_changes_wanted`); the agent takes them after each task,
-//! before it answers a command, and as script pauses, and tells each
-//! session of those it has the nodes of, as Blink's agent tells them as
-//! they happen: a node is sent as it is when the agent takes the change.
+//! before it answers a command, as script pauses and after each
+//! lifecycle, and tells each session of those it has the nodes of, as
+//! Blink's agent tells them as they happen: a node is sent as it is when
+//! the agent takes the change.
+//!
+//! An element's `::before`, `::after` and `::marker` are nodes to DevTools
+//! (Blink's `PseudoElement`s), not to machopo's DOM: an element's style
+//! has them. Each that has a box (`::before` and `::after` with content,
+//! a list item's marker) is sent with its element, numbered as nodes are;
+//! its `backendNodeId` is past every node's (`pseudo_backend_id`). The
+//! style phase notes an element whose pseudo-elements' styles changed, and
+//! the agent tells of those that came and went once it has the layout
+//! (after the lifecycle).
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 
+use computed_style::{Content, PseudoId};
 use crossbeam_channel::Sender;
 use dom::{Cx, Dom, DomChange, NodeId, NodeIdHashMap, NodeKind, NodeRef, NodeRoot, QuirksMode};
 use dom_api::DevToolsPage;
@@ -32,6 +43,38 @@ use serde_json::{Value, json};
 
 /// DevTools' `DOM.NodeId`.
 pub(crate) type Id = i64;
+
+/// The pseudo-elements that are nodes to DevTools, in the order they are
+/// sent (Blink's: `::marker` first), with their names.
+const PSEUDO_ELEMENTS: [(PseudoId, &str); 3] = [
+    (PseudoId::Marker, "marker"),
+    (PseudoId::Before, "before"),
+    (PseudoId::After, "after"),
+];
+
+/// The `backendNodeId` of `element`'s pseudo-element `pseudo`: past every
+/// node's (a `NodeId` is 32 bits), its kind above its element's id.
+pub(crate) fn pseudo_backend_id(element: NodeId, pseudo: PseudoId) -> u64 {
+    let kind: u64 = match pseudo {
+        PseudoId::Before => 1,
+        PseudoId::After => 2,
+        PseudoId::Marker => 3,
+    };
+    (kind << 32) | u64::from(element.get())
+}
+
+/// The element and kind of the pseudo-element whose `backendNodeId` is
+/// `id`, if it is one's.
+pub(crate) fn pseudo_of_backend_id(id: u64) -> Option<(NodeId, PseudoId)> {
+    let pseudo = match id >> 32 {
+        1 => PseudoId::Before,
+        2 => PseudoId::After,
+        3 => PseudoId::Marker,
+        _ => return None,
+    };
+    let element = u32::try_from(id & u64::from(u32::MAX)).ok()?;
+    Some((NodeId::from_raw(element), pseudo))
+}
 
 /// The longest text a node's `nodeValue` is sent with (Blink's
 /// `kMaxTextSize`), what is past it cut and an ellipsis put in its place.
@@ -69,6 +112,10 @@ struct Session {
     /// go; the last search's number.
     searches: HashMap<String, Vec<NodeId>>,
     last_search: u64,
+    /// The pseudo-elements it was sent, numbered as nodes are, by their
+    /// elements and kinds.
+    pseudo_ids: HashMap<(NodeId, PseudoId), Id>,
+    pseudo_nodes: HashMap<Id, (NodeId, PseudoId)>,
 }
 
 impl Session {
@@ -88,10 +135,32 @@ impl Session {
         self.last_id
     }
 
+    /// The number of `element`'s pseudo-element `pseudo`, given now if it
+    /// has none.
+    fn bind_pseudo(&mut self, element: NodeId, pseudo: PseudoId) -> Id {
+        if let Some(&id) = self.pseudo_ids.get(&(element, pseudo)) {
+            return id;
+        }
+        // Sessions number fewer than 2^63 nodes.
+        self.last_id = self.last_id.saturating_add(1);
+        self.pseudo_ids.insert((element, pseudo), self.last_id);
+        self.pseudo_nodes.insert(self.last_id, (element, pseudo));
+        self.last_id
+    }
+
+    /// `element`'s pseudo-element `pseudo`'s number goes: its number.
+    fn unbind_pseudo(&mut self, element: NodeId, pseudo: PseudoId) -> Option<Id> {
+        let id = self.pseudo_ids.remove(&(element, pseudo))?;
+        self.pseudo_nodes.remove(&id);
+        Some(id)
+    }
+
     /// Every number goes (Blink's `DiscardFrontendBindings`).
     fn discard(&mut self) {
         self.ids.clear();
         self.nodes.clear();
+        self.pseudo_ids.clear();
+        self.pseudo_nodes.clear();
         self.children_sent.clear();
         self.child_counts.clear();
         self.kept.clear();
@@ -107,6 +176,10 @@ pub(crate) struct DomAgent {
     document: Cell<Option<NodeId>>,
     /// The frames, the top-level one first (`set_frames`).
     frames: RefCell<Vec<DomFrame>>,
+    /// The elements whose pseudo-elements' styles changed while the agent
+    /// had no layout to tell what came and went with: told after the next
+    /// lifecycle.
+    pseudo_pending: RefCell<Vec<NodeId>>,
 }
 
 impl DomAgent {
@@ -116,6 +189,7 @@ impl DomAgent {
             sessions: RefCell::new(HashMap::new()),
             document: Cell::new(None),
             frames: RefCell::new(Vec::new()),
+            pseudo_pending: RefCell::new(Vec::new()),
         }
     }
 
@@ -265,9 +339,39 @@ impl DomAgent {
     }
 
     /// Tells each session with `DOM` on of the DOM's changes since they
-    /// were last taken.
+    /// were last taken (the pseudo-elements' once there is a layout).
     pub(crate) fn take_changes(&self, dom: &Dom) {
-        let changes = dom.take_dom_changes();
+        self.take_changes_with(dom, None);
+    }
+
+    /// After a frame's lifecycle: the DOM's changes since they were last
+    /// taken told, the pseudo-elements that came and went among them.
+    pub(crate) fn lifecycle_updated(&self, dom: &Dom, frame: &Frame) {
+        self.take_changes_with(dom, Some(frame));
+    }
+
+    fn take_changes_with(&self, dom: &Dom, layout: Option<&Frame>) {
+        let mut changes = dom.take_dom_changes();
+        {
+            let mut pending = self.pseudo_pending.borrow_mut();
+            match layout {
+                // What came and went needs the layout: later.
+                None => changes.retain(|change| match *change {
+                    DomChange::PseudoElements { element } => {
+                        if !pending.contains(&element) {
+                            pending.push(element);
+                        }
+                        false
+                    }
+                    _ => true,
+                }),
+                Some(_) => changes.extend(
+                    pending
+                        .drain(..)
+                        .map(|element| DomChange::PseudoElements { element }),
+                ),
+            }
+        }
         if changes.is_empty() {
             return;
         }
@@ -282,7 +386,7 @@ impl DomAgent {
                     cx,
                     session,
                     frames: &frames,
-                    layout: None,
+                    layout,
                 };
                 tree.changed(&changes)
             });
@@ -397,8 +501,8 @@ impl DomAgent {
                 return Ok(json!({ "listeners": listeners }));
             }
             "DOM.getBoxModel" => {
-                let node = self.node_param(name, &params, page)?;
-                return box_model(page, node)
+                let (node, pseudo) = self.inspected_param(name, &params, page)?;
+                return box_model(page, node, pseudo)
                     .ok_or_else(|| "Could not compute box model.".to_owned());
             }
             "DOM.getContentQuads" => {
@@ -496,6 +600,36 @@ impl DomAgent {
             });
         }
         Ok(node)
+    }
+
+    /// What a command names by its `nodeId` or `backendNodeId`, a
+    /// pseudo-element's (its element and kind) or a node's (`node_param`):
+    /// for the commands that read a pseudo-element's style or boxes.
+    pub(crate) fn inspected_param(
+        &self,
+        name: &str,
+        params: &Value,
+        page: &mut dyn DevToolsPage,
+    ) -> Result<(NodeId, Option<PseudoId>), String> {
+        let pseudo = if let Some(id) = params["nodeId"].as_i64() {
+            self.sessions
+                .borrow()
+                .get(name)
+                .and_then(|session| session.pseudo_nodes.get(&id).copied())
+        } else {
+            params["backendNodeId"].as_u64().and_then(pseudo_of_backend_id)
+        };
+        let Some((element, pseudo)) = pseudo else {
+            return Ok((self.node_param(name, params, page)?, None));
+        };
+        if page.dom().read(|cx| cx.node_by_id(element).is_none()) {
+            return Err(if params["nodeId"].is_i64() {
+                "Could not find node with given id".to_owned()
+            } else {
+                "No node found for given backend id".to_owned()
+            });
+        }
+        Ok((element, Some(pseudo)))
     }
 
     /// The node `resolveNode` names, by its number or its backend id
@@ -598,6 +732,18 @@ impl<'gc> Tree<'_, '_, 'gc> {
                 Ok(json!({}))
             }
             "describeNode" => {
+                // A pseudo-element's, by its number or backend id.
+                let pseudo = match params["nodeId"].as_i64() {
+                    Some(id) => self.session.pseudo_nodes.get(&id).copied(),
+                    None => params["backendNodeId"].as_u64().and_then(pseudo_of_backend_id),
+                };
+                if let Some((element, pseudo)) = pseudo {
+                    let element = self
+                        .cx
+                        .node_by_id(element)
+                        .ok_or("Could not find node with given id")?;
+                    return Ok(json!({ "node": self.build_pseudo(element, pseudo, false) }));
+                }
                 let node = self.node_of(params)?;
                 let depth = depth(params, 0);
                 let pierce = params["pierce"].as_bool().unwrap_or(false);
@@ -796,6 +942,92 @@ impl<'gc> Tree<'_, '_, 'gc> {
         }
     }
 
+    /// `element`'s pseudo-elements with boxes, in the order they are sent:
+    /// `::before` and `::after` with content, a list item's `::marker`
+    /// (Blink's `PseudoElement::CanCreate`). None without the layout.
+    fn pseudo_elements(&self, element: NodeRef<'gc>) -> Vec<PseudoId> {
+        let Some(layout) = self.layout else {
+            return Vec::new();
+        };
+        PSEUDO_ELEMENTS
+            .iter()
+            .map(|&(pseudo, _)| pseudo)
+            .filter(|&pseudo| {
+                dom_api::FrameLayout::pseudo_style(layout, self.cx, element, pseudo).is_some_and(
+                    |style| {
+                        style.display != computed_style::Display::None
+                            && (pseudo == PseudoId::Marker
+                                || !matches!(style.rare.content, Content::Normal | Content::None))
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// `element`'s pseudo-element `pseudo` as a `DOM.Node` (Blink's for a
+    /// `PseudoElement`: an element of no attributes or children, named
+    /// `::before`), numbered if `bind`.
+    fn build_pseudo(&mut self, element: NodeRef<'gc>, pseudo: PseudoId, bind: bool) -> Value {
+        let backend = self.cx.node_id(element);
+        let id = if bind {
+            self.session.bind_pseudo(backend, pseudo)
+        } else {
+            self.session
+                .pseudo_ids
+                .get(&(backend, pseudo))
+                .copied()
+                .unwrap_or(0)
+        };
+        let kind = PSEUDO_ELEMENTS
+            .iter()
+            .find(|(of, _)| *of == pseudo)
+            .map_or("", |(_, kind)| kind);
+        json!({
+            "nodeId": id,
+            "backendNodeId": pseudo_backend_id(backend, pseudo),
+            "nodeType": 1,
+            "nodeName": format!("::{kind}"),
+            "localName": format!("::{kind}"),
+            "nodeValue": "",
+            "pseudoType": kind,
+            "attributes": [],
+            "childNodeCount": 0,
+        })
+    }
+
+    /// `element`'s pseudo-elements' styles changed: those it was sent that
+    /// are gone told gone, those come told come (Blink's
+    /// `PseudoElementCreated`, `PseudoElementDestroyed`), if the session
+    /// has the element.
+    fn pseudo_elements_changed(&mut self, element: NodeRef<'gc>, events: &mut Events) {
+        let Some(parent_id) = self.bound(element) else {
+            return;
+        };
+        let backend = self.cx.node_id(element);
+        let now = self.pseudo_elements(element);
+        for (pseudo, _) in PSEUDO_ELEMENTS {
+            let sent = self.session.pseudo_ids.contains_key(&(backend, pseudo));
+            match (sent, now.contains(&pseudo)) {
+                (true, false) => {
+                    if let Some(id) = self.session.unbind_pseudo(backend, pseudo) {
+                        events.push((
+                            "DOM.pseudoElementRemoved",
+                            json!({ "parentId": parent_id, "pseudoElementId": id }),
+                        ));
+                    }
+                }
+                (false, true) => {
+                    let node = self.build_pseudo(element, pseudo, true);
+                    events.push((
+                        "DOM.pseudoElementAdded",
+                        json!({ "parentId": parent_id, "pseudoElement": node }),
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn bound(&self, node: NodeRef<'gc>) -> Option<Id> {
         self.session.id(self.cx.node_id(node))
     }
@@ -966,6 +1198,14 @@ impl<'gc> Tree<'_, '_, 'gc> {
                         "nodeName": cx.node_name(slot).to_str(),
                         "backendNodeId": cx.node_id(slot).get(),
                     });
+                }
+                let pseudo: Vec<Value> = self
+                    .pseudo_elements(node)
+                    .into_iter()
+                    .map(|pseudo| self.build_pseudo(node, pseudo, bind))
+                    .collect();
+                if !pseudo.is_empty() {
+                    value["pseudoElements"] = pseudo.into();
                 }
             }
             NodeKind::Document => {
@@ -1378,6 +1618,9 @@ impl<'gc> Tree<'_, '_, 'gc> {
         let cx = self.cx;
         self.session.ids.remove(&cx.node_id(node));
         self.session.nodes.remove(&id);
+        for (pseudo, _) in PSEUDO_ELEMENTS {
+            self.session.unbind_pseudo(cx.node_id(node), pseudo);
+        }
         if let Some(document) = cx.content_document(node) {
             self.unbind(document);
         }
@@ -1406,6 +1649,11 @@ impl<'gc> Tree<'_, '_, 'gc> {
         let mut recount = Vec::new();
         for change in changes {
             match *change {
+                DomChange::PseudoElements { element } => {
+                    if let Some(element) = cx.node_by_id(element) {
+                        self.pseudo_elements_changed(element, &mut events);
+                    }
+                }
                 DomChange::Inserted { parent, node, .. } => {
                     let (Some(parent), Some(node)) = (cx.node_by_id(parent), cx.node_by_id(node))
                     else {
@@ -1669,10 +1917,24 @@ pub(crate) fn with_layout<R>(
 /// `InspectorHighlight::GetBoxModel`): its quads in the top-level frame's
 /// viewport, its border box's size as `offsetWidth` and `offsetHeight`
 /// have it. None for a node with no box.
-fn box_model(page: &mut dyn DevToolsPage, node: NodeId) -> Option<Value> {
+fn box_model(page: &mut dyn DevToolsPage, node: NodeId, pseudo: Option<PseudoId>) -> Option<Value> {
     with_layout(page, node, |_, frame, _, document| {
-        let quads = frame.box_quads_in_top(document, node)?;
-        let size = frame.view.view_of(document)?.element_box(node)?.border_box;
+        let quads = frame.pseudo_box_quads_in_top(document, node, pseudo)?;
+        // A box's border box (a pseudo-element's, its border quad's
+        // extent).
+        let size = match pseudo {
+            None => frame.view.view_of(document)?.element_box(node)?.border_box.size(),
+            Some(_) => {
+                let extent = |of: fn(&gfx::PointF) -> f32| {
+                    let values = quads.border.map(|point| of(&point));
+                    let (min, max) = values
+                        .iter()
+                        .fold((f32::MAX, f32::MIN), |(min, max), &v| (min.min(v), max.max(v)));
+                    max - min
+                };
+                gfx::SizeF::new(extent(|point| point.x), extent(|point| point.y))
+            }
+        };
         Some(json!({
             "model": {
                 "content": quad_json(&quads.content),

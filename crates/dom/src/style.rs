@@ -667,9 +667,13 @@ impl<'gc> Cx<'_, 'gc> {
         self.mark_layout(node, LayoutTreeFlags::STYLE_CHANGED);
     }
 
-    /// The style phase's: `node`'s pseudo-elements' styles changed.
+    /// The style phase's: `node`'s pseudo-elements' styles changed (one may
+    /// have come or gone: DevTools' `DOM` is told).
     pub fn set_pseudo_styles_changed(&self, node: NodeRef<'gc>) {
         self.mark_layout(node, LayoutTreeFlags::PSEUDO_STYLES_CHANGED);
+        if self.dom_changes_wanted() {
+            self.note_pseudo_elements(node);
+        }
     }
 
     /// The style phase's: `node` and its subtree styled again (Blink's

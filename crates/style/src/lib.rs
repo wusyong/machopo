@@ -117,6 +117,9 @@ pub struct Explained {
     /// The rules it matches, in cascade order: the UA's, then the author's,
     /// each by specificity, then where it comes; the winner last.
     pub rules: Vec<ExplainedRule>,
+    /// The rules its pseudo-elements match, the same way: its `::before`,
+    /// `::after`, `::marker` and `::selection`, in that order.
+    pub pseudo: [Vec<ExplainedRule>; 4],
     /// Its presentational hints (HTML's attributes and SVG's presentation
     /// attributes, one block, as Blink's `attributesStyle`).
     pub presentation: Option<Arc<CssPropertyValueSet>>,
@@ -917,57 +920,66 @@ impl StyleEngine {
             &mut walk.presentation,
         );
         let mut provenance = Vec::new();
-        let [own, ..] = walk.blocks(
+        let blocks = walk.blocks(
             element,
             inline.as_ref(),
             presentation.as_ref(),
             Some(&mut provenance),
         );
-        // Each block once, at its normal declarations' place (its
-        // `!important` ones' is another).
-        let mut rules: Vec<(CascadePriority, Arc<css::StyleRule>)> = own
-            .iter()
-            .filter(|(_, _, important, _)| !important)
-            .filter_map(|(priority, _, _, source)| match source {
-                BlockSource::Rule(rule) => Some((*priority, Arc::clone(rule))),
-                BlockSource::Hints(_) | BlockSource::Own => None,
-            })
-            .collect();
-        rules.sort_by_key(|(priority, _)| *priority);
-        drop(own);
         let matched = walk.matched_selectors.take().unwrap_or_default();
         self.presentation_attributes = std::mem::take(&mut walk.presentation);
-        let rules = rules
-            .into_iter()
-            .map(|(priority, rule)| {
-                let origin = if priority.level == CascadePriority::level(Origin::UserAgent, false) {
-                    Origin::UserAgent
-                } else {
-                    Origin::Author
-                };
-                // The sheet it is of: where it was matched from, a
-                // document's index's sheets or a shadow root's.
-                let sheet = provenance
-                    .iter()
-                    .find(|from| from.tree == priority.tree && from.order == priority.order)
-                    .and_then(|from| self.sheet_of(from));
-                let mut matching_selectors: Vec<usize> = matched
-                    .iter()
-                    .filter(|(matched, _)| Arc::ptr_eq(matched, &rule))
-                    .map(|&(_, index)| index)
-                    .collect();
-                matching_selectors.sort_unstable();
-                matching_selectors.dedup();
-                ExplainedRule {
-                    rule,
-                    origin,
-                    sheet,
-                    matching_selectors,
-                }
-            })
-            .collect();
+        // Each target's rules: the element's own, then its pseudo-elements'.
+        let mut explained = blocks.iter().enumerate().map(|(target, blocks)| {
+            // Each block once, at its normal declarations' place (its
+            // `!important` ones' is another).
+            let mut rules: Vec<(CascadePriority, Arc<css::StyleRule>)> = blocks
+                .iter()
+                .filter(|(_, _, important, _)| !important)
+                .filter_map(|(priority, _, _, source)| match source {
+                    BlockSource::Rule(rule) => Some((*priority, Arc::clone(rule))),
+                    BlockSource::Hints(_) | BlockSource::Own => None,
+                })
+                .collect();
+            rules.sort_by_key(|(priority, _)| *priority);
+            rules
+                .into_iter()
+                .map(|(priority, rule)| {
+                    let origin =
+                        if priority.level == CascadePriority::level(Origin::UserAgent, false) {
+                            Origin::UserAgent
+                        } else {
+                            Origin::Author
+                        };
+                    // The sheet it is of: where it was matched from, a
+                    // document's index's sheets or a shadow root's (its
+                    // place is the rule's, whatever it was matched for).
+                    let sheet = provenance
+                        .iter()
+                        .find(|from| from.tree == priority.tree && from.order == priority.order)
+                        .and_then(|from| self.sheet_of(from));
+                    let mut matching_selectors: Vec<usize> = matched
+                        .iter()
+                        .filter(|(matched, _, of)| *of == target && Arc::ptr_eq(matched, &rule))
+                        .map(|&(_, index, _)| index)
+                        .collect();
+                    matching_selectors.sort_unstable();
+                    matching_selectors.dedup();
+                    ExplainedRule {
+                        rule,
+                        origin,
+                        sheet,
+                        matching_selectors,
+                    }
+                })
+                .collect::<Vec<_>>()
+        });
+        let rules = explained.next().unwrap_or_default();
+        let pseudo = [(); 4].map(|()| explained.next().unwrap_or_default());
+        drop(explained);
+        drop(blocks);
         Some(Explained {
             rules,
+            pseudo,
             presentation: presentation.map(|(hints, _)| hints),
             inline,
         })
@@ -995,6 +1007,21 @@ impl StyleEngine {
             }
             Some(root) => self.shadow.get(root)?.sheet_of(from.index),
         }
+    }
+
+    /// The `@keyframes` named `name` that `element`'s `animation-name`
+    /// finds, as its last recalc found it (DevTools' `cssKeyframesRules`).
+    pub fn keyframes_rule<'gc>(
+        &self,
+        cx: &Cx<'_, 'gc>,
+        element: NodeRef<'gc>,
+        name: &str,
+    ) -> Option<Arc<css::KeyframesRule>> {
+        let author = self
+            .author
+            .as_ref()
+            .map_or(&[][..], |author| &author.indexes[..]);
+        find_keyframes(cx, &self.shadow, author, element, name)
     }
 
     /// How many times it collected its document's or a shadow root's sheets
@@ -1728,9 +1755,10 @@ struct Walk<'s, 'a, 'gc> {
     /// them restyles): not for `StyleEngine::explain`, which changes
     /// nothing.
     selector_flags: NeedsSelectorFlags,
-    /// For `StyleEngine::explain`: each selector the element matched as
-    /// itself, by its rule and its index in the rule's list.
-    matched_selectors: Option<Vec<(&'s Arc<css::StyleRule>, usize)>>,
+    /// For `StyleEngine::explain`: each selector the element matched, by its
+    /// rule, its index in the rule's list and what it matched as (its
+    /// `target_index`).
+    matched_selectors: Option<Vec<(&'s Arc<css::StyleRule>, usize, usize)>>,
     #[cfg(debug_assertions)]
     restyled: Vec<gfx::NodeId>,
     #[cfg(debug_assertions)]
@@ -2692,36 +2720,9 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
     }
 
     /// The `@keyframes` named `name` that `element`'s `animation-name`
-    /// finds: its own shadow tree's (for its `:host` rules), then its tree
-    /// scope's and those around it, out to the document's; the last sheet's
-    /// first (css-scoping's tree-scoped names).
+    /// finds (`find_keyframes`).
     fn find_keyframes(&self, element: NodeRef<'gc>, name: &str) -> Option<Arc<css::KeyframesRule>> {
-        let cx = self.cx;
-        let in_scope = |root: NodeRef<'gc>| {
-            self.shadow
-                .get(cx.node_id(root))?
-                .indexes
-                .iter()
-                .rev()
-                .find_map(|(index, _)| Some(index.set.keyframes(name)?.0.clone()))
-        };
-        if let Some(found) = cx.shadow_root(element).and_then(in_scope) {
-            return Some(found);
-        }
-        let mut at = cx.containing_shadow_root(element);
-        while let Some(root) = at {
-            if let Some(found) = in_scope(root) {
-                return Some(found);
-            }
-            at = cx
-                .shadow_host(root)
-                .and_then(|host| cx.containing_shadow_root(host));
-        }
-        // The later index's, of two with one name (as in one index).
-        self.author
-            .iter()
-            .rev()
-            .find_map(|(index, _)| Some(index.set.keyframes(name)?.0.clone()))
+        find_keyframes(self.cx, self.shadow, self.author, element, name)
     }
 
     /// The declaration blocks `element` cascades (Blink's
@@ -2791,9 +2792,7 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
                         &rule.block,
                         BlockSource::Rule(rule),
                     );
-                    if target == Target::Element
-                        && let Some(provenance) = provenance.as_deref_mut()
-                    {
+                    if let Some(provenance) = provenance.as_deref_mut() {
                         provenance.push(Provenance {
                             tree: CascadePriority::tree(tree_order, false),
                             order: first.saturating_add(order),
@@ -3267,10 +3266,8 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
                 if matches_selector(selector, 0, None, &matched_as, context) {
                     let slot = &mut specificity[target_index(target)];
                     *slot = (*slot).max(Some(data.specificity));
-                    if target == Target::Element
-                        && let Some(found) = &mut self.matched_selectors
-                    {
-                        found.push((rule, data.selector as usize));
+                    if let Some(found) = &mut self.matched_selectors {
+                        found.push((rule, data.selector as usize, target_index(target)));
                     }
                 }
             }
@@ -3281,6 +3278,45 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
             }
         }
     }
+}
+
+/// The `@keyframes` named `name` that `element`'s `animation-name` finds,
+/// of `shadow`'s scopes and the document's indexes (`author`): its own
+/// shadow tree's (for its `:host` rules), then its tree scope's and those
+/// around it, out to the document's; the last sheet's first (css-scoping's
+/// tree-scoped names).
+fn find_keyframes<'gc>(
+    cx: &Cx<'_, 'gc>,
+    shadow: &ShadowScopes,
+    author: &[(Rc<RuleIndex>, usize)],
+    element: NodeRef<'gc>,
+    name: &str,
+) -> Option<Arc<css::KeyframesRule>> {
+    let in_scope = |root: NodeRef<'gc>| {
+        shadow
+            .get(cx.node_id(root))?
+            .indexes
+            .iter()
+            .rev()
+            .find_map(|(index, _)| Some(index.set.keyframes(name)?.0.clone()))
+    };
+    if let Some(found) = cx.shadow_root(element).and_then(in_scope) {
+        return Some(found);
+    }
+    let mut at = cx.containing_shadow_root(element);
+    while let Some(root) = at {
+        if let Some(found) = in_scope(root) {
+            return Some(found);
+        }
+        at = cx
+            .shadow_host(root)
+            .and_then(|host| cx.containing_shadow_root(host));
+    }
+    // The later index's, of two with one name (as in one index).
+    author
+        .iter()
+        .rev()
+        .find_map(|(index, _)| Some(index.set.keyframes(name)?.0.clone()))
 }
 
 /// Whether `element` is its document's root element.

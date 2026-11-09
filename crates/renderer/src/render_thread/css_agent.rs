@@ -39,6 +39,7 @@ const COMMANDS: &[&str] = &[
     "getMatchedStylesForNode",
     "getPlatformFontsForNode",
     "getStyleSheetText",
+    "getAnimatedStylesForNode",
     "trackComputedStyleUpdatesForNode",
 ];
 
@@ -514,6 +515,87 @@ impl CssAgent {
         rule
     }
 
+    /// The `@keyframes` `element`'s animations run, as DevTools'
+    /// `CSS.CSSKeyframesRule`s (Blink's `AnimationsForNode`): each name of
+    /// its `animation-name` once, in order, that finds one, with where it
+    /// and its keyframes are in its sheet (one of `sheets`).
+    fn keyframes_json(
+        &self,
+        page: &mut dyn DevToolsPage,
+        element: NodeId,
+        sheets: &[SheetInfo],
+    ) -> Vec<Value> {
+        let Some(style) = current_style(page, element) else {
+            return Vec::new();
+        };
+        let mut names: Vec<&str> = Vec::new();
+        for name in style.rare.animations.name.iter() {
+            if let computed_style::AnimationName::Name(name) = name
+                && !names.contains(&&**name)
+            {
+                names.push(name);
+            }
+        }
+        let mut found = Vec::new();
+        for name in names {
+            let Some(rule) = with_layout(page, element, |cx, frame, element, document| {
+                frame
+                    .view
+                    .view_of(document)?
+                    .keyframes_rule(cx, element, name)
+            }) else {
+                continue;
+            };
+            // Where it is: its sheet's, and its place in it.
+            let place = sheets.iter().find_map(|sheet| {
+                let path = keyframes_path(sheet.contents.rules(), &rule)?;
+                Some((sheet, path))
+            });
+            let id = place.as_ref().map(|(sheet, _)| self.sheet_id(sheet.id));
+            let source = place.map(|(sheet, path)| (self.source(sheet), path));
+            let source_rule = source.as_ref().and_then(|(source, path)| {
+                let mut rules = &source.rules[..];
+                let mut at = None;
+                for &index in path {
+                    let rule = rules.get(index)?;
+                    rules = &rule.rules;
+                    at = Some(rule);
+                }
+                at.map(|rule| (source, rule))
+            });
+            let mut animation_name = json!({ "text": name });
+            if let Some((source, rule)) = &source_rule {
+                animation_name["range"] = source.lines.range(&source.text, &rule.prelude);
+            }
+            let keyframes: Vec<Value> = rule
+                .keyframes()
+                .enumerate()
+                .map(|(at, keyframe)| {
+                    let mut key_text = json!({ "text": keyframe.key_text() });
+                    let mut style = style_json(&keyframe.block);
+                    if let Some((source, rule)) = &source_rule
+                        && let Some(of) = rule.rules.get(at)
+                    {
+                        key_text["range"] = source.lines.range(&source.text, &of.prelude);
+                        sourced(&mut style, &source.text, &of.block, &source.lines);
+                    }
+                    let mut entry = json!({
+                        "origin": "regular",
+                        "keyText": key_text,
+                        "style": style,
+                    });
+                    if let Some(id) = &id {
+                        entry["styleSheetId"] = id.clone().into();
+                        entry["style"]["styleSheetId"] = id.clone().into();
+                    }
+                    entry
+                })
+                .collect();
+            found.push(json!({ "animationName": animation_name, "keyframes": keyframes }));
+        }
+        found
+    }
+
     /// An element's inline style as DevTools' `CSS.CSSStyle`: its `style`
     /// attribute a sheet of its own (one with no declarations without the
     /// attribute: Blink's is its inline style sheet's, which every element
@@ -623,6 +705,12 @@ impl CssAgent {
         });
     }
 
+    /// The `DOM` agent it answers with (what the lifecycle tells of
+    /// pseudo-elements too).
+    pub(crate) fn dom_agent(&self) -> &DomAgent {
+        &self.dom_agent
+    }
+
     /// `session` has gone.
     pub(crate) fn detach(&self, session: &str) {
         self.sessions.borrow_mut().remove(session);
@@ -723,10 +811,12 @@ impl CssAgent {
                 Err("CSS agent was not enabled".to_owned())
             }
             "getComputedStyleForNode" => {
-                let node = self.node(name, params, page)?;
+                let (node, pseudo) = self.inspected(name, params, page)?;
                 let computed = with_layout(page, node, |cx, frame, node, _| {
                     let element = styled_element(cx, node)?;
-                    Some(dom_api::computed_style_for_devtools(cx, frame, element))
+                    Some(dom_api::computed_style_for_devtools(
+                        cx, frame, element, pseudo,
+                    ))
                 })
                 .unwrap_or_default();
                 let computed: Vec<Value> = computed
@@ -739,6 +829,10 @@ impl CssAgent {
                 }))
             }
             "getInlineStylesForNode" => {
+                // A pseudo-element has none (Chrome's words).
+                if self.inspected(name, params, page)?.1.is_some() {
+                    return Err("Element is not a style sheet".to_owned());
+                }
                 let node = self.element(name, params, page)?;
                 let explained = explain(page, node);
                 let inline = self.inline_json(page, node, explained.as_ref());
@@ -749,36 +843,117 @@ impl CssAgent {
                 Ok(result)
             }
             "getMatchedStylesForNode" => {
-                let node = self.element(name, params, page)?;
+                // A pseudo-element's: its rules, its element's inherited.
+                let (node, of_pseudo) = match self.inspected(name, params, page)? {
+                    (node, Some(pseudo)) => (node, Some(pseudo)),
+                    _ => (self.element(name, params, page)?, None),
+                };
                 let explained = explain(page, node);
                 let sheets = self.list_sheets(page.dom());
-                let rules: Vec<Value> = explained
-                    .iter()
-                    .flat_map(|explained| &explained.rules)
-                    .map(|matched| {
-                        json!({
-                            "rule": self.rule_json(matched, &sheets),
-                            "matchingSelectors": matched.matching_selectors,
+                let matches = |rules: &[style::ExplainedRule]| -> Vec<Value> {
+                    rules
+                        .iter()
+                        .map(|matched| {
+                            json!({
+                                "rule": self.rule_json(matched, &sheets),
+                                "matchingSelectors": matched.matching_selectors,
+                            })
                         })
-                    })
-                    .collect();
+                        .collect()
+                };
+                let rules = explained.as_ref().map_or_else(Vec::new, |explained| {
+                    match of_pseudo.and_then(|pseudo| {
+                        PSEUDO_TYPES.iter().position(|(_, of)| *of == Some(pseudo))
+                    }) {
+                        Some(at) => matches(&explained.pseudo[at]),
+                        None => matches(&explained.rules),
+                    }
+                });
+                // Its pseudo-elements' rules, those it can have (a marker a
+                // list item's, as style has it) with any (Blink's
+                // `BuildPseudoElementMatches`).
+                let list_item = current_style(page, node)
+                    .is_some_and(|style| style.display == computed_style::Display::ListItem);
+                let pseudo_elements = |explained: &style::Explained, highlights_only: bool| {
+                    PSEUDO_TYPES
+                        .iter()
+                        .zip(&explained.pseudo)
+                        .filter(|((kind, _), rules)| {
+                            !rules.is_empty()
+                                && (!highlights_only || *kind == "selection")
+                                && (*kind != "marker" || list_item)
+                        })
+                        .map(|((kind, _), rules)| {
+                            json!({ "pseudoType": kind, "matches": matches(rules) })
+                        })
+                        .collect::<Vec<Value>>()
+                };
+                let pseudo = explained
+                    .as_ref()
+                    .filter(|_| of_pseudo.is_none())
+                    .map_or_else(Vec::new, |explained| pseudo_elements(explained, false));
+                // Each of its ancestors', the nearest first (Blink's
+                // `MatchedStylesForNode`'s `inherited`): every rule it
+                // matches (the frontend picks out the inherited
+                // properties), its inline style if it has one, and its
+                // highlight pseudo-elements' rules.
+                let ancestors = page.dom().read(|cx| {
+                    let element = cx.node_by_id(node)?;
+                    // A pseudo-element's: its element first.
+                    let first = if of_pseudo.is_some() {
+                        Some(element)
+                    } else {
+                        cx.flat_tree_parent(element)
+                    };
+                    Some(
+                        std::iter::successors(first, |&at| cx.flat_tree_parent(at))
+                        .filter(|&at| cx.kind(at) == NodeKind::Element)
+                        .map(|at| cx.node_id(at))
+                        .collect::<Vec<NodeId>>(),
+                    )
+                });
+                let (mut inherited, mut inherited_pseudo) = (Vec::new(), Vec::new());
+                for ancestor in ancestors.unwrap_or_default() {
+                    let Some(of) = explain(page, ancestor) else {
+                        continue;
+                    };
+                    let mut entry = json!({ "matchedCSSRules": matches(&of.rules) });
+                    if of.inline.is_some() {
+                        entry["inlineStyle"] = self.inline_json(page, ancestor, Some(&of));
+                    }
+                    inherited.push(entry);
+                    inherited_pseudo.push(json!({ "pseudoElements": pseudo_elements(&of, true) }));
+                }
+                let keyframes = if of_pseudo.is_none() {
+                    self.keyframes_json(page, node, &sheets)
+                } else {
+                    Vec::new()
+                };
                 let mut result = json!({
                     "matchedCSSRules": rules,
-                    "pseudoElements": [],
-                    "inherited": [],
-                    "inheritedPseudoElements": [],
-                    "cssKeyframesRules": [],
+                    "pseudoElements": pseudo,
+                    "inherited": inherited,
+                    "inheritedPseudoElements": inherited_pseudo,
+                    "cssKeyframesRules": keyframes,
                     "cssPropertyRules": [],
                     "cssPropertyRegistrations": [],
                     "cssAtRules": [],
                 });
-                result["inlineStyle"] = self.inline_json(page, node, explained.as_ref());
-                if let Some(hints) = explained.as_ref().and_then(|e| e.presentation.as_deref()) {
-                    result["attributesStyle"] = style_json(hints);
+                if of_pseudo.is_none() {
+                    result["inlineStyle"] = self.inline_json(page, node, explained.as_ref());
+                    if let Some(hints) =
+                        explained.as_ref().and_then(|e| e.presentation.as_deref())
+                    {
+                        result["attributesStyle"] = style_json(hints);
+                    }
                 }
                 // Its parent in the layout tree, which Styles reads flex
-                // and grid of (Blink's `LayoutParentElement`), sent first.
+                // and grid of (Blink's `LayoutParentElement`), sent first:
+                // a pseudo-element's, its element.
                 let parent = with_layout(page, node, |cx, frame, element, _| {
+                    if of_pseudo.is_some() {
+                        return Some(cx.node_id(element));
+                    }
                     let mut at = cx.flat_tree_parent(element);
                     while let Some(parent) =
                         at.filter(|&parent| cx.kind(parent) == NodeKind::Element)
@@ -830,13 +1005,44 @@ impl CssAgent {
                 }
                 Ok(json!({ "text": sheet.text }))
             }
+            "getAnimatedStylesForNode" => {
+                // Its animations' values (a pseudo-element's, its), then
+                // each of its ancestors' (its element first).
+                let (node, pseudo) = self.inspected(name, params, page)?;
+                Ok(page
+                    .dom()
+                    .read(|cx| {
+                        let element = cx.node_by_id(node)?;
+                        let now = cx.animation_time(cx.document_of(element));
+                        let mut result = animated_styles(cx, element, pseudo, now);
+                        let first = if pseudo.is_some() {
+                            Some(element)
+                        } else {
+                            cx.flat_tree_parent(element)
+                        };
+                        let inherited: Vec<Value> =
+                            std::iter::successors(first, |&at| cx.flat_tree_parent(at))
+                                .filter(|&at| cx.kind(at) == NodeKind::Element)
+                                .map(|at| animated_styles(cx, at, None, now))
+                                .collect();
+                        result["inherited"] = inherited.into();
+                        Some(result)
+                    })
+                    .unwrap_or_else(|| json!({ "animationStyles": [], "inherited": [] })))
+            }
             "getPlatformFontsForNode" => {
-                let node = self.node(name, params, page)?;
+                let (node, pseudo) = self.inspected(name, params, page)?;
                 let fonts = with_layout(page, node, |cx, frame, node, document| {
                     let counted = counted_text(cx, node);
                     let element = (cx.kind(node) == NodeKind::Element).then(|| cx.node_id(node));
                     let view = frame.view.view_of(document)?;
                     Some(view.platform_fonts(&|run| {
+                        // A pseudo-element's: its content's.
+                        if pseudo.is_some() {
+                            return run.source.is_none()
+                                && run.pseudo == pseudo
+                                && run.node == element;
+                        }
                         match &run.source {
                             Some((text, _)) => counted.contains(text),
                             // Generated content's: the element's own
@@ -891,6 +1097,19 @@ impl CssAgent {
         let id = params["nodeId"].as_i64().unwrap_or(0);
         self.dom_agent
             .node_param(name, &json!({ "nodeId": id }), page)
+    }
+
+    /// The node or pseudo-element a command names by its `nodeId`: a
+    /// pseudo-element's element and kind.
+    fn inspected(
+        &self,
+        name: &str,
+        params: &Value,
+        page: &mut dyn DevToolsPage,
+    ) -> Result<(NodeId, Option<computed_style::PseudoId>), String> {
+        let id = params["nodeId"].as_i64().unwrap_or(0);
+        self.dom_agent
+            .inspected_param(name, &json!({ "nodeId": id }), page)
     }
 
     /// The element a command names by its `nodeId` (Blink's
@@ -973,6 +1192,74 @@ impl CssAgent {
     }
 }
 
+/// `element`'s (or its pseudo-element `pseudo`'s) animations' values at
+/// `now` as DevTools' `getAnimatedStylesForNode` has them (Blink's
+/// `BuildAnimationStyles`): each animation's alone over its base style, its
+/// name a CSS animation's, the computed values of the properties it
+/// animates; the transitions' together (for an element with animations,
+/// none running too).
+fn animated_styles<'gc>(
+    cx: &Cx<'_, 'gc>,
+    element: NodeRef<'gc>,
+    pseudo: Option<computed_style::PseudoId>,
+    now: f64,
+) -> Value {
+    let target = match pseudo {
+        None => 0,
+        Some(computed_style::PseudoId::Before) => 1,
+        Some(computed_style::PseudoId::After) => 2,
+        Some(computed_style::PseudoId::Marker) => 3,
+    };
+    let sampled = cx
+        .read_animations(element, |targets| {
+            targets[target]
+                .as_ref()
+                .map(|target| target.animations.sampled_alone(now, &target.base))
+        })
+        .flatten();
+    let style = |style: &ComputedStyle, properties: &[css::properties::LonghandId]| {
+        let properties: Vec<Value> = properties
+            .iter()
+            .map(|property| {
+                let name = property.name();
+                let value = css::computed::computed_value(style, name).unwrap_or_default();
+                json!({ "name": name, "value": value })
+            })
+            .collect();
+        json!({ "cssProperties": properties, "shorthandEntries": [] })
+    };
+    let animations: Vec<Value> = sampled
+        .iter()
+        .flat_map(|sampled| &sampled.animations)
+        .map(|animation| {
+            let mut entry = json!({ "style": style(&animation.style, &animation.properties) });
+            if let Some(name) = &animation.name {
+                entry["name"] = name.as_ref().into();
+            }
+            entry
+        })
+        .collect();
+    let mut result = json!({ "animationStyles": animations });
+    // An element with animations has its transitions' style, empty with
+    // none running (Blink's, of its `ElementAnimations`).
+    if let Some(sampled) = &sampled {
+        result["transitionsStyle"] = match &sampled.transitions {
+            Some(transitions) => style(&transitions.style, &transitions.properties),
+            None => json!({ "cssProperties": [], "shorthandEntries": [] }),
+        };
+    }
+    result
+}
+
+/// DevTools' names of the pseudo-elements `style::Explained::pseudo` has
+/// rules of, in its order, and their kinds.
+const PSEUDO_TYPES: [(&str, Option<computed_style::PseudoId>); 4] = [
+    ("before", Some(computed_style::PseudoId::Before)),
+    ("after", Some(computed_style::PseudoId::After)),
+    ("marker", Some(computed_style::PseudoId::Marker)),
+    ("selection", None),
+];
+
 /// A sheet as `CSS` tells it: its id (`dom::Cx::style_sheet_id`), its
 /// header and its text.
 struct SheetInfo {
@@ -1017,6 +1304,25 @@ fn rule_path(rules: &[CssRule], target: &Arc<css::StyleRule>) -> Option<Vec<usiz
             _ => continue,
         };
         if let Some(mut path) = rule_path(inner, target) {
+            path.insert(0, at);
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// Where `target` is in `rules` (`rule_path` of a `@keyframes`).
+fn keyframes_path(rules: &[CssRule], target: &Arc<css::KeyframesRule>) -> Option<Vec<usize>> {
+    for (at, rule) in rules.iter().enumerate() {
+        let inner = match rule {
+            CssRule::Keyframes(keyframes) if Arc::ptr_eq(keyframes, target) => {
+                return Some(vec![at]);
+            }
+            CssRule::Media(group) => &group.rules,
+            CssRule::Supports(group) => &group.rules,
+            _ => continue,
+        };
+        if let Some(mut path) = keyframes_path(inner, target) {
             path.insert(0, at);
             return Some(path);
         }

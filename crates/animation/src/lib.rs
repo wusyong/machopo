@@ -47,4 +47,6 @@ pub use crate::timing::{ComputedTiming, Phase, Timing, TimingOverrides};
 pub use crate::timing_input::{
     DurationInput, FillInput, OptionalTiming, TimingInput, apply_timing, default_timing,
 };
-pub use crate::transition::{AnimatedStyle, ElementAnimations};
+pub use crate::transition::{
+    AnimatedStyle, ElementAnimations, SampledAnimation, SampledAnimations,
+};

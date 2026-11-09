@@ -890,10 +890,21 @@ impl<'i> AtRuleParser<'i> for TopLevelParser<'_> {
     ) -> Result<Self::AtRule, ParseError<'i, Self::Error>> {
         let start = input.position().byte_index();
         if let AtRulePrelude::Keyframes(name) = prelude {
-            let rules = parse_keyframe_list(input, self.log);
+            let (rules, source) = match self.recorder.as_deref_mut() {
+                // Its keyframes' places, apart from those of the list it is
+                // in.
+                Some(recorder) => {
+                    let mut source = recorder.rule(SourceRuleKind::Keyframes, start, start);
+                    let outer = std::mem::take(&mut recorder.rules);
+                    let rules = parse_keyframe_list(input, self.log, Some(&mut *recorder));
+                    source.rules = std::mem::replace(&mut recorder.rules, outer);
+                    source.block.end = input.position().byte_index();
+                    (rules, Some(source))
+                }
+                None => (parse_keyframe_list(input, self.log, None), None),
+            };
             if let Some(recorder) = self.recorder.as_deref_mut() {
-                let end = input.position().byte_index();
-                recorder.done = Some(recorder.rule(SourceRuleKind::Keyframes, start, end));
+                recorder.done = source;
             }
             return Ok(CssRule::Keyframes(Arc::new(KeyframesRule { name, rules })));
         }
@@ -956,13 +967,25 @@ fn parse_keyframes_name<'i>(input: &mut Parser<'i, '_>) -> Result<Arc<str>, Pars
 
 /// A `@keyframes`' block: its keyframes, each a [`CssRule::Keyframe`]. A
 /// keyframe whose selector doesn't parse is dropped, as are at-rules.
-fn parse_keyframe_list(input: &mut Parser<'_, '_>, log: &mut ParseLog) -> Vec<CssRule> {
-    let mut parser = KeyframeListParser { log };
+fn parse_keyframe_list(
+    input: &mut Parser<'_, '_>,
+    log: &mut ParseLog,
+    recorder: Option<&mut Recorder>,
+) -> Vec<CssRule> {
+    let mut parser = KeyframeListParser { log, recorder };
     let mut rules = Vec::new();
     let mut dropped = 0;
-    for result in StyleSheetParser::new(input, &mut parser) {
+    let mut list = StyleSheetParser::new(input, &mut parser);
+    while let Some(result) = list.next() {
         match result {
-            Ok(rule) => rules.push(rule),
+            Ok(rule) => {
+                rules.push(rule);
+                if let Some(recorder) = list.parser.recorder.as_deref_mut()
+                    && let Some(source) = recorder.done.take()
+                {
+                    recorder.rules.push(source);
+                }
+            }
             Err((_, source)) => {
                 tracing::debug!(source, "dropped keyframe");
                 dropped = u32::saturating_add(dropped, 1);
@@ -1013,13 +1036,22 @@ fn parse_keyframe(css: &str) -> Option<CssRule> {
     let mut input = ParserInput::new(css);
     let mut input = Parser::new(&mut input);
     let rule =
-        cssparser::parse_one_rule(&mut input, &mut KeyframeListParser { log: &mut log }).ok();
+        cssparser::parse_one_rule(
+            &mut input,
+            &mut KeyframeListParser {
+                log: &mut log,
+                recorder: None,
+            },
+        )
+        .ok();
     log.report();
     rule
 }
 
 struct KeyframeListParser<'a> {
     log: &'a mut ParseLog,
+    /// What is told where the keyframes are, for DevTools.
+    recorder: Option<&'a mut Recorder>,
 }
 
 impl<'i> QualifiedRuleParser<'i> for KeyframeListParser<'_> {
@@ -1031,6 +1063,9 @@ impl<'i> QualifiedRuleParser<'i> for KeyframeListParser<'_> {
         &mut self,
         input: &mut Parser<'i, 't>,
     ) -> Result<Self::Prelude, ParseError<'i, ()>> {
+        if let Some(recorder) = self.recorder.as_deref_mut() {
+            recorder.prelude_start = input.position().byte_index();
+        }
         parse_keyframe_selectors(input)
     }
 
@@ -1040,12 +1075,17 @@ impl<'i> QualifiedRuleParser<'i> for KeyframeListParser<'_> {
         _: &ParserState,
         input: &mut Parser<'i, 't>,
     ) -> Result<Self::QualifiedRule, ParseError<'i, ()>> {
+        let start = input.position().byte_index();
         let mut parser = DeclarationListParser {
             parsed: Vec::new(),
             log: self.log,
             keyframe: true,
         };
         for _ in RuleBodyParser::new(input, &mut parser) {}
+        if let Some(recorder) = self.recorder.as_deref_mut() {
+            let end = input.position().byte_index();
+            recorder.done = Some(recorder.rule(SourceRuleKind::Keyframe, start, end));
+        }
         Ok(CssRule::Keyframe(Arc::new(KeyframeRule {
             offsets,
             block: CssPropertyValueSet::from_parsed(parser.parsed),

@@ -1504,13 +1504,31 @@ impl FrameView {
         self.style.explain(cx, element)
     }
 
-    pub(crate) fn box_quads(&self, element: NodeId) -> Option<layout::BoxQuads> {
+    /// The `@keyframes` named `name` that `element`'s animations find
+    /// (`style::StyleEngine::keyframes_rule`).
+    pub(crate) fn keyframes_rule<'gc>(
+        &self,
+        cx: &Cx<'_, 'gc>,
+        element: NodeRef<'gc>,
+        name: &str,
+    ) -> Option<Arc<css::KeyframesRule>> {
+        self.style.keyframes_rule(cx, element, name)
+    }
+
+    /// `element`'s pseudo-element `pseudo`'s box model (its own, if none),
+    /// as `layout::box_quads` has it, in the viewport.
+    pub(crate) fn pseudo_box_quads(
+        &self,
+        element: NodeId,
+        pseudo: Option<computed_style::PseudoId>,
+    ) -> Option<layout::BoxQuads> {
         let fragment = self.fragment.as_ref()?;
-        let quads = layout::box_quads(
+        let quads = layout::pseudo_box_quads(
             fragment,
             &self.scroll.containers,
             &self.scroll.stuck.offsets,
             element,
+            pseudo,
         )?;
         let at = self.viewport_origin_of(fragment, element);
         let moved = |quad: layout::Quad| quad.map(|p| PointF::new(p.x - at.x, p.y - at.y));
@@ -2221,15 +2239,20 @@ impl Frame {
         self.view.update_pre_paint();
     }
 
-    /// `element`'s box model, of `document`'s frame, in the top-level
+    /// `element`'s pseudo-element `pseudo`'s box model (its own, if none),
+    /// of `document`'s frame, in the top-level
     /// frame's viewport (Blink's `FrameQuadToViewport`): as last laid out
     /// and pre-painted; none without a box or a frame showing `document`.
-    pub(crate) fn box_quads_in_top(
+    pub(crate) fn pseudo_box_quads_in_top(
         &mut self,
         document: NodeId,
         element: NodeId,
+        pseudo: Option<computed_style::PseudoId>,
     ) -> Option<layout::BoxQuads> {
-        let quads = self.view.view_of(document)?.box_quads(element)?;
+        let quads = self
+            .view
+            .view_of(document)?
+            .pseudo_box_quads(element, pseudo)?;
         Some(layout::BoxQuads {
             content: self.quad_in_top(document, quads.content)?,
             padding: self.quad_in_top(document, quads.padding)?,

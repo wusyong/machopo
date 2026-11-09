@@ -337,6 +337,15 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 - 沒有做、記成已知差異的：`specificity.components`（Chrome 152 把 specificity 拆到每個簡單選擇器，前端的提示用）、`@media` 的 `mediaList`（第 25 條）、inline style 改了時 Chrome 送兩次 `styleSheetChanged`。
 - inline style 的 id 是 `<renderer 的前綴>.<n>`，照 Chrome 的 `<process id>.<n>`；元素沒有 `style` 屬性時也給一個（原文是空的），和 Chrome 一樣。它改了沒有在每次 lifecycle 之後比屬性的值，只比 DevTools 要過的那幾個元素。
 
+**做的時候（3c）定下的細節**：
+- pseudo element 的規則：`style` 的 `explain` 一次說明元素和它的 `::before`、`::after`、`::marker`、`::selection`（`Explained::pseudo`），同一段收集 block 的程式本來就為每個對象收集，符合的選擇器和規則的 stylesheet 照對象分開記。前端拿到的 `pseudoElements` 只有元素能有的（`::marker` 要 list item，和 style 一樣）、有規則的；祖先的只有 highlight 的（`::selection`），照 Chrome。
+- 繼承來的規則：每個 flat tree 上的祖先元素都說明一次，送它全部的規則（前端自己挑會繼承的 property）和它有 `style` 屬性時的 inline style，近的先，照 Chrome。
+- pseudo element 的節點（第 26 條）：有沒有它照 Blink 的 `PseudoElement::CanCreate` 的意思判斷（`::before`、`::after` 有 `content` 而且不是 `display: none`，list item 的 `::marker`），送的順序 `::marker`、`::before`、`::after`。`backendNodeId` 是 2^32 乘上種類（1 到 3）加上元素的 id：`NodeId` 是 32 位元，不會撞到；不另外存表，從 id 就讀得回元素和種類。掛點記下的改動要 layout 才判斷得了（pseudo element 的樣式從 frame 拿），沒有 layout 的時候（task 之後、回答命令之前）先放著，lifecycle 之後一起處理。
+- 選了 pseudo element 的節點：`getMatchedStylesForNode` 是它自己的規則，`inherited` 從它的元素開始，沒有 inline style，`parentLayoutNodeId` 是它的元素；`getInlineStylesForNode` 回答錯誤（Chrome 的字樣）；`getComputedStyleForNode` 是 `getComputedStyle(element, '::before')`；字型數它的 `content` 的；`describeNode`、`getBoxModel` 和 `Overlay` 的框認得它（`layout` 的 box quads 多了 pseudo element 的版本，fragment 本來就記著它是誰的），標籤是元素的名字、class 後面接 `::before`（Blink 的 `BuildElementInfo`）。都和 Chrome 比過。
+- 動畫的樣式（第 27 條）：只列生效中的動畫（`computed(now).progress` 有值）；元素有動畫時一律送 `transitionsStyle`，沒有在跑的 transition 時是空的，照 Chrome；值用 `getComputedStyle` 的寫法。
+- `cssKeyframesRules`：元素的 `animation-name` 每個名字一次，照 style 的 tree-scoped 的找法（`StyleEngine::keyframes_rule`，和 cascade 共用 `find_keyframes`）找到 `@keyframes`，再在 stylesheet 的規則樹裡找它的位置；`css` 的 recorder 也記下每個 keyframe 的選擇器和區塊。`keyText` 是序列化的（`from` 寫成 `0%`），範圍是原文的，和 Chrome 一樣。
+- 比對時發現的另一個差異：inline box 的高度和 Chrome 不同（20px 的 Times 的 `<span>`，machopo 20、Chrome 23），不是 pseudo element 的問題，記成 layout 的限制。
+
 ### 測試
 
 - **`shell` 的整合測試**：
@@ -485,6 +494,12 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 
 25. **`@media`、`@supports`：Styles 用的都送，裝置模式用的先不做（A2）**（第 7 節）：每條規則帶 `media`（從裡到外的每個 `@media`，最後是 stylesheet 自己的 media；各帶 `text`、`source`，`@media` 的再帶 `range` 和 `styleSheetId`）、`supports`（`text`、`range`、`active`）和 `ruleTypes`，條件從 stylesheet 的規則樹往上找，位置從第 21 條記下的 at-rule 的範圍來。`mediaList` 送空的，不做 `CSS.getMediaQueries`：只有裝置模式的 media query 尺規用它們，machopo 還沒有 `Emulation`，裝置模式本來就不能用，做 `Emulation` 時再補。對照 Chromium（2026-11-09 用 Chrome for Testing 152 試過）：Blink 的 `InspectorCSSAgent::BuildMediaListChain` 建出整套，`mediaList` 是拆開的條件（feature、值、單位、換算成 px 的長度、成不成立）。不選 A1（連 `mediaList` 和 `getMediaQueries` 一起做）：要把 media query 拆成 feature 和值、換算長度，現在沒有東西用得到。
 
+2026-11-09（使用者，3c）：
+
+26. **pseudo element 在 DOM 樹裡：DOM agent 替它編號，style 的掛點告訴它來去（N1，掛點）**（第 1 節）：machopo 的 DOM 沒有 pseudo element 的節點，`::before`、`::after`、`::marker` 只是掛在元素上的樣式（`PseudoStyles`）。DOM agent 替每個（元素，pseudo element 的種類）給一個 backend id（和真的節點的分開），`nodeId` 照一般節點給；有沒有它照 style 有沒有幫它建出盒子判斷（`::before`、`::after` 要有 `content`，`::marker` 要元素是 `list-item`），在元素的 `pseudoElements` 裡送。出現和消失：style 在元素的 pseudo element 樣式變了時呼叫的 `set_pseudo_styles_changed` 多一個 DOM 的掛點，和第 4 條的改動事件一樣，有 session 打開 `DOM` 時才記，DOM agent 拿走之後送 `DOM.pseudoElementAdded`、`pseudoElementRemoved`。選了它之後 Styles、Computed 和框都照它的樣式和盒子。不開 DevTools 時只在 pseudo element 的樣式真的變了的那一刻多一次判斷（重算時和上次不同、推進動畫時值變了），不是每個元素都走。對照 Chromium（2026-11-09 用 Chrome for Testing 152 試過）：Blink 的 pseudo element 是真的節點（`PseudoElement`，style 重算時建立），DOM agent 經過 probe（`PseudoElementCreated`、`PseudoElementDestroyed`）送事件，probe 也是「有沒有 agent」的一次判斷。不選 N2（DOM 裡建真的 pseudo element 節點）：DOM、GC 和 script 看得到的樹都要改，為了 DevTools 太大。不選 N3（樹裡不顯示）：樹上看不到 `::before`，不能選它看 Computed 和框。不選事後比對（不加掛點，每次 lifecycle 之後比對已經展開的元素）：不開 DevTools 時零成本，但開著時每個 frame 都要看一遍展開的元素，展開越多越慢。
+
+27. **動畫的樣式：每個動畫各自算（G1）**（第 7 節）：`getAnimatedStylesForNode` 對元素的每個 CSS 動畫和 Web Animation，把它單獨套在元素的基本樣式（cascade 的結果，沒有動畫）上，取當下的時間，列出它設的 property（`properties()`）的值，寫法和 `getComputedStyle` 一樣，各帶名字（`animationStyles`）；transition 全部一起套成一組（`transitionsStyle`）；每個祖先各一份（`inherited`）。前端用它在 Styles 多一個動畫的區塊、在 Computed 的預設清單列出動畫給的 property。只在前端問的時候算（動畫跑著時大約每個 frame 一次，只算那個元素和它的祖先）。對照 Chromium（2026-11-09 用 Chrome for Testing 152 試過）：Blink 的 `InspectorCSSAgent::getAnimatedStylesForNode` 對 `ElementAnimations` 的每個 effect 各自取當下的值，transition 合成一組，再走祖先。不選 G2（所有動畫合成一份，列出和基本樣式不同的）：前端分不出每個動畫的名字，值剛好等於基本樣式的 property 會漏掉。不選 G3（不做）：Styles 沒有動畫的區塊，Computed 的預設清單少了動畫給的 property（2b 手動確認時看到的差異）。
+
 ## 待決定
 
 每一段開始前只決定那一段的事。整份的兩條和第 1 段的先決定。
@@ -535,6 +550,11 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 23. **宣告怎麼列**：已決定（「已決定的事項」第 23 條，D1）。
 24. **inline style 的位置**：已決定（「已決定的事項」第 24 條，I1）。
 25. **`@media`、`@supports` 怎麼送**：已決定（「已決定的事項」第 25 條，A2）。
+
+**3c**：
+
+26. **pseudo element 怎麼出現在 DOM 樹裡**：已決定（「已決定的事項」第 26 條，N1，掛點）。
+27. **動畫的樣式怎麼算**：已決定（「已決定的事項」第 27 條，G1）。
 
 ## 之後的可能
 

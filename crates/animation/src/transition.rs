@@ -37,6 +37,23 @@ fn owner(animation: &Animation) -> &TransitionOwner {
     }
 }
 
+/// An element's animations' values each alone (`ElementAnimations::sampled_alone`).
+#[derive(Debug, Clone)]
+pub struct SampledAnimations {
+    pub animations: Vec<SampledAnimation>,
+    pub transitions: Option<SampledAnimation>,
+}
+
+/// One animation's values (or the transitions'): its name, if a CSS
+/// animation's, the base style with its values, and the properties it
+/// animates.
+#[derive(Debug, Clone)]
+pub struct SampledAnimation {
+    pub name: Option<Arc<str>>,
+    pub style: ComputedStyle,
+    pub properties: Vec<LonghandId>,
+}
+
 /// An element's animations (Blink's `ElementAnimations`): its CSS
 /// animations; its running transitions (those script canceled too: they
 /// keep their owning element), and the end values of the completed ones,
@@ -133,6 +150,51 @@ impl ElementAnimations {
             .map(|t| owner(t).property)
             .chain(self.css_animations.properties())
             .chain(self.others.iter().flat_map(|a| a.effect.properties()))
+    }
+
+    /// Each of its animations' values at `now`, each alone over `base`, for
+    /// DevTools (`getAnimatedStylesForNode`, Blink's per effect): its CSS
+    /// animations then script's, those in effect, each with its name (a CSS
+    /// animation's `animation-name`) and the properties it animates; its
+    /// transitions together, if it has any.
+    pub fn sampled_alone(&self, now: f64, base: &ComputedStyle) -> SampledAnimations {
+        let animations = self
+            .css_animations
+            .animations
+            .iter()
+            .chain(&self.others)
+            .filter(|animation| {
+                animation.replace_state != ReplaceState::Removed
+                    && animation.computed(now).progress.is_some()
+            })
+            .map(|animation| {
+                let mut style = base.clone();
+                animation.apply(now, &mut style);
+                SampledAnimation {
+                    name: match &animation.owner {
+                        Owner::CssAnimation(owner) => Some(owner.name.clone()),
+                        _ => None,
+                    },
+                    style,
+                    properties: animation.effect.properties().collect(),
+                }
+            })
+            .collect();
+        let transitions = (!self.transitions.is_empty()).then(|| {
+            let mut style = base.clone();
+            for transition in &self.transitions {
+                transition.apply(now, &mut style);
+            }
+            SampledAnimation {
+                name: None,
+                style,
+                properties: self.transitions.iter().map(|t| owner(t).property).collect(),
+            }
+        });
+        SampledAnimations {
+            animations,
+            transitions,
+        }
     }
 
     /// Its animations: the transitions, the CSS animations, then the

@@ -384,8 +384,10 @@ pub(super) fn update_lifecycle_and_layers(
     frame.widget.rendered_tree_version = dom.read(|cx| cx.tree_version());
     let output = frame.update_all_lifecycle_phases(dom);
     drop(lifecycle);
-    // The node DevTools' Computed pane follows, if its style changed, and
-    // the sheets, if they did.
+    // The pseudo-elements that came and went, for DevTools' `DOM`; the
+    // node its Computed pane follows, if its style changed, and the sheets,
+    // if they did.
+    css_agent.dom_agent().lifecycle_updated(dom, frame);
     css_agent.styles_updated(dom, frame);
     css_agent.sheets_updated(dom, frame);
     let update_layers = trace_event::trace_event!("LayerTreeHost::DoUpdateLayers");

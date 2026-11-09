@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use crate::automation_pipe::{pixel, png, server};
 use crate::devtools::{evaluate, load, page};
-use crate::devtools_overlay::{non_white, rgba};
+use crate::devtools_overlay::{non_white, rgba, screen};
 use crate::remote_debugging::{Client, Machopo};
 
 fn result(answer: Value) -> Value {
@@ -1137,4 +1137,265 @@ fn edited_sheets_are_their_rules() {
         range(&color["selectorList"]["selectors"][0]["range"]),
         (1, 0, 1, 1)
     );
+}
+
+/// The author rules of `matches` (`CSS.RuleMatch`es), by selector.
+fn selectors(matches: &Value) -> Vec<&str> {
+    matches
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|matched| matched["rule"]["origin"] == "regular")
+        .map(|matched| matched["rule"]["selectorList"]["text"].as_str().unwrap())
+        .collect()
+}
+
+const PSEUDO: &str = "<!DOCTYPE html><style>\
+    body { color: red } .p { padding: 1px } .p::selection { color: navy } .p::before { color: gray }\
+    .x::before { content: 'b' } .x::after { content: 'a' } .x::marker { color: green }\
+    .x::selection { color: pink } li::marker { color: blue }\
+    </style><div class=p style='letter-spacing: 1px'><div class=x id=x>x</div><ul><li id=li>l</li></ul></div>";
+
+/// An element's pseudo-elements' rules, those it can have (a marker a list
+/// item's) with any; its ancestors' rules, the nearest first, with their
+/// inline styles, and their highlight pseudo-elements' rules.
+#[test]
+fn pseudo_elements_and_ancestors_rules_are_listed() {
+    let (_machopo, mut page, document, _server) = css_page(PSEUDO);
+    let x = node(&mut page, &document, "#x");
+    let matched = result(page.call(None, "CSS.getMatchedStylesForNode", json!({ "nodeId": x })));
+    let pseudo: Vec<(&str, Vec<&str>)> = matched["pseudoElements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|of| (of["pseudoType"].as_str().unwrap(), selectors(&of["matches"])))
+        .collect();
+    assert_eq!(
+        pseudo,
+        [
+            ("before", vec![".x::before"]),
+            ("after", vec![".x::after"]),
+            ("selection", vec![".x::selection"])
+        ]
+    );
+    let inherited: Vec<(Vec<&str>, &Value)> = matched["inherited"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|of| (selectors(&of["matchedCSSRules"]), &of["inlineStyle"]["cssText"]))
+        .collect();
+    assert_eq!(
+        inherited,
+        [
+            (vec![".p"], &json!("letter-spacing: 1px")),
+            (vec!["body"], &Value::Null),
+            (vec![], &Value::Null)
+        ]
+    );
+    let highlights: Vec<usize> = matched["inheritedPseudoElements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|of| of["pseudoElements"].as_array().unwrap().len())
+        .collect();
+    assert_eq!(highlights, [1, 0, 0]);
+    assert_eq!(
+        matched["inheritedPseudoElements"][0]["pseudoElements"][0]["pseudoType"],
+        "selection"
+    );
+    // A list item has a marker.
+    let li = node(&mut page, &document, "#li");
+    let matched = result(page.call(None, "CSS.getMatchedStylesForNode", json!({ "nodeId": li })));
+    let kinds: Vec<&Value> = matched["pseudoElements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|of| &of["pseudoType"])
+        .collect();
+    assert!(kinds.contains(&&json!("marker")), "{kinds:?}");
+}
+
+/// A pseudo-element node is styled as itself: its rules, its element's
+/// first among those it inherits, no inline style, its element its layout
+/// parent; its computed values, fonts, box and label; no inline styles to
+/// ask for.
+#[test]
+fn a_pseudo_element_is_styled_as_itself() {
+    let (_machopo, mut page, document, _server) = css_page(PSEUDO);
+    let x = node(&mut page, &document, "#x");
+    let described = result(page.call(None, "DOM.describeNode", json!({ "nodeId": x })));
+    let before = described["node"]["pseudoElements"][0]["nodeId"].clone();
+    let matched = result(page.call(
+        None,
+        "CSS.getMatchedStylesForNode",
+        json!({ "nodeId": before }),
+    ));
+    assert_eq!(selectors(&matched["matchedCSSRules"]), [".x::before"]);
+    assert_eq!(matched["pseudoElements"], json!([]));
+    assert!(matched.get("inlineStyle").is_none(), "{matched}");
+    // Its element (no author rule of its own), `.p`, `body`, `html`.
+    assert_eq!(matched["inherited"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        selectors(&matched["inherited"][1]["matchedCSSRules"]),
+        [".p"]
+    );
+    assert_eq!(matched["parentLayoutNodeId"], x);
+    let values = computed(&mut page, &before);
+    assert_eq!(values["content"], "\"b\"");
+    assert_eq!(computed(&mut page, &x)["content"], "normal");
+    let fonts = result(page.call(
+        None,
+        "CSS.getPlatformFontsForNode",
+        json!({ "nodeId": before }),
+    ));
+    assert_eq!(fonts["fonts"][0]["glyphCount"], 1, "{fonts}");
+    assert_eq!(
+        error(page.call(
+            None,
+            "CSS.getInlineStylesForNode",
+            json!({ "nodeId": before })
+        )),
+        "Element is not a style sheet"
+    );
+    // Its box: narrower than its element's.
+    let model = result(page.call(None, "DOM.getBoxModel", json!({ "nodeId": before })));
+    let width = model["model"]["width"].as_f64().unwrap();
+    let element = result(page.call(None, "DOM.getBoxModel", json!({ "nodeId": x })));
+    assert!(
+        width > 0.0 && width < element["model"]["width"].as_f64().unwrap(),
+        "{model}"
+    );
+    let label = result(page.call(
+        None,
+        "Overlay.getHighlightObjectForTest",
+        json!({ "nodeId": before }),
+    ));
+    let info = &label["highlight"]["elementInfo"];
+    assert_eq!(
+        (&info["tagName"], &info["className"]),
+        (&json!("div"), &json!(".x::before"))
+    );
+    // Its boxes drawn: its border box where its box model's is.
+    let border = &label["highlight"]["paths"].as_array().unwrap()[2];
+    assert_eq!(border["name"], "border");
+    assert_eq!(
+        (&border["path"][1], &border["path"][2]),
+        (&model["model"]["border"][0], &model["model"]["border"][1])
+    );
+    // Highlighted: its content box, not its element's.
+    result(page.call(None, "Overlay.enable", json!({})));
+    result(page.call(
+        None,
+        "Overlay.highlightNode",
+        json!({ "nodeId": before, "highlightConfig": { "contentColor": rgba(255, 0, 0) } }),
+    ));
+    let at = |model: &Value, corner: usize| {
+        let coordinate = |index: usize| {
+            base::numerics::clamp_round::<u32>(model["model"]["content"][index].as_f64().unwrap())
+        };
+        (coordinate(corner * 2), coordinate(corner * 2 + 1))
+    };
+    let ((left, top), (right, bottom)) = (at(&model, 0), at(&model, 2));
+    assert_eq!(
+        screen(&mut page, left.midpoint(right), top.midpoint(bottom)),
+        [255, 0, 0]
+    );
+    let (element_right, _) = at(&element, 2);
+    assert_ne!(
+        screen(&mut page, element_right.saturating_sub(5), top.midpoint(bottom)),
+        [255, 0, 0]
+    );
+}
+
+/// An element's animations' values, each alone, by name, of the properties
+/// each animates (those in effect); its transitions' together (empty with
+/// none running); its ancestors' too. The `@keyframes` its animations run, with where their
+/// names, keyframes and declarations are.
+#[test]
+fn animations_are_listed() {
+    let (_machopo, mut page, document, _server) = css_page(
+        "<!DOCTYPE html><style>\n\
+         @keyframes fade { from { opacity: 0 } to { opacity: 1 } }\n\
+         @keyframes move { to { margin-left: 100px } }\n\
+         #x { animation: fade 100s linear -50s paused, move 100s linear -25s paused, fade 1s -2s;\n\
+              transition: left 1000s linear; position: relative; left: 0 }\n\
+         </style><div id=p><div id=x>x</div></div>",
+    );
+    let x = node(&mut page, &document, "#x");
+    let animated = result(page.call(
+        None,
+        "CSS.getAnimatedStylesForNode",
+        json!({ "nodeId": x }),
+    ));
+    let styles = |of: &Value| -> Vec<(Value, Vec<(String, String)>)> {
+        of["animationStyles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                let properties = entry["style"]["cssProperties"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|property| {
+                        (
+                            property["name"].as_str().unwrap().to_owned(),
+                            property["value"].as_str().unwrap().to_owned(),
+                        )
+                    })
+                    .collect();
+                (entry["name"].clone(), properties)
+            })
+            .collect()
+    };
+    let own = styles(&animated);
+    assert_eq!(own[0], (json!("fade"), vec![("opacity".to_owned(), "0.5".to_owned())]));
+    assert_eq!(
+        own[1],
+        (json!("move"), vec![("margin-left".to_owned(), "25px".to_owned())])
+    );
+    // The last over before it started: none.
+    assert_eq!(own.len(), 2, "{own:?}");
+    assert_eq!(animated["transitionsStyle"]["cssProperties"], json!([]));
+    // Its ancestors': none.
+    let inherited = animated["inherited"].as_array().unwrap();
+    assert_eq!(inherited.len(), 3);
+    assert!(inherited.iter().all(|of| of["animationStyles"] == json!([])
+        && of.get("transitionsStyle").is_none()));
+    // A transition running.
+    evaluate(&mut page, "x.style.left = '1000px'", None);
+    two_frames(&mut page);
+    let animated = result(page.call(
+        None,
+        "CSS.getAnimatedStylesForNode",
+        json!({ "nodeId": x }),
+    ));
+    let transitions = &animated["transitionsStyle"]["cssProperties"];
+    assert_eq!(transitions[0]["name"], "left", "{animated}");
+
+    // The `@keyframes`: each name once, where it is.
+    let matched = result(page.call(None, "CSS.getMatchedStylesForNode", json!({ "nodeId": x })));
+    let keyframes = matched["cssKeyframesRules"].as_array().unwrap();
+    let names: Vec<&Value> = keyframes
+        .iter()
+        .map(|rule| &rule["animationName"]["text"])
+        .collect();
+    assert_eq!(names, [&json!("fade"), &json!("move")]);
+    let fade = &keyframes[0];
+    assert_eq!(range(&fade["animationName"]["range"]), (1, 11, 1, 15));
+    let keys: Vec<(&Value, (u64, u64, u64, u64))> = fade["keyframes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|keyframe| (&keyframe["keyText"]["text"], range(&keyframe["keyText"]["range"])))
+        .collect();
+    assert_eq!(
+        keys,
+        [(&json!("0%"), (1, 18, 1, 22)), (&json!("100%"), (1, 38, 1, 40))]
+    );
+    let style = &fade["keyframes"][0]["style"];
+    assert_eq!(style["cssText"], " opacity: 0 ");
+    assert_eq!(style["cssProperties"][0]["text"], "opacity: 0 ");
+    assert_eq!(fade["keyframes"][0]["styleSheetId"], style["styleSheetId"]);
+    assert!(fade["keyframes"][0]["styleSheetId"].is_string());
 }

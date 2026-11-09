@@ -457,7 +457,7 @@ fn a_scroll_while_paused_stays() {
 }
 
 /// The page's pixel at `x`, `y`.
-fn screen(page: &mut Client, x: u32, y: u32) -> [u8; 3] {
+pub(crate) fn screen(page: &mut Client, x: u32, y: u32) -> [u8; 3] {
     let shot = result(page.call(None, "Page.captureScreenshot", json!({})));
     let ((width, _), pixels) = png(shot["data"].as_str().unwrap());
     pixel(&pixels, width, x, y)

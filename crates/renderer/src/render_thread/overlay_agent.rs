@@ -22,6 +22,7 @@ use std::sync::Arc;
 use base::numerics::f32_from_f64;
 use compositor_paint::{DisplayItemList, PaintFlags, PaintOp};
 use crossbeam_channel::Sender;
+use computed_style::PseudoId;
 use dom::{Cx, NodeId, NodeKind, NodeRef};
 use dom_api::DevToolsPage;
 use gfx::{Color, PointF, RRectF, RectF, SizeF};
@@ -152,6 +153,8 @@ impl HighlightConfig {
 #[derive(Debug, Clone)]
 struct Shown {
     node: NodeId,
+    /// Its pseudo-element highlighted, if one is (a `::before` in the tree).
+    pseudo: Option<PseudoId>,
     config: HighlightConfig,
     /// Shown by the inspect mode, under the mouse: it goes as the mode
     /// does.
@@ -333,10 +336,11 @@ impl OverlayAgent {
                 Ok(json!({}))
             }
             "highlightNode" => {
-                let node = self.dom_agent.node_param(name, params, page)?;
+                let (node, pseudo) = self.dom_agent.inspected_param(name, params, page)?;
                 let config = HighlightConfig::parse(&params["highlightConfig"])?;
                 self.show(Some(Shown {
                     node,
+                    pseudo,
                     config,
                     inspecting: false,
                 }));
@@ -379,16 +383,16 @@ impl OverlayAgent {
             }
             "getHighlightObjectForTest" => {
                 let id = params["nodeId"].as_i64().unwrap_or(0);
-                let node = self
-                    .dom_agent
-                    .node_param(name, &json!({ "nodeId": id }), page)?;
+                let (node, pseudo) =
+                    self.dom_agent
+                        .inspected_param(name, &json!({ "nodeId": id }), page)?;
                 let mut config = HighlightConfig::default_for_test();
                 config.show_styles = params["includeStyle"].as_bool().unwrap_or(false);
                 config.show_accessibility_info =
                     params["showAccessibilityInfo"].as_bool().unwrap_or(true);
                 config.color_format = params["colorFormat"].as_str().unwrap_or("hex").to_owned();
                 let highlight = with_layout(page, node, |cx, frame, element, document| {
-                    Some(highlight(cx, frame, element, document, &config, true))
+                    Some(highlight(cx, frame, element, pseudo, document, &config, true))
                 })
                 .unwrap_or_else(|| json!({}));
                 Ok(json!({ "highlight": highlight }))
@@ -438,12 +442,13 @@ impl OverlayAgent {
             .shown
             .borrow()
             .as_ref()
-            .is_some_and(|shown| shown.node == node)
+            .is_some_and(|shown| shown.node == node && shown.pseudo.is_none())
         {
             return;
         }
         self.show(Some(Shown {
             node,
+            pseudo: None,
             config,
             inspecting: true,
         }));
@@ -503,6 +508,7 @@ impl OverlayAgent {
                 cx,
                 frame,
                 element,
+                shown.pseudo,
                 document,
                 &shown.config,
                 shown.config.show_info,
@@ -564,23 +570,27 @@ const COMMANDS: &[&str] = &[
     "setPausedInDebuggerMessage",
 ];
 
-/// What is to be drawn of `element` (of `document`) highlighted with
-/// `config`, as Blink's `InspectorHighlight::AsProtocolValue` has it: its
-/// content, padding, border and margin boxes as paths in the top-level
-/// frame's viewport, each with its fill color and name, and, with
-/// `element_info`, its name and size (the accessibility and contrast
-/// Chrome's has, machopo doesn't work out).
+/// What is to be drawn of `element` (of `document`), or of its
+/// pseudo-element `pseudo`, highlighted with `config`, as Blink's
+/// `InspectorHighlight::AsProtocolValue` has it: its content, padding,
+/// border and margin boxes as paths in the top-level frame's viewport,
+/// each with its fill color and name, and, with `element_info`, its name
+/// and size (the accessibility and contrast Chrome's has, machopo doesn't
+/// work out); a pseudo-element's name its element's with `::before` after
+/// its classes (Blink's `BuildElementInfo`).
 fn highlight<'gc>(
     cx: &Cx<'_, 'gc>,
     frame: &mut Frame,
     element: NodeRef<'gc>,
+    pseudo: Option<PseudoId>,
     document: NodeId,
     config: &HighlightConfig,
     element_info: bool,
 ) -> Value {
     let node = cx.node_id(element);
     let mut paths = Vec::new();
-    if let Some(quads) = frame.box_quads_in_top(document, node) {
+    let quads = frame.pseudo_box_quads_in_top(document, node, pseudo);
+    if let Some(quads) = &quads {
         for (quad, fill, outline, name) in [
             (
                 quads.content,
@@ -633,25 +643,34 @@ fn highlight<'gc>(
                 }
             }
         }
-        if !classes.is_empty() {
-            info["className"] = classes
-                .iter()
-                .map(|class| format!(".{class}"))
-                .collect::<String>()
-                .into();
+        let mut class_name: String = classes.iter().map(|class| format!(".{class}")).collect();
+        if let Some(pseudo) = pseudo {
+            class_name.push_str(match pseudo {
+                PseudoId::Before => "::before",
+                PseudoId::After => "::after",
+                PseudoId::Marker => "::marker",
+            });
         }
-        let rects = frame
-            .view
-            .view_of(document)
-            .map(|view| view.client_rects(node))
-            .unwrap_or_default();
+        if !class_name.is_empty() {
+            info["className"] = class_name.into();
+        }
+        // Its boxes' bounds (a pseudo-element's, its border quad's).
+        let rects = match (pseudo, &quads) {
+            (None, _) => frame
+                .view
+                .view_of(document)
+                .map(|view| view.client_rects(node))
+                .unwrap_or_default(),
+            (Some(_), Some(quads)) => vec![quad_bounds(&quads.border)],
+            (Some(_), None) => Vec::new(),
+        };
         if !rects.is_empty() {
             let bounds = layout::bounding_rect(&rects);
             info["nodeWidth"] = number(bounds.width).into();
             info["nodeHeight"] = number(bounds.height).into();
         }
         if config.show_styles {
-            info["style"] = style_info(cx, frame, element);
+            info["style"] = style_info(cx, frame, element, pseudo);
         }
         info["showAccessibilityInfo"] = config.show_accessibility_info.into();
         value["elementInfo"] = info;
@@ -659,14 +678,31 @@ fn highlight<'gc>(
     value
 }
 
+/// The rect around `quad`'s points.
+fn quad_bounds(quad: &layout::Quad) -> gfx::RectF {
+    let (mut min, mut max) = (quad[0], quad[0]);
+    for point in quad {
+        min = PointF::new(min.x.min(point.x), min.y.min(point.y));
+        max = PointF::new(max.x.max(point.x), max.y.max(point.y));
+    }
+    gfx::RectF::new(min.x, min.y, max.x - min.x, max.y - min.y)
+}
+
 /// What the label shows of `element`'s computed style (Blink's
 /// `BuildStyleInfo`): the color and font for an element with text of its
 /// own, then its padding, margin and background color; the colors as
 /// `#RRGGBBAA` (Blink's `ToHEXA`), whatever the format asked (the overlay
 /// page writes them in it), and as fractions.
-fn style_info<'gc>(cx: &Cx<'_, 'gc>, frame: &mut Frame, element: NodeRef<'gc>) -> Value {
-    let has_text = std::iter::successors(cx.first_child(element), |&child| cx.next_sibling(child))
-        .any(|child| {
+fn style_info<'gc>(
+    cx: &Cx<'_, 'gc>,
+    frame: &mut Frame,
+    element: NodeRef<'gc>,
+    pseudo: Option<PseudoId>,
+) -> Value {
+    // A pseudo-element's text is its content's: it has some.
+    let has_text = pseudo.is_some()
+        || std::iter::successors(cx.first_child(element), |&child| cx.next_sibling(child)).any(
+            |child| {
             cx.kind(child) == NodeKind::Text
                 && cx.text_data(child).is_some_and(|data| {
                     !data
@@ -681,7 +717,7 @@ fn style_info<'gc>(cx: &Cx<'_, 'gc>, frame: &mut Frame, element: NodeRef<'gc>) -
         names.extend(["color", "font-family", "font-size", "line-height"]);
     }
     names.extend(["padding", "margin", "background-color"]);
-    let values = dom_api::computed_values_for_devtools(cx, frame, element, &names);
+    let values = dom_api::computed_values_for_devtools(cx, frame, element, pseudo, &names);
     let mut style = json!({});
     for (name, value) in names.into_iter().zip(values) {
         if value.is_empty() {
