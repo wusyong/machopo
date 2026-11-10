@@ -1,0 +1,13 @@
+# A prototype for RFC 0093 (not merged into the workspace): whether a host
+# function may call back into the guest that called it, in a sync store.
+[package]
+name = "reenter-prototype"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+futures = "0.3"
+wasmtime = { version = "=50.0.1", path = "../../../../third_party/wasmtime/crates/wasmtime" }
