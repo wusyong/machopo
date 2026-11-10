@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wu Yuwei <yuweiwu@pm.me>
+Date: Tue, 10 Nov 2026 11:11:39 +0900
+Subject: [PATCH] Add README.machopo.md
+
+---
+ README.machopo.md | 81 +++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 81 insertions(+)
+ create mode 100644 README.machopo.md
+
+diff --git a/README.machopo.md b/README.machopo.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..7d1ad0b7efaed6ec522171ac4135509e12e2471c
+--- /dev/null
++++ b/README.machopo.md
+@@ -0,0 +1,81 @@
++# parley (machopo's fork)
++
++| | |
++| --- | --- |
++| Upstream | https://github.com/linebender/parley (fetched by URL; no remote) |
++| Fork | https://github.com/wusyong/parley (remote `origin`) |
++| Branch | `machopo`, from upstream's `1b67b7539616e5c7dc92d8fc79a1f7678525993c` (main, 2026-11-08) |
++| Version | 0.12.0 (unreleased main) |
++| License | Apache-2.0 OR MIT (`LICENSE-APACHE`, `LICENSE-MIT`, `AUTHORS`) |
++| Used by | machopo's `crates/layout` (inline layout), `crates/shell` (the address bar: `src/omnibox.rs`, with `PlainEditor`) |
++
++## Why a fork
++
++machopo follows upstream's main rather than its releases: upstream keeps
++adding what a browser's inline layout needs (inline objects as characters
++of the text, `vertical-align`, hanging whitespace), and its Blitz tracking
++issue (#208) lists what is still missing. A change machopo needs is made
++here as a commit that can go upstream as it is; it stays in the fork only
++until upstream has it, or, when upstream won't take it, with the reason in
++the table below.
++
++## Local modifications
++
++The commits on `machopo` after upstream's, each a patch in machopo's
++`patches/parley/` (`python3 scripts/ci.py patches parley` exports them;
++`python3 scripts/ci.py third-party` checks that they give this branch).
++Each does one thing and has its tests in this repository:
++
++| Commit | What | Upstream |
++| --- | --- | --- |
++| Edges of non-atomic inline boxes | `InlineBoxKind::StartEdge` and `EndEdge`: the start and end margin, border and padding of a CSS `display: inline` element (Blink's open tag and close tag items). An edge sits at a character boundary like an out-of-flow box, so the text on its two sides is shaped and analyzed as if it weren't there, but it takes up its width on the line and adds nothing to the line's height. It has no soft wrap opportunity of its own: a start edge stays with the content after it (that content's opportunity is taken before the edge, once for consecutive edges), an end edge with the content before it. One that does not fit takes the last opportunity on the line, as text does, or overflows. Whitespace before an edge is not at the line's end, so it does not hang. Upstream lists "Margin/border/padding for inline spans" as not done in #208. Tests: `test_edges`. | Not proposed yet |
++| Make the line after a final break only where asked | `Layout::set_line_after_final_break`: whether the line after a forced break that ends the text (a newline last) is made. By default it is, as upstream has it: an editor puts the caret there. CSS makes no line after the last forced break when nothing follows it (Blink's line breaker stops at the end of the content): `<div>a<br></div>` is one line tall. Not made, the line is taken back once committed, before anything is yielded, so a caller breaking lines one at a time never sees it either. Tests: `test_final_break`. | Not proposed yet |
++| fontique: leave out fonts without an em | `FontInfo::from_font_ref` leaves out a font without `head` or whose `head` gives an em of 0 units, as it does one without a usable charmap: an Apple bitmap font has `bhed` for `head` (macOS's GB18030 Bitmap), and an em of 0 put its glyphs and runs at NaN (`font_size / units_per_em`). Text asking for one falls back as if it weren't there. Tests: `test_font_without_em`. | Not proposed yet |
++| Take the first font when it covers a cluster | `FontSelector::select_font` remembers the first font its query yields with a charmap (`first_font`, where upstream remembers only whether there is one), and forgets it where upstream did: a new segment, other families, other attributes. When that font covers the cluster completely it is taken without the query, whose answer would be the same; most clusters are in the first font, and the query went through the families and their fonts for each one. Blink's `HarfBuzzShaper` shapes a run with its primary font first, too. A debug build runs the query again each time and checks it gives that font. Tests: upstream's own (`parley_tests`); it changes no result. | Not proposed yet |
++| Lay out tabs at tab stops | `StyleProperty::TabStops` (`TextStyle::tab_stops`, `None` by default: a tab keeps its shaped advance, as upstream has it): the distance between tab stops and the least a tab advances, which the embedder works out (CSS `tab-size`). The line breaker gives a tab the advance to the next tab stop from where it is on its line; the min/max-content measurer works it out on each of its two lines. The shaper also shapes a tab as a space, so that it draws nothing: few fonts map U+0009. Tests: `test_tab_stops`. | Not proposed yet |
++| Size the font optically | `StyleProperty::OpticalSizing` (`TextStyle::optical_sizing`, off by default, as upstream has it): CSS `font-optical-sizing: auto`. The shaper sets the `opsz` axis to the item's font size before the item's own variations (which win where they set it). Tests: `test_optical_sizing`. | Not proposed yet |
++| Break lines after soft hyphens with a hyphen | `StyleProperty::SoftHyphens` (`TextStyle::soft_hyphens`, `Break` by default: the opportunity after a soft hyphen is like any other and nothing is drawn, as upstream has it): CSS `hyphens`, `NoBreak` for `none` and `Hyphen(advance)` for the others, with the advance of the hyphen the embedder shapes and draws. `LineMetrics::hyphen_advance` is the part of a line's `advance` that is the hyphen; the min/max-content measurer counts the hyphen at the end of the fragment it ends. Tests: `test_soft_hyphens`. | Not proposed yet |
++| Share a layout's shaped text | `Layout::shaped_text`: a layout's `ShapedText` is an `Arc`, which what the embedder keeps of a layout holds, so it outlives the layout and is never changed under it (rebuilding takes a new one where the old is held; what changes it copies it first where it is held). `GlyphRun::span` (`GlyphSpan`): where a glyph run's glyphs are in the shaped text, with `GlyphSpan::glyphs`, `clusters` (`SpanCluster`) and `text_range` walking them from the shaped text alone. machopo keeps a line's runs as spans into the paragraph's shaped text instead of copying their glyphs (Blink's `ShapeResultView`). A layout with an inline object of a width copies the shaped text when it is built: the object's advance is the layout's own. Tests: `test_shaped_text_sharing`. | Not proposed yet |
++| Keep shapings: of layouts alike, and of words | `LayoutContext` keeps what shaping a layout's text gave (`shape/cache.rs`, `ShapeCache`), for the next layout of the same text at the same scale, styled the same in what changes shaping, with its out-of-flow boxes and edges at the same places; and the shaper shapes a segment a word at a time and keeps what shaping a word gave (`parley_engine`'s `shape/words.rs`), only where shaping a word on its own gives what shaping the segment whole does (`shape/space.rs`, `space_reach`: what a font's rules do across a space; left to right, not Arabic or Syriac, no features that are off unless asked for). A word that starts with a default ignorable is shaped with the space before it: where a font positions no marks, harfrust does, and takes the default ignorables after a base with it. An inline object is between words and is not kept. A browser shapes the same text again as content is built again, and text is mostly the same words again; Blink keeps runs of up to 30 characters (`NGShapeCache`), Gecko words (`gfxShapedWord`). In a debug build every text that took a shaping is also shaped whole and compared (`same_shaping`). `LayoutContext::clear_shapings` forgets them, for fonts added. fontique's `SourceCache` keeps a font it prunes weakly, so that loading it again while a kept word holds it gives the same blob. Tests: `test_shape_cache` and fontique's `source_cache`; what a font's rules do across a space is tested in machopo for now, with fonts made with a rule or two each (`parley_space::`, `parley_words::`). | Fork only for now: a cache with a browser's limits and counters |
++| Look line breaks up in a table | `analyze_text` finds the line break opportunities of a text under the default rules in a table for characters up to U+017F and from U+2000 to U+203F (`parley_engine`'s `line_table.rs`), as UAX #14's pair table does. The table is what ICU4X's line segmenter gives, generated from it by a test that fails when the table is out of date and prints it anew; a word with a character outside the table (an inline object's among them), or a pair that changes with the characters around it, is given to ICU4X with the words on either side. A debug build gives every text looked up to ICU4X whole too and compares. Blink's `LazyLineBreakIterator` looks pairs up in a table of its own. `AnalysisOptions::skip_word_boundaries` (`LayoutContext::set_word_boundaries`, on by default) leaves word boundaries out, for text no one moves through by words with parley's clusters. Tests: `line_table`'s own and `test_line_break_table`. | Not proposed yet |
++| Add README.machopo.md | This file. Always the last commit, and the only one that changes it, so that the others can go upstream as they are. | Fork only |
++
++Changes are marked with `machopo:` comments. Anything sent upstream is
++drafted first and reviewed before it goes out.
++
++What the fork had before 2026-11-10 and no longer has (the old tip is the
++tag `machopo-2026-11-10`):
++
++- `InlineBox::line_break` (`InlineBoxLineBreak`), and the edges not sizing
++  the line: the edges above take their place. An edge that does not fit
++  now breaks at the line's last opportunity, as text does.
++- An atomic inline wrapping as the span it is in does: upstream's inline
++  objects are characters of the text, and wrap as it does.
++- `LineBreakData::hanging_advance`: upstream's `LineMetrics::hanging_advance`.
++
++## Tests
++
++```sh
++cargo test -p parley -p parley_engine -p parley_tests -p fontique
++cargo clippy --workspace --all-targets
++cargo fmt --all -- --check
++```
++
++and, in machopo, `cargo test -p layout` (its `parley_*`, `shaping`,
++`inline`, `float` and `font_*` modules use every change above; a debug
++build's checks run on every layout test), and the reftests and WPT of what
++the change touches (`css/css-text`, `css/CSS2/linebox`).
++
++## Updating
++
++1. Fetch upstream by URL (`git fetch https://github.com/linebender/parley
++   main`) and rebase `machopo` onto the new upstream commit, fixing any
++   conflicts. Drop the commits upstream now has; keep this file's commit
++   last.
++2. Update the start and version above, and the table.
++3. Push `machopo` (`--force-with-lease`); first tag the old tip
++   (`machopo-<date>`) so that machopo's older pins can still be fetched.
++4. In machopo: `third_party.toml`'s `rev` and `upstream_rev`, then
++   `python3 scripts/ci.py patches parley`, then `cargo test --workspace`,
++   the reftests and WPT. Upstream's API changes show up as build errors in
++   `crates/layout/src/text.rs` and `crates/shell/src/omnibox.rs`.

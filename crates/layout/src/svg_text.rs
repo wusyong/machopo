@@ -197,14 +197,14 @@ impl SourceText {
                 let run_index = runs.len();
                 runs.push(SourceRun {
                     font: FontData {
-                        bytes: Arc::new(font.font.data.clone()),
-                        index: font.font.index,
-                        id: font.font.data.id(),
+                        bytes: Arc::new(font.data.clone()),
+                        index: font.index,
+                        id: font.data.id(),
                     },
                     size: run.font_size(),
                     embolden: crate::font_features::embolden(
                         &style.font,
-                        synthesis.embolden() || needs_synthetic_bold(style.font.weight, &font.font),
+                        synthesis.embolden() || needs_synthetic_bold(style.font.weight, font),
                     ),
                     skew: crate::font_features::skew(&style.font, synthesis.skew()),
                     variations: crate::font_features::run_variations(&run, Some(&style.font)),

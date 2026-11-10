@@ -157,6 +157,20 @@ machopo 這邊只處理一種 workaround：繞在函式庫外面、因此有實�
 
 20. **第 5、6 段的順序：字型家族、float 和 taffy 的快取、做 fragment 時的斷行；`BlockContext` 可以撤回延後**（2026-11-10）：照第 2 段量到的量（`progress.md` 的「第 2 段的量測」）。字型家族的名稱每頁都有，Speedometer 每個 inline formatting context 平均 8 個；float 旁邊不用快取的盒子只在有 float 的頁，但在那些頁佔 65% 到 96%；做 fragment 時再斷行只在 Perf-Dashboard 多（23%）。float 旁邊的行重斷在量的頁都是 0，所以 `BlockContext` 可以撤回不排進這份 RFC 的階段：要改 taffy 的 block layout 的核心，省不到量得到的工作；之後有頁面量到再做。不選照原本的分法（machopo 裡的先做、fork 裡的後做）：做 fragment 時的斷行會排在量比它大的 float 快取前面。
 
+第 3 段（2026-11-10 確認）：
+
+21. **分成 3a 和 3b**（2026-11-10）：3a 是 rebase 到上游的 `1b67b75`（2026-11-08）、合成分組、拿掉 `hanging_advance`、machopo 配合上游 API 的變化，排版和第 2 段的計數不變；3b 是每個 commit 的 fork 自己的測試、上游的草稿、拿掉 machopo 的 `text-indent` workaround。不選一段做完：改寫和新的測試混在一起，排版變了時分不清是哪一邊。
+22. **先在舊的起點合成分組，再搬到新的 main**（2026-11-10）：第一步之後的 tree 要和重寫前的 `cefcbc5` 完全一樣（機械地驗證），第二步每組只解一次衝突。不選 16 個 commit 逐個 rebase 再合：試套時每一個都衝突，同一段程式要解好幾次。不選把整個 diff 一次套上再切開：切錯了沒有東西對照。Chromium 升級 `third_party` 時把 patch 依序重新套上，和第二步一樣。
+23. **tab stop 和軟連字號保留 fork 的**（2026-11-10）：上游的 #934、#827 還沒合併，照新的 main 改寫；合併時再決定（「待決定」）。
+24. **optical sizing 在 3a 原樣保留**（2026-11-10）：3b 再查能不能由 machopo 把 `opsz` 放進 `font_variations` 做到，能的話拿掉這個 commit。不選在 3a 就拿掉：3a 的排版要不變。
+25. **tag 和改寫都先在本地做，由人審核之後 push**（2026-11-10）：舊的頂端的 tag 是 `machopo-2026-11-10`。審核期間 `third_party.toml` 釘本地的 commit，push fork 之前不 push machopo。
+
+3a 的 inline box（2026-11-10 確認；上游的 #902 把 in-flow 的 inline box 改成文字裡的 U+FFFC，分組合好之後才看得出它對 fork 第一個 commit 的影響）：
+
+26. **atomic inline 照上游：machopo 在給 parley 的文字裡放 U+FFFC**（2026-11-10）：每個 atomic inline 一個，byte offset 對回 DOM 時跳過它。Blink 的 `NGInlineItemsBuilder` 也放 object replacement character。不選在 fork 裡保留不佔字元的 in-flow box：等於撤回 #902，之後每次 rebase 都要和上游的斷行、選取、bidi 對著改。
+27. **inline 元素的邊緣是不佔字元、有寬度、黏著前或後的內容的 box**（2026-11-10）：做成上游不佔字元的那一類項目（`OutOfFlowBox`）的延伸，對應 Blink 的 open tag / close tag item（有 inline size、不是字元）。不選邊緣也用 U+FFFC：多出的字元在 bidi 裡是中性字元、兩邊有斷行機會，都要另外壓掉。不選把寬度加在 span 第一個和最後一個 cluster 的 advance 上：空的 span 和跨行的 span 沒有 cluster 可以加。
+28. **一次搬到 `1b67b75`，3a 的驗收是「除了 atomic inline 的 bidi 和斷行，排版不變」**（2026-11-10）：改掉第 21 條的「排版不變」。reftest 和 WPT 的差異逐項查，記進 `progress.md`。不選先搬到 #902 的前一個 commit 再跨過它：衝突要解兩次。
+
 ## 待決定
 
 - **跟上游的頻率**：這份 RFC 的每段開始前一次；之後是每月一次、上游合了 machopo 需要的修改時，還是只在有需要時。做完第 4 段、知道一次 rebase 要多少工夫之後決定。

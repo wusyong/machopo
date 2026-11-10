@@ -1,0 +1,584 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wu Yuwei <yuweiwu@pm.me>
+Date: Tue, 10 Nov 2026 07:43:46 +0900
+Subject: [PATCH] Lay out tabs at tab stops
+
+---
+ parley/src/layout/data.rs              |  23 ++-
+ parley/src/layout/line_break.rs        |  31 +++-
+ parley/src/layout/mod.rs               |   2 +
+ parley/src/layout/spacing.rs           |  16 ++
+ parley/src/resolve/mod.rs              |  19 ++-
+ parley/src/style/mod.rs                |  22 +++
+ parley/src/tests/mod.rs                |   1 +
+ parley/src/tests/test_builders.rs      |  14 +-
+ parley/src/tests/test_tab_stops.rs     | 205 +++++++++++++++++++++++++
+ parley_engine/src/shape/shaped_text.rs |  12 ++
+ parley_engine/src/shape/shaper.rs      |   5 +
+ 11 files changed, 343 insertions(+), 7 deletions(-)
+ create mode 100644 parley/src/tests/test_tab_stops.rs
+
+diff --git a/parley/src/layout/data.rs b/parley/src/layout/data.rs
+index 477743424e895da1490f521cc65963db6b7fe431..18d70329e0998a55f06a44dc302056ed3cf099a1 100644
+--- a/parley/src/layout/data.rs
++++ b/parley/src/layout/data.rs
+@@ -2,7 +2,7 @@
+ // SPDX-License-Identifier: Apache-2.0 OR MIT
+ 
+ use crate::inline_box::LayoutInlineBox;
+-use crate::layout::spacing::{Justification, Spacing};
++use crate::layout::spacing::{Justification, Spacing, tab_advance};
+ use crate::layout::style_metrics::{BoxMetrics, StyleMetrics, inline_box_placement};
+ use crate::layout::whitespace::whitespace_hangs;
+ use crate::layout::{ContentWidths, LineMetrics, Style};
+@@ -731,8 +731,25 @@ impl ContentWidthsMeasurer {
+                     advance += gap;
+                 }
+             }
+-            self.running_min_width += advance;
+-            self.running_max_width += advance;
++            // machopo: a tab reaches the next tab stop from where it is on each of the two lines:
++            // gaps and all (`tab_advance`).
++            let tab_stops = if whitespace == Whitespace::Tab {
++                style.tab_stops
++            } else {
++                None
++            };
++            let advance = if let Some(stops) = tab_stops {
++                let tab = |position| tab_advance(stops, spacing, position);
++                let min = tab(self.running_min_width);
++                let max = tab(self.running_max_width);
++                self.running_min_width += min;
++                self.running_max_width += max;
++                max
++            } else {
++                self.running_min_width += advance;
++                self.running_max_width += advance;
++                advance
++            };
+ 
+             // A cluster hangs if all of its characters hang. Its first character is checked via the
+             // cached flags so the common case never touches `characters`.
+diff --git a/parley/src/layout/line_break.rs b/parley/src/layout/line_break.rs
+index 8d0e57080e7f31697f39a1852aa2895b19e6984b..b5587a0a9eab54e2cd6328bb650441bf54b4fb6e 100644
+--- a/parley/src/layout/line_break.rs
++++ b/parley/src/layout/line_break.rs
+@@ -12,7 +12,7 @@ use parlance::BidiLevel;
+ 
+ use crate::inline_box::{LayoutInlineBox, inline_object_box_index};
+ use crate::layout::data::{AlignedSubtreeOffset, run_box_metrics};
+-use crate::layout::spacing::{EffectiveSpacing, Justification, is_word_separator};
++use crate::layout::spacing::{EffectiveSpacing, Justification, is_word_separator, tab_advance};
+ use crate::layout::style_metrics::{BoxMetrics, StyleMetrics, inline_box_placement};
+ use crate::layout::whitespace::atom_hanging_advance;
+ use crate::layout::{
+@@ -1239,8 +1239,30 @@ impl<'a, B: Brush> BreakLines<'a, B> {
+                         }
+                     }
+ 
++                    // machopo: a tab whose advance isn't the one to the next tab stop from where it is
++                    // on the line: the advance it needs, which is set before the run is taken
++                    // again from it.
++                    let mut retab = None;
++
+                     // Iterate over the remaining atoms in the Run
+                     for atom in slice.atoms_from(self.state.cluster_idx) {
++                        let character = &atom.characters()[0];
++                        if character.whitespace == Whitespace::Tab
++                            && let Some(stops) =
++                                self.layout.data.styles[character.style_index as usize].tab_stops
++                        {
++                            // From the start edge of the line box's container: past the floats
++                            // beside the line and the indent.
++                            let position = self.state.line_x + line_indent + self.state.line.x;
++                            let wanted = tab_advance(stops, run.data.spacing, position);
++                            let advance = spacing.atom_advance(&atom);
++                            if (advance - wanted).abs() > 1e-3 {
++                                let cluster = atom.shaped_clusters_range().start;
++                                let shaped = atom.shaped_clusters()[0].advance;
++                                retab = Some((cluster, shaped + wanted - advance));
++                                break;
++                            }
++                        }
+                         // machopo: whether this atom's opportunity was taken before a start edge.
+                         let glued = core::mem::take(&mut self.state.line.glue_next);
+                         // Retrieve metadata about the atom
+@@ -1391,6 +1413,13 @@ impl<'a, B: Brush> BreakLines<'a, B> {
+                             }
+                         }
+                     }
++                    if let Some((cluster, advance)) = retab {
++                        self.layout
++                            .data
++                            .shaped_text
++                            .set_cluster_advance(cluster, advance);
++                        continue;
++                    }
+                     self.state.run_idx += 1;
+                     self.state.item_idx += 1;
+                 }
+diff --git a/parley/src/layout/mod.rs b/parley/src/layout/mod.rs
+index a4760ab7a32673c882e5506c76acb0c6b86f15ba..69c8f89c06495c39b5c209900dc7769ad1745b4d 100644
+--- a/parley/src/layout/mod.rs
++++ b/parley/src/layout/mod.rs
+@@ -67,6 +67,8 @@ pub struct Style<B: Brush> {
+     pub(crate) text_wrap_mode: TextWrapMode,
+     /// Per-cluster whitespace collapsing and hanging behavior.
+     pub(crate) white_space_collapse: WhiteSpaceCollapse,
++    /// machopo: where a tab reaches (CSS `tab-size`); `None` leaves it its shaped advance.
++    pub(crate) tab_stops: Option<crate::TabStops>,
+     /// The locale of the text, if any.
+     ///
+     /// This is useful for consumers exposing the text to assistive technologies,
+diff --git a/parley/src/layout/spacing.rs b/parley/src/layout/spacing.rs
+index 1cf3f2bc292ab0aecd65268edb791b0c8c1fdaf7..bea74f780884931018eb5482fd50a7264ad0753d 100644
+--- a/parley/src/layout/spacing.rs
++++ b/parley/src/layout/spacing.rs
+@@ -135,6 +135,22 @@ impl Spacing {
+     }
+ }
+ 
++/// machopo: a tab's advance, gaps included, at `position` from the line's start edge: to the next
++/// tab stop, or to the one after it when that is nearer than `stops.min_advance` (CSS Text 3,
++/// `tab-size`; Blink's `Font::TabWidth`). Without tab stops (an interval of 0) the tab has only
++/// its letter spacing.
++pub(crate) fn tab_advance(stops: crate::TabStops, spacing: Spacing, position: f32) -> f32 {
++    let interval = stops.interval;
++    if interval <= 0. {
++        return spacing.letter;
++    }
++    let mut distance = interval - position.rem_euclid(interval);
++    if distance < stops.min_advance {
++        distance += interval;
++    }
++    distance
++}
++
+ /// Justification to apply to a single line.
+ #[derive(Copy, Clone, Debug, PartialEq)]
+ pub(crate) struct Justification {
+diff --git a/parley/src/resolve/mod.rs b/parley/src/resolve/mod.rs
+index 49c4a68b8f6e49b874c98f558947b88155c98ebe..791b5fb9941d1303e28f5c574a96fe2aa7c69998 100644
+--- a/parley/src/resolve/mod.rs
++++ b/parley/src/resolve/mod.rs
+@@ -17,7 +17,7 @@ use super::style::{
+ use crate::font::FontContext;
+ use crate::style::TextStyle;
+ use crate::util::nearly_eq;
+-use crate::{CollapsedSpace, TextWrapMode, WhiteSpaceCollapse, WordBreak};
++use crate::{CollapsedSpace, TabStops, TextWrapMode, WhiteSpaceCollapse, WordBreak};
+ use crate::{LineBreak, LineHeight, OverflowWrap, VerticalAlign, layout};
+ use core::borrow::Borrow;
+ use core::ops::Range;
+@@ -170,6 +170,7 @@ impl ResolveContext {
+             StyleProperty::TextWrapMode(value) => TextWrapMode(*value),
+             StyleProperty::WhiteSpaceCollapse(value) => WhiteSpaceCollapse(*value),
+             StyleProperty::CollapsedSpace(value) => CollapsedSpace(*value),
++            StyleProperty::TabStops(value) => TabStops(scale_tab_stops(*value, scale)),
+         }
+     }
+ 
+@@ -212,6 +213,7 @@ impl ResolveContext {
+             text_wrap_mode: raw_style.text_wrap_mode,
+             white_space_collapse: raw_style.white_space_collapse,
+             collapsed_space: raw_style.collapsed_space,
++            tab_stops: scale_tab_stops(raw_style.tab_stops, scale),
+         }
+     }
+ 
+@@ -404,6 +406,16 @@ pub(crate) enum ResolvedProperty<B: Brush> {
+     WhiteSpaceCollapse(WhiteSpaceCollapse),
+     /// The character that collapsible whitespace collapses to.
+     CollapsedSpace(CollapsedSpace),
++    /// machopo: where a tab reaches.
++    TabStops(Option<TabStops>),
++}
++
++/// machopo: tab stops scaled as the other lengths are.
++fn scale_tab_stops(value: Option<TabStops>, scale: f32) -> Option<TabStops> {
++    value.map(|stops| TabStops {
++        interval: stops.interval * scale,
++        min_advance: stops.min_advance * scale,
++    })
+ }
+ 
+ /// Flattened group of style properties.
+@@ -454,6 +466,8 @@ pub(crate) struct ResolvedStyle<B: Brush> {
+     pub(crate) white_space_collapse: WhiteSpaceCollapse,
+     /// The character that collapsible whitespace collapses to.
+     pub(crate) collapsed_space: CollapsedSpace,
++    /// machopo: where a tab reaches.
++    pub(crate) tab_stops: Option<TabStops>,
+ }
+ 
+ impl<B: Brush> ResolvedStyle<B> {
+@@ -488,6 +502,7 @@ impl<B: Brush> ResolvedStyle<B> {
+             TextWrapMode(value) => self.text_wrap_mode = value,
+             WhiteSpaceCollapse(value) => self.white_space_collapse = value,
+             CollapsedSpace(value) => self.collapsed_space = value,
++            TabStops(value) => self.tab_stops = value,
+         }
+     }
+ 
+@@ -521,6 +536,7 @@ impl<B: Brush> ResolvedStyle<B> {
+             TextWrapMode(value) => self.text_wrap_mode == *value,
+             WhiteSpaceCollapse(value) => self.white_space_collapse == *value,
+             CollapsedSpace(value) => self.collapsed_space == *value,
++            TabStops(value) => self.tab_stops == *value,
+         }
+     }
+ 
+@@ -535,6 +551,7 @@ impl<B: Brush> ResolvedStyle<B> {
+             overflow_wrap: self.overflow_wrap,
+             text_wrap_mode: self.text_wrap_mode,
+             white_space_collapse: self.white_space_collapse,
++            tab_stops: self.tab_stops,
+             locale: self.locale,
+         }
+     }
+diff --git a/parley/src/style/mod.rs b/parley/src/style/mod.rs
+index c43d973d73a3d7246b25d8455a56be9bf98e60f0..a5371413af0eb7f2b1c29c9d2803a55c0fb0b34d 100644
+--- a/parley/src/style/mod.rs
++++ b/parley/src/style/mod.rs
+@@ -302,6 +302,25 @@ pub enum StyleProperty<'a, B: Brush> {
+     WhiteSpaceCollapse(WhiteSpaceCollapse),
+     /// The character that collapsible whitespace collapses to.
+     CollapsedSpace(CollapsedSpace),
++    /// machopo: where a tab reaches (CSS `tab-size`); `None` leaves it its shaped advance.
++    TabStops(Option<TabStops>),
++}
++
++/// machopo: tab stops for CSS `tab-size`, in layout units before the display scale, worked out by
++/// the embedder (a number of spaces is counted in the block container's space).
++#[derive(Copy, Clone, PartialEq, Debug)]
++pub struct TabStops {
++    /// The distance between tab stops from the line's start edge; a tab with none (0) has only
++    /// its letter spacing.
++    pub interval: f32,
++    /// The least a tab advances: nearer than this, it goes on to the stop after.
++    pub min_advance: f32,
++}
++
++impl<B: Brush> From<Option<TabStops>> for StyleProperty<'_, B> {
++    fn from(value: Option<TabStops>) -> Self {
++        StyleProperty::TabStops(value)
++    }
+ }
+ 
+ /// Unresolved styles.
+@@ -361,6 +380,8 @@ pub struct TextStyle<'family, 'settings, B: Brush> {
+     pub white_space_collapse: WhiteSpaceCollapse,
+     /// The character that collapsible whitespace collapses to.
+     pub collapsed_space: CollapsedSpace,
++    /// machopo: where a tab reaches (CSS `tab-size`); `None` leaves it its shaped advance.
++    pub tab_stops: Option<TabStops>,
+ }
+ 
+ impl<B: Brush> Default for TextStyle<'static, 'static, B> {
+@@ -393,6 +414,7 @@ impl<B: Brush> Default for TextStyle<'static, 'static, B> {
+             text_wrap_mode: TextWrapMode::default(),
+             white_space_collapse: WhiteSpaceCollapse::default(),
+             collapsed_space: CollapsedSpace::default(),
++            tab_stops: None,
+         }
+     }
+ }
+diff --git a/parley/src/tests/mod.rs b/parley/src/tests/mod.rs
+index 2d3694c8cb5330181d38affa45e349e64fb68d95..70c02dac6c30e2526013ace992a0ad89ff4be3da 100644
+--- a/parley/src/tests/mod.rs
++++ b/parley/src/tests/mod.rs
+@@ -7,4 +7,5 @@ mod test_edges;
+ mod test_final_break;
+ mod test_font_without_em;
+ mod test_style_metrics;
++mod test_tab_stops;
+ mod utils;
+diff --git a/parley/src/tests/test_builders.rs b/parley/src/tests/test_builders.rs
+index d8c024976f5fcc2c76c32bb44db32e8802789c64..48b17f831435898a4d45de9ec18b234930f362ab 100644
+--- a/parley/src/tests/test_builders.rs
++++ b/parley/src/tests/test_builders.rs
+@@ -16,8 +16,8 @@ use super::utils::{
+ use crate::{
+     BaseDirection, BreakReason, FontContext, FontFamily, FontFeatures, FontVariations, Layout,
+     LayoutContext, LineBreak, LineHeight, OverflowWrap, RangedBuilder, StyleProperty,
+-    StyleRunBuilder, TextStyle, TextWrapMode, TreeBuilder, VerticalAlign, WhiteSpaceCollapse,
+-    WordBreak,
++    StyleRunBuilder, TabStops, TextStyle, TextWrapMode, TreeBuilder, VerticalAlign,
++    WhiteSpaceCollapse, WordBreak,
+ };
+ 
+ /// Set of options for [`build_layout_with_ranged`].
+@@ -238,6 +238,11 @@ fn create_root_style() -> TextStyle<'static, 'static, ColorBrush> {
+         white_space_collapse: WhiteSpaceCollapse::PreserveBreaks,
+         // Only affects the `TreeBuilder`, which collapses white space.
+         collapsed_space: crate::CollapsedSpace::Space,
++        // machopo
++        tab_stops: Some(TabStops {
++            interval: 40.,
++            min_advance: 3.,
++        }),
+     }
+ }
+ 
+@@ -276,6 +281,11 @@ fn set_root_style(rb: &mut RangedBuilder<'_, ColorBrush>) {
+     rb.push_default(StyleProperty::WhiteSpaceCollapse(
+         WhiteSpaceCollapse::PreserveBreaks,
+     ));
++    // machopo
++    rb.push_default(StyleProperty::TabStops(Some(TabStops {
++        interval: 40.,
++        min_advance: 3.,
++    })));
+ }
+ 
+ /// Test that all the builders have the same default behavior.
+diff --git a/parley/src/tests/test_tab_stops.rs b/parley/src/tests/test_tab_stops.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..3a34280ea95d3bc51e3ffc7fad346912c1449fd5
+--- /dev/null
++++ b/parley/src/tests/test_tab_stops.rs
+@@ -0,0 +1,205 @@
++// Copyright 2026 the Parley Authors
++// SPDX-License-Identifier: Apache-2.0 OR MIT
++
++//! machopo: tests for tab stops ([`TabStops`]).
++
++use alloc::vec::Vec;
++
++use super::utils::ColorBrush;
++use super::utils::fonts::{FONT_FAMILY_LIST, create_font_context};
++use crate::{
++    FontFamily, Layout, LayoutContext, LineHeight, PositionedLayoutItem, TabStops, TextStyle,
++    TextWrapMode,
++};
++
++fn style(tab_stops: Option<TabStops>) -> TextStyle<'static, 'static, ColorBrush> {
++    TextStyle {
++        font_family: FontFamily::from(FONT_FAMILY_LIST),
++        font_size: 20.,
++        line_height: LineHeight::Absolute(30.),
++        tab_stops,
++        ..TextStyle::default()
++    }
++}
++
++fn stops(interval: f32, min_advance: f32) -> Option<TabStops> {
++    Some(TabStops {
++        interval,
++        min_advance,
++    })
++}
++
++fn build(text: &str, style: &TextStyle<'_, '_, ColorBrush>, scale: f32) -> Layout<ColorBrush> {
++    let mut fcx = create_font_context();
++    let mut lcx: LayoutContext<ColorBrush> = LayoutContext::new();
++    let mut builder = lcx.tree_builder(&mut fcx, scale, false, style);
++    builder.push_text(text);
++    let (layout, _) = builder.build();
++    layout
++}
++
++/// The advance of each line of `text`, trailing whitespace included.
++fn lines(text: &str, style: &TextStyle<'_, '_, ColorBrush>, max: Option<f32>) -> Vec<f32> {
++    let mut layout = build(text, style, 1.);
++    layout.break_all_lines(max);
++    layout.lines().map(|line| line.metrics().advance).collect()
++}
++
++/// The advance of `text` on one line.
++fn advance(text: &str, tab_stops: Option<TabStops>) -> f32 {
++    let lines = lines(text, &style(tab_stops), None);
++    assert_eq!(lines.len(), 1, "{text:?}");
++    lines[0]
++}
++
++fn assert_close(a: f32, b: f32) {
++    assert!((a - b).abs() < 1e-3, "{a} != {b}");
++}
++
++#[test]
++fn a_tab_reaches_the_next_tab_stop() {
++    let (a, b) = (advance("a", None), advance("b", None));
++    assert!(a < 30.);
++    assert_close(advance("a\tb", stops(40., 0.)), 40. + b);
++    assert_close(advance("a\t\tb", stops(40., 0.)), 80. + b);
++    assert_close(advance("a\tb\tb", stops(40., 0.)), 80. + b);
++    // At a tab stop, the tab reaches the one after it.
++    assert_close(advance("\t\tb", stops(40., 0.)), 80. + b);
++}
++
++#[test]
++fn without_tab_stops_a_tab_keeps_the_advance_it_was_shaped_with() {
++    // It is shaped as a space.
++    assert_close(advance("a\tb", None), advance("a b", None));
++}
++
++#[test]
++fn a_tab_nearer_its_stop_than_the_least_advance_reaches_the_one_after() {
++    let (a, b) = (advance("a", None), advance("b", None));
++    let interval = a + 2.;
++    assert_close(advance("a\tb", stops(interval, 1.5)), interval + b);
++    assert_close(advance("a\tb", stops(interval, 2.5)), 2. * interval + b);
++    // A stop as far as the least advance is reached.
++    assert_close(advance("\tb", stops(40., 40.)), 40. + b);
++}
++
++#[test]
++fn a_tab_without_an_interval_has_only_its_letter_spacing() {
++    let spaced = |text, tab_stops| {
++        let style = TextStyle {
++            letter_spacing: 5.,
++            ..style(tab_stops)
++        };
++        lines(text, &style, None)[0]
++    };
++    assert_close(
++        advance("a\tb", stops(0., 3.)),
++        advance("a", None) + advance("b", None),
++    );
++    assert_close(
++        spaced("a\tb", stops(0., 3.)),
++        spaced("a", None) + spaced("b", None) + 5.,
++    );
++}
++
++#[test]
++fn a_tab_is_placed_from_the_start_of_its_line() {
++    let (b, cc) = (advance("b", None), advance("cc", None));
++    assert!(cc < 40.);
++    // After a forced break, and after a soft wrap.
++    let forced = lines("a\tb\ncc\tb", &style(stops(40., 0.)), None);
++    assert_close(forced[0], 40. + b);
++    assert_close(forced[1], 40. + b);
++
++    let wrapped = lines(
++        "aaaaaa cc\tb",
++        &style(stops(40., 0.)),
++        Some(advance("aaaaaa ", None)),
++    );
++    assert_eq!(wrapped.len(), 2);
++    assert_close(wrapped[1], 40. + b);
++}
++
++#[test]
++fn a_tab_that_moves_is_measured_again() {
++    // The same layout broken at another width: the tab is first after "aaaaaa cc", then after
++    // "cc" at the start of a line.
++    let b = advance("b", None);
++    let tab_stops = stops(40., 0.);
++    let mut layout = build("aaaaaa cc\tb", &style(tab_stops), 1.);
++    layout.break_all_lines(None);
++    let unbroken = layout.full_width();
++    layout.break_all_lines(Some(advance("aaaaaa ", None)));
++    assert_close(layout.lines().nth(1).unwrap().metrics().advance, 40. + b);
++    layout.break_all_lines(None);
++    assert_close(layout.full_width(), unbroken);
++}
++
++#[test]
++fn tab_stops_are_scaled() {
++    let b = advance("b", None);
++    let mut layout = build("a\tb", &style(stops(40., 0.)), 2.);
++    layout.break_all_lines(None);
++    assert_close(layout.full_width(), 80. + 2. * b);
++
++    // The least advance too.
++    let a = advance("a", None);
++    let mut layout = build("a\tb", &style(stops(a + 2., 1.5)), 2.);
++    layout.break_all_lines(None);
++    assert_close(layout.full_width(), 2. * (a + 2.) + 2. * b);
++    let mut layout = build("a\tb", &style(stops(a + 2., 2.5)), 2.);
++    layout.break_all_lines(None);
++    assert_close(layout.full_width(), 4. * (a + 2.) + 2. * b);
++}
++
++#[test]
++fn content_widths_place_tabs() {
++    let b = advance("b", None);
++    let tab_stops = stops(40., 0.);
++    let widths = |text, wrap| {
++        let style = TextStyle {
++            text_wrap_mode: wrap,
++            ..style(tab_stops)
++        };
++        build(text, &style, 1.).calculate_content_widths()
++    };
++    let nowrap = widths("a\tb\tb", TextWrapMode::NoWrap);
++    assert_close(nowrap.max, 80. + b);
++    assert_close(nowrap.min, 80. + b);
++
++    // Each of the two widths places the tab on its own line: for the least one that is the line
++    // "cc\tb" (which does not wrap), for the greatest the whole text.
++    let mut fcx = create_font_context();
++    let mut lcx: LayoutContext<ColorBrush> = LayoutContext::new();
++    let root = style(tab_stops);
++    let mut builder = lcx.tree_builder(&mut fcx, 1., false, &root);
++    builder.push_text("aa ");
++    builder.push_style_span(TextStyle {
++        text_wrap_mode: TextWrapMode::NoWrap,
++        ..root.clone()
++    });
++    builder.push_text("cc\tb");
++    builder.pop_style_span();
++    let (layout, _) = builder.build();
++    let wrap = layout.calculate_content_widths();
++    assert_close(wrap.max, advance("aa cc\tb", tab_stops));
++    assert!(advance("aa", None) < 40.);
++    assert_close(wrap.min, 40. + b);
++}
++
++#[test]
++fn the_glyphs_after_a_tab_are_at_its_stop() {
++    let mut layout = build("a\tb", &style(stops(40., 0.)), 1.);
++    layout.break_all_lines(None);
++    let line = layout.lines().next().unwrap();
++    let glyphs: Vec<_> = line
++        .items()
++        .filter_map(|item| match item {
++            PositionedLayoutItem::GlyphRun(run) => Some(run),
++            PositionedLayoutItem::InlineBox(_) => None,
++        })
++        .flat_map(|run| run.positioned_glyphs())
++        .collect();
++    assert_eq!(glyphs.len(), 3);
++    assert_close(glyphs[2].x, 40.);
++}
+diff --git a/parley_engine/src/shape/shaped_text.rs b/parley_engine/src/shape/shaped_text.rs
+index 24fe29d7ce6b42b002154773ee032fa2a33a3843..fd17cd9ad3c9678a8f0c755890f3783151c9259e 100644
+--- a/parley_engine/src/shape/shaped_text.rs
++++ b/parley_engine/src/shape/shaped_text.rs
+@@ -197,6 +197,18 @@ impl ShapedText {
+         self.has_safe_to_concat_flags
+     }
+ 
++    /// machopo: gives the shaped cluster at `cluster_index` the advance `advance`, its glyphs together
++    /// (the first one takes up the difference): a tab's, which a line breaker works out from where
++    /// the tab is on its line.
++    pub fn set_cluster_advance(&mut self, cluster_index: u32, advance: f32) {
++        let cluster = &mut self.shaped_clusters[cluster_index as usize];
++        let difference = advance - cluster.advance;
++        cluster.advance = advance;
++        if !cluster.has_inline_glyph() && cluster.glyph_len() > 0 {
++            self.glyphs[cluster.glyph_offset as usize].advance += difference;
++        }
++    }
++
+     /// Get a [`ShapedSlice`] of the run at `run_index`.
+     pub fn run_slice(&self, run_index: u32) -> ShapedSlice<'_> {
+         let run = &self.runs[run_index as usize];
+diff --git a/parley_engine/src/shape/shaper.rs b/parley_engine/src/shape/shaper.rs
+index 0a18c818853db5dcd2d73c664af9751a4e5a9ba9..936012d88b59f9fd6106a29b9b68d648c299e523 100644
+--- a/parley_engine/src/shape/shaper.rs
++++ b/parley_engine/src/shape/shaper.rs
+@@ -364,6 +364,11 @@ fn shape_segment(
+             // with `char_indices`, push each char individually via `.chars` with a cluster index
+             // that matches its `infos` counterpart. This allows us to lookup `infos` via cluster
+             // index in `data.rs`.
++            //
++            // machopo: a tab shapes as a space, so it draws nothing (fonts seldom
++            // map U+0009, and its .notdef box would show); line breaking
++            // gives it its advance to the next tab stop, as Chrome draws it.
++            let ch = if ch == '\t' { ' ' } else { ch };
+             buffer.push(ch.into(), i as u32);
+         }
+ 

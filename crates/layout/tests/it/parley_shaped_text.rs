@@ -145,8 +145,8 @@ fn a_spans_glyphs_are_its_runs() {
             (4..5, StyleProperty::Underline(true)),
         ],
     );
+    layout.set_alignment(Alignment::Justify, AlignmentOptions::default());
     layout.break_all_lines(Some(250.0));
-    layout.align(Alignment::Justify, AlignmentOptions::default());
     let runs = glyphs(&layout);
     assert!(runs.len() >= 3, "{runs:?}");
     for (span, run) in &runs {
@@ -186,8 +186,8 @@ fn a_spans_clusters_are_its_runs() {
             (4..5, StyleProperty::Underline(true)),
         ],
     );
+    layout.set_alignment(Alignment::Justify, AlignmentOptions::default());
     layout.break_all_lines(Some(250.0));
-    layout.align(Alignment::Justify, AlignmentOptions::default());
     let runs = clusters(&layout);
     assert!(runs.len() >= 4, "{runs:?}");
     for (span, run) in &runs {

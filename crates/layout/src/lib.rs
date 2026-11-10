@@ -1649,8 +1649,8 @@ impl BoxTree {
                 // broken at its min-content width for a height nothing
                 // reads, a paragraph was broken once more for each
                 // shrink-to-fit or flex container measuring it. With floats
-                // its width is where they were placed beside its lines, and
-                // with an indent where its lines end.
+                // its width is where they were placed beside its lines; with
+                // an indent its lines are broken too.
                 if inputs.run_mode == RunMode::ComputeSize
                     && inputs.axis == RequestedAxis::Horizontal
                     && !floats

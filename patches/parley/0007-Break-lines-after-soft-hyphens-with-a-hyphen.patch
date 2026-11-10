@@ -1,0 +1,959 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wu Yuwei <yuweiwu@pm.me>
+Date: Tue, 10 Nov 2026 07:43:46 +0900
+Subject: [PATCH] Break lines after soft hyphens with a hyphen
+
+---
+ parley/src/layout/alignment.rs         |   2 +
+ parley/src/layout/data.rs              |  56 +++-
+ parley/src/layout/line.rs              |   6 +
+ parley/src/layout/line_break.rs        |  59 ++++-
+ parley/src/layout/mod.rs               |   2 +
+ parley/src/resolve/mod.rs              |  19 +-
+ parley/src/style/mod.rs                |  26 ++
+ parley/src/tests/mod.rs                |   1 +
+ parley/src/tests/test_builders.rs      |   4 +-
+ parley/src/tests/test_soft_hyphens.rs  | 351 +++++++++++++++++++++++++
+ parley_engine/src/shape/data.rs        |  41 ++-
+ parley_engine/src/shape/shaped_text.rs |   3 +-
+ 12 files changed, 553 insertions(+), 17 deletions(-)
+ create mode 100644 parley/src/tests/test_soft_hyphens.rs
+
+diff --git a/parley/src/layout/alignment.rs b/parley/src/layout/alignment.rs
+index e4fafeeb35de2443c0d7ed0f703210fd48fc5863..e1b2108c1f5a9650c099bb0a0ab1ee138d7ac06b 100644
+--- a/parley/src/layout/alignment.rs
++++ b/parley/src/layout/alignment.rs
+@@ -87,6 +87,8 @@ pub(crate) fn align<B: Brush>(layout: &mut LayoutData<B>) {
+             // the line to the left. Note: indent is not subtracted here because `free_space` below
+             // already accounts for it.
+             line.metrics.offset = -line.metrics.hanging_advance;
++            // machopo: a hyphen at the line's end goes on the left of its items.
++            line.metrics.offset += line.metrics.hyphen_advance;
+         } else {
+             line.metrics.offset = indent;
+         }
+diff --git a/parley/src/layout/data.rs b/parley/src/layout/data.rs
+index 18d70329e0998a55f06a44dc302056ed3cf099a1..92c472351b220f00551ab74f43a0b39a4e8dd0b9 100644
+--- a/parley/src/layout/data.rs
++++ b/parley/src/layout/data.rs
+@@ -9,7 +9,8 @@ use crate::layout::{ContentWidths, LineMetrics, Style};
+ use crate::resolve::ResolvedStyle;
+ use crate::style::Brush;
+ use crate::{
+-    IndentOptions, InlineBoxKind, LineHeight, OverflowWrap, TextWrapMode, WhiteSpaceCollapse,
++    IndentOptions, InlineBoxKind, LineHeight, OverflowWrap, SoftHyphens, TextWrapMode,
++    WhiteSpaceCollapse,
+ };
+ use core::ops::Range;
+ 
+@@ -510,6 +511,10 @@ struct ContentWidthsMeasurer {
+     /// Indents for lines following a soft/hard wrap.
+     soft_indent: f32,
+     hard_indent: f32,
++
++    /// machopo: how a line may break at the next opportunity, as in the line breaker: the last
++    /// atom's style's [`SoftHyphens`] if it is a soft hyphen, otherwise `Break`.
++    soft_hyphen: SoftHyphens,
+ }
+ 
+ impl ContentWidthsMeasurer {
+@@ -528,6 +533,7 @@ impl ContentWidthsMeasurer {
+             soft_indent: indent_options.indent_following_soft_wrap_break(indent_amount),
+             hard_indent: indent_options.indent_following_forced_line_break(indent_amount),
+             line_has_content: false,
++            soft_hyphen: SoftHyphens::Break,
+         }
+     }
+ 
+@@ -548,6 +554,23 @@ impl ContentWidthsMeasurer {
+         self.running_min_width = self.soft_indent;
+     }
+ 
++    /// machopo: [`Self::soft_break`] at a soft wrap opportunity, after a soft hyphen as its style has
++    /// it (`soft_hyphen`): the fragment ends with the hyphen, or doesn't end.
++    #[inline(always)]
++    fn soft_break_after(&mut self, soft_hyphen: SoftHyphens, line_has_content: bool) {
++        match soft_hyphen {
++            SoftHyphens::Break => self.soft_break(line_has_content),
++            SoftHyphens::NoBreak => {}
++            SoftHyphens::Hyphen(advance) => {
++                // Only a fragment that ends here has the hyphen (see `soft_break`).
++                if line_has_content && self.running_min_width >= 0.0 {
++                    self.running_min_width += advance;
++                    self.soft_break(line_has_content);
++                }
++            }
++        }
++    }
++
+     /// Ends the current line at a forced break.
+     ///
+     /// Note that a line that ends in a forced break is laid out even if it holds nothing else
+@@ -642,7 +665,7 @@ impl ContentWidthsMeasurer {
+         // Take the following content's opportunity here, once for consecutive edges.
+         if opportunity_after && !self.glue_next {
+             if self.text_wrap_mode == TextWrapMode::Wrap {
+-                self.soft_break(self.line_has_content);
++                self.soft_break_after(self.soft_hyphen, self.line_has_content);
+             }
+             self.glue_next = true;
+         }
+@@ -692,12 +715,29 @@ impl ContentWidthsMeasurer {
+                 skip_atom = false;
+                 let prev_text_wrap_mode = self.text_wrap_mode;
+                 self.text_wrap_mode = style.text_wrap_mode;
+-                if prev_text_wrap_mode == TextWrapMode::Wrap
+-                    && (cluster.is_soft_wrap_opportunity_before()
+-                        || style.overflow_wrap == OverflowWrap::Anywhere)
+-                    && !(i == 0 && glued)
+-                {
+-                    self.soft_break(i != empty_at);
++                // machopo: an opportunity after a soft hyphen is taken as its style has it.
++                // The ones beside an inline object are its own.
++                let soft_hyphen = core::mem::replace(
++                    &mut self.soft_hyphen,
++                    if cluster.is_soft_hyphen() {
++                        style.soft_hyphens
++                    } else {
++                        SoftHyphens::Break
++                    },
++                );
++                let soft_hyphen = if cluster.is_inline_object() {
++                    SoftHyphens::Break
++                } else {
++                    soft_hyphen
++                };
++                if prev_text_wrap_mode == TextWrapMode::Wrap && !(i == 0 && glued) {
++                    if cluster.is_soft_wrap_opportunity_before()
++                        && soft_hyphen != SoftHyphens::NoBreak
++                    {
++                        self.soft_break_after(soft_hyphen, i != empty_at);
++                    } else if style.overflow_wrap == OverflowWrap::Anywhere {
++                        self.soft_break(i != empty_at);
++                    }
+                 }
+                 // `Whitespace::Newline` are forced breaks. Note newlines have no advance.
+                 if whitespace == Whitespace::Newline {
+diff --git a/parley/src/layout/line.rs b/parley/src/layout/line.rs
+index f3a05b8da0f95e141be25eff65e2baf18edcdd27..4e79e0a55ed0d521553480e551ea113a027700ac 100644
+--- a/parley/src/layout/line.rs
++++ b/parley/src/layout/line.rs
+@@ -185,6 +185,12 @@ pub struct LineMetrics {
+     // into two fields.
+     pub hanging_advance: f32,
+ 
++    /// machopo: the portion of [`Self::advance`] that is a hyphen at the line's logical end, which
++    /// the embedder draws: the line broke after a soft hyphen whose style has
++    /// [`SoftHyphens::Hyphen`](crate::SoftHyphens::Hyphen). In RTL paragraphs, the line's items
++    /// leave room for it on the left of [`Self::offset`].
++    pub hyphen_advance: f32,
++
+     /// The minimum inline-axis coordinate of the line.
+     ///
+     /// For horizontal text, this would be the left of the line.
+diff --git a/parley/src/layout/line_break.rs b/parley/src/layout/line_break.rs
+index b5587a0a9eab54e2cd6328bb650441bf54b4fb6e..a5ab3b58fae8f0818f046ba9c981bb6e21657b77 100644
+--- a/parley/src/layout/line_break.rs
++++ b/parley/src/layout/line_break.rs
+@@ -21,7 +21,8 @@ use crate::layout::{
+ };
+ use crate::style::Brush;
+ use crate::{
+-    BaselineShift, InlineBoxKind, OverflowWrap, TextWrapMode, VerticalAlign, WhiteSpaceCollapse,
++    BaselineShift, InlineBoxKind, OverflowWrap, SoftHyphens, TextWrapMode, VerticalAlign,
++    WhiteSpaceCollapse,
+ };
+ 
+ use core::ops::Range;
+@@ -88,6 +89,15 @@ struct LineState {
+     /// marked again. Saved and restored with the line-breaking opportunities, like the rest of the
+     /// line state.
+     glue_next: bool,
++
++    /// machopo: how the line may break at the next opportunity: the last atom's style's
++    /// [`SoftHyphens`] if it is a soft hyphen (atomic inlines aside, an inline's edges keep it),
++    /// otherwise `Break`.
++    soft_hyphen: SoftHyphens,
++
++    /// machopo: the advance of the hyphen the line ends with when it is broken here: set on the
++    /// state saved at an opportunity after a soft hyphen.
++    hyphen_advance: f32,
+ }
+ 
+ impl LineState {
+@@ -97,6 +107,8 @@ impl LineState {
+         self.box_metrics.reset();
+         self.num_word_separators = 0;
+         self.glue_next = false;
++        self.soft_hyphen = SoftHyphens::Break;
++        self.hyphen_advance = 0.0;
+     }
+ }
+ 
+@@ -830,6 +842,24 @@ impl BreakerState {
+         });
+     }
+ 
++    /// machopo: [`Self::mark_line_break_opportunity`] after a soft hyphen as its style has it
++    /// ([`LineState::soft_hyphen`]): with a hyphen at the line's end, unless the hyphen doesn't fit
++    /// and the line has an opportunity before; or not at all.
++    fn mark_line_break_opportunity_after_soft_hyphen(&mut self, max_advance: f32) {
++        match self.line.soft_hyphen {
++            SoftHyphens::Break => self.mark_line_break_opportunity(),
++            SoftHyphens::NoBreak => {}
++            SoftHyphens::Hyphen(advance) => {
++                if self.line.x + advance <= max_advance || self.prev_boundary.is_none() {
++                    self.mark_line_break_opportunity();
++                    if let Some(prev) = &mut self.prev_boundary {
++                        prev.state.hyphen_advance = advance;
++                    }
++                }
++            }
++        }
++    }
++
+     /// Store the current iteration state so that we can revert to it if we later want to take
+     /// an *emergency* line breaking opportunity at this point.
+     fn mark_emergency_break_opportunity(&mut self) {
+@@ -1160,7 +1190,8 @@ impl<'a, B: Brush> BreakLines<'a, B> {
+                                 .soft_wrap_opportunity_after_box(self.state.item_idx)
+                         {
+                             if wraps && self.state.line.x != 0.0 {
+-                                self.state.mark_line_break_opportunity();
++                                self.state
++                                    .mark_line_break_opportunity_after_soft_hyphen(max_advance);
+                             }
+                             self.state.line.glue_next = true;
+                         }
+@@ -1276,6 +1307,16 @@ impl<'a, B: Brush> BreakLines<'a, B> {
+                         let max_height_exceeded = self.state.line.max_height_exceeded;
+                         let style_index = first_cluster.style_index;
+                         let style = &self.layout.data.styles[style_index as usize];
++                        // machopo: how the line may break after this atom.
++                        let soft_hyphen = if first_cluster.is_soft_hyphen() {
++                            style.soft_hyphens
++                        } else {
++                            SoftHyphens::Break
++                        };
++                        // machopo: the opportunities beside an inline object are its own.
++                        if first_cluster.is_inline_object() {
++                            self.state.line.soft_hyphen = SoftHyphens::Break;
++                        }
+ 
+                         // Lag text_wrap_mode style by one atom
+                         let text_wrap_mode = self.state.line.text_wrap_mode;
+@@ -1300,11 +1341,16 @@ impl<'a, B: Brush> BreakLines<'a, B> {
+                                 max_advance,
+                                 line_indent,
+                             );
+-                        } else if is_soft_wrap_opportunity && text_wrap_mode == TextWrapMode::Wrap {
++                        } else if is_soft_wrap_opportunity
++                            && text_wrap_mode == TextWrapMode::Wrap
++                            // machopo: after a soft hyphen that has none, an emergency one at most.
++                            && self.state.line.soft_hyphen != SoftHyphens::NoBreak
++                        {
+                             // We don't record boundaries when the advance is 0. As we do not want overflowing content to cause extra consecutive
+                             // line breaks. We should accept the overflowing fragment in that scenario.
+                             if self.state.line.x != 0.0 && !glued {
+-                                self.state.mark_line_break_opportunity();
++                                self.state
++                                    .mark_line_break_opportunity_after_soft_hyphen(max_advance);
+                                 // break_opportunity = true;
+                             }
+                         } else if
+@@ -1412,6 +1458,8 @@ impl<'a, B: Brush> BreakLines<'a, B> {
+                                 );
+                             }
+                         }
++                        // machopo: every way here appended the atom.
++                        self.state.line.soft_hyphen = soft_hyphen;
+                     }
+                     if let Some((cluster, advance)) = retab {
+                         self.layout
+@@ -1920,8 +1968,9 @@ fn commit_line<B: Brush>(
+         },
+         metrics: LineMetrics {
+             indent: line_indent,
+-            advance: state.x,
++            advance: state.x + state.hyphen_advance,
+             hanging_advance,
++            hyphen_advance: state.hyphen_advance,
+             ..Default::default()
+         },
+         aligned_subtree_offsets: 0..0,
+diff --git a/parley/src/layout/mod.rs b/parley/src/layout/mod.rs
+index 69c8f89c06495c39b5c209900dc7769ad1745b4d..bf118f9e9082f69bef5f2f94accb6c5d29ded42c 100644
+--- a/parley/src/layout/mod.rs
++++ b/parley/src/layout/mod.rs
+@@ -69,6 +69,8 @@ pub struct Style<B: Brush> {
+     pub(crate) white_space_collapse: WhiteSpaceCollapse,
+     /// machopo: where a tab reaches (CSS `tab-size`); `None` leaves it its shaped advance.
+     pub(crate) tab_stops: Option<crate::TabStops>,
++    /// machopo: how a line may break after a soft hyphen (CSS `hyphens`).
++    pub(crate) soft_hyphens: crate::SoftHyphens,
+     /// The locale of the text, if any.
+     ///
+     /// This is useful for consumers exposing the text to assistive technologies,
+diff --git a/parley/src/resolve/mod.rs b/parley/src/resolve/mod.rs
+index 298c40db80bf0529316d406634a5c8fe81d39481..9e2c6ab66d47bad9866f17d79bebf49404de414d 100644
+--- a/parley/src/resolve/mod.rs
++++ b/parley/src/resolve/mod.rs
+@@ -17,7 +17,7 @@ use super::style::{
+ use crate::font::FontContext;
+ use crate::style::TextStyle;
+ use crate::util::nearly_eq;
+-use crate::{CollapsedSpace, TabStops, TextWrapMode, WhiteSpaceCollapse, WordBreak};
++use crate::{CollapsedSpace, SoftHyphens, TabStops, TextWrapMode, WhiteSpaceCollapse, WordBreak};
+ use crate::{LineBreak, LineHeight, OverflowWrap, VerticalAlign, layout};
+ use core::borrow::Borrow;
+ use core::ops::Range;
+@@ -172,6 +172,7 @@ impl ResolveContext {
+             StyleProperty::CollapsedSpace(value) => CollapsedSpace(*value),
+             StyleProperty::TabStops(value) => TabStops(scale_tab_stops(*value, scale)),
+             StyleProperty::OpticalSizing(value) => OpticalSizing(*value),
++            StyleProperty::SoftHyphens(value) => SoftHyphens(scale_soft_hyphens(*value, scale)),
+         }
+     }
+ 
+@@ -216,6 +217,7 @@ impl ResolveContext {
+             collapsed_space: raw_style.collapsed_space,
+             tab_stops: scale_tab_stops(raw_style.tab_stops, scale),
+             optical_sizing: raw_style.optical_sizing,
++            soft_hyphens: scale_soft_hyphens(raw_style.soft_hyphens, scale),
+         }
+     }
+ 
+@@ -412,6 +414,16 @@ pub(crate) enum ResolvedProperty<B: Brush> {
+     TabStops(Option<TabStops>),
+     /// machopo: CSS `font-optical-sizing: auto`.
+     OpticalSizing(bool),
++    /// machopo: how a line may break after a soft hyphen.
++    SoftHyphens(SoftHyphens),
++}
++
++/// machopo: a soft hyphen's hyphen scaled as the other lengths are.
++fn scale_soft_hyphens(value: SoftHyphens, scale: f32) -> SoftHyphens {
++    match value {
++        SoftHyphens::Hyphen(advance) => SoftHyphens::Hyphen(advance * scale),
++        value => value,
++    }
+ }
+ 
+ /// machopo: tab stops scaled as the other lengths are.
+@@ -474,6 +486,8 @@ pub(crate) struct ResolvedStyle<B: Brush> {
+     pub(crate) tab_stops: Option<TabStops>,
+     /// machopo: CSS `font-optical-sizing: auto`.
+     pub(crate) optical_sizing: bool,
++    /// machopo: how a line may break after a soft hyphen.
++    pub(crate) soft_hyphens: SoftHyphens,
+ }
+ 
+ impl<B: Brush> ResolvedStyle<B> {
+@@ -510,6 +524,7 @@ impl<B: Brush> ResolvedStyle<B> {
+             CollapsedSpace(value) => self.collapsed_space = value,
+             TabStops(value) => self.tab_stops = value,
+             OpticalSizing(value) => self.optical_sizing = value,
++            SoftHyphens(value) => self.soft_hyphens = value,
+         }
+     }
+ 
+@@ -545,6 +560,7 @@ impl<B: Brush> ResolvedStyle<B> {
+             CollapsedSpace(value) => self.collapsed_space == *value,
+             TabStops(value) => self.tab_stops == *value,
+             OpticalSizing(value) => self.optical_sizing == *value,
++            SoftHyphens(value) => self.soft_hyphens == *value,
+         }
+     }
+ 
+@@ -560,6 +576,7 @@ impl<B: Brush> ResolvedStyle<B> {
+             text_wrap_mode: self.text_wrap_mode,
+             white_space_collapse: self.white_space_collapse,
+             tab_stops: self.tab_stops,
++            soft_hyphens: self.soft_hyphens,
+             locale: self.locale,
+         }
+     }
+diff --git a/parley/src/style/mod.rs b/parley/src/style/mod.rs
+index d71f3fb13f6f5035c34ac9b82a2b697b5f3929bf..2724529f7109de441e78f034866a49978ae67018 100644
+--- a/parley/src/style/mod.rs
++++ b/parley/src/style/mod.rs
+@@ -307,6 +307,8 @@ pub enum StyleProperty<'a, B: Brush> {
+     /// machopo: CSS `font-optical-sizing: auto`: a font with an `opsz` axis is shaped and drawn
+     /// at the font size on it, unless the font variations set it.
+     OpticalSizing(bool),
++    /// machopo: how a line may break after a soft hyphen (CSS `hyphens`).
++    SoftHyphens(SoftHyphens),
+ }
+ 
+ /// machopo: tab stops for CSS `tab-size`, in layout units before the display scale, worked out by
+@@ -320,6 +322,27 @@ pub struct TabStops {
+     pub min_advance: f32,
+ }
+ 
++/// machopo: how a line may break after a soft hyphen (U+00AD), for CSS `hyphens`, which the
++/// embedder works out with the hyphen's advance (it draws the hyphen).
++#[derive(Copy, Clone, PartialEq, Debug, Default)]
++pub enum SoftHyphens {
++    /// A soft wrap opportunity like any other, with nothing drawn: upstream's behaviour.
++    #[default]
++    Break,
++    /// No opportunity (`hyphens: none`).
++    NoBreak,
++    /// An opportunity with a hyphen of this advance (in layout units before the display scale)
++    /// at the line's end, taken only where the hyphen fits, unless the line has no other
++    /// (`hyphens: manual` and `auto`).
++    Hyphen(f32),
++}
++
++impl<B: Brush> From<SoftHyphens> for StyleProperty<'_, B> {
++    fn from(value: SoftHyphens) -> Self {
++        StyleProperty::SoftHyphens(value)
++    }
++}
++
+ impl<B: Brush> From<Option<TabStops>> for StyleProperty<'_, B> {
+     fn from(value: Option<TabStops>) -> Self {
+         StyleProperty::TabStops(value)
+@@ -387,6 +410,8 @@ pub struct TextStyle<'family, 'settings, B: Brush> {
+     pub tab_stops: Option<TabStops>,
+     /// machopo: CSS `font-optical-sizing: auto` (off by default, as upstream has it).
+     pub optical_sizing: bool,
++    /// machopo: how a line may break after a soft hyphen (CSS `hyphens`).
++    pub soft_hyphens: SoftHyphens,
+ }
+ 
+ impl<B: Brush> Default for TextStyle<'static, 'static, B> {
+@@ -421,6 +446,7 @@ impl<B: Brush> Default for TextStyle<'static, 'static, B> {
+             collapsed_space: CollapsedSpace::default(),
+             tab_stops: None,
+             optical_sizing: false,
++            soft_hyphens: SoftHyphens::Break,
+         }
+     }
+ }
+diff --git a/parley/src/tests/mod.rs b/parley/src/tests/mod.rs
+index 5f56fa23fa1fd2c1c907db04df8e24883710e4ae..81e13b3320ea36c948850c746c20feeeb5131260 100644
+--- a/parley/src/tests/mod.rs
++++ b/parley/src/tests/mod.rs
+@@ -7,6 +7,7 @@ mod test_edges;
+ mod test_final_break;
+ mod test_font_without_em;
+ mod test_optical_sizing;
++mod test_soft_hyphens;
+ mod test_style_metrics;
+ mod test_tab_stops;
+ mod utils;
+diff --git a/parley/src/tests/test_builders.rs b/parley/src/tests/test_builders.rs
+index 353bc6430bd60a26296a57aee8c9cbbfec73ea00..8106356b16193eabad3ccf1fd6961c1df290378f 100644
+--- a/parley/src/tests/test_builders.rs
++++ b/parley/src/tests/test_builders.rs
+@@ -15,7 +15,7 @@ use super::utils::{
+ };
+ use crate::{
+     BaseDirection, BreakReason, FontContext, FontFamily, FontFeatures, FontVariations, Layout,
+-    LayoutContext, LineBreak, LineHeight, OverflowWrap, RangedBuilder, StyleProperty,
++    LayoutContext, LineBreak, LineHeight, OverflowWrap, RangedBuilder, SoftHyphens, StyleProperty,
+     StyleRunBuilder, TabStops, TextStyle, TextWrapMode, TreeBuilder, VerticalAlign,
+     WhiteSpaceCollapse, WordBreak,
+ };
+@@ -244,6 +244,7 @@ fn create_root_style() -> TextStyle<'static, 'static, ColorBrush> {
+             min_advance: 3.,
+         }),
+         optical_sizing: true,
++        soft_hyphens: SoftHyphens::Hyphen(5.),
+     }
+ }
+ 
+@@ -288,6 +289,7 @@ fn set_root_style(rb: &mut RangedBuilder<'_, ColorBrush>) {
+         min_advance: 3.,
+     })));
+     rb.push_default(StyleProperty::OpticalSizing(true));
++    rb.push_default(StyleProperty::SoftHyphens(SoftHyphens::Hyphen(5.)));
+ }
+ 
+ /// Test that all the builders have the same default behavior.
+diff --git a/parley/src/tests/test_soft_hyphens.rs b/parley/src/tests/test_soft_hyphens.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..4d141d35369bd060fc62fc07b77e1d90b51ee635
+--- /dev/null
++++ b/parley/src/tests/test_soft_hyphens.rs
+@@ -0,0 +1,351 @@
++// Copyright 2026 the Parley Authors
++// SPDX-License-Identifier: Apache-2.0 OR MIT
++
++//! machopo: tests for how lines break after soft hyphens ([`SoftHyphens`]).
++
++use alloc::vec::Vec;
++
++use super::utils::ColorBrush;
++use super::utils::fonts::{FONT_FAMILY_LIST, create_font_context};
++use crate::{
++    ContentWidths, FontFamily, IndentOptions, InlineBox, InlineBoxKind, Layout, LayoutContext,
++    LineHeight, OverflowWrap, PositionedLayoutItem, SoftHyphens, TextStyle, VerticalAlign,
++};
++
++fn style(soft_hyphens: SoftHyphens) -> TextStyle<'static, 'static, ColorBrush> {
++    TextStyle {
++        font_family: FontFamily::from(FONT_FAMILY_LIST),
++        font_size: 20.,
++        line_height: LineHeight::Absolute(30.),
++        soft_hyphens,
++        ..TextStyle::default()
++    }
++}
++
++/// A piece of a paragraph: text, or an inline box of a kind with a width.
++#[derive(Clone, Copy)]
++enum Piece {
++    Text(&'static str),
++    Box(InlineBoxKind, f32),
++}
++use Piece::{Box, Text};
++
++fn build(
++    pieces: &[Piece],
++    style: &TextStyle<'_, '_, ColorBrush>,
++    scale: f32,
++) -> Layout<ColorBrush> {
++    let mut fcx = create_font_context();
++    let mut lcx: LayoutContext<ColorBrush> = LayoutContext::new();
++    let mut builder = lcx.tree_builder(&mut fcx, scale, false, style);
++    for (id, piece) in pieces.iter().enumerate() {
++        match *piece {
++            Text(text) => builder.push_text(text),
++            Box(kind, width) => builder.push_inline_box(InlineBox {
++                id: id as u64,
++                kind,
++                index: 0,
++                width,
++                height: 10.,
++                baseline: None,
++                vertical_align: VerticalAlign::BASELINE,
++            }),
++        }
++    }
++    let (layout, _) = builder.build();
++    layout
++}
++
++/// Each line of `pieces`: the bytes of the text on it, its advance and its hyphen's.
++fn lines_of(
++    pieces: &[Piece],
++    style: &TextStyle<'_, '_, ColorBrush>,
++    max: Option<f32>,
++) -> Vec<(core::ops::Range<usize>, f32, f32)> {
++    let mut layout = build(pieces, style, 1.);
++    layout.break_all_lines(max);
++    layout
++        .lines()
++        .map(|line| {
++            let metrics = line.metrics();
++            (line.text_range(), metrics.advance, metrics.hyphen_advance)
++        })
++        .collect()
++}
++
++fn lines(
++    text: &'static str,
++    soft_hyphens: SoftHyphens,
++    max: Option<f32>,
++) -> Vec<(core::ops::Range<usize>, f32, f32)> {
++    lines_of(&[Text(text)], &style(soft_hyphens), max)
++}
++
++/// The advance of `text` on one line.
++fn advance(text: &'static str) -> f32 {
++    let lines = lines(text, SoftHyphens::Break, None);
++    assert_eq!(lines.len(), 1, "{text:?}");
++    lines[0].1
++}
++
++fn widths(text: &'static str, soft_hyphens: SoftHyphens) -> ContentWidths {
++    build(&[Text(text)], &style(soft_hyphens), 1.).calculate_content_widths()
++}
++
++fn assert_close(a: f32, b: f32) {
++    assert!((a - b).abs() < 1e-3, "{a} != {b}");
++}
++
++// "aaa", a soft hyphen (2 bytes), "bbb".
++const WORD: &str = "aaa\u{AD}bbb";
++
++#[test]
++fn a_soft_hyphen_takes_up_no_room() {
++    assert_close(advance(WORD), advance("aaabbb"));
++}
++
++#[test]
++fn a_plain_break_after_a_soft_hyphen_has_no_hyphen() {
++    let aaa = advance("aaa");
++    let lines = lines(WORD, SoftHyphens::Break, Some(aaa + 1.));
++    assert_eq!(lines.len(), 2);
++    assert_eq!(lines[0].0, 0..5);
++    assert_close(lines[0].1, aaa);
++    assert_eq!(lines[0].2, 0.);
++    assert_eq!(lines[1].2, 0.);
++}
++
++#[test]
++fn a_line_broken_after_a_soft_hyphen_ends_with_the_hyphen() {
++    let (aaa, bbb) = (advance("aaa"), advance("bbb"));
++    // The hyphen just fits.
++    let lines = lines(WORD, SoftHyphens::Hyphen(7.), Some(aaa + 7.));
++    assert_eq!(lines.len(), 2);
++    assert_eq!(lines[0].0, 0..5);
++    assert_close(lines[0].1, aaa + 7.);
++    assert_eq!(lines[0].2, 7.);
++    // The line after has none: it does not end at a soft hyphen.
++    assert_close(lines[1].1, bbb);
++    assert_eq!(lines[1].2, 0.);
++}
++
++#[test]
++fn a_line_that_is_not_broken_after_its_soft_hyphen_has_no_hyphen() {
++    let lines = lines(WORD, SoftHyphens::Hyphen(7.), None);
++    assert_eq!(lines.len(), 1);
++    assert_close(lines[0].1, advance("aaabbb"));
++    assert_eq!(lines[0].2, 0.);
++
++    // Broken at a later opportunity.
++    let text = "aaa\u{AD}bbb ccc";
++    let lines = self::lines(text, SoftHyphens::Hyphen(7.), Some(advance("aaabbb ") + 1.));
++    assert_eq!(lines.len(), 2);
++    assert_eq!(lines[0].0, 0..9);
++    assert_close(lines[0].1, advance("aaabbb "));
++    assert_eq!(lines[0].2, 0.);
++}
++
++#[test]
++fn a_hyphen_that_does_not_fit_leaves_the_break_to_an_earlier_opportunity() {
++    let text = "aaaa aa\u{AD}bb";
++    let max = advance("aaaa aa") + 6.;
++    assert!(advance("aabb") < max);
++    let hyphenated = lines(text, SoftHyphens::Hyphen(7.), Some(max));
++    assert_eq!(hyphenated.len(), 2);
++    assert_eq!(hyphenated[0].0, 0..5);
++    assert_eq!(hyphenated[0].2, 0.);
++    assert_eq!(hyphenated[1].2, 0.);
++
++    // Without a hyphen the break is after the soft hyphen.
++    let plain = lines(text, SoftHyphens::Break, Some(max));
++    assert_eq!(plain[0].0, 0..9);
++
++    // A hyphen that takes up exactly what is left fits.
++    let fits = lines(text, SoftHyphens::Hyphen(6.), Some(max));
++    assert_eq!(fits[0].0, 0..9);
++    assert_eq!(fits[0].2, 6.);
++}
++
++#[test]
++fn a_hyphen_that_does_not_fit_overflows_a_line_without_another_opportunity() {
++    let aaa = advance("aaa");
++    let lines = lines(WORD, SoftHyphens::Hyphen(7.), Some(aaa + 6.));
++    assert_eq!(lines.len(), 2);
++    assert_eq!(lines[0].0, 0..5);
++    assert_close(lines[0].1, aaa + 7.);
++    assert_eq!(lines[0].2, 7.);
++}
++
++#[test]
++fn a_soft_hyphen_without_an_opportunity_does_not_break() {
++    let aaa = advance("aaa");
++    let unbroken = lines(WORD, SoftHyphens::NoBreak, Some(aaa + 1.));
++    assert_eq!(unbroken.len(), 1);
++
++    // The opportunities elsewhere are as they were.
++    let text = "aa aaa\u{AD}bbb";
++    let spaced = lines(text, SoftHyphens::NoBreak, Some(advance("aa aaa") + 1.));
++    assert_eq!(spaced.len(), 2);
++    assert_eq!(spaced[0].0, 0..3);
++
++    // An emergency break can still be taken there, without a hyphen.
++    let style = TextStyle {
++        overflow_wrap: OverflowWrap::Anywhere,
++        ..style(SoftHyphens::NoBreak)
++    };
++    let emergency = lines_of(&[Text(WORD)], &style, Some(aaa + 1.));
++    assert_eq!(emergency[0].0, 0..5);
++    assert!(emergency.iter().all(|line| line.2 == 0.));
++}
++
++#[test]
++fn the_hyphen_is_scaled() {
++    let mut layout = build(&[Text(WORD)], &style(SoftHyphens::Hyphen(7.)), 2.);
++    layout.break_all_lines(Some(2. * advance("aaa") + 14.));
++    let line = layout.lines().next().unwrap();
++    assert_eq!(line.metrics().hyphen_advance, 14.);
++    assert_eq!(layout.len(), 2);
++    // One that fit unscaled does not when only the layout is.
++    let mut layout = build(&[Text(WORD)], &style(SoftHyphens::Hyphen(7.)), 1.);
++    layout.break_all_lines(Some(advance("aaa") + 14.));
++    assert_eq!(layout.lines().next().unwrap().metrics().hyphen_advance, 7.);
++}
++
++#[test]
++fn content_widths_count_the_hyphen() {
++    let (aaaa, bb, whole) = (advance("aaaa"), advance("bb"), advance("aaaabb"));
++    let text = "aaaa\u{AD}bb";
++    assert!(aaaa > bb + 7.);
++
++    let plain = widths(text, SoftHyphens::Break);
++    assert_close(plain.min, aaaa);
++    assert_close(plain.max, whole);
++
++    let hyphenated = widths(text, SoftHyphens::Hyphen(7.));
++    assert_close(hyphenated.min, aaaa + 7.);
++    assert_close(hyphenated.max, whole);
++
++    let unbroken = widths(text, SoftHyphens::NoBreak);
++    assert_close(unbroken.min, whole);
++    assert_close(unbroken.max, whole);
++
++    // The fragment after the soft hyphen has no hyphen.
++    let text = "aa\u{AD}bbbb";
++    let hyphenated = widths(text, SoftHyphens::Hyphen(7.));
++    assert_close(hyphenated.min, advance("bbbb"));
++
++    // A fragment that an outdent keeps from ending has none either.
++    let outdented = |soft_hyphens| {
++        let mut layout = build(&[Text("aa\u{AD}bbbb")], &style(soft_hyphens), 1.);
++        layout.set_text_indent(-(advance("aa") + 5.), IndentOptions::default());
++        layout.calculate_content_widths()
++    };
++    let plain = outdented(SoftHyphens::Break).min;
++    assert!(plain > 0.);
++    assert_close(outdented(SoftHyphens::Hyphen(7.)).min, plain);
++
++    // An emergency break is plain.
++    let style = TextStyle {
++        overflow_wrap: OverflowWrap::Anywhere,
++        ..style(SoftHyphens::NoBreak)
++    };
++    let emergency = build(&[Text(WORD)], &style, 1.).calculate_content_widths();
++    assert!(emergency.min < advance("aa"));
++}
++
++#[test]
++fn a_start_edge_takes_the_opportunity_after_a_soft_hyphen_with_the_hyphen() {
++    let (aaa, bbb) = (advance("aaa"), advance("bbb"));
++    let pieces = [
++        Text("aaa\u{AD}"),
++        Box(InlineBoxKind::StartEdge, 5.),
++        Text("bbb"),
++        Box(InlineBoxKind::EndEdge, 5.),
++    ];
++    let hyphenated = style(SoftHyphens::Hyphen(7.));
++    let lines = lines_of(&pieces, &hyphenated, Some(aaa + 8.));
++    assert_eq!(lines.len(), 2);
++    assert_eq!(lines[0].0, 0..5);
++    assert_close(lines[0].1, aaa + 7.);
++    assert_eq!(lines[0].2, 7.);
++    assert_close(lines[1].1, bbb + 10.);
++
++    let widths = build(&pieces, &hyphenated, 1.).calculate_content_widths();
++    assert_close(widths.min, (aaa + 7.).max(bbb + 10.));
++
++    // There is none to take where the soft hyphen has none.
++    let unbroken = style(SoftHyphens::NoBreak);
++    assert_eq!(lines_of(&pieces, &unbroken, Some(aaa + 8.)).len(), 1);
++    let widths = build(&pieces, &unbroken, 1.).calculate_content_widths();
++    assert_close(widths.min, aaa + bbb + 10.);
++}
++
++#[test]
++fn an_end_edge_keeps_the_soft_hyphen_before_it() {
++    let (aaa, bbb) = (advance("aaa"), advance("bbb"));
++    let pieces = [
++        Box(InlineBoxKind::StartEdge, 5.),
++        Text("aaa\u{AD}"),
++        Box(InlineBoxKind::EndEdge, 5.),
++        Text("bbb"),
++    ];
++    let hyphenated = style(SoftHyphens::Hyphen(7.));
++    let lines = lines_of(&pieces, &hyphenated, Some(aaa + 18.));
++    assert_eq!(lines.len(), 2);
++    assert_close(lines[0].1, aaa + 17.);
++    assert_eq!(lines[0].2, 7.);
++    assert_close(lines[1].1, bbb);
++
++    let widths = build(&pieces, &hyphenated, 1.).calculate_content_widths();
++    assert_close(widths.min, aaa + 17.);
++}
++
++#[test]
++fn the_opportunities_beside_an_inline_object_are_its_own() {
++    let (aaa, bbb) = (advance("aaa"), advance("bbb"));
++    let pieces = [
++        Text("aaa\u{AD}"),
++        Box(InlineBoxKind::InFlow, 40.),
++        Text("bbb"),
++    ];
++    for soft_hyphens in [SoftHyphens::Hyphen(7.), SoftHyphens::NoBreak] {
++        let style = style(soft_hyphens);
++        let lines = lines_of(&pieces, &style, Some(aaa + 8.));
++        assert_eq!(lines.len(), 3, "{soft_hyphens:?}");
++        assert_close(lines[0].1, aaa);
++        assert_close(lines[1].1, 40.);
++        assert_close(lines[2].1, bbb);
++        assert!(lines.iter().all(|line| line.2 == 0.), "{soft_hyphens:?}");
++
++        let widths = build(&pieces, &style, 1.).calculate_content_widths();
++        assert_close(widths.min, aaa.max(40.).max(bbb));
++    }
++}
++
++#[test]
++fn in_a_right_to_left_paragraph_the_hyphen_is_left_of_the_items() {
++    // Three letters, a soft hyphen, three letters.
++    let text = "\u{628}\u{628}\u{628}\u{AD}\u{62A}\u{62A}\u{62A}";
++    let first = advance("\u{628}\u{628}\u{628}");
++    let first_run = |soft_hyphens| {
++        let mut layout = build(&[Text(text)], &style(soft_hyphens), 1.);
++        layout.break_all_lines(Some(first + 8.));
++        assert_eq!(layout.len(), 2);
++        let line = layout.lines().next().unwrap();
++        let x = line
++            .items()
++            .find_map(|item| match item {
++                PositionedLayoutItem::GlyphRun(run) => Some(run.offset()),
++                PositionedLayoutItem::InlineBox(_) => None,
++            })
++            .unwrap();
++        (x, line.metrics().advance, line.metrics().hyphen_advance)
++    };
++    let (plain_x, plain_advance, _) = first_run(SoftHyphens::Break);
++    let (x, advance, hyphen) = first_run(SoftHyphens::Hyphen(7.));
++    assert_eq!(hyphen, 7.);
++    assert_close(advance, plain_advance + 7.);
++    // The items end at the right edge either way.
++    assert_close(x, plain_x);
++    assert!(x > 7.);
++}
+diff --git a/parley_engine/src/shape/data.rs b/parley_engine/src/shape/data.rs
+index 03897fe432a4af429d1af5ccfc12fff1536dcd91..779a71908c296b7455a37f8b51b8f6642e7b8fb5 100644
+--- a/parley_engine/src/shape/data.rs
++++ b/parley_engine/src/shape/data.rs
+@@ -56,6 +56,8 @@ impl ShapedClusterFlags {
+     const SAFE_TO_CONCAT_BEFORE: u32 = 1 << 16;
+     /// Whether the cluster's first character is default ignorable.
+     const DEFAULT_IGNORABLE: u32 = 1 << 17;
++    /// machopo: whether the cluster's first character is a soft hyphen (U+00AD).
++    const SOFT_HYPHEN: u32 = 1 << 18;
+ 
+     #[inline(always)]
+     pub(crate) const fn new(glyph_len: u8) -> Self {
+@@ -117,11 +119,23 @@ impl ShapedClusterFlags {
+         self
+     }
+ 
++    /// machopo: see [`Self::SOFT_HYPHEN`].
++    #[inline(always)]
++    pub(crate) const fn with_soft_hyphen(mut self, set: bool) -> Self {
++        self.0 = self.0 & !Self::SOFT_HYPHEN | if set { Self::SOFT_HYPHEN } else { 0 };
++        self
++    }
++
+     #[inline(always)]
+     const fn is_soft_wrap_opportunity_before(self) -> bool {
+         self.0 & Self::SOFT_WRAP_BEFORE != 0
+     }
+ 
++    #[inline(always)]
++    const fn is_soft_hyphen(self) -> bool {
++        self.0 & Self::SOFT_HYPHEN != 0
++    }
++
+     #[inline(always)]
+     const fn whitespace(self) -> Whitespace {
+         Whitespace::from_u8(((self.0 & Self::WHITESPACE_MASK) >> Self::WHITESPACE_SHIFT) as u8)
+@@ -269,6 +283,13 @@ impl ShapedCluster {
+         self.flags.is_soft_wrap_opportunity_before()
+     }
+ 
++    /// machopo: whether this cluster's first character is a soft hyphen (U+00AD), cached like
++    /// [`Self::is_soft_wrap_opportunity_before`].
++    #[inline(always)]
++    pub fn is_soft_hyphen(self) -> bool {
++        self.flags.is_soft_hyphen()
++    }
++
+     /// The [`Whitespace`] class of this cluster's first character.
+     ///
+     /// Cached here so that measuring text does not need to read the character array.
+@@ -337,6 +358,9 @@ impl CharacterFlags {
+     const INLINE_OBJECT: u8 = 1 << 5;
+     /// Whether the character has the `Default_Ignorable_Code_Point` unicode property.
+     const DEFAULT_IGNORABLE: u8 = 1 << 6;
++    /// machopo: whether the source character is a soft hyphen (U+00AD), whose line-breaking
++    /// opportunity (after it) a line breaker may take only with a hyphen, or not at all.
++    const SOFT_HYPHEN: u8 = 1 << 7;
+ 
+     #[inline(always)]
+     pub(crate) fn new(
+@@ -369,6 +393,11 @@ impl CharacterFlags {
+                     Self::DEFAULT_IGNORABLE
+                 } else {
+                     0
++                }
++                | if source_char == '\u{AD}' {
++                    Self::SOFT_HYPHEN
++                } else {
++                    0
+                 },
+         )
+     }
+@@ -406,6 +435,12 @@ impl CharacterFlags {
+         self.0 & Self::DEFAULT_IGNORABLE != 0
+     }
+ 
++    /// machopo: returns if the character is a soft hyphen (U+00AD).
++    #[inline(always)]
++    pub fn is_soft_hyphen(self) -> bool {
++        self.0 & Self::SOFT_HYPHEN != 0
++    }
++
+     /// Returns these flags, marking whether the character stands in for an inline object.
+     #[inline(always)]
+     #[must_use]
+@@ -453,6 +488,7 @@ mod tests {
+             ('\u{2028}', 3, false),
+             ('\u{2600}', 3, true),
+             ('\u{1F600}', 4, true),
++            ('\u{AD}', 2, false),
+         ] {
+             for bits in 0..8_u8 {
+                 let is_word_boundary = bits & 1 != 0;
+@@ -466,6 +502,7 @@ mod tests {
+                 );
+                 assert_eq!(flags.len_utf8(), len, "{ch:?}");
+                 assert_eq!(flags.is_emoji(), emoji, "{ch:?}");
++                assert_eq!(flags.is_soft_hyphen(), ch == '\u{AD}', "{ch:?}");
+                 assert_eq!(flags.is_word_boundary(), is_word_boundary, "{ch:?}");
+                 assert_eq!(
+                     flags.is_soft_wrap_opportunity(),
+@@ -504,8 +541,10 @@ mod tests {
+                 for default_ignorable in [false, true] {
+                     let flags = ShapedClusterFlags::new(3)
+                         .with_grapheme_start(true)
+-                        .with_first_char(soft_wrap, whitespace, default_ignorable);
++                        .with_first_char(soft_wrap, whitespace, default_ignorable)
++                        .with_soft_hyphen(!soft_wrap);
+                     assert_eq!(flags.is_soft_wrap_opportunity_before(), soft_wrap);
++                    assert_eq!(flags.is_soft_hyphen(), !soft_wrap);
+                     assert_eq!(flags.whitespace(), whitespace);
+                     assert_eq!(flags.is_default_ignorable(), default_ignorable);
+                     assert_eq!(flags.glyph_len(), 3);
+diff --git a/parley_engine/src/shape/shaped_text.rs b/parley_engine/src/shape/shaped_text.rs
+index 99e81301f838fdde018f56c8b8bbb9d6d49bbf86..d559b6d06a66c69cadb32ceea69126dfbf2d46a0 100644
+--- a/parley_engine/src/shape/shaped_text.rs
++++ b/parley_engine/src/shape/shaped_text.rs
+@@ -583,7 +583,8 @@ fn process_shaped_clusters<'a>(
+                     first_character.flags.is_soft_wrap_opportunity(),
+                     first_character.whitespace,
+                     first_character.flags.is_default_ignorable(),
+-                ),
++                )
++                .with_soft_hyphen(first_character.flags.is_soft_hyphen()),
+             glyph_offset,
+             advance,
+         });

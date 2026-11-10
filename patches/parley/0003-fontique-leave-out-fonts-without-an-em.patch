@@ -1,0 +1,99 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wu Yuwei <yuweiwu@pm.me>
+Date: Tue, 10 Nov 2026 07:43:45 +0900
+Subject: [PATCH] fontique: leave out fonts without an em
+
+---
+ fontique/src/font.rs                     |  7 ++++
+ parley/src/tests/mod.rs                  |  1 +
+ parley/src/tests/test_font_without_em.rs | 52 ++++++++++++++++++++++++
+ 3 files changed, 60 insertions(+)
+ create mode 100644 parley/src/tests/test_font_without_em.rs
+
+diff --git a/fontique/src/font.rs b/fontique/src/font.rs
+index bec6c94c58f94901179b0e1a9856afbc76e133d0..4d5030cf1d94f40b7f5812abcd66d22e4b30b347 100644
+--- a/fontique/src/font.rs
++++ b/fontique/src/font.rs
+@@ -222,6 +222,13 @@ impl FontInfo {
+         // It's probably not useful to retain fonts that don't have
+         // a valid cmap so just bail here if we fail.
+         let charmap_index = CharmapIndex::new(font)?;
++        // machopo: nor fonts without an em to scale their glyphs by: an Apple
++        // bitmap font has `bhed` for `head` (macOS's GB18030 Bitmap), and
++        // its em of 0 units would put its glyphs at NaN. Text falls back
++        // as if it weren't there (OTS rejects such a web font too).
++        if font.head().map_or(true, |head| head.units_per_em() == 0) {
++            return None;
++        }
+         let (width, style, weight) = read_attributes(font);
+         let (axes, attr_axes) = if let Ok(fvar_axes) = font.fvar().and_then(|fvar| fvar.axes()) {
+             let mut axes = SmallVec::<[AxisInfo; 1]>::with_capacity(fvar_axes.len());
+diff --git a/parley/src/tests/mod.rs b/parley/src/tests/mod.rs
+index 6d33ade82a79d4445e97607473230fd6d197dffe..2d3694c8cb5330181d38affa45e349e64fb68d95 100644
+--- a/parley/src/tests/mod.rs
++++ b/parley/src/tests/mod.rs
+@@ -5,5 +5,6 @@ mod test_analysis;
+ mod test_builders;
+ mod test_edges;
+ mod test_final_break;
++mod test_font_without_em;
+ mod test_style_metrics;
+ mod utils;
+diff --git a/parley/src/tests/test_font_without_em.rs b/parley/src/tests/test_font_without_em.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..ab2ca683d74190529eead1c889ce1abef4bea116
+--- /dev/null
++++ b/parley/src/tests/test_font_without_em.rs
+@@ -0,0 +1,52 @@
++// Copyright 2026 the Parley Authors
++// SPDX-License-Identifier: Apache-2.0 OR MIT
++
++//! machopo: a font without an em is left out of a collection.
++
++use std::{sync::Arc, vec::Vec};
++
++use fontique::{Blob, Collection, CollectionOptions};
++
++/// A test font's data, its `head` table's `unitsPerEm` set to `units_per_em` if given.
++fn font_data(units_per_em: Option<u16>) -> Vec<u8> {
++    let path = parley_dev::font_dirs()
++        .flat_map(|dir| std::fs::read_dir(dir).unwrap())
++        .map(|entry| entry.unwrap().path())
++        .find(|path| path.extension().is_some_and(|ext| ext == "ttf"))
++        .unwrap();
++    let mut data = std::fs::read(path).unwrap();
++    if let Some(units_per_em) = units_per_em {
++        // The table directory: 16-byte records after the 12-byte header, of a tag, a checksum,
++        // an offset and a length.
++        let num_tables = usize::from(u16::from_be_bytes([data[4], data[5]]));
++        let record = (0..num_tables)
++            .map(|i| 12 + i * 16)
++            .find(|&record| &data[record..record + 4] == b"head")
++            .unwrap();
++        let offset = u32::from_be_bytes(data[record + 8..record + 12].try_into().unwrap());
++        // `unitsPerEm` is 18 bytes into `head`.
++        let at = offset as usize + 18;
++        data[at..at + 2].copy_from_slice(&units_per_em.to_be_bytes());
++    }
++    data
++}
++
++fn registered(data: Vec<u8>) -> usize {
++    let mut collection = Collection::new(CollectionOptions {
++        shared: false,
++        system_fonts: false,
++    });
++    collection
++        .register_fonts(Blob::new(Arc::new(data)), None)
++        .iter()
++        .map(|(_, fonts)| fonts.len())
++        .sum()
++}
++
++#[test]
++fn a_font_without_an_em_is_left_out() {
++    assert_eq!(registered(font_data(None)), 1);
++    // Patching the font is not what leaves it out.
++    assert_eq!(registered(font_data(Some(1000))), 1);
++    assert_eq!(registered(font_data(Some(0))), 0);
++}

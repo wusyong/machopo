@@ -1,81 +1,36 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Wu Yuwei <yuweiwu@pm.me>
-Date: Sat, 24 Oct 2026 13:08:41 +0900
-Subject: [PATCH] Shape text a word at a time
+Date: Tue, 10 Nov 2026 07:43:47 +0900
+Subject: [PATCH] Keep shapings: of layouts alike, and of words
 
-Selecting fonts and shaping are most of the time text takes, and text is
-mostly the same words again (Speedometer's long text has 39,003 words,
-9,917 of them distinct). The shaper now splits a segment before and
-after each space and keeps what shaping a word of up to 32 characters
-gave: its fonts and harfrust's glyphs, by its text, the font selection
-style of each character, the script and the item's options. A word kept
-is taken without selecting fonts or shaping, and words of one font are
-put together into one run converted as a run shaped whole is, so the
-result is the same, bit for bit (a debug build shapes every such layout
-whole too and compares).
-
-Only where shaping a word on its own gives what shaping the segment
-whole does: left to right, not Arabic or Syriac, without features that
-are off by default, and with fonts whose rules take a space with the
-glyph beside it at most (space.rs, as Gecko's
-CheckForFeaturesInvolvingSpace). Where a word starts or ends with a
-glyph such a rule takes beside a space, the words around it are shaped
-again as one; a font whose rules reach further shapes the segment whole.
-
-Up to 2^15 words, then the cache starts again with the ids of options
-and font styles. LayoutContext::clear_shapings forgets the words and the
-kept shapings, for fonts added. fontique's SourceCache keeps a font it
-prunes weakly, so loading it again while a kept word holds it gives the
-same blob, and the same font to the runs put together.
 ---
- README.kun.md                          |    7 +-
  fontique/src/source_cache.rs           |   64 +-
- parley/src/context.rs                  |   29 +
- parley/src/shape/cache.rs              |   60 +-
- parley/src/shape/mod.rs                |   62 +-
+ parley/src/builder.rs                  |    2 +
+ parley/src/context.rs                  |   38 +
+ parley/src/shape/cache.rs              |  275 ++++++
+ parley/src/shape/mod.rs                |  130 ++-
+ parley/src/tests/mod.rs                |    1 +
+ parley/src/tests/test_shape_cache.rs   |  307 +++++++
  parley_engine/src/shape/mod.rs         |    4 +
- parley_engine/src/shape/shaped_text.rs |  102 ++-
- parley_engine/src/shape/shaper.rs      |  738 ++++++++++++++--
- parley_engine/src/shape/space.rs       | 1085 ++++++++++++++++++++++++
- parley_engine/src/shape/words.rs       |  232 +++++
- 10 files changed, 2272 insertions(+), 111 deletions(-)
+ parley_engine/src/shape/shaped_text.rs |  134 ++-
+ parley_engine/src/shape/shaper.rs      |  837 +++++++++++++++--
+ parley_engine/src/shape/space.rs       | 1148 ++++++++++++++++++++++++
+ parley_engine/src/shape/words.rs       |  235 +++++
+ 12 files changed, 3045 insertions(+), 130 deletions(-)
+ create mode 100644 parley/src/shape/cache.rs
+ create mode 100644 parley/src/tests/test_shape_cache.rs
  create mode 100644 parley_engine/src/shape/space.rs
  create mode 100644 parley_engine/src/shape/words.rs
 
-diff --git a/README.kun.md b/README.kun.md
-index 5f5f9921d9e202ca7dbca45302db7fdda439974b..2860ad3077cd4bf4033bd3d6ec5c098066bebbac 100644
---- a/README.kun.md
-+++ b/README.kun.md
-@@ -46,6 +46,7 @@ The commits on `kun` after upstream's:
- | Break lines after soft hyphens with a hyphen | `StyleProperty::SoftHyphens` (`SoftHyphens`; `TextStyle::soft_hyphens`, `Break` by default: the opportunity after a soft hyphen is like any other and nothing is drawn, as upstream has it): CSS `hyphens`, `NoBreak` for `none` (an emergency opportunity at most, as `overflow-wrap` gives one) and `Hyphen(advance)` for the others, with the advance of the hyphen the embedder shapes and draws. The line breaker takes the opportunity after a soft hyphen (`CharacterFlags::is_soft_hyphen`, cached as `ShapedCluster::is_soft_hyphen` in `parley_engine`) as its style has it, an inline's start edge taking it too (an atomic inline's own opportunities are its own): with the hyphen at the line's end where it fits, or where the line has no opportunity before it; `LineMetrics::hyphen_advance` is then the part of the line's `advance` that is the hyphen, and in an RTL paragraph the line's items leave room for it on the left of `offset`. The min/max-content measurer counts the hyphen at the end of the fragment it ends. Marked `kun:` in `style/mod.rs`, `resolve/mod.rs`, `layout/mod.rs`, `layout/line.rs`, `layout/line_break.rs`, `layout/data.rs`, `layout/alignment.rs` and `parley_engine`'s `shape/data.rs` and `shape/shaped_text.rs`. |
- | Share a layout's shaped text | `Layout::shaped_text`: a layout's `ShapedText` (re-exported) is an `Arc`, which what the embedder keeps of a layout holds, so it outlives the layout and is never changed under it: rebuilding the layout takes a new one where the old is held (`LayoutData::clear`), and breaking the lines copies it before changing a tab's advance where it is held (`Arc::make_mut`; a layout with tabs whose stops move pays one copy when its shaping is also kept). The kept shapings share it with their layouts instead of copying it, and a layout that takes one copies it only when its characters are styled otherwise. `GlyphRun::span` (`GlyphSpan`): where a glyph run's glyphs are in the shaped text (its shaped run and clusters), its direction and its line's spacing (`EffectiveSpacing`, now `PartialEq`), and `GlyphSpan::glyphs` walks them from the shaped text alone, as `GlyphRun::glyphs` does (`Glyphs`, which both use). kun keeps a line's runs as spans into the paragraph's shaped text instead of copying their glyphs (Blink's `ShapeResultView`). Marked `kun:` in `layout/data.rs`, `layout/layout.rs`, `layout/line.rs`, `layout/line_break.rs`, `layout/mod.rs`, `layout/spacing.rs`, `shape/mod.rs` (where it was), `shape/cache.rs` (likewise) and the tests' `canonicalize_layout_data`. |
- | Walk a glyph run's clusters from its span | `GlyphSpan::clusters` (`SpanCluster`): the clusters `Run::visual_clusters` gives of the glyph run's style on its line (glyphs or not, a newline's too: the span keeps the run's clusters on the line and the style), their text and advance with the line's spacing, from the shaped text alone; `GlyphSpan::text_range`: where their text starts (the visually first) and how far it reaches, from the characters alone, without walking the clusters. `Run`'s `Clusters` and `GlyphSpan::clusters` walk the same graphemes with their atoms (`AtomGraphemes`, out of `Clusters`). kun works a run's clusters out from its span only when asked (selection, hit testing, `text-overflow`), not for every line it lays out. Marked `kun:` in `layout/line.rs`, `layout/run.rs` and `layout/mod.rs`. |
-+| Shape text a word at a time | `Shaper` shapes a segment a word at a time and keeps what shaping a word gave (`shape/words.rs`, `Words`): text is split before each space and after it, where a grapheme starts, and a word of up to 32 characters is kept by its text, an id for what font selection takes from each character's style (`FontSelector::font_style`, which parley's selector gives from `ShapeCache::font_styles`: the font stack, width, weight and style), the segment's script and the item's options. A word kept takes its fonts and harfrust's glyphs (in font units, clusters from the start of each run of one font) without selecting fonts or shaping; words of one font are put together into one `ShapedRun`, converted as a run shaped whole is (`push_run` takes harfrust's glyphs from either, `HarfGlyph`), so the result is the same, bit for bit. Only where shaping a word on its own gives what shaping the segment whole does: left to right, not Arabic or Syriac (harfrust's Arabic shaper looks at the text around a run), without features that are off unless asked for (`dlig`, `ss01`, ...), and with fonts whose rules take a space with the glyph beside it at most (`shape/space.rs`, `space_reach`: a lookup of a feature that may be on matching the space with the glyph before it or a glyph after it that can be other than a mark, a `kern` pair with it, or AAT tables; Gecko's `gfxFont::CheckForFeaturesInvolvingSpace` does the like for the whole font through HarfBuzz's `collect_glyphs`, which harfrust lacks). Such a font (`SpaceReach::Beside`) has the glyphs its rules of two take beside a space told apart, with what substitutions may make of them, positioning's apart from substitutions'; where a word ends or starts with one of them beside a space, `WordRuns` shapes the words around the space again as one: the word on that side for positioning, the words on both sides for a substitution (what it makes of the space may be shaped with the other side too), and the words on both sides of a space after a grapheme of several characters where a lookup skips marks (the `kern` table always does). The words shaped again as one aren't kept. A font whose rules reach further (`SpaceReach::Across`: a rule of three with a space, class 0 of a pair, a lookup skipping base glyphs, cursive attachment, a space as a mark, AAT, over 256 glyphs on a side) shapes the segment whole again (`ShapedText::truncate`). Arial and Times New Roman kern a few letters with a space and are shaped a word at a time; Calibri and Lato have a `calt` reaching across one. Up to 2^15 words, then the cache starts again; the ids of options and of font styles (2^12 each) start again with it. `LayoutContext::clear_shapings` forgets the words and the kept shapings, for fonts added. In a debug build every layout that took or kept a word is also shaped whole and compared (`same_shaping`); a new font selector sets its query's attributes, as the query may have shaped with another. Text is mostly the same words again (Speedometer's long text has 39,003 words, 9,917 of them distinct), and selecting fonts and shaping took most of the time text takes; Blink keeps whole runs of up to 30 characters (`NGShapeCache`), Gecko words (`gfxShapedWord`, after font selection). fontique's `SourceCache` keeps a font it prunes weakly, and loading it again while something still holds it takes the same blob: a kept word holds its font, and the font loaded again under another blob id is another font to the runs put together (`same_shaping` failed on a long text with many fonts). Marked `kun:` in `parley_engine`'s `shape/shaper.rs`, `shape/shaped_text.rs` and `shape/mod.rs`, in parley's `shape/mod.rs`, `shape/cache.rs` and `context.rs`, and in fontique's `source_cache.rs`. |
- | Add README.kun.md | This file. |
- 
- Their tests are in kun: `cargo test -p layout --test it parley_inline_box::`,
-@@ -64,7 +65,11 @@ taken for a layout without it); for the soft hyphens
- `inline::the_measured_min_content_width_counts_the_hyphen`, and WPT's
- `css/css-text/hyphens/` (the ones kun runs); for the shared shaped text
- `parley_shaped_text::` (and every text layout test: kun's fragments take
--their glyphs and clusters from the spans).
-+their glyphs and clusters from the spans); for the words `parley_words::`,
-+`parley_space::` (fonts made with a rule or two each, by `write-fonts`)
-+and `shaping::adding_fonts_forgets_what_shaping_gave` (and every layout
-+test in Ahem, in a debug build), and for the fonts pruned fontique's own
-+`source_cache::tests`, run in this repository.
- Each part of the changes was removed in turn to check that a test fails.
- 
- The vendored copy also trimmed the workspace (no `parley_dev`, upstream's
 diff --git a/fontique/src/source_cache.rs b/fontique/src/source_cache.rs
-index db8e5b729059a24c1a769e6151712fd81ac505ed..ce31745701c9c06baa32f5f4d16221f8ce812d2b 100644
+index 03f893cd3c556940411cbe271b157a28d630e4a4..f67bae0a59563df72f2652cd8b08c08b500b897d 100644
 --- a/fontique/src/source_cache.rs
 +++ b/fontique/src/source_cache.rs
 @@ -42,6 +42,12 @@ pub struct SourceCache {
      serial: u64,
      #[cfg(feature = "std")]
      shared: Option<Arc<Mutex<Shared>>>,
-+    /// kun: the blobs pruned, while something else still holds them: loading
++    /// machopo: the blobs pruned, while something else still holds them: loading
 +    /// one again takes the same blob, so the same font has one id (a
 +    /// shaping kept elsewhere holds its font, and one font in two copies
 +    /// is two fonts to whoever compares them by id) and one copy in memory.
@@ -104,7 +59,7 @@ index db8e5b729059a24c1a769e6151712fd81ac505ed..ce31745701c9c06baa32f5f4d16221f8
                  use hashbrown::hash_map::Entry as HashEntry;
                  match self.cache.entry(source.id()) {
                      HashEntry::Vacant(vacant) => {
-+                        // kun: a blob pruned that is still held.
++                        // machopo: a blob pruned that is still held.
 +                        if let Some(blob) = self
 +                            .pruned
 +                            .remove(&source.id())
@@ -124,7 +79,7 @@ index db8e5b729059a24c1a769e6151712fd81ac505ed..ce31745701c9c06baa32f5f4d16221f8
          #[cfg(feature = "std")]
          {
 -            self.cache.retain(|_, entry| match entry {
-+            // kun: what is pruned is kept weakly; what no one holds is let go.
++            // machopo: what is pruned is kept weakly; what no one holds is let go.
 +            self.pruned.retain(|_, weak| weak.upgrade().is_some());
 +            self.cache.retain(|id, entry| match entry {
                  Entry::Failed => !prune_failed,
@@ -144,7 +99,7 @@ index db8e5b729059a24c1a769e6151712fd81ac505ed..ce31745701c9c06baa32f5f4d16221f8
      Some(Blob::new(Arc::new(mapped)))
  }
 +
-+// kun: pruning keeps a font that is still held.
++// machopo: pruning keeps a font that is still held.
 +#[cfg(all(test, feature = "std"))]
 +mod tests {
 +    use super::*;
@@ -175,29 +130,61 @@ index db8e5b729059a24c1a769e6151712fd81ac505ed..ce31745701c9c06baa32f5f4d16221f8
 +        assert_ne!(cache.get(&source).unwrap().id(), id);
 +    }
 +}
-diff --git a/parley/src/context.rs b/parley/src/context.rs
-index cc0a3230dcf35c45525bbed66794f96238cf5b71..66f2abccb2d62006d4cfbe88bc4bff1f8593bd8a 100644
---- a/parley/src/context.rs
-+++ b/parley/src/context.rs
-@@ -73,6 +73,35 @@ impl<B: Brush> LayoutContext<B> {
-         self.shape_cache.reused
+diff --git a/parley/src/builder.rs b/parley/src/builder.rs
+index b894501e138f2cc272ea292594f59d288b22f0d4..d1ebd19b5966345bef4d2317d48d189d62107f95 100644
+--- a/parley/src/builder.rs
++++ b/parley/src/builder.rs
+@@ -505,6 +505,8 @@ fn build_into_layout<B: Brush>(
+             text,
+             layout,
+             &mut lcx.style_features,
++            // machopo: the shapings kept.
++            &mut lcx.shape_cache,
+         );
      }
  
-+    // kun: how many words were taken from those shaped before, and how many
+diff --git a/parley/src/context.rs b/parley/src/context.rs
+index 2642f745cd8ae064184dc07bdad3042e1d6de23c..34d3b775eee890a0a0558ac7a6b702d157f13b7a 100644
+--- a/parley/src/context.rs
++++ b/parley/src/context.rs
+@@ -45,6 +45,8 @@ pub struct LayoutContext<B: Brush = [u8; 4]> {
+     /// Style index for each character, parallel to [`Analysis::char_info`].
+     pub(crate) char_style_indices: Vec<u16>,
+     pub(crate) scx: Shaper,
++    // machopo: shapings kept for layouts alike.
++    pub(crate) shape_cache: super::shape::ShapeCache,
+ }
+ 
+ impl<B: Brush> LayoutContext<B> {
+@@ -64,9 +66,45 @@ impl<B: Brush> LayoutContext<B> {
+             tree_style_builder: TreeStyleBuilder::default(),
+             char_style_indices: vec![],
+             scx: Shaper::default(),
++            shape_cache: super::shape::ShapeCache::default(),
+         }
+     }
+ 
++    // machopo: how many layouts took the shaping of one alike, for tests.
++    #[doc(hidden)]
++    pub fn shapings_reused(&self) -> usize {
++        self.shape_cache.reused
++    }
++
++    // machopo: how many words were taken from those shaped before, and how many
 +    // were shaped and kept, for tests.
 +    #[doc(hidden)]
 +    pub fn words_reused_and_shaped(&self) -> (usize, usize) {
 +        self.scx.words_reused_and_shaped()
 +    }
 +
-+    // kun: how many times two words were shaped again as one, a space and the
++    // machopo: how many times two words were shaped again as one, a space and the
 +    // glyph beside it shaped together, for tests.
 +    #[doc(hidden)]
 +    pub fn words_joined(&self) -> usize {
 +        self.scx.words_joined()
 +    }
 +
-+    // kun: whether text is shaped a word at a time where that gives what
++    // machopo: whether text is shaped a word at a time where that gives what
 +    // shaping it whole does (it is unless turned off), for tests that compare
 +    // the two.
 +    #[doc(hidden)]
@@ -205,7 +192,7 @@ index cc0a3230dcf35c45525bbed66794f96238cf5b71..66f2abccb2d62006d4cfbe88bc4bff1f
 +        self.scx.set_shape_words(on);
 +    }
 +
-+    // kun: forgets the shapings kept, as fonts were added to the font
++    // machopo: forgets the shapings kept, as fonts were added to the font
 +    // context: font selection may pick others.
 +    #[doc(hidden)]
 +    pub fn clear_shapings(&mut self) {
@@ -216,32 +203,50 @@ index cc0a3230dcf35c45525bbed66794f96238cf5b71..66f2abccb2d62006d4cfbe88bc4bff1f
          &mut self,
          font_ctx: &mut FontContext,
 diff --git a/parley/src/shape/cache.rs b/parley/src/shape/cache.rs
-index 04c7117830e00c90d34fb48009e5cd1178cc2c7c..935e7ade391cb1be8ea1fc5b3848f5ddd802e530 100644
---- a/parley/src/shape/cache.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..afc7d00ac1650931b0c904ce6400a34725123f5f
+--- /dev/null
 +++ b/parley/src/shape/cache.rs
-@@ -17,7 +17,7 @@ use core::hash::{BuildHasher, Hash, Hasher};
- use fontique::{FamilyId, FontStyle, FontWeight, FontWidth};
- use hashbrown::HashMap;
- use parlance::BidiLevel;
--use parley_engine::{Analysis, CharInfo, ShapedText};
+@@ -0,0 +1,275 @@
++// Copyright 2026 the Parley Authors
++// SPDX-License-Identifier: Apache-2.0 OR MIT
++
++//! machopo: what shaping a layout's text gave, kept for the next layout with
++//! the same text, styled the same in what changes shaping, with its inline
++//! out-of-flow boxes in the same places and the same analysis: a browser shapes the
++//! same text again as content is built again, and alike text in alike
++//! elements (a list's items, a page's repeated parts). Its other styles
++//! (colors, decorations, line height, line breaking) may differ: each
++//! character takes the new layout's style.
++
++use alloc::boxed::Box;
++use alloc::sync::Arc;
++use alloc::vec::Vec;
++use core::hash::{BuildHasher, Hash, Hasher};
++
++use fontique::{FamilyId, FontStyle, FontWeight, FontWidth};
++use hashbrown::HashMap;
++use parlance::BidiLevel;
 +use parley_engine::{Analysis, CharInfo, ShapedText, Shaper};
- 
- use super::super::resolve::{ResolveContext, ResolvedStyle};
- use super::super::style::{Brush, FontFeature, FontVariation};
-@@ -27,6 +27,9 @@ use crate::inline_box::LayoutInlineBox;
- /// again.
- const CHARACTERS: usize = 1 << 18;
- 
++
++use super::super::resolve::{ResolveContext, ResolvedStyle};
++use super::super::style::{Brush, FontFeature, FontVariation};
++use crate::inline_box::LayoutInlineBox;
++
++/// How many characters of shaped text the cache keeps before it starts
++/// again.
++const CHARACTERS: usize = 1 << 18;
++
 +/// How many alike font styles get ids before the ids start again.
 +const FONT_STYLES: usize = 1 << 12;
 +
- /// Shaped texts by what they were shaped with.
- #[derive(Default)]
- pub(crate) struct ShapeCache {
-@@ -34,6 +37,18 @@ pub(crate) struct ShapeCache {
-     characters: usize,
-     /// How many layouts took a kept shaping (for tests).
-     pub(crate) reused: usize,
++/// Shaped texts by what they were shaped with.
++#[derive(Default)]
++pub(crate) struct ShapeCache {
++    entries: HashMap<u64, Vec<Entry>>,
++    characters: usize,
++    /// How many layouts took a kept shaping (for tests).
++    pub(crate) reused: usize,
 +    /// An id for each font style, which the shaper keeps words by.
 +    font_styles: HashMap<FontStyleKey, u32>,
 +}
@@ -254,13 +259,133 @@ index 04c7117830e00c90d34fb48009e5cd1178cc2c7c..935e7ade391cb1be8ea1fc5b3848f5dd
 +    width: u32,
 +    weight: u32,
 +    style: (u8, u32),
- }
- 
- /// What shaping a text depends on but the text.
-@@ -147,6 +162,49 @@ impl Entry {
- }
- 
- impl ShapeCache {
++}
++
++/// What shaping a text depends on but the text.
++#[derive(Clone, PartialEq)]
++struct RunStyle {
++    families: Vec<FamilyId>,
++    font_size: u32,
++    font_width: FontWidth,
++    font_style: FontStyle,
++    font_weight: FontWeight,
++    variations: Vec<FontVariation>,
++    features: Vec<FontFeature>,
++    locale: Option<parlance::Language>,
++    letter_spacing: u32,
++    word_spacing: u32,
++    optical_sizing: bool,
++}
++
++impl RunStyle {
++    fn of<B: Brush>(rcx: &ResolveContext, style: &ResolvedStyle<B>) -> Self {
++        Self {
++            families: rcx.stack(style.font_family).unwrap_or(&[]).to_vec(),
++            font_size: style.font_size.to_bits(),
++            font_width: style.font_width,
++            font_style: style.font_style,
++            font_weight: style.font_weight,
++            variations: rcx
++                .variations(style.font_variations)
++                .unwrap_or(&[])
++                .to_vec(),
++            features: rcx.features(style.font_features).unwrap_or(&[]).to_vec(),
++            locale: style.locale,
++            letter_spacing: style.letter_spacing.to_bits(),
++            word_spacing: style.word_spacing.to_bits(),
++            optical_sizing: style.optical_sizing,
++        }
++    }
++}
++
++/// A layout's text and what its shaping depends on.
++struct Entry {
++    text: Box<str>,
++    /// The layout's scale: shaping takes the font size without it too.
++    scale: u32,
++    /// Each run of characters styled alike: where it ends, and its style.
++    runs: Vec<(usize, RunStyle)>,
++    boxes: Vec<usize>,
++    char_info: Vec<CharInfo>,
++    bidi_levels: Vec<BidiLevel>,
++    paragraph_level: BidiLevel,
++    shaped: Arc<ShapedText>,
++}
++
++/// What a layout is shaped with, as `shape_text` has it.
++pub(crate) struct Key<'a> {
++    text: &'a str,
++    scale: u32,
++    runs: Vec<(usize, RunStyle)>,
++    boxes: Vec<usize>,
++    analysis: &'a Analysis,
++    hash: u64,
++}
++
++impl<'a> Key<'a> {
++    pub(crate) fn new<B: Brush>(
++        rcx: &ResolveContext,
++        styles: &[ResolvedStyle<B>],
++        inline_boxes: &[LayoutInlineBox],
++        analysis: &'a Analysis,
++        char_style_indices: &[u16],
++        text: &'a str,
++        scale: f32,
++        hasher: &impl BuildHasher,
++    ) -> Self {
++        let run_styles: Vec<RunStyle> = styles
++            .iter()
++            .map(|style| RunStyle::of(rcx, style))
++            .collect();
++        let mut runs: Vec<(usize, RunStyle)> = Vec::new();
++        for (i, &style_index) in char_style_indices.iter().enumerate() {
++            let style = &run_styles[usize::from(style_index)];
++            match runs.last_mut() {
++                Some((end, last)) if last == style => *end = i + 1,
++                _ => runs.push((i + 1, style.clone())),
++            }
++        }
++        // Shaping splits at the out-of-flow boxes; an inline object is a
++        // character of the text.
++        let boxes: Vec<usize> = inline_boxes
++            .iter()
++            .filter(|b| !b.is_inline_object())
++            .map(|b| b.inline_box.index)
++            .collect();
++        let scale = scale.to_bits();
++        let mut state = hasher.build_hasher();
++        text.hash(&mut state);
++        scale.hash(&mut state);
++        boxes.hash(&mut state);
++        for (end, style) in &runs {
++            end.hash(&mut state);
++            style.families.hash(&mut state);
++            style.font_size.hash(&mut state);
++        }
++        Self {
++            text,
++            scale,
++            runs,
++            boxes,
++            analysis,
++            hash: state.finish(),
++        }
++    }
++}
++
++impl Entry {
++    fn matches(&self, key: &Key<'_>) -> bool {
++        &*self.text == key.text
++            && self.scale == key.scale
++            && self.boxes == key.boxes
++            && self.runs == key.runs
++            && self.char_info == key.analysis.char_info()
++            && self.bidi_levels == key.analysis.bidi_levels()
++            && self.paragraph_level == key.analysis.paragraph_level()
++    }
++}
++
++impl ShapeCache {
 +    /// An id for what font selection takes from each of `styles`, the same
 +    /// for alike styles of every layout until `scx` forgets the words it
 +    /// shaped: it does when the ids start again.
@@ -304,97 +429,163 @@ index 04c7117830e00c90d34fb48009e5cd1178cc2c7c..935e7ade391cb1be8ea1fc5b3848f5dd
 +        scx.clear_words();
 +    }
 +
-     /// The hasher keys are made with.
-     pub(crate) fn hasher(&self) -> &impl BuildHasher {
-         self.entries.hasher()
++    /// The hasher keys are made with.
++    pub(crate) fn hasher(&self) -> &impl BuildHasher {
++        self.entries.hasher()
++    }
++
++    /// The shaping kept for `key`, if any.
++    pub(crate) fn get(&self, key: &Key<'_>) -> Option<&Arc<ShapedText>> {
++        self.entries
++            .get(&key.hash)?
++            .iter()
++            .find(|entry| entry.matches(key))
++            .map(|entry| &entry.shaped)
++    }
++
++    /// Keeps `shaped`, what shaping `key` gave.
++    pub(crate) fn insert(&mut self, key: Key<'_>, shaped: Arc<ShapedText>) {
++        let characters = key.analysis.char_info().len();
++        if self.characters + characters > CHARACTERS {
++            self.entries.clear();
++            self.characters = 0;
++        }
++        self.characters += characters;
++        self.entries.entry(key.hash).or_default().push(Entry {
++            text: key.text.into(),
++            scale: key.scale,
++            runs: key.runs,
++            boxes: key.boxes,
++            char_info: key.analysis.char_info().to_vec(),
++            bidi_levels: key.analysis.bidi_levels().to_vec(),
++            paragraph_level: key.analysis.paragraph_level(),
++            shaped,
++        });
++    }
++}
++
++/// Whether shapings `a` and `b` are the same, but for which loaded copy of
++/// a font file each holds: fontique loads a file again once nothing holds
++/// the copy it had, and a kept shaping holds the copy it was made with.
++#[cfg(debug_assertions)]
++pub(crate) fn same_shaping(a: &ShapedText, b: &ShapedText) -> bool {
++    a.runs() == b.runs()
++        && a.characters() == b.characters()
++        && a.shaped_clusters() == b.shaped_clusters()
++        && a.glyphs() == b.glyphs()
++        && a.features() == b.features()
++        && a.normalized_coords() == b.normalized_coords()
++        && a.fonts().len() == b.fonts().len()
++        && a.fonts().iter().zip(b.fonts()).all(|(a, b)| {
++            let (data_a, data_b) = (a.font.data.data(), b.font.data.data());
++            a.font.index == b.font.index
++                && a.synthesis == b.synthesis
++                && (core::ptr::eq(data_a, data_b) || data_a == data_b)
++        })
++}
 diff --git a/parley/src/shape/mod.rs b/parley/src/shape/mod.rs
-index 2f6097a2ce23d252a64326d0c7f25c08ee0af71d..0695e43509786ee8960b813775af0a5d803188c7 100644
+index 49ac572af8a2d6df30e1317e48cc38c127836e10..edcd01523110737fe3dfed16a91b2b5cb72d64a0 100644
 --- a/parley/src/shape/mod.rs
 +++ b/parley/src/shape/mod.rs
-@@ -80,8 +80,6 @@ pub(crate) fn shape_text<'a, B: Brush>(
+@@ -4,6 +4,10 @@
+ //! Text shaping implementation using `harfrust`for shaping
+ //! and `icu` for text analysis.
+ 
++// machopo: shapings kept for layouts alike.
++mod cache;
++pub(crate) use cache::ShapeCache;
++
+ use alloc::sync::Arc;
+ use alloc::vec::Vec;
+ use parley_engine::shape::{CharCluster, Coverage};
+@@ -53,6 +57,8 @@ pub(crate) fn shape_text<'a, B: Brush>(
+     text: &str,
+     layout: &mut Layout<B>,
+     style_features: &'a mut Vec<SmallVec<[FontFeature; 8]>>,
++    // machopo: the shapings kept (`cache`).
++    cache: &mut ShapeCache,
+ ) {
+     let scale = layout.data.scale;
+ 
+@@ -67,12 +73,6 @@ pub(crate) fn shape_text<'a, B: Brush>(
  
      let mut fq = fcx.collection.query(&mut fcx.source_cache);
  
--    let mut inline_box_iter = inline_boxes.iter().map(|b| &b.inline_box).peekable();
+-    let mut out_of_flow_box_iter = inline_boxes
+-        .iter()
+-        .filter(|b| !b.is_inline_object())
+-        .map(|b| &b.inline_box)
+-        .peekable();
 -
      // Merge font features with letter-spacing ligature suppression.
      //
-     // TODO: This allocation is slightly unfortunate (though solvable). It's required currently,
-@@ -106,7 +104,11 @@ pub(crate) fn shape_text<'a, B: Brush>(
-         .collect();
+     // TODO: This copy is slightly unfortunate (though solvable). It's required currently,
+@@ -96,7 +96,15 @@ pub(crate) fn shape_text<'a, B: Brush>(
+     let style_features = &*style_features;
  
-     // Split when shaping-relevant style properties change and at inline boxes.
+     // Split when shaping-relevant style properties change and at out-of-flow boxes.
 -    let items = {
 +    //
-+    // kun: made again for each time the text is shaped.
++    // machopo: made again for each time the text is shaped.
 +    let items = || {
-+        let mut inline_box_iter = inline_boxes.iter().map(|b| &b.inline_box).peekable();
++        let mut out_of_flow_box_iter = inline_boxes
++            .iter()
++            .filter(|b| !b.is_inline_object())
++            .map(|b| &b.inline_box)
++            .peekable();
 +
          // TODO: we currently walk characters here, but we could instead just walk boundaries of
          // styles and inline boxes.
          let char_count = char_style_indices.len();
-@@ -189,6 +191,10 @@ pub(crate) fn shape_text<'a, B: Brush>(
+@@ -182,17 +190,97 @@ pub(crate) fn shape_text<'a, B: Brush>(
          })
      };
  
-+    // kun: an id for what font selection takes from each style, which words
+-    let font_selector = FontSelector::new(&mut fq, rcx, styles);
+-
+-    scx.shape_text(
+-        text,
++    // machopo: an id for what font selection takes from each style, which words
 +    // shaped are kept by.
 +    let font_styles = cache.font_styles(rcx, styles, scx);
 +
-     // kun: the shaping of a layout with the same text, styled the same in
-     // what changes shaping, if one was kept; each character takes this
-     // layout's style.
-@@ -216,35 +222,63 @@ pub(crate) fn shape_text<'a, B: Brush>(
-             Arc::make_mut(&mut layout.data.shaped_text).set_style_indices(char_style_indices);
-         }
-         cache.reused += 1;
--        // What shaping it again gives.
++    // machopo: the shaping of a layout with the same text, styled the same in
++    // what changes shaping, if one was kept; each character takes this
++    // layout's style.
++    let key = cache::Key::new(
++        rcx,
++        styles,
++        inline_boxes,
+         analysis,
+         char_style_indices,
+-        items,
+-        font_selector,
+-        false,
+-        Arc::make_mut(&mut layout.data.shaped_text),
++        text,
++        scale,
++        cache.hasher(),
+     );
++    if let Some(shaped) = cache.get(&key) {
++        // The same shaping, shared, unless its characters were styled
++        // otherwise.
++        layout.data.shaped_text = Arc::clone(shaped);
++        let styled_alike = layout
++            .data
++            .shaped_text
++            .characters()
++            .iter()
++            .map(|character| character.style_index)
++            .eq(char_style_indices.iter().copied());
++        if !styled_alike {
++            Arc::make_mut(&mut layout.data.shaped_text).set_style_indices(char_style_indices);
++        }
++        cache.reused += 1;
 +        // What shaping it again, whole, gives.
-         #[cfg(debug_assertions)]
-         {
-             let mut fresh = parley_engine::ShapedText::new();
--            let font_selector = FontSelector::new(&mut fq, rcx, styles, analysis_data_sources);
-+            let font_selector =
-+                FontSelector::new(&mut fq, rcx, styles, analysis_data_sources, &font_styles);
-+            scx.set_shape_words(false);
-             scx.shape_text(
-                 text,
-                 analysis,
-                 char_style_indices,
--                items,
-+                items(),
-                 font_selector,
-                 &mut fresh,
-             );
-+            scx.set_shape_words(true);
-             debug_assert!(
-                 cache::same_shaping(&fresh, &layout.data.shaped_text),
-                 "a kept shaping is what shaping gives"
-             );
-         }
-     } else {
--        let font_selector = FontSelector::new(&mut fq, rcx, styles, analysis_data_sources);
 +        #[cfg(debug_assertions)]
-+        let words_before = (scx.words_reused_and_shaped(), scx.words_joined());
-+        let font_selector =
-+            FontSelector::new(&mut fq, rcx, styles, analysis_data_sources, &font_styles);
- 
-         scx.shape_text(
-             text,
-             analysis,
-             char_style_indices,
--            items,
-+            items(),
-             font_selector,
-             Arc::make_mut(&mut layout.data.shaped_text),
-         );
-+        // kun: what shaping the text whole gives, if words were taken or
-+        // kept.
-+        #[cfg(debug_assertions)]
-+        if (scx.words_reused_and_shaped(), scx.words_joined()) != words_before {
-+            let mut whole = parley_engine::ShapedText::new();
-+            let font_selector =
-+                FontSelector::new(&mut fq, rcx, styles, analysis_data_sources, &font_styles);
++        {
++            let mut fresh = parley_engine::ShapedText::new();
++            let font_selector = FontSelector::new(&mut fq, rcx, styles, &font_styles);
 +            scx.set_shape_words(false);
 +            scx.shape_text(
 +                text,
@@ -402,6 +593,43 @@ index 2f6097a2ce23d252a64326d0c7f25c08ee0af71d..0695e43509786ee8960b813775af0a5d
 +                char_style_indices,
 +                items(),
 +                font_selector,
++                false,
++                &mut fresh,
++            );
++            scx.set_shape_words(true);
++            debug_assert!(
++                cache::same_shaping(&fresh, &layout.data.shaped_text),
++                "a kept shaping is what shaping gives"
++            );
++        }
++    } else {
++        #[cfg(debug_assertions)]
++        let words_before = (scx.words_reused_and_shaped(), scx.words_joined());
++        let font_selector = FontSelector::new(&mut fq, rcx, styles, &font_styles);
++
++        scx.shape_text(
++            text,
++            analysis,
++            char_style_indices,
++            items(),
++            font_selector,
++            false,
++            Arc::make_mut(&mut layout.data.shaped_text),
++        );
++        // machopo: what shaping the text whole gives, if words were taken or
++        // kept.
++        #[cfg(debug_assertions)]
++        if (scx.words_reused_and_shaped(), scx.words_joined()) != words_before {
++            let mut whole = parley_engine::ShapedText::new();
++            let font_selector = FontSelector::new(&mut fq, rcx, styles, &font_styles);
++            scx.set_shape_words(false);
++            scx.shape_text(
++                text,
++                analysis,
++                char_style_indices,
++                items(),
++                font_selector,
++                false,
 +                &mut whole,
 +            );
 +            scx.set_shape_words(true);
@@ -410,41 +638,43 @@ index 2f6097a2ce23d252a64326d0c7f25c08ee0af71d..0695e43509786ee8960b813775af0a5d
 +                "a text shaped a word at a time is what shaping it whole gives"
 +            );
 +        }
-         cache.insert(key, Arc::clone(&layout.data.shaped_text));
-     }
++        cache.insert(key, Arc::clone(&layout.data.shaped_text));
++    }
  
-@@ -333,6 +367,9 @@ struct FontSelector<'a, 'b, B: Brush> {
+     // Out-of-flow boxes are laid out as items of their own.
+     let mut out_of_flow_box_iter = inline_boxes
+@@ -278,6 +366,9 @@ struct FontSelector<'a, 'b, B: Brush> {
+ 
+     /// The font to use if [`Self::query`] doesn't return any font.
      last_resort_font: LastResortFont,
- 
-     analysis_data_sources: &'a AnalysisDataSources,
 +
-+    /// kun: an id for what font selection takes from each style.
++    /// machopo: an id for what font selection takes from each style.
 +    font_styles: &'b [u32],
  }
  
  impl<'a, 'b, B: Brush> FontSelector<'a, 'b, B> {
-@@ -345,8 +382,12 @@ impl<'a, 'b, B: Brush> FontSelector<'a, 'b, B> {
+@@ -289,8 +380,12 @@ impl<'a, 'b, B: Brush> FontSelector<'a, 'b, B> {
+         query: &'b mut Query<'a>,
          rcx: &'a ResolveContext,
          styles: &'a [ResolvedStyle<B>],
-         analysis_data_sources: &'a AnalysisDataSources,
 +        font_styles: &'b [u32],
      ) -> Self {
          let attrs = fontique::Attributes::default();
-+        // kun: the query may have shaped with another selector (a debug
++        // machopo: the query may have shaped with another selector (a debug
 +        // build shapes again with it), which set its attributes.
 +        query.set_attributes(attrs);
  
          Self {
              query,
-@@ -361,6 +402,7 @@ impl<'a, 'b, B: Brush> FontSelector<'a, 'b, B> {
+@@ -301,6 +396,7 @@ impl<'a, 'b, B: Brush> FontSelector<'a, 'b, B> {
+             attrs,
+             first_font: None,
              last_resort_font: LastResortFont::Unresolved,
- 
-             analysis_data_sources,
 +            font_styles,
          }
      }
  }
-@@ -378,6 +420,10 @@ impl<'a, 'b, B: Brush> parley_engine::FontSelector for FontSelector<'a, 'b, B> {
+@@ -318,6 +414,10 @@ impl<'a, 'b, B: Brush> parley_engine::FontSelector for FontSelector<'a, 'b, B> {
          self.first_font = None;
      }
  
@@ -455,30 +685,355 @@ index 2f6097a2ce23d252a64326d0c7f25c08ee0af71d..0695e43509786ee8960b813775af0a5d
      fn select_font(
          &mut self,
          _segment: &parley_engine::itemize::Segment,
+diff --git a/parley/src/tests/mod.rs b/parley/src/tests/mod.rs
+index 875b7b6854cc2daf3e63dca5041e8a90b581d67f..cdcc287c2da24d086dd7ffbed2fd850d293bb28d 100644
+--- a/parley/src/tests/mod.rs
++++ b/parley/src/tests/mod.rs
+@@ -7,6 +7,7 @@ mod test_edges;
+ mod test_final_break;
+ mod test_font_without_em;
+ mod test_optical_sizing;
++mod test_shape_cache;
+ mod test_shaped_text_sharing;
+ mod test_soft_hyphens;
+ mod test_style_metrics;
+diff --git a/parley/src/tests/test_shape_cache.rs b/parley/src/tests/test_shape_cache.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..eedd11bd0c4f6325858ed47dc978faa2f67e1582
+--- /dev/null
++++ b/parley/src/tests/test_shape_cache.rs
+@@ -0,0 +1,307 @@
++// Copyright 2026 the Parley Authors
++// SPDX-License-Identifier: Apache-2.0 OR MIT
++
++//! machopo: tests for the shapings kept: a layout's, taken by the next layout of the same text
++//! styled alike in what changes shaping, and a word's. A debug build also shapes every text that
++//! took a shaping again, whole, and compares the two.
++
++use alloc::sync::Arc;
++use alloc::vec::Vec;
++
++use peniko::color::palette;
++
++use super::utils::ColorBrush;
++use super::utils::fonts::{FONT_FAMILY_LIST, create_font_context};
++use crate::{
++    FontContext, FontFamily, FontWeight, InlineBox, InlineBoxKind, Layout, LayoutContext,
++    LineHeight, PositionedLayoutItem, TextStyle, VerticalAlign,
++};
++
++fn style(font_size: f32) -> TextStyle<'static, 'static, ColorBrush> {
++    TextStyle {
++        font_family: FontFamily::from(FONT_FAMILY_LIST),
++        font_size,
++        line_height: LineHeight::Absolute(30.),
++        ..TextStyle::default()
++    }
++}
++
++/// A piece of a paragraph: text, text of another color, bold text, an inline object with a width,
++/// or an out-of-flow box.
++#[derive(Clone, Copy)]
++enum Piece {
++    Text(&'static str),
++    Green(&'static str),
++    Bold(&'static str),
++    Object(f32),
++    OutOfFlow,
++}
++use Piece::{Bold, Green, Object, OutOfFlow, Text};
++
++struct Contexts {
++    fcx: FontContext,
++    lcx: LayoutContext<ColorBrush>,
++}
++
++impl Contexts {
++    fn new() -> Self {
++        Self {
++            fcx: create_font_context(),
++            lcx: LayoutContext::new(),
++        }
++    }
++
++    fn build_scaled(&mut self, pieces: &[Piece], font_size: f32, scale: f32) -> Layout<ColorBrush> {
++        let style = style(font_size);
++        let mut builder = self.lcx.tree_builder(&mut self.fcx, scale, false, &style);
++        for (id, piece) in pieces.iter().enumerate() {
++            let inline_box = |kind, width| InlineBox {
++                id: id as u64,
++                kind,
++                index: 0,
++                width,
++                height: 10.,
++                baseline: None,
++                vertical_align: VerticalAlign::BASELINE,
++            };
++            match *piece {
++                Text(text) => builder.push_text(text),
++                Green(text) => {
++                    builder.push_style_span(TextStyle {
++                        brush: ColorBrush::new(palette::css::GREEN),
++                        ..style.clone()
++                    });
++                    builder.push_text(text);
++                    builder.pop_style_span();
++                }
++                Bold(text) => {
++                    builder.push_style_span(TextStyle {
++                        font_weight: FontWeight::BOLD,
++                        ..style.clone()
++                    });
++                    builder.push_text(text);
++                    builder.pop_style_span();
++                }
++                Object(width) => builder.push_inline_box(inline_box(InlineBoxKind::InFlow, width)),
++                OutOfFlow => builder.push_inline_box(inline_box(InlineBoxKind::OutOfFlow, 0.)),
++            }
++        }
++        let mut layout = Layout::default();
++        builder.build_into(&mut layout);
++        layout.break_all_lines(None);
++        layout
++    }
++
++    fn build(&mut self, pieces: &[Piece]) -> Layout<ColorBrush> {
++        self.build_scaled(pieces, 20., 1.)
++    }
++
++    /// Builds `pieces`; whether that took the shaping of a layout before.
++    fn reuses(&mut self, pieces: &[Piece]) -> bool {
++        let before = self.lcx.shapings_reused();
++        self.build(pieces);
++        self.lcx.shapings_reused() - before == 1
++    }
++
++    /// How many words building `pieces` took from those shaped before, and how many it shaped
++    /// and kept.
++    fn words(&mut self, pieces: &[Piece]) -> (usize, usize) {
++        self.words_scaled(pieces, 20., 1.)
++    }
++
++    fn words_scaled(&mut self, pieces: &[Piece], font_size: f32, scale: f32) -> (usize, usize) {
++        let (reused, shaped) = self.lcx.words_reused_and_shaped();
++        self.build_scaled(pieces, font_size, scale);
++        let (now_reused, now_shaped) = self.lcx.words_reused_and_shaped();
++        (now_reused - reused, now_shaped - shaped)
++    }
++}
++
++/// The glyphs of a layout's lines (id and advance) and the widths of its boxes, in order.
++fn items(layout: &Layout<ColorBrush>) -> Vec<(u32, f32)> {
++    layout
++        .lines()
++        .flat_map(|line| line.items())
++        .flat_map(|item| match item {
++            PositionedLayoutItem::GlyphRun(glyph_run) => glyph_run
++                .glyphs()
++                .map(|glyph| (glyph.id, glyph.advance))
++                .collect::<Vec<_>>(),
++            PositionedLayoutItem::InlineBox(inline_box) => {
++                alloc::vec![(u32::MAX, inline_box.width)]
++            }
++        })
++        .collect()
++}
++
++#[test]
++fn a_layout_alike_takes_the_shaping_of_the_first() {
++    let mut cx = Contexts::new();
++    let pieces = [Text("aaa bb ccc")];
++    let first = cx.build(&pieces);
++    assert_eq!(cx.lcx.shapings_reused(), 0);
++    let second = cx.build(&pieces);
++    assert_eq!(cx.lcx.shapings_reused(), 1);
++    assert!(Arc::ptr_eq(first.shaped_text(), second.shaped_text()));
++    assert_eq!(items(&first), items(&second));
++
++    // Another text is shaped.
++    assert!(!cx.reuses(&[Text("aaa bb ccd")]));
++    assert!(cx.reuses(&[Text("aaa bb ccd")]));
++}
++
++#[test]
++fn a_color_is_not_what_changes_shaping() {
++    let mut cx = Contexts::new();
++    let plain = cx.build(&[Text("aaa bbb")]);
++    let before = cx.lcx.shapings_reused();
++    let colored = cx.build(&[Text("aaa "), Green("bbb")]);
++    assert_eq!(cx.lcx.shapings_reused() - before, 1);
++    assert_eq!(items(&plain), items(&colored));
++
++    // Each character takes its own layout's style.
++    let brushes = |layout: &Layout<ColorBrush>| -> Vec<ColorBrush> {
++        layout
++            .lines()
++            .flat_map(|line| line.items())
++            .filter_map(|item| match item {
++                PositionedLayoutItem::GlyphRun(glyph_run) => Some(glyph_run.style().brush),
++                PositionedLayoutItem::InlineBox(_) => None,
++            })
++            .collect()
++    };
++    assert_eq!(brushes(&plain), [ColorBrush::default()]);
++    assert_eq!(
++        brushes(&colored),
++        [ColorBrush::default(), ColorBrush::new(palette::css::GREEN)]
++    );
++}
++
++#[test]
++fn a_font_size_or_scale_changes_shaping() {
++    let mut cx = Contexts::new();
++    let pieces = [Text("aaa bbb")];
++    cx.build_scaled(&pieces, 20., 1.);
++    let before = cx.lcx.shapings_reused();
++    cx.build_scaled(&pieces, 30., 1.);
++    // The same font size once scaled, of another scale.
++    cx.build_scaled(&pieces, 10., 2.);
++    assert_eq!(cx.lcx.shapings_reused(), before);
++    cx.build_scaled(&pieces, 10., 2.);
++    assert_eq!(cx.lcx.shapings_reused(), before + 1);
++}
++
++#[test]
++fn a_font_weight_changes_shaping() {
++    let mut cx = Contexts::new();
++    cx.build(&[Text("aaa bbb")]);
++    assert!(!cx.reuses(&[Text("aaa "), Bold("bbb")]));
++    // Bold elsewhere is another shaping too.
++    assert!(!cx.reuses(&[Text("aaa"), Bold(" bbb")]));
++    assert!(cx.reuses(&[Text("aaa "), Bold("bbb")]));
++    // All of it bold: styled apart at the same places as the first.
++    assert!(!cx.reuses(&[Bold("aaa bbb")]));
++}
++
++#[test]
++fn an_out_of_flow_box_splits_shaping_where_it_is() {
++    let mut cx = Contexts::new();
++    assert!(!cx.reuses(&[Text("aaa"), OutOfFlow, Text("bbb")]));
++    assert!(cx.reuses(&[Text("aaa"), OutOfFlow, Text("bbb")]));
++    // The same text with the box elsewhere, and without it.
++    assert!(!cx.reuses(&[Text("aa"), OutOfFlow, Text("abbb")]));
++    assert!(!cx.reuses(&[Text("aaabbb")]));
++}
++
++#[test]
++fn an_inline_object_is_a_character_of_the_text() {
++    let mut cx = Contexts::new();
++    let narrow = [Text("aaa"), Object(10.), Text("bbb")];
++    let wide = [Text("aaa"), Object(40.), Text("bbb")];
++    let first = cx.build(&narrow);
++    // Its width isn't what changes shaping, and each layout has its own.
++    let before = cx.lcx.shapings_reused();
++    let second = cx.build(&wide);
++    let third = cx.build(&narrow);
++    assert_eq!(cx.lcx.shapings_reused() - before, 2);
++    assert!(items(&first).contains(&(u32::MAX, 10.)));
++    assert!(items(&second).contains(&(u32::MAX, 40.)));
++    assert_eq!(items(&first), items(&third));
++    assert_eq!(second.full_width() - first.full_width(), 30.);
++
++    // Elsewhere in the text, it is another text.
++    assert!(!cx.reuses(&[Text("aa"), Object(10.), Text("abbb")]));
++}
++
++#[test]
++fn a_word_is_shaped_once() {
++    let mut cx = Contexts::new();
++    // `aa`, ` ` and `bb` are shaped; the rest are taken.
++    assert_eq!(cx.words(&[Text("aa bb aa bb aa")]), (6, 3));
++    // Another text takes the words shaped before.
++    assert_eq!(cx.words(&[Text("bb aa cc")]), (4, 1));
++    // A layout that takes the shaping of one alike shapes no words.
++    assert_eq!(cx.words(&[Text("bb aa cc")]), (0, 0));
++}
++
++#[test]
++fn a_word_of_other_fonts_or_another_size_is_shaped_again() {
++    let mut cx = Contexts::new();
++    // `aa`, ` ` and a bold `aa`.
++    assert_eq!(cx.words(&[Text("aa "), Bold("aa")]), (0, 3));
++    // A color asks for the same fonts.
++    assert_eq!(cx.words(&[Text("bb "), Green("bb")]), (2, 1));
++    // Another font size, and the same font size once scaled, of another scale.
++    assert_eq!(cx.words_scaled(&[Text("aa")], 30., 1.), (0, 1));
++    assert_eq!(cx.words_scaled(&[Text("aa")], 10., 2.), (0, 1));
++    assert_eq!(cx.words_scaled(&[Text("aa aa")], 10., 2.), (2, 1));
++    // The same font size before it is scaled.
++    assert_eq!(cx.words_scaled(&[Text("aa")], 20., 2.), (0, 1));
++}
++
++#[test]
++fn an_inline_object_is_between_words_and_not_kept() {
++    let mut cx = Contexts::new();
++    // `aa` and ` ` are shaped; the `aa` after the object and the one after the space are taken.
++    assert_eq!(cx.words(&[Text("aa"), Object(10.), Text("aa aa")]), (2, 2));
++    // Objects alone, and one first in the text.
++    assert_eq!(cx.words(&[Object(10.), Object(20.)]), (0, 0));
++    let layout = cx.build(&[Object(10.), Text("aa bb")]);
++    assert_eq!(cx.words(&[Text("aa bb cc")]), (4, 1));
++
++    // What shaping the text whole gives.
++    let mut whole = Contexts::new();
++    whole.lcx.set_shape_words(false);
++    let expected = whole.build(&[Object(10.), Text("aa bb")]);
++    assert_eq!(whole.lcx.words_reused_and_shaped(), (0, 0));
++    assert_eq!(items(&layout), items(&expected));
++}
++
++#[test]
++fn a_default_ignorable_after_a_space_is_shaped_with_it() {
++    let mut cx = Contexts::new();
++    // A soft hyphen first in a word: shaping the text whole takes it with the space before it
++    // where harfrust positions marks itself.
++    let pieces = [Text("aa \u{ad}bb aa")];
++    let layout = cx.build(&pieces);
++    assert_eq!(cx.lcx.words_joined(), 1);
++    // One last in a word is shaped with that word alone.
++    cx.build(&[Text("aa bb\u{ad} aa")]);
++    assert_eq!(cx.lcx.words_joined(), 1);
++
++    let mut whole = Contexts::new();
++    whole.lcx.set_shape_words(false);
++    assert_eq!(items(&layout), items(&whole.build(&pieces)));
++
++    // The same in a font whose space is beside nothing it changes.
++    let mut cx = Contexts::new();
++    let style = TextStyle {
++        font_family: FontFamily::named("Noto Sans CJK SC"),
++        ..style(20.)
++    };
++    let mut builder = cx.lcx.tree_builder(&mut cx.fcx, 1., false, &style);
++    builder.push_text("aa \u{ad}bb aa");
++    builder.build_into(&mut Layout::default());
++    assert_eq!(cx.lcx.words_reused_and_shaped(), (2, 3));
++    assert_eq!(cx.lcx.words_joined(), 1);
++}
 diff --git a/parley_engine/src/shape/mod.rs b/parley_engine/src/shape/mod.rs
-index 9ab03ced82fef7588604164ae51ddab78174b0d6..dbeff063d4ef63b238179980f9a5c7527b5645c2 100644
+index 9ab03ced82fef7588604164ae51ddab78174b0d6..9d03ea81d4dbf374e038e4ee838aec1895495493 100644
 --- a/parley_engine/src/shape/mod.rs
 +++ b/parley_engine/src/shape/mod.rs
 @@ -9,6 +9,10 @@ mod cluster;
  mod data;
  pub(crate) mod shaped_text;
  pub(crate) mod shaper;
-+// kun: whether a font's shaping can look at a space.
++// machopo: whether a font's shaping can look at a space.
 +mod space;
-+// kun: what shaping words gave.
++// machopo: what shaping words gave.
 +mod words;
  
  pub use cluster::{Char, CharCluster, Coverage, SourceRange, Whitespace};
  pub use data::{Character, CharacterFlags, ShapedCluster};
 diff --git a/parley_engine/src/shape/shaped_text.rs b/parley_engine/src/shape/shaped_text.rs
-index 494fddec068d6c5c59252bb2904985f431bcf932..0b48f6c9a19e5485196e9a3a7d12daa27c55e223 100644
+index d559b6d06a66c69cadb32ceea69126dfbf2d46a0..1109cd25aa67b7f7ca8a7fb82bd0a06e7dde3c5e 100644
 --- a/parley_engine/src/shape/shaped_text.rs
 +++ b/parley_engine/src/shape/shaped_text.rs
-@@ -155,6 +155,48 @@ pub struct ShapedText {
-     normalized_coords: Vec<NormalizedCoord>,
+@@ -158,6 +158,58 @@ pub struct ShapedText {
+     pub(crate) has_safe_to_concat_flags: bool,
  }
  
-+/// kun: what harfrust gives for a glyph, in font units: what a word's
++/// machopo: what harfrust gives for a glyph, in font units: what a word's
 +/// shaping keeps.
 +#[derive(Clone, Copy, Debug)]
 +pub(crate) struct HarfGlyph {
@@ -488,12 +1043,19 @@ index 494fddec068d6c5c59252bb2904985f431bcf932..0b48f6c9a19e5485196e9a3a7d12daa2
 +    pub(crate) x_advance: i32,
 +    pub(crate) x_offset: i32,
 +    pub(crate) y_offset: i32,
++    /// Whether breaking the text before the glyph and shaping the sides apart
++    /// may give other glyphs.
++    pub(crate) unsafe_to_break: bool,
++    /// Whether shaping the text before the glyph apart from the text from it
++    /// on, and putting the two together, may give other glyphs (false when
++    /// harfrust wasn't asked).
++    pub(crate) unsafe_to_concat: bool,
 +}
 +
 +impl HarfGlyph {
 +    /// The glyphs in harfrust's `buffer`.
 +    pub(crate) fn of_buffer(
-+        buffer: &harfrust::GlyphBuffer,
++        buffer: &harfrust::Buffer,
 +    ) -> impl DoubleEndedIterator<Item = Self> + '_ {
 +        buffer
 +            .glyph_infos()
@@ -505,11 +1067,13 @@ index 494fddec068d6c5c59252bb2904985f431bcf932..0b48f6c9a19e5485196e9a3a7d12daa2
 +                x_advance: position.x_advance,
 +                x_offset: position.x_offset,
 +                y_offset: position.y_offset,
++                unsafe_to_break: info.unsafe_to_break(),
++                unsafe_to_concat: info.unsafe_to_concat(),
 +            })
 +    }
 +}
 +
-+/// kun: how far a [`ShapedText`] went, to go back to.
++/// machopo: how far a [`ShapedText`] went, to go back to.
 +#[derive(Clone, Copy, Debug)]
 +pub(crate) struct ShapedTextMark {
 +    runs: usize,
@@ -518,16 +1082,17 @@ index 494fddec068d6c5c59252bb2904985f431bcf932..0b48f6c9a19e5485196e9a3a7d12daa2
 +    glyphs: usize,
 +    fonts: usize,
 +    normalized_coords: usize,
++    features: usize,
 +}
 +
  impl ShapedText {
      /// Create a reusable [`ShapedText`].
      pub fn new() -> Self {
-@@ -171,6 +213,29 @@ impl ShapedText {
+@@ -174,6 +226,31 @@ impl ShapedText {
          self.glyphs.reserve(additional_chars);
      }
  
-+    /// kun: how far this shaping went.
++    /// machopo: how far this shaping went.
 +    pub(crate) fn mark(&self) -> ShapedTextMark {
 +        ShapedTextMark {
 +            runs: self.runs.len(),
@@ -536,10 +1101,11 @@ index 494fddec068d6c5c59252bb2904985f431bcf932..0b48f6c9a19e5485196e9a3a7d12daa2
 +            glyphs: self.glyphs.len(),
 +            fonts: self.fonts.len(),
 +            normalized_coords: self.normalized_coords.len(),
++            features: self.features.len(),
 +        }
 +    }
 +
-+    /// kun: drops what was shaped after `mark` (fonts first used after it
++    /// machopo: drops what was shaped after `mark` (fonts first used after it
 +    /// included).
 +    pub(crate) fn truncate(&mut self, mark: ShapedTextMark) {
 +        self.runs.truncate(mark.runs);
@@ -548,22 +1114,46 @@ index 494fddec068d6c5c59252bb2904985f431bcf932..0b48f6c9a19e5485196e9a3a7d12daa2
 +        self.glyphs.truncate(mark.glyphs);
 +        self.fonts.truncate(mark.fonts);
 +        self.normalized_coords.truncate(mark.normalized_coords);
++        self.features.truncate(mark.features);
 +    }
 +
      /// Clear the result while retaining capacity.
      #[inline]
      pub fn clear(&mut self) {
-@@ -307,7 +372,8 @@ impl ShapedText {
+@@ -266,6 +343,22 @@ impl ShapedText {
+         }
+     }
+ 
++    // machopo: for a layout that takes the shaping of another with the same
++    // text, styled otherwise in what doesn't change shaping (only its
++    // colors, say): each character takes this one's style, and each shaped
++    // cluster its first character's, as shaping gives them.
++    #[doc(hidden)]
++    pub fn set_style_indices(&mut self, style_indices: &[u16]) {
++        for (character, &style_index) in self.characters.iter_mut().zip(style_indices) {
++            character.style_index = style_index;
++        }
++        for shaped_cluster in self.shaped_clusters.iter_mut() {
++            if let Some(character) = self.characters.get(shaped_cluster.chars_range.0 as usize) {
++                shaped_cluster.style_index = character.style_index;
++            }
++        }
++    }
++
+     /// The character data of the text, in logical order.
+     ///
+     /// [`ShapedRun::characters_range`] indexes into this. The nth [`Character`] corresponds exactly
+@@ -328,7 +421,8 @@ impl ShapedText {
          char_info: &[CharInfo],
          char_style_indices: &[u16],
          font: &FontInstance,
--        glyph_buffer: &harfrust::GlyphBuffer,
-+        // kun: the glyphs harfrust gave, from its buffer or kept for words.
+-        glyph_buffer: &harfrust::Buffer,
++        // machopo: the glyphs harfrust gave, from its buffer or kept for words.
 +        glyphs: impl DoubleEndedIterator<Item = HarfGlyph>,
-         normalized_coords: &[harfrust::NormalizedCoord],
+         normalized_coords: &[harfrust::font::NormalizedCoord],
      ) {
          debug_assert_eq!(
-@@ -316,8 +382,6 @@ impl ShapedText {
+@@ -337,8 +431,6 @@ impl ShapedText {
              "The claimed character range and the text's covered byte range should agree"
          );
  
@@ -572,7 +1162,7 @@ index 494fddec068d6c5c59252bb2904985f431bcf932..0b48f6c9a19e5485196e9a3a7d12daa2
          let normalized_coords_range = {
              let start = self.normalized_coords.len();
              self.normalized_coords.extend(
-@@ -354,7 +418,6 @@ impl ShapedText {
+@@ -381,7 +473,6 @@ impl ShapedText {
          // `HarfRust` returns glyphs in visual order, so we need to process them as such while
          // maintaining logical ordering of clusters.
  
@@ -580,7 +1170,7 @@ index 494fddec068d6c5c59252bb2904985f431bcf932..0b48f6c9a19e5485196e9a3a7d12daa2
          let scale_factor = options.font_size / units_per_em;
          let shaped_clusters_start = self.shaped_clusters.len();
  
-@@ -388,8 +451,7 @@ impl ShapedText {
+@@ -419,8 +510,7 @@ impl ShapedText {
                  &mut self.shaped_clusters,
                  &mut self.glyphs,
                  scale_factor,
@@ -589,8 +1179,8 @@ index 494fddec068d6c5c59252bb2904985f431bcf932..0b48f6c9a19e5485196e9a3a7d12daa2
 +                glyphs,
                  &self.characters,
                  characters_start,
-             );
-@@ -398,8 +460,7 @@ impl ShapedText {
+                 self.has_safe_to_concat_flags,
+@@ -430,8 +520,7 @@ impl ShapedText {
                  &mut self.shaped_clusters,
                  &mut self.glyphs,
                  scale_factor,
@@ -599,8 +1189,8 @@ index 494fddec068d6c5c59252bb2904985f431bcf932..0b48f6c9a19e5485196e9a3a7d12daa2
 +                glyphs.rev(),
                  &self.characters,
                  characters_start,
-             );
-@@ -474,18 +535,15 @@ pub struct ShapedRun {
+                 self.has_safe_to_concat_flags,
+@@ -510,20 +599,17 @@ pub struct ShapedRun {
  ///
  /// ## Input Parameters:
  /// * `scale_factor` - Scaling factor used to convert font units to the target size.
@@ -611,6 +1201,8 @@ index 494fddec068d6c5c59252bb2904985f431bcf932..0b48f6c9a19e5485196e9a3a7d12daa2
  /// * `characters` must contain the shaped characters whose clusters we're now processing, starting at
  ///   index `characters_start`.
  /// * `characters_start` - See `characters`.
+ /// * `produce_safe_to_concat_flags` - Whether `HarfRust` was asked to produce the unsafe-to-concat
+ ///   glyph flags.
 -fn process_shaped_clusters<'a>(
 +fn process_shaped_clusters(
      shaped_clusters: &mut Vec<ShapedCluster>,
@@ -621,9 +1213,9 @@ index 494fddec068d6c5c59252bb2904985f431bcf932..0b48f6c9a19e5485196e9a3a7d12daa2
 +    shaped_glyphs: impl Iterator<Item = HarfGlyph>,
      characters: &[Character],
      characters_start: usize,
- ) {
-@@ -549,13 +607,13 @@ fn process_shaped_clusters<'a>(
-         advance: 0.,
+     produce_safe_to_concat_flags: bool,
+@@ -603,13 +689,13 @@ fn process_shaped_clusters<'a>(
+         safe_to_concat_before: false,
      };
  
 -    for (glyph_info, glyph_pos) in glyph_infos.zip(glyph_positions) {
@@ -640,7 +1232,17 @@ index 494fddec068d6c5c59252bb2904985f431bcf932..0b48f6c9a19e5485196e9a3a7d12daa2
                  characters_start: char_end,
                  glyphs_start: glyphs.len(),
                  glyphs: 0,
-@@ -565,11 +623,11 @@ fn process_shaped_clusters<'a>(
+@@ -621,19 +707,19 @@ fn process_shaped_clusters<'a>(
+         }
+ 
+         if cluster.glyphs == 0 {
+-            cluster.safe_to_break_before = !glyph_info.unsafe_to_break();
++            cluster.safe_to_break_before = !shaped_glyph.unsafe_to_break;
+ 
+             // Without the flag being produced, we can't know whether it's safe to concat.
+             cluster.safe_to_concat_before =
+-                produce_safe_to_concat_flags && !glyph_info.unsafe_to_concat();
++                produce_safe_to_concat_flags && !shaped_glyph.unsafe_to_concat;
          }
  
          let glyph = Glyph {
@@ -657,21 +1259,20 @@ index 494fddec068d6c5c59252bb2904985f431bcf932..0b48f6c9a19e5485196e9a3a7d12daa2
          if cluster.glyphs == 0 && glyph.x == 0. && glyph.y == 0. {
              // Defer this potential zero-offset, single glyph cluster
 diff --git a/parley_engine/src/shape/shaper.rs b/parley_engine/src/shape/shaper.rs
-index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c9f8e990c 100644
+index 12b0ca1883d2f9140b9544689f0cc6fee0b693ea..0faab383db80f596405270554d82e4c66ffa3aa7 100644
 --- a/parley_engine/src/shape/shaper.rs
 +++ b/parley_engine/src/shape/shaper.rs
-@@ -3,8 +3,9 @@
+@@ -3,7 +3,9 @@
  
  //! Shaping of text.
  
 +use alloc::boxed::Box;
  use alloc::vec::Vec;
--use core::mem;
 +use core::ops::Range;
  use harfrust::ShapeOptions as HarfShapeOptions;
  use linebender_resource_handle::{Blob, FontData};
  use parlance::{FontFeature, FontVariation, Language};
-@@ -13,7 +14,12 @@ use crate::{
+@@ -12,7 +14,12 @@ use crate::{
      Analysis, CharInfo, ShapedText,
      itemize::{Item, Segment, TextRange},
      lru_cache::LruCache,
@@ -685,17 +1286,17 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
  };
  
  /// Shaping options for one item.
-@@ -96,6 +102,9 @@ pub struct Shaper {
-     /// kun: the item's variations, with `opsz` for optical sizing.
+@@ -102,6 +109,9 @@ pub struct Shaper {
+     /// machopo: the item's variations, with `opsz` for optical sizing.
      variations: Vec<FontVariation>,
      char_cluster: CharCluster,
-+    /// kun: what shaping words gave.
++    /// machopo: what shaping words gave.
 +    words: Words,
 +    word_scratch: WordScratch,
  }
  
  impl Default for Shaper {
-@@ -109,6 +118,8 @@ impl Default for Shaper {
+@@ -115,6 +125,8 @@ impl Default for Shaper {
              features: Vec::new(),
              variations: Vec::new(),
              char_cluster: CharCluster::default(),
@@ -704,32 +1305,32 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
          }
      }
  }
-@@ -120,6 +131,34 @@ impl core::fmt::Debug for Shaper {
+@@ -126,6 +138,34 @@ impl core::fmt::Debug for Shaper {
  }
  
  impl Shaper {
-+    /// kun: whether segments are shaped a word at a time where that gives what shaping them
++    /// machopo: whether segments are shaped a word at a time where that gives what shaping them
 +    /// whole does (it does unless turned off), so that a debug build can check it.
 +    #[doc(hidden)]
 +    pub fn set_shape_words(&mut self, on: bool) {
 +        self.words.enabled = on;
 +    }
 +
-+    /// kun: how many words were taken from those shaped before, and how many were shaped and
++    /// machopo: how many words were taken from those shaped before, and how many were shaped and
 +    /// kept, for tests.
 +    #[doc(hidden)]
 +    pub fn words_reused_and_shaped(&self) -> (usize, usize) {
 +        (self.words.reused, self.words.shaped)
 +    }
 +
-+    /// kun: how many times two words were shaped again as one, a space and the glyph beside it
++    /// machopo: how many times two words were shaped again as one, a space and the glyph beside it
 +    /// shaped together, for tests.
 +    #[doc(hidden)]
 +    pub fn words_joined(&self) -> usize {
 +        self.words.joined
 +    }
 +
-+    /// kun: forgets the words shaped: fonts were added, so font selection may pick others. A
++    /// machopo: forgets the words shaped: fonts were added, so font selection may pick others. A
 +    /// [`FontSelector::font_style`] id given out before may be given to another style after.
 +    #[doc(hidden)]
 +    pub fn clear_words(&mut self) {
@@ -739,7 +1340,7 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
      /// Shape text into glyphs, overwriting `shaped_text`.
      ///
      /// The `text` passed in must be the same as used for producing `analysis`.
-@@ -255,8 +294,6 @@ fn shape_segment(
+@@ -279,8 +319,6 @@ fn shape_segment(
          return Ok(()); // No clusters
      }
  
@@ -748,18 +1349,18 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
      // Shaping inputs that are constant over the segment.
      let direction = if segment.bidi_level.is_rtl() {
          harfrust::Direction::RightToLeft
-@@ -285,20 +322,166 @@ fn shape_segment(
+@@ -309,12 +347,179 @@ fn shape_segment(
              .push(FontVariation::new(OPSZ, options.font_size));
      }
      scx.variations.extend_from_slice(options.variations);
 -    let variations = &scx.variations;
 +
-+    // kun: the shaper's parts, borrowed apart.
++    // machopo: the shaper's parts, borrowed apart.
 +    let Shaper {
 +        shape_data_cache,
 +        shape_instance_cache,
 +        shape_plan_cache,
-+        unicode_buffer,
++        buffer,
 +        features,
 +        variations,
 +        char_cluster,
@@ -770,18 +1371,22 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +        shape_data_cache,
 +        shape_instance_cache,
 +        shape_plan_cache,
-+        unicode_buffer,
++        buffer,
 +        features,
 +        variations,
 +        direction,
 +        script: hb_script,
 +        language,
-+        font_size: options.font_size,
++        point_size: options.point_size,
++        produce_unsafe_to_concat: shaped_text.has_safe_to_concat_flags,
 +    };
 +
-+    // kun: a word at a time, taking the words shaped before, where that gives what shaping the
-+    // segment whole does.
-+    if words.may_split(segment.bidi_level.is_ltr(), segment.script, options) {
++    // machopo: a word at a time, taking the words shaped before, where that gives what shaping the
++    // segment whole does. Which glyphs are safe to concatenate before depends on the text around
++    // a word, so a text shaped for those flags is shaped whole.
++    if !shaped_text.has_safe_to_concat_flags
++        && words.may_split(segment.bidi_level.is_ltr(), segment.script, options)
++    {
 +        let mark = shaped_text.mark();
 +        if shape_words(
 +            &mut harf,
@@ -790,6 +1395,7 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +            char_cluster,
 +            text,
 +            segment,
++            is_item_start,
 +            options,
 +            select_font,
 +            char_info,
@@ -809,16 +1415,17 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +            font,
 +            text,
 +            range.byte_range.clone(),
-+            |glyph_buffer, normalized_coords| {
++            |buffer, normalized_coords| {
 +                shaped_text.push_run(
 +                    text,
 +                    range,
 +                    segment,
++                    is_item_start,
 +                    options,
 +                    char_info,
 +                    char_style_indices,
 +                    font,
-+                    HarfGlyph::of_buffer(glyph_buffer),
++                    HarfGlyph::of_buffer(buffer),
 +                    normalized_coords,
 +                );
 +            },
@@ -826,8 +1433,9 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +    };
 +
 +    // This is the run being accumulated, i.e., consecutive graphemes for which `select_font`
-+    // returns the same font.
++    // returns the same font, or a single inline object.
 +    let mut run: Option<(FontInstance, TextRange)> = None;
++    let mut run_is_inline_object = false;
 +
 +    // The segment's characters with their analysis data and style indices.
 +    let mut chars = segment_text
@@ -854,12 +1462,23 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +            char_range: char_start..char_end,
 +        };
 +
++        // An object is shaped as a run of its own, to ensure it becomes its own shaped cluster. It
++        // doesn't need a font of its own, so it takes the current run's.
++        let is_inline_object = char_info[char_start].is_inline_object();
++        if is_inline_object && let Some((run_font, run_range)) = run.take() {
++            shape_run(&run_font, run_range);
++            run = Some((run_font, grapheme));
++            run_is_inline_object = true;
++            continue;
++        }
++
 +        let font = select_font
 +            .select_font(segment, options, char_cluster)
 +            .ok_or(())?;
 +
 +        if let Some((run_font, run_range)) = &mut run
 +            && run_font.as_ref() == font
++            && !run_is_inline_object
 +        {
 +            run_range.byte_range.end = byte_end;
 +            run_range.char_range.end = char_end;
@@ -869,6 +1488,7 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +                shape_run(&run_font, run_range);
 +            }
 +            run = Some((font.into(), grapheme));
++            run_is_inline_object = is_inline_object;
 +        }
 +    }
 +    if let Some((run_font, run_range)) = run {
@@ -878,56 +1498,57 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +    Ok(())
 +}
 +
-+/// kun: what shaping a run with harfrust takes, the same over a segment.
++/// machopo: what shaping a run with harfrust takes, the same over a segment.
 +struct Harf<'a> {
-+    shape_data_cache: &'a mut LruCache<cache::ShapeDataKey, harfrust::ShaperData>,
-+    shape_instance_cache: &'a mut LruCache<cache::ShapeInstanceId, harfrust::ShaperInstance>,
++    shape_data_cache: &'a mut LruCache<cache::ShapeDataKey, harfrust::Font>,
++    shape_instance_cache: &'a mut LruCache<cache::ShapeInstanceId, harfrust::Font>,
 +    shape_plan_cache: &'a mut LruCache<cache::ShapePlanId, harfrust::ShapePlan>,
-+    unicode_buffer: &'a mut Option<harfrust::UnicodeBuffer>,
++    buffer: &'a mut harfrust::Buffer,
 +    features: &'a [harfrust::Feature],
 +    variations: &'a [FontVariation],
 +    direction: harfrust::Direction,
 +    script: harfrust::Script,
 +    language: Option<harfrust::Language>,
-+    font_size: f32,
++    point_size: f32,
++    /// Whether harfrust is asked which glyphs are unsafe to concatenate before.
++    produce_unsafe_to_concat: bool,
 +}
 +
 +impl Harf<'_> {
 +    /// Shapes `text[byte_range]` with `font`, the text around it as context, and hands harfrust's
-+    /// glyphs and the font instance's normalized coords to `f`.
++    /// buffer of glyphs and the font instance's normalized coords to `f`.
 +    fn shape<R>(
 +        &mut self,
 +        font: &FontInstance,
 +        text: &str,
 +        byte_range: Range<usize>,
-+        f: impl FnOnce(&harfrust::GlyphBuffer, &[harfrust::NormalizedCoord]) -> R,
++        f: impl FnOnce(&harfrust::Buffer, &[harfrust::font::NormalizedCoord]) -> R,
 +    ) -> R {
-         // TODO: How do we want to handle errors like this?
-         let font_ref =
-             harfrust::FontRef::from_index(font.font.data.as_ref(), font.font.index).unwrap();
- 
-         // Create harfrust shaper
--        let shaper_data = scx.shape_data_cache.entry(
-+        let shaper_data = self.shape_data_cache.entry(
++        let variations = self.variations;
+         // Create harfrust font instance
+-        let base_font = scx.shape_data_cache.entry(
++        let base_font = self.shape_data_cache.entry(
              cache::ShapeDataKey::new(font.font.data.id(), font.font.index),
-             || harfrust::ShaperData::new(&font_ref),
+             || {
+                 let (data, _) = font.font.data.clone().into_raw_parts();
+@@ -322,7 +527,7 @@ fn shape_segment(
+                 harfrust::Font::new(data, font.font.index).unwrap()
+             },
          );
 -        let instance = scx.shape_instance_cache.entry(
-+        let variations = self.variations;
 +        let instance = self.shape_instance_cache.entry(
              cache::ShapeInstanceKey::new(
                  font.font.data.id(),
                  font.font.index,
-@@ -317,35 +500,35 @@ fn shape_segment(
-             .shaper(&font_ref)
-             .instance(Some(instance))
-             .build();
+@@ -337,39 +542,39 @@ fn shape_segment(
+             },
+         );
+ 
 -        let shaper_plan = scx.shape_plan_cache.entry(
 +        let shaper_plan = self.shape_plan_cache.entry(
              cache::ShapePlanKey::new(
                  font.font.data.id(),
                  font.font.index,
-                 &font.synthesis,
 -                direction,
 -                hb_script,
 -                language.clone(),
@@ -936,11 +1557,11 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +                self.script,
 +                self.language.clone(),
 +                self.features,
-                 Some(variations),
+                 instance.normalized_coords(),
              ),
              || {
                  harfrust::ShapePlan::new(
-                     &harf_shaper,
+                     instance,
 -                    direction,
 -                    Some(hb_script),
 -                    language.as_ref(),
@@ -954,10 +1575,16 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
          );
  
          // Prepare harfrust buffer
--        let mut buffer = mem::take(&mut scx.unicode_buffer).unwrap();
-+        let mut buffer = self.unicode_buffer.take().unwrap();
+-        let buffer = &mut scx.buffer;
++        let buffer = &mut *self.buffer;
          buffer.clear();
-         buffer.set_cluster_level(harfrust::BufferClusterLevel::MonotoneCharacters);
+         buffer.set_cluster_level(harfrust::ClusterLevel::MonotoneCharacters);
+-        buffer.set_flags(if shaped_text.has_safe_to_concat_flags {
++        buffer.set_flags(if self.produce_unsafe_to_concat {
+             harfrust::BufferFlags::PRODUCE_UNSAFE_TO_CONCAT
+         } else {
+             harfrust::BufferFlags::empty()
+         });
  
          // Use the entire run text including newlines.
 -        let run_text = &text[range.byte_range.clone()];
@@ -965,59 +1592,55 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
          buffer.reserve(run_text.len());
          #[expect(clippy::cast_possible_truncation, reason = "Deferred")]
          for (i, ch) in run_text.chars().enumerate() {
-@@ -364,12 +547,12 @@ fn shape_segment(
-             buffer.add(ch, i as u32);
+@@ -388,100 +593,544 @@ fn shape_segment(
+             buffer.push(ch.into(), i as u32);
          }
  
 -        buffer.set_pre_context(&text[..range.byte_range.start]);
 -        buffer.set_post_context(&text[range.byte_range.end..]);
 -        buffer.set_direction(direction);
--        buffer.set_script(hb_script);
+-        buffer.set_script(Some(hb_script));
+-        buffer.set_language(language.clone());
 +        buffer.set_pre_context(&text[..byte_range.start]);
 +        buffer.set_post_context(&text[byte_range.end..]);
 +        buffer.set_direction(self.direction);
-+        buffer.set_script(self.script);
++        buffer.set_script(Some(self.script));
++        buffer.set_language(self.language.clone());
  
--        if let Some(lang) = &language {
-+        if let Some(lang) = &self.language {
-             buffer.set_language(lang.clone());
-         }
- 
-@@ -377,77 +560,468 @@ fn shape_segment(
+         harfrust::shape(
+             &harfrust::ShaperFont::new(instance),
              buffer,
              HarfShapeOptions::new()
                  .plan(Some(shaper_plan))
 -                .features(&scx.features)
--                .point_size(Some(options.font_size)),
+-                .point_size(Some(options.point_size)),
 +                .features(self.features)
-+                .point_size(Some(self.font_size)),
-         );
++                .point_size(Some(self.point_size)),
+         )
+         .expect("buffer direction and script match the shape plan");
  
 -        shaped_text.push_run(
 -            text,
 -            range,
 -            segment,
+-            is_item_start,
 -            options,
 -            char_info,
 -            char_style_indices,
 -            font,
--            &glyph_buffer,
--            harf_shaper.coords(),
+-            buffer,
+-            instance.normalized_coords(),
 -        );
-+        let result = f(&glyph_buffer, harf_shaper.coords());
- 
-         // Replace buffer to reuse allocation in the next run.
--        scx.unicode_buffer = Some(glyph_buffer.clear());
 -    };
-+        *self.unicode_buffer = Some(glyph_buffer.clear());
-+        result
++        f(buffer, instance.normalized_coords())
 +    }
 +}
  
 -    // This is the run being accumulated, i.e., consecutive graphemes for which `select_font`
--    // returns the same font.
+-    // returns the same font, or a single inline object.
 -    let mut run: Option<(FontInstance, TextRange)> = None;
-+/// kun: scratch for shaping a word at a time.
+-    let mut run_is_inline_object = false;
++/// machopo: scratch for shaping a word at a time.
 +#[derive(Default)]
 +struct WordScratch {
 +    /// The glyphs of the run being put together, clusters counted from its first character.
@@ -1034,19 +1657,24 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 -        .zip(segment_char_info)
 -        .zip(segment_char_style_indices)
 -        .map(|((ch, &info), &style_index)| (ch, info, style_index));
-+/// kun: puts runs of words, each shaped on its own, together into runs of one font, as shaping
++/// machopo: puts runs of words, each shaped on its own, together into runs of one font, as shaping
 +/// the text whole makes them; where shaping the text whole takes a space together with the glyph
 +/// beside it, the words are shaped again as one.
 +struct WordRuns<'a, 't> {
 +    text: &'t str,
 +    segment: &'t Segment,
++    is_item_start: bool,
 +    options: &'t ShapeOptions<'t>,
 +    char_info: &'t [CharInfo],
 +    char_style_indices: &'t [u16],
 +    shaped_text: &'a mut ShapedText,
 +    glyphs: &'a mut Vec<HarfGlyph>,
 +    /// The run being put together: its font, its text and its font instance's coords.
-+    run: Option<(FontInstance, TextRange, Vec<harfrust::NormalizedCoord>)>,
++    run: Option<(
++        FontInstance,
++        TextRange,
++        Vec<harfrust::font::NormalizedCoord>,
++    )>,
 +    /// Where the run's last word starts, words shaped again as one counting as one.
 +    word: RunWord,
 +    /// Where the word before it starts, if it is in the run and known.
@@ -1059,7 +1687,7 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 -    let grapheme_lengths = segment_char_info
 -        .chunk_by(|_, info| !info.is_grapheme_start())
 -        .map(<[_]>::len);
-+/// kun: where a word of a run being put together starts, within the run.
++/// machopo: where a word of a run being put together starts, within the run.
 +#[derive(Clone, Copy, Default)]
 +struct RunWord {
 +    /// Its first glyph, in the run's.
@@ -1075,7 +1703,7 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 -    // The end of the previous grapheme.
 -    let mut byte_end = text_range.start;
 -    let mut char_end = char_range.start;
-+/// kun: what a word is shaped again with.
++/// machopo: what a word is shaped again with.
 +#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 +enum Join {
 +    Nothing,
@@ -1104,7 +1732,7 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +        font: &FontInstance,
 +        range: TextRange,
 +        glyphs: &[HarfGlyph],
-+        coords: &[harfrust::NormalizedCoord],
++        coords: &[harfrust::font::NormalizedCoord],
 +        reach: Option<&SpaceReach>,
 +        starts_word: bool,
 +        space: bool,
@@ -1127,17 +1755,17 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +            (Join::Nothing, false)
          };
 -
--        let font = select_font
--            .select_font(segment, options, char_cluster)
--            .ok_or(())?;
--
--        if let Some((run_font, run_range)) = &mut run
--            && run_font.as_ref() == font
+-        // An object is shaped as a run of its own, to ensure it becomes its own shaped cluster. It
+-        // doesn't need a font of its own, so it takes the current run's.
+-        let is_inline_object = char_info[char_start].is_inline_object();
+-        if is_inline_object && let Some((run_font, run_range)) = run.take() {
+-            shape_run(&run_font, run_range);
+-            run = Some((run_font, grapheme));
+-            run_is_inline_object = true;
+-            continue;
 +        if let Some((run_font, run_range, _)) = &mut self.run
 +            && run_font == font
-         {
--            run_range.byte_range.end = byte_end;
--            run_range.char_range.end = char_end;
++        {
 +            #[expect(clippy::cast_possible_truncation, reason = "Deferred")]
 +            let offset = (range.char_range.start - run_range.char_range.start) as u32;
 +            if join == Join::Nothing {
@@ -1190,10 +1818,7 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +            }
 +            run_range.byte_range.end = range.byte_range.end;
 +            run_range.char_range.end = range.char_range.end;
-         } else {
--            if let Some((run_font, run_range)) = run.take() {
--                // The font changed: shape the previous run.
--                shape_run(&run_font, run_range);
++        } else {
 +            self.flush();
 +            self.glyphs.extend_from_slice(glyphs);
 +            self.previous = None;
@@ -1207,9 +1832,19 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +                    && matches!(reach, Some(SpaceReach::Beside(beside)) if beside.space_ligatures),
 +            };
 +            self.run = Some((font.clone(), range, coords.to_vec()));
-+        }
+         }
 +    }
-+
+ 
+-        let font = select_font
+-            .select_font(segment, options, char_cluster)
+-            .ok_or(())?;
+-
+-        if let Some((run_font, run_range)) = &mut run
+-            && run_font.as_ref() == font
+-            && !run_is_inline_object
+-        {
+-            run_range.byte_range.end = byte_end;
+-            run_range.char_range.end = char_end;
 +    /// What shaping the text whole takes together with `next`, the first glyph of a word starting
 +    /// at `char` (a space if `space`, with more in its grapheme if `space_marks`), and whether
 +    /// it takes the word after it too.
@@ -1221,8 +1856,19 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +        space: bool,
 +        space_marks: bool,
 +    ) -> (Join, bool) {
++        // Where a font positions no marks itself, harfrust positions them around their base, and
++        // takes the default ignorables after a base with it: a word that starts with one is
++        // shaped with the space before it.
++        let ignorable = if self.word.space && self.char_info[char].is_default_ignorable() {
++            Join::Last
+         } else {
+-            if let Some((run_font, run_range)) = run.take() {
+-                // The font changed: shape the previous run.
+-                shape_run(&run_font, run_range);
++            Join::Nothing
++        };
 +        let beside = match reach {
-+            Some(SpaceReach::Apart) => return (Join::Nothing, false),
++            Some(SpaceReach::Apart) => return (ignorable, false),
 +            Some(SpaceReach::Beside(beside)) => beside,
 +            // A font not looked into is taken to reach across.
 +            _ => return (Join::LastTwo, true),
@@ -1233,7 +1879,7 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +        let mut join = if self.word.joins_next {
 +            Join::Last
 +        } else {
-+            Join::Nothing
++            ignorable
 +        };
 +        let mut joins_next = false;
 +        if space {
@@ -1252,6 +1898,7 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +                joins_next = true;
              }
 -            run = Some((font.into(), grapheme));
+-            run_is_inline_object = is_inline_object;
          }
 +        if self.word.space {
 +            if beside.moved.after(next.id) {
@@ -1273,6 +1920,7 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +                self.text,
 +                range,
 +                self.segment,
++                self.is_item_start,
 +                self.options,
 +                self.char_info,
 +                self.char_style_indices,
@@ -1286,7 +1934,7 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +}
  
 -    Ok(())
-+/// kun: shapes `segment` a word at a time, taking the fonts and glyphs kept for a word shaped
++/// machopo: shapes `segment` a word at a time, taking the fonts and glyphs kept for a word shaped
 +/// before with the same styles and options, and keeping those of the others.
 +///
 +/// Returns `Ok(false)`, part of the segment shaped, if a font shapes a space together with what
@@ -1299,6 +1947,7 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +    char_cluster: &mut CharCluster,
 +    text: &str,
 +    segment: &Segment,
++    is_item_start: bool,
 +    options: &ShapeOptions<'_>,
 +    select_font: &mut impl FontSelector,
 +    char_info: &[CharInfo],
@@ -1310,6 +1959,7 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +    let mut runs = WordRuns {
 +        text,
 +        segment,
++        is_item_start,
 +        options,
 +        char_info,
 +        char_style_indices,
@@ -1321,9 +1971,54 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +        joined: 0,
 +    };
 +    let (mut reused, mut shaped) = (0, 0);
++    // The font of the inline object before this word, if one is right before it.
++    let mut object_font: Option<FontInstance> = None;
 +
 +    for word in word_ranges(text, char_info, &segment.range) {
 +        let word_text = &text[word.byte_range.clone()];
++
++        // An inline object is a run of its own, as it is in a segment shaped whole: it takes the
++        // font of the run before it, and the text after it starts another run. It isn't kept:
++        // which font it takes depends on what is before it.
++        if char_info[word.char_range.start].is_inline_object() {
++            let font = match (runs.run.as_ref(), object_font.take()) {
++                (Some((font, ..)), _) => font.clone(),
++                (None, Some(font)) => font,
++                (None, None) => {
++                    let mut byte_end = word.byte_range.start;
++                    char_cluster.fill(
++                        word_text
++                            .chars()
++                            .zip(&char_info[word.char_range.clone()])
++                            .zip(&char_style_indices[word.char_range.clone()])
++                            .map(|((ch, &info), &style_index)| (ch, info, style_index)),
++                        &mut byte_end,
++                    );
++                    select_font
++                        .select_font(segment, options, char_cluster)
++                        .ok_or(())?
++                        .into()
++                }
++            };
++            runs.flush();
++            harf.shape(&font, text, word.byte_range.clone(), |buffer, coords| {
++                runs.shaped_text.push_run(
++                    text,
++                    word.clone(),
++                    segment,
++                    is_item_start,
++                    options,
++                    char_info,
++                    char_style_indices,
++                    &font,
++                    HarfGlyph::of_buffer(buffer),
++                    coords,
++                );
++            });
++            object_font = Some(font);
++            continue;
++        }
++        object_font = None;
 +        let space = word_text.starts_with(' ');
 +        let space_marks = space && word.char_range.len() > 1;
 +        let keep = word.char_range.len() <= MAX_WORD_CHARS;
@@ -1378,7 +2073,7 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +                    scratch
 +                        .word_glyphs
 +                        .extend(HarfGlyph::of_buffer(glyph_buffer));
-+                    Box::<[harfrust::NormalizedCoord]>::from(coords)
++                    Box::<[harfrust::font::NormalizedCoord]>::from(coords)
 +                },
 +            );
 +            runs.push(
@@ -1464,8 +2159,8 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +    Ok(true)
 +}
 +
-+/// kun: the words of the text in `range`: it is split before each space and after it, where a
-+/// grapheme starts.
++/// machopo: the words of the text in `range`: it is split before each space and each inline object,
++/// and after it, where a grapheme starts.
 +fn word_ranges<'a>(
 +    text: &'a str,
 +    char_info: &'a [CharInfo],
@@ -1478,14 +2173,21 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
 +        .zip(range.char_range.clone());
 +    let mut start = (range.byte_range.start, range.char_range.start);
 +    let mut previous = None;
++    // Whether the grapheme before the character is an inline object.
++    let (mut object, mut previous_object) = (false, false);
 +    core::iter::from_fn(move || {
 +        if start.1 == end.char_range.end {
 +            return None;
 +        }
 +        for ((byte, ch), index) in chars.by_ref() {
++            let grapheme_start = char_info[index].is_grapheme_start();
++            if grapheme_start {
++                previous_object = object;
++                object = char_info[index].is_inline_object();
++            }
 +            let split = index > start.1
-+                && char_info[index].is_grapheme_start()
-+                && (ch == ' ' || previous == Some(' '));
++                && grapheme_start
++                && (ch == ' ' || previous == Some(' ') || object || previous_object);
 +            previous = Some(ch);
 +            if split {
 +                let word = TextRange {
@@ -1506,12 +2208,12 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
  }
  
  #[inline]
-@@ -494,4 +1068,14 @@ pub trait FontSelector {
+@@ -528,4 +1177,14 @@ pub trait FontSelector {
          options: &ShapeOptions<'_>,
          cluster: &mut CharCluster,
      ) -> Option<FontInstanceRef<'_>>;
 +
-+    /// kun: an id for what [`Self::select_font`] takes from the style at `style_index`, the same
++    /// machopo: an id for what [`Self::select_font`] takes from the style at `style_index`, the same
 +    /// for styles alike in every text shaped with this [`Shaper`] until
 +    /// [`Shaper::clear_words`]: with ids, a word shaped before with the same ids, script and
 +    /// options takes the fonts it took then, without asking for them. `None` shapes the
@@ -1523,14 +2225,14 @@ index c261e61c6f5ac4e9f9c75ff5da8d64504572e88b..c635c750ad0513b91f1c9e9d8af4339c
  }
 diff --git a/parley_engine/src/shape/space.rs b/parley_engine/src/shape/space.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727e6fc79bf
+index 0000000000000000000000000000000000000000..8b90473302477ded01a53b615ae4eccfbc0cae7f
 --- /dev/null
 +++ b/parley_engine/src/shape/space.rs
-@@ -0,0 +1,1085 @@
+@@ -0,0 +1,1148 @@
 +// Copyright 2026 the Parley Authors
 +// SPDX-License-Identifier: Apache-2.0 OR MIT
 +
-+//! kun: how far shaping with a font reaches across a space, so that text
++//! machopo: how far shaping with a font reaches across a space, so that text
 +//! in it shapes the same a word at a time as all at once.
 +
 +use alloc::boxed::Box;
@@ -1539,17 +2241,26 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +
 +use parlance::FontFeature;
 +use skrifa::MetadataProvider;
-+use skrifa::raw::tables::gpos::{PairPos, PositionLookup, PositionSubtables, ValueRecord};
++use skrifa::raw::tables::gpos::{
++    CursivePos, MarkBasePos, MarkLigPos, MarkMarkPos, PairPos, PositionLookup, PositionSubtables,
++    ValueFormat, ValueRecord,
++};
 +use skrifa::raw::tables::gsub::{
-+    SingleSubst, SubstitutionLookup, SubstitutionLookupList, SubstitutionSubtables,
++    AlternateSubst, LigatureSubst, MultipleSubst, ReverseChainSingleSubst, SingleSubst,
++    SubstitutionLookup, SubstitutionLookupList, SubstitutionSubtables,
 +};
 +use skrifa::raw::tables::kern::SubtableKind;
 +use skrifa::raw::tables::layout::{
 +    ChainedSequenceContext, ClassDef, CoverageTable, Feature, FeatureList, FeatureVariations,
 +    LookupFlag, SequenceContext, SequenceLookupRecord,
 +};
-+use skrifa::raw::types::{BigEndian, GlyphId, GlyphId16, Tag};
++use skrifa::raw::types::{BigEndian, GlyphId, Tag};
 +use skrifa::raw::{FontRef, ReadError, ResolveOffset, TableProvider};
++
++/// A subtable in a format for glyph ids past 16 bits, which aren't looked
++/// into: text in a font with one is shaped whole, as with a table that
++/// can't be read.
++const NOT_LOOKED_INTO: ReadError = ReadError::InvalidFormat(-1);
 +
 +/// The most glyphs, but marks, beside a space on either side that shaping
 +/// takes together with it, for text in the font to be shaped a word at a
@@ -1596,20 +2307,20 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +#[derive(Debug, PartialEq, Eq)]
 +pub(crate) struct Sides {
 +    /// Sorted.
-+    before: Box<[u16]>,
++    before: Box<[u32]>,
 +    /// Sorted.
-+    after: Box<[u16]>,
++    after: Box<[u32]>,
 +}
 +
 +impl Sides {
 +    /// Whether shaping may take `glyph` together with a space after it.
 +    pub(crate) fn before(&self, glyph: u32) -> bool {
-+        u16::try_from(glyph).map_or(true, |glyph| self.before.binary_search(&glyph).is_ok())
++        self.before.binary_search(&glyph).is_ok()
 +    }
 +
 +    /// Whether shaping may take `glyph` together with a space before it.
 +    pub(crate) fn after(&self, glyph: u32) -> bool {
-+        u16::try_from(glyph).map_or(true, |glyph| self.after.binary_search(&glyph).is_ok())
++        self.after.binary_search(&glyph).is_ok()
 +    }
 +}
 +
@@ -1652,9 +2363,6 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +    let Some(space) = font.charmap().map(' ') else {
 +        return SpaceReach::Apart;
 +    };
-+    let Ok(space) = u16::try_from(space.to_u32()).map(GlyphId16::new) else {
-+        return SpaceReach::Across;
-+    };
 +    if [b"morx", b"mort", b"kerx"]
 +        .iter()
 +        .any(|tag| font.table_data(Tag::new(tag)).is_some())
@@ -1690,7 +2398,7 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +}
 +
 +/// [`space_reach`], an error where a table can't be read.
-+fn reach(font: &FontRef<'_>, space: GlyphId16) -> Result<SpaceReach, ReadError> {
++fn reach(font: &FontRef<'_>, space: GlyphId) -> Result<SpaceReach, ReadError> {
 +    let marks = match font.gdef() {
 +        Ok(gdef) => gdef.glyph_class_def().transpose()?,
 +        Err(ReadError::TableIsMissing(_)) => None,
@@ -1802,8 +2510,8 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +        }
 +    }
 +    let sides = |reached: &Reached| Sides {
-+        before: reached.before.iter().map(GlyphId16::to_u16).collect(),
-+        after: reached.after.iter().map(GlyphId16::to_u16).collect(),
++        before: reached.before.iter().map(GlyphId::to_u32).collect(),
++        after: reached.after.iter().map(GlyphId::to_u32).collect(),
 +    };
 +    Ok(SpaceReach::Beside(Beside {
 +        moved: sides(&by_position),
@@ -1816,28 +2524,40 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +/// A set of glyphs.
 +#[derive(Default)]
 +struct GlyphSet {
++    /// A bit for each glyph id, as far as the greatest one in the set.
 +    bits: Vec<u64>,
 +    len: usize,
 +}
 +
 +impl GlyphSet {
-+    fn insert(&mut self, glyph: GlyphId16) -> bool {
-+        if self.bits.is_empty() {
-+            self.bits = vec![0; 1 << 10];
++    /// The most glyph ids a font's tables can name (24 bits).
++    const MAX_GLYPHS: usize = 1 << 24;
++
++    /// The word and the bit of `glyph`, if a table can name it.
++    fn place(glyph: GlyphId) -> Option<(usize, u64)> {
++        let glyph = usize::try_from(glyph.to_u32()).ok()?;
++        (glyph < Self::MAX_GLYPHS).then_some((glyph / 64, 1_u64 << (glyph % 64)))
++    }
++
++    fn insert(&mut self, glyph: GlyphId) -> bool {
++        let Some((index, bit)) = Self::place(glyph) else {
++            return false;
++        };
++        if self.bits.len() <= index {
++            // Most fonts stay within 16 bits: room for those at once.
++            self.bits.resize((index + 1).max(1 << 10), 0);
 +        }
-+        let glyph = usize::from(glyph.to_u16());
-+        let (word, bit) = (&mut self.bits[glyph / 64], 1_u64 << (glyph % 64));
++        let word = &mut self.bits[index];
 +        let added = *word & bit == 0;
 +        *word |= bit;
 +        self.len += usize::from(added);
 +        added
 +    }
 +
-+    fn contains(&self, glyph: GlyphId16) -> bool {
-+        let glyph = usize::from(glyph.to_u16());
-+        self.bits
-+            .get(glyph / 64)
-+            .is_some_and(|word| word & (1_u64 << (glyph % 64)) != 0)
++    fn contains(&self, glyph: GlyphId) -> bool {
++        Self::place(glyph)
++            .and_then(|(index, bit)| self.bits.get(index).map(|word| word & bit != 0))
++            .unwrap_or(false)
 +    }
 +
 +    fn is_empty(&self) -> bool {
@@ -1851,11 +2571,11 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +    }
 +
 +    /// The glyphs, in order.
-+    fn iter(&self) -> impl Iterator<Item = GlyphId16> + '_ {
++    fn iter(&self) -> impl Iterator<Item = GlyphId> + '_ {
 +        self.bits.iter().enumerate().flat_map(|(index, &word)| {
 +            (0..64_usize)
 +                .filter(move |bit| word & (1_u64 << bit) != 0)
-+                .filter_map(move |bit| u16::try_from(index * 64 + bit).ok().map(GlyphId16::new))
++                .filter_map(move |bit| u32::try_from(index * 64 + bit).ok().map(GlyphId::new))
 +        })
 +    }
 +}
@@ -1888,8 +2608,8 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +                                for glyph in table.coverage()?.iter() {
 +                                    if set.contains(glyph) {
 +                                        // Modulo 2^16, as the format says.
-+                                        let to = glyph.to_u16().wrapping_add_signed(delta);
-+                                        added |= set.insert(GlyphId16::new(to));
++                                        let to = glyph.to_u32().wrapping_add_signed(delta.into());
++                                        added |= set.insert(GlyphId::new(to & 0xFFFF));
 +                                    }
 +                                }
 +                            }
@@ -1897,22 +2617,27 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +                                let to = table.substitute_glyph_ids();
 +                                for (glyph, to) in table.coverage()?.iter().zip(to) {
 +                                    if set.contains(glyph) {
-+                                        added |= set.insert(to.get());
++                                        added |= set.insert(to.get().into());
 +                                    }
 +                                }
++                            }
++                            SingleSubst::Format3(_) | SingleSubst::Format4(_) => {
++                                return Err(NOT_LOOKED_INTO);
 +                            }
 +                        }
 +                    }
 +                }
 +                SubstitutionSubtables::Multiple(subtables) => {
 +                    for table in subtables.iter() {
-+                        let table = table?;
++                        let MultipleSubst::Format1(table) = table? else {
++                            return Err(NOT_LOOKED_INTO);
++                        };
 +                        for (glyph, sequence) in
 +                            table.coverage()?.iter().zip(table.sequences().iter())
 +                        {
 +                            if set.contains(glyph) {
 +                                for to in sequence?.substitute_glyph_ids() {
-+                                    added |= set.insert(to.get());
++                                    added |= set.insert(to.get().into());
 +                                }
 +                            }
 +                        }
@@ -1920,12 +2645,14 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +                }
 +                SubstitutionSubtables::Alternate(subtables) => {
 +                    for table in subtables.iter() {
-+                        let table = table?;
++                        let AlternateSubst::Format1(table) = table? else {
++                            return Err(NOT_LOOKED_INTO);
++                        };
 +                        let sets = table.alternate_sets();
 +                        for (glyph, alternates) in table.coverage()?.iter().zip(sets.iter()) {
 +                            if set.contains(glyph) {
 +                                for to in alternates?.alternate_glyph_ids() {
-+                                    added |= set.insert(to.get());
++                                    added |= set.insert(to.get().into());
 +                                }
 +                            }
 +                        }
@@ -1933,7 +2660,9 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +                }
 +                SubstitutionSubtables::Ligature(subtables) if !of_space => {
 +                    for table in subtables.iter() {
-+                        let table = table?;
++                        let LigatureSubst::Format1(table) = table? else {
++                            return Err(NOT_LOOKED_INTO);
++                        };
 +                        let sets = table.ligature_sets();
 +                        for (first, ligatures) in table.coverage()?.iter().zip(sets.iter()) {
 +                            for ligature in ligatures?.ligatures().iter() {
@@ -1942,9 +2671,9 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +                                    || ligature
 +                                        .component_glyph_ids()
 +                                        .iter()
-+                                        .any(|glyph| set.contains(glyph.get()))
++                                        .any(|glyph| set.contains(glyph.get().into()))
 +                                {
-+                                    added |= set.insert(ligature.ligature_glyph());
++                                    added |= set.insert(ligature.ligature_glyph().into());
 +                                }
 +                            }
 +                        }
@@ -1952,11 +2681,13 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +                }
 +                SubstitutionSubtables::Reverse(subtables) => {
 +                    for table in subtables.iter() {
-+                        let table = table?;
++                        let ReverseChainSingleSubst::Format1(table) = table? else {
++                            return Err(NOT_LOOKED_INTO);
++                        };
 +                        let to = table.substitute_glyph_ids();
 +                        for (glyph, to) in table.coverage()?.iter().zip(to) {
 +                            if set.contains(glyph) {
-+                                added |= set.insert(to.get());
++                                added |= set.insert(to.get().into());
 +                            }
 +                        }
 +                    }
@@ -1988,7 +2719,7 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +/// A font's space glyphs, and what tells its combining marks.
 +struct FontSpace<'a> {
 +    /// The space and what substitutions may make of it.
-+    spaces: Vec<GlyphId16>,
++    spaces: Vec<GlyphId>,
 +    /// GDEF's glyph classes; without them, no glyph counts as a mark (harfrust
 +    /// then takes them from the characters, which a glyph alone doesn't tell).
 +    marks: Option<ClassDef<'a>>,
@@ -1996,21 +2727,21 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +
 +/// One glyph of a rule: what may match there.
 +enum Position<'a> {
-+    Glyph(GlyphId16),
++    Glyph(GlyphId),
 +    /// A class of a class definition, and the coverage the glyph is also
 +    /// in, if any.
-+    Class(&'a ClassDef<'a>, u16, Option<&'a CoverageTable<'a>>),
++    Class(&'a ClassDef<'a>, u32, Option<&'a CoverageTable<'a>>),
 +    Coverage(CoverageTable<'a>),
 +}
 +
 +impl FontSpace<'_> {
-+    fn is_mark(&self, glyph: GlyphId16) -> bool {
++    fn is_mark(&self, glyph: GlyphId) -> bool {
 +        self.marks
 +            .as_ref()
-+            .is_some_and(|marks| marks.get(GlyphId::from(glyph)) == 3)
++            .is_some_and(|marks| marks.get(glyph) == 3)
 +    }
 +
-+    fn is_space(&self, glyph: GlyphId16) -> bool {
++    fn is_space(&self, glyph: GlyphId) -> bool {
 +        self.spaces.contains(&glyph)
 +    }
 +
@@ -2018,7 +2749,7 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +        self.spaces.iter().any(|&space| match position {
 +            Position::Glyph(glyph) => *glyph == space,
 +            Position::Class(class_def, class, coverage) => {
-+                class_def.get(GlyphId::from(space)) == *class
++                class_def.get(space) == *class
 +                    && coverage.is_none_or(|coverage| coverage.get(space).is_some())
 +            }
 +            Position::Coverage(coverage) => coverage.get(space).is_some(),
@@ -2085,7 +2816,7 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +                (0, None) => return false,
 +                (0, Some(coverage)) => {
 +                    for glyph in coverage.iter() {
-+                        if class_def.get(GlyphId::from(glyph)) == 0 {
++                        if class_def.get(glyph) == 0 {
 +                            set.insert(glyph);
 +                        }
 +                    }
@@ -2117,13 +2848,14 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +            match subtable?.kind()? {
 +                SubtableKind::Format0(pairs) => {
 +                    for pair in pairs.pairs() {
-+                        if self.is_space(pair.right()) {
++                        let (left, right) = (pair.left().into(), pair.right().into());
++                        if self.is_space(right) {
 +                            // HarfBuzz kerns past marks.
 +                            reached.before_skips_marks = true;
-+                            reached.before.insert(pair.left());
++                            reached.before.insert(left);
 +                        }
-+                        if self.is_space(pair.left()) && !self.is_mark(pair.right()) {
-+                            reached.after.insert(pair.right());
++                        if self.is_space(left) && !self.is_mark(right) {
++                            reached.after.insert(right);
 +                        }
 +                    }
 +                }
@@ -2152,13 +2884,16 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +            | SubstitutionSubtables::EmptyExtension => {}
 +            SubstitutionSubtables::Ligature(subtables) => {
 +                for table in subtables.iter() {
-+                    let table = table?;
++                    let LigatureSubst::Format1(table) = table? else {
++                        return Err(NOT_LOOKED_INTO);
++                    };
 +                    let coverage = table.coverage()?;
 +                    for (first, set) in coverage.iter().zip(table.ligature_sets().iter()) {
 +                        reached.space_ligatures |= self.is_space(first);
 +                        for ligature in set?.ligatures().iter() {
++                            let components = ligature?.component_glyph_ids();
 +                            let positions: Vec<Position<'_>> = core::iter::once(first)
-+                                .chain(ligature?.component_glyph_ids().iter().map(BigEndian::get))
++                                .chain(components.iter().map(|glyph| glyph.get().into()))
 +                                .map(Position::Glyph)
 +                                .collect();
 +                            self.rule(&positions, flag, reached);
@@ -2178,7 +2913,9 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +            }
 +            SubstitutionSubtables::Reverse(subtables) => {
 +                for table in subtables.iter() {
-+                    let table = table?;
++                    let ReverseChainSingleSubst::Format1(table) = table? else {
++                        return Err(NOT_LOOKED_INTO);
++                    };
 +                    let mut positions: Vec<Position<'_>> = table
 +                        .backtrack_coverages()
 +                        .iter()
@@ -2223,7 +2960,7 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +                                for record in set?.pair_value_records().iter() {
 +                                    let positions = [
 +                                        Position::Glyph(first),
-+                                        Position::Glyph(record?.second_glyph()),
++                                        Position::Glyph(record?.second_glyph().into()),
 +                                    ];
 +                                    self.rule(&positions, flag, reached);
 +                                }
@@ -2242,7 +2979,7 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +                                        continue;
 +                                    }
 +                                    let (Ok(class1), Ok(class2)) =
-+                                        (u16::try_from(class1), u16::try_from(class2))
++                                        (u32::try_from(class1), u32::try_from(class2))
 +                                    else {
 +                                        reached.across = true;
 +                                        return Ok(());
@@ -2255,30 +2992,44 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +                                }
 +                            }
 +                        }
++                        PairPos::Format3(_) | PairPos::Format4(_) => {
++                            return Err(NOT_LOOKED_INTO);
++                        }
 +                    }
 +                }
 +            }
 +            // Joins the space to the glyphs beside it.
 +            PositionSubtables::Cursive(subtables) => {
 +                for table in subtables.iter() {
-+                    reached.across |= has_space(table?.coverage()?);
++                    let CursivePos::Format1(table) = table? else {
++                        return Err(NOT_LOOKED_INTO);
++                    };
++                    reached.across |= has_space(table.coverage()?);
 +                }
 +            }
 +            // Marks on a space are its own (in its grapheme); a space as a
 +            // mark is odd enough to count.
 +            PositionSubtables::MarkToBase(subtables) => {
 +                for table in subtables.iter() {
-+                    reached.across |= has_space(table?.mark_coverage()?);
++                    let MarkBasePos::Format1(table) = table? else {
++                        return Err(NOT_LOOKED_INTO);
++                    };
++                    reached.across |= has_space(table.mark_coverage()?);
 +                }
 +            }
 +            PositionSubtables::MarkToLig(subtables) => {
 +                for table in subtables.iter() {
-+                    reached.across |= has_space(table?.mark_coverage()?);
++                    let MarkLigPos::Format1(table) = table? else {
++                        return Err(NOT_LOOKED_INTO);
++                    };
++                    reached.across |= has_space(table.mark_coverage()?);
 +                }
 +            }
 +            PositionSubtables::MarkToMark(subtables) => {
 +                for table in subtables.iter() {
-+                    let table = table?;
++                    let MarkMarkPos::Format1(table) = table? else {
++                        return Err(NOT_LOOKED_INTO);
++                    };
 +                    reached.across |=
 +                        has_space(table.mark1_coverage()?) || has_space(table.mark2_coverage()?);
 +                }
@@ -2309,8 +3060,9 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +                for (first, set) in coverage.iter().zip(table.seq_rule_sets().iter()) {
 +                    let Some(set) = set else { continue };
 +                    for rule in set?.seq_rules().iter() {
++                        let input = rule?.input_sequence();
 +                        let positions: Vec<Position<'_>> = core::iter::once(first)
-+                            .chain(rule?.input_sequence().iter().map(BigEndian::get))
++                            .chain(input.iter().map(|glyph| glyph.get().into()))
 +                            .map(Position::Glyph)
 +                            .collect();
 +                        self.rule(&positions, flag, reached);
@@ -2322,18 +3074,16 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +                let class_def = table.class_def()?;
 +                for (first, set) in table.class_seq_rule_sets().iter().enumerate() {
 +                    let Some(set) = set else { continue };
-+                    let Ok(first) = u16::try_from(first) else {
++                    let Ok(first) = u32::try_from(first) else {
 +                        reached.across = true;
 +                        return Ok(());
 +                    };
 +                    for rule in set?.class_seq_rules().iter() {
 +                        let positions: Vec<Position<'_>> =
 +                            core::iter::once(Position::Class(&class_def, first, Some(&coverage)))
-+                                .chain(
-+                                    rule?.input_sequence().iter().map(|class| {
-+                                        Position::Class(&class_def, class.get(), None)
-+                                    }),
-+                                )
++                                .chain(rule?.input_sequence().iter().map(|class| {
++                                    Position::Class(&class_def, class.get().into(), None)
++                                }))
 +                                .collect();
 +                        self.rule(&positions, flag, reached);
 +                    }
@@ -2347,6 +3097,9 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +                    .collect::<Result<_, _>>()?;
 +                self.rule(&positions, flag, reached);
 +            }
++            SequenceContext::Format4(_)
++            | SequenceContext::Format5(_)
++            | SequenceContext::Format6(_) => return Err(NOT_LOOKED_INTO),
 +        }
 +        Ok(())
 +    }
@@ -2364,14 +3117,15 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +                    let Some(set) = set else { continue };
 +                    for rule in set?.chained_seq_rules().iter() {
 +                        let rule = rule?;
++                        let glyph = |glyph: &BigEndian<_>| GlyphId::from(glyph.get());
 +                        let positions: Vec<Position<'_>> = rule
 +                            .backtrack_sequence()
 +                            .iter()
 +                            .rev()
-+                            .map(BigEndian::get)
++                            .map(glyph)
 +                            .chain([first])
-+                            .chain(rule.input_sequence().iter().map(BigEndian::get))
-+                            .chain(rule.lookahead_sequence().iter().map(BigEndian::get))
++                            .chain(rule.input_sequence().iter().map(glyph))
++                            .chain(rule.lookahead_sequence().iter().map(glyph))
 +                            .map(Position::Glyph)
 +                            .collect();
 +                        self.rule(&positions, flag, reached);
@@ -2385,29 +3139,27 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +                let lookahead = table.lookahead_class_def()?;
 +                for (first, set) in table.chained_class_seq_rule_sets().iter().enumerate() {
 +                    let Some(set) = set else { continue };
-+                    let Ok(first) = u16::try_from(first) else {
++                    let Ok(first) = u32::try_from(first) else {
 +                        reached.across = true;
 +                        return Ok(());
 +                    };
 +                    for rule in set?.chained_class_seq_rules().iter() {
 +                        let rule = rule?;
-+                        let positions: Vec<Position<'_>> = rule
-+                            .backtrack_sequence()
-+                            .iter()
-+                            .rev()
-+                            .map(|class| Position::Class(&backtrack, class.get(), None))
-+                            .chain([Position::Class(&input, first, Some(&coverage))])
-+                            .chain(
-+                                rule.input_sequence()
-+                                    .iter()
-+                                    .map(|class| Position::Class(&input, class.get(), None)),
-+                            )
-+                            .chain(
-+                                rule.lookahead_sequence()
-+                                    .iter()
-+                                    .map(|class| Position::Class(&lookahead, class.get(), None)),
-+                            )
-+                            .collect();
++                        let positions: Vec<Position<'_>> =
++                            rule.backtrack_sequence()
++                                .iter()
++                                .rev()
++                                .map(|class| Position::Class(&backtrack, class.get().into(), None))
++                                .chain([Position::Class(&input, first, Some(&coverage))])
++                                .chain(
++                                    rule.input_sequence().iter().map(|class| {
++                                        Position::Class(&input, class.get().into(), None)
++                                    }),
++                                )
++                                .chain(rule.lookahead_sequence().iter().map(|class| {
++                                    Position::Class(&lookahead, class.get().into(), None)
++                                }))
++                                .collect();
 +                        self.rule(&positions, flag, reached);
 +                    }
 +                }
@@ -2425,6 +3177,9 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +                    }
 +                }
 +                self.rule(&positions, flag, reached);
++            }
++            ChainedSequenceContext::Format4(_) | ChainedSequenceContext::Format5(_) => {
++                return Err(NOT_LOOKED_INTO);
 +            }
 +        }
 +        Ok(())
@@ -2475,7 +3230,7 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +                }
 +                let feature: Feature<'_> = alternate
 +                    .alternate_feature_offset()
-+                    .resolve_with_args(substitution.offset_data(), &tag)?;
++                    .resolve_with_args(substitution.offset_data(), tag)?;
 +                pending.extend(feature.lookup_list_indices().iter().map(BigEndian::get));
 +            }
 +        }
@@ -2560,6 +3315,9 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +            }
 +        }
 +        SequenceContext::Format3(table) => add_records(table.seq_lookup_records(), nested),
++        SequenceContext::Format4(_) | SequenceContext::Format5(_) | SequenceContext::Format6(_) => {
++            return Err(NOT_LOOKED_INTO);
++        }
 +    }
 +    Ok(())
 +}
@@ -2584,6 +3342,9 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +            }
 +        }
 +        ChainedSequenceContext::Format3(table) => add_records(table.seq_lookup_records(), nested),
++        ChainedSequenceContext::Format4(_) | ChainedSequenceContext::Format5(_) => {
++            return Err(NOT_LOOKED_INTO);
++        }
 +    }
 +    Ok(())
 +}
@@ -2594,34 +3355,38 @@ index 0000000000000000000000000000000000000000..89d103f12d3eefe09ac5e88d84eb9727
 +}
 +
 +/// Whether `value` moves a glyph or changes its advance.
-+fn moves(value: &ValueRecord) -> bool {
++fn moves(value: &ValueRecord<'_>) -> bool {
 +    [
-+        value.x_placement,
-+        value.y_placement,
-+        value.x_advance,
-+        value.y_advance,
++        value.x_placement(),
++        value.y_placement(),
++        value.x_advance(),
++        value.y_advance(),
 +    ]
 +    .iter()
-+    .any(|v| v.is_some_and(|v| v.get() != 0))
++    .any(|v| v.is_some_and(|v| v != 0))
 +        || [
-+            value.x_placement_device,
-+            value.y_placement_device,
-+            value.x_advance_device,
-+            value.y_advance_device,
++            ValueFormat::X_PLACEMENT_DEVICE,
++            ValueFormat::Y_PLACEMENT_DEVICE,
++            ValueFormat::X_ADVANCE_DEVICE,
++            ValueFormat::Y_ADVANCE_DEVICE,
 +        ]
-+        .iter()
-+        .any(|device| !device.get().is_null())
++        .into_iter()
++        .any(|device| {
++            value
++                .device_offset(device)
++                .is_some_and(|offset| !offset.is_null())
++        })
 +}
 diff --git a/parley_engine/src/shape/words.rs b/parley_engine/src/shape/words.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..f2529b951724cb0171728e2f5b0beb8a17e5e2f6
+index 0000000000000000000000000000000000000000..58e4badae6388a7a100d3e0a6c7a3574ba082609
 --- /dev/null
 +++ b/parley_engine/src/shape/words.rs
-@@ -0,0 +1,232 @@
+@@ -0,0 +1,235 @@
 +// Copyright 2026 the Parley Authors
 +// SPDX-License-Identifier: Apache-2.0 OR MIT
 +
-+//! kun: what shaping a word gave, kept for the next time the same word is
++//! machopo: what shaping a word gave, kept for the next time the same word is
 +//! shaped alike: text is mostly the same words again, and shaping one
 +//! again (picking its fonts, running harfrust) is most of the time text
 +//! takes. Gecko's `gfxShapedWord` cache and `WebKit`'s `WidthCache` keep
@@ -2701,7 +3466,7 @@ index 0000000000000000000000000000000000000000..f2529b951724cb0171728e2f5b0beb8a
 +    /// Its glyphs, as harfrust gives them for the run on its own (clusters
 +    /// count from the run's first character).
 +    pub(crate) glyphs: Range<usize>,
-+    pub(crate) coords: Box<[harfrust::NormalizedCoord]>,
++    pub(crate) coords: Box<[harfrust::font::NormalizedCoord]>,
 +}
 +
 +/// What a word is shaped with, but its text and the styles of its
@@ -2710,6 +3475,8 @@ index 0000000000000000000000000000000000000000..f2529b951724cb0171728e2f5b0beb8a
 +struct OptionsKey {
 +    script: Script,
 +    font_size: u32,
++    /// The font size without the scale, which harfrust tracks by (`trak`).
++    point_size: u32,
 +    language: Option<Language>,
 +    features: Vec<(u32, u16)>,
 +    variations: Vec<(u32, u32)>,
@@ -2754,6 +3521,7 @@ index 0000000000000000000000000000000000000000..f2529b951724cb0171728e2f5b0beb8a
 +        let key = OptionsKey {
 +            script,
 +            font_size: options.font_size.to_bits(),
++            point_size: options.point_size.to_bits(),
 +            language: options.language,
 +            features: options
 +                .features

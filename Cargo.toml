@@ -118,10 +118,10 @@ kurbo = "0.13"
 taffy = { path = "../third_party/taffy", default-features = false, features = ["std", "block_layout", "float_layout", "flexbox", "grid", "content_size", "calc"] }
 # Only to split faces out of font collections for Skia; the version parley
 # already pulls in.
-read-fonts = "0.41"
+read-fonts = "0.46"
 # Fonts made in tests, a lookup or two each: the version on `read-fonts`
-# 0.41.
-write-fonts = "0.50"
+# 0.46.
+write-fonts = "0.55"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Rust's allocator in the `machopo` executable (`shell`): mimalloc v3, built with
 # `cc`, as Chromium's allocations go through PartitionAlloc; the platform's

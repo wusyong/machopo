@@ -73,15 +73,14 @@ fn shape(cx: &mut TextContext, text: &str, style: &CanvasTextStyle) -> (Vec<Glyp
                 .unzip();
             runs.push(GlyphRun {
                 font: FontData {
-                    bytes: Arc::new(font.font.data.clone()),
-                    index: font.font.index,
-                    id: font.font.data.id(),
+                    bytes: Arc::new(font.data.clone()),
+                    index: font.index,
+                    id: font.data.id(),
                 },
                 size: run.font_size(),
                 glyphs,
                 positions,
-                embolden: synthesis.embolden()
-                    || needs_synthetic_bold(style.font.weight, &font.font),
+                embolden: synthesis.embolden() || needs_synthetic_bold(style.font.weight, font),
                 skew: synthesis.skew().unwrap_or(0.0),
                 variations: crate::font_features::run_variations(run, None),
             });

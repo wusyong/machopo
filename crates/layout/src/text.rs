@@ -4,8 +4,9 @@
 //!
 //! An inline element's start and end edges (margin, border, padding) are
 //! 0px-high parley inline boxes kept with the content next to them
-//! (`InlineBoxLineBreak`, our change on the `machopo` branch of our parley fork), so the edges
-//! take room on the line without changing its height. Each line then gets
+//! (`InlineBoxKind::StartEdge` and `EndEdge`, our change on the `machopo`
+//! branch of our parley fork), so the edges take room on the line without
+//! changing its height. Each line then gets
 //! one `InlineBoxFragment` per element on it, sliced at line breaks
 //! (`box-decoration-break: slice`).
 //!
@@ -28,9 +29,9 @@ use gfx::{FontData, PointF, RectF, SizeF};
 use icu_segmenter::WordSegmenter;
 use parley::fontique::{Blob, Collection, CollectionOptions, SourceCache};
 use parley::{
-    Alignment, AlignmentOptions, FontContext, IndentOptions, InlineBox, InlineBoxKind,
-    InlineBoxLineBreak, Layout, LayoutContext, PositionedLayoutItem, StyleProperty, TextStyle,
-    TextWrapMode, TreeBuilder, VerticalAlign, YieldData,
+    Alignment, AlignmentOptions, FontContext, IndentOptions, InlineBox, InlineBoxKind, Layout,
+    LayoutContext, PositionedLayoutItem, StyleProperty, TextStyle, TextWrapMode, TreeBuilder,
+    VerticalAlign, YieldData,
 };
 
 use taffy::AvailableSpace;
@@ -146,6 +147,9 @@ impl TextContext {
 /// How far past the width a line may run before it breaks.
 const BREAK_TOLERANCE: f32 = 1.0 / 64.0;
 
+/// U+FFFC OBJECT REPLACEMENT CHARACTER: an atomic inline in the text.
+const OBJECT_REPLACEMENT: char = '\u{FFFC}';
+
 /// Whether a bold weight landed on a face that isn't bold, so the glyphs
 /// need emboldening. fontique only asks for it when the requested weight is
 /// more than 200 above the face's (Blink's rule in `font_cache_skia.cc`),
@@ -231,7 +235,7 @@ fn substitute_fragment(
         let layout = shape_line(cx, text, &[(0..text.len(), style)]);
         let run = layout.lines().next()?.runs().next()?;
         let font = run.font();
-        Some((font.font.data.id(), font.font.index))
+        Some((font.data.id(), font.index))
     };
     let text = if first_font(cx, preferred) == first_font(cx, "X") {
         preferred
@@ -279,14 +283,14 @@ fn substitute_fragment(
             let synthesis = run.synthesis();
             if glyphs.is_empty() {
                 fragment.font = FontData {
-                    bytes: Arc::new(font.font.data.clone()),
-                    index: font.font.index,
-                    id: font.font.data.id(),
+                    bytes: Arc::new(font.data.clone()),
+                    index: font.index,
+                    id: font.data.id(),
                 };
                 fragment.font_size = run.font_size();
                 fragment.embolden = crate::font_features::embolden(
                     &style.font,
-                    synthesis.embolden() || needs_synthetic_bold(style.font.weight, &font.font),
+                    synthesis.embolden() || needs_synthetic_bold(style.font.weight, font),
                 );
                 fragment.skew = crate::font_features::skew(&style.font, synthesis.skew());
                 fragment.variations = crate::font_features::run_variations(run, Some(&style.font));
@@ -908,7 +912,6 @@ impl InlineContent {
                         height: 0.0,
                         baseline: None,
                         vertical_align: atomic_aligns[atomics.len()],
-                        line_break: InlineBoxLineBreak::Auto,
                     });
                     boxes.push(BoxItem::Atomic(atomics.len()));
                     atomics.push(*id);
@@ -923,7 +926,6 @@ impl InlineContent {
                         height: 0.0,
                         baseline: None,
                         vertical_align: VerticalAlign::BASELINE,
-                        line_break: InlineBoxLineBreak::Auto,
                     });
                     boxes.push(BoxItem::OutOfFlow(out_of_flow.len()));
                     out_of_flow.push((*id, style.original_display));
@@ -938,7 +940,6 @@ impl InlineContent {
                         height: 0.0,
                         baseline: None,
                         vertical_align: VerticalAlign::BASELINE,
-                        line_break: InlineBoxLineBreak::Auto,
                     });
                     boxes.push(BoxItem::Float(floats.len()));
                     floats.push(InlineFloat {
@@ -960,17 +961,16 @@ impl InlineContent {
             }
             builder.push_inline_box(InlineBox {
                 id: boxes.len() as u64,
-                kind: InlineBoxKind::InFlow,
+                kind: if start {
+                    InlineBoxKind::StartEdge
+                } else {
+                    InlineBoxKind::EndEdge
+                },
                 index: byte_index,
                 width: 0.0,
                 height: 0.0,
                 baseline: None,
                 vertical_align: VerticalAlign::BASELINE,
-                line_break: if start {
-                    InlineBoxLineBreak::KeepWithNext
-                } else {
-                    InlineBoxLineBreak::KeepWithPrevious
-                },
             });
             boxes.push(BoxItem::Edge { element, start });
             if !start {
@@ -1058,8 +1058,8 @@ impl InlineContent {
         self.out_of_flow.iter().map(|&(id, _)| id)
     }
 
-    /// Whether its first line is indented whatever its width: parley's
-    /// content widths leave the indent out, which only its lines take in.
+    /// Whether its first line is indented whatever its width: its width
+    /// is then taken from its lines.
     pub(crate) fn indented(&self) -> bool {
         indent_px(self.text_indent, None) != 0.0
     }
@@ -1165,31 +1165,34 @@ impl InlineContent {
             _ => 0.0,
         };
         let mut changed = false;
-        for inline_box in self.layout.inline_boxes_mut() {
-            let (width, height, baseline) = match &self.boxes[box_index(inline_box.id)] {
-                BoxItem::Edge { element, start } => {
-                    let edge = Edge::of(&self.elements[*element].style, self.percent_base);
-                    (if *start { edge.start() } else { edge.end() }, 0.0, None)
-                }
-                BoxItem::Atomic(index) => {
-                    let laid = atomics.lay_out(self.atomics[*index], space, self.height);
-                    (laid.margin_box.width, laid.margin_box.height, laid.baseline)
-                }
-                BoxItem::OutOfFlow(_) => (0.0, 0.0, None),
-                // Only its size: the line breaking places it.
-                BoxItem::Float(index) => {
-                    let float = &mut self.floats[*index];
-                    // The lines are broken again whenever it is placed:
-                    // its size is in the bands it leaves otherwise.
-                    float.margin_box = atomics.lay_out(float.id, space, self.height).margin_box;
-                    (0.0, 0.0, None)
-                }
-            };
-            changed |= (inline_box.width, inline_box.height, inline_box.baseline)
-                != (width, height, baseline);
-            inline_box.width = width;
-            inline_box.height = height;
-            inline_box.baseline = baseline;
+        let boxes = self.layout.inline_boxes().len();
+        for index in 0..boxes {
+            self.layout.edit_inline_box(index, |inline_box| {
+                let (width, height, baseline) = match &self.boxes[box_index(inline_box.id)] {
+                    BoxItem::Edge { element, start } => {
+                        let edge = Edge::of(&self.elements[*element].style, self.percent_base);
+                        (if *start { edge.start() } else { edge.end() }, 0.0, None)
+                    }
+                    BoxItem::Atomic(index) => {
+                        let laid = atomics.lay_out(self.atomics[*index], space, self.height);
+                        (laid.margin_box.width, laid.margin_box.height, laid.baseline)
+                    }
+                    BoxItem::OutOfFlow(_) => (0.0, 0.0, None),
+                    // Only its size: the line breaking places it.
+                    BoxItem::Float(index) => {
+                        let float = &mut self.floats[*index];
+                        // The lines are broken again whenever it is placed:
+                        // its size is in the bands it leaves otherwise.
+                        float.margin_box = atomics.lay_out(float.id, space, self.height).margin_box;
+                        (0.0, 0.0, None)
+                    }
+                };
+                changed |= (inline_box.width, inline_box.height, inline_box.baseline)
+                    != (width, height, baseline);
+                inline_box.width = width;
+                inline_box.height = height;
+                inline_box.baseline = baseline;
+            });
         }
         if changed {
             self.broken = None;
@@ -1204,15 +1207,18 @@ impl InlineContent {
         self.sized_for = None;
         self.broken = None;
         self.percent_base = 0.0;
-        for inline_box in self.layout.inline_boxes_mut() {
-            inline_box.width = match &self.boxes[box_index(inline_box.id)] {
-                BoxItem::Edge { element, start } => {
-                    let edge = Edge::of(&self.elements[*element].style, 0.0);
-                    if *start { edge.start() } else { edge.end() }
-                }
-                BoxItem::Atomic(index) => atomics.width(self.atomics[*index], space),
-                BoxItem::OutOfFlow(_) | BoxItem::Float(_) => 0.0,
-            };
+        let boxes = self.layout.inline_boxes().len();
+        for index in 0..boxes {
+            self.layout.edit_inline_box(index, |inline_box| {
+                inline_box.width = match &self.boxes[box_index(inline_box.id)] {
+                    BoxItem::Edge { element, start } => {
+                        let edge = Edge::of(&self.elements[*element].style, 0.0);
+                        if *start { edge.start() } else { edge.end() }
+                    }
+                    BoxItem::Atomic(index) => atomics.width(self.atomics[*index], space),
+                    BoxItem::OutOfFlow(_) | BoxItem::Float(_) => 0.0,
+                };
+            });
         }
     }
 
@@ -1263,6 +1269,16 @@ impl InlineContent {
         // units are 1/64 px. They are aligned in the width itself.
         self.layout
             .set_text_indent(indent_px(self.text_indent, width), IndentOptions::default());
+        // The lines are aligned as the breaking ends.
+        let alignment = match self.text_align {
+            TextAlign::Start => Alignment::Start,
+            TextAlign::End => Alignment::End,
+            TextAlign::Left => Alignment::Left,
+            TextAlign::Right => Alignment::Right,
+            TextAlign::Center => Alignment::Center,
+        };
+        self.layout
+            .set_alignment(alignment, AlignmentOptions::default());
         let mut beside = bands.clone();
         match width {
             Some(width) if places || !bands.is_empty() => {
@@ -1297,14 +1313,6 @@ impl InlineContent {
                 breaker.finish();
             }
         }
-        let alignment = match self.text_align {
-            TextAlign::Start => Alignment::Start,
-            TextAlign::End => Alignment::End,
-            TextAlign::Left => Alignment::Left,
-            TextAlign::Right => Alignment::Right,
-            TextAlign::Center => Alignment::Center,
-        };
-        self.layout.align(alignment, AlignmentOptions::default());
         // Lines beside floats skip down past them: the content ends at the
         // last line's bottom, not at their heights added up; a last line
         // with nothing on it (white space hanging after the last) doesn't
@@ -1413,8 +1421,8 @@ impl InlineContent {
                 let Some(line) = line else {
                     break true;
                 };
-                let on_line = |&&(_, at): &&(usize, f32)| at <= line.advance;
-                let content = line.advance - line.hanging_advance;
+                let on_line = |&&(_, at): &&(usize, f32)| at <= line.metrics.advance;
+                let content = line.metrics.advance - line.metrics.hanging_advance;
                 // Its content doesn't fit: a band lower down with more room.
                 // Floats beside it are placed first, at its top, and it goes
                 // on down past them too (Blink places a float that fits
@@ -1869,9 +1877,9 @@ impl InlineContent {
             let (style, _) = self.styles[newline.style().brush as usize].clone();
             let font = run.font();
             let font = FontData {
-                bytes: Arc::new(font.font.data.clone()),
-                index: font.font.index,
-                id: font.font.data.id(),
+                bytes: Arc::new(font.data.clone()),
+                index: font.index,
+                id: font.data.id(),
             };
             let metrics = run.font_metrics();
             let x = atomic_end
@@ -1980,7 +1988,7 @@ impl InlineContent {
         let synthesis = run.synthesis();
         let embolden = crate::font_features::embolden(
             &style.font,
-            synthesis.embolden() || needs_synthetic_bold(style.font.weight, &font.font),
+            synthesis.embolden() || needs_synthetic_bold(style.font.weight, font),
         );
         let x = origin.x + glyph_run.offset();
         // A span of the shaped text the lines share: its glyphs are placed
@@ -2003,9 +2011,9 @@ impl InlineContent {
                 clusters: OnceLock::new(),
             })),
             font: FontData {
-                bytes: Arc::new(font.font.data.clone()),
-                index: font.font.index,
-                id: font.font.data.id(),
+                bytes: Arc::new(font.data.clone()),
+                index: font.index,
+                id: font.data.id(),
             },
             font_size: run.font_size(),
             embolden,
@@ -2574,8 +2582,13 @@ fn collapse_white_space(items: &[InlineItem]) -> Option<(String, Runs<'_>, Tags)
             | InlineItem::OutOfFlow(..)
             | InlineItem::Float(_) => tags.push((chars.len(), index)),
             // Content: spaces around it don't collapse into each other.
+            // parley lays an in-flow box out as the object replacement
+            // character at its place in the text, which its builder adds
+            // (Blink's `InlineItemsBuilder` appends one too): it is here
+            // so that every offset is one into the text parley has.
             InlineItem::Atomic(..) => {
                 tags.push((chars.len(), index));
+                chars.push((OBJECT_REPLACEMENT, index, 0, 0));
                 last_collapsible = false;
                 line_start = false;
                 previous = None;
@@ -2608,6 +2621,12 @@ fn collapse_white_space(items: &[InlineItem]) -> Option<(String, Runs<'_>, Tags)
         let start = text.len();
         offsets.push(start);
         text.push(c);
+        // An atomic inline's character is in no run: parley's builder
+        // adds it with the box.
+        if matches!(items[item], InlineItem::Atomic(..)) {
+            last_item = item;
+            continue;
+        }
         match runs.last_mut() {
             Some((range, ..)) if item == last_item => range.end = text.len(),
             // A new run: its item's text node, and the length of its data
@@ -2628,7 +2647,7 @@ fn collapse_white_space(items: &[InlineItem]) -> Option<(String, Runs<'_>, Tags)
                     | InlineItem::Atomic(..)
                     | InlineItem::OutOfFlow(..)
                     | InlineItem::Float(_) => {
-                        unreachable!("tags and boxes have no text")
+                        unreachable!("tags and boxes have no run")
                     }
                 };
                 runs.push((start..text.len(), style, node, source));
@@ -2936,7 +2955,7 @@ pub(crate) fn control_font_metrics(
     let mut x_range = None;
     if let Some(run) = layout.lines().next().and_then(|line| line.runs().next()) {
         let font = run.font();
-        x_range = FontRef::from_index(font.font.data.data(), font.font.index)
+        x_range = FontRef::from_index(font.data.data(), font.index)
             .ok()
             .and_then(|face| face.head().ok())
             // Apart as floats: the two ends of 16 bits each may be further

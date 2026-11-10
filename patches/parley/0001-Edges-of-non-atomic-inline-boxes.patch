@@ -1,0 +1,755 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wu Yuwei <yuweiwu@pm.me>
+Date: Tue, 10 Nov 2026 10:07:37 +0900
+Subject: [PATCH] Edges of non-atomic inline boxes
+
+`InlineBoxKind::StartEdge` and `EndEdge`: the start and end margin, border
+and padding of a CSS `display: inline` element. An edge sits at a character
+boundary like an out-of-flow box, so the text on its two sides is shaped and
+analyzed as if it weren't there, but it takes up its width on the line. It
+adds nothing to the line's height.
+
+An edge has no soft wrap opportunity of its own. A start edge stays with the
+content after it (that content's opportunity is taken before the edge, once
+for consecutive edges), an end edge with the content before it. One that
+does not fit takes the last opportunity on the line, as text does, or
+overflows. Whitespace before an edge is not at the end of the line, so it
+does not hang.
+---
+ parley/src/inline_box.rs        |  28 ++-
+ parley/src/layout/cluster.rs    |  10 +-
+ parley/src/layout/data.rs       |  90 ++++++++-
+ parley/src/layout/line.rs       |   5 +-
+ parley/src/layout/line_break.rs |  86 ++++++++-
+ parley/src/tests/mod.rs         |   1 +
+ parley/src/tests/test_edges.rs  | 325 ++++++++++++++++++++++++++++++++
+ 7 files changed, 535 insertions(+), 10 deletions(-)
+ create mode 100644 parley/src/tests/test_edges.rs
+
+diff --git a/parley/src/inline_box.rs b/parley/src/inline_box.rs
+index 711cddcea751678f61331e4ca9a3a6bfc46f8c18..5578faaec87290a833b8309b870e2cdacf6eca9d 100644
+--- a/parley/src/inline_box.rs
++++ b/parley/src/inline_box.rs
+@@ -20,7 +20,8 @@ pub struct InlineBox {
+     /// Any U+FFFC character in the text without a corresponding in-flow box, is treated as ordinary
+     /// text (some fonts may render .notdef, others may have a glyph for it).
+     ///
+-    /// Out-of-flow boxes can be placed at any character boundary.
++    /// Out-of-flow boxes and [edges](InlineBoxKind::StartEdge) can be placed at any character
++    /// boundary.
+     ///
+     /// When using the [`TreeBuilder`](crate::TreeBuilder), this offset is set by the builder.
+     pub index: usize,
+@@ -113,4 +114,29 @@ pub enum InlineBoxKind {
+     ///
+     /// They can be used to implement advanced layout modes such as CSS's `float`
+     CustomOutOfFlow,
++    // machopo: the edges of non-atomic inline boxes.
++    /// The start edge of a non-atomic inline box (a CSS `display: inline` element): its start
++    /// margin, border and padding, as [`InlineBox::width`].
++    ///
++    /// Unlike an [`InFlow`](Self::InFlow) box, an edge is not a character of the text: it sits at
++    /// a character boundary, like an out-of-flow box, so the text on its two sides is analyzed as
++    /// if the edge weren't there. It takes up its width, but adds nothing to the line's height:
++    /// the inline's height comes from its content (CSS 2 § 10.8), and its vertical padding and
++    /// border don't change the line.
++    ///
++    /// An edge has no soft wrap opportunity of its own. A start edge stays on the line of the
++    /// content after it: an opportunity right before that content is taken before the edge
++    /// instead. Consecutive edges (an empty span, or nested span starts) stay together with that
++    /// content too.
++    StartEdge,
++    /// The end edge of a non-atomic inline box, see [`StartEdge`](Self::StartEdge). It stays on
++    /// the line of the content before it.
++    EndEdge,
++}
++
++impl InlineBoxKind {
++    /// Whether this is the edge of a non-atomic inline box, which takes up its width on the line.
++    pub(crate) fn is_edge(self) -> bool {
++        matches!(self, Self::StartEdge | Self::EndEdge)
++    }
+ }
+diff --git a/parley/src/layout/cluster.rs b/parley/src/layout/cluster.rs
+index e1b3f7172e4aa9cf37cc6512a116da313692379d..68c78d830811692b2d8fe67812cdf94fa451a196 100644
+--- a/parley/src/layout/cluster.rs
++++ b/parley/src/layout/cluster.rs
+@@ -113,7 +113,10 @@ impl<'a, B: Brush> Cluster<'a, B> {
+                             return Some((cluster, side));
+                         }
+                     }
+-                    LineItem::OutOfFlowBox(_) => {}
++                    // machopo: the edges of non-atomic inline boxes take up their width.
++                    LineItem::OutOfFlowBox(box_index) => {
++                        offset += layout.data.edge_width(box_index);
++                    }
+                 }
+             }
+         }
+@@ -460,7 +463,10 @@ impl<'a, B: Brush> Cluster<'a, B> {
+                         }
+                     }
+                 }
+-                LineItem::OutOfFlowBox(_) => {}
++                // machopo: the edges of non-atomic inline boxes take up their width.
++                LineItem::OutOfFlowBox(box_index) => {
++                    offset += line.layout.data.edge_width(box_index);
++                }
+             }
+         }
+         Some(offset)
+diff --git a/parley/src/layout/data.rs b/parley/src/layout/data.rs
+index aa4d8005ad830cafeb89c9194df5c2c675d7f2b7..c6515dd812b8e8513ce86c2864ffecbd7979de4d 100644
+--- a/parley/src/layout/data.rs
++++ b/parley/src/layout/data.rs
+@@ -8,7 +8,9 @@ use crate::layout::whitespace::whitespace_hangs;
+ use crate::layout::{ContentWidths, LineMetrics, Style};
+ use crate::resolve::ResolvedStyle;
+ use crate::style::Brush;
+-use crate::{IndentOptions, LineHeight, OverflowWrap, TextWrapMode, WhiteSpaceCollapse};
++use crate::{
++    IndentOptions, InlineBoxKind, LineHeight, OverflowWrap, TextWrapMode, WhiteSpaceCollapse,
++};
+ use core::ops::Range;
+ 
+ use alloc::vec::Vec;
+@@ -316,6 +318,47 @@ impl<B: Brush> LayoutData<B> {
+         }
+     }
+ 
++    // machopo: the edges of non-atomic inline boxes.
++    /// The width inline box `index` takes up on its line as an item of its own: that of an
++    /// [edge](InlineBoxKind::StartEdge), and none for an out-of-flow box.
++    pub(crate) fn edge_width(&self, index: usize) -> f32 {
++        let inline_box = &self.inline_boxes[index].inline_box;
++        if inline_box.kind.is_edge() {
++            inline_box.width
++        } else {
++            0.0
++        }
++    }
++
++    // machopo: the edges of non-atomic inline boxes.
++    /// Whether there is a soft wrap opportunity right before the content that follows the
++    /// [start edge](InlineBoxKind::StartEdge) at `item_idx`: before the first atom of the next
++    /// text run (which may be an inline object). The edges and out-of-flow boxes in between sit
++    /// at the same position, so they are skipped.
++    pub(crate) fn soft_wrap_opportunity_after_box(&self, item_idx: usize) -> bool {
++        for item in &self.items[item_idx + 1..] {
++            match item.kind {
++                LayoutItemKind::TextRun => {
++                    return self
++                        .shaped_text
++                        .run_slice(item.index as u32)
++                        .shaped_clusters()
++                        .first()
++                        .is_some_and(|cluster| cluster.is_soft_wrap_opportunity_before());
++                }
++                LayoutItemKind::OutOfFlowBox => {
++                    // The caller of the line breaker places these, possibly on another line.
++                    if self.inline_boxes[item.index].inline_box.kind
++                        == InlineBoxKind::CustomOutOfFlow
++                    {
++                        return false;
++                    }
++                }
++            }
++        }
++        false
++    }
++
+     /// Push an out-of-flow box to the list of items
+     pub(crate) fn push_out_of_flow_box(&mut self, index: usize, bidi_level: BidiLevel) {
+         self.items.push(LayoutItem {
+@@ -453,6 +496,12 @@ struct ContentWidthsMeasurer {
+ 
+     text_wrap_mode: TextWrapMode,
+ 
++    // machopo: the edges of non-atomic inline boxes.
++    /// Set by a [start edge](InlineBoxKind::StartEdge) whose following content starts with a soft
++    /// wrap opportunity: that opportunity was taken before the edge, so the content's own is
++    /// skipped.
++    glue_next: bool,
++
+     /// Indents for lines following a soft/hard wrap.
+     soft_indent: f32,
+     hard_indent: f32,
+@@ -470,6 +519,7 @@ impl ContentWidthsMeasurer {
+             running_hanging_whitespace: 0.,
+             hangs_conditionally: false,
+             text_wrap_mode: TextWrapMode::Wrap,
++            glue_next: false,
+             soft_indent: indent_options.indent_following_soft_wrap_break(indent_amount),
+             hard_indent: indent_options.indent_following_forced_line_break(indent_amount),
+             line_has_content: false,
+@@ -516,7 +566,7 @@ impl ContentWidthsMeasurer {
+ 
+     #[inline(always)]
+     fn measure<B: Brush>(mut self, layout_data: &LayoutData<B>) -> ContentWidths {
+-        for item in &layout_data.items {
++        for (item_idx, item) in layout_data.items.iter().enumerate() {
+             match item.kind {
+                 LayoutItemKind::TextRun => {
+                     let slice = layout_data.shaped_text.run_slice(item.index as u32);
+@@ -547,7 +597,15 @@ impl ContentWidthsMeasurer {
+                     }
+                 }
+                 // Out-of-flow boxes take up no space.
+-                LayoutItemKind::OutOfFlowBox => {}
++                LayoutItemKind::OutOfFlowBox => {
++                    // machopo: the edges of non-atomic inline boxes take up their width.
++                    let inline_box = &layout_data.inline_boxes[item.index].inline_box;
++                    if inline_box.kind.is_edge() {
++                        let opportunity_after = inline_box.kind == InlineBoxKind::StartEdge
++                            && layout_data.soft_wrap_opportunity_after_box(item_idx);
++                        self.measure_edge(inline_box.width, opportunity_after);
++                    }
++                }
+             }
+         }
+ 
+@@ -569,6 +627,29 @@ impl ContentWidthsMeasurer {
+         }
+     }
+ 
++    // machopo: the edges of non-atomic inline boxes.
++    /// Measures the edge of a non-atomic inline box, as the line breaker lays it out.
++    ///
++    /// `opportunity_after`: for a [start edge](InlineBoxKind::StartEdge), whether the content
++    /// after it starts with a soft wrap opportunity (see
++    /// [`LayoutData::soft_wrap_opportunity_after_box`]).
++    fn measure_edge(&mut self, width: f32, opportunity_after: bool) {
++        // Take the following content's opportunity here, once for consecutive edges.
++        if opportunity_after && !self.glue_next {
++            if self.text_wrap_mode == TextWrapMode::Wrap {
++                self.soft_break(self.line_has_content);
++            }
++            self.glue_next = true;
++        }
++        // Whitespace before an edge is not at the end of the line.
++        self.running_hanging_whitespace = 0.0;
++        self.running_min_width += width;
++        self.running_max_width += width;
++        // As in the line breaker, an edge without a width does not keep a soft wrap opportunity
++        // from being skipped at the start of a line.
++        self.line_has_content |= width != 0.0;
++    }
++
+     /// Measures a text run.
+     ///
+     /// The run is scanned one shaped cluster at a time. break opportunities are only considered at
+@@ -590,6 +671,8 @@ impl ContentWidthsMeasurer {
+         is_rtl: bool,
+     ) {
+         let clusters = slice.shaped_clusters();
++        // machopo: the first atom's opportunity may have been taken before a start edge.
++        let glued = core::mem::take(&mut self.glue_next);
+         // The cluster index at which nothing has been placed on the current line yet, if any.
+         let mut empty_at = if self.line_has_content { usize::MAX } else { 0 };
+ 
+@@ -607,6 +690,7 @@ impl ContentWidthsMeasurer {
+                 if prev_text_wrap_mode == TextWrapMode::Wrap
+                     && (cluster.is_soft_wrap_opportunity_before()
+                         || style.overflow_wrap == OverflowWrap::Anywhere)
++                    && !(i == 0 && glued)
+                 {
+                     self.soft_break(i != empty_at);
+                 }
+diff --git a/parley/src/layout/line.rs b/parley/src/layout/line.rs
+index 68670301075c84dbc6b53bc3557c555d922bca4e..f3a05b8da0f95e141be25eff65e2baf18edcdd27 100644
+--- a/parley/src/layout/line.rs
++++ b/parley/src/layout/line.rs
+@@ -457,7 +457,10 @@ impl<'a, B: Brush> Iterator for GlyphRunIter<'a, B> {
+                 // yielded from the runs below.
+                 LineItem::OutOfFlowBox(box_index) => {
+                     self.item_index += 1;
+-                    return Some(self.positioned_inline_box(box_index, self.offset));
++                    let x = self.offset;
++                    // machopo: the edges of non-atomic inline boxes take up their width.
++                    self.offset += self.line.layout.data.edge_width(box_index);
++                    return Some(self.positioned_inline_box(box_index, x));
+                 }
+                 LineItem::Run(run) => {
+                     // TODO: style indices are taken from the atom's first character, matching
+diff --git a/parley/src/layout/line_break.rs b/parley/src/layout/line_break.rs
+index 97c9f97b1eef24d76af92ef04c5e024cf970d176..c3e47a09beeb104ff519de5284f210c66dcf5da0 100644
+--- a/parley/src/layout/line_break.rs
++++ b/parley/src/layout/line_break.rs
+@@ -81,6 +81,13 @@ struct LineState {
+     /// These are the line's justification opportunities, before subtracting those that end up in
+     /// the line's hanging whitespace.
+     num_word_separators: u32,
++
++    // machopo: the edges of non-atomic inline boxes.
++    /// Set by a [start edge](InlineBoxKind::StartEdge) whose following content starts with a soft
++    /// wrap opportunity: that opportunity was taken before the edge, so the content's own is not
++    /// marked again. Saved and restored with the line-breaking opportunities, like the rest of the
++    /// line state.
++    glue_next: bool,
+ }
+ 
+ impl LineState {
+@@ -89,6 +96,7 @@ impl LineState {
+         self.x = 0.0;
+         self.box_metrics.reset();
+         self.num_word_separators = 0;
++        self.glue_next = false;
+     }
+ }
+ 
+@@ -1120,6 +1128,64 @@ impl<'a, B: Brush> BreakLines<'a, B> {
+                             advance: self.state.line.x,
+                         }));
+                     }
++
++                    // machopo: the edge of a non-atomic inline box takes up its width, and stays
++                    // with the content next to it.
++                    if inline_box.kind.is_edge() {
++                        let is_start = inline_box.kind == InlineBoxKind::StartEdge;
++                        let next_x = self.state.line.x + inline_box.width;
++                        // The opportunity next to an edge is the content's, so the mode is as the
++                        // content before it left it.
++                        let wraps = self.state.line.text_wrap_mode == TextWrapMode::Wrap;
++
++                        // A start edge takes the line-breaking opportunity of the content after
++                        // it, so a break there goes before the edge (once for consecutive edges).
++                        if is_start
++                            && !self.state.line.glue_next
++                            && self
++                                .layout
++                                .data
++                                .soft_wrap_opportunity_after_box(self.state.item_idx)
++                        {
++                            if wraps && self.state.line.x != 0.0 {
++                                self.state.mark_line_break_opportunity();
++                            }
++                            self.state.line.glue_next = true;
++                        }
++
++                        // An edge has no opportunity of its own: like text that does not fit, it
++                        // takes the last opportunity on the line, or overflows. It adds nothing
++                        // to the line's height.
++                        if next_x <= max_advance {
++                            self.state.append_inline_box_to_line(
++                                next_x,
++                                f32::NEG_INFINITY,
++                                f32::NEG_INFINITY,
++                            );
++                        } else if let Some(prev) = self.state.prev_boundary.take() {
++                            self.state.reset_to(prev);
++                            return self.start_new_line(
++                                BreakReason::Regular,
++                                max_advance,
++                                line_indent,
++                            );
++                        } else if let Some(prev_emergency) = self.state.emergency_boundary.take() {
++                            self.state.reset_to(prev_emergency);
++                            return self.start_new_line(
++                                BreakReason::Emergency,
++                                max_advance,
++                                line_indent,
++                            );
++                        } else {
++                            self.state.append_inline_box_to_line(
++                                next_x,
++                                f32::NEG_INFINITY,
++                                f32::NEG_INFINITY,
++                            );
++                        }
++                        continue;
++                    }
++
+                     self.state.append_inline_box_to_line(
+                         self.state.line.x,
+                         f32::NEG_INFINITY,
+@@ -1163,6 +1229,8 @@ impl<'a, B: Brush> BreakLines<'a, B> {
+ 
+                     // Iterate over the remaining atoms in the Run
+                     for atom in slice.atoms_from(self.state.cluster_idx) {
++                        // machopo: whether this atom's opportunity was taken before a start edge.
++                        let glued = core::mem::take(&mut self.state.line.glue_next);
+                         // Retrieve metadata about the atom
+                         let first_cluster = atom.shaped_clusters()[0];
+                         let whitespace = first_cluster.whitespace();
+@@ -1201,7 +1269,7 @@ impl<'a, B: Brush> BreakLines<'a, B> {
+                         } else if is_soft_wrap_opportunity && text_wrap_mode == TextWrapMode::Wrap {
+                             // We don't record boundaries when the advance is 0. As we do not want overflowing content to cause extra consecutive
+                             // line breaks. We should accept the overflowing fragment in that scenario.
+-                            if self.state.line.x != 0.0 {
++                            if self.state.line.x != 0.0 && !glued {
+                                 self.state.mark_line_break_opportunity();
+                                 // break_opportunity = true;
+                             }
+@@ -1350,8 +1418,10 @@ impl<'a, B: Brush> BreakLines<'a, B> {
+             match item.kind {
+                 LayoutItemKind::OutOfFlowBox => {
+                     // Out-of-flow boxes take up no space and don't count as characters.
++                    // machopo: the edges of non-atomic inline boxes take up their width.
++                    let width = self.layout.data.edge_width(item.index);
+                     self.state.append_inline_box_to_line(
+-                        self.state.line.x,
++                        self.state.line.x + width,
+                         f32::NEG_INFINITY,
+                         f32::NEG_INFINITY,
+                     );
+@@ -1879,7 +1949,17 @@ fn hanging_whitespace<B: Brush>(
+     'items: for line_item in line_items.iter().rev() {
+         match line_item.kind {
+             // Out-of-flow boxes take up no space.
+-            LayoutItemKind::OutOfFlowBox => {}
++            LayoutItemKind::OutOfFlowBox => {
++                // machopo: whitespace before the edge of a non-atomic inline box is not at the
++                // end of the line, so it does not hang.
++                if layout.data.inline_boxes[line_item.index]
++                    .inline_box
++                    .kind
++                    .is_edge()
++                {
++                    break;
++                }
++            }
+             LayoutItemKind::TextRun => {
+                 // Trailing whitespace can only hang if it ends up at the line's end edge after bidi
+                 // reordering. We don't currently apply UAX #9 L1 (resetting trailing whitespace to
+diff --git a/parley/src/tests/mod.rs b/parley/src/tests/mod.rs
+index 3d3a33c5e20e74618a819d1a6b439c2b08577bd6..fcd8a5d32711b7518eac9b57798707d877427ace 100644
+--- a/parley/src/tests/mod.rs
++++ b/parley/src/tests/mod.rs
+@@ -3,5 +3,6 @@
+ 
+ mod test_analysis;
+ mod test_builders;
++mod test_edges;
+ mod test_style_metrics;
+ mod utils;
+diff --git a/parley/src/tests/test_edges.rs b/parley/src/tests/test_edges.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..8798597f05ef2afdcf1ccdc4ff5f338edb55d426
+--- /dev/null
++++ b/parley/src/tests/test_edges.rs
+@@ -0,0 +1,325 @@
++// Copyright 2026 the Parley Authors
++// SPDX-License-Identifier: Apache-2.0 OR MIT
++
++//! machopo: tests for the edges of non-atomic inline boxes ([`InlineBoxKind::StartEdge`] and
++//! [`InlineBoxKind::EndEdge`]).
++
++use alloc::vec::Vec;
++
++use super::utils::ColorBrush;
++use super::utils::fonts::{FONT_FAMILY_LIST, create_font_context};
++use crate::{
++    Cluster, FontFamily, InlineBox, InlineBoxKind, Layout, LayoutContext, LineHeight,
++    PositionedLayoutItem, TextStyle, TextWrapMode, VerticalAlign,
++};
++
++fn root_style() -> TextStyle<'static, 'static, ColorBrush> {
++    TextStyle {
++        font_family: FontFamily::from(FONT_FAMILY_LIST),
++        font_size: 20.,
++        line_height: LineHeight::Absolute(30.),
++        ..TextStyle::default()
++    }
++}
++
++/// A piece of a paragraph: text, or an edge with an id and a width.
++#[derive(Clone, Copy)]
++enum Piece {
++    Text(&'static str),
++    /// Text that does not wrap.
++    NoWrap(&'static str),
++    Start(u64, f32),
++    End(u64, f32),
++    OutOfFlow(u64),
++}
++use Piece::{End, NoWrap, OutOfFlow, Start, Text};
++
++/// The layout of `pieces`, not broken into lines yet. The edges are taller than the text, as an
++/// edge with vertical padding would be.
++fn build(pieces: &[Piece]) -> Layout<ColorBrush> {
++    let mut fcx = create_font_context();
++    let mut lcx: LayoutContext<ColorBrush> = LayoutContext::new();
++    let root = root_style();
++    let mut builder = lcx.tree_builder(&mut fcx, 1., false, &root);
++    for piece in pieces {
++        let (id, kind, width) = match *piece {
++            Text(text) => {
++                builder.push_text(text);
++                continue;
++            }
++            NoWrap(text) => {
++                builder.push_style_span(TextStyle {
++                    text_wrap_mode: TextWrapMode::NoWrap,
++                    ..root.clone()
++                });
++                builder.push_text(text);
++                builder.pop_style_span();
++                continue;
++            }
++            Start(id, width) => (id, InlineBoxKind::StartEdge, width),
++            End(id, width) => (id, InlineBoxKind::EndEdge, width),
++            OutOfFlow(id) => (id, InlineBoxKind::OutOfFlow, 40.),
++        };
++        builder.push_inline_box(InlineBox {
++            id,
++            kind,
++            index: 0,
++            width,
++            height: 100.,
++            baseline: None,
++            vertical_align: VerticalAlign::BASELINE,
++        });
++    }
++    let (layout, _) = builder.build();
++    layout
++}
++
++fn broken(pieces: &[Piece], max_advance: Option<f32>) -> Layout<ColorBrush> {
++    let mut layout = build(pieces);
++    layout.break_all_lines(max_advance);
++    layout
++}
++
++/// The advance of `text` on a line of its own, trailing whitespace included.
++fn advance(text: &'static str) -> f32 {
++    broken(&[Text(text)], None).full_width()
++}
++
++/// A line's items: `Ok` the x and advance of a glyph run, `Err` the id and x of a box.
++fn items(layout: &Layout<ColorBrush>, line: usize) -> Vec<Result<(f32, f32), (u64, f32)>> {
++    layout
++        .lines()
++        .nth(line)
++        .unwrap()
++        .items()
++        .map(|item| match item {
++            PositionedLayoutItem::GlyphRun(run) => Ok((run.offset(), run.advance())),
++            PositionedLayoutItem::InlineBox(inline_box) => Err((inline_box.id, inline_box.x)),
++        })
++        .collect()
++}
++
++fn text_ranges(layout: &Layout<ColorBrush>) -> Vec<core::ops::Range<usize>> {
++    layout.lines().map(|line| line.text_range()).collect()
++}
++
++#[test]
++fn an_edge_takes_up_its_width_and_no_height() {
++    let (ab, cd, ef) = (advance("ab"), advance("cd"), advance("ef"));
++    let layout = broken(
++        &[
++            Text("ab"),
++            Start(1, 10.),
++            Text("cd"),
++            End(2, 5.),
++            Text("ef"),
++        ],
++        None,
++    );
++    assert_eq!(layout.len(), 1);
++    assert_eq!(
++        items(&layout, 0),
++        [
++            Ok((0., ab)),
++            Err((1, ab)),
++            Ok((ab + 10., cd)),
++            Err((2, ab + 10. + cd)),
++            Ok((ab + 10. + cd + 5., ef)),
++        ]
++    );
++    let metrics = *layout.lines().next().unwrap().metrics();
++    assert_eq!(metrics.advance, ab + cd + ef + 15.);
++    assert_eq!(layout.full_width(), ab + cd + ef + 15.);
++    // The edges are 100 tall, the line is as tall as its text.
++    assert_eq!(metrics.line_height, 30.);
++}
++
++#[test]
++fn an_edge_is_not_a_character() {
++    // The text on the two sides of an edge is analyzed as if the edge weren't there: no
++    // opportunity inside "abcd", and the text is the pieces' text.
++    let pieces = [Text("ab"), Start(1, 10.), Text("cd"), End(2, 5.)];
++    let layout = broken(&pieces, Some(1.));
++    assert_eq!(layout.len(), 1);
++    let widths = build(&pieces).calculate_content_widths();
++    assert_eq!(widths.min, advance("ab") + advance("cd") + 15.);
++    assert_eq!(widths.max, widths.min);
++}
++
++#[test]
++fn a_start_edge_stays_with_the_content_after_it() {
++    let pieces = [Text("aaa "), Start(1, 10.), Text("bbb"), End(2, 0.)];
++    // The edge fits after "aaa ", "bbb" doesn't: the break goes before the edge.
++    let layout = broken(&pieces, Some(advance("aaa ") + 11.));
++    assert_eq!(text_ranges(&layout), [0..4, 4..7]);
++    assert_eq!(items(&layout, 0), [Ok((0., advance("aaa ")))]);
++    assert_eq!(
++        items(&layout, 1),
++        [
++            Err((1, 0.)),
++            Ok((10., advance("bbb"))),
++            Err((2, 10. + advance("bbb")))
++        ]
++    );
++    // And the edge's width is on the second line.
++    assert_eq!(
++        layout.lines().nth(1).unwrap().metrics().advance,
++        10. + advance("bbb")
++    );
++}
++
++#[test]
++fn consecutive_start_edges_stay_together() {
++    // Nested spans, with an out-of-flow box between their edges.
++    let pieces = [
++        Text("aaa "),
++        Start(1, 10.),
++        OutOfFlow(9),
++        Start(2, 10.),
++        Text("bbb"),
++    ];
++    let layout = broken(&pieces, Some(advance("aaa ") + 21.));
++    assert_eq!(text_ranges(&layout), [0..4, 4..7]);
++    assert_eq!(
++        items(&layout, 1),
++        [
++            Err((1, 0.)),
++            Err((9, 10.)),
++            Err((2, 10.)),
++            Ok((20., advance("bbb")))
++        ]
++    );
++    // One opportunity, not one per edge: both edges are in the second fragment.
++    let widths = build(&pieces).calculate_content_widths();
++    assert_eq!(widths.min, advance("bbb") + 20.);
++}
++
++#[test]
++fn an_end_edge_stays_with_the_content_before_it() {
++    let pieces = [
++        Text("aaa "),
++        Start(1, 0.),
++        Text("bbb"),
++        End(2, 50.),
++        Text(" ccc"),
++    ];
++    // "bbb" fits on the first line, its end edge doesn't: "bbb" goes with it.
++    let layout = broken(&pieces, Some(advance("aaa ") + advance("bbb") + 10.));
++    assert_eq!(text_ranges(&layout)[0], 0..4);
++    assert_eq!(
++        items(&layout, 1)[..3],
++        [
++            Err((1, 0.)),
++            Ok((0., advance("bbb"))),
++            Err((2, advance("bbb")))
++        ]
++    );
++}
++
++#[test]
++fn an_edge_that_does_not_fit_overflows_without_an_opportunity() {
++    // No opportunity on the line: the edge overflows, as text would.
++    let layout = broken(&[Text("aaa"), End(1, 50.)], Some(advance("aaa") + 10.));
++    assert_eq!(layout.len(), 1);
++    assert_eq!(
++        layout.lines().next().unwrap().metrics().advance,
++        advance("aaa") + 50.
++    );
++    // First on a line, it stays there however wide.
++    let layout = broken(&[Start(1, 50.), Text("aaa bbb")], Some(10.));
++    assert_eq!(text_ranges(&layout), [0..4, 4..7]);
++    assert_eq!(items(&layout, 0)[0], Err((1, 0.)));
++}
++
++#[test]
++fn an_edge_after_text_that_does_not_wrap_takes_an_earlier_opportunity() {
++    // As "bbb" itself would if it didn't fit: the opportunity before it is the wrapping text's.
++    let pieces = [Text("aaa "), NoWrap("bbb"), End(1, 50.)];
++    let layout = broken(&pieces, Some(advance("aaa bbb") + 10.));
++    assert_eq!(text_ranges(&layout), [0..4, 4..7]);
++    // And a start edge before text that does not wrap takes none for it.
++    let pieces = [NoWrap("aaa "), Start(1, 10.), NoWrap("bbb")];
++    let layout = broken(&pieces, Some(advance("aaa ")));
++    assert_eq!(layout.len(), 1);
++}
++
++#[test]
++fn content_widths_include_edges() {
++    let pieces = [
++        Text("aaa "),
++        Start(1, 10.),
++        Text("bbb"),
++        End(2, 7.),
++        Text(" c"),
++    ];
++    let widths = build(&pieces).calculate_content_widths();
++    // The fragments are "aaa ", then both edges with "bbb" (the space after hangs), then "c".
++    assert_eq!(widths.min, advance("bbb") + 17.);
++    assert_eq!(
++        widths.max,
++        advance("aaa ") + advance("bbb") + advance(" c") + 17.
++    );
++    // The same as the lines the breaker makes.
++    let mut layout = build(&pieces);
++    layout.break_all_lines(Some(widths.min));
++    assert_eq!(text_ranges(&layout), [0..4, 4..8, 8..9]);
++    layout.break_all_lines(Some(widths.max));
++    assert_eq!(layout.len(), 1);
++}
++
++#[test]
++fn whitespace_before_an_edge_does_not_hang() {
++    let space = advance("a ") - advance("a");
++    assert!(space > 0.);
++    let hanging = |layout: &Layout<ColorBrush>| {
++        assert_eq!(text_ranges(layout), [0..4, 4..7]);
++        layout.lines().next().unwrap().metrics().hanging_advance
++    };
++    // At the end of a wrapped line, the space hangs.
++    let layout = broken(&[Text("aaa bbb")], Some(advance("aaa ")));
++    assert_eq!(hanging(&layout), space);
++    // With an edge after it, it is not at the end of the line.
++    let pieces = [Text("aaa "), End(1, 30.), Text("bbb")];
++    let layout = broken(&pieces, Some(advance("aaa ") + 30.));
++    assert_eq!(hanging(&layout), 0.);
++    let widths = build(&pieces).calculate_content_widths();
++    assert_eq!(widths.min, advance("aaa ") + 30.);
++}
++
++#[test]
++fn a_line_of_edges_alone_has_no_height() {
++    let pieces = [Start(1, 10.), End(2, 5.)];
++    let layout = broken(&pieces, None);
++    assert_eq!(layout.len(), 1);
++    let metrics = *layout.lines().next().unwrap().metrics();
++    assert_eq!(metrics.line_height, 0.);
++    assert_eq!(metrics.advance, 15.);
++    assert_eq!(items(&layout, 0), [Err((1, 0.)), Err((2, 10.))]);
++    let widths = build(&pieces).calculate_content_widths();
++    assert_eq!((widths.min, widths.max), (15., 15.));
++}
++
++#[test]
++fn hit_testing_skips_an_edge_s_width() {
++    let ab = advance("ab");
++    let layout = broken(&[Text("ab"), Start(1, 10.), Text("cd")], None);
++    // "c" starts after the edge.
++    let c = Cluster::from_byte_index(&layout, 2).unwrap();
++    assert_eq!(c.visual_offset(), Some(ab + 10.));
++    let (hit, _) = Cluster::from_point(&layout, ab + 11., 5.).unwrap();
++    assert_eq!(hit.text_range(), 2..3);
++    let (hit, _) = Cluster::from_point(&layout, ab - 1., 5.).unwrap();
++    assert_eq!(hit.text_range(), 1..2);
++}
++
++#[test]
++fn breaking_by_length_keeps_edges_widths() {
++    let mut layout = build(&[Text("ab"), Start(1, 10.), Text("cd"), End(2, 5.)]);
++    let mut breaker = layout.break_lines();
++    while breaker.break_next_with_length(100).is_some() {}
++    breaker.finish();
++    assert_eq!(
++        layout.lines().next().unwrap().metrics().advance,
++        advance("ab") + advance("cd") + 15.
++    );
++}

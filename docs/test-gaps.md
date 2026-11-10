@@ -115,6 +115,8 @@
 | machopodriver 等 `load` 時也比對分頁（`Session::wait_for_load` 的 `frame_id`，照 chromedriver） | loader 的 id 是每個分頁自己的導覽的號碼，要等的導覽還沒 `load` 時、別的分頁剛好有同號的導覽在背景載入完，才看得出差別；`load` 由 renderer 在 load 事件時送，背景的分頁也送，所以不是等價的，但要排出兩個分頁同號又同時的導覽 | 審查 | `shell` 的 `webdriver` 測試能讓背景的分頁的導覽停在指定的號碼時補（例如先在一個分頁多導覽幾次） |
 | renderer 只在 `RendererFlags::automation` 時處理自動化專用的 message（`QueryElement`、`ScrollIntoViewIfNeeded`、`RequestVisualState`、`WebDriver`），沒有時只記 log | `renderer` 的測試沒有直接送 message 給 render thread 的工具，`shell` 的測試都帶著 automation，沒有在沒有 automation 時送這幾種的 | 審查 | `renderer` 有送 message、看回答的測試工具時，沒有 automation 的 renderer 收到這幾種 message 都不回答 |
 | 選取在 `<br>` 之後、後面沒有別的子節點時，caret 畫在那個 `<br>` 的那一行（`renderer` 的 `selection::caret`）；後面還有子節點時不照這樣畫 | 拿掉「後面沒有」這個條件沒有測試失敗：後面是空的 inline 元素或 `<img>` 這類時，machopo 本來就畫不出 caret（Chrome 畫在下一行的開頭），拿掉之後畫在上一行，兩種都和 Chrome 不同，沒有 Chrome 的值能寫進測試 | 審查 | caret 照 Blink 的 canonical position 放的時候（例如落在空的 inline 元素前面），補那個位置的測試 |
+| parley fork 判斷字型的規則和空白時，24-bit 的 GSUB、GPOS 格式（`space.rs`） | 測試字型沒有一個用這些格式；讀不懂的一律當成跨過空白（整段 shape），只會比較慢 | 審查 | 有了用這些格式的測試字型時補一個 |
+| parley fork 以字為單位 shaping 時，buffer 帶 safe-to-concat 旗標的照樣整段（`shape_segment` 的 `has_safe_to_concat_flags`） | parley 一律不要這些旗標，條件走不到；拿掉它沒有測試失敗 | 審查 | parley 開始要這些旗標時補一個 |
 | 選字型記住的第一個字型只算有 charmap 的（parley fork 的 `FontSelector` 的 `first_font`） | 拿掉這個條件沒有測試失敗：測試字型（Ahem、Lato）都有 charmap，沒有一個字型能測；快速路徑自己也要先拿到 charmap，所以只影響「每個字型都沒有 charmap」時改用 last-resort 字型 | 審查；條件是上游原本就有的（它只記住有沒有這樣的字型） | 有了沒有 charmap 的測試字型時（例如測 last-resort 字型）補一個 |
 | `browser` 的 `navigation::links::idle_callbacks` 偶爾失敗（整個 binary 平行跑 90 次裡 2 次）：第一個 `chain` 的 `timeRemaining()` 不在 (0, 50] | 推測有 frame 要畫時 idle period 結束在下一個 frame（renderer 的 `idle_period_deadline`），只要還沒過就開始，剩下的可能不到 1 ms，平行跑時 callback 晚一點就過了期限 | 重跑看得出來是它 | 查 Chrome 的 `IdleHelper` 會不會開這麼短的 idle period，再決定要不要設最短的長度 |
 | DOM 點連結時，修飾鍵和中鍵決定新分頁在背景或前景（`dom_api` 的 `follow_hyperlink`） | 新分頁由 browser 開，headless 的測試只看得到原本的分頁：`shell` 的 `documents::links_the_user_follows` 守著「`target=_blank` 開新分頁、原本的頁不導覽」，但看不出是哪一種新分頁；`dom_js` 的測試只能給 script 的（不 trusted）點擊 | 審查 | `shell` 的測試能看到 browser 開了哪種分頁時（例如 `automation_pipe` 的分頁清單），補 Ctrl、Shift、中鍵的點擊 |
@@ -318,6 +320,7 @@
 - flex 和 grid container 在確定的空間裡寬度未知時 shrink-to-fit 的那條路（`layout` 的 `fit_content_width`）在寬度已知、或自己的 `width` 有值時不走：走的話，taffy 量出來的 min-content、max-content 寬度就是那個寬度，夾出來的一樣，只多量兩次。
 - parley fork 以字為單位 shaping 時，選字型的樣式沒有號碼的字也逐字（`shape_segment`）：parley 的 selector 一律給號碼，只有沒有實作 `font_style` 的 selector 會沒有；照樣整段，免得用沒有號碼的 key 存字。
 - parley fork 碰到要整段 shaping 的字型、整段重來時不重設 selector（`begin_segment`）：selector 的狀態只在樣式或字型清單變了時重設，第一個字型對現在的 query 仍然成立；照樣重設，不依賴這個細節。
+- parley fork 以字為單位 shaping 時，default ignorable 開頭的字「前一個字是空白」的條件（`WordRuns::joins`）：字只在空白和 inline object 的前後切開，inline object 之後另起一個 run，所以同一個 run 裡 default ignorable 開頭的字前面一定是空白；條件只是把意思寫出來。
 - parley fork 查斷行表時，交給 ICU4X 的字一律從文字開頭看起（`line_table.rs` 不記前一個字的開頭）：ICU4X 看到的上下文只多不少，結果一樣，只是比較慢。照樣只從前一個字開始。
 - `layout` 的 `TextContext` 不關掉字的界線（`set_word_boundaries(false)`）：machopo 不讀 parley 的字的界線，只是分析比較慢；測試看不到。之後若有算分析次數或時間的計數，再補。
 - parley fork 判斷字型的規則和空白時，chained context 的 backtrack 不倒過來（`space.rs` 的 `chained`）：backtrack 有兩格以上時規則就有三格以上，有空白就一律當成跨過空白，順序看不出差別；只有一格時倒不倒都一樣。照樣倒過來，位置的順序和比對的順序一致。

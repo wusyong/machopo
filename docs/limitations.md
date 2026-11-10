@@ -131,7 +131,7 @@
   - counter 照 css-lists 3 的「Inheriting Counters」（和 Chrome 一樣，前一個兄弟 reset 的 counter 在父元素已經有同名的時候不繼承）；照舊 CSS 2 scope 的 WPT（`counter-list-item-2.html`、`counter-reset-reversed-siblings-003.html`）和 Chrome 一樣失敗。
   - 文件有 counter 時，每次 layout 有內容要重新收集（插入、移除、不只影響繪製的 style 變化），就整份文件重算一次 counter（Blink 只在 counter 相關的改動時重算）：只走 DOM 和讀 computed style，但大的文件每次都多一趟。
 - 不同元素裡的文字分開 shape：空白和下一個元素開頭的字之間沒有 kerning（`, <span>Third`），Chrome 有。生成的文字（`::before`、`::after`、marker）也和旁邊的文字分開 shape。
-- `text-indent` 只有 `<length-percentage>`（`hanging`、`each-line` Chrome 也沒有）；`word-spacing` 只收 `<length>`（css-text 3 的百分比 Chrome 也沒有）；`letter-spacing` 在每個字元之後都加，一行最後一個字元之後也加（照 Chrome）。有長度的 `text-indent` 的段落在確定的寬度裡 shrink-to-fit（float、`width: fit-content`）時少了縮排的寬度，可能多折一行：min-content、max-content 寬度用 parley 的 `calculate_content_widths`，它不算縮排（只被問 min-content、max-content 寬度時照斷出來的行算，是對的；Chrome 都算進去）。
+- `text-indent` 只有 `<length-percentage>`（`hanging`、`each-line` Chrome 也沒有）；`word-spacing` 只收 `<length>`（css-text 3 的百分比 Chrome 也沒有）；`letter-spacing` 在每個字元之後都加，一行最後一個字元之後也加（照 Chrome）；零寬的格式字元（U+200B 等）之後不加。
 - 長度單位沒有 `ch`、`ex`（要字型的 metrics）：用它們的宣告整個無效（WPT 的 `css/css-text/` 有一大半用 `width: 5ch`）。
 - `hyphens`：只在軟連字號（U+00AD）斷字，`auto` 沒有斷字的字典，和 `manual` 一樣（Chrome 照 `lang` 斷字）；沒有 `hyphenate-character`、`hyphenate-limit-chars`、`hyphenate-limit-lines`。行尾的連字號是 U+2010，軟連字號的第一個字型沒有它時是「-」（和省略號一樣以「排在同一個字型」判斷）。連字號接在軟連字號那段文字的後面：軟連字號後面緊接著元素的結束邊緣（padding、border）時，連字號畫在邊緣之內、蓋住它（parley 留的空間在邊緣之後；Chrome 的連字號在元素之內，邊緣在它後面）。一行有兩種方向的文字時，連字號照段落的方向放在整行的文字的末端（Chrome 照 bidi 重排，在軟連字號那段文字的末端）。連字號和省略號一樣不是文字節點裡的文字（hit test 到它找到它所在的元素）。希伯來字母之間的軟連字號不斷（ICU4X 的 UAX #14 還是 Unicode 15.1 以前的 LB21a）。
 - `overflow-wrap: break-word` 和 `anywhere` 在 `word-break: keep-all` 的文字裡不斷行（parley 的 `keep-all` 關掉所有的斷點；Chrome 在整個字放不下時照樣斷）。

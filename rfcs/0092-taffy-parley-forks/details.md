@@ -60,7 +60,7 @@
 | `38493cc5` | Leave out fonts without an em | +8 −0 | fontique |
 | `cefcbc5d` | Rename kun to machopo | +149 −149（28 個檔案） | 全部 |
 
-每個 commit 都改了 README（當時叫 `README.kun.md`）。`README.machopo.md` 的「Local changes」表列的名稱和實際的 commit 不同：「Don't let inline box edges size the line」和「Give a line break's hanging whitespace」不是單獨的 commit（在第一個和 `43db46de` 裡）。fork 的測試都在 machopo 裡（`layout` 的 `parley_*::` 等），fork 自己幾乎沒有測試。
+每個 commit 都改了 README（當時叫 `README.kun.md`）。重寫前 fork 的 README 列修改的那張表（當時的標題是 Local changes），名稱和實際的 commit 不同：「Don't let inline box edges size the line」和「Give a line break's hanging whitespace」不是單獨的 commit（在第一個和 `43db46de` 裡）。fork 的測試都在 machopo 裡（`layout` 的 `parley_*::` 等），fork 自己幾乎沒有測試。
 
 ## parley fork 的重寫
 

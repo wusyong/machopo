@@ -1,0 +1,781 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wu Yuwei <yuweiwu@pm.me>
+Date: Tue, 10 Nov 2026 07:43:47 +0900
+Subject: [PATCH] Share a layout's shaped text
+
+---
+ parley/src/layout/data.rs                    |  21 +-
+ parley/src/layout/layout.rs                  |  12 +-
+ parley/src/layout/line.rs                    | 124 ++++++++-
+ parley/src/layout/line_break.rs              |   7 +-
+ parley/src/layout/mod.rs                     |   7 +-
+ parley/src/layout/run.rs                     |  80 ++++--
+ parley/src/layout/spacing.rs                 |   3 +-
+ parley/src/shape/mod.rs                      |   3 +-
+ parley/src/tests/mod.rs                      |   1 +
+ parley/src/tests/test_shaped_text_sharing.rs | 269 +++++++++++++++++++
+ parley/src/tests/utils/asserts.rs            |   3 +-
+ 11 files changed, 486 insertions(+), 44 deletions(-)
+ create mode 100644 parley/src/tests/test_shaped_text_sharing.rs
+
+diff --git a/parley/src/layout/data.rs b/parley/src/layout/data.rs
+index 92c472351b220f00551ab74f43a0b39a4e8dd0b9..be4fd18a43758503073eba298173aa00b1f934d8 100644
+--- a/parley/src/layout/data.rs
++++ b/parley/src/layout/data.rs
+@@ -14,6 +14,7 @@ use crate::{
+ };
+ use core::ops::Range;
+ 
++use alloc::sync::Arc;
+ use alloc::vec::Vec;
+ use parlance::BidiLevel;
+ use parley_engine::shape::Whitespace;
+@@ -207,7 +208,10 @@ pub(crate) struct LayoutData<B: Brush> {
+     pub(crate) inline_boxes: Vec<LayoutInlineBox>,
+ 
+     // Output of shaping (input to line breaking)
+-    pub(crate) shaped_text: ShapedText,
++    // machopo: shared with the shaping cache and with what the embedder keeps of
++    // the layout (`Layout::shaped_text`); changed only where no one else
++    // holds it (`Arc::make_mut`).
++    pub(crate) shaped_text: Arc<ShapedText>,
+     pub(crate) runs: Vec<RunData>,
+     pub(crate) items: Vec<LayoutItem>,
+ 
+@@ -259,7 +263,7 @@ impl<B: Brush> Default for LayoutData<B> {
+             styles: Vec::new(),
+             style_metrics: Vec::new(),
+             inline_boxes: Vec::new(),
+-            shaped_text: ShapedText::new(),
++            shaped_text: Arc::default(),
+             runs: Vec::new(),
+             items: Vec::new(),
+             lines: Vec::new(),
+@@ -292,7 +296,11 @@ impl<B: Brush> LayoutData<B> {
+         self.styles.clear();
+         self.style_metrics.clear();
+         self.inline_boxes.clear();
+-        self.shaped_text.clear();
++        // machopo: one held elsewhere stays as it is.
++        match Arc::get_mut(&mut self.shaped_text) {
++            Some(shaped_text) => shaped_text.clear(),
++            None => self.shaped_text = Arc::default(),
++        }
+         self.runs.clear();
+         self.items.clear();
+         self.lines.clear();
+@@ -319,8 +327,11 @@ impl<B: Brush> LayoutData<B> {
+         )
+         .baseline_offset;
+         if let Some(cluster) = layout_box.inline_object_cluster {
+-            self.shaped_text
+-                .set_inline_object_advance(cluster, layout_box.inline_box.width);
++            let width = layout_box.inline_box.width;
++            // machopo: a copy, if the shaped text is held elsewhere and the advance is another.
++            if self.shaped_text.shaped_clusters()[cluster as usize].advance != width {
++                Arc::make_mut(&mut self.shaped_text).set_inline_object_advance(cluster, width);
++            }
+         }
+     }
+ 
+diff --git a/parley/src/layout/layout.rs b/parley/src/layout/layout.rs
+index a0b328202a82af7fca98a62d589860036ef06cf6..9a9f1ce9d149468d6c4e9e152d49447eee8dd114 100644
+--- a/parley/src/layout/layout.rs
++++ b/parley/src/layout/layout.rs
+@@ -10,9 +10,10 @@ use crate::layout::{
+     line::Line, line_break::BreakLines,
+ };
+ use crate::style::Brush;
+-
++use alloc::sync::Arc;
+ use core::cmp::Ordering;
+ use core::fmt;
++use parley_engine::ShapedText;
+ 
+ /// Text layout.
+ ///
+@@ -61,6 +62,15 @@ impl<B: Brush> Layout<B> {
+         self.data.scale
+     }
+ 
++    /// machopo: the layout's shaped text, shared: what is kept of it (a
++    /// [`GlyphSpan`]'s glyphs) outlives the layout, and breaking its lines
++    /// again leaves it as it is.
++    ///
++    /// [`GlyphSpan`]: crate::GlyphSpan
++    pub fn shaped_text(&self) -> &Arc<ShapedText> {
++        &self.data.shaped_text
++    }
++
+     /// Returns the style collection for the layout.
+     pub fn styles(&self) -> &[Style<B>] {
+         &self.data.styles
+diff --git a/parley/src/layout/line.rs b/parley/src/layout/line.rs
+index 4e79e0a55ed0d521553480e551ea113a027700ac..251a922cd73a36843ddabb61f0c4af2cc55f3a8c 100644
+--- a/parley/src/layout/line.rs
++++ b/parley/src/layout/line.rs
+@@ -5,14 +5,14 @@ use crate::inline_box::inline_object_box_index;
+ use crate::layout::data::BreakReason;
+ use crate::layout::data::{LayoutItemKind, LineData};
+ use crate::layout::layout::Layout;
+-use crate::layout::run::Run;
++use crate::layout::run::{AtomGraphemes, Glyphs, Run};
+ use crate::layout::spacing::EffectiveSpacing;
+ use crate::layout::{SpanMetrics, Style};
+ use crate::style::Brush;
+ use crate::{BaselineShift, InlineBoxKind};
+ 
+ use core::ops::Range;
+-use parley_engine::{Atom, Atoms, Glyph};
++use parley_engine::{Atom, Atoms, Glyph, ShapedSlice, ShapedText};
+ 
+ /// Line in a text layout.
+ #[derive(Copy, Clone)]
+@@ -347,6 +347,21 @@ impl<'a, B: Brush> GlyphRun<'a, B> {
+         self.run.glyphs_in(self.shaped_clusters.clone())
+     }
+ 
++    /// machopo: where the run's glyphs are in its layout's shaped text, and the
++    /// spacing they take on its line: [`GlyphSpan::glyphs`] with the
++    /// layout's [`shaped_text`](crate::Layout::shaped_text) is what
++    /// [`Self::glyphs`] gives.
++    pub fn span(&self) -> GlyphSpan {
++        GlyphSpan {
++            run: self.run.shaped_text_run_index,
++            shaped_clusters: self.shaped_clusters.clone(),
++            line_clusters: self.run.line_slice().shaped_clusters_range(),
++            style_index: self.style_index,
++            is_rtl: self.run.is_rtl(),
++            spacing: self.run.line_spacing(),
++        }
++    }
++
+     /// Returns an iterator over the fully positioned glyphs in the run.
+     pub fn positioned_glyphs(&self) -> impl Iterator<Item = Glyph> + 'a + Clone + use<'a, B> {
+         let mut offset = self.offset;
+@@ -360,6 +375,111 @@ impl<'a, B: Brush> GlyphRun<'a, B> {
+     }
+ }
+ 
++/// machopo: a glyph run's glyphs without the layout: where they are in its
++/// shaped text, and the spacing they take on their line ([`GlyphRun::span`]).
++/// A layout's shaped text is shared ([`Layout::shaped_text`]), so what is kept
++/// of a layout can walk its glyphs once the layout has moved on (Blink's
++/// `ShapeResultView`).
++#[derive(Clone, Debug, PartialEq)]
++pub struct GlyphSpan {
++    /// The shaped run.
++    run: u32,
++    /// Its shaped clusters, atom boundaries both.
++    shaped_clusters: Range<u32>,
++    /// The run's shaped clusters on the line, and the glyph run's style:
++    /// its clusters are the ones of that style there, glyphs or not, as
++    /// [`Run::visual_clusters`] gives them.
++    line_clusters: Range<u32>,
++    style_index: u16,
++    is_rtl: bool,
++    spacing: EffectiveSpacing,
++}
++
++/// machopo: a cluster of a [`GlyphSpan`] ([`GlyphSpan::clusters`]): its text
++/// and advance, as its [`Cluster`](crate::Cluster) has them.
++#[derive(Clone, Debug, PartialEq)]
++pub struct SpanCluster {
++    /// The source text's bytes it is.
++    pub text_range: Range<usize>,
++    /// Its advance with its spacing.
++    pub advance: f32,
++}
++
++impl GlyphSpan {
++    /// The glyphs in visual left-to-right order, with their spacing, as
++    /// [`GlyphRun::glyphs`]: `shaped_text` is the one of the layout the span
++    /// is from.
++    pub fn glyphs<'a>(
++        &self,
++        shaped_text: &'a ShapedText,
++    ) -> impl Iterator<Item = Glyph> + 'a + Clone {
++        Glyphs::new(
++            shaped_text
++                .run_slice(self.run)
++                .narrow(self.shaped_clusters.clone()),
++            self.is_rtl,
++            self.spacing,
++        )
++    }
++
++    /// The run's clusters of the span's style on its line, glyphs or not, in
++    /// visual left-to-right order: [`Run::visual_clusters`] with that style.
++    pub fn clusters<'a>(
++        &self,
++        shaped_text: &'a ShapedText,
++    ) -> impl Iterator<Item = SpanCluster> + 'a + Clone {
++        let slice = self.line_slice(shaped_text);
++        let (style_index, is_rtl, spacing) = (self.style_index, self.is_rtl, self.spacing);
++        AtomGraphemes::new(slice, is_rtl).filter_map(move |(atom, grapheme)| {
++            let chars = grapheme.char_range();
++            (slice.characters_in(chars.clone())[0].style_index == style_index).then(|| {
++                SpanCluster {
++                    text_range: slice.text_byte_range(chars),
++                    advance: spacing.grapheme_advance(&atom, grapheme, is_rtl),
++                }
++            })
++        })
++    }
++
++    /// Where [`Self::clusters`]' text is, without walking them: the first
++    /// one's start and the furthest end (bytes). Only the characters are
++    /// looked at. `None` without any.
++    pub fn text_range(&self, shaped_text: &ShapedText) -> Option<(usize, usize)> {
++        let slice = self.line_slice(shaped_text);
++        let chars = slice.char_range();
++        // The graphemes of the style, logically first and last: a grapheme
++        // starts at the slice's start or at a grapheme start, and takes its
++        // first character's style.
++        let mut first = None;
++        let mut last = None;
++        let mut current = None;
++        for (index, character) in (chars.start..).zip(slice.characters()) {
++            if index == chars.start || character.grapheme_start {
++                if let Some(start) = current.take() {
++                    last = Some(start..index);
++                }
++                if character.style_index == self.style_index {
++                    first.get_or_insert(index);
++                    current = Some(index);
++                }
++            }
++        }
++        if let Some(start) = current {
++            last = Some(start..chars.end);
++        }
++        let last = last?;
++        let first = if self.is_rtl { last.start } else { first? };
++        Some((slice.text_byte_at(first), slice.text_byte_range(last).end))
++    }
++
++    /// The run's slice on the line.
++    fn line_slice<'a>(&self, shaped_text: &'a ShapedText) -> ShapedSlice<'a> {
++        shaped_text
++            .run_slice(self.run)
++            .narrow(self.line_clusters.clone())
++    }
++}
++
+ /// Peekable iterator over the atoms of a run in visual order, resumable across
+ /// [`GlyphRunIter::next`] calls.
+ ///
+diff --git a/parley/src/layout/line_break.rs b/parley/src/layout/line_break.rs
+index a5ab3b58fae8f0818f046ba9c981bb6e21657b77..72ae945e7d9f799846bfd27df580598077c97250 100644
+--- a/parley/src/layout/line_break.rs
++++ b/parley/src/layout/line_break.rs
+@@ -3,6 +3,7 @@
+ 
+ //! Greedy line breaking.
+ 
++use alloc::sync::Arc;
+ use alloc::vec::Vec;
+ 
+ #[cfg(feature = "libm")]
+@@ -1462,9 +1463,9 @@ impl<'a, B: Brush> BreakLines<'a, B> {
+                         self.state.line.soft_hyphen = soft_hyphen;
+                     }
+                     if let Some((cluster, advance)) = retab {
+-                        self.layout
+-                            .data
+-                            .shaped_text
++                        // A copy, if it is held elsewhere: what was laid
++                        // out of it stays as it was.
++                        Arc::make_mut(&mut self.layout.data.shaped_text)
+                             .set_cluster_advance(cluster, advance);
+                         continue;
+                     }
+diff --git a/parley/src/layout/mod.rs b/parley/src/layout/mod.rs
+index bf118f9e9082f69bef5f2f94accb6c5d29ded42c..0437b979f3eafec28a38b00e5bf03580791685f9 100644
+--- a/parley/src/layout/mod.rs
++++ b/parley/src/layout/mod.rs
+@@ -19,7 +19,8 @@ mod whitespace;
+ )]
+ mod layout;
+ 
+-pub use parley_engine::{FontMetrics, Glyph};
++// machopo: `ShapedText`, what `Layout::shaped_text` shares.
++pub use parley_engine::{FontMetrics, Glyph, ShapedText};
+ 
+ pub(crate) mod data;
+ 
+@@ -27,7 +28,9 @@ pub use alignment::{Alignment, AlignmentOptions};
+ pub use cluster::{Affinity, Cluster, ClusterPath, ClusterSide};
+ pub use data::BreakReason;
+ pub use layout::Layout;
+-pub use line::{GlyphRun, Line, LineMetrics, PositionedInlineBox, PositionedLayoutItem};
++pub use line::{
++    GlyphRun, GlyphSpan, Line, LineMetrics, PositionedInlineBox, PositionedLayoutItem, SpanCluster,
++};
+ pub use line_break::{
+     BoxBreakData, BreakLines, BreakerState, LineBreakData, MaxHeightBreakData, YieldData,
+ };
+diff --git a/parley/src/layout/run.rs b/parley/src/layout/run.rs
+index bd6e258258ce34e6f78a7afb53710204e0b94153..78d85f113a88a2ed282dfb88142cea2c5db77aab 100644
+--- a/parley/src/layout/run.rs
++++ b/parley/src/layout/run.rs
+@@ -11,8 +11,8 @@ use crate::style::Brush;
+ use core::ops::Range;
+ use fontique::Synthesis;
+ use parley_engine::{
+-    Atom, Atoms, FontMetrics, Glyph, Graphemes, NormalizedCoord, ShapedClusterGlyphs, ShapedRun,
+-    ShapedSlice,
++    Atom, Atoms, FontMetrics, Glyph, Grapheme, Graphemes, NormalizedCoord, ShapedClusterGlyphs,
++    ShapedRun, ShapedSlice,
+ };
+ 
+ /// Sequence of clusters with a single font and style.
+@@ -284,7 +284,7 @@ pub(crate) struct Glyphs<'a> {
+ }
+ 
+ impl<'a> Glyphs<'a> {
+-    fn new(slice: ShapedSlice<'a>, is_rtl: bool, spacing: EffectiveSpacing) -> Self {
++    pub(crate) fn new(slice: ShapedSlice<'a>, is_rtl: bool, spacing: EffectiveSpacing) -> Self {
+         let clusters = slice.shaped_clusters_range();
+         Self {
+             slice,
+@@ -364,9 +364,51 @@ impl Iterator for Glyphs<'_> {
+ /// This walks the run's graphemes. Each grapheme is one [`Cluster`].
+ struct Clusters<'a, B: Brush> {
+     run: Run<'a, B>,
+-    /// Cursor over the run's (line-scoped) atoms.
++    /// The run's (line-scoped) graphemes, each with its atom.
++    graphemes: AtomGraphemes<'a>,
++}
++
++impl<'a, B: Brush> Clusters<'a, B> {
++    fn new(run: Run<'a, B>, rev: bool) -> Self {
++        Self {
++            run,
++            graphemes: AtomGraphemes::new(run.line_slice(), rev),
++        }
++    }
++}
++
++impl<B: Brush> Clone for Clusters<'_, B> {
++    fn clone(&self) -> Self {
++        Self {
++            run: self.run,
++            graphemes: self.graphemes,
++        }
++    }
++}
++
++impl<'a, B: Brush> Iterator for Clusters<'a, B> {
++    type Item = Cluster<'a, B>;
++
++    fn next(&mut self) -> Option<Self::Item> {
++        let (atom, grapheme) = self.graphemes.next()?;
++        Some(Cluster {
++            run: self.run,
++            atom,
++            grapheme,
++        })
++    }
++}
++
++/// machopo: a slice's graphemes, each with the atom it is in, in logical order
++/// or its reverse: what [`Clusters`] walks, and [`GlyphSpan::clusters`]
++/// without the layout.
++///
++/// [`GlyphSpan::clusters`]: crate::GlyphSpan::clusters
++#[derive(Clone, Copy)]
++pub(crate) struct AtomGraphemes<'a> {
++    /// Cursor over the slice's atoms.
+     atoms: Atoms<'a>,
+-    /// Grapheme cursor over the run's (line-scoped) slice.
++    /// Grapheme cursor over the slice.
+     graphemes: Graphemes<'a>,
+     /// The atom containing the most recently yielded grapheme; `None` before the first grapheme.
+     atom: Option<Atom<'a>>,
+@@ -374,11 +416,9 @@ struct Clusters<'a, B: Brush> {
+     rev: bool,
+ }
+ 
+-impl<'a, B: Brush> Clusters<'a, B> {
+-    fn new(run: Run<'a, B>, rev: bool) -> Self {
+-        let slice = run.line_slice();
++impl<'a> AtomGraphemes<'a> {
++    pub(crate) fn new(slice: ShapedSlice<'a>, rev: bool) -> Self {
+         Self {
+-            run,
+             atoms: if rev {
+                 slice.atoms_end()
+             } else {
+@@ -395,20 +435,8 @@ impl<'a, B: Brush> Clusters<'a, B> {
+     }
+ }
+ 
+-impl<B: Brush> Clone for Clusters<'_, B> {
+-    fn clone(&self) -> Self {
+-        Self {
+-            run: self.run,
+-            atoms: self.atoms,
+-            graphemes: self.graphemes,
+-            atom: self.atom,
+-            rev: self.rev,
+-        }
+-    }
+-}
+-
+-impl<'a, B: Brush> Iterator for Clusters<'a, B> {
+-    type Item = Cluster<'a, B>;
++impl<'a> Iterator for AtomGraphemes<'a> {
++    type Item = (Atom<'a>, Grapheme);
+ 
+     fn next(&mut self) -> Option<Self::Item> {
+         let grapheme = if self.rev {
+@@ -431,11 +459,7 @@ impl<'a, B: Brush> Iterator for Clusters<'a, B> {
+         let atom = self.atom.expect(
+             "The first call to `next` should always be an atom edge, so this should always be set at this point.",
+         );
+-        Some(Cluster {
+-            run: self.run,
+-            atom,
+-            grapheme,
+-        })
++        Some((atom, grapheme))
+     }
+ }
+ 
+diff --git a/parley/src/layout/spacing.rs b/parley/src/layout/spacing.rs
+index bea74f780884931018eb5482fd50a7264ad0753d..b8b7aa7a2214a2255074d18225dd248aab12ee1c 100644
+--- a/parley/src/layout/spacing.rs
++++ b/parley/src/layout/spacing.rs
+@@ -179,7 +179,8 @@ impl Default for Justification {
+ }
+ 
+ /// Additional spacing to apply, including justification (if any).
+-#[derive(Copy, Clone, Debug)]
++// machopo: `PartialEq` for `GlyphSpan`.
++#[derive(Copy, Clone, Debug, PartialEq)]
+ pub(crate) struct EffectiveSpacing {
+     spacing: Spacing,
+     justification: Justification,
+diff --git a/parley/src/shape/mod.rs b/parley/src/shape/mod.rs
+index 4e1c98ec66bac1773e7bde785b29366d4c57f8c6..49ac572af8a2d6df30e1317e48cc38c127836e10 100644
+--- a/parley/src/shape/mod.rs
++++ b/parley/src/shape/mod.rs
+@@ -4,6 +4,7 @@
+ //! Text shaping implementation using `harfrust`for shaping
+ //! and `icu` for text analysis.
+ 
++use alloc::sync::Arc;
+ use alloc::vec::Vec;
+ use parley_engine::shape::{CharCluster, Coverage};
+ use parley_engine::{Analysis, FontInstance, FontInstanceRef, ShapeOptions, Shaper};
+@@ -190,7 +191,7 @@ pub(crate) fn shape_text<'a, B: Brush>(
+         items,
+         font_selector,
+         false,
+-        &mut layout.data.shaped_text,
++        Arc::make_mut(&mut layout.data.shaped_text),
+     );
+ 
+     // Out-of-flow boxes are laid out as items of their own.
+diff --git a/parley/src/tests/mod.rs b/parley/src/tests/mod.rs
+index 81e13b3320ea36c948850c746c20feeeb5131260..875b7b6854cc2daf3e63dca5041e8a90b581d67f 100644
+--- a/parley/src/tests/mod.rs
++++ b/parley/src/tests/mod.rs
+@@ -7,6 +7,7 @@ mod test_edges;
+ mod test_final_break;
+ mod test_font_without_em;
+ mod test_optical_sizing;
++mod test_shaped_text_sharing;
+ mod test_soft_hyphens;
+ mod test_style_metrics;
+ mod test_tab_stops;
+diff --git a/parley/src/tests/test_shaped_text_sharing.rs b/parley/src/tests/test_shaped_text_sharing.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..8c6c5e24dda9a025e198408b1edf14655159bc05
+--- /dev/null
++++ b/parley/src/tests/test_shaped_text_sharing.rs
+@@ -0,0 +1,269 @@
++// Copyright 2026 the Parley Authors
++// SPDX-License-Identifier: Apache-2.0 OR MIT
++
++//! machopo: tests for a layout's shared shaped text ([`Layout::shaped_text`]) and the glyph runs
++//! kept without their layout ([`GlyphSpan`]).
++
++use alloc::sync::Arc;
++use alloc::vec::Vec;
++
++use peniko::color::palette;
++
++use super::utils::ColorBrush;
++use super::utils::fonts::{FONT_FAMILY_LIST, create_font_context};
++use crate::{
++    Alignment, AlignmentOptions, FontFamily, Glyph, GlyphSpan, InlineBox, InlineBoxKind, Layout,
++    LayoutContext, LineHeight, PositionedLayoutItem, ShapedText, SpanCluster, TabStops, TextStyle,
++    VerticalAlign,
++};
++
++fn style() -> TextStyle<'static, 'static, ColorBrush> {
++    TextStyle {
++        font_family: FontFamily::from(FONT_FAMILY_LIST),
++        font_size: 20.,
++        line_height: LineHeight::Absolute(30.),
++        letter_spacing: 1.5,
++        word_spacing: 2.5,
++        ..TextStyle::default()
++    }
++}
++
++/// A piece of a paragraph: text, text of another style, or an inline object with a width.
++#[derive(Clone, Copy)]
++enum Piece {
++    Text(&'static str),
++    Other(&'static str),
++    Object(f32),
++}
++use Piece::{Object, Other, Text};
++
++fn build_into(
++    layout: &mut Layout<ColorBrush>,
++    pieces: &[Piece],
++    style: &TextStyle<'_, '_, ColorBrush>,
++) {
++    let mut fcx = create_font_context();
++    let mut lcx: LayoutContext<ColorBrush> = LayoutContext::new();
++    let mut builder = lcx.tree_builder(&mut fcx, 1., false, style);
++    for (id, piece) in pieces.iter().enumerate() {
++        match *piece {
++            Text(text) => builder.push_text(text),
++            Other(text) => {
++                builder.push_style_span(TextStyle {
++                    brush: ColorBrush::new(palette::css::GREEN),
++                    ..style.clone()
++                });
++                builder.push_text(text);
++                builder.pop_style_span();
++            }
++            Object(width) => builder.push_inline_box(InlineBox {
++                id: id as u64,
++                kind: InlineBoxKind::InFlow,
++                index: 0,
++                width,
++                height: 10.,
++                baseline: None,
++                vertical_align: VerticalAlign::BASELINE,
++            }),
++        }
++    }
++    builder.build_into(layout);
++}
++
++fn build(pieces: &[Piece]) -> Layout<ColorBrush> {
++    let mut layout = Layout::default();
++    build_into(&mut layout, pieces, &style());
++    layout
++}
++
++/// What is kept of a glyph run, and what its layout gives for it: its glyphs, and the clusters of
++/// its style in its run on the line.
++struct Kept {
++    span: GlyphSpan,
++    glyphs: Vec<Glyph>,
++    clusters: Vec<SpanCluster>,
++}
++
++fn glyph_runs(layout: &Layout<ColorBrush>) -> Vec<Kept> {
++    layout
++        .lines()
++        .flat_map(|line| line.items())
++        .filter_map(|item| match item {
++            PositionedLayoutItem::GlyphRun(glyph_run) => Some(Kept {
++                span: glyph_run.span(),
++                glyphs: glyph_run.glyphs().collect(),
++                clusters: glyph_run
++                    .run()
++                    .visual_clusters()
++                    .filter(|cluster| cluster.style_index() == glyph_run.style_index())
++                    .map(|cluster| SpanCluster {
++                        text_range: cluster.text_range(),
++                        advance: cluster.advance(),
++                    })
++                    .collect(),
++            }),
++            PositionedLayoutItem::InlineBox(_) => None,
++        })
++        .collect()
++}
++
++/// Checks that each of `kept`'s spans gives with `shaped_text` what its layout gave.
++fn assert_spans(kept: &[Kept], shaped_text: &ShapedText) {
++    for Kept {
++        span,
++        glyphs,
++        clusters,
++    } in kept
++    {
++        assert!(!glyphs.is_empty());
++        assert_eq!(&span.glyphs(shaped_text).collect::<Vec<_>>(), glyphs);
++        assert_eq!(&span.clusters(shaped_text).collect::<Vec<_>>(), clusters);
++        let start = clusters[0].text_range.start;
++        let end = clusters.iter().map(|c| c.text_range.end).max().unwrap();
++        assert_eq!(span.text_range(shaped_text), Some((start, end)));
++    }
++}
++
++/// Lines of several glyph runs, justified, with letter and word spacing.
++fn justified(pieces: &[Piece], max: f32) -> Layout<ColorBrush> {
++    let mut layout = build(pieces);
++    layout.set_alignment(Alignment::Justify, AlignmentOptions::default());
++    layout.break_all_lines(Some(max));
++    layout
++}
++
++#[test]
++fn a_span_gives_what_its_glyph_run_does() {
++    let pieces = [
++        Text("aaa bb"),
++        Other("b ccc dd"),
++        Text("d eee fff ggg "),
++        Other("hhh"),
++        // The last grapheme is two characters.
++        Text(" iie\u{301}"),
++    ];
++    let layout = justified(&pieces, 130.);
++    assert!(layout.len() > 2);
++    let kept = glyph_runs(&layout);
++    // Glyph runs that are part of their run on the line, and lines with more than one.
++    assert!(kept.len() > layout.len() + 2);
++    assert_spans(&kept, layout.shaped_text());
++
++    // Each has its own spacing.
++    let spaced: Vec<f32> = kept[0].glyphs.iter().map(|glyph| glyph.advance).collect();
++    let mut unspaced = build(&pieces);
++    unspaced.break_all_lines(Some(130.));
++    let unspaced: Vec<f32> = glyph_runs(&unspaced)[0]
++        .glyphs
++        .iter()
++        .map(|glyph| glyph.advance)
++        .collect();
++    assert_eq!(spaced.len(), unspaced.len());
++    assert_ne!(spaced, unspaced);
++}
++
++#[test]
++fn a_span_gives_what_its_right_to_left_glyph_run_does() {
++    // Arabic letters in words of three, some of another style, among Latin ones.
++    let pieces = [
++        Text("\u{628}\u{628}\u{628} \u{62A}\u{62A}"),
++        Other("\u{62A} \u{628}\u{62A}\u{628} abc \u{62A}"),
++        Text("\u{628}\u{62A} \u{628}\u{628}\u{62A}"),
++    ];
++    let layout = justified(&pieces, 90.);
++    assert!(layout.len() > 1);
++    let kept = glyph_runs(&layout);
++    assert!(kept.len() > layout.len() + 1);
++    assert_spans(&kept, layout.shaped_text());
++
++    // The first cluster is the visually first one: the logically last.
++    assert!(kept.iter().any(|kept| {
++        let clusters = &kept.clusters;
++        clusters.len() > 1 && clusters[0].text_range.start > clusters[1].text_range.start
++    }));
++}
++
++#[test]
++fn the_shaped_text_that_is_kept_outlives_the_layout() {
++    let mut layout = justified(&[Text("aaa bb"), Other("b ccc"), Text(" ddd")], 80.);
++    let kept = glyph_runs(&layout);
++    let shaped_text = Arc::clone(layout.shaped_text());
++
++    // The layout is built again: it has another shaped text.
++    build_into(&mut layout, &[Text("xyz")], &style());
++    layout.break_all_lines(None);
++    assert!(!Arc::ptr_eq(&shaped_text, layout.shaped_text()));
++    assert_eq!(layout.shaped_text().shaped_clusters().len(), 3);
++    assert_spans(&kept, &shaped_text);
++}
++
++#[test]
++fn a_layout_built_again_uses_the_shaped_text_no_one_else_has() {
++    let mut layout = build(&[Text("aaa bbb")]);
++    let before = Arc::as_ptr(layout.shaped_text());
++    build_into(&mut layout, &[Text("xyz")], &style());
++    assert_eq!(Arc::as_ptr(layout.shaped_text()), before);
++    assert_eq!(layout.shaped_text().shaped_clusters().len(), 3);
++}
++
++#[test]
++fn breaking_lines_again_leaves_the_shaped_text_as_it_is() {
++    let mut layout = build(&[Text("aaa bbb ccc"), Object(10.), Text("ddd")]);
++    let shaped_text = Arc::clone(layout.shaped_text());
++    layout.break_all_lines(Some(60.));
++    layout.break_all_lines(Some(200.));
++    assert!(Arc::ptr_eq(&shaped_text, layout.shaped_text()));
++}
++
++fn advances(shaped_text: &ShapedText) -> Vec<f32> {
++    shaped_text
++        .shaped_clusters()
++        .iter()
++        .map(|cluster| cluster.advance)
++        .collect()
++}
++
++#[test]
++fn a_tab_stop_changes_a_copy_of_shaped_text_that_is_shared() {
++    let tabbed = TextStyle {
++        tab_stops: Some(TabStops {
++            interval: 100.,
++            min_advance: 0.,
++        }),
++        ..style()
++    };
++    let mut layout = Layout::default();
++    build_into(&mut layout, &[Text("a\tb")], &tabbed);
++
++    // No one else has it: it is changed in place.
++    let shaped = advances(layout.shaped_text());
++    let before = Arc::as_ptr(layout.shaped_text());
++    layout.break_all_lines(None);
++    assert_eq!(Arc::as_ptr(layout.shaped_text()), before);
++    let laid_out = advances(layout.shaped_text());
++    assert_ne!(laid_out, shaped);
++
++    build_into(&mut layout, &[Text("a\tb")], &tabbed);
++    let shaped_text = Arc::clone(layout.shaped_text());
++    layout.break_all_lines(None);
++    assert!(!Arc::ptr_eq(&shaped_text, layout.shaped_text()));
++    assert_eq!(advances(&shaped_text), shaped);
++    assert_eq!(advances(layout.shaped_text()), laid_out);
++}
++
++#[test]
++fn an_inline_object_changes_a_copy_of_shaped_text_that_is_shared() {
++    let mut layout = build(&[Text("a"), Object(10.), Text("b")]);
++    let shaped_text = Arc::clone(layout.shaped_text());
++    let shaped = advances(&shaped_text);
++    assert_eq!(shaped[1], 10.);
++
++    // The width it has leaves the shaped text as it is.
++    layout.edit_inline_box(0, |inline_box| inline_box.height = 20.);
++    assert!(Arc::ptr_eq(&shaped_text, layout.shaped_text()));
++
++    layout.edit_inline_box(0, |inline_box| inline_box.width = 25.);
++    assert!(!Arc::ptr_eq(&shaped_text, layout.shaped_text()));
++    assert_eq!(advances(&shaped_text), shaped);
++    assert_eq!(advances(layout.shaped_text())[1], 25.);
++}
+diff --git a/parley/src/tests/utils/asserts.rs b/parley/src/tests/utils/asserts.rs
+index f74f24bafb00d714e43a3d5d2108879913c7cd75..77e74a5b5efc5d1578cb2e5036926fc8c20ef4a5 100644
+--- a/parley/src/tests/utils/asserts.rs
++++ b/parley/src/tests/utils/asserts.rs
+@@ -37,7 +37,8 @@ fn canonicalize_layout_data<B: Brush>(layout_data: &LayoutData<B>) -> LayoutData
+         }
+     }
+ 
+-    normalized.shaped_text.remap_styles(&remap);
++    // machopo: the shaped text is shared.
++    alloc::sync::Arc::make_mut(&mut normalized.shaped_text).remap_styles(&remap);
+     normalized.styles = canonical_styles;
+     normalized.style_metrics = canonical_metrics;
+     normalized

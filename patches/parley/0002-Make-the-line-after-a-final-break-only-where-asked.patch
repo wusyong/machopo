@@ -1,0 +1,203 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wu Yuwei <yuweiwu@pm.me>
+Date: Tue, 10 Nov 2026 07:43:45 +0900
+Subject: [PATCH] Make the line after a final break only where asked
+
+---
+ parley/src/layout/data.rs            |  5 ++
+ parley/src/layout/layout.rs          | 13 ++++
+ parley/src/layout/line_break.rs      | 12 ++++
+ parley/src/tests/mod.rs              |  1 +
+ parley/src/tests/test_final_break.rs | 95 ++++++++++++++++++++++++++++
+ 5 files changed, 126 insertions(+)
+ create mode 100644 parley/src/tests/test_final_break.rs
+
+diff --git a/parley/src/layout/data.rs b/parley/src/layout/data.rs
+index c6515dd812b8e8513ce86c2864ffecbd7979de4d..477743424e895da1490f521cc65963db6b7fe431 100644
+--- a/parley/src/layout/data.rs
++++ b/parley/src/layout/data.rs
+@@ -217,6 +217,9 @@ pub(crate) struct LayoutData<B: Brush> {
+     pub(crate) indent_amount: f32,
+     /// Options controlling text-indent behavior.
+     pub(crate) indent_options: IndentOptions,
++    /// machopo: whether the line after a final forced break (a newline ending the text), which has
++    /// nothing on it, is made (`Layout::set_line_after_final_break`).
++    pub(crate) line_after_final_break: bool,
+ 
+     // Output of line breaking
+     /// The lines in the
+@@ -267,6 +270,7 @@ impl<B: Brush> Default for LayoutData<B> {
+             layout_max_advance: 0.0,
+             indent_amount: 0.0,
+             indent_options: IndentOptions::default(),
++            line_after_final_break: true,
+         }
+     }
+ }
+@@ -283,6 +287,7 @@ impl<B: Brush> LayoutData<B> {
+         self.layout_max_advance = 0.0;
+         self.indent_amount = 0.0;
+         self.indent_options = IndentOptions::default();
++        self.line_after_final_break = true;
+         self.styles.clear();
+         self.style_metrics.clear();
+         self.inline_boxes.clear();
+diff --git a/parley/src/layout/layout.rs b/parley/src/layout/layout.rs
+index 0ae026ae17cf47bf956c955733973b661d4c5fcf..a0b328202a82af7fca98a62d589860036ef06cf6 100644
+--- a/parley/src/layout/layout.rs
++++ b/parley/src/layout/layout.rs
+@@ -274,6 +274,19 @@ impl<B: Brush> Layout<B> {
+         self.data.indent_options = options;
+     }
+ 
++    /// machopo: sets whether the line after a final forced break (a newline ending the text) is made.
++    ///
++    /// By default it is: an editor puts the caret there. CSS makes no line box after the last
++    /// forced break when nothing follows it (Blink's line breaker stops at the end of the
++    /// content), so `<div>a<br></div>` is one line tall; a text control keeps the line (Blink
++    /// adds a placeholder `<br>` to its value when it ends in a newline).
++    ///
++    /// This must be called before [`Layout::break_all_lines`] or [`Layout::break_lines`].
++    /// It is reset to `true` when the layout is [cleared](Self::clear) or built into.
++    pub fn set_line_after_final_break(&mut self, made: bool) {
++        self.data.line_after_final_break = made;
++    }
++
+     /// Set the alignment for the layout.
+     ///
+     /// This only takes effect the next time [`Layout::break_all_lines`] or [`Layout::break_lines`] is called.
+diff --git a/parley/src/layout/line_break.rs b/parley/src/layout/line_break.rs
+index c3e47a09beeb104ff519de5284f210c66dcf5da0..8d0e57080e7f31697f39a1852aa2895b19e6984b 100644
+--- a/parley/src/layout/line_break.rs
++++ b/parley/src/layout/line_break.rs
+@@ -978,6 +978,18 @@ impl<'a, B: Brush> BreakLines<'a, B> {
+             line_indent,
+         );
+ 
++        // machopo: a last line with no items after another is the line after a final forced break
++        // (the text ended with the break; see `finish_line`). Unless the layout makes it, it is
++        // taken back and nothing is yielded.
++        if reason == BreakReason::None
++            && !self.layout.data.line_after_final_break
++            && self.lines.lines.last().unwrap().item_range.is_empty()
++            && self.lines.lines.len() > 1
++        {
++            self.lines.lines.pop();
++            return None;
++        }
++
+         // A line containing only out-of-flow boxes (and no text) is an invisible line box with
+         // zero height; the strut only applies once the line has content. The trailing empty line
+         // after a final newline has no items and keeps the strut so the cursor has a position.
+diff --git a/parley/src/tests/mod.rs b/parley/src/tests/mod.rs
+index fcd8a5d32711b7518eac9b57798707d877427ace..6d33ade82a79d4445e97607473230fd6d197dffe 100644
+--- a/parley/src/tests/mod.rs
++++ b/parley/src/tests/mod.rs
+@@ -4,5 +4,6 @@
+ mod test_analysis;
+ mod test_builders;
+ mod test_edges;
++mod test_final_break;
+ mod test_style_metrics;
+ mod utils;
+diff --git a/parley/src/tests/test_final_break.rs b/parley/src/tests/test_final_break.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..f8eb2aa5fd30261c6963ffd4c0b7e0ae20a10d5e
+--- /dev/null
++++ b/parley/src/tests/test_final_break.rs
+@@ -0,0 +1,95 @@
++// Copyright 2026 the Parley Authors
++// SPDX-License-Identifier: Apache-2.0 OR MIT
++
++//! machopo: tests for [`Layout::set_line_after_final_break`].
++
++use super::utils::ColorBrush;
++use super::utils::fonts::{FONT_FAMILY_LIST, create_font_context};
++use crate::{
++    FontContext, FontFamily, InlineBox, InlineBoxKind, Layout, LayoutContext, LineHeight,
++    StyleProperty, VerticalAlign,
++};
++
++fn build_into(
++    layout: &mut Layout<ColorBrush>,
++    fcx: &mut FontContext,
++    text: &str,
++    box_at: Option<usize>,
++) {
++    let mut lcx: LayoutContext<ColorBrush> = LayoutContext::new();
++    let mut builder = lcx.ranged_builder(fcx, text, 1., false);
++    builder.push_default(FontFamily::from(FONT_FAMILY_LIST));
++    builder.push_default(StyleProperty::FontSize(20.));
++    builder.push_default(LineHeight::Absolute(30.));
++    if let Some(index) = box_at {
++        builder.push_inline_box(InlineBox {
++            id: 0,
++            kind: InlineBoxKind::OutOfFlow,
++            index,
++            width: 10.,
++            height: 10.,
++            baseline: None,
++            vertical_align: VerticalAlign::BASELINE,
++        });
++    }
++    builder.build_into(layout, text);
++}
++
++/// The number of lines of `text` and their height, broken all at once and one line at a time,
++/// the line after a final break made or not.
++fn broken(text: &str, box_at: Option<usize>, made: bool) -> (usize, f32) {
++    let mut fcx = create_font_context();
++    let mut layout = Layout::new();
++    build_into(&mut layout, &mut fcx, text, box_at);
++    layout.set_line_after_final_break(made);
++    let mut yielded = 0;
++    let mut breaker = layout.break_lines();
++    breaker.state_mut().set_layout_max_advance(1000.);
++    breaker.state_mut().set_line_max_advance(1000.);
++    while breaker.break_next().is_some() {
++        yielded += 1;
++    }
++    breaker.finish();
++    assert_eq!(yielded, layout.len(), "{text:?}");
++    let mut all = layout.clone();
++    all.break_all_lines(Some(1000.));
++    assert_eq!(all.len(), layout.len(), "{text:?}");
++    assert_eq!(all.height(), layout.height(), "{text:?}");
++    (layout.len(), layout.height())
++}
++
++#[test]
++fn the_line_after_a_final_break_is_not_made_when_not_asked() {
++    assert_eq!(broken("a\n", None, false), (1, 30.));
++    assert_eq!(broken("\n", None, false), (1, 30.));
++    assert_eq!(broken("a\n\n", None, false), (2, 60.));
++    // A line with text after the break is not that line.
++    assert_eq!(broken("a\nb", None, false), (2, 60.));
++}
++
++#[test]
++fn the_first_line_is_always_made() {
++    // It has no items either, but no line comes before it.
++    assert_eq!(broken("", None, false), (1, 30.));
++}
++
++#[test]
++fn the_line_after_a_final_break_is_made_by_default() {
++    assert_eq!(broken("a\n", None, true), (2, 60.));
++    let mut fcx = create_font_context();
++    let mut layout = Layout::new();
++    build_into(&mut layout, &mut fcx, "a\n", None);
++    layout.break_all_lines(None);
++    assert_eq!(layout.len(), 2);
++    // Built into again, a layout is as new.
++    layout.set_line_after_final_break(false);
++    build_into(&mut layout, &mut fcx, "a\n", None);
++    layout.break_all_lines(None);
++    assert_eq!(layout.len(), 2);
++}
++
++#[test]
++fn a_line_with_a_box_after_a_final_break_is_made() {
++    // The line is not empty: it stays, with no height (an invisible line box).
++    assert_eq!(broken("a\n", Some(2), false), (2, 30.));
++}

@@ -87,9 +87,9 @@ pub fn paint_glyphs(list: &mut DisplayItemList, layout: &Layout<()>, origin: Poi
             list.push(
                 PaintOp::DrawGlyphs {
                     font: FontData {
-                        bytes: Arc::new(font.font.data.clone()),
-                        index: font.font.index,
-                        id: font.font.data.id(),
+                        bytes: Arc::new(font.data.clone()),
+                        index: font.index,
+                        id: font.data.id(),
                     },
                     size,
                     glyphs: glyphs.into(),

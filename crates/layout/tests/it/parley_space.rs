@@ -10,16 +10,14 @@ use write_fonts::FontBuilder;
 use write_fonts::tables::cmap::Cmap;
 use write_fonts::tables::gdef::Gdef;
 use write_fonts::tables::gpos::{
-    AnchorTable, BaseArray, BaseRecord, Class1Record, Class2Record, ComponentRecord,
-    CursivePosFormat1, EntryExitRecord, LigatureArray, LigatureAttach, Mark2Array, Mark2Record,
-    MarkArray, MarkBasePosFormat1, MarkLigPosFormat1, MarkMarkPosFormat1, MarkRecord, PairPos,
-    PairSet, PairValueRecord, PositionChainContext, PositionLookup, PositionSequenceContext,
-    ValueRecord,
+    AnchorTable, BaseArray, BaseRecord, Class1Record, Class2Record, ComponentRecord, CursivePos,
+    EntryExitRecord, LigatureArray, LigatureAttach, Mark2Array, Mark2Record, MarkArray,
+    MarkBasePos, MarkLigPos, MarkMarkPos, MarkRecord, PairPos, PairSet, PairValueRecord,
+    PositionChainContext, PositionLookup, PositionSequenceContext, ValueRecord,
 };
 use write_fonts::tables::gsub::{
-    Gsub, Ligature, LigatureSet, LigatureSubstFormat1, MultipleSubstFormat1,
-    ReverseChainSingleSubstFormat1, Sequence, SingleSubst, SubstitutionChainContext,
-    SubstitutionLookup, SubstitutionSequenceContext,
+    Gsub, Ligature, LigatureSet, LigatureSubst, MultipleSubst, ReverseChainSingleSubst, Sequence,
+    SingleSubst, SubstitutionChainContext, SubstitutionLookup, SubstitutionSequenceContext,
 };
 use write_fonts::tables::head::Head;
 use write_fonts::tables::hhea::Hhea;
@@ -336,7 +334,7 @@ fn single(from: GlyphId16, to: GlyphId16) -> SubstitutionLookup {
 fn ligature(components: &[GlyphId16], to: GlyphId16, flag: LookupFlag) -> SubstitutionLookup {
     SubstitutionLookup::Ligature(Lookup::new(
         flag,
-        vec![LigatureSubstFormat1::new(
+        vec![LigatureSubst::format_1(
             coverage(&components[..1]),
             vec![LigatureSet::new(vec![Ligature::new(
                 to,
@@ -577,7 +575,7 @@ fn a_space_and_marks_take_their_neighbours_where_marks_are_skipped() {
     let rules = Rules {
         gsub: vec![SubstitutionLookup::Multiple(Lookup::new(
             LookupFlag::empty(),
-            vec![MultipleSubstFormat1::new(
+            vec![MultipleSubst::format_1(
                 coverage(&[g('T')]),
                 vec![Sequence::new(vec![g('T'), g('\u{301}')])],
             )],
@@ -709,7 +707,7 @@ fn a_space_in_a_context_of_two_joins_the_words_on_both_sides() {
             coverage(&[g(' ')]),
             classes(&[(g('T'), 1)]),
             classes(&[(g(' '), 1)]),
-            ClassDef::from_iter([]),
+            ClassDef::from_iter::<[(GlyphId16, u16); 0]>([]),
             vec![
                 None,
                 Some(ChainedClassSequenceRuleSet::new(vec![
@@ -740,7 +738,7 @@ fn a_space_in_a_context_of_two_joins_the_words_on_both_sides() {
     // space is taken for a space, which `b` after any space kerns with.
     let mut rules = in_context(SubstitutionLookup::Reverse(Lookup::new(
         LookupFlag::empty(),
-        vec![ReverseChainSingleSubstFormat1::new(
+        vec![ReverseChainSingleSubst::format_1(
             coverage(&[g(' ')]),
             vec![coverage(&[g('T')])],
             Vec::new(),
@@ -857,7 +855,7 @@ fn rules_reaching_further_shape_text_whole() {
         Rules {
             gpos: vec![PositionLookup::Cursive(Lookup::new(
                 LookupFlag::empty(),
-                vec![CursivePosFormat1::new(
+                vec![CursivePos::format_1(
                     coverage(&[g(' ')]),
                     vec![EntryExitRecord::new(Some(anchor()), Some(anchor()))],
                 )],
@@ -868,7 +866,7 @@ fn rules_reaching_further_shape_text_whole() {
         Rules {
             gpos: vec![PositionLookup::MarkToBase(Lookup::new(
                 LookupFlag::empty(),
-                vec![MarkBasePosFormat1::new(
+                vec![MarkBasePos::format_1(
                     coverage(&[g(' ')]),
                     coverage(&[g('a')]),
                     MarkArray::new(vec![MarkRecord::new(0, anchor())]),
@@ -880,7 +878,7 @@ fn rules_reaching_further_shape_text_whole() {
         Rules {
             gpos: vec![PositionLookup::MarkToLig(Lookup::new(
                 LookupFlag::empty(),
-                vec![MarkLigPosFormat1::new(
+                vec![MarkLigPos::format_1(
                     coverage(&[g(' ')]),
                     coverage(&[g('a')]),
                     MarkArray::new(vec![MarkRecord::new(0, anchor())]),
@@ -894,7 +892,7 @@ fn rules_reaching_further_shape_text_whole() {
         Rules {
             gpos: vec![PositionLookup::MarkToMark(Lookup::new(
                 LookupFlag::empty(),
-                vec![MarkMarkPosFormat1::new(
+                vec![MarkMarkPos::format_1(
                     coverage(&[g(' ')]),
                     coverage(&[g('\u{301}')]),
                     MarkArray::new(vec![MarkRecord::new(0, anchor())]),
@@ -906,7 +904,7 @@ fn rules_reaching_further_shape_text_whole() {
         Rules {
             gpos: vec![PositionLookup::MarkToMark(Lookup::new(
                 LookupFlag::empty(),
-                vec![MarkMarkPosFormat1::new(
+                vec![MarkMarkPos::format_1(
                     coverage(&[g('\u{301}')]),
                     coverage(&[g(' ')]),
                     MarkArray::new(vec![MarkRecord::new(0, anchor())]),

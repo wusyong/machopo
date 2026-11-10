@@ -833,7 +833,9 @@ fn a_width_alone_breaks_no_lines() {
             40.0,
             2,
         ),
-        // Its content widths leave an indent out: its lines give them.
+        // With an indent its lines are broken for its width: once more at
+        // the width they give with no limit, and at its min-content width,
+        // which counts the indent, only once.
         (
             "<div style='width: max-content; text-indent: 10px'>XX XX</div>",
             110.0,
@@ -842,6 +844,18 @@ fn a_width_alone_breaks_no_lines() {
         (
             "<div style='width: min-content; text-indent: 10px'>XX XX</div>",
             50.0,
+            1,
+        ),
+        // Shrunk to fit in a definite width, it is as wide as its indented
+        // line.
+        (
+            "<div style='width: 500px'><div style='width: fit-content; text-indent: 10px'>XX XX</div></div>",
+            110.0,
+            2,
+        ),
+        (
+            "<div style='width: 500px'><div style='float: left; text-indent: 10px'>XX XX</div></div>",
+            110.0,
             2,
         ),
         // A percentage is 0 there, as in Blink.
