@@ -166,11 +166,12 @@ mod tests {
             read_back(&mut data, settings, &mut raster),
             [128, 0, 0, 128, 0, 0, 0, 0]
         );
-        // Drawn again over what is there.
+        // Drawn again over what is there: 128 and 127 of 255 of the 128
+        // under it, 191.75, which Vello's 8-bit blending rounds down.
         record_red(&mut data);
         assert_eq!(
             read_back(&mut data, settings, &mut raster),
-            [192, 0, 0, 192, 0, 0, 0, 0]
+            [191, 0, 0, 191, 0, 0, 0, 0]
         );
         assert_eq!(raster::draws_into_for_testing(), draws, "not drawn here");
         // Read again with nothing recorded: the same snapshot, nothing sent.
@@ -284,7 +285,7 @@ mod tests {
         raster.wait_for_idle_for_testing();
         assert_eq!(
             format!("{:?}", raster.cache()),
-            "RasterCache { typefaces: 1, images: 0 }"
+            "RasterCache { fonts: 1, images: 0 }"
         );
     }
 }

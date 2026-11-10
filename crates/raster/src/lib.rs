@@ -23,18 +23,35 @@ use gfx::{Color, RectF, Size};
 
 mod encode;
 mod image_decode;
-mod skia_backend;
+mod ink;
 mod vello_backend;
 
 #[cfg(test)]
 mod playback_tests;
 
-use skia_backend as backend;
-
 /// Name of the raster backend, for logs.
 pub const BACKEND: &str = "vello";
 
-pub use backend::{RasterCache, ink_bounds};
+pub use ink::ink_bounds;
+
+/// What raster keeps between playbacks: fonts and decoded images. One per
+/// compositor (cc's `ImageDecodeCache`, which a `LayerTreeHostImpl` owns):
+/// renderers share none of it, as they won't share a process. The
+/// compositor's raster workers share it: a lock around its tables, held
+/// only to look up or add an entry, not while decoding or drawing.
+#[derive(Default)]
+pub struct RasterCache {
+    pub(crate) vello: vello_backend::VelloCache,
+}
+
+impl std::fmt::Debug for RasterCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RasterCache")
+            .field("fonts", &self.vello.font_count())
+            .field("images", &self.vello.image_count())
+            .finish()
+    }
+}
 pub use encode::{encode_jpeg, encode_png};
 pub use image_decode::image_size;
 
@@ -387,10 +404,11 @@ mod tests {
             index: 0,
             id: 1,
         };
-        let typeface = skia_safe::FontMgr::new()
-            .new_from_data(skia_safe::Data::new_copy(AHEM), 0)
-            .unwrap();
-        let glyph = typeface.unichar_to_glyph('X' as i32);
+        let glyph = {
+            use skrifa::MetadataProvider;
+            let id = skrifa::FontRef::new(AHEM).unwrap().charmap().map('X');
+            u16::try_from(id.unwrap().to_u32()).unwrap()
+        };
         let mut list = DisplayItemList::new();
         // Ahem: ascent 0.8em, descent 0.2em. At 20px on a baseline at y = 18
         // the glyph covers x in [2, 22), y in [2, 22).

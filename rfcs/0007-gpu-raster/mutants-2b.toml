@@ -1,0 +1,146 @@
+# Step 2b: ink bounds from skrifa's outlines, images drawn from smaller
+# levels, and gfx's path shapes against what Skia gave.
+#
+#     python3 scripts/test.py mutate rfcs/0007-gpu-raster/mutants-2b.toml
+
+test = ["cargo", "test", "-q", "-p", "raster"]
+timeout = 900
+
+[[mutant]]
+name = "ink isn't made bold"
+file = "crates/raster/src/ink.rs"
+from = '''            embolden: run.embolden.then(|| embolden_side(run.size)),'''
+to = '''            embolden: None,'''
+
+[[mutant]]
+name = "bold is twice as wide"
+file = "crates/raster/src/ink.rs"
+from = '''    f64::from(extra) * 0.5'''
+to = '''    f64::from(extra) * 1.0'''
+
+[[mutant]]
+name = "a slant leans the other way"
+file = "crates/raster/src/ink.rs"
+from = '''    Affine::skew(-f64::from(skew.to_radians().tan()), 0.0)'''
+to = '''    Affine::skew(f64::from(skew.to_radians().tan()), 0.0)'''
+
+[[mutant]]
+name = "a curve's control point isn't in the bounds"
+file = "crates/raster/src/ink.rs"
+from = '''            PathEl::QuadTo(c, p) => {
+                add(c);'''
+to = '''            PathEl::QuadTo(c, p) => {
+                let _ = c;'''
+
+[[mutant]]
+name = "an outline isn't scaled to the size"
+file = "crates/raster/src/ink.rs"
+from = '''        path.apply_affine(Affine::scale(f64::from(self.size) / self.upem));'''
+to = '''        path.apply_affine(Affine::scale(13.0 / self.upem));'''
+
+[[mutant]]
+name = "a variable font is measured at its default"
+file = "crates/raster/src/ink.rs"
+from = '''        let coords = font.axes().location(settings).coords().to_vec();'''
+to = '''        let coords = font.axes().location(settings.take(0)).coords().to_vec();'''
+
+[[mutant]]
+name = "every glyph is measured at the origin"
+file = "crates/raster/src/ink.rs"
+from = '''            let bounds = bounds + Vec2::new(f64::from(position.x), f64::from(position.y));'''
+to = '''            let bounds = bounds + Vec2::new(f64::from(position.x) * 0.0, f64::from(position.y));'''
+
+[[mutant]]
+name = "a collection is measured by its first face"
+file = "crates/raster/src/ink.rs"
+from = '''        let font = FontRef::from_index((*run.font.bytes).as_ref(), run.font.index).ok()?;'''
+to = '''        let font = FontRef::from_index((*run.font.bytes).as_ref(), run.font.index.min(0)).ok()?;'''
+
+[[mutant]]
+name = "a bitmap glyph has no ink"
+file = "crates/raster/src/ink.rs"
+from = '''            && let Some(rect) = self.bitmap_ink(&bitmap)'''
+to = '''            && let Some(rect) = self.bitmap_ink(&bitmap).filter(|_| false)'''
+
+# Missed: the test font's (Noto Color Emoji, CBDT) outer bearing is 0; a
+# font with sbix bitmaps would have one.
+[[mutant]]
+name = "a bitmap is below the baseline by its bearing"
+file = "crates/raster/src/ink.rs"
+from = '''                -f64::from(bitmap.bearing_y * to_size),'''
+to = '''                f64::from(bitmap.bearing_y * to_size),'''
+
+[[mutant]]
+name = "a bitmap isn't scaled to the size"
+file = "crates/raster/src/ink.rs"
+from = '''                f64::from(self.size / bitmap.ppem_x),'''
+to = '''                1.0,'''
+
+[[mutant]]
+name = "an image is always drawn from all its pixels"
+file = "crates/raster/src/vello_backend.rs"
+from = '''                level_for(size, (target(size.0, scale.0), target(size.1, scale.1)))'''
+to = '''                level_for(size, (target(size.0, scale.0), target(size.1, scale.1))).min(0)'''
+
+[[mutant]]
+name = "a canvas's image is drawn from a level too"
+file = "crates/raster/src/vello_backend.rs"
+from = '''            FilterQuality::None | FilterQuality::Low => 0,
+            FilterQuality::Medium | FilterQuality::High => {'''
+to = '''            FilterQuality::None => 0,
+            FilterQuality::Low | FilterQuality::Medium | FilterQuality::High => {'''
+
+[[mutant]]
+name = "a level's side is rounded down"
+file = "crates/raster/src/vello_backend.rs"
+from = '''        .saturating_add(rounding)'''
+to = '''        .saturating_add(rounding.min(0))'''
+
+[[mutant]]
+name = "a level is large enough if one side is"
+file = "crates/raster/src/vello_backend.rs"
+from = '''        if width < target.0 || height < target.1 {'''
+to = '''        if width < target.0 && height < target.1 {'''
+
+[[mutant]]
+name = "the level one smaller is taken"
+file = "crates/raster/src/vello_backend.rs"
+from = '''        if width < target.0 || height < target.1 {'''
+to = '''        if width.saturating_mul(2) < target.0 || height.saturating_mul(2) < target.1 {'''
+
+[[mutant]]
+name = "a part of an image is taken from the level as from the image"
+file = "crates/raster/src/vello_backend.rs"
+from = '''                    RectF::new(src.x * x, src.y * y, src.width * x, src.height * y)'''
+to = '''                    RectF::new(src.x * x / x, src.y * y / y, src.width * x / x, src.height * y / y)'''
+
+[[mutant]]
+name = "a pattern is drawn from all its image's pixels"
+file = "crates/raster/src/vello_backend.rs"
+from = '''                let Some((pixmap, _)) = self.cache.image_at(data, tiled.filter, seen) else {'''
+to = '''                let Some((pixmap, _)) = self.cache.image_at(data, FilterQuality::Low, seen) else {'''
+
+[[mutant]]
+name = "the level goes by the size an image is drawn at, not seen at"
+file = "crates/raster/src/vello_backend.rs"
+from = '''                let seen = axis_scales(self.transform);'''
+to = '''                let seen = axis_scales(Affine::IDENTITY);'''
+
+[[mutant]]
+name = "a pixel's ends count whole"
+file = "crates/raster/src/vello_backend.rs"
+from = '''                    f32_from_f64(covered / scale)'''
+to = '''                    f32_from_f64(covered.ceil() / scale)'''
+
+[[mutant]]
+name = "an oval's quarter has another weight"
+file = "crates/gfx/src/path_shapes.rs"
+from = '''const QUARTER_WEIGHT: f32 = std::f32::consts::FRAC_1_SQRT_2;'''
+to = '''const QUARTER_WEIGHT: f32 = 0.707;'''
+test = ["cargo", "test", "-q", "-p", "gfx"]
+
+[[mutant]]
+name = "unpremultiplying rounds to the nearest"
+file = "crates/raster/src/encode.rs"
+from = '''round_ties_even'''
+to = '''round'''

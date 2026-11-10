@@ -2429,7 +2429,7 @@ impl dom_api::FrameLayout for Frame {
     ) -> Option<gfx::ShapedText> {
         let mut shaped = layout::shape_canvas_text(&mut self.text, text, style);
         if ink {
-            shaped.ink = raster::ink_bounds(self.canvas_raster.cache(), &shaped.runs);
+            shaped.ink = raster::ink_bounds(&shaped.runs);
         }
         Some(shaped)
     }

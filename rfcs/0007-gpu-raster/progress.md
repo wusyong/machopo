@@ -11,8 +11,8 @@
 | 0 圖片的解碼和讀尺寸、JPEG 的編碼換成純 Rust 的 crate（Skia 照舊畫） | 完成，還沒 merge | 2026-11-10 |
 | 1a 原型：常用的 op；量文字多的 tile、存截圖（第一個檢查點） | 完成：檢查點通過（不 merge） | 2026-11-10 |
 | 1b 原型：全部的 op 和組出來的功能；整套 reftest（第二個檢查點） | 完成：檢查點通過（不 merge） | 2026-11-10 |
-| 2a Vello 成為唯一的 playback；`raster` 的測試搬過來、補上「上游還缺」、不會 panic、tile 接縫的測試 | 完成，還沒審 | 2026-11-11 |
-| 2b ink bounds 改用 skrifa、mipmap、拿掉 skia-safe | 還沒開始 | |
+| 2a Vello 成為唯一的 playback；`raster` 的測試搬過來、補上「上游還缺」、不會 panic、tile 接縫的測試 | 完成 | 2026-11-11 |
+| 2b ink bounds 改用 skrifa、mipmap、拿掉 skia-safe | 完成 | 2026-11-11 |
 | 2c playback 裡的 panic：release 接住、留白、記 log 和 DevTools Console 的警告 | 還沒開始 | |
 | 2d WPT 的預期結果、列出缺的功能的文件、其他文件、整個階段的檢查 | 還沒開始 | |
 | 3 改進（文字的 gamma 和對比、漸層的 dithering、fork 裡的 `ColorMatrix`；可能不需要） | 還沒開始 | |
@@ -31,6 +31,10 @@
 | 第 2a 步：display list 能放的東西每一種都畫得出來，不 panic | `playback_tests::one_of_everything_is_drawn`（每種 op、每種 filter 和巢狀的 chain、27 種 blend mode 各用在 draw、layer 和 `DrawColor`、每種 shader；三個 tile 和 canvas） |
 | 第 2a 步：tile 和整塊畫出來的一樣，filter、陰影和文字在 tile 的邊緣不斷開 | `playback_tests::tiles_have_the_pixels_of_the_whole`（96×96 對九個 32×32，scale 1 和 1.5） |
 | 第 2a 步：上游還缺的和上游的 bug，上游補上時測試會失敗 | `vello_backend::tests::upstream_lacks_color_matrix_filters`、`upstream_lacks_filters_of_several_primitives`、`upstream_pads_a_gradient_past_a_hard_stop_with_the_color_before_it`、`upstream_panics_on_a_clipped_stroke_at_the_right_edge` |
+| 第 2b 步：workspace 裡沒有 Skia | `Cargo.toml` 和 `Cargo.lock` 沒有 `skia-safe`；`cargo check --workspace --all-targets` 通過 |
+| 第 2b 步：ink bounds 是外框線控制點的範圍，不取整；假粗體、斜體、variation、collection 的 face 都照畫的算 | `cargo test -p raster ink::`（7 個）、`playback_tests::ink_bounds_are_where_glyphs_are_drawn`、`a_bitmap_glyphs_ink_is_where_it_is_drawn`（對著畫出來的像素）；WPT 的 `html/canvas/element/text` |
+| 第 2b 步：縮到一半以下的圖從預先縮好的那一層畫，層照 cc 的規則取 | `vello_backend::tests::an_image_is_drawn_from_the_smallest_level_that_is_large_enough`、`a_smaller_level_averages_what_each_pixel_covers`、`a_level_is_made_once_and_only_when_drawn_from`，`playback_tests::an_image_made_much_smaller_is_its_pixels_averaged`、`a_part_and_a_pattern_of_an_image_made_smaller_are_from_its_level` |
+| 第 2b 步：`gfx::Path` 的形狀和 Skia 逐位相同（拿掉 Skia 之後用存下來的結果比） | `cargo test -p gfx shapes_are_skias_bit_for_bit`（108 個情況） |
 
 ## 做過的檢查
 
@@ -322,3 +326,69 @@
 **沒有測試守著的**：glyph 的 culling 省了多少沒有計數（離 tile 遠的 glyph 有沒有真的被濾掉，測試只看得到「該畫的有畫」）。2d 記進測試缺口的文件；要守的話是在 playback 加一個測試讀得到的計數。
 
 **其他檢查**：`cargo clippy -p raster --all-targets -- -D warnings`、`cargo fmt -p raster --check`、`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs 都過。`boundary` 的清單拿掉了原型的兩個 thread-local。reftest、情境和 WPT 這一段沒有重跑：畫圖的程式和 1b 最後跑整套時（對齊開在 4）是同一份，只拿掉開關；2d 整個階段做完時再跑。
+
+### 第 2b 步：ink bounds 改用 skrifa、mipmap、拿掉 skia-safe（2026-11-11，Windows 11，AMD Radeon RX 7900 XTX）
+
+**做了什麼**：
+
+- **ink bounds**（`crates/raster/src/ink.rs`，已決定的事項第 35、36 條）：skrifa 取外框線，算控制點的範圍；`raster::ink_bounds` 不再拿快取。假粗體和畫的時候一樣用 `kurbo::expand_path`（加多少抽成 `embolden_side`，畫和量都呼叫），在字型的座標（y 朝上）裡加粗、再翻轉和歪斜，和 Vello 的順序相同。點陣的 glyph 照 Vello 擺點陣圖的算法算矩形。
+- **外框線用字型的單位取、自己縮放**：skrifa 把縮放過的外框線對齊到 1/64 px，13 px 的 Ahem 會差 0.006 px，1.5 px 的字差得更多（WPT 有 `actualBoundingBox.small-font`）。改成取沒縮放的再乘上字級之後，和 Skia 的數字相同。這一點是實作時發現的，沒有另外問。
+- **mipmap**（第 34 條）：圖片快取的每一項多了 16 個層的位置，第一次用到時從原圖做面積平均。`DrawImage` 和圖案 shader 的圖片照「看到的大小」（目前的 matrix 乘上 dst 對 src 的比）取層。
+- **Skia 拿掉了**：`skia_backend.rs` 刪除，`raster` 不再依賴 `skia-safe` 和 `read-fonts`，workspace 的 `Cargo.toml` 拿掉 `skia-safe`。`RasterCache` 搬到 `lib.rs`，只包著 Vello 的快取；它的 `Debug` 從 `typefaces` 改成 `fonts`。
+
+**和 Skia 的對照**（拿掉之前，同一個 glyph 兩邊各算一次，位置 (3.25, -1.5)；Ahem 278 個、Lato 3,023 個、RobotoExtremo 子集 4 個、Noto Color Emoji 子集 7 個 glyph）：
+
+| 情況 | 四邊最大的差（px） |
+| --- | --- |
+| 不加粗（13、7.3、40.5 px；歪斜 20°；`wght` 100 和 900）：Ahem、RobotoExtremo | 0.0000 |
+| 同上：Lato | 0.034（glyph 1259，組合的 glyph；其餘更小） |
+| 假粗體，13 到 40.5 px | 0.06（Ahem）到 0.21（Lato） |
+| 假粗體，100 px | 0.53（Lato 的 glyph 238） |
+| 點陣的 emoji | 0.34 到 0.97 |
+
+- 有墨水的 glyph 兩邊一致：沒有一邊有、另一邊沒有的。
+- **假粗體的差是預期中的**：Skia 用它自己的加粗，Vello 畫的時候用 `kurbo::expand_path`，量的要跟著畫的。`ink_bounds_are_where_glyphs_are_drawn` 拿畫出來的像素對過（8 組字、7 種字級和粗斜的組合，ink 包住每個畫到的 pixel、最多多出 1.5 px）。
+- **emoji 的差**：Skia 回的是取整到整數 pixel 的範圍，這裡是點陣圖實際畫的矩形。
+- Lato 那 0.034 px 沒有追原因（猜是組合 glyph 的位移在兩邊捨入不同）。
+
+**拿 Skia 當對照的測試怎麼處理**：
+
+- `gfx::Path` 的弧、圓角矩形、transform 原本逐位和 `SkPathBuilder` 比（4 個測試）。gfx 自己沒有這些形狀的測試，直接刪掉就沒人守了：拿掉 Skia 之前把 108 個情況的輸出存成 `crates/gfx/src/path_shapes.golden`，新的 `shapes_are_skias_bit_for_bit` 逐位比它。之後新加的情況沒有 Skia 可以對。
+- 「每種顏色配每種 alpha 轉成不 premultiplied 和 Skia 相同」改成比兩個 FNV-1a 的 hash（拿掉之前算的）。
+- `gfx::Path` 轉成 Skia 的 path、collection 拆成單獨的字型、Skia 的 typeface 快取的測試跟著程式一起刪了。「collection 的第二個 face 畫得出來」留著，改成只經過 playback；另外加了量的。
+
+**改了預期值的兩個測試**（都是 1b 就知道的差 1，不是這一步造成的）：
+
+- `renderer` 的 `a_flush_sends_the_recording_to_the_thread_and_forgets_it`：半透明的紅疊兩次，192 改成 191。算出來是 191.75，Vello 的 8-bit 混色往下取。
+- `browser` 的 `navigation::links::canvas_2d`：線性漸層中間和尾端的兩個 pixel，`126,0,129` 和 `1,0,254` 改成 `127,0,128` 和 `2,0,253`。
+
+這兩個都是 script 用 `getImageData` 讀得到的差異，2d 記進缺口的文件。
+
+**跑過的**：
+
+- `cargo test -p raster`（92 個）、`-p gfx`（23 個）、`-p renderer`（111 個）、`-p canvas`、`-p layout`、`-p browser --test it canvas`：都過。
+- `test.py reftest images`：17 個都和預期一樣。
+- `test.py wpt html/canvas/element/text`：315 個 check 都和預期一樣（`actualBoundingBox` 的三個結果沒變）。
+- `test.py wpt html/semantics/embedded-content/the-img-element`（1,983 個 check）、`css/css-images`（744 個）：都和預期一樣。`css/css-backgrounds`（6,223 個）有 2 個不通過：`box-shadow-041.html`、`box-shadow-042.html`，是 1b 就列出的那 8 個裡的，2d 處理。
+- `cargo clippy`（`raster`、`gfx`、`renderer`、`layout`、`browser`）、`cargo fmt --check`、`sanity.py` 的 deps、boundary、unsafe、tests、numerics、docs：都過。
+
+**Mutation test**（`mutants-2b.toml`，22 條，21 條抓到）：
+
+| 弄壞了什麼 | 哪個測試失敗 |
+| --- | --- |
+| ink 不加粗；粗兩倍；斜的方向反了 | `ink_bounds_are_made_bold_and_slanted`、`bold_is_wider_by_the_size`、`ink_bounds_are_where_glyphs_are_drawn` |
+| 控制點不算進範圍 | `bounds_are_the_points_control_points_too` |
+| 外框線不照字級縮放；variation 不套用；每個 glyph 都在原點；collection 一律用第一個 face | `ink_bounds_are_the_glyphs_outlines_together`、`a_variable_font_is_measured_at_its_axes`、`a_collections_face_is_measured_and_no_font_has_no_ink` |
+| 點陣的 glyph 沒有墨水；點陣圖不照字級縮放 | `a_bitmap_glyph_has_the_rect_it_is_drawn_in`、`a_bitmap_glyphs_ink_is_where_it_is_drawn` |
+| 圖一律從原圖畫；canvas 的圖（`Low`）也取層 | `an_image_made_much_smaller_is_its_pixels_averaged`、`a_level_is_made_once_and_only_when_drawn_from`、`a_decoded_image_is_drawn_as_its_pixels_sampled_as_its_filter_says` |
+| 層的邊長往下取整；一邊夠大就算夠大；取小一層 | `an_image_is_drawn_from_the_smallest_level_that_is_large_enough` |
+| 來源範圍沒有換算到層；圖案的圖不取層；取層只看畫的大小、不看 matrix | `a_part_and_a_pattern_of_an_image_made_smaller_are_from_its_level`、`an_image_made_much_smaller_is_its_pixels_averaged` |
+| 縮小時兩端的 pixel 算整個 | `a_smaller_level_averages_what_each_pixel_covers` |
+| 橢圓的四分之一弧的權重改掉 | `shapes_are_skias_bit_for_bit` |
+| 轉回不 premultiplied 時四捨五入 | `unpremultiplying_is_skias_for_every_color_and_alpha` |
+
+- 第一輪有 3 條沒抓到，其中 2 條是測試寫得不好：圖剛好縮成四分之一時，bilinear 取樣點落在四個 pixel 的交點，本來就是平均值，分不出有沒有取層。測試改成縮成三分之一（和 5 px 的 tile）之後抓到。
+- **沒抓到的 1 條**：點陣 glyph 的外側 bearing 正負號反了。手上的測試字型（Noto Color Emoji，CBDT）那個值是 0，要 sbix 的字型才測得到；Apple Color Emoji 專用的那個位移同樣沒有測試（沒有可以放進 repo 的字型）。2d 記進測試缺口的文件。
+- 跑完檔案都還原了。
+
+**沒有做的**：沒有外框線的 COLR glyph 當成沒有墨水（第 35 條），沒有測試；2d 記成缺口。

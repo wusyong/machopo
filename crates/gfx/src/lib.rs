@@ -21,6 +21,8 @@ mod node_id;
 mod path_hit;
 mod path_measure;
 mod path_shapes;
+#[cfg(test)]
+mod path_shapes_tests;
 pub mod svg;
 
 use std::fmt;

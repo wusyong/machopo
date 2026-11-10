@@ -161,38 +161,29 @@ mod tests {
         assert_eq!(unpremultiplied(&pixels, size, true).unwrap(), pixels);
     }
 
-    /// Every color at every alpha comes out the byte Skia's `readPixels`
-    /// gives. Goes when Skia does; the cases above stay.
+    const HASH_PREMUL: u64 = 0xcf8c_04a6_36d9_e851;
+    const HASH_OPAQUE: u64 = 0x10cd_9ffd_6970_1b25;
+
+    /// Every color at every alpha comes out the bytes Skia's `readPixels`
+    /// gave (skia-safe 0.153, compared byte for byte while raster still
+    /// had it): their FNV-1a hashes.
     #[test]
     fn unpremultiplying_is_skias_for_every_color_and_alpha() {
-        use skia_safe as sk;
         let mut pixels = Vec::new();
         for a in 0..=255u8 {
             for c in 0..=255u8 {
                 pixels.extend([c, c / 2, 255 - c, a]);
             }
         }
+        let hash = |bytes: &[u8]| {
+            bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
+                (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
+            })
+        };
         let size = Size::new(256, 256);
-        let info = |alpha| sk::ImageInfo::new((256, 256), sk::ColorType::RGBA8888, alpha, None);
-        for (opaque, alpha) in [
-            (false, sk::AlphaType::Premul),
-            (true, sk::AlphaType::Opaque),
-        ] {
-            let mut source_pixels = pixels.clone();
-            let source = sk::Pixmap::new(&info(alpha), &mut source_pixels, 256 * 4).unwrap();
-            let mut skia = vec![0; pixels.len()];
-            assert!(source.read_pixels(&info(sk::AlphaType::Unpremul), &mut skia, 256 * 4, (0, 0)));
-            let ours = unpremultiplied(&pixels, size, opaque).unwrap();
-            for ((p, ours), skia) in pixels
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .zip(ours.as_chunks::<4>().0)
-                .zip(skia.as_chunks::<4>().0)
-            {
-                assert_eq!(ours, skia, "{p:?}, opaque: {opaque}");
-            }
-        }
+        let hashes =
+            [false, true].map(|opaque| hash(&unpremultiplied(&pixels, size, opaque).unwrap()));
+        assert_eq!(hashes, [HASH_PREMUL, HASH_OPAQUE], "{hashes:x?}");
     }
 
     /// Blink's settings: deflate level 1 (the zlib header's FLEVEL, its

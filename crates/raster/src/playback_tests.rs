@@ -2270,3 +2270,373 @@ fn pixels_too_wide_to_draw_on_are_left() {
     crate::draw_into(&list, &RasterCache::default(), size, false, &mut pixels);
     assert!(pixels.iter().all(|&byte| byte == 7));
 }
+
+/// Packs single fonts into a TrueType collection: each font is copied
+/// whole, with its table offsets moved to where it lands in the file.
+pub(crate) fn ttc(fonts: &[&[u8]]) -> Vec<u8> {
+    let header = 12 + 4 * fonts.len();
+    let mut out = Vec::new();
+    out.extend(b"ttcf");
+    out.extend(0x0001_0000u32.to_be_bytes());
+    out.extend((fonts.len() as u32).to_be_bytes());
+    out.resize(header, 0);
+    for (i, font) in fonts.iter().enumerate() {
+        let base = out.len();
+        out[12 + 4 * i..16 + 4 * i].copy_from_slice(&(base as u32).to_be_bytes());
+        out.extend_from_slice(font);
+        let records = u16::from_be_bytes(font[4..6].try_into().unwrap()) as usize;
+        for r in 0..records {
+            let at = base + 12 + 16 * r + 8;
+            let offset = u32::from_be_bytes(out[at..at + 4].try_into().unwrap());
+            out[at..at + 4].copy_from_slice(&(offset + base as u32).to_be_bytes());
+        }
+        out.resize(out.len().next_multiple_of(4), 0);
+    }
+    out
+}
+
+/// A face other than the first of a collection is drawn: Ahem's square,
+/// the second face after Lato.
+#[test]
+fn draws_a_face_after_the_first_of_a_collection() {
+    let font = FontData {
+        bytes: Arc::new(ttc(&[LATO, AHEM])),
+        index: 1,
+        id: 2,
+    };
+    let list = list_of(vec![PaintOp::DrawGlyphs {
+        font,
+        size: 20.0,
+        glyphs: glyph_ids(AHEM, "X").into(),
+        positions: vec![PointF::new(2.0, 18.0)].into(),
+        rotations: Vec::new().into(),
+        flags: PaintFlags::fill(Color::rgb(0, 0, 0)),
+        embolden: false,
+        skew: 0.0,
+        variations: Arc::new([]),
+        bounds: RectF::new(2.0, 2.0, 20.0, 20.0),
+    }]);
+    let bmp = crate::playback(
+        &list,
+        &PlaybackParams {
+            content_rect: RectF::new(0.0, 0.0, 24.0, 24.0),
+            contents_scale: 1.0,
+            clear_color: Color::WHITE,
+        },
+        &RasterCache::default(),
+    );
+    assert_eq!(bmp.size, Size::new(24, 24));
+    assert_eq!(bmp.pixel(12, 12), [0, 0, 0, 255]);
+    assert_eq!(bmp.pixel(1, 1), [255, 255, 255, 255]);
+}
+
+/// Where `run`, drawn on white 200 px a side with its origin at
+/// (60, 120), leaves pixels that aren't white: left, top, right, bottom,
+/// about that origin.
+fn drawn_bounds(run: &gfx::GlyphRun) -> [f32; 4] {
+    let at = PointF::new(60.0, 120.0);
+    let list = list_of(vec![PaintOp::DrawGlyphs {
+        font: run.font.clone(),
+        size: run.size,
+        glyphs: run.glyphs.clone().into(),
+        positions: run
+            .positions
+            .iter()
+            .map(|p| PointF::new(p.x + at.x, p.y + at.y))
+            .collect(),
+        rotations: Vec::new().into(),
+        flags: PaintFlags::fill(Color::BLACK),
+        embolden: run.embolden,
+        skew: run.skew,
+        variations: run.variations.clone(),
+        bounds: RectF::new(0.0, 0.0, 200.0, 200.0),
+    }]);
+    let bmp = crate::playback(
+        &list,
+        &PlaybackParams {
+            content_rect: RectF::new(0.0, 0.0, 200.0, 200.0),
+            contents_scale: 1.0,
+            clear_color: Color::WHITE,
+        },
+        &RasterCache::default(),
+    );
+    let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+    for y in 0..200 {
+        for x in 0..200 {
+            if bmp.pixel(x, y) != WHITE {
+                (x0, y0) = (x0.min(x), y0.min(y));
+                (x1, y1) = (x1.max(x + 1), y1.max(y + 1));
+            }
+        }
+    }
+    assert!(x0 < x1, "something was drawn");
+    assert!(x0 > 0 && y0 > 0 && x1 < 200 && y1 < 200, "all of it");
+    [
+        x0 as f32 - at.x,
+        y0 as f32 - at.y,
+        x1 as f32 - at.x,
+        y1 as f32 - at.y,
+    ]
+}
+
+/// A bitmap glyph's ink is the rect its bitmap is drawn in: every pixel
+/// drawn is in it, and the pixels reach its sides but for the bitmap's
+/// own transparent margin.
+#[test]
+fn a_bitmap_glyphs_ink_is_where_it_is_drawn() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../third_party/wpt/fonts/noto/color-emoji/NotoColorEmoji-subset.ttf"
+    );
+    let bytes = Arc::new(std::fs::read(path).unwrap());
+    for (size, skew) in [(40.0, 0.0), (64.0, 0.0), (23.5, 0.0), (40.0, 20.0)] {
+        let run = gfx::GlyphRun {
+            font: FontData {
+                bytes: bytes.clone(),
+                index: 0,
+                id: 9,
+            },
+            size,
+            glyphs: vec![2],
+            positions: vec![PointF::new(0.0, 0.0)],
+            embolden: false,
+            skew,
+            variations: Arc::new([]),
+        };
+        let ink = crate::ink_bounds(std::slice::from_ref(&run));
+        let drawn = drawn_bounds(&run);
+        let ink = [ink.x, ink.y, ink.right(), ink.bottom()];
+        let name = format!("{size} {skew}: {ink:?} {drawn:?}");
+        assert!(
+            ink[0] <= drawn[0] + 1.0 && ink[1] <= drawn[1] + 1.0,
+            "{name}"
+        );
+        assert!(
+            ink[2] >= drawn[2] - 1.0 && ink[3] >= drawn[3] - 1.0,
+            "{name}"
+        );
+        let margin = size * MARGIN + 1.0;
+        // Slanted, the rect's corners are past the round picture's sides
+        // by as much as the slant moves its top from its bottom.
+        let lean = (ink[3] - ink[1]) * skew.to_radians().tan();
+        assert!(
+            ink[0] >= drawn[0] - margin - lean && ink[1] >= drawn[1] - margin,
+            "{name}"
+        );
+        assert!(
+            ink[2] <= drawn[2] + margin + lean && ink[3] <= drawn[3] + margin,
+            "{name}"
+        );
+    }
+}
+
+/// How much of the size the emoji's bitmap is transparent at a side, at
+/// most (3 px of it at 40 px).
+const MARGIN: f32 = 0.08;
+
+/// The ink bounds of glyphs are where they are drawn: around every pixel
+/// drawn, and no more than a pixel and a half past them (the pixels are
+/// whole; the bounds are the outline's points', which a curve's control
+/// points are just outside of). Made bold and slanted too, by the same
+/// amounts.
+#[test]
+fn ink_bounds_are_where_glyphs_are_drawn() {
+    let lato = |text: &str, size: f32, embolden: bool, skew: f32| gfx::GlyphRun {
+        font: FontData {
+            bytes: Arc::new(LATO.to_vec()),
+            index: 0,
+            id: 2,
+        },
+        size,
+        glyphs: glyph_ids(LATO, text),
+        positions: (0..text.chars().count())
+            .map(|i| PointF::new(i as f32 * size * 0.7, 0.0))
+            .collect(),
+        embolden,
+        skew,
+        variations: Arc::new([]),
+    };
+    for text in ["A", "g", "W", "Oj", "fy", "i", "-", "@"] {
+        for (size, embolden, skew) in [
+            (40.0, false, 0.0),
+            (13.0, false, 0.0),
+            (40.0, true, 0.0),
+            (13.0, true, 0.0),
+            (72.0, true, 0.0),
+            (40.0, false, 20.0),
+            (40.0, true, 14.0),
+        ] {
+            let run = lato(text, size, embolden, skew);
+            let ink = crate::ink_bounds(std::slice::from_ref(&run));
+            let drawn = drawn_bounds(&run);
+            let ink = [ink.x, ink.y, ink.right(), ink.bottom()];
+            let name = format!("{text} {size} {embolden} {skew}: {ink:?} {drawn:?}");
+            // Outside the pixels drawn, or inside by less than the
+            // coverage that leaves a pixel white.
+            assert!(
+                ink[0] <= drawn[0] + 1.0 && ink[1] <= drawn[1] + 1.0,
+                "{name}"
+            );
+            assert!(
+                ink[2] >= drawn[2] - 1.0 && ink[3] >= drawn[3] - 1.0,
+                "{name}"
+            );
+            assert!(
+                ink[0] >= drawn[0] - 1.5 && ink[1] >= drawn[1] - 1.5,
+                "{name}"
+            );
+            assert!(
+                ink[2] <= drawn[2] + 1.5 && ink[3] <= drawn[3] + 1.5,
+                "{name}"
+            );
+        }
+    }
+}
+
+/// A 16 by 16 checkerboard of black and white pixels, with a red 8 by 8
+/// in its top left quarter's place if `corner`.
+fn checkerboard(corner: bool) -> ImageData {
+    let mut pixels = Vec::new();
+    for y in 0..16 {
+        for x in 0..16 {
+            let value = if (x + y) % 2 == 0 { 0 } else { 255 };
+            pixels.extend(if corner && x < 8 && y < 8 {
+                [255, 0, 0, 255]
+            } else {
+                [value, value, value, 255]
+            });
+        }
+    }
+    ImageData::decoded(Size::new(16, 16), pixels)
+}
+
+/// An image drawn smaller than half its size with `Medium` or `High` is
+/// drawn from its pixels averaged: a checkerboard of black and white is
+/// gray all over, where four pixels of it sampled as they are (`Low`, a
+/// canvas's) are whatever they happen to be.
+#[test]
+fn an_image_made_much_smaller_is_its_pixels_averaged() {
+    let drawn = |filter: FilterQuality, scale: f32| {
+        let list = list_of(vec![PaintOp::DrawImage {
+            image: checkerboard(false),
+            src: None,
+            dst: RectF::new(0.0, 0.0, 16.0 * scale, 16.0 * scale),
+            filter,
+            flags: None,
+        }]);
+        crate::playback(
+            &list,
+            &PlaybackParams {
+                content_rect: RectF::new(0.0, 0.0, 4.0, 4.0),
+                contents_scale: 1.0,
+                clear_color: Color::WHITE,
+            },
+            &RasterCache::default(),
+        )
+    };
+    let gray = |pixel: [u8; 4]| (126..=129).contains(&pixel[0]) && pixel[0] == pixel[1];
+    for filter in [FilterQuality::Medium, FilterQuality::High] {
+        let bmp = drawn(filter, 0.25);
+        for (x, y) in [(0, 0), (1, 2), (3, 3)] {
+            assert!(gray(bmp.pixel(x, y)), "{filter:?}: {:?}", bmp.pixel(x, y));
+        }
+    }
+    // Three pixels of the image to one: no four of them average it.
+    let low = drawn(FilterQuality::Low, 1.0 / 3.0);
+    assert!(!(0..4).all(|x| gray(low.pixel(x, 1))));
+    let medium = drawn(FilterQuality::Medium, 1.0 / 3.0);
+    assert!((0..4).all(|x| gray(medium.pixel(x, 1))));
+    // By the scale it is seen at, not the one it is drawn at alone
+    // (a third, where a quarter would sample between four pixels each
+    // time, which is their average too).
+    let list = list_of(vec![
+        PaintOp::Concat {
+            transform: Transform([1.0 / 3.0, 0.0, 0.0, 1.0 / 3.0, 0.0, 0.0]),
+        },
+        PaintOp::DrawImage {
+            image: checkerboard(false),
+            src: None,
+            dst: RectF::new(0.0, 0.0, 16.0, 16.0),
+            filter: FilterQuality::Medium,
+            flags: None,
+        },
+    ]);
+    let bmp = crate::playback(
+        &list,
+        &PlaybackParams {
+            content_rect: RectF::new(0.0, 0.0, 4.0, 4.0),
+            contents_scale: 1.0,
+            clear_color: Color::WHITE,
+        },
+        &RasterCache::default(),
+    );
+    for x in 0..4 {
+        assert!(gray(bmp.pixel(x, 1)), "{:?}", bmp.pixel(x, 1));
+    }
+}
+
+/// A part of an image drawn much smaller is that part of the smaller
+/// level, and a pattern of one is tiles of it: the red quarter of the
+/// image stays the top left quarter of what is drawn, the rest gray.
+#[test]
+fn a_part_and_a_pattern_of_an_image_made_smaller_are_from_its_level() {
+    let play = |op: PaintOp| {
+        crate::playback(
+            &list_of(vec![op]),
+            &PlaybackParams {
+                content_rect: RectF::new(0.0, 0.0, 8.0, 8.0),
+                contents_scale: 1.0,
+                clear_color: Color::WHITE,
+            },
+            &RasterCache::default(),
+        )
+    };
+    let red = |pixel: [u8; 4]| pixel == [255, 0, 0, 255];
+    let gray = |pixel: [u8; 4]| (126..=129).contains(&pixel[0]) && pixel[0] == pixel[1];
+    // The right half of the image, 8 by 16, into 2 by 4: all gray. Its
+    // left half the same way: red above, gray below.
+    for (x, top_red) in [(8.0, false), (0.0, true)] {
+        let bmp = play(PaintOp::DrawImage {
+            image: checkerboard(true),
+            src: Some(RectF::new(x, 0.0, 8.0, 16.0)),
+            dst: RectF::new(1.0, 1.0, 2.0, 4.0),
+            filter: FilterQuality::Medium,
+            flags: None,
+        });
+        for px in 1..3 {
+            let top = bmp.pixel(px, 1);
+            assert!(if top_red { red(top) } else { gray(top) }, "{x}: {top:?}");
+            assert!(gray(bmp.pixel(px, 4)), "{x}: {:?}", bmp.pixel(px, 4));
+        }
+        assert_eq!(bmp.pixel(0, 2), WHITE);
+        assert_eq!(bmp.pixel(3, 2), WHITE);
+        assert_eq!(bmp.pixel(1, 5), WHITE);
+    }
+    // Tiles of 5 by 5, from (0, 0): each red in its top left quarter
+    // (5 to the image's 16 samples it between pixels, not where four
+    // meet, which would be their average as it is).
+    let bmp = play(PaintOp::DrawRect {
+        rect: RectF::new(0.0, 0.0, 8.0, 8.0),
+        flags: PaintFlags::shader(TiledShader {
+            image: ShaderImage::Image(checkerboard(true)),
+            tile: RectF::new(0.0, 0.0, 5.0, 5.0),
+            spacing: gfx::SizeF::new(0.0, 0.0),
+            repeat_x: true,
+            repeat_y: true,
+            transform: Transform::IDENTITY,
+            filter: FilterQuality::Medium,
+            decal: false,
+        }),
+    });
+    for (tx, ty) in [(0, 0), (5, 0), (0, 5)] {
+        assert!(red(bmp.pixel(tx, ty)), "{:?}", bmp.pixel(tx, ty));
+        assert!(
+            red(bmp.pixel(tx + 1, ty + 1)),
+            "{:?}",
+            bmp.pixel(tx + 1, ty + 1)
+        );
+    }
+    for (x, y) in [(3, 0), (4, 1), (3, 3), (0, 3), (1, 4), (4, 4)] {
+        assert!(gray(bmp.pixel(x, y)), "{x}, {y}: {:?}", bmp.pixel(x, y));
+    }
+}

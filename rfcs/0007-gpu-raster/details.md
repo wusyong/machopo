@@ -6,7 +6,7 @@
 
 2026-10-31 的程式，2026-11-10 對過還是這樣。
 
-- **`raster` crate 是唯一用到 Skia 的地方**：`crates/raster/src/skia_backend.rs`（約 990 行程式，之後是測試）、`crates/raster/src/encode.rs`（PNG 用 `png` crate，JPEG 用 Skia 的 encoder）、`crates/raster/src/lib.rs`（對外的 API 和 `Bitmap`）。依賴 `skia-safe`（prebuilt 的 `jpegd-jpege-pdf`，沒有 GPU）、只為 Skia 拆字型集合用的 `read-fonts`、`png`。
+- **`raster` crate 是唯一用到 Skia 的地方**：那時的 `skia_backend.rs`（第 2 步拿掉了）（約 990 行程式，之後是測試）、`crates/raster/src/encode.rs`（PNG 用 `png` crate，JPEG 用 Skia 的 encoder）、`crates/raster/src/lib.rs`（對外的 API 和 `Bitmap`）。依賴 `skia-safe`（prebuilt 的 `jpegd-jpege-pdf`，沒有 GPU）、只為 Skia 拆字型集合用的 `read-fonts`、`png`。
 - **對外的 API 和使用者**：
   - `ops_for`、`playback_into`：compositor 準備 tile 的迴圈（`crates/compositor/src/layer_tree_host_impl.rs`）。每個 tile 先用 `ops_for` 從 display list 的 R-tree 找出要畫的 op，再 `playback_into` 畫進那條 thread 重用的 buffer；`--num-raster-threads` 大於 1 時在 rayon 的 raster worker 上。畫完用 `TileDrawInfo::solid_color` 看像素是不是單色（cc 的 `SolidColorAnalyzer` 的位置，但看的是結果），不是的話上傳成 texture。
   - `draw_into`：canvas raster thread 把 2D context 的錄製畫在 canvas 既有的 bitmap 上（`crates/renderer/src/canvas_raster.rs`、`crates/renderer/src/canvas.rs`）。canvas 每邊最多 65535（`crates/dom/src/canvas.rs` 的 `MAX_SIDE`）。

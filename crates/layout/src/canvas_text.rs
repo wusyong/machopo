@@ -29,7 +29,7 @@ pub fn shape_canvas_text(cx: &mut TextContext, text: &str, style: &CanvasTextSty
         runs,
         width,
         metrics,
-        // Skia's, which the renderer adds (`raster::ink_bounds`).
+        // The renderer adds it (`raster::ink_bounds`).
         ink: RectF::default(),
     }
 }

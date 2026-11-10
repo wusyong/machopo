@@ -17,7 +17,7 @@ GPU raster（vello_gpu 為主，不能用時退回 vello_cpu）是下一份 RFC�
 
 **現況**（細節見 `details.md` 的「現在的 raster」）：
 
-- Skia 只在 `raster` crate 裡（`crates/raster/src/skia_backend.rs` 約 990 行程式加上測試，`crates/raster/src/encode.rs` 的 JPEG），一律是 CPU 的 backend。用到它的地方：
+- Skia 只在 `raster` crate 裡（那時的 `skia_backend.rs`（第 2 步拿掉了） 約 990 行程式加上測試，`crates/raster/src/encode.rs` 的 JPEG），一律是 CPU 的 backend。用到它的地方：
   - **tile 的 raster**：compositor thread 上（`--num-raster-threads` 時在 raster worker 上）呼叫 `raster::ops_for` 和 `raster::playback_into`，畫成 premultiplied 的 RGBA8，再上傳到 Viz 的 wgpu device（`crates/compositor/src/layer_tree_host_impl.rs`）；
   - **canvas 2D**：canvas raster thread 用 `raster::draw_into` 把錄製畫進 canvas 的 bitmap（`crates/renderer/src/canvas_raster.rs`、`crates/renderer/src/canvas.rs`）；
   - **圖片**：`raster::image_size` 讀尺寸（`crates/renderer/src/render_thread/documents.rs`），解碼在 raster 時由 Skia 做；
@@ -264,6 +264,13 @@ Vello 缺的有十來項，分三種：在 playback 裡補上、使用者看不�
 31. **2026-11-10：canvas 的 5 個 WPT 的退步，第 2 步先接受、記下來**（使用者照建議）。4 個是破壞性的 blend mode 配 clip（`2d.composite.clip.destination-atop`、`destination-in`、`source-in`、`source-out`：形狀以外的地方會被清掉的四種模式，Vello 不隔離的 clip 限制不了它們，clip 外面的像素也被清掉），1 個是 kurbo 的 stroker 在線寬遠大於線段長度時內側的接合多畫一塊（`2d.line.cross`）。兩種都少見（常見的橡皮擦是 `destination-out`，不受影響）。它們的預期結果標成失敗、寫原因，列進 `render-gaps.md` 和 `docs/limitations.md`，回報上游的草稿寫好給人審。不選第 2 步就在 machopo 這一側修那 4 個（做得到：碰到這四種模式而且有 clip 時，把目前的畫面 render 出來、形狀和 clip 各畫成一張圖，machopo 逐個 pixel 照公式合成、clip 外面保留，再寫回 bitmap；但每次都要整個 canvas 過一遍，多一段自己維護的合成程式，留作第 3 步的候選），也不選現在就改 Vello 的合成（估不出要改多少，上游在 vello_gpu 的文件寫明了這個限制，可能是設計上的取捨；kurbo 是另一個專案）。
 32. **2026-11-10：第 2 步分成四段，每段做完給人審**（使用者照建議）：2a Vello 成為唯一的 playback、測試搬過來和補齊；2b ink bounds 改用 skrifa、mipmap、拿掉 skia-safe；2c panic 的處理和警告；2d WPT 的預期結果、文件、整個階段的檢查。四段都做完才 merge。不選一次做完（改動太大，審不動；拿掉 Skia 之前先確認 Vello 單獨撐得住測試）。
 33. **2026-11-11：tile 之間允許差 1**。同一塊內容切成 tile 畫和整塊畫，反鋸齒的邊緣和模糊的範圍裡每個 channel 最多差 1（Vello 的覆蓋率用浮點數算，從不同的原點算捨入不同；Skia 用定點數，沒有這個差異）。測試在 scale 1 的形狀、文字和陰影要求逐位相同，其餘允許差 1。不選要求全部逐位相同（要改 Vello 算覆蓋率的方式）。實作時發現、照測到的結果定的，使用者確認接受；記進列出缺口的文件。
+34. **2026-11-11：縮小的圖取一層預先縮好的版本、用 bilinear 畫**（使用者確認）。filter 是 `Medium` 或 `High`、而且在縮小時，照 cc 的規則取層（`MipMapUtil::GetLevelForSize`：下一層只要有一邊比要畫的大小小，就用目前這一層；每一層的邊長是原圖除以 2 的次方、往上取整），那一層從原圖做面積平均，第一次用到時才做，和圖片一起放在快取、一起丟掉。對照 Chromium：cc 的 `SoftwareImageDecodeCache` 也是先縮到一層（`scalePixels`，`kMedium`）、畫的時候降成 `kLow`。和它不同的：
+    - cc 對 `kNone` 以外的品質都取層，包括 `kLow`；machopo 的 `Low` 是 canvas 用的，維持不取（Chromium 的 canvas 走不走這個快取沒有查）。
+    - cc 的縮小版是另一個快取項目，有記憶體預算、用 LRU 淘汰；這裡跟著圖片，每張圖最多多三分之一，沒有預算。
+    - 有來源範圍時 cc 只縮那個範圍；這裡縮整張圖、把範圍換算過去。
+    - 不選在相鄰兩層之間內插（原本 Skia 的 `MipmapMode::Linear`；每次畫兩遍、多一個 layer），也不選每種大小各縮一份（大小在動的動畫每一格都重縮）。
+35. **2026-11-11：ink bounds 用 skrifa 的外框線算，取控制點的範圍**（使用者確認）。和 Blink 給 canvas 的 `TextMetrics` 用的相同（`SkFontGetPreciseBoundsForGlyph`：glyph 的 path 的 `getBounds()`，不取整，所有平台；沒有 path 的退回 `font.getBounds()`）。假粗體和畫的時候一樣呼叫 `kurbo::expand_path`、同一組參數，再取範圍（不選每邊加固定的量：miter 接合的尖端伸得比加粗的量遠）。點陣的 glyph 照 Vello 擺點陣圖的算法算矩形（那段算法在 Vello 裡不是公開的，照抄一份，用測試對著畫出來的像素）。沒有外框線的 COLR glyph 先當成沒有墨水，記成缺口。不選展平之後算真正的墨水範圍（和 Blink 的數字不同，也比較慢）。
+36. **2026-11-11：ink bounds 留在 `raster`，不再拿快取**（使用者確認）。它要和畫出來的一致，假粗體加多少、點陣 glyph 怎麼擺都在 `raster`；假粗體的量抽成一個函式，畫和量都呼叫它。換成 skrifa 之後不需要 typeface 的快取，main thread 量字時不再去拿 canvas raster thread 的快取。不選搬到 `layout`（要加 skrifa 的依賴，上面兩樣要抄一份或再抽出去；把字型相關的東西整理成像 Blink 的 `platform/fonts` 那一層是另一份工作）。
 
 ## 待決定
 

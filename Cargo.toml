@@ -57,7 +57,6 @@ v8 = { version = "=152.2.0", path = "../third_party/rusty_v8", features = ["v8_e
 # another version doesn't build.
 wasmtime = { version = "=50.0.1", path = "../third_party/wasmtime/crates/wasmtime", features = ["gc-elise"] }
 wasmtime-wasi = { version = "=50.0.1", path = "../third_party/wasmtime/crates/wasi" }
-skia-safe = "0.153"
 wgpu = "30"
 winit = "0.30"
 pollster = "1"

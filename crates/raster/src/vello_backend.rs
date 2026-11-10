@@ -20,7 +20,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use base::numerics::{clamp_ceil, saturated_cast};
+use base::numerics::{clamp_ceil, clamp_floor, clamp_round, f32_from_f64, saturated_cast};
 use compositor_paint::{
     BlendMode, ColorInterpolation, DisplayItemList, FilterQuality, GradientShader,
     GradientShaderKind, ImageFilter, LineCap, LineJoin, PaintFlags, PaintOp, PaintShader,
@@ -40,8 +40,8 @@ use vello_cpu::{
 
 use crate::PlaybackParams;
 
-/// What the prototype keeps between tiles, beside Skia's in `RasterCache`:
-/// fonts as Vello takes them and decoded images.
+/// What playback keeps between tiles: fonts as Vello takes them, and
+/// decoded images with the smaller versions of them that were drawn.
 #[derive(Default)]
 pub(crate) struct VelloCache {
     tables: Mutex<Tables>,
@@ -55,18 +55,126 @@ struct Tables {
     /// By font id and face index: Vello keys what it keeps for a font on
     /// the id of the blob it was handed, so each font is one blob.
     fonts: HashMap<(u64, u32), peniko::FontData>,
-    /// By image id, as `RasterCache`'s: filled once, outside the lock.
+    /// By image id, each with a weak handle on its bytes: an entry goes
+    /// when a new one is added after its data did. Filled once, outside
+    /// the lock.
     images: HashMap<u64, (ImageBytes, ImageSlot)>,
 }
 
 type ImageBytes = Weak<dyn AsRef<[u8]> + Send + Sync>;
-type ImageSlot = Arc<OnceLock<Option<Arc<Pixmap>>>>;
+type ImageSlot = Arc<Decoded>;
+
+/// An image's pixels, and those of it made smaller, by level (the first
+/// is level 1, half the size): each made once, when first drawn, and
+/// kept as long as the image (cc's `SoftwareImageDecodeCache` keeps an
+/// entry of its own for each, within a budget; all the levels of an
+/// image together are a third of it).
+#[derive(Default)]
+struct Decoded {
+    pixels: OnceLock<Option<Arc<Pixmap>>>,
+    /// A side is a `u16`: 16 halvings make it 1.
+    levels: [OnceLock<Arc<Pixmap>>; 16],
+}
+
+/// A side of `side` pixels at `level`: halved that many times, rounded
+/// up (cc's `MipMapUtil::GetSizeForLevel`).
+fn level_side(side: u16, level: u32) -> u16 {
+    let rounding = 1u32
+        .checked_shl(level)
+        .map_or(u32::MAX, |one| one.saturating_sub(1));
+    let side = u32::from(side)
+        .saturating_add(rounding)
+        .checked_shr(level)
+        .unwrap_or(0);
+    saturated_cast::<u16, _>(side.max(1))
+}
+
+/// The level an image of `size` is drawn from to be `target` pixels: the
+/// smallest that is no smaller than that either way, so that it is only
+/// ever made smaller (cc's `MipMapUtil::GetLevelForSize`).
+fn level_for(size: (u16, u16), target: (u16, u16)) -> u32 {
+    let mut level = 0u32;
+    loop {
+        let next = level.saturating_add(1);
+        let (width, height) = (level_side(size.0, next), level_side(size.1, next));
+        if width < target.0 || height < target.1 {
+            return level;
+        }
+        if (level_side(size.0, level), level_side(size.1, level)) == (1, 1) {
+            return level;
+        }
+        level = next;
+    }
+}
+
+/// For each of `to` pixels along a side of `from`, the first pixel it
+/// covers and how much of it each of those is: `from / to` pixels'
+/// worth, the ends in part.
+fn coverage(from: u16, to: u16) -> Vec<(usize, Vec<f32>)> {
+    let scale = f64::from(from) / f64::from(to);
+    (0..to)
+        .map(|index| {
+            let low = f64::from(index) * scale;
+            let high = (f64::from(index) + 1.0) * scale;
+            let first = clamp_floor::<u16>(low).min(from.saturating_sub(1));
+            let last = clamp_ceil::<u16>(high).clamp(first.saturating_add(1), from);
+            let weights = (first..last)
+                .map(|pixel| {
+                    let pixel = f64::from(pixel);
+                    let covered = (high.min(pixel + 1.0) - low.max(pixel)).max(0.0);
+                    f32_from_f64(covered / scale)
+                })
+                .collect();
+            (usize::from(first), weights)
+        })
+        .collect()
+}
+
+/// `pixmap` made `width` by `height`, each pixel the average of those it
+/// covers (premultiplied, as they are).
+///
+/// vello: no mipmaps. A smaller image is sampled from four pixels of the
+/// whole one, whatever it leaves out.
+fn shrunk(pixmap: &Pixmap, width: u16, height: u16) -> Pixmap {
+    let columns = coverage(pixmap.width(), width);
+    let rows = coverage(pixmap.height(), height);
+    let data = pixmap.data_as_u8_slice();
+    let stride = usize::from(pixmap.width()) * 4;
+    let mut out = Vec::with_capacity(usize::from(width) * usize::from(height) * 4);
+    let mut sums = vec![0.0f32; usize::from(width) * 4];
+    for (first_row, row_weights) in &rows {
+        sums.fill(0.0);
+        for (row, row_weight) in data[first_row * stride..]
+            .chunks_exact(stride)
+            .zip(row_weights)
+        {
+            for ((first, weights), sum) in columns.iter().zip(sums.as_chunks_mut::<4>().0) {
+                let mut pixel_sum = [0.0f32; 4];
+                for (pixel, weight) in row[first * 4..].as_chunks::<4>().0.iter().zip(weights) {
+                    for (channel, value) in pixel_sum.iter_mut().zip(pixel) {
+                        *channel += f32::from(*value) * weight;
+                    }
+                }
+                for (channel, value) in sum.iter_mut().zip(pixel_sum) {
+                    *channel += value * row_weight;
+                }
+            }
+        }
+        out.extend(sums.iter().map(|&sum| clamp_round::<u8>(sum)));
+    }
+    premultiplied_pixmap(out, width, height)
+}
 
 impl VelloCache {
     fn tables(&self) -> std::sync::MutexGuard<'_, Tables> {
         self.tables
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// How many fonts it holds.
+    pub(crate) fn font_count(&self) -> usize {
+        self.tables().fonts.len()
     }
 
     /// How many images it holds (decoded, or found not to be images).
@@ -101,7 +209,52 @@ impl VelloCache {
             .clone()
     }
 
+    /// `data`'s pixels to draw it from with `filter`, `scale` device
+    /// pixels to each of its own: the image, or what of it is the level
+    /// that size takes if `filter` has one (cc's decode cache scales an
+    /// image to its level and draws that with `kLow`); and how many of
+    /// its pixels are one of the image's, each way.
+    fn image_at(
+        &self,
+        data: &ImageData,
+        filter: FilterQuality,
+        scale: (f64, f64),
+    ) -> Option<(Arc<Pixmap>, (f64, f64))> {
+        let (slot, image) = self.decoded(data)?;
+        let size = (image.width(), image.height());
+        // A canvas's images (`Low`) are sampled as they are, and so is
+        // one whose pixels are to show (`None`).
+        let level = match filter {
+            FilterQuality::None | FilterQuality::Low => 0,
+            FilterQuality::Medium | FilterQuality::High => {
+                let target = |side: u16, scale: f64| {
+                    clamp_round::<u16>(f64::from(side) * scale.abs()).max(1)
+                };
+                level_for(size, (target(size.0, scale.0), target(size.1, scale.1)))
+            }
+        };
+        let Some(made) = level
+            .checked_sub(1)
+            .and_then(|index| slot.levels.get(usize::try_from(index).ok()?))
+        else {
+            return Some((image, (1.0, 1.0)));
+        };
+        let (width, height) = (level_side(size.0, level), level_side(size.1, level));
+        let small = made
+            .get_or_init(|| Arc::new(shrunk(&image, width, height)))
+            .clone();
+        let ratio = (
+            f64::from(width) / f64::from(size.0),
+            f64::from(height) / f64::from(size.1),
+        );
+        Some((small, ratio))
+    }
+
     fn image(&self, data: &ImageData) -> Option<Arc<Pixmap>> {
+        self.decoded(data).map(|(_, image)| image)
+    }
+
+    fn decoded(&self, data: &ImageData) -> Option<(ImageSlot, Arc<Pixmap>)> {
         if !data.wait_ready() {
             return None;
         }
@@ -121,27 +274,30 @@ impl VelloCache {
                 }
             }
         };
-        slot.get_or_init(|| {
-            let (size, pixels) = match data.decoded {
-                Some(size) => (size, data.as_bytes().to_vec()),
-                None => {
-                    #[cfg(test)]
-                    #[expect(
-                        clippy::disallowed_methods,
-                        reason = "a count a test reads: it never gets near wrapping"
-                    )]
-                    let _ = self
-                        .decodes
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let decoded = crate::image_decode::decode(data.as_bytes())?;
-                    (decoded.size, decoded.pixels)
-                }
-            };
-            let width = u16::try_from(size.width).ok()?;
-            let height = u16::try_from(size.height).ok()?;
-            Some(Arc::new(premultiplied_pixmap(pixels, width, height)))
-        })
-        .clone()
+        let image = slot
+            .pixels
+            .get_or_init(|| {
+                let (size, pixels) = match data.decoded {
+                    Some(size) => (size, data.as_bytes().to_vec()),
+                    None => {
+                        #[cfg(test)]
+                        #[expect(
+                            clippy::disallowed_methods,
+                            reason = "a count a test reads: it never gets near wrapping"
+                        )]
+                        let _ = self
+                            .decodes
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let decoded = crate::image_decode::decode(data.as_bytes())?;
+                        (decoded.size, decoded.pixels)
+                    }
+                };
+                let width = u16::try_from(size.width).ok()?;
+                let height = u16::try_from(size.height).ok()?;
+                Some(Arc::new(premultiplied_pixmap(pixels, width, height)))
+            })
+            .clone()?;
+        Some((slot, image))
     }
 }
 
@@ -349,6 +505,12 @@ fn rect(r: RectF) -> Rect {
 
 fn affine(t: &gfx::Transform) -> Affine {
     Affine::new(t.0.map(f64::from))
+}
+
+/// How much `transform` enlarges lengths along x and along y.
+fn axis_scales(transform: Affine) -> (f64, f64) {
+    let [a, b, c, d, ..] = transform.as_coeffs();
+    ((a * a + b * b).sqrt(), (c * c + d * d).sqrt())
 }
 
 /// How much `transform` enlarges lengths, along the axis it enlarges most.
@@ -573,7 +735,8 @@ fn gradient(shader: &GradientShader) -> Gradient {
 fn quality(filter: FilterQuality) -> ImageQuality {
     match filter {
         FilterQuality::None => ImageQuality::Low,
-        // vello: no mipmaps. Scaled down, `Medium` is as `Low`.
+        // `Medium` is drawn from a smaller level of the image
+        // (`VelloCache::image_at`), and so is `High` made smaller.
         FilterQuality::Low | FilterQuality::Medium => ImageQuality::Medium,
         FilterQuality::High => ImageQuality::High,
     }
@@ -1113,7 +1276,15 @@ impl<'a> Player<'a> {
         let gaps = tiled.spacing.width != 0.0 || tiled.spacing.height != 0.0;
         match &tiled.image {
             ShaderImage::Image(data) if !gaps => {
-                let Some(pixmap) = self.cache.image(data) else {
+                let Some(whole) = self.cache.image(data) else {
+                    return false;
+                };
+                let seen = axis_scales(self.transform * local);
+                let seen = (
+                    seen.0 * f64::from(tiled.tile.width) / f64::from(whole.width()),
+                    seen.1 * f64::from(tiled.tile.height) / f64::from(whole.height()),
+                );
+                let Some((pixmap, _)) = self.cache.image_at(data, tiled.filter, seen) else {
                     return false;
                 };
                 let scale = Affine::scale_non_uniform(
@@ -1501,9 +1672,31 @@ impl<'a> Player<'a> {
                 filter,
                 flags,
             } => {
-                let Some(pixmap) = self.cache.image(image) else {
+                let Some(whole) = self.cache.image(image) else {
                     return;
                 };
+                let drawn = src.map_or(
+                    (f32::from(whole.width()), f32::from(whole.height())),
+                    |src| (src.width, src.height),
+                );
+                if drawn.0 <= 0.0 || drawn.1 <= 0.0 {
+                    return;
+                }
+                let seen = axis_scales(self.transform);
+                let seen = (
+                    seen.0 * f64::from(dst.width) / f64::from(drawn.0),
+                    seen.1 * f64::from(dst.height) / f64::from(drawn.1),
+                );
+                let Some((pixmap, ratio)) = self.cache.image_at(image, *filter, seen) else {
+                    return;
+                };
+                // `src` is in the image's pixels: in the level's, it is
+                // as much smaller as the level is.
+                let src = src.map(|src| {
+                    let (x, y) = (f32_from_f64(ratio.0), f32_from_f64(ratio.1));
+                    RectF::new(src.x * x, src.y * y, src.width * x, src.height * y)
+                });
+                let src = &src;
                 // A part of the image is cut out, so that smoothing takes
                 // no pixel from outside it (Skia's strict constraint): the
                 // whole pixels it covers, and `src` within those.
@@ -1695,7 +1888,7 @@ impl<'a> Player<'a> {
         if !positions.iter().any(near) || !self.set_flags(flags) {
             return;
         }
-        let slant = Affine::skew(-f64::from(skew.to_radians().tan()), 0.0);
+        let slant = crate::ink::slant(skew);
         let font = self.cache.font(font);
         let coords = normalized_coords(&font, variations);
         let stroked = matches!(flags.style, PaintStyle::Stroke { .. });
@@ -1797,11 +1990,9 @@ fn glyph_run<'a>(
         run = run.glyph_transform(transform);
     }
     if embolden {
-        // Skia's fake bold: an outline wider by a 24th of the size at
-        // 9 px, a 32nd at 36 px, half on each side.
-        let t = ((size - 9.0) / (36.0 - 9.0)).clamp(0.0, 1.0);
-        let extra = size * (1.0 / 24.0 + t * (1.0 / 32.0 - 1.0 / 24.0));
-        let side = f64::from(extra) * 0.5;
+        // With `FontEmbolden`'s own joins, which `ink_bounds` measures
+        // with too.
+        let side = crate::ink::embolden_side(size);
         run = run.font_embolden(glifo::FontEmbolden::new(kurbo::Diagonal2::new(side, side)));
     }
     run
@@ -1883,6 +2074,121 @@ mod tests {
         assert!(clipped_stroke_at_the_edge(32, false));
         assert!(clipped_stroke_at_the_edge(256, false));
         assert!(!clipped_stroke_at_the_edge(32, true));
+    }
+
+    /// The level an image is drawn from is cc's: the smallest whose sides
+    /// are both no smaller than what is drawn, each side halved and
+    /// rounded up a level.
+    #[test]
+    fn an_image_is_drawn_from_the_smallest_level_that_is_large_enough() {
+        assert_eq!(level_side(100, 0), 100);
+        assert_eq!(level_side(100, 1), 50);
+        assert_eq!(level_side(101, 1), 51);
+        assert_eq!(level_side(5, 2), 2);
+        assert_eq!(level_side(5, 3), 1);
+        assert_eq!(level_side(5, 9), 1);
+        assert_eq!(level_side(65535, 16), 1);
+        assert_eq!(level_side(65535, 40), 1);
+        // As large, larger, or more than half: the image itself.
+        assert_eq!(level_for((100, 100), (100, 100)), 0);
+        assert_eq!(level_for((100, 100), (300, 300)), 0);
+        assert_eq!(level_for((100, 100), (51, 51)), 0);
+        // Half or less: the level that is half; a quarter: the next.
+        assert_eq!(level_for((100, 100), (50, 50)), 1);
+        assert_eq!(level_for((100, 100), (26, 26)), 1);
+        assert_eq!(level_for((100, 100), (25, 25)), 2);
+        // The side that is made smaller the least decides.
+        assert_eq!(level_for((100, 100), (10, 50)), 1);
+        assert_eq!(level_for((100, 100), (60, 10)), 0);
+        // A side rounded up is large enough for one more pixel.
+        assert_eq!(level_for((101, 101), (51, 51)), 1);
+        // Down to one pixel, and no further.
+        assert_eq!(level_for((8, 1), (1, 1)), 3);
+        assert_eq!(level_for((1, 1), (1, 1)), 0);
+        assert_eq!(level_for((65535, 65535), (1, 1)), 16);
+    }
+
+    /// Made smaller, a pixel is the average of those it covers, the ones
+    /// at its ends by the part of them it covers: 3 pixels into 2 are the
+    /// first and half the second, half the second and the third.
+    #[test]
+    fn a_smaller_level_averages_what_each_pixel_covers() {
+        let image = |width: u16, height: u16, pixels: &[[u8; 4]]| {
+            premultiplied_pixmap(pixels.concat(), width, height)
+        };
+        let gray = |v: u8| [v, v, v, 255];
+        let bytes = |pixmap: Pixmap| pixmap.take_rgba8(ImageAlphaType::AlphaPremultiplied);
+        let row = image(3, 1, &[gray(0), gray(90), gray(240)]);
+        assert_eq!(bytes(shrunk(&row, 2, 1)), [gray(30), gray(190)].concat());
+        let column = image(1, 3, &[gray(0), gray(90), gray(240)]);
+        assert_eq!(bytes(shrunk(&column, 1, 2)), [gray(30), gray(190)].concat());
+        // Both ways at once, each channel on its own, alpha too.
+        let square = image(
+            2,
+            2,
+            &[
+                [200, 0, 0, 200],
+                [0, 100, 0, 100],
+                [0, 0, 40, 40],
+                [0, 0, 0, 0],
+            ],
+        );
+        assert_eq!(bytes(shrunk(&square, 1, 1)), [50, 25, 10, 85]);
+        // A whole number of pixels each: no part of another.
+        let four = image(4, 1, &[gray(10), gray(30), gray(100), gray(200)]);
+        assert_eq!(bytes(shrunk(&four, 2, 1)), [gray(20), gray(150)].concat());
+        // The same size: the same pixels.
+        assert_eq!(bytes(shrunk(&four, 4, 1)), bytes(four));
+    }
+
+    /// A level is made once, when it is first drawn from, and only those
+    /// drawn from are made; `Low` and `None` draw from the image itself.
+    #[test]
+    fn a_level_is_made_once_and_only_when_drawn_from() {
+        let cache = VelloCache::default();
+        let data = ImageData::decoded(Size::new(16, 16), vec![255; 16 * 16 * 4]);
+        let made = |cache: &VelloCache| {
+            let tables = cache.tables();
+            let (_, slot) = &tables.images[&data.id];
+            slot.levels
+                .iter()
+                .map(|level| level.get().map(|pixmap| pixmap.width()))
+                .collect::<Vec<_>>()
+        };
+        let (whole, ratio) = cache
+            .image_at(&data, FilterQuality::Medium, (1.0, 1.0))
+            .unwrap();
+        assert_eq!((whole.width(), ratio), (16, (1.0, 1.0)));
+        assert!(made(&cache).iter().all(Option::is_none));
+        for filter in [FilterQuality::None, FilterQuality::Low] {
+            let (image, _) = cache.image_at(&data, filter, (0.1, 0.1)).unwrap();
+            assert!(Arc::ptr_eq(&image, &whole));
+        }
+        assert!(made(&cache).iter().all(Option::is_none));
+        // A quarter the size: level 2, and not level 1.
+        let (quarter, ratio) = cache
+            .image_at(&data, FilterQuality::Medium, (0.25, 0.25))
+            .unwrap();
+        assert_eq!(
+            (quarter.width(), quarter.height(), ratio),
+            (4, 4, (0.25, 0.25))
+        );
+        let (again, _) = cache
+            .image_at(&data, FilterQuality::High, (0.2, 0.25))
+            .unwrap();
+        assert!(Arc::ptr_eq(&again, &quarter));
+        let levels = made(&cache);
+        assert_eq!(&levels[..3], [None, Some(4), None]);
+        // Turned over (a negative scale) is as small.
+        let (half, _) = cache
+            .image_at(&data, FilterQuality::Medium, (-0.5, 0.5))
+            .unwrap();
+        assert_eq!(half.width(), 8);
+        // With the image go its levels.
+        drop(data);
+        let other = ImageData::decoded(Size::new(1, 1), vec![0; 4]);
+        let _ = cache.image(&other);
+        assert_eq!(cache.image_count(), 1);
     }
 
     /// A rect on a layer with `filter`, rendered by Vello alone.

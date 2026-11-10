@@ -20,8 +20,6 @@ gfx.workspace = true
 compositor_paint.workspace = true
 tracing.workspace = true
 trace_event.workspace = true
-skia-safe.workspace = true
-read-fonts.workspace = true
 # A canvas's `toDataURL` and `toBlob` as PNG, as Blink encodes one.
 png.workspace = true
 image.workspace = true
