@@ -132,8 +132,10 @@ fn a_font_family_value_is_looked_up_once() {
     assert_eq!(names("d", "font-family: f1; font-size: 30px"), (1, 0));
     // The same names in another order are another value.
     assert_eq!(names("e", "font-family: f2, f1"), (1, one + 1));
-    // A generic family is no name to look up.
-    assert_eq!(names("e", "font-family: k1, serif, cursive"), (1, one));
+    // A generic family is no name to look up: `serif` is at most the names
+    // every list ends in, `monospace` none on any platform (`cursive` and
+    // the like are a name of their own where the fonts are Linux's).
+    assert_eq!(names("e", "font-family: k1, serif, monospace"), (1, one));
     assert_eq!(page.update().font_family_names, 0);
 }
 
