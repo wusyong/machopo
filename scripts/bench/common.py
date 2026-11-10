@@ -818,16 +818,18 @@ USER_TIMING = "blink.user_timing"
 # What Chrome records with `--trace`: its top-level tasks, Blink, V8, cc and
 # Viz, DevTools' performance panel's events (`FunctionCall`,
 # `UpdateLayoutTree`, `Layout`, `Paint`), Oilpan's phases (`CppGC.*`, as
-# machopo's DOM heap's), and User Timing.
+# machopo's DOM heap's), V8's heap's sizes and limits (`v8.memory`'s
+# counters), and User Timing.
 CHROME_TRACE_CATEGORIES = ("toplevel", "blink", "v8", "cc", "viz", "benchmark", "loading", "devtools.timeline",
-                           "cppgc", USER_TIMING)
+                           "cppgc", "v8.memory", USER_TIMING)
 
 
 # What a trace for the GC alone records: V8's and cppgc's events, V8's GC
-# phases (as machopo's trace has them, to compare a pause's), and the runner's
-# User Timing. The others slow some pages down (blink_perf's
+# phases (as machopo's trace has them, to compare a pause's), V8's heap's
+# sizes and limits (`v8.memory`: why it starts a full GC when it does), and
+# the runner's User Timing. The others slow some pages down (blink_perf's
 # innerHTML-setter to a third of its rate).
-CHROME_GC_TRACE_CATEGORIES = ("v8", "cppgc", "disabled-by-default-v8.gc", USER_TIMING)
+CHROME_GC_TRACE_CATEGORIES = ("v8", "cppgc", "disabled-by-default-v8.gc", "v8.memory", USER_TIMING)
 
 
 # DevTools' `Profiler` samples every `PROFILE_INTERVAL` µs for `--profile`:
@@ -1310,19 +1312,22 @@ def varint(data: bytes, i: int) -> tuple[int, int]:
 INCREMENTAL_CLOCK = 64
 
 
-def perfetto_track_events(path: Path, lost: list[str] | None = None) -> tuple[dict[int, str], list[tuple]]:
-    """The track events of a Perfetto trace, as Perfetto's SDK writes them:
-    the threads' names by their tracks, and each event as `(track, time,
-    order, kind, name, categories)`, its time in ns (CLOCK_BOOTTIME, or
-    what the event says; an incremental clock's in its unit, which is µs
-    in Chrome's), its kind `TrackEvent.type` (1: begin, 2: end,
-    3: instant), an end's name empty. With `lost`, the threads (or
-    `sequence N`) whose writer dropped packets, added to it: a packet after
-    the first of its sequence says the one before it was dropped (the
-    first says so of every sequence)."""
+def perfetto_track_packets(path: Path, threads: dict[int, str] | None = None, lost: list[str] | None = None,
+                           counter_tracks: dict[int, str] | None = None):
+    """Each track event of a Perfetto trace, as Perfetto's SDK writes them,
+    `(track, time, sequence, entries, name, categories, interned)`: its
+    time in ns (CLOCK_BOOTTIME, or what the event says; an incremental
+    clock's in its unit, which is µs in Chrome's), the packet's sequence,
+    the `TrackEvent`'s fields in order, its name (an end's empty), its
+    categories, and its sequence's interned debug annotation names by
+    iid. Fills `threads` with the threads' names by their tracks,
+    `counter_tracks` with the counters' names by theirs (`static_name`
+    or `name`), and `lost` with the threads (or `sequence N`) whose writer
+    dropped packets, once the trace is read: a packet after the first of
+    its sequence says the one before it was dropped (the first says so of
+    every sequence)."""
     sequences: dict[int, dict] = {}
-    threads: dict[int, str] = {}
-    events = []
+    threads = {} if threads is None else threads
     for number, packet in protobuf_fields(path.read_bytes()):
         if number != 1:
             continue
@@ -1331,13 +1336,14 @@ def perfetto_track_events(path: Path, lost: list[str] | None = None) -> tuple[di
             fields.setdefault(key, value)
         first = fields.get(10) not in sequences
         state = sequences.setdefault(
-            fields.get(10), {"names": {}, "categories": {}, "track": None, "clock": None, "time": 0, "unit": 1,
-                             "dropped": False})
+            fields.get(10), {"names": {}, "categories": {}, "annotations": {}, "track": None, "clock": None,
+                             "time": 0, "unit": 1, "dropped": False})
         if fields.get(42) and not first:  # previous_packet_dropped
             state["dropped"] = True
         if fields.get(13, 0) & 1:  # SEQ_INCREMENTAL_STATE_CLEARED
             state["names"] = {}
             state["categories"] = {}
+            state["annotations"] = {}
         if 59 in fields:  # trace_packet_defaults
             defaults = dict(protobuf_fields(fields[59]))
             state["clock"] = defaults.get(58)
@@ -1352,13 +1358,17 @@ def perfetto_track_events(path: Path, lost: list[str] | None = None) -> tuple[di
                     state["time"] = clock.get(2, 0) * state["unit"]
         if 12 in fields:  # interned_data
             for key, entry in protobuf_fields(fields[12]):
-                if key in (1, 2):  # event_categories, event_names
+                if key in (1, 2, 3):  # event_categories, event_names, debug_annotation_names
                     entry = dict(protobuf_fields(entry))
-                    state["categories" if key == 1 else "names"][entry.get(1)] = entry.get(2, b"").decode()
+                    table = {1: "categories", 2: "names", 3: "annotations"}[key]
+                    state[table][entry.get(1)] = entry.get(2, b"").decode()
         if 60 in fields:  # track_descriptor
             track = dict(protobuf_fields(fields[60]))
             if 4 in track:  # a thread's
                 threads[track.get(1)] = dict(protobuf_fields(track[4])).get(5, b"").decode()
+            if 8 in track and counter_tracks is not None:  # a counter's
+                name = track.get(10, track.get(2, b""))  # static_name, name
+                counter_tracks[track.get(1)] = name.decode() if isinstance(name, bytes) else ""
         if 11 in fields:  # track_event
             entries = list(protobuf_fields(fields[11]))
             event = dict(entries)
@@ -1369,11 +1379,53 @@ def perfetto_track_events(path: Path, lost: list[str] | None = None) -> tuple[di
             name = event[23].decode() if 23 in event else state["names"].get(event.get(10), "")
             categories = [state["categories"].get(value) if key == 3 else value.decode()
                           for key, value in entries if key in (3, 22)]  # category_iids, categories
-            events.append((event.get(11, state["track"]), time, len(events), event.get(9), name, categories))
+            yield (event.get(11, state["track"]), time, fields.get(10), entries, name, categories,
+                   state["annotations"])
     if lost is not None:
         lost += [threads.get(state["track"], f"sequence {sequence}")
                  for sequence, state in sequences.items() if state["dropped"]]
+
+
+def perfetto_track_events(path: Path, lost: list[str] | None = None) -> tuple[dict[int, str], list[tuple]]:
+    """The track events of a Perfetto trace (`perfetto_track_packets`'):
+    the threads' names by their tracks, and each event as `(track, time,
+    order, kind, name, categories)`, its kind `TrackEvent.type` (1: begin,
+    2: end, 3: instant, 4: counter). With `lost`, the threads whose writer
+    dropped packets, added to it."""
+    threads: dict[int, str] = {}
+    events = []
+    for track, time, _, entries, name, categories, _ in perfetto_track_packets(path, threads, lost):
+        events.append((track, time, len(events), dict(entries).get(9), name, categories))
     return threads, events
+
+
+def counter_value(event: dict) -> float:
+    """A counter event's value (`TrackEvent`'s fields): `counter_value`,
+    or `double_counter_value` (a fixed64)."""
+    if 30 in event:
+        return float(event[30])
+    return struct.unpack("<d", event.get(44, 0).to_bytes(8, "little"))[0]
+
+
+def debug_annotation(data: bytes, interned: dict[int, str]) -> tuple[str, object]:
+    """A `DebugAnnotation`'s name (`name`, or interned as `name_iid`) and
+    value: a dict of its `dict_entries`, a list of its `array_values`, or
+    the scalar it holds (a string decoded, a double as a float)."""
+    fields = list(protobuf_fields(data))
+    by_number = dict(fields)
+    name = by_number[10].decode() if 10 in by_number else interned.get(by_number.get(1), "")
+    if 11 in by_number:
+        return name, dict(debug_annotation(value, interned) for number, value in fields if number == 11)
+    if 12 in by_number:
+        return name, [debug_annotation(value, interned)[1] for number, value in fields if number == 12]
+    if 6 in by_number:  # string_value
+        return name, by_number[6].decode(errors="replace")
+    if 5 in by_number:  # double_value
+        return name, struct.unpack("<d", by_number[5].to_bytes(8, "little"))[0]
+    for number in (2, 3, 4, 7):  # bool, uint, int, pointer
+        if number in by_number:
+            return name, by_number[number]
+    return name, None
 
 
 def perfetto_slices(path: Path) -> dict[str, list[tuple[int, str | None]]]:
@@ -1390,12 +1442,10 @@ def perfetto_slices(path: Path) -> dict[str, list[tuple[int, str | None]]]:
     return slices
 
 
-def perfetto_marked_thread(path: Path) -> tuple[int, int] | None:
-    """The `(pid, tid)` of the thread the most User Timing marks of a
-    Perfetto trace are on, as its thread descriptor says (`None` without
-    marks): on Linux Chromium leaves each process's main thread unnamed
-    (naming it would rename the process), so `perf` calls a renderer's main
-    thread by the binary's name, and its tid picks its samples."""
+def perfetto_thread_tracks(path: Path) -> dict[int, tuple[int, int]]:
+    """The `(pid, tid)` of each thread's track of a Perfetto trace, by the
+    track's uuid, as its thread descriptor says (a track of its own, such
+    as a User Timing measure's, has none)."""
     descriptors: dict[int, tuple[int, int]] = {}
     for number, packet in protobuf_fields(path.read_bytes()):
         if number != 1:
@@ -1408,6 +1458,16 @@ def perfetto_marked_thread(path: Path) -> tuple[int, int] | None:
             if 4 in track:  # a thread's: pid, tid
                 thread = dict(protobuf_fields(track[4]))
                 descriptors[track.get(1)] = (thread.get(1, 0), thread.get(2, 0))
+    return descriptors
+
+
+def perfetto_marked_thread(path: Path) -> tuple[int, int] | None:
+    """The `(pid, tid)` of the thread the most User Timing marks of a
+    Perfetto trace are on, as its thread descriptor says (`None` without
+    marks): on Linux Chromium leaves each process's main thread unnamed
+    (naming it would rename the process), so `perf` calls a renderer's main
+    thread by the binary's name, and its tid picks its samples."""
+    descriptors = perfetto_thread_tracks(path)
     _, events = perfetto_track_events(path)
     marked = collections.Counter(track for track, _, _, kind, _, categories in events
                                  if kind == 3 and USER_TIMING in categories)

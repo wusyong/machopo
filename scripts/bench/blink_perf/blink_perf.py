@@ -14,7 +14,9 @@ in each browser and how many times slower machopo is, by folder, with the
 geometric means; the listed pages that weren't valid (regressions), the
 others that weren't and why, and those left out; `runs.json` keeps what
 each browser posted. With `--against REV`, machopo at `REV` and the working
-tree's instead, in turn (`compare.md`).
+tree's instead, in turn (`compare.md`). With `--gc`, each page `--runs`
+times in each browser with a trace, and the GC in the span the runner
+times: on the renderer's main thread, V8's and the DOM heap's (`gc.md`).
 
 Standard library only.
 """
@@ -34,6 +36,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import common  # noqa: E402
 from common import ROOT  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "gc"))
+import gc_bench  # noqa: E402
 
 
 BLINK_PERF = ROOT.parent / "third_party" / "blink_perf"
@@ -336,6 +341,454 @@ def run_pages(names: list[str], root: Path, profile: str, timeout: float) -> dic
     return runs
 
 
+# --- the GC, from traces (`--gc`) ------------------------------------------------
+
+# The browsers, in the order each run takes them.
+BROWSERS = ("machopo", "Chrome")
+
+# The span the runner times (`console.time("blink_perf")`, from its first
+# measured iteration to the end), which `hook.js` makes a User Timing mark
+# and a measure from it: Chromium's `tools/perf/benchmarks/blink_perf.py`
+# reads a page's trace events in the same span.
+TIMED = "blink_perf"
+
+# The `gc_bench.window_gc` numbers taken as each run's, and their medians.
+GC_TIMES = ("window_ns", "gc_ns", "dom_ns", "cppgc_ns", "background_gc_ns", "background_dom_ns")
+
+# A pause this long or longer is counted on its own: most of Chrome's are
+# Oilpan's sweeping in low priority tasks, some µs each, thousands a page.
+LONG_PAUSE_NS = 1_000_000
+
+
+def timed_span(events: list[tuple]) -> tuple[int, int, int] | None:
+    """The track of the thread the runner ran on and the span it timed,
+    `(track, first, last)` in ns, from track events
+    (`perfetto_track_events`'): the hook's mark is on the thread's track,
+    the measure from it on a track of its own (as Blink writes one), which
+    ends with the first end on that track after it begins. `None` without
+    both."""
+    user_timing = [event for event in events if event[4] == TIMED and common.USER_TIMING in event[5]]
+    main = next((event[0] for event in user_timing if event[3] == 3), None)
+    begin = next((event for event in user_timing if event[3] == 1), None)
+    if main is None or begin is None:
+        return None
+    last = min((event[1:3] for event in events
+                if event[0] == begin[0] and event[3] == 2 and event[1:3] > begin[1:3]), default=None)
+    return None if last is None else (main, begin[1], last[0])
+
+
+def is_dom_heap(name: str) -> bool:
+    """Whether a slice is the DOM heap's: Oilpan's (`CppGC.*`) in Chrome; in
+    machopo, elise's (`Gc.*`) and the empty `CppHeap`'s it marks beside
+    (`CppGC.*`, which V8 still drives)."""
+    return name.startswith(("CppGC.", "Gc."))
+
+
+def dom_heap_ns(events: list[tuple], main: int, first: int, last: int) -> tuple[int, int, int]:
+    """The DOM heap's time between `first` and `last`: on the `main` track,
+    of it the `CppGC.*` slices' (all of Chrome's; machopo's empty
+    `CppHeap`'s), and on the others: each track's outermost DOM heap
+    slices, inside V8's GC (its steps and pauses mark the DOM heap too) or
+    on their own, cut there."""
+    by_track: dict[int, list[tuple]] = {}
+    for event in events:
+        by_track.setdefault(event[0], []).append(event)
+    on_main = cppgc = elsewhere = 0
+    for track, own in by_track.items():
+        for begin, end, name, outer in gc_bench.slices(own, track):
+            if is_dom_heap(name) and not any(is_dom_heap(name) for name in outer):
+                ns = max(0, min(end, last) - max(begin, first))
+                if track != main:
+                    elsewhere += ns
+                    continue
+                on_main += ns
+                if name.startswith("CppGC."):
+                    cppgc += ns
+    return on_main, cppgc, elsewhere
+
+
+# V8's handling of a GC request (from a task or its stack guard), around
+# the GC it asked for: left out, so that the GC is the outermost slice, of
+# its kind (Chrome finalizes most full GCs so; it takes next to no time
+# of its own).
+GC_WRAPPERS = {"V8.GCHandleGCRequest"}
+
+
+def without_wrappers(events: list[tuple]) -> list[tuple]:
+    """`events` without the begins and ends of `GC_WRAPPERS`: each track's
+    begins paired with the ends that close them, in the trace's order."""
+    dropped: set[int] = set()
+    stacks: dict[int, list[tuple[int, str]]] = {}
+    for index in sorted(range(len(events)), key=lambda i: events[i][1:3]):
+        track, _, _, kind, name, _ = events[index]
+        stack = stacks.setdefault(track, [])
+        if kind == 1:
+            stack.append((index, name))
+        elif kind == 2 and stack:
+            begin, name = stack.pop()
+            if name in GC_WRAPPERS:
+                dropped |= {begin, index}
+    return [event for index, event in enumerate(events) if index not in dropped]
+
+
+def span_gc(events: list[tuple], threads: dict[int, tuple[int, int]]) -> dict:
+    """The GC in the span the runner timed (`timed_span`), of a trace's
+    track events and its threads' `(pid, tid)` by track:
+    `gc_bench.window_gc`'s on the runner's thread, of its process's
+    threads alone (Chrome's browser and other renderers have V8s of their
+    own), without `GC_WRAPPERS`, and of it the DOM heap's (`dom_heap_ns`);
+    or why there is none (`error`)."""
+    span = timed_span(events)
+    if span is None:
+        return {"error": "the trace has no span the runner timed"}
+    main, first, last = span
+    pid = threads.get(main, (None, None))[0]
+    if pid is not None:
+        events = [event for event in events if threads.get(event[0], (None, None))[0] == pid]
+    events = without_wrappers(events)
+    gc = gc_bench.window_gc(events, main, first, last)
+    gc["dom_ns"], gc["cppgc_ns"], gc["background_dom_ns"] = dom_heap_ns(events, main, first, last)
+    return gc
+
+
+# V8's events that say when it collected and why: a full GC, a young one,
+# and the start of a full GC's marking, which carries its reason and the
+# heap's sizes and limits then (`Heap::StartIncrementalMarking`'s).
+FULL_GC = "MajorGC"
+YOUNG_GC = "MinorGC"
+MARKING_START = "V8.GCIncrementalMarkingStart"
+# V8's counters of its heap's sizes (`v8.memory`, `GCTracer`'s
+# `RecordGCSizeCounters`): the global one counts the embedder heap's
+# (elise's, or Oilpan's) with V8's own and external memory.
+GLOBAL_BYTES = "GlobalConsumedBytes"
+OLD_BYTES = "OldGenerationConsumedBytes"
+EXTERNAL_BYTES = "ExternalMemoryBytes"
+
+
+def flattened(annotations: dict) -> dict:
+    """An event's debug annotations with those in a dict (V8 puts its
+    marking start's in one) brought up beside the others."""
+    flat = {}
+    for name, value in annotations.items():
+        if isinstance(value, dict):
+            flat.update(value)
+        else:
+            flat[name] = value
+    return flat
+
+
+def v8_schedule(events: list[tuple], main: int, first: int, last: int, starts: list[tuple],
+                counters: list[tuple]) -> dict:
+    """When V8 collected on the runner's thread between `first` and
+    `last`, and why: how many full and young GCs began then; each marking
+    start's reason and the global size over the global limit then
+    (`starts`: `(track, time, annotations)` of `MARKING_START`); and the
+    embedder heap's size after each full GC: the global size less V8's
+    old generation and external memory, as V8 first counts them after the
+    GC ends (`counters`: `(name, time, value)` the runner's thread wrote,
+    in time order; those it counts in the GC, as it sets its limits, are
+    from before the embedder heap's size is set). Oilpan sweeps after the
+    GC, so Chrome's is the size before its garbage is freed."""
+    begins = [(time, name) for track, time, _, kind, name, _ in events
+              if track == main and kind == 1 and first <= time < last]
+    marking = []
+    for track, time, annotations in starts:
+        if track != main or not first <= time < last:
+            continue
+        flat = flattened(annotations)
+        limit, consumed = flat.get("global_allocation_limit"), flat.get("global_consumed_bytes")
+        marking.append({"reason": flat.get("reason", "unknown"),
+                        "over_limit": consumed / limit if limit and consumed is not None else None})
+    full_gcs = [(begin, end) for begin, end, name, _ in gc_bench.slices(events, main)
+                if name == FULL_GC and first <= begin < last]
+    by_name: dict[str, list[tuple[int, float]]] = {}
+    for name, time, value in counters:
+        by_name.setdefault(name, []).append((time, value))
+
+    def after(name: str, end: int) -> float | None:
+        return next((value for time, value in by_name.get(name, []) if time > end), None)
+
+    embedder = []
+    for _, end in full_gcs:
+        sizes = [after(name, end) for name in (GLOBAL_BYTES, OLD_BYTES, EXTERNAL_BYTES)]
+        if None not in sizes:
+            embedder.append(sizes[0] - sizes[1] - sizes[2])
+    return {
+        "full_gcs": sum(name == FULL_GC for _, name in begins),
+        "young_gcs": sum(name == YOUNG_GC for _, name in begins),
+        "marking_starts": marking,
+        "embedder_after_full_gc_bytes": embedder,
+    }
+
+
+def trace_gc(path: Path) -> dict:
+    """The trace at `path` read once: `span_gc` of its track events, with
+    V8's schedule (`v8_schedule`, of the counters the runner's thread's
+    sequences wrote) as `schedule`, and the threads whose events were lost
+    (`lost`), if any."""
+    lost: list[str] = []
+    names: dict[int, str] = {}
+    counter_tracks: dict[int, str] = {}
+    events, starts, counters = [], [], []
+    sequences: dict[int, set[int]] = {}
+    for track, time, sequence, entries, name, categories, interned in common.perfetto_track_packets(
+            path, names, lost, counter_tracks):
+        event = dict(entries)
+        kind = event.get(9)
+        events.append((track, time, len(events), kind, name, categories))
+        sequences.setdefault(track, set()).add(sequence)
+        if kind == 4:
+            counters.append((track, time, sequence, common.counter_value(event)))
+        elif name == MARKING_START and kind == 1:
+            starts.append((track, time, dict(common.debug_annotation(value, interned)
+                                             for number, value in entries if number == 4)))
+    gc = span_gc(events, common.perfetto_thread_tracks(path))
+    span = timed_span(events)
+    if span is not None:
+        main, first, last = span
+        own = sequences.get(main, set())
+        gc["schedule"] = v8_schedule(
+            events, main, first, last, starts,
+            sorted(((counter_tracks.get(track, ""), time, value) for track, time, sequence, value in counters
+                    if sequence in own), key=lambda counter: counter[1]))
+    if lost:
+        gc["lost"] = sorted(set(lost))
+    return gc
+
+
+def gc_problems(page: dict) -> list[str]:
+    """Why a page's runs (`trace_pages`') aren't valid: a run's `problems`,
+    or a browser's trace without the GC in it."""
+    found = []
+    for number, run in enumerate(page["runs"], 1):
+        found += [f"run {number}: {why}" for why in problems(run)]
+        found += [f"run {number}: {browser}'s trace: {run[browser]['gc']['error']}"
+                  for browser in BROWSERS if "error" in run[browser].get("gc", {})]
+    return found
+
+
+def gc_summary(page: dict, browser: str) -> dict:
+    """A browser's runs of a page, summed up: the median of the runner's
+    values over every run's, the medians of each run's GC times (by kind
+    too), pause count and count of long ones (`LONG_PAUSE_NS`), the pauses'
+    distribution over every run's, and the longest pause of all with the
+    phases that took most of it; V8's schedule (`v8_schedule`): the
+    medians of each run's full and young GCs, the marking starts' reasons
+    counted over every run, and the medians over every run's of the global
+    size over the limit at a marking start and of the embedder heap's size
+    after a full GC (`None` without any)."""
+    runs = [run[browser] for run in page["runs"]]
+    gcs = [got["gc"] for got in runs]
+    pauses = [ns for gc in gcs for ns in gc["pauses_ns"]]
+    longest = max((gc["longest_pause"] for gc in gcs), key=lambda pause: pause["ns"])
+    schedules = [gc.get("schedule", {}) for gc in gcs]
+    starts = [start for schedule in schedules for start in schedule.get("marking_starts", [])]
+    over = [start["over_limit"] for start in starts if start["over_limit"] is not None]
+    embedder = [size for schedule in schedules for size in schedule.get("embedder_after_full_gc_bytes", [])]
+    reasons: dict[str, int] = {}
+    for start in starts:
+        reasons[start["reason"]] = reasons.get(start["reason"], 0) + 1
+    return {
+        "unit": runs[0]["unit"],
+        "value": common.median([value for got in runs for value in got["values"]]),
+        **{key: common.median([gc[key] for gc in gcs]) for key in GC_TIMES},
+        "by_kind_ns": {kind: common.median([gc["gc_by_kind_ns"].get(kind, 0) for gc in gcs])
+                       for kind in gc_bench.KINDS},
+        "pauses": common.median([len(gc["pauses_ns"]) for gc in gcs]),
+        "long_pauses": common.median([sum(ns >= LONG_PAUSE_NS for ns in gc["pauses_ns"]) for gc in gcs]),
+        "pause_p50_ns": gc_bench.percentile(pauses, 0.5),
+        "pause_p95_ns": gc_bench.percentile(pauses, 0.95),
+        "longest_pause": longest,
+        "lost": sorted({thread for gc in gcs for thread in gc.get("lost", [])}),
+        "full_gcs": common.median([schedule.get("full_gcs", 0) for schedule in schedules]),
+        "young_gcs": common.median([schedule.get("young_gcs", 0) for schedule in schedules]),
+        "marking_reasons": sorted(reasons.items(), key=lambda item: (-item[1], item[0])),
+        "over_limit": common.median(over) if over else None,
+        "embedder_after_full_gc_bytes": common.median(embedder) if embedder else None,
+    }
+
+
+def both(summaries: dict[str, dict], value) -> str:
+    """A cell of the two browsers' numbers, machopo's first."""
+    return " / ".join(value(summaries[browser]) for browser in BROWSERS)
+
+
+def ms(ns: float) -> str:
+    return number(ns / 1e6)
+
+
+def mib(size: float | None) -> str:
+    return "–" if size is None else number(size / 2**20)
+
+
+def over_limit(summary: dict) -> str:
+    """The global size over the limit at a marking start."""
+    return "–" if summary["over_limit"] is None else f"{summary['over_limit']:.2f}"
+
+
+def gc_share(summary: dict) -> str:
+    """The GC's share of the span, %."""
+    return f"{100 * summary['gc_ns'] / summary['window_ns']:.0f}" if summary["window_ns"] else ""
+
+
+def write_gc_report(pages_run: dict[str, dict], env: dict) -> Path:
+    """`gc.md`: for each valid page, each browser's GC in the span the
+    runner times (`gc_summary`), machopo's and Chrome's side by side: the
+    whole, and of it the DOM heap's and V8's, the other threads'; by kind;
+    the pauses, and the phases of the longest; then the pages not valid,
+    with why, and those left out."""
+    valid = [page for page in pages_run if "excluded" not in pages_run[page] and not gc_problems(pages_run[page])]
+    summaries = {page: {browser: gc_summary(pages_run[page], browser) for browser in BROWSERS} for page in valid}
+    lines = [
+        f"# The GC in blink_perf, machopo and Chrome ({env['date']})",
+        "",
+        f"machopo `{env['machopo']}` (the `{env['profile']}` profile), Chrome for Testing {env['chrome']}; "
+        f"{env['os']}, {env['cpu']} (the browsers on CPUs: {env.get('cpus', 'all')}), power: {env['power']}. "
+        f"Blink's perf tests at `{env['blink_perf']}`. Each page {env['runs']} times in a new browser of each, "
+        "machopo first, with a trace (Chrome's of the categories "
+        f"{', '.join(f'`{c}`' for c in common.CHROME_GC_TRACE_CATEGORIES)}; machopo's of its own, more). "
+        "Each cell is machopo's / Chrome's. The score is the median of every run's iterations (with the trace "
+        "on). The rest is in the span the runner times (from its first measured iteration to the end), in ms, "
+        "the median over the runs: on the renderer's main thread, the outermost GC slices and by kind; of them "
+        "the DOM heap's (Oilpan's `CppGC.*` in Chrome; elise's `Gc.*` and the empty `CppHeap`'s `CppGC.*` in "
+        "machopo), inside V8's GC or on their own, of it the `CppGC.*` slices', and the rest, V8's; the GC on "
+        "the process's other threads "
+        "(which may overlap the main thread's pauses; elise's workers write no trace events, so machopo's DOM "
+        "heap there is the `CppHeap`'s alone); the pauses (slices less than 10 µs apart are one), their count a "
+        "run, of them those of 1 ms or more, and their distribution over every run's.",
+        "",
+        "| Page | Score | Span | GC | GC % | DOM heap | `CppGC.*` | V8 | Other threads | DOM heap, other threads |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for page in valid:
+        s = summaries[page]
+        unit = s["machopo"]["unit"]
+        lines.append(
+            f"| `{page}` | {both(s, lambda b: number(b['value']))} {unit} | {both(s, lambda b: ms(b['window_ns']))} | "
+            f"{both(s, lambda b: ms(b['gc_ns']))} | "
+            f"{both(s, gc_share)} | "
+            f"{both(s, lambda b: ms(b['dom_ns']))} | {both(s, lambda b: ms(b['cppgc_ns']))} | "
+            f"{both(s, lambda b: ms(b['gc_ns'] - b['dom_ns']))} | "
+            f"{both(s, lambda b: ms(b['background_gc_ns']))} | {both(s, lambda b: ms(b['background_dom_ns']))} |"
+        )
+    lines += ["", "By kind, on the main thread: V8's scavenges (`young`), incremental marking's steps, the atomic "
+              "pause of a full GC, sweeping.", "",
+              "| Page | " + " | ".join(kind.capitalize() for kind in gc_bench.KINDS) + " |",
+              "| --- |" + " ---: |" * len(gc_bench.KINDS)]
+    for page in valid:
+        s = summaries[page]
+        lines.append(f"| `{page}` | " + " | ".join(both(s, lambda b: ms(b["by_kind_ns"][kind]))
+                                                   for kind in gc_bench.KINDS) + " |")
+    lines += ["", "The main thread's pauses.", "", "| Page | A run | 1 ms or more | Median | p95 | Longest |",
+              "| --- | ---: | ---: | ---: | ---: | ---: |"]
+    for page in valid:
+        s = summaries[page]
+        lines.append(f"| `{page}` | {both(s, lambda b: number(b['pauses']))} | "
+                     f"{both(s, lambda b: number(b['long_pauses']))} | "
+                     f"{both(s, lambda b: ms(b['pause_p50_ns']))} | {both(s, lambda b: ms(b['pause_p95_ns']))} | "
+                     f"{both(s, lambda b: ms(b['longest_pause']['ns']))} |")
+    lines += ["", "The longest pause's phases: each slice's time of its own (but its phases'), by name, the most.", ""]
+    for page in valid:
+        for browser in BROWSERS:
+            phases = summaries[page][browser]["longest_pause"]["phases"]
+            lines.append(f"- `{page}`, {browser}: " + (", ".join(f"`{name}` {ms(ns)}" for name, ns in phases)
+                                                       or "no pause"))
+    lines += ["", "V8's schedule (`v8.memory` and V8's events), on the main thread: the full and young GCs a run; "
+              "a marking start's global size (the embedder heap's, V8's old generation and external memory) over "
+              "the global limit then; the embedder heap's size after a full GC, MiB (Oilpan sweeps after the GC: "
+              "Chrome's is before its garbage is freed, so it compares where both collect before the heap is "
+              "large). The medians.", "",
+              "| Page | Full GCs | Young GCs | Marking started at, × the limit | Embedder heap after a full GC |",
+              "| --- | ---: | ---: | ---: | ---: |"]
+    for page in valid:
+        s = summaries[page]
+        lines.append(f"| `{page}` | {both(s, lambda b: number(b['full_gcs']))} | "
+                     f"{both(s, lambda b: number(b['young_gcs']))} | "
+                     f"{both(s, over_limit)} | "
+                     f"{both(s, lambda b: mib(b['embedder_after_full_gc_bytes']))} |")
+    lines += ["", "Why the markings started, each run's together.", ""]
+    for page in valid:
+        for browser in BROWSERS:
+            reasons = summaries[page][browser]["marking_reasons"]
+            lines.append(f"- `{page}`, {browser}: " + (", ".join(f"{reason} {count}" for reason, count in reasons)
+                                                       or "no marking"))
+    lost = [f"- `{page}`, {browser}: {', '.join(summaries[page][browser]['lost'])}"
+            for page in valid for browser in BROWSERS if summaries[page][browser]["lost"]]
+    if lost:
+        lines += ["", "## Events lost", "", "The threads whose events a trace lost (its numbers may be short):", "",
+                  *lost]
+    invalid = [page for page in pages_run if "excluded" not in pages_run[page] and page not in valid]
+    if invalid:
+        lines += ["", "## Not valid", ""]
+        lines += [f"- `{page}`: {'; '.join(gc_problems(pages_run[page]))}" for page in invalid]
+    excluded = [page for page in pages_run if "excluded" in pages_run[page]]
+    if excluded:
+        lines += ["", "## Left out", ""]
+        lines += [f"- `{page}`: {pages_run[page]['excluded']}" for page in excluded]
+    RESULTS.mkdir(parents=True, exist_ok=True)
+    report = RESULTS / "gc.md"
+    report.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+    return report
+
+
+def trace_pages(names: list[str], root: Path, profile: str, timeout: float, runs: int) -> dict[str, dict]:
+    """Each page `runs` times, each run in machopo and then in Chrome, each in
+    a new browser with a trace (`RESULTS/gc/`): what each gave (`result`),
+    with the GC in its trace (`trace_gc`, as `gc`), by page, its runs in
+    the order they ran; a page `scan` leaves out isn't run (`excluded`)."""
+    binary = common.machopo_binary(profile)
+    server = Server(root)
+    traces = RESULTS / "gc"
+    shutil.rmtree(traces, ignore_errors=True)
+    traces.mkdir(parents=True)
+    by_page: dict[str, dict] = {}
+    try:
+        with open(RESULTS / "machopo.log", "w", encoding="utf-8") as log:
+            for page in names:
+                found = scan(root, page)
+                if "excluded" in found:
+                    by_page[page] = found
+                    print(f"{page}: left out: {found['excluded']}", flush=True)
+                    continue
+                url = server.url("/" + page)
+                each = []
+                for number_of_run in range(1, runs + 1):
+                    run: dict = {"catches": found["catches"]}
+                    for browser in BROWSERS:
+                        trace = traces / f"{page.removesuffix('.html').replace('/', '-')}-{browser}-{number_of_run}.pftrace"
+                        posted = (common.run_in_machopo(server, binary, url, timeout, log, trace=trace)
+                                  if browser == "machopo" else
+                                  common.run_in_chrome(server, url, timeout, trace=trace,
+                                                       categories=common.CHROME_GC_TRACE_CATEGORIES))
+                        run[browser] = result(posted)
+                        if "error" not in run[browser]:
+                            run[browser]["gc"] = trace_gc(trace) if trace.is_file() else {"error": "none written"}
+                    each.append(run)
+                by_page[page] = {"runs": each}
+                why = gc_problems(by_page[page])
+                print(f"{page}: " + ("; ".join(why) if why else "GC " + both(
+                    {b: {"gc": common.median([run[b]["gc"]["gc_ns"] for run in each])} for b in BROWSERS},
+                    lambda b: f"{ms(b['gc'])} ms")), flush=True)
+    finally:
+        server.close()
+    return by_page
+
+
+def cmd_gc(args, names: list[str], root: Path) -> int:
+    """The pages with traces, `args.runs` times each (`trace_pages`);
+    `gc.md`, and `gc.json` with what each run gave."""
+    env = dict(common.environment(common.MACHOPO_PROFILE), date=date.today().isoformat(), runs=args.runs,
+               blink_perf=(root / ".machopo-rev").read_text(encoding="utf-8").strip()[:12]
+               if (root / ".machopo-rev").is_file() else "unknown")
+    if env["power"] == "battery":
+        print("warning: on battery power, the times may not be comparable")
+    by_page = trace_pages(names, root, common.MACHOPO_PROFILE, args.timeout, args.runs)
+    (RESULTS / "gc.json").write_text(json.dumps({"environment": env, "pages": by_page}, indent=1) + "\n",
+                                     encoding="utf-8", newline="\n")
+    print(f"the report: {write_gc_report(by_page, env)}")
+    return 0
+
+
 # --- two versions of machopo -----------------------------------------------------
 
 # The two versions `--against` compares, in the order each run takes them:
@@ -501,6 +954,12 @@ def cmd_blink_perf(args) -> int:
                   + ": --dirs or --pages")
             return 1
     names = pages(root, dirs, chosen)
+    if args.gc and args.against:
+        print("--gc and --against: one or the other")
+        return 1
+    if args.gc:
+        print(f"machopo and Chrome with traces of the GC: {len(names)} pages, {args.runs} runs each")
+        return cmd_gc(args, names, root)
     if args.against:
         print(f"machopo at {args.against} and the working tree's: {len(names)} pages, {args.runs} runs each")
         return cmd_against(args, names, root)

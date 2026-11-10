@@ -26,7 +26,11 @@ use crate::platform;
 /// `devtools.timeline,disabled-by-default-v8.gc`, recorded with
 /// `devtools.timeline`, as in Chrome; cppgc's (`CppGC.AtomicMark` and the
 /// like: the isolate's `CppHeap`'s phases, which the elise heap marks in, as
-/// Oilpan's in Chrome) are in `cppgc`.
+/// Oilpan's in Chrome) are in `cppgc`. `v8.memory` has V8's heap's sizes and
+/// limits as counters (the elise heap's in the global ones), which say why
+/// V8 starts a full GC when it does. Not `disabled-by-default-v8.gc` on its
+/// own: what it adds is V8's speeds, and its embedder heap's speed is the
+/// empty `CppHeap`'s, which would mislead.
 const CATEGORIES: &[&str] = &[
     "toplevel",
     "blink",
@@ -37,6 +41,7 @@ const CATEGORIES: &[&str] = &[
     "loading",
     "devtools.timeline",
     "cppgc",
+    "v8.memory",
     "machopo",
     "blink.user_timing",
 ];

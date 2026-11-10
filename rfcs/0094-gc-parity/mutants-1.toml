@@ -1,0 +1,241 @@
+# Stage 1: `bench.py blink-perf --gc`, `v8.memory` in both traces, V8's
+# schedule in the report. The tool's own tests (the fake pages, in the
+# dev build and Chrome for Testing; the dev build rebuilt for `bindings`'
+# mutant).
+test = ["python3", "scripts/bench/blink_perf/blink_perf_test.py"]
+timeout = 900
+
+[[mutant]]
+name = "the span from any slice of the name"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    user_timing = [event for event in events if event[4] == TIMED and common.USER_TIMING in event[5]]'''
+to = '''    user_timing = [event for event in events if event[4] == TIMED]'''
+
+[[mutant]]
+name = "the runner's thread is the measure's track"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    main = next((event[0] for event in user_timing if event[3] == 3), None)'''
+to = '''    main = next((event[0] for event in user_timing if event[3] == 1), None)'''
+
+[[mutant]]
+name = "the measure's end: any on its track"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''if event[0] == begin[0] and event[3] == 2 and event[1:3] > begin[1:3]), default=None)'''
+to = '''if event[0] == begin[0] and event[3] == 2), default=None)'''
+
+[[mutant]]
+name = "the measure's end: the last on its track"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    last = min((event[1:3] for event in events'''
+to = '''    last = max((event[1:3] for event in events'''
+
+[[mutant]]
+name = "elise's slices aren't the DOM heap's"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    return name.startswith(("CppGC.", "Gc."))'''
+to = '''    return name.startswith(("CppGC.",))'''
+
+[[mutant]]
+name = "the DOM heap's nested slices counted too"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''            if is_dom_heap(name) and not any(is_dom_heap(name) for name in outer):'''
+to = '''            if is_dom_heap(name):'''
+
+[[mutant]]
+name = "the DOM heap's slices not cut at the span"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''                ns = max(0, min(end, last) - max(begin, first))'''
+to = '''                ns = end - begin'''
+
+[[mutant]]
+name = "all the DOM heap's as CppGC's"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''                if name.startswith("CppGC."):'''
+to = '''                if True:'''
+
+[[mutant]]
+name = "every process's threads"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    if pid is not None:'''
+to = '''    if False:'''
+
+[[mutant]]
+name = "a GC request's handling kept"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    events = without_wrappers(events)'''
+to = '''    events = list(events)'''
+
+[[mutant]]
+name = "every slice a wrapper"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''            if name in GC_WRAPPERS:'''
+to = '''            if True:'''
+
+[[mutant]]
+name = "a trace without the GC is valid"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''                  for browser in BROWSERS if "error" in run[browser].get("gc", {})]'''
+to = '''                  for browser in BROWSERS if False]'''
+
+[[mutant]]
+name = "the longest pause: the shortest run's"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    longest = max((gc["longest_pause"] for gc in gcs), key=lambda pause: pause["ns"])'''
+to = '''    longest = min((gc["longest_pause"] for gc in gcs), key=lambda pause: pause["ns"])'''
+
+[[mutant]]
+name = "the score: the first run's"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''        "value": common.median([value for got in runs for value in got["values"]]),'''
+to = '''        "value": common.median(runs[0]["values"]),'''
+
+[[mutant]]
+name = "a pause of 1 ms isn't long"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''        "long_pauses": common.median([sum(ns >= LONG_PAUSE_NS for ns in gc["pauses_ns"]) for gc in gcs]),'''
+to = '''        "long_pauses": common.median([sum(ns > LONG_PAUSE_NS for ns in gc["pauses_ns"]) for gc in gcs]),'''
+
+[[mutant]]
+name = "the GC's share of the whole GC"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    return f"{100 * summary['gc_ns'] / summary['window_ns']:.0f}" if summary["window_ns"] else ""'''
+to = '''    return f"{100 * summary['dom_ns'] / summary['window_ns']:.0f}" if summary["window_ns"] else ""'''
+
+[[mutant]]
+name = "V8's is the whole GC"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''            f"{both(s, lambda b: ms(b['gc_ns'] - b['dom_ns']))} | "'''
+to = '''            f"{both(s, lambda b: ms(b['gc_ns']))} | "'''
+
+[[mutant]]
+name = "Chrome traced with the default categories"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''                                                       categories=common.CHROME_GC_TRACE_CATEGORIES))'''
+to = '''                                                       ))'''
+
+[[mutant]]
+name = "a run that gave nothing read for its GC"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''                        if "error" not in run[browser]:'''
+to = '''                        if True:'''
+
+[[mutant]]
+name = "--gc with --against"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''    if args.gc and args.against:'''
+to = '''    if False:'''
+
+[[mutant]]
+name = "a thread's pid and tid swapped"
+file = "scripts/bench/common.py"
+from = '''                descriptors[track.get(1)] = (thread.get(1, 0), thread.get(2, 0))'''
+to = '''                descriptors[track.get(1)] = (thread.get(2, 0), thread.get(1, 0))'''
+
+[[mutant]]
+name = "the schedule: GCs begun before the span counted"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''              if track == main and kind == 1 and first <= time < last]'''
+to = '''              if track == main and kind == 1]'''
+
+[[mutant]]
+name = "the schedule: another thread's marking starts"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''        if track != main or not first <= time < last:'''
+to = '''        if not first <= time < last:'''
+
+[[mutant]]
+name = "the schedule: the limit over the size"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''                        "over_limit": consumed / limit if limit and consumed is not None else None})'''
+to = '''                        "over_limit": limit / consumed if limit and consumed is not None else None})'''
+
+[[mutant]]
+name = "the schedule: full GCs before the span measured"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''                if name == FULL_GC and first <= begin < last]'''
+to = '''                if name == FULL_GC]'''
+
+[[mutant]]
+name = "the schedule: a size counted in the GC"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''        return next((value for time, value in by_name.get(name, []) if time > end), None)'''
+to = '''        return next((value for time, value in by_name.get(name, []) if time > end - 10 * 100_000), None)'''
+
+[[mutant]]
+name = "the schedule: external memory in the embedder heap's"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''            embedder.append(sizes[0] - sizes[1] - sizes[2])'''
+to = '''            embedder.append(sizes[0] - sizes[1])'''
+
+[[mutant]]
+name = "the schedule: the young GCs as full ones"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''        "full_gcs": sum(name == FULL_GC for _, name in begins),'''
+to = '''        "full_gcs": sum(name in (FULL_GC, YOUNG_GC) for _, name in begins),'''
+
+[[mutant]]
+name = "a dict annotation not brought up"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''            flat.update(value)'''
+to = '''            flat[name] = value'''
+
+[[mutant]]
+name = "every sequence's counters"
+file = "scripts/bench/blink_perf/blink_perf.py"
+from = '''                    if sequence in own), key=lambda counter: counter[1]))'''
+to = '''                    if True), key=lambda counter: counter[1]))'''
+
+[[mutant]]
+name = "a counter's int value read as a double"
+file = "scripts/bench/common.py"
+from = '''    if 30 in event:'''
+to = '''    if False:'''
+
+[[mutant]]
+name = "a dict annotation's entries not read"
+file = "scripts/bench/common.py"
+from = '''    if 11 in by_number:'''
+to = '''    if False:'''
+
+[[mutant]]
+name = "an array annotation's values not read"
+file = "scripts/bench/common.py"
+from = '''    if 12 in by_number:'''
+to = '''    if False:'''
+
+[[mutant]]
+name = "a string annotation not read"
+file = "scripts/bench/common.py"
+from = '''    if 6 in by_number:  # string_value'''
+to = '''    if False:  # string_value'''
+
+[[mutant]]
+name = "a double annotation not read"
+file = "scripts/bench/common.py"
+from = '''    if 5 in by_number:  # double_value'''
+to = '''    if False:  # double_value'''
+
+[[mutant]]
+name = "annotations' names not interned"
+file = "scripts/bench/common.py"
+from = '''                if key in (1, 2, 3):  # event_categories, event_names, debug_annotation_names'''
+to = '''                if key in (1, 2):  # event_categories, event_names, debug_annotation_names'''
+
+[[mutant]]
+name = "a counter's static name not read"
+file = "scripts/bench/common.py"
+from = '''                name = track.get(10, track.get(2, b""))  # static_name, name'''
+to = '''                name = track.get(2, b"")  # static_name, name'''
+
+[[mutant]]
+name = "Chrome's GC trace without v8.memory"
+file = "scripts/bench/common.py"
+from = '''CHROME_GC_TRACE_CATEGORIES = ("v8", "cppgc", "disabled-by-default-v8.gc", "v8.memory", USER_TIMING)'''
+to = '''CHROME_GC_TRACE_CATEGORIES = ("v8", "cppgc", "disabled-by-default-v8.gc", USER_TIMING)'''
+
+[[mutant]]
+name = "machopo's trace without v8.memory"
+file = "crates/bindings/src/trace.rs"
+from = '''    "v8.memory",
+    "machopo",'''
+to = '''    "machopo",'''

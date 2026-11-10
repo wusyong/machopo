@@ -1,7 +1,7 @@
 # RFC 0094：GC 和 Chrome 持平：量測（`bench.py blink-perf --gc`、V8 的記憶體 counter、elise 的 worker 的事件）和評估
 
 - 開始日期：2026-11-10
-- 狀態：📝 草稿
+- 狀態：🚧 已排程：2026-11-10
 - 細節：`details.md`
 
 ## 摘要
@@ -129,12 +129,12 @@ python3 scripts/bench.py blink-perf --gc --pages bindings/gc-forest.html,binding
 4. **machopo 的 trace 不錄 `disabled-by-default-v8.gc`**：多的是 `EmbedderSpeed` 這類速度，machopo 的被空的 `CppHeap` 扭曲（約 2,000 bytes/ms，Chrome 約 1,500,000），讀了會誤導；GC 的 phase 已經在 `devtools.timeline` 裡錄到。
 5. **最後一段是評估，不是優化**：重量、估每個候選的收益和成本，做不做到時候再決定。第 3 段照使用者的要求量 Speedometer（`speedometer --sample` 的 GC 那一類）。理由：Speedometer 上 GC 的差距（+10 ms）在 323 ms 的總差距裡是第二小的一類，GC 追平時比值約 1.48 → 1.42，文字、style、JS 各自追平時是 1.27、1.32、1.33（2026-11-08，`docs/performance-gaps.md`）；但 elise 在背景的 CPU 還量不到，要等第 2 段才知道總 CPU 是贏是輸。
 
+第 1 段開始前（2026-11-10，使用者說開始，照看法）：
+
+6. **報告的 V8 的排程四欄**：full GC 和 scavenge 的次數、marking 開始的原因、開始時用量是上限的幾倍、full GC 之後嵌入端的大小。
+7. **頁面照平常的選法**（清單、路徑、`--pages`、`--dirs`），不另外加一份 GC 的清單；`docs/benchmarks.md` 建議 `bindings/gc-*`、`create-element`、`insert-before`、`parser/innerHTML-setter`。
+
 ## 待決定
-
-第 1 段開始前：
-
-1. 報告的 V8 的排程要哪幾欄（看法：full GC 和 scavenge 的次數、marking 開始的原因、開始時用量是上限的幾倍、full GC 之後嵌入端的大小）。
-2. 頁面：照平常的選法，不另外加一份 GC 的清單（看法：照平常；`docs/benchmarks.md` 建議那六頁）。
 
 第 2 段開始前：
 

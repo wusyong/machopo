@@ -5,7 +5,7 @@ its results in `target/bench/<name>/`.
 
     python scripts/bench.py speedometer [--inventory]  # Speedometer 3.1 in Chrome and machopo; what its suites need that machopo lacks
     python scripts/bench.py raster [--window]  # machopo's tile raster while pages scroll and its window is resized
-    python scripts/bench.py blink-perf [dom/ ...] [--against REV]  # Blink's perf tests in Chrome and machopo (or two machopos): the list, or part of it
+    python scripts/bench.py blink-perf [dom/ ...] [--against REV | --gc]  # Blink's perf tests in Chrome and machopo (or two machopos; or their GC, from traces): the list, or part of it
     python scripts/bench.py calls [--cases firstChild,...]  # what one DOM call costs from JS, in instructions
     python scripts/bench.py gc [--heaps gc,gc-parallel,v8]  # the GC microbenchmarks on the gc crate's heap and V8's: pauses, GC time, memory
 
@@ -125,8 +125,15 @@ def main() -> int:
         "../third_party alike) and the working tree's, in turn, no Chrome: target/bench/blink_perf/compare.md",
     )
     blink_perf.add_argument(
+        "--gc", action="store_true",
+        help="each page --runs times in each browser with a trace, and the GC in the span the runner times: "
+        "on the renderer's main thread, V8's and the DOM heap's, the other threads', the pauses: "
+        "target/bench/blink_perf/gc.md (the traces in gc/)",
+    )
+    blink_perf.add_argument(
         "--runs", type=int, default=3,
-        help="with --against: how many times each version runs the pages (default 3)"
+        help="with --against: how many times each version runs the pages; with --gc, each page in each browser "
+        "(default 3)"
     )
     blink_perf.set_defaults(func=cmd_blink_perf)
 

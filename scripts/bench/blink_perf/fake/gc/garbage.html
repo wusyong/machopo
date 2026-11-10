@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<script src="../resources/runner.js"></script>
+<div id="list"></div>
+<script>
+  // Builds and drops a list of fifty thousand elements each iteration,
+  // each with its wrapper: garbage enough for both browsers to collect in
+  // the span the runner times.
+  PerfTestRunner.measureTime({
+    run() {
+      const list = document.getElementById("list");
+      for (let i = 0; i < 50000; i++) list.appendChild(document.createElement("p"));
+      list.textContent = "";
+    },
+  });
+</script>

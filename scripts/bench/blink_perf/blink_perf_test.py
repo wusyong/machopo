@@ -14,6 +14,7 @@ import contextlib
 import io
 import json
 import os
+import struct
 import sys
 import tempfile
 import unittest
@@ -354,13 +355,341 @@ class ReportTests(unittest.TestCase):
         self.assertNotIn("## base64", lines)
 
 
-def gc_run(machopo: dict, chrome: dict, wasm: dict, **rest) -> dict:
-    return dict({"machopo": machopo, "Chrome": chrome, "wasm": wasm, "catches": False}, **rest)
+USER_TIMING = [common.USER_TIMING]
+# A trace's time unit in these tests: far apart enough that no two slices
+# are one pause (`gc_bench.PAUSE_GAP_NS`).
+UNIT = 100_000
 
 
-# The GC in a window, as `gc_bench.window_gc` gives it.
-WINDOW_GC = {"window_ns": 2_000_000_000, "gc_ns": 50_000_000, "gc_by_kind_ns": {"marking": 30_000_000,
-             "atomic": 20_000_000}, "pauses_ns": [1_000_000, 4_000_000, 45_000_000], "background_gc_ns": 7_000_000}
+def slice_events(track: int, slices: list[tuple[int, int, str]]) -> list[tuple]:
+    """Track events (`perfetto_track_events`') of slices `(begin, end,
+    name)` on `track`, in `UNIT`s, nested as their times are."""
+    marks = []
+    for begin, end, name in slices:
+        marks += [(begin * UNIT, 1, name), (end * UNIT, 2, "")]
+    # Ends before begins at the same time, the outer slice's begin first.
+    marks.sort(key=lambda mark: (mark[0], 0 if mark[1] == 2 else 1))
+    return [(track, time, 0, kind, name, []) for time, kind, name in marks]
+
+
+def timed_events(main: int, first: int, last: int, measure: int = 99) -> list[tuple]:
+    """The hook's mark on `main` and its measure on a track of its own,
+    from `first` to `last` (`UNIT`s)."""
+    return [(main, first * UNIT, 0, 3, "blink_perf", USER_TIMING),
+            (measure, first * UNIT, 0, 1, "blink_perf", USER_TIMING), (measure, last * UNIT, 0, 2, "", [])]
+
+
+def varint(n: int) -> bytes:
+    out = b""
+    while True:
+        out += bytes([(n & 0x7f) | (0x80 if n > 0x7f else 0)])
+        n >>= 7
+        if not n:
+            return out
+
+
+def message(*fields) -> bytes:
+    """A protobuf message of `(number, value)`: an int as a varint, bytes
+    as length-delimited, a float as a fixed64 double."""
+    out = b""
+    for number, value in fields:
+        if isinstance(value, float):
+            out += varint(number << 3 | 1) + struct.pack("<d", value)
+        elif isinstance(value, int):
+            out += varint(number << 3) + varint(value)
+        else:
+            out += varint(number << 3 | 2) + varint(len(value)) + value
+    return out
+
+
+def packet(sequence: int, *fields) -> bytes:
+    """A trace's packet (`Trace.packet`) of `sequence`."""
+    return message((1, message((10, sequence), *fields)))
+
+
+def numbered(events: list[tuple]) -> list[tuple]:
+    """`events` with their order in the list, as a trace's."""
+    return [(track, time, order, kind, name, categories)
+            for order, (track, time, _, kind, name, categories) in enumerate(events)]
+
+
+class SpanGcTests(unittest.TestCase):
+    """`--gc`: the GC in the span the runner times, from a trace's events."""
+
+    def test_the_span_the_runner_timed(self):
+        events = numbered([
+            # An end on the measure's track before it begins, and another
+            # timer's slice of the name, not User Timing.
+            (99, 5 * UNIT, 0, 2, "", []), (5, 6 * UNIT, 0, 1, "blink_perf", ["blink.console"]),
+            *timed_events(1, 10, 90), (99, 95 * UNIT, 0, 2, "", []),
+        ])
+        self.assertEqual(blink_perf.timed_span(events), (1, 10 * UNIT, 90 * UNIT))
+        # Without the mark, the measure, or its end.
+        self.assertIsNone(blink_perf.timed_span(numbered(timed_events(1, 10, 90)[1:])))
+        self.assertIsNone(blink_perf.timed_span(numbered(timed_events(1, 10, 90)[::2])))
+        self.assertIsNone(blink_perf.timed_span(numbered(timed_events(1, 10, 90)[:2])))
+
+    def test_the_gc_on_the_runners_thread_and_its_process(self):
+        # V8's events and machopo's spans (elise's), on the thread's track.
+        v8 = slice_events(1, [
+            # Cut at the span's start: a scavenge.
+            (5, 15, "MinorGC"),
+            (16, 19, "FunctionCall"),
+            # A full GC's pause V8 runs for a GC request, the empty
+            # `CppHeap`'s marking in it.
+            (20, 40, "V8.GCHandleGCRequest"), (20, 40, "MajorGC"), (21, 23, "CppGC.AtomicMark"),
+            # Oilpan's sweeping on its own.
+            (50, 54, "CppGC.LazySweep"),
+            # V8's step, marking the DOM heap too.
+            (60, 66, "V8.GCIncrementalMarking"),
+            # One after the span.
+            (96, 99, "MinorGC"),
+        ])
+        machopo = slice_events(1, [
+            # Ends as V8's pause does; begins as its step does, the empty
+            # `CppHeap`'s inside it not counted again.
+            (24, 40, "Gc.Mark"), (60, 63, "Gc.Step"), (61, 62, "CppGC.IncrementalMark"),
+            # On its own, cut at the span's end.
+            (88, 95, "Gc.Sweep"),
+        ])
+        worker = slice_events(2, [(30, 70, "V8.GC_MC_BACKGROUND_MARKING"), (35, 45, "CppGC.ConcurrentMark"),
+                                  (80, 100, "Gc.Sweep")])
+        # Another process's V8.
+        other = slice_events(3, [(20, 30, "MinorGC")])
+        events = numbered(timed_events(1, 10, 90) + v8 + machopo + worker + other)
+        threads = {1: (10, 10), 2: (10, 11), 3: (20, 20)}
+        gc = blink_perf.span_gc(events, threads)
+        self.assertEqual(gc["window_ns"], 80 * UNIT)
+        self.assertEqual(gc["gc_ns"], (5 + 20 + 4 + 6 + 2) * UNIT)
+        self.assertEqual(gc["gc_by_kind_ns"],
+                         {"young": 5 * UNIT, "atomic": 20 * UNIT, "sweeping": 6 * UNIT, "marking": 6 * UNIT})
+        self.assertEqual(gc["dom_ns"], (2 + 16 + 4 + 3 + 2) * UNIT)
+        self.assertEqual(gc["cppgc_ns"], (2 + 4) * UNIT)
+        # Of the DOM heap's, elise's inside V8's GC.
+        self.assertEqual(gc["in_engine_ns"], (16 + 3) * UNIT)
+        self.assertEqual(gc["pauses_ns"], [5 * UNIT, 20 * UNIT, 4 * UNIT, 6 * UNIT, 2 * UNIT])
+        self.assertEqual(gc["background_gc_ns"], (40 + 10) * UNIT)
+        self.assertEqual(gc["background_dom_ns"], (10 + 10) * UNIT)
+        # Without the threads' descriptors: their processes unknown, all kept.
+        self.assertEqual(blink_perf.span_gc(events, {})["background_gc_ns"], (40 + 10 + 10) * UNIT)
+        self.assertEqual(blink_perf.span_gc(numbered(v8), threads),
+                         {"error": "the trace has no span the runner timed"})
+
+    def test_the_threads_of_a_traces_tracks(self):
+        def track(uuid, *fields):
+            return packet(uuid, (60, message((1, uuid), *fields)))
+
+        thread = lambda pid, tid: (4, message((1, pid), (2, tid), (5, b"T")))
+        # Two threads of a process, and a track of its own (a measure's).
+        trace = track(5, thread(100, 101)) + track(6, thread(100, 102)) + track(7, (5, 5))
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "t.pftrace"
+            path.write_bytes(trace)
+            self.assertEqual(common.perfetto_thread_tracks(path), {5: (100, 101), 6: (100, 102)})
+
+    def test_a_traces_counters_and_annotations(self):
+        # A counter track (named `static_name`, and by `name`), its values
+        # an int and a double; a begin with an interned annotation holding
+        # a dict, and with one named inline.
+        entry = lambda name, *value: message((10, name), *value)
+        reasons = message((1, 5), (11, entry(b"reason", (6, b"limit reached"))),
+                          (11, entry(b"global_allocation_limit", (3, 1 << 20))), (11, entry(b"speed", (5, 0.5))))
+        start = message((9, 1), (11, 9), (23, b"V8.GCIncrementalMarkingStart"), (4, reasons),
+                        (4, entry(b"epoch", (4, 3))), (4, entry(b"list", (12, message((3, 1))), (12, message((3, 2))))))
+        trace = (packet(1, (60, message((1, 7), (10, b"GlobalConsumedBytes"), (8, b""))))
+                 + packet(1, (60, message((1, 8), (2, b"OldGenerationConsumedBytes"), (8, b""))))
+                 + packet(1, (8, 100), (11, message((9, 4), (11, 7), (30, 4096))))
+                 + packet(1, (8, 200), (11, message((9, 4), (11, 8), (44, 2.5))))
+                 + packet(2, (12, message((3, message((1, 5), (2, b"value"))))), (8, 300), (11, start)))
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "t.pftrace"
+            path.write_bytes(trace)
+            names: dict[int, str] = {}
+            packets = list(common.perfetto_track_packets(path, counter_tracks=names))
+        self.assertEqual(names, {7: "GlobalConsumedBytes", 8: "OldGenerationConsumedBytes"})
+        counters = [(track, time, sequence, common.counter_value(dict(entries)))
+                    for track, time, sequence, entries, *_ in packets if dict(entries).get(9) == 4]
+        self.assertEqual(counters, [(7, 100, 1, 4096.0), (8, 200, 1, 2.5)])
+        track, time, sequence, entries, name, _, interned = packets[2]
+        self.assertEqual((track, time, sequence, name), (9, 300, 2, "V8.GCIncrementalMarkingStart"))
+        annotations = dict(common.debug_annotation(value, interned) for number, value in entries if number == 4)
+        self.assertEqual(annotations, {"value": {"reason": "limit reached", "global_allocation_limit": 1 << 20,
+                                                 "speed": 0.5}, "epoch": 3, "list": [1, 2]})
+        self.assertEqual(blink_perf.flattened(annotations)["reason"], "limit reached")
+
+    def test_a_trace_read_once(self):
+        # The runner's thread (sequence 1), its mark and measure, a full GC
+        # and the counters after it; another isolate's counter of the same
+        # name (sequence 3), earlier: not the runner's thread's.
+        def event(sequence, time, *fields):
+            return packet(sequence, (8, time), (11, message(*fields)))
+
+        def counter_track(sequence, uuid, name):
+            return packet(sequence, (60, message((1, uuid), (10, name), (8, b""))))
+
+        def counter(sequence, time, uuid, value):
+            return event(sequence, time, (9, 4), (11, uuid), (44, value))
+
+        user_timing = (22, common.USER_TIMING.encode())
+        trace = (packet(1, (60, message((1, 1), (4, message((1, 10), (2, 10), (5, b"CrRendererMain"))))))
+                 + counter_track(1, 7, b"GlobalConsumedBytes") + counter_track(1, 8, b"OldGenerationConsumedBytes")
+                 + counter_track(1, 9, b"ExternalMemoryBytes") + counter_track(3, 17, b"GlobalConsumedBytes")
+                 + event(1, 100, (9, 3), (11, 1), (23, b"blink_perf"), user_timing)
+                 + event(1, 100, (9, 1), (11, 99), (23, b"blink_perf"), user_timing)
+                 + event(1, 200, (9, 1), (11, 1), (23, b"MajorGC")) + event(1, 300, (9, 2), (11, 1))
+                 + counter(3, 305, 17, 1000.0)
+                 + counter(1, 310, 7, 10.0) + counter(1, 310, 8, 3.0) + counter(1, 310, 9, 1.0)
+                 + event(1, 900, (9, 2), (11, 99)))
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "t.pftrace"
+            path.write_bytes(trace)
+            gc = blink_perf.trace_gc(path)
+        self.assertEqual((gc["window_ns"], gc["gc_ns"]), (800, 100))
+        self.assertEqual(gc["schedule"]["full_gcs"], 1)
+        self.assertEqual(gc["schedule"]["embedder_after_full_gc_bytes"], [6.0])
+
+    def test_v8s_schedule_in_the_span(self):
+        events = numbered(timed_events(1, 10, 90) + slice_events(1, [
+            # A full GC before the span; in it, two full GCs and a young one.
+            (5, 8, "MajorGC"), (20, 30, "MajorGC"), (40, 42, "MinorGC"), (50, 60, "MajorGC"),
+        ]) + slice_events(2, [(45, 46, "MinorGC")]))
+        starts = [
+            (1, 15 * UNIT, {"value": {"reason": "global allocation limit reached", "global_allocation_limit": 100,
+                                      "global_consumed_bytes": 150}}),
+            # Another thread's, and one without the sizes.
+            (2, 16 * UNIT, {"value": {"reason": "other thread"}}),
+            (1, 45 * UNIT, {"value": {"reason": "soft trigger"}}),
+        ]
+        counters = [
+            # Counted in the first GC (before the embedder heap's size is
+            # set): not taken; then after each.
+            ("GlobalConsumedBytes", 25 * UNIT, 1.0), ("GlobalConsumedBytes", 31 * UNIT, 10.0),
+            ("OldGenerationConsumedBytes", 31 * UNIT, 3.0), ("ExternalMemoryBytes", 31 * UNIT, 1.0),
+            ("GlobalConsumedBytes", 61 * UNIT, 20.0), ("OldGenerationConsumedBytes", 61 * UNIT, 4.0),
+            ("ExternalMemoryBytes", 62 * UNIT, 2.0),
+        ]
+        schedule = blink_perf.v8_schedule(events, 1, 10 * UNIT, 90 * UNIT, starts, counters)
+        self.assertEqual(schedule, {
+            "full_gcs": 2, "young_gcs": 1,
+            "marking_starts": [{"reason": "global allocation limit reached", "over_limit": 1.5},
+                               {"reason": "soft trigger", "over_limit": None}],
+            "embedder_after_full_gc_bytes": [6.0, 14.0],
+        })
+        # Without the counters, no sizes.
+        self.assertEqual(blink_perf.v8_schedule(events, 1, 10 * UNIT, 90 * UNIT, starts, [])
+                         ["embedder_after_full_gc_bytes"], [])
+
+    def test_a_gc_requests_handling_is_left_out(self):
+        events = numbered(slice_events(1, [(10, 20, "V8.GCHandleGCRequest"), (10, 20, "MajorGC"), (12, 14, "A"),
+                                           (30, 31, "V8.GCHandleGCRequest")]) + slice_events(2, [(15, 16, "B")]))
+        kept = blink_perf.without_wrappers(events)
+        self.assertEqual([(track, time // UNIT, kind, name) for track, time, _, kind, name, _ in kept], [
+            (1, 10, 1, "MajorGC"), (1, 12, 1, "A"), (1, 14, 2, ""), (1, 20, 2, ""), (2, 15, 1, "B"), (2, 16, 2, ""),
+        ])
+
+
+def schedule(full: int, young: int, starts: list[tuple[str, float | None]], embedder_mib: list[float]) -> dict:
+    """V8's schedule in a run (`v8_schedule`'s)."""
+    return {"full_gcs": full, "young_gcs": young,
+            "marking_starts": [{"reason": reason, "over_limit": over} for reason, over in starts],
+            "embedder_after_full_gc_bytes": [mib * 2**20 for mib in embedder_mib]}
+
+
+def gc_ran(values: list[float], window: float, gc: float, dom: float, cppgc: float, background: float,
+           background_dom: float, kinds: dict, pauses: list[float], longest: list, **rest) -> dict:
+    """A browser's run of a page with its trace's GC (`trace_gc`'s), in ms."""
+    return dict(ran("ms", *values), gc=dict({
+        "window_ns": window * 1e6, "gc_ns": gc * 1e6, "dom_ns": dom * 1e6, "cppgc_ns": cppgc * 1e6,
+        "background_gc_ns": background * 1e6,
+        "background_dom_ns": background_dom * 1e6, "gc_by_kind_ns": {k: v * 1e6 for k, v in kinds.items()},
+        "pauses_ns": [ns * 1e6 for ns in pauses],
+        "longest_pause": {"ns": max(pauses, default=0) * 1e6, "phases": [[n, ns * 1e6] for n, ns in longest]},
+    }, **rest))
+
+
+class GcReportTests(unittest.TestCase):
+    def test_each_browsers_gc_side_by_side(self):
+        chrome = gc_ran([20], 1000, 100, 60, 60, 50, 40, {"young": 30, "marking": 10, "atomic": 60}, [4],
+                        [["CppGC.AtomicMark", 3]],
+                        schedule=schedule(4, 40, [("global allocation limit reached", 3.0)], [2]))
+        pages_run = {
+            "bindings/gc-tree.html": {"runs": [
+                {"machopo": gc_ran([10, 12], 1000, 200, 150, 8, 30, 10, {"young": 50, "atomic": 150}, [0.5, 2, 21],
+                                   [["Gc.Mark", 15], ["V8.GC_MC_MARK_ROOTS", 3]], lost=["V8 DefaultWorker"],
+                                   schedule=schedule(10, 20, [("global allocation limit reached", 1.0),
+                                                              ("global allocation limit reached", 1.1)], [1, 3])),
+                 "Chrome": chrome, "catches": False},
+                {"machopo": gc_ran([14], 1100, 220, 160, 10, 40, 20, {"young": 60, "atomic": 160}, [0.2, 1, 5],
+                                   [["Gc.Sweep", 4]],
+                                   schedule=schedule(12, 30, [("global allocation limit reached", 1.2),
+                                                              ("approaching global allocation limit", None)], [5])),
+                 "Chrome": chrome, "catches": False},
+            ]},
+            "dom/a.html": {"runs": [{"machopo": {"error": "no report in 3 s"}, "Chrome": chrome}]},
+            "dom/b.html": {"runs": [{"machopo": chrome, "Chrome": dict(ran("ms", 1), gc={
+                "error": "the trace has no span the runner timed"})}]},
+            "dom/c.html": {"excluded": "needs Chromium's `internals`"},
+        }
+        env = dict(common.environment("perf"), date="2026-11-10", blink_perf="8c07befe7a00", runs=2)
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(blink_perf, "RESULTS", Path(folder)):
+            lines = blink_perf.write_gc_report(pages_run, env).read_text(encoding="utf-8").splitlines()
+        # The medians over the runs; the score's over every run's values.
+        self.assertIn("| `bindings/gc-tree.html` | 12 / 20 ms | 1050 / 1000 | 210 / 100 | 20 / 10 | 155 / 60 | "
+                      "9 / 60 | 55 / 40 | 35 / 50 | 15 / 40 |", lines)
+        self.assertIn("| `bindings/gc-tree.html` | 0 / 10 | 155 / 60 | 55 / 30 | 0 / 0 | 0 / 0 |", lines)
+        # The pauses: their count's median (and of those of 1 ms or more), the
+        # distribution over every run's.
+        self.assertIn("| `bindings/gc-tree.html` | 3 / 1 | 2 / 1 | 1 / 4 | 21 / 4 | 21 / 4 |", lines)
+        self.assertIn("- `bindings/gc-tree.html`, machopo: `Gc.Mark` 15, `V8.GC_MC_MARK_ROOTS` 3", lines)
+        self.assertIn("- `bindings/gc-tree.html`, Chrome: `CppGC.AtomicMark` 3", lines)
+        # V8's schedule: the counts' medians, the reasons over every run, the
+        # medians of every start's and every full GC's.
+        self.assertIn("| `bindings/gc-tree.html` | 11 / 4 | 25 / 40 | 1.10 / 3.00 | 3 / 2 |", lines)
+        self.assertIn("- `bindings/gc-tree.html`, machopo: global allocation limit reached 3, "
+                      "approaching global allocation limit 1", lines)
+        self.assertIn("- `bindings/gc-tree.html`, Chrome: global allocation limit reached 2", lines)
+        self.assertEqual(lines[lines.index("## Events lost") + 4], "- `bindings/gc-tree.html`, machopo: V8 DefaultWorker")
+        invalid = lines.index("## Not valid")
+        self.assertEqual(lines[invalid + 2 : invalid + 4], [
+            "- `dom/a.html`: run 1: machopo: no report in 3 s",
+            "- `dom/b.html`: run 1: Chrome's trace: the trace has no span the runner timed",
+        ])
+        self.assertEqual(lines[lines.index("## Left out") + 2], "- `dom/c.html`: needs Chromium's `internals`")
+
+    def test_each_run_in_machopo_then_chrome_with_a_trace(self):
+        order = []
+
+        def browser(name):
+            def run(server, *rest, trace, categories=None):
+                order.append((name, trace.name, categories))
+                if name == "Chrome" and len(order) == 4:
+                    return {"error": "no report in 3 s"}
+                trace.write_bytes(b"")
+                return {"body": json.dumps({"unit": "ms", "values": [1], "log": [], "summary": SUMMARY})}
+            return run
+
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        with mock.patch.object(blink_perf, "RESULTS", Path(folder.name)), \
+                mock.patch.object(common, "machopo_binary", return_value=Path("machopo")), \
+                mock.patch.object(common, "run_in_machopo", side_effect=lambda s, b, u, t, log, trace: browser("machopo")(s, trace=trace)), \
+                mock.patch.object(common, "run_in_chrome", side_effect=browser("Chrome")), \
+                mock.patch.object(blink_perf, "trace_gc", side_effect=lambda path: {"gc_ns": 1, "trace": path.name}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            by_page = blink_perf.trace_pages(["dom/time.html", "other/internals.html"], FAKE, "perf", 3, 2)
+        self.assertEqual(order, [
+            ("machopo", "dom-time-machopo-1.pftrace", None),
+            ("Chrome", "dom-time-Chrome-1.pftrace", common.CHROME_GC_TRACE_CATEGORIES),
+            ("machopo", "dom-time-machopo-2.pftrace", None),
+            ("Chrome", "dom-time-Chrome-2.pftrace", common.CHROME_GC_TRACE_CATEGORIES),
+        ])
+        runs = by_page["dom/time.html"]["runs"]
+        self.assertEqual(runs[0]["machopo"]["gc"], {"gc_ns": 1, "trace": "dom-time-machopo-1.pftrace"})
+        self.assertEqual(runs[0]["Chrome"]["gc"]["trace"], "dom-time-Chrome-1.pftrace")
+        # A run that gave nothing has no GC.
+        self.assertEqual(runs[1]["Chrome"], {"error": "no report in 3 s"})
+        self.assertEqual(blink_perf.gc_problems(by_page["dom/time.html"]), ["run 2: Chrome: no report in 3 s"])
+        self.assertEqual(by_page["other/internals.html"], {"excluded": "needs Chromium's `internals`"})
 
 
 class ServerTests(unittest.TestCase):
@@ -443,6 +772,22 @@ class CommandTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(blink_perf.cmd_blink_perf(args), 0)
         self.assertEqual(compared, [["dom/time.html"]])
+
+    def test_the_gc_of_the_same_pages_not_with_another_version(self):
+        traced = []
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        path = Path(folder.name) / "pages.txt"
+        path.write_text("dom/time.html\nother/catches.html\n", encoding="utf-8")
+        for against, code, pages_traced in ((None, 0, [["dom/time.html"]]), ("HEAD~1", 1, [])):
+            traced.clear()
+            args = mock.Mock(dirs=None, pages=None, timeout=5, areas=["dom/"], against=against, runs=2, gc=True)
+            with mock.patch.object(blink_perf, "BLINK_PERF", FAKE), mock.patch.object(blink_perf, "PAGES", path), \
+                    mock.patch.object(blink_perf, "cmd_gc", lambda a, names, root: traced.append(names) or 0), \
+                    mock.patch.object(blink_perf, "cmd_against", lambda a, names, root: traced.append(names) or 0), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(blink_perf.cmd_blink_perf(args), code)
+            self.assertEqual(traced, pages_traced)
 
     def test_no_list_no_pages(self):
         self.assertEqual(self.run_command("# nothing yet\n")[:2], (1, []))
@@ -615,6 +960,45 @@ class RunTests(unittest.TestCase):
         for browser in ("machopo", "Chrome"):
             got = self.runs["other/uncaught.html"][browser]
             self.assertIn("set up failed", got.get("error", ""), (browser, got))
+
+
+class GcRunTests(unittest.TestCase):
+    """`--gc` on a fake page that makes garbage, in machopo (the dev build)
+    and Chrome for Testing."""
+
+    @classmethod
+    def setUpClass(cls):
+        if not common.chrome_path().exists():
+            raise unittest.SkipTest("no Chrome for Testing yet: `bench.py speedometer` downloads it")
+        cls.results = tempfile.TemporaryDirectory()
+        with mock.patch.object(blink_perf, "RESULTS", Path(cls.results.name)), contextlib.redirect_stdout(io.StringIO()):
+            cls.page = blink_perf.trace_pages(["gc/garbage.html"], FAKE, "dev", 60, 1)["gc/garbage.html"]
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.results.cleanup()
+
+    def test_each_browsers_gc_in_the_span_the_runner_timed(self):
+        self.assertEqual(blink_perf.gc_problems(self.page), [])
+        for browser in blink_perf.BROWSERS:
+            got = self.page["runs"][0][browser]
+            gc = got["gc"]
+            self.assertEqual(len(got["values"]), 4, browser)
+            self.assertGreater(gc["window_ns"], 0, browser)
+            # V8 scavenges the wrappers in the span; the DOM heap's is part of it.
+            self.assertGreater(gc["gc_by_kind_ns"].get("young", 0), 0, (browser, gc))
+            self.assertLessEqual(gc["dom_ns"], gc["gc_ns"], browser)
+            self.assertLessEqual(gc["gc_ns"], gc["window_ns"], browser)
+            self.assertTrue(gc["pauses_ns"], browser)
+            trace = Path(self.results.name) / "gc" / f"gc-garbage-{browser}-1.pftrace"
+            self.assertTrue(trace.is_file(), browser)
+            # V8's schedule: the scavenges counted; both traces have
+            # `v8.memory`'s counters.
+            self.assertGreater(gc["schedule"]["young_gcs"], 0, (browser, gc["schedule"]))
+            counters: dict[int, str] = {}
+            for _ in common.perfetto_track_packets(trace, counter_tracks=counters):
+                pass
+            self.assertIn(blink_perf.GLOBAL_BYTES, counters.values(), browser)
 
 
 if __name__ == "__main__":
