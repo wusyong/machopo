@@ -1,19 +1,24 @@
-//! A C guest (`tests/guests/dom.c`, built by `ci.py guests --next`) calls
+//! A C guest (`tests/guests/dom.c`, built by `ci.py guests`) calls
 //! the DOM through `machopo:dom`: each case runs in a store of its
 //! own (a trap ends a store), and says what went wrong, or traps. The
-//! stores are a `StoreSet`'s, borrowing the DOM's heap.
+//! stores are a `StoreSet`'s, borrowing the DOM's heap, and async (as a
+//! page's are): each call is a future polled here until it is done, in one
+//! lend of the store.
 
 use std::cell::RefCell;
+use std::future::Future;
 use std::path::Path;
+use std::pin::pin;
 use std::rc::Rc;
 use std::sync::OnceLock;
+use std::task::{Context, Poll, Waker};
 
 use dom_wasm::{WasmDom, WasmStore};
 use wasmtime::component::{Component, Linker, ResourceTable, TypedFunc};
 use wasmtime::{Config, Engine, Store, StoreSet};
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
-/// A store's data: WASI's (for the guest's libc) and the DOM's.
+/// A store's data: WASI 0.3's (for the guest's libc) and the DOM's.
 pub(crate) struct Data {
     wasi: WasiCtx,
     table: ResourceTable,
@@ -39,6 +44,20 @@ impl WasiView for Data {
     }
 }
 
+/// Polls `future` until it is done: nothing a test's guest waits for comes
+/// from outside its store, so each poll moves it on (one that never does
+/// fails the test rather than hang it).
+pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
+    let mut future = pin!(future);
+    let mut cx = Context::from_waker(Waker::noop());
+    for _ in 0..1_000_000 {
+        if let Poll::Ready(output) = future.as_mut().poll(&mut cx) {
+            return output;
+        }
+    }
+    panic!("the guest's call never finished");
+}
+
 /// The engine (`dom_wasm::configure`d), made once.
 pub(crate) fn engine() -> &'static Engine {
     static ENGINE: OnceLock<Engine> = OnceLock::new();
@@ -56,7 +75,7 @@ fn guest() -> &'static (Linker<Data>, Component) {
     GUEST.get_or_init(|| {
         let engine = engine();
         let mut linker = Linker::new(engine);
-        wasmtime_wasi::p2::add_to_linker_sync(&mut linker).unwrap();
+        wasmtime_wasi::p3::add_to_linker(&mut linker).unwrap();
         dom_wasm::add_to_linker(&mut linker, |data: &Data| &data.dom).unwrap();
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/guests/dom.wasm");
         let component = Component::from_file(engine, path).unwrap();
@@ -90,7 +109,7 @@ impl Guest {
         let run = set
             .borrow()
             .with(index, |mut cx| {
-                let instance = linker.instantiate(&mut cx, component).unwrap();
+                let instance = block_on(linker.instantiate_async(&mut cx, component)).unwrap();
                 instance.get_typed_func(&mut cx, "run").unwrap()
             })
             .unwrap();
@@ -107,7 +126,9 @@ impl Guest {
         let (failure,) = self
             .set
             .borrow()
-            .with(self.index, |mut cx| run.call(&mut cx, (case.to_owned(),)))??;
+            .with(self.index, |mut cx| {
+                block_on(run.call_async(&mut cx, (case.to_owned(),)))
+            })??;
         Ok(failure)
     }
 

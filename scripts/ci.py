@@ -578,8 +578,8 @@ def cmd_third_party(args: argparse.Namespace) -> int:
 # The DOM's C guests (`dom_wasm`'s tests): each `<name>.c` there is
 # built into `<name>.wasm` next to it, against `machopo:dom`'s WIT
 # (`DOM_WIT`) and the tests' own world (`wit/test.wit` there: the interface
-# imported, `run` exported), with wasi-sdk's clang into WASI 0.2 components
-# (the tests' stores are synchronous), checked in next to their source (the
+# imported, `run` exported), with wasi-sdk's clang into WASI 0.3 components
+# (as a page's guests: their stores are async), checked in next to their source (the
 # tests don't build them). At these versions only: the builds checked in
 # depend on them.
 GUESTS = ROOT / "crates" / "dom_wasm" / "tests" / "guests"
@@ -590,7 +590,7 @@ WIT_BINDGEN_VERSION = "0.62.0"
 # DWARF doesn't; no checkout paths. The linker's flags apart, for what's
 # only compiled (`-Werror` rejects them there).
 CLANG_FLAGS = [
-    "--target=wasm32-wasip2",
+    "--target=wasm32-wasip3",
     "-O2",
     "-DNDEBUG",
     "-Wall",

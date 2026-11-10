@@ -59,7 +59,7 @@ cargo test -p dom_wasm
 python3 scripts/ci.py guests          # 重編 tests/guests/ 的 guest（wasi-sdk 34.0、wit-bindgen 0.62.0）
 ```
 
-測試不編 guest，只用 repo 裡的 `.wasm`。測試的 guest 是 C，編成 WASI 0.2 的 component（測試的 Store 是同步的），world 在 `tests/guests/wit/test.wit`：import `machopo:dom` 的 interface，export `run`（照名稱跑一個 case，回傳哪裡錯了，沒錯是空字串）。
+測試不編 guest，只用 repo 裡的 `.wasm`。測試的 guest 是 C，編成 WASI 0.3 的 component（`wasm32-wasip3`）；測試的 Store 是 async 的（linker 是 wasmtime-wasi 的 p3），每次呼叫在 `StoreSet` 的一次借出裡 poll 到完成，world 在 `tests/guests/wit/test.wit`：import `machopo:dom` 的 interface，export `run`（照名稱跑一個 case，回傳哪裡錯了，沒錯是空字串）。
 
 - `tests/it/wit.rs`：`wit/machopo-dom.wit` 是表產生的那份；`for_each_member!` 的 `plain` 剛好是 `wit::is_plain` 的，跳過的是物件不是節點的那幾個 interface，WIT 裡沒有 event；WIT 的成員剛好是凍結的那些，每個都還是 plain。
 - `tests/it/guest.rs`（guest 是 `tests/guests/dom.c`，每個 case 一個新的 Store）：建樹、插入、走訪、移除，同一個節點每次同一個編號，element 的 handle 給 `Node` 的成員也行；字串兩個方向（屬性值的 ASCII 和非 ASCII、名稱、命名空間、text 的 data、`[LegacyNullToEmptyString]` 的 none 是空字串、`textContent`）；DOM 的錯照代碼（2、3、4、9），`this` 是別的 interface 的是代碼 1 的錯，不是 trap，Store 照樣能用；放掉的格子給下一個節點別的編號；guest 留著的節點經過 GC 還在、放掉之後 Store 沒拿著東西；放掉的、沒給過的、0、放兩次的 handle 和不是 UTF-8 的字串 trap；兩個 Store 各自的編號，第二個（不是 main）的在共用的表、它死掉時拿掉，第一個死掉之後新的 Store 也走共用的表；比它的 DOM 活得久的 Store 的呼叫 trap，它 drop 時不碰同一個 thread 之後的 DOM（那份 DOM 的第一個 Store 和它同號）。

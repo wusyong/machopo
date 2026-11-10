@@ -101,7 +101,7 @@ machopo 沒有的：`localStorage`（JS 那一側也沒有，TodoMVC 的 todo �
 
 ## C 的 guest 和 WASI 0.3 的工具鏈
 
-2026-11-10 查的，還沒有實際編（這台 macOS 沒有 wasi-sdk）。
+2026-11-10 查的；同一天 1a 用 wasi-sdk 34.0 把 `dom.c` 編成 `wasm32-wasip3`、測試通過（`progress.md`），`async func` 的 import 和 export 還沒有實際編過（1c 的入口是第一個）。
 
 - **版本不用換**：`scripts/ci.py` 現在釘的 wasi-sdk 34.0 和 `wit-bindgen` 0.62.0，就是 RFC 0001 編 C 的 guest 時用的（它的 `progress.md` 的開頭），那時的 target 是 `wasm32-wasip3`，入口是 `async func`、`dispatchEvent` 是 `async func` 的 import。要改的是 `ci.py guests` 的 `--target`（現在是 `wasm32-wasip2`）。
 - **`wit-bindgen` 0.62.0 的 C binding 寫得出 `async func`**（在本機對一份小的 WIT 跑 `wit-bindgen c` 看產生的 header）：
