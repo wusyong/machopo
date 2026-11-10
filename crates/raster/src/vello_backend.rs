@@ -136,7 +136,7 @@ fn coverage(from: u16, to: u16) -> Vec<(usize, Vec<f32>)> {
 /// `pixmap` made `width` by `height`, each pixel the average of those it
 /// covers (premultiplied, as they are).
 ///
-/// vello: no mipmaps. A smaller image is sampled from four pixels of the
+/// vello: no mipmaps (linebender/vello#1289). A smaller image is sampled from four pixels of the
 /// whole one, whatever it leaves out.
 fn shrunk(pixmap: &Pixmap, width: u16, height: u16) -> Pixmap {
     let columns = coverage(pixmap.width(), width);
@@ -818,7 +818,8 @@ fn filtered(cache: &VelloCache, pixmap: Pixmap, filter: &ImageFilter, to_device:
         reason = "a sigma or an offset in device pixels, far inside an f32's range"
     )]
     let primitive = match filter {
-        // vello: no color matrix filter (it panics on one); done on the
+        // vello: no color matrix filter (linebender/vello#1296; it panics
+        // on one); done on the
         // layer's pixels here.
         ImageFilter::ColorMatrix(matrix) => {
             let (width, height) = (pixmap.width(), pixmap.height());
@@ -826,8 +827,8 @@ fn filtered(cache: &VelloCache, pixmap: Pixmap, filter: &ImageFilter, to_device:
             color_matrix(&mut pixels, matrix);
             return premultiplied_pixmap(pixels, width, height);
         }
-        // vello: no filter of several primitives (it panics on one); each
-        // is run on the last one's pixels.
+        // vello: no filter of several primitives (linebender/vello#1296;
+        // it panics on one); each is run on the last one's pixels.
         ImageFilter::Chain(filters) => {
             return filters.iter().fold(pixmap, |pixmap, filter| {
                 filtered(cache, pixmap, filter, to_device)
@@ -1790,6 +1791,12 @@ impl<'a> Player<'a> {
 
     fn save_layer(&mut self, bounds: Option<RectF>, alpha: f32, blend: Option<peniko::BlendMode>) {
         self.save();
+        // Inside a clip that isn't on the context, a layer would be put
+        // back unclipped: a blend mode that clears what the layer doesn't
+        // cover (`source-in` and the like) would clear everything.
+        if self.hidden > 0 {
+            return;
+        }
         let clip = bounds.map(|bounds| rect(bounds).to_path(0.1));
         self.context
             .push_layer(clip.as_ref(), blend, Some(alpha), None, None);
@@ -1802,7 +1809,7 @@ impl<'a> Player<'a> {
     /// is drawn sharp off to the side and blurred.
     ///
     /// vello: a blurred rounded rect has one radius for its four corners,
-    /// both ways, and no hole.
+    /// both ways (linebender/vello#1245), and no hole.
     fn draw_shadow(
         &mut self,
         shape: &RRectF,

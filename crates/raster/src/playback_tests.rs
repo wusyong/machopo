@@ -2855,3 +2855,63 @@ fn with_debug_assertions_a_playback_that_panics_panics() {
         .store(1, std::sync::atomic::Ordering::Relaxed);
     crate::playback_ops(&red_tile(), &[0], &tile_params(Color::WHITE), &cache);
 }
+
+/// A red square in a layer put back by `mode`, in `clip`, on a green
+/// canvas of 10 by 10.
+fn clearing_layer_in(clip: RectF, mode: BlendMode) -> Vec<u8> {
+    let list = list_of(vec![
+        PaintOp::Save,
+        PaintOp::ClipRect {
+            rect: clip,
+            anti_alias: false,
+        },
+        PaintOp::SaveLayer {
+            bounds: None,
+            flags: LayerFlags {
+                blend_mode: mode,
+                ..LayerFlags::default()
+            },
+        },
+        PaintOp::DrawRect {
+            rect: RectF::new(0.0, 0.0, 3.0, 3.0),
+            flags: PaintFlags::fill(Color::rgb(255, 0, 0)),
+        },
+        PaintOp::Restore,
+        PaintOp::Restore,
+    ]);
+    let mut pixels = [0, 255, 0, 255].repeat(100);
+    let size = Size::new(10, 10);
+    crate::draw_into(&list, &RasterCache::default(), size, false, &mut pixels);
+    pixels
+}
+
+const CLEARING: [BlendMode; 4] = [
+    BlendMode::SrcIn,
+    BlendMode::SrcOut,
+    BlendMode::DstIn,
+    BlendMode::DstATop,
+];
+
+/// A layer put back with a blend mode that clears what it doesn't cover
+/// changes nothing when the clip it is in is wholly outside the pixels:
+/// the layer is hidden whole, not put back unclipped.
+#[test]
+fn a_clearing_layer_in_a_clip_outside_changes_nothing() {
+    for mode in CLEARING {
+        let pixels = clearing_layer_in(RectF::new(-20.0, -20.0, 10.0, 10.0), mode);
+        assert_eq!(pixels, [0, 255, 0, 255].repeat(100), "{mode:?}");
+    }
+}
+
+/// What upstream does, at the commit pinned: a layer's blend mode isn't
+/// kept to the clip the layer is in, so one that clears what the layer
+/// doesn't cover clears outside the clip too (a canvas's `source-in` after
+/// `clip()`). When this fails, Vello keeps it to the clip.
+#[test]
+fn upstream_doesnt_keep_a_clearing_layer_to_its_clip() {
+    for mode in CLEARING {
+        let pixels = clearing_layer_in(RectF::new(2.0, 2.0, 4.0, 4.0), mode);
+        // (8, 8) is outside the clip, and should be green.
+        assert_eq!(pixels[(8 * 10 + 8) * 4..][..4], [0, 0, 0, 0], "{mode:?}");
+    }
+}

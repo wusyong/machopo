@@ -23,6 +23,7 @@ machopo builds against projects checked out next to it, in
     parley/         our fork of parley (README.machopo.md)
     rusty_v8/       our fork of rusty_v8, its v8 submodule our fork of V8 (README.machopo.md)
     taffy/          our fork of taffy (README.machopo.md)
+    vello/          our fork of vello (README.machopo.md)
     wasmtime/       our fork of wasmtime, with elise as a collector (README.machopo.md)
     wpt/            web-platform-tests, upstream, never changed
     speedometer/    Speedometer 3.1, upstream
@@ -36,8 +37,8 @@ python3 scripts/ci.py third-party   # clone what's missing, move the rest to the
 It leaves a checkout with work of its own alone, and says so. Every
 `test.py` command runs it first. The forks are developed on their
 `machopo` branches; a change to one pins its new commit in
-`third_party.toml` in the same change, the fork pushed first. parley's
-and taffy's commits since their upstream (`upstream_rev`) are also
+`third_party.toml` in the same change, the fork pushed first. parley's,
+taffy's and vello's commits since their upstream (`upstream_rev`) are also
 patches in `patches/<name>/`, exported with `python3 scripts/ci.py
 patches <name>`; `ci.py third-party` checks that they give the pinned
 commit.
@@ -50,8 +51,7 @@ Windows x86-64 (release only).
 
 ## Building and running
 
-The toolchain is pinned (`rust-toolchain.toml`); rustup installs it. The
-first build also downloads Skia's prebuilt library.
+The toolchain is pinned (`rust-toolchain.toml`); rustup installs it.
 
 ```sh
 cargo run                                  # a window with the built-in demo page

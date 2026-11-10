@@ -62,6 +62,9 @@
 | canvas raster thread 不等其他 thread（`renderer` 的 `canvas_raster`），所以和 main thread、compositor 不會互相等待 | deadlock 只在特定的時序出現，測試排不出來 | 審查：thread 的迴圈只收命令，送來的 op 只引用它先收到、已經做好的快照（FIFO）；`RasterCache` 的鎖只在建 typeface、圖片時短暫拿著，等快照（`wait_ready`）在拿鎖之前；main thread 和 compositor 等它，它不等它們 | raster thread 要等別的東西時（換成 pool、跨 canvas 互等、GPU）重看 |
 | 快照填好時叫醒等的一方不會漏掉（`gfx` 的 `PendingPixels::set` 在鎖裡填、再 `notify_all`） | 漏掉只在「等的一方看到還沒填、還沒開始等」和「填」同時發生時出現；測試晚 50 ms 才填，拿掉 `notify_all` 會卡住、抓得到，拿掉鎖抓不到 | 審查 | — |
 | 讀快照的像素的新地方先 `wait_ready`（`gfx::ImageData::pending`） | 沒等時只有還沒填好才 panic，raster thread 夠快時測試照樣過 | 審查；現有的三處（compositor 上傳 texture、`raster` 建 image、renderer 讀像素）各有一個晚 50 ms 才填的測試 | 讀像素的地方多了時，考慮把等待放進型別 |
+| `gfx::Path` 的弧、圓角矩形和 transform 新加的情況（`gfx` 的 `path_shapes.rs`） | 現有的 108 個情況逐位比對 Skia 還在時存下來的結果（`path_shapes.golden`，`shapes_are_skias_bit_for_bit`）；workspace 裡沒有 Skia 了，新的情況沒有東西可以對 | 審查；現有的情況守著公式 | 新的情況對 Chromium 的 `SkPathBuilder` 手動算一次、加進那份檔案 |
+| Vello 在最後 render 進 canvas 的 bitmap 途中 panic 時，bitmap 寫到一半（`raster` 的 `draw_into`） | 沒有會在 render 途中 panic 的內容；測試裡的 panic 都在建場景時，bitmap 還沒被動到 | 審查：`guarded` 接住之後不動 bitmap，只補不透明的 alpha | 有實例時加測試；要保證原樣就得每次 flush 先備份 bitmap |
+| raster 用的 Vello 缺的功能裡，API 根本不存在的那幾項（`docs/render-gaps.md` 第一張表裡沒有「上游還缺」的測試的） | 沒有東西可以呼叫，寫不出「上游補上就失敗」的測試 | 升級 Vello 時逐列對那張表 | 上游加了 API 之後補測試，或拿掉補的那一段 |
 
 ## 只做過手動確認
 
@@ -153,6 +156,9 @@
 | script 在 about:blank 的子 frame 裡做的 `<iframe>` 有沒有自己的 frame | 沒有測試做這件事（子 frame 的文件換成 about:blank 之後再插入 iframe） | 沒有 | 補一個 `shell` 的測試：about:blank 的子 frame 裡插入 iframe，讀它的 `contentWindow` |
 | `navigation-timing/` 的 redirect 和 reload：`redirect-tao.html` 的三項、`nav2-test-attributes-values.html`、`nav2-test-redirect-server.html`、`test-navigation-type-reload.html`、`test-timing-attributes-order.html` 的幾項 | 時過時不過，換 DOM 之前和之後都是，還沒查（多半和 redirect 的時間、reload 的時機有關） | 整套 WPT 的結果 | 查出原因；一時修不好的，在 `.ini` 標成 known intermittent、附原因 |
 | 兩個 heap（V8 和 elise）一起標記的整合層：活的不被收、放掉的在不掃 stack 的完整 GC 之後收掉 | 現有的測試是固定的情境，查不穩定的測試時靠的是臨時的紀錄和直接重複跑上千次 | `bindings`、`dom_js` 的 GC 測試，CI 的 `matrix`、`fuzz`（有 DCHECK 的 V8） | 三個做法：用真的 V8 的 fuzz（隨機的 wrapper、邊、放掉、讀取，開 V8 的壓力 flag，對參考模型檢查，交給 CI 的 `fuzz`）；確認 CI 的 `matrix`、`fuzz` 涵蓋 `bindings` 的 unified heap 測試；在 V8 的 fork 加只給測試用的 flag，逼出 V8 平行的 marker 和 linear 的閉包那兩條路（這一節前面 V8 的平行 marker 那一條） |
+| raster 的 playback panic 之後，DevTools 的 Console 多一筆警告：`RenderThread` 收到 `ToMainThread::RasterFailed` 加一筆、每個 task 之後拿 canvas 的失敗（`renderer` 的 `render_thread/documents.rs` 的 `log_raster_failure`、`log_canvas_raster_failure`）；以及留成底色的 tile 在視窗裡的樣子 | 兩頭各有測試（`compositor` 送出訊息、`LogEntry::raster_failed` 的內容、`raster` 的 tile 是底色），中間這兩小段要整個瀏覽器跑起來才走得到，而沒有頁面內容能讓 raster panic（已知的那個被擋在 Vello 前面） | 審查 | 加一個只給測試用的啟動參數讓接下來幾次 raster 失敗（`RasterCache::fail_next_for_testing` 已經有），寫成 `shell` 的 `devtools_log` 測試和一份情境 |
+| 點陣 glyph 的 ink bounds：外側 bearing 的正負號，和 Apple Color Emoji 專用的位移（`raster` 的 `ink.rs` 的 `bitmap_ink`） | 測試用的 Noto Color Emoji（CBDT）外側 bearing 是 0，弄反了也沒有測試失敗；要 sbix 的字型才測得到，手上沒有可以放進 repo 的 | 審查：算法照 glifo 擺點陣圖的那一段 | 找一個授權允許的 sbix 字型（或自己做一個子集）加測試 |
+| 沒有外框線的 COLR glyph 的 ink bounds 是空的（`raster` 的 `ink.rs`） | 沒有這種字型的測試 | 審查 | 做了 COLR 的範圍之後一起加測試 |
 
 ## 沒有計數守著的優化
 
@@ -199,6 +205,7 @@
 - **DOM 在第一個 `<iframe>` 建立之前不看 iframe**（`dom` 的 `frame.rs` 的 `has_seen_iframes`，插入和移除的走訪的 `has_seen_connection_steps`、`has_seen_removal_steps` 也算可能在插入時跑的 script 元素、`<base>`）：插入、移除的走訪和改屬性只讀一個旗標。拿掉判斷結果一樣（不是 iframe 的元素什麼都不記），只是每個走到的節點多比一次名稱。要守的話數 `connection_steps`、`frame_owner_removed` 的呼叫次數。
 - **DOM 只在 commit 的 pre-paint 變了時重找指標底下的東西**（`renderer` 的 `render_thread/documents.rs` 的 `recompute_under_mouse`：比 top-level view 的 document 和 `pre_paints()`，指標還沒到過頁面上、有 move 等著時也不做）：拿掉這些判斷，每個 commit 都多一次 hit test 和 hover 的更新，事件和游標照樣對（底下的東西沒變時不發 boundary event，`SetCursor` 只在變了時送）。要守的話數 `EventHandler::recompute_under_mouse` 的次數（或它的 hit test），在不改 layout 的 frame 上斷言是 0。
 - **DOM 的 Selection API 在 editing host 已經有 focus 時不出操作**（`dom_api` 的 `selection.rs` 的 `focus_host` 先看 host 是不是已經有 focus）：拿掉時結果一樣（focusing steps 對已經有 focus 的元素什麼都不做），只是在有 focus 的 editing host 裡每次 `collapse`、`setBaseAndExtent` 這些都出操作，多兩三個操作、兩個 `Persistent` 和一次 layout。要數：`#[then_script]` 的成員交回要做的事的次數（host 有 focus 時的 `collapse` 應該是 0）；`bench.py calls` 的文件沒有 window、沒有選取，量不到。
+- **離 tile 太遠的 glyph 不交給 Vello**（`raster` 的 `vello_backend.rs` 的 `draw_glyphs`）：拿掉時畫出來一樣（Vello 自己會裁掉），文字多的頁面每個 tile 都把整段文字的外框線攤平一次。測試只看得到「該畫的有畫」（`a_glyph_that_begins_outside_is_drawn`）。要守的話在 playback 加一個測試讀得到的計數：交給 Vello 的 glyph 數。
 
 ## 等價、不用處理的 mutation
 

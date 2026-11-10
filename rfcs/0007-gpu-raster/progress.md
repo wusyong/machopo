@@ -13,8 +13,8 @@
 | 1b 原型：全部的 op 和組出來的功能；整套 reftest（第二個檢查點） | 完成：檢查點通過（不 merge） | 2026-11-10 |
 | 2a Vello 成為唯一的 playback；`raster` 的測試搬過來、補上「上游還缺」、不會 panic、tile 接縫的測試 | 完成 | 2026-11-11 |
 | 2b ink bounds 改用 skrifa、mipmap、拿掉 skia-safe | 完成 | 2026-11-11 |
-| 2c playback 裡的 panic：release 接住、留白、記 log 和 DevTools Console 的警告 | 完成，還沒審 | 2026-11-11 |
-| 2d WPT 的預期結果、列出缺的功能的文件、其他文件、整個階段的檢查 | 還沒開始 | |
+| 2c playback 裡的 panic：release 接住、留白、記 log 和 DevTools Console 的警告 | 完成 | 2026-11-11 |
+| 2d WPT 的預期結果、列出缺的功能的文件、其他文件、整個階段的檢查 | 完成，還沒審、還沒 merge | 2026-11-11 |
 | 3 改進（文字的 gamma 和對比、漸層的 dithering、fork 裡的 `ColorMatrix`；可能不需要） | 還沒開始 | |
 
 ## 驗收
@@ -39,6 +39,9 @@
 | 第 2c 步：失敗只在第一次和次數翻倍時說；panic 的訊息不管是哪一種都拿得到 | `playback_tests::failures_are_told_when_their_count_doubles`、`tests::a_panics_message_is_told_whatever_it_is` |
 | 第 2c 步：canvas 留著 panic 之前的像素、不透明的仍然不透明；canvas raster thread 接著畫後面的 | `playback_tests::a_canvas_keeps_what_it_had_before_a_panic`、`cargo test -p renderer a_drawing_that_fails_is_left_out_and_the_next_is_drawn` |
 | 第 2c 步：tile 失敗時 compositor 告訴 main thread；Console 的那一筆是 `rendering` 的 `warning`、帶網址 | `cargo test -p compositor the_main_thread_is_told_of_tiles_whose_raster_failed`、`cargo test -p renderer a_raster_failure_is_a_rendering_warning` |
+| 第 2d 步：會清掉 layer 沒蓋到的地方的 blend mode，在整個在畫布外面的 clip 裡什麼都不改 | `cargo test -p raster playback_tests::a_clearing_layer_in_a_clip_outside_changes_nothing`；`python3 scripts/test.py wpt html/canvas/element/compositing` |
+| 第 2d 步：Vello 造成的 WPT 差異都有預期結果（8 個 `fuzzy`、1 個失敗） | `python3 scripts/test.py wpt` 加上那 9 個測試的路徑（清單在下面「第 2d 步」） |
+| 第 2 步整個階段 | `cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo fmt --check`、`python3 scripts/test.py reftest`、`scenarios`、`automation` |
 
 ## 做過的檢查
 
@@ -445,3 +448,47 @@
 - `RenderThread` 裡接起來的兩小段：收到 `RasterFailed` 加一筆 entry、每個 task 之後拿 canvas 的失敗（`documents.rs` 的 `log_raster_failure`、`log_canvas_raster_failure`）。`RenderThread` 沒有單元測試的架子，要整個瀏覽器跑起來才測得到，而沒有頁面內容能讓 raster 失敗。要守的話是加一個只給測試用的啟動參數讓 raster 失敗（Chromium 有 `chrome://gpucrash` 這類的入口），再寫成 `shell` 的 `devtools_log` 測試。
 - 「tile 留成底色」在真的視窗裡的樣子：沒有情境（同樣的原因）。
 - Vello 在最後 render 的途中 panic 時 bitmap 寫到一半：沒有實例，沒有測試。
+
+### 第 2d 步：預期結果、文件、整個階段的檢查（2026-11-11，Windows 11，AMD Radeon RX 7900 XTX）
+
+**找到、修掉的 bug**（已決定的事項第 41 條）：寫回報上游的草稿時去讀 `2d.composite.clip.source-in.html`，它的 clip 整個在畫布外面。那是 `Player::shows` 藏起來的情況，藏起來時 `SaveLayer` 還是推了一層、沒被 clip，疊回去時清掉整張 canvas。是 machopo 的錯，不是 Vello 的：`save_layer` 在 clip 藏起來時不推 layer。四個 `2d.composite.clip.*` 通過。clip 落在畫布裡的情況 Vello 還是不限制，另一個測試記著（`upstream_doesnt_keep_a_clearing_layer_to_its_clip`）。
+
+**WPT 的預期結果**（`tests/wpt/metadata/`，每個 `.ini` 開頭寫原因）：
+
+| 測試 | 預期 | 量到的差異 |
+| --- | --- | --- |
+| `html/canvas/element/line-styles/2d.line.cross.html` | 失敗 | kurbo 的 stroker 在接合內側多畫一塊 |
+| `css/css-tables/tentative/paint/background-image-column.html` | `fuzzy` 1、140 | 最多差 1，140 個 pixel |
+| `css/css-tables/tentative/paint/background-image-column-collapsed.html` | `fuzzy` 1、588 | 最多差 1，588 個 |
+| `css/css-tables/tentative/paint/background-image-row-collapsed.html` | `fuzzy` 1、236 | 最多差 1，236 個 |
+| `css/css-backgrounds/box-shadow-041.html` | `fuzzy` 1、304 | 最多差 1，304 個 |
+| `css/css-backgrounds/box-shadow-042.html` | `fuzzy` 1、358 | 最多差 1，358 個 |
+| `css/css-masking/clip-path/animations/clip-path-animation-custom-timing-function.html` | `fuzzy` 3、628 | 差 2 的 624 個、差 3 的 4 個 |
+| `css/css-contain/contain-paint-clip-006.html` | `fuzzy` 1、4 | 最多差 1，4 個 |
+| `css/css-scroll-anchoring/nested-overflow-subtree-layout.html` | `fuzzy` 1、1 | 差 1，1 個 |
+
+- 這 9 個加上四個 `2d.composite.clip.*` 一起跑：18 個 check 都和預期一樣。`html/canvas/element/compositing` 整個目錄（209 個 check）也是。
+- **沒有重跑整套 WPT**：清單是第 1b 步跑整套得到的（那之後 2a、2b 各跑過相關的目錄）。2a 到 2d 之間如果有別的測試變了，要等 CI 才看得到。
+
+**文件**：
+
+- 新的 `docs/render-gaps.md`：補在 playback 裡的 13 項、沒有補的 9 項、只在速度上看得出來的 3 項。有上游 issue 的 4 處 `vello:` 註解補上編號（`#1289`、`#1296` 兩處、`#1245`）。
+- `docs/architecture.md`（pipeline 的表、`raster` 那一列、「Crate 選型」的 vello_cpu、skia-safe、tiny-skia、Vello，「要注意的地方」）、`docs/limitations.md`（raster 的差異、panic 時的行為、字型快取不會變小、合成粗體）、`docs/test-gaps.md`（7 項）、`docs/README.md`、根目錄的 `README.md`、`CLAUDE.md`（fork 的清單、加新的繪圖功能前先看哪一份）。
+- `upstream-reports.md`（這個資料夾）：四份要回報上游的草稿，**都沒有送出**，檔案開頭列了送之前要確認的事。
+
+**沒有把握、留著沒改的兩處文件**（都要在 macOS 上看過才知道）：
+
+- `docs/limitations.md` 的「Compositor、layer 和 input」寫著某幾個 reftest 只在 macOS 上是預期的失敗，原因是 Skia 在 macOS 上的捨入。換成 Vello 之後這個平台差異可能沒了（那幾個測試在 macOS 上變成 unexpected pass），也可能還在。
+- `docs/testing.md` 和 `CLAUDE.md` 說 macOS 上 `target/debug/deps` 堆大了之後會畫文字的測試變慢：原因是 Skia 的字型管理器。`docs/testing.md` 改成寫明「量到的時候還用 Skia，換了之後沒有重量」；`CLAUDE.md` 沒動。
+
+**整個階段的檢查**（2a 到 2d）：
+
+- `cargo test --workspace --no-fail-fast`：3778 個通過，0 個失敗。
+- `cargo clippy --workspace --all-targets -- -D warnings`、`cargo fmt --check`：過。
+- `sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs：過。
+- `python3 scripts/test.py reftest`：195 個都和預期一樣。
+- `python3 scripts/test.py scenarios`：78 次執行，0 個失敗。
+- `python3 scripts/test.py automation`：61 份情境和 `pipe --window` 都過；看了 `target/automation-results/` 的 `canvas/paths.png` 和 `backgrounds/gradient.png`（圓、圓角矩形、虛線、裁成圓的星形、漸層、陰影、文字都對）。
+- 沒有跑的：整套 `wpt`、`wdspec`、`matrix`、`fuzz`（CI 的）；Speedometer。
+
+**Mutation test**（`mutants-2d.toml`，1 條，抓到）：clip 藏起來時照樣推 layer → `a_clearing_layer_in_a_clip_outside_changes_nothing` 失敗。跑完檔案還原了。

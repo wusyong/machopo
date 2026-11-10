@@ -13,6 +13,7 @@
 - `rfcs/pre-rfcs/`：MVP 的規劃、各階段最後的設計和理由（包括試過、改掉的做法），2026-10-04 起凍結。找某個設計為什麼這樣做時讀它，不要再改它。
 - `docs/README.md`：每份文件放什麼、怎麼更新。**改文件前一定要讀**。
 - 動到 `bindings` 的 GC、`unsafe`、執行 script 的入口：先讀 `crates/bindings/soundness.md`。動到 DOM 的 GC（elise，`../third_party/elise`）：先讀 `../third_party/elise/docs/soundness.md`、`../third_party/elise/docs/api.md` 和 `../third_party/elise/docs/contributing.md`。
+- 加新的繪圖功能（新的 `PaintOp`、filter、shader、blend mode），或動 `raster` 的 playback：先看 `docs/render-gaps.md`（raster 用的 Vello 缺什麼、現在補在哪）。
 - 加新的 CSS property、pseudo-class、會影響 style 的 DOM 狀態、box 畫的新輸入，或改 hit test、parse 的 fast path：先看 `docs/architecture.md` 的「快取和增量：加新東西時要跟著改的地方」，漏改的多半是畫面不更新，不是 crash。
 - 各 crate 的 `README.md`：API、使用規則、怎麼新增東西（例如 `crates/dom_api/README.md` 的「怎麼新增一個 API」）。
 
@@ -83,9 +84,9 @@
 
 ## 第三方的 fork
 
-- `../third_party/rusty_v8`、`../third_party/parley`、`../third_party/taffy` 和 `../third_party/wasmtime` 是我們的 fork，用 `machopo` 分支；`../third_party/rusty_v8_artifacts` 是編好的 V8，大家共用。
-- **parley 和 taffy 緊跟上游的 main，上游優先**：fork 上每個 commit 只做一件事、帶 fork 自己的測試，寫成可以直接送上游的樣子，在 `README.machopo.md` 的「Local modifications」標明上游的狀態（只在 fork 的寫理由）。`README.machopo.md` 是最後一個、只改它的 commit。每個 commit 也是 machopo 的 `patches/<名稱>/` 底下的一個 patch：fork 每多一個 commit，在同一次改動裡更新 `third_party.toml` 的 `rev`（rebase 到上游的新 commit 時連同 `upstream_rev`），再用 `python3 scripts/ci.py patches <名稱>` 匯出；`ci.py third-party` 檢查 patch 套在 `upstream_rev` 上和 `rev` 一樣。rebase 之前在舊的頂端打 tag（`machopo-<日期>`），machopo 舊的 commit 釘的 rev 才拿得到。
-- **改 parley 或 taffy 的 fork 時，跑 fork 的測試**（它的 `README.machopo.md` 的「Tests」）和 machopo 相關的測試。taffy 沒有釘 toolchain，用 machopo 的編；要送上游的修改守住 taffy 的 `rust-version`，送出前用那個版本確認。
+- `../third_party/rusty_v8`、`../third_party/parley`、`../third_party/taffy`、`../third_party/vello` 和 `../third_party/wasmtime` 是我們的 fork，用 `machopo` 分支；`../third_party/rusty_v8_artifacts` 是編好的 V8，大家共用。
+- **parley、taffy 和 vello 緊跟上游的 main，上游優先**：fork 上每個 commit 只做一件事、帶 fork 自己的測試，寫成可以直接送上游的樣子，在 `README.machopo.md` 的「Local modifications」標明上游的狀態（只在 fork 的寫理由）。`README.machopo.md` 是最後一個、只改它的 commit。每個 commit 也是 machopo 的 `patches/<名稱>/` 底下的一個 patch：fork 每多一個 commit，在同一次改動裡更新 `third_party.toml` 的 `rev`（rebase 到上游的新 commit 時連同 `upstream_rev`），再用 `python3 scripts/ci.py patches <名稱>` 匯出；`ci.py third-party` 檢查 patch 套在 `upstream_rev` 上和 `rev` 一樣。rebase 之前在舊的頂端打 tag（`machopo-<日期>`），machopo 舊的 commit 釘的 rev 才拿得到。
+- **改 parley、taffy 或 vello 的 fork 時，跑 fork 的測試**（它的 `README.machopo.md` 的「Tests」）和 machopo 相關的測試。升級 vello 時 `raster` 的 `upstream_*` 測試失敗，表示上游補上了缺的功能：照 `docs/render-gaps.md` 拿掉 playback 裡補的那一段。taffy 沒有釘 toolchain，用 machopo 的編；要送上游的修改守住 taffy 的 `rust-version`，送出前用那個版本確認。
 - `../third_party/elise` 是 DOM 的 GC，machopo 自己的專案（MIT OR Apache-2.0，wasmtime 的 fork 也用它），不是 fork，用 `main`：改 GC 在那裡改，照 `../third_party/elise/docs/contributing.md`，跑它的 `cargo test --workspace`、`scripts/sanity.py` 和改到的部分的 `scripts/test.py`（models、fuzz、verus、miri），GC 自己的測試的缺口記在它的 `docs/testing.md`。**它每多一個 commit 也在同一次改動裡更新 `third_party.toml`**（下面的規則），只釘推到它的 `main` 上的 commit（它的 CI 測過的）。
 - **改 wasmtime 的 fork，或改 elise 的 `raw`（fork 接 elise 的那一層）時，跑 fork 的測試**（它的 `README.machopo.md` 的「Tests」：`cargo test --features gc-elise --test all elise::`、`python3 machopo/elise_tests.py` 和 clippy）：machopo 的 `dom_wasm` 只用到其中一部分（借 DOM 的 heap 的 Store），上游的 GC 測試、spec test 和 fuzz 用 elise 跑的結果只有 fork 的測試看得到，machopo 的 CI 不跑它們。
 - `../third_party/wpt` 是上游的 WPT，不是 fork，測試直接讀它：**不要改它**。要跑哪些測試、預期結果、怎麼換 commit，都在 `tests/wpt/`（見它的 README）。

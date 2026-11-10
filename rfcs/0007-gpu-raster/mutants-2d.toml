@@ -1,0 +1,14 @@
+# Step 2d: a layer inside a clip that isn't on the context isn't pushed.
+#
+#     python3 scripts/test.py mutate rfcs/0007-gpu-raster/mutants-2d.toml
+
+test = ["cargo", "test", "-q", "-p", "raster"]
+timeout = 900
+
+[[mutant]]
+name = "a layer in a hidden clip is pushed"
+file = "crates/raster/src/vello_backend.rs"
+from = '''        // cover (`source-in` and the like) would clear everything.
+        if self.hidden > 0 {'''
+to = '''        // cover (`source-in` and the like) would clear everything.
+        if self.hidden > 0 && bounds.is_some() {'''

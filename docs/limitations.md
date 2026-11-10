@@ -11,7 +11,7 @@
 - WPT 的測試（`test.py wpt`、`reftest`、`wdspec`）經過上游的 wptrunner 跑，只在 Windows 11 上跑過（2026-10-09 到 10）；改用它之前，上游的 wptserve 加上 machopo 自己的 runner 在 Linux 和 Windows 11 上驗證過。macOS 上還沒跑過：platform verifier 接不接受 WPT 的根憑證、預期結果的平台條件、process 數的預設都還沒確認，下次在 macOS 上跑時確認；出了問題再開 branch 修（只影響跑 WPT，不影響瀏覽器本身）。
 - `python3 scripts/bench.py speedometer` 控制 Chrome 的 pipe 只在 Windows 11 上跑過（`--remote-debugging-io-pipes`，2026-10-18）：Linux 和 macOS 上 Chrome 讀寫 fd 3、4，工具經過 `sh` 的 `exec` 把 pipe 換到那兩個號碼，還沒在那兩個平台上跑過。在那裡壞了時，Chrome 那一側的盤點、量測和 `--trace` 都會因為連不上 Chrome 而失敗。
 - 沒有 ICU data，`Intl` 不能用。
-- workspace 不能把 `panic` 設成 `abort`：圖片的 decoder（`image` crate）自己說碰到惡意的檔案可能 panic，`raster` 用 `catch_unwind` 把 panic 當成解不開的圖片；改成 abort 的話，一張壞圖會讓整個 process 結束。`catch_unwind` 接不住無窮迴圈和 stack overflow。
+- workspace 不能把 `panic` 設成 `abort`：圖片的 decoder（`image` crate）自己說碰到惡意的檔案可能 panic，`raster` 用 `catch_unwind` 把 panic 當成解不開的圖片；改成 abort 的話，一張壞圖會讓整個 process 結束。`catch_unwind` 接不住無窮迴圈和 stack overflow。 raster 接住 playback 的 panic（「Paint 和 raster」）也靠 unwind。
 - Windows 上連結時有 `LNK4098` 警告：prebuilt 的 `rusty_v8.lib` 用靜態 CRT（`/MT`，`libcmt`），Rust 用動態 CRT。這是 prebuilt V8 本身的設定，把我們的 C++ glue 改成靜態 CRT 也消不掉。
 - Windows 上 timer 的精度是系統計時器的一個 tick（約 15.6 ms）：renderer 的 event loop 用 `recv_timeout` 等下一個 timer，所以 1 ms 的 `setTimeout` 要等到 16 ms 左右才執行。WPT 的 `timer-nesting-not-inherited-in-microtask.html` 因此只在 Windows 上不跑（它在 `tests/wpt/metadata/` 的 `.ini` 是 `if os == "win"` 的 `disabled`，2026-10-07）。之後照 Chromium 的做法（`base::Time::ActivateHighResolutionTimer`）：有短的 timer 等著時用 `timeBeginPeriod(1)` 提高精度；要呼叫 Win32，`unsafe` 放在哪裡要先決定。
 - VS Code 的 rust-analyzer 會鎖住 proc macro（`gc_macros` 這類）的 dll，`cargo build` 可能出現 `LNK1104`。把被鎖住的 dll 改名後重新 build 即可。
@@ -180,7 +180,15 @@
 - 裝飾線照每段文字自己的字型放：一個元素的底線經過字型大小不同的子元素時跟著上下、粗細也跟著變（Chrome 照產生裝飾的元素（decorating box）的字型和位置畫，整條是直的，Blink 的 `InlinePaintContext`；WPT 的 `text-decoration-subelements-*`、`-decorating-box-001`、`-propagation-display-contents*`）。同一行上好幾個元素的裝飾線的陰影，各段文字各自畫（`text-shadow/decorations-multiple-zorder.html`）。沒有 `text-decoration-skip-ink`（Chrome 預設的 `auto` 讓底線在字的下降部斷開，machopo 一律畫滿）、`text-decoration-inset`、`text-decoration-skip-spaces`、`text-decoration-line` 的 `spelling-error` 和 `grammar-error`、`text-emphasis`、`-webkit-text-stroke`。`text-underline-position` 的 `under` 用字型的 ascent 和 descent 換算成 em box 的下緣（Blink 用字型的 em box 的度量）。
 - 選取：畫的是 script 選的（使用者還不能用滑鼠選）。顏色沒有 `::selection` 規則時，Linux 和 macOS 都用 Chrome 152 在 Linux 上的（`rgba(0, 65, 198, 0.8)` 和白色，page 沒有 focus 時灰底）：macOS 的 Chrome 照系統的強調色，Windows 的 machopo 讀系統的 `Highlight`，沒有 focus 時的灰色三個平台都一樣（Windows 的 Chrome 照系統的）。SVG 的文字不畫成被選到；選到的圖片不疊上選取的顏色（Chrome 疊上半透明的選取底色）；highlight 的 `fill`、`stroke`、`stroke-width` 不用。字照 glyph 的位置裁開，連字跨過選取的邊界時從中間切開（Chrome 一樣）。
 - 游標：畫在有 focus 的文字欄位（text、search、url、tel、password 和 `<textarea>`；email、number、日期時間那幾種打不進字，也沒有游標，Chrome 有）和 editing host 裡收合的選取上，只在 page 有 focus、它的 frame 是 focused frame 時。文字欄位顯示 placeholder 時不畫游標（placeholder 佔掉 inner editor 的那一行，游標照高度是 0 的 inner editor 畫，被欄位裁掉；Chrome 畫在 placeholder 的前面，用欄位的顏色）。閃爍的間隔 Windows 讀系統的（`CursorBlinkRate`），Linux 和 macOS 一律 500 ms：Chrome 在 Linux 上讀 GTK 的 `gtk-cursor-blink-time`（預設 1200 ms 一個週期，所以亮暗各 600 ms，關掉時不閃），macOS 讀 NSUserDefaults 的 `NSTextInsertionPointBlinkPeriodOn`、`Off` 和輔助使用的「不閃爍的插入點」，之後照它們讀。游標的位置照 DOM 的位置，Chrome 會先調整到看得見、能放游標的位置（canonical position）：例如落在 `visibility: hidden` 的文字裡的游標，Chrome 畫在它前面，machopo 畫在那個 offset。空的 contenteditable 沒有一行的高度（Blink 的 `HasLineIfEmpty`，machopo 只給文字欄位的 inner editor），高度是 0，游標照樣畫在它開頭、一行的位置。沒有 `caret-shape`、`caret-animation` 和 `caret` shorthand（Chrome 152 有前兩個）。
-- 合成粗體：測試字型的 Lato 只放了 Medium，`bold` 由 Skia 的 embolden 合成，和真正的 Bold 字重不同。合成的條件是 `font-synthesis-weight` 是 `auto`、要求的字重到 600、字型不到 600、沒有 `wght` 軸（`layout` 的 `needs_synthetic_bold`），和 Blink 的 fallback 字型、Firefox 一樣；Blink 在 Linux 和 Windows 上的一般路徑（fontique 也是）要求的字重要比字型重 200 以上，所以在那裡 Medium 字型的 `bold` 不加粗，machopo 會加粗；Blink 在 macOS 上從 501 起就合成，machopo 的 501 到 599 不合成。
+- 合成粗體：測試字型的 Lato 只放了 Medium，`bold` 由 raster 合成（把外框線往外推，glifo 的做法），和真正的 Bold 字重不同、也和 Skia 合成的粗細略有不同。合成的條件是 `font-synthesis-weight` 是 `auto`、要求的字重到 600、字型不到 600、沒有 `wght` 軸（`layout` 的 `needs_synthetic_bold`），和 Blink 的 fallback 字型、Firefox 一樣；Blink 在 Linux 和 Windows 上的一般路徑（fontique 也是）要求的字重要比字型重 200 以上，所以在那裡 Medium 字型的 `bold` 不加粗，machopo 會加粗；Blink 在 macOS 上從 501 起就合成，machopo 的 501 到 599 不合成。
+- raster 用 vello_cpu，它缺的和 Skia 不同的地方每一項列在 `docs/render-gaps.md`；看得到、讀得到的：
+  - 文字比 Chrome 細、淡（沒有 gamma 和對比的調整），深色背景上的淺色字最明顯；大面積、顏色相近的漸層可能有色帶（沒有 dithering）。
+  - canvas 的 `source-in`、`source-out`、`destination-in`、`destination-atop` 配落在畫布裡的 `clip()` 時，clip 外面的像素也被清掉。
+  - 線寬遠大於線段長度的 bevel 接合，內側多畫一塊。
+  - `getImageData` 讀到的半透明混色和漸層的顏色可能和 Chrome 差 1。
+  - 邊長超過 65,535 的 canvas 畫不出東西。
+  - `measureText` 的 `actualBoundingBox*` 對沒有外框線的彩色 glyph（只有 COLR 的 paint）是 0。
+- raster 的 playback panic 時（沒開 debug assertions 的 build），那個 tile 留成底色，要等它的內容下次失效才重畫；canvas 那一次 flush 剩下的不畫，已經寫回 bitmap 的留著（`putImageData` 之前的，或最後寫到一半的）。DevTools 的 Console 有警告。Rust 預設的 panic hook 每次都印一行到 stderr，不受「第一次和次數翻倍才記」的限制：每次重畫都 panic 的 tile 會一直印。
 - paint 沒有 cull rect：每一步把每個變了的 fragment 都轉成 `PaintOp`，文字的 run 每個 glyph 都放一次，畫面外的也一樣（Blink 的 `CullRect` 只畫和可見範圍相交的）。很長的文字（Speedometer 的 Editor-TipTap，23 萬個 glyph）每一步在 paint 上約花 2 ms（release），大部分是畫面外的。
 - 比 1 個 device pixel 還薄的背景（例如 `height: 0.25px`）對齊之後可能變成 0，整個不見；Chrome 至少畫 1 個 device pixel。
 - border 寬度只在 paint 時取整到 device pixel，layout 照舊用沒取整的寬度（Blink 在 style 時就取整）：border 和裡面的東西之間可能差不到 1 個 device px（layout 不知道 device scale factor）。
@@ -238,14 +246,14 @@
 - 網頁 frame 的 `LocalSurfaceId` 不比對：Viz 用那個 sink 最新的 frame，視窗大小改變的那一下會先顯示舊大小的 frame。
 - `about:demo` 的 GPU 那份比活著的 texture 多約 95 MB，跟著動畫出現（每個 frame 上傳一個 tile、畫一個 frame），不會繼續長；不是 texture 建立和銷毀造成的（重用 texture 試過，省不下來），原因還沒查到。
 - 不做 cc 的 `ResourcePool`：每個重新 raster 的 tile 都建立新的 texture。
-- raster 為可變字型建的 Skia typeface（照字型和軸的值，`RasterCache` 的 instance）跟著 compositor，不會變小：每種字型、每組軸的值一個，macOS 的系統字型有 `opsz`，每個字級各一個（Blink 的 `FontCache` 會清掉不用的 `FontPlatformData`）。
+- raster 的字型快取（`RasterCache`，每個畫過的字型和 face 一筆，握著字型檔的 bytes）跟著 compositor，不會變小：頁面換掉的 web font 也留著（Blink 的 `FontCache` 會清掉不用的 `FontPlatformData`）。
 - GPU device 遺失之後，新的 device 做不出來時（重試 3 次）直接結束程式：視窗沒有 software 的輸出可以退回（Chromium 退到 software compositing）。
 - Viz 不用 texture 上限小於 8192 的 adapter（renderer 把不超過它的 canvas 當成 layer）：這樣的 GPU 建不出 device、程式結束，不會改用下一個 adapter（例如 CPU 的）。目前的桌機 GPU 和 lavapipe、WARP 都到 16384 以上。
 - 視窗的實體像素超過 GPU 的 texture 上限（Apple Silicon 每邊 16384；使用者把視窗拉過好幾個高 DPI 的螢幕時）時 surface 的設定失敗、整個程式結束：Viz 的輸出是一張 texture，沒有夾到上限、也沒有分塊畫（Chrome 的視窗一樣受 GPU 的限制）。automation 設的大小夾到 8192（見「WebDriver 和自動化」）。
 - Viz 收到 renderer 送來的不合法的 frame（resource 的像素和大小對不上、超過 texture 的上限）時丟掉它、照舊顯示上一個，記一筆錯誤；Chromium 結束那個 renderer 的 process，machopo 的 renderer 是同一個 process 裡的 thread，停不乾淨，要等拆 process。
 - 只會在原地重建 device，不會重啟 process；GPU 驅動程式真的 crash 會讓整個程式結束，要等拆 process。
 - device 遺失到 compositor 送來新的 frame 之間，舊 device 上的 tile 不畫，露出背景色，可能閃一兩個 frame。
-- `machopo` 的 Rust 那一側用 mimalloc，空出來的記憶體預設留 10 ms（arena 的再乘 10）才還給系統：Speedometer 的記憶體峰值比平台的 allocator 多約 13%（macOS，phys footprint；TodoMVC-jQuery 多約 40%）。`MIMALLOC_PURGE_DELAY=0` 立刻歸還，峰值只多約 6%，時間慢約 2.7%。Linux 和 Windows 上還沒量。C++ 那一側（V8、Skia）照舊用平台的 `malloc`。
+- `machopo` 的 Rust 那一側用 mimalloc，空出來的記憶體預設留 10 ms（arena 的再乘 10）才還給系統：Speedometer 的記憶體峰值比平台的 allocator 多約 13%（macOS，phys footprint；TodoMVC-jQuery 多約 40%）。`MIMALLOC_PURGE_DELAY=0` 立刻歸還，峰值只多約 6%，時間慢約 2.7%。Linux 和 Windows 上還沒量。C++ 那一側（V8）照舊用平台的 `malloc`。
 - mimalloc 延後的歸還落在當時那一次配置或釋放裡：剛釋放大量記憶體之後，一次普通的配置可能在 kernel 裡花 1.5 到 4.4 ms（以前 `gc_bench` 重播讀完幾 GB 的錄製之後，GC 的 scavenge 停頓因此偶爾有一次這麼長；`MIMALLOC_PURGE_DELAY=-1` 時沒有）。總成本不變，只是落在誰身上；還沒改成在 idle 時歸還。
 
 ## Script

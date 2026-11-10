@@ -3,7 +3,7 @@
 //! `CanvasRenderingContext2DState`), the paint ops recorded and not drawn
 //! yet, and its bitmap ([`CanvasData`]); a pattern's and a gradient's data,
 //! `TextMetrics`' numbers, and the attribute parsing of a canvas's size.
-//! HTML's algorithms are each DOM's API's, drawing the ops (with Skia) the
+//! HTML's algorithms are each DOM's API's, drawing the ops (`raster`) the
 //! renderer's.
 
 #![cfg_attr(

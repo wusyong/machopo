@@ -1,5 +1,5 @@
 //! `<canvas>`'s 2D context in a whole browser: what its members record is
-//! drawn (the `canvas` crate's steps, played by Skia), before each
+//! drawn (the `canvas` crate's steps, played by `raster`), before each
 //! frame; a draw alone asks for the frame that shows it.
 
 use std::collections::HashMap;
