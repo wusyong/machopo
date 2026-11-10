@@ -7,16 +7,16 @@ Where the fork starts, what each of its commits does and whether upstream
 has it, how to test and update it. Always the last commit, and the only one
 that changes this file, so that the others can go upstream as they are.
 ---
- README.machopo.md | 83 +++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 83 insertions(+)
+ README.machopo.md | 85 +++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 85 insertions(+)
  create mode 100644 README.machopo.md
 
 diff --git a/README.machopo.md b/README.machopo.md
 new file mode 100644
-index 0000000000000000000000000000000000000000..ee29d4111596ddfa4b3c0d274262d11c0055be62
+index 0000000000000000000000000000000000000000..7d85b6a04b04f62a8b866614485741784d515998
 --- /dev/null
 +++ b/README.machopo.md
-@@ -0,0 +1,83 @@
+@@ -0,0 +1,85 @@
 +# parley (machopo's fork)
 +
 +| | |
@@ -56,6 +56,8 @@ index 0000000000000000000000000000000000000000..ee29d4111596ddfa4b3c0d274262d11c
 +| Share a layout's shaped text | `Layout::shaped_text`: a layout's `ShapedText` is an `Arc`, which what the embedder keeps of a layout holds, so it outlives the layout and is never changed under it (rebuilding takes a new one where the old is held; what changes it copies it first where it is held). `GlyphRun::span` (`GlyphSpan`): where a glyph run's glyphs are in the shaped text, with `GlyphSpan::glyphs`, `clusters` (`SpanCluster`) and `text_range` walking them from the shaped text alone. machopo keeps a line's runs as spans into the paragraph's shaped text instead of copying their glyphs (Blink's `ShapeResultView`). A layout with an inline object of a width copies the shaped text when it is built: the object's advance is the layout's own. Tests: `test_shaped_text_sharing`. | Not proposed yet |
 +| Keep shapings: of layouts alike, and of words | `LayoutContext` keeps what shaping a layout's text gave (`shape/cache.rs`, `ShapeCache`), for the next layout of the same text at the same scale, styled the same in what changes shaping, with its out-of-flow boxes and edges at the same places; and the shaper shapes a segment a word at a time and keeps what shaping a word gave (`parley_engine`'s `shape/words.rs`), only where shaping a word on its own gives what shaping the segment whole does (`shape/space.rs`, `space_reach`: what a font's rules do across a space; left to right, not Arabic or Syriac, no features that are off unless asked for). A word that starts with a default ignorable is shaped with the space before it: where a font positions no marks, harfrust does, and takes the default ignorables after a base with it. An inline object is between words and is not kept. A browser shapes the same text again as content is built again, and text is mostly the same words again; Blink keeps runs of up to 30 characters (`NGShapeCache`), Gecko words (`gfxShapedWord`). In a debug build every text that took a shaping is also shaped whole and compared (`same_shaping`). `LayoutContext::clear_shapings` forgets them, for fonts added. fontique's `SourceCache` keeps a font it prunes weakly, so that loading it again while a kept word holds it gives the same blob. Tests: `test_shape_cache`, `test_shape_words`, `test_shape_words_space` (fonts made with a rule or two each, with `write-fonts`, a dev-dependency) and fontique's `source_cache`. | Fork only for now: a cache with a browser's limits and counters |
 +| Look line breaks up in a table | `analyze_text` finds the line break opportunities of a text under the default rules in a table for characters up to U+017F and from U+2000 to U+203F (`parley_engine`'s `line_table.rs`), as UAX #14's pair table does. The table is what ICU4X's line segmenter gives, generated from it by a test that fails when the table is out of date and prints it anew; a word with a character outside the table (an inline object's among them), or a pair that changes with the characters around it, is given to ICU4X with the words on either side. A debug build gives every text looked up to ICU4X whole too and compares. Blink's `LazyLineBreakIterator` looks pairs up in a table of its own. `AnalysisOptions::skip_word_boundaries` (`LayoutContext::set_word_boundaries`, on by default) leaves word boundaries out, for text no one moves through by words with parley's clusters. Tests: `line_table`'s own and `test_line_break_table`. | Not proposed yet |
++| Take font families as ids already looked up | `StyleProperty::FontFamilyIds`: the families of a `font-family` value as `fontique::FamilyId`s, which the embedder has looked up in the collection (generic families too). It sets what `StyleProperty::FontFamily` does without looking a name up: resolving a list of names looks each up for every span that sets it, and machopo keeps what a `font-family` value resolved to. `TextStyle` has no field for it (adding one breaks every literal of it): a tree builder's root style takes it with `push_default`, the next commit. Tests: `test_family_ids`. | Not proposed yet |
++| Set a property of a tree builder's root style | `TreeBuilder::push_default`: applies a property to the root style, as `RangedBuilder::push_default` does, for one the root `TextStyle` can't hold (the family ids). A span around all the text isn't the same: the root style is also that of a layout with no text and of a line with nothing on it, whose height is its font's. It panics once anything is pushed, since the spans and runs pushed would keep the style the root had. Tests: `test_tree_default`. | Not proposed yet |
 +| Add README.machopo.md | This file. Always the last commit, and the only one that changes it, so that the others can go upstream as they are. | Fork only |
 +
 +Changes are marked with `machopo:` comments. Anything sent upstream is

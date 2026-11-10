@@ -1,0 +1,242 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wu Yuwei <yuweiwu@pm.me>
+Date: Tue, 10 Nov 2026 13:40:31 +0900
+Subject: [PATCH] Take font families as ids already looked up
+
+`StyleProperty::FontFamilyIds`: the families of a `font-family` value as
+`fontique::FamilyId`s, in order of preference. It sets what
+`StyleProperty::FontFamily` does, and either replaces the other over a
+range or in a span.
+
+Resolving `FontFamily` looks every name of the list up in the collection
+(a lowercased key and a hash lookup each), for every span that sets it. A
+caller that styles many spans with the same few lists, as a CSS engine
+does, can look a list up once, keep the ids and give them here: generic
+families are ids too (`Collection::generic_families`). The ids have to be
+of the collection the layout is built with; one that isn't there selects
+no font, as a name that isn't there.
+
+Tests: ids pick the fonts their names do, in the list's order; ids and
+names replace each other over a range and in a tree builder's span; a
+root with no families takes them from a span around its text; no ids are
+an empty list.
+---
+ parley/src/resolve/mod.rs           |   2 +
+ parley/src/style/mod.rs             |   6 +
+ parley/src/tests/mod.rs             |   1 +
+ parley/src/tests/test_family_ids.rs | 164 ++++++++++++++++++++++++++++
+ 4 files changed, 173 insertions(+)
+ create mode 100644 parley/src/tests/test_family_ids.rs
+
+diff --git a/parley/src/resolve/mod.rs b/parley/src/resolve/mod.rs
+index 604cca3bbbab3a0961c72429f68530c585c7c248..da166353919f2ef753ce3c05ffff71bd07171a56 100644
+--- a/parley/src/resolve/mod.rs
++++ b/parley/src/resolve/mod.rs
+@@ -142,6 +142,8 @@ impl ResolveContext {
+         use ResolvedProperty::*;
+         match property {
+             StyleProperty::FontFamily(value) => FontFamily(self.resolve_font_family(fcx, value)),
++            // machopo: families already looked up.
++            StyleProperty::FontFamilyIds(ids) => FontFamily(self.families.insert(ids)),
+             StyleProperty::FontSize(value) => FontSize(*value * scale),
+             StyleProperty::FontWidth(value) => FontWidth(*value),
+             StyleProperty::FontStyle(value) => FontStyle(*value),
+diff --git a/parley/src/style/mod.rs b/parley/src/style/mod.rs
+index e58adc32a2c5bc4490f5787bdef284a8f6ac6cf5..e7557864e02bbf141913adda5ca3ba368aac3de0 100644
+--- a/parley/src/style/mod.rs
++++ b/parley/src/style/mod.rs
+@@ -250,6 +250,12 @@ impl VerticalAlign {
+ pub enum StyleProperty<'a, B: Brush> {
+     /// CSS `font-family` property value.
+     FontFamily(FontFamily<'a>),
++    /// machopo: the font families of a `font-family` value the caller has already looked up
++    /// in the font collection, in order of preference. It sets the same thing
++    /// [`FontFamily`](Self::FontFamily) does without looking any name up, for callers that
++    /// keep what a value resolved to; the ids have to be of the collection the layout is
++    /// built with.
++    FontFamilyIds(Cow<'a, [fontique::FamilyId]>),
+     /// Font size.
+     FontSize(f32),
+     /// Font width.
+diff --git a/parley/src/tests/mod.rs b/parley/src/tests/mod.rs
+index 154a9a5acf83a702f4accdae8a143716a6406096..3c7e7d4f851f190db13fdbf20fb6df7c6d56a470 100644
+--- a/parley/src/tests/mod.rs
++++ b/parley/src/tests/mod.rs
+@@ -4,6 +4,7 @@
+ mod test_analysis;
+ mod test_builders;
+ mod test_edges;
++mod test_family_ids;
+ mod test_final_break;
+ mod test_font_without_em;
+ mod test_line_break_table;
+diff --git a/parley/src/tests/test_family_ids.rs b/parley/src/tests/test_family_ids.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..bfdbb9f1ff0be693a98d54307947c19166b246d1
+--- /dev/null
++++ b/parley/src/tests/test_family_ids.rs
+@@ -0,0 +1,164 @@
++// Copyright 2026 the Parley Authors
++// SPDX-License-Identifier: Apache-2.0 OR MIT
++
++//! machopo: tests for [`StyleProperty::FontFamilyIds`].
++
++use std::{borrow::Cow, ops::Range, vec::Vec};
++
++use fontique::FamilyId;
++
++use super::utils::ColorBrush;
++use super::utils::fonts::create_font_context;
++use crate::{
++    FontContext, FontFamily, FontFamilyName, Layout, LayoutContext, StyleProperty, TextStyle,
++};
++
++const TEXT: &str = "Latin \u{645}\u{631}\u{62d}\u{628}\u{627} text";
++
++fn id(fcx: &mut FontContext, name: &str) -> FamilyId {
++    fcx.collection
++        .family_id(name)
++        .unwrap_or_else(|| panic!("{name} font not found"))
++}
++
++fn ids<'a>(fcx: &mut FontContext, names: &[&str]) -> StyleProperty<'a, ColorBrush> {
++    StyleProperty::FontFamilyIds(Cow::Owned(names.iter().map(|name| id(fcx, name)).collect()))
++}
++
++fn names<'a>(names: &[&'a str]) -> StyleProperty<'a, ColorBrush> {
++    let names: Vec<_> = names
++        .iter()
++        .map(|name| FontFamilyName::named(name))
++        .collect();
++    StyleProperty::FontFamily(FontFamily::List(Cow::Owned(names)))
++}
++
++/// The font of each run of `layout` (its data's id and its index there), the text it covers
++/// and its advance.
++fn runs(mut layout: Layout<ColorBrush>) -> Vec<((u64, u32), Range<usize>, f32)> {
++    layout.break_all_lines(None);
++    layout
++        .lines()
++        .flat_map(|line| line.runs().collect::<Vec<_>>())
++        .map(|run| {
++            let font = run.font();
++            (
++                (font.data.id(), font.index),
++                run.text_range(),
++                run.advance(),
++            )
++        })
++        .collect()
++}
++
++/// `TEXT` in `default`, the bytes in `span` in `inner` if given.
++fn ranged(
++    fcx: &mut FontContext,
++    default: StyleProperty<'_, ColorBrush>,
++    inner: Option<(StyleProperty<'_, ColorBrush>, Range<usize>)>,
++) -> Vec<((u64, u32), Range<usize>, f32)> {
++    let mut lcx: LayoutContext<ColorBrush> = LayoutContext::new();
++    let mut builder = lcx.ranged_builder(fcx, TEXT, 1., false);
++    builder.push_default(default);
++    if let Some((inner, range)) = inner {
++        builder.push(inner, range);
++    }
++    runs(builder.build(TEXT))
++}
++
++#[test]
++fn ids_pick_the_fonts_their_names_do() {
++    let mut fcx = create_font_context();
++    for list in [
++        &["Roboto", "Noto Kufi Arabic"][..],
++        &["Noto Kufi Arabic", "Roboto"],
++        &["Arimo", "Noto Kufi Arabic"],
++        &["Noto Kufi Arabic"],
++    ] {
++        let by_id = ids(&mut fcx, list);
++        let by_id = ranged(&mut fcx, by_id, None);
++        assert_eq!(by_id, ranged(&mut fcx, names(list), None), "{list:?}");
++    }
++    // Which those are depends on the list.
++    let roboto = ids(&mut fcx, &["Roboto", "Noto Kufi Arabic"]);
++    let arimo = ids(&mut fcx, &["Arimo", "Noto Kufi Arabic"]);
++    assert_ne!(
++        ranged(&mut fcx, roboto, None),
++        ranged(&mut fcx, arimo, None)
++    );
++}
++
++#[test]
++fn ids_and_names_replace_each_other_over_a_range() {
++    let mut fcx = create_font_context();
++    let all = &["Roboto", "Noto Kufi Arabic"];
++    let range = 0..5;
++    let inner = ids(&mut fcx, &["Arimo"]);
++    let ids_over_names = ranged(&mut fcx, names(all), Some((inner, range.clone())));
++    let outer = ids(&mut fcx, all);
++    let names_over_ids = ranged(&mut fcx, outer, Some((names(&["Arimo"]), range.clone())));
++    let names_over_names = ranged(&mut fcx, names(all), Some((names(&["Arimo"]), range)));
++    assert_eq!(ids_over_names, names_over_names);
++    assert_eq!(names_over_ids, names_over_names);
++    // The range is in another font than the text after it.
++    assert_ne!(names_over_names, ranged(&mut fcx, names(all), None));
++}
++
++/// `TEXT` in a tree: `root`'s families, the first word in a span with `span`.
++fn tree(
++    fcx: &mut FontContext,
++    root: &[&'static str],
++    span: StyleProperty<'_, ColorBrush>,
++) -> Vec<((u64, u32), Range<usize>, f32)> {
++    let mut lcx: LayoutContext<ColorBrush> = LayoutContext::new();
++    let root_names: Vec<_> = root
++        .iter()
++        .map(|name| FontFamilyName::named(name))
++        .collect();
++    let root = TextStyle {
++        font_family: FontFamily::List(Cow::Owned(root_names)),
++        ..TextStyle::default()
++    };
++    let mut builder = lcx.tree_builder(fcx, 1., false, &root);
++    builder.push_style_modification_span(&[span]);
++    builder.push_text(&TEXT[..5]);
++    builder.pop_style_span();
++    builder.push_text(&TEXT[5..]);
++    runs(builder.build().0)
++}
++
++#[test]
++fn a_spans_ids_are_its_families() {
++    let mut fcx = create_font_context();
++    let all = &["Roboto", "Noto Kufi Arabic"];
++    let by_id = ids(&mut fcx, &["Arimo"]);
++    let by_id = tree(&mut fcx, all, by_id);
++    assert_eq!(by_id, tree(&mut fcx, all, names(&["Arimo"])));
++    assert_ne!(by_id, tree(&mut fcx, all, names(all)));
++    // A root with no families takes them from a span around all of its text.
++    let mut lcx: LayoutContext<ColorBrush> = LayoutContext::new();
++    let root = TextStyle {
++        font_family: FontFamily::List(Cow::Borrowed(&[])),
++        ..TextStyle::default()
++    };
++    let outer = ids(&mut fcx, all);
++    let inner = ids(&mut fcx, &["Arimo"]);
++    let mut builder = lcx.tree_builder(&mut fcx, 1., false, &root);
++    builder.push_style_modification_span(&[outer]);
++    builder.push_style_modification_span(&[inner]);
++    builder.push_text(&TEXT[..5]);
++    builder.pop_style_span();
++    builder.push_text(&TEXT[5..]);
++    builder.pop_style_span();
++    assert_eq!(runs(builder.build().0), by_id);
++}
++
++#[test]
++fn no_ids_are_no_families() {
++    let mut fcx = create_font_context();
++    let none = StyleProperty::FontFamilyIds(Cow::Borrowed(&[]));
++    assert_eq!(
++        ranged(&mut fcx, none, None),
++        ranged(&mut fcx, names(&[]), None)
++    );
++}
