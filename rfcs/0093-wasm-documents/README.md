@@ -1,20 +1,20 @@
 # RFC 0093：wasm 文件接回 renderer：用 `dom_wasm` 做 TodoMVC
 
 - 開始日期：2026-11-10
-- 狀態：🚧 已排程：2026-11-10（第 1 段的決定確認了；第 2 段以後的在各段開始前定；進度在 `progress.md`）
+- 狀態：✅ 已完成：2026-11-10（驗收在 `progress.md`；限制在 `docs/limitations.md`）
 - 細節：`details.md`
 
 ## 摘要
 
-讓網頁再一次能只用 wasm 寫 script，這次接在換過的 DOM 和 `dom_wasm` 上，驗收是一份用 wasm guest 寫的 TodoMVC：在視窗裡能新增、勾選、編輯、刪除、篩選 todo，行為和同一份的 JS 版一樣。
+網頁再一次能只用 wasm 寫 script，這次接在換過的 DOM 和 `dom_wasm` 上。驗收是一份用 wasm guest 寫的 TodoMVC：在視窗裡能新增、勾選、編輯、刪除、篩選 todo，同一份情境的步驟對 JS 版和 wasm 版結果一樣。
 
-RFC 0089 換 DOM 時把舊的 wasm 實作整個刪掉（它的決定 36），`dom_wasm` 只留下約 70 個只碰節點的成員和它自己的測試，renderer 沒有 wasm 的文件。這份把缺的四塊補起來，分四段：最小的 wasm 文件（頁面的 document 交給 guest）、節點以外的物件的 handle 和 TodoMVC 用到的成員、事件和 callback、TodoMVC 本身。guest 用 C 寫，不做 SDK。
+RFC 0089 換 DOM 時把舊的 wasm 實作整個刪掉（它的決定 36），`dom_wasm` 只留下約 70 個只碰節點的成員和它自己的測試，renderer 沒有 wasm 的文件。這份把缺的四塊補起來，分四段做完：最小的 wasm 文件（頁面的 document 交給 guest）、節點以外的物件的 handle 和 TodoMVC 用到的成員、事件和 callback、TodoMVC 本身。guest 用 C 寫，不做 SDK。
 
-第 1 段要決定的事 2026-11-10 都確認了（「已決定的事項」）；第 2 段以後的做法還是當天的看法，每一段開始前只決定那一段要決定的事（「待決定」）。
+每一段開始前只決定那一段要決定的事，都記在「已決定的事項」（17 條）。和草稿差最多的兩處：guest 自己觸發的事件怎麼呼叫回它的 listener（第 14 條：改 wasmtime 的 fork 讓同步的呼叫通過，不把 `dom_api` 的分派改成 async），和 WIT 的成員是明列的清單（第 13 條：不是符合規則的全部）。
 
 ## 動機
 
-現況（2026-11-10）：
+開始時的現況（2026-11-10）：
 
 - **renderer 沒有 wasm 的文件**。`--script wasm` 和 `<meta name="script" content="wasm">` 在 RFC 0089 的 5b-1 刪掉了，每份文件都跑 JS。`dom_wasm` 只有它自己的測試在用（`crates/dom_wasm/README.md`）。
 - **guest 拿不到頁面的 document**。`machopo:dom` 只有 `create-document`（一份 detached 的文件）；`WasmDom` 自己建一份沒有 engine 驅動的 DOM，不是 renderer 的那一份。renderer 只透過 `dom_api::ScriptEngine` 碰 script，實作它的只有 `dom_js` 的 `V8Engine`。
@@ -44,11 +44,11 @@ RFC 0089 換 DOM 時把舊的 wasm 實作整個刪掉（它的決定 36），`do
 要解決的 `docs/limitations.md` 裡的限制：
 
 - 「JavaScript 和 DOM API」的「沒有 wasm 的文件：wasm 的 script 不跑……」。
-- 同一份裡還有幾條描述 wasm guest 的行為（guest 的 `customElements`、observer 的 callback 拿到的 handle、wasm 文件裡的 iframe、`requestIdleCallback`、`--script wasm` 的 WebDriver），是舊的實作的：第 1 段開始時逐條對過，不成立的拿掉、之後才成立的改寫成現在的樣子。
+- 同一份裡還有幾條描述 wasm guest 的行為（guest 的 `customElements`、observer 的 callback 拿到的 handle、wasm 文件裡的 iframe、`requestIdleCallback`、`--script wasm` 的 WebDriver），是舊的實作的：第 1 段逐條對過，不成立的拿掉，那一條改寫成 wasm 文件現在的限制。
 
 ## 設計概要
 
-網頁的作者（2026-11-10 的看法，宣告的寫法照 RFC 0001）：
+網頁的作者（宣告的寫法照 RFC 0001）：
 
 ```html
 <!doctype html>
@@ -58,33 +58,34 @@ RFC 0089 換 DOM 時把舊的 wasm 實作整個刪掉（它的決定 36），`do
 <script type="application/wasm" src="todomvc.wasm"></script>
 ```
 
-guest 是一個 component，import `machopo:dom`、export 入口和 callback 的入口，用 C 寫（wasi-sdk 的 `wasm32-wasip3` 和 `wit-bindgen` 的 C binding，和 `dom_wasm` 的測試 guest 一樣）。寫起來像這樣（export 和 `add-event-listener` 的名稱只是示意）：
+guest 是一個 component，world 是 `machopo:dom/script`：import `machopo:dom` 的 interface，export 入口 `start` 和 listener 的入口 `handle-event`。用 C 寫（wasi-sdk 的 `wasm32-wasip3` 和 `wit-bindgen` 的 C binding，和 `dom_wasm` 的測試 guest 一樣）。寫起來像這樣：
 
 ```c
-#include "todomvc.h"   // wit-bindgen 從 world 產生的
+#include "script.h"   // wit-bindgen 從 world 產生的
 
 typedef machopo_dom_dom_node_t node_t;
-enum { ON_NEW_TODO_KEYDOWN = 1 };   // callback 的 id 是 guest 自己編的
+enum { ON_NEW_TODO = 1 };   // callback 的編號是 guest 自己編的
 
 // `start` is an `async func`: the callback ABI. One that never waits
 // returns at once and exits.
-todomvc_callback_code_t exports_todomvc_start(node_t document) {
+script_callback_code_t exports_script_start(node_t document) {
     machopo_dom_dom_dom_exception_t err;
     machopo_dom_dom_option_element_t input;
-    todomvc_string_t selector, keydown;
-    todomvc_string_set(&selector, ".new-todo");
-    todomvc_string_set(&keydown, "keydown");
+    script_string_t selector, change;
+    script_string_set(&selector, ".new-todo");
+    script_string_set(&change, "change");
     machopo_dom_dom_document_query_selector(document, &selector, &input, &err);
-    machopo_dom_dom_event_target_add_event_listener(input.val, &keydown, ON_NEW_TODO_KEYDOWN, &err);
-    exports_todomvc_start_return();
-    return TODOMVC_CALLBACK_CODE_EXIT;
+    // The last argument is `capture`.
+    machopo_dom_dom_event_target_add_event_listener(input.val, &change, ON_NEW_TODO, false, &err);
+    exports_script_start_return();
+    return SCRIPT_CALLBACK_CODE_EXIT;
 }
 
-bool exports_todomvc_handle_event(uint32_t id, node_t event) {
-    switch (id) {
-    case ON_NEW_TODO_KEYDOWN: /* … */ break;
+// The event's handle is the guest's for this call only.
+void exports_script_handle_event(uint32_t callback, script_object_t event) {
+    switch (callback) {
+    case ON_NEW_TODO: /* … */ break;
     }
-    return true;
 }
 ```
 
@@ -92,57 +93,53 @@ bool exports_todomvc_handle_event(uint32_t id, node_t event) {
 
 - wasm 文件裡的 JS（`<script>`、`onclick=""`）不執行，JS 文件裡的 `application/wasm` 的 script 也不執行。
 - guest 改了 DOM，下一個 frame 就畫出來，和 JS 改的一樣。
-- 使用者按鍵、點擊時，guest 註冊的 listener 照 DOM 的分派順序被呼叫，`preventDefault()` 有作用。
-- guest trap 時像沒接住的例外一樣印出來，那個 component 之後不再被呼叫（Component Model 的規定），頁面留著。
+- 使用者按鍵、點擊時，guest 註冊的 listener 照 DOM 的分派順序被呼叫，`preventDefault()` 有作用。guest 自己呼叫 `click()`、`focus()`、`blur()` 時，它的 listener 在那個呼叫回來之前跑完。
+- guest trap 時像沒接住的例外一樣印出來，那個 component 之後不再被呼叫（Component Model 的規定），它的 listener 都跳過，頁面和其他 script 留著。
 - DOM 的函式回傳 `result<_, dom-exception>`：C 的 binding 回傳 `bool`，錯誤的 `code` 寫進最後一個參數。
 
 ## 詳細設計
 
-下面每一塊先寫現在有什麼、要補什麼，選項和 2026-11-10 的看法；確認之後才搬進「已決定的事項」。
+每一塊寫最後的設計；選了什麼、不選什麼、為什麼在「已決定的事項」。實作的位置和使用規則在 `crates/dom_wasm/README.md`。
 
 ### 1. wasm 文件和 `ScriptEngine`
 
 - **文件怎麼成為 wasm 文件**：parse 之前決定，因為 engine 要在建 document 之前選好：前 1024 byte 的 `<meta name="script" content="wasm">`（「已決定的事項」第 2 條）。換到另一種文件時換掉整頁的 engine。
-- **一個實作 `dom_api::ScriptEngine` 的 wasm engine，在 `dom_wasm`**（「已決定的事項」第 4 條）：`ScriptEngine` 現在約 70 個方法。輸入、timer、rendering update 的邏輯已經在 `dom_api` 裡、對 `ScriptHost` 是泛型的；`V8Engine`（`crates/dom_js/src/engine.rs`）的方法大多只是進 V8 的 scope、呼叫 `dom_api`、跑 microtask checkpoint。wasm 這邊寫自己的 `ScriptHost` 和那一層薄的；兩邊完全一樣的片段搬成 `dom_api` 的函式。第 1 段實作建 window 和 document、執行 script、`document_ready`、rendering update、focus 和可見性；輸入到第 3 段；DevTools、module、observer、WebDriver 的 script 留空。`ScriptEngineFactory` 多一個建 wasm engine 的函式，shell 兩個都裝，renderer 照 `<meta>` 選。
-- **頁面的 DOM 是誰的**：wasm 的 engine 的，跑 guest 的一輪時借進 `dom_wasm` 的 thread-local（「已決定的事項」第 10 條）；`dom_wasm` 自己的測試照舊可以讓 DOM 一直留在 thread-local。這份 DOM 就是頁面的那一份（wasm 的 GC 物件和節點在同一個 heap，`StoreSet` 和借 heap 的規則照舊），不建 isolate、沒有 V8 驅動，elise 自己決定什麼時候 GC，有 nursery（「已決定的事項」第 3 條）。
+- **一個實作 `dom_api::ScriptEngine` 的 wasm engine，在 `dom_wasm`**（「已決定的事項」第 4 條）：`ScriptEngine` 現在約 70 個方法。輸入、timer、rendering update 的邏輯已經在 `dom_api` 裡、對 `ScriptHost` 是泛型的；`V8Engine`（`crates/dom_js/src/engine.rs`）的方法大多只是進 V8 的 scope、呼叫 `dom_api`、跑 microtask checkpoint。wasm 這邊（`dom_wasm` 的 `WasmEngine`）寫自己的 `ScriptHost` 和那一層薄的；兩邊完全一樣的片段搬成 `dom_api` 的函式（`until_next_due`）。它實作建 window 和 document、執行 script、`document_ready`、rendering update、focus 和可見性、輸入、DOM 自己的 task 和動畫、WebDriver 的查詢和輸入；DevTools 的 inspector、module、observer、WebDriver 的 script 留空。`ScriptEngineFactory` 多一個建 wasm engine 的函式，shell 兩個都裝，renderer 照 `<meta>` 選。
+- **頁面的 DOM 是誰的**：wasm 的 engine 的，跑 guest 的一輪時連同頁面的 layout 借進 `dom_wasm` 的 thread-local（「已決定的事項」第 10 條；layout 一起借是 `focus()` 這些要看 box 的成員要的）；`dom_wasm` 自己的測試照舊可以讓 DOM 一直留在 thread-local。這份 DOM 就是頁面的那一份（wasm 的 GC 物件和節點在同一個 heap，`StoreSet` 和借 heap 的規則照舊），不建 isolate、沒有 V8 驅動，elise 自己決定什麼時候 GC，有 nursery（「已決定的事項」第 3 條）。
 - **guest 怎麼拿到 document**：入口 `start(document)` 的參數，`start` 是 `async func`（「已決定的事項」第 8 條）。`create-document` 留著（建 detached 的文件）。
-- **載入**：`<script type="application/wasm" src>` 照外部 script 下載、MIME 要是 `application/wasm`、在 compile thread 上編、編好回到 main thread 照文件順序執行（RFC 0001 的「載入和執行」）。每個 script 一個 Store。
-- **Store 是 async 的，guest 用 WASI 0.3**（「已決定的事項」第 5 條）：`dom_wasm` 的 host 函式是同步的 `func_wrap`，async 的 Store 裡照樣能用；現在測試的 Store 是同步的、WASI 0.2，和頁面的一起換成 async 的、WASI 0.3（「已決定的事項」第 6 條）。入口是 `async func`（第 8 條），WASI 的時鐘自己實作（第 7 條），event loop 需要時才跑（第 9 條）。
+- **載入**：parser 插入、有 `src` 的 `<script type="application/wasm">` 照 deferred 的外部 script 下載、MIME 要是 `application/wasm`，parse 完之後照文件順序、在 `DOMContentLoaded` 之前執行。component 在 main thread 上同步編譯（沒有做 compile thread）。每個 script 一個 Store，留到換頁才丟。
+- **Store 是 async 的，guest 用 WASI 0.3**（「已決定的事項」第 5 條）：`dom_wasm` 的 host 函式是同步的 `func_wrap`，async 的 Store 裡照樣能用；`dom_wasm` 自己的測試的 Store 和 guest 一起換成 async 的、WASI 0.3（「已決定的事項」第 6 條）。入口是 `async func`（第 8 條），WASI 的時鐘自己實作（第 7 條），event loop 需要時才跑（第 9 條）。guest 只能在 `start` 裡等待。
 
 ### 2. 節點以外的物件的 handle
 
-現在的 handle 表每一格是 `Member<Node>`，種類（節點的 interface）記在 heap 外，呼叫前不碰 DOM 就能檢查 `this`。`dom` 那一側，任何物件是 `ObjectRef`（一個 enum，節點是其中一種）。
+一張表，每格指任何一種物件（`Member<Erased>`：節點和 `Event`、`Window`、`Location`、`DOMTokenList` 這些），heap 外記它最衍生的 interface 的編號，呼叫前不碰 DOM 就能檢查 `this`（「已決定的事項」第 12 條）。元素自己的 interface 的成員（`value`、`checked`）也靠它（`details.md` 的「TodoMVC 用到的成員」）。一個物件在一個 Store 裡只有一個 handle，guest 那一側一種 handle、一個 `release`。
 
-做法在「已決定的事項」第 12 條：一張表，每格指任何一種物件、記它的 interface；元素自己的 interface 的成員（`value`、`checked`）也靠它（`details.md` 的「TodoMVC 用到的成員」）。
-
-WIT 的成員是明列的清單（「已決定的事項」第 13 條）：第 2 段加 TodoMVC 用到的；不定個數的字串是 `list<string>`，可省略的 dictionary 先不放。WIT 的版本升到 `0.2.0`。
+WIT 的成員是明列的清單（「已決定的事項」第 13 條；`wit::FROZEN` 加 `wit::ADDED`）：加了 TodoMVC 用到的和同一個 interface 上成套的。不定個數的字串是 `list<string>`，可省略的 dictionary 不放進函式（等於用預設值）。WIT 的版本是 `0.2.0`，`type object = u32`、`type node = object`。
 
 ### 3. 事件和 callback
 
-- **callback 的表示**：guest 自己的 id（`u32`），`add-event-listener(this, type, callback-id, options)`；DOM 存的 listener 記著 Store 和 id。分派到它時，host 呼叫 guest 的 export `handle-event(id, event)`。`dom_api` 的分派已經經過 `ScriptHost::call_listener`，wasm 的 engine 實作它。
-- **重入**：guest 在自己的呼叫裡（例如 `focus()`、`click()`、`dispatch-event`）觸發的事件，listener 要在那個呼叫回來之前跑：host 函式（普通的 `func_wrap`）在分派裡同步呼叫 guest 的 export，fork 放行（「已決定的事項」第 14 條）。`dom_api` 不動。
-- **使用者的輸入**：renderer 的 `handle_mouse`、`handle_key` 經過 engine 分派，這時沒有 guest 在執行，直接呼叫 export。
-- **生命週期**：listener 拿著 Store 的 holder 的 edge，Store 拿著節點的 handle，環在 DOM 的 heap 裡，整個收得掉（RFC 0089 的決定 34 第 2 條留下的形狀）。guest 記憶體裡的 closure 不在圖上：listener 被移除或它的節點被收掉時，host 經過另一個 export 告訴 guest 那個 id 不用了（舊的 `dom_wasm` 沒有，callback 留到 Store 死掉）。
-- **Store 什麼時候死**：`start` 回來之後，只要還有 listener、timer 指著它就活著；頁面換掉時連同 DOM 一起丟掉。
-- **timer 和 `requestAnimationFrame`**：TodoMVC 用不到，形狀和 listener 一樣（id 加另一個 export）。做不做在第 3 段開始前定。
-- **trap**：照 RFC 0001：印出來，那個 Store 不再進入，它的 listener 之後都跳過。
+- **callback 的表示**（「已決定的事項」第 15 條）：guest 自己編的 `u32`。`event-target-add-event-listener(this, type, callback, options)` 和參數一樣的 `remove`，`options` 是 `capture` 的布林；DOM 存的 listener 的 callback edge 記著「哪個 Store、哪個編號」，`remove` 和重複的 `add` 比對它。world `script` 的同步 export `handle-event(callback, event)` 是 host 呼叫 listener 的入口，不回傳值。
+- **頁面的分派**（使用者的輸入、DOM 自己分派的事件）：`dom_api` 的分派經過 `ScriptHost::call_listener`，wasm 的 engine 找到那個 script 的 Store、把 DOM 和 layout 借給它、呼叫 `handle-event`。這時沒有 guest 在執行。
+- **guest 自己的分派**（它呼叫 `click()`、`focus()`、`blur()`）：listener 在那個呼叫回來之前跑。host 函式（普通的 `func_wrap`）在分派裡同步呼叫 guest 的 `handle-event`，fork 放行（「已決定的事項」第 14 條）；`dom_api` 不動。這條路只呼叫同一個 Store 的 listener，頁面上其他 script 的跳過。
+- **事件的 handle** 只在那次呼叫裡是 guest 的，回來時 host 收回。事件的成員：`Event` 的 `type`、`target`、`currentTarget`、`defaultPrevented`、`preventDefault()`、`stopPropagation()`，`UIEvent.detail`、`MouseEvent.button`、`KeyboardEvent.key`。
+- **生命週期**：listener 在 host 這邊跟著節點被回收；host 不告訴 guest 哪個編號不用了（「已決定的事項」第 16 條），guest 自己那張表到 Store 結束才清。Store 留到換頁、連同 DOM 一起丟掉。
+- **timer 和 `requestAnimationFrame`** 沒有做：TodoMVC 用不到。
+- **trap**：印出來，那個 Store 結束、不再進入，它的 listener 之後都跳過；在 guest 自己的分派裡 trap 時，同一次分派剩下的 listener 不跑，trap 往上經過 guest 的那次呼叫。listener 的 export 是同步的，等待當成 trap。
 
 ### 4. TodoMVC 的 guest
 
-- **語言是 C，不做 SDK**（「已決定的事項」第 1 條）：guest 直接呼叫 `wit-bindgen` 從 `machopo-dom.wit` 產生的 C 函式，工具鏈照 `ci.py guests` 現在的（wasi-sdk、`wit-bindgen`）。handle 的 `release`、callback 的 id 對到哪個函式、字串的借用和釋放都由 guest 自己寫；TodoMVC 裡重複的部分（借一個字串、檢查錯誤）寫成它自己檔案裡的幾個 helper，不另外做成函式庫。
+- **語言是 C，不做 SDK**（「已決定的事項」第 1 條）：guest 直接呼叫 `wit-bindgen` 從 `machopo-dom.wit` 產生的 C 函式，工具鏈照 `ci.py guests` 現在的（wasi-sdk、`wit-bindgen`）。handle 的 `release`、callback 的編號對到哪個函式、字串的借用和釋放都由 guest 自己寫；TodoMVC 裡重複的部分（借一個字串、檢查錯誤）寫成它自己檔案裡的幾個 helper，不另外做成函式庫。
+- **handle 什麼時候放**：一個物件只有一個 handle，所以 guest 不在拿到的地方 `release`（呼叫它的那一層可能拿著同一個物件，例如 listener 的 target 又被一次 query 找到），而是記下來、等最外層的 export 回來時一起放；view 一直留著的元素不放。
 - **放哪**（「已決定的事項」第 11 條）：guest 的原始碼和編好的 `.wasm` 在 `crates/dom_wasm/tests/guests/`，`ci.py guests` 重編；JS 版（Speedometer 的 vanilla ES5）在 `tests/sites/todomvc/`；wasm 版的頁面在 `tests/scenarios/pages/`。
-- **TodoMVC**：HTML 和 CSS 用和 JS 版同一份，guest 只換掉 script。行為照 TodoMVC 的規格，除了不保存（沒有 `localStorage`）。
+- **TodoMVC**：HTML 和 CSS 用和 JS 版同一份，guest 只換掉 script；guest 是 JS 版的 model、view、controller 一項一項搬成 C（`event.keyCode` 改讀 `key`，`dataset` 改用屬性），沒有再加 WIT 的成員。不保存 todo（JS 版在這裡也只存在記憶體裡）。清單有 `data-seed` 的測試頁一開始就有三個 todo，給不靠輸入的畫面測試用。
 - **不同平台編出的 `.wasm` 不逐 byte 相同**（`docs/limitations.md` 的「平台和建置」已經有這條），TodoMVC 的 guest 也是。
 
 ### 測試
 
-- `crates/dom_wasm/tests/it`（harness 改成 async 的 Store，guest 重編成 WASI 0.3，「已決定的事項」第 6 條）：每一段新的 host 行為（非節點的 handle、listener 的呼叫順序、重入、callback 的釋放、trap）用 C 的 guest 的 case；WIT 的 golden。
-- renderer：wasm 文件載入、執行順序、JS 不執行，照現有測 script 載入的地方加。
-- 情境（`tests/scenarios/`）：TodoMVC 的新增、勾選、編輯（雙擊、Enter、Escape、blur）、刪除、清除已完成、三種篩選；同一份情境也對 JS 版跑，兩邊的結果要一樣。
-- 靜態畫出來的 TodoMVC（第 1 段）：一份情境（`wait-text` 確認內容、`screenshot` 留圖），加一個 renderer 的測試比 wasm 版和 JS 版的同一頁畫出來一樣。不用 `test.py reftest`：wasm 文件不執行 WebDriver 的 script（「已決定的事項」第 3 條）。
-- 每一段跑 mutation test，結果寫進 `progress.md`。
-- 改到 wasmtime 的 fork 或 elise 的 `raw` 時跑 fork 的測試。
-- 視窗那一層不動，`test.py automation` 只在驗收時跑。
+- `crates/dom_wasm/tests/it`（harness 是 async 的 Store，guest 是 WASI 0.3，「已決定的事項」第 6 條）：每一段的 host 行為（非節點的 handle、加的成員、listener 的呼叫順序、兩條分派的路、trap、事件 handle 的期限、等待、DOM 的借出）用 C 的 guest 的 case；WIT 的 golden。
+- `shell` 的 `wasm_documents`：wasm 文件載入、JS 不執行、MIME、`focus()` 的畫面；guest 畫的 TodoMVC 和同樣的 todo 寫死在 markup 裡畫出來逐像素相同。不用 `test.py reftest`：wasm 文件不執行 WebDriver 的 script（「已決定的事項」第 3 條）。
+- 情境（`tests/scenarios/`）：`wasm-document`（載入、換頁時換 engine、等待）、`wasm-listeners`（真的滑鼠和鍵盤走到 listener）、`todomvc-wasm`（有 seed 的頁面）、`todomvc-app-wasm` 和 `todomvc-app-js`（新增、勾選、編輯、刪除、清除已完成、三種篩選；兩份步驟逐行相同，「已決定的事項」第 17 條）。
+- 每一段跑 mutation test；改 wasmtime 的 fork 時跑 fork 的測試；視窗那一層沒有動，`test.py automation` 在驗收時跑。結果都在 `progress.md`。
 
 ### 分階段
 
@@ -153,15 +150,15 @@ WIT 的成員是明列的清單（「已決定的事項」第 13 條）：第 2 
 | 3 | 事件和 callback：`add-event-listener`、guest 的 export、重入、callback 的釋放、使用者的輸入 | 按鍵和點擊叫得到 guest 的 listener |
 | 4 | C 的 TodoMVC 的 guest、情境 | 驗收 |
 
-第 1 段的靜態 TodoMVC 就是第 4 段的 guest 的開頭（只有 `start`），每一段往上加。
+四段都做完了（`progress.md` 的「步驟」）。第 1 段的靜態 TodoMVC 是第 4 段的 guest 的開頭（只有 `start`）；第 3 段的「callback 的釋放」沒有做（「已決定的事項」第 16 條）。
 
 ## 缺點
 
 - **又多一個要跟著 DOM 走的 front end**：每加一個成員、一種 callback，JS 和 wasm 兩邊都要接。RFC 0089 的決定 36 就是為了不拖住換 DOM 才停掉它。這份只把範圍放到 TodoMVC，之後每個新的 API 還是先只給 JS。
 - **`ScriptEngine` 那一層薄的有兩份**：`V8Engine` 和 wasm 的 engine 各寫一次，`ScriptEngine` 加方法時兩邊都要補（wasm 的可以留空）。
-- **async 的 Store 要多做很多**：Store 的 event loop、WASI 0.3、guest 的工具鏈，和 `dom_api` 裡會呼叫 script 的路怎麼接上 `await`（可能動到 JS 那條路）。
-- **guest 要承受重入**：guest 呼叫會分派事件的成員時，自己的 listener 可能在那個呼叫裡被呼叫，等待期間也會收到事件；C 的 guest 的全域狀態要自己顧好。一個 listener trap，整個 Store 結束（`details.md` 的「重入的原型」）。
-- **用 C 寫應用程式很囉嗦**：每個字串、每個 handle 的釋放都要自己寫，TodoMVC 的 guest 會比 JS 版長很多，也不是網頁作者實際會用的寫法；它證明的是 host 這一側夠用，不是好不好寫。
+- **async 的 Store 多做了很多**：Store 的 event loop、WASI 0.3、自己的時鐘、guest 的工具鏈；guest 自己觸發的事件要同步呼叫回它的 listener，最後是在 wasmtime 的 fork 多一處上游不太可能收的修改（JS 那條路沒有動）。
+- **guest 要承受重入**：guest 呼叫會分派事件的成員時，自己的 listener 在那個呼叫裡被呼叫，等待期間也會收到事件；C 的 guest 的全域狀態和 handle 什麼時候放要自己顧好（TodoMVC 的 guest 第一版就在這裡 trap 過）。一個 listener trap，整個 Store 結束（`details.md` 的「重入的原型」）。
+- **用 C 寫應用程式很囉嗦**：每個字串、每個 handle 的釋放都要自己寫，TodoMVC 的 guest 約 570 行（JS 版七份 script 約 930 行，含註解），也不是網頁作者實際會用的寫法；它證明的是 host 這一側夠用，不是好不好寫。
 
 ## 理由和其他做法
 
@@ -169,7 +166,7 @@ WIT 的成員是明列的清單（「已決定的事項」第 13 條）：第 2 
 - **把舊的實作從 git 拿回來**：它接的是 cppgc 上的 DOM、`func_new` 加 `Val` 的共用 host 函式、WIT 的 resource，三樣都換掉了。拿回來的只有設計（宣告的寫法、載入的順序、「需要時才跑」的 Store），程式重寫。
 - **wasm 經過 JS 碰 DOM（Chrome 的做法）**：machopo 做 wasm 文件的理由就是不經過 JS，這份不重新討論。
 - **替 guest 做一個 SDK（Rust，或 C 的一層有型別的 API）**：寫應用程式比較自然，但要多維護一份在 machopo 的 workspace 外面的程式，還要決定 handle 的計數、closure 的表怎麼包；這份的目標是 host 這一側，C 的 binding 最薄、最接近 host 本身（RFC 0089 的決定 33 的理由），不選。
-- **先做一個比 TodoMVC 小的目標（只有點擊的計數器）**：第 3 段做完就是它；TodoMVC 多出來的是成員的數量，放在同一份裡驗收才完整。
+- **先做一個比 TodoMVC 小的目標（只有點擊的計數器）**：第 3 段做完就是它（情境 `wasm-listeners`）；TodoMVC 多出來的是成員的數量，放在同一份裡驗收才完整。
 
 ## 先例
 
@@ -199,20 +196,7 @@ WIT 的成員是明列的清單（「已決定的事項」第 13 條）：第 2 
 
 ## 待決定
 
-第 1 段開始前的都決定了（「已決定的事項」第 2 到 9 條）。
-
-第 2 段開始前：
-
-5. （已決定，「已決定的事項」第 12 條。）
-6. （已決定，「已決定的事項」第 13 條。）
-
-第 3 段開始前：
-
-7. （都決定了：「已決定的事項」第 14、15、16 條。）
-
-第 4 段開始前：
-
-8. （都決定了：「已決定的事項」第 11、17 條。）
+沒有了：每一段開始前要決定的都在「已決定的事項」。還沒解決的在「之後的可能」和 `docs/limitations.md` 的 wasm 文件那一條。
 
 ## 之後的可能
 
@@ -221,3 +205,7 @@ WIT 的成員是明列的清單（「已決定的事項」第 13 條）：第 2 
 - guest 的 SDK（Rust 或其他語言）、Lua 的 runtime。
 - timer、`fetch`、observer、custom element 這些 callback 比較多的 API。
 - wasm 文件的子 frame、DevTools。
+- host 告訴 guest 哪個 callback 不用了（「已決定的事項」第 16 條），和 timer 一起設計。
+- guest 自己分派的事件也呼叫頁面上其他 script 的 listener。
+- 情境的 `include`：有第二組要對兩個頁面跑同樣步驟的情境時（「已決定的事項」第 17 條）。
+- compile thread：component 現在在 main thread 上同步編譯。

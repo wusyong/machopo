@@ -116,7 +116,7 @@ machopo 沒有的：`localStorage`（JS 那一側也沒有，TodoMVC 的 todo �
 
 - Component Model 現在允許重新進入（`may_enter` 只在 trap 過之後是 false，`../third_party/wasmtime/crates/wasmtime/src/runtime/component/store.rs`；規格的沿革在 `rfcs/0001-wasm-scripts/details.md` 的「Component Model 的重新進入」）。
 - **同步的入口**：普通的 `func_wrap` 就能當場呼叫回 guest。
-- **async 的入口（WASI 0.3 要的）**：只有一條路，和 RFC 0001 在 wasmtime 49 上量到的一樣：會呼叫回 guest 的成員在 WIT 裡宣告成 `async func`、host 用 `func_wrap_concurrent` 定義、用 `call_concurrent` 呼叫 listener。這種 host 函式拿到的是 `Accessor`，不是 `StoreContextMut`：Store 只在兩次 `await` 之間借得到，所以 DOM 的操作不能跨過呼叫 listener 的那個 `await`。不會呼叫回 guest 的成員照舊是同步的 `func_wrap`。
+- **async 的入口（WASI 0.3 要的）**：沒改的 wasmtime 只有一條路（最後沒有走它：fork 放行同步的呼叫，上一節和「已決定的事項」第 14 條），和 RFC 0001 在 wasmtime 49 上量到的一樣：會呼叫回 guest 的成員在 WIT 裡宣告成 `async func`、host 用 `func_wrap_concurrent` 定義、用 `call_concurrent` 呼叫 listener。這種 host 函式拿到的是 `Accessor`，不是 `StoreContextMut`：Store 只在兩次 `await` 之間借得到，所以 DOM 的操作不能跨過呼叫 listener 的那個 `await`。不會呼叫回 guest 的成員照舊是同步的 `func_wrap`。
 - 一個 listener trap 時，那次分派排在後面的 listener、和 stack 上更外層的 guest 都不能再執行，Store 整個結束。這是規格的行為，host 改不了。
 - **guest 的 task 和 host 的 future 存在 Store 裡，不在 `run_concurrent` 的 future 裡**：Store 可以只在有事要做時借出、poll 一輪、放回去，等待中的 guest 留著。第 1 輪的 waker 跟著 future 丟掉了，所以「等的東西到了」要由 host 自己排下一輪，不能靠 waker。
 - **不是 async 的 export 回傳之前不能等待**（wasmtime 50 上重新確認）：listener 的 export 是同步的，guest 只能在 async 的入口裡等。
@@ -124,14 +124,14 @@ machopo 沒有的：`localStorage`（JS 那一側也沒有，TodoMVC 的 todo �
 
 ## C 的 guest 和 WASI 0.3 的工具鏈
 
-2026-11-10 查的；同一天 1a 用 wasi-sdk 34.0 把 `dom.c` 編成 `wasm32-wasip3`、測試通過（`progress.md`），`async func` 的 import 和 export 還沒有實際編過（1c 的入口是第一個）。
+2026-11-10 開始前查的。之後照它做了：`ci.py guests` 的 target 是 `wasm32-wasip3`，三個 guest 都用 wasi-sdk 34.0 編；`async func` 的 export 實際編過、跑過（測試 guest 的 `sleep`、頁面的 `start`），`async func` 的 import 最後沒有用到（「已決定的事項」第 14 條）。
 
-- **版本不用換**：`scripts/ci.py` 現在釘的 wasi-sdk 34.0 和 `wit-bindgen` 0.62.0，就是 RFC 0001 編 C 的 guest 時用的（它的 `progress.md` 的開頭），那時的 target 是 `wasm32-wasip3`，入口是 `async func`、`dispatchEvent` 是 `async func` 的 import。要改的是 `ci.py guests` 的 `--target`（現在是 `wasm32-wasip2`）。
+- **版本不用換**：`scripts/ci.py` 現在釘的 wasi-sdk 34.0 和 `wit-bindgen` 0.62.0，就是 RFC 0001 編 C 的 guest 時用的（它的 `progress.md` 的開頭），那時的 target 是 `wasm32-wasip3`，入口是 `async func`、`dispatchEvent` 是 `async func` 的 import。要改的只有 `ci.py guests` 的 `--target`（那時是 `wasm32-wasip2`）。
 - **`wit-bindgen` 0.62.0 的 C binding 寫得出 `async func`**（在本機對一份小的 WIT 跑 `wit-bindgen c` 看產生的 header）：
   - `async func` 的 import 回傳 subtask 的狀態（`<world>_subtask_status_t`），結果寫進最後一個參數。當場完成的（host 的 `func_wrap_concurrent` 沒有等任何東西）狀態是 `RETURNED`，guest 檢查這個就好；沒完成的要拿它的 handle 放進 waitable set 等。
   - `async func` 的 export 是 callback ABI：`exports_<world>_start(...)` 回傳 callback code（`EXIT`、`YIELD`、`WAIT(set)`），之後 host 帶著事件呼叫 `exports_<world>_start_callback(event)`，做完時 guest 呼叫 `exports_<world>_start_return()`。
   - 不是 async 的 export（`handle-event`）照舊是普通的 C 函式。
-- **代價**：C 沒有 `async`/`await`，要等待的 guest 得自己寫狀態機（waitable set、callback code）。不等待的 guest（TodoMVC）只多兩件事：`start` 照 callback ABI 的樣子寫（馬上 `return` 再回傳 `EXIT`）、`async func` 的 import 檢查狀態是 `RETURNED`。
+- **代價**：C 沒有 `async`/`await`，要等待的 guest 得自己寫狀態機（waitable set、callback code）。不等待的 guest（TodoMVC）只多一件事：`start` 照 callback ABI 的樣子寫（馬上 `return` 再回傳 `EXIT`）。
 - **舊的 `sdk/c/` 找不回來**：repo 的歷史只到刪掉它之後，C 的 guest 要重寫。
 
 ## 參考資料
