@@ -15,7 +15,7 @@
 | 1d renderer：prescan `<meta>`、選 engine、換頁時換 engine、載入 `application/wasm` 的 script（決定 2） | 完成 | 2026-11-10 |
 | 1e 靜態的 TodoMVC 的 guest、情境、`shell` 的測試；第 1 段的檢查 | 完成 | 2026-11-10 |
 | 2a handle 的表指任何物件、記 interface（決定 12） | 完成 | 2026-11-10 |
-| 2b WIT 的清單加 TodoMVC 用到的成員，`list<string>`、可省略的 dictionary（決定 13） | 還沒開始 | |
+| 2b WIT 的清單加 TodoMVC 用到的成員，`list<string>`、可省略的 dictionary（決定 13）；第 2 段的檢查 | 完成 | 2026-11-10 |
 | 3 事件和 callback | 還沒開始 | |
 | 4 TodoMVC 的 guest、情境 | 還沒開始 | |
 
@@ -116,3 +116,18 @@
 - 新的單元測試兩個（任何物件的 handle 和 interface、過時的 word）。`cargo test -p dom_wasm`：14 個單元測試、33 個整合測試通過；`shell` 的 `wasm_documents`、情境 `todomvc-wasm`、`wasm-document` 通過。
 - mutation test（`mutants-2a.toml`，11 條）：11 條都抓到。跑完確認檔案都還原了。
 - 還沒有測試的：把不是節點的 handle 當節點的參數傳（`check_node` 的 trap）：現在的 WIT 交不出不是節點的 handle，2b 有了之後補。
+
+### 2b 和第 2 段的檢查（2026-11-10，macOS，Apple Silicon）
+
+- `crates/dom_wasm/src/wit.rs`：`ADDED`（40 個名稱）和 `can_hold`（放寬的規則）；`describe` 多 `type object = u32`、`type node = object`、成員提到的非節點 interface 的別名，`Strings` 是 `list<string>`，可省略的 dictionary 不放。版本 `0.2.0`（`wit/script.wit`、測試的 world、`ci.py` 跟著改）。WIT 從 70 個函式變成 110 個。
+- `src/lib.rs` 的 `member!`：清單上每個成員一行（只有有自己一行的、或 plain 的才編成 host 函式；`for_each_member!` 的分類不用改）。`src/front.rs`：`u32`、`bool`、可省略的 `bool`、不定個數的字串、省略的 `FocusOptions`、非節點 interface 的回傳值（`objects!`）、`call_listener`（什麼都不做）。
+- 找到的 bug，修了：**guest 的操作沒有帶頁面的 layout**。`focus()` 在 renderer 裡沒有效果（`shell` 的畫面測試抓到：focus 和 blur 兩頁的像素一樣）：`WasmFront` 開操作時用的是沒有 layout 的 `ApiCx`，V8 的 front 每次都帶著。layout 在 engine 手上、thread-local 拿不到，所以加了 `WasmDom::lend_page`：借 DOM 時把 engine 的 `LayoutCell` 的內容一起搬進 thread-local、結束時搬回去。1c、1d 的測試沒抓到是因為那時 WIT 裡沒有要看排版的成員。
+- 照決定 13 的清單做、有出入的：事件的成員留到第 3 段（guest 拿不到 event，加了測不到；原本加了 9 個又拿掉，`event-target` 這個函式名還和 `EventTarget` 的型別別名撞名，第 3 段要處理）；`Location.href` 只有 getter（setter 的型別是另一種）；`Window` 的 `document`、`location` 只有 getter。
+- 新的測試：guest `dom.c` 五個 case（`input`、`class-list`、`style`、`lists`、`object-as-node`）、`page.c` 四個（`window`、`focus`、`blur`、`click`）；`tests/it/guest.rs` 兩個、`tests/it/engine.rs` 兩個、`shell` 的 `wasm_documents` 一個（focus 和 blur 的畫面）。`cargo test -p dom_wasm`：14 個單元測試、37 個整合測試通過；`shell` 的 `wasm_documents` 連跑 25 次沒有失敗；情境 `todomvc-wasm`、`wasm-document` 通過。
+- mutation test（`mutants-2b.toml`，12 條）：12 條都抓到。2a 留下的「不是節點的 handle 當節點的參數」在這裡有測試了。跑完確認檔案都還原了。
+- 沒有測試的：`document-set-body`、`element-set-class-list`、`css-style-declaration-set-css-text` 以外的 setter 都測了；`document-set-body` 沒有 case（記在這裡，第 4 段寫 TodoMVC 時用不到）。讀的那一側開操作時帶 layout（`Front::read`）沒有成員走到（清單上沒有要看排版的 getter）。
+- 第 2 段的檢查：`cargo fmt` 排過（9 個檔）；之後六份 mutation 的 spec 裡有四條的原文因為程式改動對不上（`lend` 改寫、`give` 的參數、排版），改了原文、重跑那四條都抓到。
+  - `cargo clippy --workspace --all-targets -- -D warnings`：抓到一處多餘的 lifetime（`front.rs` 的 `FocusOptions` 那個 impl），修了之後通過。
+  - `cargo test --workspace`：通過（55 個測試 binary，3796 個測試通過、1 個 ignored；在 clippy 那一處修正之前跑的，修正只拿掉一個 lifetime 的名字，之後 `cargo test -p dom_wasm` 重跑通過）。
+  - `cargo fmt --check` 乾淨；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過；`test.py scenarios todomvc-wasm wasm-document` 通過。
+  - 沒有跑的：`test.py automation`、整套的情境、reftest 和 WPT（由 CI 跑）。

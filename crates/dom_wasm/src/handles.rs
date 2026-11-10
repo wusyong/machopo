@@ -287,7 +287,12 @@ impl Tables {
     }
 
     /// The store's handle to `object`: the one it has, or a new one.
-    pub(crate) fn give<'gc>(&mut self, cx: &Cx<'_, 'gc>, store: u32, object: ObjectRef<'gc>) -> u32 {
+    pub(crate) fn give<'gc>(
+        &mut self,
+        cx: &Cx<'_, 'gc>,
+        store: u32,
+        object: ObjectRef<'gc>,
+    ) -> u32 {
         let erased = object.erase();
         let word = cx.object_engine_word(object);
         let main = self.main == Some(store);
@@ -433,7 +438,10 @@ mod tests {
                 "the main handle stays"
             );
             assert_ne!(word >> 32, 0);
-            assert_eq!(tables.give(cx, third, p.into()), tables.give(cx, third, p.into()));
+            assert_eq!(
+                tables.give(cx, third, p.into()),
+                tables.give(cx, third, p.into())
+            );
             assert_eq!(cx.engine_word(p), word, "one entry for both");
             assert_eq!(tables.shared_entries(), 1);
             tables.release(cx, second, second_handle);
@@ -601,7 +609,11 @@ mod tests {
             assert_eq!(tables.shared_entries(), 0);
             // The document takes the entry `p`'s word still names.
             let of_document = tables.give(cx, third, document.into());
-            assert_eq!(cx.engine_word(document) >> 32, word >> 32, "the entry, reused");
+            assert_eq!(
+                cx.engine_word(document) >> 32,
+                word >> 32,
+                "the entry, reused"
+            );
             // `p` again, in the store the document's entry is of and in
             // another: an entry of its own, the document's untouched.
             let in_third = tables.give(cx, third, p.into());

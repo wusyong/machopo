@@ -163,3 +163,22 @@ fn the_wasm_todomvc_is_drawn_as_its_markup_written_out() {
     .expect("the page renders");
     assert!(wasm.pixels != app.pixels);
 }
+
+/// A guest's `focus()` focuses an element of the page (its focus ring is
+/// drawn), and `blur()` after it takes the focus away again.
+#[test]
+fn a_guest_focuses_and_blurs_an_element() {
+    let script = r#"<script type="application/wasm" src="page.wasm"></script>"#;
+    let with = |case: &str| {
+        let html =
+            format!(r#"<!DOCTYPE html><html data-case="{case}"><head>{META}</head><body>{script}"#);
+        render(&page(&format!("{case}.html"), &html))
+    };
+    let focused = with("focus");
+    assert_eq!(focused.failed_subresources, [""; 0]);
+    let blurred = with("blur");
+    assert!(focused.pixels != blurred.pixels, "the focus ring");
+    // Blurred, it is as it was before the focus: the same field, and the
+    // guest's paragraph after it.
+    assert!(blurred.pixels == with("blur").pixels);
+}

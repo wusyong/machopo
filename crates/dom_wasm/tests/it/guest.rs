@@ -316,3 +316,33 @@ fn a_store_outliving_its_dom_leaves_the_next_one_alone() {
     assert_eq!(new.held(), 3);
     new.run("read-kept");
 }
+
+/// An element's own interface's members (an input's value and checked,
+/// its style), told by the handle's interface: another element for `this`
+/// is a `TypeError`. Objects that aren't nodes (a class list, a style's
+/// declarations, a collection, a node list): a handle each, the same each
+/// time; their members, with any number of strings and an optional boolean.
+#[test]
+fn a_guest_holds_objects_of_any_interface() {
+    let dom = WasmDom::new();
+    let set = set(&dom);
+    for case in ["input", "class-list", "style", "lists"] {
+        let mut guest = Guest::new(&set);
+        guest.run(case);
+    }
+}
+
+/// A handle to an object that isn't a node, where a node is taken, traps:
+/// a binding's mistake, as a handle that isn't the store's.
+#[test]
+fn an_object_that_isnt_a_node_isnt_taken_as_one() {
+    let dom = WasmDom::new();
+    let set = set(&dom);
+    let mut guest = Guest::new(&set);
+    let trap = guest.try_run("object-as-node").expect_err("it traps");
+    let message = format!("{trap:?}");
+    assert!(
+        message.contains("is a DOMTokenList's handle, not a node's"),
+        "{message}"
+    );
+}

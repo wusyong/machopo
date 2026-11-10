@@ -13,10 +13,7 @@ to = '''            .filter(|state| state.serial == key.dom)'''
 [[mutant]]
 name = "the DOM isn't handed back"
 file = "crates/dom_wasm/src/lib.rs"
-from = '''                *self.0 = STATE.with_borrow_mut(|slot| {
-                    let state = slot.state.as_mut()?;
-                    Some(state.dom.take()?.into_inner())
-                });'''
+from = '''                *self.0 = back;'''
 to = ''''''
 
 [[mutant]]
@@ -24,12 +21,10 @@ name = "the DOM is handed back but stays here"
 file = "crates/dom_wasm/src/lib.rs"
 from = '''                    Some(state.dom.take()?.into_inner())
                 });
-            }
-        }'''
+                *self.0 = back;'''
 to = '''                    Some(state.dom.replace(RefCell::new(Dom::new()))?.into_inner())
                 });
-            }
-        }'''
+                *self.0 = back;'''
 
 [[mutant]]
 name = "a DOM here is lent over"

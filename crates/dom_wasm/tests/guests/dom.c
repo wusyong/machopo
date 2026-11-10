@@ -348,6 +348,229 @@ static void bad_utf8(void) {
     FAIL("a string that isn't UTF-8 didn't trap");
 }
 
+// The element `option` holds, or 0 for none.
+static node_t some_element(machopo_dom_dom_option_element_t option) {
+    return option.is_some ? option.val : 0;
+}
+
+// `child` appended to `parent`.
+static void append(node_t parent, node_t child) {
+    exception_t err;
+    node_t appended;
+    if (!machopo_dom_dom_node_append_child(parent, child, &appended, &err)) {
+        machopo_dom_dom_dom_exception_free(&err);
+    }
+}
+
+// An element's own interface's members: an input's value and checked;
+// another element for `this` is a TypeError (the handle's interface is the
+// element's by its name).
+static void input(void) {
+    exception_t err;
+    node_t document = machopo_dom_dom_create_document();
+    node_t field = element(document, "input");
+    test_string_t value = s("typed"), read;
+    OK(machopo_dom_dom_html_input_element_value(field, &read, &err));
+    CHECK(is(&read, ""));
+    OK(machopo_dom_dom_html_input_element_set_value(field, &value, &err));
+    OK(machopo_dom_dom_html_input_element_value(field, &read, &err));
+    CHECK(is(&read, "typed"));
+    // `[LegacyNullToEmptyString]`: none is the empty string.
+    OK(machopo_dom_dom_html_input_element_set_value(field, NULL, &err));
+    OK(machopo_dom_dom_html_input_element_value(field, &read, &err));
+    CHECK(is(&read, ""));
+    bool checked = true;
+    OK(machopo_dom_dom_html_input_element_checked(field, &checked, &err));
+    CHECK(!checked);
+    OK(machopo_dom_dom_html_input_element_set_checked(field, true, &err));
+    OK(machopo_dom_dom_html_input_element_checked(field, &checked, &err));
+    CHECK(checked);
+    // An input is an HTML element and an element; a div is no input.
+    node_t div = element(document, "div");
+    FAILS(machopo_dom_dom_html_input_element_value(div, &read, &err), 1);
+    FAILS(machopo_dom_dom_html_input_element_set_checked(div, true, &err), 1);
+    FAILS(machopo_dom_dom_html_input_element_checked(document, &checked, &err), 1);
+    test_string_t name = s("id");
+    OK(machopo_dom_dom_element_set_attribute(field, &name, &value, &err));
+}
+
+// An object that isn't a node: an element's class list, the same handle
+// each time, another element's another; its members, with any number of
+// tokens and an optional boolean.
+static void class_list(void) {
+    exception_t err;
+    node_t document = machopo_dom_dom_create_document();
+    node_t div = element(document, "div"), other = element(document, "div");
+    node_t list, again, others;
+    OK(machopo_dom_dom_element_class_list(div, &list, &err));
+    OK(machopo_dom_dom_element_class_list(div, &again, &err));
+    OK(machopo_dom_dom_element_class_list(other, &others, &err));
+    CHECK(list != 0 && list == again && list != others && list != div);
+
+    test_string_t two[2] = {s("a"), s("b")};
+    test_list_string_t tokens = {two, 2};
+    OK(machopo_dom_dom_dom_token_list_add(list, &tokens, &err));
+    test_string_t name;
+    OK(machopo_dom_dom_element_class_name(div, &name, &err));
+    CHECK(is(&name, "a b"));
+    uint32_t length;
+    OK(machopo_dom_dom_dom_token_list_length(list, &length, &err));
+    CHECK(length == 2);
+    test_option_string_t item;
+    OK(machopo_dom_dom_dom_token_list_item(list, 1, &item, &err));
+    CHECK(item.is_some && is(&item.val, "b"));
+    OK(machopo_dom_dom_dom_token_list_item(list, 2, &item, &err));
+    CHECK(!item.is_some);
+    test_string_t a = s("a"), c = s("c");
+    bool has;
+    OK(machopo_dom_dom_dom_token_list_contains(list, &a, &has, &err));
+    CHECK(has);
+    OK(machopo_dom_dom_dom_token_list_contains(list, &c, &has, &err));
+    CHECK(!has);
+    // No tokens at all.
+    test_list_string_t none = {NULL, 0};
+    OK(machopo_dom_dom_dom_token_list_add(list, &none, &err));
+    // Toggled with no `force`, then forced off twice.
+    OK(machopo_dom_dom_dom_token_list_toggle(list, &c, NULL, &has, &err));
+    CHECK(has);
+    bool off = false;
+    OK(machopo_dom_dom_dom_token_list_toggle(list, &c, &off, &has, &err));
+    CHECK(!has);
+    OK(machopo_dom_dom_dom_token_list_toggle(list, &c, &off, &has, &err));
+    CHECK(!has);
+    test_list_string_t one = {&two[0], 1};
+    OK(machopo_dom_dom_dom_token_list_remove(list, &one, &err));
+    OK(machopo_dom_dom_element_class_name(div, &name, &err));
+    CHECK(is(&name, "b"));
+    // A token with a space is a DOM error (5, InvalidCharacterError's
+    // neighbour is the table's; it isn't a TypeError).
+    test_string_t spaced = s("x y");
+    test_list_string_t bad = {&spaced, 1};
+    CHECK(!machopo_dom_dom_dom_token_list_add(list, &bad, &err));
+    CHECK(err.code != 1);
+    machopo_dom_dom_dom_exception_free(&err);
+    // The list isn't an element, nor the element a list.
+    FAILS(machopo_dom_dom_element_class_name(list, &name, &err), 1);
+    FAILS(machopo_dom_dom_dom_token_list_length(div, &length, &err), 1);
+    // Released, the next one given is another number.
+    machopo_dom_dom_release(list);
+    OK(machopo_dom_dom_element_class_list(div, &again, &err));
+    CHECK(again != 0 && again != list);
+}
+
+// An element's style: a declaration block, its properties set and read.
+static void style(void) {
+    exception_t err;
+    node_t document = machopo_dom_dom_create_document();
+    node_t div = element(document, "div");
+    node_t declarations, again;
+    OK(machopo_dom_dom_html_element_style(div, &declarations, &err));
+    OK(machopo_dom_dom_html_element_style(div, &again, &err));
+    CHECK(declarations == again);
+    test_string_t display = s("display"), none = s("none"), read;
+    OK(machopo_dom_dom_css_style_declaration_set_property(declarations, &display, &none, NULL, &err));
+    OK(machopo_dom_dom_css_style_declaration_get_property_value(declarations, &display, &read, &err));
+    CHECK(is(&read, "none"));
+    OK(machopo_dom_dom_css_style_declaration_css_text(declarations, &read, &err));
+    CHECK(is(&read, "display: none;"));
+    test_string_t attribute = s("style");
+    test_option_string_t got;
+    OK(machopo_dom_dom_element_get_attribute(div, &attribute, &got, &err));
+    CHECK(got.is_some && is(&got.val, "display: none;"));
+    OK(machopo_dom_dom_css_style_declaration_remove_property(declarations, &display, &read, &err));
+    CHECK(is(&read, "none"));
+    test_string_t text = s("color: red");
+    OK(machopo_dom_dom_css_style_declaration_set_css_text(declarations, &text, &err));
+    test_string_t color = s("color");
+    OK(machopo_dom_dom_css_style_declaration_get_property_value(declarations, &color, &read, &err));
+    CHECK(is(&read, "red"));
+    // The attribute's setter takes a string (`[PutForwards=cssText]`).
+    test_string_t block = s("display: block");
+    OK(machopo_dom_dom_html_element_set_style(div, &block, &err));
+    OK(machopo_dom_dom_css_style_declaration_get_property_value(declarations, &display, &read, &err));
+    CHECK(is(&read, "block"));
+    // A text node has no style.
+    test_string_t data = s("t");
+    node_t node;
+    OK(machopo_dom_dom_document_create_text_node(document, &data, &node, &err));
+    FAILS(machopo_dom_dom_html_element_style(node, &declarations, &err), 1);
+}
+
+// An element's children and what a selector matches, as lists; its element
+// siblings; itself removed.
+static void lists(void) {
+    exception_t err;
+    node_t document = machopo_dom_dom_create_document();
+    node_t ul = element(document, "ul");
+    node_t first = element(document, "li"), second = element(document, "li");
+    append(ul, first);
+    append(ul, second);
+    node_t children, matched;
+    OK(machopo_dom_dom_element_children(ul, &children, &err));
+    uint32_t length;
+    OK(machopo_dom_dom_html_collection_length(children, &length, &err));
+    CHECK(length == 2);
+    machopo_dom_dom_option_element_t at;
+    OK(machopo_dom_dom_html_collection_item(children, 1, &at, &err));
+    CHECK(some_element(at) == second);
+    OK(machopo_dom_dom_html_collection_item(children, 2, &at, &err));
+    CHECK(!at.is_some);
+    test_string_t selector = s("li");
+    OK(machopo_dom_dom_element_query_selector_all(ul, &selector, &matched, &err));
+    OK(machopo_dom_dom_node_list_length(matched, &length, &err));
+    CHECK(length == 2);
+    machopo_dom_dom_option_node_t node;
+    OK(machopo_dom_dom_node_list_item(matched, 0, &node, &err));
+    CHECK(some(node) == first);
+    CHECK(matched != children);
+    // A selector that doesn't parse: a DOM error, not a TypeError.
+    test_string_t bad = s("li:");
+    CHECK(!machopo_dom_dom_element_query_selector_all(ul, &bad, &matched, &err));
+    CHECK(err.code != 1);
+    machopo_dom_dom_dom_exception_free(&err);
+
+    OK(machopo_dom_dom_element_next_element_sibling(first, &at, &err));
+    CHECK(some_element(at) == second);
+    OK(machopo_dom_dom_element_previous_element_sibling(second, &at, &err));
+    CHECK(some_element(at) == first);
+    OK(machopo_dom_dom_element_previous_element_sibling(first, &at, &err));
+    CHECK(!at.is_some);
+    // The collection is live: one removed, it has one.
+    OK(machopo_dom_dom_element_remove(first, &err));
+    OK(machopo_dom_dom_html_collection_length(children, &length, &err));
+    CHECK(length == 1);
+    // What matched isn't: it still has two.
+    OK(machopo_dom_dom_node_list_length(matched, &length, &err));
+    CHECK(length == 2);
+
+    // A document's body, and its own lists.
+    node_t html = element(document, "html"), body = element(document, "body");
+    append(document, html);
+    append(html, body);
+    machopo_dom_dom_option_html_element_t found;
+    OK(machopo_dom_dom_document_body(document, &found, &err));
+    CHECK(found.is_some && found.val == body);
+    test_string_t all = s("*");
+    OK(machopo_dom_dom_document_query_selector_all(document, &all, &matched, &err));
+    OK(machopo_dom_dom_node_list_length(matched, &length, &err));
+    CHECK(length == 2);
+    // A document of no window has no view.
+    machopo_dom_dom_option_window_t view;
+    OK(machopo_dom_dom_document_default_view(document, &view, &err));
+    CHECK(!view.is_some);
+}
+
+// A handle that isn't a node's where a node is taken traps.
+static void object_as_node(void) {
+    exception_t err;
+    node_t document = machopo_dom_dom_create_document();
+    node_t div = element(document, "div");
+    node_t list, appended;
+    OK(machopo_dom_dom_element_class_list(div, &list, &err));
+    machopo_dom_dom_node_append_child(div, list, &appended, &err);
+    FAIL("a class list taken as a node didn't trap");
+}
+
 // Whether `sleep` has come back from its wait.
 static bool woke;
 
@@ -407,6 +630,11 @@ static const struct {
     {"release-twice", release_twice},
     {"release-never-given", release_never_given},
     {"bad-utf8", bad_utf8},
+    {"input", input},
+    {"class-list", class_list},
+    {"style", style},
+    {"lists", lists},
+    {"object-as-node", object_as_node},
     {"is-awake", is_awake},
     {"is-asleep", is_asleep},
     {"print", print},

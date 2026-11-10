@@ -135,7 +135,14 @@ pub(crate) trait WitArg: ArgType {
 /// What a read argument gives the front end: `None` if it is of another
 /// type (none of the table's arguments asks for it).
 pub(crate) trait ReadArg {
-    fn string(&self) -> Option<&str> {
+    /// How many of the call's arguments it is: one, but any number of
+    /// strings.
+    fn count(&self) -> usize {
+        1
+    }
+    /// The string `offset` arguments after its first.
+    fn string_at(&self, offset: usize) -> Option<&str> {
+        let _ = offset;
         None
     }
     fn nullable_string(&self) -> Option<Option<&str>> {
@@ -144,11 +151,42 @@ pub(crate) trait ReadArg {
     fn node(&self) -> Option<Option<u32>> {
         None
     }
+    fn unsigned_long(&self) -> Option<u32> {
+        None
+    }
+    /// A `boolean`, or an optional one's: none if it wasn't given.
+    fn boolean(&self) -> Option<Option<bool>> {
+        None
+    }
 }
 
 impl ReadArg for Cow<'_, str> {
-    fn string(&self) -> Option<&str> {
-        Some(self)
+    fn string_at(&self, offset: usize) -> Option<&str> {
+        (offset == 0).then_some(self)
+    }
+}
+
+/// Any number of strings (`classList.add`'s tokens): the call's last
+/// arguments.
+impl ReadArg for Vec<Cow<'_, str>> {
+    fn count(&self) -> usize {
+        self.len()
+    }
+
+    fn string_at(&self, offset: usize) -> Option<&str> {
+        self.get(offset).map(|string| &**string)
+    }
+}
+
+impl WitArg for dom_api::typed::Strings {
+    type Wit = Vec<WasmStr>;
+    type Read<'s> = Vec<Cow<'s, str>>;
+
+    fn read<'s, T: 'static>(
+        wit: &Vec<WasmStr>,
+        store: &'s StoreContextMut<'_, T>,
+    ) -> wasmtime::Result<Vec<Cow<'s, str>>> {
+        wit.iter().map(|wit| read_string(wit, store)).collect()
     }
 }
 
@@ -193,12 +231,15 @@ impl WitArg for dom_api::typed::UnrestrictedDouble {
     }
 }
 
-/// An `unsigned long` (a character number): as `f64`, none of the frozen
-/// members takes one. Read as its own type: a `u32` read is a node's
-/// handle.
-pub(crate) struct UnsignedLong(#[expect(dead_code, reason = "no frozen member reads one")] u32);
+/// An `unsigned long` (an index). Read as its own type: a `u32` read is
+/// an object's handle.
+pub(crate) struct UnsignedLong(u32);
 
-impl ReadArg for UnsignedLong {}
+impl ReadArg for UnsignedLong {
+    fn unsigned_long(&self) -> Option<u32> {
+        Some(self.0)
+    }
+}
 
 impl WitArg for u32 {
     type Wit = u32;
@@ -209,8 +250,11 @@ impl WitArg for u32 {
     }
 }
 
-/// A `boolean`: as `f64`, none of the frozen members takes one.
-impl ReadArg for bool {}
+impl ReadArg for bool {
+    fn boolean(&self) -> Option<Option<bool>> {
+        Some(Some(*self))
+    }
+}
 
 impl WitArg for bool {
     type Wit = bool;
@@ -221,9 +265,12 @@ impl WitArg for bool {
     }
 }
 
-/// An optional `boolean` with no default (the guest's none): as `bool`,
-/// none of the frozen members takes one.
-impl ReadArg for Option<bool> {}
+/// An optional `boolean` with no default: the guest's none.
+impl ReadArg for Option<bool> {
+    fn boolean(&self) -> Option<Option<bool>> {
+        Some(*self)
+    }
+}
 
 impl WitArg for Option<bool> {
     type Wit = Option<bool>;
@@ -382,6 +429,43 @@ impl<L: dom_api::Interface> WitRet for NewElement<L> {
     }
 }
 
+/// The interfaces whose objects aren't nodes, as results: a handle the
+/// call gives, as a node's. (None is an argument yet.)
+macro_rules! objects {
+    ($($interface:ty),*) => {$(
+        impl WitRet for $interface {
+            type Wit = u32;
+            fn wit(ret: Ret) -> u32 {
+                match ret {
+                    Ret::Node(handle) => handle,
+                    other => other.unexpected(),
+                }
+            }
+        }
+
+        impl WitRet for Option<$interface> {
+            type Wit = Option<u32>;
+            fn wit(ret: Ret) -> Option<u32> {
+                match ret {
+                    Ret::Node(handle) => Some(handle),
+                    Ret::Null => None,
+                    other => other.unexpected(),
+                }
+            }
+        }
+    )*};
+}
+
+objects!(
+    dom_api::interfaces::EventTarget,
+    dom_api::interfaces::Window,
+    dom_api::interfaces::Location,
+    dom_api::interfaces::DOMTokenList,
+    dom_api::interfaces::CSSStyleProperties,
+    dom_api::interfaces::HTMLCollection,
+    dom_api::interfaces::NodeList
+);
+
 interfaces!(
     Node,
     Document,
@@ -417,9 +501,13 @@ pub(crate) trait WitArgs {
 /// The read arguments, by index: each a constant where the call asks, so
 /// its `match` folds.
 pub(crate) trait ReadArgs {
+    /// How many arguments the call has (any number of strings count each).
+    fn count(&self) -> usize;
     fn string(&self, index: usize) -> Option<&str>;
     fn nullable_string(&self, index: usize) -> Option<Option<&str>>;
     fn node(&self, index: usize) -> Option<Option<u32>>;
+    fn unsigned_long(&self, index: usize) -> Option<u32>;
+    fn boolean(&self, index: usize) -> Option<Option<bool>>;
 }
 
 macro_rules! wit_args {
@@ -446,10 +534,37 @@ macro_rules! wit_args {
         }
 
         impl<$($t: ReadArg),*> ReadArgs for ($($t,)*) {
+            fn count(&self) -> usize {
+                0usize $(.saturating_add(self.$i.count()))*
+            }
+
+            // The argument at `index`, or one of the strings that start
+            // before it (the last arguments, any number of them).
             #[allow(unused_variables)]
             fn string(&self, index: usize) -> Option<&str> {
+                $(
+                    if let Some(string) = index
+                        .checked_sub($i)
+                        .and_then(|offset| self.$i.string_at(offset))
+                    {
+                        return Some(string);
+                    }
+                )*
+                None
+            }
+
+            #[allow(unused_variables)]
+            fn unsigned_long(&self, index: usize) -> Option<u32> {
                 match index {
-                    $($i => self.$i.string(),)*
+                    $($i => self.$i.unsigned_long(),)*
+                    _ => None,
+                }
+            }
+
+            #[allow(unused_variables)]
+            fn boolean(&self, index: usize) -> Option<Option<bool>> {
+                match index {
+                    $($i => self.$i.boolean(),)*
                     _ => None,
                 }
             }
@@ -478,6 +593,27 @@ wit_args! {
     (A a 0)
     (A a 0, B b 1)
     (A a 0, B b 1, C c 2)
+}
+
+/// `focus(options?)`: its dictionary may be left out, and the guest's
+/// function has no such parameter (`wit::can_hold`): `this` alone, the
+/// options their defaults.
+impl WitArgs for (dom_api::interfaces::FocusOptions,) {
+    type Wit = (u32,);
+    type Rest = ();
+    type Read<'s> = ();
+
+    fn split((this,): Self::Wit) -> (u32, ()) {
+        (this, ())
+    }
+
+    fn check((): &(), _: &Handles) -> wasmtime::Result<()> {
+        Ok(())
+    }
+
+    fn read<T: 'static>((): &(), _: &StoreContextMut<'_, T>) -> wasmtime::Result<()> {
+        Ok(())
+    }
 }
 
 /// A call's result, kept in its operation.
@@ -681,6 +817,7 @@ where
         let args = <M::Args as WitArgs>::read(&rest, &cx)?;
         let mut front = WasmFront {
             dom: state.dom(),
+            layout: &state.layout,
             tables: &state.tables,
             store: number,
             this,
@@ -701,6 +838,8 @@ where
 /// operation (`OpFront`).
 struct WasmFront<'r, A> {
     dom: &'r RefCell<Dom>,
+    /// The page's layout, if the DOM was lent with one.
+    layout: &'r dom_api::LayoutCell,
     tables: &'r RefCell<Tables>,
     store: u32,
     this: u32,
@@ -726,16 +865,18 @@ impl<'r, A: ReadArgs> Front for WasmFront<'r, A> {
         &'o mut self,
         f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>, &mut Self::Op<'o>) -> R,
     ) -> R {
-        let dom = self.dom;
-        dom.borrow().read(|cx| f(&ApiCx::new(cx), self))
+        let (dom, layout) = (self.dom, self.layout);
+        dom.borrow()
+            .read(|cx| f(&ApiCx::with_layout_cell(cx, layout), self))
     }
 
     fn mutate<'o, R>(
         &'o mut self,
         f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>, &mut Self::Op<'o>) -> R,
     ) -> R {
-        let dom = self.dom;
-        dom.borrow_mut().mutate(|cx| f(&ApiCx::new(cx), self))
+        let (dom, layout) = (self.dom, self.layout);
+        dom.borrow_mut()
+            .mutate(|cx| f(&ApiCx::with_layout_cell(cx, layout), self))
     }
 
     // A typed function's arguments are counted by its type.
@@ -747,6 +888,39 @@ impl<'r, A: ReadArgs> Front for WasmFront<'r, A> {
         let args: &'r A = self.args;
         Some(args.string(index).expect("a string argument"))
     }
+
+    fn arg_count(&mut self) -> usize {
+        self.args.count()
+    }
+
+    fn u32_arg(&mut self, index: usize) -> Option<u32> {
+        Some(self.args.unsigned_long(index).expect("an unsigned long"))
+    }
+
+    fn bool_arg(&mut self, index: usize) -> bool {
+        self.args
+            .boolean(index)
+            .expect("a boolean argument")
+            .expect("a boolean that was given")
+    }
+
+    /// An optional boolean the guest gave none for.
+    fn is_undefined(&mut self, index: usize) -> bool {
+        self.args
+            .boolean(index)
+            .expect("a boolean argument")
+            .is_none()
+    }
+
+    /// A dictionary the guest's function has no parameter for: its
+    /// defaults.
+    fn dict_arg(&mut self, _: usize, _: &str) -> Option<Option<()>> {
+        Some(None)
+    }
+
+    /// A listener of a wasm document is an event handler attribute's
+    /// (`onfocus=""`), which is JS: it doesn't run.
+    fn call_listener(&mut self, _: &elise::Persistent<dom::Event>, _: usize) {}
 
     fn nullable_string_arg(&mut self, index: usize) -> Option<Option<&'r str>> {
         let args: &'r A = self.args;

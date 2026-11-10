@@ -416,8 +416,6 @@ fn a_guest_gets_the_plain_members() {
             assert_eq!(members, expected.iter().collect::<Vec<_>>(), "{interface}");
         }
     }
-    let wit = dom_wasm::wit::describe();
-    assert!(!wit.contains("event"), "no event in the WIT");
 }
 
 fn desc_of(name: &str) -> &'static dom_api::InterfaceDesc {
@@ -428,10 +426,11 @@ fn desc_of(name: &str) -> &'static dom_api::InterfaceDesc {
 }
 
 /// The WIT's members are the frozen ones (`wit::FROZEN`), each plain
-/// still: a member the table changes out of plain shows here, not as a
-/// guest's missing import.
+/// still, and the added ones (`wit::ADDED`), each one a guest can hold: a
+/// member the table changes out of that, or a name with no member, shows
+/// here, not as a guest's missing import.
 #[test]
-fn the_wit_is_the_frozen_members() {
+fn the_wit_is_the_listed_members() {
     let mut in_wit = Vec::new();
     for interface in dom_api::INTERFACES {
         for member in interface.members {
@@ -447,10 +446,11 @@ fn the_wit_is_the_frozen_members() {
         }
     }
     in_wit.sort();
-    let mut frozen: Vec<String> = dom_wasm::wit::FROZEN
+    let mut listed: Vec<String> = dom_wasm::wit::FROZEN
         .iter()
+        .chain(dom_wasm::wit::ADDED)
         .map(|name| (*name).to_owned())
         .collect();
-    frozen.sort();
-    assert_eq!(in_wit, frozen);
+    listed.sort();
+    assert_eq!(in_wit, listed);
 }

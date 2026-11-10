@@ -1,13 +1,15 @@
 // machopo:dom: the DOM for wasm guests, generated from dom_api's
 // declaration table by dom_wasm (`wit::describe`;
 // `MACHOPO_UPDATE_GOLDEN=1 cargo test -p dom_wasm --test it wit` writes it).
-package machopo:dom@0.1.0;
+package machopo:dom@0.2.0;
 
 interface dom {
-  /// A node: the store's own number for it, the same each time the store
-  /// is given it, until `release` lets it go. A number that isn't one of the
-  /// store's traps the call.
-  type node = u32;
+  /// An object of the DOM's (a node, an event, a window...): the store's own
+  /// number for it, the same each time the store is given it, until `release`
+  /// lets it go. A number that isn't one of the store's traps the call.
+  type object = u32;
+  /// A node.
+  type node = object;
   type document = node;
   type document-type = node;
   type document-fragment = node;
@@ -151,6 +153,13 @@ interface dom {
   type xml-document = node;
   type comment = node;
   type processing-instruction = node;
+  type window = object;
+  type location = object;
+  type html-collection = object;
+  type node-list = object;
+  type dom-token-list = object;
+  type css-style-declaration = object;
+  type css-style-properties = object;
 
   /// What a call failed with: `code` 1 is a TypeError (`this` of another
   /// interface), the others DOMException names: 2 HierarchyRequestError,
@@ -162,9 +171,24 @@ interface dom {
 
   /// A new HTML document, in no window.
   create-document: func() -> document;
-  /// Lets the store's node `handle` go: the number may be another node's
-  /// after, and the node is collected once nothing else holds it.
-  release: func(handle: node);
+  /// Lets the store's object `handle` go: the number may be another's after,
+  /// and the object is collected once nothing else holds it.
+  release: func(handle: object);
+
+  /// `Window.document`
+  window-document: func(this: window) -> result<document, dom-exception>;
+
+  /// `Window.location`
+  window-location: func(this: window) -> result<location, dom-exception>;
+
+  /// `Location.href`
+  location-href: func(this: location) -> result<string, dom-exception>;
+
+  /// `Location.hash`
+  location-hash: func(this: location) -> result<string, dom-exception>;
+
+  /// `Location.hash` (setter)
+  location-set-hash: func(this: location, value: string) -> result<_, dom-exception>;
 
   /// `Node.nodeType`
   node-node-type: func(this: node) -> result<u32, dom-exception>;
@@ -217,8 +241,17 @@ interface dom {
   /// `Node.contains`
   node-contains: func(this: node, other: option<node>) -> result<bool, dom-exception>;
 
+  /// `Document.defaultView`
+  document-default-view: func(this: document) -> result<option<window>, dom-exception>;
+
   /// `Document.documentElement`
   document-document-element: func(this: document) -> result<option<element>, dom-exception>;
+
+  /// `Document.body`
+  document-body: func(this: document) -> result<option<html-element>, dom-exception>;
+
+  /// `Document.body` (setter)
+  document-set-body: func(this: document, value: option<html-element>) -> result<_, dom-exception>;
 
   /// `Document.readyState`
   document-ready-state: func(this: document) -> result<string, dom-exception>;
@@ -237,6 +270,9 @@ interface dom {
 
   /// `Document.querySelector`
   document-query-selector: func(this: document, selectors: string) -> result<option<element>, dom-exception>;
+
+  /// `Document.querySelectorAll`
+  document-query-selector-all: func(this: document, selectors: string) -> result<node-list, dom-exception>;
 
   /// `Document.createElement`
   document-create-element: func(this: document, local-name: string) -> result<element, dom-exception>;
@@ -295,6 +331,9 @@ interface dom {
   /// `Element.className` (setter)
   element-set-class-name: func(this: element, value: string) -> result<_, dom-exception>;
 
+  /// `Element.children`
+  element-children: func(this: element) -> result<html-collection, dom-exception>;
+
   /// `Element.firstElementChild`
   element-first-element-child: func(this: element) -> result<option<element>, dom-exception>;
 
@@ -303,6 +342,12 @@ interface dom {
 
   /// `Element.childElementCount`
   element-child-element-count: func(this: element) -> result<u32, dom-exception>;
+
+  /// `Element.previousElementSibling`
+  element-previous-element-sibling: func(this: element) -> result<option<element>, dom-exception>;
+
+  /// `Element.nextElementSibling`
+  element-next-element-sibling: func(this: element) -> result<option<element>, dom-exception>;
 
   /// `Element.getAttribute`
   element-get-attribute: func(this: element, qualified-name: string) -> result<option<string>, dom-exception>;
@@ -343,6 +388,15 @@ interface dom {
   /// `Element.querySelector`
   element-query-selector: func(this: element, selectors: string) -> result<option<element>, dom-exception>;
 
+  /// `Element.querySelectorAll`
+  element-query-selector-all: func(this: element, selectors: string) -> result<node-list, dom-exception>;
+
+  /// `Element.classList`
+  element-class-list: func(this: element) -> result<dom-token-list, dom-exception>;
+
+  /// `Element.classList` (setter)
+  element-set-class-list: func(this: element, value: string) -> result<_, dom-exception>;
+
   /// `Element.innerHTML`
   element-inner-html: func(this: element) -> result<string, dom-exception>;
 
@@ -357,6 +411,81 @@ interface dom {
 
   /// `Element.insertAdjacentHTML`
   element-insert-adjacent-html: func(this: element, position: string, %string: string) -> result<_, dom-exception>;
+
+  /// `Element.remove`
+  element-remove: func(this: element) -> result<_, dom-exception>;
+
+  /// `HTMLElement.style`
+  html-element-style: func(this: html-element) -> result<css-style-properties, dom-exception>;
+
+  /// `HTMLElement.style` (setter)
+  html-element-set-style: func(this: html-element, value: string) -> result<_, dom-exception>;
+
+  /// `HTMLElement.click`
+  html-element-click: func(this: html-element) -> result<_, dom-exception>;
+
+  /// `HTMLElement.focus`
+  html-element-focus: func(this: html-element) -> result<_, dom-exception>;
+
+  /// `HTMLElement.blur`
+  html-element-blur: func(this: html-element) -> result<_, dom-exception>;
+
+  /// `HTMLInputElement.checked`
+  html-input-element-checked: func(this: html-input-element) -> result<bool, dom-exception>;
+
+  /// `HTMLInputElement.checked` (setter)
+  html-input-element-set-checked: func(this: html-input-element, value: bool) -> result<_, dom-exception>;
+
+  /// `HTMLInputElement.value`
+  html-input-element-value: func(this: html-input-element) -> result<string, dom-exception>;
+
+  /// `HTMLInputElement.value` (setter)
+  html-input-element-set-value: func(this: html-input-element, value: option<string>) -> result<_, dom-exception>;
+
+  /// `HTMLCollection.length`
+  html-collection-length: func(this: html-collection) -> result<u32, dom-exception>;
+
+  /// `HTMLCollection.item`
+  html-collection-item: func(this: html-collection, index: u32) -> result<option<element>, dom-exception>;
+
+  /// `NodeList.length`
+  node-list-length: func(this: node-list) -> result<u32, dom-exception>;
+
+  /// `NodeList.item`
+  node-list-item: func(this: node-list, index: u32) -> result<option<node>, dom-exception>;
+
+  /// `DOMTokenList.length`
+  dom-token-list-length: func(this: dom-token-list) -> result<u32, dom-exception>;
+
+  /// `DOMTokenList.item`
+  dom-token-list-item: func(this: dom-token-list, index: u32) -> result<option<string>, dom-exception>;
+
+  /// `DOMTokenList.contains`
+  dom-token-list-contains: func(this: dom-token-list, token: string) -> result<bool, dom-exception>;
+
+  /// `DOMTokenList.add`
+  dom-token-list-add: func(this: dom-token-list, tokens: list<string>) -> result<_, dom-exception>;
+
+  /// `DOMTokenList.remove`
+  dom-token-list-remove: func(this: dom-token-list, tokens: list<string>) -> result<_, dom-exception>;
+
+  /// `DOMTokenList.toggle`
+  dom-token-list-toggle: func(this: dom-token-list, token: string, force: option<bool>) -> result<bool, dom-exception>;
+
+  /// `CSSStyleDeclaration.cssText`
+  css-style-declaration-css-text: func(this: css-style-declaration) -> result<string, dom-exception>;
+
+  /// `CSSStyleDeclaration.cssText` (setter)
+  css-style-declaration-set-css-text: func(this: css-style-declaration, value: string) -> result<_, dom-exception>;
+
+  /// `CSSStyleDeclaration.getPropertyValue`
+  css-style-declaration-get-property-value: func(this: css-style-declaration, property: string) -> result<string, dom-exception>;
+
+  /// `CSSStyleDeclaration.setProperty`
+  css-style-declaration-set-property: func(this: css-style-declaration, property: string, value: option<string>, priority: option<string>) -> result<_, dom-exception>;
+
+  /// `CSSStyleDeclaration.removeProperty`
+  css-style-declaration-remove-property: func(this: css-style-declaration, property: string) -> result<string, dom-exception>;
 
   /// `CharacterData.data`
   character-data-data: func(this: character-data) -> result<string, dom-exception>;

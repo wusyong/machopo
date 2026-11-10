@@ -1,4 +1,4 @@
-package machopo:dom@0.1.0;
+package machopo:dom@0.2.0;
 
 /// The world of a page's wasm script (`<script type="application/wasm">` in
 /// a wasm document), a component: the DOM's interface imported, and `start`,

@@ -60,6 +60,61 @@ script_callback_code_t exports_script_start(node_t document) {
         struct timespec time = {0, 5000000};
         nanosleep(&time, NULL);
         say(document, root.val, "after the wait");
+    } else if (strcmp(which, "window") == 0) {
+        // The document's window, the same each time, and back; its
+        // location, read and its fragment set.
+        machopo_dom_dom_option_window_t view, again;
+        node_t back, location;
+        if (!machopo_dom_dom_document_default_view(document, &view, &err) || !view.is_some
+            || !machopo_dom_dom_document_default_view(document, &again, &err)
+            || !machopo_dom_dom_window_document(view.val, &back, &err)
+            || !machopo_dom_dom_window_location(view.val, &location, &err)) {
+            __builtin_trap();
+        }
+        say(document, root.val, view.val == again.val && view.val != document ? "one window" : "windows");
+        say(document, root.val, back == document ? "its document" : "another document");
+        script_string_t text, fragment = s("#/active");
+        if (!machopo_dom_dom_location_href(location, &text, &err)) __builtin_trap();
+        char href[128] = {0};
+        memcpy(href, text.ptr, text.len < sizeof href - 1 ? text.len : sizeof href - 1);
+        script_string_free(&text);
+        say(document, root.val, href);
+        if (!machopo_dom_dom_location_set_hash(location, &fragment, &err)
+            || !machopo_dom_dom_location_hash(location, &text, &err)) {
+            __builtin_trap();
+        }
+        memset(href, 0, sizeof href);
+        memcpy(href, text.ptr, text.len < sizeof href - 1 ? text.len : sizeof href - 1);
+        script_string_free(&text);
+        say(document, root.val, href);
+        // A window is no node: a node's member on it is a TypeError.
+        script_string_t name;
+        bool is_node = machopo_dom_dom_node_node_name(view.val, &name, &err);
+        say(document, root.val, !is_node && err.code == 1 ? "a window is no node" : "a window as a node");
+    } else if (strcmp(which, "focus") == 0 || strcmp(which, "blur") == 0 || strcmp(which, "click") == 0) {
+        // An input in the document: focused (and blurred again), or, a
+        // checkbox, clicked.
+        script_string_t tag = s("input"), type = s("type"), checkbox = s("checkbox");
+        node_t field, appended;
+        if (!machopo_dom_dom_document_create_element(document, &tag, &field, &err)
+            || !machopo_dom_dom_node_append_child(root.val, field, &appended, &err)) {
+            __builtin_trap();
+        }
+        if (strcmp(which, "click") == 0) {
+            bool checked = false;
+            if (!machopo_dom_dom_element_set_attribute(field, &type, &checkbox, &err)
+                || !machopo_dom_dom_html_element_click(field, &err)
+                || !machopo_dom_dom_html_input_element_checked(field, &checked, &err)) {
+                __builtin_trap();
+            }
+            say(document, root.val, checked ? "checked" : "not checked");
+        } else {
+            if (!machopo_dom_dom_html_element_focus(field, &err)) __builtin_trap();
+            if (strcmp(which, "blur") == 0 && !machopo_dom_dom_html_element_blur(field, &err)) {
+                __builtin_trap();
+            }
+            say(document, root.val, "done");
+        }
     } else if (strcmp(which, "yield") == 0) {
         // Gives way twice before it is done: the host calls back each time.
         say(document, root.val, "before the yields");

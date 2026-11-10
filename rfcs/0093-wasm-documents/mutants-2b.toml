@@ -1,0 +1,109 @@
+# Mutation test of stage 2b: the members added to the WIT (objects that
+# aren't nodes, elements' own interfaces), their argument types, and the
+# page's layout lent with its DOM:
+# python3 scripts/test.py mutate rfcs/0093-wasm-documents/mutants-2b.toml
+test = ["cargo", "test", "-q", "-p", "dom_wasm"]
+timeout = 300
+
+[[mutant]]
+name = "an unsigned long argument is 0"
+file = "crates/dom_wasm/src/front.rs"
+from = '''    fn unsigned_long(&self) -> Option<u32> {
+        Some(self.0)
+    }'''
+to = '''    fn unsigned_long(&self) -> Option<u32> {
+        Some(0)
+    }'''
+
+[[mutant]]
+name = "a boolean argument is its opposite"
+file = "crates/dom_wasm/src/front.rs"
+from = '''impl ReadArg for bool {
+    fn boolean(&self) -> Option<Option<bool>> {
+        Some(Some(*self))'''
+to = '''impl ReadArg for bool {
+    fn boolean(&self) -> Option<Option<bool>> {
+        Some(Some(!*self))'''
+
+[[mutant]]
+name = "an optional boolean is never given"
+file = "crates/dom_wasm/src/front.rs"
+from = '''    fn boolean(&self) -> Option<Option<bool>> {
+        Some(*self)
+    }'''
+to = '''    fn boolean(&self) -> Option<Option<bool>> {
+        Some(None)
+    }'''
+
+[[mutant]]
+name = "an optional boolean given none is read as given"
+file = "crates/dom_wasm/src/front.rs"
+from = '''        self.args
+            .boolean(index)
+            .expect("a boolean argument")
+            .is_none()'''
+to = '''        let _ = index;
+        false'''
+
+[[mutant]]
+name = "any number of strings counts as none"
+file = "crates/dom_wasm/src/front.rs"
+from = '''    fn count(&self) -> usize {
+        self.len()
+    }'''
+to = '''    fn count(&self) -> usize {
+        0
+    }'''
+
+[[mutant]]
+name = "each of the strings is the first"
+file = "crates/dom_wasm/src/front.rs"
+from = '''        self.get(offset).map(|string| &**string)'''
+to = '''        let _ = offset;
+        self.first().map(|string| &**string)'''
+
+[[mutant]]
+name = "a handle that isn't a node's is taken as a node"
+file = "crates/dom_wasm/src/front.rs"
+from = '''    if dom_api::typed::is_interface(NODE, of) {
+        Ok(())'''
+to = '''    if of == of {
+        Ok(())'''
+
+[[mutant]]
+name = "a dictionary left out keeps the member out of the WIT"
+file = "crates/dom_wasm/src/wit.rs"
+from = '''            .all(|param| holdable(param.ty) || left_out(param))'''
+to = '''            .all(|param| holdable(param.ty))'''
+
+[[mutant]]
+name = "a guest's operation has no layout"
+file = "crates/dom_wasm/src/front.rs"
+from = '''        dom.borrow_mut()
+            .mutate(|cx| f(&ApiCx::with_layout_cell(cx, layout), self))'''
+to = '''        let _ = layout;
+        dom.borrow_mut().mutate(|cx| f(&ApiCx::new(cx), self))'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "wasm_documents::"]
+
+[[mutant]]
+name = "the page's layout isn't lent with its DOM"
+file = "crates/dom_wasm/src/lib.rs"
+from = '''            state.dom = Some(RefCell::new(lent));
+            state.layout.set(layout.take());'''
+to = '''            state.dom = Some(RefCell::new(lent));'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "wasm_documents::"]
+
+[[mutant]]
+name = "the page's layout isn't handed back"
+file = "crates/dom_wasm/src/lib.rs"
+from = '''                    self.1.set(state.layout.take());'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "wasm_documents::"]
+
+[[mutant]]
+name = "a turn lends the DOM without the layout"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''        let ran = wasm.lend_page(dom, layout, || {'''
+to = '''        let _ = &layout;
+        let ran = wasm.lend(dom, || {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "wasm_documents::"]

@@ -282,6 +282,7 @@ impl WasmEngine {
         let Self {
             wasm,
             dom,
+            layout,
             set,
             scripts,
             ..
@@ -290,7 +291,7 @@ impl WasmEngine {
             return;
         };
         let index = script.index;
-        let ran = wasm.lend(dom, || {
+        let ran = wasm.lend_page(dom, layout, || {
             let ran = set
                 .with(index, |mut cx| -> wasmtime::Result<Option<u64>> {
                     cx.data_mut().guest_clock().wake_due();

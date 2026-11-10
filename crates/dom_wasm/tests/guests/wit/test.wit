@@ -6,7 +6,7 @@
 package machopo:dom-test;
 
 world test {
-  import machopo:dom/dom@0.1.0;
+  import machopo:dom/dom@0.2.0;
   export run: func(case: string) -> string;
   export sleep: async func(nanos: u64);
 }

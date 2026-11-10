@@ -27,10 +27,10 @@ use std::fmt::Write;
 use dom_api::{INTERFACES, InterfaceDesc, Member, MemberKind, TypeDesc};
 
 /// The WIT package.
-pub const PACKAGE: &str = "machopo:dom@0.1.0";
+pub const PACKAGE: &str = "machopo:dom@0.2.0";
 
 /// The interface a guest imports, by its full name.
-pub const INTERFACE: &str = "machopo:dom/dom@0.1.0";
+pub const INTERFACE: &str = "machopo:dom/dom@0.2.0";
 
 /// WIT's keywords: a name that is one is written `%name`.
 const KEYWORDS: &[&str] = &[
@@ -200,11 +200,117 @@ pub const FROZEN: &[&str] = &[
     "processing-instruction-target",
 ];
 
-/// Whether `member` of `interface` is in the WIT: plain (`is_plain`), and
-/// one of the frozen ones.
+/// The members added to the frozen ones, by their functions' names: of
+/// objects that aren't nodes (an event, a window, a list) and of elements'
+/// own interfaces, which a store's handles tell apart by their interfaces.
+/// A list, added to as a guest needs: each is a host function of its own.
+/// Each is one a guest can hold (`can_hold`; a test).
+pub const ADDED: &[&str] = &[
+    "document-body",
+    "document-set-body",
+    "document-default-view",
+    "document-query-selector-all",
+    "element-remove",
+    "element-next-element-sibling",
+    "element-previous-element-sibling",
+    "element-class-list",
+    "element-set-class-list",
+    "element-children",
+    "element-query-selector-all",
+    "html-element-focus",
+    "html-element-blur",
+    "html-element-click",
+    "html-element-style",
+    "html-element-set-style",
+    "html-input-element-value",
+    "html-input-element-set-value",
+    "html-input-element-checked",
+    "html-input-element-set-checked",
+    "dom-token-list-length",
+    "dom-token-list-item",
+    "dom-token-list-contains",
+    "dom-token-list-add",
+    "dom-token-list-remove",
+    "dom-token-list-toggle",
+    "css-style-declaration-css-text",
+    "css-style-declaration-set-css-text",
+    "css-style-declaration-get-property-value",
+    "css-style-declaration-set-property",
+    "css-style-declaration-remove-property",
+    "html-collection-length",
+    "html-collection-item",
+    "node-list-length",
+    "node-list-item",
+    "window-document",
+    "window-location",
+    "location-href",
+    "location-hash",
+    "location-set-hash",
+];
+
+/// Whether `member` of `interface` is in the WIT: one of the frozen ones,
+/// plain (`is_plain`), or one of the added ones, which a guest can hold
+/// (`can_hold`).
 pub fn in_wit(interface: &InterfaceDesc, member: &Member) -> bool {
-    is_plain(interface, member)
-        && is_frozen(&function_name(interface.name, member.name, member.kind))
+    let name = function_name(interface.name, member.name, member.kind);
+    (is_frozen(&name) && is_plain(interface, member))
+        || (is_added(&name) && can_hold(interface, member))
+}
+
+/// Whether the function `name` is one of the added members'.
+pub fn is_added(name: &str) -> bool {
+    ADDED.contains(&name)
+}
+
+/// Whether a guest can hold what `member` of `interface` takes and gives:
+/// objects of any interface (a handle each, `this` too), strings, numbers
+/// and booleans, and any number of strings (`list<string>`). A dictionary
+/// that may be left out is: the guest's function has no such parameter.
+/// Not a constructor, nor a static operation (no `this`).
+pub fn can_hold(_: &InterfaceDesc, member: &Member) -> bool {
+    let holdable = |ty: TypeDesc| {
+        !matches!(
+            ty,
+            TypeDesc::Dictionary(_)
+                | TypeDesc::DictOrBool(_)
+                | TypeDesc::Callback(_)
+                | TypeDesc::Function(_)
+                | TypeDesc::Sequence(_)
+                | TypeDesc::FrozenArray(_)
+                | TypeDesc::Doubles
+                | TypeDesc::Numbers
+                | TypeDesc::FrozenStrings
+                | TypeDesc::ObservableArray(_)
+                | TypeDesc::Promise(_)
+                | TypeDesc::NullableUnion(_)
+                | TypeDesc::Union(_)
+                | TypeDesc::Any
+                | TypeDesc::Rest
+                | TypeDesc::Slottables
+                | TypeDesc::NodesOrStrings
+                | TypeDesc::StringPairs
+                | TypeDesc::Uint8ClampedArray
+                | TypeDesc::StringOr(_)
+        )
+    };
+    !matches!(
+        member.kind,
+        MemberKind::Constant(_)
+            | MemberKind::Constructor
+            | MemberKind::IndexedSetter
+            | MemberKind::LegacyFactory
+    ) && !member.is_static
+        && holdable(member.returns)
+        && member
+            .params
+            .iter()
+            .all(|param| holdable(param.ty) || left_out(param))
+}
+
+/// Whether `param` isn't in the guest's function: a dictionary that may be
+/// left out, taken as its defaults.
+fn left_out(param: &dom_api::Param) -> bool {
+    param.optional && matches!(param.ty, TypeDesc::Dictionary(_))
 }
 
 /// Whether the function `name` is one of the frozen members'.
@@ -282,6 +388,11 @@ pub fn is_plain(interface: &InterfaceDesc, member: &Member) -> bool {
             .all(plain_type)
 }
 
+/// An interface's type in the WIT: its name's alias.
+fn type_name(interface: &str) -> String {
+    kebab_case(interface)
+}
+
 fn wit_type(ty: TypeDesc) -> String {
     match ty {
         TypeDesc::Undefined => "_".to_owned(),
@@ -305,9 +416,9 @@ fn wit_type(ty: TypeDesc) -> String {
             unreachable!("no plain member takes or gives a union")
         }
         TypeDesc::Uint8ClampedArray => unreachable!("no plain member takes or gives a typed array"),
+        TypeDesc::Strings => "list<string>".to_owned(),
         TypeDesc::Any
         | TypeDesc::Rest
-        | TypeDesc::Strings
         | TypeDesc::Numbers
         | TypeDesc::FrozenStrings
         | TypeDesc::Doubles
@@ -316,8 +427,8 @@ fn wit_type(ty: TypeDesc) -> String {
         | TypeDesc::StringPairs => unreachable!("no plain member takes or gives any value"),
         TypeDesc::String => "string".to_owned(),
         TypeDesc::NullableString => "option<string>".to_owned(),
-        TypeDesc::Node(interface) => kebab_case(interface),
-        TypeDesc::NullableNode(interface) => format!("option<{}>", kebab_case(interface)),
+        TypeDesc::Node(interface) => type_name(interface),
+        TypeDesc::NullableNode(interface) => format!("option<{}>", type_name(interface)),
     }
 }
 
@@ -334,15 +445,40 @@ pub fn describe() -> String {
     line(&format!("package {PACKAGE};"));
     line("");
     line("interface dom {");
-    line("  /// A node: the store's own number for it, the same each time the store");
-    line("  /// is given it, until `release` lets it go. A number that isn't one of the");
-    line("  /// store's traps the call.");
-    line("  type node = u32;");
+    line("  /// An object of the DOM's (a node, an event, a window...): the store's own");
+    line("  /// number for it, the same each time the store is given it, until `release`");
+    line("  /// lets it go. A number that isn't one of the store's traps the call.");
+    line("  type object = u32;");
+    line("  /// A node.");
+    line("  type node = object;");
     for interface in INTERFACES
         .iter()
         .filter(|interface| interface.node && interface.name != "Node")
     {
         line(&format!("  type {} = node;", kebab_case(interface.name)));
+    }
+    // The other interfaces the members name.
+    let named = |name: &str| {
+        INTERFACES.iter().any(|interface| {
+            interface.members.iter().any(|member| {
+                in_wit(interface, member)
+                    && (interface.name == name
+                        || member
+                            .params
+                            .iter()
+                            .map(|param| param.ty)
+                            .chain([member.returns])
+                            .any(|ty| {
+                                matches!(ty, TypeDesc::Node(of) | TypeDesc::NullableNode(of) if of == name)
+                            }))
+            })
+        })
+    };
+    for interface in INTERFACES
+        .iter()
+        .filter(|interface| !interface.node && named(interface.name))
+    {
+        line(&format!("  type {} = object;", type_name(interface.name)));
     }
     line("");
     line("  /// What a call failed with: `code` 1 is a TypeError (`this` of another");
@@ -355,16 +491,16 @@ pub fn describe() -> String {
     line("");
     line("  /// A new HTML document, in no window.");
     line("  create-document: func() -> document;");
-    line("  /// Lets the store's node `handle` go: the number may be another node's");
-    line("  /// after, and the node is collected once nothing else holds it.");
-    line("  release: func(handle: node);");
+    line("  /// Lets the store's object `handle` go: the number may be another's after,");
+    line("  /// and the object is collected once nothing else holds it.");
+    line("  release: func(handle: object);");
     for interface in INTERFACES {
         for member in interface.members {
             if matches!(member.kind, MemberKind::Constant(_)) || !in_wit(interface, member) {
                 continue;
             }
-            let mut params = format!("this: {}", kebab_case(interface.name));
-            for param in member.params {
+            let mut params = format!("this: {}", type_name(interface.name));
+            for param in member.params.iter().filter(|param| !left_out(param)) {
                 let _ = write!(
                     params,
                     ", {}: {}",

@@ -106,8 +106,8 @@ to = '''                self.turn(at, |_| Ok(()));'''
 [[mutant]]
 name = "start gets another document"
 file = "crates/dom_wasm/src/lib.rs"
-from = '''                .mutate(|cx| tables.give(cx, number, node.get(cx.gc))))'''
-to = '''                .mutate(|cx| tables.give(cx, number, cx.create_document(true))))'''
+from = '''                .mutate(|cx| tables.give(cx, number, node.get(cx.gc).into())))'''
+to = '''                .mutate(|cx| tables.give(cx, number, cx.create_document(true).into())))'''
 
 [[mutant]]
 name = "a turn polls once"

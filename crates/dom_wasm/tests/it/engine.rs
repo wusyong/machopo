@@ -220,3 +220,35 @@ fn a_script_that_yields_goes_on_in_the_same_turn() {
     assert_eq!(page.console(), []);
     assert_eq!(page.engine.until_next_timer(), None);
 }
+
+/// A guest reaches the page's window from its document (the same handle
+/// each time, and back), and its location: the URL, and the fragment it
+/// sets. A window is no node.
+#[test]
+fn a_guest_reaches_the_window_and_its_location() {
+    let mut page = Page::new("window");
+    page.run(guest());
+    assert_eq!(
+        page.said(),
+        [
+            "one window",
+            "its document",
+            "https://page.test/",
+            "#/active",
+            "a window is no node"
+        ]
+    );
+    assert_eq!(page.console(), []);
+}
+
+/// `click()`, an element's own, which dispatches its event as it runs
+/// (no listener hears it yet): a checkbox's default action checks it.
+/// (`focus()` and `blur()` need the element rendered: `shell`'s
+/// `wasm_documents` has them.)
+#[test]
+fn a_guest_clicks() {
+    let mut page = Page::new("click");
+    page.run(guest());
+    assert_eq!(page.said(), ["", "checked"]);
+    assert_eq!(page.console(), []);
+}

@@ -64,6 +64,9 @@ struct State {
     /// it (`WasmDom::take`) and lends it for each turn of its guests
     /// (`WasmDom::lend`), as the page's own work needs the `Dom` itself.
     dom: Option<RefCell<Dom>>,
+    /// The page's layout, while its DOM is lent with it (`lend_page`): what
+    /// a guest's calls read boxes from, and bring up to date. None else.
+    layout: dom_api::LayoutCell,
 }
 
 impl State {
@@ -169,6 +172,7 @@ impl WasmDom {
                 serial: slot.made,
                 tables: RefCell::default(),
                 dom: Some(RefCell::new(Dom::new())),
+                layout: std::cell::Cell::new(None),
             });
         });
         Self(())
@@ -199,14 +203,33 @@ impl WasmDom {
     ///
     /// If `dom` holds none, or the DOM is here already.
     pub fn lend<R>(&self, dom: &mut Option<Dom>, f: impl FnOnce() -> R) -> R {
-        /// Hands the DOM back as it goes.
-        struct Lent<'a>(&'a mut Option<Dom>);
+        self.lend_page(dom, &std::cell::Cell::new(None), f)
+    }
+
+    /// `lend`, with the page's layout (the engine's cell's, moved here and
+    /// back with the DOM): a guest's members that ask for boxes (`focus()`
+    /// of what is rendered, an element's geometry) find it, as a JS
+    /// document's do.
+    ///
+    /// # Panics
+    ///
+    /// As `lend`.
+    pub fn lend_page<R>(
+        &self,
+        dom: &mut Option<Dom>,
+        layout: &dom_api::LayoutCell,
+        f: impl FnOnce() -> R,
+    ) -> R {
+        /// Hands the DOM and the layout back as it goes.
+        struct Lent<'a>(&'a mut Option<Dom>, &'a dom_api::LayoutCell);
         impl Drop for Lent<'_> {
             fn drop(&mut self) {
-                *self.0 = STATE.with_borrow_mut(|slot| {
+                let back = STATE.with_borrow_mut(|slot| {
                     let state = slot.state.as_mut()?;
+                    self.1.set(state.layout.take());
                     Some(state.dom.take()?.into_inner())
                 });
+                *self.0 = back;
             }
         }
         let lent = dom.take().expect("the engine's DOM, not lent");
@@ -214,8 +237,9 @@ impl WasmDom {
             let state = slot.state.as_mut().expect("the thread's DOM");
             assert!(state.dom.is_none(), "the DOM is here already");
             state.dom = Some(RefCell::new(lent));
+            state.layout.set(layout.take());
         });
-        let _lent = Lent(dom);
+        let _lent = Lent(dom, layout);
         f()
     }
 
@@ -405,17 +429,125 @@ pub fn add_to_linker<T: 'static>(
     // The plain members only (`wit::is_plain`): the others take or give
     // what a guest can't hold yet (an object besides a node, a
     // dictionary); and of them the frozen ones (`wit::FROZEN`).
-    macro_rules! member {
-        ($interface:ident, $member:ident, $kind:ident, $path:ty, object) => {};
-        ($interface:ident, $member:ident, $kind:ident, $path:ty, plain) => {
+    // The WIT's members (`wit::in_wit`): the frozen ones, plain, and the
+    // added ones, each named here: only a member with an arm of its own,
+    // or a plain one, is a host function (each is compiled for its types,
+    // so the others' types need no wasm side).
+    macro_rules! listed {
+        ($interface:ident, $member:ident, $kind:ident, $path:ty) => {
             let name = wit::function_name(
                 stringify!($interface),
-                stringify!($member),
+                stringify!($member).trim_start_matches("r#"),
                 MemberKind::$kind,
             );
-            if wit::is_frozen(&name) {
+            if wit::is_frozen(&name) || wit::is_added(&name) {
                 front::add::<T, $path>(&mut instance, &name, store)?;
             }
+        };
+    }
+    macro_rules! member {
+        (Document, body, $kind:ident, $path:ty, $class:ident) => {
+            listed!(Document, body, $kind, $path);
+        };
+        (Document, defaultView, $kind:ident, $path:ty, $class:ident) => {
+            listed!(Document, defaultView, $kind, $path);
+        };
+        (Document, querySelectorAll, $kind:ident, $path:ty, $class:ident) => {
+            listed!(Document, querySelectorAll, $kind, $path);
+        };
+        (Element, remove, $kind:ident, $path:ty, $class:ident) => {
+            listed!(Element, remove, $kind, $path);
+        };
+        (Element, nextElementSibling, $kind:ident, $path:ty, $class:ident) => {
+            listed!(Element, nextElementSibling, $kind, $path);
+        };
+        (Element, previousElementSibling, $kind:ident, $path:ty, $class:ident) => {
+            listed!(Element, previousElementSibling, $kind, $path);
+        };
+        (Element, classList, $kind:ident, $path:ty, $class:ident) => {
+            listed!(Element, classList, $kind, $path);
+        };
+        (Element, children, $kind:ident, $path:ty, $class:ident) => {
+            listed!(Element, children, $kind, $path);
+        };
+        (Element, querySelectorAll, $kind:ident, $path:ty, $class:ident) => {
+            listed!(Element, querySelectorAll, $kind, $path);
+        };
+        (HTMLElement, focus, $kind:ident, $path:ty, $class:ident) => {
+            listed!(HTMLElement, focus, $kind, $path);
+        };
+        (HTMLElement, blur, $kind:ident, $path:ty, $class:ident) => {
+            listed!(HTMLElement, blur, $kind, $path);
+        };
+        (HTMLElement, click, $kind:ident, $path:ty, $class:ident) => {
+            listed!(HTMLElement, click, $kind, $path);
+        };
+        (HTMLElement, style, $kind:ident, $path:ty, $class:ident) => {
+            listed!(HTMLElement, style, $kind, $path);
+        };
+        (HTMLInputElement, value, $kind:ident, $path:ty, $class:ident) => {
+            listed!(HTMLInputElement, value, $kind, $path);
+        };
+        (HTMLInputElement, checked, $kind:ident, $path:ty, $class:ident) => {
+            listed!(HTMLInputElement, checked, $kind, $path);
+        };
+        (DOMTokenList, length, $kind:ident, $path:ty, $class:ident) => {
+            listed!(DOMTokenList, length, $kind, $path);
+        };
+        (DOMTokenList, item, $kind:ident, $path:ty, $class:ident) => {
+            listed!(DOMTokenList, item, $kind, $path);
+        };
+        (DOMTokenList, contains, $kind:ident, $path:ty, $class:ident) => {
+            listed!(DOMTokenList, contains, $kind, $path);
+        };
+        (DOMTokenList, add, $kind:ident, $path:ty, $class:ident) => {
+            listed!(DOMTokenList, add, $kind, $path);
+        };
+        (DOMTokenList, remove, $kind:ident, $path:ty, $class:ident) => {
+            listed!(DOMTokenList, remove, $kind, $path);
+        };
+        (DOMTokenList, toggle, $kind:ident, $path:ty, $class:ident) => {
+            listed!(DOMTokenList, toggle, $kind, $path);
+        };
+        (CSSStyleDeclaration, cssText, $kind:ident, $path:ty, $class:ident) => {
+            listed!(CSSStyleDeclaration, cssText, $kind, $path);
+        };
+        (CSSStyleDeclaration, getPropertyValue, $kind:ident, $path:ty, $class:ident) => {
+            listed!(CSSStyleDeclaration, getPropertyValue, $kind, $path);
+        };
+        (CSSStyleDeclaration, setProperty, $kind:ident, $path:ty, $class:ident) => {
+            listed!(CSSStyleDeclaration, setProperty, $kind, $path);
+        };
+        (CSSStyleDeclaration, removeProperty, $kind:ident, $path:ty, $class:ident) => {
+            listed!(CSSStyleDeclaration, removeProperty, $kind, $path);
+        };
+        (HTMLCollection, length, $kind:ident, $path:ty, $class:ident) => {
+            listed!(HTMLCollection, length, $kind, $path);
+        };
+        (HTMLCollection, item, $kind:ident, $path:ty, $class:ident) => {
+            listed!(HTMLCollection, item, $kind, $path);
+        };
+        (NodeList, length, $kind:ident, $path:ty, $class:ident) => {
+            listed!(NodeList, length, $kind, $path);
+        };
+        (NodeList, item, $kind:ident, $path:ty, $class:ident) => {
+            listed!(NodeList, item, $kind, $path);
+        };
+        (Window, document, Getter, $path:ty, $class:ident) => {
+            listed!(Window, document, Getter, $path);
+        };
+        (Window, location, Getter, $path:ty, $class:ident) => {
+            listed!(Window, location, Getter, $path);
+        };
+        (Location, href, Getter, $path:ty, $class:ident) => {
+            listed!(Location, href, Getter, $path);
+        };
+        (Location, hash, $kind:ident, $path:ty, $class:ident) => {
+            listed!(Location, hash, $kind, $path);
+        };
+        ($interface:ident, $member:ident, $kind:ident, $path:ty, object) => {};
+        ($interface:ident, $member:ident, $kind:ident, $path:ty, plain) => {
+            listed!($interface, $member, $kind, $path);
         };
     }
     dom_api::for_each_member!(member);
