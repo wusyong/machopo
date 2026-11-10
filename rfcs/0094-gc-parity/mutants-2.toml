@@ -1,0 +1,140 @@
+# Stage 2: elise's workers' runs as spans of the platform's trace.
+# elise's integration tests (`parallel`: marking, sweeping and scavenging
+# on a pool's workers; `concurrent`: a posted marking's run, its span
+# around the time it counts; `heap`: a worker's discarding).
+test = ["cargo", "test", "-q", "--manifest-path", "../third_party/elise/Cargo.toml", "-p", "elise", "--test", "it"]
+timeout = 600
+
+[[mutant]]
+name = "a span on the joining thread too"
+file = "../third_party/elise/crates/elise/src/platform.rs"
+from = '''        if !tracing.load(std::sync::atomic::Ordering::Relaxed) || delegate.is_joining_thread() {'''
+to = '''        if !tracing.load(std::sync::atomic::Ordering::Relaxed) {'''
+
+[[mutant]]
+name = "no span begun"
+file = "../third_party/elise/crates/elise/src/platform.rs"
+from = '''            return Self(None);
+        }
+        platform.trace_begin(name);
+        Self(Some(platform))
+    }
+}
+
+impl Drop'''
+to = '''            return Self(None);
+        }
+        let _ = (platform, name);
+        Self(None)
+    }
+}
+
+impl Drop'''
+
+[[mutant]]
+name = "a span never ended"
+file = "../third_party/elise/crates/elise/src/platform.rs"
+from = '''impl Drop for WorkerSpan<'_> {
+    fn drop(&mut self) {
+        if let Some(platform) = self.0 {
+            platform.trace_end();
+        }'''
+to = '''impl Drop for WorkerSpan<'_> {
+    fn drop(&mut self) {
+        let _ = self.0;'''
+
+[[mutant]]
+name = "a span ends before its run"
+file = "../third_party/elise/crates/elise/src/platform.rs"
+from = '''    let _span = WorkerSpan::begin(tracing, platform, delegate, name);'''
+to = '''    let _ = WorkerSpan::begin(tracing, platform, delegate, name);'''
+
+[[mutant]]
+name = "marking's span by another name"
+file = "../third_party/elise/crates/elise/src/heap/concurrent.rs"
+from = '''            "Gc.ConcurrentMark",'''
+to = '''            "Gc.Other",'''
+
+[[mutant]]
+name = "sweeping's span by another name"
+file = "../third_party/elise/crates/elise/src/heap/sweep.rs"
+from = '''            "Gc.ConcurrentSweep",'''
+to = '''            "Gc.Other",'''
+
+[[mutant]]
+name = "a scavenge's span by another name"
+file = "../third_party/elise/crates/elise/src/heap/young.rs"
+from = '''            "Gc.ParallelScavenge",'''
+to = '''            "Gc.Other",'''
+
+[[mutant]]
+name = "discarding's span by another name"
+file = "../third_party/elise/crates/elise/src/heap/discard.rs"
+from = '''            "Gc.Discard",'''
+to = '''            "Gc.Other",'''
+
+[[mutant]]
+name = "sweeping's span named as marking's"
+file = "../third_party/elise/crates/elise/src/heap/sweep.rs"
+from = '''            "Gc.ConcurrentSweep",'''
+to = '''            "Gc.ConcurrentMark",'''
+
+[[mutant]]
+name = "a worker's span whatever the flag says"
+file = "../third_party/elise/crates/elise/src/platform.rs"
+from = '''        if !tracing.load(std::sync::atomic::Ordering::Relaxed) || delegate.is_joining_thread() {'''
+to = '''        if delegate.is_joining_thread() {'''
+
+[[mutant]]
+name = "a phase begun whatever the flag says"
+file = "../third_party/elise/crates/elise/src/platform.rs"
+from = '''        if !tracing.load(std::sync::atomic::Ordering::Relaxed) {
+            return Self(None);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a phase begun isn't ended"
+file = "../third_party/elise/crates/elise/src/platform.rs"
+from = '''    pub(crate) fn end(self) {
+        if let Some(platform) = self.0 {
+            platform.trace_end();
+        }'''
+to = '''    pub(crate) fn end(self) {
+        let _ = self.0;'''
+
+[[mutant]]
+name = "a phase's end by the flag, not by its begin"
+file = "../third_party/elise/crates/elise/src/platform.rs"
+from = '''        platform.trace_begin(name);
+        Self(Some(platform))
+    }
+
+    #[inline]'''
+to = '''        platform.trace_begin(name);
+        Self(None)
+    }
+
+    #[inline]'''
+
+[[mutant]]
+name = "machopo's trace doesn't say it records"
+file = "crates/bindings/src/trace.rs"
+from = '''        RECORDING.store(true, Ordering::Relaxed);
+        Ok(())'''
+to = '''        Ok(())'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "trace::"]
+
+[[mutant]]
+name = "the renderer's heap's platform never traces"
+file = "crates/bindings/src/gc_platform.rs"
+from = '''        crate::trace::recording()'''
+to = '''        { static NEVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false); &NEVER }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "trace::"]
+
+[[mutant]]
+name = "gc_bench's platform never traces"
+file = "crates/gc_bench/src/gc_heap.rs"
+from = '''        bindings::trace::recording()'''
+to = '''        { static NEVER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false); &NEVER }'''
+test = ["python3", "scripts/bench/gc/gc_bench_test.py"]

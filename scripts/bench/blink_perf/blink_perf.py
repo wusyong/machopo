@@ -653,8 +653,9 @@ def write_gc_report(pages_run: dict[str, dict], env: dict) -> Path:
         "the DOM heap's (Oilpan's `CppGC.*` in Chrome; elise's `Gc.*` and the empty `CppHeap`'s `CppGC.*` in "
         "machopo), inside V8's GC or on their own, of it the `CppGC.*` slices', and the rest, V8's; the GC on "
         "the process's other threads "
-        "(which may overlap the main thread's pauses; elise's workers write no trace events, so machopo's DOM "
-        "heap there is the `CppHeap`'s alone); the pauses (slices less than 10 µs apart are one), their count a "
+        "(which may overlap the main thread's pauses), of it the DOM heap's (a worker's run of elise's jobs is "
+        "a `Gc.ConcurrentMark`, `Gc.ConcurrentSweep`, `Gc.ParallelScavenge` or `Gc.Discard`, as Oilpan's "
+        "`CppGC.ConcurrentMark` and the like); the pauses (slices less than 10 µs apart are one), their count a "
         "run, of them those of 1 ms or more, and their distribution over every run's.",
         "",
         "| Page | Score | Span | GC | GC % | DOM heap | `CppGC.*` | V8 | Other threads | DOM heap, other threads |",

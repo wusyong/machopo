@@ -253,6 +253,9 @@ STATICS_ALLOWED = {
     ("crates/style/src/lib.rs", "USER_AGENT"):
         "the UA stylesheet's index, made once on a thread (thread-local: its names are numbered on that thread)",
     ("crates/bindings/src/trace.rs", "SCRIPT_DEPTH"): "how deep in script a thread is (thread-local)",
+    ("crates/bindings/src/trace.rs", "RECORDING"):
+        "whether the process's trace records: the trace is a process's (Perfetto's session, as V8's platform), so "
+        "a renderer in a process of its own has its own flag, set as its own trace starts",
     ("crates/bindings/src/v8_text.rs", "ASCII_SCANS"): "tests' counters (thread-local)",
     ("crates/bindings/src/unified_heap.rs", "RECEIVER_UNWRAPS"): "tests' counters (thread-local)",
     ("crates/bindings/src/v8_text.rs", "BORROWED"):

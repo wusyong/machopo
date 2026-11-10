@@ -16,6 +16,7 @@
 
 use std::cell::Cell;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::platform;
 
@@ -70,6 +71,7 @@ pub fn start(file: &Path) -> Result<(), StartError> {
         return Err(StartError::V8Started);
     }
     if v8::machopo_trace::start(file, CATEGORIES, BUFFER_KB) {
+        RECORDING.store(true, Ordering::Relaxed);
         Ok(())
     } else {
         Err(StartError::File)
@@ -79,8 +81,21 @@ pub fn start(file: &Path) -> Result<(), StartError> {
 /// Stops the trace: the rest of it is written and the file closed. Does
 /// nothing if none was started.
 pub fn stop() {
+    RECORDING.store(false, Ordering::Relaxed);
     v8::machopo_trace::stop();
 }
+
+/// Whether a trace records ([`start`] to [`stop`]): the flag the DOM's heap
+/// reads before it tells its platform of a GC phase (`elise::Platform`'s
+/// `tracing`), so that a phase costs it a load and a branch with no trace,
+/// as a span of machopo's own does (cppgc reads its category's enabled flag
+/// so, `TracingController::GetCategoryGroupEnabled`). The trace's
+/// categories are fixed, so recording at all is recording `machopo`'s.
+pub fn recording() -> &'static AtomicBool {
+    &RECORDING
+}
+
+static RECORDING: AtomicBool = AtomicBool::new(false);
 
 /// Begins a span named `name` on this thread's track; [`end`] ends the
 /// innermost one. A load and a branch with no trace.

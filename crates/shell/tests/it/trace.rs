@@ -143,6 +143,15 @@ gc();
     );
     let phases = main_thread_cppgc_phases(&trace);
     assert!(phases.contains(&"CppGC.AtomicMark"), "{phases:?}");
+    // The DOM's heap's own marking in that pause: its platform's flag says
+    // the trace records.
+    let main = trace.thread_track("CrRendererMain");
+    assert!(
+        trace.events.iter().any(|event| event.kind == BEGIN
+            && event.track == Some(main)
+            && event.name == "Gc.Mark"),
+        "no Gc.Mark on the main thread"
+    );
 }
 
 /// The trace of machopo loading `path` from `routes`, with `env`.

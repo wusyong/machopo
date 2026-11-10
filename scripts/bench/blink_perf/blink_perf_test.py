@@ -453,7 +453,7 @@ class SpanGcTests(unittest.TestCase):
             (88, 95, "Gc.Sweep"),
         ])
         worker = slice_events(2, [(30, 70, "V8.GC_MC_BACKGROUND_MARKING"), (35, 45, "CppGC.ConcurrentMark"),
-                                  (80, 100, "Gc.Sweep")])
+                                  (80, 100, "Gc.ConcurrentSweep")])
         # Another process's V8.
         other = slice_events(3, [(20, 30, "MinorGC")])
         events = numbered(timed_events(1, 10, 90) + v8 + machopo + worker + other)

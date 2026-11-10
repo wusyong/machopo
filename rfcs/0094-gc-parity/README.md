@@ -64,7 +64,8 @@ python3 scripts/bench.py blink-perf --gc --pages bindings/gc-forest.html,binding
 
 ### elise 的 worker 的事件
 
-- elise 的平行工作都經過 `Platform` 的 job：concurrent marking（`post_job`）、sweep、平行的 scavenge。worker 跑 job 的時候經過 `Platform::trace_begin` 發 span，名稱照 cppgc（`CppGC.ConcurrentMark`、`CppGC.ConcurrentSweep` 對應的 `Gc.*`）；不開 trace 時每段只多一次讀取和判斷（machopo 的 `V8GcPlatform` 經過 V8 的 Perfetto）。名稱和位置在第 2 段決定。
+- elise 的平行工作都經過 `Platform` 的 job：marking（posted 的和停頓裡一起標的）、sweep、平行的 scavenge、把空頁還給作業系統（discard）。worker 每跑一次 job，job 自己經過 `Platform::trace_begin` 發一段 span，照 cppgc 的 `StatsCollector::EnabledConcurrentScope`（`CppGC.ConcurrentMark`、`CppGC.ConcurrentSweep`）：`Gc.ConcurrentMark`、`Gc.ConcurrentSweep`、`Gc.ParallelScavenge`、`Gc.Discard`（決定 8）。joining 的 thread（heap 的）不發：它跑的那一份已經在 `Gc.Mark`、`Gc.Sweep`、`Gc.Scavenge` 裡。span 由 drop 結束（run panic 時也結束）。不開 trace 時每一段（原本的 GC phase 和 worker 的 run）只多一次讀取和判斷（決定 9；machopo 的 `V8GcPlatform` 經過 V8 的 Perfetto，任何 thread 都能呼叫）。
+- elise 的 `platform.rs` 的 `WorkerSpan`；四種 job（`heap/concurrent.rs` 的 `Marker`、`heap/sweep.rs` 的 `Sweeper`、`heap/young.rs` 的 `Scavenging`、`heap/discard.rs` 的 `Discards`）各自拿著 heap 的 platform。
 - 在 elise 改（`../third_party/elise`，照它的 `../third_party/elise/docs/contributing.md`），push 到它的 `main` 之後更新 machopo 的 `third_party.toml`。
 - `--gc` 的報告的「其他 thread 上的 DOM heap」，machopo 這一側從此有數字。
 
@@ -134,11 +135,15 @@ python3 scripts/bench.py blink-perf --gc --pages bindings/gc-forest.html,binding
 6. **報告的 V8 的排程四欄**：full GC 和 scavenge 的次數、marking 開始的原因、開始時用量是上限的幾倍、full GC 之後嵌入端的大小。
 7. **頁面照平常的選法**（清單、路徑、`--pages`、`--dirs`），不另外加一份 GC 的清單；`docs/benchmarks.md` 建議 `bindings/gc-*`、`create-element`、`insert-before`、`parser/innerHTML-setter`。
 
+第 2 段開始前（2026-11-10，使用者說繼續，照看法）：
+
+8. **elise 的 worker 的 span 照 cppgc 命名，每次 run 一段**：`Gc.ConcurrentMark`、`Gc.ConcurrentSweep`、`Gc.ParallelScavenge`，加上做的時候看到的第四種 job，`Gc.Discard`（把空頁還給作業系統）。只在 worker 上發（joining 的 thread 跑的那一份在 GC 的 phase 裡）。不切到每一塊工作：不開 trace 時的成本最小，cppgc 也是每次 task 一段。
+
+第 2 段做到一半（2026-11-10，使用者選甲）：
+
+9. **不開 trace 時，elise 的每一段 phase 只付一次讀取和判斷，和 machopo 自己的 span 一樣**：`Platform::tracing` 交給 heap 一個 `&'static AtomicBool`（heap 建立時問一次，沒有 trace 的 platform 預設給永遠是 false 的），heap 和 job 在 `trace_begin` 之前先 relaxed 讀它；開始了的 phase 一定結束（`Phase`、`WorkerSpan` 記著自己有沒有開始），旗標中途變了也成對。machopo 的 `bindings::trace` 在開始錄時設自己的旗標（`recording()`），不改 fork 的 C++。照 cppgc 的 `TracingController::GetCategoryGroupEnabled`。原本每段是一次虛擬呼叫加進到 C++ 才判斷（幾十 ns，量不出來）：改的理由是一致，之後在比較細的地方加 span 不會把虛擬呼叫放上熱的路。不選只加回傳 bool 的查詢（乙：查詢本身還是虛擬呼叫）、維持現狀（丙）。旗標跟的是「有沒有在錄」，不是 `machopo` 這個 category：machopo 的 category 是固定的一組，兩者等價。
+
 ## 待決定
-
-第 2 段開始前：
-
-3. elise 的 span 的名稱和位置（哪幾種 job、每次 run 一段還是每一塊工作一段）。
 
 第 3 段開始前：
 

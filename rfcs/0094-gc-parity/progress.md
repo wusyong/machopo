@@ -7,7 +7,7 @@
 | 步驟 | 狀態 | 完成日期 |
 | --- | --- | --- |
 | 1 `bench.py blink-perf --gc`，兩邊錄 `v8.memory`，報告的 V8 的排程 | 完成 | 2026-11-10 |
-| 2 elise 的 worker 的事件，`--gc` 讀它們 | | |
+| 2 elise 的 worker 的事件，`--gc` 讀它們；不開 trace 時 elise 的 phase 只讀一個旗標 | 完成（elise `3bda47c`） | 2026-11-10 |
 | 3 評估 | | |
 
 ## 驗收
@@ -19,6 +19,8 @@
 | Perfetto 的 counter（int、double、`static_name`、`name`）和 debug annotation（巢狀的 dict、陣列、字串、double、interned 的名稱） | `blink_perf_test.py -k test_a_traces_counters_and_annotations` |
 | 兩邊的 trace 都有 `v8.memory` 的 counter，真的瀏覽器裡區間有 GC | `blink_perf_test.py -k GcRunTests`（dev build 和 Chrome for Testing） |
 | `common.py` 抽出 `perfetto_track_packets` 之後，其他工具照舊 | `python3 scripts/bench/speedometer/speedometer_test.py`、`python3 scripts/bench/gc/gc_bench_test.py` |
+| elise 的 worker 每跑一次 job 是 trace 的一段，在 worker 上、照 job 命名、有開始有結束，heap 的 thread 不發；span 包住 job 自己計的時間 | elise：`cargo test -p elise --test it parallel::a_workers_runs_are_spans_of_the_trace`、`concurrent::a_marking_finishes_at_the_safepoint_after_it_is_done`、`heap::a_worker_discards_the_pooled_pages` |
+| `--gc` 的「其他 thread 上的 DOM heap」machopo 這一側有數字 | 下面第 2 段的量測 |
 
 ## 做過的檢查
 
@@ -46,3 +48,23 @@
   - **Chrome 只在短的頁上處於 loading 狀態**：三個 `gc-*` 頁的計時區間 1.4 到 2.7 秒，marking 開始時用量是上限的 1.5 到 3.3 倍；`create-element`、`innerHTML-setter` 約 16 秒，超過 V8 的 loading 狀態最多的 7 秒，倍數和 machopo 一樣約 1.00，full GC 的次數也差不多（`create-element` 484 / 508；innerHTML 反而是 machopo 多，1015 / 658）。所以 full GC 比較多次在 blink-perf 上主要是短的頁的現象。
   - `insert-before` 照舊不算數（machopo 快 3 倍，可疑）；`gc-tree` 的「full GC 之後」照報告的說明比不了。
 - 跑過的檢查：`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs；`blink_perf_test.py`、`gc_bench_test.py`、`speedometer_test.py`（上面那一個以外）；第 1 段做完的 `cargo test --workspace`（第二次全部通過，第一次見上一條）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`。
+
+**第 2 段**（2026-11-10，同一台機器）：
+
+- elise（`../third_party/elise`）：`platform.rs` 的 `in_worker_span` 包住四種 job 的 `run`（`Gc.ConcurrentMark`、`Gc.ConcurrentSweep`、`Gc.ParallelScavenge`、`Gc.Discard`），job 各自拿著 heap 的 platform；`docs/design.md` 補上。新的測試見驗收。
+- 決定 9（不開 trace 時只讀一個旗標）：elise 的 `Platform::tracing`、`Phase`（原本的 14 處 `trace_begin`、`trace_end` 改成成對的 `Phase::begin`、`end`），`bindings::trace::recording()`，`V8GcPlatform` 和 `gc_bench` 的 platform 交出它。新的測試：elise 的 `heap::a_trace_that_doesnt_record_isnt_told_of_phases`、`a_trace_that_stops_in_a_phase_has_its_phases_ended`、`parallel::a_trace_that_doesnt_record_isnt_told_of_workers_runs`；`shell` 的 `trace::a_js_documents_cppgc_phases_are_traced` 多看 main thread 上有 `Gc.Mark`。
+- mutation test（`mutants-2.toml`，16 條，含決定 9 的 7 條）：都抓到。第一版是每個 `run` 開頭一個 `let _span = WorkerSpan::begin(…)`，「寫成 `let _ =`、span 立刻結束」這一條在 sweep、scavenge、discard 上抓不到（測試只看有開始有結束）；改成 `in_worker_span(…, || { … })` 包住整個 run，那種錯寫不出來，剩下 `in_worker_span` 自己的一處由 marking 的測試守住（span 的時間不短於 job 自己計的 `background_mark_ns`）。
+- machopo 的檢查（第 2 段做完）：`cargo test --workspace`、`cargo fmt --check`、clippy、`sanity.py` 八項、`blink_perf_test.py`、`gc_bench_test.py`。trace 的旗標（`bindings` 的 `RECORDING`）是整個 process 一個的 static，登記進 `sanity.py boundary` 的允許清單：trace 是 process 的，和 V8 的 platform 一樣。改成旗標之後沒有重量六頁（main thread 上只是虛擬呼叫換成讀旗標）。
+- elise 的檢查：`cargo test --workspace`、`sanity.py tests`、`numerics`、`cargo fmt --check`、clippy、`test.py models`（loom、shuttle）都過。fuzz、verus、miri 沒有跑（沒有動到它們守的東西：只加了 trace 的呼叫）。
+- **量測**（和第 1 段同樣的指令；machopo / Chrome，ms，3 次的中位數）：
+
+  | 頁 | main thread 的 DOM heap | 其他 thread 的 DOM heap | DOM heap 合計 |
+  | --- | ---: | ---: | ---: |
+  | `gc-forest` | 8.1 / 102 | 28.5 / 237 | 37 / 339 |
+  | `gc-mini-tree` | 8.1 / 123 | 30.7 / 388 | 39 / 511 |
+  | `gc-tree` | 8.1 / 112 | 165 / 372 | 173 / 484 |
+  | `create-element` | 54 / 1276 | 51 / 3061 | 105 / 4337 |
+  | `innerHTML-setter` | 120 / 2472 | 433 / 5938 | 553 / 8410 |
+
+  - **DOM heap 的總 CPU（main 加背景）elise 也比 Oilpan 少**：是 Oilpan 的 2% 到 36%（`gc-tree` 全部活著、要標的最多，差距最小）。第 1 段只能說 main thread 上贏，這一段補上背景的。
+  - main thread 的數字和第 1 段一樣（span 只加在 worker 上）。`insert-before` 照舊不算數。

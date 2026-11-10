@@ -17,7 +17,7 @@
 # The DOM's GC: machopo's own project, not a fork. Its `main` branch, a commit
 # its CI has tested (it runs on every push).
 repository = "https://github.com/wusyong/elise"
-rev = "3ae8793ae655fcfbf00d45ca53675be697e61694"
+rev = "3bda47ce1c8c0d8cfb266f8af3705f1ecc429570"
 
 [wasmtime]
 # wasm scripts' engine, with elise as a collector (`gc-elise`). The `machopo`

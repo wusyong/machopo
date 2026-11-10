@@ -63,6 +63,10 @@ impl elise::Platform for V8GcPlatform {
     /// thread that runs them: inside V8's GC events when V8 drives the
     /// heap (its steps and pause), as cppgc's are. A load and a branch with
     /// no trace.
+    fn tracing(&self) -> &'static std::sync::atomic::AtomicBool {
+        crate::trace::recording()
+    }
+
     fn trace_begin(&self, name: &'static str) {
         crate::trace::begin(name);
     }
