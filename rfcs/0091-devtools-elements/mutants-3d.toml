@@ -1,0 +1,234 @@
+# Mutation test of stage 3d: `CSS.forcePseudoState` (`dom`'s forced
+# pseudo-classes, the matcher's look at them in `style`, the `CSS` agent):
+# python3 scripts/test.py mutate rfcs/0091-devtools-elements/mutants-3d.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "devtools_css::forced"]
+timeout = 600
+
+[[mutant]]
+name = "matching doesn't look at the forced"
+file = "crates/style/src/selector.rs"
+from = '''        if let Some(forced) = self.cx.forced_pseudo_class(self.node, pc) {
+            return forced;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the forced looked at before the dependency is kept"
+file = "crates/style/src/selector.rs"
+from = '''        let state = crate::invalidation::pseudo_class_state(pc);
+        if state != 0 {
+            self.cx.add_state_dependencies(self.node, state);
+        }
+        // DevTools' (`CSS.forcePseudoState`): a flag's read while none is
+        // forced, after the dependency is kept, so that its change
+        // restyles what it matched.
+        if let Some(forced) = self.cx.forced_pseudo_class(self.node, pc) {
+            return forced;
+        }'''
+to = '''        if let Some(forced) = self.cx.forced_pseudo_class(self.node, pc) {
+            return forced;
+        }
+        let state = crate::invalidation::pseudo_class_state(pc);
+        if state != 0 {
+            self.cx.add_state_dependencies(self.node, state);
+        }'''
+
+[[mutant]]
+name = "an opposite forced doesn't stop the other matching"
+file = "crates/dom/src/probe.rs"
+from = '''        if opposite.is_some_and(|opposite| forced.has(opposite)) {
+            return Some(false);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "disabled has no opposite"
+file = "crates/dom/src/probe.rs"
+from = '''            PseudoClass::Enabled => ("enabled", Some("disabled")),'''
+to = '''            PseudoClass::Enabled => ("enabled", None),'''
+
+[[mutant]]
+name = "optional has no opposite"
+file = "crates/dom/src/probe.rs"
+from = '''            PseudoClass::Optional => ("optional", Some("required")),'''
+to = '''            PseudoClass::Optional => ("optional", None),'''
+
+[[mutant]]
+name = "no ancestor matches :focus-within"
+file = "crates/dom/src/probe.rs"
+from = '''        if *class == PseudoClass::FocusWithin && self.has_forced_focus_below(element) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "the element forced the focus matches :focus-within"
+file = "crates/dom/src/probe.rs"
+from = '''            std::iter::successors(self.flat_tree_parent(focused), |&node| {
+                self.flat_tree_parent(node)
+            })
+            .any(|node| elise::Gc::ptr_eq(node, element))'''
+to = '''            std::iter::successors(Some(focused), |&node| {
+                self.flat_tree_parent(node)
+            })
+            .any(|node| elise::Gc::ptr_eq(node, element))'''
+
+[[mutant]]
+name = ":focus-within forced isn't the ancestors'"
+file = "crates/dom/src/probe.rs"
+from = '''        self.has("focus") || self.has("focus-within")'''
+to = '''        self.has("focus")'''
+
+[[mutant]]
+name = "a change of what is forced restyles nothing"
+file = "crates/dom/src/probe.rs"
+from = '''        if states != 0 {
+            self.state_changed(element, states);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "hover forced restyles nothing"
+file = "crates/dom/src/probe.rs"
+from = '''            ("hover", AttributeChanges::HOVER),'''
+to = '''            ("hover", 0),'''
+
+[[mutant]]
+name = "disabled forced restyles nothing"
+file = "crates/dom/src/probe.rs"
+from = '''            ("disabled", AttributeChanges::DISABLED),'''
+to = '''            ("disabled", 0),'''
+
+[[mutant]]
+name = "required forced restyles nothing"
+file = "crates/dom/src/probe.rs"
+from = '''            ("required", AttributeChanges::REQUIRED),'''
+to = '''            ("required", 0),'''
+
+[[mutant]]
+name = "the rules of :required have no state"
+file = "crates/style/src/invalidation.rs"
+from = '''        PseudoClass::Required | PseudoClass::Optional => AttributeChanges::REQUIRED,'''
+to = ''''''
+
+[[mutant]]
+name = "the focus forced doesn't restyle the ancestors"
+file = "crates/dom/src/probe.rs"
+from = '''        if changed.has_focus() {
+            self.forced_focus_moved(element);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "what was forced stays as it was"
+file = "crates/dom/src/probe.rs"
+from = '''            elements.retain(|&(at, _)| at != id);
+            if !classes.is_empty() {'''
+to = '''            if !classes.is_empty() {'''
+
+[[mutant]]
+name = "the forced stay with an element that left its tree"
+file = "crates/dom/src/style.rs"
+from = '''            if forced {
+                forced_focus |= self.forced_pseudo_classes_removed(at);
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "the forced of the element taken out alone go"
+file = "crates/dom/src/style.rs"
+from = '''            if forced {
+                forced_focus |= self.forced_pseudo_classes_removed(at);
+            }'''
+to = '''            if forced && elise::Gc::ptr_eq(at, node) {
+                forced_focus |= self.forced_pseudo_classes_removed(at);
+            }'''
+
+[[mutant]]
+name = "the forced focus gone leaves :focus-within above"
+file = "crates/dom/src/style.rs"
+from = '''        if forced_focus {
+            self.forced_focus_left(parent);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the parent's :focus-within alone restyled"
+file = "crates/dom/src/probe.rs"
+from = '''            self.state_changed(parent, AttributeChanges::FOCUS_WITHIN);
+            self.forced_focus_moved(parent);'''
+to = '''            self.state_changed(parent, AttributeChanges::FOCUS_WITHIN);'''
+
+[[mutant]]
+name = "visited matches"
+file = "crates/dom/src/probe.rs"
+from = '''            PseudoClass::Target => ("target", None),'''
+to = '''            PseudoClass::Target => ("target", None),
+            PseudoClass::Visited => ("visited", None),'''
+
+[[mutant]]
+name = "the sessions' not together"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                    all | classes'''
+to = '''                    classes'''
+
+[[mutant]]
+name = "or of the two its own"
+file = "crates/dom/src/probe.rs"
+from = '''        Self(self.0 | other.0)'''
+to = '''        Self(other.0)'''
+
+[[mutant]]
+name = "a session's call adds to those before"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                    session.forced.retain(|&(at, _)| at != node);
+                    if !classes.is_empty() {'''
+to = '''                    if !classes.is_empty() {'''
+
+[[mutant]]
+name = "CSS.disable leaves the forced"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                let gone = self.sessions.borrow_mut().remove(name);
+                if let Some(gone) = gone {
+                    self.force(page.dom(), gone.forced.iter().map(|&(node, _)| node));
+                }'''
+to = '''                self.sessions.borrow_mut().remove(name);'''
+
+[[mutant]]
+name = "DOM.disable leaves the forced"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''        if self.dom_agent.enabled(session) {
+            return;
+        }
+        let forced = self'''
+to = '''        if true {
+            return;
+        }
+        let forced = self'''
+
+[[mutant]]
+name = "a session gone leaves the forced"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''        if let (Some(gone), Some(dom)) = (gone, dom) {
+            self.force(dom, gone.forced.iter().map(|&(node, _)| node));
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a document forced"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''                if !element {
+                    return Err("Node is not an Element".to_owned());
+                }
+                if let Some(session) = self.sessions.borrow_mut().get_mut(name) {'''
+to = '''                if let Some(session) = self.sessions.borrow_mut().get_mut(name) {'''
+
+[[mutant]]
+name = "a malformed list taken as none"
+file = "crates/renderer/src/render_thread/css_agent.rs"
+from = '''        if method == "forcePseudoState" && !params["forcedPseudoClasses"].is_array() {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "unknown names not passed over"
+file = "crates/dom/src/probe.rs"
+from = '''                .map_or(bits, |place| bits | 1 << place)'''
+to = '''                .map_or(u32::MAX, |place| bits | 1 << place)'''

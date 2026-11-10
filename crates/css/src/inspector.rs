@@ -215,7 +215,9 @@ fn skipped(text: &str, from: usize, to: usize, mut comment: impl FnMut(Range<usi
         let rest = &text[at..to];
         if let Some(after) = rest.strip_prefix("/*") {
             // Past the `*/`, if there is one.
-            let end = after.find("*/").map_or(to, |end| at.saturating_add(end).saturating_add(4));
+            let end = after
+                .find("*/")
+                .map_or(to, |end| at.saturating_add(end).saturating_add(4));
             comment(at..end);
             at = end;
         } else if rest.starts_with(|c: char| c.is_ascii_whitespace() || c == ';') {
@@ -312,7 +314,11 @@ mod tests {
         assert_eq!(at(text, &supports.prelude), "(display: grid)");
         // A comma in a function doesn't split.
         let nested = &supports.rules[0];
-        let selectors: Vec<&str> = nested.selectors.iter().map(|range| at(text, range)).collect();
+        let selectors: Vec<&str> = nested
+            .selectors
+            .iter()
+            .map(|range| at(text, range))
+            .collect();
         assert_eq!(selectors, ["p:is(.x, .y)"]);
         assert_eq!(at(text, &nested.block), "");
         assert!(at(text, &media.block).ends_with("{} }\n"));
@@ -356,7 +362,14 @@ mod tests {
             listed,
             [
                 ("margin", "1px 2px", false, true, false, "margin: 1px 2px;"),
-                ("color", "red ! IMPORTANT", true, true, false, "color: red ! IMPORTANT;"),
+                (
+                    "color",
+                    "red ! IMPORTANT",
+                    true,
+                    true,
+                    false,
+                    "color: red ! IMPORTANT;"
+                ),
                 ("foo", "bar", false, false, false, "foo: bar;"),
                 ("color", "blu", false, false, false, "color: blu;"),
                 ("gap", "1px", false, true, true, "/* gap: 1px; */"),
@@ -368,7 +381,10 @@ mod tests {
         // A `style` attribute's: all of it.
         let inline = "color: red;  zz: 1";
         let found = declarations_for_inspector(inline, 0..inline.len());
-        let ranges: Vec<&str> = found.iter().map(|declaration| at(inline, &declaration.range)).collect();
+        let ranges: Vec<&str> = found
+            .iter()
+            .map(|declaration| at(inline, &declaration.range))
+            .collect();
         assert_eq!(ranges, ["color: red;", "zz: 1"]);
     }
 

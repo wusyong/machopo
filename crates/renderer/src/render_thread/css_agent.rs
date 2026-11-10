@@ -13,8 +13,8 @@
 //! An element's `style` attribute is a sheet of its own, not told.
 
 use std::cell::{Cell, RefCell};
-use std::ops::Range;
 use std::collections::HashMap;
+use std::ops::Range;
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
@@ -22,7 +22,7 @@ use computed_style::ComputedStyle;
 use crossbeam_channel::Sender;
 use css::inspector::{SourceDeclaration, SourceRule};
 use css::{CssPropertyValueSet, CssRule, StyleSheetContents as CssStyleSheetContents};
-use dom::{Cx, Dom, NodeId, NodeKind, NodeRef};
+use dom::{Cx, Dom, ForcedPseudoClasses, NodeId, NodeKind, NodeRef};
 use dom_api::{DevToolsPage, FrameLayout};
 use protocol::renderer::RendererHostMsg;
 use serde_json::{Value, json};
@@ -41,6 +41,7 @@ const COMMANDS: &[&str] = &[
     "getStyleSheetText",
     "getAnimatedStylesForNode",
     "trackComputedStyleUpdatesForNode",
+    "forcePseudoState",
 ];
 
 /// A session's `CSS`, while it has it on.
@@ -54,6 +55,9 @@ struct Session {
     /// ids and their contents' addresses as last told (others now: script
     /// edited them, `styleSheetChanged`).
     sheets: Vec<(u64, usize)>,
+    /// The pseudo-classes it forces (`forcePseudoState`), by the elements'
+    /// backend ids: the DOM's are every session's together.
+    forced: Vec<(NodeId, ForcedPseudoClasses)>,
 }
 
 struct Tracked {
@@ -61,6 +65,9 @@ struct Tracked {
     node: NodeId,
     style: Option<Arc<ComputedStyle>>,
 }
+
+/// A `<link>` sheet's contents and its text as it came (`CssAgent::link_texts`).
+type LinkText = (Weak<CssStyleSheetContents>, Option<Rc<str>>);
 
 /// Blink's `InspectorCSSAgent`, for every session of the page.
 pub(crate) struct CssAgent {
@@ -83,7 +90,7 @@ pub(crate) struct CssAgent {
     /// for one loaded before (`refetched`). `None`: what came again isn't
     /// what the rules are now (CSSOM writes them, as for a sheet with no
     /// text).
-    link_texts: RefCell<Vec<(Weak<CssStyleSheetContents>, Option<Rc<str>>)>>,
+    link_texts: RefCell<Vec<LinkText>>,
     /// The `<link>` sheets to fetch again for their texts, and the commands
     /// that wait for them.
     refetches: RefCell<Vec<Refetch>>,
@@ -142,7 +149,10 @@ impl Lines {
     }
 
     fn position(&self, text: &str, offset: usize) -> (u32, u32) {
-        let line = self.starts.partition_point(|&start| start <= offset).saturating_sub(1);
+        let line = self
+            .starts
+            .partition_point(|&start| start <= offset)
+            .saturating_sub(1);
         let start = self.starts.get(line).copied().unwrap_or_default();
         let column = text
             .get(start..offset)
@@ -228,7 +238,12 @@ impl CssAgent {
     /// The `<link>` sheet fetched again (`take_refetches`' `key`) came with
     /// `text` (none: it failed), parsed against `base`: kept as its text if
     /// it has the rules the sheet has now; the commands waiting answered.
-    pub(crate) fn refetched(&self, key: usize, text: Option<String>, base: Option<css::UrlContext>) {
+    pub(crate) fn refetched(
+        &self,
+        key: usize,
+        text: Option<String>,
+        base: Option<css::UrlContext>,
+    ) {
         let refetch = {
             let mut refetches = self.refetches.borrow_mut();
             let Some(at) = refetches
@@ -367,8 +382,7 @@ impl CssAgent {
                             text,
                             refetch,
                             contents: contents.clone(),
-                            media: (owner.is_some() && !media.is_empty())
-                                .then(|| media.to_owned()),
+                            media: (owner.is_some() && !media.is_empty()).then(|| media.to_owned()),
                         });
                     }
                 }
@@ -711,15 +725,64 @@ impl CssAgent {
         &self.dom_agent
     }
 
-    /// `session` has gone.
-    pub(crate) fn detach(&self, session: &str) {
-        self.sessions.borrow_mut().remove(session);
+    /// `session` has gone: what it forced goes too (from `dom`, if the
+    /// renderer has one).
+    pub(crate) fn detach(&self, session: &str, dom: Option<&mut Dom>) {
+        let gone = self.sessions.borrow_mut().remove(session);
+        if let (Some(gone), Some(dom)) = (gone, dom) {
+            self.force(dom, gone.forced.iter().map(|&(node, _)| node));
+        }
     }
 
-    /// The DOM is going: the styles kept of its nodes go.
+    /// The `DOM` agent answered a command of `session`'s: once `DOM` is
+    /// off, what it forced goes (Chrome's; the nodes' ids went).
+    pub(crate) fn dom_answered(&self, session: &str, page: &mut dyn DevToolsPage) {
+        if self.dom_agent.enabled(session) {
+            return;
+        }
+        let forced = self
+            .sessions
+            .borrow_mut()
+            .get_mut(session)
+            .map(|session| std::mem::take(&mut session.forced))
+            .unwrap_or_default();
+        self.force(page.dom(), forced.iter().map(|&(node, _)| node));
+    }
+
+    /// `nodes`' forced pseudo-classes in the DOM made every session's
+    /// together again.
+    fn force(&self, dom: &mut Dom, nodes: impl Iterator<Item = NodeId>) {
+        let sessions = self.sessions.borrow();
+        let classes = |node: NodeId| {
+            sessions
+                .values()
+                .flat_map(|session| &session.forced)
+                .filter(|&&(at, _)| at == node)
+                .fold(ForcedPseudoClasses::default(), |all, &(_, classes)| {
+                    all | classes
+                })
+        };
+        let nodes: Vec<(NodeId, ForcedPseudoClasses)> =
+            nodes.map(|node| (node, classes(node))).collect();
+        drop(sessions);
+        if nodes.is_empty() {
+            return;
+        }
+        dom.mutate(|cx| {
+            for (node, classes) in nodes {
+                if let Some(element) = cx.node_by_id(node) {
+                    cx.set_forced_pseudo_classes(element, classes);
+                }
+            }
+        });
+    }
+
+    /// The DOM is going: the styles kept of its nodes go, and what was
+    /// forced on them.
     pub(crate) fn dom_gone(&self) {
         for session in self.sessions.borrow_mut().values_mut() {
             session.tracked = None;
+            session.forced.clear();
         }
         self.inline_styles.borrow_mut().clear();
     }
@@ -767,6 +830,16 @@ impl CssAgent {
         self.dom_agent.take_changes(page.dom());
         let id = command.get("id").cloned().unwrap_or(Value::Null);
         let params = command.get("params").cloned().unwrap_or_else(|| json!({}));
+        // Refused before it reaches Blink's agent, as an invalid parameter.
+        if method == "forcePseudoState" && !params["forcedPseudoClasses"].is_array() {
+            let error = json!({
+                "code": -32602,
+                "message": "Invalid parameters",
+                "data": "Failed to deserialize params.forcedPseudoClasses - BINDINGS: array expected",
+            });
+            self.send(session, &json!({ "id": id, "error": error }));
+            return true;
+        }
         let answer = self.answer(session, method, &params, &id, page);
         let message = match answer {
             // Answered later.
@@ -804,7 +877,10 @@ impl CssAgent {
                 Ok(json!({}))
             }
             "disable" => {
-                self.sessions.borrow_mut().remove(name);
+                let gone = self.sessions.borrow_mut().remove(name);
+                if let Some(gone) = gone {
+                    self.force(page.dom(), gone.forced.iter().map(|&(node, _)| node));
+                }
                 Ok(json!({}))
             }
             _ if !self.sessions.borrow().contains_key(name) => {
@@ -907,9 +983,9 @@ impl CssAgent {
                     };
                     Some(
                         std::iter::successors(first, |&at| cx.flat_tree_parent(at))
-                        .filter(|&at| cx.kind(at) == NodeKind::Element)
-                        .map(|at| cx.node_id(at))
-                        .collect::<Vec<NodeId>>(),
+                            .filter(|&at| cx.kind(at) == NodeKind::Element)
+                            .map(|at| cx.node_id(at))
+                            .collect::<Vec<NodeId>>(),
                     )
                 });
                 let (mut inherited, mut inherited_pseudo) = (Vec::new(), Vec::new());
@@ -941,8 +1017,7 @@ impl CssAgent {
                 });
                 if of_pseudo.is_none() {
                     result["inlineStyle"] = self.inline_json(page, node, explained.as_ref());
-                    if let Some(hints) =
-                        explained.as_ref().and_then(|e| e.presentation.as_deref())
+                    if let Some(hints) = explained.as_ref().and_then(|e| e.presentation.as_deref())
                     {
                         result["attributesStyle"] = style_json(hints);
                     }
@@ -1081,6 +1156,34 @@ impl CssAgent {
                 if let Some(session) = self.sessions.borrow_mut().get_mut(name) {
                     session.tracked = tracked;
                 }
+                Ok(json!({}))
+            }
+            "forcePseudoState" => {
+                let names = params["forcedPseudoClasses"]
+                    .as_array()
+                    .into_iter()
+                    .flatten();
+                let classes = ForcedPseudoClasses::from_names(names.filter_map(Value::as_str));
+                let (node, pseudo) = self.inspected(name, params, page)?;
+                // A pseudo-element's rules match as its element's: nothing
+                // of its own to force.
+                if pseudo.is_some() {
+                    return Ok(json!({}));
+                }
+                let element = page.dom().read(|cx| {
+                    cx.node_by_id(node)
+                        .is_some_and(|node| cx.kind(node) == NodeKind::Element)
+                });
+                if !element {
+                    return Err("Node is not an Element".to_owned());
+                }
+                if let Some(session) = self.sessions.borrow_mut().get_mut(name) {
+                    session.forced.retain(|&(at, _)| at != node);
+                    if !classes.is_empty() {
+                        session.forced.push((node, classes));
+                    }
+                }
+                self.force(page.dom(), std::iter::once(node));
                 Ok(json!({}))
             }
             _ => unreachable!("one of COMMANDS"),
@@ -1379,7 +1482,9 @@ fn declaration_json(declaration: &SourceDeclaration, text: &str, lines: &Lines) 
     let longhands = parsed.inspector_declarations();
     // A shorthand's longhands; none while a `var()` keeps them from having
     // values (Blink's).
-    if longhands.iter().any(|longhand| longhand.shorthand.is_some())
+    if longhands
+        .iter()
+        .any(|longhand| longhand.shorthand.is_some())
         && longhands.iter().all(|longhand| !longhand.value.is_empty())
     {
         let longhands: Vec<Value> = longhands
@@ -1437,10 +1542,9 @@ fn serialized(contents: &css::StyleSheetContents) -> String {
 /// element's, whatever its text). None if no start tag ends there.
 fn text_position(markup: &str, line: u32, text: &str) -> Option<(u32, u32)> {
     let index = usize::try_from(line.checked_sub(1)?).ok()?;
-    let start = if index == 0 {
-        0
-    } else {
-        markup.match_indices('\n').nth(index - 1)?.0.checked_add(1)?
+    let start = match index.checked_sub(1) {
+        None => 0,
+        Some(before) => markup.match_indices('\n').nth(before)?.0.checked_add(1)?,
     };
     let line_text = markup[start..].split('\n').next()?;
     // The `>`s that end a `<style` start tag: a `<style` before them in the
@@ -1628,7 +1732,8 @@ mod tests {
     /// whose text isn't there now, the first; a line with none, none.
     #[test]
     fn inline_sheets_text_is_found_in_the_markup() {
-        let markup = "<!DOCTYPE html>\n<p title='>'>é</p><style>a {}</style><style id=b>b {}</style>\n";
+        let markup =
+            "<!DOCTYPE html>\n<p title='>'>é</p><style>a {}</style><style id=b>b {}</style>\n";
         assert_eq!(text_position(markup, 2, "a {}"), Some((1, 25)));
         assert_eq!(text_position(markup, 2, "b {}"), Some((1, 49)));
         assert_eq!(text_position(markup, 2, "changed"), Some((1, 25)));

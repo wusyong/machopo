@@ -18,7 +18,7 @@
 | 3a stylesheet：`styleSheetAdded`、`styleSheetRemoved`、規則的 `styleSheetId`、`getStyleSheetText`、`<link>` 的原文和再抓、`<style>` 的位置 | 完成 | 2026-11-09 |
 | 3b 位置：`range`、劃掉的宣告、`@media`、`@supports`、inline style 的 stylesheet、`styleSheetChanged` | 完成 | 2026-11-09 |
 | 3c 其他的規則：繼承來的、pseudo element 的規則和節點、`getAnimatedStylesForNode`、`@keyframes` | 完成 | 2026-11-10 |
-| 3d `:hov`：`forcePseudoState` | 還沒開始 | |
+| 3d `:hov`：`forcePseudoState` | 完成 | 2026-11-10 |
 
 ## 驗收
 
@@ -77,6 +77,10 @@
 | 選了 pseudo element：它的規則、從它的元素開始繼承、沒有 inline style、layout 上的父元素是它的元素、computed 是它的、字型、`getBoxModel` 是它的盒子、`getInlineStylesForNode` 是錯誤、框和標籤是它的 | `cargo test -p shell --test it devtools_css::a_pseudo_element_is_styled_as_itself` |
 | 動畫的樣式：每個動畫各自的值和名字（只有生效中的），transition 合成一組（沒有在跑的時是空的），祖先各一份；`@keyframes` 每個名字一次，名字、keyframe 和宣告的位置 | `cargo test -p shell --test it devtools_css::animations_are_listed` |
 | 和 Chrome 一樣：pseudo element 和祖先的規則、pseudo element 的節點、它的樣式和框、來去的事件、`@keyframes`、動畫的樣式的名字和 property（只差 inline box 的高度，已知） | `python3 scripts/test.py cdp css_pseudo` |
+| 強制的 pseudo-class：只在那個元素上成立（祖先的 `:hover` 不跟著，`:has()` 跟著）、在它的規則和 computed 裡、script 的 `matches()` 看得到、畫出來；強制 `:focus`、`:focus-within` 時祖先的 `:focus-within` 成立（強制 `:focus` 的元素自己的不成立）；表單狀態的對立面不成立、其他照元素的狀態；`:visited` 收下不生效；不認得的名字不理；每次取代那個元素的整組；不是元素是錯誤，不是陣列是 invalid params | `cargo test -p shell --test it devtools_css::forced_pseudo_classes_match` |
+| 強制的 pseudo-class 收回：元素離開它的樹（子樹的也是，連同祖先的 `:focus-within`）、`CSS.disable`、`DOM.disable`、session 離開；兩個 session 的合在一起，一個收回時另一個的還在 | `cargo test -p shell --test it devtools_css::forced_pseudo_classes_go` |
+| 強制的 pseudo-class 改了時重算受影響的元素（沒有 `:has()` 讓整份重算的文件）：強制時才來的規則、`:required`、父元素之上的祖先的 `:focus-within`（強制和元素離開樹時）；`:visited` 跟著別的一起強制時也不成立 | `cargo test -p shell --test it devtools_css::forced_pseudo_classes_restyle_what_they_change` |
+| 和 Chrome 一樣：強制的 pseudo-class 在 computed、規則和 script 裡，表單狀態和它們的對立面，收回，錯誤（只差 Chrome 沒重算的兩處和錯誤的 data 裡的位置，已知） | `python3 scripts/test.py cdp css_force` |
 | main thread 的 scheduler：每個 queue 的 task 照送進來的順序；停住時只取 DevTools 和 rendering 的（main frame、`RequestVisualState`），其他的（Browser 的訊息、輸入、canvas）留著、不亂順序；等的時候看得到之後送來的、有 timeout 的會放棄；要打斷 script 的照舊單獨取出；停住留下的放回最前面；main thread 走了之後送不進去 | `cargo test -p renderer --lib task_queue` |
 | 停住時照樣畫：Console 的改動、框的節點、拿掉的框；`setPausedInDebuggerMessage` 的提示（頁面蓋上一層、上方中間的淡黃色框），`Overlay` 關著的 session 的不畫、拿掉之後沒有；繼續之後照常畫 | `cargo test -p shell --test it devtools_overlay::the_page_is_drawn_while_paused` |
 | 停住時的輸入等到繼續才處理 | `cargo test -p shell --test it devtools_overlay::input_waits_for_the_pause` |
@@ -214,6 +218,17 @@
   - 沒有 layout 時就處理 pseudo element 的改動、放著的改動丟掉：測試的 style 都在 lifecycle 裡重算；補了 script 改了 class 之後馬上 `getComputedStyle` 的情況，兩條都抓到。
   - `highlightNode` 選 pseudo element 時框它的元素：只測了 `getHighlightObjectForTest`；補了截圖，抓到。
 - **跑過的檢查**：`cargo test -p css -p dom -p style -p layout -p animation -p dom_api -p renderer -p shell` 全部通過；`test.py cdp css css_sheets css_source css_pseudo overlay dom` 只有已知的差異；`test.py wpt css/cssom css/cssom-view` 有一個不預期的失敗（`scrollIntoView-should-treat-slot-as-scroll-container.html`，reftest），連跑三次都失敗，但 3b 的 commit 上也一樣失敗，不是這一段造成的，還沒查；`sanity.py` 的 7 項都通過。第 3 段做完時才跑 `cargo test --workspace`、`fmt`、clippy。
+
+### 3d `:hov`（2026-11-10，macOS）
+
+- **開始前定的事**：「已決定的事項」第 28 條（V2：強制的 `:visited` 收下但不生效）、第 29 條（F1：照 Chrome 收 24 個名字）。決定前用 Chrome for Testing 152 試過每個名字在什麼元素上生效、對立的表單狀態、`:focus-within` 怎麼傳到祖先、元素離開樹和 `CSS.disable`、`DOM.disable` 之後。
+- **新的測試**：`shell` 的 `devtools_css::forced_pseudo_classes_match`、`forced_pseudo_classes_go`、`forced_pseudo_classes_restyle_what_they_change`；`test.py cdp` 加 `css_force` 一組。
+- **和 Chrome 比**（`test.py cdp css_force`）：第一次 5 處不同。照 Chrome 改了：強制 `:focus-within` 也讓祖先的 `:focus-within` 成立；`forcedPseudoClasses` 不是陣列時回答 invalid params。剩下的 3 處記成已知的：Chrome 的祖先的 `:focus-within` 在元素離開樹之後照樣成立（它的計數不跟著減）；`DOM.disable` 之後 Chrome 已經算好的 style 留著（它不重算）；錯誤的 data 裡 CBOR 的位置。比對本身的錯：元素移走之後要重新找它的 `nodeId`。
+- **mutation test**（`mutants-3d.toml`，29 條）：第一次抓到 22 條，漏了 7 條：
+  - 強制的狀態在記下 state 的依賴之前回答、`:required` 沒有狀態位元、強制的 focus 不重算祖先、元素離開樹時不重算祖先或只重算父元素、`:visited` 會成立：測試頁有 `.p:has(#x:hover)`，有 `:has()` 的文件裡任何狀態的改變都重算整份，蓋住了 invalidation 的錯；`:visited` 只強制它一個時不重算，成立與否看不出來。補了一個沒有 `:has()` 的測試（強制時才加的規則、`:required`、隔一層的祖先、`:visited` 和 `:hover` 一起強制），都抓到。
+  - 子樹裡的元素的強制的狀態留著：測試的錯，先強制再把元素搬進要拿掉的子樹，搬那一下就收回了；改成搬好之後再強制，抓到。
+- **跑過的檢查**：`cargo test -p dom -p style -p renderer` 和 `shell` 的 `devtools` 測試全部通過；`test.py cdp css css_sheets css_source css_pseudo css_force dom overlay` 只有已知的差異；`test.py wpt css/selectors` 沒有不預期的結果；`sanity.py` 的 7 項都通過。
+- **第 3 段做完時**：`cargo fmt` 整理了第 3 段改過的 13 個檔案，clippy 抓到的 5 處（兩個太複雜的型別、`index - 1`）改好了。`cargo test --workspace` 裡 `browser` 的 `navigation::a_srcdoc_document_commits_with_nothing_else_to_wake_the_renderer` 偶爾超過它的 5 秒期限：單獨跑多半 2.5 秒內，8 個一起跑時全部逾時，RFC 之前的 `7b34544` 一樣；慢的是主文件 commit 之前那段（`RendererReady` 到 `DidCommitNavigation`），不是 srcdoc。不是這份 RFC 造成的，原因先不查。重跑 `cargo test --workspace` 全部通過。`test.py automation`：60 個情境和 `pipe --window` 都通過（第一次 `pipe --window` 的 `automation_pipe::the_real_window_is_driven_the_same` 逾時，重跑通過，和上一條一樣先不查）。
 
 ### 第 1、2 段的手動確認（2026-11-09，macOS）
 

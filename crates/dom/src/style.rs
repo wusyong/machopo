@@ -233,6 +233,9 @@ impl AttributeChanges {
     pub const MULTI_SELECT_FOCUS: u16 = 1 << 12;
     /// `:target`: its document's target element changed.
     pub const TARGET: u16 = 1 << 13;
+    /// `:required`, `:optional`: DevTools forced one or stopped (the DOM's
+    /// changes of them are of attributes).
+    pub const REQUIRED: u16 = 1 << 14;
     /// The states a form control's native look shows (`ControlState`'s:
     /// hovered, pressed and focused as itself, checked, indeterminate,
     /// disabled as its control).
@@ -1187,7 +1190,12 @@ impl<'gc> Cx<'_, 'gc> {
         let uses = self.has_seen_uses();
         let iframes = self.has_seen_removal_steps();
         let names = self.has_seen(crate::form::NAMES_SEEN);
+        let forced = self.has_forced_pseudo_classes();
+        let mut forced_focus = false;
         self.for_each_shadow_including_inclusive_descendant(node, |at, in_shadow| {
+            if forced {
+                forced_focus |= self.forced_pseudo_classes_removed(at);
+            }
             if uses {
                 self.svg_use_node_moved(at, false);
             }
@@ -1228,6 +1236,9 @@ impl<'gc> Cx<'_, 'gc> {
         if sheets {
             // The document `node` was in, `parent`'s.
             self.style_sheets_changed(parent);
+        }
+        if forced_focus {
+            self.forced_focus_left(parent);
         }
         if states != 0 {
             self.user_action_element_removed(parent, states);

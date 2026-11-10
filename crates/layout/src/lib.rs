@@ -110,8 +110,7 @@ pub use fragment::{
 };
 pub use geometry::{
     BoxQuads, Quad, ScrollOffsets, border_quads, bounding_rect, box_quads, box_transform,
-    pseudo_box_quads,
-    client_rects, element_box, is_fixed, text_rects,
+    client_rects, element_box, is_fixed, pseudo_box_quads, text_rects,
 };
 pub use platform_fonts::{PlatformFont, platform_fonts};
 use replaced::Replaced;

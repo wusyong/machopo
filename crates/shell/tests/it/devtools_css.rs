@@ -522,11 +522,7 @@ fn added(page: &mut Client) -> Vec<Value> {
 
 /// `getStyleSheetText` of the sheet `id`.
 fn sheet_text(page: &mut Client, id: &Value) -> String {
-    let answer = result(page.call(
-        None,
-        "CSS.getStyleSheetText",
-        json!({ "styleSheetId": id }),
-    ));
+    let answer = result(page.call(None, "CSS.getStyleSheetText", json!({ "styleSheetId": id })));
     answer["text"].as_str().unwrap().to_owned()
 }
 
@@ -587,14 +583,25 @@ fn style_sheets_are_told_with_their_texts() {
     );
     assert_eq!(sheet_text(&mut page, &from_link["styleSheetId"]), link);
     // Kept as it came: not fetched again.
-    let fetched = server.requests().iter().filter(|request| request.target == "/style.css").count();
+    let fetched = server
+        .requests()
+        .iter()
+        .filter(|request| request.target == "/style.css")
+        .count();
     assert_eq!(fetched, 1);
-    assert_eq!(place(from_link), [&json!(0), &json!(0), &json!(2), &json!(0), &json!(36)]);
+    assert_eq!(
+        place(from_link),
+        [&json!(0), &json!(0), &json!(2), &json!(0), &json!(36)]
+    );
 
     assert_eq!(from_style["sourceURL"], page_url);
     assert_eq!(from_style["ownerNode"], backend(&mut page, "style"));
     assert_eq!(
-        (&from_style["isInline"], &from_style["title"], &from_style["isMutable"]),
+        (
+            &from_style["isInline"],
+            &from_style["title"],
+            &from_style["isMutable"]
+        ),
         (&json!(true), &json!("t"), &json!(false))
     );
     assert!(from_style.get("loadingFailed").is_none(), "{from_style}");
@@ -603,10 +610,17 @@ fn style_sheets_are_told_with_their_texts() {
         "\np { color: red }\n"
     );
     // After `<style media=screen title=t>`, on the markup's third line.
-    assert_eq!(place(from_style), [&json!(2), &json!(28), &json!(4), &json!(0), &json!(18)]);
+    assert_eq!(
+        place(from_style),
+        [&json!(2), &json!(28), &json!(4), &json!(0), &json!(18)]
+    );
 
     assert_eq!(
-        (&adopted["sourceURL"], &adopted["isConstructed"], &adopted["isMutable"]),
+        (
+            &adopted["sourceURL"],
+            &adopted["isConstructed"],
+            &adopted["isMutable"]
+        ),
         (&json!(""), &json!(true), &json!(true))
     );
     assert!(adopted.get("ownerNode").is_none(), "{adopted}");
@@ -623,13 +637,20 @@ fn style_sheets_are_told_with_their_texts() {
         sheet_text(&mut page, &shadow["styleSheetId"]),
         "span { color: blue }"
     );
-    let ids: Vec<&Value> = headers.iter().map(|header| &header["styleSheetId"]).collect();
+    let ids: Vec<&Value> = headers
+        .iter()
+        .map(|header| &header["styleSheetId"])
+        .collect();
     assert!(
-        ids.iter().enumerate().all(|(at, id)| !ids[..at].contains(id)),
+        ids.iter()
+            .enumerate()
+            .all(|(at, id)| !ids[..at].contains(id)),
         "{ids:?}"
     );
     assert!(
-        headers.iter().all(|header| header["frameId"] == headers[0]["frameId"]),
+        headers
+            .iter()
+            .all(|header| header["frameId"] == headers[0]["frameId"]),
         "{headers:?}"
     );
 
@@ -685,13 +706,20 @@ fn sheets_coming_and_going_are_told() {
     let headers = added(&mut page);
     let id = |at: usize| headers[at]["styleSheetId"].clone();
 
-    evaluate(&mut page, "document.querySelector('style').textContent = 'p { color: blue }'", None);
+    evaluate(
+        &mut page,
+        "document.querySelector('style').textContent = 'p { color: blue }'",
+        None,
+    );
     let removed = page.event("CSS.styleSheetRemoved");
     assert_eq!(removed["params"]["styleSheetId"], id(1));
     let come = page.event("CSS.styleSheetAdded")["params"]["header"].clone();
     assert_ne!(come["styleSheetId"], id(1));
     assert_eq!(come["isInline"], true);
-    assert_eq!(sheet_text(&mut page, &come["styleSheetId"]), "p { color: blue }");
+    assert_eq!(
+        sheet_text(&mut page, &come["styleSheetId"]),
+        "p { color: blue }"
+    );
 
     evaluate(&mut page, "document.querySelector('link').remove()", None);
     assert_eq!(
@@ -699,7 +727,11 @@ fn sheets_coming_and_going_are_told() {
         id(0)
     );
     assert_eq!(
-        error(page.call(None, "CSS.getStyleSheetText", json!({ "styleSheetId": id(0) }))),
+        error(page.call(
+            None,
+            "CSS.getStyleSheetText",
+            json!({ "styleSheetId": id(0) })
+        )),
         "No style sheet with given id found"
     );
 
@@ -711,7 +743,10 @@ fn sheets_coming_and_going_are_told() {
     );
     let adopted = page.event("CSS.styleSheetAdded")["params"]["header"].clone();
     assert_eq!(adopted["isConstructed"], true);
-    assert_eq!(sheet_text(&mut page, &adopted["styleSheetId"]), "b { color: red; }\n");
+    assert_eq!(
+        sheet_text(&mut page, &adopted["styleSheetId"]),
+        "b { color: red; }\n"
+    );
     two_frames(&mut page);
     assert!(page.take_events("CSS.styleSheet").is_empty());
 
@@ -841,9 +876,8 @@ fn link_sheets_loaded_before_devtools_are_fetched_again() {
     };
     assert_eq!(padding_at(&mut page), (0, 0, 0, 1));
     // Asked twice before it comes: both answered, of one fetch.
-    let asked = [a_id.clone(), a_id.clone()].map(|id| {
-        page.send(None, "CSS.getStyleSheetText", json!({ "styleSheetId": id }))
-    });
+    let asked = [a_id.clone(), a_id.clone()]
+        .map(|id| page.send(None, "CSS.getStyleSheetText", json!({ "styleSheetId": id })));
     for asked in asked {
         assert_eq!(result(page.answer(asked))["text"], a);
     }
@@ -874,13 +908,20 @@ fn link_sheets_loaded_before_devtools_are_fetched_again() {
 }
 
 /// A `CSS.SourceRange` as (start line, start column, end line, end column).
-fn range(value: &Value) -> (u64, u64, u64, u64) {
+type SourceRange = (u64, u64, u64, u64);
+
+fn range(value: &Value) -> SourceRange {
     let at = |key: &str| {
         value[key]
             .as_u64()
             .unwrap_or_else(|| panic!("{key}: {value}"))
     };
-    (at("startLine"), at("startColumn"), at("endLine"), at("endColumn"))
+    (
+        at("startLine"),
+        at("startColumn"),
+        at("endLine"),
+        at("endColumn"),
+    )
 }
 
 /// The author rules `selector` finds an element matching.
@@ -921,16 +962,29 @@ fn rules_have_their_places() {
         unreachable!()
     };
     let selectors = first["selectorList"]["selectors"].as_array().unwrap();
-    let selectors: Vec<(&str, (u64, u64, u64, u64))> = selectors
+    let selectors: Vec<(&str, SourceRange)> = selectors
         .iter()
-        .map(|selector| (selector["text"].as_str().unwrap(), range(&selector["range"])))
+        .map(|selector| {
+            (
+                selector["text"].as_str().unwrap(),
+                range(&selector["range"]),
+            )
+        })
         .collect();
     // `é` is one code unit; the first runs to its comma.
-    assert_eq!(selectors, [(".a", (1, 8, 1, 11)), ("p > i.a", (2, 1, 2, 8))]);
+    assert_eq!(
+        selectors,
+        [(".a", (1, 8, 1, 11)), ("p > i.a", (2, 1, 2, 8))]
+    );
     assert_eq!(first["selectorList"]["text"], ".a, p > i.a");
     let style = &first["style"];
     assert_eq!(range(&style["range"]), (2, 10, 2, 84));
-    assert!(style["cssText"].as_str().unwrap().starts_with(" margin: 1px 2px;"));
+    assert!(
+        style["cssText"]
+            .as_str()
+            .unwrap()
+            .starts_with(" margin: 1px 2px;")
+    );
     let written: Vec<Value> = style["cssProperties"]
         .as_array()
         .unwrap()
@@ -992,15 +1046,27 @@ fn rules_have_their_places() {
     );
     let supports = &nested["supports"][0];
     assert_eq!(
-        (&supports["text"], &supports["active"], range(&supports["range"])),
+        (
+            &supports["text"],
+            &supports["active"],
+            range(&supports["range"])
+        ),
         (&json!("(display: grid)"), &json!(true), (4, 12, 4, 27))
     );
     assert_eq!(supports["styleSheetId"], first["styleSheetId"]);
     let media = &nested["media"];
     assert_eq!(media[0]["text"], "(max-width: 9999px)");
     assert_eq!(
-        (&media[1]["text"], &media[1]["source"], range(&media[1]["range"])),
-        (&json!("(min-width: 1px)"), &json!("mediaRule"), (3, 7, 3, 23))
+        (
+            &media[1]["text"],
+            &media[1]["source"],
+            range(&media[1]["range"])
+        ),
+        (
+            &json!("(min-width: 1px)"),
+            &json!("mediaRule"),
+            (3, 7, 3, 23)
+        )
     );
     assert_eq!(media[2]["text"], "screen");
     assert_eq!(
@@ -1024,7 +1090,7 @@ fn inline_styles_are_sheets_of_their_own() {
     assert!(id.is_string(), "{inline}");
     assert_eq!(inline["cssText"], "color: pink;  zz: 1");
     assert_eq!(range(&inline["range"]), (0, 0, 0, 19));
-    let written: Vec<(&str, &Value, (u64, u64, u64, u64))> = inline["cssProperties"]
+    let written: Vec<(&str, &Value, SourceRange)> = inline["cssProperties"]
         .as_array()
         .unwrap()
         .iter()
@@ -1067,7 +1133,9 @@ fn inline_styles_are_sheets_of_their_own() {
         .map(|property| {
             (
                 &property["name"],
-                property["longhandProperties"].as_array().map_or(0, Vec::len),
+                property["longhandProperties"]
+                    .as_array()
+                    .map_or(0, Vec::len),
             )
         })
         .collect();
@@ -1112,7 +1180,10 @@ fn edited_sheets_are_their_rules() {
         link
     );
     assert_eq!(sheet_text(&mut page, &link), "");
-    assert_eq!(sheet_text(&mut page, &headers[1]["styleSheetId"]), "p { top: 0px; }\n");
+    assert_eq!(
+        sheet_text(&mut page, &headers[1]["styleSheetId"]),
+        "p { top: 0px; }\n"
+    );
     assert_eq!(headers[1]["length"], 16);
     let id = headers[0]["styleSheetId"].clone();
     assert_eq!(sheet_text(&mut page, &id), "/* c */ p { color: red }");
@@ -1168,7 +1239,12 @@ fn pseudo_elements_and_ancestors_rules_are_listed() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|of| (of["pseudoType"].as_str().unwrap(), selectors(&of["matches"])))
+        .map(|of| {
+            (
+                of["pseudoType"].as_str().unwrap(),
+                selectors(&of["matches"]),
+            )
+        })
         .collect();
     assert_eq!(
         pseudo,
@@ -1182,7 +1258,12 @@ fn pseudo_elements_and_ancestors_rules_are_listed() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|of| (selectors(&of["matchedCSSRules"]), &of["inlineStyle"]["cssText"]))
+        .map(|of| {
+            (
+                selectors(&of["matchedCSSRules"]),
+                &of["inlineStyle"]["cssText"],
+            )
+        })
         .collect();
     assert_eq!(
         inherited,
@@ -1302,7 +1383,11 @@ fn a_pseudo_element_is_styled_as_itself() {
     );
     let (element_right, _) = at(&element, 2);
     assert_ne!(
-        screen(&mut page, element_right.saturating_sub(5), top.midpoint(bottom)),
+        screen(
+            &mut page,
+            element_right.saturating_sub(5),
+            top.midpoint(bottom)
+        ),
         [255, 0, 0]
     );
 }
@@ -1322,11 +1407,7 @@ fn animations_are_listed() {
          </style><div id=p><div id=x>x</div></div>",
     );
     let x = node(&mut page, &document, "#x");
-    let animated = result(page.call(
-        None,
-        "CSS.getAnimatedStylesForNode",
-        json!({ "nodeId": x }),
-    ));
+    let animated = result(page.call(None, "CSS.getAnimatedStylesForNode", json!({ "nodeId": x })));
     let styles = |of: &Value| -> Vec<(Value, Vec<(String, String)>)> {
         of["animationStyles"]
             .as_array()
@@ -1349,10 +1430,19 @@ fn animations_are_listed() {
             .collect()
     };
     let own = styles(&animated);
-    assert_eq!(own[0], (json!("fade"), vec![("opacity".to_owned(), "0.5".to_owned())]));
+    assert_eq!(
+        own[0],
+        (
+            json!("fade"),
+            vec![("opacity".to_owned(), "0.5".to_owned())]
+        )
+    );
     assert_eq!(
         own[1],
-        (json!("move"), vec![("margin-left".to_owned(), "25px".to_owned())])
+        (
+            json!("move"),
+            vec![("margin-left".to_owned(), "25px".to_owned())]
+        )
     );
     // The last over before it started: none.
     assert_eq!(own.len(), 2, "{own:?}");
@@ -1360,16 +1450,15 @@ fn animations_are_listed() {
     // Its ancestors': none.
     let inherited = animated["inherited"].as_array().unwrap();
     assert_eq!(inherited.len(), 3);
-    assert!(inherited.iter().all(|of| of["animationStyles"] == json!([])
-        && of.get("transitionsStyle").is_none()));
+    assert!(
+        inherited
+            .iter()
+            .all(|of| of["animationStyles"] == json!([]) && of.get("transitionsStyle").is_none())
+    );
     // A transition running.
     evaluate(&mut page, "x.style.left = '1000px'", None);
     two_frames(&mut page);
-    let animated = result(page.call(
-        None,
-        "CSS.getAnimatedStylesForNode",
-        json!({ "nodeId": x }),
-    ));
+    let animated = result(page.call(None, "CSS.getAnimatedStylesForNode", json!({ "nodeId": x })));
     let transitions = &animated["transitionsStyle"]["cssProperties"];
     assert_eq!(transitions[0]["name"], "left", "{animated}");
 
@@ -1383,19 +1472,311 @@ fn animations_are_listed() {
     assert_eq!(names, [&json!("fade"), &json!("move")]);
     let fade = &keyframes[0];
     assert_eq!(range(&fade["animationName"]["range"]), (1, 11, 1, 15));
-    let keys: Vec<(&Value, (u64, u64, u64, u64))> = fade["keyframes"]
+    let keys: Vec<(&Value, SourceRange)> = fade["keyframes"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|keyframe| (&keyframe["keyText"]["text"], range(&keyframe["keyText"]["range"])))
+        .map(|keyframe| {
+            (
+                &keyframe["keyText"]["text"],
+                range(&keyframe["keyText"]["range"]),
+            )
+        })
         .collect();
     assert_eq!(
         keys,
-        [(&json!("0%"), (1, 18, 1, 22)), (&json!("100%"), (1, 38, 1, 40))]
+        [
+            (&json!("0%"), (1, 18, 1, 22)),
+            (&json!("100%"), (1, 38, 1, 40))
+        ]
     );
     let style = &fade["keyframes"][0]["style"];
     assert_eq!(style["cssText"], " opacity: 0 ");
     assert_eq!(style["cssProperties"][0]["text"], "opacity: 0 ");
     assert_eq!(fade["keyframes"][0]["styleSheetId"], style["styleSheetId"]);
     assert!(fade["keyframes"][0]["styleSheetId"].is_string());
+}
+
+const FORCED: &str = "<!DOCTYPE html><style>\
+     #x:hover { color: rgb(0, 128, 0) } .p:hover #x { background-color: red }\
+     #x:focus { margin-left: 3px } #x:focus-within { margin-top: 3px }\
+     .p:focus-within { margin-left: 4px } .p:has(#x:hover) { margin-right: 8px }\
+     #x:target { padding-left: 5px } #x:active { padding-top: 1px }\
+     #i:disabled { margin-left: 6px } #i:enabled { margin-top: 2px } #i:read-only { text-indent: 7px }\
+     #r:required { margin-left: 9px } #r:optional { margin-top: 9px }\
+     a:visited { color: rgb(255, 0, 0) }\
+     #b { width: 40px; height: 40px } #b:hover { background: black }\
+     </style><div class=p><div id=x tabindex=0>x</div><input id=i><input id=r><a id=l href=/>l</a></div>\
+     <div id=b></div>";
+
+/// `getComputedStyle(<selector>)`'s `properties`, as script reads them.
+fn read_styles(page: &mut Client, selector: &str, properties: &[&str]) -> Vec<String> {
+    let expression = format!(
+        "(s => {properties:?}.map(p => s.getPropertyValue(p)))(getComputedStyle(document.querySelector('{selector}')))"
+    );
+    let values = evaluate(page, &expression, None);
+    serde_json::from_value(values.clone()).unwrap_or_else(|_| panic!("{expression}: {values}"))
+}
+
+fn force(page: &mut Client, node: &Value, classes: &[&str]) -> Value {
+    page.call(
+        None,
+        "CSS.forcePseudoState",
+        json!({ "nodeId": node, "forcedPseudoClasses": classes }),
+    )
+}
+
+/// `forcePseudoState`: the pseudo-classes forced match on the element
+/// alone (not its ancestors' `:hover`), in its rules, for script and on
+/// screen; a forced focus makes its ancestors match `:focus-within`, not
+/// it; a forced form state its opposite not match, the others as they
+/// are; `:visited` is taken and matches nothing; unknown names are passed
+/// over; each call puts the element's in place of those before, and none
+/// leaves them as the DOM is.
+#[test]
+fn forced_pseudo_classes_match() {
+    let (_machopo, mut page, document, _server) = css_page(FORCED);
+    let x = node(&mut page, &document, "#x");
+    let style = [
+        "color",
+        "background-color",
+        "margin-left",
+        "margin-top",
+        "padding-left",
+        "padding-top",
+    ];
+    let parent = ["margin-left", "margin-right"];
+    assert_eq!(
+        read_styles(&mut page, "#x", &style),
+        [
+            "rgb(0, 0, 0)",
+            "rgba(0, 0, 0, 0)",
+            "0px",
+            "0px",
+            "0px",
+            "0px"
+        ]
+    );
+    assert_eq!(
+        result(force(
+            &mut page,
+            &x,
+            &["hover", "focus", "target", "nope", "link"]
+        )),
+        json!({})
+    );
+    assert_eq!(
+        read_styles(&mut page, "#x", &style),
+        [
+            "rgb(0, 128, 0)",
+            "rgba(0, 0, 0, 0)",
+            "3px",
+            "0px",
+            "5px",
+            "0px"
+        ]
+    );
+    assert_eq!(read_styles(&mut page, ".p", &parent), ["4px", "8px"]);
+    assert_eq!(
+        evaluate(
+            &mut page,
+            "[x.matches(':hover'), x.matches(':focus-within'), document.querySelector('.p').matches(':focus-within, :hover')]",
+            None
+        ),
+        json!([true, false, true])
+    );
+    let matched = result(page.call(None, "CSS.getMatchedStylesForNode", json!({ "nodeId": x })));
+    let rules = selectors(&matched["matchedCSSRules"]);
+    assert!(
+        rules.contains(&"#x:hover") && rules.contains(&"#x:focus"),
+        "{rules:?}"
+    );
+    // Computed too.
+    assert_eq!(computed(&mut page, &x)["color"], "rgb(0, 128, 0)");
+
+    // In place of those before.
+    result(force(&mut page, &x, &["active"]));
+    assert_eq!(
+        read_styles(&mut page, "#x", &style),
+        [
+            "rgb(0, 0, 0)",
+            "rgba(0, 0, 0, 0)",
+            "0px",
+            "0px",
+            "0px",
+            "1px"
+        ]
+    );
+    assert_eq!(read_styles(&mut page, ".p", &parent), ["0px", "0px"]);
+    // `:focus-within` forced: its ancestors' too.
+    result(force(&mut page, &x, &["focus-within"]));
+    assert_eq!(read_styles(&mut page, "#x", &["margin-top"]), ["3px"]);
+    assert_eq!(read_styles(&mut page, ".p", &parent), ["4px", "0px"]);
+    result(force(&mut page, &x, &[]));
+    assert_eq!(read_styles(&mut page, ".p", &parent), ["0px", "0px"]);
+    assert_eq!(read_styles(&mut page, "#x", &["padding-top"]), ["0px"]);
+
+    // A form state and its opposite; the others as the DOM is.
+    let form = ["margin-left", "margin-top", "text-indent"];
+    let i = node(&mut page, &document, "#i");
+    assert_eq!(read_styles(&mut page, "#i", &form), ["0px", "2px", "0px"]);
+    result(force(&mut page, &i, &["disabled"]));
+    assert_eq!(read_styles(&mut page, "#i", &form), ["6px", "0px", "0px"]);
+    let r = node(&mut page, &document, "#r");
+    assert_eq!(read_styles(&mut page, "#r", &form[..2]), ["0px", "9px"]);
+    result(force(&mut page, &r, &["required"]));
+    assert_eq!(read_styles(&mut page, "#r", &form[..2]), ["9px", "0px"]);
+    result(force(&mut page, &r, &["optional"]));
+    assert_eq!(read_styles(&mut page, "#r", &form[..2]), ["0px", "9px"]);
+
+    // Taken, matching nothing.
+    let l = node(&mut page, &document, "#l");
+    let link = read_styles(&mut page, "#l", &["color"]);
+    assert_eq!(result(force(&mut page, &l, &["visited"])), json!({}));
+    assert_eq!(read_styles(&mut page, "#l", &["color"]), link);
+
+    // Drawn.
+    let b = node(&mut page, &document, "#b");
+    assert_eq!(black(&mut page, (8, 30), (48, 120)), 0);
+    result(force(&mut page, &b, &["hover"]));
+    two_frames(&mut page);
+    assert!(black(&mut page, (8, 30), (48, 120)) > 1000);
+
+    // An element's only.
+    assert_eq!(
+        error(force(&mut page, &document, &["hover"])),
+        "Node is not an Element"
+    );
+    let text = first_child(&mut page, &x);
+    assert_eq!(
+        error(force(&mut page, &text, &["hover"])),
+        "Node is not an Element"
+    );
+    assert_eq!(
+        page.call(
+            None,
+            "CSS.forcePseudoState",
+            json!({ "nodeId": x, "forcedPseudoClasses": "hover" })
+        )["error"]["code"],
+        -32602
+    );
+}
+
+/// What was forced goes once the element leaves its tree (put back, it
+/// matches as the DOM is, as Chrome's), with the focus forced on it the
+/// `:focus-within` above; once the session turns `CSS` or `DOM` off; and
+/// with the session. Two sessions' are both forced, each its own.
+#[test]
+fn forced_pseudo_classes_go() {
+    let (machopo, mut page, document, _server) = css_page(FORCED);
+    let x = node(&mut page, &document, "#x");
+    result(force(&mut page, &x, &["hover", "focus"]));
+    assert_eq!(read_styles(&mut page, ".p", &["margin-left"]), ["4px"]);
+    evaluate(&mut page, "document.body.append(x)", None);
+    assert_eq!(read_styles(&mut page, "#x", &["color"]), ["rgb(0, 0, 0)"]);
+    assert_eq!(read_styles(&mut page, ".p", &["margin-left"]), ["0px"]);
+    // A subtree's.
+    evaluate(&mut page, "document.querySelector('.p').append(x)", None);
+    let x = node(&mut page, &document, "#x");
+    result(force(&mut page, &x, &["hover"]));
+    assert_eq!(read_styles(&mut page, "#x", &["color"]), ["rgb(0, 128, 0)"]);
+    evaluate(
+        &mut page,
+        "(e => { document.querySelector('.p').remove(); document.body.prepend(e) })(x)",
+        None,
+    );
+    assert_eq!(read_styles(&mut page, "#x", &["color"]), ["rgb(0, 0, 0)"]);
+
+    let x = node(&mut page, &document, "#x");
+    result(force(&mut page, &x, &["hover"]));
+    result(page.call(None, "CSS.disable", json!({})));
+    assert_eq!(read_styles(&mut page, "#x", &["color"]), ["rgb(0, 0, 0)"]);
+    result(page.call(None, "CSS.enable", json!({})));
+    result(force(&mut page, &x, &["hover"]));
+    result(page.call(None, "DOM.disable", json!({})));
+    assert_eq!(read_styles(&mut page, "#x", &["color"]), ["rgb(0, 0, 0)"]);
+
+    // Two sessions.
+    result(page.call(None, "DOM.enable", json!({})));
+    let document = result(page.call(None, "DOM.getDocument", json!({})))["root"]["nodeId"].clone();
+    let x = node(&mut page, &document, "#x");
+    let (mut other, _) = crate::devtools::page(&machopo);
+    result(other.call(None, "DOM.enable", json!({})));
+    let other_document =
+        result(other.call(None, "DOM.getDocument", json!({})))["root"]["nodeId"].clone();
+    result(other.call(None, "CSS.enable", json!({})));
+    let other_x = node(&mut other, &other_document, "#x");
+    result(force(&mut page, &x, &["hover"]));
+    result(force(&mut other, &other_x, &["active"]));
+    assert_eq!(
+        read_styles(&mut page, "#x", &["color", "padding-top"]),
+        ["rgb(0, 128, 0)", "1px"]
+    );
+    // One's none: the other's stay.
+    result(force(&mut other, &other_x, &[]));
+    assert_eq!(
+        read_styles(&mut page, "#x", &["color", "padding-top"]),
+        ["rgb(0, 128, 0)", "0px"]
+    );
+    result(force(&mut other, &other_x, &["active"]));
+    result(other.call(None, "CSS.disable", json!({})));
+    assert_eq!(
+        read_styles(&mut page, "#x", &["color", "padding-top"]),
+        ["rgb(0, 128, 0)", "0px"]
+    );
+    // Gone with its session.
+    result(force(&mut page, &x, &[]));
+    result(other.call(None, "CSS.enable", json!({})));
+    result(force(&mut other, &other_x, &["hover"]));
+    assert_eq!(read_styles(&mut page, "#x", &["color"]), ["rgb(0, 128, 0)"]);
+    drop(other);
+    let start = std::time::Instant::now();
+    while read_styles(&mut page, "#x", &["color"]) != ["rgb(0, 0, 0)"] {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "the session's hover stays"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// What a forced pseudo-class changes is restyled where no `:has()` makes
+/// every change restyle the document: a rule that came while it was forced
+/// (its state looked at all the same), `:required`'s, an ancestor's
+/// `:focus-within` above the parent, as the focus is forced and as the
+/// element forced it leaves the tree. `:visited` doesn't match restyled.
+#[test]
+fn forced_pseudo_classes_restyle_what_they_change() {
+    let (_machopo, mut page, document, _server) = css_page(
+        "<!DOCTYPE html><style>#r:required { margin-left: 9px } .p:focus-within { margin-left: 4px }\
+         a:visited { color: rgb(255, 0, 0) } a:hover { padding-left: 1px }</style>\
+         <div class=p><div class=c><div id=x tabindex=0>x</div></div></div><div id=y>y</div>\
+         <input id=r><a id=l href=/>l</a>",
+    );
+    let y = node(&mut page, &document, "#y");
+    result(force(&mut page, &y, &["hover"]));
+    evaluate(
+        &mut page,
+        "document.head.append(Object.assign(document.createElement('style'), { textContent: '#y:hover { color: rgb(0, 128, 0) }' }))",
+        None,
+    );
+    assert_eq!(read_styles(&mut page, "#y", &["color"]), ["rgb(0, 128, 0)"]);
+    result(force(&mut page, &y, &[]));
+    assert_eq!(read_styles(&mut page, "#y", &["color"]), ["rgb(0, 0, 0)"]);
+
+    let r = node(&mut page, &document, "#r");
+    result(force(&mut page, &r, &["required"]));
+    assert_eq!(read_styles(&mut page, "#r", &["margin-left"]), ["9px"]);
+
+    let x = node(&mut page, &document, "#x");
+    result(force(&mut page, &x, &["focus"]));
+    assert_eq!(read_styles(&mut page, ".p", &["margin-left"]), ["4px"]);
+    evaluate(&mut page, "x.remove()", None);
+    assert_eq!(read_styles(&mut page, ".p", &["margin-left"]), ["0px"]);
+
+    let l = node(&mut page, &document, "#l");
+    let link = read_styles(&mut page, "#l", &["color"]);
+    result(force(&mut page, &l, &["visited", "hover"]));
+    assert_eq!(read_styles(&mut page, "#l", &["padding-left"]), ["1px"]);
+    assert_eq!(read_styles(&mut page, "#l", &["color"]), link);
 }

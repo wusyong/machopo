@@ -240,6 +240,12 @@ impl Element for StyleElement<'_, '_> {
         if state != 0 {
             self.cx.add_state_dependencies(self.node, state);
         }
+        // DevTools' (`CSS.forcePseudoState`): a flag's read while none is
+        // forced, after the dependency is kept, so that its change
+        // restyles what it matched.
+        if let Some(forced) = self.cx.forced_pseudo_class(self.node, pc) {
+            return forced;
+        }
         match pc {
             PseudoClass::Link | PseudoClass::AnyLink => self.is_link(),
             // The form's (`:read-write` an editable element's too).

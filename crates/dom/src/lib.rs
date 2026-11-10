@@ -222,7 +222,7 @@ pub use window::{
 pub use elise::LocalToken;
 pub use gfx::{NodeId, NodeIdHashMap, NodeIdHashSet};
 pub use names::{NameId, QualifiedName};
-pub use probe::DomChange;
+pub use probe::{DomChange, ForcedPseudoClasses};
 pub use string::{DomString, find_value, intern_value};
 pub use style::{
     AttributeChanges, ClassList, ClassName, ElementData, ElementStyle, LayoutTreeFlags, StyleFlags,
@@ -826,6 +826,8 @@ struct Changes {
     stacks: initiator::RequestStacks,
     /// The trees' changes, for DevTools (`probe`).
     dom_changes: probe::DomChanges,
+    /// The pseudo-classes DevTools forces (`probe`).
+    forced: probe::ForcedStates,
     /// The console warnings script's calls earned, until the host takes
     /// them (`Dom::take_console_warnings`).
     console_warnings: Cell<Vec<String>>,

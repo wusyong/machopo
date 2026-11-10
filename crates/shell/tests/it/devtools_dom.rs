@@ -877,7 +877,13 @@ fn pseudo_elements_are_nodes() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|node| (&node["pseudoType"], &node["nodeName"], &node["childNodeCount"]))
+        .map(|node| {
+            (
+                &node["pseudoType"],
+                &node["nodeName"],
+                &node["childNodeCount"],
+            )
+        })
         .collect();
     assert_eq!(
         kinds,
@@ -915,7 +921,11 @@ fn pseudo_elements_are_nodes() {
     // Come and gone.
     let y = query(&mut page, "#y");
     dom_events(&mut page);
-    evaluate(&mut page, "x.classList.add('gone'); y.classList.add('on')", None);
+    evaluate(
+        &mut page,
+        "x.classList.add('gone'); y.classList.add('on')",
+        None,
+    );
     let removed = page.event("DOM.pseudoElementRemoved");
     assert_eq!(
         removed["params"],
@@ -929,7 +939,11 @@ fn pseudo_elements_are_nodes() {
     // told after the frame, as it is then.
     let w = query(&mut page, "#w");
     let w_after = describe(&mut page, &w)["pseudoElements"][1]["nodeId"].clone();
-    evaluate(&mut page, "w.classList.add('gone'); getComputedStyle(w).color", None);
+    evaluate(
+        &mut page,
+        "w.classList.add('gone'); getComputedStyle(w).color",
+        None,
+    );
     let removed = page.event("DOM.pseudoElementRemoved");
     assert_eq!(
         removed["params"],
@@ -951,7 +965,11 @@ fn pseudo_elements_are_nodes() {
     evaluate(&mut page, "x.remove()", None);
     dom_events(&mut page);
     assert_eq!(
-        error(page.call(None, "DOM.describeNode", json!({ "nodeId": before["nodeId"] }))),
+        error(page.call(
+            None,
+            "DOM.describeNode",
+            json!({ "nodeId": before["nodeId"] })
+        )),
         "Could not find node with given id"
     );
 }

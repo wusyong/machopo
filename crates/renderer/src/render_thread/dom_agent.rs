@@ -617,7 +617,9 @@ impl DomAgent {
                 .get(name)
                 .and_then(|session| session.pseudo_nodes.get(&id).copied())
         } else {
-            params["backendNodeId"].as_u64().and_then(pseudo_of_backend_id)
+            params["backendNodeId"]
+                .as_u64()
+                .and_then(pseudo_of_backend_id)
         };
         let Some((element, pseudo)) = pseudo else {
             return Ok((self.node_param(name, params, page)?, None));
@@ -735,7 +737,9 @@ impl<'gc> Tree<'_, '_, 'gc> {
                 // A pseudo-element's, by its number or backend id.
                 let pseudo = match params["nodeId"].as_i64() {
                     Some(id) => self.session.pseudo_nodes.get(&id).copied(),
-                    None => params["backendNodeId"].as_u64().and_then(pseudo_of_backend_id),
+                    None => params["backendNodeId"]
+                        .as_u64()
+                        .and_then(pseudo_of_backend_id),
                 };
                 if let Some((element, pseudo)) = pseudo {
                     let element = self
@@ -1923,13 +1927,18 @@ fn box_model(page: &mut dyn DevToolsPage, node: NodeId, pseudo: Option<PseudoId>
         // A box's border box (a pseudo-element's, its border quad's
         // extent).
         let size = match pseudo {
-            None => frame.view.view_of(document)?.element_box(node)?.border_box.size(),
+            None => frame
+                .view
+                .view_of(document)?
+                .element_box(node)?
+                .border_box
+                .size(),
             Some(_) => {
                 let extent = |of: fn(&gfx::PointF) -> f32| {
                     let values = quads.border.map(|point| of(&point));
-                    let (min, max) = values
-                        .iter()
-                        .fold((f32::MAX, f32::MIN), |(min, max), &v| (min.min(v), max.max(v)));
+                    let (min, max) = values.iter().fold((f32::MAX, f32::MIN), |(min, max), &v| {
+                        (min.min(v), max.max(v))
+                    });
                     max - min
                 };
                 gfx::SizeF::new(extent(|point| point.x), extent(|point| point.y))

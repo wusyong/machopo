@@ -259,7 +259,7 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 - **字型**：`getPlatformFontsForNode` 從元素的文字的 fragment 拿實際用到的字型和 glyph 數。
 - **強制的 pseudo-class**：
   - 照 Blink 的 `probe::ForcePseudoState`（「已決定的事項」第 1 條）：每個 session 記元素強制的 pseudo-class，`style` 的 `match_non_ts_pseudo_class` 在記下 state 的依賴之後先看強制的。
-  - 那是 match 的熱路：先看「這份文件有沒有強制的狀態」一個旗標，沒有時只多讀一次。
+  - 那是 match 的熱路：先看「有沒有元素被強制」一個旗標，沒有時只多讀一次。
   - 改了之後經過 `state_changed` 通知，照現有的 invalidation 只重算受影響的元素。
   - 不改 DOM 上的 hover、focus 的 bit：表單控制項的原生外觀不跟著變，祖先的 hover 鏈也不動，和 Chrome 一樣。
   - 這是新的「會影響 style 的狀態」，照 `docs/architecture.md` 的「快取和增量：加新東西時要跟著改的地方」檢查。
@@ -345,6 +345,13 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 - 動畫的樣式（第 27 條）：只列生效中的動畫（`computed(now).progress` 有值）；元素有動畫時一律送 `transitionsStyle`，沒有在跑的 transition 時是空的，照 Chrome；值用 `getComputedStyle` 的寫法。
 - `cssKeyframesRules`：元素的 `animation-name` 每個名字一次，照 style 的 tree-scoped 的找法（`StyleEngine::keyframes_rule`，和 cascade 共用 `find_keyframes`）找到 `@keyframes`，再在 stylesheet 的規則樹裡找它的位置；`css` 的 recorder 也記下每個 keyframe 的選擇器和區塊。`keyText` 是序列化的（`from` 寫成 `0%`），範圍是原文的，和 Chrome 一樣。
 - 比對時發現的另一個差異：inline box 的高度和 Chrome 不同（20px 的 Times 的 `<span>`，machopo 20、Chrome 23），不是 pseudo element 的問題，記成 layout 的限制。
+
+**做的時候（3d）定下的細節**：
+- 強制的狀態放在 `dom`（`probe` 的 `ForcedStates`，每個元素一組 bit），CSS agent 的每個 session 記自己的，改了時把所有 session 的合起來寫進 DOM（兩個 session 都強制時兩者都成立，一個收回時另一個的還在）。match 時讀的旗標是整個 DOM 的「有沒有元素被強制」，不是每份文件的：一份 DOM 裡強制的元素很少，有時才找那張表。
+- 照 Chrome（2026-11-10 用 Chrome for Testing 152 試過）：強制 `:focus` 或 `:focus-within` 時，flat tree 上的祖先的 `:focus-within` 成立；強制 `:focus` 的元素自己的 `:focus-within` 不成立。match 時從被強制的元素往上找，不記數字：Chrome 的計數在元素離開樹時不減（祖先照樣符合），從 `focus` 加 `focus-within` 改成只有 `focus` 時也減掉，machopo 照實際的狀態。
+- 元素離開它的文件的樹時（連同子樹的每個元素）強制的狀態就沒了，放回去也一樣，照 Chrome（Blink 的 `DidRemoveDOMNode`）。`CSS.disable`、`DOM.disable` 和 session 離開時收回那個 session 的。收回時照樣重算：Chrome 的 `DOM.disable` 只忘了強制的狀態，已經算好的 style 留到元素下次重算，machopo 立刻照沒有強制的樣子。
+- `:required`、`:optional` 原本只跟著屬性的改動重算，多了一個狀態位元（`AttributeChanges::REQUIRED`）給強制的改動用；其他的照它們本來的狀態位元。
+- `forcedPseudoClasses` 不是陣列時照 Chrome 回答 invalid params（`-32602`）；pseudo element 的節點回答成功、不強制（它的規則照它的元素 match）。
 
 ### 測試
 
@@ -500,6 +507,12 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 
 27. **動畫的樣式：每個動畫各自算（G1）**（第 7 節）：`getAnimatedStylesForNode` 對元素的每個 CSS 動畫和 Web Animation，把它單獨套在元素的基本樣式（cascade 的結果，沒有動畫）上，取當下的時間，列出它設的 property（`properties()`）的值，寫法和 `getComputedStyle` 一樣，各帶名字（`animationStyles`）；transition 全部一起套成一組（`transitionsStyle`）；每個祖先各一份（`inherited`）。前端用它在 Styles 多一個動畫的區塊、在 Computed 的預設清單列出動畫給的 property。只在前端問的時候算（動畫跑著時大約每個 frame 一次，只算那個元素和它的祖先）。對照 Chromium（2026-11-09 用 Chrome for Testing 152 試過）：Blink 的 `InspectorCSSAgent::getAnimatedStylesForNode` 對 `ElementAnimations` 的每個 effect 各自取當下的值，transition 合成一組，再走祖先。不選 G2（所有動畫合成一份，列出和基本樣式不同的）：前端分不出每個動畫的名字，值剛好等於基本樣式的 property 會漏掉。不選 G3（不做）：Styles 沒有動畫的區塊，Computed 的預設清單少了動畫給的 property（2b 手動確認時看到的差異）。
 
+2026-11-10（使用者，3d）：
+
+28. **強制的 `:visited`：收下但不生效（V2）**（第 7 節）：`CSS.forcePseudoState` 收 `visited`（回答成功、記在 session 裡），但樣式不變：machopo 的 `:visited` 一律不成立，也沒有已造訪連結的那套樣式，記成限制。其他強制的 pseudo-class 照 Chrome（2026-11-10 用 Chrome for Testing 152 試過）：只對那個元素成立（祖先的 `:hover` 不跟著），強制的 `:focus` 讓祖先的 `:focus-within` 成立，script 的 `matches()` 和 `getComputedStyle` 也看得到；每次呼叫取代那個元素的整組，不認得的名字忽略；`CSS.disable`、`DOM.disable` 時清掉。對照 Chromium：Blink 的 `ForcePseudoState` 收 `visited`，cascade 為連結另外算一份 visited 的樣式（`EInsideLink::kInsideVisitedLink`），只有 `IsValidForVisitedLink` 的 property 從 visited 的規則來（試的時候 `color` 變了、`padding-left` 沒變）。不選 V1（照 Chrome 做出 visited 的樣式）：要在 cascade 加上「`:visited` 只套顏色」那一層和新的狀態位元，等於先做一半已造訪連結的支援，現在只有 DevTools 用得到；等 machopo 支援已造訪的連結時一起做。
+
+29. **收哪些名字：照 Chrome 收整份（F1）**（第 7 節）：收 Chrome 收的 24 個：`active`、`hover`、`focus`、`focus-within`、`focus-visible`、`target`、`visited`（第 28 條），和表單的 `enabled`、`disabled`、`checked`、`indeterminate`、`placeholder-shown`、`required`、`optional`、`read-only`、`read-write`、`open`、`valid`、`invalid`、`user-valid`、`user-invalid`、`in-range`、`out-of-range`、`autofill`；其他的（`link`、`default`、`fullscreen`、`popover-open`、不認得的）忽略。強制的名字在那個元素上成立，它的對立面（`enabled` 和 `disabled`、`required` 和 `optional`、`read-only` 和 `read-write`、`valid` 和 `invalid`、`user-valid` 和 `user-invalid`、`in-range` 和 `out-of-range`）不成立，其他的照元素本來的狀態（強制 `disabled` 時 `:read-only` 不跟著）。machopo 還不 parse 的那幾個（validity 的、`autofill`）照收，頁面上沒有用到它們的規則，看不出差別。對照 Chromium（2026-11-10 用 Chrome for Testing 152 試過）：Blink 的 `InspectorCSSAgent::ForcePseudoState` 就是這份清單和這幾組；前端選了表單元素時在 `:hov` 多列表單的狀態。不選 F2（只收上面七個）：選了 `<input>` 時前端列的表單狀態勾了沒有反應；多的只是 match 時的一張對照表，和 `:required`、`:optional` 給 invalidation 用的一個狀態位元。
+
 ## 待決定
 
 每一段開始前只決定那一段的事。整份的兩條和第 1 段的先決定。
@@ -555,6 +568,11 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 
 26. **pseudo element 怎麼出現在 DOM 樹裡**：已決定（「已決定的事項」第 26 條，N1，掛點）。
 27. **動畫的樣式怎麼算**：已決定（「已決定的事項」第 27 條，G1）。
+
+**3d**：
+
+28. **強制的 `:visited` 怎麼處理**：已決定（「已決定的事項」第 28 條，V2）。
+29. **收哪些名字**：已決定（「已決定的事項」第 29 條，F1）。
 
 ## 之後的可能
 

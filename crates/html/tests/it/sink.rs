@@ -363,7 +363,10 @@ fn the_document_parser_notes_where_styles_start() {
             });
         }
         styles.push(made);
-        styles.into_iter().map(|style| cx.style_parser_line(style)).collect()
+        styles
+            .into_iter()
+            .map(|style| cx.style_parser_line(style))
+            .collect()
     });
     assert_eq!(lines, [Some(2), Some(6), None, None]);
 }

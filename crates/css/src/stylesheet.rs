@@ -1035,15 +1035,14 @@ fn parse_keyframe(css: &str) -> Option<CssRule> {
     let mut log = ParseLog::default();
     let mut input = ParserInput::new(css);
     let mut input = Parser::new(&mut input);
-    let rule =
-        cssparser::parse_one_rule(
-            &mut input,
-            &mut KeyframeListParser {
-                log: &mut log,
-                recorder: None,
-            },
-        )
-        .ok();
+    let rule = cssparser::parse_one_rule(
+        &mut input,
+        &mut KeyframeListParser {
+            log: &mut log,
+            recorder: None,
+        },
+    )
+    .ok();
     log.report();
     rule
 }

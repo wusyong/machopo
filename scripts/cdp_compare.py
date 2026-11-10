@@ -98,6 +98,16 @@ PAGES = {
         ".x.gone::after { content: none }\n#li.n::before { content: 'n' }\n"
         "</style><div class=p style='letter-spacing: 1px'><div class=x>x</div><ul><li id=li>l</li></ul></div>"
     ),
+    "/force.html": (
+        "<!DOCTYPE html><style>#x:hover { color: rgb(0, 128, 0) } .p:hover #x { background-color: red }"
+        " #x:focus { margin-left: 3px } #x:focus-within { margin-top: 3px } .p:focus-within { margin-left: 4px }"
+        " .p:has(#x:hover) { margin-right: 8px } #x:target { padding-left: 5px } #x:active { padding-top: 1px }"
+        " #i:disabled { margin-left: 6px } #i:enabled { margin-top: 2px } #i:read-only { text-indent: 7px }"
+        " #r:required { margin-left: 9px } #r:optional { margin-top: 9px } #c:checked { margin-left: 2px }"
+        " details:open { margin-left: 3px }</style>"
+        "<div class=p><div id=x tabindex=0>x</div><input id=i><input id=r><input id=c type=checkbox>"
+        "<details><summary>s</summary>d</details></div>"
+    ),
     "/life.html": (
         "<!DOCTYPE html>\n<title>Life</title>\n<link rel=stylesheet href='/style.css'>\n"
         "<img src='/missing.png'>\n<iframe src='/child.html'></iframe>"
@@ -172,6 +182,11 @@ KNOWN: dict[tuple[str, str], str] = {
     ("overlay", "[9].result.highlight.elementInfo.isKeyboardFocusable"): "the same as [6]'s",
     ("overlay", "[9].result.highlight.elementInfo.layoutObjectName"): "the same as [6]'s",
     ("overlay", "[19].error.data"): "Chrome's message has where in its CBOR the field is missing",
+    ("css_force", "[24].margin-left"): "Chrome counts an element's ancestors' forced `:focus-within` as it is forced "
+    "and unforced, not as the element leaves its tree: they match it after the element went; machopo's don't",
+    ("css_force", "[26]"): "Chrome's `DOM.disable` forgets the forced pseudo-classes without styling the elements "
+    "again: a style worked out with them stays until something else restyles the element; machopo restyles it",
+    ("css_force", "[28].error.data"): "Chrome's message has where in its CBOR the field is wrong",
     ("css_source", "[0][0].selectorList.selectors[0].specificity.components"): "Chrome 152 breaks a selector's "
     "specificity down by its simple selectors, which DevTools' specificity tooltip reads; machopo doesn't",
     **{
@@ -968,6 +983,71 @@ def case_css_pseudo(run: Run, url: Callable[[str], str]) -> list:
     return transcript
 
 
+def case_css_force(run: Run, url: Callable[[str], str]) -> list:
+    """Styles' `:hov`: the pseudo-classes forced on an element, in its
+    rules and computed values, for script; its ancestors' `:focus-within`
+    and `:has()`, not their `:hover`; the form states and their opposites;
+    each call in place of the one before; unknown names passed over; those
+    of an element that left its tree, or of a session that turned `CSS` or
+    `DOM` off, gone; the errors."""
+    run.load(url("/force.html"))
+    run.call("DOM.enable")
+    run.call("CSS.enable")
+    run.events(("CSS.styleSheetAdded",), settle=0.5)
+    root = run.call("DOM.getDocument")["result"]["root"]["nodeId"]
+
+    def node(selector: str) -> int:
+        return run.call("DOM.querySelector", {"nodeId": root, "selector": selector})["result"]["nodeId"]
+
+    def force(node: int, classes) -> dict:
+        return run.call("CSS.forcePseudoState", {"nodeId": node, "forcedPseudoClasses": classes})
+
+    names = ("color", "background-color", "margin-left", "margin-top", "margin-right", "padding-left",
+             "padding-top", "text-indent")
+
+    def computed(node: int) -> dict:
+        style = run.call("CSS.getComputedStyleForNode", {"nodeId": node})["result"]["computedStyle"]
+        return {entry["name"]: entry["value"] for entry in style if entry["name"] in names}
+
+    def script(expression: str):
+        return run.call("Runtime.evaluate", {"expression": expression, "returnByValue": True})["result"]["result"].get("value")
+
+    x, p = node("#x"), node(".p")
+    transcript = [force(x, ["hover", "focus", "target", "nope", "link", "default"]), computed(x), computed(p)]
+    matched = run.call("CSS.getMatchedStylesForNode", {"nodeId": x})["result"]["matchedCSSRules"]
+    transcript.append([
+        (match["rule"]["selectorList"]["text"], match["matchingSelectors"])
+        for match in matched if match["rule"]["origin"] == "regular"
+    ])
+    transcript.append(script("[x.matches(':hover'), x.matches(':focus-within'), getComputedStyle(x).color]"))
+    transcript += [force(x, ["active", "focus-within", "focus-visible"]), computed(x), computed(p)]
+    transcript += [force(x, []), computed(x), computed(p)]
+    for selector, classes in [("#i", ["disabled"]), ("#i", ["enabled", "read-write"]), ("#r", ["required"]),
+                              ("#r", ["optional"]), ("#c", ["checked"]), ("details", ["open"])]:
+        transcript += [force(node(selector), classes), computed(node(selector))]
+    # Gone with the element's leaving its tree.
+    force(x, ["hover", "focus"])
+    script("document.body.append(x)")
+    x = node("#x")
+    transcript += [computed(x), computed(p)]
+    force(x, ["hover"])
+    run.call("CSS.disable")
+    run.call("CSS.enable")
+    run.events(("CSS.styleSheetAdded",), settle=0.5)
+    transcript.append(computed(x))
+    force(x, ["hover"])
+    run.call("DOM.disable")
+    transcript.append(script("getComputedStyle(x).color"))
+    run.call("DOM.enable")
+    root = run.call("DOM.getDocument")["result"]["root"]["nodeId"]
+    transcript.append(force(root, ["hover"]))
+    transcript.append(force(node("#x"), "hover"))
+    run.call("CSS.disable")
+    transcript.append(force(node("#x"), ["hover"]))
+    run.events(DOM_EVENTS, settle=0.2)
+    return transcript
+
+
 CASES: dict[str, Callable[[Run, Callable[[str], str]], list]] = {
     "values": case_values,
     "properties": case_properties,
@@ -987,6 +1067,7 @@ CASES: dict[str, Callable[[Run, Callable[[str], str]], list]] = {
     "css_sheets": case_css_sheets,
     "css_source": case_css_source,
     "css_pseudo": case_css_pseudo,
+    "css_force": case_css_force,
 }
 
 

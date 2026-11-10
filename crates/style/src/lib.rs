@@ -3019,19 +3019,17 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
             first: 0,
             scope: None,
         }];
-        let tree = |index: &'s RuleIndex,
-                    first,
+        let tree =
+            |index: &'s RuleIndex, first, which, host, tree_order, root: Option<NodeRef<'gc>>| {
+                Source {
+                    index,
                     which,
                     host,
                     tree_order,
-                    root: Option<NodeRef<'gc>>| Source {
-            index,
-            which,
-            host,
-            tree_order,
-            first,
-            scope: root.map(|root| cx.node_id(root)),
-        };
+                    first,
+                    scope: root.map(|root| cx.node_id(root)),
+                }
+            };
         // An element of a `<use>`'s copy matches the rules of the tree of
         // the `<use>` outside any copy, as itself (Blink's
         // `ScopedStyleResolverFor`, its corresponding element's tree).
@@ -3045,9 +3043,9 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
             Some(root) => {
                 let host = cx.shadow_host(root);
                 sources.extend(
-                    scope(root)
-                        .iter()
-                        .map(|(index, first)| tree(index, *first, Which::Tree, host, 0, Some(root))),
+                    scope(root).iter().map(|(index, first)| {
+                        tree(index, *first, Which::Tree, host, 0, Some(root))
+                    }),
                 );
                 // A part of a UA shadow tree: its host's tree's rules for
                 // it, the UA's and the author's (css-scoping: the host's
@@ -3055,11 +3053,11 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
                 if let Some(control) = host.filter(|_| cx.shadow_pseudo_id(element).is_some()) {
                     sources.push(tree(self.ua, 0, Which::Part, None, 0, None));
                     match cx.containing_shadow_root(control) {
-                        None => sources.extend(
-                            self.author
-                                .iter()
-                                .map(|(index, first)| tree(index, *first, Which::Part, None, 0, None)),
-                        ),
+                        None => {
+                            sources.extend(self.author.iter().map(|(index, first)| {
+                                tree(index, *first, Which::Part, None, 0, None)
+                            }))
+                        }
                         Some(outer) => {
                             let outer_host = cx.shadow_host(outer);
                             sources.extend(scope(outer).iter().map(|(index, first)| {
@@ -3075,21 +3073,24 @@ impl<'s, 'a, 'gc> Walk<'s, 'a, 'gc> {
         while let Some(slot) = cx.assigned_slot(at) {
             if let Some(root) = cx.containing_shadow_root(slot) {
                 let host = cx.shadow_host(root);
-                sources.extend(
-                    scope(root).iter().map(|(index, first)| {
-                        tree(index, *first, Which::Slotted, host, tree_order, Some(root))
-                    }),
-                );
+                sources.extend(scope(root).iter().map(|(index, first)| {
+                    tree(index, *first, Which::Slotted, host, tree_order, Some(root))
+                }));
             }
             tree_order = tree_order.saturating_add(1);
             at = slot;
         }
         if let Some(root) = cx.shadow_root(element) {
-            sources.extend(
-                scope(root).iter().map(|(index, first)| {
-                    tree(index, *first, Which::Host, Some(element), tree_order, Some(root))
-                }),
-            );
+            sources.extend(scope(root).iter().map(|(index, first)| {
+                tree(
+                    index,
+                    *first,
+                    Which::Host,
+                    Some(element),
+                    tree_order,
+                    Some(root),
+                )
+            }));
         }
         sources
     }

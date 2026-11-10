@@ -54,7 +54,8 @@ impl RenderThread {
         self.network_agent.detach(session);
         self.log_agent.detach(session);
         self.dom_agent.detach(session);
-        self.css_agent.detach(session);
+        self.css_agent
+            .detach(session, self.engine.as_mut().map(|engine| engine.dom_mut()));
         self.overlay_agent.detach(session);
         if let Some(engine) = &mut self.engine {
             engine
@@ -142,8 +143,11 @@ impl RenderThread {
         }
         if let Some(engine) = &mut self.engine {
             let mut page = engine.devtools_page();
-            if self.dom_agent.handle(session, message, &mut *page)
-                || self.css_agent.handle(session, message, &mut *page)
+            if self.dom_agent.handle(session, message, &mut *page) {
+                self.css_agent.dom_answered(session, &mut *page);
+                return;
+            }
+            if self.css_agent.handle(session, message, &mut *page)
                 || self.overlay_agent.handle(session, message, &mut *page)
             {
                 return;
@@ -351,7 +355,10 @@ impl dom_api::DevToolsQueue for DevToolsQueueHandle {
         self.page_agent.handle(session, message)
             || self.network_agent.handle(session, message)
             || self.log_agent.handle(session, message)
-            || self.dom_agent.handle(session, message, page)
+            || (self.dom_agent.handle(session, message, page) && {
+                self.css_agent.dom_answered(session, page);
+                true
+            })
             || self.css_agent.handle(session, message, page)
             || self.overlay_agent.handle(session, message, page)
     }

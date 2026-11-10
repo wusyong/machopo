@@ -207,7 +207,10 @@ impl<'gc> Cx<'_, 'gc> {
     /// The line `style`'s start tag ends on in its document's markup, if
     /// the parser made it (`set_style_parser_line`).
     pub fn style_parser_line(&self, style: NodeRef<'gc>) -> Option<u32> {
-        let data = style.data.get(self.gc)?.downcast::<crate::style::ElementData>()?;
+        let data = style
+            .data
+            .get(self.gc)?
+            .downcast::<crate::style::ElementData>()?;
         Some(data.parser_line.get()).filter(|&line| line != 0)
     }
 

@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use base::numerics::f32_from_f64;
 use compositor_paint::{DisplayItemList, PaintFlags, PaintOp};
-use crossbeam_channel::Sender;
 use computed_style::PseudoId;
+use crossbeam_channel::Sender;
 use dom::{Cx, NodeId, NodeKind, NodeRef};
 use dom_api::DevToolsPage;
 use gfx::{Color, PointF, RRectF, RectF, SizeF};
@@ -392,7 +392,9 @@ impl OverlayAgent {
                     params["showAccessibilityInfo"].as_bool().unwrap_or(true);
                 config.color_format = params["colorFormat"].as_str().unwrap_or("hex").to_owned();
                 let highlight = with_layout(page, node, |cx, frame, element, document| {
-                    Some(highlight(cx, frame, element, pseudo, document, &config, true))
+                    Some(highlight(
+                        cx, frame, element, pseudo, document, &config, true,
+                    ))
                 })
                 .unwrap_or_else(|| json!({}));
                 Ok(json!({ "highlight": highlight }))
@@ -703,15 +705,16 @@ fn style_info<'gc>(
     let has_text = pseudo.is_some()
         || std::iter::successors(cx.first_child(element), |&child| cx.next_sibling(child)).any(
             |child| {
-            cx.kind(child) == NodeKind::Text
-                && cx.text_data(child).is_some_and(|data| {
-                    !data
-                        .borrow()
-                        .to_str()
-                        .trim_matches(|c: char| c.is_ascii_whitespace())
-                        .is_empty()
-                })
-        });
+                cx.kind(child) == NodeKind::Text
+                    && cx.text_data(child).is_some_and(|data| {
+                        !data
+                            .borrow()
+                            .to_str()
+                            .trim_matches(|c: char| c.is_ascii_whitespace())
+                            .is_empty()
+                    })
+            },
+        );
     let mut names = Vec::new();
     if has_text {
         names.extend(["color", "font-family", "font-size", "line-height"]);

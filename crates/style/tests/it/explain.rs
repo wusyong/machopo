@@ -296,7 +296,13 @@ fn rules_know_their_sheets() {
             ("#p".to_owned(), Some(ids[3])),
         ]
     );
-    assert!(explained.rules.iter().filter(|rule| rule.origin == Origin::UserAgent).all(|rule| rule.sheet.is_none()));
+    assert!(
+        explained
+            .rules
+            .iter()
+            .filter(|rule| rule.origin == Origin::UserAgent)
+            .all(|rule| rule.sheet.is_none())
+    );
 
     // Adopted, after the document's own.
     let document = &page.document;
@@ -316,9 +322,16 @@ fn rules_know_their_sheets() {
     let sheets = author_sheets(&explained);
     // After the `<style>`'s `.a`, by where it comes (its specificity, the
     // same, below the `#p`s').
-    let style_a = sheets.iter().position(|sheet| *sheet == (".a".to_owned(), Some(ids[1])));
-    let adopted_a = sheets.iter().position(|sheet| *sheet == (".a".to_owned(), Some(adopted)));
-    assert!(style_a.is_some() && adopted_a == style_a.map(|at| at + 1), "{sheets:?}");
+    let style_a = sheets
+        .iter()
+        .position(|sheet| *sheet == (".a".to_owned(), Some(ids[1])));
+    let adopted_a = sheets
+        .iter()
+        .position(|sheet| *sheet == (".a".to_owned(), Some(adopted)));
+    assert!(
+        style_a.is_some() && adopted_a == style_a.map(|at| at + 1),
+        "{sheets:?}"
+    );
 
     // The first `<style>` taken out and put back: another object of the
     // same contents.
@@ -335,7 +348,10 @@ fn rules_know_their_sheets() {
     let again = sheet_ids(&mut page, "style");
     assert_ne!(again[0], ids[0]);
     let explained = explain(&mut page, "p").unwrap();
-    assert_eq!(author_sheets(&explained)[0], ("p".to_owned(), Some(again[0])));
+    assert_eq!(
+        author_sheets(&explained)[0],
+        ("p".to_owned(), Some(again[0]))
+    );
 }
 
 /// A large sheet (an index of its own), a small one after it, and a shadow
@@ -379,7 +395,10 @@ fn large_and_shadow_sheets_are_known() {
     let inner = explain(&mut page, "inner").unwrap();
     assert_eq!(author_sheets(&inner), [("i".to_owned(), Some(inner_sheet))]);
     let light = explain(&mut page, "light").unwrap();
-    assert_eq!(author_sheets(&light)[0], ("::slotted(b)".to_owned(), Some(inner_sheet)));
+    assert_eq!(
+        author_sheets(&light)[0],
+        ("::slotted(b)".to_owned(), Some(inner_sheet))
+    );
 }
 
 /// Each pseudo-element's rules the same way, apart from the element's own:

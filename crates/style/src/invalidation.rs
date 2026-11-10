@@ -40,6 +40,8 @@ pub(crate) fn pseudo_class_state(class: &PseudoClass) -> u16 {
         PseudoClass::Open => AttributeChanges::OPEN,
         PseudoClass::InternalMultiSelectFocus => AttributeChanges::MULTI_SELECT_FOCUS,
         PseudoClass::Target => AttributeChanges::TARGET,
+        // DevTools forcing them (the DOM's changes are of attributes).
+        PseudoClass::Required | PseudoClass::Optional => AttributeChanges::REQUIRED,
         _ => 0,
     }
 }
