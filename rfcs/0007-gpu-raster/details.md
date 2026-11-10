@@ -1,10 +1,10 @@
 # RFC 0007 的細節：用 vello_cpu 取代 Skia
 
-這份是 `README.md` 的補充，放支撐它的細節。`README.md` 裡的結論和決定以那邊為準，這裡不重複。各節寫了查的日期：2026-10-05 的是第一次寫這份 RFC 時讀原始碼和文件查的，2026-10-31 的是重新打開時對照 machopo 當時的程式和 vello_cpu 0.3.0 的原始碼查的；都還沒有原型。
+這份是 `README.md` 的補充，放支撐它的細節。`README.md` 裡的結論和決定以那邊為準，這裡不重複。各節寫了查的日期：2026-10-05 的是第一次寫這份 RFC 時讀原始碼和文件查的，2026-10-31 的是重新打開時對照 machopo 當時的程式和 vello_cpu 0.3.0 的原始碼查的，2026-11-10 的是重寫 `README.md` 時對照上游的 `main`（commit `112736d`）、上游的 issue 和 PR，以及 Zed 的 GPUI 的原始碼查的；都還沒有原型，沒有實際跑過。
 
 ## 現在的 raster
 
-2026-10-31 的程式。
+2026-10-31 的程式，2026-11-10 對過還是這樣。
 
 - **`raster` crate 是唯一用到 Skia 的地方**：`crates/raster/src/skia_backend.rs`（約 990 行程式，之後是測試）、`crates/raster/src/encode.rs`（PNG 用 `png` crate，JPEG 用 Skia 的 encoder）、`crates/raster/src/lib.rs`（對外的 API 和 `Bitmap`）。依賴 `skia-safe`（prebuilt 的 `jpegd-jpege-pdf`，沒有 GPU）、只為 Skia 拆字型集合用的 `read-fonts`、`png`。
 - **對外的 API 和使用者**：
@@ -29,7 +29,7 @@
   - sparse strips 的兩個 renderer 成為預設：**vello_cpu** 和 **vello_gpu**（原本叫 vello_hybrid，2026-09-08 改名），2026-10-31 都在 repo 的最上層（`vello_cpu/`、`vello_gpu/`、`vello_common/`、`glifo/`）。
   - 原本的 compute 版 `vello` 搬到 `research/`，README 寫它是「experimental」。
   - README 的說法：Vello GPU 打算在成熟之後成為 GPU 的主要 renderer；**Vello CPU 目前整體比較成熟**。
-- **版本**：vello_cpu 0.3.0、vello_gpu 0.3.0、vello 0.11.0 都在 2026-10-02 發布，2026-10-31 還是最新。vello_cpu 0.3 依賴 vello_common 0.3、glifo 0.4（skrifa 0.44）；vello_gpu 依賴 wgpu 30，和 machopo 一樣。
+- **版本**：vello_cpu 0.3.0、vello_gpu 0.3.0、vello 0.11.0 都在 2026-10-02 發布，2026-11-10 還是最新（上游的 `main` 一直在改，但 `Cargo.toml` 的版本還是 0.3.0；`main` 的 skrifa 已經是 0.49）。vello_cpu 0.3 依賴 vello_common 0.3、glifo 0.4（skrifa 0.44）；vello_gpu 依賴 wgpu 30，和 machopo 一樣。
 - **沒有穩定的承諾**：每一版都是 breaking。vello_cpu 的發布：0.0.8（2026-05-15）、0.0.9（2026-05-30）、0.1.0（2026-07-29）、0.2.0（2026-08-07）、0.3.0（2026-10-02）。MSRV 是 1.89，可能在 patch 版本裡提高（machopo 釘在 1.99）。
 - **沒有共用的抽象**：`vello_api`（0.0.7）原本想統一兩個 renderer 的 API，2026-04-25 的 PR #1602 把它從兩邊拿掉了。Linebender 的 2026 Q1 回顧改推第三方的抽象層（Blitz 的 AnyRender、forest-rs 的 imaging）。vello_cpu 的 `RenderContext` 和 vello_gpu 的 `Scene` 方法幾乎一樣，用的也是 vello_common 的同一組型別；這份 RFC 只用 vello_cpu，不先包抽象，等 GPU raster 的 RFC 再說。
 - **誰在用**：
@@ -40,7 +40,7 @@
 
 2026-10-31 讀 `vello_cpu/src/render.rs`、`vello_cpu/src/filter/`、`vello_common/src/filter/` 和 README。
 
-- **API**：`RenderContext::new(w, h)`，或用 `RenderSettings { level, num_threads }` 建。是有狀態的 context：`set_transform`、`set_paint`（顏色、漸層、圖片）、`set_paint_transform`、`set_stroke`（kurbo 的 `Stroke`：寬度、cap、join、miter、dash）、`set_fill_rule`、`set_blend_mode`（不隔離的）、`set_aliasing_threshold`；畫的是 `fill_path`、`stroke_path`、`fill_rect`、`stroke_rect`、`fill_blurred_rounded_rect`（`invert` 畫反過來的，給 inset 的陰影，只支援單色）、`glyph_run`；layer 是 `push_layer(clip, blend, opacity, mask, filter)`（各自可選）和 `pop_layer`，另有不隔離的 clip（`push_clip_rect`、`push_clip_path`、`pop_clip`）。圖片用 `register_image` 登記成 `ImageId`。`reset`、`reset_and_resize` 重用 context。
+- **API**：`RenderContext::new(w, h)`，或用 `RenderSettings { level, num_threads }` 建。是有狀態的 context：`set_transform`、`set_paint`（顏色、漸層、圖片）、`set_paint_transform`、`set_stroke`（kurbo 的 `Stroke`：寬度、cap、join、miter、dash）、`set_fill_rule`、`set_blend_mode`（不隔離的）、`set_aliasing_threshold`；畫的是 `fill_path`、`stroke_path`、`fill_rect`、`stroke_rect`、`fill_blurred_rounded_rect`（只有一個圓形的半徑、只支援單色；`fill_blurred_rounded_rect_in` 多一條決定畫到哪裡的 path 和 `invert`，畫反過來的，給 inset 的陰影）、`glyph_run`；layer 是 `push_layer(clip, blend, opacity, mask, filter)`（各自可選）和 `pop_layer`，另有不隔離的 clip（`push_clip_rect`、`push_clip_path`、`pop_clip`）。圖片用 `register_image` 登記成 `ImageId`。`reset`、`reset_and_resize` 重用 context。
 - **render**：`render_with(target, resources, RasterizerSettings)` 畫進 `PixmapMut`。`TargetInit::Clear(color)` 先清成某個顏色，`TargetInit::SrcOver` 畫在既有的像素上（canvas 的 `draw_into` 要的）。context 的大小就是場景的範圍：**context 外面（左上角之前、寬高之後）的內容一律丟掉**；`offset` 決定場景放在 pixmap 的哪裡，負的位移把左上角裁掉。
 - **輸出**：premultiplied RGBA8，和 machopo 的 `Bitmap` 一樣。寬高是 `u16`，最大 65535，和 canvas 的 `MAX_SIDE` 一樣。
 - **兩種 pipeline**：`u8_pipeline`（預設）和 `f32_pipeline`（比較慢、精度高）。
@@ -70,8 +70,8 @@
 | `ClearRect` | `fill_rect`，blend mode 是 Compose 的 `Clear` | |
 | `DrawDRRect` | 外面的圓角矩形加上反方向的裡面的，even-odd；`clip` 的多邊形用 `push_clip_path` | |
 | `DrawClipped` | `push_clip_path`（多邊形）、畫 `op`、`pop_clip` | |
-| `DrawShadow` | 沒有 `hole` 的用 `fill_blurred_rounded_rect`（inset 用 `invert`），外面套 `clip`；有 `hole` 的形狀包一層 GaussianBlur 的 filter layer | `fill_blurred_rounded_rect` 只支援單色，陰影本來就是單色 |
-| `PaintFlags.blur`（mask blur） | 圓角矩形同上；其他形狀包一層 GaussianBlur 的 filter layer | σ 在目前的空間裡，和 filter 的縮放一致 |
+| `DrawShadow` | 沒有 `hole`、`shape` 的四個角相同而且是圓的：`fill_blurred_rounded_rect`（inset 用 `_in` 的 `invert`），外面套 `clip`；其他的（四個角不同或橢圓的角、有 `hole` 的）包一層 GaussianBlur 的 filter layer | `fill_blurred_rounded_rect` 只有一個圓形的半徑（`RRectF` 是四個角各自的橢圓半徑），只支援單色（陰影本來就是單色）；2026-10-31 的看法漏了半徑這一點 |
+| `PaintFlags.blur`（mask blur） | 單一圓形半徑的圓角矩形同上；其他形狀包一層 GaussianBlur 的 filter layer | σ 在目前的空間裡，和 filter 的縮放一致 |
 | dash、cap、join、miter limit | kurbo 的 `Stroke`（`dash_pattern`、`dash_offset`） | 長度是 0 的 dash 加圓頭這類邊界情況要對 Skia |
 | `PaintFlags.blend_mode` | `set_blend_mode`（不隔離） | 見「vello_cpu 0.3」的不隔離的 blend |
 | 漸層 | peniko 的 linear、two-point radial、sweep；`TileMode` 的 Clamp、Repeat、Mirror 對到 `Extend` 的 Pad、Repeat、Reflect；`interpolation_alpha_space` 對 premultiplied 和 unpremultiplied；local matrix 用 `set_paint_transform` | sweep 的角度單位和起點、unpremultiplied 的結果原型時對 Skia；沒有 dithering |
@@ -80,6 +80,46 @@
 | `PaintShader::Tiled` | `ImageBrush`，`Extend` 照 `repeat_x`、`repeat_y`（Repeat 或 Pad），local matrix 和圖塊的位置用 `set_paint_transform` | 圖塊是漸層或 display list（`ShaderImage::Record`）時，照當時的 scale 先畫成 pixmap；`spacing` 畫進四周留空白的 pixmap；`decal` 改成 clip 到圖塊 |
 | `DrawRecord` | 照現在的做法，在 transform 和 clip 裡把那個 display list 重播成向量 | |
 | `WritePixels` | 前面的 op 先 render 進 bitmap（`TargetInit::SrcOver`），寫入像素，`reset` 之後接著畫 | 只出現在 canvas 的錄製裡 |
+
+## 上游缺什麼
+
+2026-11-10 對照上游的 `main`（`112736d`）、issue 和 PR。第 2 步 merge 時這張表整理成 `docs/` 底下新的 `render-gaps.md`，之後以那份為準。
+
+**結論：沒有非 fork 不可的缺口。** 缺的都能在 playback 裡組出來，或當成外觀的差異接受。
+
+在 playback 裡補、使用者看不出來的（代價是速度，只在用到的頁面上）：
+
+| 缺的 | 上游的狀態 | machopo 哪裡用到 | 做法 | 什麼時候可以拿掉 |
+| --- | --- | --- | --- | --- |
+| `ColorMatrix` filter | `PreparedFilter::new` 碰到是 `unimplemented!`。PR #1765（2026-07-24 開，2026-11-02 還在更新）CPU 和 GPU 都做，它的前一版 #1623 已經 approve；作者要先合另一個讓 filter 的資料長度可變的重構。追蹤的 issue 是 #1296 | CSS `filter` 的 brightness、contrast、grayscale、sepia、saturate、hue-rotate、invert（`crates/paint/src/filter.rs`） | 離屏，machopo 自己套矩陣 | 上游合了、發布之後，單一的 color matrix 直接交給 Vello |
+| 多個 primitive 的 filter graph | `unimplemented!`；issue #1296 只有清單，沒有人在做。#1696（碰到不支援的 filter 就略過、不 panic）沒合就關了 | `ImageFilter::Chain`（好幾個 filter function） | 離屏，照順序一個一個套 | 上游做了 graph 的執行 |
+| 模糊的圓角矩形只有一個圓形的半徑 | issue #1245（橢圓和 superellipse 的角）開著 | `DrawShadow`、mask blur：`RRectF` 是四個角各自的橢圓半徑 | 四個角相同而且是圓的走快路，其他的包一層 blur 的 filter layer | 上游支援每個角的半徑 |
+| path 的布林運算 | kurbo 和 Vello 都沒有 | `ClipPaths` | 每條 path 畫進 alpha mask，`push_mask_layer` | 不會拿掉（除非 kurbo 加上布林運算） |
+| mipmap | 沒有；issue #1289（縮小超過 2 倍品質明顯變差）開著。vello_gpu 的 atlas 也只有 level 0 | `FilterQuality::Medium` 縮小（`<img>` 和背景） | 圖片快取預先縮成 2 的次方 | 上游的圖片取樣支援 mipmap |
+| 圖塊是 display list、有 `spacing`、`decal` 的圖案 | 圖片的 paint 只有 `Extend` | `PaintShader::Tiled` | 先畫成 pixmap；`decal` 改用 clip | 不會拿掉 |
+
+接受的差異（使用者看得到，或只在比對時看得到）：
+
+| 差異 | 上游的狀態 | 看得出來嗎 | 對測試 |
+| --- | --- | --- | --- |
+| 文字沒有 gamma 和對比的調整 | issue #1694（深色背景上的文字模糊）開著；Blitz 的追蹤 issue #1491 列了「讓加粗的文字不那麼糊（gamma 校正？）」，還沒做 | **看得出來**：字比較細、淡，深色背景上的淺色字最明顯 | 文字和色塊、圖片比的 reftest 可能要 fuzzy |
+| 漸層沒有 dithering | issue #856 開很久了 | 大面積、顏色相近的漸層可能有色帶 | Skia 兩邊的雜訊剛好一樣；拿掉之後漸層對漸層的 reftest 反而容易一致 |
+| 反鋸齒的邊、不抗鋸齒時的規則 | 設計不同，不是缺 | 放大才看得出來 | `raster` 的單元測試裡檢查邊緣像素數值的要重新定預期值 |
+| JPEG 的解碼 | 和 Vello 無關，是 decoder 不同 | 每個 channel 差 1、2，看不出來 | JPEG 和 PNG 比的 reftest 可能要 fuzzy（machopo 自己的 reftest 只有 1 個檔案用到 JPEG） |
+| 合成粗體 | `font_embolden` 的參數和 Skia 不同 | 粗細略有不同 | 沒有測試比這個 |
+
+只在速度上看得出來的：
+
+- **glyph 的快取**：`atlas_cache` 的文件寫著「highly experimental and not recommended for external use」，README 也把它列在不建議用的實驗性功能；Blitz 的追蹤 issue 把「Glyph caching」列在還沒做的效能項目。不開，第 1 步量文字多的 tile。
+- **x86 的效能**：README 說 x86 上還有改進的空間（Windows 的開發機是 x86）。
+
+machopo 用不到、不用處理的：
+
+- 多執行緒時連單一的 filter 都 panic：machopo 不開 vello_cpu 的多執行緒。
+- LCD 的 subpixel 文字：machopo 現在也只用灰階。
+- `backdrop-filter`、alpha 的 mask（CSS 的 `mask`）、相對於場景的 paint transform（`background-attachment: fixed`、`background-clip: text`）：Blitz 的追蹤 issue 列著還沒做，machopo 現在也沒有這些功能。
+
+對測試的影響：machopo 沒有存起來的參考圖（`tests/` 底下的 PNG 只有 reftest 用的圖片素材）。reftest 和 WPT 的 reftest 是同一次執行裡畫兩個頁面互相比，情境的 `capture` 和 `expect-differs` 比的是同一次執行裡前後的 frame，兩邊用同一個 renderer，gamma 和 dithering 是兩邊一起變。會壞的是兩邊用不同方式畫出同一個結果的 reftest、`raster` 裡對著 Skia 寫的檢查確切像素的單元測試、檢查 JPEG 編碼輸出的 bytes 的測試。實際有幾個，第 1 步跑了才知道。
 
 ## 文字
 
@@ -124,18 +164,12 @@
 - **授權**：Vello 是 MIT 或 Apache-2.0，fork 的改動維持同樣的授權，才能送回上游。
 - **`unsafe`**：改到 SIMD 的程式時用 fearless_simd 的 safe API，不在 fork 裡新增要自己論證的 `unsafe`。
 
-## 和 RFC 0089 並行
-
-2026-10-31 查的。
-
-- **RFC 0089 改到的地方**（`main` 最近 60 個 commit 裡改到的 crate 的檔案數）：`dom_api_next` 330、`dom_js_next` 205、`dom_next` 173、`gc` 73、`bindings` 62、`dom_wasm_next` 60、`shell` 52、`renderer` 50、`style_next` 43、`html` 25、`layout` 15、`dom` 15。renderer 裡是 `render_thread/next.rs`、`render_thread.rs`、`next_frame_view.rs`、`render_thread/next_webdriver.rs`、`render_thread/devtools.rs`。沒有 `raster`、`compositor`、`compositor_paint`、`paint`、`viz`。
-- **之後會靠近的**：0089 的 4g（圖片、iframe、canvas、SVG 搬到新的 DOM）會碰 renderer 裡呼叫 `raster` 的那一側（canvas 的錄製和 raster thread 的接法、新的 frame view 讀圖片的尺寸）。`raster` 的 API 不變，衝突只在 import 這種層級。
-- **共用的 `../third_party`**：worktree 用 junction 連到同一個 `../third_party`，`ci.py third-party`（`test.py` 的每個指令開始前也跑）把裡面的 checkout 切到目前這份 checkout 的 `third_party.toml` 釘的 commit。0089 在 2026-10-29 換過 rusty_v8 的 pin（`kun-v152.2.0-24`）；`0007` 的 branch 停在舊的 `main` 時跑 `test.py`，會把 rusty_v8 切回舊的，回到 `main` 又要切、重新 build。
-- **預期結果**：0089 的驗收是今天通過的 WPT、reftest、情境和 `cargo test` 都還通過，它的 `wpt-next` 和 layout 的差分比對以舊的 DOM 為基準。raster 和 DOM 無關，所以同一時間新舊兩個 DOM 用的是同一個 raster，比對照樣成立；但兩份都會改 reftest 的 fuzzy 和 WPT 的 `.ini`，某個測試壞掉時也要分得出是 DOM 還是 raster 的。
-
 ## vello_gpu 0.3
 
-2026-10-05 讀的，2026-10-31 對過 README。給之後的 GPU raster 的 RFC。
+2026-10-05 讀的，2026-10-31 對過 README，2026-11-10 對過 `main` 的 `vello_gpu/src/scene.rs` 和 README。給之後的 GPU raster 的 RFC。
+
+- **名字**：它原本叫 vello_hybrid（2026-09-08 改名），本身就是混合的做法：覆蓋率在 CPU 上算，上色和合成在 GPU 上。Vello 系列的三個 renderer：vello_cpu（都在 CPU）、vello_gpu（混合）、經典的 vello（都在 GPU，compute shader，上游當成研究用）。
+- **vello_cpu 有、vello_gpu 會 panic 的**（2026-11-10）：mask layer（`unimplemented!`）；不隔離的破壞性 blend mode（`set_blend_mode` 的 assert，文件說要的話改用 clip layer）；pixmap 當圖片來源（要先 `upload_image` 進 atlas）；`blurred_rounded_rect` 的 feature 沒開時的模糊圓角矩形。filter 和 vello_cpu 一樣只有四種。
 
 - **做法**：CPU 用 vello_common 的程式把路徑攤平、切 tile、產生 strip，連每個 pixel 的覆蓋率（alpha）都在 CPU 上算好；GPU 收到 alpha 的 texture 和 strip，用 vertex 和 fragment shader 上色、合成、blend。**不需要 compute shader**，另有 WebGL2 的 backend。
 - **API**：`Scene::new(w, h)`，畫的方法和 vello_cpu 的 `RenderContext` 對應。`Renderer::new(&Device, &RenderTargetConfig { format, width, height })` 回傳 `(Renderer, Resources)`；`Renderer::render(&Scene, &mut Resources, &Device, &Queue, &mut CommandEncoder, &RenderSize, &TextureView, depth, &TextureBindings, TargetInit) -> Result<(), RenderError>`：畫進呼叫的人自己的 texture，**錄進呼叫的人給的 `CommandEncoder`**，所以很多個 tile 可以錄在同一個 encoder 裡、一次 submit。
@@ -151,6 +185,31 @@
 - 兩邊的攤平、筆畫、切 tile、strip 和覆蓋率是**同一份 vello_common 的程式**，差別只在上色和合成的精度。
 - 上游的共用測試（約 505 個）同時跑 vello_cpu 的各種組合、vello_gpu 的 wgpu 和 WebGL，都和同一張參考圖比：GPU 預設容許每個 channel 差 1；約 38 個測試放寬到 1、21 個到 2、13 個到 3、8 個到 4 至 7（bicubic 的圖片、color-dodge）；19 個測試在 GPU 上跳過，包括所有點陣 emoji 的測試（原因沒寫）。
 - 所以兩邊**幾乎一樣，但不是逐像素相同**。比起 Skia 的 CPU 和 GPU backend（覆蓋率的算法不同），這是很大的優勢：之後加 GPU raster 時，視窗裡畫的和 reftest 畫的差異小很多，同一個 frame 裡有些 tile 走 GPU、有些走 CPU 也看不出接縫。
+
+## GPUI 怎麼畫
+
+2026-11-10 讀 Zed 的 `main`（commit `f0d896f`）：`gpui` crate 的 `scene.rs` 和 `window.rs`、`gpui_wgpu` 的 `wgpu_renderer.rs` 和 `shaders.wgsl`，Windows 的 `directx_renderer.rs` 只看了欄位，Apple 的 Metal renderer（`gpui_apple`）沒有讀。查它是為了回答「能不能把圖形直接丟到 GPU、全程在 GPU 上畫」。
+
+- **Scene 只有 8 種 primitive**：`Shadow`、`Quad`、`Path`、`Underline`、`MonochromeSprite`、`SubpixelSprite`、`PolychromeSprite`、`Surface`。每種是一個 `#[repr(C)]` 的 struct，直接當成 instance 的資料寫進 GPU。
+- **每個 frame 一個 encoder、一次 submit**：primitive 照繪製順序排好，同種類、同一張 atlas 的併成一批（`Scene::batches`），每批一次 instanced draw，直接畫進視窗的 texture。
+- **clip 只有矩形**：`ContentMask` 就是一個 `Bounds`，在 shader 裡算離 clip 邊的距離。沒有圓角或任意 path 的 clip，沒有 blend mode、filter 和離屏的 layer；透明度乘進顏色。
+- **圓角、邊框、虛線、陰影在 fragment shader 裡算**：`quad_sdf` 算圓角；陰影用 `erf` 算解析式的高斯，沒有模糊的 pass。背景是單色或兩個色標的線性漸層。
+- **文字、SVG、圖片在 CPU 上畫好再放進 atlas**：glyph 由平台的文字系統畫（Windows 是 DirectWrite，Linux 是 cosmic-text），水平方向量化成 4 個 subpixel 位置，照這個 key 快取；SVG 用 resvg（tiny-skia）；之後畫的只是貼圖的 sprite。
+- **path 是唯一在 GPU 上算覆蓋率的**：CPU 把 path 拆成三角形扇，二次曲線用 Loop-Blinn 的做法在 fragment shader 裡判斷內外；先畫進一張和視窗一樣大的中間 texture（可以開 MSAA），再貼回主畫面。每一批 path 都要中斷主要的 render pass 再重開。
+- **快取是重播上一個 frame 的 primitive**：沒有 dirty 的 view 用 `Scene::replay` 把上一個 frame 的那一段 primitive 複製過來。省的是 layout 和 paint，GPU 還是每個 frame 重畫整個視窗；沒有 tile。
+- **後端**：Linux 和 web 用 wgpu，Windows 用 Direct3D 11，Apple 用 Metal，各寫一份 shader。
+
+和 machopo 比：
+
+| | GPUI | machopo |
+| --- | --- | --- |
+| 覆蓋率在哪算 | 矩形類在 shader；文字、SVG、圖片在 CPU；只有 path 在 GPU | 全部在 CPU（raster） |
+| clip | 矩形 | 矩形、圓角、path、path 的 union |
+| 效果 | 透明度乘進顏色 | 28 種 blend mode、filter、layer |
+| 沒變的內容 | 重播 primitive，GPU 重畫 | tile 留著，GPU 只重新合成 |
+| 捲動 | 重畫整個視窗 | compositor thread 移動 tile |
+
+結論：GPUI 不是「全程 GPU」，它是把問題縮到 8 種 primitive、每種一個 shader；UI 只有幾千個簡單的 primitive，所以可以每個 frame 全部重畫。網頁要的任意 clip 和 blend mode 一進來，就得有離屏的 layer 和通用的 path raster，那是 Vello 在做的事。它的做法比較像 WebRender（`docs/architecture.md` 已經否決）。值得借的兩點：glyph 的 atlas（vello_gpu 的 `full_image_support` 已經有，GPU raster 時拿得到），和矩形類的快速路徑（單色和圓角的矩形、邊框、`box-shadow` 用 SDF 的 shader 直接畫成 Viz 的 quad；`README.md` 的「之後的可能」）。
 
 ## 不選的做法
 
@@ -235,6 +294,8 @@ Servo 和 Blitz 的欄位依研究時讀到的資料寫，沒有逐項查證原�
 ## 參考資料
 
 - linebender/vello：README、ARCHITECTURE.md、issue #1871、PR #1602、#1872、#1883、#1895；vello_tests 的測試和容許誤差；經典 vello 的 issue #366、#476、#1061、#1063、#1545、#1694。2026-10-31：`vello_cpu/README.md`、`vello_cpu/src/render.rs`、`vello_cpu/src/filter/mod.rs`、`vello_common/src/filter/mod.rs`、`vello_gpu/README.md`、`vello_gpu/src/filter.rs`，各目錄的 commit 歷史。
+- linebender/vello，2026-11-10：`main` 的 commit `112736d`（`vello_common/src/filter/mod.rs`、`vello_common/src/filter_effects.rs`、`vello_cpu/src/render.rs`、`vello_gpu/src/scene.rs`、`glifo/src/glyph.rs`、兩份 README）；PR #1623、#1765（`ColorMatrix`）、#1696；issue #856（dithering）、#1245（橢圓的角）、#1289（縮小的品質）、#1296（剩下的 filter）、#1491（Blitz 需要的功能）、#1694（文字）。
+- zed-industries/zed，2026-11-10：`main` 的 commit `f0d896f`，`gpui`、`gpui_wgpu`、`gpui_windows` 這幾個 crate。
 - crates.io：vello_cpu 0.3.0、vello_gpu 0.3.0、vello_common 0.3.0、glifo 0.4.0、vello 0.11.0、vello_hybrid 0.2.0、vello_api 0.0.7 的原始碼；vello_cpu 的版本歷史。
 - docs.rs：vello_common 0.3.0 的 `FilterPrimitive`；peniko 0.6.1 的 `Gradient`、`InterpolationAlphaSpace`、`ImageSampler`、`ImageQuality`。
 - Linebender 的 2026 Q1 回顧（https://linebender.org/blog/tmil-25/）。
