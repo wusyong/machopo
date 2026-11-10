@@ -659,7 +659,7 @@ where
         }
         let args = <M::Args as WitArgs>::read(&rest, &cx)?;
         let mut front = WasmFront {
-            dom: &state.dom,
+            dom: state.dom(),
             tables: &state.tables,
             store: number,
             this,

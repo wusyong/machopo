@@ -1,6 +1,7 @@
 //! `dom_wasm`'s integration tests, one binary: the WIT is the table's
 //! (`wit`), a C guest calls the DOM through it (`guest`), the guests'
-//! wasm GC objects share the DOM's heap (`shared`), and the guest's WASI:
+//! wasm GC objects share the DOM's heap (`shared`), a DOM its engine owns
+//! is lent for the guests' turns (`lend`), and the guest's WASI:
 //! its waits and its output (`wasi`).
 
 #![allow(
@@ -12,6 +13,7 @@
 )]
 
 mod guest;
+mod lend;
 mod shared;
 mod wasi;
 mod wit;

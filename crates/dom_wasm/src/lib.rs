@@ -58,7 +58,17 @@ struct State {
     serial: u64,
     // Before the DOM: its holders are roots of the DOM's heap.
     tables: RefCell<Tables>,
-    dom: RefCell<Dom>,
+    /// The DOM, while it is here: an engine that owns it (a page's) takes
+    /// it (`WasmDom::take`) and lends it for each turn of its guests
+    /// (`WasmDom::lend`), as the page's own work needs the `Dom` itself.
+    dom: Option<RefCell<Dom>>,
+}
+
+impl State {
+    /// The DOM, which is here (`Slot::of` gave the state).
+    fn dom(&self) -> &RefCell<Dom> {
+        self.dom.as_ref().expect("the DOM, lent")
+    }
 }
 
 /// The thread's DOM, if it has one, and how many it made (each one's
@@ -69,9 +79,12 @@ struct Slot {
 }
 
 impl Slot {
-    /// The state of the store `key`, if the thread's DOM is still its.
+    /// The state of the store `key`, if the thread's DOM is still its,
+    /// and here (not with its engine, between its guests' turns).
     fn of(&self, key: Key) -> Option<&State> {
-        self.state.as_ref().filter(|state| state.serial == key.dom)
+        self.state
+            .as_ref()
+            .filter(|state| state.serial == key.dom && state.dom.is_some())
     }
 }
 
@@ -114,7 +127,8 @@ impl EliseHeapProvider for DomHeap {
                 .as_ref()
                 .filter(|state| state.serial == key)
                 .ok_or_else(no_store)?;
-            let mut dom = state.dom.try_borrow_mut().map_err(|_| busy())?;
+            let dom = state.dom.as_ref().ok_or_else(no_store)?;
+            let mut dom = dom.try_borrow_mut().map_err(|_| busy())?;
             f(dom.heap_mut());
             Ok(())
         })
@@ -128,7 +142,8 @@ fn collect_if_due<T>(cx: &mut StoreContextMut<'_, T>) -> wasmtime::Result<()> {
     let due = STATE.with_borrow(|slot| {
         slot.state
             .as_ref()
-            .is_some_and(|state| state.dom.try_borrow().is_ok_and(|dom| dom.should_collect()))
+            .and_then(|state| state.dom.as_ref())
+            .is_some_and(|dom| dom.try_borrow().is_ok_and(|dom| dom.should_collect()))
     });
     if due {
         cx.gc(None)?;
@@ -151,25 +166,70 @@ impl WasmDom {
             slot.state = Some(State {
                 serial: slot.made,
                 tables: RefCell::default(),
-                dom: RefCell::new(Dom::new()),
+                dom: Some(RefCell::new(Dom::new())),
             });
         });
         Self(())
     }
 
+    /// Takes the DOM out, for the engine that owns it: the page's work
+    /// (style, layout, the parser) uses the `Dom` itself, and the guests
+    /// reach it only in `lend`. Without it here a guest's call fails, a
+    /// store can't be made, and one dropped leaves its table behind (and,
+    /// with a GC heap, a root of the DOM's heap): the stores and their set
+    /// are made and dropped in `lend`.
+    ///
+    /// # Panics
+    ///
+    /// If it is out already, or in use.
+    pub fn take(&self) -> Dom {
+        STATE.with_borrow_mut(|slot| {
+            let state = slot.state.as_mut().expect("the thread's DOM");
+            state.dom.take().expect("the DOM, here").into_inner()
+        })
+    }
+
+    /// Puts the DOM its engine holds (`dom`, taken with `take`) back for
+    /// `f`, a turn of its guests or the making and dropping of their
+    /// stores, and hands it back after (if `f` unwinds too).
+    ///
+    /// # Panics
+    ///
+    /// If `dom` holds none, or the DOM is here already.
+    pub fn lend<R>(&self, dom: &mut Option<Dom>, f: impl FnOnce() -> R) -> R {
+        /// Hands the DOM back as it goes.
+        struct Lent<'a>(&'a mut Option<Dom>);
+        impl Drop for Lent<'_> {
+            fn drop(&mut self) {
+                *self.0 = STATE.with_borrow_mut(|slot| {
+                    let state = slot.state.as_mut()?;
+                    Some(state.dom.take()?.into_inner())
+                });
+            }
+        }
+        let lent = dom.take().expect("the engine's DOM, not lent");
+        STATE.with_borrow_mut(|slot| {
+            let state = slot.state.as_mut().expect("the thread's DOM");
+            assert!(state.dom.is_none(), "the DOM is here already");
+            state.dom = Some(RefCell::new(lent));
+        });
+        let _lent = Lent(dom);
+        f()
+    }
+
     /// The DOM's heap's counts.
     pub fn heap_stats(&self) -> elise::HeapStats {
-        with_state(|state| state.dom.borrow().stats())
+        with_state(|state| state.dom().borrow().stats())
     }
 
     /// Whether the DOM's heap is due to run a GC, for the tests.
     pub fn gc_due(&self) -> bool {
-        with_state(|state| state.dom.borrow().should_collect())
+        with_state(|state| state.dom().borrow().should_collect())
     }
 
     /// A full GC of the DOM's heap, between calls.
     pub fn collect(&self) {
-        with_state(|state| state.dom.borrow_mut().collect());
+        with_state(|state| state.dom().borrow_mut().collect());
     }
 
     /// A set for the DOM's guests' stores (of an engine `configure` set
@@ -224,11 +284,12 @@ pub struct WasmStore {
 impl WasmStore {
     /// # Panics
     ///
-    /// With no `WasmDom` on the thread.
+    /// With no `WasmDom` on the thread, or its DOM not here (an engine's,
+    /// outside `WasmDom::lend`).
     pub fn new() -> Self {
         let key = with_state(|state| {
             let mut tables = state.tables.borrow_mut();
-            let number = state.dom.borrow_mut().mutate(|cx| tables.add_store(cx));
+            let number = state.dom().borrow_mut().mutate(|cx| tables.add_store(cx));
             Key {
                 number,
                 dom: state.serial,
@@ -264,7 +325,7 @@ impl Drop for WasmStore {
             if let Some(state) = slot.of(self.key) {
                 let mut tables = state.tables.borrow_mut();
                 state
-                    .dom
+                    .dom()
                     .borrow_mut()
                     .mutate(|cx| tables.remove_store(cx, self.key.number));
             }
@@ -292,7 +353,7 @@ pub fn add_to_linker<T: 'static>(
                 let state = slot.of(key).ok_or_else(no_store)?;
                 let mut tables = state.tables.borrow_mut();
                 tables.store(number).ok_or_else(no_store)?;
-                Ok(state.dom.borrow_mut().mutate(|cx| {
+                Ok(state.dom().borrow_mut().mutate(|cx| {
                     let document = cx.create_document(true);
                     tables.give(cx, number, document)
                 }))
@@ -317,7 +378,7 @@ pub fn add_to_linker<T: 'static>(
                 }
                 // No allocation: no safepoint.
                 state
-                    .dom
+                    .dom()
                     .borrow_mut()
                     .read(|cx| tables.release(cx, number, handle));
                 Ok(())

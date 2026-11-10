@@ -32,14 +32,14 @@ const WAT: &str = r#"
 "#;
 
 /// A store of `WAT` in `set`, its global's struct holding `value`.
-struct Objects {
+pub(crate) struct Objects {
     set: Set,
     index: usize,
     instance: Instance,
 }
 
 impl Objects {
-    fn new(set: &Set, value: i64) -> Self {
+    pub(crate) fn new(set: &Set, value: i64) -> Self {
         let module = Module::new(engine(), WAT).unwrap();
         let index = set
             .borrow_mut()
@@ -64,7 +64,7 @@ impl Objects {
     }
 
     /// The value of the struct its global holds.
-    fn global(&self) -> i64 {
+    pub(crate) fn global(&self) -> i64 {
         let instance = self.instance;
         self.set
             .borrow()

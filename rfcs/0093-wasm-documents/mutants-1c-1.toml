@@ -1,0 +1,46 @@
+# Mutation test of stage 1c-1: a DOM its engine owns, lent for the guests'
+# turns (`WasmDom::take`, `WasmDom::lend`):
+# python3 scripts/test.py mutate rfcs/0093-wasm-documents/mutants-1c-1.toml
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "it", "--", "lend::"]
+timeout = 120
+
+[[mutant]]
+name = "a store's state is given with the DOM away"
+file = "crates/dom_wasm/src/lib.rs"
+from = '''            .filter(|state| state.serial == key.dom && state.dom.is_some())'''
+to = '''            .filter(|state| state.serial == key.dom)'''
+
+[[mutant]]
+name = "the DOM isn't handed back"
+file = "crates/dom_wasm/src/lib.rs"
+from = '''                *self.0 = STATE.with_borrow_mut(|slot| {
+                    let state = slot.state.as_mut()?;
+                    Some(state.dom.take()?.into_inner())
+                });'''
+to = ''''''
+
+[[mutant]]
+name = "the DOM is handed back but stays here"
+file = "crates/dom_wasm/src/lib.rs"
+from = '''                    Some(state.dom.take()?.into_inner())
+                });
+            }
+        }'''
+to = '''                    Some(state.dom.replace(RefCell::new(Dom::new()))?.into_inner())
+                });
+            }
+        }'''
+
+[[mutant]]
+name = "a DOM here is lent over"
+file = "crates/dom_wasm/src/lib.rs"
+from = '''            assert!(state.dom.is_none(), "the DOM is here already");'''
+to = ''''''
+
+[[mutant]]
+name = "the heap is lent with the DOM away"
+file = "crates/dom_wasm/src/lib.rs"
+from = '''            let dom = state.dom.as_ref().ok_or_else(no_store)?;
+            let mut dom = dom.try_borrow_mut().map_err(|_| busy())?;'''
+to = '''            let dom = state.dom.as_ref().expect("here");
+            let mut dom = dom.try_borrow_mut().map_err(|_| busy())?;'''

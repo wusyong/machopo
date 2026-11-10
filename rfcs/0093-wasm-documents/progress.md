@@ -10,7 +10,8 @@
 | --- | --- | --- |
 | 1a guest 和 `dom_wasm` 的測試換成 WASI 0.3 和 async 的 Store（決定 5、6） | 完成 | 2026-11-10 |
 | 1b WASI 0.3 的 linker：自己的時鐘，stdout 和 stderr 交給 sink（決定 7）；一輪的 poll（決定 9） | 完成 | 2026-11-10 |
-| 1c `dom_wasm` 的 engine：`ScriptEngine`、`ScriptHost`、需要時才跑的 event loop、`start(document)`（決定 3、4、8、9） | 還沒開始 | |
+| 1c-1 engine 擁有的 DOM：`WasmDom::take`、`lend`（決定 10） | 完成 | 2026-11-10 |
+| 1c-2 `dom_wasm` 的 engine：`ScriptEngine`、`ScriptHost`、需要時才跑的 event loop、`start(document)`（決定 3、4、8、9） | 還沒開始 | |
 | 1d renderer：prescan `<meta>`、選 engine、換頁時換 engine、載入 `application/wasm` 的 script（決定 2） | 還沒開始 | |
 | 1e 靜態的 TodoMVC 的 guest、情境、renderer 的測試 | 還沒開始 | |
 | 2 節點以外的物件的 handle、放開凍結、TodoMVC 用到的成員 | 還沒開始 | |
@@ -54,3 +55,12 @@
 - mutation test（`mutants-1b.toml`，20 條）：第一次 16 條抓到、1 條卡住（一輪永遠不結束，等到逾時）、3 條沒抓到：`next_deadline` 拿最晚的而不是最早的（整合測試每個 Store 只有一個等待）、結束的等待沒有從清單拿掉（只有沒人叫醒就被 poll 時才走到，guest 的測試走不到）、一輪只 poll 一次（guest 的測試裡剛好一次就夠）。補了五個單元測試之後 20 條都抓到，「永遠不結束」那條也改由單元測試數 poll 的次數當場抓到。跑完確認檔案都還原了。
 - 還沒做的：guest 讓出（callback code 的 `YIELD`）時在同一輪繼續 poll 的測試（決定 9 提到的 wasmtime 49 的 bug）：C 的 guest 要自己寫出會讓出的 async export，放到 1c 和入口一起。
 - `sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`docs` 通過。
+
+### 1c-1（2026-11-10，macOS，Apple Silicon）
+
+- 開始 1c 前讀 `V8Engine` 發現的：renderer 要 `&mut Dom`（`ScriptEngine::dom_mut`），`dom_wasm` 的 DOM 在 thread-local 的 `RefCell` 裡，給不出來。決定 10：engine 擁有 DOM、跑 guest 時借進 thread-local。
+- `crates/dom_wasm/src/lib.rs`：thread-local 的 DOM 變成可以不在（`Option`），`WasmDom::take`、`WasmDom::lend`；`Slot::of`（每個 host 函式找 Store 的狀態的地方）在 DOM 不在時回沒有，provider 借 heap 時也是。
+- 新的測試 `tests/it/lend.rs` 六個。`cargo test -p dom_wasm`：12 個單元測試、26 個整合測試通過。
+- 確認了：`Dom` 搬進搬出之後 heap 照常運作；DOM 在 engine 手上時的 full GC 經過 `StoreSet` 拿到 Store 的 root（guest 拿著的節點、另一個 Store 的 GC 物件都留著）。
+- 找到的規則：`StoreSet` 也要在借出期間丟掉。第一版的測試在借出之外 `drop(set)`，有 GC heap 的 Store 這時放不掉 DOM 的 heap 的 root，DOM drop 時 elise panic（`1 roots outlive their heap`）。寫進 `crates/dom_wasm/README.md`，1c-2 的 engine 要照做。
+- mutation test（`mutants-1c-1.toml`，5 條）：第一次 1 條沒抓到：`Slot::of` 不看 DOM 在不在。guest 的呼叫在進 wasm 之前 fork 就先檢查 heap 借不借得到，走不到 host 函式；走得到的是 Store 在 DOM 不在時 drop。補了一個測試之後 5 條都抓到。跑完確認檔案都還原了。
