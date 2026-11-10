@@ -679,10 +679,11 @@ pub(crate) struct InlineContent {
     /// size they took: breaking beside them again changes nothing while the
     /// boxes keep their sizes.
     broken: Option<(Option<f32>, FloatBands, SizeF)>,
-    /// The floats beside the lines when they were last laid out for real:
-    /// what they are broken beside again for their fragments, once taffy's
-    /// block formatting context is gone.
-    laid_out_beside: FloatBands,
+    /// The width the lines were broken at and the floats beside them when
+    /// they were last laid out for real: their fragments are made from
+    /// lines broken there, again only if something has been measured
+    /// since (taffy's block formatting context is gone by then).
+    laid_out: (Option<f32>, FloatBands),
     /// The narrowest and widest the content can be, once asked: flex and
     /// the intrinsic size keywords ask often. Only an atomic inline
     /// changes it in place (a new style in place is only one that changes
@@ -1038,7 +1039,7 @@ impl InlineContent {
             sized_for: None,
             height: None,
             broken: None,
-            laid_out_beside: FloatBands::default(),
+            laid_out: (None, FloatBands::default()),
             content_widths: None,
             ellipsis,
             hyphens,
@@ -1245,17 +1246,18 @@ impl InlineContent {
     }
 
     /// The lines were laid out for real as they were broken last: their
-    /// fragments are made from lines broken beside the same floats, its
-    /// own floats among them where they were placed.
-    pub(crate) fn keep_laid_out_beside(&mut self) {
-        if let Some((_, beside, _)) = &self.broken {
-            self.laid_out_beside = beside.clone();
+    /// fragments are made from lines broken at the same width beside the
+    /// same floats, its own floats among them where they were placed.
+    pub(crate) fn keep_laid_out(&mut self) {
+        if let Some((width, beside, _)) = &self.broken {
+            self.laid_out = (*width, beside.clone());
         }
     }
 
-    /// The floats beside the lines when they were last laid out for real.
-    pub(crate) fn laid_out_beside(&self) -> &FloatBands {
-        &self.laid_out_beside
+    /// The width the lines were broken at (`None` for no limit) and the
+    /// floats beside them when they were last laid out for real.
+    pub(crate) fn laid_out(&self) -> (Option<f32>, &FloatBands) {
+        (self.laid_out.0, &self.laid_out.1)
     }
 
     /// Breaks lines at `width` (content-box px; `None` for no limit),

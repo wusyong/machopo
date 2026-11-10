@@ -132,6 +132,12 @@ use text::{
 };
 pub use tree_builder::svg_element;
 
+/// How far a content box's width worked out from its border box may be
+/// from the width its lines were broken at and still be that width: the
+/// padding and border added and taken away again leave float noise, far
+/// less than this (Blink's layout units, 1/64 px, add up exactly).
+const WIDTH_NOISE: f32 = 1.0 / 64.0;
+
 /// The `LayoutView`'s index: the initial containing block, sized to the
 /// viewport, whose only child is the root element's box.
 const LAYOUT_VIEW: usize = 0;
@@ -1556,9 +1562,11 @@ impl BoxTree {
         })
     }
 
-    /// Inline formatting context `index`'s lines, broken again at its
-    /// final width (taffy may have measured other widths since), and its
-    /// atomic inlines, laid out there, placed.
+    /// Inline formatting context `index`'s lines, as they were broken when
+    /// it was laid out for real (Blink's fragment items are its inline
+    /// layout's own result), and its atomic inlines, laid out there,
+    /// placed. They are broken again only if taffy has measured it since,
+    /// or if its box didn't end up as wide as they were broken at.
     fn inline_fragments(&mut self, index: usize) -> Vec<LineFragment> {
         let mut inline = self.boxes[index]
             .inline
@@ -1572,9 +1580,17 @@ impl BoxTree {
         } = self.boxes[index].layout;
         let shift = self.boxes[index].content_shift;
         let width = size.width - padding.left - padding.right - border.left - border.right;
-        let beside = inline.laid_out_beside().clone();
+        let width = width.max(0.0);
+        let (laid_out_at, beside) = inline.laid_out();
+        let beside = beside.clone();
+        // The width they were broken at itself, not the border box's less
+        // its padding and border, which is that width with float noise
+        // and so would never be the one they were last broken at.
+        let at = laid_out_at
+            .filter(|at| (at - width).abs() <= WIDTH_NOISE)
+            .unwrap_or(width);
         let broken = self.last_layout.lines_broken;
-        inline.break_lines(Some(width.max(0.0)), &beside, self);
+        inline.break_lines(Some(at), &beside, self);
         if self.last_layout.lines_broken != broken {
             let update = &mut self.last_layout;
             update.lines_broken_for_fragments = update.lines_broken_for_fragments.wrapping_add(1);
@@ -1584,14 +1600,14 @@ impl BoxTree {
             border.top + padding.top + shift,
         ));
         self.count_text_placed(text);
-        for (&atomic, at) in inline.atomics().iter().zip(placed) {
+        for (&atomic, placed_at) in inline.atomics().iter().zip(placed) {
             let b = &mut self.boxes[usize::from(atomic)];
             // Its own `position: relative` too, as taffy does for the
             // boxes it places.
-            let by = relative_offset(&b.style, width.max(0.0), inline.height());
+            let by = relative_offset(&b.style, width, inline.height());
             b.layout.location = taffy::Point {
-                x: at.x + b.layout.margin.left + by.x,
-                y: at.y + b.layout.margin.top + by.y,
+                x: placed_at.x + b.layout.margin.left + by.x,
+                y: placed_at.y + b.layout.margin.top + by.y,
             };
         }
         self.boxes[index].inline = Some(inline);
@@ -1620,6 +1636,15 @@ impl BoxTree {
         let bands = block_ctx
             .as_deref()
             .map_or_else(FloatBands::default, |ctx| float_bands(ctx, inset));
+        // Whether its box will be as wide as it is measured here. taffy's
+        // leaf measures a box that is given a width in that width, as the
+        // room, when it lays it out for real: only a box given none is as
+        // wide as its content makes it, as is one whose width is
+        // `fit-content` (a button's).
+        let fit_content = style.size.width == taffy::Dimension::fit_content();
+        let sized_by_content = inputs.known_dimensions.width.is_none()
+            && (style.size.width.is_auto() || fit_content)
+            && style.aspect_ratio.is_none();
         let mut output = compute_leaf_layout(
             inputs,
             &style,
@@ -1664,18 +1689,20 @@ impl BoxTree {
                     // taffy reads only the width it asked for.
                     return taffy::Size { width, height: 0.0 };
                 }
-                // With floats, the lines are broken at the width it will
-                // be: its floats are placed there. Without, the room breaks
-                // them the same, and lays out the atomic inlines in the
-                // space they end up in.
-                let width = known
-                    .width
-                    .or(fit.filter(|_| floats))
-                    .or(match available.width {
-                        AvailableSpace::Definite(room) => Some(room),
-                        AvailableSpace::MinContent => Some(inline.content_widths(self).0),
-                        AvailableSpace::MaxContent => None,
-                    });
+                // The lines are broken at the width it will be (Blink
+                // lays an inline formatting context out once, at the
+                // inline size its min and max sizes gave it): they are
+                // aligned and its floats placed there, its atomic inlines
+                // are laid out in the space they end up in, and its
+                // fragments are made from these lines. That is its
+                // fit-content width if its content sizes it, and the room
+                // if not: the width its box was given.
+                let own = fit.filter(|_| sized_by_content);
+                let width = known.width.or(own).or(match available.width {
+                    AvailableSpace::Definite(room) => Some(room),
+                    AvailableSpace::MinContent => Some(inline.content_widths(self).0),
+                    AvailableSpace::MaxContent => None,
+                });
                 // Its floats go into the block formatting context it is in,
                 // or one of its own that holds them (CSS 2 § 10.6.7).
                 let mut size = match (block_ctx, width) {
@@ -1735,7 +1762,7 @@ impl BoxTree {
         self.boxes[index].taffy_style = style;
         if inputs.run_mode == RunMode::PerformLayout {
             // Its fragments are made from these lines, beside these floats.
-            inline.keep_laid_out_beside();
+            inline.keep_laid_out();
             self.place_floats(&inline, output.size.width, inset);
             output.oof_candidates = self.passed_up(index, &inline, &output, inset);
         }

@@ -1,0 +1,55 @@
+# Mutation test of stage 6b: the fragments of an inline formatting context
+# are made from the lines broken when it was laid out, at the width its box
+# ends up with:
+# python3 scripts/test.py mutate rfcs/0092-taffy-parley-forks/mutants-6b.toml
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it"]
+
+[[mutant]]
+name = "the fragments' width is found from the border box"
+file = "crates/layout/src/lib.rs"
+from = '''            .filter(|at| (at - width).abs() <= WIDTH_NOISE)'''
+to = '''            .filter(|_| false)'''
+
+[[mutant]]
+name = "the width the lines were laid out at is always the fragments'"
+file = "crates/layout/src/lib.rs"
+from = '''            .filter(|at| (at - width).abs() <= WIDTH_NOISE)'''
+to = '''            .filter(|_| true)'''
+
+[[mutant]]
+name = "the width the lines were laid out at isn't kept"
+file = "crates/layout/src/lib.rs"
+from = '''            inline.keep_laid_out();'''
+to = ''''''
+
+[[mutant]]
+name = "only lines with floats are broken at the fit-content width"
+file = "crates/layout/src/lib.rs"
+from = '''                let own = fit.filter(|_| sized_by_content);'''
+to = '''                let own = fit.filter(|_| floats);'''
+
+[[mutant]]
+name = "lines with floats are broken at the fit-content width in a box given a width"
+file = "crates/layout/src/lib.rs"
+from = '''                let own = fit.filter(|_| sized_by_content);'''
+to = '''                let own = fit.filter(|_| floats || sized_by_content);'''
+
+[[mutant]]
+name = "a box given a width by its parent counts as sized by its content"
+file = "crates/layout/src/lib.rs"
+from = '''        let sized_by_content = inputs.known_dimensions.width.is_none()
+            && (style.size.width.is_auto() || fit_content)'''
+to = '''        let sized_by_content = (style.size.width.is_auto() || fit_content)'''
+
+[[mutant]]
+name = "a box with a width of its own counts as sized by its content"
+file = "crates/layout/src/lib.rs"
+from = '''            && (style.size.width.is_auto() || fit_content)
+            && style.aspect_ratio.is_none();'''
+to = '''            && style.aspect_ratio.is_none();'''
+
+[[mutant]]
+name = "a fit-content width doesn't count as sized by its content"
+file = "crates/layout/src/lib.rs"
+from = '''            && (style.size.width.is_auto() || fit_content)'''
+to = '''            && style.size.width.is_auto()'''

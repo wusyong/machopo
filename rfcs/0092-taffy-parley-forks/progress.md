@@ -18,7 +18,7 @@
 | 5b machopo 的 `FontFallbackMap`、頁面和 canvas 的文字改給 family 的 id、計數改義 | 做完，等審核 | |
 | 6a float 旁邊的盒子進快取 | 不做：量過會命中的上限和時間（下面的「第 6a 段：float 的快取」） | 2026-11-10 |
 | 6a column flexbox 的 intrinsic 寬度搬進 taffy 的 fork | 做完（fork 的 commit 在本地，還沒 push） | 2026-11-10 |
-| 6b 做 fragment 時的斷行 | 還沒開始 | |
+| 6b 做 fragment 時的斷行 | 做完，等審核 | |
 | 7 上游的草稿 | 還沒開始 | |
 
 ## 驗收
@@ -32,7 +32,8 @@
 | shallow 和完整的 checkout 匯出的 patch 一樣 | parley 的 checkout 原本是 shallow 的，第一次匯出時加深；之後在完整的 checkout 再匯出一次，每個檔案的 md5 不變 |
 | `LayoutUpdate::laid_out_beside_floats`：因為旁邊有 float（或把自己的 float 放進共用的 block formatting context）沒用 taffy 的快取的盒子 | `layout` 的 `float::boxes_beside_floats_are_laid_out_without_the_cache`：沒有 float 時 0，兩個段落都在 float 旁邊時 2，只有一個時 1 |
 | `LayoutUpdate::lines_broken_again_beside_floats`：float 旁邊的行從頭重斷的次數，四種原因 | `float::lines_beside_floats_are_broken_again`：沒有 float、float 旁邊放得下時 0；往下找更寬的地方、高了之後在更窄的地方、拿掉移到下一行的 float、放好自己的 float 之後，各自的次數 |
-| `LayoutUpdate::lines_broken_for_fragments`：做 fragment 時在最後的寬度真的又斷了一次 | `inline::lines_are_broken_again_for_their_fragments`：確定的寬度、放得下的 shrink-to-fit 的 float 是 0；在沒有空間的地方 shrink-to-fit 的 float（行在 0 斷、盒子和內容一樣寬）是 1 |
+| `LayoutUpdate::lines_broken_for_fragments`：做 fragment 時在最後的寬度真的又斷了一次 | `inline::lines_are_broken_again_in_a_box_wider_than_they_were_broken_at`：`min-width` 撐寬的 float 是 1（行在盒子的寬度對齊）；`inline::lines_are_broken_once_for_their_fragments`：下一列的情況是 0 |
+| fragment 用最後排版時斷的行；寬度由內容決定的盒子的行在 fit-content 的寬度斷，被給了寬度的在那個寬度斷 | `inline::lines_are_broken_once_for_their_fragments`（確定的寬度、shrink-to-fit 的 float（放得下的、沒有空間的、自己有寬度的）、從 border box 算回來有浮點誤差的寬度：都斷 1 次、做 fragment 時 0 次）、`inline::a_float_aligns_its_lines_in_its_own_width`、`inline::a_shrunk_box_is_as_high_as_its_lines_at_its_width`、`inline::lines_with_floats_are_broken_once_in_the_width_their_box_is_given`（float 的 button、被給了寬度的盒子裡帶 float 的行） |
 | `BoxTreeUpdate::font_family_names`：照名稱在字型集合裡查的次數。一個 `font-family` 的值第一次用來 shape 時每個名稱查一次，之後不查 | `font_selection::a_font_family_value_is_looked_up_once`：block 的清單、inline 元素的、`display: contents` 的元素裡的 run 的，第一次各多幾個名稱就多幾次；看過的值（在別的 block、別種 span、別的字級）是 0；順序不同是另一個值；generic 不算名稱；沒有 shape 時 0。`update::` 的測試比較 `BoxTreeUpdate` 時不比這個欄位 |
 | 註冊字型之後，`font-family` 的值重新查 | `font_selection::adding_fonts_looks_the_family_names_up_again`：註冊前名稱找不到、用 Ahem；註冊之後換字級重新 shape，查了名稱、用到新的字型 |
 | 一個值查到的是集合裡有的名稱的 family 和 generic 代表的 family，照清單的順序 | `layout` 的 unit test `font_families::tests::a_value_is_the_families_the_collection_has`；`font_selection::a_generic_family_is_its_families` |
@@ -171,6 +172,35 @@
 - **和完整演算法不同的地方**：fixture 都沒變，但不是嚴格等價。完整的演算法量子項的寬度時給它 flex 之後的高度，捷徑給它自己的 style 的高度（夾在 min、max 裡、不小於 padding 加 border），沒有的話不給。寬度會跟著給的高度變、又不是經由 `aspect-ratio` 的子項（measure function 自己用高度算寬度的 leaf、換行的 column flexbox、有比例的子項以外靠高度決定寬度的 container）結果會不同；`column_width.rs` 的 `item_available_height` 的第一個斷言在完整演算法下是 10、捷徑是 70（刻意做的、寬度等於可用高度的 leaf）。machopo 原本的捷徑也是這樣（它的 debug 對照從沒被踩到），Blink 的 `ComputeMinMaxSizes` 也只用子項自己的貢獻。記在 `docs/test-gaps.md`。
 - **fork 的 mutation test**（scratchpad 的一次性 script，每條跑 fork 的 `cargo test --no-fail-fast`）：12 條全部抓到：不限 column（89 個失敗）、不限寬度（152）、換行的也走（`wrapping_column`）、有比例的也走（`item_with_aspect_ratio`）、不設已知的容器高度（`item_available_height`）、不算 line 的 cross size（87）、不扣子項的 margin、不用 style 的高度、不夾 min 和 max、不以 padding 為下限（都是 `item_with_height`、`item_available_height`）、容器高度未知時也用它當可用高度、永遠不走捷徑（`measure_count_flex_in_grid`）。過程中沒抓到、補了測試的：換行、比例、容器高度、margin、可用高度（第一輪 5 條，補了 `column_width.rs`），padding 的下限（補了 `item_with_height` 的一個斷言）。第一版的 `item_with_aspect_ratio` 用 leaf，完整演算法也不經由比例換算（leaf 不把已知的高度經比例轉成寬度），改成 block 的子項才分得出來。
 - **machopo**：`column_flex_width`、`widest_column_item` 和 debug 的對照拿掉（`lib.rs` 少 198 行）。`cargo test -p layout` 全過（unit 26、`it` 436），`flex.rs` 原有的 column 測試（寬度、min 和 max content、shrink-to-fit、子項自己的寬度、斷行次數）沒有改預期。把 fork 的捷徑關掉時 `flex::a_column_in_a_row_breaks_its_paragraphs_once` 失敗（斷行次數）。mutation test（`mutants-6a.toml`）：2 條全部抓到（flexbox 不走 `fit_content_width`、shrink-to-fit 不以 min-content 為下限）。`ci.py third-party` 過（`patches/taffy/` 兩個 patch）。 `test.py wpt css/css-flexbox`：1646 個檢查，沒有非預期的結果；`test.py reftest flex/`：16 個，沒有非預期的結果。sanity 的 7 項都過。
+
+**第 6b 段：做 fragment 時的斷行**（2026-11-10，Windows 11）：
+
+- **做之前的分類**（release build，暫時的輸出，量完還原；`tests/sites/` 7 頁和 Speedometer 20 個 suite 各一次 iteration）：做 fragment 時再斷的 343 次（`tests/sites/` 12、Speedometer 331）照原因分：
+
+  | 原因 | 次數 |
+  | --- | --- |
+  | content box 的寬度從 border box 算回來的浮點誤差（行已經在同一個寬度斷過） | 234 |
+  | shrink-to-fit：行在給它的空間斷，盒子最後是 fit-content 的寬度 | 101 |
+  | 斷行的結果被清掉（atomic inline 的大小變了、量過 min 和 max content） | 8 |
+  | taffy 在最後的 layout 之後又量了別的寬度 | 0 |
+
+- **做法**：`compute_inline` 在 `PerformLayout` 結束時記下斷行的寬度（`InlineContent::keep_laid_out`），`inline_fragments` 用它問 `break_lines`；和 border box 算回來的寬度差超過 1/64 px 時用算回來的。寬度由內容決定的盒子（taffy 沒傳已知的寬度、style 的寬度是 `auto` 或 `fit-content`、沒有 `aspect-ratio`）的行在 fit-content 的寬度斷，其他的在給它的寬度斷。
+- **原本確認的「一律在 fit-content 的寬度斷」行不通**：照做時 `cargo test -p layout` 有 8 個測試失敗（行數、list marker 的位置、斷行的次數）。原因是 taffy 的 `compute_leaf_layout` 在 `PerformLayout` 時不把盒子被給的寬度當已知的大小傳給 measure function，而是放進可用的空間；這時空間就是盒子最後的寬度，fit-content 的寬度（夾在 min-content 和 max-content 之間）可能不同。改成只在寬度由內容決定時用 fit-content 的寬度之後，失敗的只剩 2 個、都是斷行次數變少（`a_width_alone_breaks_no_lines` 的 float 加 `text-indent` 從 2 次變 1 次；舊的 `lines_are_broken_again_for_their_fragments` 的例子從再斷 1 次變 0 次），排版沒有變，改了這兩個測試預期的次數。
+- **順便修到的**：shrink-to-fit 的盒子裡有百分比寬度的 inline-block 時，原本高度是在空間的寬度量的、行是在盒子的寬度斷的（`a_shrunk_box_is_as_high_as_its_lines_at_its_width` 的 float 原本高 24、行有 2 行，現在高 44）。
+- **做完再分類一次發現的兩種**（第一次做完 Speedometer 還剩 21 次）：13 次是 float 的 button（TodoMVC 的「Clear completed」）：button 的 `auto` 寬度在 taffy 的 style 裡是 `fit-content`，不是 `auto`，條件漏了，補上。另外 `layout` 的測試裡看到被給了寬度的盒子裡帶 float 的行先在 fit-content 的寬度排、做 fragment 時再在盒子的寬度斷（原本帶 float 的行不管盒子有沒有被給寬度都用 fit-content 的寬度）：拿掉這個條件，帶 float 的行和其他的一樣。量的頁面裡沒有這種。
+- **做之後的計數**（同樣的頁面，各一次）：
+
+  | 頁面 | 斷行（之前 → 之後） | 其中做 fragment 時再斷（之前 → 之後） |
+  | --- | --- | --- |
+  | `tests/sites/` 7 頁 | 1,633 → 1,591 | 12 → 0 |
+  | Speedometer 20 個 suite | 18,611 → 17,738 | 331 → 8 |
+  | 　其中 Perf-Dashboard | 986 → 764 | 222 → 0 |
+
+  剩下的 8 次是 Editor-CodeMirror 和 Editor-TipTap 各 4 次，都是記下的寬度和盒子的寬度一樣、斷行的結果被清掉的那一種（不處理）。blink_perf 做之前是 0，沒有重量。「之前」是第 2 段量的；斷行的總數少掉的比再斷的多：這段之外，中間的階段的改動也算在裡面，沒有分開量。
+- **新的測試**（`layout` 的 `inline::`）：`lines_are_broken_once_for_their_fragments`（取代 `lines_are_broken_again_for_their_fragments`）、`a_float_aligns_its_lines_in_its_own_width`、`a_shrunk_box_is_as_high_as_its_lines_at_its_width`、`lines_are_broken_again_in_a_box_wider_than_they_were_broken_at`、`lines_with_floats_are_broken_once_in_the_width_their_box_is_given`。
+- **mutation test**（`mutants-6b.toml`）：8 條全部抓到：fragment 的寬度從 border box 算、永遠用記下的寬度、不記寬度、只有帶 float 的行用 fit-content 的寬度、被給了寬度的盒子裡帶 float 的行用 fit-content 的寬度、不看 taffy 傳的寬度、不看 style 的寬度、`fit-content` 的寬度不算由內容決定。過程中沒抓到、補了測試的：「永遠用記下的寬度」（補 `min-width` 的測試）、「不看 style 的寬度」（補 float 自己有寬度的例子）。「不看 `aspect-ratio`」抓不到、沒有放進清單：試過 float、inline-block、flex 和 grid 的子項，有比例的盒子的寬度都由父盒子傳進來，走不到這個條件；記在 `docs/test-gaps.md`。
+- **跑過的**：`cargo test -p layout`（unit 26、`it` 440）、`-p shell`（70、11、563）全過。`test.py reftest`：`inline/` 17、`text/` 27、`floats/` 11、`flex/` 16、`position/` 11、`tables/` 13、`forms/` 8，沒有非預期的結果。`test.py wpt`：`css/css-sizing` 3679 個檢查、`css/CSS2/floats` 244、`css/CSS2/linebox` 728、`css/css-text` 2751、`css/css-flexbox` 1646，沒有非預期的結果，預期結果都沒有改。`css/CSS2/floats` 的統計是「Ran 244、Expected 243、Unexpected 0」，差的 1 個沒有查是哪一個。
+- **階段結束的檢查**（第 6 段）：`cargo test --workspace` 全過；`cargo fmt --check` 第一次有 3 處（新的測試），`cargo fmt` 修掉；clippy 沒有警告；sanity 的 7 項都過。
 
 **第 2 段的量測**（2026-11-10，Windows 11，release build，`RUST_LOG=layout=debug`，scratchpad 裡一次性的 script 加總每頁的 log）：`tests/sites/` 用 `--headless`（1280×800）載入一次；blink_perf 的 30 頁照 `bench.py blink-perf` 的方法（`--automation-pipe`，頁面跑完整個 runner）；Speedometer 3.1 的 20 個 suite 各一次 iteration（`iterationCount=1`，只數計數，沒量時間）。
 

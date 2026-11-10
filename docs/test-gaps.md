@@ -227,6 +227,7 @@
 - `layout` 的 `InlineContent::new` 不為 `hyphens: none` 的 run shape 連字號（它的 style 在 parley 那裡是不斷行，連字號用不到）。
 - style 的 flag 往上標時停在已經標過的祖先（不停只是多走幾步）。
 - box tree 標「要重排」時停在已經標過的祖先、`InlineContent` 在同樣的寬度不重新斷行（兩者都只省時間）。
+- `layout` 的 `compute_inline` 判斷盒子的寬度是不是由內容決定（`sized_by_content`）時不看 `aspect-ratio`：試過的情況（float、inline-block、flex 和 grid 的子項）裡，有比例的盒子的寬度都由父盒子算好傳進來，走不到這個條件。走到的話行會先在 fit-content 的寬度斷，做 fragment 時發現盒子的寬度不同再斷一次，結果一樣。
 - `InlineContent` 記住 min-content 和 max-content 寬度（只省時間）。
 - `layout` 的 `InlineContent` 不追蹤開著的行內元素、一律拿 container 的 style 和 run 的比（`push_runs` 的 `enclosing`）：行內元素裡的文字的 style 和那個元素的一樣，多設一次和元素的 span 相同的 text property，排版結果一樣，只多做一點事）。
 - `Range` 的文字盒子裡 collapse 的範圍找到之後就停（`layout::text_rects`：一個 text 節點的 run 不重疊地蓋滿它的原文，含有一個點的 run 只有一個，停下只省下走完 fragment tree）。

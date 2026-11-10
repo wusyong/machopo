@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use dom::{QualifiedName, names};
-use gfx::{NodeId, PointF, RectF};
+use gfx::{NodeId, PointF, RectF, SizeF};
 use layout::{BoxFragment, BoxRole, LineEndKind};
 
 use crate::page::{Page, VIEWPORT};
@@ -852,12 +852,10 @@ fn a_width_alone_breaks_no_lines() {
             110.0,
             1,
         ),
-        // (A float's lines are broken in the room it is offered and again
-        // at its width, with an indent or without.)
         (
             "<div style='width: 500px'><div style='float: left; text-indent: 10px'>XX XX</div></div>",
             110.0,
-            2,
+            1,
         ),
         // A percentage is 0 there, as in Blink.
         (
@@ -894,30 +892,119 @@ fn a_width_alone_breaks_no_lines() {
     }
 }
 
-/// The lines are broken again as the fragments are made where the last
-/// break was at another width (parley keeps only the last): a float
-/// shrunk to fit no room has its lines broken in the room and is laid out
-/// as wide as its content.
+/// The fragments are made from the lines as they were broken when the box
+/// was laid out, at the width it ends up with: its fit-content width if
+/// its content sizes it (a float in room it doesn't fill, or in none), and
+/// the width it was broken at where the content box's width, found from
+/// the border box's, is a rounding error away from it.
 #[test]
-fn lines_are_broken_again_for_their_fragments() {
+fn lines_are_broken_once_for_their_fragments() {
     let ahem = "<style>body { margin: 0; font: 20px/1 Ahem }</style>";
-    for (html, broken, again) in [
-        ("<div style='width: 100px'>XX XX</div>", 1, 0),
-        (
-            "<div style='width: 100px'><div style='float: left'>XX XX</div></div>",
-            1,
-            0,
-        ),
-        (
-            "<div style='width: 0'><div style='float: left'>XX XX</div></div>",
-            2,
-            1,
-        ),
+    for html in [
+        "<div style='width: 100px'>XX XX</div>",
+        "<div style='width: 100px'><div style='float: left'>XX XX</div></div>",
+        "<div style='width: 0'><div style='float: left'>XX XX</div></div>",
+        // Wider than its content by its own width, which is the room.
+        "<div style='width: 500px'><div style='float: left; width: 200px'>XX XX</div></div>",
+        "<div style='width: 1000px'><div style='width: 33.3%; padding: 0 3.3px'>XX XX</div></div>",
     ] {
         let layout = crate::page::lay_out(&format!("{ahem}{html}")).layout;
         assert_eq!(
             (layout.lines_broken, layout.lines_broken_for_fragments),
-            (broken, again),
+            (1, 0),
+            "{html}"
+        );
+    }
+}
+
+/// A float in more room than its content fills: its lines are broken at
+/// its own width, where they are aligned.
+#[test]
+fn a_float_aligns_its_lines_in_its_own_width() {
+    let laid = crate::page::lay_out(
+        "<style>body { margin: 0; font: 20px/1 Ahem }</style>\
+         <div style='width: 500px'>\
+         <div style='float: left; text-align: center'>XX XX XX<br>XX</div></div>",
+    );
+    let l = lines(&laid.view);
+    assert_eq!(l[0].rect, RectF::new(0.0, 0.0, 160.0, 20.0));
+    assert_eq!(l[1].rect, RectF::new(60.0, 20.0, 40.0, 20.0));
+    assert_eq!(
+        (
+            laid.layout.lines_broken,
+            laid.layout.lines_broken_for_fragments
+        ),
+        (1, 0)
+    );
+}
+
+/// A box sized by its content is as high as its lines broken at its own
+/// width: an inline-block half as wide as it leaves no room for the word
+/// after it, which fit beside it in the room the box was offered.
+#[test]
+fn a_shrunk_box_is_as_high_as_its_lines_at_its_width() {
+    let laid = crate::page::lay_out(
+        "<style>body { margin: 0; font: 20px/1 Ahem }</style>\
+         <div style='width: 500px'><div style='float: left'>XX \
+         <span style='display: inline-block; width: 50%; height: 20px'></span> XX</div></div>",
+    );
+    let mut float = &laid.view.children[0].fragment;
+    while float.lines.is_empty() {
+        float = &float.children[0].fragment;
+    }
+    assert_eq!(float.lines.len(), 2);
+    assert_eq!(float.size, SizeF::new(120.0, 44.0), "{}", laid.view.dump());
+    assert_eq!(
+        (
+            laid.layout.lines_broken,
+            laid.layout.lines_broken_for_fragments
+        ),
+        (1, 0)
+    );
+}
+
+/// A box its minimum width makes wider than its content: its lines were
+/// broken at its content's width, so they are broken again at the box's
+/// for its fragments, and aligned there.
+#[test]
+fn lines_are_broken_again_in_a_box_wider_than_they_were_broken_at() {
+    let laid = crate::page::lay_out(
+        "<style>body { margin: 0; font: 20px/1 Ahem }</style>\
+         <div style='width: 500px'>\
+         <div style='float: left; min-width: 200px; text-align: right'>XX XX</div></div>",
+    );
+    assert_eq!(
+        lines(&laid.view)[0].rect,
+        RectF::new(100.0, 0.0, 100.0, 20.0)
+    );
+    assert_eq!(
+        (
+            laid.layout.lines_broken,
+            laid.layout.lines_broken_for_fragments
+        ),
+        (2, 1)
+    );
+}
+
+/// A button is as wide as its content, and its lines are broken there. A
+/// box given a width breaks its lines there with a float among them too:
+/// once more than the float's own.
+#[test]
+fn lines_with_floats_are_broken_once_in_the_width_their_box_is_given() {
+    for (html, broken) in [
+        ("<button style='float: right'>XX XX</button>", 1),
+        (
+            "<button style='float: right'>XX XX</button><span>a</span>",
+            2,
+        ),
+    ] {
+        let layout = crate::page::lay_out(&format!(
+            "<style>body {{ margin: 0 }}</style><div style='width: 500px'>{html}</div>"
+        ))
+        .layout;
+        assert_eq!(
+            (layout.lines_broken, layout.lines_broken_for_fragments),
+            (broken, 0),
             "{html}"
         );
     }
