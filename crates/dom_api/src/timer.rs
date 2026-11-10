@@ -183,6 +183,21 @@ fn run_script_timer<H: ScriptHost>(host: &mut H, window: &Persistent<Window>, no
     true
 }
 
+/// How long until `window` next has a timer due, by its clock (now with an
+/// element task or a message queued); none with no timer.
+pub fn until_next_due<'gc>(
+    cx: &dom::Cx<'_, 'gc>,
+    window: elise::Gc<'gc, Window>,
+) -> Option<std::time::Duration> {
+    // An element task or a message queued is due now.
+    let wait = if cx.has_element_task(window) || cx.has_posted_message(window) {
+        0.0
+    } else {
+        cx.next_due(window)? - cx.now_since(Some(window))
+    };
+    Some(std::time::Duration::from_secs_f64(wait.max(0.0) / 1000.0))
+}
+
 /// When `window`'s next timer is due (milliseconds since its time
 /// origin), for the host's clock; none with no timer.
 pub fn next_due(dom: &Dom, window: &Persistent<Window>) -> Option<f64> {

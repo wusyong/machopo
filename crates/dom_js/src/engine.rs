@@ -1297,7 +1297,7 @@ impl ScriptEngine for V8Engine {
             frames
                 .iter()
                 .filter_map(|frame| {
-                    crate::window::until_next_timer(cx, cx.window_of(frame.document.get(cx.gc))?)
+                    dom_api::until_next_due(cx, cx.window_of(frame.document.get(cx.gc))?)
                 })
                 .min()
         })

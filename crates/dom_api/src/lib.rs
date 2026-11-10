@@ -147,7 +147,7 @@ pub use dom_api_macros::declare;
 pub use engine::{
     ClassicScript, ConsoleMessage, ConsoleSink, DevToolsFrameIds, DevToolsInterrupter,
     DevToolsObjects, DevToolsPage, DevToolsQueue, DevToolsQueued, DevToolsSend, EngineSettings,
-    LoadSink, ScriptEngine,
+    LoadSink, ScriptEngine, WasmScript,
 };
 pub use event::{cancel as cancel_event, coarsen};
 pub use event_target::{dispatch, fire_event};
@@ -191,7 +191,9 @@ pub use script::{
     uses_credentials,
 };
 pub use text_control::run_element_tasks;
-pub use timer::{Reported, next_due, report_exception, run_due, run_next_due, run_task};
+pub use timer::{
+    Reported, next_due, report_exception, run_due, run_next_due, run_task, until_next_due,
+};
 pub use typed::{
     Any, AnyArg, AnyOrNull, ArgType, CallbackArg, ConstructorInfo, Created, DictMember, DictOrBool,
     Dictionary, DomStr, EmptyStringDefault, ErrorEventObject, Front, FrontHost, FrontTypes,

@@ -37,12 +37,14 @@ use dom_api::MemberKind;
 use wasmtime::component::Linker;
 use wasmtime::{Config, EliseHeapProvider, Engine, StoreContextMut, StoreSet};
 
+mod engine;
 mod front;
 mod handles;
 mod turn;
 mod wasi;
 pub mod wit;
 
+pub use engine::WasmEngine;
 pub use front::{TYPE_ERROR, exception_code};
 pub use turn::poll_until_idle;
 pub use wasi::{
@@ -296,6 +298,25 @@ impl WasmStore {
             }
         });
         Self { key }
+    }
+
+    /// This store's handle to `node`, for its guest (the page's document,
+    /// which its `start` takes): the same each time, as a member's result.
+    ///
+    /// # Errors
+    ///
+    /// If the store's DOM is gone, or away.
+    pub fn give(&self, node: &dom::NodeRoot) -> wasmtime::Result<u32> {
+        let number = self.key.number;
+        STATE.with_borrow(|slot| {
+            let state = slot.of(self.key).ok_or_else(no_store)?;
+            let mut tables = state.tables.borrow_mut();
+            tables.store(number).ok_or_else(no_store)?;
+            Ok(state
+                .dom()
+                .borrow_mut()
+                .mutate(|cx| tables.give(cx, number, node.get(cx.gc))))
+        })
     }
 
     /// How many nodes the store holds, for the tests: 0 once its DOM is

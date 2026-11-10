@@ -429,21 +429,6 @@ pub fn next_timer(
     dom_api::next_due(&scope.state().0.dom, &window)
 }
 
-/// How long until `window`'s next timer is due, by its clock (now with an
-/// element task queued); none with no timer.
-pub(crate) fn until_next_timer<'gc>(
-    cx: &dom::Cx<'_, 'gc>,
-    window: elise::Gc<'gc, Window>,
-) -> Option<std::time::Duration> {
-    // An element task or a message queued is due now.
-    let wait = if cx.has_element_task(window) || cx.has_posted_message(window) {
-        0.0
-    } else {
-        cx.next_due(window)? - cx.now_since(Some(window))
-    };
-    Some(std::time::Duration::from_secs_f64(wait.max(0.0) / 1000.0))
-}
-
 /// `queueMicrotask` on `global` (HTML's `WindowOrWorkerGlobalScope`): the
 /// callback in the engine's own microtask queue, wrapped so that what it
 /// throws is reported at its realm's window (HTML's "report the

@@ -11,7 +11,7 @@
 | 1a guest 和 `dom_wasm` 的測試換成 WASI 0.3 和 async 的 Store（決定 5、6） | 完成 | 2026-11-10 |
 | 1b WASI 0.3 的 linker：自己的時鐘，stdout 和 stderr 交給 sink（決定 7）；一輪的 poll（決定 9） | 完成 | 2026-11-10 |
 | 1c-1 engine 擁有的 DOM：`WasmDom::take`、`lend`（決定 10） | 完成 | 2026-11-10 |
-| 1c-2 `dom_wasm` 的 engine：`ScriptEngine`、`ScriptHost`、需要時才跑的 event loop、`start(document)`（決定 3、4、8、9） | 還沒開始 | |
+| 1c-2 `dom_wasm` 的 engine：`ScriptEngine`、`ScriptHost`、需要時才跑的 event loop、`start(document)`（決定 3、4、8、9） | 完成 | 2026-11-10 |
 | 1d renderer：prescan `<meta>`、選 engine、換頁時換 engine、載入 `application/wasm` 的 script（決定 2） | 還沒開始 | |
 | 1e 靜態的 TodoMVC 的 guest、情境、renderer 的測試 | 還沒開始 | |
 | 2 節點以外的物件的 handle、放開凍結、TodoMVC 用到的成員 | 還沒開始 | |
@@ -64,3 +64,19 @@
 - 確認了：`Dom` 搬進搬出之後 heap 照常運作；DOM 在 engine 手上時的 full GC 經過 `StoreSet` 拿到 Store 的 root（guest 拿著的節點、另一個 Store 的 GC 物件都留著）。
 - 找到的規則：`StoreSet` 也要在借出期間丟掉。第一版的測試在借出之外 `drop(set)`，有 GC heap 的 Store 這時放不掉 DOM 的 heap 的 root，DOM drop 時 elise panic（`1 roots outlive their heap`）。寫進 `crates/dom_wasm/README.md`，1c-2 的 engine 要照做。
 - mutation test（`mutants-1c-1.toml`，5 條）：第一次 1 條沒抓到：`Slot::of` 不看 DOM 在不在。guest 的呼叫在進 wasm 之前 fork 就先檢查 heap 借不借得到，走不到 host 函式；走得到的是 Store 在 DOM 不在時 drop。補了一個測試之後 5 條都抓到。跑完確認檔案都還原了。
+
+### 1c-2（2026-11-10，macOS，Apple Silicon）
+
+- 新的：`crates/dom_wasm/src/engine.rs`（`WasmEngine`，`dom_api::ScriptEngine` 的實作）、`crates/dom_wasm/wit/script.wit`（頁面的 script 的 world：import `dom`、export `async func` 的 `start(document)`）、`WasmStore::give`（把頁面的 document 交給 Store）。`dom_api`：`ScriptEngine::run_wasm_script`（預設什麼都不做，`V8Engine` 不用改）和 `WasmScript`；`until_next_due` 從 `dom_js` 的 `window.rs` 搬過來，兩個 engine 共用（決定 4）。
+- `scripts/ci.py`：每個 guest 自己的 world（`GUEST_WORLDS`），`machopo:dom` 的 WIT 整個資料夾當 dependency。新的 guest `crates/dom_wasm/tests/guests/page.c`（world 是 `script`）。
+- 設計上照預設做的：script 在 main thread 上同步編譯（沒有 compile thread）；Store 留到換頁才丟（`start` 回來、沒在等待的也是；第 3 段有 listener 之後再定什麼時候能丟）；只有最上層的 frame。
+- 新的測試 `tests/it/engine.rs` 七個。`cargo test -p dom_wasm`：12 個單元測試、33 個整合測試通過。`cargo test -p dom_api -p dom_js` 通過（`until_next_due` 搬家）。
+- 確認了：
+  - **C 的 guest 的 `async func` 入口照 callback ABI 寫得出來、跑得起來**，`start` 裡呼叫 libc 的 `nanosleep` 就是等待。
+  - **guest 讓出（`YIELD`）時同一輪接著跑完**：`poll_until_idle` 在 waker 被叫醒時繼續 poll。決定 9 提到的 wasmtime 49 的 bug（丟掉 future 會丟掉已取出的工作）照這個做法碰不到；mutation「一輪只 poll 一次」被這個測試抓到。
+  - **engine 手上的 DOM 在 script 跑過之後照常用**（讀樹、full GC）。
+- 找到的規則：拿著 DOM 的 root（`NodeRoot`）的人要比 engine 先 drop。測試第一版的 `Page` 把 `document` 放在 `engine` 後面，engine 的 DOM drop 時 elise panic（`1 roots outlive their heap`）；`V8Engine` 也是這個規則，renderer 本來就照做。
+- mutation test（`mutants-1c-2.toml`，18 條）：17 條抓到，1 條沒抓到：trap 的 Store 沒有從 `StoreSet` 拿掉。它只是留到換頁才丟，從外面看不出來，記進 `docs/test-gaps.md`。跑完確認檔案都還原了。
+- 沒有測試守著的：engine 轉給 `dom_api` 的那些方法（輸入、focus、生命週期、元素的 task、動畫、WebDriver 的查詢），要 renderer 才走得到，記進 `docs/test-gaps.md`，1d、1e 的情境會走到。
+- `sanity.py boundary` 抓到的：第一版把 wasmtime 的 `Engine` 和 linker 放在 process 共用的 `static`（每個 renderer 共用）。改成每個 `WasmEngine` 自己的，第一個 script 時才建；改完重跑測試，mutation 的 spec 裡碰到那一段的三條重跑（其中一條的原文跟著改）、照樣抓到。
+- `sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`spans`、`docs` 通過。

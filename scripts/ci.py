@@ -577,13 +577,20 @@ def cmd_third_party(args: argparse.Namespace) -> int:
 
 # The DOM's C guests (`dom_wasm`'s tests): each `<name>.c` there is
 # built into `<name>.wasm` next to it, against `machopo:dom`'s WIT
-# (`DOM_WIT`) and the tests' own world (`wit/test.wit` there: the interface
-# imported, `run` exported), with wasi-sdk's clang into WASI 0.3 components
+# (`DOM_WIT`, the files of its package) and its world (`GUEST_WORLDS`: the
+# tests' own, `wit/test.wit` there, the interface imported and `run`
+# exported; or a page's script's), with wasi-sdk's clang into WASI 0.3 components
 # (as a page's guests: their stores are async), checked in next to their source (the
 # tests don't build them). At these versions only: the builds checked in
 # depend on them.
 GUESTS = ROOT / "crates" / "dom_wasm" / "tests" / "guests"
-DOM_WIT = ROOT / "crates" / "dom_wasm" / "wit" / "machopo-dom.wit"
+DOM_WIT = ROOT / "crates" / "dom_wasm" / "wit"
+# Each guest's world, and the name wit-bindgen gives its files and
+# functions (the world's own).
+GUEST_WORLDS = {
+    "dom": ("test", "test"),
+    "page": ("machopo:dom/script@0.1.0", "script"),
+}
 WASI_SDK_VERSION = "34.0"
 WIT_BINDGEN_VERSION = "0.62.0"
 # The same everywhere: the name section stays (traps show function names),
@@ -648,17 +655,18 @@ def build_guests(clang: Path, bindgen: Path) -> list[Path] | None:
     wit = out / "wit"
     (wit / "deps").mkdir(parents=True)
     shutil.copyfile(GUESTS / "wit" / "test.wit", wit / "test.wit")
-    shutil.copyfile(DOM_WIT, wit / "deps" / DOM_WIT.name)
-    gen = out / "gen"
-    cmd = [str(bindgen), "c", str(wit), "--world", "test", "--out-dir", str(gen)]
-    print(" ".join(cmd), flush=True)
-    if subprocess.run(cmd, cwd=ROOT).returncode != 0:
-        return None
+    shutil.copytree(DOM_WIT, wit / "deps" / "machopo-dom")
     # clang runs wasm-opt when it's on PATH: only wasi-sdk's tools, so the
     # build doesn't depend on what else is installed.
     env = {**os.environ, "PATH": str(clang.parent)}
     built = []
     for source in sorted(GUESTS.glob("*.c")):
+        world, name = GUEST_WORLDS[source.stem]
+        gen = out / "gen" / source.stem
+        cmd = [str(bindgen), "c", str(wit), "--world", world, "--out-dir", str(gen)]
+        print(" ".join(cmd), flush=True)
+        if subprocess.run(cmd, cwd=ROOT).returncode != 0:
+            return None
         module = source.with_suffix(".wasm")
         cmd = [
             str(clang),
@@ -666,8 +674,8 @@ def build_guests(clang: Path, bindgen: Path) -> list[Path] | None:
             *CLANG_LINK_FLAGS,
             f"-I{gen}",
             str(source),
-            str(gen / "test.c"),
-            str(gen / "test_component_type.o"),
+            str(gen / f"{name}.c"),
+            str(gen / f"{name}_component_type.o"),
             "-o",
             str(module),
         ]

@@ -1,0 +1,122 @@
+# Mutation test of stage 1c-2: wasmtime as a page's engine (`WasmEngine`):
+# a script's store and its `start`, its turns, its waits as the engine's
+# timers, traps and output to the console:
+# python3 scripts/test.py mutate rfcs/0093-wasm-documents/mutants-1c-2.toml
+test = ["cargo", "test", "-q", "-p", "dom_wasm", "--test", "it", "--", "engine::"]
+timeout = 120
+
+[[mutant]]
+name = "a new window keeps the scripts of the one before"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''        // The document before goes, its scripts with it.
+        self.drop_scripts();'''
+to = ''''''
+
+[[mutant]]
+name = "a turn doesn't wake the due waits"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''                    cx.data_mut().guest_clock().wake_due();
+                    f(&mut cx)?;'''
+to = '''                    f(&mut cx)?;'''
+
+[[mutant]]
+name = "a turn's deadline isn't kept"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''            Ok(deadline) => script.deadline = deadline,'''
+to = '''            Ok(_) => {}'''
+
+[[mutant]]
+name = "a trap isn't reported"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''                self.report(&url, format!("{trap:?}"), true);'''
+to = '''                let _ = url;'''
+
+[[mutant]]
+name = "a trap is reported as a console call"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''                self.report(&url, format!("{trap:?}"), true);'''
+to = '''                self.report(&url, format!("{trap:?}"), false);'''
+
+[[mutant]]
+name = "a trap is reported with no URL"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''                self.report(&url, format!("{trap:?}"), true);'''
+to = '''                self.report("", format!("{trap:?}"), true);'''
+
+[[mutant]]
+name = "a turn's output isn't flushed"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''        self.flush_output();
+        self.perform_microtask_checkpoint();'''
+to = '''        self.perform_microtask_checkpoint();'''
+
+[[mutant]]
+name = "a printed line is reported as uncaught"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''            self.report("", line, false);'''
+to = '''            self.report("", line, true);'''
+
+[[mutant]]
+name = "bytes that don't compile aren't reported"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''            Ok(component) => component,
+            Err(error) => return self.report(script.url, format!("{error:?}"), true),'''
+to = '''            Ok(component) => component,
+            Err(_) => return,'''
+
+[[mutant]]
+name = "a start that waits is an error"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''                Poll::Ready(result) => result?,
+                Poll::Pending => Ok(()),'''
+to = '''                Poll::Ready(result) => result?,
+                Poll::Pending => wasmtime::bail!("start waits"),'''
+
+[[mutant]]
+name = "the guests' deadlines aren't the engine's timers"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''            (guests, own) => guests.or(own),'''
+to = '''            (_, own) => own,'''
+
+[[mutant]]
+name = "the time until a deadline is the deadline"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''Duration::from_nanos(deadline.saturating_sub(now))'''
+to = '''Duration::from_nanos(deadline)'''
+
+[[mutant]]
+name = "every waiting store is due"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''.filter(|script| script.deadline.is_some_and(|deadline| deadline <= now))'''
+to = '''.filter(|script| script.deadline.is_some())'''
+
+[[mutant]]
+name = "a store is due one nanosecond late"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''.filter(|script| script.deadline.is_some_and(|deadline| deadline <= now))'''
+to = '''.filter(|script| script.deadline.is_some_and(|deadline| deadline < now))'''
+
+[[mutant]]
+name = "run_timers says nothing ran"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''                self.turn(at, |_| Ok(()));
+                ran = true;'''
+to = '''                self.turn(at, |_| Ok(()));'''
+
+[[mutant]]
+name = "start gets another document"
+file = "crates/dom_wasm/src/lib.rs"
+from = '''                .mutate(|cx| tables.give(cx, number, node.get(cx.gc))))'''
+to = '''                .mutate(|cx| tables.give(cx, number, cx.create_document(true))))'''
+
+[[mutant]]
+name = "a turn polls once"
+file = "crates/dom_wasm/src/turn.rs"
+from = '''        if !woken.0.swap(false, Ordering::Relaxed) {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "a trapped store stays in the set"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''                let _ = set.remove(index);'''
+to = ''''''

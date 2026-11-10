@@ -1,6 +1,6 @@
 # dom_wasm
 
-DOM（`dom`、`dom_api`）給 wasm guest 用，在 wasmtime 上：`machopo:dom` 的 WIT 和 host 函式，每個 Store 對節點的 handle，和 wasm 的 GC 物件跟節點共用的 heap。renderer 還沒有接上它（machopo 沒有 wasm 的文件），只有它自己的測試用。最接近的 Blink 是 `bindings/core/v8`（engine 那一側的 DOM interface），wasm 本身 Blink 沒有對應（Chrome 的 wasm 經過 JS 碰 DOM）。
+DOM（`dom`、`dom_api`）給 wasm guest 用，在 wasmtime 上：`machopo:dom` 的 WIT 和 host 函式，每個 Store 對節點的 handle，wasm 的 GC 物件跟節點共用的 heap，guest 的 WASI，和頁面的 engine（`WasmEngine`）。renderer 還沒有接上它（machopo 沒有 wasm 的文件），只有它自己的測試用。最接近的 Blink 是 `bindings/core/v8`（engine 那一側的 DOM interface），wasm 本身 Blink 沒有對應（Chrome 的 wasm 經過 JS 碰 DOM）。
 
 不寫 `unsafe`（`#![forbid(unsafe_code)]`）。
 
@@ -22,6 +22,19 @@ set.with(index, |mut cx| run.call(&mut cx, args))?;  // 呼叫都經過 set 借�
 - **wasm 的 GC 物件在 DOM 的 heap 裡**：`configure` 讓 engine 用 elise、Store 借這個 thread 的 DOM 的 heap（wasmtime 的 fork 的 `EliseHeapProvider`：從 thread-local 借 `Dom`，鑰匙是 DOM 的序號；DOM 正被借著時、不是這份 DOM 時回錯誤）。這樣的 Store 都要在 `WasmDom::store_set` 建的 `StoreSet` 裡（不在的拿不到 GC heap）：set 擁有它們、交出它們的 root、借出時算 heap 的 frame，記憶體安全靠 fork 和 elise，不靠這個 crate（fork 的 `README.machopo.md` 的「A heap borrowed from the embedder」）。一份 DOM 一個 set；`WasmDom` 比 set 先走時，set 之後的呼叫都回錯誤。
 - **GC 在 host 呼叫裡經過 Store 做**：Store 借出期間 heap 在 frame 裡，host 函式的 DOM 操作的安全點不 GC（看不到 wasm 的 stack）。會配置的 host 函式（成員、`create-document`）做完之後 heap 該 GC 時呼叫 `StoreContextMut::gc`：wasmtime 交這個 Store 的 stack 上的 root，set 交其他 Store 的，DOM 的物件一起收；別的 Store 也借出中時不做。沒有 GC heap 的 Store（C 的 guest）的 GC 由 fork 直接請 heap 做。呼叫之間（沒有 Store 借出時）DOM 的安全點照常 GC。
 - host 函式是同步的 `func_wrap`，同步和 async 的 Store 都能用。
+
+## 頁面的 engine（`WasmEngine`）
+
+`dom_api::ScriptEngine` 的實作（`src/engine.rs`），wasm 文件用的；對應 `dom_js::V8Engine`。renderer 還沒有照文件選它，現在只有測試建它。
+
+- **DOM 是它的**（上面的「engine 擁有的 DOM」）：`dom_mut()`、`dom_and_layout()` 直接給；跑 guest 的每一輪、建和丟 Store 時借進 thread-local。
+- **沒有 JS**：不建 isolate。`run_classic_script`、module、`execute_webdriver_script`、DevTools 的 inspector、observer、idle callback、`requestAnimationFrame` 的方法什麼都不做（WebDriver 的 script 回錯誤）。event handler 的屬性（`onclick=""`）是 JS，不執行。
+- **DOM 自己的工作照樣經過 `dom_api`**：輸入的預設動作（`handle_mouse`、`handle_key`、`handle_wheel`）、focus、文件生命週期的事件、元素的 task、CSS 的動畫、WebDriver 的查詢和輸入，都和 V8 那邊呼叫同樣的函式，host 是一個呼叫 script 時什麼都不做的 `ScriptHost`（guest 還不能註冊 listener）。microtask checkpoint 只有 DOM 自己的（圖片的更新、元素改變之後的步驟）。
+- **只有最上層的 frame**：`create_window` 對其他 frame 回 `None`，iframe 沒有子文件。
+- **一個 script 一個 Store**（`run_wasm_script`，bytes 是 component，world 是 `wit/script.wit` 的 `script`）：在呼叫的 thread 上同步編譯、建 Store、實例化、呼叫 `start(document)`（頁面的 document 在這個 Store 的 handle）。`start` 第一次等待時這個 script 對頁面就算執行完了，Store 留著。編不過、import 對不上、trap 都報到 console（`uncaught`，URL 是 script 的），trap 的 Store 丟掉；之後的 script 照常跑。新的 window（換頁）時前一份文件的 Store 全部丟掉。
+- **guest 的等待是 engine 的 timer**：`until_next_timer()` 是 DOM 自己的下一個 task 和各個 Store 最早的期限裡比較早的，`run_timers()` 讓期限到了的 Store 各跑一輪。期限在每一輪結束時從 Store 讀出來記著（時鐘在 Store 裡，只有一輪裡拿得到）。
+- **guest 印的東西**在每一輪結束時一行一行交給 console 的 sink（不是 `uncaught`）。
+- `WasmEngine::with_clock` 給測試用：guest 的時鐘讀測試給的時間。
 
 ## WASI 和 Store 的一輪
 
@@ -79,11 +92,12 @@ guest 拿到的節點是一個 `u32`，那個 Store 自己的編號（`src/handl
 
 ```sh
 cargo test -p dom_wasm
-python3 scripts/ci.py guests          # 重編 tests/guests/ 的 guest（wasi-sdk 34.0、wit-bindgen 0.62.0）
+python3 scripts/ci.py guests          # 重編 tests/guests/ 的 guest（wasi-sdk 34.0、wit-bindgen 0.62.0）；每個 guest 的 world 在 ci.py 的 GUEST_WORLDS
 ```
 
 測試不編 guest，只用 repo 裡的 `.wasm`。測試的 guest 是 C，編成 WASI 0.3 的 component（`wasm32-wasip3`）；測試的 Store 是 async 的（linker 是 wasmtime-wasi 的 p3），每次呼叫在 `StoreSet` 的一次借出裡 poll 到完成，world 在 `tests/guests/wit/test.wit`：import `machopo:dom` 的 interface，export `run`（照名稱跑一個 case，回傳哪裡錯了，沒錯是空字串）和 `sleep`（`async func`：等一段時間，醒來留一個記號給 `run` 的 case 讀）。
 
+- `tests/it/engine.rs`（guest 是 `tests/guests/page.c`，world 是 `script`，照 document element 的 `data-case` 做事）：`start` 拿到頁面的 document、改它，每個 script 自己的 Store，之後 engine 的 full GC 留著改過的樹；等待的 script 在第一次等待時算執行完，期限是 `until_next_timer`，還沒到時 `run_timers` 不跑，到了才接著跑；trap 的 script 報到 console（`uncaught`、它的 URL）、之前做的留著、下一個 script 照常跑；不是 component 的 bytes 報到 console；guest 印的一行到 console；新的 window 丟掉前一份文件的 script（等待中的也是）；讓出（callback code 的 `YIELD`）的 guest 在同一輪裡接著跑完。
 - `tests/it/lend.rs`：DOM 被 engine 拿走之後，engine 直接用它；guest 只有借出期間碰得到，不在時呼叫回錯誤、之後照樣能用；engine 手上的 full GC 留著 guest 拿著的節點和另一個 Store 的 GC 物件；unwind 的借出也交還；已經在的 DOM 不能再借進來；DOM 不在時丟掉的 Store 留下它的表。
 - `tests/it/wasi.rs`：guest 在 async 的 export `sleep` 裡等待時留在 Store 裡、期限是 `next_deadline`，期限之前的一輪不叫醒它，到了之後的一輪才醒（時間到了但還沒跑那一輪時也還沒醒），等待期間照樣能呼叫它；不用等的等待在開始的那一輪就結束；兩個 Store 各自的等待；guest 讀到的時鐘和解析度是 100 µs；印的東西一行一行來、分 stdout 和 stderr，沒有換行的最後一行在 Store 丟掉時來。
 - `tests/it/wit.rs`：`wit/machopo-dom.wit` 是表產生的那份；`for_each_member!` 的 `plain` 剛好是 `wit::is_plain` 的，跳過的是物件不是節點的那幾個 interface，WIT 裡沒有 event；WIT 的成員剛好是凍結的那些，每個都還是 plain。

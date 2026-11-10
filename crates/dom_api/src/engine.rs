@@ -62,6 +62,13 @@ pub struct EngineSettings {
     pub web_tests: bool,
 }
 
+/// A wasm script to run (a component): its bytes and the URL it came from.
+#[derive(Debug, Clone, Copy)]
+pub struct WasmScript<'a> {
+    pub bytes: &'a [u8],
+    pub url: &'a str,
+}
+
 /// A classic script to run: its text, the URL it came from (an inline
 /// one's is its document's), its base URL, the line its text starts on
 /// (1-based), which error positions count from, whether its errors are
@@ -145,6 +152,13 @@ pub trait ScriptEngine: ParserHost {
     /// fetched in the realm of the frame showing `document`
     /// (`ScriptHost::start_module_graph`).
     fn start_module_graph(&mut self, document: &dom::NodeRoot, start: crate::ModuleStart);
+
+    /// Runs a wasm script in `frame`'s document: instantiated, its `start`
+    /// called with the document, done at its first wait. An engine that
+    /// runs no wasm (a JS document's) runs none.
+    fn run_wasm_script(&mut self, frame: crate::FrameId, script: &WasmScript<'_>) {
+        let _ = (frame, script);
+    }
 
     /// A module a realm's module map asked for (a `ScriptFetch` of a
     /// module), fetched (`None`: it failed): its graphs move on, those
