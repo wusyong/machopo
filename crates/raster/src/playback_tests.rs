@@ -2640,3 +2640,218 @@ fn a_part_and_a_pattern_of_an_image_made_smaller_are_from_its_level() {
         assert!(gray(bmp.pixel(x, y)), "{x}, {y}: {:?}", bmp.pixel(x, y));
     }
 }
+
+/// A red rect over all of a 4 by 2 tile.
+fn red_tile() -> DisplayItemList {
+    list_of(vec![PaintOp::DrawRect {
+        rect: RectF::new(0.0, 0.0, 4.0, 2.0),
+        flags: PaintFlags::fill(Color::rgb(255, 0, 0)),
+    }])
+}
+
+fn tile_params(clear_color: Color) -> PlaybackParams {
+    PlaybackParams {
+        content_rect: RectF::new(0.0, 0.0, 4.0, 2.0),
+        contents_scale: 1.0,
+        clear_color,
+    }
+}
+
+/// What Vello panics on, were it handed it (`shows` keeps it back): a
+/// stroke clipped to a polygon, both beginning at the right edge of
+/// pixels 20 wide.
+fn vello_panics_on() -> Vec<PaintOp> {
+    let p = PointF::new;
+    vec![
+        PaintOp::Save,
+        PaintOp::ClipPath {
+            path: gfx::Path::polygons([vec![
+                p(23.0, -3.0),
+                p(23.0, 11.0),
+                p(20.0, 8.0),
+                p(20.0, 0.0),
+            ]]),
+            anti_alias: true,
+        },
+        PaintOp::DrawLine {
+            p0: p(21.5, -3.0),
+            p1: p(21.5, 11.0),
+            flags: PaintFlags::stroke(Color::BLACK, 3.0),
+        },
+        PaintOp::Restore,
+    ]
+}
+
+/// Whether playbacks with `cache` hand Vello what `shows` keeps from it.
+fn show_all(cache: &RasterCache, all: bool) {
+    cache
+        .vello
+        .shows_all
+        .store(all, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A playback that panics leaves the tile its clear color (not what the
+/// buffer had from the tile before), is counted, and costs the thread its
+/// context: the next playback draws with a new one.
+#[test]
+fn a_playback_that_panics_leaves_the_tile_its_clear_color() {
+    let cache = RasterCache::default();
+    let list = red_tile();
+    let ops = [0];
+    let mut pixels = Vec::new();
+    let white = tile_params(Color::WHITE);
+    crate::playback_into(&list, &ops, &white, &cache, &mut pixels);
+    assert_eq!(pixels, [255, 0, 0, 255].repeat(8));
+    assert!(crate::vello_backend::has_context());
+    assert_eq!(cache.take_failure(), None);
+
+    for (clear, left) in [
+        (Color::rgb(10, 20, 30), [10, 20, 30, 255]),
+        (Color::rgba(200, 100, 0, 128), [100, 50, 0, 128]),
+    ] {
+        cache.fail_next_for_testing(1);
+        let size = crate::playback_into(&list, &ops, &tile_params(clear), &cache, &mut pixels);
+        assert_eq!(size, Size::new(4, 2));
+        assert_eq!(pixels, left.repeat(8));
+        assert!(!crate::vello_backend::has_context());
+        // The one after is drawn.
+        crate::playback_into(&list, &ops, &white, &cache, &mut pixels);
+        assert_eq!(pixels, [255, 0, 0, 255].repeat(8));
+        assert!(crate::vello_backend::has_context());
+    }
+    assert_eq!(
+        cache.take_failure(),
+        Some(crate::RasterFailure {
+            message: "a test asked this playback to fail".into(),
+            count: 2,
+        })
+    );
+    assert_eq!(cache.take_failure(), None);
+}
+
+/// A failure is one to tell the first time and each time the count
+/// doubles; the last such one waits until it is taken.
+#[test]
+fn failures_are_told_when_their_count_doubles() {
+    let cache = RasterCache::default();
+    let list = red_tile();
+    let params = tile_params(Color::WHITE);
+    cache.fail_next_for_testing(9);
+    let mut told = Vec::new();
+    for _ in 0..9 {
+        crate::playback_ops(&list, &[0], &params, &cache);
+        told.push(cache.take_failure().map(|failure| failure.count));
+    }
+    assert_eq!(
+        told,
+        [
+            Some(1),
+            Some(2),
+            None,
+            Some(4),
+            None,
+            None,
+            None,
+            Some(8),
+            None
+        ]
+    );
+    // Not taken each time: the last one to tell.
+    cache.fail_next_for_testing(8);
+    for _ in 0..8 {
+        crate::playback_ops(&list, &[0], &params, &cache);
+    }
+    assert_eq!(cache.take_failure().map(|failure| failure.count), Some(16));
+    // No more asked for: drawn, and nothing to tell.
+    let bmp = crate::playback_ops(&list, &[0], &params, &cache);
+    assert_eq!(bmp.pixel(0, 0), [255, 0, 0, 255]);
+    assert_eq!(cache.take_failure(), None);
+}
+
+/// A panic of Vello's own, in the middle of a playback, is caught as one
+/// asked for is. (When this fails with the tile drawn, upstream fixed the
+/// panic: see `upstream_panics_on_a_clipped_stroke_at_the_right_edge`.)
+#[test]
+fn a_panic_of_vellos_is_caught() {
+    let cache = RasterCache::default();
+    // Catching, as a release build.
+    cache.fail_next_for_testing(0);
+    let mut ops = vec![PaintOp::DrawRect {
+        rect: RectF::new(0.0, 0.0, 20.0, 20.0),
+        flags: PaintFlags::fill(Color::rgb(255, 0, 0)),
+    }];
+    ops.extend(vello_panics_on());
+    let list = list_of(ops);
+    let all: Vec<usize> = (0..list.ops().len()).collect();
+    let params = PlaybackParams {
+        content_rect: RectF::new(0.0, 0.0, 20.0, 20.0),
+        contents_scale: 1.0,
+        clear_color: Color::WHITE,
+    };
+    let red = [255, 0, 0, 255];
+    // As it is drawn: the clip isn't handed to Vello.
+    let bmp = crate::playback_ops(&list, &all, &params, &cache);
+    assert_eq!(bmp.pixel(10, 10), red);
+    assert_eq!(cache.take_failure(), None);
+    show_all(&cache, true);
+    let bmp = crate::playback_ops(&list, &all, &params, &cache);
+    assert_eq!(bmp.pixels, [255; 4].repeat(400));
+    assert!(!crate::vello_backend::has_context());
+    show_all(&cache, false);
+    let failure = cache.take_failure().expect("the panic is told");
+    assert_eq!(failure.count, 1);
+    assert!(failure.message.contains("overflow"), "{}", failure.message);
+    let bmp = crate::playback_ops(&list, &all, &params, &cache);
+    assert_eq!(bmp.pixel(10, 10), red);
+}
+
+/// On a canvas, a playback that panics leaves the bitmap what it had and
+/// what was written to it before the panic; an opaque one stays opaque.
+#[test]
+fn a_canvas_keeps_what_it_had_before_a_panic() {
+    let size = Size::new(20, 20);
+    let red = list_of(vec![PaintOp::DrawRect {
+        rect: RectF::new(0.0, 0.0, 20.0, 20.0),
+        flags: PaintFlags::fill(Color::rgb(255, 0, 0)),
+    }]);
+    let cache = RasterCache::default();
+    let mut pixels = [0, 0, 255, 255].repeat(400);
+    // Asked to fail as it begins: nothing of the list.
+    cache.fail_next_for_testing(1);
+    crate::draw_into(&red, &cache, size, false, &mut pixels);
+    assert_eq!(pixels, [0, 0, 255, 255].repeat(400));
+    assert_eq!(cache.take_failure().map(|failure| failure.count), Some(1));
+    crate::draw_into(&red, &cache, size, false, &mut pixels);
+    assert_eq!(pixels, [255, 0, 0, 255].repeat(400));
+
+    // Vello's own, after pixels were written: those are there, the red
+    // under them too, and an opaque bitmap's alpha is 255 for all that
+    // the pixels written had none.
+    let mut ops = vec![PaintOp::WritePixels {
+        x: 1,
+        y: 0,
+        size: Size::new(1, 1),
+        pixels: vec![0, 0, 0, 0].into(),
+    }];
+    ops.extend(vello_panics_on());
+    let list = list_of(ops);
+    show_all(&cache, true);
+    crate::draw_into(&list, &cache, size, true, &mut pixels);
+    assert_eq!(cache.take_failure().map(|failure| failure.count), Some(2));
+    assert!(!crate::vello_backend::has_context());
+    assert_eq!(pixels[..12], [255, 0, 0, 255, 0, 0, 0, 255, 255, 0, 0, 255]);
+}
+
+/// Where debug assertions are on, a playback's panic isn't caught: a test
+/// fails of it.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "a test asked this playback to fail")]
+fn with_debug_assertions_a_playback_that_panics_panics() {
+    let cache = RasterCache::default();
+    cache
+        .failures
+        .fail_next
+        .store(1, std::sync::atomic::Ordering::Relaxed);
+    crate::playback_ops(&red_tile(), &[0], &tile_params(Color::WHITE), &cache);
+}

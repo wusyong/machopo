@@ -48,6 +48,9 @@ pub(crate) struct VelloCache {
     /// How many images were decoded.
     #[cfg(test)]
     decodes: std::sync::atomic::AtomicUsize,
+    /// A test hands Vello what `shows` keeps from it.
+    #[cfg(test)]
+    pub(crate) shows_all: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Default)]
@@ -377,14 +380,8 @@ pub(crate) fn playback(
 }
 
 /// Plays `list` back onto a canvas's `pixels` (`size`), over what they
-/// have; an `opaque` one's alpha stays 255.
-pub(crate) fn draw_into(
-    list: &DisplayItemList,
-    cache: &VelloCache,
-    size: Size,
-    opaque: bool,
-    pixels: &mut [u8],
-) {
+/// have.
+pub(crate) fn draw_into(list: &DisplayItemList, cache: &VelloCache, size: Size, pixels: &mut [u8]) {
     // A context's side is a `u16`.
     let (Ok(width), Ok(height)) = (u16::try_from(size.width), u16::try_from(size.height)) else {
         skipped("pixels with a side over 65535");
@@ -401,11 +398,17 @@ pub(crate) fn draw_into(
         player.play(&ops);
         player.finish();
     });
-    if opaque {
-        for pixel in pixels.as_chunks_mut::<4>().0 {
-            pixel[3] = 255;
-        }
-    }
+}
+
+/// Drops this thread's context: the next playback makes one.
+pub(crate) fn forget_context() {
+    CONTEXT.set(None);
+}
+
+/// Whether this thread has a context kept.
+#[cfg(test)]
+pub(crate) fn has_context() -> bool {
+    CONTEXT.with_borrow(Option::is_some)
 }
 
 /// `draw` drawn on a context of its own of `width` × `height`, starting
@@ -1012,6 +1015,14 @@ impl<'a> Player<'a> {
     /// vello: a clipped stroke that begins at the right edge makes its
     /// clip intersection subtract past zero (a panic, or a wrong width).
     fn shows(&self, path: &BezPath) -> bool {
+        #[cfg(test)]
+        if self
+            .cache
+            .shows_all
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return true;
+        }
         let seen = self.transform.transform_rect_bbox(path.bounding_box());
         let bounds = self.bounds();
         seen.x0 < bounds.x1 && seen.x1 > bounds.x0 && seen.y0 < bounds.y1 && seen.y1 > bounds.y0

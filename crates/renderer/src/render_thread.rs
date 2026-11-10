@@ -526,6 +526,7 @@ impl RenderThread {
             self.start_canvas_encodes();
             self.send_webdriver_results();
             self.log_console_warnings();
+            self.log_canvas_raster_failure();
             self.update_title();
             // The blob URLs the tasks revoked, now that the loads they
             // asked for went.
@@ -630,6 +631,10 @@ impl RenderThread {
                             InputDispatch::NonBlocking => self.dispatch_wheel_only(event, document),
                         }
                     }
+                    ToMainThread::RasterFailed { message, count } => self.log_raster_failure(
+                        log_agent::RasterFailed::Tile,
+                        &raster::RasterFailure { message, count },
+                    ),
                 }
                 true
             }

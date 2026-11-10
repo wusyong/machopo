@@ -1,0 +1,130 @@
+# Step 2c: a playback that panics is caught (where debug assertions are
+# off), counted, and told the page's log.
+#
+#     python3 scripts/test.py mutate rfcs/0007-gpu-raster/mutants-2c.toml
+
+test = ["cargo", "test", "-q", "-p", "raster"]
+timeout = 900
+
+[[mutant]]
+name = "a tile whose playback failed keeps what the buffer had"
+file = "crates/raster/src/lib.rs"
+from = '''    if !drawn {'''
+to = '''    if !drawn && size.is_empty() {'''
+
+[[mutant]]
+name = "a failed tile is its clear color not premultiplied"
+file = "crates/raster/src/lib.rs"
+from = '''        let clear = params.clear_color.premultiplied();'''
+to = '''        let Color { r, g, b, a } = params.clear_color;
+        let clear = [r, g, b, a];'''
+
+[[mutant]]
+name = "the context is kept after a panic"
+file = "crates/raster/src/lib.rs"
+from = '''    vello_backend::forget_context();
+    let message'''
+to = '''    let message'''
+
+[[mutant]]
+name = "every failure is told"
+file = "crates/raster/src/lib.rs"
+from = '''        if !count.is_power_of_two() {'''
+to = '''        if count == 0 {'''
+
+[[mutant]]
+name = "only the first failure is told"
+file = "crates/raster/src/lib.rs"
+from = '''        if !count.is_power_of_two() {'''
+to = '''        if count != 1 {'''
+
+[[mutant]]
+name = "a failure taken is told again"
+file = "crates/raster/src/lib.rs"
+from = '''        self.failures.state().untold.take()'''
+to = '''        self.failures.state().untold.clone()'''
+
+[[mutant]]
+name = "a failure isn't counted"
+file = "crates/raster/src/lib.rs"
+from = '''        state.count = state.count.saturating_add(1);'''
+to = '''        state.count = state.count.max(1);'''
+
+[[mutant]]
+name = "a message made for the panic is lost"
+file = "crates/raster/src/lib.rs"
+from = '''        Ok(message) => *message,'''
+to = '''        Ok(_) => String::new(),'''
+
+[[mutant]]
+name = "a literal message is lost"
+file = "crates/raster/src/lib.rs"
+from = '''            Ok(message) => (*message).to_owned(),'''
+to = '''            Ok(_) => String::new(),'''
+
+[[mutant]]
+name = "panics are caught with debug assertions too"
+file = "crates/raster/src/lib.rs"
+from = '''            catch: AtomicBool::new(!cfg!(debug_assertions)),'''
+to = '''            catch: AtomicBool::new(true),'''
+
+[[mutant]]
+name = "panics are never caught"
+file = "crates/raster/src/lib.rs"
+from = '''    if !failures.catch.load(Ordering::Relaxed) {'''
+to = '''    if !failures.catch.load(Ordering::Relaxed) || true {'''
+
+[[mutant]]
+name = "an opaque canvas isn't made opaque after its drawing"
+file = "crates/raster/src/lib.rs"
+from = '''    // Whatever was drawn, all of the list or not.
+    if opaque {'''
+to = '''    // Whatever was drawn, all of the list or not.
+    if opaque && pixels.is_empty() {'''
+
+[[mutant]]
+name = "an opaque canvas whose drawing failed isn't made opaque"
+file = "crates/raster/src/lib.rs"
+from = '''    guarded(cache, (0.0, 0.0), size, || {
+        vello_backend::draw_into(list, &cache.vello, size, pixels);
+    });
+    // Whatever was drawn, all of the list or not.
+    if opaque {'''
+to = '''    let drawn = guarded(cache, (0.0, 0.0), size, || {
+        vello_backend::draw_into(list, &cache.vello, size, pixels);
+    });
+    // Whatever was drawn, all of the list or not.
+    if opaque && drawn {'''
+
+[[mutant]]
+name = "a failed tile isn't told the main thread"
+file = "crates/compositor/src/proxy_impl.rs"
+from = '''            self.host_impl.prepare_tiles_if_scrolled();
+            self.tell_raster_failure();'''
+to = '''            self.host_impl.prepare_tiles_if_scrolled();'''
+test = ["cargo", "test", "-q", "-p", "compositor"]
+
+[[mutant]]
+name = "a raster failure is logged as an error of another source"
+file = "crates/renderer/src/render_thread/log_agent.rs"
+from = '''            source: "rendering",
+            level: "warning",'''
+to = '''            source: "other",
+            level: "error",'''
+test = ["cargo", "test", "-q", "-p", "renderer"]
+
+[[mutant]]
+name = "a canvas's failure is logged as a tile's"
+file = "crates/renderer/src/render_thread/log_agent.rs"
+from = '''            RasterFailed::Canvas => "What a canvas drew was left out",'''
+to = '''            RasterFailed::Canvas => "A part of the page was left blank",'''
+test = ["cargo", "test", "-q", "-p", "renderer"]
+
+[[mutant]]
+name = "a canvas's drawing isn't guarded"
+file = "crates/raster/src/lib.rs"
+from = '''    guarded(cache, (0.0, 0.0), size, || {
+        vello_backend::draw_into(list, &cache.vello, size, pixels);
+    });'''
+to = '''    vello_backend::draw_into(list, &cache.vello, size, pixels);'''
+test = ["cargo", "test", "-q", "-p", "renderer", "a_drawing_that_fails"]

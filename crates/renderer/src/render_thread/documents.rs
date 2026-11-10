@@ -3371,6 +3371,35 @@ impl RenderThread {
         }
     }
 
+    /// Raster panicked drawing `what` and left it out: a warning in the
+    /// page's log, with the top-level document's URL, which the thread
+    /// that drew doesn't know. (Printed with the log's other messages; the
+    /// thread that drew logged what it knew as it happened.)
+    pub(super) fn log_raster_failure(
+        &mut self,
+        what: super::log_agent::RasterFailed,
+        failure: &raster::RasterFailure,
+    ) {
+        let url = self
+            .document
+            .as_ref()
+            .map_or("", |document| document.url.as_str());
+        self.log_agent
+            .add(super::log_agent::LogEntry::raster_failed(
+                what, failure, url,
+            ));
+    }
+
+    /// The canvas drawing that failed, on the canvas raster thread or
+    /// here, if one is to be told of: logged as a tile's is.
+    pub(super) fn log_canvas_raster_failure(&mut self) {
+        let failure = engine_frame(&mut self.engine)
+            .and_then(|(_, frame)| frame.canvas_raster.cache().take_failure());
+        if let Some(failure) = failure {
+            self.log_raster_failure(super::log_agent::RasterFailed::Canvas, &failure);
+        }
+    }
+
     /// The file of the DOM's `toBlob` call `id`, encoded: handed to the
     /// DOM, which queues the task that calls its callback
     /// (`Cx::canvas_encoded`).

@@ -13,7 +13,7 @@
 | 1b 原型：全部的 op 和組出來的功能；整套 reftest（第二個檢查點） | 完成：檢查點通過（不 merge） | 2026-11-10 |
 | 2a Vello 成為唯一的 playback；`raster` 的測試搬過來、補上「上游還缺」、不會 panic、tile 接縫的測試 | 完成 | 2026-11-11 |
 | 2b ink bounds 改用 skrifa、mipmap、拿掉 skia-safe | 完成 | 2026-11-11 |
-| 2c playback 裡的 panic：release 接住、留白、記 log 和 DevTools Console 的警告 | 還沒開始 | |
+| 2c playback 裡的 panic：release 接住、留白、記 log 和 DevTools Console 的警告 | 完成，還沒審 | 2026-11-11 |
 | 2d WPT 的預期結果、列出缺的功能的文件、其他文件、整個階段的檢查 | 還沒開始 | |
 | 3 改進（文字的 gamma 和對比、漸層的 dithering、fork 裡的 `ColorMatrix`；可能不需要） | 還沒開始 | |
 
@@ -35,6 +35,10 @@
 | 第 2b 步：ink bounds 是外框線控制點的範圍，不取整；假粗體、斜體、variation、collection 的 face 都照畫的算 | `cargo test -p raster ink::`（7 個）、`playback_tests::ink_bounds_are_where_glyphs_are_drawn`、`a_bitmap_glyphs_ink_is_where_it_is_drawn`（對著畫出來的像素）；WPT 的 `html/canvas/element/text` |
 | 第 2b 步：縮到一半以下的圖從預先縮好的那一層畫，層照 cc 的規則取 | `vello_backend::tests::an_image_is_drawn_from_the_smallest_level_that_is_large_enough`、`a_smaller_level_averages_what_each_pixel_covers`、`a_level_is_made_once_and_only_when_drawn_from`，`playback_tests::an_image_made_much_smaller_is_its_pixels_averaged`、`a_part_and_a_pattern_of_an_image_made_smaller_are_from_its_level` |
 | 第 2b 步：`gfx::Path` 的形狀和 Skia 逐位相同（拿掉 Skia 之後用存下來的結果比） | `cargo test -p gfx shapes_are_skias_bit_for_bit`（108 個情況） |
+| 第 2c 步：接住的 playback：tile 是底色、那條 thread 的 context 丟掉、下一次照常畫；開著 debug assertions 時不接 | `cargo test -p raster playback_tests::a_playback_that_panics_leaves_the_tile_its_clear_color`、`a_panic_of_vellos_is_caught`（真的 Vello panic）、`with_debug_assertions_a_playback_that_panics_panics` |
+| 第 2c 步：失敗只在第一次和次數翻倍時說；panic 的訊息不管是哪一種都拿得到 | `playback_tests::failures_are_told_when_their_count_doubles`、`tests::a_panics_message_is_told_whatever_it_is` |
+| 第 2c 步：canvas 留著 panic 之前的像素、不透明的仍然不透明；canvas raster thread 接著畫後面的 | `playback_tests::a_canvas_keeps_what_it_had_before_a_panic`、`cargo test -p renderer a_drawing_that_fails_is_left_out_and_the_next_is_drawn` |
+| 第 2c 步：tile 失敗時 compositor 告訴 main thread；Console 的那一筆是 `rendering` 的 `warning`、帶網址 | `cargo test -p compositor the_main_thread_is_told_of_tiles_whose_raster_failed`、`cargo test -p renderer a_raster_failure_is_a_rendering_warning` |
 
 ## 做過的檢查
 
@@ -392,3 +396,52 @@
 - 跑完檔案都還原了。
 
 **沒有做的**：沒有外框線的 COLR glyph 當成沒有墨水（第 35 條），沒有測試；2d 記成缺口。
+
+### 第 2c 步：playback 的 panic（2026-11-11，Windows 11）
+
+**做了什麼**（已決定的事項第 37 到 40 條）：
+
+- **`raster`**：`playback_into` 和 `draw_into` 經過同一個 `guarded`：cache 說要接時包 `catch_unwind`，接住之後丟掉那條 thread 的 Vello context、記次數。tile 填成底色（premultiplied）；canvas 留著已經寫回的，`alpha: false` 的補成不透明這一步從 Vello 那一側搬到接住之後，panic 了也會做。
+- **次數**在 `RasterCache`（一個只在失敗時才鎖的 `Mutex`）：第一次和翻倍時記一行 error log（位置、大小、訊息、次數），並留一筆等人來拿（`take_failure`）。
+- **`compositor`**：`ToMainThread::RasterFailed`。`ProxyImpl` 在畫一個 frame 之前（tile 都準備好之後）拿一次、有就送。
+- **`renderer`**：main thread 收到 `RasterFailed` 加一筆 `Log` 的 entry；每個 task 之後從 canvas 的 cache 拿一次。網址是最上層文件的。
+
+**和確認時說的不同的地方**：
+
+- **沒有「給測試指定要不要接」的建構函式**：compositor 和 canvas 的 cache 建在別的型別裡，傳不進去。`fail_next_for_testing` 順便打開「接」（第 39 條）。
+- **main thread 沒有另外再記一行帶網址的 log**：Console 的每一筆本來就印到 stderr（`[console] 訊息 (網址)`），那一行就是它（第 38 條）。
+- **commit 之後不另外送一次**：第一輪 mutation test 發現「commit 準備完 tile 之後送」那一行拿掉也沒有測試失敗，因為畫 frame 之前那一次已經涵蓋它（commit 一定設 `needs_redraw`）。那一行拿掉了，只留畫之前的那一次。分頁藏著、沒有 frame 要畫時，訊息等到下一次畫才送。
+
+**沒有處理的**：
+
+- **Rust 預設的 panic hook 每次都印**：接住的 panic 在接住之前，hook 已經把訊息（release 沒有 backtrace）印到 stderr，這一行不受「翻倍才記」的節流。一個每次重畫都 panic 的 tile 會一直印。要擋要換掉整個 process 的 hook，這一步沒有做；要不要做請使用者決定。
+- **release 沒開溢位檢查時，已知的那種 bug 不會 panic**（算出錯的寬度繼續跑），接不到；「待決定」裡那一條（只對 Vello 的 crate 開溢位檢查）還在。
+
+**跑過的**：
+
+- `cargo test -p raster`（98 個）、`-p compositor`（126 個）、`-p renderer`（113 個）：都過。
+- `cargo check --workspace --all-targets`、`cargo clippy`（`raster`、`compositor`、`renderer`，`--all-targets -D warnings`）、`cargo fmt --check`、`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs：都過。繞過 `shows` 的測試開關原本是 thread-local，`boundary` 不讓加，改成 cache 上只在測試裡有的欄位。
+- `test.py reftest images`（`ci` profile，不接 panic）：17 個都和預期一樣。
+
+**Mutation test**（`mutants-2c.toml`，17 條都抓到）：
+
+| 弄壞了什麼 | 哪個測試失敗 |
+| --- | --- |
+| 失敗的 tile 留著 buffer 原本的像素；底色沒有 premultiply | `a_playback_that_panics_leaves_the_tile_its_clear_color` |
+| panic 之後 context 留著 | 同上、`a_panic_of_vellos_is_caught` |
+| 每次都說；只說第一次；拿過的再說一次；不計數 | `failures_are_told_when_their_count_doubles`、`a_playback_that_panics_leaves_the_tile_its_clear_color` |
+| 兩種訊息各自弄丟 | `a_panics_message_is_told_whatever_it_is` |
+| 開著 debug assertions 也接；永遠不接 | `with_debug_assertions_a_playback_that_panics_panics`；`raster` 的各個接住的測試 |
+| 不透明的 canvas 不補 alpha；只在沒失敗時補 | `raster` 既有的 canvas 測試；`a_canvas_keeps_what_it_had_before_a_panic` |
+| canvas 的繪圖不經過 `guarded` | `renderer` 的 `a_drawing_that_fails_is_left_out_and_the_next_is_drawn` |
+| tile 失敗不告訴 main thread | `the_main_thread_is_told_of_tiles_whose_raster_failed` |
+| Console 的那一筆 source 和 level 不對；canvas 的寫成 tile 的 | `a_raster_failure_is_a_rendering_warning` |
+
+- 第一輪 18 條、1 條沒抓到（commit 之後送的那一行，見上面：是多餘的，拿掉了）。
+- 跑完檔案都還原了。
+
+**沒有測試守著的**（2d 記進測試缺口的文件）：
+
+- `RenderThread` 裡接起來的兩小段：收到 `RasterFailed` 加一筆 entry、每個 task 之後拿 canvas 的失敗（`documents.rs` 的 `log_raster_failure`、`log_canvas_raster_failure`）。`RenderThread` 沒有單元測試的架子，要整個瀏覽器跑起來才測得到，而沒有頁面內容能讓 raster 失敗。要守的話是加一個只給測試用的啟動參數讓 raster 失敗（Chromium 有 `chrome://gpucrash` 這類的入口），再寫成 `shell` 的 `devtools_log` 測試。
+- 「tile 留成底色」在真的視窗裡的樣子：沒有情境（同樣的原因）。
+- Vello 在最後 render 的途中 panic 時 bitmap 寫到一半：沒有實例，沒有測試。

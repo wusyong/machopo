@@ -1,6 +1,6 @@
 //! Drawing canvases' 2D contexts: what a context recorded (the DOM records
 //! each call as paint ops, kept with the context) is played onto its
-//! bitmap with Skia (`raster`), before a frame is painted, when script
+//! bitmap (`raster`), before a frame is painted, when script
 //! reads the pixels, or when it recorded too much (Blink's
 //! `CanvasResourceProvider` flushing the context's
 //! `MemoryManagedPaintRecorder`). The bitmap is moved to the canvas raster
@@ -180,6 +180,45 @@ mod tests {
         flush(&mut data, settings, CanvasFlush::Read, &mut raster);
         assert_eq!(raster.batches_sent_for_testing(), 3);
         assert_eq!(data.snapshot, snapshot);
+    }
+
+    /// A drawing that panics, on the thread or here, leaves the bitmap
+    /// as it was and is there for the page's log to be told of; the thread
+    /// goes on drawing what comes after.
+    #[test]
+    fn a_drawing_that_fails_is_left_out_and_the_next_is_drawn() {
+        for will_read_frequently in [false, true] {
+            let settings = CanvasSettings {
+                will_read_frequently,
+                ..CanvasSettings::default()
+            };
+            let mut raster = CanvasRaster::default();
+            let mut data = data();
+            // What script would read: the thread's snapshot, or the
+            // pixels here.
+            let read = |data: &mut CanvasData, raster: &mut CanvasRaster| {
+                if will_read_frequently {
+                    flush(data, settings, CanvasFlush::Read, raster);
+                    data.pixels.clone().expect("drawn here")
+                } else {
+                    read_back(data, settings, raster)
+                }
+            };
+            record_red(&mut data);
+            let first = [128, 0, 0, 128, 0, 0, 0, 0];
+            assert_eq!(read(&mut data, &mut raster), first);
+            assert_eq!(raster.cache().take_failure(), None);
+
+            raster.cache().fail_next_for_testing(1);
+            record_red(&mut data);
+            assert_eq!(read(&mut data, &mut raster), first);
+            let failure = raster.cache().take_failure().expect("told");
+            assert_eq!(failure.count, 1);
+            assert_eq!(raster.cache().take_failure(), None);
+
+            record_red(&mut data);
+            assert_eq!(read(&mut data, &mut raster), [191, 0, 0, 191, 0, 0, 0, 0]);
+        }
     }
 
     /// `willReadFrequently`, or read back often: drawn on the main thread,

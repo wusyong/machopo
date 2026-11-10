@@ -168,7 +168,11 @@ impl MainThreadScheduler {
     /// The compositor thread's main frames and input.
     pub(crate) fn post_compositor(&self, task: ToMainThread) {
         let queue = match task {
-            ToMainThread::BeginMainFrame { .. } => TaskQueue::Rendering,
+            // A failed raster's message too: it waits for nothing a
+            // frame doesn't.
+            ToMainThread::BeginMainFrame { .. } | ToMainThread::RasterFailed { .. } => {
+                TaskQueue::Rendering
+            }
             ToMainThread::Input { .. } => TaskQueue::Input,
         };
         let _ = self.post(queue, MainThreadTask::Compositor(task), false);
@@ -420,6 +424,9 @@ mod tests {
             MainThreadTask::Browser(_) => "browser".to_owned(),
             MainThreadTask::Compositor(ToMainThread::BeginMainFrame { .. }) => "frame".to_owned(),
             MainThreadTask::Compositor(ToMainThread::Input { .. }) => "input".to_owned(),
+            MainThreadTask::Compositor(ToMainThread::RasterFailed { .. }) => {
+                "raster failed".to_owned()
+            }
             MainThreadTask::CanvasEncoded { id, .. } => format!("canvas {id}"),
             MainThreadTask::DevTools(DevToolsQueued::Message { message, .. }) => {
                 format!("devtools {message}")

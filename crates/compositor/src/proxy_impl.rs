@@ -13,9 +13,10 @@ use crate::input_handler::{self, EventDisposition};
 use crate::layer_tree_host_impl::{CommitState, LayerTreeHostImpl};
 use crate::{ElementId, LayerTreeFrameSink, LayerTreeSettings, SwapPromise};
 
-/// What the compositor thread asks of the main thread. Each carries what
-/// the compositor scrolled since it last handed that over: the main thread
-/// applies it first thing, before anything else in the task.
+/// What the compositor thread asks of the main thread. A main frame and
+/// an input event each carry what the compositor scrolled since it last
+/// handed that over: the main thread applies it first thing, before
+/// anything else in the task.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToMainThread {
     /// Run a main frame for this `BeginFrame` (`ProxyMain::BeginMainFrame`),
@@ -36,6 +37,11 @@ pub enum ToMainThread {
         scroll: Option<CompositorScrollDelta>,
         dispatch: InputDispatch,
     },
+    /// A tile's raster panicked and the tile was left blank, the `count`th
+    /// time for this compositor: for the page's log (as cc tells its
+    /// client of a lost context, which Blink writes to the console). Sent
+    /// the first time and when the count doubles.
+    RasterFailed { message: String, count: u64 },
 }
 
 /// Which frame an input event the compositor hands on is for (Blink's
@@ -347,6 +353,16 @@ impl ProxyImpl {
         self.update_needs_begin_frame();
     }
 
+    /// Tells the main thread of the tile whose raster failed, if it is
+    /// one to tell of: before a frame is drawn, whether the tile was
+    /// rastered for it just now or for the commit it shows.
+    fn tell_raster_failure(&mut self) {
+        if let Some(raster::RasterFailure { message, count }) = self.host_impl.take_raster_failure()
+        {
+            (self.post_to_main_thread)(ToMainThread::RasterFailed { message, count });
+        }
+    }
+
     /// Answers the `BeginFrame` the main frame was for, if it waits.
     fn finish_begin_frame(&mut self) {
         if std::mem::take(&mut self.begin_frame_pending) {
@@ -359,6 +375,7 @@ impl ProxyImpl {
     fn draw_or_answer(&mut self) {
         if std::mem::take(&mut self.needs_redraw) {
             self.host_impl.prepare_tiles_if_scrolled();
+            self.tell_raster_failure();
             if self.host_impl.draw_and_submit().is_some() {
                 return;
             }
@@ -1246,6 +1263,53 @@ mod tests {
             4,
             "the rows at 192 and 256, two tiles each"
         );
+    }
+
+    /// Tiles whose raster panics are left blank and drawn so; the main
+    /// thread is told the first time and when the count doubles, whether
+    /// the tiles were rastered for a commit or for a scroll.
+    #[test]
+    fn the_main_thread_is_told_of_tiles_whose_raster_failed() {
+        let mut s = drawn();
+        let failed = |count| ToMainThread::RasterFailed {
+            message: "a test asked this playback to fail".into(),
+            count,
+        };
+        // The scroll has the row of two tiles at 256 rastered: both fail.
+        s.proxy.host_impl.fail_next_rasters(2);
+        s.proxy.scroll_viewport(down(200.0));
+        s.proxy.begin_frame(args(2));
+        s.proxy.begin_main_frame_aborted();
+        assert_eq!(
+            frame_resources(&s.viz.take()).len(),
+            2,
+            "the row at 192; the one at 256 is blank"
+        );
+        let told = |s: &Setup| -> Vec<ToMainThread> {
+            let mut to_main = s.to_main.lock().unwrap();
+            let told = to_main
+                .iter()
+                .filter(|task| matches!(task, ToMainThread::RasterFailed { .. }))
+                .cloned()
+                .collect();
+            to_main.clear();
+            told
+        };
+        assert_eq!(told(&s), [failed(2)]);
+        // A commit's: the third, not one to tell of, and the fourth.
+        s.proxy.host_impl.fail_next_rasters(2);
+        s.host
+            .set_root_layer(layer(display_list(Color::rgb(0, 0, 255))));
+        s.proxy.set_needs_begin_main_frame(true);
+        s.proxy.begin_frame(args(3));
+        s.proxy.commit(commit(&mut s.host, Vec::new()));
+        assert_eq!(told(&s), [failed(4)]);
+        // None fails: nothing told.
+        s.host
+            .set_root_layer(layer(display_list(Color::rgb(0, 255, 0))));
+        s.proxy.begin_frame(args(4));
+        s.proxy.commit(commit(&mut s.host, Vec::new()));
+        assert_eq!(told(&s), []);
     }
 
     #[test]

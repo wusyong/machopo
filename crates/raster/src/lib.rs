@@ -18,6 +18,9 @@
     )
 )]
 
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
 use compositor_paint::DisplayItemList;
 use gfx::{Color, RectF, Size};
 
@@ -39,9 +42,140 @@ pub use ink::ink_bounds;
 /// renderers share none of it, as they won't share a process. The
 /// compositor's raster workers share it: a lock around its tables, held
 /// only to look up or add an entry, not while decoding or drawing.
+///
+/// And what became of the playbacks that panicked ([`RasterFailure`]),
+/// counted here for whoever draws with it to tell the page's log.
 #[derive(Default)]
 pub struct RasterCache {
     pub(crate) vello: vello_backend::VelloCache,
+    failures: Failures,
+}
+
+/// A playback that panicked and was caught: what a tile or a canvas's
+/// drawing was left without. Told the first time and each time the count
+/// doubles, so that a page that keeps failing doesn't fill a log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RasterFailure {
+    /// The panic's message.
+    pub message: String,
+    /// How many playbacks with this cache have failed, this one too.
+    pub count: u64,
+}
+
+/// The playbacks that panicked, and whether they are caught at all.
+struct Failures {
+    /// Whether a panic in a playback is caught. Not where debug
+    /// assertions are on: there a panic is a bug to see at once, in a test
+    /// or while developing. Tests of what catching does turn it on.
+    catch: AtomicBool,
+    /// How many of the next playbacks panic, for tests.
+    fail_next: AtomicU32,
+    /// Locked only when a playback failed, and to take what to tell.
+    state: Mutex<FailureState>,
+}
+
+#[derive(Default)]
+struct FailureState {
+    count: u64,
+    /// The last failure whose count was one to tell, until it is taken.
+    untold: Option<RasterFailure>,
+}
+
+impl Default for Failures {
+    fn default() -> Self {
+        Self {
+            catch: AtomicBool::new(!cfg!(debug_assertions)),
+            fail_next: AtomicU32::new(0),
+            state: Mutex::default(),
+        }
+    }
+}
+
+impl Failures {
+    fn state(&self) -> std::sync::MutexGuard<'_, FailureState> {
+        // The state is whole between any two statements under the lock.
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Panics if a test asked the next playback to.
+    fn fail_if_asked(&self) {
+        let asked = self
+            .fail_next
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1));
+        assert!(asked.is_err(), "a test asked this playback to fail");
+    }
+
+    /// Counts a playback of `size` at `origin` that panicked with
+    /// `message`, and logs it if the count is one to tell.
+    fn failed(&self, message: String, origin: (f32, f32), size: Size) {
+        let mut state = self.state();
+        state.count = state.count.saturating_add(1);
+        let count = state.count;
+        if !count.is_power_of_two() {
+            return;
+        }
+        // Here and now, with what only this thread knows: whoever tells
+        // the page's log may be busy, or there may be no page.
+        tracing::error!(
+            %message,
+            count,
+            x = origin.0,
+            y = origin.1,
+            width = size.width,
+            height = size.height,
+            "raster: a playback panicked and was left undrawn"
+        );
+        state.untold = Some(RasterFailure { message, count });
+    }
+}
+
+impl RasterCache {
+    /// The failure to tell the page's log of, if a playback with this
+    /// cache failed since the last one taken and its count is one to tell.
+    pub fn take_failure(&self) -> Option<RasterFailure> {
+        self.failures.state().untold.take()
+    }
+
+    /// Makes the next `times` playbacks with this cache panic as they
+    /// begin, caught as a release build catches them. For tests.
+    pub fn fail_next_for_testing(&self, times: u32) {
+        self.failures.catch.store(true, Ordering::Relaxed);
+        self.failures.fail_next.store(times, Ordering::Relaxed);
+    }
+}
+
+/// Runs `draw`, a playback with `cache` of `size` at `origin`. Whether it
+/// finished: not if it panicked where panics are caught, the panic then
+/// counted and this thread's Vello context, which it may have left in any
+/// state, dropped for the next playback to make anew. What the cache
+/// keeps stays: fonts and images are whole once they are in it.
+fn guarded(cache: &RasterCache, origin: (f32, f32), size: Size, draw: impl FnOnce()) -> bool {
+    let failures = &cache.failures;
+    let draw = || {
+        failures.fail_if_asked();
+        draw();
+    };
+    if !failures.catch.load(Ordering::Relaxed) {
+        draw();
+        return true;
+    }
+    // What `draw` can leave half done is the context, dropped below, and
+    // the pixels, which the caller sees to.
+    let Err(panic) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(draw)) else {
+        return true;
+    };
+    vello_backend::forget_context();
+    let message = match panic.downcast::<String>() {
+        Ok(message) => *message,
+        Err(panic) => match panic.downcast::<&'static str>() {
+            Ok(message) => (*message).to_owned(),
+            Err(_) => "a panic with no message".to_owned(),
+        },
+    };
+    failures.failed(message, origin, size);
+    false
 }
 
 impl std::fmt::Debug for RasterCache {
@@ -142,6 +276,9 @@ pub fn playback_ops(
 /// [`playback_ops`] into `pixels`, made the size's (RGBA8 premultiplied,
 /// `stride == width * 4`): a buffer a raster thread draws tile after tile
 /// into, keeping its memory. Returns the size.
+///
+/// A playback that panics, where panics are caught, leaves every pixel
+/// the clear color: the tile is blank until its content is rastered again.
 pub fn playback_into(
     list: &DisplayItemList,
     ops: &[usize],
@@ -167,8 +304,20 @@ pub fn playback_into(
         .checked_byte_size()
         .expect("a tile's pixels fit a usize");
     pixels.resize(len, 0);
-    if !size.is_empty() {
+    if size.is_empty() {
+        return size;
+    }
+    let origin = (params.content_rect.x, params.content_rect.y);
+    let drawn = guarded(cache, origin, size, || {
         vello_backend::playback(list, ops, params, &cache.vello, size, pixels);
+    });
+    if !drawn {
+        // Not what the buffer had from the tile before, nor the part of
+        // this one that was drawn.
+        let clear = params.clear_color.premultiplied();
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            *pixel = clear;
+        }
     }
     size
 }
@@ -179,6 +328,10 @@ pub fn playback_into(
 /// flush (Blink's `CanvasResourceProvider` playing the recording). An
 /// `opaque` bitmap (`alpha: false`) stays opaque. Nothing for an empty
 /// size.
+///
+/// A playback that panics, where panics are caught, leaves the bitmap
+/// with what was drawn on it until then: nothing of this list, or what
+/// came before a `WritePixels` in it, or a part of the last drawing.
 ///
 /// # Panics
 ///
@@ -202,7 +355,15 @@ pub fn draw_into(
     if cfg!(debug_assertions) {
         DRAWS_INTO.set(DRAWS_INTO.get().wrapping_add(1));
     }
-    vello_backend::draw_into(list, &cache.vello, size, opaque, pixels);
+    guarded(cache, (0.0, 0.0), size, || {
+        vello_backend::draw_into(list, &cache.vello, size, pixels);
+    });
+    // Whatever was drawn, all of the list or not.
+    if opaque {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            pixel[3] = 255;
+        }
+    }
 }
 
 thread_local! {
@@ -222,6 +383,43 @@ pub fn draws_into_for_testing() -> Option<usize> {
 mod tests {
     use super::*;
     use compositor_paint::{PaintFlags, PaintOp};
+
+    /// A caught panic's message is told whatever it was made of: a
+    /// string made for it, a literal, or something else.
+    #[test]
+    fn a_panics_message_is_told_whatever_it_is() {
+        let cache = RasterCache::default();
+        cache.fail_next_for_testing(0);
+        let size = Size::new(1, 1);
+        let seven = 7;
+        assert!(!guarded(&cache, (0.0, 0.0), size, || panic!(
+            "made of {seven}"
+        )));
+        assert_eq!(cache.take_failure().unwrap().message, "made of 7");
+        assert!(!guarded(&cache, (0.0, 0.0), size, || panic!("a literal")));
+        assert_eq!(cache.take_failure().unwrap().message, "a literal");
+        cache.take_failure();
+        assert!(!guarded(
+            &cache,
+            (0.0, 0.0),
+            size,
+            || std::panic::panic_any(7)
+        ));
+        assert!(!guarded(
+            &cache,
+            (0.0, 0.0),
+            size,
+            || std::panic::panic_any(7)
+        ));
+        assert_eq!(
+            cache.take_failure(),
+            Some(RasterFailure {
+                message: "a panic with no message".into(),
+                count: 4,
+            })
+        );
+        assert!(guarded(&cache, (0.0, 0.0), size, || {}));
+    }
 
     #[test]
     fn drawing_into_a_bitmap_keeps_what_it_has() {

@@ -65,6 +65,30 @@ impl LogEntry {
         }
     }
 
+    /// A warning that raster panicked drawing `what` (a tile, a canvas)
+    /// of the page at `url`, which is left without it (`source`
+    /// `rendering`, `warning`), now: Blink's console messages of
+    /// `kRendering`, as of a context that was lost.
+    pub(crate) fn raster_failed(
+        what: RasterFailed,
+        failure: &raster::RasterFailure,
+        url: &str,
+    ) -> Self {
+        let raster::RasterFailure { message, count } = failure;
+        let left = match what {
+            RasterFailed::Tile => "A part of the page was left blank",
+            RasterFailed::Canvas => "What a canvas drew was left out",
+        };
+        Self {
+            source: "rendering",
+            level: "warning",
+            text: format!("{left}: drawing it failed ({message}). It has happened {count} times."),
+            url: url.to_owned(),
+            network_request_id: None,
+            timestamp: wall_time() * 1000.0,
+        }
+    }
+
     fn to_json(&self) -> Value {
         let mut entry = json!({
             "source": self.source,
@@ -80,6 +104,15 @@ impl LogEntry {
         }
         entry
     }
+}
+
+/// What raster failed to draw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RasterFailed {
+    /// A tile of a layer, on the compositor's side.
+    Tile,
+    /// What a canvas's 2D context recorded.
+    Canvas,
 }
 
 /// Blink's `InspectorLogAgent`, for every session of the page, and the
@@ -258,6 +291,40 @@ mod tests {
 
     fn command(method: &str) -> String {
         json!({ "id": 1, "method": method }).to_string()
+    }
+
+    /// A raster failure is a warning of the page's, of `rendering`, with
+    /// the page's URL, what was left out and how many times.
+    #[test]
+    fn a_raster_failure_is_a_rendering_warning() {
+        let failure = raster::RasterFailure {
+            message: "attempt to subtract with overflow".into(),
+            count: 4,
+        };
+        let tile = LogEntry::raster_failed(RasterFailed::Tile, &failure, "https://a.test/");
+        assert_eq!(
+            (tile.source, tile.level, tile.url.as_str()),
+            ("rendering", "warning", "https://a.test/")
+        );
+        assert_eq!(
+            tile.text,
+            "A part of the page was left blank: drawing it failed \
+             (attempt to subtract with overflow). It has happened 4 times."
+        );
+        assert_eq!(tile.network_request_id, None);
+        let canvas = LogEntry::raster_failed(RasterFailed::Canvas, &failure, "");
+        assert_eq!(
+            canvas.text,
+            "What a canvas drew was left out: drawing it failed \
+             (attempt to subtract with overflow). It has happened 4 times."
+        );
+        // Told as any entry is.
+        let (to_browser, from) = crossbeam_channel::unbounded();
+        let agent = LogAgent::new(to_browser);
+        assert!(agent.handle("s", &command("Log.enable")));
+        sent(&from);
+        agent.add(tile.clone());
+        assert_eq!(sent(&from), [tile.text]);
     }
 
     /// The newest 1000 are kept, told before `Log.enable`'s answer after

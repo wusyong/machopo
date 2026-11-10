@@ -1134,6 +1134,19 @@ impl LayerTreeHostImpl {
     /// drawing and draws a checkerboard where nothing is rastered yet,
     /// raster is synchronous here: do it before drawing, so what scrolled
     /// into view is there.
+    /// The tile whose raster panicked that the page's log is to be told
+    /// of, if one did since the last taken (`raster::RasterCache::
+    /// take_failure`). Such a tile is its layer's background color.
+    pub(crate) fn take_raster_failure(&self) -> Option<raster::RasterFailure> {
+        self.raster_cache.take_failure()
+    }
+
+    /// Makes the next `times` tiles' raster fail.
+    #[cfg(test)]
+    pub(crate) fn fail_next_rasters(&self, times: u32) {
+        self.raster_cache.fail_next_for_testing(times);
+    }
+
     pub(crate) fn prepare_tiles_if_scrolled(&mut self) {
         let Some(tree) = &self.active_tree else {
             return;
