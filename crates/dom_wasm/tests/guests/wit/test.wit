@@ -1,10 +1,12 @@
-// The world of dom_wasm's test guests: machopo:dom's interface, and
-// `run`, which runs the case it is given and says what went wrong ("" if
-// nothing did). `ci.py guests` builds them with machopo:dom's WIT as a
+// The world of dom_wasm's test guests: machopo:dom's interface, `run`,
+// which runs the case it is given and says what went wrong ("" if nothing
+// did), and `sleep`, which waits (only an async export may) and then
+// leaves a mark for `run`'s cases to read. `ci.py guests` builds them with machopo:dom's WIT as a
 // dependency.
 package machopo:dom-test;
 
 world test {
   import machopo:dom/dom@0.1.0;
   export run: func(case: string) -> string;
+  export sleep: async func(nanos: u64);
 }

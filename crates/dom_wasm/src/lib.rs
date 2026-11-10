@@ -39,9 +39,15 @@ use wasmtime::{Config, EliseHeapProvider, Engine, StoreContextMut, StoreSet};
 
 mod front;
 mod handles;
+mod turn;
+mod wasi;
 pub mod wit;
 
 pub use front::{TYPE_ERROR, exception_code};
+pub use turn::poll_until_idle;
+pub use wasi::{
+    CLOCK_RESOLUTION, GuestClock, GuestClockView, Output, OutputSink, WasmWasi, add_wasi_to_linker,
+};
 
 use handles::Tables;
 

@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 typedef machopo_dom_dom_node_t node_t;
 typedef machopo_dom_dom_dom_exception_t exception_t;
@@ -347,6 +348,47 @@ static void bad_utf8(void) {
     FAIL("a string that isn't UTF-8 didn't trap");
 }
 
+// Whether `sleep` has come back from its wait.
+static bool woke;
+
+// libc's sleep is the clock's `wait-for`, which blocks this task: the
+// host runs the store again when the time has come.
+test_callback_code_t exports_test_sleep(uint64_t nanos) {
+    struct timespec time = {(time_t)(nanos / 1000000000), (long)(nanos % 1000000000)};
+    nanosleep(&time, NULL);
+    woke = true;
+    exports_test_sleep_return();
+    return TEST_CALLBACK_CODE_EXIT;
+}
+
+// Never called: `sleep` exits from its first call.
+test_callback_code_t exports_test_sleep_callback(test_event_t *event) {
+    (void)event;
+    return TEST_CALLBACK_CODE_EXIT;
+}
+
+static void is_awake(void) { CHECK(woke); }
+
+static void is_asleep(void) { CHECK(!woke); }
+
+// A line to each output, and one with no newline at its end.
+static void print(void) {
+    printf("to stdout\n");
+    fflush(stdout);
+    fprintf(stderr, "to stderr\nno newline");
+    fflush(stderr);
+}
+
+// The clock reads to 100 microseconds, and says so.
+static void coarse_clock(void) {
+    struct timespec time, resolution;
+    CHECK(clock_gettime(CLOCK_MONOTONIC, &time) == 0);
+    CHECK(time.tv_nsec % 100000 == 0);
+    CHECK(time.tv_sec != 0 || time.tv_nsec != 0);
+    CHECK(clock_getres(CLOCK_MONOTONIC, &resolution) == 0);
+    CHECK(resolution.tv_sec == 0 && resolution.tv_nsec == 100000);
+}
+
 static const struct {
     const char *name;
     void (*run)(void);
@@ -365,6 +407,10 @@ static const struct {
     {"release-twice", release_twice},
     {"release-never-given", release_never_given},
     {"bad-utf8", bad_utf8},
+    {"is-awake", is_awake},
+    {"is-asleep", is_asleep},
+    {"print", print},
+    {"coarse-clock", coarse_clock},
 };
 
 void exports_test_run(test_string_t *name, test_string_t *ret) {

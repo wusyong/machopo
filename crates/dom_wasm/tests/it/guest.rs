@@ -10,37 +10,54 @@ use std::future::Future;
 use std::path::Path;
 use std::pin::pin;
 use std::rc::Rc;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll, Waker};
 
-use dom_wasm::{WasmDom, WasmStore};
-use wasmtime::component::{Component, Linker, ResourceTable, TypedFunc};
+use dom_wasm::{GuestClock, GuestClockView, Output, WasmDom, WasmStore, WasmWasi};
+use wasmtime::component::{Component, Linker, TypedFunc};
 use wasmtime::{Config, Engine, Store, StoreSet};
-use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
+use wasmtime_wasi::{WasiCtxView, WasiView};
 
 /// A store's data: WASI 0.3's (for the guest's libc) and the DOM's.
 pub(crate) struct Data {
-    wasi: WasiCtx,
-    table: ResourceTable,
+    wasi: WasmWasi,
     pub(crate) dom: WasmStore,
+    /// The time the guest's clock reads (nanoseconds), the test's to move.
+    pub(crate) time: Arc<AtomicU64>,
+    /// The lines the guest printed.
+    pub(crate) printed: Arc<Mutex<Vec<(Output, String)>>>,
 }
 
 impl Data {
     pub(crate) fn new() -> Self {
+        // Not at zero, nor on the clock's resolution.
+        let time = Arc::new(AtomicU64::new(1_234_567_890));
+        let printed = Arc::new(Mutex::new(Vec::new()));
+        let (now, sink) = (time.clone(), printed.clone());
         Self {
-            wasi: WasiCtx::builder().build(),
-            table: ResourceTable::new(),
+            wasi: WasmWasi::new(
+                move || now.load(Ordering::Relaxed),
+                Arc::new(move |output, line: &str| {
+                    sink.lock().unwrap().push((output, line.to_owned()));
+                }),
+            ),
             dom: WasmStore::new(),
+            time,
+            printed,
         }
     }
 }
 
 impl WasiView for Data {
     fn ctx(&mut self) -> WasiCtxView<'_> {
-        WasiCtxView {
-            ctx: &mut self.wasi,
-            table: &mut self.table,
-        }
+        self.wasi.view()
+    }
+}
+
+impl GuestClockView for Data {
+    fn guest_clock(&mut self) -> &mut GuestClock {
+        self.wasi.clock()
     }
 }
 
@@ -75,7 +92,7 @@ fn guest() -> &'static (Linker<Data>, Component) {
     GUEST.get_or_init(|| {
         let engine = engine();
         let mut linker = Linker::new(engine);
-        wasmtime_wasi::p3::add_to_linker(&mut linker).unwrap();
+        dom_wasm::add_wasi_to_linker(&mut linker).unwrap();
         dom_wasm::add_to_linker(&mut linker, |data: &Data| &data.dom).unwrap();
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/guests/dom.wasm");
         let component = Component::from_file(engine, path).unwrap();
@@ -93,9 +110,10 @@ pub(crate) fn set(dom: &WasmDom) -> Set {
 /// A store of the guest, in a set, and its `run`; removed from the set as
 /// it goes.
 pub(crate) struct Guest {
-    set: Set,
-    index: usize,
+    pub(crate) set: Set,
+    pub(crate) index: usize,
     run: TypedFunc<(String,), (String,)>,
+    pub(crate) sleep: TypedFunc<(u64,), ()>,
 }
 
 impl Guest {
@@ -106,17 +124,21 @@ impl Guest {
             .borrow_mut()
             .insert(Store::new(engine(), Data::new()))
             .unwrap();
-        let run = set
+        let (run, sleep) = set
             .borrow()
             .with(index, |mut cx| {
                 let instance = block_on(linker.instantiate_async(&mut cx, component)).unwrap();
-                instance.get_typed_func(&mut cx, "run").unwrap()
+                (
+                    instance.get_typed_func(&mut cx, "run").unwrap(),
+                    instance.get_typed_func(&mut cx, "sleep").unwrap(),
+                )
             })
             .unwrap();
         Self {
             set: set.clone(),
             index,
             run,
+            sleep,
         }
     }
 

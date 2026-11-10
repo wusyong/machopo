@@ -1,0 +1,152 @@
+# Mutation test of stage 1b: the guests' WASI (`dom_wasm`'s clock and its
+# waits, the output's lines, a turn's polling):
+# python3 scripts/test.py mutate rfcs/0093-wasm-documents/mutants-1b.toml
+# All of the crate's tests: the clock's and the turn's unit tests, and the
+# guest's (`wasi::`). A turn that never ends hangs: caught at the timeout.
+test = ["cargo", "test", "-q", "-p", "dom_wasm"]
+timeout = 120
+
+[[mutant]]
+name = "a wait is over at once"
+file = "crates/dom_wasm/src/wasi.rs"
+from = '''        if deadline <= (self.now)() {
+            if let Some(id) = *id {'''
+to = '''        if true {
+            if let Some(id) = *id {'''
+
+[[mutant]]
+name = "a wait is never over"
+file = "crates/dom_wasm/src/wasi.rs"
+from = '''        if deadline <= (self.now)() {
+            if let Some(id) = *id {'''
+to = '''        if false {
+            if let Some(id) = *id {'''
+
+[[mutant]]
+name = "a wait is over one nanosecond late"
+file = "crates/dom_wasm/src/wasi.rs"
+from = '''        if deadline <= (self.now)() {
+            if let Some(id) = *id {'''
+to = '''        if deadline < (self.now)() {
+            if let Some(id) = *id {'''
+
+[[mutant]]
+name = "the due waits aren't woken"
+file = "crates/dom_wasm/src/wasi.rs"
+from = '''            if due {
+                wait.waker.wake_by_ref();
+            }'''
+to = ''''''
+
+[[mutant]]
+name = "every wait is due"
+file = "crates/dom_wasm/src/wasi.rs"
+from = '''            let due = wait.deadline <= now;'''
+to = '''            let due = true;'''
+
+[[mutant]]
+name = "a wait is due one nanosecond late"
+file = "crates/dom_wasm/src/wasi.rs"
+from = '''            let due = wait.deadline <= now;'''
+to = '''            let due = wait.deadline < now;'''
+
+[[mutant]]
+name = "the due waits stay kept"
+file = "crates/dom_wasm/src/wasi.rs"
+from = '''            !due
+        });'''
+to = '''            true
+        });'''
+
+[[mutant]]
+name = "wake_due says none was due"
+file = "crates/dom_wasm/src/wasi.rs"
+from = '''        self.waits.len() != before'''
+to = '''        false'''
+
+[[mutant]]
+name = "the latest deadline, not the earliest"
+file = "crates/dom_wasm/src/wasi.rs"
+from = '''        self.waits.iter().map(|wait| wait.deadline).min()'''
+to = '''        self.waits.iter().map(|wait| wait.deadline).max()'''
+
+[[mutant]]
+name = "no deadline kept"
+file = "crates/dom_wasm/src/wasi.rs"
+from = '''        self.waits.iter().map(|wait| wait.deadline).min()'''
+to = '''        None'''
+
+[[mutant]]
+name = "a wait over stays kept"
+file = "crates/dom_wasm/src/wasi.rs"
+from = '''                self.waits.retain(|wait| wait.id != id);'''
+to = ''''''
+
+[[mutant]]
+name = "wait-for's deadline is the duration alone"
+file = "crates/dom_wasm/src/wasi.rs"
+from = '''(access.get().now)().saturating_add(duration)'''
+to = '''duration'''
+
+[[mutant]]
+name = "the clock reads the time as it is"
+file = "crates/dom_wasm/src/wasi.rs"
+from = '''        Ok(now - now % CLOCK_RESOLUTION)'''
+to = '''        Ok(now)'''
+
+[[mutant]]
+name = "the clock says another resolution"
+file = "crates/dom_wasm/src/wasi.rs"
+from = '''        Ok(CLOCK_RESOLUTION)
+    }'''
+to = '''        Ok(1)
+    }'''
+
+[[mutant]]
+name = "stderr's lines come as stdout's"
+file = "crates/dom_wasm/src/wasi.rs"
+from = '''            .stderr(OutputStream {
+                output: Output::Stderr,'''
+to = '''            .stderr(OutputStream {
+                output: Output::Stdout,'''
+
+[[mutant]]
+name = "a line keeps its newline"
+file = "crates/dom_wasm/src/wasi.rs"
+from = '''            if byte == b'\n' {
+                self.give();
+            } else {
+                self.line.push(byte);
+            }'''
+to = '''            self.line.push(byte);
+            if byte == b'\n' {
+                self.give();
+            }'''
+
+[[mutant]]
+name = "the last line with no newline is lost"
+file = "crates/dom_wasm/src/wasi.rs"
+from = '''        if !self.line.is_empty() {
+            self.give();
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "an empty last line is given"
+file = "crates/dom_wasm/src/wasi.rs"
+from = '''        if !self.line.is_empty() {
+            self.give();
+        }'''
+to = '''        self.give();'''
+
+[[mutant]]
+name = "a turn polls once"
+file = "crates/dom_wasm/src/turn.rs"
+from = '''        if !woken.0.swap(false, Ordering::Relaxed) {'''
+to = '''        if true {'''
+
+[[mutant]]
+name = "a turn never ends while pending"
+file = "crates/dom_wasm/src/turn.rs"
+from = '''        if !woken.0.swap(false, Ordering::Relaxed) {'''
+to = '''        if false {'''

@@ -1239,6 +1239,7 @@ dependencies = [
  "dom",
  "dom_api",
  "elise",
+ "tokio",
  "wasmtime",
  "wasmtime-wasi",
 ]

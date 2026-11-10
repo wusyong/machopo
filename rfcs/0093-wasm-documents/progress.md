@@ -9,7 +9,7 @@
 | 步驟 | 狀態 | 完成日期 |
 | --- | --- | --- |
 | 1a guest 和 `dom_wasm` 的測試換成 WASI 0.3 和 async 的 Store（決定 5、6） | 完成 | 2026-11-10 |
-| 1b WASI 0.3 的 linker：自己的時鐘，stdout 和 stderr 印到 console（決定 7） | 還沒開始 | |
+| 1b WASI 0.3 的 linker：自己的時鐘，stdout 和 stderr 交給 sink（決定 7）；一輪的 poll（決定 9） | 完成 | 2026-11-10 |
 | 1c `dom_wasm` 的 engine：`ScriptEngine`、`ScriptHost`、需要時才跑的 event loop、`start(document)`（決定 3、4、8、9） | 還沒開始 | |
 | 1d renderer：prescan `<meta>`、選 engine、換頁時換 engine、載入 `application/wasm` 的 script（決定 2） | 還沒開始 | |
 | 1e 靜態的 TodoMVC 的 guest、情境、renderer 的測試 | 還沒開始 | |
@@ -40,3 +40,17 @@
 - mutation test：沒有跑。這一步沒有改實作（`crates/dom_wasm/src` 沒動），改的是測試的 harness、編 guest 的 target 和編好的 guest。
 - 還沒確認的：guest 沒有印任何東西，wasmtime-wasi 的 stdout、stderr 在沒有 tokio 的 runtime 時能不能用要到 1b 才知道。
 - `sanity.py` 的 `tests`、`unsafe`、`numerics`、`docs` 通過。
+
+### 1b（2026-11-10，macOS，Apple Silicon）
+
+- 新的：`crates/dom_wasm/src/wasi.rs`（`add_wasi_to_linker`、`WasmWasi`、`GuestClock`、輸出的 sink）和 `src/turn.rs`（`poll_until_idle`）。`dom_wasm` 多依賴 wasmtime-wasi（原本只有測試用）和 tokio（只用 `AsyncWrite` 這個 trait，沒有 runtime）。接到 console 是 1c 的事：這一步的 sink 是 embedder 給的函式。
+- 測試的 guest：world 多一個 `async func` 的 export `sleep`（C 的 callback ABI，第一個實際編過的 async export：在裡面呼叫 libc 的 `nanosleep`，它是時鐘的 `wait-for`），`run` 多四個 case（`is-awake`、`is-asleep`、`print`、`coarse-clock`）。
+- 新的測試：`tests/it/wasi.rs` 五個（等待是期限、期限之前的一輪不叫醒、之後的一輪才醒、等待期間照樣能呼叫 guest；不用等的等待；兩個 Store 各自的等待；時鐘降到 100 µs；輸出一行一行、分 stdout 和 stderr、沒有換行的最後一行在 Store 丟掉時來），`src/wasi.rs` 三個、`src/turn.rs` 兩個單元測試。`cargo test -p dom_wasm`：12 個單元測試、21 個整合測試通過。
+- 確認了開始前沒把握的三件事：
+  - **stdout、stderr 沒有 tokio 的 runtime 也能用**：guest 的 `printf` 經過 wasmtime-wasi 的 p3 到我們的 `AsyncWrite`，測試的 thread 沒有 runtime。
+  - **等待中的 guest 留在 Store 裡**，經過 `StoreSet` 的借出和 elise 的 collector 也一樣（開始前的原型是手寫的 WAT、沒有 `StoreSet`）：`run_concurrent` 的 future 丟掉之後，下一輪新的 `run_concurrent` 接著跑它。
+  - **wasmtime 只 poll 被叫醒的 host 函式的 future**：新的一輪不會自己重新 poll 上一輪 pending 的等待，所以 `GuestClock` 要留著那個 future 的 waker、到期時叫醒（`wake_due`），不是只看時間。
+- 行為上要知道的：沒有換行的最後一行不是寫的當下給 sink，而是輸出關閉時（WASI 的 stream 沒有 flush，C 的 `fflush` 到不了 host）。記在 `crates/dom_wasm/README.md`。
+- mutation test（`mutants-1b.toml`，20 條）：第一次 16 條抓到、1 條卡住（一輪永遠不結束，等到逾時）、3 條沒抓到：`next_deadline` 拿最晚的而不是最早的（整合測試每個 Store 只有一個等待）、結束的等待沒有從清單拿掉（只有沒人叫醒就被 poll 時才走到，guest 的測試走不到）、一輪只 poll 一次（guest 的測試裡剛好一次就夠）。補了五個單元測試之後 20 條都抓到，「永遠不結束」那條也改由單元測試數 poll 的次數當場抓到。跑完確認檔案都還原了。
+- 還沒做的：guest 讓出（callback code 的 `YIELD`）時在同一輪繼續 poll 的測試（決定 9 提到的 wasmtime 49 的 bug）：C 的 guest 要自己寫出會讓出的 async export，放到 1c 和入口一起。
+- `sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`docs` 通過。

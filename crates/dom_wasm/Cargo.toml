@@ -18,7 +18,8 @@ workspace = true
 dom_api.workspace = true
 dom.workspace = true
 elise.workspace = true
+# Its `AsyncWrite` only (wasmtime-wasi's output streams are that): no
+# runtime runs.
+tokio.workspace = true
 wasmtime.workspace = true
-
-[dev-dependencies]
 wasmtime-wasi.workspace = true
