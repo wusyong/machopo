@@ -143,11 +143,11 @@ python3 scripts/bench.py blink-perf --gc --pages bindings/gc-forest.html,binding
 
 9. **不開 trace 時，elise 的每一段 phase 只付一次讀取和判斷，和 machopo 自己的 span 一樣**：`Platform::tracing` 交給 heap 一個 `&'static AtomicBool`（heap 建立時問一次，沒有 trace 的 platform 預設給永遠是 false 的），heap 和 job 在 `trace_begin` 之前先 relaxed 讀它；開始了的 phase 一定結束（`Phase`、`WorkerSpan` 記著自己有沒有開始），旗標中途變了也成對。machopo 的 `bindings::trace` 在開始錄時設自己的旗標（`recording()`），不改 fork 的 C++。照 cppgc 的 `TracingController::GetCategoryGroupEnabled`。原本每段是一次虛擬呼叫加進到 C++ 才判斷（幾十 ns，量不出來）：改的理由是一致，之後在比較細的地方加 span 不會把虛擬呼叫放上熱的路。不選只加回傳 bool 的查詢（乙：查詢本身還是虛擬呼叫）、維持現狀（丙）。旗標跟的是「有沒有在錄」，不是 `machopo` 這個 category：machopo 的 category 是固定的一組，兩者等價。
 
+第 3 段開始前（2026-11-10，使用者照建議）：
+
+10. **評估用的頁和指標**：blink-perf 的六頁（`insert-before` 可疑，只列出、不下結論）和 Speedometer 的 20 個 suite；指標是 main thread 上的 GC（V8 的和 DOM heap 的）、GC 的總 CPU（加上其他 thread）、最長的停頓和 1 ms 以上的個數、記憶體的高峰（嵌入端的大小）。Speedometer 用 `speedometer --sample` 的 GC 那一類，machopo 的配置函式另外列出來，和 Chrome 的歸類（cppgc 的配置 inline、算在 DOM）對齊。第 1、2 段先 merge 回 `main`。
+
 ## 待決定
-
-第 3 段開始前：
-
-4. 評估用的指標和頁：哪些頁（看法：六頁加上之後加進清單的 GC 頁），哪些指標（main thread 上的 GC、加上背景的總 CPU、最長的停頓、記憶體的高峰），Speedometer 的 GC 那一類怎麼和 Chrome 的配置歸類對齊。
 
 評估之後：
 

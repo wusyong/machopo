@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 1 `bench.py blink-perf --gc`，兩邊錄 `v8.memory`，報告的 V8 的排程 | 完成 | 2026-11-10 |
 | 2 elise 的 worker 的事件，`--gc` 讀它們；不開 trace 時 elise 的 phase 只讀一個旗標 | 完成（elise `3bda47c`） | 2026-11-10 |
-| 3 評估 | | |
+| 3 評估 | 進行中 | |
 
 ## 驗收
 
