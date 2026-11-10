@@ -102,6 +102,12 @@ static void show(node_t list, const todo_t *todo) {
     machopo_dom_dom_release(item);
 }
 
+// The static page listens to nothing.
+void exports_script_handle_event(uint32_t callback, script_object_t event) {
+    (void)callback;
+    (void)event;
+}
+
 script_callback_code_t exports_script_start(node_t page) {
     document = page;
     node_t list = query(".todo-list");

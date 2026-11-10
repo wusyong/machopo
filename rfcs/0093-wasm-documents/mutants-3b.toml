@@ -1,0 +1,150 @@
+# Mutation test of stage 3b: a guest's listeners (their callbacks' words,
+# the calls through `handle-event` from the page's dispatch and from the
+# guest's own, the event's handle, a listener's trap):
+# python3 scripts/test.py mutate rfcs/0093-wasm-documents/mutants-3b.toml
+test = ["cargo", "test", "-q", "-p", "dom_wasm"]
+timeout = 300
+
+[[mutant]]
+name = "any callback is the same as any other"
+file = "crates/dom_wasm/src/front.rs"
+from = '''        edge.embedder_word(cx.gc) == self.callback_word(callback)'''
+to = '''        edge.embedder_word(cx.gc) == self.callback_word(callback) || true'''
+
+[[mutant]]
+name = "no callback is the same as another"
+file = "crates/dom_wasm/src/front.rs"
+from = '''        edge.embedder_word(cx.gc) == self.callback_word(callback)'''
+to = '''        edge.embedder_word(cx.gc) == self.callback_word(callback) && false'''
+
+[[mutant]]
+name = "a listener's word names the first store"
+file = "crates/dom_wasm/src/lib.rs"
+from = '''    (u64::from(store).saturating_add(1) << 32) | u64::from(callback)'''
+to = '''    (1 << 32) | u64::from(callback) | (u64::from(store) & 0)'''
+
+[[mutant]]
+name = "a listener's capture is its opposite"
+file = "crates/dom_wasm/src/front.rs"
+from = '''    fn read<T: 'static>(wit: &bool, _: &StoreContextMut<'_, T>) -> wasmtime::Result<bool> {
+        Ok(*wit)
+    }
+}
+
+impl ReadArg for Cow<'_, str> {'''
+to = '''    fn read<T: 'static>(wit: &bool, _: &StoreContextMut<'_, T>) -> wasmtime::Result<bool> {
+        Ok(!*wit)
+    }
+}
+
+impl ReadArg for Cow<'_, str> {'''
+
+[[mutant]]
+name = "a guest's own dispatch calls another store's listeners in its own"
+file = "crates/dom_wasm/src/front.rs"
+from = '''            (of == store).then(|| {'''
+to = '''            (of == store || true).then(|| {'''
+
+[[mutant]]
+name = "a guest's own dispatch leaves the event's handle with the guest"
+file = "crates/dom_wasm/src/front.rs"
+from = '''            .is_some_and(|handles| handles.interface(handle).is_some())
+        {
+            dom.borrow_mut()
+                .read(|cx| tables.release(cx, store, handle));
+        }
+    }'''
+to = '''            .is_some_and(|handles| handles.interface(handle).is_some() && false)
+        {
+            dom.borrow_mut()
+                .read(|cx| tables.release(cx, store, handle));
+        }
+    }'''
+
+[[mutant]]
+name = "a listener's trap in a guest's own dispatch is dropped"
+file = "crates/dom_wasm/src/front.rs"
+from = '''        if let Err(trap) = guest(callback, handle) {
+            self.trap = Some(trap);
+        }'''
+to = '''        if let Err(trap) = guest(callback, handle) {
+            drop(trap);
+        }'''
+
+[[mutant]]
+name = "listeners go on after one trapped in a guest's own dispatch"
+file = "crates/dom_wasm/src/front.rs"
+from = '''        if self.trap.is_some() {
+            return;
+        }
+        let Some(guest) = self.guest.as_mut() else {'''
+to = '''        let Some(guest) = self.guest.as_mut() else {'''
+
+[[mutant]]
+name = "the page's dispatch calls no guest's listener"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''        let Some((store, callback)) = listener else {
+            return;
+        };'''
+to = '''        let Some((store, callback)) = listener.filter(|_| false) else {
+            return;
+        };'''
+
+[[mutant]]
+name = "the page's dispatch leaves the event's handle with the guest"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''                    cx.data().dom.release_if_held(handle);
+                    called'''
+to = '''                    called'''
+
+[[mutant]]
+name = "a listener that trapped keeps its script"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''        if let Err(trap) = called {
+            let url = self.scripts.remove(at).url;
+            report(self.console, &url, format!("{trap:?}"), true);
+        }'''
+to = '''        if let Err(trap) = called {
+            let url = self.scripts[at].url.clone();
+            report(self.console, &url, format!("{trap:?}"), true);
+        }'''
+
+[[mutant]]
+name = "a listener's trap isn't reported"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''            let url = self.scripts.remove(at).url;
+            report(self.console, &url, format!("{trap:?}"), true);'''
+to = '''            let url = self.scripts.remove(at).url;
+            let _ = (url, trap);'''
+
+[[mutant]]
+name = "a trapped listener's store stays in the set"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''            if called.is_err() {
+                // A trap ends its store (the Component Model's rule).
+                let _ = set.remove(index);
+            }
+            called
+        });
+        if let Err(trap) = called {'''
+to = '''            called
+        });
+        if let Err(trap) = called {'''
+
+[[mutant]]
+name = "what a listener printed isn't flushed"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''        // What the guests' listeners wrote.
+        self.flush_output();'''
+to = '''        // What the guests' listeners wrote.'''
+
+[[mutant]]
+name = "a callback can't be held by the WIT"
+file = "crates/dom_wasm/src/wit.rs"
+from = '''            TypeDesc::Dictionary(_)
+                | TypeDesc::Function(_)
+                | TypeDesc::Sequence(_)'''
+to = '''            TypeDesc::Dictionary(_)
+                | TypeDesc::Function(_)
+                | TypeDesc::Callback(_)
+                | TypeDesc::Sequence(_)'''

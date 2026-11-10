@@ -153,6 +153,10 @@ interface dom {
   type xml-document = node;
   type comment = node;
   type processing-instruction = node;
+  type event = object;
+  type ui-event = object;
+  type mouse-event = object;
+  type keyboard-event = object;
   type window = object;
   type location = object;
   type html-collection = object;
@@ -174,6 +178,39 @@ interface dom {
   /// Lets the store's object `handle` go: the number may be another's after,
   /// and the object is collected once nothing else holds it.
   release: func(handle: object);
+
+  /// `EventTarget.addEventListener`
+  event-target-add-event-listener: func(this: object, %type: string, callback: u32, options: bool) -> result<_, dom-exception>;
+
+  /// `EventTarget.removeEventListener`
+  event-target-remove-event-listener: func(this: object, %type: string, callback: u32, options: bool) -> result<_, dom-exception>;
+
+  /// `Event.type`
+  event-type: func(this: event) -> result<string, dom-exception>;
+
+  /// `Event.target`
+  event-target: func(this: event) -> result<option<object>, dom-exception>;
+
+  /// `Event.currentTarget`
+  event-current-target: func(this: event) -> result<option<object>, dom-exception>;
+
+  /// `Event.stopPropagation`
+  event-stop-propagation: func(this: event) -> result<_, dom-exception>;
+
+  /// `Event.preventDefault`
+  event-prevent-default: func(this: event) -> result<_, dom-exception>;
+
+  /// `Event.defaultPrevented`
+  event-default-prevented: func(this: event) -> result<bool, dom-exception>;
+
+  /// `UIEvent.detail`
+  ui-event-detail: func(this: ui-event) -> result<s32, dom-exception>;
+
+  /// `MouseEvent.button`
+  mouse-event-button: func(this: mouse-event) -> result<s32, dom-exception>;
+
+  /// `KeyboardEvent.key`
+  keyboard-event-key: func(this: keyboard-event) -> result<string, dom-exception>;
 
   /// `Window.document`
   window-document: func(this: window) -> result<document, dom-exception>;

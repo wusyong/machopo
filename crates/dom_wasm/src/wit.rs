@@ -241,6 +241,17 @@ pub const ADDED: &[&str] = &[
     "html-collection-item",
     "node-list-length",
     "node-list-item",
+    "event-target-add-event-listener",
+    "event-target-remove-event-listener",
+    "event-type",
+    "event-target",
+    "event-current-target",
+    "event-default-prevented",
+    "event-prevent-default",
+    "event-stop-propagation",
+    "ui-event-detail",
+    "mouse-event-button",
+    "keyboard-event-key",
     "window-document",
     "window-location",
     "location-href",
@@ -266,14 +277,14 @@ pub fn is_added(name: &str) -> bool {
 /// objects of any interface (a handle each, `this` too), strings, numbers
 /// and booleans, and any number of strings (`list<string>`). A dictionary
 /// that may be left out is: the guest's function has no such parameter.
-/// Not a constructor, nor a static operation (no `this`).
+/// A callback interface (a listener) is a number of the guest's own, and
+/// a listener's options (a dictionary or a boolean) the boolean alone,
+/// `capture`. Not a constructor, nor a static operation (no `this`).
 pub fn can_hold(_: &InterfaceDesc, member: &Member) -> bool {
     let holdable = |ty: TypeDesc| {
         !matches!(
             ty,
             TypeDesc::Dictionary(_)
-                | TypeDesc::DictOrBool(_)
-                | TypeDesc::Callback(_)
                 | TypeDesc::Function(_)
                 | TypeDesc::Sequence(_)
                 | TypeDesc::FrozenArray(_)
@@ -388,9 +399,16 @@ pub fn is_plain(interface: &InterfaceDesc, member: &Member) -> bool {
             .all(plain_type)
 }
 
-/// An interface's type in the WIT: its name's alias.
+/// An interface's type in the WIT: its name's alias, or `object` if a
+/// member's function has that name (`EventTarget`, and `Event`'s `target`:
+/// an interface's types and functions are one namespace).
 fn type_name(interface: &str) -> String {
-    kebab_case(interface)
+    let name = kebab_case(interface);
+    if is_frozen(&name) || is_added(&name) {
+        "object".to_owned()
+    } else {
+        name
+    }
 }
 
 fn wit_type(ty: TypeDesc) -> String {
@@ -404,9 +422,12 @@ fn wit_type(ty: TypeDesc) -> String {
         TypeDesc::I16 => "s16".to_owned(),
         TypeDesc::I32 => "s32".to_owned(),
         TypeDesc::Double => "f64".to_owned(),
+        // A callback interface: the guest's own number for it, which its
+        // `handle-event` is called with.
+        TypeDesc::Callback(_) => "u32".to_owned(),
+        // A listener's options: `capture` alone.
+        TypeDesc::DictOrBool(_) => "bool".to_owned(),
         TypeDesc::Dictionary(name)
-        | TypeDesc::DictOrBool(name)
-        | TypeDesc::Callback(name)
         | TypeDesc::Function(name)
         | TypeDesc::Sequence(name)
         | TypeDesc::FrozenArray(name)
@@ -478,7 +499,10 @@ pub fn describe() -> String {
         .iter()
         .filter(|interface| !interface.node && named(interface.name))
     {
-        line(&format!("  type {} = object;", type_name(interface.name)));
+        let name = type_name(interface.name);
+        if name != "object" {
+            line(&format!("  type {name} = object;"));
+        }
     }
     line("");
     line("  /// What a call failed with: `code` 1 is a TypeError (`this` of another");

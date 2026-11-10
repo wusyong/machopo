@@ -4,9 +4,17 @@ package machopo:dom@0.2.0;
 /// a wasm document), a component: the DOM's interface imported, and `start`,
 /// which the page calls with its document once the script is instantiated.
 /// `start` is async: it may wait (the page goes on at its first wait), and
-/// may never return.
+/// may never return. `handle-event` is how the page calls the script's
+/// listeners: `callback` is the number the script gave
+/// `event-target-add-event-listener`, `event` a handle that is the
+/// script's for the call (the page takes it back after). It is called
+/// within the dispatch, a member the script itself called included
+/// (`html-element-click`), so it doesn't wait. The handle's type is
+/// `object`: a world's own `event` is, in wit-bindgen's C, the name of its
+/// async runtime's.
 world script {
   import dom;
-  use dom.{document};
+  use dom.{document, object};
   export start: async func(document: document);
+  export handle-event: func(callback: u32, event: object);
 }

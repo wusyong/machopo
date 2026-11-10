@@ -100,6 +100,18 @@ machopo 沒有的：`localStorage`（JS 那一側也沒有，TodoMVC 的 todo �
 
 同一個案例裡 `run` 是普通的（不是 async 的）export 時，第 1 輪就 trap：`cannot block a synchronous task before returning`。
 
+### 拿掉 fork 的一個檢查之後（2026-11-10，第 3 段開始前）
+
+上面的表裡「`func_wrap`，`call`」在 async 的入口失敗，訊息是 `cannot do blocking call from an async context`，來自 `../third_party/wasmtime/crates/wasmtime/src/runtime/store.rs` 的 `validate_sync_call`：store 在 fiber 上時不准同步的 `call`。它的註解寫了兩個理由：巢狀的呼叫可能因為 GC 或 epoch interruption 暫停 fiber，embedder 再從另一個 thread poll 最上層的 future，等於把 `!Send` 的東西送過 thread；以及遞迴可能讓 stack 溢位。
+
+暫時在 fork 的工作目錄把那個檢查關掉（沒有 commit，試完還原）、重跑原型：
+
+| host 的 `dispatch` | 入口 `call_async` | 入口 `run_concurrent` 加 `call_concurrent` |
+| --- | --- | --- |
+| `func_wrap`，`call` | 可以，巢狀三層也是 | 可以，巢狀三層也是 |
+
+所以擋住「async 的入口裡普通的 host 函式同步呼叫回 guest」的只有這一個檢查；元件的呼叫記帳（`enter_guest_sync_call`）本來就處理得了「現在是一個 guest 的 thread 在呼叫」。第一個理由在 machopo 不成立的條件：Store 在 `StoreSet` 裡（`Rc`，不是 `Send`），只在 DOM 的 heap 的那個 thread 上 poll。沒有驗證的：listener 裡又等待（不是 async 的 export 本來就不能等）、trap 穿過巢狀的呼叫、巢狀很深時 fiber 的 stack。
+
 ### 結論
 
 - Component Model 現在允許重新進入（`may_enter` 只在 trap 過之後是 false，`../third_party/wasmtime/crates/wasmtime/src/runtime/component/store.rs`；規格的沿革在 `rfcs/0001-wasm-scripts/details.md` 的「Component Model 的重新進入」）。

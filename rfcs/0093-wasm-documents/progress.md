@@ -16,7 +16,8 @@
 | 1e 靜態的 TodoMVC 的 guest、情境、`shell` 的測試；第 1 段的檢查 | 完成 | 2026-11-10 |
 | 2a handle 的表指任何物件、記 interface（決定 12） | 完成 | 2026-11-10 |
 | 2b WIT 的清單加 TodoMVC 用到的成員，`list<string>`、可省略的 dictionary（決定 13）；第 2 段的檢查 | 完成 | 2026-11-10 |
-| 3 事件和 callback | 還沒開始 | |
+| 3a wasmtime 的 fork：set 的 Store 在 fiber 上接受同步的呼叫（決定 14） | fork 已 commit（`ef4e892`，本地的 `machopo` 分支，還沒 push），`third_party.toml` 釘到它 | 2026-11-10 |
+| 3b listener：`add`/`remove`、`handle-event`、事件的成員（決定 15、16）；第 3 段的檢查 | 完成 | 2026-11-10 |
 | 4 TodoMVC 的 guest、情境 | 還沒開始 | |
 
 ## 驗收
@@ -131,3 +132,34 @@
   - `cargo test --workspace`：通過（55 個測試 binary，3796 個測試通過、1 個 ignored；在 clippy 那一處修正之前跑的，修正只拿掉一個 lifetime 的名字，之後 `cargo test -p dom_wasm` 重跑通過）。
   - `cargo fmt --check` 乾淨；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過；`test.py scenarios todomvc-wasm wasm-document` 通過。
   - 沒有跑的：`test.py automation`、整套的情境、reftest 和 WPT（由 CI 跑）。
+
+### 3a（2026-11-10，macOS，Apple Silicon；fork 還沒 push）
+
+- 決定 14 之前的實驗（`details.md` 的「重入的原型」）：暫時在 fork 的工作目錄關掉檢查、跑原型，試完還原。原型多一個案例 `mixed`（Store 同時有 `async func` 的 import，像頁面的 Store 有 WASI 的時鐘）：沒改的 fork 先被另一個檢查擋住（`store configuration requires that *_async functions are used`），兩個都放行之後巢狀三層可以。
+- fork 的修改（`../third_party/wasmtime` 的工作目錄，5 個檔）：
+  - `crates/wasmtime/src/runtime/store.rs` 的 `validate_sync_call`：Store 在一個 `StoreSet` 裡、現在在 set 的 thread 上、而且在 fiber 上時，同步的 `call` 放行（兩個檢查都跳過）。
+  - `crates/wasmtime/src/runtime/fiber.rs` 的 `resume_fiber`：set 的 Store 的 fiber 在別的 thread 上恢復時 abort，不管它有沒有 GC heap（原本只檢查有 GC heap 的）。這是放行的安全條件：fiber 上可能有 host 函式的 frame。fork 原有的測試 `a_store_is_used_on_its_heaps_thread_only` 顯示 Store 真的能被送到別的 thread（scoped thread），所以不能只靠型別。
+  - `crates/wasmtime/src/runtime/vm/gc/enabled/elise.rs`：`SetShared` 記建立它的 thread，`check_thread`。
+  - `tests/all/elise/shared.rs`：兩個測試（set 的 Store 用 `call_async` 進去、host 函式同步呼叫回 guest、巢狀三層；不在 set 裡的 Store 照舊被拒絕）。
+  - `README.machopo.md`：「A sync call on a set's store's fiber」一節（為什麼、上游擋的兩件事各自怎麼處理）和「Local modifications」的一條。
+- 跑過的 fork 的測試（fork 沒有 toolchain 檔，這台預設的 stable 是 1.90、編不了，用 `cargo +1.99.0`）：`cargo test --features gc-elise --test all elise::` 39 個通過（含新的兩個）；`--test all -- async_functions::` 24 個通過；`python3 machopo/elise_tests.py` 的 `elise` 和 `elise-stress` 各 228 個通過、0 個失敗，spec test 沒有跑（這台沒有 `tests/spec_testsuite` 的 submodule）。沒有跑：fork 的 clippy、miri、fuzz。
+- machopo 這邊：`cargo test -p dom_wasm` 用改過的 fork 通過（還沒有用到新的行為）；`ci.py third-party` 不介意 fork 的工作目錄有未 commit 的修改。
+- fork 在本地的 `machopo` 分支 commit 了（`ef4e892`，上游的 `machopo` 在 `5c38af0`，push 是 fast-forward）；`third_party.toml` 釘到它。還要做的：先 push fork、再 push machopo。
+
+### 3b（2026-11-10，macOS，Apple Silicon；fork 還沒 push）
+
+- WIT（`machopo:dom@0.2.0`，版本沒有改：還沒有外面的 guest）：`ADDED` 多 11 個名稱（`event-target-add-event-listener`、`-remove-event-listener`，事件的 9 個成員），`can_hold` 收 callback（`u32`）和 listener 的 options（`bool`）。world `script` 多 `export handle-event: func(callback: u32, event: object)`。和決定 15 寫的有兩處出入：
+  - 參數的名字是 `options`（IDL 的名字，產生器照抄），不是 `capture`；值還是 `capture` 的布林。
+  - `handle-event` 的 `event` 的型別寫 `object`，不是 `event`：world 自己 `use` 的 `event` 在 wit-bindgen 的 C 裡叫 `script_event_t`，和它 async runtime 的同名型別撞名，編不過。
+- `src/front.rs`：callback 和 options 的參數；`same_callback`、`store_callback` 讀寫 callback edge 的 embedder word（`listener_word`：Store 的編號加一在高 32 bit、guest 的編號在低 32 bit；0 是 handler 屬性的）；`add_scripted`（`focus`、`blur`、`click` 的 host 函式：把「同步呼叫這個 Store 的 `handle-event`」交給 front）和 `WasmFront::call_listener`（guest 自己的分派）。
+- `src/engine.rs`：`Host` 拿著 engine 的 `Option<Dom>`、`StoreSet`、script 的清單和 console，`Host::call_listener`（頁面的分派）把 DOM 借給那個 script 的 Store、poll `handle-event`；`start_script` 記 Store 的編號、存 `handle-event`（world 的 export，guest 沒有它時 instantiate 之後報錯）；microtask checkpoint 結束時 flush guest 印的東西。
+- guest：`page.c` 多 `handle-event` 和十個 case（`listen`、`listen-click`、`prevent-click`、`stop-click`、`remove-click`、`listener-trap`、`trap-click`、`keep`、`keep-click`、`nested`）；`todomvc.c` 的 `handle-event` 是空的。三個 `.wasm` 重編。
+- 測試：`tests/it/engine.rs` 多 12 個；情境 `wasm-listeners`（真的滑鼠點擊走 capture、target、bubble 三個 listener、帶 `button` 和 `detail`，按鍵的 `keydown` 帶 `key`）。`cargo test -p dom_wasm`：14 個單元測試、49 個整合測試通過；`cargo test -p shell --test it wasm`：7 個通過；`test.py scenarios wasm-listeners wasm-document todomvc-wasm` 通過。
+- 寫測試時發現、照現在的行為寫的：`click()` 的事件的 `detail` 是 1（Chrome 是 0；是 DOM 那一層的行為，JS 文件也一樣，不是這一步改的）；留著的事件 handle 之後用是 trap（「不是這個 Store 的 handle」），不是 `TypeError`。
+- mutation test（`mutants-3b.toml`，15 條）：14 條抓到。第一次跑有一條沒抓到（trap 之後繼續呼叫 listener：下一個呼叫本來就進不去 trap 過的 instance，畫面一樣），補了斷言（回報的是原本的 trap、不是後面那個錯誤）之後抓到。有一條一開始打錯地方（打到 `is_plain`），改成 `can_hold` 之後抓到。沒抓到的一條：
+  - 「trap 的 listener 的 Store 留在 set 裡」：script 已經從 engine 的清單拿掉、不會再進去，Store 只是留到換頁才丟，從外面看不出來（和 `turn` 的那一條一樣，記在 `docs/test-gaps.md`）。
+  - 跑完確認檔案都還原了（跑之前和之後的 `git diff` 一樣）。
+- 沒有測試的（記在 `docs/test-gaps.md`）：listener 等待（走不到）；guest 的分派裡再分派、兩個 Store 互相分派、很深的巢狀；script 元素的 `load`、`error`。`focus`、`blur` 分派的事件走 guest 的 listener 沒有 case（和 `click` 同一條路，`add_scripted`）。
+- 第 3 段的檢查（`cargo fmt -p dom_wasm` 排過之後）：`cargo fmt --check` 乾淨；`cargo clippy --workspace --all-targets -- -D warnings` 通過；`cargo test --workspace` 通過（55 個測試 binary，3808 個測試通過、1 個 ignored）；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過。
+  - 沒有跑的：`test.py automation`、整套的情境、reftest 和 WPT（由 CI 跑）；fork 的測試在 3a 跑過，3b 沒有改 fork。
+- fork 的 commit（`ef4e892`）還沒 push：先 push fork、再 push machopo。

@@ -1,0 +1,20 @@
+# A wasm document's guest listens to the page's events: a click of the
+# mouse at the checkbox the guest made calls its listeners in the event's
+# order (the root's capturing one, the checkbox's, the root's bubbling
+# one), each with the event (a mouse's: its button, its click count), and
+# the click's default action follows; a key typed then is the document's
+# `keydown` listener's, the checkbox its target (the click focused it).
+window size=800x600
+navigate pages/wasm-listen.html
+wait-loaded
+wait-text #static "Parsed"
+screenshot before
+
+click #subject
+wait-text html>p "1:click of subject at root button 0 detail 1"
+wait-text html>p+p "2:click of subject at subject button 0 detail 1"
+wait-text html>p+p+p "3:click of subject at root button 0 detail 1"
+
+key a
+wait-text html>p+p+p+p "4:keydown of subject elsewhere key a"
+screenshot listened

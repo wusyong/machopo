@@ -27,6 +27,174 @@ static void say(node_t document, node_t parent, const char *text) {
     machopo_dom_dom_node_append_child(parent, p, &appended, &err);
 }
 
+// The page's document and its root, for the listeners; the element the
+// cases listen on, and the one a listener clicks (`CLICKS`).
+static node_t page, page_root, subject, other;
+
+// What a listener does beside saying it ran, in its callback's number.
+enum {
+    PREVENTS = 0x10,
+    STOPS = 0x20,
+    TRAPS = 0x40,
+    CLICKS = 0x80,
+    KEEPS = 0x100,
+    PRINTS = 0x200,
+};
+
+// The handle a listener kept of its event (`KEEPS`), which was its for
+// that call only.
+static script_object_t kept;
+
+static void listen(node_t target, const char *type, uint32_t callback, bool capture) {
+    exception_t err;
+    script_string_t name = s(type);
+    if (!machopo_dom_dom_event_target_add_event_listener(target, &name, callback, capture, &err)) {
+        __builtin_trap();
+    }
+}
+
+// Says "<callback>:<type>", where the event is at ("at root", "at
+// subject"), and what the event's own interface has.
+void exports_script_handle_event(uint32_t callback, script_object_t event) {
+    exception_t err;
+    script_string_t text;
+    machopo_dom_dom_option_object_t target, current;
+    if (!machopo_dom_dom_event_type(event, &text, &err)
+        || !machopo_dom_dom_event_target(event, &target, &err)
+        || !machopo_dom_dom_event_current_target(event, &current, &err)) {
+        __builtin_trap();
+    }
+    char type[32] = {0}, line[128];
+    memcpy(type, text.ptr, text.len < sizeof type - 1 ? text.len : sizeof type - 1);
+    script_string_free(&text);
+    int length = snprintf(line, sizeof line, "%u:%s%s%s", (unsigned)callback, type,
+                          target.is_some && target.val == subject ? " of subject" : "",
+                          !current.is_some ? "" : current.val == page_root ? " at root"
+                              : current.val == subject ? " at subject" : " elsewhere");
+    if (strcmp(type, "click") == 0) {
+        // A mouse's (a click the page fired itself is a plain event).
+        int32_t button = -1, detail = -1;
+        if (machopo_dom_dom_mouse_event_button(event, &button, &err)
+            && machopo_dom_dom_ui_event_detail(event, &detail, &err)) {
+            snprintf(line + length, sizeof line - (size_t)length, " button %d detail %d", (int)button,
+                     (int)detail);
+        }
+    } else if (strcmp(type, "keydown") == 0) {
+        if (!machopo_dom_dom_keyboard_event_key(event, &text, &err)) __builtin_trap();
+        snprintf(line + length, sizeof line - (size_t)length, " key %.*s", (int)text.len, (const char *)text.ptr);
+        script_string_free(&text);
+    }
+    say(page, page_root, line);
+    if (callback & PRINTS) {
+        printf("printed by a listener\n");
+        fflush(stdout);
+    }
+    if (callback & KEEPS) {
+        // The one before was the guest's for that call: a trap, by now.
+        if (kept && machopo_dom_dom_event_type(kept, &text, &err)) {
+            script_string_free(&text);
+            say(page, page_root, "the handle kept lives");
+        }
+        kept = event;
+    }
+    if (callback & PREVENTS) {
+        bool prevented = false;
+        if (!machopo_dom_dom_event_prevent_default(event, &err)
+            || !machopo_dom_dom_event_default_prevented(event, &prevented, &err)) {
+            __builtin_trap();
+        }
+        say(page, page_root, prevented ? "prevented" : "not prevented");
+    }
+    if ((callback & STOPS) && !machopo_dom_dom_event_stop_propagation(event, &err)) __builtin_trap();
+    if (callback & TRAPS) __builtin_trap();
+    if (callback & CLICKS) {
+        // Another dispatch within this one: its listeners first.
+        if (!machopo_dom_dom_html_element_click(other, &err)) __builtin_trap();
+        say(page, page_root, "after the click within");
+    }
+}
+
+// An `<input type="checkbox">` with `id`, in the root.
+static node_t checkbox(const char *id) {
+    exception_t err;
+    script_string_t tag = s("input"), type = s("type"), value = s("checkbox"), name = s("id"), given = s(id);
+    node_t field, appended;
+    if (!machopo_dom_dom_document_create_element(page, &tag, &field, &err)
+        || !machopo_dom_dom_element_set_attribute(field, &type, &value, &err)
+        || !machopo_dom_dom_element_set_attribute(field, &name, &given, &err)
+        || !machopo_dom_dom_node_append_child(page_root, field, &appended, &err)) {
+        __builtin_trap();
+    }
+    return field;
+}
+
+// The cases that listen: a checkbox (`subject`) and what listens to it.
+// The ones that end in `-click` click it themselves, within `start`.
+static bool listening(const char *which) {
+    exception_t err;
+    bool clicks = false;
+    if (strcmp(which, "listen") == 0 || strcmp(which, "listen-click") == 0) {
+        // In the root's capture, at the checkbox (twice the same: once),
+        // in the root's bubble; and the keys, at the document.
+        subject = checkbox("subject");
+        listen(page_root, "click", 1, true);
+        listen(subject, "click", 2, false);
+        listen(subject, "click", 2, false);
+        listen(page_root, "click", 3, false);
+        listen(page, "keydown", 4, false);
+        clicks = which[6] != 0;
+    } else if (strcmp(which, "prevent-click") == 0) {
+        subject = checkbox("subject");
+        listen(subject, "click", 2 | PREVENTS, false);
+        clicks = true;
+    } else if (strcmp(which, "stop-click") == 0) {
+        subject = checkbox("subject");
+        listen(page_root, "click", 1 | STOPS, true);
+        listen(subject, "click", 2, false);
+        clicks = true;
+    } else if (strcmp(which, "remove-click") == 0) {
+        // Removed as it was added; one that names the other phase stays.
+        subject = checkbox("subject");
+        script_string_t click = s("click");
+        listen(subject, "click", 6, false);
+        listen(subject, "click", 2, false);
+        listen(page_root, "click", 1, true);
+        listen(page_root, "click", 3, false);
+        if (!machopo_dom_dom_event_target_remove_event_listener(subject, &click, 2, false, &err)
+            || !machopo_dom_dom_event_target_remove_event_listener(page_root, &click, 1, false, &err)
+            || !machopo_dom_dom_event_target_remove_event_listener(page_root, &click, 3, false, &err)) {
+            __builtin_trap();
+        }
+        clicks = true;
+    } else if (strcmp(which, "listener-trap") == 0 || strcmp(which, "trap-click") == 0) {
+        subject = checkbox("subject");
+        listen(subject, "click", 2 | TRAPS, false);
+        listen(page_root, "click", 3, false);
+        clicks = which[0] == 't';
+    } else if (strcmp(which, "keep") == 0 || strcmp(which, "keep-click") == 0) {
+        subject = checkbox("subject");
+        listen(subject, "click", 2 | KEEPS, false);
+        clicks = which[4] != 0;
+        if (clicks && !machopo_dom_dom_html_element_click(subject, &err)) __builtin_trap();
+    } else if (strcmp(which, "nested") == 0) {
+        subject = checkbox("subject");
+        other = checkbox("other");
+        listen(subject, "click", 2 | CLICKS, false);
+        listen(other, "click", 5 | PRINTS, false);
+    } else {
+        return false;
+    }
+    if (clicks) {
+        bool checked = false;
+        if (!machopo_dom_dom_html_element_click(subject, &err)
+            || !machopo_dom_dom_html_input_element_checked(subject, &checked, &err)) {
+            __builtin_trap();
+        }
+        say(page, page_root, checked ? "clicked: checked" : "clicked: not checked");
+    }
+    return true;
+}
+
 // What `start` left for its callback (the `yield` case).
 static node_t yielded_document, yielded_root;
 static int yields;
@@ -45,8 +213,11 @@ script_callback_code_t exports_script_start(node_t document) {
     char which[32] = {0};
     memcpy(which, given.val.ptr, given.val.len < sizeof which - 1 ? given.val.len : sizeof which - 1);
     script_string_free(&given.val);
+    page = document;
+    page_root = root.val;
 
-    if (strcmp(which, "hello") == 0) {
+    if (listening(which)) {
+    } else if (strcmp(which, "hello") == 0) {
         say(document, root.val, "hello from wasm");
     } else if (strcmp(which, "print") == 0) {
         printf("printed by the guest\n");

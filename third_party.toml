@@ -23,7 +23,7 @@ rev = "3ae8793ae655fcfbf00d45ca53675be697e61694"
 # wasm scripts' engine, with elise as a collector (`gc-elise`). The `machopo`
 # branch, from upstream's tag v50.0.1.
 repository = "https://github.com/wusyong/wasmtime"
-rev = "5c38af0828d403beeb7d09906ff6b97780330512"
+rev = "ef4e89208a52fc6b017e16197e76033fa500190b"
 
 [parley]
 repository = "https://github.com/wusyong/parley"

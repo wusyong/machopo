@@ -1,11 +1,12 @@
 //! wasmtime as a page's script engine (`dom_api::ScriptEngine`): a document
 //! whose scripts are wasm components. The engine owns the page's DOM and
 //! lends it to the guests for each turn of theirs (`WasmDom::lend`); each
-//! script is a store, whose `start` gets the page's document. There is no
-//! JS: no realm, no listener a guest could have added yet, no inspector,
-//! so the calls for those do nothing, and the DOM's own work (the default
-//! actions of input, focus, the lifecycle's events, the tasks of elements)
-//! runs through `dom_api` as it does under V8.
+//! script is a store, whose `start` gets the page's document, and whose
+//! listeners the DOM's dispatch calls through its `handle-event`. There is
+//! no JS: no realm, no timer or observer of script's, no inspector, so the
+//! calls for those do nothing, and the DOM's own work (the default actions
+//! of input, focus, the lifecycle's events, the tasks of elements) runs
+//! through `dom_api` as it does under V8.
 
 use std::pin::pin;
 use std::sync::{Arc, Mutex};
@@ -72,22 +73,47 @@ type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 /// A script's store in the set, and when it next has something to do.
 struct Script {
     index: usize,
+    /// The store's number in the DOM, which its listeners' callbacks carry.
+    number: u32,
     url: String,
     /// The earliest deadline its guest waits for, as it was after its last
     /// turn (the clock is in the store, reached only in a turn).
     deadline: Option<u64>,
 }
 
-/// What the DOM's work calls script for, in a wasm document: nothing yet
-/// (a guest can't add a listener, a timer or an observer), so each is a
-/// call of nothing. The operations are the engine's DOM's.
+/// What the DOM's work calls script for, in a wasm document: the guests'
+/// listeners (a guest can't add a timer or an observer, so each of those
+/// is a call of nothing). The operations are the engine's DOM's.
 struct Host<'a> {
-    dom: &'a mut Dom,
+    /// The engine's DOM: lent to a guest for each listener of its.
+    dom: &'a mut Option<Dom>,
     layout: &'a LayoutCell,
     /// The window's document's number, and what the DOM's work asks of the
     /// host for its frame (`ScriptEngine::take_frame_requests`).
     top: Option<NodeId>,
     requests: &'a mut Vec<dom_api::FrameRequest>,
+    wasm: &'a WasmDom,
+    set: &'a mut Option<StoreSet<Data>>,
+    scripts: &'a mut Vec<Script>,
+    console: &'a Option<ConsoleSink>,
+}
+
+impl Host<'_> {
+    fn dom(&mut self) -> &mut Dom {
+        self.dom.as_mut().expect("the DOM, outside a guest's turn")
+    }
+}
+
+/// A message for the console, about `url`.
+fn report(console: &Option<ConsoleSink>, url: &str, text: String, uncaught: bool) {
+    if let Some(console) = console {
+        console(ConsoleMessage {
+            text,
+            url: url.to_owned(),
+            line: 0,
+            uncaught,
+        });
+    }
 }
 
 impl ScriptHost for Host<'_> {
@@ -95,19 +121,20 @@ impl ScriptHost for Host<'_> {
 
     fn read<R>(&mut self, f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>) -> R) -> R {
         let layout = self.layout;
-        self.dom.read(|cx| f(&ApiCx::with_layout_cell(cx, layout)))
+        self.dom()
+            .read(|cx| f(&ApiCx::with_layout_cell(cx, layout)))
     }
 
     fn mutate<R>(&mut self, f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>) -> R) -> R {
         let layout = self.layout;
-        self.dom
+        self.dom()
             .mutate(|cx| f(&ApiCx::with_layout_cell(cx, layout)))
     }
 
     /// The window's document navigated, or is to (a link followed, a form
     /// submitted, a fragment gone to): the host told.
     fn navigate(&mut self, document: &NodeRoot, navigation: dom::FrameNavigation) {
-        let id = self.dom.read(|cx| cx.node_id(document.get(cx.gc)));
+        let id = self.dom().read(|cx| cx.node_id(document.get(cx.gc)));
         if self.top == Some(id) {
             self.requests.push(dom_api::FrameRequest::Navigation {
                 frame: TOP,
@@ -116,9 +143,58 @@ impl ScriptHost for Host<'_> {
         }
     }
 
-    // A listener here is an event handler attribute's (`onclick=""`), which
-    // is JS: it doesn't run.
-    fn call_listener(&mut self, _: &Persistent<dom::Event>, _: usize) {}
+    /// A guest's listener, through its store's `handle-event`: the DOM
+    /// lent for the call, the event's handle the store's until it returns.
+    /// A guest that traps (or waits: the export is a sync function) is
+    /// reported and gone with its store, its other listeners with it. An
+    /// event handler attribute's listener (`onclick=""`) is JS: not run.
+    fn call_listener(&mut self, event: &Persistent<dom::Event>, index: usize) {
+        let listener = self.dom().read(|cx| {
+            let listener = cx.snapshot_at(event.get(cx.gc), index)?;
+            crate::listener_of(cx.callback_edge(listener).embedder_word(cx.gc))
+        });
+        let Some((store, callback)) = listener else {
+            return;
+        };
+        let Some(at) = self
+            .scripts
+            .iter()
+            .position(|script| script.number == store)
+        else {
+            return;
+        };
+        let (Some(set), Some(script)) = (self.set.as_mut(), self.scripts.get(at)) else {
+            return;
+        };
+        let index = script.index;
+        let called = self.wasm.lend_page(self.dom, self.layout, || {
+            let called = set
+                .with(index, |mut cx| -> wasmtime::Result<()> {
+                    let Some(handler) = cx.data().dom.handler() else {
+                        return Ok(());
+                    };
+                    let handle = cx.data().dom.give_event(event)?;
+                    let called = match poll_until_idle(pin!(
+                        handler.call_async(&mut cx, (callback, handle))
+                    )) {
+                        Poll::Ready(called) => called,
+                        Poll::Pending => Err(wasmtime::format_err!("a listener waits")),
+                    };
+                    cx.data().dom.release_if_held(handle);
+                    called
+                })
+                .and_then(|called| called);
+            if called.is_err() {
+                // A trap ends its store (the Component Model's rule).
+                let _ = set.remove(index);
+            }
+            called
+        });
+        if let Err(trap) = called {
+            let url = self.scripts.remove(at).url;
+            report(self.console, &url, format!("{trap:?}"), true);
+        }
+    }
 
     fn call_timer(&mut self, _: &Persistent<Window>, _: &Persistent<dom::Timer>) {}
 
@@ -214,12 +290,23 @@ impl WasmEngine {
 
     /// The DOM's side of a call of `dom_api`'s, and the window's document.
     fn host(&mut self) -> Host<'_> {
-        Host {
-            dom: self.dom.as_mut().expect("the DOM, outside a guest's turn"),
+        self.host_and_input().0
+    }
+
+    /// `host`, with the window's mouse state and its document: what the
+    /// input's handling takes beside it.
+    fn host_and_input(&mut self) -> (Host<'_>, &mut dom_api::EventHandler, Option<&NodeRoot>) {
+        let host = Host {
+            dom: &mut self.dom,
             layout: &self.layout,
             top: self.document_id,
             requests: &mut self.requests,
-        }
+            wasm: &self.wasm,
+            set: &mut self.set,
+            scripts: &mut self.scripts,
+            console: &self.console,
+        };
+        (host, &mut self.event_handler, self.document.as_ref())
     }
 
     fn window(&mut self) -> Option<Persistent<Window>> {
@@ -232,14 +319,7 @@ impl WasmEngine {
 
     /// A message for the console, about `url`.
     fn report(&self, url: &str, text: String, uncaught: bool) {
-        if let Some(console) = &self.console {
-            console(ConsoleMessage {
-                text,
-                url: url.to_owned(),
-                line: 0,
-                uncaught,
-            });
-        }
+        report(&self.console, url, text, uncaught);
     }
 
     /// The lines the guests wrote, to the console.
@@ -338,11 +418,13 @@ impl WasmEngine {
         let (clock, output) = (self.clock.clone(), self.output.clone());
         let Self { wasm, dom, set, .. } = self;
         // Its store, in the set (made with the first one).
-        let made = wasm.lend(dom, || -> wasmtime::Result<usize> {
+        let made = wasm.lend(dom, || -> wasmtime::Result<(usize, u32)> {
             let set = match set {
                 Some(set) => set,
                 None => set.insert(wasm.store_set(engine)?),
             };
+            let dom = WasmStore::new();
+            let number = dom.number();
             let data = Data {
                 wasi: WasmWasi::new(
                     move || clock(),
@@ -353,16 +435,17 @@ impl WasmEngine {
                             .push((output_of, line.to_owned()));
                     }),
                 ),
-                dom: WasmStore::new(),
+                dom,
             };
-            set.insert(Store::new(engine, data))
+            Ok((set.insert(Store::new(engine, data))?, number))
         });
-        let index = match made {
+        let (index, number) = match made {
             Ok(index) => index,
             Err(error) => return self.report(script.url, format!("{error:?}"), true),
         };
         self.scripts.push(Script {
             index,
+            number,
             url: script.url.to_owned(),
             deadline: None,
         });
@@ -376,6 +459,9 @@ impl WasmEngine {
                     Poll::Pending => wasmtime::bail!("the component waits as it is instantiated"),
                 };
             let start = instance.get_typed_func::<(u32,), ()>(&mut *cx, "start")?;
+            // What its listeners are called through.
+            let handler = instance.get_typed_func::<(u32, u32), ()>(&mut *cx, "handle-event")?;
+            cx.data_mut().dom.set_handler(handler);
             let handle = cx.data().dom.give(document)?;
             // The call's future goes with this poll; the task it started
             // is the store's, and runs in the turn.
@@ -561,6 +647,8 @@ impl ScriptEngine for WasmEngine {
                 dom_api::settle_animation_notices(&mut self.host());
             }
         }
+        // What the guests' listeners wrote.
+        self.flush_output();
     }
 
     fn document_ready(&mut self, frame: FrameId, readiness: DocumentReadiness) {
@@ -604,106 +692,39 @@ impl ScriptEngine for WasmEngine {
     }
 
     fn handle_mouse(&mut self, input: &dom_api::MouseInput) -> dom_api::CursorKeyword {
-        let Self {
-            dom,
-            layout,
-            event_handler,
-            document,
-            document_id,
-            requests,
-            ..
-        } = self;
-        let (Some(dom), Some(document)) = (dom.as_mut(), document.as_ref()) else {
+        let (mut host, event_handler, document) = self.host_and_input();
+        let Some(document) = document else {
             return dom_api::CursorKeyword::Default;
         };
-        let cursor = event_handler.handle_mouse(
-            &mut Host {
-                dom,
-                layout,
-                top: *document_id,
-                requests,
-            },
-            document,
-            input,
-        );
+        let cursor = event_handler.handle_mouse(&mut host, document, input);
         self.perform_microtask_checkpoint();
         cursor
     }
 
     fn recompute_under_mouse(&mut self) -> Option<dom_api::CursorKeyword> {
-        let Self {
-            dom,
-            layout,
-            event_handler,
-            document,
-            document_id,
-            requests,
-            ..
-        } = self;
-        let (dom, document) = (dom.as_mut()?, document.as_ref()?);
-        let cursor = event_handler.recompute_under_mouse(
-            &mut Host {
-                dom,
-                layout,
-                top: *document_id,
-                requests,
-            },
-            document,
-        );
+        let (mut host, event_handler, document) = self.host_and_input();
+        let document = document?;
+        let cursor = event_handler.recompute_under_mouse(&mut host, document);
         self.perform_microtask_checkpoint();
         cursor
     }
 
     fn handle_wheel(&mut self, input: &dom_api::WheelInput) -> bool {
-        let Self {
-            dom,
-            layout,
-            event_handler,
-            document,
-            document_id,
-            requests,
-            ..
-        } = self;
-        let (Some(dom), Some(document)) = (dom.as_mut(), document.as_ref()) else {
+        let (mut host, event_handler, document) = self.host_and_input();
+        let Some(document) = document else {
             return true;
         };
-        let not_canceled = event_handler.handle_wheel(
-            &mut Host {
-                dom,
-                layout,
-                top: *document_id,
-                requests,
-            },
-            document,
-            input,
-        );
+        let not_canceled = event_handler.handle_wheel(&mut host, document, input);
         self.perform_microtask_checkpoint();
         not_canceled
     }
 
     fn handle_key(&mut self, input: &dom_api::KeyInput) -> dom_api::KeyResult {
-        let Self {
-            dom,
-            layout,
-            event_handler,
-            document,
-            document_id,
-            requests,
-            ..
-        } = self;
-        let (Some(dom), Some(document)) = (dom.as_mut(), document.as_ref()) else {
+        let (mut host, event_handler, document) = self.host_and_input();
+        let Some(document) = document else {
             return dom_api::KeyResult::Done;
         };
-        let result = event_handler.handle_key(
-            &mut Host {
-                dom,
-                layout,
-                top: *document_id,
-                requests,
-            },
-            document,
-            input,
-        );
+        let result = event_handler.handle_key(&mut host, document, input);
         self.perform_microtask_checkpoint();
         result
     }

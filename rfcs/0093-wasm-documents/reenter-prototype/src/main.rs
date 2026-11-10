@@ -302,12 +302,75 @@ fn wait(engine: &Engine) -> wasmtime::Result<()> {
     Ok(())
 }
 
+/// `cargo run -- mixed <depth>`: as a page's store is, with an `async func`
+/// import too (WASI's clock), which makes the store one that must be
+/// entered with the `*_async` functions; the host's `dispatch` is a plain
+/// `func_wrap` that calls the listener with `call`.
+fn mixed(engine: &Engine, depth: u32) -> wasmtime::Result<()> {
+    println!("== a store with an async import too, host Sync, entry Async, depth {depth}");
+    let guest = GUEST
+        .replace(
+            r#"(import "dispatch" (func $dispatch (param "depth" u32)))"#,
+            r#"(import "dispatch" (func $dispatch (param "depth" u32)))
+  (import "tick" (func $tick async))
+  (core func $tick_lowered (canon lower (func $tick)))"#,
+        )
+        .replace(
+            r#"(import "host" "dispatch" (func $dispatch (param i32)))"#,
+            r#"(import "host" "dispatch" (func $dispatch (param i32)))
+    (import "host" "tick" (func $tick))"#,
+        )
+        .replace(
+            r#"(func (export "run") (param $depth i32) (result i32)
+      (call $dispatch (local.get $depth))"#,
+            r#"(func (export "run") (param $depth i32) (result i32)
+      (call $tick)
+      (call $dispatch (local.get $depth))"#,
+        )
+        .replace(
+            r#"(with "host" (instance (export "dispatch" (func $dispatch_lowered))))"#,
+            r#"(with "host" (instance (export "dispatch" (func $dispatch_lowered))
+                                  (export "tick" (func $tick_lowered))))"#,
+        );
+    let component = Component::new(engine, &guest)?;
+    let mut linker = Linker::<Data>::new(engine);
+    linker.root().func_wrap(
+        "dispatch",
+        |mut cx: StoreContextMut<'_, Data>, (depth,): (u32,)| -> wasmtime::Result<()> {
+            let listener = cx.data().listener.expect("set");
+            listener.call(&mut cx, (depth,))?;
+            cx.data_mut().log.push(format!("listener({depth}) returned"));
+            Ok(())
+        },
+    )?;
+    linker.root().func_wrap_concurrent(
+        "tick",
+        |_: &wasmtime::component::Accessor<Data>, (): ()| Box::pin(async move { Ok(()) }),
+    )?;
+    let mut store = Store::new(engine, Data::default());
+    let instance = futures::executor::block_on(linker.instantiate_async(&mut store, &component))?;
+    let listener = instance.get_typed_func::<(u32,), ()>(&mut store, "listener")?;
+    store.data_mut().listener = Some(listener);
+    let run = instance.get_typed_func::<(u32,), (u32,)>(&mut store, "run")?;
+    match futures::executor::block_on(run.call_async(&mut store, (depth,))) {
+        Ok((count,)) => println!("run({depth}) returned count {count}"),
+        Err(error) => println!("run({depth}) failed: {error:#}"),
+    }
+    for line in std::mem::take(&mut store.data_mut().log) {
+        println!("  host: {line}");
+    }
+    Ok(())
+}
+
 fn main() -> wasmtime::Result<()> {
     let mut config = Config::new();
     // For `wait`'s guest only: its export blocks on its own stack.
     config.wasm_component_model_async_stackful(true);
     let engine = Engine::new(&config)?;
     let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("mixed") {
+        return mixed(&engine, args[2].parse().expect("a depth"));
+    }
     if args.get(1).map(String::as_str) == Some("wait") {
         return wait(&engine);
     }

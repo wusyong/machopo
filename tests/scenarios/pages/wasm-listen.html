@@ -1,0 +1,11 @@
+<!doctype html>
+<html data-case="listen">
+<meta name="script" content="wasm">
+<title>A wasm document that listens</title>
+<body>
+<h1 id="static">Parsed</h1>
+<!-- The guest appends a checkbox (#subject) to the root element and
+     listens: to its clicks (in the root's capture, at the checkbox, in the
+     root's bubble) and to the document's keys. Each listener called
+     appends a paragraph saying so. -->
+<script type="application/wasm" src="../../../crates/dom_wasm/tests/guests/page.wasm"></script>

@@ -97,6 +97,21 @@ thread_local! {
     static STATE: RefCell<Slot> = const { RefCell::new(Slot { made: 0, state: None }) };
 }
 
+/// A listener's callback as its edge's word (`JsEdge::embedder_word`): the
+/// store that gave it, by its number and one (0: no guest's, a handler
+/// attribute's), in the high half, and the guest's own number for the
+/// callback in the low.
+pub(crate) fn listener_word(store: u32, callback: u32) -> u64 {
+    (u64::from(store).saturating_add(1) << 32) | u64::from(callback)
+}
+
+/// The store and the guest's number a listener's word names, if it is a
+/// guest's.
+pub(crate) fn listener_of(word: u64) -> Option<(u32, u32)> {
+    let store = u32::try_from(word >> 32).ok()?.checked_sub(1)?;
+    Some((store, u32::try_from(word & 0xffff_ffff).ok()?))
+}
+
 fn no_store() -> wasmtime::Error {
     wasmtime::format_err!("the store's DOM is gone")
 }
@@ -305,6 +320,9 @@ struct Key {
 /// goes with it. Its number isn't used again.
 pub struct WasmStore {
     key: Key,
+    /// The guest's `handle-event`, once it is instantiated (and if it
+    /// exports one): what its listeners are called through.
+    handler: Option<wasmtime::component::TypedFunc<(u32, u32), ()>>,
 }
 
 impl WasmStore {
@@ -321,7 +339,24 @@ impl WasmStore {
                 dom: state.serial,
             }
         });
-        Self { key }
+        Self { key, handler: None }
+    }
+
+    /// The guest's listener export (`handle-event`), which its listeners
+    /// are called through, the guest's own number for the callback and a
+    /// handle to the event; none for a guest that exports none.
+    pub fn set_handler(&mut self, handler: wasmtime::component::TypedFunc<(u32, u32), ()>) {
+        self.handler = Some(handler);
+    }
+
+    pub(crate) fn handler(&self) -> Option<wasmtime::component::TypedFunc<(u32, u32), ()>> {
+        self.handler
+    }
+
+    /// The store's number in its DOM, which its listeners' callbacks
+    /// carry.
+    pub fn number(&self) -> u32 {
+        self.key.number
     }
 
     /// This store's handle to `node`, for its guest (the page's document,
@@ -341,6 +376,46 @@ impl WasmStore {
                 .borrow_mut()
                 .mutate(|cx| tables.give(cx, number, node.get(cx.gc).into())))
         })
+    }
+
+    /// This store's handle to `event`, for its guest's listener: the host
+    /// takes it back after the call (`release_if_held`).
+    ///
+    /// # Errors
+    ///
+    /// If the store's DOM is gone, or away.
+    pub fn give_event(&self, event: &elise::Persistent<dom::Event>) -> wasmtime::Result<u32> {
+        let number = self.key.number;
+        STATE.with_borrow(|slot| {
+            let state = slot.of(self.key).ok_or_else(no_store)?;
+            let mut tables = state.tables.borrow_mut();
+            tables.store(number).ok_or_else(no_store)?;
+            Ok(state
+                .dom()
+                .borrow_mut()
+                .mutate(|cx| tables.give(cx, number, event.get(cx.gc).into())))
+        })
+    }
+
+    /// Lets `handle` go, if the store still holds it (its guest may have
+    /// released it itself).
+    pub fn release_if_held(&self, handle: u32) {
+        let number = self.key.number;
+        STATE.with_borrow(|slot| {
+            let Some(state) = slot.of(self.key) else {
+                return;
+            };
+            let mut tables = state.tables.borrow_mut();
+            if tables
+                .store(number)
+                .is_some_and(|handles| handles.interface(handle).is_some())
+            {
+                state
+                    .dom()
+                    .borrow_mut()
+                    .read(|cx| tables.release(cx, number, handle));
+            }
+        });
     }
 
     /// How many nodes the store holds, for the tests: 0 once its DOM is
@@ -445,6 +520,20 @@ pub fn add_to_linker<T: 'static>(
             }
         };
     }
+    // One that calls script (it dispatches events as it runs): the
+    // guest's listeners are called within it.
+    macro_rules! scripted {
+        ($interface:ident, $member:ident, $kind:ident, $path:ty) => {
+            let name = wit::function_name(
+                stringify!($interface),
+                stringify!($member),
+                MemberKind::$kind,
+            );
+            if wit::is_added(&name) {
+                front::add_scripted::<T, $path>(&mut instance, &name, store)?;
+            }
+        };
+    }
     macro_rules! member {
         (Document, body, $kind:ident, $path:ty, $class:ident) => {
             listed!(Document, body, $kind, $path);
@@ -474,13 +563,13 @@ pub fn add_to_linker<T: 'static>(
             listed!(Element, querySelectorAll, $kind, $path);
         };
         (HTMLElement, focus, $kind:ident, $path:ty, $class:ident) => {
-            listed!(HTMLElement, focus, $kind, $path);
+            scripted!(HTMLElement, focus, $kind, $path);
         };
         (HTMLElement, blur, $kind:ident, $path:ty, $class:ident) => {
-            listed!(HTMLElement, blur, $kind, $path);
+            scripted!(HTMLElement, blur, $kind, $path);
         };
         (HTMLElement, click, $kind:ident, $path:ty, $class:ident) => {
-            listed!(HTMLElement, click, $kind, $path);
+            scripted!(HTMLElement, click, $kind, $path);
         };
         (HTMLElement, style, $kind:ident, $path:ty, $class:ident) => {
             listed!(HTMLElement, style, $kind, $path);
@@ -532,6 +621,39 @@ pub fn add_to_linker<T: 'static>(
         };
         (NodeList, item, $kind:ident, $path:ty, $class:ident) => {
             listed!(NodeList, item, $kind, $path);
+        };
+        (EventTarget, addEventListener, $kind:ident, $path:ty, $class:ident) => {
+            listed!(EventTarget, addEventListener, $kind, $path);
+        };
+        (EventTarget, removeEventListener, $kind:ident, $path:ty, $class:ident) => {
+            listed!(EventTarget, removeEventListener, $kind, $path);
+        };
+        (Event, r#type, $kind:ident, $path:ty, $class:ident) => {
+            listed!(Event, r#type, $kind, $path);
+        };
+        (Event, target, $kind:ident, $path:ty, $class:ident) => {
+            listed!(Event, target, $kind, $path);
+        };
+        (Event, currentTarget, $kind:ident, $path:ty, $class:ident) => {
+            listed!(Event, currentTarget, $kind, $path);
+        };
+        (Event, defaultPrevented, $kind:ident, $path:ty, $class:ident) => {
+            listed!(Event, defaultPrevented, $kind, $path);
+        };
+        (Event, preventDefault, $kind:ident, $path:ty, $class:ident) => {
+            listed!(Event, preventDefault, $kind, $path);
+        };
+        (Event, stopPropagation, $kind:ident, $path:ty, $class:ident) => {
+            listed!(Event, stopPropagation, $kind, $path);
+        };
+        (UIEvent, detail, $kind:ident, $path:ty, $class:ident) => {
+            listed!(UIEvent, detail, $kind, $path);
+        };
+        (MouseEvent, button, $kind:ident, $path:ty, $class:ident) => {
+            listed!(MouseEvent, button, $kind, $path);
+        };
+        (KeyboardEvent, key, $kind:ident, $path:ty, $class:ident) => {
+            listed!(KeyboardEvent, key, $kind, $path);
         };
         (Window, document, Getter, $path:ty, $class:ident) => {
             listed!(Window, document, Getter, $path);

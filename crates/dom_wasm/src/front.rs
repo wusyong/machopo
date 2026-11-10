@@ -130,6 +130,14 @@ pub(crate) trait WitArg: ArgType {
         wit: &Self::Wit,
         store: &'s StoreContextMut<'_, T>,
     ) -> wasmtime::Result<Self::Read<'s>>;
+
+    /// The argument read with nothing of the guest's memory borrowed, if
+    /// it can be (not a string): a member that calls script has the store
+    /// free to call the guest while it runs.
+    fn owned(wit: &Self::Wit) -> Option<Self::Read<'static>> {
+        let _ = wit;
+        None
+    }
 }
 
 /// What a read argument gives the front end: `None` if it is of another
@@ -157,6 +165,40 @@ pub(crate) trait ReadArg {
     /// A `boolean`, or an optional one's: none if it wasn't given.
     fn boolean(&self) -> Option<Option<bool>> {
         None
+    }
+    /// A callback: the guest's number for it.
+    fn callback(&self) -> Option<u32> {
+        None
+    }
+}
+
+/// A callback (a listener): the guest's own number for it, which its
+/// `handle-event` is called with. Read as its own type: a `u32` read is an
+/// object's handle.
+pub(crate) struct Callback(u32);
+
+impl ReadArg for Callback {
+    fn callback(&self) -> Option<u32> {
+        Some(self.0)
+    }
+}
+
+impl WitArg for Option<dom_api::interfaces::EventListener> {
+    type Wit = u32;
+    type Read<'s> = Callback;
+
+    fn read<T: 'static>(wit: &u32, _: &StoreContextMut<'_, T>) -> wasmtime::Result<Callback> {
+        Ok(Callback(*wit))
+    }
+}
+
+/// A listener's options: the boolean alone, `capture` (`wit::can_hold`).
+impl<D: dom_api::typed::Dictionary + 'static> WitArg for dom_api::typed::DictOrBool<D> {
+    type Wit = bool;
+    type Read<'s> = bool;
+
+    fn read<T: 'static>(wit: &bool, _: &StoreContextMut<'_, T>) -> wasmtime::Result<bool> {
+        Ok(*wit)
     }
 }
 
@@ -354,6 +396,10 @@ macro_rules! interfaces {
             fn read<T: 'static>(wit: &u32, _: &StoreContextMut<'_, T>) -> wasmtime::Result<u32> {
                 Ok(*wit)
             }
+
+            fn owned(wit: &u32) -> Option<u32> {
+                Some(*wit)
+            }
         }
 
         impl WitArg for Option<$interface> {
@@ -369,6 +415,10 @@ macro_rules! interfaces {
 
             fn read<T: 'static>(wit: &Option<u32>, _: &StoreContextMut<'_, T>) -> wasmtime::Result<Option<u32>> {
                 Ok(*wit)
+            }
+
+            fn owned(wit: &Option<u32>) -> Option<Option<u32>> {
+                Some(*wit)
             }
         }
 
@@ -496,6 +546,9 @@ pub(crate) trait WitArgs {
         rest: &Self::Rest,
         store: &'s StoreContextMut<'_, T>,
     ) -> wasmtime::Result<Self::Read<'s>>;
+    /// The arguments read with nothing of the guest's memory borrowed, if
+    /// each can be (`WitArg::owned`).
+    fn owned(rest: &Self::Rest) -> Option<Self::Read<'static>>;
 }
 
 /// The read arguments, by index: each a constant where the call asks, so
@@ -508,6 +561,7 @@ pub(crate) trait ReadArgs {
     fn node(&self, index: usize) -> Option<Option<u32>>;
     fn unsigned_long(&self, index: usize) -> Option<u32>;
     fn boolean(&self, index: usize) -> Option<Option<bool>>;
+    fn callback(&self, index: usize) -> Option<u32>;
 }
 
 macro_rules! wit_args {
@@ -530,6 +584,11 @@ macro_rules! wit_args {
             #[allow(unused_variables, clippy::unused_unit)]
             fn read<'s, T: 'static>(rest: &Self::Rest, store: &'s StoreContextMut<'_, T>) -> wasmtime::Result<Self::Read<'s>> {
                 Ok(($($t::read(&rest.$i, store)?,)*))
+            }
+
+            #[allow(unused_variables, clippy::unused_unit)]
+            fn owned(rest: &Self::Rest) -> Option<Self::Read<'static>> {
+                Some(($($t::owned(&rest.$i)?,)*))
             }
         }
 
@@ -565,6 +624,14 @@ macro_rules! wit_args {
             fn boolean(&self, index: usize) -> Option<Option<bool>> {
                 match index {
                     $($i => self.$i.boolean(),)*
+                    _ => None,
+                }
+            }
+
+            #[allow(unused_variables)]
+            fn callback(&self, index: usize) -> Option<u32> {
+                match index {
+                    $($i => self.$i.callback(),)*
                     _ => None,
                 }
             }
@@ -613,6 +680,10 @@ impl WitArgs for (dom_api::interfaces::FocusOptions,) {
 
     fn read<T: 'static>((): &(), _: &StoreContextMut<'_, T>) -> wasmtime::Result<()> {
         Ok(())
+    }
+
+    fn owned((): &()) -> Option<()> {
+        Some(())
     }
 }
 
@@ -782,6 +853,48 @@ where
     )
 }
 
+/// Registers member `M`, which calls script (it dispatches events as it
+/// runs: `focus()`, `click()`), as the function `name`: the guest's own
+/// listeners are called within it (`WasmFront::call_listener`), so its
+/// arguments borrow nothing of the guest's memory.
+pub(crate) fn add_scripted<T, M>(
+    instance: &mut LinkerInstance<'_, T>,
+    name: &str,
+    store: fn(&T) -> &WasmStore,
+) -> wasmtime::Result<()>
+where
+    T: 'static,
+    M: TypedMember,
+    M::Args: WitArgs,
+    M::Ret: WitRet,
+{
+    instance.func_wrap(
+        name,
+        move |mut cx: StoreContextMut<'_, T>, params: <M::Args as WitArgs>::Wit| {
+            let (this, rest) = <M::Args as WitArgs>::split(params);
+            let args = <M::Args as WitArgs>::owned(&rest)
+                .expect("a member that calls script takes no string");
+            // The guest's listener export, called on this store while the
+            // member runs: a sync call, on the stack of the guest's call.
+            let (key, handler) = {
+                let store = store(cx.data());
+                (store.key, store.handler())
+            };
+            let returns = {
+                let mut guest = |callback: u32, event: u32| -> wasmtime::Result<()> {
+                    match handler {
+                        Some(handler) => handler.call(&mut cx, (callback, event)),
+                        None => Ok(()),
+                    }
+                };
+                call_with::<M, _>(key, this, &rest, &args, Some(&mut guest))?
+            };
+            crate::collect_if_due(&mut cx)?;
+            Ok(returns)
+        },
+    )
+}
+
 /// One call of `M` from the guest.
 fn call<T: 'static, M>(
     cx: StoreContextMut<'_, T>,
@@ -794,17 +907,37 @@ where
     M::Ret: WitRet,
 {
     let key = store(cx.data()).key;
+    let (this, rest) = <M::Args as WitArgs>::split(params);
+    let args = <M::Args as WitArgs>::read(&rest, &cx)?;
+    call_with::<M, _>(key, this, &rest, &args, None)
+}
+
+/// The call, its arguments read: `this` and the handles checked, then the
+/// member's typed path. `guest` calls the guest's listener export, for a
+/// member that calls script.
+fn call_with<'g, M, A>(
+    key: crate::Key,
+    this: u32,
+    rest: &<M::Args as WitArgs>::Rest,
+    args: &A,
+    guest: Option<&'g mut (dyn FnMut(u32, u32) -> wasmtime::Result<()> + 'g)>,
+) -> wasmtime::Result<Returns<M>>
+where
+    M: TypedMember,
+    M::Args: WitArgs,
+    M::Ret: WitRet,
+    A: ReadArgs,
+{
     let number = key.number;
     STATE.with_borrow(|slot| {
         let state = slot.of(key).ok_or_else(crate::no_store)?;
-        let (this, rest) = <M::Args as WitArgs>::split(params);
         // `this`'s interface, as its handle was given: the member's, or a
         // descendant of it (an element's by its name), with no DOM.
         let of = {
             let tables = state.tables.borrow();
             let handles = tables.store(number).ok_or_else(crate::no_store)?;
             let of = handles.interface(this).ok_or_else(|| not_held(this))?;
-            <M::Args as WitArgs>::check(&rest, handles)?;
+            <M::Args as WitArgs>::check(rest, handles)?;
             of
         };
         if !dom_api::typed::is_interface(M::INTERFACE, of) {
@@ -814,18 +947,24 @@ where
                 dom_api::INTERFACES[M::INTERFACE].name
             )))),));
         }
-        let args = <M::Args as WitArgs>::read(&rest, &cx)?;
         let mut front = WasmFront {
             dom: state.dom(),
             layout: &state.layout,
             tables: &state.tables,
             store: number,
             this,
-            args: &args,
+            args,
             ret: Ret::None,
             error: None,
+            guest,
+            trap: None,
         };
         M::call(&mut front);
+        // A listener trapped: the trap goes on up, through the guest's
+        // call (its store takes no call after).
+        if let Some(trap) = front.trap {
+            return Err(trap);
+        }
         Ok((match front.error {
             Some(error) => Err(DomException::of(error)),
             None => Ok(<M::Ret as WitRet>::wit(front.ret)),
@@ -836,7 +975,7 @@ where
 /// wasm's side of one call: the DOM, the store's table, `this`'s handle,
 /// the read arguments, and what the call gave. Its own side in an
 /// operation (`OpFront`).
-struct WasmFront<'r, A> {
+struct WasmFront<'r, 'g, A> {
     dom: &'r RefCell<Dom>,
     /// The page's layout, if the DOM was lent with one.
     layout: &'r dom_api::LayoutCell,
@@ -846,18 +985,32 @@ struct WasmFront<'r, A> {
     args: &'r A,
     ret: Ret,
     error: Option<ApiError>,
+    /// The guest's listener export (its callback's number, the event's
+    /// handle), for a member that calls script: none for the others,
+    /// which dispatch nothing.
+    guest: Option<&'g mut (dyn FnMut(u32, u32) -> wasmtime::Result<()> + 'g)>,
+    /// What a listener trapped with: no listener of the store runs after.
+    trap: Option<wasmtime::Error>,
 }
 
-impl<'r, A> FrontTypes for WasmFront<'r, A> {
+impl<A: ReadArgs> WasmFront<'_, '_, A> {
+    /// The word of the callback the argument `callback` names.
+    fn callback_word(&self, callback: dom_api::typed::CallbackArg) -> u64 {
+        let number = self.args.callback(callback.0).expect("a callback argument");
+        crate::listener_word(self.store, number)
+    }
+}
+
+impl<'r, A> FrontTypes for WasmFront<'r, '_, A> {
     type Str = &'r str;
     type Node = u32;
     // No dictionary is plain: no member taking one is bound.
     type Dict = ();
 }
 
-impl<'r, A: ReadArgs> Front for WasmFront<'r, A> {
+impl<'r, 'g, A: ReadArgs> Front for WasmFront<'r, 'g, A> {
     type Op<'o>
-        = WasmFront<'r, A>
+        = WasmFront<'r, 'g, A>
     where
         Self: 'o;
 
@@ -912,15 +1065,67 @@ impl<'r, A: ReadArgs> Front for WasmFront<'r, A> {
             .is_none()
     }
 
+    /// A callback: the argument's place, which `store_callback` and
+    /// `same_callback` read its number at.
+    fn callback_arg(
+        &mut self,
+        index: usize,
+        _: &str,
+    ) -> Option<Option<dom_api::typed::CallbackArg>> {
+        Some(Some(dom_api::typed::CallbackArg(index)))
+    }
+
+    /// A listener's options are the boolean alone.
+    fn is_dictionary_like(&mut self, _: usize) -> bool {
+        false
+    }
+
     /// A dictionary the guest's function has no parameter for: its
     /// defaults.
     fn dict_arg(&mut self, _: usize, _: &str) -> Option<Option<()>> {
         Some(None)
     }
 
-    /// A listener of a wasm document is an event handler attribute's
-    /// (`onfocus=""`), which is JS: it doesn't run.
-    fn call_listener(&mut self, _: &elise::Persistent<dom::Event>, _: usize) {}
+    /// A listener of the event the member dispatched, called within the
+    /// guest's call: this store's own (its `handle-event`, with a handle
+    /// to the event the host takes back after). An event handler
+    /// attribute's (`onfocus=""`) is JS and doesn't run; another script's
+    /// listener isn't called here (the member's store alone is entered).
+    fn call_listener(&mut self, event: &elise::Persistent<dom::Event>, index: usize) {
+        if self.trap.is_some() {
+            return;
+        }
+        let Some(guest) = self.guest.as_mut() else {
+            return;
+        };
+        let store = self.store;
+        let (dom, tables) = (self.dom, self.tables);
+        let listener = dom.borrow_mut().mutate(|cx| {
+            let event = event.get(cx.gc);
+            let listener = cx.snapshot_at(event, index)?;
+            let word = cx.callback_edge(listener).embedder_word(cx.gc);
+            let (of, callback) = crate::listener_of(word)?;
+            (of == store).then(|| {
+                let handle = tables.borrow_mut().give(cx, store, event.into());
+                (callback, handle)
+            })
+        });
+        let Some((callback, handle)) = listener else {
+            return;
+        };
+        if let Err(trap) = guest(callback, handle) {
+            self.trap = Some(trap);
+        }
+        // The event's handle back, unless the guest let it go itself.
+        let mut tables = tables.borrow_mut();
+        if tables
+            .store(store)
+            .is_some_and(|handles| handles.interface(handle).is_some())
+        {
+            dom.borrow_mut()
+                .read(|cx| tables.release(cx, store, handle));
+        }
+    }
 
     fn nullable_string_arg(&mut self, index: usize) -> Option<Option<&'r str>> {
         let args: &'r A = self.args;
@@ -943,7 +1148,7 @@ impl<'r, A: ReadArgs> Front for WasmFront<'r, A> {
     }
 }
 
-impl<'r, A: ReadArgs> OpFront for WasmFront<'r, A> {
+impl<'r, A: ReadArgs> OpFront for WasmFront<'r, '_, A> {
     fn str_param<'a>(&mut self, string: &'a &'r str) -> &'a str {
         string
     }
@@ -959,6 +1164,27 @@ impl<'r, A: ReadArgs> OpFront for WasmFront<'r, A> {
             .expect("a store's table")
             .object(cx, self.this)
             .downcast()
+    }
+
+    /// A listener's callback as its edge's word: the store that gave it
+    /// (its number and one: 0 is no guest's, a handler attribute's) and
+    /// the guest's number for it.
+    fn same_callback(
+        &mut self,
+        cx: &ApiCx<'_, '_>,
+        edge: &elise::JsEdge,
+        callback: dom_api::typed::CallbackArg,
+    ) -> bool {
+        edge.embedder_word(cx.gc) == self.callback_word(callback)
+    }
+
+    fn store_callback(
+        &mut self,
+        cx: &ApiCx<'_, '_>,
+        edge: &elise::JsEdge,
+        callback: dom_api::typed::CallbackArg,
+    ) {
+        edge.set_embedder_word(cx.gc, self.callback_word(callback));
     }
 
     fn node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, node: &u32) -> NodeRef<'gc> {
