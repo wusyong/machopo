@@ -12,7 +12,7 @@
 | 1b WASI 0.3 的 linker：自己的時鐘，stdout 和 stderr 交給 sink（決定 7）；一輪的 poll（決定 9） | 完成 | 2026-11-10 |
 | 1c-1 engine 擁有的 DOM：`WasmDom::take`、`lend`（決定 10） | 完成 | 2026-11-10 |
 | 1c-2 `dom_wasm` 的 engine：`ScriptEngine`、`ScriptHost`、需要時才跑的 event loop、`start(document)`（決定 3、4、8、9） | 完成 | 2026-11-10 |
-| 1d renderer：prescan `<meta>`、選 engine、換頁時換 engine、載入 `application/wasm` 的 script（決定 2） | 還沒開始 | |
+| 1d renderer：prescan `<meta>`、選 engine、換頁時換 engine、載入 `application/wasm` 的 script（決定 2） | 完成 | 2026-11-10 |
 | 1e 靜態的 TodoMVC 的 guest、情境、renderer 的測試 | 還沒開始 | |
 | 2 節點以外的物件的 handle、放開凍結、TodoMVC 用到的成員 | 還沒開始 | |
 | 3 事件和 callback | 還沒開始 | |
@@ -80,3 +80,15 @@
 - 沒有測試守著的：engine 轉給 `dom_api` 的那些方法（輸入、focus、生命週期、元素的 task、動畫、WebDriver 的查詢），要 renderer 才走得到，記進 `docs/test-gaps.md`，1d、1e 的情境會走到。
 - `sanity.py boundary` 抓到的：第一版把 wasmtime 的 `Engine` 和 linker 放在 process 共用的 `static`（每個 renderer 共用）。改成每個 `WasmEngine` 自己的，第一個 script 時才建；改完重跑測試，mutation 的 spec 裡碰到那一段的三條重跑（其中一條的原文跟著改）、照樣抓到。
 - `sanity.py` 的 `deps`、`unsafe`、`tests`、`numerics`、`boundary`、`spans`、`docs` 通過。
+
+### 1d（2026-11-10，macOS，Apple Silicon）
+
+- renderer（`crates/renderer/src`）：`encoding.rs` 的 `declares_wasm_scripts`（用原本就有的 `prescan_metas`）；`render_thread/documents.rs` 在 commit 時照它選 engine，和頁面現在的不同種時 `replace_engine`（前一份文件 unload、agent 和 renderer 拿著的前一份 DOM 的東西放掉、`Frame` 拆開把文字的 context 和 widget 交給下一個 engine 的 frame）；wasm 文件的 parser 的 script 用 `dom_api::prepare_wasm_script` 準備，當成 deferred 的 script 下載（MIME 要是 `application/wasm`）、交給 `run_wasm_script`。`ScriptEngineFactory` 多 `wasm_engine`（`shell` 裝 `WasmEngine::boxed`）。
+- `dom_api`：`Prepared::Wasm`、`prepare_wasm_script`、`ScriptEngine::take_layout`（兩個 engine 都實作）。
+- `dom_wasm` 的 engine 補了兩件接上 renderer 才發現的事：
+  - **連結點了沒反應**：DOM 的工作要 host 導覽時經過 `ScriptHost::navigate`，預設什麼都不做；`V8Engine` 把它變成 `FrameRequest::Navigation`，wasm 的 host 沒有。補上，`take_frame_requests` 交出去。
+  - **等待的 guest 時間到了不會醒**：renderer 的 loop 照 `until_next_timer` 醒來，但跑的是 `run_due_tasks`，不是 `run_timers`。到期的 guest 的那一輪改在 `run_due_tasks` 裡跑（`run_timers` 也留著）。
+- 新的測試：情境 `tests/scenarios/wasm-document.txt`（頁面 `pages/wasm-hello.html`、`wasm-sleep.html`、`wasm-js.html`：wasm 文件跑 wasm、不跑 JS，guest 加的段落排版出來；點連結到 JS 文件、再點連結到 wasm 文件、再輸入網址回 JS 文件，各跑各的 script；等待的 guest 接著跑）；`shell` 的 `tests/it/wasm_documents.rs` 五個（跑了而且畫出來、MIME 不對和不存在的是 failed subresource 而且沒跑、沒宣告或不是 `text/html` 的文件不抓也不跑 wasm、wasm 文件不抓也不跑 JS）；`renderer` 的 `encoding` 一個單元測試。
+- 跑過：`cargo test -p renderer -p shell -p browser -p dom_api`（改完 renderer 之後、補測試之前）全部通過；之後 `cargo test -p dom_wasm`、`-p shell --test it wasm_documents`、`-p renderer --lib a_meta_declares` 和 `test.py scenarios wasm-document` 通過。
+- mutation test（`mutants-1d.toml`，13 條，各用最相關的測試）：13 條都抓到。跑完確認檔案都還原了。
+- 沒有測試守著的（記進 `docs/test-gaps.md`）：wasm 文件裡鍵盤、focus、表單這些輸入；DevTools 連著時的行為和換 engine；wasm script 的 `load`、`error` 事件。`docs/limitations.md` 的 wasm 文件那一條改寫成現在的樣子，舊的 wasm 實作留下的幾句拿掉。

@@ -123,11 +123,13 @@ fn a_script_that_waits_goes_on_when_its_time_comes() {
     // Not due yet: no turn.
     page.time.fetch_add(4_999_999, Ordering::Relaxed);
     assert_eq!(page.engine.until_next_timer(), Some(Duration::from_nanos(1)));
+    assert!(!page.engine.run_due_tasks());
     assert!(!page.engine.run_timers());
     assert_eq!(page.said(), ["before the wait"]);
     page.time.fetch_add(1, Ordering::Relaxed);
     assert_eq!(page.engine.until_next_timer(), Some(Duration::ZERO));
-    assert!(page.engine.run_timers());
+    // The host's loop runs what is due as the DOM's tasks.
+    assert!(page.engine.run_due_tasks());
     assert_eq!(page.said(), ["before the wait", "after the wait"]);
     assert_eq!(page.engine.until_next_timer(), None);
     assert!(!page.engine.run_timers());

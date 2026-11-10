@@ -84,6 +84,10 @@ struct Script {
 struct Host<'a> {
     dom: &'a mut Dom,
     layout: &'a LayoutCell,
+    /// The window's document's number, and what the DOM's work asks of the
+    /// host for its frame (`ScriptEngine::take_frame_requests`).
+    top: Option<NodeId>,
+    requests: &'a mut Vec<dom_api::FrameRequest>,
 }
 
 impl ScriptHost for Host<'_> {
@@ -98,6 +102,18 @@ impl ScriptHost for Host<'_> {
         let layout = self.layout;
         self.dom
             .mutate(|cx| f(&ApiCx::with_layout_cell(cx, layout)))
+    }
+
+    /// The window's document navigated, or is to (a link followed, a form
+    /// submitted, a fragment gone to): the host told.
+    fn navigate(&mut self, document: &NodeRoot, navigation: dom::FrameNavigation) {
+        let id = self.dom.read(|cx| cx.node_id(document.get(cx.gc)));
+        if self.top == Some(id) {
+            self.requests.push(dom_api::FrameRequest::Navigation {
+                frame: TOP,
+                navigation,
+            });
+        }
     }
 
     // A listener here is an event handler attribute's (`onclick=""`), which
@@ -122,8 +138,11 @@ impl ScriptHost for Host<'_> {
 
 /// wasmtime as the DOM's engine.
 pub struct WasmEngine {
-    /// The window's document, once there is one.
+    /// The window's document, once there is one, and its number.
     document: Option<NodeRoot>,
+    document_id: Option<NodeId>,
+    /// What the DOM's work asked of the host since it last took them.
+    requests: Vec<dom_api::FrameRequest>,
     /// The window's mouse state (a new one with each window).
     event_handler: dom_api::EventHandler,
     page_focused: bool,
@@ -166,6 +185,8 @@ impl WasmEngine {
         let dom = Some(wasm.take());
         Self {
             document: None,
+            document_id: None,
+            requests: Vec::new(),
             event_handler: dom_api::EventHandler::default(),
             page_focused: false,
             page_hidden: false,
@@ -196,6 +217,8 @@ impl WasmEngine {
         Host {
             dom: self.dom.as_mut().expect("the DOM, outside a guest's turn"),
             layout: &self.layout,
+            top: self.document_id,
+            requests: &mut self.requests,
         }
     }
 
@@ -363,6 +386,26 @@ impl WasmEngine {
             }
         });
     }
+
+    /// A turn of each store whose guest's wait is over; whether any ran.
+    fn run_due_guests(&mut self) -> bool {
+        let now = (self.clock)();
+        let mut ran = false;
+        // A turn may end a store (a trap): by its place in the set.
+        let due: Vec<usize> = self
+            .scripts
+            .iter()
+            .filter(|script| script.deadline.is_some_and(|deadline| deadline <= now))
+            .map(|script| script.index)
+            .collect();
+        for index in due {
+            if let Some(at) = self.scripts.iter().position(|script| script.index == index) {
+                self.turn(at, |_| Ok(()));
+                ran = true;
+            }
+        }
+        ran
+    }
 }
 
 impl Drop for WasmEngine {
@@ -412,6 +455,10 @@ impl ScriptEngine for WasmEngine {
         )
     }
 
+    fn take_layout(&mut self) -> Option<Box<dyn FrameLayout>> {
+        self.layout.take()
+    }
+
     fn top_frame(&self) -> FrameId {
         TOP
     }
@@ -449,15 +496,18 @@ impl ScriptEngine for WasmEngine {
             cx.set_page_hidden(window, page_hidden);
             // The parser's: loading until it is parsed.
             cx.set_ready_state(document, dom::DocumentReadyState::Loading);
-            cx.root(document)
+            (cx.root(document), cx.node_id(document))
         });
+        let (document, id) = document;
         self.document = Some(document.clone());
+        self.document_id = Some(id);
+        self.requests.clear();
         self.event_handler = dom_api::EventHandler::default();
         Some(document)
     }
 
     fn take_frame_requests(&mut self) -> Vec<dom_api::FrameRequest> {
-        Vec::new()
+        std::mem::take(&mut self.requests)
     }
 
     fn fetch_response(&mut self, _: u64, _: Result<dom_api::FetchedResponse, ()>) -> bool {
@@ -557,12 +607,19 @@ impl ScriptEngine for WasmEngine {
             layout,
             event_handler,
             document,
+            document_id,
+            requests,
             ..
         } = self;
         let (Some(dom), Some(document)) = (dom.as_mut(), document.as_ref()) else {
             return dom_api::CursorKeyword::Default;
         };
-        let cursor = event_handler.handle_mouse(&mut Host { dom, layout }, document, input);
+        let cursor = event_handler.handle_mouse(&mut Host {
+                dom,
+                layout,
+                top: *document_id,
+                requests,
+            }, document, input);
         self.perform_microtask_checkpoint();
         cursor
     }
@@ -573,10 +630,17 @@ impl ScriptEngine for WasmEngine {
             layout,
             event_handler,
             document,
+            document_id,
+            requests,
             ..
         } = self;
         let (dom, document) = (dom.as_mut()?, document.as_ref()?);
-        let cursor = event_handler.recompute_under_mouse(&mut Host { dom, layout }, document);
+        let cursor = event_handler.recompute_under_mouse(&mut Host {
+                dom,
+                layout,
+                top: *document_id,
+                requests,
+            }, document);
         self.perform_microtask_checkpoint();
         cursor
     }
@@ -587,12 +651,19 @@ impl ScriptEngine for WasmEngine {
             layout,
             event_handler,
             document,
+            document_id,
+            requests,
             ..
         } = self;
         let (Some(dom), Some(document)) = (dom.as_mut(), document.as_ref()) else {
             return true;
         };
-        let not_canceled = event_handler.handle_wheel(&mut Host { dom, layout }, document, input);
+        let not_canceled = event_handler.handle_wheel(&mut Host {
+                dom,
+                layout,
+                top: *document_id,
+                requests,
+            }, document, input);
         self.perform_microtask_checkpoint();
         not_canceled
     }
@@ -603,12 +674,19 @@ impl ScriptEngine for WasmEngine {
             layout,
             event_handler,
             document,
+            document_id,
+            requests,
             ..
         } = self;
         let (Some(dom), Some(document)) = (dom.as_mut(), document.as_ref()) else {
             return dom_api::KeyResult::Done;
         };
-        let result = event_handler.handle_key(&mut Host { dom, layout }, document, input);
+        let result = event_handler.handle_key(&mut Host {
+                dom,
+                layout,
+                top: *document_id,
+                requests,
+            }, document, input);
         self.perform_microtask_checkpoint();
         result
     }
@@ -911,32 +989,18 @@ impl ScriptEngine for WasmEngine {
         }
     }
 
-    /// A turn of each store whose guest's wait is over.
     fn run_timers(&mut self) -> bool {
-        let now = (self.clock)();
-        let mut ran = false;
-        // A turn may end a store (a trap): by its place in the set.
-        let due: Vec<usize> = self
-            .scripts
-            .iter()
-            .filter(|script| script.deadline.is_some_and(|deadline| deadline <= now))
-            .map(|script| script.index)
-            .collect();
-        for index in due {
-            if let Some(at) = self.scripts.iter().position(|script| script.index == index) {
-                self.turn(at, |_| Ok(()));
-                ran = true;
-            }
-        }
-        ran
+        self.run_due_guests()
     }
 
+    /// The guests whose waits are over (the host's loop wakes for them at
+    /// `until_next_timer`), then the window's own tasks that are due.
     fn run_due_tasks(&mut self) -> bool {
+        let mut ran = self.run_due_guests();
         let Some(window) = self.window() else {
-            return false;
+            return ran;
         };
         self.dom().read(|cx| cx.begin_task_pass());
-        let mut ran = false;
         loop {
             let next = self.dom().read(|cx| {
                 let now = cx.dom_now();

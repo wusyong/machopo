@@ -1,0 +1,12 @@
+<!doctype html>
+<html data-case="hello">
+<meta name="script" content="wasm">
+<title>A wasm document</title>
+<body>
+<h1 id="static">Parsed</h1>
+<p id="js">JS did not run</p>
+<p><a id="to-js" href="wasm-js.html">To a JS document</a></p>
+<!-- JS in a wasm document doesn't run. -->
+<script>document.getElementById("js").textContent = "JS ran";</script>
+<!-- The guest appends a paragraph to the root element. -->
+<script type="application/wasm" src="../../../crates/dom_wasm/tests/guests/page.wasm"></script>

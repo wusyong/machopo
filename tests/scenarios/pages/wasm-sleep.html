@@ -1,0 +1,10 @@
+<!doctype html>
+<html data-case="sleep">
+<meta name="script" content="wasm">
+<title>A wasm document that waits</title>
+<body>
+<p id="js">JS did not run</p>
+<p id="loaded">Loading</p>
+<script>document.getElementById("js").textContent = "JS ran";</script>
+<!-- The guest appends a paragraph, waits 5 ms, and appends another. -->
+<script type="application/wasm" src="../../../crates/dom_wasm/tests/guests/page.wasm"></script>

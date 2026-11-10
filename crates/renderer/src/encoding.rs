@@ -147,6 +147,23 @@ fn prescan(bytes: &[u8]) -> Option<&'static Encoding> {
     prescan_metas(bytes, meta_charset)
 }
 
+/// Whether a document declares its scripts wasm: a
+/// `<meta name="script" content="wasm">` in its first 1024 bytes, found as
+/// the encoding's `<meta>` is (the document's engine is chosen before it
+/// is parsed). The values ASCII case-insensitively.
+pub(crate) fn declares_wasm_scripts(body: &[u8]) -> bool {
+    prescan_metas(&body[..body.len().min(PRESCAN_BYTES)], |attributes| {
+        let value = |name: &[u8]| {
+            attributes
+                .iter()
+                .find(|(attribute, _)| attribute == name)
+                .map(|(_, value)| value.as_slice())
+        };
+        (value(b"name") == Some(b"script") && value(b"content") == Some(b"wasm")).then_some(())
+    })
+    .is_some()
+}
+
 /// The walk of HTML's prescan, for any `<meta>` looked for before parsing:
 /// skips comments and the attributes of other tags, and gives `found` each
 /// `<meta>`'s attributes in order (lowercased name and value, as HTML's
@@ -418,6 +435,36 @@ mod tests {
             "<a>\u{e9}</a>"
         );
         assert_eq!(decode_xml(None, b"<a>\xE9</a>"), "<a>\u{FFFD}</a>");
+    }
+
+    #[test]
+    fn a_meta_declares_wasm_scripts() {
+        assert!(declares_wasm_scripts(
+            b"<!DOCTYPE html><meta name=script content=wasm>"
+        ));
+        // The values in any case; the attributes in any order, among others.
+        assert!(declares_wasm_scripts(
+            b"<meta charset=utf-8><META id=x CONTENT='WASM' NAME=\"Script\">"
+        ));
+        // Another name, another content, one of the two.
+        assert!(!declares_wasm_scripts(b"<meta name=scripts content=wasm>"));
+        assert!(!declares_wasm_scripts(b"<meta name=script content=js>"));
+        assert!(!declares_wasm_scripts(b"<meta name=script>"));
+        assert!(!declares_wasm_scripts(b"<meta content=wasm>"));
+        assert!(!declares_wasm_scripts(b""));
+        // Not in a comment, nor in another tag's attribute.
+        assert!(!declares_wasm_scripts(
+            b"<!-- <meta name=script content=wasm> -->"
+        ));
+        assert!(!declares_wasm_scripts(
+            b"<p title='<meta name=script content=wasm>'>"
+        ));
+        // Past the first 1024 bytes it doesn't count.
+        let late = [&[b' '; 1024][..], b"<meta name=script content=wasm>"].concat();
+        assert!(!declares_wasm_scripts(&late));
+        let just = [&[b' '; 993][..], b"<meta name=script content=wasm>"].concat();
+        assert_eq!(just.len(), 1024);
+        assert!(declares_wasm_scripts(&just));
     }
 
     #[test]

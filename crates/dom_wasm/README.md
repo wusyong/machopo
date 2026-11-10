@@ -1,6 +1,6 @@
 # dom_wasm
 
-DOM（`dom`、`dom_api`）給 wasm guest 用，在 wasmtime 上：`machopo:dom` 的 WIT 和 host 函式，每個 Store 對節點的 handle，wasm 的 GC 物件跟節點共用的 heap，guest 的 WASI，和頁面的 engine（`WasmEngine`）。renderer 還沒有接上它（machopo 沒有 wasm 的文件），只有它自己的測試用。最接近的 Blink 是 `bindings/core/v8`（engine 那一側的 DOM interface），wasm 本身 Blink 沒有對應（Chrome 的 wasm 經過 JS 碰 DOM）。
+DOM（`dom`、`dom_api`）給 wasm guest 用，在 wasmtime 上：`machopo:dom` 的 WIT 和 host 函式，每個 Store 對節點的 handle，wasm 的 GC 物件跟節點共用的 heap，guest 的 WASI，和頁面的 engine（`WasmEngine`）：renderer 替宣告成 wasm 的文件（`<meta name="script" content="wasm">`）用它。最接近的 Blink 是 `bindings/core/v8`（engine 那一側的 DOM interface），wasm 本身 Blink 沒有對應（Chrome 的 wasm 經過 JS 碰 DOM）。
 
 不寫 `unsafe`（`#![forbid(unsafe_code)]`）。
 
@@ -25,14 +25,14 @@ set.with(index, |mut cx| run.call(&mut cx, args))?;  // 呼叫都經過 set 借�
 
 ## 頁面的 engine（`WasmEngine`）
 
-`dom_api::ScriptEngine` 的實作（`src/engine.rs`），wasm 文件用的；對應 `dom_js::V8Engine`。renderer 還沒有照文件選它，現在只有測試建它。
+`dom_api::ScriptEngine` 的實作（`src/engine.rs`），wasm 文件用的；對應 `dom_js::V8Engine`。renderer 照文件選它（`shell` 把 `WasmEngine::boxed` 裝成 `ScriptEngineFactory` 的 `wasm_engine`）。
 
 - **DOM 是它的**（上面的「engine 擁有的 DOM」）：`dom_mut()`、`dom_and_layout()` 直接給；跑 guest 的每一輪、建和丟 Store 時借進 thread-local。
 - **沒有 JS**：不建 isolate。`run_classic_script`、module、`execute_webdriver_script`、DevTools 的 inspector、observer、idle callback、`requestAnimationFrame` 的方法什麼都不做（WebDriver 的 script 回錯誤）。event handler 的屬性（`onclick=""`）是 JS，不執行。
 - **DOM 自己的工作照樣經過 `dom_api`**：輸入的預設動作（`handle_mouse`、`handle_key`、`handle_wheel`）、focus、文件生命週期的事件、元素的 task、CSS 的動畫、WebDriver 的查詢和輸入，都和 V8 那邊呼叫同樣的函式，host 是一個呼叫 script 時什麼都不做的 `ScriptHost`（guest 還不能註冊 listener）。microtask checkpoint 只有 DOM 自己的（圖片的更新、元素改變之後的步驟）。
-- **只有最上層的 frame**：`create_window` 對其他 frame 回 `None`，iframe 沒有子文件。
+- **只有最上層的 frame**：`create_window` 對其他 frame 回 `None`，iframe 沒有子文件。DOM 的工作要 host 做的事只轉導覽（連結、表單、fragment：`take_frame_requests` 的 `Navigation`）。
 - **一個 script 一個 Store**（`run_wasm_script`，bytes 是 component，world 是 `wit/script.wit` 的 `script`）：在呼叫的 thread 上同步編譯、建 Store、實例化、呼叫 `start(document)`（頁面的 document 在這個 Store 的 handle）。`start` 第一次等待時這個 script 對頁面就算執行完了，Store 留著。編不過、import 對不上、trap 都報到 console（`uncaught`，URL 是 script 的），trap 的 Store 丟掉；之後的 script 照常跑。新的 window（換頁）時前一份文件的 Store 全部丟掉。
-- **guest 的等待是 engine 的 timer**：`until_next_timer()` 是 DOM 自己的下一個 task 和各個 Store 最早的期限裡比較早的，`run_timers()` 讓期限到了的 Store 各跑一輪。期限在每一輪結束時從 Store 讀出來記著（時鐘在 Store 裡，只有一輪裡拿得到）。
+- **guest 的等待是 engine 的 timer**：`until_next_timer()` 是 DOM 自己的下一個 task 和各個 Store 最早的期限裡比較早的（renderer 的 loop 照它醒來），`run_due_tasks()`（和 `run_timers()`）讓期限到了的 Store 各跑一輪。期限在每一輪結束時從 Store 讀出來記著（時鐘在 Store 裡，只有一輪裡拿得到）。
 - **guest 印的東西**在每一輪結束時一行一行交給 console 的 sink（不是 `uncaught`）。
 - `WasmEngine::with_clock` 給測試用：guest 的時鐘讀測試給的時間。
 

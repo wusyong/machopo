@@ -146,6 +146,8 @@ enum Readiness {
 /// it runs (none: it failed to load, `error` is due).
 struct ParserScript {
     element: NodeRoot,
+    /// A wasm document's wasm script: its response is a component's bytes.
+    wasm: bool,
     /// A deferred module script: the DOM holds what its graph fetched
     /// (`Cx::pending_script_fetched`), and the engine runs it.
     module: bool,
@@ -165,6 +167,8 @@ enum ParserSource {
         base_url: Option<String>,
     },
     External(dom::LoadedScript),
+    /// A wasm script's component, and its URL after redirects.
+    Wasm { bytes: Vec<u8>, url: String },
 }
 
 /// A script the DOM queued (`Dom::take_script_fetches`) being fetched: its
@@ -449,6 +453,16 @@ impl RenderThread {
     ) {
         let _span = trace_event::info_event!("commit_navigation", %url);
         let document_id = self.new_document_id();
+        // The engine the document's scripts are of, known before it is
+        // parsed: a page whose engine is the other kind takes a new one.
+        let wasm = self.script_engine.wasm_engine.is_some()
+            && mime_type == "text/html"
+            && encoding::declares_wasm_scripts(body);
+        let replaced = (self.engine.is_some() && self.engine_is_wasm != wasm).then(|| {
+            let previous = self.document.as_ref().map(|next| next.url.clone());
+            (previous, self.replace_engine(wasm))
+        });
+        self.engine_is_wasm = wasm;
         if self.engine.is_none() {
             self.engine = Some(self.make_engine());
         }
@@ -491,11 +505,16 @@ impl RenderThread {
             self.page_agent.update(vec![main]);
         }
         // The document it shows unloaded first, its `unload` timed.
-        let previous = self.document.as_ref().map(|next| next.url.clone());
+        // (By the engine before, if the page took a new one.)
+        let (previous, unloaded) = match replaced {
+            Some(replaced) => replaced,
+            None => (
+                self.document.as_ref().map(|next| next.url.clone()),
+                engine.unload_document(top),
+            ),
+        };
         let clock = self.clock;
-        let unloaded = engine
-            .unload_document(top)
-            .map(|(start, end)| (clock.at(start), clock.at(end)));
+        let unloaded = unloaded.map(|(start, end)| (clock.at(start), clock.at(end)));
         let timing = crate::navigation_timing::with_unload(
             timing.clone(),
             unloaded,
@@ -582,6 +601,44 @@ impl RenderThread {
         // arrow until it moves, or the new one is laid out under it.
         self.set_cursor(CursorType::Pointer);
         self.advance_document(top);
+    }
+
+    /// The page's engine replaced by one of the other kind (`wasm`: the
+    /// wasm one), for a document whose scripts are of it: the document it
+    /// shows unloaded (its `unload` timed), everything the renderer holds
+    /// of its DOM let go before its heap, and the frame's text and widget
+    /// taken back for the next engine's frame.
+    fn replace_engine(&mut self, wasm: bool) -> Option<(std::time::Instant, std::time::Instant)> {
+        let mut engine = self.engine.take()?;
+        let top = engine.top_frame();
+        let unloaded = engine.unload_document(top);
+        self.dom_agent.dom_gone();
+        self.css_agent.dom_gone();
+        self.overlay_agent.dom_gone();
+        self.document = None;
+        self.children = ChildFrames::default();
+        // What was asked for its documents: a response still to come is
+        // no one's (the next DOM's nodes are numbered from the start).
+        self.images.clear();
+        self.fetches.clear();
+        self.script_fetches.clear();
+        self.css_refetches.clear();
+        self.popup = None;
+        self.popup_closed_by_press = None;
+        self.under_mouse_pre_paints = None;
+        self.intersections_computed = None;
+        if let Some(layout) = engine.take_layout() {
+            let layout: Box<dyn std::any::Any> = layout;
+            if let Ok(frame) = layout.downcast::<Frame>() {
+                let (text, widget) = frame.into_thread_parts();
+                self.text = text;
+                self.widget = Some(widget);
+            }
+        }
+        drop(engine);
+        self.engine_is_wasm = wasm;
+        self.engine = Some(self.make_engine());
+        unloaded
     }
 
     /// The document loading in `frame` (the top-level one's or a child's).
@@ -1261,6 +1318,7 @@ impl RenderThread {
                             if let Some(next) = self.doc_mut(frame) {
                                 next.blocking_script = Some(ParserScript {
                                     element: script,
+                                    wasm: false,
                                     module: false,
                                     request_id: None,
                                     charset: None,
@@ -1273,6 +1331,15 @@ impl RenderThread {
                         }
                         Prepared::Defer(request) => {
                             self.fetch_parser_script(frame, script, &request, true)
+                        }
+                        Prepared::Wasm(request) => {
+                            self.fetch_parser_script(frame, script, &request, true);
+                            if let Some(script) = self
+                                .doc_mut(frame)
+                                .and_then(|next| next.deferred_scripts.back_mut())
+                            {
+                                script.wasm = true;
+                            }
                         }
                         Prepared::Module(start) => {
                             self.start_parser_module(frame, script, start, line)
@@ -1307,6 +1374,7 @@ impl RenderThread {
         };
         let script = ParserScript {
             element,
+            wasm: false,
             module: false,
             request_id: Some(request_id),
             charset: request.charset.clone(),
@@ -1339,6 +1407,7 @@ impl RenderThread {
         if deferred && let Some(next) = self.doc_mut(frame) {
             next.deferred_scripts.push_back(ParserScript {
                 element,
+                wasm: false,
                 module: true,
                 request_id: None,
                 charset: None,
@@ -1480,6 +1549,18 @@ impl RenderThread {
                     },
                 );
             }
+            Some(ParserSource::Wasm { bytes, url }) => {
+                engine.run_wasm_script(
+                    frame,
+                    &dom_api::WasmScript {
+                        bytes: &bytes,
+                        url: &url,
+                    },
+                );
+                engine.fire_event(&script.element, dom::names::event::LOAD);
+                self.send_harness_results();
+                self.request_main_frame();
+            }
             Some(ParserSource::External(loaded)) => {
                 self.run_script(
                     frame,
@@ -1508,6 +1589,9 @@ impl RenderThread {
         let Some(document) = self.doc(frame).map(|next| next.document.clone()) else {
             return Prepared::Nothing;
         };
+        // A wasm document's scripts are wasm (its top-level frame's: it
+        // has no other).
+        let wasm = self.engine_is_wasm;
         let Some(engine) = &mut self.engine else {
             return Prepared::Nothing;
         };
@@ -1516,7 +1600,11 @@ impl RenderThread {
             if cx.node_id(cx.document_of(script)) != cx.node_id(document.get(cx.gc)) {
                 return Prepared::Nothing;
             }
-            dom_api::prepare_script(cx, script)
+            if wasm {
+                dom_api::prepare_wasm_script(cx, script)
+            } else {
+                dom_api::prepare_script(cx, script)
+            }
         })
     }
 
@@ -3615,11 +3703,16 @@ impl RenderThread {
                     None => continue,
                 },
             };
-            let loaded = script_loaded(result, script.charset.as_deref(), encoding);
+            let loaded = if script.wasm {
+                wasm_loaded(result).map(|(bytes, url)| ParserSource::Wasm { bytes, url })
+            } else {
+                script_loaded(result, script.charset.as_deref(), encoding)
+                    .map(ParserSource::External)
+            };
             if loaded.is_none() {
                 next.failed.push(failed_url(result, asked));
             }
-            script.ready = Some(loaded.map(ParserSource::External));
+            script.ready = Some(loaded);
             if blocking {
                 self.advance_document(frame);
             } else {
@@ -3960,6 +4053,18 @@ impl RenderThread {
         }
         self.finish_load(frame);
     }
+}
+
+/// A wasm script's response: none for a failed load, a status that isn't
+/// ok, or a MIME type that isn't `application/wasm` (as
+/// `WebAssembly.compileStreaming` asks); else its bytes and its URL after
+/// redirects.
+fn wasm_loaded(result: &LoadResult) -> Option<(Vec<u8>, String)> {
+    let response = result.as_ref().ok()?;
+    if !(200..300).contains(&response.status) || response.mime_type != "application/wasm" {
+        return None;
+    }
+    Some((response.body.to_vec(), response.url.clone()))
 }
 
 /// A classic script's response as HTML's "fetch a classic script" takes

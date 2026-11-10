@@ -1,0 +1,32 @@
+# A document that declares its scripts wasm (`<meta name="script"
+# content="wasm">`) runs its wasm scripts and no JS: the guest's `start`
+# gets the page's document and appends to it, and what it appended is laid
+# out and drawn. The page takes another engine as it goes between a wasm
+# document and a JS one (a link clicked, the address typed): each runs its
+# own kind of script only. A guest that waits goes on when its time comes.
+window size=800x600
+navigate pages/wasm-hello.html
+wait-loaded
+wait-text #static "Parsed"
+wait-text html>p "hello from wasm"
+wait-text #js "JS did not run"
+screenshot wasm
+
+# To a JS document, by a link: its JS runs, the wasm script doesn't.
+click #to-js
+wait-text #js "JS ran"
+wait-text #wasm "No wasm ran, loaded"
+
+# And to a wasm document again: the guest waits 5 ms between its two
+# paragraphs.
+click #to-wasm
+wait-text html>p "before the wait"
+wait-text html>p+p "after the wait"
+wait-text #js "JS did not run"
+screenshot waited
+
+# And back, the address typed.
+navigate pages/wasm-js.html
+wait-loaded
+wait-text #js "JS ran"
+wait-text #wasm "No wasm ran, loaded"

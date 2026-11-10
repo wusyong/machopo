@@ -54,6 +54,7 @@ mod style_sheets;
 mod trace;
 mod transitions;
 mod web_animations;
+mod wasm_documents;
 mod webdriver;
 mod wheel;
 mod windowless;

@@ -187,7 +187,13 @@ impl RenderThread {
     /// while script is paused or busy, and attached to the browser's
     /// sessions, its frames named as DevTools names them.
     pub(super) fn make_engine(&self) -> Box<dyn ScriptEngine> {
-        let mut engine = (self.script_engine.engine)(EngineSettings {
+        // The wasm one for a page whose document declared its scripts wasm.
+        let make = self
+            .script_engine
+            .wasm_engine
+            .filter(|_| self.engine_is_wasm)
+            .unwrap_or(self.script_engine.engine);
+        let mut engine = make(EngineSettings {
             web_tests: self.web_tests,
         });
         // `fetch()` and blob URLs at the call, on the thread's handles.

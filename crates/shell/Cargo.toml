@@ -40,6 +40,7 @@ browser.workspace = true
 ipc.workspace = true
 # Picks the renderer's script engine.
 dom_js.workspace = true
+dom_wasm.workspace = true
 # V8's trace events, beside the spans (`trace`).
 html.workspace = true
 viz.workspace = true

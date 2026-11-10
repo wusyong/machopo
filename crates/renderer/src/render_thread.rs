@@ -106,6 +106,11 @@ pub struct RendererFlags {
 #[derive(Clone, Copy)]
 pub struct ScriptEngineFactory {
     pub engine: fn(dom_api::EngineSettings) -> Box<dyn dom_api::ScriptEngine>,
+    /// The engine of a document that declares its scripts wasm
+    /// (`<meta name="script" content="wasm">`), such as
+    /// `dom_wasm::WasmEngine`; with none, such a document is as any other
+    /// (its wasm scripts don't run).
+    pub wasm_engine: Option<fn(dom_api::EngineSettings) -> Box<dyn dom_api::ScriptEngine>>,
 }
 
 /// Spawns the renderer's threads: the compositor thread (`Compositor`,
@@ -337,6 +342,9 @@ struct RenderThread {
     /// The DOM's engine, made at its first document, or at DevTools'
     /// first command for its inspector (`make_engine`).
     engine: Option<Box<dyn dom_api::ScriptEngine>>,
+    /// Whether `engine` is the wasm one (the page's document declared its
+    /// scripts wasm): a document of the other kind takes another engine.
+    engine_is_wasm: bool,
     /// The images the DOM's list of available images is fetching, by
     /// request: the renderer's, not a document's, as the list is (Blink's
     /// memory cache); with the document that asked first, whose network
@@ -455,6 +463,7 @@ impl RenderThread {
             overlay_agent,
             scheduler,
             engine: None,
+            engine_is_wasm: false,
             images: std::collections::HashMap::new(),
             fetches: std::collections::HashMap::new(),
             script_fetches: std::collections::HashMap::new(),

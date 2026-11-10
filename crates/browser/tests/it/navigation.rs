@@ -102,6 +102,7 @@ fn tab_with_viz_colors(
         },
         browser::ScriptEngineFactory {
             engine: dom_js::V8Engine::boxed,
+            wasm_engine: None,
         },
         viz_tx,
         gpu,

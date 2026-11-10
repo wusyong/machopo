@@ -1,0 +1,103 @@
+# Mutation test of stage 1d: the renderer runs wasm documents (the
+# declaration's prescan, the engine chosen and replaced, wasm scripts
+# prepared, fetched and run; the wasm engine's navigation requests and its
+# guests' turns in the host's loop):
+# python3 scripts/test.py mutate rfcs/0093-wasm-documents/mutants-1d.toml
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "wasm_documents::"]
+timeout = 600
+
+[[mutant]]
+name = "any meta with content=wasm declares it"
+file = "crates/renderer/src/encoding.rs"
+from = '''(value(b"name") == Some(b"script") && value(b"content") == Some(b"wasm")).then_some(())'''
+to = '''(value(b"content") == Some(b"wasm")).then_some(())'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "a_meta_declares"]
+
+[[mutant]]
+name = "a meta named script declares it, whatever its content"
+file = "crates/renderer/src/encoding.rs"
+from = '''(value(b"name") == Some(b"script") && value(b"content") == Some(b"wasm")).then_some(())'''
+to = '''(value(b"name") == Some(b"script")).then_some(())'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "a_meta_declares"]
+
+[[mutant]]
+name = "the declaration is looked for in the whole body"
+file = "crates/renderer/src/encoding.rs"
+from = '''    prescan_metas(&body[..body.len().min(PRESCAN_BYTES)], |attributes| {
+        let value = |name: &[u8]| {'''
+to = '''    prescan_metas(body, |attributes| {
+        let value = |name: &[u8]| {'''
+test = ["cargo", "test", "-q", "-p", "renderer", "--lib", "a_meta_declares"]
+
+[[mutant]]
+name = "a document that isn't text/html may declare it"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            && mime_type == "text/html"
+            && encoding::declares_wasm_scripts(body);'''
+to = '''            && encoding::declares_wasm_scripts(body);'''
+
+[[mutant]]
+name = "a wasm document's scripts are prepared as JS"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''            if wasm {
+                dom_api::prepare_wasm_script(cx, script)'''
+to = '''            if false {
+                dom_api::prepare_wasm_script(cx, script)'''
+
+[[mutant]]
+name = "a wasm script's MIME type isn't checked"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''    if !(200..300).contains(&response.status) || response.mime_type != "application/wasm" {'''
+to = '''    if !(200..300).contains(&response.status) {'''
+
+[[mutant]]
+name = "a wasm document prepares scripts of any type as wasm"
+file = "crates/dom_api/src/script.rs"
+from = '''        is_wasm
+            && cx.is_connected(script)'''
+to = '''        cx.is_connected(script)'''
+
+[[mutant]]
+name = "the page keeps its engine for a document of the other kind"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        let replaced = (self.engine.is_some() && self.engine_is_wasm != wasm).then(|| {'''
+to = '''        let replaced = (false && self.engine_is_wasm != wasm).then(|| {'''
+test = ["python3", "scripts/test.py", "scenarios", "wasm-document"]
+
+[[mutant]]
+name = "the engine made is the wasm one whenever there is one"
+file = "crates/renderer/src/render_thread/devtools.rs"
+from = '''            .filter(|_| self.engine_is_wasm)'''
+to = ''''''
+test = ["python3", "scripts/test.py", "scenarios", "wasm-document"]
+
+[[mutant]]
+name = "the document before stays held as the engine goes"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''        self.overlay_agent.dom_gone();
+        self.document = None;'''
+to = '''        self.overlay_agent.dom_gone();'''
+test = ["python3", "scripts/test.py", "scenarios", "wasm-document"]
+
+[[mutant]]
+name = "the frame's widget isn't taken back"
+file = "crates/renderer/src/render_thread/documents.rs"
+from = '''                self.text = text;
+                self.widget = Some(widget);'''
+to = '''                self.text = text;
+                drop(widget);'''
+test = ["python3", "scripts/test.py", "scenarios", "wasm-document"]
+
+[[mutant]]
+name = "a wasm document's navigation isn't asked of the host"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''        if self.top == Some(id) {'''
+to = '''        if false {'''
+test = ["python3", "scripts/test.py", "scenarios", "wasm-document"]
+
+[[mutant]]
+name = "the host's loop doesn't run the due guests"
+file = "crates/dom_wasm/src/engine.rs"
+from = '''        let mut ran = self.run_due_guests();'''
+to = '''        let mut ran = false;'''
+test = ["python3", "scripts/test.py", "scenarios", "wasm-document"]

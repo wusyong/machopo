@@ -375,6 +375,13 @@ impl ScriptEngine for V8Engine {
         (&mut state.dom, state.layout.get_mut().as_deref_mut())
     }
 
+    fn take_layout(&mut self) -> Option<Box<dyn dom_api::FrameLayout>> {
+        bindings::isolate_state_mut::<State>(self.data.isolate())
+            .expect("the engine's DOM")
+            .layout
+            .take()
+    }
+
     fn top_frame(&self) -> dom_api::FrameId {
         crate::frames::TOP
     }

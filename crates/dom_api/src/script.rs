@@ -45,6 +45,10 @@ pub enum Prepared {
     /// A module script, queued in the DOM (`Cx::queue_module_script`):
     /// its graph for the engine to fetch (`ScriptHost::start_module_graph`).
     Module(ModuleStart),
+    /// A wasm document's parser's wasm script (`prepare_wasm_script`): a
+    /// component to fetch, run after parsing in document order, as a
+    /// deferred script is.
+    Wasm(ScriptRequest),
 }
 
 /// A module script's graph to fetch: its pending script's number (whose
@@ -86,6 +90,60 @@ pub fn prepare_script<'gc>(cx: &Cx<'_, 'gc>, script: NodeRef<'gc>) -> Prepared {
     let prepared = prepare_with(cx, script, &mut flags);
     cx.set_script_flags(script, flags);
     prepared
+}
+
+/// "Prepare the script element" in a wasm document, for a script the
+/// parser inserted: only `type="application/wasm"` with a `src` runs (a
+/// component, fetched by the host and run after parsing, in order, as a
+/// module script without `async` is); JS, and wasm with no `src`, don't.
+/// An `error` event is queued for a `src` that is empty or doesn't parse.
+pub fn prepare_wasm_script<'gc>(cx: &Cx<'_, 'gc>, script: NodeRef<'gc>) -> Prepared {
+    let mut flags = cx.script_flags(script);
+    if flags.already_started {
+        return Prepared::Nothing;
+    }
+    let attr = |name| {
+        cx.attribute_value_by_id(script, name)
+            .map(|value| value.borrow().to_str().into_owned())
+    };
+    let is_wasm = attr(names::local::TYPE).is_some_and(|kind| {
+        kind.trim_matches(|c: char| c.is_ascii_whitespace())
+            .eq_ignore_ascii_case("application/wasm")
+    });
+    let document = cx.document_of(script);
+    let Some(src) = attr(names::local::SRC).filter(|_| {
+        is_wasm
+            && cx.is_connected(script)
+            && cx.window_of(document).is_some()
+            && !cx.is_discarded(document)
+    }) else {
+        // As a script of a type that isn't run: the parser's flag goes.
+        flags.parser_inserted = false;
+        cx.set_script_flags(script, flags);
+        return Prepared::Nothing;
+    };
+    flags.already_started = true;
+    cx.set_script_flags(script, flags);
+    let src = src.trim_matches(|c: char| c.is_ascii_whitespace());
+    let url = (!src.is_empty())
+        .then(|| cx.resolve_url(document, src))
+        .flatten();
+    let Some(url) = url else {
+        cx.queue_element_task(script, names::event::ERROR);
+        return Prepared::Nothing;
+    };
+    let cors = attr(names::local::CROSSORIGIN).map(|value| {
+        if value.eq_ignore_ascii_case("use-credentials") {
+            ScriptCors::UseCredentials
+        } else {
+            ScriptCors::Anonymous
+        }
+    });
+    Prepared::Wasm(ScriptRequest {
+        url: url.into(),
+        cors,
+        charset: None,
+    })
 }
 
 /// The steps of `prepare_script` past "already started", on `flags`.

@@ -2079,6 +2079,12 @@ impl Frame {
         }
     }
 
+    /// The thread's text and widget back, as the page takes another engine
+    /// (another DOM): the view, of the DOM that goes, and the token go.
+    pub(crate) fn into_thread_parts(self) -> (TextContext, crate::frame_widget::FrameWidget) {
+        (self.text, self.widget)
+    }
+
     /// The view the queries are of (`FrameLayout::shows`).
     fn selected(&self) -> &FrameView {
         self.view.view_of(self.selected).unwrap_or(&self.view)

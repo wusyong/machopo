@@ -110,6 +110,10 @@ pub trait ScriptEngine: ParserHost {
     /// of the engine's calls runs meanwhile): what the host's frame needs.
     fn dom_and_layout(&mut self) -> (&mut Dom, Option<&mut dyn FrameLayout>);
 
+    /// Takes the layout back (`set_layout`'s), as the page changes
+    /// engines: what it holds of the host's goes to the next one's.
+    fn take_layout(&mut self) -> Option<Box<dyn FrameLayout>>;
+
     /// The top-level browsing context's number.
     fn top_frame(&self) -> crate::FrameId;
 

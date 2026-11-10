@@ -1,0 +1,16 @@
+<!doctype html>
+<html data-case="hello">
+<title>A JS document</title>
+<body>
+<p id="js">JS did not run</p>
+<p id="wasm">No wasm ran</p>
+<p><a id="to-wasm" href="wasm-sleep.html">To a wasm document</a></p>
+<script>document.getElementById("js").textContent = "JS ran";</script>
+<!-- A wasm script in a JS document doesn't run. -->
+<script type="application/wasm" src="../../../crates/dom_wasm/tests/guests/page.wasm"></script>
+<script>
+  addEventListener("load", () => {
+    document.getElementById("wasm").textContent =
+      document.querySelector("html > p") ? "wasm ran" : "No wasm ran, loaded";
+  });
+</script>
