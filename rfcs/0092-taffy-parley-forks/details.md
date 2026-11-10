@@ -12,7 +12,7 @@
 | --- | --- | --- | --- | --- | --- |
 | float 旁邊的盒子不進 taffy 的快取 | `compute_box`（`lib.rs`） | 有：旁邊有 float、或把 float 放進共用的 BFC 的盒子每次都重排 | taffy 的快取只用 `LayoutInput` 當 key | 快取的 key 包含 exclusion space | 搬進 taffy 的 fork：key 加上 float 的狀態；寫上游的草稿 |
 | 行內的 float 等行確定才放，排不下就用 `revert_to` 重試 | `break_beside_floats`（`text.rs`） | 有：每行可能斷兩三次 | taffy 的 `BlockContext` 不能複製，放進去的 float 拿不出來 | line breaker 用 exclusion space 的副本試排 | 搬進 taffy 的 fork：`BlockContext` 可以撤回（上游 #1303 已經能讀回放好的 float）；寫上游的草稿 |
-| 一段一段走 `find_content_slot`，自己找一段空間的底 | `float_bands`（`lib.rs`） | 少 | `ContentSlot.height` 永遠是無限大 | | 跟上 taffy 的 main（#1394 算出 slot 的高度） |
+| 一段一段走 `find_content_slot`，自己找一段空間的底 | `float_bands`（`lib.rs`） | 少 | `ContentSlot.height` 不是 segment 的底：v0.15.0 永遠是無限大，上游的 main（#1394）只算到被更窄的 segment 縮小的地方，不告訴你哪裡變寬 | | 留著（成本少）；做 float 的那一段再決定要不要在 fork 加露出 segment 範圍的 API |
 | 做 fragment 時在最後的寬度再斷一次行 | `inline_fragments`（`lib.rs`） | 少到有：taffy 最後量的是別的寬度時多斷一次 | parley 只存最後一次的斷行 | `InlineNode` 的 layout 結果照 constraint space 快取 | 第 2 段量；在 machopo 多存一份斷行的結果 |
 | 字型家族的清單每個 span 重建，每個名稱重新解析 | `text_style`（`text.rs`）、`font_stack`（`font_families.rs`） | 有：Linux 上清單加上別名和 metric-compatible 的字型，每個名稱一次 fontique 的 `NameKey::from_str` | machopo 照 Chrome 展開別名；parley 每次照名稱找 family | 照 `FontDescription` 快取 `FontFallbackList` | machopo 照 `font-family` 的值快取；看上游 #943（fontconfig 的 metric-compatible 別名）、#796（字型查詢的快取） |
 | flex 和 grid 的 shrink-to-fit 多量 min/max-content | `fit_content_width`（`lib.rs`） | 少：通常在 taffy 的快取裡 | taffy 的演算法不會照可用的空間縮小 | 每種盒子都照 min/max size 取 shrink-to-fit | 留著；看上游 #1277、#1297 |

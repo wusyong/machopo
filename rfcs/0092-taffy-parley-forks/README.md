@@ -96,7 +96,7 @@ machopo 這邊只處理一種 workaround：繞在函式庫外面、因此有實�
 1. **taffy fork 的基礎設施**：`wusyong/taffy` 的 `machopo` 分支，起點是 v0.15.0（和現在用的一樣），`third_party.toml`、`Cargo.toml` 的 path 依賴、`README.machopo.md`；patch 檔的放法和 `ci.py third-party` 的一致性檢查（第 3 條）；`CLAUDE.md`、根目錄的 `README.md`、`docs/architecture.md` 的第三方的選型跟著改。行為不變。
 2. **計數**：加上「計數」那一節的計數，量出各個 workaround 實際的量，決定第 5、6 段的順序和範圍。
 3. **重寫 parley 的 fork**：舊的頂端打 tag；rebase 到上游最新的 main；拿掉上游已經有的（`hanging_advance`）；把相關的 commit 合在一起（`details.md` 的「parley fork 的重寫」）；commit 帶上 fork 自己的測試；匯出 patch；machopo 拿掉上游已經不需要的 workaround（`text-indent` 的 `indented()`）。可能分成 3a（rebase 和整理）、3b（fork 自己的測試和上游的草稿）。
-4. **taffy 跟上上游的 main**：rebase 到 main，處理 API 的變化（例如 `calc()` 的 handle、`ScrollableOverflow`），查 WPT 的變化，拿掉不再需要的 workaround（`float_bands` 自己找一段空間的底），刪掉修好的限制。分成 4a（rebase、編得過所需的最小配合、預期結果和限制）和 4b（用 slot 的高度改寫 `float_bands`）。
+4. **taffy 跟上上游的 main**：rebase 到 main，處理 API 的變化（例如 `calc()` 的 handle、`ScrollableOverflow`），查 WPT 的變化，刪掉修好的限制。原本分成 4a（rebase、編得過所需的最小配合、預期結果和限制）和 4b（用 slot 的高度改寫 `float_bands`）；4b 取消（已決定的事項第 37 條），`float_bands` 留著。
 5. **字型家族的清單和名稱解析**：第 2 段量到最多的（每頁都有）。做法看第 3 段之後上游的 #943、#796 的狀態決定（「待決定」）。
 6. **float 和 taffy 的快取，再來是做 fragment 時多斷的那一次行**：6a 在 taffy 的 fork 裡把 float 的狀態加進快取的 key（同時寫上游的草稿），連同 column flexbox 的 intrinsic 寬度；6b 在 machopo 裡拿掉做 fragment 時多斷的那一次行。`BlockContext` 可以撤回不排進來（第 20 條）。
 7. **上游的草稿**：parley 和 taffy 剩下的 patch，各寫一份 PR 或 issue 的草稿（本地，給人審核）。可以和第 3 到 6 段穿插著做。
@@ -180,6 +180,7 @@ machopo 這邊只處理一種 workaround：繞在函式庫外面、因此有實�
 34. **第 4 段分成 4a、4b**（2026-11-10）：4a 只 rebase 加上編得過所需的最小配合（`find_content_slot` 的高度傳 0），結果的變化全部歸因於上游；4b 用 `ContentSlot::height` 改寫 `float_bands`。Chromium roll 第三方的相依和配合它的改動也是分開的 CL。不選一次做完：WPT 有變化時分不出是上游還是 machopo 的改寫造成的。
 35. **上游的變化讓測試退步時先查原因，照大小處理**（2026-11-10）：小而明確的在 fork 修成一個帶測試、可以送上游的 commit（每一個先列給人看），草稿留到第 7 段；大的更新預期結果、記進 `docs/limitations.md`，草稿寫成 issue。不選一律只記限制：退步留到上游修好。不選退回早一點的上游 commit：同時失去修正。
 36. **第 4 段只拿掉 `float_bands` 自己找底**（2026-11-10）：#1303 的 `FloatMark`（行內的 float 不必 `revert_to`）和 float 旁邊的盒子進快取留到 6a；`last_baseline`（#1110）、`aspect-ratio`（#1347）等上游。`rfcs/0043-floats-text/taffy-float-root-inset-report.md` 要回報的問題上游已經修好（#1384），不用送。
+37. **4b 取消，`float_bands` 留著不改**（2026-11-10，改掉第 34、36 條裡 4b 的部分）：上游的 `ContentSlot::height`（#1394）是這個寬度往下到被更窄的 segment 縮小為止的距離，不是 segment 的底：它不告訴你哪裡變寬，後面沒有更窄的 segment 時仍是無限大。`FloatBands::room` 要每個 band 的頂端和下一個 band 的頂端（包括變寬的地方，下一行才知道可以用更寬的空間），所以一段一段走 `find_content_slot`、最後用 `cleared_threshold(Clear::Both)`（O(1)）找最低的 float 的底，這兩件事都拿不掉；這個 workaround 的成本本來就少。不選現在在 fork 加露出 segment 範圍的 API（Blink 的 exclusion space 給的 layout opportunity 就有完整的範圍）：fork 多一個要送上游的 commit，而 6a 本來就要改 taffy 的 float，到那一段再列成要決定的事。不選每行直接問 `find_content_slot(top, line_height)`：要重做斷行和 `FloatBands` 的介面，而且仍然不知道哪裡變寬。
 
 ## 待決定
 

@@ -12,8 +12,8 @@
 | 2 計數 | 完成 | 2026-11-10 |
 | 3a 重寫 parley 的 fork：合成分組、rebase 到上游的 main、machopo 配合 | 完成（fork 的頂端 `11771f1c`，tag `machopo-2026-11-10-3a`；舊的頂端的 tag `machopo-2026-11-10`） | 2026-11-10 |
 | 3b parley 的 fork 自己的測試、上游的草稿、拿掉 `text-indent` 的 workaround、optical sizing 由 machopo 做 | 做完，等審核：fork 的頂端 `b4941e39`（`machopo` 分支）和兩個 tag 已經 push | |
-| 4a taffy 的 fork rebase 到上游的 main、machopo 配合 API、預期結果和限制 | 做完，等審核：fork 的頂端 `05e64bd4` 只在本地（舊的頂端有本地的 tag `machopo-2026-11-10`），`third_party.toml` 釘本地的 commit；審核後才 push tag 和 `machopo` 分支 | |
-| 4b 用 slot 的高度改寫 `float_bands` | 還沒開始 | |
+| 4a taffy 的 fork rebase 到上游的 main、machopo 配合 API、預期結果和限制 | 做完：fork 的頂端 `05e64bd4` 和舊的頂端的 tag `machopo-2026-11-10` 都還只在本地，`third_party.toml` 釘本地的 commit；push fork 之後才能 push machopo | 2026-11-10 |
+| 4b 用 slot 的高度改寫 `float_bands` | 取消：slot 的高度取代不了它（下面的「第 4b 段」） | 2026-11-10 |
 | 5 字型家族的清單和名稱解析 | 還沒開始 | |
 | 6 float 和 taffy 的快取（6a）、做 fragment 時的斷行（6b） | 還沒開始 | |
 | 7 上游的草稿 | 還沒開始 | |
@@ -100,10 +100,15 @@
     - 「讀不懂的表當成不碰空白」：缺口，沒有壞掉的表的測試字型（記在 `docs/test-gaps.md`）。
 - **跑過的檢查**：fork 的 `cargo test -p parley -p parley_engine -p parley_tests -p fontique`（11、191、37、252 個通過、1 個 ignored）、clippy（只有上游 manifest 的警告）、`cargo fmt --all -- --check`（只有 Windows checkout 的換行警告）；machopo 的 `cargo test -p layout`（25、432：少的是搬走的測試）、`cargo test -p shell`（70、11、563）；reftest 的 12 個目錄 104 個全部符合預期；WPT 的 `css/css-text`、`css/css-text-decor`、`css/CSS2/linebox`、`css/CSS2/normal-flow`、`css/css-fonts`、`css/css-overflow/line-clamp`、`css/css-sizing`、`css/css-display`、`css/css-pseudo` 共 14,151 個檢查，全部符合預期（沒有預期結果要改）；`python3 scripts/ci.py third-party`；`python3 scripts/sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。階段（3a 和 3b）最後：`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`（55 個 test binary，3727 個通過、1 個 ignored）。
 
+**第 4b 段**（2026-11-10）：取消，沒有改程式。
+
+- **查到的事**：上游的 `find_content_slot` 回傳的 `ContentSlot::height` 是這個寬度往下到被更窄的 segment 縮小為止的距離。它不是 segment 的底（變寬的地方不算），後面沒有更窄的 segment 時是無限大。`float_bands` 要的是每一段的頂端和寬度，包括變寬的地方（`FloatBands::room` 用下一個 band 的頂端當這一個的底），最後一段還要最低的 float 的底，所以一段一段用 `after` 走、最後問 `cleared_threshold(Clear::Both)` 都拿不掉。
+- **階段最後的檢查**（第 4 段到 4a 為止）：`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`（55 個 binary、3727 個通過）。
+
 **第 4a 段**（2026-11-10，Windows 11）：
 
 - **rebase**：fork 的 `machopo` 分支從 v0.15.0（`eb645069`）搬到上游 main 的頂端 `4aca4f49`（2026-11-06，中間 40 個 commit），只有 `README.machopo.md` 的 commit，沒有衝突；README 的起點和版本跟著改。舊的頂端 `bfa9eda2` 有 tag `machopo-2026-11-10`。fork 沒有 `upstream` 這個 remote，照 README 用 URL fetch。
-- **machopo 的配合**（`crates/layout/src/lib.rs`，4 處）：`find_content_slot` 多的 `height` 傳 0（和原本一樣只看頂端那一段；4b 才用它）；`apply_content_box_inset` 的 `[f32; 2]` 換成 `FloatInsets`；`place_floated_box` 多的 `id` 傳盒子的 node id（現在沒有人讀，6a 的 `floats_placed_since` 會用）。`ScrollableOverflow`（#1372）不用改：machopo 只把 taffy 給的原樣傳回去，scrollable overflow 是自己從 fragment 算的。`calc()` 的 handle（#1400）還沒合併。
+- **machopo 的配合**（`crates/layout/src/lib.rs`，4 處）：`find_content_slot` 多的 `height` 傳 0（和原本一樣只看頂端那一段）；`apply_content_box_inset` 的 `[f32; 2]` 換成 `FloatInsets`；`place_floated_box` 多的 `id` 傳盒子的 node id（現在沒有人讀，6a 的 `floats_placed_since` 會用）。`ScrollableOverflow`（#1372）不用改：machopo 只把 taffy 給的原樣傳回去，scrollable overflow 是自己從 fragment 算的。`calc()` 的 handle（#1400）還沒合併。
 - **WPT**：27 個目錄共 27,129 個檢查，沒有退步；18 個原本預期失敗的測試通過，`.ini` 刪掉（括號裡的上游 PR 是照它的說明對上的，沒有逐一 bisect）：
   - `css/CSS2/floats/floats-wrap-top-below-bfc-00{1,2,3}{l,r}.xht`（6 個）：自己是 BFC 的盒子照整個高度避開 float（#1385、#1386）。
   - `css/CSS2/floats-clear/float-replaced-height-001.xht`、`floats-101.xht`：BFC 的根在 float 下面加上自己的 padding 和 border（#1384）。
