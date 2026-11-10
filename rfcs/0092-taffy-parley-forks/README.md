@@ -99,7 +99,7 @@ machopo 這邊只處理一種 workaround：繞在函式庫外面、因此有實�
 4. **taffy 跟上上游的 main**：rebase 到 main，處理 API 的變化（例如 `calc()` 的 handle、`ScrollableOverflow`），查 WPT 的變化，刪掉修好的限制。原本分成 4a（rebase、編得過所需的最小配合、預期結果和限制）和 4b（用 slot 的高度改寫 `float_bands`）；4b 取消（已決定的事項第 37 條），`float_bands` 留著。
 5. **字型家族的清單和名稱解析**：第 2 段量到最多的（每頁都有）。machopo 照 `font-family` 的值快取查到的 family，parley 的 fork 接受 family 的 id（已決定的事項第 38 到 43 條）。分成 5a（fork 的 API，machopo 只動 pin）和 5b（machopo 的快取、改用新的 API、計數改成數真的照名稱查的次數）。
 6. **column flexbox 的 intrinsic 寬度，再來是做 fragment 時多斷的那一次行**：6a 把 column flexbox 的 intrinsic 寬度搬進 taffy 的 fork（同時寫上游的草稿）；6b 在 machopo 裡拿掉做 fragment 時多斷的那一次行。原本 6a 還要把 float 的狀態加進 taffy 的快取的 key，量過之後不做（已決定的事項第 44 條）。`BlockContext` 可以撤回不排進來（第 20 條）。
-7. **上游的草稿**：parley 和 taffy 剩下的 patch，各寫一份 PR 或 issue 的草稿（本地，給人審核）。可以和第 3 到 6 段穿插著做。
+7. **上游的草稿**：parley 和 taffy 剩下的 patch，各寫一份 PR 或 issue 的草稿（本地，給人審核）。可以和第 3 到 6 段穿插著做。後來不寫剩下的草稿，只列出每個 commit 的狀態和下一步（已決定的事項第 52 條）。
 
 ## 缺點
 
@@ -195,6 +195,10 @@ machopo 這邊只處理一種 workaround：繞在函式庫外面、因此有實�
 49. **寬度由內容決定的盒子，行在 fit-content 的寬度斷，不在給它的空間斷**（2026-11-10）：盒子沒有被給寬度（taffy 沒有傳已知的寬度、style 的寬度是 `auto` 或 `fit-content`（button 的 `auto` 也是它）、沒有 `aspect-ratio`）時，它最後的寬度是量出來的 fit-content 寬度，行就在那裡斷；原本只有帶 float 的行內內容這樣做，其他的在空間的寬度斷、做 fragment 時再在盒子的寬度斷一次（量到的 101 次）。帶 float 的行內內容原本不管盒子有沒有被給寬度都在 fit-content 的寬度斷，現在也照這條規則：被給了寬度的盒子裡，行和 float 直接在那個寬度排，不先在 fit-content 的寬度排一次。高度也跟著對了：shrink-to-fit 的盒子裡有百分比寬度的 inline-block 時，原本高度是在空間的寬度量的、行是在盒子的寬度斷的，兩者不一致。不選「不是只問寬度時一律在 fit-content 的寬度斷」（原本確認的做法）：taffy 的 leaf 在 `PerformLayout` 時把盒子被給的寬度當成可用的空間傳進來、已知的寬度是空的，這時空間就是盒子最後的寬度；它比 min-content 窄或比 max-content 寬時 fit-content 的寬度和它不同，一律用 fit-content 會改變排版（`layout` 的測試會失敗：行數、list marker 的位置、斷行的次數）。
 50. **斷行的結果被清掉之後的再斷（量到 8 次）不另外處理**（2026-11-10）：atomic inline 的大小變了、或量 min 和 max content 時 `broken` 被清掉，做 fragment 時再斷一次是必要的。計數留著。
 51. **不多存一份斷行的結果**（2026-11-10，改掉第 6 段原本的計畫）：原本打算在 machopo 多存一份最後的寬度的斷行結果。分類之後，量到的再斷行沒有一次是「taffy 在最後的 layout 之後又量了別的寬度」，多存一份省不到。這種情況之後出現時（問高度的量測發生在最後的 layout 之後）仍然會再斷一次，`lines_broken_for_fragments` 數得到。不選照 constraint space 快取多份（Blink 的 `InlineNode`）：parley 的 `Layout` 一份就是整段的行和對齊，多存要複製它。
+
+第 7 段（2026-11-10 確認）：
+
+52. **剩下的草稿不先寫，只列每個 commit 的狀態和送之前的下一步**（2026-11-10，改掉第 31、35 條裡「留到第 7 段」的部分）：`upstream/parley/README.md` 的表一個 commit 一列。已經有的草稿（parley 三份、taffy 一份）留著；parley 剩下的八個 commit 等真的要送某一個時再寫那一份。fork 的 commit 訊息和 `README.machopo.md` 已經照可以送上游的樣子寫（每個 commit 一件事、帶測試、寫明理由），再寫一份草稿多半是重複；上游規定 PR 的說明要送出的人自己寫，草稿只是材料；要先開 issue 的四個（邊緣、第一個字型、共用 shaped text、shaping 的快取），做法要等上游的回應才定得下來；草稿對照的是寫的時候的上游，放久了要重寫。不選八份都寫：成本最高，上面的理由。不選只寫要判斷的那幾份（issue 的四份、和 #934、#827 的比較）：比較現在做了，它們合併時還要再做一次。代價：#934、#827 和 fork 的 tab stop、軟連字號差多少現在沒有查，它們合併、fork rebase 遇到時才知道衝突多大。
 
 
 ## 待決定

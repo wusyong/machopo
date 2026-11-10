@@ -19,7 +19,7 @@
 | 6a float 旁邊的盒子進快取 | 不做：量過會命中的上限和時間（下面的「第 6a 段：float 的快取」） | 2026-11-10 |
 | 6a column flexbox 的 intrinsic 寬度搬進 taffy 的 fork | 做完（fork 的 commit 在本地，還沒 push） | 2026-11-10 |
 | 6b 做 fragment 時的斷行 | 做完，等審核 | |
-| 7 上游的草稿 | 還沒開始 | |
+| 7 上游的草稿 | 不寫剩下的草稿：`upstream/parley/README.md` 列了每個 commit 的狀態和送之前的下一步，等審核 | |
 
 ## 驗收
 
