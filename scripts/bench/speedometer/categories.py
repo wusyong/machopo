@@ -97,11 +97,11 @@ def is_v8(frame: str) -> bool:
 
 PASS_RUST = re.compile(
     r"^(<?(core|alloc|std|hashbrown|rustc_hash|indexmap|smallvec|arrayvec)::|<\[|<str>|<&|<\(|"
-    r"<(u8|u16|u32|u64|usize|i32|i64|f32|f64|char|bool)\b|<[A-Z] as|<?gc::vector::)")
+    r"<(u8|u16|u32|u64|usize|i32|i64|f32|f64|char|bool)\b|<[A-Z] as|<?elise::vector::)")
 CRATES = {
     "dom": "DOM", "dom_api": "DOM",
     "dom_js": "bindings", "bindings": "bindings", "v8": "bindings",
-    "gc": "GC",
+    "elise": "GC",
     "style": "style", "style_resolver": "style", "css": "style", "selectors": "style", "computed_style": "style",
     "cssparser": "style", "animation": "style",
     "parley": "text", "parley_engine": "text", "harfrust": "text", "fontique": "text", "skrifa": "text",

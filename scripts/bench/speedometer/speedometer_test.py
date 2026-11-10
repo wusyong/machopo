@@ -2084,7 +2084,7 @@ class CategoryTests(unittest.TestCase):
         self.assertEqual(self.kind("main", "parley::shape::shape_text::<u32>"), "text")
         self.assertEqual(self.kind("main", "<layout::BoxTree>::lay_out_box"), "box layout")
         self.assertEqual(self.kind("main", "html::fast_path::scan"), "HTML parse")
-        self.assertEqual(self.kind("main", "<gc::heap::young::Scavenging>::evacuate"), "GC")
+        self.assertEqual(self.kind("main", "<elise::heap::young::Scavenging>::evacuate"), "GC")
         self.assertEqual(self.kind("main", "<renderer::frame_view::FrameView>::paint"), "other")
         # rusty_v8's shell of a callback, `dom_js`'s member call inlined in it.
         self.assertEqual(self.kind("Builtins_CallApiCallbackGeneric",
@@ -2100,8 +2100,8 @@ class CategoryTests(unittest.TestCase):
                          "HTML parse")
         # `gc`'s allocation is GC's, as cppgc's is in Chrome; its containers
         # are their caller's.
-        self.assertEqual(self.kind("main", "<dom::Cx>::node", "<gc::heap::Inner>::allocate"), "GC")
-        self.assertEqual(self.kind("main", "<dom::Cx>::node", "<gc::vector::HeapVector<u32>>::push"), "DOM")
+        self.assertEqual(self.kind("main", "<dom::Cx>::node", "<elise::heap::Inner>::allocate"), "GC")
+        self.assertEqual(self.kind("main", "<dom::Cx>::node", "<elise::vector::HeapVector<u32>>::push"), "DOM")
 
     def test_v8s_own_frames_look_outward(self):
         # JS outside them: JS (its builtins, its runtime).

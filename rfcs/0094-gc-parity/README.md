@@ -1,12 +1,12 @@
 # RFC 0094：GC 和 Chrome 持平：量測（`bench.py blink-perf --gc`、V8 的記憶體 counter、elise 的 worker 的事件）和評估
 
 - 開始日期：2026-11-10
-- 狀態：🚧 已排程：2026-11-10
+- 狀態：✅ 已完成：2026-11-10（三段：量測的工具、elise 的 worker 的事件、評估；評估的結論是不做優化的段，決定 11。驗收和做過的檢查見 `progress.md`）
 - 細節：`details.md`
 
 ## 摘要
 
-`bench.py blink-perf --gc` 讓每一頁在兩個瀏覽器裡各錄幾次 trace，從 runner 計時的區間讀 renderer 的 GC：main thread 上的總時間，分成 V8 的和 DOM heap 的（elise 對 Oilpan）、依種類分、停頓，其他 thread 的時間；兩邊的 trace 都錄 V8 的 `v8.memory`，報告多寫 full GC 和 scavenge 的次數、marking 開始的原因和超過上限多少、full GC 之後嵌入端的大小。elise 的 worker 照 cppgc 發 trace 事件，machopo 在背景的 DOM heap 時間才量得到。最後一段用這些工具評估各種頁和 Speedometer 的 GC 那一部分離 Chrome 多遠、每個候選的優化能省多少，再決定要不要做。
+`bench.py blink-perf --gc` 讓每一頁在兩個瀏覽器裡各錄幾次 trace，從 runner 計時的區間讀 renderer 的 GC：main thread 上的總時間，分成 V8 的和 DOM heap 的（elise 對 Oilpan）、依種類分、停頓，其他 thread 的時間；兩邊的 trace 都錄 V8 的 `v8.memory`，報告多寫 full GC 和 scavenge 的次數、marking 開始的原因和超過上限多少、full GC 之後嵌入端的大小。elise 的 worker 照 cppgc 發 trace 事件，machopo 在背景的 DOM heap 時間才量得到。不開 trace 時 elise 的每一段 phase 只讀一個旗標。最後一段用這些工具評估了各種頁和 Speedometer 的 GC 那一部分離 Chrome 多遠：回收那一側已經持平或更好（DOM heap 的總 CPU 是 Oilpan 的 2% 到 36%，Speedometer 上回收差 2 ms），剩下的差距大半是配置，GC 全部追平對整體只有 1.384 → 1.373，所以不做優化的段（決定 11），候選留在「之後的可能」。
 
 ## 動機
 
@@ -71,26 +71,21 @@ python3 scripts/bench.py blink-perf --gc --pages bindings/gc-forest.html,binding
 
 ### 評估（第 3 段）
 
-用第 1、2 段的工具和 Speedometer 的取樣（決定 5）重量一次，回答：
+用第 1、2 段的工具和 Speedometer 的取樣量一次（決定 10），只量測、不改程式。結果（數字和拆法在 `progress.md` 的「量測和評估」）：
 
-- 背景的 DOM heap（第 2 段量到的）加上 main thread 的，總 CPU 和 Oilpan 比是贏是輸。
-- 每個候選能省多少（blink-perf 的頁、Speedometer 的 GC 那一類）、成本多少（改 fork 的 C++、重編 V8、記憶體的高峰）。
-- Speedometer 的 GC 那一類照 Chrome 的歸類對齊之後（cppgc 的配置算在 DOM）還差多少；GC 追平時整體的比值，和其他類別（`docs/performance-gaps.md` 的「各類」）比。
+- **DOM heap 的總 CPU（main thread 加其他 thread）elise 比 Oilpan 少**：blink-perf 的五頁是 Oilpan 的 2% 到 36%；main thread 上的 GC 六頁都比 Chrome 少，最長的停頓不比 Chrome 長，記憶體的高峰比較低。
+- **V8 那一側在短的 `gc-*` 頁多 19 到 77 ms**：Chrome 在 V8 的 loading 狀態（`Isolate::SetIsLoading`，最多 7 秒），超過上限一個 margin 才開始 marking，full GC 比較少次；超過 7 秒的頁上兩邊一樣。
+- **Speedometer 取樣的 GC 那一類 27.8 對 16.1 ms**：其中 9.7 ms 是 DOM heap 的配置（Chrome 的 cppgc 配置 inline、算在 DOM），回收那一側 18.1 對 16.1 ms；V8 的 scavenge 和 handle 多的約 4 ms 裡，重設被丟掉的 wrapper 的 root 的路約 1.6 ms、字串快取的 weak global 約 0.5 ms。GC 全部追平時整體的比值 1.384 → 1.373（文字、style、JS 各自追平時是 1.266、1.276、1.295）。
+- `create-element` 上 machopo 沒有 scavenge 不是問題：full GC 的節奏和 Chrome 一樣，新生代還沒滿就被 full GC 清掉。
 
-結果寫進 `progress.md`，結論和建議給使用者決定：做（在這份 RFC 加一段，或另寫 RFC）、延後，或不做。2026-11-10 看到的候選和粗估（數字見 `details.md` 的「2026-11-10 的粗估」）：
-
-- **告訴 V8 頁面正在載入**（`Isolate::SetIsLoading`）：Chrome 在 loading 期間讓 heap 超過上限一個 margin 才開始 marking，三個 `gc-*` 頁的 full GC 次數 machopo 是 Chrome 的 1.1 到 2.4 倍；連帶的是 full GC 搬新生代、清 traced handle 的工作落在 full GC。要先查 Chromium 什麼時候開始和結束 loading；rusty_v8 的 fork 要接出它（C++，要重編 V8）。代價是載入期間記憶體的高峰變高。
-- **空的 `CppHeap` 的開銷**：main thread 上 5 到 81 ms（V8 每一步照樣推它、收尾時照樣走它的 phase）。elise 經過 fork 的 `v8::machopo` 接上 V8 的 marking，`CppHeap` 只是 V8 讓嵌入端跟著它 GC 的唯一 API；要拿掉它要改 fork 的 C++。
-- **配置的快路**：Speedometer 取樣的 GC 那一類多的主要是配置（`alloc_at`、`HeapVector` 的 `Inner::allocate`），Chrome 的 cppgc 配置 inline、算在呼叫它的 DOM 裡，比較時要照同樣的歸類。
-- **atomic 停頓裡清 handle 的部分**（`V8.GC_MC_CLEAR_JOIN_JOB`）：每次 full GC machopo 也比較長（0.8 對 0.5 到 0.6 ms），要分出是 traced handle 的數量（wrapper 的數量、什麼時候變成可丟的）還是次數的連帶。
-- `create-element` 上 machopo 沒有 scavenge（Chrome 308 ms）：原因沒有查。
+結論：不做優化的段（決定 11）；候選和各自的收益、成本在「之後的可能」。
 
 ### 測試
 
 - `blink_perf_test.py`：區間（mark 的 thread、measure 的結束、不是 User Timing 的同名 slice）；main thread 和 process 的過濾、DOM heap 的時間（巢狀的、切在區間上的、`CppGC.*` 的那一欄）、拿掉 `V8.GCHandleGCRequest`；每次 machopo 先、Chrome 用 GC 的 category；報告的格子（中位數、停頓的分佈、1 ms 以上的）；counter 和 annotation 的讀法（自己寫的 protobuf）；`--gc` 和 `--against`。真的瀏覽器：fake 的頁（`fake/gc/`）建、丟一大串元素，兩邊在區間裡都有 scavenge。
 - elise：worker 的 span 有開始有結束、在 worker 上（elise 的測試的 `Platform` 記下 `trace_begin`）。
 - mutation test 照 `docs/testing.md`。量測：六頁量一次，結果寫進 `progress.md`。
-- 第 3 段只量測、不改程式：`--gc` 量那幾頁、`speedometer --sample` 量 GC 那一類，結果寫進 `progress.md`。決定要做的優化，測試在那時候的設計裡定。
+- 第 3 段只量測：`--gc` 量那幾頁、`speedometer --sample` 量 GC 那一類。量的時候發現 `categories.py` 還照 GC 的 crate 的舊名字分類（elise 的樣本掉進「other」），修好、`speedometer_test.py` 的斷言跟著改。
 
 ### 分階段
 
@@ -98,7 +93,7 @@ python3 scripts/bench.py blink-perf --gc --pages bindings/gc-forest.html,binding
 | --- | --- |
 | 1 | `bench.py blink-perf --gc`，兩邊錄 `v8.memory`，報告的 V8 的排程 |
 | 2 | elise 的 worker 的事件，`--gc` 讀它們 |
-| 3 | 評估：重量、估每個候選能省多少和成本，決定要不要做優化 |
+| 3 | 評估：重量、估每個候選能省多少和成本；結論是不做優化的段 |
 
 ## 缺點
 
@@ -147,13 +142,20 @@ python3 scripts/bench.py blink-perf --gc --pages bindings/gc-forest.html,binding
 
 10. **評估用的頁和指標**：blink-perf 的六頁（`insert-before` 可疑，只列出、不下結論）和 Speedometer 的 20 個 suite；指標是 main thread 上的 GC（V8 的和 DOM heap 的）、GC 的總 CPU（加上其他 thread）、最長的停頓和 1 ms 以上的個數、記憶體的高峰（嵌入端的大小）。Speedometer 用 `speedometer --sample` 的 GC 那一類，machopo 的配置函式另外列出來，和 Chrome 的歸類（cppgc 的配置 inline、算在 DOM）對齊。第 1、2 段先 merge 回 `main`。
 
+評估之後（2026-11-10，使用者照建議）：
+
+11. **不做優化的段，RFC 到評估為止**：回收那一側已經和 Chrome 持平或更好，剩下的差距大半是配置（屬於 DOM 的資料怎麼放）；全部的候選加起來在 Speedometer 上最多省 5 到 9 ms（整體 961.5 ms 的不到 1%），其中三項要改 fork 的 C++、重編 V8，文字、style、JS 各自的差距是 63 到 93 ms。候選留在「之後的可能」和 `docs/performance-gaps.md`。
+
 ## 待決定
 
-評估之後：
-
-5. 做不做、做哪幾項（「評估（第 3 段）」的候選）。
+無。
 
 ## 之後的可能
 
-- Speedometer 每個 suite 的 GC 拆解（`speedometer --trace` 照同樣的切法）。
-- GC 以外的差距：照 `docs/performance-gaps.md` 的方向。
+評估過、沒有做的（Speedometer 的數字是每個 iteration、20 個 suite 合計能省的估計）：
+
+- **配置的快路、`HeapVector` 的 store**（2 到 4 ms；`Inner::allocate` 3.2、`alloc_at::<AttributeInit>` 2.0、`<CharacterDataInit>` 1.7）：改 elise 和 `dom`，和 DOM、bindings 的優化一起看（屬性的資料怎麼放）。
+- **重設被丟掉的 wrapper 的 root 的路**（約 1.5 ms）：wrapper 的邊放在固定的位置、在 fork 的 C++ 裡比對和重設，不經過 Rust；要重編 V8。字串快取的 weak `v8::Global`（約 0.5 ms）。
+- **照 Blink 告訴 V8 頁面正在載入**（`Isolate::SetIsLoading`；Speedometer 最多約 1 ms，短的 `gc-*` 頁 10 到 60 ms）：要先查 Chromium 什麼時候開始和結束 loading；fork 要接出它（C++，要重編 V8）；載入期間記憶體的高峰變高。不為效能做，要照 Blink 的行為時再做。
+- **拿掉空的 `CppHeap` 的開銷**（Speedometer 量不到，blink-perf 4 到 65 ms）：要改 fork 的 C++。
+- Speedometer 每個 suite 從 trace 拆 GC（`speedometer --trace` 照 `--gc` 的切法）。
