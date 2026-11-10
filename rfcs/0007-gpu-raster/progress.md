@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | 0 圖片的解碼和讀尺寸、JPEG 的編碼換成純 Rust 的 crate（Skia 照舊畫） | 完成，還沒 merge | 2026-11-10 |
 | 1a 原型：常用的 op；量文字多的 tile、存截圖（第一個檢查點） | 完成：檢查點通過（不 merge） | 2026-11-10 |
-| 1b 原型：全部的 op 和組出來的功能；整套 reftest（第二個檢查點） | 進行中 | |
+| 1b 原型：全部的 op 和組出來的功能；整套 reftest（第二個檢查點） | 完成：檢查點通過（不 merge） | 2026-11-10 |
 | 2 playback 換成 vello_cpu、ink bounds 改用 skrifa、拿掉 skia-safe、加上列出缺的功能的文件 | 還沒開始 | |
 | 3 改進（文字的 gamma 和對比、漸層的 dithering、fork 裡的 `ColorMatrix`；可能不需要） | 還沒開始 | |
 
@@ -259,3 +259,13 @@
   - reftest 34 個：最大差 1 的 31 個、最大差 3 的 1 個、最大差 31 的 2 個（清單在上面第 1b 步的那一段，少了已經通過的 radial gradient）。
   - 另外 `svg-scale-016.html` 從預期失敗變成通過；其餘結果有變的是上面那兩個過時的預期結果和每一輪不一樣的計時類測試。
 - `cargo test --workspace --no-fail-fast`：3743 個通過，7 個失敗：4 個直接看 Skia 的快取（不適用）、1 個 mipmap（還沒做）、2 個差 1（`renderer` 的 `a_flush_sends_the_recording_to_the_thread_and_forgets_it`、`browser` 的 `navigation::links::canvas_2d`）。
+
+**差 1 的那一群的原因，和 glyph 位置的對齊**（2026-11-10）：
+
+- 把幾個測試不同的 pixel 列出來（`quotes-032.html` 1 個、`table-anonymous-objects-079.xht` 22 個、`float-nowrap-2.html` 3 個、`counter-001.html` 4 個、`text-transform-full-size-kana-005.html` 306 個）：都在 glyph 的邊緣，每個 channel 差 1（194 對 195 這種）。測試頁和參考頁的同一段文字位置差了浮點數的誤差；Skia 的 glyph 快取把位置對齊（沿著行每四分之一個 pixel、垂直方向整數 pixel），誤差被吸收；Vello 位置在哪就畫在哪。
+- 原型加了 `MACHOPO_VELLO_SNAP=<n>`：matrix 只有縮放和位移時，交給 Vello 之前把每個 glyph 的原點對齊到 device pixel 的 n 分之一（沿著行）和整數（垂直）。結果有變的那 50 個測試重跑，不通過的 reftest：不對齊 34 個，n = 4 是 8 個，n = 64 是 11 個。
+- n = 4 跑整套（`MACHOPO_RASTER=vello MACHOPO_VELLO_SNAP=4`）：`test.py reftest` 195 個都和預期一樣，`test.py scenarios` 78 次 0 個失敗，`test.py wpt` Vello 造成的不通過剩 13 個測試：
+  - canvas 5 個（和之前一樣）。
+  - reftest 8 個：`css-tables/tentative/paint/background-image-column.html`、`-column-collapsed.html`、`-row-collapsed.html`、`box-shadow-041.html`、`-042.html`（混色的差 1，f32 的管線會過）、`clip-path-animation-custom-timing-function.html`（最大差 3）、`contain-paint-clip-006.html`、`css-scroll-anchoring/nested-overflow-subtree-layout.html`（後兩個沒看）。
+  - 沒有因為對齊而變壞的；最大差 31 的 `text-decoration-thickness-percent-001.html` 和 `vars-font-shorthand-001.html` 也通過了。
+- 對齊之後文字比較頁和 Skia 的差距幾乎沒變（1x：13.0% 的 pixel 變 12.9%，平均差 31.3 變 30.5）：那個差距是粗細，不是位置。

@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wu Yuwei <yuweiwu@pm.me>
+Date: Tue, 10 Nov 2026 23:05:58 +0900
+Subject: [PATCH] Add README.machopo.md
+
+---
+ README.machopo.md | 59 +++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 59 insertions(+)
+ create mode 100644 README.machopo.md
+
+diff --git a/README.machopo.md b/README.machopo.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..178a82010227ec263f6c353cbd004a2233ef12d7
+--- /dev/null
++++ b/README.machopo.md
+@@ -0,0 +1,59 @@
++# vello (machopo's fork)
++
++| | |
++| --- | --- |
++| Upstream | https://github.com/linebender/vello (fetched by URL; no remote) |
++| Fork | https://github.com/wusyong/vello (remote `origin`) |
++| Branch | `machopo`, from upstream's `main` at `112736df24` (2026-11-10); the fork's `main` is upstream's, untouched |
++| Version | 0.3.0 in `Cargo.toml` (`vello_cpu`, `vello_common`; `glifo` 0.4.0): v0.3.0's and the unreleased changes after it |
++| License | Apache-2.0 OR MIT (`LICENSE-APACHE`, `LICENSE-MIT`) |
++| Used by | machopo's `crates/raster` (`vello_cpu` and `glifo`: tiles and canvases drawn from machopo's display lists), by path |
++
++## Why a fork
++
++machopo follows upstream's main rather than its releases: the API machopo
++draws with is main's (the release before it registers images another way),
++main shares machopo's `skrifa`, and upstream keeps fixing what a browser
++runs into. A change machopo needs is made here as a commit that can go
++upstream as it is; it stays in the fork only until upstream has it, or,
++when upstream won't take it, with the reason in the table below.
++
++## Local modifications
++
++The commits on `machopo` after upstream's, each a patch in machopo's
++`patches/vello/` (`python3 scripts/ci.py patches vello` exports them;
++`python3 scripts/ci.py third-party` checks that they give this branch):
++
++| Commit | What | Upstream |
++| --- | --- | --- |
++| Add README.machopo.md | This file. Always the last commit, and the only one that changes it, so that the others can go upstream as they are. | Fork only |
++
++Changes are marked with `machopo:` comments. A change meant for upstream
++keeps Vello's `rust-version` (1.89), checked with that toolchain before it
++is sent; the fork itself builds with machopo's pinned toolchain. Anything
++sent upstream is drafted first and reviewed before it goes out.
++
++## Tests
++
++```sh
++cargo test -p vello_common -p vello_cpu -p glifo   # in this checkout
++```
++
++Upstream's snapshot tests (`vello_tests`) compare with images kept in Git
++LFS: they need `git lfs pull` first.
++
++and, in machopo, `cargo test -p raster` and the reftests and WPT of what
++the change touches.
++
++## Updating
++
++1. Fetch upstream by URL (`git fetch https://github.com/linebender/vello
++   main`) and rebase `machopo` onto the new upstream commit, fixing any
++   conflicts. Drop the commits upstream now has; keep this file's commit
++   last.
++2. Update the start and version above, and the table.
++3. Push `machopo` (`--force-with-lease`); first tag the old tip
++   (`machopo-<date>`) so that machopo's older pins can still be fetched.
++4. In machopo: `third_party.toml`'s `rev` and `upstream_rev`, then
++   `python3 scripts/ci.py patches vello`, in the same change; fix what the
++   new API breaks in `crates/raster`, and go through the tests above.

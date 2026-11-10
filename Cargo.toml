@@ -84,10 +84,13 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 # A canvas's `toDataURL` and `toBlob` as JPEG: `image` 0.25's own encoder
 # can't subsample chroma, which Blink does below quality 100.
 jpeg-encoder = "0.7.1"
-# PROTOTYPE (not for main): the raster that may replace Skia's, at upstream's
-# main, whose API is the next release's and whose skrifa is ours.
-vello_cpu = { git = "https://github.com/linebender/vello", rev = "112736df245f36181b73b0f34cf29de8159fb1a2", default-features = false, features = ["std", "text", "png", "u8_pipeline", "f32_pipeline"] }
-glifo = { git = "https://github.com/linebender/vello", rev = "112736df245f36181b73b0f34cf29de8159fb1a2", default-features = false, features = ["std"] }
+# The raster that is to replace Skia's (a prototype beside it for now:
+# `MACHOPO_RASTER=vello`). Our fork's `machopo` branch (upstream's main, whose
+# API is the next release's and whose skrifa is ours, plus our changes, each a
+# patch in `patches/vello/`), next to the repo; see
+# ../third_party/vello/README.machopo.md.
+vello_cpu = { path = "../third_party/vello/vello_cpu", default-features = false, features = ["std", "text", "png", "u8_pipeline", "f32_pipeline"] }
+glifo = { path = "../third_party/vello/glifo", default-features = false, features = ["std"] }
 # A variable font's axis values as the coordinates Vello draws with: the
 # version parley already pulls in.
 skrifa = "0.49"

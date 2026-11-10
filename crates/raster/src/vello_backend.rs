@@ -1751,10 +1751,32 @@ impl<'a> Player<'a> {
         let font = self.cache.font(font);
         let coords = normalized_coords(&font, variations);
         let stroked = matches!(flags.style, PaintStyle::Stroke { .. });
-        let glyph = |(&id, position): (&u16, &PointF)| vello_cpu::Glyph {
-            id: u32::from(id),
-            x: position.x,
-            y: position.y,
+        // Each glyph's origin moved to
+        // the nearest of a few places a device pixel, as Skia's glyph
+        // cache has it (a quarter along the line, whole pixels across it),
+        // where the matrix only scales and moves. Vello draws a glyph
+        // exactly where it is put, so the same text a hair apart (a test
+        // and its reference) differs by a level at an edge.
+        let snap = switches().snap;
+        let [a, b, c, d, e, f] = to_device.as_coeffs();
+        let aligned = b == 0.0 && c == 0.0 && a > 0.0 && d > 0.0;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a position in the layer's space, far inside an f32's range"
+        )]
+        let glyph = move |(&id, position): (&u16, &PointF)| {
+            let (mut x, mut y) = (position.x, position.y);
+            if snap > 0.0 && aligned {
+                let device_x = f64::from(x) * a + e;
+                let device_y = f64::from(y) * d + f;
+                x = (((device_x * snap).round() / snap - e) / a) as f32;
+                y = ((device_y.round() - f) / d) as f32;
+            }
+            vello_cpu::Glyph {
+                id: u32::from(id),
+                x,
+                y,
+            }
         };
         let pairs = glyphs.iter().zip(positions.iter());
         let mut failed = false;
@@ -1872,6 +1894,11 @@ pub(crate) struct Switches {
     /// `MACHOPO_VELLO_QUALITY=1`: Vello's f32 pipeline, slower and more
     /// exact, in place of its u8 one; to see what it changes.
     quality: bool,
+    /// `MACHOPO_VELLO_SNAP=<n>`: glyphs' origins moved to the nearest of
+    /// `n` places a device pixel along the line (and whole pixels across
+    /// it); 4 unless set, as Skia's glyph cache has them; 0: where they
+    /// are.
+    snap: f64,
 }
 
 pub(crate) fn switches() -> Switches {
@@ -1886,6 +1913,10 @@ pub(crate) fn switches() -> Switches {
                 no_cull: is("MACHOPO_VELLO_NO_CULL", "1"),
                 profile: is("MACHOPO_VELLO_PROFILE", "1"),
                 quality: is("MACHOPO_VELLO_QUALITY", "1"),
+                snap: std::env::var("MACHOPO_VELLO_SNAP")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(4.0),
             };
             cell.set(Some(switches));
             switches

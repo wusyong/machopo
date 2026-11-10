@@ -708,7 +708,7 @@ def main() -> int:
         "patches",
         help="export a fork's commits since its upstream_rev to patches/NAME, from its checkout at the pinned commit",
     )
-    patches.add_argument("name", help="the fork, as third_party.toml names it (taffy, parley)")
+    patches.add_argument("name", help="the fork, as third_party.toml names it (taffy, parley, vello)")
     patches.set_defaults(func=cmd_patches)
     guests = sub.add_parser("guests", help="rebuild dom_wasm's test guests (C) with wasi-sdk and wit-bindgen")
     guests.set_defaults(func=cmd_guests)
