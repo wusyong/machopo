@@ -523,6 +523,14 @@
       id="bg-set"></div></div>
     <p><span id="bg-restyle" class="button" onclick="restyleCard()">Restyle the card</span>
        <span id="bg-restyle-note">One layer: a gradient.</span></p>
+    <p class="layer-note">A photo held sideways: this JPEG's pixels are 16 wide and 8 high, red
+       on the left and blue on the right, and its EXIF orientation says to turn it a quarter
+       to show it. It is shown 8 wide and 16 high, red on top, and that is the size the page
+       reads from it.</p>
+    <p><img id="photo" alt="A photo turned as its EXIF orientation says" width="32" height="64"
+            onload="document.getElementById('photo-size').textContent = this.naturalWidth + ' by ' + this.naturalHeight"
+            src="data:image/jpeg;base64,/9j/4QAiRXhpZgAASUkqAAgAAAABABIBAwABAAAABgAAAAAAAAD/4AAQSkZJRgABAgAAAQABAAD/wAARCAAIABADABEAAREBAhEB/9sAQwABAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB/9sAQwEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMAAAERAhEAPwD8X6/ynP8Av4PyHr/1UD/zXz//2Q==">
+       <span id="photo-size">Not loaded.</span></p>
     <p class="layer-note">A canvas: its 2D context fills rects with colors. Click the canvas
        to add a square. "Add one later" adds one from an idle callback a second later,
        which changes no DOM and asks for no frame itself: the frame that shows it comes

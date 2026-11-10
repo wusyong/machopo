@@ -2,7 +2,7 @@
 //! `cc::PaintOpBuffer::Playback` does in Chromium.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use base::numerics::saturated_cast;
 use compositor_paint::{
@@ -408,11 +408,16 @@ fn gradient_shader(gradient: &GradientShader, outer: Option<&sk::Matrix>) -> Opt
 /// `LayerTreeHostImpl` owns; Skia's font cache is one per renderer
 /// process): renderers share none of it, as they won't share a process.
 /// The compositor's raster workers share it: a lock around its tables,
-/// held only to look up or add an entry, not while drawing (Skia's typefaces
-/// and images are thread-safe), so each image is decoded once.
+/// held only to look up or add an entry, not while decoding or drawing
+/// (Skia's typefaces and images are thread-safe); an image's entry is
+/// filled once, by the first worker to draw it, the others waiting for it,
+/// so each image is decoded once.
 #[derive(Default)]
 pub struct RasterCache {
     tables: Mutex<CacheTables>,
+    /// How many images were decoded.
+    #[cfg(test)]
+    decodes: std::sync::atomic::AtomicUsize,
 }
 
 /// A variable font's instance: its font id, face index and the axes'
@@ -428,10 +433,15 @@ struct CacheTables {
     instances: HashMap<InstanceKey, sk::Typeface>,
     /// By image id, each with a weak handle on its bytes: an entry goes
     /// once no `ImageData` for it is left (its document and display lists
-    /// are gone). `sk::Image::from_encoded` decodes lazily, on first draw,
-    /// and keeps the pixels.
-    images: HashMap<u64, (ImageBytes, sk::Image)>,
+    /// are gone). Filled on first draw (cc's `ImageDecodeCache` decodes
+    /// for the raster that needs the image), with `None` for bytes that
+    /// aren't an image; it keeps the pixels.
+    images: HashMap<u64, (ImageBytes, ImageSlot)>,
 }
+
+/// An image's place in the cache: empty until the first draw fills it,
+/// outside the tables' lock.
+type ImageSlot = Arc<OnceLock<Option<sk::Image>>>;
 
 /// A weak handle on an image's bytes, encoded or decoded (`gfx::ImageData`'s).
 type ImageBytes = Weak<dyn AsRef<[u8]> + Send + Sync>;
@@ -460,34 +470,57 @@ impl RasterCache {
         if !data.wait_ready() {
             return None;
         }
-        let mut tables = self.tables();
-        if let Some((_, image)) = tables.images.get(&data.id) {
-            return Some(image.clone());
-        }
-        tables
-            .images
-            .retain(|_, (bytes, _)| bytes.strong_count() > 0);
-        let bytes = sk::Data::new_copy(data.as_bytes());
-        let image = match data.decoded {
-            // A canvas's snapshot: already pixels.
-            Some(size) => {
-                let info = sk::ImageInfo::new(
-                    (
-                        i32::try_from(size.width).ok()?,
-                        i32::try_from(size.height).ok()?,
-                    ),
-                    sk::ColorType::RGBA8888,
-                    sk::AlphaType::Premul,
-                    None,
-                );
-                sk::images::raster_from_data(&info, bytes, size.width as usize * 4)?
+        let slot = {
+            let mut tables = self.tables();
+            match tables.images.get(&data.id) {
+                Some((_, slot)) => slot.clone(),
+                None => {
+                    tables
+                        .images
+                        .retain(|_, (bytes, _)| bytes.strong_count() > 0);
+                    let slot = ImageSlot::default();
+                    tables
+                        .images
+                        .insert(data.id, (Arc::downgrade(&data.bytes), slot.clone()));
+                    slot
+                }
             }
-            None => sk::Image::from_encoded(bytes)?,
         };
-        tables
-            .images
-            .insert(data.id, (Arc::downgrade(&data.bytes), image.clone()));
-        Some(image)
+        // Decoding takes long: not under the lock, which every worker's
+        // every image goes through. Workers after the same image wait here.
+        slot.get_or_init(|| self.make_image(data)).clone()
+    }
+
+    /// `data` as a Skia image of its pixels: a canvas's snapshot's as they
+    /// are, a file's decoded. `None` for a file that isn't an image.
+    fn make_image(&self, data: &ImageData) -> Option<sk::Image> {
+        let (size, pixels) = match data.decoded {
+            // A canvas's snapshot: already pixels.
+            Some(size) => (size, sk::Data::new_copy(data.as_bytes())),
+            None => {
+                #[cfg(test)]
+                #[expect(
+                    clippy::disallowed_methods,
+                    reason = "a count a test reads: it never gets near wrapping"
+                )]
+                let _ = self
+                    .decodes
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let decoded = crate::image_decode::decode(data.as_bytes())?;
+                // Skia keeps its own copy; ours goes at the end of this.
+                (decoded.size, sk::Data::new_copy(&decoded.pixels))
+            }
+        };
+        let info = sk::ImageInfo::new(
+            (
+                i32::try_from(size.width).ok()?,
+                i32::try_from(size.height).ok()?,
+            ),
+            sk::ColorType::RGBA8888,
+            sk::AlphaType::Premul,
+            None,
+        );
+        sk::images::raster_from_data(&info, pixels, info.min_row_bytes())
     }
 
     fn typeface(&self, font: &FontData) -> Option<sk::Typeface> {
@@ -628,17 +661,6 @@ pub fn ink_bounds(cache: &RasterCache, runs: &[GlyphRun]) -> RectF {
         }
     }
     ink
-}
-
-/// An encoded image's size in pixels, from its header: no decoding. `None`
-/// if it isn't a format Skia reads (PNG, JPEG, GIF).
-pub fn image_size(bytes: &[u8]) -> Option<Size> {
-    let codec = sk::codec::Codec::from_data(sk::Data::new_copy(bytes))?;
-    let size = codec.dimensions();
-    Some(Size::new(
-        size.width.try_into().ok()?,
-        size.height.try_into().ok()?,
-    ))
 }
 
 /// Face `index` of the font collection `ttc` as a standalone font: its table
@@ -1482,14 +1504,47 @@ mod tests {
         assert_eq!(bmp.pixel(47, 27), [255, 255, 255, 255]);
     }
 
+    /// Each format a page may give is drawn: here a BMP and a JPEG, a PNG
+    /// above.
     #[test]
-    fn image_size_reads_the_header() {
-        assert_eq!(image_size(GREEN_BLUE), Some(Size::new(20, 10)));
-        let jpeg = include_bytes!("../../../tests/reftests/images/resources/green-40x30.jpg");
-        let gif = include_bytes!("../../../tests/reftests/images/resources/green-40x30.gif");
-        assert_eq!(image_size(jpeg), Some(Size::new(40, 30)));
-        assert_eq!(image_size(gif), Some(Size::new(40, 30)));
-        assert_eq!(image_size(b"not an image"), None);
+    fn draws_each_format() {
+        use crate::image_decode::tests::{JPEG, bmp};
+        let rect = RectF::new(0.0, 0.0, 40.0, 30.0);
+        let drawn = draw(
+            ImageData::new(bmp(40, 30, [0, 128, 0])),
+            rect,
+            Size::new(40, 30),
+        );
+        assert_eq!(drawn.pixel(20, 15), [0, 128, 0, 255]);
+        let drawn = draw(ImageData::new(JPEG), rect, Size::new(40, 30));
+        let [r, g, b, a] = drawn.pixel(20, 15);
+        assert!(r <= 3 && (125..=131).contains(&g) && b <= 3 && a == 255);
+    }
+
+    /// A JPEG whose EXIF orientation turns it a quarter is drawn turned,
+    /// the size its header gave (`image_size`) the turned one: drawn in a
+    /// rect of that size, nothing is stretched.
+    #[test]
+    fn draws_a_jpeg_turned_as_its_orientation_says() {
+        use crate::image_decode::tests::{JPEG, with_orientation};
+        let turned = with_orientation(JPEG, 6);
+        assert_eq!(crate::image_size(&turned), Some(Size::new(30, 40)));
+        let cache = RasterCache::default();
+        let image = cache.image(&ImageData::new(turned)).unwrap();
+        assert_eq!((image.width(), image.height()), (30, 40));
+    }
+
+    /// Pixels with alpha reach Skia premultiplied: half transparent red
+    /// over white is pink.
+    #[test]
+    fn draws_a_translucent_image_over_what_is_there() {
+        let png = crate::image_decode::tests::png_of(1, 1, &[255, 0, 0, 128]);
+        let drawn = draw(
+            ImageData::new(png),
+            RectF::new(0.0, 0.0, 4.0, 4.0),
+            Size::new(4, 4),
+        );
+        assert_eq!(drawn.pixel(2, 2), [255, 127, 127, 255]);
     }
 
     #[test]
@@ -1540,6 +1595,35 @@ mod tests {
             }
         });
         assert_eq!(cache.tables().images.len(), 1);
+        assert_eq!(decodes(&cache), 1);
+    }
+
+    fn decodes(cache: &RasterCache) -> usize {
+        cache.decodes.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// An image is decoded when it is first drawn, once however often it
+    /// is drawn after; bytes that aren't an image are tried once too.
+    #[test]
+    fn an_image_is_decoded_once() {
+        let cache = RasterCache::default();
+        let data = ImageData::new(GREEN_BLUE);
+        assert_eq!(decodes(&cache), 0);
+        let rect = RectF::new(0.0, 0.0, 20.0, 10.0);
+        for _ in 0..3 {
+            draw_with(&cache, data.clone(), rect, Size::new(20, 10));
+        }
+        assert_eq!(decodes(&cache), 1);
+        let junk = ImageData::new(&b"junk"[..]);
+        for _ in 0..3 {
+            draw_with(&cache, junk.clone(), rect, Size::new(20, 10));
+        }
+        assert_eq!(decodes(&cache), 2);
+        // A canvas's snapshot is pixels already.
+        let snapshot = ImageData::decoded(Size::new(1, 1), vec![0, 128, 0, 255]);
+        let drawn = draw_with(&cache, snapshot, rect, Size::new(20, 10));
+        assert_eq!(drawn.pixel(10, 5), [0, 128, 0, 255]);
+        assert_eq!(decodes(&cache), 2);
     }
 
     fn fill_with(shader: impl Into<PaintShader>, rect: RectF, size: Size) -> crate::Bitmap {

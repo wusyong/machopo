@@ -24,6 +24,8 @@ skia-safe.workspace = true
 read-fonts.workspace = true
 # A canvas's `toDataURL` and `toBlob` as PNG, as Blink encodes one.
 png.workspace = true
+image.workspace = true
+jpeg-encoder.workspace = true
 
 [dev-dependencies]
 fdeflate.workspace = true

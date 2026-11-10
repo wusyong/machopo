@@ -1,0 +1,137 @@
+# Step 0: images decoded and measured with `image`, JPEGs encoded with
+# jpeg-encoder, pixels unpremultiplied without Skia.
+#
+#     python3 scripts/test.py mutate rfcs/0007-gpu-raster/mutants-0.toml
+
+test = ["cargo", "test", "-q", "-p", "raster"]
+timeout = 600
+
+[[mutant]]
+name = "size not turned by the orientation"
+file = "crates/raster/src/image_decode.rs"
+from = '''        Some(oriented(size, orientation(&mut decoder)))'''
+to = '''        Some(size)'''
+
+[[mutant]]
+name = "pixels not turned by the orientation"
+file = "crates/raster/src/image_decode.rs"
+from = '''        image.apply_orientation(orientation);'''
+to = '''        let _ = orientation;'''
+
+[[mutant]]
+name = "a mirrored quarter turn keeps the size"
+file = "crates/raster/src/image_decode.rs"
+from = '''        | Orientation::Rotate90FlipH
+        | Orientation::Rotate270FlipH => Size::new(size.height, size.width),
+        Orientation::NoTransforms'''
+to = '''        => Size::new(size.height, size.width),
+        Orientation::Rotate90FlipH | Orientation::Rotate270FlipH |
+        Orientation::NoTransforms'''
+
+[[mutant]]
+name = "decoded pixels not premultiplied"
+file = "crates/raster/src/image_decode.rs"
+from = '''        let mut pixels = image.into_raw();
+        premultiply(&mut pixels);'''
+to = '''        let mut pixels = image.into_raw();
+        let _ = &mut pixels;'''
+
+[[mutant]]
+name = "premultiplying rounds down"
+file = "crates/raster/src/image_decode.rs"
+from = '''    let product = u32::from(c) * u32::from(a) + 128;'''
+to = '''    let product = u32::from(c) * u32::from(a);'''
+
+[[mutant]]
+name = "no limit on an image's pixels"
+file = "crates/raster/src/image_decode.rs"
+from = '''    (pixels <= MAX_PIXELS).then_some(Size::new(width, height))'''
+to = '''    (pixels < u64::MAX).then_some(Size::new(width, height))'''
+
+[[mutant]]
+name = "the limit is one pixel lower"
+file = "crates/raster/src/image_decode.rs"
+from = '''const MAX_PIXELS: u64 = (1 << 29) - 1;'''
+to = '''const MAX_PIXELS: u64 = 23_170 * 23_170 - 1;'''
+
+[[mutant]]
+name = "decoding doesn't check the size first"
+file = "crates/raster/src/image_decode.rs"
+from = '''        stored_size(&decoder)?;
+        let orientation'''
+to = '''
+        let orientation'''
+
+[[mutant]]
+name = "an image is decoded under the lock, every time it is asked for"
+file = "crates/raster/src/skia_backend.rs"
+from = '''        slot.get_or_init(|| self.make_image(data)).clone()'''
+to = '''        let _ = slot; self.make_image(data)'''
+
+[[mutant]]
+name = "a new entry each time"
+file = "crates/raster/src/skia_backend.rs"
+from = '''                Some((_, slot)) => slot.clone(),
+                None => {'''
+to = '''                Some((_, slot)) if false => slot.clone(),
+                _ => {'''
+
+[[mutant]]
+name = "entries stay after their data"
+file = "crates/raster/src/skia_backend.rs"
+from = '''                    tables
+                        .images
+                        .retain(|_, (bytes, _)| bytes.strong_count() > 0);'''
+to = ''''''
+
+[[mutant]]
+name = "unpremultiplying rounds a half up"
+file = "crates/raster/src/encode.rs"
+from = '''(color * 255.0).round_ties_even()'''
+to = '''(color * 255.0 + 0.5).floor()'''
+
+[[mutant]]
+name = "unpremultiplying divides exactly"
+file = "crates/raster/src/encode.rs"
+from = '''            let color = f32::from(*channel) * (1.0 / 255.0) * scale;'''
+to = '''            let color = f32::from(*channel) / f32::from(alpha);'''
+
+[[mutant]]
+name = "opaque pixels are unpremultiplied too"
+file = "crates/raster/src/encode.rs"
+from = '''    if opaque {
+        return Some(out);
+    }'''
+to = ''''''
+
+[[mutant]]
+name = "a JPEG isn't blended on black"
+file = "crates/raster/src/encode.rs"
+from = '''                [mul_div_255(r, a), mul_div_255(g, a), mul_div_255(b, a)]'''
+to = '''                [r, g, b]'''
+
+[[mutant]]
+name = "a JPEG is always 4:2:0"
+file = "crates/raster/src/encode.rs"
+from = '''    encoder.set_sampling_factor(if quality == 100 {'''
+to = '''    encoder.set_sampling_factor(if quality == 101 {'''
+
+[[mutant]]
+name = "a JPEG is always 4:4:4"
+file = "crates/raster/src/encode.rs"
+from = '''        jpeg_encoder::SamplingFactor::R_4_2_0
+    });'''
+to = '''        jpeg_encoder::SamplingFactor::R_4_4_4
+    });'''
+
+[[mutant]]
+name = "a JPEG's quality is fixed"
+file = "crates/raster/src/encode.rs"
+from = '''jpeg_encoder::Encoder::new(&mut out, quality);'''
+to = '''jpeg_encoder::Encoder::new(&mut out, 90);'''
+
+[[mutant]]
+name = "a JPEG's side may be 65,535"
+file = "crates/raster/src/encode.rs"
+from = '''    const MAX_SIDE: u16 = 65_500;'''
+to = '''    const MAX_SIDE: u16 = 65_535;'''

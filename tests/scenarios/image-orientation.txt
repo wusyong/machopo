@@ -1,0 +1,9 @@
+# about:demo's photo held sideways: a JPEG stored 16 by 8 whose EXIF
+# orientation turns it a quarter is 8 by 16 to the page, and drawn that
+# way, red on top (`screenshot` to look at; each orientation's size and
+# pixels are `raster`'s tests).
+navigate about:demo
+wait-loaded
+scroll-to #photo
+wait-text #photo-size "8 by 16"
+screenshot image-orientation

@@ -2,7 +2,8 @@
 //! `toBlob` (Blink's `ImageEncoder`, with its encoders and settings).
 
 use gfx::Size;
-use skia_safe as sk;
+
+use crate::image_decode::mul_div_255;
 
 /// `pixels` (RGBA8, premultiplied, rows tightly packed, `size`; `opaque`
 /// if every alpha is 255) as a PNG, as Blink encodes one: Skia's Rust PNG
@@ -38,62 +39,77 @@ pub fn encode_png(pixels: &[u8], size: Size, opaque: bool) -> Option<Vec<u8>> {
 }
 
 /// `pixels` (as `encode_png`'s) as a JPEG of `quality` (0 to 100), as
-/// Blink encodes one: Skia's encoder, the pixels not premultiplied and
-/// blended on black, 4:2:0 but at 100, 4:4:4. `None` if the size is empty
-/// or past JPEG's (65,500 a side), or the pixels don't fit it.
+/// Blink encodes one (Skia's encoder, libjpeg-turbo): the pixels not
+/// premultiplied and blended on black, 4:2:0 but at 100, 4:4:4; the
+/// quantization tables libjpeg's, scaled by the quality as it scales
+/// them. `None` if the size is empty or past JPEG's (65,500 a side, as
+/// libjpeg), or the pixels don't fit it.
 pub fn encode_jpeg(pixels: &[u8], size: Size, opaque: bool, quality: u8) -> Option<Vec<u8>> {
-    let mut rgba = unpremultiplied(pixels, size, opaque)?;
-    let info = image_info(size, sk::AlphaType::Unpremul);
-    let pixmap = sk::Pixmap::new(&info, &mut rgba, info.min_row_bytes())?;
-    let options = sk::jpeg_encoder::Options {
-        quality: u32::from(quality),
-        downsample: if quality == 100 {
-            sk::jpeg_encoder::Downsample::No
-        } else {
-            sk::jpeg_encoder::Downsample::BothDirections
-        },
-        alpha_option: sk::jpeg_encoder::AlphaOption::BlendOnBlack,
-        ..Default::default()
-    };
+    /// libjpeg's `JPEG_MAX_DIMENSION`.
+    const MAX_SIDE: u16 = 65_500;
+    let rgba = unpremultiplied(pixels, size, opaque)?;
+    let width = u16::try_from(size.width).ok().filter(|&w| w <= MAX_SIDE)?;
+    let height = u16::try_from(size.height).ok().filter(|&h| h <= MAX_SIDE)?;
+    // On black, a color is itself times its alpha: premultiplied again,
+    // as Skia's encoder does to the pixels it was handed.
+    let rgb: Vec<u8> = rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|&[r, g, b, a]| {
+            if opaque {
+                [r, g, b]
+            } else {
+                [mul_div_255(r, a), mul_div_255(g, a), mul_div_255(b, a)]
+            }
+        })
+        .collect();
     let mut out = Vec::new();
-    sk::jpeg_encoder::encode(&pixmap, &mut out, &options).then_some(out)
-}
-
-/// The info of an image of `size`, which its callers have checked fits
-/// Skia's `i32`s (`unpremultiplied`).
-fn image_info(size: Size, alpha: sk::AlphaType) -> sk::ImageInfo {
-    use base::numerics::saturated_cast;
-    sk::ImageInfo::new(
-        (saturated_cast(size.width), saturated_cast(size.height)),
-        sk::ColorType::RGBA8888,
-        alpha,
-        None,
-    )
+    let mut encoder = jpeg_encoder::Encoder::new(&mut out, quality);
+    encoder.set_sampling_factor(if quality == 100 {
+        jpeg_encoder::SamplingFactor::R_4_4_4
+    } else {
+        jpeg_encoder::SamplingFactor::R_4_2_0
+    });
+    encoder
+        .encode(&rgb, width, height, jpeg_encoder::ColorType::Rgb)
+        .ok()?;
+    Some(out)
 }
 
 /// `pixels` made not premultiplied as Skia does (`readPixels`, as Blink
-/// reads a canvas's for its encoder).
+/// reads a canvas's for its encoder): each color divided by its alpha in
+/// `f32`, the way Skia's pipeline does it (the byte as a fraction of 255,
+/// times the reciprocal of the alpha's, back to a byte, a half going to
+/// the even one), so that the bytes are the ones Skia gives; transparent
+/// pixels' colors are 0. `opaque` pixels are as they are. `None` if the
+/// size is empty or the pixels don't fit it.
 fn unpremultiplied(pixels: &[u8], size: Size, opaque: bool) -> Option<Vec<u8>> {
-    let width = i32::try_from(size.width).ok()?;
-    let height = i32::try_from(size.height).ok()?;
-    if width == 0 || height == 0 || Some(pixels.len()) != size.checked_byte_size() {
+    if size.is_empty() || Some(pixels.len()) != size.checked_byte_size() {
         return None;
     }
-    let alpha = if opaque {
-        sk::AlphaType::Opaque
-    } else {
-        sk::AlphaType::Premul
-    };
-    let source_info = image_info(size, alpha);
-    let row_bytes = source_info.min_row_bytes();
-    // Skia's pixmap borrows its pixels mutably, though reading only.
-    let mut source_pixels = pixels.to_vec();
-    let source = sk::Pixmap::new(&source_info, &mut source_pixels, row_bytes)?;
-    let target_info = image_info(size, sk::AlphaType::Unpremul);
-    let mut out = vec![0; pixels.len()];
-    source
-        .read_pixels(&target_info, &mut out, row_bytes, (0, 0))
-        .then_some(out)
+    let mut out = pixels.to_vec();
+    if opaque {
+        return Some(out);
+    }
+    for pixel in out.as_chunks_mut::<4>().0 {
+        let alpha = pixel[3];
+        if alpha == 255 {
+            continue;
+        }
+        let reciprocal = 1.0 / (f32::from(alpha) * (1.0 / 255.0));
+        let scale = if reciprocal.is_finite() {
+            reciprocal
+        } else {
+            0.0
+        };
+        for channel in &mut pixel[..3] {
+            let color = f32::from(*channel) * (1.0 / 255.0) * scale;
+            // A color past its alpha (not a premultiplied one) stops at 255.
+            *channel = base::numerics::saturated_cast((color * 255.0).round_ties_even());
+        }
+    }
+    Some(out)
 }
 
 #[cfg(test)]
@@ -128,6 +144,57 @@ mod tests {
         assert_eq!(out, [1, 2, 3, 4, 5, 6]);
     }
 
+    /// A color over its alpha, as Skia rounds it: 1 / 6 of 255 is 42.5
+    /// and comes out 42, 5 / 6 is 212.5 and comes out 212 (the nearest
+    /// integer would be 43 and 213). A color past its alpha is 255;
+    /// a transparent pixel's is 0; opaque pixels aren't touched.
+    #[test]
+    fn unpremultiplying_rounds_as_skia_does() {
+        let size = Size::new(4, 1);
+        let pixels = [1, 5, 3, 6, 10, 2, 12, 12, 200, 7, 0, 100, 9, 9, 9, 0];
+        assert_eq!(
+            unpremultiplied(&pixels, size, false).unwrap(),
+            [
+                42, 212, 128, 6, 212, 42, 255, 12, 255, 18, 0, 100, 0, 0, 0, 0
+            ]
+        );
+        assert_eq!(unpremultiplied(&pixels, size, true).unwrap(), pixels);
+    }
+
+    /// Every color at every alpha comes out the byte Skia's `readPixels`
+    /// gives. Goes when Skia does; the cases above stay.
+    #[test]
+    fn unpremultiplying_is_skias_for_every_color_and_alpha() {
+        use skia_safe as sk;
+        let mut pixels = Vec::new();
+        for a in 0..=255u8 {
+            for c in 0..=255u8 {
+                pixels.extend([c, c / 2, 255 - c, a]);
+            }
+        }
+        let size = Size::new(256, 256);
+        let info = |alpha| sk::ImageInfo::new((256, 256), sk::ColorType::RGBA8888, alpha, None);
+        for (opaque, alpha) in [
+            (false, sk::AlphaType::Premul),
+            (true, sk::AlphaType::Opaque),
+        ] {
+            let mut source_pixels = pixels.clone();
+            let source = sk::Pixmap::new(&info(alpha), &mut source_pixels, 256 * 4).unwrap();
+            let mut skia = vec![0; pixels.len()];
+            assert!(source.read_pixels(&info(sk::AlphaType::Unpremul), &mut skia, 256 * 4, (0, 0)));
+            let ours = unpremultiplied(&pixels, size, opaque).unwrap();
+            for ((p, ours), skia) in pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(ours.as_chunks::<4>().0)
+                .zip(skia.as_chunks::<4>().0)
+            {
+                assert_eq!(ours, skia, "{p:?}, opaque: {opaque}");
+            }
+        }
+    }
+
     /// Blink's settings: deflate level 1 (the zlib header's FLEVEL, its
     /// second byte's top two bits, is 0: the fastest) and each row
     /// filtered Up (its first byte 2).
@@ -146,16 +213,10 @@ mod tests {
     }
 
     /// A JPEG's pixel at `(x, y)`.
-    fn jpeg_pixel(jpeg: &[u8], x: i32, y: i32) -> [u8; 4] {
-        let image = sk::Image::from_encoded(sk::Data::new_copy(jpeg)).unwrap();
-        let info = image_info(
-            Size::new(image.width() as u32, image.height() as u32),
-            sk::AlphaType::Unpremul,
-        );
-        let mut out = [0u8; 4];
-        let one = info.with_dimensions((1, 1));
-        assert!(image.read_pixels(&one, &mut out, 4, (x, y), sk::image::CachingHint::Allow));
-        out
+    fn jpeg_pixel(jpeg: &[u8], x: u32, y: u32) -> [u8; 4] {
+        let image = crate::image_decode::decode(jpeg).unwrap();
+        let at = ((y * image.size.width + x) * 4) as usize;
+        image.pixels[at..at + 4].try_into().unwrap()
     }
 
     /// The sampling factors of a JPEG's first (luma) component: 0x22 for
@@ -196,10 +257,29 @@ mod tests {
         assert_eq!(luma_sampling(&best), 0x11);
     }
 
+    /// The quantization tables are libjpeg's: at quality 50 the standard
+    /// ones as they are (the luminance one begins 16, 11, 12, 14 in the
+    /// file's zigzag order), at 25 twice that.
+    #[test]
+    fn a_jpegs_tables_are_libjpegs() {
+        let gray = [128u8, 128, 128, 255].repeat(8 * 8);
+        let table = |quality| {
+            let jpeg = encode_jpeg(&gray, Size::new(8, 8), true, quality).unwrap();
+            let dqt = jpeg.windows(2).position(|w| w == [0xff, 0xdb]).unwrap();
+            // Marker, length (2), precision and id, then the table.
+            jpeg[dqt + 5..dqt + 9].to_vec()
+        };
+        assert_eq!(table(50), [16, 11, 12, 14]);
+        assert_eq!(table(25), [32, 22, 24, 28]);
+    }
+
     #[test]
     fn nothing_for_no_pixels() {
         assert!(encode_png(&[], Size::new(0, 1), false).is_none());
         assert!(encode_png(&[0; 4], Size::new(2, 1), false).is_none());
         assert!(encode_jpeg(&[], Size::new(1, 0), false, 92).is_none());
+        // Past what a JPEG's side may be.
+        assert!(encode_jpeg(&vec![0; 65_501 * 4], Size::new(65_501, 1), true, 92).is_none());
+        assert!(encode_jpeg(&vec![0; 65_500 * 4], Size::new(65_500, 1), true, 92).is_some());
     }
 }

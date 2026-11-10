@@ -22,6 +22,7 @@ use compositor_paint::DisplayItemList;
 use gfx::{Color, RectF, Size};
 
 mod encode;
+mod image_decode;
 mod skia_backend;
 
 use skia_backend as backend;
@@ -29,8 +30,9 @@ use skia_backend as backend;
 /// Name of the raster backend, for logs.
 pub const BACKEND: &str = backend::NAME;
 
-pub use backend::{RasterCache, image_size, ink_bounds};
+pub use backend::{RasterCache, ink_bounds};
 pub use encode::{encode_jpeg, encode_png};
+pub use image_decode::image_size;
 
 /// A CPU bitmap, RGBA8 premultiplied, `stride == width * 4`.
 #[derive(Clone, PartialEq, Eq)]

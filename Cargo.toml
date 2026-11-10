@@ -78,6 +78,12 @@ tower-service = "0.3"
 # reads into without a copy (in the tree already, through reqwest).
 bytes = { version = "1", features = ["serde"] }
 png = "0.18"
+# Images decoded and measured (raster): only the formats pages get, and not
+# its rayon. Its PNG decoder is `png`, its JPEG one zune-jpeg.
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "bmp", "ico"] }
+# A canvas's `toDataURL` and `toBlob` as JPEG: `image` 0.25's own encoder
+# can't subsample chroma, which Blink does below quality 100.
+jpeg-encoder = "0.7.1"
 # PNG's deflate, to read back what `png` wrote (raster's tests).
 fdeflate = "0.3"
 tracing = "0.1"
