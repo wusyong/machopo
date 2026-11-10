@@ -35,11 +35,11 @@ upstream_rev = "1b67b7539616e5c7dc92d8fc79a1f7678525993c"
 
 [taffy]
 repository = "https://github.com/wusyong/taffy"
-# The `machopo` branch: upstream's tag v0.15.0 at `upstream_rev` and the
+# The `machopo` branch: upstream's main (2026-11-06) at `upstream_rev` and the
 # commits in `patches/taffy/`.
-rev = "bfa9eda28bfb5facfc5f633fa7e706ecf15d64a4"
+rev = "05e64bd4f66abc7b92eff581e6fff9093199bfb1"
 upstream = "https://github.com/DioxusLabs/taffy"
-upstream_rev = "eb6450694f33e2b7413e40677f230ff63f0fc194"
+upstream_rev = "4aca4f4933aa9cb7a3266050c788aad4c90288d2"
 
 [wpt]
 # Upstream, not a fork: machopo never changes it. Its files must stay byte for

@@ -12,7 +12,8 @@
 | 2 計數 | 完成 | 2026-11-10 |
 | 3a 重寫 parley 的 fork：合成分組、rebase 到上游的 main、machopo 配合 | 完成（fork 的頂端 `11771f1c`，tag `machopo-2026-11-10-3a`；舊的頂端的 tag `machopo-2026-11-10`） | 2026-11-10 |
 | 3b parley 的 fork 自己的測試、上游的草稿、拿掉 `text-indent` 的 workaround、optical sizing 由 machopo 做 | 做完，等審核：fork 的頂端 `b4941e39`（`machopo` 分支）和兩個 tag 已經 push | |
-| 4 taffy 跟上上游的 main | 還沒開始 | |
+| 4a taffy 的 fork rebase 到上游的 main、machopo 配合 API、預期結果和限制 | 做完，等審核：fork 的頂端 `05e64bd4` 只在本地（舊的頂端有本地的 tag `machopo-2026-11-10`），`third_party.toml` 釘本地的 commit；審核後才 push tag 和 `machopo` 分支 | |
+| 4b 用 slot 的高度改寫 `float_bands` | 還沒開始 | |
 | 5 字型家族的清單和名稱解析 | 還沒開始 | |
 | 6 float 和 taffy 的快取（6a）、做 fragment 時的斷行（6b） | 還沒開始 | |
 | 7 上游的草稿 | 還沒開始 | |
@@ -35,6 +36,8 @@
 | `font-optical-sizing: auto` 的文字用字級的 `opsz` shape 和畫，`font-variation-settings` 自己設的贏，關掉時沒有 | `layout` 的 `font_features::a_variable_fonts_axes`：軸的值，和 advance（自動的和把 `opsz` 設成字級的一樣，和關掉的、設成 40 的都不一樣） |
 | 只被問寬度的盒子有 `text-indent` 時不斷行 | `inline::a_width_alone_breaks_no_lines`：`max-content`、`fit-content` 加縮排的寬度是 110、斷行 1 次 |
 | machopo 配合上游的 API，除了 atomic inline 的 bidi 和斷行，排版不變 | `cargo test -p layout`、`-p shell`；`test.py reftest` 的 `text/`、`inline/`、`floats/`、`generated/`、`canvas/`、`svg/`、`block/`、`position/`、`flex/`、`grid/`、`tables/`、`hidpi/`；`test.py wpt` 的 `css/css-text`、`css/css-text-decor`、`css/CSS2/linebox`、`css/CSS2/normal-flow`、`css/css-overflow/line-clamp`、`css/css-sizing`、`css/css-display`、`css/css-pseudo`；差異逐項記在「做過的檢查」 |
+| taffy 的 fork 是上游的 main（`4aca4f49`，2026-11-06）加上 `README.machopo.md` 的 commit | fork 的 `cargo test`；`python3 scripts/ci.py patches taffy` 匯出 1 個 patch，`ci.py third-party` 確認它套在 `upstream_rev` 上和 `rev` 一樣 |
+| machopo 配合 taffy 的 API，沒有退步；上游修好的 18 個 WPT 測試通過 | `cargo test -p layout`、`-p shell`；`test.py reftest` 的 12 個目錄；`test.py wpt` 的 27 個目錄（「第 4a 段」） |
 | 第 2 段的計數不變 | `tests/sites/` 的 7 頁再數一次，每頁每個計數和第 2 段的一樣 |
 
 ## 做過的檢查
@@ -96,6 +99,23 @@
     - 「`kern` 的 pair 把空白後面的 mark 也算進去」：等價，只是多合併一些字、比較慢（HarfBuzz 的 kerning 跳過 mark）。
     - 「讀不懂的表當成不碰空白」：缺口，沒有壞掉的表的測試字型（記在 `docs/test-gaps.md`）。
 - **跑過的檢查**：fork 的 `cargo test -p parley -p parley_engine -p parley_tests -p fontique`（11、191、37、252 個通過、1 個 ignored）、clippy（只有上游 manifest 的警告）、`cargo fmt --all -- --check`（只有 Windows checkout 的換行警告）；machopo 的 `cargo test -p layout`（25、432：少的是搬走的測試）、`cargo test -p shell`（70、11、563）；reftest 的 12 個目錄 104 個全部符合預期；WPT 的 `css/css-text`、`css/css-text-decor`、`css/CSS2/linebox`、`css/CSS2/normal-flow`、`css/css-fonts`、`css/css-overflow/line-clamp`、`css/css-sizing`、`css/css-display`、`css/css-pseudo` 共 14,151 個檢查，全部符合預期（沒有預期結果要改）；`python3 scripts/ci.py third-party`；`python3 scripts/sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。階段（3a 和 3b）最後：`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`（55 個 test binary，3727 個通過、1 個 ignored）。
+
+**第 4a 段**（2026-11-10，Windows 11）：
+
+- **rebase**：fork 的 `machopo` 分支從 v0.15.0（`eb645069`）搬到上游 main 的頂端 `4aca4f49`（2026-11-06，中間 40 個 commit），只有 `README.machopo.md` 的 commit，沒有衝突；README 的起點和版本跟著改。舊的頂端 `bfa9eda2` 有 tag `machopo-2026-11-10`。fork 沒有 `upstream` 這個 remote，照 README 用 URL fetch。
+- **machopo 的配合**（`crates/layout/src/lib.rs`，4 處）：`find_content_slot` 多的 `height` 傳 0（和原本一樣只看頂端那一段；4b 才用它）；`apply_content_box_inset` 的 `[f32; 2]` 換成 `FloatInsets`；`place_floated_box` 多的 `id` 傳盒子的 node id（現在沒有人讀，6a 的 `floats_placed_since` 會用）。`ScrollableOverflow`（#1372）不用改：machopo 只把 taffy 給的原樣傳回去，scrollable overflow 是自己從 fragment 算的。`calc()` 的 handle（#1400）還沒合併。
+- **WPT**：27 個目錄共 27,129 個檢查，沒有退步；18 個原本預期失敗的測試通過，`.ini` 刪掉（括號裡的上游 PR 是照它的說明對上的，沒有逐一 bisect）：
+  - `css/CSS2/floats/floats-wrap-top-below-bfc-00{1,2,3}{l,r}.xht`（6 個）：自己是 BFC 的盒子照整個高度避開 float（#1385、#1386）。
+  - `css/CSS2/floats-clear/float-replaced-height-001.xht`、`floats-101.xht`：BFC 的根在 float 下面加上自己的 padding 和 border（#1384）。
+  - `css/CSS2/floats/floats-wrap-bfc-with-margin-010.html`、`floats-zero-height-wrap-002.xht`、`zero-width-floats-positioning.tentative.html`：高度是 0 的 float 記成一段（#1387）、slot 的寬度分開扣兩邊的 float（#1392）。
+  - `css/CSS2/floats-clear/adjoining-float-nested-forced-clearance-002.html`、`margin-collapse-157.xht`：摺穿的第一個子項的 margin 不再加到 block 的底（#1397）。
+  - `css/CSS2/floats-clear/floats-031.xht`：原本記成「沒有逐一查」的 float 的 replaced 元素，哪一個 commit 修好的沒有查。
+  - `css/css-flexbox/align-content-007.htm`：`wrap-reverse` 溢出的 line 靠 flex-start（#1363）。
+  - `css/css-grid/alignment/grid-self-alignment-baseline-gfc-001.html`、`css/css-lists/list-and-grid-001.html`：grid container 的 baseline 取第一個 item 最後 layout 的（#1322、#1323）。
+  - `css/css-contain/contain-paint-clip-006.html`：原本記的原因是 reference 的 `overflow: hidden` 自己成一層、文字分開 raster 的 anti-aliasing；現在通過的原因沒有查（猜是 BFC 的根的高度變了之後沒有東西可以捲）。它和 `list-and-grid-001`、`floats-031`、`margin-collapse-157` 另外各跑了 3 次，都通過。
+- **還在的限制**（`docs/limitations.md` 跟著改）：寬是 0 的 float 旁邊的 BFC 盒子（`zero-width-floats.html`、`zero-space-between-floats-003.html`）；BFC 盒子移到比較窄的地方之後沒有照新的寬度重排（`floats-bfc-003.html`；上游的 #1396 還沒合併）。這三個 `.ini` 的註解改成現在的原因。flex、grid 那一條拿掉 grid container 的 baseline，「不 fork taffy」改成現在的做法。
+- **沒有新的測試和 mutation test**：machopo 這一段沒有新的行為（4 處都是照新的簽名傳一樣的東西），行為的變化是上游的、由上游的測試和上面的 WPT 守著。
+- **跑過的檢查**：fork 的 `cargo test`（188、161、6689、5 個通過、4 個 ignored）；machopo 的 `cargo test -p layout`（25、432）、`cargo test -p shell`（70、11、563）；reftest 的 `block/`、`floats/`、`flex/`、`grid/`、`tables/`、`inline/`、`position/`、`text/`、`images/`、`generated/`、`scroll/`、`hidpi/` 共 84 個，全部符合預期；WPT 的 `css/CSS2/floats`、`floats-clear`、`normal-flow`、`margin-padding-clear`、`positioning`、`linebox`、`visudet`、`ui`、`css/css-flexbox`、`css-grid`、`css-align`、`css-sizing`、`css-overflow`、`css-position`、`css-tables`、`css-contain`、`css-display`、`css-box`、`css-lists`、`css-content`、`css-inline`、`css-images`、`css-text`、`css-logical`，和 `css/cssom-view`、`css-scroll-anchoring`、`css-pseudo`（`cssom-view/scroll-behavior-smooth-navigation.html` 出現一次已經標過的 known intermittent）；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`；`python3 scripts/ci.py third-party`。WPT 一次給三個大目錄時 Windows 的指令太長（`WinError 206`），`css-flexbox` 到 `css-display` 那九個是一次跑一個。
 
 **第 2 段的量測**（2026-11-10，Windows 11，release build，`RUST_LOG=layout=debug`，scratchpad 裡一次性的 script 加總每頁的 log）：`tests/sites/` 用 `--headless`（1280×800）載入一次；blink_perf 的 30 頁照 `bench.py blink-perf` 的方法（`--automation-pipe`，頁面跑完整個 runner）；Speedometer 3.1 的 20 個 suite 各一次 iteration（`iterationCount=1`，只數計數，沒量時間）。
 

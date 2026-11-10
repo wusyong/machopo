@@ -2894,7 +2894,7 @@ fn float_bands(ctx: &BlockContext<'_>, inset: taffy::Rect<f32>) -> FloatBands {
     let mut bands = Vec::new();
     let mut after = None;
     loop {
-        let slot = ctx.find_content_slot(top, taffy::Clear::None, after);
+        let slot = ctx.find_content_slot(top, 0.0, taffy::Clear::None, after);
         let Some(segment) = slot.segment_id else {
             break;
         };
@@ -2909,6 +2909,7 @@ fn float_bands(ctx: &BlockContext<'_>, inset: taffy::Rect<f32>) -> FloatBands {
         .max(top);
     bands.push(band(ctx.find_content_slot(
         bottom,
+        0.0,
         taffy::Clear::None,
         after,
     )));
@@ -3805,7 +3806,7 @@ struct InlineChildren<'t, 'c, 'b> {
 impl<'t, 'c, 'b> InlineChildren<'t, 'c, 'b> {
     fn new(tree: &'t mut BoxTree, ctx: &'c mut BlockContext<'b>, inset: taffy::Rect<f32>) -> Self {
         // A float's containing block is the content box.
-        ctx.apply_content_box_inset([inset.left, inset.right]);
+        ctx.apply_content_box_inset(taffy::FloatInsets::new(inset.left, inset.right));
         Self { tree, ctx, inset }
     }
 }
@@ -3844,6 +3845,7 @@ impl AtomicInlines for InlineChildren<'_, '_, '_> {
         let style = &self.tree.boxes[usize::from(id)].taffy_style;
         let direction = style.float.float_direction().expect("a float's box floats");
         let at = self.ctx.place_floated_box(
+            u64::from(id),
             taffy::Size {
                 width: size.width,
                 height: size.height,

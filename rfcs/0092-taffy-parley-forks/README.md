@@ -96,7 +96,7 @@ machopo 這邊只處理一種 workaround：繞在函式庫外面、因此有實�
 1. **taffy fork 的基礎設施**：`wusyong/taffy` 的 `machopo` 分支，起點是 v0.15.0（和現在用的一樣），`third_party.toml`、`Cargo.toml` 的 path 依賴、`README.machopo.md`；patch 檔的放法和 `ci.py third-party` 的一致性檢查（第 3 條）；`CLAUDE.md`、根目錄的 `README.md`、`docs/architecture.md` 的第三方的選型跟著改。行為不變。
 2. **計數**：加上「計數」那一節的計數，量出各個 workaround 實際的量，決定第 5、6 段的順序和範圍。
 3. **重寫 parley 的 fork**：舊的頂端打 tag；rebase 到上游最新的 main；拿掉上游已經有的（`hanging_advance`）；把相關的 commit 合在一起（`details.md` 的「parley fork 的重寫」）；commit 帶上 fork 自己的測試；匯出 patch；machopo 拿掉上游已經不需要的 workaround（`text-indent` 的 `indented()`）。可能分成 3a（rebase 和整理）、3b（fork 自己的測試和上游的草稿）。
-4. **taffy 跟上上游的 main**：rebase 到 main，處理 API 的變化（例如 `calc()` 的 handle、`ScrollableOverflow`），查 WPT 的變化，拿掉不再需要的 workaround（`float_bands` 自己找一段空間的底），刪掉修好的限制。
+4. **taffy 跟上上游的 main**：rebase 到 main，處理 API 的變化（例如 `calc()` 的 handle、`ScrollableOverflow`），查 WPT 的變化，拿掉不再需要的 workaround（`float_bands` 自己找一段空間的底），刪掉修好的限制。分成 4a（rebase、編得過所需的最小配合、預期結果和限制）和 4b（用 slot 的高度改寫 `float_bands`）。
 5. **字型家族的清單和名稱解析**：第 2 段量到最多的（每頁都有）。做法看第 3 段之後上游的 #943、#796 的狀態決定（「待決定」）。
 6. **float 和 taffy 的快取，再來是做 fragment 時多斷的那一次行**：6a 在 taffy 的 fork 裡把 float 的狀態加進快取的 key（同時寫上游的草稿），連同 column flexbox 的 intrinsic 寬度；6b 在 machopo 裡拿掉做 fragment 時多斷的那一次行。`BlockContext` 可以撤回不排進來（第 20 條）。
 7. **上游的草稿**：parley 和 taffy 剩下的 patch，各寫一份 PR 或 issue 的草稿（本地，給人審核）。可以和第 3 到 6 段穿插著做。
@@ -176,6 +176,10 @@ machopo 這邊只處理一種 workaround：繞在函式庫外面、因此有實�
 30. **optical sizing 由 machopo 做，拿掉 fork 的 commit**（2026-11-10）：machopo 在給 parley 的 variation 裡加 `opsz`（Blink 也在自己這一側把 `opsz` 放進字型的 variation），先確認排版一樣，不一樣就留著 fork 的。不選留著：多一個只為 CSS 的 API 要說服上游。
 31. **3b 補完每個 commit 的訊息，寫三份 PR 的草稿**（2026-11-10）：最後的強制換行、沒有 em 的字型、斷行表。邊緣、共用 shaped text、快取、第一個字型要先開 issue 討論，tab stop 和軟連字號要寫的是和上游還沒合併的 PR 的差異，都留到第 7 段。草稿在這份 RFC 的 `upstream/parley/`。不選 3b 全部寫完：大的幾份在第 5、6 段還會改。
 32. **3a 的頂端打 tag（`machopo-2026-11-10-3a`），fork 現在 push**（2026-11-10）：3b 把測試加進各自的 commit，等於再改寫一次；3a 的 machopo commit 釘的是 3a 的頂端，靠 tag 留住。改掉第 25 條的「審核之後才 push」只有一次的假設：每次改寫前都在舊的頂端打 tag。
+33. **taffy rebase 到上游 main 的頂端（`4aca4f49`，2026-11-06）**（2026-11-10）：float 和 BFC 的修正、slot 的高度都在 11 月的 commit 裡。不選 v0.15.1：沒有那些修正，這一段的目的大半達不到。不選等 #1396、#1400 合併：不知道要等多久，之後再 rebase 的成本很低。
+34. **第 4 段分成 4a、4b**（2026-11-10）：4a 只 rebase 加上編得過所需的最小配合（`find_content_slot` 的高度傳 0），結果的變化全部歸因於上游；4b 用 `ContentSlot::height` 改寫 `float_bands`。Chromium roll 第三方的相依和配合它的改動也是分開的 CL。不選一次做完：WPT 有變化時分不出是上游還是 machopo 的改寫造成的。
+35. **上游的變化讓測試退步時先查原因，照大小處理**（2026-11-10）：小而明確的在 fork 修成一個帶測試、可以送上游的 commit（每一個先列給人看），草稿留到第 7 段；大的更新預期結果、記進 `docs/limitations.md`，草稿寫成 issue。不選一律只記限制：退步留到上游修好。不選退回早一點的上游 commit：同時失去修正。
+36. **第 4 段只拿掉 `float_bands` 自己找底**（2026-11-10）：#1303 的 `FloatMark`（行內的 float 不必 `revert_to`）和 float 旁邊的盒子進快取留到 6a；`last_baseline`（#1110）、`aspect-ratio`（#1347）等上游。`rfcs/0043-floats-text/taffy-float-root-inset-report.md` 要回報的問題上游已經修好（#1384），不用送。
 
 ## 待決定
 

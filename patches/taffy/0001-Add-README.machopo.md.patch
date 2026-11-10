@@ -11,7 +11,7 @@ machopo's fork: why, its local modifications and their upstream status, the test
 
 diff --git a/README.machopo.md b/README.machopo.md
 new file mode 100644
-index 0000000000000000000000000000000000000000..a1d94bc52e481809bc28ea64b9c1cb1d43f4a4ee
+index 0000000000000000000000000000000000000000..acd430105d2e42e20a4db198c17b208dcbc044ad
 --- /dev/null
 +++ b/README.machopo.md
 @@ -0,0 +1,62 @@
@@ -21,8 +21,8 @@ index 0000000000000000000000000000000000000000..a1d94bc52e481809bc28ea64b9c1cb1d
 +| --- | --- |
 +| Upstream | https://github.com/DioxusLabs/taffy (fetched by URL; no remote) |
 +| Fork | https://github.com/wusyong/taffy (remote `origin`) |
-+| Branch | `machopo`, from upstream's tag `v0.15.0` (`eb6450694f`); the fork's `main` is upstream's, untouched |
-+| Version | 0.15.0 |
++| Branch | `machopo`, from upstream's `main` at `4aca4f4933` (2026-11-06); the fork's `main` is upstream's, untouched |
++| Version | 0.15.0 in `Cargo.toml`: v0.15.1's changes and the unreleased ones after it |
 +| License | MIT (`LICENSE`) |
 +| Used by | machopo's `crates/layout` (block, flexbox and grid layout, through taffy's low-level traits on machopo's own box tree), by path |
 +
@@ -35,9 +35,9 @@ index 0000000000000000000000000000000000000000..a1d94bc52e481809bc28ea64b9c1cb1d
 +go upstream as it is; it stays in the fork only until upstream has it, or,
 +when upstream won't take it, with the reason in the table below.
 +
-+The branch starts at the tag machopo used from crates.io until then, so
-+moving to the fork changed nothing; catching up with upstream's main is a
-+step of its own.
++The branch first started at the tag machopo used from crates.io (`v0.15.0`;
++the tag `machopo-2026-11-10` is that branch's tip), so that moving to the
++fork changed nothing.
 +
 +## Local modifications
 +
