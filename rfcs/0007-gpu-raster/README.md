@@ -138,7 +138,7 @@ Vello 缺的有十來項，分三種：在 playback 裡補上、使用者看不�
 - **可能 fork 的只有 `ColorMatrix`**：第 2 步要 merge 時上游的 PR 還沒合、離屏的做法又量到太慢，才 fork 帶那一個 patch；它本來就是上游的程式，合了之後 fork 就消失。fork 照 parley 的模式：`../third_party` 底下的 vello（`machopo` 分支），只放非改不可的小 patch；`README.machopo.md`、`third_party.toml` 照現有的 fork 的規則。不完全自己接手（像 rusty_v8 那樣）：machopo 還需要上游的 x86 SIMD、glyph 快取和 vello_gpu。
 - 文字的 gamma 和對比、漸層的 dithering：改在上色的核心，上游不一定接受（會改變所有使用者的結果），第 1 步看過截圖再決定（見「待決定」）。
 - 要送上游的 patch，照 `CLAUDE.md`，先在本地寫好草稿給人審。
-- 用 crates.io 上發布的版本還是釘上游 `main` 的某個 commit，見「待決定」。
+- **原型（第 1 步，不 merge）釘上游 `main` 的 commit**（已決定的事項第 21 條）；第 2 步用哪個版本見「待決定」。
 
 ### 測試
 
@@ -243,13 +243,16 @@ Vello 缺的有十來項，分三種：在 playback 裡補上、使用者看不�
 18. **2026-11-10：解碼照今天的時機，第一次畫時在 raster 的 thread 上做，在快取的鎖外面**（使用者照建議）。快取的每個項目是只填一次的格子，同一張圖只解一次。時機和 cc 的 `ImageDecodeCache` 一樣（要畫才解、不在 main thread），差別是解碼和畫在同一個 task 裡、沒有分開排程。不選載入時在 main thread 上解（最簡單、`raster` 裡沒有 decoder，但大圖卡住 script 和 layout，沒畫到的圖也解碼），也不選載入時交給另一條 thread 解、raster 等它（最接近 Chromium，但多一條 thread 或 pool 要管，這一步的範圍變大；之後量到第一個 tile 等解碼太久時再提）。
 19. **2026-11-10：`image` 用發布的版本，不用它的 `main`**（使用者照建議）。`main` 的 `JpegEncoder` 已經包著 `jpeg-encoder`、可以選取樣，用它就不用直接依賴 `jpeg-encoder`；但 `main` 比 v0.25.10 多 826 個 commit、正在改 decoder 的介面（「Version Next」列著 breaking changes），照它寫等發布時很可能要再改一次；直接釘上游的 commit 也是 machopo 沒有的一種依賴（現在只有 crates.io 的發布版和 `../third_party` 的 fork），沒有版本號和 release notes；省下的只是 `Cargo.toml` 的一行，執行的是同一份編碼的程式。`image` 發布下一版時，升級那一次再看要不要改成經過它的 API。
 20. **2026-11-10：解碼和讀尺寸包在 `catch_unwind` 裡，並設 `image` 的 `Limits`**（使用者照建議）。`image` 的 release notes 開頭的 Known issues 寫著很多 decoder 碰到惡意的輸入會 panic；圖片是網頁給的，不能讓 raster 的 thread 或 main thread 掛掉。panic 就當成解不開、什麼都不畫（今天 Skia 碰到壞檔案的行為），失敗的結果記在快取裡，同一張圖不重複解。沒有 panic 時的成本是多一層不會被 inline 的呼叫（unwind 是查表式的），量不出來；panic 的那一次是微秒到毫秒，加上預設的 panic hook 往 stderr 印一行（先不關，看到洗版再說）。`catch_unwind` 接不住無窮迴圈、吃光記憶體和 stack overflow，所以 `Limits` 設寬高和配置的上限，數值實作時對照 Blink。**這讓 workspace 不能把 `panic` 改成 `abort`**（改了壞圖會讓整個 process 結束），記進 `docs/limitations.md`。不選不包（壞圖讓整個分頁壞掉）；放進另一個 process 解碼要等拆 process，那之後這一層仍然有用（壞圖只是不顯示，不是分頁掛掉）。沒有實測過哪些輸入會 panic，照上游自己的說明處理；測試放壞掉的、截斷的、檔頭宣稱超大尺寸的檔案。
+21. **2026-11-10：原型（第 1 步）的 Vello 釘上游 `main` 的 commit，用 git 依賴**（使用者照建議）。發布的 0.3.0 和 `main` 的 API 已經對不上（`main` 拿掉了圖片的登記 `register_image` 和 `ImageId`、改成直接給 pixmap，`fill_blurred_rounded_rect` 的 `invert` 搬到另一個函式），原型的程式要當第 2 步的基礎，照下一版的 API 寫才不用再改一次；`main` 和 machopo 用同一個 skrifa（0.49；0.3.0 用 0.44，會編兩份）；`main` 修了 `Color` 和 `Luminosity` 的 blend 把某些灰色畫成黑色的 bug。不選發布的 0.3.0（有版本號，但圖片那部分一定要重寫），也不選現在就建 fork（還不知道要不要繼續；第 4 條是先不 fork）。和第 19 條不用 `image` 的 `main` 不同的地方：這是不 merge 的原型，而且發布的版本和下一版的 API 對不上。第 2 步用哪個版本到時再定（「待決定」）。
+22. **2026-11-10：原型期間 Skia 和 Vello 都編進去，用環境變數 `MACHOPO_RASTER`（`skia` 或 `vello`，預設 `skia`）在執行時切換**（使用者照建議），只在 `raster` 裡讀一次。同一個執行檔並排比截圖和 `bench.py raster` 的時間，不用 build 兩次；預設是 Skia，原型期間 `cargo test`、reftest、情境照常通過，沒接完的 op 只在設了變數時看得到。切換只活在不 merge 的 branch 上，第 2 步拿掉 Skia 時一起拿掉，所以和第 5 條（`main` 上不留切換的旗標）不衝突；Chromium 推 Graphite 時也是兩個 backend 都編進去、執行時切換。不選在 branch 上直接取代 Skia（1a 期間很多測試會失敗，分不出是還沒接還是接錯了；每次比較都要另外 build 改之前的版本），也不選 cargo 的 feature（比較要 build 兩次，Windows 上還會另外 link 一整套執行檔）。
+23. **2026-11-10：第一個檢查點用的頁面**（使用者照建議）。量測用現成的 `bench.py raster`（Gutenberg、SQLite 的文件頁、NewsSite-Next 捲動和改視窗大小時的 PrepareTiles），Skia 和 Vello 各跑一次；先確認每一頁跳過了多少還沒接的 op，跳過太多的不採計。截圖用 `about:demo`、Gutenberg 的一章、SQLite 的文件頁，加上一頁專門比文字的（放在這個資料夾，是原型的素材、不是測試）：幾種字級、淺底深字和深底淺字、一般、粗體、斜體和合成粗體，1x 和 2x 各一次，用測試字型。不選只用現成的頁面：它們幾乎都是白底黑字、單一字級，最可能出問題的深色背景和小字看不到。外觀能不能接受由人判斷，不同的 pixel 數只是輔助。
 
 ## 待決定
 
 - **要不要繼續**：第 1 步的兩個檢查點各定一次（1a 看文字的外觀和速度，1b 看整套 reftest 和組出來的功能的成本）。
 - **文字的外觀怎麼處理**：接受比較細、淡的文字；在 playback 這一側調整（例如照 Skia 的做法對文字的覆蓋率套對比的曲線，做不做得到、能多接近還沒查）；或做進 Vello 的 fork。第 1 步看過截圖再定。漸層的 dithering 同樣。
 - **不支援的 filter 一直用離屏，還是改在 fork 裡做**：第 1 步量離屏的 color matrix 的成本（第 4 條：慢的話才 fork）；那時再看上游的 PR 合了沒有。
-- **Vello 的版本怎麼跟**：用 crates.io 上發布的版本（每一版都是 breaking，但有版本號）還是釘上游 `main` 的 commit（拿得到還沒發布的修正，例如合了之後的 `ColorMatrix`）；每次發布都升，還是釘住、需要時再升。升級時要重新對 reftest 和 `render-gaps.md`。
+- **第 2 步（要 merge）時 Vello 用哪個版本**：原型釘上游 `main` 的 commit（已決定的事項第 21 條），釘 commit 的依賴不直接進 `main`。那時 Vello 已經發布下一版就用發布的；還沒有的話，等它發布，或照 parley 的模式建 fork。之後每次發布都升，還是釘住、需要時再升，也在那時定；升級時要重新對 reftest 和 `render-gaps.md`。
 - **mipmap 的品質和記憶體**：預先縮小用 box filter 還是更好的 filter（對照 Chromium 的 `SoftwareImageDecodeCache` 怎麼縮，原型時查），縮小的版本佔多少記憶體、什麼時候清（`docs/limitations.md` 的「圖片」記著 raster 的圖片快取沒有大小上限）。
 
 ## 之後的可能
