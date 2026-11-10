@@ -1,23 +1,24 @@
-//! PROTOTYPE (not for main): tiles and canvases drawn by vello_cpu instead
-//! of Skia, with `MACHOPO_RASTER=vello`.
+//! The raster backend: tiles and canvases drawn by vello_cpu (Linebender's
+//! CPU renderer; our fork's, which follows upstream's main).
 //!
 //! Each `PaintOp` is drawn on a `RenderContext`, one per raster thread,
 //! then rendered into the pixels. What Vello has no call for is made up
 //! here from what it has: filters it doesn't run and filters at a tile's
 //! edge (the layer drawn off to the side, in a context larger than the
 //! tile), a clip to a union of paths (a mask), shadows and blurs of any
-//! shape, patterns of records or with gaps.
+//! shape, patterns of records or with gaps. Each such place has a comment
+//! that begins `vello:`, saying what Vello lacks or does wrong.
 
 #![expect(
     clippy::arithmetic_side_effects,
-    reason = "PROTOTYPE: kurbo's operators on f64 points, vectors and matrices, which \
-              don't overflow; each to be looked at before this is for main"
+    reason = "kurbo's operators on f64 points, vectors and matrices (its `Add`, `Mul` \
+              and the like, which the lint takes for integers'), and f64 arithmetic: \
+              none overflows"
 )]
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
-use std::time::{Duration, Instant};
 
 use base::numerics::{clamp_ceil, saturated_cast};
 use compositor_paint::{
@@ -34,7 +35,7 @@ use vello_cpu::peniko::{
 };
 use vello_cpu::{
     Image, ImageSource, Mask, PixelMetadata, Pixmap, PixmapMut, RasterizerSettings, RenderContext,
-    RenderMode, Resources, TargetInit,
+    Resources, TargetInit,
 };
 
 use crate::PlaybackParams;
@@ -44,6 +45,9 @@ use crate::PlaybackParams;
 #[derive(Default)]
 pub(crate) struct VelloCache {
     tables: Mutex<Tables>,
+    /// How many images were decoded.
+    #[cfg(test)]
+    decodes: std::sync::atomic::AtomicUsize,
 }
 
 #[derive(Default)]
@@ -63,6 +67,28 @@ impl VelloCache {
         self.tables
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// How many images it holds (decoded, or found not to be images).
+    pub(crate) fn image_count(&self) -> usize {
+        self.tables().images.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_image(&self, id: u64) -> bool {
+        self.tables().images.contains_key(&id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn decodes(&self) -> usize {
+        self.decodes.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// The size `data` is drawn from (decoding it if it isn't yet).
+    #[cfg(test)]
+    pub(crate) fn image_dimensions(&self, data: &ImageData) -> Option<(u16, u16)> {
+        self.image(data)
+            .map(|pixmap| (pixmap.width(), pixmap.height()))
     }
 
     fn font(&self, font: &FontData) -> peniko::FontData {
@@ -99,6 +125,14 @@ impl VelloCache {
             let (size, pixels) = match data.decoded {
                 Some(size) => (size, data.as_bytes().to_vec()),
                 None => {
+                    #[cfg(test)]
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "a count a test reads: it never gets near wrapping"
+                    )]
+                    let _ = self
+                        .decodes
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     let decoded = crate::image_decode::decode(data.as_bytes())?;
                     (decoded.size, decoded.pixels)
                 }
@@ -128,29 +162,25 @@ thread_local! {
     /// This raster thread's context, kept from tile to tile for its
     /// allocations.
     static CONTEXT: RefCell<Option<(RenderContext, Resources)>> = const { RefCell::new(None) };
-    /// How many ops of each kind this thread left out.
+    /// How many times this thread left each thing out.
     static SKIPPED: RefCell<HashMap<&'static str, usize>> = RefCell::new(HashMap::new());
-    static PROFILE: RefCell<Profile> = RefCell::new(Profile::default());
 }
 
-/// An op (or a part of one) the prototype doesn't draw: counted, and
-/// logged when the count doubles, so a page's log says what it lacked.
+/// Something that isn't drawn (a layer too large to draw off to the side,
+/// a glyph Vello can't draw): counted, and logged when the count doubles,
+/// so that a page that keeps asking for it doesn't fill the log.
 fn skipped(what: &'static str) {
     SKIPPED.with_borrow_mut(|counts| {
         let count = counts.entry(what).or_insert(0);
         *count = count.saturating_add(1);
         if count.is_power_of_two() {
-            tracing::warn!(what, count = *count, "vello prototype: not drawn");
+            tracing::warn!(what, count = *count, "raster: not drawn");
         }
     });
 }
 
-/// Whether pixels of `size` can be drawn here: a context's side is a `u16`.
-pub(crate) fn can_draw(size: Size) -> bool {
-    u16::try_from(size.width).is_ok() && u16::try_from(size.height).is_ok()
-}
-
-/// `skia_backend::playback`, with Vello.
+/// Plays `ops` of `list` back into `pixels` (`size`, RGBA8 premultiplied),
+/// cleared first, as `params` says.
 pub(crate) fn playback(
     list: &DisplayItemList,
     ops: &[usize],
@@ -159,14 +189,14 @@ pub(crate) fn playback(
     size: Size,
     pixels: &mut [u8],
 ) {
+    // A context's side is a `u16`.
     let (Ok(width), Ok(height)) = (u16::try_from(size.width), u16::try_from(size.height)) else {
+        skipped("pixels with a side over 65535");
         return;
     };
     CONTEXT.with_borrow_mut(|slot| {
         let (context, resources) =
             slot.get_or_insert_with(|| (RenderContext::new(width, height), Resources::new()));
-        let profile = switches().profile;
-        let started = Instant::now();
         context.reset_and_resize(width, height);
         let scale = f64::from(params.contents_scale);
         let base = Affine::translate((
@@ -174,13 +204,10 @@ pub(crate) fn playback(
             -f64::from(params.content_rect.y),
         )) * Affine::scale(scale);
         let mut player = Player::new(context, resources, cache, base);
-        player.timings = profile.then(Vec::new);
         let all = list.ops();
         let ops: Vec<&PaintOp> = ops.iter().map(|&op| &all[op]).collect();
         player.play(&ops);
         player.finish();
-        let glyphs = player.glyphs;
-        let timings = player.timings.take();
         let Some(target) = PixmapMut::new(width, height, pixels) else {
             return;
         };
@@ -190,13 +217,11 @@ pub(crate) fn playback(
             resources,
             settings(TargetInit::Clear(color(params.clear_color))),
         );
-        if let Some(timings) = timings {
-            Profile::add(started.elapsed(), timings, glyphs);
-        }
     });
 }
 
-/// `skia_backend::draw_into`, with Vello: `list` over what `pixels` have.
+/// Plays `list` back onto a canvas's `pixels` (`size`), over what they
+/// have; an `opaque` one's alpha stays 255.
 pub(crate) fn draw_into(
     list: &DisplayItemList,
     cache: &VelloCache,
@@ -204,7 +229,9 @@ pub(crate) fn draw_into(
     opaque: bool,
     pixels: &mut [u8],
 ) {
+    // A context's side is a `u16`.
     let (Ok(width), Ok(height)) = (u16::try_from(size.width), u16::try_from(size.height)) else {
+        skipped("pixels with a side over 65535");
         return;
     };
     CONTEXT.with_borrow_mut(|slot| {
@@ -250,98 +277,13 @@ fn render_pixmap(
     pixmap
 }
 
-/// How a context is rendered: over `target_init`, with the pipeline the
-/// environment picks.
+/// How a context is rendered: over `target_init`, with Vello's u8
+/// pipeline (its f32 one made five of WPT's reftests pass that are off by
+/// a level in a gradient or a blur, and took 1.3 to 2 times as long).
 fn settings(target_init: TargetInit) -> RasterizerSettings {
     RasterizerSettings {
-        render_mode: if switches().quality {
-            RenderMode::OptimizeQuality
-        } else {
-            RenderMode::OptimizeSpeed
-        },
         target_init,
         ..RasterizerSettings::default()
-    }
-}
-
-/// PROTOTYPE: where a thread's tiles' time went (`MACHOPO_VELLO_PROFILE=1`).
-#[derive(Default)]
-struct Profile {
-    tiles: usize,
-    total: Duration,
-    /// Everything but handing the ops to the context: resetting it, popping
-    /// what is left and rendering.
-    render: Duration,
-    /// By op: how many, and the time handing them to the context took.
-    ops: HashMap<&'static str, (usize, Duration)>,
-    /// Glyphs in the runs, and those handed to Vello.
-    glyphs: (usize, usize),
-}
-
-impl Profile {
-    fn add(total: Duration, timings: Vec<(&'static str, Duration)>, glyphs: (usize, usize)) {
-        let drawing: Duration = timings.iter().map(|(_, time)| *time).sum();
-        PROFILE.with_borrow_mut(|sums| {
-            sums.tiles += 1;
-            sums.total += total;
-            sums.render += total.saturating_sub(drawing);
-            sums.glyphs.0 += glyphs.0;
-            sums.glyphs.1 += glyphs.1;
-            for (kind, time) in timings {
-                let entry = sums.ops.entry(kind).or_default();
-                entry.0 += 1;
-                entry.1 += time;
-            }
-            if !sums.tiles.is_power_of_two() || sums.tiles < 256 {
-                return;
-            }
-            let per = |time: Duration| time.as_secs_f64() * 1e6 / sums.tiles as f64;
-            let mut ops: Vec<_> = sums.ops.iter().collect();
-            ops.sort_by_key(|(_, (_, time))| std::cmp::Reverse(*time));
-            let ops: Vec<String> = ops
-                .iter()
-                .map(|(kind, (count, time))| {
-                    format!(
-                        "{kind} {:.0}us x{:.1}",
-                        per(*time),
-                        *count as f64 / sums.tiles as f64
-                    )
-                })
-                .collect();
-            tracing::warn!(
-                "vello profile: {} tiles, {:.0}us a tile: render {:.0}, ops: {}; glyphs {:.0} drawn of {:.0} a tile",
-                sums.tiles,
-                per(sums.total),
-                per(sums.render),
-                ops.join(", "),
-                sums.glyphs.1 as f64 / sums.tiles as f64,
-                sums.glyphs.0 as f64 / sums.tiles as f64,
-            );
-        });
-    }
-}
-
-fn op_name(op: &PaintOp) -> &'static str {
-    match op {
-        PaintOp::Save => "Save",
-        PaintOp::Restore => "Restore",
-        PaintOp::Translate { .. } | PaintOp::Concat { .. } | PaintOp::SetMatrix { .. } => "matrix",
-        PaintOp::ClipRect { .. } => "ClipRect",
-        PaintOp::ClipRRect { .. } => "ClipRRect",
-        PaintOp::ClipPath { .. } | PaintOp::ClipPaths { .. } => "ClipPath",
-        PaintOp::SaveLayerAlpha { .. } | PaintOp::SaveLayer { .. } => "SaveLayer",
-        PaintOp::DrawColor { .. } => "DrawColor",
-        PaintOp::DrawRect { .. } | PaintOp::ClearRect { .. } => "DrawRect",
-        PaintOp::DrawRRect { .. } => "DrawRRect",
-        PaintOp::DrawDRRect { .. } => "DrawDRRect",
-        PaintOp::DrawLine { .. } => "DrawLine",
-        PaintOp::DrawClipped { .. } => "DrawClipped",
-        PaintOp::DrawShadow { .. } => "DrawShadow",
-        PaintOp::DrawPath { .. } => "DrawPath",
-        PaintOp::DrawGlyphs { .. } => "DrawGlyphs",
-        PaintOp::DrawImage { .. } => "DrawImage",
-        PaintOp::WritePixels { .. } => "WritePixels",
-        PaintOp::DrawRecord { .. } => "DrawRecord",
     }
 }
 
@@ -386,10 +328,6 @@ struct Player<'a> {
     /// A canvas's pixels, which what was drawn is rendered over at the
     /// end, and where pixels are written into them.
     canvas: Option<&'a mut [u8]>,
-    /// Glyphs in the runs drawn, and those handed to Vello.
-    glyphs: (usize, usize),
-    /// Each op's time, if they are timed.
-    timings: Option<Vec<(&'static str, Duration)>>,
 }
 
 fn color(c: Color) -> peniko::Color {
@@ -554,11 +492,12 @@ fn blend_mode(mode: BlendMode) -> peniko::BlendMode {
 }
 
 fn gradient(shader: &GradientShader) -> Gradient {
+    // vello: pads past a hard stop at the end with the color before it.
     // A hard stop at the very end (the last two stops both at offset 1, of
     // two colors: `blue 0% 50px, green 50px`; one before the end Vello
-    // has right): past the end Vello pads
-    // with the color it has at offset 1, which is the first of the two,
-    // where Skia pads with the last. So the gradient is made twice as
+    // has right): past the end Vello pads with the color it has at offset
+    // 1, which is the first of the two, where Skia pads with the last
+    // (and CSS means the last). So the gradient is made twice as
     // long and its offsets halved: the hard stop is then in the middle,
     // and the last color from there on. (Not one that repeats, whose
     // period that would change; not a sweep, which ends where it began.)
@@ -634,7 +573,7 @@ fn gradient(shader: &GradientShader) -> Gradient {
 fn quality(filter: FilterQuality) -> ImageQuality {
     match filter {
         FilterQuality::None => ImageQuality::Low,
-        // No mipmaps yet: scaled down, `Medium` is as `Low`.
+        // vello: no mipmaps. Scaled down, `Medium` is as `Low`.
         FilterQuality::Low | FilterQuality::Medium => ImageQuality::Medium,
         FilterQuality::High => ImageQuality::High,
     }
@@ -713,12 +652,16 @@ fn filtered(cache: &VelloCache, pixmap: Pixmap, filter: &ImageFilter, to_device:
         reason = "a sigma or an offset in device pixels, far inside an f32's range"
     )]
     let primitive = match filter {
+        // vello: no color matrix filter (it panics on one); done on the
+        // layer's pixels here.
         ImageFilter::ColorMatrix(matrix) => {
             let (width, height) = (pixmap.width(), pixmap.height());
             let mut pixels = pixmap.take_rgba8(ImageAlphaType::AlphaPremultiplied);
             color_matrix(&mut pixels, matrix);
             return premultiplied_pixmap(pixels, width, height);
         }
+        // vello: no filter of several primitives (it panics on one); each
+        // is run on the last one's pixels.
         ImageFilter::Chain(filters) => {
             return filters.iter().fold(pixmap, |pixmap, filter| {
                 filtered(cache, pixmap, filter, to_device)
@@ -869,8 +812,6 @@ impl<'a> Player<'a> {
             hidden: 0,
             decal: false,
             canvas: None,
-            glyphs: (0, 0),
-            timings: None,
         }
     }
 
@@ -903,9 +844,10 @@ impl<'a> Player<'a> {
     }
 
     /// Whether anything of `path`, in the current space, is inside the
-    /// context. What isn't doesn't go to Vello: it shows nothing, and a
-    /// clipped stroke that begins at the right edge makes Vello's clip
-    /// intersection subtract past zero.
+    /// context. What isn't doesn't go to Vello: it shows nothing.
+    ///
+    /// vello: a clipped stroke that begins at the right edge makes its
+    /// clip intersection subtract past zero (a panic, or a wrong width).
     fn shows(&self, path: &BezPath) -> bool {
         let seen = self.transform.transform_rect_bbox(path.bounding_box());
         let bounds = self.bounds();
@@ -967,6 +909,9 @@ impl<'a> Player<'a> {
         self.render_canvas();
     }
 
+    /// vello: a scene's blend modes see what is in the scene, not what
+    /// the pixels it is rendered onto have.
+    ///
     /// Draws the canvas's pixels as they are, first thing on the context:
     /// what is drawn after blends with them inside the scene, as on
     /// Skia's canvas over the bitmap (a blend mode that takes away, like
@@ -1158,6 +1103,9 @@ impl<'a> Player<'a> {
     /// repeat, is Vello's own; a record, a gradient that repeats and tiles
     /// with gaps are drawn into a pixmap of one tile (and its gap) at the
     /// size it is seen at, which is then the image.
+    ///
+    /// vello: no pattern of a recording, none with gaps between its tiles
+    /// or that stops after one tile along an axis.
     fn set_tiled(&mut self, tiled: &TiledShader, alpha: f32) -> bool {
         let tile = Affine::translate((f64::from(tiled.tile.x), f64::from(tiled.tile.y)));
         let local = affine(&tiled.transform);
@@ -1293,7 +1241,6 @@ impl<'a> Player<'a> {
     fn play(&mut self, ops: &[&PaintOp]) {
         let mut index = 0;
         while let Some(&op) = ops.get(index) {
-            let started = self.timings.is_some().then(Instant::now);
             index += 1;
             match op {
                 PaintOp::SaveLayer { bounds, flags } if flags.image_filter.is_some() => {
@@ -1305,14 +1252,14 @@ impl<'a> Player<'a> {
                 }
                 op => self.draw(op),
             }
-            if let (Some(started), Some(timings)) = (started, self.timings.as_mut()) {
-                timings.push((op_name(op), started.elapsed()));
-            }
         }
     }
 
     /// A layer with a filter: its ops drawn off to the side with room for
     /// what the filter reaches, filtered, and drawn back.
+    ///
+    /// vello: a filter layer sees only what is inside the context, so a
+    /// blur at a tile's edge would miss what the next tile has.
     fn filter_layer(
         &mut self,
         bounds: Option<RectF>,
@@ -1341,6 +1288,9 @@ impl<'a> Player<'a> {
 
     /// `op`, whose flags blur it by `sigma`: drawn sharp off to the side,
     /// blurred, and drawn back with its blend mode.
+    ///
+    /// vello: no blur on a paint (Skia's mask filter), only of a rounded
+    /// rect of one radius.
     fn draw_blurred(&mut self, op: &PaintOp, sigma: f32) {
         let mut sharp = op.clone();
         let Some(flags) = flags_mut(&mut sharp) else {
@@ -1409,7 +1359,7 @@ impl<'a> Player<'a> {
             PaintOp::ClipPath { path, anti_alias } => {
                 self.push_clip(bez_path(path), fill_rule(path), *anti_alias);
             }
-            // Vello has no union of paths: each is filled into a mask the
+            // vello: no union of paths. Each is filled into a mask the
             // size of the context, and what follows is drawn through it.
             // None is an empty mask, which clips everything away.
             PaintOp::ClipPaths { paths, anti_alias } => {
@@ -1623,10 +1573,8 @@ impl<'a> Player<'a> {
                 );
                 let base = std::mem::replace(&mut self.base, self.transform);
                 let depth = self.saves.len();
-                let timings = self.timings.take();
                 let ops: Vec<&PaintOp> = record.ops().iter().collect();
                 self.play(&ops);
-                self.timings = timings;
                 while self.saves.len() > depth {
                     self.restore();
                 }
@@ -1648,6 +1596,9 @@ impl<'a> Player<'a> {
     /// drawn only outside `clip`, or only inside it. A rounded rect of one
     /// round radius, without a hole, is Vello's own blurred one; any other
     /// is drawn sharp off to the side and blurred.
+    ///
+    /// vello: a blurred rounded rect has one radius for its four corners,
+    /// both ways, and no hole.
     fn draw_shadow(
         &mut self,
         shape: &RRectF,
@@ -1712,7 +1663,7 @@ impl<'a> Player<'a> {
         self.context.pop_clip();
     }
 
-    #[expect(clippy::too_many_arguments, reason = "PROTOTYPE: an op's fields")]
+    #[expect(clippy::too_many_arguments, reason = "an op's fields")]
     fn draw_glyphs(
         &mut self,
         font: &FontData,
@@ -1725,6 +1676,7 @@ impl<'a> Player<'a> {
         skew: f32,
         variations: &[gfx::FontVariation],
     ) {
+        // vello: glyphs outside the context cost as much as those inside.
         // A run is drawn for every tile it touches, most of its glyphs
         // outside each: Vello flattens a glyph's outline before it finds
         // that out, so those too far from the tile to reach it (twice the
@@ -1739,25 +1691,24 @@ impl<'a> Player<'a> {
             (f64::from(size) * 2.0 + stroke) * scale_of(to_device)
         };
         let visible = self.bounds().inflate(reach, reach);
-        let cull = !switches().no_cull;
-        let near = move |position: &PointF| !cull || visible.contains(to_device * point(*position));
-        let kept = positions.iter().filter(|position| near(position)).count();
-        self.glyphs.0 += positions.len();
-        self.glyphs.1 += kept;
-        if kept == 0 || !self.set_flags(flags) {
+        let near = move |position: &PointF| visible.contains(to_device * point(*position));
+        if !positions.iter().any(near) || !self.set_flags(flags) {
             return;
         }
         let slant = Affine::skew(-f64::from(skew.to_radians().tan()), 0.0);
         let font = self.cache.font(font);
         let coords = normalized_coords(&font, variations);
         let stroked = matches!(flags.style, PaintStyle::Stroke { .. });
-        // Each glyph's origin moved to
-        // the nearest of a few places a device pixel, as Skia's glyph
-        // cache has it (a quarter along the line, whole pixels across it),
-        // where the matrix only scales and moves. Vello draws a glyph
-        // exactly where it is put, so the same text a hair apart (a test
-        // and its reference) differs by a level at an edge.
-        let snap = switches().snap;
+        // vello: draws a glyph exactly where it is put.
+        // Each glyph's origin moved to the nearest of a few places a
+        // device pixel, as Skia's glyph cache has it (a quarter along the
+        // line, whole pixels across it), where the matrix only scales and
+        // moves. Vello draws a glyph exactly where it is put, so the same
+        // text a hair apart (a reftest and its reference, whose positions
+        // differ in the last bits of a float) would differ by a level at
+        // an edge. (A sixty-fourth did worse: the more places, the likelier
+        // a hair's difference straddles two.)
+        const SNAP: f64 = 4.0;
         let [a, b, c, d, e, f] = to_device.as_coeffs();
         let aligned = b == 0.0 && c == 0.0 && a > 0.0 && d > 0.0;
         #[expect(
@@ -1766,10 +1717,10 @@ impl<'a> Player<'a> {
         )]
         let glyph = move |(&id, position): (&u16, &PointF)| {
             let (mut x, mut y) = (position.x, position.y);
-            if snap > 0.0 && aligned {
+            if aligned {
                 let device_x = f64::from(x) * a + e;
                 let device_y = f64::from(y) * d + f;
-                x = (((device_x * snap).round() / snap - e) / a) as f32;
+                x = (((device_x * SNAP).round() / SNAP - e) / a) as f32;
                 y = ((device_y.round() - f) / d) as f32;
             }
             vello_cpu::Glyph {
@@ -1877,53 +1828,6 @@ fn normalized_coords(font: &peniko::FontData, variations: &[gfx::FontVariation])
         .collect()
 }
 
-/// PROTOTYPE: what the environment asks of it, read once a thread (the
-/// process's environment is one for every renderer in it, but this is
-/// not for main).
-#[derive(Clone, Copy)]
-pub(crate) struct Switches {
-    /// `MACHOPO_RASTER=vello`: tiles and canvases are drawn by Vello, not
-    /// Skia.
-    pub vello: bool,
-    /// `MACHOPO_VELLO_NO_CULL=1`: every glyph of a run is handed to Vello,
-    /// as the prototype first did; to measure what leaving out the far
-    /// ones saves.
-    no_cull: bool,
-    /// `MACHOPO_VELLO_PROFILE=1`: where the tiles' time goes, in the log.
-    profile: bool,
-    /// `MACHOPO_VELLO_QUALITY=1`: Vello's f32 pipeline, slower and more
-    /// exact, in place of its u8 one; to see what it changes.
-    quality: bool,
-    /// `MACHOPO_VELLO_SNAP=<n>`: glyphs' origins moved to the nearest of
-    /// `n` places a device pixel along the line (and whole pixels across
-    /// it); 4 unless set, as Skia's glyph cache has them; 0: where they
-    /// are.
-    snap: f64,
-}
-
-pub(crate) fn switches() -> Switches {
-    thread_local! {
-        static SWITCHES: std::cell::Cell<Option<Switches>> = const { std::cell::Cell::new(None) };
-    }
-    SWITCHES.with(|cell| {
-        cell.get().unwrap_or_else(|| {
-            let is = |name: &str, value: &str| std::env::var(name).is_ok_and(|v| v == value);
-            let switches = Switches {
-                vello: is("MACHOPO_RASTER", "vello"),
-                no_cull: is("MACHOPO_VELLO_NO_CULL", "1"),
-                profile: is("MACHOPO_VELLO_PROFILE", "1"),
-                quality: is("MACHOPO_VELLO_QUALITY", "1"),
-                snap: std::env::var("MACHOPO_VELLO_SNAP")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(4.0),
-            };
-            cell.set(Some(switches));
-            switches
-        })
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1979,5 +1883,87 @@ mod tests {
         assert!(clipped_stroke_at_the_edge(32, false));
         assert!(clipped_stroke_at_the_edge(256, false));
         assert!(!clipped_stroke_at_the_edge(32, true));
+    }
+
+    /// A rect on a layer with `filter`, rendered by Vello alone.
+    fn render_filtered(filter: Filter) {
+        let mut context = RenderContext::new(16, 16);
+        let mut resources = Resources::new();
+        context.push_filter_layer(filter);
+        context.set_paint(peniko::Color::BLACK);
+        context.fill_rect(&Rect::new(2.0, 2.0, 10.0, 10.0));
+        context.pop_layer();
+        let mut pixmap = Pixmap::new(16, 16);
+        context.flush();
+        context.render_with(
+            &mut pixmap,
+            &mut resources,
+            settings(TargetInit::Clear(peniko::Color::TRANSPARENT)),
+        );
+    }
+
+    /// What upstream lacks, at the commit pinned: a color matrix (CSS's
+    /// `grayscale()`, `invert()` and the like), which `filtered` does on
+    /// the layer's pixels. When this stops panicking, Vello has it.
+    #[test]
+    #[should_panic(expected = "Other filter primitives not yet implemented")]
+    fn upstream_lacks_color_matrix_filters() {
+        let mut matrix = [0.0; 20];
+        for channel in 0..4 {
+            matrix[channel * 6] = 1.0;
+        }
+        render_filtered(Filter::from_primitive(FilterPrimitive::ColorMatrix {
+            matrix,
+        }));
+    }
+
+    /// What upstream lacks, at the commit pinned: a filter of more than
+    /// one primitive (`blur(2px) drop-shadow(...)`), which `filtered` runs
+    /// one after the other, each from the last one's pixels. When this
+    /// stops panicking, Vello has it.
+    #[test]
+    #[should_panic(expected = "Multi-primitive filter graphs are not yet supported")]
+    fn upstream_lacks_filters_of_several_primitives() {
+        use vello_cpu::filter_effects::FilterGraph;
+        let mut graph = FilterGraph::new();
+        let _ = graph.add(FilterPrimitive::gaussian_blur(2.0, EdgeMode::None), None);
+        let last = graph.add(FilterPrimitive::Offset { dx: 1.0, dy: 1.0 }, None);
+        graph.set_output(last);
+        render_filtered(Filter {
+            graph: Arc::new(graph),
+        });
+    }
+
+    /// Upstream's bug, at the commit pinned: past the end of a gradient
+    /// whose last two stops are both at offset 1, Vello pads with the
+    /// first of the two (red here) where the second (blue) is meant.
+    /// `gradient` makes such a gradient twice as long. When this fails,
+    /// upstream fixed it.
+    #[test]
+    fn upstream_pads_a_gradient_past_a_hard_stop_with_the_color_before_it() {
+        let (red, blue) = (
+            peniko::Color::from_rgb8(255, 0, 0),
+            peniko::Color::from_rgb8(0, 0, 255),
+        );
+        let stops = [
+            peniko::ColorStop::from((0.0, red)),
+            peniko::ColorStop::from((1.0, red)),
+            peniko::ColorStop::from((1.0, blue)),
+        ];
+        let mut gradient = Gradient::new_linear((0.0, 0.0), (10.0, 0.0)).with_stops(&stops[..]);
+        gradient.extend = Extend::Pad;
+        let mut context = RenderContext::new(32, 4);
+        let mut resources = Resources::new();
+        context.set_paint(gradient);
+        context.fill_rect(&Rect::new(0.0, 0.0, 32.0, 4.0));
+        let mut pixmap = Pixmap::new(32, 4);
+        context.flush();
+        context.render_with(
+            &mut pixmap,
+            &mut resources,
+            settings(TargetInit::Clear(peniko::Color::TRANSPARENT)),
+        );
+        let pixels = pixmap.take_rgba8(ImageAlphaType::AlphaPremultiplied);
+        assert_eq!(pixels[(32 + 25) * 4..][..4], [255, 0, 0, 255]);
     }
 }

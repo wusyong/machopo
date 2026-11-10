@@ -262,6 +262,8 @@ Vello 缺的有十來項，分三種：在 playback 裡補上、使用者看不�
     - 不選不接（任何網頁湊出會 panic 的內容就能讓分頁不再更新）；不選接住之後把那個 tile 的 op 一個一個重試（複雜，重試時每個 op 都可能再 panic，換掉 Skia 之後沒有另一個 backend 可以退）。留白的 tile 畫成棋盤格、記進 trace 是之後的事。
     - 和圖片的解碼一樣，workspace 不能把 `panic` 改成 `abort`（第 20 條）；接不住無窮迴圈和記憶體用光。release 沒有整數溢位的檢查，那個 clip 的 bug 在 release 下是算錯而不是 panic：要不要只對 Vello 的 crate 打開溢位檢查見「待決定」。
 31. **2026-11-10：canvas 的 5 個 WPT 的退步，第 2 步先接受、記下來**（使用者照建議）。4 個是破壞性的 blend mode 配 clip（`2d.composite.clip.destination-atop`、`destination-in`、`source-in`、`source-out`：形狀以外的地方會被清掉的四種模式，Vello 不隔離的 clip 限制不了它們，clip 外面的像素也被清掉），1 個是 kurbo 的 stroker 在線寬遠大於線段長度時內側的接合多畫一塊（`2d.line.cross`）。兩種都少見（常見的橡皮擦是 `destination-out`，不受影響）。它們的預期結果標成失敗、寫原因，列進 `render-gaps.md` 和 `docs/limitations.md`，回報上游的草稿寫好給人審。不選第 2 步就在 machopo 這一側修那 4 個（做得到：碰到這四種模式而且有 clip 時，把目前的畫面 render 出來、形狀和 clip 各畫成一張圖，machopo 逐個 pixel 照公式合成、clip 外面保留，再寫回 bitmap；但每次都要整個 canvas 過一遍，多一段自己維護的合成程式，留作第 3 步的候選），也不選現在就改 Vello 的合成（估不出要改多少，上游在 vello_gpu 的文件寫明了這個限制，可能是設計上的取捨；kurbo 是另一個專案）。
+32. **2026-11-10：第 2 步分成四段，每段做完給人審**（使用者照建議）：2a Vello 成為唯一的 playback、測試搬過來和補齊；2b ink bounds 改用 skrifa、mipmap、拿掉 skia-safe；2c panic 的處理和警告；2d WPT 的預期結果、文件、整個階段的檢查。四段都做完才 merge。不選一次做完（改動太大，審不動；拿掉 Skia 之前先確認 Vello 單獨撐得住測試）。
+33. **2026-11-11：tile 之間允許差 1**。同一塊內容切成 tile 畫和整塊畫，反鋸齒的邊緣和模糊的範圍裡每個 channel 最多差 1（Vello 的覆蓋率用浮點數算，從不同的原點算捨入不同；Skia 用定點數，沒有這個差異）。測試在 scale 1 的形狀、文字和陰影要求逐位相同，其餘允許差 1。不選要求全部逐位相同（要改 Vello 算覆蓋率的方式）。實作時發現、照測到的結果定的，使用者確認接受；記進列出缺口的文件。
 
 ## 待決定
 

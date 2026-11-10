@@ -1,0 +1,88 @@
+# Step 2a: Vello is the playback; what it lacks is made up for.
+#
+#     python3 scripts/test.py mutate rfcs/0007-gpu-raster/mutants-2a.toml
+#
+# (The test of mipmaps is skipped: they are step 2b's.)
+
+test = ["cargo", "test", "-q", "-p", "raster", "--", "--skip", "a_decoded_image_is_drawn_as_its_pixels_sampled"]
+timeout = 900
+
+[[mutant]]
+name = "no room around a tile for what a filter or a blur reaches"
+file = "crates/raster/src/vello_backend.rs"
+from = '''    clamp_ceil::<u16>(reach.max(0.0) + 1.0).min(1024)'''
+to = '''    clamp_ceil::<u16>(reach.min(0.0)).min(1024)'''
+
+[[mutant]]
+name = "glyphs that begin outside the tile are left out"
+file = "crates/raster/src/vello_backend.rs"
+from = '''            (f64::from(size) * 2.0 + stroke) * scale_of(to_device)'''
+to = '''            (f64::from(size) * 0.0 + stroke * 0.0) * scale_of(to_device)'''
+
+[[mutant]]
+name = "glyphs are drawn where they are put"
+file = "crates/raster/src/vello_backend.rs"
+from = '''            if aligned {
+                let device_x'''
+to = '''            if aligned && a < 0.0 {
+                let device_x'''
+
+[[mutant]]
+name = "glyphs are at any height"
+file = "crates/raster/src/vello_backend.rs"
+from = '''                y = ((device_y.round() - f) / d) as f32;'''
+to = '''                y = ((device_y - f) / d) as f32;'''
+
+[[mutant]]
+name = "glyphs are at eighths of a pixel"
+file = "crates/raster/src/vello_backend.rs"
+from = '''        const SNAP: f64 = 4.0;'''
+to = '''        const SNAP: f64 = 8.0;'''
+
+[[mutant]]
+name = "what is in a clip outside the tile is drawn"
+file = "crates/raster/src/vello_backend.rs"
+from = '''            self.hidden += 1;'''
+to = '''            self.hidden += 0;'''
+
+[[mutant]]
+name = "every clip goes to Vello"
+file = "crates/raster/src/vello_backend.rs"
+from = '''        seen.x0 < bounds.x1 && seen.x1 > bounds.x0 && seen.y0 < bounds.y1 && seen.y1 > bounds.y0'''
+to = '''        seen.x0 < bounds.x1 + 1e9 && seen.x1 > bounds.x0 - 1e9 && seen.y0 < bounds.y1 + 1e9 && seen.y1 > bounds.y0 - 1e9'''
+
+[[mutant]]
+name = "a clip that touches the tile's edge from outside is shown"
+file = "crates/raster/src/vello_backend.rs"
+from = '''        seen.x0 < bounds.x1 && seen.x1 > bounds.x0 && seen.y0 < bounds.y1 && seen.y1 > bounds.y0'''
+to = '''        seen.x0 <= bounds.x1 && seen.x1 >= bounds.x0 && seen.y0 <= bounds.y1 && seen.y1 >= bounds.y0'''
+
+[[mutant]]
+name = "a canvas's pixels aren't in the scene"
+file = "crates/raster/src/vello_backend.rs"
+from = '''        player.seed_canvas();'''
+to = '''        // player.seed_canvas();'''
+
+[[mutant]]
+name = "a gradient that ends in a hard stop isn't made longer"
+file = "crates/raster/src/vello_backend.rs"
+from = '''    let stretch = shader.tile_mode == TileMode::Clamp'''
+to = '''    let stretch = shader.tile_mode != TileMode::Clamp'''
+
+[[mutant]]
+name = "a longer gradient keeps its stops' offsets"
+file = "crates/raster/src/vello_backend.rs"
+from = '''                stop.offset * 0.5'''
+to = '''                stop.offset * 1.0'''
+
+[[mutant]]
+name = "a chain runs only its first filter"
+file = "crates/raster/src/vello_backend.rs"
+from = '''            return filters.iter().fold(pixmap, |pixmap, filter| {'''
+to = '''            return filters.iter().take(1).fold(pixmap, |pixmap, filter| {'''
+
+[[mutant]]
+name = "a color matrix does nothing"
+file = "crates/raster/src/vello_backend.rs"
+from = '''            color_matrix(&mut pixels, matrix);'''
+to = '''            let _ = matrix;'''

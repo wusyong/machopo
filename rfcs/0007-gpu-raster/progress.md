@@ -11,7 +11,10 @@
 | 0 圖片的解碼和讀尺寸、JPEG 的編碼換成純 Rust 的 crate（Skia 照舊畫） | 完成，還沒 merge | 2026-11-10 |
 | 1a 原型：常用的 op；量文字多的 tile、存截圖（第一個檢查點） | 完成：檢查點通過（不 merge） | 2026-11-10 |
 | 1b 原型：全部的 op 和組出來的功能；整套 reftest（第二個檢查點） | 完成：檢查點通過（不 merge） | 2026-11-10 |
-| 2 playback 換成 vello_cpu、ink bounds 改用 skrifa、拿掉 skia-safe、加上列出缺的功能的文件 | 還沒開始 | |
+| 2a Vello 成為唯一的 playback；`raster` 的測試搬過來、補上「上游還缺」、不會 panic、tile 接縫的測試 | 完成，還沒審 | 2026-11-11 |
+| 2b ink bounds 改用 skrifa、mipmap、拿掉 skia-safe | 還沒開始 | |
+| 2c playback 裡的 panic：release 接住、留白、記 log 和 DevTools Console 的警告 | 還沒開始 | |
+| 2d WPT 的預期結果、列出缺的功能的文件、其他文件、整個階段的檢查 | 還沒開始 | |
 | 3 改進（文字的 gamma 和對比、漸層的 dithering、fork 裡的 `ColorMatrix`；可能不需要） | 還沒開始 | |
 
 ## 驗收
@@ -25,6 +28,9 @@
 | 第 0 步：轉成不是 premultiplied 的結果和 Skia 逐位相同 | `encode::tests::unpremultiplying_is_skias_for_every_color_and_alpha`（每種顏色和 alpha 的組合，和 Skia 的 `readPixels` 比；Skia 拿掉時這個測試跟著拿掉，`unpremultiplying_rounds_as_skia_does` 的固定數值留著） |
 | 第 0 步：在視窗裡，橫著存的照片照 EXIF 的方向顯示，頁面讀到轉過的尺寸 | `python3 scripts/test.py scenarios image-orientation`（`about:demo` 的「A photo held sideways」，等到頁面寫出「8 by 16」，截圖在 `target/scenario-results/image-orientation/`） |
 | 第 0 步：JPEG 的編碼照 Blink 的設定 | `encode::tests::a_jpeg_is_blended_on_black`、`a_jpegs_quality`（取樣）、`a_jpegs_tables_are_libjpegs`（量化表）、`nothing_for_no_pixels`（邊長的上限） |
+| 第 2a 步：display list 能放的東西每一種都畫得出來，不 panic | `playback_tests::one_of_everything_is_drawn`（每種 op、每種 filter 和巢狀的 chain、27 種 blend mode 各用在 draw、layer 和 `DrawColor`、每種 shader；三個 tile 和 canvas） |
+| 第 2a 步：tile 和整塊畫出來的一樣，filter、陰影和文字在 tile 的邊緣不斷開 | `playback_tests::tiles_have_the_pixels_of_the_whole`（96×96 對九個 32×32，scale 1 和 1.5） |
+| 第 2a 步：上游還缺的和上游的 bug，上游補上時測試會失敗 | `vello_backend::tests::upstream_lacks_color_matrix_filters`、`upstream_lacks_filters_of_several_primitives`、`upstream_pads_a_gradient_past_a_hard_stop_with_the_color_before_it`、`upstream_panics_on_a_clipped_stroke_at_the_right_edge` |
 
 ## 做過的檢查
 
@@ -269,3 +275,50 @@
   - reftest 8 個：`css-tables/tentative/paint/background-image-column.html`、`-column-collapsed.html`、`-row-collapsed.html`、`box-shadow-041.html`、`-042.html`（混色的差 1，f32 的管線會過）、`clip-path-animation-custom-timing-function.html`（最大差 3）、`contain-paint-clip-006.html`、`css-scroll-anchoring/nested-overflow-subtree-layout.html`（後兩個沒看）。
   - 沒有因為對齊而變壞的；最大差 31 的 `text-decoration-thickness-percent-001.html` 和 `vars-font-shorthand-001.html` 也通過了。
 - 對齊之後文字比較頁和 Skia 的差距幾乎沒變（1x：13.0% 的 pixel 變 12.9%，平均差 31.3 變 30.5）：那個差距是粗細，不是位置。
+
+### 第 2a 步：Vello 成為唯一的 playback（2026-11-11，Windows 11，AMD Radeon RX 7900 XTX）
+
+**做了什麼**：
+
+- `raster::playback_into` 和 `draw_into` 直接呼叫 `vello_backend`；原型的環境變數（`MACHOPO_RASTER`、`MACHOPO_VELLO_*`）、計時和 f32 管線的開關都拿掉，`vello_cpu` 的 `f32_pipeline` feature 也關掉。glyph 的對齊（四分之一 pixel）和 culling 變成固定的行為。
+- `skia_backend.rs` 剪到只剩 2b 要換掉的部分：Skia 的 typeface 快取、`ink_bounds`、collection 的拆解，和拿 Skia 對照 `gfx::Path` 的測試。少了 2,200 多行，剩 748 行。
+- 原本對著 Skia 寫的 52 個 playback 測試搬到 `playback_tests.rs`，改成只經過 `raster` 的公開 API；看快取的那幾個改看 Vello 的快取（幾張圖、解了幾次、資料沒了之後項目有沒有清掉）。**搬過來之後 52 個都通過**，沒有為了讓它們通過而改預期的值。
+- 補的地方每一處有一行 `vello:` 開頭的註解（14 處），寫上游缺什麼或哪裡錯。上游的 issue 編號沒有寫：還沒有逐條對過上游的 issue，2d 寫缺口的文件時一起對。
+- 邊長超過 65,535 的 pixels（Vello 的 context 的邊長是 `u16`）不畫、記一筆 log，不再悄悄地什麼都不做。tile 不會這麼大；canvas 可以，2d 記成缺口。
+
+**新的測試**（`cargo test -p raster`：85 個通過，1 個失敗）：
+
+- 上面「驗收」的三列，加上 `glyphs_are_drawn_at_quarters_of_a_pixel`、`a_glyph_that_begins_outside_is_drawn`、`a_clip_outside_hides_what_is_in_it`、`past_a_hard_stop_at_its_end_a_gradient_is_the_last_color`、`on_a_canvas_a_blend_mode_takes_from_what_the_bitmap_has`、`pixels_too_wide_to_draw_on_are_left`。
+- **失敗的一個是預期中的**：`lib.rs` 的 `tests::a_decoded_image_is_drawn_as_its_pixels_sampled_as_its_filter_says` 的後半（縮小時 `Medium` 要取平均）。Vello 沒有 mipmap，2b 在圖片的快取裡做；在那之前這個測試留著失敗，不標成忽略。
+
+**tile 的接縫不是每一種都逐位相同**：
+
+| 內容 | scale 1 | scale 1.5 |
+| --- | --- | --- |
+| 形狀（圓角矩形、粗線、半透明的 multiply） | 相同 | 最大差 1 |
+| 文字（Lato 15px 和 40px 的描邊、Ahem 21px，位置不在整數上） | 相同 | 最大差 1 |
+| 盒子的陰影（外側、內側帶洞） | 相同 | 相同 |
+| layer 的 blur | 最大差 1 | 最大差 1 |
+| layer 的 drop shadow | 相同 | 相同 |
+| blur 接 color matrix | 相同 | 最大差 1 |
+
+差 1 的都在反鋸齒的邊緣或模糊的範圍裡：Vello 的覆蓋率用浮點數算，同一條邊從不同的 tile 原點算（座標差 32）捨入不一樣；blur 則是從大小不同的離屏 context 算出來的。Skia 的掃描線用定點數，整數的位移不影響結果，所以原本沒有這個差異。測試在 scale 1 的形狀、文字和陰影要求逐位相同，其餘允許差 1；真的接縫（把四周加大的量拿掉）差 70 到 182，測試抓得到。差 1 肉眼看不到，但它是和 Skia 不一樣的地方，2d 記進缺口的文件。
+
+**Mutation test**（`mutants-2a.toml`，13 條都抓到）：
+
+| 弄壞了什麼 | 哪個測試失敗 |
+| --- | --- |
+| tile 四周不留 filter 和 blur 會用到的範圍 | `tiles_have_the_pixels_of_the_whole` |
+| 原點在 tile 外面的 glyph 不畫 | `a_glyph_that_begins_outside_is_drawn`、`tiles_have_the_pixels_of_the_whole` |
+| glyph 不對齊；垂直方向不對齊到整數；對齊到八分之一 | `glyphs_are_drawn_at_quarters_of_a_pixel` |
+| 在 tile 外面的 clip 裡照樣畫 | `a_clip_outside_hides_what_is_in_it`、`the_ops_a_tile_finds_draw_it_as_all_of_them` |
+| 每個 clip 都交給 Vello；剛好貼著 tile 邊緣的 clip 也交給 Vello | `upstream_panics_on_a_clipped_stroke_at_the_right_edge`、`a_clip_outside_hides_what_is_in_it`（Vello 在裡面 panic） |
+| canvas 原本的像素不先畫進場景 | `on_a_canvas_a_blend_mode_takes_from_what_the_bitmap_has` |
+| 結尾硬切的漸層不拉長；拉長了但色標的位置沒減半 | `past_a_hard_stop_at_its_end_a_gradient_is_the_last_color` |
+| chain 只跑第一個 filter；color matrix 沒作用 | `layer_filters_invert_blur_and_chain` |
+
+`test.py mutate` 開始前要原本的測試全過，所以這份的測試指令跳過 mipmap 那一個（2b 做完時拿掉 `--skip`）。跑完檔案都還原了。
+
+**沒有測試守著的**：glyph 的 culling 省了多少沒有計數（離 tile 遠的 glyph 有沒有真的被濾掉，測試只看得到「該畫的有畫」）。2d 記進測試缺口的文件；要守的話是在 playback 加一個測試讀得到的計數。
+
+**其他檢查**：`cargo clippy -p raster --all-targets -- -D warnings`、`cargo fmt -p raster --check`、`sanity.py` 的 deps、spans、boundary、unsafe、tests、numerics、docs 都過。`boundary` 的清單拿掉了原型的兩個 thread-local。reftest、情境和 WPT 這一段沒有重跑：畫圖的程式和 1b 最後跑整套時（對齊開在 4）是同一份，只拿掉開關；2d 整個階段做完時再跑。
