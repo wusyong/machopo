@@ -3,11 +3,17 @@ From: Wu Yuwei <yuweiwu@pm.me>
 Date: Tue, 10 Nov 2026 07:43:45 +0900
 Subject: [PATCH] fontique: leave out fonts without an em
 
+`FontInfo::from_font_ref` leaves out a font without a `head` table, or whose
+`head` gives an em of 0 units, as it does one without a usable charmap.
+
+An Apple bitmap font has `bhed` for `head` (macOS's GB18030 Bitmap is one),
+and an em of 0 put its glyphs and runs at NaN (`font_size / units_per_em`).
+Text asking for such a font now falls back as if it weren't there.
 ---
- fontique/src/font.rs                     |  7 ++++
+ fontique/src/font.rs                     |  7 +++
  parley/src/tests/mod.rs                  |  1 +
- parley/src/tests/test_font_without_em.rs | 52 ++++++++++++++++++++++++
- 3 files changed, 60 insertions(+)
+ parley/src/tests/test_font_without_em.rs | 65 ++++++++++++++++++++++++
+ 3 files changed, 73 insertions(+)
  create mode 100644 parley/src/tests/test_font_without_em.rs
 
 diff --git a/fontique/src/font.rs b/fontique/src/font.rs
@@ -41,10 +47,10 @@ index 6d33ade82a79d4445e97607473230fd6d197dffe..2d3694c8cb5330181d38affa45e349e6
  mod utils;
 diff --git a/parley/src/tests/test_font_without_em.rs b/parley/src/tests/test_font_without_em.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..ab2ca683d74190529eead1c889ce1abef4bea116
+index 0000000000000000000000000000000000000000..4977a02bbaccd47fb240cbb59e1955abbb93dd49
 --- /dev/null
 +++ b/parley/src/tests/test_font_without_em.rs
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,65 @@
 +// Copyright 2026 the Parley Authors
 +// SPDX-License-Identifier: Apache-2.0 OR MIT
 +
@@ -96,4 +102,17 @@ index 0000000000000000000000000000000000000000..ab2ca683d74190529eead1c889ce1abe
 +    // Patching the font is not what leaves it out.
 +    assert_eq!(registered(font_data(Some(1000))), 1);
 +    assert_eq!(registered(font_data(Some(0))), 0);
++}
++
++#[test]
++fn a_font_without_a_head_table_is_left_out() {
++    let mut data = font_data(None);
++    let num_tables = usize::from(u16::from_be_bytes([data[4], data[5]]));
++    let record = (0..num_tables)
++        .map(|i| 12 + i * 16)
++        .find(|&record| &data[record..record + 4] == b"head")
++        .unwrap();
++    // Another tag in its place: the records stay sorted, unless a font has a `heb` table.
++    data[record..record + 4].copy_from_slice(b"hea_");
++    assert_eq!(registered(data), 0);
 +}

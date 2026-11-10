@@ -143,13 +143,21 @@ pub(crate) fn features(font: &FontDescription) -> Vec<FontFeature> {
     out
 }
 
-/// `font-variation-settings`' axes. `font-optical-sizing: auto`'s `opsz`
-/// is the shaper's, which knows the font size and that the variations
-/// don't set it.
+/// The axes text is shaped with: `opsz` at the font size for
+/// `font-optical-sizing: auto` (CSS Fonts 4, as Blink's
+/// `FontPlatformData` adds it to the variations it hands the shaper),
+/// then `font-variation-settings`', which win where they set it. A font
+/// without the axis ignores it.
 pub(crate) fn variations(font: &FontDescription) -> Vec<FontVariation> {
-    font.variation_settings
+    let settings = font
+        .variation_settings
         .iter()
-        .map(|setting| FontVariation::new(Tag::new(&setting.tag), setting.value))
+        .map(|setting| FontVariation::new(Tag::new(&setting.tag), setting.value));
+    let optical = font.optical_sizing && !font.variation_settings.iter().any(|v| v.tag == *b"opsz");
+    optical
+        .then(|| FontVariation::new(Tag::new(b"opsz"), font.size))
+        .into_iter()
+        .chain(settings)
         .collect()
 }
 

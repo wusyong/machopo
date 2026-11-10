@@ -36,5 +36,3 @@ trace_event.workspace = true
 html.workspace = true
 # The style the box trees are built from.
 style.workspace = true
-# Fonts with one rule each, for how far shaping reaches across a space.
-write-fonts.workspace = true

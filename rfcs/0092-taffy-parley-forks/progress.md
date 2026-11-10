@@ -10,8 +10,8 @@
 | --- | --- | --- |
 | 1 taffy fork 的基礎設施：fork、path 依賴、patch 的匯出和檢查、parley 現在的 patch、文件 | 完成 | 2026-11-10 |
 | 2 計數 | 完成 | 2026-11-10 |
-| 3a 重寫 parley 的 fork：合成分組、rebase 到上游的 main、machopo 配合 | 做完，等審核：fork 的改寫只在本地（`11771f1c`，舊的頂端有本地的 tag `machopo-2026-11-10`），`third_party.toml` 釘本地的 commit；審核後才 push tag 和 `machopo` 分支。階段最後的 `cargo test --workspace`、fmt、clippy 等 3b 做完一起跑 | |
-| 3b parley 的 fork 自己的測試、上游的草稿、拿掉 `text-indent` 的 workaround | 還沒開始 | |
+| 3a 重寫 parley 的 fork：合成分組、rebase 到上游的 main、machopo 配合 | 完成（fork 的頂端 `11771f1c`，tag `machopo-2026-11-10-3a`；舊的頂端的 tag `machopo-2026-11-10`） | 2026-11-10 |
+| 3b parley 的 fork 自己的測試、上游的草稿、拿掉 `text-indent` 的 workaround、optical sizing 由 machopo 做 | 做完，等審核：fork 的頂端 `b4941e39`（`machopo` 分支）和兩個 tag 已經 push | |
 | 4 taffy 跟上上游的 main | 還沒開始 | |
 | 5 字型家族的清單和名稱解析 | 還沒開始 | |
 | 6 float 和 taffy 的快取（6a）、做 fragment 時的斷行（6b） | 還沒開始 | |
@@ -31,7 +31,9 @@
 | `LayoutUpdate::lines_broken_for_fragments`：做 fragment 時在最後的寬度真的又斷了一次 | `inline::lines_are_broken_again_for_their_fragments`：確定的寬度、放得下的 shrink-to-fit 的 float 是 0；在沒有空間的地方 shrink-to-fit 的 float（行在 0 斷、盒子和內容一樣寬）是 1 |
 | `BoxTreeUpdate::font_family_names`：shape 的 inline formatting context 給 parley 的字型家族名稱 | `font_selection::each_span_gives_parley_its_family_names`：block 的清單、inline 元素的、`display: contents` 的元素裡的 run 的，各加幾個名稱就多幾個；在 span 自己的 style 裡的文字不加；匿名 block 加兩次；沒有 shape 時 0。`update::` 的測試比較 `BoxTreeUpdate` 時不比這個欄位 |
 | 計數都在 release build 裡 | `RUST_LOG=layout=debug` 的 release build 印出 `layout`、`build box tree`、`update box tree` 三行的欄位（量測用的就是這些） |
-| parley 的 fork 是上游的 main（`1b67b753`，2026-11-08）加上 10 個各做一件事的 commit 和 `README.machopo.md` 的 commit，每個 commit 帶 fork 自己的測試 | fork 的 `cargo test -p parley -p parley_engine -p parley_tests -p fontique`、clippy、`cargo fmt --all -- --check`；`python3 scripts/ci.py patches parley` 匯出 11 個 patch，`ci.py third-party` 確認它們套在 `upstream_rev` 上和 `rev` 一樣 |
+| parley 的 fork 是上游的 main（`1b67b753`，2026-11-08）加上 9 個各做一件事的 commit 和 `README.machopo.md` 的 commit，每個 commit 帶 fork 自己的測試和完整的訊息 | fork 的 `cargo test -p parley -p parley_engine -p parley_tests -p fontique`、clippy、`cargo fmt --all -- --check`；`python3 scripts/ci.py patches parley` 匯出 10 個 patch，`ci.py third-party` 確認它們套在 `upstream_rev` 上和 `rev` 一樣 |
+| `font-optical-sizing: auto` 的文字用字級的 `opsz` shape 和畫，`font-variation-settings` 自己設的贏，關掉時沒有 | `layout` 的 `font_features::a_variable_fonts_axes`：軸的值，和 advance（自動的和把 `opsz` 設成字級的一樣，和關掉的、設成 40 的都不一樣） |
+| 只被問寬度的盒子有 `text-indent` 時不斷行 | `inline::a_width_alone_breaks_no_lines`：`max-content`、`fit-content` 加縮排的寬度是 110、斷行 1 次 |
 | machopo 配合上游的 API，除了 atomic inline 的 bidi 和斷行，排版不變 | `cargo test -p layout`、`-p shell`；`test.py reftest` 的 `text/`、`inline/`、`floats/`、`generated/`、`canvas/`、`svg/`、`block/`、`position/`、`flex/`、`grid/`、`tables/`、`hidpi/`；`test.py wpt` 的 `css/css-text`、`css/css-text-decor`、`css/CSS2/linebox`、`css/CSS2/normal-flow`、`css/css-overflow/line-clamp`、`css/css-sizing`、`css/css-display`、`css/css-pseudo`；差異逐項記在「做過的檢查」 |
 | 第 2 段的計數不變 | `tests/sites/` 的 7 頁再數一次，每頁每個計數和第 2 段的一樣 |
 
@@ -76,6 +78,24 @@
 - **成本**：有非零寬度 atomic inline 的 layout 每次 build 複製 shaped text（改寬度時 shaped text 不能和快取共用）；段落快取的 key 多了 scale，字的快取的 key 多了 `point_size`。
 - **跑過的檢查**：fork 的 `cargo test -p parley -p parley_engine -p parley_tests -p fontique`（11、169、37、252 個通過、1 個 ignored）、clippy（只有上游 manifest 的警告）、`cargo fmt --all -- --check`（只有 Windows checkout 的換行警告）；machopo 的 `cargo test -p layout`（25、469）、`cargo test -p shell`（70、11、550）；reftest 12 個目錄 112 個全部符合預期；WPT 的 8 個目錄 9,611 個檢查，只有上面那一個從 FAIL 變 PASS；`tests/sites/` 的計數和第 2 段一樣；`python3 scripts/ci.py third-party`。WPT 一次給太多目錄時 Windows 的指令列太長（`WinError 206`），分成幾次跑。
 - **rebase 到 `main` 的 `743514d`**（2026-11-10）：`rfcs/README.md` 的清單衝突兩次（另一份 RFC 的那一列照 `main`，這一份的照這個 branch），其他自動合併；之後 `cargo test -p layout`（25、469）通過，`cargo test -p shell` 的 `devtools_initiators::script_asks_with_its_stack` 不穩定（單獨跑 6 次失敗 2 次：沒有 `href` 的 `<link>` 之後拿到的是前一段 script 的 stack，`bare` 而不是 `giveHref`），其他 562 個通過。這個測試和它測的程式這個 branch 都沒有動過。看程式推測的原因（還沒驗證）：沒有 load 拿走的 stack 在 render thread 一輪的最後才清掉（`clear_request_stacks`），兩個 `Runtime.evaluate` 落在同一輪時第二個拿到第一個留下的。rebase 前跑過一次是通過的，沒有重複跑，不能確定 `main` 上有沒有。
+
+**第 3b 段**（2026-11-10，Windows 11）：
+
+- **optical sizing 由 machopo 做**：`layout` 的 `font_features::variations` 在 `font-optical-sizing: auto`、`font-variation-settings` 沒有設 `opsz` 時，在給 parley 的 variation 最前面加字級的 `opsz`（Blink 的 `FontPlatformData` 也是在自己這一側加）；沒有這個軸的字型不理它。fork 的「Size the font optically」和 `StyleProperty::OpticalSizing` 拿掉，fork 剩 9 個 commit 加 README。成本：有 optical sizing 的 style（預設就是）每次 `text_style` 多一個 variation，variation 的清單不再是空的，所以多一次小的配置；量測沒有另外做。reftest 和 WPT 的結果和 3a 一樣（下面）。
+- **拿掉 `InlineContent::indented`**：上游的 content widths 已經含縮排，只被問寬度時不用為了縮排斷行。`a_width_alone_breaks_no_lines` 的 `max-content` 和 `fit-content` 加縮排的兩個例子斷行次數從 2 變成 1，寬度不變（110）。float 加縮排的那個例子仍是 2：float 本來就先在給它的空間斷一次、再在自己的寬度斷一次，和縮排無關。
+- **測試搬進 fork**：machopo 的 `parley_inline_box.rs`、`parley_shaped_text.rs`、`parley_space.rs` 刪掉，`parley_words.rs`、`parley_line_breaks.rs` 只留下面說的幾個。fork 多了 `test_shape_words`（現做的 `Made`、`Reaching` 兩個字型）、`test_shape_words_space`（`space.rs` 的規則，每個測試現做一個只有一兩條規則的字型），`test_edges` 多兩個案例（空的盒子的邊緣、字中間的邊緣不多一個斷行機會），`test_font_without_em` 多一個沒有 `head` 的案例；fork 的 `parley` 多一個 dev-dependency `write-fonts`，machopo 的 workspace 不再依賴它。
+- **留在 machopo 的**（比決定的事項多一類）：經過 machopo 的 layout 才看得到的（`parley_line_breaks` 的兩個：`TextContext` 的文字查表、有其他規則的交給 ICU4X），和**要用 fork 的 repository 沒有的字型的**（`parley_words::text_in_lato_is_shaped_whole` 用真的 Lato-Medium，`words_beside_a_space_a_font_shapes_with_them_are_shaped_again_as_one` 用 WPT 的字型）。
+- **查到的事：計數看的是這一次 shape 的字**。`text_in_lato_is_shaped_whole` 加 Ahem 的對照時，同一個 context 先排過別的文字，對照的斷言拿到 `(4, 1)` 而不是 `(2, 3)`：字的快取裡已經有前一段文字的字，命中的不算 shape。對照改用新的 context。
+- **commit 的訊息**：9 個 commit 都補了完整的訊息（改了什麼、為什麼、怎麼測），寫成可以直接送上游的樣子。
+- **上游的草稿**（`upstream/parley/`，只在本地，沒有送出任何東西）：最後的強制換行、沒有 em 的字型、斷行表。上游的 PR 範本規定說明不能是 LLM 寫的、第一行要揭露 LLM 的參與，所以草稿寫成材料（改了什麼、為什麼、怎麼測、reviewer 可能問什麼），送出的人照它自己寫；斷行表建議先開 issue，送出前要用上游的 `parley_bench` 量測，`skip_word_boundaries` 拆成另一個 PR。
+- **mutation test**：
+  - machopo（`mutants-3b.toml`，`python3 scripts/test.py mutate rfcs/0092-taffy-parley-forks/mutants-3b.toml`）：`opsz` 的 5 條全部抓到。第一次 4 條抓到、1 條沒抓到：「加的是另一個軸」（`wdth` 設成字級，advance 一樣和關掉的不同）；測試加了一個關掉 optical sizing、把 `opsz` 設成字級的例子，advance 要和自動的一樣。另一條等價，沒有放進去：`font-variation-settings` 設了 `opsz` 時照樣加字級的（設定排在後面，後面的贏；記在 `docs/test-gaps.md`）。
+  - 拿掉 `indented` 沒有可以弄壞的程式（是刪掉的）：斷行次數的斷言在拿掉之前是 2、之後是 1，測試分得出兩者。
+  - fork（scratchpad 的一次性 script，只跑 fork 自己的測試，確認測試搬過去之後不靠 machopo 也抓得到）：沒有 em 的字型 3 條全部抓到（不檢查、沒有 `head` 的收、em 是 0 的收）；第一個字型 1 條抓到；共用 shaped text 11 條、10 條抓到、1 條等價（和 3a 一樣）；shaping 的快取 16 條、12 條抓到，沒抓到的 4 條和 3a 的一樣（3 條等價、1 條是 safe-to-concat 的缺口）；`space.rs` 的規則新寫 22 條、19 條抓到，第一次 3 條沒抓到：
+    - 「空白後面的 glyph 太多時不整段」：測試只有空白前面的；補了後面的（`a_font_with_many_glyphs_beside_a_space_shapes_text_whole`），抓到。
+    - 「`kern` 的 pair 把空白後面的 mark 也算進去」：等價，只是多合併一些字、比較慢（HarfBuzz 的 kerning 跳過 mark）。
+    - 「讀不懂的表當成不碰空白」：缺口，沒有壞掉的表的測試字型（記在 `docs/test-gaps.md`）。
+- **跑過的檢查**：fork 的 `cargo test -p parley -p parley_engine -p parley_tests -p fontique`（11、191、37、252 個通過、1 個 ignored）、clippy（只有上游 manifest 的警告）、`cargo fmt --all -- --check`（只有 Windows checkout 的換行警告）；machopo 的 `cargo test -p layout`（25、432：少的是搬走的測試）、`cargo test -p shell`（70、11、563）；reftest 的 12 個目錄 104 個全部符合預期；WPT 的 `css/css-text`、`css/css-text-decor`、`css/CSS2/linebox`、`css/CSS2/normal-flow`、`css/css-fonts`、`css/css-overflow/line-clamp`、`css/css-sizing`、`css/css-display`、`css/css-pseudo` 共 14,151 個檢查，全部符合預期（沒有預期結果要改）；`python3 scripts/ci.py third-party`；`python3 scripts/sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。階段（3a 和 3b）最後：`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`（55 個 test binary，3727 個通過、1 個 ignored）。
 
 **第 2 段的量測**（2026-11-10，Windows 11，release build，`RUST_LOG=layout=debug`，scratchpad 裡一次性的 script 加總每頁的 log）：`tests/sites/` 用 `--headless`（1280×800）載入一次；blink_perf 的 30 頁照 `bench.py blink-perf` 的方法（`--automation-pipe`，頁面跑完整個 runner）；Speedometer 3.1 的 20 個 suite 各一次 iteration（`iterationCount=1`，只數計數，沒量時間）。
 

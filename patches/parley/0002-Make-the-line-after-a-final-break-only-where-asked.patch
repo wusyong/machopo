@@ -3,6 +3,14 @@ From: Wu Yuwei <yuweiwu@pm.me>
 Date: Tue, 10 Nov 2026 07:43:45 +0900
 Subject: [PATCH] Make the line after a final break only where asked
 
+`Layout::set_line_after_final_break`: whether the line after a forced break
+that ends the text (a newline last) is made. By default it is, as before: an
+editor puts the caret there.
+
+CSS makes no line box after the last forced break when nothing follows it,
+so `<div>a<br></div>` is one line tall. Not made, the line is taken back
+once committed, before anything is yielded, so a caller breaking lines one
+at a time never sees it either.
 ---
  parley/src/layout/data.rs            |  5 ++
  parley/src/layout/layout.rs          | 13 ++++

@@ -3,6 +3,15 @@ From: Wu Yuwei <yuweiwu@pm.me>
 Date: Tue, 10 Nov 2026 07:43:46 +0900
 Subject: [PATCH] Break lines after soft hyphens with a hyphen
 
+`StyleProperty::SoftHyphens` (`TextStyle::soft_hyphens`): CSS `hyphens`.
+`Break` by default: the opportunity after a soft hyphen is like any other
+and nothing is drawn, as before. `NoBreak` is `hyphens: none`; `Hyphen` has
+the advance of the hyphen, which the embedder shapes and draws.
+
+`LineMetrics::hyphen_advance` is the part of a line's `advance` that is the
+hyphen. The min/max-content measurer counts the hyphen at the end of the
+fragment it ends. A hyphen that does not fit takes an earlier opportunity,
+or overflows.
 ---
  parley/src/layout/alignment.rs         |   2 +
  parley/src/layout/data.rs              |  56 +++-
@@ -295,7 +304,7 @@ index 69c8f89c06495c39b5c209900dc7769ad1745b4d..bf118f9e9082f69bef5f2f94accb6c5d
      ///
      /// This is useful for consumers exposing the text to assistive technologies,
 diff --git a/parley/src/resolve/mod.rs b/parley/src/resolve/mod.rs
-index 298c40db80bf0529316d406634a5c8fe81d39481..9e2c6ab66d47bad9866f17d79bebf49404de414d 100644
+index 791b5fb9941d1303e28f5c574a96fe2aa7c69998..604cca3bbbab3a0961c72429f68530c585c7c248 100644
 --- a/parley/src/resolve/mod.rs
 +++ b/parley/src/resolve/mod.rs
 @@ -17,7 +17,7 @@ use super::style::{
@@ -307,26 +316,26 @@ index 298c40db80bf0529316d406634a5c8fe81d39481..9e2c6ab66d47bad9866f17d79bebf494
  use crate::{LineBreak, LineHeight, OverflowWrap, VerticalAlign, layout};
  use core::borrow::Borrow;
  use core::ops::Range;
-@@ -172,6 +172,7 @@ impl ResolveContext {
+@@ -171,6 +171,7 @@ impl ResolveContext {
+             StyleProperty::WhiteSpaceCollapse(value) => WhiteSpaceCollapse(*value),
              StyleProperty::CollapsedSpace(value) => CollapsedSpace(*value),
              StyleProperty::TabStops(value) => TabStops(scale_tab_stops(*value, scale)),
-             StyleProperty::OpticalSizing(value) => OpticalSizing(*value),
 +            StyleProperty::SoftHyphens(value) => SoftHyphens(scale_soft_hyphens(*value, scale)),
          }
      }
  
-@@ -216,6 +217,7 @@ impl ResolveContext {
+@@ -214,6 +215,7 @@ impl ResolveContext {
+             white_space_collapse: raw_style.white_space_collapse,
              collapsed_space: raw_style.collapsed_space,
              tab_stops: scale_tab_stops(raw_style.tab_stops, scale),
-             optical_sizing: raw_style.optical_sizing,
 +            soft_hyphens: scale_soft_hyphens(raw_style.soft_hyphens, scale),
          }
      }
  
-@@ -412,6 +414,16 @@ pub(crate) enum ResolvedProperty<B: Brush> {
+@@ -408,6 +410,16 @@ pub(crate) enum ResolvedProperty<B: Brush> {
+     CollapsedSpace(CollapsedSpace),
+     /// machopo: where a tab reaches.
      TabStops(Option<TabStops>),
-     /// machopo: CSS `font-optical-sizing: auto`.
-     OpticalSizing(bool),
 +    /// machopo: how a line may break after a soft hyphen.
 +    SoftHyphens(SoftHyphens),
 +}
@@ -340,32 +349,32 @@ index 298c40db80bf0529316d406634a5c8fe81d39481..9e2c6ab66d47bad9866f17d79bebf494
  }
  
  /// machopo: tab stops scaled as the other lengths are.
-@@ -474,6 +486,8 @@ pub(crate) struct ResolvedStyle<B: Brush> {
+@@ -468,6 +480,8 @@ pub(crate) struct ResolvedStyle<B: Brush> {
+     pub(crate) collapsed_space: CollapsedSpace,
+     /// machopo: where a tab reaches.
      pub(crate) tab_stops: Option<TabStops>,
-     /// machopo: CSS `font-optical-sizing: auto`.
-     pub(crate) optical_sizing: bool,
 +    /// machopo: how a line may break after a soft hyphen.
 +    pub(crate) soft_hyphens: SoftHyphens,
  }
  
  impl<B: Brush> ResolvedStyle<B> {
-@@ -510,6 +524,7 @@ impl<B: Brush> ResolvedStyle<B> {
+@@ -503,6 +517,7 @@ impl<B: Brush> ResolvedStyle<B> {
+             WhiteSpaceCollapse(value) => self.white_space_collapse = value,
              CollapsedSpace(value) => self.collapsed_space = value,
              TabStops(value) => self.tab_stops = value,
-             OpticalSizing(value) => self.optical_sizing = value,
 +            SoftHyphens(value) => self.soft_hyphens = value,
          }
      }
  
-@@ -545,6 +560,7 @@ impl<B: Brush> ResolvedStyle<B> {
+@@ -537,6 +552,7 @@ impl<B: Brush> ResolvedStyle<B> {
+             WhiteSpaceCollapse(value) => self.white_space_collapse == *value,
              CollapsedSpace(value) => self.collapsed_space == *value,
              TabStops(value) => self.tab_stops == *value,
-             OpticalSizing(value) => self.optical_sizing == *value,
 +            SoftHyphens(value) => self.soft_hyphens == *value,
          }
      }
  
-@@ -560,6 +576,7 @@ impl<B: Brush> ResolvedStyle<B> {
+@@ -552,6 +568,7 @@ impl<B: Brush> ResolvedStyle<B> {
              text_wrap_mode: self.text_wrap_mode,
              white_space_collapse: self.white_space_collapse,
              tab_stops: self.tab_stops,
@@ -374,19 +383,19 @@ index 298c40db80bf0529316d406634a5c8fe81d39481..9e2c6ab66d47bad9866f17d79bebf494
          }
      }
 diff --git a/parley/src/style/mod.rs b/parley/src/style/mod.rs
-index d71f3fb13f6f5035c34ac9b82a2b697b5f3929bf..2724529f7109de441e78f034866a49978ae67018 100644
+index a5371413af0eb7f2b1c29c9d2803a55c0fb0b34d..e58adc32a2c5bc4490f5787bdef284a8f6ac6cf5 100644
 --- a/parley/src/style/mod.rs
 +++ b/parley/src/style/mod.rs
-@@ -307,6 +307,8 @@ pub enum StyleProperty<'a, B: Brush> {
-     /// machopo: CSS `font-optical-sizing: auto`: a font with an `opsz` axis is shaped and drawn
-     /// at the font size on it, unless the font variations set it.
-     OpticalSizing(bool),
+@@ -304,6 +304,8 @@ pub enum StyleProperty<'a, B: Brush> {
+     CollapsedSpace(CollapsedSpace),
+     /// machopo: where a tab reaches (CSS `tab-size`); `None` leaves it its shaped advance.
+     TabStops(Option<TabStops>),
 +    /// machopo: how a line may break after a soft hyphen (CSS `hyphens`).
 +    SoftHyphens(SoftHyphens),
  }
  
  /// machopo: tab stops for CSS `tab-size`, in layout units before the display scale, worked out by
-@@ -320,6 +322,27 @@ pub struct TabStops {
+@@ -317,6 +319,27 @@ pub struct TabStops {
      pub min_advance: f32,
  }
  
@@ -414,37 +423,37 @@ index d71f3fb13f6f5035c34ac9b82a2b697b5f3929bf..2724529f7109de441e78f034866a4997
  impl<B: Brush> From<Option<TabStops>> for StyleProperty<'_, B> {
      fn from(value: Option<TabStops>) -> Self {
          StyleProperty::TabStops(value)
-@@ -387,6 +410,8 @@ pub struct TextStyle<'family, 'settings, B: Brush> {
+@@ -382,6 +405,8 @@ pub struct TextStyle<'family, 'settings, B: Brush> {
+     pub collapsed_space: CollapsedSpace,
+     /// machopo: where a tab reaches (CSS `tab-size`); `None` leaves it its shaped advance.
      pub tab_stops: Option<TabStops>,
-     /// machopo: CSS `font-optical-sizing: auto` (off by default, as upstream has it).
-     pub optical_sizing: bool,
 +    /// machopo: how a line may break after a soft hyphen (CSS `hyphens`).
 +    pub soft_hyphens: SoftHyphens,
  }
  
  impl<B: Brush> Default for TextStyle<'static, 'static, B> {
-@@ -421,6 +446,7 @@ impl<B: Brush> Default for TextStyle<'static, 'static, B> {
+@@ -415,6 +440,7 @@ impl<B: Brush> Default for TextStyle<'static, 'static, B> {
+             white_space_collapse: WhiteSpaceCollapse::default(),
              collapsed_space: CollapsedSpace::default(),
              tab_stops: None,
-             optical_sizing: false,
 +            soft_hyphens: SoftHyphens::Break,
          }
      }
  }
 diff --git a/parley/src/tests/mod.rs b/parley/src/tests/mod.rs
-index 5f56fa23fa1fd2c1c907db04df8e24883710e4ae..81e13b3320ea36c948850c746c20feeeb5131260 100644
+index 70c02dac6c30e2526013ace992a0ad89ff4be3da..714f356242a504f356fc30aeb19f31ec8002e69f 100644
 --- a/parley/src/tests/mod.rs
 +++ b/parley/src/tests/mod.rs
-@@ -7,6 +7,7 @@ mod test_edges;
+@@ -6,6 +6,7 @@ mod test_builders;
+ mod test_edges;
  mod test_final_break;
  mod test_font_without_em;
- mod test_optical_sizing;
 +mod test_soft_hyphens;
  mod test_style_metrics;
  mod test_tab_stops;
  mod utils;
 diff --git a/parley/src/tests/test_builders.rs b/parley/src/tests/test_builders.rs
-index 353bc6430bd60a26296a57aee8c9cbbfec73ea00..8106356b16193eabad3ccf1fd6961c1df290378f 100644
+index 48b17f831435898a4d45de9ec18b234930f362ab..14cfa1c30e396e80d5afb745d5ff88690cd2d7f2 100644
 --- a/parley/src/tests/test_builders.rs
 +++ b/parley/src/tests/test_builders.rs
 @@ -15,7 +15,7 @@ use super::utils::{
@@ -456,18 +465,18 @@ index 353bc6430bd60a26296a57aee8c9cbbfec73ea00..8106356b16193eabad3ccf1fd6961c1d
      StyleRunBuilder, TabStops, TextStyle, TextWrapMode, TreeBuilder, VerticalAlign,
      WhiteSpaceCollapse, WordBreak,
  };
-@@ -244,6 +244,7 @@ fn create_root_style() -> TextStyle<'static, 'static, ColorBrush> {
+@@ -243,6 +243,7 @@ fn create_root_style() -> TextStyle<'static, 'static, ColorBrush> {
+             interval: 40.,
              min_advance: 3.,
          }),
-         optical_sizing: true,
 +        soft_hyphens: SoftHyphens::Hyphen(5.),
      }
  }
  
-@@ -288,6 +289,7 @@ fn set_root_style(rb: &mut RangedBuilder<'_, ColorBrush>) {
+@@ -286,6 +287,7 @@ fn set_root_style(rb: &mut RangedBuilder<'_, ColorBrush>) {
+         interval: 40.,
          min_advance: 3.,
      })));
-     rb.push_default(StyleProperty::OpticalSizing(true));
 +    rb.push_default(StyleProperty::SoftHyphens(SoftHyphens::Hyphen(5.)));
  }
  
@@ -944,7 +953,7 @@ index 03897fe432a4af429d1af5ccfc12fff1536dcd91..779a71908c296b7455a37f8b51b8f664
                      assert_eq!(flags.is_default_ignorable(), default_ignorable);
                      assert_eq!(flags.glyph_len(), 3);
 diff --git a/parley_engine/src/shape/shaped_text.rs b/parley_engine/src/shape/shaped_text.rs
-index 99e81301f838fdde018f56c8b8bbb9d6d49bbf86..d559b6d06a66c69cadb32ceea69126dfbf2d46a0 100644
+index fd17cd9ad3c9678a8f0c755890f3783151c9259e..750fa35adcb9278df92330ad3dbc10f118caea26 100644
 --- a/parley_engine/src/shape/shaped_text.rs
 +++ b/parley_engine/src/shape/shaped_text.rs
 @@ -583,7 +583,8 @@ fn process_shaped_clusters<'a>(

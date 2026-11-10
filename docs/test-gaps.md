@@ -115,6 +115,7 @@
 | machopodriver 等 `load` 時也比對分頁（`Session::wait_for_load` 的 `frame_id`，照 chromedriver） | loader 的 id 是每個分頁自己的導覽的號碼，要等的導覽還沒 `load` 時、別的分頁剛好有同號的導覽在背景載入完，才看得出差別；`load` 由 renderer 在 load 事件時送，背景的分頁也送，所以不是等價的，但要排出兩個分頁同號又同時的導覽 | 審查 | `shell` 的 `webdriver` 測試能讓背景的分頁的導覽停在指定的號碼時補（例如先在一個分頁多導覽幾次） |
 | renderer 只在 `RendererFlags::automation` 時處理自動化專用的 message（`QueryElement`、`ScrollIntoViewIfNeeded`、`RequestVisualState`、`WebDriver`），沒有時只記 log | `renderer` 的測試沒有直接送 message 給 render thread 的工具，`shell` 的測試都帶著 automation，沒有在沒有 automation 時送這幾種的 | 審查 | `renderer` 有送 message、看回答的測試工具時，沒有 automation 的 renderer 收到這幾種 message 都不回答 |
 | 選取在 `<br>` 之後、後面沒有別的子節點時，caret 畫在那個 `<br>` 的那一行（`renderer` 的 `selection::caret`）；後面還有子節點時不照這樣畫 | 拿掉「後面沒有」這個條件沒有測試失敗：後面是空的 inline 元素或 `<img>` 這類時，machopo 本來就畫不出 caret（Chrome 畫在下一行的開頭），拿掉之後畫在上一行，兩種都和 Chrome 不同，沒有 Chrome 的值能寫進測試 | 審查 | caret 照 Blink 的 canonical position 放的時候（例如落在空的 inline 元素前面），補那個位置的測試 |
+| parley fork 判斷字型的規則和空白時，讀不懂的表當成跨過空白（`space.rs` 的 `space_reach`） | 沒有表壞掉的測試字型；改成「不碰空白」沒有測試失敗。debug build 的比對（以字為單位的和整段的）在真的遇到時會抓到 | 審查 | 現做一個表被截斷的字型時補一個 |
 | parley fork 判斷字型的規則和空白時，24-bit 的 GSUB、GPOS 格式（`space.rs`） | 測試字型沒有一個用這些格式；讀不懂的一律當成跨過空白（整段 shape），只會比較慢 | 審查 | 有了用這些格式的測試字型時補一個 |
 | parley fork 以字為單位 shaping 時，buffer 帶 safe-to-concat 旗標的照樣整段（`shape_segment` 的 `has_safe_to_concat_flags`） | parley 一律不要這些旗標，條件走不到；拿掉它沒有測試失敗 | 審查 | parley 開始要這些旗標時補一個 |
 | 選字型記住的第一個字型只算有 charmap 的（parley fork 的 `FontSelector` 的 `first_font`） | 拿掉這個條件沒有測試失敗：測試字型（Ahem、Lato）都有 charmap，沒有一個字型能測；快速路徑自己也要先拿到 charmap，所以只影響「每個字型都沒有 charmap」時改用 last-resort 字型 | 審查；條件是上游原本就有的（它只記住有沒有這樣的字型） | 有了沒有 charmap 的測試字型時（例如測 last-resort 字型）補一個 |
@@ -300,7 +301,7 @@
 
 **layout**
 
-- parley fork 在 `font-optical-sizing` 改變的地方切開 shaping 的 item（`shape/mod.rs`）：machopo 在每個元素的開頭和結尾都放了一個 inline box，parley 本來就在那裡切開 item，同一個 item 不會跨過兩個元素；fork 的這一行是給不放 inline box 的使用方式的。
+- `layout` 給 parley 的 variation 在 `font-variation-settings` 自己設了 `opsz` 時不另外加字級的 `opsz`（`font_features.rs` 的 `variations`）：設定排在後面、後面的贏，兩個都給結果一樣；照樣不加，不依賴 shaper 取哪一個。
 - parley fork 的軟連字號：新的一行把「上一個 atom 是軟連字號」重設回 `Break`（`LineState::reset`；斷在軟連字號之後，下一行從那裡的狀態開始，但一行的第一個 atom 和開頭的元素邊緣都在 x 是 0 的地方，那裡不記斷點）；連字號的前進量乘上 display scale（machopo 的排版的 scale 是 1）；`ResolvedStyle::check` 比較 `SoftHyphens`（只有 `RangedBuilder` 用它，machopo 用 ranged builder 的 `shape_line` 一律給 `Break`）；min/max-content 的量測在 `hyphens: none` 的軟連字號之後只在 `overflow-wrap: anywhere` 時斷（拿掉 `NoBreak` 的條件也不斷，`anywhere` 本來就在每個 atom 之前斷，量到的最寬的一段一樣）。
 - IFC 的 measure 在知道寬度時回傳那個寬度（taffy 的 leaf 在知道寬度時不看 measure 回傳的寬度）。
 - 絕對定位盒子的 resolved `top` 和 `left` 改成取 layout 算出來的位置（`layout::geometry` 的 `used_inset`：machopo 只有 horizontal-tb、ltr，`top` 和 `left` 一定是被採用的那一邊，給了值就擺在那裡，兩者相等；同一行的 `right` 和 `bottom` 不等價，由 `shell` 的 `absolute_boxes_and_their_insets` 抓到）。
@@ -321,6 +322,7 @@
 - parley fork 以字為單位 shaping 時，選字型的樣式沒有號碼的字也逐字（`shape_segment`）：parley 的 selector 一律給號碼，只有沒有實作 `font_style` 的 selector 會沒有；照樣整段，免得用沒有號碼的 key 存字。
 - parley fork 碰到要整段 shaping 的字型、整段重來時不重設 selector（`begin_segment`）：selector 的狀態只在樣式或字型清單變了時重設，第一個字型對現在的 query 仍然成立；照樣重設，不依賴這個細節。
 - parley fork 以字為單位 shaping 時，default ignorable 開頭的字「前一個字是空白」的條件（`WordRuns::joins`）：字只在空白和 inline object 的前後切開，inline object 之後另起一個 run，所以同一個 run 裡 default ignorable 開頭的字前面一定是空白；條件只是把意思寫出來。
+- parley fork 判斷字型的規則和空白時，`kern` 的 pair 不把空白後面的 mark 算成「空白後面的 glyph」（`space.rs` 的 `in_kern`）：算進去只是多合併一些字、比較慢，HarfBuzz 的 kerning 本來就跳過 mark。照樣不算。
 - parley fork 查斷行表時，交給 ICU4X 的字一律從文字開頭看起（`line_table.rs` 不記前一個字的開頭）：ICU4X 看到的上下文只多不少，結果一樣，只是比較慢。照樣只從前一個字開始。
 - `layout` 的 `TextContext` 不關掉字的界線（`set_word_boundaries(false)`）：machopo 不讀 parley 的字的界線，只是分析比較慢；測試看不到。之後若有算分析次數或時間的計數，再補。
 - parley fork 判斷字型的規則和空白時，chained context 的 backtrack 不倒過來（`space.rs` 的 `chained`）：backtrack 有兩格以上時規則就有三格以上，有空白就一律當成跨過空白，順序看不出差別；只有一格時倒不倒都一樣。照樣倒過來，位置的順序和比對的順序一致。

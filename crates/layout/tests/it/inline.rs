@@ -833,13 +833,12 @@ fn a_width_alone_breaks_no_lines() {
             40.0,
             2,
         ),
-        // With an indent its lines are broken for its width: once more at
-        // the width they give with no limit, and at its min-content width,
-        // which counts the indent, only once.
+        // An indent is in the widths it is asked for, so its lines are
+        // broken no more often for it.
         (
             "<div style='width: max-content; text-indent: 10px'>XX XX</div>",
             110.0,
-            2,
+            1,
         ),
         (
             "<div style='width: min-content; text-indent: 10px'>XX XX</div>",
@@ -851,8 +850,10 @@ fn a_width_alone_breaks_no_lines() {
         (
             "<div style='width: 500px'><div style='width: fit-content; text-indent: 10px'>XX XX</div></div>",
             110.0,
-            2,
+            1,
         ),
+        // (A float's lines are broken in the room it is offered and again
+        // at its width, with an indent or without.)
         (
             "<div style='width: 500px'><div style='float: left; text-indent: 10px'>XX XX</div></div>",
             110.0,

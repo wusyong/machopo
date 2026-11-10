@@ -3,6 +3,20 @@ From: Wu Yuwei <yuweiwu@pm.me>
 Date: Tue, 10 Nov 2026 07:43:47 +0900
 Subject: [PATCH] Look line breaks up in a table
 
+`analyze_text` finds the line break opportunities of a text under the
+default rules in a table (`parley_engine`'s `line_table.rs`), for characters
+up to U+017F and from U+2000 to U+203F, as UAX #14's pair table does.
+
+The table is what ICU4X's line segmenter gives. A test generates it, fails
+when the table is out of date and prints it anew. A word with a character
+outside the table (an inline object's among them), or a pair that changes
+with the characters around it, is given to ICU4X with the words on either
+side. A debug build gives every text looked up to ICU4X whole too, and
+compares.
+
+`AnalysisOptions::skip_word_boundaries`
+(`LayoutContext::set_word_boundaries`, on by default) leaves word boundaries
+out, for text no one moves through by words with the layout's clusters.
 ---
  parley/src/analysis.rs                    |   1 +
  parley/src/context.rs                     |  20 +
@@ -74,7 +88,7 @@ index 34d3b775eee890a0a0558ac7a6b702d157f13b7a..fa9157cf70098ffe72d1eb6d58af638b
      // context: font selection may pick others.
      #[doc(hidden)]
 diff --git a/parley/src/tests/mod.rs b/parley/src/tests/mod.rs
-index cdcc287c2da24d086dd7ffbed2fd850d293bb28d..602b733505982e3ef073b171c39829015ec56143 100644
+index f65877e53df657f015d77a8eda020a04639556c6..154a9a5acf83a702f4accdae8a143716a6406096 100644
 --- a/parley/src/tests/mod.rs
 +++ b/parley/src/tests/mod.rs
 @@ -6,6 +6,7 @@ mod test_builders;
@@ -82,9 +96,9 @@ index cdcc287c2da24d086dd7ffbed2fd850d293bb28d..602b733505982e3ef073b171c3982901
  mod test_final_break;
  mod test_font_without_em;
 +mod test_line_break_table;
- mod test_optical_sizing;
  mod test_shape_cache;
- mod test_shaped_text_sharing;
+ mod test_shape_words;
+ mod test_shape_words_space;
 diff --git a/parley/src/tests/test_line_break_table.rs b/parley/src/tests/test_line_break_table.rs
 new file mode 100644
 index 0000000000000000000000000000000000000000..5ff84fddd6b992f3b785f417a9b424d0edb597fb
@@ -381,10 +395,10 @@ index 9140237c569cb92f4bf9f3efa228486888c82704..d81d7cfc1af35b903f8fe7ebbd236725
      }
  }
 diff --git a/parley_engine/src/lib.rs b/parley_engine/src/lib.rs
-index 6160533ad5f69f2cf404e654a2b1ff73664c0393..5920630307f762b0a3a6b0f0f76d380d5d26515b 100644
+index cc55c54fca8656b0f8f804dc0ac910568506e647..c5aff4872c0632980f35cbfb98f9332688b8a41e 100644
 --- a/parley_engine/src/lib.rs
 +++ b/parley_engine/src/lib.rs
-@@ -135,6 +135,7 @@ mod bidi;
+@@ -134,6 +134,7 @@ mod bidi;
  pub mod break_overrides;
  mod glyph;
  pub mod itemize;

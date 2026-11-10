@@ -1058,12 +1058,6 @@ impl InlineContent {
         self.out_of_flow.iter().map(|&(id, _)| id)
     }
 
-    /// Whether its first line is indented whatever its width: its width
-    /// is then taken from its lines.
-    pub(crate) fn indented(&self) -> bool {
-        indent_px(self.text_indent, None) != 0.0
-    }
-
     /// The floats here, in order, each with where the lines last placed
     /// its margin box, from the content box.
     pub(crate) fn floats(&self) -> impl Iterator<Item = (taffy::NodeId, PointF)> + '_ {
@@ -2698,7 +2692,6 @@ fn text_style(
         } else {
             parley::FontVariations::List(Cow::Owned(variations))
         },
-        optical_sizing: style.font.optical_sizing,
         font_weight: parley::FontWeight::new(style.font.weight),
         font_style: match style.font.style {
             FontStyle::Normal => parley::FontStyle::Normal,
@@ -2862,7 +2855,6 @@ fn text_properties(
         StyleProperty::FontWidth(s.font_width),
         StyleProperty::FontFeatures(s.font_features),
         StyleProperty::FontVariations(s.font_variations),
-        StyleProperty::OpticalSizing(s.optical_sizing),
         StyleProperty::LineHeight(s.line_height),
         StyleProperty::TextWrapMode(s.text_wrap_mode),
         StyleProperty::WhiteSpaceCollapse(s.white_space_collapse),

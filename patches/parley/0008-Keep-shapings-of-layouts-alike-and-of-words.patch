@@ -3,25 +3,87 @@ From: Wu Yuwei <yuweiwu@pm.me>
 Date: Tue, 10 Nov 2026 07:43:47 +0900
 Subject: [PATCH] Keep shapings: of layouts alike, and of words
 
+`LayoutContext` keeps what shaping a layout's text gave (`shape/cache.rs`,
+`ShapeCache`), for the next layout of the same text at the same scale,
+styled the same in what changes shaping, with its out-of-flow boxes and
+edges at the same places.
+
+The shaper also shapes a segment a word at a time and keeps what shaping a
+word gave (`parley_engine`'s `shape/words.rs`), only where shaping a word on
+its own gives what shaping the segment whole does: left to right, not Arabic
+or Syriac, no features that are off unless asked for, and with fonts whose
+rules take a space with the glyph beside it at most (`shape/space.rs`,
+`space_reach`: what a font's GSUB and GPOS rules do across a space). Words
+around a space a font takes so are shaped again as one. A word that starts
+with a default ignorable is shaped with the space before it: where a font
+positions no marks harfrust does, and takes the default ignorables after a
+base with it. An inline object is between words and is not kept.
+
+In a debug build every text that took a shaping is also shaped whole and
+compared (`same_shaping`). `LayoutContext::clear_shapings` forgets what is
+kept, for fonts added. fontique's `SourceCache` keeps a font it prunes
+weakly, so that loading it again while a kept word holds it gives the same
+blob.
+
+The tests make their fonts, with a rule or two each (`write-fonts`, a
+dev-dependency).
 ---
- fontique/src/source_cache.rs           |   64 +-
- parley/src/builder.rs                  |    2 +
- parley/src/context.rs                  |   38 +
- parley/src/shape/cache.rs              |  275 ++++++
- parley/src/shape/mod.rs                |  130 ++-
- parley/src/tests/mod.rs                |    1 +
- parley/src/tests/test_shape_cache.rs   |  307 +++++++
- parley_engine/src/shape/mod.rs         |    4 +
- parley_engine/src/shape/shaped_text.rs |  134 ++-
- parley_engine/src/shape/shaper.rs      |  837 +++++++++++++++--
- parley_engine/src/shape/space.rs       | 1148 ++++++++++++++++++++++++
- parley_engine/src/shape/words.rs       |  235 +++++
- 12 files changed, 3045 insertions(+), 130 deletions(-)
+ Cargo.lock                                 |   14 +
+ fontique/src/source_cache.rs               |   64 +-
+ parley/Cargo.toml                          |    2 +
+ parley/src/builder.rs                      |    2 +
+ parley/src/context.rs                      |   38 +
+ parley/src/shape/cache.rs                  |  273 +++++
+ parley/src/shape/mod.rs                    |  130 ++-
+ parley/src/tests/mod.rs                    |    3 +
+ parley/src/tests/test_shape_cache.rs       |  307 ++++++
+ parley/src/tests/test_shape_words.rs       |  296 +++++
+ parley/src/tests/test_shape_words_space.rs |  964 ++++++++++++++++
+ parley_engine/src/shape/mod.rs             |    4 +
+ parley_engine/src/shape/shaped_text.rs     |  134 ++-
+ parley_engine/src/shape/shaper.rs          |  839 ++++++++++++--
+ parley_engine/src/shape/space.rs           | 1148 ++++++++++++++++++++
+ parley_engine/src/shape/words.rs           |  231 ++++
+ 16 files changed, 4318 insertions(+), 131 deletions(-)
  create mode 100644 parley/src/shape/cache.rs
  create mode 100644 parley/src/tests/test_shape_cache.rs
+ create mode 100644 parley/src/tests/test_shape_words.rs
+ create mode 100644 parley/src/tests/test_shape_words_space.rs
  create mode 100644 parley_engine/src/shape/space.rs
  create mode 100644 parley_engine/src/shape/words.rs
 
+diff --git a/Cargo.lock b/Cargo.lock
+index 19fd9211f47523abfc94d48e4fae9e273ec7db6e..c82b4ad3f9b7eeda117c146fdb49545e57f7abf4 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2754,6 +2754,7 @@ dependencies = [
+  "parley_engine",
+  "peniko",
+  "smallvec",
++ "write-fonts",
+ ]
+ 
+ [[package]]
+@@ -4838,6 +4839,19 @@ version = "0.57.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+ 
++[[package]]
++name = "write-fonts"
++version = "0.55.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3e91ad74b39f48f456560ed1ccc75959efa19bf6f0817d1560751bb49db84f6c"
++dependencies = [
++ "font-types",
++ "indexmap",
++ "kurbo",
++ "log",
++ "read-fonts 0.46.0",
++]
++
+ [[package]]
+ name = "writeable"
+ version = "0.6.4"
 diff --git a/fontique/src/source_cache.rs b/fontique/src/source_cache.rs
 index 03f893cd3c556940411cbe271b157a28d630e4a4..f67bae0a59563df72f2652cd8b08c08b500b897d 100644
 --- a/fontique/src/source_cache.rs
@@ -130,6 +192,19 @@ index 03f893cd3c556940411cbe271b157a28d630e4a4..f67bae0a59563df72f2652cd8b08c08b
 +        assert_ne!(cache.get(&source).unwrap().id(), id);
 +    }
 +}
+diff --git a/parley/Cargo.toml b/parley/Cargo.toml
+index a0ab3345eb2464e72dfba20b17026ed157cf3669..c4fd4c4ad6646070669d2a0afbfed1c30604fa71 100644
+--- a/parley/Cargo.toml
++++ b/parley/Cargo.toml
+@@ -48,6 +48,8 @@ peniko = { workspace = true }
+ bytemuck = { workspace = true }
+ icu_properties = { workspace = true, features = ["compiled_data"] }
+ icu_segmenter = { workspace = true, features = ["compiled_data"] }
++# machopo: fonts made in tests, a lookup or two each.
++write-fonts = "0.55.0"
+ 
+ # We special-case android targets because oxipng doesn't build in Android CI.
+ [target.'cfg(not(target_os = "android"))'.dev-dependencies]
 diff --git a/parley/src/builder.rs b/parley/src/builder.rs
 index b894501e138f2cc272ea292594f59d288b22f0d4..d1ebd19b5966345bef4d2317d48d189d62107f95 100644
 --- a/parley/src/builder.rs
@@ -204,10 +279,10 @@ index 2642f745cd8ae064184dc07bdad3042e1d6de23c..34d3b775eee890a0a0558ac7a6b702d1
          font_ctx: &mut FontContext,
 diff --git a/parley/src/shape/cache.rs b/parley/src/shape/cache.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..afc7d00ac1650931b0c904ce6400a34725123f5f
+index 0000000000000000000000000000000000000000..abbf36e89ed6114b5ce1440d6e801a6889883ef7
 --- /dev/null
 +++ b/parley/src/shape/cache.rs
-@@ -0,0 +1,275 @@
+@@ -0,0 +1,273 @@
 +// Copyright 2026 the Parley Authors
 +// SPDX-License-Identifier: Apache-2.0 OR MIT
 +
@@ -274,7 +349,6 @@ index 0000000000000000000000000000000000000000..afc7d00ac1650931b0c904ce6400a347
 +    locale: Option<parlance::Language>,
 +    letter_spacing: u32,
 +    word_spacing: u32,
-+    optical_sizing: bool,
 +}
 +
 +impl RunStyle {
@@ -293,7 +367,6 @@ index 0000000000000000000000000000000000000000..afc7d00ac1650931b0c904ce6400a347
 +            locale: style.locale,
 +            letter_spacing: style.letter_spacing.to_bits(),
 +            word_spacing: style.word_spacing.to_bits(),
-+            optical_sizing: style.optical_sizing,
 +        }
 +    }
 +}
@@ -484,7 +557,7 @@ index 0000000000000000000000000000000000000000..afc7d00ac1650931b0c904ce6400a347
 +        })
 +}
 diff --git a/parley/src/shape/mod.rs b/parley/src/shape/mod.rs
-index 49ac572af8a2d6df30e1317e48cc38c127836e10..edcd01523110737fe3dfed16a91b2b5cb72d64a0 100644
+index c96c169e21c57fc14b8f7d059d650034b3d224a4..d5206fb9a31bd6e9dcc9710290968b286e175fcc 100644
 --- a/parley/src/shape/mod.rs
 +++ b/parley/src/shape/mod.rs
 @@ -4,6 +4,10 @@
@@ -537,7 +610,7 @@ index 49ac572af8a2d6df30e1317e48cc38c127836e10..edcd01523110737fe3dfed16a91b2b5c
          // TODO: we currently walk characters here, but we could instead just walk boundaries of
          // styles and inline boxes.
          let char_count = char_style_indices.len();
-@@ -182,17 +190,97 @@ pub(crate) fn shape_text<'a, B: Brush>(
+@@ -179,17 +187,97 @@ pub(crate) fn shape_text<'a, B: Brush>(
          })
      };
  
@@ -643,7 +716,7 @@ index 49ac572af8a2d6df30e1317e48cc38c127836e10..edcd01523110737fe3dfed16a91b2b5c
  
      // Out-of-flow boxes are laid out as items of their own.
      let mut out_of_flow_box_iter = inline_boxes
-@@ -278,6 +366,9 @@ struct FontSelector<'a, 'b, B: Brush> {
+@@ -275,6 +363,9 @@ struct FontSelector<'a, 'b, B: Brush> {
  
      /// The font to use if [`Self::query`] doesn't return any font.
      last_resort_font: LastResortFont,
@@ -653,7 +726,7 @@ index 49ac572af8a2d6df30e1317e48cc38c127836e10..edcd01523110737fe3dfed16a91b2b5c
  }
  
  impl<'a, 'b, B: Brush> FontSelector<'a, 'b, B> {
-@@ -289,8 +380,12 @@ impl<'a, 'b, B: Brush> FontSelector<'a, 'b, B> {
+@@ -286,8 +377,12 @@ impl<'a, 'b, B: Brush> FontSelector<'a, 'b, B> {
          query: &'b mut Query<'a>,
          rcx: &'a ResolveContext,
          styles: &'a [ResolvedStyle<B>],
@@ -666,7 +739,7 @@ index 49ac572af8a2d6df30e1317e48cc38c127836e10..edcd01523110737fe3dfed16a91b2b5c
  
          Self {
              query,
-@@ -301,6 +396,7 @@ impl<'a, 'b, B: Brush> FontSelector<'a, 'b, B> {
+@@ -298,6 +393,7 @@ impl<'a, 'b, B: Brush> FontSelector<'a, 'b, B> {
              attrs,
              first_font: None,
              last_resort_font: LastResortFont::Unresolved,
@@ -674,7 +747,7 @@ index 49ac572af8a2d6df30e1317e48cc38c127836e10..edcd01523110737fe3dfed16a91b2b5c
          }
      }
  }
-@@ -318,6 +414,10 @@ impl<'a, 'b, B: Brush> parley_engine::FontSelector for FontSelector<'a, 'b, B> {
+@@ -315,6 +411,10 @@ impl<'a, 'b, B: Brush> parley_engine::FontSelector for FontSelector<'a, 'b, B> {
          self.first_font = None;
      }
  
@@ -686,14 +759,16 @@ index 49ac572af8a2d6df30e1317e48cc38c127836e10..edcd01523110737fe3dfed16a91b2b5c
          &mut self,
          _segment: &parley_engine::itemize::Segment,
 diff --git a/parley/src/tests/mod.rs b/parley/src/tests/mod.rs
-index 875b7b6854cc2daf3e63dca5041e8a90b581d67f..cdcc287c2da24d086dd7ffbed2fd850d293bb28d 100644
+index 10dcc82f01c090e254555898f4cb56207461f43b..f65877e53df657f015d77a8eda020a04639556c6 100644
 --- a/parley/src/tests/mod.rs
 +++ b/parley/src/tests/mod.rs
-@@ -7,6 +7,7 @@ mod test_edges;
+@@ -6,6 +6,9 @@ mod test_builders;
+ mod test_edges;
  mod test_final_break;
  mod test_font_without_em;
- mod test_optical_sizing;
 +mod test_shape_cache;
++mod test_shape_words;
++mod test_shape_words_space;
  mod test_shaped_text_sharing;
  mod test_soft_hyphens;
  mod test_style_metrics;
@@ -1010,6 +1085,1278 @@ index 0000000000000000000000000000000000000000..eedd11bd0c4f6325858ed47dc978faa2
 +    assert_eq!(cx.lcx.words_reused_and_shaped(), (2, 3));
 +    assert_eq!(cx.lcx.words_joined(), 1);
 +}
+diff --git a/parley/src/tests/test_shape_words.rs b/parley/src/tests/test_shape_words.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..acb0e0709895b52293f53a195c987d7bc9f7711f
+--- /dev/null
++++ b/parley/src/tests/test_shape_words.rs
+@@ -0,0 +1,296 @@
++// Copyright 2026 the Parley Authors
++// SPDX-License-Identifier: Apache-2.0 OR MIT
++
++//! machopo: tests for text shaped a word at a time, the words kept: text is split before each
++//! space and after it, and a word is shaped again only with other fonts asked for (families,
++//! width, weight, style) or other shaping options. Only where shaping a word on its own gives
++//! what shaping the text whole does: left to right, and with fonts whose rules take a space with
++//! the glyph beside it at most (`test_shape_words_space` makes fonts with one rule or two). A
++//! debug build also shapes every text shaped a word at a time whole, and compares the two.
++
++use alloc::borrow::{Cow, ToOwned};
++use alloc::format;
++use alloc::string::{String, ToString};
++use alloc::sync::Arc;
++use alloc::vec::Vec;
++use core::ops::Range;
++
++use fontique::{Blob, Collection, CollectionOptions, SourceCache};
++use parlance::Language;
++use write_fonts::tables::layout::LookupFlag;
++
++use super::test_shape_words_space::{Rules, extra, font, font_named, g, ligature};
++use crate::{
++    FontContext, FontFamily, FontFamilyName, FontFeatures, FontVariations, FontWeight, Layout,
++    LayoutContext, StyleProperty,
++};
++
++pub(super) type Contexts = (FontContext, LayoutContext<u32>);
++
++/// A font context with two fonts made here only: `Made`, without rules, and `Reaching`, with a
++/// ligature that skips base glyphs, a space too.
++fn contexts() -> Contexts {
++    let reaching = Rules {
++        gsub: alloc::vec![ligature(
++            &[g('a'), g('b')],
++            extra(0),
++            LookupFlag::IGNORE_BASE_GLYPHS,
++        )],
++        ..Default::default()
++    };
++    contexts_with(&[font(Rules::default()), font_named("Reaching", reaching)])
++}
++
++/// A font context with the fonts in `files` only.
++pub(super) fn contexts_with(files: &[Vec<u8>]) -> Contexts {
++    let mut collection = Collection::new(CollectionOptions {
++        shared: false,
++        system_fonts: false,
++    });
++    for file in files {
++        collection.register_fonts(Blob::new(Arc::new(file.clone())), None);
++    }
++    let fonts = FontContext {
++        collection,
++        source_cache: SourceCache::default(),
++    };
++    (fonts, LayoutContext::new())
++}
++
++type Styles<'a> = &'a [(Range<usize>, StyleProperty<'static, u32>)];
++
++/// `text` in 20px `family`, with `styles` over parts of it.
++pub(super) fn build(
++    fonts: &mut FontContext,
++    cx: &mut LayoutContext<u32>,
++    family: &str,
++    text: &str,
++    styles: Styles<'_>,
++) -> Layout<u32> {
++    let mut builder = cx.ranged_builder(fonts, text, 1.0, true);
++    builder.push_default(StyleProperty::FontFamily(FontFamily::Single(
++        FontFamilyName::named(family),
++    )));
++    builder.push_default(StyleProperty::FontSize(20.0));
++    for (range, style) in styles {
++        builder.push(style.clone(), range.clone());
++    }
++    builder.build(text)
++}
++
++/// How many words laying out `text` took from those shaped before, and how many it shaped and
++/// kept.
++fn words(cx: &mut Contexts, family: &str, text: &str, styles: Styles<'_>) -> (usize, usize) {
++    let (reused, shaped) = cx.1.words_reused_and_shaped();
++    build(&mut cx.0, &mut cx.1, family, text, styles);
++    let (now_reused, now_shaped) = cx.1.words_reused_and_shaped();
++    (now_reused - reused, now_shaped - shaped)
++}
++
++/// `words` of `text` in `Made`, all of it with `style`.
++fn styled(cx: &mut Contexts, text: &str, style: StyleProperty<'static, u32>) -> (usize, usize) {
++    words(cx, "Made", text, &[(0..text.len(), style)])
++}
++
++#[test]
++fn text_is_split_before_and_after_each_space() {
++    // `aa`, ` ` and `bb` are shaped; the rest are taken.
++    assert_eq!(
++        words(&mut contexts(), "Made", "aa bb aa bb aa", &[]),
++        (6, 3)
++    );
++    // `aa`, ` `, ` `, `bb`.
++    assert_eq!(words(&mut contexts(), "Made", "aa  bb", &[]), (1, 3));
++    // A space's combining mark stays with it: `aa`, ` \u{301}bb`.
++    assert_eq!(words(&mut contexts(), "Made", "aa \u{301}bb", &[]), (0, 2));
++}
++
++#[test]
++fn a_long_word_is_not_kept() {
++    let a32 = "a".repeat(32);
++    let a33 = "a".repeat(33);
++    assert_eq!(
++        words(&mut contexts(), "Made", &format!("{a32} {a32}"), &[]),
++        (1, 2)
++    );
++    // Only the space is kept.
++    assert_eq!(
++        words(&mut contexts(), "Made", &format!("{a33} {a33}"), &[]),
++        (0, 1)
++    );
++}
++
++#[test]
++fn a_word_asking_for_other_fonts_or_options_is_shaped_again() {
++    let bold = StyleProperty::FontWeight(FontWeight::BOLD);
++    assert_eq!(
++        words(&mut contexts(), "Made", "aa aa", &[(3..5, bold)]),
++        (0, 3)
++    );
++    // A brush asks for the same fonts.
++    let brush = StyleProperty::Brush(1);
++    assert_eq!(
++        words(&mut contexts(), "Made", "aa aa", &[(3..5, brush)]),
++        (1, 2)
++    );
++    let mut cx = contexts();
++    assert_eq!(words(&mut cx, "Made", "aa", &[]), (0, 1));
++    let larger = StyleProperty::FontSize(30.0);
++    assert_eq!(styled(&mut cx, "aa", larger), (0, 1));
++    let no_ligatures =
++        StyleProperty::FontFeatures(FontFeatures::Source(Cow::Borrowed("\"liga\" 0")));
++    assert_eq!(styled(&mut cx, "aa", no_ligatures), (0, 1));
++    let weight_axis =
++        StyleProperty::FontVariations(FontVariations::Source(Cow::Borrowed("\"wght\" 500")));
++    assert_eq!(styled(&mut cx, "aa", weight_axis), (0, 1));
++    let turkish = StyleProperty::Locale(Some(Language::parse("tr").unwrap()));
++    assert_eq!(styled(&mut cx, "aa", turkish), (0, 1));
++}
++
++#[test]
++fn a_word_in_another_script_is_shaped_again() {
++    // The font has neither digits nor Greek: font selection takes it anyway, the first family.
++    let mut cx = contexts_with(&[font(Rules::default())]);
++    assert_eq!(words(&mut cx, "Made", "ab 12", &[]), (0, 3));
++    // ` 12` takes the script of the Greek before it.
++    assert_eq!(words(&mut cx, "Made", "\u{3b1}\u{3b2} 12", &[]), (0, 3));
++}
++
++/// Distinct words: `0` to `count - 1`.
++fn numbers(count: usize) -> String {
++    (0..count)
++        .map(|i| i.to_string())
++        .collect::<Vec<_>>()
++        .join(" ")
++}
++
++#[test]
++fn the_words_kept_start_again_once_there_are_too_many() {
++    let mut cx = contexts();
++    // 2^15 words with the space.
++    words(&mut cx, "Made", &numbers((1 << 15) - 1), &[]);
++    assert_eq!(words(&mut cx, "Made", "0", &[]), (1, 0));
++    // One more: the cache starts again with it.
++    assert_eq!(words(&mut cx, "Made", "x", &[]), (0, 1));
++    assert_eq!(words(&mut cx, "Made", "0 0", &[]), (1, 2));
++}
++
++#[test]
++fn the_words_kept_start_again_with_the_ids_of_options() {
++    let mut cx = contexts();
++    let size = |i: u16| StyleProperty::FontSize(f32::from(i) + 1.0);
++    // 2^12 sets of options take every id.
++    for i in 0..1 << 12 {
++        assert_eq!(styled(&mut cx, "aa", size(i)), (0, 1));
++    }
++    // Another takes one given out before: no word kept with it is taken.
++    assert_eq!(styled(&mut cx, "aa", size(1 << 12)), (0, 1));
++    // The first takes a new one.
++    assert_eq!(styled(&mut cx, "aa aa", size(0)), (1, 2));
++}
++
++#[test]
++fn the_words_kept_start_again_with_the_ids_of_font_styles() {
++    let mut cx = contexts();
++    let weight = |i: u16| StyleProperty::FontWeight(FontWeight::new(1.0 + f32::from(i) / 8.0));
++    // 2^12 font styles take every id.
++    for i in 0..1 << 12 {
++        assert_eq!(styled(&mut cx, "aa", weight(i)), (0, 1));
++    }
++    // Another (bold enough to embolden) takes one given out before: no word kept with it is
++    // taken.
++    assert_eq!(styled(&mut cx, "aa", weight(1 << 12)), (0, 1));
++    // The first takes a new one.
++    assert_eq!(styled(&mut cx, "aa aa", weight(0)), (1, 2));
++}
++
++#[test]
++fn text_is_shaped_whole_where_words_would_shape_otherwise() {
++    // `Reaching` shapes what is on the two sides of a space together.
++    assert_eq!(words(&mut contexts(), "Reaching", "aa bb aa", &[]), (0, 0));
++    // So does a text with a word in it.
++    let reaching =
++        || StyleProperty::FontFamily(FontFamily::Single(FontFamilyName::named("Reaching")));
++    assert_eq!(
++        words(&mut contexts(), "Made", "aa bb aa", &[(3..5, reaching())]),
++        (0, 0)
++    );
++    // A feature that is off unless asked for: what a font does with it isn't looked into.
++    let small_caps = StyleProperty::FontFeatures(FontFeatures::Source(Cow::Borrowed("\"smcp\"")));
++    assert_eq!(
++        words(&mut contexts(), "Made", "aa bb aa", &[(0..8, small_caps)]),
++        (0, 0)
++    );
++    // Right to left: the words of a run go the other way.
++    assert_eq!(
++        words(
++            &mut contexts(),
++            "Made",
++            "\u{5d0}\u{5d1} \u{5d0}\u{5d1}",
++            &[]
++        ),
++        (0, 0)
++    );
++    // Arabic, even left to right: harfrust's Arabic shaper looks at the text around a run. (The
++    // font has no Arabic: font selection takes it anyway, the first family.)
++    assert_eq!(
++        words(
++            &mut contexts_with(&[font(Rules::default())]),
++            "Made",
++            "\u{202d}\u{628}\u{628} \u{628}\u{628}\u{202c}",
++            &[]
++        ),
++        (0, 0)
++    );
++    // A font met after runs of others were put together: the segment is shaped whole, without
++    // them.
++    let bold = StyleProperty::FontWeight(FontWeight::BOLD);
++    assert_eq!(
++        words(
++            &mut contexts(),
++            "Made",
++            "aa bb aa",
++            &[(3..5, bold), (6..8, reaching())]
++        ),
++        (0, 0)
++    );
++}
++
++#[test]
++fn words_are_shaped_again_once_cleared() {
++    let mut cx = contexts();
++    assert_eq!(words(&mut cx, "Made", "aa", &[]), (0, 1));
++    cx.1.clear_shapings();
++    assert_eq!(words(&mut cx, "Made", "aa bb", &[]), (0, 3));
++}
++
++/// Text in many scripts, so that fonts fall back inside words, with repeated words.
++#[cfg(feature = "system")]
++const TEXTS: &[&str] = &[
++    "The quick brown fox jumps over the lazy dog. AV To Wa \u{201c}Yes,\u{201d} 1/2 fi fl ffi -- a  b\tc. The fox, the dog: the end.",
++    "\u{41f}\u{440}\u{438}\u{432}\u{435}\u{442} \u{43c}\u{438}\u{440} \u{41f}\u{440}\u{438}\u{432}\u{435}\u{442}. \u{393}\u{3b5}\u{3b9}\u{3ac} \u{3c3}\u{3bf}\u{3c5}. \u{4f60}\u{597d}\u{ff0c}\u{4e16}\u{754c} \u{4f60}\u{597d}. \u{3053}\u{3093}\u{306b}\u{3061}\u{306f} \u{4e16}\u{754c}. \u{c548}\u{b155} \u{c138}\u{c0c1} \u{c548}\u{b155}.",
++    "\u{928}\u{92e}\u{938}\u{94d}\u{924}\u{947} \u{926}\u{941}\u{928}\u{93f}\u{92f}\u{93e} \u{928}\u{92e}\u{938}\u{94d}\u{924}\u{947}. \u{e2a}\u{e27}\u{e31}\u{e2a}\u{e14}\u{e35} \u{e0a}\u{e32}\u{e27}\u{e42}\u{e25}\u{e01}. \u{1f600} \u{1f44d}\u{1f3fd} a\u{1f600}b \u{1f600}",
++    "\u{5e9}\u{5dc}\u{5d5}\u{5dd} hello \u{5e2}\u{5d5}\u{5dc}\u{5dd}. \u{645}\u{631}\u{62d}\u{628}\u{627} hello world. a\u{301} e\u{301}e x\u{20dd} a\u{200d}b a\u{200b}b \u{301}a",
++];
++
++/// With each of the system's font families, text shaped a word at a time is what shaping it
++/// whole gives (in a release build too).
++#[cfg(feature = "system")]
++#[test]
++fn system_fonts_shape_words_as_whole_text() {
++    let mut fonts = FontContext::new();
++    let families: Vec<String> = fonts.collection.family_names().map(str::to_owned).collect();
++    let mut words = LayoutContext::new();
++    let mut whole = LayoutContext::new();
++    whole.set_shape_words(false);
++    for family in &families {
++        for text in TEXTS {
++            let by_words = build(&mut fonts, &mut words, family, text, &[]);
++            let by_whole = build(&mut fonts, &mut whole, family, text, &[]);
++            assert!(
++                **by_words.shaped_text() == **by_whole.shaped_text(),
++                "{family}: {text}"
++            );
++        }
++    }
++}
+diff --git a/parley/src/tests/test_shape_words_space.rs b/parley/src/tests/test_shape_words_space.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..5e40ab16a96855732344afbb0ff11323d3a0e407
+--- /dev/null
++++ b/parley/src/tests/test_shape_words_space.rs
+@@ -0,0 +1,964 @@
++// Copyright 2026 the Parley Authors
++// SPDX-License-Identifier: Apache-2.0 OR MIT
++
++//! machopo: how far shaping with a font reaches across a space, where text is shaped a word at a
++//! time (see `test_shape_words`): a font whose rules take a space only with the glyph beside it
++//! is shaped a word at a time, and where a space and the glyph beside it are taken together the
++//! words around it are shaped again as one; a font whose rules reach further is shaped whole.
++//! The fonts are made here, a rule or two each, and every text is also shaped whole and
++//! compared.
++
++use alloc::borrow::ToOwned;
++use alloc::vec;
++use alloc::vec::Vec;
++
++use write_fonts::FontBuilder;
++use write_fonts::tables::cmap::Cmap;
++use write_fonts::tables::gdef::Gdef;
++use write_fonts::tables::gpos::{
++    AnchorTable, BaseArray, BaseRecord, Class1Record, Class2Record, ComponentRecord, CursivePos,
++    EntryExitRecord, LigatureArray, LigatureAttach, Mark2Array, Mark2Record, MarkArray,
++    MarkBasePos, MarkLigPos, MarkMarkPos, MarkRecord, PairPos, PairSet, PairValueRecord,
++    PositionChainContext, PositionLookup, PositionSequenceContext, ValueRecord,
++};
++use write_fonts::tables::gsub::{
++    Gsub, Ligature, LigatureSet, LigatureSubst, MultipleSubst, ReverseChainSingleSubst, Sequence,
++    SingleSubst, SubstitutionChainContext, SubstitutionLookup, SubstitutionSequenceContext,
++};
++use write_fonts::tables::head::Head;
++use write_fonts::tables::hhea::Hhea;
++use write_fonts::tables::hmtx::{Hmtx, LongMetric};
++use write_fonts::tables::layout::{
++    ChainedClassSequenceRule, ChainedClassSequenceRuleSet, ChainedSequenceContext,
++    ChainedSequenceRule, ChainedSequenceRuleSet, ClassDef, ClassSequenceRule, ClassSequenceRuleSet,
++    CoverageTable, Feature, FeatureList, FeatureRecord, LangSys, Lookup, LookupFlag, LookupList,
++    Script, ScriptList, ScriptRecord, SequenceContext, SequenceLookupRecord, SequenceRule,
++    SequenceRuleSet,
++};
++use write_fonts::tables::maxp::Maxp;
++use write_fonts::tables::name::{Name, NameRecord};
++use write_fonts::tables::os2::Os2;
++use write_fonts::tables::post::Post;
++use write_fonts::types::{FWord, GlyphId, GlyphId16, NameId, Tag, UfWord};
++
++use super::test_shape_words::{build, contexts_with};
++use crate::LayoutContext;
++
++/// The characters of the fonts made here, glyph 1 on (0 is `.notdef`):
++/// each a 1000-unit advance, in an em of 1000.
++const CHARS: [char; 5] = [' ', 'a', 'b', 'T', '\u{301}'];
++
++/// How many glyphs follow without characters, for substitutions to make:
++/// each a 300-unit advance.
++const EXTRAS: u16 = 300;
++
++/// The glyph of `ch`.
++pub(super) fn g(ch: char) -> GlyphId16 {
++    let index = CHARS.iter().position(|&c| c == ch).unwrap();
++    GlyphId16::new(u16::try_from(index).unwrap() + 1)
++}
++
++/// The `index`th glyph without a character.
++pub(super) fn extra(index: u16) -> GlyphId16 {
++    assert!(index < EXTRAS);
++    GlyphId16::new(u16::try_from(CHARS.len()).unwrap() + 1 + index)
++}
++
++/// What a font made here shapes with.
++#[derive(Default)]
++pub(super) struct Rules {
++    pub(super) gsub: Vec<SubstitutionLookup>,
++    pub(super) gpos: Vec<PositionLookup>,
++    /// The GSUB lookups `ccmp` applies (the rest only in contexts), if not
++    /// all of them.
++    pub(super) ccmp: Option<Vec<u16>>,
++    /// GSUB lookups `dlig` applies, a feature off unless asked for.
++    pub(super) dlig: Vec<u16>,
++    /// The `kern` table's pairs.
++    pub(super) kern: Vec<(GlyphId16, GlyphId16, i16)>,
++    /// A `kern` table of classes instead, kerning `T` and a space.
++    pub(super) kern_classes: bool,
++    /// Whether GDEF tells U+0301 a mark.
++    pub(super) marks: bool,
++    /// Whether the font has an AAT table.
++    pub(super) aat: bool,
++}
++
++/// A font named `Made` shaping with `rules`.
++pub(super) fn font(rules: Rules) -> Vec<u8> {
++    font_named("Made", rules)
++}
++
++/// A font named `name` shaping with `rules`.
++pub(super) fn font_named(name: &str, rules: Rules) -> Vec<u8> {
++    let glyphs = u16::try_from(CHARS.len()).unwrap() + 1 + EXTRAS;
++    let advance = |glyph: u16| {
++        if glyph == 0 || usize::from(glyph) > CHARS.len() {
++            300
++        } else {
++            1000
++        }
++    };
++    let mut builder = FontBuilder::new();
++    builder
++        .add_table(&Head {
++            units_per_em: 1000,
++            ..Default::default()
++        })
++        .unwrap();
++    builder
++        .add_table(&Hhea {
++            ascender: FWord::new(800),
++            descender: FWord::new(-200),
++            advance_width_max: UfWord::new(1000),
++            number_of_h_metrics: glyphs,
++            ..Default::default()
++        })
++        .unwrap()
++        .add_table(&Maxp::new(glyphs))
++        .unwrap()
++        .add_table(&Hmtx::new(
++            (0..glyphs)
++                .map(|glyph| LongMetric::new(advance(glyph), 0))
++                .collect(),
++            Vec::new(),
++        ))
++        .unwrap()
++        .add_table(
++            &Cmap::from_mappings(CHARS.iter().map(|&ch| (ch, GlyphId::from(g(ch))))).unwrap(),
++        )
++        .unwrap()
++        .add_table(&Name::new(
++            [(1, name), (2, "Regular"), (4, name), (6, name)]
++                .into_iter()
++                .map(|(id, name)| {
++                    NameRecord::new(3, 1, 0x409, NameId::new(id), name.to_owned().into())
++                })
++                .collect(),
++        ))
++        .unwrap()
++        .add_table(&Os2 {
++            us_weight_class: 400,
++            us_width_class: 5,
++            s_typo_ascender: 800,
++            s_typo_descender: -200,
++            us_win_ascent: 800,
++            us_win_descent: 200,
++            ..Default::default()
++        })
++        .unwrap()
++        .add_table(&Post::default())
++        .unwrap();
++    if rules.marks {
++        let classes = ClassDef::from_iter(
++            CHARS
++                .iter()
++                .map(|&ch| (g(ch), if ch == '\u{301}' { 3 } else { 1 })),
++        );
++        builder
++            .add_table(&Gdef::new(Some(classes), None, None, None))
++            .unwrap();
++    }
++    if !rules.gsub.is_empty() {
++        let count = u16::try_from(rules.gsub.len()).unwrap();
++        let mut features = vec![(*b"ccmp", rules.ccmp.unwrap_or_else(|| (0..count).collect()))];
++        if !rules.dlig.is_empty() {
++            features.push((*b"dlig", rules.dlig));
++        }
++        builder
++            .add_table(&Gsub::new(
++                scripts(features.len()),
++                feature_list(features),
++                LookupList::new(rules.gsub),
++            ))
++            .unwrap();
++    }
++    if !rules.gpos.is_empty() {
++        let count = u16::try_from(rules.gpos.len()).unwrap();
++        builder
++            .add_table(&write_fonts::tables::gpos::Gpos::new(
++                scripts(1),
++                feature_list(vec![(*b"kern", (0..count).collect())]),
++                LookupList::new(rules.gpos),
++            ))
++            .unwrap();
++    }
++    if !rules.kern.is_empty() {
++        builder.add_raw(Tag::new(b"kern"), kern_table(rules.kern));
++    }
++    if rules.kern_classes {
++        builder.add_raw(Tag::new(b"kern"), kern_classes_table());
++    }
++    if rules.aat {
++        // Version 2, no chains: harfrust shapes with it, and nothing happens.
++        builder.add_raw(Tag::new(b"morx"), vec![0, 2, 0, 0, 0, 0, 0, 0]);
++    }
++    builder.build()
++}
++
++/// `DFLT` and `latn`, each with features `0..count`.
++fn scripts(count: usize) -> ScriptList {
++    let features: Vec<u16> = (0..u16::try_from(count).unwrap()).collect();
++    ScriptList::new(
++        [*b"DFLT", *b"latn"]
++            .into_iter()
++            .map(|tag| {
++                ScriptRecord::new(
++                    Tag::new(&tag),
++                    Script::new(Some(LangSys::new(features.clone())), Vec::new()),
++                )
++            })
++            .collect(),
++    )
++}
++
++fn feature_list(features: Vec<([u8; 4], Vec<u16>)>) -> FeatureList {
++    FeatureList::new(
++        features
++            .into_iter()
++            .map(|(tag, lookups)| FeatureRecord::new(Tag::new(&tag), Feature::new(None, lookups)))
++            .collect(),
++    )
++}
++
++/// A `kern` table of one format 0 subtable with `pairs`.
++fn kern_table(mut pairs: Vec<(GlyphId16, GlyphId16, i16)>) -> Vec<u8> {
++    pairs.sort();
++    let count = u16::try_from(pairs.len()).unwrap();
++    let mut table = Vec::new();
++    let mut push = |value: u16| table.extend_from_slice(&value.to_be_bytes());
++    // Version 0, one subtable.
++    push(0);
++    push(1);
++    // Version 0, its length, horizontal kerning, format 0.
++    push(0);
++    push(14 + 6 * count);
++    push(1);
++    push(count);
++    let entry_selector = u16::try_from(count.max(1).ilog2()).unwrap();
++    let search_range = 6 * (1 << entry_selector);
++    push(search_range);
++    push(entry_selector);
++    push(6 * count - search_range);
++    for (left, right, value) in pairs {
++        push(left.to_u16());
++        push(right.to_u16());
++        push(u16::from_be_bytes(value.to_be_bytes()));
++    }
++    table
++}
++
++/// A `kern` table of one format 2 subtable, kerning `T` and a space by
++/// -300: one row (`T`), of two columns (every other glyph, the space).
++fn kern_classes_table() -> Vec<u8> {
++    let mut table = Vec::new();
++    let mut push = |value: u16| table.extend_from_slice(&value.to_be_bytes());
++    // Version 0, one subtable.
++    push(0);
++    push(1);
++    // Version 0, its length, horizontal kerning, format 2.
++    push(0);
++    push(30);
++    push(0x0201);
++    // The row's width in bytes, and where the classes and the values start
++    // in the subtable.
++    push(4);
++    push(14);
++    push(20);
++    push(26);
++    // The left classes: `T` is the row at the values' start.
++    push(g('T').to_u16());
++    push(1);
++    push(26);
++    // The right classes: the space is the second column.
++    push(g(' ').to_u16());
++    push(1);
++    push(2);
++    // The values.
++    push(0);
++    push(u16::from_be_bytes((-300_i16).to_be_bytes()));
++    table
++}
++
++fn coverage(glyphs: &[GlyphId16]) -> CoverageTable {
++    let mut glyphs = glyphs.to_vec();
++    glyphs.sort();
++    CoverageTable::format_1(glyphs)
++}
++
++fn classes(classes: &[(GlyphId16, u16)]) -> ClassDef {
++    ClassDef::from_iter(classes.iter().copied())
++}
++
++fn moved(x_advance: i16) -> ValueRecord {
++    ValueRecord::new().with_x_advance(x_advance)
++}
++
++/// Kerning `first` and `second` by -300, with `flag`.
++pub(super) fn pair(first: GlyphId16, second: GlyphId16, flag: LookupFlag) -> PositionLookup {
++    PositionLookup::Pair(Lookup::new(
++        flag,
++        vec![PairPos::format_1(
++            coverage(&[first]),
++            vec![PairSet::new(vec![PairValueRecord::new(
++                second,
++                moved(-300),
++                ValueRecord::new(),
++            )])],
++        )],
++    ))
++}
++
++/// Substituting `from` with `to`.
++fn single(from: GlyphId16, to: GlyphId16) -> SubstitutionLookup {
++    SubstitutionLookup::Single(Lookup::new(
++        LookupFlag::empty(),
++        vec![SingleSubst::format_2(coverage(&[from]), vec![to])],
++    ))
++}
++
++/// A ligature of `components` making `to`, with `flag`.
++pub(super) fn ligature(
++    components: &[GlyphId16],
++    to: GlyphId16,
++    flag: LookupFlag,
++) -> SubstitutionLookup {
++    SubstitutionLookup::Ligature(Lookup::new(
++        flag,
++        vec![LigatureSubst::format_1(
++            coverage(&components[..1]),
++            vec![LigatureSet::new(vec![Ligature::new(
++                to,
++                components[1..].to_vec(),
++            )])],
++        )],
++    ))
++}
++
++/// The second lookup applied at `index` of a context.
++fn second_at(index: u16) -> Vec<SequenceLookupRecord> {
++    vec![SequenceLookupRecord::new(index, 1)]
++}
++
++/// A substitution context; lookup 1 makes a space `extra(0)`, in context only.
++fn in_context(context: SubstitutionLookup) -> Rules {
++    Rules {
++        gsub: vec![context, single(g(' '), extra(0))],
++        ccmp: Some(vec![0]),
++        ..Default::default()
++    }
++}
++
++fn substitution_context(context: SequenceContext) -> SubstitutionLookup {
++    SubstitutionLookup::Contextual(Lookup::new(
++        LookupFlag::empty(),
++        vec![SubstitutionSequenceContext::from(context)],
++    ))
++}
++
++fn substitution_chain(context: ChainedSequenceContext) -> SubstitutionLookup {
++    SubstitutionLookup::ChainContextual(Lookup::new(
++        LookupFlag::empty(),
++        vec![SubstitutionChainContext::from(context)],
++    ))
++}
++
++fn anchor() -> AnchorTable {
++    AnchorTable::format_1(0, 0)
++}
++
++/// How laying out each of `texts` in a font with `rules` went, after laying
++/// out `texts` once, in the font's words shaped again as one: `None` if the
++/// text was shaped whole. Each text shapes as it does whole, glyph for glyph.
++fn joined(rules: Rules, texts: &[&str]) -> Vec<Option<usize>> {
++    let mut cx = contexts_with(&[font(rules)]);
++    // The same fonts, for the same font ids.
++    let mut whole = LayoutContext::new();
++    whole.set_shape_words(false);
++    texts
++        .iter()
++        .map(|text| {
++            let (words_before, joined_before) =
++                (cx.1.words_reused_and_shaped(), cx.1.words_joined());
++            let by_words = build(&mut cx.0, &mut cx.1, "Made", text, &[]);
++            let by_whole = build(&mut cx.0, &mut whole, "Made", text, &[]);
++            assert!(
++                **by_words.shaped_text() == **by_whole.shaped_text(),
++                "{text:?} shapes otherwise a word at a time"
++            );
++            (cx.1.words_reused_and_shaped() != words_before)
++                .then(|| cx.1.words_joined() - joined_before)
++        })
++        .collect()
++}
++
++/// `joined` of texts that are shaped whole.
++const WHOLE: [Option<usize>; 2] = [None, None];
++
++#[test]
++fn a_font_without_rules_for_a_space_shapes_words_on_their_own() {
++    assert_eq!(
++        joined(Rules::default(), &["aa bb aa", "a\u{301} \u{301}b"]),
++        [Some(0), Some(0)]
++    );
++}
++
++#[test]
++fn a_kerning_pair_with_a_space_joins_the_word_beside_it() {
++    let none = LookupFlag::empty();
++    // `aT` and the space after it.
++    let rules = Rules {
++        gpos: vec![pair(g('T'), g(' '), none)],
++        ..Default::default()
++    };
++    assert_eq!(joined(rules, &["aT bb aT", "aa bb"]), [Some(1), Some(0)]);
++    // The space and `Tb` after it.
++    let rules = Rules {
++        gpos: vec![pair(g(' '), g('T'), none)],
++        ..Default::default()
++    };
++    assert_eq!(joined(rules, &["aa Tb", "Ta bb"]), [Some(1), Some(0)]);
++    // In the `kern` table.
++    let rules = Rules {
++        kern: vec![(g('T'), g(' '), -300)],
++        ..Default::default()
++    };
++    assert_eq!(joined(rules, &["aT bb", "aa bb"]), [Some(1), Some(0)]);
++    let rules = Rules {
++        kern: vec![(g(' '), g('T'), -300)],
++        ..Default::default()
++    };
++    assert_eq!(joined(rules, &["aa Tb", "Ta bb"]), [Some(1), Some(0)]);
++}
++
++#[test]
++fn a_kerning_pair_of_classes_with_a_space_joins_the_word_beside_it() {
++    // Class 1 of the first, `T`, and class 1 of the second, the space.
++    let class_pair = |values: [i16; 2], first: ClassDef| {
++        PositionLookup::Pair(Lookup::new(
++            LookupFlag::empty(),
++            vec![PairPos::format_2(
++                coverage(&[g('T'), g('a')]),
++                first,
++                classes(&[(g(' '), 1)]),
++                vec![
++                    Class1Record::new(vec![
++                        Class2Record::new(moved(0), ValueRecord::new()),
++                        Class2Record::new(moved(0), ValueRecord::new()),
++                    ]),
++                    Class1Record::new(vec![
++                        Class2Record::new(moved(values[0]), ValueRecord::new()),
++                        Class2Record::new(moved(values[1]), ValueRecord::new()),
++                    ]),
++                ],
++            )],
++        ))
++    };
++    let rules = Rules {
++        gpos: vec![class_pair([0, -300], classes(&[(g('T'), 1)]))],
++        ..Default::default()
++    };
++    assert_eq!(joined(rules, &["aT bb", "aa bb"]), [Some(1), Some(0)]);
++    // A pair that moves nothing doesn't count.
++    let rules = Rules {
++        gpos: vec![class_pair([0, 0], classes(&[(g('T'), 1)]))],
++        ..Default::default()
++    };
++    assert_eq!(joined(rules, &["aT bb", "aa bb"]), [Some(0), Some(0)]);
++    // Class 0 of the first is what the coverage has and the classes leave
++    // out: `a`.
++    let rules = Rules {
++        gpos: vec![PositionLookup::Pair(Lookup::new(
++            LookupFlag::empty(),
++            vec![PairPos::format_2(
++                coverage(&[g('T'), g('a')]),
++                classes(&[(g('T'), 1)]),
++                classes(&[(g(' '), 1)]),
++                vec![
++                    Class1Record::new(vec![
++                        Class2Record::new(moved(0), ValueRecord::new()),
++                        Class2Record::new(moved(-300), ValueRecord::new()),
++                    ]),
++                    Class1Record::new(vec![
++                        Class2Record::new(moved(0), ValueRecord::new()),
++                        Class2Record::new(moved(0), ValueRecord::new()),
++                    ]),
++                ],
++            )],
++        ))],
++        ..Default::default()
++    };
++    assert_eq!(joined(rules, &["Ta bb", "aT bb"]), [Some(1), Some(0)]);
++    // Class 0 of the second is every glyph but the classes': text in the
++    // font is shaped whole.
++    let rules = Rules {
++        gpos: vec![PositionLookup::Pair(Lookup::new(
++            LookupFlag::empty(),
++            vec![PairPos::format_2(
++                coverage(&[g(' ')]),
++                classes(&[(g(' '), 1)]),
++                classes(&[(g('T'), 1)]),
++                vec![
++                    Class1Record::new(vec![
++                        Class2Record::new(moved(0), ValueRecord::new()),
++                        Class2Record::new(moved(0), ValueRecord::new()),
++                    ]),
++                    Class1Record::new(vec![
++                        Class2Record::new(moved(-300), ValueRecord::new()),
++                        Class2Record::new(moved(0), ValueRecord::new()),
++                    ]),
++                ],
++            )],
++        ))],
++        ..Default::default()
++    };
++    assert_eq!(joined(rules, &["aa bb", "aT bb"]), WHOLE);
++}
++
++#[test]
++fn a_space_and_marks_take_their_neighbours_where_marks_are_skipped() {
++    let skip = LookupFlag::IGNORE_MARKS;
++    // A word ending in a mark: kerning `T` and the space skips it.
++    let rules = Rules {
++        gpos: vec![pair(g('T'), g(' '), skip)],
++        marks: true,
++        ..Default::default()
++    };
++    assert_eq!(
++        joined(rules, &["aT\u{301} bb", "aa\u{301} bb"]),
++        [Some(2), Some(2)]
++    );
++    // The `kern` table's pairs skip marks.
++    let rules = Rules {
++        kern: vec![(g('T'), g(' '), -300)],
++        marks: true,
++        ..Default::default()
++    };
++    assert_eq!(
++        joined(rules, &["aT\u{301} bb", "aa bb"]),
++        [Some(2), Some(0)]
++    );
++    // A mark a substitution makes of `T`, from one character: GDEF tells it.
++    let rules = Rules {
++        gsub: vec![SubstitutionLookup::Multiple(Lookup::new(
++            LookupFlag::empty(),
++            vec![MultipleSubst::format_1(
++                coverage(&[g('T')]),
++                vec![Sequence::new(vec![g('T'), g('\u{301}')])],
++            )],
++        ))],
++        gpos: vec![pair(g('T'), g(' '), skip)],
++        marks: true,
++        ..Default::default()
++    };
++    assert_eq!(joined(rules, &["aT bb", "aa bb"]), [Some(1), Some(0)]);
++    // Kerning a space with its own mark, which stays in its word.
++    let rules = Rules {
++        gpos: vec![pair(g(' '), g('\u{301}'), LookupFlag::empty())],
++        marks: true,
++        ..Default::default()
++    };
++    assert_eq!(
++        joined(rules, &["aa \u{301}bb", "aa bb"]),
++        [Some(0), Some(0)]
++    );
++    let rules = Rules {
++        kern: vec![(g(' '), g('\u{301}'), -300)],
++        marks: true,
++        ..Default::default()
++    };
++    assert_eq!(
++        joined(rules, &["aa \u{301}bb", "aa bb"]),
++        [Some(0), Some(0)]
++    );
++}
++
++#[test]
++fn a_substitution_with_a_space_joins_the_words_on_both_sides() {
++    let none = LookupFlag::empty();
++    // `T` and the space become one glyph, which `b` after it kerns with.
++    let rules = Rules {
++        gsub: vec![ligature(&[g('T'), g(' ')], extra(0), none)],
++        gpos: vec![pair(extra(0), g('b'), none)],
++        ..Default::default()
++    };
++    assert_eq!(joined(rules, &["aT bb", "aa bb"]), [Some(2), Some(0)]);
++    // The space and `T`, which `a` before it kerns with.
++    let rules = Rules {
++        gsub: vec![ligature(&[g(' '), g('T')], extra(0), none)],
++        gpos: vec![pair(g('a'), extra(0), none)],
++        ..Default::default()
++    };
++    assert_eq!(joined(rules, &["aa Tb", "aa bb"]), [Some(1), Some(0)]);
++    // A space before `T` becomes `extra(0)`, which `a` kerns with.
++    let mut rules = in_context(substitution_chain(ChainedSequenceContext::format_3(
++        Vec::new(),
++        vec![coverage(&[g(' ')])],
++        vec![coverage(&[g('T')])],
++        second_at(0),
++    )));
++    rules.gpos = vec![pair(g('a'), extra(0), none)];
++    assert_eq!(joined(rules, &["aa Tb", "aa bb"]), [Some(1), Some(0)]);
++}
++
++#[test]
++fn what_substitutions_make_of_the_glyph_beside_a_space_counts_too() {
++    // A space after `a` becomes `extra(0)`, and then `a` becomes `extra(1)`.
++    let rules = Rules {
++        gsub: vec![
++            substitution_chain(ChainedSequenceContext::format_3(
++                vec![coverage(&[g('a')])],
++                vec![coverage(&[g(' ')])],
++                Vec::new(),
++                second_at(0),
++            )),
++            single(g(' '), extra(0)),
++            single(g('a'), extra(1)),
++        ],
++        ccmp: Some(vec![0, 2]),
++        ..Default::default()
++    };
++    assert_eq!(joined(rules, &["a bb", "bb bb"]), [Some(2), Some(0)]);
++    // A space before `b` becomes `extra(0)`, and then `b` becomes `extra(1)`.
++    let rules = Rules {
++        gsub: vec![
++            substitution_chain(ChainedSequenceContext::format_3(
++                Vec::new(),
++                vec![coverage(&[g(' ')])],
++                vec![coverage(&[g('b')])],
++                second_at(0),
++            )),
++            single(g(' '), extra(0)),
++            single(g('b'), extra(1)),
++        ],
++        ccmp: Some(vec![0, 2]),
++        ..Default::default()
++    };
++    assert_eq!(joined(rules, &["aa b", "aa aa"]), [Some(1), Some(0)]);
++}
++
++#[test]
++fn a_space_in_a_context_of_two_joins_the_words_on_both_sides() {
++    // Each takes `T` and the space after it, and makes the space `extra(0)`.
++    let space_at = second_at(1);
++    for context in [
++        substitution_context(SequenceContext::format_1(
++            coverage(&[g('T')]),
++            vec![Some(SequenceRuleSet::new(vec![SequenceRule::new(
++                vec![g(' ')],
++                space_at.clone(),
++            )]))],
++        )),
++        substitution_context(SequenceContext::format_2(
++            coverage(&[g('T')]),
++            classes(&[(g('T'), 1), (g(' '), 2)]),
++            vec![
++                None,
++                Some(ClassSequenceRuleSet::new(vec![ClassSequenceRule::new(
++                    vec![2],
++                    space_at.clone(),
++                )])),
++            ],
++        )),
++        substitution_context(SequenceContext::format_3(
++            vec![coverage(&[g('T')]), coverage(&[g(' ')])],
++            space_at.clone(),
++        )),
++        substitution_chain(ChainedSequenceContext::format_1(
++            coverage(&[g(' ')]),
++            vec![Some(ChainedSequenceRuleSet::new(vec![
++                ChainedSequenceRule::new(vec![g('T')], Vec::new(), Vec::new(), second_at(0)),
++            ]))],
++        )),
++        substitution_chain(ChainedSequenceContext::format_2(
++            coverage(&[g(' ')]),
++            classes(&[(g('T'), 1)]),
++            classes(&[(g(' '), 1)]),
++            ClassDef::from_iter::<[(GlyphId16, u16); 0]>([]),
++            vec![
++                None,
++                Some(ChainedClassSequenceRuleSet::new(vec![
++                    ChainedClassSequenceRule::new(vec![1], Vec::new(), Vec::new(), second_at(0)),
++                ])),
++            ],
++        )),
++        substitution_chain(ChainedSequenceContext::format_3(
++            vec![coverage(&[g('T')])],
++            vec![coverage(&[g(' ')])],
++            Vec::new(),
++            second_at(0),
++        )),
++    ]
++    .into_iter()
++    .enumerate()
++    {
++        let mut rules = in_context(context.1);
++        rules.gpos = vec![pair(extra(0), g('b'), LookupFlag::empty())];
++        assert_eq!(
++            joined(rules, &["aT bb", "aa bb"]),
++            [Some(2), Some(0)],
++            "{}",
++            context.0
++        );
++    }
++    // A reverse chain applies itself, by its feature: what it makes of the
++    // space is taken for a space, which `b` after any space kerns with.
++    let mut rules = in_context(SubstitutionLookup::Reverse(Lookup::new(
++        LookupFlag::empty(),
++        vec![ReverseChainSingleSubst::format_1(
++            coverage(&[g(' ')]),
++            vec![coverage(&[g('T')])],
++            Vec::new(),
++            vec![extra(0)],
++        )],
++    )));
++    rules.gpos = vec![pair(extra(0), g('b'), LookupFlag::empty())];
++    assert_eq!(
++        joined(rules, &["aT bb", "aa bb", "aa aa"]),
++        [Some(2), Some(1), Some(0)]
++    );
++}
++
++#[test]
++fn a_space_in_a_longer_context_shapes_text_whole() {
++    for context in [
++        // `a T space`.
++        substitution_chain(ChainedSequenceContext::format_3(
++            vec![coverage(&[g('T')]), coverage(&[g('a')])],
++            vec![coverage(&[g(' ')])],
++            Vec::new(),
++            second_at(0),
++        )),
++        // `space T b`: the lookahead counts.
++        substitution_chain(ChainedSequenceContext::format_3(
++            Vec::new(),
++            vec![coverage(&[g(' ')])],
++            vec![coverage(&[g('T')]), coverage(&[g('b')])],
++            second_at(0),
++        )),
++        substitution_context(SequenceContext::format_3(
++            vec![
++                coverage(&[g('a')]),
++                coverage(&[g('T')]),
++                coverage(&[g(' ')]),
++            ],
++            second_at(2),
++        )),
++    ] {
++        assert_eq!(joined(in_context(context), &["aT bb", "aa Tb"]), WHOLE);
++    }
++    // A ligature of three, which a context of two applies.
++    let rules = Rules {
++        gsub: vec![
++            substitution_context(SequenceContext::format_3(
++                vec![coverage(&[g('T')]), coverage(&[g(' ')])],
++                second_at(1),
++            )),
++            ligature(&[g(' '), g('a'), g('b')], extra(0), LookupFlag::empty()),
++        ],
++        ccmp: Some(vec![0]),
++        ..Default::default()
++    };
++    assert_eq!(joined(rules, &["aT bb", "aa bb"]), WHOLE);
++    // A ligature of three.
++    let rules = Rules {
++        gsub: vec![ligature(
++            &[g('a'), g(' '), g('b')],
++            extra(0),
++            LookupFlag::empty(),
++        )],
++        ..Default::default()
++    };
++    assert_eq!(joined(rules, &["aa bb", "Ta Tb"]), WHOLE);
++}
++
++#[test]
++fn what_a_feature_makes_of_a_space_is_a_space() {
++    // `ccmp` makes every space `extra(0)`, which kerns with `T`.
++    let rules = Rules {
++        gsub: vec![single(g(' '), extra(0))],
++        gpos: vec![pair(extra(0), g('T'), LookupFlag::empty())],
++        ..Default::default()
++    };
++    assert_eq!(joined(rules, &["aa Tb", "aa bb"]), [Some(1), Some(0)]);
++}
++
++#[test]
++fn a_ligature_of_a_space_and_its_mark_joins_the_words_on_both_sides() {
++    // A space and its mark become `extra(0)`, which `b` after it kerns with.
++    let rules = Rules {
++        gsub: vec![ligature(
++            &[g(' '), g('\u{301}')],
++            extra(0),
++            LookupFlag::empty(),
++        )],
++        gpos: vec![pair(extra(0), g('b'), LookupFlag::empty())],
++        marks: true,
++        ..Default::default()
++    };
++    assert_eq!(
++        joined(rules, &["aa \u{301}bb cc", "aa bb", " \u{301}bb cc"]),
++        [Some(2), Some(0), Some(1)]
++    );
++}
++
++#[test]
++fn rules_reaching_further_shape_text_whole() {
++    let rule_fonts = [
++        // A lookup skipping base glyphs may skip a space.
++        Rules {
++            gsub: vec![ligature(
++                &[g('a'), g('b')],
++                extra(0),
++                LookupFlag::IGNORE_BASE_GLYPHS,
++            )],
++            ..Default::default()
++        },
++        Rules {
++            gpos: vec![pair(g('a'), g('b'), LookupFlag::IGNORE_BASE_GLYPHS)],
++            ..Default::default()
++        },
++        // Cursive attachment of a space.
++        Rules {
++            gpos: vec![PositionLookup::Cursive(Lookup::new(
++                LookupFlag::empty(),
++                vec![CursivePos::format_1(
++                    coverage(&[g(' ')]),
++                    vec![EntryExitRecord::new(Some(anchor()), Some(anchor()))],
++                )],
++            ))],
++            ..Default::default()
++        },
++        // A space as a mark.
++        Rules {
++            gpos: vec![PositionLookup::MarkToBase(Lookup::new(
++                LookupFlag::empty(),
++                vec![MarkBasePos::format_1(
++                    coverage(&[g(' ')]),
++                    coverage(&[g('a')]),
++                    MarkArray::new(vec![MarkRecord::new(0, anchor())]),
++                    BaseArray::new(vec![BaseRecord::new(vec![Some(anchor())])]),
++                )],
++            ))],
++            ..Default::default()
++        },
++        Rules {
++            gpos: vec![PositionLookup::MarkToLig(Lookup::new(
++                LookupFlag::empty(),
++                vec![MarkLigPos::format_1(
++                    coverage(&[g(' ')]),
++                    coverage(&[g('a')]),
++                    MarkArray::new(vec![MarkRecord::new(0, anchor())]),
++                    LigatureArray::new(vec![LigatureAttach::new(vec![ComponentRecord::new(
++                        vec![Some(anchor())],
++                    )])]),
++                )],
++            ))],
++            ..Default::default()
++        },
++        Rules {
++            gpos: vec![PositionLookup::MarkToMark(Lookup::new(
++                LookupFlag::empty(),
++                vec![MarkMarkPos::format_1(
++                    coverage(&[g(' ')]),
++                    coverage(&[g('\u{301}')]),
++                    MarkArray::new(vec![MarkRecord::new(0, anchor())]),
++                    Mark2Array::new(vec![Mark2Record::new(vec![Some(anchor())])]),
++                )],
++            ))],
++            ..Default::default()
++        },
++        Rules {
++            gpos: vec![PositionLookup::MarkToMark(Lookup::new(
++                LookupFlag::empty(),
++                vec![MarkMarkPos::format_1(
++                    coverage(&[g('\u{301}')]),
++                    coverage(&[g(' ')]),
++                    MarkArray::new(vec![MarkRecord::new(0, anchor())]),
++                    Mark2Array::new(vec![Mark2Record::new(vec![Some(anchor())])]),
++                )],
++            ))],
++            ..Default::default()
++        },
++        // A positioning context of three.
++        Rules {
++            gpos: vec![
++                PositionLookup::Contextual(Lookup::new(
++                    LookupFlag::empty(),
++                    vec![PositionSequenceContext::from(SequenceContext::format_3(
++                        vec![
++                            coverage(&[g('a')]),
++                            coverage(&[g(' ')]),
++                            coverage(&[g('b')]),
++                        ],
++                        second_at(1),
++                    ))],
++                )),
++                pair(g(' '), g('b'), LookupFlag::empty()),
++            ],
++            ..Default::default()
++        },
++        Rules {
++            gpos: vec![PositionLookup::ChainContextual(Lookup::new(
++                LookupFlag::empty(),
++                vec![PositionChainContext::from(
++                    ChainedSequenceContext::format_3(
++                        vec![coverage(&[g('a')])],
++                        vec![coverage(&[g(' ')])],
++                        vec![coverage(&[g('b')])],
++                        Vec::new(),
++                    ),
++                )],
++            ))],
++            ..Default::default()
++        },
++        // A `kern` table of classes.
++        Rules {
++            kern_classes: true,
++            ..Default::default()
++        },
++        // AAT, which harfrust shapes with.
++        Rules {
++            aat: true,
++            ..Default::default()
++        },
++    ];
++    for rules in rule_fonts {
++        assert_eq!(joined(rules, &["aa bb", "aT Tb"]), WHOLE);
++    }
++}
++
++#[test]
++fn a_feature_off_unless_asked_for_is_not_looked_into() {
++    let rules = Rules {
++        gsub: vec![
++            single(g('b'), g('b')),
++            ligature(&[g('a'), g(' '), g('b')], extra(0), LookupFlag::empty()),
++        ],
++        ccmp: Some(vec![0]),
++        dlig: vec![1],
++        ..Default::default()
++    };
++    assert_eq!(joined(rules, &["aa bb", "bb aa"]), [Some(0), Some(0)]);
++}
++
++#[test]
++fn a_font_with_many_glyphs_beside_a_space_shapes_text_whole() {
++    let kerned = |count: u16| Rules {
++        kern: (0..count)
++            .map(|index| (extra(index), g(' '), -100))
++            .collect(),
++        ..Default::default()
++    };
++    assert_eq!(joined(kerned(256), &["aa bb"]), [Some(0)]);
++    assert_eq!(joined(kerned(257), &["aa bb"]), [None]);
++    // After it, too.
++    let kerned = |count: u16| Rules {
++        kern: (0..count)
++            .map(|index| (g(' '), extra(index), -100))
++            .collect(),
++        ..Default::default()
++    };
++    assert_eq!(joined(kerned(256), &["aa bb"]), [Some(0)]);
++    assert_eq!(joined(kerned(257), &["aa bb"]), [None]);
++}
 diff --git a/parley_engine/src/shape/mod.rs b/parley_engine/src/shape/mod.rs
 index 9ab03ced82fef7588604164ae51ddab78174b0d6..9d03ea81d4dbf374e038e4ee838aec1895495493 100644
 --- a/parley_engine/src/shape/mod.rs
@@ -1026,7 +2373,7 @@ index 9ab03ced82fef7588604164ae51ddab78174b0d6..9d03ea81d4dbf374e038e4ee838aec18
  pub use cluster::{Char, CharCluster, Coverage, SourceRange, Whitespace};
  pub use data::{Character, CharacterFlags, ShapedCluster};
 diff --git a/parley_engine/src/shape/shaped_text.rs b/parley_engine/src/shape/shaped_text.rs
-index d559b6d06a66c69cadb32ceea69126dfbf2d46a0..1109cd25aa67b7f7ca8a7fb82bd0a06e7dde3c5e 100644
+index 750fa35adcb9278df92330ad3dbc10f118caea26..10d28b81887c5a72ea4300c8e14a75bd184041e5 100644
 --- a/parley_engine/src/shape/shaped_text.rs
 +++ b/parley_engine/src/shape/shaped_text.rs
 @@ -158,6 +158,58 @@ pub struct ShapedText {
@@ -1259,7 +2606,7 @@ index d559b6d06a66c69cadb32ceea69126dfbf2d46a0..1109cd25aa67b7f7ca8a7fb82bd0a06e
          if cluster.glyphs == 0 && glyph.x == 0. && glyph.y == 0. {
              // Defer this potential zero-offset, single glyph cluster
 diff --git a/parley_engine/src/shape/shaper.rs b/parley_engine/src/shape/shaper.rs
-index 12b0ca1883d2f9140b9544689f0cc6fee0b693ea..0faab383db80f596405270554d82e4c66ffa3aa7 100644
+index 936012d88b59f9fd6106a29b9b68d648c299e523..b62bb3927c991e9e84260ad218d7738ede31a116 100644
 --- a/parley_engine/src/shape/shaper.rs
 +++ b/parley_engine/src/shape/shaper.rs
 @@ -3,7 +3,9 @@
@@ -1286,9 +2633,9 @@ index 12b0ca1883d2f9140b9544689f0cc6fee0b693ea..0faab383db80f596405270554d82e4c6
  };
  
  /// Shaping options for one item.
-@@ -102,6 +109,9 @@ pub struct Shaper {
-     /// machopo: the item's variations, with `opsz` for optical sizing.
-     variations: Vec<FontVariation>,
+@@ -97,6 +104,9 @@ pub struct Shaper {
+     buffer: harfrust::Buffer,
+     features: Vec<harfrust::Feature>,
      char_cluster: CharCluster,
 +    /// machopo: what shaping words gave.
 +    words: Words,
@@ -1296,16 +2643,16 @@ index 12b0ca1883d2f9140b9544689f0cc6fee0b693ea..0faab383db80f596405270554d82e4c6
  }
  
  impl Default for Shaper {
-@@ -115,6 +125,8 @@ impl Default for Shaper {
+@@ -109,6 +119,8 @@ impl Default for Shaper {
+             buffer: harfrust::Buffer::new(),
              features: Vec::new(),
-             variations: Vec::new(),
              char_cluster: CharCluster::default(),
 +            words: Words::default(),
 +            word_scratch: WordScratch::default(),
          }
      }
  }
-@@ -126,6 +138,34 @@ impl core::fmt::Debug for Shaper {
+@@ -120,6 +132,34 @@ impl core::fmt::Debug for Shaper {
  }
  
  impl Shaper {
@@ -1340,7 +2687,7 @@ index 12b0ca1883d2f9140b9544689f0cc6fee0b693ea..0faab383db80f596405270554d82e4c6
      /// Shape text into glyphs, overwriting `shaped_text`.
      ///
      /// The `text` passed in must be the same as used for producing `analysis`.
-@@ -279,8 +319,6 @@ fn shape_segment(
+@@ -273,8 +313,6 @@ fn shape_segment(
          return Ok(()); // No clusters
      }
  
@@ -1349,12 +2696,10 @@ index 12b0ca1883d2f9140b9544689f0cc6fee0b693ea..0faab383db80f596405270554d82e4c6
      // Shaping inputs that are constant over the segment.
      let direction = if segment.bidi_level.is_rtl() {
          harfrust::Direction::RightToLeft
-@@ -309,12 +347,179 @@ fn shape_segment(
-             .push(FontVariation::new(OPSZ, options.font_size));
-     }
-     scx.variations.extend_from_slice(options.variations);
--    let variations = &scx.variations;
-+
+@@ -295,10 +333,177 @@ fn shape_segment(
+         )
+     }));
+ 
 +    // machopo: the shaper's parts, borrowed apart.
 +    let Shaper {
 +        shape_data_cache,
@@ -1362,7 +2707,6 @@ index 12b0ca1883d2f9140b9544689f0cc6fee0b693ea..0faab383db80f596405270554d82e4c6
 +        shape_plan_cache,
 +        buffer,
 +        features,
-+        variations,
 +        char_cluster,
 +        words,
 +        word_scratch,
@@ -1373,7 +2717,7 @@ index 12b0ca1883d2f9140b9544689f0cc6fee0b693ea..0faab383db80f596405270554d82e4c6
 +        shape_plan_cache,
 +        buffer,
 +        features,
-+        variations,
++        variations: options.variations,
 +        direction,
 +        script: hb_script,
 +        language,
@@ -1408,7 +2752,7 @@ index 12b0ca1883d2f9140b9544689f0cc6fee0b693ea..0faab383db80f596405270554d82e4c6
 +        shaped_text.truncate(mark);
 +        select_font.begin_segment(segment, options);
 +    }
- 
++
      // Shape a run of the segment with a single font, appending it to `shaped_text`.
      let mut shape_run = |font: &FontInstance, range: TextRange| {
 +        harf.shape(
@@ -1531,7 +2875,7 @@ index 12b0ca1883d2f9140b9544689f0cc6fee0b693ea..0faab383db80f596405270554d82e4c6
              cache::ShapeDataKey::new(font.font.data.id(), font.font.index),
              || {
                  let (data, _) = font.font.data.clone().into_raw_parts();
-@@ -322,7 +527,7 @@ fn shape_segment(
+@@ -306,54 +511,54 @@ fn shape_segment(
                  harfrust::Font::new(data, font.font.index).unwrap()
              },
          );
@@ -1540,7 +2884,16 @@ index 12b0ca1883d2f9140b9544689f0cc6fee0b693ea..0faab383db80f596405270554d82e4c6
              cache::ShapeInstanceKey::new(
                  font.font.data.id(),
                  font.font.index,
-@@ -337,39 +542,39 @@ fn shape_segment(
+                 &font.synthesis,
+-                Some(options.variations),
++                Some(variations),
+             ),
+             || {
+                 base_font
+                     .instance_builder()
+-                    .variations(variations_iter(&font.synthesis, options.variations))
++                    .variations(variations_iter(&font.synthesis, variations))
+                     .build()
              },
          );
  
@@ -1592,7 +2945,7 @@ index 12b0ca1883d2f9140b9544689f0cc6fee0b693ea..0faab383db80f596405270554d82e4c6
          buffer.reserve(run_text.len());
          #[expect(clippy::cast_possible_truncation, reason = "Deferred")]
          for (i, ch) in run_text.chars().enumerate() {
-@@ -388,100 +593,544 @@ fn shape_segment(
+@@ -372,100 +577,544 @@ fn shape_segment(
              buffer.push(ch.into(), i as u32);
          }
  
@@ -1954,7 +3307,7 @@ index 12b0ca1883d2f9140b9544689f0cc6fee0b693ea..0faab383db80f596405270554d82e4c6
 +    char_style_indices: &[u16],
 +    shaped_text: &mut ShapedText,
 +) -> Result<bool, ()> {
-+    let options_id = words.options_id(segment.script, options, harf.variations);
++    let options_id = words.options_id(segment.script, options);
 +    scratch.run_glyphs.clear();
 +    let mut runs = WordRuns {
 +        text,
@@ -2208,7 +3561,7 @@ index 12b0ca1883d2f9140b9544689f0cc6fee0b693ea..0faab383db80f596405270554d82e4c6
  }
  
  #[inline]
-@@ -528,4 +1177,14 @@ pub trait FontSelector {
+@@ -512,4 +1161,14 @@ pub trait FontSelector {
          options: &ShapeOptions<'_>,
          cluster: &mut CharCluster,
      ) -> Option<FontInstanceRef<'_>>;
@@ -3379,10 +4732,10 @@ index 0000000000000000000000000000000000000000..8b90473302477ded01a53b615ae4eccf
 +}
 diff --git a/parley_engine/src/shape/words.rs b/parley_engine/src/shape/words.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..58e4badae6388a7a100d3e0a6c7a3574ba082609
+index 0000000000000000000000000000000000000000..e378252c9f9ed73f82556f458c53a6a91e5e9dfb
 --- /dev/null
 +++ b/parley_engine/src/shape/words.rs
-@@ -0,0 +1,235 @@
+@@ -0,0 +1,231 @@
 +// Copyright 2026 the Parley Authors
 +// SPDX-License-Identifier: Apache-2.0 OR MIT
 +
@@ -3410,7 +4763,7 @@ index 0000000000000000000000000000000000000000..58e4badae6388a7a100d3e0a6c7a3574
 +use core::ops::Range;
 +
 +use hashbrown::{DefaultHashBuilder, HashMap, HashTable};
-+use parlance::{FontVariation, Language, Script};
++use parlance::{Language, Script};
 +
 +use crate::FontInstance;
 +use crate::ShapeOptions;
@@ -3511,13 +4864,8 @@ index 0000000000000000000000000000000000000000..58e4badae6388a7a100d3e0a6c7a3574
 +    }
 +
 +    /// An id for what a segment is shaped with, but its text: its script
-+    /// and options, with `variations` (the options' and optical sizing's).
-+    pub(crate) fn options_id(
-+        &mut self,
-+        script: Script,
-+        options: &ShapeOptions<'_>,
-+        variations: &[FontVariation],
-+    ) -> u32 {
++    /// and options.
++    pub(crate) fn options_id(&mut self, script: Script, options: &ShapeOptions<'_>) -> u32 {
 +        let key = OptionsKey {
 +            script,
 +            font_size: options.font_size.to_bits(),
@@ -3528,7 +4876,8 @@ index 0000000000000000000000000000000000000000..58e4badae6388a7a100d3e0a6c7a3574
 +                .iter()
 +                .map(|feature| (u32::from_be_bytes(feature.tag.to_bytes()), feature.value))
 +                .collect(),
-+            variations: variations
++            variations: options
++                .variations
 +                .iter()
 +                .map(|variation| {
 +                    (

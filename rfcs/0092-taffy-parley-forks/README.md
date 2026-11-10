@@ -170,6 +170,12 @@ machopo 這邊只處理一種 workaround：繞在函式庫外面、因此有實�
 26. **atomic inline 照上游：machopo 在給 parley 的文字裡放 U+FFFC**（2026-11-10）：每個 atomic inline 一個，byte offset 對回 DOM 時跳過它。Blink 的 `NGInlineItemsBuilder` 也放 object replacement character。不選在 fork 裡保留不佔字元的 in-flow box：等於撤回 #902，之後每次 rebase 都要和上游的斷行、選取、bidi 對著改。
 27. **inline 元素的邊緣是不佔字元、有寬度、黏著前或後的內容的 box**（2026-11-10）：做成上游不佔字元的那一類項目（`OutOfFlowBox`）的延伸，對應 Blink 的 open tag / close tag item（有 inline size、不是字元）。不選邊緣也用 U+FFFC：多出的字元在 bidi 裡是中性字元、兩邊有斷行機會，都要另外壓掉。不選把寬度加在 span 第一個和最後一個 cluster 的 advance 上：空的 span 和跨行的 span 沒有 cluster 可以加。
 28. **一次搬到 `1b67b75`，3a 的驗收是「除了 atomic inline 的 bidi 和斷行，排版不變」**（2026-11-10）：改掉第 21 條的「排版不變」。reftest 和 WPT 的差異逐項查，記進 `progress.md`。不選先搬到 #902 的前一個 commit 再跨過它：衝突要解兩次。
+3b（2026-11-10 確認）：
+
+29. **machopo 的 `parley_*` 測試搬進 fork，machopo 的刪掉**（2026-11-10）：照 parley 的測試工具改寫，放進各自的 commit；現做字型的測試讓 fork 多一個 `write-fonts` 的 dev-dependency。只有經過 machopo 的 layout 才看得到的留在 machopo。不選兩邊都留：同一件事測兩次。不選留在 machopo：fork 的 commit 沒有測試，不能直接送上游。做的時候多留了一類：要用 fork 的 repository 沒有的字型的（真的 Lato、WPT 的字型）。
+30. **optical sizing 由 machopo 做，拿掉 fork 的 commit**（2026-11-10）：machopo 在給 parley 的 variation 裡加 `opsz`（Blink 也在自己這一側把 `opsz` 放進字型的 variation），先確認排版一樣，不一樣就留著 fork 的。不選留著：多一個只為 CSS 的 API 要說服上游。
+31. **3b 補完每個 commit 的訊息，寫三份 PR 的草稿**（2026-11-10）：最後的強制換行、沒有 em 的字型、斷行表。邊緣、共用 shaped text、快取、第一個字型要先開 issue 討論，tab stop 和軟連字號要寫的是和上游還沒合併的 PR 的差異，都留到第 7 段。草稿在這份 RFC 的 `upstream/parley/`。不選 3b 全部寫完：大的幾份在第 5、6 段還會改。
+32. **3a 的頂端打 tag（`machopo-2026-11-10-3a`），fork 現在 push**（2026-11-10）：3b 把測試加進各自的 commit，等於再改寫一次；3a 的 machopo commit 釘的是 3a 的頂端，靠 tag 留住。改掉第 25 條的「審核之後才 push」只有一次的假設：每次改寫前都在舊的頂端打 tag。
 
 ## 待決定
 

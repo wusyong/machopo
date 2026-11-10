@@ -3,6 +3,15 @@ From: Wu Yuwei <yuweiwu@pm.me>
 Date: Tue, 10 Nov 2026 07:43:46 +0900
 Subject: [PATCH] Lay out tabs at tab stops
 
+`StyleProperty::TabStops` (`TextStyle::tab_stops`): the distance between tab
+stops and the least a tab advances, which the embedder works out (CSS
+`tab-size`). `None` by default: a tab keeps the advance it was shaped with,
+as before.
+
+The line breaker gives a tab the advance to the next tab stop from where it
+is on its line; the min/max-content measurer works it out on each of its two
+lines. The shaper also shapes a tab as a space, so that it draws nothing:
+few fonts map U+0009.
 ---
  parley/src/layout/data.rs              |  23 ++-
  parley/src/layout/line_break.rs        |  31 +++-

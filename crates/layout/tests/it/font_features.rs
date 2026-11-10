@@ -237,7 +237,7 @@ fn a_variable_fonts_axes() {
              <div style='font: 20px \"{family}\"; font-optical-sizing: none'>text</div>\
              <div style='font: 20px \"{family}\"; font-variation-settings: \"opsz\" 40'>text</div>\
              <div style='font: 20px Lato'>text</div>\
-             <div style='font: 700 20px \"{family}\"; font-optical-sizing: none'>text</div>"
+             <div style='font: 700 20px \"{family}\"; font-optical-sizing: none'>text</div>             <div style='font: 20px \"{family}\"; font-optical-sizing: none; font-variation-settings: \"opsz\" 20'>text</div>"
         ),
         &["RobotoExtremo-VF.subset.ttf"],
     );
@@ -262,6 +262,9 @@ fn a_variable_fonts_axes() {
     assert_ne!(runs[0].advance, runs[1].advance);
     assert_ne!(runs[1].advance, runs[2].advance, "the settings' weight");
     assert_ne!(runs[0].advance, runs[3].advance);
+    assert_ne!(runs[0].advance, runs[4].advance, "the settings' size");
+    assert_ne!(runs[3].advance, runs[4].advance);
+    assert_eq!(runs[0].advance, runs[7].advance, "as the axis set to it");
     // An element's own, in a line of its parent's: the variation settings
     // and optical sizing it sets, each part shaped with its own.
     let (spans, _) = runs_with(

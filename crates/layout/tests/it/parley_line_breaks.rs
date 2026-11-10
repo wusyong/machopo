@@ -4,16 +4,12 @@
 //! Extended-A and the commonest punctuation), under the default rules,
 //! giving ICU4X only the
 //! words the table can't decide (with a character outside it, or beside a
-//! quotation mark whose opportunities depend on more than its neighbour),
-//! and that can leave word boundaries out. In a debug build every text
-//! looked up is also given to ICU4X whole and compared.
+//! quotation mark whose opportunities depend on more than its neighbour).
+//! In a debug build every text looked up is also given to ICU4X whole and
+//! compared. Here, which of a page's texts are looked up; the fork's own
+//! tests have the rest.
 
 use layout::TextContext;
-use parley::Layout;
-
-use crate::parley_words::{build, contexts_with};
-
-static AHEM: &[u8] = include_bytes!("../../../../resources/test_fonts/Ahem.ttf");
 
 /// How many texts building `html`'s box tree looked up in the table, and
 /// how many words it gave to ICU4X.
@@ -54,36 +50,4 @@ fn text_with_other_rules_is_given_to_icu4x_whole() {
         looked_up("<p>Le <span style='word-break: break-all'>chat</span> dort.</p>"),
         (0, 0)
     );
-}
-
-/// The clusters marked as word boundaries in `layout`, and its lines'
-/// ranges when they break at every opportunity.
-fn boundaries_and_lines(layout: &mut Layout<u32>) -> (Vec<usize>, Vec<std::ops::Range<usize>>) {
-    layout.break_all_lines(Some(0.0));
-    let boundaries = layout
-        .lines()
-        .flat_map(|line| line.runs().collect::<Vec<_>>())
-        .flat_map(|run| run.clusters().collect::<Vec<_>>())
-        .filter(|cluster| cluster.is_word_boundary())
-        .map(|cluster| cluster.text_range().start)
-        .collect();
-    let lines = layout.lines().map(|line| line.text_range()).collect();
-    (boundaries, lines)
-}
-
-#[test]
-fn word_boundaries_are_left_out_when_turned_off() {
-    let (mut fonts, mut cx) = contexts_with(&[AHEM.to_vec()]);
-    // Thai has no dictionary here: every grapheme starts a word.
-    let text = "Le chat (gris) dort. L’enfant aussi. ภาษาไทย";
-    let (boundaries, lines) =
-        boundaries_and_lines(&mut build(&mut fonts, &mut cx, "Ahem", text, &[]));
-    assert!(!boundaries.is_empty());
-    cx.set_word_boundaries(false);
-    let (no_boundaries, same_lines) =
-        boundaries_and_lines(&mut build(&mut fonts, &mut cx, "Ahem", text, &[]));
-    assert_eq!(no_boundaries, Vec::<usize>::new());
-    // Line break opportunities are where they were.
-    assert_eq!(same_lines, lines);
-    assert!(lines.len() > 1);
 }

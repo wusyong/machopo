@@ -3,6 +3,17 @@ From: Wu Yuwei <yuweiwu@pm.me>
 Date: Tue, 10 Nov 2026 07:43:46 +0900
 Subject: [PATCH] Take the first font when it covers a cluster
 
+`FontSelector::select_font` remembers the first font its query yields with
+a charmap (`first_font`, where it remembered only whether there was one),
+and forgets it where it did before: a new segment, other families, other
+attributes.
+
+When that font covers the cluster completely it is taken without the query,
+whose answer would be the same. Most clusters are in the first font, and the
+query went through the families and their fonts for each one. A debug build
+runs the query again each time and checks that it gives that font.
+
+No result changes.
 ---
  parley/src/shape/mod.rs | 127 ++++++++++++++++++++++++++--------------
  1 file changed, 82 insertions(+), 45 deletions(-)

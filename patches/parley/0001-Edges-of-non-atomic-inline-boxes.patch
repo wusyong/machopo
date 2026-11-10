@@ -18,12 +18,12 @@ does not hang.
 ---
  parley/src/inline_box.rs        |  28 ++-
  parley/src/layout/cluster.rs    |  10 +-
- parley/src/layout/data.rs       |  90 ++++++++-
+ parley/src/layout/data.rs       |  90 +++++++-
  parley/src/layout/line.rs       |   5 +-
- parley/src/layout/line_break.rs |  86 ++++++++-
+ parley/src/layout/line_break.rs |  86 +++++++-
  parley/src/tests/mod.rs         |   1 +
- parley/src/tests/test_edges.rs  | 325 ++++++++++++++++++++++++++++++++
- 7 files changed, 535 insertions(+), 10 deletions(-)
+ parley/src/tests/test_edges.rs  | 359 ++++++++++++++++++++++++++++++++
+ 7 files changed, 569 insertions(+), 10 deletions(-)
  create mode 100644 parley/src/tests/test_edges.rs
 
 diff --git a/parley/src/inline_box.rs b/parley/src/inline_box.rs
@@ -424,10 +424,10 @@ index 3d3a33c5e20e74618a819d1a6b439c2b08577bd6..fcd8a5d32711b7518eac9b57798707d8
  mod utils;
 diff --git a/parley/src/tests/test_edges.rs b/parley/src/tests/test_edges.rs
 new file mode 100644
-index 0000000000000000000000000000000000000000..8798597f05ef2afdcf1ccdc4ff5f338edb55d426
+index 0000000000000000000000000000000000000000..1ae909127b6bbda010d599d7fda201071d80b754
 --- /dev/null
 +++ b/parley/src/tests/test_edges.rs
-@@ -0,0 +1,325 @@
+@@ -0,0 +1,359 @@
 +// Copyright 2026 the Parley Authors
 +// SPDX-License-Identifier: Apache-2.0 OR MIT
 +
@@ -622,6 +622,40 @@ index 0000000000000000000000000000000000000000..8798597f05ef2afdcf1ccdc4ff5f338e
 +    // One opportunity, not one per edge: both edges are in the second fragment.
 +    let widths = build(&pieces).calculate_content_widths();
 +    assert_eq!(widths.min, advance("bbb") + 20.);
++}
++
++#[test]
++fn the_edges_of_an_empty_box_stay_with_the_content_after_them() {
++    let pieces = [Text("aaa "), Start(1, 10.), End(2, 10.), Text("bbb")];
++    let layout = broken(&pieces, Some(advance("aaa ") + 21.));
++    assert_eq!(text_ranges(&layout), [0..4, 4..7]);
++    assert_eq!(
++        items(&layout, 1),
++        [Err((1, 0.)), Err((2, 10.)), Ok((20., advance("bbb")))]
++    );
++}
++
++#[test]
++fn edges_inside_a_word_add_no_opportunity() {
++    let pieces = [
++        Text("aa"),
++        Start(1, 10.),
++        Text("aa"),
++        End(2, 10.),
++        Text("aa"),
++    ];
++    let layout = broken(&pieces, Some(advance("aa") + 5.));
++    assert_eq!(layout.len(), 1);
++    assert_eq!(
++        items(&layout, 0),
++        [
++            Ok((0., advance("aa"))),
++            Err((1, advance("aa"))),
++            Ok((advance("aa") + 10., advance("aa"))),
++            Err((2, 2. * advance("aa") + 10.)),
++            Ok((2. * advance("aa") + 20., advance("aa")))
++        ]
++    );
 +}
 +
 +#[test]

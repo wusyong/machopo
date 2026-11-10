@@ -1,0 +1,49 @@
+# Mutation test of stage 3b, machopo's side: `opsz` among the variations
+# text is shaped with (`font-optical-sizing`):
+# python3 scripts/test.py mutate rfcs/0092-taffy-parley-forks/mutants-3b.toml
+# (The fork's own mutants are run in the fork, against its tests.)
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "font_features::"]
+timeout = 900
+
+[[mutant]]
+name = "text isn't shaped at its optical size"
+file = "crates/layout/src/font_features.rs"
+from = '''    let optical = font.optical_sizing && !font.variation_settings.iter().any(|v| v.tag == *b"opsz");'''
+to = '''    let optical = false;'''
+
+[[mutant]]
+name = "shaped at its optical size with optical sizing off"
+file = "crates/layout/src/font_features.rs"
+from = '''    let optical = font.optical_sizing && !font.variation_settings.iter().any(|v| v.tag == *b"opsz");'''
+to = '''    let optical = !font.variation_settings.iter().any(|v| v.tag == *b"opsz");'''
+
+[[mutant]]
+name = "the optical size isn't the font size"
+file = "crates/layout/src/font_features.rs"
+from = '''        .then(|| FontVariation::new(Tag::new(b"opsz"), font.size))'''
+to = '''        .then(|| FontVariation::new(Tag::new(b"opsz"), font.size * 2.0))'''
+
+[[mutant]]
+name = "the optical size is another axis"
+file = "crates/layout/src/font_features.rs"
+from = '''        .then(|| FontVariation::new(Tag::new(b"opsz"), font.size))'''
+to = '''        .then(|| FontVariation::new(Tag::new(b"wdth"), font.size))'''
+
+[[mutant]]
+name = "the font size wins over the settings' opsz"
+file = "crates/layout/src/font_features.rs"
+from = '''    optical
+        .then(|| FontVariation::new(Tag::new(b"opsz"), font.size))
+        .into_iter()
+        .chain(settings)
+        .collect()'''
+to = '''    settings
+        .chain(font.optical_sizing.then(|| FontVariation::new(Tag::new(b"opsz"), font.size)))
+        .collect()'''
+
+# Equivalent while the settings come after it and the later one wins: kept
+# so that it doesn't rest on the shaper's order.
+# [[mutant]]
+# name = "opsz at the font size beside the settings' own"
+# from = '''    let optical = font.optical_sizing && !font.variation_settings.iter().any(|v| v.tag == *b"opsz");'''
+# to = '''    let optical = font.optical_sizing;'''

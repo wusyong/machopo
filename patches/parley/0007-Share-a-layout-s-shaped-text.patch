@@ -3,6 +3,19 @@ From: Wu Yuwei <yuweiwu@pm.me>
 Date: Tue, 10 Nov 2026 07:43:47 +0900
 Subject: [PATCH] Share a layout's shaped text
 
+`Layout::shaped_text`: a layout's `ShapedText` is an `Arc`. What an embedder
+keeps of a layout holds it, so it outlives the layout and is never changed
+under it: building the layout again takes a new one where the old is held,
+and what changes it (breaking lines again, justification) copies it first
+where it is held.
+
+`GlyphRun::span` (`GlyphSpan`) is where a glyph run's glyphs are in the
+shaped text; `GlyphSpan::glyphs`, `clusters` (`SpanCluster`) and
+`text_range` walk them from the shaped text alone. An embedder can keep a
+line's runs as spans instead of copying their glyphs.
+
+A layout with an inline object of a width copies the shaped text when it is
+built: the object's advance is the layout's own.
 ---
  parley/src/layout/data.rs                    |  21 +-
  parley/src/layout/layout.rs                  |  12 +-
@@ -458,7 +471,7 @@ index bea74f780884931018eb5482fd50a7264ad0753d..b8b7aa7a2214a2255074d18225dd248a
      spacing: Spacing,
      justification: Justification,
 diff --git a/parley/src/shape/mod.rs b/parley/src/shape/mod.rs
-index 4e1c98ec66bac1773e7bde785b29366d4c57f8c6..49ac572af8a2d6df30e1317e48cc38c127836e10 100644
+index 84d9165af210b7e1f6589cb7558e7af99957d6f5..c96c169e21c57fc14b8f7d059d650034b3d224a4 100644
 --- a/parley/src/shape/mod.rs
 +++ b/parley/src/shape/mod.rs
 @@ -4,6 +4,7 @@
@@ -469,7 +482,7 @@ index 4e1c98ec66bac1773e7bde785b29366d4c57f8c6..49ac572af8a2d6df30e1317e48cc38c1
  use alloc::vec::Vec;
  use parley_engine::shape::{CharCluster, Coverage};
  use parley_engine::{Analysis, FontInstance, FontInstanceRef, ShapeOptions, Shaper};
-@@ -190,7 +191,7 @@ pub(crate) fn shape_text<'a, B: Brush>(
+@@ -187,7 +188,7 @@ pub(crate) fn shape_text<'a, B: Brush>(
          items,
          font_selector,
          false,
@@ -479,13 +492,13 @@ index 4e1c98ec66bac1773e7bde785b29366d4c57f8c6..49ac572af8a2d6df30e1317e48cc38c1
  
      // Out-of-flow boxes are laid out as items of their own.
 diff --git a/parley/src/tests/mod.rs b/parley/src/tests/mod.rs
-index 81e13b3320ea36c948850c746c20feeeb5131260..875b7b6854cc2daf3e63dca5041e8a90b581d67f 100644
+index 714f356242a504f356fc30aeb19f31ec8002e69f..10dcc82f01c090e254555898f4cb56207461f43b 100644
 --- a/parley/src/tests/mod.rs
 +++ b/parley/src/tests/mod.rs
-@@ -7,6 +7,7 @@ mod test_edges;
+@@ -6,6 +6,7 @@ mod test_builders;
+ mod test_edges;
  mod test_final_break;
  mod test_font_without_em;
- mod test_optical_sizing;
 +mod test_shaped_text_sharing;
  mod test_soft_hyphens;
  mod test_style_metrics;
