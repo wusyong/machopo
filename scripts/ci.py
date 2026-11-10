@@ -590,6 +590,7 @@ DOM_WIT = ROOT / "crates" / "dom_wasm" / "wit"
 GUEST_WORLDS = {
     "dom": ("test", "test"),
     "page": ("machopo:dom/script@0.1.0", "script"),
+    "todomvc": ("machopo:dom/script@0.1.0", "script"),
 }
 WASI_SDK_VERSION = "34.0"
 WIT_BINDGEN_VERSION = "0.62.0"

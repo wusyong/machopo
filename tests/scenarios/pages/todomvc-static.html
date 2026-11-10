@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <title>TodoMVC: what the guest builds</title>
+        <link rel="stylesheet" href="../../sites/todomvc/base.css" />
+        <link rel="stylesheet" href="../../sites/todomvc/index.css" />
+        <!-- Not the JS app's: a headless frame is taken as the page loads, and a
+             label's color would be in the middle of this transition if the page
+             was styled once before the style sheets came. -->
+        <style>
+            .todo-list li label { transition: none; }
+        </style>
+    </head>
+    <body>
+        <!-- What todomvc-wasm.html's guest builds, written out: the todos' items as the JS app's template makes them, and the count. No script -->
+        <section class="todoapp">
+            <header class="header">
+                <h1>todos</h1>
+                <input class="new-todo" placeholder="What needs to be done?" autofocus />
+            </header>
+            <main class="main">
+                <div class="toggle-all-container">
+                    <input class="toggle-all" type="checkbox" />
+                    <label class="toggle-all-label" for="toggle-all">Mark all as complete</label>
+                </div>
+                <ul class="todo-list show-priority"><li data-id="1" class="completed" data-priority="4"><div class="view"><input class="toggle" type="checkbox" checked=""><label>Write the guest in C</label><button class="destroy"></button></div></li><li data-id="2" class="" data-priority="3"><div class="view"><input class="toggle" type="checkbox"><label>Give it events</label><button class="destroy"></button></div></li><li data-id="3" class="" data-priority="2"><div class="view"><input class="toggle" type="checkbox"><label>Take the todos away again</label><button class="destroy"></button></div></li></ul>
+            </main>
+            <footer class="footer">
+                <span class="todo-count"><strong>2</strong> items left</span>
+                <ul class="filters">
+                    <li>
+                        <a href="#/" class="selected">All</a>
+                    </li>
+                    <li>
+                        <a href="#/active">Active</a>
+                    </li>
+                    <li>
+                        <a href="#/completed">Completed</a>
+                    </li>
+                </ul>
+                <button class="clear-completed">Clear completed</button>
+            </footer>
+        </section>
+        <footer class="info">
+            <p>Click on input field to write your todo.</p>
+            <p>At least two characters are needed to be a valid entry.</p>
+            <p>Press 'enter' to add the todo.</p>
+            <p>Double-click to edit a todo</p>
+        </footer>
+    </body>
+</html>

@@ -73,6 +73,12 @@ impl Page {
         );
     }
 
+    /// The guests' clock moved on by `nanos`.
+    fn advance(&self, nanos: u64) {
+        let now = self.time.load(Ordering::Relaxed);
+        self.time.store(now + nanos, Ordering::Relaxed);
+    }
+
     /// The text of each child of the document element.
     fn said(&mut self) -> Vec<String> {
         let document = self.document.clone();
@@ -119,14 +125,20 @@ fn a_script_that_waits_goes_on_when_its_time_comes() {
     page.run(guest());
     // Done for the page at its first wait.
     assert_eq!(page.said(), ["before the wait"]);
-    assert_eq!(page.engine.until_next_timer(), Some(Duration::from_millis(5)));
+    assert_eq!(
+        page.engine.until_next_timer(),
+        Some(Duration::from_millis(5))
+    );
     // Not due yet: no turn.
-    page.time.fetch_add(4_999_999, Ordering::Relaxed);
-    assert_eq!(page.engine.until_next_timer(), Some(Duration::from_nanos(1)));
+    page.advance(4_999_999);
+    assert_eq!(
+        page.engine.until_next_timer(),
+        Some(Duration::from_nanos(1))
+    );
     assert!(!page.engine.run_due_tasks());
     assert!(!page.engine.run_timers());
     assert_eq!(page.said(), ["before the wait"]);
-    page.time.fetch_add(1, Ordering::Relaxed);
+    page.advance(1);
     assert_eq!(page.engine.until_next_timer(), Some(Duration::ZERO));
     // The host's loop runs what is due as the DOM's tasks.
     assert!(page.engine.run_due_tasks());
@@ -185,11 +197,12 @@ fn a_new_window_drops_the_scripts_of_the_one_before() {
         .create_window(top, "https://page.test/next", Instant::now())
         .unwrap();
     assert_eq!(page.engine.until_next_timer(), None);
-    page.time.fetch_add(10_000_000, Ordering::Relaxed);
+    page.advance(10_000_000);
     assert!(!page.engine.run_timers());
-    let same = page.engine.dom_mut().read(|cx| {
-        cx.node_id(next.get(cx.gc)) == cx.node_id(page.document.get(cx.gc))
-    });
+    let same = page
+        .engine
+        .dom_mut()
+        .read(|cx| cx.node_id(next.get(cx.gc)) == cx.node_id(page.document.get(cx.gc)));
     assert!(!same);
     assert_eq!(page.said(), ["before the wait"]);
 }

@@ -187,9 +187,8 @@ pub use resize_observer::{
     ResizeObserverRound, gather_and_broadcast, has_resize_observations, report_loop_error,
 };
 pub use script::{
-    ModuleSource, ModuleStart, Prepared, is_javascript_mime_type, prepare_script, prepare_wasm_script,
-    run_script_task,
-    uses_credentials,
+    ModuleSource, ModuleStart, Prepared, is_javascript_mime_type, prepare_script,
+    prepare_wasm_script, run_script_task, uses_credentials,
 };
 pub use text_control::run_element_tasks;
 pub use timer::{

@@ -91,7 +91,7 @@ to = '''duration'''
 [[mutant]]
 name = "the clock reads the time as it is"
 file = "crates/dom_wasm/src/wasi.rs"
-from = '''        Ok(now - now % CLOCK_RESOLUTION)'''
+from = '''        Ok(now.saturating_sub(now % CLOCK_RESOLUTION))'''
 to = '''        Ok(now)'''
 
 [[mutant]]

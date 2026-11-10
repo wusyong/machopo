@@ -1,0 +1,22 @@
+# TodoMVC shown by a wasm guest written in C, on the JS app's markup and
+# style sheets: the guest's `start` builds three todos' items as the JS
+# app's template makes them (one of them completed) and fills in the count.
+# Nothing can be done to them yet: a guest has no events.
+window size=800x600
+navigate pages/todomvc-wasm.html
+wait-loaded
+wait-text .todo-list>li:nth-child(1)>.view>label "Write the guest in C"
+wait-text .todo-list>li.completed>.view>label "Write the guest in C"
+wait-text .todo-list>li:nth-child(2)>.view>label "Give it events"
+wait-text .todo-list>li:nth-child(3)>.view>label "Take the todos away again"
+wait-text .todo-count "2 items left"
+wait-text .todo-count>strong "2"
+screenshot todos
+
+# The page's own behavior goes on without script: a todo's checkbox takes
+# a click (nothing hears of it), and the new todo's field takes the focus
+# and what is typed.
+click .todo-list>li:nth-child(2)>.view>.toggle
+click .new-todo
+type "typed"
+screenshot typed

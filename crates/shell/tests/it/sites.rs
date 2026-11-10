@@ -142,3 +142,17 @@ fn gutenberg_contents_link_to_their_chapters() {
     let loaded = render(&format!("{page}#Page_13"));
     assert!(frame.pixels == loaded.pixels, "not scrolled to the chapter");
 }
+
+/// TodoMVC's JS app (Speedometer's vanilla ES5 one) loads with its style
+/// sheets and scripts, and draws its header.
+#[test]
+fn todomvc_loads_its_style_sheets_and_scripts() {
+    let frame = render("todomvc/index.html");
+    assert_eq!(frame.title.as_deref(), Some("TodoMVC: JavaScript Es5"));
+    assert!(
+        frame.failed_subresources.is_empty(),
+        "{:?}",
+        frame.failed_subresources
+    );
+    assert!(inked_pixels(&frame) > 10_000, "{}", inked_pixels(&frame));
+}

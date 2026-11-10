@@ -123,8 +123,8 @@ impl HasData for GuestClocks {
 impl monotonic_clock::Host for &mut GuestClock {
     fn now(&mut self) -> wasmtime::Result<monotonic_clock::Mark> {
         let now = (self.now)();
-        // Down to the resolution: the remainder is below `now`.
-        Ok(now - now % CLOCK_RESOLUTION)
+        // Down to the resolution (the remainder is at most `now`).
+        Ok(now.saturating_sub(now % CLOCK_RESOLUTION))
     }
 
     fn get_resolution(&mut self) -> wasmtime::Result<types::Duration> {
@@ -151,7 +151,10 @@ impl<U> monotonic_clock::HostWithStore<U> for GuestClocks {
         Ok(())
     }
 
-    async fn wait_for(store: &Accessor<U, Self>, duration: types::Duration) -> wasmtime::Result<()> {
+    async fn wait_for(
+        store: &Accessor<U, Self>,
+        duration: types::Duration,
+    ) -> wasmtime::Result<()> {
         // A wait past the clock's end never ends, as its deadline never comes.
         let deadline = store.with(|mut access| (access.get().now)().saturating_add(duration));
         wait(store, deadline).await;
@@ -315,11 +318,19 @@ mod tests {
         let mut clock = clock(&time);
         let (mut first, mut second, mut third) = (None, None, None);
         assert!(clock.poll_wait(&mut first, 500, Waker::noop()).is_pending());
-        assert!(clock.poll_wait(&mut second, 300, Waker::noop()).is_pending());
+        assert!(
+            clock
+                .poll_wait(&mut second, 300, Waker::noop())
+                .is_pending()
+        );
         assert!(clock.poll_wait(&mut third, 400, Waker::noop()).is_pending());
         assert_eq!(clock.next_deadline(), Some(300));
         // Polled again, a wait is still one wait.
-        assert!(clock.poll_wait(&mut second, 300, Waker::noop()).is_pending());
+        assert!(
+            clock
+                .poll_wait(&mut second, 300, Waker::noop())
+                .is_pending()
+        );
         assert_eq!(clock.waits.len(), 3);
 
         time.store(300, Ordering::Relaxed);

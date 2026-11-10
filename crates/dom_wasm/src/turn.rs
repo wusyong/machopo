@@ -70,13 +70,21 @@ mod tests {
 
     #[test]
     fn a_future_that_wakes_itself_is_polled_again() {
-        let future = pin!(Steps { wakes: 3, sleeps: 0, polls: 0 });
+        let future = pin!(Steps {
+            wakes: 3,
+            sleeps: 0,
+            polls: 0
+        });
         assert_eq!(poll_until_idle(future), Poll::Ready(4));
     }
 
     #[test]
     fn a_turn_ends_at_a_poll_that_woke_nothing() {
-        let mut future = pin!(Steps { wakes: 2, sleeps: 1, polls: 0 });
+        let mut future = pin!(Steps {
+            wakes: 2,
+            sleeps: 1,
+            polls: 0
+        });
         assert_eq!(poll_until_idle(future.as_mut()), Poll::Pending);
         assert_eq!(future.polls, 3);
         // The next turn takes it from there; a wake of the turn before

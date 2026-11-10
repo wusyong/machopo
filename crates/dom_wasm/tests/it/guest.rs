@@ -145,12 +145,9 @@ impl Guest {
     /// Runs `case`: what went wrong (empty if nothing), or the trap.
     pub(crate) fn try_run(&mut self, case: &str) -> wasmtime::Result<String> {
         let run = self.run;
-        let (failure,) = self
-            .set
-            .borrow()
-            .with(self.index, |mut cx| {
-                block_on(run.call_async(&mut cx, (case.to_owned(),)))
-            })??;
+        let (failure,) = self.set.borrow().with(self.index, |mut cx| {
+            block_on(run.call_async(&mut cx, (case.to_owned(),)))
+        })??;
         Ok(failure)
     }
 

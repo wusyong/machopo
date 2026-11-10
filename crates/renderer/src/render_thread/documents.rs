@@ -168,7 +168,10 @@ enum ParserSource {
     },
     External(dom::LoadedScript),
     /// A wasm script's component, and its URL after redirects.
-    Wasm { bytes: Vec<u8>, url: String },
+    Wasm {
+        bytes: Vec<u8>,
+        url: String,
+    },
 }
 
 /// A script the DOM queued (`Dom::take_script_fetches`) being fetched: its

@@ -17,7 +17,8 @@ use shell::headless::{self, Frame};
 fn page(name: &str, html: &str) -> String {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shell-wasm-documents");
     std::fs::create_dir_all(&dir).unwrap();
-    let guest = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../dom_wasm/tests/guests/page.wasm");
+    let guest =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../dom_wasm/tests/guests/page.wasm");
     for copy in ["page.wasm", "page.bin"] {
         std::fs::copy(&guest, dir.join(copy)).unwrap();
     }
@@ -42,7 +43,10 @@ const META: &str = r#"<meta name="script" content="wasm">"#;
 fn a_wasm_documents_script_runs_and_what_it_adds_is_drawn() {
     let ran = render(&page(
         "runs.html",
-        &document(META, r#"<script type="application/wasm" src="page.wasm"></script>"#),
+        &document(
+            META,
+            r#"<script type="application/wasm" src="page.wasm"></script>"#,
+        ),
     ));
     assert_eq!(ran.failed_subresources, [""; 0]);
     // The same page with no script draws nothing.
@@ -54,9 +58,17 @@ fn a_wasm_documents_script_runs_and_what_it_adds_is_drawn() {
 fn a_wasm_script_not_served_as_wasm_fails_to_load() {
     let failed = render(&page(
         "not-wasm.html",
-        &document(META, r#"<script type="application/wasm" src="page.bin"></script>"#),
+        &document(
+            META,
+            r#"<script type="application/wasm" src="page.bin"></script>"#,
+        ),
     ));
-    assert_eq!(failed.failed_subresources.len(), 1, "{:?}", failed.failed_subresources);
+    assert_eq!(
+        failed.failed_subresources.len(),
+        1,
+        "{:?}",
+        failed.failed_subresources
+    );
     assert!(failed.failed_subresources[0].contains("page.bin"));
     let empty = render(&page("empty.html", &document(META, "")));
     assert!(failed.pixels == empty.pixels, "it didn't run");
@@ -66,9 +78,17 @@ fn a_wasm_script_not_served_as_wasm_fails_to_load() {
 fn a_wasm_script_that_isnt_there_fails_to_load() {
     let failed = render(&page(
         "missing.html",
-        &document(META, r#"<script type="application/wasm" src="none.wasm"></script>"#),
+        &document(
+            META,
+            r#"<script type="application/wasm" src="none.wasm"></script>"#,
+        ),
     ));
-    assert_eq!(failed.failed_subresources.len(), 1, "{:?}", failed.failed_subresources);
+    assert_eq!(
+        failed.failed_subresources.len(),
+        1,
+        "{:?}",
+        failed.failed_subresources
+    );
     assert!(failed.failed_subresources[0].contains("none.wasm"));
 }
 
@@ -105,4 +125,41 @@ fn a_wasm_document_runs_no_js() {
     assert_eq!(page.failed_subresources, [""; 0], "not fetched");
     let empty = render(&self::page("empty.html", &document(META, "")));
     assert!(page.pixels == empty.pixels, "it didn't run");
+}
+
+/// A page of `tests/scenarios/pages`, at 800 by 600.
+fn scenario_page(name: &str) -> Frame {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/scenarios/pages")
+        .join(name)
+        .canonicalize()
+        .expect("the page exists");
+    let url = net::file_url(&path).expect("an absolute path");
+    headless::render(&url, Size::new(800, 600), 1.0, true).expect("the page renders")
+}
+
+/// TodoMVC's todos as the wasm guest builds them (`todomvc.c`, on the JS
+/// app's markup and style sheets) are drawn as the same items written out
+/// in the markup, pixel for pixel.
+#[test]
+fn the_wasm_todomvc_is_drawn_as_its_markup_written_out() {
+    let wasm = scenario_page("todomvc-wasm.html");
+    assert_eq!(wasm.failed_subresources, [""; 0]);
+    let written = scenario_page("todomvc-static.html");
+    assert_eq!(written.failed_subresources, [""; 0]);
+    assert!(wasm.pixels == written.pixels);
+    // Not both of them empty: the JS app, which starts with no todo,
+    // looks otherwise.
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/sites/todomvc/index.html")
+        .canonicalize()
+        .unwrap();
+    let app = headless::render(
+        &net::file_url(&path).unwrap(),
+        Size::new(800, 600),
+        1.0,
+        true,
+    )
+    .expect("the page renders");
+    assert!(wasm.pixels != app.pixels);
 }

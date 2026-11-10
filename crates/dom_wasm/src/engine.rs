@@ -14,12 +14,12 @@ use std::time::{Duration, Instant};
 
 use dom::{Dom, NodeId, NodeRoot, Window};
 use dom_api::typed::ScriptHost;
-use elise::Persistent;
 use dom_api::{
     ApiCx, ConsoleMessage, ConsoleSink, DevToolsFrameIds, DevToolsInterrupter, DevToolsObjects,
     DevToolsPage, DevToolsQueue, DevToolsSend, DocumentReadiness, EngineSettings, FrameId,
     FrameLayout, LayoutCell, ScriptEngine, WasmScript,
 };
+use elise::Persistent;
 use wasmtime::component::{Component, Linker};
 use wasmtime::{AsContextMut, Config, Engine, Store, StoreSet};
 use wasmtime_wasi::{WasiCtxView, WasiView};
@@ -369,10 +369,11 @@ impl WasmEngine {
         // Instantiated, then `start(document)`: done at its first wait (the
         // scripts after it and the document's load don't wait for it).
         self.turn(at, |cx| {
-            let instance = match poll_until_idle(pin!(linker.instantiate_async(&mut *cx, &component))) {
-                Poll::Ready(instance) => instance?,
-                Poll::Pending => wasmtime::bail!("the component waits as it is instantiated"),
-            };
+            let instance =
+                match poll_until_idle(pin!(linker.instantiate_async(&mut *cx, &component))) {
+                    Poll::Ready(instance) => instance?,
+                    Poll::Pending => wasmtime::bail!("the component waits as it is instantiated"),
+                };
             let start = instance.get_typed_func::<(u32,), ()>(&mut *cx, "start")?;
             let handle = cx.data().dom.give(document)?;
             // The call's future goes with this poll; the task it started
@@ -614,12 +615,16 @@ impl ScriptEngine for WasmEngine {
         let (Some(dom), Some(document)) = (dom.as_mut(), document.as_ref()) else {
             return dom_api::CursorKeyword::Default;
         };
-        let cursor = event_handler.handle_mouse(&mut Host {
+        let cursor = event_handler.handle_mouse(
+            &mut Host {
                 dom,
                 layout,
                 top: *document_id,
                 requests,
-            }, document, input);
+            },
+            document,
+            input,
+        );
         self.perform_microtask_checkpoint();
         cursor
     }
@@ -635,12 +640,15 @@ impl ScriptEngine for WasmEngine {
             ..
         } = self;
         let (dom, document) = (dom.as_mut()?, document.as_ref()?);
-        let cursor = event_handler.recompute_under_mouse(&mut Host {
+        let cursor = event_handler.recompute_under_mouse(
+            &mut Host {
                 dom,
                 layout,
                 top: *document_id,
                 requests,
-            }, document);
+            },
+            document,
+        );
         self.perform_microtask_checkpoint();
         cursor
     }
@@ -658,12 +666,16 @@ impl ScriptEngine for WasmEngine {
         let (Some(dom), Some(document)) = (dom.as_mut(), document.as_ref()) else {
             return true;
         };
-        let not_canceled = event_handler.handle_wheel(&mut Host {
+        let not_canceled = event_handler.handle_wheel(
+            &mut Host {
                 dom,
                 layout,
                 top: *document_id,
                 requests,
-            }, document, input);
+            },
+            document,
+            input,
+        );
         self.perform_microtask_checkpoint();
         not_canceled
     }
@@ -681,12 +693,16 @@ impl ScriptEngine for WasmEngine {
         let (Some(dom), Some(document)) = (dom.as_mut(), document.as_ref()) else {
             return dom_api::KeyResult::Done;
         };
-        let result = event_handler.handle_key(&mut Host {
+        let result = event_handler.handle_key(
+            &mut Host {
                 dom,
                 layout,
                 top: *document_id,
                 requests,
-            }, document, input);
+            },
+            document,
+            input,
+        );
         self.perform_microtask_checkpoint();
         result
     }
@@ -980,9 +996,9 @@ impl ScriptEngine for WasmEngine {
             .min()
             .map(|deadline| Duration::from_nanos(deadline.saturating_sub(now)));
         let document = self.document.clone()?;
-        let own = self.dom().read(|cx| {
-            dom_api::until_next_due(cx, cx.window_of(document.get(cx.gc))?)
-        });
+        let own = self
+            .dom()
+            .read(|cx| dom_api::until_next_due(cx, cx.window_of(document.get(cx.gc))?));
         match (guests, own) {
             (Some(guests), Some(own)) => Some(guests.min(own)),
             (guests, own) => guests.or(own),
@@ -1016,8 +1032,7 @@ impl ScriptEngine for WasmEngine {
             }
             ran = true;
         }
-        self.dom()
-            .read(|cx| cx.end_task_pass(&[window.get(cx.gc)]));
+        self.dom().read(|cx| cx.end_task_pass(&[window.get(cx.gc)]));
         ran
     }
 

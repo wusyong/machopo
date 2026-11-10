@@ -54,14 +54,18 @@ impl Guest {
     fn next_deadline(&self) -> Option<u64> {
         self.set
             .borrow()
-            .with(self.index, |mut cx| cx.data_mut().guest_clock().next_deadline())
+            .with(self.index, |mut cx| {
+                cx.data_mut().guest_clock().next_deadline()
+            })
             .unwrap()
     }
 
     fn set_time(&self, time: u64) {
         self.set
             .borrow()
-            .with(self.index, |cx| cx.data().time.store(time, Ordering::Relaxed))
+            .with(self.index, |cx| {
+                cx.data().time.store(time, Ordering::Relaxed)
+            })
             .unwrap();
     }
 

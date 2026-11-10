@@ -13,7 +13,7 @@
 | 1c-1 engine 擁有的 DOM：`WasmDom::take`、`lend`（決定 10） | 完成 | 2026-11-10 |
 | 1c-2 `dom_wasm` 的 engine：`ScriptEngine`、`ScriptHost`、需要時才跑的 event loop、`start(document)`（決定 3、4、8、9） | 完成 | 2026-11-10 |
 | 1d renderer：prescan `<meta>`、選 engine、換頁時換 engine、載入 `application/wasm` 的 script（決定 2） | 完成 | 2026-11-10 |
-| 1e 靜態的 TodoMVC 的 guest、情境、renderer 的測試 | 還沒開始 | |
+| 1e 靜態的 TodoMVC 的 guest、情境、`shell` 的測試；第 1 段的檢查 | 完成 | 2026-11-10 |
 | 2 節點以外的物件的 handle、放開凍結、TodoMVC 用到的成員 | 還沒開始 | |
 | 3 事件和 callback | 還沒開始 | |
 | 4 TodoMVC 的 guest、情境 | 還沒開始 | |
@@ -92,3 +92,17 @@
 - 跑過：`cargo test -p renderer -p shell -p browser -p dom_api`（改完 renderer 之後、補測試之前）全部通過；之後 `cargo test -p dom_wasm`、`-p shell --test it wasm_documents`、`-p renderer --lib a_meta_declares` 和 `test.py scenarios wasm-document` 通過。
 - mutation test（`mutants-1d.toml`，13 條，各用最相關的測試）：13 條都抓到。跑完確認檔案都還原了。
 - 沒有測試守著的（記進 `docs/test-gaps.md`）：wasm 文件裡鍵盤、focus、表單這些輸入；DevTools 連著時的行為和換 engine；wasm script 的 `load`、`error` 事件。`docs/limitations.md` 的 wasm 文件那一條改寫成現在的樣子，舊的 wasm 實作留下的幾句拿掉。
+
+### 1e 和第 1 段的檢查（2026-11-10，macOS，Apple Silicon）
+
+- 決定 11：Speedometer 3.1 的 vanilla ES5 TodoMVC 的 `dist/` 原樣複製到 `tests/sites/todomvc/`（連同授權），`tests/sites/README.md` 記來源。
+- 新的：guest `crates/dom_wasm/tests/guests/todomvc.c`（`start` 建三個 todo 的 `<li>`、照 JS 版的樣板，填計數；用到的都是現有的成員：`query-selector`、`create-element`、`append-child`、`set-attribute`、`set-text-content`、`set-inner-html`、`release`）；頁面 `tests/scenarios/pages/todomvc-wasm.html`（JS 版的 markup 和樣式表，script 換成 guest）和 `todomvc-static.html`（同樣的 todo 直接寫在 markup 裡，沒有 script）。`ci.py guests` 重編三個 guest，原本的兩個 `.wasm` 逐 byte 沒變。
+- 新的測試：`shell` 的 `wasm_documents::the_wasm_todomvc_is_drawn_as_its_markup_written_out`（兩頁的像素一樣，而且和 JS 版沒有 todo 的畫面不一樣）、`sites::todomvc_loads_its_style_sheets_and_scripts`（JS 版載得起來）；情境 `todomvc-wasm`（每個 todo 的文字、完成的那個、計數；再點一個勾選框、在輸入框打字，確認頁面自己的行為沒有 script 也照常，結果只留截圖）。
+- 不穩定的測試，查到原因：像素比對在 `cargo test` 裡偶爾失敗（三次裡一次），單獨用 `machopo --headless` 跑八次都一樣。印出不同的像素，都在三個 `label` 的文字上；再比「靜態頁對靜態頁」六次有三次不同、「wasm 頁對 wasm 頁」六次都一樣，所以不穩的是靜態頁自己，和 wasm 無關。TodoMVC 的 CSS 給 `label` 一個 `transition: color 0.4s`；兩頁都關掉它之後，靜態頁對靜態頁 18 次都一樣，整組 `wasm_documents` 和 `sites` 連跑 40 次沒有失敗。推測是靜態頁的 `label` 在樣式表到之前被算過一次 style，樣式表到了顏色才過渡（wasm 頁的 `label` 是樣式表到了之後才建的）；什麼時候會先算那一次沒有查，記進 `docs/limitations.md`。沒有用重跑蓋過去。
+- mutation test：這一步沒有新的實作（Rust 的程式沒有改，除了測試），沒有跑。guest 的 C 由像素比對和情境守著。
+- 第 1 段的檢查：
+  - `cargo fmt --check`：第 1 段的程式有 30 處沒排好，`cargo fmt` 排過；之後四份 mutation 的 spec 的原文都還對得上。
+  - `cargo clippy --workspace --all-targets -- -D warnings`：抓到兩種，都修了：`crates/dom_wasm/src/wasi.rs` 時鐘降精度的減法沒寫明溢位（改成 `saturating_sub`，`mutants-1b.toml` 那一條的原文跟著改），`crates/dom_wasm/tests/it/engine.rs` 三處 `fetch_add`（workspace 禁用，改成讀了再存）。之後通過。
+  - `cargo test --workspace`：通過（55 個測試 binary，3789 個測試通過、1 個 ignored）。
+  - `test.py scenarios todomvc-wasm wasm-document` 通過；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過。
+  - 沒有跑的：`test.py automation`（視窗那一層沒有動）、整套的情境、reftest 和 WPT（由 CI 跑）。
