@@ -37,7 +37,7 @@ upstream_rev = "1b67b7539616e5c7dc92d8fc79a1f7678525993c"
 repository = "https://github.com/wusyong/taffy"
 # The `machopo` branch: upstream's main (2026-11-06) at `upstream_rev` and the
 # commits in `patches/taffy/`.
-rev = "05e64bd4f66abc7b92eff581e6fff9093199bfb1"
+rev = "0de7a64fed42872d210b16c3e35cfdcfb12e7007"
 upstream = "https://github.com/DioxusLabs/taffy"
 upstream_rev = "4aca4f4933aa9cb7a3266050c788aad4c90288d2"
 

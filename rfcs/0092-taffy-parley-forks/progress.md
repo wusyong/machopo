@@ -16,7 +16,9 @@
 | 4b 用 slot 的高度改寫 `float_bands` | 取消：slot 的高度取代不了它（下面的「第 4b 段」） | 2026-11-10 |
 | 5a parley 的 fork：`StyleProperty::FontFamilyIds`、`TreeBuilder::push_default` | 做完，等審核：fork 的頂端 `227d7191`（11 個 commit 加 README）只在本地，`third_party.toml` 釘本地的 commit；push fork 之後才能 push machopo。舊的頂端 `b4941e39` 的 tag 是 `machopo-2026-11-10-3b`（本地） | |
 | 5b machopo 的 `FontFallbackMap`、頁面和 canvas 的文字改給 family 的 id、計數改義 | 做完，等審核 | |
-| 6 float 和 taffy 的快取（6a）、做 fragment 時的斷行（6b） | 還沒開始 | |
+| 6a float 旁邊的盒子進快取 | 不做：量過會命中的上限和時間（下面的「第 6a 段：float 的快取」） | 2026-11-10 |
+| 6a column flexbox 的 intrinsic 寬度搬進 taffy 的 fork | 做完（fork 的 commit 在本地，還沒 push） | 2026-11-10 |
+| 6b 做 fragment 時的斷行 | 還沒開始 | |
 | 7 上游的草稿 | 還沒開始 | |
 
 ## 驗收
@@ -143,6 +145,32 @@
   - 「generic 也算成查了名稱」：計數的測試沒有 generic；加了一個帶 `serif, cursive` 的值。
   - 「generic 代表的 family 不在 id 裡」：測試的字型集合每個 generic 都是 Lato，沒有 family 時 parley 退回的也是 Lato，整合測試分不出來；加了 `font_families` 的 unit test，用自己的集合（`serif` 對到 Ahem）直接比查到的 id。
 - **跑過的檢查**：`cargo test -p layout`（26、436）、`cargo test -p shell`（70、11、563：focus 的測試回到通過）；reftest 整套 195 個檢查全部符合預期；WPT 的 `css/css-text`（2,751 個檢查）、`css/css-fonts`（4,540）、`css/CSS2/linebox`（728）、`css/css-text-decor`（1,355）、`html/canvas/element/text`（315）全部符合預期，沒有預期結果要改。階段最後的 `cargo test --workspace`（3,732 個通過、1 個 ignored）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`sanity.py` 的七項、`ci.py third-party`。
+
+**第 6a 段：float 的快取**（2026-11-10，Windows 11）：量了之後不做，程式沒有改動。
+
+- **會命中的上限**（release build，暫時的計數，量完還原）：`compute_box` 裡每個盒子多留一份 taffy 的 `Cache`，只給 float 旁邊的計算用，數同一個盒子、同樣的 `LayoutInput` 又算一次的次數，和結果（大小、上下的 margin）跟上次一樣的次數。另外數這些計算底下一共做了幾次盒子的計算、斷了幾次行（巢狀的只算一次）。
+
+  | 頁面 | 全部的計算 | float 旁邊沒用快取 | 其中同樣的輸入又算 | 省掉的斷行 |
+  | --- | --- | --- | --- | --- |
+  | gutenberg（38 次 layout） | 4,848 | 3,077 | 2,960（96%） | 0 |
+  | sqlite 的 `about.html` | 130 | 12 | 5 | 0 |
+  | `floats_show_hide` | 9,094,695 | 8,335,800 | 8,293,602（99.5%） | 0 |
+  | `floats_2_100_nested` | 556,032 | 535,487 | 523,700（98%） | 0 |
+  | `floats_20_100_nested` | 258,614 | 214,182 | 208,200（97%） | 0 |
+  | `floats_50_100_nested` | 125,830 | 42,824 | 40,400（94%） | 0 |
+  | `floats_100_100_nested` | 137,957 | 6,413 | 5,000（78%） | 0 |
+  | 沒有巢狀的 `floats_*` 5 頁 | 48,614 到 315,071 | 111 到 21,000 | 0 | 0 |
+
+  又算的那些結果全部和上次一樣；省掉的盒子的計算數等於命中數（每次命中只省那個盒子自己的）。這是上限：真的 key 還要 float 的狀態一樣。
+- **時間**（`bench.py blink-perf --pages`，machopo `60bf10a` 的 `perf` profile 對 Chrome for Testing 152，各一次）：`floats_show_hide` 21.1 對 19.3 runs/s（machopo 的時間是 Chrome 的 0.91 倍）、`floats_2_100_nested` 23.2 對 22.2 ms（1.05 倍）、`floats_20_100_nested` 43.5 對 53 ms（0.82 倍）。單次的量測，只能讀成大致打平。
+- **沒做的**：沒有取樣 `compute_box` 佔這幾頁多少時間（`blink-perf` 沒有取樣的選項，上面的結果已經夠決定）。
+
+**第 6a 段：column flexbox 的寬度**（2026-11-10，Windows 11）：
+
+- **fork**（taffy 的 `fadc44a6`「Don't measure the items' heights for the width of a single-line column」，頂端 `0de7a64f`；舊的頂端 `05e64bd4` 打了 tag `machopo-2026-11-10-4a`）：`cargo test` 全過，6689 個 xml fixture 沒有一個改預期；`caching.rs` 的 `measure_count_flex_in_grid` 的 column 從 10 次 measure 變 6 次；新的 `tests/hand_written/column_width.rs` 5 個測試。`cargo fmt --check` 過，clippy 沒有新的警告。**沒做的**：沒有用 taffy 的 `rust-version`（1.71）編過（這台機器沒裝），送上游前要做。
+- **和完整演算法不同的地方**：fixture 都沒變，但不是嚴格等價。完整的演算法量子項的寬度時給它 flex 之後的高度，捷徑給它自己的 style 的高度（夾在 min、max 裡、不小於 padding 加 border），沒有的話不給。寬度會跟著給的高度變、又不是經由 `aspect-ratio` 的子項（measure function 自己用高度算寬度的 leaf、換行的 column flexbox、有比例的子項以外靠高度決定寬度的 container）結果會不同；`column_width.rs` 的 `item_available_height` 的第一個斷言在完整演算法下是 10、捷徑是 70（刻意做的、寬度等於可用高度的 leaf）。machopo 原本的捷徑也是這樣（它的 debug 對照從沒被踩到），Blink 的 `ComputeMinMaxSizes` 也只用子項自己的貢獻。記在 `docs/test-gaps.md`。
+- **fork 的 mutation test**（scratchpad 的一次性 script，每條跑 fork 的 `cargo test --no-fail-fast`）：12 條全部抓到：不限 column（89 個失敗）、不限寬度（152）、換行的也走（`wrapping_column`）、有比例的也走（`item_with_aspect_ratio`）、不設已知的容器高度（`item_available_height`）、不算 line 的 cross size（87）、不扣子項的 margin、不用 style 的高度、不夾 min 和 max、不以 padding 為下限（都是 `item_with_height`、`item_available_height`）、容器高度未知時也用它當可用高度、永遠不走捷徑（`measure_count_flex_in_grid`）。過程中沒抓到、補了測試的：換行、比例、容器高度、margin、可用高度（第一輪 5 條，補了 `column_width.rs`），padding 的下限（補了 `item_with_height` 的一個斷言）。第一版的 `item_with_aspect_ratio` 用 leaf，完整演算法也不經由比例換算（leaf 不把已知的高度經比例轉成寬度），改成 block 的子項才分得出來。
+- **machopo**：`column_flex_width`、`widest_column_item` 和 debug 的對照拿掉（`lib.rs` 少 198 行）。`cargo test -p layout` 全過（unit 26、`it` 436），`flex.rs` 原有的 column 測試（寬度、min 和 max content、shrink-to-fit、子項自己的寬度、斷行次數）沒有改預期。把 fork 的捷徑關掉時 `flex::a_column_in_a_row_breaks_its_paragraphs_once` 失敗（斷行次數）。mutation test（`mutants-6a.toml`）：2 條全部抓到（flexbox 不走 `fit_content_width`、shrink-to-fit 不以 min-content 為下限）。`ci.py third-party` 過（`patches/taffy/` 兩個 patch）。 `test.py wpt css/css-flexbox`：1646 個檢查，沒有非預期的結果；`test.py reftest flex/`：16 個，沒有非預期的結果。sanity 的 7 項都過。
 
 **第 2 段的量測**（2026-11-10，Windows 11，release build，`RUST_LOG=layout=debug`，scratchpad 裡一次性的 script 加總每頁的 log）：`tests/sites/` 用 `--headless`（1280×800）載入一次；blink_perf 的 30 頁照 `bench.py blink-perf` 的方法（`--automation-pipe`，頁面跑完整個 runner）；Speedometer 3.1 的 20 個 suite 各一次 iteration（`iterationCount=1`，只數計數，沒量時間）。
 

@@ -1,0 +1,21 @@
+# Mutation test of stage 6a, machopo's side: with the width of a single-line
+# column in taffy's fork, a column that shrinks to fit is sized by
+# `fit_content_width` like any other flexbox:
+# python3 scripts/test.py mutate rfcs/0092-taffy-parley-forks/mutants-6a.toml
+# (The fork's own mutants are run in the fork, against its tests.)
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "flex::"]
+
+[[mutant]]
+name = "a flexbox doesn't shrink to fit"
+file = "crates/layout/src/lib.rs"
+from = '''            match self.fit_content_width(id, inputs) {
+                Some(output) => output,
+                None => compute_flexbox_layout(self, id, inputs),
+            }'''
+to = '''            compute_flexbox_layout(self, id, inputs)'''
+
+[[mutant]]
+name = "shrink to fit doesn't floor at min-content"
+file = "crates/layout/src/lib.rs"
+from = '''        let width = room.min(max).max(min);'''
+to = '''        let width = room.min(max);'''

@@ -1,20 +1,19 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Wu Yuwei <yuweiwu@pm.me>
-Date: Tue, 10 Nov 2026 03:57:36 +0900
+Date: Tue, 10 Nov 2026 15:08:42 +0900
 Subject: [PATCH] Add README.machopo.md
 
-machopo's fork: why, its local modifications and their upstream status, the tests and how to update it.
 ---
- README.machopo.md | 62 +++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 62 insertions(+)
+ README.machopo.md | 63 +++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 63 insertions(+)
  create mode 100644 README.machopo.md
 
 diff --git a/README.machopo.md b/README.machopo.md
 new file mode 100644
-index 0000000000000000000000000000000000000000..acd430105d2e42e20a4db198c17b208dcbc044ad
+index 0000000000000000000000000000000000000000..b68171767f96022c20283f43b8073a7965fb8dd9
 --- /dev/null
 +++ b/README.machopo.md
-@@ -0,0 +1,62 @@
+@@ -0,0 +1,63 @@
 +# taffy (machopo's fork)
 +
 +| | |
@@ -47,6 +46,7 @@ index 0000000000000000000000000000000000000000..acd430105d2e42e20a4db198c17b208d
 +
 +| Commit | What | Upstream |
 +| --- | --- | --- |
++| Don't measure the items' heights for the width of a single-line column | A column flex container that is only asked for its width takes the largest of its items' hypothetical outer widths, each measured at the height its own style gives it, without measuring their heights first: one line breaking less of every paragraph in it. An item whose width follows the height it is given other than through `aspect-ratio` (a measure function's own, a column that wraps) gets the width of its style's height, not of the height it flexes to. Tests: `tests/hand_written/column_width.rs` and the measure count in `caching.rs`. | Drafted, not sent |
 +| Add README.machopo.md | This file. Always the last commit, and the only one that changes it, so that the others can go upstream as they are. | Fork only |
 +
 +Changes are marked with `machopo:` comments. A change meant for upstream

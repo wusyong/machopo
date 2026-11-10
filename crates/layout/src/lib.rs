@@ -2553,12 +2553,9 @@ impl BoxTree {
                 },
             )
         } else if taffy_style.display == taffy::Display::Flex {
-            match self.column_flex_width(id, inputs) {
+            match self.fit_content_width(id, inputs) {
                 Some(output) => output,
-                None => match self.fit_content_width(id, inputs) {
-                    Some(output) => output,
-                    None => compute_flexbox_layout(self, id, inputs),
-                },
+                None => compute_flexbox_layout(self, id, inputs),
             }
         } else if taffy_style.display == taffy::Display::Grid {
             match self.fit_content_width(id, inputs) {
@@ -2573,126 +2570,6 @@ impl BoxTree {
             self.measuring_width = outer;
             output
         }
-    }
-
-    /// A single-line column flexbox's width alone, when it isn't known:
-    /// the widest of its in-flow children's contributions with their
-    /// margins, plus its own padding, border and scrollbar gutter, clamped
-    /// by its `min-width` and `max-width` (Blink's
-    /// `FlexLayoutAlgorithm::ComputeMinMaxSizes`, its fast path for a
-    /// single-line column). taffy runs the flex algorithm through the
-    /// children's flex base sizes for it, laying each child out at that
-    /// width for its height, which the width doesn't need: a column of
-    /// paragraphs had each broken into lines once more at its min-content
-    /// width. Without the height each child flexes to, which only a ratio
-    /// carries into a width: with a child that has one, or its own, or
-    /// lines that wrap, `None`, and taffy sizes it.
-    fn column_flex_width(
-        &mut self,
-        id: taffy::NodeId,
-        inputs: LayoutInput,
-    ) -> Option<LayoutOutput> {
-        let index = usize::from(id);
-        let style = &self.boxes[index].taffy_style;
-        if inputs.run_mode != RunMode::ComputeSize
-            || inputs.axis != RequestedAxis::Horizontal
-            || inputs.known_dimensions.width.is_some()
-            || !matches!(
-                style.flex_direction,
-                taffy::FlexDirection::Column | taffy::FlexDirection::ColumnReverse
-            )
-            || style.flex_wrap != taffy::FlexWrap::NoWrap
-            || style.aspect_ratio.is_some()
-        {
-            return None;
-        }
-        if self.layout_children(index).iter().any(|&child| {
-            let s = &self.boxes[usize::from(child)].taffy_style;
-            !s.position.is_out_of_flow()
-                && s.display != taffy::Display::None
-                && s.aspect_ratio.is_some()
-        }) {
-            return None;
-        }
-        let parent = inputs.parent_size.width;
-        let calc = |handle, basis| self.resolve_calc_value(handle, basis);
-        // A width its style gives, or a `max-width` no more than its
-        // `min-width`: taffy takes it without laying anything out.
-        let min = style.min_size.width.maybe_resolve(parent, calc);
-        let max = style.max_size.width.maybe_resolve(parent, calc);
-        if (inputs.sizing_mode == SizingMode::InherentSize
-            && style.size.width.maybe_resolve(parent, calc).is_some())
-            || matches!((min, max), (Some(min), Some(max)) if max <= min)
-        {
-            return None;
-        }
-        let padding = style.padding.resolve_or_zero(parent, calc);
-        let border = style.border.resolve_or_zero(parent, calc);
-        let edges = padding.left + padding.right + border.left + border.right;
-        let edges_y = padding.top + padding.bottom + border.top + border.bottom;
-        // A scrollbar that scrolls one way takes room the other way.
-        let gutter = |overflow: taffy::Overflow| {
-            if overflow == taffy::Overflow::Scroll {
-                style.scrollbar_width
-            } else {
-                0.0
-            }
-        };
-        let inset = edges + gutter(style.overflow.y);
-        let inset_y = edges_y + gutter(style.overflow.x);
-        let adjust = if style.box_sizing == taffy::BoxSizing::ContentBox {
-            edges
-        } else {
-            0.0
-        };
-        let (min, max) = (min.maybe_add(adjust), max.maybe_add(adjust));
-        let inner_height = inputs.known_dimensions.height.maybe_sub(inset_y);
-        let available = taffy::Size {
-            width: inputs.available_space.width.maybe_sub(inset).maybe_max(0.0),
-            height: inner_height.map_or(
-                inputs
-                    .available_space
-                    .height
-                    .maybe_sub(inset_y)
-                    .maybe_max(0.0),
-                |height| AvailableSpace::Definite(height.max(0.0)),
-            ),
-        };
-        let widest = |tree: &mut Self, width| {
-            tree.widest_column_item(index, width, available.height, inner_height)
-        };
-        let widest = match available.width {
-            // Shrink-to-fit, between its min-content and max-content
-            // widths, as Blink sizes it from its min and max sizes: measured
-            // in the room instead, a child that doesn't shrink with it (a
-            // percentage-width image, which a min-content width compresses)
-            // would count at its own width.
-            AvailableSpace::Definite(room) => {
-                let min = widest(self, AvailableSpace::MinContent);
-                let max = widest(self, AvailableSpace::MaxContent);
-                room.min(max).max(min)
-            }
-            width => widest(self, width),
-        };
-        let width = (widest + inset).maybe_clamp(min, max).max(edges);
-        // A debug build checks it against taffy's own, without counting
-        // what taffy's lays out again.
-        #[cfg(debug_assertions)]
-        {
-            let counts = self.last_layout;
-            let taffy = compute_flexbox_layout(self, id, inputs).size.width;
-            self.last_layout = counts;
-            assert!(
-                (taffy - width).abs() <= 1.0 / 64.0,
-                "column flexbox {index} ({:?}) is {width} px wide in {:?}, taffy says {taffy} px",
-                self.boxes[index].node,
-                inputs.available_space.width,
-            );
-        }
-        Some(LayoutOutput::from_outer_size(taffy::Size {
-            width,
-            height: 0.0,
-        }))
     }
 
     /// A flex or grid container's width, when it isn't known, in a
@@ -2761,81 +2638,6 @@ impl BoxTree {
         } else {
             compute_flexbox_layout(self, id, inputs)
         })
-    }
-
-    /// The widest of column flexbox `index`'s in-flow children's
-    /// min-content or max-content contributions (`width`), with their
-    /// margins: each measured as taffy measures an item's hypothetical
-    /// cross size, without the height it flexes to. `height` is the room
-    /// below, `inner_height` the content box's height if known.
-    fn widest_column_item(
-        &mut self,
-        index: usize,
-        width: AvailableSpace,
-        height: AvailableSpace,
-        inner_height: Option<f32>,
-    ) -> f32 {
-        let mut widest = 0.0_f32;
-        for i in 0..self.layout_children(index).len() {
-            let child = self.layout_children(index)[i];
-            let s = &self.boxes[usize::from(child)].taffy_style;
-            if s.position.is_out_of_flow() || s.display == taffy::Display::None {
-                continue;
-            }
-            // As taffy resolves an item's, against the content box's
-            // width, which isn't known.
-            let calc = |handle, basis| self.resolve_calc_value(handle, basis);
-            let padding = s.padding.resolve_or_zero(None, calc);
-            let border = s.border.resolve_or_zero(None, calc);
-            let edges = padding.left + padding.right + border.left + border.right;
-            let adjust = if s.box_sizing == taffy::BoxSizing::ContentBox {
-                edges
-            } else {
-                0.0
-            };
-            let size = s.size.width.maybe_resolve(None, calc).maybe_add(adjust);
-            let min = s.min_size.width.maybe_resolve(None, calc).maybe_add(adjust);
-            let max = s.max_size.width.maybe_resolve(None, calc).maybe_add(adjust);
-            let margin = s.margin.resolve_or_zero(None, calc);
-            let (margin, margin_y) = (margin.left + margin.right, margin.top + margin.bottom);
-            // A sizing keyword is measured under its own constraint; with
-            // no content box width, only these resolve.
-            let raw = s.size.width.into_raw();
-            let room = match raw.tag() {
-                taffy::CompactLength::MIN_CONTENT_TAG => AvailableSpace::MinContent,
-                taffy::CompactLength::MAX_CONTENT_TAG => AvailableSpace::MaxContent,
-                taffy::CompactLength::FIT_CONTENT_PX_TAG => AvailableSpace::Definite(raw.value()),
-                _ => width,
-            };
-            let size = size.maybe_clamp(min, max).maybe_max(edges);
-            let size = size.unwrap_or_else(|| {
-                let measured = self.compute_child_layout(
-                    child,
-                    LayoutInput {
-                        run_mode: RunMode::ComputeSize,
-                        sizing_mode: SizingMode::ContentSize,
-                        axis: RequestedAxis::Horizontal,
-                        known_dimensions: taffy::Size::NONE,
-                        known_dimensions_are_definite: taffy::Size {
-                            width: true,
-                            height: true,
-                        },
-                        parent_size: taffy::Size {
-                            width: None,
-                            height: inner_height,
-                        },
-                        available_space: taffy::Size {
-                            width: room,
-                            height: height.map_definite_value(|room| (room - margin_y).max(0.0)),
-                        },
-                        vertical_margins_are_collapsible: taffy::Line::FALSE,
-                    },
-                );
-                measured.size.width.maybe_clamp(min, max).max(edges)
-            });
-            widest = widest.max(size + margin);
-        }
-        widest
     }
 
     /// Box `index`'s children in the order layout takes them: a flex

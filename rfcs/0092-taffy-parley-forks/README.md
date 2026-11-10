@@ -68,7 +68,7 @@ machopo 這邊只處理一種 workaround：繞在函式庫外面、因此有實�
 
 `details.md` 的「workaround 的清單」每一條都標出：成本的種類、建議（跟上上游、搬進 fork 並送上游、在 machopo 裡做得便宜、留著），以及 Chromium 怎麼做。原則：
 
-- **成本來自繞在函式庫外面的**：搬進 fork（同時寫上游的草稿），或在上游已經有的時候跟上。例如 taffy 的快取 key 加上 float 的狀態（Blink 的 layout 快取以 exclusion space 為 key）、`BlockContext` 可以撤回、column flexbox 的 intrinsic 寬度不排子項（Blink 的 `FlexLayoutAlgorithm::ComputeMinMaxSizes`）。
+- **成本來自繞在函式庫外面的**：搬進 fork（同時寫上游的草稿），或在上游已經有的時候跟上。例如 `BlockContext` 可以撤回、column flexbox 的 intrinsic 寬度不排子項（Blink 的 `FlexLayoutAlgorithm::ComputeMinMaxSizes`）。
 - **成本來自 machopo 自己做法的**：在 machopo 裡改。例如字型家族的清單照 `font-family` 的值快取解析的結果（Blink 照 `FontDescription` 快取 `FontFallbackList`）。
 - **沒有成本的換算和照 Chrome 的行為**：留在 machopo。
 
@@ -98,7 +98,7 @@ machopo 這邊只處理一種 workaround：繞在函式庫外面、因此有實�
 3. **重寫 parley 的 fork**：舊的頂端打 tag；rebase 到上游最新的 main；拿掉上游已經有的（`hanging_advance`）；把相關的 commit 合在一起（`details.md` 的「parley fork 的重寫」）；commit 帶上 fork 自己的測試；匯出 patch；machopo 拿掉上游已經不需要的 workaround（`text-indent` 的 `indented()`）。可能分成 3a（rebase 和整理）、3b（fork 自己的測試和上游的草稿）。
 4. **taffy 跟上上游的 main**：rebase 到 main，處理 API 的變化（例如 `calc()` 的 handle、`ScrollableOverflow`），查 WPT 的變化，刪掉修好的限制。原本分成 4a（rebase、編得過所需的最小配合、預期結果和限制）和 4b（用 slot 的高度改寫 `float_bands`）；4b 取消（已決定的事項第 37 條），`float_bands` 留著。
 5. **字型家族的清單和名稱解析**：第 2 段量到最多的（每頁都有）。machopo 照 `font-family` 的值快取查到的 family，parley 的 fork 接受 family 的 id（已決定的事項第 38 到 43 條）。分成 5a（fork 的 API，machopo 只動 pin）和 5b（machopo 的快取、改用新的 API、計數改成數真的照名稱查的次數）。
-6. **float 和 taffy 的快取，再來是做 fragment 時多斷的那一次行**：6a 在 taffy 的 fork 裡把 float 的狀態加進快取的 key（同時寫上游的草稿），連同 column flexbox 的 intrinsic 寬度；6b 在 machopo 裡拿掉做 fragment 時多斷的那一次行。`BlockContext` 可以撤回不排進來（第 20 條）。
+6. **column flexbox 的 intrinsic 寬度，再來是做 fragment 時多斷的那一次行**：6a 把 column flexbox 的 intrinsic 寬度搬進 taffy 的 fork（同時寫上游的草稿）；6b 在 machopo 裡拿掉做 fragment 時多斷的那一次行。原本 6a 還要把 float 的狀態加進 taffy 的快取的 key，量過之後不做（已決定的事項第 44 條）。`BlockContext` 可以撤回不排進來（第 20 條）。
 7. **上游的草稿**：parley 和 taffy 剩下的 patch，各寫一份 PR 或 issue 的草稿（本地，給人審核）。可以和第 3 到 6 段穿插著做。
 
 ## 缺點
@@ -179,7 +179,7 @@ machopo 這邊只處理一種 workaround：繞在函式庫外面、因此有實�
 33. **taffy rebase 到上游 main 的頂端（`4aca4f49`，2026-11-06）**（2026-11-10）：float 和 BFC 的修正、slot 的高度都在 11 月的 commit 裡。不選 v0.15.1：沒有那些修正，這一段的目的大半達不到。不選等 #1396、#1400 合併：不知道要等多久，之後再 rebase 的成本很低。
 34. **第 4 段分成 4a、4b**（2026-11-10）：4a 只 rebase 加上編得過所需的最小配合（`find_content_slot` 的高度傳 0），結果的變化全部歸因於上游；4b 用 `ContentSlot::height` 改寫 `float_bands`。Chromium roll 第三方的相依和配合它的改動也是分開的 CL。不選一次做完：WPT 有變化時分不出是上游還是 machopo 的改寫造成的。
 35. **上游的變化讓測試退步時先查原因，照大小處理**（2026-11-10）：小而明確的在 fork 修成一個帶測試、可以送上游的 commit（每一個先列給人看），草稿留到第 7 段；大的更新預期結果、記進 `docs/limitations.md`，草稿寫成 issue。不選一律只記限制：退步留到上游修好。不選退回早一點的上游 commit：同時失去修正。
-36. **第 4 段只拿掉 `float_bands` 自己找底**（2026-11-10）：#1303 的 `FloatMark`（行內的 float 不必 `revert_to`）和 float 旁邊的盒子進快取留到 6a；`last_baseline`（#1110）、`aspect-ratio`（#1347）等上游。`rfcs/0043-floats-text/taffy-float-root-inset-report.md` 要回報的問題上游已經修好（#1384），不用送。
+36. **第 4 段只拿掉 `float_bands` 自己找底**（2026-11-10）：#1303 的 `FloatMark`（行內的 float 不必 `revert_to`）和 float 旁邊的盒子進快取留到 6a（後來量過、都不做：第 44 條）；`last_baseline`（#1110）、`aspect-ratio`（#1347）等上游。`rfcs/0043-floats-text/taffy-float-root-inset-report.md` 要回報的問題上游已經修好（#1384），不用送。
 37. **4b 取消，`float_bands` 留著不改**（2026-11-10，改掉第 34、36 條裡 4b 的部分）：上游的 `ContentSlot::height`（#1394）是這個寬度往下到被更窄的 segment 縮小為止的距離，不是 segment 的底：它不告訴你哪裡變寬，後面沒有更窄的 segment 時仍是無限大。`FloatBands::room` 要每個 band 的頂端和下一個 band 的頂端（包括變寬的地方，下一行才知道可以用更寬的空間），所以一段一段走 `find_content_slot`、最後用 `cleared_threshold(Clear::Both)`（O(1)）找最低的 float 的底，這兩件事都拿不掉；這個 workaround 的成本本來就少。不選現在在 fork 加露出 segment 範圍的 API（Blink 的 exclusion space 給的 layout opportunity 就有完整的範圍）：fork 多一個要送上游的 commit，而 6a 本來就要改 taffy 的 float，到那一段再列成要決定的事。不選每行直接問 `find_content_slot(top, line_height)`：要重做斷行和 `FloatBands` 的介面，而且仍然不知道哪裡變寬。
 38. **字型家族的成本：machopo 快取 `font-family` 的值查到的 family，fork 讓 parley 接受 family 的 id**（2026-11-10）：`layout` 的 `FontFallbackMap` 記每個值在字型集合裡查到的 `FamilyId` 清單（generic 的也展開），值第一次用到時查一次，之後直接給 parley。對照 Blink：`FontFallbackMap` 照 `FontDescription` 快取 `FontFallbackList`，字型集合變動時整個作廢。不選只快取展開的名稱：parley 仍然每個 span 逐個名稱查。不選等上游的 #796、#943：都還沒合併，也不解決每個 span 重查。
 39. **快取的 key 是清單的值，不是 `Arc` 的指標**（2026-11-10）：值一樣、來自不同的 style 的清單共用一筆（指標不同的清單很多：每個設了 `font-family` 的規則各一個）。註冊字型、改 generic 的對應時清掉整個快取，不逐筆作廢（和 Blink 一樣）。hash 一份清單的成本是幾個短字串，每個 span 一次，比每個名稱查一次 fontique 小。
@@ -187,6 +187,10 @@ machopo 這邊只處理一種 workaround：繞在函式庫外面、因此有實�
 41. **第 5 段分成 5a、5b**（2026-11-10）：5a 是 fork 的 commit（machopo 只動 pin 和 patch），5b 是 machopo 的快取和改用新的 API。
 42. **fork 的 API：只加 `StyleProperty::FontFamilyIds`，不改 `TextStyle`**（2026-11-10）：`Cow<[FamilyId]>`，設的是 `StyleProperty::FontFamily` 設的同一個東西，不經過名稱。不選在 `TextStyle` 加欄位：上游每個寫出整個 `TextStyle` 的地方都要改，送上游時改動大得多。
 43. **tree builder 的 root 的字型家族用新的 `TreeBuilder::push_default` 給**（2026-11-10，fork 的另一個 commit）：對應上游已有的 `RangedBuilder::push_default`。原本的做法是 root 不帶家族、在所有文字外面包一個帶 id 的 span，結果變了：parley 的 root style 也是沒有文字的 layout 和空的行的 style（行高來自它的字型），span 管不到（`shell` 的 `focus::focusing_scrolls_into_view_if_needed` 差 1px 抓到的）。不選在 `TextStyle` 加欄位（同第 42 條）。不選 root 仍然給名稱：每個 inline formatting context 還是逐個名稱查一次。它在推了任何東西之後呼叫會 panic：已經推的 span 和 run 留著 root 原本的 style。
+44. **float 旁邊的盒子進快取不做，`compute_box` 的做法和 `laid_out_beside_floats` 的計數留著**（2026-11-10，改掉第 20、36 條裡 6a 的這一部分）：動手前先量會命中的上限和時間（`progress.md` 的「第 6a 段：float 的快取」）。float 旁邊沒用快取的計算有 94% 到 99.5% 是同一個盒子、同樣的輸入又算一次，結果也都一樣，但每次命中只省那個盒子自己的一次計算：它的子項不是已經在快取裡（float 是 BFC 的根），就是自己也是這種盒子；inline 的內容本來就記著同樣寬度、同樣 float 旁邊的斷行，一次斷行都沒省到。計數上最該受益的三頁（blink_perf 的 `floats_show_hide`、`floats_2_100_nested`、`floats_20_100_nested`）machopo 是 Chrome 的 0.82 到 1.05 倍時間，沒有落後；真實的頁面（gutenberg）38 次 layout 共約三千次這種計算。代價是 fork 的兩個 API（取出盒子看得到的 float 狀態來比較、重放它放過的 float）、每個盒子多存一份狀態、和「狀態完全一樣」的論證。沒有取樣這些計算佔多少時間：之後有頁面慢在這裡時再量。當時考慮的做法（沒做）：key 是盒子看得到的 float 狀態、完全一樣才命中並重放 float（Blink 的 constraint space 帶 exclusion space，結果存著輸出的 exclusion space）；快取的項目放在 machopo 的 box 裡，fork 只加 `BlockContext` 的 API。用 `FloatMark` 讓行內的 float 不必 `revert_to` 也不做：第 2 段量到的重斷次數全部是 0。
+45. **column flexbox 的 intrinsic 寬度做在 taffy 的 fork 裡，machopo 的 `column_flex_width` 拿掉**（2026-11-10）：fork 的 `compute_preliminary` 在只被問寬度、column、不換行、沒有子項帶 `aspect-ratio` 時，不量子項的高度，直接取子項的 hypothetical cross size 的最大值。不選留在 machopo：那是 190 行照著 taffy 內部重算一次的程式，加上 debug build 每次再跑 taffy 對照，taffy 改了就要跟著改；做在 taffy 裡用的是它自己的函式，其他用 taffy 的人也拿得到（上游的草稿在 `upstream/taffy/`，不送）。不加 trait 的開關：捷徑只在結果由子項的貢獻決定時走。
+46. **捷徑量子項時給它自己的 style 的高度，不是 flex 之後的高度；和完整演算法的差異接受並記錄**（2026-11-10）：全部的 fixture 不變，但寬度跟著給的高度變、又不經由 `aspect-ratio` 的子項，結果和完整的演算法不同（`progress.md` 的「第 6a 段：column flexbox 的寬度」）。給 style 的高度是 Blink 的 `ComputeMinMaxSizes` 算子項貢獻的做法，蓋住「有固定高度、寬度由高度決定」的子項。不選為了完全等價在這些情況走完整的演算法：taffy 看不到 measure function 會不會用高度，只能全部不走。machopo 原本的捷徑有同樣的差異。
+47. **寬度有限時 column 的 shrink-to-fit 由 machopo 的 `fit_content_width` 做，不放進 fork**（2026-11-10）：它本來就對 row、grid 和換行的 column 做這件事（量 min-content 和 max-content 再夾），兩次量測各走一次 fork 的捷徑。不選放進 fork：taffy 的其他 container 都不 shrink-to-fit，只改 column 會讓 fixture 變。
 
 ## 待決定
 

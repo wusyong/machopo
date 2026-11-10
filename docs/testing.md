@@ -53,7 +53,6 @@ machopo 有哪些測試、怎麼跑、CI 的現況、mutation test 的做法。�
 | descendant invalidation set（`style`：屬性、state 改了只重算 set 找到的後代） | 以前會重算整棵子樹、set 跳過的元素，不帶動畫的重新 cascade 一次（不設 selector 旗標），比對 style 和 pseudo-element 的 style 相同；為了檢查才往下走的元素不套用任何 set，和 release build 重算的範圍一樣 |
 | stylesheet 改動只重算特徵找到的元素（`style` 的 `rule_set_invalidation`） | 沒被找到、也沒有因為別的原因重算的元素（規則變了的 tree scope 裡的），逐一比對多了、少了的規則，確認一條都不符合 |
 | shaping 的快取（`layout`：段落的，和 parley fork 以字為單位的） | 段落的快取命中時、有字取用或存下了字的 shaping 時，也整段 shape 一次比對 |
-| 非換行的 column flexbox 的寬度只取子項的貢獻（`layout` 的 `column_flex_width`） | 每次也跑 taffy 的 flex 演算法，比對寬度相同（容許 1/64 px） |
 | 選字型記住的第一個字型（`layout`，parley fork 的 `FontSelector`） | 不經過 query 用了它時，也跑整個 query，比對字型、index 和 synthesis |
 | 清單的編號和 CSS counters（`layout`） | 每次建完、更新完也跑一次整份文件的 pass，比對每個 marker 和 `counter()` 的文字 |
 | parse 的 fast path（`html`） | 收下時也用 tokenizer 和 tree builder parse 一次，比對兩棵樹 |

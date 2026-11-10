@@ -1,0 +1,264 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wu Yuwei <yuweiwu@pm.me>
+Date: Tue, 10 Nov 2026 15:08:42 +0900
+Subject: [PATCH] Don't measure the items' heights for the width of a
+ single-line column
+
+A flex container that is only asked for its width ran the algorithm up
+to the cross sizes, which for a column means measuring every item's
+height first (its flex base size), at a width that is then thrown away.
+For text that is one more line breaking of every paragraph.
+
+The width of a single-line column is the largest of its items'
+hypothetical outer widths, so they are measured directly: each at the
+height its own style gives it, if any, rather than at the height it
+flexes to. A column that wraps, or that has an item with an aspect
+ratio, takes the full path as before, since there the items' heights
+decide the width.
+---
+ src/compute/flexbox.rs             |  53 ++++++++++++--
+ tests/hand_written.rs              |   1 +
+ tests/hand_written/caching.rs      |   5 +-
+ tests/hand_written/column_width.rs | 110 +++++++++++++++++++++++++++++
+ 4 files changed, 161 insertions(+), 8 deletions(-)
+ create mode 100644 tests/hand_written/column_width.rs
+
+diff --git a/src/compute/flexbox.rs b/src/compute/flexbox.rs
+index a8dbbcf2b42e0d2ef171f2a857d85aed1d4412db..52a87b39c5073dc8fc93e041ee053977974bac65 100644
+--- a/src/compute/flexbox.rs
++++ b/src/compute/flexbox.rs
+@@ -387,6 +387,31 @@ fn compute_preliminary(tree: &mut impl LayoutFlexboxContainer, node: NodeId, inp
+     debug_log!("determine_available_space");
+     let available_space = determine_available_space(known_dimensions, available_space, &constants);
+ 
++    // If only the width of a single-line column container has been requested then it is the largest of its items'
++    // hypothetical outer widths. Each is measured at the height the item's own style gives it, if any, rather
++    // than at the height it flexes to, which only an aspect ratio transfers to its width.
++    // This avoids measuring the height of every item.
++    // See https://www.w3.org/TR/css-flexbox-1/#intrinsic-cross-sizes
++    if run_mode == RunMode::ComputeSize
++        && inputs.axis == RequestedAxis::Horizontal
++        && constants.is_column
++        && !constants.is_wrap
++        && flex_items.iter().all(|item| item.aspect_ratio.is_none())
++    {
++        if let Some(inner_main_size) = constants.node_inner_size.main(constants.dir) {
++            let outer_main_size = inner_main_size + constants.content_box_inset.main_axis_sum(constants.dir);
++            constants.container_size.set_main(constants.dir, outer_main_size);
++        }
++        let mut flex_lines = collect_flex_lines(&constants, available_space, &mut flex_items);
++        for line in &mut flex_lines {
++            determine_hypothetical_cross_size(tree, line, &constants, known_dimensions, available_space, false);
++        }
++        calculate_cross_size(&mut flex_lines, known_dimensions, &constants);
++        let _total_line_cross_size = determine_container_cross_size(&flex_lines, known_dimensions, &mut constants);
++        let size = Size::ZERO.with_cross(constants.dir, constants.container_size.cross(constants.dir));
++        return LayoutOutput::from_outer_size(size);
++    }
++
+     // 3. Determine the flex base size and hypothetical main size of each item.
+     debug_log!("determine_flex_base_size");
+     determine_flex_base_size(tree, &constants, available_space, &mut flex_items);
+@@ -461,7 +486,7 @@ fn compute_preliminary(tree: &mut impl LayoutFlexboxContainer, node: NodeId, inp
+     // 7. Determine the hypothetical cross size of each item.
+     debug_log!("determine_hypothetical_cross_size");
+     for line in &mut flex_lines {
+-        determine_hypothetical_cross_size(tree, line, &constants, known_dimensions, available_space);
++        determine_hypothetical_cross_size(tree, line, &constants, known_dimensions, available_space, true);
+     }
+ 
+     // Calculate child baselines. This function is internally smart and only computes child baselines
+@@ -2006,6 +2031,7 @@ fn determine_hypothetical_cross_size(
+     constants: &AlgoConstants,
+     node_size: Size<Option<f32>>,
+     available_space: Size<AvailableSpace>,
++    main_sizes_are_resolved: bool,
+ ) {
+     // If the flex container is single-line and has a definite cross size then that is the cross size of the
+     // line, whatever the hypothetical cross sizes of the items are
+@@ -2024,9 +2050,24 @@ fn determine_hypothetical_cross_size(
+             continue;
+         }
+ 
+-        // The available space passed to the child excludes the child's margins
+-        let child_available_main =
+-            (constants.container_size.main(constants.dir) - child.margin.main_axis_sum(constants.dir)).max(0.0).into();
++        // The main size the child is measured at, and the available space passed to it, which excludes the
++        // child's margins. Before the main sizes are resolved the child's is the one its style gives it (if any),
++        // and the container's is not known unless it was passed in: it will be large enough for the child.
++        let child_main = if main_sizes_are_resolved {
++            Some(child.target_size.main(constants.dir))
++        } else {
++            child
++                .size
++                .main(constants.dir)
++                .maybe_clamp(child.min_size.main(constants.dir), child.max_size.main(constants.dir))
++                .maybe_max((child.padding + child.border).main_axis_sum(constants.dir))
++        };
++        let child_available_main = if main_sizes_are_resolved || constants.node_inner_size.main(constants.dir).is_some()
++        {
++            (constants.container_size.main(constants.dir) - child.margin.main_axis_sum(constants.dir)).max(0.0).into()
++        } else {
++            AvailableSpace::MaxContent
++        };
+ 
+         // Sizes transferred through the aspect ratio clamp the hypothetical cross size
+         // https://github.com/w3c/csswg-drafts/issues/10997
+@@ -2075,8 +2116,8 @@ fn determine_hypothetical_cross_size(
+                     sizing_mode: SizingMode::ContentSize,
+                     axis: constants.dir.cross_axis().into(),
+                     known_dimensions: Size {
+-                        width: if constants.is_row { child.target_size.width.into() } else { child_cross },
+-                        height: if constants.is_row { child_cross } else { child.target_size.height.into() },
++                        width: if constants.is_row { child_main } else { child_cross },
++                        height: if constants.is_row { child_cross } else { child_main },
+                     },
+                     known_dimensions_are_definite: item_known_dimension_definiteness(constants, child),
+                     parent_size: constants.node_inner_size,
+diff --git a/tests/hand_written.rs b/tests/hand_written.rs
+index 28dafb3ab43ac13200bd705bb6bf26628838fcca..38e1d7f43561adbb2900221b73606dd782f7cc46 100644
+--- a/tests/hand_written.rs
++++ b/tests/hand_written.rs
+@@ -6,6 +6,7 @@ mod hand_written {
+     mod block_replaced;
+     mod border_and_padding;
+     mod caching;
++    mod column_width;
+     mod compressible_replaced;
+     mod detailed_grid_info;
+     mod fit_content_calc;
+diff --git a/tests/hand_written/caching.rs b/tests/hand_written/caching.rs
+index 8d58f933120c8ef9a063f6d11a604e9fdfbd0d7a..c35c8743e7ca6f7e1c4422264ee5573e9fff6df4 100644
+--- a/tests/hand_written/caching.rs
++++ b/tests/hand_written/caching.rs
+@@ -135,11 +135,12 @@ mod caching {
+ 
+     /// A flex container that is only asked for its main size (e.g. because it is an item of a grid
+     /// whose tracks are being sized) must not measure the cross size of its items.
+-    /// (Without that short-circuit the leaf is measured 13 times in the row case and 12 times in the column case)
++    /// Nor, when it is a single-line column that is only asked for its width, the height of its items.
++    /// (Without those short-circuits the leaf is measured 13 times in the row case and 12 times in the column case)
+     #[test]
+     #[cfg(all(feature = "grid", feature = "flexbox"))]
+     fn measure_count_flex_in_grid() {
+-        for (flex_direction, expected_count) in [(FlexDirection::Row, 9), (FlexDirection::Column, 10)] {
++        for (flex_direction, expected_count) in [(FlexDirection::Row, 9), (FlexDirection::Column, 6)] {
+             let mut taffy = new_test_tree();
+ 
+             let text = TestNodeContext::ahem_text(
+diff --git a/tests/hand_written/column_width.rs b/tests/hand_written/column_width.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..4234b6c8249c3ed6ac3150549abfdea0b0589eac
+--- /dev/null
++++ b/tests/hand_written/column_width.rs
+@@ -0,0 +1,110 @@
++//! The width of a single-line column flex container that is only asked for its width (here as an item of a
++//! row whose flex base sizes are being determined), which is found without measuring the height of its items.
++#[cfg(test)]
++mod column_width {
++    use taffy::prelude::*;
++
++    /// A leaf that is 10 wide and 10 high.
++    fn square(known_dimensions: Size<Option<f32>>, _available_space: Size<AvailableSpace>) -> Size<f32> {
++        known_dimensions.unwrap_or(Size { width: 10.0, height: 10.0 })
++    }
++
++    /// A leaf as wide as the height it is given: its known height, else the height available to it, else 10.
++    fn as_wide_as_high(known_dimensions: Size<Option<f32>>, available_space: Size<AvailableSpace>) -> Size<f32> {
++        let height = known_dimensions.height.or(available_space.height.into_option());
++        Size {
++            width: known_dimensions.width.or(height).unwrap_or(10.0),
++            height: known_dimensions.height.unwrap_or(10.0),
++        }
++    }
++
++    /// The width of a column with `style` and `children`, as an item of a row in `available_height`, with the
++    /// leaves measured by `measure`.
++    fn column_width(
++        taffy: &mut TaffyTree<()>,
++        style: Style,
++        children: &[NodeId],
++        available_height: AvailableSpace,
++        measure: fn(Size<Option<f32>>, Size<AvailableSpace>) -> Size<f32>,
++    ) -> f32 {
++        let column =
++            taffy.new_with_children(Style { flex_direction: FlexDirection::Column, ..style }, children).unwrap();
++        let row = taffy.new_with_children(Style::default(), &[column]).unwrap();
++        let available_space = Size { width: AvailableSpace::MaxContent, height: available_height };
++        taffy
++            .compute_layout_with_measure(row, available_space, |inputs, _, _, style| {
++                taffy::compute_leaf_layout(inputs, style, |_, _| 0.0, measure)
++            })
++            .unwrap();
++        taffy.layout(column).unwrap().size.width
++    }
++
++    fn fixed(width: f32, height: f32) -> Style {
++        Style { size: Size { width: length(width), height: length(height) }, ..Default::default() }
++    }
++
++    fn height(height: f32) -> Style {
++        Style { size: Size { width: auto(), height: length(height) }, ..Default::default() }
++    }
++
++    #[test]
++    fn widest_item() {
++        let mut taffy: TaffyTree<()> = TaffyTree::new();
++        let narrow = taffy.new_leaf(fixed(30.0, 20.0)).unwrap();
++        let wide =
++            taffy.new_leaf(Style { margin: Rect { left: length(5.0), ..Rect::zero() }, ..fixed(50.0, 20.0) }).unwrap();
++        let style = Style { padding: Rect { left: length(3.0), ..Rect::zero() }, ..Default::default() };
++        assert_eq!(column_width(&mut taffy, style, &[narrow, wide], AvailableSpace::MaxContent, square), 58.0);
++    }
++
++    /// An item with an aspect ratio is as wide as the height it flexes to makes it.
++    #[test]
++    fn item_with_aspect_ratio() {
++        let mut taffy: TaffyTree<()> = TaffyTree::new();
++        let content = taffy.new_leaf(Style::default()).unwrap();
++        let style = Style { display: Display::Block, flex_grow: 1.0, aspect_ratio: Some(2.0), ..Default::default() };
++        let item = taffy.new_with_children(style, &[content]).unwrap();
++        assert_eq!(column_width(&mut taffy, height(100.0), &[item], AvailableSpace::MaxContent, square), 200.0);
++    }
++
++    /// A column that wraps is as wide as its lines together.
++    #[test]
++    fn wrapping_column() {
++        let mut taffy: TaffyTree<()> = TaffyTree::new();
++        let items = [taffy.new_leaf(fixed(50.0, 60.0)).unwrap(), taffy.new_leaf(fixed(50.0, 60.0)).unwrap()];
++        let style = Style { flex_wrap: FlexWrap::Wrap, ..height(100.0) };
++        assert_eq!(column_width(&mut taffy, style, &items, AvailableSpace::MaxContent, square), 100.0);
++    }
++
++    /// An item is measured at the height its style gives it, within its minimum and maximum heights and no less
++    /// than its padding and border.
++    #[test]
++    fn item_with_height() {
++        let mut taffy: TaffyTree<()> = TaffyTree::new();
++        let item = taffy.new_leaf(height(40.0)).unwrap();
++        let width = column_width(&mut taffy, Style::default(), &[item], AvailableSpace::MaxContent, as_wide_as_high);
++        assert_eq!(width, 40.0);
++        let item =
++            taffy.new_leaf(Style { max_size: Size { width: auto(), height: length(25.0) }, ..height(40.0) }).unwrap();
++        let width = column_width(&mut taffy, Style::default(), &[item], AvailableSpace::MaxContent, as_wide_as_high);
++        assert_eq!(width, 25.0);
++        let item =
++            taffy.new_leaf(Style { padding: Rect { top: length(20.0), ..Rect::zero() }, ..height(5.0) }).unwrap();
++        let width = column_width(&mut taffy, Style::default(), &[item], AvailableSpace::MaxContent, as_wide_as_high);
++        assert_eq!(width, 20.0);
++    }
++
++    /// An item with no height of its own is measured with its height unknown: in the height of the column,
++    /// less the item's margins, if that is known, and if not in a column that will be as high as its items.
++    #[test]
++    fn item_available_height() {
++        let margin = || Style { margin: Rect { top: length(30.0), ..Rect::zero() }, ..Default::default() };
++        let mut taffy: TaffyTree<()> = TaffyTree::new();
++        let item = taffy.new_leaf(margin()).unwrap();
++        let width = column_width(&mut taffy, height(100.0), &[item], AvailableSpace::MaxContent, as_wide_as_high);
++        assert_eq!(width, 70.0);
++        let item = taffy.new_leaf(margin()).unwrap();
++        let width = column_width(&mut taffy, Style::default(), &[item], AvailableSpace::MaxContent, as_wide_as_high);
++        assert_eq!(width, 10.0);
++    }
++}
