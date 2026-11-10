@@ -92,15 +92,6 @@ Options:
                       physical pixels.
   --test-fonts        Use only the built-in test fonts: Ahem, and Lato for
                       every generic family, as the reftests do.
-  --run-web-tests     Run testharness.js tests headless, as content_shell's
-                      --run-web-tests (for a driver: shell's tests drive it):
-                      each line of standard input is a test, its timeout in
-                      milliseconds and its URL; each test's record is a line
-                      of JSON on standard output (what the page reported to
-                      testRunner, or a timeout). A line `screenshot TIMEOUT
-                      URL PATH` is a reftest's page instead: its
-                      screenshot, once reftest-wait is off, written to PATH
-                      as a PNG. With --host-resolver-rules.
   --num-raster-threads N
                       Threads each page's tiles are rastered on at once, as
                       Chromium's switch (default 1: on the compositor's
@@ -191,13 +182,6 @@ Keyboard and mouse shortcuts in the window: see crates/shell/README.md.",
 enum Command {
     Help,
     Run(Box<Args>),
-    RunWebTests(WebTests),
-}
-
-/// `--run-web-tests`, and the settings that go with it.
-#[derive(Debug, PartialEq)]
-struct WebTests {
-    host_resolver_rules: Option<String>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -251,7 +235,6 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
     let mut size = None;
     let mut scale = None;
     let mut test_fonts = false;
-    let mut run_web_tests = false;
     let mut automation = None;
     let mut automation_out = None;
     let mut automation_pipe = false;
@@ -311,7 +294,6 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
                 additional_trust_anchors =
                     Some(PathBuf::from(value("--additional-trust-anchors")?));
             }
-            "--run-web-tests" => run_web_tests = true,
             "--remote-debugging-port" => {
                 let v = value("--remote-debugging-port")?;
                 remote_debugging_port = Some(v.parse::<u16>().map_err(|_| {
@@ -357,24 +339,6 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
              --automation, URL or path"
                 .into(),
         );
-    }
-    if run_web_tests && (out.is_some() || automation.is_some() || automation_pipe || url.is_some())
-    {
-        return Err(
-            "--run-web-tests reads its tests from standard input: no --headless, --automation, \
-             --automation-pipe, URL or path"
-                .into(),
-        );
-    }
-    if run_web_tests {
-        if pipe_window || additional_trust_anchors.is_some() {
-            return Err(
-                "--window and --additional-trust-anchors only apply with --automation-pipe".into(),
-            );
-        }
-        return Ok(Command::RunWebTests(WebTests {
-            host_resolver_rules,
-        }));
     }
     if !automation_pipe
         && (pipe_window || host_resolver_rules.is_some() || additional_trust_anchors.is_some())
@@ -447,37 +411,13 @@ fn network_params(pipe: &AutomationPipe) -> Result<NetworkContextParams, String>
     Ok(params)
 }
 
-/// `--run-web-tests`: the tests standard input lists, a record each on
-/// standard output (`shell::web_tests`); the log goes to standard error.
-fn run_web_tests(tests: &WebTests) -> ExitCode {
-    let mut network = NetworkContextParams::default();
-    if let Some(rules) = &tests.host_resolver_rules {
-        match HostMappingRules::parse(rules) {
-            Ok(rules) => network.host_resolver_rules = rules,
-            Err(e) => {
-                eprintln!("machopo: --host-resolver-rules: {e}");
-                return ExitCode::from(2);
-            }
-        }
-    }
-    let stdin = std::io::stdin();
-    match shell::web_tests::run(&network, stdin.lock(), std::io::stdout().lock()) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("machopo: --run-web-tests: {e}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
 fn main() -> ExitCode {
-    let (args, web_tests) = match parse_args(std::env::args().skip(1)) {
-        Ok(Command::Run(args)) => (Some(*args), None),
+    let args = match parse_args(std::env::args().skip(1)) {
+        Ok(Command::Run(args)) => *args,
         Ok(Command::Help) => {
             println!("{}", help());
             return ExitCode::SUCCESS;
         }
-        Ok(Command::RunWebTests(tests)) => (None, Some(tests)),
         Err(e) => {
             eprintln!("machopo: {e}\n\n{USAGE}\n\nRun machopo --help for the details.");
             return ExitCode::from(2);
@@ -517,12 +457,6 @@ fn main() -> ExitCode {
     // every level (but no events): each record would be made, html5ever's
     // for every token it parses, only to be dropped.
     tracing_log::log::set_max_level(log_records);
-    let args = match (args, web_tests) {
-        (Some(args), _) => args,
-        (None, Some(tests)) => return run_web_tests(&tests),
-        (None, None) => unreachable!("a command"),
-    };
-
     // A scenario that can't run is the caller's mistake, as wrong options
     // are: said before any window opens.
     let automation = match args.automation.as_ref().map(scenario_to_run) {
@@ -866,41 +800,6 @@ mod tests {
         assert!(scenario_to_run(&automation("missing.txt")).is_err());
     }
 
-    /// `--run-web-tests` reads its tests from standard input: with
-    /// `--host-resolver-rules`, no URL, headless,
-    /// automation or window.
-    #[test]
-    fn run_web_tests_reads_its_tests() {
-        let tests = |args: &[&str]| match parse(args) {
-            Ok(Command::RunWebTests(tests)) => tests,
-            other => panic!("{other:?}"),
-        };
-        assert_eq!(
-            tests(&["--run-web-tests"]),
-            WebTests {
-                host_resolver_rules: None
-            }
-        );
-        assert_eq!(
-            tests(&[
-                "--run-web-tests",
-                "--host-resolver-rules",
-                "MAP *.test 127.0.0.1"
-            ]),
-            WebTests {
-                host_resolver_rules: Some("MAP *.test 127.0.0.1".into())
-            }
-        );
-        for args in [
-            &["--run-web-tests", "about:blank"][..],
-            &["--run-web-tests", "--headless", "o.png"],
-            &["--run-web-tests", "--automation-pipe"],
-            &["--run-web-tests", "--window"],
-        ] {
-            assert!(parse(args).is_err(), "{args:?}");
-        }
-    }
-
     #[test]
     fn help_mentions_every_option() {
         let help = help();
@@ -916,7 +815,6 @@ mod tests {
             "--host-resolver-rules",
             "--additional-trust-anchors",
             "--num-raster-threads",
-            "--run-web-tests",
             "--help",
         ] {
             assert!(help.contains(option), "{option}");

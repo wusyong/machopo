@@ -34,7 +34,6 @@ pub mod toolbar;
 pub mod trace;
 pub mod ui_text;
 pub mod url_fixup;
-pub mod web_tests;
 pub mod windowless;
 
 /// The renderer's script engine (its `ScriptEngineFactory`): V8.

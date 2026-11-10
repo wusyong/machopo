@@ -98,29 +98,6 @@ pub fn render(
     render_after_input(url, viewport_size, device_scale_factor, test_fonts, &[])
 }
 
-/// A reftest's (or its reference's) screenshot, as machopo's reftests and
-/// WPT's are taken: 800×600 CSS px at a scale of 1, the test fonts,
-/// `reftest-wait` waited for up to `reftest_wait_timeout`.
-pub fn screenshot(
-    url: &str,
-    network: NetworkContextParams,
-    reftest_wait_timeout: Duration,
-) -> Result<Frame, String> {
-    drive(
-        url,
-        Size::new(800, 600),
-        1.0,
-        true,
-        &[],
-        crate::SCRIPT_ENGINES,
-        None,
-        reftest_wait_timeout,
-        network,
-        None,
-    )
-    .map(|(frame, _)| frame)
-}
-
 /// How many frames a loaded page may take to remove `reftest-wait`: ten
 /// seconds of (virtual) animation time.
 const MAX_REFTEST_WAIT_FRAMES: u32 = 600;
