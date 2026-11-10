@@ -817,6 +817,42 @@ fn system_fonts_compute_to_the_system_ui_font() {
     assert_eq!(*style("set-after").font.family, system_ui);
 }
 
+/// The longhands a system font gives no value of reset to their initial
+/// ones, not inherited (Chrome's: pending till they compute).
+#[test]
+fn system_fonts_reset_the_other_font_longhands() {
+    let s = styles(
+        "<div style='font-variant-ligatures: none; font-variant-caps: small-caps;
+                     font-variant-numeric: oldstyle-nums; font-variant-east-asian: ruby;
+                     font-variant-alternates: historical-forms;
+                     font-variant-position: super; font-variant-emoji: text;
+                     font-stretch: condensed; font-optical-sizing: none;
+                     font-size-adjust: 0.5; font-kerning: none;
+                     font-feature-settings: \"liga\" 0;
+                     font-variation-settings: \"wght\" 300;
+                     font-language-override: \"TRK\"'>
+           <div id=menu style='font: menu'></div>
+           <div id=set-after style='font: menu; font-kerning: normal'></div>
+         </div>",
+    );
+    let initial = ComputedStyle::initial();
+    let system = computed_style::FontDescription {
+        family: Arc::new([computed_style::FontFamily::Generic(
+            computed_style::GenericFamily::SystemUi,
+        )]),
+        size: 12.0,
+        ..(*initial.font).clone()
+    };
+    assert_eq!(*style_of(&s, "menu").font, system);
+    assert_eq!(
+        *style_of(&s, "set-after").font,
+        computed_style::FontDescription {
+            kerning: computed_style::FontKerning::Normal,
+            ..system
+        }
+    );
+}
+
 #[test]
 fn system_colors_are_the_engines() {
     // The platform's, as the renderer sets them; each apart, so that one

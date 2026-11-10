@@ -509,9 +509,20 @@ pub(crate) fn transition_behavior_name(behavior: TransitionBehavior) -> &'static
     }
 }
 
-/// `transition`'s longhands, in Blink's order (which its serialization
-/// goes by).
+/// `transition`'s longhands, in the order Blink's parser sets them in
+/// (`transitionShorthandForParsing`), which a declaration block keeps
+/// them in.
 pub(crate) const TRANSITION: [LonghandId; 5] = [
+    LonghandId::TransitionBehavior,
+    LonghandId::TransitionDuration,
+    LonghandId::TransitionTimingFunction,
+    LonghandId::TransitionDelay,
+    LonghandId::TransitionProperty,
+];
+
+/// `transition`'s longhands as one value for them all sets them (see
+/// `Shorthand::expanded_longhands`).
+pub(crate) const TRANSITION_EXPANDED: [LonghandId; 5] = [
     LonghandId::TransitionProperty,
     LonghandId::TransitionDuration,
     LonghandId::TransitionTimingFunction,
@@ -615,11 +626,11 @@ pub(crate) fn parse_transition<'i>(input: &mut Parser<'i, '_>) -> ParseResult<'i
         .map(|t| t.behavior.unwrap_or(TransitionBehavior::Normal))
         .collect();
     Ok(vec![
-        Value::TransitionProperties(properties),
+        Value::TransitionBehaviors(behaviors),
         Value::Times(durations),
         Value::Easings(easings),
         Value::Times(delays),
-        Value::TransitionBehaviors(behaviors),
+        Value::TransitionProperties(properties),
     ])
 }
 
@@ -630,11 +641,11 @@ pub(crate) fn parse_transition<'i>(input: &mut Parser<'i, '_>) -> ParseResult<'i
 /// `None` unless every list has the same length.
 pub(crate) fn transition_to_css(values: &[(&Value, bool)]) -> Option<String> {
     let [
-        (Value::TransitionProperties(properties), _),
+        (Value::TransitionBehaviors(behaviors), _),
         (Value::Times(durations), _),
         (Value::Easings(easings), _),
         (Value::Times(delays), _),
-        (Value::TransitionBehaviors(behaviors), _),
+        (Value::TransitionProperties(properties), _),
     ] = values
     else {
         return None;

@@ -382,29 +382,65 @@ pub(crate) const FONT_VARIANT: [LonghandId; 7] = [
     FontVariantEmoji,
 ];
 
-/// `font`'s longhands, in Chrome's order (which `cssText` writes them in
-/// when the shorthand can't be): it resets all of them but the
-/// `font-synthesis-*` ones.
+/// `font-variant`'s longhands as one value for them all sets them (see
+/// [`Shorthand::expanded_longhands`]).
+const FONT_VARIANT_EXPANDED: [LonghandId; 7] = [
+    FontVariantLigatures,
+    FontVariantCaps,
+    FontVariantAlternates,
+    FontVariantNumeric,
+    FontVariantEastAsian,
+    FontVariantPosition,
+    FontVariantEmoji,
+];
+
+/// `font`'s longhands, in the order Blink's parser sets them in
+/// (`ConsumeFont`), which a declaration block keeps them in: it resets
+/// all of them but the `font-synthesis-*` ones.
 pub(crate) const FONT: [LonghandId; 19] = [
     FontStyle,
+    FontVariantCaps,
     FontVariantLigatures,
     FontVariantNumeric,
     FontVariantEastAsian,
-    FontVariantCaps,
     FontVariantAlternates,
-    FontVariantPosition,
-    FontVariantEmoji,
     FontSizeAdjust,
     FontLanguageOverride,
     FontKerning,
     FontOpticalSizing,
     FontFeatureSettings,
     FontVariationSettings,
+    FontVariantPosition,
+    FontVariantEmoji,
     FontWeight,
     FontStretch,
     FontSize,
     LineHeight,
     FontFamily,
+];
+
+/// `font`'s longhands as one value for them all sets them (see
+/// [`Shorthand::expanded_longhands`]).
+const FONT_EXPANDED: [LonghandId; 19] = [
+    FontStyle,
+    FontVariantLigatures,
+    FontVariantCaps,
+    FontVariantNumeric,
+    FontVariantEastAsian,
+    FontVariantAlternates,
+    FontVariantPosition,
+    FontVariantEmoji,
+    FontWeight,
+    FontStretch,
+    FontSize,
+    LineHeight,
+    FontFamily,
+    FontOpticalSizing,
+    FontSizeAdjust,
+    FontKerning,
+    FontFeatureSettings,
+    FontVariationSettings,
+    FontLanguageOverride,
 ];
 
 /// `border-image`'s longhands, in its order.
@@ -3427,6 +3463,43 @@ impl Shorthand {
         }
     }
 
+    /// Its longhands in the order one value for them all sets them in: a
+    /// CSS-wide keyword, a value with `var()`, `font`'s system font
+    /// (Blink's `AddExpandedPropertyForValue`, which goes by the
+    /// shorthand's `StylePropertyShorthand`). Where that isn't the order
+    /// its parser sets them in, [`longhands`](Self::longhands), a
+    /// declaration block lists them otherwise for these (`item()`,
+    /// `cssText`), as Chrome's does.
+    pub(crate) fn expanded_longhands(self) -> Vec<LonghandId> {
+        match self {
+            Self::Font => FONT_EXPANDED.to_vec(),
+            Self::FontVariant => FONT_VARIANT_EXPANDED.to_vec(),
+            // Side by side, each side's color, style and width.
+            Self::Border => (0..4)
+                .flat_map(|side| [BORDER_COLOR[side], BORDER_STYLE[side], BORDER_WIDTH[side]])
+                .chain(BORDER_IMAGE)
+                .collect(),
+            Self::BorderAxis(axis) => {
+                #[expect(
+                    clippy::arithmetic_side_effects,
+                    reason = "an axis is 0 or 1: its sides are 0 and 1, or 2 and 3"
+                )]
+                let sides = 2 * axis..2 * axis + 2;
+                sides
+                    .flat_map(|side| {
+                        [
+                            FLOW_BORDER_COLOR[side],
+                            FLOW_BORDER_STYLE[side],
+                            FLOW_BORDER_WIDTH[side],
+                        ]
+                    })
+                    .collect()
+            }
+            Self::Transition => crate::animation::TRANSITION_EXPANDED.to_vec(),
+            _ => self.longhands(),
+        }
+    }
+
     /// Values for `longhands()`, in the same order, each with whether the
     /// shorthand left it out (and so set it to its initial value).
     fn parse<'i>(self, input: &mut Parser<'i, '_>) -> ParseResult<'i, Vec<(Value, bool)>> {
@@ -3734,14 +3807,23 @@ pub(crate) fn parse_longhands(
         i.expect_exhausted()?;
         Ok::<_, cssparser::ParseError<'_, ()>>(keyword)
     });
-    if let Ok(keyword) = wide {
-        return Ok(longhands
+    // One value for all the longhands sets them in the shorthand's
+    // expanded order.
+    let expand = |value: Value| {
+        let longhands = match shorthand {
+            Some(shorthand) => shorthand.expanded_longhands(),
+            None => longhands.clone(),
+        };
+        longhands
             .into_iter()
             .map(|id| {
-                let value = Value::CssWide(keyword);
+                let value = value.clone();
                 (Declaration { id, value }, false)
             })
-            .collect());
+            .collect()
+    };
+    if let Ok(keyword) = wide {
+        return Ok(expand(Value::CssWide(keyword)));
     }
 
     // A value with `var()` is kept as written, for each longhand.
@@ -3751,14 +3833,16 @@ pub(crate) fn parse_longhands(
         _ => Err(i.new_custom_error::<_, ()>(())),
     });
     if let Ok(css) = with_var {
-        let unparsed = UnparsedValue::new(trim_value(css), shorthand);
-        return Ok(longhands
-            .into_iter()
-            .map(|id| {
-                let value = Value::Unparsed(unparsed.clone());
-                (Declaration { id, value }, false)
-            })
-            .collect());
+        return Ok(expand(Value::Unparsed(UnparsedValue::new(
+            trim_value(css),
+            shorthand,
+        ))));
+    }
+    // A system font sets all of `font`'s longhands pending.
+    if shorthand == Some(Shorthand::Font)
+        && let Ok(system) = input.try_parse(crate::font::parse_system_font)
+    {
+        return Ok(expand(Value::SystemFont(system)));
     }
 
     let values = match shorthand {
@@ -4201,49 +4285,29 @@ fn parse_background<'i>(input: &mut Parser<'i, '_>) -> ParseResult<'i, Vec<(Valu
     ])
 }
 
-/// The `font` shorthand. `normal` may stand for any of the optional parts;
-/// omitted ones are reset. A system font sets them all pending.
+/// The `font` shorthand but a system font (which `parse_longhands`
+/// takes). `normal` may stand for any of the optional parts; omitted ones
+/// are reset, as are the longhands it has no syntax for.
 fn parse_font<'i>(input: &mut Parser<'i, '_>) -> ParseResult<'i, Vec<Value>> {
-    // The values but style, weight, size, line height and family, which
-    // `font` resets: its small caps and stretch in the caller's.
-    let variant = crate::font_features::variant_initial_values();
-    let others = crate::font_features::other_initial_values();
-    let stretch =
-        |stretch| Value::FontStretch(crate::font_features::SpecifiedFontStretch::Keyword(stretch));
-    if let Ok(system) = input.try_parse(crate::font::parse_system_font) {
-        let system = Value::SystemFont(system);
-        return Ok([vec![system.clone()], variant.to_vec(), others.to_vec()]
-            .concat()
-            .into_iter()
-            .chain([
-                system.clone(),
-                stretch(computed_style::FontStretch::Normal),
-                system.clone(),
-                system.clone(),
-                system,
-            ])
-            .collect());
-    }
     let font = crate::font::parse_font_shorthand(input)?;
-    let mut variant = variant.to_vec();
-    if font.small_caps {
-        variant[3] = Value::FontVariantCaps(computed_style::FontVariantCaps::SmallCaps);
-    }
-    Ok([
-        vec![Value::FontStyle(
-            font.style.unwrap_or(computed_style::FontStyle::Normal),
-        )],
-        variant,
-        others.to_vec(),
-        vec![
-            Value::FontWeight(font.weight.unwrap_or(FontWeightValue::Normal)),
-            stretch(font.stretch.unwrap_or(computed_style::FontStretch::Normal)),
-            Value::FontSize(font.size),
-            Value::LineHeight(font.line_height),
-            Value::FontFamily(font.family),
-        ],
-    ]
-    .concat())
+    Ok(FONT
+        .iter()
+        .map(|&id| match id {
+            FontStyle => Value::FontStyle(font.style.unwrap_or(computed_style::FontStyle::Normal)),
+            FontVariantCaps if font.small_caps => {
+                Value::FontVariantCaps(computed_style::FontVariantCaps::SmallCaps)
+            }
+            FontWeight => Value::FontWeight(font.weight.unwrap_or(FontWeightValue::Normal)),
+            FontStretch => Value::FontStretch(crate::font_features::SpecifiedFontStretch::Keyword(
+                font.stretch.unwrap_or(computed_style::FontStretch::Normal),
+            )),
+            FontSize => Value::FontSize(font.size.clone()),
+            LineHeight => Value::LineHeight(font.line_height.clone()),
+            FontFamily => Value::FontFamily(font.family.clone()),
+            _ => crate::font_features::font_reset_value(id)
+                .unwrap_or_else(|| unreachable!("{id:?} is one of font's that it sets")),
+        })
+        .collect())
 }
 
 /// Sets a font property, leaving the font group shared while the value is
@@ -4521,6 +4585,25 @@ pub fn apply(
         (LineHeight, Value::SystemFont(_)) => {
             style.line_height = computed_style::LineHeight::Normal
         }
+        // What the system font doesn't give it resets to the initial values
+        // (Blink's converters, given a `CSSPendingSystemFontValue`).
+        (
+            FontStretch
+            | FontVariantLigatures
+            | FontVariantNumeric
+            | FontVariantEastAsian
+            | FontVariantCaps
+            | FontVariantAlternates
+            | FontVariantPosition
+            | FontVariantEmoji
+            | FontSizeAdjust
+            | FontLanguageOverride
+            | FontKerning
+            | FontOpticalSizing
+            | FontFeatureSettings
+            | FontVariationSettings,
+            Value::SystemFont(_),
+        ) => INITIAL.with(|initial| copy(id, initial, style)),
         (FontSize, Value::FontSize(v)) => set_font!(style, size, v.compute(cx)),
         (FontWeight, Value::FontWeight(v)) => {
             set_font!(style, weight, v.compute(parent.font.weight))

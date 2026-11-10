@@ -5394,6 +5394,7 @@ css/css-color/system-color-compute.html
 css/css-color/system-color-consistency.html
 css/css-color/system-color-support.html
 css/css-fonts/parsing/font-computed.html
+css/css-fonts/system-fonts-serialization.tentative.html
 css/css-pseudo/first-line-and-placeholder.html
 css/css-pseudo/placeholder-as-multicol-crash.html
 css/css-pseudo/placeholder-excluded-properties.html

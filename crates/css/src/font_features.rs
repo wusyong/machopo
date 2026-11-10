@@ -16,7 +16,7 @@ use computed_style::{
 };
 use cssparser::{Parser, match_ignore_ascii_case};
 
-use crate::properties::Value;
+use crate::properties::{LonghandId, Value};
 use crate::values::{ParseResult, parse_number, write_number};
 
 fn invalid<'i, T>(input: &Parser<'i, '_>) -> ParseResult<'i, T> {
@@ -952,16 +952,27 @@ fn parse_alternates_part<'i>(input: &mut Parser<'i, '_>) -> ParseResult<'i, Font
 /// `font-variant` from its longhands' values: `normal` while they all
 /// are, `none` while only the ligatures are (`none`), else what isn't
 /// normal in css-fonts 4's order; `None` for `none` with anything else.
+/// A longhand that a system font left pending counts as normal (Chrome's:
+/// `font: menu` reads back `font-variant: normal`).
 pub(crate) fn font_variant_to_css(values: &[(&Value, bool)]) -> Option<String> {
+    let initial = variant_initial_values();
+    let values: Vec<&Value> = values
+        .iter()
+        .zip(&initial)
+        .map(|((value, _), initial)| match value {
+            Value::SystemFont(_) => initial,
+            _ => *value,
+        })
+        .collect();
     let [
-        (Value::FontVariantLigatures(ligatures), _),
-        (Value::FontVariantNumeric(numeric), _),
-        (Value::FontVariantEastAsian(east_asian), _),
-        (Value::FontVariantCaps(caps), _),
-        (Value::FontVariantAlternates(alternates), _),
-        (Value::FontVariantPosition(position), _),
-        (Value::FontVariantEmoji(emoji), _),
-    ] = values
+        Value::FontVariantLigatures(ligatures),
+        Value::FontVariantNumeric(numeric),
+        Value::FontVariantEastAsian(east_asian),
+        Value::FontVariantCaps(caps),
+        Value::FontVariantAlternates(alternates),
+        Value::FontVariantPosition(position),
+        Value::FontVariantEmoji(emoji),
+    ] = values[..]
     else {
         return None;
     };
@@ -1017,31 +1028,36 @@ pub(crate) fn font_variant_to_css(values: &[(&Value, bool)]) -> Option<String> {
     })
 }
 
-/// The longhands' initial values, `font-variant`'s then the others the
-/// `font` shorthand resets, in [`FONT_RESET`](crate::properties)'s order.
+/// `font-variant`'s longhands' initial values, in its order.
 pub(crate) fn variant_initial_values() -> [Value; 7] {
-    [
-        Value::FontVariantLigatures(FontVariantLigatures::default()),
-        Value::FontVariantNumeric(FontVariantNumeric::default()),
-        Value::FontVariantEastAsian(FontVariantEastAsian::default()),
-        Value::FontVariantCaps(FontVariantCaps::Normal),
-        Value::FontVariantAlternates(FontVariantAlternates::default()),
-        Value::FontVariantPosition(FontVariantPosition::Normal),
-        Value::FontVariantEmoji(FontVariantEmoji::Normal),
-    ]
+    crate::properties::FONT_VARIANT
+        .map(|id| font_reset_value(id).unwrap_or_else(|| unreachable!("{id:?} is font-variant's")))
 }
 
-/// What `font` resets beside `font-variant`'s longhands, to their initial
-/// values: `font-size-adjust`, `font-language-override`, `font-kerning`,
-/// `font-optical-sizing`, `font-feature-settings`,
-/// `font-variation-settings` (Chrome's order).
-pub(crate) fn other_initial_values() -> [Value; 6] {
-    [
-        Value::FontSizeAdjust(FontSizeAdjust::None),
-        Value::FontLanguageOverride(None),
-        Value::FontKerning(FontKerning::Auto),
-        Value::FontOpticalSizing(true),
-        Value::FontFeatureSettings(Arc::new([])),
-        Value::FontVariationSettings(Arc::new([])),
-    ]
+/// What the `font` shorthand resets longhand `id` to, the initial value:
+/// for `font-variant`'s longhands (but `small-caps`, which it can set) and
+/// the others it has no syntax for; `None` for one it sets.
+pub(crate) fn font_reset_value(id: LonghandId) -> Option<Value> {
+    Some(match id {
+        LonghandId::FontVariantLigatures => {
+            Value::FontVariantLigatures(FontVariantLigatures::default())
+        }
+        LonghandId::FontVariantNumeric => Value::FontVariantNumeric(FontVariantNumeric::default()),
+        LonghandId::FontVariantEastAsian => {
+            Value::FontVariantEastAsian(FontVariantEastAsian::default())
+        }
+        LonghandId::FontVariantCaps => Value::FontVariantCaps(FontVariantCaps::Normal),
+        LonghandId::FontVariantAlternates => {
+            Value::FontVariantAlternates(FontVariantAlternates::default())
+        }
+        LonghandId::FontVariantPosition => Value::FontVariantPosition(FontVariantPosition::Normal),
+        LonghandId::FontVariantEmoji => Value::FontVariantEmoji(FontVariantEmoji::Normal),
+        LonghandId::FontSizeAdjust => Value::FontSizeAdjust(FontSizeAdjust::None),
+        LonghandId::FontLanguageOverride => Value::FontLanguageOverride(None),
+        LonghandId::FontKerning => Value::FontKerning(FontKerning::Auto),
+        LonghandId::FontOpticalSizing => Value::FontOpticalSizing(true),
+        LonghandId::FontFeatureSettings => Value::FontFeatureSettings(Arc::new([])),
+        LonghandId::FontVariationSettings => Value::FontVariationSettings(Arc::new([])),
+        _ => return None,
+    })
 }

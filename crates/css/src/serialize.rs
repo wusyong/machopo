@@ -28,7 +28,7 @@ use crate::grid::{
     auto_flow_to_css, grid_line_to_css, template_area_rows, template_areas_to_css,
     track_list_to_css, track_sizes_to_css,
 };
-use crate::properties::{CssWideKeyword, OverflowValue, Shorthand, SizeValue, Value};
+use crate::properties::{CssWideKeyword, LonghandId, OverflowValue, Shorthand, SizeValue, Value};
 use crate::shadow::shadows_to_css;
 use crate::svg::{d_to_css, dasharray_to_css};
 use crate::values::{SpecifiedColor, write_number};
@@ -639,7 +639,8 @@ fn border_side_to_css(values: &[(&Value, bool)]) -> String {
 fn font_to_css(values: &[(&Value, bool)]) -> Option<String> {
     let [
         (style, _),
-        variant @ ..,
+        (caps, _),
+        ..,
         (weight, _),
         (stretch, _),
         (size, _),
@@ -649,41 +650,29 @@ fn font_to_css(values: &[(&Value, bool)]) -> Option<String> {
     else {
         unreachable!("font's longhands")
     };
-    // What `font` can't write but as it resets them: `font-variant`'s
-    // longhands (but `small-caps`) and the others it has no syntax for.
-    let (variant, others) = variant.split_at(7);
-    let resets_alike = |values: &[(&Value, bool)], initial: &[Value], skip: Option<usize>| {
-        values
-            .iter()
-            .zip(initial)
-            .enumerate()
-            .all(|(i, ((value, _), initial))| Some(i) == skip || **value == *initial)
-    };
-    let variant_initial = crate::font_features::variant_initial_values();
-    let caps = variant[3].0;
-    if !resets_alike(variant, &variant_initial, Some(3))
-        || !resets_alike(others, &crate::font_features::other_initial_values(), None)
-    {
-        return None;
-    }
-    // A system font: the five it sets the same one, the rest as it resets
-    // them, or the shorthand doesn't read back.
-    let five = [style, weight, size, line_height, family];
-    if let Some(system) = five.iter().find_map(|value| match value {
+    // A system font: all of them pending on the same one, or the shorthand
+    // doesn't read back (one set over them, even to the value it gives, as
+    // in Chrome).
+    if let Some(system) = values.iter().find_map(|(value, _)| match value {
         Value::SystemFont(system) => Some(*system),
         _ => None,
     }) {
-        return (five
+        return values
             .iter()
-            .all(|value| ***value == Value::SystemFont(system))
-            && *caps == variant_initial[3]
-            && matches!(
-                stretch,
-                Value::FontStretch(crate::font_features::SpecifiedFontStretch::Keyword(
-                    computed_style::FontStretch::Normal
-                ))
-            ))
-        .then(|| system.name().to_owned());
+            .all(|(value, _)| **value == Value::SystemFont(system))
+            .then(|| system.name().to_owned());
+    }
+    // What `font` can't write but as it resets them: `font-variant`'s
+    // longhands (but `small-caps`) and the others it has no syntax for.
+    let resets_alike = crate::properties::FONT
+        .iter()
+        .zip(values)
+        .filter(|(id, _)| **id != LonghandId::FontVariantCaps)
+        .all(|(&id, (value, _))| {
+            crate::font_features::font_reset_value(id).is_none_or(|reset| **value == reset)
+        });
+    if !resets_alike {
+        return None;
     }
     let mut parts = Vec::new();
     if !matches!(style, Value::FontStyle(FontStyle::Normal)) {

@@ -505,9 +505,10 @@ fn the_properties_parsed_only() {
     );
 }
 
-/// A system font: the shorthand reads back as the keyword, its longhands
-/// as nothing (pending till they compute, as Chrome's); another longhand
-/// set over one leaves no shorthand.
+/// A system font: the shorthand reads back as the keyword, all its
+/// longhands as nothing (pending till they compute, as Chrome's), and
+/// `font-variant` as `normal`; another longhand set over one, even to the
+/// value it computes to, leaves no shorthand.
 #[test]
 fn system_fonts() {
     for keyword in [
@@ -530,21 +531,68 @@ fn system_fonts() {
             format!("font: {keyword};")
         );
     }
-    for longhand in [
-        "font-family",
-        "font-size",
-        "font-weight",
+    let longhands = [
         "font-style",
+        "font-variant-ligatures",
+        "font-variant-caps",
+        "font-variant-numeric",
+        "font-variant-east-asian",
+        "font-variant-alternates",
+        "font-variant-position",
+        "font-variant-emoji",
+        "font-weight",
+        "font-stretch",
+        "font-size",
         "line-height",
+        "font-family",
+        "font-optical-sizing",
+        "font-size-adjust",
+        "font-kerning",
+        "font-feature-settings",
+        "font-variation-settings",
+        "font-language-override",
+    ];
+    let mut block = CssPropertyValueSet::default();
+    block.set_property("font", "menu", "");
+    for longhand in longhands {
+        assert_eq!(block.property_value(longhand), "", "{longhand}");
+    }
+    assert_eq!(block.property_value("font-variant"), "normal");
+    // Each set to the value the system font gives it (Chrome's on Windows).
+    for (longhand, value) in [
+        ("font-style", "normal"),
+        ("font-variant-ligatures", "normal"),
+        ("font-variant-caps", "normal"),
+        ("font-variant-numeric", "normal"),
+        ("font-variant-east-asian", "normal"),
+        ("font-variant-alternates", "normal"),
+        ("font-variant-position", "normal"),
+        ("font-variant-emoji", "normal"),
+        ("font-weight", "400"),
+        ("font-stretch", "100%"),
+        ("font-size", "12px"),
+        ("line-height", "normal"),
+        ("font-family", "system-ui"),
+        ("font-optical-sizing", "auto"),
+        ("font-size-adjust", "none"),
+        ("font-kerning", "auto"),
+        ("font-feature-settings", "normal"),
+        ("font-variation-settings", "normal"),
+        ("font-language-override", "normal"),
     ] {
         let mut block = CssPropertyValueSet::default();
         block.set_property("font", "menu", "");
-        assert_eq!(block.property_value(longhand), "", "{longhand}");
+        block.set_property(longhand, value, "");
+        assert_eq!(block.property_value(longhand), value, "{longhand}");
+        assert_eq!(block.property_value("font"), "", "{longhand}");
+        for other in longhands.iter().filter(|other| **other != longhand) {
+            assert_eq!(block.property_value(other), "", "{longhand}: {other}");
+        }
     }
     let mut block = CssPropertyValueSet::default();
     block.set_property("font", "menu", "");
-    block.set_property("font-style", "italic", "");
-    assert_eq!(block.property_value("font"), "");
+    block.set_property("font-variant-caps", "small-caps", "");
+    assert_eq!(block.property_value("font-variant"), "small-caps");
     for value in ["caption bold", "bold caption", "menu, serif", "menu 12px"] {
         assert_eq!(read_back("font", value), None, "{value}");
     }
@@ -552,6 +600,96 @@ fn system_fonts() {
     assert_eq!(
         read_back("font-family", "caption").as_deref(),
         Some("caption")
+    );
+}
+
+/// A shorthand's longhands in a block, as `item()` lists them (Chrome
+/// 152's): a value for them all (a CSS-wide keyword, `var()`, a system
+/// font) sets them in the shorthand's order, a parsed value in the order
+/// its parser sets them in; the two differ for these.
+#[test]
+fn longhands_are_listed_in_chromes_order() {
+    let items = |css: &str| {
+        let block = CssPropertyValueSet::parse(css);
+        (0..block.len())
+            .map(|i| block.item(i).unwrap_or_default().to_owned())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let font_expanded = "font-style font-variant-ligatures font-variant-caps \
+        font-variant-numeric font-variant-east-asian font-variant-alternates \
+        font-variant-position font-variant-emoji font-weight font-stretch font-size \
+        line-height font-family font-optical-sizing font-size-adjust font-kerning \
+        font-feature-settings font-variation-settings font-language-override";
+    let transition_expanded = "transition-property transition-duration \
+        transition-timing-function transition-delay transition-behavior";
+    for (css, expected) in [
+        (
+            "font: 12px serif",
+            "font-style font-variant-caps font-variant-ligatures font-variant-numeric \
+             font-variant-east-asian font-variant-alternates font-size-adjust \
+             font-language-override font-kerning font-optical-sizing font-feature-settings \
+             font-variation-settings font-variant-position font-variant-emoji font-weight \
+             font-stretch font-size line-height font-family",
+        ),
+        ("font: inherit", font_expanded),
+        ("font: var(--f)", font_expanded),
+        ("font: menu", font_expanded),
+        (
+            "transition: color 1s",
+            "transition-behavior transition-duration transition-timing-function \
+             transition-delay transition-property",
+        ),
+        ("transition: inherit", transition_expanded),
+        ("transition: var(--t)", transition_expanded),
+        (
+            "font-variant: small-caps",
+            "font-variant-ligatures font-variant-numeric font-variant-east-asian \
+             font-variant-caps font-variant-alternates font-variant-position \
+             font-variant-emoji",
+        ),
+        (
+            "font-variant: inherit",
+            "font-variant-ligatures font-variant-caps font-variant-alternates \
+             font-variant-numeric font-variant-east-asian font-variant-position \
+             font-variant-emoji",
+        ),
+        (
+            "border: 1px solid red",
+            "border-top-width border-right-width border-bottom-width border-left-width \
+             border-top-style border-right-style border-bottom-style border-left-style \
+             border-top-color border-right-color border-bottom-color border-left-color \
+             border-image-source border-image-slice border-image-width border-image-outset \
+             border-image-repeat",
+        ),
+        (
+            "border: inherit",
+            "border-top-color border-top-style border-top-width border-right-color \
+             border-right-style border-right-width border-bottom-color border-bottom-style \
+             border-bottom-width border-left-color border-left-style border-left-width \
+             border-image-source border-image-slice border-image-width border-image-outset \
+             border-image-repeat",
+        ),
+        (
+            "border-block: inherit",
+            "border-block-start-color border-block-start-style border-block-start-width \
+             border-block-end-color border-block-end-style border-block-end-width",
+        ),
+        (
+            "border-inline: inherit",
+            "border-inline-start-color border-inline-start-style border-inline-start-width \
+             border-inline-end-color border-inline-end-style border-inline-end-width",
+        ),
+    ] {
+        assert_eq!(items(css), expected, "{css}");
+    }
+    // The order `cssText` writes them in when the shorthand can't be.
+    assert_eq!(
+        css_text("font: menu; font-kerning: none"),
+        "font-style: ; font-variant: normal; font-weight: ; font-stretch: ; font-size: ; \
+         line-height: ; font-family: ; font-optical-sizing: ; font-size-adjust: ; \
+         font-feature-settings: ; font-variation-settings: ; font-language-override: ; \
+         font-kerning: none;"
     );
 }
 
