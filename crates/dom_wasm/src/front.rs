@@ -93,7 +93,25 @@ impl DomException {
 
 /// A trap: a handle that isn't one of the store's.
 fn not_held(handle: u32) -> wasmtime::Error {
-    wasmtime::format_err!("{handle:#x} is no node's handle of this store")
+    wasmtime::format_err!("{handle:#x} is no handle of this store")
+}
+
+/// `Node`, which every node's interface is or descends from.
+const NODE: usize = dom_api::declare::interface_index("Node");
+
+/// A node argument's handle checked: one of the store's, and a node's
+/// (which of the node interfaces it must be is the member's to check, in
+/// its operation). A trap otherwise: a binding's mistake.
+fn check_node(handle: u32, handles: &Handles) -> wasmtime::Result<()> {
+    let of = handles.interface(handle).ok_or_else(|| not_held(handle))?;
+    if dom_api::typed::is_interface(NODE, of) {
+        Ok(())
+    } else {
+        Err(wasmtime::format_err!(
+            "{handle:#x} is a {}'s handle, not a node's",
+            dom_api::INTERFACES[of].name
+        ))
+    }
 }
 
 /// An argument's type of the table as wasm's: what wasmtime lifts, and what
@@ -283,7 +301,7 @@ macro_rules! interfaces {
             type Read<'s> = u32;
 
             fn check(wit: &u32, handles: &Handles) -> wasmtime::Result<()> {
-                handles.kind(*wit).map(drop).ok_or_else(|| not_held(*wit))
+                check_node(*wit, handles)
             }
 
             fn read<T: 'static>(wit: &u32, _: &StoreContextMut<'_, T>) -> wasmtime::Result<u32> {
@@ -297,7 +315,7 @@ macro_rules! interfaces {
 
             fn check(wit: &Option<u32>, handles: &Handles) -> wasmtime::Result<()> {
                 match *wit {
-                    Some(handle) => handles.kind(handle).map(drop).ok_or_else(|| not_held(handle)),
+                    Some(handle) => check_node(handle, handles),
                     None => Ok(()),
                 }
             }
@@ -644,16 +662,19 @@ where
     STATE.with_borrow(|slot| {
         let state = slot.of(key).ok_or_else(crate::no_store)?;
         let (this, rest) = <M::Args as WitArgs>::split(params);
-        let kind = {
+        // `this`'s interface, as its handle was given: the member's, or a
+        // descendant of it (an element's by its name), with no DOM.
+        let of = {
             let tables = state.tables.borrow();
             let handles = tables.store(number).ok_or_else(crate::no_store)?;
-            let kind = handles.kind(this).ok_or_else(|| not_held(this))?;
+            let of = handles.interface(this).ok_or_else(|| not_held(this))?;
             <M::Args as WitArgs>::check(&rest, handles)?;
-            kind
+            of
         };
-        if !dom_api::typed::accepts(M::INTERFACE, kind) {
+        if !dom_api::typed::is_interface(M::INTERFACE, of) {
             return Ok((Err(DomException::of(ApiError::type_error(format!(
-                "Illegal invocation: a {kind:?} is not a {}",
+                "Illegal invocation: a {} is not a {}",
+                dom_api::INTERFACES[of].name,
                 dom_api::INTERFACES[M::INTERFACE].name
             )))),));
         }
@@ -753,13 +774,17 @@ impl<'r, A: ReadArgs> OpFront for WasmFront<'r, A> {
         string
     }
 
-    /// A node: only node interfaces' members are bound (their plain ones).
+    /// `this`, whose interface the call checked: an object of its type.
     fn this_as<'gc, T: elise::HeapType>(
         &mut self,
         cx: &ApiCx<'_, 'gc>,
     ) -> Option<elise::Gc<'gc, T>> {
-        let this = self.this;
-        self.node(cx, &this).erase().downcast()
+        self.tables
+            .borrow()
+            .store(self.store)
+            .expect("a store's table")
+            .object(cx, self.this)
+            .downcast()
     }
 
     fn node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, node: &u32) -> NodeRef<'gc> {
@@ -802,7 +827,13 @@ impl<'r, A: ReadArgs> OpFront for WasmFront<'r, A> {
 
     /// The store's handle to the node: the one it has, or a new one.
     fn ret_node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, node: NodeRef<'gc>) {
-        let handle = self.tables.borrow_mut().give(cx, self.store, node);
+        let handle = self.tables.borrow_mut().give(cx, self.store, node.into());
+        self.ret = Ret::Node(handle);
+    }
+
+    /// The store's handle to the object, as a node's.
+    fn ret_object<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, object: dom::ObjectRef<'gc>) {
+        let handle = self.tables.borrow_mut().give(cx, self.store, object);
         self.ret = Ret::Node(handle);
     }
 }

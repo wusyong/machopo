@@ -14,17 +14,28 @@
 | 屬性 | `getAttribute`、`setAttribute`、`removeAttribute`、`hasAttribute`、`id`、`className` |
 | 找節點 | `getElementById`、`querySelector`、`closest`、`matches`、`firstElementChild`、`lastElementChild`、`childElementCount`、`parentElement`、`firstChild`、`nextSibling` |
 
-### 只是被凍結擋住的（照型別看是 plain）
+### 只是被凍結擋住的（plain）
+
+2026-11-10（第 1 段做完後）用 `wit::is_plain` 對整張表算的：表上 266 個 interface、2799 個成員（不算常數），plain 的 163 個，其中 68 個在 WIT 裡（凍結的那些）。放開凍結多 95 個，TodoMVC 用得到的：
+
+| 成員 | TodoMVC 用在哪 |
+| --- | --- |
+| `ChildNode.remove()`（`element-remove`） | 刪掉一個 todo |
+| `Document.body` | 入口 |
+| `Element.nextElementSibling` | 走過清單（不用 `children` 時） |
+
+### 元素自己的 interface 上的（`this` 要看元素的名稱）
+
+現在的 `is_plain` 把元素的 interface（`HTMLElement`、`HTMLInputElement` 這些，表上有 `element` 的）整個排除：Store 的表每一格只記節點的種類（`NodeKind`），「是不是 `<input>`」要讀 DOM 才知道。這一類不是凍結擋住的，要先讓表記得每個 handle 的 interface（`README.md` 的「待決定」第 5 條）。這份草稿原本把 `value`、`checked`、`blur()` 列在上一節，是錯的。
 
 | 成員 | 表上的型別 | TodoMVC 用在哪 |
 | --- | --- | --- |
 | `HTMLInputElement.value` | `LegacyNullToEmptyString` | 新 todo 的文字、編輯中的文字 |
 | `HTMLInputElement.checked` | `bool` | 完成的勾選、全部勾選 |
-| `ChildNode.remove()` | 沒有參數 | 刪掉一個 todo |
-| `Document.body` | `Option<HTMLElement>` | 入口 |
 | `HTMLElement.blur()` | 沒有參數，`#[calls_script]` | 結束編輯 |
+| `HTMLElement.click()` | 沒有參數 | （用不到，同一類） |
 
-`blur()` 會同步分派事件：型別是 plain，但碰到重入（`README.md` 的「待決定」第 3 條）。
+`blur()` 會同步分派事件：碰到重入（「已決定的事項」第 5 條：宣告成 `async func`）。
 
 ### 要先有節點以外的物件的 handle
 

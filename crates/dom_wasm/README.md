@@ -58,20 +58,22 @@ set.with(index, |mut cx| {
 - **guest 只能在 async 的 export 裡等待**：不是 async 的 export 回傳之前等待會 trap（Component Model 的規定）。
 - 等待被取消（task 丟掉）時，它的期限留到時間到才拿掉：多一輪沒事做的。
 
-## guest 怎麼指節點（handle）
+## guest 怎麼指 DOM 的物件（handle）
 
-guest 拿到的節點是一個 `u32`，那個 Store 自己的編號（`src/handles.rs`）：
+guest 拿到的物件（節點、`Event`、`Window` 這些）是一個 `u32`，那個 Store 自己的編號（`src/handles.rs`）：
 
-- **一個節點在一個 Store 裡一個編號**：交出時先找它在這個 Store 有沒有編號，有就給同一個，沒有才配一格。guest 直接比整數就知道是不是同一個節點；只有一種 handle，往上、往下轉型不用呼叫 host。guest 不要時呼叫 `release`（重複拿到不另外計數，guest 的 binding 自己數）。對應 Blink 每個節點在每個 world 最多一個 wrapper，一個 Store 是一個 world。
+- **一個物件在一個 Store 裡一個編號**：交出時先找它在這個 Store 有沒有編號，有就給同一個，沒有才配一格。guest 直接比整數就知道是不是同一個物件；只有一種 handle，往上、往下轉型不用呼叫 host。guest 不要時呼叫 `release`（重複拿到不另外計數，guest 的 binding 自己數）。對應 Blink 每個物件在每個 world 最多一個 wrapper，一個 Store 是一個 world。
 - **編號**：低 24 位元是 Store 的表的 index，高 8 位元是 generation（1 到 255，放掉時加一），0 永遠不是 handle。用了放掉的、沒給過的編號，呼叫 trap（只有 binding 的 bug 會這樣，和 wasm 拿 table 的 index 超出範圍一樣）。
-- **表**：節點是 Store 的 holder（DOM 的 heap 上的物件，每塊 256 個 `Member<Node>`）的 edge，不是 root：只有 guest 拿著的節點活到 Store 死掉為止，跟著它走。每一格的 generation 和節點的種類在 heap 外，呼叫前不碰 DOM 就能檢查 handle 和 `this` 的 interface。
-- **找一個節點在一個 Store 的編號**：elise 的 heap 的節點在 nursery 裡會搬，不能用位址當 key。這份 DOM 的第一個 Store 是 main（Blink 的 main world），它的編號在節點的 engine word 的低 32 位元（`Cx::engine_word`：JS 文件的節點放 wrapper 的那 8 bytes，沒有 JS engine 驅動的 heap 裡沒人用）；其他 Store 的編號在一張共用的表，高 32 位元是它的 index，每一項是幾個（Store，編號）。讀到的 main 的編號對回 Store 的表才算數。main Store 死掉之後不再有 main（換給別的 Store 時，它原本記在共用的表的編號會漏看）。共用的表的每一項只在有 Store 拿著那個節點時存在：release 或 Store 死掉時拿掉。engine word 和表存的都是數字，不撐住任何東西。
+- **表**：物件是 Store 的 holder（DOM 的 heap 上的物件，每塊 256 個 `Member<Erased>`）的 edge，不是 root：只有 guest 拿著的物件活到 Store 死掉為止，跟著它走。每一格的 generation 和物件的 **interface**（它的 wrapper 會是哪一個：`dom_api` 的 `interface_of`，元素的照它的名稱，例如 `<input>` 是 `HTMLInputElement`；交出時算一次）在 heap 外，呼叫前不碰 DOM 就能檢查 handle 和 `this`：`this` 的 interface 要是成員的 interface 或它的子孫（`dom_api::typed::is_interface`）。對應 Blink 的 wrapper 帶著 `WrapperTypeInfo`。元素的 interface 記下來之後不變（custom element 升級會改它，wasm 文件沒有）。
+- **找一個物件在一個 Store 的編號**：elise 的 heap 的物件在 nursery 裡會搬，不能用位址當 key。這份 DOM 的第一個 Store 是 main（Blink 的 main world），它的編號在物件的 engine word 的低 32 位元（`Cx::object_engine_word`：JS 文件的物件放 wrapper 的那 8 bytes，每種物件都有，沒有 JS engine 驅動的 heap 裡沒人用）；其他 Store 的編號在一張共用的表，高 32 位元是它的 index，每一項是幾個（Store，編號）。main Store 死掉之後不再有 main（換給別的 Store 時，它原本記在共用的表的編號會漏看）。
+- **word 可能是過時的**：放掉一個 handle 時手上只有那一格，不知道物件的型別，所以不去改物件的 word。word 講的東西要對過才算數：main 的編號對回 Store 的表（那一格拿的是這個物件），共用的表的那一項對它裡面的一個編號（拿的是這個物件；一項沒有 Store 之後會給別的物件用）。每一格記著它在共用的表的哪一項，放掉時不用物件就找得到。共用的表的每一項只在有 Store 拿著那個物件時存在：release 或 Store 死掉時拿掉。word 和表存的都是數字，不撐住任何東西。
+- 現在 WIT 的成員只給節點；能交出其他物件的成員還沒進 WIT。
 
 ## 一次呼叫
 
 每個成員一個有型別的 host 函式（`src/front.rs`），從 `dom_api::for_each_member!` 展開：參數和結果是成員自己的型別（`TypedMember::Args`、`Ret`），wasmtime 直接 lift、lower，沒有 `Val`。
 
-1. 操作之外，不碰 DOM：`this` 和每個節點參數是這個 Store 的 handle（不是就 trap）；`this` 是成員的 interface 的（不是就是 `TypeError`，像 JS 的 receiver 檢查）；字串參數在 guest 的記憶體裡讀（UTF-8，不複製），檢查過（不是 UTF-8 就 trap）。
+1. 操作之外，不碰 DOM：`this` 和每個節點參數是這個 Store 的 handle（不是就 trap）；`this` 是成員的 interface 或它的子孫的（照表裡記的 interface；不是就是 `TypeError`，像 JS 的 receiver 檢查）；節點的參數要是節點的 handle（不是就 trap）；字串參數在 guest 的記憶體裡讀（UTF-8，不複製），檢查過（不是 UTF-8 就 trap）。
 2. 成員的專用路徑（`TypedMember::call`，front 是 `WasmFront`）：在操作裡從 Store 的表拿節點，結果記下來；節點的結果在操作裡給 handle（表的 edge 在 DOM 的 heap 上）。
 3. wasmtime lower 結果：字串先複製成一個 `Box<str>`（wasmtime 不 lower `Rc<str>`，`DomString` 是 thread 自己的），wasmtime 再複製進 guest。
 
@@ -103,4 +105,4 @@ python3 scripts/ci.py guests          # 重編 tests/guests/ 的 guest（wasi-sd
 - `tests/it/wasi.rs`：guest 在 async 的 export `sleep` 裡等待時留在 Store 裡、期限是 `next_deadline`，期限之前的一輪不叫醒它，到了之後的一輪才醒（時間到了但還沒跑那一輪時也還沒醒），等待期間照樣能呼叫它；不用等的等待在開始的那一輪就結束；兩個 Store 各自的等待；guest 讀到的時鐘和解析度是 100 µs；印的東西一行一行來、分 stdout 和 stderr，沒有換行的最後一行在 Store 丟掉時來。
 - `tests/it/wit.rs`：`wit/machopo-dom.wit` 是表產生的那份；`for_each_member!` 的 `plain` 剛好是 `wit::is_plain` 的，跳過的是物件不是節點的那幾個 interface，WIT 裡沒有 event；WIT 的成員剛好是凍結的那些，每個都還是 plain。
 - `tests/it/guest.rs`（guest 是 `tests/guests/dom.c`，每個 case 一個新的 Store）：建樹、插入、走訪、移除，同一個節點每次同一個編號，element 的 handle 給 `Node` 的成員也行；字串兩個方向（屬性值的 ASCII 和非 ASCII、名稱、命名空間、text 的 data、`[LegacyNullToEmptyString]` 的 none 是空字串、`textContent`）；DOM 的錯照代碼（2、3、4、9），`this` 是別的 interface 的是代碼 1 的錯，不是 trap，Store 照樣能用；放掉的格子給下一個節點別的編號；guest 留著的節點經過 GC 還在、放掉之後 Store 沒拿著東西；放掉的、沒給過的、0、放兩次的 handle 和不是 UTF-8 的字串 trap；兩個 Store 各自的編號，第二個（不是 main）的在共用的表、它死掉時拿掉，第一個死掉之後新的 Store 也走共用的表；比它的 DOM 活得久的 Store 的呼叫 trap，它 drop 時不碰同一個 thread 之後的 DOM（那份 DOM 的第一個 Store 和它同號）。
-- 單元測試（`src/handles.rs`）：main Store 的編號每次一樣、在 engine word 的低 32 位元，放掉之後不是任何節點的、同一格的下一個編號不一樣；其他 Store 的在共用的一項，最後一個 Store release 或死掉時拿掉；main 死掉之後新的 Store 不讀它留下的 word；handle 撐住節點經過 GC，放掉或 Store 死掉之後收掉；generation 從 255 繞回 1、超過一塊的節點。`src/wit.rs`：kebab-case。`src/wasi.rs`：最早的期限是最早的那個等待的，同一個等待再 poll 還是一個；時間到了、沒人叫醒就被 poll 的等待結束、不再留著；被叫醒但時間還沒到（時間倒退）的再留一次。`src/turn.rs`：叫醒自己的 future 接著 poll，沒叫醒的那次 poll 之後這一輪結束，下一輪從那裡接著。
+- 單元測試（`src/handles.rs`）：main Store 的編號每次一樣、在 engine word 的低 32 位元，放掉之後不是任何節點的（word 留著、不算數）、同一格的下一個編號不一樣；handle 能指任何物件（`Window` 和節點一樣每次同一個，main 和其他 Store 都是），記著它的 interface（`<input>` 是 `HTMLInputElement`、`<p>` 是 `HTMLParagraphElement`）；共用的表放掉的一項給了別的物件之後，原本那個物件過時的 word 不算數，兩個物件各自的編號都不變；其他 Store 的在共用的一項，最後一個 Store release 或死掉時拿掉；main 死掉之後新的 Store 不讀它留下的 word；handle 撐住節點經過 GC，放掉或 Store 死掉之後收掉；generation 從 255 繞回 1、超過一塊的節點。`src/wit.rs`：kebab-case。`src/wasi.rs`：最早的期限是最早的那個等待的，同一個等待再 poll 還是一個；時間到了、沒人叫醒就被 poll 的等待結束、不再留著；被叫醒但時間還沒到（時間倒退）的再留一次。`src/turn.rs`：叫醒自己的 future 接著 poll，沒叫醒的那次 poll 之後這一輪結束，下一輪從那裡接著。

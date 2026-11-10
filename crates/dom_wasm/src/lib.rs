@@ -315,7 +315,7 @@ impl WasmStore {
             Ok(state
                 .dom()
                 .borrow_mut()
-                .mutate(|cx| tables.give(cx, number, node.get(cx.gc))))
+                .mutate(|cx| tables.give(cx, number, node.get(cx.gc).into())))
         })
     }
 
@@ -344,11 +344,7 @@ impl Drop for WasmStore {
     fn drop(&mut self) {
         STATE.with_borrow(|slot| {
             if let Some(state) = slot.of(self.key) {
-                let mut tables = state.tables.borrow_mut();
-                state
-                    .dom()
-                    .borrow_mut()
-                    .mutate(|cx| tables.remove_store(cx, self.key.number));
+                state.tables.borrow_mut().remove_store(self.key.number);
             }
         });
     }
@@ -376,7 +372,7 @@ pub fn add_to_linker<T: 'static>(
                 tables.store(number).ok_or_else(no_store)?;
                 Ok(state.dom().borrow_mut().mutate(|cx| {
                     let document = cx.create_document(true);
-                    tables.give(cx, number, document)
+                    tables.give(cx, number, document.into())
                 }))
             })?;
             collect_if_due(&mut cx)?;
@@ -392,9 +388,9 @@ pub fn add_to_linker<T: 'static>(
                 let state = slot.of(key).ok_or_else(no_store)?;
                 let mut tables = state.tables.borrow_mut();
                 let handles = tables.store(number).ok_or_else(no_store)?;
-                if handles.kind(handle).is_none() {
+                if handles.interface(handle).is_none() {
                     return Err(wasmtime::format_err!(
-                        "{handle:#x} is no node's handle of this store"
+                        "{handle:#x} is no handle of this store"
                     ));
                 }
                 // No allocation: no safepoint.

@@ -362,6 +362,79 @@ pub enum ObjectRef<'gc> {
     CustomElementRegistry(Gc<'gc, crate::CustomElementRegistry>),
 }
 
+impl<'gc> ObjectRef<'gc> {
+    /// As an edge to any type (a wasm store's handle to it).
+    pub fn erase(self) -> Gc<'gc, Erased> {
+        match self {
+            Self::Node(object) => object.erase(),
+            Self::Event(object) => object.erase(),
+            Self::EventTarget(object) => object.erase(),
+            Self::Window(object) => object.erase(),
+            Self::Location(object) => object.erase(),
+            Self::History(object) => object.erase(),
+            Self::Navigator(object) => object.erase(),
+            Self::UserActivation(object) => object.erase(),
+            Self::Url(object) => object.erase(),
+            Self::Crypto(object) => object.erase(),
+            Self::Request(object) => object.erase(),
+            Self::Response(object) => object.erase(),
+            Self::AbortController(object) => object.erase(),
+            Self::Headers(object) => object.erase(),
+            Self::Geolocation(object) => object.erase(),
+            Self::GeolocationPositionError(object) => object.erase(),
+            Self::WakeLock(object) => object.erase(),
+            Self::Scheduling(object) => object.erase(),
+            Self::IdleDeadline(object) => object.erase(),
+            Self::PerformanceTiming(object) => object.erase(),
+            Self::PerformanceObserverEntryList(object) => object.erase(),
+            Self::PerformanceObserver(object) => object.erase(),
+            Self::PerformanceEntry(object) => object.erase(),
+            Self::UrlSearchParams(object) => object.erase(),
+            Self::HtmlCollection(object) => object.erase(),
+            Self::NodeList(object) => object.erase(),
+            Self::DomTokenList(object) => object.erase(),
+            Self::DomStringMap(object) => object.erase(),
+            Self::NamedNodeMap(object) => object.erase(),
+            Self::DomParser(object) => object.erase(),
+            Self::Range(object) => object.erase(),
+            Self::NodeIterator(object) => object.erase(),
+            Self::TreeWalker(object) => object.erase(),
+            Self::Selection(object) => object.erase(),
+            Self::CssStyleDeclaration(object) => object.erase(),
+            Self::MutationObserver(object) => object.erase(),
+            Self::MutationRecord(object) => object.erase(),
+            Self::IntersectionObserver(object) => object.erase(),
+            Self::IntersectionObserverEntry(object) => object.erase(),
+            Self::ResizeObserver(object) => object.erase(),
+            Self::ResizeObserverEntry(object) => object.erase(),
+            Self::ResizeObserverSize(object) => object.erase(),
+            Self::CanvasRenderingContext2d(object) => object.erase(),
+            Self::CanvasGradient(object) => object.erase(),
+            Self::CanvasPattern(object) => object.erase(),
+            Self::ImageData(object) => object.erase(),
+            Self::Blob(object) => object.erase(),
+            Self::Path2d(object) => object.erase(),
+            Self::TextMetrics(object) => object.erase(),
+            Self::MessageChannel(object) => object.erase(),
+            Self::SvgAnimatedString(object) => object.erase(),
+            Self::SvgMatrix(object) => object.erase(),
+            Self::SvgPoint(object) => object.erase(),
+            Self::SvgRect(object) => object.erase(),
+            Self::DomRect(object) => object.erase(),
+            Self::DomRectList(object) => object.erase(),
+            Self::DomImplementation(object) => object.erase(),
+            Self::CssStyleSheet(object) => object.erase(),
+            Self::CssRule(object) => object.erase(),
+            Self::CssRuleList(object) => object.erase(),
+            Self::MediaList(object) => object.erase(),
+            Self::StyleSheetList(object) => object.erase(),
+            Self::KeyframeEffect(object) => object.erase(),
+            Self::DocumentTimeline(object) => object.erase(),
+            Self::CustomElementRegistry(object) => object.erase(),
+        }
+    }
+}
+
 impl<'gc> From<NodeRef<'gc>> for ObjectRef<'gc> {
     fn from(node: NodeRef<'gc>) -> Self {
         Self::Node(node)
@@ -1966,6 +2039,25 @@ impl<'gc> Cx<'_, 'gc> {
     /// reads and writes.
     pub fn callback_edge(&self, listener: Gc<'gc, Listener>) -> &'gc JsEdge {
         &listener.into_ref().callback
+    }
+
+    /// In a DOM no JS engine drives (a wasm document's), the 8 bytes of
+    /// `object`'s wrapper's reference are its engine's word, as a node's
+    /// (`engine_word`): 0 until set.
+    ///
+    /// # Panics
+    ///
+    /// In a DOM a JS engine drives.
+    pub fn object_engine_word(&self, object: ObjectRef<'gc>) -> u64 {
+        self.object_wrapper_edge(object).embedder_word(self.gc)
+    }
+
+    /// # Panics
+    ///
+    /// In a DOM a JS engine drives.
+    pub fn set_object_engine_word(&self, object: ObjectRef<'gc>, word: u64) {
+        self.object_wrapper_edge(object)
+            .set_embedder_word(self.gc, word);
     }
 
     /// `object`'s reference to its JS engine's wrapper, which only the

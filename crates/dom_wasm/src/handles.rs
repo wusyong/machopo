@@ -1,54 +1,65 @@
-//! The stores' handles to the DOM's nodes (Blink's `DOMDataStore`, a store
-//! a world): a guest holds a node as a number of its store's own, one for
-//! each node it was given, the same each time, until it releases it.
+//! The stores' handles to the DOM's objects (Blink's `DOMDataStore`, a
+//! store a world): a guest holds an object (a node, an event, a window...)
+//! as a number of its store's own, one for each object it was given, the
+//! same each time, until it releases it.
 //!
-//! - **A store's table** (`Handles`): its slots, each a node's or free.
-//!   The nodes are edges of the store's holder, an object of the DOM's heap
-//!   (chunks of `CHUNK` members), not roots: what only the guest holds
+//! - **A store's table** (`Handles`): its slots, each an object's or free.
+//!   The objects are edges of the store's holder, an object of the DOM's
+//!   heap (chunks of `CHUNK` members), not roots: what only the guest holds
 //!   lives as long as the store does, and goes with it. Each slot's
-//!   generation and node kind are the store's own, outside the heap, so
-//!   that a handle is checked (and `this`'s interface) before an operation,
-//!   with no DOM.
+//!   generation and its object's interface (the one its wrapper would be
+//!   of: an element's by its name) are the store's own, outside the heap,
+//!   so that a handle is checked (and `this`'s interface) before an
+//!   operation, with no DOM.
 //! - **A handle** is a slot's index (its low `INDEX_BITS`) and its
 //!   generation (the high 8, 1 to 255): a released slot's next generation
 //!   tells the old handle from the new, and 0 is never one.
-//! - **Finding a node's handle in a store**: the DOM's first store is its
-//!   main one (Blink's main world), whose handle is in the node's engine
-//!   word's low half (`Cx::engine_word`, the 8 bytes a JS document's node
-//!   keeps its wrapper in); another store's handles are in a table the
-//!   stores share, by the word's high half (1 or more), each entry the
-//!   stores' and their handles. A main handle read is checked against the
-//!   store's table, so a stale word gives none. Once the main store goes,
+//! - **Finding an object's handle in a store**: the DOM's first store is
+//!   its main one (Blink's main world), whose handle is in the object's
+//!   engine word's low half (`Cx::object_engine_word`, the 8 bytes a JS
+//!   document's object keeps its wrapper in); another store's handles are
+//!   in a table the stores share, by the word's high half (1 or more),
+//!   each entry the stores' and their handles. Once the main store goes,
 //!   none is main again: another store's handles are in the shared table,
 //!   which looking at the word alone would miss.
+//! - **A word may be stale**: a release has the slot, not the object's
+//!   type, so it leaves the word as it was. What a word names is checked
+//!   before it is believed: a main handle against the store's table (the
+//!   slot holds this object), a shared entry against one of its own
+//!   handles (which holds this object: an entry is given to another object
+//!   once no store is in it). A slot keeps its entry, so that releasing it
+//!   finds the entry without the object.
 //!
-//! A shared entry exists while a store holds the node: releasing it, or
-//! the store going, takes the store's handle out of it, so no entry
-//! outlives what holds its node. The word and the entries are numbers, not
-//! edges: they hold nothing alive.
+//! A shared entry exists while a store holds the object: releasing it, or
+//! the store going, takes the store's handle out of it. The word and the
+//! entries are numbers, not edges: they hold nothing alive.
 
-use dom::{Cx, Node, NodeKind, NodeRef};
-use elise::{GcObject, HeapVector, Member, Persistent};
+use dom::{Cx, NodeRef, ObjectRef};
+use dom_api::ApiCx;
+use elise::{Erased, Gc, GcObject, HeapVector, Member, Persistent};
 
 /// The slots of a holder's chunk.
 const CHUNK: usize = 256;
-/// A handle's bits for its slot's index: a store holds at most 2^24 nodes.
+/// A handle's bits for its slot's index: a store holds at most 2^24 objects.
 const INDEX_BITS: u32 = 24;
 const INDEX_MASK: u32 = (1 << INDEX_BITS) - 1;
 /// The engine word's halves: the main store's handle, the shared entry.
 const LOW: u64 = 0xffff_ffff;
 
-/// A chunk of a store's holder: its slots' nodes, none for a free slot.
+/// A chunk of a store's holder: its slots' objects, none for a free slot.
 #[derive(GcObject)]
 pub(crate) struct Chunk {
-    nodes: [Member<Node>; CHUNK],
+    objects: [Member<Erased>; CHUNK],
 }
 
-/// A slot's generation and its node's kind (none if it is free).
+/// A slot's generation, its object's interface (none if it is free: an
+/// index of `dom_api::INTERFACES`, which a `u16` holds), and the shared
+/// entry its handle is in (0: none, the main store's).
 #[derive(Clone, Copy)]
 struct Slot {
     generation: u8,
-    kind: Option<NodeKind>,
+    interface: Option<u16>,
+    entry: u32,
 }
 
 /// A store's table.
@@ -79,55 +90,72 @@ impl Handles {
         }
     }
 
-    /// The kind of the node `handle` holds, if it is one of the store's.
-    pub(crate) fn kind(&self, handle: u32) -> Option<NodeKind> {
+    /// The interface of the object `handle` holds, if it is one of the
+    /// store's.
+    pub(crate) fn interface(&self, handle: u32) -> Option<usize> {
         let (index, generation) = parts(handle);
         self.slots
             .get(index)
             .filter(|slot| slot.generation == generation)
-            .and_then(|slot| slot.kind)
+            .and_then(|slot| slot.interface)
+            .map(usize::from)
     }
 
-    /// The node `handle` holds, which `kind` found one.
-    pub(crate) fn node<'gc>(&self, cx: &Cx<'_, 'gc>, handle: u32) -> NodeRef<'gc> {
-        debug_assert!(self.kind(handle).is_some(), "a handle checked");
+    /// The object `handle` holds, which `interface` found one.
+    pub(crate) fn object<'gc>(&self, cx: &Cx<'_, 'gc>, handle: u32) -> Gc<'gc, Erased> {
+        debug_assert!(self.interface(handle).is_some(), "a handle checked");
         self.member(cx, parts(handle).0)
             .get(cx.gc)
-            .expect("a held slot's node")
+            .expect("a held slot's object")
     }
 
-    /// How many nodes the store holds.
+    /// The node `handle` holds, which `interface` found a node's.
+    pub(crate) fn node<'gc>(&self, cx: &Cx<'_, 'gc>, handle: u32) -> NodeRef<'gc> {
+        self.object(cx, handle)
+            .downcast()
+            .expect("a handle checked to be a node's")
+    }
+
+    /// How many objects the store holds.
     pub(crate) fn held(&self) -> usize {
         self.held
     }
 
-    fn member<'gc>(&self, cx: &Cx<'_, 'gc>, index: usize) -> &'gc Member<Node> {
+    fn member<'gc>(&self, cx: &Cx<'_, 'gc>, index: usize) -> &'gc Member<Erased> {
         let chunk = self
             .holder
             .get(cx.gc)
             .get(cx.gc, index / CHUNK)
             .expect("a slot's chunk")
             .into_ref();
-        &chunk.nodes[index % CHUNK]
+        &chunk.objects[index % CHUNK]
     }
 
-    /// Whether `handle` holds `node`.
-    fn holds<'gc>(&self, cx: &Cx<'_, 'gc>, handle: u32, node: NodeRef<'gc>) -> bool {
-        self.kind(handle).is_some() && elise::Gc::ptr_eq(self.node(cx, handle), node)
+    /// Whether `handle` holds `object`.
+    fn holds<'gc>(&self, cx: &Cx<'_, 'gc>, handle: u32, object: Gc<'gc, Erased>) -> bool {
+        self.interface(handle).is_some() && Gc::ptr_eq(self.object(cx, handle), object)
     }
 
-    /// A new handle to `node`, in a free slot or a new one.
-    fn hold<'gc>(&mut self, cx: &Cx<'_, 'gc>, node: NodeRef<'gc>) -> u32 {
+    /// A new handle to `object`, of `interface`, in the shared `entry` (0:
+    /// none), in a free slot or a new one.
+    fn hold<'gc>(
+        &mut self,
+        cx: &Cx<'_, 'gc>,
+        object: Gc<'gc, Erased>,
+        interface: usize,
+        entry: u32,
+    ) -> u32 {
         let index = match self.free.pop() {
             Some(index) => index,
             None => {
                 let index = u32::try_from(self.slots.len())
                     .ok()
                     .filter(|&index| index <= INDEX_MASK)
-                    .expect("a store holds at most 2^24 nodes");
+                    .expect("a store holds at most 2^24 objects");
                 self.slots.push(Slot {
                     generation: 1,
-                    kind: None,
+                    interface: None,
+                    entry: 0,
                 });
                 index
             }
@@ -136,25 +164,26 @@ impl Handles {
         let chunks = self.holder.get(cx.gc);
         while chunks.len() <= at / CHUNK {
             let chunk = cx.gc.alloc(ChunkInit {
-                nodes: [None; CHUNK],
+                objects: [None; CHUNK],
             });
             chunks.push(cx.gc, chunk);
         }
-        self.member(cx, at).set(cx.gc, Some(node));
+        self.member(cx, at).set(cx.gc, Some(object));
         let slot = &mut self.slots[at];
-        slot.kind = Some(cx.kind(node));
+        slot.interface = Some(u16::try_from(interface).expect("the table's interfaces fit"));
+        slot.entry = entry;
         // Below `slots.len()`, which a `Vec` keeps below `isize::MAX`.
         self.held = self.held.saturating_add(1);
         handle(index, slot.generation)
     }
 
-    /// Frees `handle`'s slot, which `kind` found one; its node.
-    fn free<'gc>(&mut self, cx: &Cx<'_, 'gc>, handle: u32) -> NodeRef<'gc> {
-        let node = self.node(cx, handle);
+    /// Frees `handle`'s slot, which `interface` found one; the shared
+    /// entry its handle was in.
+    fn free<'gc>(&mut self, cx: &Cx<'_, 'gc>, handle: u32) -> u32 {
         let (at, _) = parts(handle);
         self.member(cx, at).set(cx.gc, None);
         let slot = &mut self.slots[at];
-        slot.kind = None;
+        slot.interface = None;
         slot.generation = if slot.generation == u8::MAX {
             1
         } else {
@@ -162,20 +191,21 @@ impl Handles {
         };
         self.free.push(handle & INDEX_MASK);
         self.held = self.held.saturating_sub(1);
-        node
+        std::mem::take(&mut slot.entry)
     }
 
-    /// Each node the store holds.
-    fn nodes<'gc>(&self, cx: &Cx<'_, 'gc>) -> Vec<NodeRef<'gc>> {
-        (0..self.slots.len())
-            .filter(|&at| self.slots[at].kind.is_some())
-            .map(|at| self.member(cx, at).get(cx.gc).expect("a held slot's node"))
+    /// The shared entry of each handle the store holds.
+    fn entries(&self) -> Vec<u32> {
+        self.slots
+            .iter()
+            .filter(|slot| slot.interface.is_some())
+            .map(|slot| slot.entry)
             .collect()
     }
 }
 
 /// The entries of the stores but the main one, by the engine word's high
-/// half (entry 0 none: the word's 0).
+/// half (entry 0 none: the word's 0). An entry in use has a store in it.
 #[derive(Default)]
 struct Shared {
     entries: Vec<Vec<(u32, u32)>>,
@@ -183,9 +213,8 @@ struct Shared {
 }
 
 impl Shared {
-    fn entry(word: u64) -> Option<usize> {
-        let entry = word >> 32;
-        (entry != 0).then(|| usize::try_from(entry).expect("a shared entry's index"))
+    fn entry(word: u64) -> u32 {
+        u32::try_from(word >> 32).expect("the high half")
     }
 
     fn add(&mut self) -> u32 {
@@ -200,9 +229,19 @@ impl Shared {
             }
         }
     }
+
+    /// Takes `store`'s handle out of `entry`, and the entry away once no
+    /// store is in it (it is another object's from then).
+    fn leave(&mut self, entry: u32, store: u32) {
+        let handles = &mut self.entries[entry as usize];
+        handles.retain(|&(of, _)| of != store);
+        if handles.is_empty() {
+            self.free.push(entry);
+        }
+    }
 }
 
-/// Every store's handles to a DOM's nodes.
+/// Every store's handles to a DOM's objects.
 #[derive(Default)]
 pub(crate) struct Tables {
     /// By store number, which isn't used again: none once it went.
@@ -234,63 +273,61 @@ impl Tables {
             .expect("a store's table")
     }
 
-    /// The store's handle to `node`: the one it has, or a new one.
-    pub(crate) fn give<'gc>(&mut self, cx: &Cx<'_, 'gc>, store: u32, node: NodeRef<'gc>) -> u32 {
-        let word = cx.engine_word(node);
+    /// Whether `entry` is `object`'s: in use, and one of its handles holds
+    /// the object (a stale word names an entry given to another since).
+    fn entry_is_of<'gc>(&self, cx: &Cx<'_, 'gc>, entry: u32, object: Gc<'gc, Erased>) -> bool {
+        self.shared
+            .entries
+            .get(entry as usize)
+            .and_then(|handles| handles.first())
+            .is_some_and(|&(store, handle)| {
+                self.store(store)
+                    .is_some_and(|handles| handles.holds(cx, handle, object))
+            })
+    }
+
+    /// The store's handle to `object`: the one it has, or a new one.
+    pub(crate) fn give<'gc>(&mut self, cx: &Cx<'_, 'gc>, store: u32, object: ObjectRef<'gc>) -> u32 {
+        let erased = object.erase();
+        let word = cx.object_engine_word(object);
         let main = self.main == Some(store);
+        let mut entry = 0;
         if main {
             let handle = u32::try_from(word & LOW).expect("the low half");
-            if self.store_mut(store).holds(cx, handle, node) {
+            if self.store_mut(store).holds(cx, handle, erased) {
                 return handle;
             }
-        } else if let Some(entry) = Shared::entry(word)
-            && let Some(&(_, handle)) = self.shared.entries[entry]
-                .iter()
-                .find(|(of, _)| *of == store)
-        {
-            debug_assert!(self.store_mut(store).holds(cx, handle, node));
-            return handle;
-        }
-        let handle = self.store_mut(store).hold(cx, node);
-        if main {
-            cx.set_engine_word(node, (word & !LOW) | u64::from(handle));
         } else {
-            let entry = match Shared::entry(word) {
-                Some(entry) => entry,
-                None => {
-                    let entry = self.shared.add();
-                    cx.set_engine_word(node, (word & LOW) | (u64::from(entry) << 32));
-                    entry as usize
+            entry = Shared::entry(word);
+            if entry != 0 && self.entry_is_of(cx, entry, erased) {
+                if let Some(&(_, handle)) = self.shared.entries[entry as usize]
+                    .iter()
+                    .find(|(of, _)| *of == store)
+                {
+                    debug_assert!(self.store_mut(store).holds(cx, handle, erased));
+                    return handle;
                 }
-            };
-            self.shared.entries[entry].push((store, handle));
+            } else {
+                entry = self.shared.add();
+                cx.set_object_engine_word(object, (word & LOW) | (u64::from(entry) << 32));
+            }
+        }
+        let interface = dom_api::typed::interface_of(&ApiCx::new(cx), object);
+        let handle = self.store_mut(store).hold(cx, erased, interface, entry);
+        if main {
+            cx.set_object_engine_word(object, (word & !LOW) | u64::from(handle));
+        } else {
+            self.shared.entries[entry as usize].push((store, handle));
         }
         handle
     }
 
-    /// Lets the store's `handle` go, which `Handles::kind` found one.
+    /// Lets the store's `handle` go, which `Handles::interface` found one.
+    /// The object's word is left: nothing believes it unchecked.
     pub(crate) fn release<'gc>(&mut self, cx: &Cx<'_, 'gc>, store: u32, handle: u32) {
-        let node = self.store_mut(store).free(cx, handle);
-        let word = cx.engine_word(node);
-        if self.main == Some(store) {
-            debug_assert_eq!(word & LOW, u64::from(handle), "the main handle in the word");
-            cx.set_engine_word(node, word & !LOW);
-        } else {
-            self.unshare(cx, store, node, word);
-        }
-    }
-
-    /// Takes the store's handle to `node` out of its shared entry, and the
-    /// entry away once no store is in it.
-    fn unshare<'gc>(&mut self, cx: &Cx<'_, 'gc>, store: u32, node: NodeRef<'gc>, word: u64) {
-        let entry = Shared::entry(word).expect("a shared node's entry");
-        let handles = &mut self.shared.entries[entry];
-        handles.retain(|&(of, _)| of != store);
-        if handles.is_empty() {
-            self.shared
-                .free
-                .push(u32::try_from(entry).expect("an entry's index"));
-            cx.set_engine_word(node, word & LOW);
+        let entry = self.store_mut(store).free(cx, handle);
+        if entry != 0 {
+            self.shared.leave(entry, store);
         }
     }
 
@@ -298,16 +335,14 @@ impl Tables {
     /// goes at the next GC. Its handles leave the shared entries; the main
     /// store's words are left: `main` names no store after it (a store's
     /// number isn't used again), so none reads them.
-    pub(crate) fn remove_store<'gc>(&mut self, cx: &Cx<'_, 'gc>, store: u32) {
+    pub(crate) fn remove_store(&mut self, store: u32) {
         let Some(handles) = self.stores.get_mut(store as usize).and_then(Option::take) else {
             return;
         };
-        if self.main == Some(store) {
-            return;
-        }
-        for node in handles.nodes(cx) {
-            let word = cx.engine_word(node);
-            self.unshare(cx, store, node, word);
+        for entry in handles.entries() {
+            if entry != 0 {
+                self.shared.leave(entry, store);
+            }
         }
     }
 
@@ -353,18 +388,20 @@ mod tests {
         dom.mutate(|cx| {
             let store = tables.add_store(cx);
             let p = node(cx, &weak);
-            let handle = tables.give(cx, store, p);
+            let handle = tables.give(cx, store, p.into());
             assert_ne!(handle, 0);
-            assert_eq!(tables.give(cx, store, p), handle);
+            assert_eq!(tables.give(cx, store, p.into()), handle);
             assert_eq!(cx.engine_word(p), u64::from(handle));
             let document = cx.document_of(p);
-            let other = tables.give(cx, store, document);
+            let other = tables.give(cx, store, document.into());
             assert_ne!(other, handle);
             assert_eq!(tables.store(store).unwrap().held(), 2);
             tables.release(cx, store, handle);
-            assert_eq!(tables.store(store).unwrap().kind(handle), None);
-            assert_eq!(cx.engine_word(p), 0);
-            let again = tables.give(cx, store, p);
+            assert_eq!(tables.store(store).unwrap().interface(handle), None);
+            // The word is left, and not believed: the slot's generation
+            // isn't the handle's any more.
+            assert_eq!(cx.engine_word(p), u64::from(handle));
+            let again = tables.give(cx, store, p.into());
             assert_ne!(again, handle, "the slot's next generation");
             assert_eq!(
                 again & ((1 << INDEX_BITS) - 1),
@@ -386,9 +423,9 @@ mod tests {
             let second = tables.add_store(cx);
             let third = tables.add_store(cx);
             let p = node(cx, &weak);
-            let main_handle = tables.give(cx, main, p);
-            let second_handle = tables.give(cx, second, p);
-            assert_eq!(tables.give(cx, second, p), second_handle);
+            let main_handle = tables.give(cx, main, p.into());
+            let second_handle = tables.give(cx, second, p.into());
+            assert_eq!(tables.give(cx, second, p.into()), second_handle);
             let word = cx.engine_word(p);
             assert_eq!(
                 word & 0xffff_ffff,
@@ -396,16 +433,22 @@ mod tests {
                 "the main handle stays"
             );
             assert_ne!(word >> 32, 0);
-            assert_eq!(tables.give(cx, third, p), tables.give(cx, third, p));
+            assert_eq!(tables.give(cx, third, p.into()), tables.give(cx, third, p.into()));
             assert_eq!(cx.engine_word(p), word, "one entry for both");
             assert_eq!(tables.shared_entries(), 1);
             tables.release(cx, second, second_handle);
             assert_eq!(tables.shared_entries(), 1, "the third store's is left");
-            assert_eq!(tables.store(second).unwrap().kind(second_handle), None);
-            tables.remove_store(cx, third);
+            assert_eq!(tables.store(second).unwrap().interface(second_handle), None);
+            tables.remove_store(third);
             assert_eq!(tables.shared_entries(), 0);
-            assert_eq!(cx.engine_word(p), u64::from(main_handle));
+            // The word still names the entry, which is no one's now: a
+            // store given the node again gets a new one.
+            assert_eq!(cx.engine_word(p), word);
             assert!(tables.store(third).is_none());
+            let again = tables.give(cx, second, p.into());
+            assert_eq!(tables.give(cx, second, p.into()), again);
+            assert_eq!(tables.shared_entries(), 1);
+            assert_eq!(cx.engine_word(p) & 0xffff_ffff, u64::from(main_handle));
         });
     }
 
@@ -418,11 +461,11 @@ mod tests {
         dom.mutate(|cx| {
             let main = tables.add_store(cx);
             let p = node(cx, &weak);
-            let left = tables.give(cx, main, p);
-            tables.remove_store(cx, main);
+            let left = tables.give(cx, main, p.into());
+            tables.remove_store(main);
             let later = tables.add_store(cx);
-            let handle = tables.give(cx, later, p);
-            assert_eq!(tables.give(cx, later, p), handle);
+            let handle = tables.give(cx, later, p.into());
+            assert_eq!(tables.give(cx, later, p.into()), handle);
             assert_eq!(
                 cx.engine_word(p) & 0xffff_ffff,
                 u64::from(left),
@@ -440,7 +483,7 @@ mod tests {
         let mut tables = Tables::default();
         let (store, handle) = dom.mutate(|cx| {
             let store = tables.add_store(cx);
-            (store, tables.give(cx, store, node(cx, &weak)))
+            (store, tables.give(cx, store, node(cx, &weak).into()))
         });
         dom.collect();
         dom.mutate(|cx| {
@@ -455,14 +498,14 @@ mod tests {
         dom.mutate(|cx| {
             let main = tables.add_store(cx);
             let second = tables.add_store(cx);
-            tables.give(cx, main, node(cx, &weak));
-            tables.give(cx, second, node(cx, &weak));
-            tables.remove_store(cx, main);
+            tables.give(cx, main, node(cx, &weak).into());
+            tables.give(cx, second, node(cx, &weak).into());
+            tables.remove_store(main);
         });
         dom.collect();
         dom.mutate(|cx| {
             assert!(weak.get(cx.gc).is_some(), "the second store holds it");
-            tables.remove_store(cx, 1);
+            tables.remove_store(1);
         });
         dom.collect();
         dom.mutate(|cx| assert!(weak.get(cx.gc).is_none(), "no store holds it"));
@@ -479,7 +522,7 @@ mod tests {
             let p = node(cx, &weak);
             let mut seen = Vec::new();
             for _ in 0..300 {
-                let handle = tables.give(cx, store, p);
+                let handle = tables.give(cx, store, p.into());
                 assert_ne!(handle, 0);
                 seen.push(handle >> INDEX_BITS);
                 tables.release(cx, store, handle);
@@ -491,7 +534,7 @@ mod tests {
             let texts: Vec<_> = (0..600).map(|_| cx.create_text(document, "t")).collect();
             let handles: Vec<_> = texts
                 .iter()
-                .map(|&text| tables.give(cx, store, text))
+                .map(|&text| tables.give(cx, store, text.into()))
                 .collect();
             for (&text, &handle) in texts.iter().zip(&handles) {
                 assert!(elise::Gc::ptr_eq(
@@ -499,6 +542,80 @@ mod tests {
                     text
                 ));
             }
+        });
+    }
+
+    /// A handle is to any object, a window as a node: the same each time
+    /// in the main store and in another, each with the interface its
+    /// wrapper would be of (an element's by its name).
+    #[test]
+    fn a_handle_is_to_any_object_with_its_interface() {
+        let mut dom = Dom::new();
+        let mut tables = Tables::default();
+        dom.mutate(|cx| {
+            let interface = |name| dom_api::declare::interface_index(name);
+            let document = cx.create_document(true);
+            let window = cx.create_window(document);
+            let input = cx.create_element(document, QualName::html("input"));
+            let p = cx.create_element(document, QualName::html("p"));
+            let main = tables.add_store(cx);
+            let second = tables.add_store(cx);
+            for store in [main, second] {
+                let of = |tables: &Tables, handle| tables.store(store).unwrap().interface(handle);
+                let handle = tables.give(cx, store, window.into());
+                assert_eq!(tables.give(cx, store, window.into()), handle);
+                assert_eq!(of(&tables, handle), Some(interface("Window")));
+                assert!(elise::Gc::ptr_eq(
+                    tables.store(store).unwrap().object(cx, handle),
+                    window.erase()
+                ));
+                let handle = tables.give(cx, store, input.into());
+                assert_eq!(of(&tables, handle), Some(interface("HTMLInputElement")));
+                let handle = tables.give(cx, store, p.into());
+                assert_eq!(of(&tables, handle), Some(interface("HTMLParagraphElement")));
+                let handle = tables.give(cx, store, document.into());
+                assert_eq!(of(&tables, handle), Some(interface("Document")));
+            }
+            assert_eq!(tables.store(main).unwrap().held(), 4);
+            assert_eq!(tables.shared_entries(), 4);
+        });
+    }
+
+    /// A shared entry let go is given to another object; the word of the
+    /// object it was is left naming it, and isn't believed: each object
+    /// keeps its own handle in each store.
+    #[test]
+    fn a_stale_word_names_no_entry_of_the_object() {
+        let (mut dom, weak) = dom_and_element();
+        let mut tables = Tables::default();
+        dom.mutate(|cx| {
+            let _main = tables.add_store(cx);
+            let second = tables.add_store(cx);
+            let third = tables.add_store(cx);
+            let p = node(cx, &weak);
+            let document = cx.document_of(p);
+            // `p`'s entry, let go.
+            let handle = tables.give(cx, second, p.into());
+            let word = cx.engine_word(p);
+            tables.release(cx, second, handle);
+            assert_eq!(tables.shared_entries(), 0);
+            // The document takes the entry `p`'s word still names.
+            let of_document = tables.give(cx, third, document.into());
+            assert_eq!(cx.engine_word(document) >> 32, word >> 32, "the entry, reused");
+            // `p` again, in the store the document's entry is of and in
+            // another: an entry of its own, the document's untouched.
+            let in_third = tables.give(cx, third, p.into());
+            assert_ne!(in_third, of_document);
+            assert_ne!(cx.engine_word(p) >> 32, word >> 32);
+            let in_second = tables.give(cx, second, p.into());
+            assert_eq!(tables.give(cx, second, p.into()), in_second);
+            assert_eq!(tables.give(cx, third, p.into()), in_third);
+            assert_eq!(tables.give(cx, third, document.into()), of_document);
+            assert_eq!(tables.shared_entries(), 2);
+            assert!(elise::Gc::ptr_eq(
+                tables.store(third).unwrap().node(cx, in_third),
+                p
+            ));
         });
     }
 }

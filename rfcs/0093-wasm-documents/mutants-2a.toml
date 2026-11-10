@@ -1,0 +1,87 @@
+# Mutation test of stage 2a: a store's handles to any object, each with
+# its interface (`dom_wasm`'s `handles.rs`, the receiver's check in
+# `front.rs`):
+# python3 scripts/test.py mutate rfcs/0093-wasm-documents/mutants-2a.toml
+test = ["cargo", "test", "-q", "-p", "dom_wasm"]
+timeout = 300
+
+[[mutant]]
+name = "a slot's handle holds whatever is asked of it"
+file = "crates/dom_wasm/src/handles.rs"
+from = '''        self.interface(handle).is_some() && Gc::ptr_eq(self.object(cx, handle), object)'''
+to = '''        self.interface(handle).is_some()'''
+
+[[mutant]]
+name = "a word's entry is believed unchecked"
+file = "crates/dom_wasm/src/handles.rs"
+from = '''            if entry != 0 && self.entry_is_of(cx, entry, erased) {'''
+to = '''            if entry != 0 {'''
+
+[[mutant]]
+name = "no word's entry is believed"
+file = "crates/dom_wasm/src/handles.rs"
+from = '''            if entry != 0 && self.entry_is_of(cx, entry, erased) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "an entry no store is in isn't given to another object"
+file = "crates/dom_wasm/src/handles.rs"
+from = '''        if handles.is_empty() {
+            self.free.push(entry);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the main store's handle isn't kept in the word"
+file = "crates/dom_wasm/src/handles.rs"
+from = '''            cx.set_object_engine_word(object, (word & !LOW) | u64::from(handle));'''
+to = ''''''
+
+[[mutant]]
+name = "a new entry isn't kept in the word"
+file = "crates/dom_wasm/src/handles.rs"
+from = '''                cx.set_object_engine_word(object, (word & LOW) | (u64::from(entry) << 32));'''
+to = ''''''
+
+[[mutant]]
+name = "every handle's interface is the table's first"
+file = "crates/dom_wasm/src/handles.rs"
+from = '''        let interface = dom_api::typed::interface_of(&ApiCx::new(cx), object);'''
+to = '''        let interface = 0;'''
+
+[[mutant]]
+name = "a store going leaves its handles in the shared entries"
+file = "crates/dom_wasm/src/handles.rs"
+from = '''        for entry in handles.entries() {
+            if entry != 0 {
+                self.shared.leave(entry, store);
+            }
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a release leaves its handle in the shared entry"
+file = "crates/dom_wasm/src/handles.rs"
+from = '''        let entry = self.store_mut(store).free(cx, handle);
+        if entry != 0 {
+            self.shared.leave(entry, store);
+        }'''
+to = '''        let _ = self.store_mut(store).free(cx, handle);'''
+
+[[mutant]]
+name = "any object is a member's receiver"
+file = "crates/dom_wasm/src/front.rs"
+from = '''        if !dom_api::typed::is_interface(M::INTERFACE, of) {'''
+to = '''        if false {'''
+
+[[mutant]]
+name = "an interface is only itself, not its descendants'"
+file = "crates/dom_api/src/typed.rs"
+from = '''    crate::declare::DESCENDANTS[interface][of / 128] >> (of % 128) & 1 != 0
+}
+
+/// The interface a node of `kind`'s wrapper is of:'''
+to = '''    interface == of
+}
+
+/// The interface a node of `kind`'s wrapper is of:'''

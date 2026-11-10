@@ -7678,6 +7678,15 @@ pub fn accepts(interface: usize, kind: NodeKind) -> bool {
     crate::declare::ACCEPTED[interface] & crate::declare::kind_bit(kind) != 0
 }
 
+/// Whether an object whose wrapper is of the interface `of` (`interface_of`)
+/// is one of `INTERFACES[interface]`'s: `of` is it, or a descendant of it.
+/// What a front end that keeps each object's interface checks a receiver
+/// by, with no DOM (a node's too: its name is in `of`).
+#[inline]
+pub fn is_interface(interface: usize, of: usize) -> bool {
+    crate::declare::DESCENDANTS[interface][of / 128] >> (of % 128) & 1 != 0
+}
+
 /// The interface a node of `kind`'s wrapper is of: its kind's most derived
 /// one (an element's of the table's `Element`: `node_interface_of` reads
 /// its name).

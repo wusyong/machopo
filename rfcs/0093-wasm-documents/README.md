@@ -113,15 +113,9 @@ bool exports_todomvc_handle_event(uint32_t id, node_t event) {
 
 現在的 handle 表每一格是 `Member<Node>`，種類（節點的 interface）記在 heap 外，呼叫前不碰 DOM 就能檢查 `this`。`dom` 那一側，任何物件是 `ObjectRef`（一個 enum，節點是其中一種）。
 
-要 guest 拿得到 `Event`、`Window`、`Location`、`DOMTokenList`、`CSSStyleDeclaration` 的話，選項：
+做法在「已決定的事項」第 12 條：一張表，每格指任何一種物件、記它的 interface；元素自己的 interface 的成員（`value`、`checked`）也靠它（`details.md` 的「TodoMVC 用到的成員」）。
 
-- **A：同一張表、同一種 `u32`，每一格能指任何一種物件**。guest 那一側只有一種 handle，`release` 也只有一個；`this` 的檢查照舊看 heap 外的種類。要解決的是「一個物件在一個 Store 裡一個編號」：節點靠 engine word 找回它的編號，其他物件沒有那一格，要嘛每次交出都配新的一格（同一個物件拿兩次是兩個 handle），要嘛只有會被反覆拿到的幾種（`Window`、`classList`、`style`）另外記。
-- **B：節點照舊，其他物件另一張表、另一種 WIT 型別（`type object = u32`）**。節點的快路不動；guest 的 binding 要分兩種、兩個 `release`。
-- **C：其他物件用 WIT 的 resource**（Component Model 的正規做法，wasmtime 保證 drop 之後不能再用）。RFC 0089 的決定 34 替節點否決過：每交出一次一個新的 handle、比不出是不是同一個、轉型要呼叫 host。短命的物件（`Event`）這些缺點比較輕。
-
-2026-11-10 的看法：A，其他物件每次交出配新的一格（不保證同一個編號），callback 的引數（`Event`）在 callback 回傳時由 host 收回、guest 不用 `release`。Blink 的對照：每個物件在每個 world 最多一個 wrapper；A 對節點做到了，對其他物件放掉，因為 guest 比較的幾乎都是節點。
-
-同一段把 `wit::FROZEN` 放開：plain 的定義（只拿和給節點、字串、數字、布林）不變的成員全部進 WIT，`is_plain` 擴到「節點以外的物件」之後多出來的成員也是。拿 dictionary、union、sequence 或給 sequence 的成員照 TodoMVC 用到的補（`details.md`）：例如 `focus()` 的 `FocusOptions`、`querySelectorAll` 的結果。WIT 的版本升到 `0.2.0`。
+WIT 的成員是明列的清單（「已決定的事項」第 13 條）：第 2 段加 TodoMVC 用到的；不定個數的字串是 `list<string>`，可省略的 dictionary 先不放。WIT 的版本升到 `0.2.0`。
 
 ### 3. 事件和 callback
 
@@ -196,6 +190,8 @@ bool exports_todomvc_handle_event(uint32_t id, node_t event) {
 9. **Store 的 event loop「需要時才跑」**（2026-11-10，第 1 段開始前）：Store 平常放在 `StoreSet` 裡；有事要做時（執行 script、分派事件給它、它等的東西到了）借出來、建 `run_concurrent`、poll 到不動、丟掉 future、放回去。guest 的 task 和 host 的 future 留在 Store 裡，等待中的 guest 下一輪接著跑（`details.md` 的「等待中的 guest，event loop 丟掉再重建」）。一輪就是 `StoreSet` 現在的一次借出：兩輪之間 Store 沒借出，DOM 的安全點照常 GC、`StoreSet` 交出它的 root；分派事件給它時借出來、呼叫、放回去，listener 在分派回來之前跑完。下一輪由 host 自己排（一個 renderer 的 task），不靠 waker：上一輪的 waker 跟著 future 丟掉了，所以 guest 能等的只有 machopo 自己知道什麼時候到的東西（第 7 條的時鐘）。guest 讓出（callback code 的 `YIELD`）時在同一輪裡繼續 poll，不丟掉 future（RFC 0001 的決定 41 在 wasmtime 49 上踩過：已經取出的工作會不見；50 上用測試確認）。不選每個 Store 一個常駐的 `run_concurrent`：Store 永遠是借出的，DOM 的安全點不能做要讀 root 的 GC，分派事件給它也拿不到 Store、只能排隊。限制：用 wasm GC 的語言寫的 guest 暫停時 stack 上的 root 沒有驗證過（C 的 guest 只拿整數的 handle，不受影響；這份只做 C）。對照 Chromium：沒有對應；task 和 microtask 都由 main thread 的 scheduler 排，script 的 runtime 沒有自己的 loop。照 RFC 0001。
 10. **頁面的 DOM 是 wasm 的 engine 擁有的，跑 guest 的一輪時借進 `dom_wasm` 的 thread-local**（2026-11-10，1c 開始前）：renderer 經過 `ScriptEngine` 的 `dom_mut()`、`dom_and_layout()` 拿 `&mut Dom`，所以 DOM 平常是 engine 的；host 函式和 wasmtime 借 heap 的 provider 是 linker 和 engine 的、沒有 wasm engine 的參照，從 thread-local 找 DOM，所以一輪開始前把 `Dom` 搬進 thread-local 的格子、結束時搬回來（heap 本身不動）。guest 只有在一輪裡碰得到 DOM，和第 9 條的模型一致；兩輪之間 thread-local 是空的，這時找 DOM 的呼叫回錯誤。不選 DOM 留在 thread-local、把 `ScriptEngine` 拿 DOM 的方法改成傳 closure 或回傳 guard：`ScriptEngine`、`V8Engine` 和 renderer 每個拿 DOM 的地方都要改，為了 wasm 動 JS 那條路（和第 4 條的方向相反）。不選 thread-local 放指向 engine 的 DOM 的指標：要 `unsafe`，`dom_wasm` 不寫。對照 Chromium：Blink 的 DOM 屬於 isolate，binding 從 isolate 找到它；「跑 script 時才借得到」是 machopo 自己的規則。
 11. **TodoMVC 用 Speedometer 3.1 的 vanilla ES5 版，複製進 `tests/sites/todomvc/`**（2026-11-10，1e 開始前，使用者）：它的 `dist/`（HTML、`base.css`、`index.css`、七份 JS，約 38 KB）原樣放進 repo，MIT 的授權聲明一起（`tests/sites/README.md` 記來源和 commit）；wasm 版的頁面用它的 markup 和樣式表、把 script 換成 guest，JS 的對照版就是它。不選測試頁直接指到 `../third_party/speedometer`：`cargo test` 會依賴 repo 外面的目錄，只有 `test.py` 的指令會先同步它。不選照規格自己寫一份：和 JS 版不是同一份 CSS，還要另外寫 JS 的對照版。guest 的原始碼和 `.wasm` 先放在 `crates/dom_wasm/tests/guests/`（`ci.py guests` 編的那個資料夾），頁面在 `tests/scenarios/pages/`。對照 Chromium：Speedometer 整份在 `third_party/`，測試從那裡讀；machopo 的 `../third_party` 在 repo 外面。
+12. **Store 的 handle 表一張，每格指任何一種物件、記它的 interface**（2026-11-10，第 2 段開始前）：格子是 `Member<Erased>`（節點和 `Event`、`Window`、`Location` 這些都放得進去），heap 外記的從節點的種類（`NodeKind`）換成那個物件最衍生的 interface 的編號（元素的照它的名稱，`dom_api` 的 `interface_of`），交出時算一次；`this` 的檢查是查「這個 interface 是不是成員的 interface 或它的子孫」的一個 bit，照舊不碰 DOM。main Store 的編號放在物件的 engine word：每個 DOM 物件都有放 wrapper 的那一格（`Cx::object_wrapper_edge`），所以「一個物件在一個 Store 裡一個編號」對所有物件都成立。guest 那一側還是一種 handle、一個 `release`。這同時解決兩件事：元素自己的 interface 的成員（`HTMLInputElement.value`、`checked`，現在因為表只記種類而整個排除）和節點以外的物件。不選非節點的物件每次交出配新的一格（草稿當時的看法，以為只有節點有 engine word）：比不出是不是同一個物件，也沒有比較好做。不選節點和其他物件分兩張表：guest 要分兩種 handle、兩個 `release`，元素的 interface 還是要另外解決。不選其他物件用 WIT 的 resource：兩套機制，RFC 0089 的決定 34 替節點否決過的缺點都在。限制：元素的 interface 交出時記下來之後不變（custom element 升級會改它；wasm 文件沒有 custom element）。對照 Chromium：每個 wrapper 帶著 `WrapperTypeInfo`，receiver 的檢查沿 parent 鏈比；每個物件在每個 world 最多一個 wrapper。
+13. **WIT 的成員是明列的清單，照需要加**（2026-11-10，第 2 段開始前，使用者）：`wit::FROZEN` 改成 WIT 的清單，繼續用；進清單的成員要符合規則（`this`、參數、回傳值是任何 interface 的物件、字串、數字、布林），第 2 段加 TodoMVC 用到的和同一個 interface 上成套的：`HTMLInputElement` 的 `value`、`checked`；`HTMLElement` 的 `focus()`、`blur()`、`click()`、`style`；`Element` 的 `remove()`、`nextElementSibling`、`previousElementSibling`、`classList`、`children`、`querySelectorAll`；`Document` 的 `body`、`defaultView`、`querySelectorAll`；`DOMTokenList` 的 `add`、`remove`、`toggle`、`contains`、`length`、`item`；`CSSStyleDeclaration` 的 `getPropertyValue`、`setProperty`、`removeProperty`、`cssText`；`HTMLCollection` 和 `NodeList` 的 `length`、`item`；`Event` 的 `type`、`target`、`currentTarget`、`preventDefault()`、`stopPropagation()`、`defaultPrevented`；`KeyboardEvent.key`；`MouseEvent` 的 `button`、`detail`；`Window` 的 `location`、`document`；`Location` 的 `hash`、`href`（實際的名稱和有沒有照表上的為準，做的時候對過）。兩種不是 plain 的型別：不定個數的字串（`classList.add`）在 WIT 是 `list<string>`；可省略的 dictionary（`focus(options?)`）先不放那個參數、等於用預設值，之後要時加成 record。union、callback、promise、`any` 照舊不進。不選符合規則的全部進 WIT（2026-11-10 算的：1757 個，現在 68 個）：每個成員是一個各自單型化的 host 函式，`dom_wasm` 的編譯時間和執行檔會明顯變大（沒有量），每個頁面的 linker 要登記那麼多函式，一千多個沒有 guest 測過的函式進了對外的介面；之後要全部時拿掉清單就好，反過來難。對照 Chromium：Blink 替 IDL 的每個成員產生 binding，沒有清單（machopo 的 JS 那一側也是）。
 
 ## 待決定
 
@@ -203,8 +199,8 @@ bool exports_todomvc_handle_event(uint32_t id, node_t event) {
 
 第 2 段開始前：
 
-5. 節點以外的物件的 handle（上面的 A、B、C）。
-6. TodoMVC 用到的、不是 plain 的成員各自怎麼進 WIT（`details.md` 的表）。
+5. （已決定，「已決定的事項」第 12 條。）
+6. （已決定，「已決定的事項」第 13 條。）
 
 第 3 段開始前：
 

@@ -14,7 +14,8 @@
 | 1c-2 `dom_wasm` 的 engine：`ScriptEngine`、`ScriptHost`、需要時才跑的 event loop、`start(document)`（決定 3、4、8、9） | 完成 | 2026-11-10 |
 | 1d renderer：prescan `<meta>`、選 engine、換頁時換 engine、載入 `application/wasm` 的 script（決定 2） | 完成 | 2026-11-10 |
 | 1e 靜態的 TodoMVC 的 guest、情境、`shell` 的測試；第 1 段的檢查 | 完成 | 2026-11-10 |
-| 2 節點以外的物件的 handle、放開凍結、TodoMVC 用到的成員 | 還沒開始 | |
+| 2a handle 的表指任何物件、記 interface（決定 12） | 完成 | 2026-11-10 |
+| 2b WIT 的清單加 TodoMVC 用到的成員，`list<string>`、可省略的 dictionary（決定 13） | 還沒開始 | |
 | 3 事件和 callback | 還沒開始 | |
 | 4 TodoMVC 的 guest、情境 | 還沒開始 | |
 
@@ -106,3 +107,12 @@
   - `cargo test --workspace`：通過（55 個測試 binary，3789 個測試通過、1 個 ignored）。
   - `test.py scenarios todomvc-wasm wasm-document` 通過；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過。
   - 沒有跑的：`test.py automation`（視窗那一層沒有動）、整套的情境、reftest 和 WPT（由 CI 跑）。
+
+### 2a（2026-11-10，macOS，Apple Silicon）
+
+- 開始前算過成員的分類（暫時的測試，沒有留）：表上 2799 個成員、plain 163 個、WIT 裡 68 個；放寬成「任何 interface 的物件、字串、數字、布林」之後 1757 個符合。更正了 `details.md`：`value`、`checked`、`blur()` 不是被凍結擋住，是元素的 interface 整個被排除。決定 12、13。
+- `crates/dom_wasm/src/handles.rs` 改寫：格子是 `Member<Erased>`，heap 外記 interface 的編號（取代節點的種類）和它在共用的表的哪一項；`give` 收 `ObjectRef`。`front.rs`：`this` 的檢查改成 `dom_api::typed::is_interface`（新的，查 `DESCENDANTS` 的一個 bit）、`this_as` 和 `ret_object` 能處理任何物件、節點的參數檢查是不是節點的 handle。`dom`：`ObjectRef::erase`、`Cx::object_engine_word`、`set_object_engine_word`。WIT 沒有變（golden 的測試照舊通過）。
+- 做的時候改的設計：原本打算 release 時清掉物件的 word，但 release 手上只有 `Gc<Erased>`、不知道型別，拿不到物件放 word 的那一格。改成不清、用的時候對過才算數（main 的對 Store 的表，共用的那一項對它自己的一個 handle），每一格記著自己的那一項。原本的兩個單元測試跟著改（word 留著）。
+- 新的單元測試兩個（任何物件的 handle 和 interface、過時的 word）。`cargo test -p dom_wasm`：14 個單元測試、33 個整合測試通過；`shell` 的 `wasm_documents`、情境 `todomvc-wasm`、`wasm-document` 通過。
+- mutation test（`mutants-2a.toml`，11 條）：11 條都抓到。跑完確認檔案都還原了。
+- 還沒有測試的：把不是節點的 handle 當節點的參數傳（`check_node` 的 trap）：現在的 WIT 交不出不是節點的 handle，2b 有了之後補。

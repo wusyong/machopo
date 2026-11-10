@@ -251,7 +251,7 @@ fn a_handle_not_the_stores_and_a_string_not_utf8_trap() {
             );
         } else {
             assert!(
-                message.contains("no node's handle of this store"),
+                message.contains("no handle of this store"),
                 "{case}: {message}"
             );
         }
