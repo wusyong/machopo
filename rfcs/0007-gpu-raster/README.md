@@ -56,7 +56,8 @@ GPU raster（vello_gpu 為主，不能用時退回 vello_cpu）是下一份 RFC�
 - **不經過 tile、直接畫成 Viz 的 quad 的快速路徑**（單色和圓角的矩形、陰影用專用的 shader，GPUI 的做法，`details.md` 的「GPUI 怎麼畫」）：GPU raster 量過不夠快才考慮。
 - WebP 等新的圖片格式：拿掉 Skia 之後只要加 `image-webp`，但另外做。
 - 新的 CSS 效果（`mask-image`、`backdrop-filter`、SVG 的 filter primitive）：等那些功能時再看 Vello 有沒有、要不要自己做（見「缺點」）。
-- 色彩管理（ICC）和 EXIF 的轉向：今天的 Skia 路徑也沒有（畫進沒有色彩空間的 surface、不讀 orientation），換掉不會變差。
+- 色彩管理（ICC）：今天的 Skia 路徑也沒有（畫進沒有色彩空間的 surface），換掉不會變差。EXIF 的方向在範圍內（已決定的事項第 16 條；原本以為今天不讀 orientation，量過之後不是）。
+- CSS 的 `image-orientation: none`。
 - OOP-R 的跨 process 部分：屬於 RFC 0004 或之後。
 
 ## 設計概要
@@ -110,10 +111,14 @@ GPU raster（vello_gpu 為主，不能用時退回 vello_cpu）是下一份 RFC�
 
 ### 圖片
 
-- **解碼**：PNG 用 `png`（machopo 的編碼已經用它，Chromium 的 Skia 也已經改用它），JPEG 用 `zune-jpeg`，GIF 用 `gif`（只有第一格，和今天一樣）。解碼的結果轉成 premultiplied 的 `Pixmap`，照現在的方式依 `ImageData::id` 快取在 process 全域的表裡；縮小的版本跟著同一個項目。
-- **讀尺寸**：各 crate 只讀檔頭，不解碼。
+- **解碼**：用 `image` crate，關掉預設的 feature、只開要的格式（已決定的事項第 14 條）。它底下是 `png`（machopo 的編碼已經用它，Chromium 的 Skia 也已經改用它）、`zune-jpeg` 和 `gif`；猜格式、各種顏色格式的轉換（調色盤、灰階、16 bit、`tRNS`、interlace、CMYK 的 JPEG）由它做。GIF 只有第一格，和今天一樣。解碼的結果轉成 premultiplied 的 RGBA8，照現在的方式依 `ImageData::id` 快取在 `RasterCache`（每個 compositor 一個）；第 2 步起縮小的版本跟著同一個項目。
+- **什麼時候解碼**（已決定的事項第 18 條）：和今天一樣，第一次畫到那張圖時，在 raster 的 thread 上（compositor thread 或 raster worker）。今天靠 Skia 的懶惰解碼（在 `RasterCache` 的鎖裡只建一個 Skia 的圖片，真的解碼在畫的時候）；`image` 沒有懶惰解碼，所以快取的每個項目是一個只填一次的格子：鎖只用來找到或建立格子，解碼在鎖外面做，兩條 worker 同時要同一張圖時一條解、另一條等它。沒畫到的圖不解碼，main thread 只讀檔頭。Skia 還在畫的期間（第 0 步到第 2 步之間），解好的像素交給 Skia 建成圖片（一次複製），交完就放掉自己那一份。
+- **壞掉和惡意的檔案**（已決定的事項第 20 條）：解碼和讀尺寸都包在 `catch_unwind` 裡，panic 當成解不開；`image` 的 `Limits` 擋住宣稱超大尺寸的檔頭。
+- **讀尺寸**：`image` 只讀檔頭，不解碼。
+- **Skia 今天的行為**（2026-11-10 對著 Skia 寫測試量的）：BMP 和 ICO 也解得開（Skia 的 codec 內建，照內容認，不看 MIME type）；JPEG 的 EXIF 方向，`image_size` 回傳沒轉的尺寸、畫的卻是轉過的圖（40×30、方向是 6 的 JPEG，尺寸是 40×30、Skia 的圖片是 30×40），所以今天這種圖片是變形的。
 - **JPEG 的解碼和 Skia（libjpeg-turbo）不逐像素相同**（IDCT 和色度 upsampling 的做法）：比對 JPEG 和 PNG 的 reftest 可能要 fuzzy，每個寫明原因。
-- **JPEG 的編碼**：`jpeg-encoder`（純 Rust）。quality 照 Blink 的設定對到量化表；輸出的 bytes 和今天不同，只要解得回來、品質相當。
+- **JPEG 的編碼**：`jpeg-encoder`（純 Rust，已決定的事項第 17 條）。照 Blink 的設定：疊在黑色上，quality 低於 100 時色度是 4:2:0、等於 100 時是 4:4:4；輸出的 bytes 和今天不同，只要解得回來、品質相當。
+- **編碼前轉成不是 premultiplied 的那一步**（PNG 和 JPEG 都用到，今天是 Skia 的 `readPixels`）：換成 machopo 自己的算式。趁 Skia 還在，用一個測試把所有的顏色和 alpha 的組合拿來和 Skia 的結果比，逐位相同之後再拿掉 Skia 的那一段，`toDataURL('image/png')` 的輸出不變。
 
 ### 追蹤缺的功能
 
@@ -231,6 +236,13 @@ Vello 缺的有十來項，分三種：在 playback 裡補上、使用者看不�
 11. **2026-11-10：補的地方註解以 `vello:` 開頭**（使用者照建議），寫缺什麼和上游的 issue。不選再加 `sanity.py` 的檢查（有的缺口沒有上游的 issue、有的補在好幾處，對應不是一對一，規則會有例外；真的發生過對不上再加），也不選不加標記（`render-gaps.md` 寫的函式名稱改名之後就指錯地方，`sanity.py docs` 不檢查函式名稱）。
 12. **2026-11-10：第 1 步的原型分兩段，各有一個檢查點，程式留著當第 2 步的基礎**（使用者照建議）。1a 先接常用的 op，看文字的外觀和文字多的 tile 的速度；1b 接完全部的 op 和組出來的功能，跑整套 reftest。不選一次接完才看（最可能讓這份 RFC 停下來的兩項，要等離屏的 filter 都做完才知道），也不選只接常用的 op、之後重寫（reftest 的結果沒有意義、組出來的功能的成本看不到、第 2 步要重寫）。
 13. **2026-11-10：不屬於 raster 的三件事拆開來排**（使用者照建議）。圖片的解碼和讀尺寸、JPEG 的編碼排在原型之前、先 merge（第 0 步）；ink bounds 留到第 2 步，和 playback 一起換。不選三件事都排在原型之後（原型要寫之後會丟掉的轉接，把 Skia 解碼的圖片轉成 Vello 的 pixmap；JPEG 解碼的像素差異和 Vello 的混在一起），也不選三件事都排在前面（ink bounds 改用 skrifa 之後和 Vello 畫的一致、和 Skia 畫的可能差一點，Skia 還在時會有一段時間量的和畫的不是同一套），也不選和原型同時在兩個 branch 上做（兩邊都改 `raster` 的同一個檔案）。代價：最後決定不繼續的話，第 0 步是多做的，但它本身有用。
+14. **2026-11-10：圖片的解碼和讀尺寸用 `image` crate**（使用者照建議），關掉預設的 feature（`rayon` 和十幾種格式），只開要的。它底下和各格式各自的 crate 是同一批 decoder（`png`、`zune-jpeg`、`gif`），省下的是猜格式和顏色格式的轉換，那是自己寫最容易出錯的部分；BMP、ICO、之後的 WebP 都只是開 feature。不選各格式各自的 crate（依賴最少、少一次 RGB 轉 RGBA 的複製、最像 Blink 的每種格式一個 `ImageDecoder`，但轉換和 GIF 第一格的合成要自己寫和測），也不選 zune 系列（`zune-png` 用的人少、沒有 GIF）。加進來時用 `cargo tree` 確認它用的 `png` 和 machopo 的是同一個版本、沒有帶進預期外的依賴，有問題再回來改。Servo 和 Blitz 用 `image`。
+15. **2026-11-10：BMP 和 ICO 留著**（使用者照建議）：`image` 多開 `bmp` 和 `ico`（內建的純 Rust 實作，不帶進新的依賴）。Skia 今天解得開這兩種（「圖片」的「Skia 今天的行為」），這一步的目標是格式不少於現在；Blink 也有 `BMPImageDecoder` 和 `ICOImageDecoder`。ICO 有好幾張圖時照 Blink 用最大的那一張，和今天的 Skia 不同的話在測試裡寫明。`docs/limitations.md` 的「圖片」補上這兩種；`<source type>` 照 MIME type 挑來源時認不認得 `image/x-icon`、`image/bmp` 是另一件事，不在這一步改。不選拿掉（沒有測試守著、文件也沒寫，但是 regression），也不選只留 BMP（ICO 比較常見）。
+16. **2026-11-10：EXIF 的方向照 Chrome，尺寸和圖都轉**（使用者照建議）。讀尺寸時也讀方向，方向是 5 到 8 時寬高對調；解碼後照方向轉好像素再快取，layout、`naturalWidth`、canvas 的 `drawImage` 拿到的都是轉好的（Blink 是畫的時候才套用，結果一樣）。今天是尺寸不轉、圖轉了，是 bug（「圖片」的「Skia 今天的行為」），這一步一定會改到這個行為，直接改成 Chrome 的 `image-orientation: from-image`（預設值），預期結果只改一次。不選都不轉（最簡單、和 `docs/limitations.md` 原本寫的一致，但直拍的照片是橫的，之後還要再改一次）。`image-orientation: none` 沒有做，記進 `docs/limitations.md`；原本「不在範圍內」寫的「不讀 orientation、換掉不會變差」不成立，改掉。`image` 不能只讀檔頭就拿到方向的話，自己從 JPEG 的 APP1 讀那一個欄位。做完時跑 WPT 的 `image-orientation` 的目錄。
+17. **2026-11-10：JPEG 的編碼用 `jpeg-encoder`**（使用者照建議）。它可以設 quality 和色度的取樣，Blink 的兩種設定（4:2:0、quality 100 時 4:4:4）都對得上。不選 `image` 內建的 encoder（不用多的依賴），也不自己寫。2026-11-10 讀了 `image` 的原始碼：發布的 0.25.10 的 `JpegEncoder` 是它自己的實作，只能設 quality 和像素密度，三個 component 的取樣寫死是 1×1（一律 4:4:4，文件註解寫的 4:2:2 和程式不符），Blink 在 quality 低於 100 時的 4:2:0 做不到；它還沒發布的 `main` 已經把 `JpegEncoder` 改成包著 `jpeg-encoder`，加了 `set_chroma_subsampling`。所以兩條路底下會是同一個 encoder，現在直接用 `jpeg-encoder`；`image` 發布那一版之後，它本來就會把 `jpeg-encoder` 帶進來，那時可以改成經過 `image` 的 API、少列一個直接的依賴。它的授權是「(MIT OR Apache-2.0) AND IJG」：今天 Skia 帶的 libjpeg-turbo 也是 IJG，不是新的義務，拿掉 Skia 之後它是唯一帶這個授權的依賴。它預設的量化表是 JPEG 標準 Annex K 的那一組（libjpeg 用的），另有幾組可選、不用；照 quality 縮放的算式是不是和 libjpeg 一樣，實作時確認。
+18. **2026-11-10：解碼照今天的時機，第一次畫時在 raster 的 thread 上做，在快取的鎖外面**（使用者照建議）。快取的每個項目是只填一次的格子，同一張圖只解一次。時機和 cc 的 `ImageDecodeCache` 一樣（要畫才解、不在 main thread），差別是解碼和畫在同一個 task 裡、沒有分開排程。不選載入時在 main thread 上解（最簡單、`raster` 裡沒有 decoder，但大圖卡住 script 和 layout，沒畫到的圖也解碼），也不選載入時交給另一條 thread 解、raster 等它（最接近 Chromium，但多一條 thread 或 pool 要管，這一步的範圍變大；之後量到第一個 tile 等解碼太久時再提）。
+19. **2026-11-10：`image` 用發布的版本，不用它的 `main`**（使用者照建議）。`main` 的 `JpegEncoder` 已經包著 `jpeg-encoder`、可以選取樣，用它就不用直接依賴 `jpeg-encoder`；但 `main` 比 v0.25.10 多 826 個 commit、正在改 decoder 的介面（「Version Next」列著 breaking changes），照它寫等發布時很可能要再改一次；直接釘上游的 commit 也是 machopo 沒有的一種依賴（現在只有 crates.io 的發布版和 `../third_party` 的 fork），沒有版本號和 release notes；省下的只是 `Cargo.toml` 的一行，執行的是同一份編碼的程式。`image` 發布下一版時，升級那一次再看要不要改成經過它的 API。
+20. **2026-11-10：解碼和讀尺寸包在 `catch_unwind` 裡，並設 `image` 的 `Limits`**（使用者照建議）。`image` 的 release notes 開頭的 Known issues 寫著很多 decoder 碰到惡意的輸入會 panic；圖片是網頁給的，不能讓 raster 的 thread 或 main thread 掛掉。panic 就當成解不開、什麼都不畫（今天 Skia 碰到壞檔案的行為），失敗的結果記在快取裡，同一張圖不重複解。沒有 panic 時的成本是多一層不會被 inline 的呼叫（unwind 是查表式的），量不出來；panic 的那一次是微秒到毫秒，加上預設的 panic hook 往 stderr 印一行（先不關，看到洗版再說）。`catch_unwind` 接不住無窮迴圈、吃光記憶體和 stack overflow，所以 `Limits` 設寬高和配置的上限，數值實作時對照 Blink。**這讓 workspace 不能把 `panic` 改成 `abort`**（改了壞圖會讓整個 process 結束），記進 `docs/limitations.md`。不選不包（壞圖讓整個分頁壞掉）；放進另一個 process 解碼要等拆 process，那之後這一層仍然有用（壞圖只是不顯示，不是分頁掛掉）。沒有實測過哪些輸入會 panic，照上游自己的說明處理；測試放壞掉的、截斷的、檔頭宣稱超大尺寸的檔案。
 
 ## 待決定
 
@@ -239,7 +251,6 @@ Vello 缺的有十來項，分三種：在 playback 裡補上、使用者看不�
 - **不支援的 filter 一直用離屏，還是改在 fork 裡做**：第 1 步量離屏的 color matrix 的成本（第 4 條：慢的話才 fork）；那時再看上游的 PR 合了沒有。
 - **Vello 的版本怎麼跟**：用 crates.io 上發布的版本（每一版都是 breaking，但有版本號）還是釘上游 `main` 的 commit（拿得到還沒發布的修正，例如合了之後的 `ColorMatrix`）；每次發布都升，還是釘住、需要時再升。升級時要重新對 reftest 和 `render-gaps.md`。
 - **mipmap 的品質和記憶體**：預先縮小用 box filter 還是更好的 filter（對照 Chromium 的 `SoftwareImageDecodeCache` 怎麼縮，原型時查），縮小的版本佔多少記憶體、什麼時候清（`docs/limitations.md` 的「圖片」記著 raster 的圖片快取沒有大小上限）。
-- **圖片解碼的 crate**：PNG 用 `png` 還是 `zune-png`；要不要直接用 `image` 一整包。第 0 步決定。
 
 ## 之後的可能
 
