@@ -1,0 +1,41 @@
+diff --git a/vello_cpu/src/text.rs b/vello_cpu/src/text.rs
+index 7205efd..c1d6d35 100644
+--- a/vello_cpu/src/text.rs
++++ b/vello_cpu/src/text.rs
+@@ -63,7 +63,11 @@ impl GlyphAtlasResources {
+     ) -> Self {
+         Self {
+             glyph_atlas: GlyphAtlas::with_config(eviction_config),
+-            image_cache: ImageCache::new_with_config(AtlasConfig::default()),
++            image_cache: ImageCache::new_with_config(AtlasConfig {
++                atlas_size: (page_width, page_height),
++                max_atlases: 4096,
++                ..AtlasConfig::default()
++            }),
+             glyph_renderer: Box::new(RenderContext::new_with(
+                 page_width,
+                 page_height,
+@@ -117,11 +121,19 @@ impl Resources {
+ 
+     fn ensure_glyph_resources(&mut self, level: Level) {
+         if self.glyph_resources.is_none() {
++            // machopo experiment: the atlas page's side and the entries' age
++            // from the environment.
++            let env = |name: &str, default: u64| {
++                std::env::var(name)
++                    .ok()
++                    .and_then(|v| v.parse().ok())
++                    .unwrap_or(default)
++            };
++            let side = env("MACHOPO_VELLO_ATLAS_SIZE", u64::from(DEFAULT_GLYPH_ATLAS_SIZE)) as u16;
++            let mut eviction = GlyphCacheConfig::default();
++            eviction.max_entry_age = env("MACHOPO_VELLO_ATLAS_AGE", eviction.max_entry_age);
+             self.glyph_resources = Some(GlyphAtlasResources::with_config(
+-                DEFAULT_GLYPH_ATLAS_SIZE,
+-                DEFAULT_GLYPH_ATLAS_SIZE,
+-                level,
+-                GlyphCacheConfig::default(),
++                side, side, level, eviction,
+             ));
+         }
+     }

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<!-- Material for the prototype's first checkpoint, not a test: text as Skia
+     and as Vello draw it, where they are likeliest to differ. Rendered with
+     `machopo --headless OUT.png --test-fonts`, once with each
+     `MACHOPO_RASTER`, at scale 1 and 2. With the test fonts, bold and
+     italic are synthesized (Lato has only its Medium). -->
+<meta charset="utf-8">
+<title>Text, Skia and Vello</title>
+<style>
+  body { margin: 0; font-family: Lato, sans-serif; }
+  .half { box-sizing: border-box; width: 400px; float: left; padding: 8px 12px; }
+  .light { background: #fff; color: #111; }
+  .dark { background: #111; color: #eee; }
+  .tint { background: #1a73e8; color: #fff; }
+  .gray { background: #f1f3f4; color: #5f6368; }
+  p { margin: 0 0 4px; white-space: nowrap; overflow: hidden; }
+  .s9 { font-size: 9px; } .s11 { font-size: 11px; } .s13 { font-size: 13px; }
+  .s16 { font-size: 16px; } .s20 { font-size: 20px; } .s32 { font-size: 32px; }
+  hr { clear: both; border: 0; margin: 0; }
+</style>
+<div class="half light">
+  <p class="s9">9px The quick brown fox jumps over the lazy dog 0123456789</p>
+  <p class="s11">11px The quick brown fox jumps over the lazy dog 0123</p>
+  <p class="s13">13px The quick brown fox jumps over the lazy dog</p>
+  <p class="s16">16px The quick brown fox jumps over the lazy</p>
+  <p class="s20">20px The quick brown fox jumps over</p>
+  <p class="s32">32px Hamburgefonstiv</p>
+  <p class="s13"><b>13px bold: The quick brown fox jumps over</b></p>
+  <p class="s16"><b>16px bold: The quick brown fox jumps</b></p>
+  <p class="s32"><b>32px bold: Hamburg</b></p>
+  <p class="s13"><i>13px italic: The quick brown fox jumps over</i></p>
+  <p class="s16"><i>16px italic: The quick brown fox jumps</i></p>
+  <p class="s16"><b><i>16px bold italic: The quick brown fox</i></b></p>
+</div>
+<div class="half dark">
+  <p class="s9">9px The quick brown fox jumps over the lazy dog 0123456789</p>
+  <p class="s11">11px The quick brown fox jumps over the lazy dog 0123</p>
+  <p class="s13">13px The quick brown fox jumps over the lazy dog</p>
+  <p class="s16">16px The quick brown fox jumps over the lazy</p>
+  <p class="s20">20px The quick brown fox jumps over</p>
+  <p class="s32">32px Hamburgefonstiv</p>
+  <p class="s13"><b>13px bold: The quick brown fox jumps over</b></p>
+  <p class="s16"><b>16px bold: The quick brown fox jumps</b></p>
+  <p class="s32"><b>32px bold: Hamburg</b></p>
+  <p class="s13"><i>13px italic: The quick brown fox jumps over</i></p>
+  <p class="s16"><i>16px italic: The quick brown fox jumps</i></p>
+  <p class="s16"><b><i>16px bold italic: The quick brown fox</i></b></p>
+</div>
+<hr>
+<div class="half tint">
+  <p class="s11">11px white on blue: The quick brown fox jumps over</p>
+  <p class="s13">13px white on blue: The quick brown fox jumps</p>
+  <p class="s16"><b>16px bold white on blue: a button's label</b></p>
+</div>
+<div class="half gray">
+  <p class="s11">11px gray on gray: The quick brown fox jumps over</p>
+  <p class="s13">13px gray on gray: The quick brown fox jumps</p>
+  <p class="s16"><b>16px bold gray on gray: a quiet label</b></p>
+</div>

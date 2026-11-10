@@ -418,6 +418,8 @@ pub struct RasterCache {
     /// How many images were decoded.
     #[cfg(test)]
     decodes: std::sync::atomic::AtomicUsize,
+    /// PROTOTYPE: what Vello keeps, when it draws the tiles.
+    pub(crate) vello: crate::vello_backend::VelloCache,
 }
 
 /// A variable font's instance: its font id, face index and the axes'

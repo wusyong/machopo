@@ -24,6 +24,7 @@ use gfx::{Color, RectF, Size};
 mod encode;
 mod image_decode;
 mod skia_backend;
+mod vello_backend;
 
 use skia_backend as backend;
 
@@ -147,7 +148,12 @@ pub fn playback_into(
         .expect("a tile's pixels fit a usize");
     pixels.resize(len, 0);
     if !size.is_empty() {
-        backend::playback(list, ops, params, cache, size, pixels);
+        // PROTOTYPE (not for main): `MACHOPO_RASTER=vello` has Vello draw.
+        if vello_backend::switches().vello && vello_backend::can_draw(size) {
+            vello_backend::playback(list, ops, params, &cache.vello, size, pixels);
+        } else {
+            backend::playback(list, ops, params, cache, size, pixels);
+        }
     }
     size
 }
@@ -181,7 +187,12 @@ pub fn draw_into(
     if cfg!(debug_assertions) {
         DRAWS_INTO.set(DRAWS_INTO.get().wrapping_add(1));
     }
-    backend::draw_into(list, cache, size, opaque, pixels);
+    // PROTOTYPE (not for main): `MACHOPO_RASTER=vello`, as tiles.
+    if vello_backend::switches().vello && vello_backend::can_draw(size) {
+        vello_backend::draw_into(list, &cache.vello, size, opaque, pixels);
+    } else {
+        backend::draw_into(list, cache, size, opaque, pixels);
+    }
 }
 
 thread_local! {

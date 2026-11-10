@@ -26,6 +26,9 @@ read-fonts.workspace = true
 png.workspace = true
 image.workspace = true
 jpeg-encoder.workspace = true
+vello_cpu.workspace = true
+glifo.workspace = true
+skrifa.workspace = true
 
 [dev-dependencies]
 fdeflate.workspace = true

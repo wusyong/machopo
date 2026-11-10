@@ -9,8 +9,8 @@
 | 步驟 | 狀態 | 完成日期 |
 | --- | --- | --- |
 | 0 圖片的解碼和讀尺寸、JPEG 的編碼換成純 Rust 的 crate（Skia 照舊畫） | 完成，還沒 merge | 2026-11-10 |
-| 1a 原型：常用的 op；量文字多的 tile、存截圖（第一個檢查點） | 進行中 | |
-| 1b 原型：全部的 op 和組出來的功能；整套 reftest（第二個檢查點） | 還沒開始 | |
+| 1a 原型：常用的 op；量文字多的 tile、存截圖（第一個檢查點） | 完成：檢查點通過（不 merge） | 2026-11-10 |
+| 1b 原型：全部的 op 和組出來的功能；整套 reftest（第二個檢查點） | 進行中 | |
 | 2 playback 換成 vello_cpu、ink bounds 改用 skrifa、拿掉 skia-safe、加上列出缺的功能的文件 | 還沒開始 | |
 | 3 改進（文字的 gamma 和對比、漸層的 dithering、fork 裡的 `ColorMatrix`；可能不需要） | 還沒開始 | |
 
@@ -92,3 +92,170 @@
 - 那三個再跑一次、各 8 次（`--suites NewsSite-Next,TodoMVC-WebComponents,TodoMVC-Vue --runs 8`）：NewsSite-Next −1.2%（94.1 → 92.9）、TodoMVC-WebComponents −3.2%（23.8 → 23.0）、TodoMVC-Vue −4.0%（22.2 → 21.3），區間都重疊。
 - 第一次的差別是雜訊：兩邊開頭的幾次都比較慢，之後才穩定（NewsSite-Next 各次的中位數，`against` 是 123.5、125.4、115.2、92.8、93.9、91.8、91.3、93.9，`current` 是 123.0、114.0、92.8、92.1、90.8、92.1、93.2、91.9）。只跑 3 次時，慢的那幾次落在哪一邊就決定了結果（第一次 `against` 的三次是 122.8、93.3、119.0，`current` 是 115.0、112.9、123.6）。開頭為什麼慢沒有查。
 - 結論：看不出第 0 步讓 Speedometer 變慢或變快。計時區間裡幾乎沒有圖片的解碼和 JPEG 的編碼。
+
+### 第 1a 步：原型，常用的 op（2026-11-10，Windows 11，AMD Radeon RX 7900 XTX；不 merge）
+
+**做了什麼**：`crates/raster/src/vello_backend.rs`，`MACHOPO_RASTER=vello` 時 tile 由 vello_cpu 畫（上游 `main` 的 `112736d`），預設還是 Skia；canvas 的 bitmap（`draw_into`）兩種模式都是 Skia。接了：transform、`ClipRect`、`ClipRRect`、`ClipPath`、`SaveLayerAlpha`、`SaveLayer` 的 alpha 和 blend mode、`DrawColor`、`DrawRect`、`ClearRect`、`DrawRRect`、`DrawDRRect`、`DrawLine`、`DrawPath`、`DrawClipped`、dash、28 種 blend mode、三種漸層、`DrawImage`、圖片和漸層的 `Tiled` shader、`DrawGlyphs`（可變字型、合成粗體和斜體）、單一圓形半徑、沒有洞的 `DrawShadow`、`DrawRecord`。沒接的跳過、在 log 裡計數（「vello prototype: not drawn」）：`ClipPaths`、image filter、mask blur、有洞或四個角不同的陰影、每個 glyph 的旋轉、`Tiled` 的 spacing、decal、record 和重複的漸層圖塊、`WritePixels`。
+
+**跳過的 op**：`about:demo` 的前 1200px、文字比較頁、`bench.py raster` 的三頁（Gutenberg、SQLite、NewsSite-Next）都是 0 個。
+
+**找到的 bug**（原型自己的）：一開始沒有把 tile 的起始 transform 設給 context，每個 tile 畫的都是頁面左上角；合成斜體的 skew 正負號反了（上游的測試用負的 tan）。
+
+**文字的外觀**（`rfcs/0007-gpu-raster/text-compare.html`，`machopo --headless --test-fonts`，800×420，Skia 和 Vello 各一張，放大 4 倍對照看過）：
+
+- 深色背景上的淺色字：Skia 比較粗，Vello 比較細。
+- 淺色背景上的深色字：反過來，Skia 比較細、淡，Vello 比較粗、黑。Skia 的 gamma 和對比的調整讓深底的字變粗、淺底的字變細；Vello 兩邊一樣。
+- 不同的 pixel：1x 是 336,000 個裡的 43,658 個（13.0%），平均差 31、最大 116；2x 是 1,344,000 個裡的 91,432 個（6.8%），平均差 31、最大 131。都在 glyph 的邊緣。
+- 其他頁面（1x）：`about:demo` 的前 1200px 10.1% 的 pixel 不同（平均 20、最大 123），Gutenberg 的開頭 5.2%（平均 25、最大 120）。
+
+**速度**（`python3 scripts/bench.py raster`，headless、scale 2、預設的 raster thread，`perf` profile；各跑一次，背景有別的程式在播影片，不同批之間的比較要保守看）。每個 tile 的 `PrepareTiles` 時間（ms），括號裡是總時間和 tile 數：
+
+| 頁面 | 階段 | Skia | Vello，整段文字都交給它 | 同左，開 glyph atlas | Vello，先濾掉離 tile 遠的 glyph | 同左，開 glyph atlas |
+| --- | --- | --- | --- | --- | --- | --- |
+| Gutenberg | 捲動 | 0.381（247 / 649） | 0.988（641 / 649） | 1.894（1230 / 649） | 0.571（371 / 649） | 2.691（1746 / 649） |
+| Gutenberg | 改視窗大小 | 0.151（944 / 6270） | 0.411（1384 / 3365） | 0.874（1662 / 1903） | 0.152（970 / 6400） | 1.468（2060 / 1403） |
+| SQLite | 改視窗大小 | 0.085（469 / 5514） | 0.425（1555 / 3656） | 0.543（1491 / 2744） | 0.164（896 / 5475） | 0.694（1503 / 2165） |
+| NewsSite-Next | 捲動 | 0.266（286 / 1077） | 0.308（331 / 1077） | 0.875（943 / 1077） | 0.195（210 / 1077） | 1.182（1273 / 1077） |
+| NewsSite-Next | 改視窗大小 | 0.536（2037 / 3800） | 0.285（1664 / 5840） | 1.208（2424 / 2007） | 0.112（1271 / 11346） | 1.051（2086 / 1985） |
+
+（SQLite 的捲動沒有 raster 任何 tile。改視窗大小的階段在固定的時間裡能做幾次更新就做幾次，所以各欄的 tile 數不同。）
+
+- **整段文字都交給 Vello 時，文字多的頁面慢 2.6 到 5 倍**。原因：一段文字是一個 op，它碰到的每個 tile 都收到整個 op；Vello 先把 glyph 的輪廓攤平才知道它在 tile 外面，Skia 靠 glyph 的範圍先跳過。
+- **先濾掉離 tile 遠的 glyph**（距離超過字級的兩倍加上 stroke 的寬度，在 playback 裡）之後：Gutenberg 捲動 1.5 倍、改大小 1.0 倍，SQLite 1.9 倍，NewsSite-Next 捲動 0.73 倍、改大小 0.21 倍。濾和不濾畫出來的圖逐像素相同（文字比較頁 2x，1,344,000 個 pixel 0 個不同）。`MACHOPO_VELLO_NO_CULL=1` 關掉它。
+- **Vello 實驗性的 glyph atlas**（`atlas_cache(true)`，`MACHOPO_VELLO_GLYPH_CACHE=1`）在每一頁都更慢，不管有沒有濾 glyph：不能用。為什麼更慢沒有查。
+
+**跑過的檢查**：`cargo test -p raster` 通過（預設是 Skia，75 個）；`cargo clippy -p raster --all-targets -- -D warnings`、`cargo fmt` 通過；`sanity.py` 的 `deps`、`boundary`、`unsafe`、`numerics` 通過（開關原本是 process 共用的 `static`，`boundary` 抓到，改成每條 thread 讀一次；原型的三個 thread-local 列進 `scripts/sanity.py` 的 `STATICS_ALLOWED`，其中兩個標成只給原型用，第 2 步拿掉時 sanity 會提醒把它們從清單拿掉）。`vello_backend.rs` 整個檔案帶一個 `expect(clippy::arithmetic_side_effects)`（kurbo 的 f64 幾何運算），進 `main` 之前要逐處看。沒有為 Vello 的 playback 寫測試、沒有跑 mutation test：這一段是不 merge 的原型，第 2 步才補。
+
+**速度，重量一次**（使用者要求；同一個執行檔，Skia 和有濾 glyph 的 Vello 輪流各跑 3 次：Skia、Vello、Skia、Vello、Skia、Vello，每次約 30 秒）。每個 tile 的 `PrepareTiles` 時間（ms），三次由小到大：
+
+| 頁面 | 階段 | Skia | Vello | 中位數的比（Vello / Skia） |
+| --- | --- | --- | --- | --- |
+| Gutenberg | 捲動 | 0.564、0.597、0.616 | 0.310、0.669、0.690 | 1.12 |
+| Gutenberg | 改視窗大小 | 0.143、0.154、0.203 | 0.145、0.148、0.149 | 0.97 |
+| SQLite | 改視窗大小 | 0.090、0.093、0.094 | 0.145、0.150、0.152 | 1.62 |
+| NewsSite-Next | 捲動 | 0.292、0.295、0.296 | 0.236、0.250、0.270 | 0.85 |
+| NewsSite-Next | 改視窗大小 | 0.174、0.187、0.192 | 0.107、0.108、0.112 | 0.58 |
+
+- 捲動時最長的一次更新（ms，三次）：Gutenberg 是 Skia 8.9、11.7、7.7，Vello 9.5、11.6、8.4；NewsSite-Next 是 Skia 17.9、18.1、18.4，Vello 10.1、9.5、9.8。
+- 和上面只跑一次的表比，有兩格差很多，那兩格當時是離群值：Gutenberg 捲動的 Skia（0.381，這次三次都在 0.56 到 0.62），NewsSite-Next 改視窗大小的 Skia（0.536，這次 0.17 到 0.19）。只跑一次的數字不能拿來下結論。
+- Gutenberg 捲動的 Vello 三次裡有一次是 0.310，另外兩次是 0.67 左右，原因沒查；這一格的比（1.12）最不確定。
+- 結論：濾掉遠的 glyph 之後，Vello 在文字多的頁面和 Skia 差不多到慢 1.6 倍（SQLite 最慢，三次很一致），圖和色塊多的頁面快 15% 到 40%。glyph atlas 沒有重量（上面量過兩次都明顯更慢）。
+
+**SQLite 的那一頁慢在哪**（使用者要求；原型加了 `MACHOPO_VELLO_PROFILE=1`，把每個 tile 的時間照 op 拆開記在 log；`bench.py raster --pages sqlite,gutenberg`，改視窗大小的階段，4096 個 tile 的平均）：
+
+| | SQLite | Gutenberg |
+| --- | --- | --- |
+| 每個 tile | 127 µs | 176 µs |
+| `DrawGlyphs` | 104 µs | 112 µs |
+| ops 之後的 render | 20 µs | 60 µs |
+| 其他的 op 合計 | 約 3 µs | 約 4 µs |
+| 每個 tile 幾個 `DrawGlyphs` | 7.4 | 3.8 |
+| 每個 tile 交給 Vello 的 glyph（濾之前） | 106（356） | 72（280） |
+
+- 時間幾乎都在文字：每個 glyph 約 1 µs（SQLite）到 1.5 µs（Gutenberg）。SQLite 每個 tile 的 glyph 比較多、切成比較多段，所以比 Gutenberg 吃虧。
+- **machopo 自己快取輪廓沒有用**（`MACHOPO_VELLO_OUTLINE_CACHE=1`：一般的 glyph 的輪廓第一次用到時用 skrifa 讀出來、以字型的單位存著，一段文字合成一條 path 一次填）：SQLite 的 106 個 glyph 全部走這條路，`DrawGlyphs` 還是 106 µs（原本 104）。Skia、Vello、Vello 加輪廓快取輪流各 3 次，每個 tile 的時間對 Skia 的比：Gutenberg 捲動 1.08 和 1.08、改大小 1.09 和 1.07，SQLite 1.69 和 1.67，NewsSite-Next 捲動 0.77 和 0.75、改大小 0.57 和 0.53。畫出來幾乎一樣（文字比較頁 1x 有 18 個 pixel 不同、最大差 4，2x 有 6 個、最大差 1）。所以時間不在讀字型的輪廓，在 Vello 把 path 攤平、產生 strip。
+- **Vello 的 glyph atlas 其實有省到畫文字的時間，慢在每次 render 之前的同步**：開了之後（`MACHOPO_VELLO_GLYPH_CACHE=1`）SQLite 的 `DrawGlyphs` 從 104 µs 降到 25 µs，但 ops 之後的 render 從 20 µs 變成 1124 µs。讀 `vello_cpu/src/text.rs` 的 `sync_glyph_cache`：每次 render 前把還沒進 atlas 的 glyph 畫進一個 context、再合成到 atlas 的那一頁，atlas 的一頁是 4096×4096（`DEFAULT_GLYPH_ATLAS_SIZE`，不是公開的設定）。machopo 一個 tile render 一次，每個 tile 幾乎都有新的 glyph（位置是 subpixel 的），所以每個 tile 都付一次。這是讀原始碼的推論，沒有再往下量是哪一步佔了那 1 ms。
+- 這一輪 Gutenberg 捲動的 Skia 三次是 0.369、0.672、0.675，上一輪是 0.564、0.597、0.616：這一格兩邊都不穩。
+
+**Vello 的 glyph atlas 的同步**（使用者要求；Vello 複製一份到暫存目錄、`Cargo.toml` 暫時用 `[patch]` 指過去，改 `vello_cpu/src/text.rs` 讓 atlas 的頁面大小和項目的保留時間可以從環境變數設：`MACHOPO_VELLO_ATLAS_SIZE`、`MACHOPO_VELLO_ATLAS_AGE`；改動存成 `rfcs/0007-gpu-raster/vello-atlas-experiment.patch`，`[patch]` 那一段不 commit）：
+
+- **原因確認了**：`sync_glyph_cache` 每次 render 前把還沒進 atlas 的 glyph 畫進一個和 atlas 的頁面一樣大的 `RenderContext`，再 render 到那一頁；頁面是 4096×4096。SQLite 的那一頁，原型內部的計時（µs，每個 tile）：
+
+  | atlas 的頁面 | `DrawGlyphs` | ops 之後的 render | 合計 |
+  | --- | --- | --- | --- |
+  | 不開 | 100 | 20 | 123 |
+  | 4096（上游的預設） | 25 | 1124 | 約 1150 |
+  | 1024 | 20 | 90 | 114 |
+  | 512 | 21 | 73 | 98 |
+  | 256 | 21 | 68 | 93 |
+
+- **保留時間**（`GlyphCacheConfig::max_entry_age`，預設 64 次 render；machopo 一個 tile 一次 render）：頁面 512 時，64 是 95 µs，4096 是 82 µs，一百萬是 83 µs。
+- **斜的 glyph 開 atlas 會畫錯**：文字比較頁的斜體那幾行，同一行裡有的 glyph 是斜的、有的是正的（和不開 atlas 的圖比，1x 最大差 238）。看起來 atlas 的 key 不分 `glyph_transform`。原型裡斜的文字不走 atlas 之後，和不開 atlas 的只差位置的量化（1x 是 10.0% 的 pixel、最大差 60、平均 11；放大看粗細一樣）。合成粗體沒看到問題。
+- **三方的比較**（Skia、Vello、Vello 加 atlas（頁面 512、保留 4096）輪流各 3 次）。每個 tile 的 `PrepareTiles`（ms，三次由小到大）和對 Skia 的中位數的比：
+
+  | 頁面 | 階段 | Skia | Vello | Vello 加 atlas | Vello / Skia | 加 atlas / Skia |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | Gutenberg | 捲動 | 0.622、0.651、0.661 | 0.676、0.707、0.755 | 0.441、0.622、0.692 | 1.09 | 0.96 |
+  | Gutenberg | 改視窗大小 | 0.146、0.154、0.167 | 0.149、0.150、0.166 | 0.114、0.123、0.131 | 0.97 | 0.80 |
+  | SQLite | 改視窗大小 | 0.091、0.092、0.096 | 0.145、0.158、0.161 | 0.111、0.118、0.124 | 1.71 | 1.28 |
+  | NewsSite-Next | 捲動 | 0.295、0.296、0.315 | 0.213、0.250、0.255 | 0.235、0.250、0.269 | 0.84 | 0.84 |
+  | NewsSite-Next | 改視窗大小 | 0.179、0.183、0.187 | 0.108、0.122、0.123 | 0.101、0.104、0.114 | 0.66 | 0.57 |
+
+- 結論：atlas 的頁面改小、保留時間拉長之後，五格裡四格比 Skia 快或一樣，最慢的 SQLite 從 1.71 倍降到 1.28 倍。剩下的差在 render（開 atlas 後 59 到 73 µs，不開 20 µs：從 atlas 貼 glyph 比填純色貴，每次 render 還是同步一次），沒有再往下查。這兩個設定在上游不是公開的，要用就得改 Vello：這是要不要 fork 的第一個具體的候選。
+- 之前說「可能比 Skia 還快」是拿原型內部的計時（不含上傳和其他）和 Skia 的 `PrepareTiles` 比，基準不同，不成立。
+
+**1a 收尾**：檢查點通過之後，輪廓快取和 atlas 的開關從原型拿掉（atlas 回到上游的預設：不開），`Cargo.toml` 指向本機 Vello 的 `[patch]` 拿掉；剩下的開關是 `MACHOPO_RASTER`、`MACHOPO_VELLO_NO_CULL` 和 `MACHOPO_VELLO_PROFILE`。拿掉之後文字比較頁和之前的圖逐像素相同。
+
+### 第 1b 步：原型，全部的 op 和組出來的功能（2026-11-10，Windows 11，AMD Radeon RX 7900 XTX；不 merge）
+
+**做了什麼**：`vello_backend.rs` 重寫，1a 跳過的都接上；canvas 的 bitmap（`draw_into`）也由 Vello 畫。
+
+- image filter：layer 的 op（到它的 `Restore`）畫到旁邊一個四周加大的 context（加大的量是 filter 的範圍乘上 scale，最多 1024 px），render 成 pixmap，套 filter，再當成圖片帶著 layer 的 alpha 和 blend mode 畫回去。Blur 和 DropShadow 是把 pixmap 畫進帶 Vello filter 的 layer；ColorMatrix 是 machopo 逐個 pixel 算（先 unpremultiply）；Chain 照順序。因為旁邊的 context 比 tile 大，tile 外面的內容也在裡面，模糊跨過 tile 邊界時有東西可以模糊。
+- `ClipPaths`：每條 path 照它的 fill rule 填進一張和 context 一樣大的 pixmap，做成 alpha mask，`push_mask_layer`。
+- `DrawShadow`：單一圓形半徑、沒有洞的用 `fill_blurred_rounded_rect`；其他的把形狀（減掉洞）畫到旁邊、模糊、畫回去。兩種都先 clip 到盒子的裡面或外面。
+- mask blur（`PaintFlags.blur`）：op 不帶 blur 畫到旁邊、模糊、帶著原本的 blend mode 畫回去。
+- 圖案 shader：record、有 spacing 的、會重複的漸層圖塊，先把一個圖塊（連同間隔）照看到的大小畫成 pixmap（每邊最多 4096）再當圖片重複；`decal` 用 clip。
+- 每個 glyph 的旋轉：一個 glyph 一個 run。
+- canvas：bitmap 原本的像素先畫進場景當底，再畫錄製的 op，最後整個 render 回去；`WritePixels` 先把前面的 render 進 bitmap、寫入像素、reset、把還在的 clip 推回去。opaque 的畫完把 alpha 設回 255。
+
+**原型自己的 bug，修了的**：
+
+- 圓角矩形原本用三次曲線近似，圓和橢圓走 `gfx::Path` 的 conic：同一個形狀兩種邊，machopo 的 reftest 有 4 個不過。改成都用 `gfx::Path::add_round_rect` 之後 3 個通過（`canvas/c4-paths.html`、`effects/clip-path.html`、`svg/ellipses.html`），WPT 的 `clip-path-*Box-1e.html` 三個和 `clip-path-polygon-014.html` 也通過。
+- canvas 上破壞性的 blend mode（`ClearRect`、`copy`）沒有作用：原本是畫完才用 `TargetInit::SrcOver` 疊到 bitmap 上，場景裡沒有 bitmap 原本的像素可以拿掉。改成先把 bitmap 畫進場景（每次 flush 複製一份；Skia 是直接畫在 bitmap 上）。
+- 圖片的來源矩形：取樣取到矩形外面的像素。改成先把那一塊裁成自己的 pixmap。
+- 長度是 0 的 dash 配圓頭：kurbo 不畫，Skia 畫成一個點。給它 0.001 的長度。
+- shader 的填色沒有帶 flags 的 alpha（canvas 的 `globalAlpha` 配 pattern 和漸層）。
+- conic 切成 4 段二次曲線，放大很多倍的弧邊緣偏掉（WPT 的 `2d.path.arc.scale.1.html`）：改切 16 段。
+
+**用 Vello 跑整套**（`MACHOPO_RASTER=vello`；最後一輪）：
+
+- `python3 scripts/test.py reftest`：195 個都和預期一樣（用的是原本為 Skia 寫的容許誤差）。
+- `python3 scripts/test.py scenarios`：78 次執行，0 個失敗。
+- `python3 scripts/test.py wpt`（整套）：13,917 個測試、293,653 個檢查，107 個檢查和預期不一樣，分屬 50 個測試：
+  - **Vello 自己 panic，1 個**：`css/css-tables/crashtests/caption-repaint-crash.html`，`vello_common/src/clip.rs:723` 的 `attempt to subtract with overflow`（`cur_strip_fill_area` 的 `next.x - x`），compositor thread 跟著結束。debug build 才 panic，release 沒有溢位檢查。沒有查是哪個 op 觸發的。
+  - **canvas，5 個**：`2d.composite.clip.destination-atop`、`destination-in`、`source-in`、`source-out`（破壞性的 blend mode 不受不隔離的 clip 限制，clip 外面的像素也被改了）；`2d.line.cross`（沒查）。
+  - **reftest，35 個**，每個的截圖和參考圖比過：
+    - 最大差 1 的 31 個：1 到 30 個 pixel 的 23 個，142 到 588 個 pixel 的 8 個（`css-tables/tentative/paint/background-image-*` 三個、`text-transform-full-size-kana-005` 到 `007`、`box-shadow-041`、`box-shadow-042`）。
+    - 最大差 3 的 1 個：`clip-path-animation-custom-timing-function.html`（628 個 pixel）。
+    - 最大差 31 的 2 個：`text-decoration-thickness-percent-001.html`（60 個 pixel）、`vars-font-shorthand-001.html`（600 個）。
+    - **畫錯的 1 個**：`css-images/multiple-position-color-stop-radial.html`（5000 個 pixel 差 255：100×100 的方塊一半的顏色錯；`radial-gradient(ellipse 50px 10000px at 0px 50px, blue 0% 50px, green 50px)`）。沒查是極端的橢圓還是同一個位置的兩個色標。
+  - **原本預期失敗、現在通過，3 個**：`css-transforms/scale/svg-scale-016.html`（它的 `.ini` 記著只差邊緣的反鋸齒）、`html/rendering/widgets/button-layout/display-other.html`、`baseline-alignment-and-overflow.tentative.html`（後兩個為什麼通過沒查）。
+  - **和繪圖無關、每一輪不一樣的，6 個**（計時和檔案時間的）：`navigation-timing/` 的四個、`cssom-view/scroll-behavior-smooth-navigation.html`、`FileAPI/file/File-lastModified.html`。第二輪多出來的 13 個（圖片載入、srcset）單獨重跑，Vello 下 12 個通過、Skia 下都通過：整套一起跑時機器太忙。
+  - 這一輪 `test.py wpt` 的 Python process 在最後回報 `Segmentation fault`，結果的 log 已經寫完；原因沒查，前兩輪沒有。
+- `cargo test --workspace --no-fail-fast`：3741 個通過，8 個失敗：
+  - 不適用的 4 個（直接看 Skia 的快取）：`raster` 的 `a_decoded_image_is_dropped_with_its_data`、`an_image_is_decoded_once`、`threads_share_a_cache`，`renderer` 的 `the_typefaces_drawn_with_stay_cached_for_the_next_flush`。
+  - mipmap 還沒做的 1 個：`raster` 的 `a_decoded_image_is_drawn_as_its_pixels_sampled_as_its_filter_says`。
+  - 差 1 的 2 個：`renderer` 的 `a_flush_sends_the_recording_to_the_thread_and_forgets_it`（191 對 192）、`browser` 的 `navigation::links::canvas_2d`（漸層中間的顏色 127,0,128 對 126,0,129）。
+  - 不穩定的 1 個：`shell` 的 `devtools_initiators::script_asks_with_its_stack`，單獨跑通過。
+  - `raster` 的 75 個單元測試（對著 Skia 的像素寫的）有 71 個照原樣通過。
+
+**還沒做、還沒查的**：mipmap（第 2 步）；Vello 的 playback 自己的測試和 mutation test（第 2 步）；上面寫「沒查」的每一項；filter 在 tile 邊緣的接縫沒有另外用測試確認（加大的 context 是照推論做的，reftest 都通過）；離屏的做法每個 tile 都配置新的 context 和 pixmap，速度沒有量；開了 `MACHOPO_RASTER=vello` 的 `bench.py raster` 在 1b 之後沒有重量。
+
+**跑過的檢查**：`cargo test -p raster`（預設 Skia）通過；`cargo clippy -p raster --all-targets -- -D warnings`、`cargo fmt` 通過；`sanity.py` 的 `docs`、`boundary` 通過。
+
+**第二個檢查點前補查的**（使用者要求，2026-11-10）：
+
+- **Vello 的 panic**：最小的重現是一條平頭（butt cap）的 stroke，整條在 context 的右邊緣之外、而且剛好從邊緣開始（寬 3 的直線在 x = 寬度 + 1.5），clip 的多邊形也從邊緣開始；`vello_common::clip` 的 `cur_strip_fill_area` 算 `next.x - x` 時變成負的。32 寬和 256 寬的 context 都會；線往左移一個 pixel（碰到最後一欄）就不會，圓頭的 stroke 也不會。盒子的邊框一邊一條線、各自 clip 成梯形，邊框貼著 tile 的邊界時，隔壁的 tile 收到的就是這種。原型的處理：clip 整個在 context 外面（`Player::shows`）時不推進 Vello，它底下的東西也不畫；那個 crashtest 不再 panic。`vello_backend` 的測試 `upstream_panics_on_a_clipped_stroke_at_the_right_edge` 記著上游的行為（上游修了它就失敗）。這只避開這一種；第 2 步還是要包 `catch_unwind`。
+- **radial gradient 畫錯**（`multiple-position-color-stop-radial.html`）：和橢圓的形狀無關。最後兩個色標都在 offset 1、顏色不同（結尾的硬切）時，超過終點的地方 Vello 用它在 offset 1 查到的顏色（兩個裡的第一個），Skia 用最後一個。原型把這種漸層拉長一倍、色標的 offset 減半（只做不重複的 linear 和 radial），和 Skia 的圖逐像素相同。一開始對「最後兩個色標同一個 offset」都這樣做，`css-images/gradient-move-stops.html`（硬切在 70%）因為 LUT 的解析度減半差了 1（3900 個 pixel）：改成只在 offset 是 1 時做，`test.py wpt css/css-images/` 的 744 個檢查都和預期一樣。
+- **`2d.line.cross.html`**：線寬 200、兩段各 10 px 的直角、bevel 的接合，照規格畫布裡沒有東西；kurbo 的 stroker 在線寬遠大於線段長度時，內側的接合多畫了一塊。沒有修，machopo 這一側沒有合理的繞法。
+- **Vello 的 f32 管線**（`RenderMode::OptimizeQuality`，`vello_cpu` 的 `f32_pipeline` feature；原型的 `MACHOPO_VELLO_QUALITY=1`）：結果有變的 50 個 WPT 測試用兩種管線各跑一次，f32 的讓 5 個通過（`css-tables/tentative/paint/background-image-column.html`、`-column-collapsed.html`、`-row-collapsed.html`，`box-shadow-041.html`、`-042.html`：差 1 的裡面 pixel 數最多的，漸層和模糊的混色），沒有讓哪一個變壞；其餘差 1 的沒有變（都和文字有關，1 到 30 個 pixel 的那些）。速度（Skia、u8、f32 輪流各 3 次，每個 tile 的 `PrepareTiles` 對 Skia 的中位數的比）：
+
+  | 頁面 | 階段 | Skia（ms，三次） | Vello u8 | Vello f32 | u8 / Skia | f32 / Skia |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | Gutenberg | 捲動 | 0.589、0.684、0.721 | 0.653、0.714、0.744 | 0.810、0.947、0.956 | 1.04 | 1.38 |
+  | Gutenberg | 改視窗大小 | 0.135、0.150、0.152 | 0.145、0.159、0.160 | 0.264、0.266、0.270 | 1.06 | 1.77 |
+  | SQLite | 改視窗大小 | 0.086、0.092、0.095 | 0.147、0.157、0.161 | 0.245、0.249、0.253 | 1.71 | 2.72 |
+  | NewsSite-Next | 捲動 | 0.299、0.302、0.335 | 0.234、0.265、0.289 | 0.349、0.419、0.427 | 0.88 | 1.39 |
+  | NewsSite-Next | 改視窗大小 | 0.170、0.184、0.189 | 0.107、0.111、0.124 | 0.223、0.223、0.230 | 0.60 | 1.21 |
+
+  f32 的只消掉 5 個、每一格都比 Skia 慢：不用。u8 的數字和 1a 的一樣，1b 加的東西沒有讓這三頁變慢（這三頁沒有 filter、複雜的陰影和 mask，離屏的成本這裡看不到）。
+- **兩個原本預期失敗、現在通過的測試和 Vello 無關**：`html/rendering/widgets/baseline-alignment-and-overflow.tentative.html`（60 個 subtest）和 `button-layout/display-other.html` 用 Skia 單獨跑也是通過。前者的 `.ini` 寫的原因是 machopo 沒有 `document.images`：`main` 上的預期結果過時了，不是這份 RFC 的，沒有動。
+
+**補查之後的整套**（`MACHOPO_RASTER=vello`，u8 的管線）：
+
+- `test.py reftest` 195 個都和預期一樣；`test.py scenarios` 78 次執行 0 個失敗。
+- `test.py wpt`：Vello 造成的不通過是 39 個測試：
+  - canvas 5 個：`2d.composite.clip.destination-atop`、`destination-in`、`source-in`、`source-out`，`2d.line.cross`。
+  - reftest 34 個：最大差 1 的 31 個、最大差 3 的 1 個、最大差 31 的 2 個（清單在上面第 1b 步的那一段，少了已經通過的 radial gradient）。
+  - 另外 `svg-scale-016.html` 從預期失敗變成通過；其餘結果有變的是上面那兩個過時的預期結果和每一輪不一樣的計時類測試。
+- `cargo test --workspace --no-fail-fast`：3743 個通過，7 個失敗：4 個直接看 Skia 的快取（不適用）、1 個 mipmap（還沒做）、2 個差 1（`renderer` 的 `a_flush_sends_the_recording_to_the_thread_and_forgets_it`、`browser` 的 `navigation::links::canvas_2d`）。

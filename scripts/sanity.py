@@ -291,6 +291,14 @@ STATICS_ALLOWED = {
     ("crates/html/src/fast_path.rs", "FAST_PARSES"): "tests' counters (thread-local)",
     ("crates/html/src/fast_path.rs", "DECODES"): "tests' counters (thread-local)",
     ("crates/raster/src/lib.rs", "DRAWS_INTO"): "tests' counters (thread-local)",
+    ("crates/raster/src/vello_backend.rs", "CONTEXT"):
+        "a raster thread's Vello context, kept from tile to tile for its allocations (thread-local)",
+    ("crates/raster/src/vello_backend.rs", "SKIPPED"):
+        "PROTOTYPE (not for main): the ops a thread's Vello playback left out, for its log (thread-local)",
+    ("crates/raster/src/vello_backend.rs", "PROFILE"):
+        "PROTOTYPE (not for main): where a thread's tiles' time went, for its log (thread-local)",
+    ("crates/raster/src/vello_backend.rs", "SWITCHES"):
+        "PROTOTYPE (not for main): the environment's switches, read once a thread (thread-local)",
     ("crates/dom_js/src/templates.rs", "OVERLOADS"): "derived from the static declaration table",
     ("crates/dom_wasm/src/lib.rs", "STATE"):
         "thread-local: the DOM of each renderer's main thread's wasm engine, which installs it (a store's data must be `Send`)",
