@@ -5,7 +5,7 @@
 //! again; each family list and each style picks from its own. (In a debug
 //! build every font picked without the whole query is checked against it.)
 
-use layout::BoxFragment;
+use layout::{BoxFragment, TextContext};
 
 use crate::page::{Page, find};
 
@@ -72,6 +72,15 @@ fn each_family_list_picks_its_own() {
     }
 }
 
+/// A generic family is the families it stands for: in the tests, Lato.
+#[test]
+fn a_generic_family_is_its_families() {
+    let runs = runs(
+        "<div style='font: 20px/1 Ahem'>XX<span style='font-family: Lato'>XX</span>XX<span style='font-family: serif'>XX</span></div>",
+    );
+    assert_eq!(fonts(&runs), [0, 1, 0, 1]);
+}
+
 /// An italic element takes the font's italic, synthesized as a skew since
 /// Lato has none; the text after it, upright again, has none. With a box
 /// and without.
@@ -89,20 +98,15 @@ fn each_style_picks_its_own() {
     }
 }
 
-/// Each span of an inline formatting context shaped gives parley its font
-/// family list, every name of which fontique looks up: the block's, an
-/// inline element's, and a run's in an element with no box (`display:
-/// contents`); text in the style of the span it is in gives none of its
-/// own. Text beside a block, in an anonymous block, gives its block's list
-/// twice: as the anonymous block's, and as its run's, whose style is the
-/// block's, not the anonymous block's. An update that shapes nothing gives
-/// none.
+/// A `font-family` value's names are looked up in the fonts when text is
+/// first shaped in it, whichever span has it: the block, an inline
+/// element, or a run in an element with no box (`display: contents`).
+/// Text in a value seen before looks none up, in another block or another
+/// kind of span too, and neither does an update that shapes nothing.
 #[test]
-fn each_span_gives_parley_its_family_names() {
+fn a_font_family_value_is_looked_up_once() {
     let mut page = Page::new(
-        "<div id=d>XX <span id=s style='font-family: f1'>XX</span> \
-         <span id=c style='display: contents; font-family: f1'>XX</span></div>\
-         <div id=b>XX<div style='display: flex'></div></div><div id=e>XX</div>",
+        "<div id=d>XX <span id=s>XX</span> <span id=c style='display: contents'>XX</span></div>         <div id=e>XX</div>",
     );
     let mut names = |id: &str, style: &str| {
         let update = page.change(|cx, document| {
@@ -110,15 +114,122 @@ fn each_span_gives_parley_its_family_names() {
         });
         (update.shaped, update.font_family_names)
     };
-    let (shaped, d) = names("d", "font-size: 30px");
+    // The list's own names, and those every list ends in.
+    let (shaped, one) = names("d", "font-family: f1");
     assert_eq!(shaped, 1);
-    assert!(d > 0);
-    assert_eq!(names("s", "font-family: f1, f2"), (1, d + 1));
+    assert!(one > 0);
+    assert_eq!(names("d", "font-family: f1, f2"), (1, one + 1));
+    assert_eq!(names("s", "font-family: g1, g2, g3"), (1, one + 2));
     assert_eq!(
-        names("c", "display: contents; font-family: f1, f2, f3"),
-        (1, d + 3)
+        names("c", "display: contents; font-family: h1, h2, h3, h4"),
+        (1, one + 3)
     );
-    let (_, e) = names("e", "font-size: 30px");
-    assert_eq!(names("b", "font-size: 30px"), (1, 2 * e));
+    // Seen before: the same value, not the same style.
+    assert_eq!(names("e", "font-family: f1, f2; font-size: 30px"), (1, 0));
+    assert_eq!(names("e", "font-family: g1, g2, g3"), (1, 0));
+    assert_eq!(names("s", "font-family: h1, h2, h3, h4"), (1, 0));
+    assert_eq!(names("c", "display: contents; font-family: f1"), (1, 0));
+    assert_eq!(names("d", "font-family: f1; font-size: 30px"), (1, 0));
+    // The same names in another order are another value.
+    assert_eq!(names("e", "font-family: f2, f1"), (1, one + 1));
+    // A generic family is no name to look up.
+    assert_eq!(names("e", "font-family: k1, serif, cursive"), (1, one));
     assert_eq!(page.update().font_family_names, 0);
+}
+
+/// Adding fonts forgets what the `font-family` values were looked up as:
+/// a name that was no family's may be one of theirs.
+#[test]
+fn adding_fonts_looks_the_family_names_up_again() {
+    let exo = || {
+        let path = format!(
+            "{}/../../../third_party/wpt/css/css-fonts/support/fonts/Exo2-SemiBold.otf",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
+    };
+    let name = TextContext::new(true)
+        .register_fonts_for_testing(exo())
+        .remove(0);
+    let mut page = Page::new(&format!(
+        "<div id=d style=\"font: 20px/1 '{name}', Ahem\">XX</div>"
+    ));
+    fn run(page: &mut Page) -> (u64, f32) {
+        let view = page.lay_out().view;
+        let mut out = Vec::new();
+        fn collect(fragment: &BoxFragment, out: &mut Vec<(u64, f32)>) {
+            for line in &fragment.lines {
+                out.extend(line.runs.iter().map(|run| (run.font.id, run.advance)));
+            }
+            for child in &fragment.children {
+                collect(&child.fragment, out);
+            }
+        }
+        collect(&view, &mut out);
+        assert_eq!(out.len(), 1, "{out:?}");
+        out[0]
+    }
+    let (ahem, advance) = run(&mut page);
+    assert_eq!(advance, 40.0);
+    assert_eq!(
+        page.text.register_fonts_for_testing(exo()),
+        std::slice::from_ref(&name)
+    );
+    let update = page.change(|cx, document| {
+        let style = format!("font: 30px/1 '{name}', Ahem");
+        cx.set_attribute(find(cx, document, "d"), "style", &style);
+    });
+    assert!(update.font_family_names > 0);
+    let (font, advance) = run(&mut page);
+    assert_ne!(font, ahem);
+    assert_ne!(advance, 60.0);
+}
+
+/// A line with nothing on it is as high as the block's font makes it,
+/// like the lines with text around it: the block's families are looked
+/// up for it too, not only for the text.
+#[test]
+fn a_line_with_nothing_on_it_is_in_the_blocks_font() {
+    let heights = |family: &str| -> Vec<f32> {
+        let laid = crate::page::lay_out(&format!(
+            "<div id=d style='font: 40px {family}; white-space: pre'>x\n\nx</div>"
+        ));
+        laid.lines("d")
+            .iter()
+            .map(|line| line.size().height)
+            .collect()
+    };
+    let lato = heights("Lato");
+    assert_eq!(lato.len(), 3, "{lato:?}");
+    assert_eq!(lato[1], lato[0], "{lato:?}");
+    let ahem = heights("Ahem");
+    assert_eq!(ahem, [40.0, 40.0, 40.0]);
+    assert_ne!(lato[1], ahem[1]);
+}
+
+/// A canvas's text is in its font's families, looked up as a page's are.
+#[test]
+fn a_canvass_text_is_in_its_families() {
+    use computed_style::{CanvasFont, CanvasTextStyle, Direction, FontFamily, FontKerning};
+    let mut text = TextContext::new(true);
+    let mut width = |family: &str| {
+        let style = CanvasTextStyle {
+            font: CanvasFont {
+                family: std::sync::Arc::new([FontFamily::Named(family.into())]),
+                size: 20.0,
+                ..CanvasFont::default()
+            },
+            direction: Direction::Ltr,
+            letter_spacing: 0.0,
+            word_spacing: 0.0,
+            kerning: FontKerning::Auto,
+        };
+        layout::shape_canvas_text(&mut text, "XX", &style).width
+    };
+    assert_eq!(width("Ahem"), 40.0);
+    let lato = width("Lato");
+    assert_ne!(lato, 40.0);
+    // And again, from what the names were looked up as.
+    assert_eq!(width("Ahem"), 40.0);
+    assert_eq!(width("Lato"), lato);
 }

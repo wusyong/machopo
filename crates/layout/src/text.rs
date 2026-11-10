@@ -36,6 +36,7 @@ use parley::{
 
 use taffy::AvailableSpace;
 
+use crate::font_families::FontFallbackMap;
 use crate::fragment::{
     AtomicInline, InlineBoxFragment, LineEnd, LineEndAt, LineFragment, ShapedSpan, TextCluster,
     TextEnd, TextFragment, TextGlyphs,
@@ -48,9 +49,8 @@ static LATO: &[u8] = include_bytes!("../../../resources/test_fonts/Lato-Medium.t
 pub struct TextContext {
     fonts: FontContext,
     layout: LayoutContext<u32>,
-    /// Font family names given parley since [`Self::take_family_names`]
-    /// (`BoxTreeUpdate`'s `font_family_names`).
-    family_names: usize,
+    /// What each `font-family` value shaped so far is in `fonts`.
+    families: FontFallbackMap,
 }
 
 impl TextContext {
@@ -83,13 +83,20 @@ impl TextContext {
         Self {
             fonts,
             layout,
-            family_names: 0,
+            families: FontFallbackMap::default(),
         }
     }
 
-    /// The font family names given parley since the last call.
+    /// The font family names looked up in the fonts since the last call
+    /// (`BoxTreeUpdate`'s `font_family_names`).
     pub(crate) fn take_family_names(&mut self) -> usize {
-        std::mem::take(&mut self.family_names)
+        self.families.take_looked_up()
+    }
+
+    /// Looks `families` up in the fonts, unless it has been, for a layout
+    /// about to be built with it.
+    pub(crate) fn resolve_families(&mut self, families: &[computed_style::FontFamily]) {
+        self.families.resolve(&mut self.fonts.collection, families);
     }
 
     /// How many layouts took the shaping of one alike (parley keeps what
@@ -127,20 +134,26 @@ impl TextContext {
             .fonts
             .collection
             .register_fonts(Blob::new(Arc::new(data)), None);
-        // Font selection may pick the new fonts for text shaped before.
+        // Font selection may pick the new fonts for text shaped before,
+        // and a name looked up before may be one of theirs.
         self.layout.clear_shapings();
+        self.families.clear();
         families
             .into_iter()
             .filter_map(|(id, _)| self.fonts.collection.family_name(id).map(str::to_owned))
             .collect()
     }
 
-    /// Its font and layout contexts, for a layout of its own (a canvas's
-    /// text).
+    /// Its font and layout contexts and the families looked up, for a
+    /// layout of its own (a canvas's text).
     pub(crate) fn contexts(
         &mut self,
-    ) -> (&mut parley::FontContext, &mut parley::LayoutContext<u32>) {
-        (&mut self.fonts, &mut self.layout)
+    ) -> (
+        &mut parley::FontContext,
+        &mut parley::LayoutContext<u32>,
+        &FontFallbackMap,
+    ) {
+        (&mut self.fonts, &mut self.layout, &self.families)
     }
 }
 
@@ -187,6 +200,10 @@ pub(crate) fn shape_line(
     text: &str,
     spans: &[(std::ops::Range<usize>, &ComputedStyle)],
 ) -> Layout<u32> {
+    for (_, style) in spans {
+        cx.resolve_families(&style.font.family);
+    }
+    let families = &cx.families;
     let mut builder = cx.layout.ranged_builder(&mut cx.fonts, text, 1.0, true);
     for (index, (range, style)) in spans.iter().enumerate() {
         #[expect(
@@ -194,7 +211,7 @@ pub(crate) fn shape_line(
             reason = "a span per run of one element's text: fewer than 2^32"
         )]
         let brush = index as u32;
-        for property in text_properties(style, brush, BlockText::default()) {
+        for property in text_properties(style, brush, BlockText::default(), families) {
             builder.push(property, range.clone());
         }
         builder.push(
@@ -854,18 +871,30 @@ impl InlineContent {
             tabs,
             hyphens: &hyphen_advances,
         };
+        // The font families of every span, looked up (those not seen
+        // before) while the fonts aren't the builder's.
+        cx.resolve_families(&container.font.family);
+        for element in &elements {
+            cx.resolve_families(&element.style.font.family);
+        }
+        for (_, style, ..) in &runs {
+            cx.resolve_families(&style.font.family);
+        }
+        let families = &cx.families;
         let root = text_style(container, 0, block);
-        let mut names = family_names(&root.font_family);
         let mut builder = cx.layout.tree_builder(&mut cx.fonts, 1.0, true, &root);
-        let element_span =
-            |builder: &mut TreeBuilder<'_, u32>, names: &mut usize, element: usize| {
-                let mut properties = text_properties(&elements[element].style, 0, block);
-                *names = names.wrapping_add(property_family_names(&properties));
-                properties.push(StyleProperty::VerticalAlign(element_aligns[element]));
-                builder.push_style_modification_span(&properties);
-            };
+        // The block's families are the root style's too: a line with
+        // nothing on it is as high as the block's font.
+        builder.push_default(StyleProperty::FontFamilyIds(Cow::Borrowed(
+            families.ids(&container.font.family),
+        )));
+        let element_span = |builder: &mut TreeBuilder<'_, u32>, element: usize| {
+            let mut properties = text_properties(&elements[element].style, 0, block, families);
+            properties.push(StyleProperty::VerticalAlign(element_aligns[element]));
+            builder.push_style_modification_span(&properties);
+        };
         for &element in &open_at_start {
-            element_span(&mut builder, &mut names, element);
+            element_span(&mut builder, element);
         }
         // The elements whose spans are open, innermost last: a run whose
         // style isn't the innermost's (text in a `display: contents`
@@ -893,7 +922,7 @@ impl InlineContent {
                 block,
                 &mut styles,
                 &mut sources,
-                &mut names,
+                families,
             );
             let (element, start) = match &items[item] {
                 InlineItem::Open(node, _) | InlineItem::Close(node, _) => (
@@ -954,7 +983,7 @@ impl InlineContent {
             // The element's span, its start edge inside it and its end
             // edge before it ends.
             if start {
-                element_span(&mut builder, &mut names, element);
+                element_span(&mut builder, element);
                 open.push(element);
             } else {
                 open.pop();
@@ -987,10 +1016,9 @@ impl InlineContent {
             block,
             &mut styles,
             &mut sources,
-            &mut names,
+            families,
         );
         let (mut layout, built) = builder.build();
-        cx.family_names = cx.family_names.wrapping_add(names);
         debug_assert_eq!(built, text, "parley keeps the processed text");
         layout.set_line_after_final_break(editor);
         Some(Self {
@@ -2277,7 +2305,7 @@ fn push_runs<'a>(
     block: BlockText<'_>,
     styles: &mut Vec<(Arc<ComputedStyle>, Option<Owner>)>,
     sources: &mut Vec<Option<Arc<TextSource>>>,
-    names: &mut usize,
+    families: &FontFallbackMap,
 ) {
     while runs
         .front()
@@ -2295,8 +2323,7 @@ fn push_runs<'a>(
                 StyleProperty::VerticalAlign(VerticalAlign::BASELINE),
             ]);
         } else {
-            let mut properties = text_properties(style, brush, block);
-            *names = names.wrapping_add(property_family_names(&properties));
+            let mut properties = text_properties(style, brush, block, families);
             properties.push(StyleProperty::VerticalAlign(VerticalAlign::BASELINE));
             builder.push_style_modification_span(&properties);
         }
@@ -2666,20 +2693,17 @@ fn collapse_white_space(items: &[InlineItem]) -> Option<(String, Runs<'_>, Tags)
 }
 
 /// `style` as a parley text style, in a block with `block`; `brush`
-/// identifies the run. The font list ends in the UA's standard font.
+/// identifies the run. It names no font families: the builder is given
+/// those `style`'s list was looked up as ([`text_properties`]).
 fn text_style(
     style: &ComputedStyle,
     brush: u32,
     block: BlockText<'_>,
 ) -> TextStyle<'static, 'static, u32> {
-    let families = crate::font_families::font_stack(
-        &style.font.family,
-        crate::font_families::Platform::CURRENT,
-    );
     let features = crate::font_features::features(&style.font);
     let variations = crate::font_features::variations(&style.font);
     TextStyle {
-        font_family: parley::FontFamily::List(Cow::Owned(families)),
+        font_family: parley::FontFamily::List(Cow::Borrowed(&[])),
         font_size: style.font.size,
         font_width: parley::FontWidth::from_ratio(style.font.stretch / 100.0),
         font_features: if features.is_empty() {
@@ -2816,39 +2840,21 @@ impl BlockTabs {
     }
 }
 
-/// How many font family names `family` has: each is looked up by name.
-fn family_names(family: &parley::FontFamily<'_>) -> usize {
-    match family {
-        parley::FontFamily::List(list) => list.len(),
-        parley::FontFamily::Single(_) => 1,
-        parley::FontFamily::Source(source) => source.split(',').count(),
-    }
-}
-
-/// How many font family names `properties` set.
-fn property_family_names(properties: &[StyleProperty<'_, u32>]) -> usize {
-    properties
-        .iter()
-        .map(|property| match property {
-            StyleProperty::FontFamily(family) => family_names(family),
-            _ => 0,
-        })
-        .fold(0, usize::wrapping_add)
-}
-
-/// The parley properties for text in `style`, as `text_style` has them;
-/// `brush` identifies the run.
-fn text_properties(
+/// The parley properties for text in `style`, as `text_style` has them,
+/// and its font families as `families` looked them up (the list ends in
+/// the UA's standard font); `brush` identifies the run.
+fn text_properties<'a>(
     style: &ComputedStyle,
     brush: u32,
     block: BlockText<'_>,
-) -> Vec<StyleProperty<'static, u32>> {
+    families: &'a FontFallbackMap,
+) -> Vec<StyleProperty<'a, u32>> {
     // Every one of them: an element's span starts as a copy of its
     // parent's, so a value equal to the default (`letter-spacing: normal`
     // under a spaced parent) has to be set too.
     let s = text_style(style, brush, block);
     vec![
-        StyleProperty::FontFamily(s.font_family),
+        StyleProperty::FontFamilyIds(Cow::Borrowed(families.ids(&style.font.family))),
         StyleProperty::FontSize(s.font_size),
         StyleProperty::FontWeight(s.font_weight),
         StyleProperty::FontStyle(s.font_style),

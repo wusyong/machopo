@@ -377,10 +377,10 @@ pub struct BoxTreeUpdate {
     /// Outermost `<svg>`s whose content an update captured again (one
     /// built is in `built`).
     pub svg_captured: usize,
-    /// Font family names the shaped inline formatting contexts gave
-    /// parley: each name of each span's list, aliases and Chrome's
-    /// metric-compatible fonts included. fontique looks each one up by
-    /// name.
+    /// Font family names looked up in the fonts: each name of a
+    /// `font-family` value text is shaped in for the first time, aliases
+    /// and Chrome's metric-compatible fonts included. What a value came to
+    /// is kept, so text in one seen before looks none up.
     pub font_family_names: usize,
 }
 

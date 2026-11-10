@@ -1094,13 +1094,13 @@ pub enum TransformBox {
 }
 
 /// One entry of `font-family`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FontFamily {
     Generic(GenericFamily),
     Named(Box<str>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GenericFamily {
     Serif,
     SansSerif,

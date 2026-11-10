@@ -26,6 +26,8 @@ use std::borrow::Cow;
 
 use computed_style::{FontFamily, GenericFamily};
 use parley::FontFamilyName;
+use parley::fontique::{Collection, FamilyId};
+use rustc_hash::FxHashMap;
 
 /// What a family list resolves differently on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +132,62 @@ pub(crate) fn font_stack(
     }
     stack.push_generic(parley::GenericFamily::Serif);
     stack.out
+}
+
+/// What each `font-family` value came to in the font collection (Blink's
+/// `FontFallbackMap`, which keeps a `FontFallbackList` per
+/// `FontDescription` and drops them all when the fonts change): the
+/// families of its [`font_stack`] the collection has, in order, a generic
+/// family as the families it stands for. A value's names are looked up
+/// once; text in it afterwards gives the shaper the families themselves.
+#[derive(Default)]
+pub(crate) struct FontFallbackMap {
+    lists: FxHashMap<Box<[FontFamily]>, Box<[FamilyId]>>,
+    /// Names looked up since [`Self::take_looked_up`].
+    looked_up: usize,
+}
+
+impl FontFallbackMap {
+    /// Looks `families` up in `collection`, unless it has been: before the
+    /// shaper borrows the collection, which is when [`Self::ids`] is asked.
+    pub(crate) fn resolve(&mut self, collection: &mut Collection, families: &[FontFamily]) {
+        if self.lists.contains_key(families) {
+            return;
+        }
+        let mut ids = Vec::new();
+        for family in font_stack(families, Platform::CURRENT) {
+            match family {
+                FontFamilyName::Named(name) => {
+                    self.looked_up = self.looked_up.wrapping_add(1);
+                    // As the shaper finds a name: a family it can't load
+                    // isn't one.
+                    ids.extend(collection.family_by_name(&name).map(|family| family.id()));
+                }
+                FontFamilyName::Generic(generic) => {
+                    ids.extend(collection.generic_families(generic));
+                }
+            }
+        }
+        self.lists.insert(families.into(), ids.into());
+    }
+
+    /// The families of `families`, which [`Self::resolve`] looked up.
+    pub(crate) fn ids(&self, families: &[FontFamily]) -> &[FamilyId] {
+        self.lists
+            .get(families)
+            .expect("resolved before the layout was begun")
+    }
+
+    /// Forgets every value: the collection has other fonts, or a generic
+    /// family stands for other families.
+    pub(crate) fn clear(&mut self) {
+        self.lists.clear();
+    }
+
+    /// The names looked up since the last call.
+    pub(crate) fn take_looked_up(&mut self) -> usize {
+        std::mem::take(&mut self.looked_up)
+    }
 }
 
 #[derive(Default)]
@@ -327,5 +385,35 @@ mod tests {
                 "<Serif>"
             ]
         );
+    }
+
+    /// A value's families are those of its names the collection has and
+    /// those its generic families stand for, in the stack's order.
+    #[test]
+    fn a_value_is_the_families_the_collection_has() {
+        use parley::fontique::{Blob, CollectionOptions};
+        use std::sync::Arc;
+
+        let mut collection = Collection::new(CollectionOptions {
+            shared: false,
+            system_fonts: false,
+        });
+        let mut register =
+            |bytes: &'static [u8]| collection.register_fonts(Blob::new(Arc::new(bytes)), None)[0].0;
+        let ahem = register(include_bytes!("../../../resources/test_fonts/Ahem.ttf"));
+        let lato = register(include_bytes!(
+            "../../../resources/test_fonts/Lato-Medium.ttf"
+        ));
+        collection.set_generic_families(parley::GenericFamily::Serif, std::iter::once(ahem));
+        let mut map = FontFallbackMap::default();
+        // Every stack ends in `serif`.
+        let value = [
+            FontFamily::Named("No such family".into()),
+            FontFamily::Named("Lato".into()),
+        ];
+        map.resolve(&mut collection, &value);
+        assert_eq!(map.ids(&value), [lato, ahem]);
+        map.resolve(&mut collection, &value[..1]);
+        assert_eq!(map.ids(&value[..1]), [ahem]);
     }
 }

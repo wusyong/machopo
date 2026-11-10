@@ -14,7 +14,8 @@
 | 3b parley 的 fork 自己的測試、上游的草稿、拿掉 `text-indent` 的 workaround、optical sizing 由 machopo 做 | 做完，等審核：fork 的頂端 `b4941e39`（`machopo` 分支）和兩個 tag 已經 push | |
 | 4a taffy 的 fork rebase 到上游的 main、machopo 配合 API、預期結果和限制 | 做完：fork 的頂端 `05e64bd4` 和舊的頂端的 tag `machopo-2026-11-10` 都還只在本地，`third_party.toml` 釘本地的 commit；push fork 之後才能 push machopo | 2026-11-10 |
 | 4b 用 slot 的高度改寫 `float_bands` | 取消：slot 的高度取代不了它（下面的「第 4b 段」） | 2026-11-10 |
-| 5 字型家族的清單和名稱解析 | 還沒開始 | |
+| 5a parley 的 fork：`StyleProperty::FontFamilyIds`、`TreeBuilder::push_default` | 做完，等審核：fork 的頂端 `227d7191`（11 個 commit 加 README）只在本地，`third_party.toml` 釘本地的 commit；push fork 之後才能 push machopo。舊的頂端 `b4941e39` 的 tag 是 `machopo-2026-11-10-3b`（本地） | |
+| 5b machopo 的 `FontFallbackMap`、頁面和 canvas 的文字改給 family 的 id、計數改義 | 做完，等審核 | |
 | 6 float 和 taffy 的快取（6a）、做 fragment 時的斷行（6b） | 還沒開始 | |
 | 7 上游的草稿 | 還沒開始 | |
 
@@ -30,9 +31,13 @@
 | `LayoutUpdate::laid_out_beside_floats`：因為旁邊有 float（或把自己的 float 放進共用的 block formatting context）沒用 taffy 的快取的盒子 | `layout` 的 `float::boxes_beside_floats_are_laid_out_without_the_cache`：沒有 float 時 0，兩個段落都在 float 旁邊時 2，只有一個時 1 |
 | `LayoutUpdate::lines_broken_again_beside_floats`：float 旁邊的行從頭重斷的次數，四種原因 | `float::lines_beside_floats_are_broken_again`：沒有 float、float 旁邊放得下時 0；往下找更寬的地方、高了之後在更窄的地方、拿掉移到下一行的 float、放好自己的 float 之後，各自的次數 |
 | `LayoutUpdate::lines_broken_for_fragments`：做 fragment 時在最後的寬度真的又斷了一次 | `inline::lines_are_broken_again_for_their_fragments`：確定的寬度、放得下的 shrink-to-fit 的 float 是 0；在沒有空間的地方 shrink-to-fit 的 float（行在 0 斷、盒子和內容一樣寬）是 1 |
-| `BoxTreeUpdate::font_family_names`：shape 的 inline formatting context 給 parley 的字型家族名稱 | `font_selection::each_span_gives_parley_its_family_names`：block 的清單、inline 元素的、`display: contents` 的元素裡的 run 的，各加幾個名稱就多幾個；在 span 自己的 style 裡的文字不加；匿名 block 加兩次；沒有 shape 時 0。`update::` 的測試比較 `BoxTreeUpdate` 時不比這個欄位 |
+| `BoxTreeUpdate::font_family_names`：照名稱在字型集合裡查的次數。一個 `font-family` 的值第一次用來 shape 時每個名稱查一次，之後不查 | `font_selection::a_font_family_value_is_looked_up_once`：block 的清單、inline 元素的、`display: contents` 的元素裡的 run 的，第一次各多幾個名稱就多幾次；看過的值（在別的 block、別種 span、別的字級）是 0；順序不同是另一個值；generic 不算名稱；沒有 shape 時 0。`update::` 的測試比較 `BoxTreeUpdate` 時不比這個欄位 |
+| 註冊字型之後，`font-family` 的值重新查 | `font_selection::adding_fonts_looks_the_family_names_up_again`：註冊前名稱找不到、用 Ahem；註冊之後換字級重新 shape，查了名稱、用到新的字型 |
+| 一個值查到的是集合裡有的名稱的 family 和 generic 代表的 family，照清單的順序 | `layout` 的 unit test `font_families::tests::a_value_is_the_families_the_collection_has`；`font_selection::a_generic_family_is_its_families` |
+| 空的行的高度照 block 的字型 | `font_selection::a_line_with_nothing_on_it_is_in_the_blocks_font`：`x\n\nx` 的中間那行和有字的行一樣高，Lato 的和 Ahem 的不一樣；`shell` 的 `focus::focusing_scrolls_into_view_if_needed`（編輯區結尾的空行、空的 input） |
+| canvas 的文字照它的字型家族 | `font_selection::a_canvass_text_is_in_its_families`：Ahem 的寬度是 40、Lato 的不是，第二次（快取裡的）一樣；reftest 的 `canvas/c5-text.html` |
 | 計數都在 release build 裡 | `RUST_LOG=layout=debug` 的 release build 印出 `layout`、`build box tree`、`update box tree` 三行的欄位（量測用的就是這些） |
-| parley 的 fork 是上游的 main（`1b67b753`，2026-11-08）加上 9 個各做一件事的 commit 和 `README.machopo.md` 的 commit，每個 commit 帶 fork 自己的測試和完整的訊息 | fork 的 `cargo test -p parley -p parley_engine -p parley_tests -p fontique`、clippy、`cargo fmt --all -- --check`；`python3 scripts/ci.py patches parley` 匯出 10 個 patch，`ci.py third-party` 確認它們套在 `upstream_rev` 上和 `rev` 一樣 |
+| parley 的 fork 是上游的 main（`1b67b753`，2026-11-08）加上 11 個各做一件事的 commit 和 `README.machopo.md` 的 commit，每個 commit 帶 fork 自己的測試和完整的訊息 | fork 的 `cargo test -p parley -p parley_engine -p parley_tests -p fontique`、clippy、`cargo fmt --all -- --check`；`python3 scripts/ci.py patches parley` 匯出 12 個 patch，`ci.py third-party` 確認它們套在 `upstream_rev` 上和 `rev` 一樣 |
 | `font-optical-sizing: auto` 的文字用字級的 `opsz` shape 和畫，`font-variation-settings` 自己設的贏，關掉時沒有 | `layout` 的 `font_features::a_variable_fonts_axes`：軸的值，和 advance（自動的和把 `opsz` 設成字級的一樣，和關掉的、設成 40 的都不一樣） |
 | 只被問寬度的盒子有 `text-indent` 時不斷行 | `inline::a_width_alone_breaks_no_lines`：`max-content`、`fit-content` 加縮排的寬度是 110、斷行 1 次 |
 | machopo 配合上游的 API，除了 atomic inline 的 bidi 和斷行，排版不變 | `cargo test -p layout`、`-p shell`；`test.py reftest` 的 `text/`、`inline/`、`floats/`、`generated/`、`canvas/`、`svg/`、`block/`、`position/`、`flex/`、`grid/`、`tables/`、`hidpi/`；`test.py wpt` 的 `css/css-text`、`css/css-text-decor`、`css/CSS2/linebox`、`css/CSS2/normal-flow`、`css/css-overflow/line-clamp`、`css/css-sizing`、`css/css-display`、`css/css-pseudo`；差異逐項記在「做過的檢查」 |
@@ -121,6 +126,23 @@
 - **還在的限制**（`docs/limitations.md` 跟著改）：寬是 0 的 float 旁邊的 BFC 盒子（`zero-width-floats.html`、`zero-space-between-floats-003.html`）；BFC 盒子移到比較窄的地方之後沒有照新的寬度重排（`floats-bfc-003.html`；上游的 #1396 還沒合併）。這三個 `.ini` 的註解改成現在的原因。flex、grid 那一條拿掉 grid container 的 baseline，「不 fork taffy」改成現在的做法。
 - **沒有新的測試和 mutation test**：machopo 這一段沒有新的行為（4 處都是照新的簽名傳一樣的東西），行為的變化是上游的、由上游的測試和上面的 WPT 守著。
 - **跑過的檢查**：fork 的 `cargo test`（188、161、6689、5 個通過、4 個 ignored）；machopo 的 `cargo test -p layout`（25、432）、`cargo test -p shell`（70、11、563）；reftest 的 `block/`、`floats/`、`flex/`、`grid/`、`tables/`、`inline/`、`position/`、`text/`、`images/`、`generated/`、`scroll/`、`hidpi/` 共 84 個，全部符合預期；WPT 的 `css/CSS2/floats`、`floats-clear`、`normal-flow`、`margin-padding-clear`、`positioning`、`linebox`、`visudet`、`ui`、`css/css-flexbox`、`css-grid`、`css-align`、`css-sizing`、`css-overflow`、`css-position`、`css-tables`、`css-contain`、`css-display`、`css-box`、`css-lists`、`css-content`、`css-inline`、`css-images`、`css-text`、`css-logical`，和 `css/cssom-view`、`css-scroll-anchoring`、`css-pseudo`（`cssom-view/scroll-behavior-smooth-navigation.html` 出現一次已經標過的 known intermittent）；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`；`python3 scripts/ci.py third-party`。WPT 一次給三個大目錄時 Windows 的指令太長（`WinError 206`），`css-flexbox` 到 `css-display` 那九個是一次跑一個。
+
+**第 5a 段**（2026-11-10，Windows 11）：
+
+- **fork 的兩個 commit**：「Take font families as ids already looked up」（`StyleProperty::FontFamilyIds`，`test_family_ids`）和「Set a property of a tree builder's root style」（`TreeBuilder::push_default`，`test_tree_default`）。fork 的頂端 `227d7191`，只在本地。
+- **為什麼多一個 `push_default`**：5b 第一次的做法是 root style 不帶家族、所有文字外面包一個帶 id 的 span。`cargo test -p shell` 的 `focus::focusing_scrolls_into_view_if_needed` 穩定失敗（編輯區結尾 `0,3920`，預期 `3910`；input `0,8419`，預期 `8420`）：parley 的 root style 是沒有文字的 layout 和空的行的 style，行高來自它的字型，span 管不到。`cargo test -p layout` 當時全過，也就是 layout 的測試沒守住空的行的高度；5b 補了（`a_line_with_nothing_on_it_is_in_the_blocks_font`）。
+- **fork 的 mutation**（scratchpad 的一次性 script，只跑 fork 自己的測試）：`FontFamilyIds` 4 條全部抓到。`push_default` 6 條全部抓到（不更新 style table、不更新 tree、不 assert、不檢查 span、不檢查文字、不檢查等著合併的空白）；最後一條第一次沒抓到：測試的 root 的 `white_space_collapse` 是預設的 `Preserve`，空白直接變成文字、被文字的檢查擋下；測試改成 root 明確用 `Collapse` 並確認文字是空的。
+- **fork 的 fmt**：第一個 commit 的 `test_family_ids.rs` 原本沒有照 rustfmt 排（當時的 `--check` 被 Windows checkout 的換行警告蓋過，沒看到 diff）；改進那個 commit 裡。
+- **跑過的檢查**：fork 的 `cargo test -p parley -p parley_engine -p parley_tests -p fontique`（11、201、37、252 個通過、1 個 ignored）、clippy（只有上游 manifest 的警告）、`cargo fmt --all -- --check`；`python3 scripts/ci.py patches parley`（12 個 patch）、`ci.py third-party`。
+
+**第 5b 段**（2026-11-10，Windows 11）：
+
+- **做法**：`layout` 的 `FontFallbackMap`（`font_families.rs`）以清單的值為 key 記查到的 `FamilyId`；`InlineContent::new`、`shape_line`、canvas 的 `shape` 在建 parley 的 builder 之前先查用到的每個值（查要借 `FontContext`，builder 也借它），之後 span 的 `FontFamilyIds` 借快取裡的清單。root 的用 `push_default` 給。`register_fonts_for_testing` 清掉快取。`computed_style` 的 `FontFamily`、`GenericFamily` 多了 `Hash`。
+- **計數改義**：`font_family_names` 原本數每個 span 給 parley 的名稱，現在數真的照名稱查的次數。沒有重新量測各頁的數目（第 2 段的表是原本的意義）：看過的值是 0，一頁的次數是它用到的不同的值的名稱數的總和。
+- **mutation test**（`mutants-5.toml`，`python3 scripts/test.py mutate rfcs/0092-taffy-parley-forks/mutants-5.toml`）：11 條全部抓到。過程中沒抓到、補了測試的兩條：
+  - 「generic 也算成查了名稱」：計數的測試沒有 generic；加了一個帶 `serif, cursive` 的值。
+  - 「generic 代表的 family 不在 id 裡」：測試的字型集合每個 generic 都是 Lato，沒有 family 時 parley 退回的也是 Lato，整合測試分不出來；加了 `font_families` 的 unit test，用自己的集合（`serif` 對到 Ahem）直接比查到的 id。
+- **跑過的檢查**：`cargo test -p layout`（26、436）、`cargo test -p shell`（70、11、563：focus 的測試回到通過）；reftest 整套 195 個檢查全部符合預期；WPT 的 `css/css-text`（2,751 個檢查）、`css/css-fonts`（4,540）、`css/CSS2/linebox`（728）、`css/css-text-decor`（1,355）、`html/canvas/element/text`（315）全部符合預期，沒有預期結果要改。階段最後的 `cargo test --workspace`（3,732 個通過、1 個 ignored）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`sanity.py` 的七項、`ci.py third-party`。
 
 **第 2 段的量測**（2026-11-10，Windows 11，release build，`RUST_LOG=layout=debug`，scratchpad 裡一次性的 script 加總每頁的 log）：`tests/sites/` 用 `--headless`（1280×800）載入一次；blink_perf 的 30 頁照 `bench.py blink-perf` 的方法（`--automation-pipe`，頁面跑完整個 runner）；Speedometer 3.1 的 20 個 suite 各一次 iteration（`iterationCount=1`，只數計數，沒量時間）。
 

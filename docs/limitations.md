@@ -62,6 +62,7 @@
   - `system-ui` 照 fontique 的（Linux 上是 fontconfig 的 `system-ui`），Chrome 照 GTK 的設定：Fedora 44 上 Chrome 是 Noto Sans，machopo 是另一個字型。
   - 沒有 em 的字型（`head` 的 units-per-em 是 0，或沒有 `head`：Apple 舊式的 bitmap 字型只有 `bhed`、`bdat`，例如 macOS 的 GB18030 Bitmap）不收：要它的文字照找不到字型時 fallback。Chrome 畫得出它的點陣字（macOS 上經過 CoreText，FreeType 也讀 `bhed`、`bdat`）；machopo 讀不了 `bdat` 的點陣，縮放 glyph 也要 em。
   - 沒有 `emoji`、`math` 這兩個通用字型：寫了它們當成字型名稱，找不到就換下一個（Chrome 的 `emoji` 用 emoji 字型畫數字和符號，`math` 照出廠設定是 Latin Modern Math）。
+  - 每個 `font-family` 的值在字型集合裡查到的 family 會記住（`FontFallbackMap`），執行中安裝或移除系統字型不會讓它重新查（shaping 的快取也一樣）：要重開。Blink 在系統的字型變動時整個作廢（`FontCache::Invalidate`）。
 - iframe 的 HTML 一次解析完整份 body，不是邊收邊解析：空的 `src` 的 `<script>` 的 `error` task 在 script 被移到別的文件之前就排了，WPT 的 `moving-between-documents/before-prepare-*-success-empty-src-*` 四份因此失敗。iframe 的 `load` 在跑子 frame 的 load task 的那一輪之後才分派（不在那個 task 裡，免得 wrapper 做在子 frame 的 realm）。
 - 移到別的文件的元素的圖片還在載入時，舊的 window 拿著它，直到 window 不在；排進 task 之後 window 被丟掉的 Blob 的讀取不會 settle。
 

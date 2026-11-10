@@ -97,7 +97,7 @@ machopo 這邊只處理一種 workaround：繞在函式庫外面、因此有實�
 2. **計數**：加上「計數」那一節的計數，量出各個 workaround 實際的量，決定第 5、6 段的順序和範圍。
 3. **重寫 parley 的 fork**：舊的頂端打 tag；rebase 到上游最新的 main；拿掉上游已經有的（`hanging_advance`）；把相關的 commit 合在一起（`details.md` 的「parley fork 的重寫」）；commit 帶上 fork 自己的測試；匯出 patch；machopo 拿掉上游已經不需要的 workaround（`text-indent` 的 `indented()`）。可能分成 3a（rebase 和整理）、3b（fork 自己的測試和上游的草稿）。
 4. **taffy 跟上上游的 main**：rebase 到 main，處理 API 的變化（例如 `calc()` 的 handle、`ScrollableOverflow`），查 WPT 的變化，刪掉修好的限制。原本分成 4a（rebase、編得過所需的最小配合、預期結果和限制）和 4b（用 slot 的高度改寫 `float_bands`）；4b 取消（已決定的事項第 37 條），`float_bands` 留著。
-5. **字型家族的清單和名稱解析**：第 2 段量到最多的（每頁都有）。做法看第 3 段之後上游的 #943、#796 的狀態決定（「待決定」）。
+5. **字型家族的清單和名稱解析**：第 2 段量到最多的（每頁都有）。machopo 照 `font-family` 的值快取查到的 family，parley 的 fork 接受 family 的 id（已決定的事項第 38 到 43 條）。分成 5a（fork 的 API，machopo 只動 pin）和 5b（machopo 的快取、改用新的 API、計數改成數真的照名稱查的次數）。
 6. **float 和 taffy 的快取，再來是做 fragment 時多斷的那一次行**：6a 在 taffy 的 fork 裡把 float 的狀態加進快取的 key（同時寫上游的草稿），連同 column flexbox 的 intrinsic 寬度；6b 在 machopo 裡拿掉做 fragment 時多斷的那一次行。`BlockContext` 可以撤回不排進來（第 20 條）。
 7. **上游的草稿**：parley 和 taffy 剩下的 patch，各寫一份 PR 或 issue 的草稿（本地，給人審核）。可以和第 3 到 6 段穿插著做。
 
@@ -181,13 +181,18 @@ machopo 這邊只處理一種 workaround：繞在函式庫外面、因此有實�
 35. **上游的變化讓測試退步時先查原因，照大小處理**（2026-11-10）：小而明確的在 fork 修成一個帶測試、可以送上游的 commit（每一個先列給人看），草稿留到第 7 段；大的更新預期結果、記進 `docs/limitations.md`，草稿寫成 issue。不選一律只記限制：退步留到上游修好。不選退回早一點的上游 commit：同時失去修正。
 36. **第 4 段只拿掉 `float_bands` 自己找底**（2026-11-10）：#1303 的 `FloatMark`（行內的 float 不必 `revert_to`）和 float 旁邊的盒子進快取留到 6a；`last_baseline`（#1110）、`aspect-ratio`（#1347）等上游。`rfcs/0043-floats-text/taffy-float-root-inset-report.md` 要回報的問題上游已經修好（#1384），不用送。
 37. **4b 取消，`float_bands` 留著不改**（2026-11-10，改掉第 34、36 條裡 4b 的部分）：上游的 `ContentSlot::height`（#1394）是這個寬度往下到被更窄的 segment 縮小為止的距離，不是 segment 的底：它不告訴你哪裡變寬，後面沒有更窄的 segment 時仍是無限大。`FloatBands::room` 要每個 band 的頂端和下一個 band 的頂端（包括變寬的地方，下一行才知道可以用更寬的空間），所以一段一段走 `find_content_slot`、最後用 `cleared_threshold(Clear::Both)`（O(1)）找最低的 float 的底，這兩件事都拿不掉；這個 workaround 的成本本來就少。不選現在在 fork 加露出 segment 範圍的 API（Blink 的 exclusion space 給的 layout opportunity 就有完整的範圍）：fork 多一個要送上游的 commit，而 6a 本來就要改 taffy 的 float，到那一段再列成要決定的事。不選每行直接問 `find_content_slot(top, line_height)`：要重做斷行和 `FloatBands` 的介面，而且仍然不知道哪裡變寬。
+38. **字型家族的成本：machopo 快取 `font-family` 的值查到的 family，fork 讓 parley 接受 family 的 id**（2026-11-10）：`layout` 的 `FontFallbackMap` 記每個值在字型集合裡查到的 `FamilyId` 清單（generic 的也展開），值第一次用到時查一次，之後直接給 parley。對照 Blink：`FontFallbackMap` 照 `FontDescription` 快取 `FontFallbackList`，字型集合變動時整個作廢。不選只快取展開的名稱：parley 仍然每個 span 逐個名稱查。不選等上游的 #796、#943：都還沒合併，也不解決每個 span 重查。
+39. **快取的 key 是清單的值，不是 `Arc` 的指標**（2026-11-10）：值一樣、來自不同的 style 的清單共用一筆（指標不同的清單很多：每個設了 `font-family` 的規則各一個）。註冊字型、改 generic 的對應時清掉整個快取，不逐筆作廢（和 Blink 一樣）。hash 一份清單的成本是幾個短字串，每個 span 一次，比每個名稱查一次 fontique 小。
+40. **canvas 的文字走同一個快取，`shell` 的 `ui_text` 不動**（2026-11-10）：canvas 的字型和頁面的是同一個集合。網址列的文字只有一兩個固定的清單，不在 renderer 裡。`BoxTreeUpdate::font_family_names` 改成數真的照名稱查的次數（看過的值是 0）。
+41. **第 5 段分成 5a、5b**（2026-11-10）：5a 是 fork 的 commit（machopo 只動 pin 和 patch），5b 是 machopo 的快取和改用新的 API。
+42. **fork 的 API：只加 `StyleProperty::FontFamilyIds`，不改 `TextStyle`**（2026-11-10）：`Cow<[FamilyId]>`，設的是 `StyleProperty::FontFamily` 設的同一個東西，不經過名稱。不選在 `TextStyle` 加欄位：上游每個寫出整個 `TextStyle` 的地方都要改，送上游時改動大得多。
+43. **tree builder 的 root 的字型家族用新的 `TreeBuilder::push_default` 給**（2026-11-10，fork 的另一個 commit）：對應上游已有的 `RangedBuilder::push_default`。原本的做法是 root 不帶家族、在所有文字外面包一個帶 id 的 span，結果變了：parley 的 root style 也是沒有文字的 layout 和空的行的 style（行高來自它的字型），span 管不到（`shell` 的 `focus::focusing_scrolls_into_view_if_needed` 差 1px 抓到的）。不選在 `TextStyle` 加欄位（同第 42 條）。不選 root 仍然給名稱：每個 inline formatting context 還是逐個名稱查一次。它在推了任何東西之後呼叫會 panic：已經推的 span 和 run 留著 root 原本的 style。
 
 ## 待決定
 
 - **跟上游的頻率**：這份 RFC 的每段開始前一次；之後是每月一次、上游合了 machopo 需要的修改時，還是只在有需要時。做完第 4 段、知道一次 rebase 要多少工夫之後決定。
 - **parley 的 commit 怎麼合**：`details.md` 的「parley fork 的重寫」是建議的分組，rebase 到最新的 main 之後才知道衝突和上游的 API 改了多少。
 - **上游的 tab stop（#934）、軟連字號（#827）合併時**：改用上游的、在 machopo 這邊配合，還是保留 fork 的。看它們合併時的 API 和行為。
-- **字型家族的成本怎麼解**：machopo 自己快取、fork 加上接受解析好的 `FamilyId` 的 API，或等上游的 #943、#796。第 2 段的計數和第 3 段之後上游的狀態決定。
 - **fork 要不要有自己的 CI**：現在 parley 的 fork 靠 machopo 的測試。帶上自己的測試之後，是在 fork 上開 GitHub Actions，還是由 machopo 的 CI 一起跑。
 
 ## 之後的可能

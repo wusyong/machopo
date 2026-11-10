@@ -40,13 +40,14 @@ fn shape(cx: &mut TextContext, text: &str, style: &CanvasTextStyle) -> (Vec<Glyp
     if text.is_empty() {
         return (Vec::new(), 0.0);
     }
-    let (fonts, layouts) = cx.contexts();
+    cx.resolve_families(&style.font.family);
+    let (fonts, layouts, families) = cx.contexts();
     let mut builder = layouts.ranged_builder(fonts, text, 1.0, true);
     builder.set_base_direction(match style.direction {
         Direction::Ltr => parley::BaseDirection::Ltr,
         Direction::Rtl => parley::BaseDirection::Rtl,
     });
-    for property in properties(style) {
+    for property in properties(style, families) {
         builder.push_default(property);
     }
     let mut layout = builder.build(text);
@@ -93,16 +94,17 @@ fn shape(cx: &mut TextContext, text: &str, style: &CanvasTextStyle) -> (Vec<Glyp
 /// takes for each name, and the UA's standard font when none of it is
 /// there, as for a page's text), size, weight, style and width, the caps
 /// and kerning as OpenType features, the spacings.
-fn properties(style: &CanvasTextStyle) -> Vec<StyleProperty<'static, u32>> {
+fn properties<'a>(
+    style: &CanvasTextStyle,
+    families: &'a crate::font_families::FontFallbackMap,
+) -> Vec<StyleProperty<'a, u32>> {
     let font = &style.font;
-    let families =
-        crate::font_families::font_stack(&font.family, crate::font_families::Platform::CURRENT);
     // A page's text's, for the canvas's caps and kerning.
     let mut features = Vec::new();
     crate::font_features::caps_features(font.variant_caps, &mut features);
     crate::font_features::kerning_feature(style.kerning, &mut features);
     vec![
-        StyleProperty::FontFamily(parley::FontFamily::List(Cow::Owned(families))),
+        StyleProperty::FontFamilyIds(Cow::Borrowed(families.ids(&font.family))),
         StyleProperty::FontSize(font.size),
         StyleProperty::FontWeight(parley::FontWeight::new(font.weight)),
         StyleProperty::FontStyle(match font.style {

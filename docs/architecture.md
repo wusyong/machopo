@@ -211,7 +211,7 @@ style、layout、paint 和 parse 有很多「沒變就沿用上一次的結果�
   - 只影響 paint 的：放進 `layout` 的 `StyleDifference::between` 的那一串（不重新排版、只換 fragment 的 style）。
   - 影響 shaping 的：在 `layout` 的 `text.rs` 交給 parley（`StyleProperty`），而且要在我們 parley fork 的 `ShapeCache` 的 key（`shape/cache.rs` 的 `RunStyle`）裡，否則換了值仍沿用舊的 shaping；經過 `ShapeOptions` 交給 shaping 的，也要在字的快取的 key（`parley_engine` 的 `shape/words.rs` 的 `OptionsKey`）裡。
   - 影響選字型的（改變 fontique 的 query 的，例如之後的 `unicode-range`）：我們 parley fork 的 `FontSelector`（`shape/mod.rs`）在 query 改變時要清掉記住的第一個字型（`first_font`），否則沿用舊的字型；也要在字的快取用的樣式的 key（`shape/cache.rs` 的 `FontStyleKey`）裡，否則字沿用舊的字型。
-  - 加入字型的新的路（目前只有測試的 `register_fonts_for_testing`）：要呼叫 parley 的 `LayoutContext::clear_shapings`，否則段落和字沿用加入之前選的字型。
+  - 加入字型的新的路（目前只有測試的 `register_fonts_for_testing`）：要呼叫 parley 的 `LayoutContext::clear_shapings`，否則段落和字沿用加入之前選的字型；也要清掉 `layout` 的 `FontFallbackMap`（每個 `font-family` 的值在字型集合裡查到的 family，`font_families.rs`），否則之前找不到的名稱仍然找不到。改 generic family 對到哪些 family 時也要清。
   - 讓盒子成為 out-of-flow 盒子的包含塊的（`transform`、`contain`、`filter`）：加進 `layout` 的 `contains_out_of_flow`（taffy 的 `CoreStyle::is_containing_block` 和「固定在 viewport」都照它）；它的改變只算重畫時（`transform`），`StyleDifference` 的 Paint 那條路在它讓盒子接住與否改變、底下又有 out-of-flow 的盒子時把盒子標成要重排。
   - 會移動盒子、Blink 的 scroll anchoring 不跟著捲的（css-scroll-anchoring 的 suppression trigger，Blink 的 `ScrollAnchor` 那一組 property 和 transform 類）：加進 `layout` 的 `disables_scroll_anchoring`。
   - 值依賴元素本身或 cascade 以外的東西的：`style_resolver` 的 `MatchedPropertiesCache` 要不能快取它（看 `MatchedPropertiesCache::takes` 和 cascade 時記下的條件）。

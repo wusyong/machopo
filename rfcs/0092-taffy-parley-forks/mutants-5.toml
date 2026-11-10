@@ -1,0 +1,83 @@
+# Mutation test of stage 5, machopo's side: what each `font-family` value
+# was looked up as, kept and given to parley as family ids:
+# python3 scripts/test.py mutate rfcs/0092-taffy-parley-forks/mutants-5.toml
+# (The fork's own mutants are run in the fork, against its tests.)
+test = ["cargo", "test", "-q", "-p", "layout", "--test", "it", "font_selection::"]
+timeout = 900
+
+[[mutant]]
+name = "a value seen before is looked up again"
+file = "crates/layout/src/font_families.rs"
+from = '''        if self.lists.contains_key(families) {
+            return;
+        }
+'''
+to = ''
+
+[[mutant]]
+name = "names looked up aren't counted"
+file = "crates/layout/src/font_families.rs"
+from = '''                    self.looked_up = self.looked_up.wrapping_add(1);
+'''
+to = ''
+
+[[mutant]]
+name = "generic families count as names looked up"
+file = "crates/layout/src/font_families.rs"
+from = '''                FontFamilyName::Generic(generic) => {
+'''
+to = '''                FontFamilyName::Generic(generic) => {
+                    self.looked_up = self.looked_up.wrapping_add(1);
+'''
+
+[[mutant]]
+name = "the count isn't taken"
+file = "crates/layout/src/font_families.rs"
+from = '''        std::mem::take(&mut self.looked_up)'''
+to = '''        self.looked_up'''
+
+[[mutant]]
+name = "a name's family isn't among the ids"
+file = "crates/layout/src/font_families.rs"
+from = '''                    ids.extend(collection.family_by_name(&name).map(|family| family.id()));'''
+to = '''                    let _ = collection.family_by_name(&name);'''
+
+[[mutant]]
+name = "a generic family's families aren't among the ids"
+test = ["cargo", "test", "-q", "-p", "layout", "--lib", "font_families::"]
+file = "crates/layout/src/font_families.rs"
+from = '''                    ids.extend(collection.generic_families(generic));'''
+to = '''                    let _ = generic;'''
+
+[[mutant]]
+name = "clearing forgets nothing"
+file = "crates/layout/src/font_families.rs"
+from = '''        self.lists.clear();'''
+to = ''
+
+[[mutant]]
+name = "fonts added leave the values looked up"
+file = "crates/layout/src/text.rs"
+from = '''        self.families.clear();
+'''
+to = ''
+
+[[mutant]]
+name = "the root style has no families"
+file = "crates/layout/src/text.rs"
+from = '''        builder.push_default(StyleProperty::FontFamilyIds(Cow::Borrowed(
+            families.ids(&container.font.family),
+        )));'''
+to = '''        builder.push_default(StyleProperty::FontFamilyIds(Cow::Borrowed(&[])));'''
+
+[[mutant]]
+name = "a span has no families of its own"
+file = "crates/layout/src/text.rs"
+from = '''        StyleProperty::FontFamilyIds(Cow::Borrowed(families.ids(&style.font.family))),'''
+to = '''        StyleProperty::LetterSpacing(s.letter_spacing),'''
+
+[[mutant]]
+name = "a canvas's text has no families"
+file = "crates/layout/src/canvas_text.rs"
+from = '''StyleProperty::FontFamilyIds(Cow::Borrowed(families.ids(&font.family)))'''
+to = '''StyleProperty::FontFamilyIds(Cow::Borrowed(&[]))'''
