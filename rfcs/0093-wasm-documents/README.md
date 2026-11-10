@@ -195,6 +195,7 @@ WIT 的成員是明列的清單（「已決定的事項」第 13 條）：第 2 
 14. **guest 自己觸發的事件，host 函式同步呼叫回 guest 的 listener：改 wasmtime 的 fork 放行**（2026-11-10，第 3 段開始前，使用者）：`dom_api` 的分派是同步的（照 Blink：`EventDispatcher::Dispatch`、`JSEventListener::Invoke` 全程在同一個 stack 上，可重入），guest 呼叫 `focus()`、`click()`、`dispatch-event` 時它的 listener 要在那個呼叫回來之前跑完。async 的入口裡擋住普通的 host 函式同步呼叫回 guest 的只有 wasmtime 的一個檢查（`Store` 在 fiber 上時不准同步的 `call`；`details.md` 的「重入的原型」的「拿掉 fork 的一個檢查之後」）：fork 讓它可以關掉（照 fork 的規則做，安全論證寫進它的 `README.machopo.md`）。它擋的兩件事：暫停的 fiber 被另一個 thread poll（machopo 的 Store 在 `StoreSet` 裡，不是 `Send`，只在 DOM 的 thread 上用）、遞迴讓 stack 溢位（同步的 Store 也有的風險）。**這取代第 5 條的後半**：會呼叫回 guest 的成員不用宣告成 `async func`、不用 `func_wrap_concurrent`，照舊是普通的 `func_wrap`；Store 還是 async 的，guest 照樣在 `start` 裡等待。listener 的 export 是同步的，不能等待。不選把 `dom_api` 會呼叫 listener 的路改成 async、V8 那邊 poll 一次（RFC 0001 的做法）：為了 wasm 把 JS 的事件分派（很熱的路）變成可以暫停的狀態機，和第 4 條的方向相反，結構也不再是 Blink 的。不選 guest 自己觸發的事件延後到呼叫回來之後：順序和 JS 不同，`preventDefault()` 沒有作用。代價：fork 多一處上游不太可能收的修改；還沒驗證 trap 穿過巢狀的呼叫、巢狀很深時 fiber 的 stack。
 15. **listener 是 guest 的編號加一個 export**（2026-11-10，第 3 段開始前）：WIT 沒有 callback 的型別（`func` 不是能傳的值；guest export 的 resource 也不能當它 import 的函式的參數，2026-11-10 用 `wit-bindgen` 0.62.0 試過），host 要呼叫回 guest 只能呼叫它的 export、帶一個它認得的值。`event-target-add-event-listener(this, type, callback: u32, capture: bool)` 和參數一樣的 `event-target-remove-event-listener`：`callback` 是 guest 自己編的號碼，host 只存起來、`remove` 時比對；world `script` 多一個同步的 export `handle-event(callback: u32, event)`，不回傳值（取消預設動作呼叫 `event-prevent-default`）。事件的 handle 在 `handle-event` 回來時由 host 收回，guest 不用 `release`（留著它之後用會 trap）。事件的成員這時加進 WIT：`Event` 的 `type`、`target`、`currentTarget`、`defaultPrevented`、`preventDefault()`、`stopPropagation()`，`KeyboardEvent.key`，`MouseEvent.button`，`UIEvent.detail`（`event-target` 這個函式名和 `EventTarget` 的型別別名撞名：那個別名不產生，簽名寫 `object`）。options 先只有 `capture`；timer 和 `requestAnimationFrame` 不做。不選每種事件一個 export：WIT 跟著事件的種類長。不選 `handle-event` 回傳 `bool` 表示取消：和 `preventDefault()` 重複。這個做法已知的缺點（RFC 0001、0010、0089 記過的）：guest 那一側的 callback 不會被清掉（第 16 條）；經過 guest 記憶體的環（closure 拿著節點的 handle）要到 Store 結束才收；每加一種 callback 每個 guest 都要多實作一個 export；一個 listener trap，那個 script 的 listener 都不再跑；編號只是 `u32`，傳錯了 host 不知道。對照 Chromium：`JSEventListener` 拿著一個 JS 函式，`Invoke` 把事件傳進去；編號是那個函式的替身。實作時的兩處出入（2026-11-10）：`add`/`remove` 的那個布林參數在 WIT 裡叫 `options`（IDL 的名字，產生器照抄；值是 `capture`）；`handle-event` 的 `event` 的型別寫 `object`（world 自己 `use` 的 `event` 在 wit-bindgen 的 C 裡和它 async runtime 的 `script_event_t` 撞名）。
 16. **host 不告訴 guest 哪個 callback 不用了，記成限制**（2026-11-10，第 3 段開始前，使用者）：listener 在 host 這邊跟著節點被回收，guest 自己那張「編號對到哪個函式」的表不知道、只會長，到 Store 結束（換頁）才清。TodoMVC 用事件委派，listener 的數量固定。不選這一段就加 `release-callback` 的 export：host 要知道 listener 什麼時候被 GC 回收，要另外的機制；等有頁面需要、或加 timer 時（用完就該丟的 callback）一起設計。之後補的代價：world 多一個 export，所有 guest 重編。
+17. **互動的情境兩份、逐行相同，由測試檢查**（2026-11-10，第 4 段開始前）：wasm 版和 JS 版各一份情境檔，步驟一樣、只有 `navigate` 那一行不同；一個測試檢查兩份除了那一行以外逐行相同。不選在情境的語言加 `include`（步驟只寫一次，但要改 runner、視窗那一層，為了一組情境加一個語言功能；有第二組要共用步驟的情境時再做）。不選各寫各的、不檢查（兩邊會走偏，「結果一樣」沒有東西守著）。對照 Chromium：WPT 的 `<meta name="variant">` 讓同一份測試對不同參數各跑一次，是測試框架本來就有的。
 
 ## 待決定
 
@@ -211,7 +212,7 @@ WIT 的成員是明列的清單（「已決定的事項」第 13 條）：第 2 
 
 第 4 段開始前：
 
-8. （TodoMVC 的來源、guest 和頁面放哪已決定，「已決定的事項」第 11 條。）互動的情境怎麼和 JS 版比（同一份情境對兩個頁面跑，或各一份）。
+8. （都決定了：「已決定的事項」第 11、17 條。）
 
 ## 之後的可能
 

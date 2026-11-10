@@ -272,7 +272,7 @@
   - **沒有 JS**：event handler 的屬性（`onclick=""`）不執行；DevTools 的 Console、`Runtime` 和 `Debugger` 沒有 inspector 回答，其他由 renderer 回答的 domain 在 wasm 文件上沒有測過；WebDriver 的 Execute Script、Get Element Property 回錯誤，所以 `test.py reftest` 和 `test.py wpt` 跑不了 wasm 文件（情境可以）。
   - **只有最上層的 frame**：iframe 沒有子文件；JS 頁面的 iframe 載入 wasm 文件時，它的 wasm script 不執行（engine 是整頁一個，照最上層的文件選）。
   - guest 只能在 `start` 裡等待（WASI 的時鐘）；它讀到的時鐘降到 100 µs。guest trap 時印到 console、不分派 `error`，那個 script 的 Store 結束。它印的最後一行沒有換行時，要到 Store 丟掉（換頁）才印出來。
-  - TodoMVC 的 guest（`crates/dom_wasm/tests/guests/todomvc.c`）只把固定的三個 todo 畫出來，不能新增、勾選、編輯、刪除、篩選：這個 guest 還沒有聽事件。
+  - TodoMVC 的 guest（`crates/dom_wasm/tests/guests/todomvc.c`）不保存 todo（JS 版在這裡也只存在記憶體裡）；最多 64 個 todo、標題最多 255 byte（超過的截掉），`trim` 只認 ASCII 的空白。JS 版會丟例外的地方（要找的元素不見了）它直接從 listener 回來。
   - 換到另一種文件時整頁換 engine（renderer 拿著的前一份 DOM 的東西都放掉）；DevTools 連著時換 engine 沒有測過。
 
 ## Bindings 和 DOM API

@@ -1,0 +1,12 @@
+# Mutation test of stage 4: what the interactive TodoMVC scenario alone
+# watches of the engine (a guest's `blur()` calling its own listeners:
+# Enter in a todo's field saves it through one):
+# python3 scripts/test.py mutate rfcs/0093-wasm-documents/mutants-4.toml
+test = ["python3", "scripts/test.py", "scenarios", "todomvc-app-wasm"]
+timeout = 600
+
+[[mutant]]
+name = "a guest's blur() calls no listener"
+file = "crates/dom_wasm/src/lib.rs"
+from = '''            scripted!(HTMLElement, blur, $kind, $path);'''
+to = '''            listed!(HTMLElement, blur, $kind, $path);'''

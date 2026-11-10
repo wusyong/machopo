@@ -18,12 +18,18 @@
 | 2b WIT 的清單加 TodoMVC 用到的成員，`list<string>`、可省略的 dictionary（決定 13）；第 2 段的檢查 | 完成 | 2026-11-10 |
 | 3a wasmtime 的 fork：set 的 Store 在 fiber 上接受同步的呼叫（決定 14） | fork 已 commit（`ef4e892`，本地的 `machopo` 分支，還沒 push），`third_party.toml` 釘到它 | 2026-11-10 |
 | 3b listener：`add`/`remove`、`handle-event`、事件的成員（決定 15、16）；第 3 段的檢查 | 完成 | 2026-11-10 |
-| 4 TodoMVC 的 guest、情境 | 還沒開始 | |
+| 4 TodoMVC 的 guest、情境（決定 17）；第 4 段的檢查 | 完成 | 2026-11-10 |
 
 ## 驗收
 
 | 項目 | 怎麼驗證 |
 | --- | --- |
+| wasm 的 TodoMVC 能新增、勾選、全部勾選、編輯（Enter、Escape、離開欄位、改成空的）、刪除、清除已完成、三種篩選 | `python3 scripts/test.py scenarios todomvc-app-wasm` |
+| 同樣的步驟對 JS 版結果一樣 | `python3 scripts/test.py scenarios todomvc-app-js`；兩份情境逐行相同：`cargo test -p shell --test it the_todomvc_scenarios` |
+| 在真的視窗裡也一樣 | `python3 scripts/test.py automation todomvc-app wasm-listeners wasm-document`（要顯示器和 GPU） |
+| guest 的 listener：呼叫順序、capture、`preventDefault`、`stopPropagation`、`remove`、trap、巢狀的分派、事件 handle 的期限 | `cargo test -p dom_wasm --test it engine`；真的輸入：`python3 scripts/test.py scenarios wasm-listeners` |
+| wasm 文件：只跑 wasm、不跑 JS，guest 的等待，換 engine | `python3 scripts/test.py scenarios wasm-document`；`cargo test -p shell --test it wasm_documents` |
+| guest 畫的 TodoMVC 和寫死的 markup 畫出來逐像素相同 | `cargo test -p shell --test it the_wasm_todomvc`；`python3 scripts/test.py scenarios todomvc-wasm` |
 
 ## 做過的檢查
 
@@ -163,3 +169,18 @@
 - 第 3 段的檢查（`cargo fmt -p dom_wasm` 排過之後）：`cargo fmt --check` 乾淨；`cargo clippy --workspace --all-targets -- -D warnings` 通過；`cargo test --workspace` 通過（55 個測試 binary，3808 個測試通過、1 個 ignored）；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 通過。
   - 沒有跑的：`test.py automation`、整套的情境、reftest 和 WPT（由 CI 跑）；fork 的測試在 3a 跑過，3b 沒有改 fork。
 - fork 的 commit（`ef4e892`）還沒 push：先 push fork、再 push machopo。
+
+### 4 和第 4 段的檢查（2026-11-10，macOS，Apple Silicon；fork 還沒 push）
+
+- 開始前查過：JS 版（`tests/sites/todomvc`）用到的 DOM API 現在的 WIT 都有，沒有加成員。`event.keyCode` 改讀 `key`，`dataset` 改用 `getAttribute`/`setAttribute`。
+- guest（`crates/dom_wasm/tests/guests/todomvc.c`，約 570 行）：JS 版的 model、view、controller 一項一項搬（每個函式的註解寫它對應 JS 的哪一個），listener 照 JS 版加的順序、同樣的 capture（`blur` 是 capture）。JS 版會丟例外的地方直接回來。
+- 找到的問題，改了 guest 的寫法：**一個物件在一個 Store 裡只有一個 handle**，「用完就 `release`」的寫法會把呼叫它的那一層還拿著的 handle 放掉（勾選時：listener 的 target 是那個 checkbox，裡面的 query 又找到它、放掉，外層再放一次就 trap：「不是這個 Store 的 handle」，第一次跑靜態的情境時抓到）。改成記下來、最外層的 export 回來時一起放（巢狀的 listener 不放）。這是 binding 這種設計對 guest 的要求，記在 `crates/dom_wasm/README.md`。
+- 測試頁面的 seed：原本靜態的 guest 一開始就有三個 todo，互動的 guest 和 JS 版一樣從空的開始；`todomvc-wasm.html` 的清單加 `data-seed`，guest 看到它就先放三個 todo、在 `start` 裡畫（headless 的畫面在 `load` 的 listener 之前取，照 JS 版在 `load` 才畫的話和寫死的 markup 比不過）。
+- 情境（決定 17）：`todomvc-app-js` 和 `todomvc-app-wasm`，步驟逐行相同（`shell` 的 `wasm_documents::the_todomvc_scenarios_of_both_apps_are_the_same_steps` 檢查；手動改掉一行確認它會失敗、指出是第幾步）。先對 JS 版寫到通過，原樣給 wasm 版跑，第一次就通過。靜態的情境 `todomvc-wasm` 的後半改成「勾一個、計數變 1」。
+- 視窗裡看得到的行為都寫成情境，沒有請人看的項目。
+- mutation test（`mutants-4.toml`，1 條，測試是情境 `todomvc-app-wasm`）：「guest 的 `blur()` 不呼叫 listener」抓到（Enter 存檔靠它）；跑完確認檔案還原。這一段沒有改 Rust 的實作，其他的行為由 3b 的 15 條守著。
+- 過程中的失誤：我誤下 `git checkout` 還原了還沒 commit 的 `todomvc.c`，照對話裡的內容重寫回來（只影響那一個檔案，之後的測試都是對重寫後的版本跑的）。
+- 第 4 段的檢查：`cargo fmt --check` 乾淨；`cargo clippy --workspace --all-targets -- -D warnings` 通過；`cargo test --workspace` 通過（55 個測試 binary，3809 個測試通過、1 個 ignored）；`sanity.py` 七項通過；`test.py scenarios todomvc wasm`：8 次都通過；`test.py automation todomvc-app wasm-listeners wasm-document todomvc-wasm`（真的視窗）：5 份都通過。
+  - 沒有跑的：整套的情境、reftest、WPT（由 CI 跑）；fork 的測試（這一段沒有改 fork）。
+- 還要做的：RFC 完成時的整理（狀態、`progress.md` 併成一份、RFC 改寫成完成時的樣子）、merge 回 `main`、`cargo clean`，等審核。fork 的 commit（`ef4e892`）還沒 push：先 push fork、再 push machopo。
+

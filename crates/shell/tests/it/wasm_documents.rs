@@ -182,3 +182,41 @@ fn a_guest_focuses_and_blurs_an_element() {
     // guest's paragraph after it.
     assert!(blurred.pixels == with("blur").pixels);
 }
+
+/// The scenario `name`'s lines after its heading (the comment before its
+/// first command), the page it goes to left out.
+fn scenario_steps(name: &str) -> Vec<String> {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/scenarios")
+        .join(name);
+    let text = std::fs::read_to_string(&path).unwrap();
+    let steps: Vec<String> = text
+        .lines()
+        .skip_while(|line| line.starts_with('#'))
+        .filter(|line| !line.starts_with("navigate "))
+        .map(str::to_owned)
+        .collect();
+    // One page each: what is left out is that line alone.
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.starts_with("navigate "))
+            .count(),
+        1,
+        "{name}"
+    );
+    steps
+}
+
+/// The interactive TodoMVC scenarios, the JS app's and the wasm guest's,
+/// are the same steps but for the page: what one checks of its app the
+/// other checks of its own.
+#[test]
+fn the_todomvc_scenarios_of_both_apps_are_the_same_steps() {
+    let js = scenario_steps("todomvc-app-js.txt");
+    let wasm = scenario_steps("todomvc-app-wasm.txt");
+    assert!(js.iter().any(|line| line.starts_with("wait-text ")));
+    for (at, (js, wasm)) in js.iter().zip(&wasm).enumerate() {
+        assert_eq!(js, wasm, "step {at}");
+    }
+    assert_eq!(js.len(), wasm.len());
+}

@@ -1,0 +1,97 @@
+# TodoMVC, the JS app (`tests/sites/todomvc`): todos added, done, filtered, edited (Enter, Escape,
+# leaving the field, a title emptied), all toggled, removed, cleared.
+# The steps are `todomvc-app-wasm`'s, line for line but for the page (a test of
+# `shell`'s checks that): the two apps do the same to the same input.
+window size=800x600
+navigate ../sites/todomvc/index.html
+wait-loaded
+
+# New todos: typed and entered, the white space around one cut; what is
+# only white space is none.
+click .new-todo
+type "Buy milk"
+key Enter
+wait-text .todo-list>li:nth-child(1) label "Buy milk"
+wait-text .todo-count "1 item left"
+type "  Walk the dog  "
+key Enter
+wait-text .todo-list>li:nth-child(2) label "Walk the dog"
+type "   "
+key Enter
+type "Write code"
+key Enter
+wait-text .todo-list>li:nth-child(3) label "Write code"
+wait-text .todo-count "3 items left"
+screenshot added
+
+# One done: its item, the count, the button that clears what is done.
+click .todo-list>li:nth-child(2) .toggle
+wait-text .todo-list>li.completed label "Walk the dog"
+wait-text .todo-count "2 items left"
+wait-text .clear-completed "Clear completed"
+screenshot toggled
+
+# The filters: what is left, what is done, all.
+click .filters a[href="#/active"]
+wait-text .filters .selected "Active"
+wait-text .todo-list>li:nth-child(2) label "Write code"
+click .filters a[href="#/completed"]
+wait-text .filters .selected "Completed"
+wait-text .todo-list>li:nth-child(1) label "Walk the dog"
+click .filters a[href="#/"]
+wait-text .filters .selected "All"
+wait-text .todo-list>li:nth-child(3) label "Write code"
+
+# Editing: a double click on the title, what is typed after it, Enter.
+dblclick .todo-list>li:nth-child(1) label
+wait-text .todo-list>li.editing label "Buy milk"
+type " now"
+key Enter
+wait-text .todo-list>li:nth-child(1):not(.editing) label "Buy milk now"
+
+# Escape leaves the title as it was.
+dblclick .todo-list>li:nth-child(3) label
+wait-text .todo-list>li.editing label "Write code"
+type " badly"
+key Escape
+wait-text .todo-list>li:nth-child(3):not(.editing) label "Write code"
+
+# Leaving the field (a click elsewhere) keeps what was typed.
+dblclick .todo-list>li:nth-child(3) label
+wait-text .todo-list>li.editing label "Write code"
+type "!"
+click .new-todo
+wait-text .todo-list>li:nth-child(3):not(.editing) label "Write code!"
+
+# A title edited to nothing: the todo is gone.
+type "ab"
+key Enter
+wait-text .todo-list>li:nth-child(4) label "ab"
+dblclick .todo-list>li:nth-child(4) label
+wait-text .todo-list>li.editing label "ab"
+key Backspace
+key Backspace
+key Enter
+wait-text .todo-count "2 items left"
+wait-text .todo-list>li:last-child label "Write code!"
+
+# All done, and none.
+click .toggle-all-label
+wait-text .todo-count "0 items left"
+click .toggle-all-label
+wait-text .todo-count "3 items left"
+
+# One removed by its button (shown when the pointer is over the item).
+hover .todo-list>li:nth-child(2)
+click .todo-list>li:nth-child(2) .destroy
+wait-text .todo-list>li:nth-child(2) label "Write code!"
+wait-text .todo-count "2 items left"
+
+# What is done cleared.
+click .todo-list>li:nth-child(1) .toggle
+wait-text .todo-count "1 item left"
+click .clear-completed
+wait-text .todo-list>li:nth-child(1) label "Write code!"
+wait-text .todo-list>li:last-child label "Write code!"
+wait-text .clear-completed ""
+screenshot done
