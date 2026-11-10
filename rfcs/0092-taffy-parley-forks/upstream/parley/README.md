@@ -8,7 +8,7 @@
 | Make the line after a final break only where asked | [final-break.md](final-break.md)，等審核 | 照草稿寫 PR |
 | fontique: leave out fonts without an em | [font-without-em.md](font-without-em.md)，等審核 | 照草稿寫 PR |
 | Take the first font when it covers a cluster | 沒有草稿 | 先開 issue：改的是選字型的順序，對其他使用者是行為的變化 |
-| Lay out tabs at tab stops | 沒有草稿 | 和上游還沒合併的 #934 比較，寫出差異；#934 先合併的話，改成決定用哪一邊（RFC 的「待決定」） |
+| Lay out tabs at tab stops | 沒有草稿 | 和上游還沒合併的 #934 比較，寫出差異；#934 先合併的話，改成決定用哪一邊（RFC 的「之後的可能」） |
 | Break lines after soft hyphens with a hyphen | 沒有草稿 | 和上游還沒合併的 #827 比較，寫出差異；#827 先合併的話同上 |
 | Share a layout's shaped text | 沒有草稿 | 先開 issue：動到 `Layout` 的資料怎麼擁有 |
 | Keep shapings: of layouts alike, and of words | 沒有草稿，暫時只在 fork | 先開 issue：快取的上限和計數是照瀏覽器的需要訂的，上游要的可能是別的形狀 |

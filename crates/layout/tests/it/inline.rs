@@ -1009,3 +1009,15 @@ fn lines_with_floats_are_broken_once_in_the_width_their_box_is_given() {
         );
     }
 }
+
+/// A float among the lines of a box that is given its width is placed in
+/// that width: a right float at the box's right edge, however narrow the
+/// box's content is.
+#[test]
+fn a_float_among_lines_is_placed_in_the_width_its_box_is_given() {
+    let laid = crate::page::lay_out(
+        "<style>body { margin: 0; font: 20px/1 Ahem }</style>         <div style='display: flow-root'>         <div id=float style='float: right; width: 10px; height: 5px'></div>X</div>",
+    );
+    assert_eq!(laid.rect("float"), RectF::new(790.0, 0.0, 10.0, 5.0));
+    assert_eq!(lines(&laid.view)[0].rect, RectF::new(0.0, 0.0, 20.0, 20.0));
+}

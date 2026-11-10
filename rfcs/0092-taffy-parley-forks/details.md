@@ -1,6 +1,6 @@
 # RFC 0092 的細節：taffy 和 parley 的 fork
 
-這份是 `README.md` 的補充，放支撐它的細節。`README.md` 裡的結論和決定以那邊為準，這裡不重複。
+這份是 `README.md` 的補充，放支撐它的細節。`README.md` 裡的結論和決定以那邊為準，這裡不重複。「workaround 的清單」的最後一欄是做完時的狀態；上游的變化、parley 重寫前的 commit 和各種比較是 RFC 開始時（2026-11-10）的樣子。
 
 ## workaround 的清單
 
@@ -23,6 +23,8 @@
 
 ### 換成上游就能拿掉的
 
+前兩列拿掉了（parley 跟上上游時）；後兩列的上游還沒合併，workaround 留著。
+
 | workaround | 位置 | 上游 |
 | --- | --- | --- |
 | 有 `text-indent` 時量 intrinsic 寬度改成真的斷行 | `indented`、`content_widths`（`text.rs`） | parley #866、#889（已合併） |
@@ -37,9 +39,9 @@
 - parley：white space 的 phase I（`collapse_white_space`；parley 的 span 設成 `Preserve`，它自己的處理不跑）、inline 元素的盒子（邊緣是 0px 高的 `InlineBox`）、`text-overflow` 和省略號、連字號的字形、SVG text 每個字元的位置、canvas text、UTF-16 的 offset 對應、行尾的框、`line-height` 和 `word-break: break-word` 的對應、`vertical-align` 的百分比、用 read-fonts 讀 metrics。
 - 照 Chrome 的：`needs_synthetic_bold`（fontique 只在差 200 以上才加粗）、字型家族的別名（`font_families.rs`）、variation 軸給 raster 時換回 user-space 的值。
 
-## parley fork 現在的 commit
+## parley fork 重寫前的 commit
 
-2026-11-10 的 `machopo` 分支（`cefcbc5d`），從上游的 `97beea38` 分出來，16 個 commit（GitHub 的 compare）：
+重寫前（2026-11-10）的 `machopo` 分支（`cefcbc5d`），從上游的 `97beea38` 分出來，16 個 commit（GitHub 的 compare）：
 
 | commit | 名稱 | 大小 | 改到的 |
 | --- | --- | --- | --- |
@@ -64,7 +66,7 @@
 
 ## parley fork 的重寫
 
-建議的分組（rebase 到最新的 main 之後再確認）。每一組是一個 commit，帶 fork 自己的測試，README 的更新放在最後一個 commit：
+開始時建議的分組；每一組是一個 commit，帶 fork 自己的測試，README 的更新放在最後一個 commit。實際做的和它不同的地方：inline 元素的邊緣做成不佔字元、有寬度的 box，atomic inline 照上游用 U+FFFC（「atomic inline 照 span 的 `text-wrap-mode`」沒有搬）；optical sizing 改由 machopo 做，fork 的 commit 拿掉；tab stop 和軟連字號保留 fork 的；多了字型家族的兩個 commit（`FontFamilyIds`、`push_default`）。最後是 11 個 commit，清單在 fork 的 `README.machopo.md` 和 `upstream/parley/README.md`。
 
 | 組 | 包含 | 上游 | 建議 |
 | --- | --- | --- | --- |
@@ -81,7 +83,7 @@
 | 斷行的查表 | `line_table.rs`、`skip_word_boundaries` | | 寫上游的草稿；上游的 #755（把 segmentation 移出 `parley_engine`，進行中）會碰到 |
 | 改名 | `Rename kun to machopo` | | 不再是單獨的 commit：每個 commit 從一開始就用 `machopo:` |
 
-16 個 commit 預計變成 10 個左右，其中幾個在上游合併 #934、#827 之後還能再拿掉。
+當時預計 16 個 commit 變成 10 個左右，其中幾個在上游合併 #934、#827 之後還能再拿掉。
 
 ## 上游的變化
 
@@ -116,7 +118,7 @@ machopo 用的是 v0.15.0（2026-10-17）；v0.15.1 在 2026-10-25 發佈。v0.1
 | B. fork 加上 machopo 裡的 patch（建議） | fork 的分支，匯出 patch | `git rebase`（或 `git am -3` 套到新的上游），再匯出 | 修改和它的歷史在 machopo 裡、跟著 machopo 的 commit 審核；舊的 machopo commit 帶著當時的 patch；送上游的 PR 從 fork 開 | 兩份，要腳本檢查一致；改 fork 多一步匯出 |
 | C. 只有 patch | machopo 裡的 patch，`ci.py third-party` clone 上游、套上 | `git am -3` 套到新的上游，再匯出 | 一份；不需要 fork 的分支 | 送上游的 PR 還是要 fork；套出來的 commit 的 hash 要固定 commit 的日期才穩定；不能直接在 checkout 上 commit、push |
 
-B 的細節（第 1 段決定）：
+B 當時的細節（實際的做法在 `README.md` 的「fork 和 patch 的規則」：`patches/<名稱>/`、檔名不編號、起點記在 `third_party.toml`、`ci.py patches` 匯出、`patches/` 照原樣保存不轉換行）：
 
 - 放在 machopo 的 repo 的一個資料夾，每個專案一個子資料夾，裡面是 `git format-patch` 的輸出（`0001-….patch` 這樣編號），加上記上游起點的檔案，或直接用 `third_party.toml` 加一個上游的 rev 欄位。
 - `ci.py third-party` 檢查：fork 的 rev 的上游起點和 patch 套上去的結果，和 fork 的分支的樹一樣；不一樣時說出是哪個 patch。
