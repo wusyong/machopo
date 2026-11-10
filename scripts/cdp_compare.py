@@ -1,9 +1,10 @@
 """`test.py cdp`: machopo's answers to DevTools' domains (V8's, and the
-renderer's `Page`, `Network`, `Log` and `DOM`) against Chrome's. Each case
+renderer's `Page`, `Network`, `Log`, `DOM`, `CSS` and `Overlay`) against Chrome's. Each case
 sends the same commands to machopo and to Chrome for Testing (the version
 `bench.py` pins, whose V8 is machopo's), on the same pages, and keeps the
 answers and the events it names; the values that differ from run to run
-(object, script, context, exception and node ids, times, the target's id)
+(object, script, context, exception, node and style sheet ids, times, the
+target's id)
 become placeholders, numbered as they first appear, so that which ones
 are the same thing still counts. What differs is printed; the known
 differences, each with its reason, are left out.

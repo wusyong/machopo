@@ -1,7 +1,7 @@
 # RFC 0091：DevTools 的 Elements：`DOM`、`CSS` 和 `Overlay`
 
 - 開始日期：2026-11-09
-- 狀態：🚧 已排程：2026-11-09（接受：2026-11-09；「已決定的事項」第 1 到 7 條：整份的範圍和分段、第 1 段；第 8 到 10 條：第 2 段；第 3 段的待決定在那一段開始前決定）
+- 狀態：✅ 已完成：2026-11-10（接受、排程：2026-11-09；「已決定的事項」第 1 到 7 條：整份的範圍和分段、第 1 段；第 8 到 10 條、第 14 到 18 條：第 2 段；第 11、12、19 到 29 條：第 3 段）
 - 進度和驗收：`progress.md`
 - 細節：`details.md`（RFC 開始前（2026-11-09）machopo 的 DevTools、DOM、style 和 paint 有什麼；Chromium 的對照；DevTools 前端送的命令；各個選項的完整比較；其他實作）
 
@@ -51,7 +51,7 @@ Chrome 的 DevTools 連上 machopo 之後，Elements 面板能用：
 - **Overlay**：
   - 框出節點：`Overlay.enable`、`highlightNode`、`hideHighlight`。
   - 在頁面上點選：`setInspectMode` 的 `searchForNode`，以及 `nodeHighlightRequested`、`inspectNodeRequested` 事件。
-  - 停在斷點時：`setPausedInDebuggerMessage`，「Paused in debugger」和繼續、逐步執行的按鈕。
+  - 停在斷點時：`setPausedInDebuggerMessage`，「Paused in debugger」（繼續、逐步執行的按鈕沒做，第 8 節）。
   - DevTools 連上時送的其他 `Overlay` 命令都有回答。
 - **`CSS.forcePseudoState`**（「已決定的事項」第 1 條）：Styles 的 `:hov` 強制 `:hover`、`:focus` 等。
 
@@ -88,15 +88,16 @@ Chrome 的 DevTools 連上 machopo 之後，Elements 面板能用：
   - 滑過樹裡的節點時，頁面上用 Chrome 的顏色框出 content（藍）、padding（綠）、border（黃）、margin（橘），旁邊有 `div.card 320 × 48` 的標籤。
   - 按「選取元素」的按鈕之後，在頁面上移動滑鼠會框出底下的元素，點一下選中它。這時頁面本身收不到這些滑鼠事件。
 - **選了節點之後**：
-  - **Styles**：由上而下列出 inline style、套用的規則（選擇器、宣告，被蓋掉的劃掉，`user agent stylesheet` 標出來）、繼承來的規則、`::before` 等 pseudo element 的規則。規則旁邊的「檔名:行」點下去跳到 Sources 的那一行。
+  - **Styles**：由上而下列出 inline style、套用的規則（選擇器、宣告，被蓋掉的劃掉，`user agent stylesheet` 標出來）、`::before` 等 pseudo element 的規則、繼承來的規則和 `@keyframes`。解析不了的宣告劃掉，註解掉的是沒打勾的一條，包著規則的 `@media`、`@supports` 寫在上面。規則旁邊的「檔名:行」點下去跳到 Sources 的那一行。`:hov` 強制 `:hover`、`:focus` 和表單的狀態。
   - **Computed**：每個 property 的值，以及 box model 的圖。
   - **Event Listeners**：listener 的類型、函式和來源。
   - **Console**：`$0` 是這個節點。
-- **停在斷點時**：頁面上方有「Paused in debugger」和繼續、逐步執行的按鈕，按下去和在 DevTools 裡按一樣。
+- **停在斷點時**：頁面蓋上一層，上方有「Paused in debugger」（沒有 Chrome 提示上的繼續、逐步執行的按鈕，DevTools 自己有）；停住時 Console 改的東西、框的節點照樣畫。
 
-**machopo 和 Chrome 不同的地方**（第 7 節）：
-- machopo 解析時丟掉的東西，Styles 裡看不到：不支援的 property、無效的值、不支援的 at-rule（`@layer`、`@container`、`@font-face` 等）。Chrome 把無效的劃掉並加上警告。
-- 第 7 節的選項 R2 能把它們從原文找回來。
+**machopo 和 Chrome 不同的地方**（第 7 節，其他的在 `docs/limitations.md`）：
+- 解析時丟掉的宣告照 Chrome 劃掉，包括 machopo 還不支援、Chrome 支援的 property 和值（Chrome 不劃）；machopo 丟掉的 at-rule（`@import`、`@layer`、`@container`、`@font-face` 等）和裡面的規則不在 Styles 裡。
+- script 用 CSSOM 改過的 stylesheet，原文換成序列化的規則（Chrome 把改的規則寫進原本的原文）。
+- 強制的 `:visited` 不生效；停在斷點時 CSS 動畫不往前走。
 
 ### 改這部分程式的人
 
@@ -105,9 +106,10 @@ Chrome 的 DevTools 連上 machopo 之後，Elements 面板能用：
   - 命令先問它們，問不到才交給 V8 的 inspector；
   - 停在斷點時也在 `answer_here` 那一串裡。
 - **browser 不用改**：`DOM`、`CSS`、`Overlay` 原樣轉給 renderer。
-- **DOM 的改動**：只在有 session 打開 `DOM` 時，`dom` 才把改動記進一個 buffer，renderer 拿走之後轉成事件。這和 DevTools 抓 stack 的做法一樣（`Dom::set_stacks_wanted`）。沒打開時，每個掛點只多一個判斷。
+- **DOM 的改動**：只在有 session 打開 `DOM` 時，`dom` 才把改動（連同 style 告訴它的 pseudo element 的來去）記進一個 buffer（`dom` 的 `probe`），renderer 拿走之後轉成事件。這和 DevTools 抓 stack 的做法一樣（`Dom::set_stacks_wanted`）。沒打開時，每個掛點只多一個判斷。強制的 pseudo-class 也存在 `dom`，match 時先看一個旗標。
 - **要 V8 的部分**：`resolveNode`、`requestNode`、`$0`、listener 經過 `dom_api::ScriptEngine` 新的方法，V8 的實作在 `dom_js` 和 `bindings`。renderer 和 `dom_api` 照舊和 engine 無關。
-- **套用的規則**：由 `style` 新的一條「說明」的路算。它照一般的 cascade 重新 match 一個元素，但不寫回任何快取，也不動 selector 的 flag。
+- **套用的規則**：由 `style` 新的一條「說明」的路算。它和一般的 cascade 共用收集 block 的程式，重新 match 一個元素，但不寫回任何快取，也不動 selector 的 flag。規則的位置由 `css` 的同一個 parser 的記位置的模式對原文重新解析。
+- **停在斷點時**：main thread 的 task 是一個 scheduler，停住的迴圈只取 DevTools 和畫 frame 的；畫 frame 要的狀態在 `Frame` 裡，停住的迴圈經過 isolate 借得到，照樣畫。
 - **框出節點**：overlay 是 commit 時附加在頁面的 layer 上面的一個 layer，不經過頁面的 paint。框的位置改了只要重畫這個 layer，不重新 layout，也不重畫頁面。
 
 ## 詳細設計
@@ -137,17 +139,17 @@ Chrome 的 DevTools 連上 machopo 之後，Elements 面板能用：
 - **`nodeId`**：每個 session 一份，節點第一次送給前端時才發（Blink 的 `Bind`）。從 1 開始，同一個 session 裡不重用。
 - **什麼時候清掉**：照 Blink 的 `DiscardFrontendBindings`：`getDocument`、`documentUpdated`、`disable` 時全部清掉；節點從樹上移除時，它和送過的子孫都解除（Blink 的 `Unbind`）。
 - **節點怎麼留住**：照 Blink 用 strong 的（「已決定的事項」第 3 條）。
-  - 原本寫每個 session 一個 `Persistent<HeapVector<Node>>` 留住綁著的節點；做的時候（1a）改成只留住不在文件的樹裡的子樹的根（每個一個 `NodeRoot`），加上 nodeId 和 `NodeId` 兩張表。行為一樣：綁著的節點不是在文件的樹裡（文件留著它），就是在這樣一個子樹裡（根留著它），從樹上移除時就解除；但 `HeapVector` 解除一個節點要搬動後面的（O(n)），這樣不用，root 的數量也只有前端要過的 detached 的子樹那麼多。
+  - 每個 session 只留住不在文件的樹裡的子樹的根（每個一個 `NodeRoot`），加上 nodeId 和 `NodeId` 兩張表：綁著的節點不是在文件的樹裡（文件留著它），就是在這樣一個子樹裡（根留著它），從樹上移除時就解除。第 3 條原本寫一個 `Persistent<HeapVector<Node>>` 留住每個綁著的節點，行為一樣，但 `HeapVector` 解除一個節點要搬動後面的（O(n)），這樣不用，root 的數量也只有前端要過的 detached 的子樹那麼多。
   - 還在樹上的節點本來就活著，所以實際多留住的只有不在樹上的節點：`requestNode` 一個 detached 的物件，或在 Console 裡 `inspect()` 一個拿掉的元素。它們（連同子樹和 wrapper）活到解除為止，和 Blink 的 `Member<Node>` 一樣。
   - root 要比 heap 早 drop（elise 的規則）：session detach 時清掉，engine 收掉之前 agent 先放手。
-- **pseudo element**：`::before`、`::after`、`::marker` 只在 style 和 layout 裡，不是 DOM 的物件，沒有 `NodeId`。agent 給（元素, `PseudoId`）一個 nodeId 和 `backendNodeId`，`backendNodeId` 從另一段數字發，和 `NodeId` 不重疊。
+- **pseudo element**（第 26 條）：`::before`、`::after`、`::marker` 只在 style 和 layout 裡，不是 DOM 的物件，沒有 `NodeId`。agent 給（元素, 種類）一個 nodeId 和 `backendNodeId`：`backendNodeId` 是 2^32 乘上種類（1 到 3）加上元素的 id，`NodeId` 是 32 位元，不會撞到；不另外存表，從 id 就讀得回元素和種類。有沒有它照 Blink 的 `PseudoElement::CanCreate` 的意思（`::before`、`::after` 有 `content` 而且不是 `display: none`，list item 的 `::marker`），送的順序 `::marker`、`::before`、`::after`。來去經過 style 的掛點（`set_pseudo_styles_changed`）記下；判斷要 layout（pseudo element 的樣式從 frame 拿），沒有 layout 的時候（task 之後、回答命令之前）先放著，lifecycle 之後一起處理，送 `pseudoElementAdded`、`pseudoElementRemoved`。`describeNode`、`getBoxModel` 和 `Overlay` 的框都認得它。
 
 ### 3. 樹和 lazy push
 
 照 Blink 的 `InspectorDOMAgent`（`details.md` 的「Chromium 的對照」第 1 項）：
 - **送多少**：
   - `getDocument` 送到給的深度；每個沒送子節點的容器帶 `childNodeCount`。
-  - 預設的深度照 Blink 的實作。Blink 的程式和 pdl 寫的不同，開始時用 Chrome for Testing 152 錄過確認。
+  - 預設兩層，照 Blink 的實作（Blink 的程式和 pdl 寫的不同，用 Chrome for Testing 152 錄過）。
   - 只有一個文字子節點的元素直接帶上它。
   - shadow root、`<template>` 的內容、pseudo element 一律帶到下一層。
 - **`requestChildNodes`**：在回答之前同步送 `setChildNodes`。前端在回答之後就讀子節點，晚送的話節點點不開。
@@ -181,28 +183,19 @@ Chrome 的 DevTools 連上 machopo 之後，Elements 面板能用：
 - `childNodeInserted` 帶的節點是轉的時候的樣子，不是插入當下的。之後同一批的屬性改動照樣送，前端最後看到的一樣。
 - user-agent shadow tree 裡的改動也送，例如在文字框打字時 inner editor 的文字，和 Chrome 一樣。
 
-**成本**：沒打開時每個掛點多讀一次旗標。插入、改屬性在 Speedometer 很熱，所以旗標盡量和掛點現有的判斷（例如 MutationObserver 的 `observed()`）放在一起（第 1 段的實作確認）。Chrome 的每個 probe 在呼叫點也先判斷一次：整個 process 一個 atomic 的 agent 位元組（`CoreProbeSink::HasAgentsGlobal`，acquire 的 load），任何一個分頁開了 DevTools，同一個 process 的頁面都走進 probe 的實作；machopo 的旗標是 `Dom` 自己的、不是 atomic，只影響開了 DevTools 的分頁。
+**成本**：沒打開時每個掛點多讀一次旗標。插入、改屬性在 Speedometer 很熱，所以旗標盡量和掛點現有的判斷（例如 MutationObserver 的 `observed()`）放在一起。Chrome 的每個 probe 在呼叫點也先判斷一次：整個 process 一個 atomic 的 agent 位元組（`CoreProbeSink::HasAgentsGlobal`，acquire 的 load），任何一個分頁開了 DevTools，同一個 process 的頁面都走進 probe 的實作；machopo 的旗標是 `Dom` 自己的、不是 atomic，只影響開了 DevTools 的分頁。
 
 ### 5. 停在斷點時
 
 Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈裡照樣分派 DOM、CSS 的命令。
 
-**machopo 現在的情況**：
-- 停住時只有 `answer_here` 那一串回答（`crates/bindings/src/devtools.rs` 的 `run_paused`），page agent 是從快取的 frame 資訊回答的。
-- `Dom` 在 isolate 的 state 裡（`dom_js/src/state.rs`），JS 呼叫 DOM API 時每次從那裡拿；dispatch 事件時呼叫每個 listener 之前也放開 `Dom`（`dom_js/src/listeners.rs` 的 `call_listener`）。所以停在 JS 裡時，看起來沒有 Rust 的程式借著 `Dom`。
-- layout 和 style 在 renderer 的 `FrameView` 裡，是 `RenderThread` 的欄位；停住時外層的呼叫拿著 `&mut RenderThread`，`answer_here` 拿不到它。
-
 照 Chrome，停住時 `DOM`、`CSS` 的命令都回答，包括要 layout 和 style 的（P1+，「已決定的事項」第 5 條，比較在 `details.md` 的「停在斷點時的選項」）：
-- **樹**：engine 在 `run_paused` 裡把 `Dom` 借給 `answer_here`，dom agent 照常回答。
-- **layout 和 style**（`getBoxModel`、`getContentQuads`、`getNodeForLocation`，第 2、3 段的 Computed、Styles）：停住的迴圈也要拿得到 `FrameView`，必要時當場重算 style 和 layout（Blink 也會）。要重新安排 `RenderThread` 的擁有權，例如停住時由外層的呼叫把 `FrameView` 一起交給 engine，或把它從 `RenderThread` 裡拆出來另外借；還要確認 script 執行到一半時跑 lifecycle 是安全的（machopo 的 lifecycle 有沒有假設 engine 呼叫期間不重算）。
-- **做法**（2026-11-09 的原型）：`Dom` 和 layout（renderer 的 `Frame`，裡面是 `FrameView`）都在 engine 的 isolate 的狀態裡，不在 `RenderThread` 上，所以不用重新安排 `RenderThread` 的擁有權。
-  - `bindings` 的 `run_message_loop_on_pause` 把 isolate 交給停住的迴圈，`answer_here` 和 `paused` 帶著它；`dom_js` 用它做一個 page（`dom_api::DevToolsPage`）交給 renderer 的 `DevToolsQueueHandle`。不停住時 renderer 的命令也用同樣的 page（`ScriptEngine::devtools_page`）。
-  - page 給 `dom_and_layout`（DOM 和 layout）和 `objects`（`DevToolsObjects`：第 6 節的 `resolveNode`、`requestNode`、`$0`、Event Listeners）；兩者都從 isolate 的狀態借，借用跟著 page 的 `&mut self`，agent 拿著 DOM 時不能呼叫 inspector。原型（1a）是一個帶著 `&mut Dom` 和 layout 的 struct（`PausedPage`）；1b 要停住時也呼叫 inspector，struct 拿著 DOM 的借用就不能再經過 isolate 借，改成 trait。
-  - layout 照 operation 借它的方式（`LayoutCell` 的 take 和 set）拿出來、回答完放回去；呼叫停住的 script 的 operation 拿著它時是空的，那時要 layout 的命令照 P2 排著。查過 `dom_api` 借 layout 的地方（`with_layout`、`with_style`、`lend_layout`），沒有一個在借著時執行 JS，所以實際上一直拿得到。
-  - script 執行到一半時重算 style 和 layout 本來就有：`getBoundingClientRect` 這類 API 在 script 中途經過 `ApiCx::with_layout` 強制 layout，停住時重算是同一條路。
-  - 論證寫在 `crates/bindings/soundness.md` 的「停在斷點和打斷時的 DevTools 命令」：停在 JS 的敘述時，外層的 Rust 手上沒有狀態的借用；借用在 `answer_here` 回來時結束，在下一則交給 session 之前。
-- **原型確認了**（測試在 `progress.md`）：停在一般的 script、`click()` 呼叫的 listener、`focus()` 呼叫的 `focus` listener、`createElement` 裡的 custom element constructor、MutationObserver 的 callback、`setTimeout`、`requestAnimationFrame` 和 ResizeObserver 的 callback 時，都讀得到當時的 DOM、拿得到 layout，重算之後的 box 跟著 script 的改動。所以不拆（「已決定的事項」第 5 條）。
-- **借不到的東西**：停住時 renderer 不畫新的 frame（`LayerTreeHost` 在 render thread 上），所以停住時框出節點、「Paused in debugger」另外處理（第 8 節）。
+- **借得到什麼**：`Dom` 在 isolate 的 state 裡（`dom_js/src/state.rs`），JS 呼叫 DOM API 時每次從那裡拿，dispatch 事件時呼叫每個 listener 之前也放開，所以停在 JS 的敘述時沒有 Rust 的程式借著它。layout（renderer 的 `Frame`，裡面是 `FrameView`）也在 isolate 的狀態裡，不在 `RenderThread` 上。決定第 5 條時以為 `FrameView` 是 `RenderThread` 的欄位、停住時拿不到，要重新安排擁有權，所以第 1 段先做了原型；原型確認不用。
+- **怎麼借**：`bindings` 的 `run_message_loop_on_pause` 把 isolate 交給停住的迴圈，`answer_here` 和 `paused` 帶著它；`dom_js` 用它做一個 page（`dom_api::DevToolsPage`）交給 renderer。不停住時 renderer 的命令也用同樣的 page（`ScriptEngine::devtools_page`）。page 給 `dom_and_layout`（DOM 和 layout）和 `objects`（`DevToolsObjects`：第 6 節的 `resolveNode`、`requestNode`、`$0`、Event Listeners）；兩者都從 isolate 的狀態借，借用跟著 page 的 `&mut self`，agent 拿著 DOM 時不能呼叫 inspector。（原型是一個帶著 `&mut Dom` 和 layout 的 struct；停住時也要呼叫 inspector，struct 拿著 DOM 的借用就不能再經過 isolate 借，所以是 trait。）
+- **layout**：照 operation 借它的方式（`LayoutCell` 的 take 和 set）拿出來、回答完放回去；呼叫停住的 script 的 operation 拿著它時是空的，那時要 layout 的命令照 P2 排著。`dom_api` 借 layout 的地方（`with_layout`、`with_style`、`lend_layout`）都不在借著時執行 JS，所以實際上一直拿得到。script 執行到一半時重算 style 和 layout 本來就有（`getBoundingClientRect` 經過 `ApiCx::with_layout` 強制 layout），停住時重算是同一條路。
+- 論證寫在 `crates/bindings/soundness.md` 的「停在斷點和打斷時的 DevTools 命令」：停在 JS 的敘述時，外層的 Rust 手上沒有狀態的借用；借用在 `answer_here` 回來時結束，在下一則交給 session 之前。
+- 測試停在一般的 script、`click()` 呼叫的 listener、`focus()` 呼叫的 `focus` listener、`createElement` 裡的 custom element constructor、MutationObserver 的 callback、`setTimeout`、`requestAnimationFrame` 和 ResizeObserver 的 callback，都讀得到當時的 DOM、拿得到 layout，重算之後的 box 跟著 script 的改動。
+- 停住時照樣畫新的 frame（框出節點、「Paused in debugger」）在第 8 節。
 
 ### 6. 和 JS 的連接
 
@@ -219,195 +212,130 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 
 `resolveNode` 不管前端給的 `executionContextId`，一律在節點的 frame 的 main world 裡包：machopo 沒有 isolated world，每個 frame 只有那一個 context；rusty_v8 也沒有 `contextById` 的 binding（記在 `docs/limitations.md`）。
 
-這些 inspector 的 API 在 rusty_v8 裡已經有 binding（`wrap_object`、`unwrap_object`、`add_inspected_object`、`value_subtype`、`description_for_value_subtype`），預計不用改 fork；第 1 段的原型一起確認。
+這些 inspector 的 API 在 rusty_v8 裡已經有 binding（`wrap_object`、`unwrap_object`、`add_inspected_object`、`value_subtype`、`description_for_value_subtype`），不用改 fork。
 
 ### 7. Styles 和 Computed
 
-（computed style、字型和元素自己的規則在第 2 段，其他在第 3 段；`details.md` 的「RFC 開始前（2026-11-09）machopo 有什麼」第 3 項是現況。）
+（`details.md` 的「RFC 開始前（2026-11-09）machopo 有什麼」第 3 項是開始前的現況。）
 
-- **stylesheet 的清單**：
-  - 每份文件和 shadow root 的 `<style>`、`<link>` 和 adopted stylesheet 各送一個 `styleSheetAdded`。
-  - `styleSheetId` 是 `CssStyleSheet` 的 id 加上 renderer 的前綴。
-  - 現在沒有 `@import` 的子 stylesheet。
-  - `<style>` 的文字改了、或元素被拿掉再放回去時，machopo 建新的 stylesheet 物件，所以送 `styleSheetRemoved` 再送 `styleSheetAdded`。Chrome 也是這樣（2026-11-09 用 Chrome for Testing 152 試過：改 `<style>` 的 `textContent`，換一個新的 id）。
-  - constructed stylesheet 的原文是 CSSOM 序列化的（Chrome 的 `replaceSync('.c { color: blue }')` 給 `.c { color: blue; }\n`），所以第 11 條只有 `<link>` 要留原文。
-  - UA 的規則和 Chrome 一樣不送 header，規則帶 `origin: user-agent`、不帶 `styleSheetId`。
-- **原文和位置**：
-  - machopo 的 `css` 解析完不留原文（`<style>` 的在 DOM 的文字裡），也不記規則和宣告的位置。
-  - 原文從哪裡來：待決定第 11 條。
-  - 規則的範圍（`range`，Styles 的「檔名:行」和 Sources 靠它）怎麼得到：待決定第 12 條。
-- **套用的規則**：
-  - `style` 加 `StyleEngine` 的一條「說明」的路：照 `recalc_style` 為一個元素重新跑 match 和排 block。
-  - 為了不影響之後的 style：
-    - 不用 matched properties cache；
-    - 用新的 `SelectorCaches`；
-    - selector 的 flag 用 `NeedsSelectorFlags::No`；
-    - bloom filter 先放進祖先；
-    - 不寫回元素的 style。
-  - 回答 block 的清單：來源的規則、層級、specificity、inline 或 attribute 的 style。
-  - 元素自己的那部分在 2b（「已決定的事項」第 14 條）：規則先不帶 `styleSheetId` 和 `range`；屬於哪份 stylesheet、繼承來的、pseudo element 的在第 3 段。
-  - 規則屬於哪份 stylesheet：一份一份 match 來決定。文件裡小的 stylesheet 在 match 時併成一個 index，同樣文字的 `<style>` 也共用規則。
-  - 前端要的 `matchingSelectors`：對選擇器清單一個一個 match。
-  - 繼承來的：對 flat tree 的祖先各跑一次。
-  - pseudo element 的：對 machopo 有的 pseudo（`::before`、`::after`、`::marker`、`::selection` 等）各跑一次。
-  - 檢查：debug build 把說明的結果再 cascade 一次，和元素存著的 `ComputedStyle` 比，「說明」和一般的 cascade 就不會分岔。
-- **computed style**：重用 `dom_api` 的 `computed_style`，也就是 `getComputedStyle` 的 property 清單和取值（包括 layout 決定的值）。
-  - 跟著更新（「已決定的事項」第 15 條）：`trackComputedStyleUpdatesForNode` 記下節點，每次 lifecycle 之後比較它的 `ComputedStyle` 換了沒有，換了就送 `computedStyleUpdated`。
-- **inline style 和 attribute 的 style**：
-  - inline style 是 `Cx::inline_style`。
-  - attribute 的 style 是 presentational hint 的那一個 block，HTML 的屬性和 SVG 的 presentation attribute 併在一起，和 Chrome 的 `attributesStyle` 一樣是一個 block。
-- **字型**：`getPlatformFontsForNode` 從元素的文字的 fragment 拿實際用到的字型和 glyph 數。
-- **強制的 pseudo-class**：
-  - 照 Blink 的 `probe::ForcePseudoState`（「已決定的事項」第 1 條）：每個 session 記元素強制的 pseudo-class，`style` 的 `match_non_ts_pseudo_class` 在記下 state 的依賴之後先看強制的。
-  - 那是 match 的熱路：先看「有沒有元素被強制」一個旗標，沒有時只多讀一次。
-  - 改了之後經過 `state_changed` 通知，照現有的 invalidation 只重算受影響的元素。
-  - 不改 DOM 上的 hover、focus 的 bit：表單控制項的原生外觀不跟著變，祖先的 hover 鏈也不動，和 Chrome 一樣。
-  - 這是新的「會影響 style 的狀態」，照 `docs/architecture.md` 的「快取和增量：加新東西時要跟著改的地方」檢查。
+**stylesheet 的清單**：
+- 每份文件和 shadow root 的 `<style>`、`<link>` 和 adopted stylesheet 各送一個 `styleSheetAdded`；`styleSheetId` 是 `CssStyleSheet` 的 id 加上 renderer 的前綴。沒有 `@import` 的子 stylesheet。
+- 什麼時候送：`style` 的 `StyleEngine` 每次收集文件或 shadow root 的 stylesheet 時把一個版本加一（`sheets_version`），renderer 在每次 lifecycle 之後比較每個 frame 的版本，變了才重新列出、和每個 session 上次知道的比，送少了的 `styleSheetRemoved`、多了的 `styleSheetAdded`、內容（`Arc`）換了的 `styleSheetChanged`；沒有 session 打開 `CSS` 時不比。Blink 在 `StyleEngine` 的 active stylesheet 變了時經過 probe 通知 agent，一樣是收集的時候。
+- `<style>` 的文字改了、或元素被拿掉再放回去時，machopo 建新的 stylesheet 物件，送 `styleSheetRemoved` 再送 `styleSheetAdded`，Chrome 也是（換一個新的 id）。
+- header 照 Blink 的 `InspectorStyleSheet::BuildObjectForStyleSheetInfo`：`ownerNode` 是 `backendNodeId`；inline 的 `sourceURL` 是文件的網址，constructed 的是空的；`isMutable` 只有 constructed 的是 true；`loadingFailed` 只有不是 inline 的送。UA 的規則和 Chrome 一樣不送 header，規則帶 `origin: user-agent`、不帶 `styleSheetId`。
 
-**做的時候（2b）定下的細節**：
-- 「說明」的路和 cascade 不分岔的做法：原本寫 debug build 把說明的結果再 cascade 一次比對；做的時候改成兩邊共用同一段收集 block 的程式（`Walk::blocks`，從 `cascade` 拆出來），說明的路拿它的結果，不會分岔，就不另外比對。
-- `matchingSelectors`：原本寫對選擇器清單一個一個再 match；`:host`、`::slotted()`、`::part()` 要的 matching context（host、featureless）和 match 時的來源綁在一起，另外 match 要重做那一套。改成 match 的時候記下來：`Walk` 多一個只有說明的路才有的 `matched_selectors`，一般的 match 在選擇器符合時多一次 `Option` 的判斷（不是每個候選，是每個符合的）。同一條規則在兩個地方（同一份 stylesheet adopt 兩次）列兩次，各自只帶符合的選擇器一次。
-- 說明的路不設 selector 的 flag（`NeedsSelectorFlags::No`）：同一個元素的 recalc 已經設過一樣的 flag，設了也一樣（mutation test 是等價的），照第 7 節寫的「不影響之後的 style」不設。
-- 回答的形狀照 Chrome：沒有 `style` 屬性的元素也送空的 `inlineStyle`；`parentLayoutNodeId` 是 flat tree 上的父元素（跳過 `display: contents` 的，Blink 的 `LayoutParentElement`），先把路送給前端；空的清單照 Chrome 送 `cssAtRules`，不送 `cssFunctionRules`、`cssPositionTryRules`；`shorthandEntries` 和宣告的 `important`、`implicit` 只在是 true 時送。沒有原文的規則（UA 的）和 Chrome 完全一樣；作者的規則 Chrome 照原文列（shorthand 照寫的、`!important` 在值裡），machopo 照解析的結果，比對時只比 longhand 的值。
-- 文字節點的 `getComputedStyleForNode` 是它在 flat tree 上的父元素的（Blink 的 `StyledElement`）；`getMatchedStylesForNode`、`getInlineStylesForNode` 要元素（「Node is not an Element」）。命令在 `CSS.enable` 之前回答「CSS agent was not enabled」（Chrome 也是）。
-- `getPlatformFontsForNode` 數節點自己的文字、子元素的文字和元素的產生的內容（兩層，Blink 的 `CollectPlatformFontsForLayoutObject`；和 Chrome 比過）；順序是第一次出現的順序（Chrome 的是 hash table 的，前端自己排）。名字讀字型的 `name` table：macOS 的 Times 只有 Macintosh 的紀錄，所以 Unicode 的英文、Macintosh 的英文、第一筆依序找。
-- 標籤的樣式那幾列（`elementInfo.style`）：顏色一律送 `#RRGGBBAA` 加上 `-unclamped-rgba`（Blink 的 `ToHEXA`；前端的 overlay 頁面照 `colorFormat` 自己寫成 `rgb(…)` 等），只有元素自己有非空白的文字時送顏色和字型。machopo 照 `inspector_overlay` 的 `createElementDescription` 畫：Color、Font、Background、Margin、Padding，透明的顏色、0px 的字型、`0px` 的 margin 和 padding 不畫，顏色照 `colorFormat` 寫（`#FF0000` 不帶 `FF`）。
+**原文**（第 11 條）：
+- `<style>` 的是它現在的文字；constructed 的是 CSSOM 序列化的規則（Chrome 的 `replaceSync('.c { color: blue }')` 也給 `.c { color: blue; }\n`）。
+- `<link>` 的：DevTools 連上之後載入的，留著回應（`Bytes` 共用不複製）；連上之前載入的，前端第一次要那一份的原文時照它的 `<link>` 再抓（`crossorigin` 時用 CORS，`use-credentials` 帶 credential，發起的是文件的 origin，destination 是 style），照它的 `<link>` 的方式解碼、對它的網址解析，序列化之後和現在的規則一樣才當成原文，否則給序列化的規則；結果記在那份 stylesheet 的內容上，之後不再抓。抓的時候又要的命令一起等那一次；請求在主迴圈的 task 之間送出，停在斷點時要等繼續。
+- script 用 CSSOM 改過的 stylesheet（第 22 條）：`dom` 的 `CssStyleSheet` 記著 script 有沒有改過它的規則（`style_sheet_edited`，所有改動都經過 `set_style_sheet_rules`），改過的原文從此是 CSSOM 序列化的規則（一條一行），位置照它算；`insertRule` 填的空的 `<style>` 也是。沒改過的規則就是原文解析出來的，原文照用；`<link>` 補抓的仍然要比（伺服器可能換了內容）。
+
+**位置**（第 12、21 條）：
+- 前端要一份 stylesheet 的位置時，用 `css` 的同一個 parser 的記位置的模式（`css::inspector`，`TopLevelParser` 的 `Option<&mut Recorder>`）對原文再解析一次：記每條留下的規則的 prelude、每個選擇器和區塊，group rule 的子規則另外一串，`@keyframes` 的每個 keyframe；丟掉的規則不記。平常解析時是 `None`。規則照它在 stylesheet 的規則樹裡的位置（每一層的第幾條）對到重新解析出來的那一條。結果快取到那份的內容和原文換了為止。
+- 宣告（第 23 條）：拿到區塊之後用同一個 `DeclarationListParser` 對區塊的文字再解析一次（`declarations_for_inspector`），記每個宣告的範圍、解析得了與否，宣告之間的註解試著解析成宣告。`cssProperties` 先照原文列每一條寫的宣告（`text`、`range`，值照寫的、`!important` 在值裡，解析不了的 `parsedOk: false`，註解掉的 `disabled: true`，shorthand 帶 `longhandProperties`），接著列解析後的每個 longhand（沒有 `text`、`range`，`!important` 的值帶著 ` !important`）。沒有原文的（UA 的）只列解析後的。
+- 照 Chrome 的細節（`test.py cdp css_source` 比過）：選擇器的範圍從它的第一個 token 到它的逗號（最後一個到 prelude 的結尾），文字去掉結尾的空白；`selectorList.text` 是各個選擇器用 `, ` 接起來；最後一個沒有 `;` 的宣告的範圍到區塊的結尾；`implicit` 只在解析的結果裡、是 true 時送；值裡有 `var()` 的 shorthand 沒有 `longhandProperties`。行從 0 算、欄是 UTF-16。
+- `<style>` 在 HTML 檔裡的位置（第 20 條）：html5ever 建元素時給的行是開始標籤結束的那一行（跨行的標籤是最後一行），parser 記下它；要 header 時在 `Page` agent 留著的文件原文的那一行找 `<style` 開始標籤的 `>`，有幾個時選接下來的原文和元素現在的文字一樣的那一個（原文的 CR LF 當成 LF），都不一樣（script 改過文字）時用第一個：Blink 的位置是元素的，不管文字改了沒有。沒有原文的（script、`innerHTML` 建的）是 0、0，Chrome 給 fragment parser 的位置。
+- `@media`、`@supports`（第 25 條）：每條規則帶 `media`（從裡到外的每個 `@media`，最後是 stylesheet 自己的 media，它沒有 `mediaList`）、`supports` 和 `ruleTypes`，條件從規則樹往上找，位置從記下的 at-rule 的範圍來。`mediaList` 送空的，沒有 `getMediaQueries`。
+- inline style（第 24 條）：每個元素一個 id（`<renderer 的前綴>.<n>`，照 Chrome 的 `<process id>.<n>`），元素還在時不變，沒有 `style` 屬性時也給（原文是空的）；不送 `styleSheetAdded`；原文是 `style` 屬性的值，宣告照上面列。它改了沒有在每次 lifecycle 之後比所有元素，只比 DevTools 要過的那幾個，改了時送一次 `styleSheetChanged`（Chrome 送兩次）。
+
+**套用的規則**：
+- `style` 有一條「說明」的路（`StyleEngine::explain`）：照 `recalc_style` 為一個元素重新跑 match，收集 block 的程式（`Walk::blocks`）和 cascade 共用，所以兩邊不會分岔；不用 matched properties cache、用新的 `SelectorCaches`、bloom filter 先放進祖先、不設 selector 的 flag（`NeedsSelectorFlags::No`；recalc 已經設過一樣的）、不寫回元素的 style。回答 block 的清單：來源的規則、層級、specificity、inline 或 attribute 的 style。
+- 符合的選擇器（`matchingSelectors`）在 match 的時候記：`:host`、`::slotted()`、`::part()` 要的 matching context 和 match 時的來源綁在一起，事後另外 match 要重做那一套。`Walk` 多一個只有說明的路才有的 `matched_selectors`，一般的 match 在選擇器符合時多一次 `Option` 的判斷。同一條規則在兩個地方（同一份 stylesheet adopt 兩次）列兩次。
+- 規則屬於哪一份 stylesheet（第 19 條）：index 裡的每條規則記著它的 stylesheet 在那一串（併成一個 index 的幾份）裡的第幾份；說明的路另外記下每個 block 是從哪個 index 的第幾條來的，找到那一串在文件的 stylesheet 裡從第幾份開始；shadow root 的一個 index 是一份。內容一樣的 `<style>` 共用解析的結果，也分得出來。
+- 對象：`explain` 一次說明元素和它的 `::before`、`::after`、`::marker`、`::selection`（`Explained::pseudo`），符合的選擇器和 stylesheet 照對象分開記。前端拿到的 `pseudoElements` 只有元素能有的（`::marker` 要 list item）、有規則的。
+- 繼承來的：每個 flat tree 上的祖先元素都說明一次，送它全部的規則（前端自己挑會繼承的 property）和它有 `style` 屬性時的 inline style，近的先；祖先的 pseudo element 只送 highlight 的（`::selection`）。
+- 選了 pseudo element 的節點：它自己的規則，`inherited` 從它的元素開始，沒有 inline style（`getInlineStylesForNode` 回答 Chrome 的錯誤），`parentLayoutNodeId` 是它的元素。
+- 回答的形狀照 Chrome：沒有 `style` 屬性的元素也送空的 `inlineStyle`；`parentLayoutNodeId` 是 flat tree 上的父元素（跳過 `display: contents` 的，Blink 的 `LayoutParentElement`），先把路送給前端；空的清單照 Chrome 送 `cssAtRules`，不送 `cssFunctionRules`、`cssPositionTryRules`；`shorthandEntries` 和宣告的 `important`、`implicit` 只在是 true 時送。
+- inline style 是 `Cx::inline_style`；attribute 的 style 是 presentational hint 的那一個 block，HTML 的屬性和 SVG 的 presentation attribute 併在一起，和 Chrome 的 `attributesStyle` 一樣。
+- 文字節點的 `getComputedStyleForNode` 是它在 flat tree 上的父元素的（Blink 的 `StyledElement`）；`getMatchedStylesForNode`、`getInlineStylesForNode` 要元素（「Node is not an Element」）。命令在 `CSS.enable` 之前回答「CSS agent was not enabled」。
+
+**computed style**：
+- 重用 `dom_api` 的 `computed_style`，也就是 `getComputedStyle` 的 property 清單和取值（包括 layout 決定的值）；pseudo element 的節點是 `getComputedStyle(element, '::before')`。
+- 跟著更新（第 15 條）：`trackComputedStyleUpdatesForNode` 記下節點，每次 lifecycle 之後比較它的 `ComputedStyle` 換了沒有，換了就送 `computedStyleUpdated`。
+
+**字型**：`getPlatformFontsForNode` 數節點自己的文字、子元素的文字和元素的產生的內容（兩層，Blink 的 `CollectPlatformFontsForLayoutObject`），從 fragment 拿實際用到的字型和 glyph 數；pseudo element 的節點數它的 `content`。順序是第一次出現的順序（Chrome 的是 hash table 的，前端自己排）。名字讀字型的 `name` table：macOS 的 Times 只有 Macintosh 的紀錄，所以 Unicode 的英文、Macintosh 的英文、第一筆依序找。
+
+**標籤的樣式那幾列**（`elementInfo.style`，第 10 條）：顏色一律送 `#RRGGBBAA` 加上 `-unclamped-rgba`（Blink 的 `ToHEXA`；前端的 overlay 頁面照 `colorFormat` 自己寫成 `rgb(…)` 等），只有元素自己有非空白的文字時送顏色和字型。machopo 照 `inspector_overlay` 的 `createElementDescription` 畫：Color、Font、Background、Margin、Padding，透明的顏色、0px 的字型、`0px` 的 margin 和 padding 不畫，顏色照 `colorFormat` 寫（`#FF0000` 不帶 `FF`）。
+
+**動畫**（第 27 條）：
+- `getAnimatedStylesForNode`：每個生效中的 CSS 動畫和 Web Animation 單獨套在元素的基本樣式上、取當下的時間（`animation` 的 `ElementAnimations::sampled_alone`），列出它設的 property 的值（`getComputedStyle` 的寫法）和名字；元素有動畫時一律送 `transitionsStyle`（沒有在跑的 transition 時是空的）；每個祖先各一份。前端用它在 Computed 的預設清單列出動畫給的 property；Styles 沒有動畫的區塊，Chrome 也沒有（手動確認時對照過）。
+- `cssKeyframesRules`：元素的 `animation-name` 每個名字一次，照 style 的 tree-scoped 的找法（`StyleEngine::keyframes_rule`，和 cascade 共用 `find_keyframes`）找到 `@keyframes`，再在 stylesheet 的規則樹裡找它的位置。`keyText` 是序列化的（`from` 寫成 `0%`），範圍是原文的。
+
+**強制的 pseudo-class**（第 1、28、29 條）：
+- 照 Blink 的 `probe::ForcePseudoState`：每個 session 記元素強制的 pseudo-class，改了時把所有 session 的合起來寫進 `dom`（`probe` 的 `ForcedStates`，每個元素一組 bit；兩個 session 都強制時兩者都成立，一個收回時另一個的還在）。
+- `style` 的 `match_non_ts_pseudo_class` 在記下 state 的依賴之後先看強制的：那是 match 的熱路，先看整個 DOM 的「有沒有元素被強制」一個旗標，沒有時只多讀一次（一份 DOM 裡強制的元素很少，有時才找那張表）。強制的名字成立，它的對立面不成立，其他照元素的狀態。
+- 強制 `:focus` 或 `:focus-within` 時，flat tree 上的祖先的 `:focus-within` 成立，強制 `:focus` 的元素自己的不成立：match 時從被強制的元素往上找，不記數字。Chrome 用計數，元素離開樹時不減（祖先照樣符合）、從 `focus` 加 `focus-within` 改成只有 `focus` 時也減掉；machopo 照實際的狀態。
+- 改了之後經過 `state_changed` 通知，照現有的 invalidation 只重算受影響的元素。`:required`、`:optional` 原本只跟著屬性的改動重算，多了一個狀態位元（`AttributeChanges::REQUIRED`）給強制的改動用。
+- 不改 DOM 上的 hover、focus 的 bit：表單控制項的原生外觀不跟著變，祖先的 hover 鏈也不動。script 的 `matches()` 和 `getComputedStyle` 看得到強制的，和 Chrome 一樣。
+- 元素離開它的文件的樹時（連同子樹的每個元素）強制的狀態就沒了，放回去也一樣（Blink 的 `DidRemoveDOMNode`）；`CSS.disable`、`DOM.disable` 和 session 離開時收回那個 session 的，收回時照樣重算（Chrome 的 `DOM.disable` 只忘了強制的狀態，算好的 style 留到元素下次重算）。
+- `forcedPseudoClasses` 不是陣列時照 Chrome 回答 invalid params（`-32602`）；pseudo element 的節點回答成功、不強制（它的規則照它的元素 match）。
 
 ### 8. Overlay
 
-（第 2 段。）
-
 **畫在哪裡**：renderer 自己畫，算和畫分開（O1，「已決定的事項」第 8 條，比較在 `details.md` 的「Overlay 的選項」）。
 - overlay agent 先算出一份和 Blink 的 `InspectorHighlight::AsProtocolValue` 同樣形狀的資料（`paths`、`elementInfo`；之後的 `gridInfo`、`flexInfo`），再由 machopo 自己的畫法畫成 display list。之後要換成 Chrome 的 overlay 頁面（O2）時，只換掉畫的那一半，把同一份資料交給 `inspector_overlay`。
-- renderer 在 commit 時，在頁面的 layer 後面附加一個 `PictureLayer`，位置在 viewport 的座標裡（`fixed`）。框和標籤是它的 display list。
-- 頁面的 layer 照舊。框的位置改了只要重畫這個 layer，不重新 layout，也不重畫頁面。
-- 頁面的 `PaintOutput` 沒變時，現在會跳過 commit，要把 overlay 算進去。
-- compositor thread 上捲動時，框要到下一個 frame 才跟上，Chrome 一樣。
+- renderer 在 commit 時，在頁面的 layer 後面附加一個 `PictureLayer`，位置在 viewport 的座標裡（`fixed`），框和標籤是它的 display list。頁面的 layer 照舊：框的位置改了只要重畫這個 layer，不重新 layout，也不重畫頁面；頁面的 `PaintOutput` 沒變時 commit 也看 overlay 變了沒有。
+- compositor thread 上捲動時，框要到下一個 main frame 才跟上，Chrome 一樣。
 
 **框的內容**：
-- 四個框：content、padding、border、margin 的 quad 從 fragment 算，經過 transform、捲動和 sticky。`layout::geometry` 的 `box_to_root` 要公開。
-- 顏色：前端在 `highlightNode` 的 config 裡給。
-- 標籤（「已決定的事項」第 10 條）：元素的名字、id、class 和大小；前端的 config 要 `showStyles` 時，再加 Color（帶色塊）、Font、Background、Padding、Margin 幾列，值是 computed style（和 2b 同一條取值的路），先放進 `elementInfo.style` 再畫。文字用 `layout` 的 `shape_canvas_text` 排。
+- 四個框：content、padding、border、margin 的 quad 從 fragment 算，經過 transform、捲動和 sticky（`layout::geometry` 的 `box_quads`，pseudo element 的是 `pseudo_box_quads`）。顏色是前端在 `highlightNode` 的 config 裡給的。
+- 畫法照 `inspector_overlay` 的 `drawHighlight`：它從 margin 往內畫，每畫一個就用 `destination-out` 挖掉裡面那個框，所以每個顏色只在自己那一圈；machopo 用 even-odd 的路徑畫出同樣的一圈。一開始把四個框依序整個填滿（margin 蓋住了裡面），做標籤時和 Chrome 的截圖並排才發現。
+- 標籤（第 10 條）：元素的名字、id、class（pseudo element 的節點接 `::before`，Blink 的 `BuildElementInfo`）和大小；前端的 config 要 `showStyles` 時，再加樣式那幾列（第 7 節）。文字用 `layout` 的 `shape_canvas_text` 排。位置照 `drawElementTitle`：照所有框的範圍（包含 margin）放，放得下時在上面、放不下才在下面，左邊對齊元素、留在 viewport 裡，箭頭指著元素（窄的元素指中間），會蓋到元素又沒被它包住時不畫（第 1、2 段的手動確認之後改的：原本從 border box 的下緣往下放，margin 寬時壓在 margin 上）。
 - Chrome 的標籤還有 accessibility（name、role、能不能用鍵盤 focus）和對比度，這份不做（「已決定的事項」第 1 條）。
+- 盒模型（`getBoxModel`、`getContentQuads`）：行內元素是它在每一行的 box 的外框，border 和 padding 取第一個 box 的起點那邊和最後一個的終點那邊，margin 和 border 一樣（machopo 的行內 box 不留 margin；Blink 有左右的 margin）。`getContentQuads` 是每一行的 box，Blink 往下拿子節點的（`CollectQuads`）。
+- `getNodeForLocation` 的點在 viewport 外面時找不到節點，和 Chrome 一樣。
 
 **選取元素**：
-- `setInspectMode` 的 `searchForNode` 打開之後，滑鼠的事件在 render thread 交給 engine 之前（`handle_input`，移動在下一個 main frame 分派時）攔下，不交給頁面（Blink 的 `InspectorOverlayAgent::HandleInputEvent`）。原本寫在 `pending_mouse_move` 那裡攔，做的時候（2a）改在分派的地方：按下和放開也要攔，那裡三種都經過。
-- 用 hit test 找到元素，框出它，送 `nodeHighlightRequested`（先把它的路送給前端）。
-- 點下去送 `inspectNodeRequested`。
-- `searchForUAShadowDOM` 時不往上找到 shadow host。
+- `setInspectMode` 的 `searchForNode` 打開之後，滑鼠的事件在 render thread 分派給 engine 的地方（`handle_input`，移動在下一個 main frame 分派時）攔下，不交給頁面（Blink 的 `InspectorOverlayAgent::HandleInputEvent`）：按下、放開和移動都經過那裡。
+- 用 hit test 找到元素，框出它，送 `nodeHighlightRequested`（先把它的路送給前端）；點下去送 `inspectNodeRequested`。`searchForUAShadowDOM` 時不往上找到 shadow host。
 
-**停住時照樣畫，「Paused in debugger」**（「已決定的事項」第 9 條）：
-- Chrome 停在斷點時照樣畫新的 frame，只是 script 的 task 不跑：2026-11-09 用 Chrome for Testing 152 試過，停住時在 Console 改 `document.body.style.background`，截圖跟著變；停住時 `Overlay.highlightNode` 也框得出節點。
-- machopo 照做：停住的迴圈除了 DevTools 的佇列，也接 compositor 的 `BeginMainFrame`，只跑 style、layout、paint 和 overlay，再 commit；不跑 rAF、ResizeObserver 這些 script 的步驟。
-  - 現在做不到的原因：`BeginMainFrame` 進 main thread 的主佇列，停住的迴圈只等 DevTools 的佇列；compositor 只收它要的 main frame 裡的 commit（`main_frame_in_flight`）；`LayerTreeHost` 和上次 paint 的結果是 `RenderThread` 的欄位。要把這幾樣從 `RenderThread` 拆出來，讓停住的迴圈拿得到（layout 本來就拿得到，第 5 節）。
-  - 做法（「已決定的事項」第 16、17 條）：主執行緒的 task 合成一個 scheduler，停住的迴圈取 DevTools 和 compositor 的 main frame 的 queue；`LayerTreeHost` 等畫 frame 要的狀態搬進 `Frame`，停住的迴圈經過 isolate 拿。
-  - `Page.captureScreenshot` 要的 `RequestVisualState`（要一個 frame、掛一個 promise，不跑 script）停住時也取：Chrome 停住時截圖照樣拿到新的畫面。
-  - 停在 rAF、ResizeObserver 的 callback 裡時，那個 main frame 停在半路，不再開新的：照樣不畫（做的時候用 Chrome 確認它是不是也這樣）。
-- 「Paused in debugger」由 overlay 畫成提示的文字（前端的 `setPausedInDebuggerMessage` 給的訊息）。Chrome 提示上的繼續、逐步執行的按鈕這份不做：停住時輸入也進主佇列，要另外接；DevTools 自己有這兩個按鈕。
+**停住時照樣畫，「Paused in debugger」**（「已決定的事項」第 9、16、17 條）：
+- Chrome 停在斷點時照樣畫新的 frame，只是 script 的 task 不跑（2026-11-09 用 Chrome for Testing 152 試過：停住時在 Console 改背景色，截圖跟著變；`highlightNode` 也框得出節點）。machopo 照做：停住的迴圈除了 DevTools 的 task，也取 compositor 的 main frame，只跑 style、layout、paint 和 overlay，再 commit。
+- 主執行緒的 task 是一個 scheduler（`task_queue::MainThreadScheduler`，第 16 條）：照來源分成幾個 queue，每個 task 帶遞增的序號，主迴圈取全部，停住的迴圈只取 DevTools 和 rendering（compositor 的 main frame、`Page.captureScreenshot` 要的 `RequestVisualState`）的，其他的（Browser 的訊息、輸入、canvas）留著、不亂順序。DevTools 的訊息一則一個 task。
+- 畫 frame 要的狀態（`LayerTreeHost`、上次 paint 的結果、overlay 的 layer、等著 frame 的 promise）在 `Frame` 裡（第 17 條），停住的迴圈經過 isolate 借到它。engine 和 renderer 之間：DevTools 的佇列的 `next()` 多一種「有 frame 要畫」（`DevToolsQueued::Render`），停住的迴圈收到時呼叫 `render(page)`；每次等下一個之前呼叫 `waiting(page)`，renderer 把 DOM 的改動告訴 session，有東西要畫時才跟 compositor 要 frame。
+- 停住時什麼時候要 frame：上一個 frame 之後 DOM 變了（widget 記著畫的 tree version）、overlay 變了或框著東西、有等著 frame 的 `RequestVisualState`；都沒有時不要。少了最後一項時截圖偶爾等不到（`RequestVisualState` 要了 frame，下一個 `waiting` 看到沒有變就取消了）。
+- 停住時的 frame 和一般的 frame 共用 lifecycle、overlay 和 layer 的那一段（`update_lifecycle_and_layers`）；不跑 rAF、ResizeObserver、IntersectionObserver、media query 的事件、動畫的推進（第 18 條：Chrome 停住時照樣推進，記成限制）、文件載入的 promise。停在 rAF、ResizeObserver 的 callback 裡時那個 main frame 停在半路，不畫（Chrome 的截圖這時也不回答）；layout 被借出去時也不畫。
+- 「Paused in debugger」照 `inspector_overlay` 的 `tool_paused.css`：頁面蓋上 31% 的黑，訊息在上方中間的淡黃色框裡（`rgb(255 255 194)`、灰色的框線），訊息是開著 `Overlay` 的 session 給的。Chrome 提示上的繼續、逐步執行的按鈕不做：停住時輸入要另外接，DevTools 自己有這兩個按鈕。
 
-**做的時候（2c）定下的細節**：
-- engine 和 renderer 之間：DevTools 的佇列的 `next()` 多一種「有 frame 要畫」（`DevToolsQueued::Render`、bindings 的 `Queued::Render`），停住的迴圈收到時呼叫 `render(page)`，renderer 從 rendering 的 queue 取一個 task，用 engine 借出的 `Frame` 畫；每次等下一個之前呼叫 `waiting(page)`，renderer 把 DOM 的改動告訴 session，有東西要畫時才跟 compositor 要 frame。
-- 停住時什麼時候要 frame：上一個 frame 之後 DOM 變了（widget 記著畫的 tree version）、overlay 變了或框著東西、有等著 frame 的 `RequestVisualState`；都沒有時不要，停住而什麼都沒變的頁面不畫。少了最後一項時截圖偶爾等不到：`RequestVisualState` 要了 frame，下一個 `waiting` 看到沒有變就取消了（測試六次失敗一次，找到之後連跑二十次都過）。
-- 停住時的 frame 和一般的 frame 共用 lifecycle、overlay 和 layer 的那一段（`update_lifecycle_and_layers`）；不跑的是 rAF、ResizeObserver、IntersectionObserver、media query 的事件、動畫的推進、文件載入的 promise（`DidFinishLoad` 等下一個一般的 frame）。
-- 停住時 layout 被借出去（呼叫停住的 script 的 operation 拿著它）時那次停住不畫：`render` 碰不到 `Frame`，只等 DevTools 的 task。現在沒有一條 operation 拿著 layout 呼叫 script，這是防著的。
-- DevTools 的訊息一則一個 task：原本一個叫醒的 task 一次處理佇列裡的全部。
-- 和 Chrome 比（Chrome for Testing 152，2026-11-09）：停住時 CSS 動畫照樣往前走（`margin-left` 的動畫，main thread 的），machopo 的停住時的 frame 不推進動畫；停在 rAF 的 callback 裡時 Chrome 的 `Page.captureScreenshot` 也不回答（machopo 一樣，等到繼續）。
-- 「Paused in debugger」照 `inspector_overlay` 的 `tool_paused.css`：頁面蓋上 31% 的黑，訊息在上方中間的淡黃色框裡（`rgb(255 255 194)`、灰色的框線），沒有按鈕。訊息是開著 `Overlay` 的 session 給的。
-
-**其他命令**：前端連上時送的 `setShowViewportSizeOnResize`、`setShowGridOverlays`、`setShowFlexOverlays` 等，參數是空的或關掉時回答成功；要求 machopo 畫它沒有的 overlay 時，照 0082 的「已決定的事項」第 7 條（E1）回答錯誤（`Overlay.setShowPaintRects: machopo can't show it`）。Log 的警告沒有送：Overlay 的這些命令 DevTools 只在使用者打開對應的選項時送，錯誤留在它的 log。`setInspectMode` 的 `captureAreaScreenshot` 當成關掉。`highlightNode` 沒有 `highlightConfig` 時照 Chrome 回答 `-32602 Invalid parameters`：Chrome 的協定那一層在交給 Blink 的 agent 之前就擋下（Blink 自己的「Internal error: highlight configuration parameter is missing」走不到）。
-
-**做的時候（2a）定下的細節**：
-- 行內元素的盒模型：它在每一行的 box 的外框，border 和 padding 取第一個 box 的起點那邊和最後一個的終點那邊，margin 和 border 一樣（machopo 的行內 box 不留 margin；Blink 有左右的 margin）。`getContentQuads` 是每一行的 box，Blink 往下拿子節點的（`CollectQuads`）。
-- `getNodeForLocation` 的點在 viewport 外面時找不到節點（用 Chrome for Testing 152 試過：同一頁 viewport 裡的照樣找到，外面的回答「No node found at given location」）。
-- 標籤的樣式那幾列（第 10 條）和 2b 的 computed style 一起做：2a 的標籤只有名字、id、class 和大小。
-- 標籤的位置（第 1、2 段的手動確認之後改）：原本從 border box 的下緣往下放，margin 寬時壓在 margin 上。照 `inspector_overlay` 的 `drawElementTitle`：照所有框的範圍（包含 margin）放，放得下時在上面、放不下才在下面，左邊對齊元素、留在 viewport 裡，箭頭指著元素（窄的元素指中間），會蓋到元素又沒被它包住時不畫。
-- 框的畫法（2b 改）：2a 照 highlight 的資料把四個框依序整個填滿，margin 蓋住了裡面。2b 做標籤時和 Chrome 的截圖並排才發現不對：`inspector_overlay` 的 `drawHighlight` 從 margin 往內畫，每畫一個就用 `destination-out` 挖掉裡面那個框，所以每個顏色只在自己那一圈。machopo 用 even-odd 的路徑畫出同樣的一圈。2a 的測試把錯的畫法寫成預期（border 那一圈是 margin 的顏色），一起改了。
-
-**做的時候（3a）定下的細節**：
-- 列出 stylesheet 的時機：`style` 的 `StyleEngine` 每次收集文件或 shadow root 的 stylesheet 時把一個版本加一（`sheets_version`），renderer 在每次 lifecycle 之後比較每個 frame 的版本，變了才重新列出、和每個 session 上次知道的比，送少了的 `styleSheetRemoved`、多了的 `styleSheetAdded`。沒有 session 打開 `CSS` 時不比。Blink 在 `StyleEngine` 的 active stylesheet 變了時經過 probe 通知 agent，一樣是收集的時候。
-- header：照 Blink 的 `InspectorStyleSheet::BuildObjectForStyleSheetInfo`。`ownerNode` 是 `backendNodeId`；inline 的 `sourceURL` 是文件的網址，constructed 的是空的；`isMutable` 只有 constructed 的是 true；`loadingFailed` 只有不是 inline 的送。和 Chrome 比過（`test.py cdp` 的 `css_sheets`），不同的只有 script 建的 `<style>` 的位置（machopo 是 0、0，Chrome 給 fragment parser 的位置）。
-- 規則屬於哪一份（第 19 條）的做法：index 裡的每條規則記著它的 stylesheet 在那一串（併成一個 index 的幾份）裡的第幾份；說明的路 match 時另外記下每個 block 是從哪個 index 的第幾條來的（一般的 match 不記），找到那一串在文件的 stylesheet 裡從第幾份開始；shadow root 的一個 index 是一份，照套用的那幾份的順序找。內容一樣的 `<style>` 共用解析的結果；重新收集時 stylesheet 沒變的，留著的也換成現在的物件的 id（現在每個物件有自己的 media，沒變時一定是同一個物件，這是為了之後共用 media 時）。
-- `<style>` 的位置（第 20 條）：html5ever 建元素時給的行是開始標籤結束的那一行（跨行的標籤是最後一行），文字從那裡的 `>` 之後開始。那一行有幾個 `<style` 的開始標籤時，選接下來的原文和元素現在的文字一樣的那一個（原文的 CR LF 當成 LF）；都不一樣（文字被 script 改過）時用第一個：Blink 的位置是元素的，不管文字改了沒有。
-- `<link>` 的再抓（第 11 條）：照它的 `<link>`（`crossorigin` 時用 CORS，`use-credentials` 帶 credential，發起的是文件的 origin），destination 是 style。抓到的照它的 `<link>` 的方式解碼、對它的網址解析，序列化之後和現在的規則的序列化一樣才當成原文，不一樣（伺服器換了內容、script 改了規則）時給序列化的規則；結果記在那份 stylesheet 的內容上，之後不再抓。抓的時候又要的命令一起等那一次。請求在主迴圈的 task 之間送出，停在斷點時要等繼續。
-
-**做的時候（3b）定下的細節**：
-- 第 21 條的 observer 做成 `css` 的 `TopLevelParser` 的 `Option<&mut Recorder>`：記每條留下的規則的 prelude 和區塊，group rule 的子規則另外一串，丟掉的規則在 `StyleSheetParser` 回答錯誤時不記。宣告不在整份的解析裡記：拿到區塊之後用同一個 `DeclarationListParser` 對區塊的文字再解析一次（`css::inspector::declarations_for_inspector`），記每個宣告的範圍、解析得了與否，和宣告之間的註解；inline style 用同一個函式。規則照它在 stylesheet 的規則樹裡的位置（每一層的第幾條）對到重新解析出來的那一條。
-- 第 22 條的「對得上」不用每次重新解析來比：`dom` 的 `CssStyleSheet` 記著 script 有沒有改過它的規則（`style_sheet_edited`，所有改動都經過 `set_style_sheet_rules`），沒改過時它的規則就是原文解析出來的，原文照用；改過就是序列化的。`<link>` 補抓的仍然要比（伺服器可能換了內容）。`styleSheetChanged` 在重新列出 stylesheet 時看同一個 id 的內容（`Arc`）換了沒有。
-- 和 Chrome 比對（`test.py cdp css_source`）時照 Chrome 改的細節：選擇器的範圍從它的第一個 token 到它的逗號（逗號前的空白算在內，最後一個到 prelude 的結尾），文字去掉結尾的空白；`selectorList.text` 是各個選擇器用 `, ` 接起來；最後一個沒有 `;` 的宣告的範圍到區塊的結尾；註解掉的宣告沒有 `implicit`；解析的結果那一部分沒有 `implicit`，`!important` 的值帶著 ` !important`（沒有原文的 UA 規則也是）；值裡有 `var()` 的 shorthand 沒有 `longhandProperties`；stylesheet 自己的 media 沒有 `mediaList`。
-- 沒有做、記成已知差異的：`specificity.components`（Chrome 152 把 specificity 拆到每個簡單選擇器，前端的提示用）、`@media` 的 `mediaList`（第 25 條）、inline style 改了時 Chrome 送兩次 `styleSheetChanged`。
-- inline style 的 id 是 `<renderer 的前綴>.<n>`，照 Chrome 的 `<process id>.<n>`；元素沒有 `style` 屬性時也給一個（原文是空的），和 Chrome 一樣。它改了沒有在每次 lifecycle 之後比屬性的值，只比 DevTools 要過的那幾個元素。
-
-**做的時候（3c）定下的細節**：
-- pseudo element 的規則：`style` 的 `explain` 一次說明元素和它的 `::before`、`::after`、`::marker`、`::selection`（`Explained::pseudo`），同一段收集 block 的程式本來就為每個對象收集，符合的選擇器和規則的 stylesheet 照對象分開記。前端拿到的 `pseudoElements` 只有元素能有的（`::marker` 要 list item，和 style 一樣）、有規則的；祖先的只有 highlight 的（`::selection`），照 Chrome。
-- 繼承來的規則：每個 flat tree 上的祖先元素都說明一次，送它全部的規則（前端自己挑會繼承的 property）和它有 `style` 屬性時的 inline style，近的先，照 Chrome。
-- pseudo element 的節點（第 26 條）：有沒有它照 Blink 的 `PseudoElement::CanCreate` 的意思判斷（`::before`、`::after` 有 `content` 而且不是 `display: none`，list item 的 `::marker`），送的順序 `::marker`、`::before`、`::after`。`backendNodeId` 是 2^32 乘上種類（1 到 3）加上元素的 id：`NodeId` 是 32 位元，不會撞到；不另外存表，從 id 就讀得回元素和種類。掛點記下的改動要 layout 才判斷得了（pseudo element 的樣式從 frame 拿），沒有 layout 的時候（task 之後、回答命令之前）先放著，lifecycle 之後一起處理。
-- 選了 pseudo element 的節點：`getMatchedStylesForNode` 是它自己的規則，`inherited` 從它的元素開始，沒有 inline style，`parentLayoutNodeId` 是它的元素；`getInlineStylesForNode` 回答錯誤（Chrome 的字樣）；`getComputedStyleForNode` 是 `getComputedStyle(element, '::before')`；字型數它的 `content` 的；`describeNode`、`getBoxModel` 和 `Overlay` 的框認得它（`layout` 的 box quads 多了 pseudo element 的版本，fragment 本來就記著它是誰的），標籤是元素的名字、class 後面接 `::before`（Blink 的 `BuildElementInfo`）。都和 Chrome 比過。
-- 動畫的樣式（第 27 條）：只列生效中的動畫（`computed(now).progress` 有值）；元素有動畫時一律送 `transitionsStyle`，沒有在跑的 transition 時是空的，照 Chrome；值用 `getComputedStyle` 的寫法。
-- `cssKeyframesRules`：元素的 `animation-name` 每個名字一次，照 style 的 tree-scoped 的找法（`StyleEngine::keyframes_rule`，和 cascade 共用 `find_keyframes`）找到 `@keyframes`，再在 stylesheet 的規則樹裡找它的位置；`css` 的 recorder 也記下每個 keyframe 的選擇器和區塊。`keyText` 是序列化的（`from` 寫成 `0%`），範圍是原文的，和 Chrome 一樣。
-- 比對時發現的另一個差異：inline box 的高度和 Chrome 不同（20px 的 Times 的 `<span>`，machopo 20、Chrome 23），不是 pseudo element 的問題，記成 layout 的限制。
-
-**做的時候（3d）定下的細節**：
-- 強制的狀態放在 `dom`（`probe` 的 `ForcedStates`，每個元素一組 bit），CSS agent 的每個 session 記自己的，改了時把所有 session 的合起來寫進 DOM（兩個 session 都強制時兩者都成立，一個收回時另一個的還在）。match 時讀的旗標是整個 DOM 的「有沒有元素被強制」，不是每份文件的：一份 DOM 裡強制的元素很少，有時才找那張表。
-- 照 Chrome（2026-11-10 用 Chrome for Testing 152 試過）：強制 `:focus` 或 `:focus-within` 時，flat tree 上的祖先的 `:focus-within` 成立；強制 `:focus` 的元素自己的 `:focus-within` 不成立。match 時從被強制的元素往上找，不記數字：Chrome 的計數在元素離開樹時不減（祖先照樣符合），從 `focus` 加 `focus-within` 改成只有 `focus` 時也減掉，machopo 照實際的狀態。
-- 元素離開它的文件的樹時（連同子樹的每個元素）強制的狀態就沒了，放回去也一樣，照 Chrome（Blink 的 `DidRemoveDOMNode`）。`CSS.disable`、`DOM.disable` 和 session 離開時收回那個 session 的。收回時照樣重算：Chrome 的 `DOM.disable` 只忘了強制的狀態，已經算好的 style 留到元素下次重算，machopo 立刻照沒有強制的樣子。
-- `:required`、`:optional` 原本只跟著屬性的改動重算，多了一個狀態位元（`AttributeChanges::REQUIRED`）給強制的改動用；其他的照它們本來的狀態位元。
-- `forcedPseudoClasses` 不是陣列時照 Chrome 回答 invalid params（`-32602`）；pseudo element 的節點回答成功、不強制（它的規則照它的元素 match）。
+**其他命令**：前端連上時送的 `setShowViewportSizeOnResize`、`setShowGridOverlays`、`setShowFlexOverlays` 等，參數是空的或關掉時回答成功；要求 machopo 畫它沒有的 overlay 時，照 0082 的「已決定的事項」第 7 條（E1）回答錯誤（`Overlay.setShowPaintRects: machopo can't show it`），Log 的警告不送（這些命令 DevTools 只在使用者打開對應的選項時送，錯誤留在它的 log）。`setInspectMode` 的 `captureAreaScreenshot` 當成關掉。`highlightNode` 沒有 `highlightConfig` 時照 Chrome 回答 `-32602 Invalid parameters`：Chrome 的協定那一層在交給 Blink 的 agent 之前就擋下。`outlineColor` 照 Blink 和整個透明色比（`rgba(128, 0, 0, 0)` 照樣送）。
 
 ### 測試
 
-- **`shell` 的整合測試**：
-  - `devtools_dom`：
-    - 樹、lazy push、改動的事件；
-    - iframe、shadow root、pseudo element；
-    - `resolveNode` 和 `requestNode` 來回、`$0`、`getEventListeners`；
-    - 停在斷點時的回答；
-    - detach 和 renderer 重開。
-  - `devtools_css`：stylesheet 的清單、套用的規則、computed、`forcePseudoState`。
-  - `devtools_overlay`：highlight 和選取元素，用 `Page.captureScreenshot` 看框。
-  - 照現有的 `devtools_network` 的寫法，用 `net::test_server` 給頁面。
-- **單元測試**：
-  - agent 的命令：用 channel 代替 browser，照 `log_agent` 的寫法。
-  - `dom` 的掛點：旗標打開時記對、關掉時不記。
-  - `style` 的說明的路：結果對，不改到快取、selector 的 flag 和計數。
-- **`test.py cdp`**（和 Chrome 比）：
-  - 加 `dom`、`css`、`overlay` 三組。
-  - `nodeId`、`backendNodeId`、`styleSheetId` 加進 `VOLATILE`。
-  - `scripts/cdp_compare.py` 現在把 `parentId` 當成 frame 的 id，和 `DOM` 的 `parentId`（nodeId）撞名，要分開。
-- **mutation test**：每一段都跑。
-- **手動確認**：Chrome for Testing 152 的 Elements 面板，包括樹、hover、選取元素、Styles、Computed、Event Listeners、`$0` 和停在斷點時。
+做了的測試和驗收的結果在 `progress.md`：
+- **`shell` 的整合測試**（用 `net::test_server` 給頁面）：
+  - `devtools_dom`：樹、lazy push、改動的事件、一批的順序、查詢、iframe 換文件、停在斷點時、每個 session 的編號；節點和物件的來回、`$0`、Event Listeners、搜尋；pseudo element 的節點。
+  - `devtools_overlay`：盒模型、某一點的節點、框和標籤（`Page.captureScreenshot` 看框）、選取元素、停住時照樣畫、停住時的輸入和捲動。
+  - `devtools_css`：computed、套用的規則、字型、跟著 computed style、標籤的樣式、停住時；stylesheet 的清單、原文和補抓；規則和宣告的位置、inline style、CSSOM 改過的；pseudo element 和祖先的規則、動畫；強制的 pseudo-class。
+- **單元測試**：`dom` 的 `probes`；`style` 的 `explain`；`style_resolver` 的選擇器和宣告的清單；`layout` 的 `platform_fonts`；`css` 的 `inspector`；`html` 的 `<style>` 的行；`renderer` 的 `dom_agent`、`css_agent`、`overlay_agent`、`task_queue`；`dom_js` 停住時讀 DOM 的測試。
+- **`test.py cdp`**（和 Chrome 比）：`dom`、`dom_objects`、`overlay`、`css`、`css_sheets`、`css_source`、`css_pseudo`、`css_force`。`nodeId`、`backendNodeId`、`styleSheetId` 是 `VOLATILE`，DOM 的 `parentId` 是節點的編號（和 frame 的分開）；剩下的差異在 `KNOWN`，每一項附理由。
+- mutation test 每一段都跑（`mutants-1a.toml` 到 `mutants-3d.toml`）。
+- 手動確認（Chrome for Testing 152）：Elements 的樹、hover 和選取元素、Styles、Computed、Event Listeners、`$0`、Sources 的 stylesheet、`:hov`、停在斷點時。
 
 ### 分階段
 
-1. **DOM 樹和 JS 的連接**（第 1 到 6 節，加上 Event Listeners）。
-   - 一開始先做原型：停住時借得到 `Dom` 和 layout、停住時重算 style 和 layout 沒有問題（第 5 節）。做完了，不拆（「已決定的事項」第 5 條）。
-   - 分兩小段做（2026-11-09）：
-     - **1a 樹**：nodeId、lazy push、改動的掛點和事件、停住時回答，以及不用 JS 的查詢（`querySelector`、`describeNode`、`pushNodesByBackendIdsToFrontend`、`pushNodeByPathToFrontend`、`getAttributes`、`getOuterHTML`、`getFrameOwner`、`collectClassNamesFromSubtree`）。
-     - **1b 和 JS 的連接**：`resolveNode`、`requestNode`、`setInspectedNode`、Console 顯示節點、Event Listeners、`performSearch`。
-   - 移到後面的段：`getBoxModel`、`getContentQuads`、`getNodeForLocation` 和 `DOM.Node` 的 `isScrollable` 要 layout 的 quad 和 hit test，和 Overlay 用同樣的東西，放在第 2 段；pseudo element（第 2 節）要 style 知道它在不在，和 Styles 的 pseudo element 的規則一起放在第 3 段。
-   - 驗收：Elements 面板列出樹、跟著 script 更新；`$0`；Console 的節點能跳回 Elements；Event Listeners；`test.py cdp` 的 `dom`。
-2. **Overlay 和 Computed**（第 8 節，加上第 7 節的 computed style 和字型）。分三小段（「已決定的事項」第 9 條）：
-   - **2a Overlay**：框節點、選取元素、`getBoxModel`、`getContentQuads`、`getNodeForLocation`、`isScrollable`；原型的 `Prototype.pausedPage` 換成它們。
-   - **2b Computed**：`CSS.enable` 回答成功、還不送 stylesheet；`getComputedStyleForNode`、`getInlineStylesForNode`、`getPlatformFontsForNode`；`getMatchedStylesForNode` 回答元素自己的規則、inline 和 attribute 的 style（「已決定的事項」第 14 條）；`trackComputedStyleUpdatesForNode` 和 `computedStyleUpdated`（第 15 條）；標籤的樣式那幾列。
-   - **2c 停住時照樣畫**：主執行緒的 scheduler（「已決定的事項」第 16 條）、畫 frame 的狀態搬進 `Frame`（第 17 條），停住的迴圈接 `BeginMainFrame`，「Paused in debugger」的提示。
-   - 驗收：滑過樹裡的節點時頁面框出它；選取元素；停在斷點時的「Paused in debugger」；Computed 分頁和 box model 的圖和 Chrome 一樣；`test.py cdp` 的 `overlay` 和 `css` 的 computed 的部分。
-3. **Styles**（第 7 節的其他部分）。分四小段（2026-11-09）：
-   - **3a stylesheet**：`CSS.enable` 開始送 `styleSheetAdded`、之後送 `styleSheetRemoved`；規則帶 `styleSheetId`（「已決定的事項」第 19 條）；原文照第 11 條，`getStyleSheetText`；`<style>` 的位置照第 20 條。Sources 列出 stylesheet。
-   - **3b 位置**：`css` 的 parser 記位置的模式（第 12 條）；選擇器和宣告的 `range`，Styles 的「檔名:行」；解析時丟掉的宣告劃掉；包著規則的 `@media`、`@supports`。3b 要用 3a 的原文。
-   - **3c 其他的規則**：繼承來的規則、pseudo element 的規則和 DOM 樹裡的 pseudo element（第 1 段移過來的）、`getAnimatedStylesForNode`。
-   - **3d `:hov`**：`CSS.forcePseudoState`。它在 match 的熱路上多一次判斷，單獨一段，方便量和審。
-   - `getAnimatedStylesForNode`（2026-11-09 手動確認時發現）：Chrome 回答元素正在跑的動畫和它們當下的值，前端拿來在 Styles 多一個動畫的區塊、在 Computed 的預設清單列出動畫給的 property；machopo 回答找不到方法，兩處都沒有（Computed 要勾「Show all」）。
-   - 驗收：Styles 和 Chrome 一樣，除了 machopo 解析時丟掉的東西；Sources 列出 stylesheet；`:hov`；`test.py cdp` 的 `css`。
+1. **DOM 樹和 JS 的連接**（第 1 到 6 節，加上 Event Listeners）：先做停住時借 `Dom` 和 layout 的原型（第 5 條，結論是不拆），再分兩小段：
+   - **1a 樹**：nodeId、lazy push、改動的掛點和事件、停住時回答，以及不用 JS 的查詢（`querySelector`、`describeNode`、`pushNodesByBackendIdsToFrontend`、`pushNodeByPathToFrontend`、`getAttributes`、`getOuterHTML`、`getFrameOwner`、`collectClassNamesFromSubtree`）。
+   - **1b 和 JS 的連接**：`resolveNode`、`requestNode`、`setInspectedNode`、Console 顯示節點、Event Listeners、`performSearch`。
+   - `getBoxModel`、`getContentQuads`、`getNodeForLocation` 和 `isScrollable` 要 layout 的 quad 和 hit test，和 Overlay 用同樣的東西，移到第 2 段；pseudo element 要 style 知道它在不在，和 Styles 的 pseudo element 的規則一起移到第 3 段。
+2. **Overlay 和 Computed**（第 8 節，加上第 7 節的 computed style 和字型），三小段（第 9 條）：
+   - **2a Overlay**：框節點、選取元素、`getBoxModel`、`getContentQuads`、`getNodeForLocation`、`isScrollable`。
+   - **2b Computed**：`CSS.enable`、`getComputedStyleForNode`、`getInlineStylesForNode`、`getPlatformFontsForNode`；`getMatchedStylesForNode` 的元素自己的規則（第 14 條）；跟著更新（第 15 條）；標籤的樣式那幾列。
+   - **2c 停住時照樣畫**：main thread 的 scheduler（第 16 條）、畫 frame 的狀態搬進 `Frame`（第 17 條）、「Paused in debugger」。
+3. **Styles**（第 7 節的其他部分），四小段：
+   - **3a stylesheet**：`styleSheetAdded`、`styleSheetRemoved`、規則的 `styleSheetId`（第 19 條）、原文（第 11 條）、`<style>` 的位置（第 20 條）。
+   - **3b 位置**：記位置的模式（第 12、21 條）、選擇器和宣告的 `range`、劃掉和註解掉的宣告、`@media`、`@supports`、inline style、CSSOM 改過的（第 22 到 25 條）。
+   - **3c 其他的規則**：繼承來的、pseudo element 的規則和節點（第 26 條）、`getAnimatedStylesForNode`（第 27 條；第 1、2 段的手動確認時發現 Computed 的預設清單少了動畫給的 property，加進來）、`@keyframes`。
+   - **3d `:hov`**：`CSS.forcePseudoState`（第 28、29 條），它在 match 的熱路上多一次判斷，單獨一段。
 
-每一段做完、經過審核就可以先 merge 回 `main`（`rfcs/README.md` 的「流程」的「階段的 merge」）。順序的理由見「已決定的事項」第 2 條：Overlay 小，第 1 段的樹做完之後最先想要的就是滑過時框出節點；Computed 不碰任何未決的事、查 layout 差異時最常看，跟著提前；Styles 要決定的事最多（第 11、12 條），排在最後，不擋前兩段。
+三段都做完了：第 1、2 段做完、手動確認過之後 merge 回 `main`，第 3 段審核之後 merge；各段的結果在 `progress.md`。順序的理由見「已決定的事項」第 2 條：Overlay 小，樹做完之後最先想要的就是滑過時框出節點；Computed 不碰任何未決的事、查 layout 差異時最常看，跟著提前；Styles 要決定的事最多，排在最後，不擋前兩段。
 
 ## 缺點
 
 - **DOM 的熱路上多一個判斷**：插入、移除、改屬性、改文字都多讀一次旗標（第 4 節）。
-- **重複了一部分 cascade 的流程**：「說明」的路要和一般的 cascade 一起維護，加新的來源（例如 `@layer`）時兩邊都要改。debug build 的比對守著（第 7 節）。
+- **match 的路上多兩個判斷**：「說明」的路和一般的 cascade 共用收集 block 的程式，一般的 match 在選擇器符合時多一次 `Option` 的判斷（記下符合的選擇器），每個 pseudo-class 的 match 多讀一次「有沒有元素被強制」的旗標（第 7 節）。
 - **DevTools 開著時，不在樹上的節點會被留住**：前端要過的不在樹上的節點活到解除為止（第 2 節），和 Chrome 一樣。
 - **overlay 多一個 layer**：commit 的路上多一種東西，停在斷點時要另外處理（第 8 節）。
-- **原文多佔記憶體**：看待決定第 11 條怎麼選。
-- **和 Chrome 不一樣的地方會留下**：Styles 看不到 machopo 丟掉的宣告和 at-rule；事件的時機是一批一批的，Chrome 是改動的當下。
+- **原文多佔記憶體，也多一次請求**：DevTools 連上之後載入的 `<link>` 留著回應（共用不複製）；連上之前載入的，第一次要原文時再抓一次，Network 面板看得到那個請求（第 11 條）。位置是要的時候重新解析原文，每份 stylesheet 多解析一次。
+- **和 Chrome 不一樣的地方會留下**：Styles 看不到 machopo 丟掉的 at-rule；事件的時機是一批一批的，Chrome 是改動的當下；CSSOM 改過的 stylesheet 的原文是序列化的；強制的 `:visited` 不生效（`docs/limitations.md`）。
 
 ## 理由和其他做法
 
@@ -491,7 +419,7 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 
 2026-11-09（使用者，3b）：
 
-21. **記位置的解析：在同一個 parser 上掛 observer（P1）**（第 7 節，第 12 條的做法）：`css` 的 `TopLevelParser`、`DeclarationListParser` 多一個 `Option<&mut dyn Observer>`，解析到規則、選擇器、宣告和 at-rule 的開始、結束時把位置告訴它，連同丟掉的宣告和規則。平常解析時是 `None`，每條規則、每個宣告只多一次判斷；DevTools 要位置時才傳 observer。同一個 parser，留下和丟掉的規則一定和頁面的一樣，位置一條一條對得起來。對照 Chromium：Blink 的 `CSSParserImpl::ParseStyleSheetForInspector` 也是同一個 parser 多傳一個 `CSSParserObserver`，`InspectorStyleSheet` 的 `StyleSheetHandler` 收事件、建 `CSSRuleSourceData`。不選 P2（另外寫一個只記位置的 parser，宣告的有效與否另外問 `parse_property`）：平常的路不動，但兩套 parser 判斷丟掉哪些規則的邏輯要一直一致，不一致時位置對到別條規則，畫面正常、行號錯，很難發現。
+21. **記位置的解析：在同一個 parser 上掛 observer（P1）**（第 7 節，第 12 條的做法）：`css` 的 `TopLevelParser`、`DeclarationListParser` 多一個 `Option<&mut dyn Observer>`，解析到規則、選擇器、宣告和 at-rule 的開始、結束時把位置告訴它，連同丟掉的宣告和規則。平常解析時是 `None`，每條規則、每個宣告只多一次判斷；DevTools 要位置時才傳 observer。同一個 parser，留下和丟掉的規則一定和頁面的一樣，位置一條一條對得起來。對照 Chromium：Blink 的 `CSSParserImpl::ParseStyleSheetForInspector` 也是同一個 parser 多傳一個 `CSSParserObserver`，`InspectorStyleSheet` 的 `StyleSheetHandler` 收事件、建 `CSSRuleSourceData`。不選 P2（另外寫一個只記位置的 parser，宣告的有效與否另外問 `parse_property`）：平常的路不動，但兩套 parser 判斷丟掉哪些規則的邏輯要一直一致，不一致時位置對到別條規則，畫面正常、行號錯，很難發現。實作時的調整（3b）：observer 是具體型別的 `Option<&mut Recorder>`，只掛在 `TopLevelParser` 和規則清單的解析上；宣告在拿到區塊之後用同一個 `DeclarationListParser` 對區塊的文字再解析一次（`declarations_for_inspector`），`DeclarationListParser` 不多欄位（第 7 節）。
 
 22. **原文和現在的規則對不上時：整份換成序列化（M2）**（第 7 節，第 12 條的做法）：script 用 CSSOM（`insertRule`、`deleteRule`、改規則的 `style`）改過的 stylesheet，原文重新解析出來的規則和現在的對不上。原文解析出來的規則序列化之後和現在的一樣時照順序一條一條對；不一樣時，那份 stylesheet 的原文換成 CSSOM 序列化的規則（一條一行），位置從它算。CSSOM 改了時送 `CSS.styleSheetChanged`（Chrome 也送）。也補上 3a 的缺口：script 用 `insertRule` 填的空的 `<style>`（CSS-in-JS 的做法）原本的原文是空的。對照 Chromium（2026-11-09 用 Chrome for Testing 152 試過）：Blink 的 `InspectorStyleSheet::MergeCSSOMRulesWithText` 用 cssText 的 LCS 把 CSSOM 的規則對到原文，對不到的規則把序列化插進原文、接在前一條對到的後面，對不到的原文留著：`deleteRule` 之後刪掉的規則還在原文裡，改了規則的 `style` 之後新舊兩份都在；`<link>` 的新規則不插、沒有位置；空的 `<style>` 給接在一起的序列化。不選 M1（照 Chrome）：Sources 看得到頁面已經沒有的規則，還要做 LCS 和插入的位置；兩者只在 script 改過 CSSOM 的 stylesheet 上不同，M2 的差別是那份的註解和排版不見。
 
@@ -505,7 +433,7 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 
 26. **pseudo element 在 DOM 樹裡：DOM agent 替它編號，style 的掛點告訴它來去（N1，掛點）**（第 1 節）：machopo 的 DOM 沒有 pseudo element 的節點，`::before`、`::after`、`::marker` 只是掛在元素上的樣式（`PseudoStyles`）。DOM agent 替每個（元素，pseudo element 的種類）給一個 backend id（和真的節點的分開），`nodeId` 照一般節點給；有沒有它照 style 有沒有幫它建出盒子判斷（`::before`、`::after` 要有 `content`，`::marker` 要元素是 `list-item`），在元素的 `pseudoElements` 裡送。出現和消失：style 在元素的 pseudo element 樣式變了時呼叫的 `set_pseudo_styles_changed` 多一個 DOM 的掛點，和第 4 條的改動事件一樣，有 session 打開 `DOM` 時才記，DOM agent 拿走之後送 `DOM.pseudoElementAdded`、`pseudoElementRemoved`。選了它之後 Styles、Computed 和框都照它的樣式和盒子。不開 DevTools 時只在 pseudo element 的樣式真的變了的那一刻多一次判斷（重算時和上次不同、推進動畫時值變了），不是每個元素都走。對照 Chromium（2026-11-09 用 Chrome for Testing 152 試過）：Blink 的 pseudo element 是真的節點（`PseudoElement`，style 重算時建立），DOM agent 經過 probe（`PseudoElementCreated`、`PseudoElementDestroyed`）送事件，probe 也是「有沒有 agent」的一次判斷。不選 N2（DOM 裡建真的 pseudo element 節點）：DOM、GC 和 script 看得到的樹都要改，為了 DevTools 太大。不選 N3（樹裡不顯示）：樹上看不到 `::before`，不能選它看 Computed 和框。不選事後比對（不加掛點，每次 lifecycle 之後比對已經展開的元素）：不開 DevTools 時零成本，但開著時每個 frame 都要看一遍展開的元素，展開越多越慢。
 
-27. **動畫的樣式：每個動畫各自算（G1）**（第 7 節）：`getAnimatedStylesForNode` 對元素的每個 CSS 動畫和 Web Animation，把它單獨套在元素的基本樣式（cascade 的結果，沒有動畫）上，取當下的時間，列出它設的 property（`properties()`）的值，寫法和 `getComputedStyle` 一樣，各帶名字（`animationStyles`）；transition 全部一起套成一組（`transitionsStyle`）；每個祖先各一份（`inherited`）。前端用它在 Styles 多一個動畫的區塊、在 Computed 的預設清單列出動畫給的 property。只在前端問的時候算（動畫跑著時大約每個 frame 一次，只算那個元素和它的祖先）。對照 Chromium（2026-11-09 用 Chrome for Testing 152 試過）：Blink 的 `InspectorCSSAgent::getAnimatedStylesForNode` 對 `ElementAnimations` 的每個 effect 各自取當下的值，transition 合成一組，再走祖先。不選 G2（所有動畫合成一份，列出和基本樣式不同的）：前端分不出每個動畫的名字，值剛好等於基本樣式的 property 會漏掉。不選 G3（不做）：Styles 沒有動畫的區塊，Computed 的預設清單少了動畫給的 property（2b 手動確認時看到的差異）。
+27. **動畫的樣式：每個動畫各自算（G1）**（第 7 節）：`getAnimatedStylesForNode` 對元素的每個 CSS 動畫和 Web Animation，把它單獨套在元素的基本樣式（cascade 的結果，沒有動畫）上，取當下的時間，列出它設的 property（`properties()`）的值，寫法和 `getComputedStyle` 一樣，各帶名字（`animationStyles`）；transition 全部一起套成一組（`transitionsStyle`）；每個祖先各一份（`inherited`）。前端用它在 Styles 多一個動畫的區塊、在 Computed 的預設清單列出動畫給的 property（3c 的手動確認時更正：Styles 沒有動畫的區塊，Chrome 自己也沒有；前端只在 Computed 用它）。只在前端問的時候算（動畫跑著時大約每個 frame 一次，只算那個元素和它的祖先）。對照 Chromium（2026-11-09 用 Chrome for Testing 152 試過）：Blink 的 `InspectorCSSAgent::getAnimatedStylesForNode` 對 `ElementAnimations` 的每個 effect 各自取當下的值，transition 合成一組，再走祖先。不選 G2（所有動畫合成一份，列出和基本樣式不同的）：前端分不出每個動畫的名字，值剛好等於基本樣式的 property 會漏掉。不選 G3（不做）：Styles 沒有動畫的區塊，Computed 的預設清單少了動畫給的 property（2b 手動確認時看到的差異）。
 
 2026-11-10（使用者，3d）：
 
@@ -515,64 +443,7 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
 
 ## 待決定
 
-每一段開始前只決定那一段的事。整份的兩條和第 1 段的先決定。
-
-**整份**：
-
-1. **範圍**：已決定（「已決定的事項」第 1 條）。
-2. **分段和順序**：已決定（「已決定的事項」第 2 條）。
-
-**第 1 段**：
-
-3. **不在樹上的節點怎麼留住**：已決定（「已決定的事項」第 3 條）。
-4. **改動的事件從哪裡來**：已決定（「已決定的事項」第 4 條）。
-5. **停在斷點時回答 `DOM`**：已決定（「已決定的事項」第 5 條）。
-6. **事件什麼時候送**：已決定（「已決定的事項」第 6 條）。
-7. **Event Listeners 放在哪一段**：已決定（「已決定的事項」第 7 條）。
-
-**第 2 段**：
-
-8. **overlay 畫在哪裡**：已決定（「已決定的事項」第 8 條）。
-9. **「Paused in debugger」**：已決定（「已決定的事項」第 9 條）。
-10. **標籤的內容**：已決定（「已決定的事項」第 10 條）。
-14. **2b 的 `getMatchedStylesForNode`**：已決定（「已決定的事項」第 14 條）。
-15. **Computed 跟不跟著更新**：已決定（「已決定的事項」第 15 條）。
-16. **停住的迴圈怎麼拿到 `BeginMainFrame`**：已決定（「已決定的事項」第 16 條）。
-17. **停住的迴圈怎麼拿到畫 frame 要的狀態**：已決定（「已決定的事項」第 17 條）。
-18. **停住時 CSS 動畫往不往前走**：已決定，記成限制（「已決定的事項」第 18 條）。
-
-**第 3 段**：
-
-11. **stylesheet 的原文從哪裡來**：已決定（「已決定的事項」第 11 條，T5）。
-    - T1：一律留著 `<link>` 的回應的 `Bytes` 和 constructed stylesheet 的文字。`Bytes` 共用不複製，但要多留記憶體；0082 的「已決定的事項」第 18 條為了這個沒選一律留子資源的 body。
-    - T2：只在有 DevTools 連上時留，連上之前載入的用 CSSOM 序列化。
-    - T3：`CSS.enable` 時重新抓。Chrome 只從快取拿，machopo 沒有快取，會真的再發請求，內容也可能不同。
-    - T4：一律用 CSSOM 序列化。行號對不上原檔。
-    - 第 3 段開始前量一下典型頁面的 stylesheet 原文有多大，再決定。
-12. **規則的位置**：已決定（「已決定的事項」第 12 條，R2）。
-    - R1：`css` 的 parser 一律記位置，每次解析都付記憶體。
-    - R2：照 Blink，要的時候用 observer 對原文重新解析一次，順便找回 machopo 丟掉的宣告和 at-rule，讓 Styles 照 Chrome 把它們劃掉。
-    - R3：不給位置，Styles 沒有「檔名:行」。
-    - 草稿的看法：R2。
-13. **`forcePseudoState` 放不放進這份**：已決定，放（「已決定的事項」第 1 條）。
-
-**3b**：
-
-21. **記位置的解析怎麼做**：已決定（「已決定的事項」第 21 條，P1）。
-22. **原文和現在的規則對不上時**：已決定（「已決定的事項」第 22 條，M2）。
-23. **宣告怎麼列**：已決定（「已決定的事項」第 23 條，D1）。
-24. **inline style 的位置**：已決定（「已決定的事項」第 24 條，I1）。
-25. **`@media`、`@supports` 怎麼送**：已決定（「已決定的事項」第 25 條，A2）。
-
-**3c**：
-
-26. **pseudo element 怎麼出現在 DOM 樹裡**：已決定（「已決定的事項」第 26 條，N1，掛點）。
-27. **動畫的樣式怎麼算**：已決定（「已決定的事項」第 27 條，G1）。
-
-**3d**：
-
-28. **強制的 `:visited` 怎麼處理**：已決定（「已決定的事項」第 28 條，V2）。
-29. **收哪些名字**：已決定（「已決定的事項」第 29 條，F1）。
+沒有。
 
 ## 之後的可能
 
@@ -586,7 +457,11 @@ Chrome 停在斷點時，Elements 照樣能用：Blink 在 pause 的巢狀迴圈
   - grid、flex、container query 的 overlay；
   - highlight 的 accessibility 資訊和對比度；
   - Animations、Layers。
-- **Puppeteer、Playwright 的 `ElementHandle`**：用這份的 `DOM` 命令（`describeNode`、`resolveNode`、`getBoxModel`、`getContentQuads`、`scrollIntoViewIfNeeded`），路線的第 4 項。之後 `Machopo.queryElement` 這類代替品可能可以換掉。
+- **Puppeteer、Playwright 的 `ElementHandle`**：用這份的 `DOM` 命令（`describeNode`、`resolveNode`、`getBoxModel`、`getContentQuads`），還要補 `scrollIntoViewIfNeeded`，路線的第 4 項。之後 `Machopo.queryElement` 這類代替品可能可以換掉。
 - **renderer 重開之後交接 session 的狀態**：`DOM`、`CSS`、`Overlay` 和 `Network`、`Log` 一起。
 - **Console 的 `getEventListeners(node)`**、`monitorEvents` 等 command line API：Blink 經過 `V8InspectorClient::installAdditionalCommandLineAPI` 另外裝進 V8，不是 Event Listeners 分頁的一部分。
 - **Performance 面板**（`Tracing`）。
+- **強制的 `:visited`**：machopo 支援已造訪的連結（`:visited` 只套顏色類的 property 那一層）時一起做（第 28 條）。
+- **`mediaList` 和 `getMediaQueries`**：做 `Emulation`（裝置模式）時再補（第 25 條）；`specificity.components`（specificity 的提示）。
+- **停住時推進 CSS 動畫**：把 engine 的動畫的推進和發事件分開（第 18 條）；`Animation` domain（Animations 面板、Styles 的動畫名字旁的小圖示）。
+- **「Paused in debugger」的繼續、逐步執行的按鈕**：停住時接輸入（scheduler 的 queue 的設定）。

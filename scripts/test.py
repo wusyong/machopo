@@ -21,7 +21,7 @@
     python scripts/test.py mutate SPEC [--only NAME ...] [--keep-going] | --restore
                                        # mutation testing: break the code as SPEC lists, check a test fails
     python scripts/test.py cdp [CASE ...]
-                                       # machopo's answers to DevTools' JavaScript domains against Chrome's
+                                       # machopo's answers to DevTools' domains against Chrome's
 
 `matrix` and `fuzz` link the debug V8 (V8's `DCHECK`s), in a target directory
 of their own; `automation` needs a display and a GPU. `scenarios` is a
@@ -1915,7 +1915,7 @@ def main() -> int:
     build_arguments(wdspec)
 
 
-    cdp = command("cdp", cmd_cdp, "machopo's answers to DevTools' JavaScript domains against Chrome's")
+    cdp = command("cdp", cmd_cdp, "machopo's answers to DevTools' domains against Chrome's")
     cdp.add_argument("cases", nargs="*", metavar="CASE", help="run only these cases (default: all)")
 
     mutate = command("mutate", cmd_mutate, "mutation testing: break the code as a spec file lists, check a test fails")
