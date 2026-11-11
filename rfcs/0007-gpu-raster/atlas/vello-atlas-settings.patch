@@ -1,0 +1,236 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Wu Yuwei <yuweiwu@pm.me>
+Date: Wed, 11 Nov 2026 05:50:46 +0900
+Subject: [PATCH] vello_cpu: Add settings for the glyph atlas's pages and
+ eviction
+
+The glyph atlas's page size (4096), page limit (8) and eviction settings
+were fixed. Before each render, the glyphs new to the atlas are drawn into a
+scratch context of a page's size and composited onto their page, so the page
+size is paid by every render that brings a new glyph, and `max_entry_age`
+counts renders: a renderer that renders many small targets (a browser's
+tiles) wants small pages and a longer age than a window's frames.
+
+`Resources::with_glyph_atlas_settings` takes a `GlyphAtlasSettings`;
+`Resources::new` keeps the defaults. `Resources::glyph_atlas_page_count`
+tells how many pages the atlas has allocated.
+---
+ vello_cpu/src/lib.rs    |   4 ++
+ vello_cpu/src/render.rs | 109 ++++++++++++++++++++++++++++++++++++++++
+ vello_cpu/src/text.rs   |  26 +++++-----
+ 3 files changed, 125 insertions(+), 14 deletions(-)
+
+diff --git a/vello_cpu/src/lib.rs b/vello_cpu/src/lib.rs
+index 72c966db67ca568aae7f42bc654f9a99c9419dc0..d8332c4a226dd82e9f5a4ee8946db13f34fd1960 100644
+--- a/vello_cpu/src/lib.rs
++++ b/vello_cpu/src/lib.rs
+@@ -187,6 +187,10 @@ pub mod region;
+ #[doc(hidden)]
+ pub mod span;
+ 
++#[cfg(feature = "text")]
++pub use glifo::atlas::GlyphCacheConfig;
++#[cfg(feature = "text")]
++pub use render::GlyphAtlasSettings;
+ pub use render::{
+     PixelFormat, RasterizerSettings, RenderContext, RenderSettings, Resources, TargetInit,
+ };
+diff --git a/vello_cpu/src/render.rs b/vello_cpu/src/render.rs
+index c3b4b636cab7808b112ad1a060a1bdeee96354d9..a50f4a412cd89fefb733b53030bff94cef10ad47 100644
+--- a/vello_cpu/src/render.rs
++++ b/vello_cpu/src/render.rs
+@@ -38,6 +38,36 @@ use vello_common::util::into_fast_path_rect;
+ #[cfg(feature = "text")]
+ pub(crate) const DEFAULT_GLYPH_ATLAS_SIZE: u16 = 4096;
+ 
++/// Settings for the glyph atlas that backs
++/// [`atlas_cache`](glifo::GlyphRunBackend::atlas_cache).
++///
++/// Before each render, the glyphs that are new to the atlas are drawn into a
++/// scratch context of a page's size and composited onto their page, so the
++/// page size is a cost every such render pays: a renderer that renders many
++/// small targets wants small pages. `cache.max_entry_age` counts renders.
++#[cfg(feature = "text")]
++#[derive(Clone, Debug)]
++pub struct GlyphAtlasSettings {
++    /// Width and height of each atlas page in pixels.
++    pub page_size: u16,
++    /// The most pages the atlas grows to. A glyph that finds no room is drawn
++    /// directly, as it is without the atlas.
++    pub max_pages: usize,
++    /// When cached glyphs are evicted, and which sizes are cached at all.
++    pub cache: glifo::atlas::GlyphCacheConfig,
++}
++
++#[cfg(feature = "text")]
++impl Default for GlyphAtlasSettings {
++    fn default() -> Self {
++        Self {
++            page_size: DEFAULT_GLYPH_ATLAS_SIZE,
++            max_pages: glifo::atlas::AtlasConfig::default().max_atlases,
++            cache: glifo::atlas::GlyphCacheConfig::default(),
++        }
++    }
++}
++
+ /// Persistent resources required by Vello CPU for rendering.
+ ///
+ /// You should create one such instance per renderer.
+@@ -49,6 +79,8 @@ pub struct Resources {
+     // Will be initialized lazily on first use.
+     #[cfg(feature = "text")]
+     pub(crate) glyph_resources: Option<GlyphAtlasResources>,
++    #[cfg(feature = "text")]
++    pub(crate) glyph_atlas_settings: GlyphAtlasSettings,
+ }
+ 
+ impl Resources {
+@@ -57,6 +89,25 @@ impl Resources {
+         Self::default()
+     }
+ 
++    /// Create a new set of renderer resources whose glyph atlas, once a glyph
++    /// run asks for it, has the given settings.
++    #[cfg(feature = "text")]
++    pub fn with_glyph_atlas_settings(settings: GlyphAtlasSettings) -> Self {
++        Self {
++            glyph_atlas_settings: settings,
++            ..Self::default()
++        }
++    }
++
++    /// The number of pages the glyph atlas has allocated: each holds
++    /// `page_size` × `page_size` pixels of four bytes.
++    #[cfg(feature = "text")]
++    pub fn glyph_atlas_page_count(&self) -> usize {
++        self.glyph_resources
++            .as_ref()
++            .map_or(0, |resources| resources.pixmaps.len())
++    }
++
+     pub(crate) fn before_render(&mut self, render_mode: RenderMode) {
+         #[cfg(feature = "text")]
+         self.prepare_glyph_cache(render_mode);
+@@ -1470,4 +1521,62 @@ mod tests {
+ 
+         assert!(resources.glyph_resources.is_some());
+     }
++
++    #[cfg(feature = "text")]
++    #[test]
++    fn glyph_atlas_follows_its_settings() {
++        const ROBOTO_FONT: &[u8] = include_bytes!("../../assets/roboto/Roboto-Regular.ttf");
++
++        let font = FontData::new(Blob::new(Arc::new(ROBOTO_FONT)), 0);
++        // More glyphs than one 64x64 page holds at this size.
++        let glyphs: vec::Vec<Glyph> = (1..200)
++            .map(|id| Glyph {
++                id,
++                x: (id % 10) as f32 * 9.0,
++                y: 20.0,
++            })
++            .collect();
++        let draw = |settings: crate::GlyphAtlasSettings| {
++            let mut resources = Resources::with_glyph_atlas_settings(settings);
++            let mut ctx = RenderContext::new(100, 100);
++            let mut target = Pixmap::new(100, 100);
++            ctx.glyph_run(&mut resources, &font)
++                .font_size(16.0)
++                .atlas_cache(true)
++                .fill_glyphs(glyphs.iter().copied())
++                .unwrap();
++            ctx.flush();
++            ctx.render(&mut target, &mut resources);
++            let pages = &resources.glyph_resources.as_ref().unwrap().pixmaps;
++            let sizes: vec::Vec<(u16, u16)> =
++                pages.iter().map(|p| (p.width(), p.height())).collect();
++            assert_eq!(resources.glyph_atlas_page_count(), sizes.len());
++            (sizes, target)
++        };
++
++        let (one, with_one) = draw(crate::GlyphAtlasSettings {
++            page_size: 64,
++            max_pages: 1,
++            ..Default::default()
++        });
++        assert_eq!(one, [(64, 64)]);
++
++        let (three, with_three) = draw(crate::GlyphAtlasSettings {
++            page_size: 64,
++            max_pages: 3,
++            ..Default::default()
++        });
++        assert_eq!(three, [(64, 64); 3]);
++
++        // The glyphs that found no room were drawn all the same: directly,
++        // which rounds a level apart from compositing them from the atlas.
++        let worst = with_one
++            .data()
++            .iter()
++            .zip(with_three.data())
++            .map(|(a, b)| a.a.abs_diff(b.a))
++            .max();
++        assert!(worst <= Some(1), "{worst:?}");
++        assert!(with_one.data().iter().any(|p| p.a != 0));
++    }
+ }
+diff --git a/vello_cpu/src/text.rs b/vello_cpu/src/text.rs
+index 7205efdd8da166854d3a03ecc6d321b241225406..b921452e5d140430f029b9c13deb614e941968c7 100644
+--- a/vello_cpu/src/text.rs
++++ b/vello_cpu/src/text.rs
+@@ -11,7 +11,7 @@
+ //! [`Arc<Pixmap>`]s here, so the CPU renderer can read pixels directly without
+ //! any GPU upload step.
+ 
+-use crate::render::DEFAULT_GLYPH_ATLAS_SIZE;
++use crate::render::GlyphAtlasSettings;
+ use crate::{
+     Image, ImageSource, PaintType, Pixmap, RasterizerSettings, RenderContext, RenderMode,
+     RenderSettings, Resources, TargetInit, color, kurbo, peniko,
+@@ -23,7 +23,7 @@ use color::palette::css::BLACK;
+ use core::fmt::Debug;
+ use core::ops::RangeInclusive;
+ use glifo::atlas::{
+-    AtlasConfig, AtlasSlot, GlyphAtlas, GlyphCacheConfig, ImageCache, PendingClearRect,
++    AtlasConfig, AtlasSlot, GlyphAtlas, ImageCache, PendingClearRect,
+ };
+ use glifo::{AtlasCacher, DrawSink, GlyphRunBackend};
+ use glifo::{Glyph, renderer};
+@@ -55,15 +55,15 @@ pub(crate) struct GlyphAtlasResources {
+ }
+ 
+ impl GlyphAtlasResources {
+-    pub(crate) fn with_config(
+-        page_width: u16,
+-        page_height: u16,
+-        level: Level,
+-        eviction_config: GlyphCacheConfig,
+-    ) -> Self {
++    pub(crate) fn with_settings(settings: &GlyphAtlasSettings, level: Level) -> Self {
++        let (page_width, page_height) = (settings.page_size, settings.page_size);
+         Self {
+-            glyph_atlas: GlyphAtlas::with_config(eviction_config),
+-            image_cache: ImageCache::new_with_config(AtlasConfig::default()),
++            glyph_atlas: GlyphAtlas::with_config(settings.cache.clone()),
++            image_cache: ImageCache::new_with_config(AtlasConfig {
++                atlas_size: (page_width, page_height),
++                max_atlases: settings.max_pages,
++                ..AtlasConfig::default()
++            }),
+             glyph_renderer: Box::new(RenderContext::new_with(
+                 page_width,
+                 page_height,
+@@ -117,11 +117,9 @@ impl Resources {
+ 
+     fn ensure_glyph_resources(&mut self, level: Level) {
+         if self.glyph_resources.is_none() {
+-            self.glyph_resources = Some(GlyphAtlasResources::with_config(
+-                DEFAULT_GLYPH_ATLAS_SIZE,
+-                DEFAULT_GLYPH_ATLAS_SIZE,
++            self.glyph_resources = Some(GlyphAtlasResources::with_settings(
++                &self.glyph_atlas_settings,
+                 level,
+-                GlyphCacheConfig::default(),
+             ));
+         }
+     }

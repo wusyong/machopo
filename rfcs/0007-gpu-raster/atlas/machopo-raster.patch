@@ -1,0 +1,252 @@
+diff --git a/crates/raster/src/playback_tests.rs b/crates/raster/src/playback_tests.rs
+index 32587e2..f21de30 100644
+--- a/crates/raster/src/playback_tests.rs
++++ b/crates/raster/src/playback_tests.rs
+@@ -2915,3 +2915,121 @@ fn upstream_doesnt_keep_a_clearing_layer_to_its_clip() {
+         assert_eq!(pixels[(8 * 10 + 8) * 4..][..4], [0, 0, 0, 0], "{mode:?}");
+     }
+ }
++
++/// What `draw` gives on a thread that has drawn nothing: with no glyph
++/// in its atlas.
++fn on_a_new_thread(draw: impl FnOnce() -> crate::Bitmap + Send) -> crate::Bitmap {
++    std::thread::scope(|scope| scope.spawn(draw).join().unwrap())
++}
++
++/// A thread's glyphs are kept in its atlas, which grows to its cap and no
++/// further; the glyphs past it are drawn all the same.
++#[test]
++fn glyphs_are_kept_in_an_atlas_that_grows_to_its_cap() {
++    use crate::vello_backend::atlas_pages;
++    let black = || PaintFlags::fill(Color::BLACK);
++    assert_eq!(atlas_pages(), 0);
++    play(
++        vec![text_run((AHEM, 1), "X", 20.0, PointF::new(2.0, 18.0), 20.0, black())],
++        40.0,
++        40.0,
++    );
++    assert_eq!(atlas_pages(), 1);
++    // Each size is a glyph of its own to the atlas: four of these to a
++    // page, so these are more than its 64 pages hold.
++    let sizes = |range: std::ops::Range<u16>| -> Vec<PaintOp> {
++        range
++            .map(|i| {
++                let size = 100.0 + f32::from(i) / 64.0;
++                text_run((AHEM, 1), "X", size, PointF::new(0.0, 100.0), size, black())
++            })
++            .collect()
++    };
++    play(sizes(0..300), 120.0, 120.0);
++    assert_eq!(atlas_pages(), 64);
++    // One that found no room: drawn as on a thread whose atlas has it.
++    let last = || play(sizes(299..300), 120.0, 120.0);
++    let here = last();
++    assert_eq!(atlas_pages(), 64);
++    let there = on_a_new_thread(last);
++    assert_eq!(here.pixel(50, 50), [0, 0, 0, 255]);
++    assert_eq!(here.pixels, there.pixels);
++}
++
++/// Lato's "R" at 24px with its origin at `transform`'s, slanted by `skew`
++/// degrees: every such run asks the atlas for the same glyph at the same
++/// place within a pixel.
++fn an_r(skew: f32, transform: Transform) -> Vec<PaintOp> {
++    let mut op = text_run(
++        (LATO, 2),
++        "R",
++        24.0,
++        PointF::new(0.0, 0.0),
++        24.0,
++        PaintFlags::fill(Color::BLACK),
++    );
++    let PaintOp::DrawGlyphs { skew: its, .. } = &mut op else {
++        unreachable!()
++    };
++    *its = skew;
++    vec![
++        PaintOp::Save,
++        PaintOp::SetMatrix { transform },
++        op,
++        PaintOp::Restore,
++    ]
++}
++
++/// A glyph that is slanted, or under a matrix that turns or stretches, is
++/// drawn so whatever was drawn before it: Vello's atlas hands back the
++/// upright one of the same font, size and place that a run before it in
++/// the same playback put there.
++#[test]
++fn a_glyph_the_atlas_has_upright_is_drawn_as_its_run_has_it() {
++    let at = |x: f32| Transform([1.0, 0.0, 0.0, 1.0, x, 30.0]);
++    // By 30 degrees about its origin.
++    let turned = Transform([0.866, 0.5, -0.5, 0.866, 50.0, 30.0]);
++    let squeezed = Transform([0.5, 0.0, 0.0, 1.0, 50.0, 30.0]);
++    let tall = Transform([1.0, 0.0, 0.0, 1.25, 50.0, 30.0]);
++    let upright = play(an_r(0.0, at(50.0)), 80.0, 40.0);
++    for (what, skew, transform) in [
++        ("slanted", 20.0, at(50.0)),
++        ("turned", 0.0, turned),
++        ("squeezed", 0.0, squeezed),
++        ("tall", 0.0, tall),
++    ] {
++        let alone = on_a_new_thread(|| play(an_r(skew, transform), 80.0, 40.0));
++        assert_ne!(alone.pixels, upright.pixels, "{what}");
++        // After an upright one, 40 to its left, in the same playback.
++        let after = on_a_new_thread(|| {
++            let ops = [an_r(0.0, at(10.0)), an_r(skew, transform)].concat();
++            play(ops, 80.0, 40.0)
++        });
++        let right = |bitmap: &crate::Bitmap| -> Vec<[u8; 4]> {
++            (0..40)
++                .flat_map(|y| (40..80).map(move |x| (x, y)))
++                .map(|(x, y)| bitmap.pixel(x, y))
++                .collect()
++        };
++        assert!(right(&after) == right(&alone), "{what}");
++    }
++}
++
++/// A canvas's glyphs go through its thread's atlas too.
++#[test]
++fn a_canvas_keeps_its_glyphs_in_the_atlas() {
++    let size = Size::new(40, 40);
++    let mut pixels = vec![0u8; 40 * 40 * 4];
++    let run = text_run(
++        (AHEM, 1),
++        "X",
++        20.0,
++        PointF::new(2.0, 18.0),
++        20.0,
++        PaintFlags::fill(Color::BLACK),
++    );
++    let list = list_of(vec![run]);
++    crate::draw_into(&list, &RasterCache::default(), size, false, &mut pixels);
++    assert_eq!(crate::vello_backend::atlas_pages(), 1);
++    assert_eq!(pixels[(10 * 40 + 10) * 4..][..4], [0, 0, 0, 255]);
++}
+diff --git a/crates/raster/src/vello_backend.rs b/crates/raster/src/vello_backend.rs
+index cc64534..11fa19a 100644
+--- a/crates/raster/src/vello_backend.rs
++++ b/crates/raster/src/vello_backend.rs
+@@ -354,8 +354,7 @@ pub(crate) fn playback(
+         return;
+     };
+     CONTEXT.with_borrow_mut(|slot| {
+-        let (context, resources) =
+-            slot.get_or_insert_with(|| (RenderContext::new(width, height), Resources::new()));
++        let (context, resources) = slot.get_or_insert_with(|| kept_context(width, height));
+         context.reset_and_resize(width, height);
+         let scale = f64::from(params.contents_scale);
+         let base = Affine::translate((
+@@ -363,6 +362,7 @@ pub(crate) fn playback(
+             -f64::from(params.content_rect.y),
+         )) * Affine::scale(scale);
+         let mut player = Player::new(context, resources, cache, base);
++        player.atlas = true;
+         let all = list.ops();
+         let ops: Vec<&PaintOp> = ops.iter().map(|&op| &all[op]).collect();
+         player.play(&ops);
+@@ -388,10 +388,10 @@ pub(crate) fn draw_into(list: &DisplayItemList, cache: &VelloCache, size: Size,
+         return;
+     };
+     CONTEXT.with_borrow_mut(|slot| {
+-        let (context, resources) =
+-            slot.get_or_insert_with(|| (RenderContext::new(width, height), Resources::new()));
++        let (context, resources) = slot.get_or_insert_with(|| kept_context(width, height));
+         context.reset_and_resize(width, height);
+         let mut player = Player::new(context, resources, cache, Affine::IDENTITY);
++        player.atlas = true;
+         player.canvas = Some(pixels);
+         player.seed_canvas();
+         let ops: Vec<&PaintOp> = list.ops().iter().collect();
+@@ -400,6 +400,44 @@ pub(crate) fn draw_into(list: &DisplayItemList, cache: &VelloCache, size: Size,
+     });
+ }
+ 
++/// The side of a page of a thread's glyph atlas, in pixels. Before each
++/// render Vello draws the glyphs new to the atlas into a context of a
++/// page's size and composites it onto their page, which every tile with a
++/// new glyph pays for: with Vello's own 4096 the atlas cost more than it
++/// saved, and of 256, 512 and 1024 this was the fastest or as fast.
++const ATLAS_PAGE: u16 = 256;
++/// The most pages a thread's atlas grows to: 16 MB. A glyph that finds no
++/// room is drawn from its outline, as all were before.
++const ATLAS_PAGES: usize = 64;
++/// How many renders (a tile is one) a glyph nobody drew stays in the
++/// atlas. Vello's own 64 is frames of a window; of tiles it is a fraction
++/// of one frame's, and the atlas then saved nothing.
++const ATLAS_AGE: u64 = 4096;
++
++/// A context and its resources for this thread to keep, with a glyph
++/// atlas.
++fn kept_context(width: u16, height: u16) -> (RenderContext, Resources) {
++    let mut settings = vello_cpu::GlyphAtlasSettings {
++        page_size: ATLAS_PAGE,
++        max_pages: ATLAS_PAGES,
++        ..Default::default()
++    };
++    settings.cache.max_entry_age = ATLAS_AGE;
++    (
++        RenderContext::new(width, height),
++        Resources::with_glyph_atlas_settings(settings),
++    )
++}
++
++/// How many pages this thread's glyph atlas has.
++#[cfg(test)]
++pub(crate) fn atlas_pages() -> usize {
++    CONTEXT.with_borrow(|slot| {
++        slot.as_ref()
++            .map_or(0, |(_, resources)| resources.glyph_atlas_page_count())
++    })
++}
++
+ /// Drops this thread's context: the next playback makes one.
+ pub(crate) fn forget_context() {
+     CONTEXT.set(None);
+@@ -477,6 +515,11 @@ struct Player<'a> {
+     /// The current matrix: Vello's layers and clips don't keep it.
+     transform: Affine,
+     saves: Vec<Save>,
++    /// Whether glyphs go through `resources`' glyph atlas: only where the
++    /// resources are the thread's, kept from one playback to the next
++    /// (those that draw one layer off to the side would make an atlas and
++    /// drop it).
++    atlas: bool,
+     /// How many clips in force are wholly outside the context: while any
+     /// is, nothing is drawn.
+     hidden: usize,
+@@ -972,6 +1015,7 @@ impl<'a> Player<'a> {
+             cache,
+             base: transform,
+             transform,
++            atlas: false,
+             saves: vec![Save {
+                 transform,
+                 pushed: Vec::new(),
+@@ -1943,6 +1987,15 @@ impl<'a> Player<'a> {
+         let pairs = glyphs.iter().zip(positions.iter());
+         let mut failed = false;
+         if rotations.is_empty() {
++            // vello: a slanted glyph, or one under a matrix that turns or
++            // stretches, isn't put in the glyph atlas, but is taken from it
++            // when a run earlier in the same scene put the upright glyph of
++            // its font, size and place there: it comes out upright. Such
++            // runs go without the atlas; the matrices left are those that
++            // scale both ways alike (compared exactly: a matrix Vello
++            // wouldn't take for one mustn't pass).
++            #[expect(clippy::float_cmp, reason = "see above")]
++            let atlas = self.atlas && aligned && a == d && skew == 0.0;
+             let run = glyph_run(
+                 self.context,
+                 self.resources,
+@@ -1951,7 +2004,8 @@ impl<'a> Player<'a> {
+                 &coords,
+                 embolden,
+                 (skew != 0.0).then_some(slant),
+-            );
++            )
++            .atlas_cache(atlas);
+             let glyphs = pairs.filter(|(_, position)| near(position)).map(glyph);
+             failed = if stroked {
+                 run.stroke_glyphs(glyphs).is_err()

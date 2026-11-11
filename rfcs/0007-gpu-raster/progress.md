@@ -8,14 +8,15 @@
 
 | 步驟 | 狀態 | 完成日期 |
 | --- | --- | --- |
-| 0 圖片的解碼和讀尺寸、JPEG 的編碼換成純 Rust 的 crate（Skia 照舊畫） | 完成，還沒 merge | 2026-11-10 |
+| 0 圖片的解碼和讀尺寸、JPEG 的編碼換成純 Rust 的 crate（Skia 照舊畫） | 完成 | 2026-11-10 |
 | 1a 原型：常用的 op；量文字多的 tile、存截圖（第一個檢查點） | 完成：檢查點通過（不 merge） | 2026-11-10 |
 | 1b 原型：全部的 op 和組出來的功能；整套 reftest（第二個檢查點） | 完成：檢查點通過（不 merge） | 2026-11-10 |
 | 2a Vello 成為唯一的 playback；`raster` 的測試搬過來、補上「上游還缺」、不會 panic、tile 接縫的測試 | 完成 | 2026-11-11 |
 | 2b ink bounds 改用 skrifa、mipmap、拿掉 skia-safe | 完成 | 2026-11-11 |
 | 2c playback 裡的 panic：release 接住、留白、記 log 和 DevTools Console 的警告 | 完成 | 2026-11-11 |
-| 2d WPT 的預期結果、列出缺的功能的文件、其他文件、整個階段的檢查 | 完成，還沒審、還沒 merge | 2026-11-11 |
-| 3 改進（文字的 gamma 和對比、漸層的 dithering、fork 裡的 `ColorMatrix`；可能不需要） | 還沒開始 | |
+| 2d WPT 的預期結果、列出缺的功能的文件、其他文件、整個階段的檢查 | 完成；第 0 到 2 步 2026-11-11 merge 回 `main` | 2026-11-11 |
+| 3a 文字的速度：Vello 的 glyph atlas（fork 上的 patch） | 做了、量了、不採用：開 atlas 之後 WPT 的 reftest 不穩定（下面「第 3a 步」；改動留在 `atlas/`） | 2026-11-11 |
+| 3b 量 release 只對 Vello 開整數溢位檢查的代價 | 量了（下面「第 3b 步」），不開 | 2026-11-11 |
 
 ## 驗收
 
@@ -492,3 +493,74 @@
 - 沒有跑的：整套 `wpt`、`wdspec`、`matrix`、`fuzz`（CI 的）；Speedometer。
 
 **Mutation test**（`mutants-2d.toml`，1 條，抓到）：clip 藏起來時照樣推 layer → `a_clearing_layer_in_a_clip_outside_changes_nothing` 失敗。跑完檔案還原了。
+
+### 第 2 步 merge 回 `main`（2026-11-11）
+
+`origin/main` 這段期間多了 16 個 commit（wasm 的頁面、GC 的量測）。本地的 `main` 先 fast-forward 到它，`0007` rebase 上去（沒有衝突），`ci.py third-party` 把 elise 和 wasmtime 換到新釘的 commit。rebase 之後重跑：`cargo test --workspace --no-fail-fast` 3828 個通過、0 個失敗；`cargo fmt --check`、clippy、`sanity.py` 七項都過；`main` 新加的情境（`todomvc-wasm`、`todomvc-app-wasm`、`todomvc-app-js`、`wasm-document`、`wasm-listeners`）8 次執行都過。然後 `git merge --ff-only`、`cargo clean`。之後 push 了 `main`。reftest 和其餘的情境 rebase 之後沒有重跑（rebase 前跑過；`main` 新來的改動沒有碰 paint 和 raster）。
+
+### 第 3a 步：glyph 的 atlas，不採用（2026-11-11，Windows 11）
+
+**結論**：做完、量過，因為最後一段的問題不採用（已決定的事項第 46 條）。machopo 這一側和 fork 上的 commit 都還原了；下面寫的程式和測試現在只在 `atlas/` 的兩個 patch 裡（`vello-atlas-settings.patch` 套在 Vello 的 `112736df` 上，`machopo-raster.patch` 套在 machopo 的 `a90c6c0` 上），不在工作目錄裡。
+
+**fork 的 patch**（`atlas/vello-atlas-settings.patch`）：`vello_cpu` 加 `GlyphAtlasSettings`（頁面的邊長、頁數上限、`GlyphCacheConfig`）、`Resources::with_glyph_atlas_settings` 和 `Resources::glyph_atlas_page_count`；`Resources::new` 照舊用預設。fork 的測試 `glyph_atlas_follows_its_settings`（頁面大小和上限照設定；放不下的 glyph 照樣畫，和從 atlas 貼的最多差 1）。`cargo test -p vello_common -p vello_cpu -p glifo` 過（28、182、96 個）。這個 commit 沒有 push 過，還原時從 fork 的 `machopo` 分支拿掉了（分支回到 `b52311f2`）。
+
+**machopo 這一側**：每個 thread 留著的 `Resources` 帶 atlas 的設定（`kept_context`），tile 和 canvas 的 `DrawGlyphs` 開 atlas；畫到旁邊的 layer（filter、圖案、mask）用自己的 `Resources`，不開。一個 glyph 一個 run 的那條路（SVG 的 `rotate`）不開。
+
+**斜的、轉過的、拉伸的 run 不開 atlas**（已決定的事項第 44 條）。查的經過：
+
+- 暫時讓每個 run 都開 atlas，在新的 thread 上只畫一種 glyph、看 atlas 的頁數：斜的 0、30 度的 matrix 底下 0、橫向拉成兩倍的 matrix 底下 0、直的 1。Vello 不收前三種，所以一開始把 machopo 這一側的判斷拿掉了（mutation 也沒抓到它）。
+- 整套 reftest 有一個失敗：`canvas/c5-text`，`fillText("XXXX", 50, 150, 40)`（擠成一半寬）畫成沒擠的。縮小之後的條件：**同一個 scene（render 之前）裡，前面的 run 把同一個 glyph 直的放進 atlas，後面斜的或 matrix 不等比例的 run 就拿到那個直的**；分在兩次 render 就不會。之前的探測每次只畫一種，所以沒看到。
+- 判斷加回來：有 slant、或 matrix 不是兩個方向等比例縮放（`a == d`、沒有 `b`、`c`，逐位比較）的 run 不開 atlas。測試 `a_glyph_the_atlas_has_upright_is_drawn_as_its_run_has_it` 在同一次 playback 裡先畫直的、再畫斜的、轉 30 度的、橫向擠一半的、縱向拉高的，各自要和單獨畫時一樣；三條 mutation 都抓到。
+- 回報上游的草稿：`upstream-reports.md` 第 5 份（還沒縮成只用 Vello 的程式）。
+
+**量測**（`bench.py raster`，headless、scale 2、一個 raster thread、`perf` profile；每組設定輪流跑、各 3 次；設定是「頁面邊長、頁數上限、保留幾次 render」，頁數上限取成每組都是 16 MB）。每個 tile 的 `PrepareTiles`（ms，三次由小到大）：
+
+| 頁面 | 階段 | 不開 | 256、64、4096 | 512、16、4096 | 1024、4、4096 | 512、16、64 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Gutenberg | 捲動 | 0.713、0.722、0.728 | 0.593、0.701、0.718 | 0.697、0.699、0.708 | 0.785、0.801、0.803 | 0.707、0.713、0.783 |
+| Gutenberg | 改視窗大小 | 0.144、0.154、0.158 | 0.111、0.123、0.126 | 0.120、0.123、0.129 | 0.118、0.130、0.135 | 0.141、0.151、0.156 |
+| SQLite | 改視窗大小 | 0.147、0.155、0.160 | 0.111、0.118、0.121 | 0.118、0.119、0.123 | 0.114、0.125、0.126 | 0.117、0.126、0.132 |
+| NewsSite-Next | 捲動 | 0.282、0.301、0.302 | 0.272、0.278、0.291 | 0.282、0.296、0.297 | 0.298、0.300、0.312 | 0.291、0.293、0.314 |
+| NewsSite-Next | 改視窗大小 | 0.106、0.118、0.119 | 0.101、0.102、0.110 | 0.094、0.100、0.110 | 0.097、0.104、0.110 | 0.114、0.122、0.130 |
+
+- **選 256、64 頁、4096 次**：每一格都最快或一樣快。中位數對不開的比：Gutenberg 捲動 0.97、改大小 0.80，SQLite 0.76，NewsSite-Next 捲動 0.92、改大小 0.86。raster 的 task 本身（不含 compositor thread 上其他的事）在改大小時少三成（SQLite 0.128 → 0.086 ms）。
+- 頁面 1024 在捲動時比不開還慢（每個有新 glyph 的 tile 都要 render 一個頁面大小的 context）；保留 64 次（Vello 的預設）和不開差不多。
+- 和 Skia 比：Skia 已經拿掉，沒有同一批的數字。第 1 步量到 SQLite 是 Skia 的 1.62 倍，乘上這次的 0.76 約 1.2 倍：這是兩批數字相乘的估計，不是量到的。
+- 沒有量的：128 的頁面、其他的頁數上限、多個 raster thread、scale 1。
+
+**Mutation test**（`atlas/mutants.toml`，9 條，對套了 `machopo-raster.patch` 的程式）：tile 不開 atlas、canvas 不開、斜的 run 開 atlas、轉過的 matrix 底下開、拉伸的 matrix 底下開、沒有上限、頁面用 Vello 的 4096：7 條抓到。保留時間改回 64、畫到旁邊的 layer 也開 atlas：沒抓到，畫出來一樣、只有速度不同（要採用的話記進 `docs/test-gaps.md` 的「沒有計數守著的優化」）。跑完檔案還原了。
+
+**開 atlas 之後 WPT 的 reftest 不穩定：不採用的原因**（2026-11-11）。machopo 自己的 reftest（195 個）和情境（86 次）都過，`html/canvas/element/text`、`css/css-fonts`、`css/css-text-decor` 也和預期一樣；但 `css/css-transforms`（548 個測試）每次跑有 7 到 29 個意外的失敗，每次不同的幾個，不開 atlas 時是 0 個（另有一個和 atlas 無關的 unexpected pass：`scale/svg-scale-016.html`，開不開都有）。
+
+- 失敗的樣子：測試頁和參考頁同一行說明文字，某一個 glyph 邊緣的一欄 pixel 差 1（6 到 12 個 pixel）。
+- 原因：**同一個 glyph 畫進 atlas 的不同位置，結果可以差 1**。只用 Vello 就重現得出來：同樣 50 個 glyph、每次用新的字型 blob（對 atlas 是新的 glyph、放到新的位置），200 次裡 57 次和第一次差一個 pixel 的一級（頁面 4096，Vello 的預設）；頁面 256 時這個測試 200 次都一樣，但 machopo 裡還是看得到。glyph 是在 atlas 的那個位置上直接 raster 的，座標大小不同、浮點數的捨入就不同。
+- 不開 atlas 時沒有這個問題：測試頁和參考頁的同一段文字畫在同樣的 device 座標上。開了之後，兩頁各自的 raster thread 有各自的 atlas（每個 compositor 一條 raster thread），同一個 glyph 在兩邊的位置不同。
+- 試過、沒用的：讓 atlas 用字型原本的 id 認字型、測試字型的 blob 整個 process 共用（兩頁還是不同的 thread、不同的 atlas）；atlas 的 padding 加大（1 到 4，不是相鄰的 glyph 滲過來）。
+- 另外查到、和這個無關的：一開始的壓力測試每次 playback 都建新的 `RasterCache`，字型每次是新的 id，atlas 每次都沒命中、一直放新的；那是測試寫錯，真的瀏覽器裡 `RasterCache` 跟著 compositor。
+- 回報上游的草稿：`upstream-reports.md` 第 6 份。
+
+**還原之後**（2026-11-11）：`cargo test -p raster`、`sanity.py docs` 過；`ci.py third-party` 確認 fork 和 `third_party.toml` 對得上。
+
+### 第 3b 步：release 只對 Vello 開整數溢位檢查的代價（2026-11-11，Windows 11）
+
+只量，沒有改設定；結論是不開（已決定的事項第 47 條）。編三個 `perf` profile 的執行檔，用 cargo 的 `--config profile.perf.package.<crate>.overflow-checks=true` 開（沒有改 `Cargo.toml`）：
+
+- **不開**：現在的樣子。
+- **Vello**：`vello_cpu`、`vello_common`、`glifo`。
+- **Vello 和底下的**：再加 `kurbo`、`peniko`、`color`、`fearless_simd`、`skrifa`、`read-fonts`。
+
+`bench.py raster`（headless、scale 2、一個 raster thread），三個執行檔輪流跑、各 5 次。每個 tile 的 `PrepareTiles`（ms，五次由小到大）：
+
+| 頁面 | 階段 | 不開 | Vello | Vello 和底下的 |
+| --- | --- | --- | --- | --- |
+| Gutenberg | 捲動 | 0.265、0.651、0.667、0.675、0.699 | 0.727、0.727、0.729、0.741、0.757 | 0.728、0.729、0.733、0.736、0.748 |
+| Gutenberg | 改視窗大小 | 0.147、0.149、0.150、0.152、0.158 | 0.146、0.146、0.156、0.159、0.162 | 0.149、0.149、0.150、0.160、0.161 |
+| SQLite | 改視窗大小 | 0.148、0.157、0.158、0.159、0.159 | 0.144、0.146、0.157、0.158、0.160 | 0.145、0.150、0.161、0.162、0.165 |
+| NewsSite-Next | 捲動 | 0.221、0.263、0.265、0.266、0.270 | 0.244、0.249、0.251、0.251、0.258 | 0.248、0.254、0.254、0.256、0.261 |
+| NewsSite-Next | 改視窗大小 | 0.108、0.108、0.110、0.112、0.118 | 0.106、0.106、0.117、0.119、0.122 | 0.107、0.109、0.111、0.121、0.123 |
+
+- **Gutenberg 的捲動慢約 9%**（中位數 0.667 → 0.729；raster 的 task 本身 0.430 → 0.482 ms，約 12%），五次的範圍除了「不開」的一個離群值之外不重疊。
+- **其他四格在雜訊裡**：中位數差 -5% 到 +6%，範圍都重疊；NewsSite-Next 的捲動開了反而快 5%，表示不同的 build 之間本來就有這麼大的差別（程式的排列不同）。
+- 連底下的 crate 一起開和只開 Vello 的三個沒有差別。
+- 要小心的：第 3a 步量「不開 atlas」時（那個 build 裡有 atlas 的程式），Gutenberg 捲動是 0.713 到 0.728，和這次開了檢查的一樣。所以 9% 和「換一個 build」的差別是同一個大小，這次的量測分不出來是檢查的代價還是排列。能說的是：代價最多一成、只在文字最多的捲動上看得到。
+- 沒有量的：多個 raster thread、scale 1、canvas、macOS 和 Linux。

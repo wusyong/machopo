@@ -1,0 +1,64 @@
+# Step 3a: glyphs through Vello's glyph atlas.
+#
+#     python3 scripts/test.py mutate rfcs/0007-gpu-raster/atlas/mutants.toml
+
+test = ["cargo", "test", "-q", "-p", "raster"]
+timeout = 900
+
+[[mutant]]
+name = "a tile's glyphs don't go through the atlas"
+file = "crates/raster/src/vello_backend.rs"
+from = '''        player.atlas = true;
+        let all = list.ops();'''
+to = '''        player.atlas = false;
+        let all = list.ops();'''
+
+[[mutant]]
+name = "a canvas's glyphs don't go through the atlas"
+file = "crates/raster/src/vello_backend.rs"
+from = '''        player.atlas = true;
+        player.canvas = Some(pixels);'''
+to = '''        player.atlas = false;
+        player.canvas = Some(pixels);'''
+
+[[mutant]]
+name = "slanted glyphs go through the atlas"
+file = "crates/raster/src/vello_backend.rs"
+from = "let atlas = self.atlas && aligned && a == d && skew == 0.0;"
+to = "let atlas = self.atlas && aligned && a == d;"
+
+[[mutant]]
+name = "glyphs under a turned matrix go through the atlas"
+file = "crates/raster/src/vello_backend.rs"
+from = "let atlas = self.atlas && aligned && a == d && skew == 0.0;"
+to = "let atlas = self.atlas && a == d && skew == 0.0;"
+
+[[mutant]]
+name = "glyphs under a matrix that stretches go through the atlas"
+file = "crates/raster/src/vello_backend.rs"
+from = "let atlas = self.atlas && aligned && a == d && skew == 0.0;"
+to = "let atlas = self.atlas && aligned && skew == 0.0;"
+
+[[mutant]]
+name = "the atlas has no cap"
+file = "crates/raster/src/vello_backend.rs"
+from = "        max_pages: ATLAS_PAGES,"
+to = "        max_pages: usize::MAX,"
+
+[[mutant]]
+name = "the atlas's pages are Vello's own size"
+file = "crates/raster/src/vello_backend.rs"
+from = "        page_size: ATLAS_PAGE,"
+to = "        page_size: 4096,"
+
+[[mutant]]
+name = "glyphs leave the atlas after Vello's own 64 renders"
+file = "crates/raster/src/vello_backend.rs"
+from = "    settings.cache.max_entry_age = ATLAS_AGE;"
+to = "    settings.cache.max_entry_age = 64;"
+
+[[mutant]]
+name = "what is drawn off to the side has an atlas of its own"
+file = "crates/raster/src/vello_backend.rs"
+from = "            atlas: false,"
+to = "            atlas: true,"

@@ -171,7 +171,10 @@ Vello 缺的有十來項，分三種：在 playback 裡補上、使用者看不�
      - 量離屏的 color matrix 和四個角半徑不同的陰影。
      - **第二個檢查點**：整體的差異能不能接受、要不要 fork。結論寫進 `details.md`。
 2. **playback 換成 vello_cpu、拿掉 skia-safe**：tile 和 canvas 一起換，連同 mipmap 和所有組出來的功能（少了任何一項就會 panic 或退步，所以不再拆）；ink bounds 也在這一步改用 skrifa（Vello 用 skrifa 畫 glyph，和 playback 一起換，量的和畫的始終是同一套）；預期結果在同一個 commit 裡更新；直接替換，不留切換的旗標（已決定的事項第 5、7 條）。同一次改動加上 `render-gaps.md`，並改掉其他文件裡的 Skia：`docs/architecture.md` 的 pipeline 的表、「Crate」的表、「Crate 選型」、「要注意的地方」，`docs/limitations.md`、`docs/testing.md`、根目錄的 `README.md`、`Cargo.toml` 和 `.cargo/config.toml` 裡寫到 Skia 的註解、CI 的 setup action。
-3. **改進**：文字的速度（Vello 的 glyph atlas：頁面大小、保留時間、斜的 glyph 的 key，`vello-atlas-experiment.patch`；已決定的事項第 28 條）；canvas 上破壞性的 blend mode 配 clip（第 31 條，有頁面碰到才做）；看第 1、2 步的結果可能不需要的：文字的 gamma 和對比、漸層的 dithering、Vello 的 fork 裡的 `ColorMatrix`，不需要的寫明理由、不做。
+3. **改進**（範圍和順序是已決定的事項第 43 條；第 2 步 merge 之後做）：
+   - **3a. 文字的速度**：Vello 的 glyph atlas（第 28、44 條）。**做了、量了、不採用**（第 46 條）：改動留在 `atlas/`。
+   - **3b. 量 release 只對 Vello 開整數溢位檢查的代價**：量了，不開（第 47 條）。
+   - 不做：文字的 gamma 和對比（第 45 條）、漸層的 dithering、Vello 的 fork 裡的 `ColorMatrix`、canvas 上破壞性的 blend mode 配落在畫布裡的 clip（第 31、41 條，有頁面碰到才做）。
 
 第 2 步做完，Skia 就完全拿掉了。merge 回 `main` 之後跑 `cargo clean`。
 
@@ -282,12 +285,24 @@ Vello 缺的有十來項，分三種：在 playback 裡補上、使用者看不�
 40. **2026-11-11：測試用注入的 panic，加一個真的 Vello panic**（使用者照建議）。沒有內容能讓 Vello panic（已知的那個被 `shows` 擋在前面），所以 `RasterCache::fail_next_for_testing(次數)` 讓接下來幾次 playback 一開始就 panic、並打開「接」；它掛在 cache 上，不是全域的，release 裡也在（別的 crate 的測試要用），平常是讀一個 atomic。`raster` 另有測試繞過 `shows`、用已知的那個 clip 讓 Vello 真的 panic 走過同一段；上游修好時它和 `upstream_panics_on_a_clipped_stroke_at_the_right_edge` 一起失敗。不寫情境：沒有頁面內容能觸發，記進測試缺口的文件。
 41. **2026-11-11：canvas 那 4 個 `2d.composite.clip.*` 是 machopo 自己的錯，修掉了；第 31 條對它們的說明不對**（2d 寫回報的草稿時發現）。這四個測試的 clip 整個在畫布外面（`rect(-20, -20, 10, 10)`）。`Player::shows`（為了避開 Vello 的那個 panic）不把這種 clip 交給 Vello、它底下的東西也不畫，但 `SaveLayer` 照樣推了一層：那一層沒有被 clip，用 `source-in` 這類模式疊回去就把整張 canvas 清掉。改成 clip 藏起來時不推 layer。四個測試通過，預期結果不用標。**Vello 的缺口還在，但範圍小了**：clip 落在畫布裡時，這四種模式還是會清掉 clip 外面（`upstream_doesnt_keep_a_clearing_layer_to_its_clip` 記著），WPT 沒有測到這種。剩下標成失敗的 canvas 測試只有 `2d.line.cross`。
 42. **2026-11-11：8 個 reftest 加 `fuzzy`，數字照量到的**（照第 2 步原本的計畫，逐個看過截圖的差異）。7 個每個 channel 最多差 1（1 到 588 個 pixel）：三個 `css-tables/tentative/paint/background-image-*` 和 `box-shadow-041`、`042` 是 8-bit 混色的捨入（f32 的管線會過，第 1b 步量過、太慢不用），`contain-paint-clip-006`（4 個 pixel）和 `nested-overflow-subtree-layout`（1 個）是文字邊緣。`clip-path-animation-custom-timing-function` 最多差 3、628 個 pixel：測試自己允許差到 15、但只允許 480 個 pixel，clip 的邊落在 pixel 之間、整圈反鋸齒的邊都不一樣。不標成失敗（差異都看不出來，標成失敗就守不住真的退步）。數字是 Windows 上量的；文字那兩個和字型有關，CI（Linux）上不一樣的話照那邊的結果改。
+43. **2026-11-11：第 2 步先 merge 回 `main`，第 3 步另外做；第 3 步做一段、量一項，四項不做**（使用者照建議；文字的 gamma 和對比原本建議做，使用者定成不做，第 45 條）。第 2 步是完整的一個階段（Skia 拿掉了、整個階段的檢查都過），第 3 步要改 Vello 的 fork、會動文字的像素，和「換掉 Skia」分開比較好查；不選留在 branch 上等第 3 步（`main` 上的 Skia 多留一陣子，branch 越拖越長）。第 3 步的順序：
+    - **3a glyph 的 atlas**（fork 上的 patch：頁面大小、保留時間、斜的 glyph 的 key）：目前唯一量到的退步，先做。
+    - **3b release 只對 Vello 的 crate 開整數溢位的檢查**：只量，量完再定。
+    - **不做的**：文字的 gamma 和對比（第 45 條）；漸層的 dithering（沒有頁面或測試碰到色帶；兩邊都沒有雜訊，漸層對漸層的 reftest 反而一致）；fork 裡的 `ColorMatrix`（上游的 PR 在做，離屏補的那一段能用，合了之後拿掉）；會清掉形狀以外的 blend mode 配落在畫布裡的 clip（沒有頁面碰到）。都留在 `docs/render-gaps.md` 的「沒有補的」或「補在 playback 裡的」。
+44. **2026-11-11：3a 的 atlas：fork 加公開的設定、斜的 run 不開、數值用量的定並且有記憶體上限**（使用者都照建議）。
+    - **設定怎麼進 Vello**：fork 上加一個公開的 API 設 atlas 的頁面大小和保留時間（上游現在寫死 4096、預設保留 64 次 render，都不是公開的），一個 commit、帶測試、寫成可以送上游的樣子。不選直接改 fork 裡的常數（送不了上游，rebase 時容易被默默蓋掉）。
+    - **斜的 glyph**（合成的斜體；第 1 步看到開 atlas 時畫錯，快取的 key 不分斜不斜）：machopo 對有 `glyph_transform` 的 run 不開 atlas（開不開本來就是每個 run 的參數），不改 fork；另外寫一份回報上游的草稿。不選在 fork 裡修 key（多一個 patch 在上游標成實驗性、改得最頻繁的地方；合成斜體只在字型沒有斜體時出現）。原本說的三個 patch 因此是一個。**實作時查清楚的範圍**（2026-11-11）：Vello 不把斜的、轉過或拉伸的 matrix 底下的 glyph 放進 atlas，但同一個 scene 裡前面的 run 剛把同字型、同大小、同位置的直的 glyph 放進去時，這種 run 會拿到那個直的。所以不只斜的：matrix 不是兩個方向等比例縮放的 run 也不開 atlas（canvas 的 `fillText` 配 `maxWidth` 就是橫向擠壓的 matrix，machopo 的 reftest `canvas/c5-text` 抓到）。回報的草稿是 `upstream-reports.md` 的第 5 份。
+    - **數值**：頁面 256、512、1024 各量一次（第 1 步的那幾頁），保留時間同樣用量的；每個 raster thread 的 atlas 有記憶體上限，滿了照年齡淘汰（對照 Chromium：Skia 的 strike cache 有大小上限、滿了淘汰舊的）。上限的數字和滿了之後 Vello 怎麼做，實作時查清楚寫進 `progress.md`。
+45. **2026-11-11：文字的 gamma 和對比不做，接受現在的樣子**（使用者定）。這是兩邊的差異，不是 Vello 畫錯：Vello 照覆蓋率算 alpha、在 sRGB 的數值上混色，文字和其他形狀一樣；Skia（和 DirectWrite、CoreText）對文字的 mask 多做一步調整，補償在 sRGB 上線性混色時深底淺字偏細、淺底深字偏粗。上游當成還沒做的功能（`linebender/vello#1694`）。和 Chromium 的文字粗細因此有看得出來的差異，留在 `docs/render-gaps.md` 的「沒有補的」；上游做了就跟著有。
+46. **2026-11-11：glyph 的 atlas 不採用，文字的速度維持現在的樣子**（使用者照建議）。3a 照第 44 條做完、量過（`progress.md` 裡第 3a 步的那一段）：文字多的頁面每個 tile 快 3% 到 24%，但開了之後 WPT 的 reftest 隨機失敗（`css/css-transforms` 548 個裡每次 7 到 29 個，不開時 0 個）。原因在 Vello：glyph 直接在 atlas 裡它的位置上 raster，位置不同、邊緣的像素可以差 1；每個 raster thread 有自己的 atlas，測試頁和參考頁的同一個 glyph 位置不同。
+    - **不選在 fork 裡修**（glyph 先在固定的原點 raster、再複製進 atlas）：在上游標成實驗性、改得最頻繁的地方多一個不小的 patch，能不能完全消掉要做了才知道。
+    - **不選照樣開、把受影響的 reftest 標成 `fuzzy` 或 intermittent**：哪些測試受影響每次不同，CI 會隨機失敗，標了也守不住真的退步。
+    - machopo 這一側和 fork 上的 commit 都還原了（fork 回到 `b52311f2`，`third_party.toml` 沒有變）。留下來的在 `atlas/`：fork 的 patch（`vello-atlas-settings.patch`，套在 `112736df` 上）、machopo 的改動（`machopo-raster.patch`，套在 `a90c6c0` 上）和 mutation 的清單（`mutants.toml`）；回報上游的草稿是 `upstream-reports.md` 的第 5、6 份。上游把 atlas 改成和位置無關、或不再標成實驗性時再看；那時頁面大小和保留時間還是要能設（第 44 條量到的）。
+    - 對照 Chromium：Skia 的 glyph 快取存的是 glyph 自己的 mask（在 glyph 自己的原點上 raster，和它之後放在 atlas 的哪裡無關），所以沒有這個問題。
+47. **2026-11-11：release 不對 Vello 開整數溢位的檢查**（使用者照建議）。量到的（`progress.md` 裡第 3b 步的那一段）：文字最多的頁面捲動時每個 tile 慢約 9%，其他四項在雜訊裡；那 9% 和換一個 build 的差別一樣大，分不出是不是檢查造成的。不開的理由：文字多的頁面是換掉 Skia 之後唯一變慢的地方，atlas 又不採用（第 46 條），不在同一個地方再加可能的一成；每天的 CI 用的 profile 開著溢位檢查，WPT 和 reftest 碰得到的溢位在那裡會失敗；已知的那一個溢位已經在 playback 擋在前面（`Player::shows`）。不選打開（Vello 裡的溢位在使用者的機器上變成 panic、被接住、那個 tile 留白並警告，不會算出錯的值繼續畫）。對照 Chromium：release 不對整數溢位做全面的檢查，只在明確用 checked 運算的地方（`base/numerics`）檢查。
 
 ## 待決定
 
-- **文字的外觀怎麼處理**：接受比較細、淡的文字；在 playback 這一側調整（例如照 Skia 的做法對文字的覆蓋率套對比的曲線，做不做得到、能多接近還沒查）；或做進 Vello 的 fork。第 1 步看過截圖再定。漸層的 dithering 同樣。
-- **不支援的 filter 一直用離屏，還是改在 fork 裡做**：第 1 步量離屏的 color matrix 的成本（第 4 條：慢的話才 fork）；那時再看上游的 PR 合了沒有。
-- **release 要不要只對 Vello 的 crate 打開整數溢位的檢查**（第 30 條）：打開的話 Vello 裡的溢位一律變成 panic、被接住，不會算出錯的值繼續跑；代價是它最熱的迴圈多了檢查，慢多少沒有量。第 2 步先不開，量過再定。
 - **Vello 的 fork 多久跟一次上游**：每次上游發布都 rebase，還是釘住、需要時再跟；rebase 之後要重新對 reftest 和 `render-gaps.md`。
 - **mipmap 的品質和記憶體**：預先縮小用 box filter 還是更好的 filter（對照 Chromium 的 `SoftwareImageDecodeCache` 怎麼縮，原型時查），縮小的版本佔多少記憶體、什麼時候清（`docs/limitations.md` 的「圖片」記著 raster 的圖片快取沒有大小上限）。
 

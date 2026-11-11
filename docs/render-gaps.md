@@ -38,8 +38,8 @@
 
 | 差在哪 | 上游的狀態 | 看得出來嗎 | 之後怎麼處理 |
 | --- | --- | --- | --- |
-| 文字沒有 gamma 和對比的調整 | `linebender/vello#1694` 開著 | **看得出來**：字比較細、淡，深色背景上的淺色字最明顯 | 在 playback 調整、做進 fork，或接受：還沒定 |
-| 漸層沒有 dithering | `linebender/vello#856` 開著 | 大面積、顏色相近的漸層可能有色帶 | 同上 |
+| 文字沒有 gamma 和對比的調整 | `linebender/vello#1694` 開著 | **看得出來**：字比較細、淡，深色背景上的淺色字最明顯 | 接受：這是做法的差異，不是畫錯；上游做了就跟著有 |
+| 漸層沒有 dithering | `linebender/vello#856` 開著 | 大面積、顏色相近的漸層可能有色帶 | 接受，有頁面碰到再看 |
 | 會清掉形狀以外的 blend mode（`source-in`、`source-out`、`destination-in`、`destination-atop`）不受 clip 限制 | layer 用這種 blend mode 疊回去時，作用在整個 context 上，不只在它所在的 clip 裡。還沒回報。`playback_tests.rs` 的 `upstream_doesnt_keep_a_clearing_layer_to_its_clip` 記著現在的行為，上游改了它會失敗 | canvas 上這四種模式配落在畫布裡的 `clip()` 時，clip 外面也被清掉。clip 整個在畫布外面時沒事（那一層根本不畫）；`destination-out`（橡皮擦）不受影響 | 回報上游；或在 playback 把目前的 clip 當成 mask 套在疊回去的那一步 |
 | 線寬遠大於線段長度時，bevel 接合的內側多畫一塊 | kurbo 的 stroker。還沒回報 | 很少見（WPT 的 `2d.line.cross`：線寬 200、兩段各 10） | 回報上游 |
 | 8-bit 的混色用整數算，捨入和 Skia 不同 | 設計如此（f32 的管線準，但每個 tile 慢三到八成，不用） | 看不出來；`getImageData` 讀得到差 1（半透明的顏色疊兩次、漸層中間的顏色） | 接受 |
@@ -50,6 +50,6 @@
 
 ## 只在速度上看得出來的
 
-- **沒有 glyph 的快取**：Vello 的 atlas 快取還是實驗性的，沒有開；每個 glyph 每次都從外框線畫。
+- **沒有 glyph 的快取**：每個 glyph 每次都從外框線畫。Vello 的 atlas 快取（上游標成實驗性）試過、沒有開：改視窗大小時每個 tile 快一成半到兩成半、捲動時快不到一成，但同一個 glyph 畫進 atlas 的不同位置，邊緣的像素可以差 1，而每個 raster thread 有自己的 atlas，測試頁和參考頁的同一段文字就對不上（WPT 的 reftest 隨機失敗）。它還會把直的 glyph 給同一個 scene 裡斜的、轉過或拉伸的 run。要再試的話：上游的預設（頁面 4096、保留 64 次 render）在一個 tile render 一次時比不開還慢，頁面大小和保留時間要能設（上游不是公開的）。
 - **x86 的速度**：上游說 x86 還有改進的空間。
 - **離屏的每一項**（上面第一張表裡「畫到旁邊」的）每個 tile 都配置新的 context 和 pixmap。
