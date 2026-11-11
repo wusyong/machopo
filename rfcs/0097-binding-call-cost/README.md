@@ -100,15 +100,16 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
 
 ## 理由和其他做法
 
-- **保守地掃 stack**（不選，可以在第 1 段之後再比）：JS 文件的 heap 不搬物件，在 V8 的收尾停頓裡保守地掃 stack 就能取代規則 2，Oilpan 就是這樣。代價是要在 Rust 裡掃 stack（暫存器、每個平台），elise 對外的 API 的安全性不再能用型別證明。
+- **只在 V8 的 GC 落在操作裡時保守地掃 stack**（規則 1、2 的另一種做法；全面改成保守式不考慮：有 nursery 的 heap 的物件會搬）：不會有「這一輪什麼都不收」，掃的次數很少；要把 32 位元的值也當成可能的壓縮指標。精準這個選擇本身在 Speedometer 上估淨虧 3 到 6 ms（回收那一側 DOM heap 省約 2 ms，多半來自 worker 而不是不掃 stack；binding 這一側「留著的結果」和 `Call` 的欄位多付約 6 到 8 ms），換來的是物件能搬（nursery、之後 wasm GC 的物件）和用型別證明的 API。
+- **保守地掃 stack**（原本的說明）：JS 文件的 heap 不搬物件，在 V8 的收尾停頓裡保守地掃 stack 就能取代規則 2，Oilpan 就是這樣。代價是要在 Rust 裡掃 stack（暫存器、每個平台），elise 對外的 API 的安全性不再能用型別證明。
 - **維持三段**（不做「V8 在操作裡配置」）：其他幾項照樣可以做；`Call` 的欄位少不了那麼多，回傳沒有 wrapper 的節點照舊要 root 和第二個操作。第 1 段的數字會說它值不值得。
 - **只做 unwrap 不比型別**：1 到 2 個 cycle，差距的一小塊。
 - 完整的比較在第 1 段之後補進 `details.md`。
 
 ## 先例
 
-- Blink 生成的 callback（`nodeType` 的 getter）：receiver 用 `ToWrappableUnsafe` 轉成 `Node*`、呼叫實作、`V8SetReturnValue`；不建 scope，沒有共用的呼叫結構，會丟例外或有字串參數的才在 stack 上多放東西；參數照 WebIDL 的順序先轉完才呼叫實作。（照記憶寫的，第 1 段對 Chromium 的原始碼查證。）
-- Blink 的字串：V8 的字串第一次轉成 Blink 的字串時外部化，之後不再複製；`StringCache` 記 Blink 的字串對 V8 字串。（同上，要查證。）
+- Blink 生成的 callback（`nodeType` 的 getter）：receiver 用 `ToWrappableUnsafe` 轉成 `Node*`、呼叫實作、`V8SetReturnValue`；不建 scope，沒有共用的呼叫結構，會丟例外或有字串參數的才在 stack 上多放東西；參數照 WebIDL 的順序先轉完才呼叫實作。（生成的 callback 在 repo 裡沒有，照記憶；unwrap 的部分 2026-11-11 查證過：`ToScriptWrappable` 照樣比 tag 的範圍，`details.md` 的「Blink 的做法」。）
+- Blink 的字串：V8 的字串第一次轉成 Blink 的字串時外部化，之後不再複製；`StringCache` 記 Blink 的字串對 V8 字串。（2026-11-11 查證過，`details.md` 的「Blink 的做法」：進來時非 external 的字串複製一次、當場改成 external，resource 存著 `AtomicString`；出去時建指向 `StringImpl` 的 external 字串。）
 - V8 的 `WriteBarrier::ForCppHeapPointer`：wrap 的時候 marking 在進行就標記 cppgc 的物件；規則 3 是它在 elise 這一側的對應。
 - elise 的 `tla/unified`：現在的協定的模型，這份的模型從它改。
 
@@ -124,6 +125,10 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
 3. **原型放在 `0097` 分支上**，每個一個 commit、標明是原型，量完把數字寫進 `progress.md`，這一段結束時拿掉；elise 的原型只在本機的分支上，不推、不動 `third_party.toml`。
 4. **Blink 的做法上網查 Chromium 的原始碼**（只讀）。
 5. **數字用 `bench.py calls`**（指令數和 cycle），對應的 blink-perf 頁和 Chrome 比；這一段不量 Speedometer。
+
+第 1 段做到一半（2026-11-11，使用者同意）：
+
+6. **「V8 在操作裡配置」的原型先不做**：量了現在的路（`progress.md`），它只省「留著的結果」那條（回傳沒有 wrapper 的節點約 23%、沒快取到的字串），Speedometer 上的上限約 5 到 6 ms；`createElement` 不受惠（已經在操作前預先建 wrapper）。它是各項裡工作量和風險最大的（elise 的 marking 的開始和收尾、`bindings` 的論證）。不做的話一次呼叫照舊三段，但每次呼叫都付的固定成本由「`Call` 只帶用得到的欄位」拿掉（回傳數字、名稱、一定有 wrapper 的物件的成員編出來只有操作那一段）。模型和三條規則留著，之後要做（為了那 5 到 6 ms、拿掉「留著的結果」那一套、或事件派發）不用重來。接著做字串，再拆開量事件派發。
 
 ## 待決定
 

@@ -94,6 +94,27 @@ V8 呼叫 API callback 的地板加 trampoline 約 50 條指令、11 cycle（RFC
 
 **模型沒有的**：weak、ephemeron 和 id 表（elise 的 `tla/marking/SatbYoung.tla` 有 weak 和 ephemeron，沒有這份的放寬；規則 2 下所有 old 都活著，沒有東西要清，只是推理）；Rust 的借用（scavenge 在操作裡重設節點的 JS 邊，同時操作拿著那個節點的參照）；規則 2 的頻率和成本；會執行 script 的呼叫（不放寬）。
 
+## Blink 的做法
+
+2026-11-11 查 Chromium `main` 的原始碼，`third_party/blink/renderer/platform/bindings/` 的 `script_wrappable.h`、`to_blink_string.cc`、`string_resource.h`、`v8_value_cache.cc`：
+
+- **unwrap 照樣比 tag**：`ToScriptWrappable<T>` 呼叫 `v8::Object::Unwrap<ScriptWrappable>(isolate, wrapper, CppHeapPointerTagRange(this_tag, max_subclass_tag))`，V8 讀指標表時比 tag 落不落在那個型別和它的子類別的範圍裡，再 `static_cast`。「unsafe」指的是不再檢查 receiver 是不是那個 interface（signature 檢查過），不是不比 tag。所以原型 2 拿掉的三樣裡，比 tag 是 Blink 也付的（它比的是範圍），machopo 多的是 null 的檢查和 cage 的檢查。
+- **wrapper 在物件的固定位置**：`ScriptWrappable` 的 `TraceWrapperV8Reference<v8::Object> wrapper_`（「Inline storage for the a single wrapper reference」）。
+- **字串進來**（`ToBlinkString`）：先看 V8 的字串是不是 external（`GetExternalizedString`）：是的話直接拿 resource 裡的 WTF 字串，要 `AtomicString` 時 resource 把它存起來（`GetAtomicString` 第一次算、之後回同一個），不複製、不再雜湊。不是的話複製一份（短的 `AtomicString` 用 stack 上 32 bytes 的緩衝區直接查表，不配置），而且 `kExternalize` 模式下 V8 說可以（`CanMakeExternal`）就把那個 V8 字串**當場改成 external**（`MakeExternal`），之後同一個字串再傳進來走上面那條路。
+- **字串出去**（`StringCache::V8ExternalString`、`SetReturnValueFromString`）：`StringImpl*` 對 weak 的 `v8::Global<v8::String>` 的表，命中就直接寫回傳值；沒命中建 **external 字串**（`NewExternalOneByte`、`NewExternalTwoByte`，resource 拿著那個 `String`，`data()` 指向 `StringImpl` 自己的字元：不複製），放進表；weak callback 放掉 `StringImpl`。
+- 生成的 callback 的樣子（receiver、參數、`ReturnValue`，不建 scope）沒有在原始碼裡查到：它是 build 時生成的，repo 裡沒有。
+
+## 字串的呼叫現在花在哪
+
+2026-11-11，`perf record`（指令數）各跑五百萬次，大部分 inline 在那個成員的 callback 裡，分得出來的：
+
+- `getAttribute('id')`：`v8::Value::ToString`（參數已經是字串也經過一次 C++ 呼叫）6.4% 加 0.9%，`LentString::lends`（看能不能借字元）5.7%，`GetCurrentContext` 1.2%，`names::find_fixed` 1.0%，`ret_string` 1.1%。
+- `setAttribute('a', 'b')`：`Cx::change_attribute` 26.6%、`attribute_changed` 12.2%（DOM 本身），`intern_value` 2.4% 加雜湊表的查找 1.7%、`memcmp` 2.6%，`lends` 1.3%，`GetCurrentContext` 1.2%。
+- `id`：`ret_string` 10.1%，`attribute_value_by_id` 8.6%。
+- `getElementById('x')`：`lends` 8.2%，`ArgString::text` 6.4%，`memcmp` 1.4%，值的表的查找 0.6%。
+
+和 Blink 比，machopo 每次都做、Blink 第二次起不做的：參數的 `ToString` 的呼叫和借字元的判斷、把字元拿去查名稱表或值的表（雜湊、比對）。回傳時兩邊都是一次用位址查表；沒命中時 Blink 不複製字元。
+
 ## 參考資料
 
 - V8 的 `src/heap/heap-write-barrier.cc`（`MarkingSlowFromCppHeapWrappable`，fork 的 `machopo:` 註解）、`src/heap/heap.cc`（`IncrementalMarkingLimitReached`）。
