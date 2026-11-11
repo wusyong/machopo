@@ -19,9 +19,15 @@ fn page(name: &str, html: &str) -> String {
     std::fs::create_dir_all(&dir).unwrap();
     let guest =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../dom_wasm/tests/guests/page.wasm");
-    for copy in ["page.wasm", "page.bin"] {
-        std::fs::copy(&guest, dir.join(copy)).unwrap();
-    }
+    // Once for all the tests: they run at once and share the directory,
+    // and a copy made while another test's page is fetching the guest
+    // hands it a file cut short, which loads and runs nothing.
+    static COPIED: std::sync::Once = std::sync::Once::new();
+    COPIED.call_once(|| {
+        for copy in ["page.wasm", "page.bin"] {
+            std::fs::copy(&guest, dir.join(copy)).unwrap();
+        }
+    });
     let path = dir.join(name);
     std::fs::write(&path, html).unwrap();
     net::file_url(&path).expect("an absolute path")
