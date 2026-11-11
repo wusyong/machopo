@@ -161,6 +161,10 @@
 
 新的在前。2026-10-13 的盤點時，Complex-DOM 和 NewsSite 在 kun 上還少算了用 `var()` 的 style 和 `::before`、`::after` 的 box，那時以前的比較表裡它們的比值偏低；「2d-2 之後的 trace」的 `ParseHTML` 被高估，以最後一次為準。
 
+### binding 的 front 只拿 callback 的 info 之後，和之前比（2026-11-11，Fedora 44）
+
+使用者要求量的（RFC 0097 第 2、3 段）。`bench.py speedometer --against 0097-baseline`（`main` 的 `272ffe1` 加上 `0097` 的 rusty_v8 的 pin，本地的 `7194a4f`：工具要兩個版本釘同樣的 `../third_party`，fork 的改動向下相容）對 `6db8168`，各 3 次輪流、每次 10 個 iteration。20 個 suite 的 current / against 的幾何平均 0.991（−0.9%）；各 suite 的中位數加起來 984.2 → 976.1 ms。17 個 suite 變快、3 個變慢（`TodoMVC-WebComponents` +2.1%、`Editor-CodeMirror` +1.0%、`React-Stockcharts-SVG` +0.1%），最多的是 `TodoMVC-Angular-Complex-DOM`、`TodoMVC-Vue` −2.6%；多數 suite 兩邊的 95% 區間重疊。peak memory −5.9% 到 +3.4%。沒有和 Chrome 同一輪跑。
+
 ### 換 DOM 之後兩邊用同樣的方法取樣（2026-11-06，Fedora 44）
 
 使用者要求量的（RFC 0085 的重新取樣）。量法、兩種 Chrome 的估計、各類和每個 suite 的表在 `rfcs/0085-optimization-roadmap/details.md` 的「換 DOM 之後的分析（2026-11-06）」，摘要在 `docs/performance-gaps.md`。

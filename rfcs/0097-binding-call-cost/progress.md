@@ -257,3 +257,5 @@
 - 只靠審查的記進 `docs/test-gaps.md`：`PLAIN` 標錯的型別要到呼叫才 panic。
 - 跑過：`cargo test --workspace`（55 個 binary 通過）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`sanity.py` 七項（`boundary` 的允許清單加 `INFO_SCOPES`，測試的計數）、`test.py wpt dom/nodes`（15617 個結果都照預期）。
 - fork 的 commit `097b54c`，`third_party.toml` 釘到它。fork 的兩個 commit（`2be356e`、`097b54c`）都還沒 push：merge 回 `main` 之前要先 push。
+
+**第 2、3 段在 Speedometer 上**（2026-11-11，使用者要求；數字在 RFC 0012 的 `progress.md`）：`main`（加上這裡的 fork 的 pin，本地的 branch `0097-baseline`）對第 3 段做完的 `6db8168`，各 3 次：20 個 suite 的幾何平均 −0.9%，中位數的合計 984.2 → 976.1 ms（−8.1 ms）。17 個 suite 變快、3 個變慢，多數的 95% 區間重疊：方向一致，大小在雜訊的邊緣。微基準上每次呼叫省 8% 到 25% 的 cycle，在 Speedometer 上是不到 1%：它的時間大半在 JS、style、layout，binding 每次呼叫的固定成本只是其中一小塊，而且真的頁面打到的成員有一半還沒走新的 front。

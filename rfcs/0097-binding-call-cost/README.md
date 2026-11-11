@@ -90,7 +90,7 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
 | 1 | 原型和量測（不合併）：每一項單獨做最小的原型，`bench.py calls` 量指令數和 cycle；V8 在操作裡配置的原型另外量規則 2 多久發生一次、停頓多長 |
 | 2 | 字串參數已經是字串就不轉換（決定 7、8） |
 | 3 | front 只拿 callback 的 info：參數和結果單純的成員（決定 17、18） |
-| 4 | 階段之間傳有型別的值，其餘的成員搬到新的 front，拿掉 `V8Front` 和 `Call`（決定 17）；細節在這一段開始前決定 |
+| 4 | 階段之間傳有型別的值，其餘的成員搬到新的 front，拿掉 `V8Front` 和 `Call`（決定 17、22）；4a 到 4g |
 
 ## 缺點
 
@@ -161,10 +161,16 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
 18. **第 3 段的做法**：冷的路交給原本的 `V8Front`（不重寫；第 4 段拿掉它時才搬）；哪些成員走新的 front 在編譯時照宣告的型別決定；用計數守住「走新 front 的成員一般不建 scope」；fork 的入口照決定 15。
 19. **第 3 段做完再問要不要量 Speedometer、要不要 merge**；階段做完給使用者審，審過才 commit。
 
+第 3 段做完（2026-11-11，使用者決定）：
+
+20. **目標是 binding 的成本往 Chrome 靠，不是 Speedometer 的分數**：第 2、3 段在 Speedometer 上是 −0.9%（`progress.md`），使用者知道、不在意；要的是每次呼叫付的和 Chrome 差不多。第 4 段照做。第 4 段拿不掉的（和 Chrome 的設計不同的地方）：進出操作和借 isolate 的狀態；結果要 V8 配置時分兩步、例外出了操作才丟（Chrome 的 GC 掃 stack，當場做；要拿掉是決定 6 的「V8 在操作裡配置」）；unwrap 多的位址範圍的檢查（約 1 個 cycle）；讀 wrapper 時的 marking 檢查；短字串每次查名稱表（要 V8 的 sandbox）。最簡單的 getter 現在 machopo 自己的部分約 13 個 cycle、Chrome 約 6（開始時 19 對 6）。第 4 段做完之後把 `nodeType`、`getAttribute` 的 callback 和 Chrome 的逐條指令對照，列出剩下每一項差多少、要什麼才拿得掉。
+21. **不單獨做「在新的 front 多覆寫幾個方法」那一批**（數字、布林的參數，不是節點的物件）：併進第 4 段。它擴充的 `PLAIN` 標記第 4 段做完就拿掉，標錯只能靠審查，現在標的只有字串和節點。
+22. **第 4 段分小段，常被呼叫的先做**（每小段各自測、量、commit，中途兩個 front 並存）：4a 結果怎麼帶出操作（決定 23）；4b 數字、布林、有預設值的參數、不是節點的物件；4c 預先建 wrapper 的結果（`createElement`、`cloneNode`）；4d callback、rest、`any` 的參數直接回傳 handle；4e dictionary、promise、陣列和其餘的；4f static、constructor、named 和 indexed property 的外殼；4g 拿掉 `V8Front`、`Call` 和 `PLAIN`，wasm 的 front 跟上。每小段開始前細分。
+23. **4a：操作裡給不出去的結果，由回傳型別帶出操作，型別由每個 front 定**（使用者選的）：`FrontTypes` 多 `PendingString`、`PendingNode`、`PendingNumber`…（之後每搬一類加一個）；`OpFront` 的 `ret_string`、`ret_node`、`ret_u32`…回傳 `Option<Self::Pending…>`（沒給出去的部分）；`Front` 多 `finish_string`、`finish_node`…；`RetType` 多 `type Pending<F: FrontTypes>`，`give` 回傳它、`finish` 拿到它；產生器把它接成成員的區域變數。和參數那一側（`ArgType::Taken<T: FrontTypes>`）同一個寫法，`Front::Op` 的關聯型別多幾個相等的限制。不給東西的 front 填不可能有值的型別（`Infallible`），那一段整個編掉。不選型別由 `dom_api` 定死（例如字串一定是 `DomString`：別的引擎也得帶著）；不選維持現狀（結果留在 front 的格子）。
+
 ## 待決定
 
 3. 「V8 在操作裡配置」（決定 6：先不做）要做時：規則 2 用「整個 old 當成活的」還是保守地掃 stack。
-20. 第 4 段的細節（簽名怎麼改、分幾小段、wasm 的 front）：第 4 段開始前。
 
 ## 之後的可能
 
