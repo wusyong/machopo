@@ -118,6 +118,13 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
 
 1. **寫成一份 RFC，第 1 段的原型一起做**，看完數字再決定要不要拆（「V8 在操作裡配置」動 elise 和安全論證，「字串」動 fork，性質不同；但各項互相牽動，例如三段併成兩段之後 `Call` 要帶的欄位跟著變）。
 
+第 1 段開始前（2026-11-11，使用者照建議）：
+
+2. **原型的順序**：外殼不建 scope 加上 `Call` 只帶用得到的欄位（`nodeType`、`firstChild`）；V8 在操作裡配置（`createElement`、回傳沒有 wrapper 的節點，記規則 2 的次數和時間）；字串（先查證 Blink，再做 external string 和位址對名稱的快取兩個原型）；事件派發只拆開量。
+3. **原型放在 `0097` 分支上**，每個一個 commit、標明是原型，量完把數字寫進 `progress.md`，這一段結束時拿掉；elise 的原型只在本機的分支上，不推、不動 `third_party.toml`。
+4. **Blink 的做法上網查 Chromium 的原始碼**（只讀）。
+5. **數字用 `bench.py calls`**（指令數和 cycle），對應的 blink-perf 頁和 Chrome 比；這一段不量 Speedometer。
+
 ## 待決定
 
 2. 第 1 段之後：做哪幾項、順序、目標的數字。
