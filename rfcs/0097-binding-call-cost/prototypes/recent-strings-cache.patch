@@ -1,0 +1,103 @@
+diff --git a/crates/dom/src/names.rs b/crates/dom/src/names.rs
+index 38ba998..74f5898 100644
+--- a/crates/dom/src/names.rs
++++ b/crates/dom/src/names.rs
+@@ -262,9 +262,57 @@ pub fn intern(name: &str) -> NameId {
+ 
+ /// `name`'s number, if it has one.
+ pub fn find(name: &str) -> Option<NameId> {
++    // PROTOTYPE (measured, not to be merged): the names found lately, by
++    // their text's address and length, each with its text to compare: a
++    // hit computes no hash and looks in no table. A name not found isn't
++    // kept (it may get a number later).
++    if *PROTOTYPE_CACHE && name.len() <= CACHED_BYTES {
++        let slot = (name.as_ptr().addr() >> 3 ^ name.len()) & (CACHE_SLOTS - 1);
++        let hit = RECENT.with(|recent| {
++            let entry = recent[slot].get();
++            (usize::from(entry.len) == name.len()
++                && entry.len != 0
++                && name_eq(&entry.text[..name.len()], name.as_bytes()))
++            .then_some(entry.id)
++        });
++        if hit.is_some() {
++            return hit;
++        }
++        let found = find_fixed(name).or_else(|| TABLE.with_borrow(|table| table.find(name)));
++        if let Some(id) = found {
++            let mut text = [0u8; CACHED_BYTES];
++            text[..name.len()].copy_from_slice(name.as_bytes());
++            RECENT.with(|recent| {
++                recent[slot].set(Recent {
++                    len: u8::try_from(name.len()).unwrap_or(0),
++                    text,
++                    id,
++                });
++            });
++        }
++        return found;
++    }
+     find_fixed(name).or_else(|| TABLE.with_borrow(|table| table.find(name)))
+ }
+ 
++const CACHE_SLOTS: usize = 64;
++const CACHED_BYTES: usize = 23;
++
++#[derive(Clone, Copy)]
++struct Recent {
++    len: u8,
++    text: [u8; CACHED_BYTES],
++    id: NameId,
++}
++
++static PROTOTYPE_CACHE: std::sync::LazyLock<bool> =
++    std::sync::LazyLock::new(|| std::env::var_os("MACHOPO_PROTOTYPE_STRING_CACHE").is_some());
++thread_local! {
++    static RECENT: [std::cell::Cell<Recent>; CACHE_SLOTS] = const {
++        [const { std::cell::Cell::new(Recent { len: 0, text: [0; CACHED_BYTES], id: NONE }) }; CACHE_SLOTS]
++    };
++}
++
+ /// `name`'s fixed number, if it has one. The empty string (no namespace,
+ /// no prefix: most looks) is `NONE` with no look in the map: comparing it
+ /// there calls `memcmp` with length 0 on the empty slice's dangling
+diff --git a/crates/dom/src/string.rs b/crates/dom/src/string.rs
+index 57d357e..ed681bc 100644
+--- a/crates/dom/src/string.rs
++++ b/crates/dom/src/string.rs
+@@ -253,6 +253,36 @@ pub fn find_value(text: &str) -> Option<DomString> {
+ /// The string of the value `text`: the thread's table's if it has one, else
+ /// a new one it keeps.
+ pub fn intern_value(text: &str) -> DomString {
++    // PROTOTYPE (measured, not to be merged): the values interned lately,
++    // by their text's address and length, each compared: a hit computes no
++    // hash and looks in no table.
++    if *PROTOTYPE_CACHE {
++        let slot = (text.as_ptr().addr() >> 3 ^ text.len()) & (RECENT_SLOTS - 1);
++        let hit = RECENT_VALUES.with_borrow(|recent| {
++            recent[slot]
++                .as_ref()
++                .filter(|string| string.to_str() == text)
++                .cloned()
++        });
++        if let Some(string) = hit {
++            return string;
++        }
++        let string = intern_value_slow(text);
++        RECENT_VALUES.with_borrow_mut(|recent| recent[slot] = Some(string.clone()));
++        return string;
++    }
++    intern_value_slow(text)
++}
++
++const RECENT_SLOTS: usize = 64;
++static PROTOTYPE_CACHE: std::sync::LazyLock<bool> =
++    std::sync::LazyLock::new(|| std::env::var_os("MACHOPO_PROTOTYPE_STRING_CACHE").is_some());
++thread_local! {
++    static RECENT_VALUES: std::cell::RefCell<[Option<DomString>; RECENT_SLOTS]> =
++        const { std::cell::RefCell::new([const { None }; RECENT_SLOTS]) };
++}
++
++fn intern_value_slow(text: &str) -> DomString {
+     VALUES.with_borrow_mut(|values| {
+         if let Some(string) = values.strings.get(text) {
+             return string.clone();
