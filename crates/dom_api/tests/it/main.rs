@@ -341,6 +341,7 @@ impl FrontTypes for TestFront<'_> {
     type PendingString = std::convert::Infallible;
     type PendingNode = std::convert::Infallible;
     type PendingNumber = std::convert::Infallible;
+    type PendingObject = std::convert::Infallible;
 }
 
 impl<'d> Front for TestFront<'d> {
@@ -812,8 +813,13 @@ impl OpFront for TestFront<'_> {
             .expect("an object of the type asked for")
     }
 
-    fn ret_object<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, object: ObjectRef<'gc>) {
+    fn ret_object<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        object: ObjectRef<'gc>,
+    ) -> Option<std::convert::Infallible> {
         self.ret = Some(Ret::Object(cx.root_object(object)));
+        None
     }
 
     fn ret_objects<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, objects: &[ObjectRef<'gc>]) {

@@ -1009,6 +1009,7 @@ impl<'r, A> FrontTypes for WasmFront<'r, '_, A> {
     type PendingString = std::convert::Infallible;
     type PendingNode = std::convert::Infallible;
     type PendingNumber = std::convert::Infallible;
+    type PendingObject = std::convert::Infallible;
 }
 
 impl<'r, 'g, A: ReadArgs> Front for WasmFront<'r, 'g, A> {
@@ -1244,8 +1245,13 @@ impl<'r, A: ReadArgs> OpFront for WasmFront<'r, '_, A> {
     }
 
     /// The store's handle to the object, as a node's.
-    fn ret_object<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, object: dom::ObjectRef<'gc>) {
+    fn ret_object<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        object: dom::ObjectRef<'gc>,
+    ) -> Option<std::convert::Infallible> {
         let handle = self.tables.borrow_mut().give(cx, self.store, object);
         self.ret = Ret::Node(handle);
+        None
     }
 }

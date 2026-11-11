@@ -168,6 +168,10 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
 22. **第 4 段分小段，常被呼叫的先做**（每小段各自測、量、commit，中途兩個 front 並存）：4a 結果怎麼帶出操作（決定 23）；4b 數字、布林、有預設值的參數、不是節點的物件；4c 預先建 wrapper 的結果（`createElement`、`cloneNode`）；4d callback、rest、`any` 的參數直接回傳 handle；4e dictionary、promise、陣列和其餘的；4f static、constructor、named 和 indexed property 的外殼；4g 拿掉 `V8Front`、`Call` 和 `PLAIN`，wasm 的 front 跟上。每小段開始前細分。
 23. **4a：操作裡給不出去的結果，由回傳型別帶出操作，型別由每個 front 定**（使用者選的）：`FrontTypes` 多 `PendingString`、`PendingNode`、`PendingNumber`…（之後每搬一類加一個）；`OpFront` 的 `ret_string`、`ret_node`、`ret_u32`…回傳 `Option<Self::Pending…>`（沒給出去的部分）；`Front` 多 `finish_string`、`finish_node`…；`RetType` 多 `type Pending<F: FrontTypes>`，`give` 回傳它、`finish` 拿到它；產生器把它接成成員的區域變數。和參數那一側（`ArgType::Taken<T: FrontTypes>`）同一個寫法，`Front::Op` 的關聯型別多幾個相等的限制。不給東西的 front 填不可能有值的型別（`Infallible`），那一段整個編掉。不選型別由 `dom_api` 定死（例如字串一定是 `DomString`：別的引擎也得帶著）；不選維持現狀（結果留在 front 的格子）。
 
+第 4b 段（2026-11-11，照先前的決定，使用者說細節由實作決定）：
+
+24. **4b 的做法**：小整數的參數從 handle 直接讀，放在 fork（`v8::machopo::as_smi`，照決定 10：照 V8 的佈局讀的程式集中在 fork）；不是小整數的數字用 rusty_v8 現成、不要 scope 的 `Number::value`（heap number 的 instance type 不在 V8 公開的常數裡，不自己讀）；不是數字的才交給原本的 front（`ToNumber` 可能執行 script）。布林本身用 `is_true`、`is_false`，其他的值交給原本的 front。回傳不是節點的物件多一個 `PendingObject`（決定 23 的寫法）；回傳「元素或集合」的兩個型別改成都當物件給。`PLAIN` 照決定 21 逐個型別加（這次加的照「`take`、`param`、`give` 只呼叫新的 front 有的方法」掃過一遍），4g 拿掉。
+
 ## 待決定
 
 3. 「V8 在操作裡配置」（決定 6：先不做）要做時：規則 2 用「整個 old 當成活的」還是保守地掃 stack。

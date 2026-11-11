@@ -54,9 +54,9 @@ pub trait FrontTypes {
     /// What a result leaves for after the operation when the front end
     /// can't give it in one (it would have its engine allocate, whose GC
     /// may reach the DOM): a string its engine has no copy of
-    /// (`OpFront::ret_string`, `ret_name`), a node with no wrapper
-    /// (`ret_node`), a number its engine must allocate (`ret_u32`,
-    /// `ret_i32`, `ret_f64`). The member's call carries it out of the
+    /// (`OpFront::ret_string`, `ret_name`), a node or another object with
+    /// no wrapper (`ret_node`, `ret_object`), a number its engine must
+    /// allocate (`ret_u32`, `ret_i32`, `ret_f64`). The member's call carries it out of the
     /// operation (`RetType::Pending`) and hands it back
     /// (`Front::finish_string`, `finish_node`, `finish_number`). A front
     /// end that always gives its result in the operation names a type with
@@ -64,6 +64,9 @@ pub trait FrontTypes {
     type PendingString;
     type PendingNode;
     type PendingNumber;
+    /// An object of any type with no wrapper (`OpFront::ret_object`,
+    /// `Front::finish_object`).
+    type PendingObject;
 }
 
 /// A result type's `Pending` and `finish` when it leaves nothing for
@@ -108,6 +111,7 @@ pub trait Front: FrontTypes {
             PendingString = Self::PendingString,
             PendingNode = Self::PendingNode,
             PendingNumber = Self::PendingNumber,
+            PendingObject = Self::PendingObject,
         >
     where
         Self: 'o;
@@ -700,6 +704,10 @@ pub trait Front: FrontTypes {
         let _ = pending;
         unreachable!("a front end that leaves a number for after the operation finishes it")
     }
+    fn finish_object(&mut self, pending: Self::PendingObject) {
+        let _ = pending;
+        unreachable!("a front end that leaves an object for after the operation finishes it")
+    }
 
     /// The error the call throws, after the operation.
     fn throw(&mut self, error: ApiError);
@@ -1136,7 +1144,12 @@ pub trait OpFront: FrontTypes {
     ) -> Option<Self::PendingNode>;
     /// An object of any type: its wrapper, if it has one; else kept (a
     /// root) for a new one.
-    fn ret_object<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, object: ObjectRef<'gc>) {
+    #[must_use = "what the operation couldn't give is finished after it"]
+    fn ret_object<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        object: ObjectRef<'gc>,
+    ) -> Option<Self::PendingObject> {
         let _ = (cx, object);
         unreachable!("a front end binding a member giving an object returns it")
     }
@@ -2173,6 +2186,7 @@ impl RetType for u32 {
 /// `optional boolean x = false`).
 impl ArgType for bool {
     const DESC: TypeDesc = TypeDesc::Bool;
+    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = bool;
     type Param<'a, 'gc> = bool;
@@ -2195,6 +2209,7 @@ impl ArgType for bool {
 /// is missing or undefined (WebIDL's "not present").
 impl ArgType for Option<bool> {
     const DESC: TypeDesc = TypeDesc::OptionalBool;
+    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<bool>;
     type Param<'a, 'gc> = Option<bool>;
@@ -2272,6 +2287,7 @@ impl RetType for u16 {
 /// bits.
 impl ArgType for u16 {
     const DESC: TypeDesc = TypeDesc::U16;
+    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = u16;
     type Param<'a, 'gc> = u16;
@@ -2310,6 +2326,7 @@ pub struct WhatToShow;
 
 impl ArgType for WhatToShow {
     const DESC: TypeDesc = TypeDesc::U32;
+    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = u32;
     type Param<'a, 'gc> = u32;
@@ -2369,6 +2386,7 @@ impl ArgType for StaticRangeInitArg {
 /// one is one whose default is 0 (`optional long timeout = 0`).
 impl ArgType for i32 {
     const DESC: TypeDesc = TypeDesc::I32;
+    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = i32;
     type Param<'a, 'gc> = i32;
@@ -2390,6 +2408,7 @@ impl ArgType for i32 {
 /// WebIDL's `unsigned long`: `ToUint32`, which makes undefined 0.
 impl ArgType for u32 {
     const DESC: TypeDesc = TypeDesc::U32;
+    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = u32;
     type Param<'a, 'gc> = u32;
@@ -2413,6 +2432,7 @@ impl ArgType for u32 {
 /// present", which the overload of fewer arguments is).
 impl ArgType for Option<u32> {
     const DESC: TypeDesc = TypeDesc::U32;
+    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<u32>;
     type Param<'a, 'gc> = Option<u32>;
@@ -2439,6 +2459,7 @@ impl ArgType for Option<u32> {
 /// too, as WebIDL's overload resolution counts the arguments).
 impl ArgType for Option<i32> {
     const DESC: TypeDesc = TypeDesc::I32;
+    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<i32>;
     type Param<'a, 'gc> = Option<i32>;
@@ -2466,6 +2487,7 @@ pub struct LongDefaultMinusOne;
 
 impl ArgType for LongDefaultMinusOne {
     const DESC: TypeDesc = TypeDesc::I32;
+    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = i32;
     type Param<'a, 'gc> = i32;
@@ -2493,6 +2515,7 @@ pub struct LongDefaultOne;
 
 impl ArgType for LongDefaultOne {
     const DESC: TypeDesc = TypeDesc::I32;
+    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = i32;
     type Param<'a, 'gc> = i32;
@@ -2520,6 +2543,7 @@ pub struct U16Default302;
 
 impl ArgType for U16Default302 {
     const DESC: TypeDesc = TypeDesc::U16;
+    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = u16;
     type Param<'a, 'gc> = u16;
@@ -2547,6 +2571,7 @@ pub struct NullableU32;
 
 impl ArgType for NullableU32 {
     const DESC: TypeDesc = TypeDesc::NullableU32;
+    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Option<u32>;
     type Param<'a, 'gc> = Option<u32>;
 
@@ -3036,6 +3061,7 @@ pub struct EnforcedU64;
 
 impl ArgType for EnforcedU64 {
     const DESC: TypeDesc = TypeDesc::Double;
+    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = f64;
     type Param<'a, 'gc> = f64;
 
@@ -3074,6 +3100,7 @@ pub struct ByteString;
 
 impl ArgType for ByteString {
     const DESC: TypeDesc = TypeDesc::String;
+    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = T::Str;
     type Param<'a, 'gc> = &'a str;
 
@@ -3336,6 +3363,7 @@ pub struct Strings;
 
 impl ArgType for Strings {
     const DESC: TypeDesc = TypeDesc::Strings;
+    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Vec<T::Str>;
     type Param<'a, 'gc> = Vec<&'a str>;
@@ -3461,6 +3489,7 @@ const OPTION_OR_OPTGROUP: &str = "(HTMLOptionElement or HTMLOptGroupElement)";
 
 impl ArgType for OptionOrOptGroup {
     const DESC: TypeDesc = TypeDesc::Union(&["HTMLOptionElement", "HTMLOptGroupElement"]);
+    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = T::Node;
     type Param<'a, 'gc> = NodeRef<'gc>;
 
@@ -3502,6 +3531,7 @@ pub struct Slottables;
 
 impl ArgType for Slottables {
     const DESC: TypeDesc = TypeDesc::Slottables;
+    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Vec<T::Node>;
     type Param<'a, 'gc> = Vec<NodeRef<'gc>>;
@@ -3683,6 +3713,7 @@ impl RetType for f64 {
 /// WebIDL's `double` as an argument: a finite number.
 impl ArgType for f64 {
     const DESC: TypeDesc = TypeDesc::Double;
+    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = f64;
     type Param<'a, 'gc> = f64;
 
@@ -3726,6 +3757,7 @@ impl RetType for Option<f64> {
 /// finite number.
 impl ArgType for Option<f64> {
     const DESC: TypeDesc = TypeDesc::Double;
+    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Option<f64>;
     type Param<'a, 'gc> = Option<f64>;
 
@@ -3752,6 +3784,7 @@ pub struct OptionalUnrestrictedDouble;
 
 impl ArgType for OptionalUnrestrictedDouble {
     const DESC: TypeDesc = TypeDesc::Double;
+    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<f64>;
     type Param<'a, 'gc> = Option<f64>;
@@ -3779,6 +3812,7 @@ pub struct UnrestrictedDouble;
 
 impl ArgType for UnrestrictedDouble {
     const DESC: TypeDesc = TypeDesc::Double;
+    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = f64;
     type Param<'a, 'gc> = f64;
 
@@ -4598,8 +4632,9 @@ pub enum CollectionOrElement<'gc> {
 
 impl RetType for Option<HTMLCollectionOrElement> {
     const DESC: TypeDesc = TypeDesc::NullableUnion(&["HTMLCollection", "Element"]);
+    const PLAIN: bool = true;
     type Ret<'gc> = Option<CollectionOrElement<'gc>>;
-    pending!(PendingNode, finish_node);
+    pending!(PendingObject, finish_object);
 
     fn give<'gc, O: OpFront>(
         op: &mut O,
@@ -4607,10 +4642,11 @@ impl RetType for Option<HTMLCollectionOrElement> {
         value: Self::Ret<'gc>,
     ) -> Self::Pending<O> {
         match value {
-            Some(CollectionOrElement::Element(element)) => op.ret_node(cx, element),
+            Some(CollectionOrElement::Element(element)) => {
+                op.ret_object(cx, ObjectRef::Node(element))
+            }
             Some(CollectionOrElement::Collection(collection)) => {
-                op.ret_object(cx, ObjectRef::HtmlCollection(collection));
-                None
+                op.ret_object(cx, ObjectRef::HtmlCollection(collection))
             }
             None => {
                 op.ret_null();
@@ -4672,8 +4708,9 @@ pub struct RadioNodeListOrElement;
 
 impl RetType for Option<RadioNodeListOrElement> {
     const DESC: TypeDesc = TypeDesc::NullableUnion(&["RadioNodeList", "Element"]);
+    const PLAIN: bool = true;
     type Ret<'gc> = Option<dom::FormItem<'gc>>;
-    pending!(PendingNode, finish_node);
+    pending!(PendingObject, finish_object);
 
     fn give<'gc, O: OpFront>(
         op: &mut O,
@@ -4681,11 +4718,8 @@ impl RetType for Option<RadioNodeListOrElement> {
         value: Self::Ret<'gc>,
     ) -> Self::Pending<O> {
         match value {
-            Some(dom::FormItem::Element(element)) => op.ret_node(cx, element),
-            Some(dom::FormItem::List(list)) => {
-                op.ret_object(cx, ObjectRef::NodeList(list));
-                None
-            }
+            Some(dom::FormItem::Element(element)) => op.ret_object(cx, ObjectRef::Node(element)),
+            Some(dom::FormItem::List(list)) => op.ret_object(cx, ObjectRef::NodeList(list)),
             None => {
                 op.ret_null();
                 None
@@ -5414,8 +5448,8 @@ pub fn give_object<'gc, I: Interface, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     object: <I::Object as ObjectType>::Ref<'gc>,
-) {
-    op.ret_object(cx, <I::Object as ObjectType>::object(object));
+) -> Option<O::PendingObject> {
+    op.ret_object(cx, <I::Object as ObjectType>::object(object))
 }
 
 /// A non-nullable object interface's argument taken: null or undefined is a
@@ -5627,13 +5661,21 @@ pub struct EventOrUndefined;
 
 impl RetType for EventOrUndefined {
     const DESC: TypeDesc = TypeDesc::Any;
+    const PLAIN: bool = true;
     type Ret<'gc> = Option<Gc<'gc, dom::Event>>;
-    no_pending!();
+    pending!(PendingObject, finish_object);
 
-    fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, event: Option<Gc<'gc, dom::Event>>) {
+    fn give<'gc, O: OpFront>(
+        op: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        event: Option<Gc<'gc, dom::Event>>,
+    ) -> Self::Pending<O> {
         match event {
             Some(event) => op.ret_object(cx, ObjectRef::Event(event)),
-            None => op.ret_undefined(),
+            None => {
+                op.ret_undefined();
+                None
+            }
         }
     }
 }
@@ -6186,6 +6228,7 @@ pub struct EnforcedI32;
 
 impl ArgType for EnforcedI32 {
     const DESC: TypeDesc = TypeDesc::I32;
+    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = i32;
     type Param<'a, 'gc> = i32;
 
@@ -6315,7 +6358,17 @@ impl ArgType for CanvasStyleValue {
 impl RetType for CanvasStyleValue {
     const DESC: TypeDesc = TypeDesc::StringOr(CANVAS_STYLE_OBJECTS);
     type Ret<'gc> = CanvasStyleRet<'gc>;
-    pending!(PendingString, finish_string);
+    type Pending<F: FrontTypes> = (Option<F::PendingString>, Option<F::PendingObject>);
+
+    #[inline(always)]
+    fn finish<F: Front>(front: &mut F, (string, object): Self::Pending<F>) {
+        if let Some(string) = string {
+            front.finish_string(string);
+        }
+        if let Some(object) = object {
+            front.finish_object(object);
+        }
+    }
 
     fn give<'gc, O: OpFront>(
         op: &mut O,
@@ -6324,14 +6377,12 @@ impl RetType for CanvasStyleValue {
     ) -> Self::Pending<O> {
         use dom::CanvasStyleObject;
         match value {
-            CanvasStyleRet::String(string) => string.give(op),
+            CanvasStyleRet::String(string) => (string.give(op), None),
             CanvasStyleRet::Object(CanvasStyleObject::Gradient(gradient)) => {
-                op.ret_object(cx, ObjectRef::CanvasGradient(gradient));
-                None
+                (None, op.ret_object(cx, ObjectRef::CanvasGradient(gradient)))
             }
             CanvasStyleRet::Object(CanvasStyleObject::Pattern(pattern)) => {
-                op.ret_object(cx, ObjectRef::CanvasPattern(pattern));
-                None
+                (None, op.ret_object(cx, ObjectRef::CanvasPattern(pattern)))
             }
         }
     }
@@ -6353,6 +6404,7 @@ fn canvas_image_source_error(index: usize) -> ApiError {
 
 impl ArgType for CanvasImageSource {
     const DESC: TypeDesc = TypeDesc::Union(&["HTMLImageElement", "HTMLCanvasElement"]);
+    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = T::Node;
     type Param<'a, 'gc> = NodeRef<'gc>;
 
@@ -6803,6 +6855,7 @@ pub enum HiddenState {
 
 impl RetType for Hidden {
     const DESC: TypeDesc = TypeDesc::Any;
+    const PLAIN: bool = true;
     type Ret<'gc> = HiddenState;
     pending!(PendingString, finish_string);
 
@@ -6858,6 +6911,7 @@ const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
 impl ArgType for OptionalClampedI64 {
     const DESC: TypeDesc = TypeDesc::Double;
+    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<i64>;
     type Param<'a, 'gc> = Option<i64>;
@@ -7659,6 +7713,7 @@ pub struct EmptyStringDefault;
 
 impl ArgType for EmptyStringDefault {
     const DESC: TypeDesc = TypeDesc::String;
+    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<T::Str>;
     type Param<'a, 'gc> = &'a str;
@@ -7687,6 +7742,7 @@ pub struct OptionalString;
 
 impl ArgType for OptionalString {
     const DESC: TypeDesc = TypeDesc::String;
+    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<T::Str>;
     type Param<'a, 'gc> = Option<&'a str>;
@@ -8067,6 +8123,7 @@ mod tests {
         type PendingString = std::convert::Infallible;
         type PendingNode = std::convert::Infallible;
         type PendingNumber = std::convert::Infallible;
+        type PendingObject = std::convert::Infallible;
     }
 
     impl Front for OneNode {

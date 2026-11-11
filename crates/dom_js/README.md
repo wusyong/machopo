@@ -26,12 +26,12 @@ V8 的 callback（templates.rs 的 Member<M>）
 
 拿著狀態的只有第 2 步，那時 scope 被佔住，所以 V8 不會在裡面配置、GC（下面的「V8 不在 DOM 的操作裡配置」）。
 
-**參數和結果單純的成員走另一個 front**（`info_front.rs` 的 `InfoFront`、`templates.rs` 的 `InfoMember<M>`，`bindings::StateInfoMethod`）：`dom_api` 標成 `TypedMember::PLAIN` 的（物件的 getter、setter、method，參數是字串和節點，結果是數字、布林、字串、節點、null 或沒有；表上約一半的成員），callback 只拿 V8 的 `FunctionCallbackInfo`（`bindings::StateInfo`），像 Blink 產生的 callback：
+**參數和結果單純的成員走另一個 front**（`info_front.rs` 的 `InfoFront`、`templates.rs` 的 `InfoMember<M>`，`bindings::StateInfoMethod`）：`dom_api` 標成 `TypedMember::PLAIN` 的（物件的 getter、setter、method，參數是字串、數字、布林、節點和 DOM 的其他物件，結果是這些、null 或沒有；表上約六成的成員），callback 只拿 V8 的 `FunctionCallbackInfo`（`bindings::StateInfo`），像 Blink 產生的 callback：
 
 ```text
 V8 的 callback（templates.rs 的 InfoMember<M>）
 └─ InfoFront<'s>：只有 info
-   ├─ 1. 操作外：字串參數原地借得到的（ASCII 的字面值）直接拿，節點的參數確認是 wrapper：都只用 isolate
+   ├─ 1. 操作外：字串參數原地借得到的（ASCII 的字面值）直接拿，數字和布林本身直接讀，節點和物件的參數確認是 wrapper：都只用 isolate
    ├─ 2. read / mutate：從 info 借出狀態
    │     └─ InfoOp<'o, 's>：InfoNoGc（只要 isolate 的 unwrap、回傳，和 OpReturn）、receiver、快取
    └─ 3. 操作後：操作裡給不出去的結果（成員自己的區域變數）做完；沒有就結束

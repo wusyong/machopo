@@ -10,7 +10,7 @@
 | 2 字串參數已經是字串就不轉換 | 完成 | 2026-11-11 |
 | 3 front 只拿 callback 的 info：參數和結果單純的成員 | 完成 | 2026-11-11 |
 | 4a 結果怎麼帶出操作：`RetType::Pending`、`finish`，front 定 `PendingString`、`PendingNode`、`PendingNumber` | 完成 | 2026-11-11 |
-| 4b 新的 front 補上數字、布林、有預設值的參數，回傳不是節點的物件 | 還沒開始 | |
+| 4b 新的 front 補上數字、布林、有預設值的參數，回傳不是節點的物件 | 完成 | 2026-11-11 |
 | 4c 預先建 wrapper 的結果（`createElement`、`cloneNode`、`createTextNode`） | 還沒開始 | |
 | 4d callback、rest、`any` 的參數直接回傳 handle（`addEventListener`、`setTimeout`、`append`） | 還沒開始 | |
 | 4e dictionary、promise、陣列和其餘的參數和結果 | 還沒開始 | |
@@ -275,3 +275,14 @@
 - 第 3 段和這一段的 binary 各跑三次取最小（`perf stat`，指令數（cycle））：`nodeType` 115（24）→ 107（20），`firstChild` 140（28）→ 127（22），`parentNode` 139（28）→ 124（23），`tagName` 244（49）→ 239（48），`id` 252（58）→ 246（53），`className` 231（47）→ 224（41），`hasAttribute` 504（124）→ 496（118），`getAttribute` 565（133）→ 559（126），`id =` 898（183）→ 890（183），`setAttribute` 1092（222）→ 1084（217），`appendChild` 1266（208）→ 1253（204），`textContent =` 2004（427）→ 1998（430）；不是 `PLAIN` 的 `createElement` 2055 → 2053、`addEventListener` 856 → 854、`dispatchEvent` 3424 → 3422。最簡單的 getter 整個約 20 個 cycle（Chrome 約 17），扣掉 V8 的地板 machopo 自己約 9、Chrome 約 6。
 - 測試：`dom_js` 的 `info_front` 多一條（名稱的字串做過一次之後不再建 scope）；行為由原有的測試守著。mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4a.toml`，11 個都抓到。
 - 跑過：`cargo test -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`、`cargo fmt --check`、`test.py wpt dom/nodes`。`cargo test --workspace` 和 clippy 等第 4 段全部做完。
+
+**第 4b 段：數字、布林、有預設值的參數，不是節點的物件**（2026-11-11）：
+
+- fork（只改 Rust，`5c327d3`，`third_party.toml` 釘到它；fork 的三個 commit 都還沒 push）：`v8::machopo::as_smi`（從 handle 讀小整數；debug build 和 `Value::is_int32`、`Int32::value` 比對），`README.machopo.md` 一條。
+- `dom_api`：`FrontTypes::PendingObject`、`OpFront::ret_object` 回傳它、`Front::finish_object`；`give_object` 和產生器的 object interface 的兩個回傳型別帶它；`EventOrUndefined` 用 `pending!`；`Option<HTMLCollectionOrElement>`、`Option<RadioNodeListOrElement>` 的元素改成當物件給（`ObjectRef::Node`，一種 pending）；`CanvasStyleValue` 的 pending 是字串和物件的一對。`PLAIN` 加 26 個參數型別（`bool`、`Option<bool>`、各種整數和 `double`、`ByteString`、`Strings`、有預設值的字串、`OptionOrOptGroup`、`Slottables`、`CanvasImageSource`）、4 個回傳型別，和 object interface 的參數、回傳型別。照「`take`、`param`、`give` 裡 `front.`、`op.` 呼叫的方法都是 `InfoFront`、`InfoOp` 有的」掃過（第 3 段那次掃漏了帶 turbofish 的呼叫，例如 `front.object_if::<T>(…)`，這次補上；那次標的型別重看過，沒有受影響的）。`PLAIN` 的成員 1307 → 1726（2799 個裡，62%）；有 2 個是 indexed setter（表上寫成 method），不走 `Members::function`，`templates.rs` 的條件另外限定 getter、setter、method。
+- `dom_js`：`InfoFront` 的 `arg_count`、`is_undefined`、`is_null_or_undefined`、`bool_arg`（`is_true`、`is_false`）、`i32_arg`、`u32_arg`（`as_smi`；負的照 `ToUint32` wrap）、`f64_arg`（`as_smi`，或 `Number::value`；不是 finite 而必須是時交給原本的 front 丟 `TypeError`）、`object_arg`、`target_arg`、`finish_object`；`InfoOp` 的 `object`、`target`、`ret_object`。不是數字、布林的值交給原本的 front 轉換。其他 front 的 `PendingObject` 填 `Infallible`。
+- 4a 和這一段的 binary 各跑三次取最小（`perf stat`，指令數（cycle））：`childNodes` 299（64）→ 219（42），`classList` 269（60）→ 190（38），`list.item(0)` 416（89）→ 260（50），`event.target` 192（38）→ 150（28），`toggleAttribute('hidden', true)` 819（162）→ 737（141），`substringData(1, 3)` 3836 → 3688；沒變的：`list.length` 148、`contains` 338、`compareDocumentPosition` 1913（4a 就是 `PLAIN`），`nodeType` 109 → 111、`getAttribute` 562、`createElement` 2056 → 2055。`cloneNode(false)` 2273（476）→ 2280（516）：每次回傳沒有 wrapper 的新節點，走 `finish_node` 交給原本的 front，沒有省到（cycle 那一次偏高，沒有重跑）；4c 處理。
+- **不穩定的測試**（找到、修掉）：`info_front` 的「當場回傳的呼叫不建 scope」有幾條靠 V8 還留著先前做的字串或 wrapper（`n.getAttribute('id')` 的值、`n.firstChild` 的 `<b>`、`n.classList`），但測試沒有拿著它們：V8 的 scavenge 會丟掉沒人拿著的字串和沒改過的 wrapper，下一次讀就重做、建 scope。測試多跑幾個呼叫之後 scavenge 剛好落在中間，`n.firstChild.tagName` 那一條失敗一次；之後三次又都通過。改成測試把每個結果留在 JS 的陣列或變數裡。修完 `info_front` 的 7 個測試重複跑 1400 次（400 加 1000），都通過。
+- 測試：`dom_js` 的 `info_front` 多兩個（數字、布林、物件當場讀的不建 scope；要轉換或要建 wrapper 的建、結果一樣：字串和有 `valueOf` 的物件當數字、小數截掉、超過 32 位元的 wrap、各種值當布林、型別不對的物件和 null 是 `TypeError`、`valueOf` 丟的例外、`double` 不是 finite 的 `TypeError`、多個字串參數）；`dom_api` 的 `table` 的清單更正（第 3 段把 `cloneNode` 列成「預先建 wrapper」，它不是：那是 `createElement`、`createTextNode`）。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4b.toml`，14 個都抓到。沒有 mutant 的：`target_arg`、`is_null_or_undefined`（現在 `PLAIN` 的成員裡沒有測試呼叫到的；和原本的 front 的寫法一樣）、`templates.rs` 限定 kind 的條件（現在等價）。
+- 跑過：`cargo test -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt dom html/dom`（123056 個結果都照預期）。

@@ -1775,6 +1775,7 @@ impl<'s, A: CallArgs<'s>> FrontTypes for V8Front<'_, 's, '_, '_, A> {
     type PendingString = std::convert::Infallible;
     type PendingNode = std::convert::Infallible;
     type PendingNumber = std::convert::Infallible;
+    type PendingObject = std::convert::Infallible;
 }
 
 impl<'s, A: CallArgs<'s>> FrontTypes for V8Op<'_, 's, '_, '_, A> {
@@ -1784,6 +1785,7 @@ impl<'s, A: CallArgs<'s>> FrontTypes for V8Op<'_, 's, '_, '_, A> {
     type PendingString = std::convert::Infallible;
     type PendingNode = std::convert::Infallible;
     type PendingNumber = std::convert::Infallible;
+    type PendingObject = std::convert::Infallible;
 }
 
 impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
@@ -3528,7 +3530,11 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
         count(&self.caches.wrappers_made);
     }
 
-    fn ret_object<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, object: ObjectRef<'gc>) {
+    fn ret_object<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        object: ObjectRef<'gc>,
+    ) -> Option<std::convert::Infallible> {
         if !self
             .no_gc
             .return_wrapper(&mut self.call.rv.op(), cx.object_wrapper_edge(object))
@@ -3538,6 +3544,7 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
                 dom_api::interface_of(cx, object),
             ));
         }
+        None
     }
 
     fn construct_html<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, constructed: HtmlConstructed<'gc>) {

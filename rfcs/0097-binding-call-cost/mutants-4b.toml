@@ -1,0 +1,109 @@
+# Stage 4b: numbers, booleans, arguments with defaults and objects that
+# aren't nodes through `dom_js`'s `InfoFront`; an object result with no
+# wrapper left for after the operation (`PendingObject`).
+test = ["cargo", "test", "-q", "-p", "dom_api", "-p", "dom_js", "-p", "dom_wasm"]
+timeout = 1800
+
+[[mutant]]
+name = "true is false"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if value.is_true() {
+            return true;
+        }'''
+to = '''        if value.is_true() {
+            return false;
+        }'''
+
+[[mutant]]
+name = "false is true"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if value.is_false() {
+            return false;
+        }'''
+to = '''        if value.is_false() {
+            return true;
+        }'''
+
+[[mutant]]
+name = "a small integer is zero (long)"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            Some(value) => Some(value),
+            None => self.with_front(|front| front.i32_arg(index)),'''
+to = '''            Some(_) => Some(0),
+            None => self.with_front(|front| front.i32_arg(index)),'''
+
+[[mutant]]
+name = "a negative small integer isn't wrapped"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            Some(value) => Some(value.cast_unsigned()),'''
+to = '''            Some(value) => Some(value.max(0).cast_unsigned()),'''
+
+[[mutant]]
+name = "a small integer is zero (unsigned long)"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            Some(value) => Some(value.cast_unsigned()),'''
+to = '''            Some(_) => Some(0),'''
+
+[[mutant]]
+name = "a small integer is zero (double)"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            Some(value) => Some(f64::from(value)),'''
+to = '''            Some(_) => Some(0.0),'''
+
+[[mutant]]
+name = "a number that is no small integer is zero"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                .map(|number| number.value()),'''
+to = '''                .map(|_| 0.0),'''
+
+[[mutant]]
+name = "a double that isn't finite is taken where it must be"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            Some(number) if !finite || number.is_finite() => Some(number),'''
+to = '''            Some(number) => Some(number),'''
+
+[[mutant]]
+name = "undefined isn't told"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        front::arg(&self.info.args(), index).is_undefined()'''
+to = '''        let _ = index;
+        false'''
+
+[[mutant]]
+name = "no arguments counted"
+file = "crates/dom_js/src/info_front.rs"
+from = '''    fn arg_count(&mut self) -> usize {
+        usize::try_from(self.info.args().length()).unwrap_or(0)'''
+to = '''    fn arg_count(&mut self) -> usize {
+        0'''
+
+[[mutant]]
+name = "an object argument's type not checked"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if bindings::is_wrapper::<T>(self.info.isolate(), value) {'''
+to = '''        if value.is_object() {'''
+
+[[mutant]]
+name = "an object with a wrapper left for after"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if self.no_gc.return_wrapper(cx.object_wrapper_edge(object)) {
+            return None;
+        }'''
+to = '''        let _ = self.no_gc.return_wrapper(cx.object_wrapper_edge(object));'''
+
+[[mutant]]
+name = "an object result left isn't finished"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''            if let ::std::option::Option::Some(pending) = pending {
+                front.finish_object(pending);
+            }'''
+to = '''            let _ = (front, pending);'''
+
+[[mutant]]
+name = "a boolean argument isn't plain"
+file = "crates/dom_api/src/typed.rs"
+from = '''impl ArgType for bool {
+    const DESC: TypeDesc = TypeDesc::Bool;
+    const PLAIN: bool = true;'''
+to = '''impl ArgType for bool {
+    const DESC: TypeDesc = TypeDesc::Bool;'''

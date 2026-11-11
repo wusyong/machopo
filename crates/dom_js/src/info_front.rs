@@ -16,7 +16,10 @@
 //! makes a scope and the whole front end (`front::V8Front`) then, out of
 //! line, and is done by it.
 
-use dom::{DomString, NameId, Node, NodeRef, NodeRoot, names};
+use dom::{
+    DomString, EventTargetImpl, NameId, Node, NodeRef, NodeRoot, ObjectRef, ObjectRoot, TargetRef,
+    Window, names,
+};
 use dom_api::{ApiCx, ApiError, Front, FrontTypes, OpFront};
 
 use crate::front::{self, Checked, V8Front};
@@ -54,6 +57,8 @@ impl<'s> FrontTypes for InfoFront<'s> {
     type PendingNode = (NodeRoot, usize);
     /// A number that is no Smi.
     type PendingNumber = f64;
+    /// An object with no wrapper, rooted, and its interface.
+    type PendingObject = (ObjectRoot, usize);
 }
 
 impl<'s> FrontTypes for InfoOp<'_, 's> {
@@ -65,6 +70,8 @@ impl<'s> FrontTypes for InfoOp<'_, 's> {
     type PendingNode = (NodeRoot, usize);
     /// A number that is no Smi.
     type PendingNumber = f64;
+    /// An object with no wrapper, rooted, and its interface.
+    type PendingObject = (ObjectRoot, usize);
 }
 
 impl<'s> InfoFront<'s> {
@@ -244,6 +251,117 @@ impl<'s> Front for InfoFront<'s> {
         self.with_front(|front| front.finish_kept_as(front::Kept::F64(number)));
     }
 
+    /// An object with no wrapper: one made now.
+    #[cold]
+    #[inline(never)]
+    fn finish_object(&mut self, (object, interface): (ObjectRoot, usize)) {
+        self.with_front(|front| front.finish_kept_as(front::Kept::Object(object, interface)));
+    }
+
+    #[inline(always)]
+    fn arg_count(&mut self) -> usize {
+        usize::try_from(self.info.args().length()).unwrap_or(0)
+    }
+
+    #[inline(always)]
+    fn is_undefined(&mut self, index: usize) -> bool {
+        front::arg(&self.info.args(), index).is_undefined()
+    }
+
+    #[inline(always)]
+    fn is_null_or_undefined(&mut self, index: usize) -> bool {
+        front::arg(&self.info.args(), index).is_null_or_undefined()
+    }
+
+    /// A boolean itself is read at once; anything else is `ToBoolean`'s.
+    #[inline(always)]
+    fn bool_arg(&mut self, index: usize) -> bool {
+        let value = front::arg(&self.info.args(), index);
+        if value.is_true() {
+            return true;
+        }
+        if value.is_false() {
+            return false;
+        }
+        self.with_front(|front| front.bool_arg(index))
+    }
+
+    /// A small integer (most integer arguments) is read from its handle;
+    /// anything else is `ToInt32`'s, which may run script.
+    #[inline(always)]
+    fn i32_arg(&mut self, index: usize) -> Option<i32> {
+        match v8::machopo::as_smi(front::arg(&self.info.args(), index)) {
+            Some(value) => Some(value),
+            None => self.with_front(|front| front.i32_arg(index)),
+        }
+    }
+
+    /// As `i32_arg`: a negative small integer wraps, as `ToUint32` does.
+    #[inline(always)]
+    fn u32_arg(&mut self, index: usize) -> Option<u32> {
+        match v8::machopo::as_smi(front::arg(&self.info.args(), index)) {
+            Some(value) => Some(value.cast_unsigned()),
+            None => self.with_front(|front| front.u32_arg(index)),
+        }
+    }
+
+    /// A number is read with no conversion (a small integer from its
+    /// handle, another by V8's `Number::Value`); anything else is
+    /// `ToNumber`'s, which may run script, and what isn't finite where it
+    /// must be is the whole front end's `TypeError`.
+    #[inline(always)]
+    fn f64_arg(&mut self, index: usize, finite: bool) -> Option<f64> {
+        let value = front::arg(&self.info.args(), index);
+        let number = match v8::machopo::as_smi(value) {
+            Some(value) => Some(f64::from(value)),
+            None => v8::Local::<v8::Number>::try_from(value)
+                .ok()
+                .map(|number| number.value()),
+        };
+        match number {
+            Some(number) if !finite || number.is_finite() => Some(number),
+            _ => self.with_front(|front| front.f64_arg(index, finite)),
+        }
+    }
+
+    /// An object of the DOM's of type `T`, checked with the isolate
+    /// alone; anything else is the whole front end's `TypeError`.
+    #[inline(always)]
+    fn object_arg<T: elise::HeapType>(
+        &mut self,
+        index: usize,
+        interface: &str,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        let value = front::arg(&self.info.args(), index);
+        if value.is_null_or_undefined() {
+            return Some(None);
+        }
+        if bindings::is_wrapper::<T>(self.info.isolate(), value) {
+            return v8::Local::<v8::Object>::try_from(value).ok().map(Some);
+        }
+        self.with_front(|front| front.object_arg::<T>(index, interface))
+    }
+
+    #[inline(always)]
+    fn target_arg(
+        &mut self,
+        index: usize,
+        interface: &str,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        let value = front::arg(&self.info.args(), index);
+        if value.is_null_or_undefined() {
+            return Some(None);
+        }
+        let isolate = self.info.isolate();
+        if bindings::is_wrapper::<Node>(isolate, value)
+            || bindings::is_wrapper::<Window>(isolate, value)
+            || bindings::is_wrapper::<EventTargetImpl>(isolate, value)
+        {
+            return v8::Local::<v8::Object>::try_from(value).ok().map(Some);
+        }
+        self.with_front(|front| front.target_arg(index, interface))
+    }
+
     #[cold]
     #[inline(never)]
     fn throw(&mut self, error: ApiError) {
@@ -281,6 +399,36 @@ impl<'s> OpFront for InfoOp<'_, 's> {
         self.no_gc
             .unwrap::<Node>(cx.gc, *node)
             .expect("a wrapper, checked as it was taken")
+    }
+
+    #[inline(always)]
+    fn object<'gc, T: elise::HeapType>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        object: &v8::Local<'s, v8::Object>,
+    ) -> elise::Gc<'gc, T> {
+        self.no_gc
+            .unwrap::<T>(cx.gc, *object)
+            .expect("a wrapper, checked as it was taken")
+    }
+
+    #[inline(always)]
+    fn target<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        object: &v8::Local<'s, v8::Object>,
+    ) -> TargetRef<'gc> {
+        if let Some(node) = self.no_gc.unwrap::<Node>(cx.gc, *object) {
+            return TargetRef::Node(node);
+        }
+        if let Some(window) = self.no_gc.unwrap::<Window>(cx.gc, *object) {
+            return TargetRef::Window(window);
+        }
+        TargetRef::EventTarget(
+            self.no_gc
+                .unwrap::<EventTargetImpl>(cx.gc, *object)
+                .expect("an event target, checked as it was taken"),
+        )
     }
 
     // V8's `undefined` is the return value until set.
@@ -364,9 +512,34 @@ impl<'s> OpFront for InfoOp<'_, 's> {
         }
         Some(self.root_node(cx, node))
     }
+
+    /// The object's wrapper, written from the object's reference to it;
+    /// else made after the operation.
+    #[inline(always)]
+    fn ret_object<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        object: ObjectRef<'gc>,
+    ) -> Option<(ObjectRoot, usize)> {
+        if self.no_gc.return_wrapper(cx.object_wrapper_edge(object)) {
+            return None;
+        }
+        Some(self.root_object(cx, object))
+    }
 }
 
 impl InfoOp<'_, '_> {
+    /// As `root_node`, an object of any type.
+    #[cold]
+    #[inline(never)]
+    fn root_object<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        object: ObjectRef<'gc>,
+    ) -> (ObjectRoot, usize) {
+        (cx.root_object(object), dom_api::interface_of(cx, object))
+    }
+
     /// A node with no wrapper, rooted for after the operation, and its
     /// interface: out of line, as `front::V8Op`'s (the interface's lookup).
     #[cold]

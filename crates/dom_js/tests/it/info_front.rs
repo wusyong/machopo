@@ -53,8 +53,11 @@ fn a_plain_call_that_returns_at_once_makes_no_scope() {
     ];
     // Once first: a call that changes the DOM may tell V8 how much the
     // DOM's heap grew (a scope), the first that grows it past a buffer.
+    // What each gives is held: V8's scavenge drops a string or a wrapper
+    // that nothing holds, and the next call would make it again.
+    env.eval("var held = [];");
     for (source, _) in calls {
-        env.eval(source);
+        env.eval(&format!("held.push({source})"));
     }
     for (source, value) in calls {
         assert_eq!(scopes(&mut env, source), (value.into(), 0), "{source}");
@@ -78,12 +81,17 @@ fn a_plain_call_that_allocates_or_throws_makes_a_scope() {
         ("n.getAttribute({ toString() { return 'id'; } })", "x"),
         // A string V8 has no copy of; a name's, not made yet.
         (
-            "n.setAttribute('data-y', 'y'); n.getAttribute('data-y')",
+            "n.setAttribute('data-y', 'y'); (globalThis.y = n.getAttribute('data-y'))",
             "y",
         ),
         ("d.createElement('section').tagName", "SECTION"),
         // A node with no wrapper.
-        ("n.innerHTML = '<b></b>'; n.firstChild.tagName", "B"),
+        // (Held, as the string above: V8's scavenge drops a string or a
+        // wrapper that nothing holds, and the next read makes it again.)
+        (
+            "n.innerHTML = '<b></b>'; (globalThis.b = n.firstChild).tagName",
+            "B",
+        ),
         // Numbers that are no Smi: not an integer, past a Smi's range.
         (
             "var i = d.createElement('input'); i.type = 'number'; i.value = '1.5'; \
@@ -200,12 +208,110 @@ fn a_plain_members_receiver_is_checked_by_its_signature() {
 fn a_member_that_isnt_plain_makes_none_of_these_scopes() {
     let mut env = env();
     for source in [
-        "d.createElement('div').nodeType",
+        "d.createElement('div')",
+        "d.createTextNode('text')",
         "n.addEventListener('x', () => {})",
-        "n.childNodes.length",
-        "n.cloneNode(true).nodeType",
+        "n.dispatchEvent(new Event('x'))",
     ] {
         let (_, made) = scopes(&mut env, source);
         assert_eq!(made, 0, "{source}");
     }
+}
+
+/// Number and boolean arguments that are numbers and booleans, and
+/// objects that aren't nodes (as arguments, and as results that have
+/// wrappers), need no scope either.
+#[test]
+fn numbers_booleans_and_objects_need_no_scope() {
+    let mut env = env();
+    env.eval(
+        "var t = d.createTextNode('abcdef'); n.appendChild(t); var list = n.childNodes; \
+         var classes = n.classList; var r = d.createRange(); var r2 = d.createRange();",
+    );
+    // Each with whether it returns at once (a new string doesn't).
+    let calls = [
+        ("t.substringData(1, 3)", "bcd", false),
+        ("list.item(0) === p", "true", true),
+        ("list.item(7)", "null", true),
+        ("n.childNodes === list", "true", true),
+        ("n.classList === classes", "true", true),
+        ("n.toggleAttribute('hidden', true)", "true", true),
+        ("n.toggleAttribute('hidden', false)", "false", true),
+        ("n.toggleAttribute('hidden')", "true", true),
+        ("n.toggleAttribute('hidden')", "false", true),
+        ("r.compareBoundaryPoints(0, r2)", "0", true),
+        ("t.compareDocumentPosition(p)", "2", true),
+        ("n.cloneNode(false) !== n", "true", false),
+    ];
+    env.eval("var held = [];");
+    for (source, _, _) in calls {
+        env.eval(&format!("held.push({source})"));
+    }
+    for (source, value, at_once) in calls {
+        let (found, made) = scopes(&mut env, source);
+        assert_eq!(found, value, "{source}");
+        if at_once {
+            assert_eq!(made, 0, "{source}");
+        }
+    }
+}
+
+/// An argument that isn't a number or a boolean is converted by the whole
+/// front end (`ToNumber`, which may run script; `ToBoolean`), with what
+/// WebIDL gives: a negative `unsigned long` wraps, a `double` that isn't
+/// finite is a `TypeError` where it must be, an object of another type is
+/// one too; an object with no wrapper has one made.
+#[test]
+fn numbers_booleans_and_objects_converted_or_made_make_a_scope() {
+    let mut env = env();
+    env.eval("var t = d.createTextNode('abcdef'); n.appendChild(t); var r = d.createRange();");
+    for (source, value) in [
+        ("t.substringData('1', { valueOf() { return 3; } })", "bcd"),
+        ("t.substringData(1.9, 3.2)", "bcd"),
+        ("t.substringData(4294967297, 2)", "bc"),
+        ("n.toggleAttribute('hidden', 1)", "true"),
+        ("n.toggleAttribute('hidden', '')", "false"),
+        ("n.toggleAttribute('hidden', {})", "true"),
+        ("n.toggleAttribute('hidden', null)", "false"),
+        (
+            "try { r.compareBoundaryPoints(0, n); 'none' } catch (e) { e.name }",
+            "TypeError",
+        ),
+        (
+            "try { r.compareBoundaryPoints(0, null); 'none' } catch (e) { e.name }",
+            "TypeError",
+        ),
+        (
+            "try { r.setStart(n, { valueOf() { throw new RangeError('no'); } }); 'none' } catch (e) { e.name }",
+            "RangeError",
+        ),
+        ("d.createElement('div').childNodes.length", "0"),
+        ("d.createElement('div').classList.length", "0"),
+    ] {
+        let (found, made) = scopes(&mut env, source);
+        assert_eq!(found, value, "{source}");
+        assert!(made >= 1, "{source}: a scope");
+    }
+    // Numbers as they are: a small integer, another number; one that
+    // isn't finite where it must be is a `TypeError`. Strings to the
+    // call's last argument.
+    assert_eq!(
+        env.eval(
+            "var i = d.createElement('input'); i.type = 'number'; i.valueAsNumber = 7; \
+             var seven = i.value; i.valueAsNumber = 1.5; seven + ' ' + i.value"
+        ),
+        "7 1.5"
+    );
+    assert_eq!(
+        env.eval("try { d.createElement('meter').value = Infinity; 'none' } catch (e) { e.name }"),
+        "TypeError"
+    );
+    assert_eq!(env.eval("n.classList.add('a', 'b'); n.className"), "a b");
+    // A small negative integer wraps with no conversion; a number that is
+    // no small integer is read as it is.
+    assert_eq!(
+        env.eval("try { t.substringData(-1, 1) } catch (e) { e.name }"),
+        "IndexSizeError"
+    );
+    assert_eq!(scopes(&mut env, "n.scrollTop = 1e3; 0").1, 0);
 }

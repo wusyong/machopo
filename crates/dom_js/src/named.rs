@@ -123,6 +123,7 @@ impl<'s> FrontTypes for PropertyFront<'_, 's, '_> {
     type PendingString = std::convert::Infallible;
     type PendingNode = std::convert::Infallible;
     type PendingNumber = std::convert::Infallible;
+    type PendingObject = std::convert::Infallible;
 }
 
 impl<'s> FrontTypes for PropertyOp<'_, 's, '_> {
@@ -132,6 +133,7 @@ impl<'s> FrontTypes for PropertyOp<'_, 's, '_> {
     type PendingString = std::convert::Infallible;
     type PendingNode = std::convert::Infallible;
     type PendingNumber = std::convert::Infallible;
+    type PendingObject = std::convert::Infallible;
 }
 
 impl<'a, 's, 'i> Front for PropertyFront<'a, 's, 'i> {
@@ -300,12 +302,16 @@ impl<'s> OpFront for PropertyOp<'_, 's, '_> {
         cx: &ApiCx<'_, 'gc>,
         node: NodeRef<'gc>,
     ) -> Option<std::convert::Infallible> {
-        self.ret_object(cx, ObjectRef::Node(node));
-        None
+        self.ret_object(cx, ObjectRef::Node(node))
     }
 
-    fn ret_object<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, object: ObjectRef<'gc>) {
+    fn ret_object<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        object: ObjectRef<'gc>,
+    ) -> Option<std::convert::Infallible> {
         *self.got = Got::Object(cx.root_object(object), dom_api::interface_of(cx, object));
+        None
     }
 }
 

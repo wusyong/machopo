@@ -2093,9 +2093,24 @@ fn object_types(name: &Ident) -> Tokens {
         local("taken"),
     );
     let object = quote!(<<#name as #api::declare::Interface>::Object as #api::typed::ObjectType>);
+    // What an object result leaves for after the operation, finished.
+    let pending_object = quote! {
+        type Pending<F: #api::typed::FrontTypes> = ::std::option::Option<F::PendingObject>;
+
+        #[inline(always)]
+        fn finish<F: #api::typed::Front>(
+            front: &mut F,
+            pending: ::std::option::Option<F::PendingObject>,
+        ) {
+            if let ::std::option::Option::Some(pending) = pending {
+                front.finish_object(pending);
+            }
+        }
+    };
     quote! {
         impl #api::typed::ArgType for #name {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Node(stringify!(#name));
+            const PLAIN: bool = true;
             type Taken<T: #api::typed::FrontTypes> = T::Node;
             type Param<'a, 'gc> = #object::Ref<'gc>;
 
@@ -2115,6 +2130,7 @@ fn object_types(name: &Ident) -> Tokens {
 
         impl #api::typed::ArgType for ::std::option::Option<#name> {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::NullableNode(stringify!(#name));
+            const PLAIN: bool = true;
             // WebIDL's nullable types convert undefined to null.
             const UNDEFINED_IS_DEFAULT: bool = true;
             type Taken<T: #api::typed::FrontTypes> = ::std::option::Option<T::Node>;
@@ -2139,31 +2155,38 @@ fn object_types(name: &Ident) -> Tokens {
 
         impl #api::typed::RetType for #name {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Node(stringify!(#name));
+            const PLAIN: bool = true;
             type Ret<'gc> = #object::Ref<'gc>;
 
-            type Pending<F: #api::typed::FrontTypes> = ();
+            #pending_object
 
-            #[inline(always)]
-            fn finish<F: #api::typed::Front>(_: &mut F, (): ()) {}
-
-            fn give<'gc, O: #api::typed::OpFront>(#front: &mut O, #cx: &#api::ApiCx<'_, 'gc>, #value: Self::Ret<'gc>) {
-                #api::typed::give_object::<#name, O>(#front, #cx, #value);
+            fn give<'gc, O: #api::typed::OpFront>(
+                #front: &mut O,
+                #cx: &#api::ApiCx<'_, 'gc>,
+                #value: Self::Ret<'gc>,
+            ) -> ::std::option::Option<O::PendingObject> {
+                #api::typed::give_object::<#name, O>(#front, #cx, #value)
             }
         }
 
         impl #api::typed::RetType for ::std::option::Option<#name> {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::NullableNode(stringify!(#name));
+            const PLAIN: bool = true;
             type Ret<'gc> = ::std::option::Option<#object::Ref<'gc>>;
 
-            type Pending<F: #api::typed::FrontTypes> = ();
+            #pending_object
 
-            #[inline(always)]
-            fn finish<F: #api::typed::Front>(_: &mut F, (): ()) {}
-
-            fn give<'gc, O: #api::typed::OpFront>(#front: &mut O, #cx: &#api::ApiCx<'_, 'gc>, #value: Self::Ret<'gc>) {
+            fn give<'gc, O: #api::typed::OpFront>(
+                #front: &mut O,
+                #cx: &#api::ApiCx<'_, 'gc>,
+                #value: Self::Ret<'gc>,
+            ) -> ::std::option::Option<O::PendingObject> {
                 match #value {
                     ::std::option::Option::Some(#value) => #api::typed::give_object::<#name, O>(#front, #cx, #value),
-                    ::std::option::Option::None => #front.ret_null(),
+                    ::std::option::Option::None => {
+                        #front.ret_null();
+                        ::std::option::Option::None
+                    }
                 }
             }
         }

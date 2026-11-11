@@ -1029,12 +1029,12 @@ impl TypedVisitor for Plain {
     }
 }
 
-/// A member is plain (`TypedMember::PLAIN`: what a front end with the
-/// required methods alone calls) when it is an object's getter, setter or
-/// method whose arguments are strings and nodes and whose result is a
-/// number, a boolean, a string, a node, null or nothing; not when it
-/// takes or gives anything else, makes its result ahead (a new node), is
-/// static, or its function is given the front end.
+/// A member is plain (`TypedMember::PLAIN`) when it is an object's getter,
+/// setter or method whose arguments are strings, numbers, booleans, nodes
+/// and other objects of the DOM's, and whose result is one of those, null
+/// or nothing; not when it takes or gives anything else (a callback, a
+/// sequence), makes its result ahead (a new node), is static, or its
+/// function is given the front end.
 #[test]
 fn members_of_strings_nodes_numbers_and_booleans_are_plain() {
     let mut plain = Plain(Vec::new());
@@ -1067,16 +1067,22 @@ fn members_of_strings_nodes_numbers_and_booleans_are_plain() {
         ("Element", "removeAttribute", MemberKind::Method),
         ("Event", "timeStamp", MemberKind::Getter),
         ("Event", "type", MemberKind::Getter),
+        // Numbers and booleans as arguments; objects that aren't nodes.
+        ("Node", "cloneNode", MemberKind::Method),
+        ("Node", "childNodes", MemberKind::Getter),
+        ("Element", "classList", MemberKind::Getter),
+        ("Element", "toggleAttribute", MemberKind::Method),
+        ("CharacterData", "substringData", MemberKind::Method),
+        ("NodeList", "item", MemberKind::Method),
+        ("Event", "target", MemberKind::Getter),
     ] {
         assert!(is_plain(interface, name, kind), "{interface}.{name}");
     }
     for (interface, name, kind) in [
         // A new node, made ahead of the operation.
         ("Document", "createElement", MemberKind::Method),
-        ("Node", "cloneNode", MemberKind::Method),
-        // An object that isn't a node, a callback, a boolean argument.
-        ("Node", "childNodes", MemberKind::Getter),
-        ("Element", "classList", MemberKind::Getter),
+        ("Document", "createTextNode", MemberKind::Method),
+        // A callback; a method that leaves script to run.
         ("EventTarget", "addEventListener", MemberKind::Method),
         ("EventTarget", "dispatchEvent", MemberKind::Method),
         // A sequence.
@@ -1087,12 +1093,16 @@ fn members_of_strings_nodes_numbers_and_booleans_are_plain() {
     ] {
         assert!(!is_plain(interface, name, kind), "{interface}.{name}");
     }
-    // Only getters, setters and methods are.
+    // Only getters, setters and methods are (an indexed setter is
+    // declared as a method: an engine calls it as an interceptor).
     assert!(plain.0.iter().all(|member| {
         !member.3
             || matches!(
                 member.2,
-                MemberKind::Getter | MemberKind::Setter | MemberKind::Method
+                MemberKind::Getter
+                    | MemberKind::Setter
+                    | MemberKind::Method
+                    | MemberKind::IndexedSetter
             )
     }));
     let count = plain.0.iter().filter(|member| member.3).count();

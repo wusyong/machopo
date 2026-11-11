@@ -615,7 +615,14 @@ impl Members<'_, '_, '_> {
             // cross-origin property's (`checked`: `C` is `Member<M>`),
             // whose getter is called in its receiver's realm
             // (`CrossOriginMember`: where a wrapper it makes is made).
-            (None, Some(signature)) if checked && const { M::PLAIN } => {
+            (None, Some(signature))
+                if checked
+                    && const { M::PLAIN }
+                    && matches!(
+                        M::KIND,
+                        MemberKind::Getter | MemberKind::Setter | MemberKind::Method
+                    ) =>
+            {
                 bindings::state_info_method_template::<State, InfoMember<M>>(
                     self.scope,
                     signature,
