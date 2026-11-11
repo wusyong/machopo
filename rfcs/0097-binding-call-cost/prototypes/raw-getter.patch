@@ -1,0 +1,149 @@
+diff --git a/crates/bindings/src/isolate_state.rs b/crates/bindings/src/isolate_state.rs
+index d0b1309..56f2bc7 100644
+--- a/crates/bindings/src/isolate_state.rs
++++ b/crates/bindings/src/isolate_state.rs
+@@ -997,3 +997,54 @@ pub fn set_state_refused_access<T: Any, A: StateAccessCheck<T>>(isolate: &mut v8
+     );
+     isolate.set_failed_access_check_callback_function(refused_access::<T, A>);
+ }
++
++// PROTOTYPE (measured, not to be merged): a getter called with
++// V8's `FunctionCallbackInfo` itself, no `CallbackScope` made, to measure
++// what the scope and the front end's call structure cost.
++
++/// A getter given the isolate's state, the isolate, its receiver (checked
++/// against the function's signature) and where its result goes.
++pub trait RawGetter<T>: 'static {
++    fn get<'s>(
++        state: &T,
++        isolate: &mut v8::Isolate,
++        this: Receiver<'s>,
++        rv: &mut v8::ReturnValue<'s, v8::Value>,
++    );
++}
++
++unsafe extern "C" fn raw_getter_trampoline<T: Any, C: RawGetter<T>>(
++    info: *const v8::FunctionCallbackInfo,
++) {
++    // SAFETY (prototype): V8's callback info, valid for the call; the
++    // receiver V8 checked against the signature; the isolate's state is a
++    // `T` (`raw_getter_template` checked).
++    unsafe {
++        let info = &*info;
++        let args = v8::FunctionCallbackArguments::from_function_callback_info(info);
++        let mut rv = v8::ReturnValue::from_function_callback_info(info);
++        let this = Receiver(args.this());
++        // The isolate's slot of the callback's frame (the fork's
++        // `frame::ISOLATE`): `v8::Isolate` is that pointer, transparent.
++        // rusty_v8's `FunctionCallbackArguments::get_isolate` casts the
++        // pointer to a `*mut Isolate` instead, and crashes.
++        let raw = *(std::ptr::from_ref(info).cast::<usize>()).offset(5);
++        let mut isolate =
++            std::mem::ManuallyDrop::new(std::mem::transmute::<usize, v8::Isolate>(raw));
++        let state = unchecked::<T>(&isolate).as_ref();
++        C::get(state, &mut isolate, this, &mut rv);
++    }
++}
++
++/// A getter's function template whose callback is `C`'s raw one.
++pub fn raw_getter_template<'s, T: Any, C: RawGetter<T>>(
++    scope: &mut v8::PinScope<'s, '_>,
++    signature: v8::Local<'s, v8::Signature>,
++) -> v8::Local<'s, v8::FunctionTemplate> {
++    assert!(checked::<T>(scope).is_some());
++    v8::FunctionTemplate::builder_raw(raw_getter_trampoline::<T, C>)
++        .signature(signature)
++        .length(0)
++        .constructor_behavior(v8::ConstructorBehavior::Throw)
++        .build(scope)
++}
+diff --git a/crates/bindings/src/lib.rs b/crates/bindings/src/lib.rs
+index ce28c17..3ea476c 100644
+--- a/crates/bindings/src/lib.rs
++++ b/crates/bindings/src/lib.rs
+@@ -51,12 +51,12 @@ mod v8_text;
+ 
+ pub use gc_platform::gc_platform;
+ pub use isolate_state::{
+-    NamedOptions, NoGc, PropertyKey, Receiver, StateAccessCheck, StateCallback, StateIndexedGetter,
+-    StateIndexedSetter, StateMethod, StateNamedProperties, StateScope, drop_isolate_state,
+-    isolate_state_mut, set_isolate_state, set_state_access_check,
+-    set_state_call_as_function_handler, set_state_indexed_getter, set_state_indexed_properties,
+-    set_state_named_properties, set_state_refused_access, state_cached_getter_template,
+-    state_function_template, state_method_template,
++    NamedOptions, NoGc, PropertyKey, RawGetter, Receiver, StateAccessCheck, StateCallback,
++    StateIndexedGetter, StateIndexedSetter, StateMethod, StateNamedProperties, StateScope,
++    drop_isolate_state, isolate_state_mut, raw_getter_template, set_isolate_state,
++    set_state_access_check, set_state_call_as_function_handler, set_state_indexed_getter,
++    set_state_indexed_properties, set_state_named_properties, set_state_refused_access,
++    state_cached_getter_template, state_function_template, state_method_template,
+ };
+ pub use module_record::{
+     Compiled, Evaluation, ModuleRecords, Request, ResolveSpecifier, begin_dynamic_import,
+diff --git a/crates/dom_js/src/templates.rs b/crates/dom_js/src/templates.rs
+index c2350f8..f22e2bd 100644
+--- a/crates/dom_js/src/templates.rs
++++ b/crates/dom_js/src/templates.rs
+@@ -590,6 +590,26 @@ impl Members<'_, '_, '_> {
+             }
+             return;
+         }
++        // PROTOTYPE (measured, not to be merged): `Node`'s `nodeTypeRaw`, a
++        // getter with no scope and no front end.
++        if M::KIND == MemberKind::Getter && INTERFACES[M::INTERFACE].name == "Node" {
++            let raw = match M::NAME {
++                "nodeType" => Some((
++                    "nodeTypeRaw",
++                    bindings::raw_getter_template::<State, RawNodeType>(self.scope, self.signature),
++                )),
++                _ => None,
++            };
++            if let Some((name, getter)) = raw {
++                let name = string(self.scope, name);
++                self.prototype.set_accessor_property(
++                    name.into(),
++                    Some(getter),
++                    None,
++                    v8::PropertyAttribute::NONE,
++                );
++            }
++        }
+         let length = match M::KIND {
+             MemberKind::Setter => 1,
+             MemberKind::Method => desc.required(),
+@@ -1660,3 +1680,22 @@ pub(crate) fn string<'s>(
+     v8::String::new_from_utf8(scope, text.as_bytes(), v8::NewStringType::Internalized)
+         .expect("a short name")
+ }
++
++// PROTOTYPE (measured, not to be merged).
++struct RawNodeType;
++
++impl bindings::RawGetter<State> for RawNodeType {
++    #[inline]
++    fn get<'s>(
++        state: &State,
++        isolate: &mut v8::Isolate,
++        this: bindings::Receiver<'s>,
++        rv: &mut v8::ReturnValue<'s, v8::Value>,
++    ) {
++        state.dom.read(|cx| {
++            if let Some(node) = bindings::unwrap_receiver::<dom::Node>(isolate, cx.gc, this) {
++                rv.set_int32(i32::from(cx.node_type(node)));
++            }
++        });
++    }
++}
+diff --git a/scripts/bench/calls/calls.py b/scripts/bench/calls/calls.py
+index 9bc948b..9899341 100644
+--- a/scripts/bench/calls/calls.py
++++ b/scripts/bench/calls/calls.py
+@@ -59,6 +59,8 @@ CASES = {
+     "empty": "x = n;",
+     "firstChild": "x = n.firstChild;",
+     "nodeType": "x = n.nodeType;",
++    # PROTOTYPE (measured, not to be merged).
++    "nodeTypeRaw": "x = n.nodeTypeRaw;",
+     "getAttribute": "x = n.getAttribute('id');",
+     "setAttribute": "n.setAttribute('a', 'b');",
+     "appendChild": "n.appendChild(c);",

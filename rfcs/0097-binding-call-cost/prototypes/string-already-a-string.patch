@@ -1,0 +1,66 @@
+diff --git a/crates/bindings/src/lib.rs b/crates/bindings/src/lib.rs
+index 3ea476c..df5da9b 100644
+--- a/crates/bindings/src/lib.rs
++++ b/crates/bindings/src/lib.rs
+@@ -83,4 +83,4 @@ pub use unified_heap::{
+     set_strong_value, set_wrapper, strong, strong_value, unwrap, unwrap_object, unwrap_receiver,
+     wrap, wrapper,
+ };
+-pub use v8_text::{LentString, ascii_scans_for_testing, borrowed_texts};
++pub use v8_text::{LentString, ascii_scans_for_testing, borrowed_texts, string_if_string};
+diff --git a/crates/bindings/src/v8_text.rs b/crates/bindings/src/v8_text.rs
+index a5540fd..28226b1 100644
+--- a/crates/bindings/src/v8_text.rs
++++ b/crates/bindings/src/v8_text.rs
+@@ -172,3 +172,24 @@ pub fn borrowed_texts() -> usize {
+ pub fn ascii_scans_for_testing() -> Option<u64> {
+     cfg!(debug_assertions).then(|| ASCII_SCANS.get())
+ }
++
++/// PROTOTYPE (measured, not to be merged): `value` as a string if it is
++/// one already, read from its map as V8's header does (`IsString`), with
++/// no call into V8 and no context found; `None` for anything else, which
++/// WebIDL's `ToString` converts.
++#[inline(always)]
++pub fn string_if_string<'s>(value: v8::Local<'s, v8::Value>) -> Option<v8::Local<'s, v8::String>> {
++    // SAFETY (prototype): a handle's location holds its value's tagged
++    // address; a heap object's (low bit set) map is in its cage, whose
++    // instance type says whether it is a string (below 0x80).
++    unsafe {
++        let object = *std::ptr::from_ref::<v8::Value>(&value).cast::<usize>();
++        if object & 1 == 0 {
++            return None;
++        }
++        let cage = object & !((1usize << 32) - 1);
++        let map = cage + ((object - 1) as *const u32).read() as usize;
++        let instance_type = ((map - 1 + 8) as *const u16).read();
++        (instance_type < 0x80).then(|| v8::Local::cast_unchecked(value))
++    }
++}
+diff --git a/crates/dom_js/src/strings.rs b/crates/dom_js/src/strings.rs
+index 1b73fec..1b74d6a 100644
+--- a/crates/dom_js/src/strings.rs
++++ b/crates/dom_js/src/strings.rs
+@@ -188,7 +188,14 @@ pub fn arg_string<'s>(
+     scope: &mut v8::PinScope<'s, '_>,
+     value: v8::Local<'s, v8::Value>,
+ ) -> Option<ArgString<'s>> {
+-    let string = bindings::LentString::new(value.to_string(scope)?);
++    // PROTOTYPE (measured, not to be merged): a string already isn't
++    // converted (no call into V8, no context), unless
++    // `MACHOPO_PROTOTYPE_NO_STRING_CHECK` is set (the path as it was).
++    let string = match bindings::string_if_string(value) {
++        Some(string) if !*NO_STRING_CHECK => string,
++        _ => value.to_string(scope)?,
++    };
++    let string = bindings::LentString::new(string);
+     let copied = (!string.lends(scope)).then(|| string.string().to_rust_string_lossy(scope));
+     Some(ArgString { string, copied })
+ }
+@@ -261,3 +268,6 @@ mod tests {
+         assert_eq!(cache.len(), 2);
+     }
+ }
++
++static NO_STRING_CHECK: std::sync::LazyLock<bool> =
++    std::sync::LazyLock::new(|| std::env::var_os("MACHOPO_PROTOTYPE_NO_STRING_CHECK").is_some());

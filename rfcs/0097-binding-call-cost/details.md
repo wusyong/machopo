@@ -121,7 +121,7 @@ V8 呼叫 API callback 的地板加 trampoline 約 50 條指令、11 cycle（RFC
 
 - **出去（DOM 的字串給 V8，不複製）做得到，不用改 fork**：`String::new_external_onebyte_raw`（字元的指標、長度、一個 destructor）建 external 的一位元組字串；`DomString` 的文字是 `Rc<str>`，指標和長度就是 `Rc::into_raw` 給的，destructor 用 `Rc::from_raw` 放掉那一份計數。只有 Latin-1（ASCII）的字串可以；兩位元組的要另外轉。
 - **進來時認出自己的 external 字串做得到**：`get_external_onebyte_string_resource` 拿到 resource，它的 `data()` 就是 `DomString` 的文字的位址，也就是 `StringCache` 的 key：查到那一筆就有 `DomString`，不讀字元、不雜湊內容。要分辨是不是 machopo 建的 resource（位址在不在快取裡就夠）。
-- **把 JS 給的字串當場改成 external（`MakeExternal`）fork 沒有接**，要加 C++（重編 V8）。而且在 machopo 的 V8 的設定下短字串改不了：`String::SupportsExternalization` 在「有指標壓縮、沒有 sandbox」時，字串的大小小於 `UncachedExternalString`（header 12 bytes 加一個 8 bytes 的指標，20 bytes）就回 false，一位元組的字串要 8 個字元以上；read-only space 和 young generation 的字串也不行。Chrome 開著 sandbox（external 的指標是 4 bytes 的 handle），沒有這個限制：`'id'`、`'div'` 這種短的名稱 Blink 第一次用就改成 external，之後不再雜湊；machopo 要等 V8 的 sandbox 打開才做得到。
+- **把 JS 給的字串當場改成 external（`MakeExternal`）fork 沒有接**，要加 C++（重編 V8）。而且在 machopo 的 V8 的設定下短字串改不了：`String::SupportsExternalization` 在「有指標壓縮、沒有 sandbox」時，字串的大小小於 `UncachedExternalString`（header 12 bytes 加一個 8 bytes 的指標，20 bytes）就回 false，一位元組的字串要 8 個字元以上；read-only space 和 young generation 的字串也不行。Chrome 開著 sandbox（external 的指標是 4 bytes 的 handle），沒有這個限制：短的名稱 Blink 第一次用就改成 external，之後不再雜湊；machopo 要等 V8 的 sandbox 打開才做得到。例外是 V8 自己內建的名稱（推測在 read-only space，例如 `'id'`、`'title'`）：Chrome 也改不了，每次都查表（2026-11-11 在 Chromium 156 上量的，數字在 `progress.md`）。fork 沒有接 `MakeExternal`，但它在 V8 的函式庫裡，量測時可以直接連，不用重編。
 - 所以 benchmark 裡那些短的名稱（`'id'`、`'a'`、`'foo'`、`'div'`）在 machopo 上每次還是要拿字元去查表；能做的是讓查表本身便宜（V8 的 internalized 字串存著算好的 hash，可以不再算一次），和上面「出去不複製」。
 
 ## 參考資料

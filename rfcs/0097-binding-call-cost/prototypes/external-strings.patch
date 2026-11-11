@@ -1,0 +1,447 @@
+diff --git a/crates/bindings/src/lib.rs b/crates/bindings/src/lib.rs
+index df5da9b..e90aa7b 100644
+--- a/crates/bindings/src/lib.rs
++++ b/crates/bindings/src/lib.rs
+@@ -83,4 +83,7 @@ pub use unified_heap::{
+     set_strong_value, set_wrapper, strong, strong_value, unwrap, unwrap_object, unwrap_receiver,
+     wrap, wrapper,
+ };
+-pub use v8_text::{LentString, ascii_scans_for_testing, borrowed_texts, string_if_string};
++pub use v8_text::{
++    LentString, ascii_scans_for_testing, borrowed_texts, can_make_external, external_ascii,
++    make_external, new_external_ascii, string_if_string,
++};
+diff --git a/crates/bindings/src/v8_text.rs b/crates/bindings/src/v8_text.rs
+index 28226b1..1773d13 100644
+--- a/crates/bindings/src/v8_text.rs
++++ b/crates/bindings/src/v8_text.rs
+@@ -193,3 +193,96 @@ pub fn string_if_string<'s>(value: v8::Local<'s, v8::Value>) -> Option<v8::Local
+         (instance_type < 0x80).then(|| v8::Local::cast_unchecked(value))
+     }
+ }
++
++// PROTOTYPE (measured, not to be merged): external strings, in and out.
++// V8's `String::CanMakeExternal` and `String::MakeExternal` are in its
++// library already; the fork has no binding of them, so the prototype
++// links their C++ names.
++unsafe extern "C" {
++    #[link_name = "_ZNK2v86String15CanMakeExternalENS0_8EncodingE"]
++    fn v8_string_can_make_external(this: *const v8::String, encoding: i32) -> bool;
++    #[link_name = "_ZN2v86String12MakeExternalEPNS0_29ExternalOneByteStringResourceE"]
++    fn v8_string_make_external(this: *const v8::String, resource: *mut c_void) -> bool;
++}
++
++/// `v8::String::ONE_BYTE_ENCODING`.
++const ONE_BYTE_ENCODING: i32 = 0x8;
++
++/// An external one-byte string's resource: where the string's object
++/// keeps it (after its map, hash and length; raw, as V8 has no sandbox),
++/// read as V8's header does.
++#[inline(always)]
++unsafe fn external_resource(string: v8::Local<'_, v8::String>) -> Option<*mut usize> {
++    // SAFETY (prototype): as `string_if_string`.
++    unsafe {
++        let object = *std::ptr::from_ref::<v8::String>(&string).cast::<usize>();
++        let cage = object & !((1usize << 32) - 1);
++        let map = cage + ((object - 1) as *const u32).read() as usize;
++        let instance_type = ((map - 1 + 8) as *const u16).read();
++        // An external (2) one-byte (8) string.
++        (instance_type & 0x0f == 0x0a)
++            .then(|| ((object - 1 + 12) as *const *mut usize).read_unaligned())
++    }
++}
++
++/// An external one-byte string's text, in place: the prototype's own are
++/// the isolate's only ones (rusty_v8's resource: its vtable, V8's cached
++/// data, then the text's address and length), all ASCII.
++#[inline(always)]
++pub fn external_ascii<'s>(string: v8::Local<'s, v8::String>) -> Option<&'s str> {
++    // SAFETY (prototype): the handle keeps the string, the string its
++    // resource and text.
++    unsafe {
++        let resource = external_resource(string)?;
++        let data = resource.add(2).read() as *const u8;
++        let len = resource.add(3).read();
++        Some(std::str::from_utf8_unchecked(std::slice::from_raw_parts(data, len)))
++    }
++}
++
++/// Whether V8 would make `string` external in place.
++pub fn can_make_external(string: v8::Local<'_, v8::String>) -> bool {
++    // SAFETY (prototype): a handle is the `v8::String*` V8's API takes.
++    unsafe { v8_string_can_make_external(&*string, ONE_BYTE_ENCODING) }
++}
++
++unsafe extern "C" fn keep(_: *mut std::ffi::c_char, _: usize) {}
++
++/// Makes `string` external in place, its characters `text`'s from now
++/// (equal ones, never freed). The resource is one of a string made
++/// external of `text` and kept for ever; the two share it, so the isolate
++/// mustn't be disposed of (the process exits first).
++pub fn make_external(
++    scope: &mut v8::PinScope<'_, '_>,
++    string: v8::Local<'_, v8::String>,
++    text: &'static str,
++) -> bool {
++    // SAFETY (prototype): `text` lives for ever.
++    unsafe {
++        let Some(own) = v8::String::new_external_onebyte_raw(
++            scope,
++            text.as_ptr().cast_mut().cast(),
++            text.len(),
++            keep,
++        ) else {
++            return false;
++        };
++        std::mem::forget(v8::Global::new(scope, own));
++        let resource = external_resource(own).expect("an external string");
++        assert_eq!(resource.add(2).read(), text.as_ptr().addr());
++        assert_eq!(resource.add(3).read(), text.len());
++        v8_string_make_external(&*string, resource.cast())
++    }
++}
++
++/// A new external one-byte string of the `len` ASCII bytes at `text`,
++/// which `destructor` is given when V8 frees the string.
++pub fn new_external_ascii<'s>(
++    scope: &v8::PinScope<'s, '_, ()>,
++    text: *const u8,
++    len: usize,
++    destructor: unsafe extern "C" fn(*mut std::ffi::c_char, usize),
++) -> Option<v8::Local<'s, v8::String>> {
++    // SAFETY (prototype): the caller's text lives until `destructor`.
++    unsafe { v8::String::new_external_onebyte_raw(scope, text.cast_mut().cast(), len, destructor) }
++}
+diff --git a/crates/dom/src/lib.rs b/crates/dom/src/lib.rs
+index 05df711..077f1e0 100644
+--- a/crates/dom/src/lib.rs
++++ b/crates/dom/src/lib.rs
+@@ -15,7 +15,8 @@
+ //!
+ //! No `unsafe`: the DOM is built on elise's safe API alone.
+ 
+-#![forbid(unsafe_code)]
++// PROTOTYPE (measured, not to be merged): `prototype_external` alone.
++#![deny(unsafe_code)]
+ #![cfg_attr(
+     test,
+     allow(
+@@ -38,6 +39,7 @@ use elise::{
+     LocalExternal, Member, Mutation, Persistent, Platform, Site, WrapperMarker,
+ };
+ 
++pub mod prototype_external;
+ mod abort;
+ mod animation_objects;
+ mod animations;
+diff --git a/crates/dom/src/names.rs b/crates/dom/src/names.rs
+index 38ba998..df23805 100644
+--- a/crates/dom/src/names.rs
++++ b/crates/dom/src/names.rs
+@@ -262,6 +262,19 @@ pub fn intern(name: &str) -> NameId {
+ 
+ /// `name`'s number, if it has one.
+ pub fn find(name: &str) -> Option<NameId> {
++    // PROTOTYPE (measured, not to be merged): an external string's text
++    // remembers its name's number.
++    if let Some(header) = crate::prototype_external::header(name) {
++        let known = header.name.get();
++        if known != 0 {
++            return Some(known - 1);
++        }
++        let found = find_fixed(name).or_else(|| TABLE.with_borrow(|table| table.find(name)));
++        if let Some(number) = found {
++            header.name.set(number + 1);
++        }
++        return found;
++    }
+     find_fixed(name).or_else(|| TABLE.with_borrow(|table| table.find(name)))
+ }
+ 
+diff --git a/crates/dom/src/prototype_external.rs b/crates/dom/src/prototype_external.rs
+new file mode 100644
+index 0000000..b752b57
+--- /dev/null
++++ b/crates/dom/src/prototype_external.rs
+@@ -0,0 +1,105 @@
++//! PROTOTYPE (measured, not to be merged): what an external string of V8
++//! could carry of the DOM's (Blink's `StringResourceBase`, which keeps
++//! the `AtomicString` of a string V8 made external).
++//!
++//! In: the texts V8's strings were made external with live in one arena,
++//! never freed, each after a header that remembers its name's number and
++//! its interned value, so that `names::find` and `intern_value` of such a
++//! text read the header (an address in the arena's range) and hash
++//! nothing. Out: a `DomString`'s text lent to V8 by its address, a count
++//! held until V8 frees it.
++#![allow(unsafe_code, reason = "a prototype")]
++
++use std::cell::{Cell, OnceCell};
++use std::ffi::c_char;
++use std::rc::Rc;
++use std::sync::atomic::{AtomicUsize, Ordering};
++
++use crate::DomString;
++
++/// What an external text remembers.
++pub(crate) struct Header {
++    /// Its name's number and one, or 0 before it is looked up.
++    pub(crate) name: Cell<u32>,
++    pub(crate) value: OnceCell<DomString>,
++}
++
++const ARENA_BYTES: usize = 1 << 20;
++const HEADER: usize = std::mem::size_of::<Header>();
++
++static BASE: AtomicUsize = AtomicUsize::new(0);
++static USED: AtomicUsize = AtomicUsize::new(0);
++
++/// A copy of `text` in the arena, after a new header; none once it is full.
++pub fn alloc(text: &str) -> Option<&'static str> {
++    let mut base = BASE.load(Ordering::Relaxed);
++    if base == 0 {
++        base = Vec::leak(vec![0u64; ARENA_BYTES / 8]).as_mut_ptr().addr();
++        BASE.store(base, Ordering::Relaxed);
++    }
++    let at = USED.load(Ordering::Relaxed).next_multiple_of(8);
++    let end = at.checked_add(HEADER)?.checked_add(text.len())?;
++    if end > ARENA_BYTES {
++        return None;
++    }
++    USED.store(end, Ordering::Relaxed);
++    // SAFETY (prototype): in the arena, aligned, written once here.
++    unsafe {
++        let header = (base + at) as *mut Header;
++        header.write(Header {
++            name: Cell::new(0),
++            value: OnceCell::new(),
++        });
++        let chars = (base + at + HEADER) as *mut u8;
++        std::ptr::copy_nonoverlapping(text.as_ptr(), chars, text.len());
++        Some(std::str::from_utf8_unchecked(std::slice::from_raw_parts(
++            chars,
++            text.len(),
++        )))
++    }
++}
++
++/// `text`'s header, if it is the arena's.
++#[inline(always)]
++pub(crate) fn header(text: &str) -> Option<&'static Header> {
++    let at = text.as_ptr().addr().wrapping_sub(BASE.load(Ordering::Relaxed));
++    // SAFETY (prototype): every text in the arena follows its header
++    // (texts are only read whole, as `alloc` gave them).
++    (at < ARENA_BYTES).then(|| unsafe { &*((text.as_ptr().addr() - HEADER) as *const Header) })
++}
++
++/// The texts V8 freed, by address and length, until the DOM's thread
++/// drops their counts: V8 frees an external string's buffer on its GC's
++/// workers, and a string's count isn't atomic.
++static FREED: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
++static FREED_COUNT: AtomicUsize = AtomicUsize::new(0);
++
++/// `string`'s text's address and length, a count of it held until V8
++/// frees the string made of them (`drop_lent`). Drops the counts of those
++/// freed since.
++pub fn lend(string: &DomString) -> (*const u8, usize) {
++    if FREED_COUNT.load(Ordering::Relaxed) != 0 {
++        let freed = {
++            let mut freed = FREED.lock().unwrap();
++            FREED_COUNT.store(0, Ordering::Relaxed);
++            std::mem::take(&mut *freed)
++        };
++        for (text, len) in freed {
++            // SAFETY (prototype): `lend`'s address and length, once.
++            unsafe {
++                let text = std::ptr::slice_from_raw_parts(text as *const u8, len) as *const str;
++                drop(Rc::from_raw(text));
++            }
++        }
++    }
++    let text = Rc::into_raw(string.text_rc());
++    (text.cast::<u8>(), string.len())
++}
++
++/// V8's external string's destructor, on any thread: the text is the
++/// DOM's thread's to drop (`lend`).
++pub unsafe extern "C" fn drop_lent(text: *mut c_char, len: usize) {
++    let mut freed = FREED.lock().unwrap();
++    freed.push((text.addr(), len));
++    FREED_COUNT.store(freed.len(), Ordering::Relaxed);
++}
+diff --git a/crates/dom/src/string.rs b/crates/dom/src/string.rs
+index 57d357e..851f13b 100644
+--- a/crates/dom/src/string.rs
++++ b/crates/dom/src/string.rs
+@@ -143,6 +143,11 @@ impl DomString {
+     /// Its address, the same for every clone of it and no other string's
+     /// while one lives: what an engine keeps the strings it made of it by
+     /// (Blink's `StringCache`, by `StringImpl*`).
++    /// PROTOTYPE (measured, not to be merged): a clone of its text.
++    pub(crate) fn text_rc(&self) -> Rc<str> {
++        Rc::clone(&self.text)
++    }
++
+     pub fn addr(&self) -> usize {
+         Rc::as_ptr(&self.text).cast::<u8>().addr()
+     }
+@@ -253,6 +258,15 @@ pub fn find_value(text: &str) -> Option<DomString> {
+ /// The string of the value `text`: the thread's table's if it has one, else
+ /// a new one it keeps.
+ pub fn intern_value(text: &str) -> DomString {
++    // PROTOTYPE (measured, not to be merged): an external string's text
++    // remembers its value.
++    if let Some(header) = crate::prototype_external::header(text) {
++        return header.value.get_or_init(|| intern_value_slow(text)).clone();
++    }
++    intern_value_slow(text)
++}
++
++fn intern_value_slow(text: &str) -> DomString {
+     VALUES.with_borrow_mut(|values| {
+         if let Some(string) = values.strings.get(text) {
+             return string.clone();
+diff --git a/crates/dom_js/src/strings.rs b/crates/dom_js/src/strings.rs
+index 1b74d6a..69a1458 100644
+--- a/crates/dom_js/src/strings.rs
++++ b/crates/dom_js/src/strings.rs
+@@ -36,9 +36,20 @@ pub fn new_string<'s>(
+     scope: &v8::PinScope<'s, '_, ()>,
+     string: &DomString,
+ ) -> Option<v8::Local<'s, v8::String>> {
++    // PROTOTYPE (measured, not to be merged): an ASCII string's text lent
++    // to V8, an external string, not copied.
++    if *EXTERNAL_OUT && string.is_ascii() && !string.is_empty() {
++        let (text, len) = dom::prototype_external::lend(string);
++        return bindings::new_external_ascii(scope, text, len, dom::prototype_external::drop_lent);
++    }
+     v8::String::new_from_utf8(scope, string.to_str().as_bytes(), v8::NewStringType::Normal)
+ }
+ 
++static EXTERNAL_OUT: std::sync::LazyLock<bool> =
++    std::sync::LazyLock::new(|| std::env::var_os("MACHOPO_PROTOTYPE_EXTERNAL_OUT").is_some());
++static EXTERNALIZE: std::sync::LazyLock<bool> =
++    std::sync::LazyLock::new(|| std::env::var_os("MACHOPO_PROTOTYPE_EXTERNALIZE").is_some());
++
+ /// The V8 strings made of the DOM's strings, by their addresses (Blink's
+ /// `StringCache`, one an isolate). In the isolate's state, it is read in an
+ /// operation (`find`, its handle opened through `bindings::NoGc`), and an
+@@ -180,6 +191,8 @@ pub fn string_arg(
+ pub struct ArgString<'s> {
+     string: bindings::LentString<'s>,
+     copied: Option<String>,
++    /// PROTOTYPE: an external string's text.
++    external: Option<&'s str>,
+ }
+ 
+ /// Argument `value` as a member's `DOMString`: WebIDL's `ToString` (which
+@@ -195,9 +208,38 @@ pub fn arg_string<'s>(
+         Some(string) if !*NO_STRING_CHECK => string,
+         _ => value.to_string(scope)?,
+     };
+-    let string = bindings::LentString::new(string);
++    // PROTOTYPE (measured, not to be merged): an external string's text is
++    // read from its resource; another is made external the first time
++    // (`MACHOPO_PROTOTYPE_EXTERNALIZE`), if V8 lets it be.
++    if let Some(external) = bindings::external_ascii(string) {
++        return Some(ArgString {
++            string: bindings::LentString::new(string),
++            copied: None,
++            external: Some(external),
++        });
++    }
++    let lent = bindings::LentString::new(string);
++    if *EXTERNALIZE && bindings::can_make_external(string) {
++        let text = lent
++            .peek_ascii(scope, dom::prototype_external::alloc)
++            .flatten();
++        if let Some(text) = text
++            && bindings::make_external(scope, string, text)
++        {
++            return Some(ArgString {
++                string: lent,
++                copied: None,
++                external: Some(text),
++            });
++        }
++    }
++    let string = lent;
+     let copied = (!string.lends(scope)).then(|| string.string().to_rust_string_lossy(scope));
+-    Some(ArgString { string, copied })
++    Some(ArgString {
++        string,
++        copied,
++        external: None,
++    })
+ }
+ 
+ impl<'s> ArgString<'s> {
+@@ -205,11 +247,17 @@ impl<'s> ArgString<'s> {
+     /// lent for the call alone (`bindings::LentString::peek_ascii`): before
+     /// what may collect.
+     pub fn peek_ascii<R>(&self, isolate: &v8::Isolate, f: impl FnOnce(&str) -> R) -> Option<R> {
++        if let Some(external) = self.external {
++            return Some(f(external));
++        }
+         self.string.peek_ascii(isolate, f)
+     }
+ 
+     /// Its text, in the operation.
+     pub fn text(&self, no_gc: &mut bindings::NoGc<'_, '_, '_>) -> &str {
++        if let Some(external) = self.external {
++            return external;
++        }
+         match &self.copied {
+             Some(copied) => copied,
+             // A flat string stays flat, and stays V8's that lends it.
+diff --git a/crates/dom_js/tests/it/bench.rs b/crates/dom_js/tests/it/bench.rs
+index 48e5ab2..b6cd819 100644
+--- a/crates/dom_js/tests/it/bench.rs
++++ b/crates/dom_js/tests/it/bench.rs
+@@ -11,4 +11,12 @@ fn bench_calls() {
+     let source = std::env::var("MACHOPO_BENCH_SCRIPT").expect("MACHOPO_BENCH_SCRIPT");
+     let mut env = Env::new();
+     assert_eq!(env.eval(&source), "0");
++    // PROTOTYPE (measured, not to be merged): strings made external share
++    // their resources, which disposing of the isolate would free twice.
++    if std::env::var_os("MACHOPO_PROTOTYPE_EXTERNALIZE").is_some() {
++        // What `bench.py calls` looks for in the harness's output.
++        // Not `println!`, which the harness captures.
++        std::io::Write::write_all(&mut std::io::stdout(), b"1 passed\n").unwrap();
++        std::process::exit(0);
++    }
+ }
+diff --git a/scripts/bench/calls/calls.py b/scripts/bench/calls/calls.py
+index 9899341..835f469 100644
+--- a/scripts/bench/calls/calls.py
++++ b/scripts/bench/calls/calls.py
+@@ -63,6 +63,18 @@ CASES = {
+     "nodeTypeRaw": "x = n.nodeTypeRaw;",
+     "getAttribute": "x = n.getAttribute('id');",
+     "setAttribute": "n.setAttribute('a', 'b');",
++    # PROTOTYPE (measured, not to be merged): names and values long enough
++    # for V8 to make external; a text's data read new each time; a value
++    # read handed back.
++    "getAttributeLong": "x = n.getAttribute('data-long-name');",
++    "setAttributeLong": "n.setAttribute('data-long-name', 'a-long-value-here');",
++    "createElementLong": "x = document.createElement('blockquote');",
++    "dataNew10": "tx.data = s10; x = tx.data;",
++    "dataNew100": "tx.data = s100; x = tx.data;",
++    "dataNew1000": "tx.data = s1000; x = tx.data;",
++    "dataNewCompare1000": "tx.data = s1000; x = tx.data; if (x !== s1000b) throw 1;",
++    "dataSet1000": "tx.data = s1000;",
++    "roundTrip": "n.setAttribute('a', v);",
+     "appendChild": "n.appendChild(c);",
+     "createElement": "x = document.createElement('div');",
+     # The listener it has already: its lookup, the callbacks compared.
+@@ -79,7 +91,9 @@ CASES = {
+ JS_SETUP = (
+     "const document = machopoDom.createDocument(); const n = document.createElement('body'); "
+     "document.appendChild(n); n.appendChild(document.createElement('p')); "
+-    f"n.setAttribute('id', 'x'); const c = n.firstChild; let x; const Event = machopoDom.Event; {EVENTS_SETUP}"
++    f"n.setAttribute('id', 'x'); const c = n.firstChild; let x; n.setAttribute('data-long-name', 'a-long-value-here'); const tx = document.createTextNode('t'); "
++    "const s10 = 'abcdefghij'; const s100 = s10.repeat(10); const s1000 = s100.repeat(10); "
++    f"const s1000b = s100.repeat(10); const v = n.getAttribute('data-long-name'); const Event = machopoDom.Event; {EVENTS_SETUP}"
+ )
+ 
+ ENGINES = {
