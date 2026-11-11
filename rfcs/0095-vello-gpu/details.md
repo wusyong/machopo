@@ -6,6 +6,8 @@
 
 ## 現在的 tile 怎麼畫、怎麼到 Viz
 
+這一節是開始時的樣子。之後改了的：一輪的 tile 只 submit 一次、tile 只建一個 bind group、texture 會重用，上傳有了自己的 span（`README.md` 的「上傳」和「量測」）。
+
 - **誰決定**：`LayerTreeHostImpl::prepare_tiles`（cc 的 `TileManager::PrepareTiles`）。只有 interest rect（可見範圍每邊加上 viewport 的長邊）裡的 tile 存在；沒有 `draw_info` 的就畫。commit 時 display list 是同一個 `Arc` 就全部留著，否則只留 invalidation 沒碰到的。
 - **同步**：commit 之後、畫 frame 之前把缺的 tile 全部畫完，沒有 checkerboard、沒有優先順序、沒有每個 frame 的上限。
 - **哪條 thread**：預設在 compositor thread 上一個一個畫；`--num-raster-threads` 大於 1、而且不只一個 tile 時用 rayon 的 pool（`CompositorTileWorker`）。瀏覽器介面的 compositor 是 UI thread 上的單一 thread 版本，走同一個介面。
