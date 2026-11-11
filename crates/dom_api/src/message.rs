@@ -56,7 +56,7 @@ impl ArgType for WindowMessage {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = false;
     type Taken<T: FrontTypes> = MessageTaken<T::Node, T::Str>;
-    type Param<'a, 'gc> = MessageParam<'a, 'gc>;
+    type Param<'a, 'gc, T: FrontTypes> = MessageParam<'a, 'gc>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Self::Taken<F>> {
         // WebIDL's overloads: a string second, or the options.
@@ -96,7 +96,7 @@ impl ArgType for PortMessage {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = false;
     type Taken<T: FrontTypes> = MessageTaken<T::Node, T::Str>;
-    type Param<'a, 'gc> = MessageParam<'a, 'gc>;
+    type Param<'a, 'gc, T: FrontTypes> = MessageParam<'a, 'gc>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Self::Taken<F>> {
         let (payload, ports) = front.message_arg(

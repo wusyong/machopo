@@ -17,7 +17,7 @@ use dom::{
 use elise::{Gc, Persistent};
 
 use crate::interfaces::MediaQueryListEventInit;
-use crate::typed::{CallbackArg, DomStr, ScriptHost};
+use crate::typed::{Callback, DomStr, ScriptHost};
 use crate::{ApiCx, ApiError, OpFront};
 
 /// What media queries see for `document`: its frame's viewport and device
@@ -86,7 +86,7 @@ pub(crate) fn add_listener<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, EventTargetImpl>,
-    callback: Option<CallbackArg>,
+    callback: Option<Callback<O::Callback>>,
 ) -> Result<(), ApiError> {
     let Some(callback) = callback else {
         return Ok(());
@@ -116,7 +116,7 @@ pub(crate) fn remove_listener<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, EventTargetImpl>,
-    callback: Option<CallbackArg>,
+    callback: Option<Callback<O::Callback>>,
 ) -> Result<(), ApiError> {
     let Some(callback) = callback else {
         return Ok(());

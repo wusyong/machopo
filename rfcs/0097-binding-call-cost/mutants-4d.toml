@@ -1,0 +1,108 @@
+# Stage 4d: a callback is the front end's handle, taken before the
+# operation and handed to the DOM's function and back (`FrontTypes`'
+# `Callback`, `ArgType::Param`'s front end); `dom_js`'s `InfoFront` gives
+# the argument itself; a dictionary of plain members is read by the whole
+# front end; a member whose function is given the front end is plain by
+# its types.
+test = ["cargo", "test", "-q", "-p", "dom_api", "-p", "dom_js", "-p", "dom_wasm"]
+timeout = 1800
+
+[[mutant]]
+name = "anything is a callback"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if value.is_object() {
+            return Some(Some(Callback(value)));
+        }'''
+to = '''        if !value.is_undefined() {
+            return Some(Some(Callback(value)));
+        }'''
+
+[[mutant]]
+name = "any object is a function"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if value.is_function() {
+            return Some(Callback(value));
+        }
+        self.with_front(|front| front.function_arg(index, name).map(|_| ()))?;'''
+to = '''        if value.is_object() {
+            return Some(Callback(value));
+        }
+        self.with_front(|front| front.function_arg(index, name).map(|_| ()))?;'''
+
+[[mutant]]
+name = "what isn't an object is an event handler"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        value.is_object().then_some(Callback(value))'''
+to = '''        Some(Callback(value))'''
+
+[[mutant]]
+name = "every listener is the callback's"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.no_gc.refers_to(edge, callback.0)'''
+to = '''        let _ = (edge, callback);
+        true'''
+
+[[mutant]]
+name = "no listener is the callback's"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.no_gc.refers_to(edge, callback.0)'''
+to = '''        let _ = (edge, callback);
+        false'''
+
+[[mutant]]
+name = "a callback not stored"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            Ok(object) => self.no_gc.set_strong(edge, object),'''
+to = '''            Ok(_) => {}'''
+
+[[mutant]]
+name = "an object isn't dictionary-like"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        value.is_null_or_undefined() || value.is_object()
+    }
+
+    /// A dictionary argument'''
+to = '''        value.is_null_or_undefined()
+    }
+
+    /// A dictionary argument'''
+
+[[mutant]]
+name = "a dictionary's boolean not read"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.with_front(|front| front.dict_bool(dict, member))'''
+to = '''        let _ = (dict, member);
+        Some(None)'''
+
+[[mutant]]
+name = "a member that hands the front end a value to throw is plain"
+file = "crates/dom_api/src/typed.rs"
+from = '''impl RetType for Rethrown {
+    const DESC: TypeDesc = TypeDesc::Undefined;'''
+to = '''impl RetType for Rethrown {
+    const DESC: TypeDesc = TypeDesc::Undefined;
+    const PLAIN: bool = true;'''
+
+[[mutant]]
+name = "a dictionary is plain whatever its members"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''            const PLAIN: bool = true #(&& <#member_types as #api::typed::DictMember>::PLAIN)*;'''
+to = '''            const PLAIN: bool = true;'''
+
+[[mutant]]
+name = "a boolean member isn't plain"
+file = "crates/dom_api/src/typed.rs"
+from = '''impl DictMember for bool {
+    const PLAIN: bool = true;
+'''
+to = '''impl DictMember for bool {
+'''
+
+[[mutant]]
+name = "an event handler isn't plain"
+file = "crates/dom_api/src/typed.rs"
+from = '''impl ArgType for EventHandler {
+    const DESC: TypeDesc = TypeDesc::Function("EventHandler");
+    const PLAIN: bool = true;'''
+to = '''impl ArgType for EventHandler {
+    const DESC: TypeDesc = TypeDesc::Function("EventHandler");'''

@@ -17,7 +17,7 @@ use elise::{Gc, Persistent};
 
 use crate::exception::ExceptionName;
 use crate::interfaces::ElementDefinitionOptions;
-use crate::typed::{CallbackArg, Created, HtmlConstructed, PromiseOf};
+use crate::typed::{Callback, Created, HtmlConstructed, PromiseOf};
 use crate::{ApiCx, ApiError, DomStr, NullableStr, OpFront, ScriptHost};
 
 /// `window.customElements`: the same object each time.
@@ -41,11 +41,11 @@ fn not_supported(message: &str) -> ApiError {
 /// is read with the registry's "element definition is running" set; the
 /// definition goes in, and the promise `whenDefined(name)` gave resolves
 /// with the constructor.
-pub(crate) fn define<H: ScriptHost>(
+pub(crate) fn define<H: ScriptHost, C>(
     host: &mut H,
     this: Persistent<CustomElementRegistry>,
     name: String,
-    constructor: CallbackArg,
+    constructor: Callback<C>,
     options: ElementDefinitionOptions,
 ) -> Result<(), ApiError> {
     let _span = trace_event::trace_event!("CustomElementRegistry::define");
@@ -483,7 +483,7 @@ pub(crate) fn get_name<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, CustomElementRegistry>,
-    constructor: CallbackArg,
+    constructor: Callback<O::Callback>,
 ) -> Result<NullableStr<'gc>, ApiError> {
     let number = op.callback_number(constructor);
     let found = cx

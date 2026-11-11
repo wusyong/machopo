@@ -25,7 +25,7 @@ use elise::Gc;
 use gfx::{Color, FillRule};
 
 use crate::typed::{
-    CallbackArg, CanvasStyleParam, CanvasStyleRet, OpFront, Path2dOrString, ScriptHost,
+    Callback, CanvasStyleParam, CanvasStyleRet, OpFront, Path2dOrString, ScriptHost,
     Uint8ClampedArg,
 };
 use crate::{ApiCx, ApiError, DomException, DomStr, ExceptionName};
@@ -155,7 +155,7 @@ pub(crate) fn to_blob<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     this: NodeRef<'gc>,
-    callback: CallbackArg,
+    callback: Callback<O::Callback>,
     mime_type: Option<&str>,
     quality: Option<f64>,
 ) -> Result<(), ApiError> {

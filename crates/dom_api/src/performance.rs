@@ -15,7 +15,7 @@ use dom::{
 use elise::{Gc, Persistent};
 
 use crate::interfaces::{PerformanceMarkOptions, PerformanceObserverInit};
-use crate::typed::{CallbackArg, MeasureStartParam, OpFront, ScriptHost, StringOrNumber};
+use crate::typed::{Callback, MeasureStartParam, OpFront, ScriptHost, StringOrNumber};
 use crate::{ApiCx, ApiError, DomException, DomStr, ExceptionName, coarsen};
 
 /// `performance`: the same object each time, kept by the window, with its
@@ -425,7 +425,7 @@ fn warn_unsupported(cx: &ApiCx<'_, '_>, name: &str) {
 pub(crate) fn construct_observer<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
-    callback: CallbackArg,
+    callback: Callback<O::Callback>,
 ) -> Result<Gc<'gc, PerformanceObserver>, ApiError> {
     let window = op.current_window(cx).ok_or_else(|| {
         dom_error(

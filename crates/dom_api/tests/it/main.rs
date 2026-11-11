@@ -32,6 +32,7 @@ mod kinds;
 mod markup;
 mod mutation_observer;
 mod node;
+mod plain;
 mod query;
 mod ranges;
 mod resize;
@@ -343,6 +344,7 @@ impl FrontTypes for TestFront<'_> {
     type PendingNumber = std::convert::Infallible;
     type PendingObject = std::convert::Infallible;
     type PreparedNode = ();
+    type Callback = usize;
 }
 
 impl<'d> Front for TestFront<'d> {
@@ -499,11 +501,15 @@ impl<'d> Front for TestFront<'d> {
         )
     }
 
-    fn callback_arg(&mut self, index: usize, name: &str) -> Option<Option<dom_api::CallbackArg>> {
+    fn callback_arg(
+        &mut self,
+        index: usize,
+        name: &str,
+    ) -> Option<Option<dom_api::Callback<usize>>> {
         match self.args.get(index).cloned().unwrap_or(Arg::Undefined) {
             Arg::Callback(number) => {
                 self.callbacks.push(number);
-                Some(Some(dom_api::CallbackArg(self.callbacks.len() - 1)))
+                Some(Some(dom_api::Callback(self.callbacks.len() - 1)))
             }
             Arg::Null | Arg::Undefined => Some(None),
             _ => {
@@ -514,11 +520,11 @@ impl<'d> Front for TestFront<'d> {
     }
 
     /// A callback by its number; anything else a `TypeError`.
-    fn function_arg(&mut self, index: usize, name: &str) -> Option<dom_api::CallbackArg> {
+    fn function_arg(&mut self, index: usize, name: &str) -> Option<dom_api::Callback<usize>> {
         match self.args.get(index).cloned().unwrap_or(Arg::Undefined) {
             Arg::Callback(number) => {
                 self.callbacks.push(number);
-                Some(dom_api::CallbackArg(self.callbacks.len() - 1))
+                Some(dom_api::Callback(self.callbacks.len() - 1))
             }
             _ => {
                 self.throw_type_error(&format!("not a {name}"));
@@ -529,13 +535,13 @@ impl<'d> Front for TestFront<'d> {
 
     /// A callback by its number; anything else a string handler, number
     /// `STRING_HANDLER`.
-    fn timer_handler_arg(&mut self, index: usize) -> Option<dom_api::CallbackArg> {
+    fn timer_handler_arg(&mut self, index: usize) -> Option<dom_api::Callback<usize>> {
         let number = match self.args.get(index).cloned().unwrap_or(Arg::Undefined) {
             Arg::Callback(number) => number,
             _ => STRING_HANDLER,
         };
         self.callbacks.push(number);
-        Some(dom_api::CallbackArg(self.callbacks.len() - 1))
+        Some(dom_api::Callback(self.callbacks.len() - 1))
     }
 
     /// `ToUint32` of a number (wrapping, NaN 0), undefined 0.
@@ -787,7 +793,7 @@ impl OpFront for TestFront<'_> {
         &mut self,
         cx: &ApiCx<'_, '_>,
         edge: &elise::JsEdge,
-        callback: dom_api::CallbackArg,
+        callback: dom_api::Callback<usize>,
     ) -> bool {
         edge.embedder_word(cx.gc) == self.callbacks[callback.0]
     }
@@ -796,7 +802,7 @@ impl OpFront for TestFront<'_> {
         &mut self,
         cx: &ApiCx<'_, '_>,
         edge: &elise::JsEdge,
-        callback: dom_api::CallbackArg,
+        callback: dom_api::Callback<usize>,
     ) {
         edge.set_embedder_word(cx.gc, self.callbacks[callback.0]);
     }

@@ -406,3 +406,33 @@ fn a_wrapper_made_ahead_of_another_interface_is_made_again() {
     }
     assert_eq!(env.eval("d.createElement('c-e').made"), "1");
 }
+
+/// What a plain member's call may reach (`dom_api::PLAIN_FRONT_METHODS`,
+/// `PLAIN_OP_METHODS`: what its types and its function are checked
+/// against) is what the front end given the callback's info alone has:
+/// each is a method of its own there, not the trait's default (which, of
+/// a method a front end must have to be given such a member, panics).
+#[test]
+fn the_plain_methods_are_the_info_front_ends_own() {
+    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/info_front.rs"))
+        .expect("the front end's source");
+    let (front, op) = source
+        .split_once("OpFront for InfoOp")
+        .expect("the operation's side after the call's");
+    let has = |text: &str, name: &str| {
+        text.contains(&format!("fn {name}(")) || text.contains(&format!("fn {name}<"))
+    };
+    // The defaults that do nothing, or say there is none.
+    let missing: Vec<&str> = dom_api::PLAIN_FRONT_METHODS
+        .iter()
+        .copied()
+        .filter(|name| *name != "finish" && !has(front, name))
+        .chain(
+            dom_api::PLAIN_OP_METHODS
+                .iter()
+                .copied()
+                .filter(|name| *name != "current_window" && !has(op, name)),
+        )
+        .collect();
+    assert!(missing.is_empty(), "not the front end's own: {missing:?}");
+}

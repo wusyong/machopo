@@ -12,7 +12,7 @@
 use dom::{NameId, NodeRef, NodeRoot, TargetRef, TargetRoot, Window, names};
 use elise::{Gc, Persistent};
 
-use crate::typed::{CallbackArg, HandlerValue, OpFront, ScriptHost};
+use crate::typed::{Callback, HandlerValue, OpFront, ScriptHost};
 use crate::{ApiCx, ApiError};
 
 /// Where `element`'s handler of `event_type` is: its own, or for a
@@ -65,7 +65,7 @@ fn set_handler<'gc, O: OpFront>(
     cx: &ApiCx<'_, 'gc>,
     target: TargetRef<'gc>,
     event_type: NameId,
-    value: Option<CallbackArg>,
+    value: Option<Callback<O::Callback>>,
 ) -> Result<(), ApiError> {
     match value {
         Some(callback) => {
@@ -95,7 +95,7 @@ pub(crate) fn set_element_handler<'gc, O: OpFront, const T: NameId>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     this: NodeRef<'gc>,
-    value: Option<CallbackArg>,
+    value: Option<Callback<O::Callback>>,
 ) -> Result<(), ApiError> {
     match element_target(cx, this, T) {
         Some(target) => set_handler(op, cx, target, T, value),
@@ -115,7 +115,7 @@ pub(crate) fn set_document_handler<'gc, O: OpFront, const T: NameId>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     this: NodeRef<'gc>,
-    value: Option<CallbackArg>,
+    value: Option<Callback<O::Callback>>,
 ) -> Result<(), ApiError> {
     set_handler(op, cx, TargetRef::Node(this), T, value)
 }
@@ -132,7 +132,7 @@ pub(crate) fn set_port_handler<'gc, O: OpFront, const T: NameId>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, dom::EventTargetImpl>,
-    value: Option<CallbackArg>,
+    value: Option<Callback<O::Callback>>,
 ) -> Result<(), ApiError> {
     set_handler(op, cx, TargetRef::EventTarget(this), T, value)
 }
@@ -143,7 +143,7 @@ pub(crate) fn set_port_message_handler<'gc, O: OpFront, const T: NameId>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, dom::EventTargetImpl>,
-    value: Option<CallbackArg>,
+    value: Option<Callback<O::Callback>>,
 ) -> Result<(), ApiError> {
     set_handler(op, cx, TargetRef::EventTarget(this), T, value)?;
     cx.start_message_port(this);
@@ -161,7 +161,7 @@ pub(crate) fn set_window_handler<'gc, O: OpFront, const T: NameId>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Window>,
-    value: Option<CallbackArg>,
+    value: Option<Callback<O::Callback>>,
 ) -> Result<(), ApiError> {
     set_handler(op, cx, TargetRef::Window(this), T, value)
 }

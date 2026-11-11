@@ -24,21 +24,21 @@ use crate::typed::{
     LongDefaultMinusOne, LongDefaultOne, MeasureStart, MediaQueryListEventObject,
     MediaQueryListObject, MessageEventObject, MessagePortObject, MessagePorts, MouseEventObject,
     MutationCallback, NamespaceObject, NavigationTimingObject, NetworkInformationObject,
-    NewElement, NewHtmlElement, NewNodeLikeThis, NewObject, NoObject, NoPositionObject,
-    NodesOrStrings, NullableBody, NullableElementOrLong, NullableU32, NumberIfNumber, Numbers,
-    ObservableArray, OptionOrOptGroup, OptionalClampedI64, OptionalPath2dOrString, OptionalString,
-    OptionalTimingArg, OptionalUnrestrictedDouble, OptionsCollectionObject, PendingPromise,
-    PerformanceEntryObject, PerformanceMarkObject, PerformanceMeasureObject,
-    PerformanceNavigationObject, PerformanceObject, PerformanceObserverCallback,
-    PerformanceTimingObject, PopStateEventObject, PositionCallback, PositionErrorCallback,
-    ProgressEventObject, Promise, PromiseOfAnimation, PromiseOfAny, PromiseOfArrayBuffer,
-    PromiseOfJson, PromiseOfString, PromiseOfUint8Array, PromiseOfUndefined,
-    PromiseRejectionEventObject, RadioNodeListObject, RadioNodeListOrElement, ReaderResult,
-    Records, RequestInfo, ResizeObserverCallback, Rest, RoundRectRadii, Sequence, Serialized,
-    SignalMember, Slottables, StaticRangeInitArg, StringOrNumber, StringPairs, Strings,
-    TargetObject, TextEventObject, TimelineArg, TimerHandler, TransitionEventObject, U16Default302,
-    UiEventObject, Uint8ClampedArray, UnrestrictedDouble, WakeLockSentinelObject, WhatToShow,
-    WheelEventObject,
+    NewElement, NewHtmlElement, NewImageData, NewNodeLikeThis, NewObject, NoObject,
+    NoPositionObject, NodesOrStrings, NullableBody, NullableElementOrLong, NullableU32,
+    NumberIfNumber, Numbers, ObservableArray, OptionOrOptGroup, OptionalClampedI64,
+    OptionalPath2dOrString, OptionalString, OptionalTimingArg, OptionalUnrestrictedDouble,
+    OptionsCollectionObject, PendingPromise, PerformanceEntryObject, PerformanceMarkObject,
+    PerformanceMeasureObject, PerformanceNavigationObject, PerformanceObject,
+    PerformanceObserverCallback, PerformanceTimingObject, PopStateEventObject, PositionCallback,
+    PositionErrorCallback, ProgressEventObject, Promise, PromiseOfAnimation, PromiseOfAny,
+    PromiseOfArrayBuffer, PromiseOfJson, PromiseOfString, PromiseOfUint8Array, PromiseOfUndefined,
+    PromiseRejectionEventObject, RadioNodeListObject, RadioNodeListOrElement, ReadImageData,
+    ReaderResult, Records, RequestInfo, ResizeObserverCallback, Rest, Rethrown, RoundRectRadii,
+    Sequence, Serialized, SignalMember, Slottables, StaticRangeInitArg, StringOrNumber,
+    StringPairs, Strings, TargetObject, TextEventObject, TimelineArg, TimerHandler,
+    TransitionEventObject, U16Default302, UiEventObject, Uint8ClampedArray, UnrestrictedDouble,
+    WakeLockSentinelObject, WhatToShow, WheelEventObject,
 };
 use crate::window::NavigationUrl;
 use crate::{
@@ -1283,7 +1283,7 @@ crate::declare! {
         attribute aborted: bool, get = abort::aborted;
         attribute reason: AnyOrUndefined, get = abort::reason;
         #[front]
-        method throwIfAborted() = abort::throw_if_aborted;
+        method throwIfAborted() -> Rethrown = abort::throw_if_aborted;
         #[calls_script]
         #[front]
         attribute onabort: EventHandler, get = handlers::port_handler::<_, { event_type::ABORT }>, set = handlers::set_port_handler::<_, { event_type::ABORT }>;
@@ -4238,10 +4238,10 @@ crate::declare! {
         method fillRect(x: UnrestrictedDouble, y: UnrestrictedDouble, w: UnrestrictedDouble, h: UnrestrictedDouble) = canvas::fill_rect;
         method strokeRect(x: UnrestrictedDouble, y: UnrestrictedDouble, w: UnrestrictedDouble, h: UnrestrictedDouble) = canvas::stroke_rect;
         #[front]
-        method createImageData(sw: EnforcedI32, sh: EnforcedI32, settings?: ImageDataSettings) -> ImageData =
+        method createImageData(sw: EnforcedI32, sh: EnforcedI32, settings?: ImageDataSettings) -> NewImageData =
             canvas::create_image_data;
         #[front]
-        method createImageData(imagedata: ImageData) -> ImageData = canvas::create_image_data_of;
+        method createImageData(imagedata: ImageData) -> NewImageData = canvas::create_image_data_of;
         #[front]
         method getImageData(
             sx: EnforcedI32,
@@ -4249,12 +4249,12 @@ crate::declare! {
             sw: EnforcedI32,
             sh: EnforcedI32,
             settings?: ImageDataSettings,
-        ) -> ImageData = canvas::get_image_data;
+        ) -> NewImageData = canvas::get_image_data;
         #[front]
-        method putImageData(imagedata: ImageData, dx: EnforcedI32, dy: EnforcedI32) = canvas::put_image_data;
+        method putImageData(imagedata: ReadImageData, dx: EnforcedI32, dy: EnforcedI32) = canvas::put_image_data;
         #[front]
         method putImageData(
-            imagedata: ImageData,
+            imagedata: ReadImageData,
             dx: EnforcedI32,
             dy: EnforcedI32,
             dirtyX: EnforcedI32,

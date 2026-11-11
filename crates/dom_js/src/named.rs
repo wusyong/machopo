@@ -125,6 +125,7 @@ impl<'s> FrontTypes for PropertyFront<'_, 's, '_> {
     type PendingNumber = std::convert::Infallible;
     type PendingObject = std::convert::Infallible;
     type PreparedNode = ();
+    type Callback = std::convert::Infallible;
 }
 
 impl<'s> FrontTypes for PropertyOp<'_, 's, '_> {
@@ -136,6 +137,7 @@ impl<'s> FrontTypes for PropertyOp<'_, 's, '_> {
     type PendingNumber = std::convert::Infallible;
     type PendingObject = std::convert::Infallible;
     type PreparedNode = ();
+    type Callback = std::convert::Infallible;
 }
 
 impl<'a, 's, 'i> Front for PropertyFront<'a, 's, 'i> {

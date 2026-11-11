@@ -20,7 +20,8 @@ use dom::{
     DomString, EventTargetImpl, NameId, Node, NodeRef, NodeRoot, ObjectRef, ObjectRoot, TargetRef,
     Window, names,
 };
-use dom_api::{ApiCx, ApiError, Front, FrontTypes, OpFront};
+use dom_api::{ApiCx, ApiError, Callback, Front, FrontTypes, OpFront};
+use elise::JsEdge;
 use elise::Persistent;
 
 use crate::front::{self, Checked, V8Front};
@@ -74,6 +75,8 @@ impl<'s> FrontTypes for InfoFront<'s> {
     /// A new node's wrapper made ahead of the operation, and its
     /// interface; none for a call on another realm's object.
     type PreparedNode = Option<(v8::Local<'s, v8::Object>, usize)>;
+    /// The argument itself: an object, or a timer's string.
+    type Callback = v8::Local<'s, v8::Value>;
 }
 
 impl<'s> FrontTypes for InfoOp<'_, 's> {
@@ -89,6 +92,8 @@ impl<'s> FrontTypes for InfoOp<'_, 's> {
     /// A new node's wrapper made ahead of the operation, and its
     /// interface; none for a call on another realm's object.
     type PreparedNode = Option<(v8::Local<'s, v8::Object>, usize)>;
+    /// The argument itself: an object, or a timer's string.
+    type Callback = v8::Local<'s, v8::Value>;
 }
 
 impl<'s> InfoFront<'s> {
@@ -318,6 +323,152 @@ impl<'s> Front for InfoFront<'s> {
         self.with_front(|front| front.finish_kept_as(front::Kept::Object(object, interface)));
     }
 
+    /// A callback is its argument's handle, as the call holds it: nothing
+    /// is kept for it. Any object (a function, or one with `handleEvent`,
+    /// read when it is called); none for null or undefined; anything else
+    /// the whole front end's `TypeError`.
+    #[inline(always)]
+    fn callback_arg(
+        &mut self,
+        index: usize,
+        name: &str,
+    ) -> Option<Option<Callback<v8::Local<'s, v8::Value>>>> {
+        let value = front::arg(&self.info.args(), index);
+        if value.is_null_or_undefined() {
+            return Some(None);
+        }
+        if value.is_object() {
+            return Some(Some(Callback(value)));
+        }
+        self.with_front(|front| front.callback_arg(index, name).map(|_| ()))?;
+        None
+    }
+
+    /// A function; anything else the whole front end's `TypeError`.
+    #[inline(always)]
+    fn function_arg(
+        &mut self,
+        index: usize,
+        name: &str,
+    ) -> Option<Callback<v8::Local<'s, v8::Value>>> {
+        let value = front::arg(&self.info.args(), index);
+        if value.is_function() {
+            return Some(Callback(value));
+        }
+        self.with_front(|front| front.function_arg(index, name).map(|_| ()))?;
+        None
+    }
+
+    /// A function, none for null or undefined.
+    #[inline(always)]
+    fn nullable_function_arg(
+        &mut self,
+        index: usize,
+        name: &str,
+    ) -> Option<Option<Callback<v8::Local<'s, v8::Value>>>> {
+        let value = front::arg(&self.info.args(), index);
+        if value.is_null_or_undefined() {
+            return Some(None);
+        }
+        if value.is_function() {
+            return Some(Some(Callback(value)));
+        }
+        self.with_front(|front| front.nullable_function_arg(index, name).map(|_| ()))?;
+        None
+    }
+
+    /// Any object (callable or not: `[LegacyTreatNonObjectAsNull]`),
+    /// anything else null.
+    #[inline(always)]
+    fn event_handler_arg(&mut self, index: usize) -> Option<Callback<v8::Local<'s, v8::Value>>> {
+        let value = front::arg(&self.info.args(), index);
+        value.is_object().then_some(Callback(value))
+    }
+
+    /// A function as it is, anything else its `ToString` (which may run
+    /// script, before the operation: a scope).
+    #[inline(always)]
+    fn timer_handler_arg(&mut self, index: usize) -> Option<Callback<v8::Local<'s, v8::Value>>> {
+        let value = front::arg(&self.info.args(), index);
+        if value.is_function() {
+            return Some(Callback(value));
+        }
+        self.info
+            .with_scope(|mut scope, _| value.to_string(scope.scope()))
+            .map(|string| Callback(string.into()))
+    }
+
+    #[inline(always)]
+    fn is_dictionary_like(&mut self, index: usize) -> bool {
+        let value = front::arg(&self.info.args(), index);
+        value.is_null_or_undefined() || value.is_object()
+    }
+
+    /// A dictionary argument: none for null or undefined (most: its
+    /// defaults), an object as it is; anything else the whole front end's
+    /// `TypeError`.
+    #[inline(always)]
+    fn dict_arg(&mut self, index: usize, name: &str) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        let value = front::arg(&self.info.args(), index);
+        if value.is_null_or_undefined() {
+            return Some(None);
+        }
+        if let Ok(object) = v8::Local::<v8::Object>::try_from(value) {
+            return Some(Some(object));
+        }
+        self.with_front(|front| front.dict_arg(index, name))
+    }
+
+    // A dictionary's members are read by the whole front end (a getter
+    // may run script): what it gives is a value.
+    fn dict_bool(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: &str,
+    ) -> Option<Option<bool>> {
+        self.with_front(|front| front.dict_bool(dict, member))
+    }
+
+    fn dict_number(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: &str,
+    ) -> Option<Option<f64>> {
+        self.with_front(|front| front.dict_number(dict, member))
+    }
+
+    fn dict_string(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: &str,
+    ) -> Option<Option<String>> {
+        self.with_front(|front| front.dict_string(dict, member))
+    }
+
+    fn dict_nullable_string(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: &str,
+    ) -> Option<Option<String>> {
+        self.with_front(|front| front.dict_nullable_string(dict, member))
+    }
+
+    fn dict_strings(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: &str,
+    ) -> Option<Option<Vec<String>>> {
+        self.with_front(|front| front.dict_strings(dict, member))
+    }
+
+    fn dict_string_or_number(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: &str,
+    ) -> Option<Option<dom_api::typed::StringOrNumber>> {
+        self.with_front(|front| front.dict_string_or_number(dict, member))
+    }
+
     #[inline(always)]
     fn arg_count(&mut self) -> usize {
         usize::try_from(self.info.args().length()).unwrap_or(0)
@@ -489,6 +640,38 @@ impl<'s> OpFront for InfoOp<'_, 's> {
                 .unwrap::<EventTargetImpl>(cx.gc, *object)
                 .expect("an event target, checked as it was taken"),
         )
+    }
+
+    /// Whether the edge's object is the callback: compared in place, no
+    /// local made of the edge's.
+    #[inline(always)]
+    fn same_callback(
+        &mut self,
+        _: &ApiCx<'_, '_>,
+        edge: &JsEdge,
+        callback: Callback<v8::Local<'s, v8::Value>>,
+    ) -> bool {
+        self.no_gc.refers_to(edge, callback.0)
+    }
+
+    /// An object as an object's strong edge, a timer's string as any
+    /// value's.
+    #[inline(always)]
+    fn store_callback(
+        &mut self,
+        _: &ApiCx<'_, '_>,
+        edge: &JsEdge,
+        callback: Callback<v8::Local<'s, v8::Value>>,
+    ) {
+        match v8::Local::<v8::Object>::try_from(callback.0) {
+            Ok(object) => self.no_gc.set_strong(edge, object),
+            Err(_) => self.no_gc.set_strong_value(edge, callback.0),
+        }
+    }
+
+    /// The engine's number for the callback (V8's identity hash).
+    fn callback_number(&mut self, callback: Callback<v8::Local<'s, v8::Value>>) -> u32 {
+        v8::Local::<v8::Object>::try_from(callback.0).map_or(0, front::number)
     }
 
     // V8's `undefined` is the return value until set.

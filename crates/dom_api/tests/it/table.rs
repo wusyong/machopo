@@ -1080,18 +1080,39 @@ fn members_of_strings_nodes_numbers_and_booleans_are_plain() {
         ("Document", "createTextNode", MemberKind::Method),
         ("Document", "createDocumentFragment", MemberKind::Method),
         ("Text", "splitText", MemberKind::Method),
+        // Callbacks (the front end's handle, handed back to it), event
+        // handlers, a dictionary of booleans; their functions are given
+        // the front end's side in the operation.
+        ("EventTarget", "removeEventListener", MemberKind::Method),
+        ("Window", "requestAnimationFrame", MemberKind::Method),
+        ("Window", "cancelAnimationFrame", MemberKind::Method),
+        ("HTMLElement", "onclick", MemberKind::Setter),
+        ("Window", "onload", MemberKind::Setter),
     ] {
         assert!(is_plain(interface, name, kind), "{interface}.{name}");
     }
     for (interface, name, kind) in [
-        // A callback; a method that leaves script to run.
+        // A dictionary with an object (`signal`); a method that leaves
+        // script to run; rest arguments.
         ("EventTarget", "addEventListener", MemberKind::Method),
         ("EventTarget", "dispatchEvent", MemberKind::Method),
+        ("Window", "setTimeout", MemberKind::Method),
+        // An event handler's getter may compile its source: script.
+        ("HTMLElement", "onclick", MemberKind::Getter),
+        // Their functions hand the front end what it keeps for after the
+        // operation (a value to throw, an `ImageData`'s pixels): their
+        // result types say so.
+        ("AbortSignal", "throwIfAborted", MemberKind::Method),
+        (
+            "CanvasRenderingContext2D",
+            "getImageData",
+            MemberKind::Method,
+        ),
         // A sequence.
         ("Element", "getAttributeNames", MemberKind::Method),
         // Static; its function given the front end.
+        // Static.
         ("CSS", "escape", MemberKind::Method),
-        ("AbortSignal", "throwIfAborted", MemberKind::Method),
     ] {
         assert!(!is_plain(interface, name, kind), "{interface}.{name}");
     }

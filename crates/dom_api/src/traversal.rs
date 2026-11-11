@@ -12,7 +12,7 @@ use dom::{NodeIterator, NodeRef, NodeRoot, Traversal, TraversalRoot, TreeWalker}
 use elise::{Gc, Persistent};
 
 use crate::exception::ExceptionName;
-use crate::typed::{CallbackArg, OpFront, ScriptHost};
+use crate::typed::{Callback, OpFront, ScriptHost};
 use crate::{ApiCx, ApiError};
 
 /// `NodeFilter`'s results.
@@ -706,7 +706,7 @@ pub(crate) fn create_node_iterator<'gc, O: OpFront>(
     _: NodeRef<'gc>,
     root: NodeRef<'gc>,
     what_to_show: u32,
-    filter: Option<CallbackArg>,
+    filter: Option<Callback<O::Callback>>,
 ) -> Result<Gc<'gc, NodeIterator>, ApiError> {
     let iterator = cx.create_node_iterator(root, what_to_show, filter.is_some());
     if let Some(filter) = filter {
@@ -726,7 +726,7 @@ pub(crate) fn create_tree_walker<'gc, O: OpFront>(
     _: NodeRef<'gc>,
     root: NodeRef<'gc>,
     what_to_show: u32,
-    filter: Option<CallbackArg>,
+    filter: Option<Callback<O::Callback>>,
 ) -> Result<Gc<'gc, TreeWalker>, ApiError> {
     let walker = cx.create_tree_walker(root, what_to_show, filter.is_some());
     if let Some(filter) = filter {

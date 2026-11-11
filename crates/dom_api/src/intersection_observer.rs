@@ -12,7 +12,7 @@ use elise::{Gc, Persistent};
 use gfx::RectF;
 
 use crate::exception::DomException;
-use crate::typed::{CallbackArg, IntersectionEntryInit, IntersectionOptions, OpFront, ScriptHost};
+use crate::typed::{Callback, IntersectionEntryInit, IntersectionOptions, OpFront, ScriptHost};
 use crate::{ApiCx, ApiError, DomStr, ExceptionName};
 
 /// The least `delay` of an observer that tracks visibility.
@@ -36,7 +36,7 @@ const TRACK_VISIBILITY: &str = "Failed to construct 'IntersectionObserver': To e
 pub(crate) fn construct<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
-    callback: CallbackArg,
+    callback: Callback<O::Callback>,
     options: IntersectionOptions<'gc>,
 ) -> Result<Gc<'gc, IntersectionObserver>, ApiError> {
     let window = op

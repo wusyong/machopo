@@ -867,6 +867,24 @@ impl<'s> crate::InfoNoGc<'_, 's> {
         set_wrapper(self.isolate, edge, wrapper);
     }
 
+    /// `set_strong`.
+    #[inline]
+    pub fn set_strong(&mut self, edge: &elise::JsEdge, object: v8::Local<'s, v8::Object>) {
+        set_strong(self.isolate, edge, object);
+    }
+
+    /// `set_strong_value`.
+    #[inline]
+    pub fn set_strong_value(&mut self, edge: &elise::JsEdge, value: v8::Local<'s, v8::Value>) {
+        set_strong_value(self.isolate, edge, value);
+    }
+
+    /// `refers_to`: reads the edge's traced handle's object.
+    #[inline]
+    pub fn refers_to(&mut self, edge: &elise::JsEdge, value: v8::Local<'s, v8::Value>) -> bool {
+        refers_to(edge, value)
+    }
+
     /// The callback's result, as a holder of the state may set it.
     #[inline]
     pub fn ret(&mut self) -> OpReturn<'_, 's> {
@@ -1066,15 +1084,19 @@ pub fn set_wrapper(
 /// it, as what it refers to may be held by nothing else (a listener's
 /// callback, Blink's `TraceWrapperV8Reference`); V8's major GCs keep it
 /// while the edge's object lives. V8 marks it at once while marking.
-pub fn set_strong<'s>(
-    scope: &v8::PinScope<'s, '_, ()>,
-    edge: &elise::JsEdge,
-    object: v8::Local<'s, v8::Object>,
-) {
+pub fn set_strong(isolate: &v8::Isolate, edge: &elise::JsEdge, object: v8::Local<'_, v8::Object>) {
     // SAFETY: as `set_wrapper`'s: on the isolate's thread, the heap's (the
     // only one that writes the edge); the edge is in its final place (its
     // object is old and never moves).
-    unsafe { slot(edge).set(scope, Some(object)) };
+    unsafe { slot(edge).set(isolate, Some(object)) };
+}
+
+/// Whether `edge` refers to the object `value` is a handle of (the same
+/// one), read from the edge's traced handle with no local made of it.
+#[inline]
+pub fn refers_to(edge: &elise::JsEdge, value: v8::Local<'_, v8::Value>) -> bool {
+    // SAFETY: as `wrapper`'s: on the isolate's thread, the heap's.
+    unsafe { value_slot(edge).refers_to(value) }
 }
 
 /// What a strong edge refers to (`set_strong`), if anything: read as a
@@ -1090,13 +1112,13 @@ pub fn strong<'s>(
 /// operations) at `value`, any JS value, strongly, as `set_strong` does an
 /// object (an error event's error, a timer's arguments: Blink's
 /// `TraceWrapperV8Reference<v8::Value>`).
-pub fn set_strong_value<'s>(
-    scope: &v8::PinScope<'s, '_, ()>,
+pub fn set_strong_value(
+    isolate: &v8::Isolate,
     edge: &elise::JsEdge,
-    value: v8::Local<'s, v8::Value>,
+    value: v8::Local<'_, v8::Value>,
 ) {
     // SAFETY: as `set_strong`'s.
-    unsafe { value_slot(edge).set(scope, Some(value)) };
+    unsafe { value_slot(edge).set(isolate, Some(value)) };
 }
 
 /// What a strong edge of any value refers to (`set_strong_value`), if

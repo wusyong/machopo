@@ -289,7 +289,7 @@ pub struct SerializedState;
 impl ArgType for SerializedState {
     const DESC: TypeDesc = TypeDesc::Any;
     type Taken<T: FrontTypes> = Vec<u8>;
-    type Param<'a, 'gc> = &'a [u8];
+    type Param<'a, 'gc, T: FrontTypes> = &'a [u8];
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Vec<u8>> {
         front.serialized_state_arg(index)

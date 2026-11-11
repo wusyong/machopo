@@ -12,7 +12,7 @@ use dom::{IdleDeadline, Window};
 use elise::{Gc, Persistent};
 
 use crate::interfaces::IdleRequestOptions;
-use crate::typed::{CallbackArg, OpFront, ScriptHost};
+use crate::typed::{Callback, OpFront, ScriptHost};
 use crate::{ApiCx, ApiError};
 
 /// `requestIdleCallback(callback, options)`: a new callback of the window,
@@ -22,7 +22,7 @@ pub(crate) fn request_idle_callback<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Window>,
-    callback: CallbackArg,
+    callback: Callback<O::Callback>,
     options: &IdleRequestOptions,
 ) -> Result<u32, ApiError> {
     let idle = cx.add_idle_callback(this, options.timeout);

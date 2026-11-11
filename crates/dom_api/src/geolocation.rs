@@ -13,7 +13,7 @@ use dom::{GeoRequest, Geolocation, GeolocationPositionError, GeolocationStep, Na
 use elise::{Gc, Persistent};
 
 use crate::interfaces::PositionOptions;
-use crate::typed::{CallbackArg, OpFront, ScriptHost};
+use crate::typed::{Callback, OpFront, ScriptHost};
 use crate::{ApiCx, ApiError};
 
 /// `GeolocationPositionError`'s codes.
@@ -33,8 +33,8 @@ pub(crate) fn get_current_position<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Geolocation>,
-    success: CallbackArg,
-    error: Option<CallbackArg>,
+    success: Callback<O::Callback>,
+    error: Option<Callback<O::Callback>>,
     options: &PositionOptions,
 ) -> Result<(), ApiError> {
     request(op, cx, this, success, error, options, false);
@@ -47,8 +47,8 @@ pub(crate) fn watch_position<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Geolocation>,
-    success: CallbackArg,
-    error: Option<CallbackArg>,
+    success: Callback<O::Callback>,
+    error: Option<Callback<O::Callback>>,
     options: &PositionOptions,
 ) -> Result<i32, ApiError> {
     Ok(request(op, cx, this, success, error, options, true))
@@ -70,8 +70,8 @@ fn request<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     geolocation: Gc<'gc, Geolocation>,
-    success: CallbackArg,
-    error: Option<CallbackArg>,
+    success: Callback<O::Callback>,
+    error: Option<Callback<O::Callback>>,
     options: &PositionOptions,
     watch: bool,
 ) -> i32 {

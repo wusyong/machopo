@@ -73,6 +73,12 @@ pub trait FrontTypes {
     /// member's call (`RetType::Prepared`) and taken as the node is given
     /// (`OpFront::ret_new_node`). `()` for a front end that makes none.
     type PreparedNode: Default;
+    /// A callback argument as the engine holds it (an object: a function,
+    /// or one with `handleEvent`; a timer's string), taken before the
+    /// operation (`Front::callback_arg`...) and handed by the member's
+    /// function back to the front end to store or compare
+    /// (`OpFront::store_callback`): the function can't make one.
+    type Callback: Copy;
 }
 
 /// A result type's `Pending` and `finish` when it leaves nothing for
@@ -133,6 +139,7 @@ pub trait Front: FrontTypes {
             PendingNumber = Self::PendingNumber,
             PendingObject = Self::PendingObject,
             PreparedNode = Self::PreparedNode,
+            Callback = Self::Callback,
         >
     where
         Self: 'o;
@@ -241,7 +248,7 @@ pub trait Front: FrontTypes {
     /// Argument `index` as a callback function (`name`'s, `MutationCallback`):
     /// a function, kept by the front end, which the result names; anything
     /// else a `TypeError`, thrown.
-    fn function_arg(&mut self, index: usize, name: &str) -> Option<CallbackArg> {
+    fn function_arg(&mut self, index: usize, name: &str) -> Option<Callback<Self::Callback>> {
         let _ = (index, name);
         unreachable!("a front end binding a member with a callback function reads it")
     }
@@ -353,7 +360,11 @@ pub trait Front: FrontTypes {
     /// `PositionErrorCallback`), a member's second callback: `Some(None)`
     /// for null or undefined; a function kept by the front end, which the
     /// result names; anything else a `TypeError`, thrown.
-    fn nullable_function_arg(&mut self, index: usize, name: &str) -> Option<Option<CallbackArg>> {
+    fn nullable_function_arg(
+        &mut self,
+        index: usize,
+        name: &str,
+    ) -> Option<Option<Callback<Self::Callback>>> {
         let _ = (index, name);
         unreachable!("a front end binding a member with a nullable callback function reads it")
     }
@@ -542,9 +553,13 @@ pub trait Front: FrontTypes {
 
     /// Argument `index` as a callback interface (`name`'s, `EventListener`):
     /// `Some(None)` for null or undefined; any other object kept by the
-    /// front end, which the result names (`CallbackArg`); anything else a
+    /// front end, which the result names (`Callback`); anything else a
     /// `TypeError`, thrown.
-    fn callback_arg(&mut self, index: usize, name: &str) -> Option<Option<CallbackArg>> {
+    fn callback_arg(
+        &mut self,
+        index: usize,
+        name: &str,
+    ) -> Option<Option<Callback<Self::Callback>>> {
         let _ = (index, name);
         unreachable!("a front end binding a member with a callback reads it")
     }
@@ -552,7 +567,7 @@ pub trait Front: FrontTypes {
     /// Argument `index` as HTML's `EventHandler` (`[LegacyTreatNonObjectAsNull]
     /// callback function`): any object kept by the front end, which the
     /// result names; anything else null (`None`). It never throws.
-    fn event_handler_arg(&mut self, index: usize) -> Option<CallbackArg> {
+    fn event_handler_arg(&mut self, index: usize) -> Option<Callback<Self::Callback>> {
         let _ = index;
         unreachable!("a front end binding an event handler reads it")
     }
@@ -583,7 +598,7 @@ pub trait Front: FrontTypes {
     /// anything else converted to a string (`ToString`: a handler the timer
     /// runs as a classic script), kept by the front end, which the result
     /// names; `None` if the conversion threw.
-    fn timer_handler_arg(&mut self, index: usize) -> Option<CallbackArg> {
+    fn timer_handler_arg(&mut self, index: usize) -> Option<Callback<Self::Callback>> {
         let _ = index;
         unreachable!("a front end binding a member with a timer handler reads it")
     }
@@ -992,14 +1007,24 @@ pub trait OpFront: FrontTypes {
     /// Whether `edge` (a listener's) refers to the callback `callback`
     /// names (DOM's listener comparison, Blink's
     /// `JSEventListener::operator==`).
-    fn same_callback(&mut self, cx: &ApiCx<'_, '_>, edge: &JsEdge, callback: CallbackArg) -> bool {
+    fn same_callback(
+        &mut self,
+        cx: &ApiCx<'_, '_>,
+        edge: &JsEdge,
+        callback: Callback<Self::Callback>,
+    ) -> bool {
         let _ = (cx, edge, callback);
         unreachable!("a front end binding a member with a callback compares them")
     }
 
     /// `edge` (a new listener's) made to refer to the callback `callback`
     /// names, strongly (the engine's minor GCs keep it).
-    fn store_callback(&mut self, cx: &ApiCx<'_, '_>, edge: &JsEdge, callback: CallbackArg) {
+    fn store_callback(
+        &mut self,
+        cx: &ApiCx<'_, '_>,
+        edge: &JsEdge,
+        callback: Callback<Self::Callback>,
+    ) {
         let _ = (cx, edge, callback);
         unreachable!("a front end binding a member with a callback stores them")
     }
@@ -1098,7 +1123,7 @@ pub trait OpFront: FrontTypes {
 
     /// The engine's number for the callback `callback` names (as
     /// `new_target_number`'s).
-    fn callback_number(&mut self, callback: CallbackArg) -> u32 {
+    fn callback_number(&mut self, callback: Callback<Self::Callback>) -> u32 {
         let _ = callback;
         unreachable!("a front end binding a member taking a constructor numbers it")
     }
@@ -1372,7 +1397,7 @@ pub trait OpFront: FrontTypes {
 /// what a member's function hands back to the front end to compare or
 /// store it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CallbackArg(pub usize);
+pub struct Callback<H>(pub H);
 
 /// An item of `Blob`'s constructor's parts as the front end took it
 /// (`Front::blob_parts_arg`): a string, bytes copied, or a blob's wrapper.
@@ -2064,10 +2089,10 @@ impl<'gc> Root<'gc> for &str {
 
 /// A callback argument of a member that calls script: the front end keeps
 /// the callback for the call.
-impl<'gc> Root<'gc> for CallbackArg {
-    type Rooted = CallbackArg;
+impl<'gc, H> Root<'gc> for Callback<H> {
+    type Rooted = Callback<H>;
 
-    fn root(self, _: &ApiCx<'_, 'gc>) -> CallbackArg {
+    fn root(self, _: &ApiCx<'_, 'gc>) -> Callback<H> {
         self
     }
 }
@@ -2103,7 +2128,10 @@ pub trait ArgType {
     /// whose arguments and result all are is `TypedMember::PLAIN`.
     const PLAIN: bool = false;
     type Taken<T: FrontTypes>;
-    type Param<'a, 'gc>;
+    /// What the member's function gets of it, in the operation: the DOM's
+    /// own (a `&str`, a `NodeRef`, a number), or the front end `T`'s
+    /// handle, given back to it as it is (`Callback`).
+    type Param<'a, 'gc, T: FrontTypes>;
 
     /// Argument `index`, before the operation; `None` if it threw.
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Self::Taken<F>>;
@@ -2124,7 +2152,7 @@ pub trait ArgType {
         cx: &ApiCx<'_, 'gc>,
         taken: &'a Self::Taken<O>,
         index: usize,
-    ) -> Result<Self::Param<'a, 'gc>, ApiError>;
+    ) -> Result<Self::Param<'a, 'gc, O>, ApiError>;
 }
 
 /// How a type of the table crosses a call as a result: what the member's
@@ -2226,6 +2254,77 @@ impl<I: Interface, L: Interface> RetType for NewObject<I, L> {
     }
 }
 
+/// An `ImageData` its member makes, whose pixels the function hands the
+/// front end to make its array of after the operation
+/// (`OpFront::set_image_data_pixels`), which a front end keeps for it: as
+/// `ImageData`, but not `PLAIN`.
+pub struct NewImageData;
+
+impl RetType for NewImageData {
+    const DESC: TypeDesc = <crate::interfaces::ImageData as RetType>::DESC;
+    type Ret<'gc> = <crate::interfaces::ImageData as RetType>::Ret<'gc>;
+    type Prepared<F: FrontTypes> = <crate::interfaces::ImageData as RetType>::Prepared<F>;
+    type Pending<F: FrontTypes> = <crate::interfaces::ImageData as RetType>::Pending<F>;
+
+    fn prepare<F: Front>(front: &mut F, foreseen: Option<usize>) -> Self::Prepared<F> {
+        <crate::interfaces::ImageData as RetType>::prepare(front, foreseen)
+    }
+
+    fn give<'gc, O: OpFront>(
+        op: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        value: Self::Ret<'gc>,
+    ) -> Self::Pending<O> {
+        <crate::interfaces::ImageData as RetType>::give(op, cx, value)
+    }
+
+    fn finish<F: Front>(front: &mut F, pending: Self::Pending<F>) {
+        <crate::interfaces::ImageData as RetType>::finish(front, pending);
+    }
+}
+
+/// An `ImageData` whose pixels its member's function reads through the
+/// front end (`OpFront::with_array_bytes`: `putImageData`'s), which a
+/// front end given only `PLAIN` members doesn't do: as `ImageData`, but
+/// not `PLAIN`.
+pub struct ReadImageData;
+
+impl ArgType for ReadImageData {
+    const DESC: TypeDesc = <crate::interfaces::ImageData as ArgType>::DESC;
+    type Taken<T: FrontTypes> = <crate::interfaces::ImageData as ArgType>::Taken<T>;
+    type Param<'a, 'gc, T: FrontTypes> =
+        <crate::interfaces::ImageData as ArgType>::Param<'a, 'gc, T>;
+
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<Self::Taken<F>> {
+        <crate::interfaces::ImageData as ArgType>::take(front, index)
+    }
+
+    fn param<'a, 'gc, O: OpFront>(
+        op: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        taken: &'a Self::Taken<O>,
+        index: usize,
+    ) -> Result<Self::Param<'a, 'gc, O>, ApiError> {
+        <crate::interfaces::ImageData as ArgType>::param(op, cx, taken, index)
+    }
+}
+
+/// Nothing, from a function that may hand the front end a value to throw
+/// after the operation (`OpFront::rethrow`: an abort signal's reason),
+/// which a front end keeps for it: not `PLAIN`, so that a front end that
+/// keeps nothing isn't given such a member.
+pub struct Rethrown;
+
+impl RetType for Rethrown {
+    const DESC: TypeDesc = TypeDesc::Undefined;
+    type Ret<'gc> = ();
+    no_pending!();
+
+    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, (): ()) {
+        op.ret_undefined();
+    }
+}
+
 /// Nothing: a method that returns nothing (WebIDL's `undefined`).
 impl RetType for () {
     const DESC: TypeDesc = TypeDesc::Undefined;
@@ -2270,7 +2369,7 @@ impl ArgType for bool {
     const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = bool;
-    type Param<'a, 'gc> = bool;
+    type Param<'a, 'gc, T: FrontTypes> = bool;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<bool> {
         Some(front.bool_arg(index))
@@ -2293,7 +2392,7 @@ impl ArgType for Option<bool> {
     const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<bool>;
-    type Param<'a, 'gc> = Option<bool>;
+    type Param<'a, 'gc, T: FrontTypes> = Option<bool>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<bool>> {
         Some((!front.is_undefined(index)).then(|| front.bool_arg(index)))
@@ -2322,6 +2421,9 @@ pub enum DictOrBool<D> {
 /// argument `index` before the operation.
 pub trait Dictionary: Sized {
     const NAME: &'static str;
+    /// Whether its members are all read as values (`DictMember::PLAIN`):
+    /// then it is `PLAIN` as an argument.
+    const PLAIN: bool;
 
     /// Argument `index` as the dictionary (its defaults for null or
     /// undefined); `None` if it threw.
@@ -2330,9 +2432,10 @@ pub trait Dictionary: Sized {
 
 impl<D: Dictionary + 'static> ArgType for DictOrBool<D> {
     const DESC: TypeDesc = TypeDesc::DictOrBool(D::NAME);
+    const PLAIN: bool = D::PLAIN;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = DictOrBool<D>;
-    type Param<'a, 'gc> = &'a DictOrBool<D>;
+    type Param<'a, 'gc, T: FrontTypes> = &'a DictOrBool<D>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<DictOrBool<D>> {
         if front.is_dictionary_like(index) {
@@ -2371,7 +2474,7 @@ impl ArgType for u16 {
     const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = u16;
-    type Param<'a, 'gc> = u16;
+    type Param<'a, 'gc, T: FrontTypes> = u16;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<u16> {
         front
@@ -2410,7 +2513,7 @@ impl ArgType for WhatToShow {
     const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = u32;
-    type Param<'a, 'gc> = u32;
+    type Param<'a, 'gc, T: FrontTypes> = u32;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<u32> {
         if front.is_undefined(index) {
@@ -2443,7 +2546,7 @@ pub struct StaticRangeInitArg;
 impl ArgType for StaticRangeInitArg {
     const DESC: TypeDesc = TypeDesc::Dictionary("StaticRangeInit");
     type Taken<T: FrontTypes> = (u32, u32);
-    type Param<'a, 'gc> = StaticRangeInit<'gc>;
+    type Param<'a, 'gc, T: FrontTypes> = StaticRangeInit<'gc>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<(u32, u32)> {
         front.static_range_init(index)
@@ -2470,7 +2573,7 @@ impl ArgType for i32 {
     const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = i32;
-    type Param<'a, 'gc> = i32;
+    type Param<'a, 'gc, T: FrontTypes> = i32;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<i32> {
         front.i32_arg(index)
@@ -2492,7 +2595,7 @@ impl ArgType for u32 {
     const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = u32;
-    type Param<'a, 'gc> = u32;
+    type Param<'a, 'gc, T: FrontTypes> = u32;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<u32> {
         front.u32_arg(index)
@@ -2516,7 +2619,7 @@ impl ArgType for Option<u32> {
     const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<u32>;
-    type Param<'a, 'gc> = Option<u32>;
+    type Param<'a, 'gc, T: FrontTypes> = Option<u32>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<u32>> {
         if front.is_undefined(index) {
@@ -2543,7 +2646,7 @@ impl ArgType for Option<i32> {
     const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<i32>;
-    type Param<'a, 'gc> = Option<i32>;
+    type Param<'a, 'gc, T: FrontTypes> = Option<i32>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<i32>> {
         if front.arg_count() <= index {
@@ -2571,7 +2674,7 @@ impl ArgType for LongDefaultMinusOne {
     const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = i32;
-    type Param<'a, 'gc> = i32;
+    type Param<'a, 'gc, T: FrontTypes> = i32;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<i32> {
         if front.is_undefined(index) {
@@ -2599,7 +2702,7 @@ impl ArgType for LongDefaultOne {
     const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = i32;
-    type Param<'a, 'gc> = i32;
+    type Param<'a, 'gc, T: FrontTypes> = i32;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<i32> {
         if front.is_undefined(index) {
@@ -2627,7 +2730,7 @@ impl ArgType for U16Default302 {
     const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = u16;
-    type Param<'a, 'gc> = u16;
+    type Param<'a, 'gc, T: FrontTypes> = u16;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<u16> {
         if front.is_undefined(index) {
@@ -2654,7 +2757,7 @@ impl ArgType for NullableU32 {
     const DESC: TypeDesc = TypeDesc::NullableU32;
     const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Option<u32>;
-    type Param<'a, 'gc> = Option<u32>;
+    type Param<'a, 'gc, T: FrontTypes> = Option<u32>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<u32>> {
         if front.is_null_or_undefined(index) {
@@ -2712,19 +2815,20 @@ pub struct TimerHandler;
 
 impl ArgType for TimerHandler {
     const DESC: TypeDesc = TypeDesc::Function("TimerHandler");
-    type Taken<T: FrontTypes> = CallbackArg;
-    type Param<'a, 'gc> = CallbackArg;
+    const PLAIN: bool = true;
+    type Taken<T: FrontTypes> = Callback<T::Callback>;
+    type Param<'a, 'gc, T: FrontTypes> = Callback<T::Callback>;
 
-    fn take<F: Front>(front: &mut F, index: usize) -> Option<CallbackArg> {
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<Callback<F::Callback>> {
         front.timer_handler_arg(index)
     }
 
     fn param<'a, 'gc, O: OpFront>(
         _: &mut O,
         _: &ApiCx<'_, 'gc>,
-        taken: &'a CallbackArg,
+        taken: &'a Callback<O::Callback>,
         _: usize,
-    ) -> Result<CallbackArg, ApiError> {
+    ) -> Result<Callback<O::Callback>, ApiError> {
         Ok(*taken)
     }
 }
@@ -2737,19 +2841,20 @@ pub struct EventHandler;
 
 impl ArgType for EventHandler {
     const DESC: TypeDesc = TypeDesc::Function("EventHandler");
-    type Taken<T: FrontTypes> = Option<CallbackArg>;
-    type Param<'a, 'gc> = Option<CallbackArg>;
+    const PLAIN: bool = true;
+    type Taken<T: FrontTypes> = Option<Callback<T::Callback>>;
+    type Param<'a, 'gc, T: FrontTypes> = Option<Callback<T::Callback>>;
 
-    fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<CallbackArg>> {
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<Callback<F::Callback>>> {
         Some(front.event_handler_arg(index))
     }
 
     fn param<'a, 'gc, O: OpFront>(
         _: &mut O,
         _: &ApiCx<'_, 'gc>,
-        taken: &'a Option<CallbackArg>,
+        taken: &'a Option<Callback<O::Callback>>,
         _: usize,
-    ) -> Result<Option<CallbackArg>, ApiError> {
+    ) -> Result<Option<Callback<O::Callback>>, ApiError> {
         Ok(*taken)
     }
 }
@@ -2777,19 +2882,20 @@ pub struct IntersectionObserverCallback;
 
 impl ArgType for IntersectionObserverCallback {
     const DESC: TypeDesc = TypeDesc::Function("IntersectionObserverCallback");
-    type Taken<T: FrontTypes> = CallbackArg;
-    type Param<'a, 'gc> = CallbackArg;
+    const PLAIN: bool = true;
+    type Taken<T: FrontTypes> = Callback<T::Callback>;
+    type Param<'a, 'gc, T: FrontTypes> = Callback<T::Callback>;
 
-    fn take<F: Front>(front: &mut F, index: usize) -> Option<CallbackArg> {
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<Callback<F::Callback>> {
         front.function_arg(index, "IntersectionObserverCallback")
     }
 
     fn param<'a, 'gc, O: OpFront>(
         _: &mut O,
         _: &ApiCx<'_, 'gc>,
-        taken: &'a CallbackArg,
+        taken: &'a Callback<O::Callback>,
         _: usize,
-    ) -> Result<CallbackArg, ApiError> {
+    ) -> Result<Callback<O::Callback>, ApiError> {
         Ok(*taken)
     }
 }
@@ -2824,19 +2930,20 @@ pub struct ResizeObserverCallback;
 
 impl ArgType for ResizeObserverCallback {
     const DESC: TypeDesc = TypeDesc::Function("ResizeObserverCallback");
-    type Taken<T: FrontTypes> = CallbackArg;
-    type Param<'a, 'gc> = CallbackArg;
+    const PLAIN: bool = true;
+    type Taken<T: FrontTypes> = Callback<T::Callback>;
+    type Param<'a, 'gc, T: FrontTypes> = Callback<T::Callback>;
 
-    fn take<F: Front>(front: &mut F, index: usize) -> Option<CallbackArg> {
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<Callback<F::Callback>> {
         front.function_arg(index, "ResizeObserverCallback")
     }
 
     fn param<'a, 'gc, O: OpFront>(
         _: &mut O,
         _: &ApiCx<'_, 'gc>,
-        taken: &'a CallbackArg,
+        taken: &'a Callback<O::Callback>,
         _: usize,
-    ) -> Result<CallbackArg, ApiError> {
+    ) -> Result<Callback<O::Callback>, ApiError> {
         Ok(*taken)
     }
 }
@@ -2857,7 +2964,7 @@ impl ArgType for IntersectionObserverInitArg {
     const DESC: TypeDesc = TypeDesc::Dictionary("IntersectionObserverInit");
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = IntersectionInit;
-    type Param<'a, 'gc> = IntersectionOptions<'gc>;
+    type Param<'a, 'gc, T: FrontTypes> = IntersectionOptions<'gc>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<IntersectionInit> {
         front.intersection_observer_init(index)
@@ -2909,7 +3016,7 @@ pub struct IntersectionObserverEntryInitArg;
 impl ArgType for IntersectionObserverEntryInitArg {
     const DESC: TypeDesc = TypeDesc::Dictionary("IntersectionObserverEntryInit");
     type Taken<T: FrontTypes> = IntersectionEntryInitValues;
-    type Param<'a, 'gc> = IntersectionEntryInit<'gc>;
+    type Param<'a, 'gc, T: FrontTypes> = IntersectionEntryInit<'gc>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<IntersectionEntryInitValues> {
         front.intersection_entry_init(index)
@@ -2934,19 +3041,20 @@ pub struct MutationCallback;
 
 impl ArgType for MutationCallback {
     const DESC: TypeDesc = TypeDesc::Function("MutationCallback");
-    type Taken<T: FrontTypes> = CallbackArg;
-    type Param<'a, 'gc> = CallbackArg;
+    const PLAIN: bool = true;
+    type Taken<T: FrontTypes> = Callback<T::Callback>;
+    type Param<'a, 'gc, T: FrontTypes> = Callback<T::Callback>;
 
-    fn take<F: Front>(front: &mut F, index: usize) -> Option<CallbackArg> {
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<Callback<F::Callback>> {
         front.function_arg(index, "MutationCallback")
     }
 
     fn param<'a, 'gc, O: OpFront>(
         _: &mut O,
         _: &ApiCx<'_, 'gc>,
-        taken: &'a CallbackArg,
+        taken: &'a Callback<O::Callback>,
         _: usize,
-    ) -> Result<CallbackArg, ApiError> {
+    ) -> Result<Callback<O::Callback>, ApiError> {
         Ok(*taken)
     }
 }
@@ -2957,19 +3065,20 @@ pub struct FrameRequestCallback;
 
 impl ArgType for FrameRequestCallback {
     const DESC: TypeDesc = TypeDesc::Function("FrameRequestCallback");
-    type Taken<T: FrontTypes> = CallbackArg;
-    type Param<'a, 'gc> = CallbackArg;
+    const PLAIN: bool = true;
+    type Taken<T: FrontTypes> = Callback<T::Callback>;
+    type Param<'a, 'gc, T: FrontTypes> = Callback<T::Callback>;
 
-    fn take<F: Front>(front: &mut F, index: usize) -> Option<CallbackArg> {
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<Callback<F::Callback>> {
         front.function_arg(index, "FrameRequestCallback")
     }
 
     fn param<'a, 'gc, O: OpFront>(
         _: &mut O,
         _: &ApiCx<'_, 'gc>,
-        taken: &'a CallbackArg,
+        taken: &'a Callback<O::Callback>,
         _: usize,
-    ) -> Result<CallbackArg, ApiError> {
+    ) -> Result<Callback<O::Callback>, ApiError> {
         Ok(*taken)
     }
 }
@@ -2981,19 +3090,20 @@ macro_rules! callback_functions {
 
         impl ArgType for $name {
             const DESC: TypeDesc = TypeDesc::Function(stringify!($name));
-            type Taken<T: FrontTypes> = CallbackArg;
-            type Param<'a, 'gc> = CallbackArg;
+            const PLAIN: bool = true;
+            type Taken<T: FrontTypes> = Callback<T::Callback>;
+            type Param<'a, 'gc, T: FrontTypes> = Callback<T::Callback>;
 
-            fn take<F: Front>(front: &mut F, index: usize) -> Option<CallbackArg> {
+            fn take<F: Front>(front: &mut F, index: usize) -> Option<Callback<F::Callback>> {
                 front.function_arg(index, stringify!($name))
             }
 
             fn param<'a, 'gc, O: OpFront>(
                 _: &mut O,
                 _: &ApiCx<'_, 'gc>,
-                taken: &'a CallbackArg,
+                taken: &'a Callback<O::Callback>,
                 _: usize,
-            ) -> Result<CallbackArg, ApiError> {
+            ) -> Result<Callback<O::Callback>, ApiError> {
                 Ok(*taken)
             }
         }
@@ -3015,20 +3125,21 @@ pub struct PositionErrorCallback;
 
 impl ArgType for PositionErrorCallback {
     const DESC: TypeDesc = TypeDesc::Function("PositionErrorCallback");
+    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
-    type Taken<T: FrontTypes> = Option<CallbackArg>;
-    type Param<'a, 'gc> = Option<CallbackArg>;
+    type Taken<T: FrontTypes> = Option<Callback<T::Callback>>;
+    type Param<'a, 'gc, T: FrontTypes> = Option<Callback<T::Callback>>;
 
-    fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<CallbackArg>> {
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<Callback<F::Callback>>> {
         front.nullable_function_arg(index, "PositionErrorCallback")
     }
 
     fn param<'a, 'gc, O: OpFront>(
         _: &mut O,
         _: &ApiCx<'_, 'gc>,
-        taken: &'a Option<CallbackArg>,
+        taken: &'a Option<Callback<O::Callback>>,
         _: usize,
-    ) -> Result<Option<CallbackArg>, ApiError> {
+    ) -> Result<Option<Callback<O::Callback>>, ApiError> {
         Ok(*taken)
     }
 }
@@ -3041,7 +3152,7 @@ impl ArgType for AbortReason {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = AnyArg;
-    type Param<'a, 'gc> = AnyArg;
+    type Param<'a, 'gc, T: FrontTypes> = AnyArg;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<AnyArg> {
         front.abort_reason_arg(index)
@@ -3064,7 +3175,7 @@ pub struct AbortSignals;
 impl ArgType for AbortSignals {
     const DESC: TypeDesc = TypeDesc::Sequence("AbortSignal");
     type Taken<T: FrontTypes> = Vec<T::Node>;
-    type Param<'a, 'gc> = Vec<Gc<'gc, EventTargetImpl>>;
+    type Param<'a, 'gc, T: FrontTypes> = Vec<Gc<'gc, EventTargetImpl>>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Vec<F::Node>> {
         front.objects_arg::<EventTargetImpl>(index, "AbortSignal")
@@ -3102,7 +3213,7 @@ impl ArgType for MessagePorts {
     const DESC: TypeDesc = TypeDesc::Sequence("MessagePort");
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Vec<T::Node>;
-    type Param<'a, 'gc> = Vec<Gc<'gc, EventTargetImpl>>;
+    type Param<'a, 'gc, T: FrontTypes> = Vec<Gc<'gc, EventTargetImpl>>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Vec<F::Node>> {
         if front.is_undefined(index) {
@@ -3144,7 +3255,7 @@ impl ArgType for EnforcedU64 {
     const DESC: TypeDesc = TypeDesc::Double;
     const PLAIN: bool = true;
     type Taken<T: FrontTypes> = f64;
-    type Param<'a, 'gc> = f64;
+    type Param<'a, 'gc, T: FrontTypes> = f64;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<f64> {
         const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
@@ -3183,7 +3294,7 @@ impl ArgType for ByteString {
     const DESC: TypeDesc = TypeDesc::String;
     const PLAIN: bool = true;
     type Taken<T: FrontTypes> = T::Str;
-    type Param<'a, 'gc> = &'a str;
+    type Param<'a, 'gc, T: FrontTypes> = &'a str;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<F::Str> {
         front.string_arg(index)
@@ -3215,7 +3326,7 @@ impl ArgType for HeaderPairs {
     const DESC: TypeDesc = TypeDesc::StringPairs;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<StringPairsArg>;
-    type Param<'a, 'gc> = StringPairsInit<'a>;
+    type Param<'a, 'gc, T: FrontTypes> = StringPairsInit<'a>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<StringPairsArg>> {
         if front.is_undefined(index) {
@@ -3258,7 +3369,7 @@ pub enum RequestInput<'a, 'gc> {
 impl ArgType for RequestInfo {
     const DESC: TypeDesc = TypeDesc::StringOr(&["Request"]);
     type Taken<T: FrontTypes> = RequestInfoArg<T::Node, T::Str>;
-    type Param<'a, 'gc> = RequestInput<'a, 'gc>;
+    type Param<'a, 'gc, T: FrontTypes> = RequestInput<'a, 'gc>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<RequestInfoArg<F::Node, F::Str>> {
         match front.object_if::<dom::Request>(index) {
@@ -3290,7 +3401,7 @@ impl ArgType for NullableBody {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<BodyArg>;
-    type Param<'a, 'gc> = Option<&'a BodyArg>;
+    type Param<'a, 'gc, T: FrontTypes> = Option<&'a BodyArg>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<BodyArg>> {
         front.body_arg(index)
@@ -3313,7 +3424,7 @@ impl ArgType for JsonData {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = String;
-    type Param<'a, 'gc> = &'a str;
+    type Param<'a, 'gc, T: FrontTypes> = &'a str;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<String> {
         front.json_arg(index)
@@ -3421,7 +3532,7 @@ impl ArgType for Rest {
     const DESC: TypeDesc = TypeDesc::Rest;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<RestArg>;
-    type Param<'a, 'gc> = Option<RestArg>;
+    type Param<'a, 'gc, T: FrontTypes> = Option<RestArg>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<RestArg>> {
         Some(front.rest_arg(index))
@@ -3447,7 +3558,7 @@ impl ArgType for Strings {
     const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Vec<T::Str>;
-    type Param<'a, 'gc> = Vec<&'a str>;
+    type Param<'a, 'gc, T: FrontTypes> = Vec<&'a str>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Vec<F::Str>> {
         (index..front.arg_count())
@@ -3487,7 +3598,7 @@ impl ArgType for NodesOrStrings {
     const DESC: TypeDesc = TypeDesc::NodesOrStrings;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Vec<NodeOrStr<T::Node, T::Str>>;
-    type Param<'a, 'gc> = Vec<NodeOrString<'a, 'gc>>;
+    type Param<'a, 'gc, T: FrontTypes> = Vec<NodeOrString<'a, 'gc>>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Self::Taken<F>> {
         (index..front.arg_count())
@@ -3533,7 +3644,7 @@ impl ArgType for NullableElementOrLong {
     const DESC: TypeDesc = TypeDesc::NullableUnion(&["HTMLElement", "long"]);
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<NodeOrLong<T::Node>>;
-    type Param<'a, 'gc> = Option<ElementOrLong<'gc>>;
+    type Param<'a, 'gc, T: FrontTypes> = Option<ElementOrLong<'gc>>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Self::Taken<F>> {
         front.node_or_long_arg(index)
@@ -3572,7 +3683,7 @@ impl ArgType for OptionOrOptGroup {
     const DESC: TypeDesc = TypeDesc::Union(&["HTMLOptionElement", "HTMLOptGroupElement"]);
     const PLAIN: bool = true;
     type Taken<T: FrontTypes> = T::Node;
-    type Param<'a, 'gc> = NodeRef<'gc>;
+    type Param<'a, 'gc, T: FrontTypes> = NodeRef<'gc>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<F::Node> {
         match front.node_arg(index)? {
@@ -3615,7 +3726,7 @@ impl ArgType for Slottables {
     const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Vec<T::Node>;
-    type Param<'a, 'gc> = Vec<NodeRef<'gc>>;
+    type Param<'a, 'gc, T: FrontTypes> = Vec<NodeRef<'gc>>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Vec<F::Node>> {
         (index..front.arg_count())
@@ -3663,7 +3774,7 @@ pub struct Doubles;
 impl ArgType for Doubles {
     const DESC: TypeDesc = TypeDesc::Doubles;
     type Taken<T: FrontTypes> = Vec<f64>;
-    type Param<'a, 'gc> = Vec<f64>;
+    type Param<'a, 'gc, T: FrontTypes> = Vec<f64>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Vec<f64>> {
         front.doubles_arg(index)
@@ -3748,7 +3859,7 @@ impl ArgType for Any {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = AnyArg;
-    type Param<'a, 'gc> = AnyArg;
+    type Param<'a, 'gc, T: FrontTypes> = AnyArg;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<AnyArg> {
         Some(front.any_arg(index))
@@ -3796,7 +3907,7 @@ impl ArgType for f64 {
     const DESC: TypeDesc = TypeDesc::Double;
     const PLAIN: bool = true;
     type Taken<T: FrontTypes> = f64;
-    type Param<'a, 'gc> = f64;
+    type Param<'a, 'gc, T: FrontTypes> = f64;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<f64> {
         front.f64_arg(index, true)
@@ -3840,7 +3951,7 @@ impl ArgType for Option<f64> {
     const DESC: TypeDesc = TypeDesc::Double;
     const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Option<f64>;
-    type Param<'a, 'gc> = Option<f64>;
+    type Param<'a, 'gc, T: FrontTypes> = Option<f64>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<f64>> {
         if front.is_null_or_undefined(index) {
@@ -3868,7 +3979,7 @@ impl ArgType for OptionalUnrestrictedDouble {
     const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<f64>;
-    type Param<'a, 'gc> = Option<f64>;
+    type Param<'a, 'gc, T: FrontTypes> = Option<f64>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<f64>> {
         if front.is_undefined(index) {
@@ -3895,7 +4006,7 @@ impl ArgType for UnrestrictedDouble {
     const DESC: TypeDesc = TypeDesc::Double;
     const PLAIN: bool = true;
     type Taken<T: FrontTypes> = f64;
-    type Param<'a, 'gc> = f64;
+    type Param<'a, 'gc, T: FrontTypes> = f64;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<f64> {
         front.f64_arg(index, false)
@@ -3925,6 +4036,11 @@ impl RetType for UnrestrictedDouble {
 /// A dictionary member's type: read from the dictionary before the
 /// operation (WebIDL's conversion of the member's value).
 pub trait DictMember: Sized {
+    /// Whether the front end reads it as a value (a boolean, a number, a
+    /// string, strings), keeping nothing of its engine's for the
+    /// operation: a dictionary whose members all are is `PLAIN`.
+    const PLAIN: bool = false;
+
     /// `dict`'s member `member`: `Some(None)` if it is undefined, `None`
     /// if reading it threw.
     fn read<F: Front>(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<Self>>;
@@ -3937,6 +4053,8 @@ pub trait DictMember: Sized {
 }
 
 impl DictMember for bool {
+    const PLAIN: bool = true;
+
     fn read<F: Front>(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<bool>> {
         front.dict_bool(dict, member)
     }
@@ -3948,6 +4066,8 @@ impl DictMember for bool {
 
 /// A `boolean` member with no default: none if it is missing.
 impl DictMember for Option<bool> {
+    const PLAIN: bool = true;
+
     fn read<F: Front>(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<Option<bool>>> {
         Some(front.dict_bool(dict, member)?.map(Some))
     }
@@ -3955,6 +4075,8 @@ impl DictMember for Option<bool> {
 
 /// A `DOMString` member.
 impl DictMember for String {
+    const PLAIN: bool = true;
+
     fn read<F: Front>(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<String>> {
         front.dict_string(dict, member)
     }
@@ -3967,6 +4089,8 @@ impl DictMember for String {
 /// An `unrestricted double` member with no default: none if it is
 /// missing (`DOMMatrix2DInit`'s).
 impl DictMember for Option<f64> {
+    const PLAIN: bool = true;
+
     fn read<F: Front>(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<Option<f64>>> {
         Some(front.dict_number(dict, member)?.map(Some))
     }
@@ -3978,6 +4102,8 @@ impl DictMember for Option<f64> {
 
 /// A `double` member: a finite number.
 impl DictMember for f64 {
+    const PLAIN: bool = true;
+
     fn read<F: Front>(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<f64>> {
         let Some(value) = front.dict_number(dict, member)? else {
             return Some(None);
@@ -4012,6 +4138,8 @@ macro_rules! integer_members {
     ($($ty:ty: $bits:literal, $signed:literal;)*) => {$(
         /// A WebIDL integer member, converted modulo its size.
         impl DictMember for $ty {
+            const PLAIN: bool = true;
+
             fn read<F: Front>(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<$ty>> {
                 Some(
                     front
@@ -4036,6 +4164,8 @@ integer_members! {
 /// A `DOMString?` member whose default is null: none if it is undefined
 /// (missing) or null.
 impl DictMember for Option<String> {
+    const PLAIN: bool = true;
+
     fn read<F: Front>(
         front: &mut F,
         dict: &F::Dict,
@@ -4058,6 +4188,8 @@ impl DictMember for Option<AnyArg> {
 }
 
 impl DictMember for Option<Vec<String>> {
+    const PLAIN: bool = true;
+
     fn read<F: Front>(
         front: &mut F,
         dict: &F::Dict,
@@ -5560,7 +5692,7 @@ impl ArgType for ElementLocalName {
     /// The name, its number if it is one already, and the interface its
     /// element will be of in an HTML document (`Front::foresee_element`).
     type Taken<T: FrontTypes> = (T::Str, Option<dom::NameId>, usize);
-    type Param<'a, 'gc> = (&'a str, Option<dom::NameId>);
+    type Param<'a, 'gc, T: FrontTypes> = (&'a str, Option<dom::NameId>);
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<(F::Str, Option<dom::NameId>, usize)> {
         let name = front.string_arg(index)?;
@@ -5783,7 +5915,7 @@ impl ArgType for GetHtmlOptionsArg {
     const UNDEFINED_IS_DEFAULT: bool = true;
     /// `serializableShadowRoots`, and whether `shadowRoots` was given.
     type Taken<T: FrontTypes> = (bool, bool);
-    type Param<'a, 'gc> = GetHtmlOptions<'gc>;
+    type Param<'a, 'gc, T: FrontTypes> = GetHtmlOptions<'gc>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<(bool, bool)> {
         front.get_html_options(index)
@@ -5814,19 +5946,20 @@ pub struct CustomElementConstructor;
 
 impl ArgType for CustomElementConstructor {
     const DESC: TypeDesc = TypeDesc::Function("CustomElementConstructor");
-    type Taken<T: FrontTypes> = CallbackArg;
-    type Param<'a, 'gc> = CallbackArg;
+    const PLAIN: bool = true;
+    type Taken<T: FrontTypes> = Callback<T::Callback>;
+    type Param<'a, 'gc, T: FrontTypes> = Callback<T::Callback>;
 
-    fn take<F: Front>(front: &mut F, index: usize) -> Option<CallbackArg> {
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<Callback<F::Callback>> {
         front.function_arg(index, "CustomElementConstructor")
     }
 
     fn param<'a, 'gc, O: OpFront>(
         _: &mut O,
         _: &ApiCx<'_, 'gc>,
-        taken: &'a CallbackArg,
+        taken: &'a Callback<O::Callback>,
         _: usize,
-    ) -> Result<CallbackArg, ApiError> {
+    ) -> Result<Callback<O::Callback>, ApiError> {
         Ok(*taken)
     }
 }
@@ -6386,7 +6519,7 @@ impl ArgType for DomString {
     const DESC: TypeDesc = TypeDesc::String;
     const PLAIN: bool = true;
     type Taken<T: FrontTypes> = T::Str;
-    type Param<'a, 'gc> = &'a str;
+    type Param<'a, 'gc, T: FrontTypes> = &'a str;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<F::Str> {
         front.string_arg(index)
@@ -6428,7 +6561,7 @@ impl ArgType for EnforcedI32 {
     const DESC: TypeDesc = TypeDesc::I32;
     const PLAIN: bool = true;
     type Taken<T: FrontTypes> = i32;
-    type Param<'a, 'gc> = i32;
+    type Param<'a, 'gc, T: FrontTypes> = i32;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<i32> {
         let value = front.f64_arg(index, false)?;
@@ -6466,7 +6599,7 @@ pub struct Uint8ClampedArray;
 impl ArgType for Uint8ClampedArray {
     const DESC: TypeDesc = TypeDesc::Uint8ClampedArray;
     type Taken<T: FrontTypes> = Uint8ClampedArg;
-    type Param<'a, 'gc> = Uint8ClampedArg;
+    type Param<'a, 'gc, T: FrontTypes> = Uint8ClampedArg;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Uint8ClampedArg> {
         front.uint8_clamped_arg(index)
@@ -6522,7 +6655,7 @@ pub enum CanvasStyleRet<'gc> {
 impl ArgType for CanvasStyleValue {
     const DESC: TypeDesc = TypeDesc::StringOr(CANVAS_STYLE_OBJECTS);
     type Taken<T: FrontTypes> = CanvasStyleTaken<T::Node, T::Str>;
-    type Param<'a, 'gc> = CanvasStyleParam<'a, 'gc>;
+    type Param<'a, 'gc, T: FrontTypes> = CanvasStyleParam<'a, 'gc>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<CanvasStyleTaken<F::Node, F::Str>> {
         if let Some(object) = front.object_if::<dom::CanvasGradient>(index) {
@@ -6605,7 +6738,7 @@ impl ArgType for CanvasImageSource {
     const DESC: TypeDesc = TypeDesc::Union(&["HTMLImageElement", "HTMLCanvasElement"]);
     const PLAIN: bool = true;
     type Taken<T: FrontTypes> = T::Node;
-    type Param<'a, 'gc> = NodeRef<'gc>;
+    type Param<'a, 'gc, T: FrontTypes> = NodeRef<'gc>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<F::Node> {
         match front.node_arg(index)? {
@@ -6651,7 +6784,7 @@ impl ArgType for OptionalPath2dOrString {
     const DESC: TypeDesc = TypeDesc::StringOr(&["Path2D"]);
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<Path2dOrStringTaken<T::Node, T::Str>>;
-    type Param<'a, 'gc> = Option<Path2dOrString<'a, 'gc>>;
+    type Param<'a, 'gc, T: FrontTypes> = Option<Path2dOrString<'a, 'gc>>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Self::Taken<F>> {
         if front.is_undefined(index) {
@@ -6687,7 +6820,7 @@ impl ArgType for RoundRectRadii {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Vec<Radius>;
-    type Param<'a, 'gc> = &'a [Radius];
+    type Param<'a, 'gc, T: FrontTypes> = &'a [Radius];
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Vec<Radius>> {
         front.round_rect_radii_arg(index)
@@ -6774,7 +6907,7 @@ impl ArgType for AnimationOptions {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = AnimationOptions;
-    type Param<'a, 'gc> = &'a AnimationOptions;
+    type Param<'a, 'gc, T: FrontTypes> = &'a AnimationOptions;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<AnimationOptions> {
         front.animation_options_arg(index)
@@ -6797,7 +6930,7 @@ impl ArgType for EffectOptions {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = AnimationOptions;
-    type Param<'a, 'gc> = &'a AnimationOptions;
+    type Param<'a, 'gc, T: FrontTypes> = &'a AnimationOptions;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<AnimationOptions> {
         front.effect_options_arg(index)
@@ -6820,7 +6953,7 @@ impl ArgType for OptionalTimingArg {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = animation::OptionalTiming;
-    type Param<'a, 'gc> = &'a animation::OptionalTiming;
+    type Param<'a, 'gc, T: FrontTypes> = &'a animation::OptionalTiming;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<animation::OptionalTiming> {
         front.optional_timing_arg(index)
@@ -6844,7 +6977,7 @@ impl ArgType for TimelineArg {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = bool;
-    type Param<'a, 'gc> = bool;
+    type Param<'a, 'gc, T: FrontTypes> = bool;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<bool> {
         front.timeline_arg(index)
@@ -6958,7 +7091,7 @@ impl ArgType for Keyframes {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<animation::ScriptKeyframes>;
-    type Param<'a, 'gc> = Option<&'a animation::ScriptKeyframes>;
+    type Param<'a, 'gc, T: FrontTypes> = Option<&'a animation::ScriptKeyframes>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<animation::ScriptKeyframes>> {
         front.keyframes_arg(index)
@@ -6980,19 +7113,20 @@ pub struct BlobCallback;
 
 impl ArgType for BlobCallback {
     const DESC: TypeDesc = TypeDesc::Function("BlobCallback");
-    type Taken<T: FrontTypes> = CallbackArg;
-    type Param<'a, 'gc> = CallbackArg;
+    const PLAIN: bool = true;
+    type Taken<T: FrontTypes> = Callback<T::Callback>;
+    type Param<'a, 'gc, T: FrontTypes> = Callback<T::Callback>;
 
-    fn take<F: Front>(front: &mut F, index: usize) -> Option<CallbackArg> {
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<Callback<F::Callback>> {
         front.function_arg(index, "BlobCallback")
     }
 
     fn param<'a, 'gc, O: OpFront>(
         _: &mut O,
         _: &ApiCx<'_, 'gc>,
-        taken: &'a CallbackArg,
+        taken: &'a Callback<O::Callback>,
         _: usize,
-    ) -> Result<CallbackArg, ApiError> {
+    ) -> Result<Callback<O::Callback>, ApiError> {
         Ok(*taken)
     }
 }
@@ -7013,7 +7147,7 @@ pub struct Hidden;
 impl ArgType for Hidden {
     const DESC: TypeDesc = TypeDesc::Any;
     type Taken<T: FrontTypes> = Option<HiddenValue<T::Str>>;
-    type Param<'a, 'gc> = Option<HiddenValue<&'a str>>;
+    type Param<'a, 'gc, T: FrontTypes> = Option<HiddenValue<&'a str>>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<HiddenValue<F::Str>>> {
         if front.is_null_or_undefined(index) {
@@ -7082,7 +7216,7 @@ impl ArgType for NumberIfNumber {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<f64>;
-    type Param<'a, 'gc> = Option<f64>;
+    type Param<'a, 'gc, T: FrontTypes> = Option<f64>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<f64>> {
         Some(front.number_if(index))
@@ -7113,7 +7247,7 @@ impl ArgType for OptionalClampedI64 {
     const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<i64>;
-    type Param<'a, 'gc> = Option<i64>;
+    type Param<'a, 'gc, T: FrontTypes> = Option<i64>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<i64>> {
         if front.is_undefined(index) {
@@ -7171,7 +7305,7 @@ impl ArgType for ArrayView {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = false;
     type Taken<T: FrontTypes> = ArrayViewArg;
-    type Param<'a, 'gc> = ArrayViewArg;
+    type Param<'a, 'gc, T: FrontTypes> = ArrayViewArg;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<ArrayViewArg> {
         front.array_view_arg(index)
@@ -7222,7 +7356,7 @@ impl ArgType for CloneValue {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = false;
     type Taken<T: FrontTypes> = CloneTaken<T::Node>;
-    type Param<'a, 'gc> = CloneParam<'a, 'gc>;
+    type Param<'a, 'gc, T: FrontTypes> = CloneParam<'a, 'gc>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<CloneTaken<F::Node>> {
         let (payload, ports) = front.clone_arg(index)?;
@@ -7303,6 +7437,8 @@ pub enum StringOrNumber {
 /// A dictionary member `(DOMString or DOMHighResTimeStamp)` with no
 /// default: none if it is missing.
 impl DictMember for Option<StringOrNumber> {
+    const PLAIN: bool = true;
+
     fn read<F: Front>(
         front: &mut F,
         dict: &F::Dict,
@@ -7347,7 +7483,7 @@ impl ArgType for MeasureStart {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = MeasureStartArg<T::Str>;
-    type Param<'a, 'gc> = MeasureStartParam<'a>;
+    type Param<'a, 'gc, T: FrontTypes> = MeasureStartParam<'a>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<MeasureStartArg<F::Str>> {
         // Missing or undefined: not given (WebIDL's optional argument).
@@ -7387,19 +7523,20 @@ pub struct PerformanceObserverCallback;
 
 impl ArgType for PerformanceObserverCallback {
     const DESC: TypeDesc = TypeDesc::Function("PerformanceObserverCallback");
-    type Taken<T: FrontTypes> = CallbackArg;
-    type Param<'a, 'gc> = CallbackArg;
+    const PLAIN: bool = true;
+    type Taken<T: FrontTypes> = Callback<T::Callback>;
+    type Param<'a, 'gc, T: FrontTypes> = Callback<T::Callback>;
 
-    fn take<F: Front>(front: &mut F, index: usize) -> Option<CallbackArg> {
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<Callback<F::Callback>> {
         front.function_arg(index, "PerformanceObserverCallback")
     }
 
     fn param<'a, 'gc, O: OpFront>(
         _: &mut O,
         _: &ApiCx<'_, 'gc>,
-        taken: &'a CallbackArg,
+        taken: &'a Callback<O::Callback>,
         _: usize,
-    ) -> Result<CallbackArg, ApiError> {
+    ) -> Result<Callback<O::Callback>, ApiError> {
         Ok(*taken)
     }
 }
@@ -7784,7 +7921,7 @@ impl ArgType for StringPairs {
     const DESC: TypeDesc = TypeDesc::StringPairs;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<StringPairsArg>;
-    type Param<'a, 'gc> = StringPairsInit<'a>;
+    type Param<'a, 'gc, T: FrontTypes> = StringPairsInit<'a>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<StringPairsArg>> {
         if front.is_undefined(index) {
@@ -7824,7 +7961,7 @@ impl ArgType for BlobParts {
     const DESC: TypeDesc = TypeDesc::Sequence("BlobPart");
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<Vec<BlobPartArg<T::Node>>>;
-    type Param<'a, 'gc> = Vec<BlobPart<'a, 'gc>>;
+    type Param<'a, 'gc, T: FrontTypes> = Vec<BlobPart<'a, 'gc>>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Self::Taken<F>> {
         front.blob_parts_arg(index)
@@ -7915,7 +8052,7 @@ impl ArgType for EmptyStringDefault {
     const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<T::Str>;
-    type Param<'a, 'gc> = &'a str;
+    type Param<'a, 'gc, T: FrontTypes> = &'a str;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<F::Str>> {
         if front.is_undefined(index) {
@@ -7944,7 +8081,7 @@ impl ArgType for OptionalString {
     const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<T::Str>;
-    type Param<'a, 'gc> = Option<&'a str>;
+    type Param<'a, 'gc, T: FrontTypes> = Option<&'a str>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<F::Str>> {
         if front.is_undefined(index) {
@@ -7970,7 +8107,7 @@ impl ArgType for Option<DomString> {
     /// An optional one's missing is undefined, which is none, as null.
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<T::Str>;
-    type Param<'a, 'gc> = Option<&'a str>;
+    type Param<'a, 'gc, T: FrontTypes> = Option<&'a str>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<F::Str>> {
         front.nullable_string_arg(index)
@@ -8017,7 +8154,7 @@ impl ArgType for LegacyNullToEmptyString {
     const DESC: TypeDesc = TypeDesc::NullableString;
     const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Option<T::Str>;
-    type Param<'a, 'gc> = &'a str;
+    type Param<'a, 'gc, T: FrontTypes> = &'a str;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<F::Str>> {
         front.legacy_null_string_arg(index)
@@ -8084,6 +8221,80 @@ pub(crate) fn take_node<I: Interface, F: Front>(front: &mut F, index: usize) -> 
         }
     }
 }
+
+/// The `Front` methods a `PLAIN` member's call may reach (its own code's,
+/// and its types' `take` and `prepare`): what a front end that is given
+/// only `PLAIN` members has. With `PLAIN_OP_METHODS`, what `PLAIN` means;
+/// the tests check the types and the members' functions against them.
+pub const PLAIN_FRONT_METHODS: &[&str] = &[
+    "read",
+    "mutate",
+    "has_args",
+    "throw",
+    "finish",
+    "finish_string",
+    "finish_node",
+    "finish_number",
+    "finish_object",
+    "invoke_ce_reactions",
+    "arg_count",
+    "is_undefined",
+    "is_null_or_undefined",
+    "is_dictionary_like",
+    "string_arg",
+    "nullable_string_arg",
+    "legacy_null_string_arg",
+    "bool_arg",
+    "i32_arg",
+    "u32_arg",
+    "f64_arg",
+    "node_arg",
+    "object_arg",
+    "target_arg",
+    "callback_arg",
+    "function_arg",
+    "nullable_function_arg",
+    "event_handler_arg",
+    "timer_handler_arg",
+    "dict_arg",
+    "dict_bool",
+    "dict_number",
+    "dict_string",
+    "dict_nullable_string",
+    "dict_strings",
+    "dict_string_or_number",
+    "prepare_new_node",
+    "prepare_node_like_this",
+    "foresee_element",
+];
+
+/// The `OpFront` methods a `PLAIN` member's call may reach: its types'
+/// `param` and `give`, and its function's, if it is given the front end's
+/// side in the operation. (`current_window` is none by default: a `PLAIN`
+/// member has none found for it.)
+pub const PLAIN_OP_METHODS: &[&str] = &[
+    "str_param",
+    "this_as",
+    "node",
+    "object",
+    "target",
+    "same_callback",
+    "store_callback",
+    "callback_number",
+    "current_window",
+    "ret_undefined",
+    "ret_null",
+    "ret_bool",
+    "ret_u32",
+    "ret_i32",
+    "ret_f64",
+    "ret_string",
+    "ret_name",
+    "ret_node",
+    "ret_object",
+    "ret_new_node",
+    "ret_construct",
+];
 
 /// A member's typed path, as a type of its own: `declare!` makes one for
 /// each member.
@@ -8324,6 +8535,7 @@ mod tests {
         type PendingNumber = std::convert::Infallible;
         type PendingObject = std::convert::Infallible;
         type PreparedNode = ();
+        type Callback = usize;
     }
 
     impl Front for OneNode {

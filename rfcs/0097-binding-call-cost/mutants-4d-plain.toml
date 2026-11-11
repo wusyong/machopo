@@ -1,0 +1,59 @@
+# The checks of what `PLAIN` promises, read from the source
+# (`crates/dom_api/tests/it/plain.rs`, and the front end's own methods in
+# `crates/dom_js/tests/it/info_front.rs`).
+test = ["cargo", "test", "-q", "-p", "dom_api", "--test", "it", "plain::"]
+timeout = 900
+
+[[mutant]]
+name = "putImageData's image data is plain"
+file = "crates/dom_api/src/interfaces.rs"
+from = '''method putImageData(imagedata: ReadImageData, dx'''
+to = '''method putImageData(imagedata: ImageData, dx'''
+
+[[mutant]]
+name = "an image data read is plain"
+file = "crates/dom_api/src/typed.rs"
+from = '''impl ArgType for ReadImageData {
+    const DESC: TypeDesc = <crate::interfaces::ImageData as ArgType>::DESC;'''
+to = '''impl ArgType for ReadImageData {
+    const PLAIN: bool = true; const DESC: TypeDesc = <crate::interfaces::ImageData as ArgType>::DESC;'''
+
+[[mutant]]
+name = "a rest argument is plain"
+file = "crates/dom_api/src/typed.rs"
+from = '''impl ArgType for Rest {
+    const DESC: TypeDesc = TypeDesc::Rest;'''
+to = '''impl ArgType for Rest {
+    const PLAIN: bool = true; const DESC: TypeDesc = TypeDesc::Rest;'''
+
+[[mutant]]
+name = "an any argument is plain"
+file = "crates/dom_api/src/typed.rs"
+from = '''impl ArgType for Any {
+    const DESC: TypeDesc = TypeDesc::Any;'''
+to = '''impl ArgType for Any {
+    const PLAIN: bool = true; const DESC: TypeDesc = TypeDesc::Any;'''
+
+[[mutant]]
+name = "a signal's rethrown reason is plain"
+file = "crates/dom_api/src/interfaces.rs"
+from = '''method throwIfAborted() -> Rethrown = abort::throw_if_aborted;'''
+to = '''method throwIfAborted() = abort::throw_if_aborted;'''
+
+[[mutant]]
+name = "rethrowing is a plain method"
+file = "crates/dom_api/src/typed.rs"
+from = '''    "current_window",
+    "ret_undefined",'''
+to = '''    "current_window", "rethrow",
+    "ret_undefined",'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "the_plain_methods"]
+
+[[mutant]]
+name = "the info front end numbers no callback"
+file = "crates/dom_js/src/info_front.rs"
+from = '''    fn callback_number(&mut self, callback: Callback<v8::Local<'s, v8::Value>>) -> u32 {
+        v8::Local::<v8::Object>::try_from(callback.0).map_or(0, front::number)
+    }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "the_plain_methods"]

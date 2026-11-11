@@ -1571,7 +1571,7 @@ fn setter(iface: &Ident, ty: &Type, set: &Path, with_front: bool, ce_reactions: 
     quote! {
         type Args = (#ty,);
         type Ret = ();
-        const PLAIN: bool = !#with_front && <#ty as #api::typed::ArgType>::PLAIN;
+        const PLAIN: bool = <#ty as #api::typed::ArgType>::PLAIN;
 
         fn call<F: #api::typed::Front>(#front: &mut F) {
             let ::std::option::Option::Some(#value) = <#ty as #api::typed::ArgType>::take(#front, 0) else {
@@ -1736,7 +1736,9 @@ fn method(
     );
     let ce_invoke = ce_invoke(ce_reactions, &front, &result);
     // What a front end with only the required methods can call.
-    let plain = !with_front && !is_static && !realm && !legacy_factory;
+    // (Its function may be given the front end's side in the operation:
+    // what that asks of a front end, its types say.)
+    let plain = !is_static && !realm && !legacy_factory;
     quote! {
         type Args = (#(#types,)*);
         type Ret = #ret;
@@ -1993,6 +1995,7 @@ fn dictionary_items(dictionary: &DictionaryDef) -> Tokens {
     });
     let mut ordered: Vec<&DictMemberDef> = members.iter().collect();
     ordered.sort_by_key(|member| member.name.unraw().to_string());
+    let member_types = ordered.iter().map(|member| &member.ty);
     let reads = ordered.iter().map(|member| {
         let (field, ty) = (&member.name, &member.ty);
         let js = js_name(field);
@@ -2034,6 +2037,7 @@ fn dictionary_items(dictionary: &DictionaryDef) -> Tokens {
 
         impl #api::typed::Dictionary for #name {
             const NAME: &'static str = #name_str;
+            const PLAIN: bool = true #(&& <#member_types as #api::typed::DictMember>::PLAIN)*;
 
             fn read<F: #api::typed::Front>(#front: &mut F, #index: usize) -> ::std::option::Option<#name> {
                 let mut #value = <#name as ::std::default::Default>::default();
@@ -2067,9 +2071,10 @@ fn dictionary_items(dictionary: &DictionaryDef) -> Tokens {
 
         impl #api::typed::ArgType for #name {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Dictionary(#name_str);
+            const PLAIN: bool = <#name as #api::typed::Dictionary>::PLAIN;
             const UNDEFINED_IS_DEFAULT: bool = true;
             type Taken<T: #api::typed::FrontTypes> = #name;
-            type Param<'a, 'gc> = &'a #name;
+            type Param<'a, 'gc, T: #api::typed::FrontTypes> = &'a #name;
 
             fn take<F: #api::typed::Front>(#front: &mut F, #index: usize) -> ::std::option::Option<#name> {
                 <#name as #api::typed::Dictionary>::read(#front, #index)
@@ -2136,7 +2141,7 @@ fn object_types(name: &Ident) -> Tokens {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Node(stringify!(#name));
             const PLAIN: bool = true;
             type Taken<T: #api::typed::FrontTypes> = T::Node;
-            type Param<'a, 'gc> = #object::Ref<'gc>;
+            type Param<'a, 'gc, T: #api::typed::FrontTypes> = #object::Ref<'gc>;
 
             fn take<F: #api::typed::Front>(#front: &mut F, #index: usize) -> ::std::option::Option<F::Node> {
                 #api::typed::take_object::<#name, F>(#front, #index)
@@ -2158,7 +2163,7 @@ fn object_types(name: &Ident) -> Tokens {
             // WebIDL's nullable types convert undefined to null.
             const UNDEFINED_IS_DEFAULT: bool = true;
             type Taken<T: #api::typed::FrontTypes> = ::std::option::Option<T::Node>;
-            type Param<'a, 'gc> = ::std::option::Option<#object::Ref<'gc>>;
+            type Param<'a, 'gc, T: #api::typed::FrontTypes> = ::std::option::Option<#object::Ref<'gc>>;
 
             fn take<F: #api::typed::Front>(
                 #front: &mut F,
@@ -2218,7 +2223,7 @@ fn object_types(name: &Ident) -> Tokens {
 }
 
 /// A callback interface: its name, and its nullable form as an argument
-/// (what the front end keeps, `CallbackArg`).
+/// (the front end's handle, `Callback`).
 fn callback_items(callback: &CallbackDef) -> Tokens {
     let api = api();
     let CallbackDef { attrs, name, .. } = callback;
@@ -2230,25 +2235,26 @@ fn callback_items(callback: &CallbackDef) -> Tokens {
 
         impl #api::typed::ArgType for ::std::option::Option<#name> {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Callback(#name_str);
+            const PLAIN: bool = true;
             // WebIDL's nullable types convert undefined to null (`callback_arg`
             // takes it as none).
             const UNDEFINED_IS_DEFAULT: bool = true;
-            type Taken<T: #api::typed::FrontTypes> = ::std::option::Option<#api::typed::CallbackArg>;
-            type Param<'a, 'gc> = ::std::option::Option<#api::typed::CallbackArg>;
+            type Taken<T: #api::typed::FrontTypes> = ::std::option::Option<#api::typed::Callback<T::Callback>>;
+            type Param<'a, 'gc, T: #api::typed::FrontTypes> = ::std::option::Option<#api::typed::Callback<T::Callback>>;
 
             fn take<F: #api::typed::Front>(
                 #front: &mut F,
                 #index: usize,
-            ) -> ::std::option::Option<::std::option::Option<#api::typed::CallbackArg>> {
+            ) -> ::std::option::Option<::std::option::Option<#api::typed::Callback<F::Callback>>> {
                 #front.callback_arg(#index, #name_str)
             }
 
             fn param<'a, 'gc, O: #api::typed::OpFront>(
                 _: &mut O,
                 _: &#api::ApiCx<'_, 'gc>,
-                #taken: &'a ::std::option::Option<#api::typed::CallbackArg>,
+                #taken: &'a ::std::option::Option<#api::typed::Callback<O::Callback>>,
                 _: usize,
-            ) -> ::std::result::Result<::std::option::Option<#api::typed::CallbackArg>, #api::ApiError> {
+            ) -> ::std::result::Result<::std::option::Option<#api::typed::Callback<O::Callback>>, #api::ApiError> {
                 ::std::result::Result::Ok(*#taken)
             }
         }
@@ -2285,7 +2291,7 @@ fn node_types(name: &Ident) -> Tokens {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Node(stringify!(#name));
             const PLAIN: bool = true;
             type Taken<T: #api::typed::FrontTypes> = T::Node;
-            type Param<'a, 'gc> = ::dom::NodeRef<'gc>;
+            type Param<'a, 'gc, T: #api::typed::FrontTypes> = ::dom::NodeRef<'gc>;
 
             fn take<F: #api::typed::Front>(#front: &mut F, #index: usize) -> ::std::option::Option<F::Node> {
                 #api::typed::take_node::<#name, F>(#front, #index)
@@ -2324,7 +2330,7 @@ fn node_types(name: &Ident) -> Tokens {
             // takes it as none).
             const UNDEFINED_IS_DEFAULT: bool = true;
             type Taken<T: #api::typed::FrontTypes> = ::std::option::Option<T::Node>;
-            type Param<'a, 'gc> = ::std::option::Option<::dom::NodeRef<'gc>>;
+            type Param<'a, 'gc, T: #api::typed::FrontTypes> = ::std::option::Option<::dom::NodeRef<'gc>>;
 
             fn take<F: #api::typed::Front>(
                 #front: &mut F,

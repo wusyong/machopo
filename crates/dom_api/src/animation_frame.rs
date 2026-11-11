@@ -9,7 +9,7 @@
 use dom::Window;
 use elise::{Gc, Persistent};
 
-use crate::typed::{CallbackArg, OpFront, ScriptHost};
+use crate::typed::{Callback, OpFront, ScriptHost};
 use crate::{ApiCx, ApiError};
 
 /// `requestAnimationFrame(callback)`: a new callback of the window, its
@@ -18,7 +18,7 @@ pub(crate) fn request_animation_frame<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Window>,
-    callback: CallbackArg,
+    callback: Callback<O::Callback>,
 ) -> Result<i32, ApiError> {
     let frame = cx.add_animation_frame(this);
     op.store_callback(cx, cx.animation_frame_callback_edge(frame), callback);

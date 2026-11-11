@@ -11,14 +11,14 @@ use dom::{
 use elise::{Gc, Persistent};
 
 use crate::interfaces::MutationObserverInit;
-use crate::typed::{CallbackArg, DomStr, NullableStr, OpFront, ScriptHost};
+use crate::typed::{Callback, DomStr, NullableStr, OpFront, ScriptHost};
 use crate::{ApiCx, ApiError};
 
 /// `new MutationObserver(callback)`.
 pub(crate) fn construct<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
-    callback: CallbackArg,
+    callback: Callback<O::Callback>,
 ) -> Result<Gc<'gc, MutationObserver>, ApiError> {
     let observer = cx.create_mutation_observer();
     op.store_callback(cx, cx.observer_callback_edge(observer), callback);

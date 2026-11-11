@@ -12,10 +12,13 @@
 | 4a 結果怎麼帶出操作：`RetType::Pending`、`finish`，front 定 `PendingString`、`PendingNode`、`PendingNumber` | 完成 | 2026-11-11 |
 | 4b 新的 front 補上數字、布林、有預設值的參數，回傳不是節點的物件 | 完成 | 2026-11-11 |
 | 4c 預先建 wrapper 的結果（`createElement`、`cloneNode`、`createTextNode`） | 完成 | 2026-11-12 |
-| 4d callback、rest、`any` 的參數直接回傳 handle（`addEventListener`、`setTimeout`、`append`） | 還沒開始 | |
-| 4e dictionary、promise、陣列和其餘的參數和結果 | 還沒開始 | |
-| 4f static、constructor、named 和 indexed property 的外殼 | 還沒開始 | |
-| 4g 拿掉 `V8Front`、`Call` 和 `PLAIN`；wasm 的 front 跟上 | 還沒開始 | |
+| 4d handle 的機制（`Param` 多 front 的型別參數）、callback 和 `any`；函式拿 front 的成員照型別算 `PLAIN` | 完成 | 2026-11-12 |
+| 4e rest、dictionary 的物件和其餘的參數型別 | 還沒開始 | |
+| 4f 其餘的回傳型別（promise、陣列、dictionary） | 還沒開始 | |
+| 4g static 成員的外殼 | 還沒開始 | |
+| 4h constructor 的外殼 | 還沒開始 | |
+| 4i named、indexed property 的外殼 | 還沒開始 | |
+| 4j 冷的路搬成新的 front 自己的；拿掉 `V8Front`、`Call` 和 `PLAIN`（連同它的檢查：`PLAIN_FRONT_METHODS`、`PLAIN_OP_METHODS`、`dom_api` 的 `plain` 測試、`dom_js` 的 `the_plain_methods_are_the_info_front_ends_own`、`ReadImageData`、`docs/test-gaps.md` 的那一列） | 還沒開始 | |
 | 收尾：`nodeType`、`getAttribute` 的 callback 和 Chrome 的逐條指令對照，列出剩下的差（決定 20） | 還沒開始 | |
 
 ## 驗收
@@ -300,3 +303,19 @@
 - mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4c.toml`，11 個都抓到。
 - 跑過：`cargo test -p bindings -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt dom html/dom custom-elements`（126618 個結果都照預期）。
 - 看到、沒有動的：window 的 document 的 `cloneNode()` 給的是 `Document`、不是 `HTMLDocument`（改之前就是；沒有查 Chrome）。
+
+**第 4d 段：callback 是 front 的 handle；函式拿 front 的成員照型別算 `PLAIN`**（2026-11-12）：
+
+- fork（只改 Rust，還沒 commit）：`TracedSlot::set` 改收 isolate、`TracedSlot::refers_to`（邊指的物件是不是某個 handle 的，讀位址比），`README.machopo.md` 那一條一起寫；用不到的 import 拿掉。
+- `dom_api`：`FrontTypes::Callback`（`Copy`）；`ArgType::Param` 多 front 的型別參數（`Param<'a, 'gc, T: FrontTypes>`，74 個實作加產生器的 6 個跟著改簽名）；編號 `CallbackArg` 換成 `Callback<H>`（包著 front 的 handle，照樣能 `Root`）；`Front` 的 `callback_arg`、`function_arg`、`nullable_function_arg`、`event_handler_arg`、`timer_handler_arg` 回傳 `Callback<Self::Callback>`，`OpFront` 的 `same_callback`、`store_callback`、`callback_number` 收它；14 個模組裡收 callback 的函式的參數改成 `Callback<O::Callback>`（`define` 是 script host 的，對 handle 的型別泛型）。11 個 callback 的參數型別、產生器的 callback interface、`EventHandler` 的參數標 `PLAIN`。`DictMember::PLAIN`（布林、數字、字串、字串清單的成員）、`Dictionary::PLAIN`（成員都是），dictionary 和 `DictOrBool` 照它標。`Rethrown`（`throwIfAborted` 的回傳）、`NewImageData`（`createImageData` 兩個、`getImageData`）：和 `()`、`ImageData` 一樣，但不是 `PLAIN`。
+- `dom_api_macros`：`PLAIN` 不再看函式拿不拿 front。
+- `bindings`：`set_strong`、`set_strong_value` 收 isolate，`refers_to`；`InfoNoGc` 的 `set_strong`、`set_strong_value`、`refers_to`；`soundness.md` 補上。
+- `dom_js`：`InfoFront` 的 `Callback` 是 `Local<Value>`（參數本身），五個拿 callback 的方法只看它是不是物件或函式（timer 的字串在這時 `ToString`，建 scope）；`InfoOp` 的 `same_callback`（`refers_to`）、`store_callback`、`callback_number`；`is_dictionary_like`、`dict_arg`（沒給是 `None`）、六個讀成員的方法交給 `V8Front`。`V8Front`、測試的 front、`dom_wasm` 的 front 的 `Callback` 是它們原本的編號（`usize`），named property 的是 `Infallible`。
+- 計畫裡這一段沒做的：`any` 的值（也從 dictionary 的成員來，和 dictionary 一起在 4e）。`addEventListener` 的 options 有 `signal`（一個物件），還不是 `PLAIN`：4e。event handler 屬性的 getter 會編譯屬性的原始碼（script），本來就不是 `PLAIN`。
+- 找到、修掉的：拿掉「函式拿 front 的不是 `PLAIN`」之後，`getImageData` 因為 `ImageDataSettings` 變成 `PLAIN` 的 dictionary 而被放行，它的函式呼叫 `set_image_data_pixels`，`dom_js` 的 `canvas::images_and_origin_clean` 在預設實作的 `unreachable!` abort：換成 `NewImageData`。之後 `cargo test --workspace`（55 個 binary）和 `test.py wpt dom html/dom html/webappapis custom-elements html/semantics/forms html/canvas/element/pixel-manipulation`（131588 個結果）沒有再出現。
+- 寫了又拿掉的：`InfoOp` 的 `ret_any`、`ret_any_or_null`、`ret_any_or_undefined`、`with_array_bytes`，`InfoNoGc::strong_value` 和 fork 的 `TracedSlot::get_unscoped`：這一段沒有 `PLAIN` 的成員走得到（event handler 的 getter 不是 `PLAIN`、`putImageData` 是 overload），沒有測試守得住；用得到的那一段再加。
+- 4c 和這一段的 binary 各跑三次取最小（`perf stat`，指令數（cycle））：`t.onclick = f` 566（112）→ 500（96），`t.onclick = null` 368（78）→ 306（58），`removeEventListener('y', f)` 767（155）→ 590（126），`removeEventListener('y', f, { capture: true })` 1679（319）→ 1610（355）（給了 dictionary：建 scope、交給 `V8Front` 讀成員；cycle 那一次偏高，沒有重跑）；沒變的：`nodeType` 109、`getAttribute` 562 → 561、`addEventListener` 857 → 862、`dispatchEvent` 3425、`createElement` 1987 → 1989、`appendChild` 1508 → 1509。
+- 測試：`dom_js` 的 `handlers::a_callback_is_its_arguments_handle`（event handler 設值、取代、不是物件的是 null；移除的是 callback 相同、capture 相同的那個，不是同類型的第一個；options dictionary 的成員讀得到；不是 callback 的 `TypeError`；給物件的呼叫不建 scope）；`dom_api` 的 `table` 的清單（`removeEventListener`、`requestAnimationFrame`、`onclick` 的 setter 是 `PLAIN`；`addEventListener`、`setTimeout`、`onclick` 的 getter、`throwIfAborted`、`getImageData` 不是）。先在 `Env::window` 上寫這個測試，handler 讀回來是 null：那個環境沒有瀏覽的 context，handler 不運作（原本的 front 也一樣），不是新的 front 的問題；改用 `handlers` 的 `page()`。`info_front` 和這個測試重複跑 500 次都通過。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4d.toml`，12 個都抓到。
+- `PLAIN` 的檢查（決定 31）：`dom_api` 的 `plain::a_plain_type_calls_only_the_plain_methods`（72 個標成 `PLAIN` 的型別、`ObjectType`、共用的函式、macro 產生的型別）、`plain::a_plain_members_function_calls_only_the_plain_methods`（2152 個 `PLAIN` 的成員裡 2087 個的函式對得到、查過；測試要求至少九成）、`plain::the_functions_that_keep_something_are_seen`（已知會留東西的四個函式掃得出來），`dom_js` 的 `info_front::the_plain_methods_are_the_info_front_ends_own`。第一次跑就失敗在 `putImageData`（兩個 overload 都是 `PLAIN`、函式呼叫 `with_array_bytes`）：參數換成 `ReadImageData`。mutation test：`mutants-4d-plain.toml`，7 個都抓到（`putImageData` 換回 `ImageData`、`ReadImageData` 標成 `PLAIN`、`Rest` 和 `Any` 標成 `PLAIN`、`throwIfAborted` 不回傳 `Rethrown`、`rethrow` 放進清單、`InfoOp` 少一個方法）；第七個第一次寫成改名字，編不過，改成刪掉方法。
+- 跑過：`cargo test --workspace`（提前跑，為了找被誤放行的成員）、`cargo test -p bindings -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、上面那組 WPT。

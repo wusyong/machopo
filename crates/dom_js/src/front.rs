@@ -29,7 +29,7 @@ use dom::{
 };
 use dom_api::typed::{BlobPartArg, Radius, Uint8ClampedArg};
 use dom_api::{
-    AnyArg, ApiCx, ApiError, CallbackArg, ConstructorInfo, Front, FrontTypes, HtmlConstructed,
+    AnyArg, ApiCx, ApiError, Callback, ConstructorInfo, Front, FrontTypes, HtmlConstructed,
     OpFront, RestArg,
 };
 use elise::{JsEdge, Persistent};
@@ -256,7 +256,7 @@ pub(crate) struct Call<'s, 'r> {
     /// The current realm's global, found before the operation of a
     /// constructor that may ask for its window (`prepare_window`).
     window: Option<v8::Local<'s, v8::Object>>,
-    /// The callback or `any` argument taken (`CallbackArg(0)`, `AnyArg(0)`:
+    /// The callback or `any` argument taken (`Callback(0)`, `AnyArg(0)`:
     /// no member takes two), a word every call clears, not a `Vec` it makes
     /// and drops: an object (a listener's callback, a timer's function), a
     /// timer's string, or any value (a `CustomEvent`'s `detail`).
@@ -319,7 +319,7 @@ pub(crate) struct RareCall<'s> {
     array: Option<v8::Local<'s, v8::Uint8ClampedArray>>,
     /// The `ArrayBufferView` taken (`ArrayViewArg`).
     view: Option<v8::Local<'s, v8::ArrayBufferView>>,
-    /// A second callback taken (`CallbackArg(1)`, `nullable_function_arg`:
+    /// A second callback taken (`Callback(1)`, `nullable_function_arg`:
     /// geolocation's error callback).
     second_callback: Option<v8::Local<'s, v8::Value>>,
     /// The objects a dictionary's members or a body gave (`KeptObject`'s
@@ -1546,7 +1546,7 @@ fn throw_in(tc: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>, error: Ap
 
 /// The engine's number for `object` (V8's identity hash, as Blink's
 /// `V8CustomElementConstructorHashTraits`), its bits.
-fn number(object: v8::Local<'_, v8::Object>) -> u32 {
+pub(crate) fn number(object: v8::Local<'_, v8::Object>) -> u32 {
     u32::from_ne_bytes(object.get_identity_hash().get().to_ne_bytes())
 }
 
@@ -1805,6 +1805,9 @@ impl<'s, A: CallArgs<'s>> FrontTypes for V8Front<'_, 's, '_, '_, A> {
     type PendingNumber = std::convert::Infallible;
     type PendingObject = std::convert::Infallible;
     type PreparedNode = ();
+    /// Which of the call\'s kept callbacks (`Call::callback`, or the
+    /// second: `RareCall::second_callback`).
+    type Callback = usize;
 }
 
 impl<'s, A: CallArgs<'s>> FrontTypes for V8Op<'_, 's, '_, '_, A> {
@@ -1816,6 +1819,9 @@ impl<'s, A: CallArgs<'s>> FrontTypes for V8Op<'_, 's, '_, '_, A> {
     type PendingNumber = std::convert::Infallible;
     type PendingObject = std::convert::Infallible;
     type PreparedNode = ();
+    /// Which of the call\'s kept callbacks (`Call::callback`, or the
+    /// second: `RareCall::second_callback`).
+    type Callback = usize;
 }
 
 impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
@@ -2143,12 +2149,12 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         Some(Some(strings))
     }
 
-    fn function_arg(&mut self, index: usize, name: &str) -> Option<CallbackArg> {
+    fn function_arg(&mut self, index: usize, name: &str) -> Option<Callback<usize>> {
         let value = arg(self.args, index);
         if value.is_function() {
             assert!(self.call.callback.is_none(), "a member takes one callback");
             self.call.callback = Some(value);
-            return Some(CallbackArg(0));
+            return Some(Callback(0));
         }
         self.throw_type_error(&format!(
             "parameter {} is not of type '{name}'.",
@@ -2592,7 +2598,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
 
     /// Any object (a function, or one with `handleEvent`, read when it is
     /// called).
-    fn callback_arg(&mut self, index: usize, name: &str) -> Option<Option<CallbackArg>> {
+    fn callback_arg(&mut self, index: usize, name: &str) -> Option<Option<Callback<usize>>> {
         let value = arg(self.args, index);
         if value.is_null_or_undefined() {
             return Some(None);
@@ -2600,7 +2606,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         if value.is_object() {
             assert!(self.call.callback.is_none(), "a member takes one callback");
             self.call.callback = Some(value);
-            return Some(Some(CallbackArg(0)));
+            return Some(Some(Callback(0)));
         }
         self.throw_type_error(&format!(
             "parameter {} is not of type '{name}'.",
@@ -2611,14 +2617,18 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
 
     /// A function kept as the call's second callback, none for null or
     /// undefined.
-    fn nullable_function_arg(&mut self, index: usize, name: &str) -> Option<Option<CallbackArg>> {
+    fn nullable_function_arg(
+        &mut self,
+        index: usize,
+        name: &str,
+    ) -> Option<Option<Callback<usize>>> {
         let value = arg(self.args, index);
         if value.is_null_or_undefined() {
             return Some(None);
         }
         if value.is_function() {
             self.call.rare().second_callback = Some(value);
-            return Some(Some(CallbackArg(1)));
+            return Some(Some(Callback(1)));
         }
         self.throw_type_error(&format!(
             "parameter {} is not of type '{name}'.",
@@ -2629,19 +2639,19 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
 
     /// Any object kept (callable or not: `[LegacyTreatNonObjectAsNull]`),
     /// anything else null.
-    fn event_handler_arg(&mut self, index: usize) -> Option<CallbackArg> {
+    fn event_handler_arg(&mut self, index: usize) -> Option<Callback<usize>> {
         let value = arg(self.args, index);
         if !value.is_object() {
             return None;
         }
         assert!(self.call.callback.is_none(), "a member takes one callback");
         self.call.callback = Some(value);
-        Some(CallbackArg(0))
+        Some(Callback(0))
     }
 
     /// A function as it is, anything else its `ToString` (which may run
     /// script, before the operation).
-    fn timer_handler_arg(&mut self, index: usize) -> Option<CallbackArg> {
+    fn timer_handler_arg(&mut self, index: usize) -> Option<Callback<usize>> {
         let value = arg(self.args, index);
         let handler = if value.is_function() {
             value
@@ -2650,7 +2660,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         };
         assert!(self.call.callback.is_none(), "a member takes one callback");
         self.call.callback = Some(handler);
-        Some(CallbackArg(0))
+        Some(Callback(0))
     }
 
     fn i32_arg(&mut self, index: usize) -> Option<i32> {
@@ -3152,15 +3162,11 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         registry: &Persistent<dom::CustomElementRegistry>,
     ) -> bool {
         self.read(|cx, op| {
-            let number = op.callback_number(CallbackArg(0));
+            let number = op.callback_number(Callback(0));
             cx.custom_element_definitions_numbered(registry.get(cx.gc), number)
                 .into_iter()
                 .any(|definition| {
-                    op.same_callback(
-                        cx,
-                        cx.definition_edges(definition).constructor,
-                        CallbackArg(0),
-                    )
+                    op.same_callback(cx, cx.definition_edges(definition).constructor, Callback(0))
                 })
         })
     }
@@ -3498,7 +3504,12 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
             .set_strong_value(edge, self.call.rest.expect("the rest taken").into());
     }
 
-    fn same_callback(&mut self, _: &ApiCx<'_, '_>, edge: &JsEdge, callback: CallbackArg) -> bool {
+    fn same_callback(
+        &mut self,
+        _: &ApiCx<'_, '_>,
+        edge: &JsEdge,
+        callback: Callback<usize>,
+    ) -> bool {
         let _ = callback;
         let taken = self.call.callback.expect("the callback taken");
         self.no_gc
@@ -3508,7 +3519,7 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
 
     /// An object as an object's strong edge, a timer's string as any
     /// value's.
-    fn store_callback(&mut self, _: &ApiCx<'_, '_>, edge: &JsEdge, callback: CallbackArg) {
+    fn store_callback(&mut self, _: &ApiCx<'_, '_>, edge: &JsEdge, callback: Callback<usize>) {
         let taken = if callback.0 == 1 {
             self.call
                 .rare
@@ -3677,7 +3688,7 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
             .is_some_and(|held| v8::Local::<v8::Value>::from(held) == new_target)
     }
 
-    fn callback_number(&mut self, callback: CallbackArg) -> u32 {
+    fn callback_number(&mut self, callback: Callback<usize>) -> u32 {
         let _ = callback;
         let taken = self.call.callback.expect("the callback taken");
         v8::Local::<v8::Object>::try_from(taken).map_or(0, number)

@@ -260,3 +260,104 @@ fn the_parsers_handlers_are_at_their_lines() {
     // source's second line.
     assert_eq!(report(&mut engine, "log.join()"), "6");
 }
+
+/// A callback is its argument, handed to the DOM's function and back as
+/// the front end's handle (nothing of it kept by the front end): an event
+/// handler attribute's value, a listener to remove, an animation frame's
+/// callback. A call given an object makes no scope; an options dictionary
+/// is read by the whole front end when one is given.
+#[test]
+fn a_callback_is_its_arguments_handle() {
+    let mut engine = page();
+    run(
+        &mut engine,
+        "var f = () => log.push('f'); var g = () => log.push('g'); \
+         d.addEventListener('x', f); d.addEventListener('x', g); d.addEventListener('y', f, true);",
+    );
+    for (source, value, at_once) in [
+        // A handler set and replaced; what isn't an object is null.
+        ("d.onclick = f; d.onclick === f", "true", true),
+        ("d.onclick = g; d.onclick === g", "true", true),
+        ("d.onclick = 7; d.onclick", "null", true),
+        ("d.onclick = f; d.onclick = null; d.onclick", "null", true),
+        // The listener removed is the one whose callback the argument
+        // is, of the same capture.
+        (
+            "d.removeEventListener('x', f); d.dispatchEvent(new Event('x')); log.splice(0).join()",
+            "g",
+            true,
+        ),
+        (
+            "d.removeEventListener('y', f); d.dispatchEvent(new Event('y')); log.splice(0).join()",
+            "f",
+            true,
+        ),
+        (
+            "d.removeEventListener('y', f, true); d.dispatchEvent(new Event('y')); \
+             log.splice(0).join()",
+            "",
+            true,
+        ),
+        ("d.removeEventListener('x', null)", "undefined", true),
+        // Not the first of its type: the one whose callback it is.
+        (
+            "d.addEventListener('v', f); d.addEventListener('v', g); \
+             d.removeEventListener('v', g); d.dispatchEvent(new Event('v')); log.splice(0).join()",
+            "f",
+            true,
+        ),
+        // An options dictionary: its member read (a scope).
+        (
+            "d.addEventListener('z', f, true); d.removeEventListener('z', f, { capture: true }); \
+             d.dispatchEvent(new Event('z')); log.splice(0).join()",
+            "",
+            false,
+        ),
+        (
+            "d.addEventListener('w', f, true); d.removeEventListener('w', f, { capture: false }); \
+             d.dispatchEvent(new Event('w')); log.splice(0).join()",
+            "f",
+            false,
+        ),
+        // What isn't a callback.
+        (
+            "(() => { try { d.removeEventListener('x', 7); return 'none'; } catch (e) { return e.name; } })()",
+            "TypeError",
+            false,
+        ),
+        (
+            "(() => { try { requestAnimationFrame({}); return 'none'; } catch (e) { return e.name; } })()",
+            "TypeError",
+            false,
+        ),
+        ("typeof requestAnimationFrame(f)", "number", true),
+    ] {
+        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        // Statements as one expression (the comma operator), unless it is
+        // one already.
+        let expression = if source.starts_with("(() =>") {
+            source.to_owned()
+        } else {
+            format!("({})", source.replace("; ", ", "))
+        };
+        let found = report(&mut engine, &expression);
+        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        assert_eq!(found, value, "{source}");
+        // (`dispatchEvent`, `new Event` and the handler's getter aren't
+        // plain: none of these scopes is theirs.)
+        if at_once {
+            assert_eq!(made, 0, "{source}");
+        } else {
+            assert!(made >= 1, "{source}: a scope");
+        }
+    }
+    // The handler set is the one called.
+    run(&mut engine, "d.onclick = () => log.push('h');");
+    assert_eq!(
+        report(
+            &mut engine,
+            "(d.dispatchEvent(new Event('click')), log.splice(0).join())"
+        ),
+        "h"
+    );
+}

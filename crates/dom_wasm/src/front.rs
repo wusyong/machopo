@@ -737,6 +737,17 @@ pub(crate) trait WitRet: RetType {
 
 /// Nothing: a method that returns `undefined`, or a setter, which gives no
 /// result (V8's is `undefined` until set).
+// `throwIfAborted`'s: nothing.
+impl WitRet for dom_api::typed::Rethrown {
+    type Wit = ();
+    fn wit(ret: Ret) {
+        match ret {
+            Ret::None | Ret::Undefined => {}
+            other => other.unexpected(),
+        }
+    }
+}
+
 impl WitRet for () {
     type Wit = ();
     fn wit(ret: Ret) {
@@ -1006,7 +1017,7 @@ struct WasmFront<'r, 'g, A> {
 
 impl<A: ReadArgs> WasmFront<'_, '_, A> {
     /// The word of the callback the argument `callback` names.
-    fn callback_word(&self, callback: dom_api::typed::CallbackArg) -> u64 {
+    fn callback_word(&self, callback: dom_api::typed::Callback<usize>) -> u64 {
         let number = self.args.callback(callback.0).expect("a callback argument");
         crate::listener_word(self.store, number)
     }
@@ -1022,6 +1033,7 @@ impl<'r, A> FrontTypes for WasmFront<'r, '_, A> {
     type PendingNumber = std::convert::Infallible;
     type PendingObject = std::convert::Infallible;
     type PreparedNode = ();
+    type Callback = usize;
 }
 
 impl<'r, 'g, A: ReadArgs> Front for WasmFront<'r, 'g, A> {
@@ -1087,8 +1099,8 @@ impl<'r, 'g, A: ReadArgs> Front for WasmFront<'r, 'g, A> {
         &mut self,
         index: usize,
         _: &str,
-    ) -> Option<Option<dom_api::typed::CallbackArg>> {
-        Some(Some(dom_api::typed::CallbackArg(index)))
+    ) -> Option<Option<dom_api::typed::Callback<usize>>> {
+        Some(Some(dom_api::typed::Callback(index)))
     }
 
     /// A listener's options are the boolean alone.
@@ -1189,7 +1201,7 @@ impl<'r, A: ReadArgs> OpFront for WasmFront<'r, '_, A> {
         &mut self,
         cx: &ApiCx<'_, '_>,
         edge: &elise::JsEdge,
-        callback: dom_api::typed::CallbackArg,
+        callback: dom_api::typed::Callback<usize>,
     ) -> bool {
         edge.embedder_word(cx.gc) == self.callback_word(callback)
     }
@@ -1198,7 +1210,7 @@ impl<'r, A: ReadArgs> OpFront for WasmFront<'r, '_, A> {
         &mut self,
         cx: &ApiCx<'_, '_>,
         edge: &elise::JsEdge,
-        callback: dom_api::typed::CallbackArg,
+        callback: dom_api::typed::Callback<usize>,
     ) {
         edge.set_embedder_word(cx.gc, self.callback_word(callback));
     }

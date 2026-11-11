@@ -12,7 +12,7 @@ use dom::{
 };
 use elise::{Gc, Persistent};
 
-use crate::typed::{CallbackArg, OpFront, ScriptHost};
+use crate::typed::{Callback, OpFront, ScriptHost};
 use crate::{ApiCx, ApiError};
 
 /// `new ResizeObserver(callback)`: one of the current realm's window's
@@ -20,7 +20,7 @@ use crate::{ApiCx, ApiError};
 pub(crate) fn construct<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
-    callback: CallbackArg,
+    callback: Callback<O::Callback>,
 ) -> Result<Gc<'gc, ResizeObserver>, ApiError> {
     let window = op
         .current_window(cx)

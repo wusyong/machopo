@@ -12,7 +12,7 @@ use dom::{
 use elise::{Gc, Persistent};
 
 use crate::interfaces::{AddEventListenerOptions, EventListenerOptions};
-use crate::typed::{CallbackArg, DictOrBool, OpFront, ScriptHost};
+use crate::typed::{Callback, DictOrBool, OpFront, ScriptHost};
 use crate::{ApiCx, ApiError, ExceptionName, activation};
 
 /// `eventPhase`'s values.
@@ -39,7 +39,7 @@ pub(crate) fn add_event_listener<'gc, O: OpFront>(
     cx: &ApiCx<'_, 'gc>,
     this: TargetRef<'gc>,
     event_type: &str,
-    callback: Option<CallbackArg>,
+    callback: Option<Callback<O::Callback>>,
     options: &DictOrBool<AddEventListenerOptions>,
 ) -> Result<(), ApiError> {
     let Some(callback) = callback else {
@@ -97,7 +97,7 @@ pub(crate) fn remove_event_listener<'gc, O: OpFront>(
     cx: &ApiCx<'_, 'gc>,
     this: TargetRef<'gc>,
     event_type: &str,
-    callback: Option<CallbackArg>,
+    callback: Option<Callback<O::Callback>>,
     options: &DictOrBool<EventListenerOptions>,
 ) -> Result<(), ApiError> {
     let Some(callback) = callback else {

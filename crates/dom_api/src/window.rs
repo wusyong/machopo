@@ -110,7 +110,7 @@ pub struct NavigationUrl;
 impl ArgType for NavigationUrl {
     const DESC: TypeDesc = TypeDesc::String;
     type Taken<T: FrontTypes> = T::Str;
-    type Param<'a, 'gc> = &'a str;
+    type Param<'a, 'gc, T: FrontTypes> = &'a str;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<F::Str> {
         let url = front.string_arg(index)?;

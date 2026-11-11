@@ -11,7 +11,7 @@
 use dom::{Dom, ErrorInfo, TargetRef, Window};
 use elise::{Gc, Persistent};
 
-use crate::typed::{CallbackArg, OpFront, RestArg, ScriptHost};
+use crate::typed::{Callback, OpFront, RestArg, ScriptHost};
 use crate::{ApiCx, ApiError, dispatch};
 
 /// `setTimeout`: a timer of the window, its id.
@@ -19,7 +19,7 @@ pub(crate) fn set_timeout<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Window>,
-    handler: CallbackArg,
+    handler: Callback<O::Callback>,
     timeout: i32,
     arguments: Option<RestArg>,
 ) -> Result<i32, ApiError> {
@@ -31,7 +31,7 @@ pub(crate) fn set_interval<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Window>,
-    handler: CallbackArg,
+    handler: Callback<O::Callback>,
     timeout: i32,
     arguments: Option<RestArg>,
 ) -> Result<i32, ApiError> {
@@ -42,7 +42,7 @@ fn add<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     window: Gc<'gc, Window>,
-    (handler, arguments): (CallbackArg, Option<RestArg>),
+    (handler, arguments): (Callback<O::Callback>, Option<RestArg>),
     timeout: i32,
     repeat: bool,
 ) -> i32 {
