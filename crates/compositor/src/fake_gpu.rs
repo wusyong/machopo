@@ -15,6 +15,8 @@ pub(crate) struct FakeGpu {
     pub(crate) full: AtomicBool,
     mailboxes: AtomicSequenceNumber<u64>,
     pub(crate) made: Mutex<Vec<Weak<Vec<u8>>>>,
+    /// How many shared images had been made at each flush.
+    pub(crate) flushes: Mutex<Vec<usize>>,
     observers: Mutex<Vec<Weak<dyn ContextLostObserver>>>,
 }
 
@@ -44,6 +46,11 @@ impl SharedImageInterface for FakeGpu {
         self.made.lock().unwrap().push(Arc::downgrade(&backing));
         let mailbox = Mailbox(self.mailboxes.get_next());
         Some(SharedImage::new(mailbox, backing))
+    }
+
+    fn flush(&self) {
+        let made = self.made.lock().unwrap().len();
+        self.flushes.lock().unwrap().push(made);
     }
 
     fn add_context_lost_observer(&self, observer: Weak<dyn ContextLostObserver>) {

@@ -244,6 +244,61 @@ pub struct PlaybackParams {
     pub clear_color: Color,
 }
 
+/// What of a playback only a CPU draws: what a renderer that fills on the
+/// GPU (Vello's, which takes no masks and no pictures but textures) could
+/// not have been given. Told by what was drawn, not by the ops: an image
+/// that isn't one, or a filter in a clip outside the tile, isn't counted.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CpuOnly {
+    /// An image, or a pattern of one.
+    pub images: bool,
+    /// A clip to several paths together.
+    pub masks: bool,
+    /// A layer's filter that Vello lacks (a color matrix, several in a
+    /// row): drawn off to the side, filtered here, and put back as a
+    /// picture.
+    pub filters: bool,
+    /// A blur Vello has as a layer's filter, drawn off to the side all the
+    /// same for what it reaches past the tile's edge: a layer's blur or
+    /// drop shadow, a blurred shape, a shadow of corners that differ.
+    pub blurs: bool,
+    /// A pattern of a record, or with gaps between its tiles: drawn into a
+    /// picture first.
+    pub patterns: bool,
+    /// Glyphs of a font that has bitmaps (not that these were).
+    pub bitmap_glyphs: bool,
+}
+
+impl CpuOnly {
+    /// Whether anything is.
+    pub fn any(&self) -> bool {
+        self.images
+            || self.masks
+            || self.filters
+            || self.blurs
+            || self.patterns
+            || self.bitmap_glyphs
+    }
+
+    pub(crate) fn add(&mut self, other: Self) {
+        self.images |= other.images;
+        self.masks |= other.masks;
+        self.filters |= other.filters;
+        self.blurs |= other.blurs;
+        self.patterns |= other.patterns;
+        self.bitmap_glyphs |= other.bitmap_glyphs;
+    }
+}
+
+/// What [`playback_into`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Played {
+    /// The size of the pixels.
+    pub size: Size,
+    /// None of it, where the playback panicked.
+    pub cpu_only: CpuOnly,
+}
+
 /// Rasters `list` according to `params`, with what earlier playbacks left
 /// in `cache`: [`playback_ops`] of [`ops_for`].
 pub fn playback(list: &DisplayItemList, params: &PlaybackParams, cache: &RasterCache) -> Bitmap {
@@ -269,13 +324,14 @@ pub fn playback_ops(
     cache: &RasterCache,
 ) -> Bitmap {
     let mut pixels = Vec::new();
-    let size = playback_into(list, ops, params, cache, &mut pixels);
+    let size = playback_into(list, ops, params, cache, &mut pixels).size;
     Bitmap { size, pixels }
 }
 
 /// [`playback_ops`] into `pixels`, made the size's (RGBA8 premultiplied,
 /// `stride == width * 4`): a buffer a raster thread draws tile after tile
-/// into, keeping its memory. Returns the size.
+/// into, keeping its memory. Returns the size, and what a GPU would not
+/// have drawn.
 ///
 /// A playback that panics, where panics are caught, leaves every pixel
 /// the clear color: the tile is blank until its content is rastered again.
@@ -285,7 +341,7 @@ pub fn playback_into(
     params: &PlaybackParams,
     cache: &RasterCache,
     pixels: &mut Vec<u8>,
-) -> Size {
+) -> Played {
     // Rounded up, a negative or NaN one empty.
     let size = Size::new(
         base::numerics::clamp_ceil(params.content_rect.width),
@@ -304,12 +360,13 @@ pub fn playback_into(
         .checked_byte_size()
         .expect("a tile's pixels fit a usize");
     pixels.resize(len, 0);
+    let mut cpu_only = CpuOnly::default();
     if size.is_empty() {
-        return size;
+        return Played { size, cpu_only };
     }
     let origin = (params.content_rect.x, params.content_rect.y);
     let drawn = guarded(cache, origin, size, || {
-        vello_backend::playback(list, ops, params, &cache.vello, size, pixels);
+        cpu_only = vello_backend::playback(list, ops, params, &cache.vello, size, pixels);
     });
     if !drawn {
         // Not what the buffer had from the tile before, nor the part of
@@ -319,7 +376,7 @@ pub fn playback_into(
             *pixel = clear;
         }
     }
-    size
+    Played { size, cpu_only }
 }
 
 /// Plays `list` back onto a canvas's bitmap, `pixels` of `size` (RGBA8
@@ -741,14 +798,14 @@ mod tests {
         empty.finalize();
         let cache = RasterCache::default();
         let mut buffer = Vec::new();
-        let size = playback_into(&red, &[0], &params(8.0, 8.0, 1.0), &cache, &mut buffer);
+        let size = playback_into(&red, &[0], &params(8.0, 8.0, 1.0), &cache, &mut buffer).size;
         assert_eq!(size, Size::new(8, 8));
         assert_eq!(&buffer[..4], &[255, 0, 0, 255]);
         let transparent = PlaybackParams {
             clear_color: Color::TRANSPARENT,
             ..params(4.0, 2.0, 1.0)
         };
-        let size = playback_into(&empty, &[], &transparent, &cache, &mut buffer);
+        let size = playback_into(&empty, &[], &transparent, &cache, &mut buffer).size;
         assert_eq!(size, Size::new(4, 2));
         assert_eq!(buffer, vec![0; 4 * 2 * 4]);
     }

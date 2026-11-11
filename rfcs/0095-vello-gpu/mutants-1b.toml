@@ -1,0 +1,76 @@
+# Step 1b: Viz's pool of the textures of shared images let go.
+#
+#     python3 scripts/test.py mutate rfcs/0095-vello-gpu/mutants-1b.toml
+
+test = ["cargo", "test", "-q", "-p", "viz"]
+timeout = 1200
+
+[[mutant]]
+name = "the pool gives a texture of any size"
+file = "crates/viz/src/gpu_context.rs"
+from = '''        let at = free.textures.iter().rposition(|t| t.size == size)?;'''
+to = '''        let at = free.textures.iter().rposition(|_| true)?;'''
+
+[[mutant]]
+name = "the pool gives the oldest of a size"
+file = "crates/viz/src/gpu_context.rs"
+from = '''        let at = free.textures.iter().rposition(|t| t.size == size)?;'''
+to = '''        let at = free.textures.iter().position(|t| t.size == size)?;'''
+
+[[mutant]]
+name = "a texture taken still counts toward the bytes"
+file = "crates/viz/src/gpu_context.rs"
+from = '''        let texture = free.textures.remove(at)?;
+        free.bytes = free.bytes.saturating_sub(texture_bytes(size));'''
+to = '''        let texture = free.textures.remove(at)?;'''
+
+[[mutant]]
+name = "a texture larger than the pool keeps is kept"
+file = "crates/viz/src/gpu_context.rs"
+from = '''        if bytes > POOL_BYTES {
+            return;
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the pool keeps any number of textures"
+file = "crates/viz/src/gpu_context.rs"
+from = '''        while free.bytes > POOL_BYTES || free.textures.len() > POOL_TEXTURES {'''
+to = '''        while free.bytes > POOL_BYTES {'''
+
+[[mutant]]
+name = "the pool keeps any number of bytes"
+file = "crates/viz/src/gpu_context.rs"
+from = '''        while free.bytes > POOL_BYTES || free.textures.len() > POOL_TEXTURES {'''
+to = '''        while free.textures.len() > POOL_TEXTURES {'''
+
+[[mutant]]
+name = "the pool lets the newest go"
+file = "crates/viz/src/gpu_context.rs"
+from = '''            let Some(oldest) = free.textures.pop_front() else {'''
+to = '''            let Some(oldest) = free.textures.pop_back() else {'''
+
+[[mutant]]
+name = "a texture let go still counts toward the bytes"
+file = "crates/viz/src/gpu_context.rs"
+from = '''            free.bytes = free.bytes.saturating_sub(texture_bytes(oldest.size));'''
+to = ''''''
+
+[[mutant]]
+name = "a shared image let go doesn't give its texture back"
+file = "crates/viz/src/wgpu_renderer.rs"
+from = '''            pool.put(self.uploaded.clone());'''
+to = ''''''
+
+[[mutant]]
+name = "a texture taken from the pool isn't written over"
+file = "crates/viz/src/wgpu_renderer.rs"
+from = '''                gpu.write(&texture, pixels);
+                texture'''
+to = '''                texture'''
+
+[[mutant]]
+name = "the pool is never taken from"
+file = "crates/viz/src/wgpu_renderer.rs"
+from = '''        let uploaded = match gpu.pool.take(size) {'''
+to = '''        let uploaded = match None::<UploadedResource> {'''

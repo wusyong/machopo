@@ -1,0 +1,126 @@
+# Step 0: what of a playback only a CPU draws, and the tiles counted by it.
+#
+#     python3 scripts/test.py mutate rfcs/0095-vello-gpu/mutants-0.toml
+
+test = ["cargo", "test", "-q", "-p", "raster", "-p", "compositor"]
+timeout = 1200
+
+[[mutant]]
+name = "a drawn image isn't told"
+file = "crates/raster/src/vello_backend.rs"
+from = '''                    return;
+                };
+                self.cpu_only.images = true;'''
+to = '''                    return;
+                };'''
+
+[[mutant]]
+name = "a pattern of an image isn't told"
+file = "crates/raster/src/vello_backend.rs"
+from = '''                    return false;
+                };
+                self.cpu_only.images = true;'''
+to = '''                    return false;
+                };'''
+
+[[mutant]]
+name = "a pattern drawn into a picture isn't told"
+file = "crates/raster/src/vello_backend.rs"
+from = '''                self.cpu_only.patterns = true;'''
+to = ''''''
+
+[[mutant]]
+name = "a pattern drawn into a picture is told as an image"
+file = "crates/raster/src/vello_backend.rs"
+from = '''                self.cpu_only.patterns = true;'''
+to = '''                self.cpu_only.images = true;'''
+
+[[mutant]]
+name = "a clip to paths isn't told"
+file = "crates/raster/src/vello_backend.rs"
+from = '''                self.cpu_only.masks = true;'''
+to = ''''''
+
+[[mutant]]
+name = "every filter is a blur"
+file = "crates/raster/src/vello_backend.rs"
+from = '''            _ => self.cpu_only.filters = true,'''
+to = '''            _ => self.cpu_only.blurs = true,'''
+
+[[mutant]]
+name = "a drop shadow is a filter Vello lacks"
+file = "crates/raster/src/vello_backend.rs"
+from = '''            ImageFilter::Blur { .. } | ImageFilter::DropShadow { .. } => self.cpu_only.blurs = true,'''
+to = '''            ImageFilter::Blur { .. } => self.cpu_only.blurs = true,'''
+
+[[mutant]]
+name = "a blurred shape isn't told"
+file = "crates/raster/src/vello_backend.rs"
+from = '''    fn draw_blurred(&mut self, op: &PaintOp, sigma: f32) {
+        self.cpu_only.blurs = true;'''
+to = '''    fn draw_blurred(&mut self, op: &PaintOp, sigma: f32) {'''
+
+[[mutant]]
+name = "a shadow drawn off to the side isn't told"
+file = "crates/raster/src/vello_backend.rs"
+from = '''            self.cpu_only.blurs = true;
+            let to_device = self.transform;'''
+to = '''            let to_device = self.transform;'''
+
+[[mutant]]
+name = "what is drawn off to the side doesn't count"
+file = "crates/raster/src/vello_backend.rs"
+from = '''        self.cpu_only.add(inside);'''
+to = ''''''
+
+[[mutant]]
+name = "no font has bitmaps"
+file = "crates/raster/src/vello_backend.rs"
+from = '''                    .is_ok_and(|font| font.bitmap_strikes().format().is_some());'''
+to = '''                    .is_ok_and(|font| font.bitmap_strikes().format().is_some() && false);'''
+
+[[mutant]]
+name = "every font has bitmaps"
+file = "crates/raster/src/vello_backend.rs"
+from = '''                    .is_ok_and(|font| font.bitmap_strikes().format().is_some());'''
+to = '''                    .is_ok();'''
+
+[[mutant]]
+name = "a filter's layer in a clip outside is told"
+file = "crates/raster/src/vello_backend.rs"
+from = '''        if self.hidden > 0 {
+            return;
+        }
+        match filter {'''
+to = '''        match filter {'''
+
+[[mutant]]
+name = "adding leaves the images out"
+file = "crates/raster/src/lib.rs"
+from = '''        self.images |= other.images;'''
+to = ''''''
+
+[[mutant]]
+name = "a tile only a CPU draws counts as the GPU's"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''        one(&mut self.gpu, !cpu_only.any());'''
+to = '''        one(&mut self.gpu, true);'''
+
+[[mutant]]
+name = "a tile with more than images counts as but for its images"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''            cpu_only.images && !but_images.any(),'''
+to = '''            cpu_only.images,'''
+
+[[mutant]]
+name = "tiles of one color aren't counted"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                    prepared.solid = prepared.solid.saturating_add(1);
+                    prepared.count(cpu_only);'''
+to = '''                    prepared.solid = prepared.solid.saturating_add(1);'''
+
+[[mutant]]
+name = "blurs are counted as filters"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''        one(&mut self.blurs, cpu_only.blurs);'''
+to = '''        one(&mut self.filters, cpu_only.blurs);'''

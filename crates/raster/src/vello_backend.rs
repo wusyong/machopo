@@ -38,7 +38,7 @@ use vello_cpu::{
     Resources, TargetInit,
 };
 
-use crate::PlaybackParams;
+use crate::{CpuOnly, PlaybackParams};
 
 /// What playback keeps between tiles: fonts as Vello takes them, and
 /// decoded images with the smaller versions of them that were drawn.
@@ -57,7 +57,8 @@ pub(crate) struct VelloCache {
 struct Tables {
     /// By font id and face index: Vello keys what it keeps for a font on
     /// the id of the blob it was handed, so each font is one blob.
-    fonts: HashMap<(u64, u32), peniko::FontData>,
+    /// Each with whether it has bitmap glyphs.
+    fonts: HashMap<(u64, u32), (peniko::FontData, bool)>,
     /// By image id, each with a weak handle on its bytes: an entry goes
     /// when a new one is added after its data did. Filled once, outside
     /// the lock.
@@ -202,12 +203,20 @@ impl VelloCache {
             .map(|pixmap| (pixmap.width(), pixmap.height()))
     }
 
-    fn font(&self, font: &FontData) -> peniko::FontData {
+    /// `font` as Vello takes it, and whether it has bitmap glyphs (color
+    /// emoji as pictures: CBDT, sbix).
+    fn font(&self, font: &FontData) -> (peniko::FontData, bool) {
         self.tables()
             .fonts
             .entry((font.id, font.index))
             .or_insert_with(|| {
-                peniko::FontData::new(peniko::Blob::new(font.bytes.clone()), font.index)
+                use skrifa::MetadataProvider;
+                let bitmaps = skrifa::FontRef::from_index((*font.bytes).as_ref(), font.index)
+                    .is_ok_and(|font| font.bitmap_strikes().format().is_some());
+                (
+                    peniko::FontData::new(peniko::Blob::new(font.bytes.clone()), font.index),
+                    bitmaps,
+                )
             })
             .clone()
     }
@@ -339,7 +348,7 @@ fn skipped(what: &'static str) {
 }
 
 /// Plays `ops` of `list` back into `pixels` (`size`, RGBA8 premultiplied),
-/// cleared first, as `params` says.
+/// cleared first, as `params` says. Returns what of it only a CPU draws.
 pub(crate) fn playback(
     list: &DisplayItemList,
     ops: &[usize],
@@ -347,11 +356,11 @@ pub(crate) fn playback(
     cache: &VelloCache,
     size: Size,
     pixels: &mut [u8],
-) {
+) -> CpuOnly {
     // A context's side is a `u16`.
     let (Ok(width), Ok(height)) = (u16::try_from(size.width), u16::try_from(size.height)) else {
         skipped("pixels with a side over 65535");
-        return;
+        return CpuOnly::default();
     };
     CONTEXT.with_borrow_mut(|slot| {
         let (context, resources) =
@@ -362,21 +371,29 @@ pub(crate) fn playback(
             -f64::from(params.content_rect.x),
             -f64::from(params.content_rect.y),
         )) * Affine::scale(scale);
+        // The two halves of a playback: the scene (paths flattened into
+        // strips of coverage), which a GPU renderer builds on the CPU too,
+        // and the render (pixels filled and blended), which it doesn't.
+        let scene = trace_event::trace_event!("raster::scene");
         let mut player = Player::new(context, resources, cache, base);
         let all = list.ops();
         let ops: Vec<&PaintOp> = ops.iter().map(|&op| &all[op]).collect();
         player.play(&ops);
         player.finish();
+        let cpu_only = player.cpu_only;
+        drop(scene);
         let Some(target) = PixmapMut::new(width, height, pixels) else {
-            return;
+            return cpu_only;
         };
+        let _render = trace_event::trace_event!("raster::render");
         context.flush();
         context.render_with(
             target,
             resources,
             settings(TargetInit::Clear(color(params.clear_color))),
         );
-    });
+        cpu_only
+    })
 }
 
 /// Plays `list` back onto a canvas's `pixels` (`size`), over what they
@@ -487,6 +504,8 @@ struct Player<'a> {
     /// A canvas's pixels, which what was drawn is rendered over at the
     /// end, and where pixels are written into them.
     canvas: Option<&'a mut [u8]>,
+    /// What was drawn so far that only a CPU draws.
+    cpu_only: CpuOnly,
 }
 
 fn color(c: Color) -> peniko::Color {
@@ -979,6 +998,7 @@ impl<'a> Player<'a> {
             hidden: 0,
             decal: false,
             canvas: None,
+            cpu_only: CpuOnly::default(),
         }
     }
 
@@ -1196,16 +1216,16 @@ impl<'a> Player<'a> {
         let shift = Affine::translate((f64::from(pad), f64::from(pad)));
         let base = shift * self.base;
         let transform = shift * self.transform;
-        Some(render_pixmap(
-            self.cache,
-            grown(width)?,
-            grown(height)?,
-            base,
-            |player| {
-                player.set_transform(transform);
-                draw(player);
-            },
-        ))
+        // What is drawn there is drawn here, as far as what a GPU could
+        // draw goes.
+        let mut inside = CpuOnly::default();
+        let pixmap = render_pixmap(self.cache, grown(width)?, grown(height)?, base, |player| {
+            player.set_transform(transform);
+            draw(player);
+            inside = player.cpu_only;
+        });
+        self.cpu_only.add(inside);
+        Some(pixmap)
     }
 
     /// `pixmap`, which `offscreen` made with `pad`, drawn where it was
@@ -1291,6 +1311,7 @@ impl<'a> Player<'a> {
                 let Some(whole) = self.cache.image(data) else {
                     return false;
                 };
+                self.cpu_only.images = true;
                 let seen = axis_scales(self.transform * local);
                 let seen = (
                     seen.0 * f64::from(tiled.tile.width) / f64::from(whole.width()),
@@ -1335,6 +1356,7 @@ impl<'a> Player<'a> {
                 let scale = (f64::from(width) / cell.0, f64::from(height) / cell.1);
                 let content = RectF::new(0.0, 0.0, tiled.tile.width, tiled.tile.height);
                 let filter = tiled.filter;
+                self.cpu_only.patterns = true;
                 let pixmap = render_pixmap(
                     self.cache,
                     width,
@@ -1454,6 +1476,10 @@ impl<'a> Player<'a> {
         if self.hidden > 0 {
             return;
         }
+        match filter {
+            ImageFilter::Blur { .. } | ImageFilter::DropShadow { .. } => self.cpu_only.blurs = true,
+            _ => self.cpu_only.filters = true,
+        }
         let to_device = self.transform;
         let pad = pad_for(f64::from(reach(filter)) * scale_of(to_device));
         let Some(pixmap) = self.offscreen(pad, |player| {
@@ -1475,6 +1501,7 @@ impl<'a> Player<'a> {
     /// vello: no blur on a paint (Skia's mask filter), only of a rounded
     /// rect of one radius.
     fn draw_blurred(&mut self, op: &PaintOp, sigma: f32) {
+        self.cpu_only.blurs = true;
         let mut sharp = op.clone();
         let Some(flags) = flags_mut(&mut sharp) else {
             return;
@@ -1546,6 +1573,7 @@ impl<'a> Player<'a> {
             // size of the context, and what follows is drawn through it.
             // None is an empty mask, which clips everything away.
             PaintOp::ClipPaths { paths, anti_alias } => {
+                self.cpu_only.masks = true;
                 let (width, height) = self.size();
                 let transform = self.transform;
                 let anti_alias = *anti_alias;
@@ -1687,6 +1715,7 @@ impl<'a> Player<'a> {
                 let Some(whole) = self.cache.image(image) else {
                     return;
                 };
+                self.cpu_only.images = true;
                 let drawn = src.map_or(
                     (f32::from(whole.width()), f32::from(whole.height())),
                     |src| (src.width, src.height),
@@ -1852,6 +1881,7 @@ impl<'a> Player<'a> {
             if let Some(hole) = hole {
                 rrect_path(hole, &mut outline);
             }
+            self.cpu_only.blurs = true;
             let to_device = self.transform;
             let pad = pad_for(f64::from(sigma) * 3.0 * scale_of(to_device));
             let paint = color(flags.color);
@@ -1907,7 +1937,8 @@ impl<'a> Player<'a> {
             return;
         }
         let slant = crate::ink::slant(skew);
-        let font = self.cache.font(font);
+        let (font, bitmaps) = self.cache.font(font);
+        self.cpu_only.bitmap_glyphs |= bitmaps;
         let coords = normalized_coords(&font, variations);
         let stroked = matches!(flags.style, PaintStyle::Stroke { .. });
         // vello: draws a glyph exactly where it is put.

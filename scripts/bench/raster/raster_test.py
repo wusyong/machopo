@@ -45,16 +45,20 @@ class ReadingTests(unittest.TestCase):
             "\x1b[2m2026-10-18T10:00:00.500000Z\x1b[0m \x1b[34mDEBUG\x1b[0m Compositor compositor::layer_tree_host_impl: "
             "prepared tiles rastered=180 solid=171 skipped=3 kept=2985",
             "2026-10-18T10:00:01.000000Z DEBUG Compositor compositor::layer_tree_host_impl: "
-            "prepared tiles rastered=20 solid=5 skipped=40 kept=10",
+            "prepared tiles rastered=20 solid=5 skipped=40 kept=10 gpu=12 gpu_but_images=5 images=6 masks=1 "
+            "filters=0 blurs=2 patterns=0 bitmap_glyphs=1",
             "2026-10-18T10:00:01.000000Z  INFO main browser: something else",
             "2026-10-18T10:00:03.000000Z DEBUG Compositor compositor::layer_tree_host_impl: "
             "prepared tiles rastered=7 solid=7 kept=0",
             # Before tiles were skipped, the log didn't say.
         ])
         start = 1792317600.0  # 2026-10-18T10:00:00Z
-        self.assertEqual(raster.tiles_in_log(log, (start, start + 2)), {"rastered": 200, "solid": 176, "skipped": 43})
-        self.assertEqual(raster.tiles_in_log(log, (start + 2.5, start + 4)),
-                         {"rastered": 7, "solid": 7, "skipped": 0})
+        none = dict.fromkeys(raster.COUNTS, 0)
+        # What the log didn't say yet is 0.
+        self.assertEqual(raster.tiles_in_log(log, (start, start + 2)),
+                         {**none, "rastered": 200, "solid": 176, "skipped": 43, "gpu": 12, "gpu_but_images": 5,
+                          "images": 6, "masks": 1, "blurs": 2, "bitmap_glyphs": 1})
+        self.assertEqual(raster.tiles_in_log(log, (start + 2.5, start + 4)), {**none, "rastered": 7, "solid": 7})
 
     def test_the_window_shrinks_and_grows_back(self):
         sizes = raster.resize_sizes()
@@ -75,7 +79,14 @@ class ReadingTests(unittest.TestCase):
             "scroll": {"prepare_tiles": {"count": 4, "total_ms": 10.0, "max_ms": 5.0},
                        "raster": {"count": 8, "total_ms": 8.0, "max_ms": 1.0},
                        "main_frames": {"count": 4, "total_ms": 2.0, "max_ms": 1.0},
-                       "tiles": {"rastered": 8, "solid": 6, "skipped": 12}},
+                       "parts": {"raster::scene": {"count": 8, "total_ms": 5.0, "max_ms": 1.0},
+                                 "raster::render": {"count": 8, "total_ms": 2.0, "max_ms": 1.0},
+                                 "TileManager::ScanTile": {"count": 8, "total_ms": 0.5, "max_ms": 0.1},
+                                 "TileManager::UploadTile": {"count": 2, "total_ms": 1.0, "max_ms": 0.6},
+                                 "SharedImage::Write": {"count": 2, "total_ms": 0.6, "max_ms": 0.4},
+                                 "SharedImage::Submit": {"count": 2, "total_ms": 0.3, "max_ms": 0.2}},
+                       "tiles": {"rastered": 8, "solid": 6, "skipped": 12, "gpu": 4, "gpu_but_images": 2, "masks": 1,
+                                 "blurs": 1}},
             "resize": {"prepare_tiles": {"count": 0, "total_ms": 0, "max_ms": 0},
                        "raster": {"count": 0, "total_ms": 0, "max_ms": 0},
                        "main_frames": {"count": 0, "total_ms": 0, "max_ms": 0},
@@ -90,6 +101,11 @@ class ReadingTests(unittest.TestCase):
         self.assertIn("headless, device scale factor 2, 3 raster threads;", threaded)
         self.assertIn("| page | scroll | 4 | 10.0 | 2.5, 5.0 | 2.0 | 8 | 6 (75%) | 12 |", text)
         self.assertIn("| page | resize | 0 | 0 | 0.0, 0 | 0 | 0 | 0 | 0 |", text)
+        # The parts of the raster, of `PrepareTiles`; the tiles, of those rastered.
+        self.assertIn("| page | scroll | 5.0 (50%) | 2.0 (20%) | 0.5 (5%) | 1.0 (10%) (0.6, 0.3) | 4 (50%) | 2 (25%) "
+                      "| 1 (12%) | 0 (0%) | 1 (12%) | 0 (0%) | 0 (0%) |", text)
+        # A run from before the parts were told has none.
+        self.assertIn("| page | resize | 0 | 0 | 0 | 0 (0, 0) | 0 | 0 | 0 | 0 | 0 | 0 | 0 |", text)
 
     def test_an_unknown_page(self):
         args = argparse.Namespace(pages="nowhere", window=False, scale=2.0, raster_threads=None)

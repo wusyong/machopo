@@ -869,6 +869,8 @@ impl SharedImageInterface for RecordingGpu {
         Some(SharedImage::new(mailbox, pixels))
     }
 
+    fn flush(&self) {}
+
     fn add_context_lost_observer(&self, observer: Weak<dyn ContextLostObserver>) {
         self.observers.lock().unwrap().push(observer);
     }

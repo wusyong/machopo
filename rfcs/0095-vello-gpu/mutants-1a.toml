@@ -1,0 +1,54 @@
+# Step 1a: shared images flushed once a frame's are made; the bilinear bind
+# group made when first drawn so.
+#
+#     python3 scripts/test.py mutate rfcs/0095-vello-gpu/mutants-1a.toml
+
+test = ["cargo", "test", "-q", "-p", "compositor", "-p", "viz"]
+timeout = 1200
+
+[[mutant]]
+name = "shared images are never flushed"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''        if made_shared_images && let Some(gpu) = gpu {'''
+to = '''        if false && made_shared_images && let Some(gpu) = gpu {'''
+
+[[mutant]]
+name = "flushed though none was made"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''        if made_shared_images && let Some(gpu) = gpu {'''
+to = '''        if let Some(gpu) = gpu {'''
+
+[[mutant]]
+name = "the tiles' shared images don't count as made"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''        made_shared_images |= rastered.iter().any(|rastered| {'''
+to = '''        made_shared_images |= false && rastered.iter().any(|rastered| {'''
+
+[[mutant]]
+name = "flushed after each tile's shared image"
+file = "crates/compositor/src/layer_tree_host_impl.rs"
+from = '''                let shared_image = gpu.and_then(|gpu| gpu.create_shared_image(size, drawn));'''
+to = '''                let shared_image = gpu.and_then(|gpu| gpu.create_shared_image(size, drawn));
+                if let Some(gpu) = gpu {
+                    gpu.flush();
+                }'''
+
+[[mutant]]
+name = "the bilinear bind group is made with the texture"
+file = "crates/viz/src/gpu_context.rs"
+from = '''        linear_bind_group: Arc::default(),'''
+to = '''        linear_bind_group: Arc::new(OnceLock::from(bind_group(device, layout, &view, nearest))),'''
+
+[[mutant]]
+name = "the bilinear bind group samples the nearest texel"
+file = "crates/viz/src/gpu_context.rs"
+from = '''                &resource.view,
+                &self.linear_sampler,'''
+to = '''                &resource.view,
+                &self.sampler,'''
+
+[[mutant]]
+name = "a quad drawn bilinearly takes the nearest bind group"
+file = "crates/viz/src/wgpu_renderer.rs"
+from = '''                        Some(id) if cmd.linear => self.context.linear(&self.resources[&id]),'''
+to = '''                        Some(id) if cmd.linear => &self.resources[&id].bind_group,'''

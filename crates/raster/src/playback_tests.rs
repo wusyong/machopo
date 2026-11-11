@@ -2710,7 +2710,7 @@ fn a_playback_that_panics_leaves_the_tile_its_clear_color() {
         (Color::rgba(200, 100, 0, 128), [100, 50, 0, 128]),
     ] {
         cache.fail_next_for_testing(1);
-        let size = crate::playback_into(&list, &ops, &tile_params(clear), &cache, &mut pixels);
+        let size = crate::playback_into(&list, &ops, &tile_params(clear), &cache, &mut pixels).size;
         assert_eq!(size, Size::new(4, 2));
         assert_eq!(pixels, left.repeat(8));
         assert!(!crate::vello_backend::has_context());
@@ -2914,4 +2914,200 @@ fn upstream_doesnt_keep_a_clearing_layer_to_its_clip() {
         // (8, 8) is outside the clip, and should be green.
         assert_eq!(pixels[(8 * 10 + 8) * 4..][..4], [0, 0, 0, 0], "{mode:?}");
     }
+}
+
+/// What playing `ops` back says only a CPU draws.
+fn cpu_only(ops: Vec<PaintOp>) -> crate::CpuOnly {
+    let list = list_of(ops);
+    let all: Vec<usize> = (0..list.ops().len()).collect();
+    let params = PlaybackParams {
+        content_rect: RectF::new(0.0, 0.0, 32.0, 32.0),
+        contents_scale: 1.0,
+        clear_color: Color::WHITE,
+    };
+    let mut pixels = Vec::new();
+    crate::playback_into(&list, &all, &params, &RasterCache::default(), &mut pixels).cpu_only
+}
+
+/// A playback tells what of it a renderer that fills on the GPU could not
+/// have drawn, each kind apart, by what was drawn: shapes, gradients and
+/// outlined text are none of them.
+#[test]
+fn a_playback_tells_what_only_a_cpu_draws() {
+    use crate::CpuOnly;
+    let none = CpuOnly::default();
+    let square = RectF::new(4.0, 4.0, 16.0, 16.0);
+    let red = || filled(square, RED_COLOR, BlendMode::SrcOver);
+    let text = |font: (&[u8], u64)| {
+        let at = PointF::new(4.0, 20.0);
+        text_run(font, "X", 12.0, at, 12.0, PaintFlags::fill(Color::BLACK))
+    };
+    let shaded = |shader: PaintShader| PaintOp::DrawRect {
+        rect: square,
+        flags: PaintFlags::shader(shader),
+    };
+    let image = |image: ImageData| PaintOp::DrawImage {
+        image,
+        src: None,
+        dst: square,
+        filter: FilterQuality::Medium,
+        flags: None,
+    };
+    let picture = || image(ImageData::new(GREEN_BLUE));
+    let tile = RectF::new(0.0, 0.0, 8.0, 8.0);
+    let gradient = TiledShader {
+        image: red_to_blue(
+            GradientShaderKind::Linear {
+                start: PointF::new(0.0, 0.0),
+                end: PointF::new(8.0, 0.0),
+            },
+            false,
+        ),
+        ..image_shader(tile, gfx::SizeF::new(0.0, 0.0), false)
+    };
+    assert_eq!(
+        cpu_only(vec![
+            red(),
+            text((AHEM, 1)),
+            text((LATO, 2)),
+            shaded(gradient.into())
+        ]),
+        none
+    );
+
+    let images = CpuOnly {
+        images: true,
+        ..none
+    };
+    assert_eq!(cpu_only(vec![red(), picture()]), images);
+    let pattern = |gap: f32| image_shader(tile, gfx::SizeF::new(gap, gap), true);
+    assert_eq!(cpu_only(vec![shaded(pattern(0.0).into())]), images);
+    // Not an image: nothing is drawn.
+    assert_eq!(
+        cpu_only(vec![image(ImageData::new(&b"not an image"[..]))]),
+        none
+    );
+
+    let patterns = CpuOnly {
+        patterns: true,
+        ..none
+    };
+    assert_eq!(cpu_only(vec![shaded(pattern(2.0).into())]), patterns);
+
+    let p = PointF::new;
+    let both = PaintOp::ClipPaths {
+        paths: vec![
+            gfx::Path::polygons([vec![p(0.0, 0.0), p(20.0, 0.0), p(0.0, 20.0)]]),
+            gfx::Path::polygons([vec![p(30.0, 30.0), p(10.0, 30.0), p(30.0, 10.0)]]),
+        ],
+        anti_alias: true,
+    };
+    let masks = CpuOnly {
+        masks: true,
+        ..none
+    };
+    assert_eq!(
+        cpu_only(vec![PaintOp::Save, both, red(), PaintOp::Restore]),
+        masks
+    );
+
+    let filters = CpuOnly {
+        filters: true,
+        ..none
+    };
+    let blurs = CpuOnly {
+        blurs: true,
+        ..none
+    };
+    let blur = ImageFilter::Blur { sigma: 2.0 };
+    let shadow = ImageFilter::DropShadow {
+        offset: (2.0, 2.0),
+        sigma: 1.0,
+        color: Color::BLACK,
+        shadow_only: false,
+    };
+    assert_eq!(
+        cpu_only(layer(ImageFilter::ColorMatrix(invert()), vec![red()])),
+        filters
+    );
+    assert_eq!(
+        cpu_only(layer(
+            ImageFilter::Chain(vec![blur.clone(), blur.clone()].into()),
+            vec![red()]
+        )),
+        filters
+    );
+    assert_eq!(cpu_only(layer(blur.clone(), vec![red()])), blurs);
+    assert_eq!(cpu_only(layer(shadow, vec![red()])), blurs);
+    // What a layer drawn off to the side has in it counts too.
+    assert_eq!(
+        cpu_only(layer(blur.clone(), vec![picture()])),
+        CpuOnly {
+            images: true,
+            ..blurs
+        }
+    );
+    // A layer in a clip outside the tile isn't drawn.
+    let outside = PaintOp::ClipRect {
+        rect: RectF::new(100.0, 100.0, 10.0, 10.0),
+        anti_alias: true,
+    };
+    let mut hidden = vec![PaintOp::Save, outside];
+    hidden.extend(layer(blur, vec![red()]));
+    hidden.push(PaintOp::Restore);
+    assert_eq!(cpu_only(hidden), none);
+
+    // A blurred shape; a shadow with a hole, but not a plain one, which
+    // Vello has.
+    let blurred = PaintOp::DrawRect {
+        rect: square,
+        flags: PaintFlags {
+            blur: 2.0,
+            ..PaintFlags::fill(Color::BLACK)
+        },
+    };
+    assert_eq!(cpu_only(vec![blurred]), blurs);
+    let box_rect = gfx::RRectF::from_rect(square);
+    let box_shadow = |hole: Option<gfx::RRectF>| PaintOp::DrawShadow {
+        shape: box_rect.offset(2.0, 2.0),
+        hole,
+        clip: box_rect,
+        inside: false,
+        flags: PaintFlags {
+            blur: 2.0,
+            ..PaintFlags::fill(Color::BLACK)
+        },
+    };
+    assert_eq!(cpu_only(vec![box_shadow(None)]), none);
+    assert_eq!(cpu_only(vec![box_shadow(Some(box_rect))]), blurs);
+
+    // A font with bitmaps.
+    let emoji = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../third_party/wpt/fonts/noto/color-emoji/NotoColorEmoji-subset.ttf"
+    ))
+    .unwrap();
+    let glyph = PaintOp::DrawGlyphs {
+        font: FontData {
+            bytes: Arc::new(emoji),
+            index: 0,
+            id: 3,
+        },
+        size: 16.0,
+        glyphs: vec![2].into(),
+        positions: vec![PointF::new(4.0, 20.0)].into(),
+        rotations: Vec::new().into(),
+        flags: PaintFlags::fill(Color::BLACK),
+        embolden: false,
+        skew: 0.0,
+        variations: Arc::new([]),
+        bounds: RectF::new(-1000.0, -1000.0, 3000.0, 3000.0),
+    };
+    assert_eq!(
+        cpu_only(vec![glyph]),
+        CpuOnly {
+            bitmap_glyphs: true,
+            ..none
+        }
+    );
 }

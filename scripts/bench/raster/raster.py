@@ -16,6 +16,12 @@ renderer's main frames; and from the log, how many of the tiles rastered turned 
 one color, and how many weren't rastered (nothing draws in them). The results go to `target/bench/raster/raster.md` (and
 `raster.json`), the traces and logs next to them.
 
+A second table says where a raster's time goes (`PARTS`: building the
+scene, rendering its pixels, reading them for one color, and putting them on
+the GPU, the write and the submit apart), and how many of the tiles rastered
+a renderer that fills on the GPU could have drawn, with what kept the
+others from it (the log's counts).
+
 The raster on the compositor thread doesn't depend on which of Viz's
 renderers draws the frames, so headless (no window shows up) measures it
 the same, at the device scale factor `--scale` gives (default 2, a
@@ -73,9 +79,17 @@ def trace_now() -> int:
     return time.monotonic_ns()
 
 
-PREPARED = re.compile(
-    r"^(?P<time>\d{4}-\d\d-\d\dT[\d:.]+Z)\s.*prepared tiles rastered=(?P<rastered>\d+) solid=(?P<solid>\d+)"
-    r"(?: skipped=(?P<skipped>\d+))?")
+PREPARED = re.compile(r"^(?P<time>\d{4}-\d\d-\d\dT[\d:.]+Z)\s.*prepared tiles (?P<counts>.*)$")
+COUNT = re.compile(r"(\w+)=(\d+)")
+# What the log counts of the tiles a `PrepareTiles` rastered.
+COUNTS = ("rastered", "solid", "skipped", "gpu", "gpu_but_images", "images", "masks", "filters", "blurs", "patterns",
+          "bitmap_glyphs")
+# The parts of a tile's raster, each a span on the thread that rasters it:
+# the playback (the scene built, then rendered), its pixels read for one
+# color, and put on the GPU (Viz's write and submit, in the upload).
+PARTS = ("raster::playback", "raster::scene", "raster::render", "TileManager::ScanTile", "TileManager::UploadTile",
+         "SharedImage::Write", "SharedImage::CreateTexture", "SharedImage::WriteTexture", "SharedImage::BindGroups",
+         "SharedImage::Submit")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -157,17 +171,17 @@ def tiles_in_log(text: str, window: tuple[float, float]) -> dict:
     """The tiles the compositor's debug log says it rastered in `window`
     (wall clock, seconds), how many of them were one color, and how many
     it didn't raster (nothing draws in them)."""
-    rastered = solid = skipped = 0
+    counts = dict.fromkeys(COUNTS, 0)
     for line in ANSI.sub("", text).splitlines():
         found = PREPARED.match(line)
         if not found:
             continue
         at = datetime.fromisoformat(found["time"].replace("Z", "+00:00")).timestamp()
         if window[0] <= at <= window[1]:
-            rastered += int(found["rastered"])
-            solid += int(found["solid"])
-            skipped += int(found["skipped"] or 0)
-    return {"rastered": rastered, "solid": solid, "skipped": skipped}
+            for name, count in COUNT.findall(found["counts"]):
+                if name in counts:
+                    counts[name] += int(count)
+    return counts
 
 
 # The raster threads' names, `CompositorTileWorker1` and on, as the trace
@@ -185,7 +199,7 @@ def raster_spans(trace: Path) -> dict[int, list[tuple[str, int, int]]]:
         thread = threads.get(track, "")
         if kind in (1, 2) and (thread.startswith(RASTER_THREAD) or thread == "Compositor"):
             by_track.setdefault(track, []).append((time, name if kind == 1 else None))
-    return {track: spans(found, {"raster::playback"}) for track, found in by_track.items()}
+    return {track: spans(found, set(PARTS)) for track, found in by_track.items()}
 
 
 def analyze(run: dict) -> dict:
@@ -204,6 +218,7 @@ def analyze(run: dict) -> dict:
         results[name] = {
             "prepare_tiles": summary(compositor, "TileManager::PrepareTiles", phase["trace"]),
             "raster": summary(playbacks, "raster::playback", phase["trace"]),
+            "parts": {part: summary(playbacks, part, phase["trace"]) for part in PARTS},
             "raster_threads": sum(1 for thread in rasters.values()
                                   if summary(thread, "raster::playback", phase["trace"])["count"]),
             "main_frames": summary(main, "ProxyMain::BeginMainFrame", phase["trace"]),
@@ -241,6 +256,33 @@ def write_report(results: dict[str, dict], env: dict, window: bool, scale: float
             lines.append(f"| {page} | {phase} | {prepare['count']} | {prepare['total_ms']} | {mean:.1f}, "
                          f"{prepare['max_ms']} | {main['total_ms']} | {tiles['rastered']} | {share} | "
                          f"{tiles['skipped']} |")
+    lines += [
+        "",
+        "Where the raster's time goes (ms, and of `PrepareTiles`), and the tiles a renderer that fills on the GPU "
+        "could have drawn (of those rastered; `+ images`: those only their images kept from it):",
+        "",
+        "| Page | Phase | Scene | Render | Read for one color | Upload (write, submit) | GPU could | + images "
+        "| Masks | Filters | Blurs | Patterns | Bitmap glyphs |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for page, phases in results.items():
+        for phase, r in phases.items():
+            total, parts, tiles = r["prepare_tiles"]["total_ms"], r.get("parts", {}), r["tiles"]
+
+            def part(name: str) -> str:
+                ms = parts.get(name, {}).get("total_ms", 0)
+                return f"{ms} ({100 * ms / total:.0f}%)" if total else f"{ms}"
+
+            def share(name: str) -> str:
+                count = tiles.get(name, 0)
+                return f"{count} ({100 * count / tiles['rastered']:.0f}%)" if tiles["rastered"] else "0"
+
+            write = parts.get("SharedImage::Write", {}).get("total_ms", 0)
+            submit = parts.get("SharedImage::Submit", {}).get("total_ms", 0)
+            lines.append(f"| {page} | {phase} | {part('raster::scene')} | {part('raster::render')} | "
+                         f"{part('TileManager::ScanTile')} | {part('TileManager::UploadTile')} ({write}, {submit}) | "
+                         f"{share('gpu')} | {share('gpu_but_images')} | {share('masks')} | {share('filters')} | "
+                         f"{share('blurs')} | {share('patterns')} | {share('bitmap_glyphs')} |")
     report = RESULTS / "raster.md"
     report.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
     (RESULTS / "raster.json").write_text(json.dumps(results, indent=1) + "\n", encoding="utf-8", newline="\n")

@@ -72,6 +72,8 @@ impl SharedImageInterface for CountingGpu {
         None
     }
 
+    fn flush(&self) {}
+
     fn add_context_lost_observer(&self, _: Weak<dyn ContextLostObserver>) {}
 }
 

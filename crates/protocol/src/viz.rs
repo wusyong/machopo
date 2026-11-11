@@ -109,6 +109,12 @@ pub trait SharedImageInterface: Send + Sync {
     /// the pixels.
     fn create_shared_image(&self, size: Size, pixels: &[u8]) -> Option<SharedImage>;
 
+    /// `Flush`: sends the GPU what the shared images made since the last
+    /// one were made from. A client calls it once it has made those it
+    /// has to make for now (a frame's tiles), not after each: until then
+    /// their pixels are held as copies waiting to go.
+    fn flush(&self);
+
     /// Tells `observer` when the GPU is lost. Held weakly: it is told until
     /// its client drops it (Chromium's clients remove theirs).
     fn add_context_lost_observer(&self, observer: Weak<dyn ContextLostObserver>);

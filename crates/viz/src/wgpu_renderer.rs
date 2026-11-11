@@ -17,7 +17,7 @@
 //! do, what was on the old device isn't drawn.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock, Weak};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::time::{Duration, Instant};
 
 use base::AtomicSequenceNumber;
@@ -94,15 +94,36 @@ pub(crate) struct UploadedResource {
     /// Sampled at the nearest texel (a tile), or bilinearly (a canvas's
     /// layer, `nearest_neighbor: false`).
     pub(crate) bind_group: wgpu::BindGroup,
-    pub(crate) linear_bind_group: wgpu::BindGroup,
-    // Keeps the texture alive for the bind group.
-    pub(crate) _texture: wgpu::Texture,
+    /// Made when first drawn so: few are (a tile never is), and making
+    /// one costs the thread that rasters as much as the other did.
+    pub(crate) linear_bind_group: Arc<OnceLock<wgpu::BindGroup>>,
+    pub(crate) view: wgpu::TextureView,
+    /// Kept for the bind groups, and written over when it is used again.
+    pub(crate) texture: wgpu::Texture,
 }
 
 /// What a shared image holds: its texture, and the device it is on.
 struct SharedImageBacking {
     generation: u64,
     uploaded: UploadedResource,
+    /// Where the texture goes when the shared image is let go: its
+    /// device's pool, while there is that device.
+    pool: Weak<crate::gpu_context::TexturePool>,
+}
+
+/// The last of a shared image is gone: its client's (a tile rastered
+/// again, or far from the viewport) and the frames' that drew it. A
+/// renderer may still hold the resource for a frame it has drawn, which it
+/// forgets at its next; it draws only what a frame holds, so the texture
+/// is free to be another shared image's. What was drawn from it and is
+/// still on its way to the screen was submitted before the write that
+/// follows, and the queue keeps their order.
+impl Drop for SharedImageBacking {
+    fn drop(&mut self) {
+        if let Some(pool) = self.pool.upgrade() {
+            pool.put(self.uploaded.clone());
+        }
+    }
 }
 
 /// How many times, and after how long, a lost device is made again before
@@ -157,17 +178,34 @@ impl SharedImageInterface for GpuSharedImages {
             return None;
         }
         let _submitting = gpu.submit_lock.lock().unwrap_or_else(|e| e.into_inner());
-        let uploaded = gpu.upload(size, pixels);
-        // The write goes out at the next submit, which the renderer doesn't
-        // make while it can't draw (an occluded window): send it now, so
-        // writes don't pile up holding their staging copies.
-        gpu.queue.submit(std::iter::empty());
+        let write = trace_event::trace_event!("SharedImage::Write");
+        let uploaded = match gpu.pool.take(size) {
+            Some(texture) => {
+                gpu.write(&texture, pixels);
+                texture
+            }
+            None => gpu.upload(size, pixels),
+        };
+        drop(write);
         let mailbox = Mailbox(self.mailboxes.get_next());
         let backing = SharedImageBacking {
             generation: gpu.generation,
             uploaded,
+            pool: Arc::downgrade(&gpu.pool),
         };
         Some(SharedImage::new(mailbox, Arc::new(backing)))
+    }
+
+    fn flush(&self) {
+        let Some(gpu) = self.gpu.read().unwrap_or_else(|e| e.into_inner()).clone() else {
+            return;
+        };
+        // The writes go out at the next submit, which the renderer doesn't
+        // make while it can't draw (an occluded window): send them now, so
+        // they don't pile up holding their staging copies.
+        let _submitting = gpu.submit_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let _submit = trace_event::trace_event!("SharedImage::Submit");
+        gpu.queue.submit(std::iter::empty());
     }
 
     fn add_context_lost_observer(&self, observer: Weak<dyn ContextLostObserver>) {
@@ -805,7 +843,7 @@ impl WgpuRenderer {
                     }
                     pass.set_scissor_rect(x, y, w, h);
                     let bind_group = match cmd.resource {
-                        Some(id) if cmd.linear => &self.resources[&id].linear_bind_group,
+                        Some(id) if cmd.linear => self.context.linear(&self.resources[&id]),
                         Some(id) => &self.resources[&id].bind_group,
                         None => &self.context.white.bind_group,
                     };
@@ -1490,6 +1528,146 @@ mod drawing_tests {
                 .is_some()
         );
     }
+    /// What draws a texture bilinearly is made the first time it is drawn
+    /// so, and kept: a tile, never drawn so, has none.
+    #[test]
+    fn a_texture_has_what_draws_it_bilinearly_once_it_is_drawn_so() {
+        let _gpu = gpu();
+        let images = GpuSharedImages::new();
+        let renderer = WgpuRenderer::offscreen(Size::new(1, 1), images.clone()).unwrap();
+        let image = images
+            .create_shared_image(Size::new(1, 1), &[0; 4])
+            .unwrap();
+        images.flush();
+        let uploaded = &image.backing::<SharedImageBacking>().unwrap().uploaded;
+        assert!(uploaded.linear_bind_group.get().is_none());
+        let first: *const wgpu::BindGroup = renderer.context.linear(uploaded);
+        assert!(uploaded.linear_bind_group.get().is_some());
+        // The renderer's own copy of the resource shares it.
+        let copy = uploaded.clone();
+        assert!(std::ptr::eq(first, renderer.context.linear(&copy)));
+    }
+
+    /// A shared image let go by everything that held it leaves its
+    /// texture for the next shared image of its size, which is drawn with
+    /// its own pixels.
+    #[test]
+    fn a_shared_image_let_go_gives_its_texture_to_the_next_of_its_size() {
+        let _gpu = gpu();
+        // A size no other test's shared images have: the device, and so
+        // its pool, is the process's.
+        let size = Size::new(3, 5);
+        let images = GpuSharedImages::new();
+        let renderer = WgpuRenderer::offscreen(size, images.clone()).unwrap();
+        let pool = renderer.context.pool.clone();
+        let pooled = || pool.sizes().iter().filter(|&&s| s == size).count();
+        let mut display = Display::new(renderer, SINK);
+        let filled = |color: [u8; 4]| {
+            let pixels: Vec<u8> = std::iter::repeat_n(color, 15).flatten().collect();
+            let image = images.create_shared_image(size, &pixels).unwrap();
+            images.flush();
+            image
+        };
+        let before = pooled();
+        let red = filled([255, 0, 0, 255]);
+        assert_eq!(pooled(), before);
+        drop(red);
+        assert_eq!(pooled(), before + 1);
+        // One of another size takes none of this size.
+        drop(images.create_shared_image(Size::new(5, 3), &[0; 60]));
+        assert_eq!(pooled(), before + 1);
+
+        // The next of this size takes it, and is what it was made of.
+        let blue = filled([0, 0, 255, 255]);
+        assert_eq!(pooled(), before);
+        let mut f = frame(
+            size,
+            SharedQuadState::default(),
+            vec![DrawQuad {
+                rect: RectF::new(0.0, 0.0, 3.0, 5.0),
+                shared_quad_state: 0,
+                material: Material::Texture {
+                    resource_id: ResourceId(7),
+                    tex_coord_rect: RectF::new(0.0, 0.0, 3.0, 5.0),
+                    nearest_neighbor: true,
+                },
+            }],
+        );
+        f.resource_list.push(TransferableResource {
+            id: ResourceId(7),
+            size,
+            format: ResourceFormat::Rgba8Premul,
+            pixels: Arc::from([]),
+            shared_image: Some(blue.clone()),
+        });
+        display.submit_compositor_frame(SINK, LocalSurfaceId::default(), f);
+        let copy = draw(&mut display);
+        for (x, y) in [(0, 0), (2, 4), (1, 2)] {
+            assert_eq!(px(&copy, x, y), [0, 0, 255, 255], "{x},{y}");
+        }
+        // The frame still holds it: not let go while anything does.
+        drop(blue);
+        assert_eq!(pooled(), before);
+        drop(display);
+        assert_eq!(pooled(), before + 1);
+    }
+
+    /// The pool keeps the textures put last, up to so many and so many
+    /// bytes, and none that alone is more than it keeps.
+    #[test]
+    fn the_texture_pool_keeps_the_newest_within_its_limits() {
+        use crate::gpu_context::{POOL_BYTES, POOL_TEXTURES, TexturePool};
+        let _gpu = gpu();
+        let renderer = WgpuRenderer::offscreen(Size::new(1, 1), GpuSharedImages::new()).unwrap();
+        let texture = |size: Size| {
+            let pixels = vec![0; size.checked_byte_size().unwrap()];
+            renderer.context.upload(size, &pixels)
+        };
+        // So many: the oldest go.
+        let pool = TexturePool::default();
+        let count = u32::try_from(POOL_TEXTURES).unwrap();
+        for height in 1..=count + 2 {
+            pool.put(texture(Size::new(1, height)));
+        }
+        let sizes = pool.sizes();
+        assert_eq!(sizes.len(), POOL_TEXTURES);
+        assert_eq!(sizes[0], Size::new(1, 3));
+        assert_eq!(sizes.last(), Some(&Size::new(1, count + 2)));
+        // Taken: the one put last of that size, and no other.
+        assert!(pool.take(Size::new(1, 1)).is_none());
+        assert!(pool.take(Size::new(1, 3)).is_some());
+        assert!(pool.take(Size::new(1, 3)).is_none());
+        assert_eq!(pool.sizes().len(), POOL_TEXTURES - 1);
+
+        // So many bytes: three textures of over a third of them, the first
+        // let go when the third comes; room again once one is taken.
+        let pool = TexturePool::default();
+        let side = 1900;
+        let third = Size::new(side, side);
+        assert!(third.checked_byte_size().unwrap() * 3 > POOL_BYTES);
+        assert!(third.checked_byte_size().unwrap() * 2 <= POOL_BYTES);
+        pool.put(texture(Size::new(1, 1)));
+        pool.put(texture(third));
+        pool.put(texture(third));
+        assert_eq!(pool.sizes().len(), 3);
+        pool.put(texture(third));
+        assert_eq!(pool.sizes(), [third, third]);
+        assert!(pool.take(third).is_some());
+        pool.put(texture(Size::new(1, 1)));
+        pool.put(texture(third));
+        assert_eq!(pool.sizes(), [third, Size::new(1, 1), third]);
+
+        // One larger than all it keeps isn't kept, and pushes nothing out.
+        let large = Size::new(2900, 2900);
+        assert!(large.checked_byte_size().unwrap() > POOL_BYTES);
+        pool.put(texture(large));
+        assert_eq!(pool.sizes(), [third, Size::new(1, 1), third]);
+        // Of two of a size, the one put last is taken: the other, unused
+        // the longest, is the next to go.
+        assert!(pool.take(third).is_some());
+        assert_eq!(pool.sizes(), [third, Size::new(1, 1)]);
+    }
+
     /// A shared image is made only of pixels that fit its size, no bigger
     /// than a texture Viz takes: as the GPU process checks a client's.
     #[test]

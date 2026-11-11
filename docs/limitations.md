@@ -192,7 +192,7 @@
 - paint 沒有 cull rect：每一步把每個變了的 fragment 都轉成 `PaintOp`，文字的 run 每個 glyph 都放一次，畫面外的也一樣（Blink 的 `CullRect` 只畫和可見範圍相交的）。很長的文字（Speedometer 的 Editor-TipTap，23 萬個 glyph）每一步在 paint 上約花 2 ms（release），大部分是畫面外的。
 - 比 1 個 device pixel 還薄的背景（例如 `height: 0.25px`）對齊之後可能變成 0，整個不見；Chrome 至少畫 1 個 device pixel。
 - border 寬度只在 paint 時取整到 device pixel，layout 照舊用沒取整的寬度（Blink 在 style 時就取整）：border 和裡面的東西之間可能差不到 1 個 device px（layout 不知道 device scale factor）。
-- tile 的 raster 是同步的，預設在 compositor thread 上一個一個畫：raster 慢的頁面（tile 多的，改大小時）frame 變長（Chrome 先畫已經好的 tile，沒好的畫 checkerboard）。`--num-raster-threads N` 讓它平行，但每條 thread 畫一個 tile 的時間比一條時長（節能核心、和其他 thread 搶核心），頁面跑的時候多用 CPU 和記憶體，所以預設不開；開了之後每個分頁一組 thread。真的視窗裡上傳到 GPU 也在 compositor thread 上一個一個做（每個 tile 送一次 queue）。
+- tile 的 raster 是同步的，預設在 compositor thread 上一個一個畫：raster 慢的頁面（tile 多的，改大小時）frame 變長（Chrome 先畫已經好的 tile，沒好的畫 checkerboard）。`--num-raster-threads N` 讓它平行，但每條 thread 畫一個 tile 的時間比一條時長（節能核心、和其他 thread 搶核心），頁面跑的時候多用 CPU 和記憶體，所以預設不開；開了之後每個分頁一組 thread。上傳到 GPU 也在畫 tile 的那條 thread 上一個一個做（每個 tile 把像素複製進一張 texture，有同樣大小、沒人用的就重用；一輪的 tile 都上傳完才送一次 queue），headless 和視窗都一樣。
 
 ## Compositor、layer 和 input
 
@@ -245,7 +245,7 @@
 - 沒有 `ReturnResources`：shared image 的生命週期靠參考計數；Viz 照舊整個畫面重畫（damage rect 送到了，但沒用來 partial swap）。
 - 網頁 frame 的 `LocalSurfaceId` 不比對：Viz 用那個 sink 最新的 frame，視窗大小改變的那一下會先顯示舊大小的 frame。
 - `about:demo` 的 GPU 那份比活著的 texture 多約 95 MB，跟著動畫出現（每個 frame 上傳一個 tile、畫一個 frame），不會繼續長；不是 texture 建立和銷毀造成的（重用 texture 試過，省不下來），原因還沒查到。
-- 不做 cc 的 `ResourcePool`：每個重新 raster 的 tile 都建立新的 texture。
+- tile 和 canvas 的 texture 重用的方式和 cc 的 `ResourcePool` 不同：池子在 Viz 這一側（一個 device 一個），shared image 的最後一個引用放掉時才還回去，只照大小找；最多留 32 MB、256 張，超過時放掉最舊的，沒有閒置逾時（閒著的最多多佔 32 MB，到 device 遺失或程式結束）。Viz 自己上傳的資源（沒有 shared image、像素跟著 frame 來的）不重用。
 - raster 的字型快取（`RasterCache`，每個畫過的字型和 face 一筆，握著字型檔的 bytes）跟著 compositor，不會變小：頁面換掉的 web font 也留著（Blink 的 `FontCache` 會清掉不用的 `FontPlatformData`）。
 - GPU device 遺失之後，新的 device 做不出來時（重試 3 次）直接結束程式：視窗沒有 software 的輸出可以退回（Chromium 退到 software compositing）。
 - Viz 不用 texture 上限小於 8192 的 adapter（renderer 把不超過它的 canvas 當成 layer）：這樣的 GPU 建不出 device、程式結束，不會改用下一個 adapter（例如 CPU 的）。目前的桌機 GPU 和 lavapipe、WARP 都到 16384 以上。

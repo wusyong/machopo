@@ -12,7 +12,7 @@
 //! CPU one even with a GPU: to reproduce a machine without one, and to
 //! test that path.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -146,6 +146,76 @@ pub(crate) struct GpuContext {
     /// while it waits for the GPU to go idle. (Chromium's GPU scheduler
     /// runs shared image and display work in turn, never at once.)
     pub(crate) submit_lock: Arc<Mutex<()>>,
+    /// The textures of shared images let go, for the next ones.
+    pub(crate) pool: Arc<TexturePool>,
+}
+
+/// cc's `ResourcePool`, on Viz's side: the textures of shared images their
+/// clients and Viz have let go of, kept to be written over by the next
+/// shared image of their size rather than made anew (making a tile's
+/// texture and what draws it costs about as much as copying its pixels).
+/// It keeps the newest, up to `POOL_BYTES` and `POOL_TEXTURES`: a window
+/// resized leaves tiles of many sizes that are never asked for again.
+#[derive(Default)]
+pub(crate) struct TexturePool {
+    free: Mutex<FreeTextures>,
+}
+
+#[derive(Default)]
+struct FreeTextures {
+    /// The oldest first.
+    textures: VecDeque<UploadedResource>,
+    bytes: usize,
+}
+
+/// How much the pool keeps: about a screen's worth of tiles twice over at
+/// a device scale factor of 2 (cc's pool keeps what its tile manager's
+/// memory limit leaves).
+pub(crate) const POOL_BYTES: usize = 32 * 1024 * 1024;
+/// And how many, whatever their size: taking one looks through them.
+pub(crate) const POOL_TEXTURES: usize = 256;
+
+impl TexturePool {
+    fn free(&self) -> std::sync::MutexGuard<'_, FreeTextures> {
+        self.free.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// A texture of `size` to write over, the one put last.
+    pub(crate) fn take(&self, size: Size) -> Option<UploadedResource> {
+        let mut free = self.free();
+        let at = free.textures.iter().rposition(|t| t.size == size)?;
+        let texture = free.textures.remove(at)?;
+        free.bytes = free.bytes.saturating_sub(texture_bytes(size));
+        Some(texture)
+    }
+
+    /// Keeps `texture`, which nothing draws any more, letting the oldest
+    /// go to stay within what the pool keeps.
+    pub(crate) fn put(&self, texture: UploadedResource) {
+        let bytes = texture_bytes(texture.size);
+        // Not one that would push everything else out.
+        if bytes > POOL_BYTES {
+            return;
+        }
+        let mut free = self.free();
+        free.bytes = free.bytes.saturating_add(bytes);
+        free.textures.push_back(texture);
+        while free.bytes > POOL_BYTES || free.textures.len() > POOL_TEXTURES {
+            let Some(oldest) = free.textures.pop_front() else {
+                break;
+            };
+            free.bytes = free.bytes.saturating_sub(texture_bytes(oldest.size));
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn sizes(&self) -> Vec<Size> {
+        self.free().textures.iter().map(|t| t.size).collect()
+    }
+}
+
+fn texture_bytes(size: Size) -> usize {
+    size.checked_byte_size().unwrap_or(usize::MAX)
 }
 
 static SHARED: Mutex<Option<Arc<GpuContext>>> = Mutex::new(None);
@@ -292,7 +362,7 @@ impl GpuContext {
             &device,
             &queue,
             &bind_group_layout,
-            [&sampler, &linear_sampler],
+            &sampler,
             Size::new(1, 1),
             &[255, 255, 255, 255],
         );
@@ -318,6 +388,7 @@ impl GpuContext {
             pipelines: Mutex::default(),
             white,
             submit_lock: Arc::new(Mutex::new(())),
+            pool: Arc::default(),
         })
     }
 
@@ -385,10 +456,28 @@ impl GpuContext {
             &self.device,
             &self.queue,
             &self.bind_group_layout,
-            [&self.sampler, &self.linear_sampler],
+            &self.sampler,
             size,
             pixels,
         )
+    }
+
+    /// `pixels` over what `resource`, of their size, had.
+    pub(crate) fn write(&self, resource: &UploadedResource, pixels: &[u8]) {
+        write(&self.queue, &resource.texture, resource.size, pixels);
+    }
+
+    /// What `resource` (of this device) is drawn with sampled bilinearly,
+    /// made the first time it is.
+    pub(crate) fn linear<'a>(&self, resource: &'a UploadedResource) -> &'a wgpu::BindGroup {
+        resource.linear_bind_group.get_or_init(|| {
+            bind_group(
+                &self.device,
+                &self.bind_group_layout,
+                &resource.view,
+                &self.linear_sampler,
+            )
+        })
     }
 }
 
@@ -396,7 +485,7 @@ fn upload(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     layout: &wgpu::BindGroupLayout,
-    [nearest, linear]: [&wgpu::Sampler; 2],
+    nearest: &wgpu::Sampler,
     size: Size,
     pixels: &[u8],
 ) -> UploadedResource {
@@ -405,6 +494,7 @@ fn upload(
         height: size.height,
         depth_or_array_layers: 1,
     };
+    let create = trace_event::trace_event!("SharedImage::CreateTexture");
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("viz resource"),
         size: extent,
@@ -415,6 +505,23 @@ fn upload(
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
+    drop(create);
+    write(queue, &texture, size, pixels);
+    let _bind = trace_event::trace_event!("SharedImage::BindGroups");
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    UploadedResource {
+        size,
+        bind_group: bind_group(device, layout, &view, nearest),
+        linear_bind_group: Arc::default(),
+        view,
+        texture,
+    }
+}
+
+/// `pixels` (premultiplied RGBA, `size`) as the whole of `texture`, which
+/// is that size.
+fn write(queue: &wgpu::Queue, texture: &wgpu::Texture, size: Size, pixels: &[u8]) {
+    let _write = trace_event::trace_event!("SharedImage::WriteTexture");
     #[expect(
         clippy::arithmetic_side_effects,
         reason = "every caller's pixels fit their size (`pixels_fit`, or a 1x1 white): \
@@ -423,7 +530,7 @@ fn upload(
     let bytes_per_row = size.width * 4;
     queue.write_texture(
         wgpu::TexelCopyTextureInfo {
-            texture: &texture,
+            texture,
             mip_level: 0,
             origin: wgpu::Origin3d::ZERO,
             aspect: wgpu::TextureAspect::All,
@@ -434,31 +541,36 @@ fn upload(
             bytes_per_row: Some(bytes_per_row),
             rows_per_image: Some(size.height),
         },
-        extent,
+        wgpu::Extent3d {
+            width: size.width,
+            height: size.height,
+            depth_or_array_layers: 1,
+        },
     );
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    let bind_group = |sampler: &wgpu::Sampler| {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("viz resource bg"),
-            layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-            ],
-        })
-    };
-    UploadedResource {
-        size,
-        bind_group: bind_group(nearest),
-        linear_bind_group: bind_group(linear),
-        _texture: texture,
-    }
+}
+
+/// What a quad of a resource is drawn with: its texture, sampled by
+/// `sampler`.
+fn bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    view: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("viz resource bg"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    })
 }
 
 #[cfg(test)]

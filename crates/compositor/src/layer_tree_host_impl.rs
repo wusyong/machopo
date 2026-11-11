@@ -87,6 +87,42 @@ pub(crate) struct TilesPrepared {
     /// or an opaque fill covers them).
     pub(crate) skipped: usize,
     pub(crate) kept: usize,
+    /// Of those rastered, what a renderer that fills on the GPU could have
+    /// drawn, and what kept the others from it (a tile can have several).
+    pub(crate) gpu: usize,
+    /// Those only their images kept from it.
+    pub(crate) gpu_but_images: usize,
+    pub(crate) images: usize,
+    pub(crate) masks: usize,
+    pub(crate) filters: usize,
+    pub(crate) blurs: usize,
+    pub(crate) patterns: usize,
+    pub(crate) bitmap_glyphs: usize,
+}
+
+impl TilesPrepared {
+    fn count(&mut self, cpu_only: raster::CpuOnly) {
+        let one = |counter: &mut usize, is: bool| {
+            if is {
+                *counter = counter.saturating_add(1);
+            }
+        };
+        one(&mut self.gpu, !cpu_only.any());
+        let but_images = raster::CpuOnly {
+            images: false,
+            ..cpu_only
+        };
+        one(
+            &mut self.gpu_but_images,
+            cpu_only.images && !but_images.any(),
+        );
+        one(&mut self.images, cpu_only.images);
+        one(&mut self.masks, cpu_only.masks);
+        one(&mut self.filters, cpu_only.filters);
+        one(&mut self.blurs, cpu_only.blurs);
+        one(&mut self.patterns, cpu_only.patterns);
+        one(&mut self.bitmap_glyphs, cpu_only.bitmap_glyphs);
+    }
 }
 
 /// `cc::TileDrawInfo`: a tile's raster, or the one color it came out as.
@@ -364,11 +400,12 @@ thread_local! {
 /// What a tile came out as: of one color, or its pixels, put on the GPU
 /// (then not kept) if there is one, by the thread that rastered it.
 enum Rastered {
-    Solid(Color),
+    Solid(Color, raster::CpuOnly),
     Pixels {
         size: Size,
         pixels: Arc<[u8]>,
         shared_image: Option<protocol::viz::SharedImage>,
+        cpu_only: raster::CpuOnly,
     },
 }
 
@@ -914,6 +951,8 @@ impl LayerTreeHostImpl {
             .map(|layer| Self::layer_origin_in_pixels(tree, &offsets, &layer.properties(), scroll))
             .collect();
         let mut prepared = TilesPrepared::default();
+        // Whether a shared image was made, to flush them once all are.
+        let mut made_shared_images = false;
         // The tiles to raster, in the order they are drawn: their resources
         // are numbered in that order, however many threads raster them.
         let mut jobs = Vec::new();
@@ -937,6 +976,7 @@ impl LayerTreeHostImpl {
                             .shared_image_interface
                             .as_ref()
                             .and_then(|gpu| gpu.create_shared_image(size, snapshot.as_bytes()));
+                        made_shared_images |= shared_image.is_some();
                         let pixels: Arc<[u8]> = match shared_image {
                             Some(_) => Arc::from([]),
                             None => Arc::from(snapshot.as_bytes()),
@@ -1042,13 +1082,18 @@ impl LayerTreeHostImpl {
         // once on this thread.
         let raster = |job: &RasterJob| {
             TILE_PIXELS.with_borrow_mut(|buffer| {
-                let size = raster::playback_into(&job.list, &job.ops, &job.params, cache, buffer);
+                let raster::Played { size, cpu_only } =
+                    raster::playback_into(&job.list, &job.ops, &job.params, cache, buffer);
                 let drawn = &buffer[..];
-                if let Some(color) = TileDrawInfo::solid_color(drawn) {
-                    return Rastered::Solid(color);
+                let scan = trace_event::trace_event!("TileManager::ScanTile");
+                let solid = TileDrawInfo::solid_color(drawn);
+                drop(scan);
+                if let Some(color) = solid {
+                    return Rastered::Solid(color, cpu_only);
                 }
                 // On the GPU, if there is one to put it on; else the pixels
                 // are kept, copied out of the buffer.
+                let _upload = trace_event::trace_event!("TileManager::UploadTile");
                 let shared_image = gpu.and_then(|gpu| gpu.create_shared_image(size, drawn));
                 let pixels: Arc<[u8]> = match shared_image {
                     Some(_) => Arc::from([]),
@@ -1058,6 +1103,7 @@ impl LayerTreeHostImpl {
                     size,
                     pixels,
                     shared_image,
+                    cpu_only,
                 }
             })
         };
@@ -1069,13 +1115,27 @@ impl LayerTreeHostImpl {
             _ => jobs.iter().map(raster).collect(),
         };
 
+        made_shared_images |= rastered.iter().any(|rastered| {
+            matches!(
+                rastered,
+                Rastered::Pixels {
+                    shared_image: Some(_),
+                    ..
+                }
+            )
+        });
+        // All of them at once, not each as it was made: a submit costs
+        // about a third of what putting a tile's pixels on the GPU does.
+        if made_shared_images && let Some(gpu) = gpu {
+            gpu.flush();
+        }
         let Some(tree) = self.pending_tree.as_mut().or(self.active_tree.as_mut()) else {
             return;
         };
         for (job, result) in jobs.into_iter().zip(rastered) {
             if let Some(color) = job.expect {
                 let came = match &result {
-                    Rastered::Solid(color) => Some(*color),
+                    Rastered::Solid(color, _) => Some(*color),
                     Rastered::Pixels { .. } => None,
                 };
                 debug_assert_eq!(
@@ -1096,8 +1156,9 @@ impl LayerTreeHostImpl {
                 .expect("a tile rastered is there");
             prepared.rastered = prepared.rastered.saturating_add(1);
             let (size, pixels, shared_image) = match result {
-                Rastered::Solid(color) => {
+                Rastered::Solid(color, cpu_only) => {
                     prepared.solid = prepared.solid.saturating_add(1);
+                    prepared.count(cpu_only);
                     tile.draw_info = Some(TileDrawInfo::SolidColor(color));
                     continue;
                 }
@@ -1105,7 +1166,11 @@ impl LayerTreeHostImpl {
                     size,
                     pixels,
                     shared_image,
-                } => (size, pixels, shared_image),
+                    cpu_only,
+                } => {
+                    prepared.count(cpu_only);
+                    (size, pixels, shared_image)
+                }
             };
             // Numbered here, in the order tiles are drawn.
             let id = ResourceId(self.resource_ids.get_next());
@@ -1123,6 +1188,14 @@ impl LayerTreeHostImpl {
                 solid = prepared.solid,
                 skipped = prepared.skipped,
                 kept = prepared.kept,
+                gpu = prepared.gpu,
+                gpu_but_images = prepared.gpu_but_images,
+                images = prepared.images,
+                masks = prepared.masks,
+                filters = prepared.filters,
+                blurs = prepared.blurs,
+                patterns = prepared.patterns,
+                bitmap_glyphs = prepared.bitmap_glyphs,
                 "prepared tiles"
             );
         }
@@ -1555,10 +1628,74 @@ mod tests {
         draw(&mut host, layer(None));
         let prepared = host.host_impl().tiles_prepared();
         assert_eq!((prepared.rastered, prepared.solid), (4, 4));
+        // Those that came out one color are counted like the others.
+        assert_eq!(prepared.gpu, 4);
         // Another display list, changed in the first tile only.
         draw(&mut host, layer(Some(&[RectF::new(10.0, 10.0, 5.0, 5.0)])));
         let prepared = host.host_impl().tiles_prepared();
         assert_eq!((prepared.rastered, prepared.kept), (1, 3));
+    }
+
+    /// The tiles rastered are counted by whether a renderer that fills on
+    /// the GPU could have drawn them, and by what kept the others from it.
+    #[test]
+    fn tiles_are_counted_by_what_only_a_cpu_draws() {
+        let (mut host, _frames) = host();
+        host.set_viewport_rect_and_scale(Size::new(128, 128), 1.0, LocalSurfaceId::default());
+        // Four tiles of 64: a small rect in each, so none is one color; an
+        // image in the second, a blurred rect in the third, both in the
+        // fourth.
+        let mut list = DisplayItemList::new();
+        let image = |x: f32, y: f32| PaintOp::DrawImage {
+            image: gfx::ImageData::decoded(Size::new(1, 1), vec![255, 0, 0, 255]),
+            src: None,
+            dst: RectF::new(x, y, 4.0, 4.0),
+            filter: compositor_paint::FilterQuality::Low,
+            flags: None,
+        };
+        let blurred = |x: f32, y: f32| PaintOp::DrawRect {
+            rect: RectF::new(x, y, 4.0, 4.0),
+            flags: PaintFlags {
+                blur: 1.0,
+                ..PaintFlags::fill(Color::BLACK)
+            },
+        };
+        for (x, y) in [(10.0, 10.0), (74.0, 10.0), (10.0, 74.0), (74.0, 74.0)] {
+            list.push_op(PaintOp::DrawRect {
+                rect: RectF::new(x, y, 4.0, 4.0),
+                flags: PaintFlags::fill(Color::BLACK),
+            });
+        }
+        list.push_op(image(84.0, 10.0));
+        list.push_op(blurred(20.0, 84.0));
+        list.push_op(image(84.0, 84.0));
+        list.push_op(blurred(84.0, 94.0));
+        list.finalize();
+        draw(
+            &mut host,
+            PictureLayer {
+                id: LayerId(1),
+                bounds: SizeF::new(128.0, 128.0),
+                display_list: Arc::new(list),
+                contents_opaque: true,
+                background_color: Color::WHITE,
+                invalidation: None,
+                properties: Default::default(),
+            },
+        );
+        let prepared = host.host_impl().tiles_prepared();
+        assert_eq!((prepared.rastered, prepared.solid), (4, 0));
+        assert_eq!((prepared.gpu, prepared.gpu_but_images), (1, 1));
+        assert_eq!((prepared.images, prepared.blurs), (2, 2));
+        assert_eq!(
+            (
+                prepared.masks,
+                prepared.filters,
+                prepared.patterns,
+                prepared.bitmap_glyphs
+            ),
+            (0, 0, 0, 0)
+        );
     }
 
     /// A tile whose ops tell its color isn't rastered: one no op draws in
@@ -2572,6 +2709,28 @@ mod tests {
             // The top left pixel of every tile is the blue fill.
             assert_eq!(pixels[..4], [0, 0, 255, 255]);
         }
+    }
+
+    /// The shared images a frame's tiles need are all made before the
+    /// interface is flushed, once; a frame that makes none doesn't flush.
+    #[test]
+    fn shared_images_are_flushed_once_all_of_a_frames_are_made() {
+        let gpu = Arc::new(FakeGpu::default());
+        let (mut host, _frames) = tall_layer_with(Some(gpu.clone()));
+        host.composite();
+        let made = gpu.made.lock().unwrap().len();
+        assert!(made > 1, "{made}");
+        assert_eq!(*gpu.flushes.lock().unwrap(), [made]);
+        // Nothing new to raster.
+        host.composite();
+        assert_eq!(*gpu.flushes.lock().unwrap(), [made]);
+
+        // None made (the tiles keep their pixels): nothing to flush.
+        let full = Arc::new(FakeGpu::default());
+        full.full.store(true, Ordering::Relaxed);
+        let (mut host, _frames) = tall_layer_with(Some(full.clone()));
+        host.composite();
+        assert!(full.flushes.lock().unwrap().is_empty());
     }
 
     /// A tile the interface makes no shared image for keeps its pixels.

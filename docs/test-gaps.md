@@ -206,6 +206,8 @@
 - **DOM 只在 commit 的 pre-paint 變了時重找指標底下的東西**（`renderer` 的 `render_thread/documents.rs` 的 `recompute_under_mouse`：比 top-level view 的 document 和 `pre_paints()`，指標還沒到過頁面上、有 move 等著時也不做）：拿掉這些判斷，每個 commit 都多一次 hit test 和 hover 的更新，事件和游標照樣對（底下的東西沒變時不發 boundary event，`SetCursor` 只在變了時送）。要守的話數 `EventHandler::recompute_under_mouse` 的次數（或它的 hit test），在不改 layout 的 frame 上斷言是 0。
 - **DOM 的 Selection API 在 editing host 已經有 focus 時不出操作**（`dom_api` 的 `selection.rs` 的 `focus_host` 先看 host 是不是已經有 focus）：拿掉時結果一樣（focusing steps 對已經有 focus 的元素什麼都不做），只是在有 focus 的 editing host 裡每次 `collapse`、`setBaseAndExtent` 這些都出操作，多兩三個操作、兩個 `Persistent` 和一次 layout。要數：`#[then_script]` 的成員交回要做的事的次數（host 有 focus 時的 `collapse` 應該是 0）；`bench.py calls` 的文件沒有 window、沒有選取，量不到。
 - **離 tile 太遠的 glyph 不交給 Vello**（`raster` 的 `vello_backend.rs` 的 `draw_glyphs`）：拿掉時畫出來一樣（Vello 自己會裁掉），文字多的頁面每個 tile 都把整段文字的外框線攤平一次。測試只看得到「該畫的有畫」（`a_glyph_that_begins_outside_is_drawn`）。要守的話在 playback 加一個測試讀得到的計數：交給 Vello 的 glyph 數。
+- **一輪的 tile 上傳完之後送一次 queue**（`viz` 的 `GpuSharedImages::flush`）：拿掉裡面的 submit 時畫面一樣（下一次畫 frame 的 submit 會把寫入帶出去），只是視窗被遮住、不畫 frame 的期間，上傳的像素在 wgpu 的 staging 裡堆積。compositor 這一側「全部建完才呼叫一次」有測試（`shared_images_are_flushed_once_all_of_a_frames_are_made`）；Viz 這一側有沒有真的 submit 看不到。要守的話要 wgpu 給出還沒送出的寫入有多少。
+
 
 ## 等價、不用處理的 mutation
 
