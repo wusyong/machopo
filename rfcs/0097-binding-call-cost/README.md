@@ -6,7 +6,7 @@
 
 ## 摘要
 
-JS 呼叫一個 DOM 成員，machopo 在 V8 的地板之上自己的部分約是 Chrome 的三倍（最簡單的 getter 約 19 對 6 個 cycle），有字串參數的差得更多。這份先用原型一項一項量，再決定做哪幾項：讓 V8 能在 DOM 的操作裡配置（一次呼叫從三段變成兩段，照 TLA+ 模型驗證過的三條規則）、callback 的外殼不建 scope、`Call` 只帶成員用得到的欄位、字串參數和結果不重複轉換、事件派發回 JS 的路。
+JS 呼叫一個 DOM 成員，machopo 在 V8 的地板之上自己的部分約是 Chrome 的三倍（最簡單的 getter 約 19 對 6 個 cycle），有字串參數的差得更多。這份先用原型一項一項量，再決定做哪幾項。量完做兩項：字串參數已經是字串就不轉換；front 重新設計成只拿 V8 給 callback 的 info，階段之間傳的東西是成員自己的區域變數，不再有每次呼叫都建、所有成員共用的結構（Blink 產生的 callback 的樣子）。量過不做的：V8 在 DOM 的操作裡配置（三條規則用 TLA+ 模型驗證過，留著）、最近查過的字串的快取、external string、事件派發。
 
 ## 動機
 
@@ -56,13 +56,12 @@ V8 的 scavenge 在操作裡是安全的（協定上）：它只丟沒人用的 
 
 規則做在 elise（`Heap` 知道有沒有「允許 engine 配置的操作」在進行）和 `bindings`（`unified_heap` 的 wrap）；先改 elise 的模型，再改程式。`crates/bindings/soundness.md` 要重寫的：scavenge 在操作裡重設節點的 JS 邊（現在的論證是「scavenge 只在兩個操作之間」）、`NoGc` 這個名字和它給的能力（之後是「不執行 script」）。
 
-### 外殼不建 scope
+### front 只拿 callback 的 info
 
-rusty_v8 把每個 callback 包成建一個 `CallbackScope`、再給參數和回傳值的物件（`function.rs` 的 `MapFnFrom`）。成員的 callback 改成直接拿 V8 的 `FunctionCallbackInfo`，只有要配置或丟例外時才建 scope。fork 加一個不建 scope 的入口（只改 Rust），`bindings` 多一段 `unsafe` 和論證。
+V8 給 callback 的只有一個指標（`FunctionCallbackInfo`）：isolate、`this`、參數、回傳值的位置都從它算。Blink 產生的 callback 只收它，其餘是那個函式的區域變數，用到的才產生（`details.md` 的「Blink 產生的 callback 和 machopo 產生的差在哪」）。machopo 每次呼叫建 rusty_v8 的 scope、參數的包裝、`V8Front` 和一個所有成員共用的 `Call`（7 個欄位），冷的路拿著它們的位址，編譯器每次都得寫進記憶體。
 
-### `Call` 只帶用得到的欄位
-
-三段併成兩段之後，「留著的結果」和「預先建的 wrapper」不需要了；剩下的（callback 參數、rest、少數成員用的那一包）照成員的宣告在編譯時決定有沒有。getter 已經有的輕的路推廣到參數單純的 setter 和方法。
+- **第 3 段**：新的 front 只有 info 和一格「操作後才做完的結果」。isolate、receiver、參數、回傳值當場從 info 讀；unwrap、回傳數字、已有 wrapper 的節點、快取裡的字串、原地讀字串參數只用 isolate；要配置、丟例外、執行 script 的路當場建一個 scope、用完就丟，交給原本的 `V8Front`，在 inline 之外。不改 `Front`、`OpFront` 和產生器：跑的是同一份成員的程式。編譯時照成員的宣告決定走哪一個 front：參數是字串、節點、數字、布林，結果是數字、布林、字串、節點、`undefined` 的走新的。
+- **第 4 段**：階段之間傳的東西改成有型別的回傳值（`RetType::prepare`、`give` 回傳它準備的和還沒做完的，`finish` 拿到它；callback、rest 這類參數直接回傳 handle，像字串和節點），產生器把它們接成成員的區域變數。其餘的成員搬到新的 front，原本的 `V8Front` 和 `Call` 拿掉。沒有這一步，新的 front 要涵蓋全部成員就得把共用的欄位加回來。
 
 ### 字串
 
@@ -90,7 +89,8 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
 | --- | --- |
 | 1 | 原型和量測（不合併）：每一項單獨做最小的原型，`bench.py calls` 量指令數和 cycle；V8 在操作裡配置的原型另外量規則 2 多久發生一次、停頓多長 |
 | 2 | 字串參數已經是字串就不轉換（決定 7、8） |
-| 3 | 外殼不建 scope、`Call` 只帶用得到的欄位（決定 7、8）；怎麼分段在這一段開始前決定 |
+| 3 | front 只拿 callback 的 info：參數和結果單純的成員（決定 17、18） |
+| 4 | 階段之間傳有型別的值，其餘的成員搬到新的 front，拿掉 `V8Front` 和 `Call`（決定 17）；細節在這一段開始前決定 |
 
 ## 缺點
 
@@ -148,10 +148,23 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
 11. **只改 `arg_string`**（成員的字串參數，6 個呼叫點都受惠）；其他直接呼叫 `to_string` 的地方是冷的路，不動。
 12. **用計數守**：isolate 的狀態記成員的字串參數經過 `ToString` 轉換的次數，測試確認本來就是字串的是 0、其他的各 1 次。
 
+第 3 段開始前（2026-11-11，使用者決定）：
+
+13. **scope 只在用到的時候建，熱的路改成只收 isolate**：scope 是 rusty_v8 加的（執行時是 stack 上一個放 isolate、它自己的 annex 和 context 的結構，約 17 到 20 條指令、3 到 4 個 cycle；V8 不需要它，callback 的 handle scope 是 V8 自己開的）。外殼直接拿 `FunctionCallbackInfo`；unwrap、回傳數字、已有 wrapper 的節點、快取裡的字串和名稱、原地讀字串參數這些路改成只收 isolate，這些呼叫沒有 scope；要配置、丟例外、執行 script 的路第一次要 scope 時才建。不選每個 isolate 共用一個 scope（callback 會巢狀，兩層同時拿著同一個可變參照）。所有路都改成只收 isolate（fork 要一整套不收 scope 的 API、`dom_js` 約 150 處）做完這一段、量過再決定。
+14. **第 3 段分成 3a（外殼和 scope）和 3b（`Call` 的欄位照成員的宣告）**，3a 量完再看 3b 還剩多少。
+15. **fork 加自己的入口**（從 `FunctionCallbackInfo` 拿 isolate、只收 isolate 的回傳和 handle），不修上游的 `FunctionCallbackArguments::get_isolate`（一呼叫就 segfault；本地寫草稿，不對上游回報）。只改 Rust。
+
+3a 的第一版量完（2026-11-11，使用者同意重新設計 front，細節由實作決定）：
+
+16. **決定 13、14 作廢**：scope 延後建做了、量了（`progress.md`），沒參數的 getter 只省 2 到 4 條指令，有參數的成員反而慢。scope 在原本的程式裡只值約 8 條（先前量的 17 到 20 條高估了），延後建自己的記帳抵掉大半；原型 1 省的 37 條是整個不經過 `V8Front` 和 `Call`。「`Call` 的欄位照形狀分」不做：在旁路上補洞，front 的方法要照形狀多編好幾份。
+17. **front 重新設計成只拿 callback 的 info，分兩段**（「front 只拿 callback 的 info」）：第 3 段換 front 的形狀、不改 trait，先做參數和結果單純的成員；第 4 段改階段之間的簽名，搬完其餘的成員，拿掉 `V8Front` 和 `Call`。原型（`prototypes/info-only-front.patch`，跑產生器產生的同一份成員的程式）：`nodeType`、`firstChild` 省 35 到 38 條指令、6 到 8 個 cycle，`hasAttribute`、`getAttribute`、`setAttribute`、`appendChild` 省 66 到 101 條、12 到 33 個 cycle；blink-perf 的四頁對 Chrome 從慢 1.41 到 1.85 倍變成 1.32 到 1.36 倍。先換形狀再改簽名：每一步都有數字可以對。不選先改簽名（一次到位，中間沒有可以量的點）。
+18. **第 3 段的做法**：冷的路交給原本的 `V8Front`（不重寫；第 4 段拿掉它時才搬）；哪些成員走新的 front 在編譯時照宣告的型別決定；用計數守住「走新 front 的成員一般不建 scope」；fork 的入口照決定 15。
+19. **第 3 段做完再問要不要量 Speedometer、要不要 merge**；階段做完給使用者審，審過才 commit。
+
 ## 待決定
 
 3. 「V8 在操作裡配置」（決定 6：先不做）要做時：規則 2 用「整個 old 當成活的」還是保守地掃 stack。
-13. 第 3 段怎麼分段、哪些成員走輕的路（第 3 段開始前）。
+20. 第 4 段的細節（簽名怎麼改、分幾小段、wasm 的 front）：第 4 段開始前。
 
 ## 之後的可能
 

@@ -1,0 +1,143 @@
+diff --git a/src/cppgc/slot.rs b/src/cppgc/slot.rs
+index 0bc800a..03cd51c 100644
+--- a/src/cppgc/slot.rs
++++ b/src/cppgc/slot.rs
+@@ -148,6 +148,23 @@ impl<T> TracedSlot<T> {
+     self.storage.get().cast()
+   }
+ 
++  /// machopo: as `get`, the handle left in V8's current handle scope (a
++  /// callback's own, which V8 opens around it) with no scope of rusty_v8's
++  /// to name it by: its location, null if the slot is empty.
++  ///
++  /// # Safety
++  ///
++  /// As `get`; the location is read before the current handle scope ends.
++  pub(crate) unsafe fn get_in_current_scope(
++    &self,
++    isolate: &crate::Isolate,
++  ) -> *const T {
++    // SAFETY: on the only thread that writes the slot, per the caller.
++    unsafe {
++      v8__TracedReference__Get(self.raw(), isolate.as_real_ptr()) as *const T
++    }
++  }
++
+   /// Whether the slot is empty, read atomically: the C++ object is a single
+   /// pointer (`location_`), null when empty, as `IsEmptyThreadSafe` reads it.
+   fn is_empty(&self) -> bool {
+diff --git a/src/function.rs b/src/function.rs
+index 05e7128..47e66bb 100644
+--- a/src/function.rs
++++ b/src/function.rs
+@@ -324,12 +324,15 @@ where
+   ///
+   /// # Safety
+   ///
+-  /// As `TracedSlot::get`: on the slot's heap's thread, `scope`'s isolate
+-  /// that heap's.
++  /// As `TracedSlot::get`: on the slot's heap's thread, `isolate` that
++  /// heap's. It takes the isolate, not a scope: none is needed to return
++  /// what has a handle already (in debug builds, and without pointer
++  /// compression, V8's own setter is given a local made in V8's current
++  /// handle scope, a callback's own).
+   #[inline(always)]
+   pub unsafe fn set_traced<S>(
+     &mut self,
+-    scope: &crate::PinScope<'_, '_, ()>,
++    isolate: &Isolate,
+     slot: &crate::cppgc::TracedSlot<S>,
+   ) -> bool
+   where
+@@ -343,20 +346,19 @@ where
+     self.set_checked(
+       |rv| rv.set_internal(object),
+       |raw| unsafe {
+-        let value = slot.get(scope).expect("a traced reference set");
+-        v8__ReturnValue__Value__Set(raw, &*value as *const S as *const Value)
++        let value = slot.get_in_current_scope(isolate);
++        assert!(!value.is_null(), "a traced reference set");
++        v8__ReturnValue__Value__Set(raw, value as *const Value)
+       },
+     );
+     #[cfg(not(feature = "v8_enable_pointer_compression"))]
+     unsafe {
+-      let value = slot.get(scope).expect("a traced reference set");
+-      v8__ReturnValue__Value__Set(
+-        &mut self.0,
+-        &*value as *const S as *const Value,
+-      )
++      let value = slot.get_in_current_scope(isolate);
++      assert!(!value.is_null(), "a traced reference set");
++      v8__ReturnValue__Value__Set(&mut self.0, value as *const Value)
+     }
+     #[cfg(feature = "v8_enable_pointer_compression")]
+-    let _ = scope;
++    let _ = isolate;
+     true
+   }
+ 
+@@ -582,6 +584,22 @@ impl FunctionCallbackInfo {
+     isolate
+   }
+ 
++  /// machopo: where the callback's frame holds its isolate's pointer
++  /// (`frame`), which an [`Isolate`] is (transparent): the isolate with no
++  /// scope made, for a callback that needs none (`CallbackScope::new`
++  /// reads the same slot). Valid while the callback runs; a reference made
++  /// of it is the caller's to keep unique.
++  #[inline(always)]
++  pub fn isolate(&self) -> std::ptr::NonNull<Isolate> {
++    debug_assert_eq!(unsafe { *self.slot(frame::ISOLATE) }, unsafe {
++      v8__FunctionCallbackInfo__GetIsolate(self) as usize
++    });
++    // SAFETY: a slot of the frame, never null.
++    unsafe {
++      std::ptr::NonNull::new_unchecked(self.slot(frame::ISOLATE).cast())
++    }
++  }
++
+   /// Returns the common callback entry values with a single C++ shim call.
+   #[inline(always)]
+   pub fn get_parts(&self) -> FunctionCallbackInfoParts<'_> {
+diff --git a/src/machopo.rs b/src/machopo.rs
+index a5915fb..f896ea0 100644
+--- a/src/machopo.rs
++++ b/src/machopo.rs
+@@ -757,6 +757,27 @@ pub fn function_template_with_cache<'s>(
+   signature: Option<Local<Signature>>,
+   length: i32,
+   side_effect_type: SideEffectType,
++) -> Local<'s, FunctionTemplate> {
++  function_template_with_cache_raw(
++    scope,
++    callback.map_fn_to(),
++    cache,
++    signature,
++    length,
++    side_effect_type,
++  )
++}
++
++/// `function_template_with_cache` of a callback given V8's
++/// `FunctionCallbackInfo` itself (as `FunctionTemplate::builder_raw`'s):
++/// one that makes a scope only if it needs one.
++pub fn function_template_with_cache_raw<'s>(
++  scope: &PinScope<'s, '_, ()>,
++  callback: FunctionCallback,
++  cache: Local<Private>,
++  signature: Option<Local<Signature>>,
++  length: i32,
++  side_effect_type: SideEffectType,
+ ) -> Local<'s, FunctionTemplate> {
+   // SAFETY: the isolate, on its thread, and handles of it; the template is
+   // a handle V8 makes in `scope`'s handle scope.
+@@ -764,7 +785,7 @@ pub fn function_template_with_cache<'s>(
+     scope.cast_local(|sd| {
+       v8__machopo__FunctionTemplate__NewWithCache(
+         sd.get_isolate_ptr(),
+-        callback.map_fn_to(),
++        callback,
+         &*cache,
+         signature.map_or(ptr::null(), |signature| &*signature),
+         length,

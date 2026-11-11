@@ -8,7 +8,8 @@
 | --- | --- | --- |
 | 1 原型和量測（不合併） | 完成 | 2026-11-11 |
 | 2 字串參數已經是字串就不轉換 | 完成，等審核（fork 的 commit 和 `third_party.toml` 還沒做） | 2026-11-11 |
-| 3 外殼不建 scope、`Call` 只帶用得到的欄位 | 還沒開始 | |
+| 3 front 只拿 callback 的 info：參數和結果單純的成員 | 進行中 | |
+| 4 階段之間傳有型別的值，拿掉 `V8Front` 和 `Call` | 還沒開始 | |
 
 ## 驗收
 
@@ -155,3 +156,57 @@
 - mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-2.toml`，3 個都抓到。第一次「轉換丟了例外還繼續」沒抓到（例外還掛著，JS 照樣接到）：補了「成員沒有被呼叫」的斷言。fork 的 `as_string` 不在這個 repo、沒有 mutant：debug build 每次都和 V8 自己的 `is_string` 比（`debug_assert`），測試跑的是 debug build，測試裡有數字、`null`、`undefined`、物件、`String` 物件、symbol 和各種表示的字串。
 - 跑過：`cargo test -p dom_js`（448 個通過）；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`；`test.py wpt dom/nodes/attributes.html dom/nodes/Document-createElement.html`（216 個結果都照預期）。
 - 還沒做：fork 的 commit 和 push、`third_party.toml` 的 `rev`（等審核）；階段的最後跑過 `cargo test --workspace`（55 個 binary 都通過）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`。
+
+**第 3 段開始前：一個 scope 值多少**（2026-11-11；量完還原）：`bindings` 的 `method_trampoline` 每次呼叫多建一個 `CallbackScope`（`v8::callback_scope!`，`black_box` 讓它不被消掉）。`bench.py calls`，指令數（cycle）：`nodeType` 155（30）→ 172（33），`firstChild` 176（33）→ 196（37）。一個 scope 約 17 到 20 條指令、3 到 4 個 cycle（`black_box` 逼它留在記憶體裡，可能略高估）：原型 1 省的 37 條、7 個 cycle 裡約一半。它做的事（rusty_v8 的 `src/scope.rs`）：從 callback 的 info 讀 isolate、從 isolate 的 data slot 讀 rusty_v8 自己的每個 isolate 的資料（annex）的位址，寫進一個 pin 在 stack 上的結構（isolate、annex、還沒查的 context、兩個旗標），結束時檢查兩個旗標。V8 不需要它：callback 的 handle scope 是 V8 自己在呼叫前後開關的。
+
+**第 3a 段，第一版：scope 延後建**（2026-11-11；程式在工作目錄，還沒 commit、還沒決定留不留）：
+
+- 做了：fork 加 `FunctionCallbackInfo::isolate`（frame 上放 isolate 指標的那一格）、`ReturnValue::set_traced` 改收 isolate、`function_template_with_cache_raw`；`bindings` 的 `function_trampoline`、`method_trampoline` 改成 V8 自己的 callback（`builder_raw`），`StateScope` 和 `NoGc` 裡放 `CallScope`（isolate 從 frame 讀；scope 第一次要的時候在 trampoline 的 frame 上建，`LazyScope`）；`NoGc` 的 unwrap、`return_wrapper`、`return_global`、`return_weak`、`ascii` 只用 isolate；`dom_js` 的 `arg_string`、`is_wrapper`、`report_embedder_used_size` 只用 isolate。`cargo test -p bindings -p dom_js` 通過。
+- 建不建 scope（debug build 的計數）：`nodeType`、`firstChild`、`parentNode`、`tagName`、`id`、`getAttribute`、`hasAttribute`、`setAttribute`、`appendChild`、`id =` 都不建；`createElement`、`addEventListener`、`dispatchEvent`、`childNodes`、`textContent`（新的字串）還建。
+- 同一個 script、兩個 binary 各跑三次取最小（`perf stat`，指令數（cycle））：
+
+  | | 改之前 | 延後建 |
+  | --- | ---: | ---: |
+  | `nodeType` | 154（31） | 150（29） |
+  | `firstChild` | 172（33） | 170（32） |
+  | `getAttribute` | 661（148） | 708（153） |
+  | `setAttribute` | 1188（257） | 1255（256） |
+  | `appendChild` | 1317（221） | 1360（233） |
+  | `createElement` | 2038（438） | 2127（446） |
+  | `addEventListener` | 845（181） | 932（191） |
+  | `dispatchEvent` | 3414（716） | 3547（722） |
+
+- 沒參數的 getter 只省 2 到 4 條；有參數的成員反而多 40 到 130 條。讀 `nodeType` 的 callback 的機器碼：改之前進函式到讀狀態 35 條，其中 scope 的寫入約 8 條（isolate、annex、context、兩個旗標、pin 的參照）；改之後 31 條，scope 的 8 條換成延後建要的 6 條（`made`、info、`CallScope` 的三格）。所以 **scope 在原本的程式裡只值約 8 條指令**，先前多建一個量到的 17 到 20 條是 `black_box` 高估的；延後建自己也要記帳，只淨省 2 到 4 條。
+- 有參數的成員變慢不是 scope：`state::report`（每個不是 getter 的呼叫之後）從 inline 變成一次函式呼叫，`arg_string` 從 82 行變成 108 行（多了經過 `CallScope` 讀 isolate、檢查有沒有 scope）。調得回來，但上限就是那 2 到 4 條。
+- 原型 1 的 37 條不是 scope 省的，是整個不經過 `V8Front` 和 `Call`：那些結構（`Call` 的 7 個欄位、參數的包裝、`V8Front`）因為冷的路拿著它們的位址，編譯器只能每次都寫進記憶體。
+
+**第 3 段的原型：front 只拿 callback 的 info**（2026-11-11；`prototypes/info-only-front.patch`，套在 `prototypes/lazy-scope-rusty_v8.patch` 的 fork 上，量完還原；3a 的第一版存成 `prototypes/lazy-scope-machopo.patch`、`lazy-scope-rusty_v8.patch`）：
+
+- `bindings` 的 `StateInfo`（V8 的 `FunctionCallbackInfo` 和狀態的型別：isolate、receiver、參數、回傳值都從 info 讀，`with_scope` 當場建一個 scope、用完就丟）、`RawNoGc`（只拿 isolate 的 unwrap、`return_wrapper`、`return_weak`、`ascii`）、`raw_method_template`（`builder_raw`）。`dom_js` 的 `RawFront`：info 加一格「操作後才能做完的結果」（`Option<Kept>`，不是 box），實作 `Front` 和 `OpFront` 必要的 18 個方法；配置、丟例外、執行 script 的路（字串參數要轉換或複製、結果沒有快取或 wrapper、錯誤、custom element 的 reaction、回報用量）當場建 scope 和原本的 `V8Front`，交給它做，都在 inline 之外。**跑的是 `dom_api_macros` 產生的同一份成員的程式**（`M::call(&mut RawFront)`），DOM 的函式不變。在 `Node` 和 `Element` 上多裝 `nodeTypeRaw`、`firstChildRaw`、`appendChildRaw`、`getAttributeRaw`、`hasAttributeRaw`、`setAttributeRaw`，template 的設定和原本的一樣（signature、length、不是 constructor）。
+- 行為對照過（臨時的測試）：一般的路、沒快取的字串、要轉換的參數、參數太少、`InvalidCharacterError`、`HierarchyRequestError`、不是節點的參數、沒有 wrapper 的節點（`innerHTML` 建的）、之後 full GC。
+- 同一段 script，改之前的 binary 和有原型的 binary 各跑三次取最小（`perf stat`，指令數（cycle））：
+
+  | | 現在（改之前的 binary） | 只拿 info 的 front | 差 |
+  | --- | ---: | ---: | ---: |
+  | `nodeType` | 153（31） | 118（23） | −35 條、−8 cycle |
+  | `firstChild` | 172（33） | 134（27） | −38 條、−6 cycle |
+  | `hasAttribute` | 571（137） | 505（125） | −66 條、−12 cycle |
+  | `getAttribute` | 661（146） | 560（128） | −101 條、−18 cycle |
+  | `setAttribute` | 1188（255） | 1095（222） | −93 條、−33 cycle |
+  | `appendChild` | 1317（219） | 1234（203） | −83 條、−16 cycle |
+
+- 有原型的 binary 裡原本的成員和改之前差在 10 條以內（`getAttribute` 680、其餘 ±10）：多裝的程式沒有讓原本的路變慢到影響比較。
+- 有參數的成員省 66 到 101 條、12 到 33 個 cycle（8% 到 15% 的 cycle），比沒參數的 getter 還多：`Call` 的 7 個欄位、參數的包裝、scope、`V8Front`、操作後的檢查都不在了，而且沒有東西逼編譯器把它們寫進記憶體。
+- 原型的「留著的結果」是一個 enum（所有種類共用），正式的設計照回傳型別各自一個型別，還少一個 tag。
+
+**第 3 段的原型，和 Chrome 同一輪量**（2026-11-11；patch 多一個開關 `MACHOPO_PROTOTYPE_RAW`：設了，那 6 個成員的本名走 `RawFront`；同一個 binary 跑兩輪 `bench.py blink-perf --pages bindings/node-type.html,first-child.html,get-attribute.html,set-attribute.html,append-child.html`，machopo `perf` profile、Chrome for Testing 152.0.7977.82）。runs/s，括號是照頁面迴圈次數（10 萬，`set-attribute` 1 萬）換成的每次呼叫 ns，含 JS 的迴圈：
+
+| 頁 | machopo 現在 | machopo 原型 | Chrome（兩輪） | 慢幾倍：現在 → 原型 |
+| --- | ---: | ---: | ---: | ---: |
+| `node-type` | 1538（6.5） | 1989（5.0） | 2852、2643（3.5、3.8） | 1.85 → 1.33 |
+| `first-child` | 1424（7.0） | 1770（5.6） | 2374、2403（4.2） | 1.67 → 1.36 |
+| `get-attribute` | 303（33.0） | 346（28.9） | 477、473（21.0） | 1.58 → 1.36 |
+| `set-attribute` | 1626（61.5） | 1774（56.4） | 2296、2347（43.6、42.6） | 1.41 → 1.32 |
+| `append-child` | 535 | 631 | 155、157 | 工具標成可疑（machopo 快兩倍以上），不比；machopo 自己快 18% |
+
+- 每頁只跑一輪（runner 自己的幾次 iteration 的中位數），Chrome 兩輪之間 `node-type` 差 7%：看方向和量級，不看個位數的百分比。

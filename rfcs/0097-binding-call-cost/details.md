@@ -124,6 +124,16 @@ V8 呼叫 API callback 的地板加 trampoline 約 50 條指令、11 cycle（RFC
 - **把 JS 給的字串當場改成 external（`MakeExternal`）fork 沒有接**，要加 C++（重編 V8）。而且在 machopo 的 V8 的設定下短字串改不了：`String::SupportsExternalization` 在「有指標壓縮、沒有 sandbox」時，字串的大小小於 `UncachedExternalString`（header 12 bytes 加一個 8 bytes 的指標，20 bytes）就回 false，一位元組的字串要 8 個字元以上；read-only space 和 young generation 的字串也不行。Chrome 開著 sandbox（external 的指標是 4 bytes 的 handle），沒有這個限制：短的名稱 Blink 第一次用就改成 external，之後不再雜湊；machopo 要等 V8 的 sandbox 打開才做得到。例外是 V8 自己內建的名稱（推測在 read-only space，例如 `'id'`、`'title'`）：Chrome 也改不了，每次都查表（2026-11-11 在 Chromium 156 上量的，數字在 `progress.md`）。fork 沒有接 `MakeExternal`，但它在 V8 的函式庫裡，量測時可以直接連，不用重編。
 - 所以 benchmark 裡那些短的名稱（`'id'`、`'a'`、`'foo'`、`'div'`）在 machopo 上每次還是要拿字元去查表；能做的是讓查表本身便宜（V8 的 internalized 字串存著算好的 hash，可以不再算一次），和上面「出去不複製」。
 
+## Blink 產生的 callback 和 machopo 產生的差在哪
+
+2026-11-11 讀 Chromium 的 `third_party/blink/renderer/bindings/scripts/bind_gen/interface.py`（產生器）、`platform/bindings/v8_set_return_value.h`、`dom_data_store.h`、`exception_state.{h,cc}`，和 machopo 的 `dom_api_macros`（`getter`、`setter`、`method` 產生的 `call`）、`dom_api` 的 `ArgType`、`RetType`：
+
+- **Blink 的 callback 只拿 `FunctionCallbackInfo`，其餘都是那個函式的區域變數，而且只有用到的才產生**：產生器把 `isolate`、`v8_receiver`、`blink_receiver`、`exception_state`、`script_state`、`execution_context`…每一個登記成「symbol」（`bind_callback_local_vars` 的 `S(...)`），產生的程式提到它，它的定義才被寫出來。沒有一個所有成員共用、每次都建的結構。
+- **例外當場丟**：`ExceptionState` 是 isolate 和一個旗標，`ThrowDOMException` 在 DOM 的函式裡直接建 V8 的例外物件、`ThrowException`（Oilpan 掃 stack，C++ 拿著 DOM 的指標時 V8 可以配置）。
+- **回傳照型別各一個 `V8SetReturnValue`**：`ScriptWrappable` 的先從物件自己的 inline storage 讀 wrapper（`DOMDataStore::SetReturnValueFromInlineStorage`，`ReturnValue::SetNonEmpty` 一個 traced reference），沒有才建；字串的走 `StringCache::SetReturnValueFromString`。
+- **machopo 也有產生器**（`dom_api_macros`），每個成員的 `call` 也是一份自己的程式，參數已經是有型別的區域變數（`ArgType::Taken<F>`）。差在**階段之間傳東西的方式**：`RetType::prepare` 和 `give` 都回傳 `()`，操作前建好的 wrapper、操作裡留下來等操作後才能做的結果、要丟的錯誤，都寫進 front 裡一個所有成員共用的 `Call`（`prepared`、`kept`、`window`、`callback`、`rest`、`rare`），操作後 `front.finish()` 再照 `Kept` 的種類分派。callback、rest、`any` 的參數也是：`take` 回傳一個編號，handle 放在 `Call` 裡。所以產生的程式雖然每個成員一份，卻都帶著同一個結構。
+- V8 給 callback 的東西只有一個指標（`FunctionCallbackInfo`：frame 上的一排格子，isolate、回傳值、receiver、參數都從它算）；rusty_v8 的 scope、`FunctionCallbackArguments`（info 加兩格快取）、`ReturnValue` 都是從它導出來的，不必存。
+
 ## 參考資料
 
 - V8 的 `src/heap/heap-write-barrier.cc`（`MarkingSlowFromCppHeapWrappable`，fork 的 `machopo:` 註解）、`src/heap/heap.cc`（`IncrementalMarkingLimitReached`）。

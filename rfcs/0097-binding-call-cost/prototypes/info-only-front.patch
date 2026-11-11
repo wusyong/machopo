@@ -1,0 +1,669 @@
+diff --git a/crates/bindings/src/isolate_state.rs b/crates/bindings/src/isolate_state.rs
+index d0b1309..162d7ac 100644
+--- a/crates/bindings/src/isolate_state.rs
++++ b/crates/bindings/src/isolate_state.rs
+@@ -997,3 +997,154 @@ pub fn set_state_refused_access<T: Any, A: StateAccessCheck<T>>(isolate: &mut v8
+     );
+     isolate.set_failed_access_check_callback_function(refused_access::<T, A>);
+ }
++
++// PROTOTYPE (measured, not to be merged): a function callback given V8's
++// `FunctionCallbackInfo` alone, as Blink's generated callbacks are: the
++// isolate, the receiver, the arguments and the return value are read from
++// it; a scope is made only where one is asked for, and dropped there.
++
++/// A function callback's info, its isolate's state a `T`.
++pub struct StateInfo<'s, T> {
++    info: &'s v8::FunctionCallbackInfo,
++    _state: PhantomData<fn() -> T>,
++}
++
++/// What a holder of the state may ask of V8 with the isolate alone.
++pub struct RawNoGc<'b> {
++    isolate: &'b mut v8::Isolate,
++}
++
++impl<'s, T: Any> StateInfo<'s, T> {
++    #[inline(always)]
++    pub fn isolate(&mut self) -> &mut v8::Isolate {
++        // SAFETY (prototype): the frame's slot holding the isolate's
++        // pointer, valid for the callback; borrowed as `self` is.
++        unsafe { &mut *self.info.isolate().as_ptr() }
++    }
++
++    #[inline(always)]
++    pub fn args(&self) -> v8::FunctionCallbackArguments<'s> {
++        v8::FunctionCallbackArguments::from_function_callback_info(self.info)
++    }
++
++    #[inline(always)]
++    pub fn rv(&self) -> v8::ReturnValue<'s, v8::Value> {
++        v8::ReturnValue::from_function_callback_info(self.info)
++    }
++
++    /// The receiver, which V8 checked against the function's signature.
++    #[inline(always)]
++    pub fn receiver(&self) -> Receiver<'s> {
++        Receiver(self.args().this())
++    }
++
++    #[inline(always)]
++    pub fn state(&mut self) -> (&T, RawNoGc<'_>) {
++        let isolate = self.isolate();
++        // SAFETY (prototype): as `StateScope::state`.
++        let state = unsafe { unchecked::<T>(isolate).as_ref() };
++        (state, RawNoGc { isolate })
++    }
++
++    #[inline(always)]
++    pub fn state_mut(&mut self) -> (&mut T, RawNoGc<'_>) {
++        let isolate = self.isolate();
++        // SAFETY (prototype): as `StateScope::state_mut`.
++        let state = unsafe { unchecked::<T>(isolate).as_mut() };
++        (state, RawNoGc { isolate })
++    }
++
++    /// `f` of a scope made now (rusty_v8's `CallbackScope` of the info),
++    /// dropped as `f` returns: for what allocates, throws or runs script.
++    #[inline(never)]
++    pub fn with_scope<R>(&mut self, f: impl FnOnce(StateScope<'_, 's, 's, T>) -> R) -> R {
++        // SAFETY (prototype): V8's callback info, as rusty_v8's own
++        // trampoline makes a scope of.
++        v8::callback_scope!(unsafe scope, self.info);
++        f(StateScope {
++            scope,
++            _state: PhantomData,
++        })
++    }
++}
++
++impl RawNoGc<'_> {
++    #[inline(always)]
++    pub fn isolate(&mut self) -> &mut v8::Isolate {
++        self.isolate
++    }
++
++    #[inline(always)]
++    pub fn unwrap<'gc, O: elise::HeapType>(
++        &mut self,
++        cx: &elise::Mutation<'gc>,
++        object: v8::Local<'_, v8::Object>,
++    ) -> Option<elise::Gc<'gc, O>> {
++        crate::unified_heap::unwrap_object(self.isolate, cx, object)
++    }
++
++    #[inline(always)]
++    pub fn unwrap_receiver<'gc, O: elise::HeapType>(
++        &mut self,
++        cx: &elise::Mutation<'gc>,
++        this: Receiver<'_>,
++    ) -> Option<elise::Gc<'gc, O>> {
++        crate::unified_heap::unwrap_receiver(self.isolate, cx, this)
++    }
++
++    #[inline(always)]
++    pub fn return_wrapper(
++        &mut self,
++        rv: &mut v8::ReturnValue<'_, v8::Value>,
++        edge: &elise::JsEdge,
++    ) -> bool {
++        crate::unified_heap::return_wrapper_raw(self.isolate, rv, edge)
++    }
++
++    #[inline(always)]
++    pub fn return_weak<S>(
++        &mut self,
++        rv: &mut v8::ReturnValue<'_, v8::Value>,
++        weak: &v8::Weak<S>,
++    ) -> bool
++    where
++        for<'a> v8::Local<'a, S>: Into<v8::Local<'a, v8::Value>>,
++    {
++        rv.set_weak(self.isolate, weak)
++    }
++
++    #[inline(always)]
++    pub fn ascii<'a>(&mut self, string: &'a crate::LentString<'_>) -> Option<&'a str> {
++        string.ascii(self.isolate)
++    }
++}
++
++/// A method given its callback's info alone.
++pub trait RawMethod<T>: 'static {
++    fn call(info: StateInfo<'_, T>);
++}
++
++unsafe extern "C" fn raw_method_trampoline<T: Any, C: RawMethod<T>>(
++    info: *const v8::FunctionCallbackInfo,
++) {
++    // SAFETY (prototype): V8's callback info, valid for the call.
++    C::call(StateInfo {
++        info: unsafe { &*info },
++        _state: PhantomData,
++    });
++}
++
++/// A function template whose callback is `C`'s, its receiver checked
++/// against `signature`.
++pub fn raw_method_template<'s, T: Any, C: RawMethod<T>>(
++    scope: &mut v8::PinScope<'s, '_>,
++    signature: v8::Local<'s, v8::Signature>,
++    length: i32,
++) -> v8::Local<'s, v8::FunctionTemplate> {
++    assert!(checked::<T>(scope).is_some());
++    v8::FunctionTemplate::builder_raw(raw_method_trampoline::<T, C>)
++        .signature(signature)
++        .length(length)
++        .constructor_behavior(v8::ConstructorBehavior::Throw)
++        .build(scope)
++}
+diff --git a/crates/bindings/src/lib.rs b/crates/bindings/src/lib.rs
+index ce28c17..0da167f 100644
+--- a/crates/bindings/src/lib.rs
++++ b/crates/bindings/src/lib.rs
+@@ -58,6 +58,7 @@ pub use isolate_state::{
+     set_state_named_properties, set_state_refused_access, state_cached_getter_template,
+     state_function_template, state_method_template,
+ };
++pub use isolate_state::{RawMethod, RawNoGc, StateInfo, raw_method_template};
+ pub use module_record::{
+     Compiled, Evaluation, ModuleRecords, Request, ResolveSpecifier, begin_dynamic_import,
+     finish_dynamic_import, reject_dynamic_import,
+diff --git a/crates/bindings/src/unified_heap.rs b/crates/bindings/src/unified_heap.rs
+index 65db665..9b28d01 100644
+--- a/crates/bindings/src/unified_heap.rs
++++ b/crates/bindings/src/unified_heap.rs
+@@ -1069,6 +1069,18 @@ pub fn return_wrapper(
+     unsafe { rv.set_traced(scope, slot(edge)) }
+ }
+ 
++/// PROTOTYPE (measured, not to be merged): `return_wrapper` with the
++/// isolate alone.
++#[inline]
++pub(crate) fn return_wrapper_raw(
++    isolate: &v8::Isolate,
++    rv: &mut v8::ReturnValue<'_, v8::Value>,
++    edge: &elise::JsEdge,
++) -> bool {
++    // SAFETY: as `return_wrapper`.
++    unsafe { rv.set_traced(isolate, slot(edge)) }
++}
++
+ /// An isolate's pointer, for a `TracedMarker` made on another thread.
+ #[derive(Clone, Copy)]
+ struct IsolatePtr(v8::UnsafeRawIsolatePtr);
+diff --git a/crates/dom_js/src/front.rs b/crates/dom_js/src/front.rs
+index bbaa4ee..fc542c5 100644
+--- a/crates/dom_js/src/front.rs
++++ b/crates/dom_js/src/front.rs
+@@ -3992,3 +3992,277 @@ fn radius<'s>(scope: &mut v8::PinScope<'s, '_>, value: v8::Local<'s, v8::Value>)
+         y: point[1],
+     })
+ }
++
++// PROTOTYPE (measured, not to be merged): a front end that is the
++// callback's info and one result left for after the operation, for the
++// members whose arguments are strings and nodes and whose results are
++// numbers, booleans, strings and nodes. What allocates, throws or runs
++// script makes a scope and a `V8Front` then, out of line.
++
++pub(crate) struct RawFront<'s> {
++    info: bindings::StateInfo<'s, State>,
++    pending: Option<Kept>,
++}
++
++pub(crate) struct RawOp<'o, 's> {
++    no_gc: bindings::RawNoGc<'o>,
++    this: bindings::Receiver<'s>,
++    rv: v8::ReturnValue<'s, v8::Value>,
++    pending: &'o mut Option<Kept>,
++    caches: &'o Caches,
++}
++
++impl<'s> FrontTypes for RawFront<'s> {
++    type Str = ArgString<'s>;
++    type Node = v8::Local<'s, v8::Object>;
++    type Dict = v8::Local<'s, v8::Object>;
++}
++
++impl<'s> FrontTypes for RawOp<'_, 's> {
++    type Str = ArgString<'s>;
++    type Node = v8::Local<'s, v8::Object>;
++    type Dict = v8::Local<'s, v8::Object>;
++}
++
++impl<'s> RawFront<'s> {
++    #[inline(always)]
++    pub(crate) fn new(info: bindings::StateInfo<'s, State>) -> Self {
++        Self {
++            info,
++            pending: None,
++        }
++    }
++
++    /// `f` of the whole front end, a scope made for it: the slow paths.
++    #[cold]
++    #[inline(never)]
++    fn with_front<R>(
++        &mut self,
++        f: impl FnOnce(&mut V8Front<'_, 's, 's, 's, Checked<'s>>) -> R,
++    ) -> R {
++        let args = Checked {
++            args: self.info.args(),
++            this: self.info.receiver(),
++        };
++        let rv = self.info.rv();
++        self.info.with_scope(|scope| f(&mut V8Front::new(scope, &args, rv)))
++    }
++
++    #[cold]
++    #[inline(never)]
++    fn slow_string_arg(&mut self, value: v8::Local<'s, v8::Value>) -> Option<ArgString<'s>> {
++        self.info
++            .with_scope(|mut scope| strings::arg_string(scope.scope(), value))
++    }
++
++    /// As `state::report`, the scope made only if V8 is told something.
++    #[inline(always)]
++    pub(crate) fn report(&mut self) {
++        let (microtasks, moved) = {
++            let (state, _) = self.info.state_mut();
++            (state.dom.take_microtasks(), state::moved(state))
++        };
++        if !microtasks.is_empty() || moved.is_some() {
++            self.report_slow(microtasks, moved);
++        }
++    }
++
++    #[cold]
++    #[inline(never)]
++    fn report_slow(&mut self, microtasks: dom::Microtasks, used: Option<usize>) {
++        self.info
++            .with_scope(|mut scope| state::report_these(&mut scope, microtasks, used));
++    }
++}
++
++impl<'s> Front for RawFront<'s> {
++    type Op<'o>
++        = RawOp<'o, 's>
++    where
++        Self: 'o;
++
++    #[inline(always)]
++    fn read<'o, R>(
++        &'o mut self,
++        f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>, &mut Self::Op<'o>) -> R,
++    ) -> R {
++        let (this, rv) = (self.info.receiver(), self.info.rv());
++        let (state, no_gc) = self.info.state();
++        let mut op = RawOp {
++            no_gc,
++            this,
++            rv,
++            pending: &mut self.pending,
++            caches: &state.caches,
++        };
++        state
++            .dom
++            .read(|cx| f(&ApiCx::with_layout_cell(cx, &state.layout), &mut op))
++    }
++
++    #[inline(always)]
++    fn mutate<'o, R>(
++        &'o mut self,
++        f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>, &mut Self::Op<'o>) -> R,
++    ) -> R {
++        let (this, rv) = (self.info.receiver(), self.info.rv());
++        let (state, no_gc) = self.info.state_mut();
++        let State {
++            dom,
++            caches,
++            layout,
++            ..
++        } = state;
++        let mut op = RawOp {
++            no_gc,
++            this,
++            rv,
++            pending: &mut self.pending,
++            caches,
++        };
++        dom.mutate(|cx| f(&ApiCx::with_layout_cell(cx, layout), &mut op))
++    }
++
++    #[inline(always)]
++    fn has_args(&mut self, name: &str, required: usize) -> bool {
++        let given = usize::try_from(self.info.args().length()).unwrap_or(0);
++        if given >= required {
++            return true;
++        }
++        self.with_front(|front| front.has_args(name, required))
++    }
++
++    #[inline(always)]
++    fn string_arg(&mut self, index: usize) -> Option<ArgString<'s>> {
++        let value = arg(&self.info.args(), index);
++        if let Some(string) = v8::machopo::as_string(value) {
++            let string = bindings::LentString::new(string);
++            if string.lends(self.info.isolate()) {
++                return Some(ArgString::lent(string));
++            }
++        }
++        self.slow_string_arg(value)
++    }
++
++    fn nullable_string_arg(&mut self, index: usize) -> Option<Option<ArgString<'s>>> {
++        let value = arg(&self.info.args(), index);
++        if value.is_null_or_undefined() {
++            return Some(None);
++        }
++        self.string_arg(index).map(Some)
++    }
++
++    fn legacy_null_string_arg(&mut self, index: usize) -> Option<Option<ArgString<'s>>> {
++        let value = arg(&self.info.args(), index);
++        if value.is_null() {
++            return Some(None);
++        }
++        self.string_arg(index).map(Some)
++    }
++
++    #[inline(always)]
++    fn node_arg(&mut self, index: usize) -> Option<Option<v8::Local<'s, v8::Object>>> {
++        let value = arg(&self.info.args(), index);
++        if value.is_null_or_undefined() {
++            return Some(None);
++        }
++        if bindings::is_wrapper::<Node>(self.info.isolate(), value) {
++            return v8::Local::<v8::Object>::try_from(value).ok().map(Some);
++        }
++        self.with_front(|front| front.node_arg(index))
++    }
++
++    #[inline(always)]
++    fn finish(&mut self) {
++        if self.pending.is_some() {
++            let kept = self.pending.take();
++            self.with_front(|front| {
++                *front.call.kept = kept.map(Box::new);
++                front.finish();
++            });
++        }
++    }
++
++    #[cold]
++    #[inline(never)]
++    fn throw(&mut self, error: ApiError) {
++        self.with_front(|front| front.throw(error));
++    }
++
++    fn update_elements(&mut self) {
++        self.with_front(|front| front.update_elements());
++    }
++}
++
++impl<'s> OpFront for RawOp<'_, 's> {
++    #[inline(always)]
++    fn str_param<'a>(&mut self, string: &'a ArgString<'s>) -> &'a str {
++        string.text_raw(&mut self.no_gc)
++    }
++
++    #[inline(always)]
++    fn this_as<'gc, T: elise::HeapType>(
++        &mut self,
++        cx: &ApiCx<'_, 'gc>,
++    ) -> Option<elise::Gc<'gc, T>> {
++        self.no_gc.unwrap_receiver::<T>(cx.gc, self.this)
++    }
++
++    #[inline(always)]
++    fn node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, node: &v8::Local<'s, v8::Object>) -> NodeRef<'gc> {
++        self.no_gc
++            .unwrap::<Node>(cx.gc, *node)
++            .expect("a wrapper, checked as it was taken")
++    }
++
++    fn ret_undefined(&mut self) {}
++
++    #[inline(always)]
++    fn ret_null(&mut self) {
++        bindings::OpReturn::new(&mut self.rv).set_null();
++    }
++
++    #[inline(always)]
++    fn ret_bool(&mut self, value: bool) {
++        bindings::OpReturn::new(&mut self.rv).set_bool(value);
++    }
++
++    #[inline(always)]
++    fn ret_u32(&mut self, value: u32) {
++        if !bindings::OpReturn::new(&mut self.rv).set_smi_u32(value) {
++            *self.pending = Some(Kept::U32(value));
++        }
++    }
++
++    #[inline(always)]
++    fn ret_f64(&mut self, value: f64) {
++        let integer = value.fract() == 0.0
++            && value.abs() <= f64::from(i32::MAX)
++            && !(value == 0.0 && value.is_sign_negative());
++        if !(integer
++            && bindings::OpReturn::new(&mut self.rv)
++                .set_smi_i32(base::numerics::saturated_cast::<i32, f64>(value)))
++        {
++            *self.pending = Some(Kept::F64(value));
++        }
++    }
++
++    #[inline(always)]
++    fn ret_string(&mut self, value: &DomString) {
++        let returned = self
++            .caches
++            .strings
++            .find(value)
++            .is_some_and(|weak| self.no_gc.return_weak(&mut self.rv, weak));
++        if !returned {
++            *self.pending = Some(Kept::String(value.clone()));
++        }
++    }
++
++    #[inline(always)]
++    fn ret_node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, node: NodeRef<'gc>) {
++        if !self.no_gc.return_wrapper(&mut self.rv, cx.wrapper_edge(node)) {
++            *self.pending = Some(Kept::Node(cx.root(node), interface_of(cx, node)));
++        }
++    }
++}
+diff --git a/crates/dom_js/src/state.rs b/crates/dom_js/src/state.rs
+index d6d1b00..05d8210 100644
+--- a/crates/dom_js/src/state.rs
++++ b/crates/dom_js/src/state.rs
+@@ -263,15 +263,29 @@ pub(crate) fn report(scope: &mut Scope<'_, '_, '_>) {
+     let (microtasks, used) = {
+         let (state, _) = scope.state_mut();
+         let microtasks = state.dom.take_microtasks();
+-        // How far it moved, by what the heap counts (at once, its buffers
+-        // whole); what it uses, exactly, only when V8 is told.
+-        let counted = state.dom.counted_bytes();
+-        let moved = counted.abs_diff(state.reported) >= REPORT_BYTES;
+-        if moved {
+-            state.reported = counted;
+-        }
+-        (microtasks, moved.then(|| state.dom.used_bytes()))
++        (microtasks, moved(state))
+     };
++    report_these(scope, microtasks, used);
++}
++
++/// The DOM's used bytes, if they moved enough since V8 was told.
++#[inline(always)]
++pub(crate) fn moved(state: &mut State) -> Option<usize> {
++    // How far it moved, by what the heap counts (at once, its buffers
++    // whole); what it uses, exactly, only when V8 is told.
++    let counted = state.dom.counted_bytes();
++    let moved = counted.abs_diff(state.reported) >= REPORT_BYTES;
++    if moved {
++        state.reported = counted;
++    }
++    moved.then(|| state.dom.used_bytes())
++}
++
++pub(crate) fn report_these(
++    scope: &mut Scope<'_, '_, '_>,
++    microtasks: dom::Microtasks,
++    used: Option<usize>,
++) {
+     if !microtasks.is_empty() {
+         queue_microtasks(scope, microtasks);
+     }
+diff --git a/crates/dom_js/src/strings.rs b/crates/dom_js/src/strings.rs
+index 7875cdf..0c0aa56 100644
+--- a/crates/dom_js/src/strings.rs
++++ b/crates/dom_js/src/strings.rs
+@@ -204,6 +204,27 @@ pub fn arg_string<'s>(
+     Some(ArgString { string, copied })
+ }
+ 
++// PROTOTYPE (measured, not to be merged).
++impl<'s> ArgString<'s> {
++    /// `string`, which lends its text in place.
++    pub(crate) fn lent(string: bindings::LentString<'s>) -> Self {
++        Self {
++            string,
++            copied: None,
++        }
++    }
++
++    /// `text` with the isolate alone.
++    pub(crate) fn text_raw(&self, no_gc: &mut bindings::RawNoGc<'_>) -> &str {
++        match &self.copied {
++            Some(copied) => copied,
++            None => no_gc
++                .ascii(&self.string)
++                .expect("a string that lent its text lends it again"),
++        }
++    }
++}
++
+ impl<'s> ArgString<'s> {
+     /// `f` of its text if it lends it in place (an ASCII one-byte one),
+     /// lent for the call alone (`bindings::LentString::peek_ascii`): before
+diff --git a/crates/dom_js/src/templates.rs b/crates/dom_js/src/templates.rs
+index c2350f8..c75a52b 100644
+--- a/crates/dom_js/src/templates.rs
++++ b/crates/dom_js/src/templates.rs
+@@ -590,6 +590,32 @@ impl Members<'_, '_, '_> {
+             }
+             return;
+         }
++        // PROTOTYPE (measured, not to be merged): the same members through
++        // `RawFront`, as `<name>Raw`.
++        if matches!(
++            (INTERFACES[M::INTERFACE].name, M::NAME),
++            ("Node", "nodeType" | "firstChild" | "appendChild")
++                | ("Element", "getAttribute" | "setAttribute" | "hasAttribute")
++        ) && M::KIND != MemberKind::Setter
++        {
++            let name = string(self.scope, &format!("{}Raw", M::NAME));
++            let length = i32::try_from(desc.required()).unwrap_or(0);
++            let function = bindings::raw_method_template::<State, RawMember<M>>(
++                self.scope,
++                self.signature,
++                length,
++            );
++            if M::KIND == MemberKind::Getter {
++                self.prototype.set_accessor_property(
++                    name.into(),
++                    Some(function),
++                    None,
++                    v8::PropertyAttribute::NONE,
++                );
++            } else {
++                self.prototype.set(name.into(), function.into());
++            }
++        }
+         let length = match M::KIND {
+             MemberKind::Setter => 1,
+             MemberKind::Method => desc.required(),
+@@ -619,6 +645,26 @@ impl Members<'_, '_, '_> {
+                 member_builder(builder, None, length)
+             }),
+         };
++        // PROTOTYPE (measured, not to be merged): with
++        // `MACHOPO_PROTOTYPE_RAW`, these members' own names go through
++        // `RawFront`.
++        let function = if std::env::var_os("MACHOPO_PROTOTYPE_RAW").is_some()
++            && cached.is_none()
++            && member_signature.is_some()
++            && M::KIND != MemberKind::Setter
++            && matches!(
++                (INTERFACES[M::INTERFACE].name, M::NAME),
++                ("Node", "nodeType" | "firstChild" | "appendChild")
++                    | ("Element", "getAttribute" | "setAttribute" | "hasAttribute")
++            ) {
++            bindings::raw_method_template::<State, RawMember<M>>(
++                self.scope,
++                self.signature,
++                i32::try_from(length).unwrap_or(0),
++            )
++        } else {
++            function
++        };
+         if checked && !desc.is_static {
+             checks_receiver(function);
+         }
+@@ -1660,3 +1706,16 @@ pub(crate) fn string<'s>(
+     v8::String::new_from_utf8(scope, text.as_bytes(), v8::NewStringType::Internalized)
+         .expect("a short name")
+ }
++
++// PROTOTYPE (measured, not to be merged).
++struct RawMember<M>(PhantomData<M>);
++
++impl<M: TypedMember> bindings::RawMethod<State> for RawMember<M> {
++    fn call(info: bindings::StateInfo<'_, State>) {
++        let mut front = crate::front::RawFront::new(info);
++        M::call(&mut front);
++        if M::KIND != MemberKind::Getter {
++            front.report();
++        }
++    }
++}
+diff --git a/crates/dom_js/tests/it/strings.rs b/crates/dom_js/tests/it/strings.rs
+index d89c93e..b56f625 100644
+--- a/crates/dom_js/tests/it/strings.rs
++++ b/crates/dom_js/tests/it/strings.rs
+@@ -321,3 +321,33 @@ fn a_cached_values_v8_string_is_returned_again() {
+         "x,x,x"
+     );
+ }
++
++#[test]
++fn prototype_raw_members() {
++    let mut env = Env::new();
++    env.eval(
++        "var d = machopoDom.createDocument(); var n = d.createElement('body'); d.appendChild(n); \
++         var p = d.createElement('p'); n.setAttribute('id', 'x');",
++    );
++    for (source, expected) in [
++        ("n.nodeTypeRaw", "1"),
++        ("n.firstChildRaw", "null"),
++        ("n.appendChildRaw(p) === p", "true"),
++        ("n.firstChildRaw === p", "true"),
++        ("n.getAttributeRaw('id')", "x"),
++        ("n.getAttributeRaw('nope')", "null"),
++        ("n.hasAttributeRaw('id')", "true"),
++        ("n.setAttributeRaw('a', 'b'); n.getAttribute('a')", "b"),
++        ("n.setAttributeRaw('data-new', 'new-value-' + 1); n.getAttributeRaw('data-new')", "new-value-1"),
++        ("n.getAttributeRaw(7)", "null"),
++        ("try { n.getAttributeRaw(); 'none' } catch (e) { e.name }", "TypeError"),
++        ("try { n.setAttributeRaw('a b', 'c'); 'none' } catch (e) { e.name }", "InvalidCharacterError"),
++        ("try { n.appendChildRaw(n); 'none' } catch (e) { e.name }", "HierarchyRequestError"),
++        ("try { n.appendChildRaw(1); 'none' } catch (e) { e.name }", "TypeError"),
++        ("d.createElement('div').appendChildRaw(d.createElement('i')).nodeTypeRaw", "1"),
++        ("n.innerHTML = '<b></b>'; n.firstChildRaw.tagName", "B"),
++    ] {
++        assert_eq!(env.eval(source), expected, "{source}");
++    }
++    env.full_gc();
++}

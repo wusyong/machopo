@@ -1,0 +1,768 @@
+diff --git a/crates/bindings/src/isolate_state.rs b/crates/bindings/src/isolate_state.rs
+index d0b1309..23b9f86 100644
+--- a/crates/bindings/src/isolate_state.rs
++++ b/crates/bindings/src/isolate_state.rs
+@@ -16,6 +16,7 @@
+ 
+ use std::any::{Any, TypeId};
+ use std::marker::PhantomData;
++use std::mem::MaybeUninit;
+ use std::ptr::{self, NonNull};
+ 
+ use crate::unified_heap::EmbedderRegistration;
+@@ -161,7 +162,165 @@ pub unsafe fn drop_isolate_state(isolate: &mut v8::Isolate) {
+ /// state) can't run meanwhile. Holds the scope as long as the state is
+ /// held; made only with a borrow of it (`StateScope`).
+ pub struct NoGc<'b, 's, 'i> {
+-    pub(crate) scope: &'b mut v8::PinScope<'s, 'i>,
++    pub(crate) scope: &'b mut CallScope<'s, 'i>,
++}
++
++impl<'s, 'i> NoGc<'_, 's, 'i> {
++    /// The isolate: what most of a `NoGc`'s reads need, no scope made.
++    #[inline(always)]
++    pub(crate) fn isolate(&mut self) -> &mut v8::Isolate {
++        self.scope.isolate()
++    }
++
++    /// The scope, made now if the callback had none yet (making it
++    /// allocates nothing in V8's heap): for what gives a local handle.
++    #[inline]
++    pub(crate) fn scope(&mut self) -> &mut v8::PinScope<'s, 'i> {
++        self.scope.scope()
++    }
++}
++
++thread_local! {
++    /// The callbacks' scopes made on this thread (`LazyScope::make`), for
++    /// the tests. Counted in debug builds only.
++    static SCOPES_MADE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
++}
++
++/// How many state callbacks on this thread made a scope: what tells a
++/// member's call needs none. `None` in release builds. For tests.
++pub fn scopes_made_for_testing() -> Option<u64> {
++    cfg!(debug_assertions).then(|| SCOPES_MADE.get())
++}
++
++/// Where a function callback's scope is made, if it is: in the callback's
++/// frame (the trampoline's), never moved. rusty_v8's `CallbackScope` is
++/// its own record of the isolate (V8 opens the callback's handle scope
++/// itself): a callback that only reads the state, unwraps, and returns
++/// what has a handle already needs none, as Blink's callbacks take V8's
++/// `FunctionCallbackInfo` and its isolate alone.
++pub(crate) struct LazyScope<'s> {
++    info: &'s v8::FunctionCallbackInfo,
++    made: bool,
++    storage: MaybeUninit<v8::ScopeStorage<v8::CallbackScope<'s>>>,
++    /// The scope's pinned reference, of `storage` (so declared after
++    /// nothing it borrows is dropped: `Drop` drops `storage` alone, the
++    /// reference being plain data).
++    pinned: MaybeUninit<v8::PinCallbackScope<'s, 's>>,
++}
++
++impl<'s> LazyScope<'s> {
++    #[inline(always)]
++    fn new(info: &'s v8::FunctionCallbackInfo) -> Self {
++        Self {
++            info,
++            made: false,
++            storage: MaybeUninit::uninit(),
++            pinned: MaybeUninit::uninit(),
++        }
++    }
++
++    /// Makes the scope, as rusty_v8's own trampoline does before every
++    /// callback (`CallbackScope::new` of the info, pinned where it is).
++    ///
++    /// # Safety
++    ///
++    /// Called once, `self` never moved after.
++    #[inline(never)]
++    unsafe fn make(&mut self) -> *mut v8::PinScope<'s, 's> {
++        debug_assert!(!self.made);
++        if cfg!(debug_assertions) {
++            SCOPES_MADE.set(SCOPES_MADE.get().wrapping_add(1));
++        }
++        // SAFETY: V8's callback info, valid for `'s` (the callback), as
++        // rusty_v8's trampoline gives it.
++        let storage = self.storage.write(unsafe { v8::CallbackScope::new(self.info) });
++        // SAFETY: `self` isn't moved again (the caller's promise), so the
++        // storage is pinned; the reference's lifetime is the callback's,
++        // which `self` outlives nothing of (dropped at its end).
++        let pinned: v8::PinCallbackScope<'_, 's> =
++            unsafe { std::pin::Pin::new_unchecked(storage) }.init();
++        let pinned = self.pinned.write(unsafe {
++            std::mem::transmute::<v8::PinCallbackScope<'_, 's>, v8::PinCallbackScope<'s, 's>>(
++                pinned,
++            )
++        });
++        self.made = true;
++        std::ptr::from_mut::<v8::PinScope<'s, 's>>(&mut **pinned)
++    }
++}
++
++impl LazyScope<'_> {
++    /// Drops the scope if it was made: the trampoline's last word (not a
++    /// `Drop`, whose glue is a call every callback makes; a panic past a
++    /// trampoline aborts, so nothing unwinds past this).
++    #[inline(always)]
++    fn finish(&mut self) {
++        if self.made {
++            self.drop_made();
++        }
++    }
++
++    #[cold]
++    #[inline(never)]
++    fn drop_made(&mut self) {
++        // SAFETY: written by `make`; `pinned`, which borrows it, is plain
++        // data and not used again.
++        unsafe { self.storage.assume_init_drop() };
++        self.made = false;
++    }
++}
++
++/// A callback's isolate, and its scope: one it was given, or one made the
++/// first time it is asked for (`LazyScope`).
++pub struct CallScope<'s, 'i> {
++    /// Where the callback's frame holds the isolate's pointer, if the
++    /// scope is made late; null with a scope given, whose isolate is read
++    /// through it (no second way to the scope's own record of it).
++    frame_isolate: *mut v8::Isolate,
++    /// The scope: null until made.
++    scope: *mut v8::PinScope<'s, 'i>,
++    /// Where it is made: null with a scope given.
++    lazy: *mut LazyScope<'s>,
++}
++
++impl<'s, 'i> CallScope<'s, 'i> {
++    #[inline(always)]
++    fn given(scope: &mut v8::PinScope<'s, 'i>) -> Self {
++        Self {
++            frame_isolate: std::ptr::null_mut(),
++            scope,
++            lazy: std::ptr::null_mut(),
++        }
++    }
++
++    #[inline(always)]
++    pub(crate) fn isolate(&mut self) -> &mut v8::Isolate {
++        // SAFETY: the frame's slot, valid while the callback runs (which
++        // this is borrowed within), and not the made scope's memory (a
++        // copy of the pointer); or the scope given, alive as long (`'s`).
++        // Borrowed as `self` is: nothing else is made of either meanwhile.
++        unsafe {
++            if self.frame_isolate.is_null() {
++                &mut *self.scope
++            } else {
++                &mut *self.frame_isolate
++            }
++        }
++    }
++
++    #[inline]
++    pub(crate) fn scope(&mut self) -> &mut v8::PinScope<'s, 'i> {
++        if self.scope.is_null() {
++            // SAFETY: a `CallScope` with no scope has where to make one
++            // (`lazy`), in the trampoline's frame, alive and not moved
++            // while this is; made once (`scope` is set). `'i` is `'s`
++            // there (the trampolines'), so the cast changes no lifetime.
++            self.scope = unsafe { (*self.lazy).make() }.cast();
++        }
++        // SAFETY: made or given, alive for the callback; borrowed as
++        // `self` is.
++        unsafe { &mut *self.scope }
++    }
+ }
+ 
+ /// A call's receiver that V8 checked is an object of one of the isolate's
+@@ -325,8 +484,8 @@ pub struct NamedOptions {
+ /// made where it is one; or checked, `new`), which a state is from then on
+ /// (set once, dropped with the isolate): borrowed with no check.
+ pub struct StateScope<'a, 's, 'i, T> {
+-    scope: &'a mut v8::PinScope<'s, 'i>,
+-    _state: PhantomData<fn() -> T>,
++    scope: CallScope<'s, 'i>,
++    _state: PhantomData<(&'a mut v8::PinScope<'s, 'i>, fn() -> T)>,
+ }
+ 
+ impl<'a, 's, 'i, T: Any> StateScope<'a, 's, 'i, T> {
+@@ -334,16 +493,30 @@ impl<'a, 's, 'i, T: Any> StateScope<'a, 's, 'i, T> {
+     /// isn't a state callback (another callback, the isolate's owner).
+     pub fn new(scope: &'a mut v8::PinScope<'s, 'i>) -> Option<Self> {
+         checked::<T>(scope)?;
+-        Some(Self {
+-            scope,
++        Some(Self::given(scope))
++    }
++
++    /// `scope`, its isolate's state a `T`, as the caller checked.
++    #[inline(always)]
++    fn given(scope: &'a mut v8::PinScope<'s, 'i>) -> Self {
++        Self {
++            scope: CallScope::given(scope),
+             _state: PhantomData,
+-        })
++        }
+     }
+ 
+-    /// The scope, all of V8's: the state isn't borrowed meanwhile.
++    /// The scope, all of V8's: the state isn't borrowed meanwhile. Made
++    /// now if the callback had none yet (a function's: `LazyScope`).
+     #[inline]
+     pub fn scope(&mut self) -> &mut v8::PinScope<'s, 'i> {
+-        self.scope
++        self.scope.scope()
++    }
++
++    /// The isolate alone, no scope made: for what reads V8's objects in
++    /// place, or returns what has a handle already.
++    #[inline(always)]
++    pub fn isolate(&mut self) -> &mut v8::Isolate {
++        self.scope.isolate()
+     }
+ 
+     /// The state, shared, and what of V8 its holder may use.
+@@ -352,52 +525,81 @@ impl<'a, 's, 'i, T: Any> StateScope<'a, 's, 'i, T> {
+         // SAFETY: the state is a `T` (`StateScope`'s); as
+         // `isolate_state_mut`'s, the scope borrowed for as long and handed
+         // to the `NoGc` alone.
+-        let state = unsafe { unchecked::<T>(self.scope).as_ref() };
+-        (state, NoGc { scope: self.scope })
++        let state = unsafe { unchecked::<T>(self.scope.isolate()).as_ref() };
++        (
++            state,
++            NoGc {
++                scope: &mut self.scope,
++            },
++        )
+     }
+ 
+     /// The state, and what of V8 its holder may use.
+     #[inline]
+     pub fn state_mut(&mut self) -> (&mut T, NoGc<'_, 's, 'i>) {
+         // SAFETY: as `state`'s.
+-        let state = unsafe { unchecked::<T>(self.scope).as_mut() };
+-        (state, NoGc { scope: self.scope })
++        let state = unsafe { unchecked::<T>(self.scope.isolate()).as_mut() };
++        (
++            state,
++            NoGc {
++                scope: &mut self.scope,
++            },
++        )
+     }
+ }
+ 
+-/// The callback of `C`, given the state.
+-fn function_trampoline<'s, T: Any, C: StateCallback<T>>(
++/// A function callback's state scope, its scope made only if asked for:
++/// `lazy` in the trampoline's frame, not moved while the scope lives.
++#[inline(always)]
++fn lazy_scope<'a, 's, T: Any>(lazy: &'a mut LazyScope<'s>) -> StateScope<'a, 's, 's, T> {
++    StateScope {
++        scope: CallScope {
++            frame_isolate: lazy.info.isolate().as_ptr(),
++            scope: std::ptr::null_mut(),
++            lazy,
++        },
++        _state: PhantomData,
++    }
++}
++
++/// The callback of `C`, given the state: V8's own callback (its
++/// `FunctionCallbackInfo`), no scope made before it.
++unsafe extern "C" fn function_trampoline<T: Any, C: StateCallback<T>>(
++    info: *const v8::FunctionCallbackInfo,
++) {
++    // SAFETY: V8's callback info, valid for the call.
++    let info = unsafe { &*info };
++    let mut lazy = LazyScope::new(info);
++    let args = v8::FunctionCallbackArguments::from_function_callback_info(info);
++    let rv = v8::ReturnValue::from_function_callback_info(info);
++    C::call(lazy_scope(&mut lazy), args, rv);
++    lazy.finish();
++}
++
++/// `function_trampoline` where V8 takes rusty_v8's callback (a template
++/// called as a function): the scope made before it.
++fn scoped_function_trampoline<'s, T: Any, C: StateCallback<T>>(
+     scope: &mut v8::PinScope<'s, '_>,
+     args: v8::FunctionCallbackArguments<'s>,
+     rv: v8::ReturnValue<'s>,
+ ) {
+-    C::call(
+-        StateScope {
+-            scope,
+-            _state: PhantomData,
+-        },
+-        args,
+-        rv,
+-    );
++    C::call(StateScope::given(scope), args, rv);
+ }
+ 
+ /// A method's callback, given the state: the function's signature V8
+-/// checked the receiver against (`state_method_template`).
+-fn method_trampoline<'s, T: Any, C: StateMethod<T>>(
+-    scope: &mut v8::PinScope<'s, '_>,
+-    args: v8::FunctionCallbackArguments<'s>,
+-    rv: v8::ReturnValue<'s>,
++/// checked the receiver against (`state_method_template`). V8's own
++/// callback, as `function_trampoline`.
++unsafe extern "C" fn method_trampoline<T: Any, C: StateMethod<T>>(
++    info: *const v8::FunctionCallbackInfo,
+ ) {
++    // SAFETY: V8's callback info, valid for the call.
++    let info = unsafe { &*info };
++    let mut lazy = LazyScope::new(info);
++    let args = v8::FunctionCallbackArguments::from_function_callback_info(info);
++    let rv = v8::ReturnValue::from_function_callback_info(info);
+     let this = Receiver(args.this());
+-    C::call(
+-        StateScope {
+-            scope,
+-            _state: PhantomData,
+-        },
+-        args,
+-        this,
+-        rv,
+-    );
++    C::call(lazy_scope(&mut lazy), args, this, rv);
++    lazy.finish();
+ }
+ 
+ /// The indexed getter of `G`, given the state: its holder the object the
+@@ -410,10 +612,7 @@ fn indexed_trampoline<'s, T: Any, G: StateIndexedGetter<T>>(
+ ) -> v8::Intercepted {
+     let this = Receiver(args.holder());
+     G::get(
+-        StateScope {
+-            scope,
+-            _state: PhantomData,
+-        },
++        StateScope::given(scope),
+         index,
+         args,
+         this,
+@@ -440,7 +639,7 @@ fn indexed_enumerate<'s, T: Any, G: StateIndexedGetter<T>>(
+ 
+ fn state_scope<'a, 's, 'i, T>(scope: &'a mut v8::PinScope<'s, 'i>) -> StateScope<'a, 's, 'i, T> {
+     StateScope {
+-        scope,
++        scope: CallScope::given(scope),
+         _state: PhantomData,
+     }
+ }
+@@ -576,7 +775,7 @@ pub fn state_function_template<'s, T: Any, C: StateCallback<T>>(
+         checked::<T>(scope).is_some(),
+         "a state callback's template is made where the state is one"
+     );
+-    configure(v8::FunctionTemplate::builder(function_trampoline::<T, C>)).build(scope)
++    configure(v8::FunctionTemplate::builder_raw(function_trampoline::<T, C>)).build(scope)
+ }
+ 
+ /// A function template whose callback is `C`'s, given the isolate's state
+@@ -598,7 +797,7 @@ pub fn state_method_template<'s, T: Any, C: StateMethod<T>>(
+         checked::<T>(scope).is_some(),
+         "a state callback's template is made where the state is one"
+     );
+-    configure(v8::FunctionTemplate::builder(method_trampoline::<T, C>))
++    configure(v8::FunctionTemplate::builder_raw(method_trampoline::<T, C>))
+         .signature(signature)
+         .build(scope)
+ }
+@@ -623,7 +822,7 @@ pub fn state_cached_getter_template<'s, T: Any, C: StateMethod<T>>(
+         checked::<T>(scope).is_some(),
+         "a state callback's template is made where the state is one"
+     );
+-    let template = v8::machopo::function_template_with_cache(
++    let template = v8::machopo::function_template_with_cache_raw(
+         scope,
+         method_trampoline::<T, C>,
+         cache,
+@@ -651,7 +850,7 @@ pub fn set_state_call_as_function_handler<T: Any, C: StateCallback<T>>(
+         checked::<T>(scope).is_some(),
+         "a state callback's template is made where the state is one"
+     );
+-    template.set_call_as_function_handler(function_trampoline::<T, C>, None);
++    template.set_call_as_function_handler(scoped_function_trampoline::<T, C>, None);
+ }
+ 
+ /// Gives `template` (its isolate's) the indexed getter of `G`, given the
+diff --git a/crates/bindings/src/lib.rs b/crates/bindings/src/lib.rs
+index ce28c17..9a6a500 100644
+--- a/crates/bindings/src/lib.rs
++++ b/crates/bindings/src/lib.rs
+@@ -53,7 +53,7 @@ pub use gc_platform::gc_platform;
+ pub use isolate_state::{
+     NamedOptions, NoGc, PropertyKey, Receiver, StateAccessCheck, StateCallback, StateIndexedGetter,
+     StateIndexedSetter, StateMethod, StateNamedProperties, StateScope, drop_isolate_state,
+-    isolate_state_mut, set_isolate_state, set_state_access_check,
++    isolate_state_mut, scopes_made_for_testing, set_isolate_state, set_state_access_check,
+     set_state_call_as_function_handler, set_state_indexed_getter, set_state_indexed_properties,
+     set_state_named_properties, set_state_refused_access, state_cached_getter_template,
+     state_function_template, state_method_template,
+diff --git a/crates/bindings/src/unified_heap.rs b/crates/bindings/src/unified_heap.rs
+index 65db665..b57eb16 100644
+--- a/crates/bindings/src/unified_heap.rs
++++ b/crates/bindings/src/unified_heap.rs
+@@ -713,7 +713,7 @@ impl<'s> crate::NoGc<'_, 's, '_> {
+         cx: &elise::Mutation<'gc>,
+         object: v8::Local<'_, v8::Object>,
+     ) -> Option<elise::Gc<'gc, T>> {
+-        unwrap_object(self.scope, cx, object)
++        unwrap_object(self.isolate(), cx, object)
+     }
+ 
+     /// `unwrap_receiver`: reads a checked receiver's embedder field.
+@@ -723,7 +723,7 @@ impl<'s> crate::NoGc<'_, 's, '_> {
+         cx: &elise::Mutation<'gc>,
+         this: crate::Receiver<'_>,
+     ) -> Option<elise::Gc<'gc, T>> {
+-        unwrap_receiver(self.scope, cx, this)
++        unwrap_receiver(self.isolate(), cx, this)
+     }
+ 
+     /// `wrap`: writes the wrapper's embedder field (and the fork's pointer
+@@ -735,19 +735,19 @@ impl<'s> crate::NoGc<'_, 's, '_> {
+         wrapper: v8::Local<'_, v8::Object>,
+         object: elise::Gc<'gc, T>,
+     ) {
+-        wrap(self.scope, cx, wrapper, object);
++        wrap(self.isolate(), cx, wrapper, object);
+     }
+ 
+     /// `wrapper`: a local handle of what the edge refers to.
+     #[inline]
+     pub fn wrapper(&mut self, edge: &elise::JsEdge) -> Option<v8::Local<'s, v8::Object>> {
+-        wrapper(self.scope, edge)
++        wrapper(self.scope(), edge)
+     }
+ 
+     /// `strong_value`.
+     #[inline]
+     pub fn strong_value(&mut self, edge: &elise::JsEdge) -> Option<v8::Local<'s, v8::Value>> {
+-        strong_value(self.scope, edge)
++        strong_value(self.scope(), edge)
+     }
+ 
+     /// `strong_resolver`.
+@@ -756,32 +756,32 @@ impl<'s> crate::NoGc<'_, 's, '_> {
+         &mut self,
+         edge: &elise::JsEdge,
+     ) -> Option<v8::Local<'s, v8::PromiseResolver>> {
+-        strong_resolver(self.scope, edge)
++        strong_resolver(self.scope(), edge)
+     }
+ 
+     /// `set_wrapper`: writes the edge's traced handle.
+     #[inline]
+     pub fn set_wrapper(&mut self, edge: &elise::JsEdge, wrapper: v8::Local<'s, v8::Object>) {
+-        set_wrapper(self.scope, edge, wrapper);
++        set_wrapper(self.scope(), edge, wrapper);
+     }
+ 
+     /// `set_strong`.
+     #[inline]
+     pub fn set_strong(&mut self, edge: &elise::JsEdge, object: v8::Local<'s, v8::Object>) {
+-        set_strong(self.scope, edge, object);
++        set_strong(self.scope(), edge, object);
+     }
+ 
+     /// `set_strong_value`.
+     #[inline]
+     pub fn set_strong_value(&mut self, edge: &elise::JsEdge, value: v8::Local<'s, v8::Value>) {
+-        set_strong_value(self.scope, edge, value);
++        set_strong_value(self.scope(), edge, value);
+     }
+ 
+     /// `return_wrapper`: the callback's result from the edge's traced
+     /// handle, no local handle made.
+     #[inline]
+     pub fn return_wrapper(&mut self, rv: &mut OpReturn<'_, '_>, edge: &elise::JsEdge) -> bool {
+-        return_wrapper(self.scope, rv.rv, edge)
++        return_wrapper(self.isolate(), rv.rv, edge)
+     }
+ 
+     /// The callback's result from a global handle, no local handle made.
+@@ -790,28 +790,28 @@ impl<'s> crate::NoGc<'_, 's, '_> {
+     where
+         for<'a> v8::Local<'a, T>: Into<v8::Local<'a, v8::Value>>,
+     {
+-        rv.rv.set_global(self.scope, global);
++        rv.rv.set_global(self.isolate(), global);
+     }
+ 
+     /// A local handle of a global one's value (a cached template, a name's
+     /// string).
+     #[inline]
+     pub fn local<T>(&mut self, global: &v8::Global<T>) -> v8::Local<'s, T> {
+-        v8::Local::new(self.scope, global)
++        v8::Local::new(self.scope(), global)
+     }
+ 
+     /// A local handle of a weak one's value, if it still has it (a cached
+     /// string).
+     #[inline]
+     pub fn weak_local<T>(&mut self, weak: &v8::Weak<T>) -> Option<v8::Local<'s, T>> {
+-        weak.to_local(self.scope)
++        weak.to_local(self.scope())
+     }
+ 
+     /// A string's ASCII characters as V8 lends them in place
+     /// (`LentString::ascii`): no copy, valid while no GC runs.
+     #[inline]
+     pub fn ascii<'a>(&mut self, string: &'a crate::LentString<'_>) -> Option<&'a str> {
+-        string.ascii(self.scope)
++        string.ascii(self.isolate())
+     }
+ 
+     /// The callback's result from a weak handle, if it still has its value.
+@@ -820,7 +820,7 @@ impl<'s> crate::NoGc<'_, 's, '_> {
+     where
+         for<'a> v8::Local<'a, T>: Into<v8::Local<'a, v8::Value>>,
+     {
+-        rv.rv.set_weak(self.scope, weak)
++        rv.rv.set_weak(self.isolate(), weak)
+     }
+ }
+ 
+@@ -1060,13 +1060,13 @@ pub fn wrapper<'s>(
+ /// returning nothing, if it has none.
+ #[inline]
+ pub fn return_wrapper(
+-    scope: &v8::PinScope<'_, '_, ()>,
++    isolate: &v8::Isolate,
+     rv: &mut v8::ReturnValue<'_, v8::Value>,
+     edge: &elise::JsEdge,
+ ) -> bool {
+     // SAFETY: on the isolate's thread, the heap's (the only one that writes
+     // the edge).
+-    unsafe { rv.set_traced(scope, slot(edge)) }
++    unsafe { rv.set_traced(isolate, slot(edge)) }
+ }
+ 
+ /// An isolate's pointer, for a `TracedMarker` made on another thread.
+diff --git a/crates/dom_js/src/front.rs b/crates/dom_js/src/front.rs
+index bbaa4ee..cc95c07 100644
+--- a/crates/dom_js/src/front.rs
++++ b/crates/dom_js/src/front.rs
+@@ -404,6 +404,16 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
+         Some(BodyArg::String(string.to_rust_string_lossy(scope)))
+     }
+ 
++    /// `has_args`' error, out of line: a call with too few arguments.
++    #[cold]
++    #[inline(never)]
++    fn throw_too_few_args(&mut self, name: &str, required: usize, given: usize) {
++        self.throw_type_error(&format!(
++            "Failed to execute '{name}': {required} argument{} required, but only {given} present.",
++            if required == 1 { "" } else { "s" }
++        ));
++    }
++
+     pub(crate) fn new(
+         scope: Scope<'a, 's, 'i>,
+         args: &'a A,
+@@ -1817,21 +1827,18 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
+         dom.mutate(|cx| f(&ApiCx::with_layout_cell(cx, layout), &mut op))
+     }
+ 
+-    #[inline]
++    #[inline(always)]
+     fn has_args(&mut self, name: &str, required: usize) -> bool {
+         let given = usize::try_from(self.args.length()).unwrap_or(0);
+         if given >= required {
+             return true;
+         }
+-        self.throw_type_error(&format!(
+-            "Failed to execute '{name}': {required} argument{} required, but only {given} present.",
+-            if required == 1 { "" } else { "s" }
+-        ));
++        self.throw_too_few_args(name, required, given);
+         false
+     }
+ 
+     fn string_arg(&mut self, index: usize) -> Option<ArgString<'s>> {
+-        strings::arg_string(self.scope.scope(), arg(self.args, index))
++        strings::arg_string(&mut self.scope, arg(self.args, index))
+     }
+ 
+     fn arg_count(&mut self) -> usize {
+@@ -1843,7 +1850,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
+         if value.is_null_or_undefined() {
+             return Some(None);
+         }
+-        strings::arg_string(self.scope.scope(), value).map(Some)
++        strings::arg_string(&mut self.scope, value).map(Some)
+     }
+ 
+     fn legacy_null_string_arg(&mut self, index: usize) -> Option<Option<ArgString<'s>>> {
+@@ -1851,7 +1858,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
+         if value.is_null() {
+             return Some(None);
+         }
+-        strings::arg_string(self.scope.scope(), value).map(Some)
++        strings::arg_string(&mut self.scope, value).map(Some)
+     }
+ 
+     fn node_or_string_arg(
+@@ -1859,12 +1866,12 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
+         index: usize,
+     ) -> Option<dom_api::typed::NodeOrStr<v8::Local<'s, v8::Object>, ArgString<'s>>> {
+         let value = arg(self.args, index);
+-        if bindings::is_wrapper::<Node>(self.scope.scope(), value) {
++        if bindings::is_wrapper::<Node>(self.scope.isolate(), value) {
+             return v8::Local::<v8::Object>::try_from(value)
+                 .ok()
+                 .map(dom_api::typed::NodeOrStr::Node);
+         }
+-        strings::arg_string(self.scope.scope(), value).map(dom_api::typed::NodeOrStr::Str)
++        strings::arg_string(&mut self.scope, value).map(dom_api::typed::NodeOrStr::Str)
+     }
+ 
+     fn node_or_long_arg(
+@@ -1875,7 +1882,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
+         if value.is_null_or_undefined() {
+             return Some(None);
+         }
+-        if bindings::is_wrapper::<Node>(self.scope.scope(), value) {
++        if bindings::is_wrapper::<Node>(self.scope.isolate(), value) {
+             return v8::Local::<v8::Object>::try_from(value)
+                 .ok()
+                 .map(|node| Some(dom_api::typed::NodeOrLong::Node(node)));
+@@ -1890,7 +1897,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
+         if value.is_null_or_undefined() {
+             return Some(None);
+         }
+-        if bindings::is_wrapper::<Node>(self.scope.scope(), value) {
++        if bindings::is_wrapper::<Node>(self.scope.isolate(), value) {
+             return v8::Local::<v8::Object>::try_from(value).ok().map(Some);
+         }
+         self.throw_type_error(&format!(
+@@ -2232,7 +2239,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
+         let mut objects = Vec::with_capacity(values.len());
+         for value in values {
+             match v8::Local::<v8::Object>::try_from(value) {
+-                Ok(object) if bindings::is_wrapper::<T>(self.scope.scope(), value) => {
++                Ok(object) if bindings::is_wrapper::<T>(self.scope.isolate(), value) => {
+                     objects.push(object)
+                 }
+                 _ => {
+@@ -2260,7 +2267,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
+         if value.is_undefined() {
+             return Some(None);
+         }
+-        if !bindings::is_wrapper::<T>(self.scope.scope(), value) {
++        if !bindings::is_wrapper::<T>(self.scope.isolate(), value) {
+             self.throw_type_error(&format!(
+                 "Failed to read the '{member}' property: Failed to convert value to '{interface}'."
+             ));
+@@ -2352,7 +2359,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
+         if value.is_null() {
+             return Some(Some(dom_api::typed::SignalMember::Null));
+         }
+-        if !bindings::is_wrapper::<dom::EventTargetImpl>(self.scope.scope(), value) {
++        if !bindings::is_wrapper::<dom::EventTargetImpl>(self.scope.isolate(), value) {
+             self.throw_type_error(&format!(
+                 "Failed to read the '{member}' property: Failed to convert value to 'AbortSignal'."
+             ));
+@@ -2388,7 +2395,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
+ 
+     fn object_if<T: elise::HeapType>(&mut self, index: usize) -> Option<v8::Local<'s, v8::Object>> {
+         let value = arg(self.args, index);
+-        if bindings::is_wrapper::<T>(self.scope.scope(), value) {
++        if bindings::is_wrapper::<T>(self.scope.isolate(), value) {
+             return v8::Local::<v8::Object>::try_from(value).ok();
+         }
+         None
+@@ -2646,7 +2653,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
+         if value.is_null_or_undefined() {
+             return Some(None);
+         }
+-        if bindings::is_wrapper::<T>(self.scope.scope(), value) {
++        if bindings::is_wrapper::<T>(self.scope.isolate(), value) {
+             return v8::Local::<v8::Object>::try_from(value).ok().map(Some);
+         }
+         self.throw_type_error(&format!(
+diff --git a/crates/dom_js/src/lib.rs b/crates/dom_js/src/lib.rs
+index 30e207b..d497c29 100644
+--- a/crates/dom_js/src/lib.rs
++++ b/crates/dom_js/src/lib.rs
+@@ -53,7 +53,7 @@ pub use machopo_dom::{
+     dom_mut, heap_stats, install_machopo_dom, names_made, string_conversions, uncaught_exceptions,
+     wrappers_made, wrappers_wasted,
+ };
+-pub use strings::{ArgString, StringCache, arg_string, new_string, string_arg, throw_type_error};
++pub use strings::{ArgString, StringCache, new_string, string_arg, throw_type_error};
+ pub use templates::{install, overload_interfaces_untold};
+ pub use window::{
+     create_window_realm, next_timer, run_element_tasks, run_posted_messages, run_timers,
+diff --git a/crates/dom_js/src/named.rs b/crates/dom_js/src/named.rs
+index 86131a9..89c6a88 100644
+--- a/crates/dom_js/src/named.rs
++++ b/crates/dom_js/src/named.rs
+@@ -173,7 +173,7 @@ impl<'a, 's, 'i> Front for PropertyFront<'a, 's, 'i> {
+             Some(value) => value,
+             None => v8::undefined(self.scope.scope()).into(),
+         };
+-        strings::arg_string(self.scope.scope(), value)
++        strings::arg_string(&mut self.scope, value)
+     }
+ 
+     fn nullable_string_arg(&mut self, _: usize) -> Option<Option<ArgString<'s>>> {
+diff --git a/crates/dom_js/src/state.rs b/crates/dom_js/src/state.rs
+index d6d1b00..917ad5e 100644
+--- a/crates/dom_js/src/state.rs
++++ b/crates/dom_js/src/state.rs
+@@ -276,7 +276,7 @@ pub(crate) fn report(scope: &mut Scope<'_, '_, '_>) {
+         queue_microtasks(scope, microtasks);
+     }
+     if let Some(used) = used {
+-        bindings::report_embedder_used_size(scope.scope(), used);
++        bindings::report_embedder_used_size(scope.isolate(), used);
+     }
+ }
+ 
+diff --git a/crates/dom_js/src/strings.rs b/crates/dom_js/src/strings.rs
+index 7875cdf..8b64e18 100644
+--- a/crates/dom_js/src/strings.rs
++++ b/crates/dom_js/src/strings.rs
+@@ -185,22 +185,27 @@ pub struct ArgString<'s> {
+ /// Argument `value` as a member's `DOMString`: itself if it is a string
+ /// (most are; told inline, as Blink's bindings tell with V8's
+ /// `Value::IsString`), else WebIDL's `ToString` (which may run script:
+-/// none if it threw), a call into V8 and its context found first.
+-pub fn arg_string<'s>(
+-    scope: &mut v8::PinScope<'s, '_>,
++/// none if it threw), a call into V8 and its context found first. A
++/// string that lends its text in place asks for no scope (the call makes
++/// none for it); a conversion or a copy does.
++pub(crate) fn arg_string<'s>(
++    scope: &mut crate::state::Scope<'_, 's, '_>,
+     value: v8::Local<'s, v8::Value>,
+ ) -> Option<ArgString<'s>> {
+     let string = match v8::machopo::as_string(value) {
+         Some(string) => string,
+         None => {
+-            if let Some(state) = bindings::isolate_state_mut::<crate::state::State>(scope) {
+-                state.string_conversions = state.string_conversions.wrapping_add(1);
+-            }
+-            value.to_string(scope)?
++            let (state, _) = scope.state_mut();
++            state.string_conversions = state.string_conversions.wrapping_add(1);
++            value.to_string(scope.scope())?
+         }
+     };
+     let string = bindings::LentString::new(string);
+-    let copied = (!string.lends(scope)).then(|| string.string().to_rust_string_lossy(scope));
++    let copied = if string.lends(scope.isolate()) {
++        None
++    } else {
++        Some(string.string().to_rust_string_lossy(scope.scope()))
++    };
+     Some(ArgString { string, copied })
+ }
+ 
