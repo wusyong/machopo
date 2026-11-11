@@ -51,6 +51,48 @@ pub trait FrontTypes {
     /// A dictionary argument as the engine holds it (an object), whose
     /// members are read before the operation (`dict_bool`).
     type Dict;
+    /// What a result leaves for after the operation when the front end
+    /// can't give it in one (it would have its engine allocate, whose GC
+    /// may reach the DOM): a string its engine has no copy of
+    /// (`OpFront::ret_string`, `ret_name`), a node with no wrapper
+    /// (`ret_node`), a number its engine must allocate (`ret_u32`,
+    /// `ret_i32`, `ret_f64`). The member's call carries it out of the
+    /// operation (`RetType::Pending`) and hands it back
+    /// (`Front::finish_string`, `finish_node`, `finish_number`). A front
+    /// end that always gives its result in the operation names a type with
+    /// no value (`std::convert::Infallible`).
+    type PendingString;
+    type PendingNode;
+    type PendingNumber;
+}
+
+/// A result type's `Pending` and `finish` when it leaves nothing for
+/// after the operation.
+macro_rules! no_pending {
+    () => {
+        type Pending<F: $crate::typed::FrontTypes> = ();
+
+        #[inline(always)]
+        fn finish<F: $crate::typed::Front>(_: &mut F, (): ()) {}
+    };
+}
+pub(crate) use no_pending;
+
+/// A result type's `Pending` and `finish` when it may leave a string, a
+/// node or a number (`$pending`, `$finish`: `PendingString` and
+/// `finish_string`...) for after the operation. Always inlined: where the
+/// front end names a type with no value, nothing is left of it.
+macro_rules! pending {
+    ($pending:ident, $finish:ident) => {
+        type Pending<F: FrontTypes> = Option<F::$pending>;
+
+        #[inline(always)]
+        fn finish<F: Front>(front: &mut F, pending: Option<F::$pending>) {
+            if let Some(pending) = pending {
+                front.$finish(pending);
+            }
+        }
+    };
 }
 
 /// A front end's side of one call of a member, out of the DOM's operation:
@@ -59,7 +101,14 @@ pub trait FrontTypes {
 /// call returns then.
 pub trait Front: FrontTypes {
     /// The front end's side in the operation, borrowing it.
-    type Op<'o>: OpFront<Str = Self::Str, Node = Self::Node, Dict = Self::Dict>
+    type Op<'o>: OpFront<
+            Str = Self::Str,
+            Node = Self::Node,
+            Dict = Self::Dict,
+            PendingString = Self::PendingString,
+            PendingNode = Self::PendingNode,
+            PendingNumber = Self::PendingNumber,
+        >
     where
         Self: 'o;
 
@@ -636,6 +685,22 @@ pub trait Front: FrontTypes {
     /// an operation of its own if it needs one (to wrap a node).
     fn finish(&mut self) {}
 
+    /// What a result left for after the operation (`OpFront::ret_string`,
+    /// `ret_node`, `ret_u32`...), made the engine's value now, with none
+    /// running: a front end whose `Pending` types have values has these.
+    fn finish_string(&mut self, pending: Self::PendingString) {
+        let _ = pending;
+        unreachable!("a front end that leaves a string for after the operation finishes it")
+    }
+    fn finish_node(&mut self, pending: Self::PendingNode) {
+        let _ = pending;
+        unreachable!("a front end that leaves a node for after the operation finishes it")
+    }
+    fn finish_number(&mut self, pending: Self::PendingNumber) {
+        let _ = pending;
+        unreachable!("a front end that leaves a number for after the operation finishes it")
+    }
+
     /// The error the call throws, after the operation.
     fn throw(&mut self, error: ApiError);
 
@@ -1030,10 +1095,15 @@ pub trait OpFront: FrontTypes {
     fn ret_undefined(&mut self);
     fn ret_null(&mut self);
     fn ret_bool(&mut self, value: bool);
-    fn ret_u32(&mut self, value: u32);
-    fn ret_f64(&mut self, value: f64);
-    fn ret_i32(&mut self, value: i32) {
-        self.ret_f64(value.into());
+    /// A number: given, or what is left for after the operation
+    /// (`FrontTypes::PendingNumber`).
+    #[must_use = "what the operation couldn't give is finished after it"]
+    fn ret_u32(&mut self, value: u32) -> Option<Self::PendingNumber>;
+    #[must_use = "what the operation couldn't give is finished after it"]
+    fn ret_f64(&mut self, value: f64) -> Option<Self::PendingNumber>;
+    #[must_use = "what the operation couldn't give is finished after it"]
+    fn ret_i32(&mut self, value: i32) -> Option<Self::PendingNumber> {
+        self.ret_f64(value.into())
     }
     /// The value `edge` refers to (the engine's), undefined if none:
     /// WebIDL's `any`.
@@ -1046,14 +1116,24 @@ pub trait OpFront: FrontTypes {
         let _ = (cx, edge);
         unreachable!("a front end binding a member giving any value gives it")
     }
-    fn ret_string(&mut self, value: &DomString);
+    /// A string: given, or what is left for after the operation
+    /// (`FrontTypes::PendingString`).
+    #[must_use = "what the operation couldn't give is finished after it"]
+    fn ret_string(&mut self, value: &DomString) -> Option<Self::PendingString>;
     /// One of the thread's names (`DomStr::Name`), which live as long as
     /// the thread: as any string, unless the front keeps its own by number.
-    fn ret_name(&mut self, id: NameId) {
-        self.ret_string(&names::string(id));
+    #[must_use = "what the operation couldn't give is finished after it"]
+    fn ret_name(&mut self, id: NameId) -> Option<Self::PendingString> {
+        self.ret_string(&names::string(id))
     }
-    /// A node: its wrapper, if it has one; else kept (a root) for a new one.
-    fn ret_node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, node: NodeRef<'gc>);
+    /// A node: its wrapper, if it has one; else what is left for after
+    /// the operation, to make one (`FrontTypes::PendingNode`).
+    #[must_use = "what the operation couldn't give is finished after it"]
+    fn ret_node<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        node: NodeRef<'gc>,
+    ) -> Option<Self::PendingNode>;
     /// An object of any type: its wrapper, if it has one; else kept (a
     /// root) for a new one.
     fn ret_object<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, object: ObjectRef<'gc>) {
@@ -1233,8 +1313,14 @@ pub trait OpFront: FrontTypes {
         unreachable!("a front end binding a member giving numbers gives them")
     }
 
+    /// A node its member made (`NewObject`): as any node by default, for
+    /// a front end that gives every node in the operation.
     fn ret_new_node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, node: NodeRef<'gc>) {
-        self.ret_node(cx, node);
+        let pending = self.ret_node(cx, node);
+        assert!(
+            pending.is_none(),
+            "a front end that leaves a node for after the operation gives a new one itself"
+        );
     }
 }
 
@@ -2002,7 +2088,21 @@ pub trait RetType {
         let _ = front;
     }
 
-    fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, value: Self::Ret<'gc>);
+    /// What it leaves for after the operation, as the front end `F` names
+    /// it (`FrontTypes::PendingString`...): nothing (`()`) for a result
+    /// that is always given in the operation or kept by the front end.
+    type Pending<F: FrontTypes>;
+
+    /// The function's result handed to the front end, in the operation:
+    /// what is left of it to do after.
+    fn give<'gc, O: OpFront>(
+        op: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        value: Self::Ret<'gc>,
+    ) -> Self::Pending<O>;
+
+    /// After the operation: what `give` left, finished.
+    fn finish<F: Front>(front: &mut F, pending: Self::Pending<F>);
 
     /// The member's function failed: thrown (a promise's, rejected).
     fn fail<F: Front>(front: &mut F, error: ApiError) {
@@ -2021,6 +2121,7 @@ pub struct NewObject<I, L = I>(PhantomData<(I, L)>);
 impl<I: Interface, L: Interface> RetType for NewObject<I, L> {
     const DESC: TypeDesc = TypeDesc::Node(I::NAME);
     type Ret<'gc> = NodeRef<'gc>;
+    no_pending!();
 
     fn prepare<F: Front>(front: &mut F) {
         front.prepare_new_node(L::INDEX);
@@ -2036,6 +2137,7 @@ impl RetType for () {
     const DESC: TypeDesc = TypeDesc::Undefined;
     const PLAIN: bool = true;
     type Ret<'gc> = ();
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, (): ()) {
         op.ret_undefined();
@@ -2046,6 +2148,7 @@ impl RetType for bool {
     const DESC: TypeDesc = TypeDesc::Bool;
     const PLAIN: bool = true;
     type Ret<'gc> = bool;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: bool) {
         op.ret_bool(value);
@@ -2058,9 +2161,10 @@ impl RetType for u32 {
     const DESC: TypeDesc = TypeDesc::U32;
     const PLAIN: bool = true;
     type Ret<'gc> = u32;
+    pending!(PendingNumber, finish_number);
 
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: u32) {
-        op.ret_u32(value);
+    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: u32) -> Self::Pending<O> {
+        op.ret_u32(value)
     }
 }
 
@@ -2157,9 +2261,10 @@ impl RetType for u16 {
     const DESC: TypeDesc = TypeDesc::U16;
     const PLAIN: bool = true;
     type Ret<'gc> = u16;
+    pending!(PendingNumber, finish_number);
 
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: u16) {
-        op.ret_u32(value.into());
+    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: u16) -> Self::Pending<O> {
+        op.ret_u32(value.into())
     }
 }
 
@@ -2192,9 +2297,10 @@ impl RetType for i16 {
     const DESC: TypeDesc = TypeDesc::I16;
     const PLAIN: bool = true;
     type Ret<'gc> = i16;
+    pending!(PendingNumber, finish_number);
 
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: i16) {
-        op.ret_i32(value.into());
+    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: i16) -> Self::Pending<O> {
+        op.ret_i32(value.into())
     }
 }
 
@@ -2465,11 +2571,19 @@ impl RetType for NullableU32 {
     const DESC: TypeDesc = TypeDesc::NullableU32;
     const PLAIN: bool = true;
     type Ret<'gc> = Option<u32>;
+    pending!(PendingNumber, finish_number);
 
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: Option<u32>) {
+    fn give<'gc, O: OpFront>(
+        op: &mut O,
+        _: &ApiCx<'_, 'gc>,
+        value: Option<u32>,
+    ) -> Self::Pending<O> {
         match value {
             Some(value) => op.ret_u32(value),
-            None => op.ret_null(),
+            None => {
+                op.ret_null();
+                None
+            }
         }
     }
 }
@@ -2478,9 +2592,10 @@ impl RetType for i32 {
     const DESC: TypeDesc = TypeDesc::I32;
     const PLAIN: bool = true;
     type Ret<'gc> = i32;
+    pending!(PendingNumber, finish_number);
 
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: i32) {
-        op.ret_i32(value);
+    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: i32) -> Self::Pending<O> {
+        op.ret_i32(value)
     }
 }
 
@@ -2540,6 +2655,7 @@ pub struct HandlerValue(pub Option<Persistent<dom::Listener>>);
 impl RetType for EventHandler {
     const DESC: TypeDesc = TypeDesc::Function("EventHandler");
     type Ret<'gc> = HandlerValue;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, value: HandlerValue) {
         match value.0 {
@@ -3113,6 +3229,7 @@ pub struct PromiseOfJson;
 impl RetType for PromiseOfJson {
     const DESC: TypeDesc = TypeDesc::Promise("any");
     type Ret<'gc> = DomString;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, text: DomString) {
         op.ret_resolved_json(text);
@@ -3454,6 +3571,7 @@ impl ArgType for Doubles {
 impl RetType for Doubles {
     const DESC: TypeDesc = TypeDesc::Doubles;
     type Ret<'gc> = Vec<f64>;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: Vec<f64>) {
         op.ret_doubles(&value);
@@ -3466,6 +3584,7 @@ pub struct Numbers;
 impl RetType for Numbers {
     const DESC: TypeDesc = TypeDesc::Numbers;
     type Ret<'gc> = Vec<f64>;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: Vec<f64>) {
         op.ret_numbers(&value);
@@ -3479,6 +3598,7 @@ pub struct FrozenStrings;
 impl RetType for FrozenStrings {
     const DESC: TypeDesc = TypeDesc::FrozenStrings;
     type Ret<'gc> = Vec<DomString>;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: Vec<DomString>) {
         op.ret_frozen_strings(value);
@@ -3489,6 +3609,7 @@ impl RetType for FrozenStrings {
 impl RetType for Strings {
     const DESC: TypeDesc = TypeDesc::Strings;
     type Ret<'gc> = Vec<DomString>;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: Vec<DomString>) {
         op.ret_strings(value);
@@ -3502,6 +3623,7 @@ pub struct Any;
 impl RetType for Any {
     const DESC: TypeDesc = TypeDesc::Any;
     type Ret<'gc> = &'gc JsEdge;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, edge: &'gc JsEdge) {
         op.ret_any(cx, edge);
@@ -3539,6 +3661,7 @@ pub struct AnyOrNull;
 impl RetType for AnyOrNull {
     const DESC: TypeDesc = TypeDesc::Any;
     type Ret<'gc> = &'gc JsEdge;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, edge: &'gc JsEdge) {
         op.ret_any_or_null(cx, edge);
@@ -3550,9 +3673,10 @@ impl RetType for f64 {
     const DESC: TypeDesc = TypeDesc::Double;
     const PLAIN: bool = true;
     type Ret<'gc> = f64;
+    pending!(PendingNumber, finish_number);
 
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: f64) {
-        op.ret_f64(value);
+    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: f64) -> Self::Pending<O> {
+        op.ret_f64(value)
     }
 }
 
@@ -3581,11 +3705,19 @@ impl RetType for Option<f64> {
     const DESC: TypeDesc = TypeDesc::Double;
     const PLAIN: bool = true;
     type Ret<'gc> = Option<f64>;
+    pending!(PendingNumber, finish_number);
 
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: Option<f64>) {
+    fn give<'gc, O: OpFront>(
+        op: &mut O,
+        _: &ApiCx<'_, 'gc>,
+        value: Option<f64>,
+    ) -> Self::Pending<O> {
         match value {
             Some(value) => op.ret_f64(value),
-            None => op.ret_null(),
+            None => {
+                op.ret_null();
+                None
+            }
         }
     }
 }
@@ -3668,9 +3800,10 @@ impl RetType for UnrestrictedDouble {
     const DESC: TypeDesc = TypeDesc::Double;
     const PLAIN: bool = true;
     type Ret<'gc> = f64;
+    pending!(PendingNumber, finish_number);
 
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: f64) {
-        op.ret_f64(value);
+    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: f64) -> Self::Pending<O> {
+        op.ret_f64(value)
     }
 }
 
@@ -4466,14 +4599,23 @@ pub enum CollectionOrElement<'gc> {
 impl RetType for Option<HTMLCollectionOrElement> {
     const DESC: TypeDesc = TypeDesc::NullableUnion(&["HTMLCollection", "Element"]);
     type Ret<'gc> = Option<CollectionOrElement<'gc>>;
+    pending!(PendingNode, finish_node);
 
-    fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, value: Self::Ret<'gc>) {
+    fn give<'gc, O: OpFront>(
+        op: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        value: Self::Ret<'gc>,
+    ) -> Self::Pending<O> {
         match value {
             Some(CollectionOrElement::Element(element)) => op.ret_node(cx, element),
             Some(CollectionOrElement::Collection(collection)) => {
                 op.ret_object(cx, ObjectRef::HtmlCollection(collection));
+                None
             }
-            None => op.ret_null(),
+            None => {
+                op.ret_null();
+                None
+            }
         }
     }
 }
@@ -4531,12 +4673,23 @@ pub struct RadioNodeListOrElement;
 impl RetType for Option<RadioNodeListOrElement> {
     const DESC: TypeDesc = TypeDesc::NullableUnion(&["RadioNodeList", "Element"]);
     type Ret<'gc> = Option<dom::FormItem<'gc>>;
+    pending!(PendingNode, finish_node);
 
-    fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, value: Self::Ret<'gc>) {
+    fn give<'gc, O: OpFront>(
+        op: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        value: Self::Ret<'gc>,
+    ) -> Self::Pending<O> {
         match value {
             Some(dom::FormItem::Element(element)) => op.ret_node(cx, element),
-            Some(dom::FormItem::List(list)) => op.ret_object(cx, ObjectRef::NodeList(list)),
-            None => op.ret_null(),
+            Some(dom::FormItem::List(list)) => {
+                op.ret_object(cx, ObjectRef::NodeList(list));
+                None
+            }
+            None => {
+                op.ret_null();
+                None
+            }
         }
     }
 }
@@ -5314,6 +5467,7 @@ pub struct NewHtmlElement;
 impl RetType for NewHtmlElement {
     const DESC: TypeDesc = TypeDesc::Node("Element");
     type Ret<'gc> = Created<'gc>;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, value: Created<'gc>) {
         NewElement::<crate::interfaces::HTMLElement>::give(op, cx, value);
@@ -5338,6 +5492,7 @@ pub enum Created<'gc> {
 impl<L: Interface> RetType for NewElement<L> {
     const DESC: TypeDesc = TypeDesc::Node("Element");
     type Ret<'gc> = Created<'gc>;
+    no_pending!();
 
     fn prepare<F: Front>(front: &mut F) {
         front.prepare_new_node(L::INDEX);
@@ -5459,6 +5614,7 @@ pub struct AnyOrUndefined;
 impl RetType for AnyOrUndefined {
     const DESC: TypeDesc = TypeDesc::Any;
     type Ret<'gc> = Option<&'gc JsEdge>;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, edge: Option<&'gc JsEdge>) {
         op.ret_any_or_undefined(cx, edge);
@@ -5472,6 +5628,7 @@ pub struct EventOrUndefined;
 impl RetType for EventOrUndefined {
     const DESC: TypeDesc = TypeDesc::Any;
     type Ret<'gc> = Option<Gc<'gc, dom::Event>>;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, event: Option<Gc<'gc, dom::Event>>) {
         match event {
@@ -5499,6 +5656,7 @@ pub enum PromiseOf<'gc> {
 impl RetType for PromiseOfAny {
     const DESC: TypeDesc = TypeDesc::Promise("any");
     type Ret<'gc> = PromiseOf<'gc>;
+    no_pending!();
 
     fn prepare<F: Front>(front: &mut F) {
         front.prepare_promise();
@@ -5525,6 +5683,7 @@ pub struct ObservableArray<I>(PhantomData<I>);
 impl<I: Interface> RetType for ObservableArray<I> {
     const DESC: TypeDesc = TypeDesc::ObservableArray(I::NAME);
     type Ret<'gc> = Vec<<I::Object as ObjectType>::Ref<'gc>>;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, value: Self::Ret<'gc>) {
         let objects: Vec<ObjectRef<'gc>> = value
@@ -5543,6 +5702,7 @@ pub struct Promise<I>(PhantomData<I>);
 impl<I: Interface> RetType for Promise<I> {
     const DESC: TypeDesc = TypeDesc::Promise(I::NAME);
     type Ret<'gc> = <I::Object as ObjectType>::Ref<'gc>;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, value: Self::Ret<'gc>) {
         op.ret_resolved(cx, <I::Object as ObjectType>::object(value));
@@ -5562,6 +5722,7 @@ pub struct PendingPromise<I>(PhantomData<I>);
 impl<I: Interface> RetType for PendingPromise<I> {
     const DESC: TypeDesc = TypeDesc::Promise(I::NAME);
     type Ret<'gc> = u64;
+    no_pending!();
 
     fn prepare<F: Front>(front: &mut F) {
         front.prepare_promise();
@@ -5582,6 +5743,7 @@ pub struct Sequence<I>(PhantomData<I>);
 impl<I: Interface> RetType for Sequence<I> {
     const DESC: TypeDesc = TypeDesc::Sequence(I::DESC.name);
     type Ret<'gc> = Vec<<I::Object as ObjectType>::Ref<'gc>>;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, value: Self::Ret<'gc>) {
         let objects: Vec<ObjectRef<'gc>> = value
@@ -5599,6 +5761,7 @@ pub struct FrozenArray<I>(PhantomData<I>);
 impl<I: Interface> RetType for FrozenArray<I> {
     const DESC: TypeDesc = TypeDesc::FrozenArray(I::DESC.name);
     type Ret<'gc> = Vec<<I::Object as ObjectType>::Ref<'gc>>;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, value: Self::Ret<'gc>) {
         let objects: Vec<ObjectRef<'gc>> = value
@@ -5947,7 +6110,7 @@ impl DomStr<'_> {
     /// inlined returns (left out of line, its call and the string moved
     /// to it cost a `getAttribute` some 40 instructions).
     #[inline(always)]
-    fn give<O: OpFront>(self, op: &mut O) {
+    fn give<O: OpFront>(self, op: &mut O) -> Option<O::PendingString> {
         match self {
             Self::Owned(string) => op.ret_string(&string),
             Self::InPlace(string) => op.ret_string(&string.borrow()),
@@ -6003,11 +6166,16 @@ impl RetType for DomString {
     const DESC: TypeDesc = TypeDesc::String;
     const PLAIN: bool = true;
     type Ret<'gc> = DomStr<'gc>;
+    pending!(PendingString, finish_string);
 
     // As `DomStr::give`: inlined into the member's call.
     #[inline(always)]
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: DomStr<'gc>) {
-        value.give(op);
+    fn give<'gc, O: OpFront>(
+        op: &mut O,
+        _: &ApiCx<'_, 'gc>,
+        value: DomStr<'gc>,
+    ) -> Self::Pending<O> {
+        value.give(op)
     }
 }
 
@@ -6076,6 +6244,7 @@ impl ArgType for Uint8ClampedArray {
 impl RetType for Uint8ClampedArray {
     const DESC: TypeDesc = TypeDesc::Uint8ClampedArray;
     type Ret<'gc> = &'gc JsEdge;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, value: &'gc JsEdge) {
         op.ret_any(cx, value);
@@ -6146,16 +6315,23 @@ impl ArgType for CanvasStyleValue {
 impl RetType for CanvasStyleValue {
     const DESC: TypeDesc = TypeDesc::StringOr(CANVAS_STYLE_OBJECTS);
     type Ret<'gc> = CanvasStyleRet<'gc>;
+    pending!(PendingString, finish_string);
 
-    fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, value: CanvasStyleRet<'gc>) {
+    fn give<'gc, O: OpFront>(
+        op: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        value: CanvasStyleRet<'gc>,
+    ) -> Self::Pending<O> {
         use dom::CanvasStyleObject;
         match value {
             CanvasStyleRet::String(string) => string.give(op),
             CanvasStyleRet::Object(CanvasStyleObject::Gradient(gradient)) => {
                 op.ret_object(cx, ObjectRef::CanvasGradient(gradient));
+                None
             }
             CanvasStyleRet::Object(CanvasStyleObject::Pattern(pattern)) => {
                 op.ret_object(cx, ObjectRef::CanvasPattern(pattern));
+                None
             }
         }
     }
@@ -6283,6 +6459,7 @@ pub struct Records;
 impl RetType for Records {
     const DESC: TypeDesc = TypeDesc::Any;
     type Ret<'gc> = Vec<Vec<(String, DictValue)>>;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(
         op: &mut O,
@@ -6301,6 +6478,7 @@ pub struct DictionaryOut;
 impl RetType for DictionaryOut {
     const DESC: TypeDesc = TypeDesc::Any;
     type Ret<'gc> = Vec<(&'static str, DictValue)>;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(
         op: &mut O,
@@ -6446,6 +6624,7 @@ pub struct PromiseOfAnimation;
 impl RetType for PromiseOfAnimation {
     const DESC: TypeDesc = TypeDesc::Promise("Animation");
     type Ret<'gc> = AnimationPromise<'gc>;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, promise: AnimationPromise<'gc>) {
         op.ret_animation_promise(cx, promise.object, promise.ready, promise.resolved);
@@ -6625,10 +6804,18 @@ pub enum HiddenState {
 impl RetType for Hidden {
     const DESC: TypeDesc = TypeDesc::Any;
     type Ret<'gc> = HiddenState;
+    pending!(PendingString, finish_string);
 
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: HiddenState) {
+    fn give<'gc, O: OpFront>(
+        op: &mut O,
+        _: &ApiCx<'_, 'gc>,
+        value: HiddenState,
+    ) -> Self::Pending<O> {
         match value {
-            HiddenState::Hidden(hidden) => op.ret_bool(hidden),
+            HiddenState::Hidden(hidden) => {
+                op.ret_bool(hidden);
+                None
+            }
             HiddenState::UntilFound => DomStr::Owned(dom::DomString::new("until-found")).give(op),
         }
     }
@@ -6754,6 +6941,7 @@ pub struct FilledView;
 impl RetType for FilledView {
     const DESC: TypeDesc = TypeDesc::Any;
     type Ret<'gc> = Vec<u8>;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, bytes: Vec<u8>) {
         op.ret_filled_view(bytes);
@@ -6815,6 +7003,7 @@ pub struct Cloned;
 impl RetType for Cloned {
     const DESC: TypeDesc = TypeDesc::Any;
     type Ret<'gc> = (dom::SerializedMessage, Vec<Gc<'gc, dom::EventTargetImpl>>);
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, (payload, ports): Self::Ret<'gc>) {
         op.ret_cloned(cx, payload, &ports);
@@ -6829,16 +7018,23 @@ pub struct ReaderResult;
 impl RetType for ReaderResult {
     const DESC: TypeDesc = TypeDesc::Any;
     type Ret<'gc> = Gc<'gc, dom::EventTargetImpl>;
+    pending!(PendingString, finish_string);
 
     fn give<'gc, O: OpFront>(
         op: &mut O,
         cx: &ApiCx<'_, 'gc>,
         reader: Gc<'gc, dom::EventTargetImpl>,
-    ) {
+    ) -> Self::Pending<O> {
         match cx.file_reader_result(reader) {
-            dom::FileReaderResult::None => op.ret_null(),
+            dom::FileReaderResult::None => {
+                op.ret_null();
+                None
+            }
             dom::FileReaderResult::Text(text) => op.ret_string(&DomString::new(&text)),
-            dom::FileReaderResult::Bytes(_) => op.ret_reader_buffer(cx, reader),
+            dom::FileReaderResult::Bytes(_) => {
+                op.ret_reader_buffer(cx, reader);
+                None
+            }
         }
     }
 }
@@ -6961,6 +7157,7 @@ pub struct EntryDetail;
 impl RetType for EntryDetail {
     const DESC: TypeDesc = TypeDesc::Any;
     type Ret<'gc> = Gc<'gc, dom::PerformanceEntry>;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, entry: Self::Ret<'gc>) {
         op.ret_entry_detail(cx, entry);
@@ -7239,6 +7436,7 @@ impl RetType for AlwaysNull {
     const DESC: TypeDesc = TypeDesc::Any;
     const PLAIN: bool = true;
     type Ret<'gc> = ();
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, (): ()) {
         op.ret_null();
@@ -7404,6 +7602,7 @@ pub struct PromiseOfUndefined;
 impl RetType for PromiseOfUndefined {
     const DESC: TypeDesc = TypeDesc::Promise("undefined");
     type Ret<'gc> = ();
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, (): ()) {
         op.ret_resolved_undefined();
@@ -7421,6 +7620,7 @@ pub struct PromiseOfString;
 impl RetType for PromiseOfString {
     const DESC: TypeDesc = TypeDesc::Promise("USVString");
     type Ret<'gc> = DomString;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: DomString) {
         op.ret_resolved_string(value);
@@ -7439,6 +7639,7 @@ pub struct PromiseOfBytes<const VIEW: bool>;
 impl<const VIEW: bool> RetType for PromiseOfBytes<VIEW> {
     const DESC: TypeDesc = TypeDesc::Promise(if VIEW { "Uint8Array" } else { "ArrayBuffer" });
     type Ret<'gc> = Vec<u8>;
+    no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: Vec<u8>) {
         op.ret_resolved_bytes(value, VIEW);
@@ -7534,13 +7735,21 @@ impl RetType for Option<DomString> {
     const DESC: TypeDesc = TypeDesc::NullableString;
     const PLAIN: bool = true;
     type Ret<'gc> = NullableStr<'gc>;
+    pending!(PendingString, finish_string);
 
     // As `DomStr::give`: inlined into the member's call.
     #[inline(always)]
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: NullableStr<'gc>) {
+    fn give<'gc, O: OpFront>(
+        op: &mut O,
+        _: &ApiCx<'_, 'gc>,
+        value: NullableStr<'gc>,
+    ) -> Self::Pending<O> {
         match value.0 {
             Some(value) => value.give(op),
-            None => op.ret_null(),
+            None => {
+                op.ret_null();
+                None
+            }
         }
     }
 }
@@ -7573,11 +7782,16 @@ impl RetType for LegacyNullToEmptyString {
     const DESC: TypeDesc = TypeDesc::String;
     const PLAIN: bool = true;
     type Ret<'gc> = DomStr<'gc>;
+    pending!(PendingString, finish_string);
 
     // As `DomStr::give`: inlined into the member's call.
     #[inline(always)]
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: DomStr<'gc>) {
-        value.give(op);
+    fn give<'gc, O: OpFront>(
+        op: &mut O,
+        _: &ApiCx<'_, 'gc>,
+        value: DomStr<'gc>,
+    ) -> Self::Pending<O> {
+        value.give(op)
     }
 }
 
@@ -7850,6 +8064,9 @@ mod tests {
         type Str = String;
         type Node = ();
         type Dict = ();
+        type PendingString = std::convert::Infallible;
+        type PendingNode = std::convert::Infallible;
+        type PendingNumber = std::convert::Infallible;
     }
 
     impl Front for OneNode {
@@ -7903,10 +8120,22 @@ mod tests {
         fn ret_undefined(&mut self) {}
         fn ret_null(&mut self) {}
         fn ret_bool(&mut self, _: bool) {}
-        fn ret_u32(&mut self, _: u32) {}
-        fn ret_f64(&mut self, _: f64) {}
-        fn ret_string(&mut self, _: &DomString) {}
-        fn ret_node<'gc>(&mut self, _: &ApiCx<'_, 'gc>, _: NodeRef<'gc>) {}
+        fn ret_u32(&mut self, _: u32) -> Option<std::convert::Infallible> {
+            None
+        }
+        fn ret_f64(&mut self, _: f64) -> Option<std::convert::Infallible> {
+            None
+        }
+        fn ret_string(&mut self, _: &DomString) -> Option<std::convert::Infallible> {
+            None
+        }
+        fn ret_node<'gc>(
+            &mut self,
+            _: &ApiCx<'_, 'gc>,
+            _: NodeRef<'gc>,
+        ) -> Option<std::convert::Infallible> {
+            None
+        }
     }
 
     /// An interface's argument takes its own objects only: a text for an

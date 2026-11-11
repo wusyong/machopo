@@ -1,0 +1,96 @@
+# Stage 4a: a result the operation can't give is carried out of it by its
+# return type (`dom_api`'s `RetType::Pending`, `finish`; the generated
+# calls), of a type each front end names; `dom_js`'s `InfoFront` leaves a
+# string, a node's root or a number, the other front ends nothing.
+test = ["cargo", "test", "-q", "-p", "dom_api", "-p", "dom_js", "-p", "dom_wasm"]
+timeout = 1800
+
+[[mutant]]
+name = "what a result left isn't finished"
+file = "crates/dom_api/src/typed.rs"
+from = '''            if let Some(pending) = pending {
+                front.$finish(pending);
+            }'''
+to = '''            let _ = (front, pending);'''
+
+[[mutant]]
+name = "a getter's result left isn't finished"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''                ::std::result::Result::Ok(#value) => {
+                    <#ty as #api::typed::RetType>::finish(#front, #value);
+                    #front.finish();
+                }'''
+to = '''                ::std::result::Result::Ok(#value) => {
+                    let _ = #value;
+                    #front.finish();
+                }'''
+
+[[mutant]]
+name = "a method's result left isn't finished"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''                ::std::result::Result::Ok(#value) => {
+                    <#ret as #api::typed::RetType>::finish(#front, #value);
+                    #front.finish();
+                }'''
+to = '''                ::std::result::Result::Ok(#value) => {
+                    let _ = #value;
+                    #front.finish();
+                }'''
+
+[[mutant]]
+name = "a node interface's result left isn't finished"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''            if let ::std::option::Option::Some(pending) = pending {
+                front.finish_node(pending);
+            }'''
+to = '''                let _ = (front, pending);'''
+
+[[mutant]]
+name = "a cached string left for after"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        (!returned).then(|| PendingString::String(value.clone()))'''
+to = '''        Some(PendingString::String(value.clone()))'''
+
+[[mutant]]
+name = "a string V8 has no copy of not left"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        (!returned).then(|| PendingString::String(value.clone()))'''
+to = '''        let _ = returned;
+        None'''
+
+[[mutant]]
+name = "a wrapped node left for after"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if self.no_gc.return_wrapper(cx.wrapper_edge(node)) {
+            return None;
+        }'''
+to = '''        let _ = self.no_gc.return_wrapper(cx.wrapper_edge(node));'''
+
+[[mutant]]
+name = "a number past a Smi not left (u32)"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        (!self.no_gc.ret().set_smi_u32(value)).then(|| value.into())'''
+to = '''        let _ = self.no_gc.ret().set_smi_u32(value);
+        None'''
+
+[[mutant]]
+name = "a number that is no integer not left"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        (!given).then_some(value)'''
+to = '''        let _ = given;
+        None'''
+
+[[mutant]]
+name = "a name's string finished as any string"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                PendingString::Name(id, name) => front::Kept::Name(id, name),'''
+to = '''                PendingString::Name(_, name) => front::Kept::String(name),'''
+
+[[mutant]]
+name = "a made name's string left for after"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            Some(string) => {
+                self.no_gc.return_global(string);
+                None
+            }'''
+to = '''            Some(_) => Some(PendingString::Name(id, names::string(id))),'''

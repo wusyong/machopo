@@ -30,12 +30,14 @@ V8 的 callback（templates.rs 的 Member<M>）
 
 ```text
 V8 的 callback（templates.rs 的 InfoMember<M>）
-└─ InfoFront<'s>：info、一格「操作後才做完的結果」（多半是空的）
+└─ InfoFront<'s>：只有 info
    ├─ 1. 操作外：字串參數原地借得到的（ASCII 的字面值）直接拿，節點的參數確認是 wrapper：都只用 isolate
    ├─ 2. read / mutate：從 info 借出狀態
-   │     └─ InfoOp<'o, 's>：InfoNoGc（只要 isolate 的 unwrap、回傳，和 OpReturn）、receiver、那一格、快取
-   └─ 3. 操作後：那一格是空的就結束
+   │     └─ InfoOp<'o, 's>：InfoNoGc（只要 isolate 的 unwrap、回傳，和 OpReturn）、receiver、快取
+   └─ 3. 操作後：操作裡給不出去的結果（成員自己的區域變數）做完；沒有就結束
 ```
+
+操作裡給不出去的結果（V8 要配置的：還沒有的字串、沒有 wrapper 的節點、不是 Smi 的數字）不放在 front 裡：`InfoOp` 的 `ret_string`、`ret_node`、`ret_u32`… 回傳它（`PendingString`、節點的 root 和 interface、`f64`），`dom_api` 的回傳型別把它帶出操作（`RetType::Pending`），操作後交給 `finish_string`、`finish_node`、`finish_number`。回傳布林的成員沒有這個變數；其他 front（`V8Front`、named property 的、wasm 的）在操作裡自己留著結果，這幾個型別填 `Infallible`，那一段編掉。
 
 isolate、receiver、參數、回傳值都在用的地方從 info 讀，不建 rusty_v8 的 scope、不建 `Call`；跑的是同一份 `TypedMember::call`。要 V8 配置、丟例外、執行 script 的（參數要 `ToString` 或複製、結果是 V8 還沒有的字串、沒有 wrapper 的節點、不是 Smi 的數字、錯誤、custom element 的 reaction、要告訴 V8 heap 長大了）當場建一個 scope 和上面的 `V8Front`（`InfoFront::with_front`），交給它做，用完就丟；這些路都在 inline 之外。哪個成員走哪個 front 在編譯時決定（`Members::function` 的 `const { M::PLAIN }`）；跨 origin 的物件的成員照舊（它的 callback 先檢查呼叫者）。
 

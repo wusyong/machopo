@@ -338,6 +338,9 @@ impl FrontTypes for TestFront<'_> {
     type Str = String;
     type Node = Taken;
     type Dict = Vec<(&'static str, Option<bool>)>;
+    type PendingString = std::convert::Infallible;
+    type PendingNode = std::convert::Infallible;
+    type PendingNumber = std::convert::Infallible;
 }
 
 impl<'d> Front for TestFront<'d> {
@@ -871,21 +874,29 @@ impl OpFront for TestFront<'_> {
         self.ret = Some(Ret::Bool(value));
     }
 
-    fn ret_u32(&mut self, value: u32) {
+    fn ret_u32(&mut self, value: u32) -> Option<std::convert::Infallible> {
         self.ret = Some(Ret::U32(value));
+        None
     }
 
-    fn ret_f64(&mut self, value: f64) {
+    fn ret_f64(&mut self, value: f64) -> Option<std::convert::Infallible> {
         self.ret = Some(Ret::F64(value));
+        None
     }
 
-    fn ret_string(&mut self, value: &DomString) {
+    fn ret_string(&mut self, value: &DomString) -> Option<std::convert::Infallible> {
         self.hooks.string_refs = Some(value.reference_count());
         self.ret = Some(Ret::Str(value.clone()));
+        None
     }
 
-    fn ret_node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, node: NodeRef<'gc>) {
+    fn ret_node<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        node: NodeRef<'gc>,
+    ) -> Option<std::convert::Infallible> {
         self.ret = Some(Ret::Node(cx.root(node)));
+        None
     }
 
     fn ret_strings(&mut self, strings: Vec<DomString>) {
@@ -894,7 +905,7 @@ impl OpFront for TestFront<'_> {
 
     fn ret_new_node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, node: NodeRef<'gc>) {
         self.hooks.new_nodes += 1;
-        self.ret_node(cx, node);
+        let None = self.ret_node(cx, node);
     }
 }
 

@@ -9,7 +9,14 @@
 | 1 原型和量測（不合併） | 完成 | 2026-11-11 |
 | 2 字串參數已經是字串就不轉換 | 完成 | 2026-11-11 |
 | 3 front 只拿 callback 的 info：參數和結果單純的成員 | 完成 | 2026-11-11 |
-| 4 階段之間傳有型別的值，拿掉 `V8Front` 和 `Call` | 還沒開始 | |
+| 4a 結果怎麼帶出操作：`RetType::Pending`、`finish`，front 定 `PendingString`、`PendingNode`、`PendingNumber` | 完成 | 2026-11-11 |
+| 4b 新的 front 補上數字、布林、有預設值的參數，回傳不是節點的物件 | 還沒開始 | |
+| 4c 預先建 wrapper 的結果（`createElement`、`cloneNode`、`createTextNode`） | 還沒開始 | |
+| 4d callback、rest、`any` 的參數直接回傳 handle（`addEventListener`、`setTimeout`、`append`） | 還沒開始 | |
+| 4e dictionary、promise、陣列和其餘的參數和結果 | 還沒開始 | |
+| 4f static、constructor、named 和 indexed property 的外殼 | 還沒開始 | |
+| 4g 拿掉 `V8Front`、`Call` 和 `PLAIN`；wasm 的 front 跟上 | 還沒開始 | |
+| 收尾：`nodeType`、`getAttribute` 的 callback 和 Chrome 的逐條指令對照，列出剩下的差（決定 20） | 還沒開始 | |
 
 ## 驗收
 
@@ -259,3 +266,12 @@
 - fork 的 commit `097b54c`，`third_party.toml` 釘到它。fork 的兩個 commit（`2be356e`、`097b54c`）都還沒 push：merge 回 `main` 之前要先 push。
 
 **第 2、3 段在 Speedometer 上**（2026-11-11，使用者要求；數字在 RFC 0012 的 `progress.md`）：`main`（加上這裡的 fork 的 pin，本地的 branch `0097-baseline`）對第 3 段做完的 `6db8168`，各 3 次：20 個 suite 的幾何平均 −0.9%，中位數的合計 984.2 → 976.1 ms（−8.1 ms）。17 個 suite 變快、3 個變慢，多數的 95% 區間重疊：方向一致，大小在雜訊的邊緣。微基準上每次呼叫省 8% 到 25% 的 cycle，在 Speedometer 上是不到 1%：它的時間大半在 JS、style、layout，binding 每次呼叫的固定成本只是其中一小塊，而且真的頁面打到的成員有一半還沒走新的 front。
+
+**第 4a 段：結果怎麼帶出操作**（2026-11-11）：
+
+- `dom_api`：`FrontTypes` 的 `PendingString`、`PendingNode`、`PendingNumber`；`OpFront` 的 `ret_string`、`ret_name`、`ret_node`、`ret_u32`、`ret_i32`、`ret_f64` 回傳 `Option<Self::Pending…>`（`#[must_use]`）；`Front` 的 `finish_string`、`finish_node`、`finish_number`（預設 `unreachable!`）；`Front::Op` 多三個相等的限制；`RetType` 的 `type Pending<F: FrontTypes>`、`give` 回傳它、`finish`。數字、字串、節點的回傳型別（和 `Option<HTMLCollectionOrElement>`、`Option<RadioNodeListOrElement>`、`ReaderResult`、`CanvasStyleValue`、`Hidden`）用 `pending!`，其餘 36 個用 `no_pending!`（`()`）。`ret_new_node` 的預設實作斷言沒有東西留下（留節點的 front 自己給新節點：4c）。
+- `dom_api_macros`：getter、method、做完 script 才給結果的那種，把 `give` 的回傳值帶出操作、交給 `RetType::finish`，再呼叫 `Front::finish`（舊的 front 還用它，4g 拿掉）；`[CEReactions]` 的操作回傳 `(結果留下的, 有沒有留下 queue)`。node interface 的兩個回傳型別帶 `PendingNode`。
+- `dom_js`：`InfoFront` 只剩 info（原本的一格 `Pending`、`ManuallyDrop` 和 `end` 拿掉）；`PendingString` 是它自己的 enum（任何字串，或一個名稱的：名稱的 V8 字串照編號存，不走字串的快取）、`PendingNode` 是 root 和 interface、`PendingNumber` 是 `f64`；`finish_string`、`finish_node`、`finish_number` 在 inline 之外交給 `V8Front`。`V8Front`、`V8Op`、named property 的 front，`dom_wasm` 的 front 和測試的 front 填 `Infallible`、回傳 `None`：照舊自己留著結果。
+- 第 3 段和這一段的 binary 各跑三次取最小（`perf stat`，指令數（cycle））：`nodeType` 115（24）→ 107（20），`firstChild` 140（28）→ 127（22），`parentNode` 139（28）→ 124（23），`tagName` 244（49）→ 239（48），`id` 252（58）→ 246（53），`className` 231（47）→ 224（41），`hasAttribute` 504（124）→ 496（118），`getAttribute` 565（133）→ 559（126），`id =` 898（183）→ 890（183），`setAttribute` 1092（222）→ 1084（217），`appendChild` 1266（208）→ 1253（204），`textContent =` 2004（427）→ 1998（430）；不是 `PLAIN` 的 `createElement` 2055 → 2053、`addEventListener` 856 → 854、`dispatchEvent` 3424 → 3422。最簡單的 getter 整個約 20 個 cycle（Chrome 約 17），扣掉 V8 的地板 machopo 自己約 9、Chrome 約 6。
+- 測試：`dom_js` 的 `info_front` 多一條（名稱的字串做過一次之後不再建 scope）；行為由原有的測試守著。mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4a.toml`，11 個都抓到。
+- 跑過：`cargo test -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`、`cargo fmt --check`、`test.py wpt dom/nodes`。`cargo test --workspace` 和 clippy 等第 4 段全部做完。

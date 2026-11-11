@@ -1772,12 +1772,18 @@ impl<'s, A: CallArgs<'s>> FrontTypes for V8Front<'_, 's, '_, '_, A> {
     type Str = ArgString<'s>;
     type Node = v8::Local<'s, v8::Object>;
     type Dict = v8::Local<'s, v8::Object>;
+    type PendingString = std::convert::Infallible;
+    type PendingNode = std::convert::Infallible;
+    type PendingNumber = std::convert::Infallible;
 }
 
 impl<'s, A: CallArgs<'s>> FrontTypes for V8Op<'_, 's, '_, '_, A> {
     type Str = ArgString<'s>;
     type Node = v8::Local<'s, v8::Object>;
     type Dict = v8::Local<'s, v8::Object>;
+    type PendingString = std::convert::Infallible;
+    type PendingNode = std::convert::Infallible;
+    type PendingNumber = std::convert::Infallible;
 }
 
 impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
@@ -3796,18 +3802,20 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
 
     /// A Smi's at once; past one a heap number, made after the operation.
     #[inline]
-    fn ret_u32(&mut self, value: u32) {
+    fn ret_u32(&mut self, value: u32) -> Option<std::convert::Infallible> {
         if !self.call.rv.op().set_smi_u32(value) {
             self.keep(Kept::U32(value));
         }
+        None
     }
 
     /// A Smi's at once; past one a heap number, made after the operation.
     #[inline]
-    fn ret_i32(&mut self, value: i32) {
+    fn ret_i32(&mut self, value: i32) -> Option<std::convert::Infallible> {
         if !self.call.rv.op().set_smi_i32(value) {
             self.keep(Kept::F64(value.into()));
         }
+        None
     }
 
     /// The value as it is (V8's handle), undefined if none.
@@ -3829,7 +3837,7 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
     /// A Smi's at once (an integer in its range, not -0); another a heap
     /// number, made after the operation.
     #[inline]
-    fn ret_f64(&mut self, value: f64) {
+    fn ret_f64(&mut self, value: f64) -> Option<std::convert::Infallible> {
         let integer = value.fract() == 0.0
             && value.abs() <= f64::from(i32::MAX)
             && !(value == 0.0 && value.is_sign_negative());
@@ -3842,13 +3850,14 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
         {
             self.keep(Kept::F64(value));
         }
+        None
     }
 
     /// The string's cached V8 string, returned from the cache's weak handle
     /// (no local handle made, as Blink's `StringCache` returns its
     /// persistent); else kept, made after the operation.
     #[inline]
-    fn ret_string(&mut self, value: &DomString) {
+    fn ret_string(&mut self, value: &DomString) -> Option<std::convert::Infallible> {
         let returned = self
             .caches
             .strings
@@ -3857,12 +3866,13 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
         if !returned {
             self.keep(Kept::String(value.clone()));
         }
+        None
     }
 
     /// The name's V8 string, made once a DOM (Blink's `QualifiedName`s keep
     /// theirs in `StringCache` too), returned from its global with no
     /// local handle made, as V8's `ReturnValue::Set(const Global&)`.
-    fn ret_name(&mut self, id: NameId) {
+    fn ret_name(&mut self, id: NameId) -> Option<std::convert::Infallible> {
         match usize::try_from(id)
             .ok()
             .and_then(|index| self.caches.names.get(index))
@@ -3871,18 +3881,24 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
             Some(string) => self.no_gc.return_global(&mut self.call.rv.op(), string),
             None => self.keep(Kept::Name(id, names::string(id))),
         }
+        None
     }
 
     /// The node's wrapper, written from the node's reference to it (no
     /// local handle made), if it has one.
     #[inline]
-    fn ret_node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, node: NodeRef<'gc>) {
+    fn ret_node<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        node: NodeRef<'gc>,
+    ) -> Option<std::convert::Infallible> {
         if !self
             .no_gc
             .return_wrapper(&mut self.call.rv.op(), cx.wrapper_edge(node))
         {
             self.keep_node(cx, node);
         }
+        None
     }
 
     #[inline]
@@ -3902,7 +3918,7 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
                 if prepared.is_some() {
                     count(&self.caches.wrappers_wasted);
                 }
-                self.ret_node(cx, node);
+                let None = self.ret_node(cx, node);
             }
         }
     }

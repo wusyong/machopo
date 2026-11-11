@@ -131,6 +131,8 @@ fn a_plain_call_that_allocates_or_throws_makes_a_scope() {
     for (source, value) in [
         ("n.getAttribute('data-y')", "y"),
         ("n.firstChild.tagName", "B"),
+        // A name's string is kept by its number, not as any string's.
+        ("d.createElement('section').tagName", "SECTION"),
     ] {
         assert_eq!(scopes(&mut env, source), (value.into(), 0), "{source}");
     }

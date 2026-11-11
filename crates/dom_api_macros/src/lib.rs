@@ -1531,7 +1531,10 @@ fn getter(iface: &Ident, ty: &Type, get: &Path) -> Tokens {
                 })
             });
             match #result {
-                ::std::result::Result::Ok(()) => #front.finish(),
+                ::std::result::Result::Ok(#value) => {
+                    <#ty as #api::typed::RetType>::finish(#front, #value);
+                    #front.finish();
+                }
                 ::std::result::Result::Err(#error) => #front.throw(#error),
             }
         }
@@ -1596,9 +1599,9 @@ fn ce_scope(ce_reactions: bool, cx: &Ident, result: &Ident, steps: Tokens) -> To
     let api = api();
     quote! {
         let scope = ::dom::CeReactionsScope::enter(#cx);
-        let #result: ::std::result::Result<(), #api::ApiError> = { #steps };
-        #result?;
-        ::std::result::Result::<bool, #api::ApiError>::Ok(scope.leave())
+        let #result: ::std::result::Result<_, #api::ApiError> = { #steps };
+        let #result = #result?;
+        ::std::result::Result::<_, #api::ApiError>::Ok((#result, scope.leave()))
     }
 }
 
@@ -1611,11 +1614,11 @@ fn ce_invoke(ce_reactions: bool, front: &Ident, result: &Ident) -> Tokens {
     }
     quote! {
         let #result = match #result {
-            ::std::result::Result::Ok(left) => {
+            ::std::result::Result::Ok((given, left)) => {
                 if left {
                     #front.invoke_ce_reactions();
                 }
-                ::std::result::Result::Ok(())
+                ::std::result::Result::Ok(given)
             }
             ::std::result::Result::Err(error) => {
                 #front.invoke_ce_reactions();
@@ -1716,8 +1719,9 @@ fn method(
                 let #names = <#types as #api::typed::ArgType>::param(#op, #cx, &#names, #param_indices)?;
             )*
             let #value = #function(#front_arg #cx #this_arg #(, #names)*)?;
-            <#ret as #api::typed::RetType>::give(#op, #cx, ::std::convert::Into::into(#value));
-            ::std::result::Result::Ok(())
+            ::std::result::Result::Ok(
+                <#ret as #api::typed::RetType>::give(#op, #cx, ::std::convert::Into::into(#value))
+            )
         },
     );
     let ce_invoke = ce_invoke(ce_reactions, &front, &result);
@@ -1747,7 +1751,10 @@ fn method(
             #(#api::typed::release(#names);)*
             #ce_invoke
             match #result {
-                ::std::result::Result::Ok(()) => #front.finish(),
+                ::std::result::Result::Ok(#value) => {
+                    <#ret as #api::typed::RetType>::finish(#front, #value);
+                    #front.finish();
+                }
                 ::std::result::Result::Err(#error) => <#ret as #api::typed::RetType>::fail(#front, #error),
             }
         }
@@ -1884,10 +1891,11 @@ fn script_method(
             };
             match #function(&mut #api::typed::FrontHost(&mut *#front), #this_ #(, #names)*) {
                 ::std::result::Result::Ok(#value) => {
-                    #front.read(|#cx, #op| {
-                        <#ret as #api::typed::RetType>::give(#op, #cx, #api::typed::Unroot::unroot(#value, #cx));
+                    let #value = #front.read(|#cx, #op| {
+                        <#ret as #api::typed::RetType>::give(#op, #cx, #api::typed::Unroot::unroot(#value, #cx))
                     });
                     #ce_leave_invoke
+                    <#ret as #api::typed::RetType>::finish(#front, #value);
                     #front.finish();
                 }
                 ::std::result::Result::Err(#error) => {
@@ -2026,6 +2034,11 @@ fn dictionary_items(dictionary: &DictionaryDef) -> Tokens {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Dictionary(#name_str);
             type Ret<'gc> = #name;
 
+            type Pending<F: #api::typed::FrontTypes> = ();
+
+            #[inline(always)]
+            fn finish<F: #api::typed::Front>(_: &mut F, (): ()) {}
+
             fn give<'gc, O: #api::typed::OpFront>(#front: &mut O, _: &#api::ApiCx<'_, 'gc>, #value: #name) {
                 let mut #dict = ::std::vec::Vec::new();
                 #(#outs)*
@@ -2128,6 +2141,11 @@ fn object_types(name: &Ident) -> Tokens {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Node(stringify!(#name));
             type Ret<'gc> = #object::Ref<'gc>;
 
+            type Pending<F: #api::typed::FrontTypes> = ();
+
+            #[inline(always)]
+            fn finish<F: #api::typed::Front>(_: &mut F, (): ()) {}
+
             fn give<'gc, O: #api::typed::OpFront>(#front: &mut O, #cx: &#api::ApiCx<'_, 'gc>, #value: Self::Ret<'gc>) {
                 #api::typed::give_object::<#name, O>(#front, #cx, #value);
             }
@@ -2136,6 +2154,11 @@ fn object_types(name: &Ident) -> Tokens {
         impl #api::typed::RetType for ::std::option::Option<#name> {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::NullableNode(stringify!(#name));
             type Ret<'gc> = ::std::option::Option<#object::Ref<'gc>>;
+
+            type Pending<F: #api::typed::FrontTypes> = ();
+
+            #[inline(always)]
+            fn finish<F: #api::typed::Front>(_: &mut F, (): ()) {}
 
             fn give<'gc, O: #api::typed::OpFront>(#front: &mut O, #cx: &#api::ApiCx<'_, 'gc>, #value: Self::Ret<'gc>) {
                 match #value {
@@ -2191,6 +2214,20 @@ fn node_types(name: &Ident) -> Tokens {
     let (front, cx, value, index) = (local("front"), local("cx"), local("value"), local("index"));
     let taken = local("taken");
     let node = local("node");
+    // What a node result leaves for after the operation, finished.
+    let pending_node = quote! {
+        type Pending<F: #api::typed::FrontTypes> = ::std::option::Option<F::PendingNode>;
+
+        #[inline(always)]
+        fn finish<F: #api::typed::Front>(
+            front: &mut F,
+            pending: ::std::option::Option<F::PendingNode>,
+        ) {
+            if let ::std::option::Option::Some(pending) = pending {
+                front.finish_node(pending);
+            }
+        }
+    };
     quote! {
         impl #api::typed::ArgType for #name {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Node(stringify!(#name));
@@ -2217,12 +2254,14 @@ fn node_types(name: &Ident) -> Tokens {
             const PLAIN: bool = true;
             type Ret<'gc> = ::dom::NodeRef<'gc>;
 
+            #pending_node
+
             fn give<'gc, O: #api::typed::OpFront>(
                 #front: &mut O,
                 #cx: &#api::ApiCx<'_, 'gc>,
                 #value: ::dom::NodeRef<'gc>,
-            ) {
-                #front.ret_node(#cx, #value);
+            ) -> ::std::option::Option<O::PendingNode> {
+                #front.ret_node(#cx, #value)
             }
         }
 
@@ -2260,14 +2299,19 @@ fn node_types(name: &Ident) -> Tokens {
             const PLAIN: bool = true;
             type Ret<'gc> = ::std::option::Option<::dom::NodeRef<'gc>>;
 
+            #pending_node
+
             fn give<'gc, O: #api::typed::OpFront>(
                 #front: &mut O,
                 #cx: &#api::ApiCx<'_, 'gc>,
                 #value: ::std::option::Option<::dom::NodeRef<'gc>>,
-            ) {
+            ) -> ::std::option::Option<O::PendingNode> {
                 match #value {
                     ::std::option::Option::Some(#node) => #front.ret_node(#cx, #node),
-                    ::std::option::Option::None => #front.ret_null(),
+                    ::std::option::Option::None => {
+                        #front.ret_null();
+                        ::std::option::Option::None
+                    }
                 }
             }
         }

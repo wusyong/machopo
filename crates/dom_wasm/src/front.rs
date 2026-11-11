@@ -1006,6 +1006,9 @@ impl<'r, A> FrontTypes for WasmFront<'r, '_, A> {
     type Node = u32;
     // No dictionary is plain: no member taking one is bound.
     type Dict = ();
+    type PendingString = std::convert::Infallible;
+    type PendingNode = std::convert::Infallible;
+    type PendingNumber = std::convert::Infallible;
 }
 
 impl<'r, 'g, A: ReadArgs> Front for WasmFront<'r, 'g, A> {
@@ -1207,28 +1210,37 @@ impl<'r, A: ReadArgs> OpFront for WasmFront<'r, '_, A> {
         self.ret = Ret::Bool(value);
     }
 
-    fn ret_u32(&mut self, value: u32) {
+    fn ret_u32(&mut self, value: u32) -> Option<std::convert::Infallible> {
         self.ret = Ret::U32(value);
+        None
     }
 
-    fn ret_f64(&mut self, value: f64) {
+    fn ret_f64(&mut self, value: f64) -> Option<std::convert::Infallible> {
         self.ret = Ret::F64(value);
+        None
     }
 
-    fn ret_i32(&mut self, value: i32) {
+    fn ret_i32(&mut self, value: i32) -> Option<std::convert::Infallible> {
         self.ret = Ret::I32(value);
+        None
     }
 
-    fn ret_string(&mut self, value: &DomString) {
+    fn ret_string(&mut self, value: &DomString) -> Option<std::convert::Infallible> {
         // A copy: wasmtime lowers no `Rc<str>`, and a `DomString` is its
         // thread's (wasmtime copies it into the guest again).
         self.ret = Ret::Str(Box::from(&*value.to_str()));
+        None
     }
 
     /// The store's handle to the node: the one it has, or a new one.
-    fn ret_node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, node: NodeRef<'gc>) {
+    fn ret_node<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        node: NodeRef<'gc>,
+    ) -> Option<std::convert::Infallible> {
         let handle = self.tables.borrow_mut().give(cx, self.store, node.into());
         self.ret = Ret::Node(handle);
+        None
     }
 
     /// The store's handle to the object, as a node's.

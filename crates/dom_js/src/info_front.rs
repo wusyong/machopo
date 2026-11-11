@@ -4,16 +4,17 @@
 //! whose results are numbers, booleans, strings, nodes, null or nothing
 //! (`dom_api::TypedMember::PLAIN`), which most calls are.
 //!
-//! It holds the info and one result left for after the operation, nothing
-//! made for a call that returns at once: no scope of rusty_v8's, no
-//! `front::Call`. The isolate, the receiver, the arguments and the result
+//! It holds the info alone: no scope of rusty_v8's, no `front::Call`. A
+//! result the operation can't give (V8 would allocate) is the member's
+//! own, carried out of the operation by its return type
+//! (`dom_api::RetType::Pending`: a `PendingString`, a node's root, a
+//! number) and handed back to `finish_string`, `finish_node` or
+//! `finish_number`; a member that gives none carries nothing. The isolate, the receiver, the arguments and the result
 //! are read from the info where they are used. What allocates in V8,
 //! throws or runs script (an argument to convert or copy, a string V8 has
 //! no copy of, a node with no wrapper, an error, an element's reactions)
 //! makes a scope and the whole front end (`front::V8Front`) then, out of
 //! line, and is done by it.
-
-use std::mem::ManuallyDrop;
 
 use dom::{DomString, NameId, Node, NodeRef, NodeRoot, names};
 use dom_api::{ApiCx, ApiError, Front, FrontTypes, OpFront};
@@ -22,35 +23,25 @@ use crate::front::{self, Checked, V8Front};
 use crate::state::{self, Caches, State};
 use crate::strings::ArgString;
 
-/// A result the operation couldn't give V8 (it would allocate): what
-/// `InfoFront::finish` gives it after.
-enum Pending {
-    /// A number past a Smi.
-    Number(f64),
+/// A string the operation couldn't give V8 (it would allocate one): what
+/// `InfoFront::finish_string` makes after.
+pub(crate) enum PendingString {
     /// A string V8 has no copy of.
     String(DomString),
     /// A name's string, not made yet.
     Name(NameId, DomString),
-    /// A node with no wrapper, and its interface.
-    Node(NodeRoot, usize),
 }
 
 /// A plain member's call out of its operation.
 pub(crate) struct InfoFront<'s> {
     info: bindings::StateInfo<'s, State>,
-    /// Dropped by `end`, out of line and only if set: most calls leave
-    /// none, and the drop glue is a call each would make (as
-    /// `front::Call`'s boxes).
-    pending: ManuallyDrop<Option<Pending>>,
 }
 
 /// A plain member's call in its operation: what of V8 it may use and the
-/// result (`InfoNoGc`), the receiver, where a result that must wait goes,
-/// and the state's caches it reads.
+/// result (`InfoNoGc`), the receiver, and the state's caches it reads.
 pub(crate) struct InfoOp<'o, 's> {
     no_gc: bindings::InfoNoGc<'o, 's>,
     this: bindings::Receiver<'s>,
-    pending: &'o mut Option<Pending>,
     caches: &'o Caches,
 }
 
@@ -58,12 +49,22 @@ impl<'s> FrontTypes for InfoFront<'s> {
     type Str = ArgString<'s>;
     type Node = v8::Local<'s, v8::Object>;
     type Dict = v8::Local<'s, v8::Object>;
+    type PendingString = PendingString;
+    /// A node with no wrapper, rooted, and its interface.
+    type PendingNode = (NodeRoot, usize);
+    /// A number that is no Smi.
+    type PendingNumber = f64;
 }
 
 impl<'s> FrontTypes for InfoOp<'_, 's> {
     type Str = ArgString<'s>;
     type Node = v8::Local<'s, v8::Object>;
     type Dict = v8::Local<'s, v8::Object>;
+    type PendingString = PendingString;
+    /// A node with no wrapper, rooted, and its interface.
+    type PendingNode = (NodeRoot, usize);
+    /// A number that is no Smi.
+    type PendingNumber = f64;
 }
 
 impl<'s> InfoFront<'s> {
@@ -74,26 +75,7 @@ impl<'s> InfoFront<'s> {
             bindings::trace::in_script(),
             "a DOM member is called from script that the engine didn't count as entered"
         );
-        Self {
-            info,
-            pending: ManuallyDrop::new(None),
-        }
-    }
-
-    /// The call's end: nothing to drop unless a result was left and never
-    /// finished (a call that failed after it), looked at inline (the drop
-    /// glue is a call every member's would make).
-    #[inline(always)]
-    pub(crate) fn end(&mut self) {
-        if self.pending.is_some() {
-            self.drop_pending();
-        }
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn drop_pending(&mut self) {
-        drop(self.pending.take());
+        Self { info }
     }
 
     /// `f` of the whole front end, a scope made for it: what allocates,
@@ -141,22 +123,6 @@ impl<'s> InfoFront<'s> {
         self.info
             .with_scope(|mut scope, _| state::report_these(&mut scope, microtasks, used));
     }
-
-    #[cold]
-    #[inline(never)]
-    fn finish_pending(&mut self) {
-        let Some(pending) = self.pending.take() else {
-            return;
-        };
-        self.with_front(|front| {
-            front.finish_kept_as(match pending {
-                Pending::Number(number) => front::Kept::F64(number),
-                Pending::String(string) => front::Kept::String(string),
-                Pending::Name(id, name) => front::Kept::Name(id, name),
-                Pending::Node(node, interface) => front::Kept::Node(node, interface),
-            });
-        });
-    }
 }
 
 impl<'s> Front for InfoFront<'s> {
@@ -175,7 +141,6 @@ impl<'s> Front for InfoFront<'s> {
         let mut op = InfoOp {
             no_gc,
             this,
-            pending: &mut self.pending,
             caches: &state.caches,
         };
         state
@@ -199,7 +164,6 @@ impl<'s> Front for InfoFront<'s> {
         let mut op = InfoOp {
             no_gc,
             this,
-            pending: &mut self.pending,
             caches,
         };
         dom.mutate(|cx| f(&ApiCx::with_layout_cell(cx, layout), &mut op))
@@ -254,19 +218,36 @@ impl<'s> Front for InfoFront<'s> {
         self.with_front(|front| front.node_arg(index))
     }
 
-    #[inline(always)]
-    fn finish(&mut self) {
-        if self.pending.is_some() {
-            self.finish_pending();
-        }
+    /// A string V8 had no copy of: made (and cached) now.
+    #[cold]
+    #[inline(never)]
+    fn finish_string(&mut self, pending: PendingString) {
+        self.with_front(|front| {
+            front.finish_kept_as(match pending {
+                PendingString::String(string) => front::Kept::String(string),
+                PendingString::Name(id, name) => front::Kept::Name(id, name),
+            });
+        });
+    }
+
+    /// A node with no wrapper: one made now, in an operation of its own.
+    #[cold]
+    #[inline(never)]
+    fn finish_node(&mut self, (node, interface): (NodeRoot, usize)) {
+        self.with_front(|front| front.finish_kept_as(front::Kept::Node(node, interface)));
+    }
+
+    /// A number that is no Smi: a heap number.
+    #[cold]
+    #[inline(never)]
+    fn finish_number(&mut self, number: f64) {
+        self.with_front(|front| front.finish_kept_as(front::Kept::F64(number)));
     }
 
     #[cold]
     #[inline(never)]
     fn throw(&mut self, error: ApiError) {
         // What the operation left before it failed isn't the result.
-        // A member's function fails before its result is given.
-        debug_assert!(self.pending.is_none(), "a failed call left a result");
         self.with_front(|front| front.throw(error));
     }
 
@@ -317,80 +298,80 @@ impl<'s> OpFront for InfoOp<'_, 's> {
 
     /// A Smi's at once; past one a heap number, made after the operation.
     #[inline(always)]
-    fn ret_u32(&mut self, value: u32) {
-        if !self.no_gc.ret().set_smi_u32(value) {
-            *self.pending = Some(Pending::Number(value.into()));
-        }
+    fn ret_u32(&mut self, value: u32) -> Option<f64> {
+        (!self.no_gc.ret().set_smi_u32(value)).then(|| value.into())
     }
 
     #[inline(always)]
-    fn ret_i32(&mut self, value: i32) {
-        if !self.no_gc.ret().set_smi_i32(value) {
-            *self.pending = Some(Pending::Number(value.into()));
-        }
+    fn ret_i32(&mut self, value: i32) -> Option<f64> {
+        (!self.no_gc.ret().set_smi_i32(value)).then(|| value.into())
     }
 
     /// A Smi's at once (an integer in its range, not -0); another a heap
     /// number, made after the operation.
     #[inline(always)]
-    fn ret_f64(&mut self, value: f64) {
+    fn ret_f64(&mut self, value: f64) -> Option<f64> {
         let integer = value.fract() == 0.0
             && value.abs() <= f64::from(i32::MAX)
             && !(value == 0.0 && value.is_sign_negative());
-        if !(integer
+        let given = integer
             && self
                 .no_gc
                 .ret()
-                .set_smi_i32(base::numerics::saturated_cast::<i32, f64>(value)))
-        {
-            *self.pending = Some(Pending::Number(value));
-        }
+                .set_smi_i32(base::numerics::saturated_cast::<i32, f64>(value));
+        (!given).then_some(value)
     }
 
     /// The string's cached V8 string, returned from the cache's weak
     /// handle; else made after the operation.
     #[inline(always)]
-    fn ret_string(&mut self, value: &DomString) {
+    fn ret_string(&mut self, value: &DomString) -> Option<PendingString> {
         let returned = self
             .caches
             .strings
             .find(value)
             .is_some_and(|weak| self.no_gc.return_weak(weak));
-        if !returned {
-            *self.pending = Some(Pending::String(value.clone()));
-        }
+        (!returned).then(|| PendingString::String(value.clone()))
     }
 
     /// The name's V8 string, returned from its global; else made after
     /// the operation.
     #[inline(always)]
-    fn ret_name(&mut self, id: NameId) {
+    fn ret_name(&mut self, id: NameId) -> Option<PendingString> {
         match usize::try_from(id)
             .ok()
             .and_then(|index| self.caches.names.get(index))
             .and_then(Option::as_ref)
         {
-            Some(string) => self.no_gc.return_global(string),
-            None => *self.pending = Some(Pending::Name(id, names::string(id))),
+            Some(string) => {
+                self.no_gc.return_global(string);
+                None
+            }
+            None => Some(PendingString::Name(id, names::string(id))),
         }
     }
 
     /// The node's wrapper, written from the node's reference to it; else
     /// made after the operation.
     #[inline(always)]
-    fn ret_node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, node: NodeRef<'gc>) {
-        if !self.no_gc.return_wrapper(cx.wrapper_edge(node)) {
-            self.keep_node(cx, node);
+    fn ret_node<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        node: NodeRef<'gc>,
+    ) -> Option<(NodeRoot, usize)> {
+        if self.no_gc.return_wrapper(cx.wrapper_edge(node)) {
+            return None;
         }
+        Some(self.root_node(cx, node))
     }
 }
 
 impl InfoOp<'_, '_> {
-    /// A node with no wrapper, kept for after the operation: out of line,
-    /// as `front::V8Op`'s (its interface's lookup).
+    /// A node with no wrapper, rooted for after the operation, and its
+    /// interface: out of line, as `front::V8Op`'s (the interface's lookup).
     #[cold]
     #[inline(never)]
-    fn keep_node<'gc>(&mut self, cx: &dom::Cx<'_, 'gc>, node: NodeRef<'gc>) {
-        *self.pending = Some(Pending::Node(cx.root(node), front::interface_of(cx, node)));
+    fn root_node<'gc>(&mut self, cx: &dom::Cx<'_, 'gc>, node: NodeRef<'gc>) -> (NodeRoot, usize) {
+        (cx.root(node), front::interface_of(cx, node))
     }
 }

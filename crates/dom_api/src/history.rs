@@ -233,6 +233,7 @@ pub struct HistoryState;
 impl RetType for HistoryState {
     const DESC: TypeDesc = TypeDesc::Any;
     type Ret<'gc> = Gc<'gc, History>;
+    crate::typed::no_pending!();
 
     fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, history: Gc<'gc, History>) {
         op.ret_history_state(cx, history);

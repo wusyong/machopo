@@ -896,7 +896,6 @@ impl<M: TypedMember> bindings::StateInfoMethod<State> for InfoMember<M> {
         if M::KIND != MemberKind::Getter {
             front.report();
         }
-        front.end();
     }
 }
 

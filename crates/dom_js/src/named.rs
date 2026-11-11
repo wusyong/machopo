@@ -120,12 +120,18 @@ impl<'s> FrontTypes for PropertyFront<'_, 's, '_> {
     type Str = ArgString<'s>;
     type Node = v8::Local<'s, v8::Object>;
     type Dict = ();
+    type PendingString = std::convert::Infallible;
+    type PendingNode = std::convert::Infallible;
+    type PendingNumber = std::convert::Infallible;
 }
 
 impl<'s> FrontTypes for PropertyOp<'_, 's, '_> {
     type Str = ArgString<'s>;
     type Node = v8::Local<'s, v8::Object>;
     type Dict = ();
+    type PendingString = std::convert::Infallible;
+    type PendingNode = std::convert::Infallible;
+    type PendingNumber = std::convert::Infallible;
 }
 
 impl<'a, 's, 'i> Front for PropertyFront<'a, 's, 'i> {
@@ -272,24 +278,30 @@ impl<'s> OpFront for PropertyOp<'_, 's, '_> {
         *self.got = Got::Bool(value);
     }
 
-    fn ret_u32(&mut self, _: u32) {
+    fn ret_u32(&mut self, _: u32) -> Option<std::convert::Infallible> {
         unreachable!("a named property's operation gives strings")
     }
 
-    fn ret_f64(&mut self, _: f64) {
+    fn ret_f64(&mut self, _: f64) -> Option<std::convert::Infallible> {
         unreachable!("a named property's operation gives strings")
     }
 
-    fn ret_string(&mut self, value: &DomString) {
+    fn ret_string(&mut self, value: &DomString) -> Option<std::convert::Infallible> {
         *self.got = Got::String(value.clone());
+        None
     }
 
     fn ret_strings(&mut self, strings: Vec<DomString>) {
         *self.got = Got::Strings(strings);
     }
 
-    fn ret_node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, node: NodeRef<'gc>) {
+    fn ret_node<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        node: NodeRef<'gc>,
+    ) -> Option<std::convert::Infallible> {
         self.ret_object(cx, ObjectRef::Node(node));
+        None
     }
 
     fn ret_object<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, object: ObjectRef<'gc>) {
