@@ -1,7 +1,7 @@
 # RFC 0007：用 vello_cpu 取代 Skia
 
 - 開始日期：2026-10-05
-- 狀態：🚧 已排程：2026-11-10（接受：2026-11-10；已決定的事項第 7 到 13 條：先嘗試採用 vello_cpu，做完、可行的話下一份 RFC 是 vello_gpu；「待決定」剩下的在各步開始前或看過那一步的結果再定）
+- 狀態：✅ 已完成：2026-11-11（接受、排程：2026-11-10；已決定的事項第 7 到 13 條：先嘗試採用 vello_cpu，做完、可行的話下一份 RFC 是 vello_gpu。Skia 拿掉了，tile 和 canvas 用 vello_cpu 畫；glyph 的 atlas 做了、量了、不採用）
 - 細節：`details.md`
 - 進度和驗收：`progress.md`
 
@@ -9,7 +9,7 @@
 
 拿掉 Skia（skia-safe），machopo 用到 Skia 的每個地方都換成純 Rust 的 crate：tile 和 canvas 的 raster 用 Linebender 的 **vello_cpu**，圖片的解碼和讀尺寸用 image-rs 系列的 crate，JPEG 的編碼用 `jpeg-encoder`，glyph 的 ink bounds 用 skrifa。`raster` crate 對外的 API 不變，compositor、renderer 和 Viz 都不用改。
 
-這是一次嘗試：第 1 步先做原型，跑完測試、看過截圖、量過速度，再決定要不要繼續。Vello 沒有、machopo 的 display list 又用到的功能，在 machopo 的 playback 裡用 vello_cpu 現有的功能組出來，不先 fork Vello；缺的每一項都列在 `docs/` 底下新的一份 `render-gaps.md`（下面只寫檔名）。raster 的結果不再以和 Chromium 逐像素一致為目標。
+這是一次嘗試：先做原型，跑完測試、看過截圖、量過速度，兩個檢查點都通過才換（已決定的事項第 24、26 條）。Vello 沒有、machopo 的 display list 又用到的功能，在 machopo 的 playback 裡用 vello_cpu 現有的功能組出來；Vello 是 machopo 的 fork（上游的 `main` 加上說明文件，沒有改 Vello 的 patch，第 27 條）。缺的每一項都列在 `docs/` 底下新的一份 `render-gaps.md`（下面只寫檔名）。raster 的結果不再以和 Chromium 逐像素一致為目標。
 
 GPU raster（vello_gpu 為主，不能用時退回 vello_cpu）是下一份 RFC，這份只讓 playback 不擋住它。
 
@@ -43,7 +43,7 @@ GPU raster（vello_gpu 為主，不能用時退回 vello_cpu）是下一份 RFC�
 **目標**：
 
 - workspace 裡沒有 skia-safe；`raster` 的 tile 和 canvas 的 raster 都用 vello_cpu。
-- `raster` 對外的 API 不變（`playback`、`ops_for`、`playback_ops`、`playback_into`、`draw_into`、`image_size`、`ink_bounds`、`encode_png`、`encode_jpeg`、`RasterCache`、`Bitmap`、`PlaybackParams`、`BACKEND`），所以 compositor、renderer 和 Viz 都不用跟著改。
+- `raster` 對外的 API 不變（`playback`、`ops_for`、`playback_ops`、`playback_into`、`draw_into`、`image_size`、`ink_bounds`、`encode_png`、`encode_jpeg`、`RasterCache`、`Bitmap`、`PlaybackParams`、`BACKEND`），所以 compositor、renderer 和 Viz 都不用跟著改。做完時的例外：`ink_bounds` 不再拿 `RasterCache`（第 36 條）；為了 playback 的 panic 多了 `RasterCache` 的 `take_failure`、`fail_next_for_testing` 和 `RasterFailure`（第 38 到 40 條）。
 - 現有的 reftest、WPT 的 reftest、情境和端到端測試照樣通過。因為反鋸齒、文字的粗細、JPEG 的解碼而改了預期結果或加了 fuzzy 的，每一個都寫明原因。
 - **playback 不會 panic**：Vello 不支援的功能都在 playback 裡改寫或繞過，不交給 Vello；有測試守著每種 op、filter 和 blend mode 的組合。
 - **缺的功能看得到、追得到**：每一項都在 `render-gaps.md`，上游補上時有測試會失敗（見「追蹤缺的功能」）。
@@ -64,12 +64,12 @@ GPU raster（vello_gpu 為主，不能用時退回 vello_cpu）是下一份 RFC�
 
 給 machopo 的使用者：畫面幾乎一樣。看得出來的差異：
 
-- **文字比較細、淡**，深色背景上的淺色字最明顯：Vello 畫文字不像 Skia 那樣調整 gamma 和對比。這是唯一明顯的外觀差異，第 1 步看過截圖再決定怎麼處理（見「待決定」）。
+- **文字的粗細和 Skia 不同**：淺底的深色字略粗、深底的淺色字比較細、淡，後者最明顯。Vello 畫文字不像 Skia 那樣調整 gamma 和對比。這是唯一明顯的外觀差異，接受（已決定的事項第 45 條）。
 - 合成粗體的粗細略有不同。
 - 大面積、顏色相近的漸層可能有色帶（沒有 dithering）。
 - 反鋸齒的邊和 JPEG 的解碼有放大才看得出來的差異。
 
-捲動、改視窗大小時的 raster 應該快一些（要量）；用到 Vello 沒有的功能的頁面（好幾個 CSS `filter` 串接、四個角半徑不同的 `box-shadow`）那一部分會慢一些。
+捲動、改視窗大小時的 raster（原型時和 Skia 並排量的，第 24、28 條）：圖和色塊多的頁面每個 tile 快 15% 到 40%，文字多的頁面是 Skia 的 1.0 到 1.7 倍（沒有 glyph 的快取，第 46 條）。用到 Vello 沒有的功能的頁面（好幾個 CSS `filter` 串接、四個角半徑不同的 `box-shadow`）那一部分另外多一次離屏。
 
 給之後改 machopo 的人：
 
@@ -87,17 +87,19 @@ GPU raster（vello_gpu 為主，不能用時退回 vello_cpu）是下一份 RFC�
 - **每條 raster 的 thread 一個 `RenderContext`**，tile 和 tile 之間 `reset` 重用（今天每條 thread 重用 pixel buffer 的做法）。vello_cpu 的多執行緒不開：machopo 已經是一條 thread 畫一個 tile（`--num-raster-threads`），而且 vello_cpu 開多執行緒時連單一的 filter 都會 panic。
 - **起始的 transform**：位移到 tile 的原點，再乘上 `contents_scale`；`SetMatrix` 相對於它（和今天一樣）。
 - **`Save` / `Restore`**：Vello 的 layer 不保存 transform，playback 自己維護堆疊：目前的 `Affine`，以及這一層推了幾個 clip 或 layer，`Restore` 時一一 pop。
-- **`clear_color`** 用 render 時的 `TargetInit::Clear`；canvas 的 `draw_into` 畫在既有的像素上，用 `TargetInit::SrcOver`。
+- **`clear_color`** 用 render 時的 `TargetInit::Clear`。canvas 的 `draw_into` 不直接畫在 bitmap 上：場景的 blend mode 只看得到場景裡的東西，所以先把 bitmap 當成場景的第一樣東西畫進去，op 都畫完才 render 回去（第 37 條）。
 - **直接對應的 op**（`details.md` 的「PaintOp 怎麼對應」）：transform、`ClipRect`、`ClipRRect`、`ClipPath`（不隔離的 `push_clip_path`）、`SaveLayerAlpha`、只有 alpha 和 blend mode 的 `SaveLayer`、`DrawColor`、`DrawRect`、`DrawRRect`、`DrawDRRect`、`DrawLine`、`DrawPath`、`ClearRect`、`DrawClipped`、dash（kurbo 的 stroke）、cap 和 join、28 種 blend mode（peniko 的 Mix 加 Compose）、三種漸層（linear、two-point radial、sweep，Pad、Repeat、Reflect，premultiplied 和 unpremultiplied 的插值）、只有一個 Blur 或 DropShadow 的 filter、不抗鋸齒（`set_aliasing_threshold`）。
 - **Vello 沒有、在 playback 裡組出來的**（`details.md` 的「上游缺什麼」列了每一項的上游狀態，「PaintOp 怎麼對應」逐項寫了做法）：
   - **不支援的 filter**（`ColorMatrix`、`Chain`，vello_common 碰到會 `unimplemented!`）：layer 的內容畫進另一個 `RenderContext` 的 pixmap，machopo 自己套 color matrix（照 Skia：先 unpremultiply），Blur 和 DropShadow 照樣交給 Vello，串接的照順序一個一個做，最後當成圖片、帶著 layer 的 alpha 和 blend mode 畫回去。`ColorMatrix` 上游有 PR 在審（CPU 和 GPU 都做），合了之後單一的 color matrix 直接交給 Vello；串接的沒有人在做，離屏的做法會留著。
-  - **filter 在 tile 邊緣**：`RenderContext` 只畫自己的範圍，tile 外面的內容不會被模糊進來，相鄰的 tile 之間會有接縫。有 filter 的 layer 用比 tile 大、四周加上 filter 的範圍（`filter_expansion`）的 context 畫，render 時用負的位移裁回 tile。原型時先確認接縫真的存在。
+  - **filter 在 tile 邊緣**：`RenderContext` 只畫自己的範圍，tile 外面的內容不會被模糊進來，相鄰的 tile 之間會有接縫。有 filter 的 layer 用比 tile 大、四周加上 filter 的範圍（`filter_expansion`）的 context 畫，render 時用負的位移裁回 tile。切成 tile 畫和整塊畫，在反鋸齒的邊緣和模糊的範圍裡每個 channel 最多差 1（第 33 條）。
   - **path 的 union**（`ClipPaths`）：Vello 沒有 path 的布林運算。把每條 path 照它的 fill rule 畫進一張和 tile 一樣大的 alpha mask，`push_mask_layer`。反鋸齒的邊和 Skia 的 `PathOps` 有一點差異。
   - **陰影和任意形狀的模糊**（`DrawShadow`、`PaintFlags.blur`）：Vello 的 `fill_blurred_rounded_rect` 只有一個圓形的半徑（`_in` 的版本加上 `invert` 給 inset 的陰影），machopo 的 `RRectF` 是四個角各自的橢圓半徑。四個角相同、而且是圓的走 Vello 的快路；其他的圓角矩形和任意形狀包一層 GaussianBlur 的 filter layer（結果一樣，多一次離屏）。
   - **圖案 shader**：`ShaderImage::Record`（SVG 當背景）照當時的 scale 先畫成 pixmap；`spacing`（`background-repeat: space`）畫進四周留了空白的 pixmap；`decal` 改用 clip。
   - **每個 glyph 自己的旋轉**（SVG 的 `rotate`）：拆成一個 glyph 一個 run。
   - **`WritePixels`**（只在 canvas 的錄製裡）：先把前面的 op render 進 bitmap，寫入像素，再接著畫。
-- **mipmap**（`FilterQuality::Medium` 縮小時）：Vello 沒有。圖片快取照取樣的 scale 準備縮小的版本（2 的次方，box filter），playback 選最接近的一張交給 Vello 用 bilinear 取樣。這是 cc 的 `SoftwareImageDecodeCache` 的做法：交給 Skia 的就是預先縮好的圖。`High` 放大時用 Vello 的 bicubic。
+- **mipmap**（`FilterQuality::Medium`、`High` 縮小時，第 34 條）：Vello 沒有。圖片快取的每一項照 cc 的規則（`MipMapUtil::GetLevelForSize`）取一層預先縮好的版本（邊長是原圖除以 2 的次方，從原圖做面積平均，第一次用到時才做），交給 Vello 用 bilinear 畫。這是 cc 的 `SoftwareImageDecodeCache` 的做法：交給 Skia 的就是預先縮好的圖。縮小的層跟著圖片那一項一起留、一起丟，沒有另外的預算（第 48 條）。`High` 放大時用 Vello 的 bicubic。
+- **為了避開上游的 bug 而加的**（原型時找到，`render-gaps.md` 各有一列，回報的草稿在 `upstream-reports.md`）：整個在 context 外面的 clip 不交給 Vello、它底下的東西也不畫，clip 藏起來時也不推 layer（`Player::shows`，第 26、41 條）；結尾硬切的漸層拉長一倍（第 26 條）。
+- **playback 的 panic**（第 30、37 到 40 條）：開著 debug assertions 的 build 不接；release 接住，那個 tile 填成底色、那條 thread 的 context 丟掉重建，記一行 error log，並經過 main thread 在 DevTools 的 Console 加一筆警告。接不接是 `RasterCache` 上的狀態。
 
 ### 文字
 
@@ -108,39 +110,38 @@ GPU raster（vello_gpu 為主，不能用時退回 vello_cpu）是下一份 RFC�
 - 可變字型：`variations` 轉成 normalized 的座標交給 Vello。
 - 合成粗體用 `font_embolden`，合成斜體用 `glyph_transform` 的 skew；粗細要重新對（`docs/limitations.md` 的「Paint 和 raster」的合成粗體那一條跟著改寫）。
 - COLR 和點陣的 emoji（CBDT、sbix）由 glifo 畫，要開 `png` feature。
-- **glyph 的快取不開**：上游標成高度實驗性、不建議用。文字多的 tile 每次都重新攤平輪廓，第 1 步量這個成本。
-- **ink bounds**（`raster::ink_bounds`）改用 skrifa：有輪廓的 glyph 把輪廓畫進 kurbo 的 `BezPath` 取範圍（和 Vello 實際畫出來的一致），點陣的讀 bitmap 的 metrics，再照 embolden、skew 和 stroke 擴大。函式的簽名照舊（`RasterCache` 這個參數留著不用）。
+- **沒有 glyph 的快取**（第 46 條）：每個 glyph 每次都從外框線畫。Vello 的 glyph atlas 做過、量過（文字多的頁面每個 tile 快 3% 到 24%），不採用：glyph 的像素跟著它在 atlas 的位置變，每個 raster thread 又有自己的 atlas，WPT 的 reftest 隨機失敗。改動留在 `atlas/`。
+- **ink bounds**（`raster::ink_bounds`，第 35、36 條）改用 skrifa：有外框線的 glyph 取外框線控制點的範圍（Blink 給 canvas 的 `TextMetrics` 用的也是 path 的範圍），假粗體和畫的時候一樣呼叫 `kurbo::expand_path` 再取範圍，點陣的照 Vello 擺點陣圖的算法算矩形，再照 skew 和 stroke 擴大。留在 `raster`（要和畫出來的一致），不再拿 `RasterCache`。沒有外框線的 COLR glyph 當成沒有墨水，記成缺口。
 
 ### 圖片
 
-- **解碼**：用 `image` crate，關掉預設的 feature、只開要的格式（已決定的事項第 14 條）。它底下是 `png`（machopo 的編碼已經用它，Chromium 的 Skia 也已經改用它）、`zune-jpeg` 和 `gif`；猜格式、各種顏色格式的轉換（調色盤、灰階、16 bit、`tRNS`、interlace、CMYK 的 JPEG）由它做。GIF 只有第一格，和今天一樣。解碼的結果轉成 premultiplied 的 RGBA8，照現在的方式依 `ImageData::id` 快取在 `RasterCache`（每個 compositor 一個）；第 2 步起縮小的版本跟著同一個項目。
-- **什麼時候解碼**（已決定的事項第 18 條）：和今天一樣，第一次畫到那張圖時，在 raster 的 thread 上（compositor thread 或 raster worker）。今天靠 Skia 的懶惰解碼（在 `RasterCache` 的鎖裡只建一個 Skia 的圖片，真的解碼在畫的時候）；`image` 沒有懶惰解碼，所以快取的每個項目是一個只填一次的格子：鎖只用來找到或建立格子，解碼在鎖外面做，兩條 worker 同時要同一張圖時一條解、另一條等它。沒畫到的圖不解碼，main thread 只讀檔頭。Skia 還在畫的期間（第 0 步到第 2 步之間），解好的像素交給 Skia 建成圖片（一次複製），交完就放掉自己那一份。
+- **解碼**：用 `image` crate，關掉預設的 feature、只開要的格式（已決定的事項第 14 條）。它底下是 `png`（machopo 的編碼已經用它，Chromium 的 Skia 也已經改用它）、`zune-jpeg` 和 `gif`；猜格式、各種顏色格式的轉換（調色盤、灰階、16 bit、`tRNS`、interlace、CMYK 的 JPEG）由它做。GIF 只有第一格，和換之前一樣；BMP 和 ICO 也開（Skia 本來就解得開，第 15 條）；JPEG 的 EXIF 方向照 Chrome，尺寸和圖都轉（第 16 條）。解碼的結果轉成 premultiplied 的 RGBA8，照現在的方式依 `ImageData::id` 快取在 `RasterCache`（每個 compositor 一個）；第 2 步起縮小的版本跟著同一個項目。
+- **什麼時候解碼**（已決定的事項第 18 條）：和今天一樣，第一次畫到那張圖時，在 raster 的 thread 上（compositor thread 或 raster worker）。今天靠 Skia 的懶惰解碼（在 `RasterCache` 的鎖裡只建一個 Skia 的圖片，真的解碼在畫的時候）；`image` 沒有懶惰解碼，所以快取的每個項目是一個只填一次的格子：鎖只用來找到或建立格子，解碼在鎖外面做，兩條 worker 同時要同一張圖時一條解、另一條等它。沒畫到的圖不解碼，main thread 只讀檔頭。解好的像素直接是 Vello 畫的那一份。
 - **壞掉和惡意的檔案**（已決定的事項第 20 條）：解碼和讀尺寸都包在 `catch_unwind` 裡，panic 當成解不開；`image` 的 `Limits` 擋住宣稱超大尺寸的檔頭。
 - **讀尺寸**：`image` 只讀檔頭，不解碼。
-- **Skia 今天的行為**（2026-11-10 對著 Skia 寫測試量的）：BMP 和 ICO 也解得開（Skia 的 codec 內建，照內容認，不看 MIME type）；JPEG 的 EXIF 方向，`image_size` 回傳沒轉的尺寸、畫的卻是轉過的圖（40×30、方向是 6 的 JPEG，尺寸是 40×30、Skia 的圖片是 30×40），所以今天這種圖片是變形的。
+- **換之前 Skia 的行為**（2026-11-10 對著 Skia 寫測試量的）：BMP 和 ICO 也解得開（Skia 的 codec 內建，照內容認，不看 MIME type）；JPEG 的 EXIF 方向，`image_size` 回傳沒轉的尺寸、畫的卻是轉過的圖（40×30、方向是 6 的 JPEG，尺寸是 40×30、Skia 的圖片是 30×40），所以那時這種圖片是變形的（第 16 條改掉了）。
 - **JPEG 的解碼和 Skia（libjpeg-turbo）不逐像素相同**（IDCT 和色度 upsampling 的做法）：比對 JPEG 和 PNG 的 reftest 可能要 fuzzy，每個寫明原因。
 - **JPEG 的編碼**：`jpeg-encoder`（純 Rust，已決定的事項第 17 條）。照 Blink 的設定：疊在黑色上，quality 低於 100 時色度是 4:2:0、等於 100 時是 4:4:4；輸出的 bytes 和今天不同，只要解得回來、品質相當。
-- **編碼前轉成不是 premultiplied 的那一步**（PNG 和 JPEG 都用到，今天是 Skia 的 `readPixels`）：換成 machopo 自己的算式。趁 Skia 還在，用一個測試把所有的顏色和 alpha 的組合拿來和 Skia 的結果比，逐位相同之後再拿掉 Skia 的那一段，`toDataURL('image/png')` 的輸出不變。
+- **編碼前轉成不是 premultiplied 的那一步**（PNG 和 JPEG 都用到，今天是 Skia 的 `readPixels`）：換成 machopo 自己的算式。Skia 還在時用一個測試把所有的顏色和 alpha 的組合拿來和 Skia 的結果比過、逐位相同，才拿掉 Skia 的那一段，`toDataURL('image/png')` 的輸出不變。
 
 ### 追蹤缺的功能
 
 Vello 缺的有十來項，分三種：在 playback 裡補上、使用者看不出來的；接受的外觀差異；只在速度上看得出來的。做法：
 
 - **`render-gaps.md`**（已決定的事項第 9 條）：raster 的函式庫缺的每一項一列，包括補在 playback 裡、使用者看不出來的：缺什麼、上游的 issue 或 PR、machopo 補在哪個函式、什麼條件下可以拿掉。只放目前仍然成立的，上游補上、machopo 拿掉補的程式時刪掉那一列。
-  - 第 2 步 merge 時加這份文件；在那之前，清單在 `details.md` 的「上游缺什麼」。
   - `docs/limitations.md` 只留使用者看得到的結果（文字比較細、漸層的色帶），一句話，細節指到 `render-gaps.md`，同一件事不寫兩份。
   - 跟著改的：`docs/README.md` 的「每份文件放什麼」加一列、「其他會牽動文件的變更」加一條（升級 Vello 時逐列確認）；`CLAUDE.md` 的「先讀」加上它。
 - **「上游還缺」的測試**（已決定的事項第 10 條）：Vello 碰到會 panic 的缺口各配一個測試，直接把那個功能交給 Vello，用 `#[should_panic]` 預期它 panic：`ColorMatrix` 和多個 primitive 的 filter graph 這 2 項。升級 Vello 時上游補上了，測試就失敗，訊息寫明可以拿掉 playback 的哪一段（WPT 的預期失敗通過時 wptrunner 報「unexpected pass」是同一個想法）。這樣不用有人定期去看上游的 issue。API 根本不存在、沒有東西可以呼叫的 4 項（單一半徑的模糊圓角矩形、path 的布林運算、mipmap、圖案 shader）測不了，只靠 `render-gaps.md` 和升級時逐列確認。上游如果改成碰到不支援的 filter 就略過、不 panic（有人提過這樣的 PR，沒合就關了），這些測試也會失敗，那時改成檢查畫出來的像素。
 - **程式裡的標記**（已決定的事項第 11 條）：補的地方註解以 `vello:` 開頭，寫缺什麼和上游的 issue（和 fork 裡的 `machopo:` 同一個做法，Chromium 用 `TODO(crbug.com/編號)` 標繞道的地方），例如 `// vello: no ColorMatrix filter (linebender/vello#1296); applied offscreen here.`。`grep` 得到全部、可以和 `render-gaps.md` 對數量，函式改名或搬家也不會失聯。註解不引用 `docs/` 的文件，只寫缺什麼和上游的 issue；方向是 `render-gaps.md` 指向程式碼。這個規則寫在 `render-gaps.md` 的開頭（`raster` 沒有自己的 README）。沒有腳本檢查，補的地方只有幾處，人工對得過來。
-- **測不出來的**：glyph 快取是效能，記在 `docs/test-gaps.md`，寫明升級 Vello 時重新量 `bench.py raster`。
+- **測不出來的**：API 根本不存在的那幾項、只在速度上看得出來的（離 tile 遠的 glyph 不交給 Vello），記在 `docs/test-gaps.md`；升級 Vello 時重新量 `bench.py raster`。
 
 ### Vello 的版本和 fork
 
-- **先不 fork**（已決定的事項第 4 條）。2026-11-10 對照上游的 `main`，沒有非改 Vello 不可的缺口（`details.md` 的「上游缺什麼」）。
-- **可能 fork 的只有 `ColorMatrix`**：第 2 步要 merge 時上游的 PR 還沒合、離屏的做法又量到太慢，才 fork 帶那一個 patch；它本來就是上游的程式，合了之後 fork 就消失。fork 照 parley 的模式：`../third_party` 底下的 vello（`machopo` 分支），只放非改不可的小 patch；`README.machopo.md`、`third_party.toml` 照現有的 fork 的規則。不完全自己接手（像 rusty_v8 那樣）：machopo 還需要上游的 x86 SIMD、glyph 快取和 vello_gpu。
-- 文字的 gamma 和對比、漸層的 dithering：改在上色的核心，上游不一定接受（會改變所有使用者的結果），第 1 步看過截圖再決定（見「待決定」）。
-- 要送上游的 patch，照 `CLAUDE.md`，先在本地寫好草稿給人審。
-- **原型（第 1 步，不 merge）釘上游 `main` 的 commit**（已決定的事項第 21 條）；第 2 步用哪個版本見「待決定」。
+- **開始時不 fork**（已決定的事項第 4 條）：2026-11-10 對照上游的 `main`，沒有非改 Vello 不可的缺口（`details.md` 的「上游缺什麼」）；原型釘上游 `main` 的 commit、用 git 依賴（第 21 條）。
+- **原型做完之後建了 fork**（第 27 條），照 parley 和 taffy 的做法：`wusyong/vello` 的 `machopo` 分支是上游 `main` 的 `112736df24`（2026-11-10）加上 `README.machopo.md` 的 commit，checkout 在 `../third_party/vello`，machopo 用 path 依賴，`third_party.toml` 釘 `rev` 和 `upstream_rev`，patch 在 `patches/vello/`。做完時 fork 上沒有改 Vello 的 patch：有 fork 是為了把這個依賴放進現有的規則，並且在上游修之前能先帶修好的版本。不完全自己接手（像 rusty_v8 那樣）：machopo 還需要上游的 x86 SIMD、glyph 快取和 vello_gpu。
+- **不做進 fork 的**（第 43、45、46 條）：`ColorMatrix`（離屏補的那一段能用，上游的 PR 合了之後拿掉）、文字的 gamma 和對比、漸層的 dithering、glyph atlas 的設定和修正。
+- **多久跟一次上游**（第 49 條）：不定期，有理由時才跟。
+- **回報上游的草稿**在 `upstream-reports.md`（六份），都沒有送出；使用者需要時自己回報。
 
 ### 測試
 
@@ -152,31 +153,22 @@ Vello 缺的有十來項，分三種：在 playback 裡補上、使用者看不�
 - **圖片和編碼**：每種格式的解碼和讀尺寸、壞掉的檔案回傳 `None`；JPEG 編碼後再解碼，和原圖的差在容許範圍內；ink bounds 和輪廓的範圍一致，embolden、skew、旋轉、點陣 glyph。
 - **reftest、WPT 的 reftest、情境**：machopo 沒有存起來的參考圖，reftest 是同一次執行裡畫兩個頁面互相比，兩邊用同一個 renderer，大部分不受影響。會壞的是兩邊用不同方式畫出同一個結果的（文字和色塊比、JPEG 和 PNG 比）。照 `CLAUDE.md` 跑改到的部分，第 2 步的那個 commit 跑 `test.py reftest`、相關目錄的 `test.py wpt`、`test.py scenarios`。每個改了預期結果或加了 fuzzy 的測試，在測試或 `tests/reftests/README.md` 寫明原因。
 - **mutation test**：照 `docs/testing.md` 的「Mutation test」，結果寫進 `progress.md`。
-- **只能人看的**：文字和圖片的外觀（變細、縮小的品質），在 `about:demo` 上和改之前的截圖比，記進 `progress.md` 的「做過的檢查」；`docs/test-gaps.md` 的「測試守不住的地方」記下文字的外觀只靠人看。
-- **量測**：`bench.py raster`（捲動、改視窗大小時 compositor 的 PrepareTiles）、`bench.py blink-perf paint/ image_decoder/`，Skia 和 vello_cpu 各一次（Windows，有 Mac 時加 macOS）。Speedometer 不排，使用者要求時才跑。
+- **只能人看的**：文字和圖片的外觀（變細、縮小的品質），原型時在 `about:demo` 等頁面上和 Skia 的截圖比（第 23 條），記進 `progress.md` 的「做過的檢查」；`docs/test-gaps.md` 的「測試守不住的地方」記下文字的外觀只靠人看。
+- **量測**：`bench.py raster`（捲動、改視窗大小時 compositor 的 PrepareTiles）、`bench.py blink-perf paint/ image_decoder/`，原型時 Skia 和 vello_cpu 並排各跑（Windows；macOS 沒有量）。Speedometer 不排，使用者要求時才跑。
 
 ### 分階段
 
-順序照已決定的事項第 12、13 條；每一步開始前只決定那一步要決定的事。實作在 `0007` 的 branch 上。
+順序照已決定的事項第 12、13 條；每一步開始前只決定那一步要決定的事。實作在 `0007` 的 branch 上。每一步做了什麼、量到什麼見 `progress.md`。
 
-0. **圖片的解碼和 JPEG 的編碼先換**（Skia 照舊畫，做完先 merge）：圖片的解碼和讀尺寸、JPEG 的編碼換成純 Rust 的 crate。解碼的結果當成 raster 的圖片交給 Skia 畫，像素的差異只來自 JPEG 的解碼，預期結果因此要改的在這一步改。排在原型之前（已決定的事項第 13 條）：原型直接拿到純 Rust 解碼的像素，不用寫之後會丟掉的轉接；之後第 2 步改預期結果時，分得出哪些是解碼造成的、哪些是 Vello 造成的；而且不管最後用不用 Vello，這一步都有用（之後加 WebP 只要多一個 crate；Chromium 也是 Skia 照舊畫、PNG 先換成 Rust 的 `png`）。第 1 步的結論是不繼續的話，`main` 上是「Skia 畫、解碼和編碼不是 Skia」，能正常運作。
-1. **原型和量測**（不 merge）：這一步決定要不要繼續，分兩段、各有一個檢查點（已決定的事項第 12 條）。兩段是同一份程式，決定繼續之後整理成第 2 步，不是做完就丟。任何一個檢查點的結論是不能接受，這份 RFC 就回到草稿重新評估，Skia 留著。
-   - **1a. 常用的 op**：vello_cpu 的 playback 先接矩形、圓角、文字、圖片、漸層、基本的 clip 和 layer，沒接的 op 先跳過。
-     - 量 raster 的時間（`bench.py raster`、`bench.py blink-perf paint/`），特別是文字多的 tile。
-     - 存下 `about:demo` 等頁面換之前和換之後的截圖，給人比文字的外觀。
-     - **第一個檢查點**：文字看起來能不能接受、文字多的 tile 快不快。這兩項是最可能讓這份 RFC 停下來的，接完常用的 op 就看得到。這時的數字不含 filter 和陰影，跳過 op 的頁面畫出來是錯的，reftest 的結果還不能看。
-   - **1b. 剩下的 op 和組出來的功能**：接上全部 24 種 op，照上面的做法組出 Vello 沒有的功能。
-     - 跑 `raster` 的測試、reftest、相關的 WPT 的 reftest 和情境，列出哪些不通過、差在哪裡。
-     - 確認 filter 在 tile 邊緣的接縫、unpremultiplied 的漸層插值、不隔離的破壞性 blend mode 在 vello_cpu 上的結果。
-     - 量離屏的 color matrix 和四個角半徑不同的陰影。
-     - **第二個檢查點**：整體的差異能不能接受、要不要 fork。結論寫進 `details.md`。
-2. **playback 換成 vello_cpu、拿掉 skia-safe**：tile 和 canvas 一起換，連同 mipmap 和所有組出來的功能（少了任何一項就會 panic 或退步，所以不再拆）；ink bounds 也在這一步改用 skrifa（Vello 用 skrifa 畫 glyph，和 playback 一起換，量的和畫的始終是同一套）；預期結果在同一個 commit 裡更新；直接替換，不留切換的旗標（已決定的事項第 5、7 條）。同一次改動加上 `render-gaps.md`，並改掉其他文件裡的 Skia：`docs/architecture.md` 的 pipeline 的表、「Crate」的表、「Crate 選型」、「要注意的地方」，`docs/limitations.md`、`docs/testing.md`、根目錄的 `README.md`、`Cargo.toml` 和 `.cargo/config.toml` 裡寫到 Skia 的註解、CI 的 setup action。
-3. **改進**（範圍和順序是已決定的事項第 43 條；第 2 步 merge 之後做）：
-   - **3a. 文字的速度**：Vello 的 glyph atlas（第 28、44 條）。**做了、量了、不採用**（第 46 條）：改動留在 `atlas/`。
+0. **圖片的解碼和 JPEG 的編碼先換**（Skia 照舊畫）：圖片的解碼和讀尺寸、JPEG 的編碼換成純 Rust 的 crate。排在原型之前（第 13 條）：原型直接拿到純 Rust 解碼的像素，不用寫之後會丟掉的轉接；改預期結果時分得出哪些是解碼造成的、哪些是 Vello 造成的；而且不管最後用不用 Vello，這一步都有用（Chromium 也是 Skia 照舊畫、PNG 先換成 Rust 的 `png`）。
+1. **原型和量測**（不 merge；Skia 和 Vello 都編進去、用環境變數切換，第 22 條）：這一步決定要不要繼續，分兩段、各有一個檢查點（第 12 條），程式留著當第 2 步的基礎。
+   - **1a. 常用的 op**：量文字多的 tile、存截圖比文字的外觀。**第一個檢查點通過**（第 24 條）。
+   - **1b. 剩下的 op 和組出來的功能**：用 Vello 把整套測試各跑一次（第 25 條）。**第二個檢查點通過**（第 26 條）。
+2. **playback 換成 vello_cpu、拿掉 skia-safe**，分四段（第 32 條）：2a Vello 成為唯一的 playback、測試搬過來和補齊；2b ink bounds 改用 skrifa、mipmap、拿掉 skia-safe；2c playback 的 panic；2d WPT 的預期結果、`render-gaps.md` 和其他文件裡的 Skia、整個階段的檢查。直接替換，不留切換的旗標（第 5、7 條）。
+3. **改進**（範圍和順序是第 43 條；第 0 到 2 步先 merge 回 `main` 之後做）：
+   - **3a. 文字的速度**：Vello 的 glyph atlas（第 28、44 條）。做了、量了、不採用（第 46 條）：改動留在 `atlas/`。
    - **3b. 量 release 只對 Vello 開整數溢位檢查的代價**：量了，不開（第 47 條）。
-   - 不做：文字的 gamma 和對比（第 45 條）、漸層的 dithering、Vello 的 fork 裡的 `ColorMatrix`、canvas 上破壞性的 blend mode 配落在畫布裡的 clip（第 31、41 條，有頁面碰到才做）。
-
-第 2 步做完，Skia 就完全拿掉了。merge 回 `main` 之後跑 `cargo clean`。
+   - 不做：文字的 gamma 和對比（第 45 條）、漸層的 dithering、Vello 的 fork 裡的 `ColorMatrix`、canvas 上會清掉形狀以外的 blend mode 配落在畫布裡的 clip（第 41、43 條，有頁面碰到才做）。
 
 ## 缺點
 
@@ -185,7 +177,7 @@ Vello 缺的有十來項，分三種：在 playback 裡補上、使用者看不�
 - **machopo 要自己維護組出來的功能**：離屏的 filter、mask 的 union、非單一半徑的陰影、圖案 shader 的 pixmap、mipmap 的快取。這些在 Skia 裡都是現成的，而且離屏比 Skia 的 filter 慢、多用記憶體。
 - **多一份要維護的清單**：`render-gaps.md` 和「上游還缺」的測試，每次升級 Vello 都要對一次。
 - **少了 Skia 現成的、之後的 CSS 會用到的功能**：多步的 filter graph、SVG 的 filter primitive（vello_common 的 enum 列了，但只實作了 Flood、GaussianBlur、Offset、DropShadow）、`mask-image`、`backdrop-filter`、LCD 的文字。到時候要等上游或自己做。
-- **glyph 的快取還是實驗性的**：文字多的 tile 每次都要重新攤平輪廓，可能比 Skia 慢，要在第 1 步量。
+- **沒有 glyph 的快取**：文字多的 tile 每次都要重新攤平輪廓，每個 tile 的時間是 Skia 的 1.0 到 1.7 倍；上游的 atlas 還不能用（第 46 條）。
 
 ## 理由和其他做法
 
@@ -199,8 +191,8 @@ Vello 缺的有十來項，分三種：在 playback 裡補上、使用者看不�
 - **F. 拿掉 tile，每個 frame 整頁直接畫**（GPUI、WebRender、Blitz 的做法，`details.md` 的「GPUI 怎麼畫」）：GPUI 能這樣做是因為它只有 8 種 primitive、clip 只有矩形、沒有 blend mode 和 filter，每個 frame 重畫整個視窗。網頁的內容是任意的，而且捲動和合成動畫要能不重新 raster；這等於放棄 cc 這一層。**不選。**
 
 缺的功能怎麼處理（「詳細設計」的「Vello 的版本和 fork」）：
-- **甲. 不 fork，只在 machopo 的 playback 裡補**（開始時選這個，第 4 條）：沒有同步的成本；2026-11-10 對照上游，缺的都補得起來。
-- **乙. 小 patch 的 fork**（需要時才用）：只在離屏的做法量到太慢、上游又還沒合時，帶上游自己的 patch。
+- **甲. 不 fork，只在 machopo 的 playback 裡補**（開始時選這個，第 4 條）：沒有同步的成本；2026-11-10 對照上游，缺的都補得起來。做完時也沒有改 Vello 的 patch，但 fork 建了（第 27 條）。
+- **乙. 小 patch 的 fork**（原型之後建了，第 27 條；還沒有 patch）：原本的打算是只在離屏的做法量到太慢、上游又還沒合時，帶上游自己的 patch。
 - **丙. 完全自己接手**：失去上游最有價值的部分（x86 的 SIMD、glyph 快取、vello_gpu 走向成熟），等於 machopo 自己養一個 2D renderer。**不選。**
 
 缺的功能記在哪裡（「詳細設計」的「追蹤缺的功能」）：
@@ -248,12 +240,12 @@ Vello 缺的有十來項，分三種：在 playback 裡補上、使用者看不�
 18. **2026-11-10：解碼照今天的時機，第一次畫時在 raster 的 thread 上做，在快取的鎖外面**（使用者照建議）。快取的每個項目是只填一次的格子，同一張圖只解一次。時機和 cc 的 `ImageDecodeCache` 一樣（要畫才解、不在 main thread），差別是解碼和畫在同一個 task 裡、沒有分開排程。不選載入時在 main thread 上解（最簡單、`raster` 裡沒有 decoder，但大圖卡住 script 和 layout，沒畫到的圖也解碼），也不選載入時交給另一條 thread 解、raster 等它（最接近 Chromium，但多一條 thread 或 pool 要管，這一步的範圍變大；之後量到第一個 tile 等解碼太久時再提）。
 19. **2026-11-10：`image` 用發布的版本，不用它的 `main`**（使用者照建議）。`main` 的 `JpegEncoder` 已經包著 `jpeg-encoder`、可以選取樣，用它就不用直接依賴 `jpeg-encoder`；但 `main` 比 v0.25.10 多 826 個 commit、正在改 decoder 的介面（「Version Next」列著 breaking changes），照它寫等發布時很可能要再改一次；直接釘上游的 commit 也是 machopo 沒有的一種依賴（現在只有 crates.io 的發布版和 `../third_party` 的 fork），沒有版本號和 release notes；省下的只是 `Cargo.toml` 的一行，執行的是同一份編碼的程式。`image` 發布下一版時，升級那一次再看要不要改成經過它的 API。
 20. **2026-11-10：解碼和讀尺寸包在 `catch_unwind` 裡，並設 `image` 的 `Limits`**（使用者照建議）。`image` 的 release notes 開頭的 Known issues 寫著很多 decoder 碰到惡意的輸入會 panic；圖片是網頁給的，不能讓 raster 的 thread 或 main thread 掛掉。panic 就當成解不開、什麼都不畫（今天 Skia 碰到壞檔案的行為），失敗的結果記在快取裡，同一張圖不重複解。沒有 panic 時的成本是多一層不會被 inline 的呼叫（unwind 是查表式的），量不出來；panic 的那一次是微秒到毫秒，加上預設的 panic hook 往 stderr 印一行（先不關，看到洗版再說）。`catch_unwind` 接不住無窮迴圈、吃光記憶體和 stack overflow，所以 `Limits` 設寬高和配置的上限，數值實作時對照 Blink。**這讓 workspace 不能把 `panic` 改成 `abort`**（改了壞圖會讓整個 process 結束），記進 `docs/limitations.md`。不選不包（壞圖讓整個分頁壞掉）；放進另一個 process 解碼要等拆 process，那之後這一層仍然有用（壞圖只是不顯示，不是分頁掛掉）。沒有實測過哪些輸入會 panic，照上游自己的說明處理；測試放壞掉的、截斷的、檔頭宣稱超大尺寸的檔案。
-21. **2026-11-10：原型（第 1 步）的 Vello 釘上游 `main` 的 commit，用 git 依賴**（使用者照建議）。發布的 0.3.0 和 `main` 的 API 已經對不上（`main` 拿掉了圖片的登記 `register_image` 和 `ImageId`、改成直接給 pixmap，`fill_blurred_rounded_rect` 的 `invert` 搬到另一個函式），原型的程式要當第 2 步的基礎，照下一版的 API 寫才不用再改一次；`main` 和 machopo 用同一個 skrifa（0.49；0.3.0 用 0.44，會編兩份）；`main` 修了 `Color` 和 `Luminosity` 的 blend 把某些灰色畫成黑色的 bug。不選發布的 0.3.0（有版本號，但圖片那部分一定要重寫），也不選現在就建 fork（還不知道要不要繼續；第 4 條是先不 fork）。和第 19 條不用 `image` 的 `main` 不同的地方：這是不 merge 的原型，而且發布的版本和下一版的 API 對不上。第 2 步用哪個版本到時再定（「待決定」）。
+21. **2026-11-10：原型（第 1 步）的 Vello 釘上游 `main` 的 commit，用 git 依賴**（使用者照建議）。發布的 0.3.0 和 `main` 的 API 已經對不上（`main` 拿掉了圖片的登記 `register_image` 和 `ImageId`、改成直接給 pixmap，`fill_blurred_rounded_rect` 的 `invert` 搬到另一個函式），原型的程式要當第 2 步的基礎，照下一版的 API 寫才不用再改一次；`main` 和 machopo 用同一個 skrifa（0.49；0.3.0 用 0.44，會編兩份）；`main` 修了 `Color` 和 `Luminosity` 的 blend 把某些灰色畫成黑色的 bug。不選發布的 0.3.0（有版本號，但圖片那部分一定要重寫），也不選現在就建 fork（還不知道要不要繼續；第 4 條是先不 fork）。和第 19 條不用 `image` 的 `main` 不同的地方：這是不 merge 的原型，而且發布的版本和下一版的 API 對不上。第 2 步用哪個版本：第 27 條。
 22. **2026-11-10：原型期間 Skia 和 Vello 都編進去，用環境變數 `MACHOPO_RASTER`（`skia` 或 `vello`，預設 `skia`）在執行時切換**（使用者照建議），只在 `raster` 裡讀一次。同一個執行檔並排比截圖和 `bench.py raster` 的時間，不用 build 兩次；預設是 Skia，原型期間 `cargo test`、reftest、情境照常通過，沒接完的 op 只在設了變數時看得到。切換只活在不 merge 的 branch 上，第 2 步拿掉 Skia 時一起拿掉，所以和第 5 條（`main` 上不留切換的旗標）不衝突；Chromium 推 Graphite 時也是兩個 backend 都編進去、執行時切換。不選在 branch 上直接取代 Skia（1a 期間很多測試會失敗，分不出是還沒接還是接錯了；每次比較都要另外 build 改之前的版本），也不選 cargo 的 feature（比較要 build 兩次，Windows 上還會另外 link 一整套執行檔）。
 23. **2026-11-10：第一個檢查點用的頁面**（使用者照建議）。量測用現成的 `bench.py raster`（Gutenberg、SQLite 的文件頁、NewsSite-Next 捲動和改視窗大小時的 PrepareTiles），Skia 和 Vello 各跑一次；先確認每一頁跳過了多少還沒接的 op，跳過太多的不採計。截圖用 `about:demo`、Gutenberg 的一章、SQLite 的文件頁，加上一頁專門比文字的（放在這個資料夾，是原型的素材、不是測試）：幾種字級、淺底深字和深底淺字、一般、粗體、斜體和合成粗體，1x 和 2x 各一次，用測試字型。不選只用現成的頁面：它們幾乎都是白底黑字、單一字級，最可能出問題的深色背景和小字看不到。外觀能不能接受由人判斷，不同的 pixel 數只是輔助。
-24. **2026-11-10：第一個檢查點通過，做 1b；glyph 的 atlas 先不開**（使用者）。1a 量到的（`progress.md` 裡第 1a 步的那一段）：文字在淺底比 Skia 粗、深底比 Skia 細，正常大小下差別小；交給 Vello 之前先濾掉離 tile 遠的 glyph 之後，文字多的頁面和 Skia 差不多到慢 1.7 倍，圖和色塊多的頁面快 15% 到 40%。Vello 的 glyph atlas 改小頁面、拉長保留時間之後大致追上 Skia（最慢的一頁慢 1.3 倍），但那兩個設定要改 Vello 才有，而且斜的 glyph 開 atlas 會畫錯：先不用，改動留成 `vello-atlas-experiment.patch`，要不要為它 fork 在第二個檢查點一起定。machopo 自己快取輪廓量過沒有用（時間在攤平和產生 strip，不在讀字型），從原型拿掉。濾 glyph 的那一步留著，第 2 步要有測試。
+24. **2026-11-10：第一個檢查點通過，做 1b；glyph 的 atlas 先不開**（使用者）。1a 量到的（`progress.md` 的「量測」）：文字在淺底比 Skia 粗、深底比 Skia 細，正常大小下差別小；交給 Vello 之前先濾掉離 tile 遠的 glyph 之後，文字多的頁面和 Skia 差不多到慢 1.7 倍，圖和色塊多的頁面快 15% 到 40%。Vello 的 glyph atlas 改小頁面、拉長保留時間之後大致追上 Skia（最慢的一頁慢 1.3 倍），但那兩個設定要改 Vello 才有，而且斜的 glyph 開 atlas 會畫錯：先不用，改動留成 `vello-atlas-experiment.patch`，要不要為它 fork 在第二個檢查點一起定。machopo 自己快取輪廓量過沒有用（時間在攤平和產生 strip，不在讀字型），從原型拿掉。濾 glyph 的那一步留著，第 2 步要有測試。
 25. **2026-11-10：第二個檢查點用 Vello 把整套測試各跑一次**（使用者照建議）：`MACHOPO_RASTER=vello` 下的 `test.py reftest`、`test.py wpt`、`test.py scenarios` 和 `cargo test --workspace`。`CLAUDE.md` 的規則是本機只跑改到的部分、不跑整套的 `wpt`；換 raster 影響每一個會畫東西的測試，沒有哪個目錄算不相關，所以這個檢查點例外一次。`wdspec`、`matrix`、`fuzz` 照舊不跑。不選只跑 CSS 裡畫東西的幾個目錄（會漏掉其他目錄的 reftest，檢查點的數字不完整）。
-26. **2026-11-10：第二個檢查點通過，做第 2 步**（使用者）。1b 量到的（`progress.md` 裡第 1b 步的那一段和它後面補查的）：用 Vello 跑整套，machopo 的 reftest 195 個和情境 78 次都通過；WPT 的 13,917 個測試裡 39 個因為 Vello 不通過（34 個 reftest 差一點，其中 31 個最大差 1；5 個 canvas 的）；`raster` 對著 Skia 寫的 75 個單元測試有 71 個照原樣通過。上游的 bug 到這裡有四個，都在 machopo 這一側避開了或先不用：clip 的交集在 stroke 剛好從右邊緣開始時溢位（不把整個在外面的 clip 交給 Vello）、結尾硬切的漸層超過終點時用錯顏色（把漸層拉長一倍）、glyph atlas 每次 render 重畫整頁和斜的 glyph 用錯項目（atlas 不開，第 24 條）。繞不過的是 canvas 上破壞性的 blend mode 配 clip（4 個 WPT）和 kurbo 的 stroker 在很粗的線的內側接合（1 個）。Vello 的 f32 管線只讓 5 個差 1 的測試通過、每一頁都比 Skia 慢（1.2 到 2.7 倍），不用。第 2 步開始前要定的在「待決定」。
+26. **2026-11-10：第二個檢查點通過，做第 2 步**（使用者）。1b 量到的（`progress.md` 的「用 Vello 跑整套測試的結果」和「找到的 bug」）：用 Vello 跑整套，machopo 的 reftest 195 個和情境 78 次都通過；WPT 的 13,917 個測試裡 39 個因為 Vello 不通過（34 個 reftest 差一點，其中 31 個最大差 1；5 個 canvas 的）；`raster` 對著 Skia 寫的 75 個單元測試有 71 個照原樣通過。上游的 bug 到這裡有四個，都在 machopo 這一側避開了或先不用：clip 的交集在 stroke 剛好從右邊緣開始時溢位（不把整個在外面的 clip 交給 Vello）、結尾硬切的漸層超過終點時用錯顏色（把漸層拉長一倍）、glyph atlas 每次 render 重畫整頁和斜的 glyph 用錯項目（atlas 不開，第 24 條）。繞不過的是 canvas 上破壞性的 blend mode 配 clip（4 個 WPT）和 kurbo 的 stroker 在很粗的線的內側接合（1 個）。Vello 的 f32 管線只讓 5 個差 1 的測試通過、每一頁都比 Skia 慢（1.2 到 2.7 倍），不用。第 2 步開始前定的是第 27 到 32 條。
 27. **2026-11-10：Vello 建 fork，照 parley 和 taffy 的做法**（使用者照建議）。`wusyong/vello` 的 `machopo` 分支是上游 `main` 的 `112736df24` 加上 `README.machopo.md` 的 commit，checkout 在 `../third_party/vello`，machopo 用 path 依賴，`third_party.toml` 釘 `rev` 和 `upstream_rev`，patch 在 `patches/vello/`。一開始沒有改 Vello 的 patch。第 4 條是「需要時做小 patch 的 fork」，原型做完之後條件出現了：上游的 bug 已經找到四個、glyph atlas 要改才用得上，有 fork 才能在上游修之前先用修好的版本；即使沒有 patch，fork 也是把這個依賴放進現有規則的方式（`ci.py third-party` 管它）。不選直接釘上游的 commit 當 git 依賴進 `main`（machopo 沒有的一種依賴，要帶任何 patch 就得改成 fork），也不選等上游發布（不知道要多久，發布版一樣不能帶 patch）。第 21 條的 git 依賴只在原型期間用過。
 28. **2026-11-10：glyph 的 atlas 不在第 2 步做，留到第 3 步**（使用者照建議）。第 2 步用不開 atlas 的 Vello 換掉 Skia，接受文字多的頁面每個 tile 的時間是 Skia 的 1.0 到 1.7 倍（最慢的 SQLite 的那一頁，改視窗大小時每次更新的 raster 約 7 ms 變 12 ms）。第 2 步的範圍留在換掉而且畫得對；atlas 是上游標成實驗性、改得最頻繁的部分，現在放 patch 進去 rebase 最容易衝突；開 atlas 會把 glyph 的位置量化，預期結果要多對一輪。不選第 2 步就帶 atlas 的三個 patch（頁面大小、保留時間、斜的 glyph 的 key），也不選 machopo 自己做一層 glyph 的點陣快取（等於重做 atlas，而且量過從 atlas 貼 glyph 在 Vello 裡比填純色貴）。文字的速度是第 3 步明確的一項。
 29. **2026-11-10：glyph 的位置照 Skia 對齊到四分之一個 pixel**（使用者照建議）。交給 Vello 之前，把每個 glyph 的原點對齊到 device pixel 的四分之一（沿著行）和整數（垂直方向），只在 matrix 沒有旋轉和歪斜時做。Skia 的 glyph 快取就是這樣量化位置的，machopo 今天的畫面是對齊過的；Vello 位置在哪就畫在哪，所以測試頁和參考頁的同一段文字位置差了浮點數的誤差（十萬分之一個 pixel）時，邊緣的 pixel 會差 1。用 Vello 跑整套 WPT，不對齊時 Vello 造成 39 個測試不通過（34 個 reftest），對齊之後 13 個（8 個 reftest），沒有變壞的；那些都是 WPT 的測試，machopo 自己的 reftest 兩種都全部通過。代價是每個 glyph 最多偏移八分之一個 pixel（和今天一樣），放棄 Vello 本來能給的位置精度。不選不對齊、34 個各加 `fuzzy`（位置最精確，但測試變鬆，WPT 的清單擴大時文字相關的 reftest 會陸續碰到；WPT 的作者預設同一個瀏覽器裡兩頁畫得一樣，Chrome 和 Firefox 都對齊）；不選對齊到六十四分之一（試過剩 11 個 reftest：格線越多，誤差跨過格線的機會越大）。對齊也是 glyph 快取能命中的前提（第 3 步的 atlas）。剩下的 8 個 reftest 逐個看過再加 `fuzzy`，每個寫原因。
@@ -263,7 +255,7 @@ Vello 缺的有十來項，分三種：在 playback 裡補上、使用者看不�
     - **警告**：error 等級的 log，帶頁面的網址、tile 的位置和大小、panic 的訊息；次數累計，同樣的訊息只在第一次和次數翻倍時記（同一個 tile 每次重畫都會再 panic）；送一則警告到 DevTools 的 Console（`Log` domain），網頁的作者看得到有一部分畫不出來。raster 在 compositor thread 上，訊息要傳回 renderer 的 main thread 再交給 Console（怎麼傳、網址記在哪一行：第 38 條）。
     - 接不接是 `raster` 的一個參數，預設跟著 build 走，測試可以指定：release 的那條路的測試本身在開著 debug assertions 的 build 裡跑。用已知會讓 Vello panic 的輸入（clip 的溢位），上游修掉之後換一個觸發的方法。
     - 不選不接（任何網頁湊出會 panic 的內容就能讓分頁不再更新）；不選接住之後把那個 tile 的 op 一個一個重試（複雜，重試時每個 op 都可能再 panic，換掉 Skia 之後沒有另一個 backend 可以退）。留白的 tile 畫成棋盤格、記進 trace 是之後的事。
-    - 和圖片的解碼一樣，workspace 不能把 `panic` 改成 `abort`（第 20 條）；接不住無窮迴圈和記憶體用光。release 沒有整數溢位的檢查，那個 clip 的 bug 在 release 下是算錯而不是 panic：要不要只對 Vello 的 crate 打開溢位檢查見「待決定」。
+    - 和圖片的解碼一樣，workspace 不能把 `panic` 改成 `abort`（第 20 條）；接不住無窮迴圈和記憶體用光。release 沒有整數溢位的檢查，那個 clip 的 bug 在 release 下是算錯而不是 panic：要不要只對 Vello 的 crate 打開溢位檢查：第 47 條（不開）。
 31. **2026-11-10：canvas 的 5 個 WPT 的退步，第 2 步先接受、記下來**（使用者照建議）。4 個是破壞性的 blend mode 配 clip（`2d.composite.clip.destination-atop`、`destination-in`、`source-in`、`source-out`：形狀以外的地方會被清掉的四種模式，Vello 不隔離的 clip 限制不了它們，clip 外面的像素也被清掉），1 個是 kurbo 的 stroker 在線寬遠大於線段長度時內側的接合多畫一塊（`2d.line.cross`）。兩種都少見（常見的橡皮擦是 `destination-out`，不受影響）。它們的預期結果標成失敗、寫原因，列進 `render-gaps.md` 和 `docs/limitations.md`，回報上游的草稿寫好給人審。不選第 2 步就在 machopo 這一側修那 4 個（做得到：碰到這四種模式而且有 clip 時，把目前的畫面 render 出來、形狀和 clip 各畫成一張圖，machopo 逐個 pixel 照公式合成、clip 外面保留，再寫回 bitmap；但每次都要整個 canvas 過一遍，多一段自己維護的合成程式，留作第 3 步的候選），也不選現在就改 Vello 的合成（估不出要改多少，上游在 vello_gpu 的文件寫明了這個限制，可能是設計上的取捨；kurbo 是另一個專案）。（**其中 4 個後來發現是 machopo 自己的錯、修掉了：第 41 條。**）
 32. **2026-11-10：第 2 步分成四段，每段做完給人審**（使用者照建議）：2a Vello 成為唯一的 playback、測試搬過來和補齊；2b ink bounds 改用 skrifa、mipmap、拿掉 skia-safe；2c panic 的處理和警告；2d WPT 的預期結果、文件、整個階段的檢查。四段都做完才 merge。不選一次做完（改動太大，審不動；拿掉 Skia 之前先確認 Vello 單獨撐得住測試）。
 33. **2026-11-11：tile 之間允許差 1**。同一塊內容切成 tile 畫和整塊畫，反鋸齒的邊緣和模糊的範圍裡每個 channel 最多差 1（Vello 的覆蓋率用浮點數算，從不同的原點算捨入不同；Skia 用定點數，沒有這個差異）。測試在 scale 1 的形狀、文字和陰影要求逐位相同，其餘允許差 1。不選要求全部逐位相同（要改 Vello 算覆蓋率的方式）。實作時發現、照測到的結果定的，使用者確認接受；記進列出缺口的文件。
@@ -294,17 +286,18 @@ Vello 缺的有十來項，分三種：在 playback 裡補上、使用者看不�
     - **斜的 glyph**（合成的斜體；第 1 步看到開 atlas 時畫錯，快取的 key 不分斜不斜）：machopo 對有 `glyph_transform` 的 run 不開 atlas（開不開本來就是每個 run 的參數），不改 fork；另外寫一份回報上游的草稿。不選在 fork 裡修 key（多一個 patch 在上游標成實驗性、改得最頻繁的地方；合成斜體只在字型沒有斜體時出現）。原本說的三個 patch 因此是一個。**實作時查清楚的範圍**（2026-11-11）：Vello 不把斜的、轉過或拉伸的 matrix 底下的 glyph 放進 atlas，但同一個 scene 裡前面的 run 剛把同字型、同大小、同位置的直的 glyph 放進去時，這種 run 會拿到那個直的。所以不只斜的：matrix 不是兩個方向等比例縮放的 run 也不開 atlas（canvas 的 `fillText` 配 `maxWidth` 就是橫向擠壓的 matrix，machopo 的 reftest `canvas/c5-text` 抓到）。回報的草稿是 `upstream-reports.md` 的第 5 份。
     - **數值**：頁面 256、512、1024 各量一次（第 1 步的那幾頁），保留時間同樣用量的；每個 raster thread 的 atlas 有記憶體上限，滿了照年齡淘汰（對照 Chromium：Skia 的 strike cache 有大小上限、滿了淘汰舊的）。上限的數字和滿了之後 Vello 怎麼做，實作時查清楚寫進 `progress.md`。
 45. **2026-11-11：文字的 gamma 和對比不做，接受現在的樣子**（使用者定）。這是兩邊的差異，不是 Vello 畫錯：Vello 照覆蓋率算 alpha、在 sRGB 的數值上混色，文字和其他形狀一樣；Skia（和 DirectWrite、CoreText）對文字的 mask 多做一步調整，補償在 sRGB 上線性混色時深底淺字偏細、淺底深字偏粗。上游當成還沒做的功能（`linebender/vello#1694`）。和 Chromium 的文字粗細因此有看得出來的差異，留在 `docs/render-gaps.md` 的「沒有補的」；上游做了就跟著有。
-46. **2026-11-11：glyph 的 atlas 不採用，文字的速度維持現在的樣子**（使用者照建議）。3a 照第 44 條做完、量過（`progress.md` 裡第 3a 步的那一段）：文字多的頁面每個 tile 快 3% 到 24%，但開了之後 WPT 的 reftest 隨機失敗（`css/css-transforms` 548 個裡每次 7 到 29 個，不開時 0 個）。原因在 Vello：glyph 直接在 atlas 裡它的位置上 raster，位置不同、邊緣的像素可以差 1；每個 raster thread 有自己的 atlas，測試頁和參考頁的同一個 glyph 位置不同。
+46. **2026-11-11：glyph 的 atlas 不採用，文字的速度維持現在的樣子**（使用者照建議）。3a 照第 44 條做完、量過（`progress.md` 的「量測」）：文字多的頁面每個 tile 快 3% 到 24%，但開了之後 WPT 的 reftest 隨機失敗（`css/css-transforms` 548 個裡每次 7 到 29 個，不開時 0 個）。原因在 Vello：glyph 直接在 atlas 裡它的位置上 raster，位置不同、邊緣的像素可以差 1；每個 raster thread 有自己的 atlas，測試頁和參考頁的同一個 glyph 位置不同。
     - **不選在 fork 裡修**（glyph 先在固定的原點 raster、再複製進 atlas）：在上游標成實驗性、改得最頻繁的地方多一個不小的 patch，能不能完全消掉要做了才知道。
     - **不選照樣開、把受影響的 reftest 標成 `fuzzy` 或 intermittent**：哪些測試受影響每次不同，CI 會隨機失敗，標了也守不住真的退步。
     - machopo 這一側和 fork 上的 commit 都還原了（fork 回到 `b52311f2`，`third_party.toml` 沒有變）。留下來的在 `atlas/`：fork 的 patch（`vello-atlas-settings.patch`，套在 `112736df` 上）、machopo 的改動（`machopo-raster.patch`，套在 `a90c6c0` 上）和 mutation 的清單（`mutants.toml`）；回報上游的草稿是 `upstream-reports.md` 的第 5、6 份。上游把 atlas 改成和位置無關、或不再標成實驗性時再看；那時頁面大小和保留時間還是要能設（第 44 條量到的）。
     - 對照 Chromium：Skia 的 glyph 快取存的是 glyph 自己的 mask（在 glyph 自己的原點上 raster，和它之後放在 atlas 的哪裡無關），所以沒有這個問題。
-47. **2026-11-11：release 不對 Vello 開整數溢位的檢查**（使用者照建議）。量到的（`progress.md` 裡第 3b 步的那一段）：文字最多的頁面捲動時每個 tile 慢約 9%，其他四項在雜訊裡；那 9% 和換一個 build 的差別一樣大，分不出是不是檢查造成的。不開的理由：文字多的頁面是換掉 Skia 之後唯一變慢的地方，atlas 又不採用（第 46 條），不在同一個地方再加可能的一成；每天的 CI 用的 profile 開著溢位檢查，WPT 和 reftest 碰得到的溢位在那裡會失敗；已知的那一個溢位已經在 playback 擋在前面（`Player::shows`）。不選打開（Vello 裡的溢位在使用者的機器上變成 panic、被接住、那個 tile 留白並警告，不會算出錯的值繼續畫）。對照 Chromium：release 不對整數溢位做全面的檢查，只在明確用 checked 運算的地方（`base/numerics`）檢查。
+47. **2026-11-11：release 不對 Vello 開整數溢位的檢查**（使用者照建議）。量到的（`progress.md` 的「量測」）：文字最多的頁面捲動時每個 tile 慢約 9%，其他四項在雜訊裡；那 9% 和換一個 build 的差別一樣大，分不出是不是檢查造成的。不開的理由：文字多的頁面是換掉 Skia 之後唯一變慢的地方，atlas 又不採用（第 46 條），不在同一個地方再加可能的一成；每天的 CI 用的 profile 開著溢位檢查，WPT 和 reftest 碰得到的溢位在那裡會失敗；已知的那一個溢位已經在 playback 擋在前面（`Player::shows`）。不選打開（Vello 裡的溢位在使用者的機器上變成 panic、被接住、那個 tile 留白並警告，不會算出錯的值繼續畫）。對照 Chromium：release 不對整數溢位做全面的檢查，只在明確用 checked 運算的地方（`base/numerics`）檢查。
+48. **2026-11-11：mipmap 的品質照第 34 條，記憶體留成已知的限制**（使用者照建議）。縮小的層跟著圖片快取的那一項一起留、一起清，所有層加起來最多是原圖的三分之一；raster 的圖片快取本來就沒有大小上限（`docs/limitations.md` 的「圖片」）。不選現在給圖片快取加上限（對照 Chromium：`SoftwareImageDecodeCache` 有容量上限、照最近用過的順序淘汰）：那要動快取的擁有權和淘汰的時機，是整個圖片快取的事，不屬於換掉 Skia，之後另寫一份 RFC。
+49. **2026-11-11：Vello 的 fork 不定期跟上游，有理由時才跟**（使用者照建議）。理由有三種：上游修了 `docs/render-gaps.md` 列的缺口；machopo 需要上游的某個修正；要開始動 `raster` 的 playback 之前。每次跟完重跑 fork 的測試、`raster` 的測試（`upstream_*` 失敗表示上游補上了）、reftest 和 `bench.py raster`，再對一次 `render-gaps.md`。不選固定的週期（多數時候是為了沒用到的改動重跑一輪檢查）；不選 CI 每週拿上游的 main 自動試（最接近 Chromium 的 Skia autoroller，但要新寫 CI 的工作，現在不值得）。
 
 ## 待決定
 
-- **Vello 的 fork 多久跟一次上游**：每次上游發布都 rebase，還是釘住、需要時再跟；rebase 之後要重新對 reftest 和 `render-gaps.md`。
-- **mipmap 的品質和記憶體**：預先縮小用 box filter 還是更好的 filter（對照 Chromium 的 `SoftwareImageDecodeCache` 怎麼縮，原型時查），縮小的版本佔多少記憶體、什麼時候清（`docs/limitations.md` 的「圖片」記著 raster 的圖片快取沒有大小上限）。
+沒有。原本列在這裡的都定了：文字的外觀（第 45 條）、不支援的 filter 要不要做進 fork（第 43 條）、release 的溢位檢查（第 47 條）、mipmap 的品質和記憶體（第 34、48 條）、fork 多久跟一次上游（第 49 條）。
 
 ## 之後的可能
 
@@ -317,7 +310,9 @@ Vello 缺的有十來項，分三種：在 playback 裡補上、使用者看不�
   - 先量：vello_gpu 的覆蓋率還是在 CPU 上算，GPU 只省下填色、合成和上傳。
   - vello_gpu 的細節見 `details.md` 的「vello_gpu 0.3」和「CPU 和 GPU 的結果有多接近」。
 - **矩形類的快速路徑**（GPU raster 之後，量過不夠快才做）：單色和圓角的矩形、邊框、`box-shadow` 不經過 tile，直接變成 Viz 的 quad，用 SDF 的 shader 畫（`details.md` 的「GPUI 怎麼畫」）。Chromium 只對單色的 tile 這樣做（`SolidColorDrawQuad`）。
+- **glyph 的快取**：上游把 atlas 改成和位置無關、或不再標成實驗性時再試（第 46 條；`atlas/` 的 patch 和量到的設定）。
+- **圖片快取的大小上限**（連同縮小的層，第 48 條）：對照 cc 的 `SoftwareImageDecodeCache` 的預算和 LRU，另寫一份 RFC。
 - **WebP**：加 `image-webp` 就有（`details.md` 的「圖片」）。
-- **ink bounds 搬出 `raster`**：改用 skrifa 之後只需要字型資料，可以搬到 `layout` 或 `gfx`，renderer 量文字不再經過 `raster`。
+- **ink bounds 搬出 `raster`**：改用 skrifa 之後只需要字型資料；要搬的話連同假粗體的量和點陣 glyph 的擺法一起整理成像 Blink 的 `platform/fonts` 那一層（第 36 條）。
 - **CSS 的模糊和陰影以外的效果**：`mask-image`、`backdrop-filter`、SVG 的 filter primitive，看 Vello 那時有什麼。
 - **OOP-R**（RFC 0004 的 T3）：display list 和字型、圖片要能序列化。
