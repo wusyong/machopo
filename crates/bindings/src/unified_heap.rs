@@ -849,6 +849,24 @@ impl<'s> crate::InfoNoGc<'_, 's> {
         unwrap_receiver(self.isolate, cx, this)
     }
 
+    /// `wrap`: writes the wrapper's embedder field (and the fork's pointer
+    /// table's entry).
+    #[inline]
+    pub fn wrap<'gc, T: elise::HeapType>(
+        &mut self,
+        cx: &elise::Mutation<'gc>,
+        wrapper: v8::Local<'_, v8::Object>,
+        object: elise::Gc<'gc, T>,
+    ) {
+        wrap(self.isolate, cx, wrapper, object);
+    }
+
+    /// `set_wrapper`: writes the edge's traced handle.
+    #[inline]
+    pub fn set_wrapper(&mut self, edge: &elise::JsEdge, wrapper: v8::Local<'s, v8::Object>) {
+        set_wrapper(self.isolate, edge, wrapper);
+    }
+
     /// The callback's result, as a holder of the state may set it.
     #[inline]
     pub fn ret(&mut self) -> OpReturn<'_, 's> {
@@ -1032,15 +1050,15 @@ fn value_slot(edge: &elise::JsEdge) -> &v8::cppgc::TracedSlot<v8::Value> {
 /// operations) at `wrapper`, droppable: V8's scavenge may drop the wrapper
 /// if no one else holds it and it is unmodified, and resets `edge`. V8
 /// marks the wrapper at once while marking.
-pub fn set_wrapper<'s>(
-    scope: &v8::PinScope<'s, '_, ()>,
+pub fn set_wrapper(
+    isolate: &v8::Isolate,
     edge: &elise::JsEdge,
-    wrapper: v8::Local<'s, v8::Object>,
+    wrapper: v8::Local<'_, v8::Object>,
 ) {
     // SAFETY: on the isolate's thread, the heap's (the only one that
     // writes the edge); the edge is in its final place (its object is old
     // and never moves).
-    unsafe { slot(edge).set_droppable(scope, wrapper) };
+    unsafe { slot(edge).set_droppable(isolate, wrapper) };
 }
 
 /// Points `edge` (an object's of the isolate's embedder heap, in one of its

@@ -1551,8 +1551,36 @@ fn number(object: v8::Local<'_, v8::Object>) -> u32 {
 }
 
 /// One more wrapper made, for the tests.
-fn count(wrappers_made: &Cell<u64>) {
+pub(crate) fn count(wrappers_made: &Cell<u64>) {
     wrappers_made.set(wrappers_made.get().wrapping_add(1));
+}
+
+/// What `createElement`'s local name says of its element in an HTML
+/// document (`dom_api::Front::foresee_element`): by the name's number if
+/// it is lowercase ASCII (as most are) and a name already (the element's,
+/// lowercased in an HTML document); else `HTMLElement`'s, the wrapper
+/// made again after if that isn't it. The name only peeked at: nothing is
+/// made (V8 may collect as the wrapper is, after).
+pub(crate) fn foresee_element(
+    isolate: &v8::Isolate,
+    name: &ArgString<'_>,
+) -> (Option<dom::NameId>, usize) {
+    name.peek_ascii(isolate, |text| {
+        if text.bytes().any(|byte| byte.is_ascii_uppercase()) {
+            return None;
+        }
+        Some(match dom::names::find(text) {
+            Some(id) => (Some(id), dom_api::html_element_interface(id)),
+            // A name no element had yet: as `html_element_interface`
+            // says of one past the fixed ones.
+            None if dom::is_valid_custom_element_name(text) => {
+                (None, dom_api::declare::HTML_ELEMENT)
+            }
+            None => (None, dom_api::declare::HTML_UNKNOWN_ELEMENT),
+        })
+    })
+    .flatten()
+    .unwrap_or((None, dom_api::declare::HTML_ELEMENT))
 }
 
 /// `string`'s V8 string, from the isolate's cache, made and cached now if
@@ -1776,6 +1804,7 @@ impl<'s, A: CallArgs<'s>> FrontTypes for V8Front<'_, 's, '_, '_, A> {
     type PendingNode = std::convert::Infallible;
     type PendingNumber = std::convert::Infallible;
     type PendingObject = std::convert::Infallible;
+    type PreparedNode = ();
 }
 
 impl<'s, A: CallArgs<'s>> FrontTypes for V8Op<'_, 's, '_, '_, A> {
@@ -1786,6 +1815,7 @@ impl<'s, A: CallArgs<'s>> FrontTypes for V8Op<'_, 's, '_, '_, A> {
     type PendingNode = std::convert::Infallible;
     type PendingNumber = std::convert::Infallible;
     type PendingObject = std::convert::Infallible;
+    type PreparedNode = ();
 }
 
 impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
@@ -3022,30 +3052,8 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         self.call.prepared = Some((wrapper, interface));
     }
 
-    /// By its name's number if it is lowercase ASCII (as most are) and a
-    /// name already (the element's, lowercased in an HTML document); else
-    /// `HTMLElement`'s, made again after if that isn't it. The name only
-    /// peeked at: the wrapper is made (V8 may collect) after.
-    fn prepare_new_element(&mut self, name: &ArgString<'s>) -> Option<dom::NameId> {
-        let foreseen = name
-            .peek_ascii(self.scope.scope(), |text| {
-                if text.bytes().any(|byte| byte.is_ascii_uppercase()) {
-                    return None;
-                }
-                Some(match dom::names::find(text) {
-                    Some(id) => (Some(id), dom_api::html_element_interface(id)),
-                    // A name no element had yet: as `html_element_interface`
-                    // says of one past the fixed ones.
-                    None if dom::is_valid_custom_element_name(text) => {
-                        (None, dom_api::declare::HTML_ELEMENT)
-                    }
-                    None => (None, dom_api::declare::HTML_UNKNOWN_ELEMENT),
-                })
-            })
-            .flatten();
-        let (id, interface) = foreseen.unwrap_or((None, dom_api::declare::HTML_ELEMENT));
-        self.prepare_new_node(interface);
-        id
+    fn foresee_element(&mut self, name: &ArgString<'s>) -> (Option<dom::NameId>, usize) {
+        foresee_element(self.scope.scope(), name)
     }
 
     /// Its tag alone, mostly (the result was returned in the operation),
@@ -3680,11 +3688,12 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
         cx: &ApiCx<'_, 'gc>,
         definition: elise::Gc<'gc, dom::CustomElementDefinition>,
         document: NodeRef<'gc>,
-    ) {
+    ) -> Option<std::convert::Infallible> {
         self.keep(Kept::Construct(
             Persistent::new(cx.gc, definition),
             cx.root(document),
         ));
+        None
     }
 
     fn ret_resolved_with<'gc>(&mut self, _: &ApiCx<'_, 'gc>, edge: &'gc JsEdge) {
@@ -3909,7 +3918,12 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
     }
 
     #[inline]
-    fn ret_new_node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, node: NodeRef<'gc>) {
+    fn ret_new_node<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        node: NodeRef<'gc>,
+        (): (),
+    ) -> Option<std::convert::Infallible> {
         match self.call.prepared.take() {
             Some((wrapper, interface)) if interface == interface_of(cx, node) => {
                 debug_assert!(
@@ -3918,14 +3932,16 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
                 );
                 wrap_new(&mut self.no_gc, cx, wrapper, node);
                 count(&self.caches.wrappers_made);
+                count(&self.caches.wrappers_ahead);
                 self.call.rv.op().set(wrapper.into());
+                None
             }
             // Of another interface than the one foreseen: made after.
             prepared => {
                 if prepared.is_some() {
                     count(&self.caches.wrappers_wasted);
                 }
-                let None = self.ret_node(cx, node);
+                self.ret_node(cx, node)
             }
         }
     }

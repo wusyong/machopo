@@ -84,7 +84,10 @@ fn a_plain_call_that_allocates_or_throws_makes_a_scope() {
             "n.setAttribute('data-y', 'y'); (globalThis.y = n.getAttribute('data-y'))",
             "y",
         ),
-        ("d.createElement('section').tagName", "SECTION"),
+        (
+            "(globalThis.section = d.createElement('section')).tagName",
+            "SECTION",
+        ),
         // A node with no wrapper.
         // (Held, as the string above: V8's scavenge drops a string or a
         // wrapper that nothing holds, and the next read makes it again.)
@@ -140,7 +143,7 @@ fn a_plain_call_that_allocates_or_throws_makes_a_scope() {
         ("n.getAttribute('data-y')", "y"),
         ("n.firstChild.tagName", "B"),
         // A name's string is kept by its number, not as any string's.
-        ("d.createElement('section').tagName", "SECTION"),
+        ("section.tagName", "SECTION"),
     ] {
         assert_eq!(scopes(&mut env, source), (value.into(), 0), "{source}");
     }
@@ -208,9 +211,8 @@ fn a_plain_members_receiver_is_checked_by_its_signature() {
 fn a_member_that_isnt_plain_makes_none_of_these_scopes() {
     let mut env = env();
     for source in [
-        "d.createElement('div')",
-        "d.createTextNode('text')",
         "n.addEventListener('x', () => {})",
+        "n.getAttributeNames()",
         "n.dispatchEvent(new Event('x'))",
     ] {
         let (_, made) = scopes(&mut env, source);
@@ -314,4 +316,93 @@ fn numbers_booleans_and_objects_converted_or_made_make_a_scope() {
         "IndexSizeError"
     );
     assert_eq!(scopes(&mut env, "n.scrollTop = 1e3; 0").1, 0);
+}
+
+/// A member that always makes a node has its wrapper made ahead of the
+/// operation and made the node's in it: `createElement` (of the interface
+/// its name has), the other `create*`, `splitText`, and `cloneNode` (of
+/// the interface `this` is of, whatever the node).
+#[test]
+fn a_new_nodes_wrapper_is_made_ahead() {
+    let mut env = Env::window("https://example.test/");
+    env.eval(
+        "var d = document; var n = d.createElement('body'); var t = d.createTextNode('abcdef'); \
+         var f = d.createDocumentFragment(); var p = n.appendChild(d.createElement('p')); \
+         var held = []; 0",
+    );
+    for (source, value) in [
+        ("d.createElement('div')", "[object HTMLDivElement]"),
+        ("d.createElement('x-y')", "[object HTMLElement]"),
+        ("d.createElement('nonsuch')", "[object HTMLUnknownElement]"),
+        ("d.createTextNode('t')", "[object Text]"),
+        ("d.createComment('c')", "[object Comment]"),
+        ("d.createDocumentFragment()", "[object DocumentFragment]"),
+        ("t.splitText(3)", "[object Text]"),
+        ("n.cloneNode(false)", "[object HTMLBodyElement]"),
+        ("n.cloneNode(true)", "[object HTMLBodyElement]"),
+        ("p.cloneNode()", "[object HTMLParagraphElement]"),
+        ("t.cloneNode(true)", "[object Text]"),
+        ("f.cloneNode(true)", "[object DocumentFragment]"),
+        // (A window's document is an `HTMLDocument`; its copy is a
+        // `Document`, as it was before its wrapper was made ahead.)
+        ("d.cloneNode(false)", "[object Document]"),
+    ] {
+        let (ahead, wasted) = (env.wrappers_ahead(), env.wrappers_wasted());
+        let (found, made) = scopes(
+            &mut env,
+            &format!("held.push({source}); Object.prototype.toString.call(held.at(-1))"),
+        );
+        assert_eq!(found, value, "{source}");
+        assert_eq!(env.wrappers_ahead(), ahead + 1, "{source}: made ahead");
+        assert_eq!(env.wrappers_wasted(), wasted, "{source}: none wasted");
+        // The wrapper's scope (and one more when the call is the one
+        // that tells V8 the DOM's heap grew).
+        assert!((1..=2).contains(&made), "{source}: {made} scopes");
+    }
+    // The copy is the node's own wrapper from then on, and a copy's
+    // children have none until they are read.
+    assert_eq!(
+        env.eval(
+            "var copy = n.cloneNode(true); [copy !== n, copy.firstChild.tagName, \
+             copy.firstChild === copy.firstChild, copy.parentNode].join()"
+        ),
+        "true,P,true,"
+    );
+}
+
+/// A wrapper made ahead that isn't of the node's interface after all is
+/// wasted, and the node's made after the operation: an uppercase name
+/// (lowercased in the operation), an XML document's element; a custom
+/// element is constructed after it.
+#[test]
+fn a_wrapper_made_ahead_of_another_interface_is_made_again() {
+    let mut env = Env::window("https://example.test/");
+    env.eval(
+        "var d = document; var x = d.implementation.createDocument(null, 'r'); \
+         customElements.define('c-e', class extends HTMLElement { constructor() { super(); this.made = 1; } }); 0",
+    );
+    for (source, value, wastes) in [
+        ("d.createElement('DIV')", "[object HTMLDivElement]", 1),
+        ("x.createElement('div')", "[object Element]", 1),
+        (
+            "d.createElementNS('http://www.w3.org/1999/xhtml', 'div')",
+            "[object HTMLDivElement]",
+            1,
+        ),
+        ("d.createElement('c-e')", "[object HTMLElement]", 0),
+    ] {
+        let (ahead, wasted) = (env.wrappers_ahead(), env.wrappers_wasted());
+        assert_eq!(
+            env.eval(&format!("Object.prototype.toString.call({source})")),
+            value,
+            "{source}"
+        );
+        assert_eq!(
+            env.wrappers_ahead(),
+            ahead,
+            "{source}: not the one made ahead"
+        );
+        assert_eq!(env.wrappers_wasted(), wasted + wastes, "{source}");
+    }
+    assert_eq!(env.eval("d.createElement('c-e').made"), "1");
 }

@@ -457,6 +457,17 @@ macro_rules! interfaces {
     )*};
 }
 
+// `cloneNode`'s: as any node.
+impl WitRet for dom_api::typed::NewNodeLikeThis {
+    type Wit = u32;
+    fn wit(ret: Ret) -> u32 {
+        match ret {
+            Ret::Node(handle) => handle,
+            other => other.unexpected(),
+        }
+    }
+}
+
 // `createElement`'s: a guest's document defines no custom elements (it
 // has no registry of its own), so its element is made in the operation.
 impl WitRet for dom_api::typed::NewHtmlElement {
@@ -1010,6 +1021,7 @@ impl<'r, A> FrontTypes for WasmFront<'r, '_, A> {
     type PendingNode = std::convert::Infallible;
     type PendingNumber = std::convert::Infallible;
     type PendingObject = std::convert::Infallible;
+    type PreparedNode = ();
 }
 
 impl<'r, 'g, A: ReadArgs> Front for WasmFront<'r, 'g, A> {

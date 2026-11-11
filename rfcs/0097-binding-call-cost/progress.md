@@ -11,7 +11,7 @@
 | 3 front 只拿 callback 的 info：參數和結果單純的成員 | 完成 | 2026-11-11 |
 | 4a 結果怎麼帶出操作：`RetType::Pending`、`finish`，front 定 `PendingString`、`PendingNode`、`PendingNumber` | 完成 | 2026-11-11 |
 | 4b 新的 front 補上數字、布林、有預設值的參數，回傳不是節點的物件 | 完成 | 2026-11-11 |
-| 4c 預先建 wrapper 的結果（`createElement`、`cloneNode`、`createTextNode`） | 還沒開始 | |
+| 4c 預先建 wrapper 的結果（`createElement`、`cloneNode`、`createTextNode`） | 完成 | 2026-11-12 |
 | 4d callback、rest、`any` 的參數直接回傳 handle（`addEventListener`、`setTimeout`、`append`） | 還沒開始 | |
 | 4e dictionary、promise、陣列和其餘的參數和結果 | 還沒開始 | |
 | 4f static、constructor、named 和 indexed property 的外殼 | 還沒開始 | |
@@ -286,3 +286,17 @@
 - 測試：`dom_js` 的 `info_front` 多兩個（數字、布林、物件當場讀的不建 scope；要轉換或要建 wrapper 的建、結果一樣：字串和有 `valueOf` 的物件當數字、小數截掉、超過 32 位元的 wrap、各種值當布林、型別不對的物件和 null 是 `TypeError`、`valueOf` 丟的例外、`double` 不是 finite 的 `TypeError`、多個字串參數）；`dom_api` 的 `table` 的清單更正（第 3 段把 `cloneNode` 列成「預先建 wrapper」，它不是：那是 `createElement`、`createTextNode`）。
 - mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4b.toml`，14 個都抓到。沒有 mutant 的：`target_arg`、`is_null_or_undefined`（現在 `PLAIN` 的成員裡沒有測試呼叫到的；和原本的 front 的寫法一樣）、`templates.rs` 限定 kind 的條件（現在等價）。
 - 跑過：`cargo test -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt dom html/dom`（123056 個結果都照預期）。
+
+**第 4c 段：操作前準備的 wrapper 是成員的區域變數**（2026-11-12）：
+
+- fork（只改 Rust，`b70c0fa`，`third_party.toml` 釘到它；fork 的四個 commit 都還沒 push）：`TracedSlot::set_droppable` 改收 isolate（不建 `Local`），`README.machopo.md` 一條；用不到的 `GetIsolate` import 拿掉。
+- `bindings`：`set_wrapper` 收 isolate；`InfoNoGc` 的 `wrap`、`set_wrapper`；`soundness.md` 補上。
+- `dom_api`：`FrontTypes::PreparedNode`（`Default`）；`RetType` 的 `type Prepared<F>`、`prepare(front, foreseen)` 回傳它、`give_prepared`（預設丟掉它、呼叫 `give`）；`no_pending!`、`pending!` 帶 `no_prepared!`（`()`）；`ArgType::foreseen_interface`（預設 `None`）；`Front::prepare_new_node` 回傳 `PreparedNode`、`prepare_node_like_this`、`foresee_element`（取代 `prepare_new_element`：只看名稱、不建東西）；`OpFront::ret_new_node` 多收 `PreparedNode`、回傳 `Option<PendingNode>`，`ret_construct` 回傳 `Option<PendingNode>`。`NewObject`、`NewElement`、`NewHtmlElement` 的 `Prepared` 是 `F::PreparedNode`、`Pending` 是 `Option<F::PendingNode>`，都標 `PLAIN`；`ElementLocalName` 的 `Taken` 多帶猜到的 interface，標 `PLAIN`；新的回傳型別 `NewNodeLikeThis`，`cloneNode` 用它。兩個 promise 的型別照舊在 `prepare` 呼叫 `prepare_promise`（還在原本的 front 的那一格）。
+- `dom_api_macros`：getter 和 method 把 `prepare` 的回傳值帶進操作給 `give_prepared`；method 先把各參數的 `foreseen_interface` 用 `or` 接起來（沒有這種參數的編出來是 `None`）。
+- `dom_js`：`InfoFront` 的 `PreparedNode` 是 `Option<(wrapper, interface)>`，`prepare_new_node`（這時建 scope；別的 realm 的物件上呼叫時 `None`）、`prepare_node_like_this`（先開一個讀的操作看 `this` 的 interface）、`foresee_element`（和 `V8Front` 共用 `front::foresee_element`，只用 isolate）；`InfoOp::ret_new_node` interface 對得上就 `wrap`、`set_wrapper`、寫回傳值，對不上照沒有 wrapper 的節點；`PendingNode` 改成 enum（沒有 wrapper 的節點，或要建構的 custom element），`ret_construct` 回傳它。`V8Front` 照舊把 wrapper 放在 `Call`（它的 `PreparedNode` 是 `()`）。測試用的計數 `wrappers_ahead`（預先建的 wrapper 成了節點的 wrapper 的次數，兩個 front 都數）。`dom_wasm` 的 front：`NewNodeLikeThis` 的 `WitRet`。
+- `PLAIN` 的成員又多 `createElement`、`createElementNS`、`createTextNode`、`createComment`、`createDocumentFragment`、`createAttribute`、`splitText`、`cloneNode`、`extractContents`、`cloneContents` 等。
+- 4b 和這一段的 binary 各跑三次取最小（`perf stat`，指令數（cycle））：`cloneNode(false)` 2279（509）→ 1897（384），`cloneNode(true)`（有一個子節點）4017（955）→ 3615（793），`createTextNode` 2301（536）→ 2223（518），`createDocumentFragment` 1487（317）→ 1448（301），`createElement('div')` 2056（435）→ 1988（449），`createElement('x-y')` 3069（645）→ 3004（651）；沒變的：`nodeType` 109 → 113、`getAttribute` 561 → 562、`childNodes` 218 → 219、`appendChild` 1488 → 1509（兩次量之間的差）。`cloneNode` 從三步（root、操作後建 wrapper、再一個操作）變成一步；`createElement` 本來就預先建，只省了 `V8Front` 和 `Call`，cycle 沒有跟著降（沒有重跑）。
+- 測試：`dom_js` 的 `info_front` 多兩個（建節點的成員各用上預先建的 wrapper、沒有浪費的：`createElement` 三種名稱、`createTextNode`、`createComment`、`createDocumentFragment`、`splitText`、`cloneNode` 對元素、文字、fragment、document；interface 猜錯的（大寫的名稱、XML 文件、`createElementNS`）浪費一個、結果照樣對，custom element 操作後建構）；`dom_api` 的 `table` 的清單（`createElement` 等現在是 `PLAIN`）。`info_front` 的 9 個測試重複跑 1000 次都通過。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4c.toml`，11 個都抓到。
+- 跑過：`cargo test -p bindings -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt dom html/dom custom-elements`（126618 個結果都照預期）。
+- 看到、沒有動的：window 的 document 的 `cloneNode()` 給的是 `Document`、不是 `HTMLDocument`（改之前就是；沒有查 Chrome）。

@@ -130,6 +130,10 @@ pub(crate) struct Caches {
     /// Wrappers made ahead of a new node (`Front::prepare_new_node`) that
     /// weren't its interface's, for the tests.
     pub(crate) wrappers_wasted: Cell<u64>,
+    /// Wrappers made ahead of a new node that became its wrapper in the
+    /// operation that made it (no root, no operation after), for the
+    /// tests.
+    pub(crate) wrappers_ahead: Cell<u64>,
 }
 
 impl bindings::EmbedderHeapState for State {
@@ -218,6 +222,7 @@ pub(crate) fn install(isolate: &mut v8::Isolate) {
                 names: Vec::new(),
                 wrappers_made: Cell::new(0),
                 wrappers_wasted: Cell::new(0),
+                wrappers_ahead: Cell::new(0),
             },
             templates: (0..slots).map(|_| None).collect(),
             boilerplates: (0..slots).map(|_| None).collect(),

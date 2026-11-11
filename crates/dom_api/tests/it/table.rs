@@ -1032,8 +1032,8 @@ impl TypedVisitor for Plain {
 /// A member is plain (`TypedMember::PLAIN`) when it is an object's getter,
 /// setter or method whose arguments are strings, numbers, booleans, nodes
 /// and other objects of the DOM's, and whose result is one of those, null
-/// or nothing; not when it takes or gives anything else (a callback, a
-/// sequence), makes its result ahead (a new node), is static, or its
+/// or nothing (a new node too, its wrapper made ahead); not when it takes
+/// or gives anything else (a callback, a sequence), is static, or its
 /// function is given the front end.
 #[test]
 fn members_of_strings_nodes_numbers_and_booleans_are_plain() {
@@ -1075,13 +1075,15 @@ fn members_of_strings_nodes_numbers_and_booleans_are_plain() {
         ("CharacterData", "substringData", MemberKind::Method),
         ("NodeList", "item", MemberKind::Method),
         ("Event", "target", MemberKind::Getter),
+        // New nodes, whose wrappers are made ahead of the operation.
+        ("Document", "createElement", MemberKind::Method),
+        ("Document", "createTextNode", MemberKind::Method),
+        ("Document", "createDocumentFragment", MemberKind::Method),
+        ("Text", "splitText", MemberKind::Method),
     ] {
         assert!(is_plain(interface, name, kind), "{interface}.{name}");
     }
     for (interface, name, kind) in [
-        // A new node, made ahead of the operation.
-        ("Document", "createElement", MemberKind::Method),
-        ("Document", "createTextNode", MemberKind::Method),
         // A callback; a method that leaves script to run.
         ("EventTarget", "addEventListener", MemberKind::Method),
         ("EventTarget", "dispatchEvent", MemberKind::Method),

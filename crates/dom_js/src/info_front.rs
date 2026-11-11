@@ -21,10 +21,12 @@ use dom::{
     Window, names,
 };
 use dom_api::{ApiCx, ApiError, Front, FrontTypes, OpFront};
+use elise::Persistent;
 
 use crate::front::{self, Checked, V8Front};
 use crate::state::{self, Caches, State};
 use crate::strings::ArgString;
+use crate::templates;
 
 /// A string the operation couldn't give V8 (it would allocate one): what
 /// `InfoFront::finish_string` makes after.
@@ -33,6 +35,17 @@ pub(crate) enum PendingString {
     String(DomString),
     /// A name's string, not made yet.
     Name(NameId, DomString),
+}
+
+/// A node the operation couldn't give V8: what `InfoFront::finish_node`
+/// makes after.
+pub(crate) enum PendingNode {
+    /// A node with no wrapper, rooted, and its interface: a wrapper made,
+    /// in an operation of its own.
+    Node(NodeRoot, usize),
+    /// A custom element `createElement` is to construct with its
+    /// definition's constructor, in the document.
+    Construct(Persistent<dom::CustomElementDefinition>, NodeRoot),
 }
 
 /// A plain member's call out of its operation.
@@ -53,12 +66,14 @@ impl<'s> FrontTypes for InfoFront<'s> {
     type Node = v8::Local<'s, v8::Object>;
     type Dict = v8::Local<'s, v8::Object>;
     type PendingString = PendingString;
-    /// A node with no wrapper, rooted, and its interface.
-    type PendingNode = (NodeRoot, usize);
+    type PendingNode = PendingNode;
     /// A number that is no Smi.
     type PendingNumber = f64;
     /// An object with no wrapper, rooted, and its interface.
     type PendingObject = (ObjectRoot, usize);
+    /// A new node's wrapper made ahead of the operation, and its
+    /// interface; none for a call on another realm's object.
+    type PreparedNode = Option<(v8::Local<'s, v8::Object>, usize)>;
 }
 
 impl<'s> FrontTypes for InfoOp<'_, 's> {
@@ -66,12 +81,14 @@ impl<'s> FrontTypes for InfoOp<'_, 's> {
     type Node = v8::Local<'s, v8::Object>;
     type Dict = v8::Local<'s, v8::Object>;
     type PendingString = PendingString;
-    /// A node with no wrapper, rooted, and its interface.
-    type PendingNode = (NodeRoot, usize);
+    type PendingNode = PendingNode;
     /// A number that is no Smi.
     type PendingNumber = f64;
     /// An object with no wrapper, rooted, and its interface.
     type PendingObject = (ObjectRoot, usize);
+    /// A new node's wrapper made ahead of the operation, and its
+    /// interface; none for a call on another realm's object.
+    type PreparedNode = Option<(v8::Local<'s, v8::Object>, usize)>;
 }
 
 impl<'s> InfoFront<'s> {
@@ -237,11 +254,54 @@ impl<'s> Front for InfoFront<'s> {
         });
     }
 
-    /// A node with no wrapper: one made now, in an operation of its own.
+    /// A node with no wrapper: one made now, in an operation of its own;
+    /// a custom element constructed.
     #[cold]
     #[inline(never)]
-    fn finish_node(&mut self, (node, interface): (NodeRoot, usize)) {
-        self.with_front(|front| front.finish_kept_as(front::Kept::Node(node, interface)));
+    fn finish_node(&mut self, pending: PendingNode) {
+        self.with_front(|front| {
+            front.finish_kept_as(match pending {
+                PendingNode::Node(node, interface) => front::Kept::Node(node, interface),
+                PendingNode::Construct(definition, document) => {
+                    front::Kept::Construct(definition, document)
+                }
+            });
+        });
+    }
+
+    /// A wrapper of `INTERFACES[interface]`, made now for the node the
+    /// operation will make (V8 allocates: a scope). None for a method of
+    /// another realm called on this one's object (as `V8Front`'s: the
+    /// wrapper is made after, in the node's relevant realm).
+    #[inline(never)]
+    fn prepare_new_node(&mut self, interface: usize) -> Option<(v8::Local<'s, v8::Object>, usize)> {
+        let this = self.info.receiver().object();
+        self.info.with_scope(|mut scope, _| {
+            let current = scope.scope().get_current_context();
+            if this
+                .get_creation_context(scope.scope())
+                .is_some_and(|context| context != current)
+            {
+                return None;
+            }
+            Some((templates::new_wrapper(&mut scope, interface), interface))
+        })
+    }
+
+    /// The interface `this` is of, read in an operation of its own (no
+    /// safepoint), then its wrapper made.
+    fn prepare_node_like_this(&mut self) -> Option<(v8::Local<'s, v8::Object>, usize)> {
+        let interface = self.read(|cx, op| {
+            op.this_as::<Node>(cx)
+                .map(|node| front::interface_of(cx, node))
+        })?;
+        self.prepare_new_node(interface)
+    }
+
+    /// The name only peeked at, with the isolate alone.
+    #[inline(always)]
+    fn foresee_element(&mut self, name: &ArgString<'s>) -> (Option<NameId>, usize) {
+        front::foresee_element(self.info.isolate(), name)
     }
 
     /// A number that is no Smi: a heap number.
@@ -502,11 +562,7 @@ impl<'s> OpFront for InfoOp<'_, 's> {
     /// The node's wrapper, written from the node's reference to it; else
     /// made after the operation.
     #[inline(always)]
-    fn ret_node<'gc>(
-        &mut self,
-        cx: &ApiCx<'_, 'gc>,
-        node: NodeRef<'gc>,
-    ) -> Option<(NodeRoot, usize)> {
+    fn ret_node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, node: NodeRef<'gc>) -> Option<PendingNode> {
         if self.no_gc.return_wrapper(cx.wrapper_edge(node)) {
             return None;
         }
@@ -526,6 +582,51 @@ impl<'s> OpFront for InfoOp<'_, 's> {
         }
         Some(self.root_object(cx, object))
     }
+
+    /// A node its member made: the wrapper made ahead is its, if it is of
+    /// the node's interface (most), with no root and no operation after;
+    /// else as any node (one of another interface than foreseen, or none
+    /// made ahead: its wrapper is made after).
+    #[inline(always)]
+    fn ret_new_node<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        node: NodeRef<'gc>,
+        prepared: Option<(v8::Local<'s, v8::Object>, usize)>,
+    ) -> Option<PendingNode> {
+        match prepared {
+            Some((wrapper, interface)) if interface == front::interface_of(cx, node) => {
+                self.no_gc.wrap(cx.gc, wrapper, node);
+                self.no_gc.set_wrapper(cx.wrapper_edge(node), wrapper);
+                front::count(&self.caches.wrappers_made);
+                front::count(&self.caches.wrappers_ahead);
+                self.no_gc.ret().set(wrapper.into());
+                None
+            }
+            prepared => {
+                if prepared.is_some() {
+                    front::count(&self.caches.wrappers_wasted);
+                }
+                self.ret_node(cx, node)
+            }
+        }
+    }
+
+    /// A custom element to construct after the operation (its
+    /// constructor is script).
+    #[cold]
+    #[inline(never)]
+    fn ret_construct<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        definition: elise::Gc<'gc, dom::CustomElementDefinition>,
+        document: NodeRef<'gc>,
+    ) -> Option<PendingNode> {
+        Some(PendingNode::Construct(
+            Persistent::new(cx.gc, definition),
+            cx.root(document),
+        ))
+    }
 }
 
 impl InfoOp<'_, '_> {
@@ -544,7 +645,7 @@ impl InfoOp<'_, '_> {
     /// interface: out of line, as `front::V8Op`'s (the interface's lookup).
     #[cold]
     #[inline(never)]
-    fn root_node<'gc>(&mut self, cx: &dom::Cx<'_, 'gc>, node: NodeRef<'gc>) -> (NodeRoot, usize) {
-        (cx.root(node), front::interface_of(cx, node))
+    fn root_node<'gc>(&mut self, cx: &dom::Cx<'_, 'gc>, node: NodeRef<'gc>) -> PendingNode {
+        PendingNode::Node(cx.root(node), front::interface_of(cx, node))
     }
 }

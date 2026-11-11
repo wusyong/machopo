@@ -37,6 +37,8 @@ V8 的 callback（templates.rs 的 InfoMember<M>）
    └─ 3. 操作後：操作裡給不出去的結果（成員自己的區域變數）做完；沒有就結束
 ```
 
+一定會建新節點的成員（`createElement`、`createTextNode`、`cloneNode`…）在操作前先建好 wrapper（`InfoFront::prepare_new_node`：這時才建 scope；`createElement` 的 interface 照名稱猜，`foresee_element` 只看名稱；`cloneNode` 的先開一個讀的操作看 `this` 是哪個 interface），它是成員的區域變數（`RetType::Prepared`），操作裡 `InfoOp::ret_new_node` 收下它、直接接上節點：沒有 root、沒有操作後的事。interface 猜錯的（大寫的名稱、XML 文件的元素）那個 wrapper 浪費掉，照沒有 wrapper 的節點處理。
+
 操作裡給不出去的結果（V8 要配置的：還沒有的字串、沒有 wrapper 的節點、不是 Smi 的數字）不放在 front 裡：`InfoOp` 的 `ret_string`、`ret_node`、`ret_u32`… 回傳它（`PendingString`、節點的 root 和 interface、`f64`），`dom_api` 的回傳型別把它帶出操作（`RetType::Pending`），操作後交給 `finish_string`、`finish_node`、`finish_number`。回傳布林的成員沒有這個變數；其他 front（`V8Front`、named property 的、wasm 的）在操作裡自己留著結果，這幾個型別填 `Infallible`，那一段編掉。
 
 isolate、receiver、參數、回傳值都在用的地方從 info 讀，不建 rusty_v8 的 scope、不建 `Call`；跑的是同一份 `TypedMember::call`。要 V8 配置、丟例外、執行 script 的（參數要 `ToString` 或複製、結果是 V8 還沒有的字串、沒有 wrapper 的節點、不是 Smi 的數字、錯誤、custom element 的 reaction、要告訴 V8 heap 長大了）當場建一個 scope 和上面的 `V8Front`（`InfoFront::with_front`），交給它做，用完就丟；這些路都在 inline 之外。哪個成員走哪個 front 在編譯時決定（`Members::function` 的 `const { M::PLAIN }`）；跨 origin 的物件的成員照舊（它的 callback 先檢查呼叫者）。

@@ -67,12 +67,19 @@ pub trait FrontTypes {
     /// An object of any type with no wrapper (`OpFront::ret_object`,
     /// `Front::finish_object`).
     type PendingObject;
+    /// What the front end makes ahead of the operation for a node its
+    /// member will make (`Front::prepare_new_node`: a wrapper, which its
+    /// engine can't allocate in the operation), carried into it by the
+    /// member's call (`RetType::Prepared`) and taken as the node is given
+    /// (`OpFront::ret_new_node`). `()` for a front end that makes none.
+    type PreparedNode: Default;
 }
 
 /// A result type's `Pending` and `finish` when it leaves nothing for
 /// after the operation.
 macro_rules! no_pending {
     () => {
+        $crate::typed::no_prepared!();
         type Pending<F: $crate::typed::FrontTypes> = ();
 
         #[inline(always)]
@@ -81,12 +88,25 @@ macro_rules! no_pending {
 }
 pub(crate) use no_pending;
 
+/// A result type's `Prepared` and `prepare` when nothing is made ahead of
+/// the operation for it.
+macro_rules! no_prepared {
+    () => {
+        type Prepared<F: $crate::typed::FrontTypes> = ();
+
+        #[inline(always)]
+        fn prepare<F: $crate::typed::Front>(_: &mut F, _: Option<usize>) {}
+    };
+}
+pub(crate) use no_prepared;
+
 /// A result type's `Pending` and `finish` when it may leave a string, a
 /// node or a number (`$pending`, `$finish`: `PendingString` and
 /// `finish_string`...) for after the operation. Always inlined: where the
 /// front end names a type with no value, nothing is left of it.
 macro_rules! pending {
     ($pending:ident, $finish:ident) => {
+        no_prepared!();
         type Pending<F: FrontTypes> = Option<F::$pending>;
 
         #[inline(always)]
@@ -112,6 +132,7 @@ pub trait Front: FrontTypes {
             PendingNode = Self::PendingNode,
             PendingNumber = Self::PendingNumber,
             PendingObject = Self::PendingObject,
+            PreparedNode = Self::PreparedNode,
         >
     where
         Self: 'o;
@@ -669,19 +690,25 @@ pub trait Front: FrontTypes {
 
     /// A new node's wrapper, of `INTERFACES[interface]`, made ahead of the
     /// operation that makes the node (WebIDL's `[NewObject]`): none in it.
-    fn prepare_new_node(&mut self, interface: usize) {
+    fn prepare_new_node(&mut self, interface: usize) -> Self::PreparedNode {
         let _ = interface;
+        Self::PreparedNode::default()
     }
 
-    /// `createElement`'s: a wrapper made ahead for the element of local
-    /// name `name` in an HTML document (`prepare_new_node` of the
-    /// interface the name has); `HTMLElement`'s by default. The name's
+    /// `prepare_new_node` of the interface `this` is of: for a member
+    /// whose new node is of it (`cloneNode`). None by default.
+    fn prepare_node_like_this(&mut self) -> Self::PreparedNode {
+        Self::PreparedNode::default()
+    }
+
+    /// `createElement`'s: what the local name `name` says of the element
+    /// in an HTML document, read without making anything: the name's
     /// number if it found it as it is (lowercase), for the operation to
-    /// use.
-    fn prepare_new_element(&mut self, name: &Self::Str) -> Option<dom::NameId> {
+    /// use, and the interface the element will be of (what its wrapper is
+    /// made ahead of, `prepare_new_node`); `HTMLElement` by default.
+    fn foresee_element(&mut self, name: &Self::Str) -> (Option<dom::NameId>, usize) {
         let _ = name;
-        self.prepare_new_node(crate::declare::HTML_ELEMENT);
-        None
+        (None, crate::declare::HTML_ELEMENT)
     }
 
     /// The result made the engine's value, after the operation, with none
@@ -1080,12 +1107,13 @@ pub trait OpFront: FrontTypes {
     /// operation, with `definition`'s constructor, in `document`: the
     /// front end constructs it (`ScriptHost`-like, out of the operation),
     /// checks what it gave (`custom_elements::created`), and gives it.
+    #[must_use = "what the operation couldn't give is finished after it"]
     fn ret_construct<'gc>(
         &mut self,
         cx: &ApiCx<'_, 'gc>,
         definition: Gc<'gc, dom::CustomElementDefinition>,
         document: NodeRef<'gc>,
-    ) {
+    ) -> Option<Self::PendingNode> {
         let _ = (cx, definition, document);
         unreachable!("a front end binding `createElement` constructs custom elements")
     }
@@ -1326,14 +1354,17 @@ pub trait OpFront: FrontTypes {
         unreachable!("a front end binding a member giving numbers gives them")
     }
 
-    /// A node its member made (`NewObject`): as any node by default, for
-    /// a front end that gives every node in the operation.
-    fn ret_new_node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, node: NodeRef<'gc>) {
-        let pending = self.ret_node(cx, node);
-        assert!(
-            pending.is_none(),
-            "a front end that leaves a node for after the operation gives a new one itself"
-        );
+    /// A node its member made (`NewObject`), and what was made ahead for
+    /// it (`Front::prepare_new_node`): as any node by default.
+    #[must_use = "what the operation couldn't give is finished after it"]
+    fn ret_new_node<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        node: NodeRef<'gc>,
+        prepared: Self::PreparedNode,
+    ) -> Option<Self::PendingNode> {
+        let _ = prepared;
+        self.ret_node(cx, node)
     }
 }
 
@@ -2077,6 +2108,15 @@ pub trait ArgType {
     /// Argument `index`, before the operation; `None` if it threw.
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Self::Taken<F>>;
 
+    /// The interface this argument foresees the member's new node to be
+    /// of, if it does (`createElement`'s local name): what the result's
+    /// `RetType::prepare` is given.
+    #[inline(always)]
+    fn foreseen_interface<F: FrontTypes>(taken: &Self::Taken<F>) -> Option<usize> {
+        let _ = taken;
+        None
+    }
+
     /// What the function gets of `taken`, in the operation (argument
     /// `index`), through the front end's side there.
     fn param<'a, 'gc, O: OpFront>(
@@ -2096,10 +2136,15 @@ pub trait RetType {
     const PLAIN: bool = false;
     type Ret<'gc>;
 
-    /// Before the operation: what the front end makes ahead of it.
-    fn prepare<F: Front>(front: &mut F) {
-        let _ = front;
-    }
+    /// What the front end makes ahead of the operation for it, as the
+    /// front end `F` names it (`FrontTypes::PreparedNode`): nothing (`()`)
+    /// for most.
+    type Prepared<F: FrontTypes>;
+
+    /// Before the operation, the arguments taken: what the front end
+    /// makes ahead of it. `foreseen` is the interface an argument foresaw
+    /// the result to be of, if one did (`ArgType::foreseen_interface`).
+    fn prepare<F: Front>(front: &mut F, foreseen: Option<usize>) -> Self::Prepared<F>;
 
     /// What it leaves for after the operation, as the front end `F` names
     /// it (`FrontTypes::PendingString`...): nothing (`()`) for a result
@@ -2113,6 +2158,18 @@ pub trait RetType {
         cx: &ApiCx<'_, 'gc>,
         value: Self::Ret<'gc>,
     ) -> Self::Pending<O>;
+
+    /// `give`, with what `prepare` made: dropped, unless the type takes it.
+    #[inline(always)]
+    fn give_prepared<'gc, O: OpFront>(
+        op: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        value: Self::Ret<'gc>,
+        prepared: Self::Prepared<O>,
+    ) -> Self::Pending<O> {
+        let _ = prepared;
+        Self::give(op, cx, value)
+    }
 
     /// After the operation: what `give` left, finished.
     fn finish<F: Front>(front: &mut F, pending: Self::Pending<F>);
@@ -2133,15 +2190,39 @@ pub struct NewObject<I, L = I>(PhantomData<(I, L)>);
 
 impl<I: Interface, L: Interface> RetType for NewObject<I, L> {
     const DESC: TypeDesc = TypeDesc::Node(I::NAME);
+    const PLAIN: bool = true;
     type Ret<'gc> = NodeRef<'gc>;
-    no_pending!();
+    type Prepared<F: FrontTypes> = F::PreparedNode;
+    type Pending<F: FrontTypes> = Option<F::PendingNode>;
 
-    fn prepare<F: Front>(front: &mut F) {
-        front.prepare_new_node(L::INDEX);
+    #[inline(always)]
+    fn prepare<F: Front>(front: &mut F, _: Option<usize>) -> F::PreparedNode {
+        front.prepare_new_node(L::INDEX)
     }
 
-    fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, value: NodeRef<'gc>) {
-        op.ret_new_node(cx, value);
+    fn give<'gc, O: OpFront>(
+        op: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        value: NodeRef<'gc>,
+    ) -> Option<O::PendingNode> {
+        op.ret_node(cx, value)
+    }
+
+    #[inline(always)]
+    fn give_prepared<'gc, O: OpFront>(
+        op: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        value: NodeRef<'gc>,
+        prepared: O::PreparedNode,
+    ) -> Option<O::PendingNode> {
+        op.ret_new_node(cx, value, prepared)
+    }
+
+    #[inline(always)]
+    fn finish<F: Front>(front: &mut F, pending: Option<F::PendingNode>) {
+        if let Some(pending) = pending {
+            front.finish_node(pending);
+        }
     }
 }
 
@@ -5475,19 +5556,29 @@ pub struct ElementLocalName;
 
 impl ArgType for ElementLocalName {
     const DESC: TypeDesc = TypeDesc::String;
-    type Taken<T: FrontTypes> = (T::Str, Option<dom::NameId>);
+    const PLAIN: bool = true;
+    /// The name, its number if it is one already, and the interface its
+    /// element will be of in an HTML document (`Front::foresee_element`).
+    type Taken<T: FrontTypes> = (T::Str, Option<dom::NameId>, usize);
     type Param<'a, 'gc> = (&'a str, Option<dom::NameId>);
 
-    fn take<F: Front>(front: &mut F, index: usize) -> Option<(F::Str, Option<dom::NameId>)> {
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<(F::Str, Option<dom::NameId>, usize)> {
         let name = front.string_arg(index)?;
-        let id = front.prepare_new_element(&name);
-        Some((name, id))
+        let (id, interface) = front.foresee_element(&name);
+        Some((name, id, interface))
+    }
+
+    #[inline(always)]
+    fn foreseen_interface<F: FrontTypes>(
+        taken: &(F::Str, Option<dom::NameId>, usize),
+    ) -> Option<usize> {
+        Some(taken.2)
     }
 
     fn param<'a, 'gc, O: OpFront>(
         op: &mut O,
         _: &ApiCx<'_, 'gc>,
-        taken: &'a (O::Str, Option<dom::NameId>),
+        taken: &'a (O::Str, Option<dom::NameId>, usize),
         _: usize,
     ) -> Result<(&'a str, Option<dom::NameId>), ApiError> {
         Ok((op.str_param(&taken.0), taken.1))
@@ -5500,11 +5591,84 @@ pub struct NewHtmlElement;
 
 impl RetType for NewHtmlElement {
     const DESC: TypeDesc = TypeDesc::Node("Element");
+    const PLAIN: bool = true;
     type Ret<'gc> = Created<'gc>;
-    no_pending!();
+    type Prepared<F: FrontTypes> = F::PreparedNode;
+    type Pending<F: FrontTypes> = Option<F::PendingNode>;
 
-    fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, value: Created<'gc>) {
-        NewElement::<crate::interfaces::HTMLElement>::give(op, cx, value);
+    #[inline(always)]
+    fn prepare<F: Front>(front: &mut F, foreseen: Option<usize>) -> F::PreparedNode {
+        NewElement::<crate::interfaces::HTMLElement>::prepare(front, foreseen)
+    }
+
+    fn give<'gc, O: OpFront>(
+        op: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        value: Created<'gc>,
+    ) -> Option<O::PendingNode> {
+        NewElement::<crate::interfaces::HTMLElement>::give(op, cx, value)
+    }
+
+    #[inline(always)]
+    fn give_prepared<'gc, O: OpFront>(
+        op: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        value: Created<'gc>,
+        prepared: O::PreparedNode,
+    ) -> Option<O::PendingNode> {
+        NewElement::<crate::interfaces::HTMLElement>::give_prepared(op, cx, value, prepared)
+    }
+
+    #[inline(always)]
+    fn finish<F: Front>(front: &mut F, pending: Option<F::PendingNode>) {
+        if let Some(pending) = pending {
+            front.finish_node(pending);
+        }
+    }
+}
+
+/// A new node of the interface `this` is of (`cloneNode`'s copy): its
+/// wrapper made ahead of the operation, as `NewObject`'s, of the
+/// interface the front end finds `this` to be of
+/// (`Front::prepare_node_like_this`); one of another interface after all is
+/// given as any node.
+pub struct NewNodeLikeThis;
+
+impl RetType for NewNodeLikeThis {
+    const DESC: TypeDesc = TypeDesc::Node("Node");
+    const PLAIN: bool = true;
+    type Ret<'gc> = NodeRef<'gc>;
+    type Prepared<F: FrontTypes> = F::PreparedNode;
+    type Pending<F: FrontTypes> = Option<F::PendingNode>;
+
+    #[inline(always)]
+    fn prepare<F: Front>(front: &mut F, _: Option<usize>) -> F::PreparedNode {
+        front.prepare_node_like_this()
+    }
+
+    fn give<'gc, O: OpFront>(
+        op: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        value: NodeRef<'gc>,
+    ) -> Option<O::PendingNode> {
+        op.ret_node(cx, value)
+    }
+
+    #[inline(always)]
+    fn give_prepared<'gc, O: OpFront>(
+        op: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        value: NodeRef<'gc>,
+        prepared: O::PreparedNode,
+    ) -> Option<O::PendingNode> {
+        op.ret_new_node(cx, value, prepared)
+    }
+
+    #[inline(always)]
+    fn finish<F: Front>(front: &mut F, pending: Option<F::PendingNode>) {
+        if let Some(pending) = pending {
+            front.finish_node(pending);
+        }
     }
 }
 
@@ -5525,20 +5689,46 @@ pub enum Created<'gc> {
 
 impl<L: Interface> RetType for NewElement<L> {
     const DESC: TypeDesc = TypeDesc::Node("Element");
+    const PLAIN: bool = true;
     type Ret<'gc> = Created<'gc>;
-    no_pending!();
+    type Prepared<F: FrontTypes> = F::PreparedNode;
+    type Pending<F: FrontTypes> = Option<F::PendingNode>;
 
-    fn prepare<F: Front>(front: &mut F) {
-        front.prepare_new_node(L::INDEX);
+    /// A wrapper of the interface an argument foresaw (`createElement`'s
+    /// local name), else `L`'s.
+    #[inline(always)]
+    fn prepare<F: Front>(front: &mut F, foreseen: Option<usize>) -> F::PreparedNode {
+        front.prepare_new_node(foreseen.unwrap_or(L::INDEX))
     }
 
-    fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, value: Created<'gc>) {
+    fn give<'gc, O: OpFront>(
+        op: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        value: Created<'gc>,
+    ) -> Option<O::PendingNode> {
+        Self::give_prepared(op, cx, value, O::PreparedNode::default())
+    }
+
+    #[inline(always)]
+    fn give_prepared<'gc, O: OpFront>(
+        op: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        value: Created<'gc>,
+        prepared: O::PreparedNode,
+    ) -> Option<O::PendingNode> {
         match value {
-            Created::Element(element) => op.ret_new_node(cx, element),
+            Created::Element(element) => op.ret_new_node(cx, element, prepared),
             Created::Construct {
                 definition,
                 document,
             } => op.ret_construct(cx, definition, document),
+        }
+    }
+
+    #[inline(always)]
+    fn finish<F: Front>(front: &mut F, pending: Option<F::PendingNode>) {
+        if let Some(pending) = pending {
+            front.finish_node(pending);
         }
     }
 }
@@ -5698,9 +5888,13 @@ pub enum PromiseOf<'gc> {
 impl RetType for PromiseOfAny {
     const DESC: TypeDesc = TypeDesc::Promise("any");
     type Ret<'gc> = PromiseOf<'gc>;
-    no_pending!();
+    type Prepared<F: FrontTypes> = ();
+    type Pending<F: FrontTypes> = ();
 
-    fn prepare<F: Front>(front: &mut F) {
+    #[inline(always)]
+    fn finish<F: Front>(_: &mut F, (): ()) {}
+
+    fn prepare<F: Front>(front: &mut F, _: Option<usize>) {
         front.prepare_promise();
     }
 
@@ -5764,9 +5958,13 @@ pub struct PendingPromise<I>(PhantomData<I>);
 impl<I: Interface> RetType for PendingPromise<I> {
     const DESC: TypeDesc = TypeDesc::Promise(I::NAME);
     type Ret<'gc> = u64;
-    no_pending!();
+    type Prepared<F: FrontTypes> = ();
+    type Pending<F: FrontTypes> = ();
 
-    fn prepare<F: Front>(front: &mut F) {
+    #[inline(always)]
+    fn finish<F: Front>(_: &mut F, (): ()) {}
+
+    fn prepare<F: Front>(front: &mut F, _: Option<usize>) {
         front.prepare_promise();
     }
 
@@ -6358,6 +6556,7 @@ impl ArgType for CanvasStyleValue {
 impl RetType for CanvasStyleValue {
     const DESC: TypeDesc = TypeDesc::StringOr(CANVAS_STYLE_OBJECTS);
     type Ret<'gc> = CanvasStyleRet<'gc>;
+    no_prepared!();
     type Pending<F: FrontTypes> = (Option<F::PendingString>, Option<F::PendingObject>);
 
     #[inline(always)]
@@ -8124,6 +8323,7 @@ mod tests {
         type PendingNode = std::convert::Infallible;
         type PendingNumber = std::convert::Infallible;
         type PendingObject = std::convert::Infallible;
+        type PreparedNode = ();
     }
 
     impl Front for OneNode {

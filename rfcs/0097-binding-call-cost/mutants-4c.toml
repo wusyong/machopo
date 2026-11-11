@@ -1,0 +1,96 @@
+# Stage 4c: what is made ahead of the operation (a new node's wrapper) is
+# the member's own, carried into the operation by its return type
+# (`RetType::Prepared`, `give_prepared`); `createElement`'s interface is
+# foreseen by its argument; `cloneNode`'s is `this`'s.
+test = ["cargo", "test", "-q", "-p", "dom_api", "-p", "dom_js", "-p", "dom_wasm"]
+timeout = 1800
+
+[[mutant]]
+name = "no wrapper made ahead"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            Some((templates::new_wrapper(&mut scope, interface), interface))'''
+to = '''            let _ = (&mut scope, interface);
+            None'''
+
+[[mutant]]
+name = "a wrapper made ahead for another realm's object"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                .is_some_and(|context| context != current)
+            {
+                return None;
+            }'''
+to = '''                .is_some_and(|context| context != current)
+                && false
+            {
+                return None;
+            }'''
+
+[[mutant]]
+name = "no wrapper made ahead of a copy"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        })?;
+        self.prepare_new_node(interface)'''
+to = '''        })?;
+        let _ = interface;
+        None'''
+
+[[mutant]]
+name = "a copy's wrapper made ahead as a node's"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                .map(|node| front::interface_of(cx, node))
+        })?;'''
+to = '''                .map(|_| dom_api::declare::HTML_ELEMENT)
+        })?;'''
+
+[[mutant]]
+name = "a wrapper of another interface made the node's"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            Some((wrapper, interface)) if interface == front::interface_of(cx, node) => {'''
+to = '''            Some((wrapper, interface)) if interface == interface => {'''
+
+[[mutant]]
+name = "the wrapper made ahead not the node's"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                self.no_gc.set_wrapper(cx.wrapper_edge(node), wrapper);
+                front::count(&self.caches.wrappers_made);
+                front::count(&self.caches.wrappers_ahead);'''
+to = '''                front::count(&self.caches.wrappers_made);
+                front::count(&self.caches.wrappers_ahead);'''
+
+[[mutant]]
+name = "a custom element not constructed"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        Some(PendingNode::Construct(
+            Persistent::new(cx.gc, definition),
+            cx.root(document),
+        ))'''
+to = '''        let _ = (cx, definition, document);
+        None'''
+
+[[mutant]]
+name = "the element's interface not foreseen"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        front::foresee_element(self.info.isolate(), name)'''
+to = '''        let _ = name;
+        (None, dom_api::declare::HTML_ELEMENT)'''
+
+[[mutant]]
+name = "what an argument foresaw not given to the result"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''            let foreseen = ::std::option::Option::<usize>::None
+                #(.or(<#types as #api::typed::ArgType>::foreseen_interface::<F>(&#names)))*;'''
+to = '''            let foreseen = ::std::option::Option::<usize>::None;'''
+
+[[mutant]]
+name = "a new element's wrapper of the default interface whatever was foreseen"
+file = "crates/dom_api/src/typed.rs"
+from = '''        front.prepare_new_node(foreseen.unwrap_or(L::INDEX))'''
+to = '''        let _ = foreseen;
+        front.prepare_new_node(L::INDEX)'''
+
+[[mutant]]
+name = "the element's name foresees nothing"
+file = "crates/dom_api/src/typed.rs"
+from = '''        Some(taken.2)'''
+to = '''        let _ = taken;
+        None'''

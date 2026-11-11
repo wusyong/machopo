@@ -61,6 +61,14 @@ pub fn wrappers_made(isolate: &mut v8::Isolate) -> u64 {
         .map_or(0, |state| state.caches.wrappers_made.get())
 }
 
+/// The wrappers made ahead of a new node that became its wrapper in the
+/// operation that made it (`createElement`'s, `cloneNode`'s), for the
+/// tests.
+pub fn wrappers_ahead(isolate: &mut v8::Isolate) -> u64 {
+    bindings::isolate_state_mut::<State>(isolate)
+        .map_or(0, |state| state.caches.wrappers_ahead.get())
+}
+
 /// The wrappers made ahead of a new node that weren't its interface's
 /// (`createElement`'s foreseen by the name), for the tests.
 pub fn wrappers_wasted(isolate: &mut v8::Isolate) -> u64 {

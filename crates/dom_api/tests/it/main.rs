@@ -342,6 +342,7 @@ impl FrontTypes for TestFront<'_> {
     type PendingNode = std::convert::Infallible;
     type PendingNumber = std::convert::Infallible;
     type PendingObject = std::convert::Infallible;
+    type PreparedNode = ();
 }
 
 impl<'d> Front for TestFront<'d> {
@@ -909,9 +910,14 @@ impl OpFront for TestFront<'_> {
         self.ret = Some(Ret::Strings(strings));
     }
 
-    fn ret_new_node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, node: NodeRef<'gc>) {
+    fn ret_new_node<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        node: NodeRef<'gc>,
+        (): (),
+    ) -> Option<std::convert::Infallible> {
         self.hooks.new_nodes += 1;
-        let None = self.ret_node(cx, node);
+        self.ret_node(cx, node)
     }
 }
 

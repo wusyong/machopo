@@ -210,6 +210,10 @@ impl Env {
         dom_js::wrappers_made(self.data.isolate())
     }
 
+    pub fn wrappers_ahead(&mut self) -> u64 {
+        dom_js::wrappers_ahead(self.data.isolate())
+    }
+
     pub fn wrappers_wasted(&mut self) -> u64 {
         dom_js::wrappers_wasted(self.data.isolate())
     }

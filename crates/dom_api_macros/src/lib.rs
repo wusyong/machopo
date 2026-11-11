@@ -1523,11 +1523,16 @@ fn getter(iface: &Ident, ty: &Type, get: &Path) -> Tokens {
         const PLAIN: bool = <#ty as #api::typed::RetType>::PLAIN;
 
         fn call<F: #api::typed::Front>(#front: &mut F) {
-            <#ty as #api::typed::RetType>::prepare(#front);
+            let prepared = <#ty as #api::typed::RetType>::prepare(#front, ::std::option::Option::None);
             let #result = #front.read(|#cx, #op| {
                 let #this_ = #this;
                 #get(#cx, #this_).map(|#value| {
-                    <#ty as #api::typed::RetType>::give(#op, #cx, ::std::convert::Into::into(#value))
+                    <#ty as #api::typed::RetType>::give_prepared(
+                        #op,
+                        #cx,
+                        ::std::convert::Into::into(#value),
+                        prepared,
+                    )
                 })
             });
             match #result {
@@ -1720,7 +1725,12 @@ fn method(
             )*
             let #value = #function(#front_arg #cx #this_arg #(, #names)*)?;
             ::std::result::Result::Ok(
-                <#ret as #api::typed::RetType>::give(#op, #cx, ::std::convert::Into::into(#value))
+                <#ret as #api::typed::RetType>::give_prepared(
+                    #op,
+                    #cx,
+                    ::std::convert::Into::into(#value),
+                    prepared,
+                )
             )
         },
     );
@@ -1742,7 +1752,11 @@ fn method(
                     return;
                 };
             )*
-            <#ret as #api::typed::RetType>::prepare(#front);
+            // What an argument foresaw of the result (`createElement`'s
+            // name: its element's interface), for what is made ahead.
+            let foreseen = ::std::option::Option::<usize>::None
+                #(.or(<#types as #api::typed::ArgType>::foreseen_interface::<F>(&#names)))*;
+            let prepared = <#ret as #api::typed::RetType>::prepare(#front, foreseen);
             let #result = #front.mutate(|#cx, #op| {
                 #op_body
             });
@@ -2034,6 +2048,11 @@ fn dictionary_items(dictionary: &DictionaryDef) -> Tokens {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Dictionary(#name_str);
             type Ret<'gc> = #name;
 
+            type Prepared<F: #api::typed::FrontTypes> = ();
+
+            #[inline(always)]
+            fn prepare<F: #api::typed::Front>(_: &mut F, _: ::std::option::Option<usize>) {}
+
             type Pending<F: #api::typed::FrontTypes> = ();
 
             #[inline(always)]
@@ -2095,6 +2114,11 @@ fn object_types(name: &Ident) -> Tokens {
     let object = quote!(<<#name as #api::declare::Interface>::Object as #api::typed::ObjectType>);
     // What an object result leaves for after the operation, finished.
     let pending_object = quote! {
+        type Prepared<F: #api::typed::FrontTypes> = ();
+
+        #[inline(always)]
+        fn prepare<F: #api::typed::Front>(_: &mut F, _: ::std::option::Option<usize>) {}
+
         type Pending<F: #api::typed::FrontTypes> = ::std::option::Option<F::PendingObject>;
 
         #[inline(always)]
@@ -2239,6 +2263,11 @@ fn node_types(name: &Ident) -> Tokens {
     let node = local("node");
     // What a node result leaves for after the operation, finished.
     let pending_node = quote! {
+        type Prepared<F: #api::typed::FrontTypes> = ();
+
+        #[inline(always)]
+        fn prepare<F: #api::typed::Front>(_: &mut F, _: ::std::option::Option<usize>) {}
+
         type Pending<F: #api::typed::FrontTypes> = ::std::option::Option<F::PendingNode>;
 
         #[inline(always)]

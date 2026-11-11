@@ -24,9 +24,9 @@ use crate::typed::{
     LongDefaultMinusOne, LongDefaultOne, MeasureStart, MediaQueryListEventObject,
     MediaQueryListObject, MessageEventObject, MessagePortObject, MessagePorts, MouseEventObject,
     MutationCallback, NamespaceObject, NavigationTimingObject, NetworkInformationObject,
-    NewElement, NewHtmlElement, NewObject, NoObject, NoPositionObject, NodesOrStrings,
-    NullableBody, NullableElementOrLong, NullableU32, NumberIfNumber, Numbers, ObservableArray,
-    OptionOrOptGroup, OptionalClampedI64, OptionalPath2dOrString, OptionalString,
+    NewElement, NewHtmlElement, NewNodeLikeThis, NewObject, NoObject, NoPositionObject,
+    NodesOrStrings, NullableBody, NullableElementOrLong, NullableU32, NumberIfNumber, Numbers,
+    ObservableArray, OptionOrOptGroup, OptionalClampedI64, OptionalPath2dOrString, OptionalString,
     OptionalTimingArg, OptionalUnrestrictedDouble, OptionsCollectionObject, PendingPromise,
     PerformanceEntryObject, PerformanceMarkObject, PerformanceMeasureObject,
     PerformanceNavigationObject, PerformanceObject, PerformanceObserverCallback,
@@ -1806,7 +1806,7 @@ crate::declare! {
         #[ce_reactions]
         method removeChild(child: Node) -> Node = node::remove_child;
         #[ce_reactions]
-        method cloneNode(deep?: bool) -> Node = document::clone_node;
+        method cloneNode(deep?: bool) -> NewNodeLikeThis = document::clone_node;
 
         method isEqualNode(otherNode: Option<Node>) -> bool = node::is_equal_node;
         method isSameNode(otherNode: Option<Node>) -> bool = node::is_same_node;
