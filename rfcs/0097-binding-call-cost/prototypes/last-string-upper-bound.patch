@@ -1,0 +1,71 @@
+diff --git a/crates/dom/src/names.rs b/crates/dom/src/names.rs
+index 38ba998..595fb8f 100644
+--- a/crates/dom/src/names.rs
++++ b/crates/dom/src/names.rs
+@@ -262,9 +262,30 @@ pub fn intern(name: &str) -> NameId {
+ 
+ /// `name`'s number, if it has one.
+ pub fn find(name: &str) -> Option<NameId> {
++    // PROTOTYPE (measured, not to be merged): the last look's answer by the
++    // text's address, no hash and no compare: an upper bound of what a
++    // hash V8 already has could save (wrong in general: an address is
++    // reused).
++    if *PROTOTYPE_LAST {
++        let key = (name.as_ptr().addr(), name.len());
++        let (last, found) = LAST_FOUND.get();
++        if last == key {
++            return found;
++        }
++        let found = find_fixed(name).or_else(|| TABLE.with_borrow(|table| table.find(name)));
++        LAST_FOUND.set((key, found));
++        return found;
++    }
+     find_fixed(name).or_else(|| TABLE.with_borrow(|table| table.find(name)))
+ }
+ 
++static PROTOTYPE_LAST: std::sync::LazyLock<bool> =
++    std::sync::LazyLock::new(|| std::env::var_os("MACHOPO_PROTOTYPE_LAST_STRING").is_some());
++thread_local! {
++    static LAST_FOUND: std::cell::Cell<((usize, usize), Option<NameId>)> =
++        const { std::cell::Cell::new(((0, 0), None)) };
++}
++
+ /// `name`'s fixed number, if it has one. The empty string (no namespace,
+ /// no prefix: most looks) is `NONE` with no look in the map: comparing it
+ /// there calls `memcmp` with length 0 on the empty slice's dangling
+diff --git a/crates/dom/src/string.rs b/crates/dom/src/string.rs
+index 57d357e..d44af47 100644
+--- a/crates/dom/src/string.rs
++++ b/crates/dom/src/string.rs
+@@ -253,6 +253,31 @@ pub fn find_value(text: &str) -> Option<DomString> {
+ /// The string of the value `text`: the thread's table's if it has one, else
+ /// a new one it keeps.
+ pub fn intern_value(text: &str) -> DomString {
++    // PROTOTYPE (measured, not to be merged): as `names::find`'s.
++    if *PROTOTYPE_LAST {
++        let key = (text.as_ptr().addr(), text.len());
++        let hit = LAST_VALUE.with_borrow(|last| match last {
++            Some((at, string)) if *at == key => Some(string.clone()),
++            _ => None,
++        });
++        if let Some(string) = hit {
++            return string;
++        }
++        let string = intern_value_slow(text);
++        LAST_VALUE.with_borrow_mut(|last| *last = Some((key, string.clone())));
++        return string;
++    }
++    intern_value_slow(text)
++}
++
++static PROTOTYPE_LAST: std::sync::LazyLock<bool> =
++    std::sync::LazyLock::new(|| std::env::var_os("MACHOPO_PROTOTYPE_LAST_STRING").is_some());
++thread_local! {
++    static LAST_VALUE: std::cell::RefCell<Option<((usize, usize), DomString)>> =
++        const { std::cell::RefCell::new(None) };
++}
++
++fn intern_value_slow(text: &str) -> DomString {
+     VALUES.with_borrow_mut(|values| {
+         if let Some(string) = values.strings.get(text) {
+             return string.clone();
