@@ -89,7 +89,8 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
 | 段 | 內容 |
 | --- | --- |
 | 1 | 原型和量測（不合併）：每一項單獨做最小的原型，`bench.py calls` 量指令數和 cycle；V8 在操作裡配置的原型另外量規則 2 多久發生一次、停頓多長 |
-| 2 起 | 照第 1 段的數字決定做哪幾項、順序和怎麼分段（待決定 2） |
+| 2 | 字串參數已經是字串就不轉換（決定 7、8） |
+| 3 | 外殼不建 scope、`Call` 只帶用得到的欄位（決定 7、8）；怎麼分段在這一段開始前決定 |
 
 ## 缺點
 
@@ -130,13 +131,30 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
 
 6. **「V8 在操作裡配置」的原型先不做**：量了現在的路（`progress.md`），它只省「留著的結果」那條（回傳沒有 wrapper 的節點約 23%、沒快取到的字串），Speedometer 上的上限約 5 到 6 ms；`createElement` 不受惠（已經在操作前預先建 wrapper）。它是各項裡工作量和風險最大的（elise 的 marking 的開始和收尾、`bindings` 的論證）。不做的話一次呼叫照舊三段，但每次呼叫都付的固定成本由「`Call` 只帶用得到的欄位」拿掉（回傳數字、名稱、一定有 wrapper 的物件的成員編出來只有操作那一段）。模型和三條規則留著，之後要做（為了那 5 到 6 ms、拿掉「留著的結果」那一套、或事件派發）不用重來。接著做字串，再拆開量事件派發。
 
+第 1 段量完（2026-11-11，使用者照建議）：
+
+7. **做兩項：外殼不建 scope 加上 `Call` 只帶用得到的欄位（`nodeType` 省 37 條指令、7 個 cycle，每次呼叫都省），和字串參數已經是字串就不轉換（每個字串參數省約 57 條指令，Blink 也這樣做）**。其他都不做：
+   - 最近查過的名稱和值的小快取（每個名稱約 40 條、每個值約 95 條）：Blink 沒有這一層，是「短字串改不成 external」的替代品，多一個要維護的東西，之後能做 external 時還要拆；只在一兩個名稱的 benchmark 上量過。
+   - 進來的字串改成 external（Blink 的做法；長的名稱省約三成）：現在的 V8（有指標壓縮、沒有 sandbox）只改得了 8 個字元以上的字串，真的頁面上佔多少沒量過；要在 fork 接 `MakeExternal`（改 C++、重編 V8）、處理 resource 的生命。最常用的 `'id'` 連 Chrome 也改不了、每次查表；Chrome 在改得了的名稱上省約 3 到 5 ns（20 ns 裡）。
+   - 出去的字串不複製（external 指著 DOM 的文字）：到 1000 個字元都比複製慢，在 JS 裡讀也變慢；V8 在 GC 的 worker 上放緩衝區，DOM 的字串的計數不是 atomic 的。
+   - 為了字串開 V8 的 sandbox：效果就是上面 Chrome 的那 3 到 5 ns；要不要開看安全上的理由，另一份 RFC。
+   - 只留 cage 的檢查以外的 unwrap（約 1 個 cycle；比 tag 那一步 Blink 也付）、事件派發（最大的一塊是 DOM 的演算法，不是 binding）。
+8. **順序：先字串參數不轉換（第 2 段），再外殼和 `Call`（第 3 段）**：前者小，先走完一次實作、測試和 mutation test；後者動到每個成員的外殼，分段做，怎麼分在開始前決定。
+9. **第 1 段的原型從 `0097` 上拿掉**（決定 3）：兩個原型的 commit 的程式存成 `prototypes/raw-getter.patch`、`prototypes/string-already-a-string.patch`，分支重新整理成只有文件的 commit（還沒 push 過）。
+
+第 2 段開始前（2026-11-11，使用者照建議）：
+
+10. **「是不是字串」的檢查放在 rusty_v8 的 fork**（`v8::machopo::as_string`，和 `unwrap_inline`、`one_byte_chars` 一起）：照 V8 的佈局讀 map 的 instance type，不呼叫 V8（V8 的 `Value::IsString` 在標頭檔裡就是這樣 inline 的，Blink 直接用）。照佈局讀的程式和常數集中在 fork，V8 升級時一起檢查；只改 Rust，不重編 V8。不選放在 `bindings`（佈局的常數散在兩個 repo）；不選 rusty_v8 現成的 `is_string()`（一次 C++ 呼叫）。
+11. **只改 `arg_string`**（成員的字串參數，6 個呼叫點都受惠）；其他直接呼叫 `to_string` 的地方是冷的路，不動。
+12. **用計數守**：isolate 的狀態記成員的字串參數經過 `ToString` 轉換的次數，測試確認本來就是字串的是 0、其他的各 1 次。
+
 ## 待決定
 
-2. 第 1 段之後：做哪幾項、順序、目標的數字。
-3. 「V8 在操作裡配置」：規則 2 用「整個 old 當成活的」還是保守地掃 stack（第 1 段量規則 2 的頻率和停頓之後）。
-4. 字串：用 V8 的 external string，還是位址對名稱的快取（第 1 段各做一個原型）。
+3. 「V8 在操作裡配置」（決定 6：先不做）要做時：規則 2 用「整個 old 當成活的」還是保守地掃 stack。
+13. 第 3 段怎麼分段、哪些成員走輕的路（第 3 段開始前）。
 
 ## 之後的可能
 
+- 進來的字串改成 external（決定 7）：V8 的 sandbox 打開之後短字串也改得了，那時再做，照 Blink 把名稱的編號和 intern 過的值記在 resource 上（原型和數字在 `progress.md`、`prototypes/external-strings.patch`）。
 - 操作可以巢狀：DOM 做到一半呼叫 script 不用結束操作。
 - wasm 的 front 照同樣的方式量。

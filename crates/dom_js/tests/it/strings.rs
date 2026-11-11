@@ -207,6 +207,89 @@ fn string_arguments_of_each_kind_are_read() {
     env.minor_gc();
 }
 
+/// A member's string argument that is a string already isn't converted
+/// (no `ToString`, a call into V8); anything else is, once, with what
+/// `ToString` gives (a number's digits, an object's `toString`, `null`
+/// and `undefined` by name, a `String` object's value), and what it throws.
+#[test]
+fn a_string_argument_is_converted_only_if_it_isnt_a_string() {
+    let mut env = Env::new();
+    env.eval(
+        "var d = machopoDom.createDocument(); var e = d.createElement('p'); \
+         e.setAttribute('id', 'x'); e.setAttribute('7', 'seven'); \
+         e.setAttribute('null', 'n'); e.setAttribute('undefined', 'u'); \
+         var cons = 'i' + 'd'; var calls = 0;",
+    );
+    let converted = |env: &mut Env, source: &str| {
+        let before = env.string_conversions();
+        let result = env.eval(source);
+        (result, env.string_conversions().wrapping_sub(before))
+    };
+    // Strings of each representation: none converted.
+    for argument in [
+        "'id'",
+        "cons",
+        "String.fromCharCode(105, 100)",
+        "'文'",
+        "''",
+    ] {
+        let (_, conversions) = converted(&mut env, &format!("e.getAttribute({argument})"));
+        assert_eq!(conversions, 0, "{argument}");
+    }
+    assert_eq!(converted(&mut env, "e.getAttribute('id')"), ("x".into(), 0));
+    assert_eq!(
+        converted(&mut env, "e.setAttribute('a', 'b'); e.getAttribute('a')"),
+        ("b".into(), 0)
+    );
+    // Anything else: once each.
+    assert_eq!(
+        converted(&mut env, "e.getAttribute(7)"),
+        ("seven".into(), 1)
+    );
+    assert_eq!(converted(&mut env, "e.getAttribute(null)"), ("n".into(), 1));
+    assert_eq!(
+        converted(&mut env, "e.getAttribute(undefined)"),
+        ("u".into(), 1)
+    );
+    assert_eq!(
+        converted(&mut env, "e.getAttribute(new String('id'))"),
+        ("x".into(), 1)
+    );
+    assert_eq!(
+        converted(
+            &mut env,
+            "e.getAttribute({ toString() { calls++; return 'id'; } }) + calls"
+        ),
+        ("x1".into(), 1)
+    );
+    assert_eq!(
+        converted(&mut env, "e.setAttribute(7, 8); e.getAttribute('7')"),
+        ("8".into(), 2)
+    );
+    // What the conversion throws is the call's.
+    assert_eq!(
+        converted(
+            &mut env,
+            "try { e.getAttribute({ toString() { throw new RangeError('no'); } }); 'none' } \
+             catch (error) { error.name + ': ' + error.message }"
+        ),
+        ("RangeError: no".into(), 1)
+    );
+    let (thrown, conversions) = converted(
+        &mut env,
+        "try { e.getAttribute(Symbol('s')); 'none' } catch (error) { error.name }",
+    );
+    assert_eq!((thrown.as_str(), conversions), ("TypeError", 1));
+    // And the member isn't called.
+    assert_eq!(
+        env.eval(
+            "try { e.setAttribute('thrown', { toString() { throw 1; } }); } catch (error) {} \
+             e.hasAttribute('thrown')"
+        ),
+        "false"
+    );
+}
+
 /// Whether `name` is a valid attribute name (`setAttribute` throws for
 /// another).
 fn names_ok(name: &str) -> bool {

@@ -70,6 +70,10 @@ pub(crate) struct State {
     pub(crate) rejecting: Vec<v8::Global<v8::FunctionTemplate>>,
     /// The names' V8 strings made (`Caches::names`), for the tests.
     pub(crate) names_made: u64,
+    /// The members' string arguments converted by `ToString`
+    /// (`strings::arg_string`: none that was a string already), for the
+    /// tests.
+    pub(crate) string_conversions: u64,
     /// Exceptions listeners and timers threw that no `error` listener
     /// canceled (logged), for the tests.
     pub(crate) uncaught_exceptions: u64,
@@ -227,6 +231,7 @@ pub(crate) fn install(isolate: &mut v8::Isolate) {
             observable: Vec::new(),
             rejecting: Vec::new(),
             names_made: 0,
+            string_conversions: 0,
             uncaught_exceptions: 0,
             harness_results: None,
             webdriver_results: Vec::new(),

@@ -6,7 +6,9 @@
 
 | 步驟 | 狀態 | 完成日期 |
 | --- | --- | --- |
-| 1 原型和量測（不合併） | 進行中 | |
+| 1 原型和量測（不合併） | 完成 | 2026-11-11 |
+| 2 字串參數已經是字串就不轉換 | 完成，等審核（fork 的 commit 和 `third_party.toml` 還沒做） | 2026-11-11 |
+| 3 外殼不建 scope、`Call` 只帶用得到的欄位 | 還沒開始 | |
 
 ## 驗收
 
@@ -14,11 +16,13 @@
 | --- | --- |
 | V8 在操作裡配置的三條規則在模型上成立，各拿掉一條有反例 | `python3 rfcs/0097-binding-call-cost/tla/check.py` |
 
+| 成員的字串參數本來就是字串時不呼叫 `ToString`，其他的轉換一次、結果和例外照舊 | `cargo test -p dom_js --test it strings::`（`a_string_argument_is_converted_only_if_it_isnt_a_string`） |
+
 ## 做過的檢查
 
 - 2026-11-11（Linux，AMD Ryzen AI 9 HX 370）：`tla/check.py` 在 2×2×1 上七個版本都照預期（`details.md` 的「模型」）；`inop` 在 2×2×2 上成立。
 
-**第 1 段，原型 1：getter 不建 scope、不建 `V8Front` 和 `Call`**（2026-11-11，同一台機器）：
+**第 1 段，原型 1：getter 不建 scope、不建 `V8Front` 和 `Call`**（2026-11-11，同一台機器；`prototypes/raw-getter.patch`）：
 
 - `nodeType` 現在的 callback 反組譯（`perf annotate`，熱的路約 100 條指令；`bench.py calls` 的 153 條裡其餘是 V8 的 builtin 和 JS 的迴圈）：進出函式和存 6 個 callee-saved 暫存器約 17；建 `CallbackScope`、`V8Front`、`Call` 的寫入約 26；借狀態和一個全域的檢查約 5；unwrap（指標表、比 tag、cage 的檢查）約 22；marking 的檢查 2；`nodeType` 本身（讀種類、jump table）約 9；寫回傳值約 8；`Call` 和 scope 結束時的檢查約 12。
 - 原型：`bindings` 的 `RawGetter`、`raw_getter_template`（`FunctionTemplate::builder_raw`，callback 直接拿 `FunctionCallbackInfo`，isolate 從 frame 的那一格讀），`dom_js` 在 `Node` 上多裝一個 `nodeTypeRaw`（借狀態、`read`、`unwrap_receiver`、`set_int32`；unwrap 的檢查照舊）。`bench.py calls --cases nodeType,nodeTypeRaw`：
@@ -59,7 +63,7 @@
 
 **第 1 段，原型 2 的修正：留著比 tag，只拿掉 cage 的檢查**（2026-11-11；elise 的 patch 套上、量完還原）：`nodeType` 155（32）、`nodeTypeRaw` 118（23）、`nodeTypeRawNoCage` 113（22）。只省 5 條指令、約 1 個 cycle。Blink 也比 tag，所以 unwrap 這一項照 Blink 的做法能拿的就是這 1 個 cycle；原型 2 另外的 20 條指令、2 個 cycle 是比 tag 和 null，Blink 也付。
 
-**第 1 段，字串的原型 1：參數已經是字串就不轉換**（2026-11-11；`0097` 上的原型 commit）：
+**第 1 段，字串的原型 1：參數已經是字串就不轉換**（2026-11-11；`prototypes/string-already-a-string.patch`）：
 
 - 現在每個字串參數都呼叫 V8 的 `ToString`（先呼叫 `GetCurrentContext`，兩次 C++ 呼叫），參數本來就是字串時它只是原樣回傳。原型：`bindings` 的 `string_if_string` 照 V8 的 header 從 map 的 instance type 看它是不是字串，是就直接用（`MACHOPO_PROTOTYPE_NO_STRING_CHECK` 設了走原本的路，同一個 build 比）。
 - `bench.py calls`，指令數（cycle），原本 → 原型：`getAttribute` 749（162）→ 692（158），`setAttribute`（兩個字串）1350（271）→ 1238（255），`createElement` 2148（449）→ 2091（446）。每個字串參數省約 57 條指令；cycle 省 3 到 8 個一個（雜訊比指令數大）。
@@ -113,3 +117,41 @@
 - 拿到上限的五到七成：每個名稱約 40 到 47 條指令，每個值約 95 條。cycle 的雜訊比指令數大（`createElement` 兩次的基準差 40 個 cycle），看指令數。
 - 沒有量的：名稱很多、格子互相擠掉時（benchmark 只有一兩個名稱）；格子存 23 bytes 的文字讓每個 thread 多約 2 KiB。
 
+
+**第 1 段，字串的原型 4：external string，進來和出去**（2026-11-11；`prototypes/external-strings.patch`，量完還原）：
+
+- 不用重編 V8：`v8::String::MakeExternal`、`CanMakeExternal` 本來就在 V8 的靜態函式庫裡，fork 只是沒有包；原型在 `bindings` 直接連它們的 C++ 名稱。resource 借用 rusty_v8 建的 external 字串的那一個（兩個字串共用，isolate 不能 dispose，量測的測試跑完直接結束 process）：只能量，不能留。
+- **進來**（`MACHOPO_PROTOTYPE_EXTERNALIZE`）：字串參數第一次看到、V8 肯改（`CanMakeExternal`：8 個字元以上、在 old space）時，把文字複製到一塊不釋放的 arena，前面放一個 header（名稱的編號、intern 過的值），再 `MakeExternal`；之後同一個字串進來，從 V8 的物件讀 resource、拿到文字的位址，`names::find` 和 `intern_value` 看位址在 arena 裡就讀 header，不讀字元、不雜湊、不查表（Blink 的 `StringResourceBase` 存 `AtomicString` 的做法）。指令數（cycle）：
+
+  | | 原本 | 進來改成 external | 差 |
+  | --- | ---: | ---: | ---: |
+  | `getAttribute('data-long-name')` | 949（196） | 663（129） | −286 條、−67 cycle |
+  | `setAttribute('data-long-name', 'a-long-value-here')` | 1624（297） | 1089（185） | −535 條、−112 cycle |
+  | `createElement('blockquote')` | 2295（490） | 2069（414） | −226 條、−76 cycle |
+  | `getAttribute('id')`（改不了） | 726（156） | 758（156） | +32 條 |
+  | `setAttribute('a', 'b')`（改不了） | 1335（265） | 1399（270） | +64 條 |
+  | `createElement('div')`（改不了） | 2130（443） | 2194（450） | +64 條 |
+
+- 長的名稱省得比原型 2 的上限（每個名稱約 80 條）多：`data-long-name` 不是固定的名稱，原本要查兩張表（完美雜湊沒中、再查動態的表），字元也多；external 之後連字元都不讀（不掃 ASCII、不借出）。短的固定名稱開了 sandbox 之後能省的，照原型 2 的上限估（每個名稱約 80 條、每個值約 120 條），不是這張表的數字。
+- 改不了的短字串每個多約 32 條：每次都問一次 `CanMakeExternal`（一次 C++ 呼叫）。要做的話先照長度擋掉（8 個字元以下不問）。
+- **出去**（`MACHOPO_PROTOTYPE_EXTERNAL_OUT`）：ASCII 的 `DomString` 給 V8 時不複製，external 字串直接指著它的文字（`new_external_onebyte_raw`），多拿一份計數。**V8 在 GC 的 worker 上放掉 external 字串的緩衝區**（原型第一版在 destructor 裡檢查 thread，立刻 abort）：`DomString` 的計數不是 atomic 的，原型改成 destructor 只把位址登記到一個有鎖的清單，下次借出時在 DOM 的 thread 上放。
+
+  | | 複製（現在） | external | 差 |
+  | --- | ---: | ---: | ---: |
+  | 文字節點的 `data` 每次是新的，讀出來，10 個字元 | 3888（2497） | 4297（3512） | +409 條、+1015 cycle |
+  | 同上，100 個字元 | 4417（1324） | 5572（3831） | +1155 條、+2507 cycle |
+  | 同上，1000 個字元 | 5234（1657） | 6881（3556） | +1647 條、+1899 cycle |
+  | 同上，1000 個字元，讀出來再和另一個字串比（`!==`） | 6529（1817） | 13967（4660） | +7438 條、+2843 cycle |
+  | 讀出來的值再傳回去（`setAttribute('a', v)`） | 1346（258） | 1238（230） | −108 條、−28 cycle |
+  | `getAttribute('data-long-name')`（快取命中） | 949（196） | 949（196） | 0 |
+
+- 出去不複製到 1000 個字元都比較慢：建 external 字串要配置 resource、登記、回報外部記憶體，死掉時還要回呼；複製 1000 bytes 比這些便宜。在 JS 裡讀它的字元（比較）也變慢約一倍。快取命中的路不變（本來就不建字串）。只有「讀出來的值原樣傳回去」省到（進來時直接讀 resource 的文字，不掃、不複製）。和先前的結論一樣（`dom::string` 的模組註解：借出比複製慢 22%）。cycle 含 GC 的 worker（`perf stat` 量整個 process）。
+- **Chrome 實際拿到多少**（同一台機器的 Chromium 156，headless，`getAttribute` 兩千萬次的時間，三輪取後兩輪）：隨便取的字面值 1 到 8 個字元都是約 20 ns（`'qz'` 20.0 到 20.7、`'foo'` 20.1 到 20.4、`'qzwxecrv'` 20.7、`'data-long-name'` 19.7）：沒有長度的門檻，短的也改成 external 了。`'id'` 23.3 ns、`'title'` 25.0 ns 比較慢，執行時才組出來的長字串 30.7 ns。推測 `'id'`、`'title'` 是 V8 自己內建的名稱（在 read-only space，永遠改不了），每次都查 `AtomicStringTable`：和 2026-11-07 取樣 `getAttribute('id')` 看到的一致。所以「Chrome 開著 sandbox，短字串也改得了」是對的，但 benchmark 最常用的 `'id'` 剛好是例外；Chrome 在改得了的名稱上省約 3 到 5 ns（20 ns 裡）。`'class'` 17.6 ns 比其他都快，原因沒查。
+
+**第 2 段：字串參數已經是字串就不轉換**（2026-11-11）：
+
+- fork 的 `v8::machopo::as_string`（只改 Rust）；`dom_js` 的 `arg_string` 先問它，不是字串才呼叫 `ToString`，並在 isolate 的狀態記一次（`string_conversions`，測試用）。計數原本寫成 thread 的 `static`，`sanity.py boundary` 擋下來，改放進狀態。
+- `bench.py calls`，指令數（cycle），改之前 → 之後：`getAttribute` 726（156）→ 688（151），`setAttribute` 1335（265）→ 1228（252），`createElement` 2130（443）→ 2087（444），`addEventListener` 898（183）→ 880（182）。每個字串參數約 40 到 55 條（原型量的是 57；兩次量之間指令數有約 10 條的差）。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-2.toml`，3 個都抓到。第一次「轉換丟了例外還繼續」沒抓到（例外還掛著，JS 照樣接到）：補了「成員沒有被呼叫」的斷言。fork 的 `as_string` 不在這個 repo、沒有 mutant：debug build 每次都和 V8 自己的 `is_string` 比（`debug_assert`），測試跑的是 debug build，測試裡有數字、`null`、`undefined`、物件、`String` 物件、symbol 和各種表示的字串。
+- 跑過：`cargo test -p dom_js`（448 個通過）；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`；`test.py wpt dom/nodes/attributes.html dom/nodes/Document-createElement.html`（216 個結果都照預期）。
+- 還沒做：fork 的 commit 和 push、`third_party.toml` 的 `rev`（等審核）；階段的最後跑過 `cargo test --workspace`（55 個 binary 都通過）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`。

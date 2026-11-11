@@ -74,6 +74,12 @@ pub fn names_made(isolate: &mut v8::Isolate) -> u64 {
     bindings::isolate_state_mut::<State>(isolate).map_or(0, |state| state.names_made)
 }
 
+/// The members' string arguments the isolate's DOM converted by `ToString`
+/// so far (none that was a string already), for the tests: 0 with none.
+pub fn string_conversions(isolate: &mut v8::Isolate) -> u64 {
+    bindings::isolate_state_mut::<State>(isolate).map_or(0, |state| state.string_conversions)
+}
+
 /// The exceptions the isolate's listeners and timers threw so far that no
 /// `error` listener canceled (logged), for the tests: 0 with no DOM.
 pub fn uncaught_exceptions(isolate: &mut v8::Isolate) -> u64 {

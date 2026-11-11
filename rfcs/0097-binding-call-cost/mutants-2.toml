@@ -1,0 +1,32 @@
+# Stage 2: a member's string argument that is a string already isn't
+# converted. The fork's `v8::machopo::as_string` is outside this
+# repository: its answer is checked against V8's own in debug builds,
+# which these tests are.
+test = ["cargo", "test", "-p", "dom_js", "--test", "it", "strings::"]
+timeout = 900
+
+[[mutant]]
+name = "every argument converted"
+file = "crates/dom_js/src/strings.rs"
+from = '''    let string = match v8::machopo::as_string(value) {
+        Some(string) => string,
+        None => {'''
+to = '''    let string = match v8::machopo::as_string(value).filter(|_| false) {
+        Some(string) => string,
+        None => {'''
+
+[[mutant]]
+name = "a conversion not counted"
+file = "crates/dom_js/src/strings.rs"
+from = '''                state.string_conversions = state.string_conversions.wrapping_add(1);'''
+to = '''                state.string_conversions = state.string_conversions.wrapping_add(0);'''
+
+[[mutant]]
+name = "a conversion that threw goes on"
+file = "crates/dom_js/src/strings.rs"
+from = '''            value.to_string(scope)?
+        }
+    };'''
+to = '''            value.to_string(scope).unwrap_or_else(|| v8::String::empty(scope))
+        }
+    };'''

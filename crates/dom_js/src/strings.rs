@@ -16,7 +16,7 @@
 //! its own handle).
 //!
 //! From V8: an argument converted by WebIDL's `ToString`, which may run
-//! script; V8's one-byte strings by their bytes when ASCII (rusty_v8's
+//! script, unless it is a string already (a member's: `arg_string`); V8's one-byte strings by their bytes when ASCII (rusty_v8's
 //! `ValueView`). A lone surrogate becomes U+FFFD, until the DOM's strings
 //! keep them (WTF-8). A member's string argument (`ArgString`) is read in
 //! the DOM's operation: an ASCII one in place, V8's own characters
@@ -182,13 +182,24 @@ pub struct ArgString<'s> {
     copied: Option<String>,
 }
 
-/// Argument `value` as a member's `DOMString`: WebIDL's `ToString` (which
-/// may run script: none if it threw).
+/// Argument `value` as a member's `DOMString`: itself if it is a string
+/// (most are; told inline, as Blink's bindings tell with V8's
+/// `Value::IsString`), else WebIDL's `ToString` (which may run script:
+/// none if it threw), a call into V8 and its context found first.
 pub fn arg_string<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<ArgString<'s>> {
-    let string = bindings::LentString::new(value.to_string(scope)?);
+    let string = match v8::machopo::as_string(value) {
+        Some(string) => string,
+        None => {
+            if let Some(state) = bindings::isolate_state_mut::<crate::state::State>(scope) {
+                state.string_conversions = state.string_conversions.wrapping_add(1);
+            }
+            value.to_string(scope)?
+        }
+    };
+    let string = bindings::LentString::new(string);
     let copied = (!string.lends(scope)).then(|| string.string().to_rust_string_lossy(scope));
     Some(ArgString { string, copied })
 }

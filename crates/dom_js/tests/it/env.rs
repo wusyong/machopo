@@ -214,6 +214,10 @@ impl Env {
         dom_js::wrappers_wasted(self.data.isolate())
     }
 
+    pub fn string_conversions(&mut self) -> u64 {
+        dom_js::string_conversions(self.data.isolate())
+    }
+
     pub fn names_made(&mut self) -> u64 {
         dom_js::names_made(self.data.isolate())
     }
