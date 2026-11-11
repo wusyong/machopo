@@ -258,6 +258,7 @@ STATICS_ALLOWED = {
         "a renderer in a process of its own has its own flag, set as its own trace starts",
     ("crates/bindings/src/v8_text.rs", "ASCII_SCANS"): "tests' counters (thread-local)",
     ("crates/bindings/src/unified_heap.rs", "RECEIVER_UNWRAPS"): "tests' counters (thread-local)",
+    ("crates/bindings/src/isolate_state.rs", "INFO_SCOPES"): "tests' counters (thread-local)",
     ("crates/bindings/src/v8_text.rs", "BORROWED"):
         "the V8 strings lending their text on a thread, which V8's GC prologue on it checks (thread-local)",
     ("crates/css/src/rule_set.rs", "RULES_ADDED"): "tests' counters (thread-local)",

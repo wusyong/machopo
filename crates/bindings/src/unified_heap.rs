@@ -824,6 +824,70 @@ impl<'s> crate::NoGc<'_, 's, '_> {
     }
 }
 
+/// What a holder of the isolate's state borrowed from a callback's info
+/// does with V8 (`InfoNoGc`): `NoGc`'s reads that need the isolate alone
+/// (the same functions, the same arguments in
+/// `crates/bindings/soundness.md`), and the callback's result.
+impl<'s> crate::InfoNoGc<'_, 's> {
+    /// `unwrap_object`: reads the wrapper's embedder field.
+    #[inline]
+    pub fn unwrap<'gc, T: elise::HeapType>(
+        &mut self,
+        cx: &elise::Mutation<'gc>,
+        object: v8::Local<'_, v8::Object>,
+    ) -> Option<elise::Gc<'gc, T>> {
+        unwrap_object(self.isolate, cx, object)
+    }
+
+    /// `unwrap_receiver`: reads a checked receiver's embedder field.
+    #[inline]
+    pub fn unwrap_receiver<'gc, T: elise::HeapType>(
+        &mut self,
+        cx: &elise::Mutation<'gc>,
+        this: crate::Receiver<'_>,
+    ) -> Option<elise::Gc<'gc, T>> {
+        unwrap_receiver(self.isolate, cx, this)
+    }
+
+    /// The callback's result, as a holder of the state may set it.
+    #[inline]
+    pub fn ret(&mut self) -> OpReturn<'_, 's> {
+        OpReturn { rv: &mut self.rv }
+    }
+
+    /// `return_wrapper`: the callback's result from the edge's traced
+    /// handle, no local handle made.
+    #[inline]
+    pub fn return_wrapper(&mut self, edge: &elise::JsEdge) -> bool {
+        return_wrapper(self.isolate, &mut self.rv, edge)
+    }
+
+    /// The callback's result from a global handle, no local handle made.
+    #[inline]
+    pub fn return_global<T>(&mut self, global: &v8::Global<T>)
+    where
+        for<'a> v8::Local<'a, T>: Into<v8::Local<'a, v8::Value>>,
+    {
+        self.rv.set_global(self.isolate, global);
+    }
+
+    /// The callback's result from a weak handle, if it still has its value.
+    #[inline]
+    pub fn return_weak<T>(&mut self, weak: &v8::Weak<T>) -> bool
+    where
+        for<'a> v8::Local<'a, T>: Into<v8::Local<'a, v8::Value>>,
+    {
+        self.rv.set_weak(self.isolate, weak)
+    }
+
+    /// A string's ASCII characters as V8 lends them in place
+    /// (`LentString::ascii`): no copy, valid while no GC runs.
+    #[inline]
+    pub fn ascii<'a>(&mut self, string: &'a crate::LentString<'_>) -> Option<&'a str> {
+        string.ascii(self.isolate)
+    }
+}
+
 /// Tells V8 the embedder heap's used bytes are `used` now: it counts them
 /// with cppgc's, and on growth may start, advance or finish a major GC now
 /// (calling the embedder heap), so only between its operations. A major
@@ -1060,13 +1124,13 @@ pub fn wrapper<'s>(
 /// returning nothing, if it has none.
 #[inline]
 pub fn return_wrapper(
-    scope: &v8::PinScope<'_, '_, ()>,
+    isolate: &v8::Isolate,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
     edge: &elise::JsEdge,
 ) -> bool {
     // SAFETY: on the isolate's thread, the heap's (the only one that writes
     // the edge).
-    unsafe { rv.set_traced(scope, slot(edge)) }
+    unsafe { rv.set_traced(isolate, slot(edge)) }
 }
 
 /// An isolate's pointer, for a `TracedMarker` made on another thread.

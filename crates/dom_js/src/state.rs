@@ -262,16 +262,32 @@ pub(crate) fn scope<'a, 's, 'i>(scope: &'a mut v8::PinScope<'s, 'i>) -> Option<S
 pub(crate) fn report(scope: &mut Scope<'_, '_, '_>) {
     let (microtasks, used) = {
         let (state, _) = scope.state_mut();
-        let microtasks = state.dom.take_microtasks();
-        // How far it moved, by what the heap counts (at once, its buffers
-        // whole); what it uses, exactly, only when V8 is told.
-        let counted = state.dom.counted_bytes();
-        let moved = counted.abs_diff(state.reported) >= REPORT_BYTES;
-        if moved {
-            state.reported = counted;
-        }
-        (microtasks, moved.then(|| state.dom.used_bytes()))
+        (state.dom.take_microtasks(), moved(state))
     };
+    report_these(scope, microtasks, used);
+}
+
+/// The DOM's used bytes, if they moved enough since V8 was last told
+/// (noted as told).
+#[inline(always)]
+pub(crate) fn moved(state: &mut State) -> Option<usize> {
+    // How far it moved, by what the heap counts (at once, its buffers
+    // whole); what it uses, exactly, only when V8 is told.
+    let counted = state.dom.counted_bytes();
+    let moved = counted.abs_diff(state.reported) >= REPORT_BYTES;
+    if moved {
+        state.reported = counted;
+    }
+    moved.then(|| state.dom.used_bytes())
+}
+
+/// `report`'s second half, the state no longer borrowed: `microtasks`
+/// queued, V8 told the DOM uses `used` bytes.
+pub(crate) fn report_these(
+    scope: &mut Scope<'_, '_, '_>,
+    microtasks: dom::Microtasks,
+    used: Option<usize>,
+) {
     if !microtasks.is_empty() {
         queue_microtasks(scope, microtasks);
     }

@@ -166,7 +166,7 @@ method 和建構子可以寫好幾行（WebIDL 的 overload，`createImageData(s
 ## 怎麼新增一個 API
 
 1. 在對應的模組（`node.rs`、`element.rs`……）寫函式，照規範的演算法，簽章照上面。參數裡的整數照 `crates/base/README.md` 的規則。
-2. 在 `src/interfaces.rs` 的表加一行。需要新的型別時，替它實作 `ArgType`、`RetType`（和 `TypeDesc` 的一種），需要新的參數時在 `Front` 加一個方法。
+2. 在 `src/interfaces.rs` 的表加一行。需要新的型別時，替它實作 `ArgType`、`RetType`（和 `TypeDesc` 的一種），需要新的參數時在 `Front` 加一個方法。新的型別只經過每個 front 都有的方法（`Front`、`OpFront` 沒有預設實作的那些，和預設只呼叫它們的）拿參數、給結果，又不在操作前準備東西時，可以標 `const PLAIN: bool = true`：參數和結果都是 `PLAIN` 的 getter、setter、method（不是 static、函式不拿 front）是 `TypedMember::PLAIN`，engine 可以讓它走只有這些方法的 front（V8 那一側只拿 callback 的 info 的那個）。標錯的（用到別的方法）在呼叫時 panic：預設是 `false`，拿不準就不標。
 3. 在 `tests/it/` 用測試的 front end 經過專用路徑呼叫它。
 
 ## 測試

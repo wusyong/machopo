@@ -1520,6 +1520,7 @@ fn getter(iface: &Ident, ty: &Type, get: &Path) -> Tokens {
     quote! {
         type Args = ();
         type Ret = #ty;
+        const PLAIN: bool = <#ty as #api::typed::RetType>::PLAIN;
 
         fn call<F: #api::typed::Front>(#front: &mut F) {
             <#ty as #api::typed::RetType>::prepare(#front);
@@ -1562,6 +1563,7 @@ fn setter(iface: &Ident, ty: &Type, set: &Path, with_front: bool, ce_reactions: 
     quote! {
         type Args = (#ty,);
         type Ret = ();
+        const PLAIN: bool = !#with_front && <#ty as #api::typed::ArgType>::PLAIN;
 
         fn call<F: #api::typed::Front>(#front: &mut F) {
             let ::std::option::Option::Some(#value) = <#ty as #api::typed::ArgType>::take(#front, 0) else {
@@ -1719,9 +1721,14 @@ fn method(
         },
     );
     let ce_invoke = ce_invoke(ce_reactions, &front, &result);
+    // What a front end with only the required methods can call.
+    let plain = !with_front && !is_static && !realm && !legacy_factory;
     quote! {
         type Args = (#(#types,)*);
         type Ret = #ret;
+        const PLAIN: bool = #plain
+            #(&& <#types as #api::typed::ArgType>::PLAIN)*
+            && <#ret as #api::typed::RetType>::PLAIN;
 
         fn call<F: #api::typed::Front>(#front: &mut F) {
             #optional
@@ -2187,6 +2194,7 @@ fn node_types(name: &Ident) -> Tokens {
     quote! {
         impl #api::typed::ArgType for #name {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Node(stringify!(#name));
+            const PLAIN: bool = true;
             type Taken<T: #api::typed::FrontTypes> = T::Node;
             type Param<'a, 'gc> = ::dom::NodeRef<'gc>;
 
@@ -2206,6 +2214,7 @@ fn node_types(name: &Ident) -> Tokens {
 
         impl #api::typed::RetType for #name {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Node(stringify!(#name));
+            const PLAIN: bool = true;
             type Ret<'gc> = ::dom::NodeRef<'gc>;
 
             fn give<'gc, O: #api::typed::OpFront>(
@@ -2219,6 +2228,7 @@ fn node_types(name: &Ident) -> Tokens {
 
         impl #api::typed::ArgType for ::std::option::Option<#name> {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::NullableNode(stringify!(#name));
+            const PLAIN: bool = true;
             // WebIDL's nullable types convert undefined to null (`node_arg`
             // takes it as none).
             const UNDEFINED_IS_DEFAULT: bool = true;
@@ -2247,6 +2257,7 @@ fn node_types(name: &Ident) -> Tokens {
 
         impl #api::typed::RetType for ::std::option::Option<#name> {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::NullableNode(stringify!(#name));
+            const PLAIN: bool = true;
             type Ret<'gc> = ::std::option::Option<::dom::NodeRef<'gc>>;
 
             fn give<'gc, O: #api::typed::OpFront>(

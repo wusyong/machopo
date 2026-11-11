@@ -610,6 +610,18 @@ impl Members<'_, '_, '_> {
                 bindings::state_cached_getter_template::<State, C>(self.scope, key, signature)
             }
             (Some(_), None) => unreachable!("a cached accessor is an instance's"),
+            // A plain member's callback is given V8's callback info
+            // alone (`InfoMember`), known as its code is expanded; not a
+            // cross-origin property's (`checked`: `C` is `Member<M>`),
+            // whose getter is called in its receiver's realm
+            // (`CrossOriginMember`: where a wrapper it makes is made).
+            (None, Some(signature)) if checked && const { M::PLAIN } => {
+                bindings::state_info_method_template::<State, InfoMember<M>>(
+                    self.scope,
+                    signature,
+                    |builder| member_builder(builder, None, length),
+                )
+            }
             (None, Some(signature)) => {
                 bindings::state_method_template::<State, C>(self.scope, signature, |builder| {
                     member_builder(builder, None, length)
@@ -868,6 +880,23 @@ impl<M: TypedMember> bindings::StateMethod<State> for Member<M> {
         rv: v8::ReturnValue<'s>,
     ) {
         call_member::<M, _>(scope, &Checked { args, this }, rv);
+    }
+}
+
+/// A plain member's callback (`TypedMember::PLAIN`): its typed path
+/// through the front end that is V8's callback info
+/// (`info_front::InfoFront`), its receiver checked against the function's
+/// signature.
+pub(crate) struct InfoMember<M>(PhantomData<M>);
+
+impl<M: TypedMember> bindings::StateInfoMethod<State> for InfoMember<M> {
+    fn call(info: bindings::StateInfo<'_, State>) {
+        let mut front = crate::info_front::InfoFront::new(info);
+        M::call(&mut front);
+        if M::KIND != MemberKind::Getter {
+            front.report();
+        }
+        front.end();
     }
 }
 

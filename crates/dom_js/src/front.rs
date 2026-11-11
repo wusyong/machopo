@@ -43,7 +43,7 @@ use crate::{exception, templates};
 /// allocate for. Boxed (`Call::kept`): a call with none drops a null
 /// pointer, a check inlined; the enum's drop glue (its roots, its
 /// sequence) runs only for one kept, off the getters' path.
-enum Kept {
+pub(crate) enum Kept {
     /// Past a Smi: a heap number.
     U32(u32),
     F64(f64),
@@ -492,6 +492,13 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
         let value = self.call.rv.full(scope).get(scope);
         value.is_null()
             || v8::Local::<v8::String>::try_from(value).is_ok_and(|string| string.length() == 0)
+    }
+
+    /// `kept` made the engine's value, out of any operation: a result
+    /// another front end of the same call left (`info_front::InfoFront`).
+    pub(crate) fn finish_kept_as(&mut self, kept: Kept) {
+        *self.call.kept = Some(Box::new(kept));
+        self.finish_kept();
     }
 
     /// A kept result made the engine's value, after the operation.
@@ -1757,7 +1764,7 @@ pub(crate) fn to_uint32(
     })
 }
 
-fn arg<'s>(args: &impl CallArgs<'s>, index: usize) -> v8::Local<'s, v8::Value> {
+pub(crate) fn arg<'s>(args: &impl CallArgs<'s>, index: usize) -> v8::Local<'s, v8::Value> {
     args.get(i32::try_from(index).unwrap_or(i32::MAX))
 }
 

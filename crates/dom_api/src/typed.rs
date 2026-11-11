@@ -1967,6 +1967,11 @@ pub trait ArgType {
     /// argument of it may be optional (`name?: Type` in the table): a
     /// dictionary's, whose members' defaults WebIDL's `= {}` gives.
     const UNDEFINED_IS_DEFAULT: bool = false;
+    /// Whether it is taken and read through the methods every front end
+    /// has alone (`Front`'s and `OpFront`'s with no default, and the ones
+    /// whose default calls only those): a string or a node. A member
+    /// whose arguments and result all are is `TypedMember::PLAIN`.
+    const PLAIN: bool = false;
     type Taken<T: FrontTypes>;
     type Param<'a, 'gc>;
 
@@ -1987,6 +1992,9 @@ pub trait ArgType {
 /// function returns (`Ret`), handed back in the operation.
 pub trait RetType {
     const DESC: TypeDesc;
+    /// As `ArgType::PLAIN`: nothing made before the operation, and what
+    /// it gives a number, a boolean, a string, a node, null or nothing.
+    const PLAIN: bool = false;
     type Ret<'gc>;
 
     /// Before the operation: what the front end makes ahead of it.
@@ -2026,6 +2034,7 @@ impl<I: Interface, L: Interface> RetType for NewObject<I, L> {
 /// Nothing: a method that returns nothing (WebIDL's `undefined`).
 impl RetType for () {
     const DESC: TypeDesc = TypeDesc::Undefined;
+    const PLAIN: bool = true;
     type Ret<'gc> = ();
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, (): ()) {
@@ -2035,6 +2044,7 @@ impl RetType for () {
 
 impl RetType for bool {
     const DESC: TypeDesc = TypeDesc::Bool;
+    const PLAIN: bool = true;
     type Ret<'gc> = bool;
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: bool) {
@@ -2046,6 +2056,7 @@ impl RetType for bool {
 /// DOM's overflows).
 impl RetType for u32 {
     const DESC: TypeDesc = TypeDesc::U32;
+    const PLAIN: bool = true;
     type Ret<'gc> = u32;
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: u32) {
@@ -2144,6 +2155,7 @@ impl<D: Dictionary + 'static> ArgType for DictOrBool<D> {
 /// WebIDL's `unsigned short`.
 impl RetType for u16 {
     const DESC: TypeDesc = TypeDesc::U16;
+    const PLAIN: bool = true;
     type Ret<'gc> = u16;
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: u16) {
@@ -2178,6 +2190,7 @@ impl ArgType for u16 {
 /// WebIDL's `short`.
 impl RetType for i16 {
     const DESC: TypeDesc = TypeDesc::I16;
+    const PLAIN: bool = true;
     type Ret<'gc> = i16;
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: i16) {
@@ -2450,6 +2463,7 @@ impl ArgType for NullableU32 {
 
 impl RetType for NullableU32 {
     const DESC: TypeDesc = TypeDesc::NullableU32;
+    const PLAIN: bool = true;
     type Ret<'gc> = Option<u32>;
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: Option<u32>) {
@@ -2462,6 +2476,7 @@ impl RetType for NullableU32 {
 
 impl RetType for i32 {
     const DESC: TypeDesc = TypeDesc::I32;
+    const PLAIN: bool = true;
     type Ret<'gc> = i32;
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: i32) {
@@ -3533,6 +3548,7 @@ impl RetType for AnyOrNull {
 /// WebIDL's `double` (and `DOMHighResTimeStamp`, which is one).
 impl RetType for f64 {
     const DESC: TypeDesc = TypeDesc::Double;
+    const PLAIN: bool = true;
     type Ret<'gc> = f64;
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: f64) {
@@ -3563,6 +3579,7 @@ impl ArgType for f64 {
 /// WebIDL's `double?` as a result: a number, or null.
 impl RetType for Option<f64> {
     const DESC: TypeDesc = TypeDesc::Double;
+    const PLAIN: bool = true;
     type Ret<'gc> = Option<f64>;
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: Option<f64>) {
@@ -3649,6 +3666,7 @@ impl ArgType for UnrestrictedDouble {
 
 impl RetType for UnrestrictedDouble {
     const DESC: TypeDesc = TypeDesc::Double;
+    const PLAIN: bool = true;
     type Ret<'gc> = f64;
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: f64) {
@@ -5925,6 +5943,10 @@ impl<'gc> From<StrRef<'gc>> for DomStr<'gc> {
 }
 
 impl DomStr<'_> {
+    /// Always inlined: one call a string getter, into the front end's own
+    /// inlined returns (left out of line, its call and the string moved
+    /// to it cost a `getAttribute` some 40 instructions).
+    #[inline(always)]
     fn give<O: OpFront>(self, op: &mut O) {
         match self {
             Self::Owned(string) => op.ret_string(&string),
@@ -5959,6 +5981,7 @@ impl<'gc> From<Option<DomStr<'gc>>> for NullableStr<'gc> {
 /// string of the DOM (`DomStr`: kept, or where it is).
 impl ArgType for DomString {
     const DESC: TypeDesc = TypeDesc::String;
+    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = T::Str;
     type Param<'a, 'gc> = &'a str;
 
@@ -5978,8 +6001,11 @@ impl ArgType for DomString {
 
 impl RetType for DomString {
     const DESC: TypeDesc = TypeDesc::String;
+    const PLAIN: bool = true;
     type Ret<'gc> = DomStr<'gc>;
 
+    // As `DomStr::give`: inlined into the member's call.
+    #[inline(always)]
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: DomStr<'gc>) {
         value.give(op);
     }
@@ -7211,6 +7237,7 @@ pub struct AlwaysNull;
 
 impl RetType for AlwaysNull {
     const DESC: TypeDesc = TypeDesc::Any;
+    const PLAIN: bool = true;
     type Ret<'gc> = ();
 
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, (): ()) {
@@ -7483,6 +7510,7 @@ impl ArgType for OptionalString {
 /// `DOMString?`.
 impl ArgType for Option<DomString> {
     const DESC: TypeDesc = TypeDesc::NullableString;
+    const PLAIN: bool = true;
     /// An optional one's missing is undefined, which is none, as null.
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<T::Str>;
@@ -7504,8 +7532,11 @@ impl ArgType for Option<DomString> {
 
 impl RetType for Option<DomString> {
     const DESC: TypeDesc = TypeDesc::NullableString;
+    const PLAIN: bool = true;
     type Ret<'gc> = NullableStr<'gc>;
 
+    // As `DomStr::give`: inlined into the member's call.
+    #[inline(always)]
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: NullableStr<'gc>) {
         match value.0 {
             Some(value) => value.give(op),
@@ -7520,6 +7551,7 @@ pub struct LegacyNullToEmptyString;
 
 impl ArgType for LegacyNullToEmptyString {
     const DESC: TypeDesc = TypeDesc::NullableString;
+    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Option<T::Str>;
     type Param<'a, 'gc> = &'a str;
 
@@ -7539,8 +7571,11 @@ impl ArgType for LegacyNullToEmptyString {
 
 impl RetType for LegacyNullToEmptyString {
     const DESC: TypeDesc = TypeDesc::String;
+    const PLAIN: bool = true;
     type Ret<'gc> = DomStr<'gc>;
 
+    // As `DomStr::give`: inlined into the member's call.
+    #[inline(always)]
     fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: DomStr<'gc>) {
         value.give(op);
     }
@@ -7595,6 +7630,15 @@ pub trait TypedMember: 'static {
     /// (`for_each_member!`) converts them as.
     type Args;
     type Ret: RetType;
+    /// Whether its call reaches the front end through the methods every
+    /// front end has (`Front`'s and `OpFront`'s with no default, and the
+    /// ones whose default calls only those), `Front::finish` and
+    /// `Front::invoke_ce_reactions` alone: a getter, a setter or a method
+    /// of an object (not static), its arguments and result `PLAIN`, its
+    /// function given no front end. An engine may call such a member
+    /// through a front end that has nothing else (as it expands each
+    /// member's own code).
+    const PLAIN: bool = false;
 
     /// One call, through `front` (which opens its operations).
     fn call<F: Front>(front: &mut F);

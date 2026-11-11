@@ -7,8 +7,8 @@
 | 步驟 | 狀態 | 完成日期 |
 | --- | --- | --- |
 | 1 原型和量測（不合併） | 完成 | 2026-11-11 |
-| 2 字串參數已經是字串就不轉換 | 完成，等審核（fork 的 commit 和 `third_party.toml` 還沒做） | 2026-11-11 |
-| 3 front 只拿 callback 的 info：參數和結果單純的成員 | 進行中 | |
+| 2 字串參數已經是字串就不轉換 | 完成 | 2026-11-11 |
+| 3 front 只拿 callback 的 info：參數和結果單純的成員 | 完成 | 2026-11-11 |
 | 4 階段之間傳有型別的值，拿掉 `V8Front` 和 `Call` | 還沒開始 | |
 
 ## 驗收
@@ -18,6 +18,7 @@
 | V8 在操作裡配置的三條規則在模型上成立，各拿掉一條有反例 | `python3 rfcs/0097-binding-call-cost/tla/check.py` |
 
 | 成員的字串參數本來就是字串時不呼叫 `ToString`，其他的轉換一次、結果和例外照舊 | `cargo test -p dom_js --test it strings::`（`a_string_argument_is_converted_only_if_it_isnt_a_string`） |
+| `PLAIN` 的成員當場回傳的呼叫不建 scope；要配置、丟例外的結果和原本的 front 一樣 | `cargo test -p dom_js --test it info_front`、`cargo test -p dom_api --test it table::members_of_strings` |
 
 ## 做過的檢查
 
@@ -210,3 +211,49 @@
 | `append-child` | 535 | 631 | 155、157 | 工具標成可疑（machopo 快兩倍以上），不比；machopo 自己快 18% |
 
 - 每頁只跑一輪（runner 自己的幾次 iteration 的中位數），Chrome 兩輪之間 `node-type` 差 7%：看方向和量級，不看個位數的百分比。
+
+**第 3 段：front 只拿 callback 的 info，參數和結果單純的成員**（2026-11-11）：
+
+- fork（只改 Rust）：`FunctionCallbackInfo::isolate`、`ReturnValue::set_traced` 改收 isolate（`TracedSlot::get_in_current_scope`）；`README.machopo.md` 兩條。3a 第一版的 `function_template_with_cache_raw` 拿掉。
+- `bindings`：`StateInfo`（info、狀態的型別；`isolate`、`args`、`receiver`、`state`、`state_mut`、`with_scope`）、`InfoNoGc`（只要 isolate 的 unwrap、`return_wrapper`、`return_global`、`return_weak`、`ascii`，和 `ret` 給 `OpReturn`）、`StateInfoMethod`、`state_info_method_template`（`builder_raw`，signature 放最後）；`return_wrapper` 收 isolate。`soundness.md` 的「只拿 callback 的 info 的 callback」。
+- `dom_api`、`dom_api_macros`：`ArgType::PLAIN`、`RetType::PLAIN`（字串、節點的參數；數字、布林、字串、節點、null、沒有的結果）、`TypedMember::PLAIN`（產生器照參數、結果和 `front`、static、`realm`、legacy factory 算）。2799 個成員的路裡 1307 個是 `PLAIN`。`DomStr::give` 和兩個字串結果的 `give` 一律 inline（留在外面時 `getAttribute` 多約 40 條，`tagName`、`id`、`className` 多約 30 條）。
+- `dom_js`：`info_front.rs` 的 `InfoFront`、`InfoOp`（info 加一格 `Pending`：不是 Smi 的數字、V8 沒有的字串、還沒建的名稱、沒有 wrapper 的節點；用 `ManuallyDrop`，結束時 inline 看一眼、有東西才到外面 drop）；冷的路 `with_front` 當場建 scope 和 `V8Front`（`finish_kept_as`、`string_arg`、`node_arg`、`has_args`、`throw`、`invoke_ce_reactions`）；`templates.rs` 的 `InfoMember<M>`，`Members::function` 在 `checked && const { M::PLAIN }` 時用它（跨 origin 的物件的成員照舊）。`state::report` 拆成 `moved` 和 `report_these`。
+- 過程中量到、修掉的：`InfoFront` 的 drop glue 每次呼叫都是一次函式呼叫（改成 `ManuallyDrop`；先試過 `mem::forget(self)`，搬動整個結構，getter 從 23 變成 40 個 cycle）；`state::moved` 沒 inline；custom element 的 reaction 預設的 `invoke_ce_reactions` 把 front 當 script host 用，`InfoFront` 沒有那些方法（`custom_elements` 的測試抓到），改成整個交給 `V8Front`。
+- 同一段 script，改之前的 binary 和這一段的各跑三次取最小（`perf stat`，指令數（cycle））：
+
+  | | 改之前 | 第 3 段 |
+  | --- | ---: | ---: |
+  | `nodeType` | 156（31） | 116（24） |
+  | `firstChild` | 172（34） | 139（28） |
+  | `parentNode` | 172（33） | 139（31） |
+  | `tagName` | 308（59） | 244（51） |
+  | `id` | 318（64） | 252（59） |
+  | `className` | 300（57） | 230（49） |
+  | `hasAttribute` | 571（143） | 504（126） |
+  | `getAttribute` | 661（152） | 566（135） |
+  | `id =` | 967（195） | 898（186） |
+  | `setAttribute` | 1188（253） | 1092（224） |
+  | `appendChild` | 1317（219） | 1267（210） |
+  | `textContent =` | 2078（452） | 2009（431） |
+  | `createElement`（不是 `PLAIN`） | 2039（436） | 2055（470） |
+  | `addEventListener`（不是 `PLAIN`） | 846（173） | 857（176） |
+  | `dispatchEvent`（不是 `PLAIN`） | 3413（716） | 3424（712） |
+
+  `PLAIN` 的成員省 33 到 95 條指令；不是 `PLAIN` 的在 20 條以內（兩次量之間的差；`createElement` 的 cycle 那一次偏高，指令數沒變）。
+- 和 Chrome 同一輪（`bench.py blink-perf --pages`，machopo `perf` profile、Chrome for Testing 152.0.7977.82；runs/s；「之前」是同一天原型那一輪量的原本的路，`id-getter`、`id-setter` 是 2026-11-10 的）：
+
+  | 頁 | machopo | Chrome | 慢幾倍 | 之前 |
+  | --- | ---: | ---: | ---: | ---: |
+  | `node-type` | 2010 | 2832 | 1.41 | 1.85 |
+  | `first-child` | 1674 | 2386 | 1.43 | 1.67 |
+  | `get-attribute` | 364 | 460 | 1.26 | 1.58 |
+  | `set-attribute` | 1794 | 2150 | 1.20 | 1.41 |
+  | `id-getter` | 896 | 1122 | 1.25 | 1.69 |
+  | `id-setter` | 479 | 717 | 1.50 | 1.58 |
+
+  `append-child` machopo 598、Chrome 156，照舊標成可疑、不比。每頁一輪，Chrome 自己各輪之間差到 7%。
+- 測試：`dom_api` 的 `table::members_of_strings_nodes_numbers_and_booleans_are_plain`（哪些成員是 `PLAIN`、哪些不是）；`dom_js` 的 `info_front`（5 個：當場回傳的呼叫不建 scope；要配置或丟例外的建、結果一樣、V8 收掉之後重做；錯誤和 setter 的值；receiver 由 signature 檢查；不是 `PLAIN` 的不經過 info 的 callback）。計數是 `bindings::info_scopes_for_testing`（debug build）。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-3.toml`，26 個裡 23 個抓到。沒抓到的 3 個：跨 origin 的 property 的 `PLAIN` 成員不在 receiver 的 realm 呼叫（現在等價：`PLAIN` 的只有 `closed`、`length`，給布林和小的數字，不建 wrapper）；拿 front 的 setter 也算 `PLAIN`（現在等價：這種 setter 都收 event handler，不是 `PLAIN`）；負零當成零（現在沒有 `PLAIN` 的 getter 給得出負零：form control 的數字把 `"-0"` 讀成 0；這個檢查和 `V8Op::ret_f64` 的一樣）。第一輪另外沒抓到「失敗的呼叫留下的結果被做完」：成員的函式失敗時還沒給結果，那個 drop 走不到，改成 `debug_assert`、拿掉 mutant。fork 的兩個入口不在這個 repo：debug build 各自和 V8 的呼叫比對。
+- 只靠審查的記進 `docs/test-gaps.md`：`PLAIN` 標錯的型別要到呼叫才 panic。
+- 跑過：`cargo test --workspace`（55 個 binary 通過）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`sanity.py` 七項（`boundary` 的允許清單加 `INFO_SCOPES`，測試的計數）、`test.py wpt dom/nodes`（15617 個結果都照預期）。
+- fork 的 commit `097b54c`，`third_party.toml` 釘到它。fork 的兩個 commit（`2be356e`、`097b54c`）都還沒 push：merge 回 `main` 之前要先 push。

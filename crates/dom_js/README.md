@@ -26,7 +26,20 @@ V8 的 callback（templates.rs 的 Member<M>）
 
 拿著狀態的只有第 2 步，那時 scope 被佔住，所以 V8 不會在裡面配置、GC（下面的「V8 不在 DOM 的操作裡配置」）。
 
-每個成員一個 V8 callback（`templates.rs` 的 `Member<M>`，`bindings::StateCallback`：template 只在 isolate 的狀態是 DOM 時建得出來，callback 讀狀態不檢查），是 `dom_api` 替它展開的專用路徑（`TypedMember::call`）加上 V8 這一側的 front（`front.rs` 的 `V8Front`，Blink 產生的 callback 拿 `FunctionCallbackInfo` 做的事）：
+**參數和結果單純的成員走另一個 front**（`info_front.rs` 的 `InfoFront`、`templates.rs` 的 `InfoMember<M>`，`bindings::StateInfoMethod`）：`dom_api` 標成 `TypedMember::PLAIN` 的（物件的 getter、setter、method，參數是字串和節點，結果是數字、布林、字串、節點、null 或沒有；表上約一半的成員），callback 只拿 V8 的 `FunctionCallbackInfo`（`bindings::StateInfo`），像 Blink 產生的 callback：
+
+```text
+V8 的 callback（templates.rs 的 InfoMember<M>）
+└─ InfoFront<'s>：info、一格「操作後才做完的結果」（多半是空的）
+   ├─ 1. 操作外：字串參數原地借得到的（ASCII 的字面值）直接拿，節點的參數確認是 wrapper：都只用 isolate
+   ├─ 2. read / mutate：從 info 借出狀態
+   │     └─ InfoOp<'o, 's>：InfoNoGc（只要 isolate 的 unwrap、回傳，和 OpReturn）、receiver、那一格、快取
+   └─ 3. 操作後：那一格是空的就結束
+```
+
+isolate、receiver、參數、回傳值都在用的地方從 info 讀，不建 rusty_v8 的 scope、不建 `Call`；跑的是同一份 `TypedMember::call`。要 V8 配置、丟例外、執行 script 的（參數要 `ToString` 或複製、結果是 V8 還沒有的字串、沒有 wrapper 的節點、不是 Smi 的數字、錯誤、custom element 的 reaction、要告訴 V8 heap 長大了）當場建一個 scope 和上面的 `V8Front`（`InfoFront::with_front`），交給它做，用完就丟；這些路都在 inline 之外。哪個成員走哪個 front 在編譯時決定（`Members::function` 的 `const { M::PLAIN }`）；跨 origin 的物件的成員照舊（它的 callback 先檢查呼叫者）。
+
+其餘的成員，每個一個 V8 callback（`templates.rs` 的 `Member<M>`，`bindings::StateCallback`：template 只在 isolate 的狀態是 DOM 時建得出來，callback 讀狀態不檢查），是 `dom_api` 替它展開的專用路徑（`TypedMember::call`）加上 V8 這一側的 front（`front.rs` 的 `V8Front`，Blink 產生的 callback 拿 `FunctionCallbackInfo` 做的事）：
 
 1. 操作外轉參數：WebIDL 的 `ToString` 可能跑 script；節點的參數先確認是 wrapper（`bindings::is_wrapper`）；dictionary 照成員名稱的順序 `Get`（getter 可能跑 script、丟例外：例外留著，呼叫停在那裡）。建構子先確認是 `new` 呼叫的、參數夠不夠（照 Chrome 的訊息）。字串參數（`ArgString`）是 V8 的字串：平的 one-byte ASCII 字串在操作裡才讀，讀 V8 自己的字元（`bindings::LentString`，不複製、不經過 `ValueView`），借出期間 V8 的 GC 會 abort，所以呼叫在操作一結束就放掉參數；其他的（cons、two-byte、Latin-1）在這裡複製（攤平 cons string 會配置）。
 2. 一個 DOM 的操作，由 front 開（getter 是 `V8Front::read`：共享地借 isolate 的狀態、`Dom::read`，不經過安全點；setter 和 method 是 `V8Front::mutate`：借整個狀態、`Dom::mutate`）。狀態從呼叫的 scope 借出，借著時 scope 被佔住；操作裡的那一側（`V8Op`）只拿 `bindings::NoGc`（不配置、不呼叫回來的那幾個）和 `bindings::OpReturn`（不配置的 setter），碰不到會配置的 V8 API。`this` 和節點的參數 unwrap 一次（receiver 由 V8 的 `Signature` 檢查過；回傳 promise 的成員裝在物件上的是外面一層沒有 `Signature` 的函式，在 `TryCatch` 裡呼叫它，receiver 不對、參數轉換和 DOM 的錯誤都變成 rejected promise（`templates::rejecting`，Blink 的 `ExceptionToRejectPromiseScope`），wrapper 的 tag 分辨它是哪一種 GC 型別：`EventTarget` 的 `this` 可能是節點或單純的 target），呼叫成員的函式，結果先記下：已經是 V8 的（節點的 wrapper、快取裡的 V8 字串、名稱的 V8 字串）從它的 handle 直接寫進回傳值（不建 `Local`，V8 的 `ReturnValue::Set` 對 `Global`、`TracedReference` 的讀法），否則記下 DOM 的字串或節點（root）。

@@ -207,6 +207,13 @@ pub trait StateCallback<T>: 'static {
     );
 }
 
+/// A method given V8's callback info alone, its isolate's state a `T`
+/// (`StateInfo`): what `state_info_method_template` calls. No scope is
+/// made for it: it makes one where it needs one (`StateInfo::with_scope`).
+pub trait StateInfoMethod<T>: 'static {
+    fn call(info: StateInfo<'_, T>);
+}
+
 /// An indexed getter given its isolate's state, a `T`: what
 /// `set_state_indexed_getter` calls, and the queries of its properties.
 pub trait StateIndexedGetter<T>: 'static {
@@ -363,6 +370,129 @@ impl<'a, 's, 'i, T: Any> StateScope<'a, 's, 'i, T> {
         let state = unsafe { unchecked::<T>(self.scope).as_mut() };
         (state, NoGc { scope: self.scope })
     }
+}
+
+/// A function callback's info (V8's `FunctionCallbackInfo`: the isolate,
+/// the receiver, the arguments and where the result goes are all read from
+/// it), its isolate's state a `T`: what Blink's generated callbacks take.
+/// rusty_v8's `CallbackScope` is its own record of the isolate, not V8's
+/// (V8 opens the callback's handle scope itself): a callback that reads
+/// the state, unwraps, and returns what has a handle already needs none,
+/// and one that allocates, throws or runs script makes one then
+/// (`with_scope`). One a callback, its trampoline's: the state is borrowed
+/// through it alone.
+pub struct StateInfo<'s, T> {
+    info: &'s v8::FunctionCallbackInfo,
+    _state: PhantomData<fn() -> T>,
+}
+
+/// What a holder of the state borrowed from a `StateInfo` may ask of V8:
+/// `NoGc`'s reads that need the isolate alone, and the callback's result
+/// (`OpReturn`). Holds the isolate as long as the state is held.
+pub struct InfoNoGc<'b, 's> {
+    pub(crate) isolate: &'b mut v8::Isolate,
+    pub(crate) rv: v8::ReturnValue<'s, v8::Value>,
+}
+
+thread_local! {
+    /// The scopes the info callbacks made on this thread
+    /// (`StateInfo::with_scope`), for the tests. Counted in debug builds
+    /// only.
+    static INFO_SCOPES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many scopes this thread's info callbacks made
+/// (`StateInfo::with_scope`): what tells a member's call needed none.
+/// `None` in release builds. For tests.
+pub fn info_scopes_for_testing() -> Option<u64> {
+    cfg!(debug_assertions).then(|| INFO_SCOPES.get())
+}
+
+impl<'s, T: Any> StateInfo<'s, T> {
+    /// The isolate, no scope made: for what reads V8's objects in place.
+    #[inline(always)]
+    pub fn isolate(&mut self) -> &mut v8::Isolate {
+        // SAFETY: the slot of the callback's frame that holds the
+        // isolate's pointer, which an `Isolate` is; valid while the
+        // callback runs (`'s`). Borrowed as `self` is, and `self` is the
+        // callback's only way to it (a scope made of the info keeps a
+        // copy of the pointer, elsewhere).
+        unsafe { &mut *self.info.isolate().as_ptr() }
+    }
+
+    /// The call's arguments: reading them allocates nothing.
+    #[inline(always)]
+    pub fn args(&self) -> v8::FunctionCallbackArguments<'s> {
+        v8::FunctionCallbackArguments::from_function_callback_info(self.info)
+    }
+
+    /// The receiver, which V8 checked against the function's signature
+    /// (`state_info_method_template`).
+    #[inline(always)]
+    pub fn receiver(&self) -> Receiver<'s> {
+        Receiver(self.args().this())
+    }
+
+    /// The state, shared, and what of V8 its holder may use.
+    #[inline(always)]
+    pub fn state(&mut self) -> (&T, InfoNoGc<'_, 's>) {
+        let rv = v8::ReturnValue::from_function_callback_info(self.info);
+        let isolate = self.isolate();
+        // SAFETY: the state is a `T` (the template was made where it is
+        // one); as `StateScope::state`'s, the isolate borrowed for as long
+        // and handed to the `InfoNoGc` alone.
+        let state = unsafe { unchecked::<T>(isolate).as_ref() };
+        (state, InfoNoGc { isolate, rv })
+    }
+
+    /// The state, and what of V8 its holder may use.
+    #[inline(always)]
+    pub fn state_mut(&mut self) -> (&mut T, InfoNoGc<'_, 's>) {
+        let rv = v8::ReturnValue::from_function_callback_info(self.info);
+        let isolate = self.isolate();
+        // SAFETY: as `state`'s.
+        let state = unsafe { unchecked::<T>(isolate).as_mut() };
+        (state, InfoNoGc { isolate, rv })
+    }
+
+    /// `f` of a scope made now and the call's result, the scope dropped
+    /// as `f` returns: all of V8's, for what allocates, throws or runs
+    /// script (the state isn't borrowed meanwhile). What rusty_v8's own
+    /// trampoline gives every callback. Out of line: the calls that need
+    /// one are the slow ones.
+    #[inline(never)]
+    pub fn with_scope<R>(
+        &mut self,
+        f: impl FnOnce(StateScope<'_, 's, 's, T>, v8::ReturnValue<'s, v8::Value>) -> R,
+    ) -> R {
+        if cfg!(debug_assertions) {
+            INFO_SCOPES.set(INFO_SCOPES.get().wrapping_add(1));
+        }
+        // SAFETY: V8's callback info, alive for `'s`, as rusty_v8's
+        // trampoline makes a scope of; the handles made in it are of V8's
+        // own handle scope of the callback, so they outlive this scope
+        // (rusty_v8's `CallbackScope` gives them the info's lifetime).
+        v8::callback_scope!(unsafe scope, self.info);
+        f(
+            StateScope {
+                scope,
+                _state: PhantomData,
+            },
+            v8::ReturnValue::from_function_callback_info(self.info),
+        )
+    }
+}
+
+/// An info method's callback: V8's own (`FunctionTemplate::builder_raw`),
+/// given the info alone.
+unsafe extern "C" fn info_method_trampoline<T: Any, C: StateInfoMethod<T>>(
+    info: *const v8::FunctionCallbackInfo,
+) {
+    C::call(StateInfo {
+        // SAFETY: V8's callback info, valid for the call.
+        info: unsafe { &*info },
+        _state: PhantomData,
+    });
 }
 
 /// The callback of `C`, given the state.
@@ -601,6 +731,32 @@ pub fn state_method_template<'s, T: Any, C: StateMethod<T>>(
     configure(v8::FunctionTemplate::builder(method_trampoline::<T, C>))
         .signature(signature)
         .build(scope)
+}
+
+/// A function template whose callback is `C`'s, given V8's callback info
+/// alone (`StateInfo`), its receiver checked against `signature` before
+/// each call. `configure` sets the rest; the signature is set last, so
+/// that it is the function's.
+///
+/// # Panics
+///
+/// If the isolate's state isn't a `T`.
+pub fn state_info_method_template<'s, T: Any, C: StateInfoMethod<T>>(
+    scope: &mut v8::PinScope<'s, '_>,
+    signature: v8::Local<'s, v8::Signature>,
+    configure: impl FnOnce(
+        v8::FunctionBuilder<'s, v8::FunctionTemplate>,
+    ) -> v8::FunctionBuilder<'s, v8::FunctionTemplate>,
+) -> v8::Local<'s, v8::FunctionTemplate> {
+    assert!(
+        checked::<T>(scope).is_some(),
+        "a state callback's template is made where the state is one"
+    );
+    configure(v8::FunctionTemplate::builder_raw(
+        info_method_trampoline::<T, C>,
+    ))
+    .signature(signature)
+    .build(scope)
 }
 
 /// A getter's function template whose callback is `C`'s, given the

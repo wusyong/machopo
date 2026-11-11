@@ -154,6 +154,7 @@ impl<'s> LentString<'s> {
 }
 
 impl Drop for LentString<'_> {
+    #[inline]
     fn drop(&mut self) {
         if self.lent.get() {
             BORROWED.set(BORROWED.get().saturating_sub(1));

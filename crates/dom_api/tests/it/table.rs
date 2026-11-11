@@ -1017,3 +1017,84 @@ fn a_static_and_a_regular_operation_are_no_overload() {
         );
     }
 }
+
+/// Each typed path's interface's and member's names, its kind, and
+/// whether it is plain.
+struct Plain(Vec<(&'static str, &'static str, MemberKind, bool)>);
+
+impl TypedVisitor for Plain {
+    fn any<M: TypedMember>(&mut self) {
+        self.0
+            .push((INTERFACES[M::INTERFACE].name, M::NAME, M::KIND, M::PLAIN));
+    }
+}
+
+/// A member is plain (`TypedMember::PLAIN`: what a front end with the
+/// required methods alone calls) when it is an object's getter, setter or
+/// method whose arguments are strings and nodes and whose result is a
+/// number, a boolean, a string, a node, null or nothing; not when it
+/// takes or gives anything else, makes its result ahead (a new node), is
+/// static, or its function is given the front end.
+#[test]
+fn members_of_strings_nodes_numbers_and_booleans_are_plain() {
+    let mut plain = Plain(Vec::new());
+    dom_api::visit_typed(&mut plain);
+    let is_plain = |interface: &str, name: &str, kind: MemberKind| {
+        let found: Vec<bool> = plain
+            .0
+            .iter()
+            .filter(|member| (member.0, member.1, member.2) == (interface, name, kind))
+            .map(|member| member.3)
+            .collect();
+        assert_eq!(found.len(), 1, "{interface}.{name}: one typed path");
+        found[0]
+    };
+    for (interface, name, kind) in [
+        ("Node", "nodeType", MemberKind::Getter),
+        ("Node", "firstChild", MemberKind::Getter),
+        ("Node", "parentNode", MemberKind::Getter),
+        ("Node", "textContent", MemberKind::Getter),
+        ("Node", "textContent", MemberKind::Setter),
+        ("Node", "appendChild", MemberKind::Method),
+        ("Node", "contains", MemberKind::Method),
+        ("Element", "tagName", MemberKind::Getter),
+        ("Element", "id", MemberKind::Getter),
+        ("Element", "id", MemberKind::Setter),
+        ("Element", "className", MemberKind::Setter),
+        ("Element", "getAttribute", MemberKind::Method),
+        ("Element", "setAttribute", MemberKind::Method),
+        ("Element", "hasAttribute", MemberKind::Method),
+        ("Element", "removeAttribute", MemberKind::Method),
+        ("Event", "timeStamp", MemberKind::Getter),
+        ("Event", "type", MemberKind::Getter),
+    ] {
+        assert!(is_plain(interface, name, kind), "{interface}.{name}");
+    }
+    for (interface, name, kind) in [
+        // A new node, made ahead of the operation.
+        ("Document", "createElement", MemberKind::Method),
+        ("Node", "cloneNode", MemberKind::Method),
+        // An object that isn't a node, a callback, a boolean argument.
+        ("Node", "childNodes", MemberKind::Getter),
+        ("Element", "classList", MemberKind::Getter),
+        ("EventTarget", "addEventListener", MemberKind::Method),
+        ("EventTarget", "dispatchEvent", MemberKind::Method),
+        // A sequence.
+        ("Element", "getAttributeNames", MemberKind::Method),
+        // Static; its function given the front end.
+        ("CSS", "escape", MemberKind::Method),
+        ("AbortSignal", "throwIfAborted", MemberKind::Method),
+    ] {
+        assert!(!is_plain(interface, name, kind), "{interface}.{name}");
+    }
+    // Only getters, setters and methods are.
+    assert!(plain.0.iter().all(|member| {
+        !member.3
+            || matches!(
+                member.2,
+                MemberKind::Getter | MemberKind::Setter | MemberKind::Method
+            )
+    }));
+    let count = plain.0.iter().filter(|member| member.3).count();
+    assert!(count > plain.0.len() / 4, "{count} plain members");
+}

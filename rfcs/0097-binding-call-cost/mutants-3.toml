@@ -1,0 +1,206 @@
+# Stage 3: the plain members through V8's callback info alone
+# (`dom_js::info_front`, `bindings`' `StateInfo`), and which members are
+# plain (`dom_api`, `dom_api_macros`). `dom_js`'s whole test binary: the
+# front end is every plain member's, in every test that calls one.
+test = ["cargo", "test", "-q", "-p", "dom_api", "-p", "dom_js"]
+timeout = 1800
+
+[[mutant]]
+name = "no member is plain"
+file = "crates/dom_js/src/templates.rs"
+from = '''            (None, Some(signature)) if checked && const { M::PLAIN } => {'''
+to = '''            (None, Some(signature)) if checked && const { M::PLAIN } && false => {'''
+
+# Equivalent today: the cross-origin properties that are plain (`closed`,
+# `length`) give a boolean and a small number, which no realm makes.
+[[mutant]]
+name = "a cross-origin property's plain members aren't called in their realm"
+file = "crates/dom_js/src/templates.rs"
+from = '''            (None, Some(signature)) if checked && const { M::PLAIN } => {'''
+to = '''            (None, Some(signature)) if const { M::PLAIN } => {'''
+
+[[mutant]]
+name = "no report after a call"
+file = "crates/dom_js/src/templates.rs"
+from = '''        if M::KIND != MemberKind::Getter {
+            front.report();
+        }
+        front.end();'''
+to = '''        front.end();'''
+
+[[mutant]]
+name = "the arguments not counted"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        given >= required || self.with_front(|front| front.has_args(name, required))'''
+to = '''        let _ = (given, name, required);
+        true'''
+
+[[mutant]]
+name = "every string argument converted"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            if string.lends(self.info.isolate()) {'''
+to = '''            if string.lends(self.info.isolate()) && false {'''
+
+[[mutant]]
+name = "a string argument that lends nothing taken as lent"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            if string.lends(self.info.isolate()) {'''
+to = '''            if string.lends(self.info.isolate()) || true {'''
+
+[[mutant]]
+name = "null is a string for a nullable one"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if front::arg(&self.info.args(), index).is_null_or_undefined() {
+            return Some(None);
+        }
+        self.string_arg(index).map(Some)'''
+to = '''        self.string_arg(index).map(Some)'''
+
+[[mutant]]
+name = "undefined is none for a legacy null one"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if front::arg(&self.info.args(), index).is_null() {'''
+to = '''        if front::arg(&self.info.args(), index).is_null_or_undefined() {'''
+
+[[mutant]]
+name = "null is a string for a legacy null one"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if front::arg(&self.info.args(), index).is_null() {
+            return Some(None);
+        }
+        self.string_arg(index).map(Some)'''
+to = '''        self.string_arg(index).map(Some)'''
+
+[[mutant]]
+name = "a node argument not checked"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if bindings::is_wrapper::<Node>(self.info.isolate(), value) {'''
+to = '''        if value.is_object() {'''
+
+[[mutant]]
+name = "a null node argument is the whole front end's"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        let value = front::arg(&self.info.args(), index);
+        if value.is_null_or_undefined() {
+            return Some(None);
+        }
+        if bindings::is_wrapper'''
+to = '''        let value = front::arg(&self.info.args(), index);
+        if bindings::is_wrapper'''
+
+[[mutant]]
+name = "a result left is never finished"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if self.pending.is_some() {
+            self.finish_pending();
+        }'''
+to = '''        if self.pending.is_some() && false {
+            self.finish_pending();
+        }'''
+
+[[mutant]]
+name = "the reactions not invoked"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.with_front(|front| front.invoke_ce_reactions());'''
+to = '''        let _ = &self.info;'''
+
+[[mutant]]
+name = "a cached string made again"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            .is_some_and(|weak| self.no_gc.return_weak(weak));'''
+to = '''            .is_some_and(|weak| self.no_gc.return_weak(weak) && false);'''
+
+[[mutant]]
+name = "a name's string made again"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            Some(string) => self.no_gc.return_global(string),
+            None => *self.pending'''
+to = '''            Some(_) | None => *self.pending'''
+
+[[mutant]]
+name = "a wrapped node's wrapper made again"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if !self.no_gc.return_wrapper(cx.wrapper_edge(node)) {'''
+to = '''        if !(self.no_gc.return_wrapper(cx.wrapper_edge(node)) && false) {'''
+
+[[mutant]]
+name = "a number past a Smi dropped (u32)"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if !self.no_gc.ret().set_smi_u32(value) {
+            *self.pending = Some(Pending::Number(value.into()));
+        }'''
+to = '''        let _ = self.no_gc.ret().set_smi_u32(value);'''
+
+[[mutant]]
+name = "a number that is no integer truncated"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        let integer = value.fract() == 0.0
+            && value.abs() <= f64::from(i32::MAX)'''
+to = '''        let integer = value.abs() <= f64::from(i32::MAX)'''
+
+# Missed: no plain getter gives minus zero today (the form controls'
+# numbers parse "-0" as 0); the check is the whole front end's
+# (`V8Op::ret_f64`), which `Math`-like results reach.
+[[mutant]]
+name = "minus zero is zero"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            && !(value == 0.0 && value.is_sign_negative());'''
+to = '''            ;'''
+
+[[mutant]]
+name = "the report's microtasks dropped"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if !microtasks.is_empty() || used.is_some() {'''
+to = '''        if used.is_some() {'''
+
+[[mutant]]
+name = "an info method's receiver unchecked"
+file = "crates/bindings/src/isolate_state.rs"
+from = '''    configure(v8::FunctionTemplate::builder_raw(
+        info_method_trampoline::<T, C>,
+    ))
+    .signature(signature)
+    .build(scope)'''
+to = '''    let _ = signature;
+    configure(v8::FunctionTemplate::builder_raw(
+        info_method_trampoline::<T, C>,
+    ))
+    .build(scope)'''
+
+[[mutant]]
+name = "a string argument isn't plain"
+file = "crates/dom_api/src/typed.rs"
+from = '''impl ArgType for DomString {
+    const DESC: TypeDesc = TypeDesc::String;
+    const PLAIN: bool = true;'''
+to = '''impl ArgType for DomString {
+    const DESC: TypeDesc = TypeDesc::String;'''
+
+[[mutant]]
+name = "a method given the front end is plain"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''    let plain = !with_front && !is_static && !realm && !legacy_factory;'''
+to = '''    let plain = !is_static && !realm && !legacy_factory;'''
+
+[[mutant]]
+name = "a static method is plain"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''    let plain = !with_front && !is_static && !realm && !legacy_factory;'''
+to = '''    let plain = !with_front && !realm && !legacy_factory;'''
+
+[[mutant]]
+name = "a method is plain whatever its arguments"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''        const PLAIN: bool = #plain
+            #(&& <#types as #api::typed::ArgType>::PLAIN)*
+            && <#ret as #api::typed::RetType>::PLAIN;'''
+to = '''        const PLAIN: bool = #plain
+            && <#ret as #api::typed::RetType>::PLAIN;'''
+
+# Equivalent today: every setter given the front end takes an event
+# handler, which isn't plain.
+[[mutant]]
+name = "a setter given the front end is plain"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''        const PLAIN: bool = !#with_front && <#ty as #api::typed::ArgType>::PLAIN;'''
+to = '''        const PLAIN: bool = <#ty as #api::typed::ArgType>::PLAIN;'''

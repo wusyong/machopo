@@ -205,6 +205,26 @@ pub fn arg_string<'s>(
 }
 
 impl<'s> ArgString<'s> {
+    /// `string`, which lends its text in place (`LentString::lends`).
+    pub(crate) fn lent(string: bindings::LentString<'s>) -> Self {
+        Self {
+            string,
+            copied: None,
+        }
+    }
+
+    /// `text`, for a holder of the state borrowed from the callback's
+    /// info.
+    pub(crate) fn text_lent(&self, no_gc: &mut bindings::InfoNoGc<'_, '_>) -> &str {
+        match &self.copied {
+            Some(copied) => copied,
+            // A flat string stays flat, and stays V8's that lends it.
+            None => no_gc
+                .ascii(&self.string)
+                .expect("a string that lent its text lends it again"),
+        }
+    }
+
     /// `f` of its text if it lends it in place (an ASCII one-byte one),
     /// lent for the call alone (`bindings::LentString::peek_ascii`): before
     /// what may collect.

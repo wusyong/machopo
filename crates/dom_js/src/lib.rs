@@ -27,6 +27,7 @@ mod exception;
 mod frames;
 mod front;
 mod handlers;
+mod info_front;
 mod keyframes;
 mod listeners;
 mod machopo_dom;
