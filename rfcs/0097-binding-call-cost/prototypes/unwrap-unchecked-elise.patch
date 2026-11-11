@@ -1,0 +1,20 @@
+diff --git a/crates/elise/src/heap.rs b/crates/elise/src/heap.rs
+index caed6ec..7eeaa7d 100644
+--- a/crates/elise/src/heap.rs
++++ b/crates/elise/src/heap.rs
+@@ -1248,6 +1248,15 @@ impl<'gc> Mutation<'gc> {
+         unsafe { crate::Gc::from_raw(address.cast()) }
+     }
+ 
++    /// PROTOTYPE (measured, not to be kept): `from_engine` with no check
++    /// of the cage.
++    pub unsafe fn from_engine_unchecked<T: HeapType>(&self, address: NonNull<u8>) -> crate::Gc<'gc, T> {
++        let offset = self.inner.offset_of(address.as_ptr());
++        #[expect(clippy::cast_possible_truncation, reason = "prototype")]
++        self.inner.read_weak(offset as u32);
++        unsafe { crate::Gc::from_raw(address.cast()) }
++    }
++
+     /// A new object, written in place from `init`.
+     ///
+     /// # Panics

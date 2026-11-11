@@ -1,0 +1,32 @@
+diff --git a/src/machopo.rs b/src/machopo.rs
+index 6107f40..0b9304f 100644
+--- a/src/machopo.rs
++++ b/src/machopo.rs
+@@ -584,6 +584,27 @@ pub unsafe fn unwrap_receiver(
+   object
+ }
+ 
++/// PROTOTYPE (measured, not to be kept): `unwrap_receiver` with no tag
++/// compared and no null check.
++#[cfg(not(feature = "v8_enable_sandbox"))]
++#[inline(always)]
++pub unsafe fn unwrap_receiver_unchecked(
++  isolate: &mut Isolate,
++  wrapper: Local<Object>,
++) -> NonNull<c_void> {
++  unsafe {
++    let object = *(&*wrapper as *const Object).cast::<usize>();
++    let handle =
++      ((object - HEAP_OBJECT_TAG + JS_OBJECT_HEADER_SIZE) as *const u32).read();
++    let table = *(isolate.as_real_ptr() as *const u8)
++      .add(CPP_HEAP_POINTER_TABLE_OFFSET)
++      .cast::<*const std::sync::atomic::AtomicUsize>();
++    let entry = (*table.add((handle >> INDEX_SHIFT) as usize))
++      .load(std::sync::atomic::Ordering::Relaxed);
++    NonNull::new_unchecked((entry >> PAYLOAD_SHIFT) as *mut c_void)
++  }
++}
++
+ /// machopo: where the isolate keeps its `CppHeapPointerTable`'s base
+ /// (`Internals::kIsolateCppHeapPointerTableOffset`, `include/v8-internal.h`):
+ /// past the embedder data slots (`kNumIsolateDataSlots`, 4), the external

@@ -1,0 +1,112 @@
+diff --git a/crates/bindings/src/isolate_state.rs b/crates/bindings/src/isolate_state.rs
+index 56f2bc7..cdb88b3 100644
+--- a/crates/bindings/src/isolate_state.rs
++++ b/crates/bindings/src/isolate_state.rs
+@@ -1048,3 +1048,13 @@ pub fn raw_getter_template<'s, T: Any, C: RawGetter<T>>(
+         .constructor_behavior(v8::ConstructorBehavior::Throw)
+         .build(scope)
+ }
++
++/// PROTOTYPE: `Receiver` unwrapped with no checks, for `RawGetter`s.
++pub fn unwrap_receiver_unchecked_for_prototype<'gc, T: elise::HeapType>(
++    isolate: &mut v8::Isolate,
++    cx: &elise::Mutation<'gc>,
++    this: Receiver<'_>,
++) -> elise::Gc<'gc, T> {
++    // SAFETY (prototype): the bench's receiver is a node.
++    unsafe { crate::unified_heap::unwrap_receiver_unchecked(isolate, cx, this) }
++}
+diff --git a/crates/bindings/src/lib.rs b/crates/bindings/src/lib.rs
+index 3ea476c..440124b 100644
+--- a/crates/bindings/src/lib.rs
++++ b/crates/bindings/src/lib.rs
+@@ -53,7 +53,7 @@ pub use gc_platform::gc_platform;
+ pub use isolate_state::{
+     NamedOptions, NoGc, PropertyKey, RawGetter, Receiver, StateAccessCheck, StateCallback,
+     StateIndexedGetter, StateIndexedSetter, StateMethod, StateNamedProperties, StateScope,
+-    drop_isolate_state, isolate_state_mut, raw_getter_template, set_isolate_state,
++    drop_isolate_state, isolate_state_mut, raw_getter_template, unwrap_receiver_unchecked_for_prototype, set_isolate_state,
+     set_state_access_check, set_state_call_as_function_handler, set_state_indexed_getter,
+     set_state_indexed_properties, set_state_named_properties, set_state_refused_access,
+     state_cached_getter_template, state_function_template, state_method_template,
+@@ -81,6 +81,6 @@ pub use unified_heap::{
+     ReturnSlot, is_wrapper, receiver_unwraps_for_testing, register_embedder_heap,
+     report_embedder_used_size, return_wrapper, set_isolate_state_with_embedder_heap, set_strong,
+     set_strong_value, set_wrapper, strong, strong_value, unwrap, unwrap_object, unwrap_receiver,
+-    wrap, wrapper,
++    unwrap_receiver_unchecked, wrap, wrapper,
+ };
+ pub use v8_text::{LentString, ascii_scans_for_testing, borrowed_texts};
+diff --git a/crates/bindings/src/unified_heap.rs b/crates/bindings/src/unified_heap.rs
+index 65db665..0bdab90 100644
+--- a/crates/bindings/src/unified_heap.rs
++++ b/crates/bindings/src/unified_heap.rs
+@@ -916,6 +916,20 @@ pub fn unwrap_receiver<'gc, T: elise::HeapType>(
+     Some(unsafe { cx.from_engine::<T>(address.cast()) })
+ }
+ 
++/// PROTOTYPE (measured, not to be merged): `unwrap_receiver` with no tag
++/// compared and no check of the cage.
++#[inline]
++pub unsafe fn unwrap_receiver_unchecked<'gc, T: elise::HeapType>(
++    isolate: &mut v8::Isolate,
++    cx: &elise::Mutation<'gc>,
++    this: crate::Receiver<'_>,
++) -> elise::Gc<'gc, T> {
++    unsafe {
++        let address = v8::machopo::unwrap_receiver_unchecked(isolate, this.object());
++        cx.from_engine_unchecked::<T>(address.cast())
++    }
++}
++
+ thread_local! {
+     /// The receivers unwrapped as V8 checked them (`unwrap_receiver`), on
+     /// this thread, for the tests. Counted in debug builds only.
+diff --git a/crates/dom_js/src/templates.rs b/crates/dom_js/src/templates.rs
+index f22e2bd..98d0b49 100644
+--- a/crates/dom_js/src/templates.rs
++++ b/crates/dom_js/src/templates.rs
+@@ -598,6 +598,10 @@ impl Members<'_, '_, '_> {
+                     "nodeTypeRaw",
+                     bindings::raw_getter_template::<State, RawNodeType>(self.scope, self.signature),
+                 )),
++                "nodeName" => Some((
++                    "nodeTypeRawUnchecked",
++                    bindings::raw_getter_template::<State, RawNodeTypeUnchecked>(self.scope, self.signature),
++                )),
+                 _ => None,
+             };
+             if let Some((name, getter)) = raw {
+@@ -1699,3 +1703,20 @@ impl bindings::RawGetter<State> for RawNodeType {
+         });
+     }
+ }
++
++struct RawNodeTypeUnchecked;
++
++impl bindings::RawGetter<State> for RawNodeTypeUnchecked {
++    #[inline]
++    fn get<'s>(
++        state: &State,
++        isolate: &mut v8::Isolate,
++        this: bindings::Receiver<'s>,
++        rv: &mut v8::ReturnValue<'s, v8::Value>,
++    ) {
++        state.dom.read(|cx| {
++            let node = bindings::unwrap_receiver_unchecked_for_prototype::<dom::Node>(isolate, cx.gc, this);
++            rv.set_int32(i32::from(cx.node_type(node)));
++        });
++    }
++}
+diff --git a/scripts/bench/calls/calls.py b/scripts/bench/calls/calls.py
+index 9899341..076e94d 100644
+--- a/scripts/bench/calls/calls.py
++++ b/scripts/bench/calls/calls.py
+@@ -61,6 +61,7 @@ CASES = {
+     "nodeType": "x = n.nodeType;",
+     # PROTOTYPE (measured, not to be merged).
+     "nodeTypeRaw": "x = n.nodeTypeRaw;",
++    "nodeTypeRawUnchecked": "x = n.nodeTypeRawUnchecked;",
+     "getAttribute": "x = n.getAttribute('id');",
+     "setAttribute": "n.setAttribute('a', 'b');",
+     "appendChild": "n.appendChild(c);",
