@@ -99,12 +99,7 @@ pub(crate) fn body_used<'gc>(cx: &ApiCx<'_, 'gc>, body: Body<'gc>) -> bool {
 /// Fetch's "consume body", to its bytes: a body read already is a
 /// `TypeError`; a response's whose `fetch()` was aborted rejects with the
 /// reason (its stream errored); a null body is an empty one.
-fn consume<'gc, O: OpFront>(
-    op: &mut O,
-    cx: &ApiCx<'_, 'gc>,
-    body: Body<'gc>,
-    member: &str,
-) -> Result<Arc<[u8]>, ApiError> {
+fn consume<'gc>(cx: &ApiCx<'_, 'gc>, body: Body<'gc>, member: &str) -> Result<Arc<[u8]>, ApiError> {
     if body_used(cx, body) {
         let interface = match body {
             Body::Request(_) => "Request",
@@ -116,11 +111,11 @@ fn consume<'gc, O: OpFront>(
     }
     if let Body::Response(response) = body
         && body.state(cx).0
-        && let Some(reason) = cx
+        && let Some(signal) = cx
             .response_signal(response)
-            .and_then(|signal| cx.abort_reason(signal))
+            .filter(|&signal| cx.abort_reason(signal).is_some())
     {
-        return Err(op.rethrow(cx, reason));
+        return Err(ApiError::aborted(cx, signal));
     }
     Ok(body.take(cx).unwrap_or_else(|| Arc::from(&[][..])))
 }
@@ -133,42 +128,32 @@ fn utf8_decode(bytes: &[u8]) -> DomString {
 }
 
 /// `text()`.
-pub(crate) fn text<'gc, O: OpFront>(
-    op: &mut O,
-    cx: &ApiCx<'_, 'gc>,
-    body: Body<'gc>,
-) -> Result<DomString, ApiError> {
-    Ok(utf8_decode(&consume(op, cx, body, "text")?))
+pub(crate) fn text<'gc>(cx: &ApiCx<'_, 'gc>, body: Body<'gc>) -> Result<DomString, ApiError> {
+    Ok(utf8_decode(&consume(cx, body, "text")?))
 }
 
 /// `json()`: the text, which the front end parses.
-pub(crate) fn json<'gc, O: OpFront>(
-    op: &mut O,
-    cx: &ApiCx<'_, 'gc>,
-    body: Body<'gc>,
-) -> Result<DomString, ApiError> {
-    Ok(utf8_decode(&consume(op, cx, body, "json")?))
+pub(crate) fn json<'gc>(cx: &ApiCx<'_, 'gc>, body: Body<'gc>) -> Result<DomString, ApiError> {
+    Ok(utf8_decode(&consume(cx, body, "json")?))
 }
 
 /// `arrayBuffer()` and `bytes()`: a copy of the bytes, the buffer's.
-pub(crate) fn bytes<'gc, O: OpFront>(
-    op: &mut O,
+pub(crate) fn bytes<'gc>(
     cx: &ApiCx<'_, 'gc>,
     body: Body<'gc>,
     member: &str,
 ) -> Result<Vec<u8>, ApiError> {
-    Ok(consume(op, cx, body, member)?.to_vec())
+    Ok(consume(cx, body, member)?.to_vec())
 }
 
 /// `blob()`: a new blob of the bytes (shared, not copied), its type the
 /// `Content-Type` as Chrome has it: the header's value, lowercased (not
 /// Fetch's parsed and serialized MIME type).
-pub(crate) fn blob<'gc, O: OpFront>(
-    op: &mut O,
+pub(crate) fn blob<'gc>(
     cx: &ApiCx<'_, 'gc>,
     body: Body<'gc>,
 ) -> Result<Gc<'gc, dom::Blob>, ApiError> {
     let type_ = crate::blob::normalize_type(&body.content_type(cx));
-    let bytes = consume(op, cx, body, "blob")?;
+    let bytes = consume(cx, body, "blob")?;
     Ok(cx.create_blob(dom::BlobData::from_shared(bytes, type_)))
 }

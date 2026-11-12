@@ -1,0 +1,195 @@
+# Before stage 4h (decision 35): what a member's function asks of the
+# front end's side in its operation every front end has (an aborted
+# signal's reason carried by the error, an `ImageData`'s pixels by the
+# result, an array's bytes read from its edge, `HTMLElement`'s
+# constructor's `new.target`; three argument types carry their nodes as
+# handles). Stage 4h: a constructor is called with V8's callback info
+# alone.
+test = ["cargo", "test", "-q", "-p", "dom_api", "-p", "dom_js", "-p", "dom_wasm"]
+timeout = 1800
+
+[[mutant]]
+name = "an aborted signal's reason is undefined when thrown"
+file = "crates/dom_js/src/front.rs"
+from = '''            cx.abort_reason(signal.get(cx.gc))
+                .and_then(|edge| no_gc.strong_value(edge))'''
+to = '''            let _ = (cx, &mut no_gc);
+            None::<v8::Local<'_, v8::Value>>'''
+
+[[mutant]]
+name = "an aborted body's read throws nothing"
+file = "crates/dom_api/src/body.rs"
+from = '''            .filter(|&signal| cx.abort_reason(signal).is_some())'''
+to = '''            .filter(|&signal| cx.abort_reason(signal).is_none())'''
+
+[[mutant]]
+name = "a signal not aborted throws"
+file = "crates/dom_api/src/abort.rs"
+from = '''        None => Ok(()),
+        Some(_) => Err(ApiError::aborted(cx, this)),'''
+to = '''        None | Some(_) => Err(ApiError::aborted(cx, this)),'''
+
+[[mutant]]
+name = "an image data's pixels aren't made its array"
+file = "crates/dom_api/src/typed.rs"
+from = '''        front.finish_image_data_pixels(image_data, pixels);
+        <crate::interfaces::ImageData as RetType>::finish(front, object);'''
+to = '''        let _ = (image_data, pixels);
+        <crate::interfaces::ImageData as RetType>::finish(front, object);'''
+
+[[mutant]]
+name = "a constructed image data's pixels aren't made its array"
+file = "crates/dom_api/src/typed.rs"
+from = '''        ConstructPending::Pixels(image_data, bytes) => {
+            front.finish_image_data_pixels(image_data, bytes);
+        }'''
+to = '''        ConstructPending::Pixels(image_data, bytes) => {
+            let _ = (image_data, bytes);
+        }'''
+
+[[mutant]]
+name = "the info front end makes no array of pixels"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.with_front(|front| front.finish_image_data_pixels(image_data, bytes));'''
+to = '''        let _ = (image_data, bytes);'''
+
+[[mutant]]
+name = "an array's bytes are never there"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            Some(array) => {
+                let mut storage = [0; v8::TYPED_ARRAY_MAX_SIZE_IN_HEAP];
+                f(Some(array.get_contents(&mut storage)));
+            }
+            None => f(None),
+        }
+    }
+
+    /// The current realm's window, of a member that asked for it'''
+to = '''            Some(_) | None => f(None),
+        }
+    }
+
+    /// The current realm's window, of a member that asked for it'''
+
+[[mutant]]
+name = "new.target has no number"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        v8::Local::<v8::Object>::try_from(K::new_target(self.this))
+            .ok()
+            .map(front::number)'''
+to = '''        let _ = K::new_target(self.this);
+        None'''
+
+[[mutant]]
+name = "any definition's constructor is new.target"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.no_gc.refers_to(edge, K::new_target(self.this))
+    }
+
+    /// In place, unless'''
+to = '''        let _ = edge;
+        true
+    }
+
+    /// In place, unless'''
+
+[[mutant]]
+name = "an upgraded element's wrapper is made again"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                if self.no_gc.return_wrapper(cx.wrapper_edge(element)) {
+                    return Some(cx.root(element));
+                }'''
+to = ''''''
+
+[[mutant]]
+name = "an upgraded element's prototype isn't set"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.with_front(|front| front.finish_upgrading(element));'''
+to = '''        let _ = element;'''
+
+[[mutant]]
+name = "HTMLElement itself constructs"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if interface == const { dom_api::declare::interface_index("HTMLElement") } {
+            return self.with_front(|front| front.construct(interface, required));
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a constructor called without new constructs"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        (!args.new_target().is_undefined()
+            && usize::try_from(args.length()).unwrap_or(0) >= required)'''
+to = '''        (usize::try_from(args.length()).unwrap_or(0) >= required)'''
+
+[[mutant]]
+name = "a constructor given too few arguments constructs"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        (!args.new_target().is_undefined()
+            && usize::try_from(args.length()).unwrap_or(0) >= required)'''
+to = '''        (!args.new_target().is_undefined())'''
+
+[[mutant]]
+name = "a constructed object isn't counted"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        front::wrap_new_object(&mut self.no_gc, cx, K::new_object(self.this), object);
+        front::count(&self.caches.wrappers_made);'''
+to = '''        front::wrap_new_object(&mut self.no_gc, cx, K::new_object(self.this), object);'''
+
+[[mutant]]
+name = "a plain constructor is called as before"
+file = "crates/dom_js/src/templates.rs"
+from = '''        self.template = Some(if const { M::PLAIN } {
+            bindings::state_info_function_template::<State, InfoConstructor<M>>('''
+to = '''        self.template = Some(if const { M::PLAIN } && false {
+            bindings::state_info_function_template::<State, InfoConstructor<M>>('''
+
+[[mutant]]
+name = "a constructor isn't plain"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''        const PLAIN: bool = true #(&& <#types as #api::typed::ArgType>::PLAIN)*;
+
+        fn call<F: #api::typed::Front>(#front: &mut F) {
+            #optional
+            if !#front.construct('''
+to = '''        const PLAIN: bool = false #(&& <#types as #api::typed::ArgType>::PLAIN)*;
+
+        fn call<F: #api::typed::Front>(#front: &mut F) {
+            #optional
+            if !#front.construct('''
+
+[[mutant]]
+name = "a static range's containers are swapped"
+file = "crates/dom_api/src/typed.rs"
+from = '''            start: (op.node(cx, &start.0), start.1),
+            end: (op.node(cx, &end.0), end.1),'''
+to = '''            start: (op.node(cx, &end.0), start.1),
+            end: (op.node(cx, &start.0), end.1),'''
+
+[[mutant]]
+name = "an intersection observer's root is forgotten"
+file = "crates/dom_api/src/typed.rs"
+from = '''            root: root.as_ref().map(|root| op.node(cx, root)),'''
+to = '''            root: root.as_ref().and_then(|_| None),'''
+
+[[mutant]]
+name = "a listed node that is no shadow root is taken"
+file = "crates/dom_api/src/typed.rs"
+from = '''                if cx.is_shadow_root(node) {
+                    Ok(node)
+                } else {'''
+to = '''                if cx.is_shadow_root(node) || true {
+                    Ok(node)
+                } else {'''
+
+[[mutant]]
+name = "a dictionary's members are never read"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''                    #front.reading(Reads::<T>(&#dict, &mut #value))?;'''
+to = '''                    let _ = Reads::<T>(&#dict, &mut #value);'''
+
+[[mutant]]
+name = "the info front end reads a dictionary's members one scope each"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.with_front(|front| reads.read(front))'''
+to = '''        reads.read(self)'''

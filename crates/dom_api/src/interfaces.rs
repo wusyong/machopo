@@ -33,12 +33,12 @@ use crate::typed::{
     PerformanceTimingObject, PopStateEventObject, PositionCallback, PositionErrorCallback,
     ProgressEventObject, Promise, PromiseOfAnimation, PromiseOfAny, PromiseOfArrayBuffer,
     PromiseOfJson, PromiseOfString, PromiseOfUint8Array, PromiseOfUndefined,
-    PromiseRejectionEventObject, RadioNodeListObject, RadioNodeListOrElement, ReadImageData,
-    ReaderResult, Records, RequestInfo, ResizeObserverCallback, Rest, Rethrowing, Rethrown,
-    RoundRectRadii, Sequence, Serialized, SignalMember, SignalObject, Slottables,
-    StaticRangeInitArg, StringOrNumber, StringPairs, Strings, TargetObject, TextEventObject,
-    TimelineArg, TimerHandler, TransitionEventObject, U16Default302, UiEventObject,
-    Uint8ClampedArray, UnrestrictedDouble, WakeLockSentinelObject, WhatToShow, WheelEventObject,
+    PromiseRejectionEventObject, RadioNodeListObject, RadioNodeListOrElement, ReaderResult,
+    Records, RequestInfo, ResizeObserverCallback, Rest, RoundRectRadii, Sequence, Serialized,
+    SignalMember, SignalObject, Slottables, StaticRangeInitArg, StringOrNumber, StringPairs,
+    Strings, TargetObject, TextEventObject, TimelineArg, TimerHandler, TransitionEventObject,
+    U16Default302, UiEventObject, Uint8ClampedArray, UnrestrictedDouble, WakeLockSentinelObject,
+    WhatToShow, WheelEventObject,
 };
 use crate::window::NavigationUrl;
 use crate::{
@@ -1174,8 +1174,7 @@ crate::declare! {
         method any(signals: AbortSignals) -> AbortSignal = abort::any;
         attribute aborted: bool, get = abort::aborted;
         attribute reason: AnyOrUndefined, get = abort::reason;
-        #[front]
-        method throwIfAborted() -> Rethrown = abort::throw_if_aborted;
+        method throwIfAborted() = abort::throw_if_aborted;
         #[front]
         attribute onabort: EventHandler, get = handlers::port_handler::<{ event_type::ABORT }>, set = handlers::set_port_handler::<_, { event_type::ABORT }>;
     }
@@ -1245,16 +1244,11 @@ crate::declare! {
         attribute duplex: DomString, get = request::duplex;
         method clone() -> Request = request::clone;
         attribute bodyUsed: bool, get = request::body_used;
-        #[front]
-        method arrayBuffer() -> Rethrowing<PromiseOfArrayBuffer> = request::array_buffer;
-        #[front]
-        method blob() -> Rethrowing<Promise<Blob>> = request::blob;
-        #[front]
-        method bytes() -> Rethrowing<PromiseOfUint8Array> = request::bytes;
-        #[front]
-        method json() -> Rethrowing<PromiseOfJson> = request::json;
-        #[front]
-        method text() -> Rethrowing<PromiseOfString> = request::text;
+        method arrayBuffer() -> PromiseOfArrayBuffer = request::array_buffer;
+        method blob() -> Promise<Blob> = request::blob;
+        method bytes() -> PromiseOfUint8Array = request::bytes;
+        method json() -> PromiseOfJson = request::json;
+        method text() -> PromiseOfString = request::text;
     }
 
     interface Response [type = dom::Response] {
@@ -1278,16 +1272,11 @@ crate::declare! {
         attribute headers: Headers, get = response::headers;
         method clone() -> Response = response::clone;
         attribute bodyUsed: bool, get = response::body_used;
-        #[front]
-        method arrayBuffer() -> Rethrowing<PromiseOfArrayBuffer> = response::array_buffer;
-        #[front]
-        method blob() -> Rethrowing<Promise<Blob>> = response::blob;
-        #[front]
-        method bytes() -> Rethrowing<PromiseOfUint8Array> = response::bytes;
-        #[front]
-        method json() -> Rethrowing<PromiseOfJson> = response::json;
-        #[front]
-        method text() -> Rethrowing<PromiseOfString> = response::text;
+        method arrayBuffer() -> PromiseOfArrayBuffer = response::array_buffer;
+        method blob() -> Promise<Blob> = response::blob;
+        method bytes() -> PromiseOfUint8Array = response::bytes;
+        method json() -> PromiseOfJson = response::json;
+        method text() -> PromiseOfString = response::text;
     }
 
     // requestIdleCallback's: 0 is no timeout.
@@ -3936,12 +3925,9 @@ crate::declare! {
         method clearRect(x: UnrestrictedDouble, y: UnrestrictedDouble, w: UnrestrictedDouble, h: UnrestrictedDouble) = canvas::clear_rect;
         method fillRect(x: UnrestrictedDouble, y: UnrestrictedDouble, w: UnrestrictedDouble, h: UnrestrictedDouble) = canvas::fill_rect;
         method strokeRect(x: UnrestrictedDouble, y: UnrestrictedDouble, w: UnrestrictedDouble, h: UnrestrictedDouble) = canvas::stroke_rect;
-        #[front]
         method createImageData(sw: EnforcedI32, sh: EnforcedI32, settings?: ImageDataSettings) -> NewImageData =
             canvas::create_image_data;
-        #[front]
         method createImageData(imagedata: ImageData) -> NewImageData = canvas::create_image_data_of;
-        #[front]
         method getImageData(
             sx: EnforcedI32,
             sy: EnforcedI32,
@@ -3950,10 +3936,10 @@ crate::declare! {
             settings?: ImageDataSettings,
         ) -> NewImageData = canvas::get_image_data;
         #[front]
-        method putImageData(imagedata: ReadImageData, dx: EnforcedI32, dy: EnforcedI32) = canvas::put_image_data;
+        method putImageData(imagedata: ImageData, dx: EnforcedI32, dy: EnforcedI32) = canvas::put_image_data;
         #[front]
         method putImageData(
-            imagedata: ReadImageData,
+            imagedata: ImageData,
             dx: EnforcedI32,
             dy: EnforcedI32,
             dirtyX: EnforcedI32,
@@ -4588,7 +4574,6 @@ crate::declare! {
     // Its pixels the engine's `Uint8ClampedArray`, the same each time; no
     // `pixelFormat`.
     interface ImageData [type = dom::ImageData] {
-        #[front]
         constructor(sw: u32, sh: u32, settings?: ImageDataSettings) = canvas::construct_image_data;
         #[front]
         constructor(

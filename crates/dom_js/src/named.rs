@@ -145,6 +145,11 @@ impl<'s> FrontTypes for PropertyOp<'_, 's, '_> {
 }
 
 impl<'a, 's, 'i> Front for PropertyFront<'a, 's, 'i> {
+    #[inline(always)]
+    fn reading<V: dom_api::typed::ReadDict<Self>>(&mut self, reads: V) -> V::Out {
+        reads.read(self)
+    }
+
     type Op<'o>
         = PropertyOp<'o, 's, 'i>
     where
@@ -258,11 +263,16 @@ impl<'a, 's, 'i> Front for PropertyFront<'a, 's, 'i> {
                 exception.name.name(),
                 &exception.message,
             ),
+            ApiError::Aborted(signal) => {
+                crate::front::throw_abort_reason(&mut self.scope, &signal.0);
+            }
         }
     }
 }
 
 impl<'s> OpFront for PropertyOp<'_, 's, '_> {
+    dom_api::unbound_op_methods!();
+
     fn str_param<'a>(&mut self, string: &'a ArgString<'s>) -> &'a str {
         string.text(&mut self.no_gc)
     }

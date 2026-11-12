@@ -174,13 +174,12 @@ pub(crate) fn reason<'gc>(
 }
 
 /// `AbortSignal.throwIfAborted()`: throws its reason, once aborted.
-pub(crate) fn throw_if_aborted<'gc, O: OpFront>(
-    op: &mut O,
+pub(crate) fn throw_if_aborted<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, EventTargetImpl>,
 ) -> Result<(), ApiError> {
     match cx.abort_reason(this) {
         None => Ok(()),
-        Some(reason) => Err(op.rethrow(cx, reason)),
+        Some(_) => Err(ApiError::aborted(cx, this)),
     }
 }

@@ -709,7 +709,12 @@ fn static_operations_and_overloads_are_given_the_info_alone() {
             false,
         ),
         // A form that isn't plain is called as before, in a scope.
-        ("ctx.putImageData(data, 0, 0)", "undefined", false),
+        ("ctx.putImageData(data, 0, 0)", "undefined", true),
+        (
+            "ctx.putImageData(data, 0, 0, 0, 0, 1, 1)",
+            "undefined",
+            true,
+        ),
         ("d.scrollTo(0, 0) instanceof Promise", "true", false),
         ("d.scrollTo({ top: 0 }) instanceof Promise", "true", false),
         // A number of arguments no form takes.
@@ -739,5 +744,228 @@ fn static_operations_and_overloads_are_given_the_info_alone() {
         } else {
             assert!(made >= 1, "{source}: a scope");
         }
+    }
+}
+
+/// What a member's function asks of the front end's side in its operation
+/// the front end that is the callback's info has too, so the members
+/// whose functions ask take that path: an aborted signal's reason thrown
+/// (the error carries the signal out; the reason is read as it is
+/// thrown), an `ImageData`'s pixels (carried out with the object, its
+/// array made after), an array's bytes read in place, `HTMLElement`'s
+/// constructor's `new.target`.
+#[test]
+fn what_a_function_asks_of_the_operations_front_end_every_front_end_has() {
+    let mut engine = page();
+    run(
+        &mut engine,
+        "var reason = { why: 1 }; var controller = new AbortController(); controller.abort(reason); \
+         var signal = controller.signal; var fine = new AbortController().signal; \
+         var ctx = document.createElement('canvas').getContext('2d'); \
+         var data = ctx.createImageData(1, 1); data.data.set([1, 2, 3, 255]); ctx.putImageData(data, 0, 0); \
+         class Mine extends HTMLElement { constructor() { super(); this.made = true; } } \
+         customElements.define('x-mine', Mine); var upgraded = document.createElement('x-later'); \
+         d.appendChild(upgraded); d.id;",
+    );
+    for (source, value, at_once) in [
+        // The reason itself, thrown: the same object.
+        (
+            "(() => { try { signal.throwIfAborted(); return 'none'; } catch (e) { return e === reason; } })()",
+            "true",
+            false,
+        ),
+        ("fine.throwIfAborted()", "undefined", true),
+        (
+            "(() => { try { AbortSignal.abort().throwIfAborted(); return 'none'; } catch (e) { return e.name; } })()",
+            "AbortError",
+            false,
+        ),
+        // Pixels: read from the bitmap, in a new array each time; a new
+        // `ImageData`'s zeroed; written back with no scope.
+        ("data.data.join()", "1,2,3,255", true),
+        (
+            "ctx.getImageData(0, 0, 1, 1).data.join()",
+            "1,2,3,255",
+            false,
+        ),
+        (
+            "ctx.getImageData(0, 0, 1, 1).data !== data.data",
+            "true",
+            false,
+        ),
+        ("ctx.createImageData(1, 1).data.join()", "0,0,0,0", false),
+        ("ctx.createImageData(data).width", "1", false),
+        (
+            "new ImageData(2, 1).data.length + ' ' + new ImageData(2, 1).width",
+            "8 2",
+            false,
+        ),
+        (
+            "data.data[1] = 9; ctx.putImageData(data, 1, 1); ctx.getImageData(1, 1, 1, 1).data.join()",
+            "1,9,3,255",
+            false,
+        ),
+        (
+            "(() => { try { new ImageData(0, 1); return 'none'; } catch (e) { return e.name; } })()",
+            "IndexSizeError",
+            false,
+        ),
+        // `HTMLElement`'s constructor: a new element of the definition
+        // `new.target` is the constructor of; itself, or a function with
+        // no definition, a `TypeError`; an element upgraded is the one
+        // that was there, of the class's prototype.
+        ("new Mine() instanceof Mine", "true", false),
+        (
+            "new Mine().localName + ' ' + new Mine().made",
+            "x-mine true",
+            false,
+        ),
+        (
+            "(() => { try { new HTMLElement(); return 'none'; } catch (e) { return e.name; } })()",
+            "TypeError",
+            false,
+        ),
+        (
+            "(() => { try { Reflect.construct(HTMLElement, [], function () {}); return 'none'; } catch (e) { return e.name; } })()",
+            "TypeError",
+            false,
+        ),
+        (
+            "(() => { customElements.define('x-later', class Later extends HTMLElement { constructor() { super(); this.up = 1; } }); \
+             return upgraded.up + ' ' + (d.lastChild === upgraded) + ' ' + upgraded.constructor.name; })()",
+            "1 true Later",
+            false,
+        ),
+    ] {
+        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        let expression = if source.starts_with("(() =>") {
+            source.to_owned()
+        } else {
+            format!("({})", source.replace("; ", ", "))
+        };
+        let found = report(&mut engine, &expression);
+        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        assert_eq!(found, value, "{source}");
+        if at_once {
+            assert_eq!(made, 0, "{source}");
+        } else {
+            assert!(made >= 1, "{source}: a scope");
+        }
+    }
+    // A body's read rejects with its signal's reason.
+    run(
+        &mut engine,
+        "var aborting = new AbortController(); \
+         fetch('https://example.test/x', { signal: aborting.signal }).catch((e) => log.push(e === reason)); \
+         aborting.abort(reason);",
+    );
+    assert_eq!(report(&mut engine, "log.splice(0).join()"), "true");
+}
+
+/// A constructor takes the path with the callback's info alone: called
+/// with `new` and enough arguments, its new object (V8's, of `new.target`'s
+/// prototype) is made the wrapper of what it constructs, and the current
+/// realm's window is found for the ones that ask, with no scope. An
+/// interface's several constructors are one function that picks.
+#[test]
+fn a_constructor_is_given_the_info_alone() {
+    let mut engine = page();
+    run(
+        &mut engine,
+        "class Sub extends Event { get sub() { return true; } } var init = { bubbles: true }; \
+         var bytes = new Uint8ClampedArray(8); new Event('first'); d.id;",
+    );
+    for (source, value, at_once) in [
+        ("new Event('x') instanceof Event", "true", true),
+        ("new Event('x').type", "x", false),
+        ("new Event('x') !== new Event('x')", "true", true),
+        ("new EventTarget() instanceof EventTarget", "true", true),
+        ("new AbortController().signal.aborted", "false", false),
+        (
+            "new MessageChannel() instanceof MessageChannel",
+            "true",
+            true,
+        ),
+        ("new DocumentFragment().nodeType", "11", true),
+        (
+            "new Text('abc').data + ' ' + (new Text('a').ownerDocument === document)",
+            "abc true",
+            false,
+        ),
+        ("new Comment().nodeType", "8", true),
+        // The window found: the event's time is its clock's.
+        ("new Event('x').timeStamp >= 0", "true", false),
+        // A dictionary's members read in a scope.
+        ("new Event('x', init).bubbles", "true", false),
+        (
+            "new CustomEvent('c', { detail: d }).detail === d",
+            "true",
+            false,
+        ),
+        // `new.target`'s prototype.
+        ("new Sub('x') instanceof Sub", "true", true),
+        (
+            "new Sub('x').sub + ' ' + new Sub('y').type",
+            "true y",
+            false,
+        ),
+        ("Reflect.construct(Event, ['z'], Sub).sub", "true", true),
+        // Not called with `new`; too few arguments.
+        (
+            "(() => { try { Event('x'); return 'none'; } catch (e) { return e.name + ': ' + e.message; } })()",
+            "TypeError: Failed to construct 'Event': Please use the 'new' operator, this DOM object constructor cannot be called as a function.",
+            false,
+        ),
+        (
+            "(() => { try { new Event(); return 'none'; } catch (e) { return e.name + ': ' + e.message; } })()",
+            "TypeError: Failed to construct 'Event': 1 argument required, but only 0 present.",
+            false,
+        ),
+        // Several constructors: by the arguments.
+        (
+            "new ImageData(bytes, 2).height + ' ' + new ImageData(2, 3).height",
+            "1 3",
+            false,
+        ),
+        (
+            "(() => { try { new ImageData(); return 'none'; } catch (e) { return e.name; } })()",
+            "TypeError",
+            false,
+        ),
+    ] {
+        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        let expression = if source.starts_with("(() =>") {
+            source.to_owned()
+        } else {
+            format!("({})", source.replace("; ", ", "))
+        };
+        let found = report(&mut engine, &expression);
+        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        assert_eq!(found, value, "{source}");
+        if at_once {
+            assert_eq!(made, 0, "{source}");
+        } else {
+            assert!(made >= 1, "{source}: a scope");
+        }
+    }
+    // A dictionary's members are all read in the one scope made for
+    // them, however many it has.
+    for source in [
+        "new Event('x', { bubbles: true, cancelable: true, composed: true }).cancelable",
+        "(d.addEventListener('q', f, { capture: true, once: true, passive: true }), true)",
+    ] {
+        // (Once before: a listener added grows the DOM's heap, which the
+        // call after may tell V8 of, in a scope of its own.)
+        run(
+            &mut engine,
+            &format!("var f = f || (() => {{}}); {source}; {source};"),
+        );
+        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        assert_eq!(report(&mut engine, source), "true", "{source}");
+        assert_eq!(
+            bindings::info_scopes_for_testing().expect("a debug build") - before,
+            1,
+            "{source}"
+        );
     }
 }

@@ -6,7 +6,7 @@ use std::fmt;
 use dom::DomError;
 
 /// The error a member's call throws.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ApiError {
     /// A `TypeError`, with its message.
     Type(String),
@@ -14,6 +14,22 @@ pub enum ApiError {
     Range(String),
     /// A `DOMException`.
     Dom(DomException),
+    /// An aborted signal's reason, a value of the engine's the DOM only
+    /// holds: what `throwIfAborted()` throws and an aborted body's read
+    /// rejects with. It carries the signal out of the operation; the
+    /// front end reads the reason as it throws.
+    Aborted(AbortedSignal),
+}
+
+/// The signal whose abort reason an `ApiError::Aborted` throws, rooted.
+#[derive(Debug, Clone)]
+pub struct AbortedSignal(pub elise::Persistent<dom::EventTargetImpl>);
+
+/// Never equal: what it throws is the engine's to tell.
+impl PartialEq for AbortedSignal {
+    fn eq(&self, _: &Self) -> bool {
+        false
+    }
 }
 
 impl ApiError {
@@ -22,7 +38,16 @@ impl ApiError {
         match self {
             Self::Type(message) | Self::Range(message) => message.clone(),
             Self::Dom(exception) => exception.message.clone(),
+            Self::Aborted(_) => "signal is aborted".to_owned(),
         }
+    }
+
+    /// The error that throws `signal`'s abort reason.
+    pub fn aborted<'gc>(
+        cx: &dom::Cx<'_, 'gc>,
+        signal: elise::Gc<'gc, dom::EventTargetImpl>,
+    ) -> Self {
+        Self::Aborted(AbortedSignal(elise::Persistent::new(cx.gc, signal)))
     }
 
     pub fn type_error(message: impl Into<String>) -> Self {
@@ -54,6 +79,7 @@ impl fmt::Display for ApiError {
             Self::Type(message) => write!(f, "TypeError: {message}"),
             Self::Range(message) => write!(f, "RangeError: {message}"),
             Self::Dom(exception) => write!(f, "{}: {}", exception.name.name(), exception.message),
+            Self::Aborted(_) => write!(f, "an aborted signal's reason"),
         }
     }
 }

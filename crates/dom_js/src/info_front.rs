@@ -49,37 +49,52 @@ pub(crate) enum PendingNode {
     Construct(Persistent<dom::CustomElementDefinition>, NodeRoot),
 }
 
-/// What an info callback's function is: a method, whose receiver V8
-/// checked against its signature (`bindings::Signed`), or a static
-/// operation, which has none (`bindings::Unsigned`). Known as a member's
-/// callback is made: the front end is of one.
+/// What an info callback's function is, known as a member's callback is
+/// made (the front end is of one): a method, whose receiver V8 checked
+/// against its signature; a static operation, which has none; a
+/// constructor, whose `this` is the new object V8 made for the call.
 pub(crate) trait InfoKind<'s>: Sized + 'static {
-    /// The receiver, or nothing.
+    /// What V8 checked before the call (`bindings::Signed`, `Unsigned`).
+    type Info: 'static;
+    /// The receiver, the new object, or nothing.
     type This: Copy;
     /// What the whole front end reads the call from.
     type Args: front::CallArgs<'s>;
 
-    fn this(info: &bindings::StateInfo<'s, State, Self>) -> Self::This;
-    fn args(info: &bindings::StateInfo<'s, State, Self>) -> Self::Args;
+    fn this(info: &bindings::StateInfo<'s, State, Self::Info>) -> Self::This;
+    fn args(info: &bindings::StateInfo<'s, State, Self::Info>) -> Self::Args;
     /// The receiver made the DOM's, if it is a `T`.
     fn this_as<'gc, T: elise::HeapType>(
         no_gc: &mut bindings::InfoNoGc<'_, 's>,
         cx: &ApiCx<'_, 'gc>,
         this: Self::This,
     ) -> Option<elise::Gc<'gc, T>>;
+    /// A constructor's new object, which the object it makes is wrapped
+    /// by.
+    fn new_object(this: Self::This) -> v8::Local<'s, v8::Object>;
+    /// A constructor's `new.target`.
+    fn new_target(this: Self::This) -> v8::Local<'s, v8::Value>;
 }
 
-impl<'s> InfoKind<'s> for bindings::Signed {
+/// A method's (an attribute's accessor's).
+pub(crate) struct Method;
+/// A static operation's.
+pub(crate) struct Static;
+/// A constructor's.
+pub(crate) struct Construct;
+
+impl<'s> InfoKind<'s> for Method {
+    type Info = bindings::Signed;
     type This = bindings::Receiver<'s>;
     type Args = Checked<'s>;
 
     #[inline(always)]
-    fn this(info: &bindings::StateInfo<'s, State, Self>) -> Self::This {
+    fn this(info: &bindings::StateInfo<'s, State>) -> Self::This {
         info.receiver()
     }
 
     #[inline(always)]
-    fn args(info: &bindings::StateInfo<'s, State, Self>) -> Checked<'s> {
+    fn args(info: &bindings::StateInfo<'s, State>) -> Checked<'s> {
         Checked {
             args: info.args(),
             this: info.receiver(),
@@ -96,17 +111,26 @@ impl<'s> InfoKind<'s> for bindings::Signed {
     ) -> Option<elise::Gc<'gc, T>> {
         no_gc.unwrap_receiver::<T>(cx.gc, this)
     }
+
+    fn new_object(_: Self::This) -> v8::Local<'s, v8::Object> {
+        unreachable!("a method constructs nothing")
+    }
+
+    fn new_target(_: Self::This) -> v8::Local<'s, v8::Value> {
+        unreachable!("a method has no `new.target`")
+    }
 }
 
-impl<'s> InfoKind<'s> for bindings::Unsigned {
+impl<'s> InfoKind<'s> for Static {
+    type Info = bindings::Unsigned;
     type This = ();
     type Args = v8::FunctionCallbackArguments<'s>;
 
     #[inline(always)]
-    fn this(_: &bindings::StateInfo<'s, State, Self>) {}
+    fn this(_: &bindings::StateInfo<'s, State, bindings::Unsigned>) {}
 
     #[inline(always)]
-    fn args(info: &bindings::StateInfo<'s, State, Self>) -> Self::Args {
+    fn args(info: &bindings::StateInfo<'s, State, bindings::Unsigned>) -> Self::Args {
         info.args()
     }
 
@@ -117,11 +141,58 @@ impl<'s> InfoKind<'s> for bindings::Unsigned {
     ) -> Option<elise::Gc<'gc, T>> {
         unreachable!("a static operation has no receiver")
     }
+
+    fn new_object((): ()) -> v8::Local<'s, v8::Object> {
+        unreachable!("a static operation constructs nothing")
+    }
+
+    fn new_target((): ()) -> v8::Local<'s, v8::Value> {
+        unreachable!("a static operation has no `new.target`")
+    }
+}
+
+impl<'s> InfoKind<'s> for Construct {
+    type Info = bindings::Unsigned;
+    /// The call's `this`: called with `new` (`InfoFront::construct`
+    /// checked), the object V8 made of the interface's instance template
+    /// (with `new.target`'s prototype, a subclass's), wrapping nothing;
+    /// and `new.target`.
+    type This = (v8::Local<'s, v8::Object>, v8::Local<'s, v8::Value>);
+    type Args = v8::FunctionCallbackArguments<'s>;
+
+    #[inline(always)]
+    fn this(info: &bindings::StateInfo<'s, State, bindings::Unsigned>) -> Self::This {
+        let args = info.args();
+        (args.this(), args.new_target())
+    }
+
+    #[inline(always)]
+    fn args(info: &bindings::StateInfo<'s, State, bindings::Unsigned>) -> Self::Args {
+        info.args()
+    }
+
+    fn this_as<'gc, T: elise::HeapType>(
+        _: &mut bindings::InfoNoGc<'_, 's>,
+        _: &ApiCx<'_, 'gc>,
+        _: Self::This,
+    ) -> Option<elise::Gc<'gc, T>> {
+        unreachable!("a constructor has no receiver")
+    }
+
+    #[inline(always)]
+    fn new_object((this, _): Self::This) -> v8::Local<'s, v8::Object> {
+        this
+    }
+
+    #[inline(always)]
+    fn new_target((_, new_target): Self::This) -> v8::Local<'s, v8::Value> {
+        new_target
+    }
 }
 
 /// A plain member's call out of its operation.
-pub(crate) struct InfoFront<'s, K: InfoKind<'s> = bindings::Signed> {
-    info: bindings::StateInfo<'s, State, K>,
+pub(crate) struct InfoFront<'s, K: InfoKind<'s> = Method> {
+    info: bindings::StateInfo<'s, State, K::Info>,
     /// Whether the member asks for the current realm's window
     /// (`Front::prepare_window`, a static operation's): told before the
     /// operation, found in it (`InfoOp::current_window`). Known as the
@@ -131,7 +202,7 @@ pub(crate) struct InfoFront<'s, K: InfoKind<'s> = bindings::Signed> {
 
 /// A plain member's call in its operation: what of V8 it may use and the
 /// result (`InfoNoGc`), the receiver, and the state's caches it reads.
-pub(crate) struct InfoOp<'o, 's, K: InfoKind<'s> = bindings::Signed> {
+pub(crate) struct InfoOp<'o, 's, K: InfoKind<'s> = Method> {
     no_gc: bindings::InfoNoGc<'o, 's>,
     this: K::This,
     window: bool,
@@ -182,7 +253,7 @@ impl<'s, K: InfoKind<'s>> FrontTypes for InfoOp<'_, 's, K> {
 
 impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
     #[inline(always)]
-    pub(crate) fn new(info: bindings::StateInfo<'s, State, K>) -> Self {
+    pub(crate) fn new(info: bindings::StateInfo<'s, State, K::Info>) -> Self {
         // As `V8Front::new`'s: every way into script counts itself.
         debug_assert!(
             bindings::trace::in_script(),
@@ -236,6 +307,12 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
 }
 
 impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
+    /// A dictionary's members are read by the whole front end (a getter
+    /// may run script), all in the one scope made for them.
+    fn reading<V: dom_api::typed::ReadDict<Self>>(&mut self, reads: V) -> V::Out {
+        self.with_front(|front| reads.read(front))
+    }
+
     type Op<'o>
         = InfoOp<'o, 's, K>
     where
@@ -623,6 +700,14 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         self.with_front(|front| front.finish_animation_promise(object, interface, ready, resolved));
     }
 
+    fn finish_image_data_pixels(&mut self, image_data: Persistent<dom::ImageData>, bytes: Vec<u8>) {
+        self.with_front(|front| front.finish_image_data_pixels(image_data, bytes));
+    }
+
+    fn finish_upgrading(&mut self, element: NodeRoot) {
+        self.with_front(|front| front.finish_upgrading(element));
+    }
+
     fn finish_pending_promise(&mut self, id: u64, existing: bool) {
         self.with_front(|front| front.finish_pending_promise(id, existing));
     }
@@ -642,6 +727,22 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     /// An event handler's source compiled, by the whole front end.
     fn compile_event_handler(&mut self, target: &dom::TargetRoot, event_type: dom::NameId) {
         self.with_front(|front| front.compile_event_handler(target, event_type));
+    }
+
+    /// A constructor's call: with `new` and enough arguments (the checks
+    /// in place); else the whole front end's `TypeError`.
+    #[inline(always)]
+    fn construct(&mut self, interface: usize, required: usize) -> bool {
+        // `[HTMLConstructor]`: `new.target` mustn't be `HTMLElement`
+        // itself, which the whole front end tells (its realm's interface
+        // object).
+        if interface == const { dom_api::declare::interface_index("HTMLElement") } {
+            return self.with_front(|front| front.construct(interface, required));
+        }
+        let args = self.info.args();
+        (!args.new_target().is_undefined()
+            && usize::try_from(args.length()).unwrap_or(0) >= required)
+            || self.with_front(|front| front.construct(interface, required))
     }
 
     /// The member asks for the current realm's window: found in the
@@ -889,6 +990,71 @@ impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
         cx: &ApiCx<'_, 'gc>,
     ) -> Option<elise::Gc<'gc, T>> {
         K::this_as(&mut self.no_gc, cx, self.this)
+    }
+
+    /// The call's new object made the object's wrapper (V8 returns it).
+    #[inline(always)]
+    fn construct_object<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, object: dom::ObjectRef<'gc>) {
+        front::wrap_new_object(&mut self.no_gc, cx, K::new_object(self.this), object);
+        front::count(&self.caches.wrappers_made);
+    }
+
+    /// A new element, or one being upgraded that has no wrapper: the
+    /// call's new object made its. One that has a wrapper: that given
+    /// as the call's result now (from its edge's handle), its prototype
+    /// set after the operation.
+    fn construct_html<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        constructed: dom_api::HtmlConstructed<'gc>,
+    ) -> Option<NodeRoot> {
+        let element = match constructed {
+            dom_api::HtmlConstructed::New(element) => element,
+            dom_api::HtmlConstructed::Upgrading(element) => {
+                if self.no_gc.return_wrapper(cx.wrapper_edge(element)) {
+                    return Some(cx.root(element));
+                }
+                element
+            }
+        };
+        self.construct_object(cx, dom::ObjectRef::Node(element));
+        None
+    }
+
+    /// `new.target`'s number (V8's identity hash), if it is an object.
+    #[inline(always)]
+    fn new_target_number(&mut self) -> Option<u32> {
+        v8::Local::<v8::Object>::try_from(K::new_target(self.this))
+            .ok()
+            .map(front::number)
+    }
+
+    /// Compared in place, no local made of the edge's.
+    #[inline(always)]
+    fn is_new_target(&mut self, _: &ApiCx<'_, '_>, edge: &JsEdge) -> bool {
+        self.no_gc.refers_to(edge, K::new_target(self.this))
+    }
+
+    /// In place, unless V8 keeps the bytes on its heap (a small array):
+    /// copied to the stack then. The array's handle is the callback's own
+    /// handle scope's.
+    fn with_array_bytes(
+        &mut self,
+        _: &ApiCx<'_, '_>,
+        edge: &JsEdge,
+        f: &mut dyn FnMut(Option<&[u8]>),
+    ) {
+        let array = self
+            .no_gc
+            .strong_value(edge)
+            .and_then(|value| v8::Local::<v8::Uint8ClampedArray>::try_from(value).ok());
+        match array {
+            Some(array) => {
+                let mut storage = [0; v8::TYPED_ARRAY_MAX_SIZE_IN_HEAP];
+                f(Some(array.get_contents(&mut storage)));
+            }
+            None => f(None),
+        }
     }
 
     /// The current realm's window, of a member that asked for it

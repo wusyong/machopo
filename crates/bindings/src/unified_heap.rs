@@ -910,6 +910,17 @@ impl<'s> crate::InfoNoGc<'_, 's> {
         unsafe { v8::Context::current_global(self.isolate) }
     }
 
+    /// `strong_value`: a local handle of what the edge refers to, left in
+    /// the callback's own handle scope (no scope made: V8 allocates a
+    /// handle's slot, not on its heap).
+    #[inline]
+    pub fn strong_value(&mut self, edge: &elise::JsEdge) -> Option<v8::Local<'s, v8::Value>> {
+        // SAFETY: on the isolate's thread, the heap's (the only one that
+        // writes the edge), in the callback the info is of, whose handle
+        // scope V8 opened before calling it; `'s` is the info's.
+        unsafe { value_slot(edge).get_in_callback(self.isolate) }
+    }
+
     /// As `return_wrapper`, of an edge of any value (`set_strong_value`:
     /// a listener's callback, an event's `detail`).
     #[inline]

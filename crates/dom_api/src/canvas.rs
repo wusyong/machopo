@@ -25,8 +25,8 @@ use elise::Gc;
 use gfx::{Color, FillRule};
 
 use crate::typed::{
-    Callback, CanvasStyleParam, CanvasStyleRet, OpFront, Path2dOrString, ScriptHost,
-    Uint8ClampedArg,
+    Callback, CanvasStyleParam, CanvasStyleRet, ImageDataWithPixels, OpFront, Path2dOrString,
+    ScriptHost, Uint8ClampedArg,
 };
 use crate::{ApiCx, ApiError, DomException, DomStr, ExceptionName};
 
@@ -2082,16 +2082,16 @@ fn check_size(width: u32, height: u32) -> Result<(), ApiError> {
 
 /// A new `ImageData` of `bytes`, its array made of them after the
 /// operation.
-fn new_image_data<'gc, O: OpFront>(
-    op: &mut O,
+fn new_image_data<'gc>(
     cx: &ApiCx<'_, 'gc>,
     (width, height): (u32, u32),
     space: PredefinedColorSpace,
-    bytes: Vec<u8>,
-) -> Gc<'gc, ImageData> {
-    let image_data = cx.create_image_data(width, height, space);
-    op.set_image_data_pixels(cx, image_data, bytes);
-    image_data
+    pixels: Vec<u8>,
+) -> ImageDataWithPixels<'gc> {
+    ImageDataWithPixels {
+        image_data: cx.create_image_data(width, height, space),
+        pixels,
+    }
 }
 
 /// Zeroed pixels of an `ImageData` of `width` × `height`: a `RangeError`
@@ -2104,13 +2104,12 @@ fn zeroed_pixels(width: u32, height: u32) -> Result<Vec<u8>, ApiError> {
 /// in the settings' color space (sRGB by default). An `IndexSizeError` for
 /// a width or height of 0, or more bytes than 32 bits count (Blink's
 /// `ValidateAndCreate`); a `RangeError` for more than there can be.
-pub(crate) fn construct_image_data<'gc, O: OpFront>(
-    op: &mut O,
+pub(crate) fn construct_image_data<'gc>(
     cx: &ApiCx<'_, 'gc>,
     sw: u32,
     sh: u32,
     settings: &crate::interfaces::ImageDataSettings,
-) -> Result<Gc<'gc, ImageData>, ApiError> {
+) -> Result<ImageDataWithPixels<'gc>, ApiError> {
     let space = settings_color_space(settings, "ImageData")?;
     check_size(sw, sh)?;
     // No product of two u32s and 4 is past a u64 but past a u32 too.
@@ -2124,7 +2123,6 @@ pub(crate) fn construct_image_data<'gc, O: OpFront>(
     }
     let bytes = zeroed_pixels(sw, sh)?;
     Ok(new_image_data(
-        op,
         cx,
         (sw, sh),
         space.unwrap_or(PredefinedColorSpace::Srgb),
@@ -2208,34 +2206,32 @@ pub(crate) fn image_data_color_space<'gc>(
 /// `createImageData(sw, sh, settings)`: transparent black pixels, as many
 /// as the sizes say whatever their signs; an `IndexSizeError` for a width
 /// or height of 0. The color space is the settings', else the context's.
-pub(crate) fn create_image_data<'gc, O: OpFront>(
-    op: &mut O,
+pub(crate) fn create_image_data<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, CanvasRenderingContext2d>,
     sw: i32,
     sh: i32,
     settings: &crate::interfaces::ImageDataSettings,
-) -> Result<Gc<'gc, ImageData>, ApiError> {
+) -> Result<ImageDataWithPixels<'gc>, ApiError> {
     let space = settings_color_space(settings, "createImageData")?;
     let (width, height) = (sw.unsigned_abs(), sh.unsigned_abs());
     check_size(width, height)?;
     let bytes = zeroed_pixels(width, height)?;
     let space = space.unwrap_or(cx.canvas_context_settings(this).color_space);
-    Ok(new_image_data(op, cx, (width, height), space, bytes))
+    Ok(new_image_data(cx, (width, height), space, bytes))
 }
 
 /// `createImageData(imageData)`: transparent black pixels of its size and
 /// color space.
-pub(crate) fn create_image_data_of<'gc, O: OpFront>(
-    op: &mut O,
+pub(crate) fn create_image_data_of<'gc>(
     cx: &ApiCx<'_, 'gc>,
     _: Gc<'gc, CanvasRenderingContext2d>,
     image_data: Gc<'gc, ImageData>,
-) -> Result<Gc<'gc, ImageData>, ApiError> {
+) -> Result<ImageDataWithPixels<'gc>, ApiError> {
     let size = cx.image_data_size(image_data);
     let bytes = zeroed_pixels(size.0, size.1)?;
     let space = cx.image_data_color_space(image_data);
-    Ok(new_image_data(op, cx, size, space, bytes))
+    Ok(new_image_data(cx, size, space, bytes))
 }
 
 /// `getImageData(sx, sy, sw, sh, settings)`: the pixels of that rect of
@@ -2245,8 +2241,7 @@ pub(crate) fn create_image_data_of<'gc, O: OpFront>(
 /// canvas that isn't origin-clean. The color space is the settings', else
 /// the context's (the pixels aren't converted).
 #[expect(clippy::too_many_arguments, reason = "WebIDL's `getImageData`")]
-pub(crate) fn get_image_data<'gc, O: OpFront>(
-    op: &mut O,
+pub(crate) fn get_image_data<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, CanvasRenderingContext2d>,
     sx: i32,
@@ -2254,7 +2249,7 @@ pub(crate) fn get_image_data<'gc, O: OpFront>(
     sw: i32,
     sh: i32,
     settings: &crate::interfaces::ImageDataSettings,
-) -> Result<Gc<'gc, ImageData>, ApiError> {
+) -> Result<ImageDataWithPixels<'gc>, ApiError> {
     let space = settings_color_space(settings, "getImageData")?;
     if sw == 0 || sh == 0 {
         let which = if sw == 0 { "width" } else { "height" };
@@ -2286,7 +2281,7 @@ pub(crate) fn get_image_data<'gc, O: OpFront>(
         with_data(cx, this, |data| canvas::pixels::take_back(data, &snapshot));
     }
     let space = space.unwrap_or(context_settings.color_space);
-    Ok(new_image_data(op, cx, (width, height), space, bytes))
+    Ok(new_image_data(cx, (width, height), space, bytes))
 }
 
 /// `putImageData(imageData, dx, dy)`: all its pixels at `(dx, dy)`.

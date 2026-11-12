@@ -348,6 +348,11 @@ impl FrontTypes for TestFront<'_> {
 }
 
 impl<'d> Front for TestFront<'d> {
+    #[inline(always)]
+    fn reading<V: dom_api::typed::ReadDict<Self>>(&mut self, reads: V) -> V::Out {
+        reads.read(self)
+    }
+
     type Op<'o>
         = TestFront<'d>
     where
@@ -790,6 +795,8 @@ impl<'d> Front for TestFront<'d> {
 }
 
 impl OpFront for TestFront<'_> {
+    dom_api::unbound_op_methods!();
+
     fn str_param<'a>(&mut self, string: &'a String) -> &'a str {
         string
     }
@@ -1381,5 +1388,6 @@ pub fn exception(error: ApiError) -> &'static str {
         ApiError::Dom(exception) => exception.name.name(),
         ApiError::Type(message) => panic!("a TypeError: {message}"),
         ApiError::Range(message) => panic!("a RangeError: {message}"),
+        ApiError::Aborted(_) => panic!("an aborted signal's reason"),
     }
 }

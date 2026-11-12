@@ -1136,6 +1136,27 @@ fn members_of_strings_nodes_numbers_and_booleans_are_plain() {
         ("URL", "parse", MemberKind::Method),
         ("AbortSignal", "abort", MemberKind::Method),
         ("Response", "error", MemberKind::Method),
+        // Constructors: the call's new object made the object's wrapper.
+        ("Event", "constructor", MemberKind::Constructor),
+        ("CustomEvent", "constructor", MemberKind::Constructor),
+        ("EventTarget", "constructor", MemberKind::Constructor),
+        ("AbortController", "constructor", MemberKind::Constructor),
+        ("MutationObserver", "constructor", MemberKind::Constructor),
+        ("Text", "constructor", MemberKind::Constructor),
+        // What a member's function asks of the front end's side in the
+        // operation every front end has: an aborted signal's reason
+        // thrown (the error carries the signal), an `ImageData`'s pixels
+        // (carried out with the object), `HTMLElement`'s constructor's
+        // `new.target`.
+        ("AbortSignal", "throwIfAborted", MemberKind::Method),
+        ("Response", "text", MemberKind::Method),
+        ("Request", "arrayBuffer", MemberKind::Method),
+        (
+            "CanvasRenderingContext2D",
+            "getImageData",
+            MemberKind::Method,
+        ),
+        ("HTMLElement", "constructor", MemberKind::Constructor),
         // An event handler's getter: its listener's callback given in
         // the operation, an uncompiled source compiled after it.
         ("HTMLElement", "onclick", MemberKind::Getter),
@@ -1150,30 +1171,20 @@ fn members_of_strings_nodes_numbers_and_booleans_are_plain() {
         // abort's).
         ("EventTarget", "dispatchEvent", MemberKind::Method),
         ("AbortController", "abort", MemberKind::Method),
-        // Their functions hand the front end what it keeps for after the
-        // operation (a value to throw, an `ImageData`'s pixels): their
-        // result types say so.
-        ("AbortSignal", "throwIfAborted", MemberKind::Method),
-        (
-            "CanvasRenderingContext2D",
-            "getImageData",
-            MemberKind::Method,
-        ),
-        // A body's promise, rejected with its signal's reason, which
-        // the front end keeps.
-        ("Response", "text", MemberKind::Method),
-        ("Request", "arrayBuffer", MemberKind::Method),
         // The current realm's window found for it.
         ("Blob", "arrayBuffer", MemberKind::Method),
         // The view the front end kept, filled.
         ("Crypto", "getRandomValues", MemberKind::Method),
+        // A constructor of an argument the whole front end converts.
+        ("Blob", "constructor", MemberKind::Constructor),
         // Static, of an argument the whole front end converts.
         ("AbortSignal", "any", MemberKind::Method),
     ] {
         assert!(!is_plain(interface, name, kind), "{interface}.{name}");
     }
-    // Only getters, setters and methods are (an indexed setter is
-    // declared as a method: an engine calls it as an interceptor).
+    // Only getters, setters, methods and constructors are (an indexed
+    // setter is declared as a method: an engine calls it as an
+    // interceptor).
     assert!(plain.0.iter().all(|member| {
         !member.3
             || matches!(
@@ -1181,6 +1192,7 @@ fn members_of_strings_nodes_numbers_and_booleans_are_plain() {
                 MemberKind::Getter
                     | MemberKind::Setter
                     | MemberKind::Method
+                    | MemberKind::Constructor
                     | MemberKind::IndexedSetter
             )
     }));

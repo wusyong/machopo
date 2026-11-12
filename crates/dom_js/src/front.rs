@@ -53,16 +53,9 @@ pub(crate) enum Kept {
     Node(NodeRoot, usize),
     /// An object with no wrapper, and its interface.
     Object(ObjectRoot, usize),
-    /// An element being upgraded that has a wrapper: given, with the
-    /// call's `new.target`'s prototype (`OpFront::construct_html`).
-    Upgrading(NodeRoot),
     /// A custom element for `createElement` to construct with the
     /// definition's constructor, in the document (`OpFront::ret_construct`).
     Construct(Persistent<dom::CustomElementDefinition>, NodeRoot),
-    /// An `ImageData`'s pixels, its array made of them (its buffer's
-    /// bytes: no copy), then the call's result, if kept too
-    /// (`OpFront::set_image_data_pixels`).
-    Pixels(Persistent<dom::ImageData>, Vec<u8>, Option<Box<Kept>>),
 }
 
 /// What a call's arguments, `this` and `new.target` are read from: a
@@ -250,13 +243,6 @@ pub(crate) struct RareCall<'s> {
     /// Whether script threw in the call (a getter `define` ran): the
     /// member's error is that exception, V8's already, not another thrown.
     threw: bool,
-    /// `getHTML`'s `shadowRoots`, converted: node wrappers.
-    shadow_roots: Vec<v8::Local<'s, v8::Object>>,
-    /// An `IntersectionObserverInit`'s `root` or an
-    /// `IntersectionObserverEntryInit`'s `target`: a node's wrapper.
-    intersection_node: Option<v8::Local<'s, v8::Object>>,
-    /// A `StaticRangeInit`'s containers: nodes' wrappers.
-    static_range_nodes: Option<[v8::Local<'s, v8::Object>; 2]>,
     /// What a traversal's filter threw, caught (the traversal's flag is
     /// unset in an operation after): the member's error, thrown again.
     thrown: Option<v8::Local<'s, v8::Value>>,
@@ -448,36 +434,6 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
                 let wrapper = wrapper_of(&mut self.scope, &object, interface);
                 self.rv().set(wrapper.into());
             }
-            Kept::Pixels(image_data, bytes, then) => {
-                let len = bytes.len();
-                let scope = self.scope.scope();
-                let store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
-                let buffer = v8::ArrayBuffer::with_backing_store(scope, &store);
-                let array = v8::Uint8ClampedArray::new(scope, buffer, 0, len)
-                    .expect("an array of a buffer's length");
-                let (state, mut no_gc) = self.scope.state();
-                state.dom.read(|cx| {
-                    let edge = cx.image_data_array_edge(image_data.get(cx.gc));
-                    no_gc.set_strong_value(edge, array.into());
-                });
-                if let Some(then) = then {
-                    *self.call.kept = Some(then);
-                    self.finish_kept();
-                }
-            }
-            Kept::Upgrading(root) => {
-                let scope = self.scope.scope();
-                let prototype = self.args.this().get_prototype(scope);
-                let (state, mut no_gc) = self.scope.state();
-                let wrapper = state
-                    .dom
-                    .read(|cx| no_gc.wrapper(cx.wrapper_edge(root.get(cx.gc))))
-                    .expect("an element kept for its wrapper");
-                if let Some(prototype) = prototype {
-                    wrapper.set_prototype(self.scope.scope(), prototype);
-                }
-                self.rv().set(wrapper.into());
-            }
             Kept::Construct(definition, document) => self.finish_construct(&definition, &document),
             Kept::U32(value) => self.rv().set_uint32(value),
             Kept::F64(value) => self.rv().set_double(value),
@@ -662,6 +618,7 @@ fn rejection<'s>(
                 exception.name.name(),
                 &exception.message,
             ),
+            ApiError::Aborted(signal) => throw_abort_reason(&mut inner, &signal.0),
         }
     }
     tc.exception()
@@ -1051,6 +1008,7 @@ pub(crate) fn settle_promises(
                     exception.name.name(),
                     &exception.message,
                 ),
+                ApiError::Aborted(signal) => throw_abort_reason(&mut inner, &signal.0),
             }
         }
         tc.exception()
@@ -1213,7 +1171,27 @@ fn throw_in(tc: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>, error: Ap
         ApiError::Dom(exception) => {
             exception::throw_dom_exception(&mut inner, exception.name.name(), &exception.message)
         }
+        ApiError::Aborted(signal) => throw_abort_reason(&mut inner, &signal.0),
     }
+}
+
+/// An aborted signal's reason (`ApiError::Aborted`) thrown in `scope`:
+/// what its edge holds, read in an operation of its own (the member's is
+/// over); undefined if it holds nothing.
+pub(crate) fn throw_abort_reason(
+    scope: &mut Scope<'_, '_, '_>,
+    signal: &Persistent<dom::EventTargetImpl>,
+) {
+    let reason = {
+        let (state, mut no_gc) = scope.state();
+        // Allocates nothing: a read.
+        state.dom.read(|cx| {
+            cx.abort_reason(signal.get(cx.gc))
+                .and_then(|edge| no_gc.strong_value(edge))
+        })
+    };
+    let reason = reason.unwrap_or_else(|| v8::undefined(scope.scope()).into());
+    scope.scope().throw_exception(reason);
 }
 
 /// The engine's number for `object` (V8's identity hash, as Blink's
@@ -1286,10 +1264,57 @@ pub(crate) fn interface_of<'gc>(cx: &dom::Cx<'_, 'gc>, node: NodeRef<'gc>) -> us
     dom_api::node_interface_of(cx, node)
 }
 
+/// What an operation's holder makes a new wrapper an object's with:
+/// either of `bindings`' handles of what V8 may be asked in one (a
+/// scope's, a callback's info's).
+pub(crate) trait WrapsNew<'s> {
+    fn wrap<'gc, T: elise::HeapType>(
+        &mut self,
+        cx: &elise::Mutation<'gc>,
+        wrapper: v8::Local<'s, v8::Object>,
+        object: elise::Gc<'gc, T>,
+    );
+    fn set_wrapper(&mut self, edge: &JsEdge, wrapper: v8::Local<'s, v8::Object>);
+}
+
+impl<'s> WrapsNew<'s> for bindings::NoGc<'_, 's, '_> {
+    #[inline(always)]
+    fn wrap<'gc, T: elise::HeapType>(
+        &mut self,
+        cx: &elise::Mutation<'gc>,
+        wrapper: v8::Local<'s, v8::Object>,
+        object: elise::Gc<'gc, T>,
+    ) {
+        bindings::NoGc::wrap(self, cx, wrapper, object);
+    }
+
+    #[inline(always)]
+    fn set_wrapper(&mut self, edge: &JsEdge, wrapper: v8::Local<'s, v8::Object>) {
+        bindings::NoGc::set_wrapper(self, edge, wrapper);
+    }
+}
+
+impl<'s> WrapsNew<'s> for bindings::InfoNoGc<'_, 's> {
+    #[inline(always)]
+    fn wrap<'gc, T: elise::HeapType>(
+        &mut self,
+        cx: &elise::Mutation<'gc>,
+        wrapper: v8::Local<'s, v8::Object>,
+        object: elise::Gc<'gc, T>,
+    ) {
+        bindings::InfoNoGc::wrap(self, cx, wrapper, object);
+    }
+
+    #[inline(always)]
+    fn set_wrapper(&mut self, edge: &JsEdge, wrapper: v8::Local<'s, v8::Object>) {
+        bindings::InfoNoGc::set_wrapper(self, edge, wrapper);
+    }
+}
+
 /// `wrapper` (new, wrapping nothing) made `object`'s, in an operation: it
 /// holds the object's address, the object holds it.
-pub(crate) fn wrap_new_object<'gc, 's>(
-    no_gc: &mut bindings::NoGc<'_, 's, '_>,
+pub(crate) fn wrap_new_object<'gc, 's, N: WrapsNew<'s>>(
+    no_gc: &mut N,
     cx: &dom::Cx<'_, 'gc>,
     wrapper: v8::Local<'s, v8::Object>,
     object: ObjectRef<'gc>,
@@ -1503,6 +1528,11 @@ impl<'s, A: CallArgs<'s>> FrontTypes for V8Op<'_, 's, '_, '_, A> {
 }
 
 impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
+    #[inline(always)]
+    fn reading<V: dom_api::typed::ReadDict<Self>>(&mut self, reads: V) -> V::Out {
+        reads.read(self)
+    }
+
     type Op<'o>
         = V8Op<'o, 's, 'i, 'r, A>
     where
@@ -2403,10 +2433,10 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
 
     /// The current context's global, whose window (if it is one of the new
     /// DOM's: its global proxy wraps it) the operation reads.
-    fn get_html_options(&mut self, index: usize) -> Option<(bool, bool)> {
+    fn get_html_options(&mut self, index: usize) -> Option<(bool, Vec<v8::Local<'s, v8::Object>>)> {
         let value = arg(self.args, index);
         if value.is_null_or_undefined() {
-            return Some((false, false));
+            return Some((false, Vec::new()));
         }
         let Ok(dict) = v8::Local::<v8::Object>::try_from(value) else {
             self.throw_type_error(
@@ -2420,7 +2450,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         let key = templates::string(scope, "shadowRoots");
         let listed = dict.get(scope, key.into())?;
         if listed.is_undefined() {
-            return Some((serializable, false));
+            return Some((serializable, Vec::new()));
         }
         let mut nodes = Vec::new();
         for item in crate::observable_array::sequence(scope, listed)? {
@@ -2432,19 +2462,22 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
                 }
             }
         }
-        self.call.rare().shadow_roots = nodes;
-        Some((serializable, true))
+        Some((serializable, nodes))
     }
 
     fn intersection_observer_init(
         &mut self,
         index: usize,
-    ) -> Option<dom_api::typed::IntersectionInit> {
+    ) -> Option<(
+        dom_api::typed::IntersectionInit,
+        Option<v8::Local<'s, v8::Object>>,
+    )> {
         const NAME: &str = "Failed to construct 'IntersectionObserver'";
         let mut init = dom_api::typed::IntersectionInit::default();
+        let mut root_node = None;
         let value = arg(self.args, index);
         if value.is_null_or_undefined() {
-            return Some(init);
+            return Some((init, None));
         }
         let Ok(dict) = v8::Local::<v8::Object>::try_from(value) else {
             self.throw_type_error(&format!(
@@ -2476,8 +2509,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         if !root.is_null_or_undefined() {
             match v8::Local::<v8::Object>::try_from(root) {
                 Ok(object) if bindings::is_wrapper::<Node>(scope, root) => {
-                    init.root = true;
-                    self.call.rare().intersection_node = Some(object);
+                    root_node = Some(object);
                 }
                 _ => {
                     self.throw_type_error(&format!(
@@ -2521,14 +2553,18 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         let scope = self.scope.scope();
         let track = member(scope, "trackVisibility")?;
         init.track_visibility = track.boolean_value(scope);
-        Some(init)
+        Some((init, root_node))
     }
 
     fn intersection_entry_init(
         &mut self,
         index: usize,
-    ) -> Option<dom_api::typed::IntersectionEntryInitValues> {
+    ) -> Option<(
+        dom_api::typed::IntersectionEntryInitValues,
+        v8::Local<'s, v8::Object>,
+    )> {
         const NAME: &str = "Failed to construct 'IntersectionObserverEntry'";
+        let mut target = None;
         const INIT: &str = "IntersectionObserverEntryInit";
         let value = arg(self.args, index);
         // A dictionary: undefined and null are an empty one, whose
@@ -2580,7 +2616,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
                     let scope = self.scope.scope();
                     match v8::Local::<v8::Object>::try_from(value) {
                         Ok(object) if bindings::is_wrapper::<Node>(scope, value) => {
-                            self.call.rare().intersection_node = Some(object);
+                            target = Some(object);
                             Init::Bool(true)
                         }
                         _ => {
@@ -2617,18 +2653,21 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         else {
             unreachable!("each member converted as its type")
         };
-        Some(dom_api::typed::IntersectionEntryInitValues {
-            time,
-            root_bounds,
-            bounding_client_rect,
-            intersection_rect,
-            is_intersecting,
-            is_visible,
-            intersection_ratio,
-        })
+        Some((
+            dom_api::typed::IntersectionEntryInitValues {
+                time,
+                root_bounds,
+                bounding_client_rect,
+                intersection_rect,
+                is_intersecting,
+                is_visible,
+                intersection_ratio,
+            },
+            target.expect("a required member, converted"),
+        ))
     }
 
-    fn static_range_init(&mut self, index: usize) -> Option<(u32, u32)> {
+    fn static_range_init(&mut self, index: usize) -> Option<[(v8::Local<'s, v8::Object>, u32); 2]> {
         const NAME: &str = "Failed to construct 'StaticRange'";
         const INIT: &str = "StaticRangeInit";
         let value = arg(self.args, index);
@@ -2673,8 +2712,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
             }
         }
         // Read end first: the start's are the second.
-        self.call.rare().static_range_nodes = Some([nodes[1], nodes[0]]);
-        Some((offsets[1], offsets[0]))
+        Some([(nodes[1], offsets[1]), (nodes[0], offsets[0])])
     }
 
     fn prepare_window(&mut self) {
@@ -2760,6 +2798,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
                 exception.name.name(),
                 &exception.message,
             ),
+            ApiError::Aborted(signal) => throw_abort_reason(&mut self.scope, &signal.0),
         }
     }
 
@@ -2768,7 +2807,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     #[cold]
     #[inline(never)]
     fn reject(&mut self, error: ApiError) {
-        // What the member gave to throw (an aborted signal's reason).
+        // What a traversal's filter threw.
         let thrown = self.call.rare.as_mut().and_then(|rare| rare.thrown.take());
         let reason = if let Some(thrown) = thrown {
             Some(thrown)
@@ -2790,6 +2829,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
                             &exception.message,
                         );
                     }
+                    ApiError::Aborted(signal) => throw_abort_reason(&mut inner, &signal.0),
                 }
             }
             tc.exception()
@@ -2961,6 +3001,39 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
 
     // The results the engine allocates for, made after the operation
     // (`RetType::finish`): each the call's result.
+
+    /// The pixels made the `ImageData`'s array: its buffer's bytes, no
+    /// copy.
+    fn finish_image_data_pixels(&mut self, image_data: Persistent<dom::ImageData>, bytes: Vec<u8>) {
+        let len = bytes.len();
+        let scope = self.scope.scope();
+        let store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
+        let buffer = v8::ArrayBuffer::with_backing_store(scope, &store);
+        let array = v8::Uint8ClampedArray::new(scope, buffer, 0, len)
+            .expect("an array of a buffer's length");
+        let (state, mut no_gc) = self.scope.state();
+        state.dom.read(|cx| {
+            let edge = cx.image_data_array_edge(image_data.get(cx.gc));
+            no_gc.set_strong_value(edge, array.into());
+        });
+    }
+
+    /// The element's wrapper given the call's new object's prototype
+    /// (`new.target`'s), and the call's result (`[[SetPrototypeOf]]`: V8
+    /// gives what an API constructor returns as `new`'s).
+    fn finish_upgrading(&mut self, root: NodeRoot) {
+        let scope = self.scope.scope();
+        let prototype = self.args.this().get_prototype(scope);
+        let (state, mut no_gc) = self.scope.state();
+        let wrapper = state
+            .dom
+            .read(|cx| no_gc.wrapper(cx.wrapper_edge(root.get(cx.gc))))
+            .expect("an element kept for its wrapper");
+        if let Some(prototype) = prototype {
+            wrapper.set_prototype(self.scope.scope(), prototype);
+        }
+        self.rv().set(wrapper.into());
+    }
 
     /// A new promise, its resolver kept by its number; or the one whose
     /// resolver is kept by it already.
@@ -3267,13 +3340,6 @@ impl<'s, A: CallArgs<'s>> V8Op<'_, 's, '_, '_, A> {
     #[cold]
     #[inline(never)]
     fn keep(&mut self, kept: Kept) {
-        // After an `ImageData`'s pixels: the result, once they are its.
-        if let Some(pixels) = &mut *self.call.kept
-            && let Kept::Pixels(_, _, then) = &mut **pixels
-        {
-            *then = Some(Box::new(kept));
-            return;
-        }
         *self.call.kept = Some(Box::new(kept));
     }
 }
@@ -3342,15 +3408,6 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
         self.no_gc.set_strong_value(edge, value.0);
     }
 
-    /// Thrown after the operation, as a traversal's filter's is
-    /// (`RareCall::thrown`).
-    fn rethrow(&mut self, _: &ApiCx<'_, '_>, edge: &JsEdge) -> ApiError {
-        if let Some(value) = self.no_gc.strong_value(edge) {
-            self.call.rare().thrown = Some(value);
-        }
-        ApiError::type_error("the value thrown")
-    }
-
     fn kept_object<'gc, T: elise::HeapType>(
         &mut self,
         cx: &ApiCx<'_, 'gc>,
@@ -3415,20 +3472,6 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
             }
             None => f(None),
         }
-    }
-
-    fn set_image_data_pixels<'gc>(
-        &mut self,
-        cx: &ApiCx<'_, 'gc>,
-        image_data: elise::Gc<'gc, dom::ImageData>,
-        bytes: Vec<u8>,
-    ) {
-        let then = self.call.kept.take();
-        *self.call.kept = Some(Box::new(Kept::Pixels(
-            Persistent::new(cx.gc, image_data),
-            bytes,
-            then,
-        )));
     }
 
     fn store_rest(&mut self, _: &ApiCx<'_, '_>, edge: &JsEdge, rest: v8::Local<'s, v8::Array>) {
@@ -3497,13 +3540,16 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
         None
     }
 
-    fn construct_html<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, constructed: HtmlConstructed<'gc>) {
+    fn construct_html<'gc>(
+        &mut self,
+        cx: &ApiCx<'_, 'gc>,
+        constructed: HtmlConstructed<'gc>,
+    ) -> Option<NodeRoot> {
         let element = match constructed {
             HtmlConstructed::New(element) => element,
             HtmlConstructed::Upgrading(element) => {
                 if self.no_gc.wrapper(cx.wrapper_edge(element)).is_some() {
-                    self.keep(Kept::Upgrading(cx.root(element)));
-                    return;
+                    return Some(cx.root(element));
                 }
                 element
             }
@@ -3515,51 +3561,7 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
             ObjectRef::Node(element),
         );
         count(&self.caches.wrappers_made);
-    }
-
-    fn intersection_node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>) -> Option<NodeRef<'gc>> {
-        let object = self.call.rare.as_ref()?.intersection_node?;
-        self.no_gc.unwrap::<Node>(cx.gc, object)
-    }
-
-    fn static_range_nodes<'gc>(&mut self, cx: &ApiCx<'_, 'gc>) -> (NodeRef<'gc>, NodeRef<'gc>) {
-        let [start, end] = self
-            .call
-            .rare
-            .as_ref()
-            .and_then(|rare| rare.static_range_nodes)
-            .expect("the containers kept");
-        let mut node = |object| {
-            self.no_gc
-                .unwrap::<Node>(cx.gc, object)
-                .expect("a node's wrapper, checked")
-        };
-        (node(start), node(end))
-    }
-
-    fn listed_shadow_roots<'gc>(
-        &mut self,
-        cx: &ApiCx<'_, 'gc>,
-    ) -> Result<Vec<NodeRef<'gc>>, ApiError> {
-        let objects = self
-            .call
-            .rare
-            .as_ref()
-            .map(|rare| rare.shadow_roots.clone())
-            .unwrap_or_default();
-        objects
-            .into_iter()
-            .map(|object| {
-                let node = self.no_gc.unwrap::<Node>(cx.gc, object).expect("a node's wrapper, checked as it was taken");
-                if cx.is_shadow_root(node) {
-                    Ok(node)
-                } else {
-                    Err(ApiError::type_error(
-                        "Failed to execute 'getHTML': Failed to read the 'shadowRoots' property from 'GetHTMLOptions': Failed to convert value to 'ShadowRoot'.",
-                    ))
-                }
-            })
-            .collect()
+        None
     }
 
     fn new_target_number(&mut self) -> Option<u32> {

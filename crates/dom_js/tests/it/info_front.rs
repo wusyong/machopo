@@ -498,6 +498,19 @@ fn nodes_or_strings_are_taken_as_they_are() {
     );
 }
 
+/// A constructor's new object is the wrapper of what it constructs: one
+/// wrapper made, counted as any other, and none made again as the object
+/// is given back.
+#[test]
+fn a_constructed_objects_wrapper_is_counted() {
+    let mut env = env();
+    let before = env.wrappers_made();
+    assert_eq!(env.eval("var e = new Event('x'); e.type"), "x");
+    assert_eq!(env.wrappers_made() - before, 1);
+    assert_eq!(env.eval("n.dispatchEvent(e); e.target === n"), "true");
+    assert_eq!(env.wrappers_made() - before, 1);
+}
+
 /// What a plain member's call may reach (`dom_api::PLAIN_FRONT_METHODS`,
 /// `PLAIN_OP_METHODS`: what its types and its function are checked
 /// against) is what the front end given the callback's info alone has:

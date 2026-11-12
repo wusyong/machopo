@@ -279,7 +279,7 @@ struct Constructor<'a, 's, 'i> {
     template: Option<v8::Local<'s, v8::FunctionTemplate>>,
 }
 
-impl TypedVisitor for Constructor<'_, '_, '_> {
+impl<'s> TypedVisitor for Constructor<'_, 's, '_> {
     fn constructor<M: TypedMember>(&mut self) {
         if M::INTERFACE != self.interface {
             return;
@@ -292,10 +292,18 @@ impl TypedVisitor for Constructor<'_, '_, '_> {
             return;
         }
         let length = INTERFACES[M::INTERFACE].members[M::MEMBER].required();
-        self.template = Some(bindings::state_function_template::<State, Member<M>>(
-            self.scope,
-            |builder| builder.length(i32::try_from(length).expect("a few parameters")),
-        ));
+        let configure = |builder: v8::FunctionBuilder<'s, v8::FunctionTemplate>| {
+            builder.length(i32::try_from(length).expect("a few parameters"))
+        };
+        // A plain constructor's callback is given V8's callback info
+        // alone, as a plain member's (`InfoConstructor`).
+        self.template = Some(if const { M::PLAIN } {
+            bindings::state_info_function_template::<State, InfoConstructor<M>>(
+                self.scope, configure,
+            )
+        } else {
+            bindings::state_function_template::<State, Member<M>>(self.scope, configure)
+        });
     }
 }
 
@@ -907,7 +915,7 @@ pub(crate) struct InfoMember<M>(PhantomData<M>);
 
 impl<M: TypedMember> bindings::StateInfoMethod<State> for InfoMember<M> {
     fn call(info: bindings::StateInfo<'_, State>) {
-        let mut front = crate::info_front::InfoFront::new(info);
+        let mut front = crate::info_front::InfoFront::<crate::info_front::Method>::new(info);
         M::call(&mut front);
         if M::KIND != MemberKind::Getter {
             front.report();
@@ -921,11 +929,24 @@ pub(crate) struct InfoStatic<M>(PhantomData<M>);
 
 impl<M: TypedMember> bindings::StateInfoFunction<State> for InfoStatic<M> {
     fn call(info: bindings::StateInfo<'_, State, bindings::Unsigned>) {
-        let mut front = crate::info_front::InfoFront::new(info);
+        let mut front = crate::info_front::InfoFront::<crate::info_front::Static>::new(info);
         M::call(&mut front);
         if M::KIND != MemberKind::Getter {
             front.report();
         }
+    }
+}
+
+/// A plain constructor's callback: as `InfoStatic` (a constructor's
+/// function has no signature), its `this` the new object V8 made for the
+/// call, which the object it constructs is wrapped by.
+pub(crate) struct InfoConstructor<M>(PhantomData<M>);
+
+impl<M: TypedMember> bindings::StateInfoFunction<State> for InfoConstructor<M> {
+    fn call(info: bindings::StateInfo<'_, State, bindings::Unsigned>) {
+        let mut front = crate::info_front::InfoFront::<crate::info_front::Construct>::new(info);
+        M::call(&mut front);
+        front.report();
     }
 }
 
@@ -967,10 +988,14 @@ fn info_call<M: TypedMember>(mut info: bindings::StateInfo<'_, State>) {
     }
 }
 
-/// As `info_call`, a static operation's.
+/// As `info_call`, a static operation's or a constructor's.
 fn info_static_call<M: TypedMember>(mut info: bindings::StateInfo<'_, State, bindings::Unsigned>) {
     if const { M::PLAIN } {
-        <InfoStatic<M> as bindings::StateInfoFunction<State>>::call(info);
+        if M::KIND == MemberKind::Constructor {
+            <InfoConstructor<M> as bindings::StateInfoFunction<State>>::call(info);
+        } else {
+            <InfoStatic<M> as bindings::StateInfoFunction<State>>::call(info);
+        }
     } else {
         let args = info.args();
         info.with_scope(|scope, rv| {
@@ -1123,11 +1148,8 @@ fn overloaded_template<'s>(
             checks_receiver(template);
             template
         }
-        Overload::Static => {
+        Overload::Static | Overload::Constructors => {
             bindings::state_info_function_template::<State, Overloaded>(scope, configure)
-        }
-        Overload::Constructors => {
-            bindings::state_function_template::<State, Overloaded>(scope, configure)
         }
     }
 }

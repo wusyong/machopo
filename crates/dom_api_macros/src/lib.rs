@@ -1941,6 +1941,7 @@ fn constructor(iface: &Ident, args: &[Arg], function: &Path, with_front: bool) -
     quote! {
         type Args = (#(#types,)*);
         type Ret = ();
+        const PLAIN: bool = true #(&& <#types as #api::typed::ArgType>::PLAIN)*;
 
         fn call<F: #api::typed::Front>(#front: &mut F) {
             #optional
@@ -1958,12 +1959,14 @@ fn constructor(iface: &Ident, args: &[Arg], function: &Path, with_front: bool) -
                     let #names = <#types as #api::typed::ArgType>::param(#op, #cx, &#names, #param_indices)?;
                 )*
                 let #value = #function(#front_arg #cx #(, #names)*)?;
-                #api::typed::Constructed::construct(#value, #op, #cx);
-                ::std::result::Result::Ok(())
+                ::std::result::Result::Ok(#api::typed::Constructed::construct(#value, #op, #cx))
             });
             #(#api::typed::release(#names);)*
             match #result {
-                ::std::result::Result::Ok(()) => #front.finish(),
+                ::std::result::Result::Ok(#value) => {
+                    #api::typed::finish_constructed(#front, #value);
+                    #front.finish()
+                }
                 ::std::result::Result::Err(#error) => #front.throw(#error),
             }
         }
@@ -2016,17 +2019,15 @@ fn dictionary_items(dictionary: &DictionaryDef) -> Tokens {
         .filter(|member| !handle(member))
         .map(|member| &member.ty);
     let reads = ordered.iter().map(|member| {
-        let (field, ty) = (&member.name, &member.ty);
+        let field = &member.name;
         let js = js_name(field);
-        let member = if handle(member) {
-            quote!(<#ty as #api::typed::DictHandle<T>>)
+        let read = if handle(member) {
+            quote!(#api::typed::read_handle)
         } else {
-            quote!(<#ty as #api::typed::DictMember>)
+            quote!(#api::typed::read_member)
         };
         quote! {
-            if let ::std::option::Option::Some(#taken) = #member::read(#front, &#dict, #js)? {
-                #value.#field = #taken;
-            }
+            #read(#front, #dict, #js, &mut #value.#field)?;
         }
     });
     // As a result: its members with a value, in their names' order too.
@@ -2083,7 +2084,30 @@ fn dictionary_items(dictionary: &DictionaryDef) -> Tokens {
             fn read<T: #api::typed::Front>(#front: &mut T, #index: usize) -> ::std::option::Option<#of_t> {
                 let mut #value = <#of_t as ::std::default::Default>::default();
                 if let ::std::option::Option::Some(#dict) = #front.dict_arg(#index, #name_str)? {
-                    #(#reads)*
+                    // Its members' reads, which the front end runs on
+                    // the one that reads them (it may make one for them
+                    // all).
+                    struct Reads<'d, T: #api::typed::FrontTypes>(&'d T::Dict, &'d mut #of_t);
+
+                    impl<'d, T: #api::typed::FrontTypes> #api::typed::ReadDict<T> for Reads<'d, T> {
+                        type Out = ::std::option::Option<()>;
+
+                        fn read<F>(self, #front: &mut F) -> ::std::option::Option<()>
+                        where
+                            F: #api::typed::Front<
+                                    Str = T::Str,
+                                    Node = T::Node,
+                                    Dict = T::Dict,
+                                    Any = T::Any,
+                                >,
+                        {
+                            let Reads(#dict, #value) = self;
+                            #(#reads)*
+                            ::std::option::Option::Some(())
+                        }
+                    }
+
+                    #front.reading(Reads::<T>(&#dict, &mut #value))?;
                 }
                 ::std::option::Option::Some(#value)
             }

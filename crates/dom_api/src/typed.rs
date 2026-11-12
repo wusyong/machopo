@@ -143,6 +143,40 @@ fn rooted_objects<'gc, I: Interface>(
         .collect()
 }
 
+/// The `OpFront` methods with no default that a member's function may
+/// call whatever its types are (`with_array_bytes`, `HTMLElement`'s
+/// constructor's), for a front end that binds no member whose function
+/// does: each says so. A front end that binds them implements them.
+#[macro_export]
+macro_rules! unbound_op_methods {
+    () => {
+        fn with_array_bytes(
+            &mut self,
+            _: &$crate::ApiCx<'_, '_>,
+            _: &::elise::JsEdge,
+            _: &mut dyn FnMut(::std::option::Option<&[u8]>),
+        ) {
+            unreachable!("this front end binds no member reading an image's pixels")
+        }
+
+        fn construct_html<'gc>(
+            &mut self,
+            _: &$crate::ApiCx<'_, 'gc>,
+            _: $crate::HtmlConstructed<'gc>,
+        ) -> ::std::option::Option<::dom::NodeRoot> {
+            unreachable!("this front end doesn't bind `HTMLElement`'s constructor")
+        }
+
+        fn new_target_number(&mut self) -> ::std::option::Option<u32> {
+            unreachable!("this front end doesn't bind `HTMLElement`'s constructor")
+        }
+
+        fn is_new_target(&mut self, _: &$crate::ApiCx<'_, '_>, _: &::elise::JsEdge) -> bool {
+            unreachable!("this front end doesn't bind `HTMLElement`'s constructor")
+        }
+    };
+}
+
 /// A result type's `Prepared` and `prepare` when nothing is made ahead of
 /// the operation for it.
 macro_rules! no_prepared {
@@ -194,6 +228,15 @@ pub trait Front: FrontTypes {
         >
     where
         Self: 'o;
+
+    /// A dictionary's members read (`Dictionary::read`), each of which
+    /// may run script (a getter): `reads` run on the front end that reads
+    /// them, itself or (a front end that makes what its engine asks for a
+    /// read only then) the one it makes for all of them at once, which
+    /// holds its arguments as it does.
+    fn reading<V: ReadDict<Self>>(&mut self, reads: V) -> V::Out
+    where
+        Self: Sized;
 
     /// Runs one operation of the DOM that allocates nothing (a getter's):
     /// no safepoint, the DOM borrowed shared.
@@ -831,42 +874,48 @@ pub trait Front: FrontTypes {
 
     /// `getHTML`'s options (`GetHtmlOptionsArg`) at `index`: undefined or
     /// null the defaults, an object its `serializableShadowRoots` and its
-    /// `shadowRoots` converted to a sequence of nodes, kept for the
-    /// operation; another value, or a `shadowRoots` item that isn't a node,
-    /// a `TypeError`. `serializableShadowRoots`, and whether `shadowRoots`
-    /// was given.
-    fn get_html_options(&mut self, index: usize) -> Option<(bool, bool)> {
+    /// `shadowRoots` converted to a sequence of nodes; another value, or a
+    /// `shadowRoots` item that isn't a node, a `TypeError`.
+    /// `serializableShadowRoots`, and the nodes (none if `shadowRoots`
+    /// wasn't given).
+    fn get_html_options(&mut self, index: usize) -> Option<(bool, Vec<Self::Node>)> {
         let _ = index;
         unreachable!("a front end binding `getHTML` reads its options")
     }
 
     /// Argument `index` as an `IntersectionObserverInit` (undefined or null
-    /// its defaults): `root`, a node's wrapper, kept for the operation
-    /// (`OpFront::intersection_node`); `threshold` a number or a sequence
+    /// its defaults): `root`, a node's wrapper, given with it; `threshold`
+    /// a number or a sequence
     /// of them; the rest as its members' types. Another value, a `root`
     /// that isn't a node, or a number that isn't finite: a `TypeError`.
-    fn intersection_observer_init(&mut self, index: usize) -> Option<IntersectionInit> {
+    fn intersection_observer_init(
+        &mut self,
+        index: usize,
+    ) -> Option<(IntersectionInit, Option<Self::Node>)> {
         let _ = index;
         unreachable!("a front end binding `IntersectionObserver` reads its options")
     }
 
     /// Argument `index` as an `IntersectionObserverEntryInit`, every
-    /// member required: `target`, a node's wrapper, kept for the operation
-    /// (`OpFront::intersection_node`); the rects `DOMRectInit`s (undefined
+    /// member required: `target`, a node's wrapper, given with them; the
+    /// rects `DOMRectInit`s (undefined
     /// or null their zeros, `rootBounds` null for none). Another value, a
     /// member missing, a `target` that isn't a node, or a `time` or
     /// `intersectionRatio` that isn't finite: a `TypeError`.
-    fn intersection_entry_init(&mut self, index: usize) -> Option<IntersectionEntryInitValues> {
+    fn intersection_entry_init(
+        &mut self,
+        index: usize,
+    ) -> Option<(IntersectionEntryInitValues, Self::Node)> {
         let _ = index;
         unreachable!("a front end binding `IntersectionObserverEntry` reads its init")
     }
 
     /// Argument `index` as a `StaticRangeInit`, every member required:
-    /// `startContainer` and `endContainer`, nodes' wrappers, kept for the
-    /// operation (`OpFront::static_range_nodes`); the offsets `ToUint32`'s.
+    /// `startContainer` and `endContainer`, nodes' wrappers; the offsets
+    /// `ToUint32`'s. The start, then the end.
     /// Another value, a member missing, or a container that isn't a node:
     /// a `TypeError`.
-    fn static_range_init(&mut self, index: usize) -> Option<(u32, u32)> {
+    fn static_range_init(&mut self, index: usize) -> Option<[(Self::Node, u32); 2]> {
         let _ = index;
         unreachable!("a front end binding `StaticRange` reads its init")
     }
@@ -1082,6 +1131,20 @@ pub trait Front: FrontTypes {
         let _ = (bytes, view);
         unreachable!("a front end binding a member giving a promise makes it")
     }
+    /// A new `ImageData`'s array made of `bytes` (no copy: they become
+    /// its buffer's), before the result or the constructed object is
+    /// given.
+    fn finish_image_data_pixels(&mut self, image_data: Persistent<dom::ImageData>, bytes: Vec<u8>) {
+        let _ = (image_data, bytes);
+        unreachable!("a front end binding a member making an `ImageData` makes its array")
+    }
+    /// An element being upgraded whose wrapper `HTMLElement`'s
+    /// constructor gave (`OpFront::construct_html`): the wrapper given
+    /// `new.target`'s prototype.
+    fn finish_upgrading(&mut self, element: NodeRoot) {
+        let _ = element;
+        unreachable!("a front end binding `HTMLElement`'s constructor finishes an upgrade")
+    }
     /// A pending promise: a new one, its resolver kept by the number
     /// `id`; or (`existing`) the promise of the resolver kept by it
     /// already.
@@ -1171,13 +1234,6 @@ pub trait OpFront: FrontTypes {
         unreachable!("a front end binding a member with an `any` stores it")
     }
 
-    /// The error that throws what `edge` holds (an abort signal's reason,
-    /// `throwIfAborted()`'s): the member gives it as its failure.
-    fn rethrow(&mut self, cx: &ApiCx<'_, '_>, edge: &JsEdge) -> ApiError {
-        let _ = (cx, edge);
-        unreachable!("a front end binding `throwIfAborted` throws its reason")
-    }
-
     /// The object a dictionary's member kept (`Front::dict_object`).
     fn kept_object<'gc, T: HeapType>(
         &mut self,
@@ -1228,28 +1284,15 @@ pub trait OpFront: FrontTypes {
     }
 
     /// `f` with the bytes of the array `edge` refers to, read in place
-    /// where the engine lets them be (none if it refers to none).
+    /// where the engine lets them be (none if it refers to none). No
+    /// default: a member's function may call it whatever its types are,
+    /// so every front end says what it does.
     fn with_array_bytes(
         &mut self,
         cx: &ApiCx<'_, '_>,
         edge: &JsEdge,
         f: &mut dyn FnMut(Option<&[u8]>),
-    ) {
-        let _ = (cx, edge, f);
-        unreachable!("a front end binding a member reading an image's pixels reads them")
-    }
-
-    /// `image_data`'s array made, after the operation, of `bytes` (no
-    /// copy: they become its buffer's), before the result is given.
-    fn set_image_data_pixels<'gc>(
-        &mut self,
-        cx: &ApiCx<'_, 'gc>,
-        image_data: Gc<'gc, dom::ImageData>,
-        bytes: Vec<u8>,
-    ) {
-        let _ = (cx, image_data, bytes);
-        unreachable!("a front end binding a member making an `ImageData` makes its array")
-    }
+    );
 
     /// `edge` (a new timer's) made to refer to the rest arguments `rest`
     /// (`Front::rest_arg`), strongly.
@@ -1267,50 +1310,26 @@ pub trait OpFront: FrontTypes {
 
     /// `HTMLElement`'s constructor's element (HTML's `[HTMLConstructor]`):
     /// a new one, the call's new wrapper made its; or one being upgraded,
-    /// given as its wrapper (with `new.target`'s prototype), or the call's
-    /// new wrapper made its if it has none.
-    fn construct_html<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, constructed: HtmlConstructed<'gc>) {
-        let _ = (cx, constructed);
-        unreachable!("a front end binding `HTMLElement`'s constructor gives its element")
-    }
-
-    /// The `root` `Front::intersection_observer_init` kept, or the
-    /// `target` `Front::intersection_entry_init` did, if one was.
-    fn intersection_node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>) -> Option<NodeRef<'gc>> {
-        let _ = cx;
-        unreachable!("a front end binding `IntersectionObserver` keeps its root")
-    }
-
-    /// The containers `Front::static_range_init` kept: its start's and its
-    /// end's.
-    fn static_range_nodes<'gc>(&mut self, cx: &ApiCx<'_, 'gc>) -> (NodeRef<'gc>, NodeRef<'gc>) {
-        let _ = cx;
-        unreachable!("a front end binding `StaticRange` keeps its containers")
-    }
-
-    /// The shadow roots `Front::get_html_options` kept: each node a shadow
-    /// root, else a `TypeError`.
-    fn listed_shadow_roots<'gc>(
+    /// the call's new wrapper made its if it has none. One being upgraded
+    /// that has a wrapper is given as that, the call's result, and rooted:
+    /// its wrapper is given `new.target`'s prototype after the operation
+    /// (`Front::finish_upgrading`). No default, as `with_array_bytes`.
+    fn construct_html<'gc>(
         &mut self,
         cx: &ApiCx<'_, 'gc>,
-    ) -> Result<Vec<NodeRef<'gc>>, ApiError> {
-        let _ = cx;
-        unreachable!("a front end binding `getHTML` keeps its shadow roots")
-    }
+        constructed: HtmlConstructed<'gc>,
+    ) -> Option<NodeRoot>;
 
     /// The engine's number for the constructor call's `new.target` (V8's
     /// identity hash), if it is an object: what a registry finds its
     /// definitions by (`Cx::custom_element_definitions_numbered`).
-    fn new_target_number(&mut self) -> Option<u32> {
-        unreachable!("a front end binding `HTMLElement`'s constructor numbers `new.target`")
-    }
+    /// No default, as `with_array_bytes`.
+    fn new_target_number(&mut self) -> Option<u32>;
 
     /// Whether `edge` (a definition's constructor's) refers to the call's
     /// `new.target`.
-    fn is_new_target(&mut self, cx: &ApiCx<'_, '_>, edge: &JsEdge) -> bool {
-        let _ = (cx, edge);
-        unreachable!("a front end binding `HTMLElement`'s constructor compares `new.target`")
-    }
+    /// No default, as `with_array_bytes`.
+    fn is_new_target(&mut self, cx: &ApiCx<'_, '_>, edge: &JsEdge) -> bool;
 
     /// The engine's number for the callback `callback` names (as
     /// `new_target_number`'s).
@@ -2281,17 +2300,22 @@ impl<I: Interface, L: Interface> RetType for NewObject<I, L> {
     }
 }
 
-/// An `ImageData` its member makes, whose pixels the function hands the
-/// front end to make its array of after the operation
-/// (`OpFront::set_image_data_pixels`), which a front end keeps for it: as
-/// `ImageData`, but not `PLAIN`.
+/// An `ImageData` its member makes (`ImageDataWithPixels`): the object,
+/// as `ImageData` gives one, and its pixels, carried out of the operation
+/// for its array to be made of them (`Front::finish_image_data_pixels`)
+/// before the object is given.
 pub struct NewImageData;
 
 impl RetType for NewImageData {
     const DESC: TypeDesc = <crate::interfaces::ImageData as RetType>::DESC;
-    type Ret<'gc> = <crate::interfaces::ImageData as RetType>::Ret<'gc>;
+    const PLAIN: bool = true;
+    type Ret<'gc> = ImageDataWithPixels<'gc>;
     type Prepared<F: FrontTypes> = <crate::interfaces::ImageData as RetType>::Prepared<F>;
-    type Pending<F: FrontTypes> = <crate::interfaces::ImageData as RetType>::Pending<F>;
+    type Pending<F: FrontTypes> = (
+        Persistent<dom::ImageData>,
+        Vec<u8>,
+        <crate::interfaces::ImageData as RetType>::Pending<F>,
+    );
 
     fn prepare<F: Front>(front: &mut F, foreseen: Option<usize>) -> Self::Prepared<F> {
         <crate::interfaces::ImageData as RetType>::prepare(front, foreseen)
@@ -2300,101 +2324,18 @@ impl RetType for NewImageData {
     fn give<'gc, O: OpFront>(
         op: &mut O,
         cx: &ApiCx<'_, 'gc>,
-        value: Self::Ret<'gc>,
+        value: ImageDataWithPixels<'gc>,
     ) -> Self::Pending<O> {
-        <crate::interfaces::ImageData as RetType>::give(op, cx, value)
+        (
+            Persistent::new(cx.gc, value.image_data),
+            value.pixels,
+            <crate::interfaces::ImageData as RetType>::give(op, cx, value.image_data),
+        )
     }
 
-    fn finish<F: Front>(front: &mut F, pending: Self::Pending<F>) {
-        <crate::interfaces::ImageData as RetType>::finish(front, pending);
-    }
-}
-
-/// A result `R` of a member whose function may hand the front end a value
-/// to throw (or reject with) after the operation (`OpFront::rethrow`: an
-/// aborted body's reason), which a front end keeps for it: as `R`, but not
-/// `PLAIN`.
-pub struct Rethrowing<R>(PhantomData<R>);
-
-impl<R: RetType> RetType for Rethrowing<R> {
-    const DESC: TypeDesc = R::DESC;
-    type Ret<'gc> = R::Ret<'gc>;
-    type Prepared<F: FrontTypes> = R::Prepared<F>;
-    type Pending<F: FrontTypes> = R::Pending<F>;
-
-    #[inline(always)]
-    fn prepare<F: Front>(front: &mut F, foreseen: Option<usize>) -> Self::Prepared<F> {
-        R::prepare(front, foreseen)
-    }
-
-    #[inline(always)]
-    fn give<'gc, O: OpFront>(
-        op: &mut O,
-        cx: &ApiCx<'_, 'gc>,
-        value: Self::Ret<'gc>,
-    ) -> Self::Pending<O> {
-        R::give(op, cx, value)
-    }
-
-    #[inline(always)]
-    fn give_prepared<'gc, O: OpFront>(
-        op: &mut O,
-        cx: &ApiCx<'_, 'gc>,
-        value: Self::Ret<'gc>,
-        prepared: Self::Prepared<O>,
-    ) -> Self::Pending<O> {
-        R::give_prepared(op, cx, value, prepared)
-    }
-
-    #[inline(always)]
-    fn finish<F: Front>(front: &mut F, pending: Self::Pending<F>) {
-        R::finish(front, pending);
-    }
-
-    fn fail<F: Front>(front: &mut F, error: ApiError) {
-        R::fail(front, error);
-    }
-}
-
-/// An `ImageData` whose pixels its member's function reads through the
-/// front end (`OpFront::with_array_bytes`: `putImageData`'s), which a
-/// front end given only `PLAIN` members doesn't do: as `ImageData`, but
-/// not `PLAIN`.
-pub struct ReadImageData;
-
-impl ArgType for ReadImageData {
-    const DESC: TypeDesc = <crate::interfaces::ImageData as ArgType>::DESC;
-    type Taken<T: FrontTypes> = <crate::interfaces::ImageData as ArgType>::Taken<T>;
-    type Param<'a, 'gc, T: FrontTypes + 'a> =
-        <crate::interfaces::ImageData as ArgType>::Param<'a, 'gc, T>;
-
-    fn take<F: Front>(front: &mut F, index: usize) -> Option<Self::Taken<F>> {
-        <crate::interfaces::ImageData as ArgType>::take(front, index)
-    }
-
-    fn param<'a, 'gc, O: OpFront + 'a>(
-        op: &mut O,
-        cx: &ApiCx<'_, 'gc>,
-        taken: &'a Self::Taken<O>,
-        index: usize,
-    ) -> Result<Self::Param<'a, 'gc, O>, ApiError> {
-        <crate::interfaces::ImageData as ArgType>::param(op, cx, taken, index)
-    }
-}
-
-/// Nothing, from a function that may hand the front end a value to throw
-/// after the operation (`OpFront::rethrow`: an abort signal's reason),
-/// which a front end keeps for it: not `PLAIN`, so that a front end that
-/// keeps nothing isn't given such a member.
-pub struct Rethrown;
-
-impl RetType for Rethrown {
-    const DESC: TypeDesc = TypeDesc::Undefined;
-    type Ret<'gc> = ();
-    no_pending!();
-
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, (): ()) {
-        op.ret_undefined();
+    fn finish<F: Front>(front: &mut F, (image_data, pixels, object): Self::Pending<F>) {
+        front.finish_image_data_pixels(image_data, pixels);
+        <crate::interfaces::ImageData as RetType>::finish(front, object);
     }
 }
 
@@ -2617,29 +2558,27 @@ pub struct StaticRangeInit<'gc> {
 }
 
 /// `StaticRange`'s init, a dictionary with node members the front end
-/// converts and keeps before the operation (a dictionary of the table
-/// holds no objects), as `IntersectionObserverEntryInitArg`.
+/// converts before the operation: its handles, made the DOM's in it.
 pub struct StaticRangeInitArg;
 
 impl ArgType for StaticRangeInitArg {
     const DESC: TypeDesc = TypeDesc::Dictionary("StaticRangeInit");
-    type Taken<T: FrontTypes> = (u32, u32);
+    type Taken<T: FrontTypes> = [(T::Node, u32); 2];
     type Param<'a, 'gc, T: FrontTypes + 'a> = StaticRangeInit<'gc>;
 
-    fn take<F: Front>(front: &mut F, index: usize) -> Option<(u32, u32)> {
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<[(F::Node, u32); 2]> {
         front.static_range_init(index)
     }
 
     fn param<'a, 'gc, O: OpFront + 'a>(
         op: &mut O,
         cx: &ApiCx<'_, 'gc>,
-        taken: &'a (u32, u32),
+        [start, end]: &'a [(O::Node, u32); 2],
         _: usize,
     ) -> Result<StaticRangeInit<'gc>, ApiError> {
-        let (start, end) = op.static_range_nodes(cx);
         Ok(StaticRangeInit {
-            start: (start, taken.0),
-            end: (end, taken.1),
+            start: (op.node(cx, &start.0), start.1),
+            end: (op.node(cx, &end.0), end.1),
         })
     }
 }
@@ -3010,7 +2949,6 @@ impl ArgType for IntersectionObserverCallback {
 /// kept: whether there is one).
 #[derive(Debug, Clone, PartialEq)]
 pub struct IntersectionInit {
-    pub root: bool,
     pub root_margin: String,
     pub scroll_margin: String,
     pub thresholds: Vec<f64>,
@@ -3021,7 +2959,6 @@ pub struct IntersectionInit {
 impl Default for IntersectionInit {
     fn default() -> Self {
         Self {
-            root: false,
             root_margin: "0px".to_owned(),
             scroll_margin: "0px".to_owned(),
             thresholds: vec![0.0],
@@ -3062,39 +2999,35 @@ pub struct IntersectionOptions<'gc> {
 }
 
 /// `IntersectionObserver`'s options, a dictionary with a node member
-/// (`root`) the front end converts and keeps before the operation (a
-/// dictionary of the table holds no objects), as `GetHtmlOptionsArg`.
+/// (`root`) the front end converts before the operation: its handle,
+/// made the DOM's in it.
 pub struct IntersectionObserverInitArg;
 
 impl ArgType for IntersectionObserverInitArg {
     const DESC: TypeDesc = TypeDesc::Dictionary("IntersectionObserverInit");
     const UNDEFINED_IS_DEFAULT: bool = true;
-    type Taken<T: FrontTypes> = IntersectionInit;
+    type Taken<T: FrontTypes> = (IntersectionInit, Option<T::Node>);
     type Param<'a, 'gc, T: FrontTypes + 'a> = IntersectionOptions<'gc>;
 
-    fn take<F: Front>(front: &mut F, index: usize) -> Option<IntersectionInit> {
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<Self::Taken<F>> {
         front.intersection_observer_init(index)
     }
 
     fn param<'a, 'gc, O: OpFront + 'a>(
         op: &mut O,
         cx: &ApiCx<'_, 'gc>,
-        taken: &'a IntersectionInit,
+        (init, root): &'a (IntersectionInit, Option<O::Node>),
         _: usize,
     ) -> Result<IntersectionOptions<'gc>, ApiError> {
         Ok(IntersectionOptions {
-            root: if taken.root {
-                op.intersection_node(cx)
-            } else {
-                None
-            },
-            init: taken.clone(),
+            root: root.as_ref().map(|root| op.node(cx, root)),
+            init: init.clone(),
         })
     }
 }
 
-/// An `IntersectionObserverEntryInit` as the front end read it (its
-/// `target` kept): the rects `[x, y, width, height]`, doubles as a
+/// An `IntersectionObserverEntryInit` as the front end read it (but its
+/// `target`): the rects `[x, y, width, height]`, doubles as a
 /// `DOMRect`'s.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IntersectionEntryInitValues {
@@ -3115,28 +3048,27 @@ pub struct IntersectionEntryInit<'gc> {
 }
 
 /// `IntersectionObserverEntry`'s init, a dictionary with a node member
-/// (`target`) the front end converts and keeps before the operation, as
-/// `IntersectionObserverInitArg`.
+/// (`target`), as `IntersectionObserverInitArg`.
 pub struct IntersectionObserverEntryInitArg;
 
 impl ArgType for IntersectionObserverEntryInitArg {
     const DESC: TypeDesc = TypeDesc::Dictionary("IntersectionObserverEntryInit");
-    type Taken<T: FrontTypes> = IntersectionEntryInitValues;
+    type Taken<T: FrontTypes> = (IntersectionEntryInitValues, T::Node);
     type Param<'a, 'gc, T: FrontTypes + 'a> = IntersectionEntryInit<'gc>;
 
-    fn take<F: Front>(front: &mut F, index: usize) -> Option<IntersectionEntryInitValues> {
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<Self::Taken<F>> {
         front.intersection_entry_init(index)
     }
 
     fn param<'a, 'gc, O: OpFront + 'a>(
         op: &mut O,
         cx: &ApiCx<'_, 'gc>,
-        taken: &'a IntersectionEntryInitValues,
+        (values, target): &'a (IntersectionEntryInitValues, O::Node),
         _: usize,
     ) -> Result<IntersectionEntryInit<'gc>, ApiError> {
         Ok(IntersectionEntryInit {
-            target: op.intersection_node(cx),
-            values: *taken,
+            target: Some(op.node(cx, target)),
+            values: *values,
         })
     }
 }
@@ -3611,6 +3543,46 @@ impl DictMember for Option<IsNull> {
 
 /// An `AbortSignal` member of a dictionary (`AddEventListenerOptions`'
 /// `signal`): kept by the front end (`Front::dict_object`).
+/// A dictionary's members' reads (the table's: `Dictionary::read` makes
+/// one), of a dictionary a front end `T` took: run on a front end that
+/// holds its arguments as `T` does (`Front::reading`).
+pub trait ReadDict<T: FrontTypes> {
+    type Out;
+
+    fn read<F>(self, front: &mut F) -> Self::Out
+    where
+        F: Front<Str = T::Str, Node = T::Node, Dict = T::Dict, Any = T::Any>;
+}
+
+/// `dict`'s member `member` read into `out`, if it has one
+/// (`Dictionary::read`'s, of each member): `None` if reading it threw.
+#[inline(always)]
+pub fn read_member<F: Front, M: DictMember>(
+    front: &mut F,
+    dict: &F::Dict,
+    member: &str,
+    out: &mut M,
+) -> Option<()> {
+    if let Some(value) = M::read(front, dict, member)? {
+        *out = value;
+    }
+    Some(())
+}
+
+/// As `read_member`, of a member that is the front end's handle.
+#[inline(always)]
+pub fn read_handle<F: Front, H: DictHandle<F>>(
+    front: &mut F,
+    dict: &F::Dict,
+    member: &str,
+    out: &mut H,
+) -> Option<()> {
+    if let Some(value) = H::read(front, dict, member)? {
+        *out = value;
+    }
+    Some(())
+}
+
 /// A dictionary member's type that is a front end's handle (an object's
 /// wrapper, a value of any type): read from the dictionary before the
 /// operation as the front end `F` holds it, which the dictionary is then
@@ -5969,23 +5941,66 @@ pub enum HtmlConstructed<'gc> {
 }
 
 /// A constructor's function's result, given to the call: an object, the
-/// call's new wrapper made its; `HTMLElement`'s element.
+/// call's new wrapper made its; `HTMLElement`'s element; an `ImageData`
+/// with its pixels. What it leaves for after the operation it gives back.
 pub trait Constructed<'gc> {
-    fn construct<O: OpFront>(self, op: &mut O, cx: &ApiCx<'_, 'gc>);
+    fn construct<O: OpFront>(self, op: &mut O, cx: &ApiCx<'_, 'gc>) -> ConstructPending;
+}
+
+/// What a constructed object leaves for after the operation
+/// (`finish_constructed`): for the engine to allocate, or to set.
+pub enum ConstructPending {
+    None,
+    /// A new `ImageData`'s pixels, its array to make of them.
+    Pixels(Persistent<dom::ImageData>, Vec<u8>),
+    /// An element being upgraded, whose wrapper is the result.
+    Upgrading(NodeRoot),
+}
+
+/// What a constructor's call does after its operation with what its
+/// object left.
+#[inline(always)]
+pub fn finish_constructed<F: Front>(front: &mut F, pending: ConstructPending) {
+    match pending {
+        ConstructPending::None => {}
+        ConstructPending::Pixels(image_data, bytes) => {
+            front.finish_image_data_pixels(image_data, bytes);
+        }
+        ConstructPending::Upgrading(element) => front.finish_upgrading(element),
+    }
 }
 
 impl<'gc, T: elise::HeapType> Constructed<'gc> for Gc<'gc, T>
 where
     Gc<'gc, T>: Into<ObjectRef<'gc>>,
 {
-    fn construct<O: OpFront>(self, op: &mut O, cx: &ApiCx<'_, 'gc>) {
+    #[inline(always)]
+    fn construct<O: OpFront>(self, op: &mut O, cx: &ApiCx<'_, 'gc>) -> ConstructPending {
         op.construct_object(cx, self.into());
+        ConstructPending::None
     }
 }
 
 impl<'gc> Constructed<'gc> for HtmlConstructed<'gc> {
-    fn construct<O: OpFront>(self, op: &mut O, cx: &ApiCx<'_, 'gc>) {
-        op.construct_html(cx, self);
+    fn construct<O: OpFront>(self, op: &mut O, cx: &ApiCx<'_, 'gc>) -> ConstructPending {
+        match op.construct_html(cx, self) {
+            Some(element) => ConstructPending::Upgrading(element),
+            None => ConstructPending::None,
+        }
+    }
+}
+
+/// A new `ImageData` and the pixels its array is made of after the
+/// operation (the engine allocates it): what a member making one gives.
+pub struct ImageDataWithPixels<'gc> {
+    pub image_data: Gc<'gc, dom::ImageData>,
+    pub pixels: Vec<u8>,
+}
+
+impl<'gc> Constructed<'gc> for ImageDataWithPixels<'gc> {
+    fn construct<O: OpFront>(self, op: &mut O, cx: &ApiCx<'_, 'gc>) -> ConstructPending {
+        op.construct_object(cx, ObjectRef::ImageData(self.image_data));
+        ConstructPending::Pixels(Persistent::new(cx.gc, self.image_data), self.pixels)
     }
 }
 
@@ -6004,28 +6019,38 @@ pub struct GetHtmlOptions<'gc> {
 impl ArgType for GetHtmlOptionsArg {
     const DESC: TypeDesc = TypeDesc::Dictionary("GetHTMLOptions");
     const UNDEFINED_IS_DEFAULT: bool = true;
-    /// `serializableShadowRoots`, and whether `shadowRoots` was given.
-    type Taken<T: FrontTypes> = (bool, bool);
+    /// `serializableShadowRoots`, and `shadowRoots`' nodes.
+    type Taken<T: FrontTypes> = (bool, Vec<T::Node>);
     type Param<'a, 'gc, T: FrontTypes + 'a> = GetHtmlOptions<'gc>;
 
-    fn take<F: Front>(front: &mut F, index: usize) -> Option<(bool, bool)> {
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<(bool, Vec<F::Node>)> {
         front.get_html_options(index)
     }
 
     fn param<'a, 'gc, O: OpFront + 'a>(
         op: &mut O,
         cx: &ApiCx<'_, 'gc>,
-        taken: &'a (bool, bool),
+        (serializable_shadow_roots, listed): &'a (bool, Vec<O::Node>),
         _: usize,
     ) -> Result<GetHtmlOptions<'gc>, ApiError> {
-        let &(serializable_shadow_roots, listed) = taken;
+        // Each a shadow root (WebIDL's conversion of the sequence's
+        // items, told in the operation).
+        let shadow_roots = listed
+            .iter()
+            .map(|node| {
+                let node = op.node(cx, node);
+                if cx.is_shadow_root(node) {
+                    Ok(node)
+                } else {
+                    Err(ApiError::type_error(
+                        "Failed to execute 'getHTML': Failed to read the 'shadowRoots' property from 'GetHTMLOptions': Failed to convert value to 'ShadowRoot'.",
+                    ))
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(GetHtmlOptions {
-            serializable_shadow_roots,
-            shadow_roots: if listed {
-                op.listed_shadow_roots(cx)?
-            } else {
-                Vec::new()
-            },
+            serializable_shadow_roots: *serializable_shadow_roots,
+            shadow_roots,
         })
     }
 }
@@ -8441,6 +8466,9 @@ pub const PLAIN_FRONT_METHODS: &[&str] = &[
     "read",
     "mutate",
     "has_args",
+    "reading",
+    "construct",
+    "prepare_window",
     "throw",
     "finish",
     "finish_string",
@@ -8448,6 +8476,8 @@ pub const PLAIN_FRONT_METHODS: &[&str] = &[
     "finish_number",
     "finish_object",
     "finish_handler",
+    "finish_image_data_pixels",
+    "finish_upgrading",
     "finish_pending_promise",
     "finish_resolved_constructor",
     "finish_objects",
@@ -8521,6 +8551,11 @@ pub const PLAIN_OP_METHODS: &[&str] = &[
     "target",
     "same_callback",
     "store_callback",
+    "construct_object",
+    "construct_html",
+    "new_target_number",
+    "is_new_target",
+    "with_array_bytes",
     "store_any",
     "store_rest",
     "callback_number",
@@ -8788,6 +8823,9 @@ mod tests {
 
     impl Front for OneNode {
         type Op<'o> = OneNode;
+        fn reading<V: crate::typed::ReadDict<Self>>(&mut self, reads: V) -> V::Out {
+            reads.read(self)
+        }
 
         fn read<'o, R>(
             &'o mut self,
@@ -8822,6 +8860,8 @@ mod tests {
     }
 
     impl OpFront for OneNode {
+        crate::unbound_op_methods!();
+
         fn str_param<'a>(&mut self, string: &'a String) -> &'a str {
             string
         }

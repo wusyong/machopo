@@ -203,6 +203,13 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
     - **static 的外殼**：`bindings::StateInfo` 多一個型別參數（`Signed`、`Unsigned`），`receiver()` 只在 `Signed` 上，static 的 trampoline 建 `Unsigned` 的；`dom_js` 的 `InfoFront<'s, K>`、`InfoOp<'o, 's, K>` 照它決定有沒有 receiver。不選讓 static 的也拿 `Receiver`（`this` 沒經過 signature，`Receiver` 的不讀 map 的 unwrap 就不成立）。`TypedMember::PLAIN` 不再排除 static。
     - **overload 的外殼**：一組一個只拿 info 的函式，選形式不建 scope、不配置（組的編號從 data 原地讀；`resolve_overload` 的候選原本是每次呼叫一個 `Vec`，改放 stack 上），形式是 `PLAIN` 的直接走新的 front，不是的當場建 scope 照舊呼叫。Blink 的 overload 是產生的 `switch`（照參數個數、再照型別），形式的函式直接呼叫；machopo 的仍然是照表在執行時選（一個函式指標的呼叫），沒有改成產生的程式。constructor 的 overload 留到 4h。
     - 4g 之後走新的 front 的是 2632 個（2799 個裡）。
+35. **新的 front 補齊操作這一側的方法，不再靠標記型別擋**（2026-11-12，插在 4h 之前）：兩個 front 並存期間，成員走哪一個看參數和回傳的型別（`PLAIN`），但成員的函式在操作裡呼叫得到 `OpFront` 的任何方法，型別看不到；新的 front 沒有的方法預設實作是 `unreachable!`，呼叫時才 abort。這發生了四次（4d `getImageData`、`putImageData`，4f `Request`、`Response` 讀 body 的十個，4h `new ImageData()`），每次加一個標記型別把成員擋回舊的 front（`Rethrown`、`NewImageData`、`ReadImageData`、`Rethrowing<R>`），靠決定 31 的原始碼掃描發現，而掃描漏了 constructor。改成讓這種錯不可能發生：新的 front 缺的 12 個方法裡，
+    - **不用憑證就能呼叫的 6 個**：`rethrow` 刪掉（函式回傳一種帶著 signal 的 root 的錯誤，front 丟錯時才讀 reason）；`set_image_data_pixels` 刪掉（像素和物件一起由結果帶出操作，constructor 的結果也能帶東西出操作）；`with_array_bytes` 在新的 front 實作（fork 加不用 scope 從邊讀出 handle 的讀法）；`new_target_number`、`is_new_target`、`construct_html`（`HTMLElement` 的 constructor）在新的 front 實作。
+    - **讀 front 事先留著的東西的 3 個**（`intersection_node`、`static_range_nodes`、`listed_shadow_roots`，只有參數型別自己呼叫）：刪掉，參數型別帶著節點的 handle 進操作。
+    - **要編號才能呼叫的 3 個**（`kept_object`、`kept_target`、`store_array`）這次不動：編號只有舊的 front 的參數型別給得出來，留到 4j 和那些型別一起改成 handle。
+    做完之後前 9 個在 trait 裡沒有會 abort 的預設實作（新增這類方法卻沒在新的 front 實作是編不過），標記型別和掃描裡「函式呼叫了什麼」那一半拿掉。不選繼續加標記（`Unplain<A>`）、把掃描擴到所有種類：仍然是事後發現，文字比對有看不到的地方。不選把 trait 拆成兩個（決定 31 已經不選）。Blink 只有一種產生的 callback，沒有「這個成員能不能走某條路」的判斷。這些成員也因此從舊的 front 搬到新的。
+    - **4h（constructor 的外殼）沒有新的選擇**，照決定 17、34：只拿 info 的 callback（沒有 signature，`Unsigned`），`this` 是 V8 做的新物件。`HTMLElement` 的 constructor 也走新的 front，但每次建一個 scope 檢查 `new.target` 是不是 `HTMLElement` 本身（保留的成本）。legacy factory（`new Option()`、`new Image()`，2 個）沒動。
+    - **一個 dictionary 的成員在一個 scope 裡讀完**（量測 4h 時找到帶 init 的 constructor 變慢）：`Front::reading` 和產生的 `ReadDict`。Blink 讀 dictionary 是在 callback 自己的 handle scope 裡逐個 `Get`，沒有額外的 scope。
 
 ## 待決定
 

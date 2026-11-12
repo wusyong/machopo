@@ -60,8 +60,8 @@ pub(crate) fn fetch<'gc, O: OpFront>(
     let request = crate::request::new_request(op, cx, this, input, init)?;
     let signal = cx.request_signal(request);
     // Aborted already: the promise rejects with the reason, nothing goes.
-    if let Some(reason) = cx.abort_reason(signal) {
-        return Err(op.rethrow(cx, reason));
+    if cx.abort_reason(signal).is_some() {
+        return Err(ApiError::aborted(cx, signal));
     }
     let data = cx.with_request_data(request, |data| data.clone());
     let url = url::Url::parse(&data.url).map_err(|_| failed_to_fetch())?;

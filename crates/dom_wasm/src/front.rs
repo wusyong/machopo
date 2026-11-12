@@ -87,6 +87,12 @@ impl DomException {
                 code: exception_code(exception.name),
                 message: exception.message,
             },
+            // No member bound throws a signal's reason (a value of
+            // script's): an `AbortError` if one is.
+            error @ ApiError::Aborted(_) => Self {
+                code: exception_code(dom_api::ExceptionName::Abort),
+                message: error.message(),
+            },
         }
     }
 }
@@ -737,17 +743,6 @@ pub(crate) trait WitRet: RetType {
 
 /// Nothing: a method that returns `undefined`, or a setter, which gives no
 /// result (V8's is `undefined` until set).
-// `throwIfAborted`'s: nothing.
-impl WitRet for dom_api::typed::Rethrown {
-    type Wit = ();
-    fn wit(ret: Ret) {
-        match ret {
-            Ret::None | Ret::Undefined => {}
-            other => other.unexpected(),
-        }
-    }
-}
-
 impl WitRet for () {
     type Wit = ();
     fn wit(ret: Ret) {
@@ -1040,6 +1035,11 @@ impl<'r, A> FrontTypes for WasmFront<'r, '_, A> {
 }
 
 impl<'r, 'g, A: ReadArgs> Front for WasmFront<'r, 'g, A> {
+    #[inline(always)]
+    fn reading<V: dom_api::typed::ReadDict<Self>>(&mut self, reads: V) -> V::Out {
+        reads.read(self)
+    }
+
     type Op<'o>
         = WasmFront<'r, 'g, A>
     where
@@ -1180,6 +1180,8 @@ impl<'r, 'g, A: ReadArgs> Front for WasmFront<'r, 'g, A> {
 }
 
 impl<'r, A: ReadArgs> OpFront for WasmFront<'r, '_, A> {
+    dom_api::unbound_op_methods!();
+
     fn str_param<'a>(&mut self, string: &'a &'r str) -> &'a str {
         string
     }

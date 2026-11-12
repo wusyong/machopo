@@ -277,42 +277,37 @@ pub(crate) fn clone<'gc>(
     Ok(clone)
 }
 
-pub(crate) fn text<'gc, O: OpFront>(
-    op: &mut O,
+pub(crate) fn text<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Response>,
 ) -> Result<DomString, ApiError> {
-    body::text(op, cx, Body::Response(this))
+    body::text(cx, Body::Response(this))
 }
 
-pub(crate) fn json<'gc, O: OpFront>(
-    op: &mut O,
+pub(crate) fn json<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Response>,
 ) -> Result<DomString, ApiError> {
-    body::json(op, cx, Body::Response(this))
+    body::json(cx, Body::Response(this))
 }
 
-pub(crate) fn array_buffer<'gc, O: OpFront>(
-    op: &mut O,
+pub(crate) fn array_buffer<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Response>,
 ) -> Result<Vec<u8>, ApiError> {
-    body::bytes(op, cx, Body::Response(this), "arrayBuffer")
+    body::bytes(cx, Body::Response(this), "arrayBuffer")
 }
 
-pub(crate) fn bytes<'gc, O: OpFront>(
-    op: &mut O,
+pub(crate) fn bytes<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Response>,
 ) -> Result<Vec<u8>, ApiError> {
-    body::bytes(op, cx, Body::Response(this), "bytes")
+    body::bytes(cx, Body::Response(this), "bytes")
 }
 
-pub(crate) fn blob<'gc, O: OpFront>(
-    op: &mut O,
+pub(crate) fn blob<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Response>,
 ) -> Result<Gc<'gc, dom::Blob>, ApiError> {
-    body::blob(op, cx, Body::Response(this))
+    body::blob(cx, Body::Response(this))
 }
