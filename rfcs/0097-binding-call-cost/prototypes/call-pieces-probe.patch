@@ -1,0 +1,85 @@
+diff --git a/crates/dom_js/src/info_front.rs b/crates/dom_js/src/info_front.rs
+index 9685b5d..2c38864 100644
+--- a/crates/dom_js/src/info_front.rs
++++ b/crates/dom_js/src/info_front.rs
+@@ -588,6 +588,68 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
+         })
+     }
+ 
++    /// PROTOTYPE (measurement only): what a scope and the whole front
++    /// end cost, made `MACHOPO_PROTOTYPE_SCOPES` / `_FRONTS` times a call.
++    #[inline(always)]
++    pub(crate) fn prototype_probe(&mut self) {
++        static PROBE: std::sync::OnceLock<(u32, u32)> = std::sync::OnceLock::new();
++        let (scopes, fronts) = *PROBE.get_or_init(|| {
++            let read = |name: &str| {
++                std::env::var(name)
++                    .ok()
++                    .and_then(|value| value.parse().ok())
++                    .unwrap_or(0)
++            };
++            (read("MACHOPO_PROTOTYPE_SCOPES"), read("MACHOPO_PROTOTYPE_FRONTS"))
++        });
++        static MORE: std::sync::OnceLock<[u32; 4]> = std::sync::OnceLock::new();
++        let [reads, mutates, roots, reports] = *MORE.get_or_init(|| {
++            let read = |name: &str| {
++                std::env::var(name)
++                    .ok()
++                    .and_then(|value| value.parse().ok())
++                    .unwrap_or(0)
++            };
++            [
++                read("MACHOPO_PROTOTYPE_READS"),
++                read("MACHOPO_PROTOTYPE_MUTATES"),
++                read("MACHOPO_PROTOTYPE_ROOTS"),
++                read("MACHOPO_PROTOTYPE_REPORTS"),
++            ]
++        });
++        for _ in 0..reads {
++            self.read(|cx, _| {
++                std::hint::black_box(cx);
++            });
++        }
++        for _ in 0..mutates {
++            self.mutate(|cx, _| {
++                std::hint::black_box(cx);
++            });
++        }
++        for _ in 0..roots {
++            let root = self.read(|cx, op| {
++                op.this_as::<Node>(cx)
++                    .map(|node| elise::Persistent::new(cx.gc, node))
++            });
++            std::hint::black_box(&root);
++            drop(root);
++        }
++        for _ in 0..reports {
++            self.report();
++        }
++        for _ in 0..scopes {
++            self.info.with_scope(|scope, _| {
++                std::hint::black_box(&scope);
++            });
++        }
++        for _ in 0..fronts {
++            self.with_front(|front| {
++                std::hint::black_box(&front);
++            });
++        }
++    }
++
+     /// A string argument that doesn't lend its text in place (not a
+     /// string yet, not ASCII, not flat): converted or copied, as the whole
+     /// front end does.
+diff --git a/crates/dom_js/src/templates.rs b/crates/dom_js/src/templates.rs
+index 8862028..b192159 100644
+--- a/crates/dom_js/src/templates.rs
++++ b/crates/dom_js/src/templates.rs
+@@ -916,6 +916,7 @@ pub(crate) struct InfoMember<M>(PhantomData<M>);
+ impl<M: TypedMember> bindings::StateInfoMethod<State> for InfoMember<M> {
+     fn call(info: bindings::StateInfo<'_, State>) {
+         let mut front = crate::info_front::InfoFront::<crate::info_front::Method>::new(info);
++        front.prototype_probe();
+         M::call(&mut front);
+         if M::KIND != MemberKind::Getter {
+             front.report();

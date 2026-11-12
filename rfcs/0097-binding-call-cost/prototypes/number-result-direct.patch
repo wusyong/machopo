@@ -1,0 +1,14 @@
+diff --git a/crates/dom_js/src/info_front.rs b/crates/dom_js/src/info_front.rs
+index 9685b5d..e9f3c09 100644
+--- a/crates/dom_js/src/info_front.rs
++++ b/crates/dom_js/src/info_front.rs
+@@ -827,7 +827,8 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
+     #[cold]
+     #[inline(never)]
+     fn finish_number(&mut self, number: f64) {
+-        self.with_front(|front| front.finish_kept_as(front::Kept::F64(number)));
++        // PROTOTYPE: the heap number made by V8's return value itself.
++        self.info.with_scope(|_, mut rv| rv.set_double(number));
+     }
+ 
+     /// An object with no wrapper: one made now.
