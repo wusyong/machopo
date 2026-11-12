@@ -24,9 +24,18 @@
 | 4j-1 `KeptObject` 的編號和 `Uint8ClampedArg` 換成 handle（`view`、`relatedTarget`、`signal`、body 的 `Blob` 和 `URLSearchParams`、`ImageData` 的陣列）；`kept_object`、`kept_target`、`store_array` 拿掉；UI 事件的 constructor 和 `ImageData`（決定 39） | 完成 | 2026-11-12 |
 | 4j-keys dictionary 的成員名稱是名稱表的固定名稱，key 從名稱的 V8 字串的快取拿（決定 40） | 完成 | 2026-11-12 |
 | 4j-2 操作前讀成 Rust 值的參數型別（`fetch` 的 init、`postMessage`、keyframes…），連同卡在這些型別的 constructor、method、setter 和 static（決定 39） | 完成 | 2026-11-12 |
-| 4k 會呼叫 script 的 33 個成員：先逐個量、列出值得改結構的，再決定 | 還沒開始 | |
+| 4k 研究：一次呼叫多出來的成本一類一類拆開、和 Chrome 對照、列每條冷的路該呼叫的 V8 API（決定 41、42） | 完成 | 2026-11-12 |
+| 4k-A 回傳非整數的數字：直接設回傳值（決定 42） | 完成 | 2026-11-12 |
+| 4k-B 回傳現算的字串：不經過 `DomString`、`Box`、`V8Front`；fork 加從 callback info 借的 token | 還沒開始 | |
+| 4k-C 會呼叫 script 的成員：`this` 和參數不登記 root、少開操作 | 還沒開始 | |
+| 4k-D 新的 wrapper：不登記 root、不經過 `V8Front` | 還沒開始 | |
+| 4k-E 非 ASCII 和要轉換的字串參數 | 還沒開始 | |
+| 4k-F dictionary、例外、陣列、promise | 還沒開始 | |
+| 4k-G 最熱的路本身（`nodeType` 是 Chrome 的 1.36 倍）：另外研究 | 還沒開始 | |
 | 4l cross-origin 的 16 個成員，和要找別的 realm 的 window 的 5 個（`Blob` 的 `arrayBuffer`、`bytes`、`text`，`Location.assign`，`Document.location` 的 setter）；4i 留下的 interceptor（indexed setter、iterator 的 pairs、named 的刪除、查詢和列舉）；legacy factory | 還沒開始 | |
-| 4m 冷的路搬成新的 front 自己的（現在當場建 scope、交給 `V8Front`）；拿掉 `V8Front`、`Call`、`Kept` 和 `PLAIN`（連同它的檢查：`PLAIN_FRONT_METHODS`、`PLAIN_OP_METHODS`、`dom_api` 的 `plain` 測試、`dom_js` 的 `the_plain_methods_are_the_info_front_ends_own`、`docs/test-gaps.md` 的那一列） | 還沒開始 | |
+| 4m-1 會呼叫 script 的成員走新的外殼（做法照 4k 的研究；決定 41） | 還沒開始 | |
+| 4m-2 刪舊的外殼、`Call`、`Kept`、`PLAIN`（連同它的檢查：`PLAIN_FRONT_METHODS`、`PLAIN_OP_METHODS`、`dom_api` 的 `plain` 測試、`dom_js` 的 `the_plain_methods_are_the_info_front_ends_own`、`docs/test-gaps.md` 的那一列） | 還沒開始 | |
+| 4m-3 刪掉 `V8Front`（4k-A 到 4k-F 之後沒有人用） | 還沒開始 | |
 | 收尾：`nodeType`、`getAttribute` 的 callback 和 Chrome 的逐條指令對照，列出剩下的差（決定 20） | 還沒開始 | |
 
 ## 驗收
@@ -459,3 +468,155 @@
 - 測試：`dom_js` 的 `handlers::an_argument_read_whole_is_read_in_a_scope`（`hidden` 給布林、小整數不建 scope、給字串和要轉換的物件；`fillStyle` 給 gradient 不建 scope、給字串和要轉換的物件；`setLineDash`、`roundRect`、`toDataURL` 的品質、`getRandomValues`（同一個 view、填了、buffer 的一部分只寫那一段、浮點的 `TypeMismatchError`、不是 view 的 `TypeError`）、`structuredClone`、`Blob`、`File`、`Headers`（sequence 和 record）、`URLSearchParams`、`AbortSignal.any`、`Response.json`、`Response` 的 init、`Request` 的 headers、`StaticRange`、`getHTML`、`pushState`、`replaceState`、`performance.mark`、`PerformanceMark`、`measure`、`animate`、`KeyframeEffect`、`setKeyframes`、`updateTiming`、`Animation`、`IntersectionObserver`、`postMessage`、`Path2D`：值正確、走新的 front 的建 scope）；`dom_api` 的 `table::members_of_strings_nodes_numbers_and_booleans_are_plain` 加「不是 `PLAIN` 的成員就是這 45 個」的名單（任何型別的 `PLAIN` 被改掉都會改變名單）。寫測試時弄錯的：測試沒有 raster，`toDataURL` 是 `data:,`；量測用的環境沒有 window，`new AbortController()` 丟 `InvalidStateError`（那一項不量）。
 - mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4j2.toml`，10 個都抓到。
 - 跑過：`cargo test -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt fetch/api FileAPI url web-animations html/canvas/element webmessaging html/webappapis/structured-clone intersection-observer user-timing dom/abort dom/ranges WebCryptoAPI/getRandomValues.any.js html/browsers/history`（63646 個結果都照預期；失敗的 25 個 reftest 都是本來就預期失敗的）。
+
+**第 4k 段，量測：會呼叫 script 的 33 個成員**（2026-11-12；`bench_calls` 加 `MACHOPO_BENCH_WINDOW`，在 window 的 realm 裡跑；各跑五次取最小，指令數（cycle））：
+
+| 呼叫 | 成本 |
+| --- | ---: |
+| `t.dispatchEvent(ev)`，沒有 listener | 1623（354） |
+| `t.dispatchEvent(ev)`，一個 listener | 3596（744） |
+| `c.dispatchEvent(ev)`，在樹上、bubble、一個 listener | 6798（1450） |
+| `c.click()` | 6412（1466） |
+| `inp.focus()` / `inp.blur()` | 907（189）/ 426（90） |
+| `tw.parentNode()`（在 root，回 null） | 398（78） |
+| `tw.currentNode = c; tw.parentNode()` 扣掉 setter | 525 |
+| `tw.currentNode = n; tw.nextNode()` 扣掉 setter | 538 |
+| 同上，有 filter | 2130 |
+| `ni.nextNode(); ni.previousNode()` / 有 filter | 1083（224）/ 4483（1045） |
+| `form.reset()` | 7156（1801） |
+| `inp.select()` / `ta.select()` | 2204（1011）/ 1810（472） |
+| `sel.collapse(n, 0)` / `sel.selectAllChildren(n)` | 1688（313）/ 1627（297） |
+| `customElements.upgrade(c)` | 2401（429） |
+| `navigator.scheduling.isInputPending()` | 2288（426），其中讀 `navigator.scheduling` 1868 |
+| `ac.abort()`，已經 abort 過 | 20526（6533）：每次建預設的 `AbortError`、抓 stack trace |
+
+對照的普通成員：`c.parentNode`、`tw.currentNode`、`tw.root` 128 到 130；`tw.currentNode = c` 376；`n.contains(c)` 339。
+
+**第 4k 段，一次呼叫的各個零件各多少**（2026-11-12；`prototypes/call-pieces-probe.patch`，量完還原：在普通成員的 callback 裡多做 5 次某個零件、看 `nodeType` 多幾條，除以 5）：
+
+| 零件 | 指令數（cycle） |
+| --- | ---: |
+| 一個 scope（`StateInfo::with_scope`：rusty_v8 的 `CallbackScope`，不開 handle scope） | 27（5） |
+| scope 加整個 `V8Front`（`with_front`） | 62（22） |
+| 一個讀的操作（`Front::read`，空的） | 20（4） |
+| 一個寫的操作（`Front::mutate`，空的） | 44（8） |
+| 登記再放掉一個 root（`Persistent::new`、drop；扣掉包它的讀的操作） | 約 110（20） |
+| 回報 heap（`report`，沒有要報的） | 22（3） |
+
+- 事先估「一個 scope 100 到 200 條」是錯的：27 條。會呼叫 script 的成員貴的不是 scope，是 root 和操作的個數。`tw.parentNode()` 比普通的 getter 多的約 270 條：舊的外殼和 `V8Front` 約 60、`this` 的 root 約 110、四個操作（root、看有沒有 filter、走、給結果）約 130、回報 22，其中有重疊。`dispatchEvent`（沒有 listener）：`this` 和事件兩個 root 約 220、八到十個操作約 300，1623 條裡約三成。
+- 另外量到的（不是這 33 個成員的事，記在 README 的「之後的可能」）：window 的 getter 當全域變數讀，每次約 1700 條（`navigator` 1707、`innerWidth` 1773、`performance` 1848、`location` 1888；`performance.now()` 2547 裡 1850 是讀 `performance`）；`document`、`window`、`setTimeout` 是 0。V8 的 `ic.cc`（`LoadIC::ComputeHandler` 的 `ACCESSOR`）：API getter 的 holder 不是 fast properties 時給 `LoadSlow`，全域物件一定是 dictionary mode；它前面有 `TryLookupCachedProperty`（cached accessor）這條出路。
+
+**第 4k 段，盤點：走新的 front 的成員什麼時候還建 scope**（2026-11-12；`info_front.rs` 裡會建 scope 的方法 91 個，照 `INTERFACES` 的型別數成員；一個 scope 27 條指令）：
+
+| 什麼時候 | 哪些成員（個數是表上的） | 多常發生 |
+| --- | --- | --- |
+| 結果一定要 V8 配置 | 回傳 promise 的 34 個；回傳陣列、dictionary、record 的約 35 個（`getAttributeNames`、`querySelectorAll` 以外的 sequence、`getLineDash`…）；建新節點的 method（`createElement`、`cloneNode`、`createTextNode`…：先建 wrapper） | 每次 |
+| 結果是現算的字串 | 回傳字串的 getter 383 個、method 21 個、nullable 的 29 個裡，值不是 DOM 留著的那些：`style.color` 這類序列化、`innerHTML`、`outerHTML`、`textContent`（元素的）、`href` 這類 URL 的部分… | 每次（DOM 留著的字串只有第一次） |
+| 結果是還沒有 wrapper 的節點或物件 | 回傳節點的 getter 177 個、method 150 個；回傳其他物件的 | 每個物件第一次 |
+| 結果是放不進小整數的數字 | 回傳 double 的 getter 154 個、method 6 個（值不是整數時）；`i32`、`u32` 超過 31 bits 時 | 看值 |
+| 字串參數要轉換 | 字串參數 477 個、nullable 的 57 個：不是字串、不是 ASCII、或不是扁平的（剛串接出來的 cons string） | 看呼叫的寫法；`'a' + i` 這種每次 |
+| 數字、布林參數要轉換 | double 229 個、`i32`、`u32`：給的不是數字（或不是小整數的 `i32`） | 少 |
+| 讀 dictionary、sequence、callback 物件 | dictionary 參數 65 個、`DictOrBool` 3 個、4j-2 的那些型別 | 有給就建（dictionary 的成員共用一個） |
+| 丟例外、reject | 任何成員 | 出錯時 |
+| 呼叫之後回報 | setter 和 method：DOM 的 heap 長到要告訴 V8、有 microtask 要排 | 偶爾 |
+| constructor | 50 個：`new.target` 不是 interface 自己的、`HTMLElement` 的每次 | 看情況 |
+
+- 不建的：回傳布林、小整數、null、`undefined`、已有 wrapper 的節點、DOM 留著而且做過 V8 字串的字串、名稱（`tagName`、`localName`）、event handler 的函式；參數是扁平的 ASCII 字串、數字、布林、節點、函式。
+- 更正（使用者問「確定都只有 27 條嗎」之後量的）：27 條只是空的 scope。走到這些情況時實際多花的是幾百到一千多條（下表）；其中多少是 V8 一定要做的配置和轉換、多少是我們這條路自己的（整個 `V8Front` 62、root 約 110、多開的操作 20 到 44、把字串複製成 Rust 的 `String`），還沒拆開。
+
+  | 情況 | 不建 scope 的對照 | 走到這條路 | 多花 |
+  | --- | ---: | ---: | ---: |
+  | `setAttribute('a', s)`，`s` 是剛串接的長字串（cons string；扣掉串接本身） | 1075（扁平的 ASCII） | 1848 | +773 |
+  | `getAttribute(s)`，`s` 是 cons string | 456 | 1392 | +936 |
+  | `setAttribute('a', 'valué…')`（非 ASCII） | 1075 | 1591 | +516 |
+  | `setAttribute('a', 5)`（數字轉字串） | 1075 | 1361 | +286 |
+  | `setAttribute('a', 'v' + (i & 7))`（短的串接，V8 直接給扁平的） | 1075 | 1146 | +71 |
+  | `ev.timeStamp`（不是整數的 double） | 約 130（回傳小整數的 getter） | 497 | 約 +370 |
+  | `cur.nextSibling`，節點還沒有 wrapper | 約 130 | 1679 | 約 +1550 |
+  | 現算的字串（`style.color` 是 `'red'` 對空字串） | 1533 | 2192 | 約 +660 |
+  | `c.textContent`（元素的，現算） | 189（`text.data`，DOM 留著的） | 1094 | 含算字串本身 |
+
+  量 wrapper 時想量「第二次走同一批節點」當對照，結果和第一次一樣（1673）：兩趟之間 wrapper 被 V8 收掉、第二趟又重建，那個對照不成立，用 `parentNode` 的 128 當對照。這本身要另外看（沒有被 JS 留著的 wrapper 多久被收、重建的成本）。
+
+**第 4k 段，研究：每一類多出來的成本拆開**（2026-11-12；取樣的比例換算成條數，是近似）：
+
+- **字串參數**（`InfoFront::string_arg` 借不到字元時 → `converted_string_arg` → `with_front` → `strings::arg_string`：`to_rust_string_lossy` 複製成 Rust 的 `String`）：
+  - cons string（`getAttribute('data-attribute-name-' + (i & 7))`，+936）：V8 攤平（`ValueView` 的建構約 30%、配置新的扁平字串和 `WriteToFlat` 約 30%）佔大半，這部分 Blink 也要付（它也要攤平）；我們加的是攤平之後再複製成 `String`（`to_rust_string_lossy`、`arg_string` 約 17%，約 260 條）和 `with_front` 62 條。攤平之後那個字串已經是扁平的 one-byte，可以像一般的 ASCII 字串原地借，不用複製。
+  - 非 ASCII（Latin-1 的 `é`，+516）：`ValueView` 約 200、Latin-1 轉 UTF-8 約 90、`arg_string` 和複製約 120、malloc。DOM 的字串是 UTF-8，轉碼是這個選擇的成本（Blink 的字串和 V8 同樣是 Latin-1 或 UTF-16，不轉碼）；能省的是 malloc（短的轉進 stack 上的 buffer）和 `with_front`。
+  - 數字轉字串（+286）：V8 的 `ToString`，轉出來是扁平的、原地借；少見，不追。
+- **回傳非整數的數字**（`ret_f64` → `finish_number` → `with_front` → `finish_kept_as`：`Box::new(Kept::F64)`、建整個 `V8Front`、再 `set_double`）：固定回傳 1.5 的 getter（`ctx.lineWidth`）481，回傳 1 的 160。原型（`prototypes/number-result-direct.patch`：`finish_number` 直接對回傳值 `set_double`，量完還原）：481 → 303。多出來的 321 條裡約 180 條是我們的（一次 malloc 和 free、`V8Front`），剩下約 140 是 scope 27 和 V8 配置 heap number。`ev.timeStamp` 每次跑的值不同（有時是整數），不能當固定的對照。
+- **新的 wrapper**（`cur.nextSibling`，節點沒有 wrapper，約 +1550；`finish_node` → `with_front` → `finish_kept_as(Kept::Node(root, interface))` → `new_wrapper_in_realm`）：取樣裡 V8 把 C++ 指標登記進 sandbox 的表（`CppHeapPointerTable` 的 `TryAllocateEntry`、`WriteLazilyInitializedCppHeapPointerField`）最大，其次是 `with_front` 自己（inline 了建物件）、`finish_kept_as`（`Box`）、`finish_kept`、memmove。V8 的部分 Chrome（有 sandbox）一樣要付；我們加的有節點的 root（約 110）、`Box`、`V8Front`、多的操作。這一類的取樣混了建 20 萬個節點的 `innerHTML`，比例只能看大概，要再做乾淨的量測。
+- **現算的字串**（`style.color` 是 `'red'`，2192）：malloc 和 free 合計約 15%（約 330 條）：序列化成 `String`、轉成 `DomString`（再配置一次、複製）、`Box<Kept>`。V8 建字串本身只佔 1%。另外 `Shorthand::from_name` 佔 17%（約 370 條）：照名稱找 CSS property 的表，是 CSS 那一側的事，不是 binding。
+- 共同的型態：這些路上我們自己加的成本是 **heap 配置**（`Box<Kept>`、`String`、`DomString`）、**整個 `V8Front`**（62 條）、**root**（約 110 條）和**多開的操作**，不是 scope。
+
+**第 4k 段，研究：同一段 script 在 Chrome 和 machopo 各要多久**（2026-11-12；`prototypes/chrome-compare.js`：每個呼叫一百萬次、`performance.now()` 計時、五輪取最小，ns 一次。Chrome 是這台機器的 Fedora 的 Chromium，`--headless=new` 開 `file:` 的頁面；machopo 是 `bench_calls` 的 perf binary 在 window 的 realm 裡跑同一份。兩邊的 V8 版本和 build 設定不同、Chrome 是完整的瀏覽器，只看比例）：
+
+| 呼叫 | Chrome | machopo | machopo / Chrome |
+| --- | ---: | ---: | ---: |
+| `n.nodeType` | 7.4 | 10.1 | 1.36 |
+| `c.parentNode` | 9.6 | 11.5 | 1.20 |
+| `n.getAttribute('id')` | 19.7 | 24.6 | 1.25 |
+| `n.setAttribute('a', '…')`（扁平的 ASCII） | 55.4 | 43.2 | 0.78 |
+| `setAttribute`，長的串接字串（扣掉串接） | 157 | 71 | 0.45 |
+| `getAttribute`，長的串接字串（扣掉串接） | 107 | 54 | 0.51 |
+| `setAttribute`，非 ASCII | 55.2 | 72.9 | 1.32 |
+| `ctx.lineWidth`（值 1） | 5.6 | 7.5 | 1.34 |
+| `ctx.lineWidth`（值 1.5） | 11.4 | 26.5 | 2.32 |
+| `st.color`（`'red'`，現算的字串） | 45.7 | 112.2 | 2.46 |
+| `tw.parentNode()` | 10.1 | 24.0 | 2.38 |
+| `tw.currentNode = n; tw.nextNode()` | 26.4 | 37.2 | 1.41 |
+| `tw.currentNode = n` | 11.6 | 14.5 | 1.25 |
+| `t2.dispatchEvent(ev)`，沒有 listener | 91.8 | 69.0 | 0.75 |
+| `t.dispatchEvent(ev)`，一個 listener | 288.9 | 185.6 | 0.64 |
+| `new Event('x')` | 104.9 | 110.5 | 1.05 |
+| `new MouseEvent('x', { clientX: 1 })` | 751 | 943.5 | 1.26 |
+| 走過 20 萬個沒有 wrapper 的節點（`nextSibling`，一個節點） | 44 | 62.5 | 1.42 |
+| 再走一次（wrapper 還在） | 9 | 9 | 1.00 |
+| 全域的 `navigator` | 94.7 | 88.3 | 0.93 |
+| 全域的 `location` | 128.6 | 100.4 | 0.78 |
+| 全域的 `performance` | 93.8 | 66.6 | 0.71 |
+| 全域的 `innerWidth` | 103.5 | 60.1 | 0.58 |
+| `performance.now()` | 159.7 | 132 | 0.83 |
+| 全域的 `document` | 0.5 | 0.5 | |
+
+- **不是差距的**（先前以為要查的）：window 的 getter 當全域變數讀，Chrome 一樣慢（V8 的 `LoadSlow`，兩邊都付）；`dispatchEvent` machopo 比 Chrome 快；長的串接字串 machopo 快一倍（Chrome 也要攤平，之後還要做成它自己的字串）。
+- **是差距的，照比例排**：現算的字串結果（2.46 倍）、會呼叫 script 的成員的外殼（`tw.parentNode()` 2.38 倍）、回傳非整數的數字（2.32 倍）、新的 wrapper（1.42 倍）、非 ASCII 的字串參數（1.32 倍）、帶 dictionary 的 constructor（1.26 倍），以及最熱的那條路本身（`nodeType` 1.36 倍、`getAttribute` 1.25 倍、`parentNode` 1.20 倍）。
+- 先前說「兩趟之間 wrapper 被收掉、第二趟又重建」沒有重現：在 window 的 realm 裡第二趟是 9 ns，和 Chrome 一樣。那次是用三個不同長度的 script 的指令數相減量的，方法有問題，那個疑慮收回。
+
+**第 4k 段，研究：每條冷的路要呼叫哪些 V8 API、rusty_v8 要不要 scope**（2026-11-12；讀 `dom_js` 的 `front.rs`、`templates.rs`、`strings.rs` 和 fork 的 `src/*.rs`）：
+
+| 路 | 該呼叫的 V8 API | 現在多做的 | rusty_v8 的簽名 |
+| --- | --- | --- | --- |
+| 回傳非整數的數字 | `ReturnValue::Set(double)` | `Box<Kept>`、整個 `V8Front` | 不要 scope（`ReturnValue::set_double`） |
+| 回傳新的字串 | `String::NewFromUtf8`（或 one-byte）、`ReturnValue::Set` | 字串先變成 `String` 再變成 `DomString`、`Box<Kept>`、`V8Front`；進快取的再加 weak handle 和 finalizer | 要 scope，只拿它的 isolate |
+| 回傳沒有 wrapper 的節點或物件 | 目前的 context、複製樣板物件（fork 的 `clone_object`）、wrap、設 `TracedReference`、`ReturnValue::Set` | 節點的 root、`Box<Kept>`、`V8Front`、每次一個讀的操作比對 realm（`other_realm`）、建和接上各一個操作 | `clone_object` 要 scope；wrap、設邊已經不要 |
+| 字串參數（不是字串） | `Value::ToString` | `V8Front` | 要 scope（isolate 和 context） |
+| 字串參數（cons、非 ASCII） | 攤平或讀字元（`String::ValueView`、`WriteUtf8`） | 複製成 `String`（malloc）、`V8Front` | `to_rust_string_lossy` 要 scope；`ValueView` 只要 isolate |
+| 數字、布林參數（不是數字） | `Value::NumberValue`、`Int32Value`、`BooleanValue` | `V8Front` | 要 scope |
+| dictionary | 每個成員一次 `Object::Get`，再照型別轉換 | `V8Front`（一個 dictionary 一次） | 要 scope |
+| 丟例外 | `Exception::TypeError`（訊息的字串）或建 `DOMException` 的 wrapper、`Isolate::ThrowException` | `V8Front` | 要 scope |
+| 回報 heap | fork 的 `report_embedder_used_size` | scope | 只要 isolate |
+| 呼叫 JS（listener、filter） | `Function::Call`、`TryCatch` | `V8Front`、`this` 和參數的 root、多開的操作 | 要 scope |
+| 陣列、promise | `Array::New`、`Promise::Resolver::New`、`Resolve` | `V8Front` | 要 scope |
+
+- rusty_v8 要 scope 的地方，C++ 那一側要的只是 isolate 和（有些）context；scope 在簽名裡是「現在可以建 handle」的憑證。callback 裡 V8 已經開好 handle scope，`StateInfo::with_scope` 的 `SAFETY` 靠的就是這一點。
+- 不建 scope 而守住現有的保證（拿著狀態時不能配置）：憑證改成從 `StateInfo` 借出來的零大小的 token（借著它時借不到狀態，和現在 scope 佔住 `StateInfo` 是同一條借用規則），fork 的函式拿 token 而不是 scope。
+
+**第 4k-A 段：回傳非整數的數字**（2026-11-12，決定 42）：
+
+- `bindings`：`InfoState::return_number`（function 的 info 和兩種 property 的 info 各一份）：`ReturnValue::set_double`，V8 的回傳值自己建 heap number，不建 scope；借整個 info，所以拿著狀態時呼叫不到；`soundness.md` 補一句。
+- `dom_js`：`InfoFront::finish_number` 只呼叫它（原本是 `with_front`、`Box<Kept>`、`V8Front`），不再是 `#[cold]`。走這條路的：回傳 double 的 getter 154 個、method 6 個（值不是整數、-0、NaN、無限大時），`u32`、`i32` 超過 31 bits 時。property 的 info 的那兩份現在沒有成員走到（indexed、named 的 getter 沒有回傳數字的）。
+- `chrome-compare`（`prototypes/chrome-compare.py`：Chrome 和兩個 machopo 的 binary 各跑三次取最小、釘在一個核心上；ns 一次，括號是 Chrome 的倍數）：
+
+  | | Chrome | 之前 | 這一段 |
+  | --- | ---: | ---: | ---: |
+  | `ctx.lineWidth`（1.5） | 11.7 | 26.8（2.29） | 14.9（1.27） |
+  | `ctx.lineWidth`（1） | 5.7 | 7.7（1.35） | 7.6（1.33） |
+  | `performance.now()` | 106.8 | 132.1（1.24） | 120.1（1.12） |
+  | `n.nodeType` | 3.5 | 4.8（1.37） | 4.5（1.29） |
+
+  驗收的 1.2 倍沒有到：`lineWidth`（1.5）剩下的 1.27 倍就是整數那一條的 1.33 倍，也就是最熱的路本身的差距（4k-G），這一段自己多出來的已經沒有了（非整數比整數多 7.3 ns，Chrome 多 6.0 ns）。
+- 計時的雜訊：不釘核心、只跑一次時同一個呼叫差到兩倍（`nodeType` 10.1 和 4.5）；之後的對照都用 `chrome-compare.py`。
+- 測試：`dom_js` 的 `handlers::a_number_that_is_no_small_integer_is_returned_with_no_scope`（分數、浮點的誤差照舊、整數、-0、負的分數、很大的數、超過 31 bits 的 `unsigned long`、NaN：值正確、都不建 scope）；`a_constructor_is_given_the_info_alone` 的 `timeStamp` 那一項改成不建 scope。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4kA.toml`，3 個都抓到。
+- 跑過：`cargo test -p bindings -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt html/canvas/element dom/events hr-time`（3359 個結果都照預期）。

@@ -893,8 +893,9 @@ fn a_constructor_is_given_the_info_alone() {
             false,
         ),
         ("new Comment().nodeType", "8", true),
-        // The window found: the event's time is its clock's.
-        ("new Event('x').timeStamp >= 0", "true", false),
+        // The window found: the event's time is its clock's (a number
+        // that is no small integer is the return value's own to make).
+        ("new Event('x').timeStamp >= 0", "true", true),
         // A dictionary's members read in a scope.
         ("new Event('x', init).bubbles", "true", false),
         (
@@ -1342,5 +1343,52 @@ fn an_argument_read_whole_is_read_in_a_scope() {
             Some(false) => assert_eq!(made, 0, "{source}"),
             None => {}
         }
+    }
+}
+
+/// A result that is a number but no small integer (a fraction, -0, NaN,
+/// an infinity, an integer past 31 bits) is V8's heap number, made by the
+/// return value itself: no scope, and the number is the one given.
+#[test]
+fn a_number_that_is_no_small_integer_is_returned_with_no_scope() {
+    let mut engine = page();
+    run(
+        &mut engine,
+        "var ctx = document.createElement('canvas').getContext('2d'); \
+         var walker = document.createTreeWalker(document); var input = document.createElement('input'); \
+         input.type = 'number'; ctx.lineWidth; walker.whatToShow; d.id;",
+    );
+    for (setup, source, value) in [
+        ("ctx.lineWidth = 1.5", "ctx.lineWidth", "1.5"),
+        (
+            "ctx.lineWidth = 0.1",
+            "ctx.lineWidth + 0.2",
+            "0.30000000000000004",
+        ),
+        ("ctx.lineWidth = 3", "ctx.lineWidth", "3"),
+        (
+            "ctx.lineDashOffset = -0",
+            "Object.is(ctx.lineDashOffset, -0)",
+            "true",
+        ),
+        ("ctx.lineDashOffset = -2.25", "ctx.lineDashOffset", "-2.25"),
+        ("ctx.globalAlpha = 0.5", "ctx.globalAlpha", "0.5"),
+        ("ctx.miterLimit = 1e300", "ctx.miterLimit", "1e+300"),
+        // An unsigned long past a small integer's range.
+        ("0", "walker.whatToShow", "4294967295"),
+        ("0", "walker.whatToShow === 0xFFFFFFFF", "true"),
+        (
+            "input.value = ''",
+            "Number.isNaN(input.valueAsNumber)",
+            "true",
+        ),
+        ("input.value = '2.5'", "input.valueAsNumber", "2.5"),
+    ] {
+        run(&mut engine, setup);
+        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        run(&mut engine, &format!("var got = {source};"));
+        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        assert_eq!(report(&mut engine, "got"), value, "{source}");
+        assert_eq!(made, 0, "{source}");
     }
 }

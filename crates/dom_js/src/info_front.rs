@@ -823,11 +823,12 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         front::foresee_element(self.info.isolate(), name)
     }
 
-    /// A number that is no Smi: a heap number.
-    #[cold]
-    #[inline(never)]
+    /// A number that is no Smi: a heap number, which V8's return value
+    /// makes (Blink's `bindings::V8SetReturnValue` of a double): nothing
+    /// else of V8's is called.
+    #[inline]
     fn finish_number(&mut self, number: f64) {
-        self.with_front(|front| front.finish_kept_as(front::Kept::F64(number)));
+        self.info.return_number(number);
     }
 
     /// An object with no wrapper: one made now.

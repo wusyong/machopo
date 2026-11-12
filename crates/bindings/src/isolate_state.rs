@@ -437,6 +437,12 @@ pub trait InfoState<'s, T> {
         &mut self,
         f: impl FnOnce(StateScope<'_, 's, 's, T>, v8::ReturnValue<'s, v8::Value>) -> R,
     ) -> R;
+    /// The call's result a number that is no Smi: V8's return value
+    /// makes the heap number itself (`ReturnValue::Set(double)`), in the
+    /// callback's own handle scope, with no scope made. It allocates, so
+    /// it is out of what a holder of the state may use (`OpReturn`): the
+    /// info is borrowed whole, as no state is meanwhile.
+    fn return_number(&mut self, value: f64);
 }
 
 impl<'s, T: Any, K> InfoState<'s, T> for StateInfo<'s, T, K> {
@@ -461,6 +467,11 @@ impl<'s, T: Any, K> InfoState<'s, T> for StateInfo<'s, T, K> {
         f: impl FnOnce(StateScope<'_, 's, 's, T>, v8::ReturnValue<'s, v8::Value>) -> R,
     ) -> R {
         StateInfo::with_scope(self, f)
+    }
+
+    #[inline(always)]
+    fn return_number(&mut self, value: f64) {
+        v8::ReturnValue::<v8::Value>::from_function_callback_info(self.info).set_double(value);
     }
 }
 
@@ -536,6 +547,11 @@ impl<'s, T: Any> InfoState<'s, T> for StateIndexInfo<'s, T> {
             },
             v8::ReturnValue::from_property_callback_info(self.info),
         )
+    }
+
+    #[inline(always)]
+    fn return_number(&mut self, value: f64) {
+        v8::ReturnValue::<v8::Value>::from_property_callback_info(self.info).set_double(value);
     }
 }
 
@@ -613,6 +629,11 @@ impl<'s, T: Any> InfoState<'s, T> for StateNameInfo<'s, T> {
             },
             v8::ReturnValue::from_property_callback_info(self.info),
         )
+    }
+
+    #[inline(always)]
+    fn return_number(&mut self, value: f64) {
+        v8::ReturnValue::<v8::Value>::from_property_callback_info(self.info).set_double(value);
     }
 }
 

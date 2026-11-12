@@ -232,6 +232,18 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
     - 不選 binding 自己一張照 `&'static str` 位址查的表（Chromium 的分法：`AtomicString` 表歸 DOM，dictionary 的 key 在 bindings 的 `V8PerIsolateData::FindOrCreateEternalNameCache`）：分層和 Chromium 一致、改動最小，但是第三個字串快取，每次讀多一次 hash。不選 macro 替成員編連續的號碼、binding 自己一個陣列：執行時一樣，但也是多一個快取。
     - 和 Chromium 不同的地方：binding 的名稱（WebIDL 的成員名稱）進了 DOM 的名稱表。代價是一份要維護的清單（漏列編不過；多列由 `dom_api` 的 `members` 測試擋）。
     - 順帶修掉的：local name 清單以外的固定名稱（event type，現在加上成員名稱）拿來當 HTML 元素的名字時 `tagName` 沒有轉大寫（`<click>` 的 `tagName` 是 `click`）：`UPPERCASE` 表對這些名稱給的是它自己。表只留 local name 的那一段，其餘走一般名稱的路。
+41. **4k 重置成研究段：一次呼叫多出來的成本一類一類拆開，再設計**（2026-11-12；數字在 `progress.md` 的 4k）：
+    - **原本的 4k（會呼叫 script 的 33 個成員逐個加快路）不做了，先研究**：量下來，這些成員貴的不是 scope（一個 scope 27 條指令；事先估 100 到 200 條是錯的），是 root（登記再放掉一個約 110 條）和操作的個數（讀的 20、寫的 44）。同一次量測也發現走新的 front 的成員「要建 scope 的那些路」實際多花幾百到一千多條（長的串接字串當參數 +773 到 +936、非 ASCII 的字串 +516、回傳非整數的數字約 +370、新的 wrapper 約 +1550、現算的字串約 +660），而且其中幾條很常走到。計畫原本假設這些路少走到、照搬就好，這個假設不成立。
+    - **研究的範圍**：字串參數（cons string、非 ASCII、要轉換的）；回傳非整數的數字；新的 wrapper，連同沒被 JS 留著的 wrapper 被 V8 收掉又重建；現算的字串結果；會呼叫 script 的成員的 root 和操作個數（`this` 和參數的 wrapper 在 callback 期間本來就讓 DOM 的物件活著，能不能不登記 root 要對照 `crates/bindings/soundness.md` 和 elise 的 soundness）。每一類先分出 V8 一定要做的和我們這條路自己加的，再列選項。沒量過的數字標明是估的。
+    - **已經 commit 的不重置**：每一段都是新舊 binary 對照過才進的，這些路的成本和改之前一樣（從 4d 起就是當場交給 `V8Front`），修正能建在現有的 handle 和新的外殼上。
+    - **使用者的方向（2026-11-12 再確認）：不建 scope，一次呼叫只呼叫它該呼叫的 V8 API**。scope 是 rusty_v8 的 API 要的憑證（不開 handle scope，本身 27 條），跟著它一起來的整個 `V8Front`（62 條）、`Box<Kept>` 和字串的 heap 配置、root、多開的操作才是大宗；目標是這些路直接憑 callback info 呼叫 V8（配置數字、建字串、建 wrapper、攤平字串、呼叫函式、丟例外），研究要列出每條路需要哪些 V8 API、rusty_v8 哪些要 scope、fork 要補什麼。
+    - **4m 拆成三段**：4m-1 會呼叫 script 的成員走新的外殼（做法照研究的結果）；4m-2 刪舊的外殼、`Call`、`Kept`、`PLAIN` 和它的檢查；4m-3 冷的路改成新的 front 自己的，照研究的結果重做、不是把 `V8Front` 的程式原樣搬過來，然後刪掉 `V8Front`。
+42. **冷的路只呼叫它該呼叫的 V8 API：憑證換成 token、照和 Chrome 的差距分段、每段對著 Chrome 驗收**（2026-11-12；研究的數字在 `progress.md` 的 4k）：
+    - **研究的結論**：同一段 script 在這台機器的 Chromium 和 machopo 量（`prototypes/chrome-compare.js`）。machopo 落後的是冷的路：現算的字串結果 2.46 倍、會呼叫 script 的成員的外殼 2.38 倍、回傳非整數的數字 2.32 倍、新的 wrapper 1.42 倍、非 ASCII 的字串參數 1.32 倍、帶 dictionary 的 constructor 1.26 倍，和最熱的路本身（`nodeType` 1.36 倍）。不是差距的：window 的 getter 當全域變數讀（Chrome 一樣慢）、`dispatchEvent`（machopo 快）、長的串接字串（machopo 快一倍）。這些路上我們多做的是 heap 配置（`Box<Kept>`、`String`、`DomString`）、整個 `V8Front`、root（一個約 80 到 90 條）、多開的操作；scope 本身 27 條。
+    - **憑證：fork 加一個從 callback info 借出來的 token，不建 rusty_v8 的 scope**。rusty_v8 的 API 要 scope 的地方，C++ 要的只是 isolate 和 context；callback 裡 V8 已經開好 handle scope。token 不帶執行時的成本（就是 isolate 的指標），借著它時借不到狀態：「拿著狀態時不能叫 V8 配置」照舊由借用檢查保證。fork 的函式拿 token（建字串、`ToString`、複製物件、呼叫函式、丟例外…），每條路用到才加，只改 Rust。不選留著 scope 只拿掉 `V8Front`、`Box`、root（不改 fork、拿得到大部分，但使用者不要 scope）；不選把 rusty_v8 的 scope 本身改成零成本（影響它所有的 API，和上游差太遠）。
+    - **`this` 和參數不登記 root**：wrapper 活著就撐著它的 DOM 物件、物件不搬（`crates/bindings/soundness.md` 已有的論證，普通成員已經靠它）；callback 的 `this` 和參數整個呼叫期間都被 V8 留著，跨操作重新解出來是同一條論證。要 root 的只剩沒有 wrapper 的中間物件。
+    - **分段，照差距排**：4k-A 回傳非整數的數字；4k-B 回傳現算的字串（token 在這一段加）；4k-C 會呼叫 script 的成員（不登記 root、少開操作）；4k-D 新的 wrapper；4k-E 非 ASCII 和要轉換的字串參數；4k-F dictionary、例外、陣列、promise；4k-G 最熱的路本身，另外研究。A 到 F 做完 `V8Front` 沒有人用，4m-3 剩下刪掉它。不選先做 C（影響最多、最複雜）。
+    - **驗收**：每段的那個呼叫在 `chrome-compare.js` 裡不比 Chrome 慢超過 1.2 倍（兩邊的 V8 版本和 build 不同，再小量不準），不只是比上一段快。
 
 ## 待決定
 
@@ -244,4 +256,5 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
 - wasm 的 front 照同樣的方式量。
 - 每次現算的字串（`style.color`、其他 getter 給的新的 `DomString`）在字串的快取裡永遠找不到（快取照位址記），每次新建 V8 的字串並登記一筆（`Weak` 加 finalizer）：`style.color` 是 `'red'` 時 4709 條指令、2664 個 cycle（4i-2 量的；決定 36 當時猜是 CSS 那一側，不是）。空字串已經不經過快取。決定 38 做了。
 - dictionary 的成員名稱每次讀都重新做成 V8 的 internalized 字串（`templates::string`）再 `Get`：一個成員約一千條指令，`new MouseEvent('x', init)`（三十個左右的成員）三萬兩千條（4j-1 量的）。Chromium 產生的 dictionary 轉換把成員名稱的 V8 字串每個 isolate 快取一份（`V8PerIsolateData::FindOrCreateEternalNameCache`），讀成員時不建字串。 決定 40 做了。
+- window 的 getter 當全域變數讀（`navigator`、`location`、`performance`、`innerWidth`、`onload`…）每次約 1700 條指令（4k 量的）：V8 不替 holder 是 dictionary mode 的 API getter 建 inline cache（全域物件一定是），每次走 `Runtime_LoadGlobalIC_Slow`。V8 留的出路是 cached accessor（`FunctionTemplate` 帶 cache 的 private symbol，`TryLookupCachedProperty`）。還沒查 Chromium 對哪些屬性用、也沒量 Chrome 同樣的讀取。 2026-11-12 量了 Chrome：一樣慢（`navigator` Chrome 94.7 ns、machopo 88.3 ns），不是差距，不排。
 - `HTMLElement` 的 constructor 每次建一個 scope 檢查 `new.target` 是不是 `HTMLElement` 本身（決定 35）：要不建 scope 拿到 realm 的 interface 物件，或換一種比法。

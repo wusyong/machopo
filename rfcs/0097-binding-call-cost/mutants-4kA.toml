@@ -1,0 +1,23 @@
+# Stage 4k-A: a result that is a number but no small integer is made by
+# V8's return value itself (`InfoState::return_number`), with no scope and
+# nothing of the whole front end's.
+test = ["cargo", "test", "-q", "-p", "bindings", "-p", "dom_js"]
+timeout = 1800
+
+[[mutant]]
+name = "a number that is no small integer goes through the whole front end"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.info.return_number(number);'''
+to = '''        self.with_front(|front| front.finish_kept_as(front::Kept::F64(number)));'''
+
+[[mutant]]
+name = "a number that is no small integer isn't returned"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.info.return_number(number);'''
+to = '''        let _ = number;'''
+
+[[mutant]]
+name = "a function's number is truncated"
+file = "crates/bindings/src/isolate_state.rs"
+from = '''        v8::ReturnValue::<v8::Value>::from_function_callback_info(self.info).set_double(value);'''
+to = '''        v8::ReturnValue::<v8::Value>::from_function_callback_info(self.info).set_double(value.trunc());'''
