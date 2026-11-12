@@ -26,7 +26,7 @@ V8 的 callback（templates.rs 的 Member<M>）
 
 拿著狀態的只有第 2 步，那時 scope 被佔住，所以 V8 不會在裡面配置、GC（下面的「V8 不在 DOM 的操作裡配置」）。
 
-**參數和結果單純的成員走另一個 front**（`info_front.rs` 的 `InfoFront`、`templates.rs` 的 `InfoMember<M>`，`bindings::StateInfoMethod`）：`dom_api` 標成 `TypedMember::PLAIN` 的（物件的 getter、setter、method，參數是字串、數字、布林、節點和 DOM 的其他物件，結果是這些、null 或沒有；表上約六成的成員），callback 只拿 V8 的 `FunctionCallbackInfo`（`bindings::StateInfo`），像 Blink 產生的 callback：
+**參數和結果單純的成員走另一個 front**（`info_front.rs` 的 `InfoFront`、`templates.rs` 的 `InfoMember<M>`，`bindings::StateInfoMethod`）：`dom_api` 標成 `TypedMember::PLAIN` 的（物件的 getter、setter、method，參數是字串、數字、布林、節點和 DOM 的其他物件，callback、`any` 的值、rest、個數不定的節點或字串，結果是這些、null 或沒有；表上九成多的 getter、setter、method），callback 只拿 V8 的 `FunctionCallbackInfo`（`bindings::StateInfo`），像 Blink 產生的 callback：
 
 ```text
 V8 的 callback（templates.rs 的 InfoMember<M>）
@@ -39,7 +39,9 @@ V8 的 callback（templates.rs 的 InfoMember<M>）
 
 一定會建新節點的成員（`createElement`、`createTextNode`、`cloneNode`…）在操作前先建好 wrapper（`InfoFront::prepare_new_node`：這時才建 scope；`createElement` 的 interface 照名稱猜，`foresee_element` 只看名稱；`cloneNode` 的先開一個讀的操作看 `this` 是哪個 interface），它是成員的區域變數（`RetType::Prepared`），操作裡 `InfoOp::ret_new_node` 收下它、直接接上節點：沒有 root、沒有操作後的事。interface 猜錯的（大寫的名稱、XML 文件的元素）那個 wrapper 浪費掉，照沒有 wrapper 的節點處理。
 
-callback 參數（listener、event handler 屬性的值、`requestAnimationFrame` 的）就是那個參數的 handle（`FrontTypes::Callback` 是 `Local<Value>`）：操作前只確認它是物件或函式，DOM 的函式在操作裡把它原樣交回 `InfoOp::store_callback`（寫進 listener 的邊）或 `same_callback`（和邊指的物件比位址，不建 `Local`），front 不留它。只有布林、數字、字串成員的 dictionary（`removeEventListener` 的 options）沒給時是預設值；給了的話成員交給 `V8Front` 讀（getter 可能執行 script），讀出來的是值。
+callback 參數（listener、event handler 屬性的值、`requestAnimationFrame` 的）就是那個參數的 handle（`FrontTypes::Callback` 是 `Local<Value>`）：操作前只確認它是物件或函式，DOM 的函式在操作裡把它原樣交回 `InfoOp::store_callback`（寫進 listener 的邊）或 `same_callback`（和邊指的物件比位址，不建 `Local`），front 不留它。只有布林、數字、字串成員的 dictionary（`removeEventListener` 的 options）沒給時是預設值；給了的話成員交給 `V8Front` 讀（getter 可能執行 script），讀出來的是值，或成員的值本身的 handle（`addEventListener` 的 `signal`、`CustomEventInit` 的 `detail`：`V8Front` 的 scope 不開 handle scope，handle 活到 callback 返回）。
+
+`any` 的參數就是參數的 handle（`FrontTypes::Any`；undefined 要換成 null 時才建 scope），`InfoOp::store_any` 寫進邊；rest（`setTimeout` 多的參數，`FrontTypes::Rest`）沒有多的參數時是 none，有才建 scope 做陣列。個數不定的節點或字串（`append`）一個一個從 info 讀：節點是 wrapper 本身，字串照字串參數借。回傳存在邊裡的值（event handler 的 getter、`event.detail`、`signal.reason`）直接從邊的 traced handle 寫進回傳值（`InfoNoGc::return_value`），不建 `Local`；event handler 的原始碼還沒編譯時，操作後交給 `V8Front` 編譯。
 
 操作裡給不出去的結果（V8 要配置的：還沒有的字串、沒有 wrapper 的節點、不是 Smi 的數字）不放在 front 裡：`InfoOp` 的 `ret_string`、`ret_node`、`ret_u32`… 回傳它（`PendingString`、節點的 root 和 interface、`f64`），`dom_api` 的回傳型別把它帶出操作（`RetType::Pending`），操作後交給 `finish_string`、`finish_node`、`finish_number`。回傳布林的成員沒有這個變數；其他 front（`V8Front`、named property 的、wasm 的）在操作裡自己留著結果，這幾個型別填 `Infallible`，那一段編掉。
 

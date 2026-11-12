@@ -898,6 +898,15 @@ impl<'s> crate::InfoNoGc<'_, 's> {
         return_wrapper(self.isolate, &mut self.rv, edge)
     }
 
+    /// As `return_wrapper`, of an edge of any value (`set_strong_value`:
+    /// a listener's callback, an event's `detail`).
+    #[inline]
+    pub fn return_value(&mut self, edge: &elise::JsEdge) -> bool {
+        // SAFETY: on the isolate's thread, the heap's (the only one that
+        // writes the edge), as `return_wrapper`'s.
+        unsafe { self.rv.set_traced(self.isolate, value_slot(edge)) }
+    }
+
     /// The callback's result from a global handle, no local handle made.
     #[inline]
     pub fn return_global<T>(&mut self, global: &v8::Global<T>)

@@ -210,11 +210,7 @@ fn a_plain_members_receiver_is_checked_by_its_signature() {
 #[test]
 fn a_member_that_isnt_plain_makes_none_of_these_scopes() {
     let mut env = env();
-    for source in [
-        "n.addEventListener('x', () => {})",
-        "n.getAttributeNames()",
-        "n.dispatchEvent(new Event('x'))",
-    ] {
+    for source in ["n.getAttributeNames()", "n.dispatchEvent(new Event('x'))"] {
         let (_, made) = scopes(&mut env, source);
         assert_eq!(made, 0, "{source}");
     }
@@ -407,6 +403,101 @@ fn a_wrapper_made_ahead_of_another_interface_is_made_again() {
     assert_eq!(env.eval("d.createElement('c-e').made"), "1");
 }
 
+/// Nodes and strings, as many as the call gives (`append`'s), are taken
+/// as they are: a node its wrapper, a string lent; what is neither is
+/// converted (`ToString`, which may run script, in the arguments' order)
+/// by the whole front end. So is `add`'s element or number.
+#[test]
+fn nodes_or_strings_are_taken_as_they_are() {
+    let mut env = env();
+    env.eval(
+        "var a = d.createElement('a'), b = d.createElement('b'), c = d.createElement('c'); \
+         var box = d.createElement('div'); \
+         var text = () => Array.from(box.childNodes, (n) => n.nodeName + (n.data ?? '')).join(',');",
+    );
+    let calls = [
+        ("box.append(a, b)", "A,B"),
+        ("box.append()", "A,B"),
+        ("box.prepend(c)", "C,A,B"),
+        ("a.after(c)", "A,C,B"),
+        ("b.before(a)", "C,A,B"),
+        ("c.replaceWith(b, c)", "B,C,A"),
+        ("box.replaceChildren(a)", "A"),
+        ("box.replaceChildren()", ""),
+    ];
+    // Without a scope, each; then again for what it does (reading the
+    // children between two leaves the next call the DOM's heap's growth
+    // to report, with a scope).
+    for (source, _) in calls {
+        let (found, made) = scopes(&mut env, source);
+        assert_eq!(found, "undefined", "{source}");
+        assert_eq!(made, 0, "{source}");
+    }
+    assert_eq!(env.eval("text()"), "");
+    for (source, children) in calls {
+        env.eval(source);
+        assert_eq!(env.eval("text()"), children, "{source}");
+    }
+    // A string makes a text node (no wrapper: nothing of V8's); what is
+    // neither is converted, in order.
+    assert_eq!(
+        env.eval("box.append('x', a, 'y'); text()"),
+        "#textx,A,#texty"
+    );
+    assert_eq!(
+        env.eval(
+            "var order = []; \
+             box.replaceChildren({ toString() { order.push(1); return 'one'; } }, b, 7, null, \
+                 { toString() { order.push(2); return 'two'; } }); \
+             text() + ' ' + order"
+        ),
+        "#textone,B,#text7,#textnull,#texttwo 1,2"
+    );
+    assert_eq!(
+        env.eval(
+            "try { box.append(a, { toString() { throw new RangeError('no'); } }); 'none' } \
+             catch (e) { e.name + ' ' + text() }"
+        ),
+        "RangeError #textone,B,#text7,#textnull,#texttwo"
+    );
+    // `add`'s `before`: an element, a number (a small integer as it is,
+    // another converted), none.
+    env.eval(
+        "var s = d.createElement('select'); \
+         var o = (v) => { var o = d.createElement('option'); o.value = v; return o; }; \
+         var first = o('1'); var values = () => Array.from(s.options, (o) => o.value).join(',');",
+    );
+    for (source, values) in [
+        ("s.add(first)", "1"),
+        ("s.add(o('2'), null)", "1,2"),
+        ("s.add(o('0'), first)", "0,1,2"),
+        ("s.add(o('x'), 1)", "0,x,1,2"),
+        ("s.add(o('y'), '1')", "0,y,x,1,2"),
+        ("s.add(o('z'), 1.5)", "0,z,y,x,1,2"),
+    ] {
+        assert_eq!(env.eval(source), "undefined", "{source}");
+        assert_eq!(env.eval("values()"), values, "{source}");
+    }
+    env.eval("var last = o('v'); s.id;");
+    for source in [
+        "s.add(last, 2)",
+        "s.add(last, first)",
+        "s.add(last)",
+        "s.add(last, null)",
+    ] {
+        assert_eq!(
+            scopes(&mut env, source),
+            ("undefined".to_owned(), 0),
+            "{source}"
+        );
+    }
+    let (_, made) = scopes(&mut env, "s.add(last, 1.5)");
+    assert!(
+        made >= 1,
+        "a number that isn't a small integer is converted"
+    );
+}
+
 /// What a plain member's call may reach (`dom_api::PLAIN_FRONT_METHODS`,
 /// `PLAIN_OP_METHODS`: what its types and its function are checked
 /// against) is what the front end given the callback's info alone has:
@@ -422,11 +513,12 @@ fn the_plain_methods_are_the_info_front_ends_own() {
     let has = |text: &str, name: &str| {
         text.contains(&format!("fn {name}(")) || text.contains(&format!("fn {name}<"))
     };
-    // The defaults that do nothing, or say there is none.
+    // The defaults that do nothing, say there is none, or only call the
+    // others (`finish_handler`).
     let missing: Vec<&str> = dom_api::PLAIN_FRONT_METHODS
         .iter()
         .copied()
-        .filter(|name| *name != "finish" && !has(front, name))
+        .filter(|name| !["finish", "finish_handler"].contains(name) && !has(front, name))
         .chain(
             dom_api::PLAIN_OP_METHODS
                 .iter()

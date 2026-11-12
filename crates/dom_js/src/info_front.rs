@@ -20,7 +20,7 @@ use dom::{
     DomString, EventTargetImpl, NameId, Node, NodeRef, NodeRoot, ObjectRef, ObjectRoot, TargetRef,
     Window, names,
 };
-use dom_api::{ApiCx, ApiError, Callback, Front, FrontTypes, OpFront};
+use dom_api::{AnyArg, ApiCx, ApiError, Callback, Front, FrontTypes, OpFront};
 use elise::JsEdge;
 use elise::Persistent;
 
@@ -77,6 +77,10 @@ impl<'s> FrontTypes for InfoFront<'s> {
     type PreparedNode = Option<(v8::Local<'s, v8::Object>, usize)>;
     /// The argument itself: an object, or a timer's string.
     type Callback = v8::Local<'s, v8::Value>;
+    /// The argument itself (or a dictionary's member's value).
+    type Any = v8::Local<'s, v8::Value>;
+    /// The arguments in a new array, made by the whole front end.
+    type Rest = v8::Local<'s, v8::Array>;
 }
 
 impl<'s> FrontTypes for InfoOp<'_, 's> {
@@ -94,6 +98,10 @@ impl<'s> FrontTypes for InfoOp<'_, 's> {
     type PreparedNode = Option<(v8::Local<'s, v8::Object>, usize)>;
     /// The argument itself: an object, or a timer's string.
     type Callback = v8::Local<'s, v8::Value>;
+    /// The argument itself (or a dictionary's member's value).
+    type Any = v8::Local<'s, v8::Value>;
+    /// The arguments in a new array, made by the whole front end.
+    type Rest = v8::Local<'s, v8::Array>;
 }
 
 impl<'s> InfoFront<'s> {
@@ -245,6 +253,44 @@ impl<'s> Front for InfoFront<'s> {
         }
         // Not a node: the whole front end's `TypeError`.
         self.with_front(|front| front.node_arg(index))
+    }
+
+    /// A node as it is; anything else a string, as `string_arg` takes
+    /// one.
+    #[inline(always)]
+    fn node_or_string_arg(
+        &mut self,
+        index: usize,
+    ) -> Option<dom_api::typed::NodeOrStr<v8::Local<'s, v8::Object>, ArgString<'s>>> {
+        let value = front::arg(&self.info.args(), index);
+        if bindings::is_wrapper::<Node>(self.info.isolate(), value) {
+            return v8::Local::<v8::Object>::try_from(value)
+                .ok()
+                .map(dom_api::typed::NodeOrStr::Node);
+        }
+        self.string_arg(index).map(dom_api::typed::NodeOrStr::Str)
+    }
+
+    /// A node as it is, a small integer as it is; anything else
+    /// converted by the whole front end.
+    #[inline(always)]
+    fn node_or_long_arg(
+        &mut self,
+        index: usize,
+    ) -> Option<Option<dom_api::typed::NodeOrLong<v8::Local<'s, v8::Object>>>> {
+        let value = front::arg(&self.info.args(), index);
+        if value.is_null_or_undefined() {
+            return Some(None);
+        }
+        if bindings::is_wrapper::<Node>(self.info.isolate(), value) {
+            return v8::Local::<v8::Object>::try_from(value)
+                .ok()
+                .map(|node| Some(dom_api::typed::NodeOrLong::Node(node)));
+        }
+        match v8::machopo::as_smi(value) {
+            Some(long) => Some(Some(dom_api::typed::NodeOrLong::Long(long))),
+            None => self.with_front(|front| front.node_or_long_arg(index)),
+        }
     }
 
     /// A string V8 had no copy of: made (and cached) now.
@@ -419,8 +465,63 @@ impl<'s> Front for InfoFront<'s> {
         self.with_front(|front| front.dict_arg(index, name))
     }
 
+    /// An event handler's source compiled, by the whole front end.
+    fn compile_event_handler(&mut self, target: &dom::TargetRoot, event_type: dom::NameId) {
+        self.with_front(|front| front.compile_event_handler(target, event_type));
+    }
+
+    /// The argument itself; null for undefined, which V8 gives a scope.
+    #[inline(always)]
+    fn any_arg(&mut self, index: usize) -> AnyArg<v8::Local<'s, v8::Value>> {
+        let value = front::arg(&self.info.args(), index);
+        if value.is_undefined() {
+            return self.with_front(|front| front.any_arg(index));
+        }
+        AnyArg(value)
+    }
+
+    /// The argument itself; a new `AbortError` for undefined, made by
+    /// the whole front end.
+    #[inline(always)]
+    fn abort_reason_arg(&mut self, index: usize) -> Option<AnyArg<v8::Local<'s, v8::Value>>> {
+        let value = front::arg(&self.info.args(), index);
+        if value.is_undefined() {
+            return self.with_front(|front| front.abort_reason_arg(index));
+        }
+        Some(AnyArg(value))
+    }
+
+    /// None with no more arguments (most calls: `setTimeout(f, 0)`);
+    /// else a new array of them, made by the whole front end.
+    #[inline(always)]
+    fn rest_arg(&mut self, index: usize) -> Option<v8::Local<'s, v8::Array>> {
+        if usize::try_from(self.info.args().length()).unwrap_or(0) <= index {
+            return None;
+        }
+        self.with_front(|front| front.rest_arg(index))
+    }
+
     // A dictionary's members are read by the whole front end (a getter
-    // may run script): what it gives is a value.
+    // may run script): what it gives is a value, or the member's value
+    // itself (a handle of the callback's own handle scope, which the
+    // front end's scope leaves it in).
+    fn dict_any(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: &str,
+    ) -> Option<Option<AnyArg<v8::Local<'s, v8::Value>>>> {
+        self.with_front(|front| front.dict_any(dict, member))
+    }
+
+    fn dict_object<T: elise::HeapType>(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: &str,
+        interface: &str,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        self.with_front(|front| front.dict_object::<T>(dict, member, interface))
+    }
+
     fn dict_bool(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
@@ -501,8 +602,12 @@ impl<'s> Front for InfoFront<'s> {
     /// anything else is `ToInt32`'s, which may run script.
     #[inline(always)]
     fn i32_arg(&mut self, index: usize) -> Option<i32> {
-        match v8::machopo::as_smi(front::arg(&self.info.args(), index)) {
+        let value = front::arg(&self.info.args(), index);
+        match v8::machopo::as_smi(value) {
             Some(value) => Some(value),
+            // A missing optional one (`setTimeout(f)`): `ToInt32` of
+            // undefined.
+            None if value.is_undefined() => Some(0),
             None => self.with_front(|front| front.i32_arg(index)),
         }
     }
@@ -510,8 +615,10 @@ impl<'s> Front for InfoFront<'s> {
     /// As `i32_arg`: a negative small integer wraps, as `ToUint32` does.
     #[inline(always)]
     fn u32_arg(&mut self, index: usize) -> Option<u32> {
-        match v8::machopo::as_smi(front::arg(&self.info.args(), index)) {
+        let value = front::arg(&self.info.args(), index);
+        match v8::machopo::as_smi(value) {
             Some(value) => Some(value.cast_unsigned()),
+            None if value.is_undefined() => Some(0),
             None => self.with_front(|front| front.u32_arg(index)),
         }
     }
@@ -669,6 +776,20 @@ impl<'s> OpFront for InfoOp<'_, 's> {
         }
     }
 
+    #[inline(always)]
+    fn store_any(
+        &mut self,
+        _: &ApiCx<'_, '_>,
+        edge: &JsEdge,
+        value: AnyArg<v8::Local<'s, v8::Value>>,
+    ) {
+        self.no_gc.set_strong_value(edge, value.0);
+    }
+
+    fn store_rest(&mut self, _: &ApiCx<'_, '_>, edge: &JsEdge, rest: v8::Local<'s, v8::Array>) {
+        self.no_gc.set_strong_value(edge, rest.into());
+    }
+
     /// The engine's number for the callback (V8's identity hash).
     fn callback_number(&mut self, callback: Callback<v8::Local<'s, v8::Value>>) -> u32 {
         v8::Local::<v8::Object>::try_from(callback.0).map_or(0, front::number)
@@ -680,6 +801,30 @@ impl<'s> OpFront for InfoOp<'_, 's> {
     #[inline(always)]
     fn ret_null(&mut self) {
         self.no_gc.ret().set_null();
+    }
+
+    /// The value as it is, from the edge's own handle (no local made);
+    /// undefined if none.
+    #[inline(always)]
+    fn ret_any<'gc>(&mut self, _: &ApiCx<'_, 'gc>, edge: &'gc JsEdge) {
+        if !self.no_gc.return_value(edge) {
+            self.no_gc.ret().set_undefined();
+        }
+    }
+
+    #[inline(always)]
+    fn ret_any_or_null<'gc>(&mut self, _: &ApiCx<'_, 'gc>, edge: &'gc JsEdge) {
+        if !self.no_gc.return_value(edge) {
+            self.no_gc.ret().set_null();
+        }
+    }
+
+    #[inline(always)]
+    fn ret_any_or_undefined<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, edge: Option<&'gc JsEdge>) {
+        match edge {
+            Some(edge) => self.ret_any(cx, edge),
+            None => self.no_gc.ret().set_undefined(),
+        }
     }
 
     #[inline(always)]

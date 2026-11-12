@@ -280,8 +280,6 @@ struct TestFront<'d> {
     listeners: Listeners,
     /// The callbacks taken, by `CallbackArg`.
     callbacks: Vec<u64>,
-    /// The rest arguments taken: their count.
-    rest: u64,
 }
 
 /// A node or object argument.
@@ -326,7 +324,6 @@ impl<'d> TestFront<'d> {
             hooks: Hooks::default(),
             listeners: dom.1.clone(),
             callbacks: Vec::new(),
-            rest: 0,
         }
     }
 
@@ -345,6 +342,9 @@ impl FrontTypes for TestFront<'_> {
     type PendingObject = std::convert::Infallible;
     type PreparedNode = ();
     type Callback = usize;
+    type Any = std::convert::Infallible;
+    /// The rest arguments: their count.
+    type Rest = u64;
 }
 
 impl<'d> Front for TestFront<'d> {
@@ -467,7 +467,7 @@ impl<'d> Front for TestFront<'d> {
         _: &Self::Dict,
         _: &str,
         _: &str,
-    ) -> Option<Option<dom_api::typed::KeptObject>> {
+    ) -> Option<Option<Taken>> {
         Some(None)
     }
 
@@ -586,12 +586,9 @@ impl<'d> Front for TestFront<'d> {
     }
 
     /// Kept as their count.
-    fn rest_arg(&mut self, index: usize) -> Option<dom_api::RestArg> {
+    fn rest_arg(&mut self, index: usize) -> Option<u64> {
         let count = self.args.len().saturating_sub(index);
-        (count > 0).then(|| {
-            self.rest = count as u64;
-            dom_api::RestArg
-        })
+        (count > 0).then_some(count as u64)
     }
 
     fn object_arg<T: elise::HeapType>(
@@ -781,8 +778,8 @@ impl OpFront for TestFront<'_> {
         string
     }
 
-    fn store_rest(&mut self, cx: &ApiCx<'_, '_>, edge: &elise::JsEdge, _: dom_api::RestArg) {
-        edge.set_embedder_word(cx.gc, self.rest);
+    fn store_rest(&mut self, cx: &ApiCx<'_, '_>, edge: &elise::JsEdge, rest: u64) {
+        edge.set_embedder_word(cx.gc, rest);
     }
 
     fn ret_any<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, edge: &'gc elise::JsEdge) {

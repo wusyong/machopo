@@ -70,7 +70,7 @@ pub(crate) fn abort<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, AbortController>,
-    reason: AnyArg,
+    reason: AnyArg<O::Any>,
 ) -> Result<Option<AbortSteps<'gc>>, ApiError> {
     let signal = cx.abort_controller_signal(this);
     if cx.abort_signal_aborted(signal) {
@@ -115,7 +115,7 @@ pub(crate) fn signal_abort<H: ScriptHost>(host: &mut H, signal: &Persistent<Even
 pub(crate) fn abort_signal<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
-    reason: AnyArg,
+    reason: AnyArg<O::Any>,
 ) -> Result<Gc<'gc, EventTargetImpl>, ApiError> {
     let window = current_window(op, cx, "AbortSignal")?;
     let signal = cx.create_abort_signal(window);

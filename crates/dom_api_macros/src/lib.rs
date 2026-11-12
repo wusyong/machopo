@@ -43,7 +43,7 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as Tokens};
-use quote::{format_ident, quote};
+use quote::{ToTokens, format_ident, quote};
 use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
@@ -1985,8 +1985,22 @@ fn dictionary_items(dictionary: &DictionaryDef) -> Tokens {
         local("value"),
         local("dict"),
     );
+    // A member whose type names the front end's (`T::Node`, `T::Any`) is
+    // one of its handles: the dictionary is then of those types (its
+    // parameters, `TNode`, `TAny`), which a front end and its side in
+    // the operation share.
+    let mut kinds: Vec<Ident> = Vec::new();
+    for member in members {
+        fronts_types(member.ty.to_token_stream(), &mut kinds);
+    }
+    let handle = |member: &DictMemberDef| {
+        let mut kinds = Vec::new();
+        fronts_types(member.ty.to_token_stream(), &mut kinds);
+        !kinds.is_empty()
+    };
+    let of_front = !kinds.is_empty();
     let fields = members.iter().map(|member| {
-        let (name, ty) = (&member.name, &member.ty);
+        let (name, ty) = (&member.name, of_parameters(member.ty.to_token_stream()));
         quote!(pub #name: #ty)
     });
     let defaults = members.iter().map(|member| {
@@ -1995,14 +2009,20 @@ fn dictionary_items(dictionary: &DictionaryDef) -> Tokens {
     });
     let mut ordered: Vec<&DictMemberDef> = members.iter().collect();
     ordered.sort_by_key(|member| member.name.unraw().to_string());
-    let member_types = ordered.iter().map(|member| &member.ty);
+    let member_types = ordered
+        .iter()
+        .filter(|member| !handle(member))
+        .map(|member| &member.ty);
     let reads = ordered.iter().map(|member| {
         let (field, ty) = (&member.name, &member.ty);
         let js = js_name(field);
+        let member = if handle(member) {
+            quote!(<#ty as #api::typed::DictHandle<T>>)
+        } else {
+            quote!(<#ty as #api::typed::DictMember>)
+        };
         quote! {
-            if let ::std::option::Option::Some(#taken) =
-                <#ty as #api::typed::DictMember>::read(#front, &#dict, #js)?
-            {
+            if let ::std::option::Option::Some(#taken) = #member::read(#front, &#dict, #js)? {
                 #value.#field = #taken;
             }
         }
@@ -2020,14 +2040,32 @@ fn dictionary_items(dictionary: &DictionaryDef) -> Tokens {
         }
     });
     let name_str = LitStr::new(&name.to_string(), name.span());
-    quote! {
+    // The dictionary as a type: of the front end `T` in scope, of any,
+    // and its declaration's parameters.
+    let (of_t, of_any, params, impl_params) = if of_front {
+        let parameters: Vec<Ident> = kinds
+            .iter()
+            .map(|kind| format_ident!("T{}", kind))
+            .collect();
+        (
+            quote!(#name<#(T::#kinds),*>),
+            quote!(#name<#(#parameters),*>),
+            // Named with none where no front end is meant (the table's
+            // types: an argument's type names the dictionary).
+            quote!(<#(#parameters = ::std::convert::Infallible),*>),
+            quote!(<#(#parameters),*>),
+        )
+    } else {
+        (quote!(#name), quote!(#name), quote!(), quote!())
+    };
+    let common = quote! {
         #(#attrs)*
         #[derive(Debug, Clone, PartialEq)]
-        pub struct #name {
+        pub struct #name #params {
             #(#fields,)*
         }
 
-        impl ::std::default::Default for #name {
+        impl #impl_params ::std::default::Default for #of_any {
             fn default() -> Self {
                 Self {
                     #(#defaults,)*
@@ -2038,15 +2076,44 @@ fn dictionary_items(dictionary: &DictionaryDef) -> Tokens {
         impl #api::typed::Dictionary for #name {
             const NAME: &'static str = #name_str;
             const PLAIN: bool = true #(&& <#member_types as #api::typed::DictMember>::PLAIN)*;
+            type Of<T: #api::typed::FrontTypes> = #of_t;
 
-            fn read<F: #api::typed::Front>(#front: &mut F, #index: usize) -> ::std::option::Option<#name> {
-                let mut #value = <#name as ::std::default::Default>::default();
+            fn read<T: #api::typed::Front>(#front: &mut T, #index: usize) -> ::std::option::Option<#of_t> {
+                let mut #value = <#of_t as ::std::default::Default>::default();
                 if let ::std::option::Option::Some(#dict) = #front.dict_arg(#index, #name_str)? {
                     #(#reads)*
                 }
                 ::std::option::Option::Some(#value)
             }
         }
+
+        impl #api::typed::ArgType for #name {
+            const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Dictionary(#name_str);
+            const PLAIN: bool = <#name as #api::typed::Dictionary>::PLAIN;
+            const UNDEFINED_IS_DEFAULT: bool = true;
+            type Taken<T: #api::typed::FrontTypes> = #of_t;
+            type Param<'a, 'gc, T: #api::typed::FrontTypes + 'a> = &'a #of_t;
+
+            fn take<T: #api::typed::Front>(#front: &mut T, #index: usize) -> ::std::option::Option<#of_t> {
+                <#name as #api::typed::Dictionary>::read(#front, #index)
+            }
+
+            fn param<'a, 'gc, T: #api::typed::OpFront + 'a>(
+                _: &mut T,
+                _: &#api::ApiCx<'_, 'gc>,
+                #taken: &'a #of_t,
+                _: usize,
+            ) -> ::std::result::Result<&'a #of_t, #api::ApiError> {
+                ::std::result::Result::Ok(#taken)
+            }
+        }
+    };
+    // A result gives values: not a dictionary of a front end's handles.
+    if of_front {
+        return common;
+    }
+    quote! {
+        #common
 
         impl #api::typed::RetType for #name {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Dictionary(#name_str);
@@ -2068,28 +2135,65 @@ fn dictionary_items(dictionary: &DictionaryDef) -> Tokens {
                 #front.ret_dictionary(#dict);
             }
         }
-
-        impl #api::typed::ArgType for #name {
-            const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Dictionary(#name_str);
-            const PLAIN: bool = <#name as #api::typed::Dictionary>::PLAIN;
-            const UNDEFINED_IS_DEFAULT: bool = true;
-            type Taken<T: #api::typed::FrontTypes> = #name;
-            type Param<'a, 'gc, T: #api::typed::FrontTypes> = &'a #name;
-
-            fn take<F: #api::typed::Front>(#front: &mut F, #index: usize) -> ::std::option::Option<#name> {
-                <#name as #api::typed::Dictionary>::read(#front, #index)
-            }
-
-            fn param<'a, 'gc, O: #api::typed::OpFront>(
-                _: &mut O,
-                _: &#api::ApiCx<'_, 'gc>,
-                #taken: &'a #name,
-                _: usize,
-            ) -> ::std::result::Result<&'a #name, #api::ApiError> {
-                ::std::result::Result::Ok(#taken)
-            }
-        }
     }
+}
+
+/// The front end's types a type's tokens name (`T::Node`: `Node`), each
+/// once, added to `kinds`.
+fn fronts_types(tokens: Tokens, kinds: &mut Vec<Ident>) {
+    let _ = rewrite_fronts_types(tokens, &mut |kind| {
+        if !kinds.contains(kind) {
+            kinds.push(kind.clone());
+        }
+    });
+}
+
+/// A type's tokens with the front end's types they name made a
+/// dictionary's parameters (`T::Node`: `TNode`).
+fn of_parameters(tokens: Tokens) -> Tokens {
+    rewrite_fronts_types(tokens, &mut |_| {})
+}
+
+fn rewrite_fronts_types(tokens: Tokens, found: &mut dyn FnMut(&Ident)) -> Tokens {
+    use proc_macro2::TokenTree;
+    let tokens: Vec<TokenTree> = tokens.into_iter().collect();
+    let mut out = Vec::with_capacity(tokens.len());
+    let mut at = 0;
+    while at < tokens.len() {
+        // `T`, `:`, `:`, a name.
+        if let (
+            TokenTree::Ident(t),
+            Some(TokenTree::Punct(first)),
+            Some(TokenTree::Punct(second)),
+            Some(TokenTree::Ident(kind)),
+        ) = (
+            &tokens[at],
+            tokens.get(at + 1),
+            tokens.get(at + 2),
+            tokens.get(at + 3),
+        ) && t == "T"
+            && first.as_char() == ':'
+            && second.as_char() == ':'
+        {
+            found(kind);
+            out.push(TokenTree::Ident(format_ident!("T{}", kind)));
+            at += 4;
+            continue;
+        }
+        out.push(match &tokens[at] {
+            TokenTree::Group(group) => {
+                let mut rewritten = proc_macro2::Group::new(
+                    group.delimiter(),
+                    rewrite_fronts_types(group.stream(), found),
+                );
+                rewritten.set_span(group.span());
+                TokenTree::Group(rewritten)
+            }
+            token => token.clone(),
+        });
+        at += 1;
+    }
+    out.into_iter().collect()
 }
 
 /// The calls' locals, hygienic.
@@ -2141,13 +2245,13 @@ fn object_types(name: &Ident) -> Tokens {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Node(stringify!(#name));
             const PLAIN: bool = true;
             type Taken<T: #api::typed::FrontTypes> = T::Node;
-            type Param<'a, 'gc, T: #api::typed::FrontTypes> = #object::Ref<'gc>;
+            type Param<'a, 'gc, T: #api::typed::FrontTypes + 'a> = #object::Ref<'gc>;
 
             fn take<F: #api::typed::Front>(#front: &mut F, #index: usize) -> ::std::option::Option<F::Node> {
                 #api::typed::take_object::<#name, F>(#front, #index)
             }
 
-            fn param<'a, 'gc, O: #api::typed::OpFront>(
+            fn param<'a, 'gc, O: #api::typed::OpFront + 'a>(
                 #front: &mut O,
                 #cx: &#api::ApiCx<'_, 'gc>,
                 #taken: &'a O::Node,
@@ -2163,7 +2267,7 @@ fn object_types(name: &Ident) -> Tokens {
             // WebIDL's nullable types convert undefined to null.
             const UNDEFINED_IS_DEFAULT: bool = true;
             type Taken<T: #api::typed::FrontTypes> = ::std::option::Option<T::Node>;
-            type Param<'a, 'gc, T: #api::typed::FrontTypes> = ::std::option::Option<#object::Ref<'gc>>;
+            type Param<'a, 'gc, T: #api::typed::FrontTypes + 'a> = ::std::option::Option<#object::Ref<'gc>>;
 
             fn take<F: #api::typed::Front>(
                 #front: &mut F,
@@ -2172,7 +2276,7 @@ fn object_types(name: &Ident) -> Tokens {
                 #object::take_arg(#front, #index, stringify!(#name))
             }
 
-            fn param<'a, 'gc, O: #api::typed::OpFront>(
+            fn param<'a, 'gc, O: #api::typed::OpFront + 'a>(
                 #front: &mut O,
                 #cx: &#api::ApiCx<'_, 'gc>,
                 #taken: &'a ::std::option::Option<O::Node>,
@@ -2240,7 +2344,7 @@ fn callback_items(callback: &CallbackDef) -> Tokens {
             // takes it as none).
             const UNDEFINED_IS_DEFAULT: bool = true;
             type Taken<T: #api::typed::FrontTypes> = ::std::option::Option<#api::typed::Callback<T::Callback>>;
-            type Param<'a, 'gc, T: #api::typed::FrontTypes> = ::std::option::Option<#api::typed::Callback<T::Callback>>;
+            type Param<'a, 'gc, T: #api::typed::FrontTypes + 'a> = ::std::option::Option<#api::typed::Callback<T::Callback>>;
 
             fn take<F: #api::typed::Front>(
                 #front: &mut F,
@@ -2249,7 +2353,7 @@ fn callback_items(callback: &CallbackDef) -> Tokens {
                 #front.callback_arg(#index, #name_str)
             }
 
-            fn param<'a, 'gc, O: #api::typed::OpFront>(
+            fn param<'a, 'gc, O: #api::typed::OpFront + 'a>(
                 _: &mut O,
                 _: &#api::ApiCx<'_, 'gc>,
                 #taken: &'a ::std::option::Option<#api::typed::Callback<O::Callback>>,
@@ -2291,13 +2395,13 @@ fn node_types(name: &Ident) -> Tokens {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Node(stringify!(#name));
             const PLAIN: bool = true;
             type Taken<T: #api::typed::FrontTypes> = T::Node;
-            type Param<'a, 'gc, T: #api::typed::FrontTypes> = ::dom::NodeRef<'gc>;
+            type Param<'a, 'gc, T: #api::typed::FrontTypes + 'a> = ::dom::NodeRef<'gc>;
 
             fn take<F: #api::typed::Front>(#front: &mut F, #index: usize) -> ::std::option::Option<F::Node> {
                 #api::typed::take_node::<#name, F>(#front, #index)
             }
 
-            fn param<'a, 'gc, O: #api::typed::OpFront>(
+            fn param<'a, 'gc, O: #api::typed::OpFront + 'a>(
                 #front: &mut O,
                 #cx: &#api::ApiCx<'_, 'gc>,
                 #taken: &'a O::Node,
@@ -2330,7 +2434,7 @@ fn node_types(name: &Ident) -> Tokens {
             // takes it as none).
             const UNDEFINED_IS_DEFAULT: bool = true;
             type Taken<T: #api::typed::FrontTypes> = ::std::option::Option<T::Node>;
-            type Param<'a, 'gc, T: #api::typed::FrontTypes> = ::std::option::Option<::dom::NodeRef<'gc>>;
+            type Param<'a, 'gc, T: #api::typed::FrontTypes + 'a> = ::std::option::Option<::dom::NodeRef<'gc>>;
 
             fn take<F: #api::typed::Front>(
                 #front: &mut F,
@@ -2339,7 +2443,7 @@ fn node_types(name: &Ident) -> Tokens {
                 #front.node_arg(#index)
             }
 
-            fn param<'a, 'gc, O: #api::typed::OpFront>(
+            fn param<'a, 'gc, O: #api::typed::OpFront + 'a>(
                 #front: &mut O,
                 #cx: &#api::ApiCx<'_, 'gc>,
                 #taken: &'a ::std::option::Option<O::Node>,

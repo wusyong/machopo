@@ -29,8 +29,7 @@ use dom::{
 };
 use dom_api::typed::{BlobPartArg, Radius, Uint8ClampedArg};
 use dom_api::{
-    AnyArg, ApiCx, ApiError, Callback, ConstructorInfo, Front, FrontTypes, HtmlConstructed,
-    OpFront, RestArg,
+    AnyArg, ApiCx, ApiError, Callback, ConstructorInfo, Front, FrontTypes, HtmlConstructed, OpFront,
 };
 use elise::{JsEdge, Persistent};
 
@@ -256,13 +255,11 @@ pub(crate) struct Call<'s, 'r> {
     /// The current realm's global, found before the operation of a
     /// constructor that may ask for its window (`prepare_window`).
     window: Option<v8::Local<'s, v8::Object>>,
-    /// The callback or `any` argument taken (`Callback(0)`, `AnyArg(0)`:
-    /// no member takes two), a word every call clears, not a `Vec` it makes
-    /// and drops: an object (a listener's callback, a timer's function), a
-    /// timer's string, or any value (a `CustomEvent`'s `detail`).
+    /// The callback argument taken (`Callback(0)`: no member takes two),
+    /// a word every call clears, not a `Vec` it makes and drops: an
+    /// object (a listener's callback, a timer's function) or a timer's
+    /// string.
     callback: Option<v8::Local<'s, v8::Value>>,
-    /// The rest arguments' array taken (`RestArg`).
-    rest: Option<v8::Local<'s, v8::Array>>,
     /// What few members' calls hold (`RareCall`): one word each call
     /// clears and drops, not a field each (three cost every call about 23
     /// instructions).
@@ -425,7 +422,6 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
                 prepared: None,
                 window: None,
                 callback: None,
-                rest: None,
                 rare: ManuallyDrop::new(None),
             },
         }
@@ -1808,6 +1804,9 @@ impl<'s, A: CallArgs<'s>> FrontTypes for V8Front<'_, 's, '_, '_, A> {
     /// Which of the call\'s kept callbacks (`Call::callback`, or the
     /// second: `RareCall::second_callback`).
     type Callback = usize;
+    type Any = v8::Local<'s, v8::Value>;
+    /// The arguments in a new array.
+    type Rest = v8::Local<'s, v8::Array>;
 }
 
 impl<'s, A: CallArgs<'s>> FrontTypes for V8Op<'_, 's, '_, '_, A> {
@@ -1822,6 +1821,9 @@ impl<'s, A: CallArgs<'s>> FrontTypes for V8Op<'_, 's, '_, '_, A> {
     /// Which of the call\'s kept callbacks (`Call::callback`, or the
     /// second: `RareCall::second_callback`).
     type Callback = usize;
+    type Any = v8::Local<'s, v8::Value>;
+    /// The arguments in a new array.
+    type Rest = v8::Local<'s, v8::Array>;
 }
 
 impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
@@ -2067,32 +2069,22 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
         member: &str,
-    ) -> Option<Option<AnyArg>> {
+    ) -> Option<Option<AnyArg<v8::Local<'s, v8::Value>>>> {
         let scope = self.scope.scope();
         let key = templates::string(scope, member);
         let value = dict.get(scope, key.into())?;
         if value.is_undefined() {
             return Some(None);
         }
-        assert!(
-            self.call.callback.is_none(),
-            "a member takes one callback or `any`"
-        );
-        self.call.callback = Some(value);
-        Some(Some(AnyArg(0)))
+        Some(Some(AnyArg(value)))
     }
 
-    fn any_arg(&mut self, index: usize) -> AnyArg {
+    fn any_arg(&mut self, index: usize) -> AnyArg<v8::Local<'s, v8::Value>> {
         let mut value = arg(self.args, index);
         if value.is_undefined() {
             value = v8::null(self.scope.scope()).into();
         }
-        assert!(
-            self.call.callback.is_none(),
-            "a member takes one callback or `any`"
-        );
-        self.call.callback = Some(value);
-        AnyArg(0)
+        AnyArg(value)
     }
 
     fn target_arg(
@@ -2255,7 +2247,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
 
     /// The value, or a new `AbortError` of the current realm for
     /// undefined (Blink's `AbortController::abort` makes it then).
-    fn abort_reason_arg(&mut self, index: usize) -> Option<AnyArg> {
+    fn abort_reason_arg(&mut self, index: usize) -> Option<AnyArg<v8::Local<'s, v8::Value>>> {
         let mut value = arg(self.args, index);
         if value.is_undefined() {
             value = exception::new_dom_exception(
@@ -2265,12 +2257,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
             )?
             .into();
         }
-        assert!(
-            self.call.callback.is_none(),
-            "a member takes one callback or `any`"
-        );
-        self.call.callback = Some(value);
-        Some(AnyArg(0))
+        Some(AnyArg(value))
     }
 
     fn objects_arg<T: elise::HeapType>(
@@ -2298,13 +2285,13 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         Some(objects)
     }
 
-    /// Kept beside the call's callback (`addEventListener`'s `signal`).
+    /// The member's value itself (`addEventListener`'s `signal`).
     fn dict_object<T: elise::HeapType>(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
         member: &str,
         interface: &str,
-    ) -> Option<Option<dom_api::typed::KeptObject>> {
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
         let scope = self.scope.scope();
         let key = templates::string(scope, member);
         let value = dict.get(scope, key.into())?;
@@ -2317,7 +2304,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
             ));
             return None;
         }
-        Some(Some(self.keep_object(value)))
+        Some(v8::Local::<v8::Object>::try_from(value).ok())
     }
 
     fn dict_nullable_object(
@@ -2682,14 +2669,13 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
 
     /// A new array, made before the operation (the engine's heap isn't
     /// touched in one).
-    fn rest_arg(&mut self, index: usize) -> Option<RestArg> {
+    fn rest_arg(&mut self, index: usize) -> Option<v8::Local<'s, v8::Array>> {
         let len = usize::try_from(self.args.length()).unwrap_or(0);
         if len <= index {
             return None;
         }
         let values: Vec<_> = (index..len).map(|index| arg(self.args, index)).collect();
-        self.call.rest = Some(v8::Array::new_with_elements(self.scope.scope(), &values));
-        Some(RestArg)
+        Some(v8::Array::new_with_elements(self.scope.scope(), &values))
     }
 
     fn object_arg<T: elise::HeapType>(
@@ -3395,10 +3381,13 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
         )
     }
 
-    fn store_any(&mut self, _: &ApiCx<'_, '_>, edge: &JsEdge, value: AnyArg) {
-        let AnyArg(_) = value;
-        let taken = self.call.callback.expect("the value taken");
-        self.no_gc.set_strong_value(edge, taken);
+    fn store_any(
+        &mut self,
+        _: &ApiCx<'_, '_>,
+        edge: &JsEdge,
+        value: AnyArg<v8::Local<'s, v8::Value>>,
+    ) {
+        self.no_gc.set_strong_value(edge, value.0);
     }
 
     /// Thrown after the operation, as a traversal's filter's is
@@ -3498,10 +3487,8 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
         self.keep(Kept::Dictionary(members));
     }
 
-    fn store_rest(&mut self, _: &ApiCx<'_, '_>, edge: &JsEdge, rest: RestArg) {
-        let RestArg = rest;
-        self.no_gc
-            .set_strong_value(edge, self.call.rest.expect("the rest taken").into());
+    fn store_rest(&mut self, _: &ApiCx<'_, '_>, edge: &JsEdge, rest: v8::Local<'s, v8::Array>) {
+        self.no_gc.set_strong_value(edge, rest.into());
     }
 
     fn same_callback(

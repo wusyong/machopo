@@ -1,0 +1,240 @@
+# Stage 4e: a value of any type, a call's rest arguments and a
+# dictionary's object are the front end's handles (`FrontTypes`' `Any`,
+# `Rest`; a dictionary of its handle types); nodes or strings and an
+# element or a number taken from the callback's info; an event handler's
+# getter one operation, its uncompiled source compiled after it; any
+# value as a result from its edge's handle.
+test = ["cargo", "test", "-q", "-p", "dom_api", "-p", "dom_js", "-p", "dom_wasm"]
+timeout = 1800
+
+[[mutant]]
+name = "a node among nodes or strings is converted to a string"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if bindings::is_wrapper::<Node>(self.info.isolate(), value) {
+            return v8::Local::<v8::Object>::try_from(value)
+                .ok()
+                .map(dom_api::typed::NodeOrStr::Node);
+        }
+        self.string_arg(index).map(dom_api::typed::NodeOrStr::Str)'''
+to = '''        self.string_arg(index).map(dom_api::typed::NodeOrStr::Str)'''
+
+[[mutant]]
+name = "a small integer for an element or a number is 0"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            Some(long) => Some(Some(dom_api::typed::NodeOrLong::Long(long))),'''
+to = '''            Some(_) => Some(Some(dom_api::typed::NodeOrLong::Long(0))),'''
+
+[[mutant]]
+name = "an element for an element or a number is converted"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if bindings::is_wrapper::<Node>(self.info.isolate(), value) {
+            return v8::Local::<v8::Object>::try_from(value)
+                .ok()
+                .map(|node| Some(dom_api::typed::NodeOrLong::Node(node)));
+        }
+        match v8::machopo::as_smi(value) {'''
+to = '''        match v8::machopo::as_smi(value) {'''
+
+[[mutant]]
+name = "an undefined any value stays undefined"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if value.is_undefined() {
+            return self.with_front(|front| front.any_arg(index));
+        }
+        AnyArg(value)'''
+to = '''        AnyArg(value)'''
+
+[[mutant]]
+name = "no rest arguments are taken"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.with_front(|front| front.rest_arg(index))'''
+to = '''        None'''
+
+[[mutant]]
+name = "no rest arguments still ask the whole front end"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if usize::try_from(self.info.args().length()).unwrap_or(0) <= index {
+            return None;
+        }
+        self.with_front(|front| front.rest_arg(index))'''
+to = '''        self.with_front(|front| front.rest_arg(index))'''
+
+[[mutant]]
+name = "an any value isn't stored"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        value: AnyArg<v8::Local<'s, v8::Value>>,
+    ) {
+        self.no_gc.set_strong_value(edge, value.0);
+    }
+
+    fn store_rest('''
+to = '''        value: AnyArg<v8::Local<'s, v8::Value>>,
+    ) {
+        let _ = (edge, value);
+    }
+
+    fn store_rest('''
+
+[[mutant]]
+name = "rest arguments aren't stored"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.no_gc.set_strong_value(edge, rest.into());
+    }
+
+    /// The engine's number for the callback (V8's identity hash).'''
+to = '''        let _ = (edge, rest);
+    }
+
+    /// The engine's number for the callback (V8's identity hash).'''
+
+[[mutant]]
+name = "a dictionary's object is never there"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.with_front(|front| front.dict_object::<T>(dict, member, interface))'''
+to = '''        let _ = (dict, member, interface);
+        Some(None)'''
+
+[[mutant]]
+name = "a dictionary's object of another type is taken"
+file = "crates/dom_js/src/front.rs"
+from = '''        if !bindings::is_wrapper::<T>(self.scope.scope(), value) {
+            self.throw_type_error(&format!(
+                "Failed to read the '{member}' property: Failed to convert value to '{interface}'."
+            ));
+            return None;
+        }
+        Some(v8::Local::<v8::Object>::try_from(value).ok())'''
+to = '''        Some(v8::Local::<v8::Object>::try_from(value).ok())'''
+
+[[mutant]]
+name = "a signal that isn't an abort signal is taken"
+file = "crates/dom_api/src/event_target.rs"
+from = '''            if !cx.is_abort_signal(signal) {'''
+to = '''            if false && !cx.is_abort_signal(signal) {'''
+
+[[mutant]]
+name = "a missing integer asks the whole front end"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            // A missing optional one (`setTimeout(f)`): `ToInt32` of
+            // undefined.
+            None if value.is_undefined() => Some(0),'''
+to = ''''''
+
+[[mutant]]
+name = "a missing unsigned integer asks the whole front end"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            Some(value) => Some(value.cast_unsigned()),
+            None if value.is_undefined() => Some(0),'''
+to = '''            Some(value) => Some(value.cast_unsigned()),'''
+
+[[mutant]]
+name = "a missing integer is 1"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            Some(value) => Some(value.cast_unsigned()),
+            None if value.is_undefined() => Some(0),'''
+to = '''            Some(value) => Some(value.cast_unsigned()),
+            None if value.is_undefined() => Some(1),'''
+
+[[mutant]]
+name = "any value as a result is undefined"
+file = "crates/dom_js/src/info_front.rs"
+from = '''    fn ret_any<'gc>(&mut self, _: &ApiCx<'_, 'gc>, edge: &'gc JsEdge) {
+        if !self.no_gc.return_value(edge) {
+            self.no_gc.ret().set_undefined();
+        }'''
+to = '''    fn ret_any<'gc>(&mut self, _: &ApiCx<'_, 'gc>, edge: &'gc JsEdge) {
+        let _ = edge;
+        {
+            self.no_gc.ret().set_undefined();
+        }'''
+
+[[mutant]]
+name = "no value as a result is undefined, not null"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if !self.no_gc.return_value(edge) {
+            self.no_gc.ret().set_null();
+        }'''
+to = '''        if !self.no_gc.return_value(edge) {
+            self.no_gc.ret().set_undefined();
+        }'''
+
+[[mutant]]
+name = "no edge as a result is null, not undefined"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            None => self.no_gc.ret().set_undefined(),
+        }
+    }'''
+to = '''            None => self.no_gc.ret().set_null(),
+        }
+    }'''
+
+[[mutant]]
+name = "an uncompiled handler is given as it is"
+file = "crates/dom_api/src/handlers.rs"
+from = '''        Some(listener) if cx.handler_uncompiled(listener) => {
+            HandlerValue::Uncompiled(target, event_type)
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "an uncompiled handler isn't compiled"
+file = "crates/dom_api/src/typed.rs"
+from = '''        self.compile_event_handler(target, event_type);
+        self.read(|cx, op| {'''
+to = '''        self.read(|cx, op| {'''
+
+[[mutant]]
+name = "an uncompiled handler is null after the operation"
+file = "crates/dom_api/src/typed.rs"
+from = '''        if let Some((target, event_type)) = pending {
+            front.finish_handler(&target, event_type);
+        }'''
+to = '''        let _ = (front, pending);'''
+
+[[mutant]]
+name = "the info front end compiles no handler"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.with_front(|front| front.compile_event_handler(target, event_type));'''
+to = '''        let _ = (target, event_type);'''
+
+[[mutant]]
+name = "a body's window's handler is its own"
+file = "crates/dom_api/src/handlers.rs"
+from = '''    Ok(match element_target(cx, this, T) {
+        Some(target) => current_value(cx, target, T),
+        None => HandlerValue::None,
+    })'''
+to = '''    Ok(current_value(cx, TargetRef::Node(this), T))'''
+
+[[mutant]]
+name = "an event handler's getter isn't plain"
+file = "crates/dom_api/src/typed.rs"
+from = '''    const DESC: TypeDesc = TypeDesc::Function("EventHandler");
+    const PLAIN: bool = true;
+    type Ret<'gc> = HandlerValue<'gc>;'''
+to = '''    const DESC: TypeDesc = TypeDesc::Function("EventHandler");
+    type Ret<'gc> = HandlerValue<'gc>;'''
+
+[[mutant]]
+name = "rest arguments aren't plain"
+file = "crates/dom_api/src/typed.rs"
+from = '''    const PLAIN: bool = true;
+    type Taken<T: FrontTypes> = Option<T::Rest>;'''
+to = '''    type Taken<T: FrontTypes> = Option<T::Rest>;'''
+
+[[mutant]]
+name = "nodes or strings aren't plain"
+file = "crates/dom_api/src/typed.rs"
+from = '''    const DESC: TypeDesc = TypeDesc::NodesOrStrings;
+    const UNDEFINED_IS_DEFAULT: bool = true;
+    const PLAIN: bool = true;'''
+to = '''    const DESC: TypeDesc = TypeDesc::NodesOrStrings;
+    const UNDEFINED_IS_DEFAULT: bool = true;'''
+
+[[mutant]]
+name = "a dictionary of a front end's handles isn't plain"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''            const PLAIN: bool = true #(&& <#member_types as #api::typed::DictMember>::PLAIN)*;
+            type Of<T: #api::typed::FrontTypes> = #of_t;'''
+to = '''            const PLAIN: bool = !#of_front #(&& <#member_types as #api::typed::DictMember>::PLAIN)*;
+            type Of<T: #api::typed::FrontTypes> = #of_t;'''

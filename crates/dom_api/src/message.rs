@@ -56,7 +56,7 @@ impl ArgType for WindowMessage {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = false;
     type Taken<T: FrontTypes> = MessageTaken<T::Node, T::Str>;
-    type Param<'a, 'gc, T: FrontTypes> = MessageParam<'a, 'gc>;
+    type Param<'a, 'gc, T: FrontTypes + 'a> = MessageParam<'a, 'gc>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Self::Taken<F>> {
         // WebIDL's overloads: a string second, or the options.
@@ -82,7 +82,7 @@ impl ArgType for WindowMessage {
         })
     }
 
-    fn param<'a, 'gc, O: OpFront>(
+    fn param<'a, 'gc, O: OpFront + 'a>(
         op: &mut O,
         cx: &ApiCx<'_, 'gc>,
         taken: &'a Self::Taken<O>,
@@ -96,7 +96,7 @@ impl ArgType for PortMessage {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = false;
     type Taken<T: FrontTypes> = MessageTaken<T::Node, T::Str>;
-    type Param<'a, 'gc, T: FrontTypes> = MessageParam<'a, 'gc>;
+    type Param<'a, 'gc, T: FrontTypes + 'a> = MessageParam<'a, 'gc>;
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Self::Taken<F>> {
         let (payload, ports) = front.message_arg(
@@ -111,7 +111,7 @@ impl ArgType for PortMessage {
         })
     }
 
-    fn param<'a, 'gc, O: OpFront>(
+    fn param<'a, 'gc, O: OpFront + 'a>(
         op: &mut O,
         cx: &ApiCx<'_, 'gc>,
         taken: &'a Self::Taken<O>,
@@ -121,7 +121,7 @@ impl ArgType for PortMessage {
     }
 }
 
-fn param<'a, 'gc, O: OpFront>(
+fn param<'a, 'gc, O: OpFront + 'a>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     taken: &'a MessageTaken<O::Node, O::Str>,
@@ -263,7 +263,7 @@ pub(crate) fn construct_message_event<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     event_type: &str,
-    init: &MessageEventInit,
+    init: &MessageEventInit<O::Any>,
 ) -> Result<Gc<'gc, Event>, ApiError> {
     let window = op.current_window(cx);
     let event = cx.create_message_event(
@@ -347,7 +347,7 @@ pub(crate) fn init_message_event<'gc, O: OpFront>(
     event_type: &str,
     bubbles: bool,
     cancelable: bool,
-    data: crate::typed::AnyArg,
+    data: crate::typed::AnyArg<O::Any>,
     origin: &str,
     last_event_id: &str,
     source: Option<Gc<'gc, Window>>,

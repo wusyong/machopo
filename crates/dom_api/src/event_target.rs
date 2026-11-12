@@ -40,7 +40,7 @@ pub(crate) fn add_event_listener<'gc, O: OpFront>(
     this: TargetRef<'gc>,
     event_type: &str,
     callback: Option<Callback<O::Callback>>,
-    options: &DictOrBool<AddEventListenerOptions>,
+    options: &DictOrBool<AddEventListenerOptions<O::Node>>,
 ) -> Result<(), ApiError> {
     let Some(callback) = callback else {
         return Ok(());
@@ -50,7 +50,7 @@ pub(crate) fn add_event_listener<'gc, O: OpFront>(
             options.capture,
             options.once,
             options.passive,
-            options.signal,
+            options.signal.as_ref(),
         ),
         DictOrBool::Bool(capture) => (*capture, false, None, None),
     };
@@ -58,7 +58,7 @@ pub(crate) fn add_event_listener<'gc, O: OpFront>(
     // would); one aborted already adds nothing.
     let signal = match signal {
         Some(signal) => {
-            let signal = op.kept_object::<EventTargetImpl>(cx, signal);
+            let signal = op.object::<EventTargetImpl>(cx, &signal.0);
             if !cx.is_abort_signal(signal) {
                 return Err(ApiError::type_error(
                     "Failed to read the 'signal' property from 'AddEventListenerOptions': Failed to convert value to 'AbortSignal'.",

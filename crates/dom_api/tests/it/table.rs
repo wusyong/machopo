@@ -1088,17 +1088,36 @@ fn members_of_strings_nodes_numbers_and_booleans_are_plain() {
         ("Window", "cancelAnimationFrame", MemberKind::Method),
         ("HTMLElement", "onclick", MemberKind::Setter),
         ("Window", "onload", MemberKind::Setter),
+        // Nodes or strings, as many as given; an element or a number.
+        ("Element", "append", MemberKind::Method),
+        ("Element", "replaceChildren", MemberKind::Method),
+        ("Element", "before", MemberKind::Method),
+        ("CharacterData", "replaceWith", MemberKind::Method),
+        ("HTMLSelectElement", "add", MemberKind::Method),
+        // A value of any type, rest arguments, a dictionary with an
+        // object (`signal`): the front end's handles, handed back to it.
+        ("EventTarget", "addEventListener", MemberKind::Method),
+        ("Window", "setTimeout", MemberKind::Method),
+        ("Window", "setInterval", MemberKind::Method),
+        ("CustomEvent", "initCustomEvent", MemberKind::Method),
+        // A value of any type as a result.
+        ("CustomEvent", "detail", MemberKind::Getter),
+        ("AbortSignal", "reason", MemberKind::Getter),
+        ("CustomElementRegistry", "get", MemberKind::Method),
+        // An event handler's getter: its listener's callback given in
+        // the operation, an uncompiled source compiled after it.
+        ("HTMLElement", "onclick", MemberKind::Getter),
+        ("Window", "onload", MemberKind::Getter),
+        ("Document", "onclick", MemberKind::Getter),
+        ("MessagePort", "onmessage", MemberKind::Getter),
     ] {
         assert!(is_plain(interface, name, kind), "{interface}.{name}");
     }
     for (interface, name, kind) in [
-        // A dictionary with an object (`signal`); a method that leaves
-        // script to run; rest arguments.
-        ("EventTarget", "addEventListener", MemberKind::Method),
+        // Methods that leave script to run (a dispatch's listeners, an
+        // abort's).
         ("EventTarget", "dispatchEvent", MemberKind::Method),
-        ("Window", "setTimeout", MemberKind::Method),
-        // An event handler's getter may compile its source: script.
-        ("HTMLElement", "onclick", MemberKind::Getter),
+        ("AbortController", "abort", MemberKind::Method),
         // Their functions hand the front end what it keeps for after the
         // operation (a value to throw, an `ImageData`'s pixels): their
         // result types say so.

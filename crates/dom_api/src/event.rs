@@ -282,7 +282,7 @@ pub(crate) fn construct_custom_event<'gc, O: crate::OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     event_type: &str,
-    init: &CustomEventInit,
+    init: &CustomEventInit<O::Any>,
 ) -> Result<Gc<'gc, Event>, ApiError> {
     let event = cx.create_event(
         names::intern(event_type),
@@ -308,7 +308,7 @@ pub(crate) fn construct_error_event<'gc, O: crate::OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     event_type: &str,
-    init: &ErrorEventInit,
+    init: &ErrorEventInit<O::Any>,
 ) -> Result<Gc<'gc, Event>, ApiError> {
     let event = cx.create_error_event_of(
         names::intern(event_type),
@@ -354,7 +354,7 @@ pub(crate) fn init_custom_event<'gc, O: crate::OpFront>(
     event_type: &str,
     bubbles: bool,
     cancelable: bool,
-    detail: AnyArg,
+    detail: AnyArg<O::Any>,
 ) -> Result<(), ApiError> {
     if cx.event_state(this).dispatching {
         return Ok(());

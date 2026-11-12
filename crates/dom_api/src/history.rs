@@ -289,13 +289,13 @@ pub struct SerializedState;
 impl ArgType for SerializedState {
     const DESC: TypeDesc = TypeDesc::Any;
     type Taken<T: FrontTypes> = Vec<u8>;
-    type Param<'a, 'gc, T: FrontTypes> = &'a [u8];
+    type Param<'a, 'gc, T: FrontTypes + 'a> = &'a [u8];
 
     fn take<F: Front>(front: &mut F, index: usize) -> Option<Vec<u8>> {
         front.serialized_state_arg(index)
     }
 
-    fn param<'a, 'gc, O: OpFront>(
+    fn param<'a, 'gc, O: OpFront + 'a>(
         _: &mut O,
         _: &ApiCx<'_, 'gc>,
         taken: &'a Vec<u8>,
@@ -411,7 +411,7 @@ pub(crate) fn construct_pop_state_event<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     event_type: &str,
-    init: &PopStateEventInit,
+    init: &PopStateEventInit<O::Any>,
 ) -> Result<Gc<'gc, Event>, ApiError> {
     let event = cx.create_event(
         names::intern(event_type),

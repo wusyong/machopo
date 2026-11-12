@@ -6,13 +6,14 @@
 //! place among the target's listeners; null, it is taken out. A content
 //! attribute's (`<button onclick>`) is set by `dom` as the attribute
 //! changes, uncompiled; its engine compiles it the first time it is needed
-//! (`ScriptHost::compile_event_handler`), here or as it is invoked.
+//! (`ScriptHost::compile_event_handler`), after its getter's operation
+//! (`EventHandler`'s result) or as it is invoked.
 //! `<body>`'s and `<frameset>`'s window-reflecting ones are their window's.
 
-use dom::{NameId, NodeRef, NodeRoot, TargetRef, TargetRoot, Window, names};
-use elise::{Gc, Persistent};
+use dom::{NameId, NodeRef, TargetRef, Window, names};
+use elise::Gc;
 
-use crate::typed::{Callback, HandlerValue, OpFront, ScriptHost};
+use crate::typed::{Callback, HandlerValue, OpFront};
 use crate::{ApiCx, ApiError};
 
 /// Where `element`'s handler of `event_type` is: its own, or for a
@@ -37,24 +38,22 @@ fn element_target<'gc>(
     Some(TargetRef::Node(element))
 }
 
-/// HTML's "getting the current value of the event handler": compiled
-/// first if it is an uncompiled one; its listener, none if null.
-fn current_value<H: ScriptHost>(
-    host: &mut H,
-    target: &TargetRoot,
+/// HTML's "getting the current value of the event handler": its
+/// listener, none if null; an uncompiled one is compiled after the
+/// operation (`HandlerValue::Uncompiled`).
+#[inline(always)]
+fn current_value<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    target: TargetRef<'gc>,
     event_type: NameId,
-) -> HandlerValue {
-    let uncompiled = host.read(|cx| {
-        cx.event_handler(target.get(cx.gc), event_type)
-            .is_some_and(|listener| cx.handler_uncompiled(listener))
-    });
-    if uncompiled {
-        host.compile_event_handler(target, event_type);
+) -> HandlerValue<'gc> {
+    match cx.event_handler(target, event_type) {
+        Some(listener) if cx.handler_uncompiled(listener) => {
+            HandlerValue::Uncompiled(target, event_type)
+        }
+        Some(listener) => HandlerValue::Listener(listener),
+        None => HandlerValue::None,
     }
-    HandlerValue(host.read(|cx| {
-        cx.event_handler(target.get(cx.gc), event_type)
-            .map(|listener| Persistent::new(cx.gc, listener))
-    }))
 }
 
 /// HTML's setter of an event handler IDL attribute: an object makes it
@@ -79,16 +78,14 @@ fn set_handler<'gc, O: OpFront>(
 
 /// An HTML element's handler of `T` (its window's for `<body>`'s
 /// window-reflecting ones).
-pub(crate) fn element_handler<H: ScriptHost, const T: NameId>(
-    host: &mut H,
-    this: NodeRoot,
-) -> Result<HandlerValue, ApiError> {
-    let Some(target) =
-        host.read(|cx| element_target(cx, this.get(cx.gc), T).map(|target| cx.root_target(target)))
-    else {
-        return Ok(HandlerValue(None));
-    };
-    Ok(current_value(host, &target, T))
+pub(crate) fn element_handler<'gc, const T: NameId>(
+    cx: &ApiCx<'_, 'gc>,
+    this: NodeRef<'gc>,
+) -> Result<HandlerValue<'gc>, ApiError> {
+    Ok(match element_target(cx, this, T) {
+        Some(target) => current_value(cx, target, T),
+        None => HandlerValue::None,
+    })
 }
 
 pub(crate) fn set_element_handler<'gc, O: OpFront, const T: NameId>(
@@ -104,11 +101,11 @@ pub(crate) fn set_element_handler<'gc, O: OpFront, const T: NameId>(
 }
 
 /// A document's handler of `T`.
-pub(crate) fn document_handler<H: ScriptHost, const T: NameId>(
-    host: &mut H,
-    this: NodeRoot,
-) -> Result<HandlerValue, ApiError> {
-    Ok(current_value(host, &TargetRoot::Node(this), T))
+pub(crate) fn document_handler<'gc, const T: NameId>(
+    cx: &ApiCx<'_, 'gc>,
+    this: NodeRef<'gc>,
+) -> Result<HandlerValue<'gc>, ApiError> {
+    Ok(current_value(cx, TargetRef::Node(this), T))
 }
 
 pub(crate) fn set_document_handler<'gc, O: OpFront, const T: NameId>(
@@ -121,11 +118,11 @@ pub(crate) fn set_document_handler<'gc, O: OpFront, const T: NameId>(
 }
 
 /// A window's handler of `T`.
-pub(crate) fn port_handler<H: ScriptHost, const T: NameId>(
-    host: &mut H,
-    this: Persistent<dom::EventTargetImpl>,
-) -> Result<HandlerValue, ApiError> {
-    Ok(current_value(host, &TargetRoot::EventTarget(this), T))
+pub(crate) fn port_handler<'gc, const T: NameId>(
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, dom::EventTargetImpl>,
+) -> Result<HandlerValue<'gc>, ApiError> {
+    Ok(current_value(cx, TargetRef::EventTarget(this), T))
 }
 
 pub(crate) fn set_port_handler<'gc, O: OpFront, const T: NameId>(
@@ -150,11 +147,11 @@ pub(crate) fn set_port_message_handler<'gc, O: OpFront, const T: NameId>(
     Ok(())
 }
 
-pub(crate) fn window_handler<H: ScriptHost, const T: NameId>(
-    host: &mut H,
-    this: Persistent<Window>,
-) -> Result<HandlerValue, ApiError> {
-    Ok(current_value(host, &TargetRoot::Window(this), T))
+pub(crate) fn window_handler<'gc, const T: NameId>(
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, Window>,
+) -> Result<HandlerValue<'gc>, ApiError> {
+    Ok(current_value(cx, TargetRef::Window(this), T))
 }
 
 pub(crate) fn set_window_handler<'gc, O: OpFront, const T: NameId>(

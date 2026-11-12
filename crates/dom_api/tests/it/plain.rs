@@ -505,6 +505,11 @@ fn a_plain_type_calls_only_the_plain_methods() {
     }
     assert!(blocks.len() > 60, "{} plain types read", blocks.len());
     blocks.extend(blocks_calls(typed, " ObjectType for ", |_, _| true));
+    // A dictionary's members that are the front end's handles: plain,
+    // all.
+    let handles = blocks_calls(typed, " DictHandle<F> for ", |_, _| true);
+    assert!(!handles.is_empty());
+    blocks.extend(handles);
     // What the plain types call that isn't a method of theirs.
     for function in [
         "fn node_param<",

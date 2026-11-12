@@ -343,8 +343,8 @@ fn a_callback_is_its_arguments_handle() {
         let found = report(&mut engine, &expression);
         let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
         assert_eq!(found, value, "{source}");
-        // (`dispatchEvent`, `new Event` and the handler's getter aren't
-        // plain: none of these scopes is theirs.)
+        // (`dispatchEvent` and `new Event` aren't plain: none of these
+        // scopes is theirs.)
         if at_once {
             assert_eq!(made, 0, "{source}");
         } else {
@@ -360,4 +360,195 @@ fn a_callback_is_its_arguments_handle() {
         ),
         "h"
     );
+}
+
+/// A value of any type, a call's rest arguments and a dictionary's object
+/// (`signal`) are the front end's handles, taken before the operation and
+/// handed back to it to store: a listener added with no options or a
+/// boolean, a timer set with no more arguments and a `detail` given make
+/// no scope; a dictionary's members are read, more arguments put in an
+/// array and a missing `detail` made null in one.
+#[test]
+fn a_value_rest_arguments_and_a_signal_are_handles() {
+    let mut engine = page();
+    run(
+        &mut engine,
+        "var f = () => log.push('f'); var g = (...more) => log.push('g' + more.join('')); \
+         var fire = (type) => (d.dispatchEvent(new Event(type)), log.splice(0).join()); \
+         var controller = new AbortController(); var aborted = AbortSignal.abort(); \
+         var custom = new CustomEvent('c'); var detail = { a: 1 }; \
+         var fresh = new CustomEvent('n'); var unaborted = new AbortController().signal; \
+         var walker = document.createTreeWalker(d); var registry = customElements; \
+         var sheet = new CSSStyleSheet(); sheet.insertRule('a {}'); \
+         d.addEventListener('first', f); setTimeout(f, 100000);",
+    );
+    for (source, value, at_once) in [
+        // No options, a boolean: the listener added, capturing or not.
+        ("d.addEventListener('a', f); fire('a')", "f", true),
+        ("d.addEventListener('a', f); fire('a')", "f", true),
+        (
+            "d.addEventListener('b', f, true); d.removeEventListener('b', f); fire('b')",
+            "f",
+            true,
+        ),
+        (
+            "d.addEventListener('b', f, undefined); fire('b')",
+            "f,f",
+            true,
+        ),
+        ("d.addEventListener('b', null)", "undefined", true),
+        // A dictionary: its members read.
+        (
+            "d.addEventListener('c', f, { once: true }); fire('c') + fire('c')",
+            "f",
+            false,
+        ),
+        (
+            "d.addEventListener('e', f, { capture: true }); d.removeEventListener('e', f, true); fire('e')",
+            "",
+            false,
+        ),
+        // Its `signal`: the listener removed as it aborts; none added for
+        // one aborted already; a `TypeError` for what isn't one.
+        (
+            "d.addEventListener('s', f, { signal: controller.signal }); \
+             [fire('s'), (controller.abort(), fire('s'))].join('|')",
+            "f|",
+            false,
+        ),
+        (
+            "d.addEventListener('s', f, { signal: aborted }); fire('s')",
+            "",
+            false,
+        ),
+        (
+            "(() => { try { d.addEventListener('s', f, { signal: d }); return 'none'; } \
+             catch (e) { return e.name + fire('s'); } })()",
+            "TypeError",
+            false,
+        ),
+        (
+            "(() => { try { d.addEventListener('s', f, { get signal() { throw new RangeError('no'); } }); \
+             return 'none'; } catch (e) { return e.name + fire('s'); } })()",
+            "RangeError",
+            false,
+        ),
+        // A `detail` given is the event's; a missing one null.
+        (
+            "custom.initCustomEvent('c', false, false, detail); custom.detail === detail",
+            "true",
+            true,
+        ),
+        (
+            "custom.initCustomEvent('c', false, false, 7); custom.detail",
+            "7",
+            true,
+        ),
+        (
+            "custom.initCustomEvent('c', false, false); custom.detail",
+            "null",
+            false,
+        ),
+        (
+            "custom.initCustomEvent('c', false, false, undefined); custom.detail",
+            "null",
+            false,
+        ),
+        // A value read back is the one stored, or what its type gives
+        // for none: null, undefined.
+        ("custom.detail === custom.detail", "true", true),
+        ("fresh.detail", "null", true),
+        (
+            "controller.signal.reason === controller.signal.reason",
+            "true",
+            true,
+        ),
+        ("unaborted.reason", "undefined", true),
+        ("registry.get('x-none')", "undefined", true),
+        ("walker.filter", "null", true),
+        // A missing optional integer is 0, as `ToUint32` of undefined.
+        ("sheet.insertRule('b {}')", "0", true),
+        ("sheet.insertRule('c {}', 2)", "2", true),
+        // A timer with no more arguments; one with some, in an array.
+        ("typeof setTimeout(f, 0)", "number", true),
+        ("typeof setInterval(f, 100000)", "number", true),
+        ("typeof setTimeout(f)", "number", true),
+        ("typeof setTimeout(g, 0, 1, 'x', 2)", "number", false),
+        // A string to compile is taken by the whole front end.
+        ("typeof setTimeout('log.push(\\'s\\')', 0)", "number", false),
+    ] {
+        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        let expression = if source.starts_with("(() =>") {
+            source.to_owned()
+        } else {
+            format!("({})", source.replace("; ", ", "))
+        };
+        let found = report(&mut engine, &expression);
+        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        assert_eq!(found, value, "{source}");
+        if at_once {
+            assert_eq!(made, 0, "{source}");
+        } else {
+            assert!(made >= 1, "{source}: a scope");
+        }
+    }
+    // The timers' callbacks are called with what they were set with.
+    assert!(engine.run_timers());
+    assert_eq!(report(&mut engine, "log.splice(0).join()"), "f,f,g1x2,s");
+}
+
+/// An event handler's getter gives its listener's callback in its one
+/// operation, from the listener's own handle: no scope. A content
+/// attribute's source is compiled after the operation, the first time
+/// (a scope: script), and is the function from then on; one that doesn't
+/// compile is null.
+#[test]
+fn a_handlers_getter_gives_its_callback_in_the_operation() {
+    let mut engine = page();
+    run(
+        &mut engine,
+        "var f = () => log.push('f'); d.onclick = f; window.onresize = f; document.onkeydown = f; \
+         d.setAttribute('onfocus', 'log.push(\\'attr\\')'); d.setAttribute('onblur', 'this is not script('); \
+         body.setAttribute('onload', 'log.push(\\'load\\')'); d.id;",
+    );
+    for (source, value, at_once) in [
+        ("d.onclick === f", "true", true),
+        ("d.oninput", "null", true),
+        ("window.onresize === f", "true", true),
+        ("window.onscroll", "null", true),
+        ("document.onkeydown === f", "true", true),
+        ("document.onkeyup", "null", true),
+        // `<body>`'s window-reflecting one is its window's.
+        ("body.onresize === f", "true", true),
+        // Compiled the first time; the same function then.
+        ("typeof d.onfocus", "function", false),
+        ("typeof d.onfocus", "function", true),
+        ("d.onfocus === d.onfocus", "true", true),
+        ("d.onfocus(); log.splice(0).join()", "attr", true),
+        ("typeof window.onload", "function", false),
+        ("body.onload === window.onload", "true", true),
+        // A source that doesn't compile: null, then and after.
+        ("d.onblur", "null", false),
+        ("d.onblur", "null", true),
+        // Set again, the attribute's source is uncompiled again.
+        (
+            "d.setAttribute('onfocus', 'log.push(2)'); typeof d.onfocus",
+            "function",
+            false,
+        ),
+        ("d.onfocus(); log.splice(0).join()", "2", true),
+        // A handler set over it is the handler.
+        ("d.onfocus = f; d.onfocus === f", "true", true),
+        ("d.onfocus = null; d.onfocus", "null", true),
+    ] {
+        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        let found = report(&mut engine, &format!("({})", source.replace("; ", ", ")));
+        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        assert_eq!(found, value, "{source}");
+        if at_once {
+            assert_eq!(made, 0, "{source}");
+        } else {
+            assert!(made >= 1, "{source}: a scope");
+        }
+    }
 }

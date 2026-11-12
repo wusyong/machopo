@@ -1034,6 +1034,9 @@ impl<'r, A> FrontTypes for WasmFront<'r, '_, A> {
     type PendingObject = std::convert::Infallible;
     type PreparedNode = ();
     type Callback = usize;
+    // No member with an `any` or rest arguments is bound.
+    type Any = std::convert::Infallible;
+    type Rest = std::convert::Infallible;
 }
 
 impl<'r, 'g, A: ReadArgs> Front for WasmFront<'r, 'g, A> {

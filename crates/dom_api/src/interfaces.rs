@@ -19,24 +19,24 @@ use crate::typed::{
     FormControlsCollectionObject, FrameRequestCallback, FrozenArray, FrozenStrings,
     GetHtmlOptionsArg, HTMLCollectionOrElement, HashChangeEventObject, HeaderPairs, HeadersMember,
     Hidden, IdleRequestCallback, InputEventObject, IntersectionObserverCallback,
-    IntersectionObserverEntryInitArg, IntersectionObserverInitArg, IsNull, JsonData, KeptObject,
-    KeptTarget, KeptWindow, KeyboardEventObject, Keyframes, LegacyNullToEmptyString,
-    LongDefaultMinusOne, LongDefaultOne, MeasureStart, MediaQueryListEventObject,
-    MediaQueryListObject, MessageEventObject, MessagePortObject, MessagePorts, MouseEventObject,
-    MutationCallback, NamespaceObject, NavigationTimingObject, NetworkInformationObject,
-    NewElement, NewHtmlElement, NewImageData, NewNodeLikeThis, NewObject, NoObject,
-    NoPositionObject, NodesOrStrings, NullableBody, NullableElementOrLong, NullableU32,
-    NumberIfNumber, Numbers, ObservableArray, OptionOrOptGroup, OptionalClampedI64,
-    OptionalPath2dOrString, OptionalString, OptionalTimingArg, OptionalUnrestrictedDouble,
-    OptionsCollectionObject, PendingPromise, PerformanceEntryObject, PerformanceMarkObject,
-    PerformanceMeasureObject, PerformanceNavigationObject, PerformanceObject,
-    PerformanceObserverCallback, PerformanceTimingObject, PopStateEventObject, PositionCallback,
-    PositionErrorCallback, ProgressEventObject, Promise, PromiseOfAnimation, PromiseOfAny,
-    PromiseOfArrayBuffer, PromiseOfJson, PromiseOfString, PromiseOfUint8Array, PromiseOfUndefined,
+    IntersectionObserverEntryInitArg, IntersectionObserverInitArg, IsNull, JsonData, KeptTarget,
+    KeptWindow, KeyboardEventObject, Keyframes, LegacyNullToEmptyString, LongDefaultMinusOne,
+    LongDefaultOne, MeasureStart, MediaQueryListEventObject, MediaQueryListObject,
+    MessageEventObject, MessagePortObject, MessagePorts, MouseEventObject, MutationCallback,
+    NamespaceObject, NavigationTimingObject, NetworkInformationObject, NewElement, NewHtmlElement,
+    NewImageData, NewNodeLikeThis, NewObject, NoObject, NoPositionObject, NodesOrStrings,
+    NullableBody, NullableElementOrLong, NullableU32, NumberIfNumber, Numbers, ObservableArray,
+    OptionOrOptGroup, OptionalClampedI64, OptionalPath2dOrString, OptionalString,
+    OptionalTimingArg, OptionalUnrestrictedDouble, OptionsCollectionObject, PendingPromise,
+    PerformanceEntryObject, PerformanceMarkObject, PerformanceMeasureObject,
+    PerformanceNavigationObject, PerformanceObject, PerformanceObserverCallback,
+    PerformanceTimingObject, PopStateEventObject, PositionCallback, PositionErrorCallback,
+    ProgressEventObject, Promise, PromiseOfAnimation, PromiseOfAny, PromiseOfArrayBuffer,
+    PromiseOfJson, PromiseOfString, PromiseOfUint8Array, PromiseOfUndefined,
     PromiseRejectionEventObject, RadioNodeListObject, RadioNodeListOrElement, ReadImageData,
     ReaderResult, Records, RequestInfo, ResizeObserverCallback, Rest, Rethrown, RoundRectRadii,
-    Sequence, Serialized, SignalMember, Slottables, StaticRangeInitArg, StringOrNumber,
-    StringPairs, Strings, TargetObject, TextEventObject, TimelineArg, TimerHandler,
+    Sequence, Serialized, SignalMember, SignalObject, Slottables, StaticRangeInitArg,
+    StringOrNumber, StringPairs, Strings, TargetObject, TextEventObject, TimelineArg, TimerHandler,
     TransitionEventObject, U16Default302, UiEventObject, Uint8ClampedArray, UnrestrictedDouble,
     WakeLockSentinelObject, WhatToShow, WheelEventObject,
 };
@@ -82,12 +82,13 @@ crate::declare! {
     // `EventListenerOptions`' members first, as WebIDL reads an inherited
     // dictionary's (`capture` sorts first anyway).
     // `passive` has no default: DOM's "default passive value" then.
-    // `signal` an `AbortSignal` (`KeptObject`, checked as it is added).
+    // `signal` an `AbortSignal` (the front end's handle, checked as it
+    // is added).
     dictionary AddEventListenerOptions {
         capture: bool = false,
         once: bool = false,
         passive: Option<bool> = None,
-        signal: Option<KeptObject> = None,
+        signal: Option<SignalObject<T::Node>> = None,
     }
 
     interface Event [type = dom::Event] {
@@ -139,7 +140,7 @@ crate::declare! {
         bubbles: bool = false,
         cancelable: bool = false,
         composed: bool = false,
-        detail: Option<AnyArg> = None,
+        detail: Option<AnyArg<T::Any>> = None,
     }
 
     // HTML's messages (`message.rs`).
@@ -155,7 +156,7 @@ crate::declare! {
         bubbles: bool = false,
         cancelable: bool = false,
         composed: bool = false,
-        state: Option<AnyArg> = None,
+        state: Option<AnyArg<T::Any>> = None,
         hasUAVisualTransition: bool = false,
     }
 
@@ -203,7 +204,7 @@ crate::declare! {
         bubbles: bool = false,
         cancelable: bool = false,
         composed: bool = false,
-        data: Option<AnyArg> = None,
+        data: Option<AnyArg<T::Any>> = None,
         origin: String = String::new(),
         lastEventId: String = String::new(),
     }
@@ -226,12 +227,10 @@ crate::declare! {
         method postMessage(message: PortMessage) = message::port_post_message;
         method start() = message::start;
         method close() = message::close;
-        #[calls_script]
         #[front]
-        attribute onmessage: EventHandler, get = handlers::port_handler::<_, { event_type::MESSAGE }>, set = handlers::set_port_message_handler::<_, { event_type::MESSAGE }>;
-        #[calls_script]
+        attribute onmessage: EventHandler, get = handlers::port_handler::<{ event_type::MESSAGE }>, set = handlers::set_port_message_handler::<_, { event_type::MESSAGE }>;
         #[front]
-        attribute onmessageerror: EventHandler, get = handlers::port_handler::<_, { event_type::MESSAGEERROR }>, set = handlers::set_port_handler::<_, { event_type::MESSAGEERROR }>;
+        attribute onmessageerror: EventHandler, get = handlers::port_handler::<{ event_type::MESSAGEERROR }>, set = handlers::set_port_handler::<_, { event_type::MESSAGEERROR }>;
     }
 
     // CSSOM's: JS's only (a wasm guest has no namespaces).
@@ -254,9 +253,8 @@ crate::declare! {
         method addListener(callback: Option<EventListener>) = media_query_list::add_listener;
         #[front]
         method removeListener(callback: Option<EventListener>) = media_query_list::remove_listener;
-        #[calls_script]
         #[front]
-        attribute onchange: EventHandler, get = handlers::port_handler::<_, { event_type::CHANGE }>, set = handlers::set_port_handler::<_, { event_type::CHANGE }>;
+        attribute onchange: EventHandler, get = handlers::port_handler::<{ event_type::CHANGE }>, set = handlers::set_port_handler::<_, { event_type::CHANGE }>;
     }
 
     // What a `MediaQueryList` fires when its result changes.
@@ -328,15 +326,12 @@ crate::declare! {
         // The same promise until the animation replaces it.
         attribute ready: PromiseOfAnimation, get = animation::ready;
         attribute finished: PromiseOfAnimation, get = animation::finished;
-        #[calls_script]
         #[front]
-        attribute onfinish: EventHandler, get = handlers::port_handler::<_, { event_type::FINISH }>, set = handlers::set_port_handler::<_, { event_type::FINISH }>;
-        #[calls_script]
+        attribute onfinish: EventHandler, get = handlers::port_handler::<{ event_type::FINISH }>, set = handlers::set_port_handler::<_, { event_type::FINISH }>;
         #[front]
-        attribute oncancel: EventHandler, get = handlers::port_handler::<_, { event_type::CANCEL }>, set = handlers::set_port_handler::<_, { event_type::CANCEL }>;
-        #[calls_script]
+        attribute oncancel: EventHandler, get = handlers::port_handler::<{ event_type::CANCEL }>, set = handlers::set_port_handler::<_, { event_type::CANCEL }>;
         #[front]
-        attribute onremove: EventHandler, get = handlers::port_handler::<_, { event_type::REMOVE }>, set = handlers::set_port_handler::<_, { event_type::REMOVE }>;
+        attribute onremove: EventHandler, get = handlers::port_handler::<{ event_type::REMOVE }>, set = handlers::set_port_handler::<_, { event_type::REMOVE }>;
         method cancel() = animation::cancel;
         method finish() = animation::finish;
         method play() = animation::play;
@@ -735,7 +730,7 @@ crate::declare! {
         cancelable: bool = false,
         composed: bool = false,
         colno: u32 = 0,
-        error: Option<AnyArg> = None,
+        error: Option<AnyArg<T::Any>> = None,
         filename: String = String::new(),
         lineno: u32 = 0,
         message: String = String::new(),
@@ -787,317 +782,214 @@ crate::declare! {
         attribute document: Document, get = window::document;
 
         // HTML's `GlobalEventHandlers`.
-        #[calls_script]
         #[front]
-        attribute onabort: EventHandler, get = handlers::window_handler::<_, { event_type::ABORT }>, set = handlers::set_window_handler::<_, { event_type::ABORT }>;
-        #[calls_script]
+        attribute onabort: EventHandler, get = handlers::window_handler::<{ event_type::ABORT }>, set = handlers::set_window_handler::<_, { event_type::ABORT }>;
         #[front]
-        attribute onanimationcancel: EventHandler, get = handlers::window_handler::<_, { event_type::ANIMATIONCANCEL }>, set = handlers::set_window_handler::<_, { event_type::ANIMATIONCANCEL }>;
-        #[calls_script]
+        attribute onanimationcancel: EventHandler, get = handlers::window_handler::<{ event_type::ANIMATIONCANCEL }>, set = handlers::set_window_handler::<_, { event_type::ANIMATIONCANCEL }>;
         #[front]
-        attribute onanimationend: EventHandler, get = handlers::window_handler::<_, { event_type::ANIMATIONEND }>, set = handlers::set_window_handler::<_, { event_type::ANIMATIONEND }>;
-        #[calls_script]
+        attribute onanimationend: EventHandler, get = handlers::window_handler::<{ event_type::ANIMATIONEND }>, set = handlers::set_window_handler::<_, { event_type::ANIMATIONEND }>;
         #[front]
-        attribute onanimationiteration: EventHandler, get = handlers::window_handler::<_, { event_type::ANIMATIONITERATION }>, set = handlers::set_window_handler::<_, { event_type::ANIMATIONITERATION }>;
-        #[calls_script]
+        attribute onanimationiteration: EventHandler, get = handlers::window_handler::<{ event_type::ANIMATIONITERATION }>, set = handlers::set_window_handler::<_, { event_type::ANIMATIONITERATION }>;
         #[front]
-        attribute onanimationstart: EventHandler, get = handlers::window_handler::<_, { event_type::ANIMATIONSTART }>, set = handlers::set_window_handler::<_, { event_type::ANIMATIONSTART }>;
-        #[calls_script]
+        attribute onanimationstart: EventHandler, get = handlers::window_handler::<{ event_type::ANIMATIONSTART }>, set = handlers::set_window_handler::<_, { event_type::ANIMATIONSTART }>;
         #[front]
-        attribute onauxclick: EventHandler, get = handlers::window_handler::<_, { event_type::AUXCLICK }>, set = handlers::set_window_handler::<_, { event_type::AUXCLICK }>;
-        #[calls_script]
+        attribute onauxclick: EventHandler, get = handlers::window_handler::<{ event_type::AUXCLICK }>, set = handlers::set_window_handler::<_, { event_type::AUXCLICK }>;
         #[front]
-        attribute onbeforeinput: EventHandler, get = handlers::window_handler::<_, { event_type::BEFOREINPUT }>, set = handlers::set_window_handler::<_, { event_type::BEFOREINPUT }>;
-        #[calls_script]
+        attribute onbeforeinput: EventHandler, get = handlers::window_handler::<{ event_type::BEFOREINPUT }>, set = handlers::set_window_handler::<_, { event_type::BEFOREINPUT }>;
         #[front]
-        attribute onbeforematch: EventHandler, get = handlers::window_handler::<_, { event_type::BEFOREMATCH }>, set = handlers::set_window_handler::<_, { event_type::BEFOREMATCH }>;
-        #[calls_script]
+        attribute onbeforematch: EventHandler, get = handlers::window_handler::<{ event_type::BEFOREMATCH }>, set = handlers::set_window_handler::<_, { event_type::BEFOREMATCH }>;
         #[front]
-        attribute onbeforetoggle: EventHandler, get = handlers::window_handler::<_, { event_type::BEFORETOGGLE }>, set = handlers::set_window_handler::<_, { event_type::BEFORETOGGLE }>;
-        #[calls_script]
+        attribute onbeforetoggle: EventHandler, get = handlers::window_handler::<{ event_type::BEFORETOGGLE }>, set = handlers::set_window_handler::<_, { event_type::BEFORETOGGLE }>;
         #[front]
-        attribute onblur: EventHandler, get = handlers::window_handler::<_, { event_type::BLUR }>, set = handlers::set_window_handler::<_, { event_type::BLUR }>;
-        #[calls_script]
+        attribute onblur: EventHandler, get = handlers::window_handler::<{ event_type::BLUR }>, set = handlers::set_window_handler::<_, { event_type::BLUR }>;
         #[front]
-        attribute oncancel: EventHandler, get = handlers::window_handler::<_, { event_type::CANCEL }>, set = handlers::set_window_handler::<_, { event_type::CANCEL }>;
-        #[calls_script]
+        attribute oncancel: EventHandler, get = handlers::window_handler::<{ event_type::CANCEL }>, set = handlers::set_window_handler::<_, { event_type::CANCEL }>;
         #[front]
-        attribute oncanplay: EventHandler, get = handlers::window_handler::<_, { event_type::CANPLAY }>, set = handlers::set_window_handler::<_, { event_type::CANPLAY }>;
-        #[calls_script]
+        attribute oncanplay: EventHandler, get = handlers::window_handler::<{ event_type::CANPLAY }>, set = handlers::set_window_handler::<_, { event_type::CANPLAY }>;
         #[front]
-        attribute oncanplaythrough: EventHandler, get = handlers::window_handler::<_, { event_type::CANPLAYTHROUGH }>, set = handlers::set_window_handler::<_, { event_type::CANPLAYTHROUGH }>;
-        #[calls_script]
+        attribute oncanplaythrough: EventHandler, get = handlers::window_handler::<{ event_type::CANPLAYTHROUGH }>, set = handlers::set_window_handler::<_, { event_type::CANPLAYTHROUGH }>;
         #[front]
-        attribute onchange: EventHandler, get = handlers::window_handler::<_, { event_type::CHANGE }>, set = handlers::set_window_handler::<_, { event_type::CHANGE }>;
-        #[calls_script]
+        attribute onchange: EventHandler, get = handlers::window_handler::<{ event_type::CHANGE }>, set = handlers::set_window_handler::<_, { event_type::CHANGE }>;
         #[front]
-        attribute onclick: EventHandler, get = handlers::window_handler::<_, { event_type::CLICK }>, set = handlers::set_window_handler::<_, { event_type::CLICK }>;
-        #[calls_script]
+        attribute onclick: EventHandler, get = handlers::window_handler::<{ event_type::CLICK }>, set = handlers::set_window_handler::<_, { event_type::CLICK }>;
         #[front]
-        attribute onclose: EventHandler, get = handlers::window_handler::<_, { event_type::CLOSE }>, set = handlers::set_window_handler::<_, { event_type::CLOSE }>;
-        #[calls_script]
+        attribute onclose: EventHandler, get = handlers::window_handler::<{ event_type::CLOSE }>, set = handlers::set_window_handler::<_, { event_type::CLOSE }>;
         #[front]
-        attribute oncommand: EventHandler, get = handlers::window_handler::<_, { event_type::COMMAND }>, set = handlers::set_window_handler::<_, { event_type::COMMAND }>;
-        #[calls_script]
+        attribute oncommand: EventHandler, get = handlers::window_handler::<{ event_type::COMMAND }>, set = handlers::set_window_handler::<_, { event_type::COMMAND }>;
         #[front]
-        attribute oncontentvisibilityautostatechange: EventHandler, get = handlers::window_handler::<_, { event_type::CONTENTVISIBILITYAUTOSTATECHANGE }>, set = handlers::set_window_handler::<_, { event_type::CONTENTVISIBILITYAUTOSTATECHANGE }>;
-        #[calls_script]
+        attribute oncontentvisibilityautostatechange: EventHandler, get = handlers::window_handler::<{ event_type::CONTENTVISIBILITYAUTOSTATECHANGE }>, set = handlers::set_window_handler::<_, { event_type::CONTENTVISIBILITYAUTOSTATECHANGE }>;
         #[front]
-        attribute oncontextlost: EventHandler, get = handlers::window_handler::<_, { event_type::CONTEXTLOST }>, set = handlers::set_window_handler::<_, { event_type::CONTEXTLOST }>;
-        #[calls_script]
+        attribute oncontextlost: EventHandler, get = handlers::window_handler::<{ event_type::CONTEXTLOST }>, set = handlers::set_window_handler::<_, { event_type::CONTEXTLOST }>;
         #[front]
-        attribute oncontextmenu: EventHandler, get = handlers::window_handler::<_, { event_type::CONTEXTMENU }>, set = handlers::set_window_handler::<_, { event_type::CONTEXTMENU }>;
-        #[calls_script]
+        attribute oncontextmenu: EventHandler, get = handlers::window_handler::<{ event_type::CONTEXTMENU }>, set = handlers::set_window_handler::<_, { event_type::CONTEXTMENU }>;
         #[front]
-        attribute oncontextrestored: EventHandler, get = handlers::window_handler::<_, { event_type::CONTEXTRESTORED }>, set = handlers::set_window_handler::<_, { event_type::CONTEXTRESTORED }>;
-        #[calls_script]
+        attribute oncontextrestored: EventHandler, get = handlers::window_handler::<{ event_type::CONTEXTRESTORED }>, set = handlers::set_window_handler::<_, { event_type::CONTEXTRESTORED }>;
         #[front]
-        attribute oncuechange: EventHandler, get = handlers::window_handler::<_, { event_type::CUECHANGE }>, set = handlers::set_window_handler::<_, { event_type::CUECHANGE }>;
-        #[calls_script]
+        attribute oncuechange: EventHandler, get = handlers::window_handler::<{ event_type::CUECHANGE }>, set = handlers::set_window_handler::<_, { event_type::CUECHANGE }>;
         #[front]
-        attribute ondblclick: EventHandler, get = handlers::window_handler::<_, { event_type::DBLCLICK }>, set = handlers::set_window_handler::<_, { event_type::DBLCLICK }>;
-        #[calls_script]
+        attribute ondblclick: EventHandler, get = handlers::window_handler::<{ event_type::DBLCLICK }>, set = handlers::set_window_handler::<_, { event_type::DBLCLICK }>;
         #[front]
-        attribute ondrag: EventHandler, get = handlers::window_handler::<_, { event_type::DRAG }>, set = handlers::set_window_handler::<_, { event_type::DRAG }>;
-        #[calls_script]
+        attribute ondrag: EventHandler, get = handlers::window_handler::<{ event_type::DRAG }>, set = handlers::set_window_handler::<_, { event_type::DRAG }>;
         #[front]
-        attribute ondragend: EventHandler, get = handlers::window_handler::<_, { event_type::DRAGEND }>, set = handlers::set_window_handler::<_, { event_type::DRAGEND }>;
-        #[calls_script]
+        attribute ondragend: EventHandler, get = handlers::window_handler::<{ event_type::DRAGEND }>, set = handlers::set_window_handler::<_, { event_type::DRAGEND }>;
         #[front]
-        attribute ondragenter: EventHandler, get = handlers::window_handler::<_, { event_type::DRAGENTER }>, set = handlers::set_window_handler::<_, { event_type::DRAGENTER }>;
-        #[calls_script]
+        attribute ondragenter: EventHandler, get = handlers::window_handler::<{ event_type::DRAGENTER }>, set = handlers::set_window_handler::<_, { event_type::DRAGENTER }>;
         #[front]
-        attribute ondragleave: EventHandler, get = handlers::window_handler::<_, { event_type::DRAGLEAVE }>, set = handlers::set_window_handler::<_, { event_type::DRAGLEAVE }>;
-        #[calls_script]
+        attribute ondragleave: EventHandler, get = handlers::window_handler::<{ event_type::DRAGLEAVE }>, set = handlers::set_window_handler::<_, { event_type::DRAGLEAVE }>;
         #[front]
-        attribute ondragover: EventHandler, get = handlers::window_handler::<_, { event_type::DRAGOVER }>, set = handlers::set_window_handler::<_, { event_type::DRAGOVER }>;
-        #[calls_script]
+        attribute ondragover: EventHandler, get = handlers::window_handler::<{ event_type::DRAGOVER }>, set = handlers::set_window_handler::<_, { event_type::DRAGOVER }>;
         #[front]
-        attribute ondragstart: EventHandler, get = handlers::window_handler::<_, { event_type::DRAGSTART }>, set = handlers::set_window_handler::<_, { event_type::DRAGSTART }>;
-        #[calls_script]
+        attribute ondragstart: EventHandler, get = handlers::window_handler::<{ event_type::DRAGSTART }>, set = handlers::set_window_handler::<_, { event_type::DRAGSTART }>;
         #[front]
-        attribute ondrop: EventHandler, get = handlers::window_handler::<_, { event_type::DROP }>, set = handlers::set_window_handler::<_, { event_type::DROP }>;
-        #[calls_script]
+        attribute ondrop: EventHandler, get = handlers::window_handler::<{ event_type::DROP }>, set = handlers::set_window_handler::<_, { event_type::DROP }>;
         #[front]
-        attribute ondurationchange: EventHandler, get = handlers::window_handler::<_, { event_type::DURATIONCHANGE }>, set = handlers::set_window_handler::<_, { event_type::DURATIONCHANGE }>;
-        #[calls_script]
+        attribute ondurationchange: EventHandler, get = handlers::window_handler::<{ event_type::DURATIONCHANGE }>, set = handlers::set_window_handler::<_, { event_type::DURATIONCHANGE }>;
         #[front]
-        attribute onemptied: EventHandler, get = handlers::window_handler::<_, { event_type::EMPTIED }>, set = handlers::set_window_handler::<_, { event_type::EMPTIED }>;
-        #[calls_script]
+        attribute onemptied: EventHandler, get = handlers::window_handler::<{ event_type::EMPTIED }>, set = handlers::set_window_handler::<_, { event_type::EMPTIED }>;
         #[front]
-        attribute onended: EventHandler, get = handlers::window_handler::<_, { event_type::ENDED }>, set = handlers::set_window_handler::<_, { event_type::ENDED }>;
-        #[calls_script]
+        attribute onended: EventHandler, get = handlers::window_handler::<{ event_type::ENDED }>, set = handlers::set_window_handler::<_, { event_type::ENDED }>;
         #[front]
-        attribute onerror: EventHandler, get = handlers::window_handler::<_, { event_type::ERROR }>, set = handlers::set_window_handler::<_, { event_type::ERROR }>;
-        #[calls_script]
+        attribute onerror: EventHandler, get = handlers::window_handler::<{ event_type::ERROR }>, set = handlers::set_window_handler::<_, { event_type::ERROR }>;
         #[front]
-        attribute onfocus: EventHandler, get = handlers::window_handler::<_, { event_type::FOCUS }>, set = handlers::set_window_handler::<_, { event_type::FOCUS }>;
-        #[calls_script]
+        attribute onfocus: EventHandler, get = handlers::window_handler::<{ event_type::FOCUS }>, set = handlers::set_window_handler::<_, { event_type::FOCUS }>;
         #[front]
-        attribute onformdata: EventHandler, get = handlers::window_handler::<_, { event_type::FORMDATA }>, set = handlers::set_window_handler::<_, { event_type::FORMDATA }>;
-        #[calls_script]
+        attribute onformdata: EventHandler, get = handlers::window_handler::<{ event_type::FORMDATA }>, set = handlers::set_window_handler::<_, { event_type::FORMDATA }>;
         #[front]
-        attribute oninput: EventHandler, get = handlers::window_handler::<_, { event_type::INPUT }>, set = handlers::set_window_handler::<_, { event_type::INPUT }>;
-        #[calls_script]
+        attribute oninput: EventHandler, get = handlers::window_handler::<{ event_type::INPUT }>, set = handlers::set_window_handler::<_, { event_type::INPUT }>;
         #[front]
-        attribute oninvalid: EventHandler, get = handlers::window_handler::<_, { event_type::INVALID }>, set = handlers::set_window_handler::<_, { event_type::INVALID }>;
-        #[calls_script]
+        attribute oninvalid: EventHandler, get = handlers::window_handler::<{ event_type::INVALID }>, set = handlers::set_window_handler::<_, { event_type::INVALID }>;
         #[front]
-        attribute onkeydown: EventHandler, get = handlers::window_handler::<_, { event_type::KEYDOWN }>, set = handlers::set_window_handler::<_, { event_type::KEYDOWN }>;
-        #[calls_script]
+        attribute onkeydown: EventHandler, get = handlers::window_handler::<{ event_type::KEYDOWN }>, set = handlers::set_window_handler::<_, { event_type::KEYDOWN }>;
         #[front]
-        attribute onkeypress: EventHandler, get = handlers::window_handler::<_, { event_type::KEYPRESS }>, set = handlers::set_window_handler::<_, { event_type::KEYPRESS }>;
-        #[calls_script]
+        attribute onkeypress: EventHandler, get = handlers::window_handler::<{ event_type::KEYPRESS }>, set = handlers::set_window_handler::<_, { event_type::KEYPRESS }>;
         #[front]
-        attribute onkeyup: EventHandler, get = handlers::window_handler::<_, { event_type::KEYUP }>, set = handlers::set_window_handler::<_, { event_type::KEYUP }>;
-        #[calls_script]
+        attribute onkeyup: EventHandler, get = handlers::window_handler::<{ event_type::KEYUP }>, set = handlers::set_window_handler::<_, { event_type::KEYUP }>;
         #[front]
-        attribute onload: EventHandler, get = handlers::window_handler::<_, { event_type::LOAD }>, set = handlers::set_window_handler::<_, { event_type::LOAD }>;
-        #[calls_script]
+        attribute onload: EventHandler, get = handlers::window_handler::<{ event_type::LOAD }>, set = handlers::set_window_handler::<_, { event_type::LOAD }>;
         #[front]
-        attribute onloadeddata: EventHandler, get = handlers::window_handler::<_, { event_type::LOADEDDATA }>, set = handlers::set_window_handler::<_, { event_type::LOADEDDATA }>;
-        #[calls_script]
+        attribute onloadeddata: EventHandler, get = handlers::window_handler::<{ event_type::LOADEDDATA }>, set = handlers::set_window_handler::<_, { event_type::LOADEDDATA }>;
         #[front]
-        attribute onloadedmetadata: EventHandler, get = handlers::window_handler::<_, { event_type::LOADEDMETADATA }>, set = handlers::set_window_handler::<_, { event_type::LOADEDMETADATA }>;
-        #[calls_script]
+        attribute onloadedmetadata: EventHandler, get = handlers::window_handler::<{ event_type::LOADEDMETADATA }>, set = handlers::set_window_handler::<_, { event_type::LOADEDMETADATA }>;
         #[front]
-        attribute onloadstart: EventHandler, get = handlers::window_handler::<_, { event_type::LOADSTART }>, set = handlers::set_window_handler::<_, { event_type::LOADSTART }>;
-        #[calls_script]
+        attribute onloadstart: EventHandler, get = handlers::window_handler::<{ event_type::LOADSTART }>, set = handlers::set_window_handler::<_, { event_type::LOADSTART }>;
         #[front]
-        attribute onmousedown: EventHandler, get = handlers::window_handler::<_, { event_type::MOUSEDOWN }>, set = handlers::set_window_handler::<_, { event_type::MOUSEDOWN }>;
-        #[calls_script]
+        attribute onmousedown: EventHandler, get = handlers::window_handler::<{ event_type::MOUSEDOWN }>, set = handlers::set_window_handler::<_, { event_type::MOUSEDOWN }>;
         #[front]
-        attribute onmouseenter: EventHandler, get = handlers::window_handler::<_, { event_type::MOUSEENTER }>, set = handlers::set_window_handler::<_, { event_type::MOUSEENTER }>;
-        #[calls_script]
+        attribute onmouseenter: EventHandler, get = handlers::window_handler::<{ event_type::MOUSEENTER }>, set = handlers::set_window_handler::<_, { event_type::MOUSEENTER }>;
         #[front]
-        attribute onmouseleave: EventHandler, get = handlers::window_handler::<_, { event_type::MOUSELEAVE }>, set = handlers::set_window_handler::<_, { event_type::MOUSELEAVE }>;
-        #[calls_script]
+        attribute onmouseleave: EventHandler, get = handlers::window_handler::<{ event_type::MOUSELEAVE }>, set = handlers::set_window_handler::<_, { event_type::MOUSELEAVE }>;
         #[front]
-        attribute onmousemove: EventHandler, get = handlers::window_handler::<_, { event_type::MOUSEMOVE }>, set = handlers::set_window_handler::<_, { event_type::MOUSEMOVE }>;
-        #[calls_script]
+        attribute onmousemove: EventHandler, get = handlers::window_handler::<{ event_type::MOUSEMOVE }>, set = handlers::set_window_handler::<_, { event_type::MOUSEMOVE }>;
         #[front]
-        attribute onmouseout: EventHandler, get = handlers::window_handler::<_, { event_type::MOUSEOUT }>, set = handlers::set_window_handler::<_, { event_type::MOUSEOUT }>;
-        #[calls_script]
+        attribute onmouseout: EventHandler, get = handlers::window_handler::<{ event_type::MOUSEOUT }>, set = handlers::set_window_handler::<_, { event_type::MOUSEOUT }>;
         #[front]
-        attribute onmouseover: EventHandler, get = handlers::window_handler::<_, { event_type::MOUSEOVER }>, set = handlers::set_window_handler::<_, { event_type::MOUSEOVER }>;
-        #[calls_script]
+        attribute onmouseover: EventHandler, get = handlers::window_handler::<{ event_type::MOUSEOVER }>, set = handlers::set_window_handler::<_, { event_type::MOUSEOVER }>;
         #[front]
-        attribute onmouseup: EventHandler, get = handlers::window_handler::<_, { event_type::MOUSEUP }>, set = handlers::set_window_handler::<_, { event_type::MOUSEUP }>;
-        #[calls_script]
+        attribute onmouseup: EventHandler, get = handlers::window_handler::<{ event_type::MOUSEUP }>, set = handlers::set_window_handler::<_, { event_type::MOUSEUP }>;
         #[front]
-        attribute onmousewheel: EventHandler, get = handlers::window_handler::<_, { event_type::MOUSEWHEEL }>, set = handlers::set_window_handler::<_, { event_type::MOUSEWHEEL }>;
-        #[calls_script]
+        attribute onmousewheel: EventHandler, get = handlers::window_handler::<{ event_type::MOUSEWHEEL }>, set = handlers::set_window_handler::<_, { event_type::MOUSEWHEEL }>;
         #[front]
-        attribute onpause: EventHandler, get = handlers::window_handler::<_, { event_type::PAUSE }>, set = handlers::set_window_handler::<_, { event_type::PAUSE }>;
-        #[calls_script]
+        attribute onpause: EventHandler, get = handlers::window_handler::<{ event_type::PAUSE }>, set = handlers::set_window_handler::<_, { event_type::PAUSE }>;
         #[front]
-        attribute onplay: EventHandler, get = handlers::window_handler::<_, { event_type::PLAY }>, set = handlers::set_window_handler::<_, { event_type::PLAY }>;
-        #[calls_script]
+        attribute onplay: EventHandler, get = handlers::window_handler::<{ event_type::PLAY }>, set = handlers::set_window_handler::<_, { event_type::PLAY }>;
         #[front]
-        attribute onplaying: EventHandler, get = handlers::window_handler::<_, { event_type::PLAYING }>, set = handlers::set_window_handler::<_, { event_type::PLAYING }>;
-        #[calls_script]
+        attribute onplaying: EventHandler, get = handlers::window_handler::<{ event_type::PLAYING }>, set = handlers::set_window_handler::<_, { event_type::PLAYING }>;
         #[front]
-        attribute onprogress: EventHandler, get = handlers::window_handler::<_, { event_type::PROGRESS }>, set = handlers::set_window_handler::<_, { event_type::PROGRESS }>;
-        #[calls_script]
+        attribute onprogress: EventHandler, get = handlers::window_handler::<{ event_type::PROGRESS }>, set = handlers::set_window_handler::<_, { event_type::PROGRESS }>;
         #[front]
-        attribute onratechange: EventHandler, get = handlers::window_handler::<_, { event_type::RATECHANGE }>, set = handlers::set_window_handler::<_, { event_type::RATECHANGE }>;
-        #[calls_script]
+        attribute onratechange: EventHandler, get = handlers::window_handler::<{ event_type::RATECHANGE }>, set = handlers::set_window_handler::<_, { event_type::RATECHANGE }>;
         #[front]
-        attribute onreset: EventHandler, get = handlers::window_handler::<_, { event_type::RESET }>, set = handlers::set_window_handler::<_, { event_type::RESET }>;
-        #[calls_script]
+        attribute onreset: EventHandler, get = handlers::window_handler::<{ event_type::RESET }>, set = handlers::set_window_handler::<_, { event_type::RESET }>;
         #[front]
-        attribute onresize: EventHandler, get = handlers::window_handler::<_, { event_type::RESIZE }>, set = handlers::set_window_handler::<_, { event_type::RESIZE }>;
-        #[calls_script]
+        attribute onresize: EventHandler, get = handlers::window_handler::<{ event_type::RESIZE }>, set = handlers::set_window_handler::<_, { event_type::RESIZE }>;
         #[front]
-        attribute onscroll: EventHandler, get = handlers::window_handler::<_, { event_type::SCROLL }>, set = handlers::set_window_handler::<_, { event_type::SCROLL }>;
-        #[calls_script]
+        attribute onscroll: EventHandler, get = handlers::window_handler::<{ event_type::SCROLL }>, set = handlers::set_window_handler::<_, { event_type::SCROLL }>;
         #[front]
-        attribute onscrollend: EventHandler, get = handlers::window_handler::<_, { event_type::SCROLLEND }>, set = handlers::set_window_handler::<_, { event_type::SCROLLEND }>;
-        #[calls_script]
+        attribute onscrollend: EventHandler, get = handlers::window_handler::<{ event_type::SCROLLEND }>, set = handlers::set_window_handler::<_, { event_type::SCROLLEND }>;
         #[front]
-        attribute onsecuritypolicyviolation: EventHandler, get = handlers::window_handler::<_, { event_type::SECURITYPOLICYVIOLATION }>, set = handlers::set_window_handler::<_, { event_type::SECURITYPOLICYVIOLATION }>;
-        #[calls_script]
+        attribute onsecuritypolicyviolation: EventHandler, get = handlers::window_handler::<{ event_type::SECURITYPOLICYVIOLATION }>, set = handlers::set_window_handler::<_, { event_type::SECURITYPOLICYVIOLATION }>;
         #[front]
-        attribute onseeked: EventHandler, get = handlers::window_handler::<_, { event_type::SEEKED }>, set = handlers::set_window_handler::<_, { event_type::SEEKED }>;
-        #[calls_script]
+        attribute onseeked: EventHandler, get = handlers::window_handler::<{ event_type::SEEKED }>, set = handlers::set_window_handler::<_, { event_type::SEEKED }>;
         #[front]
-        attribute onseeking: EventHandler, get = handlers::window_handler::<_, { event_type::SEEKING }>, set = handlers::set_window_handler::<_, { event_type::SEEKING }>;
-        #[calls_script]
+        attribute onseeking: EventHandler, get = handlers::window_handler::<{ event_type::SEEKING }>, set = handlers::set_window_handler::<_, { event_type::SEEKING }>;
         #[front]
-        attribute onselect: EventHandler, get = handlers::window_handler::<_, { event_type::SELECT }>, set = handlers::set_window_handler::<_, { event_type::SELECT }>;
-        #[calls_script]
+        attribute onselect: EventHandler, get = handlers::window_handler::<{ event_type::SELECT }>, set = handlers::set_window_handler::<_, { event_type::SELECT }>;
         #[front]
-        attribute onselectionchange: EventHandler, get = handlers::window_handler::<_, { event_type::SELECTIONCHANGE }>, set = handlers::set_window_handler::<_, { event_type::SELECTIONCHANGE }>;
-        #[calls_script]
+        attribute onselectionchange: EventHandler, get = handlers::window_handler::<{ event_type::SELECTIONCHANGE }>, set = handlers::set_window_handler::<_, { event_type::SELECTIONCHANGE }>;
         #[front]
-        attribute onselectstart: EventHandler, get = handlers::window_handler::<_, { event_type::SELECTSTART }>, set = handlers::set_window_handler::<_, { event_type::SELECTSTART }>;
-        #[calls_script]
+        attribute onselectstart: EventHandler, get = handlers::window_handler::<{ event_type::SELECTSTART }>, set = handlers::set_window_handler::<_, { event_type::SELECTSTART }>;
         #[front]
-        attribute onslotchange: EventHandler, get = handlers::window_handler::<_, { event_type::SLOTCHANGE }>, set = handlers::set_window_handler::<_, { event_type::SLOTCHANGE }>;
-        #[calls_script]
+        attribute onslotchange: EventHandler, get = handlers::window_handler::<{ event_type::SLOTCHANGE }>, set = handlers::set_window_handler::<_, { event_type::SLOTCHANGE }>;
         #[front]
-        attribute onstalled: EventHandler, get = handlers::window_handler::<_, { event_type::STALLED }>, set = handlers::set_window_handler::<_, { event_type::STALLED }>;
-        #[calls_script]
+        attribute onstalled: EventHandler, get = handlers::window_handler::<{ event_type::STALLED }>, set = handlers::set_window_handler::<_, { event_type::STALLED }>;
         #[front]
-        attribute onsubmit: EventHandler, get = handlers::window_handler::<_, { event_type::SUBMIT }>, set = handlers::set_window_handler::<_, { event_type::SUBMIT }>;
-        #[calls_script]
+        attribute onsubmit: EventHandler, get = handlers::window_handler::<{ event_type::SUBMIT }>, set = handlers::set_window_handler::<_, { event_type::SUBMIT }>;
         #[front]
-        attribute onsuspend: EventHandler, get = handlers::window_handler::<_, { event_type::SUSPEND }>, set = handlers::set_window_handler::<_, { event_type::SUSPEND }>;
-        #[calls_script]
+        attribute onsuspend: EventHandler, get = handlers::window_handler::<{ event_type::SUSPEND }>, set = handlers::set_window_handler::<_, { event_type::SUSPEND }>;
         #[front]
-        attribute ontimeupdate: EventHandler, get = handlers::window_handler::<_, { event_type::TIMEUPDATE }>, set = handlers::set_window_handler::<_, { event_type::TIMEUPDATE }>;
-        #[calls_script]
+        attribute ontimeupdate: EventHandler, get = handlers::window_handler::<{ event_type::TIMEUPDATE }>, set = handlers::set_window_handler::<_, { event_type::TIMEUPDATE }>;
         #[front]
-        attribute ontoggle: EventHandler, get = handlers::window_handler::<_, { event_type::TOGGLE }>, set = handlers::set_window_handler::<_, { event_type::TOGGLE }>;
-        #[calls_script]
+        attribute ontoggle: EventHandler, get = handlers::window_handler::<{ event_type::TOGGLE }>, set = handlers::set_window_handler::<_, { event_type::TOGGLE }>;
         #[front]
-        attribute ontransitioncancel: EventHandler, get = handlers::window_handler::<_, { event_type::TRANSITIONCANCEL }>, set = handlers::set_window_handler::<_, { event_type::TRANSITIONCANCEL }>;
-        #[calls_script]
+        attribute ontransitioncancel: EventHandler, get = handlers::window_handler::<{ event_type::TRANSITIONCANCEL }>, set = handlers::set_window_handler::<_, { event_type::TRANSITIONCANCEL }>;
         #[front]
-        attribute ontransitionend: EventHandler, get = handlers::window_handler::<_, { event_type::TRANSITIONEND }>, set = handlers::set_window_handler::<_, { event_type::TRANSITIONEND }>;
-        #[calls_script]
+        attribute ontransitionend: EventHandler, get = handlers::window_handler::<{ event_type::TRANSITIONEND }>, set = handlers::set_window_handler::<_, { event_type::TRANSITIONEND }>;
         #[front]
-        attribute ontransitionrun: EventHandler, get = handlers::window_handler::<_, { event_type::TRANSITIONRUN }>, set = handlers::set_window_handler::<_, { event_type::TRANSITIONRUN }>;
-        #[calls_script]
+        attribute ontransitionrun: EventHandler, get = handlers::window_handler::<{ event_type::TRANSITIONRUN }>, set = handlers::set_window_handler::<_, { event_type::TRANSITIONRUN }>;
         #[front]
-        attribute ontransitionstart: EventHandler, get = handlers::window_handler::<_, { event_type::TRANSITIONSTART }>, set = handlers::set_window_handler::<_, { event_type::TRANSITIONSTART }>;
-        #[calls_script]
+        attribute ontransitionstart: EventHandler, get = handlers::window_handler::<{ event_type::TRANSITIONSTART }>, set = handlers::set_window_handler::<_, { event_type::TRANSITIONSTART }>;
         #[front]
-        attribute onvolumechange: EventHandler, get = handlers::window_handler::<_, { event_type::VOLUMECHANGE }>, set = handlers::set_window_handler::<_, { event_type::VOLUMECHANGE }>;
-        #[calls_script]
+        attribute onvolumechange: EventHandler, get = handlers::window_handler::<{ event_type::VOLUMECHANGE }>, set = handlers::set_window_handler::<_, { event_type::VOLUMECHANGE }>;
         #[front]
-        attribute onwaiting: EventHandler, get = handlers::window_handler::<_, { event_type::WAITING }>, set = handlers::set_window_handler::<_, { event_type::WAITING }>;
-        #[calls_script]
+        attribute onwaiting: EventHandler, get = handlers::window_handler::<{ event_type::WAITING }>, set = handlers::set_window_handler::<_, { event_type::WAITING }>;
         #[front]
-        attribute onwebkitanimationend: EventHandler, get = handlers::window_handler::<_, { event_type::WEBKIT_ANIMATION_END }>, set = handlers::set_window_handler::<_, { event_type::WEBKIT_ANIMATION_END }>;
-        #[calls_script]
+        attribute onwebkitanimationend: EventHandler, get = handlers::window_handler::<{ event_type::WEBKIT_ANIMATION_END }>, set = handlers::set_window_handler::<_, { event_type::WEBKIT_ANIMATION_END }>;
         #[front]
-        attribute onwebkitanimationiteration: EventHandler, get = handlers::window_handler::<_, { event_type::WEBKIT_ANIMATION_ITERATION }>, set = handlers::set_window_handler::<_, { event_type::WEBKIT_ANIMATION_ITERATION }>;
-        #[calls_script]
+        attribute onwebkitanimationiteration: EventHandler, get = handlers::window_handler::<{ event_type::WEBKIT_ANIMATION_ITERATION }>, set = handlers::set_window_handler::<_, { event_type::WEBKIT_ANIMATION_ITERATION }>;
         #[front]
-        attribute onwebkitanimationstart: EventHandler, get = handlers::window_handler::<_, { event_type::WEBKIT_ANIMATION_START }>, set = handlers::set_window_handler::<_, { event_type::WEBKIT_ANIMATION_START }>;
-        #[calls_script]
+        attribute onwebkitanimationstart: EventHandler, get = handlers::window_handler::<{ event_type::WEBKIT_ANIMATION_START }>, set = handlers::set_window_handler::<_, { event_type::WEBKIT_ANIMATION_START }>;
         #[front]
-        attribute onwebkittransitionend: EventHandler, get = handlers::window_handler::<_, { event_type::WEBKIT_TRANSITION_END }>, set = handlers::set_window_handler::<_, { event_type::WEBKIT_TRANSITION_END }>;
-        #[calls_script]
+        attribute onwebkittransitionend: EventHandler, get = handlers::window_handler::<{ event_type::WEBKIT_TRANSITION_END }>, set = handlers::set_window_handler::<_, { event_type::WEBKIT_TRANSITION_END }>;
         #[front]
-        attribute onwheel: EventHandler, get = handlers::window_handler::<_, { event_type::WHEEL }>, set = handlers::set_window_handler::<_, { event_type::WHEEL }>;
+        attribute onwheel: EventHandler, get = handlers::window_handler::<{ event_type::WHEEL }>, set = handlers::set_window_handler::<_, { event_type::WHEEL }>;
 
         // HTML's `WindowEventHandlers`.
-        #[calls_script]
         #[front]
-        attribute onafterprint: EventHandler, get = handlers::window_handler::<_, { event_type::AFTERPRINT }>, set = handlers::set_window_handler::<_, { event_type::AFTERPRINT }>;
-        #[calls_script]
+        attribute onafterprint: EventHandler, get = handlers::window_handler::<{ event_type::AFTERPRINT }>, set = handlers::set_window_handler::<_, { event_type::AFTERPRINT }>;
         #[front]
-        attribute onbeforeprint: EventHandler, get = handlers::window_handler::<_, { event_type::BEFOREPRINT }>, set = handlers::set_window_handler::<_, { event_type::BEFOREPRINT }>;
-        #[calls_script]
+        attribute onbeforeprint: EventHandler, get = handlers::window_handler::<{ event_type::BEFOREPRINT }>, set = handlers::set_window_handler::<_, { event_type::BEFOREPRINT }>;
         #[front]
-        attribute onbeforeunload: EventHandler, get = handlers::window_handler::<_, { event_type::BEFOREUNLOAD }>, set = handlers::set_window_handler::<_, { event_type::BEFOREUNLOAD }>;
-        #[calls_script]
+        attribute onbeforeunload: EventHandler, get = handlers::window_handler::<{ event_type::BEFOREUNLOAD }>, set = handlers::set_window_handler::<_, { event_type::BEFOREUNLOAD }>;
         #[front]
-        attribute onhashchange: EventHandler, get = handlers::window_handler::<_, { event_type::HASHCHANGE }>, set = handlers::set_window_handler::<_, { event_type::HASHCHANGE }>;
-        #[calls_script]
+        attribute onhashchange: EventHandler, get = handlers::window_handler::<{ event_type::HASHCHANGE }>, set = handlers::set_window_handler::<_, { event_type::HASHCHANGE }>;
         #[front]
-        attribute onlanguagechange: EventHandler, get = handlers::window_handler::<_, { event_type::LANGUAGECHANGE }>, set = handlers::set_window_handler::<_, { event_type::LANGUAGECHANGE }>;
-        #[calls_script]
+        attribute onlanguagechange: EventHandler, get = handlers::window_handler::<{ event_type::LANGUAGECHANGE }>, set = handlers::set_window_handler::<_, { event_type::LANGUAGECHANGE }>;
         #[front]
-        attribute onmessage: EventHandler, get = handlers::window_handler::<_, { event_type::MESSAGE }>, set = handlers::set_window_handler::<_, { event_type::MESSAGE }>;
-        #[calls_script]
+        attribute onmessage: EventHandler, get = handlers::window_handler::<{ event_type::MESSAGE }>, set = handlers::set_window_handler::<_, { event_type::MESSAGE }>;
         #[front]
-        attribute onmessageerror: EventHandler, get = handlers::window_handler::<_, { event_type::MESSAGEERROR }>, set = handlers::set_window_handler::<_, { event_type::MESSAGEERROR }>;
-        #[calls_script]
+        attribute onmessageerror: EventHandler, get = handlers::window_handler::<{ event_type::MESSAGEERROR }>, set = handlers::set_window_handler::<_, { event_type::MESSAGEERROR }>;
         #[front]
-        attribute onoffline: EventHandler, get = handlers::window_handler::<_, { event_type::OFFLINE }>, set = handlers::set_window_handler::<_, { event_type::OFFLINE }>;
-        #[calls_script]
+        attribute onoffline: EventHandler, get = handlers::window_handler::<{ event_type::OFFLINE }>, set = handlers::set_window_handler::<_, { event_type::OFFLINE }>;
         #[front]
-        attribute ononline: EventHandler, get = handlers::window_handler::<_, { event_type::ONLINE }>, set = handlers::set_window_handler::<_, { event_type::ONLINE }>;
-        #[calls_script]
+        attribute ononline: EventHandler, get = handlers::window_handler::<{ event_type::ONLINE }>, set = handlers::set_window_handler::<_, { event_type::ONLINE }>;
         #[front]
-        attribute onpagehide: EventHandler, get = handlers::window_handler::<_, { event_type::PAGEHIDE }>, set = handlers::set_window_handler::<_, { event_type::PAGEHIDE }>;
-        #[calls_script]
+        attribute onpagehide: EventHandler, get = handlers::window_handler::<{ event_type::PAGEHIDE }>, set = handlers::set_window_handler::<_, { event_type::PAGEHIDE }>;
         #[front]
-        attribute onpagereveal: EventHandler, get = handlers::window_handler::<_, { event_type::PAGEREVEAL }>, set = handlers::set_window_handler::<_, { event_type::PAGEREVEAL }>;
-        #[calls_script]
+        attribute onpagereveal: EventHandler, get = handlers::window_handler::<{ event_type::PAGEREVEAL }>, set = handlers::set_window_handler::<_, { event_type::PAGEREVEAL }>;
         #[front]
-        attribute onpageshow: EventHandler, get = handlers::window_handler::<_, { event_type::PAGESHOW }>, set = handlers::set_window_handler::<_, { event_type::PAGESHOW }>;
-        #[calls_script]
+        attribute onpageshow: EventHandler, get = handlers::window_handler::<{ event_type::PAGESHOW }>, set = handlers::set_window_handler::<_, { event_type::PAGESHOW }>;
         #[front]
-        attribute onpageswap: EventHandler, get = handlers::window_handler::<_, { event_type::PAGESWAP }>, set = handlers::set_window_handler::<_, { event_type::PAGESWAP }>;
-        #[calls_script]
+        attribute onpageswap: EventHandler, get = handlers::window_handler::<{ event_type::PAGESWAP }>, set = handlers::set_window_handler::<_, { event_type::PAGESWAP }>;
         #[front]
-        attribute onpopstate: EventHandler, get = handlers::window_handler::<_, { event_type::POPSTATE }>, set = handlers::set_window_handler::<_, { event_type::POPSTATE }>;
-        #[calls_script]
+        attribute onpopstate: EventHandler, get = handlers::window_handler::<{ event_type::POPSTATE }>, set = handlers::set_window_handler::<_, { event_type::POPSTATE }>;
         #[front]
-        attribute onrejectionhandled: EventHandler, get = handlers::window_handler::<_, { event_type::REJECTIONHANDLED }>, set = handlers::set_window_handler::<_, { event_type::REJECTIONHANDLED }>;
-        #[calls_script]
+        attribute onrejectionhandled: EventHandler, get = handlers::window_handler::<{ event_type::REJECTIONHANDLED }>, set = handlers::set_window_handler::<_, { event_type::REJECTIONHANDLED }>;
         #[front]
-        attribute onstorage: EventHandler, get = handlers::window_handler::<_, { event_type::STORAGE }>, set = handlers::set_window_handler::<_, { event_type::STORAGE }>;
-        #[calls_script]
+        attribute onstorage: EventHandler, get = handlers::window_handler::<{ event_type::STORAGE }>, set = handlers::set_window_handler::<_, { event_type::STORAGE }>;
         #[front]
-        attribute onunhandledrejection: EventHandler, get = handlers::window_handler::<_, { event_type::UNHANDLEDREJECTION }>, set = handlers::set_window_handler::<_, { event_type::UNHANDLEDREJECTION }>;
-        #[calls_script]
+        attribute onunhandledrejection: EventHandler, get = handlers::window_handler::<{ event_type::UNHANDLEDREJECTION }>, set = handlers::set_window_handler::<_, { event_type::UNHANDLEDREJECTION }>;
         #[front]
-        attribute onunload: EventHandler, get = handlers::window_handler::<_, { event_type::UNLOAD }>, set = handlers::set_window_handler::<_, { event_type::UNLOAD }>;
+        attribute onunload: EventHandler, get = handlers::window_handler::<{ event_type::UNLOAD }>, set = handlers::set_window_handler::<_, { event_type::UNLOAD }>;
         // `[PutForwards=href]`.
         #[unforgeable]
         #[front]
@@ -1284,9 +1176,8 @@ crate::declare! {
         attribute reason: AnyOrUndefined, get = abort::reason;
         #[front]
         method throwIfAborted() -> Rethrown = abort::throw_if_aborted;
-        #[calls_script]
         #[front]
-        attribute onabort: EventHandler, get = handlers::port_handler::<_, { event_type::ABORT }>, set = handlers::set_port_handler::<_, { event_type::ABORT }>;
+        attribute onabort: EventHandler, get = handlers::port_handler::<{ event_type::ABORT }>, set = handlers::set_port_handler::<_, { event_type::ABORT }>;
     }
 
     // Fetch's: a header list and its guard, its pairs sorted and combined.
@@ -1427,9 +1318,8 @@ crate::declare! {
     // has on Android and ChromeOS only), `onchange` first as in Blink's
     // `network_information.idl`.
     interface NetworkInformation : EventTarget [type = NetworkInformationObject] {
-        #[calls_script]
         #[front]
-        attribute onchange: EventHandler, get = handlers::port_handler::<_, { event_type::CHANGE }>, set = handlers::set_port_handler::<_, { event_type::CHANGE }>;
+        attribute onchange: EventHandler, get = handlers::port_handler::<{ event_type::CHANGE }>, set = handlers::set_port_handler::<_, { event_type::CHANGE }>;
         // WebIDL's `EffectiveConnectionType`, as a string.
         attribute effectiveType: DomString, get = navigator::effective_type;
         // WebIDL's `Millisecond`, an `unsigned long long`: always 0.
@@ -1498,9 +1388,8 @@ crate::declare! {
 
     // Its members in Chrome's order.
     interface WakeLockSentinel : EventTarget [type = WakeLockSentinelObject] {
-        #[calls_script]
         #[front]
-        attribute onrelease: EventHandler, get = handlers::port_handler::<_, { event_type::RELEASE }>, set = handlers::set_port_handler::<_, { event_type::RELEASE }>;
+        attribute onrelease: EventHandler, get = handlers::port_handler::<{ event_type::RELEASE }>, set = handlers::set_port_handler::<_, { event_type::RELEASE }>;
         attribute released: bool, get = wake_lock::released;
         // WebIDL's `WakeLockType`, as a string.
         attribute r#type: DomString, get = wake_lock::sentinel_type;
@@ -1874,266 +1763,180 @@ crate::declare! {
         attribute hidden: bool, get = document::hidden;
         // WebIDL's `DocumentVisibilityState`, as a string.
         attribute visibilityState: DomString, get = document::visibility_state;
-        #[calls_script]
         #[front]
-        attribute onvisibilitychange: EventHandler, get = handlers::document_handler::<_, { event_type::VISIBILITYCHANGE }>, set = handlers::set_document_handler::<_, { event_type::VISIBILITYCHANGE }>;
+        attribute onvisibilitychange: EventHandler, get = handlers::document_handler::<{ event_type::VISIBILITYCHANGE }>, set = handlers::set_document_handler::<_, { event_type::VISIBILITYCHANGE }>;
 
         // HTML's `GlobalEventHandlers`.
-        #[calls_script]
         #[front]
-        attribute onabort: EventHandler, get = handlers::document_handler::<_, { event_type::ABORT }>, set = handlers::set_document_handler::<_, { event_type::ABORT }>;
-        #[calls_script]
+        attribute onabort: EventHandler, get = handlers::document_handler::<{ event_type::ABORT }>, set = handlers::set_document_handler::<_, { event_type::ABORT }>;
         #[front]
-        attribute onanimationcancel: EventHandler, get = handlers::document_handler::<_, { event_type::ANIMATIONCANCEL }>, set = handlers::set_document_handler::<_, { event_type::ANIMATIONCANCEL }>;
-        #[calls_script]
+        attribute onanimationcancel: EventHandler, get = handlers::document_handler::<{ event_type::ANIMATIONCANCEL }>, set = handlers::set_document_handler::<_, { event_type::ANIMATIONCANCEL }>;
         #[front]
-        attribute onanimationend: EventHandler, get = handlers::document_handler::<_, { event_type::ANIMATIONEND }>, set = handlers::set_document_handler::<_, { event_type::ANIMATIONEND }>;
-        #[calls_script]
+        attribute onanimationend: EventHandler, get = handlers::document_handler::<{ event_type::ANIMATIONEND }>, set = handlers::set_document_handler::<_, { event_type::ANIMATIONEND }>;
         #[front]
-        attribute onanimationiteration: EventHandler, get = handlers::document_handler::<_, { event_type::ANIMATIONITERATION }>, set = handlers::set_document_handler::<_, { event_type::ANIMATIONITERATION }>;
-        #[calls_script]
+        attribute onanimationiteration: EventHandler, get = handlers::document_handler::<{ event_type::ANIMATIONITERATION }>, set = handlers::set_document_handler::<_, { event_type::ANIMATIONITERATION }>;
         #[front]
-        attribute onanimationstart: EventHandler, get = handlers::document_handler::<_, { event_type::ANIMATIONSTART }>, set = handlers::set_document_handler::<_, { event_type::ANIMATIONSTART }>;
-        #[calls_script]
+        attribute onanimationstart: EventHandler, get = handlers::document_handler::<{ event_type::ANIMATIONSTART }>, set = handlers::set_document_handler::<_, { event_type::ANIMATIONSTART }>;
         #[front]
-        attribute onauxclick: EventHandler, get = handlers::document_handler::<_, { event_type::AUXCLICK }>, set = handlers::set_document_handler::<_, { event_type::AUXCLICK }>;
-        #[calls_script]
+        attribute onauxclick: EventHandler, get = handlers::document_handler::<{ event_type::AUXCLICK }>, set = handlers::set_document_handler::<_, { event_type::AUXCLICK }>;
         #[front]
-        attribute onbeforeinput: EventHandler, get = handlers::document_handler::<_, { event_type::BEFOREINPUT }>, set = handlers::set_document_handler::<_, { event_type::BEFOREINPUT }>;
-        #[calls_script]
+        attribute onbeforeinput: EventHandler, get = handlers::document_handler::<{ event_type::BEFOREINPUT }>, set = handlers::set_document_handler::<_, { event_type::BEFOREINPUT }>;
         #[front]
-        attribute onbeforematch: EventHandler, get = handlers::document_handler::<_, { event_type::BEFOREMATCH }>, set = handlers::set_document_handler::<_, { event_type::BEFOREMATCH }>;
-        #[calls_script]
+        attribute onbeforematch: EventHandler, get = handlers::document_handler::<{ event_type::BEFOREMATCH }>, set = handlers::set_document_handler::<_, { event_type::BEFOREMATCH }>;
         #[front]
-        attribute onbeforetoggle: EventHandler, get = handlers::document_handler::<_, { event_type::BEFORETOGGLE }>, set = handlers::set_document_handler::<_, { event_type::BEFORETOGGLE }>;
-        #[calls_script]
+        attribute onbeforetoggle: EventHandler, get = handlers::document_handler::<{ event_type::BEFORETOGGLE }>, set = handlers::set_document_handler::<_, { event_type::BEFORETOGGLE }>;
         #[front]
-        attribute onblur: EventHandler, get = handlers::document_handler::<_, { event_type::BLUR }>, set = handlers::set_document_handler::<_, { event_type::BLUR }>;
-        #[calls_script]
+        attribute onblur: EventHandler, get = handlers::document_handler::<{ event_type::BLUR }>, set = handlers::set_document_handler::<_, { event_type::BLUR }>;
         #[front]
-        attribute oncancel: EventHandler, get = handlers::document_handler::<_, { event_type::CANCEL }>, set = handlers::set_document_handler::<_, { event_type::CANCEL }>;
-        #[calls_script]
+        attribute oncancel: EventHandler, get = handlers::document_handler::<{ event_type::CANCEL }>, set = handlers::set_document_handler::<_, { event_type::CANCEL }>;
         #[front]
-        attribute oncanplay: EventHandler, get = handlers::document_handler::<_, { event_type::CANPLAY }>, set = handlers::set_document_handler::<_, { event_type::CANPLAY }>;
-        #[calls_script]
+        attribute oncanplay: EventHandler, get = handlers::document_handler::<{ event_type::CANPLAY }>, set = handlers::set_document_handler::<_, { event_type::CANPLAY }>;
         #[front]
-        attribute oncanplaythrough: EventHandler, get = handlers::document_handler::<_, { event_type::CANPLAYTHROUGH }>, set = handlers::set_document_handler::<_, { event_type::CANPLAYTHROUGH }>;
-        #[calls_script]
+        attribute oncanplaythrough: EventHandler, get = handlers::document_handler::<{ event_type::CANPLAYTHROUGH }>, set = handlers::set_document_handler::<_, { event_type::CANPLAYTHROUGH }>;
         #[front]
-        attribute onchange: EventHandler, get = handlers::document_handler::<_, { event_type::CHANGE }>, set = handlers::set_document_handler::<_, { event_type::CHANGE }>;
-        #[calls_script]
+        attribute onchange: EventHandler, get = handlers::document_handler::<{ event_type::CHANGE }>, set = handlers::set_document_handler::<_, { event_type::CHANGE }>;
         #[front]
-        attribute onclick: EventHandler, get = handlers::document_handler::<_, { event_type::CLICK }>, set = handlers::set_document_handler::<_, { event_type::CLICK }>;
-        #[calls_script]
+        attribute onclick: EventHandler, get = handlers::document_handler::<{ event_type::CLICK }>, set = handlers::set_document_handler::<_, { event_type::CLICK }>;
         #[front]
-        attribute onclose: EventHandler, get = handlers::document_handler::<_, { event_type::CLOSE }>, set = handlers::set_document_handler::<_, { event_type::CLOSE }>;
-        #[calls_script]
+        attribute onclose: EventHandler, get = handlers::document_handler::<{ event_type::CLOSE }>, set = handlers::set_document_handler::<_, { event_type::CLOSE }>;
         #[front]
-        attribute oncommand: EventHandler, get = handlers::document_handler::<_, { event_type::COMMAND }>, set = handlers::set_document_handler::<_, { event_type::COMMAND }>;
-        #[calls_script]
+        attribute oncommand: EventHandler, get = handlers::document_handler::<{ event_type::COMMAND }>, set = handlers::set_document_handler::<_, { event_type::COMMAND }>;
         #[front]
-        attribute oncontentvisibilityautostatechange: EventHandler, get = handlers::document_handler::<_, { event_type::CONTENTVISIBILITYAUTOSTATECHANGE }>, set = handlers::set_document_handler::<_, { event_type::CONTENTVISIBILITYAUTOSTATECHANGE }>;
-        #[calls_script]
+        attribute oncontentvisibilityautostatechange: EventHandler, get = handlers::document_handler::<{ event_type::CONTENTVISIBILITYAUTOSTATECHANGE }>, set = handlers::set_document_handler::<_, { event_type::CONTENTVISIBILITYAUTOSTATECHANGE }>;
         #[front]
-        attribute oncontextlost: EventHandler, get = handlers::document_handler::<_, { event_type::CONTEXTLOST }>, set = handlers::set_document_handler::<_, { event_type::CONTEXTLOST }>;
-        #[calls_script]
+        attribute oncontextlost: EventHandler, get = handlers::document_handler::<{ event_type::CONTEXTLOST }>, set = handlers::set_document_handler::<_, { event_type::CONTEXTLOST }>;
         #[front]
-        attribute oncontextmenu: EventHandler, get = handlers::document_handler::<_, { event_type::CONTEXTMENU }>, set = handlers::set_document_handler::<_, { event_type::CONTEXTMENU }>;
-        #[calls_script]
+        attribute oncontextmenu: EventHandler, get = handlers::document_handler::<{ event_type::CONTEXTMENU }>, set = handlers::set_document_handler::<_, { event_type::CONTEXTMENU }>;
         #[front]
-        attribute oncontextrestored: EventHandler, get = handlers::document_handler::<_, { event_type::CONTEXTRESTORED }>, set = handlers::set_document_handler::<_, { event_type::CONTEXTRESTORED }>;
-        #[calls_script]
+        attribute oncontextrestored: EventHandler, get = handlers::document_handler::<{ event_type::CONTEXTRESTORED }>, set = handlers::set_document_handler::<_, { event_type::CONTEXTRESTORED }>;
         #[front]
-        attribute oncuechange: EventHandler, get = handlers::document_handler::<_, { event_type::CUECHANGE }>, set = handlers::set_document_handler::<_, { event_type::CUECHANGE }>;
-        #[calls_script]
+        attribute oncuechange: EventHandler, get = handlers::document_handler::<{ event_type::CUECHANGE }>, set = handlers::set_document_handler::<_, { event_type::CUECHANGE }>;
         #[front]
-        attribute ondblclick: EventHandler, get = handlers::document_handler::<_, { event_type::DBLCLICK }>, set = handlers::set_document_handler::<_, { event_type::DBLCLICK }>;
-        #[calls_script]
+        attribute ondblclick: EventHandler, get = handlers::document_handler::<{ event_type::DBLCLICK }>, set = handlers::set_document_handler::<_, { event_type::DBLCLICK }>;
         #[front]
-        attribute ondrag: EventHandler, get = handlers::document_handler::<_, { event_type::DRAG }>, set = handlers::set_document_handler::<_, { event_type::DRAG }>;
-        #[calls_script]
+        attribute ondrag: EventHandler, get = handlers::document_handler::<{ event_type::DRAG }>, set = handlers::set_document_handler::<_, { event_type::DRAG }>;
         #[front]
-        attribute ondragend: EventHandler, get = handlers::document_handler::<_, { event_type::DRAGEND }>, set = handlers::set_document_handler::<_, { event_type::DRAGEND }>;
-        #[calls_script]
+        attribute ondragend: EventHandler, get = handlers::document_handler::<{ event_type::DRAGEND }>, set = handlers::set_document_handler::<_, { event_type::DRAGEND }>;
         #[front]
-        attribute ondragenter: EventHandler, get = handlers::document_handler::<_, { event_type::DRAGENTER }>, set = handlers::set_document_handler::<_, { event_type::DRAGENTER }>;
-        #[calls_script]
+        attribute ondragenter: EventHandler, get = handlers::document_handler::<{ event_type::DRAGENTER }>, set = handlers::set_document_handler::<_, { event_type::DRAGENTER }>;
         #[front]
-        attribute ondragleave: EventHandler, get = handlers::document_handler::<_, { event_type::DRAGLEAVE }>, set = handlers::set_document_handler::<_, { event_type::DRAGLEAVE }>;
-        #[calls_script]
+        attribute ondragleave: EventHandler, get = handlers::document_handler::<{ event_type::DRAGLEAVE }>, set = handlers::set_document_handler::<_, { event_type::DRAGLEAVE }>;
         #[front]
-        attribute ondragover: EventHandler, get = handlers::document_handler::<_, { event_type::DRAGOVER }>, set = handlers::set_document_handler::<_, { event_type::DRAGOVER }>;
-        #[calls_script]
+        attribute ondragover: EventHandler, get = handlers::document_handler::<{ event_type::DRAGOVER }>, set = handlers::set_document_handler::<_, { event_type::DRAGOVER }>;
         #[front]
-        attribute ondragstart: EventHandler, get = handlers::document_handler::<_, { event_type::DRAGSTART }>, set = handlers::set_document_handler::<_, { event_type::DRAGSTART }>;
-        #[calls_script]
+        attribute ondragstart: EventHandler, get = handlers::document_handler::<{ event_type::DRAGSTART }>, set = handlers::set_document_handler::<_, { event_type::DRAGSTART }>;
         #[front]
-        attribute ondrop: EventHandler, get = handlers::document_handler::<_, { event_type::DROP }>, set = handlers::set_document_handler::<_, { event_type::DROP }>;
-        #[calls_script]
+        attribute ondrop: EventHandler, get = handlers::document_handler::<{ event_type::DROP }>, set = handlers::set_document_handler::<_, { event_type::DROP }>;
         #[front]
-        attribute ondurationchange: EventHandler, get = handlers::document_handler::<_, { event_type::DURATIONCHANGE }>, set = handlers::set_document_handler::<_, { event_type::DURATIONCHANGE }>;
-        #[calls_script]
+        attribute ondurationchange: EventHandler, get = handlers::document_handler::<{ event_type::DURATIONCHANGE }>, set = handlers::set_document_handler::<_, { event_type::DURATIONCHANGE }>;
         #[front]
-        attribute onemptied: EventHandler, get = handlers::document_handler::<_, { event_type::EMPTIED }>, set = handlers::set_document_handler::<_, { event_type::EMPTIED }>;
-        #[calls_script]
+        attribute onemptied: EventHandler, get = handlers::document_handler::<{ event_type::EMPTIED }>, set = handlers::set_document_handler::<_, { event_type::EMPTIED }>;
         #[front]
-        attribute onended: EventHandler, get = handlers::document_handler::<_, { event_type::ENDED }>, set = handlers::set_document_handler::<_, { event_type::ENDED }>;
-        #[calls_script]
+        attribute onended: EventHandler, get = handlers::document_handler::<{ event_type::ENDED }>, set = handlers::set_document_handler::<_, { event_type::ENDED }>;
         #[front]
-        attribute onerror: EventHandler, get = handlers::document_handler::<_, { event_type::ERROR }>, set = handlers::set_document_handler::<_, { event_type::ERROR }>;
-        #[calls_script]
+        attribute onerror: EventHandler, get = handlers::document_handler::<{ event_type::ERROR }>, set = handlers::set_document_handler::<_, { event_type::ERROR }>;
         #[front]
-        attribute onfocus: EventHandler, get = handlers::document_handler::<_, { event_type::FOCUS }>, set = handlers::set_document_handler::<_, { event_type::FOCUS }>;
-        #[calls_script]
+        attribute onfocus: EventHandler, get = handlers::document_handler::<{ event_type::FOCUS }>, set = handlers::set_document_handler::<_, { event_type::FOCUS }>;
         #[front]
-        attribute onformdata: EventHandler, get = handlers::document_handler::<_, { event_type::FORMDATA }>, set = handlers::set_document_handler::<_, { event_type::FORMDATA }>;
-        #[calls_script]
+        attribute onformdata: EventHandler, get = handlers::document_handler::<{ event_type::FORMDATA }>, set = handlers::set_document_handler::<_, { event_type::FORMDATA }>;
         #[front]
-        attribute oninput: EventHandler, get = handlers::document_handler::<_, { event_type::INPUT }>, set = handlers::set_document_handler::<_, { event_type::INPUT }>;
-        #[calls_script]
+        attribute oninput: EventHandler, get = handlers::document_handler::<{ event_type::INPUT }>, set = handlers::set_document_handler::<_, { event_type::INPUT }>;
         #[front]
-        attribute oninvalid: EventHandler, get = handlers::document_handler::<_, { event_type::INVALID }>, set = handlers::set_document_handler::<_, { event_type::INVALID }>;
-        #[calls_script]
+        attribute oninvalid: EventHandler, get = handlers::document_handler::<{ event_type::INVALID }>, set = handlers::set_document_handler::<_, { event_type::INVALID }>;
         #[front]
-        attribute onkeydown: EventHandler, get = handlers::document_handler::<_, { event_type::KEYDOWN }>, set = handlers::set_document_handler::<_, { event_type::KEYDOWN }>;
-        #[calls_script]
+        attribute onkeydown: EventHandler, get = handlers::document_handler::<{ event_type::KEYDOWN }>, set = handlers::set_document_handler::<_, { event_type::KEYDOWN }>;
         #[front]
-        attribute onkeypress: EventHandler, get = handlers::document_handler::<_, { event_type::KEYPRESS }>, set = handlers::set_document_handler::<_, { event_type::KEYPRESS }>;
-        #[calls_script]
+        attribute onkeypress: EventHandler, get = handlers::document_handler::<{ event_type::KEYPRESS }>, set = handlers::set_document_handler::<_, { event_type::KEYPRESS }>;
         #[front]
-        attribute onkeyup: EventHandler, get = handlers::document_handler::<_, { event_type::KEYUP }>, set = handlers::set_document_handler::<_, { event_type::KEYUP }>;
-        #[calls_script]
+        attribute onkeyup: EventHandler, get = handlers::document_handler::<{ event_type::KEYUP }>, set = handlers::set_document_handler::<_, { event_type::KEYUP }>;
         #[front]
-        attribute onload: EventHandler, get = handlers::document_handler::<_, { event_type::LOAD }>, set = handlers::set_document_handler::<_, { event_type::LOAD }>;
-        #[calls_script]
+        attribute onload: EventHandler, get = handlers::document_handler::<{ event_type::LOAD }>, set = handlers::set_document_handler::<_, { event_type::LOAD }>;
         #[front]
-        attribute onloadeddata: EventHandler, get = handlers::document_handler::<_, { event_type::LOADEDDATA }>, set = handlers::set_document_handler::<_, { event_type::LOADEDDATA }>;
-        #[calls_script]
+        attribute onloadeddata: EventHandler, get = handlers::document_handler::<{ event_type::LOADEDDATA }>, set = handlers::set_document_handler::<_, { event_type::LOADEDDATA }>;
         #[front]
-        attribute onloadedmetadata: EventHandler, get = handlers::document_handler::<_, { event_type::LOADEDMETADATA }>, set = handlers::set_document_handler::<_, { event_type::LOADEDMETADATA }>;
-        #[calls_script]
+        attribute onloadedmetadata: EventHandler, get = handlers::document_handler::<{ event_type::LOADEDMETADATA }>, set = handlers::set_document_handler::<_, { event_type::LOADEDMETADATA }>;
         #[front]
-        attribute onloadstart: EventHandler, get = handlers::document_handler::<_, { event_type::LOADSTART }>, set = handlers::set_document_handler::<_, { event_type::LOADSTART }>;
-        #[calls_script]
+        attribute onloadstart: EventHandler, get = handlers::document_handler::<{ event_type::LOADSTART }>, set = handlers::set_document_handler::<_, { event_type::LOADSTART }>;
         #[front]
-        attribute onmousedown: EventHandler, get = handlers::document_handler::<_, { event_type::MOUSEDOWN }>, set = handlers::set_document_handler::<_, { event_type::MOUSEDOWN }>;
-        #[calls_script]
+        attribute onmousedown: EventHandler, get = handlers::document_handler::<{ event_type::MOUSEDOWN }>, set = handlers::set_document_handler::<_, { event_type::MOUSEDOWN }>;
         #[front]
-        attribute onmouseenter: EventHandler, get = handlers::document_handler::<_, { event_type::MOUSEENTER }>, set = handlers::set_document_handler::<_, { event_type::MOUSEENTER }>;
-        #[calls_script]
+        attribute onmouseenter: EventHandler, get = handlers::document_handler::<{ event_type::MOUSEENTER }>, set = handlers::set_document_handler::<_, { event_type::MOUSEENTER }>;
         #[front]
-        attribute onmouseleave: EventHandler, get = handlers::document_handler::<_, { event_type::MOUSELEAVE }>, set = handlers::set_document_handler::<_, { event_type::MOUSELEAVE }>;
-        #[calls_script]
+        attribute onmouseleave: EventHandler, get = handlers::document_handler::<{ event_type::MOUSELEAVE }>, set = handlers::set_document_handler::<_, { event_type::MOUSELEAVE }>;
         #[front]
-        attribute onmousemove: EventHandler, get = handlers::document_handler::<_, { event_type::MOUSEMOVE }>, set = handlers::set_document_handler::<_, { event_type::MOUSEMOVE }>;
-        #[calls_script]
+        attribute onmousemove: EventHandler, get = handlers::document_handler::<{ event_type::MOUSEMOVE }>, set = handlers::set_document_handler::<_, { event_type::MOUSEMOVE }>;
         #[front]
-        attribute onmouseout: EventHandler, get = handlers::document_handler::<_, { event_type::MOUSEOUT }>, set = handlers::set_document_handler::<_, { event_type::MOUSEOUT }>;
-        #[calls_script]
+        attribute onmouseout: EventHandler, get = handlers::document_handler::<{ event_type::MOUSEOUT }>, set = handlers::set_document_handler::<_, { event_type::MOUSEOUT }>;
         #[front]
-        attribute onmouseover: EventHandler, get = handlers::document_handler::<_, { event_type::MOUSEOVER }>, set = handlers::set_document_handler::<_, { event_type::MOUSEOVER }>;
-        #[calls_script]
+        attribute onmouseover: EventHandler, get = handlers::document_handler::<{ event_type::MOUSEOVER }>, set = handlers::set_document_handler::<_, { event_type::MOUSEOVER }>;
         #[front]
-        attribute onmouseup: EventHandler, get = handlers::document_handler::<_, { event_type::MOUSEUP }>, set = handlers::set_document_handler::<_, { event_type::MOUSEUP }>;
-        #[calls_script]
+        attribute onmouseup: EventHandler, get = handlers::document_handler::<{ event_type::MOUSEUP }>, set = handlers::set_document_handler::<_, { event_type::MOUSEUP }>;
         #[front]
-        attribute onmousewheel: EventHandler, get = handlers::document_handler::<_, { event_type::MOUSEWHEEL }>, set = handlers::set_document_handler::<_, { event_type::MOUSEWHEEL }>;
-        #[calls_script]
+        attribute onmousewheel: EventHandler, get = handlers::document_handler::<{ event_type::MOUSEWHEEL }>, set = handlers::set_document_handler::<_, { event_type::MOUSEWHEEL }>;
         #[front]
-        attribute onpause: EventHandler, get = handlers::document_handler::<_, { event_type::PAUSE }>, set = handlers::set_document_handler::<_, { event_type::PAUSE }>;
-        #[calls_script]
+        attribute onpause: EventHandler, get = handlers::document_handler::<{ event_type::PAUSE }>, set = handlers::set_document_handler::<_, { event_type::PAUSE }>;
         #[front]
-        attribute onplay: EventHandler, get = handlers::document_handler::<_, { event_type::PLAY }>, set = handlers::set_document_handler::<_, { event_type::PLAY }>;
-        #[calls_script]
+        attribute onplay: EventHandler, get = handlers::document_handler::<{ event_type::PLAY }>, set = handlers::set_document_handler::<_, { event_type::PLAY }>;
         #[front]
-        attribute onplaying: EventHandler, get = handlers::document_handler::<_, { event_type::PLAYING }>, set = handlers::set_document_handler::<_, { event_type::PLAYING }>;
-        #[calls_script]
+        attribute onplaying: EventHandler, get = handlers::document_handler::<{ event_type::PLAYING }>, set = handlers::set_document_handler::<_, { event_type::PLAYING }>;
         #[front]
-        attribute onprogress: EventHandler, get = handlers::document_handler::<_, { event_type::PROGRESS }>, set = handlers::set_document_handler::<_, { event_type::PROGRESS }>;
-        #[calls_script]
+        attribute onprogress: EventHandler, get = handlers::document_handler::<{ event_type::PROGRESS }>, set = handlers::set_document_handler::<_, { event_type::PROGRESS }>;
         #[front]
-        attribute onratechange: EventHandler, get = handlers::document_handler::<_, { event_type::RATECHANGE }>, set = handlers::set_document_handler::<_, { event_type::RATECHANGE }>;
-        #[calls_script]
+        attribute onratechange: EventHandler, get = handlers::document_handler::<{ event_type::RATECHANGE }>, set = handlers::set_document_handler::<_, { event_type::RATECHANGE }>;
         #[front]
-        attribute onreset: EventHandler, get = handlers::document_handler::<_, { event_type::RESET }>, set = handlers::set_document_handler::<_, { event_type::RESET }>;
-        #[calls_script]
+        attribute onreset: EventHandler, get = handlers::document_handler::<{ event_type::RESET }>, set = handlers::set_document_handler::<_, { event_type::RESET }>;
         #[front]
-        attribute onresize: EventHandler, get = handlers::document_handler::<_, { event_type::RESIZE }>, set = handlers::set_document_handler::<_, { event_type::RESIZE }>;
-        #[calls_script]
+        attribute onresize: EventHandler, get = handlers::document_handler::<{ event_type::RESIZE }>, set = handlers::set_document_handler::<_, { event_type::RESIZE }>;
         #[front]
-        attribute onscroll: EventHandler, get = handlers::document_handler::<_, { event_type::SCROLL }>, set = handlers::set_document_handler::<_, { event_type::SCROLL }>;
-        #[calls_script]
+        attribute onscroll: EventHandler, get = handlers::document_handler::<{ event_type::SCROLL }>, set = handlers::set_document_handler::<_, { event_type::SCROLL }>;
         #[front]
-        attribute onscrollend: EventHandler, get = handlers::document_handler::<_, { event_type::SCROLLEND }>, set = handlers::set_document_handler::<_, { event_type::SCROLLEND }>;
-        #[calls_script]
+        attribute onscrollend: EventHandler, get = handlers::document_handler::<{ event_type::SCROLLEND }>, set = handlers::set_document_handler::<_, { event_type::SCROLLEND }>;
         #[front]
-        attribute onsecuritypolicyviolation: EventHandler, get = handlers::document_handler::<_, { event_type::SECURITYPOLICYVIOLATION }>, set = handlers::set_document_handler::<_, { event_type::SECURITYPOLICYVIOLATION }>;
-        #[calls_script]
+        attribute onsecuritypolicyviolation: EventHandler, get = handlers::document_handler::<{ event_type::SECURITYPOLICYVIOLATION }>, set = handlers::set_document_handler::<_, { event_type::SECURITYPOLICYVIOLATION }>;
         #[front]
-        attribute onseeked: EventHandler, get = handlers::document_handler::<_, { event_type::SEEKED }>, set = handlers::set_document_handler::<_, { event_type::SEEKED }>;
-        #[calls_script]
+        attribute onseeked: EventHandler, get = handlers::document_handler::<{ event_type::SEEKED }>, set = handlers::set_document_handler::<_, { event_type::SEEKED }>;
         #[front]
-        attribute onseeking: EventHandler, get = handlers::document_handler::<_, { event_type::SEEKING }>, set = handlers::set_document_handler::<_, { event_type::SEEKING }>;
-        #[calls_script]
+        attribute onseeking: EventHandler, get = handlers::document_handler::<{ event_type::SEEKING }>, set = handlers::set_document_handler::<_, { event_type::SEEKING }>;
         #[front]
-        attribute onselect: EventHandler, get = handlers::document_handler::<_, { event_type::SELECT }>, set = handlers::set_document_handler::<_, { event_type::SELECT }>;
-        #[calls_script]
+        attribute onselect: EventHandler, get = handlers::document_handler::<{ event_type::SELECT }>, set = handlers::set_document_handler::<_, { event_type::SELECT }>;
         #[front]
-        attribute onselectionchange: EventHandler, get = handlers::document_handler::<_, { event_type::SELECTIONCHANGE }>, set = handlers::set_document_handler::<_, { event_type::SELECTIONCHANGE }>;
-        #[calls_script]
+        attribute onselectionchange: EventHandler, get = handlers::document_handler::<{ event_type::SELECTIONCHANGE }>, set = handlers::set_document_handler::<_, { event_type::SELECTIONCHANGE }>;
         #[front]
-        attribute onselectstart: EventHandler, get = handlers::document_handler::<_, { event_type::SELECTSTART }>, set = handlers::set_document_handler::<_, { event_type::SELECTSTART }>;
-        #[calls_script]
+        attribute onselectstart: EventHandler, get = handlers::document_handler::<{ event_type::SELECTSTART }>, set = handlers::set_document_handler::<_, { event_type::SELECTSTART }>;
         #[front]
-        attribute onslotchange: EventHandler, get = handlers::document_handler::<_, { event_type::SLOTCHANGE }>, set = handlers::set_document_handler::<_, { event_type::SLOTCHANGE }>;
-        #[calls_script]
+        attribute onslotchange: EventHandler, get = handlers::document_handler::<{ event_type::SLOTCHANGE }>, set = handlers::set_document_handler::<_, { event_type::SLOTCHANGE }>;
         #[front]
-        attribute onstalled: EventHandler, get = handlers::document_handler::<_, { event_type::STALLED }>, set = handlers::set_document_handler::<_, { event_type::STALLED }>;
-        #[calls_script]
+        attribute onstalled: EventHandler, get = handlers::document_handler::<{ event_type::STALLED }>, set = handlers::set_document_handler::<_, { event_type::STALLED }>;
         #[front]
-        attribute onsubmit: EventHandler, get = handlers::document_handler::<_, { event_type::SUBMIT }>, set = handlers::set_document_handler::<_, { event_type::SUBMIT }>;
-        #[calls_script]
+        attribute onsubmit: EventHandler, get = handlers::document_handler::<{ event_type::SUBMIT }>, set = handlers::set_document_handler::<_, { event_type::SUBMIT }>;
         #[front]
-        attribute onsuspend: EventHandler, get = handlers::document_handler::<_, { event_type::SUSPEND }>, set = handlers::set_document_handler::<_, { event_type::SUSPEND }>;
-        #[calls_script]
+        attribute onsuspend: EventHandler, get = handlers::document_handler::<{ event_type::SUSPEND }>, set = handlers::set_document_handler::<_, { event_type::SUSPEND }>;
         #[front]
-        attribute ontimeupdate: EventHandler, get = handlers::document_handler::<_, { event_type::TIMEUPDATE }>, set = handlers::set_document_handler::<_, { event_type::TIMEUPDATE }>;
-        #[calls_script]
+        attribute ontimeupdate: EventHandler, get = handlers::document_handler::<{ event_type::TIMEUPDATE }>, set = handlers::set_document_handler::<_, { event_type::TIMEUPDATE }>;
         #[front]
-        attribute ontoggle: EventHandler, get = handlers::document_handler::<_, { event_type::TOGGLE }>, set = handlers::set_document_handler::<_, { event_type::TOGGLE }>;
-        #[calls_script]
+        attribute ontoggle: EventHandler, get = handlers::document_handler::<{ event_type::TOGGLE }>, set = handlers::set_document_handler::<_, { event_type::TOGGLE }>;
         #[front]
-        attribute ontransitioncancel: EventHandler, get = handlers::document_handler::<_, { event_type::TRANSITIONCANCEL }>, set = handlers::set_document_handler::<_, { event_type::TRANSITIONCANCEL }>;
-        #[calls_script]
+        attribute ontransitioncancel: EventHandler, get = handlers::document_handler::<{ event_type::TRANSITIONCANCEL }>, set = handlers::set_document_handler::<_, { event_type::TRANSITIONCANCEL }>;
         #[front]
-        attribute ontransitionend: EventHandler, get = handlers::document_handler::<_, { event_type::TRANSITIONEND }>, set = handlers::set_document_handler::<_, { event_type::TRANSITIONEND }>;
-        #[calls_script]
+        attribute ontransitionend: EventHandler, get = handlers::document_handler::<{ event_type::TRANSITIONEND }>, set = handlers::set_document_handler::<_, { event_type::TRANSITIONEND }>;
         #[front]
-        attribute ontransitionrun: EventHandler, get = handlers::document_handler::<_, { event_type::TRANSITIONRUN }>, set = handlers::set_document_handler::<_, { event_type::TRANSITIONRUN }>;
-        #[calls_script]
+        attribute ontransitionrun: EventHandler, get = handlers::document_handler::<{ event_type::TRANSITIONRUN }>, set = handlers::set_document_handler::<_, { event_type::TRANSITIONRUN }>;
         #[front]
-        attribute ontransitionstart: EventHandler, get = handlers::document_handler::<_, { event_type::TRANSITIONSTART }>, set = handlers::set_document_handler::<_, { event_type::TRANSITIONSTART }>;
-        #[calls_script]
+        attribute ontransitionstart: EventHandler, get = handlers::document_handler::<{ event_type::TRANSITIONSTART }>, set = handlers::set_document_handler::<_, { event_type::TRANSITIONSTART }>;
         #[front]
-        attribute onvolumechange: EventHandler, get = handlers::document_handler::<_, { event_type::VOLUMECHANGE }>, set = handlers::set_document_handler::<_, { event_type::VOLUMECHANGE }>;
-        #[calls_script]
+        attribute onvolumechange: EventHandler, get = handlers::document_handler::<{ event_type::VOLUMECHANGE }>, set = handlers::set_document_handler::<_, { event_type::VOLUMECHANGE }>;
         #[front]
-        attribute onwaiting: EventHandler, get = handlers::document_handler::<_, { event_type::WAITING }>, set = handlers::set_document_handler::<_, { event_type::WAITING }>;
-        #[calls_script]
+        attribute onwaiting: EventHandler, get = handlers::document_handler::<{ event_type::WAITING }>, set = handlers::set_document_handler::<_, { event_type::WAITING }>;
         #[front]
-        attribute onwebkitanimationend: EventHandler, get = handlers::document_handler::<_, { event_type::WEBKIT_ANIMATION_END }>, set = handlers::set_document_handler::<_, { event_type::WEBKIT_ANIMATION_END }>;
-        #[calls_script]
+        attribute onwebkitanimationend: EventHandler, get = handlers::document_handler::<{ event_type::WEBKIT_ANIMATION_END }>, set = handlers::set_document_handler::<_, { event_type::WEBKIT_ANIMATION_END }>;
         #[front]
-        attribute onwebkitanimationiteration: EventHandler, get = handlers::document_handler::<_, { event_type::WEBKIT_ANIMATION_ITERATION }>, set = handlers::set_document_handler::<_, { event_type::WEBKIT_ANIMATION_ITERATION }>;
-        #[calls_script]
+        attribute onwebkitanimationiteration: EventHandler, get = handlers::document_handler::<{ event_type::WEBKIT_ANIMATION_ITERATION }>, set = handlers::set_document_handler::<_, { event_type::WEBKIT_ANIMATION_ITERATION }>;
         #[front]
-        attribute onwebkitanimationstart: EventHandler, get = handlers::document_handler::<_, { event_type::WEBKIT_ANIMATION_START }>, set = handlers::set_document_handler::<_, { event_type::WEBKIT_ANIMATION_START }>;
-        #[calls_script]
+        attribute onwebkitanimationstart: EventHandler, get = handlers::document_handler::<{ event_type::WEBKIT_ANIMATION_START }>, set = handlers::set_document_handler::<_, { event_type::WEBKIT_ANIMATION_START }>;
         #[front]
-        attribute onwebkittransitionend: EventHandler, get = handlers::document_handler::<_, { event_type::WEBKIT_TRANSITION_END }>, set = handlers::set_document_handler::<_, { event_type::WEBKIT_TRANSITION_END }>;
-        #[calls_script]
+        attribute onwebkittransitionend: EventHandler, get = handlers::document_handler::<{ event_type::WEBKIT_TRANSITION_END }>, set = handlers::set_document_handler::<_, { event_type::WEBKIT_TRANSITION_END }>;
         #[front]
-        attribute onwheel: EventHandler, get = handlers::document_handler::<_, { event_type::WHEEL }>, set = handlers::set_document_handler::<_, { event_type::WHEEL }>;
+        attribute onwheel: EventHandler, get = handlers::document_handler::<{ event_type::WHEEL }>, set = handlers::set_document_handler::<_, { event_type::WHEEL }>;
 
         attribute children: HTMLCollection, get = parent_node::children;
         attribute firstElementChild: Option<Element>, get = parent_node::first_element_child;
@@ -2212,9 +2015,8 @@ crate::declare! {
         // Prerendering Revamped: machopo never prerenders, so nothing fires
         // `prerenderingchange`.
         attribute prerendering: bool, get = document::prerendering;
-        #[calls_script]
         #[front]
-        attribute onprerenderingchange: EventHandler, get = handlers::document_handler::<_, { event_type::PRERENDERINGCHANGE }>, set = handlers::set_document_handler::<_, { event_type::PRERENDERINGCHANGE }>;
+        attribute onprerenderingchange: EventHandler, get = handlers::document_handler::<{ event_type::PRERENDERINGCHANGE }>, set = handlers::set_document_handler::<_, { event_type::PRERENDERINGCHANGE }>;
     }
 
     interface DocumentType : Node [DocumentType] {
@@ -2430,261 +2232,176 @@ crate::declare! {
         attribute offsetHeight: i32, get = geometry::offset_height;
 
         // HTML's `GlobalEventHandlers`: a `<body>`'s or `<frameset>`'s window-reflecting ones are its window's.
-        #[calls_script]
         #[front]
-        attribute onabort: EventHandler, get = handlers::element_handler::<_, { event_type::ABORT }>, set = handlers::set_element_handler::<_, { event_type::ABORT }>;
-        #[calls_script]
+        attribute onabort: EventHandler, get = handlers::element_handler::<{ event_type::ABORT }>, set = handlers::set_element_handler::<_, { event_type::ABORT }>;
         #[front]
-        attribute onanimationcancel: EventHandler, get = handlers::element_handler::<_, { event_type::ANIMATIONCANCEL }>, set = handlers::set_element_handler::<_, { event_type::ANIMATIONCANCEL }>;
-        #[calls_script]
+        attribute onanimationcancel: EventHandler, get = handlers::element_handler::<{ event_type::ANIMATIONCANCEL }>, set = handlers::set_element_handler::<_, { event_type::ANIMATIONCANCEL }>;
         #[front]
-        attribute onanimationend: EventHandler, get = handlers::element_handler::<_, { event_type::ANIMATIONEND }>, set = handlers::set_element_handler::<_, { event_type::ANIMATIONEND }>;
-        #[calls_script]
+        attribute onanimationend: EventHandler, get = handlers::element_handler::<{ event_type::ANIMATIONEND }>, set = handlers::set_element_handler::<_, { event_type::ANIMATIONEND }>;
         #[front]
-        attribute onanimationiteration: EventHandler, get = handlers::element_handler::<_, { event_type::ANIMATIONITERATION }>, set = handlers::set_element_handler::<_, { event_type::ANIMATIONITERATION }>;
-        #[calls_script]
+        attribute onanimationiteration: EventHandler, get = handlers::element_handler::<{ event_type::ANIMATIONITERATION }>, set = handlers::set_element_handler::<_, { event_type::ANIMATIONITERATION }>;
         #[front]
-        attribute onanimationstart: EventHandler, get = handlers::element_handler::<_, { event_type::ANIMATIONSTART }>, set = handlers::set_element_handler::<_, { event_type::ANIMATIONSTART }>;
-        #[calls_script]
+        attribute onanimationstart: EventHandler, get = handlers::element_handler::<{ event_type::ANIMATIONSTART }>, set = handlers::set_element_handler::<_, { event_type::ANIMATIONSTART }>;
         #[front]
-        attribute onauxclick: EventHandler, get = handlers::element_handler::<_, { event_type::AUXCLICK }>, set = handlers::set_element_handler::<_, { event_type::AUXCLICK }>;
-        #[calls_script]
+        attribute onauxclick: EventHandler, get = handlers::element_handler::<{ event_type::AUXCLICK }>, set = handlers::set_element_handler::<_, { event_type::AUXCLICK }>;
         #[front]
-        attribute onbeforeinput: EventHandler, get = handlers::element_handler::<_, { event_type::BEFOREINPUT }>, set = handlers::set_element_handler::<_, { event_type::BEFOREINPUT }>;
-        #[calls_script]
+        attribute onbeforeinput: EventHandler, get = handlers::element_handler::<{ event_type::BEFOREINPUT }>, set = handlers::set_element_handler::<_, { event_type::BEFOREINPUT }>;
         #[front]
-        attribute onbeforematch: EventHandler, get = handlers::element_handler::<_, { event_type::BEFOREMATCH }>, set = handlers::set_element_handler::<_, { event_type::BEFOREMATCH }>;
-        #[calls_script]
+        attribute onbeforematch: EventHandler, get = handlers::element_handler::<{ event_type::BEFOREMATCH }>, set = handlers::set_element_handler::<_, { event_type::BEFOREMATCH }>;
         #[front]
-        attribute onbeforetoggle: EventHandler, get = handlers::element_handler::<_, { event_type::BEFORETOGGLE }>, set = handlers::set_element_handler::<_, { event_type::BEFORETOGGLE }>;
-        #[calls_script]
+        attribute onbeforetoggle: EventHandler, get = handlers::element_handler::<{ event_type::BEFORETOGGLE }>, set = handlers::set_element_handler::<_, { event_type::BEFORETOGGLE }>;
         #[front]
-        attribute onblur: EventHandler, get = handlers::element_handler::<_, { event_type::BLUR }>, set = handlers::set_element_handler::<_, { event_type::BLUR }>;
-        #[calls_script]
+        attribute onblur: EventHandler, get = handlers::element_handler::<{ event_type::BLUR }>, set = handlers::set_element_handler::<_, { event_type::BLUR }>;
         #[front]
-        attribute oncancel: EventHandler, get = handlers::element_handler::<_, { event_type::CANCEL }>, set = handlers::set_element_handler::<_, { event_type::CANCEL }>;
-        #[calls_script]
+        attribute oncancel: EventHandler, get = handlers::element_handler::<{ event_type::CANCEL }>, set = handlers::set_element_handler::<_, { event_type::CANCEL }>;
         #[front]
-        attribute oncanplay: EventHandler, get = handlers::element_handler::<_, { event_type::CANPLAY }>, set = handlers::set_element_handler::<_, { event_type::CANPLAY }>;
-        #[calls_script]
+        attribute oncanplay: EventHandler, get = handlers::element_handler::<{ event_type::CANPLAY }>, set = handlers::set_element_handler::<_, { event_type::CANPLAY }>;
         #[front]
-        attribute oncanplaythrough: EventHandler, get = handlers::element_handler::<_, { event_type::CANPLAYTHROUGH }>, set = handlers::set_element_handler::<_, { event_type::CANPLAYTHROUGH }>;
-        #[calls_script]
+        attribute oncanplaythrough: EventHandler, get = handlers::element_handler::<{ event_type::CANPLAYTHROUGH }>, set = handlers::set_element_handler::<_, { event_type::CANPLAYTHROUGH }>;
         #[front]
-        attribute onchange: EventHandler, get = handlers::element_handler::<_, { event_type::CHANGE }>, set = handlers::set_element_handler::<_, { event_type::CHANGE }>;
-        #[calls_script]
+        attribute onchange: EventHandler, get = handlers::element_handler::<{ event_type::CHANGE }>, set = handlers::set_element_handler::<_, { event_type::CHANGE }>;
         #[front]
-        attribute onclick: EventHandler, get = handlers::element_handler::<_, { event_type::CLICK }>, set = handlers::set_element_handler::<_, { event_type::CLICK }>;
-        #[calls_script]
+        attribute onclick: EventHandler, get = handlers::element_handler::<{ event_type::CLICK }>, set = handlers::set_element_handler::<_, { event_type::CLICK }>;
         #[front]
-        attribute onclose: EventHandler, get = handlers::element_handler::<_, { event_type::CLOSE }>, set = handlers::set_element_handler::<_, { event_type::CLOSE }>;
-        #[calls_script]
+        attribute onclose: EventHandler, get = handlers::element_handler::<{ event_type::CLOSE }>, set = handlers::set_element_handler::<_, { event_type::CLOSE }>;
         #[front]
-        attribute oncommand: EventHandler, get = handlers::element_handler::<_, { event_type::COMMAND }>, set = handlers::set_element_handler::<_, { event_type::COMMAND }>;
-        #[calls_script]
+        attribute oncommand: EventHandler, get = handlers::element_handler::<{ event_type::COMMAND }>, set = handlers::set_element_handler::<_, { event_type::COMMAND }>;
         #[front]
-        attribute oncontentvisibilityautostatechange: EventHandler, get = handlers::element_handler::<_, { event_type::CONTENTVISIBILITYAUTOSTATECHANGE }>, set = handlers::set_element_handler::<_, { event_type::CONTENTVISIBILITYAUTOSTATECHANGE }>;
-        #[calls_script]
+        attribute oncontentvisibilityautostatechange: EventHandler, get = handlers::element_handler::<{ event_type::CONTENTVISIBILITYAUTOSTATECHANGE }>, set = handlers::set_element_handler::<_, { event_type::CONTENTVISIBILITYAUTOSTATECHANGE }>;
         #[front]
-        attribute oncontextlost: EventHandler, get = handlers::element_handler::<_, { event_type::CONTEXTLOST }>, set = handlers::set_element_handler::<_, { event_type::CONTEXTLOST }>;
-        #[calls_script]
+        attribute oncontextlost: EventHandler, get = handlers::element_handler::<{ event_type::CONTEXTLOST }>, set = handlers::set_element_handler::<_, { event_type::CONTEXTLOST }>;
         #[front]
-        attribute oncontextmenu: EventHandler, get = handlers::element_handler::<_, { event_type::CONTEXTMENU }>, set = handlers::set_element_handler::<_, { event_type::CONTEXTMENU }>;
-        #[calls_script]
+        attribute oncontextmenu: EventHandler, get = handlers::element_handler::<{ event_type::CONTEXTMENU }>, set = handlers::set_element_handler::<_, { event_type::CONTEXTMENU }>;
         #[front]
-        attribute oncontextrestored: EventHandler, get = handlers::element_handler::<_, { event_type::CONTEXTRESTORED }>, set = handlers::set_element_handler::<_, { event_type::CONTEXTRESTORED }>;
-        #[calls_script]
+        attribute oncontextrestored: EventHandler, get = handlers::element_handler::<{ event_type::CONTEXTRESTORED }>, set = handlers::set_element_handler::<_, { event_type::CONTEXTRESTORED }>;
         #[front]
-        attribute oncuechange: EventHandler, get = handlers::element_handler::<_, { event_type::CUECHANGE }>, set = handlers::set_element_handler::<_, { event_type::CUECHANGE }>;
-        #[calls_script]
+        attribute oncuechange: EventHandler, get = handlers::element_handler::<{ event_type::CUECHANGE }>, set = handlers::set_element_handler::<_, { event_type::CUECHANGE }>;
         #[front]
-        attribute ondblclick: EventHandler, get = handlers::element_handler::<_, { event_type::DBLCLICK }>, set = handlers::set_element_handler::<_, { event_type::DBLCLICK }>;
-        #[calls_script]
+        attribute ondblclick: EventHandler, get = handlers::element_handler::<{ event_type::DBLCLICK }>, set = handlers::set_element_handler::<_, { event_type::DBLCLICK }>;
         #[front]
-        attribute ondrag: EventHandler, get = handlers::element_handler::<_, { event_type::DRAG }>, set = handlers::set_element_handler::<_, { event_type::DRAG }>;
-        #[calls_script]
+        attribute ondrag: EventHandler, get = handlers::element_handler::<{ event_type::DRAG }>, set = handlers::set_element_handler::<_, { event_type::DRAG }>;
         #[front]
-        attribute ondragend: EventHandler, get = handlers::element_handler::<_, { event_type::DRAGEND }>, set = handlers::set_element_handler::<_, { event_type::DRAGEND }>;
-        #[calls_script]
+        attribute ondragend: EventHandler, get = handlers::element_handler::<{ event_type::DRAGEND }>, set = handlers::set_element_handler::<_, { event_type::DRAGEND }>;
         #[front]
-        attribute ondragenter: EventHandler, get = handlers::element_handler::<_, { event_type::DRAGENTER }>, set = handlers::set_element_handler::<_, { event_type::DRAGENTER }>;
-        #[calls_script]
+        attribute ondragenter: EventHandler, get = handlers::element_handler::<{ event_type::DRAGENTER }>, set = handlers::set_element_handler::<_, { event_type::DRAGENTER }>;
         #[front]
-        attribute ondragleave: EventHandler, get = handlers::element_handler::<_, { event_type::DRAGLEAVE }>, set = handlers::set_element_handler::<_, { event_type::DRAGLEAVE }>;
-        #[calls_script]
+        attribute ondragleave: EventHandler, get = handlers::element_handler::<{ event_type::DRAGLEAVE }>, set = handlers::set_element_handler::<_, { event_type::DRAGLEAVE }>;
         #[front]
-        attribute ondragover: EventHandler, get = handlers::element_handler::<_, { event_type::DRAGOVER }>, set = handlers::set_element_handler::<_, { event_type::DRAGOVER }>;
-        #[calls_script]
+        attribute ondragover: EventHandler, get = handlers::element_handler::<{ event_type::DRAGOVER }>, set = handlers::set_element_handler::<_, { event_type::DRAGOVER }>;
         #[front]
-        attribute ondragstart: EventHandler, get = handlers::element_handler::<_, { event_type::DRAGSTART }>, set = handlers::set_element_handler::<_, { event_type::DRAGSTART }>;
-        #[calls_script]
+        attribute ondragstart: EventHandler, get = handlers::element_handler::<{ event_type::DRAGSTART }>, set = handlers::set_element_handler::<_, { event_type::DRAGSTART }>;
         #[front]
-        attribute ondrop: EventHandler, get = handlers::element_handler::<_, { event_type::DROP }>, set = handlers::set_element_handler::<_, { event_type::DROP }>;
-        #[calls_script]
+        attribute ondrop: EventHandler, get = handlers::element_handler::<{ event_type::DROP }>, set = handlers::set_element_handler::<_, { event_type::DROP }>;
         #[front]
-        attribute ondurationchange: EventHandler, get = handlers::element_handler::<_, { event_type::DURATIONCHANGE }>, set = handlers::set_element_handler::<_, { event_type::DURATIONCHANGE }>;
-        #[calls_script]
+        attribute ondurationchange: EventHandler, get = handlers::element_handler::<{ event_type::DURATIONCHANGE }>, set = handlers::set_element_handler::<_, { event_type::DURATIONCHANGE }>;
         #[front]
-        attribute onemptied: EventHandler, get = handlers::element_handler::<_, { event_type::EMPTIED }>, set = handlers::set_element_handler::<_, { event_type::EMPTIED }>;
-        #[calls_script]
+        attribute onemptied: EventHandler, get = handlers::element_handler::<{ event_type::EMPTIED }>, set = handlers::set_element_handler::<_, { event_type::EMPTIED }>;
         #[front]
-        attribute onended: EventHandler, get = handlers::element_handler::<_, { event_type::ENDED }>, set = handlers::set_element_handler::<_, { event_type::ENDED }>;
-        #[calls_script]
+        attribute onended: EventHandler, get = handlers::element_handler::<{ event_type::ENDED }>, set = handlers::set_element_handler::<_, { event_type::ENDED }>;
         #[front]
-        attribute onerror: EventHandler, get = handlers::element_handler::<_, { event_type::ERROR }>, set = handlers::set_element_handler::<_, { event_type::ERROR }>;
-        #[calls_script]
+        attribute onerror: EventHandler, get = handlers::element_handler::<{ event_type::ERROR }>, set = handlers::set_element_handler::<_, { event_type::ERROR }>;
         #[front]
-        attribute onfocus: EventHandler, get = handlers::element_handler::<_, { event_type::FOCUS }>, set = handlers::set_element_handler::<_, { event_type::FOCUS }>;
-        #[calls_script]
+        attribute onfocus: EventHandler, get = handlers::element_handler::<{ event_type::FOCUS }>, set = handlers::set_element_handler::<_, { event_type::FOCUS }>;
         #[front]
-        attribute onformdata: EventHandler, get = handlers::element_handler::<_, { event_type::FORMDATA }>, set = handlers::set_element_handler::<_, { event_type::FORMDATA }>;
-        #[calls_script]
+        attribute onformdata: EventHandler, get = handlers::element_handler::<{ event_type::FORMDATA }>, set = handlers::set_element_handler::<_, { event_type::FORMDATA }>;
         #[front]
-        attribute oninput: EventHandler, get = handlers::element_handler::<_, { event_type::INPUT }>, set = handlers::set_element_handler::<_, { event_type::INPUT }>;
-        #[calls_script]
+        attribute oninput: EventHandler, get = handlers::element_handler::<{ event_type::INPUT }>, set = handlers::set_element_handler::<_, { event_type::INPUT }>;
         #[front]
-        attribute oninvalid: EventHandler, get = handlers::element_handler::<_, { event_type::INVALID }>, set = handlers::set_element_handler::<_, { event_type::INVALID }>;
-        #[calls_script]
+        attribute oninvalid: EventHandler, get = handlers::element_handler::<{ event_type::INVALID }>, set = handlers::set_element_handler::<_, { event_type::INVALID }>;
         #[front]
-        attribute onkeydown: EventHandler, get = handlers::element_handler::<_, { event_type::KEYDOWN }>, set = handlers::set_element_handler::<_, { event_type::KEYDOWN }>;
-        #[calls_script]
+        attribute onkeydown: EventHandler, get = handlers::element_handler::<{ event_type::KEYDOWN }>, set = handlers::set_element_handler::<_, { event_type::KEYDOWN }>;
         #[front]
-        attribute onkeypress: EventHandler, get = handlers::element_handler::<_, { event_type::KEYPRESS }>, set = handlers::set_element_handler::<_, { event_type::KEYPRESS }>;
-        #[calls_script]
+        attribute onkeypress: EventHandler, get = handlers::element_handler::<{ event_type::KEYPRESS }>, set = handlers::set_element_handler::<_, { event_type::KEYPRESS }>;
         #[front]
-        attribute onkeyup: EventHandler, get = handlers::element_handler::<_, { event_type::KEYUP }>, set = handlers::set_element_handler::<_, { event_type::KEYUP }>;
-        #[calls_script]
+        attribute onkeyup: EventHandler, get = handlers::element_handler::<{ event_type::KEYUP }>, set = handlers::set_element_handler::<_, { event_type::KEYUP }>;
         #[front]
-        attribute onload: EventHandler, get = handlers::element_handler::<_, { event_type::LOAD }>, set = handlers::set_element_handler::<_, { event_type::LOAD }>;
-        #[calls_script]
+        attribute onload: EventHandler, get = handlers::element_handler::<{ event_type::LOAD }>, set = handlers::set_element_handler::<_, { event_type::LOAD }>;
         #[front]
-        attribute onloadeddata: EventHandler, get = handlers::element_handler::<_, { event_type::LOADEDDATA }>, set = handlers::set_element_handler::<_, { event_type::LOADEDDATA }>;
-        #[calls_script]
+        attribute onloadeddata: EventHandler, get = handlers::element_handler::<{ event_type::LOADEDDATA }>, set = handlers::set_element_handler::<_, { event_type::LOADEDDATA }>;
         #[front]
-        attribute onloadedmetadata: EventHandler, get = handlers::element_handler::<_, { event_type::LOADEDMETADATA }>, set = handlers::set_element_handler::<_, { event_type::LOADEDMETADATA }>;
-        #[calls_script]
+        attribute onloadedmetadata: EventHandler, get = handlers::element_handler::<{ event_type::LOADEDMETADATA }>, set = handlers::set_element_handler::<_, { event_type::LOADEDMETADATA }>;
         #[front]
-        attribute onloadstart: EventHandler, get = handlers::element_handler::<_, { event_type::LOADSTART }>, set = handlers::set_element_handler::<_, { event_type::LOADSTART }>;
-        #[calls_script]
+        attribute onloadstart: EventHandler, get = handlers::element_handler::<{ event_type::LOADSTART }>, set = handlers::set_element_handler::<_, { event_type::LOADSTART }>;
         #[front]
-        attribute onmousedown: EventHandler, get = handlers::element_handler::<_, { event_type::MOUSEDOWN }>, set = handlers::set_element_handler::<_, { event_type::MOUSEDOWN }>;
-        #[calls_script]
+        attribute onmousedown: EventHandler, get = handlers::element_handler::<{ event_type::MOUSEDOWN }>, set = handlers::set_element_handler::<_, { event_type::MOUSEDOWN }>;
         #[front]
-        attribute onmouseenter: EventHandler, get = handlers::element_handler::<_, { event_type::MOUSEENTER }>, set = handlers::set_element_handler::<_, { event_type::MOUSEENTER }>;
-        #[calls_script]
+        attribute onmouseenter: EventHandler, get = handlers::element_handler::<{ event_type::MOUSEENTER }>, set = handlers::set_element_handler::<_, { event_type::MOUSEENTER }>;
         #[front]
-        attribute onmouseleave: EventHandler, get = handlers::element_handler::<_, { event_type::MOUSELEAVE }>, set = handlers::set_element_handler::<_, { event_type::MOUSELEAVE }>;
-        #[calls_script]
+        attribute onmouseleave: EventHandler, get = handlers::element_handler::<{ event_type::MOUSELEAVE }>, set = handlers::set_element_handler::<_, { event_type::MOUSELEAVE }>;
         #[front]
-        attribute onmousemove: EventHandler, get = handlers::element_handler::<_, { event_type::MOUSEMOVE }>, set = handlers::set_element_handler::<_, { event_type::MOUSEMOVE }>;
-        #[calls_script]
+        attribute onmousemove: EventHandler, get = handlers::element_handler::<{ event_type::MOUSEMOVE }>, set = handlers::set_element_handler::<_, { event_type::MOUSEMOVE }>;
         #[front]
-        attribute onmouseout: EventHandler, get = handlers::element_handler::<_, { event_type::MOUSEOUT }>, set = handlers::set_element_handler::<_, { event_type::MOUSEOUT }>;
-        #[calls_script]
+        attribute onmouseout: EventHandler, get = handlers::element_handler::<{ event_type::MOUSEOUT }>, set = handlers::set_element_handler::<_, { event_type::MOUSEOUT }>;
         #[front]
-        attribute onmouseover: EventHandler, get = handlers::element_handler::<_, { event_type::MOUSEOVER }>, set = handlers::set_element_handler::<_, { event_type::MOUSEOVER }>;
-        #[calls_script]
+        attribute onmouseover: EventHandler, get = handlers::element_handler::<{ event_type::MOUSEOVER }>, set = handlers::set_element_handler::<_, { event_type::MOUSEOVER }>;
         #[front]
-        attribute onmouseup: EventHandler, get = handlers::element_handler::<_, { event_type::MOUSEUP }>, set = handlers::set_element_handler::<_, { event_type::MOUSEUP }>;
-        #[calls_script]
+        attribute onmouseup: EventHandler, get = handlers::element_handler::<{ event_type::MOUSEUP }>, set = handlers::set_element_handler::<_, { event_type::MOUSEUP }>;
         #[front]
-        attribute onmousewheel: EventHandler, get = handlers::element_handler::<_, { event_type::MOUSEWHEEL }>, set = handlers::set_element_handler::<_, { event_type::MOUSEWHEEL }>;
-        #[calls_script]
+        attribute onmousewheel: EventHandler, get = handlers::element_handler::<{ event_type::MOUSEWHEEL }>, set = handlers::set_element_handler::<_, { event_type::MOUSEWHEEL }>;
         #[front]
-        attribute onpause: EventHandler, get = handlers::element_handler::<_, { event_type::PAUSE }>, set = handlers::set_element_handler::<_, { event_type::PAUSE }>;
-        #[calls_script]
+        attribute onpause: EventHandler, get = handlers::element_handler::<{ event_type::PAUSE }>, set = handlers::set_element_handler::<_, { event_type::PAUSE }>;
         #[front]
-        attribute onplay: EventHandler, get = handlers::element_handler::<_, { event_type::PLAY }>, set = handlers::set_element_handler::<_, { event_type::PLAY }>;
-        #[calls_script]
+        attribute onplay: EventHandler, get = handlers::element_handler::<{ event_type::PLAY }>, set = handlers::set_element_handler::<_, { event_type::PLAY }>;
         #[front]
-        attribute onplaying: EventHandler, get = handlers::element_handler::<_, { event_type::PLAYING }>, set = handlers::set_element_handler::<_, { event_type::PLAYING }>;
-        #[calls_script]
+        attribute onplaying: EventHandler, get = handlers::element_handler::<{ event_type::PLAYING }>, set = handlers::set_element_handler::<_, { event_type::PLAYING }>;
         #[front]
-        attribute onprogress: EventHandler, get = handlers::element_handler::<_, { event_type::PROGRESS }>, set = handlers::set_element_handler::<_, { event_type::PROGRESS }>;
-        #[calls_script]
+        attribute onprogress: EventHandler, get = handlers::element_handler::<{ event_type::PROGRESS }>, set = handlers::set_element_handler::<_, { event_type::PROGRESS }>;
         #[front]
-        attribute onratechange: EventHandler, get = handlers::element_handler::<_, { event_type::RATECHANGE }>, set = handlers::set_element_handler::<_, { event_type::RATECHANGE }>;
-        #[calls_script]
+        attribute onratechange: EventHandler, get = handlers::element_handler::<{ event_type::RATECHANGE }>, set = handlers::set_element_handler::<_, { event_type::RATECHANGE }>;
         #[front]
-        attribute onreset: EventHandler, get = handlers::element_handler::<_, { event_type::RESET }>, set = handlers::set_element_handler::<_, { event_type::RESET }>;
-        #[calls_script]
+        attribute onreset: EventHandler, get = handlers::element_handler::<{ event_type::RESET }>, set = handlers::set_element_handler::<_, { event_type::RESET }>;
         #[front]
-        attribute onresize: EventHandler, get = handlers::element_handler::<_, { event_type::RESIZE }>, set = handlers::set_element_handler::<_, { event_type::RESIZE }>;
-        #[calls_script]
+        attribute onresize: EventHandler, get = handlers::element_handler::<{ event_type::RESIZE }>, set = handlers::set_element_handler::<_, { event_type::RESIZE }>;
         #[front]
-        attribute onscroll: EventHandler, get = handlers::element_handler::<_, { event_type::SCROLL }>, set = handlers::set_element_handler::<_, { event_type::SCROLL }>;
-        #[calls_script]
+        attribute onscroll: EventHandler, get = handlers::element_handler::<{ event_type::SCROLL }>, set = handlers::set_element_handler::<_, { event_type::SCROLL }>;
         #[front]
-        attribute onscrollend: EventHandler, get = handlers::element_handler::<_, { event_type::SCROLLEND }>, set = handlers::set_element_handler::<_, { event_type::SCROLLEND }>;
-        #[calls_script]
+        attribute onscrollend: EventHandler, get = handlers::element_handler::<{ event_type::SCROLLEND }>, set = handlers::set_element_handler::<_, { event_type::SCROLLEND }>;
         #[front]
-        attribute onsecuritypolicyviolation: EventHandler, get = handlers::element_handler::<_, { event_type::SECURITYPOLICYVIOLATION }>, set = handlers::set_element_handler::<_, { event_type::SECURITYPOLICYVIOLATION }>;
-        #[calls_script]
+        attribute onsecuritypolicyviolation: EventHandler, get = handlers::element_handler::<{ event_type::SECURITYPOLICYVIOLATION }>, set = handlers::set_element_handler::<_, { event_type::SECURITYPOLICYVIOLATION }>;
         #[front]
-        attribute onseeked: EventHandler, get = handlers::element_handler::<_, { event_type::SEEKED }>, set = handlers::set_element_handler::<_, { event_type::SEEKED }>;
-        #[calls_script]
+        attribute onseeked: EventHandler, get = handlers::element_handler::<{ event_type::SEEKED }>, set = handlers::set_element_handler::<_, { event_type::SEEKED }>;
         #[front]
-        attribute onseeking: EventHandler, get = handlers::element_handler::<_, { event_type::SEEKING }>, set = handlers::set_element_handler::<_, { event_type::SEEKING }>;
-        #[calls_script]
+        attribute onseeking: EventHandler, get = handlers::element_handler::<{ event_type::SEEKING }>, set = handlers::set_element_handler::<_, { event_type::SEEKING }>;
         #[front]
-        attribute onselect: EventHandler, get = handlers::element_handler::<_, { event_type::SELECT }>, set = handlers::set_element_handler::<_, { event_type::SELECT }>;
-        #[calls_script]
+        attribute onselect: EventHandler, get = handlers::element_handler::<{ event_type::SELECT }>, set = handlers::set_element_handler::<_, { event_type::SELECT }>;
         #[front]
-        attribute onselectionchange: EventHandler, get = handlers::element_handler::<_, { event_type::SELECTIONCHANGE }>, set = handlers::set_element_handler::<_, { event_type::SELECTIONCHANGE }>;
-        #[calls_script]
+        attribute onselectionchange: EventHandler, get = handlers::element_handler::<{ event_type::SELECTIONCHANGE }>, set = handlers::set_element_handler::<_, { event_type::SELECTIONCHANGE }>;
         #[front]
-        attribute onselectstart: EventHandler, get = handlers::element_handler::<_, { event_type::SELECTSTART }>, set = handlers::set_element_handler::<_, { event_type::SELECTSTART }>;
-        #[calls_script]
+        attribute onselectstart: EventHandler, get = handlers::element_handler::<{ event_type::SELECTSTART }>, set = handlers::set_element_handler::<_, { event_type::SELECTSTART }>;
         #[front]
-        attribute onslotchange: EventHandler, get = handlers::element_handler::<_, { event_type::SLOTCHANGE }>, set = handlers::set_element_handler::<_, { event_type::SLOTCHANGE }>;
-        #[calls_script]
+        attribute onslotchange: EventHandler, get = handlers::element_handler::<{ event_type::SLOTCHANGE }>, set = handlers::set_element_handler::<_, { event_type::SLOTCHANGE }>;
         #[front]
-        attribute onstalled: EventHandler, get = handlers::element_handler::<_, { event_type::STALLED }>, set = handlers::set_element_handler::<_, { event_type::STALLED }>;
-        #[calls_script]
+        attribute onstalled: EventHandler, get = handlers::element_handler::<{ event_type::STALLED }>, set = handlers::set_element_handler::<_, { event_type::STALLED }>;
         #[front]
-        attribute onsubmit: EventHandler, get = handlers::element_handler::<_, { event_type::SUBMIT }>, set = handlers::set_element_handler::<_, { event_type::SUBMIT }>;
-        #[calls_script]
+        attribute onsubmit: EventHandler, get = handlers::element_handler::<{ event_type::SUBMIT }>, set = handlers::set_element_handler::<_, { event_type::SUBMIT }>;
         #[front]
-        attribute onsuspend: EventHandler, get = handlers::element_handler::<_, { event_type::SUSPEND }>, set = handlers::set_element_handler::<_, { event_type::SUSPEND }>;
-        #[calls_script]
+        attribute onsuspend: EventHandler, get = handlers::element_handler::<{ event_type::SUSPEND }>, set = handlers::set_element_handler::<_, { event_type::SUSPEND }>;
         #[front]
-        attribute ontimeupdate: EventHandler, get = handlers::element_handler::<_, { event_type::TIMEUPDATE }>, set = handlers::set_element_handler::<_, { event_type::TIMEUPDATE }>;
-        #[calls_script]
+        attribute ontimeupdate: EventHandler, get = handlers::element_handler::<{ event_type::TIMEUPDATE }>, set = handlers::set_element_handler::<_, { event_type::TIMEUPDATE }>;
         #[front]
-        attribute ontoggle: EventHandler, get = handlers::element_handler::<_, { event_type::TOGGLE }>, set = handlers::set_element_handler::<_, { event_type::TOGGLE }>;
-        #[calls_script]
+        attribute ontoggle: EventHandler, get = handlers::element_handler::<{ event_type::TOGGLE }>, set = handlers::set_element_handler::<_, { event_type::TOGGLE }>;
         #[front]
-        attribute ontransitioncancel: EventHandler, get = handlers::element_handler::<_, { event_type::TRANSITIONCANCEL }>, set = handlers::set_element_handler::<_, { event_type::TRANSITIONCANCEL }>;
-        #[calls_script]
+        attribute ontransitioncancel: EventHandler, get = handlers::element_handler::<{ event_type::TRANSITIONCANCEL }>, set = handlers::set_element_handler::<_, { event_type::TRANSITIONCANCEL }>;
         #[front]
-        attribute ontransitionend: EventHandler, get = handlers::element_handler::<_, { event_type::TRANSITIONEND }>, set = handlers::set_element_handler::<_, { event_type::TRANSITIONEND }>;
-        #[calls_script]
+        attribute ontransitionend: EventHandler, get = handlers::element_handler::<{ event_type::TRANSITIONEND }>, set = handlers::set_element_handler::<_, { event_type::TRANSITIONEND }>;
         #[front]
-        attribute ontransitionrun: EventHandler, get = handlers::element_handler::<_, { event_type::TRANSITIONRUN }>, set = handlers::set_element_handler::<_, { event_type::TRANSITIONRUN }>;
-        #[calls_script]
+        attribute ontransitionrun: EventHandler, get = handlers::element_handler::<{ event_type::TRANSITIONRUN }>, set = handlers::set_element_handler::<_, { event_type::TRANSITIONRUN }>;
         #[front]
-        attribute ontransitionstart: EventHandler, get = handlers::element_handler::<_, { event_type::TRANSITIONSTART }>, set = handlers::set_element_handler::<_, { event_type::TRANSITIONSTART }>;
-        #[calls_script]
+        attribute ontransitionstart: EventHandler, get = handlers::element_handler::<{ event_type::TRANSITIONSTART }>, set = handlers::set_element_handler::<_, { event_type::TRANSITIONSTART }>;
         #[front]
-        attribute onvolumechange: EventHandler, get = handlers::element_handler::<_, { event_type::VOLUMECHANGE }>, set = handlers::set_element_handler::<_, { event_type::VOLUMECHANGE }>;
-        #[calls_script]
+        attribute onvolumechange: EventHandler, get = handlers::element_handler::<{ event_type::VOLUMECHANGE }>, set = handlers::set_element_handler::<_, { event_type::VOLUMECHANGE }>;
         #[front]
-        attribute onwaiting: EventHandler, get = handlers::element_handler::<_, { event_type::WAITING }>, set = handlers::set_element_handler::<_, { event_type::WAITING }>;
-        #[calls_script]
+        attribute onwaiting: EventHandler, get = handlers::element_handler::<{ event_type::WAITING }>, set = handlers::set_element_handler::<_, { event_type::WAITING }>;
         #[front]
-        attribute onwebkitanimationend: EventHandler, get = handlers::element_handler::<_, { event_type::WEBKIT_ANIMATION_END }>, set = handlers::set_element_handler::<_, { event_type::WEBKIT_ANIMATION_END }>;
-        #[calls_script]
+        attribute onwebkitanimationend: EventHandler, get = handlers::element_handler::<{ event_type::WEBKIT_ANIMATION_END }>, set = handlers::set_element_handler::<_, { event_type::WEBKIT_ANIMATION_END }>;
         #[front]
-        attribute onwebkitanimationiteration: EventHandler, get = handlers::element_handler::<_, { event_type::WEBKIT_ANIMATION_ITERATION }>, set = handlers::set_element_handler::<_, { event_type::WEBKIT_ANIMATION_ITERATION }>;
-        #[calls_script]
+        attribute onwebkitanimationiteration: EventHandler, get = handlers::element_handler::<{ event_type::WEBKIT_ANIMATION_ITERATION }>, set = handlers::set_element_handler::<_, { event_type::WEBKIT_ANIMATION_ITERATION }>;
         #[front]
-        attribute onwebkitanimationstart: EventHandler, get = handlers::element_handler::<_, { event_type::WEBKIT_ANIMATION_START }>, set = handlers::set_element_handler::<_, { event_type::WEBKIT_ANIMATION_START }>;
-        #[calls_script]
+        attribute onwebkitanimationstart: EventHandler, get = handlers::element_handler::<{ event_type::WEBKIT_ANIMATION_START }>, set = handlers::set_element_handler::<_, { event_type::WEBKIT_ANIMATION_START }>;
         #[front]
-        attribute onwebkittransitionend: EventHandler, get = handlers::element_handler::<_, { event_type::WEBKIT_TRANSITION_END }>, set = handlers::set_element_handler::<_, { event_type::WEBKIT_TRANSITION_END }>;
-        #[calls_script]
+        attribute onwebkittransitionend: EventHandler, get = handlers::element_handler::<{ event_type::WEBKIT_TRANSITION_END }>, set = handlers::set_element_handler::<_, { event_type::WEBKIT_TRANSITION_END }>;
         #[front]
-        attribute onwheel: EventHandler, get = handlers::element_handler::<_, { event_type::WHEEL }>, set = handlers::set_element_handler::<_, { event_type::WHEEL }>;
+        attribute onwheel: EventHandler, get = handlers::element_handler::<{ event_type::WHEEL }>, set = handlers::set_element_handler::<_, { event_type::WHEEL }>;
         #[ce_reactions]
         attribute title: DomString, get = reflect::string::<{ local::TITLE }>, set = reflect::set_string::<{ local::TITLE }>;
         #[ce_reactions]
@@ -2806,60 +2523,42 @@ crate::declare! {
         #[ce_reactions]
         attribute background: DomString, get = reflect::string::<{ local::BACKGROUND }>, set = reflect::set_string::<{ local::BACKGROUND }>;
         // HTML's `WindowEventHandlers`: its window's.
-        #[calls_script]
         #[front]
-        attribute onafterprint: EventHandler, get = handlers::element_handler::<_, { event_type::AFTERPRINT }>, set = handlers::set_element_handler::<_, { event_type::AFTERPRINT }>;
-        #[calls_script]
+        attribute onafterprint: EventHandler, get = handlers::element_handler::<{ event_type::AFTERPRINT }>, set = handlers::set_element_handler::<_, { event_type::AFTERPRINT }>;
         #[front]
-        attribute onbeforeprint: EventHandler, get = handlers::element_handler::<_, { event_type::BEFOREPRINT }>, set = handlers::set_element_handler::<_, { event_type::BEFOREPRINT }>;
-        #[calls_script]
+        attribute onbeforeprint: EventHandler, get = handlers::element_handler::<{ event_type::BEFOREPRINT }>, set = handlers::set_element_handler::<_, { event_type::BEFOREPRINT }>;
         #[front]
-        attribute onbeforeunload: EventHandler, get = handlers::element_handler::<_, { event_type::BEFOREUNLOAD }>, set = handlers::set_element_handler::<_, { event_type::BEFOREUNLOAD }>;
-        #[calls_script]
+        attribute onbeforeunload: EventHandler, get = handlers::element_handler::<{ event_type::BEFOREUNLOAD }>, set = handlers::set_element_handler::<_, { event_type::BEFOREUNLOAD }>;
         #[front]
-        attribute onhashchange: EventHandler, get = handlers::element_handler::<_, { event_type::HASHCHANGE }>, set = handlers::set_element_handler::<_, { event_type::HASHCHANGE }>;
-        #[calls_script]
+        attribute onhashchange: EventHandler, get = handlers::element_handler::<{ event_type::HASHCHANGE }>, set = handlers::set_element_handler::<_, { event_type::HASHCHANGE }>;
         #[front]
-        attribute onlanguagechange: EventHandler, get = handlers::element_handler::<_, { event_type::LANGUAGECHANGE }>, set = handlers::set_element_handler::<_, { event_type::LANGUAGECHANGE }>;
-        #[calls_script]
+        attribute onlanguagechange: EventHandler, get = handlers::element_handler::<{ event_type::LANGUAGECHANGE }>, set = handlers::set_element_handler::<_, { event_type::LANGUAGECHANGE }>;
         #[front]
-        attribute onmessage: EventHandler, get = handlers::element_handler::<_, { event_type::MESSAGE }>, set = handlers::set_element_handler::<_, { event_type::MESSAGE }>;
-        #[calls_script]
+        attribute onmessage: EventHandler, get = handlers::element_handler::<{ event_type::MESSAGE }>, set = handlers::set_element_handler::<_, { event_type::MESSAGE }>;
         #[front]
-        attribute onmessageerror: EventHandler, get = handlers::element_handler::<_, { event_type::MESSAGEERROR }>, set = handlers::set_element_handler::<_, { event_type::MESSAGEERROR }>;
-        #[calls_script]
+        attribute onmessageerror: EventHandler, get = handlers::element_handler::<{ event_type::MESSAGEERROR }>, set = handlers::set_element_handler::<_, { event_type::MESSAGEERROR }>;
         #[front]
-        attribute onoffline: EventHandler, get = handlers::element_handler::<_, { event_type::OFFLINE }>, set = handlers::set_element_handler::<_, { event_type::OFFLINE }>;
-        #[calls_script]
+        attribute onoffline: EventHandler, get = handlers::element_handler::<{ event_type::OFFLINE }>, set = handlers::set_element_handler::<_, { event_type::OFFLINE }>;
         #[front]
-        attribute ononline: EventHandler, get = handlers::element_handler::<_, { event_type::ONLINE }>, set = handlers::set_element_handler::<_, { event_type::ONLINE }>;
-        #[calls_script]
+        attribute ononline: EventHandler, get = handlers::element_handler::<{ event_type::ONLINE }>, set = handlers::set_element_handler::<_, { event_type::ONLINE }>;
         #[front]
-        attribute onpagehide: EventHandler, get = handlers::element_handler::<_, { event_type::PAGEHIDE }>, set = handlers::set_element_handler::<_, { event_type::PAGEHIDE }>;
-        #[calls_script]
+        attribute onpagehide: EventHandler, get = handlers::element_handler::<{ event_type::PAGEHIDE }>, set = handlers::set_element_handler::<_, { event_type::PAGEHIDE }>;
         #[front]
-        attribute onpagereveal: EventHandler, get = handlers::element_handler::<_, { event_type::PAGEREVEAL }>, set = handlers::set_element_handler::<_, { event_type::PAGEREVEAL }>;
-        #[calls_script]
+        attribute onpagereveal: EventHandler, get = handlers::element_handler::<{ event_type::PAGEREVEAL }>, set = handlers::set_element_handler::<_, { event_type::PAGEREVEAL }>;
         #[front]
-        attribute onpageshow: EventHandler, get = handlers::element_handler::<_, { event_type::PAGESHOW }>, set = handlers::set_element_handler::<_, { event_type::PAGESHOW }>;
-        #[calls_script]
+        attribute onpageshow: EventHandler, get = handlers::element_handler::<{ event_type::PAGESHOW }>, set = handlers::set_element_handler::<_, { event_type::PAGESHOW }>;
         #[front]
-        attribute onpageswap: EventHandler, get = handlers::element_handler::<_, { event_type::PAGESWAP }>, set = handlers::set_element_handler::<_, { event_type::PAGESWAP }>;
-        #[calls_script]
+        attribute onpageswap: EventHandler, get = handlers::element_handler::<{ event_type::PAGESWAP }>, set = handlers::set_element_handler::<_, { event_type::PAGESWAP }>;
         #[front]
-        attribute onpopstate: EventHandler, get = handlers::element_handler::<_, { event_type::POPSTATE }>, set = handlers::set_element_handler::<_, { event_type::POPSTATE }>;
-        #[calls_script]
+        attribute onpopstate: EventHandler, get = handlers::element_handler::<{ event_type::POPSTATE }>, set = handlers::set_element_handler::<_, { event_type::POPSTATE }>;
         #[front]
-        attribute onrejectionhandled: EventHandler, get = handlers::element_handler::<_, { event_type::REJECTIONHANDLED }>, set = handlers::set_element_handler::<_, { event_type::REJECTIONHANDLED }>;
-        #[calls_script]
+        attribute onrejectionhandled: EventHandler, get = handlers::element_handler::<{ event_type::REJECTIONHANDLED }>, set = handlers::set_element_handler::<_, { event_type::REJECTIONHANDLED }>;
         #[front]
-        attribute onstorage: EventHandler, get = handlers::element_handler::<_, { event_type::STORAGE }>, set = handlers::set_element_handler::<_, { event_type::STORAGE }>;
-        #[calls_script]
+        attribute onstorage: EventHandler, get = handlers::element_handler::<{ event_type::STORAGE }>, set = handlers::set_element_handler::<_, { event_type::STORAGE }>;
         #[front]
-        attribute onunhandledrejection: EventHandler, get = handlers::element_handler::<_, { event_type::UNHANDLEDREJECTION }>, set = handlers::set_element_handler::<_, { event_type::UNHANDLEDREJECTION }>;
-        #[calls_script]
+        attribute onunhandledrejection: EventHandler, get = handlers::element_handler::<{ event_type::UNHANDLEDREJECTION }>, set = handlers::set_element_handler::<_, { event_type::UNHANDLEDREJECTION }>;
         #[front]
-        attribute onunload: EventHandler, get = handlers::element_handler::<_, { event_type::UNLOAD }>, set = handlers::set_element_handler::<_, { event_type::UNLOAD }>;
+        attribute onunload: EventHandler, get = handlers::element_handler::<{ event_type::UNLOAD }>, set = handlers::set_element_handler::<_, { event_type::UNLOAD }>;
     }
 
     interface HTMLHeadingElement : HTMLElement [element html h1 h2 h3 h4 h5 h6] {
@@ -4381,261 +4080,176 @@ crate::declare! {
         attribute autofocus: bool, get = reflect::boolean::<{ local::AUTOFOCUS }>, set = reflect::set_boolean::<{ local::AUTOFOCUS }>;
 
         // HTML's `GlobalEventHandlers`, as `HTMLElement`'s.
-        #[calls_script]
         #[front]
-        attribute onabort: EventHandler, get = handlers::element_handler::<_, { event_type::ABORT }>, set = handlers::set_element_handler::<_, { event_type::ABORT }>;
-        #[calls_script]
+        attribute onabort: EventHandler, get = handlers::element_handler::<{ event_type::ABORT }>, set = handlers::set_element_handler::<_, { event_type::ABORT }>;
         #[front]
-        attribute onanimationcancel: EventHandler, get = handlers::element_handler::<_, { event_type::ANIMATIONCANCEL }>, set = handlers::set_element_handler::<_, { event_type::ANIMATIONCANCEL }>;
-        #[calls_script]
+        attribute onanimationcancel: EventHandler, get = handlers::element_handler::<{ event_type::ANIMATIONCANCEL }>, set = handlers::set_element_handler::<_, { event_type::ANIMATIONCANCEL }>;
         #[front]
-        attribute onanimationend: EventHandler, get = handlers::element_handler::<_, { event_type::ANIMATIONEND }>, set = handlers::set_element_handler::<_, { event_type::ANIMATIONEND }>;
-        #[calls_script]
+        attribute onanimationend: EventHandler, get = handlers::element_handler::<{ event_type::ANIMATIONEND }>, set = handlers::set_element_handler::<_, { event_type::ANIMATIONEND }>;
         #[front]
-        attribute onanimationiteration: EventHandler, get = handlers::element_handler::<_, { event_type::ANIMATIONITERATION }>, set = handlers::set_element_handler::<_, { event_type::ANIMATIONITERATION }>;
-        #[calls_script]
+        attribute onanimationiteration: EventHandler, get = handlers::element_handler::<{ event_type::ANIMATIONITERATION }>, set = handlers::set_element_handler::<_, { event_type::ANIMATIONITERATION }>;
         #[front]
-        attribute onanimationstart: EventHandler, get = handlers::element_handler::<_, { event_type::ANIMATIONSTART }>, set = handlers::set_element_handler::<_, { event_type::ANIMATIONSTART }>;
-        #[calls_script]
+        attribute onanimationstart: EventHandler, get = handlers::element_handler::<{ event_type::ANIMATIONSTART }>, set = handlers::set_element_handler::<_, { event_type::ANIMATIONSTART }>;
         #[front]
-        attribute onauxclick: EventHandler, get = handlers::element_handler::<_, { event_type::AUXCLICK }>, set = handlers::set_element_handler::<_, { event_type::AUXCLICK }>;
-        #[calls_script]
+        attribute onauxclick: EventHandler, get = handlers::element_handler::<{ event_type::AUXCLICK }>, set = handlers::set_element_handler::<_, { event_type::AUXCLICK }>;
         #[front]
-        attribute onbeforeinput: EventHandler, get = handlers::element_handler::<_, { event_type::BEFOREINPUT }>, set = handlers::set_element_handler::<_, { event_type::BEFOREINPUT }>;
-        #[calls_script]
+        attribute onbeforeinput: EventHandler, get = handlers::element_handler::<{ event_type::BEFOREINPUT }>, set = handlers::set_element_handler::<_, { event_type::BEFOREINPUT }>;
         #[front]
-        attribute onbeforematch: EventHandler, get = handlers::element_handler::<_, { event_type::BEFOREMATCH }>, set = handlers::set_element_handler::<_, { event_type::BEFOREMATCH }>;
-        #[calls_script]
+        attribute onbeforematch: EventHandler, get = handlers::element_handler::<{ event_type::BEFOREMATCH }>, set = handlers::set_element_handler::<_, { event_type::BEFOREMATCH }>;
         #[front]
-        attribute onbeforetoggle: EventHandler, get = handlers::element_handler::<_, { event_type::BEFORETOGGLE }>, set = handlers::set_element_handler::<_, { event_type::BEFORETOGGLE }>;
-        #[calls_script]
+        attribute onbeforetoggle: EventHandler, get = handlers::element_handler::<{ event_type::BEFORETOGGLE }>, set = handlers::set_element_handler::<_, { event_type::BEFORETOGGLE }>;
         #[front]
-        attribute onblur: EventHandler, get = handlers::element_handler::<_, { event_type::BLUR }>, set = handlers::set_element_handler::<_, { event_type::BLUR }>;
-        #[calls_script]
+        attribute onblur: EventHandler, get = handlers::element_handler::<{ event_type::BLUR }>, set = handlers::set_element_handler::<_, { event_type::BLUR }>;
         #[front]
-        attribute oncancel: EventHandler, get = handlers::element_handler::<_, { event_type::CANCEL }>, set = handlers::set_element_handler::<_, { event_type::CANCEL }>;
-        #[calls_script]
+        attribute oncancel: EventHandler, get = handlers::element_handler::<{ event_type::CANCEL }>, set = handlers::set_element_handler::<_, { event_type::CANCEL }>;
         #[front]
-        attribute oncanplay: EventHandler, get = handlers::element_handler::<_, { event_type::CANPLAY }>, set = handlers::set_element_handler::<_, { event_type::CANPLAY }>;
-        #[calls_script]
+        attribute oncanplay: EventHandler, get = handlers::element_handler::<{ event_type::CANPLAY }>, set = handlers::set_element_handler::<_, { event_type::CANPLAY }>;
         #[front]
-        attribute oncanplaythrough: EventHandler, get = handlers::element_handler::<_, { event_type::CANPLAYTHROUGH }>, set = handlers::set_element_handler::<_, { event_type::CANPLAYTHROUGH }>;
-        #[calls_script]
+        attribute oncanplaythrough: EventHandler, get = handlers::element_handler::<{ event_type::CANPLAYTHROUGH }>, set = handlers::set_element_handler::<_, { event_type::CANPLAYTHROUGH }>;
         #[front]
-        attribute onchange: EventHandler, get = handlers::element_handler::<_, { event_type::CHANGE }>, set = handlers::set_element_handler::<_, { event_type::CHANGE }>;
-        #[calls_script]
+        attribute onchange: EventHandler, get = handlers::element_handler::<{ event_type::CHANGE }>, set = handlers::set_element_handler::<_, { event_type::CHANGE }>;
         #[front]
-        attribute onclick: EventHandler, get = handlers::element_handler::<_, { event_type::CLICK }>, set = handlers::set_element_handler::<_, { event_type::CLICK }>;
-        #[calls_script]
+        attribute onclick: EventHandler, get = handlers::element_handler::<{ event_type::CLICK }>, set = handlers::set_element_handler::<_, { event_type::CLICK }>;
         #[front]
-        attribute onclose: EventHandler, get = handlers::element_handler::<_, { event_type::CLOSE }>, set = handlers::set_element_handler::<_, { event_type::CLOSE }>;
-        #[calls_script]
+        attribute onclose: EventHandler, get = handlers::element_handler::<{ event_type::CLOSE }>, set = handlers::set_element_handler::<_, { event_type::CLOSE }>;
         #[front]
-        attribute oncommand: EventHandler, get = handlers::element_handler::<_, { event_type::COMMAND }>, set = handlers::set_element_handler::<_, { event_type::COMMAND }>;
-        #[calls_script]
+        attribute oncommand: EventHandler, get = handlers::element_handler::<{ event_type::COMMAND }>, set = handlers::set_element_handler::<_, { event_type::COMMAND }>;
         #[front]
-        attribute oncontentvisibilityautostatechange: EventHandler, get = handlers::element_handler::<_, { event_type::CONTENTVISIBILITYAUTOSTATECHANGE }>, set = handlers::set_element_handler::<_, { event_type::CONTENTVISIBILITYAUTOSTATECHANGE }>;
-        #[calls_script]
+        attribute oncontentvisibilityautostatechange: EventHandler, get = handlers::element_handler::<{ event_type::CONTENTVISIBILITYAUTOSTATECHANGE }>, set = handlers::set_element_handler::<_, { event_type::CONTENTVISIBILITYAUTOSTATECHANGE }>;
         #[front]
-        attribute oncontextlost: EventHandler, get = handlers::element_handler::<_, { event_type::CONTEXTLOST }>, set = handlers::set_element_handler::<_, { event_type::CONTEXTLOST }>;
-        #[calls_script]
+        attribute oncontextlost: EventHandler, get = handlers::element_handler::<{ event_type::CONTEXTLOST }>, set = handlers::set_element_handler::<_, { event_type::CONTEXTLOST }>;
         #[front]
-        attribute oncontextmenu: EventHandler, get = handlers::element_handler::<_, { event_type::CONTEXTMENU }>, set = handlers::set_element_handler::<_, { event_type::CONTEXTMENU }>;
-        #[calls_script]
+        attribute oncontextmenu: EventHandler, get = handlers::element_handler::<{ event_type::CONTEXTMENU }>, set = handlers::set_element_handler::<_, { event_type::CONTEXTMENU }>;
         #[front]
-        attribute oncontextrestored: EventHandler, get = handlers::element_handler::<_, { event_type::CONTEXTRESTORED }>, set = handlers::set_element_handler::<_, { event_type::CONTEXTRESTORED }>;
-        #[calls_script]
+        attribute oncontextrestored: EventHandler, get = handlers::element_handler::<{ event_type::CONTEXTRESTORED }>, set = handlers::set_element_handler::<_, { event_type::CONTEXTRESTORED }>;
         #[front]
-        attribute oncuechange: EventHandler, get = handlers::element_handler::<_, { event_type::CUECHANGE }>, set = handlers::set_element_handler::<_, { event_type::CUECHANGE }>;
-        #[calls_script]
+        attribute oncuechange: EventHandler, get = handlers::element_handler::<{ event_type::CUECHANGE }>, set = handlers::set_element_handler::<_, { event_type::CUECHANGE }>;
         #[front]
-        attribute ondblclick: EventHandler, get = handlers::element_handler::<_, { event_type::DBLCLICK }>, set = handlers::set_element_handler::<_, { event_type::DBLCLICK }>;
-        #[calls_script]
+        attribute ondblclick: EventHandler, get = handlers::element_handler::<{ event_type::DBLCLICK }>, set = handlers::set_element_handler::<_, { event_type::DBLCLICK }>;
         #[front]
-        attribute ondrag: EventHandler, get = handlers::element_handler::<_, { event_type::DRAG }>, set = handlers::set_element_handler::<_, { event_type::DRAG }>;
-        #[calls_script]
+        attribute ondrag: EventHandler, get = handlers::element_handler::<{ event_type::DRAG }>, set = handlers::set_element_handler::<_, { event_type::DRAG }>;
         #[front]
-        attribute ondragend: EventHandler, get = handlers::element_handler::<_, { event_type::DRAGEND }>, set = handlers::set_element_handler::<_, { event_type::DRAGEND }>;
-        #[calls_script]
+        attribute ondragend: EventHandler, get = handlers::element_handler::<{ event_type::DRAGEND }>, set = handlers::set_element_handler::<_, { event_type::DRAGEND }>;
         #[front]
-        attribute ondragenter: EventHandler, get = handlers::element_handler::<_, { event_type::DRAGENTER }>, set = handlers::set_element_handler::<_, { event_type::DRAGENTER }>;
-        #[calls_script]
+        attribute ondragenter: EventHandler, get = handlers::element_handler::<{ event_type::DRAGENTER }>, set = handlers::set_element_handler::<_, { event_type::DRAGENTER }>;
         #[front]
-        attribute ondragleave: EventHandler, get = handlers::element_handler::<_, { event_type::DRAGLEAVE }>, set = handlers::set_element_handler::<_, { event_type::DRAGLEAVE }>;
-        #[calls_script]
+        attribute ondragleave: EventHandler, get = handlers::element_handler::<{ event_type::DRAGLEAVE }>, set = handlers::set_element_handler::<_, { event_type::DRAGLEAVE }>;
         #[front]
-        attribute ondragover: EventHandler, get = handlers::element_handler::<_, { event_type::DRAGOVER }>, set = handlers::set_element_handler::<_, { event_type::DRAGOVER }>;
-        #[calls_script]
+        attribute ondragover: EventHandler, get = handlers::element_handler::<{ event_type::DRAGOVER }>, set = handlers::set_element_handler::<_, { event_type::DRAGOVER }>;
         #[front]
-        attribute ondragstart: EventHandler, get = handlers::element_handler::<_, { event_type::DRAGSTART }>, set = handlers::set_element_handler::<_, { event_type::DRAGSTART }>;
-        #[calls_script]
+        attribute ondragstart: EventHandler, get = handlers::element_handler::<{ event_type::DRAGSTART }>, set = handlers::set_element_handler::<_, { event_type::DRAGSTART }>;
         #[front]
-        attribute ondrop: EventHandler, get = handlers::element_handler::<_, { event_type::DROP }>, set = handlers::set_element_handler::<_, { event_type::DROP }>;
-        #[calls_script]
+        attribute ondrop: EventHandler, get = handlers::element_handler::<{ event_type::DROP }>, set = handlers::set_element_handler::<_, { event_type::DROP }>;
         #[front]
-        attribute ondurationchange: EventHandler, get = handlers::element_handler::<_, { event_type::DURATIONCHANGE }>, set = handlers::set_element_handler::<_, { event_type::DURATIONCHANGE }>;
-        #[calls_script]
+        attribute ondurationchange: EventHandler, get = handlers::element_handler::<{ event_type::DURATIONCHANGE }>, set = handlers::set_element_handler::<_, { event_type::DURATIONCHANGE }>;
         #[front]
-        attribute onemptied: EventHandler, get = handlers::element_handler::<_, { event_type::EMPTIED }>, set = handlers::set_element_handler::<_, { event_type::EMPTIED }>;
-        #[calls_script]
+        attribute onemptied: EventHandler, get = handlers::element_handler::<{ event_type::EMPTIED }>, set = handlers::set_element_handler::<_, { event_type::EMPTIED }>;
         #[front]
-        attribute onended: EventHandler, get = handlers::element_handler::<_, { event_type::ENDED }>, set = handlers::set_element_handler::<_, { event_type::ENDED }>;
-        #[calls_script]
+        attribute onended: EventHandler, get = handlers::element_handler::<{ event_type::ENDED }>, set = handlers::set_element_handler::<_, { event_type::ENDED }>;
         #[front]
-        attribute onerror: EventHandler, get = handlers::element_handler::<_, { event_type::ERROR }>, set = handlers::set_element_handler::<_, { event_type::ERROR }>;
-        #[calls_script]
+        attribute onerror: EventHandler, get = handlers::element_handler::<{ event_type::ERROR }>, set = handlers::set_element_handler::<_, { event_type::ERROR }>;
         #[front]
-        attribute onfocus: EventHandler, get = handlers::element_handler::<_, { event_type::FOCUS }>, set = handlers::set_element_handler::<_, { event_type::FOCUS }>;
-        #[calls_script]
+        attribute onfocus: EventHandler, get = handlers::element_handler::<{ event_type::FOCUS }>, set = handlers::set_element_handler::<_, { event_type::FOCUS }>;
         #[front]
-        attribute onformdata: EventHandler, get = handlers::element_handler::<_, { event_type::FORMDATA }>, set = handlers::set_element_handler::<_, { event_type::FORMDATA }>;
-        #[calls_script]
+        attribute onformdata: EventHandler, get = handlers::element_handler::<{ event_type::FORMDATA }>, set = handlers::set_element_handler::<_, { event_type::FORMDATA }>;
         #[front]
-        attribute oninput: EventHandler, get = handlers::element_handler::<_, { event_type::INPUT }>, set = handlers::set_element_handler::<_, { event_type::INPUT }>;
-        #[calls_script]
+        attribute oninput: EventHandler, get = handlers::element_handler::<{ event_type::INPUT }>, set = handlers::set_element_handler::<_, { event_type::INPUT }>;
         #[front]
-        attribute oninvalid: EventHandler, get = handlers::element_handler::<_, { event_type::INVALID }>, set = handlers::set_element_handler::<_, { event_type::INVALID }>;
-        #[calls_script]
+        attribute oninvalid: EventHandler, get = handlers::element_handler::<{ event_type::INVALID }>, set = handlers::set_element_handler::<_, { event_type::INVALID }>;
         #[front]
-        attribute onkeydown: EventHandler, get = handlers::element_handler::<_, { event_type::KEYDOWN }>, set = handlers::set_element_handler::<_, { event_type::KEYDOWN }>;
-        #[calls_script]
+        attribute onkeydown: EventHandler, get = handlers::element_handler::<{ event_type::KEYDOWN }>, set = handlers::set_element_handler::<_, { event_type::KEYDOWN }>;
         #[front]
-        attribute onkeypress: EventHandler, get = handlers::element_handler::<_, { event_type::KEYPRESS }>, set = handlers::set_element_handler::<_, { event_type::KEYPRESS }>;
-        #[calls_script]
+        attribute onkeypress: EventHandler, get = handlers::element_handler::<{ event_type::KEYPRESS }>, set = handlers::set_element_handler::<_, { event_type::KEYPRESS }>;
         #[front]
-        attribute onkeyup: EventHandler, get = handlers::element_handler::<_, { event_type::KEYUP }>, set = handlers::set_element_handler::<_, { event_type::KEYUP }>;
-        #[calls_script]
+        attribute onkeyup: EventHandler, get = handlers::element_handler::<{ event_type::KEYUP }>, set = handlers::set_element_handler::<_, { event_type::KEYUP }>;
         #[front]
-        attribute onload: EventHandler, get = handlers::element_handler::<_, { event_type::LOAD }>, set = handlers::set_element_handler::<_, { event_type::LOAD }>;
-        #[calls_script]
+        attribute onload: EventHandler, get = handlers::element_handler::<{ event_type::LOAD }>, set = handlers::set_element_handler::<_, { event_type::LOAD }>;
         #[front]
-        attribute onloadeddata: EventHandler, get = handlers::element_handler::<_, { event_type::LOADEDDATA }>, set = handlers::set_element_handler::<_, { event_type::LOADEDDATA }>;
-        #[calls_script]
+        attribute onloadeddata: EventHandler, get = handlers::element_handler::<{ event_type::LOADEDDATA }>, set = handlers::set_element_handler::<_, { event_type::LOADEDDATA }>;
         #[front]
-        attribute onloadedmetadata: EventHandler, get = handlers::element_handler::<_, { event_type::LOADEDMETADATA }>, set = handlers::set_element_handler::<_, { event_type::LOADEDMETADATA }>;
-        #[calls_script]
+        attribute onloadedmetadata: EventHandler, get = handlers::element_handler::<{ event_type::LOADEDMETADATA }>, set = handlers::set_element_handler::<_, { event_type::LOADEDMETADATA }>;
         #[front]
-        attribute onloadstart: EventHandler, get = handlers::element_handler::<_, { event_type::LOADSTART }>, set = handlers::set_element_handler::<_, { event_type::LOADSTART }>;
-        #[calls_script]
+        attribute onloadstart: EventHandler, get = handlers::element_handler::<{ event_type::LOADSTART }>, set = handlers::set_element_handler::<_, { event_type::LOADSTART }>;
         #[front]
-        attribute onmousedown: EventHandler, get = handlers::element_handler::<_, { event_type::MOUSEDOWN }>, set = handlers::set_element_handler::<_, { event_type::MOUSEDOWN }>;
-        #[calls_script]
+        attribute onmousedown: EventHandler, get = handlers::element_handler::<{ event_type::MOUSEDOWN }>, set = handlers::set_element_handler::<_, { event_type::MOUSEDOWN }>;
         #[front]
-        attribute onmouseenter: EventHandler, get = handlers::element_handler::<_, { event_type::MOUSEENTER }>, set = handlers::set_element_handler::<_, { event_type::MOUSEENTER }>;
-        #[calls_script]
+        attribute onmouseenter: EventHandler, get = handlers::element_handler::<{ event_type::MOUSEENTER }>, set = handlers::set_element_handler::<_, { event_type::MOUSEENTER }>;
         #[front]
-        attribute onmouseleave: EventHandler, get = handlers::element_handler::<_, { event_type::MOUSELEAVE }>, set = handlers::set_element_handler::<_, { event_type::MOUSELEAVE }>;
-        #[calls_script]
+        attribute onmouseleave: EventHandler, get = handlers::element_handler::<{ event_type::MOUSELEAVE }>, set = handlers::set_element_handler::<_, { event_type::MOUSELEAVE }>;
         #[front]
-        attribute onmousemove: EventHandler, get = handlers::element_handler::<_, { event_type::MOUSEMOVE }>, set = handlers::set_element_handler::<_, { event_type::MOUSEMOVE }>;
-        #[calls_script]
+        attribute onmousemove: EventHandler, get = handlers::element_handler::<{ event_type::MOUSEMOVE }>, set = handlers::set_element_handler::<_, { event_type::MOUSEMOVE }>;
         #[front]
-        attribute onmouseout: EventHandler, get = handlers::element_handler::<_, { event_type::MOUSEOUT }>, set = handlers::set_element_handler::<_, { event_type::MOUSEOUT }>;
-        #[calls_script]
+        attribute onmouseout: EventHandler, get = handlers::element_handler::<{ event_type::MOUSEOUT }>, set = handlers::set_element_handler::<_, { event_type::MOUSEOUT }>;
         #[front]
-        attribute onmouseover: EventHandler, get = handlers::element_handler::<_, { event_type::MOUSEOVER }>, set = handlers::set_element_handler::<_, { event_type::MOUSEOVER }>;
-        #[calls_script]
+        attribute onmouseover: EventHandler, get = handlers::element_handler::<{ event_type::MOUSEOVER }>, set = handlers::set_element_handler::<_, { event_type::MOUSEOVER }>;
         #[front]
-        attribute onmouseup: EventHandler, get = handlers::element_handler::<_, { event_type::MOUSEUP }>, set = handlers::set_element_handler::<_, { event_type::MOUSEUP }>;
-        #[calls_script]
+        attribute onmouseup: EventHandler, get = handlers::element_handler::<{ event_type::MOUSEUP }>, set = handlers::set_element_handler::<_, { event_type::MOUSEUP }>;
         #[front]
-        attribute onmousewheel: EventHandler, get = handlers::element_handler::<_, { event_type::MOUSEWHEEL }>, set = handlers::set_element_handler::<_, { event_type::MOUSEWHEEL }>;
-        #[calls_script]
+        attribute onmousewheel: EventHandler, get = handlers::element_handler::<{ event_type::MOUSEWHEEL }>, set = handlers::set_element_handler::<_, { event_type::MOUSEWHEEL }>;
         #[front]
-        attribute onpause: EventHandler, get = handlers::element_handler::<_, { event_type::PAUSE }>, set = handlers::set_element_handler::<_, { event_type::PAUSE }>;
-        #[calls_script]
+        attribute onpause: EventHandler, get = handlers::element_handler::<{ event_type::PAUSE }>, set = handlers::set_element_handler::<_, { event_type::PAUSE }>;
         #[front]
-        attribute onplay: EventHandler, get = handlers::element_handler::<_, { event_type::PLAY }>, set = handlers::set_element_handler::<_, { event_type::PLAY }>;
-        #[calls_script]
+        attribute onplay: EventHandler, get = handlers::element_handler::<{ event_type::PLAY }>, set = handlers::set_element_handler::<_, { event_type::PLAY }>;
         #[front]
-        attribute onplaying: EventHandler, get = handlers::element_handler::<_, { event_type::PLAYING }>, set = handlers::set_element_handler::<_, { event_type::PLAYING }>;
-        #[calls_script]
+        attribute onplaying: EventHandler, get = handlers::element_handler::<{ event_type::PLAYING }>, set = handlers::set_element_handler::<_, { event_type::PLAYING }>;
         #[front]
-        attribute onprogress: EventHandler, get = handlers::element_handler::<_, { event_type::PROGRESS }>, set = handlers::set_element_handler::<_, { event_type::PROGRESS }>;
-        #[calls_script]
+        attribute onprogress: EventHandler, get = handlers::element_handler::<{ event_type::PROGRESS }>, set = handlers::set_element_handler::<_, { event_type::PROGRESS }>;
         #[front]
-        attribute onratechange: EventHandler, get = handlers::element_handler::<_, { event_type::RATECHANGE }>, set = handlers::set_element_handler::<_, { event_type::RATECHANGE }>;
-        #[calls_script]
+        attribute onratechange: EventHandler, get = handlers::element_handler::<{ event_type::RATECHANGE }>, set = handlers::set_element_handler::<_, { event_type::RATECHANGE }>;
         #[front]
-        attribute onreset: EventHandler, get = handlers::element_handler::<_, { event_type::RESET }>, set = handlers::set_element_handler::<_, { event_type::RESET }>;
-        #[calls_script]
+        attribute onreset: EventHandler, get = handlers::element_handler::<{ event_type::RESET }>, set = handlers::set_element_handler::<_, { event_type::RESET }>;
         #[front]
-        attribute onresize: EventHandler, get = handlers::element_handler::<_, { event_type::RESIZE }>, set = handlers::set_element_handler::<_, { event_type::RESIZE }>;
-        #[calls_script]
+        attribute onresize: EventHandler, get = handlers::element_handler::<{ event_type::RESIZE }>, set = handlers::set_element_handler::<_, { event_type::RESIZE }>;
         #[front]
-        attribute onscroll: EventHandler, get = handlers::element_handler::<_, { event_type::SCROLL }>, set = handlers::set_element_handler::<_, { event_type::SCROLL }>;
-        #[calls_script]
+        attribute onscroll: EventHandler, get = handlers::element_handler::<{ event_type::SCROLL }>, set = handlers::set_element_handler::<_, { event_type::SCROLL }>;
         #[front]
-        attribute onscrollend: EventHandler, get = handlers::element_handler::<_, { event_type::SCROLLEND }>, set = handlers::set_element_handler::<_, { event_type::SCROLLEND }>;
-        #[calls_script]
+        attribute onscrollend: EventHandler, get = handlers::element_handler::<{ event_type::SCROLLEND }>, set = handlers::set_element_handler::<_, { event_type::SCROLLEND }>;
         #[front]
-        attribute onsecuritypolicyviolation: EventHandler, get = handlers::element_handler::<_, { event_type::SECURITYPOLICYVIOLATION }>, set = handlers::set_element_handler::<_, { event_type::SECURITYPOLICYVIOLATION }>;
-        #[calls_script]
+        attribute onsecuritypolicyviolation: EventHandler, get = handlers::element_handler::<{ event_type::SECURITYPOLICYVIOLATION }>, set = handlers::set_element_handler::<_, { event_type::SECURITYPOLICYVIOLATION }>;
         #[front]
-        attribute onseeked: EventHandler, get = handlers::element_handler::<_, { event_type::SEEKED }>, set = handlers::set_element_handler::<_, { event_type::SEEKED }>;
-        #[calls_script]
+        attribute onseeked: EventHandler, get = handlers::element_handler::<{ event_type::SEEKED }>, set = handlers::set_element_handler::<_, { event_type::SEEKED }>;
         #[front]
-        attribute onseeking: EventHandler, get = handlers::element_handler::<_, { event_type::SEEKING }>, set = handlers::set_element_handler::<_, { event_type::SEEKING }>;
-        #[calls_script]
+        attribute onseeking: EventHandler, get = handlers::element_handler::<{ event_type::SEEKING }>, set = handlers::set_element_handler::<_, { event_type::SEEKING }>;
         #[front]
-        attribute onselect: EventHandler, get = handlers::element_handler::<_, { event_type::SELECT }>, set = handlers::set_element_handler::<_, { event_type::SELECT }>;
-        #[calls_script]
+        attribute onselect: EventHandler, get = handlers::element_handler::<{ event_type::SELECT }>, set = handlers::set_element_handler::<_, { event_type::SELECT }>;
         #[front]
-        attribute onselectionchange: EventHandler, get = handlers::element_handler::<_, { event_type::SELECTIONCHANGE }>, set = handlers::set_element_handler::<_, { event_type::SELECTIONCHANGE }>;
-        #[calls_script]
+        attribute onselectionchange: EventHandler, get = handlers::element_handler::<{ event_type::SELECTIONCHANGE }>, set = handlers::set_element_handler::<_, { event_type::SELECTIONCHANGE }>;
         #[front]
-        attribute onselectstart: EventHandler, get = handlers::element_handler::<_, { event_type::SELECTSTART }>, set = handlers::set_element_handler::<_, { event_type::SELECTSTART }>;
-        #[calls_script]
+        attribute onselectstart: EventHandler, get = handlers::element_handler::<{ event_type::SELECTSTART }>, set = handlers::set_element_handler::<_, { event_type::SELECTSTART }>;
         #[front]
-        attribute onslotchange: EventHandler, get = handlers::element_handler::<_, { event_type::SLOTCHANGE }>, set = handlers::set_element_handler::<_, { event_type::SLOTCHANGE }>;
-        #[calls_script]
+        attribute onslotchange: EventHandler, get = handlers::element_handler::<{ event_type::SLOTCHANGE }>, set = handlers::set_element_handler::<_, { event_type::SLOTCHANGE }>;
         #[front]
-        attribute onstalled: EventHandler, get = handlers::element_handler::<_, { event_type::STALLED }>, set = handlers::set_element_handler::<_, { event_type::STALLED }>;
-        #[calls_script]
+        attribute onstalled: EventHandler, get = handlers::element_handler::<{ event_type::STALLED }>, set = handlers::set_element_handler::<_, { event_type::STALLED }>;
         #[front]
-        attribute onsubmit: EventHandler, get = handlers::element_handler::<_, { event_type::SUBMIT }>, set = handlers::set_element_handler::<_, { event_type::SUBMIT }>;
-        #[calls_script]
+        attribute onsubmit: EventHandler, get = handlers::element_handler::<{ event_type::SUBMIT }>, set = handlers::set_element_handler::<_, { event_type::SUBMIT }>;
         #[front]
-        attribute onsuspend: EventHandler, get = handlers::element_handler::<_, { event_type::SUSPEND }>, set = handlers::set_element_handler::<_, { event_type::SUSPEND }>;
-        #[calls_script]
+        attribute onsuspend: EventHandler, get = handlers::element_handler::<{ event_type::SUSPEND }>, set = handlers::set_element_handler::<_, { event_type::SUSPEND }>;
         #[front]
-        attribute ontimeupdate: EventHandler, get = handlers::element_handler::<_, { event_type::TIMEUPDATE }>, set = handlers::set_element_handler::<_, { event_type::TIMEUPDATE }>;
-        #[calls_script]
+        attribute ontimeupdate: EventHandler, get = handlers::element_handler::<{ event_type::TIMEUPDATE }>, set = handlers::set_element_handler::<_, { event_type::TIMEUPDATE }>;
         #[front]
-        attribute ontoggle: EventHandler, get = handlers::element_handler::<_, { event_type::TOGGLE }>, set = handlers::set_element_handler::<_, { event_type::TOGGLE }>;
-        #[calls_script]
+        attribute ontoggle: EventHandler, get = handlers::element_handler::<{ event_type::TOGGLE }>, set = handlers::set_element_handler::<_, { event_type::TOGGLE }>;
         #[front]
-        attribute ontransitioncancel: EventHandler, get = handlers::element_handler::<_, { event_type::TRANSITIONCANCEL }>, set = handlers::set_element_handler::<_, { event_type::TRANSITIONCANCEL }>;
-        #[calls_script]
+        attribute ontransitioncancel: EventHandler, get = handlers::element_handler::<{ event_type::TRANSITIONCANCEL }>, set = handlers::set_element_handler::<_, { event_type::TRANSITIONCANCEL }>;
         #[front]
-        attribute ontransitionend: EventHandler, get = handlers::element_handler::<_, { event_type::TRANSITIONEND }>, set = handlers::set_element_handler::<_, { event_type::TRANSITIONEND }>;
-        #[calls_script]
+        attribute ontransitionend: EventHandler, get = handlers::element_handler::<{ event_type::TRANSITIONEND }>, set = handlers::set_element_handler::<_, { event_type::TRANSITIONEND }>;
         #[front]
-        attribute ontransitionrun: EventHandler, get = handlers::element_handler::<_, { event_type::TRANSITIONRUN }>, set = handlers::set_element_handler::<_, { event_type::TRANSITIONRUN }>;
-        #[calls_script]
+        attribute ontransitionrun: EventHandler, get = handlers::element_handler::<{ event_type::TRANSITIONRUN }>, set = handlers::set_element_handler::<_, { event_type::TRANSITIONRUN }>;
         #[front]
-        attribute ontransitionstart: EventHandler, get = handlers::element_handler::<_, { event_type::TRANSITIONSTART }>, set = handlers::set_element_handler::<_, { event_type::TRANSITIONSTART }>;
-        #[calls_script]
+        attribute ontransitionstart: EventHandler, get = handlers::element_handler::<{ event_type::TRANSITIONSTART }>, set = handlers::set_element_handler::<_, { event_type::TRANSITIONSTART }>;
         #[front]
-        attribute onvolumechange: EventHandler, get = handlers::element_handler::<_, { event_type::VOLUMECHANGE }>, set = handlers::set_element_handler::<_, { event_type::VOLUMECHANGE }>;
-        #[calls_script]
+        attribute onvolumechange: EventHandler, get = handlers::element_handler::<{ event_type::VOLUMECHANGE }>, set = handlers::set_element_handler::<_, { event_type::VOLUMECHANGE }>;
         #[front]
-        attribute onwaiting: EventHandler, get = handlers::element_handler::<_, { event_type::WAITING }>, set = handlers::set_element_handler::<_, { event_type::WAITING }>;
-        #[calls_script]
+        attribute onwaiting: EventHandler, get = handlers::element_handler::<{ event_type::WAITING }>, set = handlers::set_element_handler::<_, { event_type::WAITING }>;
         #[front]
-        attribute onwebkitanimationend: EventHandler, get = handlers::element_handler::<_, { event_type::WEBKIT_ANIMATION_END }>, set = handlers::set_element_handler::<_, { event_type::WEBKIT_ANIMATION_END }>;
-        #[calls_script]
+        attribute onwebkitanimationend: EventHandler, get = handlers::element_handler::<{ event_type::WEBKIT_ANIMATION_END }>, set = handlers::set_element_handler::<_, { event_type::WEBKIT_ANIMATION_END }>;
         #[front]
-        attribute onwebkitanimationiteration: EventHandler, get = handlers::element_handler::<_, { event_type::WEBKIT_ANIMATION_ITERATION }>, set = handlers::set_element_handler::<_, { event_type::WEBKIT_ANIMATION_ITERATION }>;
-        #[calls_script]
+        attribute onwebkitanimationiteration: EventHandler, get = handlers::element_handler::<{ event_type::WEBKIT_ANIMATION_ITERATION }>, set = handlers::set_element_handler::<_, { event_type::WEBKIT_ANIMATION_ITERATION }>;
         #[front]
-        attribute onwebkitanimationstart: EventHandler, get = handlers::element_handler::<_, { event_type::WEBKIT_ANIMATION_START }>, set = handlers::set_element_handler::<_, { event_type::WEBKIT_ANIMATION_START }>;
-        #[calls_script]
+        attribute onwebkitanimationstart: EventHandler, get = handlers::element_handler::<{ event_type::WEBKIT_ANIMATION_START }>, set = handlers::set_element_handler::<_, { event_type::WEBKIT_ANIMATION_START }>;
         #[front]
-        attribute onwebkittransitionend: EventHandler, get = handlers::element_handler::<_, { event_type::WEBKIT_TRANSITION_END }>, set = handlers::set_element_handler::<_, { event_type::WEBKIT_TRANSITION_END }>;
-        #[calls_script]
+        attribute onwebkittransitionend: EventHandler, get = handlers::element_handler::<{ event_type::WEBKIT_TRANSITION_END }>, set = handlers::set_element_handler::<_, { event_type::WEBKIT_TRANSITION_END }>;
         #[front]
-        attribute onwheel: EventHandler, get = handlers::element_handler::<_, { event_type::WHEEL }>, set = handlers::set_element_handler::<_, { event_type::WHEEL }>;
+        attribute onwheel: EventHandler, get = handlers::element_handler::<{ event_type::WHEEL }>, set = handlers::set_element_handler::<_, { event_type::WHEEL }>;
         attribute dataset: DOMStringMap, get = dataset::dataset;
     }
 
@@ -4924,24 +4538,18 @@ crate::declare! {
         attribute result: ReaderResult, get = file_reader::result;
         // Always `null`: reading bytes in memory doesn't fail.
         attribute error: AlwaysNull, get = file_reader::error;
-        #[calls_script]
         #[front]
-        attribute onloadstart: EventHandler, get = handlers::port_handler::<_, { event_type::LOADSTART }>, set = handlers::set_port_handler::<_, { event_type::LOADSTART }>;
-        #[calls_script]
+        attribute onloadstart: EventHandler, get = handlers::port_handler::<{ event_type::LOADSTART }>, set = handlers::set_port_handler::<_, { event_type::LOADSTART }>;
         #[front]
-        attribute onprogress: EventHandler, get = handlers::port_handler::<_, { event_type::PROGRESS }>, set = handlers::set_port_handler::<_, { event_type::PROGRESS }>;
-        #[calls_script]
+        attribute onprogress: EventHandler, get = handlers::port_handler::<{ event_type::PROGRESS }>, set = handlers::set_port_handler::<_, { event_type::PROGRESS }>;
         #[front]
-        attribute onload: EventHandler, get = handlers::port_handler::<_, { event_type::LOAD }>, set = handlers::set_port_handler::<_, { event_type::LOAD }>;
-        #[calls_script]
+        attribute onload: EventHandler, get = handlers::port_handler::<{ event_type::LOAD }>, set = handlers::set_port_handler::<_, { event_type::LOAD }>;
         #[front]
-        attribute onabort: EventHandler, get = handlers::port_handler::<_, { event_type::ABORT }>, set = handlers::set_port_handler::<_, { event_type::ABORT }>;
-        #[calls_script]
+        attribute onabort: EventHandler, get = handlers::port_handler::<{ event_type::ABORT }>, set = handlers::set_port_handler::<_, { event_type::ABORT }>;
         #[front]
-        attribute onerror: EventHandler, get = handlers::port_handler::<_, { event_type::ERROR }>, set = handlers::set_port_handler::<_, { event_type::ERROR }>;
-        #[calls_script]
+        attribute onerror: EventHandler, get = handlers::port_handler::<{ event_type::ERROR }>, set = handlers::set_port_handler::<_, { event_type::ERROR }>;
         #[front]
-        attribute onloadend: EventHandler, get = handlers::port_handler::<_, { event_type::LOADEND }>, set = handlers::set_port_handler::<_, { event_type::LOADEND }>;
+        attribute onloadend: EventHandler, get = handlers::port_handler::<{ event_type::LOADEND }>, set = handlers::set_port_handler::<_, { event_type::LOADEND }>;
         const EMPTY: u32 = 0;
         const LOADING: u32 = 1;
         const DONE: u32 = 2;
