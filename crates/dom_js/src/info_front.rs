@@ -465,6 +465,103 @@ impl<'s> Front for InfoFront<'s> {
         self.with_front(|front| front.dict_arg(index, name))
     }
 
+    // The results V8 allocates for: made by the whole front end, in a
+    // scope.
+
+    fn finish_objects(&mut self, objects: Vec<(ObjectRoot, usize)>) {
+        self.with_front(|front| front.finish_objects(objects));
+    }
+
+    fn finish_frozen_objects(&mut self, objects: Vec<(ObjectRoot, usize)>) {
+        self.with_front(|front| front.finish_frozen_objects(objects));
+    }
+
+    fn finish_strings(&mut self, strings: Vec<DomString>) {
+        self.with_front(|front| front.finish_strings(strings));
+    }
+
+    fn finish_frozen_strings(&mut self, strings: Vec<DomString>) {
+        self.with_front(|front| front.finish_frozen_strings(strings));
+    }
+
+    fn finish_doubles(&mut self, numbers: Vec<f64>) {
+        self.with_front(|front| front.finish_doubles(numbers));
+    }
+
+    fn finish_numbers(&mut self, numbers: Vec<f64>) {
+        self.with_front(|front| front.finish_numbers(numbers));
+    }
+
+    fn finish_dictionary(&mut self, members: Vec<(&'static str, dom_api::typed::DictValue)>) {
+        self.with_front(|front| front.finish_dictionary(members));
+    }
+
+    fn finish_records(&mut self, records: Vec<Vec<(String, dom_api::typed::DictValue)>>) {
+        self.with_front(|front| front.finish_records(records));
+    }
+
+    fn finish_entry_detail(&mut self, entry: Persistent<dom::PerformanceEntry>) {
+        self.with_front(|front| front.finish_entry_detail(entry));
+    }
+
+    fn finish_reader_buffer(&mut self, reader: Persistent<dom::EventTargetImpl>) {
+        self.with_front(|front| front.finish_reader_buffer(reader));
+    }
+
+    fn finish_history_state(&mut self, history: Persistent<dom::History>) {
+        self.with_front(|front| front.finish_history_state(history));
+    }
+
+    fn finish_cloned(&mut self, payload: dom::SerializedMessage, ports: Vec<(ObjectRoot, usize)>) {
+        self.with_front(|front| front.finish_cloned(payload, ports));
+    }
+
+    fn finish_resolved(&mut self, object: ObjectRoot, interface: usize) {
+        self.with_front(|front| front.finish_resolved(object, interface));
+    }
+
+    fn finish_resolved_string(&mut self, string: DomString) {
+        self.with_front(|front| front.finish_resolved_string(string));
+    }
+
+    fn finish_resolved_json(&mut self, text: DomString) {
+        self.with_front(|front| front.finish_resolved_json(text));
+    }
+
+    fn finish_resolved_undefined(&mut self) {
+        self.with_front(|front| front.finish_resolved_undefined());
+    }
+
+    fn finish_resolved_bytes(&mut self, bytes: Vec<u8>, view: bool) {
+        self.with_front(|front| front.finish_resolved_bytes(bytes, view));
+    }
+
+    fn finish_animation_promise(
+        &mut self,
+        object: Persistent<dom::EventTargetImpl>,
+        interface: usize,
+        ready: bool,
+        resolved: bool,
+    ) {
+        self.with_front(|front| front.finish_animation_promise(object, interface, ready, resolved));
+    }
+
+    fn finish_pending_promise(&mut self, id: u64, existing: bool) {
+        self.with_front(|front| front.finish_pending_promise(id, existing));
+    }
+
+    fn finish_resolved_constructor(
+        &mut self,
+        definition: Persistent<dom::CustomElementDefinition>,
+    ) {
+        self.with_front(|front| front.finish_resolved_constructor(definition));
+    }
+
+    /// A promise rejected with the error, by the whole front end.
+    fn reject(&mut self, error: ApiError) {
+        self.with_front(|front| front.reject(error));
+    }
+
     /// An event handler's source compiled, by the whole front end.
     fn compile_event_handler(&mut self, target: &dom::TargetRoot, event_type: dom::NameId) {
         self.with_front(|front| front.compile_event_handler(target, event_type));

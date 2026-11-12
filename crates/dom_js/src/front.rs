@@ -53,24 +53,6 @@ pub(crate) enum Kept {
     Node(NodeRoot, usize),
     /// An object with no wrapper, and its interface.
     Object(ObjectRoot, usize),
-    /// A sequence's objects (a new array), each with its interface.
-    Objects(Vec<(ObjectRoot, usize)>),
-    /// Numbers (a frozen array: `frozen_array`).
-    Numbers(Vec<f64>),
-    /// Strings (a new array).
-    Strings(Vec<DomString>),
-    /// Strings (a frozen array: `frozen_array`).
-    FrozenStrings(Vec<DomString>),
-    /// Numbers (a new array).
-    Doubles(Vec<f64>),
-    /// Objects, each with its interface (a frozen array: `frozen_array`).
-    FrozenObjects(Vec<(ObjectRoot, usize)>),
-    /// A promise's object (a new promise resolved with its wrapper), and
-    /// its interface.
-    Resolved(ObjectRoot, usize),
-    /// The prepared promise (`Front::prepare_promise`): resolved with
-    /// `Call::resolve_with`, or kept by the number in `Call::pending`.
-    Prepared,
     /// An element being upgraded that has a wrapper: given, with the
     /// call's `new.target`'s prototype (`OpFront::construct_html`).
     Upgrading(NodeRoot),
@@ -81,36 +63,6 @@ pub(crate) enum Kept {
     /// bytes: no copy), then the call's result, if kept too
     /// (`OpFront::set_image_data_pixels`).
     Pixels(Persistent<dom::ImageData>, Vec<u8>, Option<Box<Kept>>),
-    /// A dictionary (a new object), its members in order.
-    Dictionary(Vec<(&'static str, dom_api::typed::DictValue)>),
-    /// A mark's or a measure's `detail` (`entry_detail`).
-    EntryDetail(Persistent<dom::PerformanceEntry>),
-    /// A `FileReader`'s `ArrayBuffer` result (`reader_buffer`).
-    ReaderBuffer(Persistent<dom::EventTargetImpl>),
-    /// The kept `ArrayBufferView` argument's bytes (`Call::rare`'s `view`),
-    /// written, and the view the result.
-    FilledView(Vec<u8>),
-    /// A serialization deserialized in the current realm, its ports
-    /// these objects' wrappers (`structuredClone`'s).
-    Cloned(dom::SerializedMessage, Vec<(ObjectRoot, usize)>),
-    /// Records (`getKeyframes()`'s): a new array of new objects.
-    Records(Vec<Vec<(String, dom_api::typed::DictValue)>>),
-    /// A promise resolved with undefined (`scrollTo()`'s).
-    ResolvedUndefined,
-    /// An animation's object's `ready` (`true`) or `finished` promise, kept
-    /// on it, resolved at once if new and its animation's is (`true`).
-    AnimationPromise(Persistent<dom::EventTargetImpl>, usize, bool, bool),
-    /// A history's state (`history.state`), deserialized after the
-    /// operation if it isn't yet.
-    HistoryState(Persistent<dom::History>),
-    /// A string a new promise is resolved with.
-    ResolvedString(DomString),
-    /// Bytes a new promise is resolved with: a new `ArrayBuffer` of them
-    /// (its bytes: no copy), or a `Uint8Array` of one (`view`).
-    ResolvedBytes(Vec<u8>, bool),
-    /// Text a new promise is resolved with parsed as JSON, or rejected with
-    /// what parsing threw (the body mixin's `json()`).
-    ResolvedJson(DomString),
 }
 
 /// What a call's arguments, `this` and `new.target` are read from: a
@@ -291,10 +243,6 @@ impl Call<'_, '_> {
 /// What a call of `whenDefined` or `define` holds.
 #[derive(Default)]
 pub(crate) struct RareCall<'s> {
-    /// What a call giving a pending promise prepared (`prepare_promise`),
-    /// the value to resolve it with, or the number to keep it by (and
-    /// whether one is kept by it already).
-    promise: Option<PreparedPromise<'s>>,
     /// What `define` read off its constructor (the lifecycle callbacks:
     /// `connectedCallback`, `disconnectedCallback`, `adoptedCallback`,
     /// `attributeChangedCallback`), for the operation that stores them.
@@ -328,14 +276,6 @@ impl<'s> Call<'s, '_> {
     fn rare(&mut self) -> &mut RareCall<'s> {
         self.rare.get_or_insert_with(Box::default)
     }
-}
-
-/// A pending promise's call's: its resolver, made before the operation,
-/// and what the operation said of it.
-pub(crate) struct PreparedPromise<'s> {
-    resolver: v8::Local<'s, v8::PromiseResolver>,
-    resolve_with: Option<v8::Local<'s, v8::Value>>,
-    pending: Option<(u64, bool)>,
 }
 
 /// A member's call in its operation: what of V8 it may use (`NoGc`), the
@@ -508,72 +448,6 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
                 let wrapper = wrapper_of(&mut self.scope, &object, interface);
                 self.rv().set(wrapper.into());
             }
-            Kept::Objects(objects) => {
-                let wrappers: Vec<v8::Local<'_, v8::Value>> = objects
-                    .iter()
-                    .map(|(object, interface)| {
-                        wrapper_of(&mut self.scope, object, *interface).into()
-                    })
-                    .collect();
-                let array = v8::Array::new_with_elements(self.scope.scope(), &wrappers);
-                self.rv().set(array.into());
-            }
-            Kept::Strings(strings) => {
-                let mut values: Vec<v8::Local<'_, v8::Value>> = Vec::with_capacity(strings.len());
-                for string in &strings {
-                    let Some(value) = strings::new_string(self.scope.scope(), string) else {
-                        exception::throw_range_error(self.scope.scope(), "Invalid string length");
-                        return;
-                    };
-                    values.push(value.into());
-                }
-                let array = v8::Array::new_with_elements(self.scope.scope(), &values);
-                self.rv().set(array.into());
-            }
-            Kept::FrozenStrings(strings) => {
-                let this = self.args.this();
-                let mut values: Vec<v8::Local<'_, v8::Value>> = Vec::with_capacity(strings.len());
-                for string in &strings {
-                    let Some(value) = strings::new_string(self.scope.scope(), string) else {
-                        exception::throw_range_error(self.scope.scope(), "Invalid string length");
-                        return;
-                    };
-                    values.push(value.into());
-                }
-                let array = frozen_array(self.scope.scope(), this, &values);
-                self.rv().set(array.into());
-            }
-            Kept::Numbers(numbers) => {
-                let this = self.args.this();
-                let scope = self.scope.scope();
-                let values: Vec<v8::Local<'_, v8::Value>> = numbers
-                    .iter()
-                    .map(|&number| v8::Number::new(scope, number).into())
-                    .collect();
-                let array = frozen_array(scope, this, &values);
-                self.rv().set(array.into());
-            }
-            Kept::Doubles(numbers) => {
-                let scope = self.scope.scope();
-                let values: Vec<v8::Local<'_, v8::Value>> = numbers
-                    .iter()
-                    .map(|&number| v8::Number::new(scope, number).into())
-                    .collect();
-                let array = v8::Array::new_with_elements(scope, &values);
-                self.rv().set(array.into());
-            }
-            Kept::FrozenObjects(objects) => {
-                let wrappers: Vec<v8::Local<'_, v8::Value>> = objects
-                    .iter()
-                    .map(|(object, interface)| {
-                        wrapper_of(&mut self.scope, object, *interface).into()
-                    })
-                    .collect();
-                let this = self.args.this();
-                let array = frozen_array(self.scope.scope(), this, &wrappers);
-                self.rv().set(array.into());
-            }
-            Kept::Prepared => self.finish_prepared(),
             Kept::Pixels(image_data, bytes, then) => {
                 let len = bytes.len();
                 let scope = self.scope.scope();
@@ -591,88 +465,6 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
                     self.finish_kept();
                 }
             }
-            Kept::EntryDetail(entry) => {
-                let detail = entry_detail(&mut self.scope, &entry);
-                self.rv().set(detail);
-            }
-            Kept::ReaderBuffer(reader) => {
-                let buffer = reader_buffer(&mut self.scope, &reader);
-                self.rv().set(buffer);
-            }
-            Kept::FilledView(bytes) => {
-                let view = self
-                    .call
-                    .rare()
-                    .view
-                    .take()
-                    .expect("a view kept with the call");
-                let scope = self.scope.scope();
-                let offset = view.byte_offset();
-                if let Some(buffer) = view.buffer(scope) {
-                    let store = buffer.get_backing_store();
-                    for (cell, byte) in store.iter().skip(offset).zip(bytes) {
-                        cell.set(byte);
-                    }
-                }
-                self.rv().set(view.into());
-            }
-            Kept::Cloned(payload, ports) => {
-                // In `this`'s relevant realm (the window's), its ports'
-                // wrappers too.
-                let this = self.args.this();
-                let value = {
-                    let scope = self.scope.scope();
-                    let context = this
-                        .get_creation_context(scope)
-                        .unwrap_or_else(|| scope.get_current_context());
-                    let scope = &mut v8::ContextScope::new(scope, context);
-                    let mut realm = state::scope(scope).expect("the isolate's state");
-                    let ports: Vec<_> = ports
-                        .iter()
-                        .map(|(port, interface)| {
-                            let wrapper = wrapper_of(&mut realm, port, *interface);
-                            v8::Global::new(realm.scope(), wrapper)
-                        })
-                        .collect();
-                    crate::serialize::deserialize_message(realm.scope(), payload, ports)
-                        .map(|value| v8::Global::new(realm.scope(), value))
-                };
-                match value {
-                    Some(value) => {
-                        let value = v8::Local::new(self.scope.scope(), value);
-                        self.rv().set(value);
-                    }
-                    None => exception::throw_dom_exception(
-                        &mut self.scope,
-                        "DataCloneError",
-                        "Failed to execute 'structuredClone' on 'Window': Unable to deserialize cloned data.",
-                    ),
-                }
-            }
-            Kept::Dictionary(members) => {
-                let scope = self.scope.scope();
-                let object = v8::Object::new(scope);
-                for (name, value) in members {
-                    let key = templates::string(scope, name);
-                    let value = dict_value(scope, value);
-                    object.create_data_property(scope, key.into(), value);
-                }
-                self.rv().set(object.into());
-            }
-            Kept::Records(records) => {
-                let scope = self.scope.scope();
-                let array = v8::Array::new(scope, 0);
-                for (index, record) in (0u32..).zip(records) {
-                    let object = v8::Object::new(scope);
-                    for (name, value) in record {
-                        let key = templates::string(scope, &name);
-                        let value = dict_value(scope, value);
-                        object.create_data_property(scope, key.into(), value);
-                    }
-                    array.set_index(scope, index, object.into());
-                }
-                self.rv().set(array.into());
-            }
             Kept::Upgrading(root) => {
                 let scope = self.scope.scope();
                 let prototype = self.args.this().get_prototype(scope);
@@ -687,83 +479,6 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
                 self.rv().set(wrapper.into());
             }
             Kept::Construct(definition, document) => self.finish_construct(&definition, &document),
-            Kept::AnimationPromise(object, interface, ready, resolved) => {
-                if let Some(promise) =
-                    animation_promise(&mut self.scope, &object, interface, ready, resolved)
-                {
-                    self.rv().set(promise.into());
-                }
-            }
-            Kept::ResolvedUndefined => {
-                let undefined = v8::undefined(self.scope.scope());
-                self.resolve(undefined.into());
-            }
-            Kept::HistoryState(history) => {
-                let state = history_state(&mut self.scope, &history);
-                self.rv().set(state);
-            }
-            Kept::ResolvedString(string) => {
-                let scope = self.scope.scope();
-                let Some(string) = strings::new_string(scope, &string) else {
-                    exception::throw_range_error(scope, "Invalid string length");
-                    return;
-                };
-                self.resolve(string.into());
-            }
-            Kept::ResolvedBytes(bytes, view) => {
-                let len = bytes.len();
-                let scope = self.scope.scope();
-                let store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
-                let buffer = v8::ArrayBuffer::with_backing_store(scope, &store);
-                let value: v8::Local<'_, v8::Value> = if view {
-                    v8::Uint8Array::new(scope, buffer, 0, len)
-                        .expect("an array of a buffer's length")
-                        .into()
-                } else {
-                    buffer.into()
-                };
-                self.resolve(value);
-            }
-            Kept::ResolvedJson(text) => {
-                let scope = self.scope.scope();
-                let Some(resolver) = v8::PromiseResolver::new(scope) else {
-                    return;
-                };
-                let Some(string) = strings::new_string(scope, &text) else {
-                    exception::throw_range_error(scope, "Invalid string length");
-                    return;
-                };
-                // Parsed, or what parsing threw (a `SyntaxError`), caught.
-                let parsed = {
-                    v8::tc_scope!(let tc, scope);
-                    match v8::json::parse(tc, string) {
-                        Some(value) => Ok(value),
-                        None => Err(tc.exception()),
-                    }
-                };
-                let scope = self.scope.scope();
-                match parsed {
-                    Ok(value) => {
-                        resolver.resolve(scope, value);
-                    }
-                    Err(Some(thrown)) => {
-                        resolver.reject(scope, thrown);
-                    }
-                    Err(None) => {}
-                }
-                let promise = resolver.get_promise(scope);
-                self.rv().set(promise.into());
-            }
-            Kept::Resolved(object, interface) => {
-                let wrapper = wrapper_of(&mut self.scope, &object, interface);
-                let scope = self.scope.scope();
-                let Some(resolver) = v8::PromiseResolver::new(scope) else {
-                    return;
-                };
-                resolver.resolve(scope, wrapper.into());
-                let promise = resolver.get_promise(scope);
-                self.rv().set(promise.into());
-            }
             Kept::U32(value) => self.rv().set_uint32(value),
             Kept::F64(value) => self.rv().set_double(value),
             Kept::String(string) => match cached_string(&mut self.scope, &string) {
@@ -809,46 +524,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
     }
 }
 
-impl<'s, A: CallArgs<'s>> V8Front<'_, 's, '_, '_, A> {
-    /// The prepared promise, resolved (`ret_resolved_with`) or pending:
-    /// its resolver kept by its number, or the one kept by it already
-    /// whose promise is given instead.
-    #[cold]
-    fn finish_prepared(&mut self) {
-        let Some(prepared) = self.call.rare.as_mut().and_then(|rare| rare.promise.take()) else {
-            return;
-        };
-        let PreparedPromise {
-            resolver,
-            resolve_with,
-            pending,
-        } = prepared;
-        let resolver = match (resolve_with, pending) {
-            (Some(value), _) => {
-                resolver.resolve(self.scope.scope(), value);
-                resolver
-            }
-            (None, Some((id, false))) => {
-                let global = v8::Global::new(self.scope.scope(), resolver);
-                let (state, _) = self.scope.state_mut();
-                state.when_defined.insert(id, global);
-                resolver
-            }
-            (None, Some((id, true))) => {
-                let (state, _) = self.scope.state_mut();
-                let kept = state
-                    .when_defined
-                    .get(&id)
-                    .cloned()
-                    .expect("the promise kept by its number");
-                v8::Local::new(self.scope.scope(), kept)
-            }
-            (None, None) => return,
-        };
-        let promise = resolver.get_promise(self.scope.scope());
-        self.rv().set(promise.into());
-    }
-}
+impl<'s, A: CallArgs<'s>> V8Front<'_, 's, '_, '_, A> {}
 
 impl<'s, A: CallArgs<'s>> V8Front<'_, 's, '_, '_, A> {
     /// The call's result a new promise resolved with `value`.
@@ -3127,17 +2803,6 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         self.rv().set(promise.into());
     }
 
-    #[cold]
-    fn prepare_promise(&mut self) {
-        if let Some(resolver) = v8::PromiseResolver::new(self.scope.scope()) {
-            self.call.rare().promise = Some(PreparedPromise {
-                resolver,
-                resolve_with: None,
-                pending: None,
-            });
-        }
-    }
-
     fn constructor_is_constructor(&mut self) -> bool {
         let taken = self.call.callback.expect("the constructor taken");
         v8::Local::<v8::Object>::try_from(taken).is_ok_and(|object| object.is_constructor())
@@ -3292,6 +2957,293 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
 
     fn compile_event_handler(&mut self, target: &dom::TargetRoot, event_type: dom::NameId) {
         crate::handlers::compile_event_handler(&mut self.scope, target, event_type);
+    }
+
+    // The results the engine allocates for, made after the operation
+    // (`RetType::finish`): each the call's result.
+
+    /// A new promise, its resolver kept by its number; or the one whose
+    /// resolver is kept by it already.
+    #[cold]
+    fn finish_pending_promise(&mut self, id: u64, existing: bool) {
+        let resolver = if existing {
+            let (state, _) = self.scope.state_mut();
+            let kept = state
+                .when_defined
+                .get(&id)
+                .cloned()
+                .expect("the promise kept by its number");
+            v8::Local::new(self.scope.scope(), kept)
+        } else {
+            let Some(resolver) = v8::PromiseResolver::new(self.scope.scope()) else {
+                return;
+            };
+            let global = v8::Global::new(self.scope.scope(), resolver);
+            let (state, _) = self.scope.state_mut();
+            state.when_defined.insert(id, global);
+            resolver
+        };
+        let promise = resolver.get_promise(self.scope.scope());
+        self.rv().set(promise.into());
+    }
+
+    #[cold]
+    fn finish_resolved_constructor(
+        &mut self,
+        definition: Persistent<dom::CustomElementDefinition>,
+    ) {
+        let (state, mut no_gc) = self.scope.state();
+        // Allocates nothing: a read.
+        let constructor = state
+            .dom
+            .read(|cx| no_gc.strong_value(cx.definition_edges(definition.get(cx.gc)).constructor))
+            .expect("a definition's constructor, stored as it was added");
+        self.resolve(constructor);
+    }
+
+    fn finish_objects(&mut self, objects: Vec<(ObjectRoot, usize)>) {
+        let wrappers: Vec<v8::Local<'_, v8::Value>> = objects
+            .iter()
+            .map(|(object, interface)| wrapper_of(&mut self.scope, object, *interface).into())
+            .collect();
+        let array = v8::Array::new_with_elements(self.scope.scope(), &wrappers);
+        self.rv().set(array.into());
+    }
+
+    fn finish_frozen_objects(&mut self, objects: Vec<(ObjectRoot, usize)>) {
+        let wrappers: Vec<v8::Local<'_, v8::Value>> = objects
+            .iter()
+            .map(|(object, interface)| wrapper_of(&mut self.scope, object, *interface).into())
+            .collect();
+        let this = self.args.this();
+        let array = frozen_array(self.scope.scope(), this, &wrappers);
+        self.rv().set(array.into());
+    }
+
+    fn finish_strings(&mut self, strings: Vec<DomString>) {
+        let mut values: Vec<v8::Local<'_, v8::Value>> = Vec::with_capacity(strings.len());
+        for string in &strings {
+            let Some(value) = strings::new_string(self.scope.scope(), string) else {
+                exception::throw_range_error(self.scope.scope(), "Invalid string length");
+                return;
+            };
+            values.push(value.into());
+        }
+        let array = v8::Array::new_with_elements(self.scope.scope(), &values);
+        self.rv().set(array.into());
+    }
+
+    fn finish_frozen_strings(&mut self, strings: Vec<DomString>) {
+        let this = self.args.this();
+        let mut values: Vec<v8::Local<'_, v8::Value>> = Vec::with_capacity(strings.len());
+        for string in &strings {
+            let Some(value) = strings::new_string(self.scope.scope(), string) else {
+                exception::throw_range_error(self.scope.scope(), "Invalid string length");
+                return;
+            };
+            values.push(value.into());
+        }
+        let array = frozen_array(self.scope.scope(), this, &values);
+        self.rv().set(array.into());
+    }
+
+    fn finish_doubles(&mut self, numbers: Vec<f64>) {
+        let scope = self.scope.scope();
+        let values: Vec<v8::Local<'_, v8::Value>> = numbers
+            .iter()
+            .map(|&number| v8::Number::new(scope, number).into())
+            .collect();
+        let array = v8::Array::new_with_elements(scope, &values);
+        self.rv().set(array.into());
+    }
+
+    fn finish_numbers(&mut self, numbers: Vec<f64>) {
+        let this = self.args.this();
+        let scope = self.scope.scope();
+        let values: Vec<v8::Local<'_, v8::Value>> = numbers
+            .iter()
+            .map(|&number| v8::Number::new(scope, number).into())
+            .collect();
+        let array = frozen_array(scope, this, &values);
+        self.rv().set(array.into());
+    }
+
+    fn finish_dictionary(&mut self, members: Vec<(&'static str, dom_api::typed::DictValue)>) {
+        let scope = self.scope.scope();
+        let object = v8::Object::new(scope);
+        for (name, value) in members {
+            let key = templates::string(scope, name);
+            let value = dict_value(scope, value);
+            object.create_data_property(scope, key.into(), value);
+        }
+        self.rv().set(object.into());
+    }
+
+    fn finish_records(&mut self, records: Vec<Vec<(String, dom_api::typed::DictValue)>>) {
+        let scope = self.scope.scope();
+        let array = v8::Array::new(scope, 0);
+        for (index, record) in (0u32..).zip(records) {
+            let object = v8::Object::new(scope);
+            for (name, value) in record {
+                let key = templates::string(scope, &name);
+                let value = dict_value(scope, value);
+                object.create_data_property(scope, key.into(), value);
+            }
+            array.set_index(scope, index, object.into());
+        }
+        self.rv().set(array.into());
+    }
+
+    fn finish_entry_detail(&mut self, entry: Persistent<dom::PerformanceEntry>) {
+        let detail = entry_detail(&mut self.scope, &entry);
+        self.rv().set(detail);
+    }
+
+    fn finish_reader_buffer(&mut self, reader: Persistent<dom::EventTargetImpl>) {
+        let buffer = reader_buffer(&mut self.scope, &reader);
+        self.rv().set(buffer);
+    }
+
+    fn finish_history_state(&mut self, history: Persistent<dom::History>) {
+        let state = history_state(&mut self.scope, &history);
+        self.rv().set(state);
+    }
+
+    fn finish_filled_view(&mut self, bytes: Vec<u8>) {
+        let view = self
+            .call
+            .rare()
+            .view
+            .take()
+            .expect("a view kept with the call");
+        let scope = self.scope.scope();
+        let offset = view.byte_offset();
+        if let Some(buffer) = view.buffer(scope) {
+            let store = buffer.get_backing_store();
+            for (cell, byte) in store.iter().skip(offset).zip(bytes) {
+                cell.set(byte);
+            }
+        }
+        self.rv().set(view.into());
+    }
+
+    fn finish_cloned(&mut self, payload: dom::SerializedMessage, ports: Vec<(ObjectRoot, usize)>) {
+        // In `this`'s relevant realm (the window's), its ports'
+        // wrappers too.
+        let this = self.args.this();
+        let value = {
+            let scope = self.scope.scope();
+            let context = this
+                .get_creation_context(scope)
+                .unwrap_or_else(|| scope.get_current_context());
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let mut realm = state::scope(scope).expect("the isolate's state");
+            let ports: Vec<_> = ports
+                .iter()
+                .map(|(port, interface)| {
+                    let wrapper = wrapper_of(&mut realm, port, *interface);
+                    v8::Global::new(realm.scope(), wrapper)
+                })
+                .collect();
+            crate::serialize::deserialize_message(realm.scope(), payload, ports)
+                .map(|value| v8::Global::new(realm.scope(), value))
+        };
+        match value {
+            Some(value) => {
+                let value = v8::Local::new(self.scope.scope(), value);
+                self.rv().set(value);
+            }
+            None => exception::throw_dom_exception(
+                &mut self.scope,
+                "DataCloneError",
+                "Failed to execute 'structuredClone' on 'Window': Unable to deserialize cloned data.",
+            ),
+        }
+    }
+
+    fn finish_resolved(&mut self, object: ObjectRoot, interface: usize) {
+        let wrapper = wrapper_of(&mut self.scope, &object, interface);
+        let scope = self.scope.scope();
+        let Some(resolver) = v8::PromiseResolver::new(scope) else {
+            return;
+        };
+        resolver.resolve(scope, wrapper.into());
+        let promise = resolver.get_promise(scope);
+        self.rv().set(promise.into());
+    }
+
+    fn finish_resolved_string(&mut self, string: DomString) {
+        let scope = self.scope.scope();
+        let Some(string) = strings::new_string(scope, &string) else {
+            exception::throw_range_error(scope, "Invalid string length");
+            return;
+        };
+        self.resolve(string.into());
+    }
+
+    fn finish_resolved_json(&mut self, text: DomString) {
+        let scope = self.scope.scope();
+        let Some(resolver) = v8::PromiseResolver::new(scope) else {
+            return;
+        };
+        let Some(string) = strings::new_string(scope, &text) else {
+            exception::throw_range_error(scope, "Invalid string length");
+            return;
+        };
+        // Parsed, or what parsing threw (a `SyntaxError`), caught.
+        let parsed = {
+            v8::tc_scope!(let tc, scope);
+            match v8::json::parse(tc, string) {
+                Some(value) => Ok(value),
+                None => Err(tc.exception()),
+            }
+        };
+        let scope = self.scope.scope();
+        match parsed {
+            Ok(value) => {
+                resolver.resolve(scope, value);
+            }
+            Err(Some(thrown)) => {
+                resolver.reject(scope, thrown);
+            }
+            Err(None) => {}
+        }
+        let promise = resolver.get_promise(scope);
+        self.rv().set(promise.into());
+    }
+
+    fn finish_resolved_undefined(&mut self) {
+        let undefined = v8::undefined(self.scope.scope());
+        self.resolve(undefined.into());
+    }
+
+    fn finish_resolved_bytes(&mut self, bytes: Vec<u8>, view: bool) {
+        let len = bytes.len();
+        let scope = self.scope.scope();
+        let store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
+        let buffer = v8::ArrayBuffer::with_backing_store(scope, &store);
+        let value: v8::Local<'_, v8::Value> = if view {
+            v8::Uint8Array::new(scope, buffer, 0, len)
+                .expect("an array of a buffer's length")
+                .into()
+        } else {
+            buffer.into()
+        };
+        self.resolve(value);
+    }
+
+    fn finish_animation_promise(
+        &mut self,
+        object: Persistent<dom::EventTargetImpl>,
+        interface: usize,
+        ready: bool,
+        resolved: bool,
+    ) {
+        if let Some(promise) =
+            animation_promise(&mut self.scope, &object, interface, ready, resolved)
+        {
+            self.rv().set(promise.into());
+        }
     }
 
     fn update_elements(&mut self) {
@@ -3479,14 +3431,6 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
         )));
     }
 
-    fn ret_records(&mut self, records: Vec<Vec<(String, dom_api::typed::DictValue)>>) {
-        self.keep(Kept::Records(records));
-    }
-
-    fn ret_dictionary(&mut self, members: Vec<(&'static str, dom_api::typed::DictValue)>) {
-        self.keep(Kept::Dictionary(members));
-    }
-
     fn store_rest(&mut self, _: &ApiCx<'_, '_>, edge: &JsEdge, rest: v8::Local<'s, v8::Array>) {
         self.no_gc.set_strong_value(edge, rest.into());
     }
@@ -3593,50 +3537,6 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
         (node(start), node(end))
     }
 
-    fn ret_doubles(&mut self, numbers: &[f64]) {
-        self.keep(Kept::Doubles(numbers.to_vec()));
-    }
-
-    fn ret_numbers(&mut self, numbers: &[f64]) {
-        self.keep(Kept::Numbers(numbers.to_vec()));
-    }
-
-    fn ret_entry_detail<'gc>(
-        &mut self,
-        cx: &ApiCx<'_, 'gc>,
-        entry: elise::Gc<'gc, dom::PerformanceEntry>,
-    ) {
-        self.keep(Kept::EntryDetail(Persistent::new(cx.gc, entry)));
-    }
-
-    fn ret_reader_buffer<'gc>(
-        &mut self,
-        cx: &ApiCx<'_, 'gc>,
-        reader: elise::Gc<'gc, dom::EventTargetImpl>,
-    ) {
-        self.keep(Kept::ReaderBuffer(Persistent::new(cx.gc, reader)));
-    }
-
-    fn ret_filled_view(&mut self, bytes: Vec<u8>) {
-        self.keep(Kept::FilledView(bytes));
-    }
-
-    fn ret_cloned<'gc>(
-        &mut self,
-        cx: &ApiCx<'_, 'gc>,
-        payload: dom::SerializedMessage,
-        ports: &[elise::Gc<'gc, dom::EventTargetImpl>],
-    ) {
-        let ports = ports
-            .iter()
-            .map(|&port| {
-                let object = ObjectRef::EventTarget(port);
-                (cx.root_object(object), dom_api::interface_of(cx, object))
-            })
-            .collect();
-        self.keep(Kept::Cloned(payload, ports));
-    }
-
     fn listed_shadow_roots<'gc>(
         &mut self,
         cx: &ApiCx<'_, 'gc>,
@@ -3694,111 +3594,10 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
         None
     }
 
-    fn ret_resolved_with<'gc>(&mut self, _: &ApiCx<'_, 'gc>, edge: &'gc JsEdge) {
-        let value = self
-            .no_gc
-            .strong_value(edge)
-            .expect("a definition's constructor, stored as it was added");
-        if let Some(prepared) = self
-            .call
-            .rare
-            .as_mut()
-            .and_then(|rare| rare.promise.as_mut())
-        {
-            prepared.resolve_with = Some(value);
-            self.keep(Kept::Prepared);
-        }
-    }
-
-    fn ret_pending(&mut self, id: u64, existing: bool) {
-        if let Some(prepared) = self
-            .call
-            .rare
-            .as_mut()
-            .and_then(|rare| rare.promise.as_mut())
-        {
-            prepared.pending = Some((id, existing));
-            self.keep(Kept::Prepared);
-        }
-    }
-
     fn ret_any_or_undefined<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, edge: Option<&'gc JsEdge>) {
         if let Some(edge) = edge {
             self.ret_any(cx, edge);
         }
-    }
-
-    fn ret_resolved_string(&mut self, string: DomString) {
-        self.keep(Kept::ResolvedString(string));
-    }
-
-    fn ret_resolved_json(&mut self, text: DomString) {
-        self.keep(Kept::ResolvedJson(text));
-    }
-
-    fn ret_resolved_undefined(&mut self) {
-        self.keep(Kept::ResolvedUndefined);
-    }
-
-    fn ret_resolved_bytes(&mut self, bytes: Vec<u8>, view: bool) {
-        self.keep(Kept::ResolvedBytes(bytes, view));
-    }
-
-    fn ret_history_state<'gc>(
-        &mut self,
-        cx: &ApiCx<'_, 'gc>,
-        history: elise::Gc<'gc, dom::History>,
-    ) {
-        self.keep(Kept::HistoryState(Persistent::new(cx.gc, history)));
-    }
-
-    fn ret_animation_promise<'gc>(
-        &mut self,
-        cx: &ApiCx<'_, 'gc>,
-        object: elise::Gc<'gc, dom::EventTargetImpl>,
-        ready: bool,
-        resolved: bool,
-    ) {
-        let interface = dom_api::interface_of(cx, ObjectRef::EventTarget(object));
-        self.keep(Kept::AnimationPromise(
-            Persistent::new(cx.gc, object),
-            interface,
-            ready,
-            resolved,
-        ));
-    }
-
-    fn ret_resolved<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, object: ObjectRef<'gc>) {
-        self.keep(Kept::Resolved(
-            cx.root_object(object),
-            dom_api::interface_of(cx, object),
-        ));
-    }
-
-    fn ret_frozen_objects<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, objects: &[ObjectRef<'gc>]) {
-        self.keep(Kept::FrozenObjects(
-            objects
-                .iter()
-                .map(|object| (cx.root_object(*object), dom_api::interface_of(cx, *object)))
-                .collect(),
-        ));
-    }
-
-    fn ret_strings(&mut self, strings: Vec<DomString>) {
-        self.keep(Kept::Strings(strings));
-    }
-
-    fn ret_frozen_strings(&mut self, strings: Vec<DomString>) {
-        self.keep(Kept::FrozenStrings(strings));
-    }
-
-    fn ret_objects<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, objects: &[ObjectRef<'gc>]) {
-        self.keep(Kept::Objects(
-            objects
-                .iter()
-                .map(|object| (cx.root_object(*object), dom_api::interface_of(cx, *object)))
-                .collect(),
-        ));
     }
 
     // V8's `undefined` is the return value until set.

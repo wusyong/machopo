@@ -225,18 +225,29 @@ pub(crate) fn set_scroll_restoration<'gc>(
     Ok(())
 }
 
-/// `history.state` as a result (`OpFront::ret_history_state`): the
+/// `history.state` as a result (`Front::finish_history_state`): the
 /// current state's deserialization, made at the first ask and the same
 /// object after.
 pub struct HistoryState;
 
 impl RetType for HistoryState {
     const DESC: TypeDesc = TypeDesc::Any;
+    const PLAIN: bool = true;
     type Ret<'gc> = Gc<'gc, History>;
-    crate::typed::no_pending!();
+    crate::typed::no_prepared!();
+    type Pending<F: crate::typed::FrontTypes> = elise::Persistent<History>;
 
-    fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, history: Gc<'gc, History>) {
-        op.ret_history_state(cx, history);
+    fn give<'gc, O: OpFront>(
+        _: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        history: Gc<'gc, History>,
+    ) -> elise::Persistent<History> {
+        elise::Persistent::new(cx.gc, history)
+    }
+
+    #[inline(always)]
+    fn finish<F: crate::typed::Front>(front: &mut F, history: elise::Persistent<History>) {
+        front.finish_history_state(history);
     }
 }
 

@@ -240,6 +240,12 @@ impl<'a, 's, 'i> Front for PropertyFront<'a, 's, 'i> {
         crate::front::call_lifecycle_callback(&mut self.scope, element, definition, callback);
     }
 
+    /// A named property's names (the enumerator's): kept, as its other
+    /// results are.
+    fn finish_strings(&mut self, strings: Vec<DomString>) {
+        self.got = Got::Strings(strings);
+    }
+
     fn throw(&mut self, error: ApiError) {
         self.got = Got::Threw;
         match error {
@@ -299,10 +305,6 @@ impl<'s> OpFront for PropertyOp<'_, 's, '_> {
     fn ret_string(&mut self, value: &DomString) -> Option<std::convert::Infallible> {
         *self.got = Got::String(value.clone());
         None
-    }
-
-    fn ret_strings(&mut self, strings: Vec<DomString>) {
-        *self.got = Got::Strings(strings);
     }
 
     fn ret_node<'gc>(

@@ -1,0 +1,177 @@
+# Stage 4f: a result the engine allocates for (an array, a dictionary, a
+# promise, a value made at the first ask) leaves the operation as its
+# type's own data (`RetType::Pending`) and is made after it by a method of
+# the front end's of its own (`Front::finish_objects`...); no promise is
+# made ahead of an operation.
+test = ["cargo", "test", "-q", "-p", "dom_api", "-p", "dom_js", "-p", "dom_wasm"]
+timeout = 1800
+
+[[mutant]]
+name = "the info front end gives no objects"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.with_front(|front| front.finish_objects(objects));'''
+to = '''        let _ = objects;'''
+
+[[mutant]]
+name = "the info front end gives no strings"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.with_front(|front| front.finish_strings(strings));'''
+to = '''        let _ = strings;'''
+
+[[mutant]]
+name = "the info front end gives no dictionary"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.with_front(|front| front.finish_dictionary(members));'''
+to = '''        let _ = members;'''
+
+[[mutant]]
+name = "the info front end gives no records"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.with_front(|front| front.finish_records(records));'''
+to = '''        let _ = records;'''
+
+[[mutant]]
+name = "the info front end gives no entry's detail"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.with_front(|front| front.finish_entry_detail(entry));'''
+to = '''        let _ = entry;'''
+
+[[mutant]]
+name = "the info front end gives no history state"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.with_front(|front| front.finish_history_state(history));'''
+to = '''        let _ = history;'''
+
+[[mutant]]
+name = "the info front end gives no reader's buffer"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.with_front(|front| front.finish_reader_buffer(reader));'''
+to = '''        let _ = reader;'''
+
+[[mutant]]
+name = "the info front end gives no animation's promise"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.with_front(|front| front.finish_animation_promise(object, interface, ready, resolved));'''
+to = '''        let _ = (object, interface, ready, resolved);'''
+
+[[mutant]]
+name = "the info front end gives no pending promise"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.with_front(|front| front.finish_pending_promise(id, existing));'''
+to = '''        let _ = (id, existing);'''
+
+[[mutant]]
+name = "the info front end gives no promise of a constructor"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.with_front(|front| front.finish_resolved_constructor(definition));'''
+to = '''        let _ = definition;'''
+
+[[mutant]]
+name = "a sequence loses its last object"
+file = "crates/dom_api/src/typed.rs"
+from = '''            (cx.root_object(object), interface_of(cx, object))
+        })
+        .collect()
+}'''
+to = '''            (cx.root_object(object), interface_of(cx, object))
+        })
+        .skip(1)
+        .collect()
+}'''
+
+[[mutant]]
+name = "a frozen array of numbers is new each time"
+file = "crates/dom_js/src/front.rs"
+from = '''        let array = frozen_array(scope, this, &values);
+        self.rv().set(array.into());
+    }
+
+    fn finish_dictionary('''
+to = '''        let _ = this;
+        let array = v8::Array::new_with_elements(scope, &values);
+        self.rv().set(array.into());
+    }
+
+    fn finish_dictionary('''
+
+[[mutant]]
+name = "a frozen array of objects is new each time"
+file = "crates/dom_js/src/front.rs"
+from = '''        let this = self.args.this();
+        let array = frozen_array(self.scope.scope(), this, &wrappers);'''
+to = '''        let array = v8::Array::new_with_elements(self.scope.scope(), &wrappers);'''
+
+[[mutant]]
+name = "a promise resolved with undefined isn't given"
+file = "crates/dom_js/src/front.rs"
+from = '''        let undefined = v8::undefined(self.scope.scope());
+        self.resolve(undefined.into());'''
+to = ''''''
+
+[[mutant]]
+name = "a promise of bytes is of a view when it isn't"
+file = "crates/dom_js/src/front.rs"
+from = '''        let value: v8::Local<'_, v8::Value> = if view {
+            v8::Uint8Array::new(scope, buffer, 0, len)'''
+to = '''        let value: v8::Local<'_, v8::Value> = if !view {
+            v8::Uint8Array::new(scope, buffer, 0, len)'''
+
+[[mutant]]
+name = "an existing pending promise is made again"
+file = "crates/dom_api/src/typed.rs"
+from = '''            PromiseOf::Existing(id) => PromisePending::Pending(id, true),'''
+to = '''            PromiseOf::Existing(id) => PromisePending::Pending(id, false),'''
+
+[[mutant]]
+name = "a pending promise's resolver isn't kept"
+file = "crates/dom_js/src/front.rs"
+from = '''            let global = v8::Global::new(self.scope.scope(), resolver);
+            let (state, _) = self.scope.state_mut();
+            state.when_defined.insert(id, global);
+            resolver'''
+to = '''            resolver'''
+
+[[mutant]]
+name = "a defined name's promise is pending"
+file = "crates/dom_api/src/custom_elements.rs"
+from = '''        return Ok(PromiseOf::Defined(definition));'''
+to = '''        let _ = definition;'''
+
+[[mutant]]
+name = "an animation's finished promise is its ready one"
+file = "crates/dom_api/src/typed.rs"
+from = '''            interface_of(cx, ObjectRef::EventTarget(promise.object)),
+            promise.ready,'''
+to = '''            interface_of(cx, ObjectRef::EventTarget(promise.object)),
+            true,'''
+
+[[mutant]]
+name = "a reader's buffer is never made"
+file = "crates/dom_api/src/typed.rs"
+from = '''            Some(ReaderPending::Buffer(reader)) => front.finish_reader_buffer(reader),'''
+to = '''            Some(ReaderPending::Buffer(_)) => {}'''
+
+[[mutant]]
+name = "a dictionary as a result has no members"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''                let mut #dict = ::std::vec::Vec::new();
+                #(#outs)*
+                #dict
+            }'''
+to = '''                let #dict = ::std::vec::Vec::new();
+                let _ = #value;
+                #dict
+            }'''
+
+[[mutant]]
+name = "a body's promise is plain"
+file = "crates/dom_api/src/interfaces.rs"
+from = '''        method text() -> Rethrowing<PromiseOfString> = request::text;'''
+to = '''        method text() -> PromiseOfString = request::text;'''
+
+[[mutant]]
+name = "a sequence isn't plain"
+file = "crates/dom_api/src/typed.rs"
+from = '''    const DESC: TypeDesc = TypeDesc::Sequence(I::DESC.name);
+    const PLAIN: bool = true;'''
+to = '''    const DESC: TypeDesc = TypeDesc::Sequence(I::DESC.name);'''

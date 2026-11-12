@@ -210,7 +210,7 @@ fn a_plain_members_receiver_is_checked_by_its_signature() {
 #[test]
 fn a_member_that_isnt_plain_makes_none_of_these_scopes() {
     let mut env = env();
-    for source in ["n.getAttributeNames()", "n.dispatchEvent(new Event('x'))"] {
+    for source in ["new Event('y')", "n.dispatchEvent(new Event('x'))"] {
         let (_, made) = scopes(&mut env, source);
         assert_eq!(made, 0, "{source}");
     }

@@ -516,9 +516,7 @@ pub(crate) fn when_defined<'gc>(
         }));
     };
     if let Some(definition) = cx.custom_element_definition(this, id) {
-        return Ok(PromiseOf::Resolved(
-            cx.definition_edges(definition).constructor,
-        ));
+        return Ok(PromiseOf::Defined(definition));
     }
     Ok(match cx.when_defined(this, id) {
         Some(edge) => PromiseOf::Existing(edge),

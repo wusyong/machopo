@@ -767,6 +767,22 @@ impl<'d> Front for TestFront<'d> {
         self.hooks.finished = true;
     }
 
+    fn finish_objects(&mut self, objects: Vec<(dom::ObjectRoot, usize)>) {
+        self.ret = Some(Ret::Objects(
+            objects.into_iter().map(|(object, _)| object).collect(),
+        ));
+    }
+
+    /// A promise resolved with undefined: as undefined here (the tests'
+    /// engine has no promises).
+    fn finish_resolved_undefined(&mut self) {
+        self.ret = Some(Ret::Undefined);
+    }
+
+    fn finish_strings(&mut self, strings: Vec<DomString>) {
+        self.ret = Some(Ret::Strings(strings));
+    }
+
     fn throw(&mut self, error: ApiError) {
         assert!(self.thrown.is_none(), "thrown twice");
         self.thrown = Some(error);
@@ -826,15 +842,6 @@ impl OpFront for TestFront<'_> {
         None
     }
 
-    fn ret_objects<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, objects: &[ObjectRef<'gc>]) {
-        self.ret = Some(Ret::Objects(
-            objects
-                .iter()
-                .map(|object| cx.root_object(*object))
-                .collect(),
-        ));
-    }
-
     fn this_as<'gc, T: elise::HeapType>(
         &mut self,
         cx: &ApiCx<'_, 'gc>,
@@ -870,12 +877,6 @@ impl OpFront for TestFront<'_> {
         self.ret = Some(Ret::Undefined);
     }
 
-    /// A promise resolved with undefined: as undefined here (the tests'
-    /// engine has no promises).
-    fn ret_resolved_undefined(&mut self) {
-        self.ret = Some(Ret::Undefined);
-    }
-
     fn ret_null(&mut self) {
         self.ret = Some(Ret::Null);
     }
@@ -907,10 +908,6 @@ impl OpFront for TestFront<'_> {
     ) -> Option<std::convert::Infallible> {
         self.ret = Some(Ret::Node(cx.root(node)));
         None
-    }
-
-    fn ret_strings(&mut self, strings: Vec<DomString>) {
-        self.ret = Some(Ret::Strings(strings));
     }
 
     fn ret_new_node<'gc>(

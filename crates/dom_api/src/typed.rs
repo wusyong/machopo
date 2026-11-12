@@ -100,7 +100,48 @@ macro_rules! no_pending {
         fn finish<F: $crate::typed::Front>(_: &mut F, (): ()) {}
     };
 }
-pub(crate) use no_pending;
+
+/// A result type's `Pending`, `give` and `finish` when its value is plain
+/// data (no reference into the DOM's heap) the engine must allocate for:
+/// the value itself leaves the operation, which gives nothing, and the
+/// front end's `$finish` makes it the call's result after.
+macro_rules! finished_after {
+    ($value:ty, $finish:ident) => {
+        const PLAIN: bool = true;
+        type Ret<'gc> = $value;
+        $crate::typed::no_prepared!();
+        type Pending<F: $crate::typed::FrontTypes> = $value;
+
+        #[inline(always)]
+        fn give<'gc, O: $crate::typed::OpFront>(
+            _: &mut O,
+            _: &$crate::ApiCx<'_, 'gc>,
+            value: $value,
+        ) -> $value {
+            value
+        }
+
+        #[inline(always)]
+        fn finish<F: $crate::typed::Front>(front: &mut F, value: $value) {
+            front.$finish(value);
+        }
+    };
+}
+
+/// The objects of a result rooted with their interfaces, in the
+/// operation: what a front end makes wrappers of after it.
+fn rooted_objects<'gc, I: Interface>(
+    cx: &ApiCx<'_, 'gc>,
+    objects: Vec<<I::Object as ObjectType>::Ref<'gc>>,
+) -> Vec<(ObjectRoot, usize)> {
+    objects
+        .into_iter()
+        .map(|object| {
+            let object = <I::Object as ObjectType>::object(object);
+            (cx.root_object(object), interface_of(cx, object))
+        })
+        .collect()
+}
 
 /// A result type's `Prepared` and `prepare` when nothing is made ahead of
 /// the operation for it.
@@ -830,13 +871,6 @@ pub trait Front: FrontTypes {
         unreachable!("a front end binding `StaticRange` reads its init")
     }
 
-    /// A new promise's resolver, made ahead of the operation that may keep
-    /// it (`OpFront::ret_pending`) or have it resolved after
-    /// (`ret_resolved_with`).
-    fn prepare_promise(&mut self) {
-        unreachable!("a front end binding a member giving a pending promise makes it")
-    }
-
     /// `ScriptHost::read_custom_element_constructor`, the call's callback
     /// argument's.
     fn read_custom_element_constructor(&mut self) -> Result<ConstructorInfo, ApiError> {
@@ -943,6 +977,139 @@ pub trait Front: FrontTypes {
     /// called).
     fn compile_event_handler(&mut self, target: &TargetRoot, event_type: NameId) {
         let _ = (target, event_type);
+    }
+
+    // What a result's type carries out of the operation for the engine
+    // to allocate for (`RetType::Pending`): each made the engine's value
+    // and the call's result, after it. None has a default: a front end
+    // binding a member of such a result makes it.
+
+    /// A new array of the objects (each with its interface): a
+    /// `sequence<I>`.
+    fn finish_objects(&mut self, objects: Vec<(ObjectRoot, usize)>) {
+        let _ = objects;
+        unreachable!("a front end binding a member giving a sequence makes it")
+    }
+    /// As `finish_objects`, a `FrozenArray<I>`: frozen, and the same
+    /// array each time while its values are the same.
+    fn finish_frozen_objects(&mut self, objects: Vec<(ObjectRoot, usize)>) {
+        let _ = objects;
+        unreachable!("a front end binding a member giving a frozen array makes it")
+    }
+    /// A new array of the strings.
+    fn finish_strings(&mut self, strings: Vec<DomString>) {
+        let _ = strings;
+        unreachable!("a front end binding a member giving strings makes them")
+    }
+    /// As `finish_strings`, a `FrozenArray<DOMString>`.
+    fn finish_frozen_strings(&mut self, strings: Vec<DomString>) {
+        let _ = strings;
+        unreachable!("a front end binding a member giving a frozen array makes it")
+    }
+    /// A new array of the numbers (`sequence<double>`).
+    fn finish_doubles(&mut self, numbers: Vec<f64>) {
+        let _ = numbers;
+        unreachable!("a front end binding a member giving numbers makes them")
+    }
+    /// As `finish_doubles`, a `FrozenArray<double>`.
+    fn finish_numbers(&mut self, numbers: Vec<f64>) {
+        let _ = numbers;
+        unreachable!("a front end binding a member giving a frozen array makes it")
+    }
+    /// A new object of the members, in order (a dictionary).
+    fn finish_dictionary(&mut self, members: Vec<(&'static str, DictValue)>) {
+        let _ = members;
+        unreachable!("a front end binding a member giving a dictionary makes it")
+    }
+    /// A new array of new objects (`getKeyframes()`'s records).
+    fn finish_records(&mut self, records: Vec<Vec<(String, DictValue)>>) {
+        let _ = records;
+        unreachable!("a front end binding a member giving records makes them")
+    }
+    /// A mark's or a measure's `detail`: its serialization deserialized
+    /// at the first ask, the same value after.
+    fn finish_entry_detail(&mut self, entry: Persistent<dom::PerformanceEntry>) {
+        let _ = entry;
+        unreachable!("a front end binding User Timing gives its detail")
+    }
+    /// A `FileReader`'s `ArrayBuffer` result: made of its bytes at the
+    /// first ask, the same buffer after.
+    fn finish_reader_buffer(&mut self, reader: Persistent<EventTargetImpl>) {
+        let _ = reader;
+        unreachable!("a front end binding `FileReader` gives its buffer")
+    }
+    /// `history.state`: the current state's deserialization, made at the
+    /// first ask and the same value after.
+    fn finish_history_state(&mut self, history: Persistent<dom::History>) {
+        let _ = history;
+        unreachable!("a front end binding `history.state` gives it")
+    }
+    /// The `ArrayBufferView` argument the front end kept
+    /// (`array_view_arg`), these bytes written to it: the result.
+    fn finish_filled_view(&mut self, bytes: Vec<u8>) {
+        let _ = bytes;
+        unreachable!("a front end binding `getRandomValues` fills its view")
+    }
+    /// `payload` deserialized in the receiver's realm, its ports these
+    /// objects (`structuredClone()`'s); a `DataCloneError` if it can't be.
+    fn finish_cloned(&mut self, payload: dom::SerializedMessage, ports: Vec<(ObjectRoot, usize)>) {
+        let _ = (payload, ports);
+        unreachable!("a front end binding `structuredClone` deserializes")
+    }
+    /// A new promise resolved with the object (`Promise<I>`).
+    fn finish_resolved(&mut self, object: ObjectRoot, interface: usize) {
+        let _ = (object, interface);
+        unreachable!("a front end binding a member giving a promise makes it")
+    }
+    /// A new promise resolved with the string.
+    fn finish_resolved_string(&mut self, string: DomString) {
+        let _ = string;
+        unreachable!("a front end binding a member giving a promise makes it")
+    }
+    /// A new promise resolved with the text parsed as JSON, or rejected
+    /// with what parsing threw (the body mixin's `json()`).
+    fn finish_resolved_json(&mut self, text: DomString) {
+        let _ = text;
+        unreachable!("a front end binding a member giving a promise makes it")
+    }
+    /// A new promise resolved with undefined.
+    fn finish_resolved_undefined(&mut self) {
+        unreachable!("a front end binding a member giving a promise makes it")
+    }
+    /// A new promise resolved with a new `ArrayBuffer` of the bytes (its
+    /// own: no copy), or (`view`) a `Uint8Array` of one.
+    fn finish_resolved_bytes(&mut self, bytes: Vec<u8>, view: bool) {
+        let _ = (bytes, view);
+        unreachable!("a front end binding a member giving a promise makes it")
+    }
+    /// A pending promise: a new one, its resolver kept by the number
+    /// `id`; or (`existing`) the promise of the resolver kept by it
+    /// already.
+    fn finish_pending_promise(&mut self, id: u64, existing: bool) {
+        let _ = (id, existing);
+        unreachable!("a front end binding a member giving a pending promise makes it")
+    }
+    /// A new promise resolved with the definition's constructor
+    /// (`whenDefined()`'s of a name that is defined).
+    fn finish_resolved_constructor(
+        &mut self,
+        definition: Persistent<dom::CustomElementDefinition>,
+    ) {
+        let _ = definition;
+        unreachable!("a front end binding `whenDefined` gives its promise")
+    }
+    /// An animation's object's `ready` (`ready`) or `finished` promise:
+    /// the one kept on its object (of `interface`), made at the first
+    /// ask, resolved at once if new and its animation's is (`resolved`).
+    fn finish_animation_promise(
+        &mut self,
+        object: Persistent<EventTargetImpl>,
+        interface: usize,
+        ready: bool,
+        resolved: bool,
+    ) {
+        let _ = (object, interface, ready, resolved);
+        unreachable!("a front end binding animations gives their promises")
     }
 
     /// An event handler's getter's result left for after the operation
@@ -1231,176 +1398,10 @@ pub trait OpFront: FrontTypes {
         unreachable!("a front end binding a member giving an object returns it")
     }
 
-    /// A sequence of objects (WebIDL's `sequence<T>`: a new array).
-    fn ret_objects<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, objects: &[ObjectRef<'gc>]) {
-        let _ = (cx, objects);
-        unreachable!("a front end binding a member giving a sequence returns it")
-    }
-
-    /// A frozen array of objects (WebIDL's `FrozenArray<T>`): the same
-    /// array while they are the same objects.
-    fn ret_frozen_objects<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, objects: &[ObjectRef<'gc>]) {
-        let _ = (cx, objects);
-        unreachable!("a front end binding a member giving a frozen array returns it")
-    }
-
-    /// A promise resolved with `object` (WebIDL's `Promise<T>`: a new one).
-    fn ret_resolved<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, object: ObjectRef<'gc>) {
-        let _ = (cx, object);
-        unreachable!("a front end binding a member giving a promise returns it")
-    }
-
-    /// A promise resolved with `string` (a new one).
-    /// A new promise resolved with `text` parsed as JSON, or rejected with
-    /// what parsing throws (the body mixin's `json()`).
-    fn ret_resolved_json(&mut self, text: DomString) {
-        let _ = text;
-        unreachable!("a front end binding `json()` parses it")
-    }
-
-    fn ret_resolved_string(&mut self, string: DomString) {
-        let _ = string;
-        unreachable!("a front end binding a member giving a promise of a string returns it")
-    }
-
-    /// `object`'s animation's `ready` (or `finished`) promise, after the
-    /// notices queued for its promises are settled: the one its resolver's
-    /// edge keeps, or a new one kept there, resolved with `object` at once
-    /// if `resolved`.
-    /// `history`'s state (`history.state`): its deserialization, made in
-    /// the current realm at the first ask after it changed and kept in
-    /// the history's edge (the same object after); `null` for none.
-    fn ret_history_state<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, history: Gc<'gc, dom::History>) {
-        let _ = (cx, history);
-        unreachable!("a front end binding `history.state` deserializes it")
-    }
-
-    fn ret_animation_promise<'gc>(
-        &mut self,
-        cx: &ApiCx<'_, 'gc>,
-        object: Gc<'gc, dom::EventTargetImpl>,
-        ready: bool,
-        resolved: bool,
-    ) {
-        let _ = (cx, object, ready, resolved);
-        unreachable!("a front end binding an animation's promises keeps them")
-    }
-
-    /// A promise resolved with undefined.
-    fn ret_resolved_undefined(&mut self) {
-        unreachable!("a front end binding a member giving a promise of undefined returns it")
-    }
-
-    /// A promise resolved with a new `ArrayBuffer` of `bytes`, or a new
-    /// `Uint8Array` of one (`view`): no copy, they become its buffer's.
-    fn ret_resolved_bytes(&mut self, bytes: Vec<u8>, view: bool) {
-        let _ = (bytes, view);
-        unreachable!("a front end binding a member giving a promise of bytes returns it")
-    }
-
-    /// The prepared promise (`Front::prepare_promise`), resolved after the
-    /// operation with what `edge` holds.
-    fn ret_resolved_with<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, edge: &'gc JsEdge) {
-        let _ = (cx, edge);
-        unreachable!("a front end binding a member giving a pending promise returns it")
-    }
-
-    /// The prepared promise, pending: its resolver kept by the number
-    /// `id`; or (`existing`) the promise of the resolver kept by it already.
-    fn ret_pending(&mut self, id: u64, existing: bool) {
-        let _ = (id, existing);
-        unreachable!("a front end binding a member giving a pending promise returns it")
-    }
-
     /// What `edge` holds, or undefined if nothing (`AnyOrUndefined`).
     fn ret_any_or_undefined<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, edge: Option<&'gc JsEdge>) {
         let _ = (cx, edge);
         unreachable!("a front end binding a member giving any value gives it")
-    }
-
-    /// A node the operation made (`[NewObject]`), for the wrapper
-    /// `Front::prepare_new_node` made, if it is of the node's interface.
-    /// Strings, in order: a new array (`getAttributeNames()`), or a named
-    /// properties' supported names for an engine's enumeration of them.
-    fn ret_strings(&mut self, strings: Vec<DomString>) {
-        let _ = strings;
-        unreachable!("a front end binding a member giving strings takes them")
-    }
-
-    /// A dictionary (a new object): its members that have a value, in
-    /// order (`getContextAttributes()`).
-    fn ret_dictionary(&mut self, members: Vec<(&'static str, DictValue)>) {
-        let _ = members;
-        unreachable!("a front end binding a member giving a dictionary gives it")
-    }
-
-    /// Records, each a new object of its members in order, in a new array
-    /// (`getKeyframes()`'s keyframes: their names aren't fixed).
-    fn ret_records(&mut self, records: Vec<Vec<(String, DictValue)>>) {
-        let _ = records;
-        unreachable!("a front end binding `getKeyframes` gives its keyframes")
-    }
-
-    /// Numbers, in order: a new array, not frozen (`getLineDash()`).
-    fn ret_doubles(&mut self, numbers: &[f64]) {
-        let _ = numbers;
-        unreachable!("a front end binding a member giving numbers gives them")
-    }
-
-    /// The `ArrayBufferView` argument the front end kept
-    /// (`Front::array_view_arg`), its bytes `bytes` now (as many as it
-    /// views): `getRandomValues`'s.
-    fn ret_filled_view(&mut self, bytes: Vec<u8>) {
-        let _ = bytes;
-        unreachable!("a front end binding `getRandomValues` fills its view")
-    }
-
-    /// A mark's or a measure's `detail`: `null`, or its deserialization,
-    /// made in the current realm at the first read and kept in the entry's
-    /// edge (the same object after).
-    fn ret_entry_detail<'gc>(
-        &mut self,
-        cx: &ApiCx<'_, 'gc>,
-        entry: Gc<'gc, dom::PerformanceEntry>,
-    ) {
-        let _ = (cx, entry);
-        unreachable!("a front end binding User Timing deserializes its detail")
-    }
-
-    /// `reader`'s `ArrayBuffer` result: the one its edge keeps, or one made
-    /// of its bytes and kept there (the same one each time for a read).
-    fn ret_reader_buffer<'gc>(
-        &mut self,
-        cx: &ApiCx<'_, 'gc>,
-        reader: Gc<'gc, dom::EventTargetImpl>,
-    ) {
-        let _ = (cx, reader);
-        unreachable!("a front end binding `FileReader.result` makes its buffer")
-    }
-
-    /// `payload` deserialized in the current realm, `ports` its ports
-    /// (`structuredClone`'s).
-    fn ret_cloned<'gc>(
-        &mut self,
-        cx: &ApiCx<'_, 'gc>,
-        payload: dom::SerializedMessage,
-        ports: &[Gc<'gc, dom::EventTargetImpl>],
-    ) {
-        let _ = (cx, payload, ports);
-        unreachable!("a front end binding `structuredClone` deserializes its result")
-    }
-
-    /// Strings, in order: a frozen array of them (WebIDL's
-    /// `FrozenArray<DOMString>`), the same while they are the same.
-    fn ret_frozen_strings(&mut self, strings: Vec<DomString>) {
-        let _ = strings;
-        unreachable!("a front end binding a member giving a frozen array returns it")
-    }
-
-    /// Numbers, in order: a new array of them (`thresholds`).
-    fn ret_numbers(&mut self, numbers: &[f64]) {
-        let _ = numbers;
-        unreachable!("a front end binding a member giving numbers gives them")
     }
 
     /// A node its member made (`NewObject`), and what was made ahead for
@@ -2306,6 +2307,52 @@ impl RetType for NewImageData {
 
     fn finish<F: Front>(front: &mut F, pending: Self::Pending<F>) {
         <crate::interfaces::ImageData as RetType>::finish(front, pending);
+    }
+}
+
+/// A result `R` of a member whose function may hand the front end a value
+/// to throw (or reject with) after the operation (`OpFront::rethrow`: an
+/// aborted body's reason), which a front end keeps for it: as `R`, but not
+/// `PLAIN`.
+pub struct Rethrowing<R>(PhantomData<R>);
+
+impl<R: RetType> RetType for Rethrowing<R> {
+    const DESC: TypeDesc = R::DESC;
+    type Ret<'gc> = R::Ret<'gc>;
+    type Prepared<F: FrontTypes> = R::Prepared<F>;
+    type Pending<F: FrontTypes> = R::Pending<F>;
+
+    #[inline(always)]
+    fn prepare<F: Front>(front: &mut F, foreseen: Option<usize>) -> Self::Prepared<F> {
+        R::prepare(front, foreseen)
+    }
+
+    #[inline(always)]
+    fn give<'gc, O: OpFront>(
+        op: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        value: Self::Ret<'gc>,
+    ) -> Self::Pending<O> {
+        R::give(op, cx, value)
+    }
+
+    #[inline(always)]
+    fn give_prepared<'gc, O: OpFront>(
+        op: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        value: Self::Ret<'gc>,
+        prepared: Self::Prepared<O>,
+    ) -> Self::Pending<O> {
+        R::give_prepared(op, cx, value, prepared)
+    }
+
+    #[inline(always)]
+    fn finish<F: Front>(front: &mut F, pending: Self::Pending<F>) {
+        R::finish(front, pending);
+    }
+
+    fn fail<F: Front>(front: &mut F, error: ApiError) {
+        R::fail(front, error);
     }
 }
 
@@ -3507,12 +3554,7 @@ pub struct PromiseOfJson;
 
 impl RetType for PromiseOfJson {
     const DESC: TypeDesc = TypeDesc::Promise("any");
-    type Ret<'gc> = DomString;
-    no_pending!();
-
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, text: DomString) {
-        op.ret_resolved_json(text);
-    }
+    finished_after!(DomString, finish_resolved_json);
 
     fn fail<F: Front>(front: &mut F, error: ApiError) {
         front.reject(error);
@@ -3868,12 +3910,7 @@ impl ArgType for Doubles {
 
 impl RetType for Doubles {
     const DESC: TypeDesc = TypeDesc::Doubles;
-    type Ret<'gc> = Vec<f64>;
-    no_pending!();
-
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: Vec<f64>) {
-        op.ret_doubles(&value);
-    }
+    finished_after!(Vec<f64>, finish_doubles);
 }
 
 /// WebIDL's `FrozenArray<double>` as a result: a new array each time.
@@ -3881,12 +3918,7 @@ pub struct Numbers;
 
 impl RetType for Numbers {
     const DESC: TypeDesc = TypeDesc::Numbers;
-    type Ret<'gc> = Vec<f64>;
-    no_pending!();
-
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: Vec<f64>) {
-        op.ret_numbers(&value);
-    }
+    finished_after!(Vec<f64>, finish_numbers);
 }
 
 /// WebIDL's `FrozenArray<DOMString>` as a result: a frozen array of the
@@ -3895,23 +3927,13 @@ pub struct FrozenStrings;
 
 impl RetType for FrozenStrings {
     const DESC: TypeDesc = TypeDesc::FrozenStrings;
-    type Ret<'gc> = Vec<DomString>;
-    no_pending!();
-
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: Vec<DomString>) {
-        op.ret_frozen_strings(value);
-    }
+    finished_after!(Vec<DomString>, finish_frozen_strings);
 }
 
 /// As a result: a named properties' supported names (`#[named(names)]`).
 impl RetType for Strings {
     const DESC: TypeDesc = TypeDesc::Strings;
-    type Ret<'gc> = Vec<DomString>;
-    no_pending!();
-
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: Vec<DomString>) {
-        op.ret_strings(value);
-    }
+    finished_after!(Vec<DomString>, finish_strings);
 }
 
 /// WebIDL's `any` as a result: a value the engine keeps for the DOM (a JS
@@ -6081,31 +6103,47 @@ pub struct PromiseOfAny;
 
 /// What a member giving a `PromiseOfAny` gives.
 pub enum PromiseOf<'gc> {
-    Resolved(&'gc JsEdge),
+    /// Resolved with the definition's constructor.
+    Defined(Gc<'gc, dom::CustomElementDefinition>),
     /// A new one, its resolver to keep by the number.
     Pending(u64),
     /// The one whose resolver is kept by the number.
     Existing(u64),
 }
 
+/// What a `PromiseOfAny` leaves for after the operation: the definition
+/// whose constructor a new promise is resolved with, or the number a
+/// pending one's resolver is kept by (and whether one is already).
+pub enum PromisePending {
+    Defined(Persistent<dom::CustomElementDefinition>),
+    Pending(u64, bool),
+}
+
 impl RetType for PromiseOfAny {
     const DESC: TypeDesc = TypeDesc::Promise("any");
+    const PLAIN: bool = true;
     type Ret<'gc> = PromiseOf<'gc>;
-    type Prepared<F: FrontTypes> = ();
-    type Pending<F: FrontTypes> = ();
+    no_prepared!();
+    type Pending<F: FrontTypes> = PromisePending;
 
-    #[inline(always)]
-    fn finish<F: Front>(_: &mut F, (): ()) {}
-
-    fn prepare<F: Front>(front: &mut F, _: Option<usize>) {
-        front.prepare_promise();
+    fn give<'gc, O: OpFront>(
+        _: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        value: PromiseOf<'gc>,
+    ) -> PromisePending {
+        match value {
+            PromiseOf::Defined(definition) => {
+                PromisePending::Defined(Persistent::new(cx.gc, definition))
+            }
+            PromiseOf::Pending(id) => PromisePending::Pending(id, false),
+            PromiseOf::Existing(id) => PromisePending::Pending(id, true),
+        }
     }
 
-    fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, value: PromiseOf<'gc>) {
-        match value {
-            PromiseOf::Resolved(edge) => op.ret_resolved_with(cx, edge),
-            PromiseOf::Pending(id) => op.ret_pending(id, false),
-            PromiseOf::Existing(id) => op.ret_pending(id, true),
+    fn finish<F: Front>(front: &mut F, pending: PromisePending) {
+        match pending {
+            PromisePending::Defined(definition) => front.finish_resolved_constructor(definition),
+            PromisePending::Pending(id, existing) => front.finish_pending_promise(id, existing),
         }
     }
 
@@ -6121,15 +6159,22 @@ pub struct ObservableArray<I>(PhantomData<I>);
 
 impl<I: Interface> RetType for ObservableArray<I> {
     const DESC: TypeDesc = TypeDesc::ObservableArray(I::NAME);
+    const PLAIN: bool = true;
     type Ret<'gc> = Vec<<I::Object as ObjectType>::Ref<'gc>>;
-    no_pending!();
+    no_prepared!();
+    type Pending<F: FrontTypes> = Vec<(ObjectRoot, usize)>;
 
-    fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, value: Self::Ret<'gc>) {
-        let objects: Vec<ObjectRef<'gc>> = value
-            .into_iter()
-            .map(<I::Object as ObjectType>::object)
-            .collect();
-        op.ret_objects(cx, &objects);
+    fn give<'gc, O: OpFront>(
+        _: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        value: Self::Ret<'gc>,
+    ) -> Vec<(ObjectRoot, usize)> {
+        rooted_objects::<I>(cx, value)
+    }
+
+    #[inline(always)]
+    fn finish<F: Front>(front: &mut F, objects: Vec<(ObjectRoot, usize)>) {
+        front.finish_objects(objects);
     }
 }
 
@@ -6140,11 +6185,23 @@ pub struct Promise<I>(PhantomData<I>);
 
 impl<I: Interface> RetType for Promise<I> {
     const DESC: TypeDesc = TypeDesc::Promise(I::NAME);
+    const PLAIN: bool = true;
     type Ret<'gc> = <I::Object as ObjectType>::Ref<'gc>;
-    no_pending!();
+    no_prepared!();
+    type Pending<F: FrontTypes> = (ObjectRoot, usize);
 
-    fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, value: Self::Ret<'gc>) {
-        op.ret_resolved(cx, <I::Object as ObjectType>::object(value));
+    fn give<'gc, O: OpFront>(
+        _: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        value: Self::Ret<'gc>,
+    ) -> (ObjectRoot, usize) {
+        let object = <I::Object as ObjectType>::object(value);
+        (cx.root_object(object), interface_of(cx, object))
+    }
+
+    #[inline(always)]
+    fn finish<F: Front>(front: &mut F, (object, interface): (ObjectRoot, usize)) {
+        front.finish_resolved(object, interface);
     }
 
     fn fail<F: Front>(front: &mut F, error: ApiError) {
@@ -6160,19 +6217,19 @@ pub struct PendingPromise<I>(PhantomData<I>);
 
 impl<I: Interface> RetType for PendingPromise<I> {
     const DESC: TypeDesc = TypeDesc::Promise(I::NAME);
+    const PLAIN: bool = true;
     type Ret<'gc> = u64;
-    type Prepared<F: FrontTypes> = ();
-    type Pending<F: FrontTypes> = ();
+    no_prepared!();
+    type Pending<F: FrontTypes> = u64;
 
     #[inline(always)]
-    fn finish<F: Front>(_: &mut F, (): ()) {}
-
-    fn prepare<F: Front>(front: &mut F, _: Option<usize>) {
-        front.prepare_promise();
+    fn give<'gc, O: OpFront>(_: &mut O, _: &ApiCx<'_, 'gc>, promise: u64) -> u64 {
+        promise
     }
 
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, promise: u64) {
-        op.ret_pending(promise, false);
+    #[inline(always)]
+    fn finish<F: Front>(front: &mut F, promise: u64) {
+        front.finish_pending_promise(promise, false);
     }
 
     fn fail<F: Front>(front: &mut F, error: ApiError) {
@@ -6185,15 +6242,22 @@ pub struct Sequence<I>(PhantomData<I>);
 
 impl<I: Interface> RetType for Sequence<I> {
     const DESC: TypeDesc = TypeDesc::Sequence(I::DESC.name);
+    const PLAIN: bool = true;
     type Ret<'gc> = Vec<<I::Object as ObjectType>::Ref<'gc>>;
-    no_pending!();
+    no_prepared!();
+    type Pending<F: FrontTypes> = Vec<(ObjectRoot, usize)>;
 
-    fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, value: Self::Ret<'gc>) {
-        let objects: Vec<ObjectRef<'gc>> = value
-            .into_iter()
-            .map(<I::Object as ObjectType>::object)
-            .collect();
-        op.ret_objects(cx, &objects);
+    fn give<'gc, O: OpFront>(
+        _: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        value: Self::Ret<'gc>,
+    ) -> Vec<(ObjectRoot, usize)> {
+        rooted_objects::<I>(cx, value)
+    }
+
+    #[inline(always)]
+    fn finish<F: Front>(front: &mut F, objects: Vec<(ObjectRoot, usize)>) {
+        front.finish_objects(objects);
     }
 }
 
@@ -6203,15 +6267,22 @@ pub struct FrozenArray<I>(PhantomData<I>);
 
 impl<I: Interface> RetType for FrozenArray<I> {
     const DESC: TypeDesc = TypeDesc::FrozenArray(I::DESC.name);
+    const PLAIN: bool = true;
     type Ret<'gc> = Vec<<I::Object as ObjectType>::Ref<'gc>>;
-    no_pending!();
+    no_prepared!();
+    type Pending<F: FrontTypes> = Vec<(ObjectRoot, usize)>;
 
-    fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, value: Self::Ret<'gc>) {
-        let objects: Vec<ObjectRef<'gc>> = value
-            .into_iter()
-            .map(<I::Object as ObjectType>::object)
-            .collect();
-        op.ret_frozen_objects(cx, &objects);
+    fn give<'gc, O: OpFront>(
+        _: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        value: Self::Ret<'gc>,
+    ) -> Vec<(ObjectRoot, usize)> {
+        rooted_objects::<I>(cx, value)
+    }
+
+    #[inline(always)]
+    fn finish<F: Front>(front: &mut F, objects: Vec<(ObjectRoot, usize)>) {
+        front.finish_frozen_objects(objects);
     }
 }
 
@@ -6687,6 +6758,7 @@ impl ArgType for Uint8ClampedArray {
 
 impl RetType for Uint8ClampedArray {
     const DESC: TypeDesc = TypeDesc::Uint8ClampedArray;
+    const PLAIN: bool = true;
     type Ret<'gc> = &'gc JsEdge;
     no_pending!();
 
@@ -6758,6 +6830,7 @@ impl ArgType for CanvasStyleValue {
 
 impl RetType for CanvasStyleValue {
     const DESC: TypeDesc = TypeDesc::StringOr(CANVAS_STYLE_OBJECTS);
+    const PLAIN: bool = true;
     type Ret<'gc> = CanvasStyleRet<'gc>;
     no_prepared!();
     type Pending<F: FrontTypes> = (Option<F::PendingString>, Option<F::PendingObject>);
@@ -6912,16 +6985,7 @@ pub struct Records;
 
 impl RetType for Records {
     const DESC: TypeDesc = TypeDesc::Any;
-    type Ret<'gc> = Vec<Vec<(String, DictValue)>>;
-    no_pending!();
-
-    fn give<'gc, O: OpFront>(
-        op: &mut O,
-        _: &ApiCx<'_, 'gc>,
-        records: Vec<Vec<(String, DictValue)>>,
-    ) {
-        op.ret_records(records);
-    }
+    finished_after!(Vec<Vec<(String, DictValue)>>, finish_records);
 }
 
 /// A dictionary result whose members are given at run time (`getTiming()`,
@@ -6931,16 +6995,7 @@ pub struct DictionaryOut;
 
 impl RetType for DictionaryOut {
     const DESC: TypeDesc = TypeDesc::Any;
-    type Ret<'gc> = Vec<(&'static str, DictValue)>;
-    no_pending!();
-
-    fn give<'gc, O: OpFront>(
-        op: &mut O,
-        _: &ApiCx<'_, 'gc>,
-        members: Vec<(&'static str, DictValue)>,
-    ) {
-        op.ret_dictionary(members);
-    }
+    finished_after!(Vec<(&'static str, DictValue)>, finish_dictionary);
 }
 
 /// `animate()`'s options as the front end read them
@@ -7077,11 +7132,32 @@ pub struct PromiseOfAnimation;
 
 impl RetType for PromiseOfAnimation {
     const DESC: TypeDesc = TypeDesc::Promise("Animation");
+    const PLAIN: bool = true;
     type Ret<'gc> = AnimationPromise<'gc>;
-    no_pending!();
+    no_prepared!();
+    /// The animation's object rooted, its interface, which promise and
+    /// whether it is resolved.
+    type Pending<F: FrontTypes> = (Persistent<EventTargetImpl>, usize, bool, bool);
 
-    fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, promise: AnimationPromise<'gc>) {
-        op.ret_animation_promise(cx, promise.object, promise.ready, promise.resolved);
+    fn give<'gc, O: OpFront>(
+        _: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        promise: AnimationPromise<'gc>,
+    ) -> (Persistent<EventTargetImpl>, usize, bool, bool) {
+        (
+            Persistent::new(cx.gc, promise.object),
+            interface_of(cx, ObjectRef::EventTarget(promise.object)),
+            promise.ready,
+            promise.resolved,
+        )
+    }
+
+    #[inline(always)]
+    fn finish<F: Front>(
+        front: &mut F,
+        (object, interface, ready, resolved): (Persistent<EventTargetImpl>, usize, bool, bool),
+    ) {
+        front.finish_animation_promise(object, interface, ready, resolved);
     }
 }
 
@@ -7397,11 +7473,20 @@ pub struct FilledView;
 
 impl RetType for FilledView {
     const DESC: TypeDesc = TypeDesc::Any;
+    // Not `PLAIN`: the view is one the front end kept with the call
+    // (`array_view_arg`).
     type Ret<'gc> = Vec<u8>;
-    no_pending!();
+    no_prepared!();
+    type Pending<F: FrontTypes> = Vec<u8>;
 
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, bytes: Vec<u8>) {
-        op.ret_filled_view(bytes);
+    #[inline(always)]
+    fn give<'gc, O: OpFront>(_: &mut O, _: &ApiCx<'_, 'gc>, bytes: Vec<u8>) -> Vec<u8> {
+        bytes
+    }
+
+    #[inline(always)]
+    fn finish<F: Front>(front: &mut F, bytes: Vec<u8>) {
+        front.finish_filled_view(bytes);
     }
 }
 
@@ -7459,11 +7544,29 @@ pub struct Cloned;
 
 impl RetType for Cloned {
     const DESC: TypeDesc = TypeDesc::Any;
+    const PLAIN: bool = true;
     type Ret<'gc> = (dom::SerializedMessage, Vec<Gc<'gc, dom::EventTargetImpl>>);
-    no_pending!();
+    no_prepared!();
+    type Pending<F: FrontTypes> = (dom::SerializedMessage, Vec<(ObjectRoot, usize)>);
 
-    fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, (payload, ports): Self::Ret<'gc>) {
-        op.ret_cloned(cx, payload, &ports);
+    fn give<'gc, O: OpFront>(
+        _: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        (payload, ports): Self::Ret<'gc>,
+    ) -> Self::Pending<O> {
+        let ports = ports
+            .into_iter()
+            .map(|port| {
+                let object = ObjectRef::EventTarget(port);
+                (cx.root_object(object), interface_of(cx, object))
+            })
+            .collect();
+        (payload, ports)
+    }
+
+    #[inline(always)]
+    fn finish<F: Front>(front: &mut F, (payload, ports): Self::Pending<F>) {
+        front.finish_cloned(payload, ports);
     }
 }
 
@@ -7472,10 +7575,19 @@ impl RetType for Cloned {
 /// read (`OpFront::ret_reader_buffer`).
 pub struct ReaderResult;
 
+/// What a `FileReader`'s `result` leaves for after the operation: a
+/// string its engine has no copy of, or its buffer to make.
+pub enum ReaderPending<S> {
+    String(S),
+    Buffer(Persistent<EventTargetImpl>),
+}
+
 impl RetType for ReaderResult {
     const DESC: TypeDesc = TypeDesc::Any;
+    const PLAIN: bool = true;
     type Ret<'gc> = Gc<'gc, dom::EventTargetImpl>;
-    pending!(PendingString, finish_string);
+    no_prepared!();
+    type Pending<F: FrontTypes> = Option<ReaderPending<F::PendingString>>;
 
     fn give<'gc, O: OpFront>(
         op: &mut O,
@@ -7487,11 +7599,20 @@ impl RetType for ReaderResult {
                 op.ret_null();
                 None
             }
-            dom::FileReaderResult::Text(text) => op.ret_string(&DomString::new(&text)),
+            dom::FileReaderResult::Text(text) => op
+                .ret_string(&DomString::new(&text))
+                .map(ReaderPending::String),
             dom::FileReaderResult::Bytes(_) => {
-                op.ret_reader_buffer(cx, reader);
-                None
+                Some(ReaderPending::Buffer(Persistent::new(cx.gc, reader)))
             }
+        }
+    }
+
+    fn finish<F: Front>(front: &mut F, pending: Self::Pending<F>) {
+        match pending {
+            Some(ReaderPending::String(string)) => front.finish_string(string),
+            Some(ReaderPending::Buffer(reader)) => front.finish_reader_buffer(reader),
+            None => {}
         }
     }
 }
@@ -7616,11 +7737,22 @@ pub struct EntryDetail;
 
 impl RetType for EntryDetail {
     const DESC: TypeDesc = TypeDesc::Any;
+    const PLAIN: bool = true;
     type Ret<'gc> = Gc<'gc, dom::PerformanceEntry>;
-    no_pending!();
+    no_prepared!();
+    type Pending<F: FrontTypes> = Persistent<dom::PerformanceEntry>;
 
-    fn give<'gc, O: OpFront>(op: &mut O, cx: &ApiCx<'_, 'gc>, entry: Self::Ret<'gc>) {
-        op.ret_entry_detail(cx, entry);
+    fn give<'gc, O: OpFront>(
+        _: &mut O,
+        cx: &ApiCx<'_, 'gc>,
+        entry: Self::Ret<'gc>,
+    ) -> Persistent<dom::PerformanceEntry> {
+        Persistent::new(cx.gc, entry)
+    }
+
+    #[inline(always)]
+    fn finish<F: Front>(front: &mut F, entry: Persistent<dom::PerformanceEntry>) {
+        front.finish_entry_detail(entry);
     }
 }
 
@@ -8061,11 +8193,17 @@ pub struct PromiseOfUndefined;
 
 impl RetType for PromiseOfUndefined {
     const DESC: TypeDesc = TypeDesc::Promise("undefined");
+    const PLAIN: bool = true;
     type Ret<'gc> = ();
-    no_pending!();
+    no_prepared!();
+    type Pending<F: FrontTypes> = ();
 
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, (): ()) {
-        op.ret_resolved_undefined();
+    #[inline(always)]
+    fn give<'gc, O: OpFront>(_: &mut O, _: &ApiCx<'_, 'gc>, (): ()) {}
+
+    #[inline(always)]
+    fn finish<F: Front>(front: &mut F, (): ()) {
+        front.finish_resolved_undefined();
     }
 
     fn fail<F: Front>(front: &mut F, error: ApiError) {
@@ -8079,12 +8217,7 @@ pub struct PromiseOfString;
 
 impl RetType for PromiseOfString {
     const DESC: TypeDesc = TypeDesc::Promise("USVString");
-    type Ret<'gc> = DomString;
-    no_pending!();
-
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: DomString) {
-        op.ret_resolved_string(value);
-    }
+    finished_after!(DomString, finish_resolved_string);
 
     fn fail<F: Front>(front: &mut F, error: ApiError) {
         front.reject(error);
@@ -8098,11 +8231,19 @@ pub struct PromiseOfBytes<const VIEW: bool>;
 
 impl<const VIEW: bool> RetType for PromiseOfBytes<VIEW> {
     const DESC: TypeDesc = TypeDesc::Promise(if VIEW { "Uint8Array" } else { "ArrayBuffer" });
+    const PLAIN: bool = true;
     type Ret<'gc> = Vec<u8>;
-    no_pending!();
+    no_prepared!();
+    type Pending<F: FrontTypes> = Vec<u8>;
 
-    fn give<'gc, O: OpFront>(op: &mut O, _: &ApiCx<'_, 'gc>, value: Vec<u8>) {
-        op.ret_resolved_bytes(value, VIEW);
+    #[inline(always)]
+    fn give<'gc, O: OpFront>(_: &mut O, _: &ApiCx<'_, 'gc>, value: Vec<u8>) -> Vec<u8> {
+        value
+    }
+
+    #[inline(always)]
+    fn finish<F: Front>(front: &mut F, value: Vec<u8>) {
+        front.finish_resolved_bytes(value, VIEW);
     }
 
     fn fail<F: Front>(front: &mut F, error: ApiError) {
@@ -8307,6 +8448,27 @@ pub const PLAIN_FRONT_METHODS: &[&str] = &[
     "finish_number",
     "finish_object",
     "finish_handler",
+    "finish_pending_promise",
+    "finish_resolved_constructor",
+    "finish_objects",
+    "finish_frozen_objects",
+    "finish_strings",
+    "finish_frozen_strings",
+    "finish_doubles",
+    "finish_numbers",
+    "finish_dictionary",
+    "finish_records",
+    "finish_entry_detail",
+    "finish_reader_buffer",
+    "finish_history_state",
+    "finish_cloned",
+    "finish_resolved",
+    "finish_resolved_string",
+    "finish_resolved_json",
+    "finish_resolved_undefined",
+    "finish_resolved_bytes",
+    "finish_animation_promise",
+    "reject",
     "compile_event_handler",
     "invoke_ce_reactions",
     "arg_count",

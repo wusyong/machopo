@@ -34,11 +34,11 @@ use crate::typed::{
     ProgressEventObject, Promise, PromiseOfAnimation, PromiseOfAny, PromiseOfArrayBuffer,
     PromiseOfJson, PromiseOfString, PromiseOfUint8Array, PromiseOfUndefined,
     PromiseRejectionEventObject, RadioNodeListObject, RadioNodeListOrElement, ReadImageData,
-    ReaderResult, Records, RequestInfo, ResizeObserverCallback, Rest, Rethrown, RoundRectRadii,
-    Sequence, Serialized, SignalMember, SignalObject, Slottables, StaticRangeInitArg,
-    StringOrNumber, StringPairs, Strings, TargetObject, TextEventObject, TimelineArg, TimerHandler,
-    TransitionEventObject, U16Default302, UiEventObject, Uint8ClampedArray, UnrestrictedDouble,
-    WakeLockSentinelObject, WhatToShow, WheelEventObject,
+    ReaderResult, Records, RequestInfo, ResizeObserverCallback, Rest, Rethrowing, Rethrown,
+    RoundRectRadii, Sequence, Serialized, SignalMember, SignalObject, Slottables,
+    StaticRangeInitArg, StringOrNumber, StringPairs, Strings, TargetObject, TextEventObject,
+    TimelineArg, TimerHandler, TransitionEventObject, U16Default302, UiEventObject,
+    Uint8ClampedArray, UnrestrictedDouble, WakeLockSentinelObject, WhatToShow, WheelEventObject,
 };
 use crate::window::NavigationUrl;
 use crate::{
@@ -1246,15 +1246,15 @@ crate::declare! {
         method clone() -> Request = request::clone;
         attribute bodyUsed: bool, get = request::body_used;
         #[front]
-        method arrayBuffer() -> PromiseOfArrayBuffer = request::array_buffer;
+        method arrayBuffer() -> Rethrowing<PromiseOfArrayBuffer> = request::array_buffer;
         #[front]
-        method blob() -> Promise<Blob> = request::blob;
+        method blob() -> Rethrowing<Promise<Blob>> = request::blob;
         #[front]
-        method bytes() -> PromiseOfUint8Array = request::bytes;
+        method bytes() -> Rethrowing<PromiseOfUint8Array> = request::bytes;
         #[front]
-        method json() -> PromiseOfJson = request::json;
+        method json() -> Rethrowing<PromiseOfJson> = request::json;
         #[front]
-        method text() -> PromiseOfString = request::text;
+        method text() -> Rethrowing<PromiseOfString> = request::text;
     }
 
     interface Response [type = dom::Response] {
@@ -1279,15 +1279,15 @@ crate::declare! {
         method clone() -> Response = response::clone;
         attribute bodyUsed: bool, get = response::body_used;
         #[front]
-        method arrayBuffer() -> PromiseOfArrayBuffer = response::array_buffer;
+        method arrayBuffer() -> Rethrowing<PromiseOfArrayBuffer> = response::array_buffer;
         #[front]
-        method blob() -> Promise<Blob> = response::blob;
+        method blob() -> Rethrowing<Promise<Blob>> = response::blob;
         #[front]
-        method bytes() -> PromiseOfUint8Array = response::bytes;
+        method bytes() -> Rethrowing<PromiseOfUint8Array> = response::bytes;
         #[front]
-        method json() -> PromiseOfJson = response::json;
+        method json() -> Rethrowing<PromiseOfJson> = response::json;
         #[front]
-        method text() -> PromiseOfString = response::text;
+        method text() -> Rethrowing<PromiseOfString> = response::text;
     }
 
     // requestIdleCallback's: 0 is no timeout.

@@ -2117,6 +2117,7 @@ fn dictionary_items(dictionary: &DictionaryDef) -> Tokens {
 
         impl #api::typed::RetType for #name {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Dictionary(#name_str);
+            const PLAIN: bool = true;
             type Ret<'gc> = #name;
 
             type Prepared<F: #api::typed::FrontTypes> = ();
@@ -2124,15 +2125,24 @@ fn dictionary_items(dictionary: &DictionaryDef) -> Tokens {
             #[inline(always)]
             fn prepare<F: #api::typed::Front>(_: &mut F, _: ::std::option::Option<usize>) {}
 
-            type Pending<F: #api::typed::FrontTypes> = ();
+            // Its members' values, which leave the operation as they
+            // are: the front end makes the object after it.
+            type Pending<F: #api::typed::FrontTypes> =
+                ::std::vec::Vec<(&'static str, #api::typed::DictValue)>;
 
             #[inline(always)]
-            fn finish<F: #api::typed::Front>(_: &mut F, (): ()) {}
+            fn finish<F: #api::typed::Front>(#front: &mut F, #dict: Self::Pending<F>) {
+                #front.finish_dictionary(#dict);
+            }
 
-            fn give<'gc, O: #api::typed::OpFront>(#front: &mut O, _: &#api::ApiCx<'_, 'gc>, #value: #name) {
+            fn give<'gc, O: #api::typed::OpFront>(
+                _: &mut O,
+                _: &#api::ApiCx<'_, 'gc>,
+                #value: #name,
+            ) -> Self::Pending<O> {
                 let mut #dict = ::std::vec::Vec::new();
                 #(#outs)*
-                #front.ret_dictionary(#dict);
+                #dict
             }
         }
     }

@@ -1104,6 +1104,31 @@ fn members_of_strings_nodes_numbers_and_booleans_are_plain() {
         ("CustomEvent", "detail", MemberKind::Getter),
         ("AbortSignal", "reason", MemberKind::Getter),
         ("CustomElementRegistry", "get", MemberKind::Method),
+        // Results the engine allocates for, carried out of the operation
+        // by their types: arrays, a dictionary, promises resolved, a
+        // value made at the first ask.
+        ("Element", "getAttributeNames", MemberKind::Method),
+        ("Document", "elementsFromPoint", MemberKind::Method),
+        ("Performance", "getEntries", MemberKind::Method),
+        ("ResizeObserverEntry", "contentBoxSize", MemberKind::Getter),
+        ("Navigator", "languages", MemberKind::Getter),
+        (
+            "CanvasRenderingContext2D",
+            "getLineDash",
+            MemberKind::Method,
+        ),
+        ("AnimationEffect", "getTiming", MemberKind::Method),
+        ("KeyframeEffect", "getKeyframes", MemberKind::Method),
+        ("Animation", "ready", MemberKind::Getter),
+        ("History", "state", MemberKind::Getter),
+        ("PerformanceMark", "detail", MemberKind::Getter),
+        ("FileReader", "result", MemberKind::Getter),
+        ("ImageData", "data", MemberKind::Getter),
+        // A pending promise, kept by its number; one resolved with a
+        // definition's constructor.
+        ("CustomElementRegistry", "whenDefined", MemberKind::Method),
+        ("HTMLImageElement", "decode", MemberKind::Method),
+        ("CanvasRenderingContext2D", "fillStyle", MemberKind::Getter),
         // An event handler's getter: its listener's callback given in
         // the operation, an uncompiled source compiled after it.
         ("HTMLElement", "onclick", MemberKind::Getter),
@@ -1127,8 +1152,14 @@ fn members_of_strings_nodes_numbers_and_booleans_are_plain() {
             "getImageData",
             MemberKind::Method,
         ),
-        // A sequence.
-        ("Element", "getAttributeNames", MemberKind::Method),
+        // A body's promise, rejected with its signal's reason, which
+        // the front end keeps.
+        ("Response", "text", MemberKind::Method),
+        ("Request", "arrayBuffer", MemberKind::Method),
+        // The current realm's window found for it.
+        ("Blob", "arrayBuffer", MemberKind::Method),
+        // The view the front end kept, filled.
+        ("Crypto", "getRandomValues", MemberKind::Method),
         // Static; its function given the front end.
         // Static.
         ("CSS", "escape", MemberKind::Method),

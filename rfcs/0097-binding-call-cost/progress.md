@@ -14,7 +14,7 @@
 | 4c 預先建 wrapper 的結果（`createElement`、`cloneNode`、`createTextNode`） | 完成 | 2026-11-12 |
 | 4d handle 的機制（`Param` 多 front 的型別參數）、callback 和 `any`；函式拿 front 的成員照型別算 `PLAIN` | 完成 | 2026-11-12 |
 | 4e rest、`any`、dictionary 的 handle、節點或字串；event handler 的 getter 和回傳 `any` 的（從 4f 提前）；其餘的參數型別留到 4j（決定 32） | 完成 | 2026-11-12 |
-| 4f 其餘的回傳型別（promise、陣列、dictionary） | 還沒開始 | |
+| 4f 其餘的回傳型別（promise、陣列、dictionary、第一次讀才做的值）：由回傳型別帶出操作（決定 33） | 完成 | 2026-11-12 |
 | 4g static 成員的外殼 | 還沒開始 | |
 | 4h constructor 的外殼 | 還沒開始 | |
 | 4i named、indexed property 的外殼 | 還沒開始 | |
@@ -334,3 +334,17 @@
 - 測試：`dom_js` 的 `info_front::nodes_or_strings_are_taken_as_they_are`（節點不建 scope；字串、要轉換的值照參數順序；轉換丟的例外；`select.add` 的元素、小整數、其他數字）、`handlers::a_value_rest_arguments_and_a_signal_are_handles`（listener 沒給 options、給布林不建 scope；dictionary 的 `once`、`capture`、`signal`（abort 時移除、已經 abort 的不加、不是 `AbortSignal` 和 getter 丟例外）；`detail` 存進去和讀回來、沒有時是 null；`signal.reason`、`customElements.get` 的 undefined；省略的整數參數；timer 沒有多的參數不建 scope、有的照樣傳給 callback）、`handlers::a_handlers_getter_gives_its_callback_in_the_operation`（有 handler、沒有、window 和 document 的、`<body>` 反映 window 的都不建 scope；content attribute 的原始碼第一次編譯、之後是同一個函式；編不過的是 null；屬性重設後重新編譯）；`dom_api` 的 `table` 的清單。寫測試時弄錯的預期：`abort()`、`new CustomEvent()`、`selection.collapse()` 都不走新的 front（之後要跑 script、constructor、`#[then_script]`），不會有它的 scope；字串的 timer handler 本來就建 scope。第一次呼叫 `addEventListener` 的那個 scope 是回報 DOM 的 heap 長大，不是成員自己的：測試先呼叫一次再數。
 - mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4e.toml`，26 個都抓到。第一次 25 個：「省略的 unsigned 整數交給整個 front」沒抓到，因為測試用的 `selection.collapse(d)` 不走新的 front；換成 `sheet.insertRule('b {}')` 之後抓到。
 - 跑過：`cargo test -p bindings -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt dom html/dom html/webappapis custom-elements html/semantics/forms html/canvas/element/pixel-manipulation`（131588 個結果都照預期，和 4d 同一個數）。
+
+**第 4f 段：engine 一定要配置的結果由回傳型別帶出操作**（2026-11-12，決定 33）：
+
+- `dom_api`：`OpFront` 拿掉 21 個方法（`ret_objects`、`ret_frozen_objects`、`ret_strings`、`ret_frozen_strings`、`ret_doubles`、`ret_numbers`、`ret_dictionary`、`ret_records`、`ret_entry_detail`、`ret_reader_buffer`、`ret_history_state`、`ret_filled_view`、`ret_cloned`、`ret_resolved`、`ret_resolved_string`、`ret_resolved_json`、`ret_resolved_undefined`、`ret_resolved_bytes`、`ret_animation_promise`、`ret_resolved_with`、`ret_pending`），`Front` 拿掉 `prepare_promise`、多 21 個 `finish_*`（同樣的名字換成 `finish_`；最後兩個變成 `finish_resolved_constructor`、`finish_pending_promise`）。對應的回傳型別的 `Pending` 是帶出操作的資料：純資料照原樣（`finished_after!`），DOM 的物件在 `give` 裡 root 住、連 interface（`rooted_objects`）。`PromiseOf::Resolved(邊)` 換成 `Defined(定義)`，`PromisePending`；`ReaderResult` 的 `Pending` 是字串或 buffer（`ReaderPending`）。這些型別標成 `PLAIN`，`FilledView` 除外。`Rethrowing<R>`，`Request`、`Response` 讀 body 的十個成員用它。`Uint8ClampedArray` 和 `CanvasStyleValue` 的結果標成 `PLAIN`。
+- `dom_api_macros`：dictionary 當結果時 `Pending` 是成員的值，`finish` 呼叫 `finish_dictionary`。
+- `dom_js`：`V8Front` 的那 21 個結果從 `V8Op` 的方法加 `finish_kept` 的分支變成 `Front` 的方法（程式是原來的分支）；`Kept` 30 種剩 9 種；拿掉 `PreparedPromise` 和 `RareCall::promise`。`InfoFront` 的 `finish_*`（`finish_filled_view` 除外）和 `reject` 建 scope、交給 `V8Front` 的同一個方法。named property 的 front 的名稱列表改成 `finish_strings`。
+- `dom_api` 的測試用 front：三個結果改成 `finish_*`。`dom_wasm` 沒有實作過這些結果，不用改。
+- 和事先說的不同：說「一次做完 `Kept` 才能整個拿掉」不對，`Kept` 剩下的 9 種是 `V8Front` 自己在操作裡留的，4j 才拿掉。事先說可能套不進去的「操作前準備的 promise」套得進去：操作前建 resolver 沒有必要（resolve 和存起來本來就在操作後），改成操作後才建。
+- 找到、修掉的：`plain` 的測試在回傳型別標成 `PLAIN` 後指出 `Request`、`Response` 的 `arrayBuffer`、`blob`、`bytes`、`json`、`text` 的函式會 `rethrow`（經過 `body::consume`）：`Rethrowing<R>`。
+- `PLAIN` 的成員：2581 → 2646（getter 1374、setter 822、method 450）；能走新的 front 的 getter 只剩 1 個不是。
+- 4e 和這一段的 binary 各跑七次取最小（`perf stat`，指令數（cycle））：`x = n.getAttributeNames()`（兩個屬性）1900（420）→ 1707（361），`x = mo.takeRecords()`（空的）907（171）→ 696（127）；沒變的：`nodeType` 109 → 112、`getAttribute` 562 → 561、`x = t.onclick` 280、`addEventListener` 633、`createElement` 1992 → 1989、`appendChild` 1580。省下的是舊的 front 的 `Call` 和裝 `Kept` 的 `Box`；陣列本身的配置還在（`getAttributeNames` 的 1707 裡大部分是兩個字串和陣列）。其他的結果（promise、dictionary）在 `bench.py calls` 的頁面量不到（沒有 window），沒量。
+- 測試：`dom_js` 的 `handlers::a_result_to_allocate_for_is_made_after_the_operation`（字串、物件、數字的陣列，每次新的；`takeRecords` 取走；frozen 的同一個、是 frozen 的；dictionary 和 record 的成員；animation 的 `ready`、`finished` 各自同一個；pending 的 `whenDefined` 同一個、已定義的每次新的、resolve 成 constructor、不合法的名稱 reject；`history.state`、mark 的 `detail` 第一次做、之後同一個；都建 scope、走新的 front）；`dom_api` 的 `table` 的清單。寫測試時弄錯的預期：`navigator.languages` 不是 frozen array（每次新的，本來就是）；`Blob` 的讀取有 `#[realm]`、不走新的 front；microtask 的順序。其餘靠原有的測試（`dom_js` 463 個照舊通過：這些結果原本就各有測試）。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4f.toml`，23 個都抓到。沒有寫的：把 `FilledView` 標成 `PLAIN`（`getRandomValues` 的參數型別不是 `PLAIN`，成員不會變，等價）。
+- 跑過：`cargo test -p bindings -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt dom html/dom html/webappapis custom-elements html/semantics/forms html/canvas/element/pixel-manipulation fetch/api/response fetch/api/request FileAPI web-animations/interfaces hr-time user-timing`（135084 個結果都照預期；唯一失敗的 reftest 是本來就預期失敗的 `moveBefore-as-flex-item`）。

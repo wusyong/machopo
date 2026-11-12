@@ -552,3 +552,93 @@ fn a_handlers_getter_gives_its_callback_in_the_operation() {
         }
     }
 }
+
+/// A result the engine allocates for (an array, a dictionary, a promise,
+/// a value made at the first ask) leaves the operation as its type's own
+/// data and is made after it, in a scope: the members giving one take
+/// the path with the callback's info alone.
+#[test]
+fn a_result_to_allocate_for_is_made_after_the_operation() {
+    let mut engine = page();
+    run(
+        &mut engine,
+        "d.setAttribute('title', 't'); var a = d.animate([{ opacity: 0 }, { opacity: 1 }], 1000); \
+         var effect = a.effect; var observer = new MutationObserver(() => {}); \
+         observer.observe(d, { attributes: true }); var ctx = document.createElement('canvas').getContext('2d'); \
+         ctx.setLineDash([1, 2]); customElements.define('x-now', class extends HTMLElement {}); var io = new IntersectionObserver(() => {}, { threshold: [0, 0.5] }); var mark = performance.mark('m', { detail: { k: 1 } }); d.id;",
+    );
+    for (source, value) in [
+        ("d.getAttributeNames().join()", "id,title"),
+        ("Array.isArray(d.getAttributeNames())", "true"),
+        ("d.getAttributeNames() !== d.getAttributeNames()", "true"),
+        (
+            "d.getAnimations().length + ' ' + (d.getAnimations()[0] === a)",
+            "1 true",
+        ),
+        ("document.getAnimations()[0] === a", "true"),
+        (
+            "d.setAttribute('lang', 'x'); observer.takeRecords().length + ' ' + observer.takeRecords().length",
+            "1 0",
+        ),
+        ("ctx.getLineDash().join()", "1,2"),
+        // A frozen array: the same while its values are.
+        ("navigator.languages.join()", "en-US,en"),
+        ("io.thresholds === io.thresholds", "true"),
+        (
+            "Object.isFrozen(io.thresholds) + ' ' + io.thresholds.join()",
+            "true 0,0.5",
+        ),
+        // A dictionary; records.
+        ("effect.getTiming().duration", "1000"),
+        (
+            "effect.getKeyframes().length + ' ' + effect.getKeyframes()[1].opacity",
+            "2 1",
+        ),
+        // Promises: one kept on its object, made at the first ask.
+        ("a.ready instanceof Promise", "true"),
+        ("a.ready === a.ready", "true"),
+        ("a.finished !== a.ready", "true"),
+        // A pending promise is the same until it settles; one of a name
+        // defined is new each time.
+        (
+            "customElements.whenDefined('x-later') === customElements.whenDefined('x-later')",
+            "true",
+        ),
+        (
+            "customElements.whenDefined('x-now') !== customElements.whenDefined('x-now')",
+            "true",
+        ),
+        (
+            "customElements.whenDefined('x-now') instanceof Promise",
+            "true",
+        ),
+        (
+            "document.createElement('img').decode() instanceof Promise",
+            "true",
+        ),
+        // Values made at the first ask, the same after.
+        ("history.state", "null"),
+        (
+            "mark.detail.k + ' ' + (mark.detail === mark.detail)",
+            "1 true",
+        ),
+    ] {
+        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        let found = report(&mut engine, &format!("({})", source.replace("; ", ", ")));
+        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        assert_eq!(found, value, "{source}");
+        assert!(made >= 1, "{source}: a scope");
+    }
+    // What the promises settle with.
+    run(
+        &mut engine,
+        "customElements.whenDefined('x-now').then((c) => log.push(c === customElements.get('x-now'))); \
+         customElements.whenDefined('x-later').then((c) => log.push(c.name)); \
+         customElements.define('x-later', class Later extends HTMLElement {}); \
+         customElements.whenDefined('not a name').catch((e) => log.push(e.name));",
+    );
+    assert_eq!(
+        report(&mut engine, "log.splice(0).join()"),
+        "true,Later,SyntaxError"
+    );
+}
