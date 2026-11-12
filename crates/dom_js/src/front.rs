@@ -311,10 +311,10 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
     fn dict_value(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<v8::Local<'s, v8::Value>> {
+        let key = member_key(&mut self.scope, member);
         let scope = self.scope.scope();
-        let key = templates::string(scope, member);
         dict.get(scope, key.into())
     }
 
@@ -472,19 +472,8 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
                 Some(string) => self.rv().set(string.into()),
                 None => exception::throw_range_error(self.scope.scope(), "Invalid string length"),
             },
-            Kept::Name(id, name) => match strings::new_string(self.scope.scope(), &name) {
-                Some(string) => {
-                    let index = usize::try_from(id).expect("a name's number");
-                    let global = v8::Global::new(self.scope.scope(), string);
-                    let (state, _) = self.scope.state_mut();
-                    let names = &mut state.caches.names;
-                    if names.len() <= index {
-                        names.resize_with(index.checked_add(1).expect("a name's number"), || None);
-                    }
-                    names[index] = Some(global);
-                    state.names_made = state.names_made.wrapping_add(1);
-                    self.rv().set(string.into());
-                }
+            Kept::Name(id, name) => match make_name(&mut self.scope, id, &name.to_str()) {
+                Some(string) => self.rv().set(string.into()),
                 None => exception::throw_range_error(self.scope.scope(), "Invalid string length"),
             },
             Kept::Node(root, interface) => {
@@ -1264,6 +1253,53 @@ pub(crate) fn foresee_element(
     .unwrap_or((None, dom_api::declare::HTML_ELEMENT))
 }
 
+/// The name `id`'s V8 string (`text`), made now and kept in the isolate's
+/// cache by the name's number; none if it is too long for V8.
+/// Internalized: a name is a property's key too (a dictionary's member),
+/// which V8 would internalize each time it looked one up.
+fn make_name<'s>(
+    scope: &mut Scope<'_, 's, '_>,
+    id: NameId,
+    text: &str,
+) -> Option<v8::Local<'s, v8::String>> {
+    let string = v8::String::new_from_utf8(
+        scope.scope(),
+        text.as_bytes(),
+        v8::NewStringType::Internalized,
+    )?;
+    let index = usize::try_from(id).expect("a name's number");
+    let global = v8::Global::new(scope.scope(), string);
+    let (state, _) = scope.state_mut();
+    let names = &mut state.caches.names;
+    if names.len() <= index {
+        names.resize_with(index.checked_add(1).expect("a name's number"), || None);
+    }
+    names[index] = Some(global);
+    state.names_made = state.names_made.wrapping_add(1);
+    Some(string)
+}
+
+/// A dictionary's member's name as a property's key: the name's V8
+/// string from the isolate's cache, by its number (no string made, none
+/// looked up in V8's table), made the first time (Blink's bindings keep a
+/// dictionary's keys an isolate).
+pub(crate) fn member_key<'s>(
+    scope: &mut Scope<'_, 's, '_>,
+    member: dom_api::typed::MemberName,
+) -> v8::Local<'s, v8::String> {
+    {
+        let (state, mut no_gc) = scope.state();
+        if let Some(name) = usize::try_from(member.id())
+            .ok()
+            .and_then(|index| state.caches.names.get(index))
+            .and_then(Option::as_ref)
+        {
+            return no_gc.local(name);
+        }
+    }
+    make_name(scope, member.id(), member.name()).expect("a short name")
+}
+
 /// `string`'s V8 string, from the isolate's cache, made and cached now if
 /// V8 hasn't it (the state let go while V8 makes it); none if it is too
 /// long for V8. Out of any operation.
@@ -1721,10 +1757,10 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     fn dict_bool(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<bool>> {
+        let key = member_key(&mut self.scope, member);
         let scope = self.scope.scope();
-        let key = templates::string(scope, member);
         let value = dict.get(scope, key.into())?;
         if value.is_undefined() {
             return Some(None);
@@ -1735,10 +1771,10 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     fn dict_number(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<f64>> {
+        let key = member_key(&mut self.scope, member);
         let scope = self.scope.scope();
-        let key = templates::string(scope, member);
         let value = dict.get(scope, key.into())?;
         if value.is_undefined() {
             return Some(None);
@@ -1753,10 +1789,10 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     fn dict_string(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<String>> {
+        let key = member_key(&mut self.scope, member);
         let scope = self.scope.scope();
-        let key = templates::string(scope, member);
         let value = dict.get(scope, key.into())?;
         if value.is_undefined() {
             return Some(None);
@@ -1770,10 +1806,10 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     fn dict_nullable_string(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<String>> {
+        let key = member_key(&mut self.scope, member);
         let scope = self.scope.scope();
-        let key = templates::string(scope, member);
         let value = dict.get(scope, key.into())?;
         if value.is_null_or_undefined() {
             return Some(None);
@@ -1785,10 +1821,10 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     fn dict_serialized(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<Vec<u8>>> {
+        let key = member_key(&mut self.scope, member);
         let scope = self.scope.scope();
-        let key = templates::string(scope, member);
         let value = dict.get(scope, key.into())?;
         if value.is_undefined() {
             return Some(None);
@@ -1799,10 +1835,10 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     fn dict_string_or_number(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<dom_api::typed::StringOrNumber>> {
+        let key = member_key(&mut self.scope, member);
         let scope = self.scope.scope();
-        let key = templates::string(scope, member);
         let value = dict.get(scope, key.into())?;
         if value.is_undefined() {
             return Some(None);
@@ -1819,10 +1855,10 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     fn dict_any(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<AnyArg<v8::Local<'s, v8::Value>>>> {
+        let key = member_key(&mut self.scope, member);
         let scope = self.scope.scope();
-        let key = templates::string(scope, member);
         let value = dict.get(scope, key.into())?;
         if value.is_undefined() {
             return Some(None);
@@ -1866,10 +1902,10 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     fn dict_strings(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<Vec<String>>> {
+        let key = member_key(&mut self.scope, member);
         let scope = self.scope.scope();
-        let key = templates::string(scope, member);
         let value = dict.get(scope, key.into())?;
         if value.is_undefined() {
             return Some(None);
@@ -2044,11 +2080,11 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     fn dict_object<T: elise::HeapType>(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
         interface: &str,
     ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        let key = member_key(&mut self.scope, member);
         let scope = self.scope.scope();
-        let key = templates::string(scope, member);
         let value = dict.get(scope, key.into())?;
         if value.is_undefined() {
             return Some(None);
@@ -2065,7 +2101,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     fn dict_nullable_object<T: elise::HeapType>(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
         interface: &str,
     ) -> Option<Option<v8::Local<'s, v8::Object>>> {
         let value = self.dict_value(dict, member)?;
@@ -2084,7 +2120,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     fn dict_nullable_target(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<v8::Local<'s, v8::Object>>> {
         let value = self.dict_value(dict, member)?;
         if value.is_null_or_undefined() {
@@ -2117,7 +2153,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     fn dict_body(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<dom_api::typed::BodyMember<v8::Local<'s, v8::Object>>>> {
         let value = self.dict_value(dict, member)?;
         if value.is_undefined() {
@@ -2132,7 +2168,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     fn dict_headers(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<dom_api::StringPairsArg>> {
         let value = self.dict_value(dict, member)?;
         if value.is_undefined() {
@@ -2150,7 +2186,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     fn dict_signal(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<dom_api::typed::SignalMember<v8::Local<'s, v8::Object>>>> {
         let value = self.dict_value(dict, member)?;
         if value.is_undefined() {
@@ -2175,7 +2211,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     fn dict_is_null(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<bool>> {
         let value = self.dict_value(dict, member)?;
         Some((!value.is_undefined()).then(|| value.is_null()))

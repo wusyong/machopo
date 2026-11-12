@@ -1102,7 +1102,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     fn dict_any(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<AnyArg<v8::Local<'s, v8::Value>>>> {
         self.with_front(|front| front.dict_any(dict, member))
     }
@@ -1110,7 +1110,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     fn dict_object<T: elise::HeapType>(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
         interface: &str,
     ) -> Option<Option<v8::Local<'s, v8::Object>>> {
         self.with_front(|front| front.dict_object::<T>(dict, member, interface))
@@ -1119,7 +1119,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     fn dict_nullable_object<T: elise::HeapType>(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
         interface: &str,
     ) -> Option<Option<v8::Local<'s, v8::Object>>> {
         self.with_front(|front| front.dict_nullable_object::<T>(dict, member, interface))
@@ -1128,7 +1128,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     fn dict_nullable_target(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<v8::Local<'s, v8::Object>>> {
         self.with_front(|front| front.dict_nullable_target(dict, member))
     }
@@ -1136,7 +1136,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     fn dict_body(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<dom_api::typed::BodyMember<v8::Local<'s, v8::Object>>>> {
         self.with_front(|front| front.dict_body(dict, member))
     }
@@ -1144,7 +1144,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     fn dict_signal(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<dom_api::typed::SignalMember<v8::Local<'s, v8::Object>>>> {
         self.with_front(|front| front.dict_signal(dict, member))
     }
@@ -1176,7 +1176,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     fn dict_bool(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<bool>> {
         self.with_front(|front| front.dict_bool(dict, member))
     }
@@ -1184,7 +1184,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     fn dict_number(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<f64>> {
         self.with_front(|front| front.dict_number(dict, member))
     }
@@ -1192,7 +1192,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     fn dict_string(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<String>> {
         self.with_front(|front| front.dict_string(dict, member))
     }
@@ -1200,7 +1200,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     fn dict_nullable_string(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<String>> {
         self.with_front(|front| front.dict_nullable_string(dict, member))
     }
@@ -1208,7 +1208,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     fn dict_strings(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<Vec<String>>> {
         self.with_front(|front| front.dict_strings(dict, member))
     }
@@ -1216,7 +1216,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     fn dict_string_or_number(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
-        member: &str,
+        member: dom_api::typed::MemberName,
     ) -> Option<Option<dom_api::typed::StringOrNumber>> {
         self.with_front(|front| front.dict_string_or_number(dict, member))
     }

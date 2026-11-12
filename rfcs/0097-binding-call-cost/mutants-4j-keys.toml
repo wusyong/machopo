@@ -1,0 +1,55 @@
+# A dictionary's member is read by its name's V8 string, found by the
+# name's number in the isolate's names cache (the member names are fixed
+# names of the DOM's table).
+test = ["cargo", "test", "-q", "-p", "dom", "-p", "dom_api", "-p", "dom_js"]
+timeout = 1800
+
+[[mutant]]
+name = "a member's key is made each read"
+file = "crates/dom_js/src/front.rs"
+from = '''            .and_then(|index| state.caches.names.get(index))
+            .and_then(Option::as_ref)
+        {
+            return no_gc.local(name);
+        }'''
+to = '''            .and_then(|index| state.caches.names.get(index))
+            .and_then(Option::as_ref)
+            .filter(|_| false)
+        {
+            return no_gc.local(name);
+        }'''
+
+[[mutant]]
+name = "a name made isn't kept"
+file = "crates/dom_js/src/front.rs"
+from = '''    names[index] = Some(global);
+    state.names_made = state.names_made.wrapping_add(1);
+    Some(string)'''
+to = '''    names[index] = None;
+    drop(global);
+    state.names_made = state.names_made.wrapping_add(1);
+    Some(string)'''
+
+[[mutant]]
+name = "a member's key is another name's"
+file = "crates/dom_js/src/front.rs"
+from = '''    make_name(scope, member.id(), member.name()).expect("a short name")'''
+to = '''    make_name(scope, member.id(), "bubbles").expect("a short name")'''
+
+[[mutant]]
+name = "a name made isn't counted"
+file = "crates/dom_js/src/front.rs"
+from = '''    names[index] = Some(global);
+    state.names_made = state.names_made.wrapping_add(1);
+    Some(string)'''
+to = '''    names[index] = Some(global);
+    Some(string)'''
+
+[[mutant]]
+name = "every fixed name's uppercased one is fixed"
+file = "crates/dom/build.rs"
+from = '''        "static UPPERCASE: [u16; {local_count}] = {:?};",
+        &uppercase[..local_count]'''
+to = '''        "static UPPERCASE: [u16; {}] = {:?};",
+        uppercase.len(),
+        &uppercase[..]'''

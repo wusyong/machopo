@@ -15,6 +15,9 @@
 //! `event_type_names::kClick`). Then the event handlers' attribute names
 //! (`event_handlers.txt`) not there already, and by number, which event
 //! type each handles and in which set (`names::handler_attribute`).
+//! Last, WebIDL dictionaries' member names (`dictionary_members.txt`)
+//! not there already: a binding finds its engine's string of one by the
+//! name's number, known as it is compiled (`names::fixed`).
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -123,6 +126,7 @@ fn main() {
     println!("cargo::rerun-if-changed=fixed_names.txt");
     println!("cargo::rerun-if-changed=event_type_names.txt");
     println!("cargo::rerun-if-changed=event_handlers.txt");
+    println!("cargo::rerun-if-changed=dictionary_members.txt");
     let list = std::fs::read_to_string("fixed_names.txt").expect("fixed_names.txt");
     let mut names: Vec<&str> = OWN.to_vec();
     for name in list
@@ -179,6 +183,18 @@ fn main() {
     for &(_, attribute, _) in &handlers {
         if !names.contains(&attribute) {
             names.push(attribute);
+        }
+    }
+    // Last: no number before them moves as the list grows.
+    let member_list =
+        std::fs::read_to_string("dictionary_members.txt").expect("dictionary_members.txt");
+    for member in member_list
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+    {
+        if !names.contains(&member) {
+            names.push(member);
         }
     }
     let numbers: std::collections::HashMap<&str, usize> = names
@@ -300,11 +316,25 @@ fn main() {
     writeln!(out, "static FIXED: [&str; FIXED_COUNT] = {names:?};").unwrap();
     writeln!(
         out,
-        "/// Each fixed name's uppercased one's number (its own if it isn't a"
+        "/// Each fixed local name's uppercased one's number (its own if it isn't"
     )
     .unwrap();
-    writeln!(out, "/// local name).").unwrap();
-    writeln!(out, "static UPPERCASE: [u16; FIXED_COUNT] = {uppercase:?};").unwrap();
+    writeln!(
+        out,
+        "/// a local name). Not the names after them (the event types, the"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "/// dictionaries' members), which have no uppercased one fixed."
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "static UPPERCASE: [u16; {local_count}] = {:?};",
+        &uppercase[..local_count]
+    )
+    .unwrap();
     writeln!(
         out,
         "/// The perfect hash's seed, its buckets' displacements, and by slot"

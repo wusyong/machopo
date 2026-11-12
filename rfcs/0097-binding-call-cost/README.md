@@ -227,6 +227,11 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
     - **`KeptObject` 的編號換成現有的 handle**（`FrontTypes::Node`，V8 上是檢查過 interface 的 wrapper）：init dictionary 的 `view`、`relatedTarget`，`RequestInit` 的 `signal`，body 的 `Blob` 和 `URLSearchParams`。操作裡用已有的 `OpFront::object`、`target` 解出 DOM 的物件；`kept_object`、`kept_target`、`KeptKind`、`dict_nullable_object` 和 `V8Front` 那個陣列拿掉。執行時少一次放進陣列和照編號查回來；代價是這些 dictionary 多型別參數（決定 32 的機制）。不選另加一個 `FrontTypes::Object`（V8 上和節點都是 `Local<Object>`、wasm 上都是 `u32`，多一個沒有差別的型別）；不選讓新的 front 也實作編號（每次呼叫要帶一個陣列，三個預設會 panic 的方法拿不掉）。
     - **`new ImageData(array, w)` 的 `Uint8ClampedArray` 讀成值的 handle（`FrontTypes::Any`）加長度**，操作裡用已有的 `store_any` 存進 edge，`store_array` 拿掉。不選替 typed array 加專屬的 handle（只有這一個成員用）。
     - **切法**：4j-1 是編號換成 handle 的這兩項，連同 UI 事件的 constructor 和 `ImageData`；4j-2 是讀成 Rust 值的型別，連同其餘的 constructor、method、setter 和 2 個 static。量測每類量代表的幾個：這些成員的成本主要在讀 JS 物件本身，換外殼省的比例不大，這一段主要是讓 4m 能刪掉 `V8Front`。
+40. **dictionary 的成員名稱是名稱表的固定名稱，key 從名稱的 V8 字串的快取拿**（2026-11-12，4j-2 之前獨立的一小段）：4j-1 量到帶 init 的 `new MouseEvent` 三萬多條指令；剖析：V8 的 `Object::Get` 本身約 69%（29 個成員各查一次，沒給的也要走完 prototype 鏈；WebIDL 規定每個成員照順序各 `Get` 一次，V8 的 API 沒有 inline cache 也沒有批次讀取，Chromium 產生的轉換也是每個成員一次 `Get`），每次把成員名稱做成 internalized 字串約 17%。能省的是後者。
+    - **選：成員名稱列成 DOM 的名稱表的固定名稱**（`crates/dom/dictionary_members.txt`，排在最後），`dom_api` 傳給 front 的是 `MemberName`（名稱的編號，macro 產生 `const { MemberName::of("…") }`，編譯時由 `dom::names::fixed` 算出、不在清單裡的編不過），`dom_js` 照編號從已有的 `caches.names`（`localName`、`tagName` 用的那一份）拿 V8 的字串，第一次用到時做。執行時是一次陣列索引，不多一套快取。名稱的 V8 字串改成建的時候就 internalized（當 key 時 V8 不用再 internalize）。
+    - 不選 binding 自己一張照 `&'static str` 位址查的表（Chromium 的分法：`AtomicString` 表歸 DOM，dictionary 的 key 在 bindings 的 `V8PerIsolateData::FindOrCreateEternalNameCache`）：分層和 Chromium 一致、改動最小，但是第三個字串快取，每次讀多一次 hash。不選 macro 替成員編連續的號碼、binding 自己一個陣列：執行時一樣，但也是多一個快取。
+    - 和 Chromium 不同的地方：binding 的名稱（WebIDL 的成員名稱）進了 DOM 的名稱表。代價是一份要維護的清單（漏列編不過；多列由 `dom_api` 的 `members` 測試擋）。
+    - 順帶修掉的：local name 清單以外的固定名稱（event type，現在加上成員名稱）拿來當 HTML 元素的名字時 `tagName` 沒有轉大寫（`<click>` 的 `tagName` 是 `click`）：`UPPERCASE` 表對這些名稱給的是它自己。表只留 local name 的那一段，其餘走一般名稱的路。
 
 ## 待決定
 
@@ -238,5 +243,5 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
 - 操作可以巢狀：DOM 做到一半呼叫 script 不用結束操作。
 - wasm 的 front 照同樣的方式量。
 - 每次現算的字串（`style.color`、其他 getter 給的新的 `DomString`）在字串的快取裡永遠找不到（快取照位址記），每次新建 V8 的字串並登記一筆（`Weak` 加 finalizer）：`style.color` 是 `'red'` 時 4709 條指令、2664 個 cycle（4i-2 量的；決定 36 當時猜是 CSS 那一側，不是）。空字串已經不經過快取。決定 38 做了。
-- dictionary 的成員名稱每次讀都重新做成 V8 的 internalized 字串（`templates::string`）再 `Get`：一個成員約一千條指令，`new MouseEvent('x', init)`（三十個左右的成員）三萬兩千條（4j-1 量的）。Chromium 產生的 dictionary 轉換把成員名稱的 V8 字串每個 isolate 快取一份（`V8PerIsolateData::FindOrCreateEternalNameCache`），讀成員時不建字串。
+- dictionary 的成員名稱每次讀都重新做成 V8 的 internalized 字串（`templates::string`）再 `Get`：一個成員約一千條指令，`new MouseEvent('x', init)`（三十個左右的成員）三萬兩千條（4j-1 量的）。Chromium 產生的 dictionary 轉換把成員名稱的 V8 字串每個 isolate 快取一份（`V8PerIsolateData::FindOrCreateEternalNameCache`），讀成員時不建字串。 決定 40 做了。
 - `HTMLElement` 的 constructor 每次建一個 scope 檢查 `new.target` 是不是 `HTMLElement` 本身（決定 35）：要不建 scope 拿到 realm 的 interface 物件，或換一種比法。

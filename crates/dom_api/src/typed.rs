@@ -301,7 +301,7 @@ pub trait Front: FrontTypes {
 
     /// `dict`'s member `member` as a `boolean`: `Some(None)` if it is
     /// undefined (missing); `None` if reading it threw (a getter may run).
-    fn dict_bool(&mut self, dict: &Self::Dict, member: &str) -> Option<Option<bool>> {
+    fn dict_bool(&mut self, dict: &Self::Dict, member: MemberName) -> Option<Option<bool>> {
         let _ = (dict, member);
         unreachable!("a front end binding a member with a dictionary reads them")
     }
@@ -310,7 +310,7 @@ pub trait Front: FrontTypes {
     /// script): `Some(None)` if it is undefined (missing); `None` if
     /// reading or converting it threw. Its WebIDL type's conversion is the
     /// member's (`DictMember`).
-    fn dict_number(&mut self, dict: &Self::Dict, member: &str) -> Option<Option<f64>> {
+    fn dict_number(&mut self, dict: &Self::Dict, member: MemberName) -> Option<Option<f64>> {
         let _ = (dict, member);
         unreachable!("a front end binding a member with a dictionary of numbers reads them")
     }
@@ -318,7 +318,7 @@ pub trait Front: FrontTypes {
     /// `dict`'s member `member` as a `DOMString` (`ToString`, which may run
     /// script): `Some(None)` if it is undefined (missing); `None` if
     /// reading or converting it threw.
-    fn dict_string(&mut self, dict: &Self::Dict, member: &str) -> Option<Option<String>> {
+    fn dict_string(&mut self, dict: &Self::Dict, member: MemberName) -> Option<Option<String>> {
         let _ = (dict, member);
         unreachable!("a front end binding a member with a dictionary of strings reads them")
     }
@@ -326,7 +326,11 @@ pub trait Front: FrontTypes {
     /// `dict`'s member `member` as a `DOMString?` (`ToString`, which may
     /// run script): `Some(None)` if it is undefined (missing) or null;
     /// `None` if reading or converting it threw.
-    fn dict_nullable_string(&mut self, dict: &Self::Dict, member: &str) -> Option<Option<String>> {
+    fn dict_nullable_string(
+        &mut self,
+        dict: &Self::Dict,
+        member: MemberName,
+    ) -> Option<Option<String>> {
         let _ = (dict, member);
         unreachable!("a front end binding a member with a dictionary of strings reads them")
     }
@@ -334,7 +338,11 @@ pub trait Front: FrontTypes {
     /// `dict`'s member `member` as a `sequence<DOMString>`: `Some(None)`
     /// if it is undefined (missing); `None` if reading or converting it
     /// threw (not a sequence is a `TypeError`).
-    fn dict_strings(&mut self, dict: &Self::Dict, member: &str) -> Option<Option<Vec<String>>> {
+    fn dict_strings(
+        &mut self,
+        dict: &Self::Dict,
+        member: MemberName,
+    ) -> Option<Option<Vec<String>>> {
         let _ = (dict, member);
         unreachable!("a front end binding a member with a dictionary of strings reads them")
     }
@@ -382,7 +390,7 @@ pub trait Front: FrontTypes {
     fn dict_object<T: HeapType>(
         &mut self,
         dict: &Self::Dict,
-        member: &str,
+        member: MemberName,
         interface: &str,
     ) -> Option<Option<Self::Node>> {
         let _ = (dict, member, interface);
@@ -402,7 +410,7 @@ pub trait Front: FrontTypes {
     fn dict_body(
         &mut self,
         dict: &Self::Dict,
-        member: &str,
+        member: MemberName,
     ) -> Option<Option<BodyMember<Self::Node>>> {
         let _ = (dict, member);
         unreachable!("a front end binding a dictionary with a body reads it")
@@ -410,7 +418,11 @@ pub trait Front: FrontTypes {
 
     /// `dict`'s member `member` as `HeadersInit`: `Some(None)` if missing,
     /// else as `byte_string_pairs_arg`.
-    fn dict_headers(&mut self, dict: &Self::Dict, member: &str) -> Option<Option<StringPairsArg>> {
+    fn dict_headers(
+        &mut self,
+        dict: &Self::Dict,
+        member: MemberName,
+    ) -> Option<Option<StringPairsArg>> {
         let _ = (dict, member);
         unreachable!("a front end binding a dictionary with headers reads them")
     }
@@ -422,7 +434,7 @@ pub trait Front: FrontTypes {
     fn dict_nullable_object<T: HeapType>(
         &mut self,
         dict: &Self::Dict,
-        member: &str,
+        member: MemberName,
         interface: &str,
     ) -> Option<Option<Self::Node>> {
         let _ = (dict, member, interface);
@@ -436,7 +448,7 @@ pub trait Front: FrontTypes {
     fn dict_nullable_target(
         &mut self,
         dict: &Self::Dict,
-        member: &str,
+        member: MemberName,
     ) -> Option<Option<Self::Node>> {
         let _ = (dict, member);
         unreachable!("a front end binding a dictionary with an event target reads it")
@@ -448,7 +460,7 @@ pub trait Front: FrontTypes {
     fn dict_signal(
         &mut self,
         dict: &Self::Dict,
-        member: &str,
+        member: MemberName,
     ) -> Option<Option<SignalMember<Self::Node>>> {
         let _ = (dict, member);
         unreachable!("a front end binding a dictionary with a signal reads it")
@@ -456,7 +468,7 @@ pub trait Front: FrontTypes {
 
     /// `dict`'s member `member` as `any`, whether it is null: `Some(None)`
     /// if missing.
-    fn dict_is_null(&mut self, dict: &Self::Dict, member: &str) -> Option<Option<bool>> {
+    fn dict_is_null(&mut self, dict: &Self::Dict, member: MemberName) -> Option<Option<bool>> {
         let _ = (dict, member);
         unreachable!("a front end binding a dictionary with an `any` reads it")
     }
@@ -735,7 +747,11 @@ pub trait Front: FrontTypes {
     /// Dictionary member `member` structured-serialized (HTML's
     /// `StructuredSerializeForStorage`: User Timing's `detail`), none if it
     /// is undefined; `None` if it threw (a `DataCloneError`).
-    fn dict_serialized(&mut self, dict: &Self::Dict, member: &str) -> Option<Option<Vec<u8>>> {
+    fn dict_serialized(
+        &mut self,
+        dict: &Self::Dict,
+        member: MemberName,
+    ) -> Option<Option<Vec<u8>>> {
         let _ = (dict, member);
         unreachable!("a front end binding User Timing serializes its detail")
     }
@@ -746,7 +762,7 @@ pub trait Front: FrontTypes {
     fn dict_string_or_number(
         &mut self,
         dict: &Self::Dict,
-        member: &str,
+        member: MemberName,
     ) -> Option<Option<StringOrNumber>> {
         let _ = (dict, member);
         unreachable!("a front end binding User Timing reads its marks")
@@ -754,7 +770,11 @@ pub trait Front: FrontTypes {
 
     /// `dict`'s member `member` as WebIDL's `any`: `Some(None)` if it is
     /// undefined (missing); `None` if reading it threw.
-    fn dict_any(&mut self, dict: &Self::Dict, member: &str) -> Option<Option<AnyArg<Self::Any>>> {
+    fn dict_any(
+        &mut self,
+        dict: &Self::Dict,
+        member: MemberName,
+    ) -> Option<Option<AnyArg<Self::Any>>> {
         let _ = (dict, member);
         unreachable!("a front end binding a member with a dictionary of `any`s reads them")
     }
@@ -1448,6 +1468,45 @@ pub enum BlobPartArg<N> {
     Blob(N),
 }
 
+/// A dictionary member's name as a front end reads it: its number in the
+/// names table (Blink's `AtomicString`), fixed as the table is compiled
+/// (`dom::names::fixed`), by which a front end finds its engine's string
+/// of the name, made once (Blink's bindings keep a dictionary's keys'
+/// V8 strings an isolate, `V8PerIsolateData::FindOrCreateEternalNameCache`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemberName(dom::names::NameId);
+
+impl MemberName {
+    /// `name`, one of the fixed names: a dictionary's member that isn't
+    /// (not in `dom`'s `dictionary_members.txt`) doesn't compile.
+    pub const fn of(name: &'static str) -> Self {
+        match dom::names::fixed(name) {
+            Some(id) => Self(id),
+            None => panic!("a dictionary member's name that isn't in dom's dictionary_members.txt"),
+        }
+    }
+
+    /// The name's number.
+    pub const fn id(self) -> dom::names::NameId {
+        self.0
+    }
+
+    /// WebIDL's name (the table's text of the number: an error's message,
+    /// an engine's string made the first time).
+    pub fn name(self) -> &'static str {
+        match dom::names::get(self.0) {
+            dom::names::Name::Fixed(name) => name,
+            dom::names::Name::Dynamic(_) => unreachable!("a member's name is a fixed one"),
+        }
+    }
+}
+
+impl std::fmt::Display for MemberName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
 /// A `Uint8ClampedArray` argument (`uint8_clamped_arg`): the array as the
 /// front end holds it (`FrontTypes::Any`), which the member's function
 /// hands back to it to store (`OpFront::store_any`), and its length in
@@ -1494,7 +1553,7 @@ pub struct ViewObject<N>(pub N);
 pub struct RelatedTarget<N>(pub N);
 
 impl<F: Front> DictHandle<F> for Option<ViewObject<F::Node>> {
-    fn read(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<Self>> {
+    fn read(front: &mut F, dict: &F::Dict, member: MemberName) -> Option<Option<Self>> {
         Some(Some(
             front
                 .dict_nullable_object::<dom::Window>(dict, member, "Window")?
@@ -1504,7 +1563,7 @@ impl<F: Front> DictHandle<F> for Option<ViewObject<F::Node>> {
 }
 
 impl<F: Front> DictHandle<F> for Option<RelatedTarget<F::Node>> {
-    fn read(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<Self>> {
+    fn read(front: &mut F, dict: &F::Dict, member: MemberName) -> Option<Option<Self>> {
         Some(Some(
             front.dict_nullable_target(dict, member)?.map(RelatedTarget),
         ))
@@ -3472,7 +3531,7 @@ impl RetType for PromiseOfJson {
 }
 
 impl<F: Front> DictHandle<F> for Option<BodyMember<F::Node>> {
-    fn read(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<Self>> {
+    fn read(front: &mut F, dict: &F::Dict, member: MemberName) -> Option<Option<Self>> {
         Some(front.dict_body(dict, member)?.map(Some))
     }
 }
@@ -3481,7 +3540,7 @@ impl DictMember for Option<HeadersMember> {
     fn read<F: Front>(
         front: &mut F,
         dict: &F::Dict,
-        member: &str,
+        member: MemberName,
     ) -> Option<Option<Option<HeadersMember>>> {
         Some(
             front
@@ -3492,7 +3551,7 @@ impl DictMember for Option<HeadersMember> {
 }
 
 impl<F: Front> DictHandle<F> for Option<SignalMember<F::Node>> {
-    fn read(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<Self>> {
+    fn read(front: &mut F, dict: &F::Dict, member: MemberName) -> Option<Option<Self>> {
         Some(front.dict_signal(dict, member)?.map(Some))
     }
 }
@@ -3501,7 +3560,7 @@ impl DictMember for Option<IsNull> {
     fn read<F: Front>(
         front: &mut F,
         dict: &F::Dict,
-        member: &str,
+        member: MemberName,
     ) -> Option<Option<Option<IsNull>>> {
         Some(
             front
@@ -3530,7 +3589,7 @@ pub trait ReadDict<T: FrontTypes> {
 pub fn read_member<F: Front, M: DictMember>(
     front: &mut F,
     dict: &F::Dict,
-    member: &str,
+    member: MemberName,
     out: &mut M,
 ) -> Option<()> {
     if let Some(value) = M::read(front, dict, member)? {
@@ -3544,7 +3603,7 @@ pub fn read_member<F: Front, M: DictMember>(
 pub fn read_handle<F: Front, H: DictHandle<F>>(
     front: &mut F,
     dict: &F::Dict,
-    member: &str,
+    member: MemberName,
     out: &mut H,
 ) -> Option<()> {
     if let Some(value) = H::read(front, dict, member)? {
@@ -3560,11 +3619,11 @@ pub fn read_handle<F: Front, H: DictHandle<F>>(
 /// front end in the operation.
 pub trait DictHandle<F: Front>: Sized {
     /// As `DictMember::read`.
-    fn read(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<Self>>;
+    fn read(front: &mut F, dict: &F::Dict, member: MemberName) -> Option<Option<Self>>;
 }
 
 impl<F: Front> DictHandle<F> for Option<SignalObject<F::Node>> {
-    fn read(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<Self>> {
+    fn read(front: &mut F, dict: &F::Dict, member: MemberName) -> Option<Option<Self>> {
         Some(
             front
                 .dict_object::<EventTargetImpl>(dict, member, "AbortSignal")?
@@ -3575,7 +3634,7 @@ impl<F: Front> DictHandle<F> for Option<SignalObject<F::Node>> {
 
 /// An `any` member: none if it is undefined (missing).
 impl<F: Front> DictHandle<F> for Option<AnyArg<F::Any>> {
-    fn read(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<Self>> {
+    fn read(front: &mut F, dict: &F::Dict, member: MemberName) -> Option<Option<Self>> {
         Some(front.dict_any(dict, member)?.map(Some))
     }
 }
@@ -4086,7 +4145,7 @@ pub trait DictMember: Sized {
 
     /// `dict`'s member `member`: `Some(None)` if it is undefined, `None`
     /// if reading it threw.
-    fn read<F: Front>(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<Self>>;
+    fn read<F: Front>(front: &mut F, dict: &F::Dict, member: MemberName) -> Option<Option<Self>>;
 
     /// The member's value in a dictionary given as a result; none for a
     /// missing one (or one a result doesn't give).
@@ -4098,7 +4157,7 @@ pub trait DictMember: Sized {
 impl DictMember for bool {
     const PLAIN: bool = true;
 
-    fn read<F: Front>(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<bool>> {
+    fn read<F: Front>(front: &mut F, dict: &F::Dict, member: MemberName) -> Option<Option<bool>> {
         front.dict_bool(dict, member)
     }
 
@@ -4111,7 +4170,11 @@ impl DictMember for bool {
 impl DictMember for Option<bool> {
     const PLAIN: bool = true;
 
-    fn read<F: Front>(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<Option<bool>>> {
+    fn read<F: Front>(
+        front: &mut F,
+        dict: &F::Dict,
+        member: MemberName,
+    ) -> Option<Option<Option<bool>>> {
         Some(front.dict_bool(dict, member)?.map(Some))
     }
 }
@@ -4120,7 +4183,7 @@ impl DictMember for Option<bool> {
 impl DictMember for String {
     const PLAIN: bool = true;
 
-    fn read<F: Front>(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<String>> {
+    fn read<F: Front>(front: &mut F, dict: &F::Dict, member: MemberName) -> Option<Option<String>> {
         front.dict_string(dict, member)
     }
 
@@ -4134,7 +4197,11 @@ impl DictMember for String {
 impl DictMember for Option<f64> {
     const PLAIN: bool = true;
 
-    fn read<F: Front>(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<Option<f64>>> {
+    fn read<F: Front>(
+        front: &mut F,
+        dict: &F::Dict,
+        member: MemberName,
+    ) -> Option<Option<Option<f64>>> {
         Some(front.dict_number(dict, member)?.map(Some))
     }
 
@@ -4147,7 +4214,7 @@ impl DictMember for Option<f64> {
 impl DictMember for f64 {
     const PLAIN: bool = true;
 
-    fn read<F: Front>(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<f64>> {
+    fn read<F: Front>(front: &mut F, dict: &F::Dict, member: MemberName) -> Option<Option<f64>> {
         let Some(value) = front.dict_number(dict, member)? else {
             return Some(None);
         };
@@ -4183,7 +4250,7 @@ macro_rules! integer_members {
         impl DictMember for $ty {
             const PLAIN: bool = true;
 
-            fn read<F: Front>(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<$ty>> {
+            fn read<F: Front>(front: &mut F, dict: &F::Dict, member: MemberName) -> Option<Option<$ty>> {
                 Some(
                     front
                         .dict_number(dict, member)?
@@ -4212,7 +4279,7 @@ impl DictMember for Option<String> {
     fn read<F: Front>(
         front: &mut F,
         dict: &F::Dict,
-        member: &str,
+        member: MemberName,
     ) -> Option<Option<Option<String>>> {
         Some(front.dict_nullable_string(dict, member)?.map(Some))
     }
@@ -4224,7 +4291,7 @@ impl DictMember for Option<Vec<String>> {
     fn read<F: Front>(
         front: &mut F,
         dict: &F::Dict,
-        member: &str,
+        member: MemberName,
     ) -> Option<Option<Option<Vec<String>>>> {
         Some(front.dict_strings(dict, member)?.map(Some))
     }
@@ -7629,7 +7696,7 @@ impl DictMember for Option<StringOrNumber> {
     fn read<F: Front>(
         front: &mut F,
         dict: &F::Dict,
-        member: &str,
+        member: MemberName,
     ) -> Option<Option<Option<StringOrNumber>>> {
         Some(front.dict_string_or_number(dict, member)?.map(Some))
     }
@@ -7644,7 +7711,7 @@ impl DictMember for Option<Serialized> {
     fn read<F: Front>(
         front: &mut F,
         dict: &F::Dict,
-        member: &str,
+        member: MemberName,
     ) -> Option<Option<Option<Serialized>>> {
         Some(
             front

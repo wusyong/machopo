@@ -136,6 +136,26 @@ fn a_fixed_names_node_name_is_fixed() {
     });
 }
 
+/// A fixed name that isn't a local name of the list (an event type, a
+/// dictionary's member) has no uppercased one fixed: an HTML element so
+/// named has its `tagName` uppercased all the same, a name of the table.
+#[test]
+fn a_fixed_name_that_is_no_local_name_is_uppercased_too() {
+    on_new_thread(|| {
+        let mut dom = Dom::new();
+        dom.mutate(|cx| {
+            let doc = cx.create_document(true);
+            for local in ["click", "bubbles", "c"] {
+                assert!(names::fixed(local).is_some(), "{local}");
+                let element = cx.create_element(doc, QualName::html(local));
+                let id = cx.node_name_id(element);
+                assert_eq!(&*names::get(id), local.to_ascii_uppercase());
+                assert!(usize::try_from(id).unwrap() >= FIXED_COUNT, "{local}");
+            }
+        });
+    });
+}
+
 /// `nodeName` that isn't the local name is made once, a name of the table.
 #[test]
 fn an_uppercased_node_name_is_made_once() {

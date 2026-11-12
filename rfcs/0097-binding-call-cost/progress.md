@@ -22,6 +22,7 @@
 | 4i-2 named 的 getter 和 setter 的 interceptor（`dataset.a`、`children.px`、`attributes.id`；決定 37）；空字串不做字串 | 完成 | 2026-11-12 |
 | 4i-3 只被這次呼叫持有的字串不進字串的快取（決定 38） | 完成 | 2026-11-12 | |
 | 4j-1 `KeptObject` 的編號和 `Uint8ClampedArg` 換成 handle（`view`、`relatedTarget`、`signal`、body 的 `Blob` 和 `URLSearchParams`、`ImageData` 的陣列）；`kept_object`、`kept_target`、`store_array` 拿掉；UI 事件的 constructor 和 `ImageData`（決定 39） | 完成 | 2026-11-12 |
+| 4j-keys dictionary 的成員名稱是名稱表的固定名稱，key 從名稱的 V8 字串的快取拿（決定 40） | 完成 | 2026-11-12 |
 | 4j-2 操作前讀成 Rust 值的參數型別（`fetch` 的 init、`postMessage`、keyframes…），連同卡在這些型別的 constructor、method、setter 和 static（決定 39） | 還沒開始 | |
 | 4k 會呼叫 script 的 33 個成員：先逐個量、列出值得改結構的，再決定 | 還沒開始 | |
 | 4l cross-origin 的 16 個成員；4i 留下的 interceptor（indexed setter、iterator 的 pairs、named 的刪除、查詢和列舉）；legacy factory | 還沒開始 | |
@@ -435,3 +436,15 @@
 - 測試：`dom_js` 的 `handlers::an_objects_handle_is_taken_as_it_is`（`view` 是 window、null、undefined、沒給；`relatedTarget` 是節點、window、`new EventTarget()` 的物件、null；六個 constructor 都建 scope 讀 dictionary（走新的 front）；`view` 是節點或數字、`relatedTarget` 是一般物件或事件時是 `TypeError`；`new ImageData(bytes, 2).data === bytes` 不建 scope、長度不對的 `InvalidStateError`、別種 typed array 走另一個 constructor；`Request` 的 signal（跟著 abort、null 不跟 input 的、沒給的跟、別種物件是 `TypeError`）、body 是 `Blob` 和 `URLSearchParams` 時的 `Content-Type`）。寫測試時弄錯的：這幾個 `TypeError` 和 `InvalidStateError` 的訊息沒有 `Failed to construct` 的前綴；`new ImageData(new Uint8Array(8), 2)` 不是 `TypeError`，是另一個 constructor 的 `IndexSizeError`。
 - mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4j1.toml`，15 個都抓到。第一次停在「null 的 signal 當成沒給」沒抓到（原有的測試也沒有分辨），補了「input 有 signal、init 的 signal 是 null 時不跟」。
 - 跑過：`cargo test -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt dom/events uievents html/canvas/element fetch/api/request fetch/api/response fetch/api/abort`（4505 個結果都照預期；失敗的 18 個 reftest 都是本來就預期失敗的）。
+
+**第 4j-keys 段：dictionary 的成員名稱是名稱表的固定名稱**（2026-11-12，決定 40）：
+
+- 剖析（`perf record`，`new MouseEvent('x', { clientX: 1 })`）：V8 的 `Object::Get` 和它底下的查找約 69%，把成員名稱做成 internalized 字串約 17%，其餘（建事件、外殼、轉換）約 14%。
+- `dom`：`dictionary_members.txt`（145 個名稱，其中 116 個原本不是固定名稱），`build.rs` 排在所有其他固定名稱之後。`UPPERCASE` 表只留 local name 的那一段：其餘的固定名稱（event type、成員名稱）當 HTML 元素的名字時走一般名稱的路轉大寫。修掉原有的問題：`<click>` 的 `tagName` 是 `click`（加了成員名稱之後 `dom` 原有的兩個測試先抓到 `<c>`）。
+- `dom_api`：`MemberName`（只包名稱的編號；`of` 是 `const fn`，不在清單裡的編不過；`name()` 從名稱表讀文字，給錯誤訊息和第一次建字串用），`Front` 的 `dict_*`、`DictMember::read`、`DictHandle::read`、`read_member`、`read_handle` 的 `member: &str` 都換成它；macro 產生 `const { MemberName::of("…") }`。
+- `dom_js`：`member_key`（照編號從 `caches.names` 拿，沒有時建）、`make_name`（建 internalized 的字串、存進 `caches.names`、計數；`Kept::Name` 也用它，所以 `localName` 這類名稱的 V8 字串也是 internalized 的）。`V8Front` 讀成員的 10 處都經過 `member_key`。
+- 和事先說的不同：一開始寫的 `MemberName` 同時帶字串和編號，使用者指出放進名稱表之後它就是 atom，字串是多餘的，改成只包編號。估計每個成員省約 175 條，實際約 300 條：key 是 internalized 時 V8 查屬性前的處理（`PropertyKey`）也變便宜。
+- 4j-1 和這一段的 binary 各跑七次取最小（`perf stat`，指令數（cycle））：`new MouseEvent('x', { clientX: 1 })` 32045（5890）→ 23451（4874），`new MouseEvent('x', { relatedTarget: n })` 32727（6083）→ 24128（5125），`new KeyboardEvent('x', { key: 'a' })` 31500（6105）→ 23380（5116），`new UIEvent('x', { detail: 1 })` 8227（1671）→ 6585（1454），`new Event('x', init)` 5348（1156）→ 4612（1082），`addEventListener('z', f, opts)` 4370（788）→ 3338（660）；沒變的（差在雜訊 ±10 之內）：`new MouseEvent('x')` 2568 → 2558、`new Event('x')` 2605 → 2595、`nodeType` 109 → 101、`tagName` 243 → 235、`n.id` 254 → 245、`getAttribute('id')` 567 → 558、`style.color` 2202 → 2196。
+- 測試：`dom_js` 的 `strings::a_dictionary_members_key_is_made_once`（第一次讀 `EventInit` 做三個名稱、之後 20 次不再做；別的 dictionary 同名的成員不再做、新的名稱多一個；getter 照名稱的順序各叫一次；同時是成員名稱和元素名稱的 `once` 兩邊都對）；`dom_api` 的 `members::the_listed_member_names_are_the_dictionaries`（清單和原始碼裡 dictionary 的成員一致、照順序、都是固定名稱）；`dom` 的 `names::a_fixed_name_that_is_no_local_name_is_uppercased_too`。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4j-keys.toml`，5 個都抓到。另外試了「清單少一個名稱」：編不過（`MemberName::of` 的 const 求值 panic），這個由編譯器擋，不列在 spec 裡。「名稱的字串不是 internalized」結果一樣、只是慢，沒有測試分辨得出來（rusty_v8 沒有查詢的 API），記在 `docs/test-gaps.md` 的「沒有計數守著的優化」。
+- 跑過：`cargo test -p dom -p dom_api -p dom_js -p dom_wasm -p html -p style`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt dom/events dom/nodes uievents fetch/api/request fetch/api/response intersection-observer web-animations/interfaces`（19302 個結果都照預期；失敗的 1 個 reftest 是本來就預期失敗的）。

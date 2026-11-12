@@ -359,3 +359,59 @@ fn a_string_only_the_call_holds_isnt_cached() {
         "the attribute's value, once"
     );
 }
+
+/// A dictionary's member is read by its name's V8 string, made the first
+/// time any dictionary's member of the name is read and found by the
+/// name's number after: none made for a read again, of that dictionary or
+/// of another with a member of the name. The same string is the name's as
+/// a result (`localName`).
+#[test]
+fn a_dictionary_members_key_is_made_once() {
+    let mut env = Env::new();
+    env.eval(
+        "var d = machopoDom.createDocument(); var e = d.createElement('p'); \
+         var init = { bubbles: true, cancelable: false }; var Event = machopoDom.Event; \
+         var CustomEvent = machopoDom.CustomEvent;",
+    );
+    let before = env.names_made();
+    assert_eq!(
+        env.eval("var ev = new Event('x', init); [ev.bubbles, ev.cancelable, ev.composed].join()"),
+        "true,false,false"
+    );
+    assert_eq!(
+        env.names_made(),
+        before + 3,
+        "bubbles, cancelable, composed"
+    );
+    assert_eq!(
+        env.eval(
+            "for (var i = 0; i < 20; i++) ev = new Event('y', { cancelable: true, composed: true }); \
+             [ev.bubbles, ev.cancelable, ev.composed].join()"
+        ),
+        "false,true,true"
+    );
+    assert_eq!(env.names_made(), before + 3, "found by their numbers");
+    // Another dictionary's members of the same names, and one more.
+    assert_eq!(
+        env.eval("ev = new CustomEvent('z', { bubbles: true, detail: 7 }); [ev.bubbles, ev.detail].join()"),
+        "true,7"
+    );
+    assert_eq!(env.names_made(), before + 4, "detail");
+    // A getter is called once a read, in the names' order.
+    assert_eq!(
+        env.eval(
+            "var log = []; new Event('g', { get composed() { log.push('composed'); return true; }, \
+             get bubbles() { log.push('bubbles'); return true; } }); log.join()"
+        ),
+        "bubbles,composed"
+    );
+    // A name that is a member's and an element's: one string, whichever
+    // made it.
+    assert_eq!(
+        env.eval(
+            "var options = { once: true }; e.addEventListener('q', () => {}, options); \
+             var o = d.createElement('once'); [o.localName, o.tagName, o.localName in options].join()"
+        ),
+        "once,ONCE,true"
+    );
+}

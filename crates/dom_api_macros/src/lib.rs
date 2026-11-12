@@ -2027,7 +2027,12 @@ fn dictionary_items(dictionary: &DictionaryDef) -> Tokens {
             quote!(#api::typed::read_member)
         };
         quote! {
-            #read(#front, #dict, #js, &mut #value.#field)?;
+            #read(
+                #front,
+                #dict,
+                const { #api::typed::MemberName::of(#js) },
+                &mut #value.#field,
+            )?;
         }
     });
     // As a result: its members with a value, in their names' order too.

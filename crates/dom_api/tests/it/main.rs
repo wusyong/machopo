@@ -30,6 +30,7 @@ mod input;
 mod intersection;
 mod kinds;
 mod markup;
+mod members;
 mod mutation_observer;
 mod node;
 mod plain;
@@ -445,8 +446,12 @@ impl<'d> Front for TestFront<'d> {
         }
     }
 
-    fn dict_bool(&mut self, dict: &Self::Dict, member: &str) -> Option<Option<bool>> {
-        let entry = dict.iter().find(|(name, _)| *name == member);
+    fn dict_bool(
+        &mut self,
+        dict: &Self::Dict,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<bool>> {
+        let entry = dict.iter().find(|(name, _)| *name == member.name());
         if let Some((name, _)) = entry {
             self.hooks.dict_reads.push(name);
         }
@@ -462,7 +467,11 @@ impl<'d> Front for TestFront<'d> {
 
     /// The tests' dictionaries have booleans alone: a string sequence is
     /// always missing.
-    fn dict_strings(&mut self, _: &Self::Dict, _: &str) -> Option<Option<Vec<String>>> {
+    fn dict_strings(
+        &mut self,
+        _: &Self::Dict,
+        _: dom_api::typed::MemberName,
+    ) -> Option<Option<Vec<String>>> {
         Some(None)
     }
 
@@ -470,7 +479,7 @@ impl<'d> Front for TestFront<'d> {
     fn dict_object<T: elise::HeapType>(
         &mut self,
         _: &Self::Dict,
-        _: &str,
+        _: dom_api::typed::MemberName,
         _: &str,
     ) -> Option<Option<Taken>> {
         Some(None)
