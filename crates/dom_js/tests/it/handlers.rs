@@ -1140,3 +1140,207 @@ fn an_objects_handle_is_taken_as_it_is() {
         }
     }
 }
+
+/// A member whose argument is read whole into the DOM's values before the
+/// operation (a sequence, a dictionary of its own shape, a serialization,
+/// keyframes) takes the path with the callback's info alone: the argument
+/// is read in a scope made for it, and one that is a boolean, a small
+/// integer or a wrapper already is told with none.
+#[test]
+fn an_argument_read_whole_is_read_in_a_scope() {
+    let mut engine = page();
+    run(
+        &mut engine,
+        "var canvas = document.createElement('canvas'); var ctx = canvas.getContext('2d'); \
+         var gradient = ctx.createLinearGradient(0, 0, 1, 1); var view = new Uint8Array(8); \
+         var c = new AbortController(); var channel = new MessageChannel(); \
+         var thrown = (f) => { try { f(); return 'none'; } catch (e) { return e.name + ': ' + e.message; } }; \
+         var path = new Path2D(); var big = new Uint8Array(64); var part = new Uint8Array(new ArrayBuffer(40), 8, 32); var effect = new KeyframeEffect(d, null); \
+         d.hidden = false; ctx.fillStyle = 'blue'; ctx.setLineDash([1]); \
+         crypto.getRandomValues(view); structuredClone(1); new Blob(['a']); d.id;",
+    );
+    for (source, value, scopes) in [
+        // Told with no scope: a boolean, a small integer, a wrapper.
+        ("d.hidden = true; d.hidden", "true", Some(false)),
+        ("d.hidden = 0; d.hidden", "false", Some(false)),
+        ("d.hidden = 'until-found'; d.hidden", "until-found", None),
+        // (A string converted: the scope tells the path taken.)
+        (
+            "d.hidden = { toString() { return 'until-found'; } }; d.hidden",
+            "until-found",
+            Some(true),
+        ),
+        (
+            "ctx.fillStyle = { toString() { return '#00ff00'; } }; ctx.fillStyle",
+            "#00ff00",
+            Some(true),
+        ),
+        (
+            "ctx.fillStyle = gradient; ctx.fillStyle === gradient",
+            "true",
+            Some(false),
+        ),
+        ("ctx.fillStyle = '#ff0000'; ctx.fillStyle", "#ff0000", None),
+        // A sequence, a dictionary, a serialization: a scope.
+        (
+            "ctx.setLineDash([2, 3]); ctx.getLineDash().join()",
+            "2,3",
+            Some(true),
+        ),
+        (
+            "thrown(() => ctx.setLineDash(5)).slice(0, 9)",
+            "TypeError",
+            Some(true),
+        ),
+        (
+            "ctx.roundRect(0, 0, 4, 4, [1, 2]); path.roundRect(0, 0, 4, 4, 1); true",
+            "true",
+            Some(true),
+        ),
+        // (No raster in the tests: an empty canvas's URL.)
+        (
+            "canvas.toDataURL('image/png', 0.5).slice(0, 5)",
+            "data:",
+            Some(true),
+        ),
+        ("crypto.getRandomValues(view) === view", "true", Some(true)),
+        (
+            "crypto.getRandomValues(big); big.some((byte) => byte !== 0)",
+            "true",
+            Some(true),
+        ),
+        // A view of part of a buffer: the bytes before it aren't written.
+        (
+            "crypto.getRandomValues(part); new Uint8Array(part.buffer).slice(0, 8).every((byte) => byte === 0) \
+             + ' ' + part.some((byte) => byte !== 0)",
+            "true true",
+            Some(true),
+        ),
+        (
+            "thrown(() => crypto.getRandomValues(new Float32Array(4))).slice(0, 17)",
+            "TypeMismatchError",
+            Some(true),
+        ),
+        (
+            "thrown(() => crypto.getRandomValues({})).slice(0, 9)",
+            "TypeError",
+            Some(true),
+        ),
+        ("structuredClone({ a: [1, 2] }).a.join()", "1,2", Some(true)),
+        ("new Blob(['ab', new Uint8Array(3)]).size", "5", Some(true)),
+        ("new File(['abc'], 'f.txt').name", "f.txt", Some(true)),
+        ("new Headers([['a', 'b']]).get('a')", "b", Some(true)),
+        ("new Headers({ c: 'd' }).get('c')", "d", Some(true)),
+        (
+            "new URLSearchParams([['a', '1']]).get('a')",
+            "1",
+            Some(true),
+        ),
+        ("new URLSearchParams('b=2').get('b')", "2", None),
+        ("AbortSignal.any([c.signal]).aborted", "false", Some(true)),
+        (
+            "thrown(() => AbortSignal.any([d])).slice(0, 9)",
+            "TypeError",
+            Some(true),
+        ),
+        (
+            "Response.json({ a: 1 }).headers.get('content-type')",
+            "application/json",
+            Some(true),
+        ),
+        (
+            "new Response('body', { status: 201, headers: { x: 'y' } }).headers.get('x')",
+            "y",
+            Some(true),
+        ),
+        (
+            "var request = new Request('https://example.test/a', { headers: [['p', 'q']] }); \
+             new Request(request).headers.get('p')",
+            "q",
+            None,
+        ),
+        (
+            "new StaticRange({ startContainer: d, startOffset: 0, endContainer: d, endOffset: 0 }).startContainer === d",
+            "true",
+            Some(true),
+        ),
+        (
+            "d.getHTML({ serializableShadowRoots: true })",
+            "",
+            Some(true),
+        ),
+        (
+            "history.pushState({ a: 7 }, ''); history.state.a",
+            "7",
+            Some(true),
+        ),
+        (
+            "history.replaceState({ a: 8 }, ''); history.state.a",
+            "8",
+            Some(true),
+        ),
+        (
+            "performance.mark('m', { detail: { b: 1 } }).detail.b",
+            "1",
+            Some(true),
+        ),
+        (
+            "new PerformanceMark('n', { startTime: 5 }).startTime",
+            "5",
+            Some(true),
+        ),
+        ("performance.measure('span', 'm').name", "span", None),
+        (
+            "d.animate([{ opacity: 0 }, { opacity: 1 }], 100) instanceof Animation",
+            "true",
+            Some(true),
+        ),
+        (
+            "new KeyframeEffect(d, { opacity: [0, 1] }, { duration: 50 }).getTiming().duration",
+            "50",
+            Some(true),
+        ),
+        (
+            "effect.setKeyframes([{ opacity: 0.5 }]); effect.updateTiming({ duration: 9 }); \
+             effect.getKeyframes().length + ' ' + effect.getTiming().duration",
+            "1 9",
+            Some(true),
+        ),
+        (
+            "new Animation(new KeyframeEffect(d, null), null).timeline",
+            "null",
+            Some(true),
+        ),
+        (
+            "new IntersectionObserver(() => {}, { root: d, threshold: [0, 1] }).thresholds.join()",
+            "0,1",
+            Some(true),
+        ),
+        (
+            "channel.port1.postMessage({ a: 1 }, []); new Path2D('M0 0L1 1') instanceof Path2D",
+            "true",
+            Some(true),
+        ),
+        ("new Path2D(path) instanceof Path2D", "true", None),
+    ] {
+        let (first, last) = match source.rsplit_once("; ") {
+            Some((first, last)) => (Some(first), last),
+            None => (None, source),
+        };
+        if let Some(first) = first.filter(|first| first.starts_with("var ")) {
+            run(&mut engine, first);
+        }
+        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        if let Some(first) = first.filter(|first| !first.starts_with("var ")) {
+            run(&mut engine, first);
+        }
+        let found = report(&mut engine, last);
+        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        assert_eq!(found, value, "{source}");
+        match scopes {
+            Some(true) => assert!(made >= 1, "{source}: a scope"),
+            Some(false) => assert_eq!(made, 0, "{source}"),
+            None => {}
+        }
+    }
+}

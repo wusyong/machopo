@@ -1,0 +1,93 @@
+# Stage 4j-2: the arguments read whole into the DOM's values before the
+# operation are the new front end's too (each read in a scope, by the
+# whole front end's code); a boolean, a small integer and a wrapper are
+# told with no scope; `getRandomValues`' view is its first argument.
+test = ["cargo", "test", "-q", "-p", "dom_api", "-p", "dom_js", "-p", "dom_wasm"]
+timeout = 1800
+
+[[mutant]]
+name = "a small integer is told in a scope"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        match v8::machopo::as_smi(value) {
+            Some(number) => Some(f64::from(number)),
+            None => self.with_front(|front| front.number_if(index)),
+        }'''
+to = '''        self.with_front(|front| front.number_if(index))'''
+
+[[mutant]]
+name = "a boolean told is the other"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        value.is_boolean().then(|| value.is_true())'''
+to = '''        value.is_boolean().then(|| value.is_false())'''
+
+[[mutant]]
+name = "a boolean is told in a scope"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        value.is_boolean().then(|| value.is_true())'''
+to = '''        self.with_front(|front| front.bool_if(index))'''
+
+[[mutant]]
+name = "a wrapper isn't told"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if bindings::is_wrapper::<T>(self.info.isolate(), value) {
+            return v8::Local::<v8::Object>::try_from(value).ok();
+        }
+        None
+    }
+
+    /// A boolean itself: no scope.'''
+to = '''        let _ = value;
+        None
+    }
+
+    /// A boolean itself: no scope.'''
+
+[[mutant]]
+name = "a wrapper is told in a scope"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if bindings::is_wrapper::<T>(self.info.isolate(), value) {
+            return v8::Local::<v8::Object>::try_from(value).ok();
+        }
+        None
+    }
+
+    /// A boolean itself: no scope.'''
+to = '''        let _ = value;
+        self.with_front(|front| front.object_if::<T>(index))
+    }
+
+    /// A boolean itself: no scope.'''
+
+[[mutant]]
+name = "the view filled isn't the result"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        self.with_front(|front| front.finish_filled_view(bytes));'''
+to = '''        drop(bytes);'''
+
+[[mutant]]
+name = "the view's bytes aren't written"
+file = "crates/dom_js/src/front.rs"
+from = '''            for (cell, byte) in store.iter().skip(offset).zip(bytes) {'''
+to = '''            for (cell, byte) in store.iter().skip(offset).zip(bytes).take(0) {'''
+
+[[mutant]]
+name = "a view's bytes are written from its buffer's start"
+file = "crates/dom_js/src/front.rs"
+from = '''            for (cell, byte) in store.iter().skip(offset).zip(bytes) {'''
+to = '''            for (cell, byte) in store.iter().skip(0 * offset).zip(bytes) {'''
+
+[[mutant]]
+name = "keyframes aren't plain"
+file = "crates/dom_api/src/typed.rs"
+from = '''impl ArgType for Keyframes {
+    const PLAIN: bool = true;'''
+to = '''impl ArgType for Keyframes {
+    const PLAIN: bool = false;'''
+
+[[mutant]]
+name = "a structured clone's value isn't plain"
+file = "crates/dom_api/src/typed.rs"
+from = '''impl ArgType for CloneValue {
+    const PLAIN: bool = true;'''
+to = '''impl ArgType for CloneValue {
+    const PLAIN: bool = false;'''

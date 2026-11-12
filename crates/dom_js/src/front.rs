@@ -283,8 +283,6 @@ pub(crate) struct RareCall<'s> {
     /// What a traversal's filter threw, caught (the traversal's flag is
     /// unset in an operation after): the member's error, thrown again.
     thrown: Option<v8::Local<'s, v8::Value>>,
-    /// The `ArrayBufferView` taken (`ArrayViewArg`).
-    view: Option<v8::Local<'s, v8::ArrayBufferView>>,
     /// A second callback taken (`Callback(1)`, `nullable_function_arg`:
     /// geolocation's error callback).
     second_callback: Option<v8::Local<'s, v8::Value>>,
@@ -1997,7 +1995,6 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
             ),
         };
         let byte_length = view.byte_length();
-        self.call.rare().view = Some(view);
         Some(dom_api::typed::ArrayViewArg {
             name,
             integer,
@@ -3284,12 +3281,8 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     }
 
     fn finish_filled_view(&mut self, bytes: Vec<u8>) {
-        let view = self
-            .call
-            .rare()
-            .view
-            .take()
-            .expect("a view kept with the call");
+        let view = v8::Local::<v8::ArrayBufferView>::try_from(arg(self.args, 0))
+            .expect("a view, checked as it was taken");
         let scope = self.scope.scope();
         let offset = view.byte_offset();
         if let Some(buffer) = view.buffer(scope) {

@@ -1133,8 +1133,8 @@ pub trait Front: FrontTypes {
         let _ = history;
         unreachable!("a front end binding `history.state` gives it")
     }
-    /// The `ArrayBufferView` argument the front end kept
-    /// (`array_view_arg`), these bytes written to it: the result.
+    /// The first argument, an `ArrayBufferView` as `array_view_arg` took
+    /// it, these bytes written to it: the result.
     fn finish_filled_view(&mut self, bytes: Vec<u8>) {
         let _ = bytes;
         unreachable!("a front end binding `getRandomValues` fills its view")
@@ -2599,6 +2599,7 @@ pub struct StaticRangeInit<'gc> {
 pub struct StaticRangeInitArg;
 
 impl ArgType for StaticRangeInitArg {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Dictionary("StaticRangeInit");
     type Taken<T: FrontTypes> = [(T::Node, u32); 2];
     type Param<'a, 'gc, T: FrontTypes + 'a> = StaticRangeInit<'gc>;
@@ -3041,6 +3042,7 @@ pub struct IntersectionOptions<'gc> {
 pub struct IntersectionObserverInitArg;
 
 impl ArgType for IntersectionObserverInitArg {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Dictionary("IntersectionObserverInit");
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = (IntersectionInit, Option<T::Node>);
@@ -3089,6 +3091,7 @@ pub struct IntersectionEntryInit<'gc> {
 pub struct IntersectionObserverEntryInitArg;
 
 impl ArgType for IntersectionObserverEntryInitArg {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Dictionary("IntersectionObserverEntryInit");
     type Taken<T: FrontTypes> = (IntersectionEntryInitValues, T::Node);
     type Param<'a, 'gc, T: FrontTypes + 'a> = IntersectionEntryInit<'gc>;
@@ -3249,6 +3252,7 @@ impl ArgType for AbortReason {
 pub struct AbortSignals;
 
 impl ArgType for AbortSignals {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Sequence("AbortSignal");
     type Taken<T: FrontTypes> = Vec<T::Node>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Vec<Gc<'gc, EventTargetImpl>>;
@@ -3286,6 +3290,7 @@ impl ArgType for AbortSignals {
 pub struct MessagePorts;
 
 impl ArgType for MessagePorts {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Sequence("MessagePort");
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Vec<T::Node>;
@@ -3399,6 +3404,7 @@ impl ArgType for ByteString {
 pub struct HeaderPairs;
 
 impl ArgType for HeaderPairs {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::StringPairs;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<StringPairsArg>;
@@ -3443,6 +3449,7 @@ pub enum RequestInput<'a, 'gc> {
 }
 
 impl ArgType for RequestInfo {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::StringOr(&["Request"]);
     type Taken<T: FrontTypes> = RequestInfoArg<T::Node, T::Str>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = RequestInput<'a, 'gc>;
@@ -3474,6 +3481,7 @@ impl ArgType for RequestInfo {
 pub struct NullableBody;
 
 impl ArgType for NullableBody {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<BodyArg<T::Node>>;
@@ -3497,6 +3505,7 @@ impl ArgType for NullableBody {
 pub struct JsonData;
 
 impl ArgType for JsonData {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = String;
@@ -3537,6 +3546,7 @@ impl<F: Front> DictHandle<F> for Option<BodyMember<F::Node>> {
 }
 
 impl DictMember for Option<HeadersMember> {
+    const PLAIN: bool = true;
     fn read<F: Front>(
         front: &mut F,
         dict: &F::Dict,
@@ -3557,6 +3567,7 @@ impl<F: Front> DictHandle<F> for Option<SignalMember<F::Node>> {
 }
 
 impl DictMember for Option<IsNull> {
+    const PLAIN: bool = true;
     fn read<F: Front>(
         front: &mut F,
         dict: &F::Dict,
@@ -3891,6 +3902,7 @@ fn slottable_error(index: usize) -> ApiError {
 pub struct Doubles;
 
 impl ArgType for Doubles {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Doubles;
     type Taken<T: FrontTypes> = Vec<f64>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Vec<f64>;
@@ -6054,6 +6066,7 @@ pub struct GetHtmlOptions<'gc> {
 }
 
 impl ArgType for GetHtmlOptionsArg {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Dictionary("GetHTMLOptions");
     const UNDEFINED_IS_DEFAULT: bool = true;
     /// `serializableShadowRoots`, and `shadowRoots`' nodes.
@@ -6858,6 +6871,7 @@ pub enum CanvasStyleRet<'gc> {
 }
 
 impl ArgType for CanvasStyleValue {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::StringOr(CANVAS_STYLE_OBJECTS);
     type Taken<T: FrontTypes> = CanvasStyleTaken<T::Node, T::Str>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = CanvasStyleParam<'a, 'gc>;
@@ -6987,6 +7001,7 @@ pub enum Path2dOrString<'a, 'gc> {
 }
 
 impl ArgType for OptionalPath2dOrString {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::StringOr(&["Path2D"]);
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<Path2dOrStringTaken<T::Node, T::Str>>;
@@ -7023,6 +7038,7 @@ impl ArgType for OptionalPath2dOrString {
 pub struct RoundRectRadii;
 
 impl ArgType for RoundRectRadii {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Vec<Radius>;
@@ -7092,6 +7108,7 @@ impl Default for AnimationOptions {
 }
 
 impl ArgType for AnimationOptions {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = AnimationOptions;
@@ -7115,6 +7132,7 @@ impl ArgType for AnimationOptions {
 pub struct EffectOptions;
 
 impl ArgType for EffectOptions {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = AnimationOptions;
@@ -7138,6 +7156,7 @@ impl ArgType for EffectOptions {
 pub struct OptionalTimingArg;
 
 impl ArgType for OptionalTimingArg {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = animation::OptionalTiming;
@@ -7162,6 +7181,7 @@ impl ArgType for OptionalTimingArg {
 pub struct TimelineArg;
 
 impl ArgType for TimelineArg {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = bool;
@@ -7297,6 +7317,7 @@ impl ObjectType for dom::DocumentTimeline {
 pub struct Keyframes;
 
 impl ArgType for Keyframes {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<animation::ScriptKeyframes>;
@@ -7354,6 +7375,7 @@ pub enum HiddenValue<S> {
 pub struct Hidden;
 
 impl ArgType for Hidden {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     type Taken<T: FrontTypes> = Option<HiddenValue<T::Str>>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Option<HiddenValue<&'a str>>;
@@ -7422,6 +7444,7 @@ impl RetType for Hidden {
 pub struct NumberIfNumber;
 
 impl ArgType for NumberIfNumber {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<f64>;
@@ -7511,6 +7534,7 @@ pub struct ArrayViewArg {
 pub struct ArrayView;
 
 impl ArgType for ArrayView {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = false;
     type Taken<T: FrontTypes> = ArrayViewArg;
@@ -7535,9 +7559,8 @@ impl ArgType for ArrayView {
 pub struct FilledView;
 
 impl RetType for FilledView {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
-    // Not `PLAIN`: the view is one the front end kept with the call
-    // (`array_view_arg`).
     type Ret<'gc> = Vec<u8>;
     no_prepared!();
     type Pending<F: FrontTypes> = Vec<u8>;
@@ -7571,6 +7594,7 @@ pub struct CloneParam<'a, 'gc> {
 }
 
 impl ArgType for CloneValue {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = false;
     type Taken<T: FrontTypes> = CloneTaken<T::Node>;
@@ -7708,6 +7732,7 @@ impl DictMember for Option<StringOrNumber> {
 pub struct Serialized(pub Vec<u8>);
 
 impl DictMember for Option<Serialized> {
+    const PLAIN: bool = true;
     fn read<F: Front>(
         front: &mut F,
         dict: &F::Dict,
@@ -7734,6 +7759,7 @@ pub enum MeasureStartArg<S> {
 }
 
 impl ArgType for MeasureStart {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = MeasureStartArg<T::Str>;
@@ -8183,6 +8209,7 @@ pub enum StringPairsInit<'a> {
 }
 
 impl ArgType for StringPairs {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::StringPairs;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<StringPairsArg>;
@@ -8223,6 +8250,7 @@ pub enum BlobPart<'a, 'gc> {
 }
 
 impl ArgType for BlobParts {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Sequence("BlobPart");
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<Vec<BlobPartArg<T::Node>>>;
@@ -8566,6 +8594,34 @@ pub const PLAIN_FRONT_METHODS: &[&str] = &[
     "dict_body",
     "dict_signal",
     "uint8_clamped_arg",
+    "serialized_state_arg",
+    "message_arg",
+    "static_range_init",
+    "intersection_observer_init",
+    "intersection_entry_init",
+    "objects_arg",
+    "byte_string_pairs_arg",
+    "object_if",
+    "body_arg",
+    "json_arg",
+    "doubles_arg",
+    "get_html_options",
+    "round_rect_radii_arg",
+    "animation_options_arg",
+    "effect_options_arg",
+    "optional_timing_arg",
+    "timeline_arg",
+    "keyframes_arg",
+    "number_if",
+    "bool_if",
+    "clone_arg",
+    "string_pairs_arg",
+    "blob_parts_arg",
+    "array_view_arg",
+    "dict_headers",
+    "dict_is_null",
+    "dict_serialized",
+    "finish_filled_view",
     "function_arg",
     "nullable_function_arg",
     "event_handler_arg",

@@ -1116,6 +1116,177 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         self.with_front(|front| front.dict_object::<T>(dict, member, interface))
     }
 
+    // The arguments read whole into the DOM's values before the
+    // operation (a sequence, a dictionary of its own shape, a structured
+    // serialization, keyframes): reading one allocates and may run script,
+    // so each is the whole front end's, in a scope.
+    fn serialized_state_arg(&mut self, index: usize) -> Option<Vec<u8>> {
+        self.with_front(|front| front.serialized_state_arg(index))
+    }
+
+    fn message_arg(
+        &mut self,
+        index: usize,
+        transfer: dom_api::typed::TransferArg,
+        from_port: bool,
+    ) -> Option<(dom::SerializedMessage, Vec<v8::Local<'s, v8::Object>>)> {
+        self.with_front(|front| front.message_arg(index, transfer, from_port))
+    }
+
+    fn static_range_init(&mut self, index: usize) -> Option<[(v8::Local<'s, v8::Object>, u32); 2]> {
+        self.with_front(|front| front.static_range_init(index))
+    }
+
+    fn intersection_observer_init(
+        &mut self,
+        index: usize,
+    ) -> Option<(
+        dom_api::typed::IntersectionInit,
+        Option<v8::Local<'s, v8::Object>>,
+    )> {
+        self.with_front(|front| front.intersection_observer_init(index))
+    }
+
+    fn intersection_entry_init(
+        &mut self,
+        index: usize,
+    ) -> Option<(
+        dom_api::typed::IntersectionEntryInitValues,
+        v8::Local<'s, v8::Object>,
+    )> {
+        self.with_front(|front| front.intersection_entry_init(index))
+    }
+
+    fn byte_string_pairs_arg(&mut self, index: usize) -> Option<dom_api::typed::StringPairsArg> {
+        self.with_front(|front| front.byte_string_pairs_arg(index))
+    }
+
+    fn json_arg(&mut self, index: usize) -> Option<String> {
+        self.with_front(|front| front.json_arg(index))
+    }
+
+    fn doubles_arg(&mut self, index: usize) -> Option<Vec<f64>> {
+        self.with_front(|front| front.doubles_arg(index))
+    }
+
+    fn get_html_options(&mut self, index: usize) -> Option<(bool, Vec<v8::Local<'s, v8::Object>>)> {
+        self.with_front(|front| front.get_html_options(index))
+    }
+
+    fn round_rect_radii_arg(&mut self, index: usize) -> Option<Vec<dom_api::typed::Radius>> {
+        self.with_front(|front| front.round_rect_radii_arg(index))
+    }
+
+    fn animation_options_arg(&mut self, index: usize) -> Option<dom_api::typed::AnimationOptions> {
+        self.with_front(|front| front.animation_options_arg(index))
+    }
+
+    fn effect_options_arg(&mut self, index: usize) -> Option<dom_api::typed::AnimationOptions> {
+        self.with_front(|front| front.effect_options_arg(index))
+    }
+
+    fn optional_timing_arg(&mut self, index: usize) -> Option<animation::OptionalTiming> {
+        self.with_front(|front| front.optional_timing_arg(index))
+    }
+
+    fn timeline_arg(&mut self, index: usize) -> Option<bool> {
+        self.with_front(|front| front.timeline_arg(index))
+    }
+
+    fn keyframes_arg(&mut self, index: usize) -> Option<Option<animation::ScriptKeyframes>> {
+        self.with_front(|front| front.keyframes_arg(index))
+    }
+
+    fn clone_arg(
+        &mut self,
+        index: usize,
+    ) -> Option<(dom::SerializedMessage, Vec<v8::Local<'s, v8::Object>>)> {
+        self.with_front(|front| front.clone_arg(index))
+    }
+
+    fn string_pairs_arg(&mut self, index: usize) -> Option<dom_api::typed::StringPairsArg> {
+        self.with_front(|front| front.string_pairs_arg(index))
+    }
+
+    fn blob_parts_arg(
+        &mut self,
+        index: usize,
+    ) -> Option<Option<Vec<dom_api::typed::BlobPartArg<v8::Local<'s, v8::Object>>>>> {
+        self.with_front(|front| front.blob_parts_arg(index))
+    }
+
+    fn array_view_arg(&mut self, index: usize) -> Option<dom_api::typed::ArrayViewArg> {
+        self.with_front(|front| front.array_view_arg(index))
+    }
+
+    fn dict_headers(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<dom_api::typed::StringPairsArg>> {
+        self.with_front(|front| front.dict_headers(dict, member))
+    }
+
+    fn dict_is_null(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<bool>> {
+        self.with_front(|front| front.dict_is_null(dict, member))
+    }
+
+    fn dict_serialized(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<Vec<u8>>> {
+        self.with_front(|front| front.dict_serialized(dict, member))
+    }
+
+    fn objects_arg<T: elise::HeapType>(
+        &mut self,
+        index: usize,
+        interface: &str,
+    ) -> Option<Vec<v8::Local<'s, v8::Object>>> {
+        self.with_front(|front| front.objects_arg::<T>(index, interface))
+    }
+
+    /// A wrapper is told by its type's tag: no scope.
+    #[inline]
+    fn object_if<T: elise::HeapType>(&mut self, index: usize) -> Option<v8::Local<'s, v8::Object>> {
+        let value = K::arg(&self.info, index);
+        if bindings::is_wrapper::<T>(self.info.isolate(), value) {
+            return v8::Local::<v8::Object>::try_from(value).ok();
+        }
+        None
+    }
+
+    /// A boolean itself: no scope.
+    #[inline]
+    fn bool_if(&mut self, index: usize) -> Option<bool> {
+        let value = K::arg(&self.info, index);
+        value.is_boolean().then(|| value.is_true())
+    }
+
+    /// A small integer is read from its handle; another number is the
+    /// whole front end's.
+    #[inline]
+    fn number_if(&mut self, index: usize) -> Option<f64> {
+        let value = K::arg(&self.info, index);
+        if !value.is_number() {
+            return None;
+        }
+        match v8::machopo::as_smi(value) {
+            Some(number) => Some(f64::from(number)),
+            None => self.with_front(|front| front.number_if(index)),
+        }
+    }
+
+    /// The view is the first argument, as `array_view_arg` took it.
+    fn finish_filled_view(&mut self, bytes: Vec<u8>) {
+        self.with_front(|front| front.finish_filled_view(bytes));
+    }
+
     fn dict_nullable_object<T: elise::HeapType>(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,

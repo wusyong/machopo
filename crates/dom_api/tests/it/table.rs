@@ -1163,6 +1163,16 @@ fn members_of_strings_nodes_numbers_and_booleans_are_plain() {
         ("Window", "onload", MemberKind::Getter),
         ("Document", "onclick", MemberKind::Getter),
         ("MessagePort", "onmessage", MemberKind::Getter),
+        // Arguments read whole before the operation (a sequence, a
+        // dictionary of its own shape, a serialization), and the view
+        // given back filled.
+        ("Crypto", "getRandomValues", MemberKind::Method),
+        ("Blob", "constructor", MemberKind::Constructor),
+        ("AbortSignal", "any", MemberKind::Method),
+        ("Element", "animate", MemberKind::Method),
+        ("Request", "constructor", MemberKind::Constructor),
+        ("Window", "structuredClone", MemberKind::Method),
+        ("MessagePort", "postMessage", MemberKind::Method),
     ] {
         assert!(is_plain(interface, name, kind), "{interface}.{name}");
     }
@@ -1173,12 +1183,10 @@ fn members_of_strings_nodes_numbers_and_booleans_are_plain() {
         ("AbortController", "abort", MemberKind::Method),
         // The current realm's window found for it.
         ("Blob", "arrayBuffer", MemberKind::Method),
-        // The view the front end kept, filled.
-        ("Crypto", "getRandomValues", MemberKind::Method),
-        // A constructor of an argument the whole front end converts.
-        ("Blob", "constructor", MemberKind::Constructor),
-        // Static, of an argument the whole front end converts.
-        ("AbortSignal", "any", MemberKind::Method),
+        // Another realm's window found for it (the incumbent's, the
+        // entry's).
+        ("Window", "postMessage", MemberKind::Method),
+        ("Location", "assign", MemberKind::Method),
     ] {
         assert!(!is_plain(interface, name, kind), "{interface}.{name}");
     }
@@ -1198,4 +1206,65 @@ fn members_of_strings_nodes_numbers_and_booleans_are_plain() {
     }));
     let count = plain.0.iter().filter(|member| member.3).count();
     assert!(count > plain.0.len() / 4, "{count} plain members");
+    let mut others: Vec<String> = plain
+        .0
+        .iter()
+        .filter(|member| !member.3)
+        .map(|member| format!("{}.{} {:?}", member.0, member.1, member.2))
+        .collect();
+    others.sort();
+    // Every other member, by name: the ones that leave script to run, that
+    // find another realm's window (the incumbent's, the entry's, `this`'s
+    // relevant one), the cross-origin ones of those, and the legacy
+    // factories. A type that stops being plain adds its members here.
+    assert_eq!(
+        others,
+        [
+            "AbortController.abort Method",
+            "Blob.arrayBuffer Method",
+            "Blob.bytes Method",
+            "Blob.text Method",
+            "CustomElementRegistry.define Method",
+            "CustomElementRegistry.upgrade Method",
+            "Document.location Setter",
+            "EventTarget.dispatchEvent Method",
+            "FileReader.abort Method",
+            "HTMLElement.blur Method",
+            "HTMLElement.click Method",
+            "HTMLElement.focus Method",
+            "HTMLFormElement.reset Method",
+            "HTMLImageElement.Image LegacyFactory",
+            "HTMLInputElement.select Method",
+            "HTMLOptionElement.Option LegacyFactory",
+            "HTMLSelectElement.showPicker Method",
+            "HTMLTextAreaElement.select Method",
+            "Location.assign Method",
+            "Location.href Setter",
+            "Location.replace Method",
+            "NodeIterator.nextNode Method",
+            "NodeIterator.previousNode Method",
+            "SVGElement.blur Method",
+            "SVGElement.focus Method",
+            "Scheduling.isInputPending Method",
+            "Selection.addRange Method",
+            "Selection.collapse Method",
+            "Selection.collapseToEnd Method",
+            "Selection.collapseToStart Method",
+            "Selection.extend Method",
+            "Selection.selectAllChildren Method",
+            "Selection.setBaseAndExtent Method",
+            "Selection.setPosition Method",
+            "TreeWalker.firstChild Method",
+            "TreeWalker.lastChild Method",
+            "TreeWalker.nextNode Method",
+            "TreeWalker.nextSibling Method",
+            "TreeWalker.parentNode Method",
+            "TreeWalker.previousNode Method",
+            "TreeWalker.previousSibling Method",
+            "WakeLockSentinel.release Method",
+            "Window.focus Method",
+            "Window.location Setter",
+            "Window.postMessage Method",
+        ]
+    );
 }

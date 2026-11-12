@@ -298,6 +298,7 @@ pub(crate) fn forward<'gc>(cx: &ApiCx<'_, 'gc>, this: Gc<'gc, History>) -> Resul
 pub struct SerializedState;
 
 impl ArgType for SerializedState {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     type Taken<T: FrontTypes> = Vec<u8>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = &'a [u8];

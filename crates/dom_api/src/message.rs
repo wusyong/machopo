@@ -93,6 +93,7 @@ impl ArgType for WindowMessage {
 }
 
 impl ArgType for PortMessage {
+    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = false;
     type Taken<T: FrontTypes> = MessageTaken<T::Node, T::Str>;

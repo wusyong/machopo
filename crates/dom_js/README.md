@@ -26,7 +26,7 @@ V8 的 callback（templates.rs 的 Member<M>）
 
 拿著狀態的只有第 2 步，那時 scope 被佔住，所以 V8 不會在裡面配置、GC（下面的「V8 不在 DOM 的操作裡配置」）。
 
-**參數和結果單純的成員走另一個 front**（`info_front.rs` 的 `InfoFront`、`templates.rs` 的 `InfoMember<M>`，`bindings::StateInfoMethod`）：`dom_api` 標成 `TypedMember::PLAIN` 的（物件的 getter、setter、method，參數是字串、數字、布林、節點和 DOM 的其他物件，callback、`any` 的值、rest、個數不定的節點或字串，結果是這些、null 或沒有；表上九成多的 getter、setter、method），callback 只拿 V8 的 `FunctionCallbackInfo`（`bindings::StateInfo`），像 Blink 產生的 callback：
+**參數和結果單純的成員走另一個 front**（`info_front.rs` 的 `InfoFront`、`templates.rs` 的 `InfoMember<M>`，`bindings::StateInfoMethod`）：`dom_api` 標成 `TypedMember::PLAIN` 的（物件的 getter、setter、method，參數是字串、數字、布林、節點和 DOM 的其他物件，callback、`any` 的值、rest、個數不定的節點或字串，以及操作前整個讀成 DOM 的值的（sequence、形狀特別的 dictionary、structured clone、keyframes：每個在當場建的 scope 裡由 `V8Front` 的那段程式讀），結果是這些、null 或沒有；表上除了會讓 script 跑的、要找別的 realm 的 window 的和 legacy factory 之外的所有 getter、setter、method、constructor、static），callback 只拿 V8 的 `FunctionCallbackInfo`（`bindings::StateInfo`），像 Blink 產生的 callback：
 
 ```text
 V8 的 callback（templates.rs 的 InfoMember<M>）
