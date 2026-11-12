@@ -498,6 +498,74 @@ fn nodes_or_strings_are_taken_as_they_are() {
     );
 }
 
+/// An indexed getter's interceptor (`list[i]`) takes the path with the
+/// callback's info alone: its index read as the number it is, an item
+/// that has a wrapper given with no scope. No item (past the end: null,
+/// or an empty string) isn't intercepted, so the property is undefined
+/// (V8 looks on the prototype).
+#[test]
+fn an_indexed_getter_is_given_the_info_alone() {
+    let mut env = env();
+    env.eval(
+        "var t = d.createTextNode('x'); n.appendChild(t); n.className = 'a b'; \
+         var list = n.childNodes, kids = n.children, classes = n.classList, attrs = n.attributes; \
+         var held = [list[0], list[1], kids[0], attrs[0], attrs[1], classes[0], classes[1]];",
+    );
+    for (source, value) in [
+        ("list[0] === p", "true"),
+        ("list[1] === t", "true"),
+        ("list[2]", "undefined"),
+        ("list[4294967294]", "undefined"),
+        ("kids[0] === p", "true"),
+        ("kids[1]", "undefined"),
+        ("attrs[0] === held[3]", "true"),
+        ("attrs[5]", "undefined"),
+        ("classes[0]", "a"),
+        ("classes[1]", "b"),
+        ("classes[2]", "undefined"),
+    ] {
+        let (found, made) = scopes(&mut env, source);
+        assert_eq!(found, value, "{source}");
+        assert_eq!(made, 0, "{source}");
+    }
+    // What the interceptor's other callbacks tell is as before: the
+    // indices there are, in order; none past the end; read-only.
+    for (source, value) in [
+        ("list[0] === list.item(0)", "true"),
+        // An empty string is no item (a style's `item` past its end).
+        ("n.style[0]", "undefined"),
+        ("n.style.item(0)", ""),
+        ("n.style.color = 'red'; n.style[0]", "color"),
+        ("0 in list", "true"),
+        ("2 in list", "false"),
+        ("Object.keys(list).join()", "0,1"),
+        ("[...list].length", "2"),
+        (
+            "Array.prototype.map.call(kids, (k) => k.localName).join()",
+            "p",
+        ),
+        ("list[0] = 7; list[0] === p", "true"),
+        ("Object.getOwnPropertyDescriptor(list, 0).writable", "false"),
+        ("list['0'] === p", "true"),
+        ("list[-1]", "undefined"),
+        ("list[0.5]", "undefined"),
+        // An item with no wrapper yet has one made (a scope), the same
+        // one after.
+        ("d.createElement('ul').childNodes[0]", "undefined"),
+        (
+            "var ul = d.createElement('ul'); ul.innerHTML = '<li></li>'; \
+             var li = ul.childNodes[0]; li === ul.childNodes[0] && li.localName",
+            "li",
+        ),
+    ] {
+        assert_eq!(env.eval(source), value, "{source}");
+    }
+    env.eval("var fresh = d.createElement('ol'); fresh.innerHTML = '<li></li>'; var freshList = fresh.childNodes;");
+    let (found, made) = scopes(&mut env, "freshList[0].localName");
+    assert_eq!(found, "li");
+    assert!(made >= 1, "a wrapper made for the item");
+}
+
 /// A constructor's new object is the wrapper of what it constructs: one
 /// wrapper made, counted as any other, and none made again as the object
 /// is given back.

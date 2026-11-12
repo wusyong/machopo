@@ -210,6 +210,12 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
     做完之後前 9 個在 trait 裡沒有會 abort 的預設實作（新增這類方法卻沒在新的 front 實作是編不過），標記型別和掃描裡「函式呼叫了什麼」那一半拿掉。不選繼續加標記（`Unplain<A>`）、把掃描擴到所有種類：仍然是事後發現，文字比對有看不到的地方。不選把 trait 拆成兩個（決定 31 已經不選）。Blink 只有一種產生的 callback，沒有「這個成員能不能走某條路」的判斷。這些成員也因此從舊的 front 搬到新的。
     - **4h（constructor 的外殼）沒有新的選擇**，照決定 17、34：只拿 info 的 callback（沒有 signature，`Unsigned`），`this` 是 V8 做的新物件。`HTMLElement` 的 constructor 也走新的 front，但每次建一個 scope 檢查 `new.target` 是不是 `HTMLElement` 本身（保留的成本）。legacy factory（`new Option()`、`new Image()`，2 個）沒動。
     - **一個 dictionary 的成員在一個 scope 裡讀完**（量測 4h 時找到帶 init 的 constructor 變慢）：`Front::reading` 和產生的 `ReadDict`。Blink 讀 dictionary 是在 callback 自己的 handle scope 裡逐個 `Get`，沒有額外的 scope。
+36. **4i 分兩步，4j 拆成四段**（2026-11-12）：
+    - interceptor（`list[0]`、`dataset.a`）現在全走舊的做法，named 的是另寫的一個小 front（`PropertyFront`）。量到的（指令數（cycle））：`list.item(0)` 257（52）對 `list[0]` 686（145）、超出範圍的 `list[9]` 1202（234）、`children[0]` 761、`classList[0]` 791、`attributes[0]` 785、`children.px` 1847、`attributes.id` 1848、`dataset.a` 1310、`dataset.a = '1'` 1814。Blink 的 interceptor 是產生的 callback、直接拿 `PropertyCallbackInfo`，和一般成員同一個形狀。
+    - **4i-1 只做 indexed getter**，**4i-2 做 named 的 getter 和 setter**（做之前再列要決定的事：named property 的規則多，`PropertyFront` 要重做）；很少用的（indexed setter、iterator 的 pairs、named 的刪除、查詢和列舉）留到 4l。不選一次做完（21 個成員、named 的所有規則一起動，出錯時難分辨）。
+    - fork 再加一個只有 Rust 的讀法：從 `PropertyCallbackInfo` 不建 scope 取得 isolate。
+    - `style.color` 4052 條指令卻 3293 個 cycle，比例和其他成員差很多，不像是外殼的成本：不在這份 RFC 查，記在「之後的可能」。
+    - **4j 原本包了五件性質不同的事**（決定 30、34 累積下來的）：拆成 4j 剩下的參數型別、4k 會呼叫 script 的成員、4l cross-origin 和留下的 interceptor、4m 冷的路和刪掉舊的 front。4j 到 4l 彼此獨立，4m 在最後。
 
 ## 待決定
 
@@ -220,3 +226,5 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
 - 進來的字串改成 external（決定 7）：V8 的 sandbox 打開之後短字串也改得了，那時再做，照 Blink 把名稱的編號和 intern 過的值記在 resource 上（原型和數字在 `progress.md`、`prototypes/external-strings.patch`）。
 - 操作可以巢狀：DOM 做到一半呼叫 script 不用結束操作。
 - wasm 的 front 照同樣的方式量。
+- `style.color`（`CSSStyleDeclaration` 的 named getter）4052 條指令、3293 個 cycle（決定 36）：cycle 的比例比其他成員高得多，看起來是 CSS 那一側每次重做某件事，不是 binding 的外殼。另外查。
+- `HTMLElement` 的 constructor 每次建一個 scope 檢查 `new.target` 是不是 `HTMLElement` 本身（決定 35）：要不建 scope 拿到 realm 的 interface 物件，或換一種比法。

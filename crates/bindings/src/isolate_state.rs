@@ -214,6 +214,12 @@ pub trait StateInfoMethod<T>: 'static {
     fn call(info: StateInfo<'_, T>);
 }
 
+/// An indexed getter given V8's callback info alone (`StateIndexInfo`):
+/// what `set_state_info_indexed_getter` calls for `object[index]`.
+pub trait StateInfoIndexedGetter<T>: 'static {
+    fn get(info: StateIndexInfo<'_, T>) -> v8::Intercepted;
+}
+
 /// A function given V8's callback info alone, as `StateInfoMethod`, its
 /// receiver unchecked (a static operation's: it has no signature): what
 /// `state_info_function_template` calls.
@@ -397,6 +403,124 @@ pub struct StateInfo<'s, T, K = Signed> {
     _state: PhantomData<fn() -> (T, K)>,
 }
 
+/// What a callback given V8's callback info alone reads through it,
+/// whichever kind of callback it is (a function's `StateInfo`, an indexed
+/// getter's `StateIndexInfo`): the isolate, the state with what of V8 its
+/// holder may use, and a scope where it needs one.
+pub trait InfoState<'s, T> {
+    /// The isolate, no scope made.
+    fn isolate(&mut self) -> &mut v8::Isolate;
+    /// The state, shared, and what of V8 its holder may use.
+    fn state(&mut self) -> (&T, InfoNoGc<'_, 's>);
+    /// The state, and what of V8 its holder may use.
+    fn state_mut(&mut self) -> (&mut T, InfoNoGc<'_, 's>);
+    /// `f` of a scope made now and the call's result.
+    fn with_scope<R>(
+        &mut self,
+        f: impl FnOnce(StateScope<'_, 's, 's, T>, v8::ReturnValue<'s, v8::Value>) -> R,
+    ) -> R;
+}
+
+impl<'s, T: Any, K> InfoState<'s, T> for StateInfo<'s, T, K> {
+    #[inline(always)]
+    fn isolate(&mut self) -> &mut v8::Isolate {
+        StateInfo::isolate(self)
+    }
+
+    #[inline(always)]
+    fn state(&mut self) -> (&T, InfoNoGc<'_, 's>) {
+        StateInfo::state(self)
+    }
+
+    #[inline(always)]
+    fn state_mut(&mut self) -> (&mut T, InfoNoGc<'_, 's>) {
+        StateInfo::state_mut(self)
+    }
+
+    #[inline(always)]
+    fn with_scope<R>(
+        &mut self,
+        f: impl FnOnce(StateScope<'_, 's, 's, T>, v8::ReturnValue<'s, v8::Value>) -> R,
+    ) -> R {
+        StateInfo::with_scope(self, f)
+    }
+}
+
+/// An indexed getter's interceptor's info (V8's `PropertyCallbackInfo`)
+/// and its index, its isolate's state a `T`: as `StateInfo` is a
+/// function's, with no scope made (Blink's generated
+/// `IndexedPropertyGetterCallback` takes the same). One a callback, its
+/// trampoline's.
+pub struct StateIndexInfo<'s, T> {
+    info: &'s v8::PropertyCallbackInfo<v8::Value>,
+    /// The isolate's pointer, read from the info once.
+    isolate: v8::Isolate,
+    index: u32,
+    _state: PhantomData<fn() -> T>,
+}
+
+impl<'s, T: Any> StateIndexInfo<'s, T> {
+    /// The index asked for.
+    #[inline(always)]
+    pub fn index(&self) -> u32 {
+        self.index
+    }
+
+    /// The object the interceptor is on: one of the template's (V8 calls
+    /// an interceptor with it), as `indexed_trampoline`'s.
+    #[inline(always)]
+    pub fn holder(&self) -> Receiver<'s> {
+        Receiver(self.info.arguments().holder())
+    }
+}
+
+impl<'s, T: Any> InfoState<'s, T> for StateIndexInfo<'s, T> {
+    #[inline(always)]
+    fn isolate(&mut self) -> &mut v8::Isolate {
+        &mut self.isolate
+    }
+
+    #[inline(always)]
+    fn state(&mut self) -> (&T, InfoNoGc<'_, 's>) {
+        let rv = v8::ReturnValue::from_property_callback_info(self.info);
+        let isolate = &mut self.isolate;
+        // SAFETY: as `StateInfo::state`'s: the state is a `T` (the
+        // interceptor was set where it is one), the isolate borrowed for
+        // as long and handed to the `InfoNoGc` alone.
+        let state = unsafe { unchecked::<T>(isolate).as_ref() };
+        (state, InfoNoGc { isolate, rv })
+    }
+
+    #[inline(always)]
+    fn state_mut(&mut self) -> (&mut T, InfoNoGc<'_, 's>) {
+        let rv = v8::ReturnValue::from_property_callback_info(self.info);
+        let isolate = &mut self.isolate;
+        // SAFETY: as `state`'s.
+        let state = unsafe { unchecked::<T>(isolate).as_mut() };
+        (state, InfoNoGc { isolate, rv })
+    }
+
+    #[inline(never)]
+    fn with_scope<R>(
+        &mut self,
+        f: impl FnOnce(StateScope<'_, 's, 's, T>, v8::ReturnValue<'s, v8::Value>) -> R,
+    ) -> R {
+        if cfg!(debug_assertions) {
+            INFO_SCOPES.set(INFO_SCOPES.get().wrapping_add(1));
+        }
+        // SAFETY: as `StateInfo::with_scope`'s, of an interceptor's info
+        // (rusty_v8's own trampoline makes its scope of it).
+        v8::callback_scope!(unsafe scope, self.info);
+        f(
+            StateScope {
+                scope,
+                _state: PhantomData,
+            },
+            v8::ReturnValue::from_property_callback_info(self.info),
+        )
+    }
+}
+
 /// A `StateInfo` of a function with a signature: its receiver is one of
 /// the isolate's templates' objects (`StateInfo::receiver`).
 pub struct Signed;
@@ -525,6 +649,22 @@ unsafe extern "C" fn info_function_trampoline<T: Any, C: StateInfoFunction<T>>(
         info: unsafe { &*info },
         _state: PhantomData,
     });
+}
+
+/// An info indexed getter's callback: V8's own (`getter_raw`), given the
+/// index and the info alone.
+unsafe extern "C" fn info_indexed_trampoline<T: Any, G: StateInfoIndexedGetter<T>>(
+    index: u32,
+    info: *const v8::PropertyCallbackInfo<v8::Value>,
+) -> v8::Intercepted {
+    // SAFETY: V8's callback info, valid for the call.
+    let info = unsafe { &*info };
+    G::get(StateIndexInfo {
+        info,
+        isolate: info.isolate(),
+        index,
+        _state: PhantomData,
+    })
 }
 
 /// The callback of `C`, given the state.
@@ -888,6 +1028,39 @@ pub fn set_state_indexed_getter<T: Any, G: StateIndexedGetter<T>>(
             .enumerator(indexed_enumerate::<T, G>)
             .data(data),
     );
+}
+
+/// As `set_state_indexed_getter`, the getter itself given V8's callback
+/// info alone (`StateInfoIndexedGetter`); with a setter of `S` if
+/// `setter`. The query and the enumerator are as before.
+///
+/// # Panics
+///
+/// If the isolate's state isn't a `T`.
+pub fn set_state_info_indexed_getter<
+    T: Any,
+    G: StateInfoIndexedGetter<T> + StateIndexedGetter<T>,
+    S: StateIndexedSetter<T>,
+>(
+    scope: &mut v8::PinScope<'_, '_>,
+    template: v8::Local<'_, v8::ObjectTemplate>,
+    data: v8::Local<'_, v8::Value>,
+    setter: bool,
+) {
+    assert!(
+        checked::<T>(scope).is_some(),
+        "a state callback's template is made where the state is one"
+    );
+    let configuration = v8::IndexedPropertyHandlerConfiguration::new()
+        .getter_raw(info_indexed_trampoline::<T, G>)
+        .query(indexed_query::<T, G>)
+        .enumerator(indexed_enumerate::<T, G>)
+        .data(data);
+    template.set_indexed_property_handler(if setter {
+        configuration.setter(indexed_set_trampoline::<T, S>)
+    } else {
+        configuration
+    });
 }
 
 /// Gives `template` (its isolate's) the indexed getter of `G` and the

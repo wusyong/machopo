@@ -1,0 +1,87 @@
+# Stage 4i-1: a plain indexed getter's interceptor (`list[i]`) is given
+# V8's callback info alone (`bindings::StateIndexInfo`, `InfoKind`'s
+# `IndexedGet`): the index read as a number, no item not intercepted.
+test = ["cargo", "test", "-q", "-p", "dom_api", "-p", "dom_js", "-p", "dom_wasm"]
+timeout = 1800
+
+[[mutant]]
+name = "a null result isn't noted as no item"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        K::note_no_item(self.noted);
+        self.no_gc.ret().set_null();'''
+to = '''        self.no_gc.ret().set_null();'''
+
+[[mutant]]
+name = "an empty string isn't noted as no item"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if value.is_empty() {
+            K::note_no_item(self.noted);
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "the index is one more"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        (index == 0).then(|| info.index())'''
+to = '''        (index == 0).then(|| info.index().wrapping_add(1))'''
+
+[[mutant]]
+name = "an indexed getter's call has no argument"
+file = "crates/dom_js/src/info_front.rs"
+from = '''    #[inline(always)]
+    fn length(_: &Self::Info) -> usize {
+        1
+    }'''
+to = '''    #[inline(always)]
+    fn length(_: &Self::Info) -> usize {
+        0
+    }'''
+
+[[mutant]]
+name = "no item is intercepted, an item isn't"
+file = "crates/dom_js/src/templates.rs"
+from = '''        if front.noted().0 {
+            v8::Intercepted::kNo
+        } else {
+            v8::Intercepted::kYes
+        }
+    }
+}
+
+impl<M: TypedMember> bindings::StateIndexedGetter<State> for Indexed<M> {'''
+to = '''        if front.noted().0 {
+            v8::Intercepted::kYes
+        } else {
+            v8::Intercepted::kNo
+        }
+    }
+}
+
+impl<M: TypedMember> bindings::StateIndexedGetter<State> for Indexed<M> {'''
+
+[[mutant]]
+name = "a plain indexed getter is installed as before"
+file = "crates/dom_js/src/templates.rs"
+from = '''    if const { M::PLAIN } {
+        bindings::set_state_info_indexed_getter::<State, Indexed<M>, IndexedSetter>('''
+to = '''    if const { M::PLAIN } && false {
+        bindings::set_state_info_indexed_getter::<State, Indexed<M>, IndexedSetter>('''
+
+[[mutant]]
+name = "an interface's indexed setter isn't installed"
+file = "crates/bindings/src/isolate_state.rs"
+from = '''    template.set_indexed_property_handler(if setter {
+        configuration.setter(indexed_set_trampoline::<T, S>)
+    } else {
+        configuration
+    });'''
+to = '''    let _ = setter;
+    template.set_indexed_property_handler(configuration);'''
+
+[[mutant]]
+name = "the names table's empty string isn't noted as no item"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if id == names::NONE {
+            K::note_no_item(self.noted);
+        }'''
+to = ''''''

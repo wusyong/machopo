@@ -1364,17 +1364,24 @@ fn set_indexed<'s, M: TypedMember>(
         .members
         .iter()
         .any(|member| member.kind == MemberKind::IndexedSetter);
-    if setter {
-        let data =
-            v8::Integer::new_from_unsigned(scope, u32::try_from(interface).expect("a small table"));
+    let data =
+        v8::Integer::new_from_unsigned(scope, u32::try_from(interface).expect("a small table"));
+    // A plain getter's interceptor is given V8's callback info alone, as
+    // a plain member's function (`StateInfoIndexedGetter`).
+    if const { M::PLAIN } {
+        bindings::set_state_info_indexed_getter::<State, Indexed<M>, IndexedSetter>(
+            scope,
+            instance,
+            data.into(),
+            setter,
+        );
+    } else if setter {
         bindings::set_state_indexed_properties::<State, Indexed<M>, IndexedSetter>(
             scope,
             instance,
             data.into(),
         );
     } else {
-        let data =
-            v8::Integer::new_from_unsigned(scope, u32::try_from(interface).expect("a small table"));
         bindings::set_state_indexed_getter::<State, Indexed<M>>(scope, instance, data.into());
     }
 }
@@ -1422,6 +1429,22 @@ fn install_indexed<'s, M: TypedMember>(
 /// `object[index]`: the indexed getter's typed path, its one argument the
 /// index.
 struct Indexed<M>(PhantomData<M>);
+
+/// `object[index]` of a plain getter: through the front end that is the
+/// interceptor's info, its index read as the number it is. A result that
+/// is null or an empty string is no item (as `V8Front::returned_no_item`
+/// tells): V8 then looks on the prototype.
+impl<M: TypedMember> bindings::StateInfoIndexedGetter<State> for Indexed<M> {
+    fn get(info: bindings::StateIndexInfo<'_, State>) -> v8::Intercepted {
+        let mut front = crate::info_front::InfoFront::<crate::info_front::IndexedGet>::new(info);
+        M::call(&mut front);
+        if front.noted().0 {
+            v8::Intercepted::kNo
+        } else {
+            v8::Intercepted::kYes
+        }
+    }
+}
 
 impl<M: TypedMember> bindings::StateIndexedGetter<State> for Indexed<M> {
     fn get<'s>(

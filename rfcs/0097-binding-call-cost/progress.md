@@ -18,8 +18,12 @@
 | 4g static 成員和 overload 的外殼；目前的 realm 的 window 從 isolate 讀（決定 34） | 完成 | 2026-11-12 |
 | 4h 之前：新的 front 補齊操作這一側的方法（`OpFront` 裡它沒有、成員的函式卻呼叫得到的 9 個：刪掉或實作，不再有會 abort 的預設實作；決定 35） | 完成 | 2026-11-12 |
 | 4h constructor 的外殼（做到一半時停下來做上一列） | 完成 | 2026-11-12 |
-| 4i named、indexed property 的外殼 | 還沒開始 | |
-| 4j 冷的路搬成新的 front 自己的（會呼叫 script 的 33 個先逐個量、列出值得改結構的；cross-origin 的 16 個；決定 34）；拿掉 `V8Front`、`Call` 和 `PLAIN`（連同它的檢查：`PLAIN_FRONT_METHODS`、`PLAIN_OP_METHODS`、`dom_api` 的 `plain` 測試、`dom_js` 的 `the_plain_methods_are_the_info_front_ends_own`、`ReadImageData`、`docs/test-gaps.md` 的那一列） | 還沒開始 | |
+| 4i-1 indexed getter 的 interceptor（`list[i]`、`children[i]`、`classList[i]`、`attributes[i]`；決定 36） | 完成 | 2026-11-12 |
+| 4i-2 named 的 getter 和 setter 的 interceptor（`dataset.a`、`children.px`、`attributes.id`）：做之前再列要決定的事 | 還沒開始 | |
+| 4j 剩下的參數型別改成 handle（`fetch` 的 init、`postMessage`、keyframes、事件 init 的 `view` 和 `relatedTarget`、`Uint8ClampedArray`…），連同卡在這些型別的 constructor；`kept_object`、`kept_target`、`store_array` 跟著拿掉 | 還沒開始 | |
+| 4k 會呼叫 script 的 33 個成員：先逐個量、列出值得改結構的，再決定 | 還沒開始 | |
+| 4l cross-origin 的 16 個成員；4i 留下的 interceptor（indexed setter、iterator 的 pairs、named 的刪除、查詢和列舉）；legacy factory | 還沒開始 | |
+| 4m 冷的路搬成新的 front 自己的（現在當場建 scope、交給 `V8Front`）；拿掉 `V8Front`、`Call`、`Kept` 和 `PLAIN`（連同它的檢查：`PLAIN_FRONT_METHODS`、`PLAIN_OP_METHODS`、`dom_api` 的 `plain` 測試、`dom_js` 的 `the_plain_methods_are_the_info_front_ends_own`、`docs/test-gaps.md` 的那一列） | 還沒開始 | |
 | 收尾：`nodeType`、`getAttribute` 的 callback 和 Chrome 的逐條指令對照，列出剩下的差（決定 20） | 還沒開始 | |
 
 ## 驗收
@@ -383,3 +387,15 @@
 - 測試：`dom_js` 的 `handlers::what_a_function_asks_of_the_operations_front_end_every_front_end_has`（丟出來的就是 reason 那個物件、沒 abort 的不丟、預設的 `AbortError`；像素寫入再讀回、新的 `ImageData` 是零、`putImageData` 不建 scope；`new Mine()`、`new HTMLElement()` 和沒有定義的 `new.target` 是 `TypeError`、upgrade 的元素是原來那個、prototype 是 class 的；`fetch` 的 signal abort 時 reject 成 reason）、`handlers::a_constructor_is_given_the_info_alone`（`new Event` 等不建 scope；`new.target` 的 prototype；沒用 `new`、參數不夠的 `TypeError` 訊息；好幾個 constructor 的照參數選；一個 dictionary 只建一個 scope）、`info_front::a_constructed_objects_wrapper_is_counted`；`dom_api` 的 `table` 的清單。寫測試時弄錯的：這個測試環境沒有 raster，`fillRect` 之後 `getImageData` 是零（原有的 canvas 測試也是用 `putImageData` 寫入）；把分號換成逗號的寫法弄壞了 class 的內容；回傳字串和非整數的 getter 本來就建 scope；`addEventListener` 之後回報 heap 長大的那個 scope 不是 dictionary 的。
 - mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4h.toml`，22 個都抓到。第一次 20 個裡 19 個：「constructor 建的物件不計入 wrapper 的計數」沒抓到，補了 `a_constructed_objects_wrapper_is_counted`。
 - 跑過：`cargo test -p bindings -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`ci.py third-party`、`test.py wpt dom html/dom html/webappapis custom-elements html/semantics/forms html/canvas/element url fetch/api/response fetch/api/request fetch/api/abort FileAPI intersection-observer shadow-dom`（144990 個結果都照預期；失敗的 22 個 reftest 都是本來就預期失敗的）。
+
+**第 4i-1 段：indexed getter 的 interceptor**（2026-11-12，決定 36）：
+
+- fork（只改 Rust，`cc74cef`，還沒 push）：`PropertyCallbackInfo::isolate`、`arguments`（不建 `CallbackScope` 讀 isolate、holder、data）；`third_party.toml` 的 `rev` 跟著改。
+- `bindings`：`InfoState<'s, T>`（`isolate`、`state`、`state_mut`、`with_scope`：`StateInfo` 和新的 `StateIndexInfo` 共同的介面）；`StateIndexInfo<'s, T>`（interceptor 的 info、讀出來的 isolate、索引；`index()`、`holder()`）；`StateInfoIndexedGetter`、`set_state_info_indexed_getter`（getter 用 `getter_raw`，查詢和列舉照舊，有沒有 setter 是參數）；`soundness.md` 補一條。
+- `dom_js`：`InfoKind::Info` 是 info 的型別本身（原本是 `Signed`、`Unsigned` 的標記），參數、個數、`this` 都經過 kind 讀（`arg`、`length`、`number_arg`、`this_object`；交給 `V8Front` 的參數來源分成 `seed` 和 `args`，index 的 V8 數字在有 scope 時才建）；`IndexedGet`；`InfoFront` 多 `noted`（`K::Noted`：indexed getter 的「沒有這一項」，其他 kind 是 `()`）。`templates.rs`：`Indexed<M>` 的 `StateInfoIndexedGetter`，plain 的 getter 用新的安裝函式。
+- 找到、修掉的（新的測試）：`n.style[0]`（沒有宣告）是空字串而不是 `undefined`。`CSSStyleDeclaration.item` 過了最後一個給的是名稱表的空字串（`DomStr::Name(NONE)`），經過 `ret_name` 不是 `ret_string`，沒記成「沒有這一項」；原有的 467 個測試沒有一個看這個。`ret_name` 也記。
+- 實際走新的 front 的成員：2678 → 2682（沒有名字的 indexed getter 4 個；有名字的 10 個的函式那一份本來就是，這次換的是它們的 interceptor）。
+- 4h 和這一段的 binary 各跑七次取最小（`perf stat`，指令數（cycle））：`list[0]` 686（143）→ 440（84），`list[9]`（超出範圍）1202（231）→ 969（178），`children[0]` 761（152）→ 515（96），`classList[0]` 791（168）→ 521（103），`attributes[0]` 785（159）→ 538（102），`n.childNodes[0]` 902（188）→ 656（128）；沒變的：`nodeType` 109、`list.item(0)` 257、`list.length` 150、`children.px` 1847、`dataset.a` 1310、`dataset.a = '1'` 1814、`attributes.id` 1848（named 的是 4i-2）。`list[0]` 還比 `list.item(0)` 多 183 條：V8 的 indexed interceptor 那條路本身（不是 inline cache 直接呼叫的 API 函式），加上從 info 讀 isolate、holder、回傳值的三個 C++ 呼叫（函式的 info 是從 frame 的固定位置讀的）。
+- 測試：`dom_js` 的 `info_front::an_indexed_getter_is_given_the_info_alone`（`childNodes`、`children`、`attributes`、`classList` 的項不建 scope；過了最後一個、很大的索引是 `undefined`；空字串的沒有這一項（`style[0]`）；`in`、`Object.keys`、展開、唯讀、字串的索引、負的和不是整數的照舊；沒有 wrapper 的項建一個、之後同一個）。寫測試時弄錯的：`list.item(0)` 是 method、呼叫完會回報 heap 的成長，那個 scope 不是 getter 的；回傳字串的 `.name` 本來就建 scope。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4i.toml`，8 個裡 7 個抓到。沒抓到的是「`ret_string` 的空字串不記成沒有這一項」：表上沒有 indexed getter 經過 `ret_string` 給空字串（`item` 給 `Option` 的過了最後一個是 null，`CSSStyleDeclaration` 的給名稱表的空字串、走 `ret_name`），等價；檢查留著，和 `V8Front::returned_no_item` 一致。
+- 跑過：`cargo test -p bindings -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`ci.py third-party`、`test.py wpt dom html/dom html/webappapis custom-elements html/semantics/forms css/cssom`（136064 個結果都照預期）。

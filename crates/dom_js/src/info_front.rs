@@ -16,6 +16,7 @@
 //! makes a scope and the whole front end (`front::V8Front`) then, out of
 //! line, and is done by it.
 
+use bindings::InfoState;
 use dom::{
     DomString, EventTargetImpl, NameId, Node, NodeRef, NodeRoot, ObjectRef, ObjectRoot, TargetRef,
     Window, names,
@@ -49,31 +50,53 @@ pub(crate) enum PendingNode {
     Construct(Persistent<dom::CustomElementDefinition>, NodeRoot),
 }
 
-/// What an info callback's function is, known as a member's callback is
-/// made (the front end is of one): a method, whose receiver V8 checked
-/// against its signature; a static operation, which has none; a
-/// constructor, whose `this` is the new object V8 made for the call.
+/// What an info callback is, known as a member's callback is made (the
+/// front end is of one): a method, whose receiver V8 checked against its
+/// signature; a static operation, which has none; a constructor, whose
+/// `this` is the new object V8 made for the call; an indexed getter's
+/// interceptor, whose one argument is the index.
 pub(crate) trait InfoKind<'s>: Sized + 'static {
-    /// What V8 checked before the call (`bindings::Signed`, `Unsigned`).
-    type Info: 'static;
+    /// V8's callback info (`bindings::StateInfo`, `StateIndexInfo`).
+    type Info: InfoState<'s, State>;
     /// The receiver, the new object, or nothing.
     type This: Copy;
-    /// What the whole front end reads the call from.
+    /// What the whole front end reads the call from, and what of the
+    /// info it is made of (itself, or with a scope: an index's number).
     type Args: front::CallArgs<'s>;
+    type Seed;
+    /// What the kind's call notes as its result is given (an indexed
+    /// getter: whether there was no item).
+    type Noted: Default;
 
-    fn this(info: &bindings::StateInfo<'s, State, Self::Info>) -> Self::This;
-    fn args(info: &bindings::StateInfo<'s, State, Self::Info>) -> Self::Args;
+    fn this(info: &Self::Info) -> Self::This;
+    fn seed(info: &Self::Info) -> Self::Seed;
+    fn args(seed: Self::Seed, scope: &mut v8::PinScope<'s, '_>) -> Self::Args;
+    /// How many arguments the call has, and one of them.
+    fn length(info: &Self::Info) -> usize;
+    fn arg(info: &Self::Info, index: usize) -> v8::Local<'s, v8::Value>;
+    /// Argument `index` as a number the info holds as one (an indexed
+    /// getter's index), which no handle is made of.
+    #[inline(always)]
+    fn number_arg(_: &Self::Info, _: usize) -> Option<u32> {
+        None
+    }
     /// The receiver made the DOM's, if it is a `T`.
     fn this_as<'gc, T: elise::HeapType>(
         no_gc: &mut bindings::InfoNoGc<'_, 's>,
         cx: &ApiCx<'_, 'gc>,
         this: Self::This,
     ) -> Option<elise::Gc<'gc, T>>;
+    /// The call's `this` object, whatever V8 checked of it.
+    fn this_object(info: &Self::Info) -> v8::Local<'s, v8::Object>;
     /// A constructor's new object, which the object it makes is wrapped
     /// by.
     fn new_object(this: Self::This) -> v8::Local<'s, v8::Object>;
     /// A constructor's `new.target`.
     fn new_target(this: Self::This) -> v8::Local<'s, v8::Value>;
+    /// The result is null or an empty string: an indexed getter's no
+    /// item.
+    #[inline(always)]
+    fn note_no_item(_: &mut Self::Noted) {}
 }
 
 /// A method's (an attribute's accessor's).
@@ -82,23 +105,56 @@ pub(crate) struct Method;
 pub(crate) struct Static;
 /// A constructor's.
 pub(crate) struct Construct;
+/// An indexed getter's interceptor's.
+pub(crate) struct IndexedGet;
+
+/// A function's argument `index`, undefined past the last.
+#[inline(always)]
+fn function_arg<'s, K>(
+    info: &bindings::StateInfo<'s, State, K>,
+    index: usize,
+) -> v8::Local<'s, v8::Value> {
+    front::arg(&info.args(), index)
+}
+
+#[inline(always)]
+fn function_length<K>(info: &bindings::StateInfo<'_, State, K>) -> usize {
+    usize::try_from(info.args().length()).unwrap_or(0)
+}
 
 impl<'s> InfoKind<'s> for Method {
-    type Info = bindings::Signed;
+    type Info = bindings::StateInfo<'s, State>;
     type This = bindings::Receiver<'s>;
     type Args = Checked<'s>;
+    type Seed = Checked<'s>;
+    type Noted = ();
 
     #[inline(always)]
-    fn this(info: &bindings::StateInfo<'s, State>) -> Self::This {
+    fn this(info: &Self::Info) -> Self::This {
         info.receiver()
     }
 
     #[inline(always)]
-    fn args(info: &bindings::StateInfo<'s, State>) -> Checked<'s> {
+    fn seed(info: &Self::Info) -> Checked<'s> {
         Checked {
             args: info.args(),
             this: info.receiver(),
         }
+    }
+
+    #[inline(always)]
+    fn args(seed: Checked<'s>, _: &mut v8::PinScope<'s, '_>) -> Checked<'s> {
+        seed
+    }
+
+    #[inline(always)]
+    fn length(info: &Self::Info) -> usize {
+        function_length(info)
+    }
+
+    #[inline(always)]
+    fn arg(info: &Self::Info, index: usize) -> v8::Local<'s, v8::Value> {
+        function_arg(info, index)
     }
 
     /// The receiver V8 checked against the function's signature: its map
@@ -112,6 +168,11 @@ impl<'s> InfoKind<'s> for Method {
         no_gc.unwrap_receiver::<T>(cx.gc, this)
     }
 
+    #[inline(always)]
+    fn this_object(info: &Self::Info) -> v8::Local<'s, v8::Object> {
+        info.args().this()
+    }
+
     fn new_object(_: Self::This) -> v8::Local<'s, v8::Object> {
         unreachable!("a method constructs nothing")
     }
@@ -122,16 +183,33 @@ impl<'s> InfoKind<'s> for Method {
 }
 
 impl<'s> InfoKind<'s> for Static {
-    type Info = bindings::Unsigned;
+    type Info = bindings::StateInfo<'s, State, bindings::Unsigned>;
     type This = ();
     type Args = v8::FunctionCallbackArguments<'s>;
+    type Seed = v8::FunctionCallbackArguments<'s>;
+    type Noted = ();
 
     #[inline(always)]
-    fn this(_: &bindings::StateInfo<'s, State, bindings::Unsigned>) {}
+    fn this(_: &Self::Info) {}
 
     #[inline(always)]
-    fn args(info: &bindings::StateInfo<'s, State, bindings::Unsigned>) -> Self::Args {
+    fn seed(info: &Self::Info) -> Self::Seed {
         info.args()
+    }
+
+    #[inline(always)]
+    fn args(seed: Self::Seed, _: &mut v8::PinScope<'s, '_>) -> Self::Args {
+        seed
+    }
+
+    #[inline(always)]
+    fn length(info: &Self::Info) -> usize {
+        function_length(info)
+    }
+
+    #[inline(always)]
+    fn arg(info: &Self::Info, index: usize) -> v8::Local<'s, v8::Value> {
+        function_arg(info, index)
     }
 
     fn this_as<'gc, T: elise::HeapType>(
@@ -140,6 +218,11 @@ impl<'s> InfoKind<'s> for Static {
         (): (),
     ) -> Option<elise::Gc<'gc, T>> {
         unreachable!("a static operation has no receiver")
+    }
+
+    #[inline(always)]
+    fn this_object(info: &Self::Info) -> v8::Local<'s, v8::Object> {
+        info.args().this()
     }
 
     fn new_object((): ()) -> v8::Local<'s, v8::Object> {
@@ -152,23 +235,40 @@ impl<'s> InfoKind<'s> for Static {
 }
 
 impl<'s> InfoKind<'s> for Construct {
-    type Info = bindings::Unsigned;
+    type Info = bindings::StateInfo<'s, State, bindings::Unsigned>;
     /// The call's `this`: called with `new` (`InfoFront::construct`
     /// checked), the object V8 made of the interface's instance template
     /// (with `new.target`'s prototype, a subclass's), wrapping nothing;
     /// and `new.target`.
     type This = (v8::Local<'s, v8::Object>, v8::Local<'s, v8::Value>);
     type Args = v8::FunctionCallbackArguments<'s>;
+    type Seed = v8::FunctionCallbackArguments<'s>;
+    type Noted = ();
 
     #[inline(always)]
-    fn this(info: &bindings::StateInfo<'s, State, bindings::Unsigned>) -> Self::This {
+    fn this(info: &Self::Info) -> Self::This {
         let args = info.args();
         (args.this(), args.new_target())
     }
 
     #[inline(always)]
-    fn args(info: &bindings::StateInfo<'s, State, bindings::Unsigned>) -> Self::Args {
+    fn seed(info: &Self::Info) -> Self::Seed {
         info.args()
+    }
+
+    #[inline(always)]
+    fn args(seed: Self::Seed, _: &mut v8::PinScope<'s, '_>) -> Self::Args {
+        seed
+    }
+
+    #[inline(always)]
+    fn length(info: &Self::Info) -> usize {
+        function_length(info)
+    }
+
+    #[inline(always)]
+    fn arg(info: &Self::Info, index: usize) -> v8::Local<'s, v8::Value> {
+        function_arg(info, index)
     }
 
     fn this_as<'gc, T: elise::HeapType>(
@@ -177,6 +277,11 @@ impl<'s> InfoKind<'s> for Construct {
         _: Self::This,
     ) -> Option<elise::Gc<'gc, T>> {
         unreachable!("a constructor has no receiver")
+    }
+
+    #[inline(always)]
+    fn this_object(info: &Self::Info) -> v8::Local<'s, v8::Object> {
+        info.args().this()
     }
 
     #[inline(always)]
@@ -190,14 +295,92 @@ impl<'s> InfoKind<'s> for Construct {
     }
 }
 
+/// Whether an indexed getter's result was no item (null, or an empty
+/// string: `InfoKind::note_no_item`).
+#[derive(Default)]
+pub(crate) struct NoItem(pub(crate) bool);
+
+impl<'s> InfoKind<'s> for IndexedGet {
+    type Info = bindings::StateIndexInfo<'s, State>;
+    /// The interceptor's holder: an object of the template's.
+    type This = bindings::Receiver<'s>;
+    type Args = front::IndexArgs<'s>;
+    /// The holder and the index.
+    type Seed = (bindings::Receiver<'s>, u32);
+    type Noted = NoItem;
+
+    #[inline(always)]
+    fn this(info: &Self::Info) -> Self::This {
+        info.holder()
+    }
+
+    #[inline(always)]
+    fn seed(info: &Self::Info) -> Self::Seed {
+        (info.holder(), info.index())
+    }
+
+    /// The index a number of V8's, made now.
+    fn args((this, index): Self::Seed, scope: &mut v8::PinScope<'s, '_>) -> Self::Args {
+        front::IndexArgs {
+            index: v8::Integer::new_from_unsigned(scope, index).into(),
+            this: this.object(),
+            receiver: Some(this),
+            undefined: v8::undefined(scope).into(),
+        }
+    }
+
+    #[inline(always)]
+    fn length(_: &Self::Info) -> usize {
+        1
+    }
+
+    fn arg(_: &Self::Info, _: usize) -> v8::Local<'s, v8::Value> {
+        unreachable!("an indexed getter's argument is its index, read as a number")
+    }
+
+    #[inline(always)]
+    fn number_arg(info: &Self::Info, index: usize) -> Option<u32> {
+        (index == 0).then(|| info.index())
+    }
+
+    #[inline(always)]
+    fn this_as<'gc, T: elise::HeapType>(
+        no_gc: &mut bindings::InfoNoGc<'_, 's>,
+        cx: &ApiCx<'_, 'gc>,
+        this: Self::This,
+    ) -> Option<elise::Gc<'gc, T>> {
+        no_gc.unwrap_receiver::<T>(cx.gc, this)
+    }
+
+    #[inline(always)]
+    fn this_object(info: &Self::Info) -> v8::Local<'s, v8::Object> {
+        info.holder().object()
+    }
+
+    fn new_object(_: Self::This) -> v8::Local<'s, v8::Object> {
+        unreachable!("an indexed getter constructs nothing")
+    }
+
+    fn new_target(_: Self::This) -> v8::Local<'s, v8::Value> {
+        unreachable!("an indexed getter has no `new.target`")
+    }
+
+    #[inline(always)]
+    fn note_no_item(noted: &mut NoItem) {
+        noted.0 = true;
+    }
+}
+
 /// A plain member's call out of its operation.
 pub(crate) struct InfoFront<'s, K: InfoKind<'s> = Method> {
-    info: bindings::StateInfo<'s, State, K::Info>,
+    info: K::Info,
     /// Whether the member asks for the current realm's window
     /// (`Front::prepare_window`, a static operation's): told before the
     /// operation, found in it (`InfoOp::current_window`). Known as the
     /// member's call is expanded.
     window: bool,
+    /// What the call notes as its result is given.
+    noted: K::Noted,
 }
 
 /// A plain member's call in its operation: what of V8 it may use and the
@@ -206,6 +389,7 @@ pub(crate) struct InfoOp<'o, 's, K: InfoKind<'s> = Method> {
     no_gc: bindings::InfoNoGc<'o, 's>,
     this: K::This,
     window: bool,
+    noted: &'o mut K::Noted,
     caches: &'o Caches,
 }
 
@@ -253,7 +437,7 @@ impl<'s, K: InfoKind<'s>> FrontTypes for InfoOp<'_, 's, K> {
 
 impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
     #[inline(always)]
-    pub(crate) fn new(info: bindings::StateInfo<'s, State, K::Info>) -> Self {
+    pub(crate) fn new(info: K::Info) -> Self {
         // As `V8Front::new`'s: every way into script counts itself.
         debug_assert!(
             bindings::trace::in_script(),
@@ -262,7 +446,14 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
         Self {
             info,
             window: false,
+            noted: K::Noted::default(),
         }
+    }
+
+    /// What the call noted as its result was given.
+    #[inline(always)]
+    pub(crate) fn noted(&self) -> &K::Noted {
+        &self.noted
     }
 
     /// `f` of the whole front end, a scope made for it: what allocates,
@@ -270,9 +461,11 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
     #[cold]
     #[inline(never)]
     fn with_front<R>(&mut self, f: impl FnOnce(&mut V8Front<'_, 's, 's, 's, K::Args>) -> R) -> R {
-        let args = K::args(&self.info);
-        self.info
-            .with_scope(|scope, rv| f(&mut V8Front::new(scope, &args, rv)))
+        let seed = K::seed(&self.info);
+        self.info.with_scope(|mut scope, rv| {
+            let args = K::args(seed, scope.scope());
+            f(&mut V8Front::new(scope, &args, rv))
+        })
     }
 
     /// A string argument that doesn't lend its text in place (not a
@@ -330,6 +523,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
             no_gc,
             this,
             window,
+            noted: &mut self.noted,
             caches: &state.caches,
         };
         state
@@ -355,6 +549,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
             no_gc,
             this,
             window,
+            noted: &mut self.noted,
             caches,
         };
         dom.mutate(|cx| f(&ApiCx::with_layout_cell(cx, layout), &mut op))
@@ -362,15 +557,14 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
 
     #[inline(always)]
     fn has_args(&mut self, name: &str, required: usize) -> bool {
-        let given = usize::try_from(self.info.args().length()).unwrap_or(0);
-        given >= required || self.with_front(|front| front.has_args(name, required))
+        K::length(&self.info) >= required || self.with_front(|front| front.has_args(name, required))
     }
 
     /// A string that lends its text in place (most: an ASCII literal) is
     /// taken with the isolate alone.
     #[inline(always)]
     fn string_arg(&mut self, index: usize) -> Option<ArgString<'s>> {
-        let value = front::arg(&self.info.args(), index);
+        let value = K::arg(&self.info, index);
         if let Some(string) = v8::machopo::as_string(value) {
             let string = bindings::LentString::new(string);
             if string.lends(self.info.isolate()) {
@@ -382,7 +576,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
 
     #[inline(always)]
     fn nullable_string_arg(&mut self, index: usize) -> Option<Option<ArgString<'s>>> {
-        if front::arg(&self.info.args(), index).is_null_or_undefined() {
+        if K::arg(&self.info, index).is_null_or_undefined() {
             return Some(None);
         }
         self.string_arg(index).map(Some)
@@ -390,7 +584,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
 
     #[inline(always)]
     fn legacy_null_string_arg(&mut self, index: usize) -> Option<Option<ArgString<'s>>> {
-        if front::arg(&self.info.args(), index).is_null() {
+        if K::arg(&self.info, index).is_null() {
             return Some(None);
         }
         self.string_arg(index).map(Some)
@@ -398,7 +592,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
 
     #[inline(always)]
     fn node_arg(&mut self, index: usize) -> Option<Option<v8::Local<'s, v8::Object>>> {
-        let value = front::arg(&self.info.args(), index);
+        let value = K::arg(&self.info, index);
         if value.is_null_or_undefined() {
             return Some(None);
         }
@@ -416,7 +610,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         &mut self,
         index: usize,
     ) -> Option<dom_api::typed::NodeOrStr<v8::Local<'s, v8::Object>, ArgString<'s>>> {
-        let value = front::arg(&self.info.args(), index);
+        let value = K::arg(&self.info, index);
         if bindings::is_wrapper::<Node>(self.info.isolate(), value) {
             return v8::Local::<v8::Object>::try_from(value)
                 .ok()
@@ -432,7 +626,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         &mut self,
         index: usize,
     ) -> Option<Option<dom_api::typed::NodeOrLong<v8::Local<'s, v8::Object>>>> {
-        let value = front::arg(&self.info.args(), index);
+        let value = K::arg(&self.info, index);
         if value.is_null_or_undefined() {
             return Some(None);
         }
@@ -480,7 +674,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     /// wrapper is made after, in the node's relevant realm).
     #[inline(never)]
     fn prepare_new_node(&mut self, interface: usize) -> Option<(v8::Local<'s, v8::Object>, usize)> {
-        let this = self.info.args().this();
+        let this = K::this_object(&self.info);
         self.info.with_scope(|mut scope, _| {
             let current = scope.scope().get_current_context();
             if this
@@ -533,7 +727,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         index: usize,
         name: &str,
     ) -> Option<Option<Callback<v8::Local<'s, v8::Value>>>> {
-        let value = front::arg(&self.info.args(), index);
+        let value = K::arg(&self.info, index);
         if value.is_null_or_undefined() {
             return Some(None);
         }
@@ -551,7 +745,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         index: usize,
         name: &str,
     ) -> Option<Callback<v8::Local<'s, v8::Value>>> {
-        let value = front::arg(&self.info.args(), index);
+        let value = K::arg(&self.info, index);
         if value.is_function() {
             return Some(Callback(value));
         }
@@ -566,7 +760,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         index: usize,
         name: &str,
     ) -> Option<Option<Callback<v8::Local<'s, v8::Value>>>> {
-        let value = front::arg(&self.info.args(), index);
+        let value = K::arg(&self.info, index);
         if value.is_null_or_undefined() {
             return Some(None);
         }
@@ -581,7 +775,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     /// anything else null.
     #[inline(always)]
     fn event_handler_arg(&mut self, index: usize) -> Option<Callback<v8::Local<'s, v8::Value>>> {
-        let value = front::arg(&self.info.args(), index);
+        let value = K::arg(&self.info, index);
         value.is_object().then_some(Callback(value))
     }
 
@@ -589,7 +783,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     /// script, before the operation: a scope).
     #[inline(always)]
     fn timer_handler_arg(&mut self, index: usize) -> Option<Callback<v8::Local<'s, v8::Value>>> {
-        let value = front::arg(&self.info.args(), index);
+        let value = K::arg(&self.info, index);
         if value.is_function() {
             return Some(Callback(value));
         }
@@ -600,7 +794,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
 
     #[inline(always)]
     fn is_dictionary_like(&mut self, index: usize) -> bool {
-        let value = front::arg(&self.info.args(), index);
+        let value = K::arg(&self.info, index);
         value.is_null_or_undefined() || value.is_object()
     }
 
@@ -609,7 +803,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     /// `TypeError`.
     #[inline(always)]
     fn dict_arg(&mut self, index: usize, name: &str) -> Option<Option<v8::Local<'s, v8::Object>>> {
-        let value = front::arg(&self.info.args(), index);
+        let value = K::arg(&self.info, index);
         if value.is_null_or_undefined() {
             return Some(None);
         }
@@ -739,9 +933,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         if interface == const { dom_api::declare::interface_index("HTMLElement") } {
             return self.with_front(|front| front.construct(interface, required));
         }
-        let args = self.info.args();
-        (!args.new_target().is_undefined()
-            && usize::try_from(args.length()).unwrap_or(0) >= required)
+        (!K::new_target(K::this(&self.info)).is_undefined() && K::length(&self.info) >= required)
             || self.with_front(|front| front.construct(interface, required))
     }
 
@@ -755,7 +947,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     /// The argument itself; null for undefined, which V8 gives a scope.
     #[inline(always)]
     fn any_arg(&mut self, index: usize) -> AnyArg<v8::Local<'s, v8::Value>> {
-        let value = front::arg(&self.info.args(), index);
+        let value = K::arg(&self.info, index);
         if value.is_undefined() {
             return self.with_front(|front| front.any_arg(index));
         }
@@ -766,7 +958,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     /// the whole front end.
     #[inline(always)]
     fn abort_reason_arg(&mut self, index: usize) -> Option<AnyArg<v8::Local<'s, v8::Value>>> {
-        let value = front::arg(&self.info.args(), index);
+        let value = K::arg(&self.info, index);
         if value.is_undefined() {
             return self.with_front(|front| front.abort_reason_arg(index));
         }
@@ -777,7 +969,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     /// else a new array of them, made by the whole front end.
     #[inline(always)]
     fn rest_arg(&mut self, index: usize) -> Option<v8::Local<'s, v8::Array>> {
-        if usize::try_from(self.info.args().length()).unwrap_or(0) <= index {
+        if K::length(&self.info) <= index {
             return None;
         }
         self.with_front(|front| front.rest_arg(index))
@@ -854,23 +1046,23 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
 
     #[inline(always)]
     fn arg_count(&mut self) -> usize {
-        usize::try_from(self.info.args().length()).unwrap_or(0)
+        K::length(&self.info)
     }
 
     #[inline(always)]
     fn is_undefined(&mut self, index: usize) -> bool {
-        front::arg(&self.info.args(), index).is_undefined()
+        K::arg(&self.info, index).is_undefined()
     }
 
     #[inline(always)]
     fn is_null_or_undefined(&mut self, index: usize) -> bool {
-        front::arg(&self.info.args(), index).is_null_or_undefined()
+        K::arg(&self.info, index).is_null_or_undefined()
     }
 
     /// A boolean itself is read at once; anything else is `ToBoolean`'s.
     #[inline(always)]
     fn bool_arg(&mut self, index: usize) -> bool {
-        let value = front::arg(&self.info.args(), index);
+        let value = K::arg(&self.info, index);
         if value.is_true() {
             return true;
         }
@@ -884,7 +1076,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     /// anything else is `ToInt32`'s, which may run script.
     #[inline(always)]
     fn i32_arg(&mut self, index: usize) -> Option<i32> {
-        let value = front::arg(&self.info.args(), index);
+        let value = K::arg(&self.info, index);
         match v8::machopo::as_smi(value) {
             Some(value) => Some(value),
             // A missing optional one (`setTimeout(f)`): `ToInt32` of
@@ -897,7 +1089,11 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     /// As `i32_arg`: a negative small integer wraps, as `ToUint32` does.
     #[inline(always)]
     fn u32_arg(&mut self, index: usize) -> Option<u32> {
-        let value = front::arg(&self.info.args(), index);
+        // An indexed getter's index is a number already.
+        if let Some(number) = K::number_arg(&self.info, index) {
+            return Some(number);
+        }
+        let value = K::arg(&self.info, index);
         match v8::machopo::as_smi(value) {
             Some(value) => Some(value.cast_unsigned()),
             None if value.is_undefined() => Some(0),
@@ -911,7 +1107,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     /// must be is the whole front end's `TypeError`.
     #[inline(always)]
     fn f64_arg(&mut self, index: usize, finite: bool) -> Option<f64> {
-        let value = front::arg(&self.info.args(), index);
+        let value = K::arg(&self.info, index);
         let number = match v8::machopo::as_smi(value) {
             Some(value) => Some(f64::from(value)),
             None => v8::Local::<v8::Number>::try_from(value)
@@ -932,7 +1128,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         index: usize,
         interface: &str,
     ) -> Option<Option<v8::Local<'s, v8::Object>>> {
-        let value = front::arg(&self.info.args(), index);
+        let value = K::arg(&self.info, index);
         if value.is_null_or_undefined() {
             return Some(None);
         }
@@ -948,7 +1144,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         index: usize,
         interface: &str,
     ) -> Option<Option<v8::Local<'s, v8::Object>>> {
-        let value = front::arg(&self.info.args(), index);
+        let value = K::arg(&self.info, index);
         if value.is_null_or_undefined() {
             return Some(None);
         }
@@ -1157,6 +1353,7 @@ impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
 
     #[inline(always)]
     fn ret_null(&mut self) {
+        K::note_no_item(self.noted);
         self.no_gc.ret().set_null();
     }
 
@@ -1219,6 +1416,9 @@ impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
     /// handle; else made after the operation.
     #[inline(always)]
     fn ret_string(&mut self, value: &DomString) -> Option<PendingString> {
+        if value.is_empty() {
+            K::note_no_item(self.noted);
+        }
         let returned = self
             .caches
             .strings
@@ -1231,6 +1431,10 @@ impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
     /// the operation.
     #[inline(always)]
     fn ret_name(&mut self, id: NameId) -> Option<PendingString> {
+        // The names table's empty string.
+        if id == names::NONE {
+            K::note_no_item(self.noted);
+        }
         match usize::try_from(id)
             .ok()
             .and_then(|index| self.caches.names.get(index))

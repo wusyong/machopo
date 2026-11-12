@@ -53,6 +53,8 @@ overload 的一組一個函式（`Overloaded`），也只拿 info：組的編號
 
 constructor 也是（`InfoConstructor<M>`，`InfoKind` 的 `Construct`）：`InfoFront::construct` 原地檢查是不是用 `new` 呼叫、參數夠不夠（不是才交給 `V8Front` 丟 `TypeError`；`HTMLElement` 的一律交給它比 `new.target` 是不是 interface 物件本身），操作裡 `InfoOp::construct_object` 把 V8 替這次呼叫做的新物件（`this`，prototype 是 `new.target` 的）接上建好的物件。`HTMLElement` 的 constructor 的 `new.target` 從 info 讀（編號是 identity hash，和定義的 constructor 的邊比位址）。interface 有好幾個 constructor 的那一組也是只拿 info 的 `Overloaded`。
 
+indexed getter 的 interceptor（`list[i]`，`Indexed<M>` 的 `StateInfoIndexedGetter`，`InfoKind` 的 `IndexedGet`）也走這個 front：info 是 interceptor 的（`bindings::StateIndexInfo`：V8 的 `PropertyCallbackInfo` 和索引），索引照數字讀（`InfoKind::number_arg`，不做成 V8 的值），`this` 是 interceptor 的 holder。結果是 null 或空字串（包括名稱表的空字串）時記下「沒有這一項」（`InfoKind::note_no_item`），回 `kNo`，V8 接著查 prototype；查詢和列舉的 callback 照舊。
+
 成員的函式在操作裡問 front 的事，`InfoOp` 都有（`OpFront` 的這類方法沒有預設實作）：讀 `ImageData` 的陣列的 bytes（`with_array_bytes`：從邊取出 handle、原地讀，handle 在 callback 自己的 handle scope 裡，`InfoNoGc::strong_value`）。要留到操作後的（要丟的 abort reason、`ImageData` 的像素、upgrade 中的元素）由錯誤或結果帶出操作，不留在 front 裡。
 
 其餘的成員，每個一個 V8 callback（`templates.rs` 的 `Member<M>`，`bindings::StateCallback`：template 只在 isolate 的狀態是 DOM 時建得出來，callback 讀狀態不檢查），是 `dom_api` 替它展開的專用路徑（`TypedMember::call`）加上 V8 這一側的 front（`front.rs` 的 `V8Front`，Blink 產生的 callback 拿 `FunctionCallbackInfo` 做的事）：
