@@ -118,16 +118,8 @@ impl Platform for Traced {
         self.0.posts_jobs()
     }
 
-    fn tracing(&self) -> &'static std::sync::atomic::AtomicBool {
-        bindings::trace::recording()
-    }
-
-    fn trace_begin(&self, name: &'static str) {
-        bindings::trace::begin(name);
-    }
-
-    fn trace_end(&self) {
-        bindings::trace::end();
+    fn tracing_controller(&self) -> &'static dyn elise::TracingController {
+        bindings::trace::gc_tracing_controller()
     }
 }
 

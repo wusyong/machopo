@@ -85,14 +85,34 @@ pub fn stop() {
     v8::machopo_trace::stop();
 }
 
-/// Whether a trace records ([`start`] to [`stop`]): the flag the DOM's heap
-/// reads before it tells its platform of a GC phase (`elise::Platform`'s
-/// `tracing`), so that a phase costs it a load and a branch with no trace,
-/// as a span of machopo's own does (cppgc reads its category's enabled flag
-/// so, `TracingController::GetCategoryGroupEnabled`). The trace's
-/// categories are fixed, so recording at all is recording `machopo`'s.
-pub fn recording() -> &'static AtomicBool {
-    &RECORDING
+/// The trace as the DOM's heap's (`elise::TracingController`; gin's
+/// `V8Platform::GetTracingController`, a static, as cppgc's in Chrome): the
+/// heap's phases, and its workers' runs of its jobs, as spans on the thread
+/// that runs each.
+pub fn gc_tracing_controller() -> &'static dyn elise::TracingController {
+    &GcTracing
+}
+
+struct GcTracing;
+
+impl elise::TracingController for GcTracing {
+    /// Whether a trace records ([`start`] to [`stop`]): the flag the heap
+    /// reads before each phase, so that a phase costs it a load and a branch
+    /// with no trace, as a span of machopo's own does (cppgc reads its
+    /// category's enabled flag so,
+    /// `TracingController::GetCategoryGroupEnabled`). The trace's categories
+    /// are fixed, so recording at all is recording `machopo`'s.
+    fn enabled(&self) -> &AtomicBool {
+        &RECORDING
+    }
+
+    fn begin(&self, name: &'static str) {
+        self::begin(name);
+    }
+
+    fn end(&self) {
+        self::end();
+    }
 }
 
 static RECORDING: AtomicBool = AtomicBool::new(false);

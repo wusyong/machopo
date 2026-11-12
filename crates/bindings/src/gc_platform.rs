@@ -61,18 +61,10 @@ impl elise::Platform for V8GcPlatform {
 
     /// The heap's phases as spans on machopo's trace (`MACHOPO_TRACE`), on the
     /// thread that runs them: inside V8's GC events when V8 drives the
-    /// heap (its steps and pause), as cppgc's are. A load and a branch with
-    /// no trace.
-    fn tracing(&self) -> &'static std::sync::atomic::AtomicBool {
-        crate::trace::recording()
-    }
-
-    fn trace_begin(&self, name: &'static str) {
-        crate::trace::begin(name);
-    }
-
-    fn trace_end(&self) {
-        crate::trace::end();
+    /// heap (its steps and pause), as cppgc's are; a worker's run of a job
+    /// on the worker's track. A load and a branch with no trace.
+    fn tracing_controller(&self) -> &'static dyn elise::TracingController {
+        crate::trace::gc_tracing_controller()
     }
 }
 
