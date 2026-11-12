@@ -20,6 +20,7 @@
 | 4h constructor 的外殼（做到一半時停下來做上一列） | 完成 | 2026-11-12 |
 | 4i-1 indexed getter 的 interceptor（`list[i]`、`children[i]`、`classList[i]`、`attributes[i]`；決定 36） | 完成 | 2026-11-12 |
 | 4i-2 named 的 getter 和 setter 的 interceptor（`dataset.a`、`children.px`、`attributes.id`；決定 37）；空字串不做字串 | 完成 | 2026-11-12 |
+| 4i-3 只被這次呼叫持有的字串不進字串的快取（決定 38） | 完成 | 2026-11-12 | |
 | 4j 剩下的參數型別改成 handle（`fetch` 的 init、`postMessage`、keyframes、事件 init 的 `view` 和 `relatedTarget`、`Uint8ClampedArray`…），連同卡在這些型別的 constructor；`kept_object`、`kept_target`、`store_array` 跟著拿掉 | 還沒開始 | |
 | 4k 會呼叫 script 的 33 個成員：先逐個量、列出值得改結構的，再決定 | 還沒開始 | |
 | 4l cross-origin 的 16 個成員；4i 留下的 interceptor（indexed setter、iterator 的 pairs、named 的刪除、查詢和列舉）；legacy factory | 還沒開始 | |
@@ -411,3 +412,13 @@
 - 測試：`dom_js` 的 `info_front::a_named_getter_and_setter_are_given_the_info_alone`（`children`、`attributes`、`dataset` 照名字讀不建 scope；沒有的名字是 `undefined`；空字串是值、不建 scope（`dataset`、`style`、`title`）；prototype 的方法和 `length` 不被蓋掉；setter 寫進屬性和宣告、非字串的值轉換、`null` 是空字串；不收的名字變成一般屬性；setter 丟的例外；`in`、`Object.keys`、`delete`、數字當名字、symbol、descriptor、`defineProperty` 照舊；沒有 wrapper 的項建一個）。`strings::a_names_v8_string_is_made_once` 的預期從 3 個名稱改成 2 個（空字串不再做）。
 - mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4i2.toml`，9 個都抓到。第一次 5 個：四個沒抓到的都是測試分辨不出來（判斷「走了新的 front」的那幾行後面接了別的會建 scope 的呼叫：`.localName`、再讀一次；named setter 的參數個數少算時 `has_args` 交給 `V8Front` 補回來、只多一個 scope），改成只量 getter 或 setter 自己的那一次，加一個「字串的值、已有的名字不建 scope」。
 - 跑過：`cargo test -p bindings -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`ci.py third-party`、`test.py wpt dom html/dom html/webappapis custom-elements html/semantics/forms css/cssom css/css-variables`（136871 個結果都照預期）。
+
+**第 4i-3 段：只被這次呼叫持有的字串不進字串的快取**（2026-11-12，決定 38）：
+
+- `dom`：`DomString::is_unique` 公開（只有 `self` 持有這個字串）。
+- `dom_js`：`cached_string`（操作之後做字串的那一步，`V8Front` 的 `Kept::String` 和 named getter 都經過它）在快取找不到、而且字串只有呼叫自己持有時，直接做 V8 的字串（`strings::new_string`），不登記（沒有 `Weak`、沒有 finalizer、快取不多留一份 `DomString`）。DOM 持有的字串（屬性的值、文字節點的資料）照舊登記。`cached_strings`（測試用：isolate 的快取有幾筆）。
+- 判斷放在冷的那一步：操作裡的 `ret_string` 沒有動（照位址查快取，找不到就把字串帶出操作），所以已經在快取裡的字串一條指令都不多。
+- 4i-2 和這一段的 binary 各跑七次取最小（`perf stat`，指令數（cycle））：`style.color`（`'red'`）4712（2695）→ 2192（544），`style.cssText` 13438（4594）→ 10901（2434）；沒變的（差在空迴圈的雜訊 ±10 之內）：`nodeType` 110 → 99、`list[0]` 440 → 430、`dataset.a` 1042 → 1031、`style.color`（空字串）1544 → 1533、`getAttribute('id')` 566 → 556、`n.id` 254 → 244、`text.data` 187 → 176、`tagName` 241 → 234。
+- 測試：`dom_js` 的 `strings::a_string_only_the_call_holds_isnt_cached`（`style.color`、`style['color']`、`style.cssText` 各讀 50 次，快取的筆數不變、值正確；`getAttribute('title')` 讀 50 次只多一筆）。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4i3.toml`，4 個都抓到（一律登記、反過來只登記呼叫自己持有的、一律不登記、兩個持有也算唯一）。
+- 跑過：`cargo test -p dom -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt dom html/dom css/cssom css/css-variables`（128481 個結果都照預期；失敗的 13 個 reftest 都是本來就預期失敗的）。

@@ -14,6 +14,8 @@
 //! that, its finalizer marks the entry dead, and the cache drops dead
 //! entries as it is next used (not in the finalizer, which mustn't drop
 //! its own handle).
+//! A string only the call holds (a result computed for it) has no entry:
+//! its address goes with the call, so none would be found again.
 //!
 //! From V8: an argument converted by WebIDL's `ToString`, which may run
 //! script, unless it is a string already (a member's: `arg_string`); V8's one-byte strings by their bytes when ASCII (rusty_v8's

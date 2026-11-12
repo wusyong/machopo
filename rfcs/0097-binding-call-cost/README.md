@@ -221,6 +221,7 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
     - **只換 getter 和 setter、只換照名字的**（8 個 getter、2 個 setter 裡是 `PLAIN` 的）：查詢、定義、刪除、列舉，和用數字當名字的（`dataset[9]`，走 indexed 的 interceptor）照舊、留到 4l，`PropertyFront` 也留到那時。named property 的規則都在 interceptor 的設定和那幾個 callback 裡，這次不動。
     - setter「不收這個名字」（`style.notAProperty = 1` 落回一般屬性）：給結果的當下記下來（`InfoKind` 的 `Noted`，和 4i-1 的「沒有這一項」一樣），不寫 V8 的回傳值那一格。named getter 的空字串是值（`data-a=""`），只有 null 是沒有這個屬性：`note_no_item` 分成 null 和空字串兩個。
     - fork 再加一個只有 Rust 的讀法：interceptor 的 raw callback 拿到的名稱和值是 `SealedLocal`，要不建 scope 換成 `Local`。
+38. **只被這次呼叫持有的字串不進字串的快取**（2026-11-12，4i-2 之後獨立的一小段）：`StringCache` 照 `DomString` 的位址記 V8 的字串（`Weak` 加 finalizer，V8 回收時標成 dead）。DOM 留著的字串（屬性值、文字、名稱）下次回傳時位址相同、找得到；每次現算的（`style.color` 的序列化、其他 getter 做出來的新字串）位址每次不同，永遠找不到，卻每次登記一筆：`style.color` 是 `'red'` 時 4709 條指令、2664 個 cycle（4i-2）。做法：做 V8 的字串時，`DomString` 的引用計數是 1（只有這次呼叫要回傳的那一份）就直接做、不登記；DOM 還留著的照舊。不選留著不動。Blink 的 `StringCache` 也照 `StringImpl` 的位址記、也替暫時的字串登記，但它的字串是 external 的（V8 的字串指著 `StringImpl`，不複製），登記的是一個 persistent handle，沒有 machopo 這邊每筆一個 `Box` 的 finalizer。
 
 ## 待決定
 
@@ -231,5 +232,5 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
 - 進來的字串改成 external（決定 7）：V8 的 sandbox 打開之後短字串也改得了，那時再做，照 Blink 把名稱的編號和 intern 過的值記在 resource 上（原型和數字在 `progress.md`、`prototypes/external-strings.patch`）。
 - 操作可以巢狀：DOM 做到一半呼叫 script 不用結束操作。
 - wasm 的 front 照同樣的方式量。
-- 每次現算的字串（`style.color`、其他 getter 給的新的 `DomString`）在字串的快取裡永遠找不到（快取照位址記），每次新建 V8 的字串並登記一筆（`Weak` 加 finalizer）：`style.color` 是 `'red'` 時 4709 條指令、2664 個 cycle（4i-2 量的；決定 36 當時猜是 CSS 那一側，不是）。空字串已經不經過快取。要決定的是只被這次呼叫持有的字串要不要進快取。
+- 每次現算的字串（`style.color`、其他 getter 給的新的 `DomString`）在字串的快取裡永遠找不到（快取照位址記），每次新建 V8 的字串並登記一筆（`Weak` 加 finalizer）：`style.color` 是 `'red'` 時 4709 條指令、2664 個 cycle（4i-2 量的；決定 36 當時猜是 CSS 那一側，不是）。空字串已經不經過快取。決定 38 做了。
 - `HTMLElement` 的 constructor 每次建一個 scope 檢查 `new.target` 是不是 `HTMLElement` 本身（決定 35）：要不建 scope 拿到 realm 的 interface 物件，或換一種比法。

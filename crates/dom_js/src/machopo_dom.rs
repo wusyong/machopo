@@ -82,6 +82,13 @@ pub fn names_made(isolate: &mut v8::Isolate) -> u64 {
     bindings::isolate_state_mut::<State>(isolate).map_or(0, |state| state.names_made)
 }
 
+/// The entries of the isolate's DOM's string cache (one a string of the
+/// DOM's whose V8 string was made, the collected ones not yet dropped
+/// among them), for the tests: 0 with none.
+pub fn cached_strings(isolate: &mut v8::Isolate) -> usize {
+    bindings::isolate_state_mut::<State>(isolate).map_or(0, |state| state.caches.strings.len())
+}
+
 /// The members' string arguments the isolate's DOM converted by `ToString`
 /// so far (none that was a string already), for the tests: 0 with none.
 pub fn string_conversions(isolate: &mut v8::Isolate) -> u64 {

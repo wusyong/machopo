@@ -154,8 +154,8 @@ impl DomString {
     }
 
     /// Whether only `self` holds its string (an interned value only the
-    /// table holds).
-    fn is_unique(&self) -> bool {
+    /// table holds; a result only the call that computed it holds).
+    pub fn is_unique(&self) -> bool {
         Rc::strong_count(&self.text) == 1
     }
 }

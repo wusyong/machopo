@@ -222,6 +222,10 @@ impl Env {
         dom_js::string_conversions(self.data.isolate())
     }
 
+    pub fn cached_strings(&mut self) -> usize {
+        dom_js::cached_strings(self.data.isolate())
+    }
+
     pub fn names_made(&mut self) -> u64 {
         dom_js::names_made(self.data.isolate())
     }

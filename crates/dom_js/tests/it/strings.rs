@@ -322,3 +322,40 @@ fn a_cached_values_v8_string_is_returned_again() {
         "x,x,x"
     );
 }
+
+/// A string only the call holds (a style value serialized for this read,
+/// a number's text) is given to V8 and not cached: its address is gone
+/// with the call, so no later read would find its entry. One the DOM
+/// holds (an attribute's value) is cached the first time it is read.
+#[test]
+fn a_string_only_the_call_holds_isnt_cached() {
+    let mut env = Env::new();
+    env.eval(
+        "var d = machopoDom.createDocument(); var e = d.createElement('p'); \
+         e.style.color = 'red'; e.setAttribute('title', 'held-by-the-dom');",
+    );
+    let before = env.cached_strings();
+    assert_eq!(
+        env.eval("var s = ''; for (var i = 0; i < 50; i++) s = e.style.color; s"),
+        "red"
+    );
+    assert_eq!(
+        env.eval("for (var i = 0; i < 50; i++) s = e.style['color']; s"),
+        "red",
+        "by its name, through the named getter"
+    );
+    assert_eq!(
+        env.eval("for (var i = 0; i < 50; i++) s = e.style.cssText; s"),
+        "color: red;"
+    );
+    assert_eq!(env.cached_strings(), before, "none of them an entry");
+    assert_eq!(
+        env.eval("for (var i = 0; i < 50; i++) s = e.getAttribute('title'); s"),
+        "held-by-the-dom"
+    );
+    assert_eq!(
+        env.cached_strings(),
+        before + 1,
+        "the attribute's value, once"
+    );
+}

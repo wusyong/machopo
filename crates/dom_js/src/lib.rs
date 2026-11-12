@@ -51,8 +51,8 @@ pub use engine::V8Engine;
 pub use bindings::trace;
 
 pub use machopo_dom::{
-    dom_mut, heap_stats, install_machopo_dom, names_made, string_conversions, uncaught_exceptions,
-    wrappers_ahead, wrappers_made, wrappers_wasted,
+    cached_strings, dom_mut, heap_stats, install_machopo_dom, names_made, string_conversions,
+    uncaught_exceptions, wrappers_ahead, wrappers_made, wrappers_wasted,
 };
 pub use strings::{ArgString, StringCache, arg_string, new_string, string_arg, throw_type_error};
 pub use templates::{install, overload_interfaces_untold};

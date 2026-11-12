@@ -1,0 +1,34 @@
+# Stage 4i-3: a string only the call holds (a result computed for this
+# call) is given to V8 and not entered in the string cache.
+test = ["cargo", "test", "-q", "-p", "dom", "-p", "dom_js"]
+timeout = 1800
+
+[[mutant]]
+name = "a string only the call holds is cached"
+file = "crates/dom_js/src/front.rs"
+from = '''        if string.is_unique() {
+            None'''
+to = '''        if false {
+            None'''
+
+[[mutant]]
+name = "a string the DOM holds isn't cached"
+file = "crates/dom_js/src/front.rs"
+from = '''        if string.is_unique() {
+            None'''
+to = '''        if !string.is_unique() {
+            None'''
+
+[[mutant]]
+name = "no string is cached"
+file = "crates/dom_js/src/front.rs"
+from = '''        if string.is_unique() {
+            None'''
+to = '''        if true {
+            None'''
+
+[[mutant]]
+name = "a string two hold is unique"
+file = "crates/dom/src/string.rs"
+from = '''        Rc::strong_count(&self.text) == 1'''
+to = '''        Rc::strong_count(&self.text) <= 2'''
