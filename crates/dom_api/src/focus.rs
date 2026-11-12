@@ -571,7 +571,7 @@ pub(crate) fn construct_focus_event<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     event_type: &str,
-    init: &FocusEventInit,
+    init: &FocusEventInit<O::Node>,
 ) -> Result<Gc<'gc, dom::Event>, ApiError> {
     let event = cx.create_event(
         names::intern(event_type),
@@ -583,8 +583,8 @@ pub(crate) fn construct_focus_event<'gc, O: OpFront>(
         },
         op.current_window(cx),
     );
-    let view = crate::ui_event::init_view(op, cx, init.view);
-    let related = crate::ui_event::related_target_of(op, cx, init.relatedTarget);
+    let view = crate::ui_event::init_view(op, cx, &init.view);
+    let related = crate::ui_event::related_target_of(op, cx, &init.relatedTarget);
     cx.set_focus_event_data(event, view, init.detail, related);
     Ok(event)
 }

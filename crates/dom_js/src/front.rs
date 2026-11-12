@@ -283,16 +283,11 @@ pub(crate) struct RareCall<'s> {
     /// What a traversal's filter threw, caught (the traversal's flag is
     /// unset in an operation after): the member's error, thrown again.
     thrown: Option<v8::Local<'s, v8::Value>>,
-    /// The `Uint8ClampedArray` taken (`Uint8ClampedArg`).
-    array: Option<v8::Local<'s, v8::Uint8ClampedArray>>,
     /// The `ArrayBufferView` taken (`ArrayViewArg`).
     view: Option<v8::Local<'s, v8::ArrayBufferView>>,
     /// A second callback taken (`Callback(1)`, `nullable_function_arg`:
     /// geolocation's error callback).
     second_callback: Option<v8::Local<'s, v8::Value>>,
-    /// The objects a dictionary's members or a body gave (`KeptObject`'s
-    /// index): wrappers.
-    kept_objects: Vec<v8::Local<'s, v8::Value>>,
 }
 
 impl<'s> Call<'s, '_> {
@@ -312,14 +307,6 @@ pub(crate) struct V8Op<'o, 's, 'i, 'r, A: CallArgs<'s>> {
 }
 
 impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
-    /// `value` kept for the operation (`KeptObject`).
-    fn keep_object(&mut self, value: v8::Local<'s, v8::Value>) -> dom_api::typed::KeptObject {
-        let kept = &mut self.call.rare().kept_objects;
-        let index = kept.len();
-        kept.push(value);
-        dom_api::typed::KeptObject(index)
-    }
-
     /// `dict`'s member `member`'s value (its getter may throw).
     fn dict_value(
         &mut self,
@@ -332,16 +319,23 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
     }
 
     /// `value` (not null or undefined) as `BodyInit`: a blob's or a
-    /// `URLSearchParams`' wrapper kept, a buffer's or a view's bytes copied,
+    /// `URLSearchParams`' wrapper, a buffer's or a view's bytes copied,
     /// anything else its `ToString` (WebIDL's union, a string last).
-    fn body_of(&mut self, value: v8::Local<'s, v8::Value>) -> Option<dom_api::typed::BodyArg> {
+    fn body_of(
+        &mut self,
+        value: v8::Local<'s, v8::Value>,
+    ) -> Option<dom_api::typed::BodyArg<v8::Local<'s, v8::Object>>> {
         use dom_api::typed::BodyArg;
         let scope = self.scope.scope();
         if bindings::is_wrapper::<dom::Blob>(scope, value) {
-            return Some(BodyArg::Blob(self.keep_object(value)));
+            return v8::Local::<v8::Object>::try_from(value)
+                .ok()
+                .map(BodyArg::Blob);
         }
         if bindings::is_wrapper::<dom::UrlSearchParams>(scope, value) {
-            return Some(BodyArg::SearchParams(self.keep_object(value)));
+            return v8::Local::<v8::Object>::try_from(value)
+                .ok()
+                .map(BodyArg::SearchParams);
         }
         // A copy of a buffer's or a view's bytes, as they are now.
         if let Ok(buffer) = v8::Local::<v8::ArrayBuffer>::try_from(value) {
@@ -1912,7 +1906,10 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         None
     }
 
-    fn uint8_clamped_arg(&mut self, index: usize) -> Option<Uint8ClampedArg> {
+    fn uint8_clamped_arg(
+        &mut self,
+        index: usize,
+    ) -> Option<Uint8ClampedArg<v8::Local<'s, v8::Value>>> {
         let value = arg(self.args, index);
         let Ok(array) = v8::Local::<v8::Uint8ClampedArray>::try_from(value) else {
             self.throw_type_error(&format!(
@@ -1921,9 +1918,10 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
             ));
             return None;
         };
-        let len = array.byte_length();
-        self.call.rare().array = Some(array);
-        Some(Uint8ClampedArg { len })
+        Some(Uint8ClampedArg {
+            array: value,
+            len: array.byte_length(),
+        })
     }
 
     fn array_view_arg(&mut self, index: usize) -> Option<dom_api::typed::ArrayViewArg> {
@@ -2064,37 +2062,51 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         Some(v8::Local::<v8::Object>::try_from(value).ok())
     }
 
-    fn dict_nullable_object(
+    fn dict_nullable_object<T: elise::HeapType>(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
         member: &str,
-        kind: dom_api::typed::KeptKind,
-    ) -> Option<Option<dom_api::typed::KeptObject>> {
-        use dom_api::typed::KeptKind;
+        interface: &str,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
         let value = self.dict_value(dict, member)?;
         if value.is_null_or_undefined() {
             return Some(None);
         }
-        let scope = self.scope.scope();
-        let (accepted, interface) = match kind {
-            KeptKind::Window => (bindings::is_wrapper::<Window>(scope, value), "Window"),
-            KeptKind::EventTarget => (
-                bindings::is_wrapper::<Node>(scope, value)
-                    || bindings::is_wrapper::<Window>(scope, value)
-                    || bindings::is_wrapper::<EventTargetImpl>(scope, value),
-                "EventTarget",
-            ),
-        };
-        if !accepted {
+        if !bindings::is_wrapper::<T>(self.scope.scope(), value) {
             self.throw_type_error(&format!(
                 "Failed to read the '{member}' property: Failed to convert value to '{interface}'."
             ));
             return None;
         }
-        Some(Some(self.keep_object(value)))
+        Some(v8::Local::<v8::Object>::try_from(value).ok())
     }
 
-    fn body_arg(&mut self, index: usize) -> Option<Option<dom_api::typed::BodyArg>> {
+    fn dict_nullable_target(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: &str,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        let value = self.dict_value(dict, member)?;
+        if value.is_null_or_undefined() {
+            return Some(None);
+        }
+        let scope = self.scope.scope();
+        if !(bindings::is_wrapper::<Node>(scope, value)
+            || bindings::is_wrapper::<Window>(scope, value)
+            || bindings::is_wrapper::<EventTargetImpl>(scope, value))
+        {
+            self.throw_type_error(&format!(
+                "Failed to read the '{member}' property: Failed to convert value to 'EventTarget'."
+            ));
+            return None;
+        }
+        Some(v8::Local::<v8::Object>::try_from(value).ok())
+    }
+
+    fn body_arg(
+        &mut self,
+        index: usize,
+    ) -> Option<Option<dom_api::typed::BodyArg<v8::Local<'s, v8::Object>>>> {
         let value = arg(self.args, index);
         if value.is_null_or_undefined() {
             return Some(None);
@@ -2106,7 +2118,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
         member: &str,
-    ) -> Option<Option<dom_api::typed::BodyMember>> {
+    ) -> Option<Option<dom_api::typed::BodyMember<v8::Local<'s, v8::Object>>>> {
         let value = self.dict_value(dict, member)?;
         if value.is_undefined() {
             return Some(None);
@@ -2139,7 +2151,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
         member: &str,
-    ) -> Option<Option<dom_api::typed::SignalMember>> {
+    ) -> Option<Option<dom_api::typed::SignalMember<v8::Local<'s, v8::Object>>>> {
         let value = self.dict_value(dict, member)?;
         if value.is_undefined() {
             return Some(None);
@@ -2153,9 +2165,11 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
             ));
             return None;
         }
-        Some(Some(dom_api::typed::SignalMember::Signal(
-            self.keep_object(value),
-        )))
+        Some(
+            v8::Local::<v8::Object>::try_from(value)
+                .ok()
+                .map(dom_api::typed::SignalMember::Signal),
+        )
     }
 
     fn dict_is_null(
@@ -3457,51 +3471,6 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
         value: AnyArg<v8::Local<'s, v8::Value>>,
     ) {
         self.no_gc.set_strong_value(edge, value.0);
-    }
-
-    fn kept_object<'gc, T: elise::HeapType>(
-        &mut self,
-        cx: &ApiCx<'_, 'gc>,
-        object: dom_api::typed::KeptObject,
-    ) -> elise::Gc<'gc, T> {
-        let value = *self
-            .call
-            .rare
-            .as_ref()
-            .and_then(|rare| rare.kept_objects.get(object.0))
-            .expect("the object kept");
-        let object =
-            v8::Local::<v8::Object>::try_from(value).expect("a wrapper, checked as it was kept");
-        self.no_gc
-            .unwrap::<T>(cx.gc, object)
-            .expect("a wrapper, checked as it was kept")
-    }
-
-    fn kept_target<'gc>(
-        &mut self,
-        cx: &ApiCx<'_, 'gc>,
-        object: dom_api::typed::KeptObject,
-    ) -> TargetRef<'gc> {
-        let value = *self
-            .call
-            .rare
-            .as_ref()
-            .and_then(|rare| rare.kept_objects.get(object.0))
-            .expect("the object kept");
-        let object =
-            v8::Local::<v8::Object>::try_from(value).expect("a wrapper, checked as it was kept");
-        self.target(cx, &object)
-    }
-
-    fn store_array(&mut self, _: &ApiCx<'_, '_>, edge: &JsEdge, array: Uint8ClampedArg) {
-        let Uint8ClampedArg { .. } = array;
-        let taken = self
-            .call
-            .rare
-            .as_ref()
-            .and_then(|rare| rare.array)
-            .expect("the array taken");
-        self.no_gc.set_strong_value(edge, taken.into());
     }
 
     /// In place, unless V8 keeps the bytes on its heap (a small array):

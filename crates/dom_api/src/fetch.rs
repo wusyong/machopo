@@ -55,7 +55,7 @@ pub(crate) fn fetch<'gc, O: OpFront>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Window>,
     input: RequestInput<'_, 'gc>,
-    init: &RequestInit,
+    init: &RequestInit<O::Node>,
 ) -> Result<u64, ApiError> {
     let request = crate::request::new_request(op, cx, this, input, init)?;
     let signal = cx.request_signal(request);

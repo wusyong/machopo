@@ -1116,6 +1116,63 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         self.with_front(|front| front.dict_object::<T>(dict, member, interface))
     }
 
+    fn dict_nullable_object<T: elise::HeapType>(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: &str,
+        interface: &str,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        self.with_front(|front| front.dict_nullable_object::<T>(dict, member, interface))
+    }
+
+    fn dict_nullable_target(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: &str,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        self.with_front(|front| front.dict_nullable_target(dict, member))
+    }
+
+    fn dict_body(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: &str,
+    ) -> Option<Option<dom_api::typed::BodyMember<v8::Local<'s, v8::Object>>>> {
+        self.with_front(|front| front.dict_body(dict, member))
+    }
+
+    fn dict_signal(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: &str,
+    ) -> Option<Option<dom_api::typed::SignalMember<v8::Local<'s, v8::Object>>>> {
+        self.with_front(|front| front.dict_signal(dict, member))
+    }
+
+    fn body_arg(
+        &mut self,
+        index: usize,
+    ) -> Option<Option<dom_api::typed::BodyArg<v8::Local<'s, v8::Object>>>> {
+        self.with_front(|front| front.body_arg(index))
+    }
+
+    /// A typed array is no allocation to tell: no scope unless it isn't
+    /// one (the `TypeError`).
+    #[inline]
+    fn uint8_clamped_arg(
+        &mut self,
+        index: usize,
+    ) -> Option<dom_api::typed::Uint8ClampedArg<v8::Local<'s, v8::Value>>> {
+        let value = K::arg(&self.info, index);
+        match v8::Local::<v8::Uint8ClampedArray>::try_from(value) {
+            Ok(array) => Some(dom_api::typed::Uint8ClampedArg {
+                array: value,
+                len: array.byte_length(),
+            }),
+            Err(_) => self.with_front(|front| front.uint8_clamped_arg(index)),
+        }
+    }
+
     fn dict_bool(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,

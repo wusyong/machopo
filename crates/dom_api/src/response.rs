@@ -82,7 +82,7 @@ fn initialize<'gc>(
 pub(crate) fn construct<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
-    body: Option<&BodyArg>,
+    body: Option<&BodyArg<O::Node>>,
     init: &ResponseInit,
 ) -> Result<Gc<'gc, Response>, ApiError> {
     let window = crate::request::current_window(op, cx, "Response")?;

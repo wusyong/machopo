@@ -17,7 +17,7 @@ use gfx::{ElementBox, PointF};
 use crate::interfaces::{
     InputEventInit, KeyboardEventInit, MouseEventInit, UIEventInit, WheelEventInit,
 };
-use crate::typed::{DomStr, KeptTarget, KeptWindow, NullableStr, OpFront};
+use crate::typed::{DomStr, NullableStr, OpFront, RelatedTarget, ViewObject};
 use crate::{ApiCx, ApiError};
 
 /// `EventModifierInit`'s modifier keys of `init` (a dictionary that
@@ -53,7 +53,7 @@ pub(crate) fn construct_ui_event<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     event_type: &str,
-    init: &UIEventInit,
+    init: &UIEventInit<O::Node>,
 ) -> Result<Gc<'gc, Event>, ApiError> {
     let event = cx.create_event(
         names::intern(event_type),
@@ -65,27 +65,29 @@ pub(crate) fn construct_ui_event<'gc, O: OpFront>(
         },
         op.current_window(cx),
     );
-    cx.set_ui_event_data(event, init_view(op, cx, init.view), init.detail);
+    cx.set_ui_event_data(event, init_view(op, cx, &init.view), init.detail);
     Ok(event)
 }
 
-/// An init dictionary's `view`: the window the front end kept, if any.
+/// An init dictionary's `view`: the window given, if any.
 pub(crate) fn init_view<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
-    view: Option<KeptWindow>,
+    view: &Option<ViewObject<O::Node>>,
 ) -> Option<Gc<'gc, Window>> {
-    view.map(|KeptWindow(kept)| op.kept_object::<Window>(cx, kept))
+    view.as_ref()
+        .map(|ViewObject(window)| op.object::<Window>(cx, window))
 }
 
-/// An init dictionary's `relatedTarget`: the event target the front end
-/// kept, if any.
+/// An init dictionary's `relatedTarget`: the event target given, if any.
 pub(crate) fn related_target_of<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
-    related: Option<KeptTarget>,
+    related: &Option<RelatedTarget<O::Node>>,
 ) -> Option<TargetRef<'gc>> {
-    related.map(|KeptTarget(kept)| op.kept_target(cx, kept))
+    related
+        .as_ref()
+        .map(|RelatedTarget(target)| op.target(cx, target))
 }
 
 /// `MouseEventInit`'s members of `init` (a dictionary that inherits it) as
@@ -114,7 +116,7 @@ pub(crate) fn construct_mouse_event<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     event_type: &str,
-    init: &MouseEventInit,
+    init: &MouseEventInit<O::Node>,
 ) -> Result<Gc<'gc, Event>, ApiError> {
     let event = cx.create_event(
         names::intern(event_type),
@@ -126,10 +128,10 @@ pub(crate) fn construct_mouse_event<'gc, O: OpFront>(
         },
         op.current_window(cx),
     );
-    let related = related_target_of(op, cx, init.relatedTarget);
+    let related = related_target_of(op, cx, &init.relatedTarget);
     cx.set_mouse_event_data(
         event,
-        init_view(op, cx, init.view),
+        init_view(op, cx, &init.view),
         &mouse_info!(init),
         related,
     );
@@ -142,7 +144,7 @@ pub(crate) fn construct_wheel_event<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     event_type: &str,
-    init: &WheelEventInit,
+    init: &WheelEventInit<O::Node>,
 ) -> Result<Gc<'gc, Event>, ApiError> {
     let event = cx.create_event(
         names::intern(event_type),
@@ -160,10 +162,10 @@ pub(crate) fn construct_wheel_event<'gc, O: OpFront>(
         delta_z: init.deltaZ,
         delta_mode: init.deltaMode,
     };
-    let related = related_target_of(op, cx, init.relatedTarget);
+    let related = related_target_of(op, cx, &init.relatedTarget);
     cx.set_wheel_event_data(
         event,
-        init_view(op, cx, init.view),
+        init_view(op, cx, &init.view),
         &mouse_info!(init),
         related,
         &wheel,
@@ -177,7 +179,7 @@ pub(crate) fn construct_input_event<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     event_type: &str,
-    init: &InputEventInit,
+    init: &InputEventInit<O::Node>,
 ) -> Result<Gc<'gc, Event>, ApiError> {
     let event = cx.create_event(
         names::intern(event_type),
@@ -195,7 +197,7 @@ pub(crate) fn construct_input_event<'gc, O: OpFront>(
         input_type: DomString::new(&init.inputType),
         is_composing: init.isComposing,
     };
-    cx.set_input_event_data(event, init_view(op, cx, init.view), &info);
+    cx.set_input_event_data(event, init_view(op, cx, &init.view), &info);
     Ok(event)
 }
 
@@ -318,7 +320,7 @@ pub(crate) fn construct_keyboard_event<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     event_type: &str,
-    init: &KeyboardEventInit,
+    init: &KeyboardEventInit<O::Node>,
 ) -> Result<Gc<'gc, Event>, ApiError> {
     let event = cx.create_event(
         names::intern(event_type),
@@ -341,7 +343,7 @@ pub(crate) fn construct_keyboard_event<'gc, O: OpFront>(
         char_code: init.charCode,
         key_code: init.keyCode,
     };
-    cx.set_keyboard_event_data(event, init_view(op, cx, init.view), &info);
+    cx.set_keyboard_event_data(event, init_view(op, cx, &init.view), &info);
     Ok(event)
 }
 

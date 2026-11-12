@@ -969,3 +969,174 @@ fn a_constructor_is_given_the_info_alone() {
         );
     }
 }
+
+/// An init dictionary's `view` and `relatedTarget` and a `Uint8ClampedArray`
+/// argument are the engine's own handles, made the DOM's in the operation:
+/// their constructors take the path with the callback's info alone (the
+/// dictionary read in a scope), the object given is the one read back, and
+/// a value of another type is a `TypeError` before anything is made.
+#[test]
+fn an_objects_handle_is_taken_as_it_is() {
+    let mut engine = page();
+    run(
+        &mut engine,
+        "var et = new EventTarget(); var bytes = new Uint8ClampedArray(8); \
+         var thrown = (f) => { try { f(); return 'none'; } catch (e) { return e.name + ': ' + e.message; } }; \
+         new MouseEvent('first', { view: window, relatedTarget: d }); new ImageData(bytes, 2); d.id;",
+    );
+    for (source, value, scopes) in [
+        (
+            "new UIEvent('x', { view: window }).view === window",
+            "true",
+            Some(true),
+        ),
+        ("new UIEvent('x', { view: null }).view", "null", Some(true)),
+        (
+            "new UIEvent('x', { view: undefined }).view",
+            "null",
+            Some(true),
+        ),
+        ("new UIEvent('x', {}).view", "null", Some(true)),
+        ("new UIEvent('x').view", "null", None),
+        (
+            "new MouseEvent('x', { view: window, relatedTarget: d }).relatedTarget === d",
+            "true",
+            Some(true),
+        ),
+        (
+            "new MouseEvent('x', { relatedTarget: window }).relatedTarget === window",
+            "true",
+            Some(true),
+        ),
+        (
+            "new MouseEvent('x', { relatedTarget: et }).relatedTarget === et",
+            "true",
+            Some(true),
+        ),
+        (
+            "new MouseEvent('x', { relatedTarget: null }).relatedTarget",
+            "null",
+            Some(true),
+        ),
+        (
+            "new WheelEvent('x', { view: window, relatedTarget: d, deltaY: 3 }).deltaY",
+            "3",
+            Some(true),
+        ),
+        (
+            "new FocusEvent('x', { relatedTarget: d }).relatedTarget === d",
+            "true",
+            Some(true),
+        ),
+        (
+            "new KeyboardEvent('x', { view: window, key: 'a' }).view === window",
+            "true",
+            Some(true),
+        ),
+        (
+            "new InputEvent('x', { view: window, data: 'a' }).view === window",
+            "true",
+            Some(true),
+        ),
+        (
+            "thrown(() => new UIEvent('x', { view: d }))",
+            "TypeError: Failed to read the 'view' property: Failed to convert value to 'Window'.",
+            Some(true),
+        ),
+        (
+            "thrown(() => new UIEvent('x', { view: 5 }))",
+            "TypeError: Failed to read the 'view' property: Failed to convert value to 'Window'.",
+            Some(true),
+        ),
+        (
+            "thrown(() => new MouseEvent('x', { relatedTarget: {} }))",
+            "TypeError: Failed to read the 'relatedTarget' property: Failed to convert value to 'EventTarget'.",
+            Some(true),
+        ),
+        (
+            "thrown(() => new MouseEvent('x', { relatedTarget: new Event('e') }))",
+            "TypeError: Failed to read the 'relatedTarget' property: Failed to convert value to 'EventTarget'.",
+            Some(true),
+        ),
+        // The array itself is the new object's: no scope to take it.
+        (
+            "new ImageData(bytes, 2).data === bytes",
+            "true",
+            Some(false),
+        ),
+        ("new ImageData(bytes, 1, 2).height", "2", None),
+        // A body's blob and `URLSearchParams`, an init's signal.
+        (
+            "var c = new AbortController(); new Request('https://example.test/', { signal: c.signal }).signal.aborted",
+            "false",
+            None,
+        ),
+        (
+            "c.abort(); new Request('https://example.test/', { signal: c.signal }).signal.aborted",
+            "true",
+            None,
+        ),
+        (
+            "new Request('https://example.test/', { signal: null }).signal.aborted",
+            "false",
+            None,
+        ),
+        // A null signal is given (the input's isn't followed); a missing
+        // one isn't.
+        (
+            "var c2 = new AbortController(); var from = new Request('https://example.test/', { signal: c2.signal }); \
+             var unfollowing = new Request(from, { signal: null }); var following = new Request(from, {}); \
+             c2.abort(); unfollowing.signal.aborted + ' ' + following.signal.aborted",
+            "false true",
+            None,
+        ),
+        (
+            "thrown(() => new Request('https://example.test/', { signal: et }))",
+            "TypeError: Failed to construct 'Request': Failed to read the 'signal' property from 'RequestInit': Failed to convert value to 'AbortSignal'.",
+            None,
+        ),
+        (
+            "new Response(new Blob(['ab'], { type: 'text/x' })).headers.get('content-type')",
+            "text/x",
+            None,
+        ),
+        (
+            "new Response(new URLSearchParams('a=1')).headers.get('content-type')",
+            "application/x-www-form-urlencoded;charset=UTF-8",
+            None,
+        ),
+        (
+            "new Request('https://example.test/', { method: 'POST', body: new Blob(['ab'], { type: 'text/y' }) }).headers.get('content-type')",
+            "text/y",
+            None,
+        ),
+        (
+            "thrown(() => new ImageData(new Uint8ClampedArray(6), 1))",
+            "InvalidStateError: The input data length is not a multiple of 4.",
+            Some(true),
+        ),
+        // Another typed array is no `Uint8ClampedArray`: the other
+        // constructor's width, zero.
+        (
+            "thrown(() => new ImageData(new Uint8Array(8), 2)).slice(0, 14)",
+            "IndexSizeError",
+            None,
+        ),
+    ] {
+        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        let found = match source.rsplit_once("; ") {
+            Some((first, last)) => {
+                run(&mut engine, first);
+                report(&mut engine, last)
+            }
+            None => report(&mut engine, source),
+        };
+        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        assert_eq!(found, value, "{source}");
+        match scopes {
+            Some(true) => assert!(made >= 1, "{source}: a scope"),
+            Some(false) => assert_eq!(made, 0, "{source}"),
+            None => {}
+        }
+    }
+}

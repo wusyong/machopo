@@ -2138,7 +2138,7 @@ pub(crate) fn construct_image_data<'gc>(
 pub(crate) fn construct_image_data_of<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
-    data: Uint8ClampedArg,
+    data: Uint8ClampedArg<O::Any>,
     sw: u32,
     sh: Option<u32>,
     settings: &crate::interfaces::ImageDataSettings,
@@ -2168,7 +2168,11 @@ pub(crate) fn construct_image_data_of<'gc, O: OpFront>(
         ));
     }
     let image_data = cx.create_image_data(sw, height, space.unwrap_or(PredefinedColorSpace::Srgb));
-    op.store_array(cx, cx.image_data_array_edge(image_data), data);
+    op.store_any(
+        cx,
+        cx.image_data_array_edge(image_data),
+        crate::typed::AnyArg(data.array),
+    );
     Ok(image_data)
 }
 

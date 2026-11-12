@@ -1,0 +1,176 @@
+# Stage 4j-1: an init dictionary's `view` and `relatedTarget`, a body's
+# blob and `URLSearchParams`, `RequestInit`'s signal and a
+# `Uint8ClampedArray` argument are the front end's handles
+# (`FrontTypes::Node`, `Any`), made the DOM's in the operation.
+test = ["cargo", "test", "-q", "-p", "dom_api", "-p", "dom_js", "-p", "dom_wasm"]
+timeout = 1800
+
+[[mutant]]
+name = "a view of another type is taken"
+file = "crates/dom_js/src/front.rs"
+from = '''        if !bindings::is_wrapper::<T>(self.scope.scope(), value) {
+            self.throw_type_error(&format!(
+                "Failed to read the '{member}' property: Failed to convert value to '{interface}'."
+            ));
+            return None;
+        }
+        Some(v8::Local::<v8::Object>::try_from(value).ok())
+    }
+
+    fn dict_nullable_target('''
+to = '''        if false {
+            self.throw_type_error(&format!(
+                "Failed to read the '{member}' property: Failed to convert value to '{interface}'."
+            ));
+            return None;
+        }
+        Some(v8::Local::<v8::Object>::try_from(value).ok())
+    }
+
+    fn dict_nullable_target('''
+
+[[mutant]]
+name = "a null view is a type error"
+file = "crates/dom_js/src/front.rs"
+from = '''        interface: &str,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        let value = self.dict_value(dict, member)?;
+        if value.is_null_or_undefined() {
+            return Some(None);
+        }
+        if !bindings::is_wrapper::<T>'''
+to = '''        interface: &str,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        let value = self.dict_value(dict, member)?;
+        if value.is_undefined() {
+            return Some(None);
+        }
+        if !bindings::is_wrapper::<T>'''
+
+[[mutant]]
+name = "a related target that is a plain event target is a type error"
+file = "crates/dom_js/src/front.rs"
+from = '''            || bindings::is_wrapper::<Window>(scope, value)
+            || bindings::is_wrapper::<EventTargetImpl>(scope, value))
+        {
+            self.throw_type_error(&format!(
+                "Failed to read the '{member}' property: Failed to convert value to 'EventTarget'."'''
+to = '''            || bindings::is_wrapper::<Window>(scope, value))
+        {
+            self.throw_type_error(&format!(
+                "Failed to read the '{member}' property: Failed to convert value to 'EventTarget'."'''
+
+[[mutant]]
+name = "a related target that is a window is a type error"
+file = "crates/dom_js/src/front.rs"
+from = '''        if !(bindings::is_wrapper::<Node>(scope, value)
+            || bindings::is_wrapper::<Window>(scope, value)
+            || bindings::is_wrapper::<EventTargetImpl>(scope, value))
+        {
+            self.throw_type_error(&format!(
+                "Failed to read the '{member}' property: Failed to convert value to 'EventTarget'."'''
+to = '''        if !(bindings::is_wrapper::<Node>(scope, value)
+            || bindings::is_wrapper::<EventTargetImpl>(scope, value))
+        {
+            self.throw_type_error(&format!(
+                "Failed to read the '{member}' property: Failed to convert value to 'EventTarget'."'''
+
+[[mutant]]
+name = "a related target of any type is taken"
+file = "crates/dom_js/src/front.rs"
+from = '''        if !(bindings::is_wrapper::<Node>(scope, value)
+            || bindings::is_wrapper::<Window>(scope, value)
+            || bindings::is_wrapper::<EventTargetImpl>(scope, value))
+        {
+            self.throw_type_error(&format!(
+                "Failed to read the '{member}' property: Failed to convert value to 'EventTarget'."'''
+to = '''        if false
+        {
+            self.throw_type_error(&format!(
+                "Failed to read the '{member}' property: Failed to convert value to 'EventTarget'."'''
+
+[[mutant]]
+name = "an init's view is dropped"
+file = "crates/dom_api/src/ui_event.rs"
+from = '''    view.as_ref()
+        .map(|ViewObject(window)| op.object::<Window>(cx, window))'''
+to = '''    view.as_ref()
+        .filter(|_| false)
+        .map(|ViewObject(window)| op.object::<Window>(cx, window))'''
+
+[[mutant]]
+name = "an init's related target is dropped"
+file = "crates/dom_api/src/ui_event.rs"
+from = '''    related
+        .as_ref()
+        .map(|RelatedTarget(target)| op.target(cx, target))'''
+to = '''    related
+        .as_ref()
+        .filter(|_| false)
+        .map(|RelatedTarget(target)| op.target(cx, target))'''
+
+[[mutant]]
+name = "a view is read as a related target"
+file = "crates/dom_api/src/typed.rs"
+from = '''                .dict_nullable_object::<dom::Window>(dict, member, "Window")?
+                .map(ViewObject),'''
+to = '''                .dict_nullable_target(dict, member)?
+                .map(ViewObject),'''
+
+[[mutant]]
+name = "the array given isn't the image data's"
+file = "crates/dom_api/src/canvas.rs"
+from = '''    op.store_any(cx, cx.image_data_array_edge(image_data), crate::typed::AnyArg(data.array));'''
+to = '''    let _ = (op, data.array);'''
+
+[[mutant]]
+name = "a typed array argument is not plain"
+file = "crates/dom_api/src/typed.rs"
+from = '''    const DESC: TypeDesc = TypeDesc::Uint8ClampedArray;
+    const PLAIN: bool = true;
+    type Taken<T: FrontTypes> = Uint8ClampedArg<T::Any>;'''
+to = '''    const DESC: TypeDesc = TypeDesc::Uint8ClampedArray;
+    const PLAIN: bool = false;
+    type Taken<T: FrontTypes> = Uint8ClampedArg<T::Any>;'''
+
+[[mutant]]
+name = "a typed array argument is taken in a scope"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        match v8::Local::<v8::Uint8ClampedArray>::try_from(value) {
+            Ok(array) => Some(dom_api::typed::Uint8ClampedArg {
+                array: value,
+                len: array.byte_length(),
+            }),
+            Err(_) => self.with_front(|front| front.uint8_clamped_arg(index)),
+        }'''
+to = '''        self.with_front(|front| front.uint8_clamped_arg(index))'''
+
+[[mutant]]
+name = "a typed array's length is zero"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                array: value,
+                len: array.byte_length(),
+            }),
+            Err(_) => self.with_front'''
+to = '''                array: value,
+                len: 0,
+            }),
+            Err(_) => self.with_front'''
+
+[[mutant]]
+name = "a null signal is no member"
+file = "crates/dom_js/src/front.rs"
+from = '''            return Some(Some(dom_api::typed::SignalMember::Null));'''
+to = '''            return Some(None);'''
+
+[[mutant]]
+name = "a signal of another type is taken"
+file = "crates/dom_api/src/request.rs"
+from = '''            if !cx.is_abort_signal(given) {'''
+to = '''            if false {'''
+
+[[mutant]]
+name = "a body's blob has no type"
+file = "crates/dom_api/src/body.rs"
+from = '''            let content_type = (!data.type_().is_empty()).then(|| data.type_().to_owned());'''
+to = '''            let content_type = None;'''

@@ -111,7 +111,7 @@ pub(crate) fn construct<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
     input: RequestInput<'_, 'gc>,
-    init: &RequestInit,
+    init: &RequestInit<O::Node>,
 ) -> Result<Gc<'gc, Request>, ApiError> {
     let window = current_window(op, cx, "Request")?;
     new_request(op, cx, window, input, init)
@@ -124,7 +124,7 @@ pub(crate) fn new_request<'gc, O: OpFront>(
     cx: &ApiCx<'_, 'gc>,
     window: Gc<'gc, Window>,
     input: RequestInput<'_, 'gc>,
-    init: &RequestInit,
+    init: &RequestInit<O::Node>,
 ) -> Result<Gc<'gc, Request>, ApiError> {
     let document = cx.window_document(window);
     let base = cx.document_base_url(document);
@@ -248,8 +248,8 @@ pub(crate) fn new_request<'gc, O: OpFront>(
     }
     match init.signal {
         Some(SignalMember::Null) => signal = None,
-        Some(SignalMember::Signal(kept)) => {
-            let given = op.kept_object::<EventTargetImpl>(cx, kept);
+        Some(SignalMember::Signal(ref object)) => {
+            let given = op.object::<EventTargetImpl>(cx, object);
             if !cx.is_abort_signal(given) {
                 return Err(construct_error(
                     "Failed to read the 'signal' property from 'RequestInit': Failed to convert value to 'AbortSignal'.",

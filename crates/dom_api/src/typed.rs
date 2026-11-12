@@ -392,14 +392,18 @@ pub trait Front: FrontTypes {
     /// Argument `index` as `BodyInit?` (`new Response(body)`'s): `Some(None)`
     /// for null or undefined; another value as a `BodyInit` converts it
     /// (a string its `ToString`).
-    fn body_arg(&mut self, index: usize) -> Option<Option<BodyArg>> {
+    fn body_arg(&mut self, index: usize) -> Option<Option<BodyArg<Self::Node>>> {
         let _ = index;
         unreachable!("a front end binding a member with a body reads it")
     }
 
     /// `dict`'s member `member` as `BodyInit?`: `Some(None)` if missing,
     /// else null or the body, as `body_arg`.
-    fn dict_body(&mut self, dict: &Self::Dict, member: &str) -> Option<Option<BodyMember>> {
+    fn dict_body(
+        &mut self,
+        dict: &Self::Dict,
+        member: &str,
+    ) -> Option<Option<BodyMember<Self::Node>>> {
         let _ = (dict, member);
         unreachable!("a front end binding a dictionary with a body reads it")
     }
@@ -411,25 +415,41 @@ pub trait Front: FrontTypes {
         unreachable!("a front end binding a dictionary with headers reads them")
     }
 
-    /// `dict`'s member `member` as a nullable object (`Window?`,
-    /// `EventTarget?`; an init dictionary's `view` and `relatedTarget`, whose
-    /// default is null): `Some(None)` if null or missing, else its wrapper,
-    /// kept beside the call's callback (`KeptObject`); another value a
+    /// `dict`'s member `member` as a nullable object (`T`'s wrapper, of
+    /// interface `interface`: an init dictionary's `view`, whose default
+    /// is null): `Some(None)` if null or missing; another value a
     /// `TypeError`, thrown.
-    fn dict_nullable_object(
+    fn dict_nullable_object<T: HeapType>(
         &mut self,
         dict: &Self::Dict,
         member: &str,
-        kind: KeptKind,
-    ) -> Option<Option<KeptObject>> {
-        let _ = (dict, member, kind);
+        interface: &str,
+    ) -> Option<Option<Self::Node>> {
+        let _ = (dict, member, interface);
         unreachable!("a front end binding a dictionary with an object reads it")
     }
 
+    /// `dict`'s member `member` as a nullable event target of any type
+    /// (a node, a window, what `new EventTarget()` makes: an init
+    /// dictionary's `relatedTarget`), as `target_arg`: `Some(None)` if
+    /// null or missing; another value a `TypeError`, thrown.
+    fn dict_nullable_target(
+        &mut self,
+        dict: &Self::Dict,
+        member: &str,
+    ) -> Option<Option<Self::Node>> {
+        let _ = (dict, member);
+        unreachable!("a front end binding a dictionary with an event target reads it")
+    }
+
     /// `dict`'s member `member` as `AbortSignal?`: `Some(None)` if missing,
-    /// else null or the signal's wrapper, kept (another value a
-    /// `TypeError`, thrown).
-    fn dict_signal(&mut self, dict: &Self::Dict, member: &str) -> Option<Option<SignalMember>> {
+    /// else null or the signal's wrapper (another value a `TypeError`,
+    /// thrown).
+    fn dict_signal(
+        &mut self,
+        dict: &Self::Dict,
+        member: &str,
+    ) -> Option<Option<SignalMember<Self::Node>>> {
         let _ = (dict, member);
         unreachable!("a front end binding a dictionary with a signal reads it")
     }
@@ -469,9 +489,9 @@ pub trait Front: FrontTypes {
         unreachable!("a front end binding a member taking numbers reads them")
     }
 
-    /// Argument `index` as a `Uint8ClampedArray`, kept by the front end
-    /// (one a call); another value a `TypeError`.
-    fn uint8_clamped_arg(&mut self, index: usize) -> Option<Uint8ClampedArg> {
+    /// Argument `index` as a `Uint8ClampedArray`: the array as the engine
+    /// holds it and its length; another value a `TypeError`.
+    fn uint8_clamped_arg(&mut self, index: usize) -> Option<Uint8ClampedArg<Self::Any>> {
         let _ = index;
         unreachable!("a front end binding a member taking a typed array reads it")
     }
@@ -1234,23 +1254,6 @@ pub trait OpFront: FrontTypes {
         unreachable!("a front end binding a member with an `any` stores it")
     }
 
-    /// The object a dictionary's member kept (`Front::dict_object`).
-    fn kept_object<'gc, T: HeapType>(
-        &mut self,
-        cx: &ApiCx<'_, 'gc>,
-        object: KeptObject,
-    ) -> Gc<'gc, T> {
-        let _ = (cx, object);
-        unreachable!("a front end binding a dictionary with an object gives it")
-    }
-
-    /// The event target `object` names (a node, a window or a plain
-    /// target, kept as `KeptKind::EventTarget`).
-    fn kept_target<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, object: KeptObject) -> TargetRef<'gc> {
-        let _ = (cx, object);
-        unreachable!("a front end binding a dictionary with an event target gives it")
-    }
-
     /// Whether `edge` (a listener's) refers to the callback `callback`
     /// names (DOM's listener comparison, Blink's
     /// `JSEventListener::operator==`).
@@ -1274,13 +1277,6 @@ pub trait OpFront: FrontTypes {
     ) {
         let _ = (cx, edge, callback);
         unreachable!("a front end binding a member with a callback stores them")
-    }
-
-    /// `edge` (a new `ImageData`'s) made to refer to the array `array`
-    /// names, strongly.
-    fn store_array(&mut self, cx: &ApiCx<'_, '_>, edge: &JsEdge, array: Uint8ClampedArg) {
-        let _ = (cx, edge, array);
-        unreachable!("a front end binding a member taking a typed array stores it")
     }
 
     /// `f` with the bytes of the array `edge` refers to, read in place
@@ -1452,10 +1448,13 @@ pub enum BlobPartArg<N> {
     Blob(N),
 }
 
-/// A `Uint8ClampedArray` argument the front end keeps (`uint8_clamped_arg`):
-/// its length in bytes, as it was taken.
+/// A `Uint8ClampedArray` argument (`uint8_clamped_arg`): the array as the
+/// front end holds it (`FrontTypes::Any`), which the member's function
+/// hands back to it to store (`OpFront::store_any`), and its length in
+/// bytes, as it was taken.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Uint8ClampedArg {
+pub struct Uint8ClampedArg<A> {
+    pub array: A,
     pub len: usize,
 }
 
@@ -1481,83 +1480,62 @@ pub struct AnyArg<A>(pub A);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SignalObject<N>(pub N);
 
-/// Which objects `Front::dict_nullable_object` takes.
+/// An init dictionary's `view` (`Window?`, null by default) as the front
+/// end took it: a window's wrapper (`FrontTypes::Node`), which the
+/// member's function has the front end make the DOM's
+/// (`OpFront::object`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeptKind {
-    /// A window (its `WindowProxy`).
-    Window,
-    /// A node, a window or a plain event target.
-    EventTarget,
-}
+pub struct ViewObject<N>(pub N);
 
-/// An init dictionary's `view` (`Window?`, null by default), kept by the
-/// front end.
+/// An init dictionary's `relatedTarget` (`EventTarget?`, null by default)
+/// as the front end took it: a node's, a window's or a plain event
+/// target's wrapper, made the DOM's by `OpFront::target`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct KeptWindow(pub KeptObject);
+pub struct RelatedTarget<N>(pub N);
 
-/// An init dictionary's `relatedTarget` (`EventTarget?`, null by default),
-/// kept by the front end.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct KeptTarget(pub KeptObject);
-
-impl DictMember for Option<KeptWindow> {
-    fn read<F: Front>(
-        front: &mut F,
-        dict: &F::Dict,
-        member: &str,
-    ) -> Option<Option<Option<KeptWindow>>> {
+impl<F: Front> DictHandle<F> for Option<ViewObject<F::Node>> {
+    fn read(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<Self>> {
         Some(Some(
             front
-                .dict_nullable_object(dict, member, KeptKind::Window)?
-                .map(KeptWindow),
+                .dict_nullable_object::<dom::Window>(dict, member, "Window")?
+                .map(ViewObject),
         ))
     }
 }
 
-impl DictMember for Option<KeptTarget> {
-    fn read<F: Front>(
-        front: &mut F,
-        dict: &F::Dict,
-        member: &str,
-    ) -> Option<Option<Option<KeptTarget>>> {
+impl<F: Front> DictHandle<F> for Option<RelatedTarget<F::Node>> {
+    fn read(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<Self>> {
         Some(Some(
-            front
-                .dict_nullable_object(dict, member, KeptKind::EventTarget)?
-                .map(KeptTarget),
+            front.dict_nullable_target(dict, member)?.map(RelatedTarget),
         ))
     }
 }
-
-/// An object a dictionary's member gave, which the front end keeps
-/// (`Front::dict_object`), handed back to it in the operation
-/// (`OpFront::kept_object`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct KeptObject(pub usize);
 
 /// `BodyInit` (`(Blob or BufferSource or URLSearchParams or USVString)`)
 /// as the front end took it: a string, a buffer's bytes (a copy, as the
-/// buffer was), or a blob's or a `URLSearchParams`' wrapper, kept.
+/// buffer was), or a blob's or a `URLSearchParams`' wrapper
+/// (`FrontTypes::Node`, made the DOM's by `OpFront::object`).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BodyArg {
+pub enum BodyArg<N> {
     String(String),
     Bytes(Vec<u8>),
-    Blob(KeptObject),
-    SearchParams(KeptObject),
+    Blob(N),
+    SearchParams(N),
 }
 
 /// `RequestInit`'s `body` (`BodyInit?`) given: null, or a body.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BodyMember {
+pub enum BodyMember<N> {
     Null,
-    Body(BodyArg),
+    Body(BodyArg<N>),
 }
 
 /// `RequestInit`'s `signal` (`AbortSignal?`) given: null, or a signal's
-/// wrapper, kept.
+/// wrapper (`FrontTypes::Node`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SignalMember {
+pub enum SignalMember<N> {
     Null,
-    Signal(KeptObject),
+    Signal(N),
 }
 
 /// A dictionary member given (`RequestInit`'s `window`): whether it is
@@ -3439,19 +3417,19 @@ pub struct NullableBody;
 impl ArgType for NullableBody {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
-    type Taken<T: FrontTypes> = Option<BodyArg>;
-    type Param<'a, 'gc, T: FrontTypes + 'a> = Option<&'a BodyArg>;
+    type Taken<T: FrontTypes> = Option<BodyArg<T::Node>>;
+    type Param<'a, 'gc, T: FrontTypes + 'a> = Option<&'a BodyArg<T::Node>>;
 
-    fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<BodyArg>> {
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<Option<BodyArg<F::Node>>> {
         front.body_arg(index)
     }
 
     fn param<'a, 'gc, O: OpFront + 'a>(
         _: &mut O,
         _: &ApiCx<'_, 'gc>,
-        taken: &'a Option<BodyArg>,
+        taken: &'a Option<BodyArg<O::Node>>,
         _: usize,
-    ) -> Result<Option<&'a BodyArg>, ApiError> {
+    ) -> Result<Option<&'a BodyArg<O::Node>>, ApiError> {
         Ok(taken.as_ref())
     }
 }
@@ -3493,12 +3471,8 @@ impl RetType for PromiseOfJson {
     }
 }
 
-impl DictMember for Option<BodyMember> {
-    fn read<F: Front>(
-        front: &mut F,
-        dict: &F::Dict,
-        member: &str,
-    ) -> Option<Option<Option<BodyMember>>> {
+impl<F: Front> DictHandle<F> for Option<BodyMember<F::Node>> {
+    fn read(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<Self>> {
         Some(front.dict_body(dict, member)?.map(Some))
     }
 }
@@ -3517,12 +3491,8 @@ impl DictMember for Option<HeadersMember> {
     }
 }
 
-impl DictMember for Option<SignalMember> {
-    fn read<F: Front>(
-        front: &mut F,
-        dict: &F::Dict,
-        member: &str,
-    ) -> Option<Option<Option<SignalMember>>> {
+impl<F: Front> DictHandle<F> for Option<SignalMember<F::Node>> {
+    fn read(front: &mut F, dict: &F::Dict, member: &str) -> Option<Option<Self>> {
         Some(front.dict_signal(dict, member)?.map(Some))
     }
 }
@@ -6757,26 +6727,27 @@ impl ArgType for EnforcedI32 {
     }
 }
 
-/// A `Uint8ClampedArray`: as an argument, the script's own, kept by the
-/// front end (`Uint8ClampedArg`); as a result, the one an `ImageData`
+/// A `Uint8ClampedArray`: as an argument, the script's own, as the front
+/// end holds it (`Uint8ClampedArg`); as a result, the one an `ImageData`
 /// holds (its `JsEdge`), the same each time.
 pub struct Uint8ClampedArray;
 
 impl ArgType for Uint8ClampedArray {
     const DESC: TypeDesc = TypeDesc::Uint8ClampedArray;
-    type Taken<T: FrontTypes> = Uint8ClampedArg;
-    type Param<'a, 'gc, T: FrontTypes + 'a> = Uint8ClampedArg;
+    const PLAIN: bool = true;
+    type Taken<T: FrontTypes> = Uint8ClampedArg<T::Any>;
+    type Param<'a, 'gc, T: FrontTypes + 'a> = Uint8ClampedArg<T::Any>;
 
-    fn take<F: Front>(front: &mut F, index: usize) -> Option<Uint8ClampedArg> {
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<Uint8ClampedArg<F::Any>> {
         front.uint8_clamped_arg(index)
     }
 
     fn param<'a, 'gc, O: OpFront + 'a>(
         _: &mut O,
         _: &ApiCx<'_, 'gc>,
-        taken: &'a Uint8ClampedArg,
+        taken: &'a Uint8ClampedArg<O::Any>,
         _: usize,
-    ) -> Result<Uint8ClampedArg, ApiError> {
+    ) -> Result<Uint8ClampedArg<O::Any>, ApiError> {
         Ok(*taken)
     }
 }
@@ -8523,6 +8494,11 @@ pub const PLAIN_FRONT_METHODS: &[&str] = &[
     "rest_arg",
     "dict_any",
     "dict_object",
+    "dict_nullable_object",
+    "dict_nullable_target",
+    "dict_body",
+    "dict_signal",
+    "uint8_clamped_arg",
     "function_arg",
     "nullable_function_arg",
     "event_handler_arg",

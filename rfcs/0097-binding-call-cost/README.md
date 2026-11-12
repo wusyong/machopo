@@ -222,6 +222,11 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
     - setter「不收這個名字」（`style.notAProperty = 1` 落回一般屬性）：給結果的當下記下來（`InfoKind` 的 `Noted`，和 4i-1 的「沒有這一項」一樣），不寫 V8 的回傳值那一格。named getter 的空字串是值（`data-a=""`），只有 null 是沒有這個屬性：`note_no_item` 分成 null 和空字串兩個。
     - fork 再加一個只有 Rust 的讀法：interceptor 的 raw callback 拿到的名稱和值是 `SealedLocal`，要不建 scope 換成 `Local`。
 38. **只被這次呼叫持有的字串不進字串的快取**（2026-11-12，4i-2 之後獨立的一小段）：`StringCache` 照 `DomString` 的位址記 V8 的字串（`Weak` 加 finalizer，V8 回收時標成 dead）。DOM 留著的字串（屬性值、文字、名稱）下次回傳時位址相同、找得到；每次現算的（`style.color` 的序列化、其他 getter 做出來的新字串）位址每次不同，永遠找不到，卻每次登記一筆：`style.color` 是 `'red'` 時 4709 條指令、2664 個 cycle（4i-2）。做法：做 V8 的字串時，`DomString` 的引用計數是 1（只有這次呼叫要回傳的那一份）就直接做、不登記；DOM 還留著的照舊。不選留著不動。Blink 的 `StringCache` 也照 `StringImpl` 的位址記、也替暫時的字串登記，但它的字串是 external 的（V8 的字串指著 `StringImpl`，不複製），登記的是一個 persistent handle，沒有 machopo 這邊每筆一個 `Box` 的 finalizer。
+39. **4j：剩下的參數型別怎麼搬，切成 4j-1 和 4j-2**（2026-11-12）：
+    - **操作前整個讀成 Rust 值的型別（約 30 種：keyframes、`RequestInit` 的成員、structured clone、sequence…）照樣在操作前讀**：新的 front 的這些方法是冷的，建一個 scope、呼叫現有的讀取的程式（這一段經過 `with_front`，4m 搬成自己的），型別標成 `PLAIN`。讀 JS 物件會配置、會跑 getter，那個 scope 省不掉；Chromium 也在呼叫實作之前轉成 native 的值（`NativeValueTraits<IDLSequence<…>>`、dictionary 的 `Create`）。不選改成 handle 在操作裡讀（讀物件會跑 script，V8 在操作裡不能配置）；不選留到 4m（4m 會同時搬型別又刪 `V8Front`）。
+    - **`KeptObject` 的編號換成現有的 handle**（`FrontTypes::Node`，V8 上是檢查過 interface 的 wrapper）：init dictionary 的 `view`、`relatedTarget`，`RequestInit` 的 `signal`，body 的 `Blob` 和 `URLSearchParams`。操作裡用已有的 `OpFront::object`、`target` 解出 DOM 的物件；`kept_object`、`kept_target`、`KeptKind`、`dict_nullable_object` 和 `V8Front` 那個陣列拿掉。執行時少一次放進陣列和照編號查回來；代價是這些 dictionary 多型別參數（決定 32 的機制）。不選另加一個 `FrontTypes::Object`（V8 上和節點都是 `Local<Object>`、wasm 上都是 `u32`，多一個沒有差別的型別）；不選讓新的 front 也實作編號（每次呼叫要帶一個陣列，三個預設會 panic 的方法拿不掉）。
+    - **`new ImageData(array, w)` 的 `Uint8ClampedArray` 讀成值的 handle（`FrontTypes::Any`）加長度**，操作裡用已有的 `store_any` 存進 edge，`store_array` 拿掉。不選替 typed array 加專屬的 handle（只有這一個成員用）。
+    - **切法**：4j-1 是編號換成 handle 的這兩項，連同 UI 事件的 constructor 和 `ImageData`；4j-2 是讀成 Rust 值的型別，連同其餘的 constructor、method、setter 和 2 個 static。量測每類量代表的幾個：這些成員的成本主要在讀 JS 物件本身，換外殼省的比例不大，這一段主要是讓 4m 能刪掉 `V8Front`。
 
 ## 待決定
 
@@ -233,4 +238,5 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
 - 操作可以巢狀：DOM 做到一半呼叫 script 不用結束操作。
 - wasm 的 front 照同樣的方式量。
 - 每次現算的字串（`style.color`、其他 getter 給的新的 `DomString`）在字串的快取裡永遠找不到（快取照位址記），每次新建 V8 的字串並登記一筆（`Weak` 加 finalizer）：`style.color` 是 `'red'` 時 4709 條指令、2664 個 cycle（4i-2 量的；決定 36 當時猜是 CSS 那一側，不是）。空字串已經不經過快取。決定 38 做了。
+- dictionary 的成員名稱每次讀都重新做成 V8 的 internalized 字串（`templates::string`）再 `Get`：一個成員約一千條指令，`new MouseEvent('x', init)`（三十個左右的成員）三萬兩千條（4j-1 量的）。Chromium 產生的 dictionary 轉換把成員名稱的 V8 字串每個 isolate 快取一份（`V8PerIsolateData::FindOrCreateEternalNameCache`），讀成員時不建字串。
 - `HTMLElement` 的 constructor 每次建一個 scope 檢查 `new.target` 是不是 `HTMLElement` 本身（決定 35）：要不建 scope 拿到 realm 的 interface 物件，或換一種比法。

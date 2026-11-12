@@ -66,17 +66,17 @@ impl<'gc> Body<'gc> {
 pub(crate) fn extract<'gc, O: OpFront>(
     op: &mut O,
     cx: &ApiCx<'_, 'gc>,
-    body: &BodyArg,
+    body: &BodyArg<O::Node>,
 ) -> (Arc<[u8]>, Option<String>) {
     match body {
         BodyArg::Blob(blob) => {
-            let data = cx.blob_data(op.kept_object::<dom::Blob>(cx, *blob));
+            let data = cx.blob_data(op.object::<dom::Blob>(cx, blob));
             let content_type = (!data.type_().is_empty()).then(|| data.type_().to_owned());
             (data.shared_bytes(), content_type)
         }
         BodyArg::Bytes(bytes) => (bytes.as_slice().into(), None),
         BodyArg::SearchParams(params) => {
-            let params = op.kept_object::<dom::UrlSearchParams>(cx, *params);
+            let params = op.object::<dom::UrlSearchParams>(cx, params);
             let text = cx.with_search_params(params, |list| crate::url::serialize(list));
             (
                 text.into_bytes().into(),

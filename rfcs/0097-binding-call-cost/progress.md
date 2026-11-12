@@ -21,7 +21,8 @@
 | 4i-1 indexed getter 的 interceptor（`list[i]`、`children[i]`、`classList[i]`、`attributes[i]`；決定 36） | 完成 | 2026-11-12 |
 | 4i-2 named 的 getter 和 setter 的 interceptor（`dataset.a`、`children.px`、`attributes.id`；決定 37）；空字串不做字串 | 完成 | 2026-11-12 |
 | 4i-3 只被這次呼叫持有的字串不進字串的快取（決定 38） | 完成 | 2026-11-12 | |
-| 4j 剩下的參數型別改成 handle（`fetch` 的 init、`postMessage`、keyframes、事件 init 的 `view` 和 `relatedTarget`、`Uint8ClampedArray`…），連同卡在這些型別的 constructor；`kept_object`、`kept_target`、`store_array` 跟著拿掉 | 還沒開始 | |
+| 4j-1 `KeptObject` 的編號和 `Uint8ClampedArg` 換成 handle（`view`、`relatedTarget`、`signal`、body 的 `Blob` 和 `URLSearchParams`、`ImageData` 的陣列）；`kept_object`、`kept_target`、`store_array` 拿掉；UI 事件的 constructor 和 `ImageData`（決定 39） | 完成 | 2026-11-12 |
+| 4j-2 操作前讀成 Rust 值的參數型別（`fetch` 的 init、`postMessage`、keyframes…），連同卡在這些型別的 constructor、method、setter 和 static（決定 39） | 還沒開始 | |
 | 4k 會呼叫 script 的 33 個成員：先逐個量、列出值得改結構的，再決定 | 還沒開始 | |
 | 4l cross-origin 的 16 個成員；4i 留下的 interceptor（indexed setter、iterator 的 pairs、named 的刪除、查詢和列舉）；legacy factory | 還沒開始 | |
 | 4m 冷的路搬成新的 front 自己的（現在當場建 scope、交給 `V8Front`）；拿掉 `V8Front`、`Call`、`Kept` 和 `PLAIN`（連同它的檢查：`PLAIN_FRONT_METHODS`、`PLAIN_OP_METHODS`、`dom_api` 的 `plain` 測試、`dom_js` 的 `the_plain_methods_are_the_info_front_ends_own`、`docs/test-gaps.md` 的那一列） | 還沒開始 | |
@@ -422,3 +423,15 @@
 - 測試：`dom_js` 的 `strings::a_string_only_the_call_holds_isnt_cached`（`style.color`、`style['color']`、`style.cssText` 各讀 50 次，快取的筆數不變、值正確；`getAttribute('title')` 讀 50 次只多一筆）。
 - mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4i3.toml`，4 個都抓到（一律登記、反過來只登記呼叫自己持有的、一律不登記、兩個持有也算唯一）。
 - 跑過：`cargo test -p dom -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt dom html/dom css/cssom css/css-variables`（128481 個結果都照預期；失敗的 13 個 reftest 都是本來就預期失敗的）。
+
+**第 4j-1 段：`KeptObject` 的編號和 `Uint8ClampedArg` 換成 handle**（2026-11-12，決定 39）：
+
+- `dom_api`：`ViewObject<N>`、`RelatedTarget<N>`（init dictionary 的 `view`、`relatedTarget`）、`SignalMember<N>`、`BodyMember<N>`、`BodyArg<N>`（`RequestInit` 的 `signal`、`body`，`new Response(body)`）都帶 front 的 handle（`FrontTypes::Node`），dictionary 的成員經過 `DictHandle` 讀；`Uint8ClampedArg<A>` 是 handle（`FrontTypes::Any`）加長度。`Front::dict_nullable_object::<T>`（原本照 `KeptKind` 分）、新的 `dict_nullable_target`，`body_arg`、`dict_body`、`dict_signal`、`uint8_clamped_arg` 回傳 handle。操作裡用已有的 `OpFront::object`、`target`、`store_any`。拿掉 `KeptObject`、`KeptWindow`、`KeptTarget`、`KeptKind`、`OpFront::kept_object`、`kept_target`、`store_array`：`OpFront` 沒有「要編號才能呼叫」的方法了。UI 事件的六個 init dictionary 和 `RequestInit` 多型別參數（函式拿 `&MouseEventInit<O::Node>`）。
+- `dom_js`：`V8Front` 的 `kept_objects`、`array`（`RareCall` 的欄位）和 `keep_object` 拿掉；`InfoFront` 實作這六個方法（dictionary 的四個和 `body_arg` 經過 `with_front`；`uint8_clamped_arg` 自己讀，是 typed array 時不建 scope）。`dom_wasm` 不用改（這些方法它用預設的）。
+- `PLAIN`：`Uint8ClampedArray` 的參數標成 `PLAIN`；UI 事件的 init dictionary 的成員都是 handle 或 `PLAIN`，跟著是。`PLAIN_FRONT_METHODS` 加 `dict_nullable_object`、`dict_nullable_target`、`dict_body`、`dict_signal`、`uint8_clamped_arg`（原始碼的檢查先擋下來：`BodyMember`、`SignalMember` 改成 `DictHandle` 之後呼叫了清單外的方法）。
+- 換到的成員：`UIEvent`、`MouseEvent`、`WheelEvent`、`FocusEvent`、`KeyboardEvent`、`InputEvent`、`ImageData` 的 constructor。實際走新的 front 的成員 2692 → 2699；不是 `PLAIN` 的 constructor 20 → 13。
+- 4i-3 和這一段的 binary 各跑七次取最小（`perf stat`，指令數（cycle））：`new MouseEvent('x')` 2689（667）→ 2568（637），`new MouseEvent('x', { clientX: 1 })` 32216（5911）→ 32045（5889），`new MouseEvent('x', { relatedTarget: n })` 33208（6282）→ 32726（6100），`new UIEvent('x', { detail: 1 })` 8343（1714）→ 8227（1676），`new KeyboardEvent('x', { key: 'a' })` 31846（6224）→ 31500（6115），`new ImageData(u8, 2)` 2947（620）→ 2603（533）；沒變的：`nodeType` 109 → 112、`new ImageData(2, 1)` 8648 → 8665、`new Event('x')` 2612 → 2617、`new Event('x', init)` 5358 → 5352。
+- 量測時看到的（不在這一段修，記在 README 的「之後的可能」）：帶 init 的 `new MouseEvent` 三萬多條指令，幾乎都在讀 dictionary：每個成員各把名稱做成 V8 的 internalized 字串（`templates::string`）再 `Get`，一個成員約一千條，`MouseEventInit` 有三十個左右。
+- 測試：`dom_js` 的 `handlers::an_objects_handle_is_taken_as_it_is`（`view` 是 window、null、undefined、沒給；`relatedTarget` 是節點、window、`new EventTarget()` 的物件、null；六個 constructor 都建 scope 讀 dictionary（走新的 front）；`view` 是節點或數字、`relatedTarget` 是一般物件或事件時是 `TypeError`；`new ImageData(bytes, 2).data === bytes` 不建 scope、長度不對的 `InvalidStateError`、別種 typed array 走另一個 constructor；`Request` 的 signal（跟著 abort、null 不跟 input 的、沒給的跟、別種物件是 `TypeError`）、body 是 `Blob` 和 `URLSearchParams` 時的 `Content-Type`）。寫測試時弄錯的：這幾個 `TypeError` 和 `InvalidStateError` 的訊息沒有 `Failed to construct` 的前綴；`new ImageData(new Uint8Array(8), 2)` 不是 `TypeError`，是另一個 constructor 的 `IndexSizeError`。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4j1.toml`，15 個都抓到。第一次停在「null 的 signal 當成沒給」沒抓到（原有的測試也沒有分辨），補了「input 有 signal、init 的 signal 是 null 時不跟」。
+- 跑過：`cargo test -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt dom/events uievents html/canvas/element fetch/api/request fetch/api/response fetch/api/abort`（4505 個結果都照預期；失敗的 18 個 reftest 都是本來就預期失敗的）。

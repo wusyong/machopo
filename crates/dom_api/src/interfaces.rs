@@ -19,26 +19,26 @@ use crate::typed::{
     FormControlsCollectionObject, FrameRequestCallback, FrozenArray, FrozenStrings,
     GetHtmlOptionsArg, HTMLCollectionOrElement, HashChangeEventObject, HeaderPairs, HeadersMember,
     Hidden, IdleRequestCallback, InputEventObject, IntersectionObserverCallback,
-    IntersectionObserverEntryInitArg, IntersectionObserverInitArg, IsNull, JsonData, KeptTarget,
-    KeptWindow, KeyboardEventObject, Keyframes, LegacyNullToEmptyString, LongDefaultMinusOne,
-    LongDefaultOne, MeasureStart, MediaQueryListEventObject, MediaQueryListObject,
-    MessageEventObject, MessagePortObject, MessagePorts, MouseEventObject, MutationCallback,
-    NamespaceObject, NavigationTimingObject, NetworkInformationObject, NewElement, NewHtmlElement,
-    NewImageData, NewNodeLikeThis, NewObject, NoObject, NoPositionObject, NodesOrStrings,
-    NullableBody, NullableElementOrLong, NullableU32, NumberIfNumber, Numbers, ObservableArray,
-    OptionOrOptGroup, OptionalClampedI64, OptionalPath2dOrString, OptionalString,
-    OptionalTimingArg, OptionalUnrestrictedDouble, OptionsCollectionObject, PendingPromise,
-    PerformanceEntryObject, PerformanceMarkObject, PerformanceMeasureObject,
-    PerformanceNavigationObject, PerformanceObject, PerformanceObserverCallback,
-    PerformanceTimingObject, PopStateEventObject, PositionCallback, PositionErrorCallback,
-    ProgressEventObject, Promise, PromiseOfAnimation, PromiseOfAny, PromiseOfArrayBuffer,
-    PromiseOfJson, PromiseOfString, PromiseOfUint8Array, PromiseOfUndefined,
-    PromiseRejectionEventObject, RadioNodeListObject, RadioNodeListOrElement, ReaderResult,
-    Records, RequestInfo, ResizeObserverCallback, Rest, RoundRectRadii, Sequence, Serialized,
-    SignalMember, SignalObject, Slottables, StaticRangeInitArg, StringOrNumber, StringPairs,
-    Strings, TargetObject, TextEventObject, TimelineArg, TimerHandler, TransitionEventObject,
-    U16Default302, UiEventObject, Uint8ClampedArray, UnrestrictedDouble, WakeLockSentinelObject,
-    WhatToShow, WheelEventObject,
+    IntersectionObserverEntryInitArg, IntersectionObserverInitArg, IsNull, JsonData,
+    KeyboardEventObject, Keyframes, LegacyNullToEmptyString, LongDefaultMinusOne, LongDefaultOne,
+    MeasureStart, MediaQueryListEventObject, MediaQueryListObject, MessageEventObject,
+    MessagePortObject, MessagePorts, MouseEventObject, MutationCallback, NamespaceObject,
+    NavigationTimingObject, NetworkInformationObject, NewElement, NewHtmlElement, NewImageData,
+    NewNodeLikeThis, NewObject, NoObject, NoPositionObject, NodesOrStrings, NullableBody,
+    NullableElementOrLong, NullableU32, NumberIfNumber, Numbers, ObservableArray, OptionOrOptGroup,
+    OptionalClampedI64, OptionalPath2dOrString, OptionalString, OptionalTimingArg,
+    OptionalUnrestrictedDouble, OptionsCollectionObject, PendingPromise, PerformanceEntryObject,
+    PerformanceMarkObject, PerformanceMeasureObject, PerformanceNavigationObject,
+    PerformanceObject, PerformanceObserverCallback, PerformanceTimingObject, PopStateEventObject,
+    PositionCallback, PositionErrorCallback, ProgressEventObject, Promise, PromiseOfAnimation,
+    PromiseOfAny, PromiseOfArrayBuffer, PromiseOfJson, PromiseOfString, PromiseOfUint8Array,
+    PromiseOfUndefined, PromiseRejectionEventObject, RadioNodeListObject, RadioNodeListOrElement,
+    ReaderResult, Records, RelatedTarget, RequestInfo, ResizeObserverCallback, Rest,
+    RoundRectRadii, Sequence, Serialized, SignalMember, SignalObject, Slottables,
+    StaticRangeInitArg, StringOrNumber, StringPairs, Strings, TargetObject, TextEventObject,
+    TimelineArg, TimerHandler, TransitionEventObject, U16Default302, UiEventObject,
+    Uint8ClampedArray, UnrestrictedDouble, ViewObject, WakeLockSentinelObject, WhatToShow,
+    WheelEventObject,
 };
 use crate::window::NavigationUrl;
 use crate::{
@@ -428,14 +428,14 @@ crate::declare! {
     }
 
     // WebIDL's names, which the table reads its members by, in its order:
-    // the inherited dictionaries' first. `view` kept by the front end
-    // (`KeptWindow`), as `relatedTarget` (`KeptTarget`) below.
+    // the inherited dictionaries' first. `view` is the front end's handle
+    // (`ViewObject`), as `relatedTarget` (`RelatedTarget`) below.
     dictionary UIEventInit {
         bubbles: bool = false,
         cancelable: bool = false,
         composed: bool = false,
         detail: i32 = 0,
-        view: Option<KeptWindow> = None,
+        view: Option<ViewObject<T::Node>> = None,
         which: u32 = 0,
     }
 
@@ -499,7 +499,7 @@ crate::declare! {
         cancelable: bool = false,
         composed: bool = false,
         detail: i32 = 0,
-        view: Option<KeptWindow> = None,
+        view: Option<ViewObject<T::Node>> = None,
         which: u32 = 0,
         altKey: bool = false,
         ctrlKey: bool = false,
@@ -521,7 +521,7 @@ crate::declare! {
         clientY: f64 = 0.0,
         movementX: f64 = 0.0,
         movementY: f64 = 0.0,
-        relatedTarget: Option<KeptTarget> = None,
+        relatedTarget: Option<RelatedTarget<T::Node>> = None,
         screenX: f64 = 0.0,
         screenY: f64 = 0.0,
     }
@@ -551,7 +551,7 @@ crate::declare! {
         cancelable: bool = false,
         composed: bool = false,
         detail: i32 = 0,
-        view: Option<KeptWindow> = None,
+        view: Option<ViewObject<T::Node>> = None,
         which: u32 = 0,
         altKey: bool = false,
         ctrlKey: bool = false,
@@ -573,7 +573,7 @@ crate::declare! {
         clientY: f64 = 0.0,
         movementX: f64 = 0.0,
         movementY: f64 = 0.0,
-        relatedTarget: Option<KeptTarget> = None,
+        relatedTarget: Option<RelatedTarget<T::Node>> = None,
         screenX: f64 = 0.0,
         screenY: f64 = 0.0,
         deltaMode: u32 = 0,
@@ -595,9 +595,9 @@ crate::declare! {
         cancelable: bool = false,
         composed: bool = false,
         detail: i32 = 0,
-        view: Option<KeptWindow> = None,
+        view: Option<ViewObject<T::Node>> = None,
         which: u32 = 0,
-        relatedTarget: Option<KeptTarget> = None,
+        relatedTarget: Option<RelatedTarget<T::Node>> = None,
     }
 
     // `focus()`'s; `focusVisible` with no default (the window's then).
@@ -650,7 +650,7 @@ crate::declare! {
         cancelable: bool = false,
         composed: bool = false,
         detail: i32 = 0,
-        view: Option<KeptWindow> = None,
+        view: Option<ViewObject<T::Node>> = None,
         which: u32 = 0,
         altKey: bool = false,
         ctrlKey: bool = false,
@@ -706,7 +706,7 @@ crate::declare! {
         cancelable: bool = false,
         composed: bool = false,
         detail: i32 = 0,
-        view: Option<KeptWindow> = None,
+        view: Option<ViewObject<T::Node>> = None,
         which: u32 = 0,
         data: Option<String> = None,
         inputType: String = String::new(),
@@ -1198,7 +1198,7 @@ crate::declare! {
     dictionary RequestInit {
         method: Option<String> = None,
         headers: Option<HeadersMember> = None,
-        body: Option<BodyMember> = None,
+        body: Option<BodyMember<T::Node>> = None,
         referrer: Option<String> = None,
         referrerPolicy: Option<String> = None,
         mode: Option<String> = None,
@@ -1207,7 +1207,7 @@ crate::declare! {
         redirect: Option<String> = None,
         integrity: Option<String> = None,
         keepalive: Option<bool> = None,
-        signal: Option<SignalMember> = None,
+        signal: Option<SignalMember<T::Node>> = None,
         duplex: Option<String> = None,
         priority: Option<String> = None,
         window: Option<IsNull> = None,
