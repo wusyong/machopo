@@ -48,11 +48,29 @@ pub(crate) struct NamedCalls {
     /// The indexed setter (`#[indexed(setter)]`), which the indexed
     /// interceptor calls.
     pub(crate) indexed_set: Option<Call>,
+    /// The getter's and the setter's own callbacks, given V8's callback
+    /// info alone, if they are plain: what a string name's get and set
+    /// call (`NamedGetter`, `NamedSetter`).
+    get_info: Option<v8::NamedPropertyGetterCallback>,
+    set_info: Option<v8::NamedPropertySetterCallback>,
 }
 
 impl NamedCalls {
     pub(crate) fn add<M: TypedMember>(&mut self, named: Named) {
         let call: Call = call::<M>;
+        // Known as this is expanded: only a plain one's callback has its
+        // address taken.
+        if const { M::PLAIN } {
+            match named {
+                Named::Getter => {
+                    self.get_info = Some(bindings::info_named_getter::<State, NamedGetter<M>>());
+                }
+                Named::Setter => {
+                    self.set_info = Some(bindings::info_named_setter::<State, NamedSetter<M>>());
+                }
+                Named::Deleter | Named::Names => {}
+            }
+        }
         let slot = match named {
             Named::Getter => &mut self.get,
             Named::Setter => &mut self.set,
@@ -76,12 +94,49 @@ impl NamedCalls {
             deleter: self.delete.is_some(),
             enumerator: self.names.is_some(),
             indices: !indexed,
+            getter_info: self.get_info,
+            setter_info: self.set_info,
         }
     }
 }
 
 fn call<M: TypedMember>(front: &mut PropertyFront<'_, '_, '_>) {
     M::call(front);
+}
+
+/// `object.name` of a plain named getter `M`: its typed path through the
+/// front end that is the interceptor's info, as a plain member's. A
+/// result that is null is no property of the name: V8 looks on (the
+/// object's own, its prototypes').
+struct NamedGetter<M>(std::marker::PhantomData<M>);
+
+impl<M: TypedMember> bindings::StateInfoNamedGetter<State> for NamedGetter<M> {
+    fn get(info: bindings::StateNameInfo<'_, State>) -> v8::Intercepted {
+        let mut front = crate::info_front::InfoFront::<crate::info_front::NamedGet>::new(info);
+        M::call(&mut front);
+        if front.noted().0 {
+            v8::Intercepted::kNo
+        } else {
+            v8::Intercepted::kYes
+        }
+    }
+}
+
+/// `object.name = value` of a plain named setter `M`: one that gives
+/// `false` didn't take the name, an ordinary property's.
+struct NamedSetter<M>(std::marker::PhantomData<M>);
+
+impl<M: TypedMember> bindings::StateInfoNamedSetter<State> for NamedSetter<M> {
+    fn set(info: bindings::StateNameInfo<'_, State>) -> v8::Intercepted {
+        let mut front = crate::info_front::InfoFront::<crate::info_front::NamedSet>::new(info);
+        M::call(&mut front);
+        front.report();
+        if front.noted().0 {
+            v8::Intercepted::kNo
+        } else {
+            v8::Intercepted::kYes
+        }
+    }
 }
 
 /// What a special operation gave.

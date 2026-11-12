@@ -1,0 +1,100 @@
+# Stage 4i-2: a plain named getter and setter each have a callback of
+# their own given V8's callback info alone (`bindings::StateNameInfo`,
+# `InfoKind`'s `NamedGet` and `NamedSet`); V8's own empty string is
+# returned with no scope.
+test = ["cargo", "test", "-q", "-p", "dom_api", "-p", "dom_js", "-p", "dom_wasm"]
+timeout = 1800
+
+[[mutant]]
+name = "a named getter's null is a property"
+file = "crates/dom_js/src/info_front.rs"
+from = '''    /// No property of the name: V8 looks on.
+    #[inline(always)]
+    fn note_null(noted: &mut NoItem) {
+        noted.0 = true;
+    }'''
+to = '''    /// No property of the name: V8 looks on.
+    #[inline(always)]
+    fn note_null(noted: &mut NoItem) {
+        noted.0 = false;
+    }'''
+
+[[mutant]]
+name = "a named setter always takes the name"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        noted.0 = !took;
+        false'''
+to = '''        let _ = took;
+        noted.0 = false;
+        false'''
+
+[[mutant]]
+name = "a plain named getter is called as before"
+file = "crates/dom_js/src/named.rs"
+from = '''                Named::Getter => {
+                    self.get_info = Some(bindings::info_named_getter::<State, NamedGetter<M>>());
+                }'''
+to = '''                Named::Getter => {}'''
+
+[[mutant]]
+name = "a plain named setter is called as before"
+file = "crates/dom_js/src/named.rs"
+from = '''                Named::Setter => {
+                    self.set_info = Some(bindings::info_named_setter::<State, NamedSetter<M>>());
+                }'''
+to = '''                Named::Setter => {}'''
+
+[[mutant]]
+name = "the info getter isn't installed"
+file = "crates/bindings/src/isolate_state.rs"
+from = '''    let mut named = match options.getter_info {
+        Some(getter) => named.getter_raw(getter),
+        None => named.getter(named_get::<T, N>),
+    }'''
+to = '''    let mut named = match options.getter_info {
+        Some(_) | None => named.getter(named_get::<T, N>),
+    }'''
+
+[[mutant]]
+name = "an empty string result is left undefined"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            K::note_empty(self.noted);
+            self.no_gc.ret().set_empty_string();
+            return None;
+        }
+        let returned = self'''
+to = '''            K::note_empty(self.noted);
+            return None;
+        }
+        let returned = self'''
+
+[[mutant]]
+name = "the names table's empty string is left undefined"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if id == names::NONE {
+            K::note_empty(self.noted);
+            self.no_gc.ret().set_empty_string();
+            return None;
+        }'''
+to = '''        if id == names::NONE {
+            K::note_empty(self.noted);
+            return None;
+        }'''
+
+[[mutant]]
+name = "a named setter's value is its name"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                (0, _) => info.name().into(),
+                (_, Some(value)) => value,'''
+to = '''                (0, _) | (_, Some(_)) => info.name().into(),'''
+
+[[mutant]]
+name = "a named setter's call has one argument"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        fn length(info: &Self::Info) -> usize {
+            if info.value().is_some() { 2 } else { 1 }
+        }'''
+to = '''        fn length(info: &Self::Info) -> usize {
+            let _ = info;
+            1
+        }'''

@@ -220,6 +220,17 @@ pub trait StateInfoIndexedGetter<T>: 'static {
     fn get(info: StateIndexInfo<'_, T>) -> v8::Intercepted;
 }
 
+/// A named getter given V8's callback info alone (`StateNameInfo`): what
+/// `info_named_getter`'s callback calls for `object.name`.
+pub trait StateInfoNamedGetter<T>: 'static {
+    fn get(info: StateNameInfo<'_, T>) -> v8::Intercepted;
+}
+
+/// A named setter given V8's callback info alone: `object.name = value`.
+pub trait StateInfoNamedSetter<T>: 'static {
+    fn set(info: StateNameInfo<'_, T>) -> v8::Intercepted;
+}
+
 /// A function given V8's callback info alone, as `StateInfoMethod`, its
 /// receiver unchecked (a static operation's: it has no signature): what
 /// `state_info_function_template` calls.
@@ -339,6 +350,13 @@ pub struct NamedOptions {
     /// interface has indexed properties of its own, its indexed handler
     /// left as it is.
     pub indices: bool,
+    /// The getter of a string name, if it is one given V8's callback
+    /// info alone (`info_named_getter`) in `StateNamedProperties::get`'s
+    /// place; and the setter (`info_named_setter`), in `set`'s. An array
+    /// index as a name, and the other callbacks, are
+    /// `StateNamedProperties`' either way.
+    pub getter_info: Option<v8::NamedPropertyGetterCallback>,
+    pub setter_info: Option<v8::NamedPropertySetterCallback>,
 }
 
 /// A scope whose isolate's state is a `T` (a state callback's, its template
@@ -521,6 +539,83 @@ impl<'s, T: Any> InfoState<'s, T> for StateIndexInfo<'s, T> {
     }
 }
 
+/// A named property's interceptor's info (V8's `PropertyCallbackInfo`),
+/// the name asked for and (a setter's) the value, its isolate's state a
+/// `T`: as `StateIndexInfo` is an indexed getter's. A setter's result
+/// isn't the info's to give (V8 reads what the callback returns): its
+/// holder writes none.
+pub struct StateNameInfo<'s, T> {
+    info: &'s v8::PropertyCallbackInfo<v8::Value>,
+    isolate: v8::Isolate,
+    name: v8::Local<'s, v8::Name>,
+    value: Option<v8::Local<'s, v8::Value>>,
+    _state: PhantomData<fn() -> T>,
+}
+
+impl<'s, T: Any> StateNameInfo<'s, T> {
+    /// The name asked for: a string (the interceptor takes no symbols).
+    #[inline(always)]
+    pub fn name(&self) -> v8::Local<'s, v8::Name> {
+        self.name
+    }
+
+    /// The value a setter is given; none for a getter.
+    #[inline(always)]
+    pub fn value(&self) -> Option<v8::Local<'s, v8::Value>> {
+        self.value
+    }
+
+    /// The object the interceptor is on, as `StateIndexInfo::holder`.
+    #[inline(always)]
+    pub fn holder(&self) -> Receiver<'s> {
+        Receiver(self.info.arguments().holder())
+    }
+}
+
+impl<'s, T: Any> InfoState<'s, T> for StateNameInfo<'s, T> {
+    #[inline(always)]
+    fn isolate(&mut self) -> &mut v8::Isolate {
+        &mut self.isolate
+    }
+
+    #[inline(always)]
+    fn state(&mut self) -> (&T, InfoNoGc<'_, 's>) {
+        let rv = v8::ReturnValue::from_property_callback_info(self.info);
+        let isolate = &mut self.isolate;
+        // SAFETY: as `StateIndexInfo::state`'s.
+        let state = unsafe { unchecked::<T>(isolate).as_ref() };
+        (state, InfoNoGc { isolate, rv })
+    }
+
+    #[inline(always)]
+    fn state_mut(&mut self) -> (&mut T, InfoNoGc<'_, 's>) {
+        let rv = v8::ReturnValue::from_property_callback_info(self.info);
+        let isolate = &mut self.isolate;
+        // SAFETY: as `state`'s.
+        let state = unsafe { unchecked::<T>(isolate).as_mut() };
+        (state, InfoNoGc { isolate, rv })
+    }
+
+    #[inline(never)]
+    fn with_scope<R>(
+        &mut self,
+        f: impl FnOnce(StateScope<'_, 's, 's, T>, v8::ReturnValue<'s, v8::Value>) -> R,
+    ) -> R {
+        if cfg!(debug_assertions) {
+            INFO_SCOPES.set(INFO_SCOPES.get().wrapping_add(1));
+        }
+        // SAFETY: as `StateIndexInfo::with_scope`'s.
+        v8::callback_scope!(unsafe scope, self.info);
+        f(
+            StateScope {
+                scope,
+                _state: PhantomData,
+            },
+            v8::ReturnValue::from_property_callback_info(self.info),
+        )
+    }
+}
+
 /// A `StateInfo` of a function with a signature: its receiver is one of
 /// the isolate's templates' objects (`StateInfo::receiver`).
 pub struct Signed;
@@ -665,6 +760,57 @@ unsafe extern "C" fn info_indexed_trampoline<T: Any, G: StateInfoIndexedGetter<T
         index,
         _state: PhantomData,
     })
+}
+
+/// An info named getter's callback: V8's own (`getter_raw`), given the
+/// name and the info alone.
+unsafe extern "C" fn info_named_get_trampoline<T: Any, G: StateInfoNamedGetter<T>>(
+    name: v8::SealedLocal<v8::Name>,
+    info: *const v8::PropertyCallbackInfo<v8::Value>,
+) -> v8::Intercepted {
+    // SAFETY: V8's callback info, valid for the call.
+    let info = unsafe { &*info };
+    G::get(StateNameInfo {
+        info,
+        isolate: info.isolate(),
+        // SAFETY: the name V8 passed the callback, used within it.
+        name: unsafe { name.unseal_in_callback() },
+        value: None,
+        _state: PhantomData,
+    })
+}
+
+/// An info named setter's callback, as `info_named_get_trampoline`.
+unsafe extern "C" fn info_named_set_trampoline<T: Any, S: StateInfoNamedSetter<T>>(
+    name: v8::SealedLocal<v8::Name>,
+    value: v8::SealedLocal<v8::Value>,
+    info: *const v8::PropertyCallbackInfo<v8::Boolean>,
+) -> v8::Intercepted {
+    // SAFETY: V8's callback info, valid for the call. Its return value's
+    // type is a phantom of rusty_v8's (`PropertyCallbackInfo` is
+    // `repr(C)` of the raw info and a `PhantomData`), and a setter's is
+    // never written (`StateNameInfo`).
+    let info = unsafe { &*info.cast::<v8::PropertyCallbackInfo<v8::Value>>() };
+    S::set(StateNameInfo {
+        info,
+        isolate: info.isolate(),
+        // SAFETY: the name and the value V8 passed the callback, used
+        // within it.
+        name: unsafe { name.unseal_in_callback() },
+        value: Some(unsafe { value.unseal_in_callback() }),
+        _state: PhantomData,
+    })
+}
+
+/// The callback of `G`'s named getter given V8's callback info alone,
+/// for `NamedOptions::getter_info`.
+pub fn info_named_getter<T: Any, G: StateInfoNamedGetter<T>>() -> v8::NamedPropertyGetterCallback {
+    info_named_get_trampoline::<T, G>
+}
+
+/// As `info_named_getter`, a setter's (`NamedOptions::setter_info`).
+pub fn info_named_setter<T: Any, S: StateInfoNamedSetter<T>>() -> v8::NamedPropertySetterCallback {
+    info_named_set_trampoline::<T, S>
 }
 
 /// The callback of `C`, given the state.
@@ -1122,20 +1268,25 @@ pub fn set_state_named_properties<T: Any, N: StateNamedProperties<T>>(
         flags = flags | v8::PropertyHandlerFlags::NON_MASKING;
         index_flags = v8::PropertyHandlerFlags::NON_MASKING;
     }
-    let mut named = v8::NamedPropertyHandlerConfiguration::new()
-        .getter(named_get::<T, N>)
-        .query(named_query::<T, N>)
-        .data(data)
-        .flags(flags);
+    let named = v8::NamedPropertyHandlerConfiguration::new();
+    let mut named = match options.getter_info {
+        Some(getter) => named.getter_raw(getter),
+        None => named.getter(named_get::<T, N>),
+    }
+    .query(named_query::<T, N>)
+    .data(data)
+    .flags(flags);
     let mut indexed = v8::IndexedPropertyHandlerConfiguration::new()
         .getter(index_get::<T, N>)
         .query(index_query::<T, N>)
         .data(data)
         .flags(index_flags);
     if options.setter {
-        named = named
-            .setter(named_set::<T, N>)
-            .definer(named_define::<T, N>);
+        named = match options.setter_info {
+            Some(setter) => named.setter_raw(setter),
+            None => named.setter(named_set::<T, N>),
+        }
+        .definer(named_define::<T, N>);
         indexed = indexed
             .setter(index_set::<T, N>)
             .definer(index_define::<T, N>);

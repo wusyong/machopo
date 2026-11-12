@@ -152,9 +152,10 @@ fn peek_makes_nothing() {
     assert_eq!(references(&string), 2, "the string's and the entry's");
 }
 
-/// A name's V8 string (a local name, an uppercased tag name, the empty
-/// string of an attribute `id` and `className` don't find) is made the
-/// first time one is returned, then returned again from the DOM's.
+/// A name's V8 string (a local name, an uppercased tag name) is made the
+/// first time one is returned, then returned again from the DOM's. The
+/// empty string of an attribute `id` and `className` don't find is V8's
+/// own: none made.
 #[test]
 fn a_names_v8_string_is_made_once() {
     let mut env = Env::new();
@@ -167,10 +168,10 @@ fn a_names_v8_string_is_made_once() {
         env.eval("[e.localName, e.localName, f.localName, e.tagName, f.tagName, e.id, f.className].join()"),
         "p,p,p,P,P,,"
     );
-    assert_eq!(env.names_made(), 3, "p, P and the empty string");
+    assert_eq!(env.names_made(), 2, "p and P");
     // Not names: an attribute's value isn't one of them.
     assert_eq!(env.eval("e.id = 'p'; [e.id, e.localName].join()"), "p,p");
-    assert_eq!(env.names_made(), 3);
+    assert_eq!(env.names_made(), 2);
 }
 
 /// A member's string argument of each kind V8 has is read whole: an ASCII

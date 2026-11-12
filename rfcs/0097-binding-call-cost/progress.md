@@ -19,7 +19,7 @@
 | 4h 之前：新的 front 補齊操作這一側的方法（`OpFront` 裡它沒有、成員的函式卻呼叫得到的 9 個：刪掉或實作，不再有會 abort 的預設實作；決定 35） | 完成 | 2026-11-12 |
 | 4h constructor 的外殼（做到一半時停下來做上一列） | 完成 | 2026-11-12 |
 | 4i-1 indexed getter 的 interceptor（`list[i]`、`children[i]`、`classList[i]`、`attributes[i]`；決定 36） | 完成 | 2026-11-12 |
-| 4i-2 named 的 getter 和 setter 的 interceptor（`dataset.a`、`children.px`、`attributes.id`）：做之前再列要決定的事 | 還沒開始 | |
+| 4i-2 named 的 getter 和 setter 的 interceptor（`dataset.a`、`children.px`、`attributes.id`；決定 37）；空字串不做字串 | 完成 | 2026-11-12 |
 | 4j 剩下的參數型別改成 handle（`fetch` 的 init、`postMessage`、keyframes、事件 init 的 `view` 和 `relatedTarget`、`Uint8ClampedArray`…），連同卡在這些型別的 constructor；`kept_object`、`kept_target`、`store_array` 跟著拿掉 | 還沒開始 | |
 | 4k 會呼叫 script 的 33 個成員：先逐個量、列出值得改結構的，再決定 | 還沒開始 | |
 | 4l cross-origin 的 16 個成員；4i 留下的 interceptor（indexed setter、iterator 的 pairs、named 的刪除、查詢和列舉）；legacy factory | 還沒開始 | |
@@ -399,3 +399,15 @@
 - 測試：`dom_js` 的 `info_front::an_indexed_getter_is_given_the_info_alone`（`childNodes`、`children`、`attributes`、`classList` 的項不建 scope；過了最後一個、很大的索引是 `undefined`；空字串的沒有這一項（`style[0]`）；`in`、`Object.keys`、展開、唯讀、字串的索引、負的和不是整數的照舊；沒有 wrapper 的項建一個、之後同一個）。寫測試時弄錯的：`list.item(0)` 是 method、呼叫完會回報 heap 的成長，那個 scope 不是 getter 的；回傳字串的 `.name` 本來就建 scope。
 - mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4i.toml`，8 個裡 7 個抓到。沒抓到的是「`ret_string` 的空字串不記成沒有這一項」：表上沒有 indexed getter 經過 `ret_string` 給空字串（`item` 給 `Option` 的過了最後一個是 null，`CSSStyleDeclaration` 的給名稱表的空字串、走 `ret_name`），等價；檢查留著，和 `V8Front::returned_no_item` 一致。
 - 跑過：`cargo test -p bindings -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`ci.py third-party`、`test.py wpt dom html/dom html/webappapis custom-elements html/semantics/forms css/cssom`（136064 個結果都照預期）。
+
+**第 4i-2 段：named 的 getter 和 setter 的 interceptor；空字串不做字串**（2026-11-12，決定 37）：
+
+- fork（只改 Rust，`6dbddfd`，還沒 push）：`SealedLocal::unseal_in_callback`；`third_party.toml` 的 `rev` 跟著改。
+- `bindings`：`StateNameInfo<'s, T>`（info、isolate、名稱、setter 的值；`InfoState`）；`StateInfoNamedGetter`、`StateInfoNamedSetter`、`info_named_getter`、`info_named_setter`（回傳 V8 的 raw callback）；`NamedOptions` 多 `getter_info`、`setter_info`，`set_state_named_properties` 有的話用它們（`getter_raw`、`setter_raw`），其餘的 callback 照舊；`OpReturn::set_empty_string`；`soundness.md` 補兩處。
+- `dom_js`：`InfoKind` 的 `NamedGet`、`NamedSet`（`named_kind!` 是兩者共同的部分）；`note_no_item` 分成 `note_null`、`note_empty`，多 `note_bool`（`NamedSet` 記下「不收」、不寫回傳值）；`front.rs` 的 `NameArgs`（交給 `V8Front` 時的參數來源）；`named.rs` 的 `NamedGetter<M>`、`NamedSetter<M>`，`NamedCalls` 多 `get_info`、`set_info`（成員是 `PLAIN` 時填）。`InfoOp::ret_string` 和 `ret_name` 的空字串直接設 V8 的空字串。
+- 換到的成員：8 個 named getter 和 2 個 setter 都是 `PLAIN`（`dataset`、`CSSStyleDeclaration`、`HTMLCollection`、`HTMLAllCollection`、`HTMLFormElement`、`HTMLFormControlsCollection`、`HTMLOptionsCollection`、`NamedNodeMap`）。實際走新的 front 的成員 2682 → 2692。
+- 量測時找到的（不在這一段修的那一半記在 README 的「之後的可能」）：`style.color` 的 cycle 異常（決定 36）的原因。字串的快取照 `DomString` 的位址記（`StringCache`），每次現算的字串位址都不同、永遠找不到，於是每次新建 V8 的字串並在快取登記一筆（`Weak` 加 finalizer）。空字串這一段繞過去了（下面）；非空的（`style.color` 是 `'red'`）仍然 4709 條、2664 個 cycle。
+- 4i-1 和這一段的 binary 各跑七次取最小（`perf stat`，指令數（cycle））：`children.px` 1873（404）→ 834（155），`attributes.id` 1848（396）→ 814（154），`dataset.a` 1310（324）→ 1042（211），`dataset.a = '1'` 1814（373）→ 1576（306），`dataset.zz`（沒有）1822（380）→ 1621（307），`style.color`（空字串）4052（3293）→ 1544（338），`style.color = 'red'` 4555（1188）→ 4339（1121），`style.zz`（沒有）893（194）→ 704（144），`style.color`（`'red'`）4631（2619）→ 4709（2664）；沒變的：`nodeType` 109、`list.item(0)` 259 → 258、`list[0]` 440、`children[0]` 515、`n.title`（空字串）278 → 279。`style.color`（`'red'`）多的 78 條是結果的字串 V8 沒有時當場建 scope、交給 `V8Front` 的那一趟（舊的 interceptor 本來就有 scope），4m 的事。
+- 測試：`dom_js` 的 `info_front::a_named_getter_and_setter_are_given_the_info_alone`（`children`、`attributes`、`dataset` 照名字讀不建 scope；沒有的名字是 `undefined`；空字串是值、不建 scope（`dataset`、`style`、`title`）；prototype 的方法和 `length` 不被蓋掉；setter 寫進屬性和宣告、非字串的值轉換、`null` 是空字串；不收的名字變成一般屬性；setter 丟的例外；`in`、`Object.keys`、`delete`、數字當名字、symbol、descriptor、`defineProperty` 照舊；沒有 wrapper 的項建一個）。`strings::a_names_v8_string_is_made_once` 的預期從 3 個名稱改成 2 個（空字串不再做）。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4i2.toml`，9 個都抓到。第一次 5 個：四個沒抓到的都是測試分辨不出來（判斷「走了新的 front」的那幾行後面接了別的會建 scope 的呼叫：`.localName`、再讀一次；named setter 的參數個數少算時 `has_args` 交給 `V8Front` 補回來、只多一個 scope），改成只量 getter 或 setter 自己的那一次，加一個「字串的值、已有的名字不建 scope」。
+- 跑過：`cargo test -p bindings -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`ci.py third-party`、`test.py wpt dom html/dom html/webappapis custom-elements html/semantics/forms css/cssom css/css-variables`（136871 個結果都照預期）。

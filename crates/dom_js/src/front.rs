@@ -176,6 +176,43 @@ impl<'s> CallArgs<'s> for IndexArgs<'s> {
     }
 }
 
+/// A named property's special operation's call (`object.name`,
+/// `object.name = value`): its arguments the name and (a setter's) the
+/// value, its `this` the interceptor's holder.
+pub(crate) struct NameArgs<'s> {
+    pub(crate) name: v8::Local<'s, v8::Value>,
+    pub(crate) value: Option<v8::Local<'s, v8::Value>>,
+    pub(crate) this: bindings::Receiver<'s>,
+    pub(crate) undefined: v8::Local<'s, v8::Value>,
+}
+
+impl<'s> CallArgs<'s> for NameArgs<'s> {
+    #[inline]
+    fn receiver(&self) -> Option<bindings::Receiver<'s>> {
+        Some(self.this)
+    }
+
+    fn length(&self) -> i32 {
+        if self.value.is_some() { 2 } else { 1 }
+    }
+
+    fn get(&self, index: i32) -> v8::Local<'s, v8::Value> {
+        match (index, self.value) {
+            (0, _) => self.name,
+            (1, Some(value)) => value,
+            _ => self.undefined,
+        }
+    }
+
+    fn this(&self) -> v8::Local<'s, v8::Object> {
+        self.this.object()
+    }
+
+    fn new_target(&self) -> v8::Local<'s, v8::Value> {
+        self.undefined
+    }
+}
+
 /// A member's call out of its operation: the scope (whose isolate's state
 /// is the DOM's), the arguments, and what the call holds across its
 /// operation (`Call`). `'r` is the result's (a property callback's

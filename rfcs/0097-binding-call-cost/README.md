@@ -216,6 +216,11 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
     - fork 再加一個只有 Rust 的讀法：從 `PropertyCallbackInfo` 不建 scope 取得 isolate。
     - `style.color` 4052 條指令卻 3293 個 cycle，比例和其他成員差很多，不像是外殼的成本：不在這份 RFC 查，記在「之後的可能」。
     - **4j 原本包了五件性質不同的事**（決定 30、34 累積下來的）：拆成 4j 剩下的參數型別、4k 會呼叫 script 的成員、4l cross-origin 和留下的 interceptor、4m 冷的路和刪掉舊的 front。4j 到 4l 彼此獨立，4m 在最後。
+37. **4i-2：named 的 getter 和 setter 各自一個 callback，只換照名字的那條路**（2026-11-12）：現在所有 interface 的 named property 共用一個 callback（`NamedProperties`），執行時從 callback 的 data 讀出 interface、查狀態裡的表（`NamedCalls`）、經過函式指標呼叫成員，成員跑在另寫的 `PropertyFront` 上、結果先存成 Rust 的值（`Got`）再做成 V8 的值。
+    - **每個成員一個 callback**（`NamedGetter<M>`、`NamedSetter<M>`，template 建立時就知道是哪個成員），和 4i-1 的 `Indexed<M>`、Blink 產生的 `NamedPropertyGetterCallback` 一樣：沒有查表、沒有函式指標、沒有中間的值，成員的呼叫 inline 進 callback。不選保留共用的 callback 加查表（改動小，但每次呼叫多一次查表和一次間接呼叫，named 會是唯一還在執行時找成員的地方）。代價是每個成員一份機器碼。
+    - **只換 getter 和 setter、只換照名字的**（8 個 getter、2 個 setter 裡是 `PLAIN` 的）：查詢、定義、刪除、列舉，和用數字當名字的（`dataset[9]`，走 indexed 的 interceptor）照舊、留到 4l，`PropertyFront` 也留到那時。named property 的規則都在 interceptor 的設定和那幾個 callback 裡，這次不動。
+    - setter「不收這個名字」（`style.notAProperty = 1` 落回一般屬性）：給結果的當下記下來（`InfoKind` 的 `Noted`，和 4i-1 的「沒有這一項」一樣），不寫 V8 的回傳值那一格。named getter 的空字串是值（`data-a=""`），只有 null 是沒有這個屬性：`note_no_item` 分成 null 和空字串兩個。
+    - fork 再加一個只有 Rust 的讀法：interceptor 的 raw callback 拿到的名稱和值是 `SealedLocal`，要不建 scope 換成 `Local`。
 
 ## 待決定
 
@@ -226,5 +231,5 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
 - 進來的字串改成 external（決定 7）：V8 的 sandbox 打開之後短字串也改得了，那時再做，照 Blink 把名稱的編號和 intern 過的值記在 resource 上（原型和數字在 `progress.md`、`prototypes/external-strings.patch`）。
 - 操作可以巢狀：DOM 做到一半呼叫 script 不用結束操作。
 - wasm 的 front 照同樣的方式量。
-- `style.color`（`CSSStyleDeclaration` 的 named getter）4052 條指令、3293 個 cycle（決定 36）：cycle 的比例比其他成員高得多，看起來是 CSS 那一側每次重做某件事，不是 binding 的外殼。另外查。
+- 每次現算的字串（`style.color`、其他 getter 給的新的 `DomString`）在字串的快取裡永遠找不到（快取照位址記），每次新建 V8 的字串並登記一筆（`Weak` 加 finalizer）：`style.color` 是 `'red'` 時 4709 條指令、2664 個 cycle（4i-2 量的；決定 36 當時猜是 CSS 那一側，不是）。空字串已經不經過快取。要決定的是只被這次呼叫持有的字串要不要進快取。
 - `HTMLElement` 的 constructor 每次建一個 scope 檢查 `new.target` 是不是 `HTMLElement` 本身（決定 35）：要不建 scope 拿到 realm 的 interface 物件，或換一種比法。

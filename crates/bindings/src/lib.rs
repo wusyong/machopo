@@ -53,13 +53,14 @@ pub use gc_platform::gc_platform;
 pub use isolate_state::{
     InfoNoGc, InfoState, NamedOptions, NoGc, PropertyKey, Receiver, Signed, StateAccessCheck,
     StateCallback, StateIndexInfo, StateIndexedGetter, StateIndexedSetter, StateInfo,
-    StateInfoFunction, StateInfoIndexedGetter, StateInfoMethod, StateMethod, StateNamedProperties,
-    StateScope, Unsigned, drop_isolate_state, info_scopes_for_testing, isolate_state_mut,
-    set_isolate_state, set_state_access_check, set_state_call_as_function_handler,
-    set_state_indexed_getter, set_state_indexed_properties, set_state_info_indexed_getter,
-    set_state_named_properties, set_state_refused_access, state_cached_getter_template,
-    state_function_template, state_info_function_template, state_info_method_template,
-    state_method_template,
+    StateInfoFunction, StateInfoIndexedGetter, StateInfoMethod, StateInfoNamedGetter,
+    StateInfoNamedSetter, StateMethod, StateNameInfo, StateNamedProperties, StateScope, Unsigned,
+    drop_isolate_state, info_named_getter, info_named_setter, info_scopes_for_testing,
+    isolate_state_mut, set_isolate_state, set_state_access_check,
+    set_state_call_as_function_handler, set_state_indexed_getter, set_state_indexed_properties,
+    set_state_info_indexed_getter, set_state_named_properties, set_state_refused_access,
+    state_cached_getter_template, state_function_template, state_info_function_template,
+    state_info_method_template, state_method_template,
 };
 pub use module_record::{
     Compiled, Evaluation, ModuleRecords, Request, ResolveSpecifier, begin_dynamic_import,

@@ -93,10 +93,21 @@ pub(crate) trait InfoKind<'s>: Sized + 'static {
     fn new_object(this: Self::This) -> v8::Local<'s, v8::Object>;
     /// A constructor's `new.target`.
     fn new_target(this: Self::This) -> v8::Local<'s, v8::Value>;
-    /// The result is null or an empty string: an indexed getter's no
-    /// item.
+    /// The result is null: an indexed getter's no item, a named getter's
+    /// no property.
     #[inline(always)]
-    fn note_no_item(_: &mut Self::Noted) {}
+    fn note_null(_: &mut Self::Noted) {}
+    /// The result is an empty string: an indexed getter's no item (a
+    /// named getter's is a value).
+    #[inline(always)]
+    fn note_empty(_: &mut Self::Noted) {}
+    /// The result is a boolean; whether it is the callback's to return
+    /// (a named setter's says whether it took the name: noted, not
+    /// returned).
+    #[inline(always)]
+    fn note_bool(_: &mut Self::Noted, _: bool) -> bool {
+        true
+    }
 }
 
 /// A method's (an attribute's accessor's).
@@ -366,8 +377,117 @@ impl<'s> InfoKind<'s> for IndexedGet {
     }
 
     #[inline(always)]
-    fn note_no_item(noted: &mut NoItem) {
+    fn note_null(noted: &mut NoItem) {
         noted.0 = true;
+    }
+
+    #[inline(always)]
+    fn note_empty(noted: &mut NoItem) {
+        noted.0 = true;
+    }
+}
+
+/// A named property's getter's interceptor's (`object.name`).
+pub(crate) struct NamedGet;
+/// A named property's setter's (`object.name = value`).
+pub(crate) struct NamedSet;
+
+/// Whether a named setter gave `false`: it didn't take the name, an
+/// ordinary property's.
+#[derive(Default)]
+pub(crate) struct Declined(pub(crate) bool);
+
+/// What the named kinds share: the info, the holder, the arguments.
+macro_rules! named_kind {
+    () => {
+        type Info = bindings::StateNameInfo<'s, State>;
+        /// The interceptor's holder: an object of the template's.
+        type This = bindings::Receiver<'s>;
+        type Args = front::NameArgs<'s>;
+        /// The holder, the name and a setter's value.
+        type Seed = (
+            bindings::Receiver<'s>,
+            v8::Local<'s, v8::Value>,
+            Option<v8::Local<'s, v8::Value>>,
+        );
+
+        #[inline(always)]
+        fn this(info: &Self::Info) -> Self::This {
+            info.holder()
+        }
+
+        #[inline(always)]
+        fn seed(info: &Self::Info) -> Self::Seed {
+            (info.holder(), info.name().into(), info.value())
+        }
+
+        fn args((this, name, value): Self::Seed, scope: &mut v8::PinScope<'s, '_>) -> Self::Args {
+            front::NameArgs {
+                name,
+                value,
+                this,
+                undefined: v8::undefined(scope).into(),
+            }
+        }
+
+        #[inline(always)]
+        fn length(info: &Self::Info) -> usize {
+            if info.value().is_some() { 2 } else { 1 }
+        }
+
+        /// The name, then a setter's value (each call reads no other).
+        #[inline(always)]
+        fn arg(info: &Self::Info, index: usize) -> v8::Local<'s, v8::Value> {
+            match (index, info.value()) {
+                (0, _) => info.name().into(),
+                (_, Some(value)) => value,
+                (_, None) => unreachable!("a named getter's argument is the name"),
+            }
+        }
+
+        #[inline(always)]
+        fn this_as<'gc, T: elise::HeapType>(
+            no_gc: &mut bindings::InfoNoGc<'_, 's>,
+            cx: &ApiCx<'_, 'gc>,
+            this: Self::This,
+        ) -> Option<elise::Gc<'gc, T>> {
+            no_gc.unwrap_receiver::<T>(cx.gc, this)
+        }
+
+        #[inline(always)]
+        fn this_object(info: &Self::Info) -> v8::Local<'s, v8::Object> {
+            info.holder().object()
+        }
+
+        fn new_object(_: Self::This) -> v8::Local<'s, v8::Object> {
+            unreachable!("a named property's operation constructs nothing")
+        }
+
+        fn new_target(_: Self::This) -> v8::Local<'s, v8::Value> {
+            unreachable!("a named property's operation has no `new.target`")
+        }
+    };
+}
+
+impl<'s> InfoKind<'s> for NamedGet {
+    named_kind!();
+    type Noted = NoItem;
+
+    /// No property of the name: V8 looks on.
+    #[inline(always)]
+    fn note_null(noted: &mut NoItem) {
+        noted.0 = true;
+    }
+}
+
+impl<'s> InfoKind<'s> for NamedSet {
+    named_kind!();
+    type Noted = Declined;
+
+    #[inline(always)]
+    fn note_bool(noted: &mut Declined, took: bool) -> bool {
+        noted.0 = !took;
+        false
     }
 }
 
@@ -1353,7 +1473,7 @@ impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
 
     #[inline(always)]
     fn ret_null(&mut self) {
-        K::note_no_item(self.noted);
+        K::note_null(self.noted);
         self.no_gc.ret().set_null();
     }
 
@@ -1383,7 +1503,9 @@ impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
 
     #[inline(always)]
     fn ret_bool(&mut self, value: bool) {
-        self.no_gc.ret().set_bool(value);
+        if K::note_bool(self.noted, value) {
+            self.no_gc.ret().set_bool(value);
+        }
     }
 
     /// A Smi's at once; past one a heap number, made after the operation.
@@ -1416,8 +1538,12 @@ impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
     /// handle; else made after the operation.
     #[inline(always)]
     fn ret_string(&mut self, value: &DomString) -> Option<PendingString> {
+        // V8's own empty string, whatever string of the DOM's it is (one
+        // made for the call is no entry of the cache).
         if value.is_empty() {
-            K::note_no_item(self.noted);
+            K::note_empty(self.noted);
+            self.no_gc.ret().set_empty_string();
+            return None;
         }
         let returned = self
             .caches
@@ -1431,9 +1557,11 @@ impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
     /// the operation.
     #[inline(always)]
     fn ret_name(&mut self, id: NameId) -> Option<PendingString> {
-        // The names table's empty string.
+        // The names table's empty string: V8's own.
         if id == names::NONE {
-            K::note_no_item(self.noted);
+            K::note_empty(self.noted);
+            self.no_gc.ret().set_empty_string();
+            return None;
         }
         match usize::try_from(id)
             .ok()

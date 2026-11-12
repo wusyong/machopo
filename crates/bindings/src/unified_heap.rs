@@ -678,6 +678,13 @@ impl<'o, 'r> OpReturn<'o, 'r> {
         self.rv.set_undefined();
     }
 
+    /// V8's empty string: one of its roots (a constant with pointer
+    /// compression's static roots), no string made.
+    #[inline]
+    pub fn set_empty_string(&mut self) {
+        self.rv.set_empty_string();
+    }
+
     /// `value` as a Smi, if one holds it: whether it did.
     #[inline]
     pub fn set_smi_u32(&mut self, value: u32) -> bool {

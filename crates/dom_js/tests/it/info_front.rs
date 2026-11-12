@@ -566,6 +566,104 @@ fn an_indexed_getter_is_given_the_info_alone() {
     assert!(made >= 1, "a wrapper made for the item");
 }
 
+/// A named property's getter and setter (`dataset.a`, `children.px`) each
+/// have a callback of their own given the interceptor's info alone: a
+/// name that is a property gives it with no scope (a wrapper it has, a
+/// string V8 has, V8's empty string), one that isn't is not intercepted
+/// (the object's own, its prototypes'); a setter that doesn't take the
+/// name leaves an ordinary property. The rest is as before: `in`, the
+/// names listed, `delete`, a number as a name.
+#[test]
+fn a_named_getter_and_setter_are_given_the_info_alone() {
+    let mut env = env();
+    env.eval(
+        "p.id = 'px'; n.setAttribute('data-a', '1'); n.setAttribute('data-empty', ''); \
+         var kids = n.children, attrs = n.attributes, ds = n.dataset, st = n.style; \
+         var held = [kids.px, attrs.id, attrs['data-a'], ds.a];",
+    );
+    for (source, value) in [
+        ("kids.px === p", "true"),
+        ("kids.nope", "undefined"),
+        ("attrs.id === held[1]", "true"),
+        ("attrs.nope", "undefined"),
+        ("ds.a", "1"),
+        ("ds.nope", "undefined"),
+        // An empty string is a value: V8's own.
+        ("ds.empty === ''", "true"),
+        ("st.color === ''", "true"),
+        ("n.title === ''", "true"),
+        // Not a named property: the prototype's.
+        ("typeof kids.item", "function"),
+        ("kids.length", "1"),
+        ("typeof ds.toString", "function"),
+    ] {
+        let (found, made) = scopes(&mut env, source);
+        assert_eq!(found, value, "{source}");
+        assert_eq!(made, 0, "{source}");
+    }
+    for (source, value) in [
+        // Set: the attribute, the declaration; read back.
+        (
+            "ds.b = 'two'; n.getAttribute('data-b') + ' ' + ds.b",
+            "two two",
+        ),
+        ("ds.a = 7; ds.a", "7"),
+        ("ds.camelCase = 'x'; n.getAttribute('data-camel-case')", "x"),
+        (
+            "st.color = 'red'; st.color + ' ' + n.getAttribute('style')",
+            "red color: red;",
+        ),
+        ("st.color = null; st.color === ''", "true"),
+        // A name the setter doesn't take is an ordinary property.
+        (
+            "st.notAProperty = 5; st.notAProperty + ' ' + Object.hasOwn(st, 'notAProperty')",
+            "5 true",
+        ),
+        ("n.getAttribute('style')", ""),
+        // A setter that throws.
+        (
+            "try { ds['a-b'] = 1; 'none' } catch (e) { e.name }",
+            "SyntaxError",
+        ),
+        // The rest of the interceptor: as before.
+        ("'a' in ds", "true"),
+        ("'nope' in ds", "false"),
+        ("Object.keys(ds).join()", "a,empty,b,camelCase"),
+        ("delete ds.b; ds.b", "undefined"),
+        (
+            "ds[9] = 'nine'; ds[9] + ' ' + n.getAttribute('data-9')",
+            "nine nine",
+        ),
+        ("ds[Symbol.iterator]", "undefined"),
+        ("Object.getOwnPropertyDescriptor(ds, 'a').value", "7"),
+        ("Object.defineProperty(ds, 'c', { value: 'd' }); ds.c", "d"),
+        // A named item with no wrapper yet has one made, the same after.
+        (
+            "var fresh = d.createElement('div'); fresh.innerHTML = '<b id=q></b>'; \
+             var q = fresh.children.q; q === fresh.children.q && q.localName",
+            "b",
+        ),
+    ] {
+        assert_eq!(env.eval(source), value, "{source}");
+    }
+    env.eval("var late = d.createElement('div'); late.innerHTML = '<i id=w></i>'; var lateKids = late.children;");
+    // (Nothing else in these: only the getter's or the setter's own
+    // scope is counted.)
+    let (found, made) = scopes(&mut env, "var w = lateKids.w; 0");
+    assert_eq!(found, "0");
+    assert!(made >= 1, "a wrapper made for the item");
+    // A setter's value that isn't a string is converted, in a scope; one
+    // that is a string, of a name the object has already, needs none.
+    let (found, made) = scopes(&mut env, "ds.z = 8; 0");
+    assert_eq!(found, "0");
+    assert!(made >= 1, "the value converted");
+    env.eval("ds.a = 'q'; ds.a = 'q';");
+    let (found, made) = scopes(&mut env, "ds.a = 'q'; 0");
+    assert_eq!(found, "0");
+    assert_eq!(made, 0, "a string's set");
+    assert_eq!(env.eval("ds.a + ds.z"), "q8");
+}
+
 /// A constructor's new object is the wrapper of what it constructs: one
 /// wrapper made, counted as any other, and none made again as the object
 /// is given back.

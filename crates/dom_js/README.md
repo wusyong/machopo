@@ -55,6 +55,10 @@ constructor 也是（`InfoConstructor<M>`，`InfoKind` 的 `Construct`）：`Inf
 
 indexed getter 的 interceptor（`list[i]`，`Indexed<M>` 的 `StateInfoIndexedGetter`，`InfoKind` 的 `IndexedGet`）也走這個 front：info 是 interceptor 的（`bindings::StateIndexInfo`：V8 的 `PropertyCallbackInfo` 和索引），索引照數字讀（`InfoKind::number_arg`，不做成 V8 的值），`this` 是 interceptor 的 holder。結果是 null 或空字串（包括名稱表的空字串）時記下「沒有這一項」（`InfoKind::note_no_item`），回 `kNo`，V8 接著查 prototype；查詢和列舉的 callback 照舊。
 
+named property 的 getter 和 setter（`dataset.a`、`children.px`、`style.color = 'red'`）是 plain 的時候各有自己的 callback（`named.rs` 的 `NamedGetter<M>`、`NamedSetter<M>`，`bindings::StateInfoNamedGetter`、`StateInfoNamedSetter`，`InfoKind` 的 `NamedGet`、`NamedSet`），template 建立時就知道是哪個成員：info 是 `bindings::StateNameInfo`（interceptor 的 info、名稱、setter 的值），參數就是名稱和值的 handle。getter 的結果是 null 時回 `kNo`（沒有這個屬性，V8 接著查物件自己和 prototype；空字串是值）；setter 給 `false` 時記下「不收這個名字」、回 `kNo`（一般的屬性），不寫回傳值。照數字當名字的（`dataset[9]`）、查詢、定義、刪除、列舉仍然是共用的 `NamedProperties` 加 `PropertyFront`。
+
+回傳空字串不做字串：`InfoOp::ret_string` 和名稱表的空字串都直接設成 V8 自己的空字串（`OpReturn::set_empty_string`，root 表的常數）。
+
 成員的函式在操作裡問 front 的事，`InfoOp` 都有（`OpFront` 的這類方法沒有預設實作）：讀 `ImageData` 的陣列的 bytes（`with_array_bytes`：從邊取出 handle、原地讀，handle 在 callback 自己的 handle scope 裡，`InfoNoGc::strong_value`）。要留到操作後的（要丟的 abort reason、`ImageData` 的像素、upgrade 中的元素）由錯誤或結果帶出操作，不留在 front 裡。
 
 其餘的成員，每個一個 V8 callback（`templates.rs` 的 `Member<M>`，`bindings::StateCallback`：template 只在 isolate 的狀態是 DOM 時建得出來，callback 讀狀態不檢查），是 `dom_api` 替它展開的專用路徑（`TypedMember::call`）加上 V8 這一側的 front（`front.rs` 的 `V8Front`，Blink 產生的 callback 拿 `FunctionCallbackInfo` 做的事）：
