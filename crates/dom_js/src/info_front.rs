@@ -49,20 +49,96 @@ pub(crate) enum PendingNode {
     Construct(Persistent<dom::CustomElementDefinition>, NodeRoot),
 }
 
+/// What an info callback's function is: a method, whose receiver V8
+/// checked against its signature (`bindings::Signed`), or a static
+/// operation, which has none (`bindings::Unsigned`). Known as a member's
+/// callback is made: the front end is of one.
+pub(crate) trait InfoKind<'s>: Sized + 'static {
+    /// The receiver, or nothing.
+    type This: Copy;
+    /// What the whole front end reads the call from.
+    type Args: front::CallArgs<'s>;
+
+    fn this(info: &bindings::StateInfo<'s, State, Self>) -> Self::This;
+    fn args(info: &bindings::StateInfo<'s, State, Self>) -> Self::Args;
+    /// The receiver made the DOM's, if it is a `T`.
+    fn this_as<'gc, T: elise::HeapType>(
+        no_gc: &mut bindings::InfoNoGc<'_, 's>,
+        cx: &ApiCx<'_, 'gc>,
+        this: Self::This,
+    ) -> Option<elise::Gc<'gc, T>>;
+}
+
+impl<'s> InfoKind<'s> for bindings::Signed {
+    type This = bindings::Receiver<'s>;
+    type Args = Checked<'s>;
+
+    #[inline(always)]
+    fn this(info: &bindings::StateInfo<'s, State, Self>) -> Self::This {
+        info.receiver()
+    }
+
+    #[inline(always)]
+    fn args(info: &bindings::StateInfo<'s, State, Self>) -> Checked<'s> {
+        Checked {
+            args: info.args(),
+            this: info.receiver(),
+        }
+    }
+
+    /// The receiver V8 checked against the function's signature: its map
+    /// isn't read again, only its tag (`bindings::unwrap_receiver`).
+    #[inline(always)]
+    fn this_as<'gc, T: elise::HeapType>(
+        no_gc: &mut bindings::InfoNoGc<'_, 's>,
+        cx: &ApiCx<'_, 'gc>,
+        this: Self::This,
+    ) -> Option<elise::Gc<'gc, T>> {
+        no_gc.unwrap_receiver::<T>(cx.gc, this)
+    }
+}
+
+impl<'s> InfoKind<'s> for bindings::Unsigned {
+    type This = ();
+    type Args = v8::FunctionCallbackArguments<'s>;
+
+    #[inline(always)]
+    fn this(_: &bindings::StateInfo<'s, State, Self>) {}
+
+    #[inline(always)]
+    fn args(info: &bindings::StateInfo<'s, State, Self>) -> Self::Args {
+        info.args()
+    }
+
+    fn this_as<'gc, T: elise::HeapType>(
+        _: &mut bindings::InfoNoGc<'_, 's>,
+        _: &ApiCx<'_, 'gc>,
+        (): (),
+    ) -> Option<elise::Gc<'gc, T>> {
+        unreachable!("a static operation has no receiver")
+    }
+}
+
 /// A plain member's call out of its operation.
-pub(crate) struct InfoFront<'s> {
-    info: bindings::StateInfo<'s, State>,
+pub(crate) struct InfoFront<'s, K: InfoKind<'s> = bindings::Signed> {
+    info: bindings::StateInfo<'s, State, K>,
+    /// Whether the member asks for the current realm's window
+    /// (`Front::prepare_window`, a static operation's): told before the
+    /// operation, found in it (`InfoOp::current_window`). Known as the
+    /// member's call is expanded.
+    window: bool,
 }
 
 /// A plain member's call in its operation: what of V8 it may use and the
 /// result (`InfoNoGc`), the receiver, and the state's caches it reads.
-pub(crate) struct InfoOp<'o, 's> {
+pub(crate) struct InfoOp<'o, 's, K: InfoKind<'s> = bindings::Signed> {
     no_gc: bindings::InfoNoGc<'o, 's>,
-    this: bindings::Receiver<'s>,
+    this: K::This,
+    window: bool,
     caches: &'o Caches,
 }
 
-impl<'s> FrontTypes for InfoFront<'s> {
+impl<'s, K: InfoKind<'s>> FrontTypes for InfoFront<'s, K> {
     type Str = ArgString<'s>;
     type Node = v8::Local<'s, v8::Object>;
     type Dict = v8::Local<'s, v8::Object>;
@@ -83,7 +159,7 @@ impl<'s> FrontTypes for InfoFront<'s> {
     type Rest = v8::Local<'s, v8::Array>;
 }
 
-impl<'s> FrontTypes for InfoOp<'_, 's> {
+impl<'s, K: InfoKind<'s>> FrontTypes for InfoOp<'_, 's, K> {
     type Str = ArgString<'s>;
     type Node = v8::Local<'s, v8::Object>;
     type Dict = v8::Local<'s, v8::Object>;
@@ -104,29 +180,26 @@ impl<'s> FrontTypes for InfoOp<'_, 's> {
     type Rest = v8::Local<'s, v8::Array>;
 }
 
-impl<'s> InfoFront<'s> {
+impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
     #[inline(always)]
-    pub(crate) fn new(info: bindings::StateInfo<'s, State>) -> Self {
+    pub(crate) fn new(info: bindings::StateInfo<'s, State, K>) -> Self {
         // As `V8Front::new`'s: every way into script counts itself.
         debug_assert!(
             bindings::trace::in_script(),
             "a DOM member is called from script that the engine didn't count as entered"
         );
-        Self { info }
+        Self {
+            info,
+            window: false,
+        }
     }
 
     /// `f` of the whole front end, a scope made for it: what allocates,
     /// throws or runs script.
     #[cold]
     #[inline(never)]
-    fn with_front<R>(
-        &mut self,
-        f: impl FnOnce(&mut V8Front<'_, 's, 's, 's, Checked<'s>>) -> R,
-    ) -> R {
-        let args = Checked {
-            args: self.info.args(),
-            this: self.info.receiver(),
-        };
+    fn with_front<R>(&mut self, f: impl FnOnce(&mut V8Front<'_, 's, 's, 's, K::Args>) -> R) -> R {
+        let args = K::args(&self.info);
         self.info
             .with_scope(|scope, rv| f(&mut V8Front::new(scope, &args, rv)))
     }
@@ -162,9 +235,9 @@ impl<'s> InfoFront<'s> {
     }
 }
 
-impl<'s> Front for InfoFront<'s> {
+impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     type Op<'o>
-        = InfoOp<'o, 's>
+        = InfoOp<'o, 's, K>
     where
         Self: 'o;
 
@@ -173,11 +246,13 @@ impl<'s> Front for InfoFront<'s> {
         &'o mut self,
         f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>, &mut Self::Op<'o>) -> R,
     ) -> R {
-        let this = self.info.receiver();
+        let this = K::this(&self.info);
+        let window = self.window;
         let (state, no_gc) = self.info.state();
         let mut op = InfoOp {
             no_gc,
             this,
+            window,
             caches: &state.caches,
         };
         state
@@ -190,7 +265,8 @@ impl<'s> Front for InfoFront<'s> {
         &'o mut self,
         f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>, &mut Self::Op<'o>) -> R,
     ) -> R {
-        let this = self.info.receiver();
+        let this = K::this(&self.info);
+        let window = self.window;
         let (state, no_gc) = self.info.state_mut();
         let State {
             dom,
@@ -201,6 +277,7 @@ impl<'s> Front for InfoFront<'s> {
         let mut op = InfoOp {
             no_gc,
             this,
+            window,
             caches,
         };
         dom.mutate(|cx| f(&ApiCx::with_layout_cell(cx, layout), &mut op))
@@ -326,7 +403,7 @@ impl<'s> Front for InfoFront<'s> {
     /// wrapper is made after, in the node's relevant realm).
     #[inline(never)]
     fn prepare_new_node(&mut self, interface: usize) -> Option<(v8::Local<'s, v8::Object>, usize)> {
-        let this = self.info.receiver().object();
+        let this = self.info.args().this();
         self.info.with_scope(|mut scope, _| {
             let current = scope.scope().get_current_context();
             if this
@@ -567,6 +644,13 @@ impl<'s> Front for InfoFront<'s> {
         self.with_front(|front| front.compile_event_handler(target, event_type));
     }
 
+    /// The member asks for the current realm's window: found in the
+    /// operation.
+    #[inline(always)]
+    fn prepare_window(&mut self) {
+        self.window = true;
+    }
+
     /// The argument itself; null for undefined, which V8 gives a scope.
     #[inline(always)]
     fn any_arg(&mut self, index: usize) -> AnyArg<v8::Local<'s, v8::Value>> {
@@ -793,20 +877,30 @@ impl<'s> Front for InfoFront<'s> {
     }
 }
 
-impl<'s> OpFront for InfoOp<'_, 's> {
+impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
     #[inline(always)]
     fn str_param<'a>(&mut self, string: &'a ArgString<'s>) -> &'a str {
         string.text_lent(&mut self.no_gc)
     }
 
-    /// The receiver V8 checked against the function's signature: its map
-    /// isn't read again, only its tag (`bindings::unwrap_receiver`).
     #[inline(always)]
     fn this_as<'gc, T: elise::HeapType>(
         &mut self,
         cx: &ApiCx<'_, 'gc>,
     ) -> Option<elise::Gc<'gc, T>> {
-        self.no_gc.unwrap_receiver::<T>(cx.gc, self.this)
+        K::this_as(&mut self.no_gc, cx, self.this)
+    }
+
+    /// The current realm's window, of a member that asked for it
+    /// (`InfoFront::prepare_window`): its context's global, read from the
+    /// isolate now; none if that isn't a window of the DOM's.
+    #[inline(always)]
+    fn current_window<'gc>(&mut self, cx: &ApiCx<'_, 'gc>) -> Option<elise::Gc<'gc, Window>> {
+        if !self.window {
+            return None;
+        }
+        let global = self.no_gc.current_global();
+        self.no_gc.unwrap::<Window>(cx.gc, global)
     }
 
     #[inline(always)]
@@ -1054,7 +1148,7 @@ impl<'s> OpFront for InfoOp<'_, 's> {
     }
 }
 
-impl InfoOp<'_, '_> {
+impl<'s, K: InfoKind<'s>> InfoOp<'_, 's, K> {
     /// As `root_node`, an object of any type.
     #[cold]
     #[inline(never)]

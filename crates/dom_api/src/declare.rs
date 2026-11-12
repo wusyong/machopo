@@ -304,6 +304,10 @@ pub enum TypeDesc {
 /// something else there is the one for any other value. The index of the
 /// form; the `TypeError`'s message when none takes that many
 /// (`putImageData(data, 1, 2, 3)`), as Chrome words it.
+/// The most forms an overload set of the table has (`resolve_overload`'s
+/// candidates are kept on the stack).
+const MOST_FORMS: usize = 8;
+
 pub fn resolve_overload(
     forms: &[&Member],
     given: usize,
@@ -315,10 +319,17 @@ pub fn resolve_overload(
         .max()
         .unwrap_or(0);
     let count = given.min(most);
-    let candidates: Vec<usize> = (0..forms.len())
-        .filter(|&form| forms[form].required() <= count && count <= forms[form].params.len())
-        .collect();
-    match candidates.as_slice() {
+    // On the stack: a call resolves its form each time (the table's
+    // overloads have a few forms each).
+    let mut found = [0usize; MOST_FORMS];
+    let mut candidates = 0usize;
+    for form in 0..forms.len() {
+        if forms[form].required() <= count && count <= forms[form].params.len() {
+            found[candidates] = form;
+            candidates = candidates.saturating_add(1);
+        }
+    }
+    match &found[..candidates] {
         [] => {
             let mut arities: Vec<usize> = forms
                 .iter()

@@ -15,10 +15,10 @@
 | 4d handle 的機制（`Param` 多 front 的型別參數）、callback 和 `any`；函式拿 front 的成員照型別算 `PLAIN` | 完成 | 2026-11-12 |
 | 4e rest、`any`、dictionary 的 handle、節點或字串；event handler 的 getter 和回傳 `any` 的（從 4f 提前）；其餘的參數型別留到 4j（決定 32） | 完成 | 2026-11-12 |
 | 4f 其餘的回傳型別（promise、陣列、dictionary、第一次讀才做的值）：由回傳型別帶出操作（決定 33） | 完成 | 2026-11-12 |
-| 4g static 成員的外殼 | 還沒開始 | |
+| 4g static 成員和 overload 的外殼；目前的 realm 的 window 從 isolate 讀（決定 34） | 完成 | 2026-11-12 |
 | 4h constructor 的外殼 | 還沒開始 | |
 | 4i named、indexed property 的外殼 | 還沒開始 | |
-| 4j 冷的路搬成新的 front 自己的；拿掉 `V8Front`、`Call` 和 `PLAIN`（連同它的檢查：`PLAIN_FRONT_METHODS`、`PLAIN_OP_METHODS`、`dom_api` 的 `plain` 測試、`dom_js` 的 `the_plain_methods_are_the_info_front_ends_own`、`ReadImageData`、`docs/test-gaps.md` 的那一列） | 還沒開始 | |
+| 4j 冷的路搬成新的 front 自己的（會呼叫 script 的 33 個先逐個量、列出值得改結構的；cross-origin 的 16 個；決定 34）；拿掉 `V8Front`、`Call` 和 `PLAIN`（連同它的檢查：`PLAIN_FRONT_METHODS`、`PLAIN_OP_METHODS`、`dom_api` 的 `plain` 測試、`dom_js` 的 `the_plain_methods_are_the_info_front_ends_own`、`ReadImageData`、`docs/test-gaps.md` 的那一列） | 還沒開始 | |
 | 收尾：`nodeType`、`getAttribute` 的 callback 和 Chrome 的逐條指令對照，列出剩下的差（決定 20） | 還沒開始 | |
 
 ## 驗收
@@ -348,3 +348,15 @@
 - 測試：`dom_js` 的 `handlers::a_result_to_allocate_for_is_made_after_the_operation`（字串、物件、數字的陣列，每次新的；`takeRecords` 取走；frozen 的同一個、是 frozen 的；dictionary 和 record 的成員；animation 的 `ready`、`finished` 各自同一個；pending 的 `whenDefined` 同一個、已定義的每次新的、resolve 成 constructor、不合法的名稱 reject；`history.state`、mark 的 `detail` 第一次做、之後同一個；都建 scope、走新的 front）；`dom_api` 的 `table` 的清單。寫測試時弄錯的預期：`navigator.languages` 不是 frozen array（每次新的，本來就是）；`Blob` 的讀取有 `#[realm]`、不走新的 front；microtask 的順序。其餘靠原有的測試（`dom_js` 463 個照舊通過：這些結果原本就各有測試）。
 - mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4f.toml`，23 個都抓到。沒有寫的：把 `FilledView` 標成 `PLAIN`（`getRandomValues` 的參數型別不是 `PLAIN`，成員不會變，等價）。
 - 跑過：`cargo test -p bindings -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt dom html/dom html/webappapis custom-elements html/semantics/forms html/canvas/element/pixel-manipulation fetch/api/response fetch/api/request FileAPI web-animations/interfaces hr-time user-timing`（135084 個結果都照預期；唯一失敗的 reftest 是本來就預期失敗的 `moveBefore-as-flex-item`）。
+
+**第 4g 段：static 成員和 overload 的外殼；目前的 realm 的 window 從 isolate 讀**（2026-11-12，決定 34）：
+
+- fork（只改 Rust，`36b85bd`，還沒 push）：`Context::current_global(isolate)`（`GetCurrentContext()->Global()`，handle 留在 V8 目前的 handle scope），`README.machopo.md`；`third_party.toml` 的 `rev` 跟著改。
+- `bindings`：`StateInfo<'s, T, K = Signed>`，`Signed`、`Unsigned`；`receiver()` 只在 `Signed` 上；`StateInfoFunction`、`state_info_function_template`（沒有 signature）；`InfoNoGc::current_global`；`soundness.md` 補兩條。
+- `dom_api_macros`：method 的 `PLAIN` 不再排除 static。`dom_api`：`resolve_overload` 的候選放 stack 上（`MOST_FORMS` 8 個），不再每次呼叫配置 `Vec`。
+- `dom_js`：`InfoFront<'s, K>`、`InfoOp<'o, 's, K>`（`InfoKind`：receiver 的型別、交給 `V8Front` 時的參數來源、`this_as`）；`InfoFront::prepare_window` 記一個布林，`InfoOp::current_window` 在操作裡讀目前的 context 的 global、unwrap 成 window。`templates.rs`：`InfoStatic<M>`，plain 的 static 用 `state_info_function_template`；overload 的 method 和 static 的函式是只拿 info 的 `Overloaded`（`info_form` 選形式，`info_call::<M>`、`info_static_call::<M>` 呼叫），constructor 的那一組照舊；拿掉 `MethodCall`。
+- 實際走新的 front 的成員（照分派算，決定 34）：2575 → 2632（2799 個裡）。剩下：不是 `PLAIN` 的 getter、setter、method 76（包括 5 個 overload 的形式）、constructor 50、cross-origin 16、named 13、沒有名字的 indexed getter 4、static 2（`AbortSignal.any`、`Response.json`）、iterator 的 pairs 2、legacy factory 2、indexed setter 2。
+- 4f 和這一段的 binary 各跑七次取最小（`perf stat`，指令數（cycle））：`ctx.setTransform(1, 0, 0, 1, 0, 0)` 1309（271）→ 755（142），`ctx.fill()` 2929（829）→ 2632（760），`ctx.isPointInPath(1, 1)` 2979（814）→ 2628（717），`ctx.isPointInPath(path, 1, 1)` 3511（909）→ 3101（809），`URL.canParse('https://a.test/')` 2305（476）→ 2252（469），`CSS.escape('ab')` 3719（2400）→ 3701（2407）；沒變的：`nodeType` 109 → 112、`getAttribute` 562 → 563、`removeEventListener` 606 → 607、`appendChild` 1580 → 1581。overload 省的是舊外殼的 scope、`Call`、候選的 `Vec` 和讀 data 的 `uint32_value`；static 的兩個省得少，成本在解析 URL、配置字串（`escape` 的 cycle 高是字串的配置，兩邊一樣）。
+- 測試：`dom_js` 的 `handlers::static_operations_and_overloads_are_given_the_info_alone`（static 的布林結果不建 scope、`this` 是任何值也行；新字串、新物件操作後才建；`AbortSignal.abort()` 找到目前的 window、reason 是預設的 `AbortError` 或給的值（`InfoFront::abort_reason_arg` 4e 時走不到，現在有測試）；少給參數的 `TypeError`；overload 照參數個數和第一個參數是不是 `Path2D` 選形式，不建 scope；不是 `PLAIN` 的形式（`putImageData`、`scrollTo`）在 scope 裡照舊；個數不對的 `TypeError` 的訊息；method 的 receiver 照樣檢查）；`dom_api` 的 `table` 的清單。寫測試時弄錯的：以為 `Response.json(data)` 是 static 的 overload，它和實例的 `json()` 不同組、自己一個，又不是 `PLAIN`，不走新的 front。這個錯的案例讓 mutation test 的第一次在基準就失敗（那次測試的輸出在背景執行裡，沒看到）：之後啟動 mutation test 前先在前景跑一次測試。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4g.toml`，10 個都抓到。
+- 跑過：`cargo test -p bindings -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`ci.py third-party`、`test.py wpt dom html/dom html/webappapis custom-elements html/semantics/forms html/canvas/element url css/cssom css/css-conditional/js fetch/api/response FileAPI`（148537 個結果都照預期）。

@@ -47,6 +47,10 @@ callback 參數（listener、event handler 屬性的值、`requestAnimationFrame
 
 isolate、receiver、參數、回傳值都在用的地方從 info 讀，不建 rusty_v8 的 scope、不建 `Call`；跑的是同一份 `TypedMember::call`。要 V8 配置、丟例外、執行 script 的（參數要 `ToString` 或複製、結果是 V8 還沒有的字串、沒有 wrapper 的節點、不是 Smi 的數字、錯誤、custom element 的 reaction、要告訴 V8 heap 長大了）當場建一個 scope 和上面的 `V8Front`（`InfoFront::with_front`），交給它做，用完就丟；這些路都在 inline 之外。哪個成員走哪個 front 在編譯時決定（`Members::function` 的 `const { M::PLAIN }`）；跨 origin 的物件的成員照舊（它的 callback 先檢查呼叫者）。
 
+static 的 operation 和 attribute（`CSS.escape`、`URL.canParse`、`AbortSignal.abort`）也走這個 front，callback 是 `InfoStatic<M>`（`bindings::StateInfoFunction`）：函式沒有 signature，`this` 是任何值，所以 info 是 `StateInfo<State, Unsigned>`、沒有 `receiver()`，`InfoFront<'s, K>` 的 `K`（`InfoKind`：`Signed` 或 `Unsigned`）決定有沒有 receiver 和冷的路交給 `V8Front` 時怎麼讀參數。要目前的 realm 的 window 的成員（`#[front]` 的 static：`Front::prepare_window`）只是記下「要」，操作裡 `InfoOp::current_window` 才從 isolate 讀目前的 context 的 global（`InfoNoGc::current_global`，不建 scope）；沒要的成員拿到 none。
+
+overload 的一組一個函式（`Overloaded`），也只拿 info：組的編號從函式的 data 原地讀（小整數），照參數的個數和第一個分得出的參數是哪個 interface 選形式（`dom_api::resolve_overload`，候選放在 stack 上；`implements` 只用 isolate），再呼叫那個形式的 `info_call::<M>`：`PLAIN` 的形式是它的 `InfoMember<M>`（或 `InfoStatic<M>`），不是的當場建 scope、照舊呼叫它的 `Member<M>`。個數不對的 `TypeError` 才建 scope。interface 有好幾個 constructor 的那一組照舊（拿 scope 的 `Overloaded`）。
+
 其餘的成員，每個一個 V8 callback（`templates.rs` 的 `Member<M>`，`bindings::StateCallback`：template 只在 isolate 的狀態是 DOM 時建得出來，callback 讀狀態不檢查），是 `dom_api` 替它展開的專用路徑（`TypedMember::call`）加上 V8 這一側的 front（`front.rs` 的 `V8Front`，Blink 產生的 callback 拿 `FunctionCallbackInfo` 做的事）：
 
 1. 操作外轉參數：WebIDL 的 `ToString` 可能跑 script；節點的參數先確認是 wrapper（`bindings::is_wrapper`）；dictionary 照成員名稱的順序 `Get`（getter 可能跑 script、丟例外：例外留著，呼叫停在那裡）。建構子先確認是 `new` 呼叫的、參數夠不夠（照 Chrome 的訊息）。字串參數（`ArgString`）是 V8 的字串：平的 one-byte ASCII 字串在操作裡才讀，讀 V8 自己的字元（`bindings::LentString`，不複製、不經過 `ValueView`），借出期間 V8 的 GC 會 abort，所以呼叫在操作一結束就放掉參數；其他的（cons、two-byte、Latin-1）在這裡複製（攤平 cons string 會配置）。

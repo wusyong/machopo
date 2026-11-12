@@ -898,6 +898,18 @@ impl<'s> crate::InfoNoGc<'_, 's> {
         return_wrapper(self.isolate, &mut self.rv, edge)
     }
 
+    /// The current context's global object (its global proxy), its handle
+    /// left in the callback's own handle scope: the current realm of a
+    /// callback with no receiver to find it by (Blink's callbacks'
+    /// `GetCurrentContext()`).
+    #[inline]
+    pub fn current_global(&mut self) -> v8::Local<'s, v8::Object> {
+        // SAFETY: on the isolate's thread, in the callback the info is
+        // of: V8 entered its function's context and opened its handle
+        // scope before calling it, and `'s` is the info's.
+        unsafe { v8::Context::current_global(self.isolate) }
+    }
+
     /// As `return_wrapper`, of an edge of any value (`set_strong_value`:
     /// a listener's callback, an event's `detail`).
     #[inline]

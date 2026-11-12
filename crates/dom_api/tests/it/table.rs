@@ -1129,6 +1129,13 @@ fn members_of_strings_nodes_numbers_and_booleans_are_plain() {
         ("CustomElementRegistry", "whenDefined", MemberKind::Method),
         ("HTMLImageElement", "decode", MemberKind::Method),
         ("CanvasRenderingContext2D", "fillStyle", MemberKind::Getter),
+        // Static operations: no receiver; the current realm's window
+        // found for the ones that ask.
+        ("CSS", "escape", MemberKind::Method),
+        ("URL", "canParse", MemberKind::Method),
+        ("URL", "parse", MemberKind::Method),
+        ("AbortSignal", "abort", MemberKind::Method),
+        ("Response", "error", MemberKind::Method),
         // An event handler's getter: its listener's callback given in
         // the operation, an uncompiled source compiled after it.
         ("HTMLElement", "onclick", MemberKind::Getter),
@@ -1160,9 +1167,8 @@ fn members_of_strings_nodes_numbers_and_booleans_are_plain() {
         ("Blob", "arrayBuffer", MemberKind::Method),
         // The view the front end kept, filled.
         ("Crypto", "getRandomValues", MemberKind::Method),
-        // Static; its function given the front end.
-        // Static.
-        ("CSS", "escape", MemberKind::Method),
+        // Static, of an argument the whole front end converts.
+        ("AbortSignal", "any", MemberKind::Method),
     ] {
         assert!(!is_plain(interface, name, kind), "{interface}.{name}");
     }

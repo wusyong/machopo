@@ -1,0 +1,107 @@
+# Stage 4g: a static operation is called with V8's callback info alone,
+# with no receiver (`bindings::Unsigned`, `InfoStatic`), the current
+# realm's window found in its operation; an overload set's function picks
+# its form from the info with no scope and calls it the same way.
+test = ["cargo", "test", "-q", "-p", "dom_api", "-p", "dom_js", "-p", "dom_wasm"]
+timeout = 1800
+
+[[mutant]]
+name = "the info front end finds no current window"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if !self.window {
+            return None;
+        }
+        let global = self.no_gc.current_global();'''
+to = '''        if self.window {
+            return None;
+        }
+        let global = self.no_gc.current_global();'''
+
+[[mutant]]
+name = "a member's asking for the window is forgotten"
+file = "crates/dom_js/src/info_front.rs"
+from = '''    fn prepare_window(&mut self) {
+        self.window = true;
+    }'''
+to = '''    fn prepare_window(&mut self) {
+        self.window = false;
+    }'''
+
+[[mutant]]
+name = "a static operation isn't plain"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''    let plain = !realm && !legacy_factory;'''
+to = '''    let plain = !is_static && !realm && !legacy_factory;'''
+
+[[mutant]]
+name = "a plain static operation is called as before"
+file = "crates/dom_js/src/templates.rs"
+from = '''            (None, None) if checked && const { M::PLAIN } => {'''
+to = '''            (None, None) if checked && const { M::PLAIN } && false => {'''
+
+[[mutant]]
+name = "an overloaded method's plain form is called in a scope"
+file = "crates/dom_js/src/templates.rs"
+from = '''    if const { M::PLAIN } {
+        <InfoMember<M> as bindings::StateInfoMethod<State>>::call(info);
+    } else {'''
+to = '''    if const { M::PLAIN } && false {
+        <InfoMember<M> as bindings::StateInfoMethod<State>>::call(info);
+    } else {'''
+
+[[mutant]]
+name = "an overloaded static operation's plain form is called in a scope"
+file = "crates/dom_js/src/templates.rs"
+from = '''    if const { M::PLAIN } {
+        <InfoStatic<M> as bindings::StateInfoFunction<State>>::call(info);
+    } else {'''
+to = '''    if const { M::PLAIN } && false {
+        <InfoStatic<M> as bindings::StateInfoFunction<State>>::call(info);
+    } else {'''
+
+[[mutant]]
+name = "an overload's form is always its first"
+file = "crates/dom_js/src/templates.rs"
+from = '''        match form {
+            Ok(form) => Some((set, form)),
+            Err(message) => {
+                info.with_scope(|mut scope, _| {'''
+to = '''        match form {
+            Ok(_) => Some((set, 0)),
+            Err(message) => {
+                info.with_scope(|mut scope, _| {'''
+
+[[mutant]]
+name = "an overload's object argument is never its interface's"
+file = "crates/dom_js/src/templates.rs"
+from = '''            implements(info.isolate(), value, name)
+                .expect("an overload's interface `implements` knows")
+        });
+        match form {
+            Ok(form) => Some((set, form)),'''
+to = '''            let _ = (value, name);
+            false
+        });
+        match form {
+            Ok(form) => Some((set, form)),'''
+
+[[mutant]]
+name = "a number of arguments no form takes throws nothing"
+file = "crates/dom_js/src/templates.rs"
+from = '''                info.with_scope(|mut scope, _| {
+                    crate::throw_type_error(
+                        scope.scope(),
+                        &format!("Failed to execute '{}': {message}", forms[0].name),
+                    );
+                });
+                None'''
+to = '''                let _ = message;
+                None'''
+
+[[mutant]]
+name = "overload resolution takes a form of too many parameters"
+file = "crates/dom_api/src/declare.rs"
+from = '''        if forms[form].required() <= count && count <= forms[form].params.len() {
+            found[candidates] = form;'''
+to = '''        if forms[form].required() <= count {
+            found[candidates] = form;'''

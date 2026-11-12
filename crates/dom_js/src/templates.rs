@@ -287,7 +287,7 @@ impl TypedVisitor for Constructor<'_, '_, '_> {
         // Several: the one function that picks among them.
         if let Some(set) = overload_set(M::INTERFACE, M::MEMBER) {
             if self.template.is_none() {
-                self.template = Some(overloaded_template(self.scope, set, None));
+                self.template = Some(overloaded_template(self.scope, set, Overload::Constructors));
             }
             return;
         }
@@ -575,10 +575,11 @@ impl Members<'_, '_, '_> {
                 // A static operation's (a namespace's): on the interface
                 // object, its `this` anything.
                 if desc.is_static {
-                    let function = overloaded_template(self.scope, set, None);
+                    let function = overloaded_template(self.scope, set, Overload::Static);
                     self.template.set(name.into(), function.into());
                 } else {
-                    let function = overloaded_template(self.scope, set, Some(self.signature));
+                    let function =
+                        overloaded_template(self.scope, set, Overload::Method(self.signature));
                     let function = if matches!(desc.returns, TypeDesc::Promise(_)) {
                         rejecting(self.scope, function, desc.required())
                     } else {
@@ -633,6 +634,14 @@ impl Members<'_, '_, '_> {
                 bindings::state_method_template::<State, C>(self.scope, signature, |builder| {
                     member_builder(builder, None, length)
                 })
+            }
+            // A plain static operation's, as a plain member's: its info
+            // has no receiver (`InfoStatic`).
+            (None, None) if checked && const { M::PLAIN } => {
+                bindings::state_info_function_template::<State, InfoStatic<M>>(
+                    self.scope,
+                    |builder| member_builder(builder, None, length),
+                )
             }
             (None, None) => bindings::state_function_template::<State, C>(self.scope, |builder| {
                 member_builder(builder, None, length)
@@ -906,6 +915,20 @@ impl<M: TypedMember> bindings::StateInfoMethod<State> for InfoMember<M> {
     }
 }
 
+/// A plain static operation's callback (or a static attribute's getter's):
+/// as `InfoMember`, with no receiver (its function has no signature).
+pub(crate) struct InfoStatic<M>(PhantomData<M>);
+
+impl<M: TypedMember> bindings::StateInfoFunction<State> for InfoStatic<M> {
+    fn call(info: bindings::StateInfo<'_, State, bindings::Unsigned>) {
+        let mut front = crate::info_front::InfoFront::new(info);
+        M::call(&mut front);
+        if M::KIND != MemberKind::Getter {
+            front.report();
+        }
+    }
+}
+
 /// One call of `M` through V8's front end, V8 told of the DOM's growth
 /// after one that may allocate.
 #[inline(always)]
@@ -922,14 +945,50 @@ fn call_member<'s, M: TypedMember, A: crate::front::CallArgs<'s>>(
 }
 
 /// A form's call (its `Member<M>`'s), for its overload set's function:
-/// with no word of its receiver, and with the receiver V8 checked.
+/// with no word of its receiver (a constructor's).
 type Call = for<'s> fn(Scope<'_, 's, '_>, v8::FunctionCallbackArguments<'s>, v8::ReturnValue<'s>);
-type MethodCall = for<'s> fn(
-    Scope<'_, 's, '_>,
-    v8::FunctionCallbackArguments<'s>,
-    bindings::Receiver<'s>,
-    v8::ReturnValue<'s>,
-);
+/// A form's call given V8's callback info alone (a method's, with its
+/// receiver checked, and a static operation's): its `InfoMember<M>`'s or
+/// `InfoStatic<M>`'s if it is plain, else its `Member<M>`'s in a scope
+/// made for it.
+type InfoCall = for<'s> fn(bindings::StateInfo<'s, State>);
+type InfoStaticCall = for<'s> fn(bindings::StateInfo<'s, State, bindings::Unsigned>);
+
+/// `M`'s call from a method's info: through the front end that is the
+/// info if `M` is plain (known as this is expanded), else as before.
+fn info_call<M: TypedMember>(mut info: bindings::StateInfo<'_, State>) {
+    if const { M::PLAIN } {
+        <InfoMember<M> as bindings::StateInfoMethod<State>>::call(info);
+    } else {
+        let (args, this) = (info.args(), info.receiver());
+        info.with_scope(|scope, rv| {
+            <Member<M> as bindings::StateMethod<State>>::call(scope, args, this, rv);
+        });
+    }
+}
+
+/// As `info_call`, a static operation's.
+fn info_static_call<M: TypedMember>(mut info: bindings::StateInfo<'_, State, bindings::Unsigned>) {
+    if const { M::PLAIN } {
+        <InfoStatic<M> as bindings::StateInfoFunction<State>>::call(info);
+    } else {
+        let args = info.args();
+        info.with_scope(|scope, rv| {
+            <Member<M> as bindings::StateCallback<State>>::call(scope, args, rv);
+        });
+    }
+}
+
+/// What an overload set's function is.
+#[derive(Clone, Copy)]
+enum Overload<'s> {
+    /// A method's: its receiver checked against the signature.
+    Method(v8::Local<'s, v8::Signature>),
+    /// A static operation's.
+    Static,
+    /// An interface's constructors'.
+    Constructors,
+}
 
 /// An overloaded method's forms, or an interface's constructors when it has
 /// several: their members (indexes in the interface's, the table's order)
@@ -937,7 +996,16 @@ type MethodCall = for<'s> fn(
 struct OverloadSet {
     interface: usize,
     members: Vec<usize>,
-    calls: Vec<(Call, MethodCall)>,
+    calls: Vec<Call>,
+    info_calls: Vec<(InfoCall, InfoStaticCall)>,
+}
+
+impl OverloadSet {
+    /// Its forms' descriptions, in `members`' order.
+    fn forms(&self) -> impl Iterator<Item = &'static dom_api::Member> + '_ {
+        let members = INTERFACES[self.interface].members;
+        self.members.iter().map(move |&member| &members[member])
+    }
 }
 
 /// Every overload set of the table, found at the first ask: derived from
@@ -965,10 +1033,8 @@ impl TypedVisitor for CollectOverloads {
         let same = |member: &dom_api::Member| {
             member.kind == M::KIND && member.name == M::NAME && member.is_static == this.is_static
         };
-        let call: (Call, MethodCall) = (
-            <Member<M> as bindings::StateCallback<State>>::call,
-            <Member<M> as bindings::StateMethod<State>>::call,
-        );
+        let call: Call = <Member<M> as bindings::StateCallback<State>>::call;
+        let info_call: (InfoCall, InfoStaticCall) = (info_call::<M>, info_static_call::<M>);
         let first = members.iter().position(same).expect("this member is one");
         match self
             .0
@@ -978,11 +1044,13 @@ impl TypedVisitor for CollectOverloads {
             Some(set) => {
                 set.members.push(M::MEMBER);
                 set.calls.push(call);
+                set.info_calls.push(info_call);
             }
             None => self.0.push(OverloadSet {
                 interface: M::INTERFACE,
                 members: vec![M::MEMBER],
                 calls: vec![call],
+                info_calls: vec![info_call],
             }),
         }
     }
@@ -997,14 +1065,21 @@ fn overload_set(interface: usize, member: usize) -> Option<usize> {
             dom_api::visit_typed(&mut collect);
             // In the table's order, whatever order the visit took.
             for set in &mut collect.0 {
-                let mut forms: Vec<(usize, (Call, MethodCall))> = set
+                let mut forms: Vec<_> = set
                     .members
                     .iter()
                     .copied()
-                    .zip(set.calls.iter().copied())
+                    .zip(
+                        set.calls
+                            .iter()
+                            .copied()
+                            .zip(set.info_calls.iter().copied()),
+                    )
                     .collect();
                 forms.sort_by_key(|(member, _)| *member);
-                (set.members, set.calls) = forms.into_iter().unzip();
+                let (members, calls): (Vec<_>, Vec<_>) = forms.into_iter().unzip();
+                set.members = members;
+                (set.calls, set.info_calls) = calls.into_iter().unzip();
             }
             collect.0
         })
@@ -1018,7 +1093,7 @@ fn overload_set(interface: usize, member: usize) -> Option<usize> {
 fn overloaded_template<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     set: usize,
-    signature: Option<v8::Local<'s, v8::Signature>>,
+    kind: Overload<'s>,
 ) -> v8::Local<'s, v8::FunctionTemplate> {
     let overloads = OVERLOADS.get().expect("made by `overload_set`");
     let members = INTERFACES[overloads[set].interface].members;
@@ -1034,20 +1109,27 @@ fn overloaded_template<'s>(
             .data(data.into())
             .length(i32::try_from(length).expect("a few parameters"))
     };
-    // With a signature, the form is given the receiver V8 checked against
-    // it (`bindings::StateMethod`).
-    let template = match signature {
-        Some(signature) => {
-            bindings::state_method_template::<State, Overloaded>(scope, signature, |builder| {
-                configure(builder).constructor_behavior(v8::ConstructorBehavior::Throw)
-            })
+    // A method's and a static operation's are given V8's callback info
+    // alone, as a plain member's (the form then called is too, if it is
+    // one); with a signature, the form is given the receiver V8 checked
+    // against it.
+    match kind {
+        Overload::Method(signature) => {
+            let template = bindings::state_info_method_template::<State, Overloaded>(
+                scope,
+                signature,
+                |builder| configure(builder).constructor_behavior(v8::ConstructorBehavior::Throw),
+            );
+            checks_receiver(template);
+            template
         }
-        None => bindings::state_function_template::<State, Overloaded>(scope, configure),
-    };
-    if signature.is_some() {
-        checks_receiver(template);
+        Overload::Static => {
+            bindings::state_info_function_template::<State, Overloaded>(scope, configure)
+        }
+        Overload::Constructors => {
+            bindings::state_function_template::<State, Overloaded>(scope, configure)
+        }
     }
-    template
 }
 
 /// `template`, a member's function, made to have V8 check that its `this`
@@ -1074,27 +1156,67 @@ impl bindings::StateCallback<State> for Overloaded {
         rv: v8::ReturnValue<'s>,
     ) {
         if let Some((scope, set, form)) = Overloaded::form(scope, &args) {
-            (set.calls[form].0)(scope, args, rv);
+            (set.calls[form])(scope, args, rv);
         }
     }
 }
 
 /// An overloaded method's (one with a signature): its form given the
-/// receiver V8 checked.
-impl bindings::StateMethod<State> for Overloaded {
-    fn call<'s>(
-        scope: Scope<'_, 's, '_>,
-        args: v8::FunctionCallbackArguments<'s>,
-        this: bindings::Receiver<'s>,
-        rv: v8::ReturnValue<'s>,
-    ) {
-        if let Some((scope, set, form)) = Overloaded::form(scope, &args) {
-            (set.calls[form].1)(scope, args, this, rv);
+/// info, whose receiver V8 checked.
+impl bindings::StateInfoMethod<State> for Overloaded {
+    fn call(mut info: bindings::StateInfo<'_, State>) {
+        if let Some((set, form)) = Overloaded::info_form(&mut info) {
+            (set.info_calls[form].0)(info);
+        }
+    }
+}
+
+/// An overloaded static operation's.
+impl bindings::StateInfoFunction<State> for Overloaded {
+    fn call(mut info: bindings::StateInfo<'_, State, bindings::Unsigned>) {
+        if let Some((set, form)) = Overloaded::info_form(&mut info) {
+            (set.info_calls[form].1)(info);
         }
     }
 }
 
 impl Overloaded {
+    /// As `form`, of a call given its info alone: the set's number read
+    /// from the function's data (a small integer, in place), the
+    /// arguments told apart with the isolate; a scope only to throw.
+    fn info_form<K>(
+        info: &mut bindings::StateInfo<'_, State, K>,
+    ) -> Option<(&'static OverloadSet, usize)> {
+        let args = info.args();
+        let set = v8::machopo::as_smi(args.data()).and_then(|set| usize::try_from(set).ok())?;
+        let set = &OVERLOADS.get().expect("made with its template")[set];
+        let mut forms = [&INTERFACES[set.interface].members[set.members[0]]; MOST_FORMS];
+        let mut count = 0usize;
+        for form in set.forms().take(MOST_FORMS) {
+            forms[count] = form;
+            count = count.saturating_add(1);
+        }
+        let forms = &forms[..count];
+        let given = usize::try_from(args.length()).unwrap_or(0);
+        let form = dom_api::resolve_overload(forms, given, |index, name| {
+            let value = args.get(i32::try_from(index).unwrap_or(i32::MAX));
+            implements(info.isolate(), value, name)
+                .expect("an overload's interface `implements` knows")
+        });
+        match form {
+            Ok(form) => Some((set, form)),
+            Err(message) => {
+                info.with_scope(|mut scope, _| {
+                    crate::throw_type_error(
+                        scope.scope(),
+                        &format!("Failed to execute '{}': {message}", forms[0].name),
+                    );
+                });
+                None
+            }
+        }
+    }
+
     /// The call's overload set and the form its arguments pick; `None`
     /// with a `TypeError` thrown for a number of them no form takes.
     fn form<'a, 's, 'i>(
@@ -1128,6 +1250,10 @@ impl Overloaded {
     }
 }
 
+/// The most forms an overload set has (`dom_api::resolve_overload` keeps
+/// as many).
+const MOST_FORMS: usize = 8;
+
 /// The interfaces `implements` tells an object of.
 const TOLD_APART: [&str; 2] = ["Uint8ClampedArray", "Path2D"];
 
@@ -1135,7 +1261,7 @@ const TOLD_APART: [&str; 2] = ["Uint8ClampedArray", "Path2D"];
 /// interfaces an overload's forms are told apart by (`resolve_overload`,
 /// `TOLD_APART`); `None` for another.
 fn implements(
-    scope: &mut v8::PinScope<'_, '_>,
+    scope: &mut v8::Isolate,
     value: v8::Local<'_, v8::Value>,
     name: &str,
 ) -> Option<bool> {

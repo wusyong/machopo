@@ -214,6 +214,13 @@ pub trait StateInfoMethod<T>: 'static {
     fn call(info: StateInfo<'_, T>);
 }
 
+/// A function given V8's callback info alone, as `StateInfoMethod`, its
+/// receiver unchecked (a static operation's: it has no signature): what
+/// `state_info_function_template` calls.
+pub trait StateInfoFunction<T>: 'static {
+    fn call(info: StateInfo<'_, T, Unsigned>);
+}
+
 /// An indexed getter given its isolate's state, a `T`: what
 /// `set_state_indexed_getter` calls, and the queries of its properties.
 pub trait StateIndexedGetter<T>: 'static {
@@ -381,10 +388,22 @@ impl<'a, 's, 'i, T: Any> StateScope<'a, 's, 'i, T> {
 /// and one that allocates, throws or runs script makes one then
 /// (`with_scope`). One a callback, its trampoline's: the state is borrowed
 /// through it alone.
-pub struct StateInfo<'s, T> {
+///
+/// `K` tells what V8 checked before the call: `Signed`, the receiver
+/// against the function's signature (a method's, `receiver`); `Unsigned`,
+/// nothing (a static operation's, whose `this` is anything).
+pub struct StateInfo<'s, T, K = Signed> {
     info: &'s v8::FunctionCallbackInfo,
-    _state: PhantomData<fn() -> T>,
+    _state: PhantomData<fn() -> (T, K)>,
 }
+
+/// A `StateInfo` of a function with a signature: its receiver is one of
+/// the isolate's templates' objects (`StateInfo::receiver`).
+pub struct Signed;
+
+/// A `StateInfo` of a function with no signature: no `Receiver` is made
+/// of its `this`.
+pub struct Unsigned;
 
 /// What a holder of the state borrowed from a `StateInfo` may ask of V8:
 /// `NoGc`'s reads that need the isolate alone, and the callback's result
@@ -408,7 +427,16 @@ pub fn info_scopes_for_testing() -> Option<u64> {
     cfg!(debug_assertions).then(|| INFO_SCOPES.get())
 }
 
-impl<'s, T: Any> StateInfo<'s, T> {
+impl<'s, T: Any> StateInfo<'s, T, Signed> {
+    /// The receiver, which V8 checked against the function's signature
+    /// (`state_info_method_template`).
+    #[inline(always)]
+    pub fn receiver(&self) -> Receiver<'s> {
+        Receiver(self.args().this())
+    }
+}
+
+impl<'s, T: Any, K> StateInfo<'s, T, K> {
     /// The isolate, no scope made: for what reads V8's objects in place.
     #[inline(always)]
     pub fn isolate(&mut self) -> &mut v8::Isolate {
@@ -424,13 +452,6 @@ impl<'s, T: Any> StateInfo<'s, T> {
     #[inline(always)]
     pub fn args(&self) -> v8::FunctionCallbackArguments<'s> {
         v8::FunctionCallbackArguments::from_function_callback_info(self.info)
-    }
-
-    /// The receiver, which V8 checked against the function's signature
-    /// (`state_info_method_template`).
-    #[inline(always)]
-    pub fn receiver(&self) -> Receiver<'s> {
-        Receiver(self.args().this())
     }
 
     /// The state, shared, and what of V8 its holder may use.
@@ -486,6 +507,17 @@ impl<'s, T: Any> StateInfo<'s, T> {
 /// An info method's callback: V8's own (`FunctionTemplate::builder_raw`),
 /// given the info alone.
 unsafe extern "C" fn info_method_trampoline<T: Any, C: StateInfoMethod<T>>(
+    info: *const v8::FunctionCallbackInfo,
+) {
+    C::call(StateInfo {
+        // SAFETY: V8's callback info, valid for the call.
+        info: unsafe { &*info },
+        _state: PhantomData,
+    });
+}
+
+/// An info function's callback, as `info_method_trampoline`.
+unsafe extern "C" fn info_function_trampoline<T: Any, C: StateInfoFunction<T>>(
     info: *const v8::FunctionCallbackInfo,
 ) {
     C::call(StateInfo {
@@ -756,6 +788,29 @@ pub fn state_info_method_template<'s, T: Any, C: StateInfoMethod<T>>(
         info_method_trampoline::<T, C>,
     ))
     .signature(signature)
+    .build(scope)
+}
+
+/// A function template whose callback is `C`'s, given V8's callback info
+/// alone, with no signature: its `this` is anything (a static operation's,
+/// on an interface object). `configure` sets the rest.
+///
+/// # Panics
+///
+/// If the isolate's state isn't a `T`.
+pub fn state_info_function_template<'s, T: Any, C: StateInfoFunction<T>>(
+    scope: &mut v8::PinScope<'s, '_>,
+    configure: impl FnOnce(
+        v8::FunctionBuilder<'s, v8::FunctionTemplate>,
+    ) -> v8::FunctionBuilder<'s, v8::FunctionTemplate>,
+) -> v8::Local<'s, v8::FunctionTemplate> {
+    assert!(
+        checked::<T>(scope).is_some(),
+        "a state callback's template is made where the state is one"
+    );
+    configure(v8::FunctionTemplate::builder_raw(
+        info_function_trampoline::<T, C>,
+    ))
     .build(scope)
 }
 

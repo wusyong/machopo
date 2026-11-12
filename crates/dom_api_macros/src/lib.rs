@@ -1738,7 +1738,9 @@ fn method(
     // What a front end with only the required methods can call.
     // (Its function may be given the front end's side in the operation:
     // what that asks of a front end, its types say.)
-    let plain = !is_static && !realm && !legacy_factory;
+    // (A static one too: it has no `this`, and the current realm's window
+    // it may ask for is the front end's to find, `Front::prepare_window`.)
+    let plain = !realm && !legacy_factory;
     quote! {
         type Args = (#(#types,)*);
         type Ret = #ret;

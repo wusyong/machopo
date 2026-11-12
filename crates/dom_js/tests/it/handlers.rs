@@ -642,3 +642,102 @@ fn a_result_to_allocate_for_is_made_after_the_operation() {
         "true,Later,SyntaxError"
     );
 }
+
+/// A static operation takes the path with the callback's info alone: it
+/// has no receiver (its `this` is anything), and the current realm's
+/// window it may ask for is found in its operation. An overloaded
+/// method's function picks its form from the arguments with no scope and
+/// calls it the same way.
+#[test]
+fn static_operations_and_overloads_are_given_the_info_alone() {
+    let mut engine = page();
+    run(
+        &mut engine,
+        "var canParse = URL.canParse; var supports = HTMLScriptElement.supports; \
+         var canvas = document.createElement('canvas'); var ctx = canvas.getContext('2d'); \
+         var path = new Path2D(); path.rect(0, 0, 10, 10); ctx.rect(0, 0, 10, 10); \
+         var data = ctx.createImageData(1, 1); d.id;",
+    );
+    for (source, value, at_once) in [
+        // Static: booleans at once, whatever `this` is.
+        ("URL.canParse('https://a.test/')", "true", true),
+        ("URL.canParse('nope')", "false", true),
+        ("canParse('https://a.test/')", "true", true),
+        ("canParse.call(7, 'x', 'https://a.test/')", "true", true),
+        ("HTMLScriptElement.supports('module')", "true", true),
+        ("supports('nothing')", "false", true),
+        // A new string, a new object: made after the operation.
+        ("CSS.escape('a b')", "a\\ b", false),
+        ("URL.parse('https://a.test/b').pathname", "/b", false),
+        ("URL.parse('nope')", "null", true),
+        ("Response.error().type", "error", false),
+        // The current realm's window found: the signal is its.
+        ("AbortSignal.abort() instanceof AbortSignal", "true", false),
+        ("AbortSignal.abort().aborted", "true", false),
+        ("AbortSignal.abort().reason.name", "AbortError", false),
+        ("AbortSignal.abort(7).reason", "7", false),
+        ("AbortSignal.abort(d).reason === d", "true", false),
+        // An argument missing: the `TypeError` of a call given too few.
+        (
+            "(() => { try { URL.canParse(); return 'none'; } catch (e) { return e.name; } })()",
+            "TypeError",
+            false,
+        ),
+        // Overloads: the form by the number of arguments, and by what
+        // the first is.
+        ("ctx.isPointInPath(1, 1)", "true", true),
+        ("ctx.isPointInPath(20, 20)", "false", true),
+        ("ctx.isPointInPath(path, 1, 1)", "true", true),
+        ("ctx.isPointInPath(path, 20, 1)", "false", true),
+        (
+            "ctx.fill(); ctx.fill('evenodd'); ctx.fill(path); ctx.fill(path, 'nonzero')",
+            "undefined",
+            true,
+        ),
+        (
+            "ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.setTransform()",
+            "undefined",
+            true,
+        ),
+        ("CSS.supports('color', 'red')", "true", true),
+        ("CSS.supports('color: red')", "true", true),
+        ("CSS.supports('not-a-property', 'red')", "false", true),
+        // A number of arguments none of a static overload's forms takes.
+        (
+            "(() => { try { CSS.supports(); return 'none'; } catch (e) { return e.name; } })()",
+            "TypeError",
+            false,
+        ),
+        // A form that isn't plain is called as before, in a scope.
+        ("ctx.putImageData(data, 0, 0)", "undefined", false),
+        ("d.scrollTo(0, 0) instanceof Promise", "true", false),
+        ("d.scrollTo({ top: 0 }) instanceof Promise", "true", false),
+        // A number of arguments no form takes.
+        (
+            "(() => { try { ctx.putImageData(data, 1, 2, 3); return 'none'; } catch (e) { return e.name + ': ' + e.message; } })()",
+            "TypeError: Failed to execute 'putImageData': Valid arities are: [3, 7], but 4 arguments provided.",
+            false,
+        ),
+        // A method's receiver is still checked.
+        (
+            "(() => { try { ctx.fill.call(d); return 'none'; } catch (e) { return e.name; } })()",
+            "TypeError",
+            true,
+        ),
+    ] {
+        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        let expression = if source.starts_with("(() =>") {
+            source.to_owned()
+        } else {
+            format!("({})", source.replace("; ", ", "))
+        };
+        let found = report(&mut engine, &expression);
+        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        assert_eq!(found, value, "{source}");
+        if at_once {
+            assert_eq!(made, 0, "{source}");
+        } else {
+            assert!(made >= 1, "{source}: a scope");
+        }
+    }
+}
