@@ -295,6 +295,26 @@ fn run<H: ScriptHost>(
     between(&mut Between { host, traversal })
 }
 
+/// A traversal's algorithm tried in one operation (`#[first(..)]`): walked
+/// if it has no filter, the result given; none if it has one, which is
+/// script's to run (the method's own function then, between operations).
+/// Nothing is touched before that is told.
+fn first<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    traversal: Traversal<'gc>,
+    in_op: impl for<'a, 'b> FnOnce(&mut InOp<'a, 'b, 'gc>) -> Result<Option<NodeRef<'gc>>, ApiError>,
+) -> Result<Option<Option<NodeRef<'gc>>>, ApiError> {
+    if cx.traversal_has_filter(traversal) {
+        return Ok(None);
+    }
+    let mut walk = InOp {
+        cx,
+        traversal,
+        filtering: None,
+    };
+    Ok(Some(in_op(&mut walk)?))
+}
+
 /// The first node after `node` in tree order in `root`'s subtree (a node
 /// iterator's collection's next).
 fn following<W: Walk>(walk: &mut W, node: &W::Node, root: &W::Node) -> Option<W::Node> {
@@ -433,6 +453,26 @@ pub(crate) fn previous_node<H: ScriptHost>(
         |walk| traverse(walk, false),
         |walk| traverse(walk, false),
     )
+}
+
+/// `nextNode()` of an iterator without a filter, in one operation.
+pub(crate) fn next_node_first<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, NodeIterator>,
+) -> Result<Option<Option<NodeRef<'gc>>>, ApiError> {
+    first(cx, Traversal::NodeIterator(this), |walk| {
+        traverse(walk, true)
+    })
+}
+
+/// `previousNode()` of an iterator without a filter, in one operation.
+pub(crate) fn previous_node_first<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, NodeIterator>,
+) -> Result<Option<Option<NodeRef<'gc>>>, ApiError> {
+    first(cx, Traversal::NodeIterator(this), |walk| {
+        traverse(walk, false)
+    })
 }
 
 /// `detach()`: nothing (DOM keeps it for compatibility).
@@ -648,7 +688,7 @@ fn next_node_of<W: Walk>(walk: &mut W) -> Result<Option<W::Node>, ApiError> {
 
 /// A tree walker's method: `algorithm` run.
 macro_rules! walker_method {
-    ($(#[$doc:meta])* $name:ident, $algorithm:expr) => {
+    ($(#[$doc:meta])* $name:ident, $first:ident, $algorithm:expr) => {
         $(#[$doc])*
         pub(crate) fn $name<H: ScriptHost>(
             host: &mut H,
@@ -658,42 +698,57 @@ macro_rules! walker_method {
                 $algorithm(walk)
             })
         }
+
+        /// The same of a walker without a filter, in one operation.
+        pub(crate) fn $first<'gc>(
+            cx: &ApiCx<'_, 'gc>,
+            this: Gc<'gc, TreeWalker>,
+        ) -> Result<Option<Option<NodeRef<'gc>>>, ApiError> {
+            first(cx, Traversal::TreeWalker(this), |walk| $algorithm(walk))
+        }
     };
 }
 
 walker_method!(
     /// `parentNode()`.
     parent_node,
+    parent_node_first,
     parent_node_of
 );
 walker_method!(
     /// `firstChild()`.
     first_child,
+    first_child_first,
     |walk| traverse_children(walk, true)
 );
 walker_method!(
     /// `lastChild()`.
     last_child,
+    last_child_first,
     |walk| traverse_children(walk, false)
 );
 walker_method!(
     /// `previousSibling()`.
     previous_sibling,
+    previous_sibling_first,
     |walk| traverse_siblings(walk, false)
 );
 walker_method!(
     /// `nextSibling()`.
     next_sibling,
+    next_sibling_first,
     |walk| traverse_siblings(walk, true)
 );
 walker_method!(
     /// `previousNode()`.
     walker_previous_node,
+    walker_previous_node_first,
     previous_node_of
 );
 walker_method!(
     /// `nextNode()`.
     walker_next_node,
+    walker_next_node_first,
     next_node_of
 );
 

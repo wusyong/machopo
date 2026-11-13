@@ -28,13 +28,15 @@
 | 4k-A 回傳非整數的數字：直接設回傳值（決定 42） | 完成 | 2026-11-12 |
 | 4k-B 回傳現算的字串：不經過 `DomString`、`Box`、`V8Front`；fork 加從 callback info 借的 token | 完成 | 2026-11-12 |
 | 4k-B2 回傳關鍵字和現算的文字的函式改用 `DomStr::fresh`（不做 `DomString`） | 完成 | 2026-11-13 |
-| 4k-C 會呼叫 script 的成員：`this` 和參數不登記 root、少開操作 | 還沒開始 | |
+| 4k-C1 33 個會呼叫 script 的成員搬到新的外殼（`Front::whole`；決定 43） | 完成 | 2026-11-13 |
+| 4k-C2 「先試的普通函式」的機制（`#[first(..)]`）和走訪的 9 個成員的快路（沒有 filter 時一個操作） | 完成 | 2026-11-13 |
+| 4k-C3 剖析 `inp.select()`、`abort()`（Chrome 的 1.29 倍） | 完成 | 2026-11-13 |
 | 4k-D 新的 wrapper：不登記 root、不經過 `V8Front` | 還沒開始 | |
 | 4k-E 非 ASCII 和要轉換的字串參數 | 還沒開始 | |
 | 4k-F dictionary、例外、陣列、promise | 還沒開始 | |
+| 4k-C4 評估：會跑 script 的函式的 `this` 和參數改拿 wrapper、不登記 root（185 個函式和 `ScriptHost` 的介面；4k-F 之後有完整的數字再決定做不做、做多大；決定 43） | 還沒開始 | |
 | 4k-G 最熱的路本身（`nodeType` 是 Chrome 的 1.36 倍）：另外研究 | 還沒開始 | |
 | 4l cross-origin 的 16 個成員，和要找別的 realm 的 window 的 5 個（`Blob` 的 `arrayBuffer`、`bytes`、`text`，`Location.assign`，`Document.location` 的 setter）；4i 留下的 interceptor（indexed setter、iterator 的 pairs、named 的刪除、查詢和列舉）；legacy factory | 還沒開始 | |
-| 4m-1 會呼叫 script 的成員走新的外殼（做法照 4k 的研究；決定 41） | 還沒開始 | |
 | 4m-2 刪舊的外殼、`Call`、`Kept`、`PLAIN`（連同它的檢查：`PLAIN_FRONT_METHODS`、`PLAIN_OP_METHODS`、`dom_api` 的 `plain` 測試、`dom_js` 的 `the_plain_methods_are_the_info_front_ends_own`、`docs/test-gaps.md` 的那一列） | 還沒開始 | |
 | 4m-3 刪掉 `V8Front`（4k-A 到 4k-F 之後沒有人用） | 還沒開始 | |
 | 收尾：`nodeType`、`getAttribute` 的 callback 和 Chrome 的逐條指令對照，列出剩下的差（決定 20） | 還沒開始 | |
@@ -663,3 +665,52 @@
 - 測試：`dom_js` 的 `strings::a_keyword_or_computed_text_is_given_as_it_is`（window 的 realm：五個關鍵字、九個現算的，值正確、各算一次 `fresh_strings`）。寫測試時弄錯的：測試的 window 的文件沒有 `<html>`、`readyState` 是 `complete`、沒有 `<head>` 時 `document.title` 是空的（空的文字是 V8 的空字串，不算）。
 - mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4kB2.toml`，4 個都抓到。
 - 跑過：`cargo test -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt html/dom url fetch/api/request fetch/api/response html/semantics/forms html/browsers/history shadow-dom selection`（108240 個結果都照預期）。
+
+**第 4k-C 段，量測：會呼叫 script 的成員對 Chrome**（2026-11-13；`chrome-compare`，各三次取最小，ns 一次）：
+
+| 呼叫 | Chrome | machopo | 倍數 |
+| --- | ---: | ---: | ---: |
+| `tw.parentNode()`（沒有 filter） | 9.9 | 16.0 | 1.62 |
+| `ni.nextNode(); ni.previousNode()` | 32.5 | 45.3 | 1.39 |
+| `tw.currentNode = n; tw.nextNode()` | 27.3 | 37.6 | 1.38 |
+| `inp.select()` | 157.0 | 202.0 | 1.29 |
+| `new AbortController().abort()` | 1665.5 | 2145.0 | 1.29 |
+| `tw.currentNode = n; tw.firstChild()` | 33.6 | 39.4 | 1.17 |
+| `form.reset()` | 531.5 | 378.5 | 0.71 |
+| `c.dispatchEvent(evb)`（在樹上、bubble） | 413.0 | 293.5 | 0.71 |
+| `twf.currentNode = n; twf.nextNode()`（有 filter） | 170.0 | 113.5 | 0.67 |
+| `t.dispatchEvent(ev)`（一個 listener） | 273.9 | 155.1 | 0.57 |
+| `c.click()` | 675.5 | 310.5 | 0.46 |
+| `sel.collapse(n, 0)` | 209.5 | 94.5 | 0.45 |
+
+- `inp.focus(); inp.blur()`：Chrome 38310、machopo 54.5，兩邊做的事差太多（測試的環境沒有真的版面），不能比。
+- **沒查出原因的異常**：整份對照的 script 裡 `sel.selectAllChildren(n)` 在 machopo 是 62156 ns 一次（Chrome 223.5）；單獨跑、前面接 `inp.select()`、`focus` 加 `blur`、`form.reset()`、`click()`、十萬到一百萬次 `collapse`、二十萬次 `NodeIterator`、五萬次有 filter 的 `TreeWalker`、接上兩萬個節點，都是 140 到 300 ns，沒重現。要再找是哪個狀態讓它變慢。
+
+**第 4k-C1 到 4k-C3 段（一組）：會呼叫 script 的成員搬到新的外殼；走訪的快路；`select()` 和 `abort()` 的剖析**（2026-11-13，決定 43）：
+
+- 4k-C1，`dom_api`：`Front::whole` 和 `WholeCall`（一個成員的整個呼叫，在會跑 script 的 front 上跑：預設是自己）；macro 的 `script_method`、`then_script_method` 產生的呼叫整段包成 `WholeCall`，標成 `PLAIN`。`dom_js`：`InfoFront::whole` 當場建一個 scope 和 `V8Front`、在上面跑（不是 `#[cold]`：它是這種成員的整個呼叫）。33 個成員的 callback 現在只拿 info；不是 `PLAIN` 的剩 11 個（找別的 realm 的 window 的、cross-origin 的、legacy factory）。
+- 4k-C2，macro：`#[first(path)]`（只能標在不是 `#[ce_reactions]` 的 `#[calls_script]` method 上）：先在 callback 拿到的 front 上開一個操作呼叫那個函式，回 `Some` 就給結果、結束，回 `None` 才 `whole`（參數重新拿）。`dom_api` 的 `traversal.rs`：`first`（沒有 filter 就用 `InOp` 走完）和 9 個 `*_first` 函式（walker 的 7 個由 `walker_method!` 一起產生）。
+- 4k-C3（只剖析，沒有改）：`inp.select()` 45% 在一個 `memcmp`、`Cx::input_value` 17%、`is_focusable_area` 12%，binding 的外殼約 21%；是 DOM 那一側的實作，`memcmp` 是誰呼叫的沒查出來（帶 call graph 的取樣在這台機器上寫不出檔）。`new AbortController().abort()` 分散在 V8 替 `DOMException` 抓 stack trace（`StackFrameIterator`、`CaptureSimpleStackTrace`）和設屬性（`MigrateToMap`、`DefineOwnPropertyIgnoreAttributes`），Chrome 也要做；看不到 binding 這邊單獨能省的。兩者留著，不在這份 RFC 處理。
+- 和事先說的不同：
+  - 「呼叫 JS 不建 scope」沒有做：會跑 script 的那條路整段還在 `V8Front` 上（一個 scope），只憑 info 呼叫函式要連 `TryCatch`、例外的回報、listener 的呼叫都不用 rusty_v8 的 scope 重寫，是 4m-3（刪掉 `V8Front`）才有辦法一起做的。步驟表的 4k-C1 改掉了那一句。
+  - 說搬到新的外殼「效能預期不變」：跑到 script 的路慢了約 4 ns（多一層才進到 `V8Front`），有 filter 的走訪慢約 11 ns（再加先試的那一次操作）。
+- `chrome-compare`（各三次取最小；ns 一次，括號是 Chrome 的倍數）：
+
+  | | Chrome | 4k-B2 | 這一組 |
+  | --- | ---: | ---: | ---: |
+  | `tw.parentNode()` | 9.8 | 15.8（1.61） | 8.4（0.86） |
+  | `tw.currentNode = n; tw.nextNode()` | 27.4 | 37.7（1.38） | 25.8（0.94） |
+  | `tw.currentNode = n; tw.firstChild()` | 33.2 | 39.5（1.19） | 25.7（0.77） |
+  | `ni.nextNode(); ni.previousNode()` | 34.5 | 45.4（1.32） | 23.8（0.69） |
+  | `twf.currentNode = n; twf.nextNode()`（有 filter） | 190.0 | 113.0（0.59） | 124.0（0.65） |
+  | `t2.dispatchEvent(ev)`（沒有 listener） | 75.0 | 71.4（0.95） | 75.4（1.01） |
+  | `t.dispatchEvent(ev)`（一個 listener） | 316.4 | 155.1（0.49） | 158.2（0.50） |
+  | `c.click()` | 695.5 | 309.0（0.44） | 308.0（0.44） |
+  | `form.reset()` | 510.5 | 368.5（0.72） | 362.5（0.71） |
+  | `inp.select()` | 162.0 | 201.0（1.24） | 207.0（1.28） |
+  | `new AbortController().abort()` | 1744.0 | 2145.0（1.23） | 2209.0（1.27） |
+
+  `chrome-compare.js` 拿掉了 selection 的兩項：`selectAllChildren` 在整份 script 裡異常地慢（上面記的，原因沒找到），讓每次對照要多跑十幾分鐘。
+- 測試：`dom_js` 的 `info_front::a_traversal_without_a_filter_walks_in_one_operation`（window 的 realm：walker 的七個方法從 root 和從裡面走、只顯示元素的 walker、iterator 兩個方向：都不建 scope、節點正確、filter 沒被呼叫；有 filter 的 walker 和 iterator 建 scope、呼叫 filter、走到同樣的節點；filter 丟的例外；沒有 wrapper 的節點）；`info_front::a_member_that_runs_script_makes_one_scope`（原本是「不是 `PLAIN` 的成員不建這種 scope」，改成新的事實：`dispatchEvent` 一個、`click()` 一到兩個）；`handlers.rs` 的兩個測試把「被測的呼叫之後的派發」移到計數之外（`counted_before_dispatch`）；`dom_api` 的 table 測試的名單從 45 個改成 11 個。寫測試時弄錯的：沒有 window 的測試環境裡 callback 不能跑（`The provided callback is no longer runnable`），有 filter 的要在 window 的 realm 測。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4kC1.toml`，7 個都抓到。第一次沒跑：一個 mutant 的原文和格式化過的程式對不上（`from` 找到 0 次），工具在改任何檔案之前就停了。
+- 跑過：`cargo test -p dom_api_macros -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt dom/traversal dom/events dom/abort html/semantics/forms selection custom-elements html/interaction/focus uievents`（44859 個結果都照預期）。

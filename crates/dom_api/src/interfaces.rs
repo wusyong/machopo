@@ -4863,8 +4863,10 @@ crate::declare! {
         attribute whatToShow: u32, get = traversal::node_iterator_what_to_show;
         attribute filter: AnyOrNull, get = traversal::node_iterator_filter;
         #[calls_script]
+        #[first(traversal::next_node_first)]
         method nextNode() -> Option<Node> = traversal::next_node;
         #[calls_script]
+        #[first(traversal::previous_node_first)]
         method previousNode() -> Option<Node> = traversal::previous_node;
         method detach() = traversal::detach;
     }
@@ -4875,18 +4877,25 @@ crate::declare! {
         attribute filter: AnyOrNull, get = traversal::tree_walker_filter;
         attribute currentNode: Node, get = traversal::current_node, set = traversal::set_current_node;
         #[calls_script]
+        #[first(traversal::parent_node_first)]
         method parentNode() -> Option<Node> = traversal::parent_node;
         #[calls_script]
+        #[first(traversal::first_child_first)]
         method firstChild() -> Option<Node> = traversal::first_child;
         #[calls_script]
+        #[first(traversal::last_child_first)]
         method lastChild() -> Option<Node> = traversal::last_child;
         #[calls_script]
+        #[first(traversal::previous_sibling_first)]
         method previousSibling() -> Option<Node> = traversal::previous_sibling;
         #[calls_script]
+        #[first(traversal::next_sibling_first)]
         method nextSibling() -> Option<Node> = traversal::next_sibling;
         #[calls_script]
+        #[first(traversal::walker_previous_node_first)]
         method previousNode() -> Option<Node> = traversal::walker_previous_node;
         #[calls_script]
+        #[first(traversal::walker_next_node_first)]
         method nextNode() -> Option<Node> = traversal::walker_next_node;
     }
 

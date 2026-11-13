@@ -188,6 +188,11 @@ enum MemberDef {
         /// `#[calls_script]`: its function runs out of the operation and
         /// calls script through the front end (`ScriptHost`).
         calls_script: bool,
+        /// `#[first(path)]` on a `#[calls_script]` method: a function
+        /// tried first, in one operation (as any other member's), which
+        /// gives the result, or none if this call needs script; only then
+        /// is the method's own function run.
+        first: Option<Path>,
         /// `#[then_script]`: its function runs in the operation and may
         /// leave something to do that calls script (`typed::ThenScript`),
         /// done out of it before the call returns; most calls leave
@@ -430,6 +435,7 @@ impl Parse for MemberDef {
         ) = (
             false, false, false, false, false, false, false, false, false, false,
         );
+        let mut first: Option<Path> = None;
         let mut named = None;
         let mut observable = None;
         let mut anonymous = false;
@@ -527,6 +533,16 @@ impl Parse for MemberDef {
                 observable = Some((operation, attribute));
                 continue;
             }
+            if attr.path().is_ident("first") {
+                if !input.peek(kw::method) {
+                    return Err(syn::Error::new_spanned(
+                        attr,
+                        "`#[first(..)]` marks a method",
+                    ));
+                }
+                first = Some(attr.parse_args()?);
+                continue;
+            }
             if attr.path().is_ident("named") {
                 let special: Ident = attr.parse_args()?;
                 if !["getter", "setter", "deleter", "names"]
@@ -609,6 +625,13 @@ impl Parse for MemberDef {
             return Err(syn::Error::new_spanned(
                 &attrs[0],
                 "a method calling script gets the front end as its script host already",
+            ));
+        }
+        // Tried before a function that calls script: of no other.
+        if first.is_some() && (!calls_script || ce_reactions || input.peek(kw::attribute)) {
+            return Err(syn::Error::new_spanned(
+                &attrs[0],
+                "`#[first(..)]` marks a `#[calls_script]` method that isn't `#[ce_reactions]`",
             ));
         }
         // Its function's in an operation (with the front end in it if
@@ -744,6 +767,7 @@ impl Parse for MemberDef {
                 front: front || realm,
                 realm,
                 calls_script,
+                first,
                 then_script,
                 ce_reactions,
                 is_static,
@@ -1270,7 +1294,7 @@ fn entries(interface: &InterfaceDef) -> Vec<Entry<'_>> {
                             "getter"
                         },
                         if *calls_script {
-                            script_method(iface, name, &[], ty, get, false)
+                            script_method(iface, name, &[], ty, get, false, None)
                         } else if *is_static {
                             // No `this`: a static method's path, of no
                             // arguments.
@@ -1333,6 +1357,7 @@ fn entries(interface: &InterfaceDef) -> Vec<Entry<'_>> {
                 front,
                 realm,
                 calls_script,
+                first,
                 then_script,
                 ce_reactions,
                 is_static,
@@ -1436,7 +1461,15 @@ fn entries(interface: &InterfaceDef) -> Vec<Entry<'_>> {
                         kind,
                         visit,
                         if *calls_script {
-                            script_method(iface, name, args, &ret, function, *ce_reactions)
+                            script_method(
+                                iface,
+                                name,
+                                args,
+                                &ret,
+                                function,
+                                *ce_reactions,
+                                first.as_ref(),
+                            )
                         } else if *then_script {
                             then_script_method(iface, name, args, function, *front)
                         } else {
@@ -1807,8 +1840,24 @@ fn then_script_method(
     quote! {
         type Args = (#(#types,)*);
         type Ret = ();
+        // On the front end that runs script (`Front::whole`), whichever
+        // the member's callback is given.
+        const PLAIN: bool = true;
 
         fn call<F: #api::typed::Front>(#front: &mut F) {
+            struct Whole;
+
+            impl #api::typed::WholeCall for Whole {
+                type Out = ();
+
+                fn run<F: #api::typed::Front>(self, #front: &mut F) {
+                    whole(#front);
+                }
+            }
+
+            #front.whole(Whole);
+
+            fn whole<F: #api::typed::Front>(#front: &mut F) {
             #optional
             if !#front.has_args(#js, #required) {
                 return;
@@ -1835,6 +1884,7 @@ fn then_script_method(
                 }
                 ::std::result::Result::Err(#error) => <() as #api::typed::RetType>::fail(#front, #error),
             }
+            }
         }
     }
 }
@@ -1851,6 +1901,7 @@ fn script_method(
     ret: &Type,
     function: &Path,
     ce_reactions: bool,
+    first: Option<&Path>,
 ) -> Tokens {
     let api = api();
     let (front, op, cx, this_, result, value, error) = locals();
@@ -1860,6 +1911,49 @@ fn script_method(
     let (names, types, optional) = args_of(args);
     let indices = 0..args.len();
     let param_indices = 0..args.len();
+    // The function tried first (`#[first(..)]`): one operation on the
+    // front end the callback is given, as a member that calls no script
+    // has; the call is over if it gave the result, and goes on to the
+    // whole front end (which takes the arguments again) if it gave none.
+    let tried = first.map(|first| {
+        let (indices, param_indices) = (0..args.len(), 0..args.len());
+        quote! {
+            {
+                #optional
+                if !#front.has_args(#js, #required) {
+                    return;
+                }
+                #(
+                    let ::std::option::Option::Some(#names) = <#types as #api::typed::ArgType>::take(#front, #indices) else {
+                        return;
+                    };
+                )*
+                let #result = #front.mutate(|#cx, #op| {
+                    let #this_ = #this;
+                    #(
+                        let #names = <#types as #api::typed::ArgType>::param(#op, #cx, &#names, #param_indices)?;
+                    )*
+                    ::std::result::Result::Ok(
+                        #first(#cx, #this_ #(, #names)*)?
+                            .map(|#value| <#ret as #api::typed::RetType>::give(#op, #cx, #value)),
+                    )
+                });
+                #(#api::typed::release(#names);)*
+                match #result {
+                    ::std::result::Result::Ok(::std::option::Option::Some(#value)) => {
+                        <#ret as #api::typed::RetType>::finish(#front, #value);
+                        #front.finish();
+                        return;
+                    }
+                    ::std::result::Result::Ok(::std::option::Option::None) => {}
+                    ::std::result::Result::Err(#error) => {
+                        #front.throw(#error);
+                        return;
+                    }
+                }
+            }
+        }
+    });
     // Its scope in operations of their own, around its function's.
     let (ce_enter, ce_leave_invoke) = if ce_reactions {
         (
@@ -1876,8 +1970,25 @@ fn script_method(
     quote! {
         type Args = (#(#types,)*);
         type Ret = #ret;
+        // On the front end that runs script (`Front::whole`), whichever
+        // the member's callback is given.
+        const PLAIN: bool = true;
 
         fn call<F: #api::typed::Front>(#front: &mut F) {
+            struct Whole;
+
+            impl #api::typed::WholeCall for Whole {
+                type Out = ();
+
+                fn run<F: #api::typed::Front>(self, #front: &mut F) {
+                    whole(#front);
+                }
+            }
+
+            #tried
+            #front.whole(Whole);
+
+            fn whole<F: #api::typed::Front>(#front: &mut F) {
             #optional
             if !#front.has_args(#js, #required) {
                 return;
@@ -1920,6 +2031,7 @@ fn script_method(
                     #ce_leave_invoke
                     #front.throw(#error);
                 }
+            }
             }
         }
     }

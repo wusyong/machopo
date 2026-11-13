@@ -244,6 +244,15 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
     - **`this` 和參數不登記 root**：wrapper 活著就撐著它的 DOM 物件、物件不搬（`crates/bindings/soundness.md` 已有的論證，普通成員已經靠它）；callback 的 `this` 和參數整個呼叫期間都被 V8 留著，跨操作重新解出來是同一條論證。要 root 的只剩沒有 wrapper 的中間物件。
     - **分段，照差距排**：4k-A 回傳非整數的數字；4k-B 回傳現算的字串（token 在這一段加）；4k-C 會呼叫 script 的成員（不登記 root、少開操作）；4k-D 新的 wrapper；4k-E 非 ASCII 和要轉換的字串參數；4k-F dictionary、例外、陣列、promise；4k-G 最熱的路本身，另外研究。A 到 F 做完 `V8Front` 沒有人用，4m-3 剩下刪掉它。不選先做 C（影響最多、最複雜）。
     - **驗收**：每段的那個呼叫在 `chrome-compare.js` 裡不比 Chrome 慢超過 1.2 倍（兩邊的 V8 版本和 build 不同，再小量不準），不只是比上一段快。
+43. **4k-C：會呼叫 script 的成員，沒跑到 script 的一個操作做完，跑到的 `this` 和參數改拿 wrapper**（2026-11-13；數字在 `progress.md` 的 4k-C）：
+    - **對 Chrome 量的結果**：真的跑到 script 的呼叫 machopo 已經比較快（`dispatchEvent` 0.57 到 0.87 倍、`click()` 0.46、`form.reset()` 0.71、有 filter 的走訪 0.67、`selection.collapse` 0.45）；落後的是沒跑到 script 卻付了完整代價的：沒有 filter 的走訪 1.38 到 1.62 倍，另外 `inp.select()`、`new AbortController().abort()` 1.29 倍（原因還沒拆）。
+    - **「先試的普通函式」**：表上會呼叫 script 的成員可以多宣告一個普通的函式（`#[calls_script(first = …)]`），在一個操作裡跑，回「做完了、結果是這個」或「這次需要 script」；需要時才走原本的路。它要在動任何狀態之前就決定需要 script（原本那條路會從頭再做）。不選把成員拆成兩個、外殼在執行時選（只對走訪有用）。
+    - **33 個成員一次搬到新的外殼**（原本排在 4m-1）：新的 front 有一個入口，在裡面用完整的 front 跑原本那段。
+    - **跑到 script 的路：`this` 和參數改拿 wrapper，不登記 root（使用者：希望全改）**。函式和它們往下呼叫的內部函式的簽名改成由呼叫的一方決定怎麼拿著物件（binding 用 wrapper，引擎自己派發時用 root），一個模組一個模組做。安全性靠 `crates/bindings/soundness.md` 已有的論證（wrapper 活著就撐著它的 DOM 物件，callback 的 `this` 和參數整個呼叫期間被 V8 留著），不碰 GC。省不到的：呼叫中途新建的物件、要帶出操作的結果、走訪到一半的節點（沒有 wrapper，還是 root）；這些呼叫已經比 Chrome 快。
+    - **不選在 elise 加只活在一次呼叫的便宜的 root**（像 handle scope：登記估約 10 條、涵蓋所有的 root、函式的簽名不用改）：涵蓋廣，但是新的 root 種類，要補 GC 的 soundness 論證和測試；使用者選只做上一條。記在「之後的可能」。不選兩個都做。
+    - **加快審核（使用者同意，2026-11-13）**：4k-C 的八小段併成三組，各停一次給使用者審：C1 到 C3；C4（型別的設計，走訪當試點）；C5 到 C8。組裡每一步只跑改到的 crate 的測試和 `cargo fmt`；mutation test、`sanity.py`、相關的 WPT、對 Chrome 的量測和 `progress.md` 在那一組的最後做一次。
+    - **`this` 和參數改拿 wrapper 移到 4k-F 之後再評估（2026-11-13，使用者）**：查型別的設計時發現規模比當初說的大：寫成會呼叫 script 的函式有 185 個、分布在 `dom_api` 的 39 個檔案，彼此之間和向 host 要求（`ScriptHost` 的二十多個方法）傳的都是 root，所以不能只改入口。可行的設計是 `ScriptHost::Held<T>`（`Hold<T>`：在一個操作裡交出物件；`Persistent<T>` 實作它，binding 的是「wrapper 或 root」），函式把型別換掉、`this.get(cx.gc)` 換成 `this.get(cx)`；估兩三千行。省的是每個呼叫一到兩個 root（各約 80 到 90 條、合計約 3 到 8 ns），這些呼叫是 70 到 700 ns、已經是 Chrome 的 0.44 到 1.0 倍。先做真的落後的（4k-D 到 4k-F），到時再決定。先做掉不用改簽名的一點：沒有參數的成員登記 `this` 的 root 用讀的操作（20 條）而不是寫的（44 條）。
+    - **分段**：4k-C1 新的外殼；4k-C2 「先試」的機制和走訪的 9 個成員的快路；4k-C3 剖析 `inp.select()`、`abort()`；4k-C4（`this` 和參數改拿 wrapper）移到 4k-F 之後評估。
 
 ## 待決定
 
@@ -257,4 +266,5 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
 - 每次現算的字串（`style.color`、其他 getter 給的新的 `DomString`）在字串的快取裡永遠找不到（快取照位址記），每次新建 V8 的字串並登記一筆（`Weak` 加 finalizer）：`style.color` 是 `'red'` 時 4709 條指令、2664 個 cycle（4i-2 量的；決定 36 當時猜是 CSS 那一側，不是）。空字串已經不經過快取。決定 38 做了。
 - dictionary 的成員名稱每次讀都重新做成 V8 的 internalized 字串（`templates::string`）再 `Get`：一個成員約一千條指令，`new MouseEvent('x', init)`（三十個左右的成員）三萬兩千條（4j-1 量的）。Chromium 產生的 dictionary 轉換把成員名稱的 V8 字串每個 isolate 快取一份（`V8PerIsolateData::FindOrCreateEternalNameCache`），讀成員時不建字串。 決定 40 做了。
 - window 的 getter 當全域變數讀（`navigator`、`location`、`performance`、`innerWidth`、`onload`…）每次約 1700 條指令（4k 量的）：V8 不替 holder 是 dictionary mode 的 API getter 建 inline cache（全域物件一定是），每次走 `Runtime_LoadGlobalIC_Slow`。V8 留的出路是 cached accessor（`FunctionTemplate` 帶 cache 的 private symbol，`TryLookupCachedProperty`）。還沒查 Chromium 對哪些屬性用、也沒量 Chrome 同樣的讀取。 2026-11-12 量了 Chrome：一樣慢（`navigator` Chrome 94.7 ns、machopo 88.3 ns），不是差距，不排。
+- 只活在一次呼叫的便宜的 root（elise 加，像 V8 的 handle scope：呼叫開始記下位置，登記是往陣列尾端寫一格，結束時整批丟掉）：現在登記再放掉一個 `Persistent` 約 80 到 90 條，估可以到約 10 條（沒量），而且涵蓋呼叫中途新建的物件和要帶出操作的結果。要補 elise 的 soundness 論證和 model、fuzz（concurrent marking 進行中丟掉 root 照現有的規則記下來）。決定 43 不選。
 - `HTMLElement` 的 constructor 每次建一個 scope 檢查 `new.target` 是不是 `HTMLElement` 本身（決定 35）：要不建 scope 拿到 realm 的 interface 物件，或換一種比法。

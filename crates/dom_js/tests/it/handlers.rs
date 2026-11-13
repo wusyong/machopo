@@ -33,6 +33,40 @@ fn report(engine: &mut V8Engine, expression: &str) -> String {
     engine.take_harness_results().unwrap_or_default()
 }
 
+/// `source`'s value and what its statements before the first that
+/// dispatches an event (`dispatchEvent`, the tests' `fire`) asked of V8
+/// (`env::slow_paths`): the dispatch is run after the count, as it is the
+/// whole front end's, in a scope of its own. Statements as one expression
+/// (the comma operator), unless `source` is one already.
+fn counted_before_dispatch(engine: &mut V8Engine, source: &str) -> (String, u64) {
+    let expression = |statements: &str| format!("({})", statements.replace("; ", ", "));
+    if source.starts_with("(() =>") {
+        let before = crate::env::slow_paths();
+        let found = report(engine, source);
+        return (found, crate::env::slow_paths() - before);
+    }
+    let statements: Vec<&str> = source.split("; ").collect();
+    let dispatch = statements
+        .iter()
+        .position(|statement| statement.contains("dispatchEvent(") || statement.contains("fire("));
+    match dispatch {
+        Some(at) if at > 0 => {
+            let before = crate::env::slow_paths();
+            run(engine, &format!("{};", statements[..at].join("; ")));
+            let made = crate::env::slow_paths() - before;
+            (
+                report(engine, &expression(&statements[at..].join("; "))),
+                made,
+            )
+        }
+        _ => {
+            let before = crate::env::slow_paths();
+            let found = report(engine, &expression(source));
+            (found, crate::env::slow_paths() - before)
+        }
+    }
+}
+
 /// An engine whose window's document has `<html><body><div id=d>`.
 fn page() -> V8Engine {
     let mut engine = V8Engine::new(EngineSettings { web_tests: true });
@@ -332,19 +366,10 @@ fn a_callback_is_its_arguments_handle() {
         ),
         ("typeof requestAnimationFrame(f)", "number", true),
     ] {
-        let before = crate::env::slow_paths();
-        // Statements as one expression (the comma operator), unless it is
-        // one already.
-        let expression = if source.starts_with("(() =>") {
-            source.to_owned()
-        } else {
-            format!("({})", source.replace("; ", ", "))
-        };
-        let found = report(&mut engine, &expression);
-        let made = crate::env::slow_paths() - before;
+        // (What dispatches after the call under test is run after the
+        // count: a dispatch is the whole front end's, in a scope.)
+        let (found, made) = counted_before_dispatch(&mut engine, source);
         assert_eq!(found, value, "{source}");
-        // (`dispatchEvent` and `new Event` aren't plain: none of these
-        // scopes is theirs.)
         if at_once {
             assert_eq!(made, 0, "{source}");
         } else {
@@ -477,14 +502,7 @@ fn a_value_rest_arguments_and_a_signal_are_handles() {
         // A string to compile is taken by the whole front end.
         ("typeof setTimeout('log.push(\\'s\\')', 0)", "number", false),
     ] {
-        let before = crate::env::slow_paths();
-        let expression = if source.starts_with("(() =>") {
-            source.to_owned()
-        } else {
-            format!("({})", source.replace("; ", ", "))
-        };
-        let found = report(&mut engine, &expression);
-        let made = crate::env::slow_paths() - before;
+        let (found, made) = counted_before_dispatch(&mut engine, source);
         assert_eq!(found, value, "{source}");
         if at_once {
             assert_eq!(made, 0, "{source}");

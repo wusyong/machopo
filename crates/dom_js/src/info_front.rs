@@ -644,6 +644,19 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
 impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     /// A dictionary's members are read by the whole front end (a getter
     /// may run script), all in the one scope made for them.
+    /// The whole front end, in a scope made for the call: script runs
+    /// between its operations.
+    /// (As `with_front`, but no cold path: it is the whole of such a
+    /// member's call.)
+    #[inline(never)]
+    fn whole<C: dom_api::typed::WholeCall>(&mut self, call: C) -> C::Out {
+        let seed = K::seed(&self.info);
+        self.info.with_scope(|mut scope, rv| {
+            let args = K::args(seed, scope.scope());
+            call.run(&mut V8Front::new(scope, &args, rv))
+        })
+    }
+
     fn reading<V: dom_api::typed::ReadDict<Self>>(&mut self, reads: V) -> V::Out {
         self.with_front(|front| reads.read(front))
     }

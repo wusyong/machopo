@@ -205,15 +205,25 @@ fn a_plain_members_receiver_is_checked_by_its_signature() {
     }
 }
 
-/// A member that isn't plain is called as before: no info callback, so
-/// none of their scopes.
+/// A member that leaves script to run is the whole front end's: its
+/// callback is given the info alone, and makes the one scope its call
+/// runs in.
 #[test]
-fn a_member_that_isnt_plain_makes_none_of_these_scopes() {
+fn a_member_that_runs_script_makes_one_scope() {
     let mut env = env();
-    for source in ["new Event('y')", "n.dispatchEvent(new Event('x'))"] {
-        let (_, made) = scopes(&mut env, source);
-        assert_eq!(made, 0, "{source}");
+    env.eval("var ev = new Event('x'); var heard = 0; n.addEventListener('x', () => heard++); n.dispatchEvent(ev);");
+    for (source, value) in [
+        ("n.dispatchEvent(ev)", "true"),
+        ("p.dispatchEvent(ev)", "true"),
+        ("n.click()", "undefined"),
+    ] {
+        let (found, made) = scopes(&mut env, source);
+        assert_eq!(found, value, "{source}");
+        // (One more when the call made the DOM's heap grow, a click's
+        // event: V8 told of it after, in a scope of its own.)
+        assert!((1..=2).contains(&made), "{source}: {made}");
     }
+    assert_eq!(env.eval("heard"), "2");
 }
 
 /// Number and boolean arguments that are numbers and booleans, and
@@ -706,4 +716,111 @@ fn the_plain_methods_are_the_info_front_ends_own() {
         )
         .collect();
     assert!(missing.is_empty(), "not the front end's own: {missing:?}");
+}
+
+/// A traversal's method is tried first in one operation: without a filter
+/// it walks there and gives its node with no scope, as a member that
+/// calls no script does; with one it is the whole front end's (the filter
+/// is script), and gives the same nodes.
+#[test]
+fn a_traversal_without_a_filter_walks_in_one_operation() {
+    // (A window's realm: a filter is a callback, run only there.)
+    let mut env = Env::window("https://example.test/page.html");
+    env.eval(
+        "var d = document; var html = d.documentElement || d.appendChild(d.createElement('html')); \
+         var n = html.appendChild(d.createElement('body')); n.nodeType; \
+         var root = d.createElement('div'); n.appendChild(root); \
+         root.innerHTML = '<a><b></b>t</a><i></i><!--c-->'; \
+         var all = []; (function walk(node) { all.push(node); for (var c = node.firstChild; c; c = c.nextSibling) walk(c); })(root); \
+         var names = (nodes) => nodes.map((node) => node ? node.nodeName : 'null').join(); \
+         var seen = 0; var filter = (node) => { seen++; return node.nodeName === 'B' ? 2 : 1; }; \
+         var tw = d.createTreeWalker(root); var twe = d.createTreeWalker(root, 1); \
+         var twf = d.createTreeWalker(root, 0xFFFFFFFF, filter); \
+         var ni = d.createNodeIterator(root); var nif = d.createNodeIterator(root, 0xFFFFFFFF, filter); \
+         var got;",
+    );
+    for (source, value) in [
+        // Every method of a walker, from its root and from inside.
+        (
+            "got = [tw.nextNode(), tw.nextNode(), tw.nextNode(), tw.nextNode(), tw.nextNode(), tw.nextNode()]",
+            "A,B,#text,I,#comment,null",
+        ),
+        (
+            "got = [tw.previousNode(), tw.previousNode(), tw.parentNode(), tw.parentNode(), tw.parentNode()]",
+            "I,#text,A,DIV,null",
+        ),
+        (
+            "got = [tw.firstChild(), tw.firstChild(), tw.firstChild(), tw.nextSibling(), tw.nextSibling()]",
+            "A,B,null,#text,null",
+        ),
+        (
+            "got = [tw.previousSibling(), tw.previousSibling(), tw.parentNode(), tw.lastChild(), tw.lastChild()]",
+            "B,null,A,#text,null",
+        ),
+        // What it shows is no script: elements alone.
+        (
+            "got = [twe.nextNode(), twe.nextNode(), twe.nextNode(), twe.nextNode()]",
+            "A,B,I,null",
+        ),
+        (
+            "got = [twe.previousNode(), twe.lastChild(), twe.parentNode(), twe.firstChild()]",
+            "B,null,A,B",
+        ),
+        // An iterator, both ways.
+        (
+            "got = [ni.nextNode(), ni.nextNode(), ni.nextNode(), ni.previousNode(), ni.previousNode()]",
+            "DIV,A,B,B,A",
+        ),
+        (
+            "got = [ni.referenceNode, ni.pointerBeforeReferenceNode]",
+            "A,true",
+        ),
+    ] {
+        let (_, made) = scopes(&mut env, source);
+        assert_eq!(made, 0, "{source}");
+        assert_eq!(
+            env.eval("names(got.map((x) => typeof x === 'boolean' ? { nodeName: String(x) } : x))"),
+            value,
+            "{source}"
+        );
+    }
+    assert_eq!(env.eval("seen"), "0", "no filter was called");
+    // With a filter (skipping `b`): script's, in a scope; the same walk.
+    for (source, value, called) in [
+        (
+            "got = [twf.nextNode(), twf.nextNode(), twf.nextNode(), twf.nextNode(), twf.nextNode()]",
+            "A,#text,I,#comment,null",
+            true,
+        ),
+        ("got = [twf.parentNode(), twf.firstChild()]", "DIV,A", true),
+        (
+            "got = [nif.nextNode(), nif.nextNode(), nif.nextNode()]",
+            "DIV,A,#text",
+            true,
+        ),
+    ] {
+        let seen: u64 = env.eval("seen").parse().unwrap();
+        let (found, made) = scopes(&mut env, source);
+        assert!(!found.starts_with("Exception"), "{source}: {found}");
+        assert!(made >= 1, "{source}: a scope");
+        assert_eq!(env.eval("names(got)"), value, "{source}");
+        let now: u64 = env.eval("seen").parse().unwrap();
+        assert_eq!(now > seen, called, "{source}: the filter was called");
+    }
+    // A filter that throws: the exception is the method's.
+    assert_eq!(
+        env.eval(
+            "var bad = d.createTreeWalker(root, 0xFFFFFFFF, () => { throw new RangeError('no'); }); \
+             try { bad.nextNode(); 'none' } catch (e) { e.name }"
+        ),
+        "RangeError"
+    );
+    // A node with no wrapper yet is given one, the same after.
+    assert_eq!(
+        env.eval(
+            "root.innerHTML = '<u></u>'; var fresh = d.createTreeWalker(root); \
+             var u = fresh.nextNode(); [u.nodeName, u === root.firstChild, fresh.currentNode === u].join()"
+        ),
+        "U,true,true"
+    );
 }

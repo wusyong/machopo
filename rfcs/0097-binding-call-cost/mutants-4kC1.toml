@@ -1,0 +1,75 @@
+# Stages 4k-C1 and 4k-C2: a member that leaves script to run is on the
+# front end that runs script whichever its callback is given
+# (`Front::whole`); a traversal's method is tried first in one operation
+# (`#[first(..)]`), which walks if there is no filter.
+test = ["cargo", "test", "-q", "-p", "dom_api_macros", "-p", "dom_api", "-p", "dom_js"]
+timeout = 1800
+
+[[mutant]]
+name = "a method that calls script isn't plain"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''        type Ret = #ret;
+        // On the front end that runs script (`Front::whole`), whichever
+        // the member's callback is given.
+        const PLAIN: bool = true;'''
+to = '''        type Ret = #ret;
+        const PLAIN: bool = false;'''
+
+[[mutant]]
+name = "a method that leaves script to do isn't plain"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''        type Ret = ();
+        // On the front end that runs script (`Front::whole`), whichever
+        // the member's callback is given.
+        const PLAIN: bool = true;'''
+to = '''        type Ret = ();
+        const PLAIN: bool = false;'''
+
+[[mutant]]
+name = "what was tried first and gave its result is run again"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''                        <#ret as #api::typed::RetType>::finish(#front, #value);
+                        #front.finish();
+                        return;'''
+to = '''                        <#ret as #api::typed::RetType>::finish(#front, #value);
+                        #front.finish();'''
+
+[[mutant]]
+name = "a traversal with a filter walks without it"
+file = "crates/dom_api/src/traversal.rs"
+from = '''    if cx.traversal_has_filter(traversal) {
+        return Ok(None);
+    }
+    let mut walk = InOp {'''
+to = '''    if false {
+        return Ok(None);
+    }
+    let mut walk = InOp {'''
+
+[[mutant]]
+name = "a traversal without a filter isn't walked in one operation"
+file = "crates/dom_api/src/traversal.rs"
+from = '''    if cx.traversal_has_filter(traversal) {
+        return Ok(None);
+    }
+    let mut walk = InOp {'''
+to = '''    if true {
+        return Ok(None);
+    }
+    let mut walk = InOp {'''
+
+[[mutant]]
+name = "an iterator's next node tried first is its previous"
+file = "crates/dom_api/src/traversal.rs"
+from = '''    first(cx, Traversal::NodeIterator(this), |walk| {
+        traverse(walk, true)
+    })'''
+to = '''    first(cx, Traversal::NodeIterator(this), |walk| {
+        traverse(walk, false)
+    })'''
+
+[[mutant]]
+name = "a walker's parent node tried first is its first child"
+file = "crates/dom_api/src/interfaces.rs"
+from = '''        #[first(traversal::parent_node_first)]'''
+to = '''        #[first(traversal::first_child_first)]'''

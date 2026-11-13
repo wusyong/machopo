@@ -238,6 +238,18 @@ pub trait Front: FrontTypes {
     where
         Self: Sized;
 
+    /// A member's call that leaves script to run between its operations
+    /// (`#[calls_script]`, `#[then_script]`), on the front end that runs
+    /// script: itself, or (a front end that makes what its engine asks
+    /// for only then) the one it makes for the call, which takes the
+    /// arguments again.
+    fn whole<C: WholeCall>(&mut self, call: C) -> C::Out
+    where
+        Self: Sized,
+    {
+        call.run(self)
+    }
+
     /// Runs one operation of the DOM that allocates nothing (a getter's):
     /// no safepoint, the DOM borrowed shared.
     fn read<'o, R>(
@@ -3593,6 +3605,14 @@ impl DictMember for Option<IsNull> {
 
 /// An `AbortSignal` member of a dictionary (`AddEventListenerOptions`'
 /// `signal`): kept by the front end (`Front::dict_object`).
+/// A member's call run on a front end that runs script (`Front::whole`):
+/// the table's, of a member that leaves script to run.
+pub trait WholeCall {
+    type Out;
+
+    fn run<F: Front>(self, front: &mut F) -> Self::Out;
+}
+
 /// A dictionary's members' reads (the table's: `Dictionary::read` makes
 /// one), of a dictionary a front end `T` took: run on a front end that
 /// holds its arguments as `T` does (`Front::reading`).
@@ -8555,6 +8575,7 @@ pub const PLAIN_FRONT_METHODS: &[&str] = &[
     "mutate",
     "has_args",
     "reading",
+    "whole",
     "construct",
     "prepare_window",
     "throw",

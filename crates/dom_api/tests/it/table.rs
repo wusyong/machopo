@@ -1173,14 +1173,18 @@ fn members_of_strings_nodes_numbers_and_booleans_are_plain() {
         ("Request", "constructor", MemberKind::Constructor),
         ("Window", "structuredClone", MemberKind::Method),
         ("MessagePort", "postMessage", MemberKind::Method),
+        // Methods that leave script to run (a dispatch's listeners, an
+        // abort's, a traversal's filter): on the front end that runs
+        // script, whichever their callback is given.
+        ("EventTarget", "dispatchEvent", MemberKind::Method),
+        ("AbortController", "abort", MemberKind::Method),
+        ("TreeWalker", "nextNode", MemberKind::Method),
+        ("HTMLElement", "click", MemberKind::Method),
+        ("Selection", "collapse", MemberKind::Method),
     ] {
         assert!(is_plain(interface, name, kind), "{interface}.{name}");
     }
     for (interface, name, kind) in [
-        // Methods that leave script to run (a dispatch's listeners, an
-        // abort's).
-        ("EventTarget", "dispatchEvent", MemberKind::Method),
-        ("AbortController", "abort", MemberKind::Method),
         // The current realm's window found for it.
         ("Blob", "arrayBuffer", MemberKind::Method),
         // Another realm's window found for it (the incumbent's, the
@@ -1213,56 +1217,22 @@ fn members_of_strings_nodes_numbers_and_booleans_are_plain() {
         .map(|member| format!("{}.{} {:?}", member.0, member.1, member.2))
         .collect();
     others.sort();
-    // Every other member, by name: the ones that leave script to run, that
-    // find another realm's window (the incumbent's, the entry's, `this`'s
-    // relevant one), the cross-origin ones of those, and the legacy
-    // factories. A type that stops being plain adds its members here.
+    // Every other member, by name: the ones that find another realm's
+    // window (the incumbent's, the entry's, `this`'s relevant one), the
+    // cross-origin ones of those, and the legacy factories. A type that
+    // stops being plain adds its members here.
     assert_eq!(
         others,
         [
-            "AbortController.abort Method",
             "Blob.arrayBuffer Method",
             "Blob.bytes Method",
             "Blob.text Method",
-            "CustomElementRegistry.define Method",
-            "CustomElementRegistry.upgrade Method",
             "Document.location Setter",
-            "EventTarget.dispatchEvent Method",
-            "FileReader.abort Method",
-            "HTMLElement.blur Method",
-            "HTMLElement.click Method",
-            "HTMLElement.focus Method",
-            "HTMLFormElement.reset Method",
             "HTMLImageElement.Image LegacyFactory",
-            "HTMLInputElement.select Method",
             "HTMLOptionElement.Option LegacyFactory",
-            "HTMLSelectElement.showPicker Method",
-            "HTMLTextAreaElement.select Method",
             "Location.assign Method",
             "Location.href Setter",
             "Location.replace Method",
-            "NodeIterator.nextNode Method",
-            "NodeIterator.previousNode Method",
-            "SVGElement.blur Method",
-            "SVGElement.focus Method",
-            "Scheduling.isInputPending Method",
-            "Selection.addRange Method",
-            "Selection.collapse Method",
-            "Selection.collapseToEnd Method",
-            "Selection.collapseToStart Method",
-            "Selection.extend Method",
-            "Selection.selectAllChildren Method",
-            "Selection.setBaseAndExtent Method",
-            "Selection.setPosition Method",
-            "TreeWalker.firstChild Method",
-            "TreeWalker.lastChild Method",
-            "TreeWalker.nextNode Method",
-            "TreeWalker.nextSibling Method",
-            "TreeWalker.parentNode Method",
-            "TreeWalker.previousNode Method",
-            "TreeWalker.previousSibling Method",
-            "WakeLockSentinel.release Method",
-            "Window.focus Method",
             "Window.location Setter",
             "Window.postMessage Method",
         ]
