@@ -38,8 +38,8 @@
 | 4l cross-origin 的成員、要找別的 realm 的 window 的、legacy factory 的 callback 只拿 info（整個呼叫在一個 scope 裡）；4i 留下的 interceptor 不動 | 完成 | 2026-11-13 |
 | 4m-2 成員還用 rusty_v8 的 trampoline 的幾處改掉（`window.window`、`window.document` 的 cached getter、legacy caller、好幾個 constructor 的那一組的 `Call`），要找別的 realm 的 window 的和 legacy factory 改從新的 front 開始，刪 `PLAIN`（連同它的檢查：`PLAIN_FRONT_METHODS`、`PLAIN_OP_METHODS`、`dom_api` 的 `plain` 測試）和成員舊的 callback（`Member<M>`、`bindings` 的 `StateMethod`） | 完成（`Front` 的預設實作還沒拿掉：見那一段） | 2026-11-13 |
 | 4m-3a 新的 front 還交給 `V8Front` 的方法搬到只有 scope、參數、回傳值的 `Scoped` 上；讀 dictionary 成員的方法分成 `DictFront` | 完成 | 2026-11-13 |
-| 4m-3b script 那一側怎麼收（`whole`、custom element reactions、cross-origin 的成員、legacy caller、pairs、舊的 indexed 的路還建 `V8Front`）：待決定，見 4m-3a 那一段的最後 | 還沒開始 | |
-| 4m-3c 拿掉 `Front` 的預設實作、清舊的實作、整個階段的檢查和對 Chrome 的收尾量測 | 還沒開始 | |
+| 4m-3b script 那一側留著自己的 front（決定 46）：改名 `WholeFront`，只有它實作 `ScriptFront`；`Kept` 刪掉（結果由回傳型別帶出操作） | 完成 | 2026-11-13 |
+| 4m-3c `Front`、`OpFront` 會 panic 的預設實作在編譯時檢查 front 允不允許留空（`FrontTypes::STUBS`）；整個階段的檢查和對 Chrome 的收尾量測 | 完成 | 2026-11-13 |
 | 收尾：`nodeType`、`getAttribute` 的 callback 和 Chrome 的逐條指令對照，列出剩下的差（決定 20） | 還沒開始 | |
 
 ## 驗收
@@ -843,3 +843,23 @@
 - mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4m3a.toml`，5 個都抓到（第一次「callback 的錯誤寫成 index」沒抓到，補了上面的測試）。
 - 跑過：`cargo build --workspace --tests`、`cargo test -p dom_api_macros -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt dom/events dom/nodes dom/abort html/dom web-animations/interfaces fetch/api/headers FileAPI/blob`（820 個測試、78178 個結果都照預期）。
 - **4m-3b 開始前發現決定 45 的第二項前提不對，要請使用者重選**：那一項說實作 script 那一側的是「一個瘦的型別（scope、參數、回傳值）」。但 `whole` 是把整個成員的呼叫（`TypedMember::call`，對 `Front` 泛型）放到那個型別上跑，所以它要實作 `Front` 的全部和操作那一側（`V8Op`），還要留著呼叫期間的東西（taken 的 callback、準備好的 wrapper、window、`define` 讀到的 callback、filter 丟的例外）：那就是現在的 `V8Front`，瘦不下來。選項寫在回覆裡。
+
+**第 4m-3b、4m-3c 段：script 的 front 收小，漏掉的方法編不過**（2026-11-13；決定 46）：
+
+- `dom_api`：script 那一側才用的 13 個方法（`call_listener`、`call_node_filter`、`call_mutation_callback`、`call_lifecycle_callback`、`upgrade_element`、custom element 定義的四個、`reject_promise_with_reason`、`pending_input`、`update_elements`）從 `Front` 分到下層的 `ScriptFront: Front`；`WholeCall::run`、`FrontHost`、macro 產生的 `whole` 要 `ScriptFront`。`Front::whole` 和 `invoke_ce_reactions` 沒有預設實作了（原本的本體是 `ScriptFront::invoke_left_reactions`）：會跑 script 的 front 寫「在自己身上跑」，`InfoFront` 交給 `WholeFront`。
+- `dom_js`：`V8Front`、`V8Op` 改名 `WholeFront`、`WholeOp`。`Kept` 和 `Call::kept` 刪掉：`WholeOp` 的 `ret_string`、`ret_name`、`ret_node`、`ret_new_node`、`ret_object`、`ret_construct`、`ret_u32`、`ret_i32`、`ret_f64` 給不出去時回傳 `PendingString`、`PendingNode`、`f64`、root 和 interface（`InfoFront` 的同一組型別），`WholeFront` 的 `finish_string`、`finish_node`、`finish_number`、`finish_object` 在 `Scoped` 上做完（`Scoped::finish_string_pending` 是新的）。`Call` 剩準備好的 wrapper、window、callback 和 `rare`。
+- **預設實作沒有刪，改成編譯時檢查（做法和決定 45 寫的不同，效果一樣）**：`FrontTypes` 多一個 `const STUBS: bool`；`DictFront`、`Front`、`ScriptFront`、`OpFront` 裡本體是 `unreachable!` 的 115 個預設實作第一行加 `const { assert!(Self::STUBS, ..) }`。`InfoFront`、`InfoOp`、`WholeFront`、`WholeOp`、`Scoped` 是 false，wasm 的、named property 的、測試的 front 是 true。成員的呼叫（每個都替 `InfoFront` 展開）走得到一個它沒實作的方法時，那個預設實作替它產生程式的當下 build 就失敗，訊息寫出方法和呼叫的地方。試過：拿掉 `InfoFront::doubles_arg`，`cargo build -p dom_js` 失敗（`evaluation of <InfoFront as Front>::doubles_arg::{constant#0} failed`）。不選原本說的「刪掉預設實作、其他 front 用 macro 補」：四個只綁一部分成員的 front 各缺八十到一百個方法，補的 macro 要把每個方法的簽名再寫一次（或每個 front 列出它缺的名字），而且會把「沒有成員走得到、所以不用實作」的方法也變成一定要寫。這個做法的限制：檢查在單態化之後，`cargo check` 看不到，`cargo build` 和 `cargo test` 才看得到。`dom_js` 照原始碼檢查的那個測試和 `docs/test-gaps.md` 的那一列刪掉。
+- 沒有做的：`Indexed<M>` 舊的 `StateIndexedGetter::get` 沒有人呼叫了，但 `bindings` 的 indexed 的 query 和 enumerator 還要這個 trait，拆開它是 4i 留下的 interceptor 的範圍，沒動。
+- 階段收尾時 clippy 抓到先前各段留下的四處，一起修了：`dom_api_macros` 的 `rewrite_fronts_types` 的索引運算（改成 slice pattern 和 `saturating_add`）、`bindings` 的 named setter 的 trampoline 兩個 `unsafe` 共用一個 `SAFETY` 註解、`dom_api::resolve_overload` 的迴圈、`canvas::get_image_data` 多的 `#[expect]`。
+- 測試：`handlers::first_reads_and_a_filtered_walks_nodes_are_made_after_the_operation`。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4m3b.toml`，3 個都抓到。另外三個（`WholeFront` 操作後做字串、沒有 wrapper 的節點、不是 Smi 的數字）沒抓到：追蹤之後確認現在在 `WholeFront` 上跑的成員沒有一個給這三種結果（`location.href` 的 getter 不經過 cross-origin 的 callback；有 filter 的走訪給的節點是 script 那一側 root 住的，走另一條路），測試走不到。從 spec 拿掉、註明，記進 `docs/test-gaps.md`。
+- 指令數（`perf stat`，4m-3a 的 binary → 這一段）：`nodeType` 100.7 → 102.5，`removeEventListener` 帶 options 1196.6 → 1196.6，`appendChild` 丟例外 26991.2 → 26948.1，`cloneNode(1.5)` 2051.6 → 2052.2，`getClientRects()` 1728.1 → 1726.0，`new Event('x', {bubbles: true})` 4012.8 → 4013.0，`n.children` 210.4 → 210.4，`classList.add('a', 'b')` 4591.9 → 4592.2。沒有變。
+- **對 Chrome 的收尾量測（階段結束；本機的 Chromium headless，釘一顆核心，各三次取最小）**：
+  - 每次呼叫的指令數（Chrome / machopo / 倍數）：`nodeType` 66.9 / 102.5 / 1.53，`parentNode` 91.7 / 132.5 / 1.45，`firstChild` 88.5 / 132.5 / 1.50，`getAttribute` 617.7 / 560.5 / 0.91，`id` 212.5 / 248.5 / 1.17，`tagName` 205.5 / 237.5 / 1.16，`hasAttribute` 512.4 / 492.5 / 0.96，`setAttribute` 1757.5 / 1081.5 / 0.62，`contains` 338.5 / 334.5 / 0.99。（Chrome 的 `nodeType` 這次是 66.9，4k-G 那次是 72.9：兩次迴圈相減的量法在幾條的尺度上會晃。）
+  - 每次呼叫的時間（ns，Chrome / machopo / 倍數），66 項裡 machopo 比較快或一樣的 43 項，1.0 到 1.3 倍的 16 項，超過 1.3 倍的 7 項：
+    - 最熱的 getter：`nodeType` 3.6 / 4.5 / 1.25，`parentNode` 4.4 / 6.1 / 1.39，`n.tagName` 9.2 / 10.2 / 1.11，`getAttribute` 20.1 / 25.3 / 1.26，`lineWidth` 5.7 / 7.5 / 1.32，`opt.value` 14.5 / 18.3 / 1.26，`classList.contains` 26.8 / 33.5 / 1.25。
+    - 超過 1.3 倍的：`st.cssText` 148.8 / 473.1 / 3.18，`c.innerHTML` 41.6 / 90.0 / 2.16，`style.color = 'red'` 47.1 / 81.8 / 1.74，`n.matches` 27.8 / 48.1 / 1.73，`c.textContent` 21.4 / 35.9 / 1.68，沒有 wrapper 的節點的走訪 36.0 / 55.0 / 1.53，`parentNode` 1.39。前五個是 DOM 那一側做的事（序列化、解析、selector），不是 binding 的外殼；走訪是建 wrapper 的成本（4k-D）。
+    - 會跑 script 的：`dispatchEvent` 一個 listener 325.6 / 161.5 / 0.50，`c.click()` 699.5 / 316.0 / 0.45，`form.reset()` 522.5 / 346.0 / 0.66，有 filter 的走訪 191.5 / 117.5 / 0.61，`inp.select()` 162.0 / 206.5 / 1.27，`new AbortController().abort()` 1764.5 / 2162.5 / 1.23。
+    - 冷的路：丟例外 0.39 到 0.83，`new Event(init)` 0.74，`new MouseEvent(init)` 801.0 / 924.5 / 1.15，帶 options 的 add 加 remove listener 0.60，`getAttributeNames` 0.87，`getBoundingClientRect` 72.3（Chrome 920.7），`scrollTo(options)` 0.16。
+    - 字串：`setAttribute` 平的 57.0 / 44.3 / 0.78，cons 的 0.43，CJK 56.7 / 64.3 / 1.13，Latin-1 0.91。
+- 跑過：`cargo test --workspace`（55 個 binary 都過）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`sanity.py` 七項、`test.py scenarios`（86 個都過）、`test.py wpt dom/events dom/nodes dom/traversal dom/abort html/dom custom-elements html/browsers/the-window-object html/semantics/forms/the-input-element selection`（1223 個測試、118337 個結果都照預期）。

@@ -1019,6 +1019,8 @@ impl<A: ReadArgs> WasmFront<'_, '_, A> {
 }
 
 impl<'r, A> FrontTypes for WasmFront<'r, '_, A> {
+    // It binds some members only.
+    const STUBS: bool = true;
     type Str = &'r str;
     type Node = u32;
     // No dictionary is plain: no member taking one is bound.
@@ -1040,7 +1042,59 @@ impl<'r, 'g, A: ReadArgs> DictFront for WasmFront<'r, 'g, A> {
     }
 }
 
+impl<'r, 'g, A: ReadArgs> dom_api::typed::ScriptFront for WasmFront<'r, 'g, A> {
+    /// A listener of the event the member dispatched, called within the
+    /// guest's call: this store's own (its `handle-event`, with a handle
+    /// to the event the host takes back after). An event handler
+    /// attribute's (`onfocus=""`) is JS and doesn't run; another script's
+    /// listener isn't called here (the member's store alone is entered).
+    fn call_listener(&mut self, event: &elise::Persistent<dom::Event>, index: usize) {
+        if self.trap.is_some() {
+            return;
+        }
+        let Some(guest) = self.guest.as_mut() else {
+            return;
+        };
+        let store = self.store;
+        let (dom, tables) = (self.dom, self.tables);
+        let listener = dom.borrow_mut().mutate(|cx| {
+            let event = event.get(cx.gc);
+            let listener = cx.snapshot_at(event, index)?;
+            let word = cx.callback_edge(listener).embedder_word(cx.gc);
+            let (of, callback) = crate::listener_of(word)?;
+            (of == store).then(|| {
+                let handle = tables.borrow_mut().give(cx, store, event.into());
+                (callback, handle)
+            })
+        });
+        let Some((callback, handle)) = listener else {
+            return;
+        };
+        if let Err(trap) = guest(callback, handle) {
+            self.trap = Some(trap);
+        }
+        // The event's handle back, unless the guest let it go itself.
+        let mut tables = tables.borrow_mut();
+        if tables
+            .store(store)
+            .is_some_and(|handles| handles.interface(handle).is_some())
+        {
+            dom.borrow_mut()
+                .read(|cx| tables.release(cx, store, handle));
+        }
+    }
+}
+
 impl<'r, 'g, A: ReadArgs> Front for WasmFront<'r, 'g, A> {
+    /// Script runs on this front end itself.
+    fn whole<C: dom_api::typed::WholeCall>(&mut self, call: C) -> C::Out {
+        call.run(self)
+    }
+
+    fn invoke_ce_reactions(&mut self) {
+        dom_api::typed::ScriptFront::invoke_left_reactions(self);
+    }
+
     #[inline(always)]
     fn reading<V: dom_api::typed::ReadDict<Self>>(&mut self, reads: V) -> V::Out {
         reads.read(self)
@@ -1121,47 +1175,6 @@ impl<'r, 'g, A: ReadArgs> Front for WasmFront<'r, 'g, A> {
     /// defaults.
     fn dict_arg(&mut self, _: usize, _: &str) -> Option<Option<()>> {
         Some(None)
-    }
-
-    /// A listener of the event the member dispatched, called within the
-    /// guest's call: this store's own (its `handle-event`, with a handle
-    /// to the event the host takes back after). An event handler
-    /// attribute's (`onfocus=""`) is JS and doesn't run; another script's
-    /// listener isn't called here (the member's store alone is entered).
-    fn call_listener(&mut self, event: &elise::Persistent<dom::Event>, index: usize) {
-        if self.trap.is_some() {
-            return;
-        }
-        let Some(guest) = self.guest.as_mut() else {
-            return;
-        };
-        let store = self.store;
-        let (dom, tables) = (self.dom, self.tables);
-        let listener = dom.borrow_mut().mutate(|cx| {
-            let event = event.get(cx.gc);
-            let listener = cx.snapshot_at(event, index)?;
-            let word = cx.callback_edge(listener).embedder_word(cx.gc);
-            let (of, callback) = crate::listener_of(word)?;
-            (of == store).then(|| {
-                let handle = tables.borrow_mut().give(cx, store, event.into());
-                (callback, handle)
-            })
-        });
-        let Some((callback, handle)) = listener else {
-            return;
-        };
-        if let Err(trap) = guest(callback, handle) {
-            self.trap = Some(trap);
-        }
-        // The event's handle back, unless the guest let it go itself.
-        let mut tables = tables.borrow_mut();
-        if tables
-            .store(store)
-            .is_some_and(|handles| handles.interface(handle).is_some())
-        {
-            dom.borrow_mut()
-                .read(|cx| tables.release(cx, store, handle));
-        }
     }
 
     fn nullable_string_arg(&mut self, index: usize) -> Option<Option<&'r str>> {

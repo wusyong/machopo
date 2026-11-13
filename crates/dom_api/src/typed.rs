@@ -40,6 +40,13 @@ pub use canvas::path::Radius;
 /// What a front end's arguments are as its engine holds them, out of an
 /// operation and in one alike.
 pub trait FrontTypes {
+    /// Whether the front end binds only some members, and so may leave
+    /// the methods the others reach as they are here (each panics: "a
+    /// front end binding such a member has it"). A front end every member
+    /// is called through says no: a member's call that reaches such a
+    /// method on it doesn't compile (the method's body asserts this as it
+    /// is made for the front end).
+    const STUBS: bool;
     /// A string argument: converted before the operation (`ToString`),
     /// its text read in it (`OpFront::str_param`), where the engine may
     /// lend its own characters (no copy) until the call drops the argument.
@@ -218,6 +225,7 @@ pub trait DictFront: FrontTypes {
     /// `dict`'s member `member` as a `boolean`: `Some(None)` if it is
     /// undefined (missing); `None` if reading it threw (a getter may run).
     fn dict_bool(&mut self, dict: &Self::Dict, member: MemberName) -> Option<Option<bool>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (dict, member);
         unreachable!("a front end binding a member with a dictionary reads them")
     }
@@ -227,6 +235,7 @@ pub trait DictFront: FrontTypes {
     /// reading or converting it threw. Its WebIDL type's conversion is the
     /// member's (`DictMember`).
     fn dict_number(&mut self, dict: &Self::Dict, member: MemberName) -> Option<Option<f64>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (dict, member);
         unreachable!("a front end binding a member with a dictionary of numbers reads them")
     }
@@ -235,6 +244,7 @@ pub trait DictFront: FrontTypes {
     /// script): `Some(None)` if it is undefined (missing); `None` if
     /// reading or converting it threw.
     fn dict_string(&mut self, dict: &Self::Dict, member: MemberName) -> Option<Option<String>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (dict, member);
         unreachable!("a front end binding a member with a dictionary of strings reads them")
     }
@@ -247,6 +257,7 @@ pub trait DictFront: FrontTypes {
         dict: &Self::Dict,
         member: MemberName,
     ) -> Option<Option<String>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (dict, member);
         unreachable!("a front end binding a member with a dictionary of strings reads them")
     }
@@ -259,6 +270,7 @@ pub trait DictFront: FrontTypes {
         dict: &Self::Dict,
         member: MemberName,
     ) -> Option<Option<Vec<String>>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (dict, member);
         unreachable!("a front end binding a member with a dictionary of strings reads them")
     }
@@ -272,6 +284,7 @@ pub trait DictFront: FrontTypes {
         member: MemberName,
         interface: &str,
     ) -> Option<Option<Self::Node>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (dict, member, interface);
         unreachable!("a front end binding a dictionary with an object reads it")
     }
@@ -283,6 +296,7 @@ pub trait DictFront: FrontTypes {
         dict: &Self::Dict,
         member: MemberName,
     ) -> Option<Option<BodyMember<Self::Node>>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (dict, member);
         unreachable!("a front end binding a dictionary with a body reads it")
     }
@@ -294,6 +308,7 @@ pub trait DictFront: FrontTypes {
         dict: &Self::Dict,
         member: MemberName,
     ) -> Option<Option<StringPairsArg>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (dict, member);
         unreachable!("a front end binding a dictionary with headers reads them")
     }
@@ -308,6 +323,7 @@ pub trait DictFront: FrontTypes {
         member: MemberName,
         interface: &str,
     ) -> Option<Option<Self::Node>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (dict, member, interface);
         unreachable!("a front end binding a dictionary with an object reads it")
     }
@@ -321,6 +337,7 @@ pub trait DictFront: FrontTypes {
         dict: &Self::Dict,
         member: MemberName,
     ) -> Option<Option<Self::Node>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (dict, member);
         unreachable!("a front end binding a dictionary with an event target reads it")
     }
@@ -333,6 +350,7 @@ pub trait DictFront: FrontTypes {
         dict: &Self::Dict,
         member: MemberName,
     ) -> Option<Option<SignalMember<Self::Node>>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (dict, member);
         unreachable!("a front end binding a dictionary with a signal reads it")
     }
@@ -340,6 +358,7 @@ pub trait DictFront: FrontTypes {
     /// `dict`'s member `member` as `any`, whether it is null: `Some(None)`
     /// if missing.
     fn dict_is_null(&mut self, dict: &Self::Dict, member: MemberName) -> Option<Option<bool>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (dict, member);
         unreachable!("a front end binding a dictionary with an `any` reads it")
     }
@@ -352,6 +371,7 @@ pub trait DictFront: FrontTypes {
         dict: &Self::Dict,
         member: MemberName,
     ) -> Option<Option<Vec<u8>>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (dict, member);
         unreachable!("a front end binding User Timing serializes its detail")
     }
@@ -364,6 +384,7 @@ pub trait DictFront: FrontTypes {
         dict: &Self::Dict,
         member: MemberName,
     ) -> Option<Option<StringOrNumber>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (dict, member);
         unreachable!("a front end binding User Timing reads its marks")
     }
@@ -375,12 +396,158 @@ pub trait DictFront: FrontTypes {
         dict: &Self::Dict,
         member: MemberName,
     ) -> Option<Option<AnyArg<Self::Any>>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (dict, member);
         unreachable!("a front end binding a member with a dictionary of `any`s reads them")
     }
 
     /// The error the call throws, after the operation.
     fn throw(&mut self, error: ApiError);
+}
+
+/// A front end that runs script in a member's call (`Front::whole`): what
+/// the member's function asks of it as its script host (`FrontHost`), a
+/// listener called, a filter, an observer's callback, a custom element's
+/// reactions. A trait of its own: a front end that hands such a call to
+/// another has none of these.
+pub trait ScriptFront: Front {
+    /// `Front::invoke_ce_reactions`: a `[CEReactions]` member's element queue, left as its operation
+    /// ended (`Cx::leave_ce_reactions` gave true): its reactions invoked
+    /// (`custom_elements::invoke_reactions`), the front end as their script
+    /// host. Out of line: most calls enqueue none.
+    #[cold]
+    #[inline(never)]
+    fn invoke_left_reactions(&mut self)
+    where
+        Self: Sized,
+    {
+        if self.read(|cx, _| cx.has_element_changes()) {
+            self.update_elements();
+        }
+        let Some(queue) = self.mutate(|cx, _| cx.take_left_element_queue()) else {
+            return;
+        };
+        crate::custom_elements::invoke_reactions(&mut FrontHost(self), &queue);
+    }
+
+    /// `ScriptHost::read_custom_element_constructor`, the call's callback
+    /// argument's.
+    fn read_custom_element_constructor(&mut self) -> Result<ConstructorInfo, ApiError> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
+        unreachable!("a front end binding `define` reads its constructor")
+    }
+
+    /// `ScriptHost::store_custom_element_definition`.
+    fn store_custom_element_definition(
+        &mut self,
+        registry: &Persistent<dom::CustomElementRegistry>,
+        definition: &Persistent<dom::CustomElementDefinition>,
+    ) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
+        let _ = (registry, definition);
+        unreachable!("a front end binding `define` stores its callbacks")
+    }
+
+    /// `ScriptHost::call_lifecycle_callback`.
+    fn call_lifecycle_callback(
+        &mut self,
+        element: &Persistent<dom::Node>,
+        definition: &Persistent<dom::CustomElementDefinition>,
+        callback: crate::custom_elements::LifecycleCallback,
+    ) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
+        let _ = (element, definition, callback);
+        unreachable!("a front end invoking custom element reactions calls their callbacks")
+    }
+
+    /// `ScriptHost::upgrade_element`.
+    fn upgrade_element(
+        &mut self,
+        definition: &Persistent<dom::CustomElementDefinition>,
+        element: &Persistent<dom::Node>,
+    ) -> bool {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
+        let _ = (definition, element);
+        unreachable!("a front end binding a member upgrading elements constructs them")
+    }
+
+    /// `ScriptHost::constructor_is_constructor`.
+    fn constructor_is_constructor(&mut self) -> bool {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
+        unreachable!("a front end binding `define` checks its constructor")
+    }
+
+    /// `ScriptHost::constructor_is_defined`.
+    fn constructor_is_defined(
+        &mut self,
+        registry: &Persistent<dom::CustomElementRegistry>,
+    ) -> bool {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
+        let _ = registry;
+        unreachable!("a front end binding `define` compares its constructor")
+    }
+
+    /// `ScriptHost::resolve_when_defined`.
+    fn resolve_when_defined(
+        &mut self,
+        pending: &[u64],
+        definition: &Persistent<dom::CustomElementDefinition>,
+    ) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
+        let _ = (pending, definition);
+        unreachable!("a front end binding `define` resolves `whenDefined`'s promises")
+    }
+
+    /// `ScriptHost::call_mutation_callback`, for a member that calls
+    /// script.
+    fn call_mutation_callback(
+        &mut self,
+        observer: &Persistent<dom::MutationObserver>,
+        records: &[Persistent<dom::MutationRecord>],
+    ) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
+        let _ = (observer, records);
+        unreachable!("a front end binding a member that calls script calls observers")
+    }
+
+    /// `ScriptHost::call_listener`, for a member that calls script.
+    fn call_listener(&mut self, event: &Persistent<dom::Event>, index: usize) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
+        let _ = (event, index);
+        unreachable!("a front end binding a member that calls script calls listeners")
+    }
+
+    /// `ScriptHost::reject_promise_with_reason`, for `abort()`'s steps.
+    fn reject_promise_with_reason(&mut self, promise: u64, signal: &Persistent<EventTargetImpl>) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
+        let _ = (promise, signal);
+        unreachable!("a front end binding `abort()` rejects an aborted fetch's promise")
+    }
+
+    /// `ScriptHost::pending_input`, for `isInputPending()`.
+    fn pending_input(&mut self, include_continuous: bool) -> Vec<crate::PendingInput> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
+        let _ = include_continuous;
+        unreachable!("a front end binding `isInputPending` asks the engine's monitor")
+    }
+
+    /// `ScriptHost::call_node_filter`.
+    fn call_node_filter(
+        &mut self,
+        traversal: &TraversalRoot,
+        node: &dom::NodeRoot,
+    ) -> Result<u16, ApiError> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
+        let _ = (traversal, node);
+        unreachable!("a front end binding a traversal calls its filter")
+    }
+
+    /// The iframes' and script elements' steps for what the operation did
+    /// to them (`frame::update_elements`), before its custom element
+    /// reactions are invoked: HTML's post-connection steps come first, as
+    /// Blink makes an iframe's frame, and runs a script, as it is
+    /// inserted. Nothing by default: a front end with neither.
+    fn update_elements(&mut self) {}
 }
 
 pub trait Front: DictFront {
@@ -417,10 +584,7 @@ pub trait Front: DictFront {
     /// arguments again.
     fn whole<C: WholeCall>(&mut self, call: C) -> C::Out
     where
-        Self: Sized,
-    {
-        call.run(self)
-    }
+        Self: Sized;
 
     /// Runs one operation of the DOM that allocates nothing (a getter's):
     /// no safepoint, the DOM borrowed shared.
@@ -446,6 +610,7 @@ pub trait Front: DictFront {
 
     /// How many arguments the call has: where a variadic one ends.
     fn arg_count(&mut self) -> usize {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         unreachable!("a front end binding a member with variadic strings counts them")
     }
 
@@ -463,6 +628,7 @@ pub trait Front: DictFront {
     /// Argument `index` as a `(Node or DOMString)`: a node if it is one,
     /// else `ToString` (which may run script).
     fn node_or_string_arg(&mut self, index: usize) -> Option<NodeOrStr<Self::Node, Self::Str>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding a member with nodes or strings reads them")
     }
@@ -471,6 +637,7 @@ pub trait Front: DictFront {
     /// null or undefined, a node if it is one, else `ToNumber` and
     /// `ToInt32` (which may run script).
     fn node_or_long_arg(&mut self, index: usize) -> Option<Option<NodeOrLong<Self::Node>>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding a member with a node or a long reads them")
     }
@@ -479,6 +646,7 @@ pub trait Front: DictFront {
     /// null, whose members are their defaults); anything else but an
     /// object is a `TypeError`, thrown (`name` the dictionary's).
     fn dict_arg(&mut self, index: usize, name: &str) -> Option<Option<Self::Dict>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (index, name);
         unreachable!("a front end binding a member with a dictionary reads them")
     }
@@ -487,6 +655,7 @@ pub trait Front: DictFront {
     /// a function, kept by the front end, which the result names; anything
     /// else a `TypeError`, thrown.
     fn function_arg(&mut self, index: usize, name: &str) -> Option<Callback<Self::Callback>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (index, name);
         unreachable!("a front end binding a member with a callback function reads it")
     }
@@ -496,6 +665,7 @@ pub trait Front: DictFront {
     /// `string_pairs_arg`, but anything not an object, or a string with a
     /// character past U+00FF, a `TypeError`, thrown.
     fn byte_string_pairs_arg(&mut self, index: usize) -> Option<StringPairsArg> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding `new Headers()` reads its init")
     }
@@ -504,6 +674,7 @@ pub trait Front: DictFront {
     /// kept as `any_arg` keeps one; undefined is a new `AbortError`
     /// `DOMException` of the current realm, made now.
     fn abort_reason_arg(&mut self, index: usize) -> Option<AnyArg<Self::Any>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding `abort()` reads its reason")
     }
@@ -516,6 +687,7 @@ pub trait Front: DictFront {
         index: usize,
         interface: &str,
     ) -> Option<Vec<Self::Node>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (index, interface);
         unreachable!("a front end binding a member with a sequence of objects reads it")
     }
@@ -524,6 +696,7 @@ pub trait Front: DictFront {
     /// for null or undefined; another value as a `BodyInit` converts it
     /// (a string its `ToString`).
     fn body_arg(&mut self, index: usize) -> Option<Option<BodyArg<Self::Node>>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding a member with a body reads it")
     }
@@ -532,6 +705,7 @@ pub trait Front: DictFront {
     /// value JSON can't serialize is a `TypeError`, and what serializing
     /// throws is thrown.
     fn json_arg(&mut self, index: usize) -> Option<String> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding `Response.json` serializes its data")
     }
@@ -545,6 +719,7 @@ pub trait Front: DictFront {
         index: usize,
         name: &str,
     ) -> Option<Option<Callback<Self::Callback>>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (index, name);
         unreachable!("a front end binding a member with a nullable callback function reads it")
     }
@@ -552,6 +727,7 @@ pub trait Front: DictFront {
     /// Argument `index` as a `sequence<unrestricted double>`: an iterable
     /// of values each converted to a number; another value a `TypeError`.
     fn doubles_arg(&mut self, index: usize) -> Option<Vec<f64>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding a member taking numbers reads them")
     }
@@ -559,6 +735,7 @@ pub trait Front: DictFront {
     /// Argument `index` as a `Uint8ClampedArray`: the array as the engine
     /// holds it and its length; another value a `TypeError`.
     fn uint8_clamped_arg(&mut self, index: usize) -> Option<Uint8ClampedArg<Self::Any>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding a member taking a typed array reads it")
     }
@@ -567,6 +744,7 @@ pub trait Front: DictFront {
     /// a call): what it is and how many bytes it views; another value a
     /// `TypeError`.
     fn array_view_arg(&mut self, index: usize) -> Option<ArrayViewArg> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding `getRandomValues` reads its view")
     }
@@ -577,6 +755,7 @@ pub trait Front: DictFront {
     /// the ports transferred, in its order. `None` if it threw (a
     /// `DataCloneError`, or what script threw).
     fn clone_arg(&mut self, index: usize) -> Option<(dom::SerializedMessage, Vec<Self::Node>)> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding `structuredClone` serializes its value")
     }
@@ -588,6 +767,7 @@ pub trait Front: DictFront {
     /// `ToString` (a `USVString`: lone surrogates replaced). Another value
     /// a `TypeError`; `None` if it threw.
     fn blob_parts_arg(&mut self, index: usize) -> Option<Option<Vec<BlobPartArg<Self::Node>>>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding `Blob`'s constructor reads its parts")
     }
@@ -600,6 +780,7 @@ pub trait Front: DictFront {
     /// `None` if it threw (a sequence's item that isn't an object a
     /// `TypeError`).
     fn string_pairs_arg(&mut self, index: usize) -> Option<StringPairsArg> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding `URLSearchParams`' constructor reads its init")
     }
@@ -616,6 +797,7 @@ pub trait Front: DictFront {
         transfer: TransferArg,
         from_port: bool,
     ) -> Option<(dom::SerializedMessage, Vec<Self::Node>)> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (index, transfer, from_port);
         unreachable!("a front end binding `postMessage` serializes its message")
     }
@@ -629,6 +811,7 @@ pub trait Front: DictFront {
     /// object, or null, one `DOMPointInit`; anything else one number
     /// (`ToNumber`). `None` if it threw.
     fn round_rect_radii_arg(&mut self, index: usize) -> Option<Vec<Radius>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding `roundRect` reads its radii")
     }
@@ -638,6 +821,7 @@ pub trait Front: DictFront {
     /// its enumerations checked: a `TypeError` otherwise); its defaults for
     /// `undefined`. `None` if it threw.
     fn animation_options_arg(&mut self, index: usize) -> Option<AnimationOptions> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding `animate` reads its options")
     }
@@ -649,11 +833,13 @@ pub trait Front: DictFront {
     /// `StructuredSerializeForStorage`): `None` if it threw (a
     /// `DataCloneError`).
     fn serialized_state_arg(&mut self, index: usize) -> Option<Vec<u8>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding `pushState` serializes its state")
     }
 
     fn effect_options_arg(&mut self, index: usize) -> Option<AnimationOptions> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding `KeyframeEffect`'s constructor reads its options")
     }
@@ -661,6 +847,7 @@ pub trait Front: DictFront {
     /// Argument `index`, `updateTiming()`'s `OptionalEffectTiming`: the
     /// members given, read in WebIDL's order. `None` if it threw.
     fn optional_timing_arg(&mut self, index: usize) -> Option<animation::OptionalTiming> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding `updateTiming` reads its timing")
     }
@@ -670,6 +857,7 @@ pub trait Front: DictFront {
     /// its document's; `null`: none); anything else a `TypeError`. `None`
     /// if it threw.
     fn timeline_arg(&mut self, index: usize) -> Option<bool> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding `new Animation()` reads its timeline")
     }
@@ -679,6 +867,7 @@ pub trait Front: DictFront {
     /// iterable's keyframes, or one property-indexed keyframe; `null` or
     /// `undefined` none. `None` if it threw.
     fn keyframes_arg(&mut self, index: usize) -> Option<Option<animation::ScriptKeyframes>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding `animate` reads its keyframes")
     }
@@ -687,6 +876,7 @@ pub trait Front: DictFront {
     /// with no conversion: `toBlob`'s `quality`); none otherwise. It never
     /// throws.
     fn number_if(&mut self, index: usize) -> Option<f64> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding a member taking a number or anything reads it")
     }
@@ -694,6 +884,7 @@ pub trait Front: DictFront {
     /// Argument `index`, if it is an object of GC type `T` (a wrapper of
     /// one): nothing thrown when it isn't (a union's other types).
     fn object_if<T: HeapType>(&mut self, index: usize) -> Option<Self::Node> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding a member taking a union of objects reads it")
     }
@@ -701,6 +892,7 @@ pub trait Front: DictFront {
     /// Argument `index`'s value if it is a boolean (a union's member, read
     /// with no conversion); none otherwise. It never throws.
     fn bool_if(&mut self, index: usize) -> Option<bool> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding a member taking a union with a boolean reads it")
     }
@@ -708,18 +900,21 @@ pub trait Front: DictFront {
     /// Argument `index` as a `boolean` (WebIDL's: `ToBoolean`, which runs
     /// nothing).
     fn bool_arg(&mut self, index: usize) -> bool {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding a member with a boolean reads it")
     }
 
     /// Whether argument `index` is undefined (or missing).
     fn is_undefined(&mut self, index: usize) -> bool {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding a member with an optional boolean reads it")
     }
 
     /// Whether argument `index` is null or undefined (or missing).
     fn is_null_or_undefined(&mut self, index: usize) -> bool {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding a member with a nullable number reads it")
     }
@@ -727,6 +922,7 @@ pub trait Front: DictFront {
     /// Whether argument `index` is an object, null or undefined: what a
     /// union of a dictionary and a `boolean` converts as the dictionary.
     fn is_dictionary_like(&mut self, index: usize) -> bool {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding a member with a union reads it")
     }
@@ -740,6 +936,7 @@ pub trait Front: DictFront {
         index: usize,
         name: &str,
     ) -> Option<Option<Callback<Self::Callback>>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (index, name);
         unreachable!("a front end binding a member with a callback reads it")
     }
@@ -748,6 +945,7 @@ pub trait Front: DictFront {
     /// callback function`): any object kept by the front end, which the
     /// result names; anything else null (`None`). It never throws.
     fn event_handler_arg(&mut self, index: usize) -> Option<Callback<Self::Callback>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding an event handler reads it")
     }
@@ -755,6 +953,7 @@ pub trait Front: DictFront {
     /// Argument `index` as WebIDL's `unsigned long` (`ToUint32`: undefined
     /// is 0); `None` if the conversion threw.
     fn u32_arg(&mut self, index: usize) -> Option<u32> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding a member with an `unsigned long` reads it")
     }
@@ -762,6 +961,7 @@ pub trait Front: DictFront {
     /// Argument `index` as WebIDL's `long` (`ToInt32`: undefined is 0);
     /// `None` if the conversion threw.
     fn i32_arg(&mut self, index: usize) -> Option<i32> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding a member with a `long` reads it")
     }
@@ -770,6 +970,7 @@ pub trait Front: DictFront {
     /// undefined is NaN), or with `finite` its `double` (a NaN or an
     /// infinity a `TypeError`, thrown); `None` if the conversion threw.
     fn f64_arg(&mut self, index: usize, finite: bool) -> Option<f64> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (index, finite);
         unreachable!("a front end binding a member with a `double` reads it")
     }
@@ -779,6 +980,7 @@ pub trait Front: DictFront {
     /// runs as a classic script), kept by the front end, which the result
     /// names; `None` if the conversion threw.
     fn timer_handler_arg(&mut self, index: usize) -> Option<Callback<Self::Callback>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding a member with a timer handler reads it")
     }
@@ -787,6 +989,7 @@ pub trait Front: DictFront {
     /// as the front end holds them to be stored (a new array); none if
     /// there are none.
     fn rest_arg(&mut self, index: usize) -> Option<Self::Rest> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding a member with rest arguments reads them")
     }
@@ -795,6 +998,7 @@ pub trait Front: DictFront {
     /// (`initCustomEvent`'s `detail`): the value, null for undefined (or
     /// missing). It never throws.
     fn any_arg(&mut self, index: usize) -> AnyArg<Self::Any> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding a member with an `any` reads it")
     }
@@ -803,6 +1007,7 @@ pub trait Front: DictFront {
     /// what `new EventTarget()` makes); `Some(None)` for null or undefined;
     /// anything else a `TypeError` naming `interface`, thrown.
     fn target_arg(&mut self, index: usize, interface: &str) -> Option<Option<Self::Node>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (index, interface);
         unreachable!("a front end binding a member with an event target reads it")
     }
@@ -815,6 +1020,7 @@ pub trait Front: DictFront {
         index: usize,
         interface: &str,
     ) -> Option<Option<Self::Node>> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (index, interface);
         unreachable!("a front end binding a member with an object reads it")
     }
@@ -823,6 +1029,7 @@ pub trait Front: DictFront {
     /// one (JS's `new`) with at least `required` arguments; else a
     /// `TypeError` thrown (`INTERFACES[interface]` the constructor's).
     fn construct(&mut self, interface: usize, required: usize) -> bool {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (interface, required);
         unreachable!("a front end binding a constructor checks its calls")
     }
@@ -887,18 +1094,22 @@ pub trait Front: DictFront {
     /// `ret_node`, `ret_u32`...), made the engine's value now, with none
     /// running: a front end whose `Pending` types have values has these.
     fn finish_string(&mut self, pending: Self::PendingString) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = pending;
         unreachable!("a front end that leaves a string for after the operation finishes it")
     }
     fn finish_node(&mut self, pending: Self::PendingNode) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = pending;
         unreachable!("a front end that leaves a node for after the operation finishes it")
     }
     fn finish_number(&mut self, pending: Self::PendingNumber) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = pending;
         unreachable!("a front end that leaves a number for after the operation finishes it")
     }
     fn finish_object(&mut self, pending: Self::PendingObject) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = pending;
         unreachable!("a front end that leaves an object for after the operation finishes it")
     }
@@ -906,28 +1117,15 @@ pub trait Front: DictFront {
     /// The error a call giving a promise gives it rejected with, after the
     /// operation: a new promise.
     fn reject(&mut self, error: ApiError) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = error;
         unreachable!("a front end binding a member giving a promise rejects it")
     }
 
     /// A `[CEReactions]` member's element queue, left as its operation
-    /// ended (`Cx::leave_ce_reactions` gave true): its reactions invoked
-    /// (`custom_elements::invoke_reactions`), the front end as their script
-    /// host. Out of line: most calls enqueue none.
-    #[cold]
-    #[inline(never)]
-    fn invoke_ce_reactions(&mut self)
-    where
-        Self: Sized,
-    {
-        if self.read(|cx, _| cx.has_element_changes()) {
-            self.update_elements();
-        }
-        let Some(queue) = self.mutate(|cx, _| cx.take_left_element_queue()) else {
-            return;
-        };
-        crate::custom_elements::invoke_reactions(&mut FrontHost(self), &queue);
-    }
+    /// ended (`Cx::leave_ce_reactions` gave true): its reactions invoked,
+    /// on a front end that runs script (`ScriptFront::invoke_left_reactions`).
+    fn invoke_ce_reactions(&mut self);
 
     /// `getHTML`'s options (`GetHtmlOptionsArg`) at `index`: undefined or
     /// null the defaults, an object its `serializableShadowRoots` and its
@@ -936,6 +1134,7 @@ pub trait Front: DictFront {
     /// `serializableShadowRoots`, and the nodes (none if `shadowRoots`
     /// wasn't given).
     fn get_html_options(&mut self, index: usize) -> Option<(bool, Vec<Self::Node>)> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding `getHTML` reads its options")
     }
@@ -949,6 +1148,7 @@ pub trait Front: DictFront {
         &mut self,
         index: usize,
     ) -> Option<(IntersectionInit, Option<Self::Node>)> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding `IntersectionObserver` reads its options")
     }
@@ -963,6 +1163,7 @@ pub trait Front: DictFront {
         &mut self,
         index: usize,
     ) -> Option<(IntersectionEntryInitValues, Self::Node)> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding `IntersectionObserverEntry` reads its init")
     }
@@ -973,108 +1174,9 @@ pub trait Front: DictFront {
     /// Another value, a member missing, or a container that isn't a node:
     /// a `TypeError`.
     fn static_range_init(&mut self, index: usize) -> Option<[(Self::Node, u32); 2]> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = index;
         unreachable!("a front end binding `StaticRange` reads its init")
-    }
-
-    /// `ScriptHost::read_custom_element_constructor`, the call's callback
-    /// argument's.
-    fn read_custom_element_constructor(&mut self) -> Result<ConstructorInfo, ApiError> {
-        unreachable!("a front end binding `define` reads its constructor")
-    }
-
-    /// `ScriptHost::store_custom_element_definition`.
-    fn store_custom_element_definition(
-        &mut self,
-        registry: &Persistent<dom::CustomElementRegistry>,
-        definition: &Persistent<dom::CustomElementDefinition>,
-    ) {
-        let _ = (registry, definition);
-        unreachable!("a front end binding `define` stores its callbacks")
-    }
-
-    /// `ScriptHost::call_lifecycle_callback`.
-    fn call_lifecycle_callback(
-        &mut self,
-        element: &Persistent<dom::Node>,
-        definition: &Persistent<dom::CustomElementDefinition>,
-        callback: crate::custom_elements::LifecycleCallback,
-    ) {
-        let _ = (element, definition, callback);
-        unreachable!("a front end invoking custom element reactions calls their callbacks")
-    }
-
-    /// `ScriptHost::upgrade_element`.
-    fn upgrade_element(
-        &mut self,
-        definition: &Persistent<dom::CustomElementDefinition>,
-        element: &Persistent<dom::Node>,
-    ) -> bool {
-        let _ = (definition, element);
-        unreachable!("a front end binding a member upgrading elements constructs them")
-    }
-
-    /// `ScriptHost::constructor_is_constructor`.
-    fn constructor_is_constructor(&mut self) -> bool {
-        unreachable!("a front end binding `define` checks its constructor")
-    }
-
-    /// `ScriptHost::constructor_is_defined`.
-    fn constructor_is_defined(
-        &mut self,
-        registry: &Persistent<dom::CustomElementRegistry>,
-    ) -> bool {
-        let _ = registry;
-        unreachable!("a front end binding `define` compares its constructor")
-    }
-
-    /// `ScriptHost::resolve_when_defined`.
-    fn resolve_when_defined(
-        &mut self,
-        pending: &[u64],
-        definition: &Persistent<dom::CustomElementDefinition>,
-    ) {
-        let _ = (pending, definition);
-        unreachable!("a front end binding `define` resolves `whenDefined`'s promises")
-    }
-
-    /// `ScriptHost::call_mutation_callback`, for a member that calls
-    /// script.
-    fn call_mutation_callback(
-        &mut self,
-        observer: &Persistent<dom::MutationObserver>,
-        records: &[Persistent<dom::MutationRecord>],
-    ) {
-        let _ = (observer, records);
-        unreachable!("a front end binding a member that calls script calls observers")
-    }
-
-    /// `ScriptHost::call_listener`, for a member that calls script.
-    fn call_listener(&mut self, event: &Persistent<dom::Event>, index: usize) {
-        let _ = (event, index);
-        unreachable!("a front end binding a member that calls script calls listeners")
-    }
-
-    /// `ScriptHost::reject_promise_with_reason`, for `abort()`'s steps.
-    fn reject_promise_with_reason(&mut self, promise: u64, signal: &Persistent<EventTargetImpl>) {
-        let _ = (promise, signal);
-        unreachable!("a front end binding `abort()` rejects an aborted fetch's promise")
-    }
-
-    /// `ScriptHost::pending_input`, for `isInputPending()`.
-    fn pending_input(&mut self, include_continuous: bool) -> Vec<crate::PendingInput> {
-        let _ = include_continuous;
-        unreachable!("a front end binding `isInputPending` asks the engine's monitor")
-    }
-
-    /// `ScriptHost::call_node_filter`.
-    fn call_node_filter(
-        &mut self,
-        traversal: &TraversalRoot,
-        node: &dom::NodeRoot,
-    ) -> Result<u16, ApiError> {
-        let _ = (traversal, node);
-        unreachable!("a front end binding a traversal calls its filter")
     }
 
     /// `ScriptHost::compile_event_handler`, for a member that calls script
@@ -1093,17 +1195,20 @@ pub trait Front: DictFront {
     /// A new array of the objects (each with its interface): a
     /// `sequence<I>`.
     fn finish_objects(&mut self, objects: Vec<(ObjectRoot, usize)>) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = objects;
         unreachable!("a front end binding a member giving a sequence makes it")
     }
     /// As `finish_objects`, a `FrozenArray<I>`: frozen, and the same
     /// array each time while its values are the same.
     fn finish_frozen_objects(&mut self, objects: Vec<(ObjectRoot, usize)>) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = objects;
         unreachable!("a front end binding a member giving a frozen array makes it")
     }
     /// A new array of the strings.
     fn finish_strings(&mut self, strings: Vec<DomString>) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = strings;
         unreachable!("a front end binding a member giving strings makes them")
     }
@@ -1123,82 +1228,97 @@ pub trait Front: DictFront {
     }
     /// As `finish_strings`, a `FrozenArray<DOMString>`.
     fn finish_frozen_strings(&mut self, strings: Vec<DomString>) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = strings;
         unreachable!("a front end binding a member giving a frozen array makes it")
     }
     /// A new array of the numbers (`sequence<double>`).
     fn finish_doubles(&mut self, numbers: Vec<f64>) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = numbers;
         unreachable!("a front end binding a member giving numbers makes them")
     }
     /// As `finish_doubles`, a `FrozenArray<double>`.
     fn finish_numbers(&mut self, numbers: Vec<f64>) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = numbers;
         unreachable!("a front end binding a member giving a frozen array makes it")
     }
     /// A new object of the members, in order (a dictionary).
     fn finish_dictionary(&mut self, members: Vec<(&'static str, DictValue)>) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = members;
         unreachable!("a front end binding a member giving a dictionary makes it")
     }
     /// A new array of new objects (`getKeyframes()`'s records).
     fn finish_records(&mut self, records: Vec<Vec<(String, DictValue)>>) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = records;
         unreachable!("a front end binding a member giving records makes them")
     }
     /// A mark's or a measure's `detail`: its serialization deserialized
     /// at the first ask, the same value after.
     fn finish_entry_detail(&mut self, entry: Persistent<dom::PerformanceEntry>) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = entry;
         unreachable!("a front end binding User Timing gives its detail")
     }
     /// A `FileReader`'s `ArrayBuffer` result: made of its bytes at the
     /// first ask, the same buffer after.
     fn finish_reader_buffer(&mut self, reader: Persistent<EventTargetImpl>) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = reader;
         unreachable!("a front end binding `FileReader` gives its buffer")
     }
     /// `history.state`: the current state's deserialization, made at the
     /// first ask and the same value after.
     fn finish_history_state(&mut self, history: Persistent<dom::History>) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = history;
         unreachable!("a front end binding `history.state` gives it")
     }
     /// The first argument, an `ArrayBufferView` as `array_view_arg` took
     /// it, these bytes written to it: the result.
     fn finish_filled_view(&mut self, bytes: Vec<u8>) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = bytes;
         unreachable!("a front end binding `getRandomValues` fills its view")
     }
     /// `payload` deserialized in the receiver's realm, its ports these
     /// objects (`structuredClone()`'s); a `DataCloneError` if it can't be.
     fn finish_cloned(&mut self, payload: dom::SerializedMessage, ports: Vec<(ObjectRoot, usize)>) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (payload, ports);
         unreachable!("a front end binding `structuredClone` deserializes")
     }
     /// A new promise resolved with the object (`Promise<I>`).
     fn finish_resolved(&mut self, object: ObjectRoot, interface: usize) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (object, interface);
         unreachable!("a front end binding a member giving a promise makes it")
     }
     /// A new promise resolved with the string.
     fn finish_resolved_string(&mut self, string: DomString) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = string;
         unreachable!("a front end binding a member giving a promise makes it")
     }
     /// A new promise resolved with the text parsed as JSON, or rejected
     /// with what parsing threw (the body mixin's `json()`).
     fn finish_resolved_json(&mut self, text: DomString) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = text;
         unreachable!("a front end binding a member giving a promise makes it")
     }
     /// A new promise resolved with undefined.
     fn finish_resolved_undefined(&mut self) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         unreachable!("a front end binding a member giving a promise makes it")
     }
     /// A new promise resolved with a new `ArrayBuffer` of the bytes (its
     /// own: no copy), or (`view`) a `Uint8Array` of one.
     fn finish_resolved_bytes(&mut self, bytes: Vec<u8>, view: bool) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (bytes, view);
         unreachable!("a front end binding a member giving a promise makes it")
     }
@@ -1206,6 +1326,7 @@ pub trait Front: DictFront {
     /// its buffer's), before the result or the constructed object is
     /// given.
     fn finish_image_data_pixels(&mut self, image_data: Persistent<dom::ImageData>, bytes: Vec<u8>) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (image_data, bytes);
         unreachable!("a front end binding a member making an `ImageData` makes its array")
     }
@@ -1213,6 +1334,7 @@ pub trait Front: DictFront {
     /// constructor gave (`OpFront::construct_html`): the wrapper given
     /// `new.target`'s prototype.
     fn finish_upgrading(&mut self, element: NodeRoot) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = element;
         unreachable!("a front end binding `HTMLElement`'s constructor finishes an upgrade")
     }
@@ -1220,6 +1342,7 @@ pub trait Front: DictFront {
     /// `id`; or (`existing`) the promise of the resolver kept by it
     /// already.
     fn finish_pending_promise(&mut self, id: u64, existing: bool) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (id, existing);
         unreachable!("a front end binding a member giving a pending promise makes it")
     }
@@ -1229,6 +1352,7 @@ pub trait Front: DictFront {
         &mut self,
         definition: Persistent<dom::CustomElementDefinition>,
     ) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = definition;
         unreachable!("a front end binding `whenDefined` gives its promise")
     }
@@ -1242,6 +1366,7 @@ pub trait Front: DictFront {
         ready: bool,
         resolved: bool,
     ) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (object, interface, ready, resolved);
         unreachable!("a front end binding animations gives their promises")
     }
@@ -1261,13 +1386,6 @@ pub trait Front: DictFront {
             },
         );
     }
-
-    /// The iframes' and script elements' steps for what the operation did
-    /// to them (`frame::update_elements`), before its custom element
-    /// reactions are invoked: HTML's post-connection steps come first, as
-    /// Blink makes an iframe's frame, and runs a script, as it is
-    /// inserted. Nothing by default: a front end with neither.
-    fn update_elements(&mut self) {}
 }
 
 /// A front end's side in a call's operation: the arguments made the DOM's,
@@ -1288,12 +1406,14 @@ pub trait OpFront: FrontTypes {
 
     /// An object argument.
     fn object<'gc, T: HeapType>(&mut self, cx: &ApiCx<'_, 'gc>, object: &Self::Node) -> Gc<'gc, T> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (cx, object);
         unreachable!("a front end binding a member with an object reads it")
     }
 
     /// An event target argument (`Front::target_arg`) as the DOM's.
     fn target<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, object: &Self::Node) -> TargetRef<'gc> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (cx, object);
         unreachable!("a front end binding a member with an event target reads it")
     }
@@ -1301,6 +1421,7 @@ pub trait OpFront: FrontTypes {
     /// `edge` made to refer to the value `value` (`Front::any_arg`,
     /// `Front::dict_any`), strongly.
     fn store_any(&mut self, cx: &ApiCx<'_, '_>, edge: &JsEdge, value: AnyArg<Self::Any>) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (cx, edge, value);
         unreachable!("a front end binding a member with an `any` stores it")
     }
@@ -1314,6 +1435,7 @@ pub trait OpFront: FrontTypes {
         edge: &JsEdge,
         callback: Callback<Self::Callback>,
     ) -> bool {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (cx, edge, callback);
         unreachable!("a front end binding a member with a callback compares them")
     }
@@ -1326,6 +1448,7 @@ pub trait OpFront: FrontTypes {
         edge: &JsEdge,
         callback: Callback<Self::Callback>,
     ) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (cx, edge, callback);
         unreachable!("a front end binding a member with a callback stores them")
     }
@@ -1344,6 +1467,7 @@ pub trait OpFront: FrontTypes {
     /// `edge` (a new timer's) made to refer to the rest arguments `rest`
     /// (`Front::rest_arg`), strongly.
     fn store_rest(&mut self, cx: &ApiCx<'_, '_>, edge: &JsEdge, rest: Self::Rest) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (cx, edge, rest);
         unreachable!("a front end binding a member with rest arguments stores them")
     }
@@ -1351,6 +1475,7 @@ pub trait OpFront: FrontTypes {
     /// A constructor's new object: the call's own new wrapper (JS's `this`
     /// in a constructor) made its.
     fn construct_object<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, object: ObjectRef<'gc>) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (cx, object);
         unreachable!("a front end binding a constructor wraps its objects")
     }
@@ -1381,6 +1506,7 @@ pub trait OpFront: FrontTypes {
     /// The engine's number for the callback `callback` names (as
     /// `new_target_number`'s).
     fn callback_number(&mut self, callback: Callback<Self::Callback>) -> u32 {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = callback;
         unreachable!("a front end binding a member taking a constructor numbers it")
     }
@@ -1396,6 +1522,7 @@ pub trait OpFront: FrontTypes {
         definition: Gc<'gc, dom::CustomElementDefinition>,
         document: NodeRef<'gc>,
     ) -> Option<Self::PendingNode> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (cx, definition, document);
         unreachable!("a front end binding `createElement` constructs custom elements")
     }
@@ -1426,11 +1553,13 @@ pub trait OpFront: FrontTypes {
     /// The value `edge` refers to (the engine's), undefined if none:
     /// WebIDL's `any`.
     fn ret_any<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, edge: &'gc JsEdge) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (cx, edge);
         unreachable!("a front end binding a member giving any value gives it")
     }
     /// As `ret_any`, null if none (`AnyOrNull`).
     fn ret_any_or_null<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, edge: &'gc JsEdge) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (cx, edge);
         unreachable!("a front end binding a member giving any value gives it")
     }
@@ -1470,12 +1599,14 @@ pub trait OpFront: FrontTypes {
         cx: &ApiCx<'_, 'gc>,
         object: ObjectRef<'gc>,
     ) -> Option<Self::PendingObject> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (cx, object);
         unreachable!("a front end binding a member giving an object returns it")
     }
 
     /// What `edge` holds, or undefined if nothing (`AnyOrUndefined`).
     fn ret_any_or_undefined<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, edge: Option<&'gc JsEdge>) {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
         let _ = (cx, edge);
         unreachable!("a front end binding a member giving any value gives it")
     }
@@ -2054,7 +2185,7 @@ pub struct ConstructorInfo {
 /// member that calls script).
 pub struct FrontHost<'a, F>(pub &'a mut F);
 
-impl<F: Front> ScriptHost for FrontHost<'_, F> {
+impl<F: ScriptFront> ScriptHost for FrontHost<'_, F> {
     /// None: a member's call reports nothing in its operations.
     type Value = std::convert::Infallible;
 
@@ -3572,7 +3703,7 @@ impl DictMember for Option<IsNull> {
 pub trait WholeCall {
     type Out;
 
-    fn run<F: Front>(self, front: &mut F) -> Self::Out;
+    fn run<F: ScriptFront>(self, front: &mut F) -> Self::Out;
 }
 
 /// A dictionary's members' reads (the table's: `Dictionary::read` makes
@@ -8689,6 +8820,8 @@ mod tests {
     }
 
     impl FrontTypes for OneNode {
+        // It binds some members only.
+        const STUBS: bool = true;
         type Str = String;
         type Node = ();
         type Dict = ();
@@ -8708,7 +8841,18 @@ mod tests {
         }
     }
 
+    impl super::ScriptFront for OneNode {}
+
     impl Front for OneNode {
+        /// Script runs on this front end itself.
+        fn whole<C: super::WholeCall>(&mut self, call: C) -> C::Out {
+            call.run(self)
+        }
+
+        fn invoke_ce_reactions(&mut self) {
+            super::ScriptFront::invoke_left_reactions(self);
+        }
+
         type Op<'o> = OneNode;
         fn reading<V: crate::typed::ReadDict<Self>>(&mut self, reads: V) -> V::Out {
             reads.read(self)

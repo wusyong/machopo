@@ -323,9 +323,9 @@ pub fn resolve_overload(
     // overloads have a few forms each).
     let mut found = [0usize; MOST_FORMS];
     let mut candidates = 0usize;
-    for form in 0..forms.len() {
-        if forms[form].required() <= count && count <= forms[form].params.len() {
-            found[candidates] = form;
+    for (index, form) in forms.iter().enumerate() {
+        if form.required() <= count && count <= form.params.len() {
+            found[candidates] = index;
             candidates = candidates.saturating_add(1);
         }
     }

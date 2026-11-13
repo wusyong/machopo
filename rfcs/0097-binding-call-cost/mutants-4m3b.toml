@@ -1,0 +1,37 @@
+# Stages 4m-3b and 4m-3c: the front end that runs script (`WholeFront`)
+# carries its results out of the operation as the info front end does
+# (no `Kept`), and alone implements `ScriptFront`.
+test = ["cargo", "test", "-q", "-p", "dom_api", "-p", "dom_js"]
+timeout = 1800
+
+[[mutant]]
+name = "an object with no wrapper isn't the whole front end's result"
+file = "crates/dom_js/src/front.rs"
+from = '''        Some((cx.root_object(object), dom_api::interface_of(cx, object)))'''
+to = '''        let _ = (cx, object);
+        None'''
+
+# Not here: a string, a node with no wrapper or a number past a small
+# integer left for after the whole front end's operation (`finish_string`,
+# `ret_node`'s pending, `finish_number`). Traced: no member that runs on
+# the whole front end gives one now (the cross-origin properties give
+# windows, booleans and `length`; the members that call script give
+# booleans, promises, nothing, or nodes rooted by the script's side), so
+# no test can tell. They are there because the front end is a `Front`.
+
+[[mutant]]
+name = "the reactions a member left aren't invoked on the whole front end"
+file = "crates/dom_js/src/front.rs"
+from = '''    fn invoke_ce_reactions(&mut self) {
+        dom_api::typed::ScriptFront::invoke_left_reactions(self);
+    }'''
+to = '''    fn invoke_ce_reactions(&mut self) {}'''
+
+[[mutant]]
+name = "the elements an operation changed aren't updated before its reactions"
+file = "crates/dom_api/src/typed.rs"
+from = '''        if self.read(|cx, _| cx.has_element_changes()) {
+            self.update_elements();
+        }
+        let Some(queue) = self.mutate(|cx, _| cx.take_left_element_queue()) else {'''
+to = '''        let Some(queue) = self.mutate(|cx, _| cx.take_left_element_queue()) else {'''

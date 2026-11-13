@@ -1839,14 +1839,14 @@ fn then_script_method(
             impl #api::typed::WholeCall for Whole {
                 type Out = ();
 
-                fn run<F: #api::typed::Front>(self, #front: &mut F) {
+                fn run<F: #api::typed::ScriptFront>(self, #front: &mut F) {
                     whole(#front);
                 }
             }
 
             #front.whole(Whole);
 
-            fn whole<F: #api::typed::Front>(#front: &mut F) {
+            fn whole<F: #api::typed::ScriptFront>(#front: &mut F) {
             #optional
             if !#front.has_args(#js, #required) {
                 return;
@@ -1976,7 +1976,7 @@ fn script_method(
             impl #api::typed::WholeCall for Whole {
                 type Out = ();
 
-                fn run<F: #api::typed::Front>(self, #front: &mut F) {
+                fn run<F: #api::typed::ScriptFront>(self, #front: &mut F) {
                     whole(#front);
                 }
             }
@@ -1984,7 +1984,7 @@ fn script_method(
             #tried
             #front.whole(Whole);
 
-            fn whole<F: #api::typed::Front>(#front: &mut F) {
+            fn whole<F: #api::typed::ScriptFront>(#front: &mut F) {
             #optional
             if !#front.has_args(#js, #required) {
                 return;
@@ -2299,26 +2299,24 @@ fn rewrite_fronts_types(tokens: Tokens, found: &mut dyn FnMut(&Ident)) -> Tokens
     use proc_macro2::TokenTree;
     let tokens: Vec<TokenTree> = tokens.into_iter().collect();
     let mut out = Vec::with_capacity(tokens.len());
-    let mut at = 0;
+    let mut at = 0usize;
     while at < tokens.len() {
         // `T`, `:`, `:`, a name.
-        if let (
+        if let [
             TokenTree::Ident(t),
-            Some(TokenTree::Punct(first)),
-            Some(TokenTree::Punct(second)),
-            Some(TokenTree::Ident(kind)),
-        ) = (
-            &tokens[at],
-            tokens.get(at + 1),
-            tokens.get(at + 2),
-            tokens.get(at + 3),
-        ) && t == "T"
+            TokenTree::Punct(first),
+            TokenTree::Punct(second),
+            TokenTree::Ident(kind),
+            ..,
+        ] = &tokens[at..]
+            && t == "T"
             && first.as_char() == ':'
             && second.as_char() == ':'
         {
             found(kind);
             out.push(TokenTree::Ident(format_ident!("T{}", kind)));
-            at += 4;
+            // Within the tokens: the four matched.
+            at = at.saturating_add(4);
             continue;
         }
         out.push(match &tokens[at] {
@@ -2332,7 +2330,7 @@ fn rewrite_fronts_types(tokens: Tokens, found: &mut dyn FnMut(&Ident)) -> Tokens
             }
             token => token.clone(),
         });
-        at += 1;
+        at = at.saturating_add(1);
     }
     out.into_iter().collect()
 }

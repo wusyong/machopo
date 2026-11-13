@@ -16,7 +16,7 @@ use std::marker::PhantomData;
 
 use dom_api::{INTERFACES, TypedMember};
 
-use crate::front::{IndexArgs, V8Front};
+use crate::front::{IndexArgs, WholeFront};
 use crate::state::{self, Scope, State};
 use crate::templates::{self, string};
 
@@ -106,7 +106,7 @@ fn pair<'s, M: TypedMember>(
     };
     {
         let scope = state::scope(scope)?;
-        let mut front = V8Front::new(scope, &call, rv);
+        let mut front = WholeFront::new(scope, &call, rv);
         M::call(&mut front);
     }
     v8::Local::<v8::Array>::try_from(rv.get(scope)).ok()

@@ -2,8 +2,8 @@
 //! generated callback does with its `FunctionCallbackInfo`. The arguments
 //! are converted before the DOM's operation (WebIDL's `ToString` may run
 //! script). The operation borrows the isolate's state from the call's
-//! scope (`V8Front::read`, `V8Front::mutate`), and its side of the call
-//! (`V8Op`) holds the scope as `bindings::NoGc`: `this` and the node
+//! scope (`WholeFront::read`, `WholeFront::mutate`), and its side of the call
+//! (`WholeOp`) holds the scope as `bindings::NoGc`: `this` and the node
 //! arguments are unwrapped once (V8's `Signature` checked the receiver's
 //! interface), and a result that is the engine's already (a node's
 //! wrapper, a string's cached V8 string, a primitive V8 needn't allocate)
@@ -34,30 +34,11 @@ use dom_api::{
 };
 use elise::{JsEdge, Persistent};
 
+use crate::info_front::{PendingNode, PendingString};
 use crate::listeners::{self, ReportAt};
 use crate::state::{self, Caches, Scope, State};
 use crate::strings::{self, ArgString, StringCache};
 use crate::{exception, templates};
-
-/// A result kept in the operation, made V8's after it: what V8 must
-/// allocate for. Boxed (`Call::kept`): a call with none drops a null
-/// pointer, a check inlined; the enum's drop glue (its roots, its
-/// sequence) runs only for one kept, off the getters' path.
-pub(crate) enum Kept {
-    /// Past a Smi: a heap number.
-    U32(u32),
-    F64(f64),
-    String(DomString),
-    /// A name of the table whose V8 string isn't made yet.
-    Name(NameId, DomString),
-    /// A node with no wrapper, and its interface.
-    Node(NodeRoot, usize),
-    /// An object with no wrapper, and its interface.
-    Object(ObjectRoot, usize),
-    /// A custom element for `createElement` to construct with the
-    /// definition's constructor, in the document (`OpFront::ret_construct`).
-    Construct(Persistent<dom::CustomElementDefinition>, NodeRoot),
-}
 
 /// What a call's arguments, `this` and `new.target` are read from: a
 /// function's callback's (`FunctionCallbackArguments`), or an indexed
@@ -218,7 +199,7 @@ impl<'s> CallArgs<'s> for NameArgs<'s> {
 /// is the DOM's), the arguments, and what the call holds across its
 /// operation (`Call`). `'r` is the result's (a property callback's
 /// `ReturnValue` has a lifetime of its own).
-pub(crate) struct V8Front<'a, 's, 'i, 'r, A: CallArgs<'s> = v8::FunctionCallbackArguments<'s>> {
+pub(crate) struct WholeFront<'a, 's, 'i, 'r, A: CallArgs<'s> = v8::FunctionCallbackArguments<'s>> {
     base: Scoped<'a, 's, 'i, 'r, A>,
     call: Call<'s>,
 }
@@ -226,8 +207,6 @@ pub(crate) struct V8Front<'a, 's, 'i, 'r, A: CallArgs<'s> = v8::FunctionCallback
 /// What a call takes before its operation and leaves for after: lent to
 /// the operation's side whole (one pointer, not each field copied in).
 pub(crate) struct Call<'s> {
-    /// Dropped by `Call`'s own `Drop` (as `rare`), out of line only if set.
-    kept: ManuallyDrop<Option<Box<Kept>>>,
     /// A `[NewObject]`'s wrapper, made before the operation, and its
     /// interface.
     prepared: Option<(v8::Local<'s, v8::Object>, usize)>,
@@ -251,7 +230,7 @@ pub(crate) struct Call<'s> {
 impl Drop for Call<'_> {
     #[inline]
     fn drop(&mut self) {
-        if self.kept.is_some() || self.rare.is_some() {
+        if self.rare.is_some() {
             self.drop_held();
         }
     }
@@ -263,7 +242,7 @@ impl Call<'_> {
     fn drop_held(&mut self) {
         // Taken out and dropped here: what stays is `None`, which needs no
         // drop.
-        drop((self.kept.take(), self.rare.take()));
+        drop(self.rare.take());
     }
 }
 
@@ -294,7 +273,7 @@ impl<'s> Call<'s> {
 /// A member's call in its operation: what of V8 it may use (`NoGc`), the
 /// arguments, what the call holds (`Call`, its result by `OpReturn`), and
 /// the state's caches it reads.
-pub(crate) struct V8Op<'o, 's, 'i, 'r, A: CallArgs<'s>> {
+pub(crate) struct WholeOp<'o, 's, 'i, 'r, A: CallArgs<'s>> {
     no_gc: bindings::NoGc<'o, 's, 'i>,
     args: &'o A,
     call: &'o mut Call<'s>,
@@ -1926,6 +1905,24 @@ impl<'s, A: CallArgs<'s>> Scoped<'_, 's, '_, '_, A> {
         self.rv().set(promise.into());
     }
 
+    /// A string the operation left for after it: made now, a string of
+    /// the DOM's cached by its address, a name's kept by its number.
+    pub(crate) fn finish_string_pending(&mut self, pending: PendingString) {
+        let made = match pending {
+            PendingString::String(string) => cached_string(&mut self.scope, &string),
+            PendingString::Name(id, name) => make_name(&mut self.scope, id, &name.to_str()),
+            PendingString::Fresh(text) => v8::String::new_from_utf8(
+                self.scope.scope(),
+                text.as_bytes(),
+                v8::NewStringType::Normal,
+            ),
+        };
+        match made {
+            Some(string) => self.rv().set(string.into()),
+            None => exception::throw_range_error(self.scope.scope(), "Invalid string length"),
+        }
+    }
+
     /// The result `object`'s wrapper, made now if it has none.
     pub(crate) fn finish_object_root(&mut self, object: &ObjectRoot, interface: usize) {
         let wrapper = wrapper_of(&mut self.scope, object, interface);
@@ -1956,7 +1953,7 @@ impl<'s, A: CallArgs<'s>> Scoped<'_, 's, '_, '_, A> {
     }
 }
 
-impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
+impl<'a, 's, 'i, 'r, A: CallArgs<'s>> WholeFront<'a, 's, 'i, 'r, A> {
     pub(crate) fn new(
         scope: Scope<'a, 's, 'i>,
         args: &'a A,
@@ -1972,7 +1969,6 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
         Self {
             base: Scoped::new(scope, args, rv),
             call: Call {
-                kept: ManuallyDrop::new(None),
                 prepared: None,
                 window: None,
                 callback: None,
@@ -1995,35 +1991,6 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
         let value = self.base.rv.full(scope).get(scope);
         value.is_null()
             || v8::Local::<v8::String>::try_from(value).is_ok_and(|string| string.length() == 0)
-    }
-
-    /// A kept result made the engine's value, after the operation.
-    #[inline(never)]
-    fn finish_kept(&mut self) {
-        let Some(kept) = self.call.kept.take() else {
-            return;
-        };
-        match *kept {
-            Kept::Object(object, interface) => self.base.finish_object_root(&object, interface),
-            Kept::Construct(definition, document) => {
-                self.base.finish_construct(&definition, &document);
-            }
-            Kept::U32(value) => self.base.rv().set_uint32(value),
-            Kept::F64(value) => self.base.rv().set_double(value),
-            Kept::String(string) => match cached_string(&mut self.base.scope, &string) {
-                Some(string) => self.base.rv().set(string.into()),
-                None => {
-                    exception::throw_range_error(self.base.scope.scope(), "Invalid string length")
-                }
-            },
-            Kept::Name(id, name) => match make_name(&mut self.base.scope, id, &name.to_str()) {
-                Some(string) => self.base.rv().set(string.into()),
-                None => {
-                    exception::throw_range_error(self.base.scope.scope(), "Invalid string length")
-                }
-            },
-            Kept::Node(root, interface) => self.base.finish_node_root(&root, interface),
-        }
     }
 }
 
@@ -3091,14 +3058,16 @@ pub(crate) fn arg<'s>(args: &impl CallArgs<'s>, index: usize) -> v8::Local<'s, v
     args.get(i32::try_from(index).unwrap_or(i32::MAX))
 }
 
-impl<'s, A: CallArgs<'s>> FrontTypes for V8Front<'_, 's, '_, '_, A> {
+impl<'s, A: CallArgs<'s>> FrontTypes for WholeFront<'_, 's, '_, '_, A> {
+    // Every member is called through it: no method is left a stub.
+    const STUBS: bool = false;
     type Str = ArgString<'s>;
     type Node = v8::Local<'s, v8::Object>;
     type Dict = v8::Local<'s, v8::Object>;
-    type PendingString = std::convert::Infallible;
-    type PendingNode = std::convert::Infallible;
-    type PendingNumber = std::convert::Infallible;
-    type PendingObject = std::convert::Infallible;
+    type PendingString = PendingString;
+    type PendingNode = PendingNode;
+    type PendingNumber = f64;
+    type PendingObject = (ObjectRoot, usize);
     type PreparedNode = ();
     /// Which of the call\'s kept callbacks (`Call::callback`, or the
     /// second: `RareCall::second_callback`).
@@ -3108,14 +3077,16 @@ impl<'s, A: CallArgs<'s>> FrontTypes for V8Front<'_, 's, '_, '_, A> {
     type Rest = v8::Local<'s, v8::Array>;
 }
 
-impl<'s, A: CallArgs<'s>> FrontTypes for V8Op<'_, 's, '_, '_, A> {
+impl<'s, A: CallArgs<'s>> FrontTypes for WholeOp<'_, 's, '_, '_, A> {
+    // Every member is called through it: no method is left a stub.
+    const STUBS: bool = false;
     type Str = ArgString<'s>;
     type Node = v8::Local<'s, v8::Object>;
     type Dict = v8::Local<'s, v8::Object>;
-    type PendingString = std::convert::Infallible;
-    type PendingNode = std::convert::Infallible;
-    type PendingNumber = std::convert::Infallible;
-    type PendingObject = std::convert::Infallible;
+    type PendingString = PendingString;
+    type PendingNode = PendingNode;
+    type PendingNumber = f64;
+    type PendingObject = (ObjectRoot, usize);
     type PreparedNode = ();
     /// Which of the call\'s kept callbacks (`Call::callback`, or the
     /// second: `RareCall::second_callback`).
@@ -3128,6 +3099,8 @@ impl<'s, A: CallArgs<'s>> FrontTypes for V8Op<'_, 's, '_, '_, A> {
 /// The types a dictionary's members are read as: the callback's own
 /// handles, as every front end of V8's has them.
 impl<'s, A: CallArgs<'s>> FrontTypes for Scoped<'_, 's, '_, '_, A> {
+    // Every member is called through it: no method is left a stub.
+    const STUBS: bool = false;
     type Str = ArgString<'s>;
     type Node = v8::Local<'s, v8::Object>;
     type Dict = v8::Local<'s, v8::Object>;
@@ -3299,7 +3272,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> DictFront for Scoped<'a, 's, 'i, 'r, A> {
     }
 }
 
-impl<'a, 's, 'i, 'r, A: CallArgs<'s>> DictFront for V8Front<'a, 's, 'i, 'r, A> {
+impl<'a, 's, 'i, 'r, A: CallArgs<'s>> DictFront for WholeFront<'a, 's, 'i, 'r, A> {
     /// The member's value (a getter may run, and throw: V8 has the
     /// exception pending then), `ToBoolean`ed.
     #[inline]
@@ -3462,14 +3435,183 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> DictFront for V8Front<'a, 's, 'i, 'r, A> {
     }
 }
 
-impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
+impl<'a, 's, 'i, 'r, A: CallArgs<'s>> dom_api::typed::ScriptFront
+    for WholeFront<'a, 's, 'i, 'r, A>
+{
+    fn constructor_is_constructor(&mut self) -> bool {
+        let taken = self.call.callback.expect("the constructor taken");
+        v8::Local::<v8::Object>::try_from(taken).is_ok_and(|object| object.is_constructor())
+    }
+
+    fn constructor_is_defined(
+        &mut self,
+        registry: &Persistent<dom::CustomElementRegistry>,
+    ) -> bool {
+        self.read(|cx, op| {
+            let number = op.callback_number(Callback(0));
+            cx.custom_element_definitions_numbered(registry.get(cx.gc), number)
+                .into_iter()
+                .any(|definition| {
+                    op.same_callback(cx, cx.definition_edges(definition).constructor, Callback(0))
+                })
+        })
+    }
+
+    fn read_custom_element_constructor(&mut self) -> Result<ConstructorInfo, ApiError> {
+        let constructor =
+            v8::Local::<v8::Object>::try_from(self.call.callback.expect("the constructor taken"))
+                .expect("a constructor, checked");
+        match crate::custom_elements::read_constructor(self.base.scope.scope(), constructor) {
+            Some((callbacks, info)) => {
+                self.call.rare().definition = Some(callbacks);
+                Ok(info)
+            }
+            None => {
+                // V8's exception is the member's: no other thrown over it.
+                self.call.rare().threw = true;
+                Err(ApiError::type_error(
+                    "define: the constructor's reading threw",
+                ))
+            }
+        }
+    }
+
+    fn store_custom_element_definition(
+        &mut self,
+        registry: &Persistent<dom::CustomElementRegistry>,
+        definition: &Persistent<dom::CustomElementDefinition>,
+    ) {
+        let callbacks = self
+            .call
+            .rare()
+            .definition
+            .take()
+            .expect("the callbacks read");
+        self.mutate(|cx, op| {
+            let edges = cx.definition_edges(definition.get(cx.gc));
+            let constructor =
+                v8::Local::<v8::Object>::try_from(op.call.callback.expect("the constructor taken"))
+                    .expect("a constructor, checked");
+            op.no_gc.set_strong(edges.constructor, constructor);
+            cx.set_definition_constructor_number(
+                registry.get(cx.gc),
+                definition.get(cx.gc),
+                number(constructor),
+            );
+            let callback_edges = [
+                (edges.connected, dom::Callback::Connected),
+                (edges.disconnected, dom::Callback::Disconnected),
+                (edges.adopted, dom::Callback::Adopted),
+                (edges.attribute_changed, dom::Callback::AttributeChanged),
+            ];
+            let mut has = 0;
+            for ((edge, which), callback) in callback_edges.into_iter().zip(callbacks) {
+                if let Some(callback) = callback {
+                    op.no_gc.set_strong(edge, callback.into());
+                    has |= which.bit();
+                }
+            }
+            cx.set_definition_callbacks(definition.get(cx.gc), has);
+        });
+    }
+
+    /// The constructor constructed, in a `TryCatch`: what it threw, or a
+    /// `TypeError` if it gave another object than `element`'s wrapper,
+    /// reported at its realm.
+    fn upgrade_element(
+        &mut self,
+        definition: &Persistent<dom::CustomElementDefinition>,
+        element: &Persistent<Node>,
+    ) -> bool {
+        crate::listeners::call_constructor(&mut self.base.scope, |scope| {
+            upgrade_element(scope, definition, element)
+        })
+    }
+
+    fn call_lifecycle_callback(
+        &mut self,
+        element: &Persistent<Node>,
+        definition: &Persistent<dom::CustomElementDefinition>,
+        callback: dom_api::LifecycleCallback,
+    ) {
+        crate::listeners::call_function(&mut self.base.scope, |scope| {
+            call_lifecycle_callback(scope, element, definition, callback)
+        });
+    }
+
+    fn pending_input(&mut self, include_continuous: bool) -> Vec<dom_api::PendingInput> {
+        crate::listeners::pending_input(&mut self.base.scope, include_continuous)
+    }
+
+    fn reject_promise_with_reason(
+        &mut self,
+        promise: u64,
+        signal: &Persistent<dom::EventTargetImpl>,
+    ) {
+        crate::listeners::reject_promise_with_reason(&mut self.base.scope, promise, signal);
+    }
+
+    fn resolve_when_defined(
+        &mut self,
+        pending: &[u64],
+        definition: &Persistent<dom::CustomElementDefinition>,
+    ) {
+        let _ = definition;
+        let constructor = self.call.callback.expect("the constructor taken");
+        for id in pending {
+            let (state, _) = self.base.scope.state_mut();
+            let Some(resolver) = state.when_defined.remove(id) else {
+                continue;
+            };
+            let scope = self.base.scope.scope();
+            let resolver = v8::Local::new(scope, resolver);
+            resolver.resolve(scope, constructor);
+        }
+    }
+
+    fn call_listener(&mut self, event: &Persistent<dom::Event>, index: usize) {
+        crate::listeners::call_listener(&mut self.base.scope, event, index, false);
+    }
+
+    fn call_node_filter(
+        &mut self,
+        traversal: &dom::TraversalRoot,
+        node: &NodeRoot,
+    ) -> Result<u16, ApiError> {
+        let filtered = crate::listeners::call_function(&mut self.base.scope, |scope| {
+            crate::listeners::call_node_filter(scope, traversal, node)
+        });
+        match filtered {
+            Ok(result) => Ok(result),
+            Err(thrown) => {
+                self.call.rare().thrown = Some(thrown);
+                Err(ApiError::type_error("the filter threw"))
+            }
+        }
+    }
+
+    fn update_elements(&mut self) {
+        crate::state::update_elements(&mut self.base.scope);
+    }
+}
+
+impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for WholeFront<'a, 's, 'i, 'r, A> {
+    /// Script runs on this front end itself.
+    fn whole<C: dom_api::typed::WholeCall>(&mut self, call: C) -> C::Out {
+        call.run(self)
+    }
+
+    fn invoke_ce_reactions(&mut self) {
+        dom_api::typed::ScriptFront::invoke_left_reactions(self);
+    }
+
     #[inline(always)]
     fn reading<V: dom_api::typed::ReadDict<Self>>(&mut self, reads: V) -> V::Out {
         reads.read(self)
     }
 
     type Op<'o>
-        = V8Op<'o, 's, 'i, 'r, A>
+        = WholeOp<'o, 's, 'i, 'r, A>
     where
         Self: 'o;
 
@@ -3479,7 +3621,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>, &mut Self::Op<'o>) -> R,
     ) -> R {
         let (state, no_gc) = self.base.scope.state();
-        let mut op = V8Op {
+        let mut op = WholeOp {
             no_gc,
             args: self.base.args,
             call: &mut self.call,
@@ -3503,7 +3645,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
             layout,
             ..
         } = state;
-        let mut op = V8Op {
+        let mut op = WholeOp {
             no_gc,
             args: self.base.args,
             call: &mut self.call,
@@ -3941,14 +4083,39 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         foresee_element(self.base.scope.scope(), name)
     }
 
-    /// Its tag alone, mostly (the result was returned in the operation),
-    /// inlined: the rest out of line, whose registers saved first would
-    /// cost every call.
-    #[inline]
-    fn finish(&mut self) {
-        if self.call.kept.is_some() {
-            self.finish_kept();
+    /// A string the operation left: made now, and cached.
+    #[cold]
+    #[inline(never)]
+    fn finish_string(&mut self, pending: PendingString) {
+        self.base.finish_string_pending(pending);
+    }
+
+    /// A node the operation left: its wrapper made now.
+    #[cold]
+    #[inline(never)]
+    fn finish_node(&mut self, pending: PendingNode) {
+        match pending {
+            PendingNode::Node(node, interface) | PendingNode::Elsewhere(node, interface) => {
+                self.base.finish_node_root(&node, interface);
+            }
+            PendingNode::Construct(definition, document) => {
+                self.base.finish_construct(&definition, &document);
+            }
         }
+    }
+
+    /// A number that is no small integer: a heap number, made now.
+    #[cold]
+    #[inline(never)]
+    fn finish_number(&mut self, number: f64) {
+        self.base.rv().set_double(number);
+    }
+
+    /// An object the operation left: its wrapper made now.
+    #[cold]
+    #[inline(never)]
+    fn finish_object(&mut self, (object, interface): (ObjectRoot, usize)) {
+        self.base.finish_object_root(&object, interface);
     }
 
     /// A new promise rejected with what `error` throws (WebIDL's for an
@@ -3959,158 +4126,6 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         // What a traversal's filter threw.
         let thrown = self.call.rare.as_mut().and_then(|rare| rare.thrown.take());
         self.base.reject_with(thrown, error);
-    }
-
-    fn constructor_is_constructor(&mut self) -> bool {
-        let taken = self.call.callback.expect("the constructor taken");
-        v8::Local::<v8::Object>::try_from(taken).is_ok_and(|object| object.is_constructor())
-    }
-
-    fn constructor_is_defined(
-        &mut self,
-        registry: &Persistent<dom::CustomElementRegistry>,
-    ) -> bool {
-        self.read(|cx, op| {
-            let number = op.callback_number(Callback(0));
-            cx.custom_element_definitions_numbered(registry.get(cx.gc), number)
-                .into_iter()
-                .any(|definition| {
-                    op.same_callback(cx, cx.definition_edges(definition).constructor, Callback(0))
-                })
-        })
-    }
-
-    fn read_custom_element_constructor(&mut self) -> Result<ConstructorInfo, ApiError> {
-        let constructor =
-            v8::Local::<v8::Object>::try_from(self.call.callback.expect("the constructor taken"))
-                .expect("a constructor, checked");
-        match crate::custom_elements::read_constructor(self.base.scope.scope(), constructor) {
-            Some((callbacks, info)) => {
-                self.call.rare().definition = Some(callbacks);
-                Ok(info)
-            }
-            None => {
-                // V8's exception is the member's: no other thrown over it.
-                self.call.rare().threw = true;
-                Err(ApiError::type_error(
-                    "define: the constructor's reading threw",
-                ))
-            }
-        }
-    }
-
-    fn store_custom_element_definition(
-        &mut self,
-        registry: &Persistent<dom::CustomElementRegistry>,
-        definition: &Persistent<dom::CustomElementDefinition>,
-    ) {
-        let callbacks = self
-            .call
-            .rare()
-            .definition
-            .take()
-            .expect("the callbacks read");
-        self.mutate(|cx, op| {
-            let edges = cx.definition_edges(definition.get(cx.gc));
-            let constructor =
-                v8::Local::<v8::Object>::try_from(op.call.callback.expect("the constructor taken"))
-                    .expect("a constructor, checked");
-            op.no_gc.set_strong(edges.constructor, constructor);
-            cx.set_definition_constructor_number(
-                registry.get(cx.gc),
-                definition.get(cx.gc),
-                number(constructor),
-            );
-            let callback_edges = [
-                (edges.connected, dom::Callback::Connected),
-                (edges.disconnected, dom::Callback::Disconnected),
-                (edges.adopted, dom::Callback::Adopted),
-                (edges.attribute_changed, dom::Callback::AttributeChanged),
-            ];
-            let mut has = 0;
-            for ((edge, which), callback) in callback_edges.into_iter().zip(callbacks) {
-                if let Some(callback) = callback {
-                    op.no_gc.set_strong(edge, callback.into());
-                    has |= which.bit();
-                }
-            }
-            cx.set_definition_callbacks(definition.get(cx.gc), has);
-        });
-    }
-
-    /// The constructor constructed, in a `TryCatch`: what it threw, or a
-    /// `TypeError` if it gave another object than `element`'s wrapper,
-    /// reported at its realm.
-    fn upgrade_element(
-        &mut self,
-        definition: &Persistent<dom::CustomElementDefinition>,
-        element: &Persistent<Node>,
-    ) -> bool {
-        crate::listeners::call_constructor(&mut self.base.scope, |scope| {
-            upgrade_element(scope, definition, element)
-        })
-    }
-
-    fn call_lifecycle_callback(
-        &mut self,
-        element: &Persistent<Node>,
-        definition: &Persistent<dom::CustomElementDefinition>,
-        callback: dom_api::LifecycleCallback,
-    ) {
-        crate::listeners::call_function(&mut self.base.scope, |scope| {
-            call_lifecycle_callback(scope, element, definition, callback)
-        });
-    }
-
-    fn pending_input(&mut self, include_continuous: bool) -> Vec<dom_api::PendingInput> {
-        crate::listeners::pending_input(&mut self.base.scope, include_continuous)
-    }
-
-    fn reject_promise_with_reason(
-        &mut self,
-        promise: u64,
-        signal: &Persistent<dom::EventTargetImpl>,
-    ) {
-        crate::listeners::reject_promise_with_reason(&mut self.base.scope, promise, signal);
-    }
-
-    fn resolve_when_defined(
-        &mut self,
-        pending: &[u64],
-        definition: &Persistent<dom::CustomElementDefinition>,
-    ) {
-        let _ = definition;
-        let constructor = self.call.callback.expect("the constructor taken");
-        for id in pending {
-            let (state, _) = self.base.scope.state_mut();
-            let Some(resolver) = state.when_defined.remove(id) else {
-                continue;
-            };
-            let scope = self.base.scope.scope();
-            let resolver = v8::Local::new(scope, resolver);
-            resolver.resolve(scope, constructor);
-        }
-    }
-
-    fn call_listener(&mut self, event: &Persistent<dom::Event>, index: usize) {
-        crate::listeners::call_listener(&mut self.base.scope, event, index, false);
-    }
-
-    fn call_node_filter(
-        &mut self,
-        traversal: &dom::TraversalRoot,
-        node: &NodeRoot,
-    ) -> Result<u16, ApiError> {
-        let filtered = crate::listeners::call_function(&mut self.base.scope, |scope| {
-            crate::listeners::call_node_filter(scope, traversal, node)
-        });
-        match filtered {
-            Ok(result) => Ok(result),
-            Err(thrown) => {
-                self.call.rare().thrown = Some(thrown);
-                Err(ApiError::type_error("the filter threw"))
-            }
-        }
     }
 
     #[inline]
@@ -4260,33 +4275,9 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         self.base
             .finish_animation_promise(object, interface, ready, resolved)
     }
-
-    fn update_elements(&mut self) {
-        crate::state::update_elements(&mut self.base.scope);
-    }
 }
 
-impl<'s, A: CallArgs<'s>> V8Op<'_, 's, '_, '_, A> {
-    /// A node with no wrapper kept, its wrapper made after the operation:
-    /// out of line, so that a getter whose node has one (most) doesn't
-    /// carry the interface's lookup (an element's name read, a table).
-    #[cold]
-    #[inline(never)]
-    fn keep_node<'gc>(&mut self, cx: &dom::Cx<'_, 'gc>, node: NodeRef<'gc>) {
-        self.keep(Kept::Node(cx.root(node), interface_of(cx, node)));
-    }
-
-    /// `kept` kept for after the operation: out of line, so that a result
-    /// returned at once (most) carries no allocation, and its setter
-    /// inlines.
-    #[cold]
-    #[inline(never)]
-    fn keep(&mut self, kept: Kept) {
-        *self.call.kept = Some(Box::new(kept));
-    }
-}
-
-impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
+impl<'s, A: CallArgs<'s>> OpFront for WholeOp<'_, 's, '_, '_, A> {
     fn str_param<'a>(&mut self, string: &'a ArgString<'s>) -> &'a str {
         string.text(&mut self.no_gc)
     }
@@ -4424,17 +4415,14 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
         &mut self,
         cx: &ApiCx<'_, 'gc>,
         object: ObjectRef<'gc>,
-    ) -> Option<std::convert::Infallible> {
-        if !self
+    ) -> Option<(ObjectRoot, usize)> {
+        if self
             .no_gc
             .return_wrapper(&mut self.rv.op(), cx.object_wrapper_edge(object))
         {
-            self.keep(Kept::Object(
-                cx.root_object(object),
-                dom_api::interface_of(cx, object),
-            ));
+            return None;
         }
-        None
+        Some((cx.root_object(object), dom_api::interface_of(cx, object)))
     }
 
     fn construct_html<'gc>(
@@ -4485,12 +4473,11 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
         cx: &ApiCx<'_, 'gc>,
         definition: elise::Gc<'gc, dom::CustomElementDefinition>,
         document: NodeRef<'gc>,
-    ) -> Option<std::convert::Infallible> {
-        self.keep(Kept::Construct(
+    ) -> Option<PendingNode> {
+        Some(PendingNode::Construct(
             Persistent::new(cx.gc, definition),
             cx.root(document),
-        ));
-        None
+        ))
     }
 
     fn ret_any_or_undefined<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, edge: Option<&'gc JsEdge>) {
@@ -4514,20 +4501,14 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
 
     /// A Smi's at once; past one a heap number, made after the operation.
     #[inline]
-    fn ret_u32(&mut self, value: u32) -> Option<std::convert::Infallible> {
-        if !self.rv.op().set_smi_u32(value) {
-            self.keep(Kept::U32(value));
-        }
-        None
+    fn ret_u32(&mut self, value: u32) -> Option<f64> {
+        (!self.rv.op().set_smi_u32(value)).then(|| value.into())
     }
 
     /// A Smi's at once; past one a heap number, made after the operation.
     #[inline]
-    fn ret_i32(&mut self, value: i32) -> Option<std::convert::Infallible> {
-        if !self.rv.op().set_smi_i32(value) {
-            self.keep(Kept::F64(value.into()));
-        }
-        None
+    fn ret_i32(&mut self, value: i32) -> Option<f64> {
+        (!self.rv.op().set_smi_i32(value)).then(|| value.into())
     }
 
     /// The value as it is (V8's handle), undefined if none.
@@ -4549,7 +4530,7 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
     /// A Smi's at once (an integer in its range, not -0); another a heap
     /// number, made after the operation.
     #[inline]
-    fn ret_f64(&mut self, value: f64) -> Option<std::convert::Infallible> {
+    fn ret_f64(&mut self, value: f64) -> Option<f64> {
         let integer = value.fract() == 0.0
             && value.abs() <= f64::from(i32::MAX)
             && !(value == 0.0 && value.is_sign_negative());
@@ -4559,7 +4540,7 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
                 .op()
                 .set_smi_i32(base::numerics::saturated_cast::<i32, f64>(value)))
         {
-            self.keep(Kept::F64(value));
+            return Some(value);
         }
         None
     }
@@ -4568,48 +4549,43 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
     /// (no local handle made, as Blink's `StringCache` returns its
     /// persistent); else kept, made after the operation.
     #[inline]
-    fn ret_string(&mut self, value: &DomString) -> Option<std::convert::Infallible> {
+    fn ret_string(&mut self, value: &DomString) -> Option<PendingString> {
         let returned = self
             .caches
             .strings
             .find(value)
             .is_some_and(|weak| self.no_gc.return_weak(&mut self.rv.op(), weak));
-        if !returned {
-            self.keep(Kept::String(value.clone()));
-        }
-        None
+        (!returned).then(|| PendingString::String(value.clone()))
     }
 
     /// The name's V8 string, made once a DOM (Blink's `QualifiedName`s keep
     /// theirs in `StringCache` too), returned from its global with no
     /// local handle made, as V8's `ReturnValue::Set(const Global&)`.
-    fn ret_name(&mut self, id: NameId) -> Option<std::convert::Infallible> {
+    fn ret_name(&mut self, id: NameId) -> Option<PendingString> {
         match usize::try_from(id)
             .ok()
             .and_then(|index| self.caches.names.get(index))
             .and_then(Option::as_ref)
         {
-            Some(string) => self.no_gc.return_global(&mut self.rv.op(), string),
-            None => self.keep(Kept::Name(id, names::string(id))),
+            Some(string) => {
+                self.no_gc.return_global(&mut self.rv.op(), string);
+                None
+            }
+            None => Some(PendingString::Name(id, names::string(id))),
         }
-        None
     }
 
     /// The node's wrapper, written from the node's reference to it (no
     /// local handle made), if it has one.
     #[inline]
-    fn ret_node<'gc>(
-        &mut self,
-        cx: &ApiCx<'_, 'gc>,
-        node: NodeRef<'gc>,
-    ) -> Option<std::convert::Infallible> {
-        if !self
+    fn ret_node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, node: NodeRef<'gc>) -> Option<PendingNode> {
+        if self
             .no_gc
             .return_wrapper(&mut self.rv.op(), cx.wrapper_edge(node))
         {
-            self.keep_node(cx, node);
+            return None;
         }
-        None
+        Some(PendingNode::Node(cx.root(node), interface_of(cx, node)))
     }
 
     #[inline]
@@ -4618,7 +4594,7 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
         cx: &ApiCx<'_, 'gc>,
         node: NodeRef<'gc>,
         (): (),
-    ) -> Option<std::convert::Infallible> {
+    ) -> Option<PendingNode> {
         match self.call.prepared.take() {
             Some((wrapper, interface)) if interface == interface_of(cx, node) => {
                 debug_assert!(

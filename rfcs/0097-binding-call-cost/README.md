@@ -263,12 +263,18 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
     - **script 那一側**：分出 `ScriptFront: Front`，放只有跑 script 時才用的方法，`WholeCall::run` 要它；實作它的是一個瘦的型別（scope、參數、回傳值），給 `whole`、cross-origin 的成員、legacy caller、pairs、interceptor 用，取代完整的 front。之後拿掉 `Front` 的預設實作（wasm 和測試的 front 用 macro 補）。不選讓新的 front 為那些方法寫 `unreachable!`（沒有編譯期的保證），不選留著完整的 front 只給 script 用（兩套幾乎重複的程式）。
     - **不是成員的**：pairs 和 4i 留下的 interceptor 改到瘦的型別上，trampoline 不換（不熱，換了要 fork 再加幾種原始 callback）；`state.rs` 的內部函式不動。
     - **分段**：4m-3a 88 個方法照類別搬；4m-3b `ScriptFront` 和瘦的型別，刪掉完整的 front、`Call`、`Kept`；4m-3c 拿掉預設實作、清舊的實作、整個階段的檢查和對 Chrome 的收尾量測。各停一次給使用者審。
+46. **script 那一側留著自己的 front，收小；之後另開 RFC 併成一個**（2026-11-13，使用者；經過在 `progress.md` 的 4m-3a）：
+    - 決定 45 的第二項前提不對：`Front::whole` 是把整個成員的呼叫放到另一個 front 上跑，那個 front 要實作 `Front` 的全部和操作那一側，還要留著呼叫期間的東西，瘦不成「scope、參數、回傳值」。
+    - 選：完整的 front 留著、改名成 script 用的（`WholeFront`），只有它實作 `ScriptFront`（script 那一側的方法）；`Kept` 改用新的 front 帶出結果的做法刪掉；`Front` 的預設實作照決定 45 拿掉。會跑 script 的成員、custom element reactions、cross-origin 的成員、legacy caller、pairs、舊的 indexed 的路繼續用它。
+    - 不選現在就只留一個 front（新的 front 自己實作 script 那一側、每次呼叫 JS 建一個 scope，刪掉完整的 front 和它的操作那一側）：4m-3a 量到換殼不改變這些路的指令數，換到的只有少一份程式，卻要動 33 個會跑 script 的成員的執行路徑和熱的路上的欄位。**使用者：之後開一份 RFC 整個改掉**（記在「之後的可能」）。
 
 ## 待決定
 
 3. 「V8 在操作裡配置」（決定 6：先不做）要做時：規則 2 用「整個 old 當成活的」還是保守地掃 stack。
 
 ## 之後的可能
+
+- **V8 那一側只留一個 front（另開 RFC；使用者，2026-11-13）**：現在會跑 script 的成員、cross-origin 的成員、legacy caller、pairs 還在另一個 front（`WholeFront`）上跑，它和只拿 info 的 front 各有一份 `Front` 的實作和操作那一側。併成一個要：只拿 info 的 front 自己實作 script 那一側的方法（每次呼叫 JS 建一個 scope）、放 script 的狀態（`define` 讀到的 callback、filter 丟的例外）、legacy caller 一種新的 `InfoKind`、cross-origin 的 getter 進 receiver 的 realm 的入口（`bindings`），pairs 和舊的 indexed 的路搬過去；33 個會跑 script 的成員的例外和重入要重新驗。
 
 - 進來的字串改成 external（決定 7）：V8 的 sandbox 打開之後短字串也改得了，那時再做，照 Blink 把名稱的編號和 intern 過的值記在 resource 上（原型和數字在 `progress.md`、`prototypes/external-strings.patch`）。
 - 操作可以巢狀：DOM 做到一半呼叫 script 不用結束操作。

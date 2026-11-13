@@ -922,9 +922,9 @@ unsafe extern "C" fn info_named_set_trampoline<T: Any, S: StateInfoNamedSetter<T
     S::set(StateNameInfo {
         info,
         isolate: info.isolate(),
-        // SAFETY: the name and the value V8 passed the callback, used
-        // within it.
+        // SAFETY: the name V8 passed the callback, used within it.
         name: unsafe { name.unseal_in_callback() },
+        // SAFETY: the value V8 passed the callback, used within it.
         value: Some(unsafe { value.unseal_in_callback() }),
         _state: PhantomData,
     })

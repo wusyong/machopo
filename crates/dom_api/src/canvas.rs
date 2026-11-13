@@ -2238,7 +2238,6 @@ pub(crate) fn create_image_data_of<'gc>(
 /// `IndexSizeError` for a width or height of 0, a `SecurityError` for a
 /// canvas that isn't origin-clean. The color space is the settings', else
 /// the context's (the pixels aren't converted).
-#[expect(clippy::too_many_arguments, reason = "WebIDL's `getImageData`")]
 pub(crate) fn get_image_data<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, CanvasRenderingContext2d>,

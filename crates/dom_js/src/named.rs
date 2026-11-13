@@ -168,6 +168,8 @@ pub(crate) struct PropertyOp<'o, 's, 'i> {
 }
 
 impl<'s> FrontTypes for PropertyFront<'_, 's, '_> {
+    // It binds some members only.
+    const STUBS: bool = true;
     type Str = ArgString<'s>;
     type Node = v8::Local<'s, v8::Object>;
     type Dict = ();
@@ -182,6 +184,8 @@ impl<'s> FrontTypes for PropertyFront<'_, 's, '_> {
 }
 
 impl<'s> FrontTypes for PropertyOp<'_, 's, '_> {
+    // It binds some members only.
+    const STUBS: bool = true;
     type Str = ArgString<'s>;
     type Node = v8::Local<'s, v8::Object>;
     type Dict = ();
@@ -215,7 +219,29 @@ impl<'a, 's, 'i> DictFront for PropertyFront<'a, 's, 'i> {
     }
 }
 
+impl<'a, 's, 'i> dom_api::typed::ScriptFront for PropertyFront<'a, 's, 'i> {
+    /// A setter's reactions (`dataset.x = ...`, an options collection's
+    /// indexed setter): the lifecycle callbacks they call.
+    fn call_lifecycle_callback(
+        &mut self,
+        element: &elise::Persistent<dom::Node>,
+        definition: &elise::Persistent<dom::CustomElementDefinition>,
+        callback: dom_api::LifecycleCallback,
+    ) {
+        crate::front::call_lifecycle_callback(&mut self.scope, element, definition, callback);
+    }
+}
+
 impl<'a, 's, 'i> Front for PropertyFront<'a, 's, 'i> {
+    /// Script runs on this front end itself.
+    fn whole<C: dom_api::typed::WholeCall>(&mut self, call: C) -> C::Out {
+        call.run(self)
+    }
+
+    fn invoke_ce_reactions(&mut self) {
+        dom_api::typed::ScriptFront::invoke_left_reactions(self);
+    }
+
     #[inline(always)]
     fn reading<V: dom_api::typed::ReadDict<Self>>(&mut self, reads: V) -> V::Out {
         reads.read(self)
@@ -303,17 +329,6 @@ impl<'a, 's, 'i> Front for PropertyFront<'a, 's, 'i> {
     fn u32_arg(&mut self, index: usize) -> Option<u32> {
         let value = self.args.get(index).copied().flatten()?;
         crate::front::to_uint32(self.scope.scope(), value)
-    }
-
-    /// A setter's reactions (`dataset.x = ...`, an options collection's
-    /// indexed setter): the lifecycle callbacks they call.
-    fn call_lifecycle_callback(
-        &mut self,
-        element: &elise::Persistent<dom::Node>,
-        definition: &elise::Persistent<dom::CustomElementDefinition>,
-        callback: dom_api::LifecycleCallback,
-    ) {
-        crate::front::call_lifecycle_callback(&mut self.scope, element, definition, callback);
     }
 
     /// A named property's names (the enumerator's): kept, as its other

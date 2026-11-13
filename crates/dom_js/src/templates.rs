@@ -19,7 +19,7 @@ use dom_api::{CALLBACK_INTERFACES, INTERFACES, MemberKind, TypedMember, TypedVis
 
 use crate::cross_origin::{self, CrossOriginMember};
 use crate::exception;
-use crate::front::{IndexArgs, V8Front};
+use crate::front::{IndexArgs, WholeFront};
 use crate::named::{IndexedSetter, NamedCalls, NamedProperties};
 use crate::state::{self, Scope, State};
 use crate::window::CachedAccessor;
@@ -912,7 +912,7 @@ pub(crate) fn call_member<'s, M: TypedMember, A: crate::front::CallArgs<'s>>(
     args: &A,
     rv: v8::ReturnValue<'s>,
 ) {
-    let mut front = V8Front::new(scope, args, rv);
+    let mut front = WholeFront::new(scope, args, rv);
     M::call(&mut front);
     if M::KIND != MemberKind::Getter {
         front.report();
@@ -1301,7 +1301,7 @@ struct Indexed<M>(PhantomData<M>);
 
 /// `object[index]` of a plain getter: through the front end that is the
 /// interceptor's info, its index read as the number it is. A result that
-/// is null or an empty string is no item (as `V8Front::returned_no_item`
+/// is null or an empty string is no item (as `WholeFront::returned_no_item`
 /// tells): V8 then looks on the prototype.
 impl<M: TypedMember> bindings::StateInfoIndexedGetter<State> for Indexed<M> {
     fn get(info: bindings::StateIndexInfo<'_, State>) -> v8::Intercepted {
@@ -1329,7 +1329,7 @@ impl<M: TypedMember> bindings::StateIndexedGetter<State> for Indexed<M> {
             receiver: Some(this),
             undefined: v8::undefined(scope.scope()).into(),
         };
-        let mut front = V8Front::new(scope, &call, rv);
+        let mut front = WholeFront::new(scope, &call, rv);
         M::call(&mut front);
         if front.returned_no_item() {
             v8::Intercepted::kNo

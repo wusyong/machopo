@@ -45,6 +45,7 @@ mod webdriver;
 mod wheel;
 mod window;
 
+use dom_api::typed::ScriptFront;
 use dom_api::{
     ApiCx, ApiError, DictFront, Front, FrontTypes, MemberKind, OpFront, TypedMember, TypedVisitor,
 };
@@ -335,6 +336,8 @@ impl<'d> TestFront<'d> {
 }
 
 impl FrontTypes for TestFront<'_> {
+    // It binds some members only.
+    const STUBS: bool = true;
     type Str = String;
     type Node = Taken;
     type Dict = Vec<(&'static str, Option<bool>)>;
@@ -395,7 +398,159 @@ impl<'d> DictFront for TestFront<'d> {
     }
 }
 
+impl<'d> dom_api::typed::ScriptFront for TestFront<'d> {
+    /// Logs the call, then does the callback's action.
+    fn call_listener(&mut self, event: &elise::Persistent<dom::Event>, index: usize) {
+        let listeners = self.listeners.clone();
+        let dom = self.dom;
+        let action = dom.borrow().read(|cx| {
+            let event = event.get(cx.gc);
+            let listener = cx
+                .snapshot_at(event, index)
+                .expect("a listener of the snapshot");
+            let callback = cx.callback_edge(listener).embedder_word(cx.gc);
+            let target = cx.event_current_target(event).expect("a current target");
+            listeners.log.borrow_mut().push(Call {
+                callback,
+                phase: cx.event_phase(event),
+                target: target_name(cx, target),
+                event_target: cx
+                    .event_target(event)
+                    .map_or_else(String::new, |target| target_name(cx, target)),
+                event_type: dom::names::get(cx.event_type(event)).to_string(),
+                passive: cx.event_state(event).in_passive_listener,
+                trusted: cx.event_flags(event).trusted,
+                cancelable: cx.event_flags(event).cancelable,
+                error: cx
+                    .error_event_data(event)
+                    .map_or(0, |data| cx.error_edge(data).embedder_word(cx.gc)),
+                time: cx.event_time_stamp(event),
+                mouse: cx
+                    .mouse_event_data(event)
+                    .map(|data| cx.mouse_event_info(data)),
+                related: cx
+                    .mouse_event_data(event)
+                    .and_then(|data| cx.mouse_related_target(data))
+                    .or_else(|| {
+                        cx.focus_event_data(event)
+                            .and_then(|data| cx.focus_related_target(data))
+                    })
+                    .map_or_else(String::new, |target| target_name(cx, target)),
+                wheel: cx
+                    .wheel_event_data(event)
+                    .map(|data| cx.wheel_event_info(data)),
+                input: cx
+                    .input_event_data(event)
+                    .map(|data| cx.input_event_info(data)),
+                text: cx
+                    .text_event_data(event)
+                    .map(|data| cx.text_event_text(data).to_str().into_owned()),
+                interface: dom_api::INTERFACES
+                    [dom_api::interface_of(&ApiCx::new(cx), ObjectRef::Event(event))]
+                .name,
+            });
+            if let Some(data) = cx.keyboard_event_data(event) {
+                listeners
+                    .keys
+                    .borrow_mut()
+                    .push(cx.keyboard_event_info(data));
+            }
+            let action = listeners
+                .actions
+                .borrow()
+                .get(&callback)
+                .copied()
+                .unwrap_or(Action::Nothing);
+            let mut state = cx.event_state(event);
+            match action {
+                Action::Nothing
+                | Action::ReportAgain
+                | Action::Detach
+                | Action::MoveFocus
+                | Action::DetachNode => {}
+                Action::ListenAtNode(other) => {
+                    let node = listeners
+                        .action_node
+                        .borrow()
+                        .clone()
+                        .expect("a node to act on");
+                    let added = cx.add_listener(
+                        dom::TargetRef::Node(node.get(cx.gc)),
+                        cx.event_type(event),
+                        dom::ListenerFlags::default(),
+                    );
+                    cx.callback_edge(added).set_embedder_word(cx.gc, other);
+                }
+                Action::Cancel => state.canceled = true,
+                Action::StopPropagation => state.stop_propagation = true,
+                Action::StopImmediatePropagation => {
+                    state.stop_propagation = true;
+                    state.stop_immediate_propagation = true;
+                }
+                Action::Remove(other) => {
+                    let flags = cx.listener_flags(listener);
+                    let found =
+                        cx.find_listener(target, cx.event_type(event), flags.capture, |edge| {
+                            edge.embedder_word(cx.gc) == other
+                        });
+                    if let Some(found) = found {
+                        cx.remove_listener(target, found);
+                    }
+                }
+            }
+            cx.set_event_state(event, state);
+            action
+        });
+        if matches!(action, Action::MoveFocus | Action::DetachNode) {
+            let node = listeners
+                .action_node
+                .borrow()
+                .clone()
+                .expect("a node to act on");
+            dom.borrow_mut().mutate(|cx| {
+                let node = node.get(cx.gc);
+                if action == Action::MoveFocus {
+                    cx.set_focused_element(cx.document_of(node), Some(node), true);
+                } else {
+                    cx.remove(node);
+                }
+            });
+        }
+        if action == Action::Detach {
+            dom.borrow_mut().mutate(|cx| {
+                if let Some(dom::TargetRef::Node(node)) = cx.event_current_target(event.get(cx.gc))
+                {
+                    cx.remove(node);
+                }
+            });
+        }
+        if action == Action::ReportAgain {
+            let window = dom.borrow().read(|cx| {
+                let target = cx
+                    .event_current_target(event.get(cx.gc))
+                    .expect("a current target");
+                let dom::TargetRef::Window(window) = target else {
+                    panic!("reported again at a window");
+                };
+                elise::Persistent::new(cx.gc, window)
+            });
+            let reported =
+                dom_api::report_exception(&mut TestHost(self), &window, &error_info(), Some(99));
+            listeners.reported.borrow_mut().push(reported);
+        }
+    }
+}
+
 impl<'d> Front for TestFront<'d> {
+    /// Script runs on this front end itself.
+    fn whole<C: dom_api::typed::WholeCall>(&mut self, call: C) -> C::Out {
+        call.run(self)
+    }
+
+    fn invoke_ce_reactions(&mut self) {
+        dom_api::typed::ScriptFront::invoke_left_reactions(self);
+    }
+
     #[inline(always)]
     fn reading<V: dom_api::typed::ReadDict<Self>>(&mut self, reads: V) -> V::Out {
         reads.read(self)
@@ -625,147 +780,6 @@ impl<'d> Front for TestFront<'d> {
                 self.throw_type_error(&format!("not a {interface}"));
                 None
             }
-        }
-    }
-
-    /// Logs the call, then does the callback's action.
-    fn call_listener(&mut self, event: &elise::Persistent<dom::Event>, index: usize) {
-        let listeners = self.listeners.clone();
-        let dom = self.dom;
-        let action = dom.borrow().read(|cx| {
-            let event = event.get(cx.gc);
-            let listener = cx
-                .snapshot_at(event, index)
-                .expect("a listener of the snapshot");
-            let callback = cx.callback_edge(listener).embedder_word(cx.gc);
-            let target = cx.event_current_target(event).expect("a current target");
-            listeners.log.borrow_mut().push(Call {
-                callback,
-                phase: cx.event_phase(event),
-                target: target_name(cx, target),
-                event_target: cx
-                    .event_target(event)
-                    .map_or_else(String::new, |target| target_name(cx, target)),
-                event_type: dom::names::get(cx.event_type(event)).to_string(),
-                passive: cx.event_state(event).in_passive_listener,
-                trusted: cx.event_flags(event).trusted,
-                cancelable: cx.event_flags(event).cancelable,
-                error: cx
-                    .error_event_data(event)
-                    .map_or(0, |data| cx.error_edge(data).embedder_word(cx.gc)),
-                time: cx.event_time_stamp(event),
-                mouse: cx
-                    .mouse_event_data(event)
-                    .map(|data| cx.mouse_event_info(data)),
-                related: cx
-                    .mouse_event_data(event)
-                    .and_then(|data| cx.mouse_related_target(data))
-                    .or_else(|| {
-                        cx.focus_event_data(event)
-                            .and_then(|data| cx.focus_related_target(data))
-                    })
-                    .map_or_else(String::new, |target| target_name(cx, target)),
-                wheel: cx
-                    .wheel_event_data(event)
-                    .map(|data| cx.wheel_event_info(data)),
-                input: cx
-                    .input_event_data(event)
-                    .map(|data| cx.input_event_info(data)),
-                text: cx
-                    .text_event_data(event)
-                    .map(|data| cx.text_event_text(data).to_str().into_owned()),
-                interface: dom_api::INTERFACES
-                    [dom_api::interface_of(&ApiCx::new(cx), ObjectRef::Event(event))]
-                .name,
-            });
-            if let Some(data) = cx.keyboard_event_data(event) {
-                listeners
-                    .keys
-                    .borrow_mut()
-                    .push(cx.keyboard_event_info(data));
-            }
-            let action = listeners
-                .actions
-                .borrow()
-                .get(&callback)
-                .copied()
-                .unwrap_or(Action::Nothing);
-            let mut state = cx.event_state(event);
-            match action {
-                Action::Nothing
-                | Action::ReportAgain
-                | Action::Detach
-                | Action::MoveFocus
-                | Action::DetachNode => {}
-                Action::ListenAtNode(other) => {
-                    let node = listeners
-                        .action_node
-                        .borrow()
-                        .clone()
-                        .expect("a node to act on");
-                    let added = cx.add_listener(
-                        dom::TargetRef::Node(node.get(cx.gc)),
-                        cx.event_type(event),
-                        dom::ListenerFlags::default(),
-                    );
-                    cx.callback_edge(added).set_embedder_word(cx.gc, other);
-                }
-                Action::Cancel => state.canceled = true,
-                Action::StopPropagation => state.stop_propagation = true,
-                Action::StopImmediatePropagation => {
-                    state.stop_propagation = true;
-                    state.stop_immediate_propagation = true;
-                }
-                Action::Remove(other) => {
-                    let flags = cx.listener_flags(listener);
-                    let found =
-                        cx.find_listener(target, cx.event_type(event), flags.capture, |edge| {
-                            edge.embedder_word(cx.gc) == other
-                        });
-                    if let Some(found) = found {
-                        cx.remove_listener(target, found);
-                    }
-                }
-            }
-            cx.set_event_state(event, state);
-            action
-        });
-        if matches!(action, Action::MoveFocus | Action::DetachNode) {
-            let node = listeners
-                .action_node
-                .borrow()
-                .clone()
-                .expect("a node to act on");
-            dom.borrow_mut().mutate(|cx| {
-                let node = node.get(cx.gc);
-                if action == Action::MoveFocus {
-                    cx.set_focused_element(cx.document_of(node), Some(node), true);
-                } else {
-                    cx.remove(node);
-                }
-            });
-        }
-        if action == Action::Detach {
-            dom.borrow_mut().mutate(|cx| {
-                if let Some(dom::TargetRef::Node(node)) = cx.event_current_target(event.get(cx.gc))
-                {
-                    cx.remove(node);
-                }
-            });
-        }
-        if action == Action::ReportAgain {
-            let window = dom.borrow().read(|cx| {
-                let target = cx
-                    .event_current_target(event.get(cx.gc))
-                    .expect("a current target");
-                let dom::TargetRef::Window(window) = target else {
-                    panic!("reported again at a window");
-                };
-                elise::Persistent::new(cx.gc, window)
-            });
-            let reported =
-                dom_api::report_exception(&mut TestHost(self), &window, &error_info(), Some(99));
-            listeners.reported.borrow_mut().push(reported);
         }
     }
 

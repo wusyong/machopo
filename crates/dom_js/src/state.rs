@@ -35,7 +35,7 @@ pub(crate) struct State {
     /// since).
     reported: usize,
     /// What a member's operation reads (a borrow of it alone, beside the
-    /// DOM's: `front::V8Op`).
+    /// DOM's: `front::WholeOp`).
     pub(crate) caches: Caches,
     /// Each interface's template, by its index in `INTERFACES`, and
     /// `DOMException`'s after them: made at the first use.

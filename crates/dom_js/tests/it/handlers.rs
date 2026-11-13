@@ -1491,3 +1491,29 @@ fn a_callback_that_isnt_one_is_named_by_its_position() {
         );
     }
 }
+
+/// A location's strings read for the first time (V8 has no copy yet),
+/// and the nodes a walk with a filter gives (the filter is script; the
+/// nodes have no wrappers yet): made after the operation.
+#[test]
+fn first_reads_and_a_filtered_walks_nodes_are_made_after_the_operation() {
+    let mut engine = page();
+    // The first read of each: nothing cached.
+    assert_eq!(
+        report(&mut engine, "location.href"),
+        "https://example.test/page.html"
+    );
+    assert_eq!(report(&mut engine, "location.protocol"), "https:");
+    run(
+        &mut engine,
+        "var root = document.createElement('div'); root.innerHTML = '<a><b></b></a><i></i>'; \
+         var walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, () => NodeFilter.FILTER_ACCEPT);",
+    );
+    assert_eq!(
+        report(
+            &mut engine,
+            "[walker.nextNode(), walker.nextNode(), walker.nextNode(), walker.nextNode()].map(n => n && n.nodeName)"
+        ),
+        "A,B,I,"
+    );
+}

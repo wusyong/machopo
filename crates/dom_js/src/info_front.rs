@@ -11,7 +11,7 @@
 //! are read from the info where they are used. What allocates in V8,
 //! throws or runs script (an argument to convert or copy, a string V8 has
 //! no copy of, a node with no wrapper, an error, an element's reactions)
-//! makes a scope and the whole front end (`front::V8Front`) then, out of
+//! makes a scope and the whole front end (`front::WholeFront`) then, out of
 //! line, and is done by it.
 
 use bindings::InfoState;
@@ -23,7 +23,7 @@ use dom_api::{AnyArg, ApiCx, ApiError, Callback, DictFront, Front, FrontTypes, O
 use elise::JsEdge;
 use elise::Persistent;
 
-use crate::front::{self, Checked, V8Front};
+use crate::front::{self, Checked, WholeFront};
 use crate::state::{self, Caches, State};
 use crate::strings::ArgString;
 use crate::templates;
@@ -523,6 +523,8 @@ pub(crate) struct InfoOp<'o, 's, K: InfoKind<'s> = Method> {
 }
 
 impl<'s, K: InfoKind<'s>> FrontTypes for InfoFront<'s, K> {
+    // Every member is called through it: no method is left a stub.
+    const STUBS: bool = false;
     type Str = ArgString<'s>;
     type Node = v8::Local<'s, v8::Object>;
     type Dict = v8::Local<'s, v8::Object>;
@@ -544,6 +546,8 @@ impl<'s, K: InfoKind<'s>> FrontTypes for InfoFront<'s, K> {
 }
 
 impl<'s, K: InfoKind<'s>> FrontTypes for InfoOp<'_, 's, K> {
+    // Every member is called through it: no method is left a stub.
+    const STUBS: bool = false;
     type Str = ArgString<'s>;
     type Node = v8::Local<'s, v8::Object>;
     type Dict = v8::Local<'s, v8::Object>;
@@ -567,7 +571,7 @@ impl<'s, K: InfoKind<'s>> FrontTypes for InfoOp<'_, 's, K> {
 impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
     #[inline(always)]
     pub(crate) fn new(info: K::Info) -> Self {
-        // As `V8Front::new`'s: every way into script counts itself.
+        // As `WholeFront::new`'s: every way into script counts itself.
         debug_assert!(
             bindings::trace::in_script(),
             "a DOM member is called from script that the engine didn't count as entered"
@@ -590,11 +594,14 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
     /// throws or runs script.
     #[cold]
     #[inline(never)]
-    fn with_front<R>(&mut self, f: impl FnOnce(&mut V8Front<'_, 's, 's, 's, K::Args>) -> R) -> R {
+    fn with_front<R>(
+        &mut self,
+        f: impl FnOnce(&mut WholeFront<'_, 's, 's, 's, K::Args>) -> R,
+    ) -> R {
         let seed = K::seed(&self.info);
         self.info.with_scope(|mut scope, rv| {
             let args = K::args(seed, scope.scope());
-            f(&mut V8Front::new(scope, &args, rv))
+            f(&mut WholeFront::new(scope, &args, rv))
         })
     }
 
@@ -854,7 +861,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         let seed = K::seed(&self.info);
         self.info.with_scope(|mut scope, rv| {
             let args = K::args(seed, scope.scope());
-            call.run(&mut V8Front::new(scope, &args, rv))
+            call.run(&mut WholeFront::new(scope, &args, rv))
         })
     }
 
@@ -1057,7 +1064,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
 
     /// A wrapper of `INTERFACES[interface]`, made now for the node the
     /// operation will make (V8 allocates: a scope). None for a method of
-    /// another realm called on this one's object (as `V8Front`'s: the
+    /// another realm called on this one's object (as `WholeFront`'s: the
     /// wrapper is made after, in the node's relevant realm).
     #[inline(never)]
     fn prepare_new_node(&mut self, interface: usize) -> Option<(v8::Local<'s, v8::Object>, usize)> {
@@ -2080,7 +2087,7 @@ impl<'s, K: InfoKind<'s>> InfoOp<'_, 's, K> {
     }
 
     /// A node with no wrapper, rooted for after the operation, and its
-    /// interface: out of line, as `front::V8Op`'s (the interface's lookup).
+    /// interface: out of line, as `front::WholeOp`'s (the interface's lookup).
     #[cold]
     #[inline(never)]
     fn root_node<'gc>(&mut self, cx: &dom::Cx<'_, 'gc>, node: NodeRef<'gc>) -> PendingNode {
