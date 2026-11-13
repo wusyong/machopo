@@ -1128,14 +1128,13 @@ pub(crate) fn animation_name<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, EventTargetImpl>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::from(
+    Ok(DomStr::fresh(
         read_animation(cx, this, |a, _| match &a.owner {
             Owner::CssAnimation(owner) => owner.name.to_string(),
             _ => String::new(),
         })
-        .unwrap_or_default()
-        .as_str(),
-    )))
+        .unwrap_or_default(),
+    ))
 }
 
 /// `CSSTransition.transitionProperty`.

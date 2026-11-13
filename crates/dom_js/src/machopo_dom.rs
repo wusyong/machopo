@@ -76,6 +76,14 @@ pub fn wrappers_wasted(isolate: &mut v8::Isolate) -> u64 {
         .map_or(0, |state| state.caches.wrappers_wasted.get())
 }
 
+/// The results the isolate's DOM gave as text computed for the call, no
+/// string of the DOM's made of it (`DomStr::Fresh`), for the tests: 0
+/// with none.
+pub fn fresh_strings(isolate: &mut v8::Isolate) -> u64 {
+    bindings::isolate_state_mut::<State>(isolate)
+        .map_or(0, |state| state.caches.fresh_strings.get())
+}
+
 /// The names' V8 strings the isolate's DOM made so far (one a name
 /// returned), for the tests: 0 with none.
 pub fn names_made(isolate: &mut v8::Isolate) -> u64 {

@@ -3,8 +3,6 @@
 //! unit functions (`CSS.px()`) and `registerProperty` too, which machopo
 //! doesn't.
 
-use dom::DomString;
-
 use crate::typed::DomStr;
 use crate::{ApiCx, ApiError};
 
@@ -27,7 +25,5 @@ pub(crate) fn supports_condition<'gc>(
 
 /// `escape(ident)`: `ident` serialized as an identifier.
 pub(crate) fn escape<'gc>(_: &ApiCx<'_, 'gc>, ident: &str) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::from(css::escape_identifier(
-        ident,
-    ))))
+    Ok(DomStr::fresh(css::escape_identifier(ident)))
 }

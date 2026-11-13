@@ -91,7 +91,7 @@ pub(crate) fn type_<'gc>(
     _: &ApiCx<'_, 'gc>,
     _: Gc<'gc, CssStyleSheet>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::from("text/css")))
+    Ok(DomStr::fresh("text/css"))
 }
 
 /// `href`: a `<link>`'s sheet's URL as asked for; `null` for any other.

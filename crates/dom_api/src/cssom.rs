@@ -52,7 +52,7 @@ pub(crate) fn css_text<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, CssRule>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::from(cx.css_rule(this).css_text())))
+    Ok(DomStr::fresh(cx.css_rule(this).css_text()))
 }
 
 /// Setting `CSSRule.cssText` does nothing (CSSOM).
@@ -107,9 +107,7 @@ pub(crate) fn selector_text<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, CssRule>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::from(
-        style_rule(cx, this).selector_text(),
-    )))
+    Ok(DomStr::fresh(style_rule(cx, this).selector_text()))
 }
 
 /// Setting `selectorText`: the rule takes the selectors if they parse,
@@ -200,7 +198,7 @@ pub(crate) fn condition_text<'gc>(
         .css_rule(this)
         .condition_text()
         .expect("a condition rule");
-    Ok(DomStr::Owned(DomString::from(text)))
+    Ok(DomStr::fresh(text))
 }
 
 /// A media rule's `media` (`[SameObject]`).
@@ -228,7 +226,7 @@ pub(crate) fn keyframes_name<'gc>(
     let Rule::Keyframes(rule) = cx.css_rule(this) else {
         unreachable!("a keyframes rule's member on a keyframes rule");
     };
-    Ok(DomStr::Owned(DomString::from(&*rule.name)))
+    Ok(DomStr::fresh(rule.name.to_string()))
 }
 
 /// Setting `CSSKeyframesRule.name`: any string (`none` and the CSS-wide
@@ -315,7 +313,7 @@ pub(crate) fn key_text<'gc>(
     let Rule::Keyframe(rule) = cx.css_rule(this) else {
         unreachable!("a keyframe rule's member on a keyframe rule");
     };
-    Ok(DomStr::Owned(DomString::from(rule.key_text())))
+    Ok(DomStr::fresh(rule.key_text()))
 }
 
 /// Setting `keyText`: the selectors parsed; a `SyntaxError` (and nothing
@@ -363,7 +361,7 @@ pub(crate) fn media_text<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, MediaList>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::from(media_of(cx, this).to_css())))
+    Ok(DomStr::fresh(media_of(cx, this).to_css()))
 }
 
 /// Setting `mediaText`: the queries `value` parses into (none for the

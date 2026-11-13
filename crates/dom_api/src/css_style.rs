@@ -170,11 +170,7 @@ pub(crate) fn css_text<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, CssStyleDeclaration>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::from(read(
-        cx,
-        this,
-        CssPropertyValueSet::css_text,
-    ))))
+    Ok(DomStr::fresh(read(cx, this, CssPropertyValueSet::css_text)))
 }
 
 /// Replaces the declarations with those `value` parses into, even if they
@@ -252,11 +248,11 @@ pub(crate) fn get_property_value<'gc>(
     // A computed declaration's: the property's resolved value.
     if let Some((element, target)) = computed(cx, this) {
         let value = crate::computed_style::property_value(cx, element, target, property);
-        return Ok(DomStr::Owned(DomString::from(value)));
+        return Ok(DomStr::fresh(value));
     }
-    Ok(DomStr::Owned(DomString::from(read(cx, this, |block| {
+    Ok(DomStr::fresh(read(cx, this, |block| {
         block.property_value(property)
-    }))))
+    })))
 }
 
 pub(crate) fn get_property_priority<'gc>(
@@ -264,9 +260,9 @@ pub(crate) fn get_property_priority<'gc>(
     this: Gc<'gc, CssStyleDeclaration>,
     property: &str,
 ) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::from(read(cx, this, |block| {
+    Ok(DomStr::fresh(read(cx, this, |block| {
         block.property_priority(property)
-    }))))
+    })))
 }
 
 /// Changes the declarations only if they change: not for a property machopo
@@ -300,7 +296,7 @@ pub(crate) fn remove_property<'gc>(
 ) -> Result<DomStr<'gc>, ApiError> {
     writable(cx, this)?;
     let value = change(cx, this, |block| block.remove_property(property));
-    Ok(DomStr::Owned(DomString::from(value)))
+    Ok(DomStr::fresh(value))
 }
 
 pub(crate) fn css_float<'gc>(

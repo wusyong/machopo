@@ -332,7 +332,7 @@ fn a_callback_is_its_arguments_handle() {
         ),
         ("typeof requestAnimationFrame(f)", "number", true),
     ] {
-        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        let before = crate::env::slow_paths();
         // Statements as one expression (the comma operator), unless it is
         // one already.
         let expression = if source.starts_with("(() =>") {
@@ -341,7 +341,7 @@ fn a_callback_is_its_arguments_handle() {
             format!("({})", source.replace("; ", ", "))
         };
         let found = report(&mut engine, &expression);
-        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        let made = crate::env::slow_paths() - before;
         assert_eq!(found, value, "{source}");
         // (`dispatchEvent` and `new Event` aren't plain: none of these
         // scopes is theirs.)
@@ -477,14 +477,14 @@ fn a_value_rest_arguments_and_a_signal_are_handles() {
         // A string to compile is taken by the whole front end.
         ("typeof setTimeout('log.push(\\'s\\')', 0)", "number", false),
     ] {
-        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        let before = crate::env::slow_paths();
         let expression = if source.starts_with("(() =>") {
             source.to_owned()
         } else {
             format!("({})", source.replace("; ", ", "))
         };
         let found = report(&mut engine, &expression);
-        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        let made = crate::env::slow_paths() - before;
         assert_eq!(found, value, "{source}");
         if at_once {
             assert_eq!(made, 0, "{source}");
@@ -541,9 +541,9 @@ fn a_handlers_getter_gives_its_callback_in_the_operation() {
         ("d.onfocus = f; d.onfocus === f", "true", true),
         ("d.onfocus = null; d.onfocus", "null", true),
     ] {
-        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        let before = crate::env::slow_paths();
         let found = report(&mut engine, &format!("({})", source.replace("; ", ", ")));
-        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        let made = crate::env::slow_paths() - before;
         assert_eq!(found, value, "{source}");
         if at_once {
             assert_eq!(made, 0, "{source}");
@@ -623,9 +623,9 @@ fn a_result_to_allocate_for_is_made_after_the_operation() {
             "1 true",
         ),
     ] {
-        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        let before = crate::env::slow_paths();
         let found = report(&mut engine, &format!("({})", source.replace("; ", ", ")));
-        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        let made = crate::env::slow_paths() - before;
         assert_eq!(found, value, "{source}");
         assert!(made >= 1, "{source}: a scope");
     }
@@ -730,14 +730,14 @@ fn static_operations_and_overloads_are_given_the_info_alone() {
             true,
         ),
     ] {
-        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        let before = crate::env::slow_paths();
         let expression = if source.starts_with("(() =>") {
             source.to_owned()
         } else {
             format!("({})", source.replace("; ", ", "))
         };
         let found = report(&mut engine, &expression);
-        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        let made = crate::env::slow_paths() - before;
         assert_eq!(found, value, "{source}");
         if at_once {
             assert_eq!(made, 0, "{source}");
@@ -837,14 +837,14 @@ fn what_a_function_asks_of_the_operations_front_end_every_front_end_has() {
             false,
         ),
     ] {
-        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        let before = crate::env::slow_paths();
         let expression = if source.starts_with("(() =>") {
             source.to_owned()
         } else {
             format!("({})", source.replace("; ", ", "))
         };
         let found = report(&mut engine, &expression);
-        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        let made = crate::env::slow_paths() - before;
         assert_eq!(found, value, "{source}");
         if at_once {
             assert_eq!(made, 0, "{source}");
@@ -934,14 +934,14 @@ fn a_constructor_is_given_the_info_alone() {
             false,
         ),
     ] {
-        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        let before = crate::env::slow_paths();
         let expression = if source.starts_with("(() =>") {
             source.to_owned()
         } else {
             format!("({})", source.replace("; ", ", "))
         };
         let found = report(&mut engine, &expression);
-        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        let made = crate::env::slow_paths() - before;
         assert_eq!(found, value, "{source}");
         if at_once {
             assert_eq!(made, 0, "{source}");
@@ -961,13 +961,9 @@ fn a_constructor_is_given_the_info_alone() {
             &mut engine,
             &format!("var f = f || (() => {{}}); {source}; {source};"),
         );
-        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        let before = crate::env::slow_paths();
         assert_eq!(report(&mut engine, source), "true", "{source}");
-        assert_eq!(
-            bindings::info_scopes_for_testing().expect("a debug build") - before,
-            1,
-            "{source}"
-        );
+        assert_eq!(crate::env::slow_paths() - before, 1, "{source}");
     }
 }
 
@@ -1124,7 +1120,7 @@ fn an_objects_handle_is_taken_as_it_is() {
             None,
         ),
     ] {
-        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        let before = crate::env::slow_paths();
         let found = match source.rsplit_once("; ") {
             Some((first, last)) => {
                 run(&mut engine, first);
@@ -1132,7 +1128,7 @@ fn an_objects_handle_is_taken_as_it_is() {
             }
             None => report(&mut engine, source),
         };
-        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        let made = crate::env::slow_paths() - before;
         assert_eq!(found, value, "{source}");
         match scopes {
             Some(true) => assert!(made >= 1, "{source}: a scope"),
@@ -1331,12 +1327,12 @@ fn an_argument_read_whole_is_read_in_a_scope() {
         if let Some(first) = first.filter(|first| first.starts_with("var ")) {
             run(&mut engine, first);
         }
-        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        let before = crate::env::slow_paths();
         if let Some(first) = first.filter(|first| !first.starts_with("var ")) {
             run(&mut engine, first);
         }
         let found = report(&mut engine, last);
-        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        let made = crate::env::slow_paths() - before;
         assert_eq!(found, value, "{source}");
         match scopes {
             Some(true) => assert!(made >= 1, "{source}: a scope"),
@@ -1385,9 +1381,9 @@ fn a_number_that_is_no_small_integer_is_returned_with_no_scope() {
         ("input.value = '2.5'", "input.valueAsNumber", "2.5"),
     ] {
         run(&mut engine, setup);
-        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        let before = crate::env::slow_paths();
         run(&mut engine, &format!("var got = {source};"));
-        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        let made = crate::env::slow_paths() - before;
         assert_eq!(report(&mut engine, "got"), value, "{source}");
         assert_eq!(made, 0, "{source}");
     }

@@ -437,6 +437,9 @@ pub trait InfoState<'s, T> {
         &mut self,
         f: impl FnOnce(StateScope<'_, 's, 's, T>, v8::ReturnValue<'s, v8::Value>) -> R,
     ) -> R;
+    /// What of V8 allocates, with no scope made: the info borrowed whole,
+    /// so no state is held meanwhile.
+    fn handles(&mut self) -> InfoHandles<'_, 's>;
     /// The call's result a number that is no Smi: V8's return value
     /// makes the heap number itself (`ReturnValue::Set(double)`), in the
     /// callback's own handle scope, with no scope made. It allocates, so
@@ -467,6 +470,16 @@ impl<'s, T: Any, K> InfoState<'s, T> for StateInfo<'s, T, K> {
         f: impl FnOnce(StateScope<'_, 's, 's, T>, v8::ReturnValue<'s, v8::Value>) -> R,
     ) -> R {
         StateInfo::with_scope(self, f)
+    }
+
+    #[inline(always)]
+    fn handles(&mut self) -> InfoHandles<'_, 's> {
+        count_handles();
+        let rv = v8::ReturnValue::from_function_callback_info(self.info);
+        InfoHandles {
+            isolate: self.isolate(),
+            rv,
+        }
     }
 
     #[inline(always)]
@@ -547,6 +560,15 @@ impl<'s, T: Any> InfoState<'s, T> for StateIndexInfo<'s, T> {
             },
             v8::ReturnValue::from_property_callback_info(self.info),
         )
+    }
+
+    #[inline(always)]
+    fn handles(&mut self) -> InfoHandles<'_, 's> {
+        count_handles();
+        InfoHandles {
+            rv: v8::ReturnValue::from_property_callback_info(self.info),
+            isolate: &mut self.isolate,
+        }
     }
 
     #[inline(always)]
@@ -632,6 +654,15 @@ impl<'s, T: Any> InfoState<'s, T> for StateNameInfo<'s, T> {
     }
 
     #[inline(always)]
+    fn handles(&mut self) -> InfoHandles<'_, 's> {
+        count_handles();
+        InfoHandles {
+            rv: v8::ReturnValue::from_property_callback_info(self.info),
+            isolate: &mut self.isolate,
+        }
+    }
+
+    #[inline(always)]
     fn return_number(&mut self, value: f64) {
         v8::ReturnValue::<v8::Value>::from_property_callback_info(self.info).set_double(value);
     }
@@ -653,6 +684,58 @@ pub struct InfoNoGc<'b, 's> {
     pub(crate) rv: v8::ReturnValue<'s, v8::Value>,
 }
 
+/// What a callback asks of V8 with no state held and no scope made
+/// (`InfoState::handles`): what allocates. V8 calls a callback with a
+/// handle scope of its own open, which the handles made here are of
+/// (they have the info's lifetime, as a scope made of the info gives
+/// them); rusty_v8's scope is only its proof that handles may be made,
+/// which borrowing the info whole is here: no state is held meanwhile, so
+/// a GC V8 runs as it allocates finds the state unborrowed.
+pub struct InfoHandles<'b, 's> {
+    isolate: &'b mut v8::Isolate,
+    rv: v8::ReturnValue<'s, v8::Value>,
+}
+
+impl<'s> InfoHandles<'_, 's> {
+    /// The isolate, for what of rusty_v8's takes it alone (a `Global`, a
+    /// `Weak` with a finalizer).
+    #[inline(always)]
+    pub fn isolate(&mut self) -> &mut v8::Isolate {
+        self.isolate
+    }
+
+    /// A new string of `text`; none if it is longer than V8's strings may
+    /// be.
+    #[inline]
+    pub fn new_string(&mut self, text: &str) -> Option<v8::Local<'s, v8::String>> {
+        self.string(text, v8::NewStringType::Normal)
+    }
+
+    /// As `new_string`, internalized: a property's key, a name.
+    #[inline]
+    pub fn new_internalized_string(&mut self, text: &str) -> Option<v8::Local<'s, v8::String>> {
+        self.string(text, v8::NewStringType::Internalized)
+    }
+
+    #[inline(always)]
+    fn string(
+        &mut self,
+        text: &str,
+        new_type: v8::NewStringType,
+    ) -> Option<v8::Local<'s, v8::String>> {
+        // SAFETY: in a callback of V8's on the isolate's thread (an info
+        // is one's, and `self` borrows it); the handle has the info's
+        // lifetime, which ends with the callback.
+        unsafe { v8::String::new_from_utf8_in_callback(self.isolate, text.as_bytes(), new_type) }
+    }
+
+    /// The callback's result.
+    #[inline(always)]
+    pub fn return_value(&mut self, value: v8::Local<'s, v8::Value>) {
+        self.rv.set(value);
+    }
+}
+
 thread_local! {
     /// The scopes the info callbacks made on this thread
     /// (`StateInfo::with_scope`), for the tests. Counted in debug builds
@@ -665,6 +748,27 @@ thread_local! {
 /// `None` in release builds. For tests.
 pub fn info_scopes_for_testing() -> Option<u64> {
     cfg!(debug_assertions).then(|| INFO_SCOPES.get())
+}
+
+thread_local! {
+    /// The times an info callback asked for what of V8 allocates with no
+    /// scope made (`InfoState::handles`), on this thread, for the tests.
+    /// Counted in debug builds only.
+    static INFO_HANDLES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// The times the info callbacks asked for V8's handles with no scope made
+/// (`InfoState::handles`) on this thread so far, for the tests; none in a
+/// release build.
+pub fn info_handles_for_testing() -> Option<u64> {
+    cfg!(debug_assertions).then(|| INFO_HANDLES.get())
+}
+
+#[inline(always)]
+fn count_handles() {
+    if cfg!(debug_assertions) {
+        INFO_HANDLES.set(INFO_HANDLES.get().wrapping_add(1));
+    }
 }
 
 impl<'s, T: Any> StateInfo<'s, T, Signed> {

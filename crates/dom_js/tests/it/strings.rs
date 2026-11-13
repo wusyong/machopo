@@ -415,3 +415,143 @@ fn a_dictionary_members_key_is_made_once() {
         "once,ONCE,true"
     );
 }
+
+/// A string V8 has no copy of is made by V8's string constructor alone,
+/// with no scope: text computed for the call and a constant of the
+/// program's (no string of the DOM's made of them, nothing cached), a
+/// string the DOM holds (cached: none made the second time), a name. The
+/// text is the same whatever it holds: ASCII, Latin-1, other scripts,
+/// short and long.
+#[test]
+fn a_new_string_is_made_with_no_scope() {
+    let mut env = Env::new();
+    env.eval(
+        "var d = machopoDom.createDocument(); var e = d.createElement('p'); d.appendChild(e); \
+         var ctx = d.createElement('canvas').getContext('2d'); e.style.color = 'red'; \
+         var out;",
+    );
+    let scopes = || bindings::info_scopes_for_testing().expect("a debug build");
+    let handles = || bindings::info_handles_for_testing().expect("a debug build");
+    // Text computed for the call, and a constant, are carried out of the
+    // operation as they are: no string of the DOM's is made of them.
+    let fresh = env.fresh_strings();
+    env.eval(
+        "e.style.color; e.style.cssText; ctx.globalCompositeOperation; ctx.lineCap; e.outerHTML;",
+    );
+    assert_eq!(env.fresh_strings(), fresh + 5);
+    env.eval("e.getAttribute('style'); e.textContent; e.localName;");
+    assert_eq!(
+        env.fresh_strings(),
+        fresh + 5,
+        "the DOM's own strings aren't"
+    );
+    for (setup, source, value, cached) in [
+        // Computed for the call.
+        ("0", "e.style.color", "red", false),
+        ("0", "e.style.cssText", "color: red;", false),
+        ("e.innerHTML = '<i>a</i>'", "e.innerHTML", "<i>a</i>", false),
+        (
+            "0",
+            "e.outerHTML",
+            "<p style=\"color: red;\"><i>a</i></p>",
+            false,
+        ),
+        // A string of the DOM's made for the call (only the call holds
+        // it): given, not cached.
+        (
+            "e.innerHTML = '<i>a</i><b>b</b>'",
+            "e.textContent",
+            "ab",
+            false,
+        ),
+        // A constant: nothing allocated on the DOM's side.
+        ("0", "ctx.globalCompositeOperation", "source-over", false),
+        ("0", "ctx.lineCap", "butt", false),
+        // Other than ASCII: short (V8's decoder) and long (decoded
+        // before V8 is given it), Latin-1 and not.
+        ("e.textContent = 'é'", "e.innerHTML", "é", false),
+        (
+            "e.textContent = 'caf\u{e9} cr\u{e8}me br\u{fb}l\u{e9}e, tr\u{e8}s bien pr\u{e9}par\u{e9}e'",
+            "e.innerHTML",
+            "café crème brûlée, très bien préparée",
+            false,
+        ),
+        (
+            "e.textContent = '\u{6f22}\u{5b57}'",
+            "e.innerHTML",
+            "漢字",
+            false,
+        ),
+        (
+            "e.textContent = '\u{6f22}\u{5b57}\u{306e}\u{6587}\u{7ae0}\u{3092}\u{9577}\u{304f}\u{66f8}\u{304f}\u{3068}\u{3053}\u{3046}\u{306a}\u{308b}'",
+            "e.innerHTML",
+            "漢字の文章を長く書くとこうなる",
+            false,
+        ),
+        (
+            "e.textContent = 'a\u{1f600}b, and more text after it to be long'",
+            "e.innerHTML",
+            "a😀b, and more text after it to be long",
+            false,
+        ),
+        // The DOM's own: cached the first time.
+        (
+            "e.setAttribute('title', 'held by the DOM')",
+            "e.getAttribute('title')",
+            "held by the DOM",
+            true,
+        ),
+        (
+            "e.setAttribute('lang', 'caf\u{e9}')",
+            "e.getAttribute('lang')",
+            "café",
+            true,
+        ),
+    ] {
+        env.eval(setup);
+        let (scopes_before, handles_before, cached_before) =
+            (scopes(), handles(), env.cached_strings());
+        env.eval(&format!("out = {source};"));
+        assert_eq!(scopes(), scopes_before, "{source}: no scope");
+        assert_eq!(handles(), handles_before + 1, "{source}: V8 asked once");
+        assert_eq!(
+            env.cached_strings(),
+            cached_before + usize::from(cached),
+            "{source}: cached only if the DOM holds it"
+        );
+        assert_eq!(env.eval("out"), value, "{source}");
+        // Again: a cached one is found, the others made again.
+        let handles_before = handles();
+        env.eval(&format!("out = {source};"));
+        assert_eq!(scopes(), scopes_before, "{source}: no scope again");
+        assert_eq!(
+            handles(),
+            handles_before + u64::from(!cached),
+            "{source}: again"
+        );
+        assert_eq!(env.eval("out"), value, "{source} again");
+    }
+    // A name's string: made once, with no scope.
+    let (scopes_before, handles_before, names_before) = (scopes(), handles(), env.names_made());
+    assert_eq!(
+        env.eval("var q = d.createElement('q'); out = q.localName + q.tagName; out"),
+        "qQ"
+    );
+    assert_eq!(env.names_made(), names_before + 2);
+    assert_eq!(handles(), handles_before + 2);
+    let handles_before = handles();
+    assert_eq!(env.eval("out = q.localName + q.tagName; out"), "qQ");
+    assert_eq!(handles(), handles_before, "found by their numbers");
+    // (`createElement` makes a scope for the element's wrapper: not the
+    // strings'.)
+    let _ = scopes_before;
+    // Empty text is V8's own empty string: nothing asked of it. (The
+    // style's wrapper made first: that one is a scope's.)
+    env.eval("q.style");
+    let (scopes_before, handles_before) = (scopes(), handles());
+    assert_eq!(
+        env.eval("q.innerHTML + q.style.cssText + q.style.color"),
+        ""
+    );
+    assert_eq!((scopes(), handles()), (scopes_before, handles_before));
+}

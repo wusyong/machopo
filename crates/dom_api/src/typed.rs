@@ -1407,6 +1407,16 @@ pub trait OpFront: FrontTypes {
     /// (`FrontTypes::PendingString`).
     #[must_use = "what the operation couldn't give is finished after it"]
     fn ret_string(&mut self, value: &DomString) -> Option<Self::PendingString>;
+    /// Text computed for the call (`DomStr::Fresh`): as a string of the
+    /// DOM's made of it, unless the front end takes the text itself (no
+    /// string of the DOM's made, none looked up in a cache).
+    #[must_use = "what the operation couldn't give is finished after it"]
+    fn ret_fresh_string(
+        &mut self,
+        value: std::borrow::Cow<'static, str>,
+    ) -> Option<Self::PendingString> {
+        self.ret_string(&DomString::from(value.into_owned()))
+    }
     /// One of the thread's names (`DomStr::Name`), which live as long as
     /// the thread: as any string, unless the front keeps its own by number.
     #[must_use = "what the operation couldn't give is finished after it"]
@@ -6680,6 +6690,10 @@ pub enum DomStr<'gc> {
     Owned(DomString),
     InPlace(StrRef<'gc>),
     Name(NameId),
+    /// Text the function computed for this call (a serialization), or a
+    /// constant of the program's (a keyword): no string of the DOM's is
+    /// made of it, the front end takes the text (`DomStr::fresh`).
+    Fresh(std::borrow::Cow<'static, str>),
 }
 
 impl From<DomString> for DomStr<'_> {
@@ -6695,6 +6709,13 @@ impl<'gc> From<StrRef<'gc>> for DomStr<'gc> {
 }
 
 impl DomStr<'_> {
+    /// Text that is no string of the DOM's: a `String` computed for the
+    /// call (moved, not copied), or a constant (`&'static str`: nothing
+    /// allocated).
+    pub fn fresh(text: impl Into<std::borrow::Cow<'static, str>>) -> Self {
+        Self::Fresh(text.into())
+    }
+
     /// Always inlined: one call a string getter, into the front end's own
     /// inlined returns (left out of line, its call and the string moved
     /// to it cost a `getAttribute` some 40 instructions).
@@ -6704,6 +6725,7 @@ impl DomStr<'_> {
             Self::Owned(string) => op.ret_string(&string),
             Self::InPlace(string) => op.ret_string(&string.borrow()),
             Self::Name(id) => op.ret_name(id),
+            Self::Fresh(text) => op.ret_fresh_string(text),
         }
     }
 }
@@ -8669,6 +8691,7 @@ pub const PLAIN_OP_METHODS: &[&str] = &[
     "ret_i32",
     "ret_f64",
     "ret_string",
+    "ret_fresh_string",
     "ret_name",
     "ret_node",
     "ret_object",

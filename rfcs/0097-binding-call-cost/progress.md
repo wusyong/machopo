@@ -26,7 +26,7 @@
 | 4j-2 操作前讀成 Rust 值的參數型別（`fetch` 的 init、`postMessage`、keyframes…），連同卡在這些型別的 constructor、method、setter 和 static（決定 39） | 完成 | 2026-11-12 |
 | 4k 研究：一次呼叫多出來的成本一類一類拆開、和 Chrome 對照、列每條冷的路該呼叫的 V8 API（決定 41、42） | 完成 | 2026-11-12 |
 | 4k-A 回傳非整數的數字：直接設回傳值（決定 42） | 完成 | 2026-11-12 |
-| 4k-B 回傳現算的字串：不經過 `DomString`、`Box`、`V8Front`；fork 加從 callback info 借的 token | 還沒開始 | |
+| 4k-B 回傳現算的字串：不經過 `DomString`、`Box`、`V8Front`；fork 加從 callback info 借的 token | 完成 | 2026-11-12 |
 | 4k-C 會呼叫 script 的成員：`this` 和參數不登記 root、少開操作 | 還沒開始 | |
 | 4k-D 新的 wrapper：不登記 root、不經過 `V8Front` | 還沒開始 | |
 | 4k-E 非 ASCII 和要轉換的字串參數 | 還沒開始 | |
@@ -620,3 +620,26 @@
 - 測試：`dom_js` 的 `handlers::a_number_that_is_no_small_integer_is_returned_with_no_scope`（分數、浮點的誤差照舊、整數、-0、負的分數、很大的數、超過 31 bits 的 `unsigned long`、NaN：值正確、都不建 scope）；`a_constructor_is_given_the_info_alone` 的 `timeStamp` 那一項改成不建 scope。
 - mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4kA.toml`，3 個都抓到。
 - 跑過：`cargo test -p bindings -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt html/canvas/element dom/events hr-time`（3359 個結果都照預期）。
+
+**第 4k-B 段：回傳現算的字串**（2026-11-12，決定 42）：
+
+- fork（只改 Rust，`b718995`，還沒 push）：`String::new_from_utf8_in_callback`（`unsafe`：在 V8 的 callback 裡、handle 不活過 callback；和 `new_from_utf8` 走同樣的路：ASCII 當 one-byte、長的非 ASCII 用 simdutf 解、其餘 V8 的解碼器）；`third_party.toml` 的 `rev` 跟著改。
+- `bindings`：`InfoHandles`（`InfoState::handles`，借整個 info：借著時拿不到狀態）：`new_string`、`new_internalized_string`、`return_value`、`isolate`；`info_handles_for_testing`（debug build 數 `handles` 被呼叫幾次）；`soundness.md` 補一段（憑證從 scope 換成「借著 info」，新增方法的規則）。
+- `dom_api`：`DomStr::Fresh(Cow<'static, str>)` 和 `DomStr::fresh`（`String` 是搬過去、`&'static str` 不配置），`OpFront::ret_fresh_string`（預設照舊做成 `DomString`：wasm 和測試的 front 用預設）；33 處 `DomStr::Owned(DomString::from(…))` 改成 `DomStr::fresh(…)`（`style` 的值和 `cssText`、CSSOM 的各種 `cssText`、`innerHTML`、`outerHTML`、`getHTML`、canvas 的 12 個回傳關鍵字或序列化的 getter、`Range.toString`…）。
+- `dom_js`：`PendingString::Fresh`、`InfoOp::ret_fresh_string`（空的直接給 V8 的空字串）；`InfoFront::finish_string` 不再經過 `V8Front`：現算的文字和只被呼叫持有的 `DomString` 直接建字串；DOM 持有的建字串、做 weak handle（`StringCache::weak_of`，從 `make` 拆出來）、登記；名稱建 internalized 的字串、存 global（`front::keep_name`，從 `make_name` 拆出來）。太長的字串（`RangeError`）還是建 scope 丟（4k-F）。
+- 還沒改的：DOM 那一側做好 `DomString` 才交出來的結果（`textContent`、URL 的各部分、`select`、`history`…，`dom_api` 裡還有約 90 處）走「只被呼叫持有的 `DomString`」那條路：不建 scope、不進快取，但多一次 `DomString` 的配置。要改的是 `dom` 那些函式的回傳型別，逐個改，不在這一段。
+- `chrome-compare`（各三次取最小；ns 一次，括號是 Chrome 的倍數）：
+
+  | | Chrome | 4k-A | 這一段 |
+  | --- | ---: | ---: | ---: |
+  | `st.color`（`'red'`） | 47.4 | 113.5（2.39） | 81.8（1.73） |
+  | `c.innerHTML` | 42.0 | 114.6（2.73） | 92.9（2.21） |
+  | `c.textContent`（元素的） | 22.7 | 52.3（2.30） | 35.9（1.58） |
+  | `st.cssText` | 150.2 | 511.9（3.41） | 479.0（3.19） |
+  | `ctx.lineCap`（常數） | 55.1 | 46.6（0.85） | 19.3（0.35） |
+  | `n.tagName`、`nodeType`、`getAttribute`（沒動到的） | | 沒變 | |
+
+  `st.color` 的指令數 2192 → 1803。**驗收的 1.2 倍沒有到**：取樣裡 binding 自己的配置只剩約 2%（一次 malloc 和 free），剩下的在 DOM 和 CSS 那一側：`style.color` 照名稱找 property 找了三次（`css_property_for_attribute`、`LonghandId::from_name`、`Shorthand::from_name`，合計約 19%）加取值；`innerHTML` 和 `cssText` 是序列化本身；`textContent` 是先做成 `DomString`。這些不是 binding 的成本，要另外開題目。
+- 測試：`dom_js` 的 `strings::a_new_string_is_made_with_no_scope`（現算的、只被呼叫持有的 `DomString`、常數、短和長的非 ASCII（Latin-1、漢字、emoji）、DOM 持有的（第一次登記、第二次不再向 V8 要）、名稱：都不建 scope、向 V8 要一次、內容正確；現算的和常數不做 `DomString`（`fresh_strings` 的計數）；空的文字什麼都不要）。原有的三個測試原本用「建了 scope」證明走了新的 front，改成看 scope 加 `handles` 的次數（`env::slow_paths`）。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4kB.toml`，8 個都抓到。第一次 7 個：「現算的文字又做成 `DomString`」結果一樣、只多一次配置，沒有測試分辨得出來；加了 `fresh_strings` 的計數。
+- 跑過：`cargo test -p bindings -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項（`boundary` 的清單加 `INFO_HANDLES`：測試的計數，thread-local）、`cargo fmt --check`、`ci.py third-party`、`test.py wpt css/cssom dom/nodes domparsing html/canvas/element html/dom url`（90530 個結果都照預期）。

@@ -111,17 +111,28 @@ impl StringCache {
         string: &DomString,
     ) -> Option<(v8::Local<'s, v8::String>, v8::Weak<v8::String>)> {
         let local = new_string(scope, string)?;
+        let weak = Self::weak_of(scope, local, dead, string);
+        Some((local, weak))
+    }
+
+    /// A weak handle of `local`, `string`'s V8 string, whose finalizer
+    /// marks its entry dead in `dead` (`dead`): what `insert` takes.
+    pub fn weak_of(
+        isolate: &mut v8::Isolate,
+        local: v8::Local<'_, v8::String>,
+        dead: std::rc::Weak<RefCell<Vec<usize>>>,
+        string: &DomString,
+    ) -> v8::Weak<v8::String> {
         let key = string.addr();
-        let weak = v8::Weak::with_finalizer(
-            scope,
+        v8::Weak::with_finalizer(
+            isolate,
             local,
             Box::new(move |_| {
                 if let Some(dead) = dead.upgrade() {
                     dead.borrow_mut().push(key);
                 }
             }),
-        );
-        Some((local, weak))
+        )
     }
 
     /// `string`'s entry, its handle `weak` (`make`'s), the dead ones

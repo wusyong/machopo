@@ -50,9 +50,7 @@ pub(crate) fn media<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, EventTargetImpl>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::from(
-        cx.media_query_list_queries(this).to_css(),
-    )))
+    Ok(DomStr::fresh(cx.media_query_list_queries(this).to_css()))
 }
 
 /// The list's queries evaluated now, kept as its result: whether that

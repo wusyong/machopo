@@ -1265,16 +1265,21 @@ fn make_name<'s>(
         text.as_bytes(),
         v8::NewStringType::Internalized,
     )?;
-    let index = usize::try_from(id).expect("a name's number");
     let global = v8::Global::new(scope.scope(), string);
-    let (state, _) = scope.state_mut();
+    keep_name(scope.state_mut().0, id, global);
+    Some(string)
+}
+
+/// The name `id`'s V8 string, kept in the isolate's cache by the name's
+/// number and counted.
+pub(crate) fn keep_name(state: &mut State, id: NameId, string: v8::Global<v8::String>) {
+    let index = usize::try_from(id).expect("a name's number");
     let names = &mut state.caches.names;
     if names.len() <= index {
         names.resize_with(index.checked_add(1).expect("a name's number"), || None);
     }
-    names[index] = Some(global);
+    names[index] = Some(string);
     state.names_made = state.names_made.wrapping_add(1);
-    Some(string)
 }
 
 /// A dictionary's member's name as a property's key: the name's V8

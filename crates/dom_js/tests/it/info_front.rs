@@ -8,9 +8,9 @@ use crate::env::Env;
 /// `source`'s value, and how many scopes the info callbacks made
 /// evaluating it.
 fn scopes(env: &mut Env, source: &str) -> (String, u64) {
-    let before = bindings::info_scopes_for_testing().expect("a debug build");
+    let before = crate::env::slow_paths();
     let value = env.eval(source);
-    let made = bindings::info_scopes_for_testing().expect("a debug build");
+    let made = crate::env::slow_paths();
     (value, made.wrapping_sub(before))
 }
 

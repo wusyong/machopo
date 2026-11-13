@@ -3,6 +3,16 @@
 
 use bindings::V8PerIsolateData;
 
+/// The times the info callbacks asked V8 for what allocates, throws or
+/// runs script on this thread so far: the scopes they made
+/// (`bindings::StateInfo::with_scope`) and the times they asked for
+/// handles with none (`bindings::InfoState::handles`). A call that adds
+/// none was served from what V8 and the DOM already had.
+pub fn slow_paths() -> u64 {
+    bindings::info_scopes_for_testing().expect("a debug build")
+        + bindings::info_handles_for_testing().expect("a debug build")
+}
+
 /// Whether this run's V8 starts GCs at its own times (one of the stress
 /// flags in `MACHOPO_V8_FLAGS` that `test.py`'s matrix and fuzzer set: a
 /// marking almost all the time, compaction at every GC, GCs at allocation
@@ -224,6 +234,10 @@ impl Env {
 
     pub fn cached_strings(&mut self) -> usize {
         dom_js::cached_strings(self.data.isolate())
+    }
+
+    pub fn fresh_strings(&mut self) -> u64 {
+        dom_js::fresh_strings(self.data.isolate())
     }
 
     pub fn names_made(&mut self) -> u64 {

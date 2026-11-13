@@ -7,7 +7,7 @@
 
 use std::cmp::Ordering;
 
-use dom::{BoundaryPoint, DomString, NodeKind, NodeRef, Range};
+use dom::{BoundaryPoint, NodeKind, NodeRef, Range};
 use elise::Gc;
 use gfx::RectF;
 
@@ -521,9 +521,7 @@ pub(crate) fn to_string<'gc>(
 ) -> Result<DomStr<'gc>, ApiError> {
     let (start, end) = (cx.range_start(this), cx.range_end(this));
     if Gc::ptr_eq(start.0, end.0) && is_text(cx, start.0) {
-        return Ok(DomStr::Owned(DomString::from(substring(
-            cx, start.0, start.1, end.1,
-        ))));
+        return Ok(DomStr::fresh(substring(cx, start.0, start.1, end.1)));
     }
     let mut text = String::new();
     if is_text(cx, start.0) {
@@ -537,7 +535,7 @@ pub(crate) fn to_string<'gc>(
     if is_text(cx, end.0) {
         text.push_str(&substring(cx, end.0, 0, end.1));
     }
-    Ok(DomStr::Owned(DomString::from(text)))
+    Ok(DomStr::fresh(text))
 }
 
 /// `f` of `root`'s descendants, in tree order.

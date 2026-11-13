@@ -7,7 +7,7 @@
 //! An XML document's markup would be XML's (its parser and serializer),
 //! which machopo doesn't have: the members there are a `NotSupportedError`.
 
-use dom::{DomString, NodeKind, NodeRef, QualName, names};
+use dom::{NodeKind, NodeRef, QualName, names};
 
 use crate::exception::{DomException, ExceptionName};
 use crate::typed::DomStr;
@@ -64,7 +64,7 @@ pub(crate) fn inner_html<'gc>(
 ) -> Result<DomStr<'gc>, ApiError> {
     html_only(cx, this, "innerHTML")?;
     let markup = html::parser::serialize_children(cx, this, scripting_enabled(cx, this));
-    Ok(DomStr::Owned(DomString::from(markup)))
+    Ok(DomStr::fresh(markup))
 }
 
 /// `innerHTML`'s setter: `value` parsed with `this` as the context, and
@@ -102,7 +102,7 @@ pub(crate) fn outer_html<'gc>(
 ) -> Result<DomStr<'gc>, ApiError> {
     html_only(cx, this, "outerHTML")?;
     let markup = html::parser::serialize_node(cx, this, scripting_enabled(cx, this));
-    Ok(DomStr::Owned(DomString::from(markup)))
+    Ok(DomStr::fresh(markup))
 }
 
 /// `outerHTML`'s setter: nothing with no parent; a document parent is a
@@ -268,5 +268,5 @@ pub(crate) fn get_html<'gc>(
     };
     let markup =
         html::parser::serialize_children_with(cx, this, scripting_enabled(cx, context), shadows);
-    Ok(DomStr::Owned(DomString::from(markup)))
+    Ok(DomStr::fresh(markup))
 }

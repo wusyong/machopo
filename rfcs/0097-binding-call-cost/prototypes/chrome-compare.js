@@ -44,6 +44,11 @@ function run() {
   ctx.lineWidth = 1; time('lineWidth 1', N, (N) => { for (let i = 0; i < N; i++) { x = ctx.lineWidth; } });
   ctx.lineWidth = 1.5; time('lineWidth 1.5', N, (N) => { for (let i = 0; i < N; i++) { x = ctx.lineWidth; } });
   time('style.color red', N, (N) => { for (let i = 0; i < N; i++) { x = st.color; } });
+  time('c.innerHTML', N, (N) => { for (let i = 0; i < N; i++) { x = c.innerHTML; } });
+  time('c.textContent', N, (N) => { for (let i = 0; i < N; i++) { x = c.textContent; } });
+  time('ctx.lineCap', N, (N) => { for (let i = 0; i < N; i++) { x = ctx.lineCap; } });
+  time('st.cssText', N, (N) => { for (let i = 0; i < N; i++) { x = st.cssText; } });
+  time('n.tagName', N, (N) => { for (let i = 0; i < N; i++) { x = n.tagName; } });
   time('new Event', N, (N) => { for (let i = 0; i < N; i++) { x = new Event('x'); } });
   time('new MouseEvent init', 200000, (N) => { for (let i = 0; i < N; i++) { x = new MouseEvent('x', mi); } });
   const M = 200000;

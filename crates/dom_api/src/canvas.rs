@@ -18,8 +18,8 @@ use std::sync::Arc;
 use canvas::CanvasColorStop;
 use compositor_paint::{PaintFlags, PaintOp};
 use dom::{
-    CanvasGradient, CanvasPattern, CanvasRenderingContext2d, CanvasStyleObject, DomString,
-    ImageData, ImageForCanvas, NodeRef, Path2d, names,
+    CanvasGradient, CanvasPattern, CanvasRenderingContext2d, CanvasStyleObject, ImageData,
+    ImageForCanvas, NodeRef, Path2d, names,
 };
 use elise::Gc;
 use gfx::{Color, FillRule};
@@ -140,7 +140,7 @@ pub(crate) fn to_data_url<'gc>(
         }
         None => "data:,".to_owned(),
     };
-    Ok(DomStr::Owned(DomString::from(url)))
+    Ok(DomStr::fresh(url))
 }
 
 /// `toBlob(callback, type, quality)`: the bitmap as it is now
@@ -424,9 +424,7 @@ pub(crate) fn global_composite_operation<'gc>(
     this: Gc<'gc, CanvasRenderingContext2d>,
 ) -> Result<DomStr<'gc>, ApiError> {
     let mode = with_data(cx, this, |data| data.state().global_composite);
-    Ok(DomStr::Owned(DomString::from(context::composite_name(
-        mode,
-    ))))
+    Ok(DomStr::fresh(context::composite_name(mode)))
 }
 
 pub(crate) fn set_global_composite_operation<'gc>(
@@ -456,9 +454,9 @@ fn style<'gc>(
 ) -> Result<CanvasStyleRet<'gc>, ApiError> {
     let style = with_data(cx, this, |data| style_of(data.state(), target));
     Ok(match style {
-        CanvasStyle::Color(color) => CanvasStyleRet::String(DomStr::Owned(DomString::from(
-            css::canvas::serialize_canvas_color(color),
-        ))),
+        CanvasStyle::Color(color) => {
+            CanvasStyleRet::String(DomStr::fresh(css::canvas::serialize_canvas_color(color)))
+        }
         CanvasStyle::Gradient | CanvasStyle::Pattern => CanvasStyleRet::Object(
             cx.canvas_style_object(this, target)
                 .expect("a gradient or pattern style's object, in its slot"),
@@ -661,9 +659,7 @@ pub(crate) fn shadow_color<'gc>(
     this: Gc<'gc, CanvasRenderingContext2d>,
 ) -> Result<DomStr<'gc>, ApiError> {
     let color = with_data(cx, this, |data| data.state().shadow_color);
-    Ok(DomStr::Owned(DomString::from(
-        css::canvas::serialize_canvas_color(color),
-    )))
+    Ok(DomStr::fresh(css::canvas::serialize_canvas_color(color)))
 }
 
 /// Parsed as `fillStyle`'s colors are (`currentcolor` too); ignored
@@ -790,7 +786,7 @@ pub(crate) fn line_cap<'gc>(
         .iter()
         .find(|(_, c)| *c == cap)
         .map_or("butt", |(name, _)| name);
-    Ok(DomStr::Owned(DomString::from(name)))
+    Ok(DomStr::fresh(name))
 }
 
 /// Ignored unless one of `CanvasLineCap`'s values (WebIDL's enumeration
@@ -815,7 +811,7 @@ pub(crate) fn line_join<'gc>(
         .iter()
         .find(|(_, j)| *j == join)
         .map_or("miter", |(name, _)| name);
-    Ok(DomStr::Owned(DomString::from(name)))
+    Ok(DomStr::fresh(name))
 }
 
 /// Ignored unless one of `CanvasLineJoin`'s values.
@@ -1329,7 +1325,7 @@ pub(crate) fn font<'gc>(
     let font = with_data(cx, this, |data| {
         css::serialize_canvas_font(&data.state().font)
     });
-    Ok(DomStr::Owned(DomString::from(font)))
+    Ok(DomStr::fresh(font))
 }
 
 /// Whether the frame shows `canvas`'s document (Blink's canvas has a
@@ -1413,7 +1409,7 @@ fn keyword<T: PartialEq + Copy>(
         .iter()
         .find(|(_, v)| *v == value)
         .map_or(default, |(name, _)| name);
-    DomStr::Owned(DomString::from(name))
+    DomStr::fresh(name)
 }
 
 /// Setting a keyword attribute: what `value` names, if it is one of the
@@ -1491,7 +1487,7 @@ pub(crate) fn letter_spacing<'gc>(
     this: Gc<'gc, CanvasRenderingContext2d>,
 ) -> Result<DomStr<'gc>, ApiError> {
     let spacing = with_data(cx, this, |data| data.state().letter_spacing.clone());
-    Ok(DomStr::Owned(DomString::from(spacing)))
+    Ok(DomStr::fresh(spacing))
 }
 
 /// Ignored unless one length with a unit (`css::parse_canvas_spacing`); it
@@ -1514,7 +1510,7 @@ pub(crate) fn word_spacing<'gc>(
     this: Gc<'gc, CanvasRenderingContext2d>,
 ) -> Result<DomStr<'gc>, ApiError> {
     let spacing = with_data(cx, this, |data| data.state().word_spacing.clone());
-    Ok(DomStr::Owned(DomString::from(spacing)))
+    Ok(DomStr::fresh(spacing))
 }
 
 /// As `letterSpacing`.
@@ -1916,9 +1912,7 @@ pub(crate) fn image_smoothing_quality<'gc>(
     this: Gc<'gc, CanvasRenderingContext2d>,
 ) -> Result<DomStr<'gc>, ApiError> {
     let quality = with_data(cx, this, |data| data.state().image_smoothing_quality);
-    Ok(DomStr::Owned(DomString::from(
-        image::smoothing_quality_name(quality),
-    )))
+    Ok(DomStr::fresh(image::smoothing_quality_name(quality)))
 }
 
 /// `imageSmoothingQuality`'s setter: one of `ImageSmoothingQuality`'s
@@ -2202,9 +2196,9 @@ pub(crate) fn image_data_color_space<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, ImageData>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::from(color_space_name(
+    Ok(DomStr::fresh(color_space_name(
         cx.image_data_color_space(this),
-    ))))
+    )))
 }
 
 /// `createImageData(sw, sh, settings)`: transparent black pixels, as many

@@ -1,0 +1,68 @@
+# Stage 4k-B: a string V8 has no copy of is made by V8's string
+# constructor alone (`InfoHandles::new_string`, the fork's
+# `String::new_from_utf8_in_callback`), with no scope; text computed for
+# the call is carried out of the operation as it is (`DomStr::Fresh`).
+test = ["cargo", "test", "-q", "-p", "bindings", "-p", "dom_api", "-p", "dom_js", "-p", "dom_wasm"]
+timeout = 1800
+
+[[mutant]]
+name = "empty text asks V8 for a string"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if value.is_empty() {
+            K::note_empty(self.noted);
+            self.no_gc.ret().set_empty_string();
+            return None;
+        }
+        Some(PendingString::Fresh(value))'''
+to = '''        Some(PendingString::Fresh(value))'''
+
+[[mutant]]
+name = "a string only the call holds is cached"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            PendingString::String(string) if string.is_unique() => {'''
+to = '''            PendingString::String(string) if false && string.is_unique() => {'''
+
+[[mutant]]
+name = "a string the DOM holds isn't cached"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                handles.return_value(local.into());
+                self.info.state_mut().0.caches.strings.insert(&string, weak);'''
+to = '''                handles.return_value(local.into());
+                drop(weak);'''
+
+[[mutant]]
+name = "a cached string isn't the result"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                handles.return_value(local.into());
+                self.info.state_mut().0.caches.strings.insert(&string, weak);'''
+to = '''                self.info.state_mut().0.caches.strings.insert(&string, weak);'''
+
+[[mutant]]
+name = "a name's string isn't kept"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                handles.return_value(local.into());
+                front::keep_name(self.info.state_mut().0, id, global);'''
+to = '''                handles.return_value(local.into());
+                drop(global);'''
+
+[[mutant]]
+name = "a new string isn't the result"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            Some(string) => handles.return_value(string.into()),
+            None => self.throw_too_long(),'''
+to = '''            Some(_) => {}
+            None => self.throw_too_long(),'''
+
+[[mutant]]
+name = "a new string is made in a scope"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            PendingString::Fresh(text) => self.finish_new_string(&text),'''
+to = '''            PendingString::Fresh(text) => self.with_front(|front| {
+                front.finish_kept_as(front::Kept::String(DomString::from(text.into_owned())));
+            }),'''
+
+[[mutant]]
+name = "fresh text is a string of the DOM's"
+file = "crates/dom_api/src/typed.rs"
+from = '''            Self::Fresh(text) => op.ret_fresh_string(text),'''
+to = '''            Self::Fresh(text) => op.ret_string(&DomString::from(text.into_owned())),'''

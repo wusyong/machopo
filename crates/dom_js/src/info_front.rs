@@ -37,6 +37,8 @@ pub(crate) enum PendingString {
     String(DomString),
     /// A name's string, not made yet.
     Name(NameId, DomString),
+    /// Text computed for the call, or a constant: no string of the DOM's.
+    Fresh(std::borrow::Cow<'static, str>),
 }
 
 /// A node the operation couldn't give V8: what `InfoFront::finish_node`
@@ -588,6 +590,26 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
         })
     }
 
+    /// `text` as a new V8 string, the call's result.
+    #[inline]
+    fn finish_new_string(&mut self, text: &str) {
+        let mut handles = self.info.handles();
+        match handles.new_string(text) {
+            Some(string) => handles.return_value(string.into()),
+            None => self.throw_too_long(),
+        }
+    }
+
+    /// A string longer than V8's may be: a `RangeError`, the whole front
+    /// end's to throw.
+    #[cold]
+    #[inline(never)]
+    fn throw_too_long(&mut self) {
+        self.info.with_scope(|mut scope, _| {
+            crate::exception::throw_range_error(scope.scope(), "Invalid string length");
+        });
+    }
+
     /// A string argument that doesn't lend its text in place (not a
     /// string yet, not ASCII, not flat): converted or copied, as the whole
     /// front end does.
@@ -761,16 +783,40 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         }
     }
 
-    /// A string V8 had no copy of: made (and cached) now.
-    #[cold]
+    /// A string V8 had no copy of: made now, by V8's string constructor
+    /// alone, with no scope (Blink's `V8String`). Text computed for the
+    /// call, and a string of the DOM's only the call holds, are given and
+    /// not cached (their address goes with the call); a string the DOM
+    /// holds is cached by its address, a name by its number.
     #[inline(never)]
     fn finish_string(&mut self, pending: PendingString) {
-        self.with_front(|front| {
-            front.finish_kept_as(match pending {
-                PendingString::String(string) => front::Kept::String(string),
-                PendingString::Name(id, name) => front::Kept::Name(id, name),
-            });
-        });
+        match pending {
+            PendingString::Fresh(text) => self.finish_new_string(&text),
+            PendingString::String(string) if string.is_unique() => {
+                self.finish_new_string(&string.to_str());
+            }
+            PendingString::String(string) => {
+                let dead = self.info.state().0.caches.strings.dead();
+                let mut handles = self.info.handles();
+                let Some(local) = handles.new_string(&string.to_str()) else {
+                    return self.throw_too_long();
+                };
+                let weak =
+                    crate::strings::StringCache::weak_of(handles.isolate(), local, dead, &string);
+                handles.return_value(local.into());
+                self.info.state_mut().0.caches.strings.insert(&string, weak);
+            }
+            PendingString::Name(id, name) => {
+                let mut handles = self.info.handles();
+                // Internalized: a name is a property's key too.
+                let Some(local) = handles.new_internalized_string(&name.to_str()) else {
+                    return self.throw_too_long();
+                };
+                let global = v8::Global::new(handles.isolate(), local);
+                handles.return_value(local.into());
+                front::keep_name(self.info.state_mut().0, id, global);
+            }
+        }
     }
 
     /// A node with no wrapper: one made now, in an operation of its own;
@@ -1780,6 +1826,19 @@ impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
             .find(value)
             .is_some_and(|weak| self.no_gc.return_weak(weak));
         (!returned).then(|| PendingString::String(value.clone()))
+    }
+
+    /// The text itself is carried out of the operation: no string of the
+    /// DOM's is made of it, none looked up in the cache.
+    #[inline(always)]
+    fn ret_fresh_string(&mut self, value: std::borrow::Cow<'static, str>) -> Option<PendingString> {
+        if value.is_empty() {
+            K::note_empty(self.noted);
+            self.no_gc.ret().set_empty_string();
+            return None;
+        }
+        front::count(&self.caches.fresh_strings);
+        Some(PendingString::Fresh(value))
     }
 
     /// The name's V8 string, returned from its global; else made after

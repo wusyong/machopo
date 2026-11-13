@@ -85,7 +85,7 @@ pub(crate) fn blob_type<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Blob>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::from(cx.blob_data(this).type_())))
+    Ok(DomStr::fresh(cx.blob_data(this).type_().to_owned()))
 }
 
 /// File API's relative position of a `slice()` argument in a blob of

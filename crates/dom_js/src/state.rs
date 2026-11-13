@@ -134,6 +134,10 @@ pub(crate) struct Caches {
     /// operation that made it (no root, no operation after), for the
     /// tests.
     pub(crate) wrappers_ahead: Cell<u64>,
+    /// Results that were text carried out of the operation as it was
+    /// (`OpFront::ret_fresh_string`: no string of the DOM's made of it),
+    /// for the tests.
+    pub(crate) fresh_strings: Cell<u64>,
 }
 
 impl bindings::EmbedderHeapState for State {
@@ -223,6 +227,7 @@ pub(crate) fn install(isolate: &mut v8::Isolate) {
                 wrappers_made: Cell::new(0),
                 wrappers_wasted: Cell::new(0),
                 wrappers_ahead: Cell::new(0),
+                fresh_strings: Cell::new(0),
             },
             templates: (0..slots).map(|_| None).collect(),
             boilerplates: (0..slots).map(|_| None).collect(),
