@@ -46,17 +46,22 @@ unsafe extern "C" fn no_text_borrowed(
     }
 }
 
+/// `LentString::flags`' bits.
+const LENT: usize = 1;
+const ASCII: usize = 2;
+
 /// A V8 string whose text may be lent in place ([`LentString::ascii`]):
 /// from the first loan until it drops, V8's GCs abort.
 pub struct LentString<'s> {
     string: v8::Local<'s, v8::String>,
-    /// Whether it lent its text (counted in `BORROWED`).
-    lent: Cell<bool>,
-    /// Whether its characters were found ASCII, on a guarded isolate: a V8
-    /// string's characters never change (a GC may move them, or make it
+    /// `LENT`: whether it lent its text (counted in `BORROWED`). `ASCII`:
+    /// whether its characters were found ASCII, on a guarded isolate: a
+    /// V8 string's characters never change (a GC may move them, or make it
     /// thin, forwarding to the same ones), so later reads find where they
-    /// are and scan them no more.
-    ascii: Cell<bool>,
+    /// are and scan them no more. One word, not two bytes: a call's code
+    /// moves this by the word, and a word read after a narrower write of
+    /// it is one the CPU can't forward (some 15 cycles).
+    flags: Cell<usize>,
     /// The count is this thread's.
     _thread: PhantomData<*const ()>,
 }
@@ -68,8 +73,7 @@ impl<'s> LentString<'s> {
     pub fn new(string: v8::Local<'s, v8::String>) -> Self {
         Self {
             string,
-            lent: Cell::new(false),
-            ascii: Cell::new(false),
+            flags: Cell::new(0),
             _thread: PhantomData,
         }
     }
@@ -85,14 +89,14 @@ impl<'s> LentString<'s> {
     #[inline]
     pub fn ascii(&self, isolate: &v8::Isolate) -> Option<&str> {
         let chars = self.chars(isolate)?;
-        if !self.lent.get() {
+        if self.flags.get() & LENT == 0 {
             BORROWED.set(
                 BORROWED
                     .get()
                     .checked_add(1)
                     .expect("fewer than usize::MAX loans"),
             );
-            self.lent.set(true);
+            self.flags.set(self.flags.get() | LENT);
         }
         // SAFETY: the characters live while no GC runs (`chars`), which
         // the count makes so until `self` drops, past the borrow of it.
@@ -149,12 +153,34 @@ impl<'s> LentString<'s> {
         self.chars(isolate).is_some()
     }
 
+    /// `string` if `ascii` would lend its text (as `new`, then `lends`),
+    /// known ASCII from the start. Made where it is taken, after the
+    /// check: a string made first and marked through a reference is
+    /// written in pieces (its handle, then a flag), and a caller that then
+    /// moves it whole reads what no one store wrote, which the CPU can't
+    /// forward (some 15 cycles a string argument).
+    #[inline(always)]
+    pub fn lending(string: v8::Local<'s, v8::String>, isolate: &v8::Isolate) -> Option<Self> {
+        Self::text_lends(string, isolate).then_some(Self {
+            string,
+            flags: Cell::new(ASCII),
+            _thread: PhantomData,
+        })
+    }
+
+    /// Whether `string`'s text can be lent in place: a flat one-byte ASCII
+    /// string of an isolate whose GCs check loans (what `chars` finds of
+    /// one not yet known).
+    fn text_lends(string: v8::Local<'s, v8::String>, isolate: &v8::Isolate) -> bool {
+        Self::new(string).chars(isolate).is_some()
+    }
+
     /// Its ASCII characters in place: valid while no GC runs. Found ASCII
     /// once (`lends`, before the operation), they are found again with no
     /// scan (Blink reads a string's characters once it knows them).
     #[inline]
     fn chars(&self, isolate: &v8::Isolate) -> Option<*const str> {
-        let known = self.ascii.get();
+        let known = self.flags.get() & ASCII != 0;
         if !known && isolate.get_data(GUARDED_SLOT).is_null() {
             return None;
         }
@@ -169,7 +195,7 @@ impl<'s> LentString<'s> {
             if !chars.is_ascii() {
                 return None;
             }
-            self.ascii.set(true);
+            self.flags.set(self.flags.get() | ASCII);
         }
         // SAFETY: ASCII is UTF-8: these characters, or the same ones moved
         // or forwarded to (`ascii`'s field), were found ASCII.
@@ -180,7 +206,7 @@ impl<'s> LentString<'s> {
 impl Drop for LentString<'_> {
     #[inline]
     fn drop(&mut self) {
-        if self.lent.get() {
+        if self.flags.get() & LENT != 0 {
             BORROWED.set(BORROWED.get().saturating_sub(1));
         }
     }

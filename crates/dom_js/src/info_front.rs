@@ -590,8 +590,8 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
         &self.noted
     }
 
-    /// `f` of the whole front end, a scope made for it: what allocates,
-    /// throws or runs script.
+    /// `f` of the whole front end, a scope made for it: what runs script
+    /// after the member's operation (its custom element reactions).
     #[cold]
     #[inline(never)]
     fn with_front<R>(
@@ -850,8 +850,6 @@ impl<'s, K: InfoKind<'s>> DictFront for InfoFront<'s, K> {
 }
 
 impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
-    /// A dictionary's members are read by the whole front end (a getter
-    /// may run script), all in the one scope made for them.
     /// The whole front end, in a scope made for the call: script runs
     /// between its operations.
     /// (As `with_front`, but no cold path: it is the whole of such a
@@ -865,6 +863,8 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         })
     }
 
+    /// A dictionary's members are read in one scope made for them (a
+    /// getter may run script), on what has their reads alone.
     fn reading<V: dom_api::typed::ReadDict<Self>>(&mut self, reads: V) -> V::Out {
         self.with_scoped(|scoped| reads.read(scoped))
     }
@@ -931,11 +931,10 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     #[inline(always)]
     fn string_arg(&mut self, index: usize) -> Option<ArgString<'s>> {
         let value = K::arg(&self.info, index);
-        if let Some(string) = v8::machopo::as_string(value) {
-            let string = bindings::LentString::new(string);
-            if string.lends(self.info.isolate()) {
-                return Some(ArgString::lent(string));
-            }
+        if let Some(string) = v8::machopo::as_string(value)
+            && let Some(string) = bindings::LentString::lending(string, self.info.isolate())
+        {
+            return Some(ArgString::lent(string));
         }
         self.converted_string_arg(index)
     }
@@ -1094,7 +1093,8 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     /// The name only peeked at, with the isolate alone.
     #[inline(always)]
     fn foresee_element(&mut self, name: &ArgString<'s>) -> (Option<NameId>, usize) {
-        front::foresee_element(self.info.isolate(), name)
+        let (id, interface) = front::foresee_element_words(self.info.isolate(), name);
+        (NameId::try_from(id).ok(), interface)
     }
 
     /// A number that is no Smi: a heap number, which V8's return value

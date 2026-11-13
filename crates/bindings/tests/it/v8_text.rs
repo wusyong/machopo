@@ -90,6 +90,51 @@ fn a_string_is_scanned_for_ascii_once() {
     assert_eq!(bindings::ascii_scans_for_testing().unwrap() - scans, 3);
 }
 
+/// `lending` is `new` and `lends` in one: a string that would lend its
+/// text, known ASCII from the start (scanned once, by `lending`), lending
+/// none until it is read and counted once; nothing for a string that
+/// lends none, or on an isolate that checks no loans.
+#[test]
+fn a_string_taken_lending_is_scanned_once_and_lends_as_any() {
+    let mut data = V8PerIsolateData::new();
+    let isolate = data.isolate();
+    v8::scope!(let scope, isolate);
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let before = borrowed_texts();
+    let scans = bindings::ascii_scans_for_testing().expect("a debug build");
+    let string = LentString::lending(eval(scope, "'taken-lending'"), scope).expect("it lends");
+    assert_eq!(borrowed_texts(), before, "taking it lends nothing");
+    assert!(string.lends(scope));
+    assert_eq!(string.ascii(scope), Some("taken-lending"));
+    assert_eq!(string.ascii(scope), Some("taken-lending"));
+    assert_eq!(bindings::ascii_scans_for_testing().unwrap() - scans, 1);
+    assert_eq!(borrowed_texts(), before + 1);
+    drop(string);
+    assert_eq!(borrowed_texts(), before);
+    for source in [
+        "'文字'",
+        "'caf\\u00e9'",
+        "'cons-string-' + String.fromCharCode(97).repeat(20)",
+    ] {
+        assert!(
+            LentString::lending(eval(scope, source), scope).is_none(),
+            "{source}"
+        );
+    }
+    assert_eq!(borrowed_texts(), before);
+}
+
+/// As `an_unguarded_isolate_lends_nothing`, taken with `lending`.
+#[test]
+fn an_unguarded_isolates_string_isnt_taken_lending() {
+    bindings::initialize();
+    let mut isolate = v8::Isolate::new(v8::CreateParams::default());
+    v8::scope!(let scope, &mut isolate);
+    let string = v8::String::new(scope, "ascii").unwrap();
+    assert!(LentString::lending(string, scope).is_none());
+}
+
 #[test]
 fn another_string_lends_nothing() {
     let mut data = V8PerIsolateData::new();

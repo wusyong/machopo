@@ -1,117 +1,141 @@
 # RFC 0097：binding 每次呼叫的成本往 Chrome 靠
 
 - 開始日期：2026-11-11
-- 狀態：🚧 已排程：2026-11-11
+- 狀態：✅ 已完成：2026-11-13
 - 細節：`details.md`
-- 對 Chrome 的收尾量測（整份數字）：`measurements.md`
+- 進度、驗收、做過的檢查：`progress.md`
+- 對 Chrome 的收尾量測（整份數字、逐條指令的對照）：`measurements.md`
 
 ## 摘要
 
-JS 呼叫一個 DOM 成員，machopo 在 V8 的地板之上自己的部分約是 Chrome 的三倍（最簡單的 getter 約 19 對 6 個 cycle），有字串參數的差得更多。這份先用原型一項一項量，再決定做哪幾項。量完做兩項：字串參數已經是字串就不轉換；front 重新設計成只拿 V8 給 callback 的 info，階段之間傳的東西是成員自己的區域變數，不再有每次呼叫都建、所有成員共用的結構（Blink 產生的 callback 的樣子）。量過不做的：V8 在 DOM 的操作裡配置（三條規則用 TLA+ 模型驗證過，留著）、最近查過的字串的快取、external string、事件派發。
+JS 呼叫一個 DOM 成員，machopo 在 V8 的地板之上自己的部分開始時約是 Chrome 的三倍（最簡單的 getter 約 19 對 6 個 cycle），有字串參數的差得更多。這份先用原型一項一項量，再照數字做：
+
+- 字串參數已經是字串就不轉換。
+- **每個成員的 V8 callback 只拿 V8 給它的 `FunctionCallbackInfo`**（Blink 產生的 callback 的樣子）：不建 rusty_v8 的 scope，沒有每次呼叫都建、所有成員共用的結構；階段之間傳的東西是成員自己的區域變數，由回傳型別帶出操作。要 V8 配置、丟例外、執行 script 的地方才當場建 scope，而且只呼叫那件事該呼叫的 V8 API。
+- 量到落後 Chrome 的冷路徑一條一條補：dictionary 的成員名稱、沒有 wrapper 的節點、不是 ASCII 的字串參數、回傳一串名稱、會呼叫 script 但這次沒跑到 script 的成員。
+
+做完時（`measurements.md`）：對 Chrome 量的 63 項裡 machopo 比較快或一樣的 42 項，1.3 倍以內的 12 項，超過的 9 項（三個最簡單的 getter 和 setter，其餘是 DOM 那一側的序列化和解析、建 wrapper）。帶字串參數的成員追上了（`getAttribute` 0.78 倍、`setAttribute` 0.63 倍）；最熱的 getter 還是 Chrome 的 1.3 到 1.35 倍（`nodeType` 102.5 對 66.9 條指令）：剩下的差逐條列在 `measurements.md`，一半是寫法和 elise 的 API 還能拿掉的，一半是和 Blink 設計不同的地方。
+
+量過不做的：V8 在 DOM 的操作裡配置（三條規則用 TLA+ 模型驗證過，留著）、最近查過的字串的快取、external string、unwrap 不比型別。沒有做完的：V8 那一側還有兩個 front（會跑 script 的呼叫在另一個上面跑），之後另開 RFC 併成一個（決定 46）。
 
 ## 動機
 
-**現況**（2026-11-11，Linux、AMD Ryzen AI 9 HX 370；量法和完整的數字在 `details.md` 的「2026-11-11 的量測」）：
+**開始時的狀況**（2026-11-11，Linux、AMD Ryzen AI 9 HX 370；量法和完整的數字在 `details.md` 的「2026-11-11 的量測」）：
 
-- Speedometer 取樣的 bindings 那一類 machopo 33 ms、Chrome 6 ms（每個 iteration，20 個 suite 合計；`docs/performance-gaps.md`）；字串參數的成本有一部分算在 DOM（名稱和值的查找約 9 ms）。
+- Speedometer 取樣的 bindings 那一類 machopo 33 ms、Chrome 6 ms（每個 iteration，20 個 suite 合計）；字串參數的成本有一部分算在 DOM（名稱和值的查找約 9 ms）。
 - 每次呼叫（blink-perf 換算，ns，machopo / Chrome）：`nodeType` 6.4 / 3.5，`firstChild` 7.4 / 4.2，`id` 14.0 / 8.3，`getAttribute` 31.4 / 21.1，`id = …` 44.2 / 27.9，`setAttribute` 60.1 / 42.8，`getElementById` 38.2 / 17.4，`createElement` 79.4 / 55.4。`bench.py calls`：`nodeType` 153 條指令、30 cycle，其中 V8 呼叫 API callback 的地板約 50 條、11 cycle；`dispatchEvent` 3497 條、727 cycle。
-- 一次呼叫現在分三段（`dom_js` 的 `front.rs`）：操作之前轉參數、預先建新物件的 wrapper；操作裡 unwrap、呼叫 DOM，V8 不能配置；操作之後把「留著的」結果（新的字串、沒有 wrapper 的節點、放不進 Smi 的數字）變成 V8 的。跨段的東西放在 `Call`（7 個欄位，每次呼叫都清一遍、結束時檢查要不要釋放）。
+- 一次呼叫分三段（`dom_js` 的 `front.rs`）：操作之前轉參數、預先建新物件的 wrapper；操作裡 unwrap、呼叫 DOM，V8 不能配置；操作之後把「留著的」結果（新的字串、沒有 wrapper 的節點、放不進 Smi 的數字）變成 V8 的。跨段的東西放在每次呼叫都建的 `Call`（7 個欄位，每次清一遍、結束時檢查要不要釋放），外面再包 rusty_v8 每次 callback 建的 `CallbackScope`。
 - V8 不能在操作裡配置，是因為它一配置就可能 scavenge、開始或收尾 major GC，而 elise 不掃 stack：操作裡只在 stack 上的物件會被漏標。Blink 沒有這個限制（Oilpan 保守地掃 stack），生成的 callback 只有 receiver、參數的轉換和 `ReturnValue`。
-- 以前做過的一輪（RFC 0067 每個成員一條有型別的路、RFC 0085 第 4 段的 getter 的輕的路）之後剩下的：建 `V8Front` 和 `Call`、rusty_v8 每次 callback 建的 `CallbackScope`、unwrap 的型別比對（RFC 0085 決定 14 延後的那一項）、字串參數每次重新查表。
 
-**目標**：
+**目標**：知道每一項各佔每次呼叫的多少，照數字決定做哪幾項；做完之後常見的成員每次呼叫的成本接近 Chrome 的。目標是 binding 的成本，不是 Speedometer 的分數（決定 20）；第 4 段起每一段的驗收是那個呼叫在對 Chrome 的腳本裡不慢超過 1.2 倍（決定 42）。
 
-- 知道每一項各佔每次呼叫的多少（原型，`bench.py calls` 的指令數和 cycle），照數字決定做哪幾項。
-- 做的那幾項之後，常見的成員（getter、帶字串參數的、建節點的、派發事件的）每次呼叫的成本接近 Chrome 的。目標的數字在第 1 段之後定。
-
-**要解決的 `docs/limitations.md` 的限制**：無（`docs/performance-gaps.md` 的「可以開 RFC 的方向」的 DOM 和 bindings 那一條裡，binding 每次呼叫的固定成本）。
+**要解決的 `docs/limitations.md` 的限制**：無（`docs/performance-gaps.md` 的 DOM 和 bindings 那一條裡，binding 每次呼叫的固定成本）。
 
 **不在範圍內**：
 
-- 操作可以巢狀（DOM 做到一半呼叫 script 而不結束操作）：要把 DOM 的狀態改成共享借用下可變，三條規則也要重新設計。事件派發那條路先量，值得的話另寫。
+- 操作可以巢狀（DOM 做到一半呼叫 script 而不結束操作）。
 - 保守地掃 stack：見「理由和其他做法」。
-- DOM 本身的資料怎麼放（屬性的 `HeapVector`、名稱表）：`docs/performance-gaps.md` 的 DOM 那一條。這份只處理字串怎麼在 V8 和 DOM 之間過去。
-- wasm 的 front（`dom_wasm`）：成員的實作共用，但它的呼叫路徑不在這份量。
+- DOM 本身的資料怎麼放（屬性的 `HeapVector`、名稱表）、序列化和解析。這份只處理 JS 和 DOM 之間怎麼過去。
+- wasm 的 front（`dom_wasm`）：成員的實作共用，它的呼叫路徑不在這份量。
 
 ## 設計概要
 
 對網頁沒有看得到的變化。對改 binding 的人：
 
-- 成員照舊寫成對一個 front 做事（`dom_api` 的 `Front`、`OpFront`），JS 和 wasm 共用。
-- 一次呼叫從三段變成兩段：**操作之外**只做可能執行 script 的參數轉換（物件當字串或數字用、字典、可迭代的），參數本來就是字串、數字、節點、函式時這一段是空的；**操作裡**做其他全部，包括需要 V8 配置的結果（新的 wrapper、字串、陣列）當場建。「操作之後」那一段沒有了。
-- 會執行 script 的 V8 呼叫照舊不能在操作裡（型別照舊擋住：操作裡拿到的 V8 的能力不含執行 script）。
+- 成員照舊寫成對一個 front 做事（`dom_api` 的 `Front`、`OpFront`），JS 和 wasm 共用同一份 `TypedMember::call`。
+- V8 那一側每個成員的呼叫從 `InfoFront` 開始（`dom_js` 的 `info_front.rs`）：它只有 V8 的 callback info。一次呼叫照舊是「操作之外轉參數、操作裡做事、操作之後把給不出去的結果做完」，但每一段只在需要時才付錢：參數本來就是字串、數字、節點、函式時第一段不呼叫 V8；結果當場給得出去（數字、布林、已有 wrapper 的節點、快取裡的字串）時沒有第三段。
+- 會執行 script 的 V8 呼叫照舊不能在操作裡（型別照舊擋住：操作裡拿到的 V8 的能力不含配置和執行 script）。
+- 新的 `Front` 方法：`InfoFront` 和 `WholeFront` 沒實作、成員的呼叫又走得到時，build 會失敗（`FrontTypes::STUBS`），不是到執行時才 panic。
 
 ## 詳細設計
 
-各項是候選，第 1 段量過才決定（待決定 2）。
+現在的程式怎麼組成寫在 `crates/dom_js/README.md` 的「一次呼叫」和 `crates/dom_api/README.md`；`unsafe` 的論證在 `crates/bindings/soundness.md`。這裡寫設計和理由。
 
-### V8 在操作裡配置
+### 只拿 callback 的 info
 
-現在 marking 只在安全點（兩個操作之間）開始和收尾，那時 stack 上沒有裸指標。放寬成 V8 可以在操作裡配置之後，V8 的 scavenge、major GC 的開始和收尾都可能發生在操作裡。照 elise 的 `tla/unified` 模型加上這些（`tla/Unified.tla`、`tla/check.py`；結果在 `details.md` 的「模型」），要三條規則：
+V8 給 callback 的只有一個指標（`FunctionCallbackInfo`）：isolate、`this`、參數、回傳值的位置都從它算。Blink 產生的 callback 只收它，其餘是那個函式的區域變數，用到的才產生（`details.md` 的「Blink 產生的 callback 和 machopo 產生的差在哪」）。
 
-1. **在操作裡被要求開始 marking 時，elise 的快照延到操作結束（下一個安全點）**。延後期間 barrier 和 black allocation 還沒開，V8 交過來的物件只排隊、不掃描（掃了之後被寫入的邊沒有 barrier）。worker 的 concurrent marking 照舊，只是晚一個操作開始。
-2. **V8 的收尾停頓發生在操作裡時，這一輪把所有 old 的物件標成活的**（標記、掃描，JS 的邊照樣交給 V8），不釋放任何 DOM 物件。只是不 sweep 不夠：沒標到的物件指向的 wrapper 會被 V8 收掉。
-3. **在操作裡建 wrapper 時，V8 正在 marking 的話把那個節點標記起來**。marking 期間新建的 wrapper 是黑的，V8 不再掃它、不會把節點交過來。rusty_v8 的 fork 現在刻意跳過這個 barrier（`heap-write-barrier.cc` 的 `MarkingSlowFromCppHeapWrappable`：「wrap 的時候一定已經標過」，在現在的規則下成立）。
+- `bindings` 的 `StateInfo`（function 的）、`StateIndexInfo`、`StateNameInfo`（interceptor 的）包著 info，trampoline 是 V8 自己的 callback（rusty_v8 的 `builder_raw`），不建 `CallbackScope`。info 的型別參數記著 V8 檢查過什麼：`Signed` 的才有 `receiver()`（function 有 signature），所以「不讀 map 就 unwrap」只會從 V8 檢查過的 `this` 做出來。
+- 只用 isolate 就能做的當場做：unwrap、回傳數字和布林、已有 wrapper 的節點、快取裡的字串、原地讀字串參數。rusty_v8 的 fork 為此加了幾個只收 isolate 或 callback 的入口（讀 info 的欄位、`String::new_from_utf8_in_callback`、`Context::current_in_callback`、`Local::new_in_callback`、`clone_object_in_callback`、`SealedLocal::unseal_in_callback`、`TracedSlot::get_in_callback`、cached getter 和 call handler 收原始的 callback），都只改 Rust，清單在 fork 的 `README.machopo.md`。
+- 要 V8 配置、丟例外、轉換參數的當場建 scope（`StateInfo::with_scope`，量到 27 條指令），在 `front.rs` 的 `Scoped` 上做：它只有 scope、參數、回傳值，沒有要留到之後的東西。
+- **階段之間傳的東西是成員的區域變數**：操作裡給不出去的結果由回傳型別帶出來（`RetType::Pending`：`PendingString`、`PendingNode`、`f64`、root 和 interface），操作後交給 `finish_string`、`finish_node`、`finish_number`、`finish_object`；一定會建新節點的成員在操作前建好 wrapper（`RetType::Prepared`）。回傳布林的成員沒有這些變數。callback、`any`、rest 這類參數就是參數的 handle。
 
-V8 的 scavenge 在操作裡是安全的（協定上）：它只丟沒人用的 wrapper、重設節點指向它的參照，不動 DOM 物件。
+### 冷的路只呼叫它該呼叫的
 
-規則做在 elise（`Heap` 知道有沒有「允許 engine 配置的操作」在進行）和 `bindings`（`unified_heap` 的 wrap）；先改 elise 的模型，再改程式。`crates/bindings/soundness.md` 要重寫的：scavenge 在操作裡重設節點的 JS 邊（現在的論證是「scavenge 只在兩個操作之間」）、`NoGc` 這個名字和它給的能力（之後是「不執行 script」）。
+4k 的研究把「一次呼叫多出來的成本」一類一類拆開（決定 41、42）：scope 本身 27 條，scope 加完整的 front 62 條，讀的操作 20、寫的操作 44，一個 root 的登記和釋放約 80 到 110，回報 heap 的大小 22。之後照和 Chrome 的差距分段做：
 
-### front 只拿 callback 的 info
+- **dictionary**：成員名稱是 `dom` 的固定名稱表裡的名稱（`dictionary_members.txt`，`MemberName` 是 `NameId`），key 從名稱的 V8 字串的快取拿（internalized），不每次建字串（決定 40）。
+- **沒有 wrapper 的節點**：是 callback 的 realm 的就從那個 realm 的 boilerplate 複製一份（`clone_object_in_callback`），不建 scope。
+- **字串參數**：借不出去的（不是 ASCII、cons）只用 isolate 複製；平的 Latin-1 原地讀、用 simdutf 轉成 UTF-8。
+- **回傳一串名稱**（`getAttributeNames`）：名稱照編號給，V8 字串從 isolate 的名稱快取拿。
+- **會呼叫 script 的成員**：可以多宣告一個「先試」的普通函式（`#[first(..)]`），在一個操作裡跑，回「做完了」或「這次需要 script」（走訪沒有 filter 時不跑 script）；需要時才整個交給會跑 script 的 front（決定 43）。
+- **要找別的 realm 的 window 的成員**：操作前建一個 scope 問 V8 那個 context。
 
-V8 給 callback 的只有一個指標（`FunctionCallbackInfo`）：isolate、`this`、參數、回傳值的位置都從它算。Blink 產生的 callback 只收它，其餘是那個函式的區域變數，用到的才產生（`details.md` 的「Blink 產生的 callback 和 machopo 產生的差在哪」）。machopo 每次呼叫建 rusty_v8 的 scope、參數的包裝、`V8Front` 和一個所有成員共用的 `Call`（7 個欄位），冷的路拿著它們的位址，編譯器每次都得寫進記憶體。
+### 兩個 front 和三層 trait
 
-- **第 3 段**：新的 front 只有 info 和一格「操作後才做完的結果」。isolate、receiver、參數、回傳值當場從 info 讀；unwrap、回傳數字、已有 wrapper 的節點、快取裡的字串、原地讀字串參數只用 isolate；要配置、丟例外、執行 script 的路當場建一個 scope、用完就丟，交給原本的 `V8Front`，在 inline 之外。不改 `Front`、`OpFront` 和產生器：跑的是同一份成員的程式。編譯時照成員的宣告決定走哪一個 front：參數是字串、節點、數字、布林，結果是數字、布林、字串、節點、`undefined` 的走新的。
-- **第 4 段**：階段之間傳的東西改成有型別的回傳值（`RetType::prepare`、`give` 回傳它準備的和還沒做完的，`finish` 拿到它；callback、rest 這類參數直接回傳 handle，像字串和節點），產生器把它們接成成員的區域變數。其餘的成員搬到新的 front，原本的 `V8Front` 和 `Call` 拿掉。沒有這一步，新的 front 要涵蓋全部成員就得把共用的欄位加回來。
+- `InfoFront`：每個成員的呼叫開始的地方。
+- `WholeFront`（`front.rs`）：整個呼叫在一個 scope 裡跑。只有會跑 script 的呼叫用它：`Front::whole` 交過來的成員、custom element 的 reaction、跨 origin 的屬性的成員（getter 要先進 receiver 的 realm）、legacy caller、iterator 的 pairs。它是 `Scoped` 加上呼叫期間留著的東西（`Call`：準備好的 wrapper、window、拿到的 callback、script 丟的例外）。
+- `dom_api` 的 trait 照「誰需要」分三層：`DictFront`（讀 dictionary 的成員和丟例外；`Scoped` 只實作它，所以讀 dictionary 的程式碰不到別的方法）← `Front` ← `ScriptFront`（呼叫 listener、filter、observer、custom element 的 callback；只有會跑 script 的 front 實作，`WholeCall::run` 要它）。
+- **漏掉的方法編不過**：`Front`、`OpFront` 裡會 panic 的預設實作第一行是 `const { assert!(Self::STUBS, ..) }`。只綁一部分成員的 front（wasm 的、named property 的、測試的）把 `FrontTypes::STUBS` 設成 true；`InfoFront`、`WholeFront`、`Scoped` 設成 false，成員的呼叫走得到它們沒實作的方法時，那個預設實作替它們產生程式的當下 build 失敗。檢查在單態化之後：`cargo check` 看不到，`cargo build`、`cargo test` 才看得到。原本用的是每個型別標一個 `PLAIN`、再照原始碼的文字檢查，所有成員都搬到新的 front 之後刪掉了（決定 44、45）。
+- 沒有併成一個 front：4m-3 量到換殼不改變這些路的指令數，併起來要動 33 個會跑 script 的成員的執行路徑。之後另開 RFC（決定 46，「之後的可能」）。
 
 ### 字串
 
-- 進來：純 ASCII 的 V8 字串現在不複製（借用字元），但每次都要拿字元去查名稱表或值的表。候選：讓 V8 的字串記住它對應的 DOM 字串或名稱（V8 的 external string，或 internalized 字串的位址對名稱的快取）。要 fork 支援。
-- 出去：快取裡沒有的字串現在複製一份給 V8、加 weak handle、放進快取。候選：external string 直接指向 DOM 的字串。
+- 進來：參數本來就是字串時不呼叫 `ToString`（決定 7、8）。平的 one-byte ASCII 字串在操作裡原地借字元（`bindings::LentString`），借出期間 V8 的 GC 會 abort。`LentString` 在檢查通過的地方才建出來（`lending`）、旗標是一個字：先建再透過參照改旗標的寫法，結構被分開寫入、再整個搬走，CPU 不能 forward，每個字串參數多十幾個 cycle（收尾時在建節點的頁上量到的退步，`measurements.md`）。
+- 出去：DOM 的字串對 V8 字串的快取照舊（`StringCache`，照位址）；只有這次呼叫拿著的字串（`DomStr::Fresh`）不進快取。名稱的 V8 字串每個 isolate 做一次。
+- 量過不做：external string（要 V8 的 sandbox 才值得，決定 7）、最近查過的字串的快取。
 
-### 事件派發回 JS
+### V8 在操作裡配置（模型驗證過，沒有做）
 
-`dispatchEvent` 3497 條指令。先拆開量：結束和重開操作、登記 root、`call_listener`、建事件的 wrapper 各佔多少，再看有沒有不動「操作不能巢狀」就能省的。
+要放寬成 V8 可以在操作裡配置，V8 的 scavenge、major GC 的開始和收尾都可能發生在操作裡。照 elise 的 `tla/unified` 模型加上這些（`tla/Unified.tla`、`tla/check.py`；結果在 `details.md` 的「模型」），要三條規則：
 
-### unwrap 不比型別
+1. 在操作裡被要求開始 marking 時，elise 的快照延到操作結束。
+2. V8 的收尾停頓發生在操作裡時，這一輪把所有 old 的物件標成活的，不釋放任何 DOM 物件。
+3. 在操作裡建 wrapper 時，V8 正在 marking 的話把那個節點標記起來。
 
-signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量過約 1 到 2 個 cycle）。排最後，和外殼那一項一起看。
+三條在模型上成立、各拿掉一條有反例。決定 6 先不做：只拿 info 的 front 做完之後，「操作之後」那一段只剩真的要配置的結果才付，放寬能再省的不多，而它動的是 GC 最容易出錯的地方。要做時還要決定規則 2 用「整個 old 當成活的」還是保守地掃 stack（「之後的可能」）。
 
 ### 測試
 
-- 第 1 段的原型不合併，只有量測。
-- 實作的每一項：行為由現有的 `dom_js`、`bindings` 的測試和 WPT 守著；優化本身用計數守（例如「這個成員的呼叫沒有建 scope」「沒有留著的結果」），照 `docs/test-gaps.md` 的「沒有計數守著的優化」的做法。
-- V8 在操作裡配置：elise 的模型先改（三條規則各拿掉一條的反例）；elise 的整合測試（操作裡開始、操作裡收尾、操作裡 wrap）；`bindings` 的 `unified_heap` 測試；結果看 GC 什麼時候標的測試照 `docs/testing.md` 重複跑。merge 之後手動開始 CI 的 `gc.yml`。
-- mutation test 照 `docs/testing.md`。
+- 行為由 `dom_js`、`dom_api`、`bindings` 的測試和 WPT 守著。
+- 優化本身用計數守：info 的 callback 建了幾個 scope、幾個 handle（`bindings::info_scopes_for_testing`、`info_handles_for_testing`，`dom_js` 測試的 `env::slow_paths`），wrapper、名稱字串、轉換各做了幾次。守不住的記在 `docs/test-gaps.md`。
+- 每一段的 mutation test 的 spec 在這個資料夾（`mutants-*.toml`），結果在 `progress.md`。
 
 ### 分階段
 
 | 段 | 內容 |
 | --- | --- |
-| 1 | 原型和量測（不合併）：每一項單獨做最小的原型，`bench.py calls` 量指令數和 cycle；V8 在操作裡配置的原型另外量規則 2 多久發生一次、停頓多長 |
+| 1 | 原型和量測（不合併）：每一項單獨做最小的原型，量指令數和 cycle |
 | 2 | 字串參數已經是字串就不轉換（決定 7、8） |
 | 3 | front 只拿 callback 的 info：參數和結果單純的成員（決定 17、18） |
-| 4 | 階段之間傳有型別的值，其餘的成員搬到新的 front，拿掉 `V8Front` 和 `Call`（決定 17、22）；4a 到 4g |
+| 4a 到 4j | 階段之間傳有型別的值；其餘的參數和結果的種類、static、constructor、overload、indexed 和 named 的 getter 搬到新的 front |
+| 4k | 研究冷的路各付多少（決定 41），照和 Chrome 的差距分段補（決定 42、43） |
+| 4l、4m | 剩下的成員的 callback 也只拿 info；刪掉 `PLAIN` 和舊的 callback；冷的路在 `Scoped` 上做；script 那一側分出 `ScriptFront`；漏掉的方法編不過（決定 44 到 46） |
+
+每一步的狀態在 `progress.md`。
 
 ## 缺點
 
-- V8 在操作裡配置動到 elise 的 marking 的開始和收尾，和 `bindings` 的 `unsafe` 論證：這是 GC 最容易出錯的地方。
-- 規則 2 發生時那一輪什麼都不收，還要走過整個 old（毫秒級的停頓）；多久發生一次還沒量。
-- 外殼和字串要改 rusty_v8 的 fork；字串那一項可能要動 C++（要重編 V8）。
-- 之後每個新的成員都走兩段式：改 `dom_api` 的 `Front` 這一層的人要知道哪些轉換可能執行 script。
+- 每一段用指令數驗收，看不到 store forwarding 這一類的成本：`createElement` 的指令數變少、整頁卻慢了 12%，收尾才找到（修掉了）。binding 的改動要連同 cycle 和衝突數看，並在階段結束時對 `main` 量建節點的頁。
+- 最熱的 getter 還是比 Chrome 多 30 多條指令。其中約 13 條是設計的不同（比 wrapper 的型別 tag、檢查位址在 heap 的 cage 裡、讀取時看是不是正在標記），這份決定留著。
+- V8 那一側有兩個 front：`WholeFront` 實作整個 `Front` 和操作那一側，其中給字串、節點、數字的那一半現在沒有成員走得到（`docs/test-gaps.md`）。
+- 「漏掉的方法編不過」的檢查在單態化之後，`cargo check` 看不到。
+- rusty_v8 的 fork 多了十來個只改 Rust 的入口，升級 rusty_v8 時要跟著對（其中讀 callback 的 frame 的欄位依賴 V8 標頭檔的佈局，debug build 每次和 V8 自己的比對）。
+- 改 `dom_api` 的 `Front` 這一層的人要知道哪些轉換可能執行 script、哪些方法屬於哪一層 trait。
 
 ## 理由和其他做法
 
-- **只在 V8 的 GC 落在操作裡時保守地掃 stack**（規則 1、2 的另一種做法；全面改成保守式不考慮：有 nursery 的 heap 的物件會搬）：不會有「這一輪什麼都不收」，掃的次數很少；要把 32 位元的值也當成可能的壓縮指標。精準這個選擇本身在 Speedometer 上估淨虧 3 到 6 ms（回收那一側 DOM heap 省約 2 ms，多半來自 worker 而不是不掃 stack；binding 這一側「留著的結果」和 `Call` 的欄位多付約 6 到 8 ms），換來的是物件能搬（nursery、之後 wasm GC 的物件）和用型別證明的 API。
-- **保守地掃 stack**（原本的說明）：JS 文件的 heap 不搬物件，在 V8 的收尾停頓裡保守地掃 stack 就能取代規則 2，Oilpan 就是這樣。代價是要在 Rust 裡掃 stack（暫存器、每個平台），elise 對外的 API 的安全性不再能用型別證明。
-- **維持三段**（不做「V8 在操作裡配置」）：其他幾項照樣可以做；`Call` 的欄位少不了那麼多，回傳沒有 wrapper 的節點照舊要 root 和第二個操作。第 1 段的數字會說它值不值得。
-- **只做 unwrap 不比型別**：1 到 2 個 cycle，差距的一小塊。
-- 完整的比較在第 1 段之後補進 `details.md`。
+- **V8 在操作裡配置**：見上面那一節。
+- **保守地掃 stack**：JS 文件的 heap 不搬物件，在 V8 的收尾停頓裡保守地掃 stack 就能取代規則 2，Oilpan 就是這樣。代價是要在 Rust 裡掃 stack（暫存器、每個平台），elise 對外的 API 的安全性不再能用型別證明；有 nursery 的 heap 的物件會搬，不能全面改成保守式。精準這個選擇本身在 Speedometer 上估淨虧 3 到 6 ms，換來的是物件能搬和用型別證明的 API。
+- **冷的路全部不建 scope**（4m-3 的另一個選項）：要在 fork 加很多只拿 isolate 的入口（陣列、物件的讀寫、promise、`TryCatch`、數字的轉換），每個都要 soundness 的論證，會執行 script 的轉換沒有 scope 很難寫對；這些路量過不落後 Chrome。真的熱的幾條（字串、節點、數字、名稱）個別做掉了。
+- **unwrap 不比型別**：約 6 條指令。不比就是信任 V8 的 signature 檢查，要補 soundness 的論證；4k-G 只做了不影響安全性的那一半（tag 比一次）。
+- **刪掉 `Front` 的預設實作、其他 front 用 macro 補**（「漏掉的方法編不過」的另一種做法）：四個只綁一部分成員的 front 各缺八十到一百個方法，macro 要把每個簽名再寫一次，還會把沒有成員走得到的方法也變成一定要寫。
 
 ## 先例
 
-- Blink 生成的 callback（`nodeType` 的 getter）：receiver 用 `ToWrappableUnsafe` 轉成 `Node*`、呼叫實作、`V8SetReturnValue`；不建 scope，沒有共用的呼叫結構，會丟例外或有字串參數的才在 stack 上多放東西；參數照 WebIDL 的順序先轉完才呼叫實作。（生成的 callback 在 repo 裡沒有，照記憶；unwrap 的部分 2026-11-11 查證過：`ToScriptWrappable` 照樣比 tag 的範圍，`details.md` 的「Blink 的做法」。）
-- Blink 的字串：V8 的字串第一次轉成 Blink 的字串時外部化，之後不再複製；`StringCache` 記 Blink 的字串對 V8 字串。（2026-11-11 查證過，`details.md` 的「Blink 的做法」：進來時非 external 的字串複製一次、當場改成 external，resource 存著 `AtomicString`；出去時建指向 `StringImpl` 的 external 字串。）
+- Blink 生成的 callback（`nodeType` 的 getter）：receiver 用 `ToWrappableUnsafe` 轉成 `Node*`、呼叫實作、`V8SetReturnValue`；不建 scope，沒有共用的呼叫結構，會丟例外或有字串參數的才在 stack 上多放東西；參數照 WebIDL 的順序先轉完才呼叫實作（`details.md` 的「Blink 的做法」）。
+- Blink 的字串：V8 的字串第一次轉成 Blink 的字串時外部化，之後不再複製；`StringCache` 記 Blink 的字串對 V8 字串。
+- Blink 的 `[CachedAccessor]`、`IDLMemberInstaller` 的 access check、`ExceptionToRejectPromiseScope`：cached getter、`checks_receiver`、回傳 promise 的成員的外層函式照它們做。
 - V8 的 `WriteBarrier::ForCppHeapPointer`：wrap 的時候 marking 在進行就標記 cppgc 的物件；規則 3 是它在 elise 這一側的對應。
 - elise 的 `tla/unified`：現在的協定的模型，這份的模型從它改。
 
@@ -271,9 +295,12 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
 
 ## 待決定
 
-3. 「V8 在操作裡配置」（決定 6：先不做）要做時：規則 2 用「整個 old 當成活的」還是保守地掃 stack。
+無。
 
 ## 之後的可能
+
+- **V8 在操作裡配置**（決定 6：先不做）要做時：規則 2 用「整個 old 當成活的」還是保守地掃 stack。
+- **最熱的 getter 剩下的差**（`measurements.md` 的逐條對照）：冷的路搬出 callback、讓熱的路不用 callee-saved 的暫存器（估 8 到 10 條，沒做過）；elise 的型別編號變成編譯期的常數（4 條）；開 `Weak` 時不比 isolate 的入口（`getAttribute` 回傳快取裡的字串時 9 條和一次呼叫）。
 
 - **V8 那一側只留一個 front（另開 RFC；使用者，2026-11-13）**：現在會跑 script 的成員、cross-origin 的成員、legacy caller、pairs 還在另一個 front（`WholeFront`）上跑，它和只拿 info 的 front 各有一份 `Front` 的實作和操作那一側。併成一個要：只拿 info 的 front 自己實作 script 那一側的方法（每次呼叫 JS 建一個 scope）、放 script 的狀態（`define` 讀到的 callback、filter 丟的例外）、legacy caller 一種新的 `InfoKind`、cross-origin 的 getter 進 receiver 的 realm 的入口（`bindings`），pairs 和舊的 indexed 的路搬過去；33 個會跑 script 的成員的例外和重入要重新驗。
 

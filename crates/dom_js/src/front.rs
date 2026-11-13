@@ -2714,6 +2714,27 @@ pub(crate) fn foresee_element(
     isolate: &v8::Isolate,
     name: &ArgString<'_>,
 ) -> (Option<dom::NameId>, usize) {
+    let (id, interface) = foresee_element_words(isolate, name);
+    (dom::NameId::try_from(id).ok(), interface)
+}
+
+/// `foresee_element`, its name's number a word (`usize::MAX` for none):
+/// two words come back in registers, where an `Option` of a number beside
+/// a word is written to the caller's stack in halves, which it then reads
+/// whole (a read the CPU can't forward from the two writes).
+pub(crate) fn foresee_element_words(isolate: &v8::Isolate, name: &ArgString<'_>) -> (usize, usize) {
+    let (id, interface) = foresee_element_parts(isolate, name);
+    (
+        id.map_or(usize::MAX, |id| usize::try_from(id).unwrap_or(usize::MAX)),
+        interface,
+    )
+}
+
+#[inline(always)]
+fn foresee_element_parts(
+    isolate: &v8::Isolate,
+    name: &ArgString<'_>,
+) -> (Option<dom::NameId>, usize) {
     name.peek_ascii(isolate, |text| {
         if text.bytes().any(|byte| byte.is_ascii_uppercase()) {
             return None;

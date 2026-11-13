@@ -1,0 +1,31 @@
+# The string argument taken where it is checked (`LentString::lending`),
+# its flags one word; `createElement`'s foreseen name in two words.
+test = ["cargo", "test", "-q", "-p", "bindings", "-p", "dom_js"]
+timeout = 1800
+
+[[mutant]]
+name = "a string that lends nothing is taken lending"
+file = "crates/bindings/src/v8_text.rs"
+from = '''        Self::text_lends(string, isolate).then_some(Self {'''
+to = '''        (Self::text_lends(string, isolate) || true).then_some(Self {'''
+
+[[mutant]]
+name = "a string taken lending isn't known ASCII"
+file = "crates/bindings/src/v8_text.rs"
+from = '''            flags: Cell::new(ASCII),'''
+to = '''            flags: Cell::new(0),'''
+
+[[mutant]]
+name = "a loan isn't counted"
+file = "crates/bindings/src/v8_text.rs"
+from = '''            self.flags.set(self.flags.get() | LENT);'''
+to = '''            self.flags.set(self.flags.get());'''
+
+# Not here, both equivalent:
+# - "marking a string ASCII forgets that it lent" (`flags.set(ASCII)` for
+#   `flags.set(flags | ASCII)`): the characters are found ASCII (`chars`)
+#   before the first loan is counted (`ascii` calls `chars` first), and a
+#   string known ASCII isn't marked again, so `LENT` is never set then.
+# - "a foreseen element's name is never a name's number" (`None` for the
+#   number `foresee_element` gives): the number only spares `createElement`
+#   looking the name up again; the element is the same.

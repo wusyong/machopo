@@ -56,7 +56,7 @@ canvas 不在表裡：Chrome headless 在 Linux 上的 canvas 2D 在 main thread
 - **JS**：兩邊最多的是同一批 JS 函式和 regexp，machopo 各慢 1.2 到 1.5 倍，沒有單一的慢路徑：V8 的 build 設定（machopo 用的 V8 沒有 PGO）和給 V8 的設定。
 - **style**：machopo 多的在走樹本身（`style::Walk::blocks` 23 ms、`children` 13 ms）、selector 比對（9 ms）、cascade（`Walk::cascade`、`cascade_declarations`）、`ComputedStyle::rare_mut`、`MatchedPropertiesCache::add`；Chrome 是收集規則（`ElementRuleCollector`）、`RecalcStyle`、`SelectorChecker`，各 3 ms 以內。
 - **DOM**：machopo 是插入時的 `link`、`attribute_value_by_id`、名稱的查找（`names::find_fixed`）、`intern_value`、`form_subtree_inserted`、建節點（`Node` 的 `__init`、`Cx::node`）、`class_names`；Chrome 是 `Element::RemovedFrom`、`InsertedInto`、`ClassAttributeChanged`、`EventDispatcher::Dispatch`。
-- **bindings**：machopo 是每次呼叫的外殼（rusty_v8 的 `c_fn`、`V8Front::finish_kept`、`V8Op::keep`）、回傳字串的快取（`StringCache::insert`）、參數的字串（`ArgString::text`）。建 wrapper（`templates::new_wrapper`，3.5 ms）算在 V8 API。
+- **bindings**（2026-11-10 的取樣；這裡列的外殼的函式在之後重做 binding 的外殼時拿掉了，還沒重新取樣）：machopo 是每次呼叫的外殼（rusty_v8 的 `c_fn`、`V8Front::finish_kept`、`V8Op::keep`）、回傳字串的快取（`StringCache::insert`）、參數的字串（`ArgString::text`）。建 wrapper（`templates::new_wrapper`，3.5 ms）算在 V8 API。
 - **box layout**：machopo 是 `extend_overflow`、taffy 的 flexbox 和 block、`BoxTree::fragment`、`lay_out_box`、`release`；Chrome 是 `BlockLayoutAlgorithm`、`PhysicalBoxFragment::Create`、`FlexLayoutAlgorithm`。
 - **paint**：machopo 是 `PrePaint::walk` 和 `release`、`Painter` 的 `contents`、`background`、`stacking_context`、`PaintController::paint`、main thread 的 scroll hit test 區域；Chrome 是 Skia 的 glyph bounds、`PaintPropertyTreeBuilder`。
 - **HTML parse**：兩邊都是 fast path（`innerHTML`），machopo 的 `scan` 10 ms，Chrome 的 `ParseAttributes` 8 ms。
@@ -80,20 +80,22 @@ canvas 不在表裡：Chrome headless 在 Linux 上的 canvas 2D 在 main thread
 | 頁 | machopo 慢幾倍 |
 | --- | ---: |
 | `css/CSSPropertySetterGetter` | 2.51 |
-| `bindings/get-element-by-id` | 2.20 |
+| `bindings/get-element-by-id` | 1.41 |
 | `css/PseudoClassSelectors` | 2.15 |
 | `parser/query-selector-all-class` | 2.14 |
-| `bindings/get-elements-by-tag-name` | 1.93 |
-| `bindings/node-type`、`first-child` | 1.83、1.77 |
-| `bindings/id-getter`、`id-setter` | 1.69、1.59 |
+| `bindings/get-elements-by-tag-name` | 1.26 |
+| `bindings/node-type`、`first-child` | 1.33、1.44 |
+| `bindings/id-getter`、`id-setter` | 1.28、1.30 |
 | `layout/line-layout-line-height`、`chapter-reflow-once`、`flexbox-row-nowrap` | 1.68、1.54、1.48 |
-| `bindings/gc-forest`、`gc-mini-tree`、`gc-tree` | 1.58、1.19、1.01 |
-| `bindings/get-attribute`、`create-element`、`set-attribute` | 1.49、1.43、1.40 |
-| `events/EventsDispatching` | 1.24 |
+| `bindings/gc-forest`、`gc-mini-tree`、`gc-tree` | 1.58、1.10、1.07 |
+| `bindings/get-attribute`、`create-element`、`set-attribute` | 0.96、1.50、1.02 |
+| `events/EventsDispatching` | 1.22 |
 
-比 Chrome 快的：`parser/innerHTML-setter`（0.65）、`dom/modify-element-id`（0.72）、`events/EventsDispatchingInV1ShadowTrees`（0.77）；快 2 倍以上、工具標成可疑的（兩邊做的事可能不同，不算進幾何平均）：`bindings/append-child`（0.27）、`insert-before`（0.33）、`parser/tiny-innerHTML`（0.39）、`dom/child-list-mutation-with-unrelated-observer`（0.45）。
+比 Chrome 快的：`parser/innerHTML-setter`（0.65）、`dom/modify-element-id`（0.72）、`events/EventsDispatchingInV1ShadowTrees`（0.70）；快 2 倍以上、工具標成可疑的（兩邊做的事可能不同，不算進幾何平均）：`bindings/append-child`（0.27）、`insert-before`（0.31）、`parser/tiny-innerHTML`（0.39）、`dom/child-list-mutation-with-unrelated-observer`（0.45）。
 
-三個 `gc-*` 頁整頁還慢，但 GC 本身 machopo 比較少（上一節）：慢的在建節點和 binding 的呼叫。剩下的 binding 頁差的多半是每次呼叫的固定成本：getter 在 V8 的地板之上 machopo 約多 17 cycle、Chrome 約 4.5（建 `V8Front` 和 `Call`、開操作、unwrap 的檢查和 `read_weak` 的 barrier）；`get-element-by-id` 還多了字串參數的轉換；`create-element` 多半是 V8 建、接上 wrapper 的機制，Chrome 也一樣。`CSSPropertySetterGetter` 是宣告集合的增刪（宣告的結構大，增刪時搬得多）和一次存取照名稱查三、四次屬性。
+**`bindings/` 和 `events/` 的 16 頁是 2026-11-13 重量的**（binding 每次呼叫的外殼重做之後；各跑一次，表裡的其他頁和幾何平均還是 2026-11-10 的，沒有重算，表的排序也還是原來的）。getter 的頁從 1.7 到 1.8 倍降到 1.3 到 1.45 倍；帶字串參數的頁 `get-attribute` 1.49 → 0.96、`set-attribute` 1.40 → 1.02、`get-element-by-id` 2.20 → 1.41、`get-elements-by-tag-name` 1.93 → 1.26。`create-element` 1.43 → 1.50 在一次量測的起伏內（對重做之前的 machopo 直接比是持平）。
+
+三個 `gc-*` 頁整頁還慢，但 GC 本身 machopo 比較少（上一節）：慢的在建節點和 binding 的呼叫。剩下的 binding 頁差的是每次呼叫的固定成本和 DOM 那一側：最簡單的 getter 一次呼叫 machopo 約 103 條指令、Chrome 約 67（其中 V8 呼叫 callback 的那一段兩邊各約 50）；多的是進出 callback 存的暫存器、讀型別的 tag、unwrap 時比 tag、檢查位址在 heap 的 cage 裡、讀取時看是不是正在標記。`getAttribute`、`setAttribute` 的指令數比 Chrome 少（541 對 618、1035 對 1758），時間也是（0.78、0.63 倍）；`get-element-by-id` 多的是照名稱找元素；`create-element` 多半是 V8 建、接上 wrapper 的機制，Chrome 也一樣。`CSSPropertySetterGetter` 是宣告集合的增刪（宣告的結構大，增刪時搬得多）和一次存取照名稱查三、四次屬性。
 
 ## 可以開 RFC 的方向
 
@@ -101,7 +103,7 @@ canvas 不在表裡：Chrome headless 在 Linux 上的 canvas 2D 在 main thread
 
 1. **文字**（+93 ms，TipTap 一個 suite +39）：shaping 的結果組成 layout、行內內容的建立和 fragment、文字的分析、斷行。Blink 的 shaping 結果有 word cache（`ShapeCache`），`ShapeResultView` 是段落結果的一段、不重組。
 2. **style**（+78 ms，NewsSite 兩個 suite 最多）：走樹本身（`Walk::blocks`、`children`）最多，其次是 cascade 和 `ComputedStyle` 的複製、初始化。Chromium：`ComputedStyleBase` 的 `DataRef` 群組、`ComputedStyleBuilder`、`MatchedPropertiesCache` 命中時只複製不同的群組。
-3. **DOM 和 bindings**（合計 +66 ms）：每次呼叫的固定成本（建 `V8Front` 和 `Call`、開操作、unwrap 的檢查、`read_weak` 的 barrier；unwrap 照 Blink 的 `ToWrappableUnsafe` 要改 `bindings` 的 `unsafe` 論證）；插入時的連結、屬性和名稱的查找。**DOM 的資料怎麼配置也在這裡**：取樣算在 GC 的 9.7 ms 是配置，`HeapVector` 和它的 store 每次兩個物件（Blink 的屬性存在元素的陣列裡），屬性和文字節點各一次 `alloc_at`；估能省 2 到 4 ms。
+3. **DOM 和 bindings**（合計 +66 ms，2026-11-10 的取樣；之後 binding 的外殼重做過，每個成員的 callback 只拿 V8 的 callback info、不建 scope 和共用的結構，Speedometer 還沒重新取樣）：binding 每次呼叫剩下的固定成本是進出 callback 存的暫存器、型別的 tag 不是編譯期的常數（這兩項寫法上還能拿掉）、unwrap 比 tag、cage 的檢查、`read_weak` 的 barrier（unwrap 照 Blink 的 `ToWrappableUnsafe` 不比要改 `bindings` 的 `unsafe` 論證）；V8 那一側還有兩個 front（會跑 script 的呼叫在另一個上面跑），可以併成一個。DOM 那一側：`cssText`、`innerHTML` 的序列化、`style` 的宣告的解析、`matches` 的 selector、`textContent`（各是 Chrome 的 1.7 到 3.2 倍），插入時的連結、屬性和名稱的查找（每次呼叫用名稱的文字查固定名稱表）。**DOM 的資料怎麼配置也在這裡**：取樣算在 GC 的 9.7 ms 是配置，`HeapVector` 和它的 store 每次兩個物件（Blink 的屬性存在元素的陣列裡），屬性和文字節點各一次 `alloc_at`；估能省 2 到 4 ms。
 4. **box layout**（+27 ms，NewsSite 兩個 suite）：overflow 的計算、taffy 的 flexbox、fragment、box tree 的釋放。
 5. **paint**（+14 ms）：pre-paint 的走樹和釋放、`Painter`。還沒細看。
 6. **GC 剩下的**（合計約 2 到 3 ms，都要改 rusty_v8 的 fork 的 C++、重編 V8，量太小，動到那一段時順便做）：重設被丟掉的 wrapper 的 root 不經過 Rust（wrapper 的邊放在固定的位置，約 1.5 ms）；字串快取的 weak global（約 0.5 ms）；照 Blink 告訴 V8 頁面正在載入（Speedometer 上最多約 1 ms，短的頁 full GC 少一半，記憶體的高峰變高：為了行為和 Blink 一樣才做）；拿掉空的 `CppHeap` 的開銷（Speedometer 上量不到）。
