@@ -269,7 +269,7 @@
 - DOM 的 iframe 的步驟不在被 discard 的文件裡建子 browsing context（`dom_api` 的 `frame.rs` 的 `create_child_frame` 看 `is_discarded`）：拿掉時 V8 的 engine 照樣不建，它拿掉 frame 時一起從 isolate 的 frame 清單拿掉（`dom_js` 的 `discard_child`），`create_child` 找不到顯示那份文件的 frame。留著給沒有自己的 frame 清單的 host。
 - DOM 的宣告表（`dom_api_macros` 的 `declare!`）產生的 method 的呼叫，把每個參數的位置都寫成第一個交給 `node_param`：位置只用在節點參數不是那個 interface 的 `TypeError` 的訊息，而表上的節點參數都是 `Node`，任何節點都接受，經過專用路徑碰不到這個錯（`node_param` 本身的訊息有單元測試）。表上有了比 `Node` 窄的節點參數時要補測試。
 - DOM 的 wasm 那一側（`dom_wasm` 的 `handles.rs`）讀到 main Store 在節點的 engine word 裡的編號時，不對回 Store 的表、只看是不是 0：main Store 活著時，那個編號只在交出時寫、release 時清，一直是對的；main Store 死掉之後不再有 main，沒有 Store 讀它留下的編號。對回表是防著之後的程式漏清。
-- DOM 的 V8 front（`dom_js` 的 `V8Front::dict_bool`）把 undefined 的 dictionary 成員當成沒給（`Some(None)`，用預設值），不 `ToBoolean` 成 false：表上唯一的 dictionary `EventInit` 的成員預設值都是 false，兩者一樣。有預設值是 true 的 `boolean` 成員時要補測試。
+- DOM 的 V8 front（`dom_js` 的 `Scoped::dict_bool`）把 undefined 的 dictionary 成員當成沒給（`Some(None)`，用預設值），不 `ToBoolean` 成 false：表上唯一的 dictionary `EventInit` 的成員預設值都是 false，兩者一樣。有預設值是 true 的 `boolean` 成員時要補測試。
 - DOM 的 number 的使用者的一步走完之後再對齊 step（`dom` 的 `StepRange::apply`，Blink 的 `AlignValueForStep`）：拿掉也一樣。它只在原本的值對齊時（`mismatch` 說沒有不對齊）做，對齊的值加整數個 step 只差 float 的誤差，那個誤差比 step 的 2^-24 小，最後照 step 和 step base 的小數位數四捨五入時就消掉；位數超過 15 或值在 10^15 以上時不四捨五入，double 本來也分不出那個誤差。
 - DOM 的 search 欄位空的時候不接 Escape（`dom_api` 的 `controls::keydown` 回 false）：接了也一樣，Escape 不打字，按鍵的處理兩種都接著結束。Escape 有別的預設動作（關掉 dialog、離開全螢幕）時要補測試。
 - DOM 的 spin button 放開時換一個按下的編號（`dom_api` 的 `controls::release`）：不換也一樣，放開時清掉按的是哪一半，舊的計時器到期時先看它、什麼都不做；下一次按下自己換編號，舊的計時器也對不上。

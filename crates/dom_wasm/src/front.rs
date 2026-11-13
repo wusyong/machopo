@@ -23,8 +23,8 @@ use dom_api::interfaces::{
 };
 use dom_api::typed::LegacyNullToEmptyString;
 use dom_api::{
-    ApiCx, ApiError, ArgType, ExceptionName, Front, FrontTypes, NewElement, NewObject, OpFront,
-    RetType, TypedMember,
+    ApiCx, ApiError, ArgType, DictFront, ExceptionName, Front, FrontTypes, NewElement, NewObject,
+    OpFront, RetType, TypedMember,
 };
 use wasmtime::component::{
     ComponentNamedList, ComponentType, Lift, LinkerInstance, Lower, WasmStr,
@@ -1034,6 +1034,12 @@ impl<'r, A> FrontTypes for WasmFront<'r, '_, A> {
     type Rest = std::convert::Infallible;
 }
 
+impl<'r, 'g, A: ReadArgs> DictFront for WasmFront<'r, 'g, A> {
+    fn throw(&mut self, error: ApiError) {
+        self.error = Some(error);
+    }
+}
+
 impl<'r, 'g, A: ReadArgs> Front for WasmFront<'r, 'g, A> {
     #[inline(always)]
     fn reading<V: dom_api::typed::ReadDict<Self>>(&mut self, reads: V) -> V::Out {
@@ -1172,10 +1178,6 @@ impl<'r, 'g, A: ReadArgs> Front for WasmFront<'r, 'g, A> {
 
     fn node_arg(&mut self, index: usize) -> Option<Option<u32>> {
         Some(self.args.node(index).expect("a node argument"))
-    }
-
-    fn throw(&mut self, error: ApiError) {
-        self.error = Some(error);
     }
 }
 

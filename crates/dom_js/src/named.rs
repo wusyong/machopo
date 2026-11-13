@@ -27,7 +27,7 @@
 //! index and the value its arguments, the setter always taking the index.
 
 use dom::{DomString, NodeRef, ObjectRef, ObjectRoot};
-use dom_api::{ApiCx, ApiError, Front, FrontTypes, Named, OpFront, TypedMember};
+use dom_api::{ApiCx, ApiError, DictFront, Front, FrontTypes, Named, OpFront, TypedMember};
 
 use crate::exception;
 use crate::front::cached_string;
@@ -195,6 +195,26 @@ impl<'s> FrontTypes for PropertyOp<'_, 's, '_> {
     type Rest = std::convert::Infallible;
 }
 
+impl<'a, 's, 'i> DictFront for PropertyFront<'a, 's, 'i> {
+    fn throw(&mut self, error: ApiError) {
+        self.got = Got::Threw;
+        match error {
+            ApiError::Type(message) => crate::throw_type_error(self.scope.scope(), &message),
+            ApiError::Range(message) => {
+                crate::strings::throw_range_error(self.scope.scope(), &message)
+            }
+            ApiError::Dom(exception) => exception::throw_dom_exception(
+                &mut self.scope,
+                exception.name.name(),
+                &exception.message,
+            ),
+            ApiError::Aborted(signal) => {
+                crate::front::throw_abort_reason(&mut self.scope, &signal.0);
+            }
+        }
+    }
+}
+
 impl<'a, 's, 'i> Front for PropertyFront<'a, 's, 'i> {
     #[inline(always)]
     fn reading<V: dom_api::typed::ReadDict<Self>>(&mut self, reads: V) -> V::Out {
@@ -300,24 +320,6 @@ impl<'a, 's, 'i> Front for PropertyFront<'a, 's, 'i> {
     /// results are.
     fn finish_strings(&mut self, strings: Vec<DomString>) {
         self.got = Got::Strings(strings);
-    }
-
-    fn throw(&mut self, error: ApiError) {
-        self.got = Got::Threw;
-        match error {
-            ApiError::Type(message) => crate::throw_type_error(self.scope.scope(), &message),
-            ApiError::Range(message) => {
-                crate::strings::throw_range_error(self.scope.scope(), &message)
-            }
-            ApiError::Dom(exception) => exception::throw_dom_exception(
-                &mut self.scope,
-                exception.name.name(),
-                &exception.message,
-            ),
-            ApiError::Aborted(signal) => {
-                crate::front::throw_abort_reason(&mut self.scope, &signal.0);
-            }
-        }
     }
 }
 

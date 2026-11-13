@@ -195,13 +195,13 @@ pub use timer::{
     Reported, next_due, report_exception, run_due, run_next_due, run_task, until_next_due,
 };
 pub use typed::{
-    Any, AnyArg, AnyOrNull, ArgType, Callback, ConstructorInfo, Created, DictMember, DictOrBool,
-    Dictionary, DomStr, EmptyStringDefault, ErrorEventObject, Front, FrontHost, FrontTypes,
-    HtmlConstructed, NewElement, NewObject, NodeObject, NullableStr, ObjectType, OpFront,
-    PromiseRejectionEventObject, Rest, RetType, ScriptHost, Sequence, StringPairsArg, Strings,
-    TargetObject, TimerHandler, TransferArg, TypedMember, TypedVisitor, UnrestrictedDouble,
-    accepts_node, html_element_interface, interface_of, node_interface, node_interface_of,
-    realm_document, visit_typed,
+    Any, AnyArg, AnyOrNull, ArgType, Callback, ConstructorInfo, Created, DictFront, DictMember,
+    DictOrBool, Dictionary, DomStr, EmptyStringDefault, ErrorEventObject, Front, FrontHost,
+    FrontTypes, HtmlConstructed, NewElement, NewObject, NodeObject, NullableStr, ObjectType,
+    OpFront, PromiseRejectionEventObject, Rest, RetType, ScriptHost, Sequence, StringPairsArg,
+    Strings, TargetObject, TimerHandler, TransferArg, TypedMember, TypedVisitor,
+    UnrestrictedDouble, accepts_node, html_element_interface, interface_of, node_interface,
+    node_interface_of, realm_document, visit_typed,
 };
 pub use webdriver::{
     ElementLocator, Probed, WebDriverActionError, WebDriverAnswer, WebDriverQuery,

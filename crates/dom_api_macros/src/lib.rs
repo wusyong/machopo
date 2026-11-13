@@ -2201,7 +2201,7 @@ fn dictionary_items(dictionary: &DictionaryDef) -> Tokens {
 
                         fn read<F>(self, #front: &mut F) -> ::std::option::Option<()>
                         where
-                            F: #api::typed::Front<
+                            F: #api::typed::DictFront<
                                     Str = T::Str,
                                     Node = T::Node,
                                     Dict = T::Dict,

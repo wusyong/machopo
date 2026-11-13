@@ -19,7 +19,7 @@ use dom::{
     DomString, EventTargetImpl, NameId, Node, NodeRef, NodeRoot, ObjectRef, ObjectRoot, TargetRef,
     Window, names,
 };
-use dom_api::{AnyArg, ApiCx, ApiError, Callback, Front, FrontTypes, OpFront};
+use dom_api::{AnyArg, ApiCx, ApiError, Callback, DictFront, Front, FrontTypes, OpFront};
 use elise::JsEdge;
 use elise::Persistent;
 
@@ -598,6 +598,22 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
         })
     }
 
+    /// `f` of a scope made now, with the call's arguments and where its
+    /// result goes: what allocates in V8, throws or converts, and keeps
+    /// nothing of the call.
+    #[cold]
+    #[inline(never)]
+    fn with_scoped<R>(
+        &mut self,
+        f: impl FnOnce(&mut front::Scoped<'_, 's, 's, 's, K::Args>) -> R,
+    ) -> R {
+        let seed = K::seed(&self.info);
+        self.info.with_scope(|mut scope, rv| {
+            let args = K::args(seed, scope.scope());
+            f(&mut front::Scoped::new(scope, &args, rv))
+        })
+    }
+
     /// `text` as a new V8 string, the call's result.
     #[inline]
     fn finish_new_string(&mut self, text: &str) {
@@ -666,7 +682,7 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
         if let Some(string) = v8::machopo::as_string(K::arg(&self.info, index)) {
             return Some(ArgString::copied(self.info.isolate(), string));
         }
-        self.with_front(|front| front.string_arg(index))
+        self.with_scoped(|scoped| scoped.string_arg(index))
     }
 
     /// Tells V8 of the DOM's growth after a call that may allocate, and
@@ -691,6 +707,141 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
     }
 }
 
+impl<'s, K: InfoKind<'s>> DictFront for InfoFront<'s, K> {
+    // A dictionary's members are read by the whole front end (a getter
+    // may run script): what it gives is a value, or the member's value
+    // itself (a handle of the callback's own handle scope, which the
+    // front end's scope leaves it in).
+    fn dict_any(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<AnyArg<v8::Local<'s, v8::Value>>>> {
+        self.with_scoped(|scoped| scoped.dict_any(dict, member))
+    }
+
+    fn dict_object<T: elise::HeapType>(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+        interface: &str,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        self.with_scoped(|scoped| scoped.dict_object::<T>(dict, member, interface))
+    }
+
+    fn dict_headers(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<dom_api::typed::StringPairsArg>> {
+        self.with_scoped(|scoped| scoped.dict_headers(dict, member))
+    }
+
+    fn dict_is_null(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<bool>> {
+        self.with_scoped(|scoped| scoped.dict_is_null(dict, member))
+    }
+
+    fn dict_serialized(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<Vec<u8>>> {
+        self.with_scoped(|scoped| scoped.dict_serialized(dict, member))
+    }
+
+    fn dict_nullable_object<T: elise::HeapType>(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+        interface: &str,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        self.with_scoped(|scoped| scoped.dict_nullable_object::<T>(dict, member, interface))
+    }
+
+    fn dict_nullable_target(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        self.with_scoped(|scoped| scoped.dict_nullable_target(dict, member))
+    }
+
+    fn dict_body(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<dom_api::typed::BodyMember<v8::Local<'s, v8::Object>>>> {
+        self.with_scoped(|scoped| scoped.dict_body(dict, member))
+    }
+
+    fn dict_signal(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<dom_api::typed::SignalMember<v8::Local<'s, v8::Object>>>> {
+        self.with_scoped(|scoped| scoped.dict_signal(dict, member))
+    }
+
+    fn dict_bool(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<bool>> {
+        self.with_scoped(|scoped| scoped.dict_bool(dict, member))
+    }
+
+    fn dict_number(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<f64>> {
+        self.with_scoped(|scoped| scoped.dict_number(dict, member))
+    }
+
+    fn dict_string(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<String>> {
+        self.with_scoped(|scoped| scoped.dict_string(dict, member))
+    }
+
+    fn dict_nullable_string(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<String>> {
+        self.with_scoped(|scoped| scoped.dict_nullable_string(dict, member))
+    }
+
+    fn dict_strings(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<Vec<String>>> {
+        self.with_scoped(|scoped| scoped.dict_strings(dict, member))
+    }
+
+    fn dict_string_or_number(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<dom_api::typed::StringOrNumber>> {
+        self.with_scoped(|scoped| scoped.dict_string_or_number(dict, member))
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn throw(&mut self, error: ApiError) {
+        // What the operation left before it failed isn't the result.
+        self.with_scoped(|scoped| scoped.throw_error(error));
+    }
+}
+
 impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     /// A dictionary's members are read by the whole front end (a getter
     /// may run script), all in the one scope made for them.
@@ -708,7 +859,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     }
 
     fn reading<V: dom_api::typed::ReadDict<Self>>(&mut self, reads: V) -> V::Out {
-        self.with_front(|front| reads.read(front))
+        self.with_scoped(|scoped| reads.read(scoped))
     }
 
     type Op<'o>
@@ -764,7 +915,8 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
 
     #[inline(always)]
     fn has_args(&mut self, name: &str, required: usize) -> bool {
-        K::length(&self.info) >= required || self.with_front(|front| front.has_args(name, required))
+        K::length(&self.info) >= required
+            || self.with_scoped(|scoped| scoped.has_args(name, required))
     }
 
     /// A string that lends its text in place (most: an ASCII literal) is
@@ -807,7 +959,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
             return v8::Local::<v8::Object>::try_from(value).ok().map(Some);
         }
         // Not a node: the whole front end's `TypeError`.
-        self.with_front(|front| front.node_arg(index))
+        self.with_scoped(|scoped| scoped.node_arg(index))
     }
 
     /// A node as it is; anything else a string, as `string_arg` takes
@@ -844,7 +996,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         }
         match v8::machopo::as_smi(value) {
             Some(long) => Some(Some(dom_api::typed::NodeOrLong::Long(long))),
-            None => self.with_front(|front| front.node_or_long_arg(index)),
+            None => self.with_scoped(|scoped| scoped.node_or_long_arg(index)),
         }
     }
 
@@ -893,15 +1045,13 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         {
             return;
         }
-        self.with_front(|front| {
-            front.finish_kept_as(match pending {
-                PendingNode::Node(node, interface) | PendingNode::Elsewhere(node, interface) => {
-                    front::Kept::Node(node, interface)
-                }
-                PendingNode::Construct(definition, document) => {
-                    front::Kept::Construct(definition, document)
-                }
-            });
+        self.with_scoped(|scoped| match pending {
+            PendingNode::Node(node, interface) | PendingNode::Elsewhere(node, interface) => {
+                scoped.finish_node_root(&node, interface);
+            }
+            PendingNode::Construct(definition, document) => {
+                scoped.finish_construct(&definition, &document);
+            }
         });
     }
 
@@ -952,7 +1102,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     #[cold]
     #[inline(never)]
     fn finish_object(&mut self, (object, interface): (ObjectRoot, usize)) {
-        self.with_front(|front| front.finish_kept_as(front::Kept::Object(object, interface)));
+        self.with_scoped(|scoped| scoped.finish_object_root(&object, interface));
     }
 
     /// A callback is its argument's handle, as the call holds it: nothing
@@ -972,7 +1122,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         if value.is_object() {
             return Some(Some(Callback(value)));
         }
-        self.with_front(|front| front.callback_arg(index, name).map(|_| ()))?;
+        self.with_scoped(|scoped| scoped.throw_not_of_type(index, name));
         None
     }
 
@@ -987,7 +1137,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         if value.is_function() {
             return Some(Callback(value));
         }
-        self.with_front(|front| front.function_arg(index, name).map(|_| ()))?;
+        self.with_scoped(|scoped| scoped.throw_not_of_type(index, name));
         None
     }
 
@@ -1005,7 +1155,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         if value.is_function() {
             return Some(Some(Callback(value)));
         }
-        self.with_front(|front| front.nullable_function_arg(index, name).map(|_| ()))?;
+        self.with_scoped(|scoped| scoped.throw_not_of_type(index, name));
         None
     }
 
@@ -1048,82 +1198,82 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         if let Ok(object) = v8::Local::<v8::Object>::try_from(value) {
             return Some(Some(object));
         }
-        self.with_front(|front| front.dict_arg(index, name))
+        self.with_scoped(|scoped| scoped.dict_arg(index, name))
     }
 
     // The results V8 allocates for: made by the whole front end, in a
     // scope.
 
     fn finish_objects(&mut self, objects: Vec<(ObjectRoot, usize)>) {
-        self.with_front(|front| front.finish_objects(objects));
+        self.with_scoped(|scoped| scoped.finish_objects(objects));
     }
 
     fn finish_frozen_objects(&mut self, objects: Vec<(ObjectRoot, usize)>) {
-        self.with_front(|front| front.finish_frozen_objects(objects));
+        self.with_scoped(|scoped| scoped.finish_frozen_objects(objects));
     }
 
     fn finish_strings(&mut self, strings: Vec<DomString>) {
-        self.with_front(|front| front.finish_strings(strings));
+        self.with_scoped(|scoped| scoped.finish_strings(strings));
     }
 
     fn finish_names(&mut self, names: Vec<dom_api::typed::NameOrText>) {
-        self.with_front(|front| front.finish_names(names));
+        self.with_scoped(|scoped| scoped.finish_names(names));
     }
 
     fn finish_frozen_strings(&mut self, strings: Vec<DomString>) {
-        self.with_front(|front| front.finish_frozen_strings(strings));
+        self.with_scoped(|scoped| scoped.finish_frozen_strings(strings));
     }
 
     fn finish_doubles(&mut self, numbers: Vec<f64>) {
-        self.with_front(|front| front.finish_doubles(numbers));
+        self.with_scoped(|scoped| scoped.finish_doubles(numbers));
     }
 
     fn finish_numbers(&mut self, numbers: Vec<f64>) {
-        self.with_front(|front| front.finish_numbers(numbers));
+        self.with_scoped(|scoped| scoped.finish_numbers(numbers));
     }
 
     fn finish_dictionary(&mut self, members: Vec<(&'static str, dom_api::typed::DictValue)>) {
-        self.with_front(|front| front.finish_dictionary(members));
+        self.with_scoped(|scoped| scoped.finish_dictionary(members));
     }
 
     fn finish_records(&mut self, records: Vec<Vec<(String, dom_api::typed::DictValue)>>) {
-        self.with_front(|front| front.finish_records(records));
+        self.with_scoped(|scoped| scoped.finish_records(records));
     }
 
     fn finish_entry_detail(&mut self, entry: Persistent<dom::PerformanceEntry>) {
-        self.with_front(|front| front.finish_entry_detail(entry));
+        self.with_scoped(|scoped| scoped.finish_entry_detail(entry));
     }
 
     fn finish_reader_buffer(&mut self, reader: Persistent<dom::EventTargetImpl>) {
-        self.with_front(|front| front.finish_reader_buffer(reader));
+        self.with_scoped(|scoped| scoped.finish_reader_buffer(reader));
     }
 
     fn finish_history_state(&mut self, history: Persistent<dom::History>) {
-        self.with_front(|front| front.finish_history_state(history));
+        self.with_scoped(|scoped| scoped.finish_history_state(history));
     }
 
     fn finish_cloned(&mut self, payload: dom::SerializedMessage, ports: Vec<(ObjectRoot, usize)>) {
-        self.with_front(|front| front.finish_cloned(payload, ports));
+        self.with_scoped(|scoped| scoped.finish_cloned(payload, ports));
     }
 
     fn finish_resolved(&mut self, object: ObjectRoot, interface: usize) {
-        self.with_front(|front| front.finish_resolved(object, interface));
+        self.with_scoped(|scoped| scoped.finish_resolved(object, interface));
     }
 
     fn finish_resolved_string(&mut self, string: DomString) {
-        self.with_front(|front| front.finish_resolved_string(string));
+        self.with_scoped(|scoped| scoped.finish_resolved_string(string));
     }
 
     fn finish_resolved_json(&mut self, text: DomString) {
-        self.with_front(|front| front.finish_resolved_json(text));
+        self.with_scoped(|scoped| scoped.finish_resolved_json(text));
     }
 
     fn finish_resolved_undefined(&mut self) {
-        self.with_front(|front| front.finish_resolved_undefined());
+        self.with_scoped(|scoped| scoped.finish_resolved_undefined());
     }
 
     fn finish_resolved_bytes(&mut self, bytes: Vec<u8>, view: bool) {
-        self.with_front(|front| front.finish_resolved_bytes(bytes, view));
+        self.with_scoped(|scoped| scoped.finish_resolved_bytes(bytes, view));
     }
 
     fn finish_animation_promise(
@@ -1133,36 +1283,38 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         ready: bool,
         resolved: bool,
     ) {
-        self.with_front(|front| front.finish_animation_promise(object, interface, ready, resolved));
+        self.with_scoped(|scoped| {
+            scoped.finish_animation_promise(object, interface, ready, resolved)
+        });
     }
 
     fn finish_image_data_pixels(&mut self, image_data: Persistent<dom::ImageData>, bytes: Vec<u8>) {
-        self.with_front(|front| front.finish_image_data_pixels(image_data, bytes));
+        self.with_scoped(|scoped| scoped.finish_image_data_pixels(image_data, bytes));
     }
 
     fn finish_upgrading(&mut self, element: NodeRoot) {
-        self.with_front(|front| front.finish_upgrading(element));
+        self.with_scoped(|scoped| scoped.finish_upgrading(element));
     }
 
     fn finish_pending_promise(&mut self, id: u64, existing: bool) {
-        self.with_front(|front| front.finish_pending_promise(id, existing));
+        self.with_scoped(|scoped| scoped.finish_pending_promise(id, existing));
     }
 
     fn finish_resolved_constructor(
         &mut self,
         definition: Persistent<dom::CustomElementDefinition>,
     ) {
-        self.with_front(|front| front.finish_resolved_constructor(definition));
+        self.with_scoped(|scoped| scoped.finish_resolved_constructor(definition));
     }
 
     /// A promise rejected with the error, by the whole front end.
     fn reject(&mut self, error: ApiError) {
-        self.with_front(|front| front.reject(error));
+        self.with_scoped(|scoped| scoped.reject_with(None, error));
     }
 
     /// An event handler's source compiled, by the whole front end.
     fn compile_event_handler(&mut self, target: &dom::TargetRoot, event_type: dom::NameId) {
-        self.with_front(|front| front.compile_event_handler(target, event_type));
+        self.with_scoped(|scoped| scoped.compile_event_handler(target, event_type));
     }
 
     /// A constructor's call: with `new` and enough arguments (the checks
@@ -1173,10 +1325,10 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         // itself, which the whole front end tells (its realm's interface
         // object).
         if interface == const { dom_api::declare::interface_index("HTMLElement") } {
-            return self.with_front(|front| front.construct(interface, required));
+            return self.with_scoped(|scoped| scoped.construct(interface, required));
         }
         (!K::new_target(K::this(&self.info)).is_undefined() && K::length(&self.info) >= required)
-            || self.with_front(|front| front.construct(interface, required))
+            || self.with_scoped(|scoped| scoped.construct(interface, required))
     }
 
     /// The member asks for the current realm's window: found in the
@@ -1225,7 +1377,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     fn any_arg(&mut self, index: usize) -> AnyArg<v8::Local<'s, v8::Value>> {
         let value = K::arg(&self.info, index);
         if value.is_undefined() {
-            return self.with_front(|front| front.any_arg(index));
+            return self.with_scoped(|scoped| scoped.any_arg(index));
         }
         AnyArg(value)
     }
@@ -1236,7 +1388,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     fn abort_reason_arg(&mut self, index: usize) -> Option<AnyArg<v8::Local<'s, v8::Value>>> {
         let value = K::arg(&self.info, index);
         if value.is_undefined() {
-            return self.with_front(|front| front.abort_reason_arg(index));
+            return self.with_scoped(|scoped| scoped.abort_reason_arg(index));
         }
         Some(AnyArg(value))
     }
@@ -1248,28 +1400,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         if K::length(&self.info) <= index {
             return None;
         }
-        self.with_front(|front| front.rest_arg(index))
-    }
-
-    // A dictionary's members are read by the whole front end (a getter
-    // may run script): what it gives is a value, or the member's value
-    // itself (a handle of the callback's own handle scope, which the
-    // front end's scope leaves it in).
-    fn dict_any(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<AnyArg<v8::Local<'s, v8::Value>>>> {
-        self.with_front(|front| front.dict_any(dict, member))
-    }
-
-    fn dict_object<T: elise::HeapType>(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-        interface: &str,
-    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
-        self.with_front(|front| front.dict_object::<T>(dict, member, interface))
+        self.with_scoped(|scoped| scoped.rest_arg(index))
     }
 
     // The arguments read whole into the DOM's values before the
@@ -1277,7 +1408,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     // serialization, keyframes): reading one allocates and may run script,
     // so each is the whole front end's, in a scope.
     fn serialized_state_arg(&mut self, index: usize) -> Option<Vec<u8>> {
-        self.with_front(|front| front.serialized_state_arg(index))
+        self.with_scoped(|scoped| scoped.serialized_state_arg(index))
     }
 
     fn message_arg(
@@ -1286,11 +1417,11 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         transfer: dom_api::typed::TransferArg,
         from_port: bool,
     ) -> Option<(dom::SerializedMessage, Vec<v8::Local<'s, v8::Object>>)> {
-        self.with_front(|front| front.message_arg(index, transfer, from_port))
+        self.with_scoped(|scoped| scoped.message_arg(index, transfer, from_port))
     }
 
     fn static_range_init(&mut self, index: usize) -> Option<[(v8::Local<'s, v8::Object>, u32); 2]> {
-        self.with_front(|front| front.static_range_init(index))
+        self.with_scoped(|scoped| scoped.static_range_init(index))
     }
 
     fn intersection_observer_init(
@@ -1300,7 +1431,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         dom_api::typed::IntersectionInit,
         Option<v8::Local<'s, v8::Object>>,
     )> {
-        self.with_front(|front| front.intersection_observer_init(index))
+        self.with_scoped(|scoped| scoped.intersection_observer_init(index))
     }
 
     fn intersection_entry_init(
@@ -1310,93 +1441,69 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         dom_api::typed::IntersectionEntryInitValues,
         v8::Local<'s, v8::Object>,
     )> {
-        self.with_front(|front| front.intersection_entry_init(index))
+        self.with_scoped(|scoped| scoped.intersection_entry_init(index))
     }
 
     fn byte_string_pairs_arg(&mut self, index: usize) -> Option<dom_api::typed::StringPairsArg> {
-        self.with_front(|front| front.byte_string_pairs_arg(index))
+        self.with_scoped(|scoped| scoped.byte_string_pairs_arg(index))
     }
 
     fn json_arg(&mut self, index: usize) -> Option<String> {
-        self.with_front(|front| front.json_arg(index))
+        self.with_scoped(|scoped| scoped.json_arg(index))
     }
 
     fn doubles_arg(&mut self, index: usize) -> Option<Vec<f64>> {
-        self.with_front(|front| front.doubles_arg(index))
+        self.with_scoped(|scoped| scoped.doubles_arg(index))
     }
 
     fn get_html_options(&mut self, index: usize) -> Option<(bool, Vec<v8::Local<'s, v8::Object>>)> {
-        self.with_front(|front| front.get_html_options(index))
+        self.with_scoped(|scoped| scoped.get_html_options(index))
     }
 
     fn round_rect_radii_arg(&mut self, index: usize) -> Option<Vec<dom_api::typed::Radius>> {
-        self.with_front(|front| front.round_rect_radii_arg(index))
+        self.with_scoped(|scoped| scoped.round_rect_radii_arg(index))
     }
 
     fn animation_options_arg(&mut self, index: usize) -> Option<dom_api::typed::AnimationOptions> {
-        self.with_front(|front| front.animation_options_arg(index))
+        self.with_scoped(|scoped| scoped.animation_options_arg(index))
     }
 
     fn effect_options_arg(&mut self, index: usize) -> Option<dom_api::typed::AnimationOptions> {
-        self.with_front(|front| front.effect_options_arg(index))
+        self.with_scoped(|scoped| scoped.effect_options_arg(index))
     }
 
     fn optional_timing_arg(&mut self, index: usize) -> Option<animation::OptionalTiming> {
-        self.with_front(|front| front.optional_timing_arg(index))
+        self.with_scoped(|scoped| scoped.optional_timing_arg(index))
     }
 
     fn timeline_arg(&mut self, index: usize) -> Option<bool> {
-        self.with_front(|front| front.timeline_arg(index))
+        self.with_scoped(|scoped| scoped.timeline_arg(index))
     }
 
     fn keyframes_arg(&mut self, index: usize) -> Option<Option<animation::ScriptKeyframes>> {
-        self.with_front(|front| front.keyframes_arg(index))
+        self.with_scoped(|scoped| scoped.keyframes_arg(index))
     }
 
     fn clone_arg(
         &mut self,
         index: usize,
     ) -> Option<(dom::SerializedMessage, Vec<v8::Local<'s, v8::Object>>)> {
-        self.with_front(|front| front.clone_arg(index))
+        self.with_scoped(|scoped| scoped.clone_arg(index))
     }
 
     fn string_pairs_arg(&mut self, index: usize) -> Option<dom_api::typed::StringPairsArg> {
-        self.with_front(|front| front.string_pairs_arg(index))
+        self.with_scoped(|scoped| scoped.string_pairs_arg(index))
     }
 
     fn blob_parts_arg(
         &mut self,
         index: usize,
     ) -> Option<Option<Vec<dom_api::typed::BlobPartArg<v8::Local<'s, v8::Object>>>>> {
-        self.with_front(|front| front.blob_parts_arg(index))
+        self.with_scoped(|scoped| scoped.blob_parts_arg(index))
     }
 
     fn array_view_arg(&mut self, index: usize) -> Option<dom_api::typed::ArrayViewArg> {
-        self.with_front(|front| front.array_view_arg(index))
-    }
-
-    fn dict_headers(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<dom_api::typed::StringPairsArg>> {
-        self.with_front(|front| front.dict_headers(dict, member))
-    }
-
-    fn dict_is_null(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<bool>> {
-        self.with_front(|front| front.dict_is_null(dict, member))
-    }
-
-    fn dict_serialized(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<Vec<u8>>> {
-        self.with_front(|front| front.dict_serialized(dict, member))
+        self.with_scoped(|scoped| scoped.array_view_arg(index))
     }
 
     fn objects_arg<T: elise::HeapType>(
@@ -1404,7 +1511,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         index: usize,
         interface: &str,
     ) -> Option<Vec<v8::Local<'s, v8::Object>>> {
-        self.with_front(|front| front.objects_arg::<T>(index, interface))
+        self.with_scoped(|scoped| scoped.objects_arg::<T>(index, interface))
     }
 
     /// A wrapper is told by its type's tag: no scope.
@@ -1434,53 +1541,20 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         }
         match v8::machopo::as_smi(value) {
             Some(number) => Some(f64::from(number)),
-            None => self.with_front(|front| front.number_if(index)),
+            None => self.with_scoped(|scoped| scoped.number_if(index)),
         }
     }
 
     /// The view is the first argument, as `array_view_arg` took it.
     fn finish_filled_view(&mut self, bytes: Vec<u8>) {
-        self.with_front(|front| front.finish_filled_view(bytes));
-    }
-
-    fn dict_nullable_object<T: elise::HeapType>(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-        interface: &str,
-    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
-        self.with_front(|front| front.dict_nullable_object::<T>(dict, member, interface))
-    }
-
-    fn dict_nullable_target(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
-        self.with_front(|front| front.dict_nullable_target(dict, member))
-    }
-
-    fn dict_body(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<dom_api::typed::BodyMember<v8::Local<'s, v8::Object>>>> {
-        self.with_front(|front| front.dict_body(dict, member))
-    }
-
-    fn dict_signal(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<dom_api::typed::SignalMember<v8::Local<'s, v8::Object>>>> {
-        self.with_front(|front| front.dict_signal(dict, member))
+        self.with_scoped(|scoped| scoped.finish_filled_view(bytes));
     }
 
     fn body_arg(
         &mut self,
         index: usize,
     ) -> Option<Option<dom_api::typed::BodyArg<v8::Local<'s, v8::Object>>>> {
-        self.with_front(|front| front.body_arg(index))
+        self.with_scoped(|scoped| scoped.body_arg(index))
     }
 
     /// A typed array is no allocation to tell: no scope unless it isn't
@@ -1496,56 +1570,8 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
                 array: value,
                 len: array.byte_length(),
             }),
-            Err(_) => self.with_front(|front| front.uint8_clamped_arg(index)),
+            Err(_) => self.with_scoped(|scoped| scoped.uint8_clamped_arg(index)),
         }
-    }
-
-    fn dict_bool(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<bool>> {
-        self.with_front(|front| front.dict_bool(dict, member))
-    }
-
-    fn dict_number(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<f64>> {
-        self.with_front(|front| front.dict_number(dict, member))
-    }
-
-    fn dict_string(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<String>> {
-        self.with_front(|front| front.dict_string(dict, member))
-    }
-
-    fn dict_nullable_string(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<String>> {
-        self.with_front(|front| front.dict_nullable_string(dict, member))
-    }
-
-    fn dict_strings(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<Vec<String>>> {
-        self.with_front(|front| front.dict_strings(dict, member))
-    }
-
-    fn dict_string_or_number(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<dom_api::typed::StringOrNumber>> {
-        self.with_front(|front| front.dict_string_or_number(dict, member))
     }
 
     #[inline(always)]
@@ -1573,7 +1599,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         if value.is_false() {
             return false;
         }
-        self.with_front(|front| front.bool_arg(index))
+        self.with_scoped(|scoped| scoped.bool_arg(index))
     }
 
     /// A small integer (most integer arguments) is read from its handle;
@@ -1586,7 +1612,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
             // A missing optional one (`setTimeout(f)`): `ToInt32` of
             // undefined.
             None if value.is_undefined() => Some(0),
-            None => self.with_front(|front| front.i32_arg(index)),
+            None => self.with_scoped(|scoped| scoped.i32_arg(index)),
         }
     }
 
@@ -1601,7 +1627,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         match v8::machopo::as_smi(value) {
             Some(value) => Some(value.cast_unsigned()),
             None if value.is_undefined() => Some(0),
-            None => self.with_front(|front| front.u32_arg(index)),
+            None => self.with_scoped(|scoped| scoped.u32_arg(index)),
         }
     }
 
@@ -1620,7 +1646,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         };
         match number {
             Some(number) if !finite || number.is_finite() => Some(number),
-            _ => self.with_front(|front| front.f64_arg(index, finite)),
+            _ => self.with_scoped(|scoped| scoped.f64_arg(index, finite)),
         }
     }
 
@@ -1639,7 +1665,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         if bindings::is_wrapper::<T>(self.info.isolate(), value) {
             return v8::Local::<v8::Object>::try_from(value).ok().map(Some);
         }
-        self.with_front(|front| front.object_arg::<T>(index, interface))
+        self.with_scoped(|scoped| scoped.object_arg::<T>(index, interface))
     }
 
     #[inline(always)]
@@ -1659,14 +1685,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         {
             return v8::Local::<v8::Object>::try_from(value).ok().map(Some);
         }
-        self.with_front(|front| front.target_arg(index, interface))
-    }
-
-    #[cold]
-    #[inline(never)]
-    fn throw(&mut self, error: ApiError) {
-        // What the operation left before it failed isn't the result.
-        self.with_front(|front| front.throw(error));
+        self.with_scoped(|scoped| scoped.target_arg(index, interface))
     }
 
     /// The reactions' callbacks are script: the whole front end's, which

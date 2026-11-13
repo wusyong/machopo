@@ -37,7 +37,9 @@
 | 4k-G 最熱的路本身：對 Chrome 數指令（做了）；不影響安全性的寫法調整（wrapper 的 tag 比一次） | 完成 | 2026-11-13 |
 | 4l cross-origin 的成員、要找別的 realm 的 window 的、legacy factory 的 callback 只拿 info（整個呼叫在一個 scope 裡）；4i 留下的 interceptor 不動 | 完成 | 2026-11-13 |
 | 4m-2 成員還用 rusty_v8 的 trampoline 的幾處改掉（`window.window`、`window.document` 的 cached getter、legacy caller、好幾個 constructor 的那一組的 `Call`），要找別的 realm 的 window 的和 legacy factory 改從新的 front 開始，刪 `PLAIN`（連同它的檢查：`PLAIN_FRONT_METHODS`、`PLAIN_OP_METHODS`、`dom_api` 的 `plain` 測試）和成員舊的 callback（`Member<M>`、`bindings` 的 `StateMethod`） | 完成（`Front` 的預設實作還沒拿掉：見那一段） | 2026-11-13 |
-| 4m-3 新的 front 還交給 `V8Front` 的約 85 個方法搬出來（搬法到時評估：留一個 scope、只拿掉殼，或全部不建 scope；決定 42），再刪掉 `V8Front`、`Call`、`Kept`；`Front` 的預設實作拿掉（script 那一側的方法先分出去：決定 44）；iterator 的 pairs、4i 留下的 interceptor、`state.rs` 的內部函式還用 rusty_v8 的 trampoline 的一起看 | 還沒開始 | |
+| 4m-3a 新的 front 還交給 `V8Front` 的方法搬到只有 scope、參數、回傳值的 `Scoped` 上；讀 dictionary 成員的方法分成 `DictFront` | 完成 | 2026-11-13 |
+| 4m-3b script 那一側怎麼收（`whole`、custom element reactions、cross-origin 的成員、legacy caller、pairs、舊的 indexed 的路還建 `V8Front`）：待決定，見 4m-3a 那一段的最後 | 還沒開始 | |
+| 4m-3c 拿掉 `Front` 的預設實作、清舊的實作、整個階段的檢查和對 Chrome 的收尾量測 | 還沒開始 | |
 | 收尾：`nodeType`、`getAttribute` 的 callback 和 Chrome 的逐條指令對照，列出剩下的差（決定 20） | 還沒開始 | |
 
 ## 驗收
@@ -830,3 +832,14 @@
 - mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4m2.toml`，6 個都抓到（第一次跑時「relevant realm 的 window 換成目前的」沒抓到，補了上面第一個測試）。
 - 沒有量指令數或對 Chrome 量：這一段動的是很少被呼叫的成員和刪程式。
 - 跑過：`cargo test -p bindings -p dom_api_macros -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt FileAPI/blob html/semantics/embedded-content/the-img-element html/semantics/forms/the-option-element html/infrastructure/common-dom-interfaces/collections html/browsers/the-window-object dom/nodes`（627 個測試、18238 個結果都照預期）。
+
+**第 4m-3a 段：冷的路在 `Scoped` 上做，不建完整的 front**（2026-11-13；決定 45）：
+
+- `dom_js` 的 `front.rs`：新的 `Scoped<'a, 's, 'i, 'r, A>`（scope、參數、`ReturnSlot`，沒有 `Drop`）。`V8Front` 的方法裡不碰一次呼叫留著的東西（`Call` 的 `kept`、`prepared`、`window`、`callback`、`rare`）的 85 個連同 7 個輔助函式原樣搬成 `Scoped` 的方法（腳本搬的，本體沒改，`Self::Node` 之類換成具體的型別）；`V8Front` 變成 `{ base: Scoped, call: Call }`，那 85 個在它的 `Front` 實作裡各剩一行轉呼叫，`Call` 不再有回傳值（`V8Op` 另外借 `base.rv`）。丟例外、reject、節點和物件的結果、callback 型別不對的錯誤，不用狀態的那一半也分出來（`throw_error`、`reject_with`、`finish_node_root`、`finish_object_root`、`finish_construct`、`throw_not_of_type`）。`Kept` 少了從新的 front 進來的那個入口（`finish_kept_as`）。
+- `InfoFront::with_scoped` 只建 `Scoped`；原本 88 處 `with_front` 剩一處（custom element reactions：跑 script），`whole` 照舊。
+- `dom_api`：讀 dictionary 成員的 15 個方法和 `throw` 從 `Front` 分到上層的 `DictFront`（`Front: DictFront`）；`DictMember::read`、`DictHandle`、`ReadDict`、`read_member`、`read_handle` 只要 `DictFront`。`Scoped` 實作 `FrontTypes` 和 `DictFront`，所以 `InfoFront::reading` 在一個 scope 裡用 `Scoped` 讀整個 dictionary，讀 dictionary 的程式碰到別的方法會編不過。六個 front 各多一個 `impl DictFront`（wasm 的、named property 的、`OneNode` 只有 `throw`）。
+- **指令數（`perf stat`，window 的 realm，各三次取最小；4l 的 binary → 這一段）**：`nodeType` 100.9 → 102.5，`removeEventListener('x', f, {capture: true})` 1199.5 → 1196.5，`appendChild` 丟例外 27000.6 → 26990.7，`cloneNode(1.5)` 2049.4 → 2054.3，`getClientRects()` 1867.1 → 1720.7，`new Event('x', {bubbles: true})` 4016.7 → 4010.7，`n.children` 209.5 → 211.2，`classList.add('a', 'b')` 4592.0 → 4594.3。**開始前估的「每次省約 35 條」不對**：大多數的路差在 ±10 條以內（雜訊的大小），只有回傳物件陣列的少了 146 條。這一段的收穫是結構（冷的路不再經過完整的 front、dictionary 的讀取有編譯期的界線），不是指令數。
+- 測試：`handlers::a_callback_that_isnt_one_is_named_by_its_position`（`addEventListener('x', 5)`、`requestAnimationFrame(5)` 的 `TypeError` 寫的是第幾個參數）。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4m3a.toml`，5 個都抓到（第一次「callback 的錯誤寫成 index」沒抓到，補了上面的測試）。
+- 跑過：`cargo build --workspace --tests`、`cargo test -p dom_api_macros -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt dom/events dom/nodes dom/abort html/dom web-animations/interfaces fetch/api/headers FileAPI/blob`（820 個測試、78178 個結果都照預期）。
+- **4m-3b 開始前發現決定 45 的第二項前提不對，要請使用者重選**：那一項說實作 script 那一側的是「一個瘦的型別（scope、參數、回傳值）」。但 `whole` 是把整個成員的呼叫（`TypedMember::call`，對 `Front` 泛型）放到那個型別上跑，所以它要實作 `Front` 的全部和操作那一側（`V8Op`），還要留著呼叫期間的東西（taken 的 callback、準備好的 wrapper、window、`define` 讀到的 callback、filter 丟的例外）：那就是現在的 `V8Front`，瘦不下來。選項寫在回覆裡。

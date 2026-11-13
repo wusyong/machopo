@@ -29,7 +29,8 @@ use dom::{
 };
 use dom_api::typed::{BlobPartArg, Radius, Uint8ClampedArg};
 use dom_api::{
-    AnyArg, ApiCx, ApiError, Callback, ConstructorInfo, Front, FrontTypes, HtmlConstructed, OpFront,
+    AnyArg, ApiCx, ApiError, Callback, ConstructorInfo, DictFront, Front, FrontTypes,
+    HtmlConstructed, OpFront,
 };
 use elise::{JsEdge, Persistent};
 
@@ -218,17 +219,13 @@ impl<'s> CallArgs<'s> for NameArgs<'s> {
 /// operation (`Call`). `'r` is the result's (a property callback's
 /// `ReturnValue` has a lifetime of its own).
 pub(crate) struct V8Front<'a, 's, 'i, 'r, A: CallArgs<'s> = v8::FunctionCallbackArguments<'s>> {
-    scope: Scope<'a, 's, 'i>,
-    args: &'a A,
-    call: Call<'s, 'r>,
+    base: Scoped<'a, 's, 'i, 'r, A>,
+    call: Call<'s>,
 }
 
 /// What a call takes before its operation and leaves for after: lent to
 /// the operation's side whole (one pointer, not each field copied in).
-pub(crate) struct Call<'s, 'r> {
-    /// The result: in the operation only as `OpReturn` (`full` needs the
-    /// isolate, which a holder of the state hasn't).
-    rv: bindings::ReturnSlot<'r>,
+pub(crate) struct Call<'s> {
     /// Dropped by `Call`'s own `Drop` (as `rare`), out of line only if set.
     kept: ManuallyDrop<Option<Box<Kept>>>,
     /// A `[NewObject]`'s wrapper, made before the operation, and its
@@ -251,7 +248,7 @@ pub(crate) struct Call<'s, 'r> {
 /// The two boxes looked at inline, freed out of line: most calls (every
 /// getter's) have neither, and the drop glue's call (its registers saved,
 /// two checks) was some 18 instructions each.
-impl Drop for Call<'_, '_> {
+impl Drop for Call<'_> {
     #[inline]
     fn drop(&mut self) {
         if self.kept.is_some() || self.rare.is_some() {
@@ -260,7 +257,7 @@ impl Drop for Call<'_, '_> {
     }
 }
 
-impl Call<'_, '_> {
+impl Call<'_> {
     #[cold]
     #[inline(never)]
     fn drop_held(&mut self) {
@@ -288,7 +285,7 @@ pub(crate) struct RareCall<'s> {
     second_callback: Option<v8::Local<'s, v8::Value>>,
 }
 
-impl<'s> Call<'s, '_> {
+impl<'s> Call<'s> {
     fn rare(&mut self) -> &mut RareCall<'s> {
         self.rare.get_or_insert_with(Box::default)
     }
@@ -300,13 +297,39 @@ impl<'s> Call<'s, '_> {
 pub(crate) struct V8Op<'o, 's, 'i, 'r, A: CallArgs<'s>> {
     no_gc: bindings::NoGc<'o, 's, 'i>,
     args: &'o A,
-    call: &'o mut Call<'s, 'r>,
+    call: &'o mut Call<'s>,
+    /// The result: in the operation only as `OpReturn` (`full` needs the
+    /// isolate, which a holder of the state hasn't).
+    rv: &'o mut bindings::ReturnSlot<'r>,
     caches: &'o Caches,
 }
 
-impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
+/// A scope made in a callback, its arguments and where its result goes:
+/// what a member's call does that allocates in V8, throws or converts
+/// (an argument read whole, a dictionary's member, a result V8 makes),
+/// each a function of these alone. Nothing is kept across them: no call's
+/// state, nothing to drop.
+pub(crate) struct Scoped<'a, 's, 'i, 'r, A: CallArgs<'s> = v8::FunctionCallbackArguments<'s>> {
+    pub(crate) scope: Scope<'a, 's, 'i>,
+    pub(crate) args: &'a A,
+    pub(crate) rv: bindings::ReturnSlot<'r>,
+}
+
+impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Scoped<'a, 's, 'i, 'r, A> {
+    pub(crate) fn new(
+        scope: Scope<'a, 's, 'i>,
+        args: &'a A,
+        rv: v8::ReturnValue<'r, v8::Value>,
+    ) -> Self {
+        Self {
+            scope,
+            args,
+            rv: bindings::ReturnSlot::new(rv),
+        }
+    }
+
     /// `dict`'s member `member`'s value (its getter may throw).
-    fn dict_value(
+    pub(crate) fn dict_value(
         &mut self,
         dict: &v8::Local<'s, v8::Object>,
         member: dom_api::typed::MemberName,
@@ -319,7 +342,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
     /// `value` (not null or undefined) as `BodyInit`: a blob's or a
     /// `URLSearchParams`' wrapper, a buffer's or a view's bytes copied,
     /// anything else its `ToString` (WebIDL's union, a string last).
-    fn body_of(
+    pub(crate) fn body_of(
         &mut self,
         value: v8::Local<'s, v8::Value>,
     ) -> Option<dom_api::typed::BodyArg<v8::Local<'s, v8::Object>>> {
@@ -356,37 +379,11 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
         Some(BodyArg::String(string.to_rust_string_lossy(scope)))
     }
 
-    pub(crate) fn new(
-        scope: Scope<'a, 's, 'i>,
-        args: &'a A,
-        rv: v8::ReturnValue<'r, v8::Value>,
-    ) -> Self {
-        // Every way into script counts itself (`listeners::run_callback`
-        // and the engine's entries): a member called with none counted
-        // would run a microtask checkpoint where HTML has none.
-        debug_assert!(
-            bindings::trace::in_script(),
-            "a DOM member is called from script that the engine didn't count as entered"
-        );
-        Self {
-            scope,
-            args,
-            call: Call {
-                rv: bindings::ReturnSlot::new(rv),
-                kept: ManuallyDrop::new(None),
-                prepared: None,
-                window: None,
-                callback: None,
-                rare: ManuallyDrop::new(None),
-            },
-        }
-    }
-
     /// Whether the call's `new.target` is `interface`'s interface object
     /// in the current context.
     #[cold]
     #[inline(never)]
-    fn is_own_constructor(&mut self, interface: usize) -> bool {
+    pub(crate) fn is_own_constructor(&mut self, interface: usize) -> bool {
         let new_target = self.args.new_target();
         templates::template(&mut self.scope, interface)
             .get_function(self.scope.scope())
@@ -397,7 +394,11 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
     /// `IntersectionObserverEntryInit`: `[x, y, width, height]`, each
     /// unrestricted and 0 if missing; null an empty one. Not an object: a
     /// `TypeError`, thrown.
-    fn rect_init(&mut self, value: v8::Local<'s, v8::Value>, name: &str) -> Option<[f64; 4]> {
+    pub(crate) fn rect_init(
+        &mut self,
+        value: v8::Local<'s, v8::Value>,
+        name: &str,
+    ) -> Option<[f64; 4]> {
         if value.is_null() {
             return Some([0.0; 4]);
         }
@@ -421,17 +422,1568 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
     }
 
     /// The result whole, out of the operation.
-    fn rv(&mut self) -> &mut v8::ReturnValue<'r, v8::Value> {
-        self.call.rv.full(self.scope.scope())
+    pub(crate) fn rv(&mut self) -> &mut v8::ReturnValue<'r, v8::Value> {
+        self.rv.full(self.scope.scope())
     }
 
-    fn throw_type_error(&mut self, message: &str) {
+    pub(crate) fn throw_type_error(&mut self, message: &str) {
         crate::throw_type_error(self.scope.scope(), message);
+    }
+
+    /// The call's result a new promise resolved with `value`.
+    pub(crate) fn resolve(&mut self, value: v8::Local<'s, v8::Value>) {
+        let scope = self.scope.scope();
+        let Some(resolver) = v8::PromiseResolver::new(scope) else {
+            return;
+        };
+        resolver.resolve(scope, value);
+        let promise = resolver.get_promise(scope);
+        self.rv().set(promise.into());
+    }
+
+    #[inline]
+    pub(crate) fn has_args(&mut self, name: &str, required: usize) -> bool {
+        let given = usize::try_from(self.args.length()).unwrap_or(0);
+        if given >= required {
+            return true;
+        }
+        self.throw_type_error(&format!(
+            "Failed to execute '{name}': {required} argument{} required, but only {given} present.",
+            if required == 1 { "" } else { "s" }
+        ));
+        false
+    }
+
+    pub(crate) fn string_arg(&mut self, index: usize) -> Option<ArgString<'s>> {
+        strings::arg_string(self.scope.scope(), arg(self.args, index))
+    }
+
+    pub(crate) fn node_or_long_arg(
+        &mut self,
+        index: usize,
+    ) -> Option<Option<dom_api::typed::NodeOrLong<v8::Local<'s, v8::Object>>>> {
+        let value = arg(self.args, index);
+        if value.is_null_or_undefined() {
+            return Some(None);
+        }
+        if bindings::is_wrapper::<Node>(self.scope.scope(), value) {
+            return v8::Local::<v8::Object>::try_from(value)
+                .ok()
+                .map(|node| Some(dom_api::typed::NodeOrLong::Node(node)));
+        }
+        value
+            .int32_value(self.scope.scope())
+            .map(|long| Some(dom_api::typed::NodeOrLong::Long(long)))
+    }
+
+    pub(crate) fn node_arg(&mut self, index: usize) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        let value = arg(self.args, index);
+        if value.is_null_or_undefined() {
+            return Some(None);
+        }
+        if bindings::is_wrapper::<Node>(self.scope.scope(), value) {
+            return v8::Local::<v8::Object>::try_from(value).ok().map(Some);
+        }
+        self.throw_type_error(&format!(
+            "parameter {} is not of type 'Node'.",
+            index.saturating_add(1)
+        ));
+        None
+    }
+
+    pub(crate) fn dict_arg(
+        &mut self,
+        index: usize,
+        name: &str,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        let value = arg(self.args, index);
+        if value.is_null_or_undefined() {
+            return Some(None);
+        }
+        if let Ok(object) = v8::Local::<v8::Object>::try_from(value) {
+            return Some(Some(object));
+        }
+        self.throw_type_error(&format!("The provided value is not of type '{name}'."));
+        None
+    }
+
+    /// The member's value (a getter may run, and throw: V8 has the
+    /// exception pending then), `ToBoolean`ed.
+    pub(crate) fn dict_bool(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<bool>> {
+        let key = member_key(&mut self.scope, member);
+        let scope = self.scope.scope();
+        let value = dict.get(scope, key.into())?;
+        if value.is_undefined() {
+            return Some(None);
+        }
+        Some(Some(value.boolean_value(scope)))
+    }
+
+    pub(crate) fn dict_number(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<f64>> {
+        let key = member_key(&mut self.scope, member);
+        let scope = self.scope.scope();
+        let value = dict.get(scope, key.into())?;
+        if value.is_undefined() {
+            return Some(None);
+        }
+        Some(Some(value.number_value(scope)?))
+    }
+
+    /// Cold: only a constructor's dictionary reads one (`KeyboardEvent`'s),
+    /// and placed among the hot calls it made `appendChild` and
+    /// `dispatchEvent` a third slower (the same instructions).
+    #[cold]
+    pub(crate) fn dict_string(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<String>> {
+        let key = member_key(&mut self.scope, member);
+        let scope = self.scope.scope();
+        let value = dict.get(scope, key.into())?;
+        if value.is_undefined() {
+            return Some(None);
+        }
+        let string = value.to_string(scope)?;
+        Some(Some(string.to_rust_string_lossy(scope)))
+    }
+
+    /// Cold, as `dict_string`: only `InputEvent`'s constructor reads one.
+    #[cold]
+    pub(crate) fn dict_nullable_string(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<String>> {
+        let key = member_key(&mut self.scope, member);
+        let scope = self.scope.scope();
+        let value = dict.get(scope, key.into())?;
+        if value.is_null_or_undefined() {
+            return Some(None);
+        }
+        let string = value.to_string(scope)?;
+        Some(Some(string.to_rust_string_lossy(scope)))
+    }
+
+    pub(crate) fn dict_serialized(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<Vec<u8>>> {
+        let key = member_key(&mut self.scope, member);
+        let scope = self.scope.scope();
+        let value = dict.get(scope, key.into())?;
+        if value.is_undefined() {
+            return Some(None);
+        }
+        crate::serialize::serialize_for_storage(scope, value).map(Some)
+    }
+
+    pub(crate) fn dict_string_or_number(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<dom_api::typed::StringOrNumber>> {
+        let key = member_key(&mut self.scope, member);
+        let scope = self.scope.scope();
+        let value = dict.get(scope, key.into())?;
+        if value.is_undefined() {
+            return Some(None);
+        }
+        if value.is_number() {
+            return Some(Some(dom_api::typed::StringOrNumber::Number(
+                value.number_value(scope)?,
+            )));
+        }
+        let string = value.to_string(scope)?.to_rust_string_lossy(scope);
+        Some(Some(dom_api::typed::StringOrNumber::String(string)))
+    }
+
+    pub(crate) fn dict_any(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<AnyArg<v8::Local<'s, v8::Value>>>> {
+        let key = member_key(&mut self.scope, member);
+        let scope = self.scope.scope();
+        let value = dict.get(scope, key.into())?;
+        if value.is_undefined() {
+            return Some(None);
+        }
+        Some(Some(AnyArg(value)))
+    }
+
+    pub(crate) fn any_arg(&mut self, index: usize) -> AnyArg<v8::Local<'s, v8::Value>> {
+        let mut value = arg(self.args, index);
+        if value.is_undefined() {
+            value = v8::null(self.scope.scope()).into();
+        }
+        AnyArg(value)
+    }
+
+    pub(crate) fn target_arg(
+        &mut self,
+        index: usize,
+        interface: &str,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        let value = arg(self.args, index);
+        if value.is_null_or_undefined() {
+            return Some(None);
+        }
+        let scope = self.scope.scope();
+        if bindings::is_wrapper::<Node>(scope, value)
+            || bindings::is_wrapper::<Window>(scope, value)
+            || bindings::is_wrapper::<EventTargetImpl>(scope, value)
+        {
+            return v8::Local::<v8::Object>::try_from(value).ok().map(Some);
+        }
+        self.throw_type_error(&format!(
+            "parameter {} is not of type '{interface}'.",
+            index.saturating_add(1)
+        ));
+        None
+    }
+
+    /// An array's elements, each `ToString`ed (WebIDL's `sequence`
+    /// conversion of an array; another iterable is a `TypeError` here).
+    pub(crate) fn dict_strings(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<Vec<String>>> {
+        let key = member_key(&mut self.scope, member);
+        let scope = self.scope.scope();
+        let value = dict.get(scope, key.into())?;
+        if value.is_undefined() {
+            return Some(None);
+        }
+        let Ok(array) = v8::Local::<v8::Array>::try_from(value) else {
+            self.throw_type_error(&format!(
+                "The provided value for '{member}' is not a sequence."
+            ));
+            return None;
+        };
+        let mut strings = Vec::new();
+        for index in 0..array.length() {
+            let element = array.get_index(self.scope.scope(), index)?;
+            strings.push(
+                element
+                    .to_string(self.scope.scope())?
+                    .to_rust_string_lossy(self.scope.scope()),
+            );
+        }
+        Some(Some(strings))
+    }
+
+    pub(crate) fn uint8_clamped_arg(
+        &mut self,
+        index: usize,
+    ) -> Option<Uint8ClampedArg<v8::Local<'s, v8::Value>>> {
+        let value = arg(self.args, index);
+        let Ok(array) = v8::Local::<v8::Uint8ClampedArray>::try_from(value) else {
+            self.throw_type_error(&format!(
+                "parameter {} is not of type 'Uint8ClampedArray'.",
+                index.saturating_add(1)
+            ));
+            return None;
+        };
+        Some(Uint8ClampedArg {
+            array: value,
+            len: array.byte_length(),
+        })
+    }
+
+    pub(crate) fn array_view_arg(&mut self, index: usize) -> Option<dom_api::typed::ArrayViewArg> {
+        let value = arg(self.args, index);
+        let Ok(view) = v8::Local::<v8::ArrayBufferView>::try_from(value) else {
+            self.throw_type_error(&format!(
+                "parameter {} is not of type 'ArrayBufferView'.",
+                index.saturating_add(1)
+            ));
+            return None;
+        };
+        let integer = [
+            ("Int8Array", value.is_int8_array()),
+            ("Uint8Array", value.is_uint8_array()),
+            ("Uint8ClampedArray", value.is_uint8_clamped_array()),
+            ("Int16Array", value.is_int16_array()),
+            ("Uint16Array", value.is_uint16_array()),
+            ("Int32Array", value.is_int32_array()),
+            ("Uint32Array", value.is_uint32_array()),
+            ("BigInt64Array", value.is_big_int64_array()),
+            ("BigUint64Array", value.is_big_uint64_array()),
+        ];
+        let other = [
+            ("Float32Array", value.is_float32_array()),
+            ("Float64Array", value.is_float64_array()),
+            ("DataView", value.is_data_view()),
+        ];
+        let (name, integer) = match integer.iter().find(|(_, is)| *is) {
+            Some((name, _)) => (*name, true),
+            // A `Float16Array`'s too.
+            None => (
+                other
+                    .iter()
+                    .find(|(_, is)| *is)
+                    .map_or("Float16Array", |(name, _)| *name),
+                false,
+            ),
+        };
+        let byte_length = view.byte_length();
+        Some(dom_api::typed::ArrayViewArg {
+            name,
+            integer,
+            byte_length,
+        })
+    }
+
+    pub(crate) fn clone_arg(
+        &mut self,
+        index: usize,
+    ) -> Option<(dom::SerializedMessage, Vec<v8::Local<'s, v8::Object>>)> {
+        let value = arg(self.args, index);
+        let options = arg(self.args, index.saturating_add(1));
+        crate::serialize::serialize_message(
+            &mut self.scope,
+            value,
+            options,
+            crate::serialize::TransferForm::Options,
+            None,
+        )
+    }
+
+    pub(crate) fn string_pairs_arg(&mut self, index: usize) -> Option<dom_api::StringPairsArg> {
+        let value = arg(self.args, index);
+        string_pairs(self.scope.scope(), value, false)
+    }
+
+    pub(crate) fn byte_string_pairs_arg(
+        &mut self,
+        index: usize,
+    ) -> Option<dom_api::StringPairsArg> {
+        let value = arg(self.args, index);
+        if !value.is_object() {
+            self.throw_type_error(
+                "The provided value is not of type '(record<ByteString, ByteString> or sequence<sequence<ByteString>>)'.",
+            );
+            return None;
+        }
+        string_pairs(self.scope.scope(), value, true)
+    }
+
+    /// The value, or a new `AbortError` of the current realm for
+    /// undefined (Blink's `AbortController::abort` makes it then).
+    pub(crate) fn abort_reason_arg(
+        &mut self,
+        index: usize,
+    ) -> Option<AnyArg<v8::Local<'s, v8::Value>>> {
+        let mut value = arg(self.args, index);
+        if value.is_undefined() {
+            value = exception::new_dom_exception(
+                &mut self.scope,
+                "AbortError",
+                "signal is aborted without reason",
+            )?
+            .into();
+        }
+        Some(AnyArg(value))
+    }
+
+    pub(crate) fn objects_arg<T: elise::HeapType>(
+        &mut self,
+        index: usize,
+        interface: &str,
+    ) -> Option<Vec<v8::Local<'s, v8::Object>>> {
+        let value = arg(self.args, index);
+        let values = crate::observable_array::sequence(self.scope.scope(), value)?;
+        let mut objects = Vec::with_capacity(values.len());
+        for value in values {
+            match v8::Local::<v8::Object>::try_from(value) {
+                Ok(object) if bindings::is_wrapper::<T>(self.scope.scope(), value) => {
+                    objects.push(object)
+                }
+                _ => {
+                    self.throw_type_error(&format!(
+                        "parameter {}: Failed to convert value to '{interface}'.",
+                        index.saturating_add(1)
+                    ));
+                    return None;
+                }
+            }
+        }
+        Some(objects)
+    }
+
+    /// The member's value itself (`addEventListener`'s `signal`).
+    pub(crate) fn dict_object<T: elise::HeapType>(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+        interface: &str,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        let key = member_key(&mut self.scope, member);
+        let scope = self.scope.scope();
+        let value = dict.get(scope, key.into())?;
+        if value.is_undefined() {
+            return Some(None);
+        }
+        if !bindings::is_wrapper::<T>(self.scope.scope(), value) {
+            self.throw_type_error(&format!(
+                "Failed to read the '{member}' property: Failed to convert value to '{interface}'."
+            ));
+            return None;
+        }
+        Some(v8::Local::<v8::Object>::try_from(value).ok())
+    }
+
+    pub(crate) fn dict_nullable_object<T: elise::HeapType>(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+        interface: &str,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        let value = self.dict_value(dict, member)?;
+        if value.is_null_or_undefined() {
+            return Some(None);
+        }
+        if !bindings::is_wrapper::<T>(self.scope.scope(), value) {
+            self.throw_type_error(&format!(
+                "Failed to read the '{member}' property: Failed to convert value to '{interface}'."
+            ));
+            return None;
+        }
+        Some(v8::Local::<v8::Object>::try_from(value).ok())
+    }
+
+    pub(crate) fn dict_nullable_target(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        let value = self.dict_value(dict, member)?;
+        if value.is_null_or_undefined() {
+            return Some(None);
+        }
+        let scope = self.scope.scope();
+        if !(bindings::is_wrapper::<Node>(scope, value)
+            || bindings::is_wrapper::<Window>(scope, value)
+            || bindings::is_wrapper::<EventTargetImpl>(scope, value))
+        {
+            self.throw_type_error(&format!(
+                "Failed to read the '{member}' property: Failed to convert value to 'EventTarget'."
+            ));
+            return None;
+        }
+        Some(v8::Local::<v8::Object>::try_from(value).ok())
+    }
+
+    pub(crate) fn body_arg(
+        &mut self,
+        index: usize,
+    ) -> Option<Option<dom_api::typed::BodyArg<v8::Local<'s, v8::Object>>>> {
+        let value = arg(self.args, index);
+        if value.is_null_or_undefined() {
+            return Some(None);
+        }
+        self.body_of(value).map(Some)
+    }
+
+    pub(crate) fn dict_body(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<dom_api::typed::BodyMember<v8::Local<'s, v8::Object>>>> {
+        let value = self.dict_value(dict, member)?;
+        if value.is_undefined() {
+            return Some(None);
+        }
+        if value.is_null() {
+            return Some(Some(dom_api::typed::BodyMember::Null));
+        }
+        Some(Some(dom_api::typed::BodyMember::Body(self.body_of(value)?)))
+    }
+
+    pub(crate) fn dict_headers(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<dom_api::StringPairsArg>> {
+        let value = self.dict_value(dict, member)?;
+        if value.is_undefined() {
+            return Some(None);
+        }
+        if !value.is_object() {
+            self.throw_type_error(&format!(
+                "Failed to read the '{member}' property: The provided value is not of type '(record<ByteString, ByteString> or sequence<sequence<ByteString>>)'."
+            ));
+            return None;
+        }
+        string_pairs(self.scope.scope(), value, true).map(Some)
+    }
+
+    pub(crate) fn dict_signal(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<dom_api::typed::SignalMember<v8::Local<'s, v8::Object>>>> {
+        let value = self.dict_value(dict, member)?;
+        if value.is_undefined() {
+            return Some(None);
+        }
+        if value.is_null() {
+            return Some(Some(dom_api::typed::SignalMember::Null));
+        }
+        if !bindings::is_wrapper::<dom::EventTargetImpl>(self.scope.scope(), value) {
+            self.throw_type_error(&format!(
+                "Failed to read the '{member}' property: Failed to convert value to 'AbortSignal'."
+            ));
+            return None;
+        }
+        Some(
+            v8::Local::<v8::Object>::try_from(value)
+                .ok()
+                .map(dom_api::typed::SignalMember::Signal),
+        )
+    }
+
+    pub(crate) fn dict_is_null(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<bool>> {
+        let value = self.dict_value(dict, member)?;
+        Some((!value.is_undefined()).then(|| value.is_null()))
+    }
+
+    pub(crate) fn json_arg(&mut self, index: usize) -> Option<String> {
+        let value = arg(self.args, index);
+        let scope = self.scope.scope();
+        let json = v8::json::stringify(scope, value)?.to_rust_string_lossy(scope);
+        // What `JSON.stringify` gives undefined for (undefined, a
+        // function, a symbol), V8's API gives as this, which no JSON text
+        // is.
+        if json == "undefined" {
+            self.throw_type_error("The data is not JSON serializable");
+            return None;
+        }
+        Some(json)
+    }
+
+    /// WebIDL's sequence conversion, each item as a `BlobPart` union is:
+    /// a blob's wrapper, else a buffer or a view of one (its bytes copied
+    /// now, as File API's "process blob parts" takes them), else a string.
+    pub(crate) fn blob_parts_arg(
+        &mut self,
+        index: usize,
+    ) -> Option<Option<Vec<BlobPartArg<v8::Local<'s, v8::Object>>>>> {
+        let value = arg(self.args, index);
+        if value.is_undefined() {
+            return Some(None);
+        }
+        let mut parts = Vec::new();
+        crate::observable_array::for_each_item(self.scope.scope(), value, |scope, value| {
+            let part = if bindings::is_wrapper::<dom::Blob>(scope, value) {
+                BlobPartArg::Blob(v8::Local::<v8::Object>::try_from(value).ok()?)
+            } else if let Ok(buffer) = v8::Local::<v8::ArrayBuffer>::try_from(value) {
+                let store = buffer.get_backing_store();
+                BlobPartArg::Bytes(
+                    store
+                        .iter()
+                        .take(buffer.byte_length())
+                        .map(Cell::get)
+                        .collect(),
+                )
+            } else if let Ok(view) = v8::Local::<v8::ArrayBufferView>::try_from(value) {
+                let mut bytes = vec![0; view.byte_length()];
+                let copied = view.copy_contents(&mut bytes);
+                bytes.truncate(copied);
+                BlobPartArg::Bytes(bytes)
+            } else {
+                BlobPartArg::String(value.to_string(scope)?.to_rust_string_lossy(scope))
+            };
+            parts.push(part);
+            Some(())
+        })?;
+        Some(Some(parts))
+    }
+
+    pub(crate) fn message_arg(
+        &mut self,
+        index: usize,
+        transfer: dom_api::TransferArg,
+        from_port: bool,
+    ) -> Option<(dom::SerializedMessage, Vec<v8::Local<'s, v8::Object>>)> {
+        let value = arg(self.args, index);
+        let (at, form) = match transfer {
+            dom_api::TransferArg::Sequence(at) => (at, crate::serialize::TransferForm::Sequence),
+            dom_api::TransferArg::Options(at) => (at, crate::serialize::TransferForm::Options),
+            dom_api::TransferArg::SequenceOrOptions(at) => {
+                (at, crate::serialize::TransferForm::SequenceOrOptions)
+            }
+        };
+        let transfer = arg(self.args, at);
+        let source = from_port.then(|| self.args.this());
+        crate::serialize::serialize_message(&mut self.scope, value, transfer, form, source)
+    }
+
+    pub(crate) fn serialized_state_arg(&mut self, index: usize) -> Option<Vec<u8>> {
+        let value = arg(self.args, index);
+        crate::serialize::serialize_for_storage(self.scope.scope(), value)
+    }
+
+    pub(crate) fn animation_options_arg(
+        &mut self,
+        index: usize,
+    ) -> Option<dom_api::typed::AnimationOptions> {
+        let value = arg(self.args, index);
+        crate::keyframes::read_options(self.scope.scope(), value, true)
+    }
+
+    pub(crate) fn effect_options_arg(
+        &mut self,
+        index: usize,
+    ) -> Option<dom_api::typed::AnimationOptions> {
+        let value = arg(self.args, index);
+        crate::keyframes::read_options(self.scope.scope(), value, false)
+    }
+
+    pub(crate) fn optional_timing_arg(
+        &mut self,
+        index: usize,
+    ) -> Option<animation::OptionalTiming> {
+        let value = arg(self.args, index);
+        crate::keyframes::read_optional_timing(self.scope.scope(), value)
+    }
+
+    pub(crate) fn timeline_arg(&mut self, index: usize) -> Option<bool> {
+        let value = arg(self.args, index);
+        crate::keyframes::read_timeline(self.scope.scope(), value)
+    }
+
+    pub(crate) fn keyframes_arg(
+        &mut self,
+        index: usize,
+    ) -> Option<Option<animation::ScriptKeyframes>> {
+        let value = arg(self.args, index);
+        if value.is_null_or_undefined() {
+            return Some(None);
+        }
+        Some(Some(crate::keyframes::read(self.scope.scope(), value)?))
+    }
+
+    pub(crate) fn round_rect_radii_arg(&mut self, index: usize) -> Option<Vec<Radius>> {
+        let value = arg(self.args, index);
+        if value.is_undefined() {
+            return Some(vec![Radius::Both(0.0)]);
+        }
+        let scope = self.scope.scope();
+        if let Ok(object) = v8::Local::<v8::Object>::try_from(value) {
+            let symbol = v8::Symbol::get_iterator(scope);
+            if !object.get(scope, symbol.into())?.is_undefined() {
+                let mut radii = Vec::new();
+                crate::observable_array::for_each_item(scope, value, |scope, item| {
+                    radii.push(radius(scope, item)?);
+                    Some(())
+                })?;
+                return Some(radii);
+            }
+        }
+        Some(vec![radius(scope, value)?])
+    }
+
+    pub(crate) fn number_if(&mut self, index: usize) -> Option<f64> {
+        let value = arg(self.args, index);
+        value
+            .is_number()
+            .then(|| value.number_value(self.scope.scope()))
+            .flatten()
+    }
+
+    pub(crate) fn doubles_arg(&mut self, index: usize) -> Option<Vec<f64>> {
+        let value = arg(self.args, index);
+        let values = crate::observable_array::sequence(self.scope.scope(), value)?;
+        values
+            .into_iter()
+            .map(|value| value.number_value(self.scope.scope()))
+            .collect()
+    }
+
+    pub(crate) fn bool_arg(&mut self, index: usize) -> bool {
+        arg(self.args, index).boolean_value(self.scope.scope())
+    }
+
+    pub(crate) fn i32_arg(&mut self, index: usize) -> Option<i32> {
+        arg(self.args, index).int32_value(self.scope.scope())
+    }
+
+    pub(crate) fn u32_arg(&mut self, index: usize) -> Option<u32> {
+        to_uint32(self.scope.scope(), arg(self.args, index))
+    }
+
+    pub(crate) fn f64_arg(&mut self, index: usize, finite: bool) -> Option<f64> {
+        let value = arg(self.args, index).number_value(self.scope.scope())?;
+        if finite && !value.is_finite() {
+            self.throw_type_error("The provided double value is non-finite.");
+            return None;
+        }
+        Some(value)
+    }
+
+    /// A new array, made before the operation (the engine's heap isn't
+    /// touched in one).
+    pub(crate) fn rest_arg(&mut self, index: usize) -> Option<v8::Local<'s, v8::Array>> {
+        let len = usize::try_from(self.args.length()).unwrap_or(0);
+        if len <= index {
+            return None;
+        }
+        let values: Vec<_> = (index..len).map(|index| arg(self.args, index)).collect();
+        Some(v8::Array::new_with_elements(self.scope.scope(), &values))
+    }
+
+    pub(crate) fn object_arg<T: elise::HeapType>(
+        &mut self,
+        index: usize,
+        interface: &str,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        let value = arg(self.args, index);
+        if value.is_null_or_undefined() {
+            return Some(None);
+        }
+        if bindings::is_wrapper::<T>(self.scope.scope(), value) {
+            return v8::Local::<v8::Object>::try_from(value).ok().map(Some);
+        }
+        self.throw_type_error(&format!(
+            "parameter {} is not of type '{interface}'.",
+            index.saturating_add(1)
+        ));
+        None
+    }
+
+    pub(crate) fn construct(&mut self, interface: usize, required: usize) -> bool {
+        let name = dom_api::INTERFACES[interface].name;
+        if self.args.new_target().is_undefined() {
+            self.throw_type_error(&format!(
+                "Failed to construct '{name}': Please use the 'new' operator, this DOM object constructor cannot be called as a function."
+            ));
+            return false;
+        }
+        // `[HTMLConstructor]`: `new.target` is `HTMLElement` itself (its
+        // own constructor, or one defined with it), as Blink compares it
+        // with its realm's interface object.
+        if interface == const { dom_api::declare::interface_index("HTMLElement") }
+            && self.is_own_constructor(interface)
+        {
+            self.throw_type_error("Illegal constructor");
+            return false;
+        }
+        let given = usize::try_from(self.args.length()).unwrap_or(0);
+        if given >= required {
+            return true;
+        }
+        self.throw_type_error(&format!(
+            "Failed to construct '{name}': {required} argument{} required, but only {given} present.",
+            if required == 1 { "" } else { "s" }
+        ));
+        false
+    }
+
+    /// The current context's global, whose window (if it is one of the new
+    /// DOM's: its global proxy wraps it) the operation reads.
+    pub(crate) fn get_html_options(
+        &mut self,
+        index: usize,
+    ) -> Option<(bool, Vec<v8::Local<'s, v8::Object>>)> {
+        let value = arg(self.args, index);
+        if value.is_null_or_undefined() {
+            return Some((false, Vec::new()));
+        }
+        let Ok(dict) = v8::Local::<v8::Object>::try_from(value) else {
+            self.throw_type_error(
+                "Failed to execute 'getHTML': The provided value is not of type 'GetHTMLOptions'.",
+            );
+            return None;
+        };
+        let scope = self.scope.scope();
+        let key = templates::string(scope, "serializableShadowRoots");
+        let serializable = dict.get(scope, key.into())?.boolean_value(scope);
+        let key = templates::string(scope, "shadowRoots");
+        let listed = dict.get(scope, key.into())?;
+        if listed.is_undefined() {
+            return Some((serializable, Vec::new()));
+        }
+        let mut nodes = Vec::new();
+        for item in crate::observable_array::sequence(scope, listed)? {
+            match v8::Local::<v8::Object>::try_from(item) {
+                Ok(object) if bindings::is_wrapper::<Node>(scope, item) => nodes.push(object),
+                _ => {
+                    self.throw_type_error("Failed to execute 'getHTML': Failed to read the 'shadowRoots' property from 'GetHTMLOptions': Failed to convert value to 'ShadowRoot'.");
+                    return None;
+                }
+            }
+        }
+        Some((serializable, nodes))
+    }
+
+    pub(crate) fn intersection_observer_init(
+        &mut self,
+        index: usize,
+    ) -> Option<(
+        dom_api::typed::IntersectionInit,
+        Option<v8::Local<'s, v8::Object>>,
+    )> {
+        const NAME: &str = "Failed to construct 'IntersectionObserver'";
+        let mut init = dom_api::typed::IntersectionInit::default();
+        let mut root_node = None;
+        let value = arg(self.args, index);
+        if value.is_null_or_undefined() {
+            return Some((init, None));
+        }
+        let Ok(dict) = v8::Local::<v8::Object>::try_from(value) else {
+            self.throw_type_error(&format!(
+                "{NAME}: The provided value is not of type 'IntersectionObserverInit'."
+            ));
+            return None;
+        };
+        // The members in the order WebIDL reads them: by name.
+        let scope = self.scope.scope();
+        let member = |scope: &mut v8::PinScope<'s, '_>, name: &str| {
+            let key = templates::string(scope, name);
+            dict.get(scope, key.into())
+        };
+        let number = |scope: &mut v8::PinScope<'s, '_>, value: v8::Local<'s, v8::Value>| {
+            value.number_value(scope)
+        };
+        let delay = member(scope, "delay")?;
+        if !delay.is_undefined() {
+            init.delay = number(scope, delay)?;
+            if !init.delay.is_finite() {
+                self.throw_type_error(&format!(
+                    "{NAME}: Failed to read the 'delay' property from 'IntersectionObserverInit': The provided double value is non-finite."
+                ));
+                return None;
+            }
+        }
+        let scope = self.scope.scope();
+        let root = member(scope, "root")?;
+        if !root.is_null_or_undefined() {
+            match v8::Local::<v8::Object>::try_from(root) {
+                Ok(object) if bindings::is_wrapper::<Node>(scope, root) => {
+                    root_node = Some(object);
+                }
+                _ => {
+                    self.throw_type_error(&format!(
+                        "{NAME}: Failed to read the 'root' property from 'IntersectionObserverInit': The provided value is not of type '(Element or Document)'."
+                    ));
+                    return None;
+                }
+            }
+        }
+        for (name, out) in [
+            ("rootMargin", &mut init.root_margin),
+            ("scrollMargin", &mut init.scroll_margin),
+        ] {
+            let scope = self.scope.scope();
+            let value = member(scope, name)?;
+            if !value.is_undefined() {
+                *out = value.to_string(scope)?.to_rust_string_lossy(scope);
+            }
+        }
+        let scope = self.scope.scope();
+        let threshold = member(scope, "threshold")?;
+        if !threshold.is_undefined() {
+            // `(double or sequence<double>)`: an object is the sequence.
+            let values = if threshold.is_object() {
+                crate::observable_array::sequence(scope, threshold)?
+            } else {
+                vec![threshold]
+            };
+            init.thresholds.clear();
+            for value in values {
+                let value = number(self.scope.scope(), value)?;
+                if !value.is_finite() {
+                    self.throw_type_error(&format!(
+                        "{NAME}: Failed to read the 'threshold' property from 'IntersectionObserverInit': The provided double value is non-finite."
+                    ));
+                    return None;
+                }
+                init.thresholds.push(value);
+            }
+        }
+        let scope = self.scope.scope();
+        let track = member(scope, "trackVisibility")?;
+        init.track_visibility = track.boolean_value(scope);
+        Some((init, root_node))
+    }
+
+    pub(crate) fn intersection_entry_init(
+        &mut self,
+        index: usize,
+    ) -> Option<(
+        dom_api::typed::IntersectionEntryInitValues,
+        v8::Local<'s, v8::Object>,
+    )> {
+        const NAME: &str = "Failed to construct 'IntersectionObserverEntry'";
+        let mut target = None;
+        const INIT: &str = "IntersectionObserverEntryInit";
+        let value = arg(self.args, index);
+        // A dictionary: undefined and null are an empty one, whose
+        // required members are missing.
+        let dict = if value.is_null_or_undefined() {
+            v8::Object::new(self.scope.scope())
+        } else if let Ok(dict) = v8::Local::<v8::Object>::try_from(value) {
+            dict
+        } else {
+            self.throw_type_error(&format!(
+                "{NAME}: The provided value is not of type '{INIT}'."
+            ));
+            return None;
+        };
+        // The members in the order WebIDL reads them: by name; each one
+        // required.
+        let mut values = Vec::with_capacity(8);
+        for name in [
+            "boundingClientRect",
+            "intersectionRatio",
+            "intersectionRect",
+            "isIntersecting",
+            "isVisible",
+            "rootBounds",
+            "target",
+            "time",
+        ] {
+            let scope = self.scope.scope();
+            let key = templates::string(scope, name);
+            let value = dict.get(scope, key.into())?;
+            if value.is_undefined() {
+                self.throw_type_error(&format!(
+                    "{NAME}: Failed to read the '{name}' property from '{INIT}': Required member is undefined."
+                ));
+                return None;
+            }
+            let converted = match name {
+                "boundingClientRect" | "intersectionRect" | "rootBounds" => {
+                    if name == "rootBounds" && value.is_null() {
+                        Init::Rect(None)
+                    } else {
+                        Init::Rect(Some(self.rect_init(value, name)?))
+                    }
+                }
+                "isIntersecting" | "isVisible" => {
+                    Init::Bool(value.boolean_value(self.scope.scope()))
+                }
+                "target" => {
+                    let scope = self.scope.scope();
+                    match v8::Local::<v8::Object>::try_from(value) {
+                        Ok(object) if bindings::is_wrapper::<Node>(scope, value) => {
+                            target = Some(object);
+                            Init::Bool(true)
+                        }
+                        _ => {
+                            self.throw_type_error(&format!(
+                                "{NAME}: Failed to read the 'target' property from '{INIT}': Failed to convert value to 'Element'."
+                            ));
+                            return None;
+                        }
+                    }
+                }
+                _ => {
+                    let number = value.number_value(self.scope.scope())?;
+                    if !number.is_finite() {
+                        self.throw_type_error(&format!(
+                            "{NAME}: Failed to read the '{name}' property from '{INIT}': The provided double value is non-finite."
+                        ));
+                        return None;
+                    }
+                    Init::Number(number)
+                }
+            };
+            values.push(converted);
+        }
+        let [
+            Init::Rect(Some(bounding_client_rect)),
+            Init::Number(intersection_ratio),
+            Init::Rect(Some(intersection_rect)),
+            Init::Bool(is_intersecting),
+            Init::Bool(is_visible),
+            Init::Rect(root_bounds),
+            Init::Bool(_),
+            Init::Number(time),
+        ] = values[..]
+        else {
+            unreachable!("each member converted as its type")
+        };
+        Some((
+            dom_api::typed::IntersectionEntryInitValues {
+                time,
+                root_bounds,
+                bounding_client_rect,
+                intersection_rect,
+                is_intersecting,
+                is_visible,
+                intersection_ratio,
+            },
+            target.expect("a required member, converted"),
+        ))
+    }
+
+    pub(crate) fn static_range_init(
+        &mut self,
+        index: usize,
+    ) -> Option<[(v8::Local<'s, v8::Object>, u32); 2]> {
+        const NAME: &str = "Failed to construct 'StaticRange'";
+        const INIT: &str = "StaticRangeInit";
+        let value = arg(self.args, index);
+        // A dictionary: undefined and null are an empty one, whose
+        // required members are missing.
+        let dict = if value.is_null_or_undefined() {
+            v8::Object::new(self.scope.scope())
+        } else if let Ok(dict) = v8::Local::<v8::Object>::try_from(value) {
+            dict
+        } else {
+            self.throw_type_error(&format!(
+                "{NAME}: The provided value is not of type '{INIT}'."
+            ));
+            return None;
+        };
+        // The members in the order WebIDL reads them: by name; each one
+        // required.
+        let mut nodes = Vec::with_capacity(2);
+        let mut offsets = Vec::with_capacity(2);
+        for name in ["endContainer", "endOffset", "startContainer", "startOffset"] {
+            let scope = self.scope.scope();
+            let key = templates::string(scope, name);
+            let value = dict.get(scope, key.into())?;
+            if value.is_undefined() {
+                self.throw_type_error(&format!(
+                    "{NAME}: Failed to read the '{name}' property from '{INIT}': Required member is undefined."
+                ));
+                return None;
+            }
+            if name.ends_with("Offset") {
+                offsets.push(to_uint32(scope, value)?);
+                continue;
+            }
+            match v8::Local::<v8::Object>::try_from(value) {
+                Ok(object) if bindings::is_wrapper::<Node>(scope, value) => nodes.push(object),
+                _ => {
+                    self.throw_type_error(&format!(
+                        "{NAME}: Failed to read the '{name}' property from '{INIT}': Failed to convert value to 'Node'."
+                    ));
+                    return None;
+                }
+            }
+        }
+        // Read end first: the start's are the second.
+        Some([(nodes[1], offsets[1]), (nodes[0], offsets[0])])
+    }
+
+    pub(crate) fn compile_event_handler(
+        &mut self,
+        target: &dom::TargetRoot,
+        event_type: dom::NameId,
+    ) {
+        crate::handlers::compile_event_handler(&mut self.scope, target, event_type);
+    }
+
+    /// The pixels made the `ImageData`'s array: its buffer's bytes, no
+    /// copy.
+    pub(crate) fn finish_image_data_pixels(
+        &mut self,
+        image_data: Persistent<dom::ImageData>,
+        bytes: Vec<u8>,
+    ) {
+        let len = bytes.len();
+        let scope = self.scope.scope();
+        let store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
+        let buffer = v8::ArrayBuffer::with_backing_store(scope, &store);
+        let array = v8::Uint8ClampedArray::new(scope, buffer, 0, len)
+            .expect("an array of a buffer's length");
+        let (state, mut no_gc) = self.scope.state();
+        state.dom.read(|cx| {
+            let edge = cx.image_data_array_edge(image_data.get(cx.gc));
+            no_gc.set_strong_value(edge, array.into());
+        });
+    }
+
+    /// The element's wrapper given the call's new object's prototype
+    /// (`new.target`'s), and the call's result (`[[SetPrototypeOf]]`: V8
+    /// gives what an API constructor returns as `new`'s).
+    pub(crate) fn finish_upgrading(&mut self, root: NodeRoot) {
+        let scope = self.scope.scope();
+        let prototype = self.args.this().get_prototype(scope);
+        let (state, mut no_gc) = self.scope.state();
+        let wrapper = state
+            .dom
+            .read(|cx| no_gc.wrapper(cx.wrapper_edge(root.get(cx.gc))))
+            .expect("an element kept for its wrapper");
+        if let Some(prototype) = prototype {
+            wrapper.set_prototype(self.scope.scope(), prototype);
+        }
+        self.rv().set(wrapper.into());
+    }
+
+    /// A new promise, its resolver kept by its number; or the one whose
+    /// resolver is kept by it already.
+    #[cold]
+    pub(crate) fn finish_pending_promise(&mut self, id: u64, existing: bool) {
+        let resolver = if existing {
+            let (state, _) = self.scope.state_mut();
+            let kept = state
+                .when_defined
+                .get(&id)
+                .cloned()
+                .expect("the promise kept by its number");
+            v8::Local::new(self.scope.scope(), kept)
+        } else {
+            let Some(resolver) = v8::PromiseResolver::new(self.scope.scope()) else {
+                return;
+            };
+            let global = v8::Global::new(self.scope.scope(), resolver);
+            let (state, _) = self.scope.state_mut();
+            state.when_defined.insert(id, global);
+            resolver
+        };
+        let promise = resolver.get_promise(self.scope.scope());
+        self.rv().set(promise.into());
+    }
+
+    #[cold]
+    pub(crate) fn finish_resolved_constructor(
+        &mut self,
+        definition: Persistent<dom::CustomElementDefinition>,
+    ) {
+        let (state, mut no_gc) = self.scope.state();
+        // Allocates nothing: a read.
+        let constructor = state
+            .dom
+            .read(|cx| no_gc.strong_value(cx.definition_edges(definition.get(cx.gc)).constructor))
+            .expect("a definition's constructor, stored as it was added");
+        self.resolve(constructor);
+    }
+
+    pub(crate) fn finish_objects(&mut self, objects: Vec<(ObjectRoot, usize)>) {
+        let wrappers: Vec<v8::Local<'_, v8::Value>> = objects
+            .iter()
+            .map(|(object, interface)| wrapper_of(&mut self.scope, object, *interface).into())
+            .collect();
+        let array = v8::Array::new_with_elements(self.scope.scope(), &wrappers);
+        self.rv().set(array.into());
+    }
+
+    pub(crate) fn finish_frozen_objects(&mut self, objects: Vec<(ObjectRoot, usize)>) {
+        let wrappers: Vec<v8::Local<'_, v8::Value>> = objects
+            .iter()
+            .map(|(object, interface)| wrapper_of(&mut self.scope, object, *interface).into())
+            .collect();
+        let this = self.args.this();
+        let array = frozen_array(self.scope.scope(), this, &wrappers);
+        self.rv().set(array.into());
+    }
+
+    /// A name of the table is its V8 string of the isolate's cache, by
+    /// its number (made the first time, as a name returned is): no string
+    /// of the DOM's and no V8 string made for it.
+    pub(crate) fn finish_names(&mut self, names: Vec<dom_api::typed::NameOrText>) {
+        use dom_api::typed::NameOrText;
+        let mut values: Vec<v8::Local<'_, v8::Value>> = Vec::with_capacity(names.len());
+        for name in &names {
+            let value = match name {
+                NameOrText::Name(id) => {
+                    let cached = {
+                        let (state, mut no_gc) = self.scope.state();
+                        usize::try_from(*id)
+                            .ok()
+                            .and_then(|index| state.caches.names.get(index))
+                            .and_then(Option::as_ref)
+                            .map(|name| no_gc.local(name))
+                    };
+                    match cached {
+                        Some(string) => Some(string),
+                        None => make_name(&mut self.scope, *id, &names::get(*id)),
+                    }
+                }
+                NameOrText::Text(text) => v8::String::new_from_utf8(
+                    self.scope.scope(),
+                    text.as_bytes(),
+                    v8::NewStringType::Normal,
+                ),
+            };
+            let Some(value) = value else {
+                exception::throw_range_error(self.scope.scope(), "Invalid string length");
+                return;
+            };
+            values.push(value.into());
+        }
+        let array = v8::Array::new_with_elements(self.scope.scope(), &values);
+        self.rv().set(array.into());
+    }
+
+    pub(crate) fn finish_strings(&mut self, strings: Vec<DomString>) {
+        let mut values: Vec<v8::Local<'_, v8::Value>> = Vec::with_capacity(strings.len());
+        for string in &strings {
+            let Some(value) = strings::new_string(self.scope.scope(), string) else {
+                exception::throw_range_error(self.scope.scope(), "Invalid string length");
+                return;
+            };
+            values.push(value.into());
+        }
+        let array = v8::Array::new_with_elements(self.scope.scope(), &values);
+        self.rv().set(array.into());
+    }
+
+    pub(crate) fn finish_frozen_strings(&mut self, strings: Vec<DomString>) {
+        let this = self.args.this();
+        let mut values: Vec<v8::Local<'_, v8::Value>> = Vec::with_capacity(strings.len());
+        for string in &strings {
+            let Some(value) = strings::new_string(self.scope.scope(), string) else {
+                exception::throw_range_error(self.scope.scope(), "Invalid string length");
+                return;
+            };
+            values.push(value.into());
+        }
+        let array = frozen_array(self.scope.scope(), this, &values);
+        self.rv().set(array.into());
+    }
+
+    pub(crate) fn finish_doubles(&mut self, numbers: Vec<f64>) {
+        let scope = self.scope.scope();
+        let values: Vec<v8::Local<'_, v8::Value>> = numbers
+            .iter()
+            .map(|&number| v8::Number::new(scope, number).into())
+            .collect();
+        let array = v8::Array::new_with_elements(scope, &values);
+        self.rv().set(array.into());
+    }
+
+    pub(crate) fn finish_numbers(&mut self, numbers: Vec<f64>) {
+        let this = self.args.this();
+        let scope = self.scope.scope();
+        let values: Vec<v8::Local<'_, v8::Value>> = numbers
+            .iter()
+            .map(|&number| v8::Number::new(scope, number).into())
+            .collect();
+        let array = frozen_array(scope, this, &values);
+        self.rv().set(array.into());
+    }
+
+    pub(crate) fn finish_dictionary(
+        &mut self,
+        members: Vec<(&'static str, dom_api::typed::DictValue)>,
+    ) {
+        let scope = self.scope.scope();
+        let object = v8::Object::new(scope);
+        for (name, value) in members {
+            let key = templates::string(scope, name);
+            let value = dict_value(scope, value);
+            object.create_data_property(scope, key.into(), value);
+        }
+        self.rv().set(object.into());
+    }
+
+    pub(crate) fn finish_records(
+        &mut self,
+        records: Vec<Vec<(String, dom_api::typed::DictValue)>>,
+    ) {
+        let scope = self.scope.scope();
+        let array = v8::Array::new(scope, 0);
+        for (index, record) in (0u32..).zip(records) {
+            let object = v8::Object::new(scope);
+            for (name, value) in record {
+                let key = templates::string(scope, &name);
+                let value = dict_value(scope, value);
+                object.create_data_property(scope, key.into(), value);
+            }
+            array.set_index(scope, index, object.into());
+        }
+        self.rv().set(array.into());
+    }
+
+    pub(crate) fn finish_entry_detail(&mut self, entry: Persistent<dom::PerformanceEntry>) {
+        let detail = entry_detail(&mut self.scope, &entry);
+        self.rv().set(detail);
+    }
+
+    pub(crate) fn finish_reader_buffer(&mut self, reader: Persistent<dom::EventTargetImpl>) {
+        let buffer = reader_buffer(&mut self.scope, &reader);
+        self.rv().set(buffer);
+    }
+
+    pub(crate) fn finish_history_state(&mut self, history: Persistent<dom::History>) {
+        let state = history_state(&mut self.scope, &history);
+        self.rv().set(state);
+    }
+
+    pub(crate) fn finish_filled_view(&mut self, bytes: Vec<u8>) {
+        let view = v8::Local::<v8::ArrayBufferView>::try_from(arg(self.args, 0))
+            .expect("a view, checked as it was taken");
+        let scope = self.scope.scope();
+        let offset = view.byte_offset();
+        if let Some(buffer) = view.buffer(scope) {
+            let store = buffer.get_backing_store();
+            for (cell, byte) in store.iter().skip(offset).zip(bytes) {
+                cell.set(byte);
+            }
+        }
+        self.rv().set(view.into());
+    }
+
+    pub(crate) fn finish_cloned(
+        &mut self,
+        payload: dom::SerializedMessage,
+        ports: Vec<(ObjectRoot, usize)>,
+    ) {
+        // In `this`'s relevant realm (the window's), its ports'
+        // wrappers too.
+        let this = self.args.this();
+        let value = {
+            let scope = self.scope.scope();
+            let context = this
+                .get_creation_context(scope)
+                .unwrap_or_else(|| scope.get_current_context());
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let mut realm = state::scope(scope).expect("the isolate's state");
+            let ports: Vec<_> = ports
+                .iter()
+                .map(|(port, interface)| {
+                    let wrapper = wrapper_of(&mut realm, port, *interface);
+                    v8::Global::new(realm.scope(), wrapper)
+                })
+                .collect();
+            crate::serialize::deserialize_message(realm.scope(), payload, ports)
+                .map(|value| v8::Global::new(realm.scope(), value))
+        };
+        match value {
+            Some(value) => {
+                let value = v8::Local::new(self.scope.scope(), value);
+                self.rv().set(value);
+            }
+            None => exception::throw_dom_exception(
+                &mut self.scope,
+                "DataCloneError",
+                "Failed to execute 'structuredClone' on 'Window': Unable to deserialize cloned data.",
+            ),
+        }
+    }
+
+    pub(crate) fn finish_resolved(&mut self, object: ObjectRoot, interface: usize) {
+        let wrapper = wrapper_of(&mut self.scope, &object, interface);
+        let scope = self.scope.scope();
+        let Some(resolver) = v8::PromiseResolver::new(scope) else {
+            return;
+        };
+        resolver.resolve(scope, wrapper.into());
+        let promise = resolver.get_promise(scope);
+        self.rv().set(promise.into());
+    }
+
+    pub(crate) fn finish_resolved_string(&mut self, string: DomString) {
+        let scope = self.scope.scope();
+        let Some(string) = strings::new_string(scope, &string) else {
+            exception::throw_range_error(scope, "Invalid string length");
+            return;
+        };
+        self.resolve(string.into());
+    }
+
+    pub(crate) fn finish_resolved_json(&mut self, text: DomString) {
+        let scope = self.scope.scope();
+        let Some(resolver) = v8::PromiseResolver::new(scope) else {
+            return;
+        };
+        let Some(string) = strings::new_string(scope, &text) else {
+            exception::throw_range_error(scope, "Invalid string length");
+            return;
+        };
+        // Parsed, or what parsing threw (a `SyntaxError`), caught.
+        let parsed = {
+            v8::tc_scope!(let tc, scope);
+            match v8::json::parse(tc, string) {
+                Some(value) => Ok(value),
+                None => Err(tc.exception()),
+            }
+        };
+        let scope = self.scope.scope();
+        match parsed {
+            Ok(value) => {
+                resolver.resolve(scope, value);
+            }
+            Err(Some(thrown)) => {
+                resolver.reject(scope, thrown);
+            }
+            Err(None) => {}
+        }
+        let promise = resolver.get_promise(scope);
+        self.rv().set(promise.into());
+    }
+
+    pub(crate) fn finish_resolved_undefined(&mut self) {
+        let undefined = v8::undefined(self.scope.scope());
+        self.resolve(undefined.into());
+    }
+
+    pub(crate) fn finish_resolved_bytes(&mut self, bytes: Vec<u8>, view: bool) {
+        let len = bytes.len();
+        let scope = self.scope.scope();
+        let store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
+        let buffer = v8::ArrayBuffer::with_backing_store(scope, &store);
+        let value: v8::Local<'_, v8::Value> = if view {
+            v8::Uint8Array::new(scope, buffer, 0, len)
+                .expect("an array of a buffer's length")
+                .into()
+        } else {
+            buffer.into()
+        };
+        self.resolve(value);
+    }
+
+    pub(crate) fn finish_animation_promise(
+        &mut self,
+        object: Persistent<dom::EventTargetImpl>,
+        interface: usize,
+        ready: bool,
+        resolved: bool,
+    ) {
+        if let Some(promise) =
+            animation_promise(&mut self.scope, &object, interface, ready, resolved)
+        {
+            self.rv().set(promise.into());
+        }
+    }
+}
+
+impl<'s, A: CallArgs<'s>> Scoped<'_, 's, '_, '_, A> {
+    /// A `TypeError`: argument `index` isn't a `name` (a callback's, a
+    /// function's).
+    pub(crate) fn throw_not_of_type(&mut self, index: usize, name: &str) {
+        self.throw_type_error(&format!(
+            "parameter {} is not of type '{name}'.",
+            index.saturating_add(1)
+        ));
+    }
+
+    /// Throws `error`, as the exception it is.
+    pub(crate) fn throw_error(&mut self, error: ApiError) {
+        match error {
+            ApiError::Type(message) => self.throw_type_error(&message),
+            ApiError::Range(message) => {
+                crate::strings::throw_range_error(self.scope.scope(), &message)
+            }
+            ApiError::Dom(exception) => exception::throw_dom_exception(
+                &mut self.scope,
+                exception.name.name(),
+                &exception.message,
+            ),
+            ApiError::Aborted(signal) => throw_abort_reason(&mut self.scope, &signal.0),
+        }
+    }
+
+    /// The result a new promise rejected with `thrown` (what script
+    /// threw in the call), or with what `error` throws.
+    pub(crate) fn reject_with(
+        &mut self,
+        thrown: Option<v8::Local<'s, v8::Value>>,
+        error: ApiError,
+    ) {
+        let reason = if let Some(thrown) = thrown {
+            Some(thrown)
+        } else {
+            v8::tc_scope!(let tc, self.scope.scope());
+            {
+                let Some(mut inner) = crate::state::scope(tc) else {
+                    return;
+                };
+                match error {
+                    ApiError::Type(message) => crate::throw_type_error(inner.scope(), &message),
+                    ApiError::Range(message) => {
+                        crate::strings::throw_range_error(inner.scope(), &message)
+                    }
+                    ApiError::Dom(exception) => {
+                        exception::throw_dom_exception(
+                            &mut inner,
+                            exception.name.name(),
+                            &exception.message,
+                        );
+                    }
+                    ApiError::Aborted(signal) => throw_abort_reason(&mut inner, &signal.0),
+                }
+            }
+            tc.exception()
+        };
+        let scope = self.scope.scope();
+        let (Some(reason), Some(resolver)) = (reason, v8::PromiseResolver::new(scope)) else {
+            return;
+        };
+        resolver.reject(scope, reason);
+        let promise = resolver.get_promise(scope);
+        self.rv().set(promise.into());
+    }
+
+    /// The result `object`'s wrapper, made now if it has none.
+    pub(crate) fn finish_object_root(&mut self, object: &ObjectRoot, interface: usize) {
+        let wrapper = wrapper_of(&mut self.scope, object, interface);
+        self.rv().set(wrapper.into());
+    }
+
+    /// The result `root`'s wrapper, made now (in its realm) if it has
+    /// none.
+    pub(crate) fn finish_node_root(&mut self, root: &dom::NodeRoot, interface: usize) {
+        let made = new_wrapper_in_realm(&mut self.scope, interface, |cx| {
+            ObjectRef::Node(root.get(cx.gc))
+        });
+        let (state, mut no_gc) = self.scope.state();
+        // Allocates nothing: a read.
+        let wrapper = state.dom.read(|cx| {
+            let node = root.get(cx.gc);
+            // Nothing made it one since (no script ran).
+            match no_gc.wrapper(cx.wrapper_edge(node)) {
+                Some(wrapper) => wrapper,
+                None => {
+                    wrap_new(&mut no_gc, cx, made, node);
+                    count(&state.caches.wrappers_made);
+                    made
+                }
+            }
+        });
+        self.rv().set(wrapper.into());
+    }
+}
+
+impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
+    pub(crate) fn new(
+        scope: Scope<'a, 's, 'i>,
+        args: &'a A,
+        rv: v8::ReturnValue<'r, v8::Value>,
+    ) -> Self {
+        // Every way into script counts itself (`listeners::run_callback`
+        // and the engine's entries): a member called with none counted
+        // would run a microtask checkpoint where HTML has none.
+        debug_assert!(
+            bindings::trace::in_script(),
+            "a DOM member is called from script that the engine didn't count as entered"
+        );
+        Self {
+            base: Scoped::new(scope, args, rv),
+            call: Call {
+                kept: ManuallyDrop::new(None),
+                prepared: None,
+                window: None,
+                callback: None,
+                rare: ManuallyDrop::new(None),
+            },
+        }
     }
 
     /// Tells V8 of the DOM's growth, after a call that may allocate.
     pub(crate) fn report(&mut self) {
-        state::report(&mut self.scope);
+        state::report(&mut self.base.scope);
     }
 
     /// The call's result as it stands, for an indexed getter: a null one
@@ -439,17 +1991,10 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
     /// nullable, and gives one past the end (its supported indices are
     /// below `length`); no item of a list of strings is empty.
     pub(crate) fn returned_no_item(&mut self) -> bool {
-        let scope = self.scope.scope();
-        let value = self.call.rv.full(scope).get(scope);
+        let scope = self.base.scope.scope();
+        let value = self.base.rv.full(scope).get(scope);
         value.is_null()
             || v8::Local::<v8::String>::try_from(value).is_ok_and(|string| string.length() == 0)
-    }
-
-    /// `kept` made the engine's value, out of any operation: a result
-    /// another front end of the same call left (`info_front::InfoFront`).
-    pub(crate) fn finish_kept_as(&mut self, kept: Kept) {
-        *self.call.kept = Some(Box::new(kept));
-        self.finish_kept();
     }
 
     /// A kept result made the engine's value, after the operation.
@@ -459,61 +2004,30 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> V8Front<'a, 's, 'i, 'r, A> {
             return;
         };
         match *kept {
-            Kept::Object(object, interface) => {
-                let wrapper = wrapper_of(&mut self.scope, &object, interface);
-                self.rv().set(wrapper.into());
+            Kept::Object(object, interface) => self.base.finish_object_root(&object, interface),
+            Kept::Construct(definition, document) => {
+                self.base.finish_construct(&definition, &document);
             }
-            Kept::Construct(definition, document) => self.finish_construct(&definition, &document),
-            Kept::U32(value) => self.rv().set_uint32(value),
-            Kept::F64(value) => self.rv().set_double(value),
-            Kept::String(string) => match cached_string(&mut self.scope, &string) {
-                Some(string) => self.rv().set(string.into()),
-                None => exception::throw_range_error(self.scope.scope(), "Invalid string length"),
+            Kept::U32(value) => self.base.rv().set_uint32(value),
+            Kept::F64(value) => self.base.rv().set_double(value),
+            Kept::String(string) => match cached_string(&mut self.base.scope, &string) {
+                Some(string) => self.base.rv().set(string.into()),
+                None => {
+                    exception::throw_range_error(self.base.scope.scope(), "Invalid string length")
+                }
             },
-            Kept::Name(id, name) => match make_name(&mut self.scope, id, &name.to_str()) {
-                Some(string) => self.rv().set(string.into()),
-                None => exception::throw_range_error(self.scope.scope(), "Invalid string length"),
+            Kept::Name(id, name) => match make_name(&mut self.base.scope, id, &name.to_str()) {
+                Some(string) => self.base.rv().set(string.into()),
+                None => {
+                    exception::throw_range_error(self.base.scope.scope(), "Invalid string length")
+                }
             },
-            Kept::Node(root, interface) => {
-                let made = new_wrapper_in_realm(&mut self.scope, interface, |cx| {
-                    ObjectRef::Node(root.get(cx.gc))
-                });
-                let (state, mut no_gc) = self.scope.state();
-                // Allocates nothing: a read.
-                let wrapper = state.dom.read(|cx| {
-                    let node = root.get(cx.gc);
-                    // Nothing made it one since (no script ran).
-                    match no_gc.wrapper(cx.wrapper_edge(node)) {
-                        Some(wrapper) => wrapper,
-                        None => {
-                            wrap_new(&mut no_gc, cx, made, node);
-                            count(&state.caches.wrappers_made);
-                            made
-                        }
-                    }
-                });
-                self.rv().set(wrapper.into());
-            }
+            Kept::Node(root, interface) => self.base.finish_node_root(&root, interface),
         }
     }
 }
 
-impl<'s, A: CallArgs<'s>> V8Front<'_, 's, '_, '_, A> {}
-
-impl<'s, A: CallArgs<'s>> V8Front<'_, 's, '_, '_, A> {
-    /// The call's result a new promise resolved with `value`.
-    fn resolve(&mut self, value: v8::Local<'s, v8::Value>) {
-        let scope = self.scope.scope();
-        let Some(resolver) = v8::PromiseResolver::new(scope) else {
-            return;
-        };
-        resolver.resolve(scope, value);
-        let promise = resolver.get_promise(scope);
-        self.rv().set(promise.into());
-    }
-}
-
-impl<'s, A: CallArgs<'s>> V8Front<'_, 's, '_, '_, A> {
+impl<'s, A: CallArgs<'s>> Scoped<'_, 's, '_, '_, A> {
     /// `createElement`'s custom element: its definition's constructor
     /// constructed, in a `TryCatch`, and what it made checked
     /// (`dom_api::check_created_custom_element`); what it threw, or
@@ -521,7 +2035,7 @@ impl<'s, A: CallArgs<'s>> V8Front<'_, 's, '_, '_, A> {
     /// failed element given instead (HTML's "create an element").
     #[cold]
     #[inline(never)]
-    fn finish_construct(
+    pub(crate) fn finish_construct(
         &mut self,
         definition: &Persistent<dom::CustomElementDefinition>,
         document: &NodeRoot,
@@ -1611,6 +3125,343 @@ impl<'s, A: CallArgs<'s>> FrontTypes for V8Op<'_, 's, '_, '_, A> {
     type Rest = v8::Local<'s, v8::Array>;
 }
 
+/// The types a dictionary's members are read as: the callback's own
+/// handles, as every front end of V8's has them.
+impl<'s, A: CallArgs<'s>> FrontTypes for Scoped<'_, 's, '_, '_, A> {
+    type Str = ArgString<'s>;
+    type Node = v8::Local<'s, v8::Object>;
+    type Dict = v8::Local<'s, v8::Object>;
+    type PendingString = std::convert::Infallible;
+    type PendingNode = std::convert::Infallible;
+    type PendingNumber = std::convert::Infallible;
+    type PendingObject = std::convert::Infallible;
+    type PreparedNode = ();
+    type Callback = v8::Local<'s, v8::Value>;
+    type Any = v8::Local<'s, v8::Value>;
+    type Rest = v8::Local<'s, v8::Array>;
+}
+
+/// A dictionary's members read in the scope: what `Front::reading` runs
+/// a dictionary's reads on, for a front end that has no scope of its own.
+impl<'a, 's, 'i, 'r, A: CallArgs<'s>> DictFront for Scoped<'a, 's, 'i, 'r, A> {
+    /// The member's value (a getter may run, and throw: V8 has the
+    /// exception pending then), `ToBoolean`ed.
+    #[inline]
+    fn dict_bool(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<bool>> {
+        Scoped::dict_bool(self, dict, member)
+    }
+
+    #[inline]
+    fn dict_number(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<f64>> {
+        Scoped::dict_number(self, dict, member)
+    }
+
+    /// Cold: only a constructor's dictionary reads one (`KeyboardEvent`'s),
+    /// and placed among the hot calls it made `appendChild` and
+    /// `dispatchEvent` a third slower (the same instructions).
+    #[inline]
+    fn dict_string(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<String>> {
+        Scoped::dict_string(self, dict, member)
+    }
+
+    /// Cold, as `dict_string`: only `InputEvent`'s constructor reads one.
+    #[inline]
+    fn dict_nullable_string(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<String>> {
+        Scoped::dict_nullable_string(self, dict, member)
+    }
+
+    #[inline]
+    fn dict_serialized(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<Vec<u8>>> {
+        Scoped::dict_serialized(self, dict, member)
+    }
+
+    #[inline]
+    fn dict_string_or_number(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<dom_api::typed::StringOrNumber>> {
+        Scoped::dict_string_or_number(self, dict, member)
+    }
+
+    #[inline]
+    fn dict_any(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<AnyArg<v8::Local<'s, v8::Value>>>> {
+        Scoped::dict_any(self, dict, member)
+    }
+
+    /// An array's elements, each `ToString`ed (WebIDL's `sequence`
+    /// conversion of an array; another iterable is a `TypeError` here).
+    #[inline]
+    fn dict_strings(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<Vec<String>>> {
+        Scoped::dict_strings(self, dict, member)
+    }
+
+    /// The member's value itself (`addEventListener`'s `signal`).
+    #[inline]
+    fn dict_object<T: elise::HeapType>(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+        interface: &str,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        Scoped::dict_object::<T>(self, dict, member, interface)
+    }
+
+    #[inline]
+    fn dict_nullable_object<T: elise::HeapType>(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+        interface: &str,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        Scoped::dict_nullable_object::<T>(self, dict, member, interface)
+    }
+
+    #[inline]
+    fn dict_nullable_target(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        Scoped::dict_nullable_target(self, dict, member)
+    }
+
+    #[inline]
+    fn dict_body(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<dom_api::typed::BodyMember<v8::Local<'s, v8::Object>>>> {
+        Scoped::dict_body(self, dict, member)
+    }
+
+    #[inline]
+    fn dict_headers(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<dom_api::StringPairsArg>> {
+        Scoped::dict_headers(self, dict, member)
+    }
+
+    #[inline]
+    fn dict_signal(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<dom_api::typed::SignalMember<v8::Local<'s, v8::Object>>>> {
+        Scoped::dict_signal(self, dict, member)
+    }
+
+    #[inline]
+    fn dict_is_null(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<bool>> {
+        Scoped::dict_is_null(self, dict, member)
+    }
+
+    /// Out of line: the members' calls mostly don't throw, and its
+    /// registers saved inline would cost each.
+    #[cold]
+    #[inline(never)]
+    fn throw(&mut self, error: ApiError) {
+        self.throw_error(error);
+    }
+}
+
+impl<'a, 's, 'i, 'r, A: CallArgs<'s>> DictFront for V8Front<'a, 's, 'i, 'r, A> {
+    /// The member's value (a getter may run, and throw: V8 has the
+    /// exception pending then), `ToBoolean`ed.
+    #[inline]
+    fn dict_bool(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<bool>> {
+        self.base.dict_bool(dict, member)
+    }
+
+    #[inline]
+    fn dict_number(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<f64>> {
+        self.base.dict_number(dict, member)
+    }
+
+    /// Cold: only a constructor's dictionary reads one (`KeyboardEvent`'s),
+    /// and placed among the hot calls it made `appendChild` and
+    /// `dispatchEvent` a third slower (the same instructions).
+    #[inline]
+    fn dict_string(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<String>> {
+        self.base.dict_string(dict, member)
+    }
+
+    /// Cold, as `dict_string`: only `InputEvent`'s constructor reads one.
+    #[inline]
+    fn dict_nullable_string(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<String>> {
+        self.base.dict_nullable_string(dict, member)
+    }
+
+    #[inline]
+    fn dict_serialized(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<Vec<u8>>> {
+        self.base.dict_serialized(dict, member)
+    }
+
+    #[inline]
+    fn dict_string_or_number(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<dom_api::typed::StringOrNumber>> {
+        self.base.dict_string_or_number(dict, member)
+    }
+
+    #[inline]
+    fn dict_any(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<AnyArg<v8::Local<'s, v8::Value>>>> {
+        self.base.dict_any(dict, member)
+    }
+
+    /// An array's elements, each `ToString`ed (WebIDL's `sequence`
+    /// conversion of an array; another iterable is a `TypeError` here).
+    #[inline]
+    fn dict_strings(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<Vec<String>>> {
+        self.base.dict_strings(dict, member)
+    }
+
+    /// The member's value itself (`addEventListener`'s `signal`).
+    #[inline]
+    fn dict_object<T: elise::HeapType>(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+        interface: &str,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        self.base.dict_object::<T>(dict, member, interface)
+    }
+
+    #[inline]
+    fn dict_nullable_object<T: elise::HeapType>(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+        interface: &str,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        self.base.dict_nullable_object::<T>(dict, member, interface)
+    }
+
+    #[inline]
+    fn dict_nullable_target(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
+        self.base.dict_nullable_target(dict, member)
+    }
+
+    #[inline]
+    fn dict_body(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<dom_api::typed::BodyMember<v8::Local<'s, v8::Object>>>> {
+        self.base.dict_body(dict, member)
+    }
+
+    #[inline]
+    fn dict_headers(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<dom_api::StringPairsArg>> {
+        self.base.dict_headers(dict, member)
+    }
+
+    #[inline]
+    fn dict_signal(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<dom_api::typed::SignalMember<v8::Local<'s, v8::Object>>>> {
+        self.base.dict_signal(dict, member)
+    }
+
+    #[inline]
+    fn dict_is_null(
+        &mut self,
+        dict: &v8::Local<'s, v8::Object>,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<bool>> {
+        self.base.dict_is_null(dict, member)
+    }
+
+    /// Out of line: the members' calls mostly don't throw, and its
+    /// registers saved inline would cost each.
+    #[cold]
+    #[inline(never)]
+    fn throw(&mut self, error: ApiError) {
+        if self.call.rare.as_ref().is_some_and(|rare| rare.threw) {
+            return;
+        }
+        if let Some(thrown) = self.call.rare.as_mut().and_then(|rare| rare.thrown.take()) {
+            self.base.scope.scope().throw_exception(thrown);
+            return;
+        }
+        self.base.throw_error(error);
+    }
+}
+
 impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     #[inline(always)]
     fn reading<V: dom_api::typed::ReadDict<Self>>(&mut self, reads: V) -> V::Out {
@@ -1627,11 +3478,12 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         &'o mut self,
         f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>, &mut Self::Op<'o>) -> R,
     ) -> R {
-        let (state, no_gc) = self.scope.state();
+        let (state, no_gc) = self.base.scope.state();
         let mut op = V8Op {
             no_gc,
-            args: self.args,
+            args: self.base.args,
             call: &mut self.call,
+            rv: &mut self.base.rv,
             caches: &state.caches,
         };
         state
@@ -1644,7 +3496,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         &'o mut self,
         f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>, &mut Self::Op<'o>) -> R,
     ) -> R {
-        let (state, no_gc) = self.scope.state_mut();
+        let (state, no_gc) = self.base.scope.state_mut();
         let State {
             dom,
             caches,
@@ -1653,8 +3505,9 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         } = state;
         let mut op = V8Op {
             no_gc,
-            args: self.args,
+            args: self.base.args,
             call: &mut self.call,
+            rv: &mut self.base.rv,
             caches,
         };
         dom.mutate(|cx| f(&ApiCx::with_layout_cell(cx, layout), &mut op))
@@ -1662,580 +3515,153 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
 
     #[inline]
     fn has_args(&mut self, name: &str, required: usize) -> bool {
-        let given = usize::try_from(self.args.length()).unwrap_or(0);
-        if given >= required {
-            return true;
-        }
-        self.throw_type_error(&format!(
-            "Failed to execute '{name}': {required} argument{} required, but only {given} present.",
-            if required == 1 { "" } else { "s" }
-        ));
-        false
+        self.base.has_args(name, required)
     }
 
+    #[inline]
     fn string_arg(&mut self, index: usize) -> Option<ArgString<'s>> {
-        strings::arg_string(self.scope.scope(), arg(self.args, index))
+        self.base.string_arg(index)
     }
 
     fn arg_count(&mut self) -> usize {
-        usize::try_from(self.args.length()).unwrap_or(0)
+        usize::try_from(self.base.args.length()).unwrap_or(0)
     }
 
     fn nullable_string_arg(&mut self, index: usize) -> Option<Option<ArgString<'s>>> {
-        let value = arg(self.args, index);
+        let value = arg(self.base.args, index);
         if value.is_null_or_undefined() {
             return Some(None);
         }
-        strings::arg_string(self.scope.scope(), value).map(Some)
+        strings::arg_string(self.base.scope.scope(), value).map(Some)
     }
 
     fn legacy_null_string_arg(&mut self, index: usize) -> Option<Option<ArgString<'s>>> {
-        let value = arg(self.args, index);
+        let value = arg(self.base.args, index);
         if value.is_null() {
             return Some(None);
         }
-        strings::arg_string(self.scope.scope(), value).map(Some)
+        strings::arg_string(self.base.scope.scope(), value).map(Some)
     }
 
     fn node_or_string_arg(
         &mut self,
         index: usize,
     ) -> Option<dom_api::typed::NodeOrStr<v8::Local<'s, v8::Object>, ArgString<'s>>> {
-        let value = arg(self.args, index);
-        if bindings::is_wrapper::<Node>(self.scope.scope(), value) {
+        let value = arg(self.base.args, index);
+        if bindings::is_wrapper::<Node>(self.base.scope.scope(), value) {
             return v8::Local::<v8::Object>::try_from(value)
                 .ok()
                 .map(dom_api::typed::NodeOrStr::Node);
         }
-        strings::arg_string(self.scope.scope(), value).map(dom_api::typed::NodeOrStr::Str)
+        strings::arg_string(self.base.scope.scope(), value).map(dom_api::typed::NodeOrStr::Str)
     }
 
+    #[inline]
     fn node_or_long_arg(
         &mut self,
         index: usize,
     ) -> Option<Option<dom_api::typed::NodeOrLong<v8::Local<'s, v8::Object>>>> {
-        let value = arg(self.args, index);
-        if value.is_null_or_undefined() {
-            return Some(None);
-        }
-        if bindings::is_wrapper::<Node>(self.scope.scope(), value) {
-            return v8::Local::<v8::Object>::try_from(value)
-                .ok()
-                .map(|node| Some(dom_api::typed::NodeOrLong::Node(node)));
-        }
-        value
-            .int32_value(self.scope.scope())
-            .map(|long| Some(dom_api::typed::NodeOrLong::Long(long)))
+        self.base.node_or_long_arg(index)
     }
 
+    #[inline]
     fn node_arg(&mut self, index: usize) -> Option<Option<v8::Local<'s, v8::Object>>> {
-        let value = arg(self.args, index);
-        if value.is_null_or_undefined() {
-            return Some(None);
-        }
-        if bindings::is_wrapper::<Node>(self.scope.scope(), value) {
-            return v8::Local::<v8::Object>::try_from(value).ok().map(Some);
-        }
-        self.throw_type_error(&format!(
-            "parameter {} is not of type 'Node'.",
-            index.saturating_add(1)
-        ));
-        None
+        self.base.node_arg(index)
     }
 
+    #[inline]
     fn dict_arg(&mut self, index: usize, name: &str) -> Option<Option<v8::Local<'s, v8::Object>>> {
-        let value = arg(self.args, index);
-        if value.is_null_or_undefined() {
-            return Some(None);
-        }
-        if let Ok(object) = v8::Local::<v8::Object>::try_from(value) {
-            return Some(Some(object));
-        }
-        self.throw_type_error(&format!("The provided value is not of type '{name}'."));
-        None
+        self.base.dict_arg(index, name)
     }
 
-    /// The member's value (a getter may run, and throw: V8 has the
-    /// exception pending then), `ToBoolean`ed.
-    fn dict_bool(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<bool>> {
-        let key = member_key(&mut self.scope, member);
-        let scope = self.scope.scope();
-        let value = dict.get(scope, key.into())?;
-        if value.is_undefined() {
-            return Some(None);
-        }
-        Some(Some(value.boolean_value(scope)))
-    }
-
-    fn dict_number(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<f64>> {
-        let key = member_key(&mut self.scope, member);
-        let scope = self.scope.scope();
-        let value = dict.get(scope, key.into())?;
-        if value.is_undefined() {
-            return Some(None);
-        }
-        Some(Some(value.number_value(scope)?))
-    }
-
-    /// Cold: only a constructor's dictionary reads one (`KeyboardEvent`'s),
-    /// and placed among the hot calls it made `appendChild` and
-    /// `dispatchEvent` a third slower (the same instructions).
-    #[cold]
-    fn dict_string(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<String>> {
-        let key = member_key(&mut self.scope, member);
-        let scope = self.scope.scope();
-        let value = dict.get(scope, key.into())?;
-        if value.is_undefined() {
-            return Some(None);
-        }
-        let string = value.to_string(scope)?;
-        Some(Some(string.to_rust_string_lossy(scope)))
-    }
-
-    /// Cold, as `dict_string`: only `InputEvent`'s constructor reads one.
-    #[cold]
-    fn dict_nullable_string(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<String>> {
-        let key = member_key(&mut self.scope, member);
-        let scope = self.scope.scope();
-        let value = dict.get(scope, key.into())?;
-        if value.is_null_or_undefined() {
-            return Some(None);
-        }
-        let string = value.to_string(scope)?;
-        Some(Some(string.to_rust_string_lossy(scope)))
-    }
-
-    fn dict_serialized(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<Vec<u8>>> {
-        let key = member_key(&mut self.scope, member);
-        let scope = self.scope.scope();
-        let value = dict.get(scope, key.into())?;
-        if value.is_undefined() {
-            return Some(None);
-        }
-        crate::serialize::serialize_for_storage(scope, value).map(Some)
-    }
-
-    fn dict_string_or_number(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<dom_api::typed::StringOrNumber>> {
-        let key = member_key(&mut self.scope, member);
-        let scope = self.scope.scope();
-        let value = dict.get(scope, key.into())?;
-        if value.is_undefined() {
-            return Some(None);
-        }
-        if value.is_number() {
-            return Some(Some(dom_api::typed::StringOrNumber::Number(
-                value.number_value(scope)?,
-            )));
-        }
-        let string = value.to_string(scope)?.to_rust_string_lossy(scope);
-        Some(Some(dom_api::typed::StringOrNumber::String(string)))
-    }
-
-    fn dict_any(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<AnyArg<v8::Local<'s, v8::Value>>>> {
-        let key = member_key(&mut self.scope, member);
-        let scope = self.scope.scope();
-        let value = dict.get(scope, key.into())?;
-        if value.is_undefined() {
-            return Some(None);
-        }
-        Some(Some(AnyArg(value)))
-    }
-
+    #[inline]
     fn any_arg(&mut self, index: usize) -> AnyArg<v8::Local<'s, v8::Value>> {
-        let mut value = arg(self.args, index);
-        if value.is_undefined() {
-            value = v8::null(self.scope.scope()).into();
-        }
-        AnyArg(value)
+        self.base.any_arg(index)
     }
 
+    #[inline]
     fn target_arg(
         &mut self,
         index: usize,
         interface: &str,
     ) -> Option<Option<v8::Local<'s, v8::Object>>> {
-        let value = arg(self.args, index);
-        if value.is_null_or_undefined() {
-            return Some(None);
-        }
-        let scope = self.scope.scope();
-        if bindings::is_wrapper::<Node>(scope, value)
-            || bindings::is_wrapper::<Window>(scope, value)
-            || bindings::is_wrapper::<EventTargetImpl>(scope, value)
-        {
-            return v8::Local::<v8::Object>::try_from(value).ok().map(Some);
-        }
-        self.throw_type_error(&format!(
-            "parameter {} is not of type '{interface}'.",
-            index.saturating_add(1)
-        ));
-        None
-    }
-
-    /// An array's elements, each `ToString`ed (WebIDL's `sequence`
-    /// conversion of an array; another iterable is a `TypeError` here).
-    fn dict_strings(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<Vec<String>>> {
-        let key = member_key(&mut self.scope, member);
-        let scope = self.scope.scope();
-        let value = dict.get(scope, key.into())?;
-        if value.is_undefined() {
-            return Some(None);
-        }
-        let Ok(array) = v8::Local::<v8::Array>::try_from(value) else {
-            self.throw_type_error(&format!(
-                "The provided value for '{member}' is not a sequence."
-            ));
-            return None;
-        };
-        let mut strings = Vec::new();
-        for index in 0..array.length() {
-            let element = array.get_index(self.scope.scope(), index)?;
-            strings.push(
-                element
-                    .to_string(self.scope.scope())?
-                    .to_rust_string_lossy(self.scope.scope()),
-            );
-        }
-        Some(Some(strings))
+        self.base.target_arg(index, interface)
     }
 
     fn function_arg(&mut self, index: usize, name: &str) -> Option<Callback<usize>> {
-        let value = arg(self.args, index);
+        let value = arg(self.base.args, index);
         if value.is_function() {
             assert!(self.call.callback.is_none(), "a member takes one callback");
             self.call.callback = Some(value);
             return Some(Callback(0));
         }
-        self.throw_type_error(&format!(
-            "parameter {} is not of type '{name}'.",
-            index.saturating_add(1)
-        ));
+        self.base.throw_not_of_type(index, name);
         None
     }
 
+    #[inline]
     fn uint8_clamped_arg(
         &mut self,
         index: usize,
     ) -> Option<Uint8ClampedArg<v8::Local<'s, v8::Value>>> {
-        let value = arg(self.args, index);
-        let Ok(array) = v8::Local::<v8::Uint8ClampedArray>::try_from(value) else {
-            self.throw_type_error(&format!(
-                "parameter {} is not of type 'Uint8ClampedArray'.",
-                index.saturating_add(1)
-            ));
-            return None;
-        };
-        Some(Uint8ClampedArg {
-            array: value,
-            len: array.byte_length(),
-        })
+        self.base.uint8_clamped_arg(index)
     }
 
+    #[inline]
     fn array_view_arg(&mut self, index: usize) -> Option<dom_api::typed::ArrayViewArg> {
-        let value = arg(self.args, index);
-        let Ok(view) = v8::Local::<v8::ArrayBufferView>::try_from(value) else {
-            self.throw_type_error(&format!(
-                "parameter {} is not of type 'ArrayBufferView'.",
-                index.saturating_add(1)
-            ));
-            return None;
-        };
-        let integer = [
-            ("Int8Array", value.is_int8_array()),
-            ("Uint8Array", value.is_uint8_array()),
-            ("Uint8ClampedArray", value.is_uint8_clamped_array()),
-            ("Int16Array", value.is_int16_array()),
-            ("Uint16Array", value.is_uint16_array()),
-            ("Int32Array", value.is_int32_array()),
-            ("Uint32Array", value.is_uint32_array()),
-            ("BigInt64Array", value.is_big_int64_array()),
-            ("BigUint64Array", value.is_big_uint64_array()),
-        ];
-        let other = [
-            ("Float32Array", value.is_float32_array()),
-            ("Float64Array", value.is_float64_array()),
-            ("DataView", value.is_data_view()),
-        ];
-        let (name, integer) = match integer.iter().find(|(_, is)| *is) {
-            Some((name, _)) => (*name, true),
-            // A `Float16Array`'s too.
-            None => (
-                other
-                    .iter()
-                    .find(|(_, is)| *is)
-                    .map_or("Float16Array", |(name, _)| *name),
-                false,
-            ),
-        };
-        let byte_length = view.byte_length();
-        Some(dom_api::typed::ArrayViewArg {
-            name,
-            integer,
-            byte_length,
-        })
+        self.base.array_view_arg(index)
     }
 
+    #[inline]
     fn clone_arg(
         &mut self,
         index: usize,
     ) -> Option<(dom::SerializedMessage, Vec<v8::Local<'s, v8::Object>>)> {
-        let value = arg(self.args, index);
-        let options = arg(self.args, index.saturating_add(1));
-        crate::serialize::serialize_message(
-            &mut self.scope,
-            value,
-            options,
-            crate::serialize::TransferForm::Options,
-            None,
-        )
+        self.base.clone_arg(index)
     }
 
+    #[inline]
     fn string_pairs_arg(&mut self, index: usize) -> Option<dom_api::StringPairsArg> {
-        let value = arg(self.args, index);
-        string_pairs(self.scope.scope(), value, false)
+        self.base.string_pairs_arg(index)
     }
 
+    #[inline]
     fn byte_string_pairs_arg(&mut self, index: usize) -> Option<dom_api::StringPairsArg> {
-        let value = arg(self.args, index);
-        if !value.is_object() {
-            self.throw_type_error(
-                "The provided value is not of type '(record<ByteString, ByteString> or sequence<sequence<ByteString>>)'.",
-            );
-            return None;
-        }
-        string_pairs(self.scope.scope(), value, true)
+        self.base.byte_string_pairs_arg(index)
     }
 
     /// The value, or a new `AbortError` of the current realm for
     /// undefined (Blink's `AbortController::abort` makes it then).
+    #[inline]
     fn abort_reason_arg(&mut self, index: usize) -> Option<AnyArg<v8::Local<'s, v8::Value>>> {
-        let mut value = arg(self.args, index);
-        if value.is_undefined() {
-            value = exception::new_dom_exception(
-                &mut self.scope,
-                "AbortError",
-                "signal is aborted without reason",
-            )?
-            .into();
-        }
-        Some(AnyArg(value))
+        self.base.abort_reason_arg(index)
     }
 
+    #[inline]
     fn objects_arg<T: elise::HeapType>(
         &mut self,
         index: usize,
         interface: &str,
     ) -> Option<Vec<v8::Local<'s, v8::Object>>> {
-        let value = arg(self.args, index);
-        let values = crate::observable_array::sequence(self.scope.scope(), value)?;
-        let mut objects = Vec::with_capacity(values.len());
-        for value in values {
-            match v8::Local::<v8::Object>::try_from(value) {
-                Ok(object) if bindings::is_wrapper::<T>(self.scope.scope(), value) => {
-                    objects.push(object)
-                }
-                _ => {
-                    self.throw_type_error(&format!(
-                        "parameter {}: Failed to convert value to '{interface}'.",
-                        index.saturating_add(1)
-                    ));
-                    return None;
-                }
-            }
-        }
-        Some(objects)
+        self.base.objects_arg::<T>(index, interface)
     }
 
-    /// The member's value itself (`addEventListener`'s `signal`).
-    fn dict_object<T: elise::HeapType>(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-        interface: &str,
-    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
-        let key = member_key(&mut self.scope, member);
-        let scope = self.scope.scope();
-        let value = dict.get(scope, key.into())?;
-        if value.is_undefined() {
-            return Some(None);
-        }
-        if !bindings::is_wrapper::<T>(self.scope.scope(), value) {
-            self.throw_type_error(&format!(
-                "Failed to read the '{member}' property: Failed to convert value to '{interface}'."
-            ));
-            return None;
-        }
-        Some(v8::Local::<v8::Object>::try_from(value).ok())
-    }
-
-    fn dict_nullable_object<T: elise::HeapType>(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-        interface: &str,
-    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
-        let value = self.dict_value(dict, member)?;
-        if value.is_null_or_undefined() {
-            return Some(None);
-        }
-        if !bindings::is_wrapper::<T>(self.scope.scope(), value) {
-            self.throw_type_error(&format!(
-                "Failed to read the '{member}' property: Failed to convert value to '{interface}'."
-            ));
-            return None;
-        }
-        Some(v8::Local::<v8::Object>::try_from(value).ok())
-    }
-
-    fn dict_nullable_target(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<v8::Local<'s, v8::Object>>> {
-        let value = self.dict_value(dict, member)?;
-        if value.is_null_or_undefined() {
-            return Some(None);
-        }
-        let scope = self.scope.scope();
-        if !(bindings::is_wrapper::<Node>(scope, value)
-            || bindings::is_wrapper::<Window>(scope, value)
-            || bindings::is_wrapper::<EventTargetImpl>(scope, value))
-        {
-            self.throw_type_error(&format!(
-                "Failed to read the '{member}' property: Failed to convert value to 'EventTarget'."
-            ));
-            return None;
-        }
-        Some(v8::Local::<v8::Object>::try_from(value).ok())
-    }
-
+    #[inline]
     fn body_arg(
         &mut self,
         index: usize,
     ) -> Option<Option<dom_api::typed::BodyArg<v8::Local<'s, v8::Object>>>> {
-        let value = arg(self.args, index);
-        if value.is_null_or_undefined() {
-            return Some(None);
-        }
-        self.body_of(value).map(Some)
+        self.base.body_arg(index)
     }
 
-    fn dict_body(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<dom_api::typed::BodyMember<v8::Local<'s, v8::Object>>>> {
-        let value = self.dict_value(dict, member)?;
-        if value.is_undefined() {
-            return Some(None);
-        }
-        if value.is_null() {
-            return Some(Some(dom_api::typed::BodyMember::Null));
-        }
-        Some(Some(dom_api::typed::BodyMember::Body(self.body_of(value)?)))
-    }
-
-    fn dict_headers(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<dom_api::StringPairsArg>> {
-        let value = self.dict_value(dict, member)?;
-        if value.is_undefined() {
-            return Some(None);
-        }
-        if !value.is_object() {
-            self.throw_type_error(&format!(
-                "Failed to read the '{member}' property: The provided value is not of type '(record<ByteString, ByteString> or sequence<sequence<ByteString>>)'."
-            ));
-            return None;
-        }
-        string_pairs(self.scope.scope(), value, true).map(Some)
-    }
-
-    fn dict_signal(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<dom_api::typed::SignalMember<v8::Local<'s, v8::Object>>>> {
-        let value = self.dict_value(dict, member)?;
-        if value.is_undefined() {
-            return Some(None);
-        }
-        if value.is_null() {
-            return Some(Some(dom_api::typed::SignalMember::Null));
-        }
-        if !bindings::is_wrapper::<dom::EventTargetImpl>(self.scope.scope(), value) {
-            self.throw_type_error(&format!(
-                "Failed to read the '{member}' property: Failed to convert value to 'AbortSignal'."
-            ));
-            return None;
-        }
-        Some(
-            v8::Local::<v8::Object>::try_from(value)
-                .ok()
-                .map(dom_api::typed::SignalMember::Signal),
-        )
-    }
-
-    fn dict_is_null(
-        &mut self,
-        dict: &v8::Local<'s, v8::Object>,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<bool>> {
-        let value = self.dict_value(dict, member)?;
-        Some((!value.is_undefined()).then(|| value.is_null()))
-    }
-
+    #[inline]
     fn json_arg(&mut self, index: usize) -> Option<String> {
-        let value = arg(self.args, index);
-        let scope = self.scope.scope();
-        let json = v8::json::stringify(scope, value)?.to_rust_string_lossy(scope);
-        // What `JSON.stringify` gives undefined for (undefined, a
-        // function, a symbol), V8's API gives as this, which no JSON text
-        // is.
-        if json == "undefined" {
-            self.throw_type_error("The data is not JSON serializable");
-            return None;
-        }
-        Some(json)
+        self.base.json_arg(index)
     }
 
     fn object_if<T: elise::HeapType>(&mut self, index: usize) -> Option<v8::Local<'s, v8::Object>> {
-        let value = arg(self.args, index);
-        if bindings::is_wrapper::<T>(self.scope.scope(), value) {
+        let value = arg(self.base.args, index);
+        if bindings::is_wrapper::<T>(self.base.scope.scope(), value) {
             return v8::Local::<v8::Object>::try_from(value).ok();
         }
         None
@@ -2244,158 +3670,98 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     /// WebIDL's sequence conversion, each item as a `BlobPart` union is:
     /// a blob's wrapper, else a buffer or a view of one (its bytes copied
     /// now, as File API's "process blob parts" takes them), else a string.
+    #[inline]
     fn blob_parts_arg(
         &mut self,
         index: usize,
     ) -> Option<Option<Vec<BlobPartArg<v8::Local<'s, v8::Object>>>>> {
-        let value = arg(self.args, index);
-        if value.is_undefined() {
-            return Some(None);
-        }
-        let mut parts = Vec::new();
-        crate::observable_array::for_each_item(self.scope.scope(), value, |scope, value| {
-            let part = if bindings::is_wrapper::<dom::Blob>(scope, value) {
-                BlobPartArg::Blob(v8::Local::<v8::Object>::try_from(value).ok()?)
-            } else if let Ok(buffer) = v8::Local::<v8::ArrayBuffer>::try_from(value) {
-                let store = buffer.get_backing_store();
-                BlobPartArg::Bytes(
-                    store
-                        .iter()
-                        .take(buffer.byte_length())
-                        .map(Cell::get)
-                        .collect(),
-                )
-            } else if let Ok(view) = v8::Local::<v8::ArrayBufferView>::try_from(value) {
-                let mut bytes = vec![0; view.byte_length()];
-                let copied = view.copy_contents(&mut bytes);
-                bytes.truncate(copied);
-                BlobPartArg::Bytes(bytes)
-            } else {
-                BlobPartArg::String(value.to_string(scope)?.to_rust_string_lossy(scope))
-            };
-            parts.push(part);
-            Some(())
-        })?;
-        Some(Some(parts))
+        self.base.blob_parts_arg(index)
     }
 
+    #[inline]
     fn message_arg(
         &mut self,
         index: usize,
         transfer: dom_api::TransferArg,
         from_port: bool,
     ) -> Option<(dom::SerializedMessage, Vec<v8::Local<'s, v8::Object>>)> {
-        let value = arg(self.args, index);
-        let (at, form) = match transfer {
-            dom_api::TransferArg::Sequence(at) => (at, crate::serialize::TransferForm::Sequence),
-            dom_api::TransferArg::Options(at) => (at, crate::serialize::TransferForm::Options),
-            dom_api::TransferArg::SequenceOrOptions(at) => {
-                (at, crate::serialize::TransferForm::SequenceOrOptions)
-            }
-        };
-        let transfer = arg(self.args, at);
-        let source = from_port.then(|| self.args.this());
-        crate::serialize::serialize_message(&mut self.scope, value, transfer, form, source)
+        self.base.message_arg(index, transfer, from_port)
     }
 
+    #[inline]
     fn serialized_state_arg(&mut self, index: usize) -> Option<Vec<u8>> {
-        let value = arg(self.args, index);
-        crate::serialize::serialize_for_storage(self.scope.scope(), value)
+        self.base.serialized_state_arg(index)
     }
 
+    #[inline]
     fn animation_options_arg(&mut self, index: usize) -> Option<dom_api::typed::AnimationOptions> {
-        let value = arg(self.args, index);
-        crate::keyframes::read_options(self.scope.scope(), value, true)
+        self.base.animation_options_arg(index)
     }
 
+    #[inline]
     fn effect_options_arg(&mut self, index: usize) -> Option<dom_api::typed::AnimationOptions> {
-        let value = arg(self.args, index);
-        crate::keyframes::read_options(self.scope.scope(), value, false)
+        self.base.effect_options_arg(index)
     }
 
+    #[inline]
     fn optional_timing_arg(&mut self, index: usize) -> Option<animation::OptionalTiming> {
-        let value = arg(self.args, index);
-        crate::keyframes::read_optional_timing(self.scope.scope(), value)
+        self.base.optional_timing_arg(index)
     }
 
+    #[inline]
     fn timeline_arg(&mut self, index: usize) -> Option<bool> {
-        let value = arg(self.args, index);
-        crate::keyframes::read_timeline(self.scope.scope(), value)
+        self.base.timeline_arg(index)
     }
 
+    #[inline]
     fn keyframes_arg(&mut self, index: usize) -> Option<Option<animation::ScriptKeyframes>> {
-        let value = arg(self.args, index);
-        if value.is_null_or_undefined() {
-            return Some(None);
-        }
-        Some(Some(crate::keyframes::read(self.scope.scope(), value)?))
+        self.base.keyframes_arg(index)
     }
 
+    #[inline]
     fn round_rect_radii_arg(&mut self, index: usize) -> Option<Vec<Radius>> {
-        let value = arg(self.args, index);
-        if value.is_undefined() {
-            return Some(vec![Radius::Both(0.0)]);
-        }
-        let scope = self.scope.scope();
-        if let Ok(object) = v8::Local::<v8::Object>::try_from(value) {
-            let symbol = v8::Symbol::get_iterator(scope);
-            if !object.get(scope, symbol.into())?.is_undefined() {
-                let mut radii = Vec::new();
-                crate::observable_array::for_each_item(scope, value, |scope, item| {
-                    radii.push(radius(scope, item)?);
-                    Some(())
-                })?;
-                return Some(radii);
-            }
-        }
-        Some(vec![radius(scope, value)?])
+        self.base.round_rect_radii_arg(index)
     }
 
     fn bool_if(&mut self, index: usize) -> Option<bool> {
-        let value = arg(self.args, index);
+        let value = arg(self.base.args, index);
         value
             .is_boolean()
-            .then(|| value.boolean_value(self.scope.scope()))
+            .then(|| value.boolean_value(self.base.scope.scope()))
     }
 
+    #[inline]
     fn number_if(&mut self, index: usize) -> Option<f64> {
-        let value = arg(self.args, index);
-        value
-            .is_number()
-            .then(|| value.number_value(self.scope.scope()))
-            .flatten()
+        self.base.number_if(index)
     }
 
+    #[inline]
     fn doubles_arg(&mut self, index: usize) -> Option<Vec<f64>> {
-        let value = arg(self.args, index);
-        let values = crate::observable_array::sequence(self.scope.scope(), value)?;
-        values
-            .into_iter()
-            .map(|value| value.number_value(self.scope.scope()))
-            .collect()
+        self.base.doubles_arg(index)
     }
 
+    #[inline]
     fn bool_arg(&mut self, index: usize) -> bool {
-        arg(self.args, index).boolean_value(self.scope.scope())
+        self.base.bool_arg(index)
     }
 
     fn is_undefined(&mut self, index: usize) -> bool {
-        arg(self.args, index).is_undefined()
+        arg(self.base.args, index).is_undefined()
     }
 
     fn is_null_or_undefined(&mut self, index: usize) -> bool {
-        arg(self.args, index).is_null_or_undefined()
+        arg(self.base.args, index).is_null_or_undefined()
     }
 
     fn is_dictionary_like(&mut self, index: usize) -> bool {
-        let value = arg(self.args, index);
+        let value = arg(self.base.args, index);
         value.is_null_or_undefined() || value.is_object()
     }
 
     /// Any object (a function, or one with `handleEvent`, read when it is
     /// called).
     fn callback_arg(&mut self, index: usize, name: &str) -> Option<Option<Callback<usize>>> {
-        let value = arg(self.args, index);
+        let value = arg(self.base.args, index);
         if value.is_null_or_undefined() {
             return Some(None);
         }
@@ -2404,10 +3770,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
             self.call.callback = Some(value);
             return Some(Some(Callback(0)));
         }
-        self.throw_type_error(&format!(
-            "parameter {} is not of type '{name}'.",
-            index.saturating_add(1)
-        ));
+        self.base.throw_not_of_type(index, name);
         None
     }
 
@@ -2418,7 +3781,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         index: usize,
         name: &str,
     ) -> Option<Option<Callback<usize>>> {
-        let value = arg(self.args, index);
+        let value = arg(self.base.args, index);
         if value.is_null_or_undefined() {
             return Some(None);
         }
@@ -2426,17 +3789,14 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
             self.call.rare().second_callback = Some(value);
             return Some(Some(Callback(1)));
         }
-        self.throw_type_error(&format!(
-            "parameter {} is not of type '{name}'.",
-            index.saturating_add(1)
-        ));
+        self.base.throw_not_of_type(index, name);
         None
     }
 
     /// Any object kept (callable or not: `[LegacyTreatNonObjectAsNull]`),
     /// anything else null.
     fn event_handler_arg(&mut self, index: usize) -> Option<Callback<usize>> {
-        let value = arg(self.args, index);
+        let value = arg(self.base.args, index);
         if !value.is_object() {
             return None;
         }
@@ -2448,126 +3808,61 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     /// A function as it is, anything else its `ToString` (which may run
     /// script, before the operation).
     fn timer_handler_arg(&mut self, index: usize) -> Option<Callback<usize>> {
-        let value = arg(self.args, index);
+        let value = arg(self.base.args, index);
         let handler = if value.is_function() {
             value
         } else {
-            value.to_string(self.scope.scope())?.into()
+            value.to_string(self.base.scope.scope())?.into()
         };
         assert!(self.call.callback.is_none(), "a member takes one callback");
         self.call.callback = Some(handler);
         Some(Callback(0))
     }
 
+    #[inline]
     fn i32_arg(&mut self, index: usize) -> Option<i32> {
-        arg(self.args, index).int32_value(self.scope.scope())
+        self.base.i32_arg(index)
     }
 
+    #[inline]
     fn u32_arg(&mut self, index: usize) -> Option<u32> {
-        to_uint32(self.scope.scope(), arg(self.args, index))
+        self.base.u32_arg(index)
     }
 
+    #[inline]
     fn f64_arg(&mut self, index: usize, finite: bool) -> Option<f64> {
-        let value = arg(self.args, index).number_value(self.scope.scope())?;
-        if finite && !value.is_finite() {
-            self.throw_type_error("The provided double value is non-finite.");
-            return None;
-        }
-        Some(value)
+        self.base.f64_arg(index, finite)
     }
 
     /// A new array, made before the operation (the engine's heap isn't
     /// touched in one).
+    #[inline]
     fn rest_arg(&mut self, index: usize) -> Option<v8::Local<'s, v8::Array>> {
-        let len = usize::try_from(self.args.length()).unwrap_or(0);
-        if len <= index {
-            return None;
-        }
-        let values: Vec<_> = (index..len).map(|index| arg(self.args, index)).collect();
-        Some(v8::Array::new_with_elements(self.scope.scope(), &values))
+        self.base.rest_arg(index)
     }
 
+    #[inline]
     fn object_arg<T: elise::HeapType>(
         &mut self,
         index: usize,
         interface: &str,
     ) -> Option<Option<v8::Local<'s, v8::Object>>> {
-        let value = arg(self.args, index);
-        if value.is_null_or_undefined() {
-            return Some(None);
-        }
-        if bindings::is_wrapper::<T>(self.scope.scope(), value) {
-            return v8::Local::<v8::Object>::try_from(value).ok().map(Some);
-        }
-        self.throw_type_error(&format!(
-            "parameter {} is not of type '{interface}'.",
-            index.saturating_add(1)
-        ));
-        None
+        self.base.object_arg::<T>(index, interface)
     }
 
+    #[inline]
     fn construct(&mut self, interface: usize, required: usize) -> bool {
-        let name = dom_api::INTERFACES[interface].name;
-        if self.args.new_target().is_undefined() {
-            self.throw_type_error(&format!(
-                "Failed to construct '{name}': Please use the 'new' operator, this DOM object constructor cannot be called as a function."
-            ));
-            return false;
-        }
-        // `[HTMLConstructor]`: `new.target` is `HTMLElement` itself (its
-        // own constructor, or one defined with it), as Blink compares it
-        // with its realm's interface object.
-        if interface == const { dom_api::declare::interface_index("HTMLElement") }
-            && self.is_own_constructor(interface)
-        {
-            self.throw_type_error("Illegal constructor");
-            return false;
-        }
-        let given = usize::try_from(self.args.length()).unwrap_or(0);
-        if given >= required {
-            return true;
-        }
-        self.throw_type_error(&format!(
-            "Failed to construct '{name}': {required} argument{} required, but only {given} present.",
-            if required == 1 { "" } else { "s" }
-        ));
-        false
+        self.base.construct(interface, required)
     }
 
     /// The current context's global, whose window (if it is one of the new
     /// DOM's: its global proxy wraps it) the operation reads.
+    #[inline]
     fn get_html_options(&mut self, index: usize) -> Option<(bool, Vec<v8::Local<'s, v8::Object>>)> {
-        let value = arg(self.args, index);
-        if value.is_null_or_undefined() {
-            return Some((false, Vec::new()));
-        }
-        let Ok(dict) = v8::Local::<v8::Object>::try_from(value) else {
-            self.throw_type_error(
-                "Failed to execute 'getHTML': The provided value is not of type 'GetHTMLOptions'.",
-            );
-            return None;
-        };
-        let scope = self.scope.scope();
-        let key = templates::string(scope, "serializableShadowRoots");
-        let serializable = dict.get(scope, key.into())?.boolean_value(scope);
-        let key = templates::string(scope, "shadowRoots");
-        let listed = dict.get(scope, key.into())?;
-        if listed.is_undefined() {
-            return Some((serializable, Vec::new()));
-        }
-        let mut nodes = Vec::new();
-        for item in crate::observable_array::sequence(scope, listed)? {
-            match v8::Local::<v8::Object>::try_from(item) {
-                Ok(object) if bindings::is_wrapper::<Node>(scope, item) => nodes.push(object),
-                _ => {
-                    self.throw_type_error("Failed to execute 'getHTML': Failed to read the 'shadowRoots' property from 'GetHTMLOptions': Failed to convert value to 'ShadowRoot'.");
-                    return None;
-                }
-            }
-        }
-        Some((serializable, nodes))
+        self.base.get_html_options(index)
     }
 
+    #[inline]
     fn intersection_observer_init(
         &mut self,
         index: usize,
@@ -2575,90 +3870,10 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         dom_api::typed::IntersectionInit,
         Option<v8::Local<'s, v8::Object>>,
     )> {
-        const NAME: &str = "Failed to construct 'IntersectionObserver'";
-        let mut init = dom_api::typed::IntersectionInit::default();
-        let mut root_node = None;
-        let value = arg(self.args, index);
-        if value.is_null_or_undefined() {
-            return Some((init, None));
-        }
-        let Ok(dict) = v8::Local::<v8::Object>::try_from(value) else {
-            self.throw_type_error(&format!(
-                "{NAME}: The provided value is not of type 'IntersectionObserverInit'."
-            ));
-            return None;
-        };
-        // The members in the order WebIDL reads them: by name.
-        let scope = self.scope.scope();
-        let member = |scope: &mut v8::PinScope<'s, '_>, name: &str| {
-            let key = templates::string(scope, name);
-            dict.get(scope, key.into())
-        };
-        let number = |scope: &mut v8::PinScope<'s, '_>, value: v8::Local<'s, v8::Value>| {
-            value.number_value(scope)
-        };
-        let delay = member(scope, "delay")?;
-        if !delay.is_undefined() {
-            init.delay = number(scope, delay)?;
-            if !init.delay.is_finite() {
-                self.throw_type_error(&format!(
-                    "{NAME}: Failed to read the 'delay' property from 'IntersectionObserverInit': The provided double value is non-finite."
-                ));
-                return None;
-            }
-        }
-        let scope = self.scope.scope();
-        let root = member(scope, "root")?;
-        if !root.is_null_or_undefined() {
-            match v8::Local::<v8::Object>::try_from(root) {
-                Ok(object) if bindings::is_wrapper::<Node>(scope, root) => {
-                    root_node = Some(object);
-                }
-                _ => {
-                    self.throw_type_error(&format!(
-                        "{NAME}: Failed to read the 'root' property from 'IntersectionObserverInit': The provided value is not of type '(Element or Document)'."
-                    ));
-                    return None;
-                }
-            }
-        }
-        for (name, out) in [
-            ("rootMargin", &mut init.root_margin),
-            ("scrollMargin", &mut init.scroll_margin),
-        ] {
-            let scope = self.scope.scope();
-            let value = member(scope, name)?;
-            if !value.is_undefined() {
-                *out = value.to_string(scope)?.to_rust_string_lossy(scope);
-            }
-        }
-        let scope = self.scope.scope();
-        let threshold = member(scope, "threshold")?;
-        if !threshold.is_undefined() {
-            // `(double or sequence<double>)`: an object is the sequence.
-            let values = if threshold.is_object() {
-                crate::observable_array::sequence(scope, threshold)?
-            } else {
-                vec![threshold]
-            };
-            init.thresholds.clear();
-            for value in values {
-                let value = number(self.scope.scope(), value)?;
-                if !value.is_finite() {
-                    self.throw_type_error(&format!(
-                        "{NAME}: Failed to read the 'threshold' property from 'IntersectionObserverInit': The provided double value is non-finite."
-                    ));
-                    return None;
-                }
-                init.thresholds.push(value);
-            }
-        }
-        let scope = self.scope.scope();
-        let track = member(scope, "trackVisibility")?;
-        init.track_visibility = track.boolean_value(scope);
-        Some((init, root_node))
+        self.base.intersection_observer_init(index)
     }
 
+    #[inline]
     fn intersection_entry_init(
         &mut self,
         index: usize,
@@ -2666,167 +3881,23 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         dom_api::typed::IntersectionEntryInitValues,
         v8::Local<'s, v8::Object>,
     )> {
-        const NAME: &str = "Failed to construct 'IntersectionObserverEntry'";
-        let mut target = None;
-        const INIT: &str = "IntersectionObserverEntryInit";
-        let value = arg(self.args, index);
-        // A dictionary: undefined and null are an empty one, whose
-        // required members are missing.
-        let dict = if value.is_null_or_undefined() {
-            v8::Object::new(self.scope.scope())
-        } else if let Ok(dict) = v8::Local::<v8::Object>::try_from(value) {
-            dict
-        } else {
-            self.throw_type_error(&format!(
-                "{NAME}: The provided value is not of type '{INIT}'."
-            ));
-            return None;
-        };
-        // The members in the order WebIDL reads them: by name; each one
-        // required.
-        let mut values = Vec::with_capacity(8);
-        for name in [
-            "boundingClientRect",
-            "intersectionRatio",
-            "intersectionRect",
-            "isIntersecting",
-            "isVisible",
-            "rootBounds",
-            "target",
-            "time",
-        ] {
-            let scope = self.scope.scope();
-            let key = templates::string(scope, name);
-            let value = dict.get(scope, key.into())?;
-            if value.is_undefined() {
-                self.throw_type_error(&format!(
-                    "{NAME}: Failed to read the '{name}' property from '{INIT}': Required member is undefined."
-                ));
-                return None;
-            }
-            let converted = match name {
-                "boundingClientRect" | "intersectionRect" | "rootBounds" => {
-                    if name == "rootBounds" && value.is_null() {
-                        Init::Rect(None)
-                    } else {
-                        Init::Rect(Some(self.rect_init(value, name)?))
-                    }
-                }
-                "isIntersecting" | "isVisible" => {
-                    Init::Bool(value.boolean_value(self.scope.scope()))
-                }
-                "target" => {
-                    let scope = self.scope.scope();
-                    match v8::Local::<v8::Object>::try_from(value) {
-                        Ok(object) if bindings::is_wrapper::<Node>(scope, value) => {
-                            target = Some(object);
-                            Init::Bool(true)
-                        }
-                        _ => {
-                            self.throw_type_error(&format!(
-                                "{NAME}: Failed to read the 'target' property from '{INIT}': Failed to convert value to 'Element'."
-                            ));
-                            return None;
-                        }
-                    }
-                }
-                _ => {
-                    let number = value.number_value(self.scope.scope())?;
-                    if !number.is_finite() {
-                        self.throw_type_error(&format!(
-                            "{NAME}: Failed to read the '{name}' property from '{INIT}': The provided double value is non-finite."
-                        ));
-                        return None;
-                    }
-                    Init::Number(number)
-                }
-            };
-            values.push(converted);
-        }
-        let [
-            Init::Rect(Some(bounding_client_rect)),
-            Init::Number(intersection_ratio),
-            Init::Rect(Some(intersection_rect)),
-            Init::Bool(is_intersecting),
-            Init::Bool(is_visible),
-            Init::Rect(root_bounds),
-            Init::Bool(_),
-            Init::Number(time),
-        ] = values[..]
-        else {
-            unreachable!("each member converted as its type")
-        };
-        Some((
-            dom_api::typed::IntersectionEntryInitValues {
-                time,
-                root_bounds,
-                bounding_client_rect,
-                intersection_rect,
-                is_intersecting,
-                is_visible,
-                intersection_ratio,
-            },
-            target.expect("a required member, converted"),
-        ))
+        self.base.intersection_entry_init(index)
     }
 
+    #[inline]
     fn static_range_init(&mut self, index: usize) -> Option<[(v8::Local<'s, v8::Object>, u32); 2]> {
-        const NAME: &str = "Failed to construct 'StaticRange'";
-        const INIT: &str = "StaticRangeInit";
-        let value = arg(self.args, index);
-        // A dictionary: undefined and null are an empty one, whose
-        // required members are missing.
-        let dict = if value.is_null_or_undefined() {
-            v8::Object::new(self.scope.scope())
-        } else if let Ok(dict) = v8::Local::<v8::Object>::try_from(value) {
-            dict
-        } else {
-            self.throw_type_error(&format!(
-                "{NAME}: The provided value is not of type '{INIT}'."
-            ));
-            return None;
-        };
-        // The members in the order WebIDL reads them: by name; each one
-        // required.
-        let mut nodes = Vec::with_capacity(2);
-        let mut offsets = Vec::with_capacity(2);
-        for name in ["endContainer", "endOffset", "startContainer", "startOffset"] {
-            let scope = self.scope.scope();
-            let key = templates::string(scope, name);
-            let value = dict.get(scope, key.into())?;
-            if value.is_undefined() {
-                self.throw_type_error(&format!(
-                    "{NAME}: Failed to read the '{name}' property from '{INIT}': Required member is undefined."
-                ));
-                return None;
-            }
-            if name.ends_with("Offset") {
-                offsets.push(to_uint32(scope, value)?);
-                continue;
-            }
-            match v8::Local::<v8::Object>::try_from(value) {
-                Ok(object) if bindings::is_wrapper::<Node>(scope, value) => nodes.push(object),
-                _ => {
-                    self.throw_type_error(&format!(
-                        "{NAME}: Failed to read the '{name}' property from '{INIT}': Failed to convert value to 'Node'."
-                    ));
-                    return None;
-                }
-            }
-        }
-        // Read end first: the start's are the second.
-        Some([(nodes[1], offsets[1]), (nodes[0], offsets[0])])
+        self.base.static_range_init(index)
     }
 
     fn prepare_window(&mut self) {
-        let scope = self.scope.scope();
+        let scope = self.base.scope.scope();
         let context = scope.get_current_context();
         self.call.window = Some(context.global(scope));
     }
 
     fn prepare_relevant_window(&mut self) {
-        let scope = self.scope.scope();
-        let this = self.args.this();
+        let scope = self.base.scope.scope();
+        let this = self.base.args.this();
         let context = this
             .get_creation_context(scope)
             .unwrap_or_else(|| scope.get_current_context());
@@ -2834,13 +3905,13 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     }
 
     fn prepare_incumbent_window(&mut self) {
-        let scope = self.scope.scope();
+        let scope = self.base.scope.scope();
         let context = scope.get_incumbent_context();
         self.call.window = Some(v8::Local::new(scope, context).global(scope));
     }
 
     fn prepare_entry_window(&mut self) {
-        let scope = self.scope.scope();
+        let scope = self.base.scope.scope();
         let context = scope.get_entered_or_microtask_context();
         self.call.window = Some(v8::Local::new(scope, context).global(scope));
     }
@@ -2852,8 +3923,9 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         // document's, as Blink's bindings convert a result with the
         // receiver's `ScriptState`); the one prepared here would be the
         // current realm's.
-        let scope = self.scope.scope();
+        let scope = self.base.scope.scope();
         if self
+            .base
             .args
             .this()
             .get_creation_context(scope)
@@ -2861,12 +3933,12 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         {
             return;
         }
-        let wrapper = templates::new_wrapper(&mut self.scope, interface);
+        let wrapper = templates::new_wrapper(&mut self.base.scope, interface);
         self.call.prepared = Some((wrapper, interface));
     }
 
     fn foresee_element(&mut self, name: &ArgString<'s>) -> (Option<dom::NameId>, usize) {
-        foresee_element(self.scope.scope(), name)
+        foresee_element(self.base.scope.scope(), name)
     }
 
     /// Its tag alone, mostly (the result was returned in the operation),
@@ -2879,32 +3951,6 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         }
     }
 
-    /// Out of line: the members' calls mostly don't throw, and its
-    /// registers saved inline would cost each.
-    #[cold]
-    #[inline(never)]
-    fn throw(&mut self, error: ApiError) {
-        if self.call.rare.as_ref().is_some_and(|rare| rare.threw) {
-            return;
-        }
-        if let Some(thrown) = self.call.rare.as_mut().and_then(|rare| rare.thrown.take()) {
-            self.scope.scope().throw_exception(thrown);
-            return;
-        }
-        match error {
-            ApiError::Type(message) => self.throw_type_error(&message),
-            ApiError::Range(message) => {
-                crate::strings::throw_range_error(self.scope.scope(), &message)
-            }
-            ApiError::Dom(exception) => exception::throw_dom_exception(
-                &mut self.scope,
-                exception.name.name(),
-                &exception.message,
-            ),
-            ApiError::Aborted(signal) => throw_abort_reason(&mut self.scope, &signal.0),
-        }
-    }
-
     /// A new promise rejected with what `error` throws (WebIDL's for an
     /// operation giving a promise).
     #[cold]
@@ -2912,38 +3958,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
     fn reject(&mut self, error: ApiError) {
         // What a traversal's filter threw.
         let thrown = self.call.rare.as_mut().and_then(|rare| rare.thrown.take());
-        let reason = if let Some(thrown) = thrown {
-            Some(thrown)
-        } else {
-            v8::tc_scope!(let tc, self.scope.scope());
-            {
-                let Some(mut inner) = crate::state::scope(tc) else {
-                    return;
-                };
-                match error {
-                    ApiError::Type(message) => crate::throw_type_error(inner.scope(), &message),
-                    ApiError::Range(message) => {
-                        crate::strings::throw_range_error(inner.scope(), &message)
-                    }
-                    ApiError::Dom(exception) => {
-                        exception::throw_dom_exception(
-                            &mut inner,
-                            exception.name.name(),
-                            &exception.message,
-                        );
-                    }
-                    ApiError::Aborted(signal) => throw_abort_reason(&mut inner, &signal.0),
-                }
-            }
-            tc.exception()
-        };
-        let scope = self.scope.scope();
-        let (Some(reason), Some(resolver)) = (reason, v8::PromiseResolver::new(scope)) else {
-            return;
-        };
-        resolver.reject(scope, reason);
-        let promise = resolver.get_promise(scope);
-        self.rv().set(promise.into());
+        self.base.reject_with(thrown, error);
     }
 
     fn constructor_is_constructor(&mut self) -> bool {
@@ -2969,7 +3984,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         let constructor =
             v8::Local::<v8::Object>::try_from(self.call.callback.expect("the constructor taken"))
                 .expect("a constructor, checked");
-        match crate::custom_elements::read_constructor(self.scope.scope(), constructor) {
+        match crate::custom_elements::read_constructor(self.base.scope.scope(), constructor) {
             Some((callbacks, info)) => {
                 self.call.rare().definition = Some(callbacks);
                 Ok(info)
@@ -3031,7 +4046,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         definition: &Persistent<dom::CustomElementDefinition>,
         element: &Persistent<Node>,
     ) -> bool {
-        crate::listeners::call_constructor(&mut self.scope, |scope| {
+        crate::listeners::call_constructor(&mut self.base.scope, |scope| {
             upgrade_element(scope, definition, element)
         })
     }
@@ -3042,13 +4057,13 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         definition: &Persistent<dom::CustomElementDefinition>,
         callback: dom_api::LifecycleCallback,
     ) {
-        crate::listeners::call_function(&mut self.scope, |scope| {
+        crate::listeners::call_function(&mut self.base.scope, |scope| {
             call_lifecycle_callback(scope, element, definition, callback)
         });
     }
 
     fn pending_input(&mut self, include_continuous: bool) -> Vec<dom_api::PendingInput> {
-        crate::listeners::pending_input(&mut self.scope, include_continuous)
+        crate::listeners::pending_input(&mut self.base.scope, include_continuous)
     }
 
     fn reject_promise_with_reason(
@@ -3056,7 +4071,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         promise: u64,
         signal: &Persistent<dom::EventTargetImpl>,
     ) {
-        crate::listeners::reject_promise_with_reason(&mut self.scope, promise, signal);
+        crate::listeners::reject_promise_with_reason(&mut self.base.scope, promise, signal);
     }
 
     fn resolve_when_defined(
@@ -3067,18 +4082,18 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         let _ = definition;
         let constructor = self.call.callback.expect("the constructor taken");
         for id in pending {
-            let (state, _) = self.scope.state_mut();
+            let (state, _) = self.base.scope.state_mut();
             let Some(resolver) = state.when_defined.remove(id) else {
                 continue;
             };
-            let scope = self.scope.scope();
+            let scope = self.base.scope.scope();
             let resolver = v8::Local::new(scope, resolver);
             resolver.resolve(scope, constructor);
         }
     }
 
     fn call_listener(&mut self, event: &Persistent<dom::Event>, index: usize) {
-        crate::listeners::call_listener(&mut self.scope, event, index, false);
+        crate::listeners::call_listener(&mut self.base.scope, event, index, false);
     }
 
     fn call_node_filter(
@@ -3086,7 +4101,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         traversal: &dom::TraversalRoot,
         node: &NodeRoot,
     ) -> Result<u16, ApiError> {
-        let filtered = crate::listeners::call_function(&mut self.scope, |scope| {
+        let filtered = crate::listeners::call_function(&mut self.base.scope, |scope| {
             crate::listeners::call_node_filter(scope, traversal, node)
         });
         match filtered {
@@ -3098,8 +4113,9 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         }
     }
 
+    #[inline]
     fn compile_event_handler(&mut self, target: &dom::TargetRoot, event_type: dom::NameId) {
-        crate::handlers::compile_event_handler(&mut self.scope, target, event_type);
+        self.base.compile_event_handler(target, event_type)
     }
 
     // The results the engine allocates for, made after the operation
@@ -3107,341 +4123,133 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
 
     /// The pixels made the `ImageData`'s array: its buffer's bytes, no
     /// copy.
+    #[inline]
     fn finish_image_data_pixels(&mut self, image_data: Persistent<dom::ImageData>, bytes: Vec<u8>) {
-        let len = bytes.len();
-        let scope = self.scope.scope();
-        let store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
-        let buffer = v8::ArrayBuffer::with_backing_store(scope, &store);
-        let array = v8::Uint8ClampedArray::new(scope, buffer, 0, len)
-            .expect("an array of a buffer's length");
-        let (state, mut no_gc) = self.scope.state();
-        state.dom.read(|cx| {
-            let edge = cx.image_data_array_edge(image_data.get(cx.gc));
-            no_gc.set_strong_value(edge, array.into());
-        });
+        self.base.finish_image_data_pixels(image_data, bytes)
     }
 
     /// The element's wrapper given the call's new object's prototype
     /// (`new.target`'s), and the call's result (`[[SetPrototypeOf]]`: V8
     /// gives what an API constructor returns as `new`'s).
+    #[inline]
     fn finish_upgrading(&mut self, root: NodeRoot) {
-        let scope = self.scope.scope();
-        let prototype = self.args.this().get_prototype(scope);
-        let (state, mut no_gc) = self.scope.state();
-        let wrapper = state
-            .dom
-            .read(|cx| no_gc.wrapper(cx.wrapper_edge(root.get(cx.gc))))
-            .expect("an element kept for its wrapper");
-        if let Some(prototype) = prototype {
-            wrapper.set_prototype(self.scope.scope(), prototype);
-        }
-        self.rv().set(wrapper.into());
+        self.base.finish_upgrading(root)
     }
 
     /// A new promise, its resolver kept by its number; or the one whose
     /// resolver is kept by it already.
-    #[cold]
+    #[inline]
     fn finish_pending_promise(&mut self, id: u64, existing: bool) {
-        let resolver = if existing {
-            let (state, _) = self.scope.state_mut();
-            let kept = state
-                .when_defined
-                .get(&id)
-                .cloned()
-                .expect("the promise kept by its number");
-            v8::Local::new(self.scope.scope(), kept)
-        } else {
-            let Some(resolver) = v8::PromiseResolver::new(self.scope.scope()) else {
-                return;
-            };
-            let global = v8::Global::new(self.scope.scope(), resolver);
-            let (state, _) = self.scope.state_mut();
-            state.when_defined.insert(id, global);
-            resolver
-        };
-        let promise = resolver.get_promise(self.scope.scope());
-        self.rv().set(promise.into());
+        self.base.finish_pending_promise(id, existing)
     }
 
-    #[cold]
+    #[inline]
     fn finish_resolved_constructor(
         &mut self,
         definition: Persistent<dom::CustomElementDefinition>,
     ) {
-        let (state, mut no_gc) = self.scope.state();
-        // Allocates nothing: a read.
-        let constructor = state
-            .dom
-            .read(|cx| no_gc.strong_value(cx.definition_edges(definition.get(cx.gc)).constructor))
-            .expect("a definition's constructor, stored as it was added");
-        self.resolve(constructor);
+        self.base.finish_resolved_constructor(definition)
     }
 
+    #[inline]
     fn finish_objects(&mut self, objects: Vec<(ObjectRoot, usize)>) {
-        let wrappers: Vec<v8::Local<'_, v8::Value>> = objects
-            .iter()
-            .map(|(object, interface)| wrapper_of(&mut self.scope, object, *interface).into())
-            .collect();
-        let array = v8::Array::new_with_elements(self.scope.scope(), &wrappers);
-        self.rv().set(array.into());
+        self.base.finish_objects(objects)
     }
 
+    #[inline]
     fn finish_frozen_objects(&mut self, objects: Vec<(ObjectRoot, usize)>) {
-        let wrappers: Vec<v8::Local<'_, v8::Value>> = objects
-            .iter()
-            .map(|(object, interface)| wrapper_of(&mut self.scope, object, *interface).into())
-            .collect();
-        let this = self.args.this();
-        let array = frozen_array(self.scope.scope(), this, &wrappers);
-        self.rv().set(array.into());
+        self.base.finish_frozen_objects(objects)
     }
 
     /// A name of the table is its V8 string of the isolate's cache, by
     /// its number (made the first time, as a name returned is): no string
     /// of the DOM's and no V8 string made for it.
+    #[inline]
     fn finish_names(&mut self, names: Vec<dom_api::typed::NameOrText>) {
-        use dom_api::typed::NameOrText;
-        let mut values: Vec<v8::Local<'_, v8::Value>> = Vec::with_capacity(names.len());
-        for name in &names {
-            let value = match name {
-                NameOrText::Name(id) => {
-                    let cached = {
-                        let (state, mut no_gc) = self.scope.state();
-                        usize::try_from(*id)
-                            .ok()
-                            .and_then(|index| state.caches.names.get(index))
-                            .and_then(Option::as_ref)
-                            .map(|name| no_gc.local(name))
-                    };
-                    match cached {
-                        Some(string) => Some(string),
-                        None => make_name(&mut self.scope, *id, &names::get(*id)),
-                    }
-                }
-                NameOrText::Text(text) => v8::String::new_from_utf8(
-                    self.scope.scope(),
-                    text.as_bytes(),
-                    v8::NewStringType::Normal,
-                ),
-            };
-            let Some(value) = value else {
-                exception::throw_range_error(self.scope.scope(), "Invalid string length");
-                return;
-            };
-            values.push(value.into());
-        }
-        let array = v8::Array::new_with_elements(self.scope.scope(), &values);
-        self.rv().set(array.into());
+        self.base.finish_names(names)
     }
 
+    #[inline]
     fn finish_strings(&mut self, strings: Vec<DomString>) {
-        let mut values: Vec<v8::Local<'_, v8::Value>> = Vec::with_capacity(strings.len());
-        for string in &strings {
-            let Some(value) = strings::new_string(self.scope.scope(), string) else {
-                exception::throw_range_error(self.scope.scope(), "Invalid string length");
-                return;
-            };
-            values.push(value.into());
-        }
-        let array = v8::Array::new_with_elements(self.scope.scope(), &values);
-        self.rv().set(array.into());
+        self.base.finish_strings(strings)
     }
 
+    #[inline]
     fn finish_frozen_strings(&mut self, strings: Vec<DomString>) {
-        let this = self.args.this();
-        let mut values: Vec<v8::Local<'_, v8::Value>> = Vec::with_capacity(strings.len());
-        for string in &strings {
-            let Some(value) = strings::new_string(self.scope.scope(), string) else {
-                exception::throw_range_error(self.scope.scope(), "Invalid string length");
-                return;
-            };
-            values.push(value.into());
-        }
-        let array = frozen_array(self.scope.scope(), this, &values);
-        self.rv().set(array.into());
+        self.base.finish_frozen_strings(strings)
     }
 
+    #[inline]
     fn finish_doubles(&mut self, numbers: Vec<f64>) {
-        let scope = self.scope.scope();
-        let values: Vec<v8::Local<'_, v8::Value>> = numbers
-            .iter()
-            .map(|&number| v8::Number::new(scope, number).into())
-            .collect();
-        let array = v8::Array::new_with_elements(scope, &values);
-        self.rv().set(array.into());
+        self.base.finish_doubles(numbers)
     }
 
+    #[inline]
     fn finish_numbers(&mut self, numbers: Vec<f64>) {
-        let this = self.args.this();
-        let scope = self.scope.scope();
-        let values: Vec<v8::Local<'_, v8::Value>> = numbers
-            .iter()
-            .map(|&number| v8::Number::new(scope, number).into())
-            .collect();
-        let array = frozen_array(scope, this, &values);
-        self.rv().set(array.into());
+        self.base.finish_numbers(numbers)
     }
 
+    #[inline]
     fn finish_dictionary(&mut self, members: Vec<(&'static str, dom_api::typed::DictValue)>) {
-        let scope = self.scope.scope();
-        let object = v8::Object::new(scope);
-        for (name, value) in members {
-            let key = templates::string(scope, name);
-            let value = dict_value(scope, value);
-            object.create_data_property(scope, key.into(), value);
-        }
-        self.rv().set(object.into());
+        self.base.finish_dictionary(members)
     }
 
+    #[inline]
     fn finish_records(&mut self, records: Vec<Vec<(String, dom_api::typed::DictValue)>>) {
-        let scope = self.scope.scope();
-        let array = v8::Array::new(scope, 0);
-        for (index, record) in (0u32..).zip(records) {
-            let object = v8::Object::new(scope);
-            for (name, value) in record {
-                let key = templates::string(scope, &name);
-                let value = dict_value(scope, value);
-                object.create_data_property(scope, key.into(), value);
-            }
-            array.set_index(scope, index, object.into());
-        }
-        self.rv().set(array.into());
+        self.base.finish_records(records)
     }
 
+    #[inline]
     fn finish_entry_detail(&mut self, entry: Persistent<dom::PerformanceEntry>) {
-        let detail = entry_detail(&mut self.scope, &entry);
-        self.rv().set(detail);
+        self.base.finish_entry_detail(entry)
     }
 
+    #[inline]
     fn finish_reader_buffer(&mut self, reader: Persistent<dom::EventTargetImpl>) {
-        let buffer = reader_buffer(&mut self.scope, &reader);
-        self.rv().set(buffer);
+        self.base.finish_reader_buffer(reader)
     }
 
+    #[inline]
     fn finish_history_state(&mut self, history: Persistent<dom::History>) {
-        let state = history_state(&mut self.scope, &history);
-        self.rv().set(state);
+        self.base.finish_history_state(history)
     }
 
+    #[inline]
     fn finish_filled_view(&mut self, bytes: Vec<u8>) {
-        let view = v8::Local::<v8::ArrayBufferView>::try_from(arg(self.args, 0))
-            .expect("a view, checked as it was taken");
-        let scope = self.scope.scope();
-        let offset = view.byte_offset();
-        if let Some(buffer) = view.buffer(scope) {
-            let store = buffer.get_backing_store();
-            for (cell, byte) in store.iter().skip(offset).zip(bytes) {
-                cell.set(byte);
-            }
-        }
-        self.rv().set(view.into());
+        self.base.finish_filled_view(bytes)
     }
 
+    #[inline]
     fn finish_cloned(&mut self, payload: dom::SerializedMessage, ports: Vec<(ObjectRoot, usize)>) {
-        // In `this`'s relevant realm (the window's), its ports'
-        // wrappers too.
-        let this = self.args.this();
-        let value = {
-            let scope = self.scope.scope();
-            let context = this
-                .get_creation_context(scope)
-                .unwrap_or_else(|| scope.get_current_context());
-            let scope = &mut v8::ContextScope::new(scope, context);
-            let mut realm = state::scope(scope).expect("the isolate's state");
-            let ports: Vec<_> = ports
-                .iter()
-                .map(|(port, interface)| {
-                    let wrapper = wrapper_of(&mut realm, port, *interface);
-                    v8::Global::new(realm.scope(), wrapper)
-                })
-                .collect();
-            crate::serialize::deserialize_message(realm.scope(), payload, ports)
-                .map(|value| v8::Global::new(realm.scope(), value))
-        };
-        match value {
-            Some(value) => {
-                let value = v8::Local::new(self.scope.scope(), value);
-                self.rv().set(value);
-            }
-            None => exception::throw_dom_exception(
-                &mut self.scope,
-                "DataCloneError",
-                "Failed to execute 'structuredClone' on 'Window': Unable to deserialize cloned data.",
-            ),
-        }
+        self.base.finish_cloned(payload, ports)
     }
 
+    #[inline]
     fn finish_resolved(&mut self, object: ObjectRoot, interface: usize) {
-        let wrapper = wrapper_of(&mut self.scope, &object, interface);
-        let scope = self.scope.scope();
-        let Some(resolver) = v8::PromiseResolver::new(scope) else {
-            return;
-        };
-        resolver.resolve(scope, wrapper.into());
-        let promise = resolver.get_promise(scope);
-        self.rv().set(promise.into());
+        self.base.finish_resolved(object, interface)
     }
 
+    #[inline]
     fn finish_resolved_string(&mut self, string: DomString) {
-        let scope = self.scope.scope();
-        let Some(string) = strings::new_string(scope, &string) else {
-            exception::throw_range_error(scope, "Invalid string length");
-            return;
-        };
-        self.resolve(string.into());
+        self.base.finish_resolved_string(string)
     }
 
+    #[inline]
     fn finish_resolved_json(&mut self, text: DomString) {
-        let scope = self.scope.scope();
-        let Some(resolver) = v8::PromiseResolver::new(scope) else {
-            return;
-        };
-        let Some(string) = strings::new_string(scope, &text) else {
-            exception::throw_range_error(scope, "Invalid string length");
-            return;
-        };
-        // Parsed, or what parsing threw (a `SyntaxError`), caught.
-        let parsed = {
-            v8::tc_scope!(let tc, scope);
-            match v8::json::parse(tc, string) {
-                Some(value) => Ok(value),
-                None => Err(tc.exception()),
-            }
-        };
-        let scope = self.scope.scope();
-        match parsed {
-            Ok(value) => {
-                resolver.resolve(scope, value);
-            }
-            Err(Some(thrown)) => {
-                resolver.reject(scope, thrown);
-            }
-            Err(None) => {}
-        }
-        let promise = resolver.get_promise(scope);
-        self.rv().set(promise.into());
+        self.base.finish_resolved_json(text)
     }
 
+    #[inline]
     fn finish_resolved_undefined(&mut self) {
-        let undefined = v8::undefined(self.scope.scope());
-        self.resolve(undefined.into());
+        self.base.finish_resolved_undefined()
     }
 
+    #[inline]
     fn finish_resolved_bytes(&mut self, bytes: Vec<u8>, view: bool) {
-        let len = bytes.len();
-        let scope = self.scope.scope();
-        let store = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
-        let buffer = v8::ArrayBuffer::with_backing_store(scope, &store);
-        let value: v8::Local<'_, v8::Value> = if view {
-            v8::Uint8Array::new(scope, buffer, 0, len)
-                .expect("an array of a buffer's length")
-                .into()
-        } else {
-            buffer.into()
-        };
-        self.resolve(value);
+        self.base.finish_resolved_bytes(bytes, view)
     }
 
+    #[inline]
     fn finish_animation_promise(
         &mut self,
         object: Persistent<dom::EventTargetImpl>,
@@ -3449,15 +4257,12 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         ready: bool,
         resolved: bool,
     ) {
-        if let Some(promise) =
-            animation_promise(&mut self.scope, &object, interface, ready, resolved)
-        {
-            self.rv().set(promise.into());
-        }
+        self.base
+            .finish_animation_promise(object, interface, ready, resolved)
     }
 
     fn update_elements(&mut self) {
-        crate::state::update_elements(&mut self.scope);
+        crate::state::update_elements(&mut self.base.scope);
     }
 }
 
@@ -3622,7 +4427,7 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
     ) -> Option<std::convert::Infallible> {
         if !self
             .no_gc
-            .return_wrapper(&mut self.call.rv.op(), cx.object_wrapper_edge(object))
+            .return_wrapper(&mut self.rv.op(), cx.object_wrapper_edge(object))
         {
             self.keep(Kept::Object(
                 cx.root_object(object),
@@ -3699,18 +4504,18 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
 
     #[inline]
     fn ret_null(&mut self) {
-        self.call.rv.op().set_null();
+        self.rv.op().set_null();
     }
 
     #[inline]
     fn ret_bool(&mut self, value: bool) {
-        self.call.rv.op().set_bool(value);
+        self.rv.op().set_bool(value);
     }
 
     /// A Smi's at once; past one a heap number, made after the operation.
     #[inline]
     fn ret_u32(&mut self, value: u32) -> Option<std::convert::Infallible> {
-        if !self.call.rv.op().set_smi_u32(value) {
+        if !self.rv.op().set_smi_u32(value) {
             self.keep(Kept::U32(value));
         }
         None
@@ -3719,7 +4524,7 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
     /// A Smi's at once; past one a heap number, made after the operation.
     #[inline]
     fn ret_i32(&mut self, value: i32) -> Option<std::convert::Infallible> {
-        if !self.call.rv.op().set_smi_i32(value) {
+        if !self.rv.op().set_smi_i32(value) {
             self.keep(Kept::F64(value.into()));
         }
         None
@@ -3729,15 +4534,15 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
     #[inline]
     fn ret_any<'gc>(&mut self, _: &ApiCx<'_, 'gc>, edge: &'gc JsEdge) {
         match self.no_gc.strong_value(edge) {
-            Some(value) => self.call.rv.op().set(value),
-            None => self.call.rv.op().set_undefined(),
+            Some(value) => self.rv.op().set(value),
+            None => self.rv.op().set_undefined(),
         }
     }
 
     fn ret_any_or_null<'gc>(&mut self, _: &ApiCx<'_, 'gc>, edge: &'gc JsEdge) {
         match self.no_gc.strong_value(edge) {
-            Some(value) => self.call.rv.op().set(value),
-            None => self.call.rv.op().set_null(),
+            Some(value) => self.rv.op().set(value),
+            None => self.rv.op().set_null(),
         }
     }
 
@@ -3750,7 +4555,6 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
             && !(value == 0.0 && value.is_sign_negative());
         if !(integer
             && self
-                .call
                 .rv
                 .op()
                 .set_smi_i32(base::numerics::saturated_cast::<i32, f64>(value)))
@@ -3769,7 +4573,7 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
             .caches
             .strings
             .find(value)
-            .is_some_and(|weak| self.no_gc.return_weak(&mut self.call.rv.op(), weak));
+            .is_some_and(|weak| self.no_gc.return_weak(&mut self.rv.op(), weak));
         if !returned {
             self.keep(Kept::String(value.clone()));
         }
@@ -3785,7 +4589,7 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
             .and_then(|index| self.caches.names.get(index))
             .and_then(Option::as_ref)
         {
-            Some(string) => self.no_gc.return_global(&mut self.call.rv.op(), string),
+            Some(string) => self.no_gc.return_global(&mut self.rv.op(), string),
             None => self.keep(Kept::Name(id, names::string(id))),
         }
         None
@@ -3801,7 +4605,7 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
     ) -> Option<std::convert::Infallible> {
         if !self
             .no_gc
-            .return_wrapper(&mut self.call.rv.op(), cx.wrapper_edge(node))
+            .return_wrapper(&mut self.rv.op(), cx.wrapper_edge(node))
         {
             self.keep_node(cx, node);
         }
@@ -3824,7 +4628,7 @@ impl<'s, A: CallArgs<'s>> OpFront for V8Op<'_, 's, '_, '_, A> {
                 wrap_new(&mut self.no_gc, cx, wrapper, node);
                 count(&self.caches.wrappers_made);
                 count(&self.caches.wrappers_ahead);
-                self.call.rv.op().set(wrapper.into());
+                self.rv.op().set(wrapper.into());
                 None
             }
             // Of another interface than the one foreseen: made after.

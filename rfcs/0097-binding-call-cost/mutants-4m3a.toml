@@ -1,0 +1,56 @@
+# Stage 4m-3a: what the info front end does in a scope (an argument read
+# whole, a dictionary's member, a result V8 makes, an error thrown) runs
+# on `front::Scoped`, the scope, the arguments and the result alone.
+test = ["cargo", "test", "-q", "-p", "dom_api", "-p", "dom_js"]
+timeout = 1800
+
+[[mutant]]
+name = "a callback that isn't one is named by its index, not its position"
+file = "crates/dom_js/src/front.rs"
+from = '''            "parameter {} is not of type '{name}'.",
+            index.saturating_add(1)
+        ));
+    }'''
+to = '''            "parameter {} is not of type '{name}'.",
+            index
+        ));
+    }'''
+
+[[mutant]]
+name = "a range error is thrown as a type error"
+file = "crates/dom_js/src/front.rs"
+from = '''            ApiError::Range(message) => {
+                crate::strings::throw_range_error(self.scope.scope(), &message)
+            }
+            ApiError::Dom(exception) => exception::throw_dom_exception(
+                &mut self.scope,'''
+to = '''            ApiError::Range(message) => self.throw_type_error(&message),
+            ApiError::Dom(exception) => exception::throw_dom_exception(
+                &mut self.scope,'''
+
+[[mutant]]
+name = "an object left for after the operation isn't the result"
+file = "crates/dom_js/src/front.rs"
+from = '''        let wrapper = wrapper_of(&mut self.scope, object, interface);
+        self.rv().set(wrapper.into());'''
+to = '''        let _wrapper = wrapper_of(&mut self.scope, object, interface);'''
+
+[[mutant]]
+name = "a promise isn't rejected with what the call's error throws"
+file = "crates/dom_js/src/front.rs"
+from = '''        resolver.reject(scope, reason);
+        let promise = resolver.get_promise(scope);
+        self.rv().set(promise.into());'''
+to = '''        resolver.resolve(scope, reason);
+        let promise = resolver.get_promise(scope);
+        self.rv().set(promise.into());'''
+
+[[mutant]]
+name = "a non-finite double member of a dictionary is taken"
+file = "crates/dom_api/src/typed.rs"
+from = '''        if !value.is_finite() {
+            front.throw(ApiError::type_error(format!(
+                "The provided double value for '{member}' is non-finite."'''
+to = '''        if false && !value.is_finite() {
+            front.throw(ApiError::type_error(format!(
+                "The provided double value for '{member}' is non-finite."'''

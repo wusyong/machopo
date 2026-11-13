@@ -1462,3 +1462,32 @@ fn a_member_that_needs_a_scope_is_given_the_info_and_makes_it() {
         assert_eq!(report(&mut engine, source), value, "{source}");
     }
 }
+
+/// An argument that isn't the callback or the function its parameter
+/// takes is a `TypeError` naming the parameter by its position, counted
+/// from one.
+#[test]
+fn a_callback_that_isnt_one_is_named_by_its_position() {
+    let mut engine = page();
+    for (source, message) in [
+        (
+            "document.addEventListener('x', 5)",
+            "parameter 2 is not of type 'EventListener'.",
+        ),
+        (
+            "requestAnimationFrame(5)",
+            "parameter 1 is not of type 'FrameRequestCallback'.",
+        ),
+    ] {
+        let found = report(
+            &mut engine,
+            &format!(
+                "(() => {{ try {{ {source}; return 'no error'; }} catch (e) {{ return e.constructor.name + ': ' + e.message; }} }})()"
+            ),
+        );
+        assert!(
+            found.starts_with("TypeError: ") && found.ends_with(message),
+            "{source}: {found}"
+        );
+    }
+}

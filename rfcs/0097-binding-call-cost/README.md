@@ -258,6 +258,11 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
     - 4m-2 開始前選的是「把 `Front` 的預設實作拿掉，由編譯器保證新的 front 什麼都有；wasm 和測試的 front 用 macro 補」，不選留著 `PLAIN` 的清單和照原始碼檢查的測試。
     - 做的時候發現新的 front 沒有的 15 個方法幾乎都是 script 那一側才用的（listener、filter、observer、custom element 的 callback…），只在 `Front::whole` 交給完整的 front 之後被呼叫。要讓編譯器保證，得先把它們分到完整的 front 才實作的 trait；那個 trait 由誰實作是 4m-3 的題目（`V8Front` 怎麼收掉）。所以拿掉預設實作排進 4m-3，和搬法一起決定（待使用者確認）；在那之前由 `dom_js` 的一個照原始碼檢查的測試守著（`docs/test-gaps.md`）。
     - cached getter 和 legacy caller 要 fork 多兩個收原始 callback 的入口（只改 Rust）：不選留著 `Member<M>` 拿 scope 的實作只給這兩處用。
+45. **4m-3：冷的方法留 scope、拿掉殼；script 那一側分成自己的 trait**（2026-11-13；使用者：都照建議）：
+    - **新的 front 還交給完整的 front 的 88 個方法**：本體改成拿 scope 和參數的普通函式，新的 front 在當場建的 scope 裡直接呼叫，不再建完整的 front（殼約 35 條指令，先前量的 62 減 27）。不選全部不建 scope：要在 fork 加很多只拿 isolate 的入口（陣列、物件的讀寫、promise、`TryCatch`、數字的轉換），每個都要 soundness 論證，會執行 script 的轉換沒有 scope 很難寫對；這些路量過不落後 Chrome，多省的 27 條換不到看得見的差距。Blink 這些路也在 callback 的 `HandleScope` 裡用一般的 V8 API。之後量到落後的個別方法仍可以改成不建 scope。
+    - **script 那一側**：分出 `ScriptFront: Front`，放只有跑 script 時才用的方法，`WholeCall::run` 要它；實作它的是一個瘦的型別（scope、參數、回傳值），給 `whole`、cross-origin 的成員、legacy caller、pairs、interceptor 用，取代完整的 front。之後拿掉 `Front` 的預設實作（wasm 和測試的 front 用 macro 補）。不選讓新的 front 為那些方法寫 `unreachable!`（沒有編譯期的保證），不選留著完整的 front 只給 script 用（兩套幾乎重複的程式）。
+    - **不是成員的**：pairs 和 4i 留下的 interceptor 改到瘦的型別上，trampoline 不換（不熱，換了要 fork 再加幾種原始 callback）；`state.rs` 的內部函式不動。
+    - **分段**：4m-3a 88 個方法照類別搬；4m-3b `ScriptFront` 和瘦的型別，刪掉完整的 front、`Call`、`Kept`；4m-3c 拿掉預設實作、清舊的實作、整個階段的檢查和對 Chrome 的收尾量測。各停一次給使用者審。
 
 ## 待決定
 

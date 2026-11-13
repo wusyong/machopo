@@ -45,7 +45,9 @@ mod webdriver;
 mod wheel;
 mod window;
 
-use dom_api::{ApiCx, ApiError, Front, FrontTypes, MemberKind, OpFront, TypedMember, TypedVisitor};
+use dom_api::{
+    ApiCx, ApiError, DictFront, Front, FrontTypes, MemberKind, OpFront, TypedMember, TypedVisitor,
+};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -347,6 +349,52 @@ impl FrontTypes for TestFront<'_> {
     type Rest = u64;
 }
 
+impl<'d> DictFront for TestFront<'d> {
+    fn dict_bool(
+        &mut self,
+        dict: &Self::Dict,
+        member: dom_api::typed::MemberName,
+    ) -> Option<Option<bool>> {
+        let entry = dict.iter().find(|(name, _)| *name == member.name());
+        if let Some((name, _)) = entry {
+            self.hooks.dict_reads.push(name);
+        }
+        match entry {
+            None => Some(None),
+            Some((_, Some(value))) => Some(Some(*value)),
+            Some((_, None)) => {
+                self.throw_type_error(&format!("{member}'s getter threw"));
+                None
+            }
+        }
+    }
+
+    /// The tests' dictionaries have booleans alone: a string sequence is
+    /// always missing.
+    fn dict_strings(
+        &mut self,
+        _: &Self::Dict,
+        _: dom_api::typed::MemberName,
+    ) -> Option<Option<Vec<String>>> {
+        Some(None)
+    }
+
+    /// Nor an object (`AddEventListenerOptions`' `signal`).
+    fn dict_object<T: elise::HeapType>(
+        &mut self,
+        _: &Self::Dict,
+        _: dom_api::typed::MemberName,
+        _: &str,
+    ) -> Option<Option<Taken>> {
+        Some(None)
+    }
+
+    fn throw(&mut self, error: ApiError) {
+        assert!(self.thrown.is_none(), "thrown twice");
+        self.thrown = Some(error);
+    }
+}
+
 impl<'d> Front for TestFront<'d> {
     #[inline(always)]
     fn reading<V: dom_api::typed::ReadDict<Self>>(&mut self, reads: V) -> V::Out {
@@ -443,45 +491,6 @@ impl<'d> Front for TestFront<'d> {
                 None
             }
         }
-    }
-
-    fn dict_bool(
-        &mut self,
-        dict: &Self::Dict,
-        member: dom_api::typed::MemberName,
-    ) -> Option<Option<bool>> {
-        let entry = dict.iter().find(|(name, _)| *name == member.name());
-        if let Some((name, _)) = entry {
-            self.hooks.dict_reads.push(name);
-        }
-        match entry {
-            None => Some(None),
-            Some((_, Some(value))) => Some(Some(*value)),
-            Some((_, None)) => {
-                self.throw_type_error(&format!("{member}'s getter threw"));
-                None
-            }
-        }
-    }
-
-    /// The tests' dictionaries have booleans alone: a string sequence is
-    /// always missing.
-    fn dict_strings(
-        &mut self,
-        _: &Self::Dict,
-        _: dom_api::typed::MemberName,
-    ) -> Option<Option<Vec<String>>> {
-        Some(None)
-    }
-
-    /// Nor an object (`AddEventListenerOptions`' `signal`).
-    fn dict_object<T: elise::HeapType>(
-        &mut self,
-        _: &Self::Dict,
-        _: dom_api::typed::MemberName,
-        _: &str,
-    ) -> Option<Option<Taken>> {
-        Some(None)
     }
 
     fn bool_arg(&mut self, index: usize) -> bool {
@@ -794,11 +803,6 @@ impl<'d> Front for TestFront<'d> {
 
     fn finish_strings(&mut self, strings: Vec<DomString>) {
         self.ret = Some(Ret::Strings(strings));
-    }
-
-    fn throw(&mut self, error: ApiError) {
-        assert!(self.thrown.is_none(), "thrown twice");
-        self.thrown = Some(error);
     }
 }
 

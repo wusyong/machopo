@@ -732,8 +732,9 @@ fn the_front_ends_methods_are_the_info_front_ends_own() {
             .map(|rest| rest.split(['(', '<']).next().expect("a name").to_string())
             .collect()
     };
+    // (`DictFront`'s too: `Front` follows it.)
     let front_methods = methods(
-        "\npub trait Front: FrontTypes {",
+        "\npub trait DictFront: FrontTypes {",
         "\npub trait OpFront: FrontTypes {",
     );
     let op_methods = methods("\npub trait OpFront: FrontTypes {", "\n}\n");
