@@ -282,7 +282,7 @@ impl TypedVisitor for Make<'_, '_, '_> {
             templates::template(&mut scope, M::INTERFACE)
         };
         let signature = v8::Signature::new(self.scope, interface);
-        let template = bindings::state_method_template::<State, CrossOriginMember<M>>(
+        let template = bindings::state_info_method_template::<State, CrossOriginMember<M>>(
             self.scope,
             signature,
             |builder| {
@@ -321,10 +321,29 @@ impl<M: TypedMember> bindings::StateMethod<State> for CrossOriginMember<M> {
         {
             let scope = &mut v8::ContextScope::new(scope.scope(), context);
             let scope = state::scope(scope).expect("the isolate's state");
-            <Member<M> as bindings::StateMethod<State>>::call(scope, args, this, rv);
+            crate::templates::call_member::<M, _>(scope, &crate::front::Checked { args, this }, rv);
             return;
         }
-        <Member<M> as bindings::StateMethod<State>>::call(scope, args, this, rv);
+        crate::templates::call_member::<M, _>(scope, &crate::front::Checked { args, this }, rv);
+    }
+}
+
+/// The same, given V8's callback info alone: the scope its call needs
+/// (the receiver's realm entered for a getter, the whole front end's
+/// call) is made for it.
+impl<M: TypedMember> bindings::StateInfoMethod<State> for CrossOriginMember<M> {
+    fn call(mut info: bindings::StateInfo<'_, State>) {
+        let (args, this) = (info.args(), info.receiver());
+        info.with_scope(|scope, rv| {
+            <Self as bindings::StateMethod<State>>::call(scope, args, this, rv);
+        });
+    }
+}
+
+/// A static member's (none is cross-origin).
+impl<M: TypedMember> bindings::StateInfoFunction<State> for CrossOriginMember<M> {
+    fn call(info: bindings::StateInfo<'_, State, bindings::Unsigned>) {
+        <Member<M> as bindings::StateInfoFunction<State>>::call(info);
     }
 }
 

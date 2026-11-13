@@ -1,0 +1,25 @@
+# Stage 4l: a member that isn't plain (a cross-origin property, one that
+# finds another realm's window, a legacy factory) is given V8's callback
+# info alone, its whole call in a scope made for it.
+test = ["cargo", "test", "-q", "-p", "dom_api", "-p", "dom_js"]
+timeout = 1800
+
+# Not listed: "a cross-origin getter isn't called in its receiver's realm"
+# (`CrossOriginMember`'s `ContextScope`): no test tells it. What its
+# getters give is made in its own realm whichever is current
+# (`front::new_wrapper_in_realm`), so the realm entered changes nothing
+# seen today.
+
+[[mutant]]
+name = "a member that isn't plain does nothing"
+file = "crates/dom_js/src/templates.rs"
+from = '''        info.with_scope(|scope, rv| call_member::<M, _>(scope, &Checked { args, this }, rv));'''
+to = '''        let _ = (args, this);
+        info.with_scope(|_, _| ());'''
+
+[[mutant]]
+name = "a legacy factory's or a static member's call does nothing"
+file = "crates/dom_js/src/templates.rs"
+from = '''        info.with_scope(|scope, rv| call_member::<M, _>(scope, &args, rv));'''
+to = '''        let _ = args;
+        info.with_scope(|_, _| ());'''

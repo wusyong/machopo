@@ -1406,3 +1406,37 @@ fn a_number_that_is_no_small_integer_is_returned_with_no_scope() {
         assert_eq!(made, 0, "{source}");
     }
 }
+
+/// A member that isn't plain (a cross-origin property, one that finds
+/// another realm's window, a legacy factory) is given V8's callback info
+/// alone too: its whole call runs in a scope made for it, and gives what
+/// it gave.
+#[test]
+fn a_member_that_isnt_plain_is_given_the_info_and_makes_its_scope() {
+    let mut engine = page();
+    run(
+        &mut engine,
+        "var blob = new Blob(['ab']); var got = []; location.href; new Image(); d.id;",
+    );
+    for (source, value) in [
+        // Cross-origin properties, on this window and its location.
+        ("location.href", "https://example.test/page.html"),
+        ("(window.postMessage('m', '*'), 'posted')", "posted"),
+        ("window.closed", "false"),
+        ("window.length", "0"),
+        ("(window.focus(), 'focused')", "focused"),
+        // The realm's window found for it.
+        ("blob.text() instanceof Promise", "true"),
+        ("(document.location === location)", "true"),
+        // Legacy factories.
+        ("new Image(3, 4).width", "3"),
+        ("new Option('t', 'v').value", "v"),
+        ("new Image() instanceof HTMLImageElement", "true"),
+    ] {
+        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        let found = report(&mut engine, source);
+        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        assert_eq!(found, value, "{source}");
+        assert!(made >= 1, "{source}: a scope, of an info callback");
+    }
+}

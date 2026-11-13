@@ -34,10 +34,9 @@
 | 4k-D 新的 wrapper：同一個 realm 的節點直接複製樣板物件、不經過 `V8Front`（root 還在） | 完成 | 2026-11-13 |
 | 4k-E 不借字元的字串參數（非 ASCII、還沒攤平的）用 isolate 複製，不經過 `V8Front`；Latin-1 原地讀 | 完成 | 2026-11-13 |
 | 4k-F 對 Chrome 量 dictionary、例外、陣列、promise（都不落後）；只做 `getAttributeNames`（名稱從名稱的 V8 字串快取拿） | 完成 | 2026-11-13 |
-| 4k-C4 評估：會跑 script 的函式的 `this` 和參數改拿 wrapper、不登記 root（185 個函式和 `ScriptHost` 的介面；4k-F 之後有完整的數字再決定做不做、做多大；決定 43） | 還沒開始 | |
 | 4k-G 最熱的路本身：對 Chrome 數指令（做了）；不影響安全性的寫法調整（wrapper 的 tag 比一次） | 完成 | 2026-11-13 |
-| 4l cross-origin 的 16 個成員，和要找別的 realm 的 window 的 5 個（`Blob` 的 `arrayBuffer`、`bytes`、`text`，`Location.assign`，`Document.location` 的 setter）；4i 留下的 interceptor（indexed setter、iterator 的 pairs、named 的刪除、查詢和列舉）；legacy factory | 還沒開始 | |
-| 4m-2 刪舊的外殼、`Call`、`Kept`、`PLAIN`（連同它的檢查：`PLAIN_FRONT_METHODS`、`PLAIN_OP_METHODS`、`dom_api` 的 `plain` 測試、`dom_js` 的 `the_plain_methods_are_the_info_front_ends_own`、`docs/test-gaps.md` 的那一列） | 還沒開始 | |
+| 4l cross-origin 的成員、要找別的 realm 的 window 的、legacy factory 的 callback 只拿 info（整個呼叫在一個 scope 裡）；4i 留下的 interceptor 不動 | 完成 | 2026-11-13 |
+| 4m-2 還用 rusty_v8 的 trampoline 的幾處改掉（`window.window`、`window.document` 的 cached getter、legacy caller、好幾個 constructor 的那一組的 `Call`、iterator 的 pairs、4i 留下的 interceptor），刪舊的外殼、`Call`、`Kept`、`PLAIN`（連同它的檢查：`PLAIN_FRONT_METHODS`、`PLAIN_OP_METHODS`、`dom_api` 的 `plain` 測試、`dom_js` 的 `the_plain_methods_are_the_info_front_ends_own`、`docs/test-gaps.md` 的那一列） | 還沒開始 | |
 | 4m-3 新的 front 還交給 `V8Front` 的約 85 個方法搬出來（搬法到時評估：留一個 scope、只拿掉殼，或全部不建 scope；決定 42），再刪掉 `V8Front` | 還沒開始 | |
 | 收尾：`nodeType`、`getAttribute` 的 callback 和 Chrome 的逐條指令對照，列出剩下的差（決定 20） | 還沒開始 | |
 
@@ -805,3 +804,14 @@
 - 改完之後 `nodeType` 的 callback 走到的路是 51 條，剩下和 Blink 不同的：cage 的檢查 5 條、讀型別的 tag 和檢查初始化 4 條加算出要比的值 2 條、標記的旗標 2 條。
 - mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4kG.toml`（改的是 fork 的檔案，spec 裡用相對路徑），2 個都抓到（不遮標記 bit：標記中的 wrapper 解不出來；任何 tag 都算：型別分不出來）。
 - 跑過：`cargo test -p bindings -p dom -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`ci.py third-party`。這一段只動 fork 的那幾行和一個新的測試，沒有另外跑 WPT。
+
+**第 4l 段：不是 `PLAIN` 的成員的 callback 也只拿 info**（2026-11-13；使用者：都照建議）：
+
+- 決定（開始前列的三項）：這些成員很少被呼叫，目的是離開舊的外殼、不是效能，所以整個呼叫在當場建的一個 scope 裡用 `V8Front` 跑，不替它們各做不建 scope 的路；4i 留下的 interceptor（indexed setter、named 的刪除、查詢、列舉、iterator 的 pairs）這一段不動（要在 fork 再加幾種原始的 callback，4m-3 評估剩下的怎麼搬時一起看）；不對 Chrome 量，只確認沒有變慢。
+- `dom_js`：`Member<M>` 和 `CrossOriginMember<M>` 多實作 `StateInfoMethod`、`StateInfoFunction`（從 info 拿參數和 receiver，`with_scope` 裡 `call_member`；cross-origin 的照舊先進 receiver 的 realm）。`templates.rs` 的 `Members::function` 不是 `PLAIN` 的兩個分支、constructor 不是 `PLAIN` 的分支（現在沒有成員走到）、legacy factory 的 function、`cross_origin.rs` 給另一個 origin 的那一份 function，都改用 `state_info_method_template`、`state_info_function_template`。`info_call`、`info_static_call` 的另一半直接呼叫這兩個實作。
+- 換到的：cross-origin 的 16 個、要找別的 realm 的 window 的 5 個（`Blob` 的 `arrayBuffer`、`bytes`、`text`，`Location.assign`，`Document.location` 的 setter）、legacy factory 2 個。成員的 function 現在都由 `bindings` 的 info 的 trampoline 呼叫。
+- 還用 rusty_v8 的 trampoline（給 scope）的：`window.window`、`window.document` 的 cached getter（`state_cached_getter_template`）、legacy caller（`set_state_call_as_function_handler`）、一個 interface 有好幾個 constructor 的那一組（`Overloaded` 的 `Call`）、iterator 的 pairs（`pairs.rs`）、4i 留下的 interceptor，和不是成員的內部函式（`state.rs` 的三個）。記在步驟表的 4m-2。
+- 指令數（`perf stat`，window 的 realm，各五次取最小；前後）：`location.href` 6663 → 6673，`window.closed` 1685 → 1686，`window.postMessage('m', '*')` 9375 → 9401，`new Image()` 3108 → 3112，`new Option('t')` 4632 → 4638，`blob.text()` 4612 → 4629，`nodeType` 106 → 106。沒有變慢（多 1 到 26 條）。
+- 測試：`dom_js` 的 `handlers::a_member_that_isnt_plain_is_given_the_info_and_makes_its_scope`（十個呼叫：cross-origin 的 getter 和 method、`blob.text()`、`document.location`、兩個 legacy factory：值正確、info 的 callback 建了 scope）；`cross_origin::a_cross_origin_getters_object_is_its_receivers_realms`（child window 的 `location` 由 parent 第一次讀，wrapper 是 child 的 realm 的 `Location`）。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4l.toml`，2 個都抓到。第三個「cross-origin 的 getter 不進 receiver 的 realm」沒抓到，補了上面第二個測試還是沒抓到：getter 給的物件的 wrapper 本來就建在它自己的 realm（`new_wrapper_in_realm`），進不進 receiver 的 realm 現在看不出差別。等價的 mutation，從 spec 拿掉、在 spec 裡註明；那一段進 realm 的程式照舊留著（這一段不改行為）。
+- 跑過：`cargo test -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt html/browsers webmessaging FileAPI html/semantics/embedded-content/the-img-element html/semantics/forms/the-option-element html/webappapis/scripting`（4980 個結果都照預期）。

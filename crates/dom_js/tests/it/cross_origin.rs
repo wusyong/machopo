@@ -405,3 +405,23 @@ fn a_windows_close_focus_and_blur() {
         "false / null / false / true / true / true / true / true / true"
     );
 }
+
+/// A cross-origin property's getter is called in its receiver's realm,
+/// whichever realm's script reads it: the object it gives, when that has
+/// no wrapper yet, is made there (a child window's `location`, first read
+/// by its parent, is the child's realm's `Location`).
+#[test]
+fn a_cross_origin_getters_object_is_its_receivers_realms() {
+    let (mut engine, _) = engine(&["https://example.test/b.html"]);
+    run(
+        &mut engine,
+        "var w = f0.contentWindow; var l = w.location;
+         log.push(Object.getPrototypeOf(l) === w.Location.prototype,
+                  Object.getPrototypeOf(l) === Location.prototype,
+                  l instanceof w.Location, l === w.location, l.href);",
+    );
+    assert_eq!(
+        log(&mut engine),
+        "true / false / true / true / https://example.test/b.html"
+    );
+}

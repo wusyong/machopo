@@ -302,7 +302,7 @@ impl<'s> TypedVisitor for Constructor<'_, 's, '_> {
                 self.scope, configure,
             )
         } else {
-            bindings::state_function_template::<State, Member<M>>(self.scope, configure)
+            bindings::state_info_function_template::<State, Member<M>>(self.scope, configure)
         });
     }
 }
@@ -564,7 +564,9 @@ impl Members<'_, '_, '_> {
     /// be) if `checked` and it has one.
     fn function<
         M: TypedMember,
-        C: bindings::StateCallback<State> + bindings::StateMethod<State>,
+        C: bindings::StateMethod<State>
+            + bindings::StateInfoMethod<State>
+            + bindings::StateInfoFunction<State>,
     >(
         &mut self,
         checked: bool,
@@ -638,8 +640,10 @@ impl Members<'_, '_, '_> {
                     |builder| member_builder(builder, None, length),
                 )
             }
+            // Another member's, and a cross-origin property's: given
+            // the info alone too, its whole call in a scope made for it.
             (None, Some(signature)) => {
-                bindings::state_method_template::<State, C>(self.scope, signature, |builder| {
+                bindings::state_info_method_template::<State, C>(self.scope, signature, |builder| {
                     member_builder(builder, None, length)
                 })
             }
@@ -651,9 +655,11 @@ impl Members<'_, '_, '_> {
                     |builder| member_builder(builder, None, length),
                 )
             }
-            (None, None) => bindings::state_function_template::<State, C>(self.scope, |builder| {
-                member_builder(builder, None, length)
-            }),
+            (None, None) => {
+                bindings::state_info_function_template::<State, C>(self.scope, |builder| {
+                    member_builder(builder, None, length)
+                })
+            }
         };
         if checked && !desc.is_static {
             checks_receiver(function);
@@ -907,6 +913,25 @@ impl<M: TypedMember> bindings::StateMethod<State> for Member<M> {
     }
 }
 
+/// A member that isn't plain, given V8's callback info alone as a plain
+/// one is: its whole call on the front end of a scope, made for it (what
+/// its types ask needs one: another realm's window found).
+impl<M: TypedMember> bindings::StateInfoMethod<State> for Member<M> {
+    fn call(mut info: bindings::StateInfo<'_, State>) {
+        let (args, this) = (info.args(), info.receiver());
+        info.with_scope(|scope, rv| call_member::<M, _>(scope, &Checked { args, this }, rv));
+    }
+}
+
+/// As a method's, with no word of its receiver (a static member's, a
+/// constructor's, a legacy factory's).
+impl<M: TypedMember> bindings::StateInfoFunction<State> for Member<M> {
+    fn call(mut info: bindings::StateInfo<'_, State, bindings::Unsigned>) {
+        let args = info.args();
+        info.with_scope(|scope, rv| call_member::<M, _>(scope, &args, rv));
+    }
+}
+
 /// A plain member's callback (`TypedMember::PLAIN`): its typed path
 /// through the front end that is V8's callback info
 /// (`info_front::InfoFront`), its receiver checked against the function's
@@ -953,7 +978,7 @@ impl<M: TypedMember> bindings::StateInfoFunction<State> for InfoConstructor<M> {
 /// One call of `M` through V8's front end, V8 told of the DOM's growth
 /// after one that may allocate.
 #[inline(always)]
-fn call_member<'s, M: TypedMember, A: crate::front::CallArgs<'s>>(
+pub(crate) fn call_member<'s, M: TypedMember, A: crate::front::CallArgs<'s>>(
     scope: Scope<'_, 's, '_>,
     args: &A,
     rv: v8::ReturnValue<'s>,
@@ -977,19 +1002,16 @@ type InfoStaticCall = for<'s> fn(bindings::StateInfo<'s, State, bindings::Unsign
 
 /// `M`'s call from a method's info: through the front end that is the
 /// info if `M` is plain (known as this is expanded), else as before.
-fn info_call<M: TypedMember>(mut info: bindings::StateInfo<'_, State>) {
+fn info_call<M: TypedMember>(info: bindings::StateInfo<'_, State>) {
     if const { M::PLAIN } {
         <InfoMember<M> as bindings::StateInfoMethod<State>>::call(info);
     } else {
-        let (args, this) = (info.args(), info.receiver());
-        info.with_scope(|scope, rv| {
-            <Member<M> as bindings::StateMethod<State>>::call(scope, args, this, rv);
-        });
+        <Member<M> as bindings::StateInfoMethod<State>>::call(info);
     }
 }
 
 /// As `info_call`, a static operation's or a constructor's.
-fn info_static_call<M: TypedMember>(mut info: bindings::StateInfo<'_, State, bindings::Unsigned>) {
+fn info_static_call<M: TypedMember>(info: bindings::StateInfo<'_, State, bindings::Unsigned>) {
     if const { M::PLAIN } {
         if M::KIND == MemberKind::Constructor {
             <InfoConstructor<M> as bindings::StateInfoFunction<State>>::call(info);
@@ -997,10 +1019,7 @@ fn info_static_call<M: TypedMember>(mut info: bindings::StateInfo<'_, State, bin
             <InfoStatic<M> as bindings::StateInfoFunction<State>>::call(info);
         }
     } else {
-        let args = info.args();
-        info.with_scope(|scope, rv| {
-            <Member<M> as bindings::StateCallback<State>>::call(scope, args, rv);
-        });
+        <Member<M> as bindings::StateInfoFunction<State>>::call(info);
     }
 }
 
@@ -1738,7 +1757,7 @@ impl TypedVisitor for Factory<'_, '_, '_> {
             return;
         }
         let length = INTERFACES[M::INTERFACE].members[M::MEMBER].required();
-        self.template = Some(bindings::state_function_template::<State, Member<M>>(
+        self.template = Some(bindings::state_info_function_template::<State, Member<M>>(
             self.scope,
             |builder| builder.length(i32::try_from(length).expect("a few parameters")),
         ));
