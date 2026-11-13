@@ -44,9 +44,11 @@ pub(crate) enum PendingString {
 /// A node the operation couldn't give V8: what `InfoFront::finish_node`
 /// makes after.
 pub(crate) enum PendingNode {
-    /// A node with no wrapper, rooted, and its interface: a wrapper made,
-    /// in an operation of its own.
-    Node(NodeRoot, usize),
+    /// A node with no wrapper, rooted, its interface, and whether its
+    /// realm is the callback's (most are: its wrapper is then a copy of
+    /// that realm's boilerplate, made with no scope): a wrapper made, in
+    /// an operation of its own.
+    Node(NodeRoot, usize, bool),
     /// A custom element `createElement` is to construct with its
     /// definition's constructor, in the document.
     Construct(Persistent<dom::CustomElementDefinition>, NodeRoot),
@@ -610,6 +612,41 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
         });
     }
 
+    /// A wrapper for `node` (of this callback's realm, with none yet) made
+    /// with no scope: a copy of the realm's boilerplate of its interface
+    /// (Blink's `V8PerContextData::CreateWrapperFromCache`), made the
+    /// node's in one operation. False if the realm has no boilerplate of
+    /// the interface yet (the first of it: the whole front end's to make).
+    fn wrap_node_here(&mut self, node: &NodeRoot, interface: usize) -> bool {
+        let context = self.info.handles().current_context();
+        let boilerplate = {
+            let (state, mut no_gc) = self.info.state();
+            match &state.boilerplates[interface] {
+                Some((of, boilerplate)) if *of == context => no_gc.local(boilerplate),
+                _ => return false,
+            }
+        };
+        let made = self.info.handles().clone_object(boilerplate);
+        let (state, mut no_gc) = self.info.state();
+        // Allocates nothing: a read.
+        let new = state.dom.read(|cx| {
+            let node = node.get(cx.gc);
+            let edge = cx.wrapper_edge(node);
+            // Nothing made it one since (no script ran).
+            if no_gc.return_wrapper(edge) {
+                return false;
+            }
+            no_gc.wrap(cx.gc, made, node);
+            no_gc.set_wrapper(edge, made);
+            front::count(&state.caches.wrappers_made);
+            true
+        });
+        if new {
+            self.info.handles().return_value(made.into());
+        }
+        true
+    }
+
     /// A string argument that doesn't lend its text in place (not a
     /// string yet, not ASCII, not flat): converted or copied, as the whole
     /// front end does.
@@ -834,12 +871,20 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
 
     /// A node with no wrapper: one made now, in an operation of its own;
     /// a custom element constructed.
-    #[cold]
     #[inline(never)]
     fn finish_node(&mut self, pending: PendingNode) {
+        let pending = match pending {
+            PendingNode::Node(node, interface, true) => {
+                if self.wrap_node_here(&node, interface) {
+                    return;
+                }
+                PendingNode::Node(node, interface, false)
+            }
+            other => other,
+        };
         self.with_front(|front| {
             front.finish_kept_as(match pending {
-                PendingNode::Node(node, interface) => front::Kept::Node(node, interface),
+                PendingNode::Node(node, interface, _) => front::Kept::Node(node, interface),
                 PendingNode::Construct(definition, document) => {
                     front::Kept::Construct(definition, document)
                 }
@@ -1964,6 +2009,17 @@ impl<'s, K: InfoKind<'s>> InfoOp<'_, 's, K> {
     #[cold]
     #[inline(never)]
     fn root_node<'gc>(&mut self, cx: &dom::Cx<'_, 'gc>, node: NodeRef<'gc>) -> PendingNode {
-        PendingNode::Node(cx.root(node), front::interface_of(cx, node))
+        // Its realm told here, in the operation it is already in: none
+        // of its own after.
+        let here = match dom_api::realm_document(cx, ObjectRef::Node(node)) {
+            None => true,
+            Some(document) => {
+                let global = self.no_gc.current_global();
+                self.no_gc
+                    .unwrap::<Window>(cx.gc, global)
+                    .is_some_and(|window| elise::Gc::ptr_eq(cx.window_document(window), document))
+            }
+        };
+        PendingNode::Node(cx.root(node), front::interface_of(cx, node), here)
     }
 }

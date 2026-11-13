@@ -905,6 +905,17 @@ impl<'s> crate::InfoNoGc<'_, 's> {
         return_wrapper(self.isolate, &mut self.rv, edge)
     }
 
+    /// A local handle of a global one's value (a cached boilerplate), with
+    /// no scope made: a handle of the callback's own handle scope
+    /// (`HandleScope::Extend`'s block isn't V8's heap: no GC).
+    #[inline(always)]
+    pub fn local<T>(&mut self, global: &v8::Global<T>) -> v8::Local<'s, T> {
+        // SAFETY: in a callback of V8's on the isolate's thread (an
+        // `InfoNoGc` is of a callback's info); the handle has the info's
+        // lifetime.
+        unsafe { v8::Local::new_in_callback(self.isolate, global) }
+    }
+
     /// The current context's global object (its global proxy), its handle
     /// left in the callback's own handle scope: the current realm of a
     /// callback with no receiver to find it by (Blink's callbacks'

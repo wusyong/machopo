@@ -31,7 +31,7 @@
 | 4k-C1 33 個會呼叫 script 的成員搬到新的外殼（`Front::whole`；決定 43） | 完成 | 2026-11-13 |
 | 4k-C2 「先試的普通函式」的機制（`#[first(..)]`）和走訪的 9 個成員的快路（沒有 filter 時一個操作） | 完成 | 2026-11-13 |
 | 4k-C3 剖析 `inp.select()`、`abort()`（Chrome 的 1.29 倍） | 完成 | 2026-11-13 |
-| 4k-D 新的 wrapper：不登記 root、不經過 `V8Front` | 還沒開始 | |
+| 4k-D 新的 wrapper：同一個 realm 的節點直接複製樣板物件、不經過 `V8Front`（root 還在） | 完成 | 2026-11-13 |
 | 4k-E 非 ASCII 和要轉換的字串參數 | 還沒開始 | |
 | 4k-F dictionary、例外、陣列、promise | 還沒開始 | |
 | 4k-C4 評估：會跑 script 的函式的 `this` 和參數改拿 wrapper、不登記 root（185 個函式和 `ScriptHost` 的介面；4k-F 之後有完整的數字再決定做不做、做多大；決定 43） | 還沒開始 | |
@@ -714,3 +714,16 @@
 - 測試：`dom_js` 的 `info_front::a_traversal_without_a_filter_walks_in_one_operation`（window 的 realm：walker 的七個方法從 root 和從裡面走、只顯示元素的 walker、iterator 兩個方向：都不建 scope、節點正確、filter 沒被呼叫；有 filter 的 walker 和 iterator 建 scope、呼叫 filter、走到同樣的節點；filter 丟的例外；沒有 wrapper 的節點）；`info_front::a_member_that_runs_script_makes_one_scope`（原本是「不是 `PLAIN` 的成員不建這種 scope」，改成新的事實：`dispatchEvent` 一個、`click()` 一到兩個）；`handlers.rs` 的兩個測試把「被測的呼叫之後的派發」移到計數之外（`counted_before_dispatch`）；`dom_api` 的 table 測試的名單從 45 個改成 11 個。寫測試時弄錯的：沒有 window 的測試環境裡 callback 不能跑（`The provided callback is no longer runnable`），有 filter 的要在 window 的 realm 測。
 - mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4kC1.toml`，7 個都抓到。第一次沒跑：一個 mutant 的原文和格式化過的程式對不上（`from` 找到 0 次），工具在改任何檔案之前就停了。
 - 跑過：`cargo test -p dom_api_macros -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt dom/traversal dom/events dom/abort html/semantics/forms selection custom-elements html/interaction/focus uievents`（44859 個結果都照預期）。
+
+**第 4k-D 段：新的 wrapper**（2026-11-13，決定 42；連同 4k-C 留下的一個小改）：
+
+- fork（只改 Rust，`README.machopo.md` 記了，還沒 push）：`Context::current_in_callback`、`Local::new_in_callback`（從 `Global` 建 local，比對 isolate，和 `Local::new` 一樣）、`machopo::clone_object_in_callback`；`third_party.toml` 的 `rev` 跟著改。
+- `bindings`：`InfoHandles::current_context`、`clone_object`；`InfoNoGc::local`（拿著狀態時從 `Global` 建 local：只動 handle scope）；`soundness.md` 補。
+- `dom_js`：`PendingNode::Node` 多一格「節點的 realm 是不是 callback 的」（`root_node` 在原本的操作裡判斷：節點的 realm 的文件是不是目前的 global 那個 window 的文件）；是的話 `InfoFront::wrap_node_here`：目前的 context 有這個 interface 的樣板物件就複製一個（不建 scope）、在一個讀的操作裡接到節點上（wrap、設邊、計數）、設回傳值。別的 realm 的節點、這個 realm 第一次用到這個 interface（還沒有樣板物件）、目前的 global 不是 window 的（沒有 window 的測試環境），照舊交給 `V8Front`。
+- 4k-C 留下的小改：會呼叫 script、沒有參數的成員登記 `this` 的 root 用讀的操作（`script_method` 的 `rooting`）；結果一樣、沒有測試分辨得出來，記在 `docs/test-gaps.md` 的「沒有計數守著的優化」。
+- 沒改的：節點以外的物件第一次拿 wrapper（`finish_object`：`el.style`、`classList`、事件…，每個物件一次）還經過 `V8Front`；節點的 root 還在（節點沒有 wrapper，離開操作去複製樣板時要有東西撐著它）。
+- `chrome-compare`（各三次取最小；ns 一個節點）：走過 20 萬個沒有 wrapper 的節點 62.5 → 59.5；Chrome 這次 44.0，先前幾次 54.5、55.5（1.08 到 1.35 倍之間）。再走一次（wrapper 還在）兩邊都是 9.0。其他的沒變（`nodeType` 4.6、`dispatchEvent` 75.4、`click()` 311）；`parentNode` 5.5 → 5.9、`tw.parentNode()` 8.4 → 9.4 在這次量測裡多了約 0.5 到 1 ns，這幾個呼叫的程式沒動，先當成雜訊，下一段再對一次。
+- 剖析（一半以上是建節點的 `innerHTML`，只看大概）：wrapper 那一部分最大的是 V8 把指標登記進 sandbox 的表（`CppHeapPointerTable` 的 `TryAllocateEntry`，9.2%），Chrome 一樣要付；我們的：`finish_node` 4.7%、外殼 4.3%、判斷 realm 約 5%（`unwrap::<Window>` 2.2%、`realm_document` 1.2%、拿目前的 global 的兩個 V8 呼叫約 1.4%）、`root_node` 1.7%、`GlobalizeTracedReference` 1.8%。取樣裡也看到 `reset_root` 1.0%：走的途中 V8 的 scavenge 在丟掉沒被 JS 留著的 wrapper（和 Blink 一樣的機制）。判斷 realm 那一步可以更便宜（isolate 只有一個 window 的 realm 時不用判斷），但多個 realm 並存時的規則要先想清楚（目前的 realm 不是 frame 的情況），沒在這一段做。
+- 測試：`dom_js` 的 `info_front::a_nodes_wrapper_is_copied_from_its_realms_boilerplate_with_no_scope`（window 的 realm：沒有 wrapper 的節點不建 scope、wrapper 多一個、再讀同一個節點不再多；另一種 interface 的第一個節點建 scope、之後的不建；wrapper 是節點自己的、prototype 對、script 設的屬性過了 full GC 還在）。寫測試時弄錯的：這個檔案的 `scopes` 現在數的是 scope 加 `handles` 的次數（4k-B 改的），這條路要三次 `handles`，一開始以為是三個 scope；改用只數 scope 的 `only_scopes`。別的 realm 的節點靠原有的測試（mutation 的兩個跨 realm 的 mutant 都被抓到）。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4kD.toml`，6 個都抓到。
+- 跑過：`cargo test -p bindings -p dom_api_macros -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`ci.py third-party`、`test.py wpt dom/nodes dom/traversal dom/events dom/collections html/dom html/browsers/windows html/semantics/embedded-content/the-iframe-element custom-elements`（81802 個結果都照預期）。

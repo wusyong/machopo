@@ -14,6 +14,14 @@ fn scopes(env: &mut Env, source: &str) -> (String, u64) {
     (value, made.wrapping_sub(before))
 }
 
+/// The scopes alone the info callbacks made evaluating `source` (not the
+/// handles asked for with none).
+fn only_scopes(env: &mut Env, source: &str) -> u64 {
+    let before = bindings::info_scopes_for_testing().expect("a debug build");
+    env.eval(source);
+    bindings::info_scopes_for_testing().expect("a debug build") - before
+}
+
 fn env() -> Env {
     let mut env = Env::new();
     env.eval(
@@ -822,5 +830,67 @@ fn a_traversal_without_a_filter_walks_in_one_operation() {
              var u = fresh.nextNode(); [u.nodeName, u === root.firstChild, fresh.currentNode === u].join()"
         ),
         "U,true,true"
+    );
+}
+
+/// A node of the callback's realm with no wrapper is given one with no
+/// scope: a copy of the realm's boilerplate of its interface, made the
+/// node's in one operation. The first node of an interface in the realm
+/// makes the boilerplate (the whole front end's, in a scope). The wrapper
+/// is the node's from then on, and holds what script set on it across a
+/// GC.
+#[test]
+fn a_nodes_wrapper_is_copied_from_its_realms_boilerplate_with_no_scope() {
+    // (A window's realm: the node's realm is told by its document's
+    // window, which the callback's global is.)
+    let mut env = Env::window("https://example.test/page.html");
+    env.eval(
+        "var d = document; var html = d.documentElement || d.appendChild(d.createElement('html')); \
+         var n = html.appendChild(d.createElement('body')); n.nodeType; \
+         var root = d.createElement('div'); n.appendChild(root); \
+         root.innerHTML = '<i></i><i></i><i></i><b></b>text<!--c-->'; var got; \
+         root.firstChild;",
+    );
+    // (The first `<i>` made `HTMLElement`'s boilerplate.)
+    for (source, value, wrappers) in [
+        ("got = root.firstChild.nextSibling", "I", 1),
+        ("got = root.firstChild.nextSibling", "I", 0),
+        ("got = root.firstChild.nextSibling.nextSibling", "I", 1),
+        (
+            "got = root.firstChild.nextSibling.nextSibling.nextSibling",
+            "B",
+            1,
+        ),
+    ] {
+        let made_before = env.wrappers_made();
+        let made = only_scopes(&mut env, source);
+        assert_eq!(made, 0, "{source}: no scope");
+        assert_eq!(env.wrappers_made() - made_before, wrappers, "{source}");
+        assert_eq!(env.eval("got.nodeName"), value, "{source}");
+    }
+    // Another interface's first: its boilerplate, in a scope; the next of
+    // it with none.
+    let made = only_scopes(&mut env, "got = root.lastChild.previousSibling");
+    assert!(made >= 1, "the first text node of the realm");
+    assert_eq!(env.eval("got.nodeName"), "#text");
+    env.eval("root.appendChild(d.createTextNode('more')); root.innerHTML += 'x<u></u>y'; 0");
+    let made = only_scopes(&mut env, "got = root.lastChild");
+    assert_eq!(made, 0, "a text node, of a boilerplate made already");
+    assert_eq!(env.eval("got.data"), "y");
+    // The wrapper is the node's own: the same each time, of the node's
+    // interface, with what script set on it, across a GC.
+    assert_eq!(
+        env.eval(
+            "var second = root.firstChild.nextSibling; second.mark = 7; \
+             [second === root.childNodes[1], second instanceof HTMLElement, \
+              Object.getPrototypeOf(second) === HTMLElement.prototype].join()"
+        ),
+        "true,true,true"
+    );
+    env.eval("second = null; got = null;");
+    env.full_gc();
+    assert_eq!(
+        env.eval("root.firstChild.nextSibling.mark + ' ' + root.firstChild.nextSibling.nodeName"),
+        "7 I"
     );
 }

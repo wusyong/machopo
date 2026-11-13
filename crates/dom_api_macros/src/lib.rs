@@ -1954,6 +1954,14 @@ fn script_method(
             }
         }
     });
+    // `this` and the arguments are rooted in an operation of their own:
+    // one that only reads when there is `this` alone to root (a root
+    // changes nothing of the DOM's; an argument's `param` may store).
+    let rooting = if args.is_empty() {
+        quote!(read)
+    } else {
+        quote!(mutate)
+    };
     // Its scope in operations of their own, around its function's.
     let (ce_enter, ce_leave_invoke) = if ce_reactions {
         (
@@ -1999,7 +2007,7 @@ fn script_method(
                 };
             )*
             #ce_enter
-            let #result = #front.mutate(|#cx, #op| {
+            let #result = #front.#rooting(|#cx, #op| {
                 let #this_ = #this;
                 #(
                     let #names = <#types as #api::typed::ArgType>::param(#op, #cx, &#names, #param_indices)?;

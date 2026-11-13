@@ -1,0 +1,55 @@
+# Stage 4k-D: a node of the callback's realm with no wrapper is given one
+# with no scope, a copy of the realm's boilerplate of its interface
+# (`InfoFront::wrap_node_here`).
+test = ["cargo", "test", "-q", "-p", "bindings", "-p", "dom_api", "-p", "dom_js"]
+timeout = 1800
+
+[[mutant]]
+name = "a node's wrapper is always the whole front end's"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                Some((of, boilerplate)) if *of == context => no_gc.local(boilerplate),
+                _ => return false,'''
+to = '''                Some((of, boilerplate)) if false && *of == context => no_gc.local(boilerplate),
+                _ => return false,'''
+
+[[mutant]]
+name = "a boilerplate of another realm is copied"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                Some((of, boilerplate)) if *of == context => no_gc.local(boilerplate),'''
+to = '''                Some((_, boilerplate)) => no_gc.local(boilerplate),'''
+
+[[mutant]]
+name = "the wrapper copied isn't made the node's"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            no_gc.wrap(cx.gc, made, node);
+            no_gc.set_wrapper(edge, made);
+            front::count(&state.caches.wrappers_made);
+            true'''
+to = '''            no_gc.wrap(cx.gc, made, node);
+            front::count(&state.caches.wrappers_made);
+            true'''
+
+[[mutant]]
+name = "the wrapper copied isn't counted"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            no_gc.set_wrapper(edge, made);
+            front::count(&state.caches.wrappers_made);
+            true'''
+to = '''            no_gc.set_wrapper(edge, made);
+            true'''
+
+[[mutant]]
+name = "the wrapper copied isn't the result"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if new {
+            self.info.handles().return_value(made.into());
+        }
+        true'''
+to = '''        let _ = new;
+        true'''
+
+[[mutant]]
+name = "a node of another realm is taken for this one's"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                    .is_some_and(|window| elise::Gc::ptr_eq(cx.window_document(window), document))'''
+to = '''                    .is_some_and(|_| true)'''

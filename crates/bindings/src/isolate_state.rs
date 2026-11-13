@@ -734,6 +734,21 @@ impl<'s> InfoHandles<'_, 's> {
     pub fn return_value(&mut self, value: v8::Local<'s, v8::Value>) {
         self.rv.set(value);
     }
+
+    /// The current context (the callback's realm).
+    #[inline(always)]
+    pub fn current_context(&mut self) -> v8::Local<'s, v8::Context> {
+        // SAFETY: as `string`'s: a callback of V8's, a context entered.
+        unsafe { v8::Context::current_in_callback(self.isolate) }
+    }
+
+    /// A shallow copy of `object` (a wrapper from its boilerplate).
+    #[inline]
+    pub fn clone_object(&mut self, object: v8::Local<'s, v8::Object>) -> v8::Local<'s, v8::Object> {
+        // SAFETY: as `string`'s; `object` is the isolate's (a handle of
+        // this callback's).
+        unsafe { v8::machopo::clone_object_in_callback(self.isolate, object) }
+    }
 }
 
 thread_local! {
