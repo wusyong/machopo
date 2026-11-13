@@ -228,7 +228,6 @@ pub struct HistoryState;
 
 impl RetType for HistoryState {
     const DESC: TypeDesc = TypeDesc::Any;
-    const PLAIN: bool = true;
     type Ret<'gc> = Gc<'gc, History>;
     crate::typed::no_prepared!();
     type Pending<F: crate::typed::FrontTypes> = elise::Persistent<History>;
@@ -294,7 +293,6 @@ pub(crate) fn forward<'gc>(cx: &ApiCx<'_, 'gc>, this: Gc<'gc, History>) -> Resul
 pub struct SerializedState;
 
 impl ArgType for SerializedState {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     type Taken<T: FrontTypes> = Vec<u8>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = &'a [u8];

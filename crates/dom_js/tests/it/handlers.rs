@@ -1407,12 +1407,13 @@ fn a_number_that_is_no_small_integer_is_returned_with_no_scope() {
     }
 }
 
-/// A member that isn't plain (a cross-origin property, one that finds
-/// another realm's window, a legacy factory) is given V8's callback info
-/// alone too: its whole call runs in a scope made for it, and gives what
-/// it gave.
+/// A cross-origin property and a member that finds another realm's
+/// window are given V8's callback info alone too, and make the scope
+/// they need (the property's whole call in it; V8 asked for the realm in
+/// it); a legacy factory function is called as a constructor is, and
+/// gives what it gave.
 #[test]
-fn a_member_that_isnt_plain_is_given_the_info_and_makes_its_scope() {
+fn a_member_that_needs_a_scope_is_given_the_info_and_makes_it() {
     let mut engine = page();
     run(
         &mut engine,
@@ -1428,15 +1429,36 @@ fn a_member_that_isnt_plain_is_given_the_info_and_makes_its_scope() {
         // The realm's window found for it.
         ("blob.text() instanceof Promise", "true"),
         ("(document.location === location)", "true"),
-        // Legacy factories.
-        ("new Image(3, 4).width", "3"),
-        ("new Option('t', 'v').value", "v"),
-        ("new Image() instanceof HTMLImageElement", "true"),
     ] {
         let before = bindings::info_scopes_for_testing().expect("a debug build");
         let found = report(&mut engine, source);
         let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
         assert_eq!(found, value, "{source}");
         assert!(made >= 1, "{source}: a scope, of an info callback");
+    }
+    for (source, value) in [
+        ("new Image(3, 4).width", "3"),
+        ("new Option('t', 'v').value", "v"),
+        ("new Image() instanceof HTMLImageElement", "true"),
+        ("new Option() instanceof HTMLOptionElement", "true"),
+        (
+            "Object.getPrototypeOf(new Image()) === HTMLImageElement.prototype",
+            "true",
+        ),
+        (
+            "(() => { try { Image(); } catch (e) { return e.constructor.name + ': ' + e.message; } })()",
+            "TypeError: Failed to construct 'HTMLImageElement': Please use the 'new' operator, this DOM object constructor cannot be called as a function.",
+        ),
+        ("document.all(0) === document.documentElement", "true"),
+        (
+            "document.all.item.call(document.all, 0) === document.documentElement",
+            "true",
+        ),
+        (
+            "window.window === window && window.document === document",
+            "true",
+        ),
+    ] {
+        assert_eq!(report(&mut engine, source), value, "{source}");
     }
 }

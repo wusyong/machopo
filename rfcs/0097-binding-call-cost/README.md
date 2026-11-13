@@ -254,6 +254,10 @@ signature 檢查過的 receiver 不再比型別的 tag（RFC 0085 決定 14 量�
     - **加快審核（使用者同意，2026-11-13）**：4k-C 的八小段併成三組，各停一次給使用者審：C1 到 C3；C4（型別的設計，走訪當試點）；C5 到 C8。組裡每一步只跑改到的 crate 的測試和 `cargo fmt`；mutation test、`sanity.py`、相關的 WPT、對 Chrome 的量測和 `progress.md` 在那一組的最後做一次。
     - **`this` 和參數改拿 wrapper 移到 4k-F 之後再評估（2026-11-13，使用者）**：查型別的設計時發現規模比當初說的大：寫成會呼叫 script 的函式有 185 個、分布在 `dom_api` 的 39 個檔案，彼此之間和向 host 要求（`ScriptHost` 的二十多個方法）傳的都是 root，所以不能只改入口。可行的設計是 `ScriptHost::Held<T>`（`Hold<T>`：在一個操作裡交出物件；`Persistent<T>` 實作它，binding 的是「wrapper 或 root」），函式把型別換掉、`this.get(cx.gc)` 換成 `this.get(cx)`；估兩三千行。省的是每個呼叫一到兩個 root（各約 80 到 90 條、合計約 3 到 8 ns），這些呼叫是 70 到 700 ns、已經是 Chrome 的 0.44 到 1.0 倍。先做真的落後的（4k-D 到 4k-F），到時再決定。先做掉不用改簽名的一點：沒有參數的成員登記 `this` 的 root 用讀的操作（20 條）而不是寫的（44 條）。
     - **分段**：4k-C1 新的外殼；4k-C2 「先試」的機制和走訪的 9 個成員的快路；4k-C3 剖析 `inp.select()`、`abort()`；4k-C4（`this` 和參數改拿 wrapper）移到 4k-F 之後評估。
+44. **`PLAIN` 刪掉，每個成員都從只拿 info 的 front 開始；`Front` 的預設實作留到 4m-3 拿掉**（2026-11-13；經過在 `progress.md` 的 4m-2）：
+    - 4m-2 開始前選的是「把 `Front` 的預設實作拿掉，由編譯器保證新的 front 什麼都有；wasm 和測試的 front 用 macro 補」，不選留著 `PLAIN` 的清單和照原始碼檢查的測試。
+    - 做的時候發現新的 front 沒有的 15 個方法幾乎都是 script 那一側才用的（listener、filter、observer、custom element 的 callback…），只在 `Front::whole` 交給完整的 front 之後被呼叫。要讓編譯器保證，得先把它們分到完整的 front 才實作的 trait；那個 trait 由誰實作是 4m-3 的題目（`V8Front` 怎麼收掉）。所以拿掉預設實作排進 4m-3，和搬法一起決定（待使用者確認）；在那之前由 `dom_js` 的一個照原始碼檢查的測試守著（`docs/test-gaps.md`）。
+    - cached getter 和 legacy caller 要 fork 多兩個收原始 callback 的入口（只改 Rust）：不選留著 `Member<M>` 拿 scope 的實作只給這兩處用。
 
 ## 待決定
 

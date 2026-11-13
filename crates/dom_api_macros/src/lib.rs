@@ -1554,7 +1554,6 @@ fn getter(iface: &Ident, ty: &Type, get: &Path) -> Tokens {
     quote! {
         type Args = ();
         type Ret = #ty;
-        const PLAIN: bool = <#ty as #api::typed::RetType>::PLAIN;
 
         fn call<F: #api::typed::Front>(#front: &mut F) {
             let prepared = <#ty as #api::typed::RetType>::prepare(#front, ::std::option::Option::None);
@@ -1605,7 +1604,6 @@ fn setter(iface: &Ident, ty: &Type, set: &Path, with_front: bool, ce_reactions: 
     quote! {
         type Args = (#ty,);
         type Ret = ();
-        const PLAIN: bool = <#ty as #api::typed::ArgType>::PLAIN;
 
         fn call<F: #api::typed::Front>(#front: &mut F) {
             let ::std::option::Option::Some(#value) = <#ty as #api::typed::ArgType>::take(#front, 0) else {
@@ -1769,18 +1767,9 @@ fn method(
         },
     );
     let ce_invoke = ce_invoke(ce_reactions, &front, &result);
-    // What a front end with only the required methods can call.
-    // (Its function may be given the front end's side in the operation:
-    // what that asks of a front end, its types say.)
-    // (A static one too: it has no `this`, and the current realm's window
-    // it may ask for is the front end's to find, `Front::prepare_window`.)
-    let plain = !realm && !legacy_factory;
     quote! {
         type Args = (#(#types,)*);
         type Ret = #ret;
-        const PLAIN: bool = #plain
-            #(&& <#types as #api::typed::ArgType>::PLAIN)*
-            && <#ret as #api::typed::RetType>::PLAIN;
 
         fn call<F: #api::typed::Front>(#front: &mut F) {
             #optional
@@ -1843,7 +1832,6 @@ fn then_script_method(
         type Ret = ();
         // On the front end that runs script (`Front::whole`), whichever
         // the member's callback is given.
-        const PLAIN: bool = true;
 
         fn call<F: #api::typed::Front>(#front: &mut F) {
             struct Whole;
@@ -1981,7 +1969,6 @@ fn script_method(
         type Ret = #ret;
         // On the front end that runs script (`Front::whole`), whichever
         // the member's callback is given.
-        const PLAIN: bool = true;
 
         fn call<F: #api::typed::Front>(#front: &mut F) {
             struct Whole;
@@ -2062,7 +2049,6 @@ fn constructor(iface: &Ident, args: &[Arg], function: &Path, with_front: bool) -
     quote! {
         type Args = (#(#types,)*);
         type Ret = ();
-        const PLAIN: bool = true #(&& <#types as #api::typed::ArgType>::PLAIN)*;
 
         fn call<F: #api::typed::Front>(#front: &mut F) {
             #optional
@@ -2135,10 +2121,6 @@ fn dictionary_items(dictionary: &DictionaryDef) -> Tokens {
     });
     let mut ordered: Vec<&DictMemberDef> = members.iter().collect();
     ordered.sort_by_key(|member| member.name.unraw().to_string());
-    let member_types = ordered
-        .iter()
-        .filter(|member| !handle(member))
-        .map(|member| &member.ty);
     let reads = ordered.iter().map(|member| {
         let field = &member.name;
         let js = js_name(field);
@@ -2204,7 +2186,6 @@ fn dictionary_items(dictionary: &DictionaryDef) -> Tokens {
 
         impl #api::typed::Dictionary for #name {
             const NAME: &'static str = #name_str;
-            const PLAIN: bool = true #(&& <#member_types as #api::typed::DictMember>::PLAIN)*;
             type Of<T: #api::typed::FrontTypes> = #of_t;
 
             fn read<T: #api::typed::Front>(#front: &mut T, #index: usize) -> ::std::option::Option<#of_t> {
@@ -2241,7 +2222,6 @@ fn dictionary_items(dictionary: &DictionaryDef) -> Tokens {
 
         impl #api::typed::ArgType for #name {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Dictionary(#name_str);
-            const PLAIN: bool = <#name as #api::typed::Dictionary>::PLAIN;
             const UNDEFINED_IS_DEFAULT: bool = true;
             type Taken<T: #api::typed::FrontTypes> = #of_t;
             type Param<'a, 'gc, T: #api::typed::FrontTypes + 'a> = &'a #of_t;
@@ -2269,7 +2249,6 @@ fn dictionary_items(dictionary: &DictionaryDef) -> Tokens {
 
         impl #api::typed::RetType for #name {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Dictionary(#name_str);
-            const PLAIN: bool = true;
             type Ret<'gc> = #name;
 
             type Prepared<F: #api::typed::FrontTypes> = ();
@@ -2405,7 +2384,6 @@ fn object_types(name: &Ident) -> Tokens {
     quote! {
         impl #api::typed::ArgType for #name {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Node(stringify!(#name));
-            const PLAIN: bool = true;
             type Taken<T: #api::typed::FrontTypes> = T::Node;
             type Param<'a, 'gc, T: #api::typed::FrontTypes + 'a> = #object::Ref<'gc>;
 
@@ -2425,7 +2403,6 @@ fn object_types(name: &Ident) -> Tokens {
 
         impl #api::typed::ArgType for ::std::option::Option<#name> {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::NullableNode(stringify!(#name));
-            const PLAIN: bool = true;
             // WebIDL's nullable types convert undefined to null.
             const UNDEFINED_IS_DEFAULT: bool = true;
             type Taken<T: #api::typed::FrontTypes> = ::std::option::Option<T::Node>;
@@ -2450,7 +2427,6 @@ fn object_types(name: &Ident) -> Tokens {
 
         impl #api::typed::RetType for #name {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Node(stringify!(#name));
-            const PLAIN: bool = true;
             type Ret<'gc> = #object::Ref<'gc>;
 
             #pending_object
@@ -2466,7 +2442,6 @@ fn object_types(name: &Ident) -> Tokens {
 
         impl #api::typed::RetType for ::std::option::Option<#name> {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::NullableNode(stringify!(#name));
-            const PLAIN: bool = true;
             type Ret<'gc> = ::std::option::Option<#object::Ref<'gc>>;
 
             #pending_object
@@ -2501,7 +2476,6 @@ fn callback_items(callback: &CallbackDef) -> Tokens {
 
         impl #api::typed::ArgType for ::std::option::Option<#name> {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Callback(#name_str);
-            const PLAIN: bool = true;
             // WebIDL's nullable types convert undefined to null (`callback_arg`
             // takes it as none).
             const UNDEFINED_IS_DEFAULT: bool = true;
@@ -2555,7 +2529,6 @@ fn node_types(name: &Ident) -> Tokens {
     quote! {
         impl #api::typed::ArgType for #name {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Node(stringify!(#name));
-            const PLAIN: bool = true;
             type Taken<T: #api::typed::FrontTypes> = T::Node;
             type Param<'a, 'gc, T: #api::typed::FrontTypes + 'a> = ::dom::NodeRef<'gc>;
 
@@ -2575,7 +2548,6 @@ fn node_types(name: &Ident) -> Tokens {
 
         impl #api::typed::RetType for #name {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::Node(stringify!(#name));
-            const PLAIN: bool = true;
             type Ret<'gc> = ::dom::NodeRef<'gc>;
 
             #pending_node
@@ -2591,7 +2563,6 @@ fn node_types(name: &Ident) -> Tokens {
 
         impl #api::typed::ArgType for ::std::option::Option<#name> {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::NullableNode(stringify!(#name));
-            const PLAIN: bool = true;
             // WebIDL's nullable types convert undefined to null (`node_arg`
             // takes it as none).
             const UNDEFINED_IS_DEFAULT: bool = true;
@@ -2620,7 +2591,6 @@ fn node_types(name: &Ident) -> Tokens {
 
         impl #api::typed::RetType for ::std::option::Option<#name> {
             const DESC: #api::declare::TypeDesc = #api::declare::TypeDesc::NullableNode(stringify!(#name));
-            const PLAIN: bool = true;
             type Ret<'gc> = ::std::option::Option<::dom::NodeRef<'gc>>;
 
             #pending_node

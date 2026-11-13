@@ -105,7 +105,7 @@ impl<'s> CallArgs<'s> for v8::FunctionCallbackArguments<'s> {
 }
 
 /// A function's callback's arguments and its receiver, which V8 checked
-/// against the function's signature (`bindings::StateMethod`).
+/// against the function's signature (`bindings::StateInfo::receiver`).
 pub(crate) struct Checked<'s> {
     pub(crate) args: v8::FunctionCallbackArguments<'s>,
     pub(crate) this: bindings::Receiver<'s>,

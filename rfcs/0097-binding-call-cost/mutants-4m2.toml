@@ -1,0 +1,66 @@
+# Stage 4m-2: every member's callback is given V8's callback info alone
+# and starts on the info front end (`TypedMember::PLAIN` is gone); the
+# info front end finds another realm's window itself.
+test = ["cargo", "test", "-q", "-p", "bindings", "-p", "dom_api", "-p", "dom_js"]
+timeout = 1800
+
+[[mutant]]
+name = "the relevant realm's window is the current realm's"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            let context = this
+                .get_creation_context(scope)
+                .unwrap_or_else(|| scope.get_current_context());
+            context.global(scope)
+        }));'''
+to = '''            let _ = this;
+            scope.get_current_context().global(scope)
+        }));'''
+
+[[mutant]]
+name = "the entry realm's window is the current realm's"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            let context = scope.get_entered_or_microtask_context();
+            v8::Local::new(scope, context).global(scope)'''
+to = '''            scope.get_current_context().global(scope)'''
+
+[[mutant]]
+name = "another realm's window found is not the member's"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if let Some(global) = self.other_window {
+            return self.no_gc.unwrap::<Window>(cx.gc, global);
+        }'''
+to = '''        if let Some(global) = self.other_window.filter(|_| false) {
+            return self.no_gc.unwrap::<Window>(cx.gc, global);
+        }'''
+
+[[mutant]]
+name = "a legacy caller isn't installed"
+file = "crates/dom_js/src/templates.rs"
+from = '''        if const { INTERFACES[M::INTERFACE].is_html_dda }
+            && M::KIND == MemberKind::Method
+            && M::NAME == "item"'''
+to = '''        if const { INTERFACES[M::INTERFACE].is_html_dda }
+            && M::KIND == MemberKind::Method
+            && M::NAME == "no such member"'''
+
+[[mutant]]
+name = "a constructor's form of an overload set is called as a static operation"
+file = "crates/dom_js/src/templates.rs"
+from = '''    if M::KIND == MemberKind::Constructor {
+        <InfoConstructor<M> as bindings::StateInfoFunction<State>>::call(info);
+    } else {'''
+to = '''    if false {
+        <InfoConstructor<M> as bindings::StateInfoFunction<State>>::call(info);
+    } else {'''
+
+[[mutant]]
+name = "a legacy factory function is called as a static operation"
+file = "crates/dom_js/src/templates.rs"
+from = '''        self.template = Some(bindings::state_info_function_template::<
+            State,
+            InfoConstructor<M>,
+        >(self.scope, |builder| {'''
+to = '''        self.template = Some(bindings::state_info_function_template::<
+            State,
+            InfoStatic<M>,
+        >(self.scope, |builder| {'''

@@ -33,7 +33,6 @@ mod markup;
 mod members;
 mod mutation_observer;
 mod node;
-mod plain;
 mod query;
 mod ranges;
 mod resize;

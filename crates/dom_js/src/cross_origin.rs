@@ -37,7 +37,7 @@ use dom_api::{INTERFACES, MemberKind, TypedMember, TypedVisitor};
 
 use crate::exception;
 use crate::state::{self, Scope, State};
-use crate::templates::{self, Member, string};
+use crate::templates::{self, string};
 
 /// A function other origins are given: a member's, by its interface's
 /// name, its name and its kind.
@@ -307,54 +307,27 @@ impl TypedVisitor for Make<'_, '_, '_> {
 pub(crate) struct CrossOriginMember<M>(PhantomData<M>);
 
 /// Its functions have the interface's signature: the receiver V8 checked
-/// goes on to the member's call.
-impl<M: TypedMember> bindings::StateMethod<State> for CrossOriginMember<M> {
-    fn call<'s>(
-        mut scope: Scope<'_, 's, '_>,
-        args: v8::FunctionCallbackArguments<'s>,
-        this: bindings::Receiver<'s>,
-        rv: v8::ReturnValue<'s>,
-    ) {
-        if M::KIND == MemberKind::Getter
-            && let Some(context) = this.object().get_creation_context(scope.scope())
-            && context != scope.scope().get_current_context()
-        {
-            let scope = &mut v8::ContextScope::new(scope.scope(), context);
-            let scope = state::scope(scope).expect("the isolate's state");
-            crate::templates::call_member::<M, _>(scope, &crate::front::Checked { args, this }, rv);
-            return;
-        }
-        crate::templates::call_member::<M, _>(scope, &crate::front::Checked { args, this }, rv);
-    }
-}
-
-/// The same, given V8's callback info alone: the scope its call needs
-/// (the receiver's realm entered for a getter, the whole front end's
-/// call) is made for it.
+/// goes on to the member's call, through V8's front end in a scope made
+/// for it (the receiver's realm entered for a getter).
 impl<M: TypedMember> bindings::StateInfoMethod<State> for CrossOriginMember<M> {
     fn call(mut info: bindings::StateInfo<'_, State>) {
         let (args, this) = (info.args(), info.receiver());
-        info.with_scope(|scope, rv| {
-            <Self as bindings::StateMethod<State>>::call(scope, args, this, rv);
+        info.with_scope(|mut scope, rv| {
+            if M::KIND == MemberKind::Getter
+                && let Some(context) = this.object().get_creation_context(scope.scope())
+                && context != scope.scope().get_current_context()
+            {
+                let scope = &mut v8::ContextScope::new(scope.scope(), context);
+                let scope = state::scope(scope).expect("the isolate's state");
+                crate::templates::call_member::<M, _>(
+                    scope,
+                    &crate::front::Checked { args, this },
+                    rv,
+                );
+                return;
+            }
+            crate::templates::call_member::<M, _>(scope, &crate::front::Checked { args, this }, rv);
         });
-    }
-}
-
-/// A static member's (none is cross-origin).
-impl<M: TypedMember> bindings::StateInfoFunction<State> for CrossOriginMember<M> {
-    fn call(info: bindings::StateInfo<'_, State, bindings::Unsigned>) {
-        <Member<M> as bindings::StateInfoFunction<State>>::call(info);
-    }
-}
-
-/// A static member's (none is cross-origin): the member's call.
-impl<M: TypedMember> bindings::StateCallback<State> for CrossOriginMember<M> {
-    fn call<'s>(
-        scope: Scope<'_, 's, '_>,
-        args: v8::FunctionCallbackArguments<'s>,
-        rv: v8::ReturnValue<'s>,
-    ) {
-        <Member<M> as bindings::StateCallback<State>>::call(scope, args, rv);
     }
 }
 

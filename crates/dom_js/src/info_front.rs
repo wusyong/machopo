@@ -1,8 +1,6 @@
 //! A member's call through V8's callback info alone (Blink's generated
 //! callbacks take `v8::FunctionCallbackInfo` and keep the rest in locals):
-//! the front end of the members whose arguments are strings and nodes and
-//! whose results are numbers, booleans, strings, nodes, null or nothing
-//! (`dom_api::TypedMember::PLAIN`), which most calls are.
+//! the front end every member's call starts on.
 //!
 //! It holds the info alone: no scope of rusty_v8's, no `front::Call`. A
 //! result the operation can't give (V8 would allocate) is the member's
@@ -505,6 +503,10 @@ pub(crate) struct InfoFront<'s, K: InfoKind<'s> = Method> {
     /// operation, found in it (`InfoOp::current_window`). Known as the
     /// member's call is expanded.
     window: bool,
+    /// The window of another realm than the current one that the member
+    /// asks for instead (`Front::prepare_relevant_window`, the incumbent's,
+    /// the entry's): its global, found before the operation.
+    other_window: Option<v8::Local<'s, v8::Object>>,
     /// What the call notes as its result is given.
     noted: K::Noted,
 }
@@ -515,6 +517,7 @@ pub(crate) struct InfoOp<'o, 's, K: InfoKind<'s> = Method> {
     no_gc: bindings::InfoNoGc<'o, 's>,
     this: K::This,
     window: bool,
+    other_window: Option<v8::Local<'s, v8::Object>>,
     noted: &'o mut K::Noted,
     caches: &'o Caches,
 }
@@ -572,6 +575,7 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
         Self {
             info,
             window: false,
+            other_window: None,
             noted: K::Noted::default(),
         }
     }
@@ -718,12 +722,13 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>, &mut Self::Op<'o>) -> R,
     ) -> R {
         let this = K::this(&self.info);
-        let window = self.window;
+        let (window, other_window) = (self.window, self.other_window);
         let (state, no_gc) = self.info.state();
         let mut op = InfoOp {
             no_gc,
             this,
             window,
+            other_window,
             noted: &mut self.noted,
             caches: &state.caches,
         };
@@ -738,7 +743,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>, &mut Self::Op<'o>) -> R,
     ) -> R {
         let this = K::this(&self.info);
-        let window = self.window;
+        let (window, other_window) = (self.window, self.other_window);
         let (state, no_gc) = self.info.state_mut();
         let State {
             dom,
@@ -750,6 +755,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
             no_gc,
             this,
             window,
+            other_window,
             noted: &mut self.noted,
             caches,
         };
@@ -1178,6 +1184,40 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     #[inline(always)]
     fn prepare_window(&mut self) {
         self.window = true;
+    }
+
+    /// The window of `this`'s relevant realm (the realm its wrapper was
+    /// made in): V8's to find, in a scope.
+    #[inline(never)]
+    fn prepare_relevant_window(&mut self) {
+        let this = K::this_object(&self.info);
+        self.other_window = Some(self.info.with_scope(|mut scope, _| {
+            let scope = scope.scope();
+            let context = this
+                .get_creation_context(scope)
+                .unwrap_or_else(|| scope.get_current_context());
+            context.global(scope)
+        }));
+    }
+
+    /// The incumbent realm's window: V8's to find, in a scope.
+    #[inline(never)]
+    fn prepare_incumbent_window(&mut self) {
+        self.other_window = Some(self.info.with_scope(|mut scope, _| {
+            let scope = scope.scope();
+            let context = scope.get_incumbent_context();
+            v8::Local::new(scope, context).global(scope)
+        }));
+    }
+
+    /// The entry realm's window: V8's to find, in a scope.
+    #[inline(never)]
+    fn prepare_entry_window(&mut self) {
+        self.other_window = Some(self.info.with_scope(|mut scope, _| {
+            let scope = scope.scope();
+            let context = scope.get_entered_or_microtask_context();
+            v8::Local::new(scope, context).global(scope)
+        }));
     }
 
     /// The argument itself; null for undefined, which V8 gives a scope.
@@ -1722,6 +1762,11 @@ impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
     /// isolate now; none if that isn't a window of the DOM's.
     #[inline(always)]
     fn current_window<'gc>(&mut self, cx: &ApiCx<'_, 'gc>) -> Option<elise::Gc<'gc, Window>> {
+        // Another realm's, found before the operation; else the current
+        // one's, if the member asked.
+        if let Some(global) = self.other_window {
+            return self.no_gc.unwrap::<Window>(cx.gc, global);
+        }
         if !self.window {
             return None;
         }

@@ -171,8 +171,8 @@ pub struct NoGc<'b, 's, 'i> {
 /// its map (V8's header's `Object::Unwrap` doesn't read it either). Made
 /// only here: by the
 /// callbacks of the functions this module gives a `Signature`
-/// (`state_method_template`, `state_cached_getter_template`: V8 calls them
-/// only past it), and by the indexed interceptors it installs on an object
+/// (`state_info_method_template`, `state_cached_getter_template`: V8 calls
+/// them only past it), and by the indexed interceptors it installs on an object
 /// template (V8 calls them with the object the interceptor is on, one of
 /// the template's, an API wrapper of its own type, as an object with an
 /// interceptor is).
@@ -183,18 +183,6 @@ impl<'s> Receiver<'s> {
     pub fn object(self) -> v8::Local<'s, v8::Object> {
         self.0
     }
-}
-
-/// A callback given its isolate's state, a `T`, and its receiver, which V8
-/// checked against the function's signature: what `state_method_template`
-/// and `state_cached_getter_template` call.
-pub trait StateMethod<T>: 'static {
-    fn call<'s>(
-        scope: StateScope<'_, 's, '_, T>,
-        args: v8::FunctionCallbackArguments<'s>,
-        this: Receiver<'s>,
-        rv: v8::ReturnValue<'s>,
-    );
 }
 
 /// A callback given its isolate's state, a `T`: what
@@ -969,25 +957,6 @@ fn function_trampoline<'s, T: Any, C: StateCallback<T>>(
     );
 }
 
-/// A method's callback, given the state: the function's signature V8
-/// checked the receiver against (`state_method_template`).
-fn method_trampoline<'s, T: Any, C: StateMethod<T>>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s>,
-) {
-    let this = Receiver(args.this());
-    C::call(
-        StateScope {
-            scope,
-            _state: PhantomData,
-        },
-        args,
-        this,
-        rv,
-    );
-}
-
 /// The indexed getter of `G`, given the state: its holder the object the
 /// interceptor is on (`Receiver`).
 fn indexed_trampoline<'s, T: Any, G: StateIndexedGetter<T>>(
@@ -1167,30 +1136,6 @@ pub fn state_function_template<'s, T: Any, C: StateCallback<T>>(
     configure(v8::FunctionTemplate::builder(function_trampoline::<T, C>)).build(scope)
 }
 
-/// A function template whose callback is `C`'s, given the isolate's state
-/// and its receiver (`Receiver`), which V8 checks against `signature`
-/// before each call. `configure` sets the rest; the signature is set last,
-/// so that it is the function's.
-///
-/// # Panics
-///
-/// If the isolate's state isn't a `T`.
-pub fn state_method_template<'s, T: Any, C: StateMethod<T>>(
-    scope: &mut v8::PinScope<'s, '_>,
-    signature: v8::Local<'s, v8::Signature>,
-    configure: impl FnOnce(
-        v8::FunctionBuilder<'s, v8::FunctionTemplate>,
-    ) -> v8::FunctionBuilder<'s, v8::FunctionTemplate>,
-) -> v8::Local<'s, v8::FunctionTemplate> {
-    assert!(
-        checked::<T>(scope).is_some(),
-        "a state callback's template is made where the state is one"
-    );
-    configure(v8::FunctionTemplate::builder(method_trampoline::<T, C>))
-        .signature(signature)
-        .build(scope)
-}
-
 /// A function template whose callback is `C`'s, given V8's callback info
 /// alone (`StateInfo`), its receiver checked against `signature` before
 /// each call. `configure` sets the rest; the signature is set last, so
@@ -1240,9 +1185,9 @@ pub fn state_info_function_template<'s, T: Any, C: StateInfoFunction<T>>(
     .build(scope)
 }
 
-/// A getter's function template whose callback is `C`'s, given the
-/// isolate's state and its receiver, which V8 checks against `signature`
-/// (as `state_method_template`'s), whose result V8 reads
+/// A getter's function template whose callback is `C`'s, given V8's
+/// callback info alone (as `state_info_method_template`'s), its receiver
+/// checked against `signature`, whose result V8 reads
 /// from `cache`, a private property of the object the accessor is found
 /// on, once that has one (Blink's `[CachedAccessor]`): V8's inline caches
 /// and optimizing compilers load it as data. The embedder sets the
@@ -1251,7 +1196,7 @@ pub fn state_info_function_template<'s, T: Any, C: StateInfoFunction<T>>(
 /// # Panics
 ///
 /// If the isolate's state isn't a `T`.
-pub fn state_cached_getter_template<'s, T: Any, C: StateMethod<T>>(
+pub fn state_cached_getter_template<'s, T: Any, C: StateInfoMethod<T>>(
     scope: &mut v8::PinScope<'s, '_>,
     cache: v8::Local<'s, v8::Private>,
     signature: v8::Local<'s, v8::Signature>,
@@ -1262,7 +1207,7 @@ pub fn state_cached_getter_template<'s, T: Any, C: StateMethod<T>>(
     );
     let template = v8::machopo::function_template_with_cache(
         scope,
-        method_trampoline::<T, C>,
+        info_method_trampoline::<T, C>,
         cache,
         Some(signature),
         0,
@@ -1274,13 +1219,14 @@ pub fn state_cached_getter_template<'s, T: Any, C: StateMethod<T>>(
 }
 
 /// Makes `template`'s (its isolate's) objects callable, calling `C`'s
-/// callback given the isolate's state, its `this` the object called (V8's
-/// for an object template's call handler).
+/// callback given V8's callback info alone, its `this` the object called
+/// (V8's for an object template's call handler), which nothing here
+/// checked: a function's.
 ///
 /// # Panics
 ///
 /// If the isolate's state isn't a `T`.
-pub fn set_state_call_as_function_handler<T: Any, C: StateCallback<T>>(
+pub fn set_state_call_as_function_handler<T: Any, C: StateInfoFunction<T>>(
     scope: &mut v8::PinScope<'_, '_>,
     template: v8::Local<'_, v8::ObjectTemplate>,
 ) {
@@ -1288,7 +1234,7 @@ pub fn set_state_call_as_function_handler<T: Any, C: StateCallback<T>>(
         checked::<T>(scope).is_some(),
         "a state callback's template is made where the state is one"
     );
-    template.set_call_as_function_handler(function_trampoline::<T, C>, None);
+    template.set_call_as_function_handler_raw(info_function_trampoline::<T, C>, None);
 }
 
 /// Gives `template` (its isolate's) the indexed getter of `G`, given the

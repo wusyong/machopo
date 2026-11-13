@@ -107,7 +107,6 @@ macro_rules! no_pending {
 /// front end's `$finish` makes it the call's result after.
 macro_rules! finished_after {
     ($value:ty, $finish:ident) => {
-        const PLAIN: bool = true;
         type Ret<'gc> = $value;
         $crate::typed::no_prepared!();
         type Pending<F: $crate::typed::FrontTypes> = $value;
@@ -2241,11 +2240,6 @@ pub trait ArgType {
     /// argument of it may be optional (`name?: Type` in the table): a
     /// dictionary's, whose members' defaults WebIDL's `= {}` gives.
     const UNDEFINED_IS_DEFAULT: bool = false;
-    /// Whether it is taken and read through the methods every front end
-    /// has alone (`Front`'s and `OpFront`'s with no default, and the ones
-    /// whose default calls only those): a string or a node. A member
-    /// whose arguments and result all are is `TypedMember::PLAIN`.
-    const PLAIN: bool = false;
     type Taken<T: FrontTypes>;
     /// What the member's function gets of it, in the operation: the DOM's
     /// own (a `&str`, a `NodeRef`, a number), or the front end `T`'s
@@ -2278,9 +2272,6 @@ pub trait ArgType {
 /// function returns (`Ret`), handed back in the operation.
 pub trait RetType {
     const DESC: TypeDesc;
-    /// As `ArgType::PLAIN`: nothing made before the operation, and what
-    /// it gives a number, a boolean, a string, a node, null or nothing.
-    const PLAIN: bool = false;
     type Ret<'gc>;
 
     /// What the front end makes ahead of the operation for it, as the
@@ -2337,7 +2328,6 @@ pub struct NewObject<I, L = I>(PhantomData<(I, L)>);
 
 impl<I: Interface, L: Interface> RetType for NewObject<I, L> {
     const DESC: TypeDesc = TypeDesc::Node(I::NAME);
-    const PLAIN: bool = true;
     type Ret<'gc> = NodeRef<'gc>;
     type Prepared<F: FrontTypes> = F::PreparedNode;
     type Pending<F: FrontTypes> = Option<F::PendingNode>;
@@ -2381,7 +2371,6 @@ pub struct NewImageData;
 
 impl RetType for NewImageData {
     const DESC: TypeDesc = <crate::interfaces::ImageData as RetType>::DESC;
-    const PLAIN: bool = true;
     type Ret<'gc> = ImageDataWithPixels<'gc>;
     type Prepared<F: FrontTypes> = <crate::interfaces::ImageData as RetType>::Prepared<F>;
     type Pending<F: FrontTypes> = (
@@ -2415,7 +2404,6 @@ impl RetType for NewImageData {
 /// Nothing: a method that returns nothing (WebIDL's `undefined`).
 impl RetType for () {
     const DESC: TypeDesc = TypeDesc::Undefined;
-    const PLAIN: bool = true;
     type Ret<'gc> = ();
     no_pending!();
 
@@ -2426,7 +2414,6 @@ impl RetType for () {
 
 impl RetType for bool {
     const DESC: TypeDesc = TypeDesc::Bool;
-    const PLAIN: bool = true;
     type Ret<'gc> = bool;
     no_pending!();
 
@@ -2439,7 +2426,6 @@ impl RetType for bool {
 /// DOM's overflows).
 impl RetType for u32 {
     const DESC: TypeDesc = TypeDesc::U32;
-    const PLAIN: bool = true;
     type Ret<'gc> = u32;
     pending!(PendingNumber, finish_number);
 
@@ -2453,7 +2439,6 @@ impl RetType for u32 {
 /// `optional boolean x = false`).
 impl ArgType for bool {
     const DESC: TypeDesc = TypeDesc::Bool;
-    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = bool;
     type Param<'a, 'gc, T: FrontTypes + 'a> = bool;
@@ -2476,7 +2461,6 @@ impl ArgType for bool {
 /// is missing or undefined (WebIDL's "not present").
 impl ArgType for Option<bool> {
     const DESC: TypeDesc = TypeDesc::OptionalBool;
-    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<bool>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Option<bool>;
@@ -2508,10 +2492,6 @@ pub enum DictOrBool<D> {
 /// argument `index` before the operation.
 pub trait Dictionary {
     const NAME: &'static str;
-    /// Whether its members are all read as values (`DictMember::PLAIN`)
-    /// or as the front end's handles (`DictHandle`): then it is `PLAIN`
-    /// as an argument.
-    const PLAIN: bool;
     /// The dictionary as read by a front end `T`: itself, or (one with
     /// members that are the front end's handles) itself of `T`'s types
     /// of them, which `T`'s side in the operation shares.
@@ -2524,7 +2504,6 @@ pub trait Dictionary {
 
 impl<D: Dictionary + 'static> ArgType for DictOrBool<D> {
     const DESC: TypeDesc = TypeDesc::DictOrBool(D::NAME);
-    const PLAIN: bool = D::PLAIN;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = DictOrBool<D::Of<T>>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = &'a DictOrBool<D::Of<T>>;
@@ -2550,7 +2529,6 @@ impl<D: Dictionary + 'static> ArgType for DictOrBool<D> {
 /// WebIDL's `unsigned short`.
 impl RetType for u16 {
     const DESC: TypeDesc = TypeDesc::U16;
-    const PLAIN: bool = true;
     type Ret<'gc> = u16;
     pending!(PendingNumber, finish_number);
 
@@ -2563,7 +2541,6 @@ impl RetType for u16 {
 /// bits.
 impl ArgType for u16 {
     const DESC: TypeDesc = TypeDesc::U16;
-    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = u16;
     type Param<'a, 'gc, T: FrontTypes + 'a> = u16;
@@ -2587,7 +2564,6 @@ impl ArgType for u16 {
 /// WebIDL's `short`.
 impl RetType for i16 {
     const DESC: TypeDesc = TypeDesc::I16;
-    const PLAIN: bool = true;
     type Ret<'gc> = i16;
     pending!(PendingNumber, finish_number);
 
@@ -2602,7 +2578,6 @@ pub struct WhatToShow;
 
 impl ArgType for WhatToShow {
     const DESC: TypeDesc = TypeDesc::U32;
-    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = u32;
     type Param<'a, 'gc, T: FrontTypes + 'a> = u32;
@@ -2635,7 +2610,6 @@ pub struct StaticRangeInit<'gc> {
 pub struct StaticRangeInitArg;
 
 impl ArgType for StaticRangeInitArg {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Dictionary("StaticRangeInit");
     type Taken<T: FrontTypes> = [(T::Node, u32); 2];
     type Param<'a, 'gc, T: FrontTypes + 'a> = StaticRangeInit<'gc>;
@@ -2661,7 +2635,6 @@ impl ArgType for StaticRangeInitArg {
 /// one is one whose default is 0 (`optional long timeout = 0`).
 impl ArgType for i32 {
     const DESC: TypeDesc = TypeDesc::I32;
-    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = i32;
     type Param<'a, 'gc, T: FrontTypes + 'a> = i32;
@@ -2683,7 +2656,6 @@ impl ArgType for i32 {
 /// WebIDL's `unsigned long`: `ToUint32`, which makes undefined 0.
 impl ArgType for u32 {
     const DESC: TypeDesc = TypeDesc::U32;
-    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = u32;
     type Param<'a, 'gc, T: FrontTypes + 'a> = u32;
@@ -2707,7 +2679,6 @@ impl ArgType for u32 {
 /// present", which the overload of fewer arguments is).
 impl ArgType for Option<u32> {
     const DESC: TypeDesc = TypeDesc::U32;
-    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<u32>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Option<u32>;
@@ -2734,7 +2705,6 @@ impl ArgType for Option<u32> {
 /// too, as WebIDL's overload resolution counts the arguments).
 impl ArgType for Option<i32> {
     const DESC: TypeDesc = TypeDesc::I32;
-    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<i32>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Option<i32>;
@@ -2762,7 +2732,6 @@ pub struct LongDefaultMinusOne;
 
 impl ArgType for LongDefaultMinusOne {
     const DESC: TypeDesc = TypeDesc::I32;
-    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = i32;
     type Param<'a, 'gc, T: FrontTypes + 'a> = i32;
@@ -2790,7 +2759,6 @@ pub struct LongDefaultOne;
 
 impl ArgType for LongDefaultOne {
     const DESC: TypeDesc = TypeDesc::I32;
-    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = i32;
     type Param<'a, 'gc, T: FrontTypes + 'a> = i32;
@@ -2818,7 +2786,6 @@ pub struct U16Default302;
 
 impl ArgType for U16Default302 {
     const DESC: TypeDesc = TypeDesc::U16;
-    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = u16;
     type Param<'a, 'gc, T: FrontTypes + 'a> = u16;
@@ -2846,7 +2813,6 @@ pub struct NullableU32;
 
 impl ArgType for NullableU32 {
     const DESC: TypeDesc = TypeDesc::NullableU32;
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Option<u32>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Option<u32>;
 
@@ -2869,7 +2835,6 @@ impl ArgType for NullableU32 {
 
 impl RetType for NullableU32 {
     const DESC: TypeDesc = TypeDesc::NullableU32;
-    const PLAIN: bool = true;
     type Ret<'gc> = Option<u32>;
     pending!(PendingNumber, finish_number);
 
@@ -2890,7 +2855,6 @@ impl RetType for NullableU32 {
 
 impl RetType for i32 {
     const DESC: TypeDesc = TypeDesc::I32;
-    const PLAIN: bool = true;
     type Ret<'gc> = i32;
     pending!(PendingNumber, finish_number);
 
@@ -2906,7 +2870,6 @@ pub struct TimerHandler;
 
 impl ArgType for TimerHandler {
     const DESC: TypeDesc = TypeDesc::Function("TimerHandler");
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Callback<T::Callback>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Callback<T::Callback>;
 
@@ -2932,7 +2895,6 @@ pub struct EventHandler;
 
 impl ArgType for EventHandler {
     const DESC: TypeDesc = TypeDesc::Function("EventHandler");
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Option<Callback<T::Callback>>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Option<Callback<T::Callback>>;
 
@@ -2966,7 +2928,6 @@ pub enum HandlerValue<'gc> {
 /// it is then (`Front::finish_handler`).
 impl RetType for EventHandler {
     const DESC: TypeDesc = TypeDesc::Function("EventHandler");
-    const PLAIN: bool = true;
     type Ret<'gc> = HandlerValue<'gc>;
     no_prepared!();
     type Pending<F: FrontTypes> = Option<(TargetRoot, NameId)>;
@@ -3001,7 +2962,6 @@ pub struct IntersectionObserverCallback;
 
 impl ArgType for IntersectionObserverCallback {
     const DESC: TypeDesc = TypeDesc::Function("IntersectionObserverCallback");
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Callback<T::Callback>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Callback<T::Callback>;
 
@@ -3047,7 +3007,6 @@ pub struct ResizeObserverCallback;
 
 impl ArgType for ResizeObserverCallback {
     const DESC: TypeDesc = TypeDesc::Function("ResizeObserverCallback");
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Callback<T::Callback>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Callback<T::Callback>;
 
@@ -3078,7 +3037,6 @@ pub struct IntersectionOptions<'gc> {
 pub struct IntersectionObserverInitArg;
 
 impl ArgType for IntersectionObserverInitArg {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Dictionary("IntersectionObserverInit");
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = (IntersectionInit, Option<T::Node>);
@@ -3127,7 +3085,6 @@ pub struct IntersectionEntryInit<'gc> {
 pub struct IntersectionObserverEntryInitArg;
 
 impl ArgType for IntersectionObserverEntryInitArg {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Dictionary("IntersectionObserverEntryInit");
     type Taken<T: FrontTypes> = (IntersectionEntryInitValues, T::Node);
     type Param<'a, 'gc, T: FrontTypes + 'a> = IntersectionEntryInit<'gc>;
@@ -3155,7 +3112,6 @@ pub struct MutationCallback;
 
 impl ArgType for MutationCallback {
     const DESC: TypeDesc = TypeDesc::Function("MutationCallback");
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Callback<T::Callback>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Callback<T::Callback>;
 
@@ -3179,7 +3135,6 @@ pub struct FrameRequestCallback;
 
 impl ArgType for FrameRequestCallback {
     const DESC: TypeDesc = TypeDesc::Function("FrameRequestCallback");
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Callback<T::Callback>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Callback<T::Callback>;
 
@@ -3204,7 +3159,6 @@ macro_rules! callback_functions {
 
         impl ArgType for $name {
             const DESC: TypeDesc = TypeDesc::Function(stringify!($name));
-            const PLAIN: bool = true;
             type Taken<T: FrontTypes> = Callback<T::Callback>;
             type Param<'a, 'gc, T: FrontTypes + 'a> = Callback<T::Callback>;
 
@@ -3239,7 +3193,6 @@ pub struct PositionErrorCallback;
 
 impl ArgType for PositionErrorCallback {
     const DESC: TypeDesc = TypeDesc::Function("PositionErrorCallback");
-    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<Callback<T::Callback>>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Option<Callback<T::Callback>>;
@@ -3265,7 +3218,6 @@ pub struct AbortReason;
 impl ArgType for AbortReason {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = AnyArg<T::Any>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = AnyArg<T::Any>;
 
@@ -3288,7 +3240,6 @@ impl ArgType for AbortReason {
 pub struct AbortSignals;
 
 impl ArgType for AbortSignals {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Sequence("AbortSignal");
     type Taken<T: FrontTypes> = Vec<T::Node>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Vec<Gc<'gc, EventTargetImpl>>;
@@ -3326,7 +3277,6 @@ impl ArgType for AbortSignals {
 pub struct MessagePorts;
 
 impl ArgType for MessagePorts {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Sequence("MessagePort");
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Vec<T::Node>;
@@ -3370,7 +3320,6 @@ pub struct EnforcedU64;
 
 impl ArgType for EnforcedU64 {
     const DESC: TypeDesc = TypeDesc::Double;
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = f64;
     type Param<'a, 'gc, T: FrontTypes + 'a> = f64;
 
@@ -3409,7 +3358,6 @@ pub struct ByteString;
 
 impl ArgType for ByteString {
     const DESC: TypeDesc = TypeDesc::String;
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = T::Str;
     type Param<'a, 'gc, T: FrontTypes + 'a> = &'a str;
 
@@ -3440,7 +3388,6 @@ impl ArgType for ByteString {
 pub struct HeaderPairs;
 
 impl ArgType for HeaderPairs {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::StringPairs;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<StringPairsArg>;
@@ -3485,7 +3432,6 @@ pub enum RequestInput<'a, 'gc> {
 }
 
 impl ArgType for RequestInfo {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::StringOr(&["Request"]);
     type Taken<T: FrontTypes> = RequestInfoArg<T::Node, T::Str>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = RequestInput<'a, 'gc>;
@@ -3517,7 +3463,6 @@ impl ArgType for RequestInfo {
 pub struct NullableBody;
 
 impl ArgType for NullableBody {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<BodyArg<T::Node>>;
@@ -3541,7 +3486,6 @@ impl ArgType for NullableBody {
 pub struct JsonData;
 
 impl ArgType for JsonData {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = String;
@@ -3582,7 +3526,6 @@ impl<F: Front> DictHandle<F> for Option<BodyMember<F::Node>> {
 }
 
 impl DictMember for Option<HeadersMember> {
-    const PLAIN: bool = true;
     fn read<F: Front>(
         front: &mut F,
         dict: &F::Dict,
@@ -3603,7 +3546,6 @@ impl<F: Front> DictHandle<F> for Option<SignalMember<F::Node>> {
 }
 
 impl DictMember for Option<IsNull> {
-    const PLAIN: bool = true;
     fn read<F: Front>(
         front: &mut F,
         dict: &F::Dict,
@@ -3702,7 +3644,6 @@ pub struct Rest;
 impl ArgType for Rest {
     const DESC: TypeDesc = TypeDesc::Rest;
     const UNDEFINED_IS_DEFAULT: bool = true;
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Option<T::Rest>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Option<T::Rest>;
 
@@ -3727,7 +3668,6 @@ pub struct Strings;
 
 impl ArgType for Strings {
     const DESC: TypeDesc = TypeDesc::Strings;
-    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Vec<T::Str>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Vec<&'a str>;
@@ -3769,7 +3709,6 @@ pub struct NodesOrStrings;
 impl ArgType for NodesOrStrings {
     const DESC: TypeDesc = TypeDesc::NodesOrStrings;
     const UNDEFINED_IS_DEFAULT: bool = true;
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Vec<NodeOrStr<T::Node, T::Str>>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Vec<NodeOrString<'a, 'gc>>;
 
@@ -3816,7 +3755,6 @@ pub struct NullableElementOrLong;
 impl ArgType for NullableElementOrLong {
     const DESC: TypeDesc = TypeDesc::NullableUnion(&["HTMLElement", "long"]);
     const UNDEFINED_IS_DEFAULT: bool = true;
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Option<NodeOrLong<T::Node>>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Option<ElementOrLong<'gc>>;
 
@@ -3855,7 +3793,6 @@ const OPTION_OR_OPTGROUP: &str = "(HTMLOptionElement or HTMLOptGroupElement)";
 
 impl ArgType for OptionOrOptGroup {
     const DESC: TypeDesc = TypeDesc::Union(&["HTMLOptionElement", "HTMLOptGroupElement"]);
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = T::Node;
     type Param<'a, 'gc, T: FrontTypes + 'a> = NodeRef<'gc>;
 
@@ -3897,7 +3834,6 @@ pub struct Slottables;
 
 impl ArgType for Slottables {
     const DESC: TypeDesc = TypeDesc::Slottables;
-    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Vec<T::Node>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Vec<NodeRef<'gc>>;
@@ -3946,7 +3882,6 @@ fn slottable_error(index: usize) -> ApiError {
 pub struct Doubles;
 
 impl ArgType for Doubles {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Doubles;
     type Taken<T: FrontTypes> = Vec<f64>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Vec<f64>;
@@ -4018,7 +3953,6 @@ pub struct Any;
 
 impl RetType for Any {
     const DESC: TypeDesc = TypeDesc::Any;
-    const PLAIN: bool = true;
     type Ret<'gc> = &'gc JsEdge;
     no_pending!();
 
@@ -4033,7 +3967,6 @@ impl RetType for Any {
 impl ArgType for Any {
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = AnyArg<T::Any>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = AnyArg<T::Any>;
 
@@ -4058,7 +3991,6 @@ pub struct AnyOrNull;
 
 impl RetType for AnyOrNull {
     const DESC: TypeDesc = TypeDesc::Any;
-    const PLAIN: bool = true;
     type Ret<'gc> = &'gc JsEdge;
     no_pending!();
 
@@ -4070,7 +4002,6 @@ impl RetType for AnyOrNull {
 /// WebIDL's `double` (and `DOMHighResTimeStamp`, which is one).
 impl RetType for f64 {
     const DESC: TypeDesc = TypeDesc::Double;
-    const PLAIN: bool = true;
     type Ret<'gc> = f64;
     pending!(PendingNumber, finish_number);
 
@@ -4082,7 +4013,6 @@ impl RetType for f64 {
 /// WebIDL's `double` as an argument: a finite number.
 impl ArgType for f64 {
     const DESC: TypeDesc = TypeDesc::Double;
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = f64;
     type Param<'a, 'gc, T: FrontTypes + 'a> = f64;
 
@@ -4103,7 +4033,6 @@ impl ArgType for f64 {
 /// WebIDL's `double?` as a result: a number, or null.
 impl RetType for Option<f64> {
     const DESC: TypeDesc = TypeDesc::Double;
-    const PLAIN: bool = true;
     type Ret<'gc> = Option<f64>;
     pending!(PendingNumber, finish_number);
 
@@ -4126,7 +4055,6 @@ impl RetType for Option<f64> {
 /// finite number.
 impl ArgType for Option<f64> {
     const DESC: TypeDesc = TypeDesc::Double;
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Option<f64>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Option<f64>;
 
@@ -4153,7 +4081,6 @@ pub struct OptionalUnrestrictedDouble;
 
 impl ArgType for OptionalUnrestrictedDouble {
     const DESC: TypeDesc = TypeDesc::Double;
-    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<f64>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Option<f64>;
@@ -4181,7 +4108,6 @@ pub struct UnrestrictedDouble;
 
 impl ArgType for UnrestrictedDouble {
     const DESC: TypeDesc = TypeDesc::Double;
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = f64;
     type Param<'a, 'gc, T: FrontTypes + 'a> = f64;
 
@@ -4201,7 +4127,6 @@ impl ArgType for UnrestrictedDouble {
 
 impl RetType for UnrestrictedDouble {
     const DESC: TypeDesc = TypeDesc::Double;
-    const PLAIN: bool = true;
     type Ret<'gc> = f64;
     pending!(PendingNumber, finish_number);
 
@@ -4213,11 +4138,6 @@ impl RetType for UnrestrictedDouble {
 /// A dictionary member's type: read from the dictionary before the
 /// operation (WebIDL's conversion of the member's value).
 pub trait DictMember: Sized {
-    /// Whether the front end reads it as a value (a boolean, a number, a
-    /// string, strings), keeping nothing of its engine's for the
-    /// operation: a dictionary whose members all are is `PLAIN`.
-    const PLAIN: bool = false;
-
     /// `dict`'s member `member`: `Some(None)` if it is undefined, `None`
     /// if reading it threw.
     fn read<F: Front>(front: &mut F, dict: &F::Dict, member: MemberName) -> Option<Option<Self>>;
@@ -4230,8 +4150,6 @@ pub trait DictMember: Sized {
 }
 
 impl DictMember for bool {
-    const PLAIN: bool = true;
-
     fn read<F: Front>(front: &mut F, dict: &F::Dict, member: MemberName) -> Option<Option<bool>> {
         front.dict_bool(dict, member)
     }
@@ -4243,8 +4161,6 @@ impl DictMember for bool {
 
 /// A `boolean` member with no default: none if it is missing.
 impl DictMember for Option<bool> {
-    const PLAIN: bool = true;
-
     fn read<F: Front>(
         front: &mut F,
         dict: &F::Dict,
@@ -4256,8 +4172,6 @@ impl DictMember for Option<bool> {
 
 /// A `DOMString` member.
 impl DictMember for String {
-    const PLAIN: bool = true;
-
     fn read<F: Front>(front: &mut F, dict: &F::Dict, member: MemberName) -> Option<Option<String>> {
         front.dict_string(dict, member)
     }
@@ -4270,8 +4184,6 @@ impl DictMember for String {
 /// An `unrestricted double` member with no default: none if it is
 /// missing (`DOMMatrix2DInit`'s).
 impl DictMember for Option<f64> {
-    const PLAIN: bool = true;
-
     fn read<F: Front>(
         front: &mut F,
         dict: &F::Dict,
@@ -4287,8 +4199,6 @@ impl DictMember for Option<f64> {
 
 /// A `double` member: a finite number.
 impl DictMember for f64 {
-    const PLAIN: bool = true;
-
     fn read<F: Front>(front: &mut F, dict: &F::Dict, member: MemberName) -> Option<Option<f64>> {
         let Some(value) = front.dict_number(dict, member)? else {
             return Some(None);
@@ -4323,7 +4233,6 @@ macro_rules! integer_members {
     ($($ty:ty: $bits:literal, $signed:literal;)*) => {$(
         /// A WebIDL integer member, converted modulo its size.
         impl DictMember for $ty {
-            const PLAIN: bool = true;
 
             fn read<F: Front>(front: &mut F, dict: &F::Dict, member: MemberName) -> Option<Option<$ty>> {
                 Some(
@@ -4349,8 +4258,6 @@ integer_members! {
 /// A `DOMString?` member whose default is null: none if it is undefined
 /// (missing) or null.
 impl DictMember for Option<String> {
-    const PLAIN: bool = true;
-
     fn read<F: Front>(
         front: &mut F,
         dict: &F::Dict,
@@ -4361,8 +4268,6 @@ impl DictMember for Option<String> {
 }
 
 impl DictMember for Option<Vec<String>> {
-    const PLAIN: bool = true;
-
     fn read<F: Front>(
         front: &mut F,
         dict: &F::Dict,
@@ -5020,7 +4925,6 @@ pub enum CollectionOrElement<'gc> {
 
 impl RetType for Option<HTMLCollectionOrElement> {
     const DESC: TypeDesc = TypeDesc::NullableUnion(&["HTMLCollection", "Element"]);
-    const PLAIN: bool = true;
     type Ret<'gc> = Option<CollectionOrElement<'gc>>;
     pending!(PendingObject, finish_object);
 
@@ -5096,7 +5000,6 @@ pub struct RadioNodeListOrElement;
 
 impl RetType for Option<RadioNodeListOrElement> {
     const DESC: TypeDesc = TypeDesc::NullableUnion(&["RadioNodeList", "Element"]);
-    const PLAIN: bool = true;
     type Ret<'gc> = Option<dom::FormItem<'gc>>;
     pending!(PendingObject, finish_object);
 
@@ -5863,7 +5766,6 @@ pub struct ElementLocalName;
 
 impl ArgType for ElementLocalName {
     const DESC: TypeDesc = TypeDesc::String;
-    const PLAIN: bool = true;
     /// The name, its number if it is one already, and the interface its
     /// element will be of in an HTML document (`Front::foresee_element`).
     type Taken<T: FrontTypes> = (T::Str, Option<dom::NameId>, usize);
@@ -5898,7 +5800,6 @@ pub struct NewHtmlElement;
 
 impl RetType for NewHtmlElement {
     const DESC: TypeDesc = TypeDesc::Node("Element");
-    const PLAIN: bool = true;
     type Ret<'gc> = Created<'gc>;
     type Prepared<F: FrontTypes> = F::PreparedNode;
     type Pending<F: FrontTypes> = Option<F::PendingNode>;
@@ -5943,7 +5844,6 @@ pub struct NewNodeLikeThis;
 
 impl RetType for NewNodeLikeThis {
     const DESC: TypeDesc = TypeDesc::Node("Node");
-    const PLAIN: bool = true;
     type Ret<'gc> = NodeRef<'gc>;
     type Prepared<F: FrontTypes> = F::PreparedNode;
     type Pending<F: FrontTypes> = Option<F::PendingNode>;
@@ -5996,7 +5896,6 @@ pub enum Created<'gc> {
 
 impl<L: Interface> RetType for NewElement<L> {
     const DESC: TypeDesc = TypeDesc::Node("Element");
-    const PLAIN: bool = true;
     type Ret<'gc> = Created<'gc>;
     type Prepared<F: FrontTypes> = F::PreparedNode;
     type Pending<F: FrontTypes> = Option<F::PendingNode>;
@@ -6129,7 +6028,6 @@ pub struct GetHtmlOptions<'gc> {
 }
 
 impl ArgType for GetHtmlOptionsArg {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Dictionary("GetHTMLOptions");
     const UNDEFINED_IS_DEFAULT: bool = true;
     /// `serializableShadowRoots`, and `shadowRoots`' nodes.
@@ -6175,7 +6073,6 @@ pub struct CustomElementConstructor;
 
 impl ArgType for CustomElementConstructor {
     const DESC: TypeDesc = TypeDesc::Function("CustomElementConstructor");
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Callback<T::Callback>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Callback<T::Callback>;
 
@@ -6199,7 +6096,6 @@ pub struct AnyOrUndefined;
 
 impl RetType for AnyOrUndefined {
     const DESC: TypeDesc = TypeDesc::Any;
-    const PLAIN: bool = true;
     type Ret<'gc> = Option<&'gc JsEdge>;
     no_pending!();
 
@@ -6214,7 +6110,6 @@ pub struct EventOrUndefined;
 
 impl RetType for EventOrUndefined {
     const DESC: TypeDesc = TypeDesc::Any;
-    const PLAIN: bool = true;
     type Ret<'gc> = Option<Gc<'gc, dom::Event>>;
     pending!(PendingObject, finish_object);
 
@@ -6259,7 +6154,6 @@ pub enum PromisePending {
 
 impl RetType for PromiseOfAny {
     const DESC: TypeDesc = TypeDesc::Promise("any");
-    const PLAIN: bool = true;
     type Ret<'gc> = PromiseOf<'gc>;
     no_prepared!();
     type Pending<F: FrontTypes> = PromisePending;
@@ -6297,7 +6191,6 @@ pub struct ObservableArray<I>(PhantomData<I>);
 
 impl<I: Interface> RetType for ObservableArray<I> {
     const DESC: TypeDesc = TypeDesc::ObservableArray(I::NAME);
-    const PLAIN: bool = true;
     type Ret<'gc> = Vec<<I::Object as ObjectType>::Ref<'gc>>;
     no_prepared!();
     type Pending<F: FrontTypes> = Vec<(ObjectRoot, usize)>;
@@ -6323,7 +6216,6 @@ pub struct Promise<I>(PhantomData<I>);
 
 impl<I: Interface> RetType for Promise<I> {
     const DESC: TypeDesc = TypeDesc::Promise(I::NAME);
-    const PLAIN: bool = true;
     type Ret<'gc> = <I::Object as ObjectType>::Ref<'gc>;
     no_prepared!();
     type Pending<F: FrontTypes> = (ObjectRoot, usize);
@@ -6355,7 +6247,6 @@ pub struct PendingPromise<I>(PhantomData<I>);
 
 impl<I: Interface> RetType for PendingPromise<I> {
     const DESC: TypeDesc = TypeDesc::Promise(I::NAME);
-    const PLAIN: bool = true;
     type Ret<'gc> = u64;
     no_prepared!();
     type Pending<F: FrontTypes> = u64;
@@ -6380,7 +6271,6 @@ pub struct Sequence<I>(PhantomData<I>);
 
 impl<I: Interface> RetType for Sequence<I> {
     const DESC: TypeDesc = TypeDesc::Sequence(I::DESC.name);
-    const PLAIN: bool = true;
     type Ret<'gc> = Vec<<I::Object as ObjectType>::Ref<'gc>>;
     no_prepared!();
     type Pending<F: FrontTypes> = Vec<(ObjectRoot, usize)>;
@@ -6405,7 +6295,6 @@ pub struct FrozenArray<I>(PhantomData<I>);
 
 impl<I: Interface> RetType for FrozenArray<I> {
     const DESC: TypeDesc = TypeDesc::FrozenArray(I::DESC.name);
-    const PLAIN: bool = true;
     type Ret<'gc> = Vec<<I::Object as ObjectType>::Ref<'gc>>;
     no_prepared!();
     type Pending<F: FrontTypes> = Vec<(ObjectRoot, usize)>;
@@ -6808,7 +6697,6 @@ impl<'gc> From<Option<DomStr<'gc>>> for NullableStr<'gc> {
 /// string of the DOM (`DomStr`: kept, or where it is).
 impl ArgType for DomString {
     const DESC: TypeDesc = TypeDesc::String;
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = T::Str;
     type Param<'a, 'gc, T: FrontTypes + 'a> = &'a str;
 
@@ -6828,7 +6716,6 @@ impl ArgType for DomString {
 
 impl RetType for DomString {
     const DESC: TypeDesc = TypeDesc::String;
-    const PLAIN: bool = true;
     type Ret<'gc> = DomStr<'gc>;
     pending!(PendingString, finish_string);
 
@@ -6850,7 +6737,6 @@ pub struct EnforcedI32;
 
 impl ArgType for EnforcedI32 {
     const DESC: TypeDesc = TypeDesc::I32;
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = i32;
     type Param<'a, 'gc, T: FrontTypes + 'a> = i32;
 
@@ -6889,7 +6775,6 @@ pub struct Uint8ClampedArray;
 
 impl ArgType for Uint8ClampedArray {
     const DESC: TypeDesc = TypeDesc::Uint8ClampedArray;
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Uint8ClampedArg<T::Any>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Uint8ClampedArg<T::Any>;
 
@@ -6909,7 +6794,6 @@ impl ArgType for Uint8ClampedArray {
 
 impl RetType for Uint8ClampedArray {
     const DESC: TypeDesc = TypeDesc::Uint8ClampedArray;
-    const PLAIN: bool = true;
     type Ret<'gc> = &'gc JsEdge;
     no_pending!();
 
@@ -6946,7 +6830,6 @@ pub enum CanvasStyleRet<'gc> {
 }
 
 impl ArgType for CanvasStyleValue {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::StringOr(CANVAS_STYLE_OBJECTS);
     type Taken<T: FrontTypes> = CanvasStyleTaken<T::Node, T::Str>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = CanvasStyleParam<'a, 'gc>;
@@ -6982,7 +6865,6 @@ impl ArgType for CanvasStyleValue {
 
 impl RetType for CanvasStyleValue {
     const DESC: TypeDesc = TypeDesc::StringOr(CANVAS_STYLE_OBJECTS);
-    const PLAIN: bool = true;
     type Ret<'gc> = CanvasStyleRet<'gc>;
     no_prepared!();
     type Pending<F: FrontTypes> = (Option<F::PendingString>, Option<F::PendingObject>);
@@ -7031,7 +6913,6 @@ fn canvas_image_source_error(index: usize) -> ApiError {
 
 impl ArgType for CanvasImageSource {
     const DESC: TypeDesc = TypeDesc::Union(&["HTMLImageElement", "HTMLCanvasElement"]);
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = T::Node;
     type Param<'a, 'gc, T: FrontTypes + 'a> = NodeRef<'gc>;
 
@@ -7076,7 +6957,6 @@ pub enum Path2dOrString<'a, 'gc> {
 }
 
 impl ArgType for OptionalPath2dOrString {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::StringOr(&["Path2D"]);
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<Path2dOrStringTaken<T::Node, T::Str>>;
@@ -7113,7 +6993,6 @@ impl ArgType for OptionalPath2dOrString {
 pub struct RoundRectRadii;
 
 impl ArgType for RoundRectRadii {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Vec<Radius>;
@@ -7183,7 +7062,6 @@ impl Default for AnimationOptions {
 }
 
 impl ArgType for AnimationOptions {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = AnimationOptions;
@@ -7207,7 +7085,6 @@ impl ArgType for AnimationOptions {
 pub struct EffectOptions;
 
 impl ArgType for EffectOptions {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = AnimationOptions;
@@ -7231,7 +7108,6 @@ impl ArgType for EffectOptions {
 pub struct OptionalTimingArg;
 
 impl ArgType for OptionalTimingArg {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = animation::OptionalTiming;
@@ -7256,7 +7132,6 @@ impl ArgType for OptionalTimingArg {
 pub struct TimelineArg;
 
 impl ArgType for TimelineArg {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = bool;
@@ -7290,7 +7165,6 @@ pub struct PromiseOfAnimation;
 
 impl RetType for PromiseOfAnimation {
     const DESC: TypeDesc = TypeDesc::Promise("Animation");
-    const PLAIN: bool = true;
     type Ret<'gc> = AnimationPromise<'gc>;
     no_prepared!();
     /// The animation's object rooted, its interface, which promise and
@@ -7392,7 +7266,6 @@ impl ObjectType for dom::DocumentTimeline {
 pub struct Keyframes;
 
 impl ArgType for Keyframes {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<animation::ScriptKeyframes>;
@@ -7418,7 +7291,6 @@ pub struct BlobCallback;
 
 impl ArgType for BlobCallback {
     const DESC: TypeDesc = TypeDesc::Function("BlobCallback");
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Callback<T::Callback>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Callback<T::Callback>;
 
@@ -7450,7 +7322,6 @@ pub enum HiddenValue<S> {
 pub struct Hidden;
 
 impl ArgType for Hidden {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     type Taken<T: FrontTypes> = Option<HiddenValue<T::Str>>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Option<HiddenValue<&'a str>>;
@@ -7494,7 +7365,6 @@ pub enum HiddenState {
 
 impl RetType for Hidden {
     const DESC: TypeDesc = TypeDesc::Any;
-    const PLAIN: bool = true;
     type Ret<'gc> = HiddenState;
     pending!(PendingString, finish_string);
 
@@ -7519,7 +7389,6 @@ impl RetType for Hidden {
 pub struct NumberIfNumber;
 
 impl ArgType for NumberIfNumber {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<f64>;
@@ -7551,7 +7420,6 @@ const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 
 impl ArgType for OptionalClampedI64 {
     const DESC: TypeDesc = TypeDesc::Double;
-    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<i64>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Option<i64>;
@@ -7609,7 +7477,6 @@ pub struct ArrayViewArg {
 pub struct ArrayView;
 
 impl ArgType for ArrayView {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = false;
     type Taken<T: FrontTypes> = ArrayViewArg;
@@ -7634,7 +7501,6 @@ impl ArgType for ArrayView {
 pub struct FilledView;
 
 impl RetType for FilledView {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     type Ret<'gc> = Vec<u8>;
     no_prepared!();
@@ -7669,7 +7535,6 @@ pub struct CloneParam<'a, 'gc> {
 }
 
 impl ArgType for CloneValue {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = false;
     type Taken<T: FrontTypes> = CloneTaken<T::Node>;
@@ -7706,7 +7571,6 @@ pub struct Cloned;
 
 impl RetType for Cloned {
     const DESC: TypeDesc = TypeDesc::Any;
-    const PLAIN: bool = true;
     type Ret<'gc> = (dom::SerializedMessage, Vec<Gc<'gc, dom::EventTargetImpl>>);
     no_prepared!();
     type Pending<F: FrontTypes> = (dom::SerializedMessage, Vec<(ObjectRoot, usize)>);
@@ -7746,7 +7610,6 @@ pub enum ReaderPending<S> {
 
 impl RetType for ReaderResult {
     const DESC: TypeDesc = TypeDesc::Any;
-    const PLAIN: bool = true;
     type Ret<'gc> = Gc<'gc, dom::EventTargetImpl>;
     no_prepared!();
     type Pending<F: FrontTypes> = Option<ReaderPending<F::PendingString>>;
@@ -7790,8 +7653,6 @@ pub enum StringOrNumber {
 /// A dictionary member `(DOMString or DOMHighResTimeStamp)` with no
 /// default: none if it is missing.
 impl DictMember for Option<StringOrNumber> {
-    const PLAIN: bool = true;
-
     fn read<F: Front>(
         front: &mut F,
         dict: &F::Dict,
@@ -7807,7 +7668,6 @@ impl DictMember for Option<StringOrNumber> {
 pub struct Serialized(pub Vec<u8>);
 
 impl DictMember for Option<Serialized> {
-    const PLAIN: bool = true;
     fn read<F: Front>(
         front: &mut F,
         dict: &F::Dict,
@@ -7834,7 +7694,6 @@ pub enum MeasureStartArg<S> {
 }
 
 impl ArgType for MeasureStart {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Any;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = MeasureStartArg<T::Str>;
@@ -7878,7 +7737,6 @@ pub struct PerformanceObserverCallback;
 
 impl ArgType for PerformanceObserverCallback {
     const DESC: TypeDesc = TypeDesc::Function("PerformanceObserverCallback");
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Callback<T::Callback>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Callback<T::Callback>;
 
@@ -7901,7 +7759,6 @@ pub struct EntryDetail;
 
 impl RetType for EntryDetail {
     const DESC: TypeDesc = TypeDesc::Any;
-    const PLAIN: bool = true;
     type Ret<'gc> = Gc<'gc, dom::PerformanceEntry>;
     no_prepared!();
     type Pending<F: FrontTypes> = Persistent<dom::PerformanceEntry>;
@@ -8190,7 +8047,6 @@ pub struct AlwaysNull;
 
 impl RetType for AlwaysNull {
     const DESC: TypeDesc = TypeDesc::Any;
-    const PLAIN: bool = true;
     type Ret<'gc> = ();
     no_pending!();
 
@@ -8284,7 +8140,6 @@ pub enum StringPairsInit<'a> {
 }
 
 impl ArgType for StringPairs {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::StringPairs;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<StringPairsArg>;
@@ -8325,7 +8180,6 @@ pub enum BlobPart<'a, 'gc> {
 }
 
 impl ArgType for BlobParts {
-    const PLAIN: bool = true;
     const DESC: TypeDesc = TypeDesc::Sequence("BlobPart");
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<Vec<BlobPartArg<T::Node>>>;
@@ -8359,7 +8213,6 @@ pub struct PromiseOfUndefined;
 
 impl RetType for PromiseOfUndefined {
     const DESC: TypeDesc = TypeDesc::Promise("undefined");
-    const PLAIN: bool = true;
     type Ret<'gc> = ();
     no_prepared!();
     type Pending<F: FrontTypes> = ();
@@ -8397,7 +8250,6 @@ pub struct PromiseOfBytes<const VIEW: bool>;
 
 impl<const VIEW: bool> RetType for PromiseOfBytes<VIEW> {
     const DESC: TypeDesc = TypeDesc::Promise(if VIEW { "Uint8Array" } else { "ArrayBuffer" });
-    const PLAIN: bool = true;
     type Ret<'gc> = Vec<u8>;
     no_prepared!();
     type Pending<F: FrontTypes> = Vec<u8>;
@@ -8426,7 +8278,6 @@ pub struct EmptyStringDefault;
 
 impl ArgType for EmptyStringDefault {
     const DESC: TypeDesc = TypeDesc::String;
-    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<T::Str>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = &'a str;
@@ -8455,7 +8306,6 @@ pub struct OptionalString;
 
 impl ArgType for OptionalString {
     const DESC: TypeDesc = TypeDesc::String;
-    const PLAIN: bool = true;
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<T::Str>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = Option<&'a str>;
@@ -8480,7 +8330,6 @@ impl ArgType for OptionalString {
 /// `DOMString?`.
 impl ArgType for Option<DomString> {
     const DESC: TypeDesc = TypeDesc::NullableString;
-    const PLAIN: bool = true;
     /// An optional one's missing is undefined, which is none, as null.
     const UNDEFINED_IS_DEFAULT: bool = true;
     type Taken<T: FrontTypes> = Option<T::Str>;
@@ -8502,7 +8351,6 @@ impl ArgType for Option<DomString> {
 
 impl RetType for Option<DomString> {
     const DESC: TypeDesc = TypeDesc::NullableString;
-    const PLAIN: bool = true;
     type Ret<'gc> = NullableStr<'gc>;
     pending!(PendingString, finish_string);
 
@@ -8529,7 +8377,6 @@ pub struct LegacyNullToEmptyString;
 
 impl ArgType for LegacyNullToEmptyString {
     const DESC: TypeDesc = TypeDesc::NullableString;
-    const PLAIN: bool = true;
     type Taken<T: FrontTypes> = Option<T::Str>;
     type Param<'a, 'gc, T: FrontTypes + 'a> = &'a str;
 
@@ -8549,7 +8396,6 @@ impl ArgType for LegacyNullToEmptyString {
 
 impl RetType for LegacyNullToEmptyString {
     const DESC: TypeDesc = TypeDesc::String;
-    const PLAIN: bool = true;
     type Ret<'gc> = DomStr<'gc>;
     pending!(PendingString, finish_string);
 
@@ -8599,161 +8445,6 @@ pub(crate) fn take_node<I: Interface, F: Front>(front: &mut F, index: usize) -> 
     }
 }
 
-/// The `Front` methods a `PLAIN` member's call may reach (its own code's,
-/// and its types' `take` and `prepare`): what a front end that is given
-/// only `PLAIN` members has. With `PLAIN_OP_METHODS`, what `PLAIN` means;
-/// the tests check the types and the members' functions against them.
-pub const PLAIN_FRONT_METHODS: &[&str] = &[
-    "read",
-    "mutate",
-    "has_args",
-    "reading",
-    "whole",
-    "construct",
-    "prepare_window",
-    "throw",
-    "finish",
-    "finish_string",
-    "finish_node",
-    "finish_number",
-    "finish_object",
-    "finish_handler",
-    "finish_image_data_pixels",
-    "finish_upgrading",
-    "finish_pending_promise",
-    "finish_resolved_constructor",
-    "finish_objects",
-    "finish_frozen_objects",
-    "finish_strings",
-    "finish_names",
-    "finish_frozen_strings",
-    "finish_doubles",
-    "finish_numbers",
-    "finish_dictionary",
-    "finish_records",
-    "finish_entry_detail",
-    "finish_reader_buffer",
-    "finish_history_state",
-    "finish_cloned",
-    "finish_resolved",
-    "finish_resolved_string",
-    "finish_resolved_json",
-    "finish_resolved_undefined",
-    "finish_resolved_bytes",
-    "finish_animation_promise",
-    "reject",
-    "compile_event_handler",
-    "invoke_ce_reactions",
-    "arg_count",
-    "is_undefined",
-    "is_null_or_undefined",
-    "is_dictionary_like",
-    "string_arg",
-    "nullable_string_arg",
-    "legacy_null_string_arg",
-    "bool_arg",
-    "i32_arg",
-    "u32_arg",
-    "f64_arg",
-    "node_arg",
-    "node_or_string_arg",
-    "node_or_long_arg",
-    "object_arg",
-    "target_arg",
-    "callback_arg",
-    "any_arg",
-    "abort_reason_arg",
-    "rest_arg",
-    "dict_any",
-    "dict_object",
-    "dict_nullable_object",
-    "dict_nullable_target",
-    "dict_body",
-    "dict_signal",
-    "uint8_clamped_arg",
-    "serialized_state_arg",
-    "message_arg",
-    "static_range_init",
-    "intersection_observer_init",
-    "intersection_entry_init",
-    "objects_arg",
-    "byte_string_pairs_arg",
-    "object_if",
-    "body_arg",
-    "json_arg",
-    "doubles_arg",
-    "get_html_options",
-    "round_rect_radii_arg",
-    "animation_options_arg",
-    "effect_options_arg",
-    "optional_timing_arg",
-    "timeline_arg",
-    "keyframes_arg",
-    "number_if",
-    "bool_if",
-    "clone_arg",
-    "string_pairs_arg",
-    "blob_parts_arg",
-    "array_view_arg",
-    "dict_headers",
-    "dict_is_null",
-    "dict_serialized",
-    "finish_filled_view",
-    "function_arg",
-    "nullable_function_arg",
-    "event_handler_arg",
-    "timer_handler_arg",
-    "dict_arg",
-    "dict_bool",
-    "dict_number",
-    "dict_string",
-    "dict_nullable_string",
-    "dict_strings",
-    "dict_string_or_number",
-    "prepare_new_node",
-    "prepare_node_like_this",
-    "foresee_element",
-];
-
-/// The `OpFront` methods a `PLAIN` member's call may reach: its types'
-/// `param` and `give`, and its function's, if it is given the front end's
-/// side in the operation. (`current_window` is none by default: a `PLAIN`
-/// member has none found for it.)
-pub const PLAIN_OP_METHODS: &[&str] = &[
-    "str_param",
-    "this_as",
-    "node",
-    "object",
-    "target",
-    "same_callback",
-    "store_callback",
-    "construct_object",
-    "construct_html",
-    "new_target_number",
-    "is_new_target",
-    "with_array_bytes",
-    "store_any",
-    "store_rest",
-    "callback_number",
-    "current_window",
-    "ret_undefined",
-    "ret_any",
-    "ret_any_or_null",
-    "ret_any_or_undefined",
-    "ret_null",
-    "ret_bool",
-    "ret_u32",
-    "ret_i32",
-    "ret_f64",
-    "ret_string",
-    "ret_fresh_string",
-    "ret_name",
-    "ret_node",
-    "ret_object",
-    "ret_new_node",
-    "ret_construct",
-];
-
 /// A member's typed path, as a type of its own: `declare!` makes one for
 /// each member.
 pub trait TypedMember: 'static {
@@ -8768,15 +8459,6 @@ pub trait TypedMember: 'static {
     /// (`for_each_member!`) converts them as.
     type Args;
     type Ret: RetType;
-    /// Whether its call reaches the front end through the methods every
-    /// front end has (`Front`'s and `OpFront`'s with no default, and the
-    /// ones whose default calls only those), `Front::finish` and
-    /// `Front::invoke_ce_reactions` alone: a getter, a setter or a method
-    /// of an object (not static), its arguments and result `PLAIN`, its
-    /// function given no front end. An engine may call such a member
-    /// through a front end that has nothing else (as it expands each
-    /// member's own code).
-    const PLAIN: bool = false;
 
     /// One call, through `front` (which opens its operations).
     fn call<F: Front>(front: &mut F);

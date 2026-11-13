@@ -19,7 +19,7 @@ use dom_api::{CALLBACK_INTERFACES, INTERFACES, MemberKind, TypedMember, TypedVis
 
 use crate::cross_origin::{self, CrossOriginMember};
 use crate::exception;
-use crate::front::{Checked, IndexArgs, V8Front};
+use crate::front::{IndexArgs, V8Front};
 use crate::named::{IndexedSetter, NamedCalls, NamedProperties};
 use crate::state::{self, Scope, State};
 use crate::window::CachedAccessor;
@@ -295,15 +295,12 @@ impl<'s> TypedVisitor for Constructor<'_, 's, '_> {
         let configure = |builder: v8::FunctionBuilder<'s, v8::FunctionTemplate>| {
             builder.length(i32::try_from(length).expect("a few parameters"))
         };
-        // A plain constructor's callback is given V8's callback info
-        // alone, as a plain member's (`InfoConstructor`).
-        self.template = Some(if const { M::PLAIN } {
-            bindings::state_info_function_template::<State, InfoConstructor<M>>(
-                self.scope, configure,
-            )
-        } else {
-            bindings::state_info_function_template::<State, Member<M>>(self.scope, configure)
-        });
+        // Its callback is given V8's callback info alone, as a member's
+        // (`InfoConstructor`).
+        self.template = Some(bindings::state_info_function_template::<
+            State,
+            InfoConstructor<M>,
+        >(self.scope, configure));
     }
 }
 
@@ -492,23 +489,23 @@ fn unforgeable() -> v8::PropertyAttribute {
 
 impl TypedVisitor for Members<'_, '_, '_> {
     fn getter<M: TypedMember>(&mut self) {
-        self.function::<M, Member<M>>(true);
+        self.function::<M, InfoMember<M>>(true);
     }
 
     fn setter<M: TypedMember>(&mut self) {
-        self.function::<M, Member<M>>(true);
+        self.function::<M, InfoMember<M>>(true);
     }
 
     fn method<M: TypedMember>(&mut self) {
-        self.function::<M, Member<M>>(true);
+        self.function::<M, InfoMember<M>>(true);
     }
 
     fn static_member<M: TypedMember>(&mut self) {
-        self.function::<M, Member<M>>(true);
+        self.function::<M, InfoMember<M>>(true);
     }
 
     fn observable<M: TypedMember>(&mut self) {
-        self.function::<M, Member<M>>(true);
+        self.function::<M, InfoMember<M>>(true);
     }
 
     // A cross-origin property's (WebIDL's `[CrossOrigin]`): called on a
@@ -524,7 +521,7 @@ impl TypedVisitor for Members<'_, '_, '_> {
         install_indexed::<M>(self.scope, self.interface, self.instance, self.prototype);
         // Anonymous (`#[indexed(getter)]`): the interceptor's alone.
         if !INTERFACES[M::INTERFACE].members[M::MEMBER].name.is_empty() {
-            self.function::<M, Member<M>>(true);
+            self.function::<M, InfoMember<M>>(true);
         }
     }
 
@@ -560,17 +557,12 @@ impl Members<'_, '_, '_> {
     }
 
     /// An attribute's accessor or an operation: its function, its
-    /// callback `C`, its receiver checked (as the typed path takes it to
-    /// be) if `checked` and it has one.
-    fn function<
-        M: TypedMember,
-        C: bindings::StateMethod<State>
-            + bindings::StateInfoMethod<State>
-            + bindings::StateInfoFunction<State>,
-    >(
-        &mut self,
-        checked: bool,
-    ) {
+    /// callback `C` (given V8's callback info alone: `InfoMember`, or a
+    /// cross-origin property's, `CrossOriginMember`, whose getter is
+    /// called in its receiver's realm, where a wrapper it makes is made),
+    /// its receiver checked (as the typed path takes it to be) if
+    /// `checked` and it has one.
+    fn function<M: TypedMember, C: bindings::StateInfoMethod<State>>(&mut self, checked: bool) {
         if !self.takes::<M>() {
             return;
         }
@@ -613,53 +605,25 @@ impl Members<'_, '_, '_> {
         let cached = (M::KIND == MemberKind::Getter)
             .then(|| CachedAccessor::of(INTERFACES[M::INTERFACE].name, M::NAME))
             .flatten();
-        // With a signature, its callback is given the receiver V8 checked
-        // against it (`bindings::StateMethod`).
+        // With a signature, its callback's info has the receiver V8
+        // checked against it.
         let function = match (cached, member_signature) {
             (Some(cached), Some(signature)) => {
                 let key = cached.key(self.scope);
                 bindings::state_cached_getter_template::<State, C>(self.scope, key, signature)
             }
             (Some(_), None) => unreachable!("a cached accessor is an instance's"),
-            // A plain member's callback is given V8's callback info
-            // alone (`InfoMember`), known as its code is expanded; not a
-            // cross-origin property's (`checked`: `C` is `Member<M>`),
-            // whose getter is called in its receiver's realm
-            // (`CrossOriginMember`: where a wrapper it makes is made).
-            (None, Some(signature))
-                if checked
-                    && const { M::PLAIN }
-                    && matches!(
-                        M::KIND,
-                        MemberKind::Getter | MemberKind::Setter | MemberKind::Method
-                    ) =>
-            {
-                bindings::state_info_method_template::<State, InfoMember<M>>(
-                    self.scope,
-                    signature,
-                    |builder| member_builder(builder, None, length),
-                )
-            }
-            // Another member's, and a cross-origin property's: given
-            // the info alone too, its whole call in a scope made for it.
             (None, Some(signature)) => {
                 bindings::state_info_method_template::<State, C>(self.scope, signature, |builder| {
                     member_builder(builder, None, length)
                 })
             }
-            // A plain static operation's, as a plain member's: its info
-            // has no receiver (`InfoStatic`).
-            (None, None) if checked && const { M::PLAIN } => {
-                bindings::state_info_function_template::<State, InfoStatic<M>>(
-                    self.scope,
-                    |builder| member_builder(builder, None, length),
-                )
-            }
-            (None, None) => {
-                bindings::state_info_function_template::<State, C>(self.scope, |builder| {
-                    member_builder(builder, None, length)
-                })
-            }
+            // A static operation's: its info has no receiver
+            // (`InfoStatic`). None is a cross-origin property.
+            (None, None) => bindings::state_info_function_template::<State, InfoStatic<M>>(
+                self.scope,
+                |builder| member_builder(builder, None, length),
+            ),
         };
         if checked && !desc.is_static {
             checks_receiver(function);
@@ -676,7 +640,7 @@ impl Members<'_, '_, '_> {
             && M::KIND == MemberKind::Method
             && M::NAME == "item"
         {
-            bindings::set_state_call_as_function_handler::<State, Member<M>>(
+            bindings::set_state_call_as_function_handler::<State, LegacyCaller<M>>(
                 self.scope,
                 self.instance,
             );
@@ -882,60 +846,23 @@ fn member_builder<'s>(
         .constructor_behavior(v8::ConstructorBehavior::Throw)
 }
 
-/// A member's callback: its typed path, through V8's front end, on the
-/// isolate's DOM (its template made where it is, the state borrowed with no
-/// check); V8 told of the DOM's growth after a call that may allocate.
-pub(crate) struct Member<M>(PhantomData<M>);
+/// A legacy caller's callback (an `[IsHTMLDDA]` object called): its
+/// member's typed path through V8's front end, in a scope made for the
+/// call, with no word of its receiver (the object called, whatever
+/// called it), which is checked whole as it is unwrapped.
+struct LegacyCaller<M>(PhantomData<M>);
 
-/// A call with no word of its receiver (a constructor's, a static
-/// member's, a legacy caller's, a form of such an overload set's): checked
-/// whole as it is unwrapped.
-impl<M: TypedMember> bindings::StateCallback<State> for Member<M> {
-    fn call<'s>(
-        scope: Scope<'_, 's, '_>,
-        args: v8::FunctionCallbackArguments<'s>,
-        rv: v8::ReturnValue<'s>,
-    ) {
-        call_member::<M, _>(scope, &args, rv);
-    }
-}
-
-/// A call whose receiver V8 checked against the function's signature (a
-/// getter's, a setter's, a method's that isn't static).
-impl<M: TypedMember> bindings::StateMethod<State> for Member<M> {
-    fn call<'s>(
-        scope: Scope<'_, 's, '_>,
-        args: v8::FunctionCallbackArguments<'s>,
-        this: bindings::Receiver<'s>,
-        rv: v8::ReturnValue<'s>,
-    ) {
-        call_member::<M, _>(scope, &Checked { args, this }, rv);
-    }
-}
-
-/// A member that isn't plain, given V8's callback info alone as a plain
-/// one is: its whole call on the front end of a scope, made for it (what
-/// its types ask needs one: another realm's window found).
-impl<M: TypedMember> bindings::StateInfoMethod<State> for Member<M> {
-    fn call(mut info: bindings::StateInfo<'_, State>) {
-        let (args, this) = (info.args(), info.receiver());
-        info.with_scope(|scope, rv| call_member::<M, _>(scope, &Checked { args, this }, rv));
-    }
-}
-
-/// As a method's, with no word of its receiver (a static member's, a
-/// constructor's, a legacy factory's).
-impl<M: TypedMember> bindings::StateInfoFunction<State> for Member<M> {
+impl<M: TypedMember> bindings::StateInfoFunction<State> for LegacyCaller<M> {
     fn call(mut info: bindings::StateInfo<'_, State, bindings::Unsigned>) {
         let args = info.args();
         info.with_scope(|scope, rv| call_member::<M, _>(scope, &args, rv));
     }
 }
 
-/// A plain member's callback (`TypedMember::PLAIN`): its typed path
-/// through the front end that is V8's callback info
-/// (`info_front::InfoFront`), its receiver checked against the function's
-/// signature.
+/// A member's callback: its typed path through the front end that is
+/// V8's callback info (`info_front::InfoFront`), on the isolate's DOM,
+/// its receiver checked against the function's signature; V8 told of the
+/// DOM's growth after a call that may allocate.
 pub(crate) struct InfoMember<M>(PhantomData<M>);
 
 impl<M: TypedMember> bindings::StateInfoMethod<State> for InfoMember<M> {
@@ -948,7 +875,7 @@ impl<M: TypedMember> bindings::StateInfoMethod<State> for InfoMember<M> {
     }
 }
 
-/// A plain static operation's callback (or a static attribute's getter's):
+/// A static operation's callback (or a static attribute's getter's):
 /// as `InfoMember`, with no receiver (its function has no signature).
 pub(crate) struct InfoStatic<M>(PhantomData<M>);
 
@@ -962,9 +889,10 @@ impl<M: TypedMember> bindings::StateInfoFunction<State> for InfoStatic<M> {
     }
 }
 
-/// A plain constructor's callback: as `InfoStatic` (a constructor's
-/// function has no signature), its `this` the new object V8 made for the
-/// call, which the object it constructs is wrapped by.
+/// A constructor's callback (a legacy factory function's too): as
+/// `InfoStatic` (a constructor's function has no signature), its `this`
+/// the new object V8 made for the call, which the object it constructs is
+/// wrapped by.
 pub(crate) struct InfoConstructor<M>(PhantomData<M>);
 
 impl<M: TypedMember> bindings::StateInfoFunction<State> for InfoConstructor<M> {
@@ -975,8 +903,9 @@ impl<M: TypedMember> bindings::StateInfoFunction<State> for InfoConstructor<M> {
     }
 }
 
-/// One call of `M` through V8's front end, V8 told of the DOM's growth
-/// after one that may allocate.
+/// One call of `M` through V8's front end, in a scope (a cross-origin
+/// property's, a legacy caller's), V8 told of the DOM's growth after one
+/// that may allocate.
 #[inline(always)]
 pub(crate) fn call_member<'s, M: TypedMember, A: crate::front::CallArgs<'s>>(
     scope: Scope<'_, 's, '_>,
@@ -990,36 +919,23 @@ pub(crate) fn call_member<'s, M: TypedMember, A: crate::front::CallArgs<'s>>(
     }
 }
 
-/// A form's call (its `Member<M>`'s), for its overload set's function:
-/// with no word of its receiver (a constructor's).
-type Call = for<'s> fn(Scope<'_, 's, '_>, v8::FunctionCallbackArguments<'s>, v8::ReturnValue<'s>);
 /// A form's call given V8's callback info alone (a method's, with its
-/// receiver checked, and a static operation's): its `InfoMember<M>`'s or
-/// `InfoStatic<M>`'s if it is plain, else its `Member<M>`'s in a scope
-/// made for it.
+/// receiver checked, and a static operation's or a constructor's): its
+/// own function's callback.
 type InfoCall = for<'s> fn(bindings::StateInfo<'s, State>);
 type InfoStaticCall = for<'s> fn(bindings::StateInfo<'s, State, bindings::Unsigned>);
 
-/// `M`'s call from a method's info: through the front end that is the
-/// info if `M` is plain (known as this is expanded), else as before.
+/// `M`'s call from a method's info.
 fn info_call<M: TypedMember>(info: bindings::StateInfo<'_, State>) {
-    if const { M::PLAIN } {
-        <InfoMember<M> as bindings::StateInfoMethod<State>>::call(info);
-    } else {
-        <Member<M> as bindings::StateInfoMethod<State>>::call(info);
-    }
+    <InfoMember<M> as bindings::StateInfoMethod<State>>::call(info);
 }
 
 /// As `info_call`, a static operation's or a constructor's.
 fn info_static_call<M: TypedMember>(info: bindings::StateInfo<'_, State, bindings::Unsigned>) {
-    if const { M::PLAIN } {
-        if M::KIND == MemberKind::Constructor {
-            <InfoConstructor<M> as bindings::StateInfoFunction<State>>::call(info);
-        } else {
-            <InfoStatic<M> as bindings::StateInfoFunction<State>>::call(info);
-        }
+    if M::KIND == MemberKind::Constructor {
+        <InfoConstructor<M> as bindings::StateInfoFunction<State>>::call(info);
     } else {
-        <Member<M> as bindings::StateInfoFunction<State>>::call(info);
+        <InfoStatic<M> as bindings::StateInfoFunction<State>>::call(info);
     }
 }
 
@@ -1040,7 +956,6 @@ enum Overload<'s> {
 struct OverloadSet {
     interface: usize,
     members: Vec<usize>,
-    calls: Vec<Call>,
     info_calls: Vec<(InfoCall, InfoStaticCall)>,
 }
 
@@ -1077,7 +992,6 @@ impl TypedVisitor for CollectOverloads {
         let same = |member: &dom_api::Member| {
             member.kind == M::KIND && member.name == M::NAME && member.is_static == this.is_static
         };
-        let call: Call = <Member<M> as bindings::StateCallback<State>>::call;
         let info_call: (InfoCall, InfoStaticCall) = (info_call::<M>, info_static_call::<M>);
         let first = members.iter().position(same).expect("this member is one");
         match self
@@ -1087,13 +1001,11 @@ impl TypedVisitor for CollectOverloads {
         {
             Some(set) => {
                 set.members.push(M::MEMBER);
-                set.calls.push(call);
                 set.info_calls.push(info_call);
             }
             None => self.0.push(OverloadSet {
                 interface: M::INTERFACE,
                 members: vec![M::MEMBER],
-                calls: vec![call],
                 info_calls: vec![info_call],
             }),
         }
@@ -1113,17 +1025,10 @@ fn overload_set(interface: usize, member: usize) -> Option<usize> {
                     .members
                     .iter()
                     .copied()
-                    .zip(
-                        set.calls
-                            .iter()
-                            .copied()
-                            .zip(set.info_calls.iter().copied()),
-                    )
+                    .zip(set.info_calls.iter().copied())
                     .collect();
                 forms.sort_by_key(|(member, _)| *member);
-                let (members, calls): (Vec<_>, Vec<_>) = forms.into_iter().unzip();
-                set.members = members;
-                (set.calls, set.info_calls) = calls.into_iter().unzip();
+                (set.members, set.info_calls) = forms.into_iter().unzip();
             }
             collect.0
         })
@@ -1153,10 +1058,9 @@ fn overloaded_template<'s>(
             .data(data.into())
             .length(i32::try_from(length).expect("a few parameters"))
     };
-    // A method's and a static operation's are given V8's callback info
-    // alone, as a plain member's (the form then called is too, if it is
-    // one); with a signature, the form is given the receiver V8 checked
-    // against it.
+    // Given V8's callback info alone, as a member's own function (the
+    // form then called is too); with a signature, the form's info has the
+    // receiver V8 checked against it.
     match kind {
         Overload::Method(signature) => {
             let template = bindings::state_info_method_template::<State, Overloaded>(
@@ -1189,18 +1093,6 @@ pub(crate) fn checks_receiver(template: v8::Local<'_, v8::FunctionTemplate>) {
 /// called as its own function is; a `TypeError` for a number of them no
 /// form takes.
 struct Overloaded;
-
-impl bindings::StateCallback<State> for Overloaded {
-    fn call<'s>(
-        scope: Scope<'_, 's, '_>,
-        args: v8::FunctionCallbackArguments<'s>,
-        rv: v8::ReturnValue<'s>,
-    ) {
-        if let Some((scope, set, form)) = Overloaded::form(scope, &args) {
-            (set.calls[form])(scope, args, rv);
-        }
-    }
-}
 
 /// An overloaded method's (one with a signature): its form given the
 /// info, whose receiver V8 checked.
@@ -1253,38 +1145,6 @@ impl Overloaded {
                         &format!("Failed to execute '{}': {message}", forms[0].name),
                     );
                 });
-                None
-            }
-        }
-    }
-
-    /// The call's overload set and the form its arguments pick; `None`
-    /// with a `TypeError` thrown for a number of them no form takes.
-    fn form<'a, 's, 'i>(
-        mut scope: Scope<'a, 's, 'i>,
-        args: &v8::FunctionCallbackArguments<'s>,
-    ) -> Option<(Scope<'a, 's, 'i>, &'static OverloadSet, usize)> {
-        let set = args
-            .data()
-            .uint32_value(scope.scope())
-            .and_then(|set| usize::try_from(set).ok())?;
-        let set = &OVERLOADS.get().expect("made with its template")[set];
-        let members = INTERFACES[set.interface].members;
-        let forms: Vec<&dom_api::Member> =
-            set.members.iter().map(|&member| &members[member]).collect();
-        let given = usize::try_from(args.length()).unwrap_or(0);
-        let form = dom_api::resolve_overload(&forms, given, |index, name| {
-            let value = args.get(i32::try_from(index).unwrap_or(i32::MAX));
-            implements(scope.scope(), value, name)
-                .expect("an overload's interface `implements` knows")
-        });
-        match form {
-            Ok(form) => Some((scope, set, form)),
-            Err(message) => {
-                crate::throw_type_error(
-                    scope.scope(),
-                    &format!("Failed to execute '{}': {message}", forms[0].name),
-                );
                 None
             }
         }
@@ -1385,24 +1245,14 @@ fn set_indexed<'s, M: TypedMember>(
         .any(|member| member.kind == MemberKind::IndexedSetter);
     let data =
         v8::Integer::new_from_unsigned(scope, u32::try_from(interface).expect("a small table"));
-    // A plain getter's interceptor is given V8's callback info alone, as
-    // a plain member's function (`StateInfoIndexedGetter`).
-    if const { M::PLAIN } {
-        bindings::set_state_info_indexed_getter::<State, Indexed<M>, IndexedSetter>(
-            scope,
-            instance,
-            data.into(),
-            setter,
-        );
-    } else if setter {
-        bindings::set_state_indexed_properties::<State, Indexed<M>, IndexedSetter>(
-            scope,
-            instance,
-            data.into(),
-        );
-    } else {
-        bindings::set_state_indexed_getter::<State, Indexed<M>>(scope, instance, data.into());
-    }
+    // The getter's interceptor is given V8's callback info alone, as a
+    // member's function (`StateInfoIndexedGetter`).
+    bindings::set_state_info_indexed_getter::<State, Indexed<M>, IndexedSetter>(
+        scope,
+        instance,
+        data.into(),
+        setter,
+    );
 }
 
 /// Whether `INTERFACES[interface]` (or an ancestor) has an indexed getter.
@@ -1757,10 +1607,13 @@ impl TypedVisitor for Factory<'_, '_, '_> {
             return;
         }
         let length = INTERFACES[M::INTERFACE].members[M::MEMBER].required();
-        self.template = Some(bindings::state_info_function_template::<State, Member<M>>(
-            self.scope,
-            |builder| builder.length(i32::try_from(length).expect("a few parameters")),
-        ));
+        // Called as a constructor, its `new.target` read as one's.
+        self.template = Some(bindings::state_info_function_template::<
+            State,
+            InfoConstructor<M>,
+        >(self.scope, |builder| {
+            builder.length(i32::try_from(length).expect("a few parameters"))
+        }));
     }
 }
 

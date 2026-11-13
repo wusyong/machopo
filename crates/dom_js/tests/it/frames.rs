@@ -1068,3 +1068,27 @@ fn the_globals_document_is_cached_and_follows_the_window() {
         "true / true / true / true / true / true / https://example.test/a/next.html / true"
     );
 }
+
+/// A blob's read is a task of the blob's relevant realm's window (File
+/// API's "read the blob"), not of the realm whose `text` was called: one
+/// of a removed iframe's blob never settles, though the top window's
+/// method read it; the top window's blob read with the iframe's method
+/// settles.
+#[test]
+fn a_blob_read_is_a_task_of_the_blobs_realm() {
+    let mut engine = engine();
+    run(
+        &mut engine,
+        "var f = document.body.appendChild(document.createElement('iframe'));
+         var w = f.contentWindow;
+         var theirs = new w.Blob(['theirs']), ours = new Blob(['ours']);
+         var read = w.Blob.prototype.text;
+         Blob.prototype.text.call(theirs).then(text => log.push(text));
+         read.call(ours).then(text => log.push(text));
+         document.body.removeChild(f);",
+    );
+    engine.perform_microtask_checkpoint();
+    engine.run_due_tasks();
+    engine.perform_microtask_checkpoint();
+    assert_eq!(log(&mut engine), "ours");
+}

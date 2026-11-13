@@ -1,5 +1,4 @@
-//! The plain members' calls (`dom_api::TypedMember::PLAIN`), through
-//! V8's callback info alone: no scope made for a call that returns at
+//! Members' calls through V8's callback info alone: no scope made for a call that returns at
 //! once, one for what allocates in V8, throws or runs script, with the
 //! same results.
 
@@ -712,35 +711,72 @@ fn a_constructed_objects_wrapper_is_counted() {
     assert_eq!(env.wrappers_made() - before, 1);
 }
 
-/// What a plain member's call may reach (`dom_api::PLAIN_FRONT_METHODS`,
-/// `PLAIN_OP_METHODS`: what its types and its function are checked
-/// against) is what the front end given the callback's info alone has:
-/// each is a method of its own there, not the trait's default (which, of
-/// a method a front end must have to be given such a member, panics).
+/// Every method a member's call may reach on its front end is the info
+/// front end's own, not the trait's default (which, of a method a front
+/// end must have to be given such a member, panics): all of `Front`'s
+/// but the ones that only the whole front end runs (a member that leaves
+/// script to run is handed to it, `Front::whole`), and all of
+/// `OpFront`'s.
 #[test]
-fn the_plain_methods_are_the_info_front_ends_own() {
-    let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/info_front.rs"))
-        .expect("the front end's source");
+fn the_front_ends_methods_are_the_info_front_ends_own() {
+    let read = |path: &str| {
+        std::fs::read_to_string(format!("{}/{path}", env!("CARGO_MANIFEST_DIR")))
+            .expect("a source file")
+    };
+    let traits = read("../dom_api/src/typed.rs");
+    let methods = |from: &str, to: &str| -> Vec<String> {
+        let (_, rest) = traits.split_once(from).expect("the trait");
+        let (body, _) = rest.split_once(to).expect("what follows the trait");
+        body.lines()
+            .filter_map(|line| line.strip_prefix("    fn "))
+            .map(|rest| rest.split(['(', '<']).next().expect("a name").to_string())
+            .collect()
+    };
+    let front_methods = methods(
+        "\npub trait Front: FrontTypes {",
+        "\npub trait OpFront: FrontTypes {",
+    );
+    let op_methods = methods("\npub trait OpFront: FrontTypes {", "\n}\n");
+    assert!(front_methods.len() > 100 && op_methods.len() > 25);
+    // What script's side of a call asks of the whole front end, and the
+    // defaults that do nothing (`finish`: nothing is left for after a
+    // call here) or only call the others.
+    const WHOLE: [&str; 15] = [
+        "finish",
+        "read_custom_element_constructor",
+        "store_custom_element_definition",
+        "call_lifecycle_callback",
+        "upgrade_element",
+        "constructor_is_constructor",
+        "constructor_is_defined",
+        "resolve_when_defined",
+        "call_mutation_callback",
+        "call_listener",
+        "reject_promise_with_reason",
+        "pending_input",
+        "call_node_filter",
+        "update_elements",
+        "finish_handler",
+    ];
+    let source = read("src/info_front.rs");
     let (front, op) = source
         .split_once("OpFront for InfoOp")
         .expect("the operation's side after the call's");
     let has = |text: &str, name: &str| {
         text.contains(&format!("fn {name}(")) || text.contains(&format!("fn {name}<"))
     };
-    // The defaults that do nothing, say there is none, or only call the
-    // others (`finish_handler`).
-    let missing: Vec<&str> = dom_api::PLAIN_FRONT_METHODS
+    let missing: Vec<&String> = front_methods
         .iter()
-        .copied()
-        .filter(|name| !["finish", "finish_handler"].contains(name) && !has(front, name))
-        .chain(
-            dom_api::PLAIN_OP_METHODS
-                .iter()
-                .copied()
-                .filter(|name| *name != "current_window" && !has(op, name)),
-        )
+        .filter(|name| !WHOLE.contains(&name.as_str()) && !has(front, name))
+        .chain(op_methods.iter().filter(|name| !has(op, name)))
         .collect();
     assert!(missing.is_empty(), "not the front end's own: {missing:?}");
+    let stale: Vec<&str> = WHOLE
+        .iter()
+        .copied()
+        .filter(|name| has(front, name) || !front_methods.iter().any(|method| method == name))
+        .collect();
+    assert!(stale.is_empty(), "listed, but its own or gone: {stale:?}");
 }
 
 /// A traversal's method is tried first in one operation: without a filter

@@ -58,18 +58,14 @@ pub(crate) struct NamedCalls {
 impl NamedCalls {
     pub(crate) fn add<M: TypedMember>(&mut self, named: Named) {
         let call: Call = call::<M>;
-        // Known as this is expanded: only a plain one's callback has its
-        // address taken.
-        if const { M::PLAIN } {
-            match named {
-                Named::Getter => {
-                    self.get_info = Some(bindings::info_named_getter::<State, NamedGetter<M>>());
-                }
-                Named::Setter => {
-                    self.set_info = Some(bindings::info_named_setter::<State, NamedSetter<M>>());
-                }
-                Named::Deleter | Named::Names => {}
+        match named {
+            Named::Getter => {
+                self.get_info = Some(bindings::info_named_getter::<State, NamedGetter<M>>());
             }
+            Named::Setter => {
+                self.set_info = Some(bindings::info_named_setter::<State, NamedSetter<M>>());
+            }
+            Named::Deleter | Named::Names => {}
         }
         let slot = match named {
             Named::Getter => &mut self.get,
