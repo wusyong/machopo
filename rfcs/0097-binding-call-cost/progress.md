@@ -35,7 +35,7 @@
 | 4k-E 不借字元的字串參數（非 ASCII、還沒攤平的）用 isolate 複製，不經過 `V8Front`；Latin-1 原地讀 | 完成 | 2026-11-13 |
 | 4k-F 對 Chrome 量 dictionary、例外、陣列、promise（都不落後）；只做 `getAttributeNames`（名稱從名稱的 V8 字串快取拿） | 完成 | 2026-11-13 |
 | 4k-C4 評估：會跑 script 的函式的 `this` 和參數改拿 wrapper、不登記 root（185 個函式和 `ScriptHost` 的介面；4k-F 之後有完整的數字再決定做不做、做多大；決定 43） | 還沒開始 | |
-| 4k-G 最熱的路本身（`nodeType` 是 Chrome 的 1.36 倍）：另外研究 | 還沒開始 | |
+| 4k-G 最熱的路本身：對 Chrome 數指令（做了）；不影響安全性的寫法調整（wrapper 的 tag 比一次） | 完成 | 2026-11-13 |
 | 4l cross-origin 的 16 個成員，和要找別的 realm 的 window 的 5 個（`Blob` 的 `arrayBuffer`、`bytes`、`text`，`Location.assign`，`Document.location` 的 setter）；4i 留下的 interceptor（indexed setter、iterator 的 pairs、named 的刪除、查詢和列舉）；legacy factory | 還沒開始 | |
 | 4m-2 刪舊的外殼、`Call`、`Kept`、`PLAIN`（連同它的檢查：`PLAIN_FRONT_METHODS`、`PLAIN_OP_METHODS`、`dom_api` 的 `plain` 測試、`dom_js` 的 `the_plain_methods_are_the_info_front_ends_own`、`docs/test-gaps.md` 的那一列） | 還沒開始 | |
 | 4m-3 新的 front 還交給 `V8Front` 的約 85 個方法搬出來（搬法到時評估：留一個 scope、只拿掉殼，或全部不建 scope；決定 42），再刪掉 `V8Front` | 還沒開始 | |
@@ -761,3 +761,47 @@
 - 測試：`dom_js` 的 `strings::attribute_names_are_the_names_own_strings`（四個屬性照順序、沒有前綴的三個各做一次名稱的字串、有前綴的是文字、再呼叫不再做、每次是新的陣列、和 `localName` 是同一個字串、沒有屬性是空的）。
 - mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4kF.toml`，4 個都抓到。
 - 跑過：`cargo test -p dom_api_macros -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt dom/nodes html/dom`（75502 個結果都照預期）。
+
+**第 4k-G 段，研究：最熱的路，Chrome 和 machopo 每次呼叫各幾條指令**（2026-11-13；`prototypes/chrome-instructions.py`：同一段 script（包在一個函式裡）跑兩千萬圈和六千萬圈，`perf stat` 的使用者空間指令數相減、除以四千萬，再扣掉空迴圈；Chrome 是整個 headless 的 process 群，各三次取最小）：
+
+| | Chrome | machopo | 差 |
+| --- | ---: | ---: | ---: |
+| 空迴圈（`x = n`） | 8.0 | 5.4 | |
+| `n.nodeType` | 72.9 | 107.5 | +34.6 |
+| `c.parentNode` | 93.0 | 135.6 | +42.6 |
+| `n.firstChild` | 95.0 | 135.6 | +40.6 |
+| `n.tagName` | 211.2 | 241.6 | +30.4 |
+| `n.id` | 219.9 | 252.6 | +32.7 |
+| `n.contains(c)` | 344.5 | 335.6 | −8.9 |
+| `n.hasAttribute('id')` | 516.2 | 496.6 | −19.6 |
+| `n.getAttribute('id')` | 623.7 | 564.5 | −59.2 |
+| `n.setAttribute('a', 'b')` | 1763.1 | 1085.6 | −677.5 |
+
+- 第一次量錯：給 Chrome 的 script 把變數放在最外層（全域的 `let`），空迴圈一圈 113 條、`nodeType` 算出來是負的；machopo 那份是包在區塊裡的。兩邊都包進同一個函式之後空迴圈是 8.0 和 5.4，才能比。
+- 最簡單的 getter 每次固定多約 30 到 40 條；DOM 的工作多的呼叫（`getAttribute`、`setAttribute`）machopo 反而少，把那一段抵掉了。
+- `nodeType` 的 callback 的機器碼（`perf annotate`，`info_method_trampoline::<State, InfoMember<nodeType>>`），走到的那條路 57 條；V8 從 JIT 過的程式呼叫 callback 的那一段約 50 條，兩邊一樣，所以 Blink 的 callback 約 23 條、差的 34 條都在我們的 callback 裡：
+
+  | 做什麼 | 條數 |
+  | --- | ---: |
+  | 進出函式：存和還原 5 個 callee-saved 暫存器、`ret` | 12 |
+  | 讀 isolate、讀狀態 | 2 |
+  | 讀型別的 tag（一個全域的值）、檢查它初始化了沒有 | 4 |
+  | 解出 `this`：讀 holder、handle、`CppHeapPointerTable` 的那一格，比 tag（兩種編碼各比一次） | 18 |
+  | 檢查位址在這個 heap 的 cage 裡（`from_engine`） | 5 |
+  | 檢查是不是正在標記（讀取的 barrier 的旗標） | 2 |
+  | 算 `nodeType`（照節點的種類查跳躍表） | 9 |
+  | 寫回傳值（讀那一格、遮掉低 32 bits、併進去、寫回） | 5 |
+
+- 取樣的比例在這裡不能信（`CallApiCallbackOptimizedNoProfiling` 佔 88%、我們的 callback 10%，和數出來的 50 對 57 條不合）：指令數的取樣有偏移，這一類很短的函式要直接數機器碼。
+
+**第 4k-G 段：不影響安全性的寫法調整**（2026-11-13；使用者：先做這一種，量完再決定要不要拿掉 cage 的檢查）：
+
+- fork（只改 Rust，`e114259`，還沒 push）：`object_of`（`unwrap` 和 `unwrap_receiver` 共用的那一段）把指標表那一格的標記 bit 遮掉、tag 只比一次（原本和兩種值各比一次）；`third_party.toml` 的 `rev` 跟著改。
+- 指令數（`chrome-instructions.py`，Chrome 的數字同上表）：`nodeType` 107.5 → 102.6（Chrome 的 1.48 → 1.40 倍），`parentNode` 135.6 → 130.5（1.46 → 1.38），`firstChild` 135.6 → 130.5，`tagName` 241.6 → 236.6（1.14 → 1.11），`id` 252.6 → 247.6，`getAttribute` 564.5 → 559.5（0.90），`hasAttribute` 496.6 → 491.5，`setAttribute` 1085.6 → 1080.5，`contains` 335.6 → 333.6。每個 DOM 呼叫少 5 條（有參數是物件的再多一點）。
+- 事先估「這一種省 10 到 15 條」太多，實際 5 條。其餘列的三樣：
+  - `nodeType` 的跳躍表改成查表（`dom` 的 `Cx::node_type`）：量出來 103 → 105，多 2 條，還原。留下新的測試 `dom` 的 `kinds::every_kind_has_its_node_type`（九種節點的 `nodeType`，包括 `Attr` 和 CDATA section：原本沒有一個測試看全）。
+  - 寫回傳值的 5 條省不到：讀整格、遮掉低 32 bits、併進去、寫回，是為了不讓 LLVM 把它縮成 32 bits 的 store（緊接著 V8 整格讀回，窄的 store 接寬的 load 不能 forward，先前量到 2.3 ns）；V8 自己的 `SetInternal` 編出來是同樣的指令，Blink 一樣付。
+  - 少存暫存器省不到：那 5 個 callee-saved 是為了冷的路（標記中的 barrier 的兩個呼叫、panic）留的，熱的路上的值變少也不會少存。
+- 改完之後 `nodeType` 的 callback 走到的路是 51 條，剩下和 Blink 不同的：cage 的檢查 5 條、讀型別的 tag 和檢查初始化 4 條加算出要比的值 2 條、標記的旗標 2 條。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4kG.toml`（改的是 fork 的檔案，spec 裡用相對路徑），2 個都抓到（不遮標記 bit：標記中的 wrapper 解不出來；任何 tag 都算：型別分不出來）。
+- 跑過：`cargo test -p bindings -p dom -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`ci.py third-party`。這一段只動 fork 的那幾行和一個新的測試，沒有另外跑 WPT。

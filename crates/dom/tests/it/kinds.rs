@@ -15,6 +15,32 @@ fn a_node_fits_its_slot() {
     assert_eq!(std::mem::size_of::<dom::Node>(), 56);
 }
 
+/// `nodeType` of every kind of node: the nine DOM gives (a CDATA section
+/// is a text node whose type is its own).
+#[test]
+fn every_kind_has_its_node_type() {
+    let mut dom = Dom::new();
+    dom.mutate(|cx| {
+        let document = cx.create_document(true);
+        let element = cx.create_element(document, QualName::html("p"));
+        cx.set_attribute(element, "title", "t");
+        let types = [
+            element,
+            cx.attr_node(element, "title")
+                .expect("its attribute's node"),
+            cx.create_text(document, "text"),
+            cx.create_cdata_section(document, "cdata"),
+            cx.create_processing_instruction(document, "target", "data"),
+            cx.create_comment(document, "comment"),
+            document,
+            cx.create_doctype(document, "html", "", ""),
+            cx.create_document_fragment(document),
+        ]
+        .map(|node| cx.node_type(node));
+        assert_eq!(types, [1, 2, 3, 4, 7, 8, 9, 10, 11]);
+    });
+}
+
 #[test]
 fn each_kind_has_its_type_name_and_data() {
     let mut dom = Dom::new();

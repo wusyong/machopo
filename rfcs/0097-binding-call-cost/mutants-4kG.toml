@@ -1,0 +1,18 @@
+# Stage 4k-G: a wrapper's tag is compared once, its entry's marking bit
+# masked off (the fork's `object_of`).
+test = ["cargo", "test", "-q", "-p", "bindings", "-p", "dom_js"]
+timeout = 1800
+
+[[mutant]]
+name = "a wrapper whose entry is marked isn't the type's"
+file = "../third_party/rusty_v8/src/machopo.rs"
+from = '''  let actual = u32::from(entry as u16) & !1;'''
+to = '''  let actual = u32::from(entry as u16);'''
+
+[[mutant]]
+name = "a wrapper of any tag is the type's"
+file = "../third_party/rusty_v8/src/machopo.rs"
+from = '''  if actual == first {
+    NonNull::new((entry >> PAYLOAD_SHIFT) as *mut c_void)'''
+to = '''  if actual == first || actual != 0 {
+    NonNull::new((entry >> PAYLOAD_SHIFT) as *mut c_void)'''
