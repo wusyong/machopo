@@ -122,9 +122,7 @@ pub(crate) fn entry_type<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, PerformanceEntry>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::new(
-        cx.performance_entry_type(this).name(),
-    )))
+    Ok(DomStr::fresh(cx.performance_entry_type(this).name()))
 }
 
 pub(crate) fn start_time<'gc>(
@@ -810,8 +808,8 @@ pub(crate) fn zero<'gc>(_: &ApiCx<'_, 'gc>, _: Gc<'gc, PerformanceEntry>) -> Res
     Ok(0.0)
 }
 
-fn string<'gc>(text: &str) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::new(text)))
+fn string<'gc>(text: impl Into<std::borrow::Cow<'static, str>>) -> Result<DomStr<'gc>, ApiError> {
+    Ok(DomStr::fresh(text))
 }
 
 pub(crate) fn initiator_type<'gc>(
@@ -834,7 +832,7 @@ pub(crate) fn next_hop_protocol<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, PerformanceEntry>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    string(&entry_timing(cx, this).next_hop_protocol)
+    string(entry_timing(cx, this).next_hop_protocol.clone())
 }
 
 /// A document is never render-blocking.
@@ -849,14 +847,14 @@ pub(crate) fn content_type<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, PerformanceEntry>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    string(&entry_timing(cx, this).content_type)
+    string(entry_timing(cx, this).content_type.clone())
 }
 
 pub(crate) fn content_encoding<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, PerformanceEntry>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    string(&entry_timing(cx, this).content_encoding)
+    string(entry_timing(cx, this).content_encoding.clone())
 }
 
 #[expect(

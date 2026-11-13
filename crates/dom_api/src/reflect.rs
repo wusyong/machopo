@@ -52,9 +52,7 @@ pub(crate) fn url<'gc, const N: NameId>(
     let resolved = cx
         .resolve_url(cx.document_of(this), &value)
         .map(String::from);
-    Ok(DomStr::Owned(dom::DomString::new(
-        &resolved.unwrap_or(value),
-    )))
+    Ok(DomStr::fresh(resolved.unwrap_or(value)))
 }
 
 /// A form's `action` and a submitter's `formAction` (HTML's): the URL the
@@ -98,7 +96,7 @@ pub(crate) fn enumerated<'gc>(
                 .unwrap_or(invalid)
         }
     };
-    DomStr::Owned(dom::DomString::new(keyword))
+    DomStr::fresh(keyword)
 }
 
 /// A `boolean`: whether the attribute is there; set, it added (empty) or

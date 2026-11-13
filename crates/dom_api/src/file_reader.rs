@@ -11,7 +11,7 @@
 
 use base64::Engine as _;
 use dom::{
-    Blob, BlobData, DomString, Event, EventFlags, EventTargetImpl, FileInfo, FileReaderResult,
+    Blob, BlobData, Event, EventFlags, EventTargetImpl, FileInfo, FileReaderResult,
     FileReaderState, ReadAs, ReadStep, TargetRoot, names,
 };
 use elise::{Gc, Persistent};
@@ -338,7 +338,7 @@ fn file_info<'gc>(cx: &ApiCx<'_, 'gc>, this: Gc<'gc, Blob>) -> Result<&'gc FileI
 
 /// A `File`'s `name`.
 pub(crate) fn name<'gc>(cx: &ApiCx<'_, 'gc>, this: Gc<'gc, Blob>) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::new(&file_info(cx, this)?.name)))
+    Ok(DomStr::fresh(file_info(cx, this)?.name.clone()))
 }
 
 /// A `File`'s `lastModified`.
@@ -359,7 +359,7 @@ pub(crate) fn webkit_relative_path<'gc>(
     this: Gc<'gc, Blob>,
 ) -> Result<DomStr<'gc>, ApiError> {
     file_info(cx, this)?;
-    Ok(DomStr::Owned(DomString::new("")))
+    Ok(DomStr::fresh(""))
 }
 
 /// `new ProgressEvent(type, eventInitDict)`.

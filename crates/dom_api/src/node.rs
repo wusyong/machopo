@@ -368,9 +368,9 @@ pub(crate) fn base_uri<'gc>(
     } else {
         cx.document_of(this)
     };
-    Ok(crate::typed::DomStr::Owned(dom::DomString::new(
+    Ok(crate::typed::DomStr::fresh(
         cx.document_base_url(document)
             .as_ref()
-            .map_or("about:blank", url::Url::as_str),
-    )))
+            .map_or_else(|| "about:blank".to_owned(), |url| url.as_str().to_owned()),
+    ))
 }

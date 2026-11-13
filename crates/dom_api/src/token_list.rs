@@ -113,7 +113,7 @@ pub(crate) fn item<'gc>(
         let tokens = parsed(cx, this);
         return Ok(index
             .and_then(|index| tokens.get(index))
-            .map(|token| DomStr::Owned(dom::DomString::new(token))));
+            .map(|token| DomStr::fresh(token.to_string())));
     }
     let classes = cx.class_names(element(cx, this));
     Ok(index

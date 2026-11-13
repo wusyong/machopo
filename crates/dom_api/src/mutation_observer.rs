@@ -5,8 +5,8 @@
 //! the records are `dom`'s.
 
 use dom::{
-    DomString, MutationObserver, MutationRecord, NodeList, NodeRef, ObserveOptions, TargetRef,
-    TargetRoot, names,
+    MutationObserver, MutationRecord, NodeList, NodeRef, ObserveOptions, TargetRef, TargetRoot,
+    names,
 };
 use elise::{Gc, Persistent};
 
@@ -99,7 +99,7 @@ pub(crate) fn record_type<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, MutationRecord>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::new(cx.record_kind(this).name())))
+    Ok(DomStr::fresh(cx.record_kind(this).name()))
 }
 
 pub(crate) fn target<'gc>(

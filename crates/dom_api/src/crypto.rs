@@ -4,7 +4,7 @@
 //! random numbers. Not `subtle`. And `structuredClone()` (HTML's), which
 //! the window has beside it.
 
-use dom::{Crypto, DomString, SerializedMessage, Window};
+use dom::{Crypto, SerializedMessage, Window};
 use elise::Gc;
 
 use crate::typed::{ArrayViewArg, CloneParam};
@@ -64,7 +64,7 @@ pub(crate) fn random_uuid<'gc>(
     _: &ApiCx<'_, 'gc>,
     _: Gc<'gc, Crypto>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::new(&new_uuid())))
+    Ok(DomStr::fresh(new_uuid()))
 }
 
 /// A new version 4 UUID (WebCrypto's "generate a random UUID"), which a

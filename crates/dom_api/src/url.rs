@@ -96,7 +96,7 @@ pub(crate) fn create_object_url<'gc, O: OpFront>(
         url: url.clone(),
         data: cx.blob_data(obj).clone(),
     });
-    Ok(DomStr::Owned(DomString::new(&url)))
+    Ok(DomStr::fresh(url))
 }
 
 /// `URL.revokeObjectURL(url)`: a blob URL of the current realm's origin
@@ -511,9 +511,9 @@ pub(crate) fn to_string<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, UrlSearchParams>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::new(
-        &cx.with_search_params(this, |list| serialize(list)),
-    )))
+    Ok(DomStr::fresh(
+        cx.with_search_params(this, |list| serialize(list)),
+    ))
 }
 
 /// The pair at `index` for the pair iterator (`#[pairs]`): `[name,

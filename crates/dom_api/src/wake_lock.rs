@@ -104,7 +104,7 @@ pub(crate) fn sentinel_type<'gc>(
     _: &ApiCx<'_, 'gc>,
     _: Gc<'gc, EventTargetImpl>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(dom::DomString::new("screen")))
+    Ok(DomStr::fresh("screen"))
 }
 
 /// `release()`: releases the lock if it is active, then a promise resolved

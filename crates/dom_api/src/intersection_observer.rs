@@ -160,7 +160,7 @@ pub(crate) fn root_margin<'gc>(
     let margin = style_resolver::serialize_intersection_margin(
         &cx.intersection_observer_options(this).root_margin,
     );
-    Ok(DomStr::Owned(dom::DomString::new(&margin)))
+    Ok(DomStr::fresh(margin))
 }
 
 /// `scrollMargin`, as `rootMargin`.
@@ -171,7 +171,7 @@ pub(crate) fn scroll_margin<'gc>(
     let margin = style_resolver::serialize_intersection_margin(
         &cx.intersection_observer_options(this).scroll_margin,
     );
-    Ok(DomStr::Owned(dom::DomString::new(&margin)))
+    Ok(DomStr::fresh(margin))
 }
 
 /// `thresholds`: sorted.

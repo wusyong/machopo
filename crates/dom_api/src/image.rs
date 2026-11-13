@@ -375,7 +375,7 @@ pub(crate) fn current_src<'gc>(
         .filter(|(state, _)| *state != ImageRequestState::Unavailable)
         .map(|(_, url)| url)
         .unwrap_or_default();
-    Ok(DomStr::Owned(dom::DomString::new(&url)))
+    Ok(DomStr::fresh(url))
 }
 
 /// `width` and `height`: the content box's, laid out, for an image being

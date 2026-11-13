@@ -200,11 +200,7 @@ pub(crate) fn scroll_restoration<'gc>(
 ) -> Result<DomStr<'gc>, ApiError> {
     fully_active_document(cx, this)?;
     let manual = cx.history_manual_scroll_restoration(this);
-    Ok(DomStr::Owned(DomString::new(if manual {
-        "manual"
-    } else {
-        "auto"
-    })))
+    Ok(DomStr::fresh(if manual { "manual" } else { "auto" }))
 }
 
 /// Setting `scrollRestoration` (an enumeration: another value ignored):

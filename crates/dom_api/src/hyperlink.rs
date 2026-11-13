@@ -48,7 +48,7 @@ fn set<'gc>(
 /// empty string without one. The elements' stringifier too.
 pub(crate) fn href<'gc>(cx: &ApiCx<'_, 'gc>, this: NodeRef<'gc>) -> Result<DomStr<'gc>, ApiError> {
     Ok(match url(cx, this) {
-        Some(url) => DomStr::Owned(DomString::new(url.as_str())),
+        Some(url) => DomStr::fresh(String::from(url)),
         None => crate::element::reflected(cx, this, names::local::HREF),
     })
 }
@@ -262,9 +262,7 @@ pub(crate) fn base_href<'gc>(
     let resolved = cx
         .fallback_base_url(cx.document_of(this))
         .and_then(|fallback| fallback.join(&value).ok());
-    Ok(DomStr::Owned(DomString::new(
-        resolved.as_ref().map_or(value.as_str(), Url::as_str),
-    )))
+    Ok(DomStr::fresh(resolved.map_or(value, String::from)))
 }
 
 // --- Following hyperlinks

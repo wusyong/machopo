@@ -428,7 +428,7 @@ pub(crate) fn composite<'gc>(
     _: &ApiCx<'_, 'gc>,
     _: Gc<'gc, KeyframeEffectObject>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::new("replace")))
+    Ok(DomStr::fresh("replace"))
 }
 
 /// Setting `composite`: nothing (an enumeration's value it doesn't know

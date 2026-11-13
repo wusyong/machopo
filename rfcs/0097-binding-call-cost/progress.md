@@ -27,6 +27,7 @@
 | 4k 研究：一次呼叫多出來的成本一類一類拆開、和 Chrome 對照、列每條冷的路該呼叫的 V8 API（決定 41、42） | 完成 | 2026-11-12 |
 | 4k-A 回傳非整數的數字：直接設回傳值（決定 42） | 完成 | 2026-11-12 |
 | 4k-B 回傳現算的字串：不經過 `DomString`、`Box`、`V8Front`；fork 加從 callback info 借的 token | 完成 | 2026-11-12 |
+| 4k-B2 回傳關鍵字和現算的文字的函式改用 `DomStr::fresh`（不做 `DomString`） | 完成 | 2026-11-13 |
 | 4k-C 會呼叫 script 的成員：`this` 和參數不登記 root、少開操作 | 還沒開始 | |
 | 4k-D 新的 wrapper：不登記 root、不經過 `V8Front` | 還沒開始 | |
 | 4k-E 非 ASCII 和要轉換的字串參數 | 還沒開始 | |
@@ -643,3 +644,22 @@
 - 測試：`dom_js` 的 `strings::a_new_string_is_made_with_no_scope`（現算的、只被呼叫持有的 `DomString`、常數、短和長的非 ASCII（Latin-1、漢字、emoji）、DOM 持有的（第一次登記、第二次不再向 V8 要）、名稱：都不建 scope、向 V8 要一次、內容正確；現算的和常數不做 `DomString`（`fresh_strings` 的計數）；空的文字什麼都不要）。原有的三個測試原本用「建了 scope」證明走了新的 front，改成看 scope 加 `handles` 的次數（`env::slow_paths`）。
 - mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4kB.toml`，8 個都抓到。第一次 7 個：「現算的文字又做成 `DomString`」結果一樣、只多一次配置，沒有測試分辨得出來；加了 `fresh_strings` 的計數。
 - 跑過：`cargo test -p bindings -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項（`boundary` 的清單加 `INFO_HANDLES`：測試的計數，thread-local）、`cargo fmt --check`、`ci.py third-party`、`test.py wpt css/cssom dom/nodes domparsing html/canvas/element html/dom url`（90530 個結果都照預期）。
+
+**第 4k-B2 段：回傳關鍵字和現算的文字的函式改用 `DomStr::fresh`**（2026-11-13）：
+
+- 4k-B 說「還有約 90 處」數多了：`dom_api` 裡 `DomString::new`、`DomString::from` 共約 95 處，其中約 30 處不是回傳值（存進事件的 `key`、`code`、`origin`、`message`…，本來就要一個 `DomString`）或是陣列的元素（4k-F）。
+- 改了 45 處 `DomStr::Owned(DomString::new(…))`：22 處是常數（`document.readyState`、`compatMode`、`shadowRoot.mode`、`history.scrollRestoration`、`animation.playState`、`selection.type`、`effect.composite`、mutation record 的 `type`、反射的列舉屬性…：改完沒有配置）；其餘是現算的 `String`（`option.label`、`value`、`text`、`select.value`、`document.title`、`crypto.randomUUID()`、`rootMargin`、`a.href`（`Url` 直接變 `String`）、`URLSearchParams.toString()`…：少一次配置和複製）。文字是借來的（request、response、performance entry 的欄位、`file.name`、`classList.item()`、`baseURI`）改成複製成 `String`，成本和做成 `DomString` 一樣，只是統一不經過 `DomString`。`navigator`、`performance`、`request`、`response` 各自的 `string` 小函式的參數從 `&str` 改成 `impl Into<Cow<'static, str>>`。
+- 沒改的：`dom` 自己回 `DomString` 的（`textContent` 的 `cx.text_content`、`a.text`）：要動 `dom` 的函式簽名。
+- `chrome-compare`（各三次取最小；ns 一次，括號是 Chrome 的倍數）：
+
+  | | Chrome | 4k-B | 這一段 |
+  | --- | ---: | ---: | ---: |
+  | `document.readyState` | 18.4 | 24.4（1.33） | 17.1（0.93） |
+  | `document.compatMode` | 59.8 | 21.4（0.36） | 17.3（0.29） |
+  | `opt.value` | 14.6 | 25.8（1.77） | 18.3（1.25） |
+  | `opt.text` | 109.8 | 55.5（0.51） | 46.4（0.42） |
+  | `link.href` | 148.5 | 114.3（0.77） | 110.9（0.75） |
+
+- 測試：`dom_js` 的 `strings::a_keyword_or_computed_text_is_given_as_it_is`（window 的 realm：五個關鍵字、九個現算的，值正確、各算一次 `fresh_strings`）。寫測試時弄錯的：測試的 window 的文件沒有 `<html>`、`readyState` 是 `complete`、沒有 `<head>` 時 `document.title` 是空的（空的文字是 V8 的空字串，不算）。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4kB2.toml`，4 個都抓到。
+- 跑過：`cargo test -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt html/dom url fetch/api/request fetch/api/response html/semantics/forms html/browsers/history shadow-dom selection`（108240 個結果都照預期）。

@@ -63,7 +63,7 @@ pub(crate) fn shadow_root_mode<'gc>(
         Some(value) if value.eq_ignore_ascii_case("closed") => "closed",
         _ => "",
     };
-    Ok(DomStr::Owned(dom::DomString::new(keyword)))
+    Ok(DomStr::fresh(keyword))
 }
 
 pub(crate) fn set_shadow_root_mode<'gc>(
@@ -148,7 +148,7 @@ pub(crate) fn content_editable<'gc>(
     let state = cx
         .content_editable(this)
         .unwrap_or(ContentEditable::Inherit);
-    Ok(DomStr::Owned(dom::DomString::new(state.keyword())))
+    Ok(DomStr::fresh(state.keyword()))
 }
 
 /// Setting it: `inherit` removes the attribute; `true`, `false` and
@@ -432,7 +432,7 @@ pub(crate) fn enter_key_hint<'gc>(
                 .copied()
         })
         .unwrap_or("");
-    Ok(DomStr::Owned(dom::DomString::new(keyword)))
+    Ok(DomStr::fresh(keyword))
 }
 
 pub(crate) fn set_enter_key_hint<'gc>(
@@ -484,9 +484,7 @@ pub(crate) fn autocapitalize<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: NodeRef<'gc>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(dom::DomString::new(
-        own_autocapitalization_hint(cx, this),
-    )))
+    Ok(DomStr::fresh(own_autocapitalization_hint(cx, this)))
 }
 
 pub(crate) fn set_autocapitalize<'gc>(

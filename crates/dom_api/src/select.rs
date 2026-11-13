@@ -23,13 +23,11 @@ pub(crate) fn select_type<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: NodeRef<'gc>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::new(
-        if cx.select_is_multiple(this) {
-            "select-multiple"
-        } else {
-            "select-one"
-        },
-    )))
+    Ok(DomStr::fresh(if cx.select_is_multiple(this) {
+        "select-multiple"
+    } else {
+        "select-one"
+    }))
 }
 
 /// `options`: the same each time.
@@ -111,11 +109,11 @@ pub(crate) fn set_selected_index<'gc>(
 
 /// `value`: the first selected option's value, empty for none.
 pub(crate) fn value<'gc>(cx: &ApiCx<'_, 'gc>, this: NodeRef<'gc>) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::new(
-        &cx.first_selected_option(this)
+    Ok(DomStr::fresh(
+        cx.first_selected_option(this)
             .map(|option| cx.option_value(option))
             .unwrap_or_default(),
-    )))
+    ))
 }
 
 /// Setting `value`: every option unselected, and the first whose value it
@@ -366,7 +364,7 @@ pub(crate) fn option_form<'gc>(
 
 /// `label`: the attribute where there is one, else `text`.
 pub(crate) fn label<'gc>(cx: &ApiCx<'_, 'gc>, this: NodeRef<'gc>) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::new(&cx.option_label(this))))
+    Ok(DomStr::fresh(cx.option_label(this)))
 }
 
 /// `value`: the attribute where there is one, else `text`.
@@ -374,12 +372,12 @@ pub(crate) fn option_value<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: NodeRef<'gc>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::new(&cx.option_value(this))))
+    Ok(DomStr::fresh(cx.option_value(this)))
 }
 
 /// `text`: its descendant text but a script's, stripped and collapsed.
 pub(crate) fn text<'gc>(cx: &ApiCx<'_, 'gc>, this: NodeRef<'gc>) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::new(&cx.option_text(this))))
+    Ok(DomStr::fresh(cx.option_text(this)))
 }
 
 /// Setting `text`: DOM's string replace all, as `textContent`'s.

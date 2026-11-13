@@ -24,9 +24,8 @@ use animation::{
 };
 use computed_style::{ComputedStyle, PseudoId};
 use dom::{
-    AnimationClass, AnimationPlace, DocumentTimeline, DomString, Event, EventFlags,
-    EventTargetImpl, KeyframeEffectObject, NodeIdHashMap, NodeRef, PendingAnimationEvent,
-    TargetRoot, names,
+    AnimationClass, AnimationPlace, DocumentTimeline, Event, EventFlags, EventTargetImpl,
+    KeyframeEffectObject, NodeIdHashMap, NodeRef, PendingAnimationEvent, TargetRoot, names,
 };
 use elise::{Gc, Persistent};
 
@@ -798,11 +797,11 @@ pub(crate) fn replace_state<'gc>(
 ) -> Result<DomStr<'gc>, ApiError> {
     prepare(cx, this);
     let state = read_animation(cx, this, |a, _| a.replace_state).unwrap_or_default();
-    Ok(DomStr::Owned(DomString::new(match state {
+    Ok(DomStr::fresh(match state {
         animation::ReplaceState::Active => "active",
         animation::ReplaceState::Removed => "removed",
         animation::ReplaceState::Persisted => "persisted",
-    })))
+    }))
 }
 
 /// `persist()`: never removed; one removed already gives its target values
@@ -989,12 +988,12 @@ pub(crate) fn play_state<'gc>(
 ) -> Result<DomStr<'gc>, ApiError> {
     prepare(cx, this);
     let state = read_animation(cx, this, |a, now| a.play_state(now)).unwrap_or(PlayState::Idle);
-    Ok(DomStr::Owned(DomString::new(match state {
+    Ok(DomStr::fresh(match state {
         PlayState::Idle => "idle",
         PlayState::Running => "running",
         PlayState::Paused => "paused",
         PlayState::Finished => "finished",
-    })))
+    }))
 }
 
 /// `pending`: a play or pause task waits.
@@ -1142,13 +1141,13 @@ pub(crate) fn transition_property<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, EventTargetImpl>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::new(
+    Ok(DomStr::fresh(
         read_animation(cx, this, |a, _| match &a.owner {
             Owner::Transition(owner) => owner.property.name(),
             _ => "",
         })
         .unwrap_or(""),
-    )))
+    ))
 }
 
 // --- `AnimationPlaybackEvent`

@@ -21,7 +21,7 @@
 
 use std::cmp::Ordering;
 
-use dom::{BoundaryPoint, DomString, NodeKind, NodeRef, NodeRoot, Range, Selection, Window};
+use dom::{BoundaryPoint, NodeKind, NodeRef, NodeRoot, Range, Selection, Window};
 use elise::Gc;
 
 use crate::exception::ExceptionName;
@@ -303,7 +303,7 @@ pub(crate) fn selection_type<'gc>(
         Some(true) => "Caret",
         Some(false) => "Range",
     };
-    Ok(DomStr::Owned(DomString::new(name)))
+    Ok(DomStr::fresh(name))
 }
 
 /// `direction`: `none` while empty or collapsed (Chrome's; the
@@ -320,7 +320,7 @@ pub(crate) fn direction<'gc>(
     } else {
         "forward"
     };
-    Ok(DomStr::Owned(DomString::new(name)))
+    Ok(DomStr::fresh(name))
 }
 
 /// `getRangeAt(index)`: its range itself, not a copy; past it an
@@ -597,6 +597,6 @@ pub(crate) fn to_string<'gc>(
 ) -> Result<DomStr<'gc>, ApiError> {
     match range_of(cx, this) {
         Some(range) => crate::range::to_string(cx, range),
-        None => Ok(DomStr::Owned(DomString::new(""))),
+        None => Ok(DomStr::fresh("")),
     }
 }

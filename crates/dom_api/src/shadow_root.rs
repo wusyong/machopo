@@ -3,9 +3,7 @@
 //! `getRootNode` (Blink's `Element::attachShadow`, `ShadowRoot`). The
 //! trees are `dom`'s (`attach_shadow`, `retarget`).
 
-use dom::{
-    DomString, NodeRef, ShadowHostError, ShadowRootInit, ShadowRootMode, SlotAssignmentMode,
-};
+use dom::{NodeRef, ShadowHostError, ShadowRootInit, ShadowRootMode, SlotAssignmentMode};
 
 use crate::exception::{DomException, ExceptionName};
 use crate::interfaces::{GetRootNodeOptions, ShadowRootInit as ShadowRootInitDict};
@@ -123,7 +121,7 @@ pub(crate) fn mode<'gc>(cx: &ApiCx<'_, 'gc>, this: NodeRef<'gc>) -> Result<DomSt
         ShadowRootMode::Open => "open",
         ShadowRootMode::Closed | ShadowRootMode::UserAgent => "closed",
     };
-    Ok(DomStr::Owned(DomString::new(mode)))
+    Ok(DomStr::fresh(mode))
 }
 
 pub(crate) fn delegates_focus<'gc>(
@@ -141,7 +139,7 @@ pub(crate) fn slot_assignment<'gc>(
         SlotAssignmentMode::Named => "named",
         SlotAssignmentMode::Manual => "manual",
     };
-    Ok(DomStr::Owned(DomString::new(mode)))
+    Ok(DomStr::fresh(mode))
 }
 
 pub(crate) fn clonable<'gc>(cx: &ApiCx<'_, 'gc>, this: NodeRef<'gc>) -> Result<bool, ApiError> {

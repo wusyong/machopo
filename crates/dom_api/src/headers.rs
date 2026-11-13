@@ -167,7 +167,7 @@ pub(crate) fn get<'gc>(
     check_name(name)?;
     Ok(cx
         .with_header_list(this, |headers| list::get(headers, name))
-        .map(|value| DomStr::Owned(DomString::new(&value))))
+        .map(DomStr::fresh))
 }
 
 /// `getSetCookie()`: the `Set-Cookie` values, each on its own.

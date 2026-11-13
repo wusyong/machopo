@@ -46,8 +46,8 @@ pub(crate) fn window_navigator<'gc>(
     Ok(cx.window_navigator(this))
 }
 
-fn string<'gc>(text: &str) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::new(text)))
+fn string<'gc>(text: impl Into<std::borrow::Cow<'static, str>>) -> Result<DomStr<'gc>, ApiError> {
+    Ok(DomStr::fresh(text))
 }
 
 pub(crate) fn app_code_name<'gc>(
@@ -70,7 +70,7 @@ pub(crate) fn app_version<'gc>(
     this: Gc<'gc, Navigator>,
 ) -> Result<DomStr<'gc>, ApiError> {
     let agent = agent(cx, this);
-    string(agent.strip_prefix("Mozilla/").unwrap_or(&agent))
+    string(agent.strip_prefix("Mozilla/").unwrap_or(&agent).to_owned())
 }
 
 /// What Chrome says on the platform machopo was built for (Blink's
@@ -117,7 +117,7 @@ pub(crate) fn user_agent<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Navigator>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    string(&agent(cx, this))
+    string(agent(cx, this))
 }
 
 pub(crate) fn vendor<'gc>(

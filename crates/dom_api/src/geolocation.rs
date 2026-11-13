@@ -223,7 +223,7 @@ pub(crate) fn error_message<'gc>(
         PERMISSION_DENIED => "User denied Geolocation",
         _ => "Timeout expired",
     };
-    Ok(crate::typed::DomStr::Owned(dom::DomString::new(message)))
+    Ok(crate::typed::DomStr::fresh(message))
 }
 
 /// A `GeolocationPosition`'s or `GeolocationCoordinates`' member: there is

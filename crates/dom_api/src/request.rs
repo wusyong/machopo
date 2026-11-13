@@ -331,22 +331,22 @@ pub(crate) fn new_request<'gc, O: OpFront>(
     Ok(cx.create_request(window, data, headers, signal))
 }
 
-fn string<'gc>(text: &str) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::new(text)))
+fn string<'gc>(text: impl Into<std::borrow::Cow<'static, str>>) -> Result<DomStr<'gc>, ApiError> {
+    Ok(DomStr::fresh(text))
 }
 
 pub(crate) fn method<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Request>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    cx.with_request_data(this, |data| string(&data.method))
+    cx.with_request_data(this, |data| string(data.method.clone()))
 }
 
 pub(crate) fn url<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Request>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    cx.with_request_data(this, |data| string(&data.url))
+    cx.with_request_data(this, |data| string(data.url.clone()))
 }
 
 pub(crate) fn headers<'gc>(
@@ -372,7 +372,7 @@ pub(crate) fn referrer<'gc>(
     cx.with_request_data(this, |data| match &data.referrer {
         Referrer::NoReferrer => string(""),
         Referrer::Client => string("about:client"),
-        Referrer::Url(url) => string(url),
+        Referrer::Url(url) => string(url.clone()),
     })
 }
 
@@ -380,7 +380,7 @@ pub(crate) fn referrer_policy<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Request>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    cx.with_request_data(this, |data| string(&data.referrer_policy))
+    cx.with_request_data(this, |data| string(data.referrer_policy.clone()))
 }
 
 pub(crate) fn mode<'gc>(
@@ -424,7 +424,7 @@ pub(crate) fn integrity<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Request>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    cx.with_request_data(this, |data| string(&data.integrity))
+    cx.with_request_data(this, |data| string(data.integrity.clone()))
 }
 
 pub(crate) fn keepalive<'gc>(

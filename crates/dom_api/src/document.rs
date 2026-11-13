@@ -1,7 +1,7 @@
 //! `Document`'s members of the tree (https://dom.spec.whatwg.org/#interface-document).
 
 use dom::names::{self, local};
-use dom::{DomImplementation, DomString, NodeKind, NodeRef, QualName, QualifiedName};
+use dom::{DomImplementation, NodeKind, NodeRef, QualName, QualifiedName};
 use elise::Gc;
 
 use crate::exception::ExceptionName;
@@ -21,7 +21,7 @@ pub(crate) fn ready_state<'gc>(
         dom::DocumentReadyState::Interactive => "interactive",
         dom::DocumentReadyState::Complete => "complete",
     };
-    Ok(crate::typed::DomStr::Owned(dom::DomString::new(state)))
+    Ok(crate::typed::DomStr::fresh(state))
 }
 
 /// `URL` and `documentURI`: its URL (`about:blank` for one with none).
@@ -53,7 +53,7 @@ pub(crate) fn compat_mode<'gc>(
         dom::QuirksMode::Quirks => "BackCompat",
         _ => "CSS1Compat",
     };
-    Ok(crate::typed::DomStr::Owned(dom::DomString::new(mode)))
+    Ok(crate::typed::DomStr::fresh(mode))
 }
 
 /// `documentElement`: its element child.
@@ -271,7 +271,7 @@ pub fn document_title<'gc>(cx: &dom::Cx<'_, 'gc>, document: NodeRef<'gc>) -> Str
 
 /// `title`.
 pub(crate) fn title<'gc>(cx: &ApiCx<'_, 'gc>, this: NodeRef<'gc>) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::new(&document_title(cx, this))))
+    Ok(DomStr::fresh(document_title(cx, this)))
 }
 
 /// Setting `title`: with an SVG document element, its first SVG `title`

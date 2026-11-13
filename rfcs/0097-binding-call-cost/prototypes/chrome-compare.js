@@ -49,6 +49,13 @@ function run() {
   time('ctx.lineCap', N, (N) => { for (let i = 0; i < N; i++) { x = ctx.lineCap; } });
   time('st.cssText', N, (N) => { for (let i = 0; i < N; i++) { x = st.cssText; } });
   time('n.tagName', N, (N) => { for (let i = 0; i < N; i++) { x = n.tagName; } });
+  const opt = document.createElement('option'); opt.setAttribute('value', 'v'); opt.textContent = 'some text';
+  const link = document.createElement('a'); link.setAttribute('href', '/path?q#f');
+  time('document.readyState', N, (N) => { for (let i = 0; i < N; i++) { x = document.readyState; } });
+  time('document.compatMode', N, (N) => { for (let i = 0; i < N; i++) { x = document.compatMode; } });
+  time('opt.value', N, (N) => { for (let i = 0; i < N; i++) { x = opt.value; } });
+  time('opt.text', N, (N) => { for (let i = 0; i < N; i++) { x = opt.text; } });
+  time('link.href', N, (N) => { for (let i = 0; i < N; i++) { x = link.href; } });
   time('new Event', N, (N) => { for (let i = 0; i < N; i++) { x = new Event('x'); } });
   time('new MouseEvent init', 200000, (N) => { for (let i = 0; i < N; i++) { x = new MouseEvent('x', mi); } });
   const M = 200000;

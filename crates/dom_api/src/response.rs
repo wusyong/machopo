@@ -185,8 +185,8 @@ pub(crate) fn json_static<'gc, O: OpFront>(
     Ok(cx.create_response(window, response, headers))
 }
 
-fn string<'gc>(text: &str) -> Result<DomStr<'gc>, ApiError> {
-    Ok(DomStr::Owned(DomString::new(text)))
+fn string<'gc>(text: impl Into<std::borrow::Cow<'static, str>>) -> Result<DomStr<'gc>, ApiError> {
+    Ok(DomStr::fresh(text))
 }
 
 pub(crate) fn response_type<'gc>(
@@ -211,7 +211,11 @@ pub(crate) fn url<'gc>(
     this: Gc<'gc, Response>,
 ) -> Result<DomStr<'gc>, ApiError> {
     cx.with_response_data(this, |data| match &data.url {
-        Some(url) => string(url.split_once('#').map_or(url.as_str(), |(url, _)| url)),
+        Some(url) => string(
+            url.split_once('#')
+                .map_or(url.as_str(), |(url, _)| url)
+                .to_owned(),
+        ),
         None => string(""),
     })
 }
@@ -236,7 +240,7 @@ pub(crate) fn status_text<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: Gc<'gc, Response>,
 ) -> Result<DomStr<'gc>, ApiError> {
-    cx.with_response_data(this, |data| string(&data.status_text))
+    cx.with_response_data(this, |data| string(data.status_text.clone()))
 }
 
 pub(crate) fn headers<'gc>(

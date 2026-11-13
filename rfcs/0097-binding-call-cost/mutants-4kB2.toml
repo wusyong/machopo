@@ -1,0 +1,28 @@
+# Stage 4k-B2: a result that is a keyword or text its function computed is
+# given as that text (`DomStr::fresh`), no string of the DOM's made of it.
+test = ["cargo", "test", "-q", "-p", "dom_api", "-p", "dom_js"]
+timeout = 1800
+
+[[mutant]]
+name = "a keyword is made a string of the DOM's"
+file = "crates/dom_api/src/document.rs"
+from = '''    Ok(crate::typed::DomStr::fresh(state))'''
+to = '''    Ok(crate::typed::DomStr::Owned(dom::DomString::new(state)))'''
+
+[[mutant]]
+name = "an option's text is made a string of the DOM's"
+file = "crates/dom_api/src/select.rs"
+from = '''    Ok(DomStr::fresh(cx.option_text(this)))'''
+to = '''    Ok(DomStr::Owned(dom::DomString::new(&cx.option_text(this))))'''
+
+[[mutant]]
+name = "a link's URL is made a string of the DOM's"
+file = "crates/dom_api/src/hyperlink.rs"
+from = '''        Some(url) => DomStr::fresh(String::from(url)),'''
+to = '''        Some(url) => DomStr::Owned(dom::DomString::new(url.as_str())),'''
+
+[[mutant]]
+name = "a link's URL is another's"
+file = "crates/dom_api/src/hyperlink.rs"
+from = '''        Some(url) => DomStr::fresh(String::from(url)),'''
+to = '''        Some(_) => DomStr::fresh("about:blank"),'''

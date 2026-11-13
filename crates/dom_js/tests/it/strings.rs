@@ -555,3 +555,48 @@ fn a_new_string_is_made_with_no_scope() {
     );
     assert_eq!((scopes(), handles()), (scopes_before, handles_before));
 }
+
+/// A result that is a keyword (a constant of the program's) or text its
+/// function computed is given as that text: no string of the DOM's is
+/// made of it on the way.
+#[test]
+fn a_keyword_or_computed_text_is_given_as_it_is() {
+    let mut env = Env::window("https://example.test/page.html");
+    assert_eq!(
+        env.eval(
+            "var e = document.createElement('div'); \
+             (document.documentElement || document.appendChild(document.createElement('html'))).appendChild(e); \
+             var root = e.attachShadow({ mode: 'open' }); var select = document.createElement('select'); \
+             var option = document.createElement('option'); option.setAttribute('value', 'v'); \
+             option.textContent = ' some  text '; select.appendChild(option); \
+             var a = document.createElement('a'); a.setAttribute('href', '/path?q#f'); \
+             var observer = new IntersectionObserver(() => {}, { rootMargin: '1px 2px' }); \
+             document.documentElement.appendChild(document.createElement('head')); \
+             document.title = 'a title'; var out; 0"
+        ),
+        "0"
+    );
+    for (source, value) in [
+        // Keywords.
+        ("document.readyState", "complete"),
+        ("document.compatMode", "CSS1Compat"),
+        ("root.mode", "open"),
+        ("history.scrollRestoration", "auto"),
+        ("getSelection().type", "None"),
+        // Computed for the call.
+        ("document.title", "a title"),
+        ("option.text", "some text"),
+        ("option.label", "some text"),
+        ("option.value", "v"),
+        ("select.value", "v"),
+        ("a.href", "https://example.test/path?q#f"),
+        ("document.baseURI", "https://example.test/page.html"),
+        ("observer.rootMargin", "1px 2px 1px 2px"),
+        ("crypto.randomUUID().length", "36"),
+    ] {
+        let fresh = env.fresh_strings();
+        env.eval(&format!("out = {source};"));
+        assert_eq!(env.fresh_strings(), fresh + 1, "{source}");
+        assert_eq!(env.eval("String(out)"), value, "{source}");
+    }
+}
