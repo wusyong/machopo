@@ -222,10 +222,19 @@ fn qualified_text(name: dom::NameIds) -> String {
 pub(crate) fn get_attribute_names<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: NodeRef<'gc>,
-) -> Result<Vec<dom::DomString>, ApiError> {
+) -> Result<Vec<crate::typed::NameOrText>, ApiError> {
+    use crate::typed::NameOrText;
     Ok((0..cx.attribute_count(this))
         .filter_map(|index| cx.attribute_at(this, index))
-        .map(|attribute| dom::DomString::from(qualified_text(attribute.name)))
+        .map(|attribute| {
+            // Without a prefix (most), the qualified name is the local
+            // name, one of the table's: no text made.
+            if attribute.name.prefix == dom::names::NONE {
+                NameOrText::Name(attribute.name.local)
+            } else {
+                NameOrText::Text(qualified_text(attribute.name))
+            }
+        })
         .collect())
 }
 

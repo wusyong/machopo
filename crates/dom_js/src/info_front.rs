@@ -1060,6 +1060,10 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         self.with_front(|front| front.finish_strings(strings));
     }
 
+    fn finish_names(&mut self, names: Vec<dom_api::typed::NameOrText>) {
+        self.with_front(|front| front.finish_names(names));
+    }
+
     fn finish_frozen_strings(&mut self, strings: Vec<DomString>) {
         self.with_front(|front| front.finish_frozen_strings(strings));
     }

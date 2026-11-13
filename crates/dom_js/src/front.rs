@@ -3196,6 +3196,44 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for V8Front<'a, 's, 'i, 'r, A> {
         self.rv().set(array.into());
     }
 
+    /// A name of the table is its V8 string of the isolate's cache, by
+    /// its number (made the first time, as a name returned is): no string
+    /// of the DOM's and no V8 string made for it.
+    fn finish_names(&mut self, names: Vec<dom_api::typed::NameOrText>) {
+        use dom_api::typed::NameOrText;
+        let mut values: Vec<v8::Local<'_, v8::Value>> = Vec::with_capacity(names.len());
+        for name in &names {
+            let value = match name {
+                NameOrText::Name(id) => {
+                    let cached = {
+                        let (state, mut no_gc) = self.scope.state();
+                        usize::try_from(*id)
+                            .ok()
+                            .and_then(|index| state.caches.names.get(index))
+                            .and_then(Option::as_ref)
+                            .map(|name| no_gc.local(name))
+                    };
+                    match cached {
+                        Some(string) => Some(string),
+                        None => make_name(&mut self.scope, *id, &names::get(*id)),
+                    }
+                }
+                NameOrText::Text(text) => v8::String::new_from_utf8(
+                    self.scope.scope(),
+                    text.as_bytes(),
+                    v8::NewStringType::Normal,
+                ),
+            };
+            let Some(value) = value else {
+                exception::throw_range_error(self.scope.scope(), "Invalid string length");
+                return;
+            };
+            values.push(value.into());
+        }
+        let array = v8::Array::new_with_elements(self.scope.scope(), &values);
+        self.rv().set(array.into());
+    }
+
     fn finish_strings(&mut self, strings: Vec<DomString>) {
         let mut values: Vec<v8::Local<'_, v8::Value>> = Vec::with_capacity(strings.len());
         for string in &strings {

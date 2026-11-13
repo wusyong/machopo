@@ -1104,6 +1104,7 @@ fn not_plain(table: &Table) -> Vec<String> {
                 "Any",
                 "Rest",
                 "Strings",
+                "Names",
                 "Slottables",
                 "NodesOrStrings",
                 "GetHtmlOptionsArg",

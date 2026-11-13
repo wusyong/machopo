@@ -1102,6 +1102,20 @@ pub trait Front: FrontTypes {
         let _ = strings;
         unreachable!("a front end binding a member giving strings makes them")
     }
+    /// A new array of names: one of the names table by its number (the
+    /// front end may keep its engine's string of it), or text. As
+    /// `finish_strings` of them, unless the front end has its own.
+    fn finish_names(&mut self, names: Vec<NameOrText>) {
+        self.finish_strings(
+            names
+                .into_iter()
+                .map(|name| match name {
+                    NameOrText::Name(id) => names::string(id),
+                    NameOrText::Text(text) => DomString::from(text),
+                })
+                .collect(),
+        );
+    }
     /// As `finish_strings`, a `FrozenArray<DOMString>`.
     fn finish_frozen_strings(&mut self, strings: Vec<DomString>) {
         let _ = strings;
@@ -3971,6 +3985,25 @@ pub struct FrozenStrings;
 impl RetType for FrozenStrings {
     const DESC: TypeDesc = TypeDesc::FrozenStrings;
     finished_after!(Vec<DomString>, finish_frozen_strings);
+}
+
+/// A name as a result's array has it: one of the names table (a local
+/// name), by its number, or text made for it (a qualified name with a
+/// prefix).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NameOrText {
+    Name(NameId),
+    Text(String),
+}
+
+/// `sequence<DOMString>` of names (`getAttributeNames()`'s): a new array
+/// each time, a name of the table given by its number
+/// (`Front::finish_names`).
+pub struct Names;
+
+impl RetType for Names {
+    const DESC: TypeDesc = TypeDesc::Strings;
+    finished_after!(Vec<NameOrText>, finish_names);
 }
 
 /// As a result: a named properties' supported names (`#[named(names)]`).
@@ -8592,6 +8625,7 @@ pub const PLAIN_FRONT_METHODS: &[&str] = &[
     "finish_objects",
     "finish_frozen_objects",
     "finish_strings",
+    "finish_names",
     "finish_frozen_strings",
     "finish_doubles",
     "finish_numbers",

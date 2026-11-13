@@ -33,12 +33,12 @@
 | 4k-C3 剖析 `inp.select()`、`abort()`（Chrome 的 1.29 倍） | 完成 | 2026-11-13 |
 | 4k-D 新的 wrapper：同一個 realm 的節點直接複製樣板物件、不經過 `V8Front`（root 還在） | 完成 | 2026-11-13 |
 | 4k-E 不借字元的字串參數（非 ASCII、還沒攤平的）用 isolate 複製，不經過 `V8Front`；Latin-1 原地讀 | 完成 | 2026-11-13 |
-| 4k-F dictionary、例外、陣列、promise | 還沒開始 | |
+| 4k-F 對 Chrome 量 dictionary、例外、陣列、promise（都不落後）；只做 `getAttributeNames`（名稱從名稱的 V8 字串快取拿） | 完成 | 2026-11-13 |
 | 4k-C4 評估：會跑 script 的函式的 `this` 和參數改拿 wrapper、不登記 root（185 個函式和 `ScriptHost` 的介面；4k-F 之後有完整的數字再決定做不做、做多大；決定 43） | 還沒開始 | |
 | 4k-G 最熱的路本身（`nodeType` 是 Chrome 的 1.36 倍）：另外研究 | 還沒開始 | |
 | 4l cross-origin 的 16 個成員，和要找別的 realm 的 window 的 5 個（`Blob` 的 `arrayBuffer`、`bytes`、`text`，`Location.assign`，`Document.location` 的 setter）；4i 留下的 interceptor（indexed setter、iterator 的 pairs、named 的刪除、查詢和列舉）；legacy factory | 還沒開始 | |
 | 4m-2 刪舊的外殼、`Call`、`Kept`、`PLAIN`（連同它的檢查：`PLAIN_FRONT_METHODS`、`PLAIN_OP_METHODS`、`dom_api` 的 `plain` 測試、`dom_js` 的 `the_plain_methods_are_the_info_front_ends_own`、`docs/test-gaps.md` 的那一列） | 還沒開始 | |
-| 4m-3 刪掉 `V8Front`（4k-A 到 4k-F 之後沒有人用） | 還沒開始 | |
+| 4m-3 新的 front 還交給 `V8Front` 的約 85 個方法搬出來（搬法到時評估：留一個 scope、只拿掉殼，或全部不建 scope；決定 42），再刪掉 `V8Front` | 還沒開始 | |
 | 收尾：`nodeType`、`getAttribute` 的 callback 和 Chrome 的逐條指令對照，列出剩下的差（決定 20） | 還沒開始 | |
 
 ## 驗收
@@ -750,3 +750,14 @@
 - 測試：`dom_js` 的 `info_front::a_plain_call_that_allocates_or_throws_makes_a_scope` 把「不借字元的字串參數」移到不建 scope 的那一組（cons string、Latin-1 的名稱、漢字的名稱、Latin-1 和漢字的值），並讀回值確認內容和長度。
 - mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4kE.toml`，3 個都抓到。「Latin-1 不走原地讀的路」結果一樣、只是慢，沒有列（記在 `docs/test-gaps.md`）。
 - 跑過：`cargo test -p bindings -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt dom/nodes dom/traversal html/dom encoding/textdecoder-labels.any.js`（77128 個結果都照預期）。
+
+**第 4k-F 段：dictionary、例外、陣列、promise 對 Chrome 量；`getAttributeNames`**（2026-11-13，決定 42）：
+
+- `chrome-compare`（各三次取最小；ns 一次）：machopo 比較快或持平的：`new Event('x', init)` 221.0 對 181.7（0.82 倍）、`new CustomEvent('x', { detail })` 333.7 對 213.3（0.64）、`addEventListener` 加 `removeEventListener`（帶 options）548.3 對 216.0（0.39）、丟例外的三種（`appendChild(自己)` 2667 對 1973、參數型別錯 2705 對 1013、selector 語法錯 2493 對 2063：0.37 到 0.83）、`ctx.getLineDash()` 55.7 對 24.7、`navigator.languages` 158.0 對 126.3、`querySelectorAll('p')` 330.3 對 175.3、`n.children` 18.8 對 10.8、`new DOMRect(…)` 288.7 對 63.7、`new MouseEvent('x', init)` 805 對 924（1.15）。落後的：`n.matches('body')` 27.7 對 48.0（1.73）、`n.getAttributeNames()` 94.0 對 154.3（1.64）、`n.classList.contains('a')` 27.0 對 32.4（1.20）。不能比的（Chrome 做了真的版面和 I/O，測試環境的 machopo 沒有）：`new Blob(…).text()`、`new Response(…).text()`、`getBoundingClientRect()`、`scrollTo(…)`。
+- 剖析：`getAttributeNames` 的 malloc 和 free 約兩成（每個名稱各做一個 `DomString` 再複製給 V8）、`Cx::attribute_at` 27%；`matches` 32% 在一次 `memmove`（style 的 `SelectorQuery` 那一側搬一塊大的結構）、15% 在 `with_full_match`，不是 binding，不在這份 RFC 處理。
+- 只做 `getAttributeNames`：`dom_api` 的 `NameOrText`、`Names`（`RetType`，`TypeDesc::Strings`）、`Front::finish_names`（預設轉成 `DomString` 交給 `finish_strings`）；`get_attribute_names` 沒有前綴的給名稱的編號（local name 就是 qualified name），有前綴的照舊做成文字。`dom_js`：`V8Front::finish_names` 照編號從 `caches.names` 拿 V8 的字串（沒有時 `make_name`），`InfoFront` 經過 `with_front`（建陣列還是要 scope）。macro 的「wasm 的 guest 拿不了的型別」清單加 `Names`。
+- 指令數（`perf stat`，各五次取最小）：兩個屬性 2526 → 1365，八個屬性 7943 → 3282。`chrome-compare`：154.3 → 84.0 ns（Chrome 92.0：1.68 → 0.91 倍）；沒動到的沒變（`nodeType` 4.5、`parentNode` 5.8 和 5.9、`getAttribute` 25.3 和 25.6、`setAttribute` 44.2 和 44.8、`tagName` 10.3、`dispatchEvent` 74.0 和 74.7）。
+- 其餘的不做（使用者）：例外、promise、dictionary、其他陣列已經比 Chrome 快，但還經過 `V8Front`（新的 front 約 85 個方法）；怎麼搬到 4m-3 再評估，步驟表的 4m-3 改了。
+- 測試：`dom_js` 的 `strings::attribute_names_are_the_names_own_strings`（四個屬性照順序、沒有前綴的三個各做一次名稱的字串、有前綴的是文字、再呼叫不再做、每次是新的陣列、和 `localName` 是同一個字串、沒有屬性是空的）。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4kF.toml`，4 個都抓到。
+- 跑過：`cargo test -p dom_api_macros -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt dom/nodes html/dom`（75502 個結果都照預期）。

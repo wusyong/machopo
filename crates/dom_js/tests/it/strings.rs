@@ -600,3 +600,44 @@ fn a_keyword_or_computed_text_is_given_as_it_is() {
         assert_eq!(env.eval("String(out)"), value, "{source}");
     }
 }
+
+/// `getAttributeNames()` gives each attribute's name from the isolate's
+/// names: a local name's V8 string is made the first time and found by
+/// its number after; a name with a prefix is text made for it. The array
+/// is new each time, in the attributes' order.
+#[test]
+fn attribute_names_are_the_names_own_strings() {
+    let mut env = Env::new();
+    env.eval(
+        "var d = machopoDom.createDocument(); var e = d.createElement('p'); \
+         e.setAttribute('data-first', '1'); e.setAttribute('id', 'x'); \
+         e.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', '#'); \
+         e.setAttribute('caf\\u00e9', '2'); var got;",
+    );
+    let names = env.names_made();
+    assert_eq!(
+        env.eval("got = e.getAttributeNames(); got.join()"),
+        "data-first,id,xlink:href,café"
+    );
+    assert_eq!(
+        env.names_made(),
+        names + 3,
+        "the three with no prefix; the prefixed one is text"
+    );
+    assert_eq!(
+        env.eval(
+            "var again = e.getAttributeNames(); \
+             [Array.isArray(again), again !== got, again.join() === got.join(), again.length].join()"
+        ),
+        "true,true,true,4"
+    );
+    assert_eq!(env.names_made(), names + 3, "found by their numbers");
+    // The same string as the name returned alone, and no attribute, none.
+    assert_eq!(
+        env.eval(
+            "var f = d.createElement('id'); [f.getAttributeNames().length, f.localName === got[1]].join()"
+        ),
+        "0,true"
+    );
+    assert_eq!(env.names_made(), names + 3);
+}

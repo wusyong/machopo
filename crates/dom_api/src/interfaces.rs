@@ -22,7 +22,7 @@ use crate::typed::{
     IntersectionObserverEntryInitArg, IntersectionObserverInitArg, IsNull, JsonData,
     KeyboardEventObject, Keyframes, LegacyNullToEmptyString, LongDefaultMinusOne, LongDefaultOne,
     MeasureStart, MediaQueryListEventObject, MediaQueryListObject, MessageEventObject,
-    MessagePortObject, MessagePorts, MouseEventObject, MutationCallback, NamespaceObject,
+    MessagePortObject, MessagePorts, MouseEventObject, MutationCallback, Names, NamespaceObject,
     NavigationTimingObject, NetworkInformationObject, NewElement, NewHtmlElement, NewImageData,
     NewNodeLikeThis, NewObject, NoObject, NoPositionObject, NodesOrStrings, NullableBody,
     NullableElementOrLong, NullableU32, NumberIfNumber, Numbers, ObservableArray, OptionOrOptGroup,
@@ -2113,7 +2113,7 @@ crate::declare! {
         method removeAttribute(qualifiedName: DomString) = element::remove_attribute;
         method hasAttribute(qualifiedName: DomString) -> bool = element::has_attribute;
         method hasAttributes() -> bool = element::has_attributes;
-        method getAttributeNames() -> Strings = element::get_attribute_names;
+        method getAttributeNames() -> Names = element::get_attribute_names;
         attribute attributes: NamedNodeMap, get = attr::attributes;
         method getAttributeNode(qualifiedName: DomString) -> Option<Attr> = attr::get_attribute_node;
         method getAttributeNodeNS(namespace: Option<DomString>, localName: DomString) -> Option<Attr> =

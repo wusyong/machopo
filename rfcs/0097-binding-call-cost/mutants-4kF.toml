@@ -1,0 +1,48 @@
+# Stage 4k-F: `getAttributeNames()` gives a name of the names table by its
+# number, its V8 string from the isolate's names cache.
+test = ["cargo", "test", "-q", "-p", "dom_api", "-p", "dom_js"]
+timeout = 1800
+
+[[mutant]]
+name = "a name's string is made each time"
+file = "crates/dom_js/src/front.rs"
+from = '''                            .and_then(Option::as_ref)
+                            .map(|name| no_gc.local(name))
+                    };
+                    match cached {'''
+to = '''                            .and_then(Option::as_ref)
+                            .map(|name| no_gc.local(name))
+                            .filter(|_| false)
+                    };
+                    match cached {'''
+
+[[mutant]]
+name = "a prefixed attribute's name is its local name"
+file = "crates/dom_api/src/element.rs"
+from = '''            if attribute.name.prefix == dom::names::NONE {
+                NameOrText::Name(attribute.name.local)'''
+to = '''            if true {
+                NameOrText::Name(attribute.name.local)'''
+
+[[mutant]]
+name = "an attribute's name is always text"
+file = "crates/dom_api/src/element.rs"
+from = '''            if attribute.name.prefix == dom::names::NONE {
+                NameOrText::Name(attribute.name.local)'''
+to = '''            if false {
+                NameOrText::Name(attribute.name.local)'''
+
+[[mutant]]
+name = "the last name is left out of the array"
+file = "crates/dom_js/src/front.rs"
+from = '''        let array = v8::Array::new_with_elements(self.scope.scope(), &values);
+        self.rv().set(array.into());
+    }
+
+    fn finish_strings'''
+to = '''        values.pop();
+        let array = v8::Array::new_with_elements(self.scope.scope(), &values);
+        self.rv().set(array.into());
+    }
+
+    fn finish_strings'''
