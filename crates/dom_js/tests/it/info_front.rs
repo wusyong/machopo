@@ -85,7 +85,6 @@ fn a_plain_call_that_allocates_or_throws_makes_a_scope() {
             "n.setAttribute('data-x', '\\u6587'); n.getAttribute('data-x')",
             "文",
         ),
-        ("n.getAttribute('data-' + 'z'.repeat(20))", "null"),
         ("n.getAttribute({ toString() { return 'id'; } })", "x"),
         // A string V8 has no copy of; a name's, not made yet.
         (
@@ -152,9 +151,27 @@ fn a_plain_call_that_allocates_or_throws_makes_a_scope() {
         ("n.firstChild.tagName", "B"),
         // A name's string is kept by its number, not as any string's.
         ("section.tagName", "SECTION"),
+        // A string argument that doesn't lend its text (not flat yet, not
+        // ASCII: Latin-1, two-byte) is copied with the isolate alone.
+        ("n.getAttribute('data-' + 'z'.repeat(20))", "null"),
+        ("n.hasAttribute('data-caf\\u00e9')", "false"),
+        ("n.hasAttribute('\\u6587\\u5b57')", "false"),
+        (
+            "n.setAttribute('data-l', 'caf\\u00e9 cr\\u00e8me'); n.hasAttribute('data-l')",
+            "true",
+        ),
+        (
+            "n.setAttribute('data-w', '\\u6587\\u5b57'); n.hasAttribute('data-w')",
+            "true",
+        ),
     ] {
         assert_eq!(scopes(&mut env, source), (value.into(), 0), "{source}");
     }
+    // What was copied is the text: Latin-1 and two-byte, read back.
+    assert_eq!(
+        env.eval("[n.getAttribute('data-l'), n.getAttribute('data-w'), n.getAttribute('data-l').length].join()"),
+        "café crème,文字,10"
+    );
     // And after V8 collected what it had, made again.
     env.full_gc();
     assert_eq!(

@@ -166,6 +166,7 @@
 
 - **影響大的**（當時量到幾 % 到幾十 %）：
   - `dom_js` 每次操作之後看 DOM 的 heap 長了多少，用 `Dom::counted_bytes`（elise 的 `Heap::counted_bytes`，一次讀完），要報給 V8 時才用 `used_bytes`（扣掉每一級 cursor 還沒用的尾巴，走過 51 個 cursor）：每次都用 `used_bytes` 時結果一樣，每個會回報的成員多約 510 條指令（2026-11-08 `bench.py calls` 量到：`getAttribute` 700 → 1213）。要守的話數 `used_bytes` 算尾巴的次數，`calls` 的迴圈裡應該只在回報時有。
+  - `dom_js` 的 `ArgString::copied` 對扁平的 Latin-1 字串用 `bindings::LentString::latin1_to_utf8`（原地讀、simdutf 轉碼），不經過 V8 的 `ValueView`：拿掉這條路（一律 `to_rust_string_lossy`）結果一樣，`setAttribute` 一個 Latin-1 的值多約 200 條指令（2026-11-13 量的：1284 對 1491）。要守的話數 `ValueView` 建了幾次（fork 沒有這個計數）。
   - 會呼叫 script、沒有參數的成員登記 `this` 的 root 用讀的操作（`dom_api_macros` 的 `script_method` 的 `rooting`）：換回寫的操作結果一樣，每次呼叫多約 24 條指令（一個寫的操作 44 條、讀的 20 條，2026-11-12 量的零件成本）。要守的話數這類成員一次呼叫開了幾個寫的操作。
   - `dom_js` 的名稱的 V8 字串建成 internalized 的（`make_name`）：dictionary 的成員拿它當屬性的 key，不是 internalized 時 V8 每次查屬性都要先 internalize，結果一樣、只是慢（「key 只做一次」有 `strings::a_dictionary_members_key_is_made_once` 數著；「是 internalized」沒有：rusty_v8 沒有問字串是不是 internalized 的 API）。要守的話在 fork 加這個查詢。
   - rusty_v8 的 fork 的 callback 回傳值寫整格（`src/function.rs` 的 `set_internal`，relaxed 的 `AtomicUsize` store）：換回一般的寫入時值一樣（debug build 的交叉檢查只比值），但 LLVM 把它縮成 32 bits 的 store，builtin 接著讀整格，store forwarding 失敗（x86-64 上空的 getter 5.4 ns 裡的 2.3 ns）。現在靠 `bench.py calls` 的 store forwarding 衝突數（每次呼叫的方括號）和審查；`cargo test` 沒有 `perf`。要數：新的 binding 的 callback 在 `bench.py calls` 裡每次呼叫的衝突數是 0，或在有 `perf` 的機器上把它寫成測試。

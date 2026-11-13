@@ -226,6 +226,23 @@ impl<'s> ArgString<'s> {
         }
     }
 
+    /// `string`, which doesn't lend its text in place (not ASCII, or
+    /// not flat: a cons string, which reading flattens), copied now as
+    /// UTF-8: with the isolate alone, no scope made.
+    pub(crate) fn copied(isolate: &v8::Isolate, string: v8::Local<'s, v8::String>) -> Self {
+        let string = bindings::LentString::new(string);
+        // A flat one-byte string that isn't ASCII (Latin-1) is read where
+        // it is; another (two-byte, or not flat yet) through V8's view of
+        // it.
+        let copied = string
+            .latin1_to_utf8(isolate)
+            .unwrap_or_else(|| string.string().to_rust_string_lossy(isolate));
+        Self {
+            string,
+            copied: Some(copied),
+        }
+    }
+
     /// `text`, for a holder of the state borrowed from the callback's
     /// info.
     pub(crate) fn text_lent(&self, no_gc: &mut bindings::InfoNoGc<'_, '_>) -> &str {

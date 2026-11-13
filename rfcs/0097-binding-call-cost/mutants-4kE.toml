@@ -1,0 +1,26 @@
+# Stage 4k-E: a string argument that doesn't lend its text is copied with
+# the isolate alone (no scope, nothing of the whole front end's), a flat
+# Latin-1 one read where it is.
+test = ["cargo", "test", "-q", "-p", "bindings", "-p", "dom_js"]
+timeout = 1800
+
+[[mutant]]
+name = "a string that doesn't lend its text is the whole front end's"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if let Some(string) = v8::machopo::as_string(K::arg(&self.info, index)) {
+            return Some(ArgString::copied(self.info.isolate(), string));
+        }'''
+to = ''''''
+
+[[mutant]]
+name = "a Latin-1 string's copy isn't cut to what was written"
+file = "crates/bindings/src/v8_text.rs"
+from = '''        utf8.truncate(written);'''
+to = '''        let _ = written;'''
+
+[[mutant]]
+name = "a Latin-1 string is copied as its bytes"
+file = "crates/bindings/src/v8_text.rs"
+from = '''        let written = unsafe { v8::simdutf::convert_latin1_to_utf8(chars, &mut utf8) };'''
+to = '''        utf8[..chars.len()].copy_from_slice(chars);
+        let written = chars.len();'''

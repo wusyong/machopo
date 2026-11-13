@@ -44,11 +44,13 @@ pub(crate) enum PendingString {
 /// A node the operation couldn't give V8: what `InfoFront::finish_node`
 /// makes after.
 pub(crate) enum PendingNode {
-    /// A node with no wrapper, rooted, its interface, and whether its
-    /// realm is the callback's (most are: its wrapper is then a copy of
-    /// that realm's boilerplate, made with no scope): a wrapper made, in
-    /// an operation of its own.
-    Node(NodeRoot, usize, bool),
+    /// A node of the callback's realm with no wrapper (most such are),
+    /// rooted, and its interface: its wrapper is a copy of the realm's
+    /// boilerplate, made with no scope, in an operation of its own.
+    Node(NodeRoot, usize),
+    /// As `Node`, of another realm: the whole front end's to make there.
+    /// (A variant, not a flag: what a getter hands back stays two words.)
+    Elsewhere(NodeRoot, usize),
     /// A custom element `createElement` is to construct with its
     /// definition's constructor, in the document.
     Construct(Persistent<dom::CustomElementDefinition>, NodeRoot),
@@ -650,9 +652,16 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
     /// A string argument that doesn't lend its text in place (not a
     /// string yet, not ASCII, not flat): converted or copied, as the whole
     /// front end does.
-    #[cold]
+    ///
+    /// A string is copied with the isolate alone (V8's own reading of its
+    /// characters: no scope, nothing of the whole front end's); what
+    /// isn't a string yet is the whole front end's to convert (`ToString`
+    /// may run script).
     #[inline(never)]
     fn converted_string_arg(&mut self, index: usize) -> Option<ArgString<'s>> {
+        if let Some(string) = v8::machopo::as_string(K::arg(&self.info, index)) {
+            return Some(ArgString::copied(self.info.isolate(), string));
+        }
         self.with_front(|front| front.string_arg(index))
     }
 
@@ -873,18 +882,16 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     /// a custom element constructed.
     #[inline(never)]
     fn finish_node(&mut self, pending: PendingNode) {
-        let pending = match pending {
-            PendingNode::Node(node, interface, true) => {
-                if self.wrap_node_here(&node, interface) {
-                    return;
-                }
-                PendingNode::Node(node, interface, false)
-            }
-            other => other,
-        };
+        if let PendingNode::Node(node, interface) = &pending
+            && self.wrap_node_here(node, *interface)
+        {
+            return;
+        }
         self.with_front(|front| {
             front.finish_kept_as(match pending {
-                PendingNode::Node(node, interface, _) => front::Kept::Node(node, interface),
+                PendingNode::Node(node, interface) | PendingNode::Elsewhere(node, interface) => {
+                    front::Kept::Node(node, interface)
+                }
                 PendingNode::Construct(definition, document) => {
                     front::Kept::Construct(definition, document)
                 }
@@ -2020,6 +2027,11 @@ impl<'s, K: InfoKind<'s>> InfoOp<'_, 's, K> {
                     .is_some_and(|window| elise::Gc::ptr_eq(cx.window_document(window), document))
             }
         };
-        PendingNode::Node(cx.root(node), front::interface_of(cx, node), here)
+        let (root, interface) = (cx.root(node), front::interface_of(cx, node));
+        if here {
+            PendingNode::Node(root, interface)
+        } else {
+            PendingNode::Elsewhere(root, interface)
+        }
     }
 }

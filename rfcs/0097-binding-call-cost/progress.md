@@ -32,7 +32,7 @@
 | 4k-C2 「先試的普通函式」的機制（`#[first(..)]`）和走訪的 9 個成員的快路（沒有 filter 時一個操作） | 完成 | 2026-11-13 |
 | 4k-C3 剖析 `inp.select()`、`abort()`（Chrome 的 1.29 倍） | 完成 | 2026-11-13 |
 | 4k-D 新的 wrapper：同一個 realm 的節點直接複製樣板物件、不經過 `V8Front`（root 還在） | 完成 | 2026-11-13 |
-| 4k-E 非 ASCII 和要轉換的字串參數 | 還沒開始 | |
+| 4k-E 不借字元的字串參數（非 ASCII、還沒攤平的）用 isolate 複製，不經過 `V8Front`；Latin-1 原地讀 | 完成 | 2026-11-13 |
 | 4k-F dictionary、例外、陣列、promise | 還沒開始 | |
 | 4k-C4 評估：會跑 script 的函式的 `this` 和參數改拿 wrapper、不登記 root（185 個函式和 `ScriptHost` 的介面；4k-F 之後有完整的數字再決定做不做、做多大；決定 43） | 還沒開始 | |
 | 4k-G 最熱的路本身（`nodeType` 是 Chrome 的 1.36 倍）：另外研究 | 還沒開始 | |
@@ -727,3 +727,26 @@
 - 測試：`dom_js` 的 `info_front::a_nodes_wrapper_is_copied_from_its_realms_boilerplate_with_no_scope`（window 的 realm：沒有 wrapper 的節點不建 scope、wrapper 多一個、再讀同一個節點不再多；另一種 interface 的第一個節點建 scope、之後的不建；wrapper 是節點自己的、prototype 對、script 設的屬性過了 full GC 還在）。寫測試時弄錯的：這個檔案的 `scopes` 現在數的是 scope 加 `handles` 的次數（4k-B 改的），這條路要三次 `handles`，一開始以為是三個 scope；改用只數 scope 的 `only_scopes`。別的 realm 的節點靠原有的測試（mutation 的兩個跨 realm 的 mutant 都被抓到）。
 - mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4kD.toml`，6 個都抓到。
 - 跑過：`cargo test -p bindings -p dom_api_macros -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`ci.py third-party`、`test.py wpt dom/nodes dom/traversal dom/events dom/collections html/dom html/browsers/windows html/semantics/embedded-content/the-iframe-element custom-elements`（81802 個結果都照預期）。
+
+**第 4k-E 段：非 ASCII 和還沒攤平的字串參數**（2026-11-13，決定 42）：
+
+- `dom_js`：`InfoFront::converted_string_arg` 碰到字串（不借字元的：不是 ASCII、或還沒攤平的 cons string）用 `ArgString::copied` 當場複製，只拿 isolate、不建 scope、不經過 `V8Front`；不是字串的（要 `ToString`，可能跑 script）照舊。`ArgString::copied`：扁平的 Latin-1 用 `bindings::LentString::latin1_to_utf8`，其餘（two-byte、cons）用 rusty_v8 的 `to_rust_string_lossy`（它只要 isolate，經過 `ValueView`）。
+- `bindings`：`LentString::latin1_to_utf8`（`one_byte_chars` 拿字元、rusty_v8 的 simdutf 轉 UTF-8；`soundness.md` 補）。沒有動 fork。
+- 4k-D 的 `PendingNode` 改成用另一個 variant（`Elsewhere`）表示別的 realm 的節點，不多帶一個旗標（寫法比較直接；量不出差別）。
+- 走錯的一步：Latin-1 第一版在 `dom_js` 裡逐字元轉（`bytes.iter().map(char::from).collect()`），量出來 1591 → 2300 條，比原本還慢；換成 simdutf 才是下面的數字。
+- 指令數（`perf stat`，各五次取最小；`setAttribute('a', …)`，扁平的 ASCII 是 1075）：Latin-1 1591 → 1284，two-byte（漢字）1594 → 1550，cons string 1831 → 1781（扣掉串接），`getAttribute(cons)` 1366 → 1344。
+- `chrome-compare`（各三次取最小；ns 一次，括號是 Chrome 的倍數）：
+
+  | | Chrome | 4k-D | 這一段 |
+  | --- | ---: | ---: | ---: |
+  | `setAttribute`，Latin-1 | 56.8 | 74.7（1.32） | 52.4（0.92） |
+  | `setAttribute`，漢字 | 56.9 | 68.7（1.21） | 67.5（1.19） |
+  | `setAttribute`，cons string（含串接） | 167.6 | 76.9（0.46） | 73.7（0.44） |
+  | `getAttribute`，cons string（含串接） | 116.6 | 60.4（0.52） | 56.9（0.49） |
+  | `setAttribute`，扁平的 ASCII | 56.9 | 44.0（0.77） | 44.1（0.78） |
+
+  驗收的 1.2 倍：Latin-1 到了；漢字 1.19，剛好在線上（剩下的是 `ValueView` 和一次 malloc）。
+- `parentNode` 的 0.4 ns（4k-D 記的疑慮）：指令數是 136，改了兩種寫法（`PendingNode` 縮回兩格、`finish_node` 標成冷的）都還是 136；時間的差在這份對照的解析度以內（同一個 binary 不同次 5.4 到 5.9），當成雜訊，不追。為了拿 4k-D 之前的 binary 對照，一度把兩個 repo 暫時切回舊的 commit，被使用者打斷後還原（那時 fork 是照 `third_party.toml` 釘的 commit 的 detached HEAD，還原時要回到那個 commit，不是 `machopo` 這個本地 branch：它停在更早的地方）。
+- 測試：`dom_js` 的 `info_front::a_plain_call_that_allocates_or_throws_makes_a_scope` 把「不借字元的字串參數」移到不建 scope 的那一組（cons string、Latin-1 的名稱、漢字的名稱、Latin-1 和漢字的值），並讀回值確認內容和長度。
+- mutation test：`python3 scripts/test.py mutate rfcs/0097-binding-call-cost/mutants-4kE.toml`，3 個都抓到。「Latin-1 不走原地讀的路」結果一樣、只是慢，沒有列（記在 `docs/test-gaps.md`）。
+- 跑過：`cargo test -p bindings -p dom_api -p dom_js -p dom_wasm`、`sanity.py` 七項、`cargo fmt --check`、`test.py wpt dom/nodes dom/traversal html/dom encoding/textdecoder-labels.any.js`（77128 個結果都照預期）。

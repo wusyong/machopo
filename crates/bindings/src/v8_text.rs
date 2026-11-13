@@ -120,6 +120,30 @@ impl<'s> LentString<'s> {
         Some(result)
     }
 
+    /// Its text as UTF-8, a copy, if it is a flat one-byte string of an
+    /// isolate whose GCs check loans: its Latin-1 characters read where
+    /// they are and converted (simdutf), instead of through V8's
+    /// `ValueView`. For a string that isn't ASCII (which `ascii` won't
+    /// lend: Latin-1 isn't UTF-8).
+    pub fn latin1_to_utf8(&self, isolate: &v8::Isolate) -> Option<String> {
+        if isolate.get_data(GUARDED_SLOT).is_null() {
+            return None;
+        }
+        // SAFETY: as `chars`': the string is `isolate`'s, rooted by its
+        // handle; the slice is read below, before anything of V8's is
+        // called (nothing allocates between: no GC).
+        let chars = unsafe { v8::machopo::one_byte_chars(isolate, &self.string) }?;
+        let capacity = chars.len().checked_mul(2)?;
+        let mut utf8 = vec![0; capacity];
+        // SAFETY: the output has twice the input's length, simdutf's
+        // bound for Latin-1 (a character is one or two bytes of UTF-8).
+        let written = unsafe { v8::simdutf::convert_latin1_to_utf8(chars, &mut utf8) };
+        utf8.truncate(written);
+        // SAFETY: simdutf wrote `written` bytes of valid UTF-8 (any
+        // Latin-1 input converts).
+        Some(unsafe { String::from_utf8_unchecked(utf8) })
+    }
+
     /// Whether `ascii` would lend its text: lending none yet.
     pub fn lends(&self, isolate: &v8::Isolate) -> bool {
         self.chars(isolate).is_some()

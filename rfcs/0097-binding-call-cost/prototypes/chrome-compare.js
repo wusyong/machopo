@@ -40,6 +40,7 @@ function run() {
   time('getAttribute flat', N, (N) => { for (let i = 0; i < N; i++) { x = n.getAttribute('id'); } });
   time('concat2 only', N, (N) => { for (let i = 0; i < N; i++) { s = 'data-attribute-name-' + (i & 7); } });
   time('getAttribute cons', N, (N) => { for (let i = 0; i < N; i++) { s = 'data-attribute-name-' + (i & 7); x = n.getAttribute(s); } });
+  time('setAttribute cjk', N, (N) => { for (let i = 0; i < N; i++) { n.setAttribute('a', '\u6f22\u5b57\u306e\u6587\u7ae0'); } });
   time('setAttribute non-ascii', N, (N) => { for (let i = 0; i < N; i++) { n.setAttribute('a', 'valué-number-long-1'); } });
   ctx.lineWidth = 1; time('lineWidth 1', N, (N) => { for (let i = 0; i < N; i++) { x = ctx.lineWidth; } });
   ctx.lineWidth = 1.5; time('lineWidth 1.5', N, (N) => { for (let i = 0; i < N; i++) { x = ctx.lineWidth; } });
