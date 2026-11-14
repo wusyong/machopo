@@ -9,8 +9,17 @@ use bindings::V8PerIsolateData;
 /// handles with none (`bindings::InfoState::handles`). A call that adds
 /// none was served from what V8 and the DOM already had.
 pub fn slow_paths() -> u64 {
-    bindings::info_scopes_for_testing().expect("a debug build")
-        + bindings::info_handles_for_testing().expect("a debug build")
+    info_scopes() + bindings::info_handles_for_testing().expect("a debug build")
+}
+
+/// The scopes the info callbacks made on this thread so far, but those
+/// made only to tell V8 the DOM's heap's size: such a one follows a GC
+/// (the heap shrank), whatever the member called, and V8 starts GCs at its
+/// own times under the stress flags.
+pub fn info_scopes() -> u64 {
+    bindings::info_scopes_for_testing()
+        .expect("a debug build")
+        .wrapping_sub(dom_js::size_report_scopes_for_testing().expect("a debug build"))
 }
 
 /// Whether this run's V8 starts GCs at its own times (one of the stress

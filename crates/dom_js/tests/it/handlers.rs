@@ -1430,9 +1430,9 @@ fn a_member_that_needs_a_scope_is_given_the_info_and_makes_it() {
         ("blob.text() instanceof Promise", "true"),
         ("(document.location === location)", "true"),
     ] {
-        let before = bindings::info_scopes_for_testing().expect("a debug build");
+        let before = crate::env::info_scopes();
         let found = report(&mut engine, source);
-        let made = bindings::info_scopes_for_testing().expect("a debug build") - before;
+        let made = crate::env::info_scopes() - before;
         assert_eq!(found, value, "{source}");
         assert!(made >= 1, "{source}: a scope, of an info callback");
     }

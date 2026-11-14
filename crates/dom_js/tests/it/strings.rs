@@ -430,7 +430,7 @@ fn a_new_string_is_made_with_no_scope() {
          var ctx = d.createElement('canvas').getContext('2d'); e.style.color = 'red'; \
          var out;",
     );
-    let scopes = || bindings::info_scopes_for_testing().expect("a debug build");
+    let scopes = || crate::env::info_scopes();
     let handles = || bindings::info_handles_for_testing().expect("a debug build");
     // Text computed for the call, and a constant, are carried out of the
     // operation as they are: no string of the DOM's is made of them.

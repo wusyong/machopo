@@ -16,9 +16,9 @@ fn scopes(env: &mut Env, source: &str) -> (String, u64) {
 /// The scopes alone the info callbacks made evaluating `source` (not the
 /// handles asked for with none).
 fn only_scopes(env: &mut Env, source: &str) -> u64 {
-    let before = bindings::info_scopes_for_testing().expect("a debug build");
+    let before = crate::env::info_scopes();
     env.eval(source);
-    bindings::info_scopes_for_testing().expect("a debug build") - before
+    crate::env::info_scopes() - before
 }
 
 fn env() -> Env {

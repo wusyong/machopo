@@ -28,6 +28,22 @@ use crate::state::{self, Caches, State};
 use crate::strings::ArgString;
 use crate::templates;
 
+thread_local! {
+    /// The scopes the info front end made on this thread only to tell V8
+    /// the DOM's heap's size (`InfoFront::report`), for the tests. Counted
+    /// in debug builds only.
+    static SIZE_REPORT_SCOPES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many scopes this thread's member calls made only to tell V8 how
+/// much the DOM's heap grew or shrank: what a test counting a call's
+/// scopes takes off, as these come whenever a GC ran before the call
+/// (V8's, at its own times under the stress flags). `None` in release
+/// builds. For tests.
+pub fn size_report_scopes_for_testing() -> Option<u64> {
+    cfg!(debug_assertions).then(|| SIZE_REPORT_SCOPES.get())
+}
+
 /// A string the operation couldn't give V8 (it would allocate one): what
 /// `InfoFront::finish_string` makes after.
 pub(crate) enum PendingString {
@@ -709,6 +725,11 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
     #[cold]
     #[inline(never)]
     fn report_these(&mut self, microtasks: dom::Microtasks, used: Option<usize>) {
+        // A scope only to tell V8 how much the DOM's heap moved: it comes
+        // when a GC does, not by what the member is.
+        if cfg!(debug_assertions) && microtasks.is_empty() {
+            SIZE_REPORT_SCOPES.set(SIZE_REPORT_SCOPES.get().wrapping_add(1));
+        }
         self.info
             .with_scope(|mut scope, _| state::report_these(&mut scope, microtasks, used));
     }
