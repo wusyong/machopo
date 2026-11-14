@@ -1409,9 +1409,11 @@ fn a_number_that_is_no_small_integer_is_returned_with_no_scope() {
 
 /// A cross-origin property and a member that finds another realm's
 /// window are given V8's callback info alone too, and make the scope
-/// they need (the property's whole call in it; V8 asked for the realm in
-/// it); a legacy factory function is called as a constructor is, and
-/// gives what it gave.
+/// they need (a message's to serialize it; V8 asked for the realm in
+/// it), and none when they need none (a cross-origin getter or method
+/// that makes nothing); a
+/// legacy factory function is called as a constructor is, and gives what
+/// it gave.
 #[test]
 fn a_member_that_needs_a_scope_is_given_the_info_and_makes_it() {
     let mut engine = page();
@@ -1420,21 +1422,30 @@ fn a_member_that_needs_a_scope_is_given_the_info_and_makes_it() {
         "var blob = new Blob(['ab']); var got = []; location.href; new Image(); d.id;",
     );
     for (source, value) in [
-        // Cross-origin properties, on this window and its location.
-        ("location.href", "https://example.test/page.html"),
+        // A cross-origin property, on this window.
         ("(window.postMessage('m', '*'), 'posted')", "posted"),
-        ("window.closed", "false"),
-        ("window.length", "0"),
-        ("(window.focus(), 'focused')", "focused"),
         // The realm's window found for it.
         ("blob.text() instanceof Promise", "true"),
-        ("(document.location === location)", "true"),
     ] {
         let before = crate::env::info_scopes();
         let found = report(&mut engine, source);
         let made = crate::env::info_scopes() - before;
         assert_eq!(found, value, "{source}");
         assert!(made >= 1, "{source}: a scope, of an info callback");
+    }
+    // A cross-origin getter or method with nothing for V8 to make: as any
+    // member.
+    for (source, value) in [
+        // (Its string V8 has already: read above.)
+        ("location.href", "https://example.test/page.html"),
+        ("(document.location === location)", "true"),
+        ("window.closed", "false"),
+        ("window.length", "0"),
+        ("(window.focus(), 'focused')", "focused"),
+    ] {
+        let before = crate::env::info_scopes();
+        assert_eq!(report(&mut engine, source), value, "{source}");
+        assert_eq!(crate::env::info_scopes(), before, "{source}: no scope");
     }
     for (source, value) in [
         ("new Image(3, 4).width", "3"),

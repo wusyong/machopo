@@ -125,6 +125,7 @@ def code_lines(path: Path):
 def cmd_deps(args: argparse.Namespace) -> int:
     """V8 stays in `bindings` and `dom_js` (and `gc_bench`): other
     crates don't depend on V8. wasmtime likewise stays in `dom_wasm`.
+    `dom_js` has one front end (`front_problems`).
     The crates that pick an engine may depend on `dom_js`
     (`ENGINE_PICKERS` in this script)."""
     problems = []
@@ -140,12 +141,33 @@ def cmd_deps(args: argparse.Namespace) -> int:
                 continue
             problems.append(f"crates/{crate}/Cargo.toml: `{name}` in [{section}], but {crate} is engine-neutral")
 
+    problems += front_problems()
     for problem in problems:
         print(problem)
     if problems:
         return 1
-    print("V8 is confined to bindings, dom_js and gc_bench")
+    print("V8 is confined to bindings, dom_js and gc_bench; dom_js has one front end")
     return 0
+
+
+# The front ends `dom_js` may have (`impl ... Front for`): the one every
+# member's call runs on, and the named properties' own small one.
+DOM_JS_FRONTS = {"InfoFront", "PropertyFront"}
+
+
+def front_problems(root: Path = ROOT) -> list[str]:
+    """`dom_js` has one front end of V8's, `InfoFront`: every member's call
+    runs on it, script and all (`PropertyFront`, the named properties'
+    interceptors' part of one, aside). A second `impl Front` is a second
+    copy of each conversion to keep alike."""
+    problems = []
+    for path in sorted((root / "crates" / "dom_js" / "src").glob("*.rs")):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            found = re.match(r"impl\b.*\bFront for (\w+)", line)
+            if found and found.group(1) not in DOM_JS_FRONTS:
+                problems.append(f"{path.relative_to(root).as_posix()}:{number}: a front end `{found.group(1)}`, but "
+                                f"dom_js's members run on `InfoFront` alone (crates/dom_js/README.md)")
+    return problems
 
 
 # --- spans --------------------------------------------------------------------

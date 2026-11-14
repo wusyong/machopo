@@ -1,8 +1,9 @@
 //! A member's call through V8's callback info alone (Blink's generated
 //! callbacks take `v8::FunctionCallbackInfo` and keep the rest in locals):
-//! the front end every member's call starts on.
+//! the one front end of V8's, which every member's call runs on.
 //!
-//! It holds the info alone: no scope of rusty_v8's, no `front::Call`. A
+//! It holds the info alone: no scope of rusty_v8's, nothing kept across
+//! the call's script. A
 //! result the operation can't give (V8 would allocate) is the member's
 //! own, carried out of the operation by its return type
 //! (`dom_api::RetType::Pending`: a `PendingString`, a node's root, a
@@ -11,8 +12,9 @@
 //! are read from the info where they are used. What allocates in V8,
 //! throws or runs script (an argument to convert or copy, a string V8 has
 //! no copy of, a node with no wrapper, an error, an element's reactions)
-//! makes a scope and the whole front end (`front::WholeFront`) then, out of
-//! line, and is done by it.
+//! makes a scope then, out of line, and is done in it (`front::Scoped`);
+//! a member that runs script makes one for each call into script
+//! (`ScriptFront`).
 
 use bindings::InfoState;
 use dom::{
@@ -136,6 +138,54 @@ pub(crate) struct Method;
 pub(crate) struct Static;
 /// A constructor's.
 pub(crate) struct Construct;
+/// A legacy caller's (`document.all(..)`): its `this` the object called,
+/// whatever called it.
+pub(crate) struct Called;
+/// A pair iterator's step (`next()`, a turn of `forEach`): the
+/// interface's pairs member called on the iterator's target with an
+/// index, in a function's callback.
+pub(crate) struct Pair;
+
+/// What a pair iterator's step calls its member with: the function's
+/// callback info, the target and the index.
+pub(crate) struct PairInfo<'s> {
+    pub(crate) info: bindings::StateInfo<'s, State, bindings::Unsigned>,
+    pub(crate) target: v8::Local<'s, v8::Object>,
+    pub(crate) index: u32,
+}
+
+/// The function's info's.
+impl<'s> InfoState<'s, State> for PairInfo<'s> {
+    #[inline(always)]
+    fn isolate(&mut self) -> &mut v8::Isolate {
+        self.info.isolate()
+    }
+
+    #[inline(always)]
+    fn state(&mut self) -> (&State, bindings::InfoNoGc<'_, 's>) {
+        self.info.state()
+    }
+
+    #[inline(always)]
+    fn state_mut(&mut self) -> (&mut State, bindings::InfoNoGc<'_, 's>) {
+        self.info.state_mut()
+    }
+
+    fn with_scope<R>(
+        &mut self,
+        f: impl FnOnce(bindings::StateScope<'_, 's, 's, State>, v8::ReturnValue<'s, v8::Value>) -> R,
+    ) -> R {
+        self.info.with_scope(f)
+    }
+
+    fn handles(&mut self) -> bindings::InfoHandles<'_, 's> {
+        InfoState::handles(&mut self.info)
+    }
+
+    fn return_number(&mut self, value: f64) {
+        InfoState::return_number(&mut self.info, value);
+    }
+}
 /// An indexed getter's interceptor's.
 pub(crate) struct IndexedGet;
 
@@ -210,6 +260,129 @@ impl<'s> InfoKind<'s> for Method {
 
     fn new_target(_: Self::This) -> v8::Local<'s, v8::Value> {
         unreachable!("a method has no `new.target`")
+    }
+}
+
+impl<'s> InfoKind<'s> for Called {
+    type Info = bindings::StateInfo<'s, State, bindings::Unsigned>;
+    type This = v8::Local<'s, v8::Object>;
+    type Args = v8::FunctionCallbackArguments<'s>;
+    type Seed = v8::FunctionCallbackArguments<'s>;
+    type Noted = ();
+
+    #[inline(always)]
+    fn this(info: &Self::Info) -> Self::This {
+        info.args().this()
+    }
+
+    #[inline(always)]
+    fn seed(info: &Self::Info) -> Self::Seed {
+        info.args()
+    }
+
+    #[inline(always)]
+    fn args(seed: Self::Seed, _: &mut v8::PinScope<'s, '_>) -> Self::Args {
+        seed
+    }
+
+    #[inline(always)]
+    fn length(info: &Self::Info) -> usize {
+        function_length(info)
+    }
+
+    #[inline(always)]
+    fn arg(info: &Self::Info, index: usize) -> v8::Local<'s, v8::Value> {
+        function_arg(info, index)
+    }
+
+    /// The object called, which nothing checked: unwrapped whole (its
+    /// map read, then its tag).
+    #[inline(always)]
+    fn this_as<'gc, T: elise::HeapType>(
+        no_gc: &mut bindings::InfoNoGc<'_, 's>,
+        cx: &ApiCx<'_, 'gc>,
+        this: Self::This,
+    ) -> Option<elise::Gc<'gc, T>> {
+        no_gc.unwrap::<T>(cx.gc, this)
+    }
+
+    #[inline(always)]
+    fn this_object(info: &Self::Info) -> v8::Local<'s, v8::Object> {
+        info.args().this()
+    }
+
+    fn new_object(_: Self::This) -> v8::Local<'s, v8::Object> {
+        unreachable!("a legacy caller constructs nothing")
+    }
+
+    fn new_target(_: Self::This) -> v8::Local<'s, v8::Value> {
+        unreachable!("a legacy caller has no `new.target`")
+    }
+}
+
+impl<'s> InfoKind<'s> for Pair {
+    type Info = PairInfo<'s>;
+    /// The iterator's target: what `entries` kept of its receiver, which
+    /// is no `Receiver` (unwrapped whole).
+    type This = v8::Local<'s, v8::Object>;
+    type Args = front::IndexArgs<'s>;
+    /// The target and the index.
+    type Seed = (v8::Local<'s, v8::Object>, u32);
+    type Noted = ();
+
+    #[inline(always)]
+    fn this(info: &Self::Info) -> Self::This {
+        info.target
+    }
+
+    #[inline(always)]
+    fn seed(info: &Self::Info) -> Self::Seed {
+        (info.target, info.index)
+    }
+
+    /// The index a number of V8's, made now.
+    fn args((this, index): Self::Seed, scope: &mut v8::PinScope<'s, '_>) -> Self::Args {
+        front::IndexArgs {
+            index: v8::Integer::new_from_unsigned(scope, index).into(),
+            this,
+            undefined: v8::undefined(scope).into(),
+        }
+    }
+
+    #[inline(always)]
+    fn length(_: &Self::Info) -> usize {
+        1
+    }
+
+    fn arg(_: &Self::Info, _: usize) -> v8::Local<'s, v8::Value> {
+        unreachable!("a pairs member's argument is its index, read as a number")
+    }
+
+    #[inline(always)]
+    fn number_arg(info: &Self::Info, index: usize) -> Option<u32> {
+        (index == 0).then_some(info.index)
+    }
+
+    #[inline(always)]
+    fn this_as<'gc, T: elise::HeapType>(
+        no_gc: &mut bindings::InfoNoGc<'_, 's>,
+        cx: &ApiCx<'_, 'gc>,
+        this: Self::This,
+    ) -> Option<elise::Gc<'gc, T>> {
+        no_gc.unwrap::<T>(cx.gc, this)
+    }
+
+    #[inline(always)]
+    fn this_object(info: &Self::Info) -> v8::Local<'s, v8::Object> {
+        info.target
+    }
+
+    fn new_object(_: Self::This) -> v8::Local<'s, v8::Object> {
+        unreachable!("a pairs member constructs nothing")
+    }
+
+    fn new_target(_: Self::This) -> v8::Local<'s, v8::Value> {
+        unreachable!("a pairs member has no `new.target`")
     }
 }
 
@@ -355,7 +528,6 @@ impl<'s> InfoKind<'s> for IndexedGet {
         front::IndexArgs {
             index: v8::Integer::new_from_unsigned(scope, index).into(),
             this: this.object(),
-            receiver: Some(this),
             undefined: v8::undefined(scope).into(),
         }
     }
@@ -587,7 +759,9 @@ impl<'s, K: InfoKind<'s>> FrontTypes for InfoOp<'_, 's, K> {
 impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
     #[inline(always)]
     pub(crate) fn new(info: K::Info) -> Self {
-        // As `WholeFront::new`'s: every way into script counts itself.
+        // Every way into script counts itself (`listeners::run_callback`
+        // and the engine's entries): a member called with none counted
+        // would run a microtask checkpoint where HTML has none.
         debug_assert!(
             bindings::trace::in_script(),
             "a DOM member is called from script that the engine didn't count as entered"
@@ -604,6 +778,12 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
     #[inline(always)]
     pub(crate) fn noted(&self) -> &K::Noted {
         &self.noted
+    }
+
+    /// The info back, the member's call over: for a callback that goes on
+    /// after it (a pair iterator's step).
+    pub(crate) fn into_info(self) -> K::Info {
+        self.info
     }
 
     /// `f` of a scope made now, with the call's arguments and where its
@@ -1066,8 +1246,8 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
 
     /// A wrapper of `INTERFACES[interface]`, made now for the node the
     /// operation will make (V8 allocates: a scope). None for a method of
-    /// another realm called on this one's object (as `WholeFront`'s: the
-    /// wrapper is made after, in the node's relevant realm).
+    /// another realm called on this one's object (the wrapper is made
+    /// after, in the node's relevant realm).
     #[inline(never)]
     fn prepare_new_node(&mut self, interface: usize) -> Option<(v8::Local<'s, v8::Object>, usize)> {
         let this = K::this_object(&self.info);
@@ -2268,7 +2448,7 @@ impl<'s, K: InfoKind<'s>> InfoOp<'_, 's, K> {
     }
 
     /// A node with no wrapper, rooted for after the operation, and its
-    /// interface: out of line, as `front::WholeOp`'s (the interface's lookup).
+    /// interface: out of line (the interface's lookup).
     #[cold]
     #[inline(never)]
     fn root_node<'gc>(&mut self, cx: &dom::Cx<'_, 'gc>, node: NodeRef<'gc>) -> PendingNode {

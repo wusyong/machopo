@@ -50,7 +50,7 @@
 
 ### 分階段
 
-3a：`InfoFront` 實作 `ScriptFront`，會跑 script 的成員搬過去。3b：legacy caller、iterator、cross-origin 改成從 info 開始。3c：刪掉 `WholeFront`、`WholeOp`、`Call`，加 `sanity.py` 的檢查，評估 `PropertyFront`。
+3a：`InfoFront` 實作 `ScriptFront`，會跑 script 的成員搬過去。3b：legacy caller、iterator、cross-origin 改成從 info 開始。3c：刪掉 `WholeFront`、`WholeOp`、`Call`，加 `sanity.py` 的檢查。3d：`PropertyFront` 併進 `InfoFront`（決定 8）。
 
 ## 缺點
 
@@ -80,6 +80,12 @@
 5. **跨過 script 的操作要留著的東西照值傳**，不留狀態：`dom_api` 的 `ScriptHost` 和 `ScriptFront` 的那幾個操作明白地收、回 constructor、讀到的 lifecycle callback、filter 丟的例外，「script 已經丟了」是一種錯誤。不選 `InfoFront` 多一個欄位（每次呼叫都付，熱的 getter 也付）；不選放在 isolate 的狀態上（呼叫會重入，要自己維護 stack）。對照 Blink：`CustomElementRegistry::define` 裡這些是區域變數。
 6. **搬之前先補測試**：盤點重入、例外、reaction 的順序、microtask 的時機的測試，缺的先補在現在的行為上。
 
+3b、3c，2026-11-14（使用者）：
+
+7. **cross-origin 的 getter 不先進到 receiver 的 realm**。3b 一開始照原本的行為搬過來（`bindings` 多一個在 info 上進入另一個 context 的入口，一處新的 `unsafe` 用法，每個 getter 開一個 scope），mutation test 發現它沒有看得到的效果：這些 getter（`window`、`self`、`location`、`closed`、`frames`、`length`、`top`、`opener`、`parent`）不丟例外，給的東西的 wrapper 本來就建在物件自己的 realm；RFC 0097 在舊的 front 上也查到同一件事。拿掉之後 cross-origin 的成員和其他 method 完全一樣。不選留著：一段沒有測試守得住的程式和論證。
+8. **`PropertyFront` 也併進來**（決定 3 留到最後的；使用者選併）：另開一段 3d。不選留著當 `sanity.py` 列的例外。
+9. **3d 分兩步**：3d-1 是 query、delete、enumerate、indexed setter（和索引的 query 同一種做法：V8 原始的 callback，各自把結果寫成它的型別）；3d-2 是 define 和數字名稱的 get、set；都做完才刪 `PropertyFront`。named 的 query 沒有 `length` 可以比，仍然呼叫 getter 看有沒有，只是不建 wrapper、不經過 rusty_v8 的 trampoline。
+
 ## 當時的選項
 
 1. **會跑 script 的成員怎麼放到 `InfoFront` 上**
@@ -94,7 +100,7 @@
    - B：一起併。
    - C：明確排除。
 4. **分階段**
-   - A（建議）：三段，每段可以 merge。3a：`InfoFront` 實作 `ScriptFront`，會跑 script 的成員搬過去（`WholeFront` 還在，給其他入口用）。3b：legacy caller、iterator、cross-origin 改成從 info 開始。3c：刪掉 `WholeFront`、`WholeOp`、`Call`，加 `sanity.py` 的檢查，評估 `PropertyFront`。
+   - A（建議）：三段，每段可以 merge。3a：`InfoFront` 實作 `ScriptFront`，會跑 script 的成員搬過去（`WholeFront` 還在，給其他入口用）。3b：legacy caller、iterator、cross-origin 改成從 info 開始。3c：刪掉 `WholeFront`、`WholeOp`、`Call`，加 `sanity.py` 的檢查。3d：`PropertyFront` 併進 `InfoFront`（決定 8）。
    - B：一段做完。
 
 ## 待決定

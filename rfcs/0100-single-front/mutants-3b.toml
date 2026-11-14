@@ -1,0 +1,55 @@
+# The legacy caller, the cross-origin members and the pair iterators on
+# the info front end.
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it"]
+timeout = 1800
+
+[[mutant]]
+name = "a legacy caller's object isn't unwrapped"
+file = "crates/dom_js/src/info_front.rs"
+from = '''    /// The object called, which nothing checked: unwrapped whole (its
+    /// map read, then its tag).
+    #[inline(always)]
+    fn this_as<'gc, T: elise::HeapType>(
+        no_gc: &mut bindings::InfoNoGc<'_, 's>,
+        cx: &ApiCx<'_, 'gc>,
+        this: Self::This,
+    ) -> Option<elise::Gc<'gc, T>> {
+        no_gc.unwrap::<T>(cx.gc, this)'''
+to = '''    /// The object called, which nothing checked: unwrapped whole (its
+    /// map read, then its tag).
+    #[inline(always)]
+    fn this_as<'gc, T: elise::HeapType>(
+        no_gc: &mut bindings::InfoNoGc<'_, 's>,
+        cx: &ApiCx<'_, 'gc>,
+        this: Self::This,
+    ) -> Option<elise::Gc<'gc, T>> {
+        no_gc.unwrap::<T>(cx.gc, this).filter(|_| false)'''
+
+[[mutant]]
+name = "a pair's index is one more"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        (index == 0).then_some(info.index)'''
+to = '''        (index == 0).then_some(info.index.saturating_add(1))'''
+
+[[mutant]]
+name = "a pair's target is the function's this"
+file = "crates/dom_js/src/pairs.rs"
+from = '''        info,
+        target,
+        index,
+    });'''
+to = '''        target: info.args().this(),
+        info,
+        index,
+    });'''
+
+[[mutant]]
+name = "forEach goes on after its callback threw"
+file = "crates/dom_js/src/pairs.rs"
+from = '''                callback
+                    .call(scope, this_arg, &[value, key, this.into()])
+                    .is_some()'''
+to = '''                callback
+                    .call(scope, this_arg, &[value, key, this.into()])
+                    .is_some()
+                    || true'''

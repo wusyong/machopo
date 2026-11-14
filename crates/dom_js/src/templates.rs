@@ -19,7 +19,6 @@ use dom_api::{CALLBACK_INTERFACES, INTERFACES, MemberKind, TypedMember, TypedVis
 
 use crate::cross_origin::{self, CrossOriginMember};
 use crate::exception;
-use crate::front::WholeFront;
 use crate::named::{IndexedSetter, NamedCalls, NamedProperties};
 use crate::state::{self, Scope, State};
 use crate::window::CachedAccessor;
@@ -847,15 +846,20 @@ fn member_builder<'s>(
 }
 
 /// A legacy caller's callback (an `[IsHTMLDDA]` object called): its
-/// member's typed path through V8's front end, in a scope made for the
-/// call, with no word of its receiver (the object called, whatever
-/// called it), which is checked whole as it is unwrapped.
+/// member's typed path through the front end that is V8's callback info
+/// (`info_front::Called`), with no word of its receiver (the object
+/// called, whatever called it), which is checked whole as it is
+/// unwrapped.
 struct LegacyCaller<M>(PhantomData<M>);
 
 impl<M: TypedMember> bindings::StateInfoFunction<State> for LegacyCaller<M> {
-    fn call(mut info: bindings::StateInfo<'_, State, bindings::Unsigned>) {
-        let args = info.args();
-        info.with_scope(|scope, rv| call_member::<M, _>(scope, &args, rv));
+    fn call(info: bindings::StateInfo<'_, State, bindings::Unsigned>) {
+        let mut front = crate::info_front::InfoFront::<crate::info_front::Called>::new(info);
+        census_label::<M>();
+        M::call(&mut front);
+        if M::KIND != MemberKind::Getter {
+            front.report();
+        }
     }
 }
 
@@ -918,23 +922,6 @@ impl<M: TypedMember> bindings::StateInfoFunction<State> for InfoConstructor<M> {
         let mut front = crate::info_front::InfoFront::<crate::info_front::Construct>::new(info);
         census_label::<M>();
         M::call(&mut front);
-        front.report();
-    }
-}
-
-/// One call of `M` through V8's front end, in a scope (a cross-origin
-/// property's, a legacy caller's), V8 told of the DOM's growth after one
-/// that may allocate.
-#[inline(always)]
-pub(crate) fn call_member<'s, M: TypedMember, A: crate::front::CallArgs<'s>>(
-    scope: Scope<'_, 's, '_>,
-    args: &A,
-    rv: v8::ReturnValue<'s>,
-) {
-    let mut front = WholeFront::new(scope, args, rv);
-    census_label::<M>();
-    M::call(&mut front);
-    if M::KIND != MemberKind::Getter {
         front.report();
     }
 }
@@ -1321,8 +1308,8 @@ struct Indexed<M>(PhantomData<M>);
 
 /// `object[index]` of a plain getter: through the front end that is the
 /// interceptor's info, its index read as the number it is. A result that
-/// is null or an empty string is no item (as `WholeFront::returned_no_item`
-/// tells): V8 then looks on the prototype.
+/// is null or an empty string is no item (`info_front::NoItem`): V8 then
+/// looks on the prototype.
 impl<M: TypedMember> bindings::StateInfoIndexedGetter<State> for Indexed<M> {
     fn get(info: bindings::StateIndexInfo<'_, State>) -> v8::Intercepted {
         let mut front = crate::info_front::InfoFront::<crate::info_front::IndexedGet>::new(info);

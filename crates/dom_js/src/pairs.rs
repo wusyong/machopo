@@ -16,8 +16,8 @@ use std::marker::PhantomData;
 
 use dom_api::{INTERFACES, TypedMember};
 
-use crate::front::{IndexArgs, WholeFront};
-use crate::state::{self, Scope, State};
+use crate::info_front::{InfoFront, Pair, PairInfo};
+use crate::state::{Scope, State};
 use crate::templates::{self, string};
 
 /// What an iterator yields (WebIDL's "kind").
@@ -42,7 +42,7 @@ pub(crate) fn install<'s, M: TypedMember>(
         let key = string(scope, name);
         prototype.set_with_attr(key.into(), template.into(), v8::PropertyAttribute::NONE);
     }
-    let for_each = bindings::state_function_template::<State, ForEach<M>>(scope, |builder| {
+    let for_each = bindings::state_info_function_template::<State, ForEach<M>>(scope, |builder| {
         builder
             .signature(signature)
             .length(1)
@@ -87,30 +87,30 @@ fn private<'s, M: TypedMember>(
     v8::Private::for_api(scope, Some(name))
 }
 
-/// The pair at `index` of `target`, `M`'s call: `[key, value]`, an empty
-/// array past the last; `None` with an exception pending.
+/// A function's callback info, as a step's callbacks take it.
+type Info<'s> = bindings::StateInfo<'s, State, bindings::Unsigned>;
+
+/// The pair at `index` of `target`, `M`'s call through the front end that
+/// is the callback's info: `[key, value]`, an empty array past the last;
+/// `None` with an exception pending. The info back, for what the step
+/// does next.
 fn pair<'s, M: TypedMember>(
-    scope: &mut v8::PinScope<'s, '_>,
+    info: Info<'s>,
     target: v8::Local<'s, v8::Object>,
     index: u32,
-    rv: v8::ReturnValue<'_, v8::Value>,
-) -> Option<v8::Local<'s, v8::Array>> {
-    let undefined = v8::undefined(scope).into();
-    // The iterator's target, unwrapped whole: what `entries` kept of its
-    // receiver is no `Receiver`.
-    let call = IndexArgs {
-        index: v8::Integer::new_from_unsigned(scope, index).into(),
-        this: target,
-        receiver: None,
-        undefined,
-    };
-    {
-        let scope = state::scope(scope)?;
-        let mut front = WholeFront::new(scope, &call, rv);
-        crate::templates::census_label::<M>();
-        M::call(&mut front);
-    }
-    v8::Local::<v8::Array>::try_from(rv.get(scope)).ok()
+) -> (Info<'s>, Option<v8::Local<'s, v8::Array>>) {
+    let mut front = InfoFront::<Pair>::new(PairInfo {
+        info,
+        target,
+        index,
+    });
+    crate::templates::census_label::<M>();
+    M::call(&mut front);
+    let mut info = front.into_info().info;
+    // The member's result is the callback's until the step sets its own.
+    let pair = info
+        .with_scope(|mut scope, rv| v8::Local::<v8::Array>::try_from(rv.get(scope.scope())).ok());
+    (info, pair)
 }
 
 /// `entries`, `keys`, `values` (and `@@iterator`): a new default iterator
@@ -153,7 +153,7 @@ fn iterator_prototype<'s, M: TypedMember>(
     let prototype = v8::Object::new(scope);
     let intrinsic = iterator_prototype_intrinsic(scope);
     prototype.set_prototype(scope, intrinsic);
-    let next = bindings::state_function_template::<State, Next<M>>(scope, |builder| {
+    let next = bindings::state_info_function_template::<State, Next<M>>(scope, |builder| {
         builder
             .length(0)
             .constructor_behavior(v8::ConstructorBehavior::Throw)
@@ -197,55 +197,64 @@ fn iterator_prototype_intrinsic<'s>(scope: &mut v8::PinScope<'s, '_>) -> v8::Loc
 /// if the list has one now, and the index moves on; else done.
 struct Next<M>(PhantomData<M>);
 
-impl<M: TypedMember> bindings::StateCallback<State> for Next<M> {
-    fn call<'s>(
-        mut scope: Scope<'_, 's, '_>,
-        args: v8::FunctionCallbackArguments<'s>,
-        mut rv: v8::ReturnValue<'s>,
-    ) {
-        let scope = scope.scope();
-        let iterator = args.this();
-        let target_key = private::<M>(scope, "target");
-        let target = iterator
-            .get_private(scope, target_key)
-            .and_then(|target| v8::Local::<v8::Object>::try_from(target).ok());
-        let Some(target) = target else {
-            let message = format!(
-                "next called on an object that isn't a {} Iterator",
-                INTERFACES[M::INTERFACE].name
-            );
-            crate::throw_type_error(scope, &message);
+impl<M: TypedMember> bindings::StateInfoFunction<State> for Next<M> {
+    fn call(mut info: Info<'_>) {
+        let iterator = info.args().this();
+        // What the iterator holds, read in a scope of its own; the member
+        // is called out of it, and the result made in another.
+        let held = info.with_scope(|mut scope, _| {
+            let scope = scope.scope();
+            let target_key = private::<M>(scope, "target");
+            let target = iterator
+                .get_private(scope, target_key)
+                .and_then(|target| v8::Local::<v8::Object>::try_from(target).ok());
+            let Some(target) = target else {
+                let message = format!(
+                    "next called on an object that isn't a {} Iterator",
+                    INTERFACES[M::INTERFACE].name
+                );
+                crate::throw_type_error(scope, &message);
+                return None;
+            };
+            let kind_key = private::<M>(scope, "kind");
+            let kind = iterator
+                .get_private(scope, kind_key)
+                .and_then(|kind| kind.uint32_value(scope))
+                .unwrap_or(u32::from(KEY_VALUE));
+            let index_key = private::<M>(scope, "index");
+            let index = iterator
+                .get_private(scope, index_key)
+                .and_then(|index| index.uint32_value(scope))
+                .unwrap_or(0);
+            Some((target, kind, index))
+        });
+        let Some((target, kind, index)) = held else {
             return;
         };
-        let kind_key = private::<M>(scope, "kind");
-        let kind = iterator
-            .get_private(scope, kind_key)
-            .and_then(|kind| kind.uint32_value(scope))
-            .unwrap_or(u32::from(KEY_VALUE));
-        let index_key = private::<M>(scope, "index");
-        let index = iterator
-            .get_private(scope, index_key)
-            .and_then(|index| index.uint32_value(scope))
-            .unwrap_or(0);
-        let Some(pair) = pair::<M>(scope, target, index, rv) else {
+        let (mut info, pair) = pair::<M>(info, target, index);
+        let Some(pair) = pair else {
             return;
         };
-        if pair.length() < 2 {
-            let undefined = v8::undefined(scope).into();
-            rv.set(iter_result(scope, undefined, true).into());
-            return;
-        }
-        let value = match u8::try_from(kind) {
-            Ok(KEY) => pair.get_index(scope, 0),
-            Ok(VALUE) => pair.get_index(scope, 1),
-            _ => Some(pair.into()),
-        };
-        let Some(value) = value else {
-            return;
-        };
-        let next = v8::Integer::new_from_unsigned(scope, index.saturating_add(1));
-        iterator.set_private(scope, index_key, next.into());
-        rv.set(iter_result(scope, value, false).into());
+        info.with_scope(|mut scope, mut rv| {
+            let scope = scope.scope();
+            if pair.length() < 2 {
+                let undefined = v8::undefined(scope).into();
+                rv.set(iter_result(scope, undefined, true).into());
+                return;
+            }
+            let value = match u8::try_from(kind) {
+                Ok(KEY) => pair.get_index(scope, 0),
+                Ok(VALUE) => pair.get_index(scope, 1),
+                _ => Some(pair.into()),
+            };
+            let Some(value) = value else {
+                return;
+            };
+            let index_key = private::<M>(scope, "index");
+            let next = v8::Integer::new_from_unsigned(scope, index.saturating_add(1));
+            iterator.set_private(scope, index_key, next.into());
+            rv.set(iter_result(scope, value, false).into());
+        });
     }
 }
 
@@ -269,44 +278,48 @@ fn iter_result<'s>(
 /// `forEach` of a pair iterable).
 struct ForEach<M>(PhantomData<M>);
 
-impl<M: TypedMember> bindings::StateCallback<State> for ForEach<M> {
-    fn call<'s>(
-        mut scope: Scope<'_, 's, '_>,
-        args: v8::FunctionCallbackArguments<'s>,
-        mut rv: v8::ReturnValue<'s>,
-    ) {
-        let scope = scope.scope();
+impl<M: TypedMember> bindings::StateInfoFunction<State> for ForEach<M> {
+    fn call(mut info: Info<'_>) {
+        let args = info.args();
         let this = args.this();
         let Ok(callback) = v8::Local::<v8::Function>::try_from(args.get(0)) else {
-            let message = format!(
-                "Failed to execute 'forEach' on '{}': The callback provided as parameter 1 is not a function.",
-                INTERFACES[M::INTERFACE].name
-            );
-            crate::throw_type_error(scope, &message);
+            info.with_scope(|mut scope, _| {
+                let message = format!(
+                    "Failed to execute 'forEach' on '{}': The callback provided as parameter 1 is not a function.",
+                    INTERFACES[M::INTERFACE].name
+                );
+                crate::throw_type_error(scope.scope(), &message);
+            });
             return;
         };
         let this_arg = args.get(1);
         let mut index = 0u32;
         loop {
-            let Some(pair) = pair::<M>(scope, this, index, rv) else {
+            let (back, pair) = pair::<M>(info, this, index);
+            info = back;
+            let Some(pair) = pair else {
                 return;
             };
-            if pair.length() < 2 {
-                break;
-            }
-            let (Some(key), Some(value)) = (pair.get_index(scope, 0), pair.get_index(scope, 1))
-            else {
-                return;
-            };
-            // `None`: the callback threw; it propagates.
-            if callback
-                .call(scope, this_arg, &[value, key, this.into()])
-                .is_none()
-            {
+            // Whether to go on: not past the last pair, nor once the
+            // callback threw (which propagates).
+            let more = info.with_scope(|mut scope, mut rv| {
+                let scope = scope.scope();
+                if pair.length() < 2 {
+                    rv.set_undefined();
+                    return false;
+                }
+                let (Some(key), Some(value)) = (pair.get_index(scope, 0), pair.get_index(scope, 1))
+                else {
+                    return false;
+                };
+                callback
+                    .call(scope, this_arg, &[value, key, this.into()])
+                    .is_some()
+            });
+            if !more {
                 return;
             }
             index = index.saturating_add(1);
         }
-        rv.set_undefined();
     }
 }

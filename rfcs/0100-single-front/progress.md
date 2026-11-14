@@ -8,8 +8,9 @@
 | --- | --- | --- |
 | 3a 之前：盤點測試、補缺的 | 做完 | 2026-11-14 |
 | 3a：`InfoFront` 實作 `ScriptFront`，會跑 script 的成員搬過去 | 做完 | 2026-11-14 |
-| 3b：legacy caller、iterator、cross-origin 從 callback info 開始 | 未開始 | |
-| 3c：刪掉 `WholeFront`、`WholeOp`、`Call`；`sanity.py` 的檢查；評估 `PropertyFront` | 未開始 | |
+| 3b：legacy caller、iterator、cross-origin 從 callback info 開始 | 做完 | 2026-11-14 |
+| 3c：刪掉 `WholeFront`、`WholeOp`、`Call`；`sanity.py` 的檢查 | 做完 | 2026-11-14 |
+| 3d：`PropertyFront` 併進 `InfoFront` | 未開始 | |
 
 ## 驗收
 
@@ -49,3 +50,16 @@
 - **WPT**：`dom/events/`、`custom-elements/`、`dom/traversal/`、`dom/abort/`、`dom/nodes/`、`is-input-pending/`：876 個測試、21,935 個檢查，非預期的結果 0。
 - **`bench.py calls --baseline`**：`nodeType` 113 → 113、`firstChild` 140 → 140、`getAttribute` 560 → 560；`dispatchEvent` 3496 → 3427（−68：不建 `WholeFront` 和 `Call`），cycles 746 → 740。其他成員的指令差在 2 條以內。`appendChild` 的 store forwarding 衝突 7.60 → 8.34、`list[i] (first)` 7.83 → 9.47，這兩條路沒有改到、cycles 沒跟著變，當成量測的起伏，沒有另外驗證。
 - **mutation test**（`mutants-3a.toml`，16 個）：都抓到。第一次一個都沒跑：spec 的 `from` 和 `cargo fmt` 之後的程式對不上，改了再跑。
+
+### 3b 和 3c（2026-11-14，Linux x86-64）
+
+- **legacy caller**：`info_front::Called`（`this` 是被呼叫的物件，`InfoNoGc::unwrap` 整個檢查），`LegacyCaller<M>` 直接建 `InfoFront`。
+- **cross-origin 的屬性的成員**：本來就是 `StateInfoMethod`，不用動 fork；`CrossOriginMember<M>` 建 `InfoFront<Method>`，getter 經過 `bindings::StateInfo::in_realm_of`（新的：用 info 開 scope、看 receiver 的 creation context，不是目前的就進去，再把 info 交給 closure；論證在 `crates/bindings/soundness.md`）。方法和 setter 不再開 scope（`window.focus()` 0 個；`handlers::a_member_that_needs_a_scope_is_given_the_info_and_makes_it` 照這個改）。
+- **pair iterator**：`Next<M>`、`ForEach<M>` 改成 `StateInfoFunction`；`info_front::Pair`（info 是 `PairInfo`：函式的 info、target、index；index 由 `number_arg` 給、不建 handle），`InfoFront::into_info` 把 info 拿回來給那一步之後的事；成員的結果從回傳值讀回來。
+- **刪掉**：`WholeFront`、`WholeOp`、`Call`、`RareCall` 和它們的 `Front`（93 個方法）、`OpFront`（31 個）、`DictFront`、`ScriptFront`、`FrontTypes`，`templates::call_member`、`CallArgs::receiver`、`IndexArgs::receiver`、`Scoped::finish_string_pending`、`front::foresee_element`。`front.rs` 4,721 行 → 3,175 行。
+- **`sanity.py deps`**：`dom_js` 的 `impl … Front for` 只能是 `InfoFront` 和 `PropertyFront`；用假的檔案確認多一個會被抓到。
+- **測試**：`cargo test --workspace` 3,884 個通過；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通過。新的：`urls::for_each_stops_at_what_its_callback_throws`、`frames::a_cross_origin_getter_gives_what_is_its_receivers_realms`。
+- **WPT**：`dom/events/`、`custom-elements/`、`dom/traversal/`、`dom/nodes/`、`url/`、`html/browsers/origin/`、`html/infrastructure/common-dom-interfaces/collections/`：918 個測試、29,337 個檢查，非預期的結果 0。
+- **mutation test**（`mutants-3b.toml`，5 個）：3 個抓到；「`forEach` 在 callback 丟例外之後繼續」漏掉，補了測試後抓到；「另一個 realm 的物件的 getter 在目前的 realm 跑」補了測試還是沒抓到，等價（wrapper 本來就建在物件自己的 realm、這些 getter 不丟例外；之前在舊的 front 上也查到同一件事），從 spec 拿掉、在 spec 裡註明。所以 `in_realm_of` 現在沒有看得到的效果。
+- **`bench.py calls --baseline`**：整套跑的那次 `firstChild` 140 → 142、`nodeType` 113 → 114、`getAttribute` 的衝突 0.14 → 1.11；只重跑這三個：129、101、549（都少 11：空迴圈的指令數偶爾多 10 條的那個已知的起伏），衝突 0.12、0.01、0.14；沒有這批改動的同樣三個是 140、113、560。結論是沒有變，差別在量測的起伏以內。`dispatchEvent` 3496 → 3427。
+- **決定 7 之後**（同一天）：`in_realm_of` 和 `CrossOriginMember` 的那一步拿掉，cross-origin 的 getter 不再開 scope（`location.href`（字串 V8 已經有）、`window.closed`、`window.length`、`document.location === location` 都是 0 個；`handlers` 的那個測試再改一次）。`cargo test -p dom_js -p bindings` 通過（`dom_js` 496 個）；WPT `html/browsers/origin/`、`html/browsers/the-window-object/`、`html/browsers/history/the-location-interface/`：87 個測試、430 個檢查，非預期的結果 0。

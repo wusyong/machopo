@@ -99,3 +99,25 @@ fn crypto_and_structured_clone() {
         "true,true"
     );
 }
+
+/// `forEach` stops at the callback's exception, which is what it throws:
+/// the very value, and no pair after it is given.
+#[test]
+fn for_each_stops_at_what_its_callback_throws() {
+    let mut env = crate::env::Env::window("about:blank");
+    assert_eq!(
+        env.eval(
+            "var p = new URLSearchParams('a=1&b=2&c=3'); var seen = []; var thrown = { no: 'error' }; var caught; \
+             try { p.forEach((v, k) => { seen.push(k); if (k === 'b') throw thrown; }); } catch (e) { caught = e; } \
+             [seen.join(''), caught === thrown].join()"
+        ),
+        "ab,true"
+    );
+    // The iterator's `next` on what isn't one: a `TypeError`, of the realm.
+    assert_eq!(
+        env.eval(
+            "var next = p.entries().next; try { next.call({}); 'none' } catch (e) { [e instanceof TypeError, e.message].join() }"
+        ),
+        "true,next called on an object that isn't a URLSearchParams Iterator"
+    );
+}

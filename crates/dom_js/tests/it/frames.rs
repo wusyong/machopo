@@ -1092,3 +1092,20 @@ fn a_blob_read_is_a_task_of_the_blobs_realm() {
     engine.perform_microtask_checkpoint();
     assert_eq!(log(&mut engine), "ours");
 }
+
+/// What a cross-origin property's getter gives of another realm's window
+/// is that realm's, whichever realm reads it first (another window's
+/// `location`, read from this one).
+#[test]
+fn a_cross_origin_getter_gives_what_is_its_receivers_realms() {
+    let mut engine = engine();
+    run(
+        &mut engine,
+        "var f = document.body.appendChild(document.createElement('iframe')); var w = f.contentWindow;
+         var theirs = w.location;
+         log.push(theirs instanceof w.Location, theirs instanceof Location,
+                  Object.getPrototypeOf(theirs) === w.Location.prototype, theirs === w.location,
+                  location instanceof Location);",
+    );
+    assert_eq!(log(&mut engine), "true / false / true / true / true");
+}
