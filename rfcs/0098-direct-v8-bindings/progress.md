@@ -15,7 +15,7 @@
 
 - 計數：`base::census`（`census` feature，`MACHOPO_CENSUS=<檔案>`）照 callback 記每次呼叫自己做的 scope、root 和操作；被它呼叫的 callback 做的算它們自己的。`bindings` 的每個 trampoline 記進出和 scope，`dom` 的 `Dom::read`、`Dom::mutate` 記操作，`dom_js` 標出成員。沒開 feature 時是空的。
 - root 在 elise 裡數（`roots_made()`，它的 `census` feature）。
-- 跑的腳本還在 scratchpad，沒有做成 `bench.py` 的指令。
+- 跑法：`bench.py census blink-perf|speedometer`（`scripts/bench/census/`，測試是 `census_test.py`）；下面的數字是做成指令之前用同樣的做法跑的。
 - 還沒做：`bench.py calls` 的冷的路、驗收的腳本。
 
 ### 數到的（一輪）

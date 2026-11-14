@@ -7,6 +7,7 @@ its results in `target/bench/<name>/`.
     python scripts/bench.py raster [--window]  # machopo's tile raster while pages scroll and its window is resized
     python scripts/bench.py blink-perf [dom/ ...] [--against REV | --gc]  # Blink's perf tests in Chrome and machopo (or two machopos; or their GC, from traces): the list, or part of it
     python scripts/bench.py calls [--cases firstChild,...]  # what one DOM call costs from JS, in instructions
+    python scripts/bench.py census blink-perf [--dirs bindings,dom] | speedometer  # what each binding call makes: scopes, roots, operations, counted
     python scripts/bench.py gc [--heaps gc,gc-parallel,v8]  # the GC microbenchmarks on the gc crate's heap and V8's: pauses, GC time, memory
 
 Standard library only. Every command exits non-zero on failure.
@@ -150,6 +151,22 @@ def main() -> int:
     calls.add_argument("--profile", default="perf", help="the cargo profile (default perf: machopo's, measured)")
     calls.set_defaults(func=cmd_calls)
 
+    census = sub.add_parser(
+        "census",
+        help="what each binding call makes on its way, by callback: the scopes of V8's it opens, the DOM "
+        "heap's roots it registers, the operations it runs; counted in machopo built with the census feature "
+        "(target/census), one run of each page (target/bench/census/<workload>/census.md)",
+    )
+    census.add_argument("workload", choices=["blink-perf", "speedometer"],
+                        help="Blink's perf tests (the listed pages, or --dirs), or Speedometer's suites, one "
+                        "iteration each")
+    census.add_argument("--dirs", help="blink-perf: every page in these folders (comma-separated: bindings,dom)")
+    census.add_argument("--suites", help="speedometer: only these suites (comma-separated names)")
+    census.add_argument("--timeout", type=float, default=300, help="blink-perf: how long a page may take, s "
+                        "(default 300)")
+    census.add_argument("--top", type=int, default=25, help="how many callbacks each ranking lists (default 25)")
+    census.set_defaults(func=cmd_census)
+
     gc = sub.add_parser(
         "gc",
         help="the GC microbenchmarks (gc_bench) on the gc crate's heap, DOM-like workloads on a tree and "
@@ -191,6 +208,13 @@ def cmd_calls(args: argparse.Namespace) -> int:
     import calls
 
     return calls.cmd_calls(args)
+
+
+def cmd_census(args: argparse.Namespace) -> int:
+    sys.path.insert(0, str(BENCH / "census"))
+    import census
+
+    return census.cmd_census(args)
 
 
 def cmd_gc(args: argparse.Namespace) -> int:

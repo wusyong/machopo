@@ -55,6 +55,10 @@ let request = next_request.get_next();
 - `AtomicSequenceNumber<T>` 放在 `static` 裡、任何 thread 都能用（`&self`），`T` 是 `u32`、`u64`、`usize`；每個值只發一次，不保證和其他記憶體的順序（`Relaxed`）。
 - 要循環的 ID（例如 timer 的 handle）不用它們，寫自己的規則。
 
+## `census`
+
+binding 呼叫的計數（`census` feature，預設關）：`count(Kind)` 記這個 thread 多做了一個 scope、root 以外的東西，`Call::enter` 到它 drop 是一個 callback 的一次執行，`label` 給正在跑的 callback 標上成員的名字。每個 callback 的那一列只算它自己做的（它裡面呼叫的 callback 做的算它們自己的），寫到 `MACHOPO_CENSUS` 指定的檔案。root 的數目由呼叫的一方給（`Call::enter` 的 `roots`）：這個 crate 沒有相依，拿不到 heap 的計數。沒開 feature 時每個函式都是空的，呼叫的地方不用寫 `cfg`。
+
 ## 測試
 
 ```sh
