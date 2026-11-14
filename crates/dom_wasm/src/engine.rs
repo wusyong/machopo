@@ -118,6 +118,9 @@ fn report(console: &Option<ConsoleSink>, url: &str, text: String, uncaught: bool
 
 impl ScriptHost for Host<'_> {
     type Value = ();
+    /// None: no member that defines custom elements is called through it.
+    type Callback = std::convert::Infallible;
+    type Lifecycle = std::convert::Infallible;
 
     fn read<R>(&mut self, f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>) -> R) -> R {
         let layout = self.layout;

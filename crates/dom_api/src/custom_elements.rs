@@ -41,16 +41,15 @@ fn not_supported(message: &str) -> ApiError {
 /// is read with the registry's "element definition is running" set; the
 /// definition goes in, and the promise `whenDefined(name)` gave resolves
 /// with the constructor.
-pub(crate) fn define<H: ScriptHost, C>(
+pub(crate) fn define<H: ScriptHost>(
     host: &mut H,
     this: Persistent<CustomElementRegistry>,
     name: String,
-    constructor: Callback<C>,
+    constructor: Callback<H::Callback>,
     options: ElementDefinitionOptions,
 ) -> Result<(), ApiError> {
     let _span = trace_event::trace_event!("CustomElementRegistry::define");
-    let _ = constructor;
-    if !host.constructor_is_constructor() {
+    if !host.constructor_is_constructor(&constructor) {
         return Err(ApiError::type_error(
             "define: the constructor is not a constructor",
         ));
@@ -67,7 +66,7 @@ pub(crate) fn define<H: ScriptHost, C>(
             "define: \"{name}\" is defined already"
         )));
     }
-    if host.constructor_is_defined(&this) {
+    if host.constructor_is_defined(&this, &constructor) {
         return Err(not_supported("define: the constructor is defined already"));
     }
     if options.extends.is_some() {
@@ -79,9 +78,9 @@ pub(crate) fn define<H: ScriptHost, C>(
         return Err(not_supported("define: another definition is being made"));
     }
     host.mutate(|cx| cx.set_element_definition_is_running(this.get(cx.gc), true));
-    let read = host.read_custom_element_constructor();
+    let read = host.read_custom_element_constructor(&constructor);
     host.mutate(|cx| cx.set_element_definition_is_running(this.get(cx.gc), false));
-    let info = read?;
+    let (info, lifecycle) = read?;
     let (definition, pending) = host.mutate(|cx| {
         let registry = this.get(cx.gc);
         let definition = cx.add_custom_element_definition(
@@ -107,9 +106,9 @@ pub(crate) fn define<H: ScriptHost, C>(
         let pending = cx.take_when_defined(registry, id);
         (Persistent::new(cx.gc, definition), pending)
     });
-    host.store_custom_element_definition(&this, &definition);
+    host.store_custom_element_definition(&this, &definition, &constructor, lifecycle);
     if !pending.is_empty() {
-        host.resolve_when_defined(&pending, &definition);
+        host.resolve_when_defined(&pending, &definition, &constructor);
     }
     // The candidates' upgrade reactions, invoked as `define` returns
     // (`[CEReactions]`).

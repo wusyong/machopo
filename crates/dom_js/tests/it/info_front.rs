@@ -229,25 +229,28 @@ fn a_plain_members_receiver_is_checked_by_its_signature() {
     }
 }
 
-/// A member that leaves script to run is the whole front end's: its
-/// callback is given the info alone, and makes the one scope its call
-/// runs in.
+/// A member that leaves script to run makes a scope for each call into
+/// script, and none when it calls none: a dispatch that finds no listener
+/// runs as any other member.
 #[test]
-fn a_member_that_runs_script_makes_one_scope() {
+fn a_member_that_runs_script_makes_a_scope_for_each_call_into_script() {
     let mut env = env();
-    env.eval("var ev = new Event('x'); var heard = 0; n.addEventListener('x', () => heard++); n.dispatchEvent(ev);");
-    for (source, value) in [
-        ("n.dispatchEvent(ev)", "true"),
-        ("p.dispatchEvent(ev)", "true"),
-        ("n.click()", "undefined"),
+    env.eval(
+        "var ev = new Event('x'); var heard = 0; n.addEventListener('x', () => heard++); \
+         n.dispatchEvent(ev); var two = d.createElement('i'); \
+         two.addEventListener('x', () => heard++); two.addEventListener('x', () => heard++); two.dispatchEvent(ev);",
+    );
+    for (source, value, scopes_made) in [
+        ("n.dispatchEvent(ev)", "true", 1),
+        ("two.dispatchEvent(ev)", "true", 2),
+        // No listener of its own, and the event doesn't bubble.
+        ("p.dispatchEvent(ev)", "true", 0),
     ] {
-        let (found, made) = scopes(&mut env, source);
-        assert_eq!(found, value, "{source}");
-        // (One more when the call made the DOM's heap grow, a click's
-        // event: V8 told of it after, in a scope of its own.)
-        assert!((1..=2).contains(&made), "{source}: {made}");
+        let made = only_scopes(&mut env, source);
+        assert_eq!(env.eval(source), value, "{source}");
+        assert_eq!(made, scopes_made, "{source}");
     }
-    assert_eq!(env.eval("heard"), "2");
+    assert_eq!(env.eval("heard"), "9");
 }
 
 /// Number and boolean arguments that are numbers and booleans, and

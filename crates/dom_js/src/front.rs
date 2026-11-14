@@ -246,19 +246,9 @@ impl Call<'_> {
     }
 }
 
-/// What a call of `whenDefined` or `define` holds.
+/// What few calls hold beside their one callback.
 #[derive(Default)]
 pub(crate) struct RareCall<'s> {
-    /// What `define` read off its constructor (the lifecycle callbacks:
-    /// `connectedCallback`, `disconnectedCallback`, `adoptedCallback`,
-    /// `attributeChangedCallback`), for the operation that stores them.
-    definition: Option<[Option<v8::Local<'s, v8::Function>>; 4]>,
-    /// Whether script threw in the call (a getter `define` ran): the
-    /// member's error is that exception, V8's already, not another thrown.
-    threw: bool,
-    /// What a traversal's filter threw, caught (the traversal's flag is
-    /// unset in an operation after): the member's error, thrown again.
-    thrown: Option<v8::Local<'s, v8::Value>>,
     /// A second callback taken (`Callback(1)`, `nullable_function_arg`:
     /// geolocation's error callback).
     second_callback: Option<v8::Local<'s, v8::Value>>,
@@ -1861,6 +1851,8 @@ impl<'s, A: CallArgs<'s>> Scoped<'_, 's, '_, '_, A> {
                 &exception.message,
             ),
             ApiError::Aborted(signal) => throw_abort_reason(&mut self.scope, &signal.0),
+            // V8 holds what script threw: it is the member's as it is.
+            ApiError::Thrown => {}
         }
     }
 
@@ -1892,6 +1884,7 @@ impl<'s, A: CallArgs<'s>> Scoped<'_, 's, '_, '_, A> {
                         );
                     }
                     ApiError::Aborted(signal) => throw_abort_reason(&mut inner, &signal.0),
+                    ApiError::Thrown => throw_script_threw(inner.scope()),
                 }
             }
             tc.exception()
@@ -2107,6 +2100,7 @@ fn rejection<'s>(
                 &exception.message,
             ),
             ApiError::Aborted(signal) => throw_abort_reason(&mut inner, &signal.0),
+            ApiError::Thrown => throw_script_threw(inner.scope()),
         }
     }
     tc.exception()
@@ -2497,6 +2491,7 @@ pub(crate) fn settle_promises(
                     &exception.message,
                 ),
                 ApiError::Aborted(signal) => throw_abort_reason(&mut inner, &signal.0),
+                ApiError::Thrown => throw_script_threw(inner.scope()),
             }
         }
         tc.exception()
@@ -2660,7 +2655,16 @@ fn throw_in(tc: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>, error: Ap
             exception::throw_dom_exception(&mut inner, exception.name.name(), &exception.message)
         }
         ApiError::Aborted(signal) => throw_abort_reason(&mut inner, &signal.0),
+        ApiError::Thrown => throw_script_threw(inner.scope()),
     }
+}
+
+/// `ApiError::Thrown` where a reason is made of an error in a `TryCatch`
+/// of its own (a promise's rejection), which what script threw outside
+/// it isn't in: a `TypeError`. No member that rejects a promise runs the
+/// script that gives the error (`define`'s reads, a traversal's filter).
+fn throw_script_threw(scope: &mut v8::PinScope<'_, '_>) {
+    crate::throw_type_error(scope, "script threw");
 }
 
 /// An aborted signal's reason (`ApiError::Aborted`) thrown in `scope`:
@@ -3434,13 +3438,6 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> DictFront for WholeFront<'a, 's, 'i, 'r, A
     #[cold]
     #[inline(never)]
     fn throw(&mut self, error: ApiError) {
-        if self.call.rare.as_ref().is_some_and(|rare| rare.threw) {
-            return;
-        }
-        if let Some(thrown) = self.call.rare.as_mut().and_then(|rare| rare.thrown.take()) {
-            self.base.scope.scope().throw_exception(thrown);
-            return;
-        }
         self.base.throw_error(error);
     }
 }
@@ -3448,7 +3445,14 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> DictFront for WholeFront<'a, 's, 'i, 'r, A
 impl<'a, 's, 'i, 'r, A: CallArgs<'s>> dom_api::typed::ScriptFront
     for WholeFront<'a, 's, 'i, 'r, A>
 {
-    fn constructor_is_constructor(&mut self) -> bool {
+    /// The lifecycle callbacks `define` read: `connectedCallback`,
+    /// `disconnectedCallback`, `adoptedCallback`,
+    /// `attributeChangedCallback`.
+    type Lifecycle = [Option<v8::Local<'s, v8::Function>>; 4];
+
+    // `define`'s constructor is the call's callback kept (`Call`), which
+    // the index these are given names.
+    fn constructor_is_constructor(&mut self, _: &Callback<usize>) -> bool {
         let taken = self.call.callback.expect("the constructor taken");
         v8::Local::<v8::Object>::try_from(taken).is_ok_and(|object| object.is_constructor())
     }
@@ -3456,6 +3460,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> dom_api::typed::ScriptFront
     fn constructor_is_defined(
         &mut self,
         registry: &Persistent<dom::CustomElementRegistry>,
+        _: &Callback<usize>,
     ) -> bool {
         self.read(|cx, op| {
             let number = op.callback_number(Callback(0));
@@ -3467,22 +3472,17 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> dom_api::typed::ScriptFront
         })
     }
 
-    fn read_custom_element_constructor(&mut self) -> Result<ConstructorInfo, ApiError> {
+    fn read_custom_element_constructor(
+        &mut self,
+        _: &Callback<usize>,
+    ) -> Result<(ConstructorInfo, Self::Lifecycle), ApiError> {
         let constructor =
             v8::Local::<v8::Object>::try_from(self.call.callback.expect("the constructor taken"))
                 .expect("a constructor, checked");
         match crate::custom_elements::read_constructor(self.base.scope.scope(), constructor) {
-            Some((callbacks, info)) => {
-                self.call.rare().definition = Some(callbacks);
-                Ok(info)
-            }
-            None => {
-                // V8's exception is the member's: no other thrown over it.
-                self.call.rare().threw = true;
-                Err(ApiError::type_error(
-                    "define: the constructor's reading threw",
-                ))
-            }
+            Some((callbacks, info)) => Ok((info, callbacks)),
+            // V8's exception is the member's: no other thrown over it.
+            None => Err(ApiError::Thrown),
         }
     }
 
@@ -3490,13 +3490,9 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> dom_api::typed::ScriptFront
         &mut self,
         registry: &Persistent<dom::CustomElementRegistry>,
         definition: &Persistent<dom::CustomElementDefinition>,
+        _: &Callback<usize>,
+        callbacks: Self::Lifecycle,
     ) {
-        let callbacks = self
-            .call
-            .rare()
-            .definition
-            .take()
-            .expect("the callbacks read");
         self.mutate(|cx, op| {
             let edges = cx.definition_edges(definition.get(cx.gc));
             let constructor =
@@ -3565,6 +3561,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> dom_api::typed::ScriptFront
         &mut self,
         pending: &[u64],
         definition: &Persistent<dom::CustomElementDefinition>,
+        _: &Callback<usize>,
     ) {
         let _ = definition;
         let constructor = self.call.callback.expect("the constructor taken");
@@ -3593,9 +3590,11 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> dom_api::typed::ScriptFront
         });
         match filtered {
             Ok(result) => Ok(result),
+            // Caught so that the call's `TryCatch` ends, thrown again at
+            // once: V8 holds it until the member returns, as it is.
             Err(thrown) => {
-                self.call.rare().thrown = Some(thrown);
-                Err(ApiError::type_error("the filter threw"))
+                self.base.scope.scope().throw_exception(thrown);
+                Err(ApiError::Thrown)
             }
         }
     }
@@ -4133,9 +4132,7 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> Front for WholeFront<'a, 's, 'i, 'r, A> {
     #[cold]
     #[inline(never)]
     fn reject(&mut self, error: ApiError) {
-        // What a traversal's filter threw.
-        let thrown = self.call.rare.as_mut().and_then(|rare| rare.thrown.take());
-        self.base.reject_with(thrown, error);
+        self.base.reject_with(None, error);
     }
 
     #[inline]

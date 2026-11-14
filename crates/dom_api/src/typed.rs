@@ -411,6 +411,12 @@ pub trait DictFront: FrontTypes {
 /// reactions. A trait of its own: a front end that hands such a call to
 /// another has none of these.
 pub trait ScriptFront: Front {
+    /// What `define` read off its constructor that the engine keeps: the
+    /// lifecycle callbacks, handed from the reading to the storing
+    /// (`read_custom_element_constructor`,
+    /// `store_custom_element_definition`).
+    type Lifecycle;
+
     /// `Front::invoke_ce_reactions`: a `[CEReactions]` member's element queue, left as its operation
     /// ended (`Cx::leave_ce_reactions` gave true): its reactions invoked
     /// (`custom_elements::invoke_reactions`), the front end as their script
@@ -432,8 +438,12 @@ pub trait ScriptFront: Front {
 
     /// `ScriptHost::read_custom_element_constructor`, the call's callback
     /// argument's.
-    fn read_custom_element_constructor(&mut self) -> Result<ConstructorInfo, ApiError> {
+    fn read_custom_element_constructor(
+        &mut self,
+        constructor: &Callback<Self::Callback>,
+    ) -> Result<(ConstructorInfo, Self::Lifecycle), ApiError> {
         const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
+        let _ = constructor;
         unreachable!("a front end binding `define` reads its constructor")
     }
 
@@ -442,9 +452,11 @@ pub trait ScriptFront: Front {
         &mut self,
         registry: &Persistent<dom::CustomElementRegistry>,
         definition: &Persistent<dom::CustomElementDefinition>,
+        constructor: &Callback<Self::Callback>,
+        lifecycle: Self::Lifecycle,
     ) {
         const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
-        let _ = (registry, definition);
+        let _ = (registry, definition, constructor, lifecycle);
         unreachable!("a front end binding `define` stores its callbacks")
     }
 
@@ -472,8 +484,9 @@ pub trait ScriptFront: Front {
     }
 
     /// `ScriptHost::constructor_is_constructor`.
-    fn constructor_is_constructor(&mut self) -> bool {
+    fn constructor_is_constructor(&mut self, constructor: &Callback<Self::Callback>) -> bool {
         const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
+        let _ = constructor;
         unreachable!("a front end binding `define` checks its constructor")
     }
 
@@ -481,9 +494,10 @@ pub trait ScriptFront: Front {
     fn constructor_is_defined(
         &mut self,
         registry: &Persistent<dom::CustomElementRegistry>,
+        constructor: &Callback<Self::Callback>,
     ) -> bool {
         const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
-        let _ = registry;
+        let _ = (registry, constructor);
         unreachable!("a front end binding `define` compares its constructor")
     }
 
@@ -492,9 +506,10 @@ pub trait ScriptFront: Front {
         &mut self,
         pending: &[u64],
         definition: &Persistent<dom::CustomElementDefinition>,
+        constructor: &Callback<Self::Callback>,
     ) {
         const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
-        let _ = (pending, definition);
+        let _ = (pending, definition, constructor);
         unreachable!("a front end binding `define` resolves `whenDefined`'s promises")
     }
 
@@ -1786,6 +1801,12 @@ pub trait ScriptHost {
     /// A value of the engine's the host stores in the DOM's JS edges (an
     /// exception thrown, a promise rejected), as it holds it.
     type Value;
+    /// A callback argument of the call, as its front end took it
+    /// (`define`'s constructor, which its steps are given).
+    type Callback;
+    /// What `define` read off its constructor that the engine keeps
+    /// (`ScriptFront::Lifecycle`).
+    type Lifecycle;
 
     /// Runs one operation of the DOM that allocates nothing: no safepoint,
     /// the DOM borrowed shared.
@@ -2082,7 +2103,11 @@ pub trait ScriptHost {
     /// `observedAttributes` (with an `attributeChangedCallback`),
     /// `disabledFeatures`, `formAssociated`; the callbacks kept for
     /// `store_custom_element_definition`. What it throws, an error.
-    fn read_custom_element_constructor(&mut self) -> Result<ConstructorInfo, ApiError> {
+    fn read_custom_element_constructor(
+        &mut self,
+        constructor: &Callback<Self::Callback>,
+    ) -> Result<(ConstructorInfo, Self::Lifecycle), ApiError> {
+        let _ = constructor;
         unreachable!("a host defining custom elements reads their constructors")
     }
 
@@ -2093,8 +2118,10 @@ pub trait ScriptHost {
         &mut self,
         registry: &Persistent<dom::CustomElementRegistry>,
         definition: &Persistent<dom::CustomElementDefinition>,
+        constructor: &Callback<Self::Callback>,
+        lifecycle: Self::Lifecycle,
     ) {
-        let _ = (registry, definition);
+        let _ = (registry, definition, constructor, lifecycle);
         unreachable!("a host defining custom elements stores their callbacks")
     }
 
@@ -2142,7 +2169,8 @@ pub trait ScriptHost {
 
     /// Whether the call's callback argument is a constructor (ECMAScript's
     /// `IsConstructor`).
-    fn constructor_is_constructor(&mut self) -> bool {
+    fn constructor_is_constructor(&mut self, constructor: &Callback<Self::Callback>) -> bool {
+        let _ = constructor;
         unreachable!("a host defining custom elements checks their constructors")
     }
 
@@ -2151,8 +2179,9 @@ pub trait ScriptHost {
     fn constructor_is_defined(
         &mut self,
         registry: &Persistent<dom::CustomElementRegistry>,
+        constructor: &Callback<Self::Callback>,
     ) -> bool {
-        let _ = registry;
+        let _ = (registry, constructor);
         unreachable!("a host defining custom elements compares their constructors")
     }
 
@@ -2162,8 +2191,9 @@ pub trait ScriptHost {
         &mut self,
         pending: &[u64],
         definition: &Persistent<dom::CustomElementDefinition>,
+        constructor: &Callback<Self::Callback>,
     ) {
-        let _ = (pending, definition);
+        let _ = (pending, definition, constructor);
         unreachable!("a host defining custom elements resolves their promises")
     }
 }
@@ -2188,6 +2218,8 @@ pub struct FrontHost<'a, F>(pub &'a mut F);
 impl<F: ScriptFront> ScriptHost for FrontHost<'_, F> {
     /// None: a member's call reports nothing in its operations.
     type Value = std::convert::Infallible;
+    type Callback = F::Callback;
+    type Lifecycle = F::Lifecycle;
 
     fn read<R>(&mut self, f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>) -> R) -> R {
         self.0.read(|cx, _| f(cx))
@@ -2225,16 +2257,22 @@ impl<F: ScriptFront> ScriptHost for FrontHost<'_, F> {
         self.0.call_mutation_callback(observer, records);
     }
 
-    fn read_custom_element_constructor(&mut self) -> Result<ConstructorInfo, ApiError> {
-        self.0.read_custom_element_constructor()
+    fn read_custom_element_constructor(
+        &mut self,
+        constructor: &Callback<Self::Callback>,
+    ) -> Result<(ConstructorInfo, Self::Lifecycle), ApiError> {
+        self.0.read_custom_element_constructor(constructor)
     }
 
     fn store_custom_element_definition(
         &mut self,
         registry: &Persistent<dom::CustomElementRegistry>,
         definition: &Persistent<dom::CustomElementDefinition>,
+        constructor: &Callback<Self::Callback>,
+        lifecycle: Self::Lifecycle,
     ) {
-        self.0.store_custom_element_definition(registry, definition);
+        self.0
+            .store_custom_element_definition(registry, definition, constructor, lifecycle);
     }
 
     fn upgrade_element(
@@ -2255,23 +2293,26 @@ impl<F: ScriptFront> ScriptHost for FrontHost<'_, F> {
             .call_lifecycle_callback(element, definition, callback);
     }
 
-    fn constructor_is_constructor(&mut self) -> bool {
-        self.0.constructor_is_constructor()
+    fn constructor_is_constructor(&mut self, constructor: &Callback<Self::Callback>) -> bool {
+        self.0.constructor_is_constructor(constructor)
     }
 
     fn constructor_is_defined(
         &mut self,
         registry: &Persistent<dom::CustomElementRegistry>,
+        constructor: &Callback<Self::Callback>,
     ) -> bool {
-        self.0.constructor_is_defined(registry)
+        self.0.constructor_is_defined(registry, constructor)
     }
 
     fn resolve_when_defined(
         &mut self,
         pending: &[u64],
         definition: &Persistent<dom::CustomElementDefinition>,
+        constructor: &Callback<Self::Callback>,
     ) {
-        self.0.resolve_when_defined(pending, definition);
+        self.0
+            .resolve_when_defined(pending, definition, constructor);
     }
 
     fn pending_input(&mut self, include_continuous: bool) -> Vec<crate::PendingInput> {
@@ -8849,7 +8890,9 @@ mod tests {
         }
     }
 
-    impl super::ScriptFront for OneNode {}
+    impl super::ScriptFront for OneNode {
+        type Lifecycle = ();
+    }
 
     impl Front for OneNode {
         /// Script runs on this front end itself.

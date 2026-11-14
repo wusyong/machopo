@@ -23,7 +23,7 @@ use dom_api::{AnyArg, ApiCx, ApiError, Callback, DictFront, Front, FrontTypes, O
 use elise::JsEdge;
 use elise::Persistent;
 
-use crate::front::{self, Checked, WholeFront};
+use crate::front::{self, Checked};
 use crate::state::{self, Caches, State};
 use crate::strings::ArgString;
 use crate::templates;
@@ -606,21 +606,6 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
         &self.noted
     }
 
-    /// `f` of the whole front end, a scope made for it: what runs script
-    /// after the member's operation (its custom element reactions).
-    #[cold]
-    #[inline(never)]
-    fn with_front<R>(
-        &mut self,
-        f: impl FnOnce(&mut WholeFront<'_, 's, 's, 's, K::Args>) -> R,
-    ) -> R {
-        let seed = K::seed(&self.info);
-        self.info.with_scope(|mut scope, rv| {
-            let args = K::args(seed, scope.scope());
-            f(&mut WholeFront::new(scope, &args, rv))
-        })
-    }
-
     /// `f` of a scope made now, with the call's arguments and where its
     /// result goes: what allocates in V8, throws or converts, and keeps
     /// nothing of the call.
@@ -874,17 +859,11 @@ impl<'s, K: InfoKind<'s>> DictFront for InfoFront<'s, K> {
 }
 
 impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
-    /// The whole front end, in a scope made for the call: script runs
-    /// between its operations.
-    /// (As `with_front`, but no cold path: it is the whole of such a
-    /// member's call.)
+    /// Script runs on this front end itself, between its operations
+    /// (`ScriptFront`): each call into script makes its own scope.
     #[inline(never)]
     fn whole<C: dom_api::typed::WholeCall>(&mut self, call: C) -> C::Out {
-        let seed = K::seed(&self.info);
-        self.info.with_scope(|mut scope, rv| {
-            let args = K::args(seed, scope.scope());
-            call.run(&mut WholeFront::new(scope, &args, rv))
-        })
+        call.run(self)
     }
 
     /// A dictionary's members are read in one scope made for them (a
@@ -1731,7 +1710,178 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     #[cold]
     #[inline(never)]
     fn invoke_ce_reactions(&mut self) {
-        self.with_front(|front| front.invoke_ce_reactions());
+        dom_api::typed::ScriptFront::invoke_left_reactions(self);
+    }
+}
+
+/// What a member's function asks of its script host, in a scope each
+/// makes for itself (`StateInfo::with_scope`): the handles it makes are
+/// the callback's (V8's own handle scope of it), and nothing of one is
+/// kept for the next but what the member's function passes on.
+impl<'s, K: InfoKind<'s>> dom_api::typed::ScriptFront for InfoFront<'s, K> {
+    /// The lifecycle callbacks `define` read: `connectedCallback`,
+    /// `disconnectedCallback`, `adoptedCallback`,
+    /// `attributeChangedCallback`.
+    type Lifecycle = [Option<v8::Local<'s, v8::Function>>; 4];
+
+    fn constructor_is_constructor(
+        &mut self,
+        constructor: &Callback<v8::Local<'s, v8::Value>>,
+    ) -> bool {
+        v8::Local::<v8::Object>::try_from(constructor.0).is_ok_and(|object| object.is_constructor())
+    }
+
+    fn constructor_is_defined(
+        &mut self,
+        registry: &Persistent<dom::CustomElementRegistry>,
+        constructor: &Callback<v8::Local<'s, v8::Value>>,
+    ) -> bool {
+        let constructor = *constructor;
+        self.read(|cx, op| {
+            let number = op.callback_number(constructor);
+            cx.custom_element_definitions_numbered(registry.get(cx.gc), number)
+                .into_iter()
+                .any(|definition| {
+                    op.same_callback(cx, cx.definition_edges(definition).constructor, constructor)
+                })
+        })
+    }
+
+    fn read_custom_element_constructor(
+        &mut self,
+        constructor: &Callback<v8::Local<'s, v8::Value>>,
+    ) -> Result<(dom_api::typed::ConstructorInfo, Self::Lifecycle), ApiError> {
+        let constructor =
+            v8::Local::<v8::Object>::try_from(constructor.0).expect("a constructor, checked");
+        let read = self.info.with_scope(|mut scope, _| {
+            crate::custom_elements::read_constructor(scope.scope(), constructor)
+        });
+        // V8's exception is the member's: no other thrown over it.
+        read.map(|(callbacks, info)| (info, callbacks))
+            .ok_or(ApiError::Thrown)
+    }
+
+    fn store_custom_element_definition(
+        &mut self,
+        registry: &Persistent<dom::CustomElementRegistry>,
+        definition: &Persistent<dom::CustomElementDefinition>,
+        constructor: &Callback<v8::Local<'s, v8::Value>>,
+        callbacks: Self::Lifecycle,
+    ) {
+        let constructor =
+            v8::Local::<v8::Object>::try_from(constructor.0).expect("a constructor, checked");
+        self.mutate(|cx, op| {
+            let edges = cx.definition_edges(definition.get(cx.gc));
+            op.no_gc.set_strong(edges.constructor, constructor);
+            cx.set_definition_constructor_number(
+                registry.get(cx.gc),
+                definition.get(cx.gc),
+                front::number(constructor),
+            );
+            let callback_edges = [
+                (edges.connected, dom::Callback::Connected),
+                (edges.disconnected, dom::Callback::Disconnected),
+                (edges.adopted, dom::Callback::Adopted),
+                (edges.attribute_changed, dom::Callback::AttributeChanged),
+            ];
+            let mut has = 0;
+            for ((edge, which), callback) in callback_edges.into_iter().zip(callbacks) {
+                if let Some(callback) = callback {
+                    op.no_gc.set_strong(edge, callback.into());
+                    has |= which.bit();
+                }
+            }
+            cx.set_definition_callbacks(definition.get(cx.gc), has);
+        });
+    }
+
+    /// The constructor constructed, in a `TryCatch`: what it threw, or a
+    /// `TypeError` if it gave another object than `element`'s wrapper,
+    /// reported at its realm.
+    fn upgrade_element(
+        &mut self,
+        definition: &Persistent<dom::CustomElementDefinition>,
+        element: &Persistent<Node>,
+    ) -> bool {
+        self.info.with_scope(|mut scope, _| {
+            crate::listeners::call_constructor(&mut scope, |scope| {
+                front::upgrade_element(scope, definition, element)
+            })
+        })
+    }
+
+    fn call_lifecycle_callback(
+        &mut self,
+        element: &Persistent<Node>,
+        definition: &Persistent<dom::CustomElementDefinition>,
+        callback: dom_api::LifecycleCallback,
+    ) {
+        self.info.with_scope(|mut scope, _| {
+            crate::listeners::call_function(&mut scope, |scope| {
+                front::call_lifecycle_callback(scope, element, definition, callback);
+            });
+        });
+    }
+
+    fn pending_input(&mut self, include_continuous: bool) -> Vec<dom_api::PendingInput> {
+        self.info.with_scope(|mut scope, _| {
+            crate::listeners::pending_input(&mut scope, include_continuous)
+        })
+    }
+
+    fn reject_promise_with_reason(&mut self, promise: u64, signal: &Persistent<EventTargetImpl>) {
+        self.info.with_scope(|mut scope, _| {
+            crate::listeners::reject_promise_with_reason(&mut scope, promise, signal);
+        });
+    }
+
+    fn resolve_when_defined(
+        &mut self,
+        pending: &[u64],
+        _: &Persistent<dom::CustomElementDefinition>,
+        constructor: &Callback<v8::Local<'s, v8::Value>>,
+    ) {
+        let constructor = constructor.0;
+        self.info.with_scope(|mut scope, _| {
+            for id in pending {
+                let (state, _) = scope.state_mut();
+                let Some(resolver) = state.when_defined.remove(id) else {
+                    continue;
+                };
+                let scope = scope.scope();
+                let resolver = v8::Local::new(scope, resolver);
+                resolver.resolve(scope, constructor);
+            }
+        });
+    }
+
+    fn call_listener(&mut self, event: &Persistent<dom::Event>, index: usize) {
+        self.info.with_scope(|mut scope, _| {
+            crate::listeners::call_listener(&mut scope, event, index, false);
+        });
+    }
+
+    fn call_node_filter(
+        &mut self,
+        traversal: &dom::TraversalRoot,
+        node: &NodeRoot,
+    ) -> Result<u16, ApiError> {
+        self.info.with_scope(|mut scope, _| {
+            let filtered = crate::listeners::call_function(&mut scope, |scope| {
+                crate::listeners::call_node_filter(scope, traversal, node)
+            });
+            // Caught so that the call's `TryCatch` ends, thrown again at
+            // once: V8 holds it until the member returns, as it is.
+            filtered.map_err(|thrown| {
+                scope.scope().throw_exception(thrown);
+                ApiError::Thrown
+            })
+        })
+    }
+
+    fn update_elements(&mut self) {
+        self.info
+            .with_scope(|mut scope, _| crate::state::update_elements(&mut scope));
     }
 }
 

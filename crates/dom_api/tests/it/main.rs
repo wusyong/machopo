@@ -399,6 +399,9 @@ impl<'d> DictFront for TestFront<'d> {
 }
 
 impl<'d> dom_api::typed::ScriptFront for TestFront<'d> {
+    /// None: no test defines a custom element through it.
+    type Lifecycle = std::convert::Infallible;
+
     /// Logs the call, then does the callback's action.
     fn call_listener(&mut self, event: &elise::Persistent<dom::Event>, index: usize) {
         let listeners = self.listeners.clone();
@@ -974,6 +977,9 @@ pub struct TestHost<'a, 'd>(&'a mut TestFront<'d>);
 
 impl dom_api::ScriptHost for TestHost<'_, '_> {
     type Value = u64;
+    /// None: no member that defines custom elements is called through it.
+    type Callback = std::convert::Infallible;
+    type Lifecycle = std::convert::Infallible;
 
     fn read<R>(&mut self, f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>) -> R) -> R {
         self.0.read(|cx, _| f(cx))
@@ -1415,5 +1421,6 @@ pub fn exception(error: ApiError) -> &'static str {
         ApiError::Type(message) => panic!("a TypeError: {message}"),
         ApiError::Range(message) => panic!("a RangeError: {message}"),
         ApiError::Aborted(_) => panic!("an aborted signal's reason"),
+        ApiError::Thrown => panic!("what script threw"),
     }
 }

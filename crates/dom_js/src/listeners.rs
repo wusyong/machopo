@@ -55,6 +55,9 @@ pub(crate) struct Host<'a, 'b, 's, 'i> {
 
 impl<'s> ScriptHost for Host<'_, '_, 's, '_> {
     type Value = v8::Local<'s, v8::Value>;
+    /// None: no member that defines custom elements is called through it.
+    type Callback = std::convert::Infallible;
+    type Lifecycle = std::convert::Infallible;
 
     fn read<R>(&mut self, f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>) -> R) -> R {
         let (state, _) = self.scope.state();

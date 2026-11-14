@@ -93,6 +93,12 @@ impl DomException {
                 code: exception_code(dom_api::ExceptionName::Abort),
                 message: error.message(),
             },
+            // No member bound runs script that throws (a guest has no
+            // exception of its own to hold): a `TypeError` if one does.
+            error @ ApiError::Thrown => Self {
+                code: TYPE_ERROR,
+                message: error.message(),
+            },
         }
     }
 }
@@ -1043,6 +1049,9 @@ impl<'r, 'g, A: ReadArgs> DictFront for WasmFront<'r, 'g, A> {
 }
 
 impl<'r, 'g, A: ReadArgs> dom_api::typed::ScriptFront for WasmFront<'r, 'g, A> {
+    /// None: a guest defines no custom element.
+    type Lifecycle = std::convert::Infallible;
+
     /// A listener of the event the member dispatched, called within the
     /// guest's call: this store's own (its `handle-event`, with a handle
     /// to the event the host takes back after). An event handler

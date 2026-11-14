@@ -1,0 +1,120 @@
+# The script operations on the info front end, each in its own scope;
+# what `define` and a traversal pass on by value.
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it"]
+timeout = 1800
+
+[[mutant]]
+name = "anything is a constructor"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        v8::Local::<v8::Object>::try_from(constructor.0).is_ok_and(|object| object.is_constructor())'''
+to = '''        v8::Local::<v8::Object>::try_from(constructor.0).is_ok()'''
+
+[[mutant]]
+name = "no constructor is defined already"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                    op.same_callback(cx, cx.definition_edges(definition).constructor, constructor)'''
+to = '''                    op.same_callback(cx, cx.definition_edges(definition).constructor, constructor) && false'''
+
+[[mutant]]
+name = "what define's reads threw is thrown over"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            .ok_or(ApiError::Thrown)'''
+to = '''            .ok_or(ApiError::type_error("define: the constructor's reading threw"))'''
+
+[[mutant]]
+name = "a definition's constructor isn't stored"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            op.no_gc.set_strong(edges.constructor, constructor);'''
+to = '''            let _ = edges.constructor;'''
+
+[[mutant]]
+name = "a definition has no lifecycle callback"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                    has |= which.bit();'''
+to = '''                    let _ = which;'''
+
+[[mutant]]
+name = "a lifecycle callback isn't stored"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                    op.no_gc.set_strong(edge, callback.into());'''
+to = '''                    let _ = (edge, callback);'''
+
+[[mutant]]
+name = "an upgrade constructs nothing"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                front::upgrade_element(scope, definition, element)'''
+to = '''                { let _ = (scope, definition, element); true }'''
+
+[[mutant]]
+name = "a lifecycle callback isn't called"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                front::call_lifecycle_callback(scope, element, definition, callback);'''
+to = '''                let _ = (scope, element, definition, callback);'''
+
+[[mutant]]
+name = "no input is pending"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            crate::listeners::pending_input(&mut scope, include_continuous)
+        })'''
+to = '''            { let _ = (&mut scope, include_continuous); Vec::new() }
+        })'''
+
+[[mutant]]
+name = "an abort rejects no promise"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            crate::listeners::reject_promise_with_reason(&mut scope, promise, signal);'''
+to = '''            let _ = (&mut scope, promise, signal);'''
+
+[[mutant]]
+name = "whenDefined's promises aren't resolved"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                resolver.resolve(scope, constructor);
+            }
+        });'''
+to = '''                let _ = (resolver, constructor);
+            }
+        });'''
+
+[[mutant]]
+name = "a listener isn't called"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            crate::listeners::call_listener(&mut scope, event, index, false);
+        });'''
+to = '''            let _ = (&mut scope, event, index);
+        });'''
+
+[[mutant]]
+name = "what a filter threw isn't thrown again"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                scope.scope().throw_exception(thrown);
+                ApiError::Thrown'''
+to = '''                let _ = thrown;
+                ApiError::Thrown'''
+
+[[mutant]]
+name = "a filter's exception is thrown over"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                scope.scope().throw_exception(thrown);
+                ApiError::Thrown'''
+to = '''                scope.scope().throw_exception(thrown);
+                ApiError::type_error("the filter threw")'''
+
+[[mutant]]
+name = "a member's reactions aren't invoked"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        dom_api::typed::ScriptFront::invoke_left_reactions(self);
+    }
+}
+
+/// What a member's function asks'''
+to = '''        let _ = self;
+    }
+}
+
+/// What a member's function asks'''
+
+[[mutant]]
+name = "the elements aren't updated"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            .with_scope(|mut scope, _| crate::state::update_elements(&mut scope));'''
+to = '''            .with_scope(|mut scope, _| { let _ = &mut scope; });'''

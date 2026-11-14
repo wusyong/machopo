@@ -217,11 +217,16 @@ impl<'a, 's, 'i> DictFront for PropertyFront<'a, 's, 'i> {
             ApiError::Aborted(signal) => {
                 crate::front::throw_abort_reason(&mut self.scope, &signal.0);
             }
+            // V8 holds what script threw.
+            ApiError::Thrown => {}
         }
     }
 }
 
 impl<'a, 's, 'i> dom_api::typed::ScriptFront for PropertyFront<'a, 's, 'i> {
+    /// None: no named property's operation defines a custom element.
+    type Lifecycle = std::convert::Infallible;
+
     /// A setter's reactions (`dataset.x = ...`, an options collection's
     /// indexed setter): the lifecycle callbacks they call.
     fn call_lifecycle_callback(

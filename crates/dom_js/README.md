@@ -6,11 +6,11 @@ DOM（`dom`、`dom_api`）的 JS 前端（V8），頁面的 document 都是它�
 
 ## 一次呼叫
 
-每個成員的 V8 callback 只拿 V8 的 callback info、從 `InfoFront` 開始（下面的「每個成員的呼叫都從另一個 front 開始」）。整個呼叫都在一個 scope 裡跑的只有會跑 script 的：會讓 script 跑的成員（`InfoFront::whole`）、custom element 的 reaction、跨 origin 的屬性的成員（`CrossOriginMember<M>`）、legacy caller（`LegacyCaller<M>`）、iterator 的 pairs。它們用 `WholeFront`，先看它誰拿著什麼：
+每個成員的 V8 callback 只拿 V8 的 callback info、從 `InfoFront` 開始（下面的「每個成員的呼叫都從另一個 front 開始」）。會讓 script 跑的成員和 custom element 的 reaction 也在 `InfoFront` 上跑：它實作 `dom_api` 的 `ScriptFront`，每次呼叫 script（一個 listener、一個 lifecycle callback、一次 filter……）當場開一個 scope，沒有呼叫到 script 的就不開（`InfoFront::whole` 是 `call.run(self)`）；一次呼叫跨過 script 要留著的東西（`define` 的 constructor 和它讀到的 lifecycle callback）由 `dom_api` 的函式照值傳，front 不留狀態；script 丟的例外留在 V8 裡，成員的錯誤是 `ApiError::Thrown`（front 不再丟別的蓋過它）。整個呼叫都在一個 scope 裡跑的只剩跨 origin 的屬性的成員（`CrossOriginMember<M>`）、legacy caller（`LegacyCaller<M>`）和 iterator 的 pairs。它們用 `WholeFront`，先看它誰拿著什麼：
 
 ```text
-會跑 script 的呼叫（InfoFront::whole、CrossOriginMember<M>、LegacyCaller<M>、pairs）
-└─ WholeFront<'a, 's, 'i, 'r>：Scoped（scope（isolate 的狀態是 DOM 的）、參數、結果的格子）和 Call（操作前建好的 wrapper、拿到的 callback、script 丟的例外）
+整個在一個 scope 裡的呼叫（CrossOriginMember<M>、LegacyCaller<M>、pairs）
+└─ WholeFront<'a, 's, 'i, 'r>：Scoped（scope（isolate 的狀態是 DOM 的）、參數、結果的格子）和 Call（操作前建好的 wrapper、拿到的 callback）
    ├─ 1. 操作外：轉參數（可能跑 script、丟例外）
    ├─ 2. read / mutate：從 scope 借出狀態（DOM、快取、layout），scope 被佔住
    │     └─ WholeOp<'o, 's, 'i, 'r>：NoGc、參數、&mut Call、快取
@@ -61,7 +61,7 @@ named property 的 getter 和 setter（`dataset.a`、`children.px`、`style.colo
 
 成員的函式在操作裡問 front 的事，`InfoOp` 都有（`OpFront` 的這類方法沒有預設實作）：讀 `ImageData` 的陣列的 bytes（`with_array_bytes`：從邊取出 handle、原地讀，handle 在 callback 自己的 handle scope 裡，`InfoNoGc::strong_value`）。要留到操作後的（要丟的 abort reason、`ImageData` 的像素、upgrade 中的元素）由錯誤或結果帶出操作，不留在 front 裡。
 
-在 `WholeFront` 上跑的呼叫，是 `dom_api` 替成員展開的專用路徑（`TypedMember::call`，和 `InfoFront` 上跑的是同一份）加上這個 front（`front.rs`）。只有它實作 `dom_api` 的 `ScriptFront`（script 那一側的方法：呼叫 listener、filter、observer 和 custom element 的 callback），所以 `WholeCall::run` 只在它上面跑得起來。讀參數、做結果、丟例外和 `InfoFront` 的冷路徑是同一份 `Scoped` 的方法。`InfoFront` 和 `WholeFront` 都把 `FrontTypes::STUBS` 設成 false：`Front`、`OpFront` 的方法裡會 panic 的預設實作在替它們產生程式時就編不過，所以成員的呼叫走得到的方法它們一定都自己實作了。步驟：
+在 `WholeFront` 上跑的呼叫，是 `dom_api` 替成員展開的專用路徑（`TypedMember::call`，和 `InfoFront` 上跑的是同一份）加上這個 front（`front.rs`）。它和 `InfoFront` 都實作 `dom_api` 的 `ScriptFront`（script 那一側的方法：呼叫 listener、filter、observer 和 custom element 的 callback）。讀參數、做結果、丟例外和 `InfoFront` 的冷路徑是同一份 `Scoped` 的方法。`InfoFront` 和 `WholeFront` 都把 `FrontTypes::STUBS` 設成 false：`Front`、`OpFront` 的方法裡會 panic 的預設實作在替它們產生程式時就編不過，所以成員的呼叫走得到的方法它們一定都自己實作了。步驟：
 
 1. 操作外轉參數：WebIDL 的 `ToString` 可能跑 script；節點的參數先確認是 wrapper（`bindings::is_wrapper`）；dictionary 照成員名稱的順序 `Get`（getter 可能跑 script、丟例外：例外留著，呼叫停在那裡）。建構子先確認是 `new` 呼叫的、參數夠不夠（照 Chrome 的訊息）。字串參數（`ArgString`）是 V8 的字串：平的 one-byte ASCII 字串在操作裡才讀，讀 V8 自己的字元（`bindings::LentString`，不複製、不經過 `ValueView`），借出期間 V8 的 GC 會 abort，所以呼叫在操作一結束就放掉參數；其他的（cons、two-byte、Latin-1）在這裡複製（攤平 cons string 會配置）。
 2. 一個 DOM 的操作，由 front 開（getter 是 `WholeFront::read`：共享地借 isolate 的狀態、`Dom::read`，不經過安全點；setter 和 method 是 `WholeFront::mutate`：借整個狀態、`Dom::mutate`）。狀態從呼叫的 scope 借出，借著時 scope 被佔住；操作裡的那一側（`WholeOp`）只拿 `bindings::NoGc`（不配置、不呼叫回來的那幾個）和 `bindings::OpReturn`（不配置的 setter），碰不到會配置的 V8 API。`this` 和節點的參數 unwrap 一次（receiver 由 V8 的 `Signature` 檢查過；回傳 promise 的成員裝在物件上的是外面一層沒有 `Signature` 的函式，在 `TryCatch` 裡呼叫它，receiver 不對、參數轉換和 DOM 的錯誤都變成 rejected promise（`templates::rejecting`，Blink 的 `ExceptionToRejectPromiseScope`），wrapper 的 tag 分辨它是哪一種 GC 型別：`EventTarget` 的 `this` 可能是節點或單純的 target），呼叫成員的函式，結果先記下：已經是 V8 的（節點的 wrapper、快取裡的 V8 字串、名稱的 V8 字串）從它的 handle 直接寫進回傳值（不建 `Local`，V8 的 `ReturnValue::Set` 對 `Global`、`TracedReference` 的讀法），否則記下 DOM 的字串或節點（root）。

@@ -19,6 +19,10 @@ pub enum ApiError {
     /// rejects with. It carries the signal out of the operation; the
     /// front end reads the reason as it throws.
     Aborted(AbortedSignal),
+    /// Script the member ran threw (a getter it read, a filter it called),
+    /// and the engine holds that exception still: it is the member's, the
+    /// very value, so a front end given this throws nothing over it.
+    Thrown,
 }
 
 /// The signal whose abort reason an `ApiError::Aborted` throws, rooted.
@@ -39,6 +43,7 @@ impl ApiError {
             Self::Type(message) | Self::Range(message) => message.clone(),
             Self::Dom(exception) => exception.message.clone(),
             Self::Aborted(_) => "signal is aborted".to_owned(),
+            Self::Thrown => "script threw".to_owned(),
         }
     }
 
@@ -80,6 +85,7 @@ impl fmt::Display for ApiError {
             Self::Range(message) => write!(f, "RangeError: {message}"),
             Self::Dom(exception) => write!(f, "{}: {}", exception.name.name(), exception.message),
             Self::Aborted(_) => write!(f, "an aborted signal's reason"),
+            Self::Thrown => write!(f, "what script threw"),
         }
     }
 }
