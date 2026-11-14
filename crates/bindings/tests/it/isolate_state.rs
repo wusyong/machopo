@@ -8,7 +8,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use bindings::{
-    InfoState, StateCallback, StateIndexInfo, StateIndexedSetter, StateInfoIndexedGetter,
+    InfoState, StateCallback, StateIndexInfo, StateInfoIndexedGetter, StateInfoIndexedSetter,
     StateScope, V8PerIsolateData, drop_isolate_state, isolate_state_mut, set_isolate_state,
     set_state_info_indexed_getter, state_function_template,
 };
@@ -123,13 +123,8 @@ impl StateInfoIndexedGetter<State> for Plus {
 /// No setter: `Plus`'s properties are read-only.
 struct NoSetter;
 
-impl StateIndexedSetter<State> for NoSetter {
-    fn set<'s>(
-        _: StateScope<'_, 's, '_, State>,
-        _: u32,
-        _: v8::Local<'s, v8::Value>,
-        _: v8::PropertyCallbackArguments<'s>,
-    ) -> v8::Intercepted {
+impl StateInfoIndexedSetter<State> for NoSetter {
+    fn set(_: StateIndexInfo<'_, State>) {
         unreachable!("the interceptor has no setter")
     }
 }

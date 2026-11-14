@@ -123,6 +123,17 @@ pub(crate) trait InfoKind<'s>: Sized + 'static {
     /// named getter's is a value).
     #[inline(always)]
     fn note_empty(_: &mut Self::Noted) {}
+    /// The result is a value there is (a string, a node, an object):
+    /// whether the kind only asks that, and takes it noted in the
+    /// result's place (a named property's query: no value of V8's is
+    /// made for it).
+    #[inline(always)]
+    fn note_some(_: &mut Self::Noted) -> bool {
+        false
+    }
+    /// The call threw.
+    #[inline(always)]
+    fn note_thrown(_: &mut Self::Noted) {}
     /// The result is a boolean; whether it is the callback's to return
     /// (a named setter's says whether it took the name: noted, not
     /// returned).
@@ -584,10 +595,13 @@ pub(crate) struct NamedGet;
 /// A named property's setter's (`object.name = value`).
 pub(crate) struct NamedSet;
 
-/// Whether a named setter gave `false`: it didn't take the name, an
-/// ordinary property's.
+/// What a named setter did: whether it gave `false` (it didn't take the
+/// name, an ordinary property's), and whether it threw.
 #[derive(Default)]
-pub(crate) struct Declined(pub(crate) bool);
+pub(crate) struct Assigned {
+    pub(crate) declined: bool,
+    pub(crate) threw: bool,
+}
 
 /// What the named kinds share: the info, the holder, the arguments.
 macro_rules! named_kind {
@@ -674,12 +688,172 @@ impl<'s> InfoKind<'s> for NamedGet {
 
 impl<'s> InfoKind<'s> for NamedSet {
     named_kind!();
-    type Noted = Declined;
+    type Noted = Assigned;
 
     #[inline(always)]
-    fn note_bool(noted: &mut Declined, took: bool) -> bool {
-        noted.0 = !took;
+    fn note_bool(noted: &mut Assigned, took: bool) -> bool {
+        noted.declined = !took;
         false
+    }
+
+    #[inline(always)]
+    fn note_thrown(noted: &mut Assigned) {
+        noted.threw = true;
+    }
+}
+
+/// Whether a named getter gives a value for the name, asked alone (a
+/// named property's query, and its deleter's first step).
+pub(crate) struct NamedHas;
+
+/// What `NamedHas` found.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Has {
+    /// No property of the name (the getter's null, or undefined).
+    #[default]
+    No,
+    Yes,
+    /// The getter threw.
+    Threw,
+}
+
+impl<'s> InfoKind<'s> for NamedHas {
+    named_kind!();
+    type Noted = Has;
+
+    /// A named getter's empty string is a value.
+    #[inline(always)]
+    fn note_empty(noted: &mut Has) {
+        *noted = Has::Yes;
+    }
+
+    #[inline(always)]
+    fn note_some(noted: &mut Has) -> bool {
+        *noted = Has::Yes;
+        true
+    }
+
+    #[inline(always)]
+    fn note_thrown(noted: &mut Has) {
+        *noted = Has::Threw;
+    }
+}
+
+/// Whether the call threw.
+#[derive(Default)]
+pub(crate) struct Thrown(pub(crate) bool);
+
+/// A named deleter's.
+pub(crate) struct NamedDelete;
+
+impl<'s> InfoKind<'s> for NamedDelete {
+    named_kind!();
+    type Noted = Thrown;
+
+    #[inline(always)]
+    fn note_thrown(noted: &mut Thrown) {
+        noted.0 = true;
+    }
+}
+
+/// The interceptors' callbacks that take no name: the supported names'
+/// member (`Names`, no argument), and an indexed setter's (`IndexedSet`:
+/// the index and the value assigned).
+pub(crate) struct Names;
+pub(crate) struct IndexedSet;
+
+/// What the two share: the info, the holder, the arguments made for the
+/// slow paths (the index a number of V8's, made then).
+macro_rules! index_info_kind {
+    () => {
+        type Info = bindings::StateIndexInfo<'s, State>;
+        /// The interceptor's holder: an object of the template's.
+        type This = bindings::Receiver<'s>;
+        type Args = front::NameArgs<'s>;
+        /// The holder, the index and a setter's value.
+        type Seed = (
+            bindings::Receiver<'s>,
+            u32,
+            Option<v8::Local<'s, v8::Value>>,
+        );
+        type Noted = ();
+
+        #[inline(always)]
+        fn this(info: &Self::Info) -> Self::This {
+            info.holder()
+        }
+
+        #[inline(always)]
+        fn seed(info: &Self::Info) -> Self::Seed {
+            (info.holder(), info.index(), info.value())
+        }
+
+        fn args((this, index, value): Self::Seed, scope: &mut v8::PinScope<'s, '_>) -> Self::Args {
+            front::NameArgs {
+                name: v8::Integer::new_from_unsigned(scope, index).into(),
+                value,
+                this,
+                undefined: v8::undefined(scope).into(),
+            }
+        }
+
+        #[inline(always)]
+        fn this_as<'gc, T: elise::HeapType>(
+            no_gc: &mut bindings::InfoNoGc<'_, 's>,
+            cx: &ApiCx<'_, 'gc>,
+            this: Self::This,
+        ) -> Option<elise::Gc<'gc, T>> {
+            no_gc.unwrap_receiver::<T>(cx.gc, this)
+        }
+
+        #[inline(always)]
+        fn this_object(info: &Self::Info) -> v8::Local<'s, v8::Object> {
+            info.holder().object()
+        }
+
+        fn new_object(_: Self::This) -> v8::Local<'s, v8::Object> {
+            unreachable!("an interceptor's operation constructs nothing")
+        }
+
+        fn new_target(_: Self::This) -> v8::Local<'s, v8::Value> {
+            unreachable!("an interceptor's operation has no `new.target`")
+        }
+    };
+}
+
+impl<'s> InfoKind<'s> for Names {
+    index_info_kind!();
+
+    #[inline(always)]
+    fn length(_: &Self::Info) -> usize {
+        0
+    }
+
+    fn arg(_: &Self::Info, _: usize) -> v8::Local<'s, v8::Value> {
+        unreachable!("the supported names' member takes no argument")
+    }
+}
+
+impl<'s> InfoKind<'s> for IndexedSet {
+    index_info_kind!();
+
+    #[inline(always)]
+    fn length(_: &Self::Info) -> usize {
+        2
+    }
+
+    /// The value assigned; the index is read as the number it is.
+    #[inline(always)]
+    fn arg(info: &Self::Info, index: usize) -> v8::Local<'s, v8::Value> {
+        match (index, info.value()) {
+            (1, Some(value)) => value,
+            _ => unreachable!("an indexed setter's arguments are the index and the value"),
+        }
+    }
+
+    #[inline(always)]
+    fn number_arg(info: &Self::Info, index: usize) -> Option<u32> {
+        (index == 0).then(|| info.index())
     }
 }
 
@@ -1033,6 +1207,7 @@ impl<'s, K: InfoKind<'s>> DictFront for InfoFront<'s, K> {
     #[cold]
     #[inline(never)]
     fn throw(&mut self, error: ApiError) {
+        K::note_thrown(&mut self.noted);
         // What the operation left before it failed isn't the result.
         self.with_scoped(|scoped| scoped.throw_error(error));
     }
@@ -2321,6 +2496,9 @@ impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
             self.no_gc.ret().set_empty_string();
             return None;
         }
+        if K::note_some(self.noted) {
+            return None;
+        }
         let returned = self
             .caches
             .strings
@@ -2338,6 +2516,9 @@ impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
             self.no_gc.ret().set_empty_string();
             return None;
         }
+        if K::note_some(self.noted) {
+            return None;
+        }
         front::count(&self.caches.fresh_strings);
         Some(PendingString::Fresh(value))
     }
@@ -2350,6 +2531,9 @@ impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
         if id == names::NONE {
             K::note_empty(self.noted);
             self.no_gc.ret().set_empty_string();
+            return None;
+        }
+        if K::note_some(self.noted) {
             return None;
         }
         match usize::try_from(id)
@@ -2369,6 +2553,9 @@ impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
     /// made after the operation.
     #[inline(always)]
     fn ret_node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, node: NodeRef<'gc>) -> Option<PendingNode> {
+        if K::note_some(self.noted) {
+            return None;
+        }
         if self.no_gc.return_wrapper(cx.wrapper_edge(node)) {
             return None;
         }
@@ -2383,6 +2570,9 @@ impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
         cx: &ApiCx<'_, 'gc>,
         object: ObjectRef<'gc>,
     ) -> Option<(ObjectRoot, usize)> {
+        if K::note_some(self.noted) {
+            return None;
+        }
         if self.no_gc.return_wrapper(cx.object_wrapper_edge(object)) {
             return None;
         }

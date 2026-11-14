@@ -51,11 +51,11 @@ mod v8_text;
 
 pub use gc_platform::gc_platform;
 pub use isolate_state::{
-    InfoHandles, InfoNoGc, InfoState, NamedOptions, NoGc, PropertyKey, Receiver, Signed,
-    StateAccessCheck, StateCallback, StateIndexInfo, StateIndexedSetter, StateInfo,
-    StateInfoFunction, StateInfoIndexedGetter, StateInfoMethod, StateInfoNamedGetter,
-    StateInfoNamedSetter, StateNameInfo, StateNamedProperties, StateScope, Unsigned,
-    drop_isolate_state, info_handles_for_testing, info_named_getter, info_named_setter,
+    InfoHandles, InfoNoGc, InfoState, NamedAssigned, NamedDeleted, NamedOptions, NamedQueried,
+    NoGc, PropertyKey, Receiver, Signed, StateAccessCheck, StateCallback, StateIndexInfo,
+    StateInfo, StateInfoFunction, StateInfoIndexedGetter, StateInfoIndexedSetter, StateInfoMethod,
+    StateInfoNamed, StateInfoNamedGetter, StateInfoNamedSetter, StateNameInfo, StateScope,
+    Unsigned, drop_isolate_state, info_handles_for_testing, info_named_getter, info_named_setter,
     info_scopes_for_testing, isolate_state_mut, set_isolate_state, set_state_access_check,
     set_state_call_as_function_handler, set_state_info_indexed_getter, set_state_named_properties,
     set_state_refused_access, state_cached_getter_template, state_function_template,

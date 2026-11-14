@@ -212,13 +212,13 @@ fn make_template<'s>(
                 | v8::PropertyAttribute::DONT_DELETE,
         );
     }
-    if named.get.is_some() {
+    if let Some(options) = named.options(desc.override_builtins, has_indexed(interface)) {
         let data =
             v8::Integer::new_from_unsigned(scope, u32::try_from(interface).expect("a small table"));
         bindings::set_state_named_properties::<State, NamedProperties>(
             scope,
             instance,
-            named.options(desc.override_builtins, has_indexed(interface)),
+            options,
             data.into(),
         );
     }

@@ -1,16 +1,16 @@
 //! WebIDL's named properties (`dataset.fooBar`; Blink's generated
 //! `NamedPropertyGetterCallback` and the rest): interceptors on an
 //! interface's instances that call its anonymous special operations'
-//! typed paths (`#[named(..)]`), through a front end of their own
-//! (`PropertyFront`): an interceptor's result is a `Boolean` or an `Array`,
-//! not a function's `Value`, so the operation's result is kept as the
-//! DOM's and made V8's after.
+//! typed paths (`#[named(..)]`) through the front end every member runs
+//! on (`info_front::InfoFront`), each callback V8's own, given the
+//! callback info alone.
 //!
 //! - Get: the getter (a string, or an object: `form[name]`); its none is
 //!   no property (V8 looks on).
-//! - Query: the getter too; a named property is configurable, writable
-//!   with a setter, enumerable with its names listed (else as with
-//!   `[LegacyUnenumerableNamedProperties]`).
+//! - Query: the getter too, asked only whether it gives the name (nothing
+//!   of V8's is made for what it gives); a named property is
+//!   configurable, writable with a setter, enumerable with its names
+//!   listed (else as with `[LegacyUnenumerableNamedProperties]`).
 //! - Set: the setter; one that gives `false` didn't take the name, an
 //!   ordinary property's (`style.notAProperty = 1`).
 //! - Define: a value goes through the setter; a getter or setter is
@@ -20,630 +20,247 @@
 //! - Enumerate: the supported names, own keys.
 //!
 //! An array index is a name like any other (`dataset[9]`), as in Blink's
-//! bindings.
+//! bindings: its digits.
 //!
-//! An interface's indexed setter (`select[0] = option`) goes through the
-//! same front end, from its indexed interceptor (`IndexedSetter`): the
-//! index and the value its arguments, the setter always taking the index.
+//! An interface's indexed setter (`select[0] = option`) is called from
+//! its indexed interceptor (`IndexedSetter`): the index and the value its
+//! arguments, the setter always taking the index.
 
-use dom::{DomString, NodeRef, ObjectRef, ObjectRoot};
-use dom_api::{ApiCx, ApiError, DictFront, Front, FrontTypes, Named, OpFront, TypedMember};
+use dom_api::{Named, TypedMember};
 
-use crate::exception;
-use crate::front::cached_string;
-use crate::state::{self, Scope, State};
-use crate::strings::{self, ArgString};
+use crate::info_front::{
+    Has, IndexedSet, InfoFront, NamedDelete, NamedGet, NamedHas, NamedSet, Names,
+};
+use crate::state::State;
 
-/// A special operation's typed path, through `PropertyFront`.
-pub(crate) type Call = for<'a, 's, 'i> fn(&mut PropertyFront<'a, 's, 'i>);
+type NameInfo<'s> = bindings::StateNameInfo<'s, State>;
+type IndexInfo<'s> = bindings::StateIndexInfo<'s, State>;
+
+/// A special operation's typed path through the front end that is the
+/// interceptor's info: the getter; whether it gives the name (the info
+/// back, for a deleter that goes on); the setter; whether the deleter
+/// threw; and a call of no name's (the supported names, an indexed
+/// setter).
+type GetCall = for<'s> fn(NameInfo<'s>) -> v8::Intercepted;
+type HasCall = for<'s> fn(NameInfo<'s>) -> (NameInfo<'s>, Has);
+type AssignCall = for<'s> fn(NameInfo<'s>) -> bindings::NamedAssigned;
+type DeleteCall = for<'s> fn(NameInfo<'s>) -> bool;
+type IndexCall = for<'s> fn(IndexInfo<'s>);
 
 /// An interface's named properties' special operations, found as its
 /// template is made.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct NamedCalls {
-    pub(crate) get: Option<Call>,
-    set: Option<Call>,
-    delete: Option<Call>,
-    names: Option<Call>,
+    get: Option<GetCall>,
+    has: Option<HasCall>,
+    assign: Option<AssignCall>,
+    delete: Option<DeleteCall>,
+    names: Option<IndexCall>,
     /// The indexed setter (`#[indexed(setter)]`), which the indexed
     /// interceptor calls.
-    pub(crate) indexed_set: Option<Call>,
-    /// The getter's and the setter's own callbacks, given V8's callback
-    /// info alone, if they are plain: what a string name's get and set
-    /// call (`NamedGetter`, `NamedSetter`).
+    pub(crate) indexed_set: Option<IndexCall>,
+    /// The getter's and the setter's own callbacks: what a string name's
+    /// get and set call (`NamedGetter`, `NamedSetter`).
     get_info: Option<v8::NamedPropertyGetterCallback>,
     set_info: Option<v8::NamedPropertySetterCallback>,
 }
 
 impl NamedCalls {
     pub(crate) fn add<M: TypedMember>(&mut self, named: Named) {
-        let call: Call = call::<M>;
         match named {
             Named::Getter => {
                 self.get_info = Some(bindings::info_named_getter::<State, NamedGetter<M>>());
+                self.get = Some(get_name::<M>);
+                self.has = Some(has_name::<M>);
             }
             Named::Setter => {
                 self.set_info = Some(bindings::info_named_setter::<State, NamedSetter<M>>());
+                self.assign = Some(assign_name::<M>);
             }
-            Named::Deleter | Named::Names => {}
+            Named::Deleter => self.delete = Some(delete_name::<M>),
+            Named::Names => self.names = Some(names::<M>),
         }
-        let slot = match named {
-            Named::Getter => &mut self.get,
-            Named::Setter => &mut self.set,
-            Named::Deleter => &mut self.delete,
-            Named::Names => &mut self.names,
-        };
-        *slot = Some(call);
     }
 
     pub(crate) fn add_indexed_setter<M: TypedMember>(&mut self) {
-        self.indexed_set = Some(call::<M>);
+        self.indexed_set = Some(indexed_set::<M>);
     }
 
-    /// The interceptors' options, for an interface whose named properties
-    /// shadow its own (`masking`) or not, and with indexed properties of
-    /// its own or not.
-    pub(crate) fn options(&self, masking: bool, indexed: bool) -> bindings::NamedOptions {
-        bindings::NamedOptions {
+    /// The interceptors' options, if the interface has named properties
+    /// (a getter): for one whose named properties shadow its own
+    /// (`masking`) or not, and with indexed properties of its own or not.
+    pub(crate) fn options(&self, masking: bool, indexed: bool) -> Option<bindings::NamedOptions> {
+        Some(bindings::NamedOptions {
             masking,
-            setter: self.set.is_some(),
             deleter: self.delete.is_some(),
             enumerator: self.names.is_some(),
             indices: !indexed,
-            getter_info: self.get_info,
+            getter_info: self.get_info?,
             setter_info: self.set_info,
-        }
+        })
     }
 }
 
-fn call<M: TypedMember>(front: &mut PropertyFront<'_, '_, '_>) {
-    M::call(front);
+/// The named getter `M`'s call: a result that is null is no property of
+/// the name, and V8 looks on (the object's own, its prototypes').
+fn get_name<M: TypedMember>(info: NameInfo<'_>) -> v8::Intercepted {
+    let mut front = InfoFront::<NamedGet>::new(info);
+    crate::templates::census_label::<M>();
+    M::call(&mut front);
+    if front.noted().0 {
+        v8::Intercepted::kNo
+    } else {
+        v8::Intercepted::kYes
+    }
 }
 
-/// `object.name` of a plain named getter `M`: its typed path through the
-/// front end that is the interceptor's info, as a plain member's. A
-/// result that is null is no property of the name: V8 looks on (the
-/// object's own, its prototypes').
+/// Whether the named getter `M` gives `info`'s name: its call with
+/// nothing of V8's made for what it gives (`info_front::NamedHas`).
+fn has_name<M: TypedMember>(info: NameInfo<'_>) -> (NameInfo<'_>, Has) {
+    let mut front = InfoFront::<NamedHas>::new(info);
+    crate::templates::census_label::<M>();
+    M::call(&mut front);
+    let has = *front.noted();
+    (front.into_info(), has)
+}
+
+/// The named setter `M`'s call: one that gives `false` didn't take the
+/// name, an ordinary property's.
+fn assign_name<M: TypedMember>(info: NameInfo<'_>) -> bindings::NamedAssigned {
+    let mut front = InfoFront::<NamedSet>::new(info);
+    crate::templates::census_label::<M>();
+    M::call(&mut front);
+    front.report();
+    let noted = front.noted();
+    if noted.threw {
+        bindings::NamedAssigned::Threw
+    } else if noted.declined {
+        bindings::NamedAssigned::Declined
+    } else {
+        bindings::NamedAssigned::Took
+    }
+}
+
+/// The named deleter `M`'s call; whether it threw.
+fn delete_name<M: TypedMember>(info: NameInfo<'_>) -> bool {
+    let mut front = InfoFront::<NamedDelete>::new(info);
+    crate::templates::census_label::<M>();
+    M::call(&mut front);
+    front.report();
+    front.noted().0
+}
+
+/// The supported names' member `M`'s call: their array the result.
+fn names<M: TypedMember>(info: IndexInfo<'_>) {
+    let mut front = InfoFront::<Names>::new(info);
+    crate::templates::census_label::<M>();
+    M::call(&mut front);
+}
+
+/// The indexed setter `M`'s call.
+fn indexed_set<M: TypedMember>(info: IndexInfo<'_>) {
+    let mut front = InfoFront::<IndexedSet>::new(info);
+    crate::templates::census_label::<M>();
+    M::call(&mut front);
+    front.report();
+}
+
+/// `object.name` of the named getter `M`: a string name's own callback.
 struct NamedGetter<M>(std::marker::PhantomData<M>);
 
 impl<M: TypedMember> bindings::StateInfoNamedGetter<State> for NamedGetter<M> {
-    fn get(info: bindings::StateNameInfo<'_, State>) -> v8::Intercepted {
-        let mut front = crate::info_front::InfoFront::<crate::info_front::NamedGet>::new(info);
-        crate::templates::census_label::<M>();
-        M::call(&mut front);
-        if front.noted().0 {
-            v8::Intercepted::kNo
-        } else {
-            v8::Intercepted::kYes
-        }
+    fn get(info: NameInfo<'_>) -> v8::Intercepted {
+        get_name::<M>(info)
     }
 }
 
-/// `object.name = value` of a plain named setter `M`: one that gives
-/// `false` didn't take the name, an ordinary property's.
+/// `object.name = value` of the named setter `M`: a string name's own
+/// callback.
 struct NamedSetter<M>(std::marker::PhantomData<M>);
 
 impl<M: TypedMember> bindings::StateInfoNamedSetter<State> for NamedSetter<M> {
-    fn set(info: bindings::StateNameInfo<'_, State>) -> v8::Intercepted {
-        let mut front = crate::info_front::InfoFront::<crate::info_front::NamedSet>::new(info);
-        crate::templates::census_label::<M>();
-        M::call(&mut front);
-        front.report();
-        if front.noted().0 {
-            v8::Intercepted::kNo
-        } else {
-            v8::Intercepted::kYes
+    fn set(info: NameInfo<'_>) -> v8::Intercepted {
+        match assign_name::<M>(info) {
+            bindings::NamedAssigned::Declined => v8::Intercepted::kNo,
+            bindings::NamedAssigned::Took | bindings::NamedAssigned::Threw => v8::Intercepted::kYes,
         }
     }
 }
 
-/// What a special operation gave.
-enum Got {
-    Undefined,
-    Null,
-    String(DomString),
-    Strings(Vec<DomString>),
-    /// An object, its wrapper's interface: its wrapper made after the
-    /// operation.
-    Object(ObjectRoot, usize),
-    /// A setter's: whether it took the name (else it is an ordinary
-    /// property's).
-    Bool(bool),
-    /// It threw: V8 has the exception pending.
-    Threw,
+/// The special operations of the interceptor's interface (its index the
+/// callbacks' data).
+fn calls_of<'s>(
+    info: &mut impl bindings::InfoState<'s, State>,
+    data: v8::Local<'s, v8::Value>,
+) -> NamedCalls {
+    let interface = v8::machopo::as_smi(data)
+        .and_then(|interface| usize::try_from(interface).ok())
+        .expect("named interceptors carry their interface's index");
+    info.state().0.named[interface]
 }
 
-/// A special operation's call: its receiver (the interceptor's holder), the
-/// name and a setter's value, and what it gave.
-pub(crate) struct PropertyFront<'a, 's, 'i> {
-    scope: Scope<'a, 's, 'i>,
-    this: v8::Local<'s, v8::Object>,
-    args: [Option<v8::Local<'s, v8::Value>>; 2],
-    got: Got,
-}
-
-/// Its side in the operation.
-pub(crate) struct PropertyOp<'o, 's, 'i> {
-    no_gc: bindings::NoGc<'o, 's, 'i>,
-    this: v8::Local<'s, v8::Object>,
-    got: &'o mut Got,
-}
-
-impl<'s> FrontTypes for PropertyFront<'_, 's, '_> {
-    // It binds some members only.
-    const STUBS: bool = true;
-    type Str = ArgString<'s>;
-    type Node = v8::Local<'s, v8::Object>;
-    type Dict = ();
-    type PendingString = std::convert::Infallible;
-    type PendingNode = std::convert::Infallible;
-    type PendingNumber = std::convert::Infallible;
-    type PendingObject = std::convert::Infallible;
-    type PreparedNode = ();
-    type Callback = std::convert::Infallible;
-    type Any = std::convert::Infallible;
-    type Rest = std::convert::Infallible;
-}
-
-impl<'s> FrontTypes for PropertyOp<'_, 's, '_> {
-    // It binds some members only.
-    const STUBS: bool = true;
-    type Str = ArgString<'s>;
-    type Node = v8::Local<'s, v8::Object>;
-    type Dict = ();
-    type PendingString = std::convert::Infallible;
-    type PendingNode = std::convert::Infallible;
-    type PendingNumber = std::convert::Infallible;
-    type PendingObject = std::convert::Infallible;
-    type PreparedNode = ();
-    type Callback = std::convert::Infallible;
-    type Any = std::convert::Infallible;
-    type Rest = std::convert::Infallible;
-}
-
-impl<'a, 's, 'i> DictFront for PropertyFront<'a, 's, 'i> {
-    fn throw(&mut self, error: ApiError) {
-        self.got = Got::Threw;
-        match error {
-            ApiError::Type(message) => crate::throw_type_error(self.scope.scope(), &message),
-            ApiError::Range(message) => {
-                crate::strings::throw_range_error(self.scope.scope(), &message)
-            }
-            ApiError::Dom(exception) => exception::throw_dom_exception(
-                &mut self.scope,
-                exception.name.name(),
-                &exception.message,
-            ),
-            ApiError::Aborted(signal) => {
-                crate::front::throw_abort_reason(&mut self.scope, &signal.0);
-            }
-            // V8 holds what script threw.
-            ApiError::Thrown => {}
-        }
-    }
-}
-
-impl<'a, 's, 'i> dom_api::typed::ScriptFront for PropertyFront<'a, 's, 'i> {
-    /// None: no named property's operation defines a custom element.
-    type Lifecycle = std::convert::Infallible;
-
-    /// A setter's reactions (`dataset.x = ...`, an options collection's
-    /// indexed setter): the lifecycle callbacks they call.
-    fn call_lifecycle_callback(
-        &mut self,
-        element: &elise::Persistent<dom::Node>,
-        definition: &elise::Persistent<dom::CustomElementDefinition>,
-        callback: dom_api::LifecycleCallback,
-    ) {
-        crate::front::call_lifecycle_callback(&mut self.scope, element, definition, callback);
-    }
-}
-
-impl<'a, 's, 'i> Front for PropertyFront<'a, 's, 'i> {
-    /// Script runs on this front end itself.
-    fn whole<C: dom_api::typed::WholeCall>(&mut self, call: C) -> C::Out {
-        call.run(self)
-    }
-
-    fn invoke_ce_reactions(&mut self) {
-        dom_api::typed::ScriptFront::invoke_left_reactions(self);
-    }
-
-    #[inline(always)]
-    fn reading<V: dom_api::typed::ReadDict<Self>>(&mut self, reads: V) -> V::Out {
-        reads.read(self)
-    }
-
-    type Op<'o>
-        = PropertyOp<'o, 's, 'i>
-    where
-        Self: 'o;
-
-    fn read<'o, R>(
-        &'o mut self,
-        f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>, &mut Self::Op<'o>) -> R,
-    ) -> R {
-        let (state, no_gc) = self.scope.state();
-        let mut op = PropertyOp {
-            no_gc,
-            this: self.this,
-            got: &mut self.got,
-        };
-        state
-            .dom
-            .read(|cx| f(&ApiCx::with_layout_cell(cx, &state.layout), &mut op))
-    }
-
-    fn mutate<'o, R>(
-        &'o mut self,
-        f: impl for<'gc> FnOnce(&ApiCx<'_, 'gc>, &mut Self::Op<'o>) -> R,
-    ) -> R {
-        let (state, no_gc) = self.scope.state_mut();
-        let mut op = PropertyOp {
-            no_gc,
-            this: self.this,
-            got: &mut self.got,
-        };
-        let crate::state::State { dom, layout, .. } = state;
-        dom.mutate(|cx| f(&ApiCx::with_layout_cell(cx, layout), &mut op))
-    }
-
-    // An interceptor gives each operation its arguments.
-    fn has_args(&mut self, _: &str, _: usize) -> bool {
-        true
-    }
-
-    fn string_arg(&mut self, index: usize) -> Option<ArgString<'s>> {
-        let value = match self.args.get(index).copied().flatten() {
-            Some(value) => value,
-            None => v8::undefined(self.scope.scope()).into(),
-        };
-        strings::arg_string(self.scope.scope(), value)
-    }
-
-    fn nullable_string_arg(&mut self, _: usize) -> Option<Option<ArgString<'s>>> {
-        unreachable!("a named property's operation takes strings")
-    }
-
-    fn legacy_null_string_arg(&mut self, index: usize) -> Option<Option<ArgString<'s>>> {
-        match self.args.get(index).copied().flatten() {
-            Some(value) if value.is_null() => Some(None),
-            _ => self.string_arg(index).map(Some),
-        }
-    }
-
-    // An indexed setter's value.
-    fn node_arg(&mut self, index: usize) -> Option<Option<v8::Local<'s, v8::Object>>> {
-        let value = match self.args.get(index).copied().flatten() {
-            Some(value) if !value.is_null_or_undefined() => value,
-            _ => return Some(None),
-        };
-        if bindings::is_wrapper::<dom::Node>(self.scope.scope(), value) {
-            return v8::Local::<v8::Object>::try_from(value).ok().map(Some);
-        }
-        crate::throw_type_error(
-            self.scope.scope(),
-            &format!(
-                "parameter {} is not of type 'Node'.",
-                index.saturating_add(1)
-            ),
-        );
-        self.got = Got::Threw;
-        None
-    }
-
-    // An indexed setter's index.
-    fn u32_arg(&mut self, index: usize) -> Option<u32> {
-        let value = self.args.get(index).copied().flatten()?;
-        crate::front::to_uint32(self.scope.scope(), value)
-    }
-
-    /// A named property's names (the enumerator's): kept, as its other
-    /// results are.
-    fn finish_strings(&mut self, strings: Vec<DomString>) {
-        self.got = Got::Strings(strings);
-    }
-}
-
-impl<'s> OpFront for PropertyOp<'_, 's, '_> {
-    dom_api::unbound_op_methods!();
-
-    fn str_param<'a>(&mut self, string: &'a ArgString<'s>) -> &'a str {
-        string.text(&mut self.no_gc)
-    }
-
-    /// The interceptor is on the interface's instances: its holder is one
-    /// of its objects.
-    fn this_as<'gc, T: elise::HeapType>(
-        &mut self,
-        cx: &ApiCx<'_, 'gc>,
-    ) -> Option<elise::Gc<'gc, T>> {
-        self.no_gc.unwrap::<T>(cx.gc, self.this)
-    }
-
-    fn node<'gc>(&mut self, cx: &ApiCx<'_, 'gc>, node: &v8::Local<'s, v8::Object>) -> NodeRef<'gc> {
-        self.no_gc
-            .unwrap::<dom::Node>(cx.gc, *node)
-            .expect("a wrapper, checked as it was taken")
-    }
-
-    fn ret_undefined(&mut self) {
-        *self.got = Got::Undefined;
-    }
-
-    fn ret_null(&mut self) {
-        *self.got = Got::Null;
-    }
-
-    fn ret_bool(&mut self, value: bool) {
-        *self.got = Got::Bool(value);
-    }
-
-    fn ret_u32(&mut self, _: u32) -> Option<std::convert::Infallible> {
-        unreachable!("a named property's operation gives strings")
-    }
-
-    fn ret_f64(&mut self, _: f64) -> Option<std::convert::Infallible> {
-        unreachable!("a named property's operation gives strings")
-    }
-
-    fn ret_string(&mut self, value: &DomString) -> Option<std::convert::Infallible> {
-        *self.got = Got::String(value.clone());
-        None
-    }
-
-    fn ret_node<'gc>(
-        &mut self,
-        cx: &ApiCx<'_, 'gc>,
-        node: NodeRef<'gc>,
-    ) -> Option<std::convert::Infallible> {
-        self.ret_object(cx, ObjectRef::Node(node))
-    }
-
-    fn ret_object<'gc>(
-        &mut self,
-        cx: &ApiCx<'_, 'gc>,
-        object: ObjectRef<'gc>,
-    ) -> Option<std::convert::Infallible> {
-        *self.got = Got::Object(cx.root_object(object), dom_api::interface_of(cx, object));
-        None
-    }
-}
-
-/// The interceptors of `NamedCalls` (the interface's, by its index in
-/// the callbacks' data).
+/// The interceptor's callbacks that aren't an interface's own: found by
+/// the interface's index in their data.
 pub(crate) struct NamedProperties;
 
-/// The special operations of the interceptor's interface.
-fn calls(scope: &mut Scope<'_, '_, '_>, args: &v8::PropertyCallbackArguments<'_>) -> NamedCalls {
-    let interface = v8::Local::<v8::Integer>::try_from(args.data())
-        .ok()
-        .and_then(|index| usize::try_from(index.value()).ok())
-        .expect("named interceptors carry their interface's index");
-    scope.state().0.named[interface]
-}
-
-/// The key as the operations take it: a name, or an index as one.
-fn key_value<'s>(
-    scope: &mut Scope<'_, 's, '_>,
-    key: bindings::PropertyKey<'s>,
-) -> v8::Local<'s, v8::Value> {
-    match key {
-        bindings::PropertyKey::Name(name) => name.into(),
-        bindings::PropertyKey::Index(index) => {
-            v8::Integer::new_from_unsigned(scope.scope(), index).into()
-        }
-    }
-}
-
-/// `call` on `this`, with `args`: what it gave, and the scope back.
-fn run<'a, 's, 'i>(
-    scope: Scope<'a, 's, 'i>,
-    call: Call,
-    this: v8::Local<'s, v8::Object>,
-    args: [Option<v8::Local<'s, v8::Value>>; 2],
-) -> (Scope<'a, 's, 'i>, Got) {
-    let mut front = PropertyFront {
-        scope,
-        this,
-        args,
-        got: Got::Undefined,
-    };
-    call(&mut front);
-    (front.scope, front.got)
-}
-
-/// Whether the getter gives `key` (`None` if it threw).
-fn has<'a, 's, 'i>(
-    scope: Scope<'a, 's, 'i>,
-    calls: NamedCalls,
-    key: v8::Local<'s, v8::Value>,
-    this: v8::Local<'s, v8::Object>,
-) -> (Scope<'a, 's, 'i>, Option<bool>) {
-    let get = calls.get.expect("a named getter");
-    let (scope, got) = run(scope, get, this, [Some(key), None]);
-    let has = match got {
-        Got::Threw => None,
-        Got::Undefined | Got::Null => Some(false),
-        Got::String(_) | Got::Object(..) => Some(true),
-        Got::Strings(_) | Got::Bool(_) => {
-            unreachable!("a named getter gives a string or an object")
-        }
-    };
-    (scope, has)
-}
-
-/// What the setter given `key` and `value` did.
-enum Assigned {
-    /// It took the name.
-    Took,
-    /// It didn't: the name is an ordinary property's.
-    Declined,
-    Threw,
-}
-
-/// The setter given `key` and `value`.
-fn assign<'s>(
-    scope: Scope<'_, 's, '_>,
-    calls: NamedCalls,
-    key: v8::Local<'s, v8::Value>,
-    value: v8::Local<'s, v8::Value>,
-    this: v8::Local<'s, v8::Object>,
-) -> Assigned {
-    let set = calls.set.expect("a named setter");
-    let (mut scope, got) = run(scope, set, this, [Some(key), Some(value)]);
-    state::report(&mut scope);
-    match got {
-        Got::Threw => Assigned::Threw,
-        Got::Bool(false) => Assigned::Declined,
-        _ => Assigned::Took,
-    }
-}
-
-impl bindings::StateNamedProperties<State> for NamedProperties {
-    fn get<'s>(
-        mut scope: Scope<'_, 's, '_>,
-        key: bindings::PropertyKey<'s>,
-        args: v8::PropertyCallbackArguments<'s>,
-        mut rv: v8::ReturnValue<'_, v8::Value>,
-    ) -> v8::Intercepted {
-        let calls = calls(&mut scope, &args);
-        let key = key_value(&mut scope, key);
-        let get = calls.get.expect("a named getter");
-        let (mut scope, got) = run(scope, get, args.holder(), [Some(key), None]);
-        match got {
-            Got::Undefined | Got::Null => v8::Intercepted::kNo,
-            Got::Threw => v8::Intercepted::kYes,
-            Got::String(value) => {
-                match cached_string(&mut scope, &value) {
-                    Some(string) => rv.set(string.into()),
-                    None => exception::throw_range_error(scope.scope(), "Invalid string length"),
-                }
-                v8::Intercepted::kYes
-            }
-            Got::Object(object, interface) => {
-                let wrapper = crate::front::wrapper_of(&mut scope, &object, interface);
-                rv.set(wrapper.into());
-                v8::Intercepted::kYes
-            }
-            Got::Strings(_) | Got::Bool(_) => {
-                unreachable!("a named getter gives a string or an object")
-            }
-        }
+impl bindings::StateInfoNamed<State> for NamedProperties {
+    fn get(mut info: NameInfo<'_>) -> v8::Intercepted {
+        let data = info.data();
+        let calls = calls_of(&mut info, data);
+        calls.get.expect("a named getter")(info)
     }
 
-    fn query<'s>(
-        mut scope: Scope<'_, 's, '_>,
-        key: bindings::PropertyKey<'s>,
-        args: v8::PropertyCallbackArguments<'s>,
-        mut rv: v8::ReturnValue<'_, v8::Integer>,
-    ) -> v8::Intercepted {
-        let calls = calls(&mut scope, &args);
-        let key = key_value(&mut scope, key);
-        match has(scope, calls, key, args.holder()).1 {
-            Some(false) => v8::Intercepted::kNo,
-            None => v8::Intercepted::kYes,
-            Some(true) => {
+    fn assign(mut info: NameInfo<'_>) -> bindings::NamedAssigned {
+        let data = info.data();
+        let calls = calls_of(&mut info, data);
+        calls.assign.expect("a named setter")(info)
+    }
+
+    /// The getter asked whether it gives the name; a named property is
+    /// configurable, writable with a setter, enumerable with its names
+    /// listed.
+    fn query(mut info: NameInfo<'_>) -> bindings::NamedQueried {
+        let data = info.data();
+        let calls = calls_of(&mut info, data);
+        let (_, has) = calls.has.expect("a named getter")(info);
+        match has {
+            Has::No => bindings::NamedQueried::None,
+            Has::Threw => bindings::NamedQueried::Threw,
+            Has::Yes => {
                 let mut attributes = v8::PropertyAttribute::NONE;
-                if calls.set.is_none() {
+                if calls.assign.is_none() {
                     attributes = attributes | v8::PropertyAttribute::READ_ONLY;
                 }
                 if calls.names.is_none() {
                     attributes = attributes | v8::PropertyAttribute::DONT_ENUM;
                 }
-                rv.set_int32(attributes.as_u32().cast_signed());
-                v8::Intercepted::kYes
+                bindings::NamedQueried::Has(attributes)
             }
         }
     }
 
-    fn set<'s>(
-        mut scope: Scope<'_, 's, '_>,
-        key: bindings::PropertyKey<'s>,
-        value: v8::Local<'s, v8::Value>,
-        args: v8::PropertyCallbackArguments<'s>,
-    ) -> v8::Intercepted {
-        let calls = calls(&mut scope, &args);
-        let key = key_value(&mut scope, key);
-        match assign(scope, calls, key, value, args.holder()) {
-            Assigned::Declined => v8::Intercepted::kNo,
-            Assigned::Took | Assigned::Threw => v8::Intercepted::kYes,
-        }
-    }
-
-    fn define<'s>(
-        mut scope: Scope<'_, 's, '_>,
-        key: bindings::PropertyKey<'s>,
-        descriptor: &v8::PropertyDescriptor,
-        args: v8::PropertyCallbackArguments<'s>,
-        mut rv: v8::ReturnValue<'_, v8::Boolean>,
-    ) -> v8::Intercepted {
-        if descriptor.has_get() || descriptor.has_set() {
-            rv.set_bool(false);
-            return v8::Intercepted::kYes;
-        }
-        let calls = calls(&mut scope, &args);
-        let key = key_value(&mut scope, key);
-        let value = if descriptor.has_value() {
-            // In this scope: the descriptor's handle lives only as long as it.
-            v8::Local::new(scope.scope(), descriptor.value())
-        } else {
-            v8::undefined(scope.scope()).into()
-        };
-        match assign(scope, calls, key, value, args.holder()) {
-            Assigned::Declined => return v8::Intercepted::kNo,
-            Assigned::Took => rv.set_bool(true),
-            Assigned::Threw => {}
-        }
-        v8::Intercepted::kYes
-    }
-
-    fn delete<'s>(
-        mut scope: Scope<'_, 's, '_>,
-        key: bindings::PropertyKey<'s>,
-        args: v8::PropertyCallbackArguments<'s>,
-        mut rv: v8::ReturnValue<'_, v8::Boolean>,
-    ) -> v8::Intercepted {
-        let calls = calls(&mut scope, &args);
-        let key = key_value(&mut scope, key);
-        let this = args.holder();
-        let (scope, has) = has(scope, calls, key, this);
+    /// A named property through the deleter; another name is an ordinary
+    /// property's.
+    fn delete(mut info: NameInfo<'_>) -> bindings::NamedDeleted {
+        let data = info.data();
+        let calls = calls_of(&mut info, data);
+        let (info, has) = calls.has.expect("a named getter")(info);
         match has {
-            Some(false) => return v8::Intercepted::kNo,
-            None => return v8::Intercepted::kYes,
-            Some(true) => {}
+            Has::No => return bindings::NamedDeleted::None,
+            Has::Threw => return bindings::NamedDeleted::Threw,
+            Has::Yes => {}
         }
-        let delete = calls.delete.expect("a named deleter");
-        let (mut scope, got) = run(scope, delete, this, [Some(key), None]);
-        state::report(&mut scope);
-        if !matches!(got, Got::Threw) {
-            rv.set_bool(true);
+        if calls.delete.expect("a named deleter")(info) {
+            bindings::NamedDeleted::Threw
+        } else {
+            bindings::NamedDeleted::Deleted
         }
-        v8::Intercepted::kYes
     }
 
-    fn enumerate<'s>(
-        mut scope: Scope<'_, 's, '_>,
-        args: v8::PropertyCallbackArguments<'s>,
-        mut rv: v8::ReturnValue<'_, v8::Array>,
-    ) {
-        let calls = calls(&mut scope, &args);
-        let names = calls.names.expect("named properties' names");
-        let (mut scope, got) = run(scope, names, args.holder(), [None, None]);
-        let Got::Strings(names) = got else {
-            return;
-        };
-        let mut keys: Vec<v8::Local<'s, v8::Value>> = Vec::with_capacity(names.len());
-        for name in &names {
-            match cached_string(&mut scope, name) {
-                Some(string) => keys.push(string.into()),
-                None => {
-                    exception::throw_range_error(scope.scope(), "Invalid string length");
-                    return;
-                }
-            }
-        }
-        rv.set(v8::Array::new_with_elements(scope.scope(), &keys));
+    fn enumerate(mut info: IndexInfo<'_>) {
+        let data = info.data();
+        let calls = calls_of(&mut info, data);
+        calls.names.expect("named properties' names")(info);
     }
 }
 
@@ -651,18 +268,10 @@ impl bindings::StateNamedProperties<State> for NamedProperties {
 /// callbacks' data), given the index and the value: it takes every index.
 pub(crate) struct IndexedSetter;
 
-impl bindings::StateIndexedSetter<State> for IndexedSetter {
-    fn set<'s>(
-        mut scope: Scope<'_, 's, '_>,
-        index: u32,
-        value: v8::Local<'s, v8::Value>,
-        args: v8::PropertyCallbackArguments<'s>,
-    ) -> v8::Intercepted {
-        let calls = calls(&mut scope, &args);
-        let set = calls.indexed_set.expect("an indexed setter");
-        let index = v8::Integer::new_from_unsigned(scope.scope(), index).into();
-        let (mut scope, _) = run(scope, set, args.holder(), [Some(index), Some(value)]);
-        state::report(&mut scope);
-        v8::Intercepted::kYes
+impl bindings::StateInfoIndexedSetter<State> for IndexedSetter {
+    fn set(mut info: IndexInfo<'_>) {
+        let data = info.data();
+        let calls = calls_of(&mut info, data);
+        calls.indexed_set.expect("an indexed setter")(info);
     }
 }

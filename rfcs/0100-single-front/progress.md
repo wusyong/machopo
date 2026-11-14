@@ -10,13 +10,13 @@
 | 3a：`InfoFront` 實作 `ScriptFront`，會跑 script 的成員搬過去 | 做完 | 2026-11-14 |
 | 3b：legacy caller、iterator、cross-origin 從 callback info 開始 | 做完 | 2026-11-14 |
 | 3c：刪掉 `WholeFront`、`WholeOp`、`Call`；`sanity.py` 的檢查 | 做完 | 2026-11-14 |
-| 3d：`PropertyFront` 併進 `InfoFront` | 未開始 | |
+| 3d：`PropertyFront` 併進 `InfoFront` | 做完 | 2026-11-14 |
 
 ## 驗收
 
 | 項目 | 怎麼驗證 |
 | --- | --- |
-| `dom_js` 只有一個 `impl Front`（`PropertyFront` 另外評估） | `sanity.py`（3c 加） |
+| `dom_js` 只有一個 `impl Front` | `sanity.py deps` |
 | 熱的呼叫不變慢 | `bench.py calls --baseline rfcs/0098-direct-v8-bindings/calls-baseline.json`，每段做完量一次 |
 | 行為不變 | `dom_js` 的測試、相關的 WPT 目錄 |
 
@@ -63,3 +63,14 @@
 - **mutation test**（`mutants-3b.toml`，5 個）：3 個抓到；「`forEach` 在 callback 丟例外之後繼續」漏掉，補了測試後抓到；「另一個 realm 的物件的 getter 在目前的 realm 跑」補了測試還是沒抓到，等價（wrapper 本來就建在物件自己的 realm、這些 getter 不丟例外；之前在舊的 front 上也查到同一件事），從 spec 拿掉、在 spec 裡註明。所以 `in_realm_of` 現在沒有看得到的效果。
 - **`bench.py calls --baseline`**：整套跑的那次 `firstChild` 140 → 142、`nodeType` 113 → 114、`getAttribute` 的衝突 0.14 → 1.11；只重跑這三個：129、101、549（都少 11：空迴圈的指令數偶爾多 10 條的那個已知的起伏），衝突 0.12、0.01、0.14；沒有這批改動的同樣三個是 140、113、560。結論是沒有變，差別在量測的起伏以內。`dispatchEvent` 3496 → 3427。
 - **決定 7 之後**（同一天）：`in_realm_of` 和 `CrossOriginMember` 的那一步拿掉，cross-origin 的 getter 不再開 scope（`location.href`（字串 V8 已經有）、`window.closed`、`window.length`、`document.location === location` 都是 0 個；`handlers` 的那個測試再改一次）。`cargo test -p dom_js -p bindings` 通過（`dom_js` 496 個）；WPT `html/browsers/origin/`、`html/browsers/the-window-object/`、`html/browsers/history/the-location-interface/`：87 個測試、430 個檢查，非預期的結果 0。
+
+### 3d（2026-11-14，Linux x86-64）
+
+- **`bindings`**：named interceptor 的 callback 全部是 V8 原始的（`StateInfoNamed`：`get`、`assign`、`query`、`delete`、`enumerate`；trampoline 照 `NamedQueried`、`NamedDeleted`、`NamedAssigned` 寫 `Integer`、`Boolean` 的回傳值；define 在 trampoline 拒絕 accessor、把 descriptor 的值複製出來再走 `assign`；數字當名稱的 get、set、query、delete、define 把 index 做成它的數字的字串、走同一組）；indexed setter 是 `StateInfoIndexedSetter`（`StateIndexInfo` 多了值）。`StateNamedProperties`、`StateIndexedSetter` 和 12 個經過 rusty_v8 的 trampoline 刪掉。沒有動 fork。
+- **`dom_js`**：`InfoKind` 多了 `NamedHas`（query 和 delete 問 getter 有沒有：`note_some` 讓結果只記有沒有，不建字串和 wrapper；`note_thrown` 記丟了例外）、`NamedDelete`、`Names`、`IndexedSet`；`NamedSet` 的 noted 多了「丟了」。`named.rs` 663 行 → 約 270 行：`NamedCalls` 是每個 interface 的成員照 info 呼叫的函式指標，`NamedProperties` 照 callback 的資料裡的 interface 編號找。`PropertyFront`、`PropertyOp`、`Got`、`front::cached_string` 刪掉。`sanity.py deps` 只允許 `InfoFront`。
+- **新的測試**：`named_properties`（8 個）：query 和 descriptor（有 setter 可寫、列名稱的可列舉、空字串是值、getter 的 form 唯讀不可列舉）、query 不開 scope 不建 wrapper、keys、delete、define（值經過 setter、accessor 拒絕、setter 丟的例外）、數字名稱（set、get、query、descriptor、define、delete、超過 31 bits 的 index）、setter 拒絕或丟例外、indexed setter。
+- **原本就有、這次看到的兩件**（拿 3d 之前的程式跑同樣的測試確認不是這次造成的；沒有對照 Chrome）：`delete form.x`（interface 沒有 deleter）回 `true`、屬性還在；`Object.keys(dataset)` 有數字名稱時照名稱的順序（`a,b,9`），數字沒排前面。測試照現在的行為寫。
+- **測試**：`cargo test --workspace` 3,894 個通過（`dom_js` 504 個）；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、sanity 通過。
+- **WPT**：`html/dom/elements/global-attributes/`、`css/cssom/`、`html/semantics/forms/`、`dom/collections/`、`dom/nodes/`、`html/infrastructure/common-dom-interfaces/collections/`：973 個測試、23,875 個檢查，非預期的結果 0。
+- **mutation test**（`mutants-3d.toml`，17 個）：13 個抓到；4 個以現在有的 interface 來說等價（唯一有 deleter 的 `DOMStringMap` 刪沒有的名字什麼都不做；deleter、setter「丟了」和「做了」的差別只在寫不寫布林的回傳值，V8 沒寫也當 true、例外照樣傳出去；數字當名稱的 interface 的 setter 不會拒絕），從 spec 拿掉、在 spec 裡註明。
+- **`bench.py calls --baseline`**：`firstChild` 140 → 138、`nodeType` 113 → 113、`getAttribute` 560 → 560、`dispatchEvent` 3496 → 3427（cycles 746 → 724）、`0 in list` 935 → 444；其他成員的指令差在 1 條以內。

@@ -1,0 +1,150 @@
+# The named properties' interceptors on the info front end: each callback
+# V8's own, a query asking only whether there is a value.
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it"]
+timeout = 1800
+
+[[mutant]]
+name = "a query makes what the getter gives"
+file = "crates/dom_js/src/info_front.rs"
+from = '''    fn note_some(noted: &mut Has) -> bool {
+        *noted = Has::Yes;
+        true'''
+to = '''    fn note_some(noted: &mut Has) -> bool {
+        *noted = Has::Yes;
+        false'''
+
+[[mutant]]
+name = "an empty string is no property"
+file = "crates/dom_js/src/info_front.rs"
+from = '''    /// A named getter's empty string is a value.
+    #[inline(always)]
+    fn note_empty(noted: &mut Has) {
+        *noted = Has::Yes;'''
+to = '''    /// A named getter's empty string is a value.
+    #[inline(always)]
+    fn note_empty(noted: &mut Has) {
+        *noted = Has::No;'''
+
+[[mutant]]
+name = "a named property is read-only with a setter"
+file = "crates/dom_js/src/named.rs"
+from = '''                if calls.assign.is_none() {'''
+to = '''                if calls.assign.is_some() {'''
+
+[[mutant]]
+name = "a named property is enumerable without its names"
+file = "crates/dom_js/src/named.rs"
+from = '''                if calls.names.is_none() {'''
+to = '''                if calls.names.is_some() {'''
+
+[[mutant]]
+name = "a setter that declined took the name"
+file = "crates/dom_js/src/named.rs"
+from = '''    } else if noted.declined {
+        bindings::NamedAssigned::Declined'''
+to = '''    } else if noted.declined {
+        bindings::NamedAssigned::Took'''
+
+[[mutant]]
+name = "indices are names where the interface has its own"
+file = "crates/dom_js/src/named.rs"
+from = '''            indices: !indexed,'''
+to = '''            indices: true,'''
+
+[[mutant]]
+name = "an indexed setter's index is one more"
+file = "crates/dom_js/src/info_front.rs"
+from = '''    /// The value assigned; the index is read as the number it is.
+    #[inline(always)]
+    fn arg(info: &Self::Info, index: usize) -> v8::Local<'s, v8::Value> {
+        match (index, info.value()) {
+            (1, Some(value)) => value,
+            _ => unreachable!("an indexed setter's arguments are the index and the value"),
+        }
+    }
+
+    #[inline(always)]
+    fn number_arg(info: &Self::Info, index: usize) -> Option<u32> {
+        (index == 0).then(|| info.index())'''
+to = '''    /// The value assigned; the index is read as the number it is.
+    #[inline(always)]
+    fn arg(info: &Self::Info, index: usize) -> v8::Local<'s, v8::Value> {
+        match (index, info.value()) {
+            (1, Some(value)) => value,
+            _ => unreachable!("an indexed setter's arguments are the index and the value"),
+        }
+    }
+
+    #[inline(always)]
+    fn number_arg(info: &Self::Info, index: usize) -> Option<u32> {
+        (index == 0).then(|| info.index().saturating_add(1))'''
+
+[[mutant]]
+name = "a query's property isn't one"
+file = "crates/bindings/src/isolate_state.rs"
+from = '''        NamedQueried::Has(attribute) => {
+            v8::ReturnValue::from_property_callback_info(attributes)
+                .set_int32(attribute.as_u32().cast_signed());
+            v8::Intercepted::kYes'''
+to = '''        NamedQueried::Has(attribute) => {
+            v8::ReturnValue::from_property_callback_info(attributes)
+                .set_int32(attribute.as_u32().cast_signed());
+            v8::Intercepted::kNo'''
+
+[[mutant]]
+name = "a delete isn't told done"
+file = "crates/bindings/src/isolate_state.rs"
+from = '''        NamedDeleted::Deleted => {
+            v8::ReturnValue::from_property_callback_info(deleted).set_bool(true);'''
+to = '''        NamedDeleted::Deleted => {
+            v8::ReturnValue::from_property_callback_info(deleted).set_bool(false);'''
+
+[[mutant]]
+name = "an accessor is defined through the setter"
+file = "crates/bindings/src/isolate_state.rs"
+from = '''    if descriptor.has_get() || descriptor.has_set() {
+        v8::ReturnValue::from_property_callback_info(result).set_bool(false);
+        return v8::Intercepted::kYes;
+    }'''
+to = '''    if false && (descriptor.has_get() || descriptor.has_set()) {
+        v8::ReturnValue::from_property_callback_info(result).set_bool(false);
+        return v8::Intercepted::kYes;
+    }'''
+
+[[mutant]]
+name = "a define's value is undefined"
+file = "crates/bindings/src/isolate_state.rs"
+from = '''        if descriptor.has_value() {
+            v8::Local::new(scope, descriptor.value())'''
+to = '''        if false && descriptor.has_value() {
+            v8::Local::new(scope, descriptor.value())'''
+
+[[mutant]]
+name = "a define that took the name isn't told so"
+file = "crates/bindings/src/isolate_state.rs"
+from = '''        NamedAssigned::Took => {
+            v8::ReturnValue::from_property_callback_info(result).set_bool(true);
+        }'''
+to = '''        NamedAssigned::Took => {
+            v8::ReturnValue::from_property_callback_info(result).set_bool(false);
+        }'''
+
+[[mutant]]
+name = "an index's name is the next index's"
+file = "crates/bindings/src/isolate_state.rs"
+from = '''    v8::String::new(scope, &index.to_string())'''
+to = '''    v8::String::new(scope, &index.saturating_add(1).to_string())'''
+
+# Not here, equivalent with the interfaces there are:
+# - "a name the getter gives none for is deleted" (the deleter called for
+#   any name): the one interface with a deleter is `DOMStringMap`, whose
+#   deleter of a name it hasn't does nothing and throws nothing, and an
+#   ordinary delete of the name says true as well.
+# - "a delete that didn't throw threw" and "a setter that threw took the
+#   name" (`NamedDeleted::Threw` for `Deleted`, `NamedAssigned::Took` for
+#   `Threw`): the difference is whether the callback's boolean result is
+#   written, which V8 reads as true unwritten too, and an exception
+#   pending propagates either way.
+# - "an index's set that declined took it": no setter of an interface
+#   whose indices are names declines (`DOMStringMap`'s takes every name;
+#   `CSSStyleDeclaration`, whose does, has indexed properties of its own).

@@ -217,6 +217,61 @@ pub trait StateInfoIndexedGetter<T>: 'static {
     fn length(info: StateIndexInfo<'_, T>) -> u32;
 }
 
+/// What a named interceptor's query found of the name.
+pub enum NamedQueried {
+    /// No property of the name: V8 looks on.
+    None,
+    /// A property, with these attributes.
+    Has(v8::PropertyAttribute),
+    /// Script threw: V8 holds the exception.
+    Threw,
+}
+
+/// What a named interceptor's deleter did with the name.
+pub enum NamedDeleted {
+    /// No property of the name: an ordinary one's delete.
+    None,
+    Deleted,
+    /// Script threw: V8 holds the exception.
+    Threw,
+}
+
+/// What a named interceptor's setter did with the name and the value.
+pub enum NamedAssigned {
+    /// It took the name.
+    Took,
+    /// It didn't: the name is an ordinary property's.
+    Declined,
+    /// Script threw: V8 holds the exception.
+    Threw,
+}
+
+/// A named interceptor's callbacks given V8's callback info alone: what
+/// `set_state_named_properties` calls for `name in object` (and a
+/// property's descriptor), `delete object.name`, the object's keys, a
+/// property defined, and an array index got or set as a name
+/// (`dataset[9]`: the name its digits). A string name's get and set are
+/// the interface's own callbacks (`NamedOptions`).
+pub trait StateInfoNamed<T>: 'static {
+    /// An array index's get: as `StateInfoNamedGetter::get`.
+    fn get(info: StateNameInfo<'_, T>) -> v8::Intercepted;
+    /// The setter given the name and the info's value: an array index's
+    /// set, and a property defined with a value.
+    fn assign(info: StateNameInfo<'_, T>) -> NamedAssigned;
+    fn query(info: StateNameInfo<'_, T>) -> NamedQueried;
+    fn delete(info: StateNameInfo<'_, T>) -> NamedDeleted;
+    /// The supported names, an array the call's result (`info`'s index is
+    /// none's).
+    fn enumerate(info: StateIndexInfo<'_, T>);
+}
+
+/// An indexed setter given V8's callback info alone (`StateIndexInfo`,
+/// its value the one assigned): what `set_state_info_indexed_getter`
+/// calls for `object[index] = value`; it takes every index.
+pub trait StateInfoIndexedSetter<T>: 'static {
+    fn set(info: StateIndexInfo<'_, T>);
+}
+
 /// A named getter given V8's callback info alone (`StateNameInfo`): what
 /// `info_named_getter`'s callback calls for `object.name`.
 pub trait StateInfoNamedGetter<T>: 'static {
@@ -235,17 +290,6 @@ pub trait StateInfoFunction<T>: 'static {
     fn call(info: StateInfo<'_, T, Unsigned>);
 }
 
-/// An indexed setter given its isolate's state, a `T`: what
-/// `set_state_info_indexed_getter` calls with the handler's data.
-pub trait StateIndexedSetter<T>: 'static {
-    fn set<'s>(
-        scope: StateScope<'_, 's, '_, T>,
-        index: u32,
-        value: v8::Local<'s, v8::Value>,
-        args: v8::PropertyCallbackArguments<'s>,
-    ) -> v8::Intercepted;
-}
-
 /// A property an interceptor is asked of: a string name, or an array
 /// index (which V8 sends to the indexed interceptor).
 #[derive(Clone, Copy)]
@@ -254,56 +298,7 @@ pub enum PropertyKey<'s> {
     Index(u32),
 }
 
-/// Named properties given their isolate's state, a `T`: what
-/// `set_state_named_properties` calls, for string names and array indices
-/// alike (WebIDL's named properties are by any string).
-pub trait StateNamedProperties<T>: 'static {
-    fn get<'s>(
-        scope: StateScope<'_, 's, '_, T>,
-        key: PropertyKey<'s>,
-        args: v8::PropertyCallbackArguments<'s>,
-        rv: v8::ReturnValue<'_, v8::Value>,
-    ) -> v8::Intercepted;
-
-    /// The property's attributes (`PropertyAttribute`'s bits), if there
-    /// is one.
-    fn query<'s>(
-        scope: StateScope<'_, 's, '_, T>,
-        key: PropertyKey<'s>,
-        args: v8::PropertyCallbackArguments<'s>,
-        rv: v8::ReturnValue<'_, v8::Integer>,
-    ) -> v8::Intercepted;
-
-    fn set<'s>(
-        scope: StateScope<'_, 's, '_, T>,
-        key: PropertyKey<'s>,
-        value: v8::Local<'s, v8::Value>,
-        args: v8::PropertyCallbackArguments<'s>,
-    ) -> v8::Intercepted;
-
-    fn define<'s>(
-        scope: StateScope<'_, 's, '_, T>,
-        key: PropertyKey<'s>,
-        descriptor: &v8::PropertyDescriptor,
-        args: v8::PropertyCallbackArguments<'s>,
-        rv: v8::ReturnValue<'_, v8::Boolean>,
-    ) -> v8::Intercepted;
-
-    fn delete<'s>(
-        scope: StateScope<'_, 's, '_, T>,
-        key: PropertyKey<'s>,
-        args: v8::PropertyCallbackArguments<'s>,
-        rv: v8::ReturnValue<'_, v8::Boolean>,
-    ) -> v8::Intercepted;
-
-    fn enumerate<'s>(
-        scope: StateScope<'_, 's, '_, T>,
-        args: v8::PropertyCallbackArguments<'s>,
-        rv: v8::ReturnValue<'_, v8::Array>,
-    );
-}
-
-/// What of `StateNamedProperties` an interface has.
+/// What an interface's named properties have (`set_state_named_properties`).
 #[derive(Clone, Copy)]
 pub struct NamedOptions {
     /// Whether its names shadow the object's and its prototypes' own
@@ -311,19 +306,16 @@ pub struct NamedOptions {
     /// interceptor; else a non-masking one, asked only when nothing else
     /// has the name.
     pub masking: bool,
-    pub setter: bool,
     pub deleter: bool,
     pub enumerator: bool,
     /// Whether array indices are names too (`dataset[9]`); else the
     /// interface has indexed properties of its own, its indexed handler
     /// left as it is.
     pub indices: bool,
-    /// The getter of a string name, if it is one given V8's callback
-    /// info alone (`info_named_getter`) in `StateNamedProperties::get`'s
-    /// place; and the setter (`info_named_setter`), in `set`'s. An array
-    /// index as a name, and the other callbacks, are
-    /// `StateNamedProperties`' either way.
-    pub getter_info: Option<v8::NamedPropertyGetterCallback>,
+    /// A string name's getter, given V8's callback info alone
+    /// (`info_named_getter`), and its setter if the interface has one
+    /// (`info_named_setter`): the interface's own callbacks.
+    pub getter_info: v8::NamedPropertyGetterCallback,
     pub setter_info: Option<v8::NamedPropertySetterCallback>,
 }
 
@@ -466,6 +458,8 @@ pub struct StateIndexInfo<'s, T> {
     /// The isolate's pointer, read from the info once.
     isolate: v8::Isolate,
     index: u32,
+    /// The value an indexed setter is given.
+    value: Option<v8::Local<'s, v8::Value>>,
     _state: PhantomData<fn() -> T>,
 }
 
@@ -487,6 +481,12 @@ impl<'s, T: Any> StateIndexInfo<'s, T> {
     #[inline(always)]
     pub fn data(&self) -> v8::Local<'s, v8::Value> {
         self.info.arguments().data()
+    }
+
+    /// The value a setter is given; none for a getter.
+    #[inline(always)]
+    pub fn value(&self) -> Option<v8::Local<'s, v8::Value>> {
+        self.value
     }
 }
 
@@ -582,6 +582,12 @@ impl<'s, T: Any> StateNameInfo<'s, T> {
     #[inline(always)]
     pub fn holder(&self) -> Receiver<'s> {
         Receiver(self.info.arguments().holder())
+    }
+
+    /// The interceptor's data (`set_state_named_properties`').
+    #[inline(always)]
+    pub fn data(&self) -> v8::Local<'s, v8::Value> {
+        self.info.arguments().data()
     }
 }
 
@@ -885,6 +891,7 @@ unsafe extern "C" fn info_indexed_trampoline<T: Any, G: StateInfoIndexedGetter<T
         info,
         isolate: info.isolate(),
         index,
+        value: None,
         _state: PhantomData,
     })
 }
@@ -906,6 +913,7 @@ unsafe extern "C" fn info_indexed_query_trampoline<T: Any, G: StateInfoIndexedGe
         info,
         isolate: info.isolate(),
         index,
+        value: None,
         _state: PhantomData,
     }) else {
         return v8::Intercepted::kNo;
@@ -937,6 +945,7 @@ unsafe extern "C" fn info_indexed_enumerate_trampoline<T: Any, G: StateInfoIndex
         info,
         isolate: info.isolate(),
         index: 0,
+        value: None,
         _state: PhantomData,
     });
     if cfg!(debug_assertions) {
@@ -994,6 +1003,270 @@ unsafe extern "C" fn info_named_set_trampoline<T: Any, S: StateInfoNamedSetter<T
     })
 }
 
+/// A property callback's info as a `StateNameInfo` reads it, whatever
+/// the callback's result's type is.
+///
+/// # Safety
+///
+/// `info` is V8's callback info, valid for the call (`'s`). The result's
+/// type is a phantom of rusty_v8's (`PropertyCallbackInfo` is `repr(C)` of
+/// the raw info and a `PhantomData`): what a callee writes of it as a
+/// value (a getter's result, the names' array) is what the callback
+/// gives, or is overwritten by the trampoline with the result of its own
+/// type, or is left where V8 reads none (no property; an exception).
+unsafe fn value_info<'s, R>(
+    info: *const v8::PropertyCallbackInfo<R>,
+) -> &'s v8::PropertyCallbackInfo<v8::Value> {
+    // SAFETY: the caller's.
+    unsafe { &*info.cast::<v8::PropertyCallbackInfo<v8::Value>>() }
+}
+
+/// An array index as the name it is asked by: its digits, a string made
+/// in a scope of the callback's info (the string is of V8's own handle
+/// scope of the callback, as `with_scope`'s handles are).
+fn index_name<'s>(
+    info: &'s v8::PropertyCallbackInfo<v8::Value>,
+    index: u32,
+) -> v8::Local<'s, v8::Name> {
+    if cfg!(debug_assertions) {
+        INFO_SCOPES.set(INFO_SCOPES.get().wrapping_add(1));
+    }
+    base::census::count(base::census::Kind::Scope);
+    // SAFETY: as `StateInfo::with_scope`'s, of an interceptor's info; the
+    // scope ends here, before the info is handed on.
+    v8::callback_scope!(unsafe scope, info);
+    v8::String::new(scope, &index.to_string())
+        .expect("an index's digits are a string")
+        .into()
+}
+
+fn name_info<'s, T>(
+    info: &'s v8::PropertyCallbackInfo<v8::Value>,
+    name: v8::Local<'s, v8::Name>,
+    value: Option<v8::Local<'s, v8::Value>>,
+) -> StateNameInfo<'s, T> {
+    StateNameInfo {
+        info,
+        isolate: info.isolate(),
+        name,
+        value,
+        _state: PhantomData,
+    }
+}
+
+/// The query's answer as V8 reads it: the attributes its result.
+fn queried(
+    attributes: &v8::PropertyCallbackInfo<v8::Integer>,
+    queried: NamedQueried,
+) -> v8::Intercepted {
+    match queried {
+        NamedQueried::None => v8::Intercepted::kNo,
+        NamedQueried::Threw => v8::Intercepted::kYes,
+        NamedQueried::Has(attribute) => {
+            v8::ReturnValue::from_property_callback_info(attributes)
+                .set_int32(attribute.as_u32().cast_signed());
+            v8::Intercepted::kYes
+        }
+    }
+}
+
+/// The deleter's answer as V8 reads it.
+fn deleted(deleted: &v8::PropertyCallbackInfo<v8::Boolean>, done: NamedDeleted) -> v8::Intercepted {
+    match done {
+        NamedDeleted::None => v8::Intercepted::kNo,
+        NamedDeleted::Threw => v8::Intercepted::kYes,
+        NamedDeleted::Deleted => {
+            v8::ReturnValue::from_property_callback_info(deleted).set_bool(true);
+            v8::Intercepted::kYes
+        }
+    }
+}
+
+/// A property defined (WebIDL's [[DefineOwnProperty]] of a legacy
+/// platform object): a value goes through the setter; a getter or a
+/// setter is refused.
+fn defined<'s, T: Any, I: StateInfoNamed<T>>(
+    name: impl FnOnce(&'s v8::PropertyCallbackInfo<v8::Value>) -> v8::Local<'s, v8::Name>,
+    descriptor: &v8::PropertyDescriptor,
+    result: &'s v8::PropertyCallbackInfo<v8::Boolean>,
+    info: &'s v8::PropertyCallbackInfo<v8::Value>,
+) -> v8::Intercepted {
+    if descriptor.has_get() || descriptor.has_set() {
+        v8::ReturnValue::from_property_callback_info(result).set_bool(false);
+        return v8::Intercepted::kYes;
+    }
+    let value = {
+        if cfg!(debug_assertions) {
+            INFO_SCOPES.set(INFO_SCOPES.get().wrapping_add(1));
+        }
+        base::census::count(base::census::Kind::Scope);
+        // SAFETY: as `index_name`'s. The descriptor's handle lives only as
+        // long as the descriptor: copied into the callback's handle scope.
+        v8::callback_scope!(unsafe scope, info);
+        if descriptor.has_value() {
+            v8::Local::new(scope, descriptor.value())
+        } else {
+            v8::undefined(scope).into()
+        }
+    };
+    match I::assign(name_info(info, name(info), Some(value))) {
+        NamedAssigned::Declined => return v8::Intercepted::kNo,
+        NamedAssigned::Took => {
+            v8::ReturnValue::from_property_callback_info(result).set_bool(true);
+        }
+        NamedAssigned::Threw => {}
+    }
+    v8::Intercepted::kYes
+}
+
+/// A named interceptor's query: V8's own callback (`query_raw`), given the
+/// name and the info alone.
+unsafe extern "C" fn info_named_query_trampoline<T: Any, I: StateInfoNamed<T>>(
+    name: v8::SealedLocal<v8::Name>,
+    info: *const v8::PropertyCallbackInfo<v8::Integer>,
+) -> v8::Intercepted {
+    let _call = census_call::<I>();
+    // SAFETY: V8's callback info, valid for the call; the name V8 passed
+    // the callback, used within it.
+    let (attributes, info, name) = unsafe { (&*info, value_info(info), name.unseal_in_callback()) };
+    queried(attributes, I::query(name_info(info, name, None)))
+}
+
+/// A named interceptor's deleter: V8's own callback (`deleter_raw`).
+unsafe extern "C" fn info_named_delete_trampoline<T: Any, I: StateInfoNamed<T>>(
+    name: v8::SealedLocal<v8::Name>,
+    info: *const v8::PropertyCallbackInfo<v8::Boolean>,
+) -> v8::Intercepted {
+    let _call = census_call::<I>();
+    // SAFETY: as `info_named_query_trampoline`'s.
+    let (result, info, name) = unsafe { (&*info, value_info(info), name.unseal_in_callback()) };
+    deleted(result, I::delete(name_info(info, name, None)))
+}
+
+/// A named interceptor's definer: V8's own callback (`definer_raw`).
+unsafe extern "C" fn info_named_define_trampoline<T: Any, I: StateInfoNamed<T>>(
+    name: v8::SealedLocal<v8::Name>,
+    descriptor: *const v8::PropertyDescriptor,
+    info: *const v8::PropertyCallbackInfo<v8::Boolean>,
+) -> v8::Intercepted {
+    let _call = census_call::<I>();
+    // SAFETY: as `info_named_query_trampoline`'s; the descriptor V8 passed
+    // the callback, valid for it.
+    let (result, info, name, descriptor) = unsafe {
+        (
+            &*info,
+            value_info(info),
+            name.unseal_in_callback(),
+            &*descriptor,
+        )
+    };
+    defined::<T, I>(|_| name, descriptor, result, info)
+}
+
+/// A named interceptor's enumerator: V8's own callback
+/// (`enumerator_raw`); its result the array `enumerate` gives.
+unsafe extern "C" fn info_named_enumerate_trampoline<T: Any, I: StateInfoNamed<T>>(
+    info: *const v8::PropertyCallbackInfo<v8::Array>,
+) {
+    let _call = census_call::<I>();
+    // SAFETY: V8's callback info, valid for the call.
+    let info = unsafe { value_info(info) };
+    I::enumerate(StateIndexInfo {
+        info,
+        isolate: info.isolate(),
+        index: 0,
+        value: None,
+        _state: PhantomData,
+    });
+}
+
+/// An array index got as a name, of an interface whose indices are names
+/// (`dataset[9]`): V8's own indexed callbacks, the index's digits the
+/// name.
+unsafe extern "C" fn info_index_get_trampoline<T: Any, I: StateInfoNamed<T>>(
+    index: u32,
+    info: *const v8::PropertyCallbackInfo<v8::Value>,
+) -> v8::Intercepted {
+    let _call = census_call::<I>();
+    // SAFETY: V8's callback info, valid for the call.
+    let info = unsafe { &*info };
+    I::get(name_info(info, index_name(info, index), None))
+}
+
+unsafe extern "C" fn info_index_query_trampoline<T: Any, I: StateInfoNamed<T>>(
+    index: u32,
+    info: *const v8::PropertyCallbackInfo<v8::Integer>,
+) -> v8::Intercepted {
+    let _call = census_call::<I>();
+    // SAFETY: V8's callback info, valid for the call.
+    let (attributes, info) = unsafe { (&*info, value_info(info)) };
+    queried(
+        attributes,
+        I::query(name_info(info, index_name(info, index), None)),
+    )
+}
+
+unsafe extern "C" fn info_index_set_trampoline<T: Any, I: StateInfoNamed<T>>(
+    index: u32,
+    value: v8::SealedLocal<v8::Value>,
+    info: *const v8::PropertyCallbackInfo<v8::Boolean>,
+) -> v8::Intercepted {
+    let _call = census_call::<I>();
+    // SAFETY: V8's callback info, valid for the call; the value V8 passed
+    // the callback, used within it.
+    let (info, value) = unsafe { (value_info(info), value.unseal_in_callback()) };
+    match I::assign(name_info(info, index_name(info, index), Some(value))) {
+        NamedAssigned::Declined => v8::Intercepted::kNo,
+        NamedAssigned::Took | NamedAssigned::Threw => v8::Intercepted::kYes,
+    }
+}
+
+unsafe extern "C" fn info_index_delete_trampoline<T: Any, I: StateInfoNamed<T>>(
+    index: u32,
+    info: *const v8::PropertyCallbackInfo<v8::Boolean>,
+) -> v8::Intercepted {
+    let _call = census_call::<I>();
+    // SAFETY: V8's callback info, valid for the call.
+    let (result, info) = unsafe { (&*info, value_info(info)) };
+    deleted(
+        result,
+        I::delete(name_info(info, index_name(info, index), None)),
+    )
+}
+
+unsafe extern "C" fn info_index_define_trampoline<T: Any, I: StateInfoNamed<T>>(
+    index: u32,
+    descriptor: *const v8::PropertyDescriptor,
+    info: *const v8::PropertyCallbackInfo<v8::Boolean>,
+) -> v8::Intercepted {
+    let _call = census_call::<I>();
+    // SAFETY: V8's callback info and descriptor, valid for the call.
+    let (result, info, descriptor) = unsafe { (&*info, value_info(info), &*descriptor) };
+    defined::<T, I>(|info| index_name(info, index), descriptor, result, info)
+}
+
+/// An info indexed setter's callback: V8's own (`setter_raw`), given the
+/// index, the value and the info alone; it takes every index.
+unsafe extern "C" fn info_indexed_set_trampoline<T: Any, S: StateInfoIndexedSetter<T>>(
+    index: u32,
+    value: v8::SealedLocal<v8::Value>,
+    info: *const v8::PropertyCallbackInfo<v8::Boolean>,
+) -> v8::Intercepted {
+    let _call = census_call::<S>();
+    // SAFETY: as `info_named_set_trampoline`'s: a setter's return value
+    // is never written.
+    let info = unsafe { &*info.cast::<v8::PropertyCallbackInfo<v8::Value>>() };
+    S::set(StateIndexInfo {
+        info,
+        isolate: info.isolate(),
+        index,
+        // SAFETY: the value V8 passed the callback, used within it.
+        value: Some(unsafe { value.unseal_in_callback() }),
+        _state: PhantomData,
+    });
+    v8::Intercepted::kYes
+}
+
 /// The callback of `G`'s named getter given V8's callback info alone,
 /// for `NamedOptions::getter_info`.
 pub fn info_named_getter<T: Any, G: StateInfoNamedGetter<T>>() -> v8::NamedPropertyGetterCallback {
@@ -1028,132 +1301,6 @@ fn state_scope<'a, 's, 'i, T>(scope: &'a mut v8::PinScope<'s, 'i>) -> StateScope
         scope,
         _state: PhantomData,
     }
-}
-
-fn named_get<'s, T: Any, N: StateNamedProperties<T>>(
-    scope: &mut v8::PinScope<'s, '_>,
-    name: v8::Local<'s, v8::Name>,
-    args: v8::PropertyCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Value>,
-) -> v8::Intercepted {
-    let _call = census_call::<N>();
-    base::census::count(base::census::Kind::TrampolineScope);
-    N::get(state_scope(scope), PropertyKey::Name(name), args, rv)
-}
-
-fn named_query<'s, T: Any, N: StateNamedProperties<T>>(
-    scope: &mut v8::PinScope<'s, '_>,
-    name: v8::Local<'s, v8::Name>,
-    args: v8::PropertyCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Integer>,
-) -> v8::Intercepted {
-    let _call = census_call::<N>();
-    base::census::count(base::census::Kind::TrampolineScope);
-    N::query(state_scope(scope), PropertyKey::Name(name), args, rv)
-}
-
-fn named_set<'s, T: Any, N: StateNamedProperties<T>>(
-    scope: &mut v8::PinScope<'s, '_>,
-    name: v8::Local<'s, v8::Name>,
-    value: v8::Local<'s, v8::Value>,
-    args: v8::PropertyCallbackArguments<'s>,
-    _: v8::ReturnValue<'_, v8::Boolean>,
-) -> v8::Intercepted {
-    let _call = census_call::<N>();
-    base::census::count(base::census::Kind::TrampolineScope);
-    N::set(state_scope(scope), PropertyKey::Name(name), value, args)
-}
-
-fn named_define<'s, T: Any, N: StateNamedProperties<T>>(
-    scope: &mut v8::PinScope<'s, '_>,
-    name: v8::Local<'s, v8::Name>,
-    descriptor: &v8::PropertyDescriptor,
-    args: v8::PropertyCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Boolean>,
-) -> v8::Intercepted {
-    let _call = census_call::<N>();
-    base::census::count(base::census::Kind::TrampolineScope);
-    N::define(
-        state_scope(scope),
-        PropertyKey::Name(name),
-        descriptor,
-        args,
-        rv,
-    )
-}
-
-fn named_delete<'s, T: Any, N: StateNamedProperties<T>>(
-    scope: &mut v8::PinScope<'s, '_>,
-    name: v8::Local<'s, v8::Name>,
-    args: v8::PropertyCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Boolean>,
-) -> v8::Intercepted {
-    let _call = census_call::<N>();
-    base::census::count(base::census::Kind::TrampolineScope);
-    N::delete(state_scope(scope), PropertyKey::Name(name), args, rv)
-}
-
-fn named_enumerate<'s, T: Any, N: StateNamedProperties<T>>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::PropertyCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Array>,
-) {
-    let _call = census_call::<N>();
-    base::census::count(base::census::Kind::TrampolineScope);
-    N::enumerate(state_scope(scope), args, rv);
-}
-
-fn index_get<'s, T: Any, N: StateNamedProperties<T>>(
-    scope: &mut v8::PinScope<'s, '_>,
-    index: u32,
-    args: v8::PropertyCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Value>,
-) -> v8::Intercepted {
-    N::get(state_scope(scope), PropertyKey::Index(index), args, rv)
-}
-
-fn index_query<'s, T: Any, N: StateNamedProperties<T>>(
-    scope: &mut v8::PinScope<'s, '_>,
-    index: u32,
-    args: v8::PropertyCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Integer>,
-) -> v8::Intercepted {
-    N::query(state_scope(scope), PropertyKey::Index(index), args, rv)
-}
-
-fn index_set<'s, T: Any, N: StateNamedProperties<T>>(
-    scope: &mut v8::PinScope<'s, '_>,
-    index: u32,
-    value: v8::Local<'s, v8::Value>,
-    args: v8::PropertyCallbackArguments<'s>,
-    _: v8::ReturnValue<'_, v8::Boolean>,
-) -> v8::Intercepted {
-    N::set(state_scope(scope), PropertyKey::Index(index), value, args)
-}
-
-fn index_define<'s, T: Any, N: StateNamedProperties<T>>(
-    scope: &mut v8::PinScope<'s, '_>,
-    index: u32,
-    descriptor: &v8::PropertyDescriptor,
-    args: v8::PropertyCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Boolean>,
-) -> v8::Intercepted {
-    N::define(
-        state_scope(scope),
-        PropertyKey::Index(index),
-        descriptor,
-        args,
-        rv,
-    )
-}
-
-fn index_delete<'s, T: Any, N: StateNamedProperties<T>>(
-    scope: &mut v8::PinScope<'s, '_>,
-    index: u32,
-    args: v8::PropertyCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Boolean>,
-) -> v8::Intercepted {
-    N::delete(state_scope(scope), PropertyKey::Index(index), args, rv)
 }
 
 /// A function template whose callback is `C`'s, given the isolate's state:
@@ -1288,7 +1435,7 @@ pub fn set_state_call_as_function_handler<T: Any, C: StateInfoFunction<T>>(
 pub fn set_state_info_indexed_getter<
     T: Any,
     G: StateInfoIndexedGetter<T>,
-    S: StateIndexedSetter<T>,
+    S: StateInfoIndexedSetter<T>,
 >(
     scope: &mut v8::PinScope<'_, '_>,
     template: v8::Local<'_, v8::ObjectTemplate>,
@@ -1305,22 +1452,10 @@ pub fn set_state_info_indexed_getter<
         .enumerator_raw(info_indexed_enumerate_trampoline::<T, G>)
         .data(data);
     template.set_indexed_property_handler(if setter {
-        configuration.setter(indexed_set_trampoline::<T, S>)
+        configuration.setter_raw(info_indexed_set_trampoline::<T, S>)
     } else {
         configuration
     });
-}
-
-fn indexed_set_trampoline<'s, T: Any, S: StateIndexedSetter<T>>(
-    scope: &mut v8::PinScope<'s, '_>,
-    index: u32,
-    value: v8::Local<'s, v8::Value>,
-    args: v8::PropertyCallbackArguments<'s>,
-    _: v8::ReturnValue<'_, v8::Boolean>,
-) -> v8::Intercepted {
-    let _call = census_call::<S>();
-    base::census::count(base::census::Kind::TrampolineScope);
-    S::set(state_scope(scope), index, value, args)
 }
 
 /// Gives `template` (its isolate's) the named properties of `N`, given the
@@ -1330,7 +1465,7 @@ fn indexed_set_trampoline<'s, T: Any, S: StateIndexedSetter<T>>(
 /// # Panics
 ///
 /// If the isolate's state isn't a `T`.
-pub fn set_state_named_properties<T: Any, N: StateNamedProperties<T>>(
+pub fn set_state_named_properties<T: Any, I: StateInfoNamed<T>>(
     scope: &mut v8::PinScope<'_, '_>,
     template: v8::Local<'_, v8::ObjectTemplate>,
     options: NamedOptions,
@@ -1346,35 +1481,30 @@ pub fn set_state_named_properties<T: Any, N: StateNamedProperties<T>>(
         flags = flags | v8::PropertyHandlerFlags::NON_MASKING;
         index_flags = v8::PropertyHandlerFlags::NON_MASKING;
     }
-    let named = v8::NamedPropertyHandlerConfiguration::new();
-    let mut named = match options.getter_info {
-        Some(getter) => named.getter_raw(getter),
-        None => named.getter(named_get::<T, N>),
-    }
-    .query(named_query::<T, N>)
-    .data(data)
-    .flags(flags);
+    let mut named = v8::NamedPropertyHandlerConfiguration::new()
+        .getter_raw(options.getter_info)
+        .query_raw(info_named_query_trampoline::<T, I>)
+        .data(data)
+        .flags(flags);
     let mut indexed = v8::IndexedPropertyHandlerConfiguration::new()
-        .getter(index_get::<T, N>)
-        .query(index_query::<T, N>)
+        .getter_raw(info_index_get_trampoline::<T, I>)
+        .query_raw(info_index_query_trampoline::<T, I>)
         .data(data)
         .flags(index_flags);
-    if options.setter {
-        named = match options.setter_info {
-            Some(setter) => named.setter_raw(setter),
-            None => named.setter(named_set::<T, N>),
-        }
-        .definer(named_define::<T, N>);
+    if let Some(setter) = options.setter_info {
+        named = named
+            .setter_raw(setter)
+            .definer_raw(info_named_define_trampoline::<T, I>);
         indexed = indexed
-            .setter(index_set::<T, N>)
-            .definer(index_define::<T, N>);
+            .setter_raw(info_index_set_trampoline::<T, I>)
+            .definer_raw(info_index_define_trampoline::<T, I>);
     }
     if options.deleter {
-        named = named.deleter(named_delete::<T, N>);
-        indexed = indexed.deleter(index_delete::<T, N>);
+        named = named.deleter_raw(info_named_delete_trampoline::<T, I>);
+        indexed = indexed.deleter_raw(info_index_delete_trampoline::<T, I>);
     }
     if options.enumerator {
-        named = named.enumerator(named_enumerate::<T, N>);
+        named = named.enumerator_raw(info_named_enumerate_trampoline::<T, I>);
     }
     template.set_named_property_handler(named);
     if options.indices {

@@ -25,7 +25,7 @@ use elise::{JsEdge, Persistent};
 
 use crate::listeners::{self, ReportAt};
 use crate::state::{self, Scope, State};
-use crate::strings::{self, ArgString, StringCache};
+use crate::strings::{self, ArgString};
 use crate::{exception, templates};
 
 /// What a call's arguments, `this` and `new.target` are read from: a
@@ -2622,44 +2622,6 @@ pub(crate) fn member_key<'s>(
         }
     }
     make_name(scope, member.id(), member.name()).expect("a short name")
-}
-
-/// `string`'s V8 string, from the isolate's cache, made and cached now if
-/// V8 hasn't it (the state let go while V8 makes it); none if it is too
-/// long for V8. Out of any operation.
-///
-/// A string only the caller holds (a result computed for this call, as a
-/// serialized style value) is made and not cached: its address is gone
-/// with the call, so its entry would never be found again, and would cost
-/// a weak handle V8's GC then has to clear. Blink's `StringCache` keys by
-/// `StringImpl` and has the same miss for a fresh one; it pays for it with
-/// an external string, which needs no copy.
-pub(crate) fn cached_string<'s>(
-    scope: &mut Scope<'_, 's, '_>,
-    string: &DomString,
-) -> Option<v8::Local<'s, v8::String>> {
-    let dead = {
-        let (state, mut no_gc) = scope.state();
-        if let Some(local) = state
-            .caches
-            .strings
-            .find(string)
-            .and_then(|weak| no_gc.weak_local(weak))
-        {
-            return Some(local);
-        }
-        if string.is_unique() {
-            None
-        } else {
-            Some(state.caches.strings.dead())
-        }
-    };
-    let Some(dead) = dead else {
-        return strings::new_string(scope.scope(), string);
-    };
-    let (local, weak) = StringCache::make(scope.scope(), dead, string)?;
-    scope.state_mut().0.caches.strings.insert(string, weak);
-    Some(local)
 }
 
 /// The interface a node's wrapper is of: its kind's most derived one, an
