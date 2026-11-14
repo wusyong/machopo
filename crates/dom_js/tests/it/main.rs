@@ -54,6 +54,7 @@ mod performance;
 mod queries;
 mod ranges;
 mod resize_observers;
+mod script_members;
 mod scripts;
 mod scrolling;
 mod select;

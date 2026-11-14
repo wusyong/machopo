@@ -75,6 +75,11 @@
 3. **`PropertyFront` 最後一段再評估**。
 4. **分三段**（3a、3b、3c），每段做完可以 merge。
 
+3a，2026-11-14（使用者：都照建議；選項在「待決定」原本的列表）：
+
+5. **跨過 script 的操作要留著的東西照值傳**，不留狀態：`dom_api` 的 `ScriptHost` 和 `ScriptFront` 的那幾個操作明白地收、回 constructor、讀到的 lifecycle callback、filter 丟的例外，「script 已經丟了」是一種錯誤。不選 `InfoFront` 多一個欄位（每次呼叫都付，熱的 getter 也付）；不選放在 isolate 的狀態上（呼叫會重入，要自己維護 stack）。對照 Blink：`CustomElementRegistry::define` 裡這些是區域變數。
+6. **搬之前先補測試**：盤點重入、例外、reaction 的順序、microtask 的時機的測試，缺的先補在現在的行為上。
+
 ## 當時的選項
 
 1. **會跑 script 的成員怎麼放到 `InfoFront` 上**
@@ -94,7 +99,15 @@
 
 ## 待決定
 
-每一段開始時列那一段的。
+3a 的兩條已經定了（決定 5、6），當時的選項留在這裡：
+
+1. **一次呼叫裡跨過 script 的操作要留著的東西放哪裡**。`ScriptFront` 的 13 個操作裡，10 個只要一個 scope（呼叫 listener、lifecycle callback、mutation callback、upgrade、reject promise、`pending_input`、`update_elements`……），搬過去就是「當場開 scope、呼叫 `listeners` 裡同一個函式」。另外幾個靠 `WholeFront` 的 `Call` 記著東西：`define` 的 constructor（「拿到的 callback」）、它讀到的四個 lifecycle callback、「script 已經丟了例外」的旗標；`NodeFilter` 丟的例外（之後重丟）；geolocation 的第二個 callback。`InfoFront` 沒有地方放。
+   - A：`InfoFront` 多一個欄位（一個字，平常是空的）。改動最小；但每次呼叫都要初始化它、結束時檢查它（`WholeFront` 的 `Call` 為了這個特別寫過 `Drop`，量過每次約 18 條指令，壓到 2、3 條），最熱的 getter（`nodeType` 113 條）也付。
+   - B（建議）：照值傳，不留狀態。`dom_api` 的 `ScriptHost` 的這幾個操作改成明白地收、回這些東西：constructor 由 `define` 傳給它們（`define` 本來就是泛型地拿著它），讀到的 lifecycle callback 當回傳值、再傳給存的那一步，「已經丟了」是一種錯誤而不是旗標，filter 丟的例外用 `ScriptHost::Value` 帶回來。沒有每次呼叫的成本，擁有權看得見；代價是動 `dom_api` 的 `ScriptHost`、`ScriptFront` 和 `FrontHost`（`dom_wasm` 的 front 如果實作了這幾個也要跟著改）。
+   - C：放在 isolate 的 `State` 上。沒有每次呼叫的成本、不動 `dom_api`；但呼叫可以重入（`define` 的 getter 裡再 `define`），要自己維護一個 stack，是藏起來的全域狀態。
+2. **搬之前先補測試**：先盤點重入、例外、reaction 的順序、microtask 的時機現有的測試，缺的在搬之前補在 `main` 的行為上（先補、確認通過，再搬）。建議照做。
+
+之後的段落開始時列那一段的。
 
 ## 之後的可能
 
