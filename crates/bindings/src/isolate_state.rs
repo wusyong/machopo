@@ -235,37 +235,8 @@ pub trait StateInfoFunction<T>: 'static {
     fn call(info: StateInfo<'_, T, Unsigned>);
 }
 
-/// An indexed getter given its isolate's state, a `T`: what
-/// `set_state_indexed_getter` calls, and the queries of its properties.
-pub trait StateIndexedGetter<T>: 'static {
-    /// `this` the interceptor's holder.
-    fn get<'s>(
-        scope: StateScope<'_, 's, '_, T>,
-        index: u32,
-        args: v8::PropertyCallbackArguments<'s>,
-        this: Receiver<'s>,
-        rv: v8::ReturnValue<'_, v8::Value>,
-    ) -> v8::Intercepted;
-
-    /// The property's attributes (`PropertyAttribute`'s bits), if there
-    /// is one at `index`.
-    fn query<'s>(
-        scope: StateScope<'_, 's, '_, T>,
-        index: u32,
-        args: v8::PropertyCallbackArguments<'s>,
-        rv: v8::ReturnValue<'_, v8::Integer>,
-    ) -> v8::Intercepted;
-
-    /// The indices there are properties at.
-    fn enumerate<'s>(
-        scope: StateScope<'_, 's, '_, T>,
-        args: v8::PropertyCallbackArguments<'s>,
-        rv: v8::ReturnValue<'_, v8::Array>,
-    );
-}
-
 /// An indexed setter given its isolate's state, a `T`: what
-/// `set_state_indexed_properties` calls with the handler's data.
+/// `set_state_info_indexed_getter` calls with the handler's data.
 pub trait StateIndexedSetter<T>: 'static {
     fn set<'s>(
         scope: StateScope<'_, 's, '_, T>,
@@ -506,7 +477,7 @@ impl<'s, T: Any> StateIndexInfo<'s, T> {
     }
 
     /// The object the interceptor is on: one of the template's (V8 calls
-    /// an interceptor with it), as `indexed_trampoline`'s.
+    /// an interceptor with it).
     #[inline(always)]
     pub fn holder(&self) -> Receiver<'s> {
         Receiver(self.info.arguments().holder())
@@ -1052,50 +1023,6 @@ fn function_trampoline<'s, T: Any, C: StateCallback<T>>(
     );
 }
 
-/// The indexed getter of `G`, given the state: its holder the object the
-/// interceptor is on (`Receiver`).
-fn indexed_trampoline<'s, T: Any, G: StateIndexedGetter<T>>(
-    scope: &mut v8::PinScope<'s, '_>,
-    index: u32,
-    args: v8::PropertyCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Value>,
-) -> v8::Intercepted {
-    let _call = census_call::<G>();
-    base::census::count(base::census::Kind::TrampolineScope);
-    let this = Receiver(args.holder());
-    G::get(
-        StateScope {
-            scope,
-            _state: PhantomData,
-        },
-        index,
-        args,
-        this,
-        rv,
-    )
-}
-
-fn indexed_query<'s, T: Any, G: StateIndexedGetter<T>>(
-    scope: &mut v8::PinScope<'s, '_>,
-    index: u32,
-    args: v8::PropertyCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Integer>,
-) -> v8::Intercepted {
-    let _call = census_call::<G>();
-    base::census::count(base::census::Kind::TrampolineScope);
-    G::query(state_scope(scope), index, args, rv)
-}
-
-fn indexed_enumerate<'s, T: Any, G: StateIndexedGetter<T>>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::PropertyCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Array>,
-) {
-    let _call = census_call::<G>();
-    base::census::count(base::census::Kind::TrampolineScope);
-    G::enumerate(state_scope(scope), args, rv);
-}
-
 fn state_scope<'a, 's, 'i, T>(scope: &'a mut v8::PinScope<'s, 'i>) -> StateScope<'a, 's, 'i, T> {
     StateScope {
         scope,
@@ -1350,34 +1277,10 @@ pub fn set_state_call_as_function_handler<T: Any, C: StateInfoFunction<T>>(
     template.set_call_as_function_handler_raw(info_function_trampoline::<T, C>, None);
 }
 
-/// Gives `template` (its isolate's) the indexed getter of `G`, given the
-/// isolate's state, each callback given `data`
-/// (`PropertyCallbackArguments::data`).
-///
-/// # Panics
-///
-/// If the isolate's state isn't a `T`.
-pub fn set_state_indexed_getter<T: Any, G: StateIndexedGetter<T>>(
-    scope: &mut v8::PinScope<'_, '_>,
-    template: v8::Local<'_, v8::ObjectTemplate>,
-    data: v8::Local<'_, v8::Value>,
-) {
-    assert!(
-        checked::<T>(scope).is_some(),
-        "a state callback's template is made where the state is one"
-    );
-    template.set_indexed_property_handler(
-        v8::IndexedPropertyHandlerConfiguration::new()
-            .getter(indexed_trampoline::<T, G>)
-            .query(indexed_query::<T, G>)
-            .enumerator(indexed_enumerate::<T, G>)
-            .data(data),
-    );
-}
-
-/// As `set_state_indexed_getter`, the getter itself given V8's callback
-/// info alone (`StateInfoIndexedGetter`); with a setter of `S` if
-/// `setter`. The query and the enumerator are as before.
+/// Gives `template` (its isolate's) the indexed getter of `G`, its query
+/// and its enumerator, each V8's own callback given the callback info
+/// alone (`StateInfoIndexedGetter`), and `data`
+/// (`StateIndexInfo::data`); with a setter of `S` if `setter`.
 ///
 /// # Panics
 ///
@@ -1406,32 +1309,6 @@ pub fn set_state_info_indexed_getter<
     } else {
         configuration
     });
-}
-
-/// Gives `template` (its isolate's) the indexed getter of `G` and the
-/// indexed setter of `S`, given the isolate's state, each callback given
-/// `data` (`PropertyCallbackArguments::data`).
-///
-/// # Panics
-///
-/// If the isolate's state isn't a `T`.
-pub fn set_state_indexed_properties<T: Any, G: StateIndexedGetter<T>, S: StateIndexedSetter<T>>(
-    scope: &mut v8::PinScope<'_, '_>,
-    template: v8::Local<'_, v8::ObjectTemplate>,
-    data: v8::Local<'_, v8::Value>,
-) {
-    assert!(
-        checked::<T>(scope).is_some(),
-        "a state callback's template is made where the state is one"
-    );
-    template.set_indexed_property_handler(
-        v8::IndexedPropertyHandlerConfiguration::new()
-            .getter(indexed_trampoline::<T, G>)
-            .setter(indexed_set_trampoline::<T, S>)
-            .query(indexed_query::<T, G>)
-            .enumerator(indexed_enumerate::<T, G>)
-            .data(data),
-    );
 }
 
 fn indexed_set_trampoline<'s, T: Any, S: StateIndexedSetter<T>>(

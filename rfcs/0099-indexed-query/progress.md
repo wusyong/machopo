@@ -7,6 +7,7 @@
 | 步驟 | 狀態 | 完成日期 |
 | --- | --- | --- |
 | query 和 enumerator 讀 `length`，V8 原始的 callback | 做完 | 2026-11-14 |
+| 刪掉舊的那組索引 interceptor | 做完 | 2026-11-14 |
 | 布林參數的 `undefined`、`null`、小整數不開 scope | 做完 | 2026-11-14 |
 
 ## 驗收
@@ -30,4 +31,4 @@ Speedometer 一輪的總數：自己開 scope 的呼叫 8.8% → 7.7%，經過 t
 - **WPT**：`dom/collections/`、`dom/lists/`、`dom/nodes/`、`html/semantics/forms/the-select-element/`、`the-form-element/`、`css/cssom/`、`html/infrastructure/common-dom-interfaces/collections/`：773 個測試、20,809 個檢查，非預期的結果 0。
 - **測試**：`cargo test --workspace`、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、sanity 的七項通過。
 - **測試守不住的**：query 不登記 root、操作是讀的（`docs/test-gaps.md` 的「沒有計數守著的優化」）。
-- **留著沒動的**：`bindings` 的 `set_state_indexed_getter`、`set_state_indexed_properties` 和 `StateIndexedGetter`（經過 rusty_v8 的 trampoline 的那一組）`dom_js` 不再用，只剩 `bindings` 自己的測試在用。
+- **刪掉的**：`bindings` 的 `set_state_indexed_getter`、`set_state_indexed_properties`、`StateIndexedGetter` 和它們的 trampoline（`dom_js` 不再用）；`bindings` 的測試 `a_callback_borrows_its_isolates_state` 改用 `set_state_info_indexed_getter`，同時測到新的 query 和 enumerator 的 trampoline。之後 `cargo test -p bindings -p dom_js`、兩者的 clippy、`cargo fmt --check`、sanity 的 `unsafe`、`docs`、`numerics` 通過。

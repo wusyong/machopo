@@ -8,8 +8,9 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use bindings::{
-    StateCallback, StateIndexedGetter, StateScope, V8PerIsolateData, drop_isolate_state,
-    isolate_state_mut, set_isolate_state, set_state_indexed_getter, state_function_template,
+    InfoState, StateCallback, StateIndexInfo, StateIndexedSetter, StateInfoIndexedGetter,
+    StateScope, V8PerIsolateData, drop_isolate_state, isolate_state_mut, set_isolate_state,
+    set_state_info_indexed_getter, state_function_template,
 };
 
 struct State {
@@ -103,42 +104,33 @@ impl StateCallback<State> for Count {
 /// indices below the state's value, read-only.
 struct Plus;
 
-impl StateIndexedGetter<State> for Plus {
-    fn get<'s>(
-        mut scope: StateScope<'_, 's, '_, State>,
-        index: u32,
-        _: v8::PropertyCallbackArguments<'s>,
-        _: bindings::Receiver<'s>,
-        mut rv: v8::ReturnValue<'_, v8::Value>,
-    ) -> v8::Intercepted {
-        rv.set_uint32(index + scope.state().0.value);
+impl StateInfoIndexedGetter<State> for Plus {
+    fn get(mut info: StateIndexInfo<'_, State>) -> v8::Intercepted {
+        let value = info.index() + info.state().0.value;
+        info.return_number(f64::from(value));
         v8::Intercepted::kYes
     }
 
-    fn query<'s>(
-        mut scope: StateScope<'_, 's, '_, State>,
-        index: u32,
-        _: v8::PropertyCallbackArguments<'s>,
-        mut rv: v8::ReturnValue<'_, v8::Integer>,
-    ) -> v8::Intercepted {
-        if index >= scope.state().0.value {
-            return v8::Intercepted::kNo;
-        }
-        rv.set_int32(v8::PropertyAttribute::READ_ONLY.as_u32().cast_signed());
-        v8::Intercepted::kYes
+    fn query(mut info: StateIndexInfo<'_, State>) -> Option<bool> {
+        (info.index() < info.state().0.value).then_some(false)
     }
 
-    fn enumerate<'s>(
-        mut scope: StateScope<'_, 's, '_, State>,
+    fn length(mut info: StateIndexInfo<'_, State>) -> u32 {
+        info.state().0.value
+    }
+}
+
+/// No setter: `Plus`'s properties are read-only.
+struct NoSetter;
+
+impl StateIndexedSetter<State> for NoSetter {
+    fn set<'s>(
+        _: StateScope<'_, 's, '_, State>,
+        _: u32,
+        _: v8::Local<'s, v8::Value>,
         _: v8::PropertyCallbackArguments<'s>,
-        mut rv: v8::ReturnValue<'_, v8::Array>,
-    ) {
-        let count = scope.state().0.value;
-        let scope = scope.scope();
-        let indices: Vec<v8::Local<'_, v8::Value>> = (0..count)
-            .map(|index| v8::Integer::new_from_unsigned(scope, index).into())
-            .collect();
-        rv.set(v8::Array::new_with_elements(scope, &indices));
+    ) -> v8::Intercepted {
+        unreachable!("the interceptor has no setter")
     }
 }
 
@@ -159,7 +151,7 @@ fn a_callback_borrows_its_isolates_state() {
     let count = count.get_function(scope).unwrap();
     let holder = v8::ObjectTemplate::new(scope);
     let data = v8::undefined(scope);
-    set_state_indexed_getter::<State, Plus>(scope, holder, data.into());
+    set_state_info_indexed_getter::<State, Plus, NoSetter>(scope, holder, data.into(), false);
     let holder = holder.new_instance(scope).unwrap();
     let global = context.global(scope);
     let name = v8::String::new(scope, "count").unwrap();
