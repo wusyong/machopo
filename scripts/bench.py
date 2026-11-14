@@ -145,10 +145,13 @@ def main() -> int:
     )
     calls.add_argument("--engines", help="only these (comma-separated): js")
     calls.add_argument("--cases", help="only these members (comma-separated): firstChild, nodeType, "
-                       "getAttribute, setAttribute, appendChild, createElement")
+                       "getAttribute, setAttribute, appendChild, createElement; the cold paths: 'classList (first)', "
+                       "'nextSibling (first)', 'list[i] (first)', 'list[0]', '0 in list'")
     calls.add_argument("--n", type=int, default=1_000_000, help="calls in each loop (default 1000000)")
     calls.add_argument("--runs", type=int, default=3, help="runs of each loop, the median taken (default 3)")
     calls.add_argument("--profile", default="perf", help="the cargo profile (default perf: machopo's, measured)")
+    calls.add_argument("--baseline", metavar="FILE", help="a calls.json of an earlier run (copied aside before "
+                       "this one overwrites it): the report ends with each member's counts before and now")
     calls.set_defaults(func=cmd_calls)
 
     census = sub.add_parser(

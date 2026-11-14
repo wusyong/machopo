@@ -79,6 +79,33 @@ class CallsTests(unittest.TestCase):
         dispatch = calls.environment("js", "dispatchEvent", 5)["MACHOPO_BENCH_SCRIPT"]
         self.assertIn("{ t.dispatchEvent(ev); }", dispatch)
 
+    def test_a_cold_path_has_its_own_setup_and_loop_to_take_away(self):
+        js = calls.environment("js", "list[i] (first)", 7)["MACHOPO_BENCH_SCRIPT"]
+        # Its setup after the common one, sized by the loop's count.
+        self.assertIn("'<i></i>'.repeat(7 + 1); const list = big.childNodes; for (let i = 0; i < 7; i++) "
+                      "{ x = list[i]; } } 0", js)
+        base = calls.environment("js", "list[i] (first)" + calls.BASE, 7)["MACHOPO_BENCH_SCRIPT"]
+        self.assertEqual(base, js.replace("{ x = list[i]; }", "{ x = list; }"))
+
+    def test_a_cold_paths_own_loop_is_taken_away_not_the_empty_one(self):
+        run = lambda i: [{"instructions": i, "cycles": i}] * 3
+        counts = {"empty": run(100.0), "nodeType": run(300.0), "0 in list": run(5000.0),
+                  "0 in list" + calls.BASE: run(1000.0)}
+        got = calls.per_call(counts, 10)
+        self.assertEqual(sorted(got), ["0 in list", "nodeType"])
+        self.assertEqual(got["0 in list"]["instructions"], 400.0)
+        self.assertEqual(got["nodeType"]["instructions"], 20.0)
+
+    def test_a_run_is_compared_with_an_earlier_one(self):
+        now = {"js": {"nodeType": {"instructions": 205.0, "cycles": 50.0, "stlf": 0.5},
+                      "firstChild": {"instructions": 300.0, "cycles": 80.0, "stlf": 0.0}}}
+        before = {"js": {"nodeType": {"instructions": 209.4, "cycles": 53.2, "stlf": 2.04}}}
+        text = calls.compare(now, before, "old.json")
+        self.assertIn("## Against old.json", text)
+        self.assertIn("| `nodeType` | 209 → 205 (-4) | 53 → 50 (-3) | 2.04 → 0.50 (-1.54) |", text)
+        # A member the earlier run didn't measure isn't compared.
+        self.assertNotIn("firstChild", text)
+
     def test_the_report(self):
         results = {"js": {"nodeType": {"instructions": 209.4, "cycles": 53.2, "stlf": 2.04}},
                    "wasm": {"nodeType": {"instructions": 2184.0, "cycles": 649.0}}}

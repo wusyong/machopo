@@ -80,6 +80,31 @@ JS_SETUP = (
     f"n.setAttribute('id', 'x'); const c = n.firstChild; let x; const Event = machopoDom.Event; {EVENTS_SETUP}"
 )
 
+# The cold paths: a member's call that isn't its usual one, which needs
+# more before the loop than the others (`{n}` is the loop's count) and so
+# its own loop to take away, of the same setup (the setup is in the counts
+# too). By name: what is before the loop, the loop's body, and the body of
+# the loop taken away.
+BIG_SETUP = "const big = document.createElement('div'); big.innerHTML = '<i></i>'.repeat({n} + 1);"
+COLD = {
+    # An object returned for the first time (it has no wrapper): rooted
+    # across the operation, its wrapper made in a scope after.
+    "classList (first)": (
+        "const els = []; for (let i = 0; i < {n}; i++) els.push(document.createElement('i'));",
+        "x = els[i].classList;", "x = els[i];"),
+    # A node script hasn't seen, returned by a getter and by a collection's
+    # index.
+    "nextSibling (first)": (BIG_SETUP + " let w = big.firstChild;", "w = w.nextSibling;", "x = w;"),
+    "list[i] (first)": (BIG_SETUP + " const list = big.childNodes;", "x = list[i];", "x = list;"),
+    # The same of a node that has its wrapper.
+    "list[0]": ("const list = n.childNodes;", "x = list[0];", "x = list;"),
+    # Whether a collection has an index: the interceptor's query.
+    "0 in list": ("const list = n.childNodes;", "x = 0 in list;", "x = list;"),
+}
+
+# The name of the loop taken away from a cold path's.
+BASE = ":base"
+
 ENGINES = {
     "js": ("dom_js", "bench::bench_calls"),
 }
@@ -155,7 +180,13 @@ def parse_perf_stat(text: str, stlf: str | None = None) -> dict[str, float]:
 
 def environment(engine: str, case: str, n: int) -> dict[str, str]:
     """What the engine's test is told to run."""
-    return {"MACHOPO_BENCH_SCRIPT": f"{{ {JS_SETUP} for (let i = 0; i < {n}; i++) {{ {CASES[case]} }} }} 0"}
+    name, base = case.removesuffix(BASE), case.endswith(BASE)
+    if name in COLD:
+        setup, body, base_body = COLD[name]
+        setup, body = setup.replace("{n}", str(n)), base_body if base else body
+    else:
+        setup, body = "", CASES[case]
+    return {"MACHOPO_BENCH_SCRIPT": f"{{ {JS_SETUP} {setup} for (let i = 0; i < {n}; i++) {{ {body} }} }} 0"}
 
 
 def run_once(binary: Path, test: str, env: dict[str, str], cpu: list[int] | None,
@@ -179,12 +210,12 @@ EMPTY_RUNS = 3
 
 
 def per_call(counts: dict[str, list[dict[str, float]]], n: int) -> dict[str, dict[str, float]]:
-    """Each case's median counts less the empty loop's, per call (each
-    event every run counted)."""
+    """Each case's median counts less the empty loop's (a cold path's, less
+    its own loop's: `BASE`), per call (each event every run counted)."""
     events = [e for e in (*EVENTS, "stlf") if all(e in run for runs in counts.values() for run in runs)]
     medians = {case: {e: statistics.median(run[e] for run in runs) for e in events} for case, runs in counts.items()}
-    empty = medians["empty"]
-    return {case: {e: (m[e] - empty[e]) / n for e in events} for case, m in medians.items() if case != "empty"}
+    return {case: {e: (m[e] - medians.get(case + BASE, medians["empty"])[e]) / n for e in events}
+            for case, m in medians.items() if case != "empty" and not case.endswith(BASE)}
 
 
 def write_report(results: dict[str, dict[str, dict[str, float]]], n: int, runs: int, profile: str,
@@ -204,7 +235,7 @@ def write_report(results: dict[str, dict[str, dict[str, float]]], n: int, runs: 
         "| Member | " + " | ".join(engines) + " |",
         "| --- |" + " ---: |" * len(engines),
     ]
-    cases = [case for case in CASES if case != "empty"]
+    cases = [case for case in (*CASES, *COLD) if case != "empty"]
     for case in cases:
         cells = []
         for engine in engines:
@@ -217,20 +248,44 @@ def write_report(results: dict[str, dict[str, dict[str, float]]], n: int, runs: 
     return report
 
 
+def compare(results: dict[str, dict[str, dict[str, float]]], baseline: dict[str, dict[str, dict[str, float]]],
+            name: str) -> str:
+    """This run's counts next to an earlier run's (`baseline`, its
+    `calls.json`'s results), by member: each event's before, now and the
+    difference; a member only one of them measured is left out."""
+    lines = [f"## Against {name}", ""]
+    for engine, cases in results.items():
+        before = baseline.get(engine, {})
+        events = [e for e in (*EVENTS, "stlf")
+                  if all(e in got and e in before[case] for case, got in cases.items() if case in before)]
+        lines += [f"| Member ({engine}) | " + " | ".join(events) + " |", "| --- |" + " ---: |" * len(events)]
+        for case, got in cases.items():
+            if case not in before:
+                continue
+            digits = lambda e: 2 if e == "stlf" else 0
+            cells = [f"{before[case][e]:.{digits(e)}f} → {got[e]:.{digits(e)}f} ({got[e] - before[case][e]:+.{digits(e)}f})"
+                     for e in events]
+            lines.append(f"| `{case}` | " + " | ".join(cells) + " |")
+        lines.append("")
+    return "\n".join(lines)
+
+
 def cmd_calls(args) -> int:
     if not sys.platform.startswith("linux") or not shutil.which("perf"):
         print("bench.py calls needs Linux's perf")
         return 1
     engines = args.engines.split(",") if args.engines else list(ENGINES)
-    cases = ["empty", *(args.cases.split(",") if args.cases else [c for c in CASES if c != "empty"])]
+    known = [c for c in (*CASES, *COLD) if c != "empty"]
+    cases = ["empty", *(args.cases.split(",") if args.cases else known)]
     for name in engines:
         if name not in ENGINES:
             print(f"no engine {name}; the engines: {', '.join(ENGINES)}")
             return 2
     for case in cases:
-        if case not in CASES:
-            print(f"no case {case}; the cases: {', '.join(c for c in CASES if c != 'empty')}")
+        if case not in known and case != "empty":
+            print(f"no case {case}; the cases: {', '.join(known)}")
             return 2
+    cases += [case + BASE for case in cases if case in COLD]
     fastest = common.fastest_cpus() if shutil.which("taskset") else None
     cpu = fastest[:1] if fastest else None
     stlf = stlf_event()
@@ -248,6 +303,10 @@ def cmd_calls(args) -> int:
                     counts[case].append(run_once(binary, test, environment(engine, case, args.n), cpu, stlf))
         results[engine] = per_call(counts, args.n)
         print(f"  {engine}: " + ", ".join(f"{case} {got['instructions']:.0f}" for case, got in results[engine].items()))
+    baseline = json.loads(Path(args.baseline).read_text(encoding="utf-8")) if args.baseline else None
     report = write_report(results, args.n, args.runs, args.profile, cpu)
+    if baseline:
+        with open(report, "a", encoding="utf-8", newline="\n") as file:
+            file.write("\n" + compare(results, baseline["results"], args.baseline))
     print(report.read_text(encoding="utf-8"))
     return 0

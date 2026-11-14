@@ -254,7 +254,10 @@ mod imp {
         );
         for ((entry, label), row) in table.iter() {
             let (interface, member, kind) = label.unwrap_or_default();
-            text.push_str(&format!("{entry}\t{interface}\t{member}\t{kind}\t{}", row.calls));
+            text.push_str(&format!(
+                "{entry}\t{interface}\t{member}\t{kind}\t{}",
+                row.calls
+            ));
             for n in row.made.iter().chain(&row.with) {
                 text.push_str(&format!("\t{n}"));
             }
@@ -267,7 +270,10 @@ mod imp {
             .and_then(|mut file| file.write_all(text.as_bytes()))
             .and_then(|()| std::fs::rename(&partial, path));
         if let Err(e) = written {
-            eprintln!("machopo: MACHOPO_CENSUS: can't write {}: {e}", path.display());
+            eprintln!(
+                "machopo: MACHOPO_CENSUS: can't write {}: {e}",
+                path.display()
+            );
         }
     }
 }

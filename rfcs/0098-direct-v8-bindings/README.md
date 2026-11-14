@@ -127,7 +127,7 @@ M0 的數字出來之後範圍縮小了（決定 11）：三種中間層在 Spee
 | M2 | 索引的 query 只比較索引和長度：不拿節點、不登記 root，接成 V8 原始的 callback；查 `CanvasRenderingContext2D.arc` 為什麼每次開 scope | S | 用陣列的方法走訪 `NodeList` |
 | M3 | 會跑 script 的成員搬到唯一的 front，刪掉 `WholeFront` | F | 程式少一份 front |
 
-順序的理由：先量（M0），因為 RFC 0097 好幾次估計不準；root 在併 front 之前（M1 在 M3 之前），因為登記 root 的地方有近兩百處，先定下 root 的寫法，M3 搬成員時直接用新的，不用搬兩次。
+順序（決定 18）：M0、M2、查 `classList (first)` 的 store forwarding 衝突、M1（做不做到時再定）、M3。理由：先量（M0），因為 RFC 0097 好幾次估計不準；M2 有明確的目標，M1 的收穫小又要動 elise，所以往後放；root 在併 front 之前（M1 在 M3 之前），因為登記 root 的地方有近兩百處，先定下 root 的寫法，M3 搬成員時直接用新的，不用搬兩次。
 
 每個里程碑做完都是完整的狀態（可以 merge、可以停）。
 
@@ -203,6 +203,8 @@ RFC 0097 每一段用指令數驗收，漏掉了 store forwarding 造成的退�
 15. **M1 在 M3 之前**（決定 10 的順序在新的里程碑上不變）。
 16. **fork 的入口照可以送上游的樣子寫**，照 fork 現有的規則。
 17. **Speedometer 在 M1 和 M3 做完時各量一次**（取代決定 8 的 M5）。
+
+18. **順序改成先 M2**（M0 的每次呼叫的基準出來之後）：先做索引的 query，再查 `classList (first)` 的 store forwarding 衝突（每次 24 次，表裡最多），M1 留到 M3 之前再決定要不要做。理由：第一次回傳物件的路每次約 1,900 到 2,500 條指令，root 的約 95 條只佔 4% 到 5%，而 M1 要動 elise；query 則有明確的目標（`0 in list` 935 條，`list[0]` 447 條）。決定 15 的「M1 在 M3 之前」仍然成立：要做的話在 M3 之前做。
 
 ## 待決定
 

@@ -1,0 +1,74 @@
+{
+  "n": 1000000,
+  "runs": 3,
+  "profile": "perf",
+  "results": {
+    "js": {
+      "firstChild": {
+        "instructions": 139.810296,
+        "cycles": 28.736119,
+        "stlf": 0.111661
+      },
+      "nodeType": {
+        "instructions": 113.134016,
+        "cycles": 22.371363,
+        "stlf": 0.008493
+      },
+      "getAttribute": {
+        "instructions": 560.09099,
+        "cycles": 91.20436,
+        "stlf": 0.137284
+      },
+      "setAttribute": {
+        "instructions": 1071.488092,
+        "cycles": 189.086526,
+        "stlf": 2.554291
+      },
+      "appendChild": {
+        "instructions": 1328.048902,
+        "cycles": 226.590186,
+        "stlf": 7.603904
+      },
+      "createElement": {
+        "instructions": 2047.680219,
+        "cycles": 448.058472,
+        "stlf": 2.865683
+      },
+      "addEventListener": {
+        "instructions": 640.799992,
+        "cycles": 122.538975,
+        "stlf": 0.226246
+      },
+      "dispatchEvent": {
+        "instructions": 3495.516228,
+        "cycles": 746.466186,
+        "stlf": 12.961152
+      },
+      "classList (first)": {
+        "instructions": 2467.746158,
+        "cycles": 652.998945,
+        "stlf": 24.312423
+      },
+      "nextSibling (first)": {
+        "instructions": 1899.784708,
+        "cycles": 419.483941,
+        "stlf": 9.269067
+      },
+      "list[i] (first)": {
+        "instructions": 2288.796206,
+        "cycles": 488.580371,
+        "stlf": 7.829723
+      },
+      "list[0]": {
+        "instructions": 446.598225,
+        "cycles": 85.221594,
+        "stlf": 0.003392
+      },
+      "0 in list": {
+        "instructions": 934.533963,
+        "cycles": 230.777465,
+        "stlf": 4.90068
+      }
+    }
+  }
+}
