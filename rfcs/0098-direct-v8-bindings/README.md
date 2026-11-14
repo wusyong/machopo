@@ -123,7 +123,7 @@ M0 的數字出來之後範圍縮小了（決定 11）：三種中間層在 Spee
 | | 內容 | 線 | 預期的收穫 |
 | --- | --- | --- | --- |
 | M0 | 量測的基準和工具：照路徑數一次呼叫開幾個 scope、登記幾個 root、開幾個操作（Speedometer 和 blink_perf 上各走到幾次）；`bench.py calls` 加冷的路；驗收的腳本連同 cycle 和 store forwarding 的衝突 | | 知道每條路被走到幾次，之後的順序照它調整 |
-| M1 | 便宜的 root：只活在這次呼叫裡，不進 heap 的 root 表（細節在它的 RFC 定） | R | 第一次回傳的物件（`classList`、集合的索引、`TreeWalker`）、會跑 script 的成員的 `this` 和參數 |
+| M1（不做，決定 20） | 便宜的 root：只活在這次呼叫裡，不進 heap 的 root 表 | R | 第一次回傳的物件（`classList`、集合的索引、`TreeWalker`）、會跑 script 的成員的 `this` 和參數 |
 | M2 | 索引的 query 只比較索引和長度：不拿節點、不登記 root，接成 V8 原始的 callback；查 `CanvasRenderingContext2D.arc` 為什麼每次開 scope | S | 用陣列的方法走訪 `NodeList` |
 | M3 | 會跑 script 的成員搬到唯一的 front，刪掉 `WholeFront` | F | 程式少一份 front |
 
@@ -206,12 +206,17 @@ RFC 0097 每一段用指令數驗收，漏掉了 store forwarding 造成的退�
 
 18. **順序改成先 M2**（M0 的每次呼叫的基準出來之後）：先做索引的 query，再查 `classList (first)` 的 store forwarding 衝突（每次 24 次，表裡最多），M1 留到 M3 之前再決定要不要做。理由：第一次回傳物件的路每次約 1,900 到 2,500 條指令，root 的約 95 條只佔 4% 到 5%，而 M1 要動 elise；query 則有明確的目標（`0 in list` 935 條，`list[0]` 447 條）。決定 15 的「M1 在 M3 之前」仍然成立：要做的話在 M3 之前做。
 
+19. **`classList (first)` 的 store forwarding 衝突現在不修**（使用者，2026-11-14；查到的在 `progress.md`）：最大的一塊是 elise 配置大的物件時先在 stack 上組好再搬進 heap，修法要動 elise 配置物件的介面，而在實際的頁面上量不出來。之後有 RFC 本來就要動 elise 的配置時再做（「之後的可能」）。
+20. **M1（便宜的 root）不做**（使用者，2026-11-14）：root 在第一次回傳物件的路上約佔 4% 的指令、每次 3.4 次衝突，而它要動 elise。決定 12 記的做法留給以後；接著做 M3（單一 front）。決定 17 的 Speedometer 只剩 M3 做完時量一次。
+
 ## 待決定
 
 沒有。
 
 ## 之後的可能
 
+- 便宜的、只活在這次呼叫裡的 root（原本的 M1，決定 12 和 20）。
+- elise 配置物件時直接在 heap 的位置上寫欄位，不先在 stack 上組好再搬（決定 19）：欄位多的型別（`ElementData`）配置一次有約 7 次 store forwarding 的衝突。
 - 草稿原本的範圍裡拿掉的：iterator、named interceptor 剩下的 callback、`rejecting` 改成 V8 原始的 callback（Speedometer 上合計不到 100 次）；dictionary 和參數的轉換不開 scope；`createElement` 這類建 wrapper 的路不開 scope；成員的路上完全沒有 scope。
 - 最熱的 getter 剩下的差（RFC 0097 的 `measurements.md` 的逐條對照）：冷的路搬出 callback、型別的 tag 變成常數、開 `Weak` 時不比 isolate。
 - 字串參數每次用文字查固定名稱表（要把編號記在 V8 的字串上，等 V8 的 sandbox）。

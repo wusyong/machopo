@@ -5,7 +5,7 @@
 | 里程碑 | 狀態 | RFC |
 |---|---|---|
 | M0 量測的基準和工具 | 做完（2026-11-14） | 這份 |
-| M1 便宜的 root | 未開始 | |
+| M1 便宜的 root | 不做（2026-11-14，README 的決定 20） | |
 | M2 索引的 query | 做完（2026-11-14） | 0099 |
 | M3 單一 front | 未開始 | |
 
@@ -89,6 +89,25 @@ scope 集中的成員：`Document.createElement`（每次都開：Speedometer 11
 - 第一次回傳物件的路每次約 1,900 到 2,500 條（含建 wrapper 和它引發的 GC）；root 的約 95 條只佔 4% 到 5%，M1 在這條路上省得到的就是這個量級。
 - `0 in list` 是 `list[0]` 的兩倍多（935 對 447），多出來的是 query 去跑整個 getter、登記 root 和 trampoline 的 scope：M2 的目標是讓它不比 `list[0]` 貴。
 - `classList (first)` 每次有 24 次 store forwarding 的衝突，是表裡最多的，還沒查是哪裡。
+
+### `classList (first)` 的 store forwarding 衝突（2026-11-14）
+
+每次 24 次裡，19 次在 main thread、是呼叫 `classList` 多出來的（其餘是對照迴圈也有的）。用 `perf record -e ls_bad_status2.stli_other:u -c 2003` 取樣（週期 97 時被 perf 節流，總數只剩十分之一；2003 時取樣的總數 22.8 和 `perf stat` 的一致），照函式分：
+
+| 每次呼叫 | 在哪 |
+|---:|---|
+| 約 7 | 配置元素的 `ElementData`（第一次要 `classList` 時才建）：`ElementData::__init` 3.7、`alloc_at::<ElementDataInit>` 2.1、`memmove`/`memcpy` 1.1。init 的 struct 在 stack 上一格一格寫（每條邊 4 bytes），再整塊搬進 heap |
+| 約 3.4 | `InfoOp::root_object`：登記 root |
+| 約 3.2 | callback 的進出和 `finish_object`（回傳 root 和 interface 的 tuple） |
+| 約 2 | V8 建 wrapper（`WriteLazilyInitializedCppHeapPointerField`、`CopyJSObjectWithAllocationSite`、指標表的配置） |
+| 約 0.8 | 配置 `DomTokenList` |
+| 其餘 | 分散，各不到 0.5 |
+
+這條路每條指令的 cycles 是 0.26（`createElement` 0.21、`list[0]` 0.19），多出來的約 120 到 170 cycles 大致就是這些衝突，佔這條路的兩成上下。
+
+`ElementData` 不只 `classList` 會建：新元素設 `className` 多 4.1 次衝突（383 cycles、1565 條指令）、設 `id` 多 5.3 次、`setAttribute('title', ..)` 多 1.6 次。
+
+結論：沒有單一的壞點，最大的一塊（約三分之一）是「大的 GC 物件先在 stack 上組好再搬進 heap」，這是 elise 配置物件的方式，每個欄位多的型別都有；其次才是 root。在 Speedometer 上這條路 14.5 萬次、每次多約 150 cycles，合計約 2,000 萬 cycles，量不出來。現在不修（README 的決定 19）。
 
 ### 查過的
 
