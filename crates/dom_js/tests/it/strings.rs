@@ -514,11 +514,22 @@ fn a_new_string_is_made_with_no_scope() {
         env.eval(&format!("out = {source};"));
         assert_eq!(scopes(), scopes_before, "{source}: no scope");
         assert_eq!(handles(), handles_before + 1, "{source}: V8 asked once");
-        assert_eq!(
-            env.cached_strings(),
-            cached_before + usize::from(cached),
-            "{source}: cached only if the DOM holds it"
-        );
+        // (Under V8's stress flags a GC may run here and collect an
+        // earlier case's string: the cache drops its entry as this one
+        // is entered, so it has no more than this, not exactly this.)
+        let cached_now = cached_before + usize::from(cached);
+        if crate::env::v8_gcs_at_its_own_times() {
+            assert!(
+                env.cached_strings() <= cached_now,
+                "{source}: cached only if the DOM holds it"
+            );
+        } else {
+            assert_eq!(
+                env.cached_strings(),
+                cached_now,
+                "{source}: cached only if the DOM holds it"
+            );
+        }
         assert_eq!(env.eval("out"), value, "{source}");
         // Again: a cached one is found, the others made again.
         let handles_before = handles();
