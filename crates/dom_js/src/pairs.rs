@@ -107,6 +107,7 @@ fn pair<'s, M: TypedMember>(
     {
         let scope = state::scope(scope)?;
         let mut front = WholeFront::new(scope, &call, rv);
+        crate::templates::census_label::<M>();
         M::call(&mut front);
     }
     v8::Local::<v8::Array>::try_from(rv.get(scope)).ok()

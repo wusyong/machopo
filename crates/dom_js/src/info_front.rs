@@ -730,6 +730,9 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
         if cfg!(debug_assertions) && microtasks.is_empty() {
             SIZE_REPORT_SCOPES.set(SIZE_REPORT_SCOPES.get().wrapping_add(1));
         }
+        if microtasks.is_empty() {
+            base::census::count(base::census::Kind::ReportScope);
+        }
         self.info
             .with_scope(|mut scope, _| state::report_these(&mut scope, microtasks, used));
     }

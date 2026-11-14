@@ -15,6 +15,7 @@
     )
 )]
 
+pub mod census;
 pub mod numerics;
 mod sequence;
 

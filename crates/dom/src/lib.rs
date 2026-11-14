@@ -941,6 +941,7 @@ impl Dom {
 
     /// Runs an operation: a binding's call. The heap may collect first.
     pub fn mutate<R>(&mut self, f: impl for<'gc> FnOnce(&Cx<'_, 'gc>) -> R) -> R {
+        ::base::census::count(::base::census::Kind::Mutate);
         let (origin, changes) = (self.origin, &self.changes);
         self.heap.mutate(|gc| {
             f(&Cx {
@@ -997,6 +998,7 @@ impl Dom {
     /// safepoint first, so no GC's work (`elise::Heap::read`). Shared: such
     /// operations may overlap, not one of `mutate` or a GC.
     pub fn read<R>(&self, f: impl for<'gc> FnOnce(&Cx<'_, 'gc>) -> R) -> R {
+        ::base::census::count(::base::census::Kind::Read);
         let (origin, changes) = (self.origin, &self.changes);
         self.heap.read(|gc| {
             f(&Cx {

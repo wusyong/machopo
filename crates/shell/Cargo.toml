@@ -24,6 +24,10 @@ doctest = false
 [lints]
 workspace = true
 
+[features]
+# `MACHOPO_CENSUS=<file>`: what each binding call makes (`base::census`).
+census = ["dom_js/census"]
+
 [dependencies]
 base.workspace = true
 gfx.workspace = true

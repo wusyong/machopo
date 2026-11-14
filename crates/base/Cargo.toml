@@ -11,5 +11,9 @@ license.workspace = true
 [lib]
 doctest = false
 
+[features]
+# Keeps the census of what each binding call makes (`census`).
+census = []
+
 [lints]
 workspace = true

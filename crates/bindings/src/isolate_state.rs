@@ -538,6 +538,7 @@ impl<'s, T: Any> InfoState<'s, T> for StateIndexInfo<'s, T> {
         if cfg!(debug_assertions) {
             INFO_SCOPES.set(INFO_SCOPES.get().wrapping_add(1));
         }
+        base::census::count(base::census::Kind::Scope);
         // SAFETY: as `StateInfo::with_scope`'s, of an interceptor's info
         // (rusty_v8's own trampoline makes its scope of it).
         v8::callback_scope!(unsafe scope, self.info);
@@ -630,6 +631,7 @@ impl<'s, T: Any> InfoState<'s, T> for StateNameInfo<'s, T> {
         if cfg!(debug_assertions) {
             INFO_SCOPES.set(INFO_SCOPES.get().wrapping_add(1));
         }
+        base::census::count(base::census::Kind::Scope);
         // SAFETY: as `StateIndexInfo::with_scope`'s.
         v8::callback_scope!(unsafe scope, self.info);
         f(
@@ -739,6 +741,13 @@ impl<'s> InfoHandles<'_, 's> {
     }
 }
 
+/// A callback's run in the census (`base::census`), named by its type;
+/// nothing unless the census is kept.
+#[inline(always)]
+fn census_call<C>() -> base::census::Call {
+    base::census::Call::enter(std::any::type_name::<C>, elise::roots_made)
+}
+
 thread_local! {
     /// The scopes the info callbacks made on this thread
     /// (`StateInfo::with_scope`), for the tests. Counted in debug builds
@@ -836,6 +845,7 @@ impl<'s, T: Any, K> StateInfo<'s, T, K> {
         if cfg!(debug_assertions) {
             INFO_SCOPES.set(INFO_SCOPES.get().wrapping_add(1));
         }
+        base::census::count(base::census::Kind::Scope);
         // SAFETY: V8's callback info, alive for `'s`, as rusty_v8's
         // trampoline makes a scope of; the handles made in it are of V8's
         // own handle scope of the callback, so they outlive this scope
@@ -856,6 +866,7 @@ impl<'s, T: Any, K> StateInfo<'s, T, K> {
 unsafe extern "C" fn info_method_trampoline<T: Any, C: StateInfoMethod<T>>(
     info: *const v8::FunctionCallbackInfo,
 ) {
+    let _call = census_call::<C>();
     C::call(StateInfo {
         // SAFETY: V8's callback info, valid for the call.
         info: unsafe { &*info },
@@ -867,6 +878,7 @@ unsafe extern "C" fn info_method_trampoline<T: Any, C: StateInfoMethod<T>>(
 unsafe extern "C" fn info_function_trampoline<T: Any, C: StateInfoFunction<T>>(
     info: *const v8::FunctionCallbackInfo,
 ) {
+    let _call = census_call::<C>();
     C::call(StateInfo {
         // SAFETY: V8's callback info, valid for the call.
         info: unsafe { &*info },
@@ -880,6 +892,7 @@ unsafe extern "C" fn info_indexed_trampoline<T: Any, G: StateInfoIndexedGetter<T
     index: u32,
     info: *const v8::PropertyCallbackInfo<v8::Value>,
 ) -> v8::Intercepted {
+    let _call = census_call::<G>();
     // SAFETY: V8's callback info, valid for the call.
     let info = unsafe { &*info };
     G::get(StateIndexInfo {
@@ -896,6 +909,7 @@ unsafe extern "C" fn info_named_get_trampoline<T: Any, G: StateInfoNamedGetter<T
     name: v8::SealedLocal<v8::Name>,
     info: *const v8::PropertyCallbackInfo<v8::Value>,
 ) -> v8::Intercepted {
+    let _call = census_call::<G>();
     // SAFETY: V8's callback info, valid for the call.
     let info = unsafe { &*info };
     G::get(StateNameInfo {
@@ -914,6 +928,7 @@ unsafe extern "C" fn info_named_set_trampoline<T: Any, S: StateInfoNamedSetter<T
     value: v8::SealedLocal<v8::Value>,
     info: *const v8::PropertyCallbackInfo<v8::Boolean>,
 ) -> v8::Intercepted {
+    let _call = census_call::<S>();
     // SAFETY: V8's callback info, valid for the call. Its return value's
     // type is a phantom of rusty_v8's (`PropertyCallbackInfo` is
     // `repr(C)` of the raw info and a `PhantomData`), and a setter's is
@@ -947,6 +962,8 @@ fn function_trampoline<'s, T: Any, C: StateCallback<T>>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'s>,
 ) {
+    let _call = census_call::<C>();
+    base::census::count(base::census::Kind::TrampolineScope);
     C::call(
         StateScope {
             scope,
@@ -965,6 +982,8 @@ fn indexed_trampoline<'s, T: Any, G: StateIndexedGetter<T>>(
     args: v8::PropertyCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
+    let _call = census_call::<G>();
+    base::census::count(base::census::Kind::TrampolineScope);
     let this = Receiver(args.holder());
     G::get(
         StateScope {
@@ -984,6 +1003,8 @@ fn indexed_query<'s, T: Any, G: StateIndexedGetter<T>>(
     args: v8::PropertyCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Integer>,
 ) -> v8::Intercepted {
+    let _call = census_call::<G>();
+    base::census::count(base::census::Kind::TrampolineScope);
     G::query(state_scope(scope), index, args, rv)
 }
 
@@ -992,6 +1013,8 @@ fn indexed_enumerate<'s, T: Any, G: StateIndexedGetter<T>>(
     args: v8::PropertyCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Array>,
 ) {
+    let _call = census_call::<G>();
+    base::census::count(base::census::Kind::TrampolineScope);
     G::enumerate(state_scope(scope), args, rv);
 }
 
@@ -1008,6 +1031,8 @@ fn named_get<'s, T: Any, N: StateNamedProperties<T>>(
     args: v8::PropertyCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
+    let _call = census_call::<N>();
+    base::census::count(base::census::Kind::TrampolineScope);
     N::get(state_scope(scope), PropertyKey::Name(name), args, rv)
 }
 
@@ -1017,6 +1042,8 @@ fn named_query<'s, T: Any, N: StateNamedProperties<T>>(
     args: v8::PropertyCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Integer>,
 ) -> v8::Intercepted {
+    let _call = census_call::<N>();
+    base::census::count(base::census::Kind::TrampolineScope);
     N::query(state_scope(scope), PropertyKey::Name(name), args, rv)
 }
 
@@ -1027,6 +1054,8 @@ fn named_set<'s, T: Any, N: StateNamedProperties<T>>(
     args: v8::PropertyCallbackArguments<'s>,
     _: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
+    let _call = census_call::<N>();
+    base::census::count(base::census::Kind::TrampolineScope);
     N::set(state_scope(scope), PropertyKey::Name(name), value, args)
 }
 
@@ -1037,6 +1066,8 @@ fn named_define<'s, T: Any, N: StateNamedProperties<T>>(
     args: v8::PropertyCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
+    let _call = census_call::<N>();
+    base::census::count(base::census::Kind::TrampolineScope);
     N::define(
         state_scope(scope),
         PropertyKey::Name(name),
@@ -1052,6 +1083,8 @@ fn named_delete<'s, T: Any, N: StateNamedProperties<T>>(
     args: v8::PropertyCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
+    let _call = census_call::<N>();
+    base::census::count(base::census::Kind::TrampolineScope);
     N::delete(state_scope(scope), PropertyKey::Name(name), args, rv)
 }
 
@@ -1060,6 +1093,8 @@ fn named_enumerate<'s, T: Any, N: StateNamedProperties<T>>(
     args: v8::PropertyCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Array>,
 ) {
+    let _call = census_call::<N>();
+    base::census::count(base::census::Kind::TrampolineScope);
     N::enumerate(state_scope(scope), args, rv);
 }
 
@@ -1328,6 +1363,8 @@ fn indexed_set_trampoline<'s, T: Any, S: StateIndexedSetter<T>>(
     args: v8::PropertyCallbackArguments<'s>,
     _: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
+    let _call = census_call::<S>();
+    base::census::count(base::census::Kind::TrampolineScope);
     S::set(state_scope(scope), index, value, args)
 }
 
@@ -1456,6 +1493,7 @@ extern "C" fn access_check<T: Any, A: StateAccessCheck<T>>(
     accessed: v8::Local<'_, v8::Object>,
     _: v8::Local<'_, v8::Value>,
 ) -> bool {
+    let _call = census_call::<A>();
     // SAFETY: V8 calls this on the isolate's thread, while script of
     // `accessing` runs (an access of its), so a callback scope may be
     // opened on it.
@@ -1470,6 +1508,7 @@ extern "C" fn refused_access<T: Any, A: StateAccessCheck<T>>(
     _: v8::AccessType,
     _: v8::Local<'_, v8::Value>,
 ) {
+    let _call = census_call::<A>();
     // SAFETY: as `access_check`'s: V8 calls this on the isolate's thread,
     // as script's access is refused.
     v8::callback_scope!(unsafe scope, target);

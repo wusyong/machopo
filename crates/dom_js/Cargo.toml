@@ -14,6 +14,9 @@ doctest = false
 [lints]
 workspace = true
 
+[features]
+census = ["bindings/census"]
+
 [dependencies]
 # A keyframes argument as read, for `animate()`.
 animation.workspace = true

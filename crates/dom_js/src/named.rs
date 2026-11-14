@@ -109,6 +109,7 @@ struct NamedGetter<M>(std::marker::PhantomData<M>);
 impl<M: TypedMember> bindings::StateInfoNamedGetter<State> for NamedGetter<M> {
     fn get(info: bindings::StateNameInfo<'_, State>) -> v8::Intercepted {
         let mut front = crate::info_front::InfoFront::<crate::info_front::NamedGet>::new(info);
+        crate::templates::census_label::<M>();
         M::call(&mut front);
         if front.noted().0 {
             v8::Intercepted::kNo
@@ -125,6 +126,7 @@ struct NamedSetter<M>(std::marker::PhantomData<M>);
 impl<M: TypedMember> bindings::StateInfoNamedSetter<State> for NamedSetter<M> {
     fn set(info: bindings::StateNameInfo<'_, State>) -> v8::Intercepted {
         let mut front = crate::info_front::InfoFront::<crate::info_front::NamedSet>::new(info);
+        crate::templates::census_label::<M>();
         M::call(&mut front);
         front.report();
         if front.noted().0 {

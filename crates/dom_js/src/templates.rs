@@ -859,6 +859,22 @@ impl<M: TypedMember> bindings::StateInfoFunction<State> for LegacyCaller<M> {
     }
 }
 
+/// Names the running callback's member in the census (`base::census`);
+/// nothing unless the census is kept.
+#[inline(always)]
+pub(crate) fn census_label<M: TypedMember>() {
+    base::census::label(
+        INTERFACES[M::INTERFACE].name,
+        M::NAME,
+        match M::KIND {
+            MemberKind::Getter => "getter",
+            MemberKind::Setter => "setter",
+            MemberKind::Constructor => "constructor",
+            _ => "method",
+        },
+    );
+}
+
 /// A member's callback: its typed path through the front end that is
 /// V8's callback info (`info_front::InfoFront`), on the isolate's DOM,
 /// its receiver checked against the function's signature; V8 told of the
@@ -868,6 +884,7 @@ pub(crate) struct InfoMember<M>(PhantomData<M>);
 impl<M: TypedMember> bindings::StateInfoMethod<State> for InfoMember<M> {
     fn call(info: bindings::StateInfo<'_, State>) {
         let mut front = crate::info_front::InfoFront::<crate::info_front::Method>::new(info);
+        census_label::<M>();
         M::call(&mut front);
         if M::KIND != MemberKind::Getter {
             front.report();
@@ -882,6 +899,7 @@ pub(crate) struct InfoStatic<M>(PhantomData<M>);
 impl<M: TypedMember> bindings::StateInfoFunction<State> for InfoStatic<M> {
     fn call(info: bindings::StateInfo<'_, State, bindings::Unsigned>) {
         let mut front = crate::info_front::InfoFront::<crate::info_front::Static>::new(info);
+        census_label::<M>();
         M::call(&mut front);
         if M::KIND != MemberKind::Getter {
             front.report();
@@ -898,6 +916,7 @@ pub(crate) struct InfoConstructor<M>(PhantomData<M>);
 impl<M: TypedMember> bindings::StateInfoFunction<State> for InfoConstructor<M> {
     fn call(info: bindings::StateInfo<'_, State, bindings::Unsigned>) {
         let mut front = crate::info_front::InfoFront::<crate::info_front::Construct>::new(info);
+        census_label::<M>();
         M::call(&mut front);
         front.report();
     }
@@ -913,6 +932,7 @@ pub(crate) fn call_member<'s, M: TypedMember, A: crate::front::CallArgs<'s>>(
     rv: v8::ReturnValue<'s>,
 ) {
     let mut front = WholeFront::new(scope, args, rv);
+    census_label::<M>();
     M::call(&mut front);
     if M::KIND != MemberKind::Getter {
         front.report();
@@ -1306,6 +1326,7 @@ struct Indexed<M>(PhantomData<M>);
 impl<M: TypedMember> bindings::StateInfoIndexedGetter<State> for Indexed<M> {
     fn get(info: bindings::StateIndexInfo<'_, State>) -> v8::Intercepted {
         let mut front = crate::info_front::InfoFront::<crate::info_front::IndexedGet>::new(info);
+        census_label::<M>();
         M::call(&mut front);
         if front.noted().0 {
             v8::Intercepted::kNo
@@ -1330,6 +1351,7 @@ impl<M: TypedMember> bindings::StateIndexedGetter<State> for Indexed<M> {
             undefined: v8::undefined(scope.scope()).into(),
         };
         let mut front = WholeFront::new(scope, &call, rv);
+        census_label::<M>();
         M::call(&mut front);
         if front.returned_no_item() {
             v8::Intercepted::kNo

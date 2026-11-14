@@ -14,6 +14,11 @@ doctest = false
 [lints]
 workspace = true
 
+[features]
+# The census of what each binding call makes (`base::census`), the heap's
+# count of roots with it.
+census = ["base/census", "elise/census"]
+
 [dependencies]
 base.workspace = true
 # A `gc` heap marking with V8's major GCs (`unified_heap`).
