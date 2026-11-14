@@ -288,6 +288,53 @@ fn numbers_booleans_and_objects_need_no_scope() {
     }
 }
 
+/// A boolean argument that is nothing or a small integer is told by the
+/// value alone, as a boolean is: no scope. An optional one left out is
+/// undefined (`arc`'s `counterclockwise`, which most calls leave out).
+#[test]
+fn a_boolean_argument_of_nothing_or_a_small_integer_needs_no_scope() {
+    let mut env = Env::window("about:blank");
+    env.eval(
+        "document.appendChild(document.createElement('html')).appendChild(document.createElement('body')); \
+         n = document.body; ctx = document.createElement('canvas').getContext('2d'); 0",
+    );
+    for (source, value) in [
+        ("n.toggleAttribute('hidden', 1)", "true"),
+        ("n.toggleAttribute('hidden', 0)", "false"),
+        ("n.toggleAttribute('hidden', -1)", "true"),
+        ("n.toggleAttribute('hidden', null)", "false"),
+        ("n.toggleAttribute('hidden', true)", "true"),
+        ("n.toggleAttribute('hidden', undefined)", "false"),
+        (
+            "ctx.beginPath(); ctx.arc(5, 5, 3, 0, 3); ctx.isPointInPath(5, 7)",
+            "true",
+        ),
+        (
+            "ctx.beginPath(); ctx.arc(5, 5, 3, 0, 3, 0); ctx.isPointInPath(5, 7)",
+            "true",
+        ),
+        (
+            "ctx.beginPath(); ctx.arc(5, 5, 3, 0, 3, 1); ctx.isPointInPath(5, 7)",
+            "false",
+        ),
+    ] {
+        let before = crate::env::info_scopes();
+        let found = env.eval(source);
+        assert_eq!(found, value, "{source}");
+        assert_eq!(crate::env::info_scopes(), before, "{source}: no scope");
+    }
+    // Anything else is V8's `ToBoolean`, in a scope.
+    for (source, value) in [
+        ("n.toggleAttribute('hidden', 0.5)", "true"),
+        ("n.toggleAttribute('hidden', NaN)", "false"),
+        ("n.toggleAttribute('hidden', 'x')", "true"),
+    ] {
+        let before = crate::env::info_scopes();
+        assert_eq!(env.eval(source), value, "{source}");
+        assert!(crate::env::info_scopes() > before, "{source}: a scope");
+    }
+}
+
 /// An argument that isn't a number or a boolean is converted by the whole
 /// front end (`ToNumber`, which may run script; `ToBoolean`), with what
 /// WebIDL gives: a negative `unsigned long` wraps, a `double` that isn't
@@ -301,10 +348,8 @@ fn numbers_booleans_and_objects_converted_or_made_make_a_scope() {
         ("t.substringData('1', { valueOf() { return 3; } })", "bcd"),
         ("t.substringData(1.9, 3.2)", "bcd"),
         ("t.substringData(4294967297, 2)", "bc"),
-        ("n.toggleAttribute('hidden', 1)", "true"),
         ("n.toggleAttribute('hidden', '')", "false"),
         ("n.toggleAttribute('hidden', {})", "true"),
-        ("n.toggleAttribute('hidden', null)", "false"),
         (
             "try { r.compareBoundaryPoints(0, n); 'none' } catch (e) { e.name }",
             "TypeError",

@@ -39,6 +39,7 @@ mod history;
 mod html_elements;
 mod idle;
 mod images;
+mod indexed_query;
 mod info_front;
 mod intersection_observers;
 mod links;

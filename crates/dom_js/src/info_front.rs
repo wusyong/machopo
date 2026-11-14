@@ -1620,15 +1620,22 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         K::arg(&self.info, index).is_null_or_undefined()
     }
 
-    /// A boolean itself is read at once; anything else is `ToBoolean`'s.
+    /// A boolean itself is read at once, and so is what script most often
+    /// passes for one: nothing (undefined, or null) and a small integer
+    /// (`arc(.., 0)`), which `ToBoolean` tells by the value alone. Anything
+    /// else (a string, an object, a double) is V8's `ToBoolean`, in a
+    /// scope.
     #[inline(always)]
     fn bool_arg(&mut self, index: usize) -> bool {
         let value = K::arg(&self.info, index);
         if value.is_true() {
             return true;
         }
-        if value.is_false() {
+        if value.is_false() || value.is_null_or_undefined() {
             return false;
+        }
+        if let Some(integer) = v8::machopo::as_smi(value) {
+            return integer != 0;
         }
         self.with_scoped(|scoped| scoped.bool_arg(index))
     }

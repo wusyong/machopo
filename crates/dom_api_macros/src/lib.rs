@@ -954,6 +954,23 @@ fn expand(table: &Table) -> syn::Result<Tokens> {
             let Some((kind, visit, call)) = &entry.path else {
                 continue;
             };
+            // An indexed getter's interface's `length`, read on its own:
+            // what tells its supported property indices.
+            let indexed_length = if *visit == "indexed" {
+                let Some(length) = interface.members.iter().find_map(|member| match member {
+                    MemberDef::Attribute { name, get, .. } if name == "length" => Some(get),
+                    _ => None,
+                }) else {
+                    return Err(syn::Error::new(
+                        entry.name.span(),
+                        "an interface with an indexed getter has a `length` attribute \
+                         (its supported property indices are those below it)",
+                    ));
+                };
+                indexed_length(name, length)
+            } else {
+                Tokens::new()
+            };
             let visit = Ident::new(visit, Span::call_site());
             let kind_ident = kind.ident();
             let js = if entry.anonymous {
@@ -968,6 +985,7 @@ fn expand(table: &Table) -> syn::Result<Tokens> {
                     const NAME: &'static str = #js;
                     const KIND: #api::declare::MemberKind = #api::declare::MemberKind::#kind_ident;
                     #call
+                    #indexed_length
                 }
             });
             visits.extend(quote!(#visitor.#visit::<M<#member>>();));
@@ -1575,6 +1593,25 @@ fn getter(iface: &Ident, ty: &Type, get: &Path) -> Tokens {
                 }
                 ::std::result::Result::Err(#error) => #front.throw(#error),
             }
+        }
+    }
+}
+
+/// An indexed getter's `indexed_length`: its interface's `length`'s
+/// function on `this`, in an operation with no safepoint; nothing of the
+/// engine's is made. A `length` that fails is no index.
+fn indexed_length(iface: &Ident, get: &Path) -> Tokens {
+    let api = api();
+    let (front, op, cx, this_, ..) = locals();
+    let this = this(iface);
+    quote! {
+        fn indexed_length<F: #api::typed::Front>(#front: &mut F) -> u32 {
+            #front
+                .read(|#cx, #op| {
+                    let #this_ = #this;
+                    #get(#cx, #this_)
+                })
+                .unwrap_or(0)
         }
     }
 }
@@ -2953,6 +2990,7 @@ mod tests {
             method d() = w::d;
             #[indexed(getter)]
             method e(index: u32) -> u32 = w::e;
+            attribute length: u32, get = w::length;
         }";
         let tokens = expand(&syn::parse_str::<Table>(table).unwrap())
             .unwrap()
@@ -3010,6 +3048,7 @@ mod tests {
         interface SVGElement : Element [element svg] {}
         interface SVGUseElement : SVGElement [element svg r#use] {}
         interface C [type = C] {
+            attribute length: u32, get = c::length;
             #[indexed]
             method item(index: u32) -> Option<Element> = c::item;
             method other(index: u32) -> Option<Element> = c::other;
@@ -3025,12 +3064,29 @@ mod tests {
                 "interface C [type = C] {
                     #[indexed(getter)]
                     method getter(index: u32) -> u32 = c::item;
+                    attribute length: u32, get = c::length;
                 }",
             )
             .unwrap(),
         )
         .unwrap()
         .to_string();
+        // The getter tells its interface's length by the attribute's
+        // function, on its own: no other member does.
+        assert_eq!(
+            anonymous.matches("fn indexed_length").count(),
+            1,
+            "{anonymous}"
+        );
+        assert!(anonymous.contains("c :: length (cx , this)"), "{anonymous}");
+        // A `length` that fails tells of no index.
+        assert!(anonymous.contains(". unwrap_or (0)"), "{anonymous}");
+        assert_eq!(
+            error(
+                "interface C [type = C] { #[indexed] method item(index: u32) -> u32 = c::item; }"
+            ),
+            "an interface with an indexed getter has a `length` attribute (its supported property indices are those below it)"
+        );
         assert!(
             anonymous
                 .contains("name : \"\" , kind : :: dom_api :: declare :: MemberKind :: Method"),

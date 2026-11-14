@@ -8615,6 +8615,14 @@ pub trait TypedMember: 'static {
 
     /// One call, through `front` (which opens its operations).
     fn call<F: Front>(front: &mut F);
+
+    /// An indexed getter's interface's `length`, of `front`'s `this`: its
+    /// supported property indices are those below it (WebIDL's, which an
+    /// interceptor's query and enumerator ask for, with no item made).
+    /// One operation with no safepoint. Only an indexed getter has one.
+    fn indexed_length<F: Front>(_front: &mut F) -> u32 {
+        unreachable!("only an indexed getter tells its interface's length")
+    }
 }
 
 /// What visits every member's typed path (a front end making its calls),

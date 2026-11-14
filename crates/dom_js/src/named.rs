@@ -468,37 +468,6 @@ fn has<'a, 's, 'i>(
     (scope, has)
 }
 
-/// Whether the indexed getter `M` gives an item at `index` (`None` if it
-/// threw): neither null nor an empty string (a `DOMString` getter's past
-/// its length), as its interceptor sees it.
-pub(crate) fn has_index<'a, 's, 'i, M: TypedMember>(
-    mut scope: Scope<'a, 's, 'i>,
-    index: u32,
-    this: v8::Local<'s, v8::Object>,
-) -> (Scope<'a, 's, 'i>, Option<bool>) {
-    let index = v8::Integer::new_from_unsigned(scope.scope(), index).into();
-    let (scope, got) = run(scope, call::<M>, this, [Some(index), None]);
-    let has = match got {
-        Got::Threw => None,
-        Got::Undefined | Got::Null => Some(false),
-        Got::String(string) => Some(!string.is_empty()),
-        Got::Object(..) => Some(true),
-        Got::Strings(_) | Got::Bool(_) => {
-            unreachable!("an indexed getter gives a string or an object")
-        }
-    };
-    (scope, has)
-}
-
-/// Whether the indexed interceptor's interface (by its index in the
-/// callbacks' data) has an indexed setter.
-pub(crate) fn has_indexed_setter(
-    scope: &mut Scope<'_, '_, '_>,
-    args: &v8::PropertyCallbackArguments<'_>,
-) -> bool {
-    calls(scope, args).indexed_set.is_some()
-}
-
 /// What the setter given `key` and `value` did.
 enum Assigned {
     /// It took the name.

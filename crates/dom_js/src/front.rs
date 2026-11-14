@@ -1981,17 +1981,6 @@ impl<'a, 's, 'i, 'r, A: CallArgs<'s>> WholeFront<'a, 's, 'i, 'r, A> {
     pub(crate) fn report(&mut self) {
         state::report(&mut self.base.scope);
     }
-
-    /// The call's result as it stands, for an indexed getter: a null one
-    /// is no item, and so is an empty string: CSSOM's `item` isn't
-    /// nullable, and gives one past the end (its supported indices are
-    /// below `length`); no item of a list of strings is empty.
-    pub(crate) fn returned_no_item(&mut self) -> bool {
-        let scope = self.base.scope.scope();
-        let value = self.base.rv.full(scope).get(scope);
-        value.is_null()
-            || v8::Local::<v8::String>::try_from(value).is_ok_and(|string| string.length() == 0)
-    }
 }
 
 impl<'s, A: CallArgs<'s>> Scoped<'_, 's, '_, '_, A> {

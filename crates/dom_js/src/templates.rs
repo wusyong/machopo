@@ -19,7 +19,7 @@ use dom_api::{CALLBACK_INTERFACES, INTERFACES, MemberKind, TypedMember, TypedVis
 
 use crate::cross_origin::{self, CrossOriginMember};
 use crate::exception;
-use crate::front::{IndexArgs, WholeFront};
+use crate::front::WholeFront;
 use crate::named::{IndexedSetter, NamedCalls, NamedProperties};
 use crate::state::{self, Scope, State};
 use crate::window::CachedAccessor;
@@ -1334,82 +1334,26 @@ impl<M: TypedMember> bindings::StateInfoIndexedGetter<State> for Indexed<M> {
             v8::Intercepted::kYes
         }
     }
-}
 
-impl<M: TypedMember> bindings::StateIndexedGetter<State> for Indexed<M> {
-    fn get<'s>(
-        mut scope: Scope<'_, 's, '_>,
-        index: u32,
-        _: v8::PropertyCallbackArguments<'s>,
-        this: bindings::Receiver<'s>,
-        rv: v8::ReturnValue<'_, v8::Value>,
-    ) -> v8::Intercepted {
-        let call = IndexArgs {
-            index: v8::Integer::new_from_unsigned(scope.scope(), index).into(),
-            this: this.object(),
-            receiver: Some(this),
-            undefined: v8::undefined(scope.scope()).into(),
-        };
-        let mut front = WholeFront::new(scope, &call, rv);
-        census_label::<M>();
-        M::call(&mut front);
-        if front.returned_no_item() {
-            v8::Intercepted::kNo
-        } else {
-            v8::Intercepted::kYes
-        }
+    /// WebIDL's supported property indices: those below the interface's
+    /// `length`, read alone (no item is made, nothing is rooted). The
+    /// property is writable if the object's interface has an indexed
+    /// setter (its index is the interceptor's data).
+    fn query(mut info: bindings::StateIndexInfo<'_, State>) -> Option<bool> {
+        let index = info.index();
+        let interface = v8::machopo::as_smi(info.data())
+            .and_then(|interface| usize::try_from(interface).ok())
+            .expect("indexed interceptors carry their interface's index");
+        let writable = bindings::InfoState::state(&mut info).0.named[interface]
+            .indexed_set
+            .is_some();
+        let mut front = crate::info_front::InfoFront::<crate::info_front::IndexedGet>::new(info);
+        (index < M::indexed_length(&mut front)).then_some(writable)
     }
 
-    /// WebIDL's indexed property: enumerable, configurable, read-only
-    /// unless the interface has an indexed setter.
-    fn query<'s>(
-        mut scope: Scope<'_, 's, '_>,
-        index: u32,
-        args: v8::PropertyCallbackArguments<'s>,
-        mut rv: v8::ReturnValue<'_, v8::Integer>,
-    ) -> v8::Intercepted {
-        let setter = crate::named::has_indexed_setter(&mut scope, &args);
-        match crate::named::has_index::<M>(scope, index, args.holder()).1 {
-            Some(false) => v8::Intercepted::kNo,
-            None => v8::Intercepted::kYes,
-            Some(true) => {
-                let attributes = if setter {
-                    v8::PropertyAttribute::NONE
-                } else {
-                    v8::PropertyAttribute::READ_ONLY
-                };
-                rv.set_int32(attributes.as_u32().cast_signed());
-                v8::Intercepted::kYes
-            }
-        }
-    }
-
-    /// The supported property indices: from 0 while there is an item (an
-    /// indexed getter's are each below its `length`).
-    fn enumerate<'s>(
-        mut scope: Scope<'_, 's, '_>,
-        args: v8::PropertyCallbackArguments<'s>,
-        mut rv: v8::ReturnValue<'_, v8::Array>,
-    ) {
-        let this = args.holder();
-        let mut count = 0_u32;
-        loop {
-            let (back, has) = crate::named::has_index::<M>(scope, count, this);
-            scope = back;
-            match has {
-                Some(true) => {}
-                Some(false) => break,
-                None => return,
-            }
-            let Some(next) = count.checked_add(1) else {
-                break;
-            };
-            count = next;
-        }
-        let indices: Vec<v8::Local<'s, v8::Value>> = (0..count)
-            .map(|index| v8::Integer::new_from_unsigned(scope.scope(), index).into())
-            .collect();
-        rv.set(v8::Array::new_with_elements(scope.scope(), &indices));
+    fn length(info: bindings::StateIndexInfo<'_, State>) -> u32 {
+        let mut front = crate::info_front::InfoFront::<crate::info_front::IndexedGet>::new(info);
+        M::indexed_length(&mut front)
     }
 }
 

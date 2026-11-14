@@ -206,6 +206,15 @@ pub trait StateInfoMethod<T>: 'static {
 /// what `set_state_info_indexed_getter` calls for `object[index]`.
 pub trait StateInfoIndexedGetter<T>: 'static {
     fn get(info: StateIndexInfo<'_, T>) -> v8::Intercepted;
+
+    /// Whether the object has `info`'s index, and if so whether the
+    /// property is writable: what `index in object` and a property's
+    /// descriptor ask. No item is made for it.
+    fn query(info: StateIndexInfo<'_, T>) -> Option<bool>;
+
+    /// How many indices the object has, from 0: what its keys are listed
+    /// from (`info`'s index is none's).
+    fn length(info: StateIndexInfo<'_, T>) -> u32;
 }
 
 /// A named getter given V8's callback info alone (`StateNameInfo`): what
@@ -501,6 +510,12 @@ impl<'s, T: Any> StateIndexInfo<'s, T> {
     #[inline(always)]
     pub fn holder(&self) -> Receiver<'s> {
         Receiver(self.info.arguments().holder())
+    }
+
+    /// The interceptor's data (`set_state_info_indexed_getter`'s).
+    #[inline(always)]
+    pub fn data(&self) -> v8::Local<'s, v8::Value> {
+        self.info.arguments().data()
     }
 }
 
@@ -901,6 +916,69 @@ unsafe extern "C" fn info_indexed_trampoline<T: Any, G: StateInfoIndexedGetter<T
         index,
         _state: PhantomData,
     })
+}
+
+/// An info indexed getter's query: V8's own callback (`query_raw`), given
+/// the index and the info alone; no scope is made.
+unsafe extern "C" fn info_indexed_query_trampoline<T: Any, G: StateInfoIndexedGetter<T>>(
+    index: u32,
+    info: *const v8::PropertyCallbackInfo<v8::Integer>,
+) -> v8::Intercepted {
+    let _call = census_call::<G>();
+    // SAFETY: V8's callback info, valid for the call.
+    let attributes = unsafe { &*info };
+    // SAFETY: as `info_named_set_trampoline`'s: the return value's type is
+    // a phantom of rusty_v8's, and `query` is given no way to write it
+    // (the attributes are written here, as the integer they are).
+    let info = unsafe { &*info.cast::<v8::PropertyCallbackInfo<v8::Value>>() };
+    let Some(writable) = G::query(StateIndexInfo {
+        info,
+        isolate: info.isolate(),
+        index,
+        _state: PhantomData,
+    }) else {
+        return v8::Intercepted::kNo;
+    };
+    // WebIDL's indexed property: enumerable, configurable, read-only
+    // unless the interface has an indexed setter.
+    let attribute = if writable {
+        v8::PropertyAttribute::NONE
+    } else {
+        v8::PropertyAttribute::READ_ONLY
+    };
+    v8::ReturnValue::from_property_callback_info(attributes)
+        .set_int32(attribute.as_u32().cast_signed());
+    v8::Intercepted::kYes
+}
+
+/// An info indexed getter's enumerator: V8's own callback
+/// (`enumerator_raw`); the indices below the object's length, their array
+/// made in a scope made here (V8 allocates it).
+unsafe extern "C" fn info_indexed_enumerate_trampoline<T: Any, G: StateInfoIndexedGetter<T>>(
+    info: *const v8::PropertyCallbackInfo<v8::Array>,
+) {
+    let _call = census_call::<G>();
+    // SAFETY: V8's callback info, valid for the call.
+    let array = unsafe { &*info };
+    // SAFETY: as `info_indexed_query_trampoline`'s.
+    let info = unsafe { &*info.cast::<v8::PropertyCallbackInfo<v8::Value>>() };
+    let length = G::length(StateIndexInfo {
+        info,
+        isolate: info.isolate(),
+        index: 0,
+        _state: PhantomData,
+    });
+    if cfg!(debug_assertions) {
+        INFO_SCOPES.set(INFO_SCOPES.get().wrapping_add(1));
+    }
+    base::census::count(base::census::Kind::Scope);
+    // SAFETY: as `StateInfo::with_scope`'s, of an interceptor's info.
+    v8::callback_scope!(unsafe scope, array);
+    let indices: Vec<v8::Local<'_, v8::Value>> = (0..length)
+        .map(|index| v8::Integer::new_from_unsigned(scope, index).into())
+        .collect();
+    v8::ReturnValue::from_property_callback_info(array)
+        .set(v8::Array::new_with_elements(scope, &indices));
 }
 
 /// An info named getter's callback: V8's own (`getter_raw`), given the
@@ -1306,7 +1384,7 @@ pub fn set_state_indexed_getter<T: Any, G: StateIndexedGetter<T>>(
 /// If the isolate's state isn't a `T`.
 pub fn set_state_info_indexed_getter<
     T: Any,
-    G: StateInfoIndexedGetter<T> + StateIndexedGetter<T>,
+    G: StateInfoIndexedGetter<T>,
     S: StateIndexedSetter<T>,
 >(
     scope: &mut v8::PinScope<'_, '_>,
@@ -1320,8 +1398,8 @@ pub fn set_state_info_indexed_getter<
     );
     let configuration = v8::IndexedPropertyHandlerConfiguration::new()
         .getter_raw(info_indexed_trampoline::<T, G>)
-        .query(indexed_query::<T, G>)
-        .enumerator(indexed_enumerate::<T, G>)
+        .query_raw(info_indexed_query_trampoline::<T, G>)
+        .enumerator_raw(info_indexed_enumerate_trampoline::<T, G>)
         .data(data);
     template.set_indexed_property_handler(if setter {
         configuration.setter(indexed_set_trampoline::<T, S>)

@@ -1,7 +1,7 @@
 # RFC 0099：索引的 query 只比較索引和長度
 
 - 開始日期：2026-11-14
-- 狀態：📝 草稿
+- 狀態：🚧 已排程：2026-11-14
 - 細節：無
 
 ## 摘要
@@ -35,9 +35,9 @@
 
 現在的規則是「getter 給 null 或空字串就是沒有」，改完是「索引小於 `length` 就是有」。兩者在 getter 於長度以內都給東西時相同。WebIDL 的定義是後者（supported property indices，DOM 的集合都定成 `0..length`）。Blink 是前者：它沒有索引的 query，`in` 經過 descriptor 的 callback，那裡呼叫 getter、getter 不攔截就不攔截（「先例」）；現在的 machopo 和它一樣。要逐一確認 16 個介面在長度以內不會給 null；有的話那是 getter 或 `length` 的 bug，照 WebIDL 修。
 
-### 另一件：`CanvasRenderingContext2D.arc` 每次開 scope
+### 另一件：布林參數不開 scope
 
-M0 的計數看到 `arc` 每次呼叫都開一個 scope（Speedometer 上 30,298 次），它不建物件，不應該。先查原因；是轉換參數或檢查範圍時走到會丟例外的路的話，改成只在真的要丟時才開。查出來不是小修的話另外記下來，不在這份做。
+M0 的計數看到 `CanvasRenderingContext2D.arc` 每次呼叫都開一個 scope（Speedometer 上 30,298 次）。原因：它最後一個選用的布林參數沒給時是 `undefined`，而布林參數只有剛好是 `true`、`false` 時直接讀，其他的值都走到開 scope 的 `ToBoolean`。改成 `undefined`、`null`（都是 false）和小整數（不是 0 就是 true）也直接讀；字串、物件、不是小整數的數字照舊。沒有動 fork：rusty_v8 的 `boolean_value` 要一個 scope（其實只用它的 isolate），替它加一個只拿 isolate 的入口可以涵蓋全部的值，但這三種已經是實際會碰到的。影響所有吃布林參數的成員。
 
 ### 量法
 
@@ -72,23 +72,16 @@ M0 的計數看到 `arc` 每次呼叫都開一個 scope（Speedometer 上 30,298
 
 ## 已決定的事項
 
-無。
+2026-11-14（使用者：都照建議）：
+
+1. **query 用 `index < length` 判斷**。不選照樣呼叫 getter（仍是會進安全點的操作，front 要多一條路）；不選每個介面手寫一個 `has_index`：14 個介面（另外兩個繼承 `HTMLCollection`）在規格裡都是 `0..length`，手寫的內容就是這一句，卻多一個會和 `length` 不一致的地方。逐一對過：13 個的 getter 和 `length` 讀同一個序列，`HTMLSelectElement` 是兩種算法（getter 從選項的集合取、`length` 走樹數），規則相同。加一個測試守住每個介面「`length` 以內 getter 都給得出、`length` 那一格給不出」。
+2. **`length` 由宣告表產生的入口讀**（回 `u32`，在 `Dom::read` 裡直接呼叫），不經過 front。
+3. **enumerator 一起改**：讀一次 `length`、回 `0..length`（Blink 的 enumerator 也是）。
+4. **布林參數不開 scope 放在這份**：`arc` 每次開 scope 的原因是布林參數的值不是 `true`、`false` 時（數字、`undefined`）走到開 scope 的路；轉成布林值不跑 script、不配置、不丟例外，只要 isolate。影響所有吃布林參數的成員。
 
 ## 待決定
 
-1. **query 怎麼知道有沒有**
-   - A（建議）：`index < length`。照 WebIDL 的定義，也是 Blink 的 enumerator 和 deleter 的判斷；最便宜（一個讀的操作）。缺點：`length` 和 getter 不一致的介面行為會變，而且和 Blink 的 `in` 不是同一種做法（它呼叫 getter）。
-   - B：照樣呼叫 getter，但改成經過只拿 callback info 的 front，結果不建 wrapper。行為完全不變，也是 Blink 判斷的方式；但仍然是一個會進安全點的操作，還要替「只問有沒有」的情況在 front 上多一條路。
-   - C：每個介面在 `dom_api` 另外寫一個 `has_index`。最精確；16 個介面各多一個函式，大多數就是 `index < length`。
-2. **`length` 怎麼讀**
-   - A（建議）：宣告表在展開 `#[indexed]` 的介面時，連同它的 `length` 的 getter 產生一個回 `u32` 的入口，query 在 `Dom::read` 裡直接呼叫它。不經過 front，沒有 V8 的值進出。
-   - B：經過 front 呼叫 `length` 的 typed path，再從回傳值的位置讀回數字。不用動宣告表；但繞一圈，而且 query 的回傳值的位置是放 attribute 的。
-3. **enumerator 要不要一起改**
-   - A（建議）：一起。它和 query 是同一段程式，現在是呼叫 `length + 1` 次 getter。
-   - B：只改 query。enumerator 很少被呼叫（Speedometer 上沒有）。
-4. **`arc` 放不放在這份**
-   - A（建議）：放，先查，小修就做。
-   - B：另外處理，這份只做 query。
+無。
 
 ## 之後的可能
 

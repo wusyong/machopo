@@ -1,0 +1,116 @@
+# The indexed interceptor's query and enumerator, told by the length; a
+# boolean argument read from nothing or a small integer.
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "--", "indexed_query", "info_front", "select", "collections"]
+timeout = 1800
+
+[[mutant]]
+name = "the index at the length is a property"
+file = "crates/dom_js/src/templates.rs"
+from = '''        (index < M::indexed_length(&mut front)).then_some(writable)'''
+to = '''        (index <= M::indexed_length(&mut front)).then_some(writable)'''
+
+[[mutant]]
+name = "every index is a property"
+file = "crates/dom_js/src/templates.rs"
+from = '''        (index < M::indexed_length(&mut front)).then_some(writable)'''
+to = '''        Some(writable)'''
+
+[[mutant]]
+name = "no index is a property"
+file = "crates/dom_js/src/templates.rs"
+from = '''        (index < M::indexed_length(&mut front)).then_some(writable)'''
+to = '''        None'''
+
+[[mutant]]
+name = "an indexed property is always read-only"
+file = "crates/dom_js/src/templates.rs"
+from = '''        (index < M::indexed_length(&mut front)).then_some(writable)'''
+to = '''        (index < M::indexed_length(&mut front)).then_some(false)'''
+
+[[mutant]]
+name = "an indexed property is always writable"
+file = "crates/dom_js/src/templates.rs"
+from = '''        (index < M::indexed_length(&mut front)).then_some(writable)'''
+to = '''        (index < M::indexed_length(&mut front)).then_some(true)'''
+
+[[mutant]]
+name = "the attributes are the other way"
+file = "crates/bindings/src/isolate_state.rs"
+from = '''    let attribute = if writable {'''
+to = '''    let attribute = if !writable {'''
+
+[[mutant]]
+name = "the keys are one fewer"
+file = "crates/bindings/src/isolate_state.rs"
+from = '''    let indices: Vec<v8::Local<'_, v8::Value>> = (0..length)
+        .map(|index| v8::Integer::new_from_unsigned(scope, index).into())'''
+to = '''    let indices: Vec<v8::Local<'_, v8::Value>> = (0..length.saturating_sub(1))
+        .map(|index| v8::Integer::new_from_unsigned(scope, index).into())'''
+
+[[mutant]]
+name = "the keys are one more"
+file = "crates/bindings/src/isolate_state.rs"
+from = '''    let indices: Vec<v8::Local<'_, v8::Value>> = (0..length)
+        .map(|index| v8::Integer::new_from_unsigned(scope, index).into())'''
+to = '''    let indices: Vec<v8::Local<'_, v8::Value>> = (0..=length)
+        .map(|index| v8::Integer::new_from_unsigned(scope, index).into())'''
+
+[[mutant]]
+name = "the keys start at one"
+file = "crates/bindings/src/isolate_state.rs"
+from = '''    let indices: Vec<v8::Local<'_, v8::Value>> = (0..length)
+        .map(|index| v8::Integer::new_from_unsigned(scope, index).into())'''
+to = '''    let indices: Vec<v8::Local<'_, v8::Value>> = (1..length)
+        .map(|index| v8::Integer::new_from_unsigned(scope, index).into())'''
+
+[[mutant]]
+name = "a length that fails is every index"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''                .unwrap_or(0)
+        }
+    }
+}
+
+/// A setter's call'''
+to = '''                .unwrap_or(u32::MAX)
+        }
+    }
+}
+
+/// A setter's call'''
+test = ["cargo", "test", "-q", "-p", "dom_api_macros"]
+
+[[mutant]]
+name = "null and undefined are true"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if value.is_false() || value.is_null_or_undefined() {
+            return false;'''
+to = '''        if value.is_false() {
+            return false;
+        }
+        if value.is_null_or_undefined() {
+            return true;'''
+
+[[mutant]]
+name = "a small integer is true"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            return integer != 0;'''
+to = '''            return true;'''
+
+[[mutant]]
+name = "a small integer is true when zero"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            return integer != 0;'''
+to = '''            return integer == 0;'''
+
+[[mutant]]
+name = "a small integer goes to the scope"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if let Some(integer) = v8::machopo::as_smi(value) {'''
+to = '''        if let Some(integer) = v8::machopo::as_smi(value).filter(|_| false) {'''
+
+[[mutant]]
+name = "nothing goes to the scope"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        if value.is_false() || value.is_null_or_undefined() {'''
+to = '''        if value.is_false() {'''
