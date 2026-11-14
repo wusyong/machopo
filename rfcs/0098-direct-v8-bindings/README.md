@@ -57,17 +57,20 @@ RFC 0097 之後，最熱的路（getter、字串參數）已經只拿 V8 的 cal
 
 **終點的定義**（每一條都可以用測試或 `sanity.py` 檢查）：
 
-1. **成員的呼叫路徑上不建 rusty_v8 的 scope**。V8 那一側要做的事（建字串、物件、陣列，讀寫屬性，丟例外，呼叫函式，接住例外）都經過 fork 裡直接對應 V8 的 C++ API 的入口，拿的是 isolate、context 和 callback 的 handle scope 裡的 handle。例外要明列、附理由（預期只剩每個 interface 跑一次的初始化和測試用的函式）。
-2. **一次呼叫裡不登記 elise 的 root**。root 只給真的要活過這次呼叫的東西（存起來的 listener、timer、pending 的 promise）。呼叫當中要跨過安全點的物件，用比 root 便宜、或根本不需要登記的機制（見 R 線）。
+M0 的數字出來之後範圍縮小了（決定 11）：三種中間層在 Speedometer 上合計約 0.1% 的指令，拿掉它們換不到看得出來的速度，所以只做一致性收穫大、風險低的部分。
+
+1. **scope 該開才開**：會讓 V8 配置、丟例外或跑 script 的路可以當場開一個 rusty_v8 的 scope，其餘不開。成員這一側已經是這樣；剩下的是 V8 會大量呼叫、卻每次先開 scope 的 callback（索引的 query）。
+2. **一次呼叫裡登記的 root 是便宜的**：只活在這次呼叫裡，不進 heap 的 root 表。heap 的 root 表只給真的要活過這次呼叫的東西（存起來的 listener、timer、pending 的 promise）。
 3. **V8 那一側只有一個 front**。會跑 script 的呼叫也在它上面跑；`WholeFront`、`WholeOp`、`Call` 刪掉。
-4. **callback 一律是 V8 原始的 callback**：function、interceptor、iterator、回傳 promise 的成員外面那一層，都不經過 rusty_v8 會先建 scope 的 trampoline。
-5. **不變慢**：每個里程碑對 `main` 量，熱的呼叫的 cycle 和 store forwarding 的衝突數不增加（見「量法」）。
+4. **不變慢**：每個里程碑對 `main` 量，熱的呼叫的 cycle 和 store forwarding 的衝突數不增加（見「量法」）。
+
+草稿原本的終點還有「成員的路上完全不建 scope」和「callback 一律是 V8 原始的」，拿掉了，記在「之後的可能」。
 
 對照 Blink（「先例」）：它產生的 callback 就是這個樣子。handle 直接放在 V8 替 callback 開的 handle scope 裡，沒有另一層 scope；Oilpan 保守地掃 stack，所以 callback 裡的裸指標不用登記；每個成員的程式是產生出來的，沒有第二條路。
 
 ## 詳細設計
 
-這份不定每個里程碑的設計，只定它們的範圍、順序和彼此的關係。每個里程碑開始時另開一份 RFC，照流程先列那一段要決定的事。
+這份不定每個里程碑的設計，只定它們的範圍、順序和彼此的關係。下面「三條線」是草稿時列的全部可能；範圍縮小之後（決定 11）實際要做的只有「里程碑」那張表裡的。每個里程碑開始時另開一份 RFC，照流程先列那一段要決定的事。
 
 ### 三條線
 
@@ -120,14 +123,11 @@ RFC 0097 之後，最熱的路（getter、字串參數）已經只拿 V8 的 cal
 | | 內容 | 線 | 預期的收穫 |
 | --- | --- | --- | --- |
 | M0 | 量測的基準和工具：照路徑數一次呼叫開幾個 scope、登記幾個 root、開幾個操作（Speedometer 和 blink_perf 上各走到幾次）；`bench.py calls` 加冷的路；驗收的腳本連同 cycle 和 store forwarding 的衝突 | | 知道每條路被走到幾次，之後的順序照它調整 |
-| M1 | root 的機制：甲、乙的原型和量測，選定之後做進 elise | R | 回傳沒有 wrapper 的節點和物件（約 80 到 110 條一個） |
-| M2 | 不執行 script 的路直接呼叫 V8：預先建 wrapper、回報大小、丟例外、reject、陣列和物件的結果 | S | `createElement` 這類少一個 scope；丟例外和回傳陣列的路 |
-| M3 | callback 都是 V8 原始的：iterator、interceptor（連同 `PropertyFront`）、`rejecting`、`DOMException` 的 getter | S、F | `for…of`、`forEach`、回傳 promise 的 API |
-| M4 | 會執行 script 的讀取直接呼叫 V8：dictionary、參數的轉換、sequence | S | 帶 dictionary 的建構子、非原始型別的參數 |
-| M5 | 呼叫 JS 不經過 scope；會跑 script 的成員搬到唯一的 front，`this` 和參數不登記 root；刪掉 `WholeFront` | S、R、F | `dispatchEvent`、`click`、走訪；程式少一份 front |
-| M6 | 收尾：`sanity.py` 檢查終點的五條、文件、對 Chrome 的量測 | | |
+| M1 | 便宜的 root：只活在這次呼叫裡，不進 heap 的 root 表（細節在它的 RFC 定） | R | 第一次回傳的物件（`classList`、集合的索引、`TreeWalker`）、會跑 script 的成員的 `this` 和參數 |
+| M2 | 索引的 query 只比較索引和長度：不拿節點、不登記 root，接成 V8 原始的 callback；查 `CanvasRenderingContext2D.arc` 為什麼每次開 scope | S | 用陣列的方法走訪 `NodeList` |
+| M3 | 會跑 script 的成員搬到唯一的 front，刪掉 `WholeFront` | F | 程式少一份 front |
 
-順序的理由：先量（M0），因為 RFC 0097 好幾次估計不準；root 排在最前面（M1），因為它單項最貴，而且它的結果決定 M2 的「預先建 wrapper」還要不要；之後由不執行 script 的（簡單、熱）到會執行的（難）；併 front 放最後，因為它依賴前面全部。M0 的數字出來之後，M2 到 M4 的先後可以對調。
+順序的理由：先量（M0），因為 RFC 0097 好幾次估計不準；root 在併 front 之前（M1 在 M3 之前），因為登記 root 的地方有近兩百處，先定下 root 的寫法，M3 搬成員時直接用新的，不用搬兩次。
 
 每個里程碑做完都是完整的狀態（可以 merge、可以停）。
 
@@ -139,17 +139,17 @@ RFC 0097 每一段用指令數驗收，漏掉了 store forwarding 造成的退�
 - `bench.py blink-perf --against main`：`bindings/` 的頁（一定包含 `create-element`、`gc-forest`）和那個里程碑動到的頁，各三次。
 - 對 Chrome 的腳本（RFC 0097 的 `chrome-compare.py`）：那個里程碑動到的呼叫。
 - 計數的測試：換過的路斷言「這次呼叫沒有建 scope」「沒有登記 root」（debug build 的計數，照 `docs/test-gaps.md` 的做法）。
-- Speedometer 照規定只在使用者要求時量。建議 M1 和 M5 做完時各量一次。
+- Speedometer 照規定只在使用者要求時量。M1 和 M3 做完時各量一次（決定 17）。
 
 ### 測試
 
-- 行為：`dom_js`、`dom_api`、`bindings` 的測試和相關的 WPT 目錄；動到 GC 的里程碑（M1，可能還有 M5）加 elise 的測試、模型、fuzz，merge 之後手動開始 `gc.yml`。
+- 行為：`dom_js`、`dom_api`、`bindings` 的測試和相關的 WPT 目錄；動到 GC 的里程碑（M1）加 elise 的測試、模型、fuzz，merge 之後手動開始 `gc.yml`。
 - 每個里程碑的 mutation test 照 `docs/testing.md`。
-- 終點的五條在 M6 做成 `sanity.py` 的檢查（例如 `dom_js` 的成員的路上不出現 `with_scope`、V8 那一側只有一個 `impl Front`），之後不會退回去。
+- 終點的幾條在 M3 做成 `sanity.py` 的檢查（例如 `dom_js` 的成員的路上不出現 `with_scope`、V8 那一側只有一個 `impl Front`），之後不會退回去。
 
 ### 分階段
 
-見「里程碑」。這份 RFC 自己只做 M0；M1 到 M6 各開一份 RFC，在這份的 `progress.md` 記每個里程碑的狀態和它的 RFC 的編號。
+見「里程碑」。這份 RFC 自己只做 M0；M1 到 M3 各開一份 RFC，在這份的 `progress.md` 記每個里程碑的狀態和它的 RFC 的編號。
 
 ## 缺點
 
@@ -157,8 +157,8 @@ RFC 0097 每一段用指令數驗收，漏掉了 store forwarding 造成的退�
 - **整份換到的速度可能很小**：binding 現在落後 Chrome 的主因不在這三種中間層（「摘要」）。root 在 Speedometer 上佔多少沒有現在的數字（最後一次是 2026-10-24、DOM 還在 cppgc 上時的 2.2%）。
 - **scope 那條線換到的速度很小**：一個 scope 27 條，多數冷的路本體是幾百到上萬條。RFC 0097 的 4m-3 量到換殼對這些路沒有可見的影響。這條線主要是為了一致。
 - **R 線動到 GC**：甲要新的 root 種類，乙動 marking 的開始和收尾。
-- **M5 動行為最複雜的 34 個成員**：重入、例外在哪一步丟、microtask 什麼時候跑、reaction 的順序。
-- **時間長**：六個里程碑，其中 M1 和 M5 各自都不小。
+- **M3 動行為最複雜的 34 個成員**：重入、例外在哪一步丟、microtask 什麼時候跑、reaction 的順序。
+- **時間長**：M1 和 M3 各自都不小。
 - rusty_v8 的 safe API 用型別保證「在對的 isolate 和 context 裡」；直接呼叫之後，這個保證改由 `bindings` 的論證負責。
 
 ## 理由和其他做法
@@ -196,16 +196,21 @@ RFC 0097 每一段用指令數驗收，漏掉了 store forwarding 造成的退�
 9. **待決定的三條等 M0 的數字出來再定**（使用者：現在難以決定；overhead 希望越少越好，但有些看起來留著可能比較合適）。所以終點的五條是方向，不是每一條都一定做到底：M0 量出來某一種中間層在實際的頁面上佔得很少、拿掉它的代價又高時，可以決定留著，寫明留在哪裡、為什麼。
 10. **里程碑的順序維持草稿的**（M1 的 root 在 M2 之前）。
 
+11. **範圍縮小**（M0 的數字出來之後）：只做便宜的 root、索引的 query、單一 front。不選照原本的六個里程碑全做：要動 GC 和 `unsafe` 的論證，換不到速度（三種中間層在 Speedometer 上合計約 0.1% 的指令，`progress.md`）。不選停在 M0：兩個 front 並存、root 的兩種寫法都留著。決定 4 的終點和里程碑由這一條取代，決定 5 不再需要（interceptor 的 trampoline 不換了）。
+12. **root 用便宜的、只活在這次呼叫裡的**。不選讓 V8 在操作裡配置：要動 elise「只在安全點回收」的保證。不選預先建 wrapper：只對新建節點的成員有用，M0 看到的 root 大多是第一次回傳既有的物件。對照 Blink：Oilpan 保守地掃 stack，不需要登記；elise 是精準的，只能讓登記便宜。
+13. **scope 的規則照現況**：會讓 V8 配置、丟例外或跑 script 的路可以開，其餘不開。成員這一側視為做完。對照 Blink：V8 進 callback 時自己開了 handle scope，會跑 script 的成員另有 `ScriptState::Scope`，它也不是完全沒有。
+14. **索引的 query 照 Blink 的做法**：有 `length` 的介面只比較索引和長度，不呼叫 getter。
+15. **M1 在 M3 之前**（決定 10 的順序在新的里程碑上不變）。
+16. **fork 的入口照可以送上游的樣子寫**，照 fork 現有的規則。
+17. **Speedometer 在 M1 和 M3 做完時各量一次**（取代決定 8 的 M5）。
+
 ## 待決定
 
-M0 的數字出來之後和使用者逐條確認：
-
-1. **R 線選哪幾種機制、先後**（甲：便宜的 root；乙：V8 在操作裡配置；丙：拿 wrapper）。
-2. **fork 的入口要不要寫成可以送上游的樣子**。rusty_v8 的 fork 現在不照 parley、taffy、vello 那套「每個 commit 可以直接送上游」的規則；入口多了之後，rebase 的成本會變高。
-3. **終點的第 1 條的例外清單**：哪些可以留著 scope（目前的看法：每個 interface 只跑一次的初始化、測試和 WebDriver 用的函式、module 的載入）。
+沒有。
 
 ## 之後的可能
 
+- 草稿原本的範圍裡拿掉的：iterator、named interceptor 剩下的 callback、`rejecting` 改成 V8 原始的 callback（Speedometer 上合計不到 100 次）；dictionary 和參數的轉換不開 scope；`createElement` 這類建 wrapper 的路不開 scope；成員的路上完全沒有 scope。
 - 最熱的 getter 剩下的差（RFC 0097 的 `measurements.md` 的逐條對照）：冷的路搬出 callback、型別的 tag 變成常數、開 `Weak` 時不比 isolate。
 - 字串參數每次用文字查固定名稱表（要把編號記在 V8 的字串上，等 V8 的 sandbox）。
 - wasm 的 front 的同一件事：它的 root 和呼叫的成本沒有量過。
