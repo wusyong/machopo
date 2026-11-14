@@ -1,12 +1,12 @@
 # RFC 0100：V8 那一側只有一個 front
 
 - 開始日期：2026-11-14
-- 狀態：🚧 已排程：2026-11-14
+- 狀態：✅ 已完成：2026-11-14
 - 細節：無
 
 ## 摘要
 
-`dom_js` 現在有兩個完整的 front：只拿 V8 的 callback info 的 `InfoFront`（每個成員從它開始），和拿著一個 scope 的 `WholeFront`（會跑 script 的成員、cross-origin 的屬性、legacy caller、iterator 走它）。兩者各自實作同一套 `Front`、`OpFront`、`DictFront`。這份把會跑 script 的呼叫也放到 `InfoFront` 上，其他入口改成從 callback info 開始，然後刪掉 `WholeFront`、`WholeOp` 和 `Call`。這是 RFC 0098 路線圖的 M3；目的是一致性和少一份程式，不是速度。
+`dom_js` 原本有三個 front：只拿 V8 的 callback info 的 `InfoFront`（每個成員從它開始）、拿著一個 scope 的 `WholeFront`（會跑 script 的成員、cross-origin 的屬性、legacy caller、iterator 走它，和 `InfoFront` 各自實作同一套 `Front`、`OpFront`、`DictFront`），和 named property 的 interceptor 用的 `PropertyFront`。現在只有 `InfoFront`：會跑 script 的呼叫在它上面跑（每次呼叫 script 當場開 scope），其他入口都從 callback info 開始，`WholeFront`、`WholeOp`、`Call`、`PropertyFront`、`PropertyOp` 刪掉了。這是 RFC 0098 路線圖的 M3；目的是一致性和少一份程式，不是速度。做了什麼、量到什麼在 `progress.md`。
 
 ## 動機
 
@@ -19,20 +19,21 @@
   | `DictFront` | 16 個、133 行 | 16 個、161 行 |
 
   加一種參數或回傳的型別要改兩處，行為要靠測試保證兩邊一樣。
-- **走 `WholeFront` 的入口**：會跑 script 的成員（`InfoFront::whole` 開一個 scope、建一個 `WholeFront`，成員剩下的部分在它上面跑）、legacy caller（`document.all(..)`）、cross-origin 的屬性（access check 的 interceptor，兩處）、iterator 的 `next`（`pairs.rs`）。另外 `named.rs` 的 `PropertyFront` 是第三個、只實作一部分的 front（12 個方法）。
+- **原本走 `WholeFront` 的入口**：會跑 script 的成員（`InfoFront::whole` 開一個 scope、建一個 `WholeFront`，成員剩下的部分在它上面跑）、legacy caller（`document.all(..)`）、cross-origin 的屬性（access check 的 interceptor，兩處）、iterator 的 `next`（`pairs.rs`）。另外 `named.rs` 的 `PropertyFront` 是第三個、只實作一部分的 front（12 個方法）。
 - 對網頁沒有看得到的變化。
 
 ## 設計概要
 
-對改 binding 的人：`Front` 只有一個實作。會跑 script 的操作（呼叫 listener、custom element 的 callback、`NodeFilter`……，`ScriptFront` 的 13 個方法）是 `InfoFront` 的方法，要用到 V8 會配置或跑 script 的地方時當場開 scope（和它其他的慢路一樣）。
+對改 binding 的人：`Front` 只有一個實作（`sanity.py deps` 檢查）。會跑 script 的操作（呼叫 listener、custom element 的 callback、`NodeFilter`……，`ScriptFront` 的方法）是 `InfoFront` 的方法，要用到 V8 會配置或跑 script 的地方時當場開 scope（和它其他的慢路一樣）。
 
 ## 詳細設計
 
-每一段的設計在那一段開始時寫。先記現在的結構：
-
-- `Front::whole(call)`：`InfoFront` 的實作開一個 scope，`call.run(&mut WholeFront::new(scope, &args, rv))`。`WholeCall::run<F: ScriptFront>` 是宣告表替會跑 script 的成員產生的，`ScriptFront: Front`，所以它在 `F` 上讀參數、開操作、寫回傳值，也呼叫 script。
-- `WholeFront` 是 `Scoped`（scope、參數、回傳值的位置）加 `Call`（跨過操作要留著的：預先建的 wrapper、window、拿到的 callback、`define` 讀到的 lifecycle callback、接住的例外）。`Scoped` 本身不是 front，`InfoFront` 的慢路（`with_scoped`）也用它。
-- 其他入口拿到的是 rusty_v8 給的 scope、參數和回傳值，沒有 callback info：iterator 的函式是 `state_function_template` 做的，cross-origin 的是 access check 的 interceptor。
+- **會跑 script 的成員**：`InfoFront` 實作 `ScriptFront`，每個操作 `info.with_scope` 開一個 scope、呼叫 `listeners` 和 `front` 裡做那件事的函式；`Front::whole(call)` 是 `call.run(self)`。沒有呼叫到 script 的呼叫不開 scope（`dispatchEvent` 沒有 listener 被呼叫時 0 個）。
+- **跨過 script 要留著的東西照值傳**（決定 5）：`dom_api` 的 `ScriptHost` 有 `Callback`、`Lifecycle` 兩個型別，`define` 把 constructor 和讀到的 lifecycle callback 明白地傳給它的每一步；script 丟的例外留在 V8 裡，成員的錯誤是 `ApiError::Thrown`（front 拿到它什麼都不丟）。traversal 的 filter 丟的例外接住之後立刻在 V8 裡重丟。front 沒有一次呼叫的狀態。
+- **其他入口**：各是 `InfoFront` 的一種（`InfoKind`）：legacy caller（`Called`：`this` 是被呼叫的物件，整個檢查）、pair iterator 的一步（`Pair`：函式改成只拿 info 的，info 帶著 target 和 index，成員跑完把 info 拿回來）。cross-origin 的屬性的成員本來就是只拿 info 的 method，直接用 `Method`；getter 不先進 receiver 的 realm（決定 7）。
+- **named property 的 interceptor**：`bindings` 的 callback 全部是 V8 原始的（`StateInfoNamed`），回傳值不是 `Value` 的由 trampoline 照結果寫；`InfoKind` 的 `NamedHas`（query 和 delete 問 getter 有沒有，不做 V8 的值）、`NamedDelete`、`Names`、`IndexedSet`，define 和數字的 set 用 `NamedSet`。數字當名稱時名稱是它的數字的字串，在 trampoline 做。
+- `front.rs` 剩下的是 `Scoped`：當場開的 scope、參數和回傳值的位置，要 V8 配置、丟例外、轉換的函式是它的方法，不是 front。
+- 沒有動 rusty_v8 的 fork。
 
 ### 量法
 
@@ -45,12 +46,12 @@
 - 行為：`dom_js` 的測試（events、custom elements、traversal、mutation observer、cross-origin、iterators）和相關的 WPT 目錄（`dom/events`、`custom-elements`、`dom/traversal`、`dom/nodes`、`html/browsers/origin`）。
 - 重入：listener 裡再 dispatch、callback 裡丟例外、`define` 的 getter 跑 script、reaction 的順序、microtask 的時機，現有的測試先盤點，缺的補上。
 - mutation test：每個搬過去的 script 操作。
-- `sanity.py`：`dom_js` 只有一個 `impl Front`（做完時加）。
+- `sanity.py deps`：`dom_js` 只有一個 `impl Front`。
 - 動到 GC 的 root 的寫法時 merge 之後手動開始 `gc.yml`。
 
 ### 分階段
 
-3a：`InfoFront` 實作 `ScriptFront`，會跑 script 的成員搬過去。3b：legacy caller、iterator、cross-origin 改成從 info 開始。3c：刪掉 `WholeFront`、`WholeOp`、`Call`，加 `sanity.py` 的檢查。3d：`PropertyFront` 併進 `InfoFront`（決定 8）。
+四段，都做完了（`progress.md`）。3a：`InfoFront` 實作 `ScriptFront`，會跑 script 的成員搬過去。3b：legacy caller、iterator、cross-origin 改成從 info 開始。3c：刪掉 `WholeFront`、`WholeOp`、`Call`，加 `sanity.py` 的檢查。3d：`PropertyFront` 併進 `InfoFront`（決定 8）。
 
 ## 缺點
 
@@ -105,16 +106,9 @@
 
 ## 待決定
 
-3a 的兩條已經定了（決定 5、6），當時的選項留在這裡：
-
-1. **一次呼叫裡跨過 script 的操作要留著的東西放哪裡**。`ScriptFront` 的 13 個操作裡，10 個只要一個 scope（呼叫 listener、lifecycle callback、mutation callback、upgrade、reject promise、`pending_input`、`update_elements`……），搬過去就是「當場開 scope、呼叫 `listeners` 裡同一個函式」。另外幾個靠 `WholeFront` 的 `Call` 記著東西：`define` 的 constructor（「拿到的 callback」）、它讀到的四個 lifecycle callback、「script 已經丟了例外」的旗標；`NodeFilter` 丟的例外（之後重丟）；geolocation 的第二個 callback。`InfoFront` 沒有地方放。
-   - A：`InfoFront` 多一個欄位（一個字，平常是空的）。改動最小；但每次呼叫都要初始化它、結束時檢查它（`WholeFront` 的 `Call` 為了這個特別寫過 `Drop`，量過每次約 18 條指令，壓到 2、3 條），最熱的 getter（`nodeType` 113 條）也付。
-   - B（建議）：照值傳，不留狀態。`dom_api` 的 `ScriptHost` 的這幾個操作改成明白地收、回這些東西：constructor 由 `define` 傳給它們（`define` 本來就是泛型地拿著它），讀到的 lifecycle callback 當回傳值、再傳給存的那一步，「已經丟了」是一種錯誤而不是旗標，filter 丟的例外用 `ScriptHost::Value` 帶回來。沒有每次呼叫的成本，擁有權看得見；代價是動 `dom_api` 的 `ScriptHost`、`ScriptFront` 和 `FrontHost`（`dom_wasm` 的 front 如果實作了這幾個也要跟著改）。
-   - C：放在 isolate 的 `State` 上。沒有每次呼叫的成本、不動 `dom_api`；但呼叫可以重入（`define` 的 getter 裡再 `define`），要自己維護一個 stack，是藏起來的全域狀態。
-2. **搬之前先補測試**：先盤點重入、例外、reaction 的順序、microtask 的時機現有的測試，缺的在搬之前補在 `main` 的行為上（先補、確認通過，再搬）。建議照做。
-
-之後的段落開始時列那一段的。
+無。3a 開始時列的選項（跨過 script 的東西放哪裡：`InfoFront` 多一個欄位、照值傳、放在 isolate 的狀態上）和選的理由在決定 5。
 
 ## 之後的可能
 
-無。
+- cross-origin 的物件的 access check 的 interceptor（`bindings` 的 `StateAccessCheck`）和幾個不是成員的函式（observable array、內部的函式）仍然經過 rusty_v8 先開 scope 的 trampoline：它們不呼叫宣告表的成員，不需要 front。
+- `Scoped::reject_with` 的 `thrown` 參數現在一律是 none，可以拿掉。

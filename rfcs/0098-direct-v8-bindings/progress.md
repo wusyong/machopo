@@ -7,7 +7,16 @@
 | M0 量測的基準和工具 | 做完（2026-11-14） | 這份 |
 | M1 便宜的 root | 不做（2026-11-14，README 的決定 20） | |
 | M2 索引的 query | 做完（2026-11-14） | 0099 |
-| M3 單一 front | 已排程 | 0100 |
+| M3 單一 front | 做完（2026-11-14） | 0100 |
+
+## 做完時（2026-11-14）
+
+M0、M2（RFC 0099）、M3（RFC 0100）做完，M1 不做（README 的決定 20）。
+
+- **Speedometer**（2026-11-14，`bench.py speedometer --against a02eae5`：路線圖的量測工具做完時的版本對現在的，各 3 輪）：20 個 suite 的時間的幾何平均 0.998（−0.2%），各 suite −3.5% 到 +2.0%，都在每輪之間的起伏以內；peak memory −2.6% 到 +3.9%。和預期一樣，量不出差別。
+- **`bench.py calls` 對 M0 的基準**：`0 in list` 935 → 444 條指令、`dispatchEvent` 3496 → 3427，`nodeType`、`firstChild`、`getAttribute` 不變（113、138 到 140、560）。
+- **`dom_js` 的 front**：三個（`InfoFront`、`WholeFront`、`PropertyFront`）變成一個，`sanity.py deps` 檢查。
+- **scope**：會跑 script 的成員每次呼叫 script 才開；cross-origin 的成員、索引和 named 的 query 不開；布林參數是 `undefined`、`null`、小整數時不開。經過 rusty_v8 的 trampoline 的只剩 access check 的 interceptor 和不呼叫成員的函式。
 
 ## M0
 

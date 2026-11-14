@@ -69,8 +69,12 @@
 - **`bindings`**：named interceptor 的 callback 全部是 V8 原始的（`StateInfoNamed`：`get`、`assign`、`query`、`delete`、`enumerate`；trampoline 照 `NamedQueried`、`NamedDeleted`、`NamedAssigned` 寫 `Integer`、`Boolean` 的回傳值；define 在 trampoline 拒絕 accessor、把 descriptor 的值複製出來再走 `assign`；數字當名稱的 get、set、query、delete、define 把 index 做成它的數字的字串、走同一組）；indexed setter 是 `StateInfoIndexedSetter`（`StateIndexInfo` 多了值）。`StateNamedProperties`、`StateIndexedSetter` 和 12 個經過 rusty_v8 的 trampoline 刪掉。沒有動 fork。
 - **`dom_js`**：`InfoKind` 多了 `NamedHas`（query 和 delete 問 getter 有沒有：`note_some` 讓結果只記有沒有，不建字串和 wrapper；`note_thrown` 記丟了例外）、`NamedDelete`、`Names`、`IndexedSet`；`NamedSet` 的 noted 多了「丟了」。`named.rs` 663 行 → 約 270 行：`NamedCalls` 是每個 interface 的成員照 info 呼叫的函式指標，`NamedProperties` 照 callback 的資料裡的 interface 編號找。`PropertyFront`、`PropertyOp`、`Got`、`front::cached_string` 刪掉。`sanity.py deps` 只允許 `InfoFront`。
 - **新的測試**：`named_properties`（8 個）：query 和 descriptor（有 setter 可寫、列名稱的可列舉、空字串是值、getter 的 form 唯讀不可列舉）、query 不開 scope 不建 wrapper、keys、delete、define（值經過 setter、accessor 拒絕、setter 丟的例外）、數字名稱（set、get、query、descriptor、define、delete、超過 31 bits 的 index）、setter 拒絕或丟例外、indexed setter。
-- **原本就有、這次看到的兩件**（拿 3d 之前的程式跑同樣的測試確認不是這次造成的；沒有對照 Chrome）：`delete form.x`（interface 沒有 deleter）回 `true`、屬性還在；`Object.keys(dataset)` 有數字名稱時照名稱的順序（`a,b,9`），數字沒排前面。測試照現在的行為寫。
+- **寫測試時猜錯的兩件**：`delete form.x`（interface 沒有 deleter）回 `true`、屬性還在；`Object.keys(dataset)` 有數字名稱時照名稱的順序（`a,b,9`），數字沒排前面。原本以為該是 `false` 和 `9,a,b`；拿 3d 之前的程式跑是同樣的結果，在本機的 Chromium（headless）跑同一段 script 也是同樣的結果（strict mode 的 `delete form.x` 也不丟例外），所以是測試的預期寫錯，不是限制。
 - **測試**：`cargo test --workspace` 3,894 個通過（`dom_js` 504 個）；`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、sanity 通過。
 - **WPT**：`html/dom/elements/global-attributes/`、`css/cssom/`、`html/semantics/forms/`、`dom/collections/`、`dom/nodes/`、`html/infrastructure/common-dom-interfaces/collections/`：973 個測試、23,875 個檢查，非預期的結果 0。
 - **mutation test**（`mutants-3d.toml`，17 個）：13 個抓到；4 個以現在有的 interface 來說等價（唯一有 deleter 的 `DOMStringMap` 刪沒有的名字什麼都不做；deleter、setter「丟了」和「做了」的差別只在寫不寫布林的回傳值，V8 沒寫也當 true、例外照樣傳出去；數字當名稱的 interface 的 setter 不會拒絕），從 spec 拿掉、在 spec 裡註明。
 - **`bench.py calls --baseline`**：`firstChild` 140 → 138、`nodeType` 113 → 113、`getAttribute` 560 → 560、`dispatchEvent` 3496 → 3427（cycles 746 → 724）、`0 in list` 935 → 444；其他成員的指令差在 1 條以內。
+
+### 做完時
+
+- **Speedometer**（2026-11-14，`bench.py speedometer --against a02eae5`：路線圖的量測工具做完時的版本對現在的，各 3 輪）：20 個 suite 的時間的幾何平均 0.998（−0.2%），各 suite −3.5% 到 +2.0%，都在每輪之間的起伏以內；peak memory −2.6% 到 +3.9%。和預期一樣，量不出差別。

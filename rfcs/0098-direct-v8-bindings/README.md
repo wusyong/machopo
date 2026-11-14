@@ -1,7 +1,7 @@
 # RFC 0098：binding 直接呼叫 V8：不經過 scope、不登記 root、只有一個 front（路線圖）
 
 - 開始日期：2026-11-14
-- 狀態：🚧 已排程：2026-11-14（M0 做完；M2 是 RFC 0099）
+- 狀態：✅ 已完成：2026-11-14（M0 在這份；M2 是 RFC 0099、M3 是 RFC 0100，都做完；M1 不做）
 - 細節：無
 
 ## 摘要
@@ -9,6 +9,8 @@
 RFC 0097 之後，最熱的路（getter、字串參數）已經只拿 V8 的 callback info、直接讀寫。其餘的路還有三種「中間層」：rusty_v8 的 scope（94 個方法當場開一個，另有幾類每次 callback 都開）、elise 的 root（一次呼叫裡為了跨過操作而登記、釋放）、和第二個 front（會跑 script 的呼叫在 `WholeFront` 上跑）。這份是路線圖：目標是 **一次 binding 的呼叫在 V8 那一側做的事，就是 Blink 產生的 callback 會做的那幾個 V8 API 呼叫**，沒有別的。分三條線（scope、root、front）、六個里程碑，每個里程碑輪到時各開一份 RFC；這份只定目標、終點的定義、量法、順序和各里程碑的範圍。
 
 追求的是效能和一致性兩者，但**預期換到的主要是一致性**：scope 本身只有 27 條指令；root 一個約 80 到 110 條，是最貴的一種，最常呼叫的成員（`nodeType`、`getAttribute`、`createElement`）不碰它，但 M0 數到 Speedometer 上每五次呼叫有一次登記 root（`classList`、集合的索引、`TreeWalker`；數字在 `progress.md`）。binding 現在比 Chrome 慢的地方（RFC 0097 的收尾量測）大多和這三種中間層無關：最熱的 getter 的 1.3 倍是進出 callback 和 unwrap 的檢查，其餘是 DOM 那一側的序列化和解析；和 root 有關的只有「走訪沒有 wrapper 的節點」（1.51 倍，root 估計只佔差距的一部分）。每一種中間層在實際的頁面上到底佔多少，由 M0 量；量出來不值得的可以留著（決定 9）。
+
+**做完時的結果**（細節在 `progress.md`）：M0 量到三種中間層在 Speedometer 上合計約 0.1% 的指令，所以範圍縮小成一致性收穫大的部分（決定 11）。做了的：索引和 named 的 interceptor 的 query 不建 V8 的值、不經過 rusty_v8 的 trampoline（RFC 0099、0100）；`dom_js` 只剩一個 front（RFC 0100）。沒做的：便宜的 root（決定 20）、成員的路上完全不建 scope。Speedometer 前後的差在量測的起伏以內（−0.2%）。下面的「動機」到「詳細設計」是開始時寫的，留著當時的範圍；實際做的照「里程碑」的表和「已決定的事項」。
 
 ## 動機
 
