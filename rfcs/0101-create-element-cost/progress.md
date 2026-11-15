@@ -9,6 +9,7 @@
 | 第 1 段：接上預先建的 wrapper 不檢查、預先建 wrapper 不開 scope、realm 只問一次 | 做完 | 2026-11-15 |
 | 第 2 段：名稱用 V8 字串的身分查（連同拿樣板物件時剩下的檢查） | 做完 | 2026-11-15 |
 | 第 3 段：建節點（不動 elise 的兩項，決定 15） | 做完 | 2026-11-15 |
+| 第 3 段的第三項：elise 的 `__init` inline（決定 16、17） | 做完 | 2026-11-15 |
 
 ## 驗收
 
@@ -97,3 +98,27 @@
 - **mutation test**（`mutants-3.toml`，6 個）：6 個都抓到。「`made_with_more` 對每個名稱都是真」是等價的（它擋著的那一段自己再看一次名稱），沒有列。
 - **WPT**：`dom/nodes/`、`custom-elements/`、`html/dom/`、`html/semantics/forms/`、`html/semantics/scripting-1/the-template-element/`：974 個測試、83,804 個檢查，非預期的結果 0。
 - **階段的檢查**：`cargo test --workspace`（3900 個通過）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、sanity 的各項通過。
+
+### 第 3 段的第三項
+
+2026-11-15，Linux x86-64。
+
+- **當時的選項**：（一）併進這份、另開一份、不做；（二）所有型別都 inline、加屬性只標指定的型別。使用者都選第一個（README 的決定 16、17）。
+- **做法**：elise 的 `elise-derive` 產生的 `GcObject::__init` 標 `#[inline(always)]`，一行。不動 soundness 的論證（每個欄位照樣經過 `HeapField::__write`）。
+- **結果**：
+
+  | | 第 3 段的兩項之後 | 加上這一項 |
+  | --- | ---: | ---: |
+  | callback 本身（gdb 單步） | 沒有量（第 2 段之後 1076 條） | 945 條 |
+  | 其中 `Cx::node` 加 `Node::__init` | 166 條 | 105 條 |
+  | `createElement` 每次（`bench.py calls`） | 1353 條、286 cycles、衝突 4.15 | 1293 條、268 cycles、衝突 2.58 |
+  | `bindings/create-element`（對 Chrome for Testing，慢幾倍；三次） | 0.94、0.93、0.93 | 0.88、0.88、0.88 |
+  | `bindings/gc-forest` | 1.04、1.03、1.15 | 1.02、1.02、1.09 |
+  | `bindings/gc-mini-tree` | 0.81、0.82、0.80 | 0.82、0.76、0.75 |
+  | `bindings/gc-tree` | 0.83、0.81、0.77 | 0.83、0.77、0.81 |
+
+  `create-element` 的分數：machopo 4071 runs/s，Chrome for Testing 3563。`Cx::node` 分兩半寫、`Node::__init` 整格讀的那一次轉發不了的讀取不見了。其他成員的指令數不變（`classList (first)` 2459 → 2450）。測試的 binary 的 text 64,862,326 → 64,843,246 bytes（前一個是第 2 段的 binary，差也含第 3 段的兩項）。
+- **整份前後**：`createElement` 每次 2048 → 1293 條、448 → 268 cycles；`create-element` 對 Chrome for Testing 1.42 → 0.88。
+- **沒量的**：`createTextNode`、`cloneNode`、parser 建樹（走同一個 `Cx::node`，`bench.py calls` 沒有這幾個成員）；欄位是動態值的型別 inline 之後各自的大小（只看了整個 binary）。
+- **測試**：沒有新的（不改行為）；elise 把它記在「沒有計數守著的優化」，要守的話看 `createElement` 的指令數。
+- **檢查**：elise 的 `cargo test --workspace`（315 個通過）、`cargo fmt --check`、clippy、`sanity.py` 通過；Miri 開始跑了、沒跑完就停掉（使用者決定：這個改動不碰 `unsafe` 的論證，而且 Miri 解譯 MIR、看不到 inline 的差別）；models、fuzz 沒跑。elise 的 commit `df8d8bb`，pin 跟著更新。machopo 的 `cargo test --workspace`、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、sanity 的各項通過。

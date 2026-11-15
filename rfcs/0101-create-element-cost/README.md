@@ -135,6 +135,11 @@
 14. **屬性名稱這份不做**（決定 3 留下的）：`getAttribute` 一次 560 條，名稱那一段佔多少還沒量。不選在第 2 段接著做 `getAttribute`、`setAttribute`、`hasAttribute`、`removeAttribute`。
 15. **第 3 段只做不動 elise 的兩項**：`make_element` 查名稱表的旗標、`QualifiedName::new` 的名稱放得進 bits 時直接組。不選連 elise 配置清成 0 的物件一起做（要新增入口，並在編譯時檢查「全 0 是這個型別的合法值」，跑它的 models、fuzz、miri）：`create-element` 這頁已經和 Chrome for Testing 打平，那一項的收穫是所有建節點的路徑的，另外開一份做比較合適。不選第 3 段整個不做。
 
+第 3 段做完之後，2026-11-15（使用者想研究配置清成 0 的物件；先做了原型，選項在 `progress.md` 的「第 3 段的第三項」）：
+
+16. **elise 的 derive 產生的 `__init` 在配置的地方 inline，併進這份當第 3 段的第三項**。讀了程式之後，建節點慢的不是「沒有清成 0」（bump 出來的記憶體本來就不是 0，清成 0 也要寫），而是 `__init` 沒被 inline：呼叫的人知道 11 個欄位是常數，卻先寫進 stack 上的 init struct、再一欄一欄讀回來。inline 之後編譯器把常數欄位折成幾次整塊寫 0，初始化只剩約 25 條，「清成 0 的配置入口」能再省的只剩個位數，不做。不選另開一份 RFC 連泛用的配置路徑一起研究；不選不做。
+17. **所有型別都 inline**（原型的做法，binary 沒有變大）。不選加一個屬性只標指定的型別。
+
 ## 當時的選項
 
 1. **範圍：三段都做，還是先做一部分**
@@ -188,8 +193,8 @@
 
 ## 之後的可能
 
-- **配置清成 0 的物件**（第 3 段沒做的那一項）：建節點的 166 條裡約 80 到 90 條是先在 stack 上組 13 個欄位的 init、再一欄一欄讀出來寫進 heap（每個 `Option<Gc>` 欄位一次分支）。節點的初始值除了 owner 和 flags 都是 0：elise 給一個「配置一塊清成 0 的物件，再寫幾格」的入口，估省約 100 條。所有建節點的路徑都受惠（`createTextNode`、`createComment`、`createDocumentFragment`、`cloneNode`、parser 建的節點），`ElementData`、事件物件、list 類的物件看起來也符合，沒有逐一確認。條件是「全 0 是這個型別的合法值」，要 elise 在編譯時檢查，不能靠呼叫的人保證。
-- **泛用的配置路徑**（約 45 條：查型別的資訊、看 nursery、size class 的 cursor、bump、寫 header）：每一次配置都走，沒有看出明顯多做的事。
+- **配置清成 0 的物件**：不做（決定 16）。`__init` inline 之後節點的初始化只剩約 25 條，再省的只剩個位數。cppgc 的做法是 sweep 時把回收的格子清成 0、配置時不用寫，那動的是 sweep。
+- **泛用的配置路徑**（`__init` inline 之後 `Cx::node` 的 105 條裡約 80 條，連函式進出：查型別的資訊、看 nursery、size class 的 cursor、bump、寫 header）：每一次配置都走，沒有看出明顯多做的事。
 - **屬性名稱照字串的身分認**（決定 14）：`getAttribute`、`setAttribute`、`hasAttribute`、`removeAttribute`，和 `getElementsByTagName` 的名稱。表可以共用，要加的是屬性那一側的旗標和各成員拿參數的那一步；先量名稱那一段在 `getAttribute` 的 560 條裡佔多少。
 - **callback 裡 inline 的那一段**（參數、進操作、結果，當時量到 131 條）：沒有細看。
 - **其他不照身分認的名稱**：`createElementNS`、大寫的名稱、custom element 的名稱、執行時才出現的名稱。
