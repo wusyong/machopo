@@ -372,6 +372,19 @@ impl WitArg for dom_api::typed::ElementLocalName {
     }
 }
 
+/// An attribute's qualified name: a string.
+impl WitArg for dom_api::typed::AttributeQualifiedName {
+    type Wit = WasmStr;
+    type Read<'s> = Cow<'s, str>;
+
+    fn read<'s, T: 'static>(
+        wit: &WasmStr,
+        store: &'s StoreContextMut<'_, T>,
+    ) -> wasmtime::Result<Cow<'s, str>> {
+        read_string(wit, store)
+    }
+}
+
 /// `DOMString?`, and `[LegacyNullToEmptyString] DOMString`: `option<string>`.
 macro_rules! nullable_strings {
     ($($ty:ty),*) => {$(

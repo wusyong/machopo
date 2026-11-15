@@ -6,7 +6,7 @@ use dom::{NameId, NodeRef, QualName, StrRef, names};
 
 use crate::exception::ExceptionName;
 use crate::names_check::{self, NameContext};
-use crate::typed::DomStr;
+use crate::typed::{AttributeName, DomStr};
 use crate::{ApiCx, ApiError};
 
 /// The name of an element, the table's types promising one.
@@ -111,12 +111,67 @@ fn qualified<'a, 'gc>(
     }
 }
 
+/// The value of the first attribute whose qualified name is `name`, where
+/// it is: by the name's number if the front end told or looked it up (no
+/// text read; a name that is none is no attribute's), else by its text.
+#[inline]
+fn value_of<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    this: NodeRef<'gc>,
+    name: AttributeName<'_>,
+) -> Option<StrRef<'gc>> {
+    match name {
+        AttributeName::Known(id) | AttributeName::Lowercase(_, Some(id)) => {
+            cx.attribute_value_numbered(this, id)
+        }
+        AttributeName::Lowercase(_, None) => None,
+        AttributeName::Text(text) => cx.attribute_value(this, &qualified(cx, this, text)),
+    }
+}
+
+/// Whether `name` is a valid attribute local name: a known one is.
+#[inline]
+fn is_valid(name: AttributeName<'_>) -> bool {
+    match name {
+        AttributeName::Known(_) => true,
+        AttributeName::Lowercase(text, _) | AttributeName::Text(text) => {
+            names_check::is_valid_attribute_local_name(text)
+        }
+    }
+}
+
+/// `set_attribute` of `name`, valid: by its number, or by its text
+/// (lowercased for an HTML element in an HTML document).
+fn set<'gc>(cx: &ApiCx<'_, 'gc>, this: NodeRef<'gc>, name: AttributeName<'_>, value: &str) {
+    match name {
+        AttributeName::Known(id) | AttributeName::Lowercase(_, Some(id)) => {
+            cx.set_attribute_numbered(this, id, value);
+        }
+        // No name yet: interned as the attribute is appended.
+        AttributeName::Lowercase(text, None) => cx.set_attribute(this, text, value),
+        AttributeName::Text(text) => cx.set_attribute(this, &qualified(cx, this, text), value),
+    }
+}
+
+/// `remove_attribute` of `name`.
+fn remove<'gc>(cx: &ApiCx<'_, 'gc>, this: NodeRef<'gc>, name: AttributeName<'_>) {
+    match name {
+        AttributeName::Known(id) | AttributeName::Lowercase(_, Some(id)) => {
+            cx.remove_attribute_numbered(this, id);
+        }
+        AttributeName::Lowercase(_, None) => {}
+        AttributeName::Text(text) => {
+            cx.remove_attribute(this, &qualified(cx, this, text));
+        }
+    }
+}
+
 pub(crate) fn get_attribute<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: NodeRef<'gc>,
-    qualified_name: &str,
+    qualified_name: AttributeName<'_>,
 ) -> Result<Option<StrRef<'gc>>, ApiError> {
-    Ok(cx.attribute_value(this, &qualified(cx, this, qualified_name)))
+    Ok(value_of(cx, this, qualified_name))
 }
 
 /// `getAttribute(name)`'s value, kept (WebDriver's Get Element
@@ -144,13 +199,13 @@ pub(crate) fn get_attribute_ns<'gc>(
 pub(crate) fn set_attribute<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: NodeRef<'gc>,
-    qualified_name: &str,
+    qualified_name: AttributeName<'_>,
     value: &str,
 ) -> Result<(), ApiError> {
-    if !names_check::is_valid_attribute_local_name(qualified_name) {
+    if !is_valid(qualified_name) {
         return Err(ApiError::dom(ExceptionName::InvalidCharacter));
     }
-    cx.set_attribute(this, &qualified(cx, this, qualified_name), value);
+    set(cx, this, qualified_name, value);
     Ok(())
 }
 
@@ -172,9 +227,9 @@ pub(crate) fn set_attribute_ns<'gc>(
 pub(crate) fn remove_attribute<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: NodeRef<'gc>,
-    qualified_name: &str,
+    qualified_name: AttributeName<'_>,
 ) -> Result<(), ApiError> {
-    cx.remove_attribute(this, &qualified(cx, this, qualified_name));
+    remove(cx, this, qualified_name);
     Ok(())
 }
 
@@ -191,12 +246,10 @@ pub(crate) fn remove_attribute_ns<'gc>(
 pub(crate) fn has_attribute<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: NodeRef<'gc>,
-    qualified_name: &str,
+    qualified_name: AttributeName<'_>,
 ) -> Result<bool, ApiError> {
     // Where the value is, not a clone of it (two atomic counts).
-    Ok(cx
-        .attribute_value(this, &qualified(cx, this, qualified_name))
-        .is_some())
+    Ok(value_of(cx, this, qualified_name).is_some())
 }
 
 pub(crate) fn has_attribute_ns<'gc>(
@@ -245,22 +298,21 @@ pub(crate) fn get_attribute_names<'gc>(
 pub(crate) fn toggle_attribute<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: NodeRef<'gc>,
-    qualified_name: &str,
+    qualified_name: AttributeName<'_>,
     force: Option<bool>,
 ) -> Result<bool, ApiError> {
-    if !names_check::is_valid_attribute_local_name(qualified_name) {
+    if !is_valid(qualified_name) {
         return Err(ApiError::dom(ExceptionName::InvalidCharacter));
     }
-    let name = qualified(cx, this, qualified_name);
-    let present = cx.attribute_value(this, &name).is_some();
+    let present = value_of(cx, this, qualified_name).is_some();
     match (present, force) {
         (false, None | Some(true)) => {
-            cx.set_attribute(this, &name, "");
+            set(cx, this, qualified_name, "");
             Ok(true)
         }
         (false, Some(false)) => Ok(false),
         (true, None | Some(false)) => {
-            cx.remove_attribute(this, &name);
+            remove(cx, this, qualified_name);
             Ok(false)
         }
         (true, Some(true)) => Ok(true),

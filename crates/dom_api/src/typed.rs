@@ -1106,6 +1106,26 @@ pub trait Front: DictFront {
         None
     }
 
+    /// Argument `index` as an attribute's qualified name told with no
+    /// text read (an engine that knows its strings by their identity):
+    /// the name's number, a plain one's (`is_plain_attribute_name`).
+    /// None: the name is taken as a string (`string_arg`,
+    /// `look_up_attribute_name`).
+    #[inline(always)]
+    fn known_attribute_name(&mut self, index: usize) -> Option<dom::NameId> {
+        let _ = index;
+        None
+    }
+
+    /// What `name`, an attribute's qualified name taken as a string, is:
+    /// looked up here once if the front end reads its text in place, so
+    /// that the operation needn't again. `Unread` by default.
+    #[inline(always)]
+    fn look_up_attribute_name(&mut self, name: &Self::Str) -> AttributeLookup {
+        let _ = name;
+        AttributeLookup::Unread
+    }
+
     fn foresee_element(&mut self, name: &Self::Str) -> (Option<dom::NameId>, usize) {
         let _ = name;
         (None, crate::declare::HTML_ELEMENT)
@@ -5995,27 +6015,125 @@ pub enum ElementName<'a> {
 pub fn is_plain_element_name(id: dom::NameId) -> bool {
     static PLAIN: std::sync::OnceLock<Box<[u64]>> = std::sync::OnceLock::new();
     let plain = PLAIN.get_or_init(|| {
-        let mut bits = Vec::new();
-        let mut id: dom::NameId = 0;
-        while let Some(name) = dom::names::fixed_text(id) {
-            let plain = crate::names_check::is_valid_element_local_name(name)
+        fixed_names_bits(|name| {
+            crate::names_check::is_valid_element_local_name(name)
                 && !name.contains('-')
-                && !name.bytes().any(|byte| byte.is_ascii_uppercase());
-            let index = usize::try_from(id).expect("a fixed number fits a usize");
-            if index % 64 == 0 {
-                bits.push(0u64);
-            }
-            if plain {
-                *bits.last_mut().expect("a word just pushed") |= 1 << (index % 64);
-            }
-            id = id.checked_add(1).expect("fewer fixed names than numbers");
-        }
-        bits.into_boxed_slice()
+                && !name.bytes().any(|byte| byte.is_ascii_uppercase())
+        })
     });
     usize::try_from(id)
         .ok()
         .and_then(|index| Some(plain.get(index / 64)? >> (index % 64) & 1 != 0))
         .unwrap_or(false)
+}
+
+/// What a front end found an attribute's qualified name to be
+/// (`Front::look_up_attribute_name`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttributeLookup {
+    /// Its text wasn't read.
+    Unread,
+    /// No ASCII uppercase letter and no colon in it; its number, if it is
+    /// a name at all.
+    Lowercase(Option<dom::NameId>),
+}
+
+/// An attribute's qualified name as the front end took it.
+pub enum AttributeNameArg<S> {
+    Known(dom::NameId),
+    Lowercase(S, Option<dom::NameId>),
+    Text(S),
+}
+
+/// An attribute's qualified name in the operation.
+#[derive(Clone, Copy)]
+pub enum AttributeName<'a> {
+    /// A plain name (`is_plain_attribute_name`): a valid attribute local
+    /// name with no uppercase letter and no colon. Its text isn't read.
+    Known(dom::NameId),
+    /// One with no ASCII uppercase letter and no colon (it is itself in
+    /// any document, and names no attribute with a prefix), not checked
+    /// for validity; its number, if it is a name at all.
+    Lowercase(&'a str, Option<dom::NameId>),
+    /// Any other, as it was given.
+    Text(&'a str),
+}
+
+/// Whether the fixed name `id` is a plain attribute name: a valid
+/// attribute local name with no ASCII uppercase letter (it is itself in an
+/// HTML document and any other) and no colon (it names no attribute with a
+/// prefix). False for a name interned at run time. One bit of a table
+/// made at the first ask.
+#[inline]
+pub fn is_plain_attribute_name(id: dom::NameId) -> bool {
+    static PLAIN_ATTRIBUTES: std::sync::OnceLock<Box<[u64]>> = std::sync::OnceLock::new();
+    let plain = PLAIN_ATTRIBUTES.get_or_init(|| {
+        fixed_names_bits(|name| {
+            crate::names_check::is_valid_attribute_local_name(name)
+                && !name.contains(':')
+                && !name.bytes().any(|byte| byte.is_ascii_uppercase())
+        })
+    });
+    usize::try_from(id)
+        .ok()
+        .and_then(|index| Some(plain.get(index / 64)? >> (index % 64) & 1 != 0))
+        .unwrap_or(false)
+}
+
+/// A bit for each fixed name, by its number: whether `is` of its text.
+fn fixed_names_bits(is: impl Fn(&str) -> bool) -> Box<[u64]> {
+    let mut bits = Vec::new();
+    let mut id: dom::NameId = 0;
+    while let Some(name) = dom::names::fixed_text(id) {
+        let index = usize::try_from(id).expect("a fixed number fits a usize");
+        if index % 64 == 0 {
+            bits.push(0u64);
+        }
+        if is(name) {
+            *bits.last_mut().expect("a word just pushed") |= 1 << (index % 64);
+        }
+        id = id.checked_add(1).expect("fewer fixed names than numbers");
+    }
+    bits.into_boxed_slice()
+}
+
+/// An attribute's qualified name (`getAttribute`'s, `setAttribute`'s): a
+/// `DOMString` the front end may tell with no text read, or look up as it
+/// takes it.
+pub struct AttributeQualifiedName;
+
+impl ArgType for AttributeQualifiedName {
+    const DESC: TypeDesc = TypeDesc::String;
+    type Taken<T: FrontTypes> = AttributeNameArg<T::Str>;
+    type Param<'a, 'gc, T: FrontTypes + 'a> = AttributeName<'a>;
+
+    #[inline(always)]
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<AttributeNameArg<F::Str>> {
+        if let Some(id) = front.known_attribute_name(index) {
+            return Some(AttributeNameArg::Known(id));
+        }
+        let name = front.string_arg(index)?;
+        Some(match front.look_up_attribute_name(&name) {
+            AttributeLookup::Unread => AttributeNameArg::Text(name),
+            AttributeLookup::Lowercase(id) => AttributeNameArg::Lowercase(name, id),
+        })
+    }
+
+    #[inline(always)]
+    fn param<'a, 'gc, O: OpFront + 'a>(
+        op: &mut O,
+        _: &ApiCx<'_, 'gc>,
+        taken: &'a AttributeNameArg<O::Str>,
+        _: usize,
+    ) -> Result<AttributeName<'a>, ApiError> {
+        Ok(match taken {
+            AttributeNameArg::Known(id) => AttributeName::Known(*id),
+            AttributeNameArg::Lowercase(name, id) => {
+                AttributeName::Lowercase(op.str_param(name), *id)
+            }
+            AttributeNameArg::Text(name) => AttributeName::Text(op.str_param(name)),
+        })
+    }
 }
 
 impl ArgType for ElementLocalName {

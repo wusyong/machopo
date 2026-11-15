@@ -1024,9 +1024,14 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
 
     #[cold]
     #[inline(never)]
-    fn remember_name(&mut self, string: v8::Local<'s, v8::String>, id: NameId) {
+    fn remember_name(
+        &mut self,
+        string: v8::Local<'s, v8::String>,
+        id: NameId,
+        named: front::NameUse,
+    ) {
         let (state, mut no_gc) = self.info.state_mut();
-        front::remember_name(state, &mut no_gc, string, id);
+        front::remember_name(state, &mut no_gc, string, id, named);
     }
 
     /// A wrapper for `node` (of this callback's realm, with none yet) made
@@ -1491,8 +1496,31 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     fn known_element_name(&mut self, index: usize) -> Option<(NameId, usize)> {
         let string = v8::machopo::as_string(K::arg(&self.info, index))?;
         let (state, mut no_gc) = self.info.state();
-        let id = front::name_by_identity(&state.caches, &mut no_gc, string)?;
+        let id =
+            front::name_by_identity(&state.caches, &mut no_gc, string, front::NameUse::Element)?;
         Some((id, dom_api::html_element_interface(id)))
+    }
+
+    /// A literal's name, told by the string's identity: no text read.
+    #[inline(always)]
+    fn known_attribute_name(&mut self, index: usize) -> Option<NameId> {
+        let string = v8::machopo::as_string(K::arg(&self.info, index))?;
+        let (state, mut no_gc) = self.info.state();
+        front::name_by_identity(&state.caches, &mut no_gc, string, front::NameUse::Attribute)
+    }
+
+    /// The name looked up by its text, peeked at with the isolate alone.
+    /// A plain name found is remembered by its string's identity, for the
+    /// next call (`known_attribute_name`).
+    #[inline]
+    fn look_up_attribute_name(&mut self, name: &ArgString<'s>) -> dom_api::typed::AttributeLookup {
+        let looked = front::look_up_attribute_name(self.info.isolate(), name);
+        if let dom_api::typed::AttributeLookup::Lowercase(Some(id)) = looked
+            && dom_api::typed::is_plain_attribute_name(id)
+        {
+            self.remember_name(name.v8_string(), id, front::NameUse::Attribute);
+        }
+        looked
     }
 
     /// The name only peeked at, with the isolate alone. A plain name
@@ -1505,7 +1533,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         if let Some(id) = id
             && dom_api::typed::is_plain_element_name(id)
         {
-            self.remember_name(name.v8_string(), id);
+            self.remember_name(name.v8_string(), id, front::NameUse::Element);
         }
         (id, interface)
     }

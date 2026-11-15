@@ -636,10 +636,12 @@ fn attribute_names_are_the_names_own_strings() {
         env.eval("got = e.getAttributeNames(); got.join()"),
         "data-first,id,xlink:href,café"
     );
+    // `id` was `setAttribute`'s argument, kept as the name's string then
+    // (a literal of a plain name).
     assert_eq!(
         env.names_made(),
-        names + 3,
-        "the three with no prefix; the prefixed one is text"
+        names + 2,
+        "the two with no prefix not made yet; the prefixed one is text"
     );
     assert_eq!(
         env.eval(
@@ -648,7 +650,7 @@ fn attribute_names_are_the_names_own_strings() {
         ),
         "true,true,true,4"
     );
-    assert_eq!(env.names_made(), names + 3, "found by their numbers");
+    assert_eq!(env.names_made(), names + 2, "found by their numbers");
     // The same string as the name returned alone, and no attribute, none.
     assert_eq!(
         env.eval(
@@ -656,5 +658,5 @@ fn attribute_names_are_the_names_own_strings() {
         ),
         "0,true"
     );
-    assert_eq!(env.names_made(), names + 3);
+    assert_eq!(env.names_made(), names + 2);
 }

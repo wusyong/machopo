@@ -140,6 +140,15 @@
 16. **elise 的 derive 產生的 `__init` 在配置的地方 inline，併進這份當第 3 段的第三項**。讀了程式之後，建節點慢的不是「沒有清成 0」（bump 出來的記憶體本來就不是 0，清成 0 也要寫），而是 `__init` 沒被 inline：呼叫的人知道 11 個欄位是常數，卻先寫進 stack 上的 init struct、再一欄一欄讀回來。inline 之後編譯器把常數欄位折成幾次整塊寫 0，初始化只剩約 25 條，「清成 0 的配置入口」能再省的只剩個位數，不做。不選另開一份 RFC 連泛用的配置路徑一起研究；不選不做。
 17. **所有型別都 inline**（原型的做法，binary 沒有變大）。不選加一個屬性只標指定的型別。
 
+第 4 段，2026-11-15（使用者：把屬性名稱照字串的身分認做完；選項在 `progress.md` 的「第 4 段」，都照建議）：
+
+18. **決定 14 改掉：屬性名稱在這份做，當第 4 段**。量了之後 `getAttribute` 的 549 條裡和名稱有關的約 180 到 200 條（`text_lends` 51、掃大寫 59、`find_fixed` 68、有 prefix 的分支約 20），表和 fork 的函式都是這份做的。不選另開一份。
+19. **範圍是 `getAttribute`、`setAttribute`、`hasAttribute`、`removeAttribute`、`toggleAttribute`**（同一種參數）。不選加上 `getElementsByTagName`（回傳快取的集合，熱迴圈裡少見，名稱的規則是元素的那一套）。
+20. **屬性自己一張 1024 格的表**（`Caches::attribute_slots`）：熱路上不多檢查，兩種名稱不互相擠掉，每個 isolate 多 4 KB。不選和元素共用（每一側查到之後要再看自己的旗標，`createElement` 每次多幾條）。
+21. **只認固定名稱表裡的**「合法的屬性名稱、沒有大寫、沒有 `:`」（`dom_api::typed::is_plain_attribute_name`），和決定 12 一致；可以有 `-`。不選連執行時才出現的名稱（頁面自訂的 `data-*`）也認：名稱快取會跟著留字串，名稱表本身回不回收沒有查。
+
+認不出來的那條路沒有選項：front 就地看文字，沒有大寫、沒有 `:` 的名稱由 front 查編號、交給操作（`AttributeName::Lowercase`），操作不再照文字查；front 不查兩次。
+
 ## 當時的選項
 
 1. **範圍：三段都做，還是先做一部分**
@@ -195,11 +204,11 @@
 
 - **配置清成 0 的物件**：不做（決定 16）。`__init` inline 之後節點的初始化只剩約 25 條，再省的只剩個位數。cppgc 的做法是 sweep 時把回收的格子清成 0、配置時不用寫，那動的是 sweep。
 - **泛用的配置路徑**（`__init` inline 之後 `Cx::node` 的 105 條裡約 80 條，連函式進出：查型別的資訊、看 nursery、size class 的 cursor、bump、寫 header）：每一次配置都走，沒有看出明顯多做的事。
-- **屬性名稱照字串的身分認**（決定 14）：`getAttribute`、`setAttribute`、`hasAttribute`、`removeAttribute`，和 `getElementsByTagName` 的名稱。表可以共用，要加的是屬性那一側的旗標和各成員拿參數的那一步；先量名稱那一段在 `getAttribute` 的 560 條裡佔多少。
+- **`getElementsByTagName` 的名稱照字串的身分認**（決定 19 沒做的）：規則是元素的那一套，可以用元素的表。
+- **執行時才出現的屬性名稱**（決定 21 沒做的，頁面自訂的 `data-*`）：字面值現在每次由 front 照文字查一次編號（操作不再查），不靠身分。要認的話先確認名稱表回不回收。
 - **callback 裡 inline 的那一段**（參數、進操作、結果，當時量到 131 條）：沒有細看。
 - **其他不照身分認的名稱**：`createElementNS`、大寫的名稱、custom element 的名稱、執行時才出現的名稱。
 - **兩個落在同一格的名稱輪流建**（決定 11 的代價）：真的碰到時，一格放兩個名稱。
 
 - `createTextNode`、`createComment`、`cloneNode` 的同一件事（第 1、3 段的改動它們大多直接受惠，沒有另外量）。
-- 其他欄位多的型別用第 3 段的配置方式（`ElementData`）。
 - 發行版的 Chromium 量出來的舊數字裡，會配置的項目要對 Chrome for Testing 重量。

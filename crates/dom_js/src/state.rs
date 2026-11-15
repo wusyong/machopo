@@ -130,6 +130,10 @@ pub(crate) struct Caches {
     /// `names` is the one a literal of the name is. Filled as names are
     /// told by their text; a slot two names share holds the later.
     pub(crate) name_slots: Box<[Cell<u32>; crate::front::NAME_SLOTS]>,
+    /// Plain attribute names by their V8 string's identity, as
+    /// `name_slots`: a table of their own, so that neither kind takes the
+    /// other's slots and neither checks which kind a slot's name is.
+    pub(crate) attribute_slots: Box<[Cell<u32>; crate::front::NAME_SLOTS]>,
     /// Wrappers made, for the tests: counted in an operation too, where the
     /// caches are shared.
     pub(crate) wrappers_made: Cell<u64>,
@@ -231,6 +235,7 @@ pub(crate) fn install(isolate: &mut v8::Isolate) {
                 strings: StringCache::new(),
                 names: Vec::new(),
                 name_slots: Box::new([const { Cell::new(0) }; crate::front::NAME_SLOTS]),
+                attribute_slots: Box::new([const { Cell::new(0) }; crate::front::NAME_SLOTS]),
                 wrappers_made: Cell::new(0),
                 wrappers_wasted: Cell::new(0),
                 wrappers_ahead: Cell::new(0),

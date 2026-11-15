@@ -11,14 +11,14 @@ use crate::message::{PortMessage, WindowMessage};
 use crate::typed::{
     AbortReason, AbortSignalObject, AbortSignals, AllCollectionObject, AlwaysNull,
     AnimationEventObject, AnimationObject, AnimationOptions, AnimationPlaybackEventObject, Any,
-    AnyArg, AnyOrNull, AnyOrUndefined, ArrayView, BlobCallback, BlobParts, BodyMember, ByteString,
-    CanvasImageSource, CanvasStyleValue, CloneValue, Cloned, ConfidenceObject,
-    CustomElementConstructor, CustomEventObject, DictOrBool, DictionaryOut, Doubles, EffectOptions,
-    ElementLocalName, EmptyStringDefault, EnforcedI32, EnforcedU64, EntryDetail, ErrorEventObject,
-    EventHandler, EventOrUndefined, FileObject, FileReaderObject, FilledView, FocusEventObject,
-    FormControlsCollectionObject, FrameRequestCallback, FrozenArray, FrozenStrings,
-    GetHtmlOptionsArg, HTMLCollectionOrElement, HashChangeEventObject, HeaderPairs, HeadersMember,
-    Hidden, IdleRequestCallback, InputEventObject, IntersectionObserverCallback,
+    AnyArg, AnyOrNull, AnyOrUndefined, ArrayView, AttributeQualifiedName, BlobCallback, BlobParts,
+    BodyMember, ByteString, CanvasImageSource, CanvasStyleValue, CloneValue, Cloned,
+    ConfidenceObject, CustomElementConstructor, CustomEventObject, DictOrBool, DictionaryOut,
+    Doubles, EffectOptions, ElementLocalName, EmptyStringDefault, EnforcedI32, EnforcedU64,
+    EntryDetail, ErrorEventObject, EventHandler, EventOrUndefined, FileObject, FileReaderObject,
+    FilledView, FocusEventObject, FormControlsCollectionObject, FrameRequestCallback, FrozenArray,
+    FrozenStrings, GetHtmlOptionsArg, HTMLCollectionOrElement, HashChangeEventObject, HeaderPairs,
+    HeadersMember, Hidden, IdleRequestCallback, InputEventObject, IntersectionObserverCallback,
     IntersectionObserverEntryInitArg, IntersectionObserverInitArg, IsNull, JsonData,
     KeyboardEventObject, Keyframes, LegacyNullToEmptyString, LongDefaultMinusOne, LongDefaultOne,
     MeasureStart, MediaQueryListEventObject, MediaQueryListObject, MessageEventObject,
@@ -2106,12 +2106,12 @@ crate::declare! {
         attribute previousElementSibling: Option<Element>, get = child_node::previous_element_sibling;
         attribute nextElementSibling: Option<Element>, get = child_node::next_element_sibling;
 
-        method getAttribute(qualifiedName: DomString) -> Option<DomString> = element::get_attribute;
+        method getAttribute(qualifiedName: AttributeQualifiedName) -> Option<DomString> = element::get_attribute;
         #[ce_reactions]
-        method setAttribute(qualifiedName: DomString, value: DomString) = element::set_attribute;
+        method setAttribute(qualifiedName: AttributeQualifiedName, value: DomString) = element::set_attribute;
         #[ce_reactions]
-        method removeAttribute(qualifiedName: DomString) = element::remove_attribute;
-        method hasAttribute(qualifiedName: DomString) -> bool = element::has_attribute;
+        method removeAttribute(qualifiedName: AttributeQualifiedName) = element::remove_attribute;
+        method hasAttribute(qualifiedName: AttributeQualifiedName) -> bool = element::has_attribute;
         method hasAttributes() -> bool = element::has_attributes;
         method getAttributeNames() -> Names = element::get_attribute_names;
         attribute attributes: NamedNodeMap, get = attr::attributes;
@@ -2133,7 +2133,7 @@ crate::declare! {
         method removeAttributeNS(namespace: Option<DomString>, localName: DomString) =
             element::remove_attribute_ns;
         #[ce_reactions]
-        method toggleAttribute(qualifiedName: DomString, force?: Option<bool>) -> bool = element::toggle_attribute;
+        method toggleAttribute(qualifiedName: AttributeQualifiedName, force?: Option<bool>) -> bool = element::toggle_attribute;
         method hasAttributeNS(namespace: Option<DomString>, localName: DomString) -> bool =
             element::has_attribute_ns;
         method matches(selectors: DomString) -> bool = query::matches;

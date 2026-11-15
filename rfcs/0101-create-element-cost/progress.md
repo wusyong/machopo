@@ -10,6 +10,7 @@
 | 第 2 段：名稱用 V8 字串的身分查（連同拿樣板物件時剩下的檢查） | 做完 | 2026-11-15 |
 | 第 3 段：建節點（不動 elise 的兩項，決定 15） | 做完 | 2026-11-15 |
 | 第 3 段的第三項：elise 的 `__init` inline（決定 16、17） | 做完 | 2026-11-15 |
+| 第 4 段：屬性名稱用 V8 字串的身分查（決定 18 到 21） | 做完 | 2026-11-15 |
 
 ## 驗收
 
@@ -122,3 +123,32 @@
 - **沒量的**：`createTextNode`、`cloneNode`、parser 建樹（走同一個 `Cx::node`，`bench.py calls` 沒有這幾個成員）；欄位是動態值的型別 inline 之後各自的大小（只看了整個 binary）。
 - **測試**：沒有新的（不改行為）；elise 把它記在「沒有計數守著的優化」，要守的話看 `createElement` 的指令數。
 - **檢查**：elise 的 `cargo test --workspace`（315 個通過）、`cargo fmt --check`、clippy、`sanity.py` 通過；Miri 開始跑了、沒跑完就停掉（使用者決定：這個改動不碰 `unsafe` 的論證，而且 Miri 解譯 MIR、看不到 inline 的差別）；models、fuzz 沒跑。elise 的 commit `df8d8bb`，pin 跟著更新。machopo 的 `cargo test --workspace`、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、sanity 的各項通過。
+
+### 第 4 段
+
+2026-11-15，Linux x86-64。
+
+- **開始前量的**：`getAttribute('class')` 的 callback 549 條（gdb 單步），和名稱有關的約 180 到 200 條：`LentString::text_lends` 51、`element::qualified`（掃大寫）59、`names::find_fixed` 68、`attribute_by_name` 裡有 prefix 的屬性才比文字的分支約 20。
+- **當時的選項**（使用者都選第一個，README 的決定 18 到 21）：
+  1. 範圍：`getAttribute`、`setAttribute`、`hasAttribute`、`removeAttribute`、`toggleAttribute`；或加上 `getElementsByTagName`。
+  2. 表：屬性自己一張 1024 格；或和元素共用、每一側再看自己的旗標。
+  3. 認哪些名稱：只認固定名稱表裡的（合法、沒有大寫、沒有 `:`）；或連執行時才出現的也認。
+  4. 放哪裡：這份的第 4 段；或另開一份。
+- **做法**：
+  - `dom`：照編號找、設、移除屬性（`attribute_value_numbered`、`set_attribute_numbered`、`remove_attribute_numbered`）：沒有 prefix、local name 是那個編號的第一個屬性，和「照 qualified name 找」對一個沒有 `:` 的名稱找到的相同。
+  - `dom_api`：參數型別 `AttributeQualifiedName`，操作拿到 `AttributeName`：`Known`（front 照身分認的，`is_plain_attribute_name`，不檢查合法）、`Lowercase`（front 讀了文字，沒有大寫和 `:`，帶 front 查到的編號；沒有編號的不是任何屬性的名稱）、`Text`（照原本的路）。
+  - `dom_js`：`Caches::attribute_slots`，`front::NameUse` 選哪一張表；`InfoFront::known_attribute_name`、`look_up_attribute_name`（查到的是 plain 的就登記）。
+- **結果**（`bench.py calls`，其他成員不變）：
+
+  | | 之前 | 第 4 段之後 |
+  | --- | ---: | ---: |
+  | `getAttribute` 每次 | 560 條、91 cycles | 378 條、68 cycles |
+  | `setAttribute` 每次 | 1071 條、189 cycles | 864 條、148 cycles |
+
+  `hasAttribute`、`removeAttribute`、`toggleAttribute` 不在 `bench.py calls` 裡，沒有數字。callback 本身這一段沒有再單步。
+- **一個原有的測試的預期改了**（`strings::attribute_names_are_the_names_own_strings`）：`setAttribute('id', …)` 的參數字串留作名稱的字串，`getAttributeNames()` 少建一個。
+- **新的測試**：`info_front::a_literal_attribute_name_is_told_by_its_strings_identity`（五個成員互相認得對方登記的名稱；有 `-` 的名稱照樣認；執行時接出來的字串、大寫、有 `:`、不在固定名稱表裡的、還不是名稱的、不合法的、不是字串的都照文字，結果一樣；SVG 元素不轉小寫；元素的表和屬性的表各自登記；有 prefix 的屬性不被沒有 `:` 的名稱找到、有 namespace 沒有 prefix 的會；GC 之後仍然認得）、`info_front::attribute_names_that_share_a_slot_name_their_own_attributes`（`is_plain_attribute_name` 的固定名稱超過 1024 個，全部設、讀、問、移除各兩輪）。
+- **mutation test**（`mutants-4.toml`，13 個）：13 個都抓到。等價、沒有列的：`Lowercase` 沒有編號時 `getAttribute`、`removeAttribute` 改走照文字的路（照文字也找不到）。
+- **`dom_wasm`**：新的參數型別要有它的 `WitArg`（一個字串，和 `ElementLocalName` 一樣）。第一次跑階段的檢查時 workspace 編不過才發現：前面只跑了 `dom`、`dom_api`、`dom_js` 的測試。
+- **WPT**：`dom/nodes/`、`custom-elements/`、`html/dom/`、`dom/collections/`：673 個測試、79,131 個檢查，非預期的結果 0。
+- **階段的檢查**：`cargo test --workspace`（3902 個通過）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、sanity 的各項通過（`boundary` 的清單加了屬性名稱的 bitset）。

@@ -2531,8 +2531,30 @@ pub(crate) fn count(wrappers_made: &Cell<u64>) {
     wrappers_made.set(wrappers_made.get().wrapping_add(1));
 }
 
-/// How many slots the names told by identity have (`Caches::name_slots`).
+/// How many slots the names told by identity have (`Caches::name_slots`,
+/// `Caches::attribute_slots`).
 pub(crate) const NAME_SLOTS: usize = 1024;
+
+/// What a name told by its string's identity names: each has its own
+/// slots, and its own rule of which names are told so.
+#[derive(Clone, Copy)]
+pub(crate) enum NameUse {
+    /// `createElement`'s local name (`dom_api::typed::is_plain_element_name`).
+    Element,
+    /// An attribute's qualified name
+    /// (`dom_api::typed::is_plain_attribute_name`).
+    Attribute,
+}
+
+impl NameUse {
+    #[inline(always)]
+    fn slots(self, caches: &Caches) -> &[Cell<u32>; NAME_SLOTS] {
+        match self {
+            Self::Element => &caches.name_slots,
+            Self::Attribute => &caches.attribute_slots,
+        }
+    }
+}
 
 /// The slot of an internalized string's hash field: past its two type
 /// bits (`Name::HashFieldTypeBits`), the hash's low bits.
@@ -2541,7 +2563,7 @@ fn name_slot(hash: u32) -> usize {
     (hash >> 2) as usize & (NAME_SLOTS - 1)
 }
 
-/// The plain element name `string` is, told by its identity: a literal
+/// The plain name (an element's, an attribute's: `named`) `string` is, told by its identity: a literal
 /// is internalized, the one object of its characters in the isolate, and
 /// so is the string the names' cache holds for the name. Its text isn't
 /// read. None for a string that isn't internalized, or whose name wasn't
@@ -2551,9 +2573,10 @@ pub(crate) fn name_by_identity<'s>(
     caches: &Caches,
     no_gc: &mut bindings::InfoNoGc<'_, 's>,
     string: v8::Local<'s, v8::String>,
+    named: NameUse,
 ) -> Option<NameId> {
     let hash = v8::machopo::internalized_hash(string)?;
-    let id = caches.name_slots[name_slot(hash)].get().checked_sub(1)?;
+    let id = named.slots(caches)[name_slot(hash)].get().checked_sub(1)?;
     let held = caches.names.get(usize::try_from(id).ok()?)?.as_ref()?;
     if !no_gc.same_object(string, held) {
         return None;
@@ -2579,7 +2602,7 @@ pub fn names_by_identity_for_testing() -> Option<u64> {
     None
 }
 
-/// `string` (internalized) remembered as the plain element name `id`, for
+/// `string` (internalized) remembered as the plain name `id` (`named`), for
 /// `name_by_identity`: the names' cache holds it (it is the name's V8
 /// string: the one of its characters), and its hash's slot the number.
 #[cold]
@@ -2589,6 +2612,7 @@ pub(crate) fn remember_name<'s>(
     no_gc: &mut bindings::InfoNoGc<'_, 's>,
     string: v8::Local<'s, v8::String>,
     id: NameId,
+    named: NameUse,
 ) {
     let Some(hash) = v8::machopo::internalized_hash(string) else {
         return;
@@ -2600,7 +2624,30 @@ pub(crate) fn remember_name<'s>(
     if !held {
         keep_name(state, id, no_gc.global(string));
     }
-    state.caches.name_slots[name_slot(hash)].set(id.saturating_add(1));
+    named.slots(&state.caches)[name_slot(hash)].set(id.saturating_add(1));
+}
+
+/// What an attribute's qualified name is (`dom_api::Front::
+/// look_up_attribute_name`), its text read in place: one with no ASCII
+/// uppercase letter and no colon is looked up here, so that the operation
+/// needn't again. The name only peeked at: nothing is made.
+#[inline]
+pub(crate) fn look_up_attribute_name(
+    isolate: &v8::Isolate,
+    name: &ArgString<'_>,
+) -> dom_api::typed::AttributeLookup {
+    use dom_api::typed::AttributeLookup;
+    name.peek_ascii(isolate, |text| {
+        if text
+            .bytes()
+            .any(|byte| byte.is_ascii_uppercase() || byte == b':')
+        {
+            AttributeLookup::Unread
+        } else {
+            AttributeLookup::Lowercase(dom::names::find(text))
+        }
+    })
+    .unwrap_or(AttributeLookup::Unread)
 }
 
 /// What `createElement`'s local name says of its element in an HTML

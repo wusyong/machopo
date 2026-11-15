@@ -437,6 +437,211 @@ fn names_that_share_a_slot_make_their_own_elements() {
     );
 }
 
+/// An attribute's qualified name is told by its string's identity once its
+/// text told it: a literal's plain name, lowercase with no colon. Any
+/// other is told by its text each time, to the same end.
+#[test]
+fn a_literal_attribute_name_is_told_by_its_strings_identity() {
+    let mut env = env();
+    env.eval(
+        "var e = d.createElement('div'); var half = 'ti'; var text = () => half + 'tle'; \
+         var error = f => { try { return String(f()); } catch (e) { return e.name; } }; \
+         var svg = d.createElementNS('http://www.w3.org/2000/svg', 'svg');",
+    );
+    for (source, value, first, again) in [
+        // By its text the first time, by its identity after; each member
+        // finds what another told.
+        ("e.setAttribute('title', 'a')", "undefined", 0, 1),
+        ("e.getAttribute('title')", "a", 1, 1),
+        ("e.hasAttribute('title')", "true", 1, 1),
+        ("e.toggleAttribute('hidden', true)", "true", 0, 1),
+        ("e.toggleAttribute('hidden', false)", "false", 1, 1),
+        ("e.removeAttribute('title')", "undefined", 1, 1),
+        ("e.getAttribute('title')", "null", 1, 1),
+        // A name with a hyphen is an attribute's as any.
+        (
+            "e.setAttribute('aria-label', 'l'), e.getAttribute('aria-label')",
+            "l",
+            1,
+            2,
+        ),
+        // A string made as script runs isn't internalized.
+        (
+            "e.setAttribute(text(), 'b'), e.getAttribute(text())",
+            "b",
+            0,
+            0,
+        ),
+        ("e.getAttribute('title')", "b", 1, 1),
+        // Not plain: lowercased for an HTML element, one with a colon, a
+        // name that is no fixed one.
+        ("e.getAttribute('TITLE')", "b", 0, 0),
+        (
+            "e.setAttribute('Lang', 'en'), e.getAttribute('lang')",
+            "en",
+            0,
+            1,
+        ),
+        ("e.getAttribute('xlink:href')", "null", 0, 0),
+        (
+            "e.setAttribute('data-told-by-text', 'd'), e.getAttribute('data-told-by-text')",
+            "d",
+            0,
+            0,
+        ),
+        // A name that is none yet: no attribute's, till one is set.
+        (
+            "[e.getAttribute('nosuchname'), e.hasAttribute('nosuchname'), e.removeAttribute('nosuchname')].join()",
+            ",false,",
+            0,
+            0,
+        ),
+        (
+            "e.setAttribute('nosuchname', 'n'), e.getAttribute('nosuchname')",
+            "n",
+            0,
+            0,
+        ),
+        // Not valid, known or not: thrown where a name is checked, none
+        // found where it isn't.
+        (
+            "error(() => e.setAttribute('', 'x'))",
+            "InvalidCharacterError",
+            0,
+            0,
+        ),
+        (
+            "error(() => e.setAttribute('a b', 'x'))",
+            "InvalidCharacterError",
+            0,
+            0,
+        ),
+        (
+            "error(() => e.toggleAttribute('a=b'))",
+            "InvalidCharacterError",
+            0,
+            0,
+        ),
+        ("error(() => e.getAttribute('a b'))", "null", 0, 0),
+        // Not a string: converted, then by its text.
+        (
+            "e.setAttribute(null, 'z'), e.getAttribute({ toString: () => 'null' })",
+            "z",
+            0,
+            0,
+        ),
+        // An element that isn't an HTML one keeps a name's case: the
+        // lowercase literal names another attribute.
+        (
+            "svg.setAttribute('viewBox', '0 0 1 1'), [svg.getAttribute('viewBox'), svg.getAttribute('viewbox')].join()",
+            "0 0 1 1,",
+            0,
+            0,
+        ),
+        (
+            "svg.setAttribute('width', '3'), svg.getAttribute('width')",
+            "3",
+            1,
+            2,
+        ),
+    ] {
+        for (told, round) in [(first, "first"), (again, "again"), (again, "a third time")] {
+            let (got, by_identity) = by_identity(&mut env, &format!("String(({source}))"));
+            assert_eq!(got, value, "{source} {round}");
+            assert_eq!(by_identity, told, "{source} {round}");
+        }
+    }
+    // An element's names and an attribute's are told apart: each kind by
+    // its own text first.
+    assert_eq!(
+        by_identity(&mut env, "d.createElement('title').localName").1,
+        0
+    );
+    assert_eq!(
+        by_identity(&mut env, "d.createElement('title').localName").1,
+        1
+    );
+    env.eval("d.createElement('summary')");
+    assert_eq!(by_identity(&mut env, "e.getAttribute('summary')").1, 0);
+    assert_eq!(by_identity(&mut env, "e.getAttribute('summary')").1, 1);
+    // A known name names the first attribute with that qualified name:
+    // not one with a prefix, and one in a namespace with none.
+    assert_eq!(
+        env.eval(
+            "var q = d.createElement('div'); q.getAttribute('title'); \
+             q.setAttributeNS('urn:x', 'x:title', 'prefixed'); var before = q.getAttribute('title'); \
+             q.setAttributeNS('urn:y', 'title', 'namespaced'); \
+             [before, q.getAttribute('title'), q.getAttribute('x:title'), q.hasAttribute('title'), \
+              (q.setAttribute('title', 'set'), q.getAttributeNS('urn:y', 'title')), q.attributes.length, \
+              (q.removeAttribute('title'), q.attributes.length), q.getAttribute('title'), \
+              (q.setAttribute('title', 'new'), q.getAttributeNS(null, 'title')), q.attributes[1].name].join()"
+        ),
+        ",namespaced,prefixed,true,set,2,1,,new,title"
+    );
+    // After GCs that move and would collect the name's string.
+    for _ in 0..3 {
+        env.minor_gc();
+        env.full_gc();
+    }
+    assert_eq!(
+        by_identity(&mut env, "e.getAttribute('title')"),
+        ("b".to_owned(), 1)
+    );
+}
+
+/// Every plain attribute name, twice over, set, read and removed: more
+/// names than slots, each one's attribute its own.
+#[test]
+fn attribute_names_that_share_a_slot_name_their_own_attributes() {
+    let mut env = env();
+    let plain: Vec<&str> = (0..)
+        .map_while(dom::names::fixed_text)
+        .zip(0..)
+        .filter(|&(_, id)| dom_api::typed::is_plain_attribute_name(id))
+        .map(|(name, _)| name)
+        .collect();
+    assert!(plain.len() > 1024, "{} plain names", plain.len());
+    assert!(plain.contains(&"aria-label") && plain.contains(&"class"));
+    assert!(!plain.contains(&"") && !plain.contains(&"viewBox") && !plain.contains(&"xlink:href"));
+    let calls = |member: &str, more: &str| {
+        plain
+            .iter()
+            .map(|name| format!("e.{member}('{name}'{more})"))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let names = plain
+        .iter()
+        .map(|name| format!("'{name}'"))
+        .collect::<Vec<_>>()
+        .join(",");
+    env.eval(&format!(
+        "var e = d.createElement('div'); var names = [{names}]; \
+         var set = () => [{}]; var get = () => [{}]; var has = () => [{}]; var remove = () => [{}];",
+        calls("setAttribute", &", 'v of ' + '".replace("'v of ' + '", "'v'")),
+        calls("getAttribute", ""),
+        calls("hasAttribute", ""),
+        calls("removeAttribute", ""),
+    ));
+    let all = u64::try_from(plain.len()).unwrap();
+    for round in 0..2 {
+        let (ok, told) = by_identity(
+            &mut env,
+            "set(); names.forEach((n, i) => e.setAttribute(n, 'v' + i)); \
+             var ok = get().every((v, i) => v === 'v' + i) && has().every(h => h) \
+               && e.attributes.length === names.length \
+               && names.every((n, i) => e.attributes[i].name === n); \
+             remove(); ok && e.attributes.length === 0 && get().every(v => v === null) && !has().some(h => h)",
+        );
+        assert_eq!(ok, "true", "round {round}");
+        // Those alone in their slots, of six literals of each name.
+        assert!(
+            told > all / 2 && told < all * 6,
+            "round {round}: {told} of {all}"
+        );
+    }
+}
+
 /// A member that leaves script to run makes a scope for each call into
 /// script, and none when it calls none: a dispatch that finds no listener
 /// runs as any other member.

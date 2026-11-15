@@ -1,0 +1,103 @@
+# An attribute's qualified name told by its V8 string's identity, or
+# looked up as it is taken.
+test = ["cargo", "test", "-q", "-p", "dom", "-p", "dom_api", "-p", "dom_js"]
+timeout = 1800
+
+[[mutant]]
+name = "a numbered name names an attribute with a prefix too"
+file = "crates/dom/src/lib.rs"
+from = '''            name.prefix == names::NONE && name.local == local
+        })'''
+to = '''            name.local == local
+        })'''
+
+[[mutant]]
+name = "a numbered name names the first attribute"
+file = "crates/dom/src/lib.rs"
+from = '''            name.prefix == names::NONE && name.local == local
+        })'''
+to = '''            name.prefix == names::NONE || name.local == local
+        })'''
+
+[[mutant]]
+name = "setting by number always appends"
+file = "crates/dom/src/lib.rs"
+from = '''        if let Some((_, attribute)) = self.attribute_by_number(element, local) {
+            self.change_attribute(element, attribute, value);
+            return;
+        }
+        let name = NameIds {'''
+to = '''        let name = NameIds {'''
+
+[[mutant]]
+name = "a name with a colon is a plain attribute name"
+file = "crates/dom_api/src/typed.rs"
+from = '''                && !name.contains(':')
+'''
+to = ''''''
+
+[[mutant]]
+name = "a name with an uppercase letter is a plain attribute name"
+file = "crates/dom_api/src/typed.rs"
+from = '''            crate::names_check::is_valid_attribute_local_name(name)
+                && !name.contains(':')
+                && !name.bytes().any(|byte| byte.is_ascii_uppercase())'''
+to = '''            crate::names_check::is_valid_attribute_local_name(name)
+                && !name.contains(':')'''
+
+[[mutant]]
+name = "an invalid name is a plain attribute name"
+file = "crates/dom_api/src/typed.rs"
+from = '''            crate::names_check::is_valid_attribute_local_name(name)
+                && !name.contains(':')'''
+to = '''            !name.contains(':')'''
+
+[[mutant]]
+name = "a name looked up is valid"
+file = "crates/dom_api/src/element.rs"
+from = '''        AttributeName::Lowercase(text, _) | AttributeName::Text(text) => {
+            names_check::is_valid_attribute_local_name(text)
+        }'''
+to = '''        AttributeName::Lowercase(..) => true,
+        AttributeName::Text(text) => names_check::is_valid_attribute_local_name(text),'''
+
+[[mutant]]
+name = "a name with an uppercase letter is looked up as it is"
+file = "crates/dom_js/src/front.rs"
+from = '''            .any(|byte| byte.is_ascii_uppercase() || byte == b':')'''
+to = '''            .any(|byte| byte == b':')'''
+
+[[mutant]]
+name = "a name with a colon is looked up as it is"
+file = "crates/dom_js/src/front.rs"
+from = '''            .any(|byte| byte.is_ascii_uppercase() || byte == b':')'''
+to = '''            .any(|byte| byte.is_ascii_uppercase())'''
+
+[[mutant]]
+name = "any attribute name looked up is remembered, plain or not"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            && dom_api::typed::is_plain_attribute_name(id)
+        {'''
+to = '''            && (dom_api::typed::is_plain_attribute_name(id) || true)
+        {'''
+
+[[mutant]]
+name = "no attribute name is remembered"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            && dom_api::typed::is_plain_attribute_name(id)
+        {'''
+to = '''            && dom_api::typed::is_plain_attribute_name(id)
+            && false
+        {'''
+
+[[mutant]]
+name = "attributes' names share the elements' slots"
+file = "crates/dom_js/src/front.rs"
+from = '''            Self::Attribute => &caches.attribute_slots,'''
+to = '''            Self::Attribute => &caches.name_slots,'''
+
+[[mutant]]
+name = "a name that is none is set as one found"
+file = "crates/dom_api/src/element.rs"
+from = '''        AttributeName::Lowercase(text, None) => cx.set_attribute(this, text, value),'''
+to = '''        AttributeName::Lowercase(_, None) => {}'''

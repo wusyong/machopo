@@ -2511,6 +2511,60 @@ impl<'gc> Cx<'_, 'gc> {
         })
     }
 
+    /// `attribute_by_name` of the name numbered `local`, one with no colon
+    /// (and lowercased already, if need be): the first attribute with no
+    /// prefix and that local name. No text is read.
+    #[inline]
+    fn attribute_by_number(
+        &self,
+        element: NodeRef<'gc>,
+        local: NameId,
+    ) -> Option<(usize, Gc<'gc, Attribute>)> {
+        self.find_attribute(element, |attribute| {
+            let name = attribute.qualified_name().ids();
+            name.prefix == names::NONE && name.local == local
+        })
+    }
+
+    /// `attribute_value` of the name numbered `local`, one with no colon.
+    #[inline]
+    pub fn attribute_value_numbered(
+        &self,
+        element: NodeRef<'gc>,
+        local: NameId,
+    ) -> Option<StrRef<'gc>> {
+        self.attribute_by_number(element, local)
+            .map(|(_, attribute)| StrRef(attribute.into_ref().value.get()))
+    }
+
+    /// `set_attribute` of the name numbered `local`, one with no colon.
+    ///
+    /// # Panics
+    ///
+    /// If `element` isn't an element.
+    pub fn set_attribute_numbered(&self, element: NodeRef<'gc>, local: NameId, value: &str) {
+        if let Some((_, attribute)) = self.attribute_by_number(element, local) {
+            self.change_attribute(element, attribute, value);
+            return;
+        }
+        let name = NameIds {
+            namespace: names::NONE,
+            prefix: names::NONE,
+            local,
+        };
+        self.append_attribute(element, name, value);
+    }
+
+    /// `remove_attribute` of the name numbered `local`, one with no colon.
+    pub fn remove_attribute_numbered(
+        &self,
+        element: NodeRef<'gc>,
+        local: NameId,
+    ) -> Option<DomString> {
+        let (index, _) = self.attribute_by_number(element, local)?;
+        Some(self.remove_attribute_at(element, index))
+    }
+
     /// `getAttributeNS`: the value of the attribute in `namespace` (none or
     /// empty for the null namespace) named `local`.
     pub fn get_attribute_ns(
