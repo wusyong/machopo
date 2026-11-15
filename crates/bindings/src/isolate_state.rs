@@ -731,6 +731,15 @@ impl<'s> InfoHandles<'_, 's> {
         // this callback's).
         unsafe { v8::machopo::clone_object_in_callback(self.isolate, object) }
     }
+
+    /// A new wrapper copied from `boilerplate`.
+    #[inline]
+    pub fn new_wrapper(
+        &mut self,
+        boilerplate: crate::unified_heap::BoilerplateLocal<'s>,
+    ) -> crate::unified_heap::NewWrapper<'s> {
+        crate::unified_heap::copy_boilerplate(self.isolate, boilerplate)
+    }
 }
 
 /// A callback's run in the census (`base::census`), named by its type;

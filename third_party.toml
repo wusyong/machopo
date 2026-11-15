@@ -81,4 +81,4 @@ archive = "third_party/blink/perf_tests"
 # changed since the tag (unless RUSTY_V8_ARCHIVE is set: builds link a V8
 # built locally from this checkout, `ci.py v8`). A new release moves the
 # tag and drops `rev`.
-rev = "2816d5d4b8df66bbb4ccbc494884fcc00861e23a"
+rev = "118f97d2c625de4d7bcedbfca03a0769c486c4f6"

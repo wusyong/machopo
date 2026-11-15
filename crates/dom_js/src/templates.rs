@@ -1384,29 +1384,41 @@ pub(crate) fn new_wrapper<'s>(
     scope: &mut Scope<'_, 's, '_>,
     interface: usize,
 ) -> v8::Local<'s, v8::Object> {
+    new_wrapper_unwrapped(scope, interface).into_object()
+}
+
+/// `new_wrapper`, as what it is: a copy of the boilerplate nothing else
+/// holds, which wraps its object with no check (`InfoNoGc::wrap_new`).
+pub(crate) fn new_wrapper_unwrapped<'s>(
+    scope: &mut Scope<'_, 's, '_>,
+    interface: usize,
+) -> bindings::NewWrapper<'s> {
     let context = scope.scope().get_current_context();
     let cached = {
         let (state, mut no_gc) = scope.state();
         match &state.boilerplates[interface] {
-            Some((of, boilerplate)) if *of == context => Some(no_gc.local(boilerplate)),
+            Some((of, boilerplate)) if *of == context => Some(no_gc.boilerplate(boilerplate)),
             _ => None,
         }
     };
     if let Some(boilerplate) = cached {
-        return v8::machopo::clone_object(scope.scope(), boilerplate);
+        return bindings::new_wrapper(scope.scope(), boilerplate);
     }
     let template = template(scope, interface);
     let scope_ = scope.scope();
-    let boilerplate = template
-        .instance_template(scope_)
-        .new_instance(scope_)
-        .expect("a wrapper boilerplate");
-    let made = (
-        v8::Global::new(scope_, context),
-        v8::Global::new(scope_, boilerplate),
-    );
-    scope.state_mut().0.boilerplates[interface] = Some(made);
-    v8::machopo::clone_object(scope.scope(), boilerplate)
+    let instance = template.instance_template(scope_);
+    let boilerplate =
+        bindings::Boilerplate::instantiate(scope_, instance).expect("a wrapper boilerplate");
+    let context = v8::Global::new(scope_, context);
+    scope.state_mut().0.boilerplates[interface] = Some((context, boilerplate));
+    let boilerplate = {
+        let (state, mut no_gc) = scope.state();
+        let (_, boilerplate) = state.boilerplates[interface]
+            .as_ref()
+            .expect("the boilerplate just made");
+        no_gc.boilerplate(boilerplate)
+    };
+    bindings::new_wrapper(scope.scope(), boilerplate)
 }
 
 /// Installs the table's interface objects, `DOMException` and

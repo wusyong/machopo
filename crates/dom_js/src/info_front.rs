@@ -898,7 +898,7 @@ impl<'s, K: InfoKind<'s>> FrontTypes for InfoFront<'s, K> {
     type PendingObject = (ObjectRoot, usize);
     /// A new node's wrapper made ahead of the operation, and its
     /// interface; none for a call on another realm's object.
-    type PreparedNode = Option<(v8::Local<'s, v8::Object>, usize)>;
+    type PreparedNode = Option<(bindings::NewWrapper<'s>, usize)>;
     /// The argument itself: an object, or a timer's string.
     type Callback = v8::Local<'s, v8::Value>;
     /// The argument itself (or a dictionary's member's value).
@@ -921,7 +921,7 @@ impl<'s, K: InfoKind<'s>> FrontTypes for InfoOp<'_, 's, K> {
     type PendingObject = (ObjectRoot, usize);
     /// A new node's wrapper made ahead of the operation, and its
     /// interface; none for a call on another realm's object.
-    type PreparedNode = Option<(v8::Local<'s, v8::Object>, usize)>;
+    type PreparedNode = Option<(bindings::NewWrapper<'s>, usize)>;
     /// The argument itself: an object, or a timer's string.
     type Callback = v8::Local<'s, v8::Value>;
     /// The argument itself (or a dictionary's member's value).
@@ -996,6 +996,32 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
         });
     }
 
+    /// `prepare_new_node` in a scope: the current realm's boilerplate made
+    /// if it has none (V8 instantiates the template). None for a method
+    /// of another realm called on this one's object (the wrapper is made
+    /// after, in the node's relevant realm).
+    #[cold]
+    #[inline(never)]
+    fn prepare_new_node_slowly(
+        &mut self,
+        interface: usize,
+        this: v8::Local<'s, v8::Object>,
+    ) -> Option<(bindings::NewWrapper<'s>, usize)> {
+        self.info.with_scope(|mut scope, _| {
+            let current = scope.scope().get_current_context();
+            if this
+                .get_creation_context(scope.scope())
+                .is_some_and(|context| context != current)
+            {
+                return None;
+            }
+            Some((
+                templates::new_wrapper_unwrapped(&mut scope, interface),
+                interface,
+            ))
+        })
+    }
+
     /// A wrapper for `node` (of this callback's realm, with none yet) made
     /// with no scope: a copy of the realm's boilerplate of its interface
     /// (Blink's `V8PerContextData::CreateWrapperFromCache`), made the
@@ -1006,11 +1032,11 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
         let boilerplate = {
             let (state, mut no_gc) = self.info.state();
             match &state.boilerplates[interface] {
-                Some((of, boilerplate)) if *of == context => no_gc.local(boilerplate),
+                Some((of, boilerplate)) if *of == context => no_gc.boilerplate(boilerplate),
                 _ => return false,
             }
         };
-        let made = self.info.handles().clone_object(boilerplate);
+        let made = self.info.handles().new_wrapper(boilerplate);
         let (state, mut no_gc) = self.info.state();
         // Allocates nothing: a read.
         let new = state.dom.read(|cx| {
@@ -1018,14 +1044,14 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
             let edge = cx.wrapper_edge(node);
             // Nothing made it one since (no script ran).
             if no_gc.return_wrapper(edge) {
-                return false;
+                return None;
             }
-            no_gc.wrap(cx.gc, made, node);
+            let made = no_gc.wrap_new(cx.gc, made, node);
             no_gc.set_wrapper(edge, made);
             front::count(&state.caches.wrappers_made);
-            true
+            Some(made)
         });
-        if new {
+        if let Some(made) = new {
             self.info.handles().return_value(made.into());
         }
         true
@@ -1420,27 +1446,32 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
     }
 
     /// A wrapper of `INTERFACES[interface]`, made now for the node the
-    /// operation will make (V8 allocates: a scope). None for a method of
-    /// another realm called on this one's object (the wrapper is made
-    /// after, in the node's relevant realm).
-    #[inline(never)]
-    fn prepare_new_node(&mut self, interface: usize) -> Option<(v8::Local<'s, v8::Object>, usize)> {
+    /// operation will make: a copy of the boilerplate of `this`'s realm
+    /// (the realm the node's wrapper is of), with no scope made. The
+    /// boilerplate cached is another realm's, or none is yet (a realm's
+    /// first of the interface): `prepare_new_node_slowly`.
+    #[inline(always)]
+    fn prepare_new_node(&mut self, interface: usize) -> Option<(bindings::NewWrapper<'s>, usize)> {
         let this = K::this_object(&self.info);
-        self.info.with_scope(|mut scope, _| {
-            let current = scope.scope().get_current_context();
-            if this
-                .get_creation_context(scope.scope())
-                .is_some_and(|context| context != current)
-            {
-                return None;
+        let boilerplate = {
+            let (state, mut no_gc) = self.info.state();
+            match &state.boilerplates[interface] {
+                Some((of, boilerplate))
+                    if no_gc
+                        .creation_context(this)
+                        .is_some_and(|realm| *of == realm) =>
+                {
+                    no_gc.boilerplate(boilerplate)
+                }
+                _ => return self.prepare_new_node_slowly(interface, this),
             }
-            Some((templates::new_wrapper(&mut scope, interface), interface))
-        })
+        };
+        Some((self.info.handles().new_wrapper(boilerplate), interface))
     }
 
     /// The interface `this` is of, read in an operation of its own (no
     /// safepoint), then its wrapper made.
-    fn prepare_node_like_this(&mut self) -> Option<(v8::Local<'s, v8::Object>, usize)> {
+    fn prepare_node_like_this(&mut self) -> Option<(bindings::NewWrapper<'s>, usize)> {
         let interface = self.read(|cx, op| {
             op.this_as::<Node>(cx)
                 .map(|node| front::interface_of(cx, node))
@@ -2588,11 +2619,11 @@ impl<'s, K: InfoKind<'s>> OpFront for InfoOp<'_, 's, K> {
         &mut self,
         cx: &ApiCx<'_, 'gc>,
         node: NodeRef<'gc>,
-        prepared: Option<(v8::Local<'s, v8::Object>, usize)>,
+        prepared: Option<(bindings::NewWrapper<'s>, usize)>,
     ) -> Option<PendingNode> {
         match prepared {
             Some((wrapper, interface)) if interface == front::interface_of(cx, node) => {
-                self.no_gc.wrap(cx.gc, wrapper, node);
+                let wrapper = self.no_gc.wrap_new(cx.gc, wrapper, node);
                 self.no_gc.set_wrapper(cx.wrapper_edge(node), wrapper);
                 front::count(&self.caches.wrappers_made);
                 front::count(&self.caches.wrappers_ahead);

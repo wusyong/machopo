@@ -23,7 +23,7 @@ use crate::strings::StringCache;
 const REPORT_BYTES: usize = 64 << 10;
 
 /// A wrapper boilerplate, and the context it was made in.
-type Boilerplate = (v8::Global<v8::Context>, v8::Global<v8::Object>);
+type Boilerplate = (v8::Global<v8::Context>, bindings::Boilerplate);
 
 /// A scope of an isolate whose state is the DOM's.
 pub(crate) type Scope<'a, 's, 'i> = bindings::StateScope<'a, 's, 'i, State>;

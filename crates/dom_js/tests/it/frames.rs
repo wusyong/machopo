@@ -1109,3 +1109,33 @@ fn a_cross_origin_getter_gives_what_is_its_receivers_realms() {
     );
     assert_eq!(log(&mut engine), "true / false / true / true / true");
 }
+
+/// A node made by a method of one realm called on another's document has
+/// its wrapper of the document's realm, whichever realm's function made
+/// it, the first of its interface or a later one (the wrapper is a copy
+/// of that realm's boilerplate).
+#[test]
+fn a_new_nodes_wrapper_is_of_its_documents_realm() {
+    let mut engine = engine();
+    run(
+        &mut engine,
+        "var f = document.body.appendChild(document.createElement('iframe')); var w = f.contentWindow, d = f.contentDocument;
+         var made = [
+           // Their method, their document; ours on theirs; theirs on ours.
+           d.createElement('p'), document.createElement.call(d, 'p'), d.createElement.call(document, 'p'),
+           // Again, each realm's boilerplate there by now, and in turn.
+           document.createElement.call(d, 'p'), document.createElement('p'), d.createElement('p'),
+           d.createElement.call(document, 'p'), document.createElement.call(d, 'p'),
+           document.createTextNode.call(d, 't'), d.createTextNode.call(document, 't'),
+         ];
+         log.push(made.map(n => n instanceof w.Node ? 'theirs' : n instanceof Node ? 'ours' : 'neither').join(),
+                  made.map(n => n.ownerDocument === d ? 'theirs' : 'ours').join(),
+                  Object.getPrototypeOf(made[1]) === w.HTMLParagraphElement.prototype,
+                  Object.getPrototypeOf(made[2]) === HTMLParagraphElement.prototype);",
+    );
+    assert_eq!(
+        log(&mut engine),
+        "theirs,theirs,ours,theirs,ours,theirs,ours,theirs,theirs,ours / \
+         theirs,theirs,ours,theirs,ours,theirs,ours,theirs,theirs,ours / true / true"
+    );
+}

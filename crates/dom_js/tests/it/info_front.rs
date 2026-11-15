@@ -229,6 +229,31 @@ fn a_plain_members_receiver_is_checked_by_its_signature() {
     }
 }
 
+/// A member that makes a node has its wrapper made ahead with no scope,
+/// once the realm has the interface's boilerplate (the first of an
+/// interface instantiates its template, in a scope).
+#[test]
+fn a_new_nodes_wrapper_is_made_with_no_scope() {
+    let mut env = env();
+    env.eval("d.createElement('span'); d.createTextNode('t'); d.createComment('c'); d.createDocumentFragment(); p.cloneNode(false);");
+    for source in [
+        "d.createElement('span')",
+        "d.createTextNode('t')",
+        "d.createComment('c')",
+        "d.createDocumentFragment()",
+        "p.cloneNode(false)",
+    ] {
+        let wrappers = env.wrappers_made();
+        let made = only_scopes(&mut env, &format!("var made = {source};"));
+        assert_eq!(made, 0, "{source}");
+        assert_eq!(env.wrappers_made() - wrappers, 1, "{source}: its wrapper");
+        assert_eq!(env.eval("made instanceof Node"), "true", "{source}");
+    }
+    // An interface the realm made none of yet: its boilerplate, in a scope.
+    assert!(only_scopes(&mut env, "d.createElement('table')") >= 1);
+    assert_eq!(only_scopes(&mut env, "d.createElement('table')"), 0);
+}
+
 /// A member that leaves script to run makes a scope for each call into
 /// script, and none when it calls none: a dispatch that finds no listener
 /// runs as any other member.

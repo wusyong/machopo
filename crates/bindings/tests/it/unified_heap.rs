@@ -392,6 +392,19 @@ fn a_wrapper_wraps_one_object() {
     });
 }
 
+/// A boilerplate is an API wrapper (a `FunctionTemplate`'s instance): what
+/// its copies are wrapped as with no check. An object template's own
+/// instance isn't one.
+#[test]
+#[should_panic(expected = "a wrapper boilerplate is an API wrapper wrapping nothing")]
+fn a_boilerplate_is_an_api_wrapper() {
+    let mut env = setup();
+    env.run(|scope, _| {
+        let plain = v8::ObjectTemplate::new(scope);
+        let _ = bindings::Boilerplate::instantiate(scope, plain);
+    });
+}
+
 /// A heap that is the isolate's state goes with it, V8's GC reaching it
 /// through the slot; a second state (of any type) panics before it
 /// registers, so that the first stays the one V8 marks.

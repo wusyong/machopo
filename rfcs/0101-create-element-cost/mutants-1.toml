@@ -1,0 +1,54 @@
+# A wrapper made ahead with no scope, of `this`'s realm's boilerplate, and
+# attached with no check of it.
+test = ["cargo", "test", "-q", "-p", "dom_js", "-p", "bindings"]
+timeout = 1800
+
+[[mutant]]
+name = "the boilerplate of any realm is this's"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                        .is_some_and(|realm| *of == realm) =>'''
+to = '''                        .is_some() =>'''
+
+[[mutant]]
+name = "a wrapper ahead is always made in a scope"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                        .is_some_and(|realm| *of == realm) =>'''
+to = '''                        .is_some_and(|realm| *of == realm && false) =>'''
+
+[[mutant]]
+name = "the slow path makes a wrapper for another realm's object"
+file = "crates/dom_js/src/info_front.rs"
+from = '''                .is_some_and(|context| context != current)
+            {
+                return None;
+            }
+            Some((
+                templates::new_wrapper_unwrapped(&mut scope, interface),'''
+to = '''                .is_some_and(|context| context != current && false)
+            {
+                return None;
+            }
+            Some((
+                templates::new_wrapper_unwrapped(&mut scope, interface),'''
+
+[[mutant]]
+name = "a boilerplate needn't be an API wrapper"
+file = "crates/bindings/src/unified_heap.rs"
+from = '''        assert!(
+            object.is_api_wrapper() && !v8::Object::is_wrapping(scope, object),
+            "a wrapper boilerplate is an API wrapper wrapping nothing"
+        );'''
+to = '''        assert!(
+            true || object.is_api_wrapper() && !v8::Object::is_wrapping(scope, object),
+            "a wrapper boilerplate is an API wrapper wrapping nothing"
+        );'''
+
+[[mutant]]
+name = "a new wrapper wraps nothing"
+file = "crates/bindings/src/unified_heap.rs"
+from = '''    unsafe { v8::machopo::wrap(isolate, wrapper, address.cast(), tag::<T>()) };
+    wrapper
+}'''
+to = '''    let _ = (address, isolate);
+    wrapper
+}'''

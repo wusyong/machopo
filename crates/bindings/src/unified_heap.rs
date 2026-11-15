@@ -807,6 +807,12 @@ impl<'s> crate::NoGc<'_, 's, '_> {
         v8::Local::new(self.scope, global)
     }
 
+    /// A boilerplate's object, to copy (`new_wrapper`).
+    #[inline]
+    pub fn boilerplate(&mut self, boilerplate: &Boilerplate) -> BoilerplateLocal<'s> {
+        BoilerplateLocal(v8::Local::new(self.scope, &boilerplate.0))
+    }
+
     /// A local handle of a weak one's value, if it still has it (a cached
     /// string).
     #[inline]
@@ -916,6 +922,37 @@ impl<'s> crate::InfoNoGc<'_, 's> {
         unsafe { v8::Local::new_in_callback(self.isolate, global) }
     }
 
+    /// The context `object` was made in (its realm), a handle of the
+    /// callback's own handle scope: nothing of V8's heap is made.
+    #[inline(always)]
+    pub fn creation_context(
+        &mut self,
+        object: v8::Local<'s, v8::Object>,
+    ) -> Option<v8::Local<'s, v8::Context>> {
+        // SAFETY: as `local`'s: in a callback of V8's on the isolate's
+        // thread, `object` a handle of it; the handle has the info's
+        // lifetime.
+        unsafe { object.get_creation_context_in_callback() }
+    }
+
+    /// A boilerplate's object, to copy (`InfoHandles::new_wrapper`).
+    #[inline(always)]
+    pub fn boilerplate(&mut self, boilerplate: &Boilerplate) -> BoilerplateLocal<'s> {
+        BoilerplateLocal(self.local(&boilerplate.0))
+    }
+
+    /// `wrap` of a wrapper just copied from its boilerplate, unchecked;
+    /// the wrapper back, wrapping.
+    #[inline(always)]
+    pub fn wrap_new<'gc, T: elise::HeapType>(
+        &mut self,
+        cx: &elise::Mutation<'gc>,
+        wrapper: NewWrapper<'s>,
+        object: elise::Gc<'gc, T>,
+    ) -> v8::Local<'s, v8::Object> {
+        wrap_new(self.isolate, cx, wrapper, object)
+    }
+
     /// The current context's global object (its global proxy), its handle
     /// left in the callback's own handle scope: the current realm of a
     /// callback with no receiver to find it by (Blink's callbacks'
@@ -1007,6 +1044,89 @@ pub fn wrap<'gc, T: elise::HeapType>(
     // the wrapper does (V8 hands it over as it marks the wrapper), as the
     // embedder marking (`Marking::hand`) takes it.
     unsafe { v8::machopo::wrap(isolate, wrapper, address.cast(), tag::<T>()) };
+}
+
+/// A wrapper boilerplate: an instance of an interface's template that
+/// wraps nothing and never will, kept to copy new wrappers from (Blink's
+/// `V8PerContextData`'s wrapper boilerplates). Its object never leaves
+/// this type: only copies of it do (`NewWrapper`).
+pub struct Boilerplate(v8::Global<v8::Object>);
+
+impl Boilerplate {
+    /// A new instance of `template`, in the current context.
+    ///
+    /// # Panics
+    ///
+    /// Unless the instance is an API wrapper (the template is a
+    /// `FunctionTemplate`'s instance template) wrapping nothing.
+    pub fn instantiate(
+        scope: &mut v8::PinScope<'_, '_>,
+        template: v8::Local<'_, v8::ObjectTemplate>,
+    ) -> Option<Self> {
+        let object = template.new_instance(scope)?;
+        assert!(
+            object.is_api_wrapper() && !v8::Object::is_wrapping(scope, object),
+            "a wrapper boilerplate is an API wrapper wrapping nothing"
+        );
+        Some(Self(v8::Global::new(scope, object)))
+    }
+}
+
+/// A boilerplate's object as a callback's handle: only to copy.
+#[derive(Clone, Copy)]
+pub struct BoilerplateLocal<'s>(v8::Local<'s, v8::Object>);
+
+/// A wrapper just copied from a boilerplate: an API wrapper wrapping
+/// nothing yet, which nothing else holds. Not copied: `wrap_new` takes it,
+/// so it wraps one object, once.
+pub struct NewWrapper<'s>(v8::Local<'s, v8::Object>);
+
+impl<'s> NewWrapper<'s> {
+    /// The wrapper itself, for a caller that wraps it as any object
+    /// (`wrap`, which checks it) or lets it go.
+    pub fn into_object(self) -> v8::Local<'s, v8::Object> {
+        self.0
+    }
+}
+
+/// A new wrapper copied from `boilerplate`, in a scope.
+pub fn new_wrapper<'s>(
+    scope: &v8::PinScope<'s, '_>,
+    boilerplate: BoilerplateLocal<'s>,
+) -> NewWrapper<'s> {
+    NewWrapper(v8::machopo::clone_object(scope, boilerplate.0))
+}
+
+/// As `new_wrapper`, with no scope made, in a callback of V8's
+/// (`InfoHandles::new_wrapper`).
+pub(crate) fn copy_boilerplate<'s>(
+    isolate: &v8::Isolate,
+    boilerplate: BoilerplateLocal<'s>,
+) -> NewWrapper<'s> {
+    // SAFETY: as `InfoHandles::clone_object`'s: in a callback of V8's on
+    // the isolate's thread, the boilerplate a handle of this callback's.
+    NewWrapper(unsafe { v8::machopo::clone_object_in_callback(isolate, boilerplate.0) })
+}
+
+/// `wrap` of a wrapper just copied from its boilerplate, with no check of
+/// it: the copy of an API wrapper wrapping nothing is one too, and no one
+/// had it to wrap it since (`NewWrapper`).
+fn wrap_new<'gc, 's, T: elise::HeapType>(
+    isolate: &mut v8::Isolate,
+    cx: &elise::Mutation<'gc>,
+    wrapper: NewWrapper<'s>,
+    object: elise::Gc<'gc, T>,
+) -> v8::Local<'s, v8::Object> {
+    let wrapper = wrapper.0;
+    debug_assert!(wrapper.is_api_wrapper() && !v8::Object::is_wrapping(isolate, wrapper));
+    let address = cx.engine_address(object);
+    // SAFETY: as `wrap`'s, of the address. The wrapper is an API wrapper
+    // wrapping nothing, which `wrap` asserts and this doesn't: a
+    // `NewWrapper` is made only by copying a `Boilerplate` (which is one,
+    // checked as it was made, and whose object no one else can reach to
+    // wrap), and is consumed here, so it is wrapped at most once.
+    unsafe { v8::machopo::wrap(isolate, wrapper, address.cast(), tag::<T>()) };
+    wrapper
 }
 
 /// The `T` `value` wraps, if it is a wrapper of one (`wrap`), read in an

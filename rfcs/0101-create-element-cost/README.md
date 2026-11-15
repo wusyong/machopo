@@ -116,6 +116,13 @@
 4. **原型留在 `prototypes/`**。
 5. **預先建 wrapper 的 scope 放進第 1 段**（使用者問能不能優化）：樣板物件已經在時不開 scope，用 `InfoHandles`。
 
+第 1 段，2026-11-15（使用者：都照建議；選項在「待決定」原本的列表）：
+
+6. **接上預先建的 wrapper 用型別保證不檢查**：`bindings` 的 `NewWrapper`（只有複製樣板做得出來、不能複製、接上時消耗掉）。不選 `unsafe fn` 加註解（`dom_js` 不能寫 `unsafe`，包成安全的函式就是靠註解）；不選留著檢查。
+7. **realm 只問 `this` 的 creation context**，拿它找樣板；樣板對不上（第一次、另一個 realm）才走原本的路。
+8. **這一段不動 fork**：handle 的比較留到第 2 段。
+9. **這一段在 fork 加一個不用 scope 問 creation context 的入口**（使用者，同一天稍後）：決定 5、7、8 對不上（不開 scope 問 creation context 在 fork 沒有入口），三個裡改的是決定 8：加那一個入口，只改 Rust；handle 的比較仍然留到第 2 段。不選把 scope 和 realm 延到第 2 段（會把和名稱無關的改動混進去）；不選改用目前的 context 判斷（跨 realm 的呼叫要另外確認，比較複雜）。
+
 ## 當時的選項
 
 1. **範圍：三段都做，還是先做一部分**
@@ -133,7 +140,39 @@
 
 ## 待決定
 
-每一段開始前列那一段的。
+第 1 段的三條已經定了（決定 6 到 8），當時的選項留在這裡：
+
+1. **接上預先建的 wrapper 時怎麼不檢查**（`bindings::unified_heap::wrap` 的 `assert!(wrapper.is_api_wrapper() && !is_wrapping(..))`，約 60 條）
+   - A（建議）：用型別保證。`bindings` 給一個 `NewWrapper<'s>`：只有「從樣板複製」的那個入口做得出來，不能複製，`wrap_new` 收下它（消耗掉）、不檢查。front 預先建的 wrapper（`FrontTypes::PreparedNode`）帶的是它而不是 `Local<Object>`。`unsafe` 只在 `bindings` 裡那一處，論證是「這個值只能是剛複製出來、還沒交給任何人的 wrapper；樣板是 `FunctionTemplate` 的 instance、從不接東西」。debug build 仍然檢查。
+   - B：`unsafe fn wrap_unchecked`，呼叫的地方寫 `// SAFETY:`。改動最小；但 `unsafe` 的呼叫點會在 `bindings` 之外（`dom_js` 不能寫 `unsafe`），所以得在 `bindings` 包成安全的函式，等於靠註解保證。
+   - C：留著檢查。
+2. **看 realm 的那一步**（現在問 `this` 的 creation context、問目前的 context、比較，再用目前的 context 找樣板，約 80 條加樣板那邊再比一次）
+   - A（建議）：只問 `this` 的 creation context，直接拿它當新 wrapper 的 realm 去找樣板（樣板本來就是照 context 快取的，複製出來的 wrapper 是樣板那個 realm 的）。不問目前的 context，少一次比較，估省約 35 條；別的 realm 的函式呼叫在這個 realm 的物件上時，也不用退回「操作後再建」的慢路。Blink 也是問 receiver 的 creation context（`ScriptState::ForRelevantRealm`）。
+   - B：照現在的，兩個都問。
+3. **比兩個 handle 是不是同一個物件**（現在是呼叫 V8 的 `v8__Data__EQ`，一次 14 條，這條路上兩次）
+   - A（建議）：這一段先不動；第 2 段本來就要在 fork 加照佈局讀的函式，到時候一起加一個 inline 的比較。
+   - B：這一段就動 fork。
+
+預先建 wrapper 不開 scope（決定 5）的做法沒有選項：樣板已經在時用 `InfoHandles`（加一個問 creation context 的方法），第一次才開 scope 建樣板。
+
+第 2 段（2026-11-15 列的）：
+
+1. **表放哪裡、長什麼樣**
+   - A（建議）：表只記「V8 的 hash → 名稱的編號」；比身分用現有的名稱快取（`Caches::names`：名稱的編號對到它的 internalized 的 V8 字串，現在回傳名稱時用）。第一次照文字認到一個名稱時，把參數那個字串登記進快取。不多留 handle。
+   - B：表的每一格自己留一個 handle。獨立；同一個字串留兩份。
+2. **表的大小和撞到時**
+   - A（建議）：固定 1024 格，照 hash 直接對應，撞到就蓋掉（下次重新照文字查，不影響正確）。
+   - B：會長大的 hash 表：不漏，每次查多幾條，多一塊要管的記憶體。
+3. **認哪些名稱**
+   - A（建議）：只認固定名稱表裡的；「合法的元素名稱、沒有 `-`」的旗標編譯時算好。
+   - B：連執行時才出現的名稱也認（custom element 的）：要在名稱第一次出現時算旗標，而這類名稱本來就走慢的路。
+4. **fork 加的**（只改 Rust）
+   - A（建議）：三個一起：讀 internalized 字串的 hash；inline 地比一個 handle 和一個 `Global` 是不是同一個物件（現在呼叫 `v8__Data__EQ`，一次 14 條）；把 `Global` 當 `Local` 借來用、不另建 handle（第 1 段剩下的拿樣板物件的 58 條）。
+   - B：只加第一個。
+
+`dom_api` 這一側沒有選項：`ElementLocalName` 的參數多一種「已知的名稱」的形式（只帶編號），`document::create_element` 拿到它時不檢查合法、不找 `-`。store forwarding 的衝突每一步量，變多的當場查。
+
+之後的段落開始時列那一段的。
 
 ## 之後的可能
 

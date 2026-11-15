@@ -80,10 +80,10 @@ pub use script_state::{
     script_options, set_native_error_check,
 };
 pub use unified_heap::{
-    Detachedness, EmbedderHeap, EmbedderHeapState, EmbedderRegistration, HeapGraph, OpReturn,
-    ReturnSlot, is_wrapper, receiver_unwraps_for_testing, register_embedder_heap,
-    report_embedder_used_size, return_wrapper, set_isolate_state_with_embedder_heap, set_strong,
-    set_strong_value, set_wrapper, strong, strong_value, unwrap, unwrap_object, unwrap_receiver,
-    wrap, wrapper,
+    Boilerplate, BoilerplateLocal, Detachedness, EmbedderHeap, EmbedderHeapState,
+    EmbedderRegistration, HeapGraph, NewWrapper, OpReturn, ReturnSlot, is_wrapper, new_wrapper,
+    receiver_unwraps_for_testing, register_embedder_heap, report_embedder_used_size,
+    return_wrapper, set_isolate_state_with_embedder_heap, set_strong, set_strong_value,
+    set_wrapper, strong, strong_value, unwrap, unwrap_object, unwrap_receiver, wrap, wrapper,
 };
 pub use v8_text::{LentString, ascii_scans_for_testing, borrowed_texts};

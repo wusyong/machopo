@@ -26,7 +26,7 @@ V8 的 callback（templates.rs 的 InfoMember<M>）
    └─ 3. 操作後：操作裡給不出去的結果（成員自己的區域變數）做完；沒有就結束
 ```
 
-一定會建新節點的成員（`createElement`、`createTextNode`、`cloneNode`…）在操作前先建好 wrapper（`InfoFront::prepare_new_node`：這時才建 scope；`createElement` 的 interface 照名稱猜，`foresee_element` 只看名稱；`cloneNode` 的先開一個讀的操作看 `this` 是哪個 interface），它是成員的區域變數（`RetType::Prepared`），操作裡 `InfoOp::ret_new_node` 收下它、直接接上節點：沒有 root、沒有操作後的事。interface 猜錯的（大寫的名稱、XML 文件的元素）那個 wrapper 浪費掉，照沒有 wrapper 的節點處理。
+一定會建新節點的成員（`createElement`、`createTextNode`、`cloneNode`…）在操作前先建好 wrapper（`InfoFront::prepare_new_node`：複製 `this` 的 realm 的樣板物件，不建 scope（`bindings::InfoHandles::new_wrapper`；realm 是 `this` 的 creation context，所以別的 realm 的函式呼叫在這個 realm 的物件上也走這條路）；樣板還沒有、或快取的是另一個 realm 的才建 scope（`prepare_new_node_slowly`）。建出來的是 `bindings::NewWrapper`，接上節點時不再檢查它是不是 wrapper；`createElement` 的 interface 照名稱猜，`foresee_element` 只看名稱；`cloneNode` 的先開一個讀的操作看 `this` 是哪個 interface），它是成員的區域變數（`RetType::Prepared`），操作裡 `InfoOp::ret_new_node` 收下它、直接接上節點：沒有 root、沒有操作後的事。interface 猜錯的（大寫的名稱、XML 文件的元素）那個 wrapper 浪費掉，照沒有 wrapper 的節點處理。
 
 callback 參數（listener、event handler 屬性的值、`requestAnimationFrame` 的）就是那個參數的 handle（`FrontTypes::Callback` 是 `Local<Value>`）：操作前只確認它是物件或函式，DOM 的函式在操作裡把它原樣交回 `InfoOp::store_callback`（寫進 listener 的邊）或 `same_callback`（和邊指的物件比位址，不建 `Local`），front 不留它。只有布林、數字、字串成員的 dictionary（`removeEventListener` 的 options）沒給時是預設值；給了的話整個 dictionary 的成員在一個 scope 裡由 `Scoped` 讀（`Front::reading`；getter 可能執行 script）：讀成員的方法是 `dom_api` 的 `DictFront`（`Front` 的上層 trait），`Scoped` 只實作它，所以讀 dictionary 的程式碰不到別的方法。讀出來的是值，或成員的值本身的 handle（`addEventListener` 的 `signal`、`CustomEventInit` 的 `detail`：那個 scope 不開 handle scope，handle 活到 callback 返回）。
 
