@@ -58,6 +58,18 @@ pub(crate) fn form_kind(local: NameId) -> u8 {
         .unwrap_or(0)
 }
 
+/// Whether an HTML element of the local name `local` has more made with
+/// it than its node (a template's contents, a form control's state, an
+/// iframe's and a base's counts): one load; false for a name not fixed.
+#[inline]
+pub(crate) fn made_with_more(local: NameId) -> bool {
+    usize::try_from(local)
+        .ok()
+        .and_then(|index| MADE_WITH_MORE.get(index))
+        .copied()
+        .unwrap_or(false)
+}
+
 /// What an attribute is as an event handler's content attribute: the
 /// event type its handler handles, and the sets it is in (HTML's
 /// `GlobalEventHandlers`, its `WindowEventHandlers`, and the global ones
@@ -461,10 +473,18 @@ impl QualifiedName {
     }
 
     /// `name`'s number, given it now if it needs the table and has none.
+    #[inline]
     pub fn new(name: NameIds) -> Self {
-        if let Some(name) = Self::in_bits(name) {
-            return name;
+        match Self::in_bits(name) {
+            Some(name) => name,
+            None => Self::new_tabled(name),
         }
+    }
+
+    /// `new` of a name that doesn't fit the bits: its number in the table.
+    #[cold]
+    #[inline(never)]
+    fn new_tabled(name: NameIds) -> Self {
         TABLE.with_borrow_mut(|table| {
             if let Some(&number) = table.qualified_numbers.get(&name) {
                 return Self(number);

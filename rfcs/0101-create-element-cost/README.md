@@ -130,6 +130,11 @@
 12. **只認固定名稱表裡的**「合法的元素名稱、沒有 `-`、沒有大寫」（`dom_api::typed::is_plain_element_name`）。和當時寫的不同：旗標不是編譯時算的，是第一次問時算一張 bitset（名稱表是 `dom` 的，合法與否的規則在 `dom_api`；編譯時算要把規則搬進 `dom` 的 build script）。不選連執行時才出現的名稱也認。
 13. **fork 加三個函式**（只改 Rust）：`v8::machopo::internalized_hash`、`Local::is_same_object`、`Local::new_in_callback_unchecked`。第三個和當時寫的不同：不是「把 `Global` 當 `Local` 借來用、不另建 handle」，而是照樣建一個 handle、只拿掉 `Global` 還活著和是不是這個 isolate 的兩個檢查。借來用的 `Local` 指向 `Global` 自己的那一格，`Global` 被丟掉或換掉之後它就懸空，而 `Local` 的 lifetime 是整個 callback 的，型別擋不住；建 handle 只多 18 條。
 
+第 2 段做完之後，2026-11-15（使用者：都 A，沒做的列在「之後的可能」）：
+
+14. **屬性名稱這份不做**（決定 3 留下的）：`getAttribute` 一次 560 條，名稱那一段佔多少還沒量。不選在第 2 段接著做 `getAttribute`、`setAttribute`、`hasAttribute`、`removeAttribute`。
+15. **第 3 段只做不動 elise 的兩項**：`make_element` 查名稱表的旗標、`QualifiedName::new` 的名稱放得進 bits 時直接組。不選連 elise 配置清成 0 的物件一起做（要新增入口，並在編譯時檢查「全 0 是這個型別的合法值」，跑它的 models、fuzz、miri）：`create-element` 這頁已經和 Chrome for Testing 打平，那一項的收穫是所有建節點的路徑的，另外開一份做比較合適。不選第 3 段整個不做。
+
 ## 當時的選項
 
 1. **範圍：三段都做，還是先做一部分**
@@ -182,6 +187,13 @@
 之後的段落開始時列那一段的。
 
 ## 之後的可能
+
+- **配置清成 0 的物件**（第 3 段沒做的那一項）：建節點的 166 條裡約 80 到 90 條是先在 stack 上組 13 個欄位的 init、再一欄一欄讀出來寫進 heap（每個 `Option<Gc>` 欄位一次分支）。節點的初始值除了 owner 和 flags 都是 0：elise 給一個「配置一塊清成 0 的物件，再寫幾格」的入口，估省約 100 條。所有建節點的路徑都受惠（`createTextNode`、`createComment`、`createDocumentFragment`、`cloneNode`、parser 建的節點），`ElementData`、事件物件、list 類的物件看起來也符合，沒有逐一確認。條件是「全 0 是這個型別的合法值」，要 elise 在編譯時檢查，不能靠呼叫的人保證。
+- **泛用的配置路徑**（約 45 條：查型別的資訊、看 nursery、size class 的 cursor、bump、寫 header）：每一次配置都走，沒有看出明顯多做的事。
+- **屬性名稱照字串的身分認**（決定 14）：`getAttribute`、`setAttribute`、`hasAttribute`、`removeAttribute`，和 `getElementsByTagName` 的名稱。表可以共用，要加的是屬性那一側的旗標和各成員拿參數的那一步；先量名稱那一段在 `getAttribute` 的 560 條裡佔多少。
+- **callback 裡 inline 的那一段**（參數、進操作、結果，當時量到 131 條）：沒有細看。
+- **其他不照身分認的名稱**：`createElementNS`、大寫的名稱、custom element 的名稱、執行時才出現的名稱。
+- **兩個落在同一格的名稱輪流建**（決定 11 的代價）：真的碰到時，一格放兩個名稱。
 
 - `createTextNode`、`createComment`、`cloneNode` 的同一件事（第 1、3 段的改動它們大多直接受惠，沒有另外量）。
 - 其他欄位多的型別用第 3 段的配置方式（`ElementData`）。

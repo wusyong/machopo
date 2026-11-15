@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 第 1 段：接上預先建的 wrapper 不檢查、預先建 wrapper 不開 scope、realm 只問一次 | 做完 | 2026-11-15 |
 | 第 2 段：名稱用 V8 字串的身分查（連同拿樣板物件時剩下的檢查） | 做完 | 2026-11-15 |
-| 第 3 段：建節點 | 未開始 | |
+| 第 3 段：建節點（不動 elise 的兩項，決定 15） | 做完 | 2026-11-15 |
 
 ## 驗收
 
@@ -74,3 +74,26 @@
 - **mutation test**（`mutants-2.toml`，11 個）：11 個都抓到。
 - **WPT**：`dom/nodes/`、`custom-elements/`、`html/dom/`：661 個測試、79,064 個檢查，非預期的結果 0。
 - **階段的檢查**：`cargo test --workspace`（3900 個通過）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、sanity 的各項通過（`boundary` 的清單加了兩個 static：測試的計數、照固定名稱表算一次的 bitset）。fork 的 commit `ba468a0`，pin 跟著更新。
+
+### 第 3 段
+
+2026-11-15，Linux x86-64。只做不動 elise 的兩項（README 的決定 15）。
+
+- **`make_element`**：`dom` 的 build script 多一張表 `MADE_WITH_MORE`（每個固定名稱一格：HTML 元素建立時除了節點還要做事的，template、iframe、base 和表單相關的名稱），`make_element` 在 HTML 的命名空間裡查一次，要做事的才進 `html_element_made`（原本那幾段，搬到一個不 inline 的函式）。
+- **`QualifiedName::new`**：放得進 bits 的名稱 inline 直接組，要進表的搬到不 inline 的 `new_tabled`。
+- **結果**：
+
+  | | 第 2 段之後 | 第 3 段之後 |
+  | --- | ---: | ---: |
+  | `createElement` 每次（`bench.py calls`） | 1423 條、298 cycles、衝突 4.32 | 1353 條、286 cycles、衝突 4.15 |
+  | `bindings/create-element`（對 Chrome for Testing，慢幾倍；三次） | 0.99、1.00、0.99 | 0.94、0.93、0.93 |
+  | `bindings/gc-forest` | 1.04、1.22、1.03 | 1.04、1.03、1.15 |
+  | `bindings/gc-mini-tree` | 0.85、0.90、0.89 | 0.81、0.82、0.80 |
+  | `bindings/gc-tree` | 0.81、0.87、0.67 | 0.83、0.81、0.77 |
+
+  `create-element` 的分數：machopo 3880 runs/s，Chrome for Testing 3624。其他成員的指令數不變。callback 本身這一段沒有再單步。
+- **整份前後**（`bench.py calls` 對開始前的基準）：`createElement` 每次 2048 → 1353 條、448 → 286 cycles；`create-element` 對 Chrome for Testing 1.42 → 0.93。
+- **測試**：沒有加新的；這兩項不改行為，原有的測試（template 的內容、表單的 owner 和狀態、iframe 和 base 的計數）守著。
+- **mutation test**（`mutants-3.toml`，6 個）：6 個都抓到。「`made_with_more` 對每個名稱都是真」是等價的（它擋著的那一段自己再看一次名稱），沒有列。
+- **WPT**：`dom/nodes/`、`custom-elements/`、`html/dom/`、`html/semantics/forms/`、`html/semantics/scripting-1/the-template-element/`：974 個測試、83,804 個檢查，非預期的結果 0。
+- **階段的檢查**：`cargo test --workspace`（3900 個通過）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、sanity 的各項通過。

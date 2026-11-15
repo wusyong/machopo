@@ -391,6 +391,25 @@ fn main() {
         "static FORM_KINDS: [u8; FIXED_COUNT] = {form_kinds:?};"
     )
     .unwrap();
+    // An HTML element of these names has more made with it: a template's
+    // contents, a form's and a control's state (any form kind but
+    // labelable alone, which is only asked of later), the counts of
+    // iframes and bases.
+    let mut made_with_more: Vec<bool> = form_kinds.iter().map(|kind| kind & !2 != 0).collect();
+    for name in ["template", "iframe", "base"] {
+        made_with_more[numbers_of(&names, name)] = true;
+    }
+    writeln!(
+        out,
+        "/// By number, whether an HTML element of the local name has more made"
+    )
+    .unwrap();
+    writeln!(out, "/// with it (`Cx::make_element`).").unwrap();
+    writeln!(
+        out,
+        "static MADE_WITH_MORE: [bool; FIXED_COUNT] = {made_with_more:?};"
+    )
+    .unwrap();
     for (set, constant) in [
         ("global", "GLOBAL_EVENT_HANDLERS"),
         ("window", "WINDOW_EVENT_HANDLERS"),

@@ -1397,7 +1397,24 @@ impl<'gc> Cx<'_, 'gc> {
         let document = self.document_of(document);
         let element = self.node(NodeKind::Element, Some(document), &sites::ELEMENT);
         element.name.set(QualifiedName::new(name).raw());
-        if name.namespace == names::HTML_NAMESPACE && name.local == names::TEMPLATE {
+        // Most elements are their node alone: one look at the name tells.
+        if name.namespace == names::HTML_NAMESPACE {
+            if names::made_with_more(name.local) {
+                self.html_element_made(document, element, name.local);
+            }
+        } else if name.namespace == names::SVG_NAMESPACE && name.local == names::local::USE {
+            self.svg_use_made();
+        }
+        element
+    }
+
+    /// What is made with an HTML element of a name `names::made_with_more`
+    /// tells of: a template's contents, a form control's state, the counts
+    /// of iframes and bases.
+    #[cold]
+    #[inline(never)]
+    fn html_element_made(&self, document: NodeRef<'gc>, element: NodeRef<'gc>, local: NameId) {
+        if local == names::TEMPLATE {
             let content = self.create_document_fragment(self.template_document(document));
             let data = self.gc.alloc_beside(
                 content,
@@ -1416,31 +1433,27 @@ impl<'gc> Cx<'_, 'gc> {
         // are looked at for form owners (disabled controls): a page without
         // one, nearly all of Speedometer's, looks at nothing more. An input
         // has its type from the start, a textarea its state.
-        if name.namespace == names::HTML_NAMESPACE {
-            // `CONTROL_ATTRIBUTE` as an element's name's: a `<picture>`
-            // (and a `<form>`, a `<label>`, whose names are attributes'
-            // too: looked at, nothing done).
-            let kind = names::form_kind(name.local)
-                & (form::FORM
-                    | form::FIELDSET
-                    | form::INPUT
-                    | form::TEXTAREA
-                    | form::DISABLABLE
-                    | form::LISTED
-                    | form::CONTROL_ATTRIBUTE);
-            if kind != 0 {
-                self.form_element_made(element, kind);
-            }
-        } else if name.namespace == names::SVG_NAMESPACE && name.local == names::local::USE {
-            self.svg_use_made();
+        //
+        // `CONTROL_ATTRIBUTE` as an element's name's: a `<picture>` (and a
+        // `<form>`, a `<label>`, whose names are attributes' too: looked
+        // at, nothing done).
+        let kind = names::form_kind(local)
+            & (form::FORM
+                | form::FIELDSET
+                | form::INPUT
+                | form::TEXTAREA
+                | form::DISABLABLE
+                | form::LISTED
+                | form::CONTROL_ATTRIBUTE);
+        if kind != 0 {
+            self.form_element_made(element, kind);
         }
-        if name.namespace == names::HTML_NAMESPACE && name.local == names::local::IFRAME {
+        if local == names::local::IFRAME {
             self.iframe_made();
         }
-        if name.namespace == names::HTML_NAMESPACE && name.local == names::local::BASE {
+        if local == names::local::BASE {
             self.base_made();
         }
-        element
     }
 
     /// `template`'s contents made `contents` (HTML's, as the parser

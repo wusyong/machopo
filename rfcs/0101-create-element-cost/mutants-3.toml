@@ -1,0 +1,49 @@
+# What is made with an element beside its node, told by one look at its
+# name. (`made_with_more` true of every name is equivalent: what it
+# guards looks at the name again.)
+test = ["cargo", "test", "-q", "-p", "dom", "-p", "dom_api", "-p", "dom_js", "-p", "html"]
+timeout = 1800
+
+[[mutant]]
+name = "no element has more made with it"
+file = "crates/dom/src/lib.rs"
+from = '''            if names::made_with_more(name.local) {'''
+to = '''            if names::made_with_more(name.local) && false {'''
+
+[[mutant]]
+name = "a form's elements have nothing more made"
+file = "crates/dom/build.rs"
+from = '''form_kinds.iter().map(|kind| kind & !2 != 0).collect();'''
+to = '''form_kinds.iter().map(|_| false).collect();'''
+
+[[mutant]]
+name = "a template has nothing more made"
+file = "crates/dom/build.rs"
+from = '''    for name in ["template", "iframe", "base"] {
+        made_with_more'''
+to = '''    for name in ["iframe", "base"] {
+        made_with_more'''
+
+[[mutant]]
+name = "an iframe has nothing more made"
+file = "crates/dom/build.rs"
+from = '''    for name in ["template", "iframe", "base"] {
+        made_with_more'''
+to = '''    for name in ["template", "base"] {
+        made_with_more'''
+
+[[mutant]]
+name = "a base has nothing more made"
+file = "crates/dom/build.rs"
+from = '''    for name in ["template", "iframe", "base"] {
+        made_with_more'''
+to = '''    for name in ["template", "iframe"] {
+        made_with_more'''
+
+[[mutant]]
+name = "an element of another namespace has an HTML one's made"
+file = "crates/dom/src/lib.rs"
+from = '''        if name.namespace == names::HTML_NAMESPACE {
+            if names::made_with_more(name.local) {'''
+to = '''        if name.namespace == names::HTML_NAMESPACE || true {
+            if names::made_with_more(name.local) {'''
