@@ -95,7 +95,9 @@ canvas 不在表裡：Chrome headless 在 Linux 上的 canvas 2D 在 main thread
 
 **`bindings/` 和 `events/` 的 16 頁是 2026-11-13 重量的**（binding 每次呼叫的外殼重做之後；各跑一次，表裡的其他頁和幾何平均還是 2026-11-10 的，沒有重算，表的排序也還是原來的）。getter 的頁從 1.7 到 1.8 倍降到 1.3 到 1.45 倍；帶字串參數的頁 `get-attribute` 1.49 → 0.96、`set-attribute` 1.40 → 1.02、`get-element-by-id` 2.20 → 1.41、`get-elements-by-tag-name` 1.93 → 1.26。`create-element` 1.43 → 1.50 在一次量測的起伏內（對重做之前的 machopo 直接比是持平）。
 
-三個 `gc-*` 頁整頁還慢，但 GC 本身 machopo 比較少（上一節）：慢的在建節點和 binding 的呼叫。剩下的 binding 頁差的是每次呼叫的固定成本和 DOM 那一側：最簡單的 getter 一次呼叫 machopo 約 103 條指令、Chrome 約 67（其中 V8 呼叫 callback 的那一段兩邊各約 50）；多的是進出 callback 存的暫存器、讀型別的 tag、unwrap 時比 tag、檢查位址在 heap 的 cage 裡、讀取時看是不是正在標記。`getAttribute`、`setAttribute` 的指令數比 Chrome 少（541 對 618、1035 對 1758），時間也是（0.78、0.63 倍）；`get-element-by-id` 多的是照名稱找元素；`create-element` 多半是 V8 建、接上 wrapper 的機制，Chrome 也一樣。`CSSPropertySetterGetter` 是宣告集合的增刪（宣告的結構大，增刪時搬得多）和一次存取照名稱查三、四次屬性。
+**`create-element`、三個 `gc-*` 頁、`get-attribute`、`set-attribute` 是 2026-11-15 重量的**（建元素少做的檢查、元素和屬性的字面值名稱照 V8 字串的身分認、節點的初始化 inline 之後；對 Chrome for Testing，各三次，表裡沒有改）：`create-element` 0.86 到 0.88、`gc-forest` 1.04 到 1.05、`gc-mini-tree` 0.76 到 0.86、`gc-tree` 0.75 到 0.86、`get-attribute` 0.70 到 0.74、`set-attribute` 0.83 到 0.84。表裡這幾頁的舊數字裡，會建節點的是對發行版的 Chromium 量的，它建節點比 Chrome for Testing 慢三到四成。
+
+2026-11-13 時：三個 `gc-*` 頁整頁還慢，但 GC 本身 machopo 比較少（上一節）：慢的在建節點和 binding 的呼叫。剩下的 binding 頁差的是每次呼叫的固定成本和 DOM 那一側：最簡單的 getter 一次呼叫 machopo 約 103 條指令、Chrome 約 67（其中 V8 呼叫 callback 的那一段兩邊各約 50）；多的是進出 callback 存的暫存器、讀型別的 tag、unwrap 時比 tag、檢查位址在 heap 的 cage 裡、讀取時看是不是正在標記。`getAttribute`、`setAttribute` 的指令數比 Chrome 少（541 對 618、1035 對 1758），時間也是（0.78、0.63 倍）；`get-element-by-id` 多的是照名稱找元素；`create-element` 多半是 V8 建、接上 wrapper 的機制，Chrome 也一樣。`CSSPropertySetterGetter` 是宣告集合的增刪（宣告的結構大，增刪時搬得多）和一次存取照名稱查三、四次屬性。
 
 ## 可以開 RFC 的方向
 

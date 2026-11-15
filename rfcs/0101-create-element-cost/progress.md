@@ -1,6 +1,6 @@
 # RFC 0101 的進度：`createElement` 的成本往 Chrome 靠
 
-開始日期：2026-11-15
+開始日期：2026-11-15。完成日期：2026-11-15（Linux x86-64）。
 
 ## 步驟
 
@@ -14,11 +14,12 @@
 
 ## 驗收
 
-| 項目 | 怎麼驗證 |
-| --- | --- |
-| `createElement` 的指令、cycles、store forwarding 的衝突往下，其他成員不增加 | `bench.py calls --baseline rfcs/0098-direct-v8-bindings/calls-baseline.json` |
-| callback 改到的幾段的條數 | gdb 單步（RFC 0097 的 `prototypes/step-callback.py`） |
-| 四頁對 Chrome for Testing | `bench.py blink-perf --pages`，各三次 |
+| 項目 | 怎麼驗證 | 結果 |
+| --- | --- | --- |
+| `createElement` 的指令、cycles、store forwarding 的衝突往下，其他成員不增加 | `bench.py calls --baseline rfcs/0098-direct-v8-bindings/calls-baseline.json` | 2048 → 1292 條、448（另一次量 412）→ 272 cycles、衝突 2.87 → 2.56；其他成員不增加 |
+| callback 改到的幾段的條數 | gdb 單步（RFC 0097 的 `prototypes/step-callback.py`） | 1658 → 945 條（第 3 段的第三項之後量的；第 4 段不動 `createElement`） |
+| 四頁對 Chrome for Testing | `bench.py blink-perf --pages`，各三次 | `create-element` 1.42 → 0.86、0.88、0.87；`gc-forest` 1.37 → 1.04、1.05、1.04；`gc-mini-tree` 1.18 → 0.86、0.76、0.81；`gc-tree` 1.05 → 0.75、0.86、0.79 |
+| 屬性的成員（第 4 段加的） | `bench.py calls`；`bench.py blink-perf --pages`，各三次 | `getAttribute` 560 → 378 條、`setAttribute` 1071 → 864 條；`get-attribute` 0.74、0.70、0.73，`set-attribute` 0.83、0.84、0.84（這兩頁開始前沒有對 Chrome for Testing 量過） |
 
 開始前：callback 1658 條；`createElement` 每次 2048 條、448 cycles（另一次量 412）、衝突 2.87。
 
@@ -152,3 +153,13 @@
 - **`dom_wasm`**：新的參數型別要有它的 `WitArg`（一個字串，和 `ElementLocalName` 一樣）。第一次跑階段的檢查時 workspace 編不過才發現：前面只跑了 `dom`、`dom_api`、`dom_js` 的測試。
 - **WPT**：`dom/nodes/`、`custom-elements/`、`html/dom/`、`dom/collections/`：673 個測試、79,131 個檢查，非預期的結果 0。
 - **階段的檢查**：`cargo test --workspace`（3902 個通過）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、sanity 的各項通過（`boundary` 的清單加了屬性名稱的 bitset）。
+
+### 做完時
+
+2026-11-15，Linux x86-64。
+
+- **最後量的六頁**（對 Chrome for Testing，慢幾倍；三次）：`create-element` 0.86、0.88、0.87；`gc-forest` 1.04、1.05、1.04；`gc-mini-tree` 0.86、0.76、0.81；`gc-tree` 0.75、0.86、0.79；`get-attribute` 0.74、0.70、0.73；`set-attribute` 0.83、0.84、0.84。
+- **沒有查的**：`gc-forest` 和 `gc-tree` 的起伏（各段都有一次離其他兩次遠）；第 2 段之後 store forwarding 的衝突變多是不是因為 V8 那兩個函式前面的路變短（第 3 段的第三項之後衝突回到 2.56）；`bench.py calls` 的差比單步的差多的部分（第 1 段）。
+- **沒有量的**：`createTextNode`、`createComment`、`cloneNode`、`hasAttribute`、`removeAttribute`、`toggleAttribute`（`bench.py calls` 沒有這幾個成員）；Speedometer（使用者沒有要求）。
+- **elise 的 models、fuzz、Miri 沒有跑**：elise 的改動是 derive 產生的 `__init` 的一個 inline 屬性，不碰 `unsafe` 的論證。
+- **fork 和 elise 的 commit**：rusty_v8 的 fork `118f97d`（第 1 段）、`ba468a0`（第 2 段）；elise `df8d8bb`（第 3 段的第三項）。
