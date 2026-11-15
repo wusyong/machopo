@@ -1,0 +1,69 @@
+diff --git a/crates/dom_js/src/front.rs b/crates/dom_js/src/front.rs
+index 8d3c21e..810cd23 100644
+--- a/crates/dom_js/src/front.rs
++++ b/crates/dom_js/src/front.rs
+@@ -2549,10 +2549,48 @@ pub(crate) fn foresee_element_words(isolate: &v8::Isolate, name: &ArgString<'_>)
+     )
+ }
+ 
++thread_local! {
++    /// PROTOTYPE: names found by their V8 string's identity. A slot by
++    /// the string's hash: the internalized string's address, its name's
++    /// number and its element's interface. (A real one would hold the
++    /// string by a handle, whose address a GC updates; this trusts the
++    /// address.)
++    static NAME_IDENTITIES: std::cell::Cell<[(usize, u32, u32); 256]> =
++        const { std::cell::Cell::new([(0, 0, 0); 256]) };
++    pub(crate) static NAME_IDENTITY_HITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
++}
++
+ #[inline(always)]
+ fn foresee_element_parts(
+     isolate: &v8::Isolate,
+     name: &ArgString<'_>,
++) -> (Option<dom::NameId>, usize) {
++    let identity = v8::machopo::internalized_identity(name.v8_string());
++    if let Some((hash, address)) = identity {
++        let slot = (hash >> 2) as usize & 255;
++        let found = NAME_IDENTITIES.with(|slots| {
++            // SAFETY-free read of one slot: the array is `Copy` in a `Cell`.
++            let slots = slots.as_array_of_cells();
++            slots[slot].get()
++        });
++        if found.0 == address {
++            NAME_IDENTITY_HITS.set(NAME_IDENTITY_HITS.get().wrapping_add(1));
++            return (Some(found.1), found.2 as usize);
++        }
++    }
++    let (id, interface) = foresee_element_slow(isolate, name);
++    if let (Some((hash, address)), Some(id)) = (identity, id) {
++        let slot = (hash >> 2) as usize & 255;
++        NAME_IDENTITIES.with(|slots| {
++            slots.as_array_of_cells()[slot].set((address, id, interface as u32));
++        });
++    }
++    (id, interface)
++}
++
++fn foresee_element_slow(
++    isolate: &v8::Isolate,
++    name: &ArgString<'_>,
+ ) -> (Option<dom::NameId>, usize) {
+     name.peek_ascii(isolate, |text| {
+         if text.bytes().any(|byte| byte.is_ascii_uppercase()) {
+diff --git a/crates/dom_js/src/strings.rs b/crates/dom_js/src/strings.rs
+index 0369736..bfc9fcb 100644
+--- a/crates/dom_js/src/strings.rs
++++ b/crates/dom_js/src/strings.rs
+@@ -262,6 +262,11 @@ impl<'s> ArgString<'s> {
+         self.string.peek_ascii(isolate, f)
+     }
+ 
++    /// PROTOTYPE: the V8 string itself.
++    pub fn v8_string(&self) -> v8::Local<'s, v8::String> {
++        self.string.string()
++    }
++
+     /// Its text, in the operation.
+     pub fn text(&self, no_gc: &mut bindings::NoGc<'_, '_, '_>) -> &str {
+         match &self.copied {

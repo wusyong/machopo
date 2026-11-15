@@ -1,0 +1,40 @@
+diff --git a/src/machopo.rs b/src/machopo.rs
+index 8c2c171..84171bc 100644
+--- a/src/machopo.rs
++++ b/src/machopo.rs
+@@ -727,6 +727,35 @@ pub fn as_string<'s>(value: Local<'s, Value>) -> Option<Local<'s, crate::String>
+   is_string.then(|| unsafe { Local::cast_unchecked(value) })
+ }
+ 
++/// machopo (prototype): an internalized string's hash field and its
++/// tagged address; none for a string that isn't internalized. An
++/// internalized string is the one object of its characters in the isolate
++/// (`StringTable`), and V8 computed its hash as it interned it
++/// (`Name::raw_hash_field`, after the map; `kIsNotInternalizedMask` of the
++/// map's instance type).
++#[inline(always)]
++pub fn internalized_identity(
++  string: Local<'_, crate::String>,
++) -> Option<(u32, usize)> {
++  const NAME_HASH_OFFSET: usize = 4;
++  const NOT_INTERNALIZED: u16 = 1 << 5;
++  // SAFETY: as `as_string`'s.
++  unsafe {
++    let object = *(&*string as *const crate::String).cast::<usize>();
++    let cage = object & !(CAGE_ALIGNMENT - 1);
++    let map = cage + ((object - HEAP_OBJECT_TAG) as *const u32).read() as usize;
++    let instance_type = ((map - HEAP_OBJECT_TAG + MAP_INSTANCE_TYPE_OFFSET)
++      as *const u16)
++      .read();
++    if instance_type & NOT_INTERNALIZED != 0 {
++      return None;
++    }
++    let hash =
++      ((object - HEAP_OBJECT_TAG + NAME_HASH_OFFSET) as *const u32).read();
++    Some((hash, object))
++  }
++}
++
+ /// machopo: `value` as a small integer if it is one (a Smi: V8's tagged
+ /// value with `kSmiTag`, 31 bits with pointer compression,
+ /// `Internals::SmiValue`), with no call into V8: what most integer
