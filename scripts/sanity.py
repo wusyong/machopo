@@ -283,6 +283,10 @@ STATICS_ALLOWED = {
     ("crates/bindings/src/isolate_state.rs", "INFO_SCOPES"): "tests' counters (thread-local)",
     ("crates/bindings/src/isolate_state.rs", "INFO_HANDLES"): "tests' counters (thread-local)",
     ("crates/dom_js/src/info_front.rs", "SIZE_REPORT_SCOPES"): "tests' counters (thread-local)",
+    ("crates/dom_js/src/front.rs", "NAMES_BY_IDENTITY"): "tests' counters (thread-local)",
+    ("crates/dom_api/src/typed.rs", "PLAIN"):
+        "which fixed names are plain element names, computed once from the fixed names' table: the same in every "
+        "process",
     ("crates/bindings/src/v8_text.rs", "BORROWED"):
         "the V8 strings lending their text on a thread, which V8's GC prologue on it checks (thread-local)",
     ("crates/css/src/rule_set.rs", "RULES_ADDED"): "tests' counters (thread-local)",

@@ -72,8 +72,28 @@ pub(crate) fn document_element<'gc>(
 pub(crate) fn create_element<'gc>(
     cx: &ApiCx<'_, 'gc>,
     this: NodeRef<'gc>,
-    (local_name, id): (&str, Option<dom::NameId>),
+    name: crate::typed::ElementName<'_>,
 ) -> Result<Created<'gc>, ApiError> {
+    let text;
+    let (local_name, id) = match name {
+        // A plain name: valid, lowercase, no hyphen. In an HTML document
+        // its element is made by the number, the text never read.
+        crate::typed::ElementName::Known(local) => {
+            if cx.is_html_document(this) {
+                let ids = dom::NameIds {
+                    namespace: names::HTML_NAMESPACE,
+                    prefix: names::NONE,
+                    local,
+                };
+                let element = cx.create_element_named(this, ids);
+                debug_assert!(is_element(cx, element));
+                return Ok(Created::Element(element));
+            }
+            text = names::string(local);
+            (&*text.to_str(), Some(local))
+        }
+        crate::typed::ElementName::Text(local_name, id) => (local_name, id),
+    };
     if !names_check::is_valid_element_local_name(local_name) {
         return Err(ApiError::dom(ExceptionName::InvalidCharacter));
     }

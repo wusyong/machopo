@@ -1022,6 +1022,13 @@ impl<'s, K: InfoKind<'s>> InfoFront<'s, K> {
         })
     }
 
+    #[cold]
+    #[inline(never)]
+    fn remember_name(&mut self, string: v8::Local<'s, v8::String>, id: NameId) {
+        let (state, mut no_gc) = self.info.state_mut();
+        front::remember_name(state, &mut no_gc, string, id);
+    }
+
     /// A wrapper for `node` (of this callback's realm, with none yet) made
     /// with no scope: a copy of the realm's boilerplate of its interface
     /// (Blink's `V8PerContextData::CreateWrapperFromCache`), made the
@@ -1459,7 +1466,7 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
                 Some((of, boilerplate))
                     if no_gc
                         .creation_context(this)
-                        .is_some_and(|realm| *of == realm) =>
+                        .is_some_and(|realm| no_gc.same_object(realm, of)) =>
                 {
                     no_gc.boilerplate(boilerplate)
                 }
@@ -1479,11 +1486,28 @@ impl<'s, K: InfoKind<'s>> Front for InfoFront<'s, K> {
         self.prepare_new_node(interface)
     }
 
-    /// The name only peeked at, with the isolate alone.
+    /// A literal's name, told by the string's identity: no text read.
+    #[inline(always)]
+    fn known_element_name(&mut self, index: usize) -> Option<(NameId, usize)> {
+        let string = v8::machopo::as_string(K::arg(&self.info, index))?;
+        let (state, mut no_gc) = self.info.state();
+        let id = front::name_by_identity(&state.caches, &mut no_gc, string)?;
+        Some((id, dom_api::html_element_interface(id)))
+    }
+
+    /// The name only peeked at, with the isolate alone. A plain name
+    /// found is remembered by its string's identity, for the next call
+    /// (`known_element_name`).
     #[inline(always)]
     fn foresee_element(&mut self, name: &ArgString<'s>) -> (Option<NameId>, usize) {
         let (id, interface) = front::foresee_element_words(self.info.isolate(), name);
-        (NameId::try_from(id).ok(), interface)
+        let id = NameId::try_from(id).ok();
+        if let Some(id) = id
+            && dom_api::typed::is_plain_element_name(id)
+        {
+            self.remember_name(name.v8_string(), id);
+        }
+        (id, interface)
     }
 
     /// A number that is no Smi: a heap number, which V8's return value

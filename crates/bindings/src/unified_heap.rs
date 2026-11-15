@@ -938,7 +938,29 @@ impl<'s> crate::InfoNoGc<'_, 's> {
     /// A boilerplate's object, to copy (`InfoHandles::new_wrapper`).
     #[inline(always)]
     pub fn boilerplate(&mut self, boilerplate: &Boilerplate) -> BoilerplateLocal<'s> {
-        BoilerplateLocal(self.local(&boilerplate.0))
+        // SAFETY: as `local`'s; a `Boilerplate` is made of the isolate
+        // whose state holds it, which a callback of that isolate reads it
+        // from: the isolate's, alive, with no check of either.
+        BoilerplateLocal(unsafe {
+            v8::Local::new_in_callback_unchecked(self.isolate, &boilerplate.0)
+        })
+    }
+
+    /// A global handle of `local`'s value (a name's string to keep): a
+    /// handle's node, nothing of V8's heap.
+    #[inline]
+    pub fn global<T>(&mut self, local: v8::Local<'s, T>) -> v8::Global<T> {
+        v8::Global::new(self.isolate, local)
+    }
+
+    /// Whether `local` and `global` hold the same object: their addresses
+    /// compared in place, with no call into V8.
+    #[inline(always)]
+    pub fn same_object<T, U>(&mut self, local: v8::Local<'s, T>, global: &v8::Global<U>) -> bool {
+        // SAFETY: a `Global` the caller has is of an isolate alive (a
+        // callback of the isolate's is running: the state that holds its
+        // globals is this isolate's).
+        unsafe { local.is_same_object(global) }
     }
 
     /// `wrap` of a wrapper just copied from its boilerplate, unchecked;

@@ -221,6 +221,11 @@ thread_local! {
 }
 
 /// A dynamic name's index in `Table::strings`, if `number` isn't fixed.
+/// A fixed name's text; none for a name interned at run time.
+pub fn fixed_text(number: NameId) -> Option<&'static str> {
+    FIXED.get(usize::try_from(number).ok()?).copied()
+}
+
 fn dynamic_index(number: NameId) -> Option<usize> {
     usize::try_from(number).ok()?.checked_sub(FIXED_COUNT)
 }

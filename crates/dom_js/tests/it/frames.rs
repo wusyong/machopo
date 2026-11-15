@@ -1110,6 +1110,44 @@ fn a_cross_origin_getter_gives_what_is_its_receivers_realms() {
     assert_eq!(log(&mut engine), "true / false / true / true / true");
 }
 
+/// A name told by its string's identity is the isolate's: a literal of
+/// another realm's script is the same string, and the element still its
+/// document's realm's. In a document that isn't an HTML one the name makes
+/// what its text does: an element of no namespace, or the XHTML one's.
+#[test]
+fn a_name_told_by_identity_makes_its_documents_element() {
+    let mut engine = engine();
+    let told = || dom_js::names_by_identity_for_testing().expect("a debug build");
+    run(
+        &mut engine,
+        "var f = document.body.appendChild(document.createElement('iframe')); var w = f.contentWindow, d = f.contentDocument;
+         var xml = document.implementation.createDocument(null, 'root');
+         var xhtml = document.implementation.createDocument('http://www.w3.org/1999/xhtml', 'html');
+         var describe = e => [e.localName, e.tagName, e.namespaceURI || '', Object.getPrototypeOf(e).constructor.name].join(' ');
+         var before = [xml.createElement('section'), xhtml.createElement('section')].map(describe).join();
+         w.eval(`var theirs = () => document.createElement('section'); var ours = d => d.createElement('section');`);
+         document.createElement('section');",
+    );
+    let before = told();
+    run(
+        &mut engine,
+        "var made = [document.createElement('section'), w.theirs(), w.ours(document), d.createElement('section')];
+         log.push(made.map(n => n instanceof w.HTMLElement ? 'theirs' : n instanceof HTMLElement ? 'ours' : 'neither').join(),
+                  made.map(n => n.localName).join());",
+    );
+    assert_eq!(told() - before, 4);
+    run(
+        &mut engine,
+        "log.push(before, [xml.createElement('section'), xhtml.createElement('section')].map(describe).join() === before);",
+    );
+    assert_eq!(told() - before, 6, "told, and made by its text");
+    assert_eq!(
+        log(&mut engine),
+        "ours,theirs,ours,theirs / section,section,section,section / \
+         section section  Element,section section http://www.w3.org/1999/xhtml HTMLElement / true"
+    );
+}
+
 /// A node made by a method of one realm called on another's document has
 /// its wrapper of the document's realm, whichever realm's function made
 /// it, the first of its interface or a later one (the wrapper is a copy

@@ -124,6 +124,12 @@ pub(crate) struct Caches {
     /// The names table's V8 strings, by number, made the first time one is
     /// returned: held strongly, as the names are (the table never shrinks).
     pub(crate) names: Vec<Option<v8::Global<v8::String>>>,
+    /// Plain element names by their V8 string's identity
+    /// (`front::NAME_SLOTS`): a slot by the internalized string's hash
+    /// holds the name's number plus one (0: none), whose string in
+    /// `names` is the one a literal of the name is. Filled as names are
+    /// told by their text; a slot two names share holds the later.
+    pub(crate) name_slots: Box<[Cell<u32>; crate::front::NAME_SLOTS]>,
     /// Wrappers made, for the tests: counted in an operation too, where the
     /// caches are shared.
     pub(crate) wrappers_made: Cell<u64>,
@@ -224,6 +230,7 @@ pub(crate) fn install(isolate: &mut v8::Isolate) {
             caches: Caches {
                 strings: StringCache::new(),
                 names: Vec::new(),
+                name_slots: Box::new([const { Cell::new(0) }; crate::front::NAME_SLOTS]),
                 wrappers_made: Cell::new(0),
                 wrappers_wasted: Cell::new(0),
                 wrappers_ahead: Cell::new(0),

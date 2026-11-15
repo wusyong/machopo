@@ -123,6 +123,13 @@
 8. **這一段不動 fork**：handle 的比較留到第 2 段。
 9. **這一段在 fork 加一個不用 scope 問 creation context 的入口**（使用者，同一天稍後）：決定 5、7、8 對不上（不開 scope 問 creation context 在 fork 沒有入口），三個裡改的是決定 8：加那一個入口，只改 Rust；handle 的比較仍然留到第 2 段。不選把 scope 和 realm 延到第 2 段（會把和名稱無關的改動混進去）；不選改用目前的 context 判斷（跨 realm 的呼叫要另外確認，比較複雜）。
 
+第 2 段，2026-11-15（使用者：都照建議；選項在「待決定」原本的列表）：
+
+10. **表只記「V8 的 hash → 名稱的編號」**，比身分用現有的名稱快取（`Caches::names`）；第一次照文字認到一個名稱時，參數那個字串就是快取裡那個名稱的字串（之後 `localName` 回傳的也是它，不另建）。不選每一格自己留 handle（同一個字串留兩份）。
+11. **固定 1024 格、照 hash 直接對應、撞到就蓋掉**。不選會長大的 hash 表（每次查多幾條，多一塊要管的記憶體）。代價：兩個落在同一格的名稱輪流建時互相蓋掉，兩個都走照文字的路，每次還多一次登記；一般頁面用到的元素名稱一兩百個以內，1024 格裡撞到的機會小。
+12. **只認固定名稱表裡的**「合法的元素名稱、沒有 `-`、沒有大寫」（`dom_api::typed::is_plain_element_name`）。和當時寫的不同：旗標不是編譯時算的，是第一次問時算一張 bitset（名稱表是 `dom` 的，合法與否的規則在 `dom_api`；編譯時算要把規則搬進 `dom` 的 build script）。不選連執行時才出現的名稱也認。
+13. **fork 加三個函式**（只改 Rust）：`v8::machopo::internalized_hash`、`Local::is_same_object`、`Local::new_in_callback_unchecked`。第三個和當時寫的不同：不是「把 `Global` 當 `Local` 借來用、不另建 handle」，而是照樣建一個 handle、只拿掉 `Global` 還活著和是不是這個 isolate 的兩個檢查。借來用的 `Local` 指向 `Global` 自己的那一格，`Global` 被丟掉或換掉之後它就懸空，而 `Local` 的 lifetime 是整個 callback 的，型別擋不住；建 handle 只多 18 條。
+
 ## 當時的選項
 
 1. **範圍：三段都做，還是先做一部分**
@@ -155,7 +162,7 @@
 
 預先建 wrapper 不開 scope（決定 5）的做法沒有選項：樣板已經在時用 `InfoHandles`（加一個問 creation context 的方法），第一次才開 scope 建樣板。
 
-第 2 段（2026-11-15 列的）：
+第 2 段的四條已經定了（決定 10 到 13），當時的選項留在這裡：
 
 1. **表放哪裡、長什麼樣**
    - A（建議）：表只記「V8 的 hash → 名稱的編號」；比身分用現有的名稱快取（`Caches::names`：名稱的編號對到它的 internalized 的 V8 字串，現在回傳名稱時用）。第一次照文字認到一個名稱時，把參數那個字串登記進快取。不多留 handle。

@@ -7,7 +7,7 @@
 | 步驟 | 狀態 | 完成日期 |
 | --- | --- | --- |
 | 第 1 段：接上預先建的 wrapper 不檢查、預先建 wrapper 不開 scope、realm 只問一次 | 做完 | 2026-11-15 |
-| 第 2 段：名稱用 V8 字串的身分查（連同拿樣板物件時剩下的檢查） | 未開始 | |
+| 第 2 段：名稱用 V8 字串的身分查（連同拿樣板物件時剩下的檢查） | 做完 | 2026-11-15 |
 | 第 3 段：建節點 | 未開始 | |
 
 ## 驗收
@@ -49,3 +49,28 @@
 - **mutation test**（`mutants-1.toml`，5 個）：4 個抓到；「樣板不必是 API wrapper」漏掉，補了 `bindings` 的測試後抓到。
 - **WPT**：`dom/nodes/`、`custom-elements/`、`html/browsers/origin/`、`html/dom/`：661 個測試、79,064 個檢查，非預期的結果 0。
 - **階段的檢查**：`cargo test --workspace`、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、sanity 的各項通過。
+
+### 第 2 段
+
+2026-11-15，Linux x86-64。
+
+- **做法**（README 的決定 10 到 13）：`dom_js` 的 `Caches::name_slots`（1024 格，V8 的 hash 選一格，記名稱的編號）；`front::name_by_identity` 讀參數的 hash、看那一格的名稱在名稱快取裡的字串和參數是不是同一個物件；`InfoFront::known_element_name` 認得出來時操作只拿到編號（`dom_api` 的 `ElementName::Known`），HTML 文件裡 `document::create_element` 直接照編號建，不借文字、不檢查合法、不找 `-`。認不出來的照文字查，查到的是 `is_plain_element_name` 的名稱（固定名稱表裡合法、沒有大寫、沒有 `-`）就登記（`front::remember_name`）：參數那個字串留作名稱快取裡那個名稱的字串。fork 的 `v8::machopo::internalized_hash`、`Local::is_same_object`、`Local::new_in_callback_unchecked`。
+- **結果**：
+
+  | | 第 1 段之後 | 第 2 段之後 |
+  | --- | ---: | ---: |
+  | callback 本身（gdb 單步） | 1496 條 | 1076 條 |
+  | `createElement` 每次（`bench.py calls`） | 1843 條、377 cycles、衝突 3.16 | 1423 條、298 cycles、衝突 4.32 |
+  | `bindings/create-element`（對 Chrome for Testing，慢幾倍；三次） | 1.24、1.26、1.28 | 0.99、1.00、0.99 |
+  | `bindings/gc-forest` | 1.34、1.33、1.51 | 1.04、1.22、1.03 |
+  | `bindings/gc-mini-tree` | 1.01、1.01、1.04 | 0.85、0.90、0.89 |
+  | `bindings/gc-tree` | 1.01、0.99、1.02 | 0.81、0.87、0.67 |
+
+  `create-element` 的分數：machopo 3562 runs/s，Chrome for Testing 3541。其他成員的指令數不變（`firstChild` 139、`nodeType` 112、`getAttribute` 560、`setAttribute` 1071、`appendChild` 1329、`classList (first)` 2473、`nextSibling (first)` 1865、`list[i] (first)` 2289）。`gc-forest` 和 `gc-tree` 各有一次離其他兩次遠（1.22、0.67），這兩頁的起伏沒有查。
+- **store forwarding 的衝突變多（3.16 → 4.32）**：查了，不在改到的程式裡。單步一次 callback、找「讀的範圍和前面 150 條內的寫部分重疊」的讀取，第 1 段和第 2 段的 binary 是同一組（`Node::__init` 讀 `Cx::node` 分兩半寫的那一格，第 3 段的範圍；其餘三處是腳本把 1、2 byte 的寫算成 8 byte 的誤判）。用 `perf record -e ls_bad_status2.stli_other` 取樣：多出來的落在 V8 的 `ExternalEntityTable::TryAllocateEntry`（每次 0.86 → 1.7）和 `Factory::CopyJSObjectWithAllocationSite`（0.04 → 0.83），兩個函式都沒改。這個計數算的是「讀的時候前面的寫還沒完成」；推測是它們前面的路短了 420 條，寫還在路上的機會變多。這個推測沒有另外驗證。cycles 照指令的比例下降（−21% 對 −23%）。
+- **兩個原有的測試的預期改了**（`strings::a_names_v8_string_is_made_once`、`a_new_string_is_made_with_no_scope`）：`createElement` 的參數字串現在留作名稱的字串，`localName` 第一次回傳時不另建（少一個 handle；`names_made` 在 `createElement` 時就加一）。
+- **兩個落在同一格的名稱**輪流建時互相蓋掉，兩個都走照文字的路、每次多一次登記（決定 11 的代價）。固定名稱表裡 `is_plain_element_name` 的有 1259 個，全部各建兩輪，第二輪 364 個靠身分認到（獨佔一格的；照 1259 個丟進 1024 格算是約 369 個）。
+- **新的測試**：`info_front::a_literal_element_name_is_told_by_its_strings_identity`（字面值第二次起靠身分；執行時接出來的字串、大寫、有 `-`、沒見過的名稱、不合法的、不是字串的都照文字，建出來的元素一樣；GC 之後仍然認得、字串還是同一個）、`info_front::names_that_share_a_slot_make_their_own_elements`、`frames::a_name_told_by_identity_makes_its_documents_element`（另一個 realm 的字面值是同一個字串、wrapper 是 document 那個 realm 的；XML 和 XHTML 的文件照文字建的結果）。靠身分認到的次數用 debug build 才有的計數看（`dom_js::names_by_identity_for_testing`）。fork 的 `internalized_hash` 在 debug build 和 `Name::GetIdentityHash` 比對。
+- **mutation test**（`mutants-2.toml`，11 個）：11 個都抓到。
+- **WPT**：`dom/nodes/`、`custom-elements/`、`html/dom/`：661 個測試、79,064 個檢查，非預期的結果 0。
+- **階段的檢查**：`cargo test --workspace`（3900 個通過）、`cargo fmt --check`、`cargo clippy --workspace --all-targets -- -D warnings`、sanity 的各項通過（`boundary` 的清單加了兩個 static：測試的計數、照固定名稱表算一次的 bitset）。fork 的 commit `ba468a0`，pin 跟著更新。

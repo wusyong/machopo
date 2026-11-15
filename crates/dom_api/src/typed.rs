@@ -1095,6 +1095,17 @@ pub trait Front: DictFront {
     /// number if it found it as it is (lowercase), for the operation to
     /// use, and the interface the element will be of (what its wrapper is
     /// made ahead of, `prepare_new_node`); `HTMLElement` by default.
+    /// Argument `index` as an element's local name told with no text read
+    /// (an engine that knows its strings by their identity): the name's
+    /// number, a plain one's (`is_plain_element_name`), and the interface
+    /// its element is of in an HTML document. None: the name is taken as
+    /// a string (`string_arg`, `foresee_element`).
+    #[inline(always)]
+    fn known_element_name(&mut self, index: usize) -> Option<(dom::NameId, usize)> {
+        let _ = index;
+        None
+    }
+
     fn foresee_element(&mut self, name: &Self::Str) -> (Option<dom::NameId>, usize) {
         let _ = name;
         (None, crate::declare::HTML_ELEMENT)
@@ -5958,33 +5969,88 @@ pub fn take_object<I: Interface, F: Front>(front: &mut F, index: usize) -> Optio
 /// `NewHtmlElement` as the result).
 pub struct ElementLocalName;
 
+/// `createElement`'s local name as the front end took it: a name told
+/// with no text read, or the string and its number if it is one already.
+pub enum ElementNameArg<S> {
+    Known(dom::NameId),
+    Text(S, Option<dom::NameId>),
+}
+
+/// `createElement`'s local name in the operation.
+#[derive(Clone, Copy)]
+pub enum ElementName<'a> {
+    /// A plain name (`is_plain_element_name`): a valid local name,
+    /// lowercase, with no hyphen. Its text isn't read.
+    Known(dom::NameId),
+    /// The text, and its number if it is a name already as it is.
+    Text(&'a str, Option<dom::NameId>),
+}
+
+/// Whether the fixed name `id` is a plain element name: a valid element
+/// local name with no ASCII uppercase letter (an HTML document makes its
+/// element by the name as it is) and no hyphen (not a custom element's).
+/// False for a name interned at run time. One bit of a table made at the
+/// first ask.
+#[inline]
+pub fn is_plain_element_name(id: dom::NameId) -> bool {
+    static PLAIN: std::sync::OnceLock<Box<[u64]>> = std::sync::OnceLock::new();
+    let plain = PLAIN.get_or_init(|| {
+        let mut bits = Vec::new();
+        let mut id: dom::NameId = 0;
+        while let Some(name) = dom::names::fixed_text(id) {
+            let plain = crate::names_check::is_valid_element_local_name(name)
+                && !name.contains('-')
+                && !name.bytes().any(|byte| byte.is_ascii_uppercase());
+            let index = usize::try_from(id).expect("a fixed number fits a usize");
+            if index % 64 == 0 {
+                bits.push(0u64);
+            }
+            if plain {
+                *bits.last_mut().expect("a word just pushed") |= 1 << (index % 64);
+            }
+            id = id.checked_add(1).expect("fewer fixed names than numbers");
+        }
+        bits.into_boxed_slice()
+    });
+    usize::try_from(id)
+        .ok()
+        .and_then(|index| Some(plain.get(index / 64)? >> (index % 64) & 1 != 0))
+        .unwrap_or(false)
+}
+
 impl ArgType for ElementLocalName {
     const DESC: TypeDesc = TypeDesc::String;
-    /// The name, its number if it is one already, and the interface its
-    /// element will be of in an HTML document (`Front::foresee_element`).
-    type Taken<T: FrontTypes> = (T::Str, Option<dom::NameId>, usize);
-    type Param<'a, 'gc, T: FrontTypes + 'a> = (&'a str, Option<dom::NameId>);
+    /// The name (told with no text read, or the string and its number if
+    /// it is one already), and the interface its element will be of in an
+    /// HTML document (`Front::known_element_name`,
+    /// `Front::foresee_element`).
+    type Taken<T: FrontTypes> = (ElementNameArg<T::Str>, usize);
+    type Param<'a, 'gc, T: FrontTypes + 'a> = ElementName<'a>;
 
-    fn take<F: Front>(front: &mut F, index: usize) -> Option<(F::Str, Option<dom::NameId>, usize)> {
+    fn take<F: Front>(front: &mut F, index: usize) -> Option<(ElementNameArg<F::Str>, usize)> {
+        if let Some((id, interface)) = front.known_element_name(index) {
+            return Some((ElementNameArg::Known(id), interface));
+        }
         let name = front.string_arg(index)?;
         let (id, interface) = front.foresee_element(&name);
-        Some((name, id, interface))
+        Some((ElementNameArg::Text(name, id), interface))
     }
 
     #[inline(always)]
-    fn foreseen_interface<F: FrontTypes>(
-        taken: &(F::Str, Option<dom::NameId>, usize),
-    ) -> Option<usize> {
-        Some(taken.2)
+    fn foreseen_interface<F: FrontTypes>(taken: &(ElementNameArg<F::Str>, usize)) -> Option<usize> {
+        Some(taken.1)
     }
 
     fn param<'a, 'gc, O: OpFront + 'a>(
         op: &mut O,
         _: &ApiCx<'_, 'gc>,
-        taken: &'a (O::Str, Option<dom::NameId>, usize),
+        taken: &'a (ElementNameArg<O::Str>, usize),
         _: usize,
-    ) -> Result<(&'a str, Option<dom::NameId>), ApiError> {
-        Ok((op.str_param(&taken.0), taken.1))
+    ) -> Result<ElementName<'a>, ApiError> {
+        Ok(match &taken.0 {
+            ElementNameArg::Known(id) => ElementName::Known(*id),
+            ElementNameArg::Text(name, id) => ElementName::Text(op.str_param(name), *id),
+        })
     }
 }
 

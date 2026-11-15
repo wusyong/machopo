@@ -1,0 +1,89 @@
+# An element's name told by its V8 string's identity.
+test = ["cargo", "test", "-q", "-p", "dom_js", "-p", "bindings", "-p", "dom_api"]
+timeout = 1800
+
+[[mutant]]
+name = "a slot's name is the string's, whatever string"
+file = "crates/dom_js/src/front.rs"
+from = '''    if !no_gc.same_object(string, held) {
+        return None;
+    }'''
+to = '''    if !no_gc.same_object(string, held) && false {
+        return None;
+    }'''
+
+[[mutant]]
+name = "no name is told by identity"
+file = "crates/dom_js/src/front.rs"
+from = '''    if !no_gc.same_object(string, held) {
+        return None;
+    }'''
+to = '''    if !no_gc.same_object(string, held) || true {
+        return None;
+    }'''
+
+[[mutant]]
+name = "two handles are always of the same object"
+file = "crates/bindings/src/unified_heap.rs"
+from = '''        unsafe { local.is_same_object(global) }'''
+to = '''        unsafe { local.is_same_object(global) || true }'''
+
+[[mutant]]
+name = "a name is remembered in no slot"
+file = "crates/dom_js/src/front.rs"
+from = '''    state.caches.name_slots[name_slot(hash)].set(id.saturating_add(1));'''
+to = '''    let _ = hash;'''
+
+[[mutant]]
+name = "the argument isn't kept as the name's string"
+file = "crates/dom_js/src/front.rs"
+from = '''    if !held {
+        keep_name(state, id, no_gc.global(string));
+    }'''
+to = '''    let _ = (held, no_gc);'''
+
+[[mutant]]
+name = "any name found is remembered, plain or not"
+file = "crates/dom_js/src/info_front.rs"
+from = '''            && dom_api::typed::is_plain_element_name(id)
+        {
+            self.remember_name(name.v8_string(), id);'''
+to = '''            && (dom_api::typed::is_plain_element_name(id) || true)
+        {
+            self.remember_name(name.v8_string(), id);'''
+
+[[mutant]]
+name = "a name with a hyphen is plain"
+file = "crates/dom_api/src/typed.rs"
+from = '''                && !name.contains('-')
+'''
+to = ''''''
+
+[[mutant]]
+name = "a name that isn't a valid element's is plain"
+file = "crates/dom_api/src/typed.rs"
+from = '''            let plain = crate::names_check::is_valid_element_local_name(name)
+                && !name.contains('-')'''
+to = '''            let plain = !name.contains('-')'''
+
+[[mutant]]
+name = "a name with an uppercase letter is plain"
+file = "crates/dom_api/src/typed.rs"
+from = '''                && !name.bytes().any(|byte| byte.is_ascii_uppercase());
+            let index'''
+to = ''';
+            let index'''
+
+[[mutant]]
+name = "a known name makes an HTML element in any document"
+file = "crates/dom_api/src/document.rs"
+from = '''            if cx.is_html_document(this) {
+                let ids = dom::NameIds {'''
+to = '''            if cx.is_html_document(this) || true {
+                let ids = dom::NameIds {'''
+
+[[mutant]]
+name = "a known name's element is foreseen an HTMLElement"
+file = "crates/dom_js/src/info_front.rs"
+from = '''        Some((id, dom_api::html_element_interface(id)))'''
+to = '''        Some((id, dom_api::declare::HTML_ELEMENT))'''

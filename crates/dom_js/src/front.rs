@@ -24,7 +24,7 @@ use dom_api::{AnyArg, ApiCx, ApiError, DictFront, FrontTypes};
 use elise::{JsEdge, Persistent};
 
 use crate::listeners::{self, ReportAt};
-use crate::state::{self, Scope, State};
+use crate::state::{self, Caches, Scope, State};
 use crate::strings::{self, ArgString};
 use crate::{exception, templates};
 
@@ -2529,6 +2529,78 @@ pub(crate) fn number(object: v8::Local<'_, v8::Object>) -> u32 {
 /// One more wrapper made, for the tests.
 pub(crate) fn count(wrappers_made: &Cell<u64>) {
     wrappers_made.set(wrappers_made.get().wrapping_add(1));
+}
+
+/// How many slots the names told by identity have (`Caches::name_slots`).
+pub(crate) const NAME_SLOTS: usize = 1024;
+
+/// The slot of an internalized string's hash field: past its two type
+/// bits (`Name::HashFieldTypeBits`), the hash's low bits.
+#[inline(always)]
+fn name_slot(hash: u32) -> usize {
+    (hash >> 2) as usize & (NAME_SLOTS - 1)
+}
+
+/// The plain element name `string` is, told by its identity: a literal
+/// is internalized, the one object of its characters in the isolate, and
+/// so is the string the names' cache holds for the name. Its text isn't
+/// read. None for a string that isn't internalized, or whose name wasn't
+/// told by its text yet (`remember_name`).
+#[inline(always)]
+pub(crate) fn name_by_identity<'s>(
+    caches: &Caches,
+    no_gc: &mut bindings::InfoNoGc<'_, 's>,
+    string: v8::Local<'s, v8::String>,
+) -> Option<NameId> {
+    let hash = v8::machopo::internalized_hash(string)?;
+    let id = caches.name_slots[name_slot(hash)].get().checked_sub(1)?;
+    let held = caches.names.get(usize::try_from(id).ok()?)?.as_ref()?;
+    if !no_gc.same_object(string, held) {
+        return None;
+    }
+    #[cfg(debug_assertions)]
+    NAMES_BY_IDENTITY.set(NAMES_BY_IDENTITY.get().wrapping_add(1));
+    Some(id)
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// The names told by their strings' identity on this thread
+    /// (`name_by_identity`), for the tests.
+    static NAMES_BY_IDENTITY: Cell<u64> = const { Cell::new(0) };
+}
+
+/// How many names this thread's member calls told by their strings'
+/// identity, the text not read. `None` in release builds. For tests.
+pub fn names_by_identity_for_testing() -> Option<u64> {
+    #[cfg(debug_assertions)]
+    return Some(NAMES_BY_IDENTITY.get());
+    #[cfg(not(debug_assertions))]
+    None
+}
+
+/// `string` (internalized) remembered as the plain element name `id`, for
+/// `name_by_identity`: the names' cache holds it (it is the name's V8
+/// string: the one of its characters), and its hash's slot the number.
+#[cold]
+#[inline(never)]
+pub(crate) fn remember_name<'s>(
+    state: &mut State,
+    no_gc: &mut bindings::InfoNoGc<'_, 's>,
+    string: v8::Local<'s, v8::String>,
+    id: NameId,
+) {
+    let Some(hash) = v8::machopo::internalized_hash(string) else {
+        return;
+    };
+    let held = usize::try_from(id)
+        .ok()
+        .and_then(|index| state.caches.names.get(index))
+        .is_some_and(Option::is_some);
+    if !held {
+        keep_name(state, id, no_gc.global(string));
+    }
+    state.caches.name_slots[name_slot(hash)].set(id.saturating_add(1));
 }
 
 /// What `createElement`'s local name says of its element in an HTML

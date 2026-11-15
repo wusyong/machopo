@@ -262,6 +262,11 @@ impl<'s> ArgString<'s> {
         self.string.peek_ascii(isolate, f)
     }
 
+    /// The V8 string itself.
+    pub fn v8_string(&self) -> v8::Local<'s, v8::String> {
+        self.string.string()
+    }
+
     /// Its text, in the operation.
     pub fn text(&self, no_gc: &mut bindings::NoGc<'_, '_, '_>) -> &str {
         match &self.copied {

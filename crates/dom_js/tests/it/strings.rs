@@ -163,12 +163,14 @@ fn a_names_v8_string_is_made_once() {
         "var d = machopoDom.createDocument(); var e = d.createElement('p'); \
          var f = d.createElement('p');",
     );
-    assert_eq!(env.names_made(), 0);
+    // `createElement`'s own argument is the name's string from then on (a
+    // literal is internalized, as a name's string is): kept, none made.
+    assert_eq!(env.names_made(), 1, "p, the argument");
     assert_eq!(
         env.eval("[e.localName, e.localName, f.localName, e.tagName, f.tagName, e.id, f.className].join()"),
         "p,p,p,P,P,,"
     );
-    assert_eq!(env.names_made(), 2, "p and P");
+    assert_eq!(env.names_made(), 2, "and P");
     // Not names: an attribute's value isn't one of them.
     assert_eq!(env.eval("e.id = 'p'; [e.id, e.localName].join()"), "p,p");
     assert_eq!(env.names_made(), 2);
@@ -549,7 +551,11 @@ fn a_new_string_is_made_with_no_scope() {
         "qQ"
     );
     assert_eq!(env.names_made(), names_before + 2);
-    assert_eq!(handles(), handles_before + 2);
+    assert_eq!(
+        handles(),
+        handles_before + 1,
+        "Q: q is `createElement`'s argument, kept"
+    );
     let handles_before = handles();
     assert_eq!(env.eval("out = q.localName + q.tagName; out"), "qQ");
     assert_eq!(handles(), handles_before, "found by their numbers");

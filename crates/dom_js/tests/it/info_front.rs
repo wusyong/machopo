@@ -254,6 +254,189 @@ fn a_new_nodes_wrapper_is_made_with_no_scope() {
     assert_eq!(only_scopes(&mut env, "d.createElement('table')"), 0);
 }
 
+/// The names `source` told by their strings' identity as it ran, and its
+/// value.
+fn by_identity(env: &mut Env, source: &str) -> (String, u64) {
+    let before = dom_js::names_by_identity_for_testing().expect("a debug build");
+    let value = env.eval(source);
+    let after = dom_js::names_by_identity_for_testing().expect("a debug build");
+    (value, after - before)
+}
+
+/// `createElement`'s name is told by its string's identity once its text
+/// told it: a literal's (internalized) plain name, lowercase with no
+/// hyphen. Any other is told by its text each time, and makes the same
+/// element.
+#[test]
+fn a_literal_element_name_is_told_by_its_strings_identity() {
+    let mut env = env();
+    let describe = "(e => e.localName + ' ' + e.tagName + ' ' + e.namespaceURI.slice(-5) + ' ' + \
+                    Object.getPrototypeOf(e).constructor.name)";
+    env.eval(&format!(
+        "var describe = {describe}; var half = 'sp'; var text = () => half + 'an'; \
+         var error = f => {{ try {{ return describe(f()); }} catch (e) {{ return e.name; }} }};"
+    ));
+    for (source, value, first, again) in [
+        // By its text the first time, by its identity after.
+        (
+            "d.createElement('span')",
+            "span SPAN xhtml HTMLSpanElement",
+            0,
+            1,
+        ),
+        (
+            "d.createElement('table')",
+            "table TABLE xhtml HTMLTableElement",
+            0,
+            1,
+        ),
+        // The same literal elsewhere is the same string.
+        (
+            "(() => d.createElement('span'))()",
+            "span SPAN xhtml HTMLSpanElement",
+            1,
+            1,
+        ),
+        // A string made as script runs isn't internalized.
+        (
+            "d.createElement(text())",
+            "span SPAN xhtml HTMLSpanElement",
+            0,
+            0,
+        ),
+        // Not plain: lowercased, a custom element's, a name no element had.
+        (
+            "d.createElement('SPAN')",
+            "span SPAN xhtml HTMLSpanElement",
+            0,
+            0,
+        ),
+        (
+            "d.createElement('Span')",
+            "span SPAN xhtml HTMLSpanElement",
+            0,
+            0,
+        ),
+        (
+            "d.createElement('my-span')",
+            "my-span MY-SPAN xhtml HTMLElement",
+            0,
+            0,
+        ),
+        (
+            "d.createElement('spanx')",
+            "spanx SPANX xhtml HTMLUnknownElement",
+            0,
+            0,
+        ),
+        // Not an element's name at all, and one that is only an attribute's.
+        (
+            "error(() => d.createElement(''))",
+            "InvalidCharacterError",
+            0,
+            0,
+        ),
+        (
+            "error(() => d.createElement('a b'))",
+            "InvalidCharacterError",
+            0,
+            0,
+        ),
+        (
+            "d.createElement('href')",
+            "href HREF xhtml HTMLUnknownElement",
+            0,
+            1,
+        ),
+        // Not a string: converted, then by its text.
+        (
+            "d.createElement(null)",
+            "null NULL xhtml HTMLUnknownElement",
+            0,
+            0,
+        ),
+        (
+            "d.createElement({ toString: () => 'span' })",
+            "span SPAN xhtml HTMLSpanElement",
+            0,
+            0,
+        ),
+    ] {
+        for (told, round) in [(first, "first"), (again, "again"), (again, "a third time")] {
+            let (made, by_identity) = by_identity(
+                &mut env,
+                &format!("describe({source})").replace("describe(error", "(error"),
+            );
+            assert_eq!(made, value, "{source} {round}");
+            assert_eq!(by_identity, told, "{source} {round}");
+        }
+    }
+    // The name's string is the argument: kept, and still it after GCs that
+    // move and would collect it.
+    env.eval("var kept = d.createElement('article'); var name = kept.localName;");
+    for _ in 0..3 {
+        env.minor_gc();
+        env.full_gc();
+    }
+    assert_eq!(
+        by_identity(&mut env, "describe(d.createElement('article'))"),
+        ("article ARTICLE xhtml HTMLElement".to_owned(), 1)
+    );
+    assert_eq!(
+        env.eval("name === 'article' && kept.localName === name"),
+        "true"
+    );
+}
+
+/// Every plain name, twice over: more names than some slots hold (two
+/// whose hashes share a slot take it in turn), each one's element its own.
+#[test]
+fn names_that_share_a_slot_make_their_own_elements() {
+    let mut env = env();
+    let plain: Vec<&str> = (0..)
+        .map_while(dom::names::fixed_text)
+        .zip(0..)
+        .filter(|&(_, id)| dom_api::typed::is_plain_element_name(id))
+        .map(|(name, _)| name)
+        .collect();
+    assert!(plain.len() > 300, "{} plain names", plain.len());
+    assert!(plain.contains(&"div") && !plain.contains(&"") && !plain.contains(&"aria-label"));
+    let names = plain
+        .iter()
+        .map(|name| format!("'{name}'"))
+        .collect::<Vec<_>>()
+        .join(",");
+    // Literals, each its own call site's.
+    let calls = plain
+        .iter()
+        .map(|name| format!("d.createElement('{name}').localName"))
+        .collect::<Vec<_>>()
+        .join(",");
+    env.eval(&format!(
+        "var names = [{names}]; var make = () => [{calls}];"
+    ));
+    let (first, told_first) = by_identity(&mut env, "make().join() === names.join()");
+    assert_eq!(first, "true");
+    let (again, told_again) = by_identity(&mut env, "make().join() === names.join()");
+    assert_eq!(again, "true");
+    // What the env made before is found at once. Of the rest, those alone
+    // in their slots: two that share one each take it from the other.
+    let all = u64::try_from(plain.len()).unwrap();
+    assert!(
+        told_first <= 2,
+        "{told_first}: body and p alone were told before"
+    );
+    assert!(
+        told_again > all / 8 && told_again < all,
+        "{told_again} of {all}"
+    );
+    assert_eq!(
+        env.eval("names.every(n => { var a = d.createElement(n), b = machopoDom.createDocument().createElement(n); \
+                  return a.localName === n && Object.getPrototypeOf(a) === Object.getPrototypeOf(b); })"),
+        "true"
+    );
+}
+
 /// A member that leaves script to run makes a scope for each call into
 /// script, and none when it calls none: a dispatch that finds no listener
 /// runs as any other member.

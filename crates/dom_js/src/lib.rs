@@ -44,6 +44,7 @@ mod window;
 mod window_properties;
 
 pub use engine::V8Engine;
+pub use front::names_by_identity_for_testing;
 pub use info_front::size_report_scopes_for_testing;
 
 /// A Perfetto trace of the process: V8's events (GC, compiling, parsing)
