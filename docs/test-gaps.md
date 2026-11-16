@@ -31,7 +31,7 @@
 | `bench.py gc` 的 v8-single 給 V8 `--single-threaded-gc`（`HEAP_ARGS`） | 拿掉它，跑出來的和 v8 一樣是合法的報告：單一 thread 的 scavenge 那一個 task 照樣可能在 worker 上跑，trace 和 V8 的行看不出 GC 用了幾個 thread | 審查 | V8 的報告寫出它用的 flag，或 trace 看得出平行的 task 數時補 |
 | `bench.py` 錄 Chrome 的 trace 時帶 `cppgc` 的類別（`common.py` 的 `CHROME_TRACE_CATEGORIES`），Oilpan 的階段才在 Chrome 那一側的 trace 裡 | 拿掉它，只有真的 Chrome 錄的 trace 少了 `CppGC.*`；用 Chrome 的測試在 Windows 上不跑，其他平台上也不檢查這些事件 | 審查；machopo 那一側的類別由 `shell` 的 `trace` 測試守住 | 讀 cppgc 的 pause 的工具（`bench.py gc`）比較兩邊時，用真的 Chrome 的測試檢查它的 trace 有 `CppGC.*` |
 | `bench.py speedometer --against` 在 Windows 上讀 machopo 的記憶體峰值（`scripts/bench/speedometer/speedometer.py` 的 `windows_peak_private_bytes`：`OpenProcess`、`K32GetProcessMemoryInfo` 的 `PeakPagefileUsage`） | 寫的時候在 macOS 上，Windows 的 `ctypes` 呼叫跑不到；`MemoryTests` 只在 macOS 和 Linux 上讀自己的峰值 | 審查；讀不到時回傳 `None`，報告寫「–」，不影響時間的比較 | 下次在 Windows 上跑 `speedometer_test.py` 時，讓 `MemoryTests` 的自己的峰值那一個也在 Windows 上跑（`mmap` 換成配置 private 的記憶體） |
-| 瀏覽器 UI 的文字（分頁標題、網址列：`shell` 的 `ui_text`）帶著可變字型的軸的值畫 | `shell` 的測試用內建的 Lato，不是可變字型，軸的值一直是空的 | 審查；頁面的文字走同一個 raster 的路徑（`raster` 的 `a_variable_font_is_drawn_at_its_axes`、`layout` 的 `font_features::a_variable_fonts_axes`） | `shell` 的測試能載入測試用的可變字型時，加一個粗體標題的測試 |
+| 瀏覽器 UI 的文字（分頁標題、網址列：`ui` 的 `text`）帶著可變字型的軸的值畫 | `shell` 的測試用內建的 Lato，不是可變字型，軸的值一直是空的 | 審查；頁面的文字走同一個 raster 的路徑（`raster` 的 `a_variable_font_is_drawn_at_its_axes`、`layout` 的 `font_features::a_variable_fonts_axes`） | `shell` 的測試能載入測試用的可變字型時，加一個粗體標題的測試 |
 | debug build 照樣 raster 判斷是單色的 tile、比對顏色（`LayerTreeHostImpl::prepare_tiles` 的 `RasterJob::expect`） | 它只在判斷錯時 panic：拿掉它的 mutation 沒有測試失敗 | 審查；判斷本身由 `compositor_paint` 的單元測試和 `raster` 的隨機測試守，判斷錯的 mutation 都抓得到 | 判斷擴大到文字或圖片時，再考慮讓 reftest 檢查比對真的跑過 |
 | 新的導覽開始時、分頁關掉時取消舊導覽的載入（`WebContents` 的 `begin_navigation`、`shutdown` 取消 `PendingNavigation` 的 `load`） | 被取代的導覽停在 redirect 時，取消和不取消看起來一樣：分頁不會再叫它繼續（`on_navigation_redirected` 只認最新的導覽），兩者都不再送出請求，差別只在載入一直佔著、直到網路服務結束 | 審查；只認最新的導覽由 `browser` 的 `a_navigation_waits_at_a_redirect_for_the_tab` 守住 | `net` 能數進行中的載入時補 |
 | 每條 raster thread 重複用一塊 buffer（`TILE_PIXELS`） | 每次配置新的 buffer 畫出來一樣，只差配置的次數 | 審查 | 有量配置次數的工具時補 |
@@ -367,6 +367,7 @@
 
 **renderer、browser 和自動化**
 
+- `ui` 的樹把每個 view 留著的錄製放進 layer 時，用它這次的位置或錄製記著的位置（`tree.rs` 的 `ViewTree::paint`）：放進之前，位置沒變的沿用、變了的先把錄製記著的改成這次的，兩者一定一樣。
 - script 停住而 layout 被借出去時那次停住不畫（`renderer` 的 `render_thread/devtools.rs` 的 `cannot_render`）：現在沒有一條 operation 拿著 layout 呼叫 script，拿掉這個判斷的 mutation 走不到；留著是因為走到時停住的迴圈會一直說有 frame 要畫又畫不了。
 - renderer 不呼叫 `ScriptEngine::end_rendering_update`（`begin_main_frame` 的最後）：renderer 列出 frame 的地方都在 rendering update 裡，每次 `begin_rendering_update` 都重新找一次；update 之外只有每轉一圈 loop 的動畫檢查，它不經過這份清單（照 frame 建立的順序），所以看不出差別。engine 的「update 之後再走」由 `dom_js` 的 `frames::a_rendering_update_walks_the_frame_tree_once` 守著。renderer 之後在 update 之外列 frame 時，這條會變成真的要守的。
 

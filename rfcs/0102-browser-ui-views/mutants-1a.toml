@@ -1,0 +1,256 @@
+# `ui`'s tree: ids, layout, painting with kept recordings and damage, hit
+# testing, events, focus.
+test = ["cargo", "test", "-q", "-p", "ui"]
+timeout = 600
+
+[[mutant]]
+name = "a freed slot keeps its generation"
+file = "crates/ui/src/tree.rs"
+from = '''                slot.generation = next;'''
+to = '''                let _ = next;'''
+
+[[mutant]]
+name = "an id's generation isn't checked"
+file = "crates/ui/src/tree.rs"
+from = '''        if slot.generation != id.generation {
+            return None;
+        }
+        slot.node.as_ref()'''
+to = '''        slot.node.as_ref()'''
+
+[[mutant]]
+name = "removing a view leaves the views under it"
+file = "crates/ui/src/tree.rs"
+from = '''            stack.extend(node.children);
+            self.views[id.slot()] = None;'''
+to = '''            drop(node.children);
+            self.views[id.slot()] = None;'''
+
+[[mutant]]
+name = "a view that asks to be laid out keeps its ancestors' caches"
+file = "crates/ui/src/tree.rs"
+from = '''            node.cache.clear();
+            at = node.parent;'''
+to = '''            at = node.parent;'''
+
+[[mutant]]
+name = "a view whose size changed doesn't paint again"
+file = "crates/ui/src/tree.rs"
+from = '''            if bounds.size() != node.bounds.size() {
+                node.needs_paint = true;
+            }'''
+to = '''            if bounds.size() != node.bounds.size() && false {
+                node.needs_paint = true;
+            }'''
+
+[[mutant]]
+name = "a view painted again leaves no damage where it was"
+file = "crates/ui/src/tree.rs"
+from = '''                if let Some(old) = node.painted.replace(painted) {
+                    damage.push(old.drawn());
+                }'''
+to = '''                if let Some(old) = node.painted.replace(painted) {
+                    drop(old);
+                }'''
+
+[[mutant]]
+name = "a view moved leaves no damage where it was"
+file = "crates/ui/src/tree.rs"
+from = '''                    // Moved: where it was and where it is.
+                    damage.push(painted.drawn());'''
+to = '''                    // Moved: where it was and where it is.'''
+
+[[mutant]]
+name = "a view hidden leaves no damage"
+file = "crates/ui/src/tree.rs"
+from = '''                    self.forget_painted(id);
+                    damage.append(&mut self.damage);'''
+to = '''                    self.damage.clear();'''
+
+[[mutant]]
+name = "a removed view leaves no damage"
+file = "crates/ui/src/tree.rs"
+from = '''            if let Some(painted) = painted {
+                self.damage.push(painted.drawn());
+            }'''
+to = '''            drop(painted);'''
+
+[[mutant]]
+name = "the first frame names what changed"
+file = "crates/ui/src/tree.rs"
+from = '''                invalidation: (!full).then(|| damage.into()),'''
+to = '''                invalidation: Some(damage.into()),'''
+
+[[mutant]]
+name = "a new size isn't painted whole"
+file = "crates/ui/src/tree.rs"
+from = '''            self.needs_layout = true;
+            self.needs_full_paint = true;'''
+to = '''            self.needs_layout = true;'''
+
+[[mutant]]
+name = "a view's request to paint is dropped"
+file = "crates/ui/src/tree.rs"
+from = '''        if requests.paint
+            && let Some(node) = self.node_mut(id)'''
+to = '''        if requests.paint
+            && false
+            && let Some(node) = self.node_mut(id)'''
+
+[[mutant]]
+name = "a new theme paints nothing again"
+file = "crates/ui/src/tree.rs"
+from = '''            if let Some(node) = &mut slot.node {
+                node.needs_paint = true;'''
+to = '''            if let Some(node) = &mut slot.node {'''
+
+[[mutant]]
+name = "no recording is found stale"
+file = "crates/ui/src/tree.rs"
+from = '''                    .is_some_and(|painted| painted.list != fresh)'''
+to = '''                    .is_some_and(|painted| painted.list != fresh && false)'''
+
+[[mutant]]
+name = "an earlier child is hit before a later one"
+file = "crates/ui/src/tree.rs"
+from = '''        for &child in node.children.iter().rev() {
+            if let Some(hit) = self.hit_test_in(child, local) {'''
+to = '''        for &child in node.children.iter() {
+            if let Some(hit) = self.hit_test_in(child, local) {'''
+
+[[mutant]]
+name = "a hidden view is hit"
+file = "crates/ui/src/tree.rs"
+from = '''        if node.style.display == Display::None {
+            return None;
+        }
+        let local'''
+to = '''        let local'''
+
+[[mutant]]
+name = "a container is hit"
+file = "crates/ui/src/view.rs"
+from = '''    fn hit_test(&self, _: PointF) -> bool {
+        false
+    }'''
+to = '''    fn hit_test(&self, _: PointF) -> bool {
+        true
+    }'''
+
+[[mutant]]
+name = "a press not handled stops at the view under the pointer"
+file = "crates/ui/src/tree.rs"
+from = '''                return Handled::Yes;
+            }
+            at = self.parent(id);
+        }
+        Handled::No
+    }
+
+    /// The pointer left'''
+to = '''                return Handled::Yes;
+            }
+            at = None;
+        }
+        Handled::No
+    }
+
+    /// The pointer left'''
+
+[[mutant]]
+name = "a press handled doesn't capture the pointer"
+file = "crates/ui/src/tree.rs"
+from = '''                    self.captured = Some((id, button));'''
+to = '''                    let _ = button;'''
+
+[[mutant]]
+name = "the captured view's button coming up doesn't let go"
+file = "crates/ui/src/tree.rs"
+from = '''            && self.captured.is_some_and(|(_, with)| with == button)'''
+to = '''            && self.captured.is_some_and(|(_, with)| with != button)'''
+
+[[mutant]]
+name = "the pointer goes to the view under it while captured"
+file = "crates/ui/src/tree.rs"
+from = '''        let handled = match captured {'''
+to = '''        let handled = match captured.filter(|_| false) {'''
+
+[[mutant]]
+name = "the views hovered no more hear it outermost first"
+file = "crates/ui/src/tree.rs"
+from = '''        for &id in before.iter().rev().filter(|id| !now.contains(id)) {'''
+to = '''        for &id in before.iter().filter(|id| !now.contains(id)) {'''
+
+[[mutant]]
+name = "the views hovered now hear it deepest first"
+file = "crates/ui/src/tree.rs"
+from = '''        for &id in now.iter().filter(|id| !before.contains(id)) {'''
+to = '''        for &id in now.iter().rev().filter(|id| !before.contains(id)) {'''
+
+[[mutant]]
+name = "the view that had the focus isn't told it lost it"
+file = "crates/ui/src/tree.rs"
+from = '''            self.call(old, |view, ctx| view.on_focus(ctx, false));'''
+to = '''            let _ = old;'''
+
+[[mutant]]
+name = "a key not handled stops at the focused view"
+file = "crates/ui/src/tree.rs"
+from = '''                return Handled::Yes;
+            }
+            at = self.parent(id);
+        }
+        Handled::No
+    }
+}'''
+to = '''                return Handled::Yes;
+            }
+            at = None;
+        }
+        Handled::No
+    }
+}'''
+
+[[mutant]]
+name = "a view's request for the focus is dropped"
+file = "crates/ui/src/tree.rs"
+from = '''            Some(true) => self.set_focus(Some(id)),'''
+to = '''            Some(true) => {}'''
+
+[[mutant]]
+name = "a view asking to be laid out isn't"
+file = "crates/ui/src/tree.rs"
+from = '''        if requests.layout {
+            self.mark_layout(id);
+        }'''
+to = '''        if requests.layout && false {
+            self.mark_layout(id);
+        }'''
+
+[[mutant]]
+name = "the cursor is the default everywhere"
+file = "crates/ui/src/tree.rs"
+from = '''            .and_then(|(id, local)| Some(self.views[id.slot()].as_deref()?.cursor(local)))'''
+to = '''            .and_then(|(id, _)| self.views[id.slot()].as_deref().map(|_| Cursor::Default))'''
+
+[[mutant]]
+name = "a token table's values are out of order"
+file = "crates/ui/src/theme.rs"
+from = '''            values: K::ALL.iter().map(|&token| value(token)).collect(),'''
+to = '''            values: K::ALL.iter().rev().map(|&token| value(token)).collect(),'''
+
+[[mutant]]
+name = "a view's damage is its list's bounds"
+file = "crates/ui/src/tree.rs"
+from = '''        self.list
+            .visual_rects()
+            .iter()
+            .fold(RectF::default(), |drawn, rect| drawn.union(rect))
+            .offset(self.origin.x, self.origin.y)'''
+to = '''        self.list.bounds().offset(self.origin.x, self.origin.y)'''
+
+[[mutant]]
+name = "damage isn't kept within the layer"
+file = "crates/ui/src/tree.rs"
+from = '''            .map(|rect| rect.intersect(&layer))'''
+to = '''            .map(|rect| *rect)'''

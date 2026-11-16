@@ -1,8 +1,8 @@
 # RFC 0102：瀏覽器 UI 的 view 樹和可以換的版面
 
 - 開始日期：2026-11-16
-- 狀態：👍 已接受：2026-11-16（長期方向、範圍和第 1 階段的設計；第 2、3 階段的問題到那個階段開始前再決定）
-- 細節：`details.md`
+- 狀態：🚧 已排程：2026-11-16（第 1 階段；第 2、3 階段的問題到那個階段開始前再決定）
+- 細節：`details.md`；進度、驗收和做過的檢查：`progress.md`
 
 ## 摘要
 
@@ -64,7 +64,7 @@ ui（新的 crate）
   保留的樹：view、bounds、版面管理、畫、hit test、事件的分派和 capture、主題
         │
         ▼
-gfx、compositor_paint、parley（UI 的文字，現在的 ui_text 搬過來）
+gfx、compositor_paint、parley（UI 的文字，現在的 ui_text 搬過來）、taffy（排版的協定）
 ```
 
 - **`ui` 不依賴瀏覽器的東西**：不依賴 `shell`、`browser`、`protocol`、`compositor`、`viz`；不依賴 winit（事件型別自己定，`shell` 的 `window.rs` 轉換）。見「已決定的事項」第 4 條。
@@ -75,7 +75,7 @@ gfx、compositor_paint、parley（UI 的文字，現在的 ui_text 搬過來）
 ### 測試
 
 - **`ui` 自己的測試**：巢狀的 hit test 和座標換算（1x、1.5x、2x）；事件往上找處理的 view；capture 跟著按下的 view、那個 view 被拿掉時放掉；改了 view 時要重畫；版面管理的排法。
-- **只重畫變了的部分的交叉檢查**（`docs/testing.md` 的「快取和增量的交叉檢查」的做法）：測試裡每次更新都另外整份重畫一次，比較兩者的 display list 和 raster 的結果；變了的範圍沒涵蓋到的地方，兩者要一樣。
+- **只重畫變了的部分的交叉檢查**（`docs/testing.md` 的「快取和增量的交叉檢查」的做法）：`ViewTree::stale_views` 讓每個 view 重錄一次，和留著的比較，不一樣的就是改了卻沒要求重畫的。layer 是從留著的錄製組出來的，留著的都對時，它就是整份重畫的結果，所以比較每個 view 就夠了。變了的範圍（舊位置、新位置、拿掉和隱藏的）由 `ui` 的單元測試一種一種檢查。原本打算每次都整份重畫、比較 raster 的結果（2026-11-16 改）：layer 本來就是錄製組成的，比 raster 只會重複檢查同一件事，還要 `ui` 的測試依賴 `raster`。
 - **第 1 階段是重構**：外觀和行為不變。`shell` 現有的單元測試（`toolbar`、`tab_strip`、`browser_view_layout`）、整合測試的 `browser_view`、`windowless` 和情境的 `tab-strip`、`navigation` 守住；測試裡寫死座標的地方照新的程式改寫，但數字不變。
 - **第 2 階段之後**：側邊欄的版面在 1x、1.5x、2x 的位置；直的分頁清單的點擊、新分頁、關分頁寫成情境。
 - **只能手動確認的**：畫進標題列、深色模式跟著系統（第 3 階段），記進 `docs/test-gaps.md`。
@@ -126,7 +126,7 @@ gfx、compositor_paint、parley（UI 的文字，現在的 ui_text 搬過來）
 2. **view 樹放在新的 crate `ui`，不依賴瀏覽器的東西，現在不承諾公開 API**（2026-11-16）：位置像 Chromium 的 `//ui/views`（和 `//chrome` 分開），內部的設計照第 5 條。瀏覽器的元件和版面留在 `shell`。這樣幾乎不多花成本，以後要拿出來成為 GUI API 時不必再拆；真的要公開時，穩定的 API、無障礙、瀏覽器以外的輸入法和剪貼簿、文件另開 RFC。不選「寫在 `shell` 裡」：和瀏覽器的東西纏在一起，以後拆很痛。
 3. **橫式的分頁列和工具列留著，側邊欄是另一種版面**（2026-11-16）：不覆蓋現在的樣子，兩種版面用同一批元件，之後可以有更多種。
 4. **`ui` 的邊界**（2026-11-16，第 1 階段的 Q1）：
-   - 只依賴 `base`、`gfx`、`compositor_paint`、`parley`（`shell` 的 `ui_text.rs` 搬進來）。不依賴 `shell`、`browser`、`protocol`（瀏覽器的東西）、`compositor`（樹只交出 display list，layer 是 `BrowserView` 的事；個別 view 要自己的 layer 時再加，Q4）和 winit。
+   - 只依賴 `base`、`gfx`、`compositor_paint`、`parley`（`shell` 的 `ui_text.rs` 搬進來）和 `taffy`（排版的協定，第 12 條；2026-11-16 補上）。不依賴 `shell`、`browser`、`protocol`（瀏覽器的東西）、`compositor`（樹只交出 display list，layer 是 `BrowserView` 的事；個別 view 要自己的 layer 時再加，Q4）和 winit。
    - 滑鼠、按鍵和輸入法的事件型別在 `ui` 裡自己定，按鍵的形狀照 winit 的 `Key`（列舉，不是字串）；`shell` 的 `window.rs`、`keyboard.rs` 轉換。快捷鍵（`command_for`）留在 `shell`、照舊用 winit 判斷，是快捷鍵的不進樹。對照 Chromium 的 `//ui/events`（`ui::KeyEvent`，平台的事件都先轉成它）。不選直接用 winit 的型別：省一個轉換，但 `ui` 綁死 winit，違背第 2 條留的路。不選 `protocol` 的 DOM 事件：依賴瀏覽器的 crate，鍵要用字串比對。
    - 網址列用的 `Clipboard` trait 跟著網址列搬到 `ui`，實作（`arboard`）留在 `shell` 傳進來（Chromium 的 `ui::Clipboard` 在 `//ui/base`）。
 5. **`ui` 的設計照我們的目標比較，不要求對應 Chromium**（2026-11-16）：比較的標準是彈性（換版面、加元件、換外觀）、效能（閒著時、狀態變了時、記憶體）、實作和維護的成本、當成 GUI API 好不好用、好不好測、不靠 `Rc` / `RefCell`；Chromium 和其他實作（SwiftUI、Flutter、Masonry / Xilem、egui……）都只是參考。這是 `CLAUDE.md`「型別和模組盡量對應 Chromium 的名字和分層」在 `ui` 的例外：自己的 GUI 框架沒有理由照搬 Views，更好的做法就用更好的。`shell` 這一側（`BrowserView`、`TabStripModel`、`BrowserViewLayout`）照舊對應 Chromium。
@@ -136,7 +136,13 @@ gfx、compositor_paint、parley（UI 的文字，現在的 ui_text 搬過來）
    - 滑鼠：hit test 找點下面最深的 view，不處理就往父 view 找；按下時處理的 view 成為 capture，收之後的移動和放開；hover 的進出比較前後兩次的目標。沒有 DOM 的捕獲階段（從上往下先走一遍），瀏覽器 UI 用不到，之後要加不影響其他部分。按鍵給有 focus 的 view，不處理就往上；第 1 階段的順序照舊（快捷鍵、網址列、網頁）。
    - 結果：view 處理事件時往 context 送出一個訊息，樹帶訊息的型別參數（`shell` 用 `Command`）；分派完由使用的一方一個一個處理，狀態變了就重新描述 UI（第 6 條），資料只往一個方向流。理由：使用者能做的事本來就是 `Command`，按鈕和快捷鍵走同一條路；能做的事都列在 enum 裡；測試只要斷言送出了哪個訊息。元件內部的狀態（網址列的打字、選取、游標，hover、按下的樣子）留在 view 自己，不送訊息；網址列只在按 Enter 時送出導覽。不選描述 UI 時附上拿 `&mut 狀態` 的 closure（Xilem、SwiftUI、React 的 `onClick`）：寫起來最順手，但分派時樹正被借著，狀態要從 `BrowserView` 拆出來，能做的事散在各個 closure；當成 GUI API 時可以在訊息上加一層 closure 轉訊息的便利寫法。不選 view 自己拿瀏覽器的參考去改（Views 的 `PressedCallback`）：Rust 裡借用不成立。不選 `Box<dyn Any>` 的訊息：丟掉型別檢查。
 9. **一個 layer，只重錄、只重 raster 變了的 view；留好個別 layer 的路**（2026-11-16，Q4）：每個節點快取自己錄好的 display list，只有 view 要求重畫時才重錄；組合時沿用沒變的部分，變了的 view 的舊位置和新位置（view 搬動時兩個都算）交給 `PictureLayer` 的 `invalidation`，compositor 只重 raster 碰到的 tile（網頁的 layer 已經這樣用）。`ui` 交出的是一份 layer 清單（`ui` 自己的型別，第 1 階段只有一個），個別 view 要自己的 layer（捲動的清單只改位移、動畫）時第 3 階段再加，不改 view 的 API。漏算範圍（畫面沒更新）由交叉檢查守住（「測試」）。理由：側邊欄是整個視窗高，每次 hover 整片重 raster 很浪費；而且「只重畫變了的」要 view 回報自己變了，從整份重畫改過來要回頭改每個 view，所以第 1 階段的重構就定好這個形狀。不選整份重畫（現在）：見上一句。不選每個 view 都有 layer（iOS 的 UIView 和 CALayer）：layer 太多，合成和記憶體都浪費。對照：Blink 的 display item 快取和 raster invalidation；Flutter 的 `RepaintBoundary`、Views 的 `SetPaintToLayer` 是第 3 階段那一步。
-10. **主題是具名的 token**（2026-11-16，Q5）：顏色和大小（圓角、間距、字的大小）各是一個 token 的 enum（例如 `ColorToken::ToolbarBackground`），每份主題是一張以 token 為索引的表，用 `match` 建，少一個 token 就編不過；畫的時候從 context 讀（`theme.color(ColorToken::ToolbarBackground)`），是陣列索引。第 1 階段只有一份內建的淺色主題，值和現在 `toolbar.rs`、`tab_strip.rs`、`omnibox.rs` 的常數一樣。理由：在 Rust 裡和具名欄位的 struct 一樣安全、一樣快；token 有名字，之後可以從檔案只覆蓋幾個值、照名字列出來，第 2 階段如果用 CSS 描述外觀，token 一對一對到 CSS 的自訂屬性（`--toolbar-background`）。不選具名欄位的 struct：從檔案讀、覆蓋、接 CSS 都要另外寫對照。不選把顏色寫在 UI 的描述裡（SwiftUI 的 modifier、Flutter 的元件參數）作為主題：深色要在每個用到的地方分；個別元件在描述裡覆蓋 token 的值，等第 2 階段描述的形狀定了再談。對照：design token、Chromium 的 `ColorId`（不做它的 mixer）。
+10. **主題是具名的 token**（2026-11-16，Q5）：顏色和大小（圓角、間距、字的大小）各是一個 token 的 enum（例如 `ColorToken::ToolbarBackground`），每份主題是一張以 token 為索引的表，用 `match` 建，少一個 token 就編不過；畫的時候從 context 讀，是陣列索引。token 是 app 的（`shell` 的 `ColorToken`），不是 `ui` 的：`ui` 不知道工具列是什麼（第 2 條）。`ui` 只提供做法：`tokens!` 宣告 token 的 enum，`TokenTable` 是表；app 的主題型別由 `App` trait 帶進樹（和訊息的型別同一個參數，第 8 條），context 的 `theme()` 拿到它（2026-11-16，做 1a 時定的形狀；原本的寫法 `theme.color(ColorToken::ToolbarBackground)` 像是 `ui` 擁有 token）。第 1 階段只有一份內建的淺色主題，值和現在 `toolbar.rs`、`tab_strip.rs`、`omnibox.rs` 的常數一樣。理由：在 Rust 裡和具名欄位的 struct 一樣安全、一樣快；token 有名字，之後可以從檔案只覆蓋幾個值、照名字列出來，第 2 階段如果用 CSS 描述外觀，token 一對一對到 CSS 的自訂屬性（`--toolbar-background`）。不選具名欄位的 struct：從檔案讀、覆蓋、接 CSS 都要另外寫對照。不選把顏色寫在 UI 的描述裡（SwiftUI 的 modifier、Flutter 的元件參數）作為主題：深色要在每個用到的地方分；個別元件在描述裡覆蓋 token 的值，等第 2 階段描述的形狀定了再談。對照：design token、Chromium 的 `ColorId`（不做它的 mixer）。
+11. **bounds 是 f32 的 CSS px，相對於父 view**（2026-11-16，第 1 階段的 1a）：相對於父 view：容器移動時（側邊欄收合）子 view 不用動，子 view 錄好的內容不帶位置、用 `push_list_at` 平移，容器移動時照樣沿用（第 9 條的快取）；hit test 往下走一層減一次父 view 的位置。f32 的 CSS px：和現在的工具列、分頁列、`PaintOp` 同一個單位，元件不必知道 scale。邊緣對齊 physical px 不靠型別保證，是排版的事：第 2 階段的版面管理算完位置後可以吸附到 physical px（Flutter、SwiftUI 也是小數的邏輯像素）；現在的分頁寬度本來就是小數。網頁 view 第 1 階段在樹外，照舊是整數的 physical px；第 2 階段如果進樹，那個節點把自己在視窗裡的位置取整（RFC 0002 的第 3 條），其他 view 不受影響。不選相對於視窗：容器移動時每個子孫都要改，錄好的內容也要重錄。不選整數的 physical px（網頁 view 的做法）：每個元件都要帶著 scale 計算、取整，現有的計算全部改寫，當成 GUI API 時寫元件的人也要處理。不選整數的 CSS px（Chromium Views 的 DIP）：除出來的寬度要取整，1.5x 時照樣不對齊。
+12. **排版用 taffy 的低階介面當協定，每個節點選自己的演算法**（2026-11-16，第 1 階段的 1a）：arena（第 7 條）實作 taffy 的低階 trait（走訪子節點、存排好的結果、快取），和 `layout` crate 的 `BoxTree` 同樣的做法。每個節點決定怎麼排：容器用 taffy 的 flex、grid、block（`compute_flexbox_layout` 等），或自己寫（只排可見範圍的長清單、跟著動畫的位置）；葉子用 `compute_leaf_layout` 加自己的量測（按鈕的固定大小、文字的寬高）。結果由 `compute_cached_layout` 跨整棵樹快取，view 的內容影響大小時標記要重排、往上傳。寫元件的人：葉子只寫一個量測的函式；容器多半直接用 flex。1a 做了 flex、grid 和葉子；還沒有的（第一個要用的人來時再接）：block 的容器、`position: absolute`（taffy 的 fork 把 out-of-flow 的子節點交給包含它的區塊排，要實作它的 `LayoutContainingBlock`；1a 的測試用負的 margin 疊 view）、自己寫排法的容器（view 在排版時要能叫子 view 排，view 本身正被借著，要另外設計）。理由：flex、grid 現成，寬度決定高度、固有大小（min-content、max-content）是 taffy 的協定本來就有的；巢狀的 flex 共用一份快取，不會一層層重複量；自訂的排法照樣能寫；第 2 階段選 Rust 的規則、taffy 或 machopo 自己的 CSS 引擎都接得上（`layout` crate 也走同一套 taffy 介面）。不選父 view 的 `layout` hook 加「想要的大小」（Views 的 `Layout()`、AppKit、Android）：想要的大小不知道可用的空間（Views 後來也把 `CalculatePreferredSize` 改成接收 `SizeBounds`）。不選自己定的「限制往下、大小往上」（Flutter、SwiftUI）：每種容器自己寫；每個 flex 容器各自呼叫 taffy 時，巢狀的容器之間沒有共用的快取，量固有大小會一層層重複。不選每個 view 只帶樣式、taffy 排整棵樹：描述不了的排法沒有出口，而且提前決定了第 2 階段的「外觀和排版用什麼描述」。代價：taffy 的輸入（可用空間是確定值、min-content 或 max-content；只量大小或真的排）比較複雜，簡單的寫法要蓋住它；`ui` 多依賴 `taffy`。
+13. **樹擁有一份 `FontContext` 和 `LayoutContext`，view 借用；樹外的 sad tab 和下拉清單也借同一份**（2026-11-16，第 1 階段的 1a）：view 在量測和畫的時候從 context 借；網址列的 `PlainEditor` 本來就在操作時才拿 context。sad tab、`<select>` 的下拉清單和樹都屬於 `BrowserView`，分開借欄位就能用同一份。理由：每建一個 `FontContext` 就重新掃一次系統字型（fontique 的 `SystemFonts::new()`），載入的字型資料也各存一份；現在每個視窗的網址列、分頁列、sad tab 各建一份，下拉清單每打開一次就建一份。測試字型（`test_fonts`）照舊由每棵樹（每個 `BrowserView`）選。外觀不變。不選每個 view 各自一份（現在）：見上。不選每個 view 拿一份 clone：掃描結果共用（裡面是 `Arc<Mutex>`），但字型資料和排版暫存各一份。不選全域的一份（`thread_local`）：同一個 process 裡用測試字型和用系統字型的測試會互相干擾，也是 `CLAUDE.md` 不要的隱藏共享狀態。
+14. **從樹外面拿 view 用帶型別的 id**（2026-11-16，第 1 階段的 1a）：`tree.insert(Omnibox::new())` 回傳 `ViewId<Omnibox>`，`tree.get(id)` 拿到的就是 `&Omnibox`；`View` trait 有轉成 `Any` 的方法，樹在內部向下轉型。只有 `insert::<T>` 產生 `ViewId<T>`，位置重用時世代數會變（第 7 條），所以活著的 id 轉型不會失敗，拿掉的 id 拿到 `None`。結構上的操作（子 view、hit test 的結果、capture）用不帶型別的 `AnyViewId`，`ViewId<T>` 隨時轉得過去。用在 `BrowserView` 命令式地碰 view（換分頁時設網址、Cmd+L 讓網址列取得焦點）和測試；第 2 階段有了宣告式那一層，「狀態變了」改成重新描述，這個介面留給命令式的操作。不選不帶型別的 id、取用時指定型別：型別錯了到執行時才知道。不選只能送訊息給 view：每種 view 要有自己的訊息型別，樹要裝各種訊息又要轉型，第 2 階段的比對會取代它。
+15. **從外面改 view 走 `tree.update(id, |view, ctx| …)`，view 自己判斷有沒有變**（2026-11-16，第 1 階段的 1a）：view 的方法收一個 context（`omnibox.set_url(url, ctx)`），有變才 `ctx.request_paint()` 或 `ctx.request_layout()`（重排之後也重畫）；事件處理時拿到的是同一種 context。唯讀的 `tree.get(id)`（第 14 條）給測試和查詢。理由：`BrowserView::sync_toolbar()` 在每個 renderer 訊息之後都跑，每次都重設網址和上一頁、下一頁的狀態，大多沒變；現在是在外面比較前後再設 `chrome_dirty`，改成 view 自己判斷，沒變就不重畫，外面不用比較。漏了 `request_paint` 由第 9 條的交叉檢查抓到。對照 Masonry 的 `WidgetMut`（改 widget 時帶著 context）。不選拿到 `&mut` 就當成變了：每個 renderer 訊息都重畫、重 raster 工具列。不選呼叫的一方自己標記（Views 的 `SchedulePaint()`）：容易漏，散在每個呼叫的地方。不選自動比較前後（React 的 `memo`）：每次都要比較狀態或重錄一次。
+16. **`sanity.py` 守 `ui` 的兩個方向**（2026-11-16，第 1 階段的 1a）：`ui` 加進 `boundary` 的 `BROWSER_SIDE`，renderer 那一側的 crate 不能依賴它（renderer 有自己畫 UI 的方式；Chromium 也用 DEPS 擋 renderer 引用 `//ui/views`）；`deps` 加一份 `ui` 的 `[dependencies]` 的允許清單（`base`、`gfx`、`compositor_paint`、`parley`、`taffy`），守住第 2、4 條，`[dev-dependencies]` 不限。多依賴一個 crate 時改清單，同時在這份 RFC 寫明理由。不選只加進 `BROWSER_SIDE`：`ui` 依賴瀏覽器的東西時沒人擋。不選不檢查：兩個方向都沒人擋。
 
 2026-11-16 的看法：預設的版面維持橫式（現有的情境照它的位置點擊）；切換先用命令列選項。第 2 階段確認。
 

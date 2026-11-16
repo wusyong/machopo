@@ -1,9 +1,8 @@
-//! Text in the browser's own UI, laid out with parley apart from Blink's
-//! (Chromium's `gfx::RenderText`, which Views uses): the fonts, a label on
-//! one line, and glyph runs as paint ops. The address field and the tab
-//! strip share it.
-//!
-//! Transitional, with the rest of the native UI (see `toolbar`).
+//! Text in views, laid out with parley apart from Blink's (Chromium's
+//! `gfx::RenderText`, which Views uses): the fonts, a label on one line,
+//! and glyph runs as paint ops. A tree has one [`TextContexts`], which its
+//! views borrow to measure and paint; whatever else draws next to the tree
+//! can borrow it too ([`crate::ViewTree::text`]).
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -14,6 +13,30 @@ use parley::fontique::{Blob, Collection, CollectionOptions, SourceCache};
 use parley::{FontContext, Layout, LayoutContext, PositionedLayoutItem, StyleProperty};
 
 static LATO: &[u8] = include_bytes!("../../../resources/test_fonts/Lato-Medium.ttf");
+
+/// What text is laid out with: the fonts, and the scratch space laying out
+/// takes. Making a `FontContext` scans the system's fonts again (fontique's
+/// `SystemFonts::new`) and keeps its own copy of every font it loads, so a
+/// tree makes one and lends it.
+pub struct TextContexts {
+    pub fonts: FontContext,
+    pub layouts: LayoutContext<()>,
+}
+
+impl TextContexts {
+    /// `test_fonts`: Lato for every family (see [`font_context`]).
+    pub fn new(test_fonts: bool) -> Self {
+        Self {
+            fonts: font_context(test_fonts),
+            layouts: LayoutContext::new(),
+        }
+    }
+
+    /// `text` on one line, `size` CSS px (see [`label`]).
+    pub fn label(&mut self, text: &str, size: f32) -> Layout<()> {
+        label(&mut self.fonts, &mut self.layouts, text, size)
+    }
+}
 
 /// The UI's fonts. `test_fonts`: Lato for every family, as the renderer's
 /// test fonts, so tests measure the same everywhere. Otherwise the

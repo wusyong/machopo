@@ -11,17 +11,13 @@ use gfx::{Color, PointF, RectF};
 use parley::{Affinity, Cursor, FontContext, LayoutContext, PlainEditor, Selection};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
-use crate::ui_text;
+use ui::text as ui_text;
 
 pub const FONT_SIZE: f32 = 14.0;
 const TEXT: Color = Color::rgb(32, 33, 36);
 const SELECTION: Color = Color::rgb(198, 218, 252);
 
-/// The system clipboard (`ui::Clipboard`), plain text only.
-pub trait Clipboard {
-    fn read(&mut self) -> Option<String>;
-    fn write(&mut self, text: &str);
-}
+pub use ui::Clipboard;
 
 /// What a key did in the field.
 #[derive(Debug, Clone, PartialEq, Eq)]

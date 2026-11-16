@@ -101,6 +101,10 @@ V8_DEPENDENCIES = {"v8", "bindings", "dom_js"}
 # wasmtime stays in the DOM's wasm side (`dom_wasm`).
 WASMTIME_CRATES = {"dom_wasm"}
 WASMTIME_DEPENDENCIES = {"wasmtime", "wasmtime-wasi"}
+# `ui`, machopo's own UI framework, knows nothing of the browser, so that it
+# can be used on its own: its [dependencies] are only these. Another one is
+# a decision of its own, with why, where the crate's design is recorded.
+UI_DEPENDENCIES = {"base", "gfx", "compositor_paint", "parley", "taffy"}
 DEPENDENCY_SECTION = re.compile(r"^\[(?:target\.[^\]]+\.)?((?:dev-|build-)?dependencies)\]\s*$")
 
 def dependencies(manifest: Path) -> list[tuple[str, str]]:
@@ -127,10 +131,15 @@ def cmd_deps(args: argparse.Namespace) -> int:
     crates don't depend on V8. wasmtime likewise stays in `dom_wasm`.
     `dom_js` has one front end (`front_problems`).
     The crates that pick an engine may depend on `dom_js`
-    (`ENGINE_PICKERS` in this script)."""
+    (`ENGINE_PICKERS` in this script). `ui` depends only on
+    `UI_DEPENDENCIES`."""
     problems = []
     for manifest in sorted((ROOT / "crates").glob("*/Cargo.toml")):
         crate = manifest.parent.name
+        if crate == "ui":
+            for name, section in sorted(set(dependencies(manifest))):
+                if section == "dependencies" and name not in UI_DEPENDENCIES:
+                    problems.append(f"crates/ui/Cargo.toml: `{name}` in [{section}], but ui depends only on {', '.join(sorted(UI_DEPENDENCIES))}")
         if crate in V8_CRATES:
             continue
         picks = ENGINE_PICKERS.get(crate, set())
@@ -146,7 +155,7 @@ def cmd_deps(args: argparse.Namespace) -> int:
         print(problem)
     if problems:
         return 1
-    print("V8 is confined to bindings, dom_js and gc_bench; dom_js has one front end")
+    print("V8 is confined to bindings, dom_js and gc_bench; dom_js has one front end; ui depends on no browser crate")
     return 0
 
 
@@ -228,7 +237,9 @@ RENDERER_SIDE = {
     "dom_wasm",
 }
 # What they must not depend on: the browser's side.
-BROWSER_SIDE = {"browser", "net", "viz", "shell"}
+# `ui` too: the renderer draws its own way (Blink), not with the browser's UI
+# framework.
+BROWSER_SIDE = {"browser", "net", "viz", "shell", "ui"}
 # What their code must not name: Viz's whole queue (the renderer gets a
 # `CompositorFrameSinkSender`, bound to its sink), and Viz's context lost
 # observers (the browser tells the renderer, with `CompositorMsg::ContextLost`).

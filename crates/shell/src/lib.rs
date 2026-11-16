@@ -32,7 +32,6 @@ pub mod tab_strip;
 pub mod tab_strip_model;
 pub mod toolbar;
 pub mod trace;
-pub mod ui_text;
 pub mod url_fixup;
 pub mod windowless;
 

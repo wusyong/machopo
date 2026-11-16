@@ -15,7 +15,7 @@ use parley::{FontContext, LayoutContext, StyleProperty};
 use protocol::TabId;
 use protocol::renderer::{MenuItem, MenuItemKind, PopupMenuResult};
 
-use crate::ui_text;
+use ui::text as ui_text;
 
 /// At most this many rows show; the rest scroll (Chrome's list picker's
 /// size).

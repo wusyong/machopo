@@ -11,7 +11,7 @@ use compositor_paint::{DisplayItemList, PaintFlags, PaintOp};
 use gfx::{Color, PointF, RRectF, RectF, SizeF};
 use parley::{FontContext, LayoutContext};
 
-use crate::ui_text;
+use ui::text as ui_text;
 
 const TITLE: &str = "This page crashed";
 const MESSAGE: &str = "Something went wrong while showing this page.";

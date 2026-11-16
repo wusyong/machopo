@@ -38,6 +38,7 @@ style_resolver = { path = "crates/style_resolver" }
 style = { path = "crates/style" }
 computed_style = { path = "crates/computed_style" }
 layout = { path = "crates/layout" }
+ui = { path = "crates/ui" }
 paint = { path = "crates/paint" }
 net = { path = "crates/net" }
 renderer = { path = "crates/renderer" }

@@ -1,0 +1,24 @@
+[package]
+name = "ui"
+description = "machopo's own UI framework: a retained tree of views, laid out with taffy, painted into display lists (the place of //ui/views)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# No doc examples: skip rustdoc's pass in `cargo test`.
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+# Only these: `ui` knows nothing of the browser, so that it can be used on
+# its own (`sanity.py deps` checks the list).
+[dependencies]
+base.workspace = true
+gfx.workspace = true
+compositor_paint.workspace = true
+parley.workspace = true
+taffy.workspace = true

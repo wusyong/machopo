@@ -14,7 +14,7 @@ use parley::{FontContext, LayoutContext};
 use protocol::input::MouseButton;
 
 use crate::toolbar;
-use crate::ui_text;
+use ui::text as ui_text;
 
 /// CSS px, above the toolbar.
 pub const HEIGHT: f32 = 34.0;
