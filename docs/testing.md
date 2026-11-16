@@ -58,6 +58,7 @@ machopo 有哪些測試、怎麼跑、CI 的現況、mutation test 的做法。�
 | shaping 的快取（`layout`：段落的，和 parley fork 以字為單位的） | 段落的快取命中時、有字取用或存下了字的 shaping 時，也整段 shape 一次比對 |
 | 選字型記住的第一個字型（`layout`，parley fork 的 `FontSelector`） | 不經過 query 用了它時，也跑整個 query，比對字型、index 和 synthesis |
 | 清單的編號和 CSS counters（`layout`） | 每次建完、更新完也跑一次整份文件的 pass，比對每個 marker 和 `counter()` 的文字 |
+| 瀏覽器 UI 的 view 留著的錄製（`ui` 的 `ViewTree::paint`） | 每次 paint 之後每個 view 重錄一次，比對和留著的相同（改了卻沒要求重畫的 view 會被找到）；`ui` 自己數 paint 次數的測試關掉它（`set_check_recordings`） |
 | parse 的 fast path（`html`） | 收下時也用 tokenizer 和 tree builder parse 一次，比對兩棵樹 |
 | cppgc 的讀取在 Rust 裡 inline（`v8` crate 的 fork） | 每次讀取也呼叫 C++ 的 `Get` 比對 |
 

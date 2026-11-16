@@ -1,0 +1,184 @@
+# The browser UI on `ui`'s tree: the toolbar's row, buttons and field, the
+# tab strip, and the browser view going through the tree.
+test = ["cargo", "test", "-q", "-p", "shell", "--lib"]
+timeout = 900
+
+[[mutant]]
+name = "a disabled button is pressed"
+file = "crates/shell/src/toolbar.rs"
+from = '''            } if self.enabled => {
+                self.pressed = true;'''
+to = '''            } => {
+                self.pressed = true;'''
+
+[[mutant]]
+name = "a button is pressed by its up anywhere"
+file = "crates/shell/src/toolbar.rs"
+from = '''                if self.enabled && RectF::from_size(ctx.size()).contains(position) {'''
+to = '''                if self.enabled {
+                    let _ = position;'''
+
+[[mutant]]
+name = "a disabled button lights up under the pointer"
+file = "crates/shell/src/toolbar.rs"
+from = '''        if self.hovered && self.enabled {'''
+to = '''        if self.hovered {'''
+
+[[mutant]]
+name = "a button enabled isn't painted again"
+file = "crates/shell/src/toolbar.rs"
+from = '''        if self.enabled != enabled {
+            self.enabled = enabled;
+            ctx.request_paint();
+        }'''
+to = '''        if self.enabled != enabled {
+            self.enabled = enabled;
+        }'''
+
+[[mutant]]
+name = "the toolbar's background doesn't keep the pointer"
+file = "crates/shell/src/toolbar.rs"
+from = '''            } => Handled::Yes,
+            _ => Handled::No,
+        }
+    }
+}'''
+to = '''            } => Handled::No,
+            _ => Handled::No,
+        }
+    }
+}'''
+
+[[mutant]]
+name = "Cmd+L while editing selects nothing again"
+file = "crates/shell/src/chrome.rs"
+from = '''                omnibox.focus(ctx.text());
+                ctx.request_paint();'''
+to = '''                ctx.request_paint();'''
+
+[[mutant]]
+name = "the toolbar's field is laid out without the gap before it"
+file = "crates/shell/src/chrome.rs"
+from = '''                left: length(theme.size(SizeToken::ToolbarGap)),'''
+to = '''                left: length(0.0),'''
+
+[[mutant]]
+name = "the field losing the keys keeps what was typed"
+file = "crates/shell/src/omnibox.rs"
+from = '''        if focused {
+            self.focus(ctx.text());
+        } else {
+            self.blur(ctx.text());
+        }'''
+to = '''        if focused {
+            self.focus(ctx.text());
+        }'''
+
+[[mutant]]
+name = "a click in the focused field doesn't place the caret"
+file = "crates/shell/src/omnibox.rs"
+from = '''                    self.mouse_down(ctx.text(), in_text, modifiers.shift);'''
+to = '''                    let _ = (in_text, modifiers);'''
+
+[[mutant]]
+name = "the field paints no focus ring"
+file = "crates/shell/src/omnibox.rs"
+from = '''        if self.focused {
+            let ring = field.inset(-1.0);'''
+to = '''        if self.focused && false {
+            let ring = field.inset(-1.0);'''
+
+[[mutant]]
+name = "the tab strip doesn't hear the pointer leave"
+file = "crates/shell/src/tab_strip.rs"
+from = '''        if !hovered && self.mouse_leave() {'''
+to = '''        if !hovered && false {'''
+
+[[mutant]]
+name = "the tab strip's close is the active tab's"
+file = "crates/shell/src/tab_strip.rs"
+from = '''            Some(Action::Close(index)) => ctx.submit(UiMessage::CloseTab(index)),'''
+to = '''            Some(Action::Close(_)) => ctx.submit(UiMessage::Command(Command::CloseTab)),'''
+
+[[mutant]]
+name = "the tab strip's hover doesn't paint again"
+file = "crates/shell/src/tab_strip.rs"
+from = '''                if self.mouse_move(position) {
+                    ctx.request_paint();
+                }'''
+to = '''                self.mouse_move(position);'''
+
+[[mutant]]
+name = "the address field's URL isn't painted again"
+file = "crates/shell/src/browser_view.rs"
+from = '''            if omnibox.set_url(ctx.text(), &url) {
+                ctx.request_paint();
+            }'''
+to = '''            omnibox.set_url(ctx.text(), &url);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::", "windowless::"]
+
+[[mutant]]
+name = "the tab strip's titles aren't painted again"
+file = "crates/shell/src/browser_view.rs"
+from = '''            if strip.set_tabs(titles, active) {
+                ctx.request_paint();
+            }'''
+to = '''            strip.set_tabs(titles, active);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::", "windowless::"]
+
+[[mutant]]
+name = "the UI's messages are dropped"
+file = "crates/shell/src/browser_view.rs"
+from = '''        for message in self.chrome.tree.take_messages() {'''
+to = '''        for message in self.chrome.tree.take_messages().into_iter().filter(|_| false) {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::", "windowless::"]
+
+[[mutant]]
+name = "the UI isn't hit"
+file = "crates/shell/src/browser_view.rs"
+from = '''                    .contains(at)
+                    .then_some(Target::Chrome)'''
+to = '''                    .contains(at)
+                    .then_some(Target::Chrome)
+                    .filter(|_| false)'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::", "windowless::"]
+
+[[mutant]]
+name = "the pointer leaving the UI isn't told"
+file = "crates/shell/src/browser_view.rs"
+from = '''        if !matches!(target, Some((Target::Chrome, _))) {
+            self.chrome.tree.pointer_left();
+        }'''
+to = '''        if false {
+            self.chrome.tree.pointer_left();
+        }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::", "windowless::"]
+
+[[mutant]]
+name = "a press in the page leaves the field the keys"
+file = "crates/shell/src/browser_view.rs"
+from = '''                    self.focused = tab;
+                    self.chrome.blur_omnibox();'''
+to = '''                    self.focused = tab;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::", "windowless::"]
+
+[[mutant]]
+name = "the UI's layer is rastered whole every time"
+file = "crates/shell/src/browser_view.rs"
+from = '''                    invalidation = layer.invalidation;'''
+to = '''                    let _ = layer.invalidation;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::", "windowless::"]
+
+[[mutant]]
+name = "the IME's area is the field's, not its text's"
+file = "crates/shell/src/browser_view.rs"
+from = '''            field.x + padding + area.x,'''
+to = '''            field.x + area.x,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::", "windowless::"]
+
+[[mutant]]
+name = "keys in the field aren't the UI's"
+file = "crates/shell/src/keyboard.rs"
+from = '''            NamedKey::Enter => ui::Key::Named(ui::NamedKey::Enter),'''
+to = '''            NamedKey::Enter => ui::Key::Unidentified,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::", "windowless::"]

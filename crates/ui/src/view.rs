@@ -144,6 +144,12 @@ impl<A: App> PaintCtx<'_, A> {
         &mut self.shared.text
     }
 
+    /// The text contexts and the theme at once, for painting text in the
+    /// theme's colors.
+    pub fn text_and_theme(&mut self) -> (&mut TextContexts, &A::Theme) {
+        (&mut self.shared.text, &self.shared.theme)
+    }
+
     /// The view's size, as laid out.
     pub fn size(&self) -> SizeF {
         self.size
@@ -187,6 +193,13 @@ impl<A: App> EventCtx<'_, A> {
     /// The clipboard, if whoever drives the tree lent one.
     pub fn clipboard(&mut self) -> Option<&mut (dyn Clipboard + 'static)> {
         self.shared.clipboard.as_deref_mut()
+    }
+
+    /// The text contexts and the clipboard at once, for editing text.
+    pub fn text_and_clipboard(
+        &mut self,
+    ) -> (&mut TextContexts, Option<&mut (dyn Clipboard + 'static)>) {
+        (&mut self.shared.text, self.shared.clipboard.as_deref_mut())
     }
 
     /// The view's size, as last laid out.

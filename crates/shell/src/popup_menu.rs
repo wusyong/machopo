@@ -4,17 +4,17 @@
 //! each, below the select or above it where there is more room, as wide as
 //! its widest item or the select. The browser view puts it over everything
 //! in the window, gives it the mouse over it and every key while it is
-//! open, and tells the renderer how it closed.
-//!
-//! Transitional, with the rest of the native UI (see `toolbar`).
+//! open, and tells the renderer how it closed. Its text is laid out with
+//! the fonts the browser UI's tree lends.
 
 use base::numerics::{clamp_ceil, clamp_floor, saturated_cast};
 use compositor_paint::{DisplayItemList, PaintFlags, PaintOp};
 use gfx::{Color, PointF, RectF, SizeF};
-use parley::{FontContext, LayoutContext, StyleProperty};
+use parley::StyleProperty;
 use protocol::TabId;
 use protocol::renderer::{MenuItem, MenuItemKind, PopupMenuResult};
 
+use ui::TextContexts;
 use ui::text as ui_text;
 
 /// At most this many rows show; the rest scroll (Chrome's list picker's
@@ -63,23 +63,19 @@ pub struct PopupMenu {
     /// The item the pointer or the keys are on: an option that can be
     /// picked.
     highlighted: Option<usize>,
-    fonts: FontContext,
-    layouts: LayoutContext<()>,
 }
 
 impl PopupMenu {
     /// `tab`'s select's dropdown, its items in `menu`, below `anchor` (the
     /// select's border box) in a window `window` big, CSS px both.
-    /// `test_fonts` as for the toolbar.
+    /// Its text is laid out with `text`.
     pub fn new(
         tab: TabId,
         menu: protocol::renderer::PopupMenu,
         anchor: RectF,
         window: SizeF,
-        test_fonts: bool,
+        text: &mut TextContexts,
     ) -> Self {
-        let mut fonts = ui_text::font_context(test_fonts);
-        let mut layouts = LayoutContext::new();
         let mut grouped = Vec::with_capacity(menu.items.len());
         let mut in_group = false;
         for item in &menu.items {
@@ -90,14 +86,14 @@ impl PopupMenu {
             }
             grouped.push(in_group && item.kind == MenuItemKind::Option);
         }
-        let probe = ui_text::label(&mut fonts, &mut layouts, "Xy", menu.font_size);
+        let probe = text.label("Xy", menu.font_size);
         let row_height = probe.height().ceil() + 2.0 * PADDING_Y;
         let widest = menu
             .items
             .iter()
             .zip(&grouped)
             .map(|(item, grouped)| {
-                let layout = label(&mut fonts, &mut layouts, item, menu.font_size);
+                let layout = label(text, item, menu.font_size);
                 layout.width() + if *grouped { GROUP_INDENT } else { 0.0 }
             })
             .fold(0.0f32, f32::max);
@@ -139,8 +135,6 @@ impl PopupMenu {
             row_height,
             rows,
             scroll: 0,
-            fonts,
-            layouts,
         };
         popup.scroll_to_highlighted();
         popup
@@ -310,7 +304,7 @@ impl PopupMenu {
     }
 
     /// Its picture, from its top left.
-    pub fn paint(&mut self) -> DisplayItemList {
+    pub fn paint(&mut self, text: &mut TextContexts) -> DisplayItemList {
         let mut list = DisplayItemList::new();
         let size = self.rect.size();
         fill(&mut list, RectF::from_size(size), BORDER_COLOR);
@@ -358,7 +352,7 @@ impl PopupMenu {
             } else {
                 0.0
             };
-            let layout = label(&mut self.fonts, &mut self.layouts, item, self.font_size);
+            let layout = label(text, item, self.font_size);
             let top = row.y + ((row.height - layout.height()) / 2.0).round();
             ui_text::paint_glyphs(
                 &mut list,
@@ -379,14 +373,11 @@ fn pickable(item: &MenuItem) -> bool {
 }
 
 /// An item's label on one line: a group's in bold.
-fn label(
-    fonts: &mut FontContext,
-    layouts: &mut LayoutContext<()>,
-    item: &MenuItem,
-    size: f32,
-) -> parley::Layout<()> {
+fn label(contexts: &mut TextContexts, item: &MenuItem, size: f32) -> parley::Layout<()> {
     let text = &item.label;
-    let mut builder = layouts.ranged_builder(fonts, text, 1.0, true);
+    let mut builder = contexts
+        .layouts
+        .ranged_builder(&mut contexts.fonts, text, 1.0, true);
     builder.push_default(ui_text::font_family());
     builder.push_default(StyleProperty::FontSize(size));
     if item.kind == MenuItemKind::Group {
@@ -434,7 +425,13 @@ mod tests {
     const WINDOW: SizeF = SizeF::new(800.0, 600.0);
 
     fn popup(items: Vec<MenuItem>, selected: Option<u32>, anchor: RectF) -> PopupMenu {
-        PopupMenu::new(TabId(1), menu(items, selected), anchor, WINDOW, true)
+        PopupMenu::new(
+            TabId(1),
+            menu(items, selected),
+            anchor,
+            WINDOW,
+            &mut TextContexts::new(true),
+        )
     }
 
     fn accepted(index: u32, by_keyboard: bool) -> PopupMenuResult {
@@ -586,7 +583,7 @@ mod tests {
     fn it_paints_its_rows() {
         let anchor = RectF::new(0.0, 0.0, 50.0, 20.0);
         let mut p = popup(vec![option("a"), option("b")], Some(1), anchor);
-        let list = p.paint();
+        let list = p.paint(&mut TextContexts::new(true));
         let ops: Vec<&PaintOp> = list.ops().iter().collect();
         let fills: Vec<Color> = ops
             .iter()

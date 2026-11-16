@@ -1,10 +1,11 @@
-//! `BrowserView`: what a browser window shows, the tab strip, the toolbar
-//! and the web views, and where its input goes. Its tabs are a
+//! `BrowserView`: what a browser window shows, the browser's own UI (the
+//! tab strip and the toolbar, a tree of `ui`'s views, `chrome`) and the web
+//! views, and where its input goes. Its tabs are a
 //! `TabStripModel`; the first web view shows the active one. A
 //! `BrowserViewLayout` gives each its bounds; drawing, the renderers' sizes
 //! and hit testing all follow them. The browser draws through its own
-//! compositor (Chromium's `ui::Compositor`, a `cc::LayerTreeHost`): the tab
-//! strip and the toolbar are the root layer, and each web view's surface is
+//! compositor (Chromium's `ui::Compositor`, a `cc::LayerTreeHost`): the UI's
+//! tree is the root layer, and each web view's surface is
 //! a `SurfaceLayer`, which Viz fills with that renderer's frames. A new
 //! frame from a renderer needs nothing from the browser.
 //!
@@ -35,12 +36,14 @@ use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 
 use crate::browser_view_layout::{BrowserViewLayout, DefaultLayout};
 use crate::keyboard::{self, KeyInput};
-use crate::omnibox::{Clipboard, KeyResult};
+use crate::chrome::{Chrome, UiMessage};
+use crate::omnibox::Clipboard;
 use crate::popup_menu::{KeyOutcome, PopupMenu};
 use crate::sad_tab::{self, SadTab};
-use crate::tab_strip::{self, TabStrip};
+use crate::omnibox::Omnibox;
+use crate::theme::SizeToken;
+use crate::tab_strip::TabStrip;
 use crate::tab_strip_model::TabStripModel;
-use crate::toolbar::{self, Button, Part, Toolbar};
 use crate::url_fixup::fixup_url;
 
 /// The browser's own frame sink: the root of a window's `Display`.
@@ -186,8 +189,8 @@ pub fn command_for(
 /// What a point in the window is over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Target {
-    TabStrip,
-    Toolbar,
+    /// The browser's own UI, the tree's.
+    Chrome,
     /// The web view showing this tab.
     WebView(TabId),
 }
@@ -238,15 +241,19 @@ pub struct BrowserView {
     tab_strip_bounds: Rect,
     /// `ui::Compositor`.
     compositor: LayerTreeHost<SingleThreadProxy>,
-    tab_strip: TabStrip,
-    toolbar: Toolbar,
+    /// The tab strip and the toolbar (Chromium's `TopContainerView`), one
+    /// layer, painted where it changed.
+    chrome: Chrome,
+    /// The UI's layer as last painted: given the compositor again while
+    /// only other layers change, so that it keeps its tiles.
+    chrome_layer: Option<Arc<DisplayItemList>>,
+    /// What the UI's last frame changed, as given its layer (`None`: all
+    /// of it), for tests.
+    chrome_invalidation: Option<Arc<[RectF]>>,
     /// What a web view whose renderer has gone shows.
     sad_tab: SadTab,
     /// Where sad tabs were last drawn, physical px.
     sad_drawn: Vec<Rect>,
-    /// The tab strip or the toolbar shows differently: they are painted
-    /// again (Chromium's `TopContainerView`, one layer).
-    chrome_dirty: bool,
     /// Physical px.
     size: Size,
     scale: f32,
@@ -272,7 +279,6 @@ pub struct BrowserView {
     /// The window is the active one (`Widget::IsActive`); a view with no
     /// platform window (headless, the scenarios') counts as one.
     window_focused: bool,
-    clipboard: Box<dyn Clipboard>,
     mac: bool,
     /// What relative paths typed in the address field are from.
     cwd: PathBuf,
@@ -284,7 +290,6 @@ pub struct BrowserView {
     /// The primary button went down in the dropdown: its up is the
     /// dropdown's too.
     pressed_in_popup: bool,
-    test_fonts: bool,
 }
 
 impl BrowserView {
@@ -321,11 +326,11 @@ impl BrowserView {
                 },
                 Box::new(frame_sink),
             ),
-            tab_strip: TabStrip::new(test_fonts),
-            toolbar: Toolbar::new(test_fonts),
-            sad_tab: SadTab::new(test_fonts),
+            chrome: Chrome::new(test_fonts, clipboard),
+            chrome_layer: None,
+            chrome_invalidation: None,
+            sad_tab: SadTab::new(),
             sad_drawn: Vec::new(),
-            chrome_dirty: true,
             size: Size::new(0, 0),
             scale: 1.0,
             origin: PointF::new(0.0, 0.0),
@@ -338,13 +343,11 @@ impl BrowserView {
             keys_down_in_page: HashSet::new(),
             buttons: 0,
             click_counts: [1; 3],
-            clipboard,
             mac: cfg!(target_os = "macos"),
             cwd: std::env::current_dir().unwrap_or_default(),
             popup: None,
             popup_dirty: false,
             pressed_in_popup: false,
-            test_fonts,
         }
     }
 
@@ -370,6 +373,9 @@ impl BrowserView {
     /// default.
     pub fn set_mac(&mut self, mac: bool) {
         self.mac = mac;
+        self.chrome
+            .tree
+            .update(self.chrome.omnibox, |omnibox, _| omnibox.set_mac(mac));
     }
 
     /// Where new tabs come from.
@@ -462,8 +468,7 @@ impl BrowserView {
         contents.navigate("about:blank");
         let index = self.tabs.append(contents);
         self.activate_tab(index);
-        self.toolbar.omnibox.focus();
-        self.chrome_dirty = true;
+        self.chrome.focus_omnibox();
     }
 
     /// `TabStripModel::ActivateTabAt`: shows the tab at `index`, if there
@@ -492,10 +497,7 @@ impl BrowserView {
         }
         self.web_views[0].contents = tab;
         self.focused = tab;
-        if self.toolbar.omnibox.is_focused() {
-            self.toolbar.omnibox.blur();
-        }
-        self.chrome_dirty = true;
+        self.chrome.blur_omnibox();
         self.relayout();
         self.sync_toolbar();
         self.update();
@@ -676,12 +678,39 @@ impl BrowserView {
         self.web_views.iter().find(|view| view.contents == tab)
     }
 
-    pub fn toolbar(&self) -> &Toolbar {
-        &self.toolbar
+    /// The address field.
+    pub fn omnibox(&self) -> &Omnibox {
+        self.chrome.omnibox()
+    }
+
+    /// The address field's box, CSS px of the window.
+    pub fn omnibox_rect(&self) -> RectF {
+        self.chrome_rect(self.chrome.omnibox.any())
+    }
+
+    /// Where a view of the UI is, CSS px of the window.
+    fn chrome_rect(&self, id: ui::AnyViewId) -> RectF {
+        let origin = self.chrome_origin();
+        self.chrome
+            .tree
+            .absolute_bounds(id)
+            .unwrap_or_default()
+            .offset(origin.x, origin.y)
+    }
+
+    /// Whether back and forward are enabled.
+    pub fn history(&self) -> (bool, bool) {
+        self.chrome.history()
+    }
+
+    /// What the UI's last frame changed, CSS px of the UI (`None`: all of
+    /// it): only that is rastered again.
+    pub fn chrome_invalidation_for_testing(&self) -> Option<&[RectF]> {
+        self.chrome_invalidation.as_deref()
     }
 
     pub fn tab_strip(&self) -> &TabStrip {
-        &self.tab_strip
+        self.chrome.tab_strip()
     }
 
     /// Lays the window out with `layout` from now on.
@@ -724,10 +753,7 @@ impl BrowserView {
     /// lets go of the keys and shows where the tab goes.
     pub fn navigate(&mut self, url: &str) {
         self.tabs.active_mut().navigate(url);
-        if self.toolbar.omnibox.is_focused() {
-            self.toolbar.omnibox.blur();
-            self.chrome_dirty = true;
-        }
+        self.chrome.blur_omnibox();
         self.sync_toolbar();
         // A debug URL may have changed what the tab shows (`about:crash`).
         self.update();
@@ -762,14 +788,14 @@ impl BrowserView {
             .layout
             .layout(self.size, self.scale, self.web_views.len());
         assert_eq!(layout.web_views.len(), self.web_views.len());
-        // Painted again even at the same bounds: the scale may be new.
         self.toolbar_bounds = layout.toolbar;
         self.tab_strip_bounds = layout.tab_strip;
-        self.chrome_dirty = true;
-        self.toolbar
-            .set_width(layout.toolbar.width as f32 / self.scale);
-        self.tab_strip
-            .set_width(layout.tab_strip.width as f32 / self.scale);
+        // The toolbar starts where the tab strip's whole physical px end.
+        // A new scale alone needs no new frame of the UI: its layer's
+        // tiles are rastered again at it.
+        let strip = layout.tab_strip.height as f32 / self.scale;
+        self.chrome
+            .set_size(layout.toolbar.width as f32 / self.scale, strip);
         for (view, bounds) in self.web_views.iter_mut().zip(layout.web_views) {
             view.bounds = bounds;
             if bounds.is_empty() {
@@ -823,8 +849,8 @@ impl BrowserView {
     }
 
     /// What `point` (CSS px of the window) is over, and where it is in it:
-    /// the web views from the top one down, then the tab strip and the
-    /// toolbar (aura's `WindowTargeter`).
+    /// the web views from the top one down, then the UI (aura's
+    /// `WindowTargeter`).
     fn hit_test(&self, point: PointF) -> Option<(Target, PointF)> {
         let at = PointF::new(point.x * self.scale, point.y * self.scale);
         let target = self
@@ -834,22 +860,36 @@ impl BrowserView {
             .find(|view| view.bounds.to_f32().contains(at))
             .map(|view| Target::WebView(view.contents))
             .or_else(|| {
-                [
-                    (self.tab_strip_bounds, Target::TabStrip),
-                    (self.toolbar_bounds, Target::Toolbar),
-                ]
-                .into_iter()
-                .find(|(bounds, _)| bounds.to_f32().contains(at))
-                .map(|(_, target)| target)
+                self.chrome_bounds()
+                    .to_f32()
+                    .contains(at)
+                    .then_some(Target::Chrome)
             })?;
         Some((target, self.in_target(target, point)?))
+    }
+
+    /// The UI's area, physical px of the window: the tab strip's and the
+    /// toolbar's together.
+    fn chrome_bounds(&self) -> Rect {
+        let (strip, toolbar) = (self.tab_strip_bounds, self.toolbar_bounds);
+        Rect::new(
+            strip.x.min(toolbar.x),
+            strip.y.min(toolbar.y),
+            strip.width.max(toolbar.width),
+            strip.height.saturating_add(toolbar.height),
+        )
+    }
+
+    /// Where the UI's tree is, CSS px of the window.
+    fn chrome_origin(&self) -> PointF {
+        let at = self.chrome_bounds().to_f32().scale(1.0 / self.scale);
+        PointF::new(at.x, at.y)
     }
 
     /// The bounds of `target`, if it's still there.
     fn bounds_of(&self, target: Target) -> Option<Rect> {
         match target {
-            Target::TabStrip => Some(self.tab_strip_bounds),
-            Target::Toolbar => Some(self.toolbar_bounds),
+            Target::Chrome => Some(self.chrome_bounds()),
             Target::WebView(tab) => self.web_view(tab).map(|view| view.bounds),
         }
     }
@@ -914,7 +954,7 @@ impl BrowserView {
     /// the window is active and the address field doesn't have them.
     fn sync_focus(&mut self) {
         let focused =
-            (self.window_focused && !self.toolbar.omnibox.is_focused()).then_some(self.focused);
+            (self.window_focused && !self.chrome.omnibox_focused()).then_some(self.focused);
         for contents in self.tabs.iter_mut().chain(self.others.iter_mut()) {
             contents.set_focus(Some(contents.tab()) == focused);
         }
@@ -933,22 +973,17 @@ impl BrowserView {
             return;
         }
         let target = self.pointer_target();
-        if !matches!(target, Some((Target::Toolbar, _))) && self.toolbar.mouse_leave() {
-            self.chrome_dirty = true;
-        }
-        if !matches!(target, Some((Target::TabStrip, _))) && self.tab_strip.mouse_leave() {
-            self.chrome_dirty = true;
+        if !matches!(target, Some((Target::Chrome, _))) {
+            self.chrome.tree.pointer_left();
         }
         match target {
-            Some((Target::TabStrip, p)) => {
-                if self.tab_strip.mouse_move(p) {
-                    self.chrome_dirty = true;
-                }
-            }
-            Some((Target::Toolbar, p)) => {
-                if self.toolbar.mouse_move(p) {
-                    self.chrome_dirty = true;
-                }
+            Some((Target::Chrome, p)) => {
+                let modifiers = self.ui_modifiers();
+                self.chrome.tree.pointer(ui::PointerEvent::Move {
+                    position: p,
+                    modifiers,
+                });
+                self.handle_ui_messages();
             }
             Some((Target::WebView(tab), p)) => {
                 let (buttons, modifiers) = (self.buttons, self.page_modifiers());
@@ -1040,45 +1075,32 @@ impl BrowserView {
             };
         }
         match hit {
-            Some((Target::Toolbar, p)) if button == MouseButton::Left => {
-                if pressed {
-                    self.toolbar.mouse_down(p, self.modifiers.shift_key());
-                } else if let Some(pressed) = self.toolbar.mouse_up(p) {
-                    self.run(match pressed {
-                        Button::Back => Command::Back,
-                        Button::Forward => Command::Forward,
-                        Button::Reload => Command::Reload,
-                    });
-                }
-                self.chrome_dirty = true;
-            }
-            Some((Target::Toolbar, _)) | None => {}
-            Some((Target::TabStrip, p)) => {
-                let action = if pressed {
-                    self.tab_strip.mouse_down(p, button)
-                } else {
-                    self.tab_strip.mouse_up(p, button)
-                };
-                match action {
-                    Some(tab_strip::Action::Activate(index)) => self.run(Command::SelectTab(index)),
-                    Some(tab_strip::Action::Close(index)) => {
-                        self.close_tab(index);
-                        self.sync_toolbar();
+            None => {}
+            Some((Target::Chrome, position)) => {
+                let (button, modifiers) = (ui_button(button), self.ui_modifiers());
+                self.chrome.tree.pointer(if pressed {
+                    ui::PointerEvent::Down {
+                        position,
+                        button,
+                        click_count,
+                        modifiers,
                     }
-                    Some(tab_strip::Action::NewTab) => self.run(Command::NewTab),
-                    None => {}
-                }
-                self.chrome_dirty = true;
+                } else {
+                    ui::PointerEvent::Up {
+                        position,
+                        button,
+                        click_count,
+                        modifiers,
+                    }
+                });
+                self.handle_ui_messages();
             }
             Some((Target::WebView(tab), p)) => {
                 // A press in a web view gives it the focus, from the
                 // address field too.
                 if pressed {
                     self.focused = tab;
-                    if self.toolbar.omnibox.is_focused() {
-                        self.toolbar.omnibox.blur();
-                        self.chrome_dirty = true;
-                    }
+                    self.chrome.blur_omnibox();
                 }
                 if self.crashed(tab) {
                     // Only its sad tab's button: the renderer has gone.
@@ -1126,6 +1148,36 @@ impl BrowserView {
             }
         }
         self.update();
+    }
+
+    /// The keys held, as the UI's events have them.
+    fn ui_modifiers(&self) -> ui::Modifiers {
+        let m = self.modifiers;
+        ui::Modifiers {
+            shift: m.shift_key(),
+            ctrl: m.control_key(),
+            alt: m.alt_key(),
+            meta: m.super_key(),
+        }
+    }
+
+    /// Does what the UI's views asked, in order.
+    fn handle_ui_messages(&mut self) {
+        for message in self.chrome.tree.take_messages() {
+            match message {
+                UiMessage::Command(command) => self.run(command),
+                UiMessage::CloseTab(index) => {
+                    self.close_tab(index);
+                    self.sync_toolbar();
+                }
+                UiMessage::Navigate(typed) => {
+                    if let Some(url) = fixup_url(&typed, &self.cwd) {
+                        self.chrome.blur_omnibox();
+                        self.navigate(&url);
+                    }
+                }
+            }
+        }
     }
 
     /// The keys held, as the page's events have them.
@@ -1204,7 +1256,7 @@ impl BrowserView {
             return;
         }
         let key = &input.logical;
-        let in_field = self.toolbar.omnibox.is_focused();
+        let in_field = self.chrome.omnibox_focused();
         if let Some(command) = command_for(key, self.modifiers, self.mac, in_field) {
             self.run(command);
             return;
@@ -1217,8 +1269,7 @@ impl BrowserView {
                 // `BrowserView` hands the focus to the web contents, which
                 // gives it to the page's first (or last) element
                 // (`WebContentsImpl::FocusThroughTabTraversal`).
-                self.toolbar.omnibox.blur();
-                self.chrome_dirty = true;
+                self.chrome.blur_omnibox();
                 self.update();
                 if let Some(contents) = self.contents_mut(self.focused).filter(|c| !c.is_crashed())
                 {
@@ -1226,23 +1277,11 @@ impl BrowserView {
                 }
                 return;
             }
-            let result = self.toolbar.omnibox.key(
-                key,
-                input.text.as_deref(),
-                self.modifiers,
-                self.mac,
-                self.clipboard.as_mut(),
-            );
-            match result {
-                KeyResult::Navigate(typed) => {
-                    if let Some(url) = fixup_url(&typed, &self.cwd) {
-                        self.toolbar.omnibox.blur();
-                        self.navigate(&url);
-                    }
-                }
-                KeyResult::Handled | KeyResult::Ignored => {}
-            }
-            self.chrome_dirty = true;
+            // Every key goes to the field while it has them, used or not.
+            self.chrome
+                .tree
+                .key(&keyboard::ui_key_event(input, self.modifiers));
+            self.handle_ui_messages();
             self.update();
             return;
         }
@@ -1258,26 +1297,28 @@ impl BrowserView {
     /// past its last or first focusable element): the address field takes
     /// it, as Chrome's toolbar does.
     fn take_focus(&mut self, tab: TabId) {
-        if tab == self.focused && !self.toolbar.omnibox.is_focused() {
-            self.toolbar.omnibox.focus();
-            self.chrome_dirty = true;
+        if tab == self.focused {
+            self.chrome.focus_omnibox();
         }
     }
 
     /// `Ime::Preedit`, for the address field.
     pub fn ime_preedit(&mut self, text: &str, cursor: Option<(usize, usize)>) {
-        if self.toolbar.omnibox.is_focused() {
-            self.toolbar.omnibox.preedit(text, cursor);
-            self.chrome_dirty = true;
+        if self.chrome.omnibox_focused() {
+            self.chrome.tree.ime(&ui::ImeEvent::Preedit {
+                text: text.to_owned(),
+                cursor,
+            });
             self.update();
         }
     }
 
     /// `Ime::Commit`, for the address field.
     pub fn ime_commit(&mut self, text: &str) {
-        if self.toolbar.omnibox.is_focused() {
-            self.toolbar.omnibox.commit(text);
-            self.chrome_dirty = true;
+        if self.chrome.omnibox_focused() {
+            self.chrome
+                .tree
+                .ime(&ui::ImeEvent::Commit(text.to_owned()));
             self.update();
         }
     }
@@ -1291,10 +1332,7 @@ impl BrowserView {
                 self.tabs.active_mut().go_forward();
             }
             Command::Reload => self.tabs.active_mut().reload(),
-            Command::FocusLocation => {
-                self.toolbar.omnibox.focus();
-                self.chrome_dirty = true;
-            }
+            Command::FocusLocation => self.chrome.focus_omnibox(),
             Command::NewTab => self.new_tab(),
             Command::CloseTab => self.close_tab(self.tabs.active_index()),
             Command::NextTab => self.activate_tab(self.tabs.next_index()),
@@ -1379,7 +1417,7 @@ impl BrowserView {
                         menu.clone(),
                         anchor,
                         window,
-                        self.test_fonts,
+                        self.chrome.tree.text(),
                     ));
                     self.pressed_in_popup = false;
                     self.popup_dirty = true;
@@ -1412,18 +1450,21 @@ impl BrowserView {
     /// shows every tab's title.
     fn sync_toolbar(&mut self) {
         let titles = self.tabs.iter().map(tab_title).collect();
-        if self.tab_strip.set_tabs(titles, self.tabs.active_index()) {
-            self.chrome_dirty = true;
-        }
-        let before = (self.toolbar.omnibox.text(), self.toolbar.history());
+        let active = self.tabs.active_index();
+        let chrome = &mut self.chrome;
+        chrome.tree.update(chrome.tab_strip, |strip, ctx| {
+            if strip.set_tabs(titles, active) {
+                ctx.request_paint();
+            }
+        });
         let url = self.tabs.active().url().unwrap_or_default().to_owned();
-        self.toolbar.omnibox.set_url(&url);
+        chrome.tree.update(chrome.omnibox, |omnibox, ctx| {
+            if omnibox.set_url(ctx.text(), &url) {
+                ctx.request_paint();
+            }
+        });
         let controller = self.tabs.active().controller();
-        self.toolbar
-            .set_history(controller.can_go_back(), controller.can_go_forward());
-        if before != (self.toolbar.omnibox.text(), self.toolbar.history()) {
-            self.chrome_dirty = true;
-        }
+        chrome.set_history(controller.can_go_back(), controller.can_go_forward());
     }
 
     /// What the pointer should look like where it is: over a page, what
@@ -1431,10 +1472,9 @@ impl BrowserView {
     /// UpdateCursor`); over the address field, the I-beam.
     pub fn cursor(&self) -> CursorType {
         match self.pointer_target() {
-            Some((Target::TabStrip, _)) => CursorType::Pointer,
-            Some((Target::Toolbar, p)) => match self.toolbar.part_at(p) {
-                Part::Field => CursorType::IBeam,
-                _ => CursorType::Pointer,
+            Some((Target::Chrome, p)) => match self.chrome.tree.cursor(p) {
+                ui::Cursor::Text => CursorType::IBeam,
+                ui::Cursor::Default => CursorType::Pointer,
             },
             Some((Target::WebView(tab), _)) => self
                 .cursors
@@ -1454,11 +1494,23 @@ impl BrowserView {
     /// should avoid (CSS px of the window); `None` turns the IME off, so
     /// keys go to the page as they are.
     pub fn ime_area(&mut self) -> Option<RectF> {
-        if !self.toolbar.omnibox.is_focused() {
+        if !self.chrome.omnibox_focused() {
             return None;
         }
-        let origin = self.toolbar_bounds.to_f32().scale(1.0 / self.scale);
-        Some(self.toolbar.ime_cursor_area().offset(origin.x, origin.y))
+        // In the field's text: the field's padding in.
+        let field = self.omnibox_rect();
+        let padding = self.chrome.tree.theme().size(SizeToken::FieldPadding);
+        let chrome = &mut self.chrome;
+        let area = chrome
+            .tree
+            .update(chrome.omnibox, |omnibox, ctx| omnibox.ime_cursor_area(ctx.text()))?;
+        let top = field.y + (field.height - area.height) / 2.0;
+        Some(RectF::new(
+            field.x + padding + area.x,
+            top,
+            area.width,
+            area.height,
+        ))
     }
 
     /// Draws the browser's frame if anything in it changed: the tab strip
@@ -1479,25 +1531,31 @@ impl BrowserView {
             .map(|view| view.bounds)
             .collect();
         let popup_dirty = std::mem::take(&mut self.popup_dirty);
-        if std::mem::take(&mut self.chrome_dirty) || sad != self.sad_drawn || popup_dirty {
-            // One layer from the window's top left: each painted where the
-            // layout put it.
-            let (strip, toolbar) = (css(self.tab_strip_bounds), css(self.toolbar_bounds));
-            let mut list = DisplayItemList::new();
-            list.push_list_at(&self.tab_strip.paint(), strip.x, strip.y);
-            list.push_list_at(&self.toolbar.paint(), toolbar.x, toolbar.y);
-            list.finalize();
+        // The UI's tree, painted where it changed (`None`: nothing did).
+        let mut invalidation = None;
+        let chrome_changed = match self.chrome.tree.paint() {
+            Some(frame) => {
+                for layer in frame.layers {
+                    // One: the UI has no view with a layer of its own.
+                    self.chrome_layer = Some(layer.display_list);
+                    invalidation = layer.invalidation;
+                    self.chrome_invalidation.clone_from(&invalidation);
+                }
+                true
+            }
+            None => false,
+        };
+        if chrome_changed || sad != self.sad_drawn || popup_dirty {
+            let origin = self.chrome_origin();
+            let size = self.chrome.tree.size();
             let mut layers = vec![PictureLayer {
                 id: LayerId(1),
-                bounds: SizeF::new(
-                    strip.right().max(toolbar.right()),
-                    (strip.y + tab_strip::HEIGHT).max(toolbar.y + toolbar::HEIGHT),
-                ),
-                display_list: Arc::new(list),
+                bounds: SizeF::new(origin.x + size.width, origin.y + size.height),
+                display_list: self.chrome_layer.clone().expect("painted"),
                 contents_opaque: true,
                 background_color: Color::WHITE,
-                // Small: rastered whole when it changes.
-                invalidation: None,
+                // Read only when the list is a new one.
+                invalidation,
                 properties: LayerProperties::default(),
             }];
             for (bounds, id) in sad.iter().zip(100..) {
@@ -1505,7 +1563,7 @@ impl BrowserView {
                 layers.push(PictureLayer {
                     id: LayerId(id),
                     bounds: at.size(),
-                    display_list: Arc::new(self.sad_tab.paint(at.size())),
+                    display_list: Arc::new(self.sad_tab.paint(self.chrome.tree.text(), at.size())),
                     contents_opaque: true,
                     background_color: sad_tab::BACKGROUND,
                     invalidation: None,
@@ -1521,7 +1579,7 @@ impl BrowserView {
                 layers.push(PictureLayer {
                     id: LayerId(50),
                     bounds: at.size(),
-                    display_list: Arc::new(popup.paint()),
+                    display_list: Arc::new(popup.paint(self.chrome.tree.text())),
                     contents_opaque: true,
                     background_color: Color::WHITE,
                     invalidation: None,
@@ -1590,6 +1648,15 @@ impl WebView {
             contents,
             bounds: Rect::default(),
         }
+    }
+}
+
+/// A mouse button as the UI's events have it.
+fn ui_button(button: MouseButton) -> ui::PointerButton {
+    match button {
+        MouseButton::Left => ui::PointerButton::Primary,
+        MouseButton::Middle => ui::PointerButton::Middle,
+        MouseButton::Right => ui::PointerButton::Secondary,
     }
 }
 
@@ -1696,3 +1763,4 @@ mod tests {
         assert_eq!(on(&down, ModifiersState::empty(), false), None);
     }
 }
+

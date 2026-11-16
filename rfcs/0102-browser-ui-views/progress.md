@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 第 1 階段：`ui` 的保留的樹，工具列和分頁列搬上去 | 進行中 | |
 | 1a：`ui` 的樹、排版、畫、事件、主題；`ui_text` 搬進來 | 做完 | 2026-11-16 |
-| 1b：工具列和分頁列改寫成 view，`BrowserView` 走樹 | 還沒開始 | |
+| 1b：工具列和分頁列改寫成 view，`BrowserView` 走樹 | 做完 | 2026-11-17 |
 | 1c：文件和階段結束的檢查 | 還沒開始 | |
 | 第 2 階段：宣告式的一層、版面管理和側邊欄 | 還沒開始 | |
 | 第 3 階段：外觀 | 還沒開始 | |
@@ -20,6 +20,10 @@
 | `ui` 的樹：id 和世代、flex 的排版、要求重排、hit test、事件往上找、capture、hover 的順序、焦點和按鍵、游標、只重畫變了的 view 和變了的範圍（重畫、搬動、縮小、隱藏、拿掉、新的大小、新的主題、沒有 rect 的 op）、留著的錄製沒有過期 | `cargo test -p ui` |
 | `ui` 只依賴允許的 crate；renderer 那一側不依賴 `ui` | `python3 scripts/sanity.py deps`、`python3 scripts/sanity.py boundary` |
 | `shell` 改用 `ui` 的 `text`、`Clipboard` 之後行為不變 | `cargo test -p shell --lib`；`cargo test -p shell --test it -- browser_view:: windowless::` |
+| 工具列（按鈕和網址列是 view，flex 排）、分頁列（一個 view）在樹上：位置和改寫前一樣、按鈕要可以按才按得下、按下和放開都在按鈕上、只有可以按的按鈕 hover 時亮、網址列點一下拿到焦點和外框、Cmd+L 再全選、分頁列送出的訊息、工具列的背景收住指標 | `cargo test -p shell --lib chrome::` |
+| `BrowserView` 走樹：網址列、按鈕、分頁列的操作和游標照舊；hover 一個按鈕只重 raster 那個按鈕；輸入法的位置在網址列的文字裡 | `cargo test -p shell --test it -- browser_view:: windowless::` |
+| 每次 paint 都檢查 view 留著的錄製沒有過期（debug build），`shell` 的測試和情境都經過它 | `cargo test -p shell --test it`；`python3 scripts/test.py scenarios tab-strip navigation demo-busy rounded demo-script gpu-crash` |
+| 外觀不變 | 見「做過的檢查」的 1b：改之前、改之後的截圖逐像素比較 |
 
 ## 做過的檢查
 
@@ -37,3 +41,22 @@
   - 同時找到的問題：view 的變了的範圍原本用 display list 的 `bounds()`，沒帶 rect 錄的 op（可能畫在任何地方）不算在裡面，範圍會太小。改成每個 op 的 visual rect 的聯集、夾在 layer 裡，補測試 `an_op_recorded_without_a_rect_damages_the_whole_layer`，spec 加兩個 mutant。
   - 改完之後重跑改到的 7 個：全部抓到。spec 現在 31 個。
 - **跑過的檢查**：`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`；`deps` 和 `boundary` 新的規則各弄壞一次（`ui` 依賴 `protocol`、`paint` 依賴 `ui`），都報錯。
+
+### 1b
+
+2026-11-17，macOS（Apple Silicon）。
+
+- **外觀**（「已決定的事項」第 19 條）：一份暫時的情境把 UI 擺成 14 種狀態（剛打開；hover 在重新載入、不能按的上一頁、上一頁上；hover 在分頁、關閉鈕、新分頁鈕上；網址列全選、打字後游標在中間、太長捲到後面；標題淡出；16 個分頁擠到最窄、hover、指標在頁面上），在 1x、1.25x、1.5x、2x 各截一張；用到按鍵的照 macOS 和其他平台的快捷鍵各跑一次，共 112 張。先在 1a 的 commit（`66220ab`）上跑兩次，確認每次的截圖完全相同，再在改完的程式上跑。結果：1x、2x 的 64 張完全相同；1.25x 的 20 張、1.5x 的 28 張各有 1 到 18 個像素不同，全部是某個顏色的值差 1，在字和圖示抗鋸齒的邊上。原因是浮點數加法的順序：每個 view 用自己的座標錄、再平移過去，原本在工具列的座標裡一次算；位置一樣，只差最後一位的捨入。1x、2x 的平移都是整數個像素，所以完全相同。情境和比較的腳本沒有 commit。
+- **和原本不同的兩處行為**（邊角的情況）：
+  - 在分頁列上按著拖到工具列的按鈕上時，按鈕會亮（hover 跟著指標下面的 view；原本被分頁列收住時工具列不亮）。
+  - 不能按的按鈕在指標下面變成可以按時（頁面載入完，上一頁剛好在指標下面），立刻亮；原本要等滑鼠再動一下。
+- **新的測試**：`shell` 的 `chrome::` 7 個（工具列的位置、按鈕的按下、不能按的按鈕按下之後才變成可以按也不算、只有可以按的按鈕亮、網址列的焦點和外框和 Cmd+L、工具列的背景收住指標、分頁列送出的訊息）；`browser_view` 的 `hovering_a_toolbar_button_rasters_only_the_button_again`，`typing_in_the_address_field_navigates` 加上輸入法位置的檢查。`ui` 的 2 個（debug build 的檢查找到改了卻沒要求重畫的 view 時 panic、沒有時不 panic）。原本 `toolbar.rs` 的 3 個測試跟著舊的 `Toolbar` 拿掉，由 `chrome::` 的取代；網址列的測試改成直接驅動它的編輯（點擊的那個改在樹上）。
+- **跑過的測試**：`ui` 28 個；`shell` 的單元測試 72 個；`shell` 的整合測試全部 570 個（加了上面那個之前）和之後的 `browser_view::`、`windowless::` 65 個；情境 `tab-strip`、`navigation`、`demo-busy`、`rounded`、`demo-script`、`gpu-crash` 和外觀比較用的暫時情境。
+- **不穩定的測試**：`shell` 的 `devtools_initiators::script_asks_with_its_stack` 單獨跑 3 次失敗 1 次（兩次失敗在不同的行）。RFC 0007、0092、0095 都記過它在乾淨的 tree 上也會失敗、推測的原因；這次的改動沒有碰它測的程式。沒有再查。
+- **mutation test**（`mutants-1b.toml`，`python3 scripts/test.py mutate --keep-going rfcs/0102-browser-ui-views/mutants-1b.toml`）：第一次 23 個抓到 19 個。沒抓到的四個：
+  - 不能按的按鈕也收下按下：放開時還要可以按才算，所以多半一樣；但按下之後才變成可以按時（頁面載入完）會被當成按了上一頁。補測試 `a_press_on_a_disabled_button_is_the_toolbar_s_even_once_it_is_enabled`。
+  - 換了倍率不讓 UI 整個重畫：compositor 自己在倍率變了時重新 raster 整個 layer（tile 只在同樣的倍率下沿用），這行是多餘的。刪掉它和 `ui` 的 `ViewTree::invalidate_layer`，從 spec 拿掉。
+  - UI 的 layer 每次都整個重新 raster：結果一樣，只是多做事，沒有計數。`BrowserView` 加 `chrome_invalidation_for_testing`，補測試 hover 一個按鈕只重 raster 那個按鈕。
+  - 輸入法的位置少了網址列的內距：原本的測試只看有沒有位置。補位置的檢查。
+  - 補完之後重跑這三個：全部抓到。spec 現在 22 個。
+- **跑過的檢查**：`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。

@@ -107,6 +107,9 @@ pub struct ViewTree<A: App> {
     /// the pointer until it comes up.
     captured: Option<(AnyViewId, PointerButton)>,
     focused: Option<AnyViewId>,
+    /// Every paint checks that no view's kept recording is stale (debug
+    /// builds; see [`ViewTree::set_check_recordings`]).
+    check_recordings: bool,
 }
 
 impl<A: App> ViewTree<A> {
@@ -132,6 +135,7 @@ impl<A: App> ViewTree<A> {
             hovered: Vec::new(),
             captured: None,
             focused: None,
+            check_recordings: cfg!(debug_assertions),
         };
         tree.root = tree.insert(Container).any();
         tree
@@ -152,6 +156,14 @@ impl<A: App> ViewTree<A> {
             self.needs_layout = true;
             self.needs_full_paint = true;
         }
+    }
+
+    /// Whether every paint has each view record again and compares it with
+    /// what it kept, panicking at a view that changed without asking to be
+    /// painted again: on by default in debug builds, so that any test that
+    /// paints checks it. Off for a test that counts paints.
+    pub fn set_check_recordings(&mut self, check: bool) {
+        self.check_recordings = check;
     }
 
     pub fn theme(&self) -> &A::Theme {
@@ -551,6 +563,18 @@ impl<A: App> ViewTree<A> {
     /// nothing did. Each view's recording is kept and drawn again where
     /// the view is now, until it asks to paint again.
     pub fn paint(&mut self) -> Option<Frame> {
+        let frame = self.paint_changed();
+        if self.check_recordings {
+            let stale = self.stale_views();
+            assert!(
+                stale.is_empty(),
+                "views changed without asking to be painted again: {stale:?}"
+            );
+        }
+        frame
+    }
+
+    fn paint_changed(&mut self) -> Option<Frame> {
         self.layout();
         let full = std::mem::take(&mut self.needs_full_paint);
         let mut damage = std::mem::take(&mut self.damage);

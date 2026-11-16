@@ -114,9 +114,12 @@ impl View<TestApp> for Swatch {
     }
 }
 
+/// A tree 200 × 100, not checking its recordings on every paint: the
+/// tests count paints, and check with `assert_fresh`.
 fn tree() -> ViewTree<TestApp> {
     let mut tree = ViewTree::new(Color::WHITE, TextContexts::new(true));
     tree.set_size(SizeF::new(200.0, 100.0));
+    tree.set_check_recordings(false);
     tree
 }
 
@@ -804,4 +807,29 @@ fn an_op_recorded_without_a_rect_damages_the_whole_layer() {
     });
     let damage = paint(&mut tree).unwrap().unwrap();
     assert_eq!(damage, [RectF::new(0.0, 0.0, 200.0, 100.0)]);
+}
+
+#[test]
+#[should_panic(expected = "views changed without asking to be painted again")]
+fn checking_recordings_a_paint_panics_at_a_view_changed_without_asking() {
+    let mut tree = tree();
+    tree.set_check_recordings(true);
+    let [a] = row_of(&mut tree, &["a"], 30.0)[..] else {
+        unreachable!()
+    };
+    tree.paint();
+    tree.update(a, |swatch, _| swatch.color = Some(Color::rgb(255, 0, 0)));
+    tree.paint();
+}
+
+#[test]
+fn checking_recordings_a_paint_of_fresh_views_passes() {
+    let mut tree = tree();
+    tree.set_check_recordings(true);
+    let [a] = row_of(&mut tree, &["a"], 30.0)[..] else {
+        unreachable!()
+    };
+    tree.paint();
+    tree.update(a, |swatch, ctx| swatch.set_color(Color::rgb(255, 0, 0), ctx));
+    assert!(tree.paint().is_some());
 }

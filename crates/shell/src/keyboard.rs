@@ -2,7 +2,7 @@
 //! turned into a `NativeWebKeyboardEvent` in the browser process): the DOM
 //! `key` and `code`, the legacy `keyCode`, the text it types and the
 //! modifiers, worked out here so the renderer never sees the platform's
-//! keys.
+//! keys. The browser UI's views get theirs here too, in `ui`'s types.
 
 use protocol::input::{KeyboardEvent, Modifiers};
 use winit::keyboard::{Key, KeyCode, KeyLocation, ModifiersState, NamedKey, PhysicalKey};
@@ -48,6 +48,44 @@ impl KeyInput {
 }
 
 /// The page's event for `input`, with `modifiers` held.
+/// The key as the browser UI's views get it (`ui`'s, so that `ui` sees no
+/// platform's keys either).
+pub fn ui_key_event(input: &KeyInput, modifiers: ModifiersState) -> ui::KeyEvent {
+    let key = match &input.logical {
+        Key::Character(c) => ui::Key::Character(c.to_string()),
+        Key::Named(named) => match named {
+            NamedKey::Enter => ui::Key::Named(ui::NamedKey::Enter),
+            NamedKey::Escape => ui::Key::Named(ui::NamedKey::Escape),
+            NamedKey::Tab => ui::Key::Named(ui::NamedKey::Tab),
+            NamedKey::Backspace => ui::Key::Named(ui::NamedKey::Backspace),
+            NamedKey::Delete => ui::Key::Named(ui::NamedKey::Delete),
+            NamedKey::ArrowLeft => ui::Key::Named(ui::NamedKey::ArrowLeft),
+            NamedKey::ArrowRight => ui::Key::Named(ui::NamedKey::ArrowRight),
+            NamedKey::ArrowUp => ui::Key::Named(ui::NamedKey::ArrowUp),
+            NamedKey::ArrowDown => ui::Key::Named(ui::NamedKey::ArrowDown),
+            NamedKey::Home => ui::Key::Named(ui::NamedKey::Home),
+            NamedKey::End => ui::Key::Named(ui::NamedKey::End),
+            NamedKey::PageUp => ui::Key::Named(ui::NamedKey::PageUp),
+            NamedKey::PageDown => ui::Key::Named(ui::NamedKey::PageDown),
+            NamedKey::Space => ui::Key::Named(ui::NamedKey::Space),
+            _ => ui::Key::Unidentified,
+        },
+        _ => ui::Key::Unidentified,
+    };
+    ui::KeyEvent {
+        key,
+        text: input.text.clone(),
+        modifiers: ui::Modifiers {
+            shift: modifiers.shift_key(),
+            ctrl: modifiers.control_key(),
+            alt: modifiers.alt_key(),
+            meta: modifiers.super_key(),
+        },
+        pressed: input.pressed,
+        repeat: input.repeat,
+    }
+}
+
 pub fn keyboard_event(input: &KeyInput, modifiers: ModifiersState) -> KeyboardEvent {
     let key = dom_key(&input.logical);
     let code = dom_code(&input.physical);

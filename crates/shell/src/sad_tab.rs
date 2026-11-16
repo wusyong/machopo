@@ -1,17 +1,14 @@
 //! The sad tab (Chromium's `SadTabView`): what a web view shows once its
 //! renderer has gone, drawn by the browser, with a button that loads the
 //! page again in a new renderer. It knows its size and where the button
-//! is; what the button does is the view's.
-//!
-//! Transitional, with the rest of the native UI (see `toolbar`).
+//! is; what the button does is the view's. Its text is laid out with the
+//! fonts the browser UI's tree lends.
 
 use std::f32::consts::PI;
 
 use compositor_paint::{DisplayItemList, PaintFlags, PaintOp};
 use gfx::{Color, PointF, RRectF, RectF, SizeF};
-use parley::{FontContext, LayoutContext};
-
-use ui::text as ui_text;
+use ui::TextContexts;
 
 const TITLE: &str = "This page crashed";
 const MESSAGE: &str = "Something went wrong while showing this page.";
@@ -35,18 +32,11 @@ pub struct SadTab {
     /// The primary button went down on the reload button: going up on it
     /// too reloads.
     pressed: bool,
-    fonts: FontContext,
-    layouts: LayoutContext<()>,
 }
 
 impl SadTab {
-    /// `test_fonts` as for the toolbar.
-    pub fn new(test_fonts: bool) -> Self {
-        Self {
-            pressed: false,
-            fonts: ui_text::font_context(test_fonts),
-            layouts: LayoutContext::new(),
-        }
+    pub fn new() -> Self {
+        Self { pressed: false }
     }
 
     /// Where the content's column starts in a web view `size` CSS px.
@@ -93,7 +83,7 @@ impl SadTab {
     }
 
     /// The sad tab for a web view `size` CSS px.
-    pub fn paint(&mut self, size: SizeF) -> DisplayItemList {
+    pub fn paint(&mut self, text: &mut TextContexts, size: SizeF) -> DisplayItemList {
         let mut list = DisplayItemList::new();
         list.push_op(PaintOp::DrawRect {
             rect: RectF::from_size(size),
@@ -108,14 +98,16 @@ impl SadTab {
             flags: PaintFlags::fill(SECONDARY),
         });
         let x = Self::origin(size).x;
-        self.label(
+        label(
+            text,
             &mut list,
             TITLE,
             TITLE_SIZE,
             PointF::new(x, Self::title_top(size)),
             TEXT,
         );
-        self.label(
+        label(
+            text,
             &mut list,
             MESSAGE,
             MESSAGE_SIZE,
@@ -127,27 +119,33 @@ impl SadTab {
             rrect: RRectF::uniform(button, 4.0),
             flags: PaintFlags::fill(BUTTON_COLOR),
         });
-        let layout = ui_text::label(&mut self.fonts, &mut self.layouts, RELOAD, MESSAGE_SIZE);
+        let layout = text.label(RELOAD, MESSAGE_SIZE);
         let at = PointF::new(
             button.x + ((button.width - layout.width()) / 2.0).round(),
             button.y + ((button.height - layout.height()) / 2.0).round(),
         );
-        ui_text::paint_glyphs(&mut list, &layout, at, Color::WHITE);
+        ui::text::paint_glyphs(&mut list, &layout, at, Color::WHITE);
         list.finalize();
         list
     }
+}
 
-    fn label(
-        &mut self,
-        list: &mut DisplayItemList,
-        text: &str,
-        size: f32,
-        at: PointF,
-        color: Color,
-    ) {
-        let layout = ui_text::label(&mut self.fonts, &mut self.layouts, text, size);
-        ui_text::paint_glyphs(list, &layout, at, color);
+impl Default for SadTab {
+    fn default() -> Self {
+        Self::new()
     }
+}
+
+fn label(
+    contexts: &mut TextContexts,
+    list: &mut DisplayItemList,
+    text: &str,
+    size: f32,
+    at: PointF,
+    color: Color,
+) {
+    let layout = contexts.label(text, size);
+    ui::text::paint_glyphs(list, &layout, at, color);
 }
 
 /// A frowning face around `c`, as filled polygons: a ring, two eyes and a
@@ -202,7 +200,7 @@ mod tests {
 
     #[test]
     fn the_button_reloads_on_down_and_up_on_it() {
-        let mut sad = SadTab::new(true);
+        let mut sad = SadTab::new();
         let button = center(SadTab::reload_rect(SIZE));
         let elsewhere = PointF::new(10.0, 10.0);
         sad.mouse_down(button, SIZE);
@@ -216,8 +214,8 @@ mod tests {
 
     #[test]
     fn it_paints_the_page_the_face_the_words_and_the_button() {
-        let mut sad = SadTab::new(true);
-        let list = sad.paint(SIZE);
+        let mut sad = SadTab::new();
+        let list = sad.paint(&mut TextContexts::new(true), SIZE);
         let ops = list.ops();
         assert!(matches!(
             ops.first(),

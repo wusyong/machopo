@@ -446,7 +446,7 @@ impl Window {
     }
 
     fn field_text(&self) -> String {
-        self.view.toolbar().omnibox.text()
+        self.view.omnibox().text()
     }
 
     fn close(mut self) {
@@ -817,13 +817,19 @@ fn typing_in_the_address_field_navigates() {
     // Cmd+L focuses and selects it all; typing replaces it. A host and
     // port with no scheme: `http://`, for an IP address.
     window.shortcut("l");
-    assert!(window.view.ime_area().is_some());
+    // Where the field's text starts, its padding in from the field's edge.
+    let area = window.view.ime_area().unwrap();
+    let field = window.view.omnibox_rect();
+    assert!(
+        area.x >= field.x + 12.0 && area.y >= field.y && area.bottom() <= field.bottom(),
+        "{area:?} in {field:?}"
+    );
     let typed = server.url("/next");
     window.type_text(typed.trim_start_matches("http://"));
     window.key(NamedKey::Enter);
     window.until(|msg| matches!(msg, RendererHostMsg::DidCommitNavigation { .. }));
     assert_eq!(window.url(), Some(typed.as_str()));
-    assert!(!window.view.toolbar().omnibox.is_focused());
+    assert!(!window.view.omnibox().is_focused());
     assert_eq!(window.view.ime_area(), None);
     assert_eq!(window.field_text(), typed);
     window.close();
@@ -835,8 +841,8 @@ fn the_field_gives_the_url_back() {
     let url = server.url("/");
     let mut window = Window::open(Size::new(400, 300), 1.0);
     window.load(&url);
-    let field = window.view.toolbar().field_rect();
-    let in_field = (field.x + 20.0, TOOLBAR_Y + field.y + field.height / 2.0);
+    let field = window.view.omnibox_rect();
+    let in_field = (field.x + 20.0, field.y + field.height / 2.0);
     // A click focuses it with everything selected; copy that.
     window.click(in_field.0, in_field.1);
     window.shortcut("c");
@@ -851,7 +857,7 @@ fn the_field_gives_the_url_back() {
     window.type_text("more");
     window.click(10.0, 200.0);
     assert_eq!(window.field_text(), url);
-    assert!(!window.view.toolbar().omnibox.is_focused());
+    assert!(!window.view.omnibox().is_focused());
     // Paste and go.
     *window.clipboard.0.borrow_mut() = Some(format!("{url}#pasted"));
     window.click(in_field.0, in_field.1);
@@ -867,23 +873,39 @@ fn the_back_and_forward_buttons() {
     let server = server(&[("/", &links(&["/two"])), ("/two", GREEN_PAGE)]);
     let mut window = Window::open(Size::new(400, 300), 1.0);
     window.load(&server.url("/"));
-    assert_eq!(window.view.toolbar().history(), (false, false));
+    assert_eq!(window.view.history(), (false, false));
     // The renderer asks for the link; once the navigation it starts has
     // committed, wait for that page.
     window.click(10.0, TOP + 10.0);
     window.until(|msg| matches!(msg, RendererHostMsg::DidCommitNavigation { .. }));
     window.until_loaded();
-    assert_eq!(window.view.toolbar().history(), (true, false));
+    assert_eq!(window.view.history(), (true, false));
     // The back button: the first in the toolbar.
     let back = (6.0 + 14.0, TOOLBAR_Y + toolbar::HEIGHT / 2.0);
     let forward = (back.0 + 32.0, back.1);
     window.click(back.0, back.1);
     window.until_loaded();
     assert_eq!(window.url(), Some(server.url("/").as_str()));
-    assert_eq!(window.view.toolbar().history(), (false, true));
+    assert_eq!(window.view.history(), (false, true));
     window.click(forward.0, forward.1);
     window.until_loaded();
     assert_eq!(window.url(), Some(server.url("/two").as_str()));
+    window.close();
+}
+
+#[test]
+fn hovering_a_toolbar_button_rasters_only_the_button_again() {
+    let server = server(&[("/", GREEN_PAGE)]);
+    let mut window = Window::open(Size::new(400, 300), 1.0);
+    window.load(&server.url("/"));
+    // Reload: the third button, 70 in, 6 down the toolbar.
+    let reload = RectF::new(70.0, TOOLBAR_Y + 6.0, 28.0, 28.0);
+    window
+        .view
+        .pointer_moved(PointF::new(reload.x + 14.0, reload.y + 14.0));
+    let damage = window.view.chrome_invalidation_for_testing().unwrap();
+    assert!(!damage.is_empty());
+    assert!(damage.iter().all(|rect| *rect == reload), "{damage:?}");
     window.close();
 }
 
@@ -892,10 +914,10 @@ fn the_cursor_follows_what_is_under_it() {
     let server = server(&[("/", &links(&["/a"]))]);
     let mut window = Window::open(Size::new(400, 300), 1.0);
     window.load(&server.url("/"));
-    let field = window.view.toolbar().field_rect();
+    let field = window.view.omnibox_rect();
     window
         .view
-        .pointer_moved(PointF::new(field.x + 20.0, TOOLBAR_Y + field.y + 10.0));
+        .pointer_moved(PointF::new(field.x + 20.0, field.y + 10.0));
     assert_eq!(window.view.cursor(), CursorType::IBeam);
     window
         .view
@@ -1058,10 +1080,10 @@ fn the_web_view_a_drag_starts_in_has_it() {
     window.view.mouse_input(MouseButton::Left, false);
     window.until_out(TabId(0), "350,110;");
     // Then it's free: over the address field, the field's.
-    let field = window.view.toolbar().field_rect();
+    let field = window.view.omnibox_rect();
     window
         .view
-        .pointer_moved(PointF::new(field.x + 20.0, TOOLBAR_Y + field.y + 10.0));
+        .pointer_moved(PointF::new(field.x + 20.0, field.y + 10.0));
     assert_eq!(window.view.cursor(), CursorType::IBeam);
     window.close();
 }

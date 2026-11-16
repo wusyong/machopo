@@ -422,14 +422,14 @@ iframe 照同源、同 process 的情形做：有自己的 browsing context、wi
 
 ## 工具列和網址列
 
-- 這是過渡的原生 UI，之後要換成能用 HTML / CSS 自訂的。
+- UI 是 machopo 自己畫的（`ui` 的 view 樹），只有一種版面（分頁列在上、工具列在下），使用者不能自訂外觀。
 - 分頁列在系統的視窗框（標題列）下面，不像 Chrome 畫在標題列裡。分頁沒有 favicon、載入中的動畫和 tooltip；不能拖拉排序（之後）；分頁太多、縮到最窄（56 CSS px）之後，超出右邊的看不到、點不到，只能用快捷鍵切換。標題太長時的淡出是用幾條透明度遞增的細條疊出來的，不是真的漸層。新分頁是 `about:blank`，沒有新分頁頁面。切換分頁時網址列失去 focus，打到一半的網址不保留。沒有停止載入的按鈕，也沒有載入中的提示。
 - renderer 當掉的分頁顯示 sad tab，分頁列上看不出是哪一個（沒有 favicon）；一再當掉時說明不變。`about:crash` 讓 renderer 立刻結束（像 `chrome://kill`），不是真的 crash。卡在無窮迴圈裡的 renderer 不會因為 `about:crash` 結束：它只在處理完目前的工作之後才讀到結束的訊息。
 - 隱藏的分頁不畫、不跑 `requestAnimationFrame`，計時器照常跑；它的 `DidFinishLoad` 要等再顯示時才送（跟著 frame 送）。只有切到別的分頁算隱藏：視窗縮到最小或被其他視窗擋住時，`document.visibilityState` 還是 `visible`（Chrome 縮到最小時是 `hidden`，也照被擋住的程度判斷）。等著 frame 的 input ack 不等：隱藏時立刻送出，不帶 frame。
 - 網址列沒有搜尋、沒有自動完成和建議，也不會把網址裡的 scheme 或路徑變淡顯示。
 - 游標不會閃爍；沒有雙擊選詞、三擊全選；右鍵沒有選單。
-- 工具列的顏色和大小是寫死的，不跟著系統的深色模式和字型大小。
-- 視窗的版面只有一層：工具列和網頁 view 是平的清單，沒有巢狀的 view 和版面管理；Tab 鍵只在網址列和網頁之間移動 focus，工具列的按鈕和分頁拿不到 focus；指標離開一個網頁時不通知它（網頁沒有 `mouseout`）；滾輪每次都給指標下面的網頁，沒有 scroll latching。現在只有一個網頁，看不出差別。
+- 只有一份淺色的主題，不跟著系統的深色模式和字型大小。
+- 網頁 view 在 UI 的 view 樹外面，和 UI 的區域是平的清單；Tab 鍵只在網址列和網頁之間移動 focus，工具列的按鈕和分頁拿不到 focus；指標離開一個網頁時不通知它（網頁沒有 `mouseout`）；滾輪每次都給指標下面的網頁，沒有 scroll latching。現在只有一個網頁，看不出差別。
 
 ## WebDriver 和自動化
 
