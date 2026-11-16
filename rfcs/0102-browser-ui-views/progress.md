@@ -6,10 +6,10 @@
 
 | 步驟 | 狀態 | 完成日期 |
 | --- | --- | --- |
-| 第 1 階段：`ui` 的保留的樹，工具列和分頁列搬上去 | 進行中 | |
+| 第 1 階段：`ui` 的保留的樹，工具列和分頁列搬上去 | 做完 | 2026-11-17 |
 | 1a：`ui` 的樹、排版、畫、事件、主題；`ui_text` 搬進來 | 做完 | 2026-11-16 |
 | 1b：工具列和分頁列改寫成 view，`BrowserView` 走樹 | 做完 | 2026-11-17 |
-| 1c：文件和階段結束的檢查 | 還沒開始 | |
+| 1c：文件和階段結束的檢查 | 做完 | 2026-11-17 |
 | 第 2 階段：宣告式的一層、版面管理和側邊欄 | 還沒開始 | |
 | 第 3 階段：外觀 | 還沒開始 | |
 
@@ -60,3 +60,14 @@
   - 輸入法的位置少了網址列的內距：原本的測試只看有沒有位置。補位置的檢查。
   - 補完之後重跑這三個：全部抓到。spec 現在 22 個。
 - **跑過的檢查**：`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
+
+### 1c 和第 1 階段結束的檢查
+
+2026-11-17，macOS（Apple Silicon）。
+
+- **文件**：新增 `crates/ui/README.md`（怎麼運作、用法、寫 view 的規則、還沒有的、測試）；`docs/architecture.md` 的「和 Chromium 刻意不同的地方」的瀏覽器 UI 那一列改成現在的樣子；`crates/shell/README.md` 的「鍵盤和滑鼠」改到哪些函式要跟著改表的清單加上 `NavButton::on_pointer`。`docs/limitations.md`、`docs/testing.md` 和 `crates` 的 crate 表在 1a、1b 改過。
+- **`cargo test --workspace`**：3933 個通過，沒有失敗。
+- **`cargo fmt --check`**：1a、1b 的 9 個檔案沒排，`cargo fmt` 排好（只動排版）之後重跑 `ui`、`shell` 的單元測試，通過。
+- **`cargo clippy --workspace --all-targets -- -D warnings`**：沒有警告。
+- **真的視窗**（`python3 scripts/test.py scenarios --window tab-strip navigation demo-busy rounded demo-script gpu-crash`）：6 個都通過；看過 `target/automation-results/tab-strip/tab-strip.png`（2 倍、系統字型），分頁列、工具列、按鈕和網址列和改寫前一樣。
+- `sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 都通過。

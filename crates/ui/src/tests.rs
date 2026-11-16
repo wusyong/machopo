@@ -56,7 +56,11 @@ impl Swatch {
     }
 
     fn handled(&self) -> Handled {
-        if self.handles { Handled::Yes } else { Handled::No }
+        if self.handles {
+            Handled::Yes
+        } else {
+            Handled::No
+        }
     }
 }
 
@@ -333,7 +337,10 @@ fn the_deepest_view_hit_is_found_with_the_point_in_its_coordinates() {
         unreachable!()
     };
     tree.layout();
-    assert_eq!(tree.hit_test(PointF::new(10.0, 5.0)), Some((a.any(), PointF::new(10.0, 5.0))));
+    assert_eq!(
+        tree.hit_test(PointF::new(10.0, 5.0)),
+        Some((a.any(), PointF::new(10.0, 5.0)))
+    );
     assert_eq!(
         tree.hit_test(PointF::new(31.0, 7.0)),
         Some((b.any(), PointF::new(0.5, 7.0)))
@@ -430,7 +437,10 @@ fn the_view_that_handled_a_press_gets_the_pointer_until_its_button_comes_up() {
     // hovered.
     tree.pointer(move_to(40.0, 10.0));
     tree.pointer(up(40.0, 10.0));
-    assert_eq!(take_heard(&mut tree, a), ["hover false", "move 40 10", "up 40 10"]);
+    assert_eq!(
+        take_heard(&mut tree, a),
+        ["hover false", "move 40 10", "up 40 10"]
+    );
     assert_eq!(take_heard(&mut tree, b), ["hover true"]);
     assert_eq!(tree.captured(), None);
     // Not captured any more: a move over b goes to b.
@@ -509,7 +519,10 @@ fn keys_go_to_the_focused_view_then_up_and_nowhere_without_one() {
     assert_eq!(tree.key(&key), Handled::No);
     tree.set_focus(Some(field.any()));
     assert_eq!(tree.key(&key), Handled::Yes);
-    assert_eq!(take_heard(&mut tree, field), ["focus true", "key Character(\"a\")"]);
+    assert_eq!(
+        take_heard(&mut tree, field),
+        ["focus true", "key Character(\"a\")"]
+    );
     assert_eq!(take_heard(&mut tree, group), ["key Character(\"a\")"]);
     // A press that asks for the focus takes it; the other view hears.
     tree.layout();
@@ -571,14 +584,18 @@ fn a_view_that_asks_is_painted_again_alone_and_only_where_it_is() {
         unreachable!()
     };
     paint(&mut tree);
-    tree.update(b, |swatch, ctx| swatch.set_color(Color::rgb(0, 0, 255), ctx));
+    tree.update(b, |swatch, ctx| {
+        swatch.set_color(Color::rgb(0, 0, 255), ctx)
+    });
     let damage = paint(&mut tree).unwrap().unwrap();
     assert!(!damage.is_empty());
     let b_at = RectF::new(30.0, 0.0, 30.0, 20.0);
     assert!(damage.iter().all(|rect| *rect == b_at));
     assert_eq!((paints(&tree, a), paints(&tree, b)), (1, 2));
     // The same color again: it doesn't ask, nothing is painted.
-    tree.update(b, |swatch, ctx| swatch.set_color(Color::rgb(0, 0, 255), ctx));
+    tree.update(b, |swatch, ctx| {
+        swatch.set_color(Color::rgb(0, 0, 255), ctx)
+    });
     assert_eq!(tree.paint().map(|_| ()), None);
     assert_fresh(&mut tree);
 }
@@ -661,7 +678,9 @@ fn the_layer_has_each_view_s_recording_where_it_is_parents_under_children() {
     let inner = tree.insert(Swatch::new("inner", 20.0, 20.0));
     tree.append_child(tree.root(), group);
     tree.append_child(group, inner);
-    tree.update(inner, |swatch, ctx| swatch.set_color(Color::rgb(0, 128, 0), ctx));
+    tree.update(inner, |swatch, ctx| {
+        swatch.set_color(Color::rgb(0, 128, 0), ctx)
+    });
     let frame = tree.paint().unwrap();
     let rects: Vec<(RectF, Color)> = frame.layers[0]
         .display_list
@@ -830,6 +849,8 @@ fn checking_recordings_a_paint_of_fresh_views_passes() {
         unreachable!()
     };
     tree.paint();
-    tree.update(a, |swatch, ctx| swatch.set_color(Color::rgb(255, 0, 0), ctx));
+    tree.update(a, |swatch, ctx| {
+        swatch.set_color(Color::rgb(255, 0, 0), ctx)
+    });
     assert!(tree.paint().is_some());
 }

@@ -35,15 +35,15 @@ use std::sync::Arc;
 use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 
 use crate::browser_view_layout::{BrowserViewLayout, DefaultLayout};
-use crate::keyboard::{self, KeyInput};
 use crate::chrome::{Chrome, UiMessage};
+use crate::keyboard::{self, KeyInput};
 use crate::omnibox::Clipboard;
+use crate::omnibox::Omnibox;
 use crate::popup_menu::{KeyOutcome, PopupMenu};
 use crate::sad_tab::{self, SadTab};
-use crate::omnibox::Omnibox;
-use crate::theme::SizeToken;
 use crate::tab_strip::TabStrip;
 use crate::tab_strip_model::TabStripModel;
+use crate::theme::SizeToken;
 use crate::url_fixup::fixup_url;
 
 /// The browser's own frame sink: the root of a window's `Display`.
@@ -1316,9 +1316,7 @@ impl BrowserView {
     /// `Ime::Commit`, for the address field.
     pub fn ime_commit(&mut self, text: &str) {
         if self.chrome.omnibox_focused() {
-            self.chrome
-                .tree
-                .ime(&ui::ImeEvent::Commit(text.to_owned()));
+            self.chrome.tree.ime(&ui::ImeEvent::Commit(text.to_owned()));
             self.update();
         }
     }
@@ -1501,9 +1499,9 @@ impl BrowserView {
         let field = self.omnibox_rect();
         let padding = self.chrome.tree.theme().size(SizeToken::FieldPadding);
         let chrome = &mut self.chrome;
-        let area = chrome
-            .tree
-            .update(chrome.omnibox, |omnibox, ctx| omnibox.ime_cursor_area(ctx.text()))?;
+        let area = chrome.tree.update(chrome.omnibox, |omnibox, ctx| {
+            omnibox.ime_cursor_area(ctx.text())
+        })?;
         let top = field.y + (field.height - area.height) / 2.0;
         Some(RectF::new(
             field.x + padding + area.x,
@@ -1763,4 +1761,3 @@ mod tests {
         assert_eq!(on(&down, ModifiersState::empty(), false), None);
     }
 }
-

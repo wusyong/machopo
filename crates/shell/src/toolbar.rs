@@ -222,4 +222,3 @@ fn icon(button: Button, c: PointF) -> Vec<Vec<PointF>> {
         }
     }
 }
-

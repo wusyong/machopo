@@ -4,7 +4,7 @@
 
 ## 鍵盤和滑鼠
 
-視窗模式的快捷鍵和滑鼠操作。改了 `crates/shell/src/browser_view.rs` 的 `command_for`、`BrowserView::key`、`BrowserView::mouse_input`，`crates/shell/src/tab_strip.rs` 的 `TabStrip::mouse_down`、`TabStrip::mouse_up`，`crates/dom_api/src/hyperlink.rs` 的 `follow_hyperlink`，`crates/shell/src/omnibox.rs` 的 `Omnibox::key`，`crates/shell/src/keyboard.rs`（按鍵換成網頁的 `key`、`code`、`keyCode`）、`crates/shell/src/mouse.rs`（連點的次數），或 `crates/shell/src/window.rs` 裡滑鼠按鍵的對應時，這些表要跟著改。
+視窗模式的快捷鍵和滑鼠操作。改了 `crates/shell/src/browser_view.rs` 的 `command_for`、`BrowserView::key`、`BrowserView::mouse_input`，`crates/shell/src/toolbar.rs` 的 `NavButton::on_pointer`，`crates/shell/src/tab_strip.rs` 的 `TabStrip::mouse_down`、`TabStrip::mouse_up`，`crates/dom_api/src/hyperlink.rs` 的 `follow_hyperlink`，`crates/shell/src/omnibox.rs` 的 `Omnibox::key`，`crates/shell/src/keyboard.rs`（按鍵換成網頁的 `key`、`code`、`keyCode`）、`crates/shell/src/mouse.rs`（連點的次數），或 `crates/shell/src/window.rs` 裡滑鼠按鍵的對應時，這些表要跟著改。
 
 **導航**（網址列有沒有 focus 都可以用，例外見表）
 

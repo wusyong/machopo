@@ -11,14 +11,12 @@ use compositor_paint::DisplayItemList;
 use gfx::{PointF, RectF, SizeF};
 use taffy::{
     AvailableSpace, Cache, CacheTree, Display, Layout, LayoutFlexboxContainer, LayoutGridContainer,
-    LayoutInput, LayoutOutput, LayoutPartialTree, Line, NodeId, RequestedAxis, RunMode,
-    SizingMode, Style, TraversePartialTree, compute_cached_layout, compute_flexbox_layout,
-    compute_grid_layout, compute_hidden_layout, compute_leaf_layout,
+    LayoutInput, LayoutOutput, LayoutPartialTree, Line, NodeId, RequestedAxis, RunMode, SizingMode,
+    Style, TraversePartialTree, compute_cached_layout, compute_flexbox_layout, compute_grid_layout,
+    compute_hidden_layout, compute_leaf_layout,
 };
 
-use crate::event::{
-    Clipboard, Cursor, Handled, ImeEvent, KeyEvent, PointerButton, PointerEvent,
-};
+use crate::event::{Clipboard, Cursor, Handled, ImeEvent, KeyEvent, PointerButton, PointerEvent};
 use crate::id::{AnyViewId, ViewId};
 use crate::text::TextContexts;
 use crate::view::{App, Container, EventCtx, MeasureCtx, PaintCtx, Requests, Shared, View};
@@ -223,8 +221,8 @@ impl<A: App> ViewTree<A> {
                 id
             }
             None => {
-                let index = u32::try_from(self.slots.len())
-                    .expect("fewer than u32::MAX views at once");
+                let index =
+                    u32::try_from(self.slots.len()).expect("fewer than u32::MAX views at once");
                 self.slots.push(Slot {
                     generation: 0,
                     node: Some(node),
@@ -287,7 +285,10 @@ impl<A: App> ViewTree<A> {
         child: impl Into<AnyViewId>,
     ) {
         let (parent, child) = (parent.into(), child.into());
-        assert!(self.contains(parent) && self.contains(child), "views of the tree");
+        assert!(
+            self.contains(parent) && self.contains(child),
+            "views of the tree"
+        );
         assert!(
             child != self.root && !self.is_ancestor(child, parent),
             "a view can't go under itself"
@@ -919,7 +920,10 @@ impl<A: App> LayoutPass<'_, A> {
             // Block containers aren't laid out yet: none of the views
             // needs one.
             _ => {
-                debug_assert!(!has_children, "a view with children is a flex or grid container");
+                debug_assert!(
+                    !has_children,
+                    "a view with children is a flex or grid container"
+                );
                 let index = slot_of(id);
                 let style = &self.slots[index]
                     .node
@@ -928,16 +932,21 @@ impl<A: App> LayoutPass<'_, A> {
                     .style;
                 let view = self.views[index].as_deref_mut();
                 let shared = &mut *self.shared;
-                compute_leaf_layout(inputs, style, |_, _| 0.0, |known, available| {
-                    let Some(view) = view else {
-                        return taffy::Size::ZERO;
-                    };
-                    let size = view.measure(&mut MeasureCtx { shared }, known, available);
-                    taffy::Size {
-                        width: size.width,
-                        height: size.height,
-                    }
-                })
+                compute_leaf_layout(
+                    inputs,
+                    style,
+                    |_, _| 0.0,
+                    |known, available| {
+                        let Some(view) = view else {
+                            return taffy::Size::ZERO;
+                        };
+                        let size = view.measure(&mut MeasureCtx { shared }, known, available);
+                        taffy::Size {
+                            width: size.width,
+                            height: size.height,
+                        }
+                    },
+                )
             }
         }
     }
@@ -981,7 +990,9 @@ impl<A: App> LayoutPartialTree for LayoutPass<'_, A> {
     }
 
     fn compute_child_layout(&mut self, id: NodeId, inputs: LayoutInput) -> LayoutOutput {
-        compute_cached_layout(self, id, inputs, |pass, id, inputs| pass.compute(id, inputs))
+        compute_cached_layout(self, id, inputs, |pass, id, inputs| {
+            pass.compute(id, inputs)
+        })
     }
 }
 

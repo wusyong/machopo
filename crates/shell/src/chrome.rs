@@ -189,7 +189,10 @@ impl Chrome {
     }
 
     pub fn set_history(&mut self, can_go_back: bool, can_go_forward: bool) {
-        for (id, enabled) in [(self.buttons[0], can_go_back), (self.buttons[1], can_go_forward)] {
+        for (id, enabled) in [
+            (self.buttons[0], can_go_back),
+            (self.buttons[1], can_go_forward),
+        ] {
             self.tree
                 .update(id, |button, ctx| button.set_enabled(enabled, ctx));
         }
@@ -341,7 +344,10 @@ mod tests {
         let mut chrome = chrome();
         chrome.tree.paint();
         let forward = center(rect(&chrome, chrome.buttons[1]));
-        let hover = chrome.tree.theme().color(crate::theme::ColorToken::ButtonHover);
+        let hover = chrome
+            .tree
+            .theme()
+            .color(crate::theme::ColorToken::ButtonHover);
         let lit = |chrome: &mut Chrome| {
             let frame = chrome.tree.paint();
             frame.is_some_and(|frame| {
@@ -372,14 +378,17 @@ mod tests {
     #[test]
     fn a_click_in_the_field_focuses_it_with_its_ring() {
         let mut chrome = chrome();
-        chrome
-            .tree
-            .update(chrome.omnibox, |omnibox, ctx| omnibox.set_url(ctx.text(), "https://a.test/"));
+        chrome.tree.update(chrome.omnibox, |omnibox, ctx| {
+            omnibox.set_url(ctx.text(), "https://a.test/")
+        });
         let field = center(rect(&chrome, chrome.omnibox));
         click(&mut chrome, field, PointerButton::Primary);
         assert!(chrome.omnibox_focused());
         assert_eq!(chrome.omnibox().selected_text(), Some("https://a.test/"));
-        let ring = chrome.tree.theme().color(crate::theme::ColorToken::FocusRing);
+        let ring = chrome
+            .tree
+            .theme()
+            .color(crate::theme::ColorToken::FocusRing);
         let frame = chrome.tree.paint().unwrap();
         assert!(frame.layers[0].display_list.ops().iter().any(|op| matches!(
             op,

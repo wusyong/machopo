@@ -10,8 +10,8 @@ use gfx::{PointF, RRectF, RectF, SizeF};
 use parley::{Affinity, Cursor as TextCursor, PlainEditor, Selection};
 use ui::taffy::{AvailableSpace, Size};
 use ui::{
-    Cursor, EventCtx, Handled, ImeEvent, Key, KeyEvent, MeasureCtx, Modifiers, NamedKey,
-    PaintCtx, PointerButton, PointerEvent, TextContexts, View,
+    Cursor, EventCtx, Handled, ImeEvent, Key, KeyEvent, MeasureCtx, Modifiers, NamedKey, PaintCtx,
+    PointerButton, PointerEvent, TextContexts, View,
 };
 
 use crate::chrome::{BrowserUi, UiMessage};
@@ -248,7 +248,12 @@ impl Omnibox {
 
     /// `Ime::Preedit`: text being composed, shown underlined in place;
     /// empty when composing stops.
-    pub fn preedit(&mut self, text: &mut TextContexts, composed: &str, cursor: Option<(usize, usize)>) {
+    pub fn preedit(
+        &mut self,
+        text: &mut TextContexts,
+        composed: &str,
+        cursor: Option<(usize, usize)>,
+    ) {
         let mut driver = edit(&mut self.editor, text);
         if composed.is_empty() {
             driver.clear_compose();
@@ -482,7 +487,13 @@ impl View<BrowserUi> for Omnibox {
             return Handled::No;
         }
         let (text, clipboard) = ctx.text_and_clipboard();
-        match self.key(text, &event.key, event.text.as_deref(), event.modifiers, clipboard) {
+        match self.key(
+            text,
+            &event.key,
+            event.text.as_deref(),
+            event.modifiers,
+            clipboard,
+        ) {
             KeyResult::Navigate(typed) => ctx.submit(UiMessage::Navigate(typed)),
             KeyResult::Handled => ctx.request_paint(),
             KeyResult::Ignored => return Handled::No,
@@ -660,10 +671,7 @@ mod tests {
         field.shortcut("v", cmd);
         assert_eq!(field.text(), "https://a.test/p q");
         // Ctrl does nothing on macOS, and types nothing.
-        assert_eq!(
-            field.shortcut("a", CTRL),
-            KeyResult::Ignored
-        );
+        assert_eq!(field.shortcut("a", CTRL), KeyResult::Ignored);
         assert_eq!(field.text(), "https://a.test/p q");
         // Elsewhere it is Ctrl.
         let mut field = Field::new("x", false);
@@ -688,7 +696,8 @@ mod tests {
     #[test]
     fn clicks_focus_then_place_the_caret() {
         // On the tree: the first click focuses it, which selects all.
-        let mut tree = ui::ViewTree::<BrowserUi>::new(BrowserTheme::light(), TextContexts::new(true));
+        let mut tree =
+            ui::ViewTree::<BrowserUi>::new(BrowserTheme::light(), TextContexts::new(true));
         tree.set_size(SizeF::new(200.0, 30.0));
         tree.set_style(
             tree.root(),

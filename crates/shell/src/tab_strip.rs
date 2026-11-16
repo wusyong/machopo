@@ -574,7 +574,11 @@ mod tests {
             "moved off"
         );
         strip.mouse_down(center(strip.close_rect(1)), PointerButton::Primary);
-        assert_eq!(strip.mouse_up(close, PointerButton::Primary), None, "another's");
+        assert_eq!(
+            strip.mouse_up(close, PointerButton::Primary),
+            None,
+            "another's"
+        );
         strip.mouse_down(close, PointerButton::Primary);
         assert_eq!(
             strip.mouse_up(close, PointerButton::Middle),
