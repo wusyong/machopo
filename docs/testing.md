@@ -30,6 +30,8 @@ machopo 有哪些測試、怎麼跑、CI 的現況、mutation test 的做法。�
 | 真視窗的情境 | 同一份情境，在 `machopo` 真的視窗裡跑：winit 的滑鼠和滾輪事件、wgpu 畫出來再讀回的畫面、真的 `resize`；用本機的快捷鍵和字型、螢幕的 scale | `tests/scenarios/` | `python3 scripts/test.py scenarios --window`：每份情境開一個 `machopo --automation-pipe --window`，一次一個，情境的執行器經過 pipe 驅動它（和 machopodriver 一樣）；設了 `window caret-blink=` 的情境略過（pipe 沒辦法讓視窗的 caret 閃）。要有顯示器和 GPU，CI 不跑；只在動到視窗那一層、RFC 和階段驗收時跑（`CLAUDE.md`）。跑完情境之後也跑經過 pipe 驅動真視窗的那個測試（`automation_pipe.rs`，設 `MACHOPO_WINDOW_TESTS`） |
 | 視窗 | 其餘自動測試和情境都不經過的那一層（`test-gaps.md` 的「只做過手動確認」） | `about:demo`（`resources/demo.html`） | `cargo run`，照每段工作寫下的步驟手動確認 |
 
+**畫面和網頁平台的行為先找 WPT**：要測的行為 WPT 已經有測試的，把它加進 `tests/wpt/include.txt`（`tests/wpt/README.md` 的做法：先用 `test.py wpt --all` 試跑，大部分通過才整個目錄加，不然只列檔案；用 `MACHOPO_UPDATE_EXPECTATIONS` 寫預期結果，失敗的寫明原因），確認它通過，就不另外寫 machopo 自己的 reftest。只有 WPT 沒有、只部分涵蓋（缺的那一塊沒有測試，或對應的 WPT 失敗、是要人看的 manual test、是 machopo 跑不了的 `.svg` 文件），或測的是 machopo 自己的東西（compositor 的 layer、增量的快取、device pixel 的對齊、規範沒定死而照 Blink 做的行為、canvas 畫進頁面）時，才寫 `tests/reftests/` 的 reftest，在它的 `<title>` 或註解寫明 WPT 缺的是什麼。判斷「有沒有守著」要嚴格：WPT 的測試在 machopo 把這個行為弄壞時會失敗，不只是用到同一個 property；可疑時用 mutation test 確認。
+
 每個指令的選項見 `python3 scripts/sanity.py -h`（`unsafe`、`deps`、`spans`、`boundary`、`tests`、`numerics`、`docs` 這些靜態檢查）、`python3 scripts/ci.py -h`（建置的工具）和 `python3 scripts/test.py -h`（`cargo test` 跳過或不含的 `reftest`、`scenarios`、`wpt`、`wdspec`，以及 `matrix`、`fuzz`、`automation`）。
 
 ## CI

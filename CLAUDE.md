@@ -37,6 +37,7 @@
 ## 測試
 
 - **在視窗裡看得到的行為寫成情境**（`tests/scenarios/`），不要請人開視窗確認；情境做不到的（輸入法、剪貼簿、游標、外觀）才請人看。做法見 `docs/README.md` 的「完成一步時」第 5 步。
+- **畫面和網頁平台的行為先找 WPT**：已經有測試的加進 `tests/wpt/include.txt`、確認通過，不另外寫 reftest；WPT 沒有或只部分涵蓋時才寫 `tests/reftests/` 的 reftest（`docs/testing.md` 的「測試的種類」最後）。
 - **新的整合測試是那個 crate 的 tests/it/ 的模組**（加一個檔案、在 `main.rs` 加一行 `mod`），不直接放在 `tests/` 底下：那會多一個要重新 link 的 binary（`docs/testing.md` 的「測試的種類」；`sanity.py tests` 檢查）。
 - 新的行為都要有測試，並且**跑 mutation test**：弄壞實作，確認有測試失敗；沒抓到的要補測試，或說明為什麼是等價的。用 `python3 scripts/test.py mutate <spec>` 跑（它先確認原本的程式通過、跑完還原檔案），做法見 `docs/testing.md` 的「Mutation test」。結果寫進那份 RFC 的 `progress.md` 的「做過的檢查」（`docs/README.md` 的「完成一步時」）。補不了測試、只能靠審查或手動確認的，記進 `docs/test-gaps.md` 的「測試守不住的地方」，寫明之後怎麼處理。
 - **Speedometer（`bench.py speedometer`）平常不量，只在使用者要求時跑**：RFC 的測試計畫也不排量測（`docs/benchmarks.md` 的「效能的量測」）。

@@ -1,6 +1,6 @@
 # Reftests
 
-Our own reftests, in WPT's format, run by upstream's wptrunner as WPT's are: at `/_machopo/` beside WPT (as Servo's and Firefox's own tests are at `/_mozilla/`), through machopodriver and machopo. Run them with:
+Our own reftests, in WPT's format, run by upstream's wptrunner as WPT's are: at `/_machopo/` beside WPT (as Servo's and Firefox's own tests are at `/_mozilla/`), through machopodriver and machopo. Only what WPT doesn't check goes here: behavior a WPT test already guards is tested by adding that test to `tests/wpt/include.txt` (`docs/testing.md` has the rule), and a reftest here says in its `<title>` or a comment what WPT lacks. Run them with:
 
 ```sh
 python3 scripts/test.py reftest           # all of them
