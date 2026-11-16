@@ -1,6 +1,6 @@
 [package]
 name = "shell"
-description = "Browser window / UI, headless mode, the automation pipe and the `machopo` binary (//chrome/browser/ui)."
+description = "Browser window / UI, the headless pipeline for tests, the automation pipe and the `machopo` binary (//chrome/browser/ui)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

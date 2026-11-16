@@ -30,10 +30,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use browser::{HostMappingRules, NetworkContextParams};
-use gfx::Size;
-use shell::automation::Context;
 use shell::devtools_http_handler::{self, AllowedOrigins};
-use shell::{automation_pipe, headless, scenario, to_url};
+use shell::{automation_pipe, to_url};
 use tracing_log::AsLog;
 use tracing_subscriber::Layer;
 use tracing_subscriber::filter::LevelFilter;
@@ -41,7 +39,6 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 const DEFAULT_URL: &str = "about:demo";
-const DEFAULT_SIZE: Size = Size::new(800, 600);
 // Rust's allocations in machopo (the nodes' data, the parser's, style's) go
 // through mimalloc, as Chromium's go through PartitionAlloc (PartitionAlloc-
 // Everywhere); C++'s (V8, Skia) stay with the platform's malloc, so memory
@@ -55,10 +52,6 @@ const DEFAULT_LOG_FILTER: &str = "info,wgpu_core=warn,wgpu_hal=warn,naga=warn";
 const USAGE: &str = "\
 usage: machopo [--test-fonts] [--num-raster-threads N]
            [--remote-debugging-port PORT [--remote-allow-origins ORIGINS]] [URL|PATH]
-       machopo --headless OUT.png [--size WxH] [--scale F] [--test-fonts]
-           [--num-raster-threads N] [URL|PATH]
-       machopo --automation SCENARIO [--out DIR] [--test-fonts]
-           [--num-raster-threads N]
        machopo --automation-pipe [--window | --scale F] [--host-resolver-rules RULES]
            [--additional-trust-anchors PEM] [--test-fonts]
            [--num-raster-threads N] [--remote-debugging-port PORT
@@ -75,21 +68,17 @@ machopo: a Chromium-like browser in Rust.
 
 {USAGE}
 
-Opens URL or the file at PATH in a window, or with --headless renders it to
-a PNG once it and everything it loads (stylesheets, images) have loaded or
-failed. URLs: http://..., https://...,
-file://..., about:blank, about:demo (the built-in demo page, the default).
-Anything else is taken as a path; a relative one is resolved against the
-working directory.
+Opens URL or the file at PATH in a window, or with --automation-pipe is
+driven by what reads and writes its standard input and output. URLs:
+http://..., https://..., file://..., about:blank, about:demo (the built-in
+demo page, the default). Anything else is taken as a path; a relative one
+is resolved against the working directory.
 
 Options:
-  --headless OUT.png  Render one frame to OUT.png instead of opening a window.
-  --size WxH          Headless only: the viewport in CSS px (default {w}x{h}).
-  --scale F           With --headless or --automation-pipe (but not --window):
-                      the device scale factor (default 1), as Chromium's
-                      --force-device-scale-factor. The headless PNG and the
-                      pipe's screenshots are the viewport times F, in
-                      physical pixels.
+  --scale F           With --automation-pipe (but not --window): the device
+                      scale factor (default 1), as Chromium's
+                      --force-device-scale-factor. The pipe's screenshots
+                      are the viewport times F, in physical pixels.
   --test-fonts        Use only the built-in test fonts: Ahem, and Lato for
                       every generic family, as the reftests do.
   --num-raster-threads N
@@ -99,18 +88,9 @@ Options:
                       (resizing it: about 4 times on 9 threads), but take
                       CPU and memory from the page while it runs; here,
                       {threads} would leave a processor to its main thread.
-  --automation SCENARIO
-                      Run the scenario in the file SCENARIO (the format is in
-                      tests/scenarios/README.md) in a window, which stays on
-                      top and ignores the mouse and keyboard meanwhile, then
-                      close it. The exit status is 0 if every check passed,
-                      1 if one failed (it says which), 2 if the scenario or
-                      the options are wrong. Only the system's keyboard
-                      shortcuts' `platform` blocks run.
-  --out DIR           Automation only: where the scenario's screenshots go
-                      (none are saved without it).
   --automation-pipe   Be driven through standard input and output, by machopo's
-                      WebDriver driver (machopodriver): DevTools-protocol-shaped
+                      WebDriver driver (machopodriver) or the scenario
+                      tests' runner: DevTools-protocol-shaped
                       JSON messages, each followed by a NUL (as Chromium's
                       --remote-debugging-pipe). The window is a window
                       without the platform's: nothing shows (but with
@@ -171,8 +151,6 @@ Environment:
                            there is none.
 
 Keyboard and mouse shortcuts in the window: see crates/shell/README.md.",
-        w = DEFAULT_SIZE.width,
-        h = DEFAULT_SIZE.height,
         threads =
             std::thread::available_parallelism().map_or(1, |n| n.get().saturating_sub(1).max(1)),
     )
@@ -188,8 +166,6 @@ enum Command {
 struct Args {
     url: String,
     test_fonts: bool,
-    headless: Option<headless::Options>,
-    automation: Option<Automation>,
     automation_pipe: Option<AutomationPipe>,
     /// `--num-raster-threads`; `None`: the default.
     num_raster_threads: Option<usize>,
@@ -221,22 +197,11 @@ impl Default for AutomationPipe {
     }
 }
 
-/// `--automation`: the scenario's file, and where its screenshots go.
-#[derive(Debug, PartialEq)]
-struct Automation {
-    scenario: PathBuf,
-    out: Option<PathBuf>,
-}
-
 /// Parses the arguments after the program name. Errors say what was wrong.
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String> {
     let mut url = None;
-    let mut out = None;
-    let mut size = None;
     let mut scale = None;
     let mut test_fonts = false;
-    let mut automation = None;
-    let mut automation_out = None;
     let mut automation_pipe = false;
     let mut pipe_window = false;
     let mut host_resolver_rules = None;
@@ -259,17 +224,6 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
             None => it.next().ok_or_else(|| format!("{name} needs a value")),
         };
         match name.as_str() {
-            "--headless" => out = Some(value("--headless")?),
-            "--size" => {
-                let v = value("--size")?;
-                let parsed = v.split_once('x').and_then(|(w, h)| {
-                    Some(Size::new(w.parse().ok()?, h.parse().ok()?))
-                        .filter(|s| s.width > 0 && s.height > 0)
-                });
-                size = Some(parsed.ok_or_else(|| {
-                    format!("--size wants WIDTHxHEIGHT in whole CSS px, like 800x600, not {v:?}")
-                })?);
-            }
             "--scale" => {
                 let v = value("--scale")?;
                 let parsed = v.parse::<f32>().ok().filter(|f| f.is_finite() && *f > 0.0);
@@ -285,8 +239,6 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
                     format!("--num-raster-threads wants a whole number from 1, like 4, not {v:?}")
                 })?);
             }
-            "--automation" => automation = Some(PathBuf::from(value("--automation")?)),
-            "--out" => automation_out = Some(PathBuf::from(value("--out")?)),
             "--automation-pipe" => automation_pipe = true,
             "--window" => pipe_window = true,
             "--host-resolver-rules" => host_resolver_rules = Some(value("--host-resolver-rules")?),
@@ -312,32 +264,16 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
             return Err(format!("{name} takes no value"));
         }
     }
-    if out.is_none() && size.is_some() {
+    if scale.is_some() && (!automation_pipe || pipe_window) {
         return Err(
-            "--size only applies with --headless; a window takes its size from the screen".into(),
-        );
-    }
-    if out.is_none() && scale.is_some() && (!automation_pipe || pipe_window) {
-        return Err(
-            "--scale only applies with --headless or --automation-pipe; a window takes its \
-             scale from the screen"
+            "--scale only applies with --automation-pipe; a window takes its scale from the \
+             screen"
                 .into(),
         );
     }
-    if automation.is_some() && (out.is_some() || url.is_some()) {
+    if automation_pipe && url.is_some() {
         return Err(
-            "--automation runs a scenario, which navigates itself: no --headless, URL or path"
-                .into(),
-        );
-    }
-    if automation.is_none() && automation_out.is_some() {
-        return Err("--out only applies with --automation".into());
-    }
-    if automation_pipe && (out.is_some() || automation.is_some() || url.is_some()) {
-        return Err(
-            "--automation-pipe is driven through the pipe, which navigates: no --headless, \
-             --automation, URL or path"
-                .into(),
+            "--automation-pipe is driven through the pipe, which navigates: no URL or path".into(),
         );
     }
     if !automation_pipe
@@ -346,13 +282,6 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
         return Err(
             "--window, --host-resolver-rules and --additional-trust-anchors only apply with \
              --automation-pipe"
-                .into(),
-        );
-    }
-    if remote_debugging_port.is_some() && (out.is_some() || automation.is_some()) {
-        return Err(
-            "--remote-debugging-port applies to a window or --automation-pipe: no --headless \
-             or --automation"
                 .into(),
         );
     }
@@ -366,25 +295,12 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
             .map(AllowedOrigins::parse)
             .unwrap_or_default(),
     });
-    let size = size.unwrap_or(DEFAULT_SIZE);
     let scale = scale.unwrap_or(1.0);
     Ok(Command::Run(Box::new(Args {
         url: url.map_or_else(|| DEFAULT_URL.to_owned(), |arg| to_url(&arg)),
-        headless: out.map(|out| headless::Options {
-            out: out.into(),
-            // `--size` is in CSS px; the renderer works in physical px.
-            viewport_size: size.scale_to_ceiled(scale),
-            device_scale_factor: scale,
-            test_fonts,
-            num_raster_threads,
-        }),
         test_fonts,
         num_raster_threads,
         remote_debugging,
-        automation: automation.map(|scenario| Automation {
-            scenario,
-            out: automation_out,
-        }),
         automation_pipe: automation_pipe.then_some(AutomationPipe {
             window: pipe_window,
             scale,
@@ -457,25 +373,13 @@ fn main() -> ExitCode {
     // every level (but no events): each record would be made, html5ever's
     // for every token it parses, only to be dropped.
     tracing_log::log::set_max_level(log_records);
-    // A scenario that can't run is the caller's mistake, as wrong options
-    // are: said before any window opens.
-    let automation = match args.automation.as_ref().map(scenario_to_run) {
-        Some(Err(e)) => {
-            eprintln!("machopo: {e}");
-            return ExitCode::from(2);
-        }
-        Some(Ok(automation)) => Some(automation),
-        None => None,
-    };
-
-    let result = match (args.headless, &args.automation_pipe) {
-        (Some(opts), _) => headless::run(&args.url, opts),
-        (None, Some(pipe)) => match network_params(pipe) {
+    let result = match &args.automation_pipe {
+        Some(pipe) => match network_params(pipe) {
             Ok(network) if pipe.window => window::run(
                 args.url,
                 args.test_fonts,
                 args.num_raster_threads,
-                Some(window::Driver::Pipe(network)),
+                Some(network),
                 args.remote_debugging,
             ),
             Ok(network) => automation_pipe::run(automation_pipe::Options {
@@ -491,11 +395,11 @@ fn main() -> ExitCode {
                 return ExitCode::from(2);
             }
         },
-        (None, None) => window::run(
+        None => window::run(
             args.url,
             args.test_fonts,
             args.num_raster_threads,
-            automation.map(window::Driver::Scenario),
+            None,
             args.remote_debugging,
         ),
     };
@@ -506,22 +410,6 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
-}
-
-/// The scenario `--automation` names, read and parsed, to run with the
-/// system's keyboard shortcuts.
-fn scenario_to_run(automation: &Automation) -> Result<window::Automation, String> {
-    let path = &automation.scenario;
-    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let scenario = scenario::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-    Ok(window::Automation {
-        scenario,
-        context: Context {
-            base: path.parent().map(PathBuf::from).unwrap_or_default(),
-            out: automation.out.clone(),
-            mac: cfg!(target_os = "macos"),
-        },
-    })
 }
 
 #[cfg(test)]
@@ -570,54 +458,30 @@ mod tests {
     fn defaults() {
         let args = run(&[]);
         assert_eq!(args.url, DEFAULT_URL);
-        assert!(args.headless.is_none());
+        assert!(args.automation_pipe.is_none());
         assert!(!args.test_fonts);
+        assert_eq!(args.num_raster_threads, None);
         assert_eq!(parse(&["x", "--help"]), Ok(Command::Help));
         assert_eq!(parse(&["-h"]), Ok(Command::Help));
     }
 
     #[test]
-    fn headless_options() {
-        let args = run(&[
-            "--headless",
-            "out.png",
-            "--size",
-            "100x50",
-            "--scale",
-            "1.5",
-            "--test-fonts",
-            "--num-raster-threads",
-            "3",
-            "about:blank",
-        ]);
+    fn window_options() {
+        let args = run(&["--test-fonts", "--num-raster-threads", "3", "about:blank"]);
         assert_eq!(args.url, "about:blank");
+        assert!(args.test_fonts);
         assert_eq!(args.num_raster_threads, Some(3));
-        assert_eq!(
-            args.headless,
-            Some(headless::Options {
-                out: "out.png".into(),
-                viewport_size: Size::new(150, 75),
-                device_scale_factor: 1.5,
-                test_fonts: true,
-                num_raster_threads: Some(3),
-            })
-        );
-        let default = run(&["--headless", "out.png"]);
-        assert_eq!(default.num_raster_threads, None);
-        let default = default.headless.unwrap();
-        assert_eq!(default.viewport_size, DEFAULT_SIZE);
-        assert_eq!(default.num_raster_threads, None);
     }
 
     /// Chrome's `--name=value`, as well as `--name value`; a switch
     /// without a value takes none.
     #[test]
     fn values_come_after_an_equals_sign_too() {
-        let args = run(&["--headless=out.png", "--size=100x50", "about:blank?a=b"]);
+        let args = run(&["--num-raster-threads=2", "about:blank?a=b"]);
         assert_eq!(args.url, "about:blank?a=b");
-        let headless = args.headless.expect("headless");
-        assert_eq!(headless.out, std::path::PathBuf::from("out.png"));
-        assert_eq!(headless.viewport_size, Size::new(100, 50));
+        assert_eq!(args.num_raster_threads, Some(2));
+        let args = run(&["--automation-pipe", "--scale=1.5"]);
+        assert_eq!(args.automation_pipe.map(|pipe| pipe.scale), Some(1.5));
         let err = |args: &[&str]| parse(args).unwrap_err();
         assert!(err(&["--test-fonts=yes"]).contains("--test-fonts takes no value"));
     }
@@ -652,51 +516,36 @@ mod tests {
             err(&["--remote-allow-origins=*"])
                 .contains("only applies with --remote-debugging-port")
         );
-        assert!(
-            err(&["--headless", "o.png", "--remote-debugging-port=0"])
-                .contains("no --headless or --automation")
-        );
     }
 
     #[test]
     fn errors_say_what_is_wrong() {
         let err = |args: &[&str]| parse(args).unwrap_err();
-        assert!(err(&["--headless"]).contains("--headless needs a value"));
-        assert!(err(&["--headless", "o.png", "--size", "800"]).contains("WIDTHxHEIGHT"));
-        assert!(err(&["--headless", "o.png", "--size", "0x10"]).contains("WIDTHxHEIGHT"));
-        assert!(err(&["--headless", "o.png", "--scale", "-1"]).contains("positive"));
+        assert!(err(&["--automation-pipe", "--scale", "-1"]).contains("positive"));
+        assert!(err(&["--automation-pipe", "--scale"]).contains("--scale needs a value"));
         for n in ["0", "-1", "two"] {
             assert!(
                 err(&["--num-raster-threads", n]).contains("whole number from 1"),
                 "{n}"
             );
         }
-        assert!(err(&["--size", "10x10"]).contains("only applies with --headless"));
         for args in [
             &["--scale", "2"][..],
             &["--automation-pipe", "--window", "--scale", "2"],
         ] {
             assert!(
-                err(args).contains("only applies with --headless or --automation-pipe"),
+                err(args).contains("only applies with --automation-pipe"),
                 "{args:?}"
             );
         }
         assert!(err(&["--frobnicate"]).contains("unknown option"));
+        // The modes machopo has no more.
+        for gone in ["--headless", "--size", "--automation", "--out"] {
+            assert!(err(&[gone, "x"]).contains("unknown option"), "{gone}");
+        }
         assert!(err(&["a.html", "b.html"]).contains("more than one"));
         assert!(err(&["--script", "wasm"]).contains("--script"));
-        assert!(err(&["--automation"]).contains("--automation needs a value"));
-        assert!(err(&["--automation", "s.txt", "about:blank"]).contains("navigates itself"));
-        assert!(
-            err(&["--automation", "s.txt", "--headless", "o.png"]).contains("navigates itself")
-        );
-        assert!(err(&["--out", "shots"]).contains("only applies with --automation"));
-        for args in [
-            &["--automation-pipe", "about:blank"][..],
-            &["--automation-pipe", "--headless", "o.png"],
-            &["--automation-pipe", "--automation", "s.txt"],
-        ] {
-            assert!(err(args).contains("driven through the pipe"), "{args:?}");
-        }
+        assert!(err(&["--automation-pipe", "about:blank"]).contains("driven through the pipe"));
         assert!(err(&["--host-resolver-rules", "MAP * 127.0.0.1"]).contains("only apply with"));
         assert!(err(&["--window"]).contains("only apply with"));
         assert!(err(&["--additional-trust-anchors", "a.pem"]).contains("only apply with"));
@@ -759,57 +608,11 @@ mod tests {
     }
 
     #[test]
-    fn automation() {
-        let args = run(&["--automation", "tests/s.txt", "--out", "shots"]);
-        assert_eq!(
-            args.automation,
-            Some(Automation {
-                scenario: "tests/s.txt".into(),
-                out: Some("shots".into()),
-            })
-        );
-        assert_eq!(
-            run(&["--automation", "s.txt"]).automation.unwrap().out,
-            None
-        );
-        assert_eq!(run(&[]).automation, None);
-    }
-
-    /// The scenario is read and parsed before any window opens; relative
-    /// paths in it are its file's.
-    #[test]
-    fn the_scenario_to_run() {
-        let dir = std::env::temp_dir().join(format!("machopo-main-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("good.txt"), "window size=300x200\nwait-loaded").unwrap();
-        std::fs::write(dir.join("bad.txt"), "wait-loaded\nfly").unwrap();
-        let automation = |name: &str| Automation {
-            scenario: dir.join(name),
-            out: Some("shots".into()),
-        };
-        let good = scenario_to_run(&automation("good.txt")).unwrap();
-        assert_eq!(good.scenario.window.size, Some((300.0, 200.0)));
-        assert_eq!(good.scenario.steps.len(), 1);
-        assert_eq!(good.context.base, dir);
-        assert_eq!(good.context.out, Some("shots".into()));
-        assert_eq!(good.context.mac, cfg!(target_os = "macos"));
-        let Err(bad) = scenario_to_run(&automation("bad.txt")) else {
-            panic!("bad.txt parses");
-        };
-        assert!(bad.ends_with("line 2: unknown command `fly`"), "{bad}");
-        assert!(scenario_to_run(&automation("missing.txt")).is_err());
-    }
-
-    #[test]
     fn help_mentions_every_option() {
         let help = help();
         for option in [
-            "--headless",
-            "--size",
             "--scale",
             "--test-fonts",
-            "--automation",
-            "--out",
             "--automation-pipe",
             "--window",
             "--host-resolver-rules",

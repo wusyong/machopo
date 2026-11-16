@@ -1032,7 +1032,8 @@ fn waits_end_with_the_frame_that_shows_them() {
 }
 
 /// `--window`: the same, in the real window. It needs a display (and a
-/// GPU), so it runs only with `MACHOPO_WINDOW_TESTS` (`test.py automation`).
+/// GPU), so it runs only with `MACHOPO_WINDOW_TESTS` (`test.py scenarios
+/// --window`).
 #[test]
 fn the_real_window_is_driven_the_same() {
     if std::env::var_os("MACHOPO_WINDOW_TESTS").is_none() {

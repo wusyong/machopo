@@ -56,8 +56,6 @@ The toolchain is pinned (`rust-toolchain.toml`); rustup installs it.
 ```sh
 cargo run                                  # a window with the built-in demo page
 cargo run -- https://example.com/          # a URL (http, https, file, about) or a local file
-cargo run -- --headless out.png --size 800x600 --scale 2
-                                           # no window: one frame saved as a PNG
 cargo run -- --remote-debugging-port=9222 https://example.com
                                            # its tabs show up in Chrome's chrome://inspect (CDP)
 cargo build -p shell -p driver && target/debug/machopodriver --port 4444
@@ -75,7 +73,7 @@ python3 scripts/test.py reftest            # machopo's own reftests (tests/refte
 python3 scripts/test.py wpt [dom/nodes/]   # web-platform-tests, through upstream's wptrunner
 python3 scripts/test.py wdspec             # WPT's WebDriver tests
 python3 scripts/test.py scenarios          # the scenarios (tests/scenarios/), with no platform window
-python3 scripts/test.py automation         # the same in a real window
+python3 scripts/test.py scenarios --window # the same in a real window
 python3 scripts/sanity.py -h               # checks of the repository's rules
 ```
 

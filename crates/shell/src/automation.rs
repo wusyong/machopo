@@ -1,16 +1,17 @@
-//! Runs a [`scenario`](crate::scenario) against a browser window: for the
-//! scenario tests (a window without the platform's, `windowless`) and
-//! `machopo --automation` (the real one), as Chromium's `interactive_ui_tests`
-//! drive a browser.
+//! Runs a [`scenario`](crate::scenario) against a browser window, for the
+//! scenario tests, as Chromium's `interactive_ui_tests` drive a browser:
+//! a window without the platform's (`windowless`), or the real one
+//! (`machopo --automation-pipe --window`).
 //!
 //! The runner is a client of `protocol::automation`, as machopodriver is:
 //! it steps through the scenario on a thread of its own and sends
 //! the `Machopo` domain's commands (the window and its tab shown, as a person
 //! uses them), waiting, polling, for what it checks. The window's
-//! `AutomationSession` answers them on its UI thread, in the same process:
-//! the commands and answers go through channels, not serialized; input it
-//! hands to the embedder, which gives it to the window as the platform
-//! would.
+//! `AutomationSession` answers them on its UI thread: in the same process
+//! for the window without the platform's, the commands and answers going
+//! through channels, not serialized; through the pipe for the real one.
+//! Input it hands to the embedder, which gives it to the window as the
+//! platform would.
 //!
 //! The renderer answers `Machopo.queryElement` on its main thread, so while
 //! script keeps that busy a query waits; frames come from Viz, which

@@ -1,5 +1,5 @@
 //! The browser shell (`//chrome/browser/ui` + `content_shell`) as a library,
-//! so its end-to-end tests can drive headless mode in-process. The `machopo` binary (`main.rs`) adds the window and argument
+//! so its end-to-end tests can drive the pipeline headless in-process. The `machopo` binary (`main.rs`) adds the window and argument
 //! parsing.
 
 #![cfg_attr(

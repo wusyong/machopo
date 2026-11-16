@@ -1,10 +1,11 @@
-//! Headless mode: run the full pipeline once and write the frame Viz would
-//! have presented to a PNG, drawn by the software `DirectRenderer`.
-//! End-to-end tests build on this.
+//! The full pipeline, headless, for end-to-end tests: a page loaded in a
+//! tab of its own, and the frame Viz would have presented read back, drawn
+//! on the process's GPU device. Its `BeginFrame`s are virtual, so a page
+//! comes out the same on every run (as content_shell's web test mode).
 
 use std::fs::File;
 use std::io::BufWriter;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -18,17 +19,6 @@ use protocol::network::{LoadResult, RedirectInfo};
 use protocol::renderer::RendererHostMsg;
 use protocol::viz::{CompositorFrameSinkMsg, CopyOutputRequest, SharedImageInterface, VizMsg};
 use viz::{BeginFrameSource, Display, GpuSharedImages, WgpuRenderer};
-
-#[derive(Debug, PartialEq)]
-pub struct Options {
-    pub out: PathBuf,
-    /// Physical pixels.
-    pub viewport_size: Size,
-    pub device_scale_factor: f32,
-    pub test_fonts: bool,
-    /// `RendererFlags::num_raster_threads`.
-    pub num_raster_threads: Option<usize>,
-}
 
 /// The first frame that shows a navigation fully loaded.
 pub struct Frame {
@@ -49,29 +39,6 @@ pub struct Frame {
 }
 
 const FRAME_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Renders `url` and writes the frame to `opts.out`.
-pub fn run(url: &str, opts: Options) -> Result<(), String> {
-    let (frame, _) = drive(
-        url,
-        opts.viewport_size,
-        opts.device_scale_factor,
-        opts.test_fonts,
-        &[],
-        crate::SCRIPT_ENGINES,
-        None,
-        REFTEST_WAIT_TIMEOUT,
-        NetworkContextParams::default(),
-        opts.num_raster_threads,
-    )?;
-    if let Some(title) = &frame.title {
-        tracing::info!(title = %title, "page title");
-    }
-    write_png(&opts.out, frame.size, &frame.pixels)
-        .map_err(|e| format!("writing {}: {e}", opts.out.display()))?;
-    tracing::info!(path = %opts.out.display(), size = ?frame.size, "wrote frame");
-    Ok(())
-}
 
 /// What the headless loop waits on: frames for Viz, and messages from the
 /// renderer. They come on two channels; forwarding both into one keeps

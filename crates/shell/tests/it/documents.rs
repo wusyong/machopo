@@ -125,7 +125,7 @@ const GREEN: [u8; 4] = [0, 128, 0, 255];
 const WHITE: [u8; 4] = [255, 255, 255, 255];
 
 /// The DOM's document drawn: its `<style>` and `style` attributes,
-/// its boxes, text, and the frame written as headless writes one.
+/// its boxes, text, and the frame written as a PNG.
 #[test]
 fn a_document_is_drawn() {
     let url = site(
@@ -144,17 +144,8 @@ fn a_document_is_drawn() {
     assert_eq!(pixel(&frame, 70, 30), GREEN);
     assert_eq!(pixel(&frame, 70, 60), WHITE);
     let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("shell-documents/drawn.png");
-    headless::run(
-        &url,
-        headless::Options {
-            out: out.clone(),
-            viewport_size: gfx::Size::new(100, 100),
-            device_scale_factor: 1.0,
-            test_fonts: true,
-            num_raster_threads: None,
-        },
-    )
-    .expect("written");
+    std::fs::create_dir_all(out.parent().unwrap()).unwrap();
+    headless::write_png(&out, frame.size, &frame.pixels).expect("written");
     assert!(out.exists());
 }
 

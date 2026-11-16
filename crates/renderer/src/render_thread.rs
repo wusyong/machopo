@@ -78,7 +78,7 @@ pub struct RendererFlags {
     /// `LayerTreeSettings::wait_for_all_pipeline_stages_before_draw`.
     pub wait_for_all_pipeline_stages_before_draw: bool,
     /// Answer `RendererMsg::QueryElement`, for automated checks of a
-    /// browser window (`machopo --automation`, the scenario tests), as
+    /// browser window (`machopo --automation-pipe`, the scenario tests), as
     /// `content_shell --run-web-tests` exposes `internals` only to tests.
     pub automation: bool,
     /// The browser's user agent string, which `navigator.userAgent` gives

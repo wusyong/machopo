@@ -7,18 +7,20 @@ runs by itself. Each `*.txt` here is one scenario, but `known-failures.txt`
 ```sh
 python3 scripts/test.py scenarios            # all of them
 python3 scripts/test.py scenarios demo       # file names containing "demo"
-python3 scripts/test.py automation           # each in a real window (see below)
+python3 scripts/test.py scenarios --window   # each in a real window (see below)
 ```
 
-**In a real window**: `machopo --automation <scenario> [--out <dir>]` runs one
-in `machopo`'s own window, winit and wgpu included, and exits 0 if every check
-passed, 1 if one failed, 2 if the scenario is wrong; `scripts/test.py
-automation` runs each this way, with screenshots in
-`target/automation-results/`. The window stays on top and ignores the mouse
-and keyboard while it runs. It uses the system's keyboard shortcuts (only
-that platform's `platform` blocks run), the display's scale (`window scale=`
-is ignored) and the system's fonts, so its screenshots look like what a
-person sees. It needs a display and a GPU.
+**In a real window**: with `--window`, each scenario runs in a `machopo
+--automation-pipe --window` of its own (`machopo`'s own window, winit and wgpu
+included), one at a time, driven through the pipe as machopodriver drives
+it; its screenshots and machopo's log go to
+`target/automation-results/<scenario>/`. The window stays on top and ignores
+the mouse and keyboard while it runs. It uses the system's keyboard
+shortcuts (only that platform's `platform` blocks run), the display's scale
+(`window scale=` is ignored) and the system's fonts, so its screenshots look
+like what a person sees. A scenario with `window caret-blink=` is skipped:
+the pipe has no way to make the window's caret blink. It needs a display
+and a GPU.
 
 - **The window**: a browser window without the platform's window
   (`shell::windowless`): the toolbar and the tab, Viz on its own thread
@@ -46,7 +48,8 @@ person sees. It needs a display and a GPU.
 - **Known failures**: those `known-failures.txt` names (one a line, the
   file's name without `.txt`, a `#` comment saying why) may fail; one of
   them that passes every run fails the run (take it off the list), as does
-  a name there no scenario has. `test.py automation` reads the list too.
+  a name there no scenario has. The runs in a real window are judged by the
+  list too.
 
 ## Format
 

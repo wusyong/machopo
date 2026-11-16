@@ -12,8 +12,8 @@ one from our rusty_v8 fork's GitHub Release (`RUSTY_V8_MIRROR`), or, with
 `RUSTY_V8_ARCHIVE` set in the environment, one `v8` built locally. A plain
 build links the release one. The checks of the repo's rules (`unsafe`,
 `deps`, `spans`, `boundary`, `tests`, `numerics`, `docs`) are in `sanity.py`; the test runs `cargo test`
-leaves out (the GC's `matrix` and `fuzz`, `automation`, the reftests, the
-scenarios and WPT) in `test.py`; the benchmarks (Speedometer, the tile
+leaves out (the GC's `matrix` and `fuzz`, the reftests, the scenarios, in
+a window without the platform's or a real one, and WPT) in `test.py`; the benchmarks (Speedometer, the tile
 raster) in `bench.py`.
 
 Standard library only. Every command exits non-zero on failure.

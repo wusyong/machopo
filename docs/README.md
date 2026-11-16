@@ -55,7 +55,7 @@ RFC 的「分階段」裡的一步（或再細分的一段）做完時。那份 
 
 4. `docs/limitations.md`：新的限制加進去；**被這一步解決的舊限制刪掉**。`docs/test-gaps.md` 的「測試守不住的地方」裡被這一步解決的項目（補了測試、加了工具）也刪掉。新增或拿掉 crate、thread 時更新 `docs/architecture.md`。
 5. **在視窗裡看得到新的行為**：在 `about:demo`（`resources/demo.html`，視窗預設開的頁面）加上示範這一步的東西，例如「Busy for 3 seconds」按鈕（點了之後 script 忙等 3 秒，期間照樣能捲）。頁面維持英文，新增的地方標明它示範什麼。然後把「在視窗裡做什麼、應該看到什麼」寫成情境，或補進現有的一份（`tests/scenarios/`，格式見它的 README）：`python3 scripts/test.py scenarios` 在沒有平台視窗的瀏覽器視窗裡跑它（`cargo test --workspace` 跳過情境：寫了或改了情境時用 `python3 scripts/test.py scenarios <名稱>` 跑那幾份，CI 每天跑全部）。純重構、畫面上看不出差別時，現有的情境就是回歸檢查。
-   - **動到視窗那一層時**（`CLAUDE.md` 列出的檔案）再跑 `python3 scripts/test.py automation`：同樣的情境在真的視窗（winit、wgpu）裡跑；看 `target/automation-results/` 的截圖，結果和日期記進 `progress.md` 的「做過的檢查」。
+   - **動到視窗那一層時**（`CLAUDE.md` 列出的檔案）再跑 `python3 scripts/test.py scenarios --window`：同樣的情境在真的視窗（winit、wgpu）裡跑；看 `target/automation-results/` 的截圖，結果和日期記進 `progress.md` 的「做過的檢查」。
    - **人開視窗確認**只在情境做不到的地方：輸入法、剪貼簿、游標的樣子、外觀和「順不順」（`docs/test-gaps.md` 的「只做過手動確認」），或使用者要求時。
 
 其他文件裡寫到這次改動的地方，當下就改，不要留到最後：

@@ -4,12 +4,12 @@
 //! asks of the window (cursor, title, IME); the rest of the browser is a
 //! [`BrowserWindow`].
 //!
-//! With `--automation`, a scenario drives the window (`shell::automation`),
-//! and with `--automation-pipe --window`, what reads and writes machopo's
-//! standard input and output does (`shell::automation_pipe`): both through
-//! the window's `AutomationSession`, whose input goes in as winit's events
-//! would. The platform's own input is ignored meanwhile, as
-//! `interactive_ui_tests` own the window they drive. With
+//! With `--automation-pipe --window`, what reads and writes machopo's
+//! standard input and output drives the window (`shell::automation_pipe`:
+//! machopodriver, or the scenario tests' runner), through the window's
+//! `AutomationSession`, whose input goes in as winit's events would. The
+//! platform's own input is ignored meanwhile, as `interactive_ui_tests` own
+//! the window they drive. With
 //! `--remote-debugging-port` the session has the server's clients too
 //! (`shell::devtools_http_handler`), in a window a person may be using.
 
@@ -25,7 +25,6 @@ use protocol::automation::Message;
 use protocol::input::{MouseButton, ScrollDelta};
 use protocol::renderer::CursorType;
 use protocol::viz::{ContextLostObserver, DisplayMsg, SharedImageInterface, VizMsg};
-use shell::automation::{self, Client, Context, Failure};
 use shell::automation_pipe::{self, Read};
 use shell::automation_session::{AutomationSession, ClientEvent, Input, Reply};
 use shell::browser_view::Command;
@@ -34,7 +33,6 @@ use shell::devtools_http_handler::{self, DevToolsHttpHandler};
 use shell::keyboard::KeyInput;
 use shell::mouse::{ClickCounter, double_click_interval};
 use shell::omnibox::Clipboard;
-use shell::scenario::Scenario;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{
@@ -57,41 +55,30 @@ enum ShellEvent {
     /// Viz asks for a new surface for the window (only the thread that
     /// made the window can make one).
     MakeSurface(crossbeam_channel::Sender<Result<wgpu::Surface<'static>, String>>),
-    /// From the scenario's thread, or the pipe's reader.
+    /// From the pipe's reader.
     Automation(Read),
-    /// The scenario has run, or the pipe's input has ended (`Ok`).
-    AutomationDone(Result<(), Failure>),
+    /// The pipe's input has ended.
+    AutomationDone,
     /// From the remote debugging server's thread.
     DevTools(ClientEvent),
 }
 
-/// A scenario for the window to run (`machopo --automation`).
-pub struct Automation {
-    pub scenario: Scenario,
-    pub context: Context,
-}
-
-/// What drives the window.
-pub enum Driver {
-    /// `machopo --automation`.
-    Scenario(Automation),
-    /// `machopo --automation-pipe --window`, with the network settings given.
-    Pipe(NetworkContextParams),
-}
-
-/// The window's half of a run that drives it.
+/// The window's half of a run that drives it (`machopo --automation-pipe
+/// --window`).
 struct Automating {
-    /// Until the window is up and what drives it starts.
-    pending: Option<Driver>,
+    /// The network settings given, until the window is up and the pipe
+    /// starts.
+    pending: Option<NetworkContextParams>,
     /// The pipe's writer, to wait for once the session has gone.
     writer: Option<std::thread::JoinHandle<()>>,
     /// Set while the window gives itself the driver's input, which goes
     /// through; the platform's doesn't.
     injecting: bool,
-    result: Option<Result<(), Failure>>,
+    /// The pipe's input has ended, or `Browser.close` was answered.
+    done: bool,
 }
 
-/// The platform's input, which the window ignores while a scenario drives
+/// The platform's input, which the window ignores while the pipe drives
 /// it.
 fn is_input(event: &WindowEvent) -> bool {
     matches!(
@@ -267,33 +254,20 @@ impl App {
         let mut attrs = Window::default_attributes()
             .with_title("machopo")
             .with_inner_size(LogicalSize::new(1024.0, 768.0));
-        // A scenario's caret blinks only if it says so (`window
-        // caret-blink=`), as the windowless runner's.
-        let mut caret_blink_interval =
-            shell::system_colors::caret_blink_interval_for_window(self.test_fonts, false);
-        let driver = self.automating.as_ref().and_then(|a| a.pending.as_ref());
-        let network = match driver {
-            Some(Driver::Pipe(network)) => network.clone(),
-            _ => NetworkContextParams::default(),
-        };
-        let pipe = matches!(driver, Some(Driver::Pipe(_)));
-        if driver.is_some() {
+        let pipe = self.automating.as_ref().and_then(|a| a.pending.as_ref());
+        let network = pipe.cloned().unwrap_or_default();
+        let automation = pipe.is_some();
+        if automation {
             // Nothing covers it: a window hidden has no frames to read back.
             attrs = attrs.with_window_level(WindowLevel::AlwaysOnTop);
         }
-        if let Some(Driver::Scenario(automation)) = driver {
-            let window = automation.scenario.window;
-            if let Some((width, height)) = window.size {
-                attrs = attrs.with_inner_size(LogicalSize::new(width, height));
-            }
-            if window.scale.is_some() {
-                tracing::info!(
-                    "automation: the window's scale is the display's; `window scale=` is ignored"
-                );
-            }
-            caret_blink_interval = window.caret_blink;
-        }
-        let automation = driver.is_some();
+        // Driven through the pipe, the caret doesn't blink, so each frame
+        // comes out the same; a person's blinks as the system's does.
+        let caret_blink_interval = if automation {
+            None
+        } else {
+            shell::system_colors::caret_blink_interval_for_window(self.test_fonts, false)
+        };
         let window = Arc::new(
             event_loop
                 .create_window(attrs)
@@ -341,7 +315,7 @@ impl App {
                 automation,
                 network,
                 num_raster_threads: self.num_raster_threads,
-                caret_blink_interval: if pipe { None } else { caret_blink_interval },
+                caret_blink_interval,
             },
             size,
             scale,
@@ -360,12 +334,12 @@ impl App {
                 let _ = proxy.send_event(ShellEvent::FromContents(tab, Box::new(msg)));
             }),
         )?;
-        // A scenario navigates itself; through the pipe the tab starts with
-        // a document, as Chrome's does.
-        if !automation {
-            browser.view_mut().navigate(&self.initial_url);
-        } else if pipe {
+        // Through the pipe the tab starts with a document, as Chrome's
+        // does, and the pipe navigates.
+        if automation {
             automation_pipe::start_blank(&mut browser);
+        } else {
+            browser.view_mut().navigate(&self.initial_url);
         }
         let context_lost: Arc<dyn ContextLostObserver> =
             Arc::new(ToolbarContextLost(self.proxy.clone()));
@@ -386,38 +360,27 @@ impl App {
     }
 
     /// Starts what drives the window, now that it is up: the session, and
-    /// the scenario on a thread of its own, or the pipe's reader and
-    /// writer.
+    /// the pipe's reader and writer.
     fn start_automation(&mut self) {
         let (Some(running), Some(automating)) = (&self.running, &mut self.automating) else {
             return;
         };
-        let Some(driver) = automating.pending.take() else {
+        if automating.pending.take().is_none() {
             return;
-        };
+        }
         let (outbox, messages) = unbounded::<Message>();
         self.session = Some(AutomationSession::new(&running.browser, outbox).in_platform_window());
         let proxy = self.proxy.clone();
         let send = move |read| proxy.send_event(ShellEvent::Automation(read)).is_ok();
         let done = self.proxy.clone();
-        let spawned = match driver {
-            Driver::Scenario(Automation { scenario, context }) => std::thread::Builder::new()
-                .name("Automation".into())
-                .spawn(move || {
-                    let client = Client::new(Box::new(move |command| send(Ok(command))), messages);
-                    let result = automation::run(&scenario.steps, &context, &client);
-                    let _ = done.send_event(ShellEvent::AutomationDone(result));
+        let spawned = automation_pipe::spawn_writer(messages)
+            .and_then(|writer| {
+                automating.writer = Some(writer);
+                automation_pipe::spawn_reader(send, move || {
+                    let _ = done.send_event(ShellEvent::AutomationDone);
                 })
-                .map(drop),
-            Driver::Pipe(_) => automation_pipe::spawn_writer(messages)
-                .and_then(|writer| {
-                    automating.writer = Some(writer);
-                    automation_pipe::spawn_reader(send, move || {
-                        let _ = done.send_event(ShellEvent::AutomationDone(Ok(())));
-                    })
-                })
-                .map(drop),
-        };
+            })
+            .map(drop);
         if let Err(e) = spawned {
             self.error = Some(format!("start what drives the window: {e}"));
         }
@@ -748,7 +711,7 @@ impl ApplicationHandler<ShellEvent> for App {
                         }
                         if close {
                             if let Some(automating) = &mut self.automating {
-                                automating.result = Some(Ok(()));
+                                automating.done = true;
                             }
                             return self.exit(event_loop);
                         }
@@ -757,9 +720,9 @@ impl ApplicationHandler<ShellEvent> for App {
                 }
                 return;
             }
-            ShellEvent::AutomationDone(result) => {
+            ShellEvent::AutomationDone => {
                 if let Some(automating) = &mut self.automating {
-                    automating.result = Some(result);
+                    automating.done = true;
                 }
                 return self.exit(event_loop);
             }
@@ -777,7 +740,7 @@ impl ApplicationHandler<ShellEvent> for App {
                 };
                 if close || running.browser.view().close_requested() {
                     if let Some(automating) = &mut self.automating {
-                        automating.result = Some(Ok(()));
+                        automating.done = true;
                     }
                     return self.exit(event_loop);
                 }
@@ -801,14 +764,14 @@ impl ApplicationHandler<ShellEvent> for App {
     }
 }
 
-/// Opens a window at `url`, until it is closed; or, with `driver`, lets it
-/// drive the window until it is done (the scenario has run, failing if it
-/// does; the pipe's input has ended, or `Browser.close`).
+/// Opens a window at `url`, until it is closed; or, with `pipe` (the
+/// network settings `--automation-pipe --window` gives), lets the pipe
+/// drive the window until its input ends, or `Browser.close`.
 pub fn run(
     url: String,
     test_fonts: bool,
     num_raster_threads: Option<usize>,
-    driver: Option<Driver>,
+    pipe: Option<NetworkContextParams>,
     remote_debugging: Option<devtools_http_handler::Options>,
 ) -> Result<(), String> {
     let event_loop = EventLoop::<ShellEvent>::with_user_event()
@@ -821,11 +784,11 @@ pub fn run(
         proxy: event_loop.create_proxy(),
         running: None,
         error: None,
-        automating: driver.map(|driver| Automating {
-            pending: Some(driver),
+        automating: pipe.map(|network| Automating {
+            pending: Some(network),
             writer: None,
             injecting: false,
-            result: None,
+            done: false,
         }),
         remote_debugging,
         session: None,
@@ -838,9 +801,10 @@ pub fn run(
     if let Some(e) = app.error {
         return Err(e);
     }
-    match app.automating.map(|a| a.result) {
-        None | Some(Some(Ok(()))) => Ok(()),
-        Some(Some(Err(failure))) => Err(failure.to_string()),
-        Some(None) => Err("the window closed before what drove it was done".into()),
+    match app.automating {
+        Some(Automating { done: false, .. }) => {
+            Err("the window closed before what drove it was done".into())
+        }
+        _ => Ok(()),
     }
 }

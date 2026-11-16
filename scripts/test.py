@@ -4,11 +4,10 @@
     python scripts/test.py matrix      # GC tests under each pool size, and under stress
     python scripts/test.py fuzz [--iterations N] [--minutes M] [--seed S] [--max-flags N] [--out FILE]
                                        # random GC configurations (numfuzz-style)
-    python scripts/test.py automation [FILTER ...]
-                                       # every scenario in tests/scenarios/ in a real window (machopo --automation),
-                                       # and the pipe's test with one (machopo --automation-pipe --window)
-    python scripts/test.py scenarios [FILTER ...]
-                                       # the scenarios without the platform's window (cargo test skips them)
+    python scripts/test.py scenarios [--window] [FILTER ...]
+                                       # the scenarios without the platform's window (cargo test skips them);
+                                       # --window: in a real one (machopo --automation-pipe --window), and
+                                       # the pipe's test with one
     python scripts/test.py wpt [TEST ...] [--processes N] [--chunk I/N] [--profile NAME] [--no-build]
                                        # WPT's testharness.js tests, reftests and crashtests, against
                                        # machopodriver and machopo (wptrunner)
@@ -24,7 +23,7 @@
                                        # machopo's answers to DevTools' domains against Chrome's
 
 `matrix` and `fuzz` link the debug V8 (V8's `DCHECK`s), in a target directory
-of their own; `automation` needs a display and a GPU. `scenarios` is a
+of their own; `scenarios --window` needs a display and a GPU. `scenarios` is a
 test of `cargo test` that skips itself unless `MACHOPO_SLOW_TESTS` is set,
 which the command sets. `wpt`, `reftest` and `wdspec` run upstream's
 wptrunner, in a venv of its own, against the debug build or another
@@ -739,94 +738,6 @@ def cmd_fuzz(args: argparse.Namespace) -> int:
     return 1 if failures else 0
 
 
-# --- automation ---------------------------------------------------------------
-
-SCENARIOS = ROOT / "tests" / "scenarios"
-AUTOMATION_RESULTS = ROOT / "target" / "automation-results"
-
-
-def cmd_automation(args: argparse.Namespace) -> int:
-    """Each scenario in its own `machopo --automation` process (a window can be
-    opened once per process), with the system's keyboard shortcuts; then the
-    pipe's test that drives the window. Needs a display and a GPU."""
-    build = subprocess.run(["cargo", "build", "-p", "shell", "--bin", "machopo"], cwd=ROOT)
-    if build.returncode != 0:
-        return build.returncode
-    # The display stays on while this runs (macOS): once it sleeps, the
-    # window is occluded, Viz draws nothing, and a capture waits for a frame
-    # that never comes. `caffeinate -i` alone keeps only the system awake.
-    if sys.platform == "darwin":
-        subprocess.Popen(["caffeinate", "-d", "-i", "-w", str(os.getpid())])
-    machopo = ROOT / "target" / "debug" / ("machopo.exe" if os.name == "nt" else "machopo")
-    # The list of those known to fail, not a scenario.
-    scenarios = sorted(s for s in SCENARIOS.glob("*.txt") if s.stem != "known-failures")
-    known = known_failing_scenarios()
-    if args.filter:
-        scenarios = [s for s in scenarios if any(f in s.stem for f in args.filter)]
-    failures = 0
-    for scenario in scenarios:
-        out = AUTOMATION_RESULTS / scenario.stem
-        shutil.rmtree(out, ignore_errors=True)
-        start = time.monotonic()
-        result = subprocess.run(
-            [str(machopo), "--automation", str(scenario), "--out", str(out)],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        took = f"({time.monotonic() - start:.0f}s)"
-        if result.returncode == 0:
-            if scenario.stem in known:
-                failures += 1
-                print(f"PASS {scenario.stem} {took}: known-failures.txt names it, take it off")
-            else:
-                print(f"ok   {scenario.stem} {took}")
-            continue
-        if scenario.stem in known:
-            print(f"known failure {scenario.stem} {took}")
-            continue
-        failures += 1
-        print(f"FAIL {scenario.stem} {took}")
-        # The failure is the last error line; the log has the rest.
-        lines = re.sub(r"\x1b\[[0-9;]*m", "", result.stdout + result.stderr).splitlines()
-        errors = [line for line in lines if " ERROR " in line or line.startswith("machopo:")]
-        print("  " + (errors[-1].strip() if errors else f"exit status {result.returncode}"))
-    print(f"\n{len(scenarios) - failures}/{len(scenarios)} scenarios passed; screenshots in {AUTOMATION_RESULTS}")
-    # `machopo --automation-pipe --window`: the pipe's test that needs the window.
-    if not args.filter or any(f in "pipe" for f in args.filter):
-        start = time.monotonic()
-        pipe = subprocess.run(
-            ["cargo", "test", "-p", "shell", "--test", "it", "--", "--exact", WINDOW_PIPE_TEST],
-            cwd=ROOT,
-            env={**os.environ, "MACHOPO_WINDOW_TESTS": "1"},
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-        took = f"({time.monotonic() - start:.0f}s)"
-        if pipe.returncode == 0 and "1 passed" in pipe.stdout:
-            print(f"ok   pipe --window {took}")
-        else:
-            failures += 1
-            print(f"FAIL pipe --window {took}\n{pipe.stdout}{pipe.stderr}")
-    return 1 if failures else 0
-
-
-def known_failing_scenarios() -> set[str]:
-    """The scenarios `tests/scenarios/known-failures.txt` names: one a
-    line, `#` comments."""
-    text = (SCENARIOS / "known-failures.txt").read_text(encoding="utf-8")
-    return {name for line in text.splitlines() if (name := line.split("#", 1)[0].strip())}
-
-
-# The test in crates/shell/tests/it/automation_pipe.rs that drives the real
-# window, which runs only with `MACHOPO_WINDOW_TESTS`.
-WINDOW_PIPE_TEST = "automation_pipe::the_real_window_is_driven_the_same"
-
-
 # --- scenarios ---------------------------------------------------------------
 
 # The part of `cargo test` that skips itself without `MACHOPO_SLOW_TESTS` (the
@@ -864,6 +775,11 @@ def run_slow_test(target: str, filters: list[str], env: dict[str, str] | None = 
     return status
 
 
+# The test in crates/shell/tests/it/automation_pipe.rs that drives the real
+# window, which runs only with `MACHOPO_WINDOW_TESTS`.
+WINDOW_PIPE_TEST = "automation_pipe::the_real_window_is_driven_the_same"
+
+
 def cmd_scenarios(args: argparse.Namespace) -> int:
     """The scenarios under `tests/scenarios/`, in a browser window without
     the platform's window (shell's `scenarios` test), four at a time: those
@@ -871,8 +787,40 @@ def cmd_scenarios(args: argparse.Namespace) -> int:
     the rest once. In real time: about as long as the longest one.
     Screenshots go to `target/scenario-results/`. Those
     `tests/scenarios/known-failures.txt` names may fail; one of them that
-    passes fails the run (to be taken off)."""
-    return run_slow_test("scenarios", args.filter, None)
+    passes fails the run (to be taken off).
+
+    With `--window`, each in a real window of its own (`machopo
+    --automation-pipe --window`), one at a time, with the system's keyboard
+    shortcuts, its screenshots and machopo's log in
+    `target/automation-results/`; then the pipe's test that drives the
+    window. Needs a display and a GPU."""
+    if not args.window:
+        return run_slow_test("scenarios", args.filter, None)
+    # The display stays on while this runs (macOS): once it sleeps, the
+    # window is occluded, Viz draws nothing, and a capture waits for a frame
+    # that never comes. `caffeinate -i` alone keeps only the system awake.
+    if sys.platform == "darwin":
+        subprocess.Popen(["caffeinate", "-d", "-i", "-w", str(os.getpid())])
+    failures = 1 if run_slow_test("scenarios", ["--window", *args.filter], None) else 0
+    # `machopo --automation-pipe --window`: the pipe's test that needs the window.
+    if not args.filter or any(f in "pipe" for f in args.filter):
+        start = time.monotonic()
+        pipe = subprocess.run(
+            ["cargo", "test", "-p", "shell", "--test", "it", "--", "--exact", WINDOW_PIPE_TEST],
+            cwd=ROOT,
+            env={**os.environ, "MACHOPO_WINDOW_TESTS": "1"},
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        took = f"({time.monotonic() - start:.0f}s)"
+        if pipe.returncode == 0 and "1 passed" in pipe.stdout:
+            print(f"ok   pipe --window {took}")
+        else:
+            failures += 1
+            print(f"FAIL pipe --window {took}\n{pipe.stdout}{pipe.stderr}")
+    return 1 if failures else 0
 
 
 # --- WPT through wptrunner --------------------------------------------------
@@ -1828,28 +1776,25 @@ def main() -> int:
         "the extension (default: target/gc-fuzz-failures.jsonl)",
     )
 
-    automation = command(
-        "automation",
-        cmd_automation,
-        "run every scenario in tests/scenarios/ in a real window (machopo --automation), and the pipe's "
-        "test with one (machopo --automation-pipe --window)",
-    )
-    automation.add_argument(
-        "filter",
-        nargs="*",
-        metavar="FILTER",
-        help="run only the scenarios whose file name contains one of these, and the pipe's test "
-        "if one is in `pipe` (default: all of them)",
-    )
-
     scenarios = command(
-        "scenarios", cmd_scenarios, "the scenarios in a browser window without the platform's (skipped by cargo test)"
+        "scenarios",
+        cmd_scenarios,
+        "the scenarios in a browser window without the platform's (skipped by cargo test), or with "
+        "--window in a real one (machopo --automation-pipe --window)",
+    )
+    scenarios.add_argument(
+        "--window",
+        action="store_true",
+        help="run each in a real window of its own, one at a time, with the system's keyboard "
+        "shortcuts (screenshots and logs in target/automation-results/), then the pipe's test with "
+        "the window; needs a display and a GPU",
     )
     scenarios.add_argument(
         "filter",
         nargs="*",
         metavar="FILTER",
-        help="run only the scenarios whose file name contains one of these (default: all of them)",
+        help="run only the scenarios whose file name contains one of these, and with --window the "
+        "pipe's test if one is in `pipe` (default: all of them)",
     )
 
     wpt = command("wpt", cmd_wpt, "WPT's testharness.js tests, reftests and crashtests (wptrunner)")

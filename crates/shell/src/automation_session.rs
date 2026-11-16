@@ -768,7 +768,7 @@ impl AutomationSession {
     }
 
     /// The browser is the platform's window (`machopo --automation-pipe
-    /// --window`, `machopo --automation`), which `Browser.getVersion` tells.
+    /// --window`), which `Browser.getVersion` tells.
     pub fn in_platform_window(mut self) -> Self {
         self.windowed = true;
         self
