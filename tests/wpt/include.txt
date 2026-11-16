@@ -2083,6 +2083,99 @@ html/semantics/embedded-content/the-canvas-element/
 css/CSS2/floats/
 css/CSS2/floats-clear/
 
+# css/CSS2/cascade: the cascade's order, specificity and `!important`
+# (whole)
+css/CSS2/cascade/
+
+# css/CSS2/selectors: every test but those of `::first-letter` and
+# `::first-line` (and their case-insensitive names, `pseudo-002`, `-006`),
+# which machopo doesn't have: most of the directory.
+css/CSS2/selectors/attribute-selector-001.xht
+css/CSS2/selectors/attribute-selector-002.xht
+css/CSS2/selectors/attribute-token-selector-002.xht
+css/CSS2/selectors/attribute-value-selector-001.xht
+css/CSS2/selectors/attribute-value-selector-002.xht
+css/CSS2/selectors/attribute-value-selector-003.xht
+css/CSS2/selectors/attribute-value-selector-004.xht
+css/CSS2/selectors/attribute-value-selector-005.html
+css/CSS2/selectors/attribute-value-selector-006.xht
+css/CSS2/selectors/attribute-value-selector-007.html
+css/CSS2/selectors/attribute-value-selector-008.xht
+css/CSS2/selectors/attribute-value-selector-009.xht
+css/CSS2/selectors/attribute-value-selector-010.html
+css/CSS2/selectors/before-after-selector-001.xht
+css/CSS2/selectors/child-selector-001.xht
+css/CSS2/selectors/child-selector-002.xht
+css/CSS2/selectors/child-selector-003.xht
+css/CSS2/selectors/class-selector-001.xht
+css/CSS2/selectors/class-selector-002.xht
+css/CSS2/selectors/class-selector-003.xht
+css/CSS2/selectors/class-selector-004.xht
+css/CSS2/selectors/class-selector-005.xht
+css/CSS2/selectors/class-selector-006.xht
+css/CSS2/selectors/class-selector-007.xht
+css/CSS2/selectors/class-selector-008.xht
+css/CSS2/selectors/class-selector-009.xht
+css/CSS2/selectors/class-selector-010.xht
+css/CSS2/selectors/class-selector-011.xht
+css/CSS2/selectors/class-selector-012.xht
+css/CSS2/selectors/combinator-001.xht
+css/CSS2/selectors/combinator-002.xht
+css/CSS2/selectors/combinator-003.xht
+css/CSS2/selectors/combinator-004.xht
+css/CSS2/selectors/default-attribute-selector-001.xht
+css/CSS2/selectors/default-attribute-selector-002.xht
+css/CSS2/selectors/default-attribute-selector-003.xht
+css/CSS2/selectors/default-attribute-selector-004.xht
+css/CSS2/selectors/descendent-selector-001.xht
+css/CSS2/selectors/descendent-selector-002.xht
+css/CSS2/selectors/descendent-selector-003.xht
+css/CSS2/selectors/descendent-selector-004.xht
+css/CSS2/selectors/descendent-selector-005.xht
+css/CSS2/selectors/descendent-selector-006.xht
+css/CSS2/selectors/descendent-selector-007.xht
+css/CSS2/selectors/descendent-selector-008.xht
+css/CSS2/selectors/descendent-selector-009.xht
+css/CSS2/selectors/descendent-selector-010.xht
+css/CSS2/selectors/descendent-selector-011.xht
+css/CSS2/selectors/dynamic-sibling-combinator-001.xht
+css/CSS2/selectors/first-child-selector-001.xht
+css/CSS2/selectors/first-child-selector-002.xht
+css/CSS2/selectors/first-child-selector-003.xht
+css/CSS2/selectors/grouping-002.xht
+css/CSS2/selectors/html-case-sensitivity-001.html
+css/CSS2/selectors/id-selector-001.xht
+css/CSS2/selectors/id-selector-002.xht
+css/CSS2/selectors/id-selector-004.xht
+css/CSS2/selectors/id-selector-005.xht
+css/CSS2/selectors/id-selector-006.xht
+css/CSS2/selectors/lang-pseudoclass-001.html
+css/CSS2/selectors/lang-pseudoclass-002.xht
+css/CSS2/selectors/lang-selector-001.xht
+css/CSS2/selectors/lang-selector-002.xht
+css/CSS2/selectors/lang-selector-003.xht
+css/CSS2/selectors/lang-selector-004.xht
+css/CSS2/selectors/lang-selector-005.xht
+css/CSS2/selectors/lang-selector-006.xht
+css/CSS2/selectors/pseudo-001.xht
+css/CSS2/selectors/pseudo-007.xht
+css/CSS2/selectors/pseudo-008.xht
+css/CSS2/selectors/pseudo-014.xht
+css/CSS2/selectors/pseudo-015.xht
+css/CSS2/selectors/pseudo-016.xht
+css/CSS2/selectors/selectors-001.xht
+css/CSS2/selectors/selectors-002.xht
+css/CSS2/selectors/selectors-parsing-001.xht
+css/CSS2/selectors/sibling-selector-001.xht
+css/CSS2/selectors/sibling-selector-002.xht
+css/CSS2/selectors/sibling-selector-003.xht
+css/CSS2/selectors/type-selector-001.xht
+css/CSS2/selectors/universal-selector-001.xht
+css/CSS2/selectors/universal-selector-002.xht
+css/CSS2/selectors/universal-selector-003.xht
+css/CSS2/selectors/universal-selector-004.xht
+css/CSS2/selectors/universal-selector-005.xht
+
 # Generated content: css/CSS2/generated-content and css/css-content (whole),
 # and the files of css/css-pseudo about `::before` and `::after` (without
 # animations).
@@ -2852,8 +2945,8 @@ css/CSS2/normal-flow/min-height-percentage-002.xht
 css/CSS2/normal-flow/min-width-applies-to-012.xht
 css/CSS2/normal-flow/width-applies-to-012.xht
 
-# css/CSS2/zindex
-css/CSS2/zindex/z-index-dynamic-001.xht
+# css/CSS2/zindex (whole)
+css/CSS2/zindex/
 
 # css/CSS2/positioning
 css/CSS2/positioning/bottom-004.xht
