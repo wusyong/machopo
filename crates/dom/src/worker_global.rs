@@ -25,6 +25,9 @@ pub struct WorkerGlobalScope {
     origin: LocalExternal<url::Origin>,
     /// Its name (`new Worker(url, { name })`, `self.name`).
     name: LocalExternal<DomString>,
+    /// Its `location` and `navigator`, once asked for.
+    pub(crate) location: Member<crate::Location>,
+    pub(crate) navigator: Member<crate::Navigator>,
     pub(crate) listeners: Member<HeapVector<Listener>>,
     wrapper: JsEdge,
 }
@@ -47,6 +50,8 @@ impl<'gc> Cx<'_, 'gc> {
                 url: LocalExternal::new(url),
                 origin: LocalExternal::new(origin),
                 name: LocalExternal::new(name),
+                location: None,
+                navigator: None,
                 listeners: None,
                 wrapper: (),
             },

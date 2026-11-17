@@ -63,7 +63,7 @@ named property 的 getter 和 setter（`dataset.a`、`children.px`、`style.colo
 
 | 型別、函式 | 對應 Blink | 用途 |
 | --- | --- | --- |
-| `install` | `V8Window` 的 interface 物件、`V8PerIsolateData` 的 template | 把表上 exposed 在 window 的 interface 物件（`InterfaceDesc::exposed`）和 `DOMException` 裝到一個 window 的 realm 的 global 上：lazy data property（第一次讀時才做出來），不可列舉。isolate 的 DOM 在第一次裝時建 |
+| `install` | `V8Window` 的 interface 物件、`V8PerIsolateData` 的 template | 把表上 exposed 在 window 的 interface 物件（`InterfaceDesc::exposed`）和 `DOMException` 裝到一個 window 的 realm 的 global 上：lazy data property（第一次讀時才做出來），不可列舉。isolate 的 DOM 在第一次裝時建，同時記下它的 realm 的 global 是哪一種（一個 isolate 只有一種：window 的 engine 的或 worker 的）；template 只裝那種 global 有的成員（`Member::exposed`，worker 的 `performance` 沒有 `timing`） |
 | `install_machopo_dom` | runtime enabled features | global 上不可列舉的 `machopoDom`，`createDocument()` 建 isolate 的 DOM 的一份 HTML document（它的 wrapper 在操作前建好）；DOM 的 interface 物件也在它上面（`machopoDom.Event`，lazy）。測試的 realm（`tests/it/env.rs`，`bench.py calls` 的也是）裝它 |
 | `uncaught_exceptions` | （無） | 測試用：listener 和 timer 丟的例外裡，沒被 `error` 的 listener 取消、印出來的有幾次 |
 | `create_window_realm` | `LocalWindowProxy::CreateContext` | 一個 global 是新的 window 的 realm：context 的 global template 是 `Window` 的 template，global proxy 包住一個新的 document（給定的 URL）的新 `Window`（global proxy 是 API wrapper，`Object::Wrap` 得了；裡面的 global object 不是），表上的 interface 物件裝在它上面。要在 isolate 的某個 context 裡呼叫（template 是 isolate 的） |

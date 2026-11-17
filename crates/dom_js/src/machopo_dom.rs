@@ -12,7 +12,7 @@ use crate::templates::{self, string};
 /// Installs `machopoDom` on `global`: not enumerable, as an interface
 /// object. The isolate's DOM is made with the first.
 pub fn install_machopo_dom(scope: &mut v8::PinScope<'_, '_>, global: v8::Local<'_, v8::Object>) {
-    state::install(scope);
+    state::install(scope, templates::GlobalKind::Window);
     let next = v8::Object::new(scope);
     let create = v8::Function::builder(create_document)
         .length(0)

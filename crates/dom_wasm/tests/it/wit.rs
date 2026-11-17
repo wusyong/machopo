@@ -85,6 +85,8 @@ fn a_guest_gets_the_plain_members() {
             "Worker",
             "WorkerGlobalScope",
             "DedicatedWorkerGlobalScope",
+            "WorkerLocation",
+            "WorkerNavigator",
             "CSS",
             "MediaQueryList",
             "MediaQueryListEvent",

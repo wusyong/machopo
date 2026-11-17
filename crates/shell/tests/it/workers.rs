@@ -106,6 +106,30 @@ fn a_page_and_its_worker_talk() {
     );
 }
 
+/// A worker's time origin is when its page made it, not when its script
+/// came (300 ms later); its `navigator` says the page's user agent; its
+/// `location` is its script's URL.
+#[test]
+fn a_worker_s_time_origin_agent_and_location() {
+    assert_eq!(
+        report_served(
+            "const made = performance.timeOrigin + performance.now(); \
+             const w = new Worker('/slow.js'); \
+             w.onmessage = e => report([Math.abs(e.data[0] - made) < 150, \
+               e.data[1] === navigator.userAgent, e.data[2] === location.origin + '/slow.js'].join());",
+            |_| {
+                vec![(
+                    "/slow.js",
+                    js("postMessage([performance.timeOrigin, navigator.userAgent, location.href]);")
+                        .with_delay(Duration::from_millis(300)),
+                )]
+            },
+            &[],
+        ),
+        "true,true,true"
+    );
+}
+
 /// What the worker throws is an `error` at its `Worker`, its message and
 /// line; at the window too unless the `Worker`'s listener cancels it, its
 /// value null there (it comes without it).

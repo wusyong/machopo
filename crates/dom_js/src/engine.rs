@@ -59,7 +59,7 @@ impl V8Engine {
     pub fn new(settings: EngineSettings) -> Self {
         let mut data = V8PerIsolateData::new();
         // The isolate's DOM, made with the engine.
-        state::install(data.isolate());
+        state::install(data.isolate(), crate::templates::GlobalKind::Window);
         // What DevTools calls its nodes.
         bindings::devtools::set_subtypes(data.isolate(), Box::new(crate::devtools_page::subtype));
         let bootstrap = {

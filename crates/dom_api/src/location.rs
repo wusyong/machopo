@@ -1,7 +1,9 @@
 //! A window's `Location` (https://html.spec.whatwg.org/#the-location-interface;
 //! Blink's `Location`): its document's URL and its
 //! parts (`url`'s `quirks`, URL's API steps), each setter navigating to a
-//! copy of the URL changed so (HTML's Location-object navigate).
+//! copy of the URL changed so (HTML's Location-object navigate). A
+//! worker's (HTML's `WorkerLocation`) has the getters alone, of its
+//! global's URL.
 
 use dom::{FrameNavigation, Location, NodeRef};
 use elise::Gc;
@@ -10,15 +12,19 @@ use url::{Url, quirks};
 use crate::typed::{DomStr, OpFront};
 use crate::{ApiCx, ApiError, DomException, ExceptionName};
 
-/// The location's relevant document: its window's, if fully active.
+/// The location's relevant document: its window's, if fully active; none
+/// for a worker's.
 fn relevant_document<'gc>(cx: &ApiCx<'_, 'gc>, this: Gc<'gc, Location>) -> Option<NodeRef<'gc>> {
-    let document = cx.window_document(cx.location_window(this));
+    let document = cx.window_document(cx.location_window(this)?);
     crate::history::is_fully_active(cx, document).then_some(document)
 }
 
 /// The location's URL: its relevant document's, `about:blank` without one
-/// (or with one that doesn't parse).
+/// (or with one that doesn't parse); a worker's, its global's URL.
 pub(crate) fn url_of<'gc>(cx: &ApiCx<'_, 'gc>, this: Gc<'gc, Location>) -> Url {
+    if let Some(global) = cx.location_worker(this) {
+        return cx.worker_global_url(global).clone();
+    }
     relevant_document(cx, this)
         .and_then(|document| crate::history::document_url(cx, document))
         .unwrap_or_else(blank)

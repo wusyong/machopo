@@ -30,6 +30,15 @@ pub(crate) fn window_performance<'gc>(
     Ok(performance)
 }
 
+/// A worker's global's `performance` (HR-Time's), the same each time; it
+/// has no navigation entry.
+pub(crate) fn worker_performance<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, dom::WorkerGlobalScope>,
+) -> Result<Gc<'gc, EventTargetImpl>, ApiError> {
+    Ok(cx.context_performance(cx.worker_global_context(this)))
+}
+
 /// HR-Time's "current high resolution time" of `context`: the time since
 /// its time origin, coarsened.
 fn context_now<'gc>(cx: &ApiCx<'_, 'gc>, context: Gc<'gc, ExecutionContext>) -> f64 {
@@ -187,15 +196,15 @@ fn dom_error(name: ExceptionName, message: String) -> ApiError {
 }
 
 /// The `PerformanceMark` constructor's steps, for a mark of `context`'s: a
-/// timing name is a `SyntaxError`; a given `startTime` (not negative) or
-/// now.
+/// timing name is a `SyntaxError` in a window's (a worker has no
+/// `performance.timing`); a given `startTime` (not negative) or now.
 fn make_mark<'gc>(
     cx: &ApiCx<'_, 'gc>,
     context: Gc<'gc, ExecutionContext>,
     name: &str,
     options: &PerformanceMarkOptions,
 ) -> Result<Gc<'gc, PerformanceEntry>, ApiError> {
-    if TIMING_NAMES.contains(&name) {
+    if TIMING_NAMES.contains(&name) && cx.context_worker_global(context).is_none() {
         return Err(dom_error(
             ExceptionName::Syntax,
             format!(
@@ -267,8 +276,9 @@ pub(crate) fn clear_measures<'gc>(
 
 /// User Timing's "convert a mark to a timestamp": a time as it is (not
 /// negative); a timing name `performance.timing`'s time of it, less
-/// `navigationStart` (0, not happened yet, an `InvalidAccessError`); else
-/// the latest mark of that name, or a `SyntaxError`.
+/// `navigationStart` (0, not happened yet, an `InvalidAccessError`), or in
+/// a worker's (no `performance.timing`) a `TypeError`, even with a mark of
+/// that name; else the latest mark of that name, or a `SyntaxError`.
 fn mark_time<'gc>(
     cx: &ApiCx<'_, 'gc>,
     performance: Gc<'gc, EventTargetImpl>,
@@ -281,11 +291,16 @@ fn mark_time<'gc>(
         StringOrNumber::Number(time) => return Ok(*time),
         StringOrNumber::String(name) => name.as_str(),
     };
+    let context = cx.performance_context(performance);
+    if TIMING_NAMES.contains(&name) && cx.context_worker_global(context).is_some() {
+        return Err(ApiError::type_error(format!(
+            "'{name}' is a PerformanceTiming attribute's name, a window's alone"
+        )));
+    }
     if name == "navigationStart" {
         return Ok(0.0);
     }
     if TIMING_NAMES.contains(&name) {
-        let context = cx.performance_context(performance);
         return match (
             legacy_time(cx, context, name),
             legacy_time(cx, context, "navigationStart"),

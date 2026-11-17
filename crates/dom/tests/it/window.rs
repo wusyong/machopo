@@ -16,7 +16,7 @@ fn a_window_and_its_document_know_each_other() {
         // The location: made once, its window's.
         let location = cx.window_location(window);
         assert!(elise::Gc::ptr_eq(cx.window_location(window), location));
-        assert!(elise::Gc::ptr_eq(cx.location_window(location), window));
+        assert!(elise::Gc::ptr_eq(cx.location_window(location).unwrap(), window));
         // A document's template document, made after, keeps the window.
         cx.template_document(document);
         assert!(elise::Gc::ptr_eq(cx.window_of(document).unwrap(), window));

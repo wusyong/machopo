@@ -273,6 +273,9 @@ crate::declare! {
         #[front]
         attribute onerror: EventHandler, get = handlers::worker_global_handler::<{ event_type::ERROR }>, set = handlers::set_worker_global_handler::<_, { event_type::ERROR }>;
         attribute crypto: Crypto, get = crypto::worker_crypto;
+        attribute location: WorkerLocation, get = worker::location;
+        attribute navigator: WorkerNavigator, get = worker::navigator;
+        attribute performance: Performance, get = performance::worker_performance;
         #[front]
         method setTimeout(handler: TimerHandler, timeout?: i32, arguments?: Rest) -> i32 =
             timer::worker_set_timeout;
@@ -299,6 +302,41 @@ crate::declare! {
         attribute onmessage: EventHandler, get = handlers::worker_global_handler::<{ event_type::MESSAGE }>, set = handlers::set_worker_global_handler::<_, { event_type::MESSAGE }>;
         #[front]
         attribute onmessageerror: EventHandler, get = handlers::worker_global_handler::<{ event_type::MESSAGEERROR }>, set = handlers::set_worker_global_handler::<_, { event_type::MESSAGEERROR }>;
+    }
+
+    // HTML's `WorkerLocation`: a worker's global's URL and its parts, read
+    // only (`dom::Location`, of a worker's global).
+    #[exposed(Worker)]
+    interface WorkerLocation [type = dom::Location] {
+        attribute href: DomString, get = location::href;
+        attribute origin: DomString, get = location::origin;
+        attribute protocol: DomString, get = location::protocol;
+        attribute host: DomString, get = location::host;
+        attribute hostname: DomString, get = location::hostname;
+        attribute port: DomString, get = location::port;
+        attribute pathname: DomString, get = location::pathname;
+        attribute search: DomString, get = location::search;
+        attribute hash: DomString, get = location::hash;
+        method toString() -> DomString = location::href;
+    }
+
+    // HTML's `WorkerNavigator` (`dom::Navigator`, of a worker's global):
+    // what a window's has of `NavigatorID`, `NavigatorLanguage`,
+    // `NavigatorOnLine` and `NavigatorConcurrentHardware` that a worker has
+    // too, and Network Information's `connection`.
+    #[exposed(Worker)]
+    interface WorkerNavigator [type = dom::Navigator] {
+        attribute appCodeName: DomString, get = navigator::app_code_name;
+        attribute appName: DomString, get = navigator::app_name;
+        attribute appVersion: DomString, get = navigator::app_version;
+        attribute platform: DomString, get = navigator::platform;
+        attribute product: DomString, get = navigator::product;
+        attribute userAgent: DomString, get = navigator::user_agent;
+        attribute language: DomString, get = navigator::language;
+        attribute languages: Strings, get = navigator::languages;
+        attribute onLine: bool, get = navigator::on_line;
+        attribute hardwareConcurrency: u32, get = navigator::hardware_concurrency;
+        attribute connection: NetworkInformation, get = navigator::connection;
     }
 
     // CSSOM's: JS's only (a wasm guest has no namespaces).
@@ -1464,8 +1502,9 @@ crate::declare! {
         method release() -> PromiseOfUndefined = wake_lock::release;
     }
 
-    // HR-Time's, a window's: an event target of its own, on its document's
-    // timeline; Performance Timeline's and User Timing's partials.
+    // HR-Time's, a window's or a worker's: an event target of its own, on
+    // its document's timeline or its worker's; Performance Timeline's and
+    // User Timing's partials.
     #[exposed(Window, Worker)]
     interface Performance : EventTarget [type = PerformanceObject] {
         method now() -> f64 = performance::now;
@@ -1477,8 +1516,11 @@ crate::declare! {
         method clearMarks(markName?: OptionalString) = performance::clear_marks;
         method measure(measureName: DomString, startOrMeasureOptions?: MeasureStart, endMark?: OptionalString) -> PerformanceMeasure = performance::measure;
         method clearMeasures(measureName?: OptionalString) = performance::clear_measures;
-        // Navigation Timing's, the same each time.
+        // Navigation Timing's, the same each time: a document's, so a
+        // window's alone.
+        #[exposed(Window)]
         attribute timing: PerformanceTiming, get = performance::timing;
+        #[exposed(Window)]
         attribute navigation: PerformanceNavigation, get = performance::navigation;
     }
 

@@ -568,22 +568,32 @@ pub trait ScriptEngine: ParserHost {
     fn devtools_page(&mut self) -> Box<dyn DevToolsPage + '_>;
 }
 
+/// What a dedicated worker's global is made with (Blink's
+/// `GlobalScopeCreationParams`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkerGlobalParams {
+    /// Its URL: its script's response's.
+    pub url: url::Url,
+    pub origin: url::Origin,
+    pub name: String,
+    /// Its time origin: when its page made it (`new Worker()`), as
+    /// Blink's `WorkerThread` takes the time as it is made.
+    pub time_origin: std::time::Instant,
+    /// The browser's user agent string, and whether automation controls it
+    /// (its `navigator`'s, as a window's are the host's: `Dom::set_agent`).
+    pub user_agent: String,
+    pub webdriver: bool,
+}
+
 /// A dedicated worker's engine, on the worker's thread (Blink's
 /// `WorkerOrWorkletScriptController`, of the worker's global): its realm,
 /// whose global is a worker's global, and what runs its script and its
 /// tasks. The worker's thread's loop drives it, as a frame's drives a
 /// `ScriptEngine`, one task at a time.
 pub trait WorkerEngine {
-    /// Its realm, made: its global a dedicated worker's global of `url`
-    /// (its script's response's), `origin` and `name`, what it sends to its
-    /// `Worker` going to `host`.
-    fn create_global(
-        &mut self,
-        url: &url::Url,
-        origin: url::Origin,
-        name: &str,
-        host: Box<dyn crate::WorkerGlobalHost>,
-    );
+    /// Its realm, made: its global a dedicated worker's global of `params`,
+    /// what it sends to its `Worker` going to `host`.
+    fn create_global(&mut self, params: WorkerGlobalParams, host: Box<dyn crate::WorkerGlobalHost>);
 
     /// Runs its classic script (its main script's), what it throws reported
     /// at its global (HTML's "run a classic script"); a microtask

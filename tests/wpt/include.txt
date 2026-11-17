@@ -67,15 +67,12 @@ intersection-observer/
 
 # Dedicated workers. Shared and service workers, module workers and
 # workers made in a worker don't run (`disabled`); what a dedicated worker
-# doesn't have yet (`location`, `navigator`, `fetch()`, XHR, a `MessagePort`
-# to or from it) fails.
+# doesn't have yet (`fetch()`, XHR, a `MessagePort` to or from it) fails.
 workers/
 
 # The navigator's Network Information, Geolocation and Screen Wake Lock.
 # Most of the last two's tests set the permission first through
-# testdriver's `set_permission`, which machopodriver doesn't have; their
-# workers' variants, `navigator` in a worker, which machopo's workers don't
-# have yet.
+# testdriver's `set_permission`, which machopodriver doesn't have.
 netinfo/
 geolocation/
 screen-wake-lock/
@@ -1310,9 +1307,8 @@ performance-timeline/
 # and `performance.navigation`.
 navigation-timing/
 
-# User Timing. The files of `user-timing/` that run
-# in a window over HTTP (the `.worker.js` ones need `performance` in a
-# worker, which machopo's workers don't have yet).
+# User Timing. The files of `user-timing/` that run over HTTP, in a window
+# or a dedicated worker.
 user-timing/buffered-flag.any.js
 user-timing/case-sensitivity.any.js
 user-timing/clearMarks.html
@@ -1326,6 +1322,7 @@ user-timing/clear_one_measure.any.js
 user-timing/entry_type.any.js
 user-timing/idlharness.any.js
 user-timing/invoke_with_timing_attributes.html
+user-timing/invoke_with_timing_attributes.worker.js
 user-timing/invoke_without_parameter.html
 user-timing/mark-entry-constructor.any.js
 user-timing/mark-errors.any.js
@@ -1345,6 +1342,7 @@ user-timing/measure_exceptions_navigation_timing.html
 user-timing/measure_navigation_timing.html
 user-timing/measure_syntax_err.any.js
 user-timing/measures.html
+user-timing/performance-measure-invalid.worker.js
 user-timing/structured-serialize-detail.any.js
 user-timing/supported-usertiming-types.any.js
 user-timing/user-timing-tojson.html

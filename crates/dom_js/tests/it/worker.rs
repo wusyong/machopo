@@ -68,10 +68,26 @@ fn script(sent: &Rc<RefCell<Sent>>, url: &str, source: &str, muted: bool) {
 /// A worker's engine, its global of `https://example.test/w.js`, named
 /// `fib`, and what it sends.
 fn worker() -> (V8WorkerEngine, Rc<RefCell<Sent>>) {
+    worker_of("https://example.test/w.js", Instant::now())
+}
+
+/// A worker's engine, its global of `url`, named `fib`, its time origin
+/// `time_origin`, and what it sends.
+fn worker_of(url: &str, time_origin: Instant) -> (V8WorkerEngine, Rc<RefCell<Sent>>) {
     let mut engine = V8WorkerEngine::new(EngineSettings { web_tests: true });
     let sent = Rc::new(RefCell::new(Sent::default()));
-    let url = url::Url::parse("https://example.test/w.js").unwrap();
-    engine.create_global(&url, url.origin(), "fib", Box::new(Host(sent.clone())));
+    let url = url::Url::parse(url).unwrap();
+    engine.create_global(
+        dom_api::WorkerGlobalParams {
+            url: url.clone(),
+            origin: url.origin(),
+            name: "fib".to_owned(),
+            time_origin,
+            user_agent: "Machopo/1".to_owned(),
+            webdriver: false,
+        },
+        Box::new(Host(sent.clone())),
+    );
     (engine, sent)
 }
 
@@ -140,6 +156,129 @@ fn a_worker_s_name_is_replaceable() {
             "[name, (name = 'other', name), typeof Object.getOwnPropertyDescriptor(self, 'name').value].join()"
         ),
         "fib,other,string"
+    );
+}
+
+/// `location` is a `WorkerLocation` of its URL, the same each time, read
+/// only (no setters, no `assign()`); `toString()` its URL.
+#[test]
+fn a_worker_s_location_is_its_url() {
+    let (mut engine, _) = worker_of("https://example.test:8443/dir/w.js?q=1#h", Instant::now());
+    assert_eq!(
+        result(
+            &mut engine,
+            "[location instanceof WorkerLocation, location === self.location, location.href, \
+              location.origin, location.protocol, location.host, location.hostname, location.port, \
+              location.pathname, location.search, location.hash, String(location), \
+              typeof location.assign, (location.href = 'https://other.test/', location.href), \
+              typeof Location].join(' | ')"
+        ),
+        "true | true | https://example.test:8443/dir/w.js?q=1#h | https://example.test:8443 | \
+         https: | example.test:8443 | example.test | 8443 | /dir/w.js | ?q=1 | #h | \
+         https://example.test:8443/dir/w.js?q=1#h | undefined | \
+         https://example.test:8443/dir/w.js?q=1#h | undefined"
+    );
+}
+
+/// `navigator` is a `WorkerNavigator`, the same each time: the browser's
+/// user agent, a worker's members alone (no `vendor`, no `geolocation`),
+/// its own `connection`.
+#[test]
+fn a_worker_s_navigator_is_a_worker_navigator() {
+    let (mut engine, _) = worker();
+    assert_eq!(
+        result(
+            &mut engine,
+            "[navigator instanceof WorkerNavigator, navigator === self.navigator, navigator.userAgent, \
+              navigator.onLine, navigator.language, navigator.hardwareConcurrency > 0, \
+              'vendor' in navigator, 'geolocation' in navigator, \
+              navigator.connection instanceof NetworkInformation, \
+              navigator.connection === navigator.connection, typeof Navigator].join(' | ')"
+        ),
+        "true | true | Machopo/1 | true | en-US | true | false | false | true | true | undefined"
+    );
+}
+
+/// `performance` counts from its time origin (when its page made it, given
+/// at its start); marks and an observer work as a window's do.
+#[test]
+fn a_worker_s_performance_counts_from_its_time_origin() {
+    let made = Instant::now() - Duration::from_millis(600);
+    let (mut engine, _) = worker_of("https://example.test/w.js", made);
+    assert_eq!(
+        result(
+            &mut engine,
+            "[performance === self.performance, performance.now() >= 600, \
+              Math.abs(performance.timeOrigin + performance.now() - Date.now()) < 50, \
+              performance.mark('a').name, performance.getEntriesByType('mark').length].join()"
+        ),
+        "true,true,true,a,1"
+    );
+    run(
+        &mut engine,
+        "globalThis.seen = []; new PerformanceObserver(list => \
+           seen.push(...list.getEntries().map(e => e.name))).observe({ type: 'mark' }); \
+         performance.mark('b');",
+    );
+    run_tasks_until(&mut engine, |engine| result(engine, "seen.length") == "1");
+    assert_eq!(result(&mut engine, "seen.join()"), "b");
+}
+
+/// A worker has no `performance.timing`: its names are marks' as any
+/// other (a window's are a `SyntaxError`), and measuring from one is a
+/// `TypeError`, even with a mark of that name.
+#[test]
+fn a_worker_s_marks_may_have_timing_names() {
+    let (mut engine, _) = worker();
+    assert_eq!(
+        result(
+            &mut engine,
+            "[performance.mark('navigationStart').name, new PerformanceMark('domComplete').name, \
+              ...['navigationStart', 'domComplete'].map(name => { \
+                try { performance.measure('m', name); return 'measured'; } \
+                catch (e) { return e.constructor.name; } \
+              })].join()"
+        ),
+        "navigationStart,domComplete,TypeError,TypeError"
+    );
+}
+
+/// A member a window's alone has, of an interface a worker has too
+/// (WebIDL's `[Exposed=Window]` on a member: `Performance.timing`), isn't
+/// there: not on its prototype nor its interface object.
+#[test]
+fn a_worker_s_realm_has_only_the_members_exposed_there() {
+    let (mut engine, _) = worker();
+    let mut missing: Vec<(&str, &str)> = dom_api::INTERFACES
+        .iter()
+        .filter(|interface| interface.exposed.in_dedicated_worker())
+        .flat_map(|interface| {
+            interface
+                .members
+                .iter()
+                .filter(|member| !member.exposed.in_dedicated_worker())
+                .map(|member| (interface.name, member.name))
+        })
+        .collect();
+    missing.dedup();
+    assert!(missing.contains(&("Performance", "navigation")));
+    for (interface, member) in missing {
+        assert_eq!(
+            result(
+                &mut engine,
+                &format!("'{member}' in {interface}.prototype || '{member}' in {interface}")
+            ),
+            "false",
+            "{interface}.{member}"
+        );
+    }
+    assert_eq!(
+        result(
+            &mut engine,
+            "[typeof performance.timing, typeof performance.navigation, 'now' in performance, \
+              typeof PerformanceTiming].join()"
+        ),
+        "undefined,undefined,true,undefined"
     );
 }
 
@@ -342,6 +481,25 @@ fn a_worker_s_script_that_doesn_t_parse_runs_nothing() {
     assert!(sent.borrow().errors.is_empty());
     assert!(engine.run_classic_script(&script("throw 1;")));
     assert_eq!(sent.borrow().errors.len(), 1);
+}
+
+/// What its `onerror` throws while it reports another goes to its host
+/// too, after that one (HTML's "report an exception": no event for it,
+/// its global being in error reporting mode, but its `Worker` gets it).
+#[test]
+fn what_a_worker_s_onerror_throws_goes_to_its_host() {
+    let (mut engine, sent) = worker();
+    run(
+        &mut engine,
+        "onerror = () => { throw new Error('in onerror'); }; throw new Error('first');",
+    );
+    let messages: Vec<_> = sent
+        .borrow()
+        .errors
+        .iter()
+        .map(|error| error.message.clone())
+        .collect();
+    assert_eq!(messages, ["Uncaught Error: in onerror", "Uncaught Error: first"]);
 }
 
 /// `importScripts()` runs what its host fetched, in turn, in its realm,

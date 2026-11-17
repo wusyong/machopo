@@ -1429,8 +1429,9 @@ fn report(
         None => Reported::NotCanceled,
     };
     // A worker's, not canceled: its `Worker`'s too (HTML's "report an
-    // exception" of a worker's global).
-    if reported == Reported::NotCanceled
+    // exception" of a worker's global); one thrown while its global
+    // reported another (by its `onerror`) too, its event not fired there.
+    if reported != Reported::Canceled
         && matches!(at, Some(dom::GlobalRoot::WorkerGlobal(_)))
         && let Some(host) = scope.state().0.caches.worker_global_host.as_deref()
     {

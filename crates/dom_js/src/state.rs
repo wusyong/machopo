@@ -17,6 +17,7 @@ use dom::Dom;
 
 use crate::named::NamedCalls;
 use crate::strings::StringCache;
+use crate::templates::GlobalKind;
 
 /// How far the DOM's used bytes move before V8 is told (cppgc tells it as
 /// its allocation buffers fill).
@@ -37,6 +38,10 @@ pub(crate) struct State {
     /// What a member's operation reads (a borrow of it alone, beside the
     /// DOM's: `info_front::InfoOp`).
     pub(crate) caches: Caches,
+    /// The kind of global the isolate's realms have, one for them all (a
+    /// window's engine's or a worker's): which members its templates have
+    /// (`Member::exposed`).
+    pub(crate) kind: GlobalKind,
     /// Each interface's template, by its index in `INTERFACES`, and
     /// `DOMException`'s after them: made at the first use.
     pub(crate) templates: Vec<Option<v8::Global<v8::FunctionTemplate>>>,
@@ -219,13 +224,16 @@ pub(crate) fn heap_options(given: Option<&str>) -> elise::HeapOptions {
     options
 }
 
-/// Makes the isolate's DOM and registers it with V8, unless it has it.
+/// Makes the isolate's DOM and registers it with V8, unless it has it, for
+/// realms whose global is of `kind`.
 ///
 /// # Panics
 ///
-/// If the isolate has another embedder state.
-pub(crate) fn install(isolate: &mut v8::Isolate) {
-    if bindings::isolate_state_mut::<State>(isolate).is_some() {
+/// If the isolate has another embedder state, or realms of another kind of
+/// global.
+pub(crate) fn install(isolate: &mut v8::Isolate, kind: GlobalKind) {
+    if let Some(state) = bindings::isolate_state_mut::<State>(isolate) {
+        assert_eq!(state.kind, kind, "an isolate's realms' globals of one kind");
         return;
     }
     // And `DOMException`'s and `QuotaExceededError`'s.
@@ -238,6 +246,7 @@ pub(crate) fn install(isolate: &mut v8::Isolate) {
                 bindings::gc_platform(),
             ),
             reported: 0,
+            kind,
             caches: Caches {
                 strings: StringCache::new(),
                 names: Vec::new(),

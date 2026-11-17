@@ -6822,9 +6822,9 @@ impl<I: Interface> RetType for FrozenArray<I> {
 /// the callback's, which its caller enters).
 pub fn realm_document<'gc>(cx: &dom::Cx<'_, 'gc>, object: ObjectRef<'gc>) -> Option<NodeRef<'gc>> {
     let window = match object {
-        ObjectRef::Location(location) => Some(cx.location_window(location)),
+        ObjectRef::Location(location) => cx.location_window(location),
         ObjectRef::History(history) => Some(cx.history_window(history)),
-        ObjectRef::Navigator(navigator) => Some(cx.navigator_window(navigator)),
+        ObjectRef::Navigator(navigator) => cx.navigator_window(navigator),
         ObjectRef::UserActivation(activation) => Some(cx.user_activation_window(activation)),
         ObjectRef::Scheduling(scheduling) => Some(cx.scheduling_window(scheduling)),
         ObjectRef::Geolocation(geolocation) => Some(cx.geolocation_window(geolocation)),
@@ -6976,8 +6976,14 @@ pub fn interface_of<'gc>(cx: &ApiCx<'_, 'gc>, object: ObjectRef<'gc>) -> usize {
         ObjectRef::WorkerGlobal(_) => {
             const { crate::declare::interface_index("DedicatedWorkerGlobalScope") }
         }
+        ObjectRef::Location(location) if cx.location_worker(location).is_some() => {
+            const { crate::declare::interface_index("WorkerLocation") }
+        }
         ObjectRef::Location(_) => const { crate::declare::interface_index("Location") },
         ObjectRef::History(_) => const { crate::declare::interface_index("History") },
+        ObjectRef::Navigator(navigator) if cx.navigator_window(navigator).is_none() => {
+            const { crate::declare::interface_index("WorkerNavigator") }
+        }
         ObjectRef::Navigator(_) => const { crate::declare::interface_index("Navigator") },
         ObjectRef::Url(_) => const { crate::declare::interface_index("URL") },
         ObjectRef::UrlSearchParams(_) => {

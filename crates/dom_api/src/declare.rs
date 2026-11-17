@@ -167,6 +167,10 @@ pub struct Member {
     /// anonymous, what its `entries`, `keys`, `values`, `forEach` and
     /// `@@iterator` call each step.
     pub pairs: bool,
+    /// The globals whose realms have it: its interface's, or fewer
+    /// (WebIDL's `[Exposed]` on a member, `#[exposed(..)]` on it in the
+    /// table: `Performance.timing`, a window's alone).
+    pub exposed: Exposed,
 }
 
 /// An observable array attribute's backing list's operation (WebIDL's

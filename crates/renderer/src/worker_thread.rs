@@ -108,6 +108,9 @@ pub(crate) struct Workers {
     /// be made.
     engine: Option<fn(EngineSettings) -> Box<dyn WorkerEngine>>,
     settings: EngineSettings,
+    /// The browser's user agent string and whether automation controls it,
+    /// for each worker's `navigator` (as the page's is told).
+    agent: Agent,
     scheduler: Arc<MainThreadScheduler>,
     /// The browser's end: told of each worker as it starts and goes; what
     /// a worker's thread asks of it goes there too.
@@ -124,12 +127,14 @@ impl Workers {
     pub(crate) fn new(
         engine: Option<fn(EngineSettings) -> Box<dyn WorkerEngine>>,
         settings: EngineSettings,
+        agent: Agent,
         scheduler: Arc<MainThreadScheduler>,
         to_browser: BrowserSender<RendererHostMsg>,
     ) -> Self {
         Self {
             engine,
             settings,
+            agent,
             scheduler,
             to_browser,
             last_id: Cell::new(0),
@@ -205,17 +210,22 @@ impl Workers {
         let (tasks, from_owner) = std::sync::mpsc::channel();
         let shared = Arc::new(Shared::default());
         let request = script_request(&start);
+        // Its time origin (Blink's `WorkerThread` takes it as it is made).
+        let time_origin = std::time::Instant::now();
         let thread = std::thread::Builder::new()
             .name("DedicatedWorker thread".into())
             .spawn({
                 let shared = shared.clone();
                 let scheduler = self.scheduler.clone();
                 let settings = self.settings;
+                let agent = self.agent.clone();
                 let to_browser = self.to_browser.clone();
                 move || {
                     run(WorkerThread {
                         id,
                         start,
+                        time_origin,
+                        agent,
                         make: engine,
                         settings,
                         from_owner,
@@ -408,11 +418,21 @@ impl dom_api::WorkerGlobalHost for GlobalHost {
     }
 }
 
+/// The browser's user agent string and whether automation controls it
+/// (WebDriver's webdriver-active flag): what a worker's `navigator` says.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Agent {
+    pub(crate) user_agent: String,
+    pub(crate) webdriver: bool,
+}
+
 /// What a worker's thread starts with (Blink's `DedicatedWorkerThread`'s
 /// startup data).
 struct WorkerThread {
     id: u64,
     start: WorkerStart,
+    time_origin: std::time::Instant,
+    agent: Agent,
     make: fn(EngineSettings) -> Box<dyn WorkerEngine>,
     settings: EngineSettings,
     from_owner: Receiver<WorkerTask>,
@@ -429,6 +449,8 @@ fn run(thread: WorkerThread) {
     let WorkerThread {
         id,
         start,
+        time_origin,
+        agent,
         make,
         settings,
         from_owner,
@@ -497,7 +519,17 @@ fn run(thread: WorkerThread) {
         closing: closing.clone(),
         shared: shared.clone(),
     };
-    engine.create_global(&url, origin, &start.name, Box::new(host));
+    engine.create_global(
+        dom_api::WorkerGlobalParams {
+            url: url.clone(),
+            origin,
+            name: start.name.clone(),
+            time_origin,
+            user_agent: agent.user_agent,
+            webdriver: agent.webdriver,
+        },
+        Box::new(host),
+    );
     let parsed = engine.run_classic_script(&ClassicScript {
         source: &source,
         url: url.as_str(),
@@ -617,9 +649,7 @@ mod tests {
     impl WorkerEngine for Slow {
         fn create_global(
             &mut self,
-            _: &url::Url,
-            _: url::Origin,
-            _: &str,
+            _: dom_api::WorkerGlobalParams,
             _: Box<dyn dom_api::WorkerGlobalHost>,
         ) {
         }
@@ -667,6 +697,7 @@ mod tests {
         let workers = Rc::new(Workers::new(
             Some(slow),
             EngineSettings { web_tests: false },
+            Agent::default(),
             Arc::new(MainThreadScheduler::default()),
             crossbeam_channel::unbounded().0,
         ));

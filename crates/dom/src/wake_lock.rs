@@ -35,7 +35,7 @@ impl<'gc> Cx<'_, 'gc> {
         let wake_lock = self.gc.alloc_in(
             &sites::OTHER,
             WakeLockInit {
-                window: Some(self.navigator_window(navigator)),
+                window: self.navigator_window(navigator),
                 sentinels: None,
                 wrapper: (),
             },

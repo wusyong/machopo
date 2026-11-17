@@ -138,8 +138,8 @@ pub struct EventTargetImpl {
     pub(crate) performance: Member<crate::PerformanceData>,
     /// A `WakeLockSentinel`'s data (`wake_lock`).
     pub(crate) wake_lock: Member<crate::WakeLockSentinelData>,
-    /// A navigator's `connection`'s window (`navigator`).
-    pub(crate) connection: Member<Window>,
+    /// A navigator's `connection`'s navigator (`navigator`).
+    pub(crate) connection: Member<crate::Navigator>,
     /// An `AbortSignal`'s state (`abort`).
     pub(crate) abort: Member<crate::AbortSignalData>,
     /// A `Worker`'s data (`worker`).

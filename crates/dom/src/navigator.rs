@@ -1,4 +1,5 @@
-//! A window's `Navigator` (HTML's, Blink's `Navigator`) and its
+//! A window's `Navigator` (HTML's, Blink's `Navigator`), or a worker's
+//! global's (HTML's `WorkerNavigator`, the same type), and its
 //! `UserActivation` (HTML's `NavigatorUserActivation`): the same object
 //! each time, each knowing its window; what they answer is the window's
 //! (its last activation) or the host's. It keeps the objects of the specs
@@ -10,11 +11,13 @@
 
 use elise::{Gc, GcObject, JsEdge, Member};
 
-use crate::{Cx, EventTargetImpl, Window, sites};
+use crate::{Cx, EventTargetImpl, Window, WorkerGlobalScope, sites};
 
 #[derive(GcObject)]
 pub struct Navigator {
+    /// Its window; none for a worker's global's (`worker`).
     window: Member<Window>,
+    worker: Member<WorkerGlobalScope>,
     /// Its `userActivation`, `geolocation`, `wakeLock`, `scheduling` and
     /// `connection`, once asked for.
     user_activation: Member<UserActivation>,
@@ -69,6 +72,7 @@ impl<'gc> Cx<'_, 'gc> {
             &sites::OTHER,
             NavigatorInit {
                 window: Some(window),
+                worker: None,
                 user_activation: None,
                 geolocation: None,
                 wake_lock: None,
@@ -81,8 +85,40 @@ impl<'gc> Cx<'_, 'gc> {
         navigator
     }
 
-    pub fn navigator_window(&self, navigator: Gc<'gc, Navigator>) -> Gc<'gc, Window> {
-        navigator.window.get(self.gc).expect("a navigator's window")
+    /// `global`'s `WorkerNavigator`, the same each time.
+    pub fn worker_navigator(&self, global: Gc<'gc, WorkerGlobalScope>) -> Gc<'gc, Navigator> {
+        if let Some(navigator) = global.navigator.get(self.gc) {
+            return navigator;
+        }
+        let navigator = self.gc.alloc_in(
+            &sites::OTHER,
+            NavigatorInit {
+                window: None,
+                worker: Some(global),
+                user_activation: None,
+                geolocation: None,
+                wake_lock: None,
+                scheduling: None,
+                connection: None,
+                wrapper: (),
+            },
+        );
+        global.navigator.set(self.gc, Some(navigator));
+        navigator
+    }
+
+    /// The window whose navigator `navigator` is; none for a worker's.
+    pub fn navigator_window(&self, navigator: Gc<'gc, Navigator>) -> Option<Gc<'gc, Window>> {
+        navigator.window.get(self.gc)
+    }
+
+    /// The execution context of the realm `navigator` is of.
+    fn navigator_context(&self, navigator: Gc<'gc, Navigator>) -> Gc<'gc, crate::ExecutionContext> {
+        match (navigator.window.get(self.gc), navigator.worker.get(self.gc)) {
+            (Some(window), _) => self.window_context(window),
+            (None, Some(global)) => self.worker_global_context(global),
+            (None, None) => unreachable!("a navigator is a window's or a worker's"),
+        }
     }
 
     /// `navigator`'s `userActivation`, the same each time.
@@ -135,15 +171,14 @@ impl<'gc> Cx<'_, 'gc> {
     }
 
     /// `navigator`'s `connection`, the same each time: an event target of
-    /// its window's.
+    /// its realm's.
     pub fn navigator_connection(&self, navigator: Gc<'gc, Navigator>) -> Gc<'gc, EventTargetImpl> {
         if let Some(connection) = navigator.connection.get(self.gc) {
             return connection;
         }
         let connection = self.create_event_target();
-        connection
-            .connection
-            .set(self.gc, navigator.window.get(self.gc));
+        self.set_event_target_context(connection, Some(self.navigator_context(navigator)));
+        connection.connection.set(self.gc, Some(navigator));
         navigator.connection.set(self.gc, Some(connection));
         connection
     }
@@ -153,12 +188,15 @@ impl<'gc> Cx<'_, 'gc> {
     }
 
     /// The window whose navigator's `connection` `target` is; none for
-    /// another target.
+    /// another target, or a worker's.
     pub fn network_information_window(
         &self,
         target: Gc<'gc, EventTargetImpl>,
     ) -> Option<Gc<'gc, Window>> {
-        target.connection.get(self.gc)
+        target
+            .connection
+            .get(self.gc)
+            .and_then(|navigator| navigator.window.get(self.gc))
     }
 
     pub(crate) fn navigator_wrapper_edge(&self, navigator: Gc<'gc, Navigator>) -> &'gc JsEdge {

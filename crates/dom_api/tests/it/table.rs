@@ -28,6 +28,8 @@ fn interfaces_have_their_parents_and_kinds_parents_first() {
             "Worker",
             "WorkerGlobalScope",
             "DedicatedWorkerGlobalScope",
+            "WorkerLocation",
+            "WorkerNavigator",
             "CSS",
             "MediaQueryList",
             "MediaQueryListEvent",
@@ -429,17 +431,19 @@ fn interfaces_have_their_parents_and_kinds_parents_first() {
                 | "Worker"
                 | "WorkerGlobalScope"
                 | "DedicatedWorkerGlobalScope"
+                | "WorkerLocation"
+                | "WorkerNavigator"
         );
         assert_eq!(desc.node, node, "{}", desc.name);
         assert!(node || desc.kinds.is_empty(), "{}", desc.name);
     }
 }
 
-/// An interface accepts its own kinds and its descendants'.
 /// Each interface in the globals WebIDL's `[Exposed]` names: every one in a
-/// window's but a worker's globals' own; a worker's, those the specs' IDL
-/// exposes in `Worker` too (`*` included), none of a document's;
-/// `DedicatedWorkerGlobalScope` in a dedicated worker's alone.
+/// window's but a worker's globals', locations' and navigators' own; a
+/// worker's, those the specs' IDL exposes in `Worker` too (`*` included),
+/// none of a document's; `DedicatedWorkerGlobalScope` in a dedicated
+/// worker's alone.
 #[test]
 fn interfaces_are_exposed_in_their_globals() {
     let mut in_workers: Vec<_> = INTERFACES
@@ -490,9 +494,12 @@ fn interfaces_are_exposed_in_their_globals() {
             "URLSearchParams",
             "Worker",
             "WorkerGlobalScope",
+            "WorkerLocation",
+            "WorkerNavigator",
         ]
     );
-    // Every one in a window's but a worker's globals' own.
+    // Every one in a window's but a worker's globals' own, its location's
+    // and its navigator's.
     let not_in_windows: Vec<_> = INTERFACES
         .iter()
         .filter(|desc| !desc.exposed.window)
@@ -500,7 +507,12 @@ fn interfaces_are_exposed_in_their_globals() {
         .collect();
     assert_eq!(
         not_in_windows,
-        ["WorkerGlobalScope", "DedicatedWorkerGlobalScope"]
+        [
+            "WorkerGlobalScope",
+            "DedicatedWorkerGlobalScope",
+            "WorkerLocation",
+            "WorkerNavigator"
+        ]
     );
     let dedicated_only: Vec<_> = INTERFACES
         .iter()
@@ -512,6 +524,36 @@ fn interfaces_are_exposed_in_their_globals() {
     assert!(node.window && !node.in_dedicated_worker());
 }
 
+/// Each member in its interface's globals but those whose IDL exposes it
+/// in fewer (`[Exposed=Window]` on a member: Navigation Timing's, of a
+/// document), and in none its interface isn't.
+#[test]
+fn members_are_exposed_in_their_interface_s_globals_or_fewer() {
+    let mut fewer = Vec::new();
+    for desc in INTERFACES {
+        for member in desc.members {
+            let (of, its) = (desc.exposed, member.exposed);
+            assert!(
+                (of.window || !its.window)
+                    && (of.worker || !its.worker)
+                    && (of.in_dedicated_worker() || !its.in_dedicated_worker()),
+                "{}.{}",
+                desc.name,
+                member.name
+            );
+            if its != of {
+                fewer.push(format!("{}.{}", desc.name, member.name));
+            }
+        }
+    }
+    assert_eq!(fewer, ["Performance.timing", "Performance.navigation"]);
+    assert_eq!(
+        interface("Performance").members[0].exposed,
+        interface("Performance").exposed
+    );
+}
+
+/// An interface accepts its own kinds and its descendants'.
 #[test]
 fn interfaces_accept_their_kinds_and_their_descendants() {
     use dom_api::interfaces::{

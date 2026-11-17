@@ -70,7 +70,7 @@ impl<'gc> Cx<'_, 'gc> {
         let geolocation = self.gc.alloc_in(
             &sites::OTHER,
             GeolocationInit {
-                window: Some(self.navigator_window(navigator)),
+                window: self.navigator_window(navigator),
                 requests: None,
                 next_id: Cell::new(1),
                 next_watch_id: Cell::new(1),

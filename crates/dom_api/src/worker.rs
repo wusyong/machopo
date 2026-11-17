@@ -295,6 +295,22 @@ pub enum ImportError {
     Thrown,
 }
 
+/// `location`: its `WorkerLocation`, the same each time.
+pub(crate) fn location<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, WorkerGlobalScope>,
+) -> Result<Gc<'gc, dom::Location>, ApiError> {
+    Ok(cx.worker_location(this))
+}
+
+/// `navigator`: its `WorkerNavigator`, the same each time.
+pub(crate) fn navigator<'gc>(
+    cx: &ApiCx<'_, 'gc>,
+    this: Gc<'gc, WorkerGlobalScope>,
+) -> Result<Gc<'gc, dom::Navigator>, ApiError> {
+    Ok(cx.worker_navigator(this))
+}
+
 /// `self` of a worker's global: itself.
 pub(crate) fn global_self<'gc>(
     _: &ApiCx<'_, 'gc>,

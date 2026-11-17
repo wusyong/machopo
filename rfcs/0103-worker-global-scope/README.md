@@ -125,6 +125,8 @@ worker 的主 script 和 `importScripts()` 的 script 經過 Browser 的 `net` �
 | 1b | dedicated worker：thread、isolate、`Dom`、`DedicatedWorkerGlobalScope`，classic script、`postMessage`、timer、`console`、`importScripts()`、`terminate()`、`close()`、`onerror` | 上面的例子跑得起來；WPT 的 worker variant 開始跑 |
 | 2 | worker 裡的 `fetch()`、`MessagePort` 跨 thread、module worker（`type: "module"`）、巢狀的 worker、`WorkerNavigator`、`WorkerLocation`、`performance` | 常見的函式庫的 worker 用法 |
 
+第 2 階段分成六段（2026-11-18 決定）：2a worker 裡的 `location`、`navigator`、`performance`；2b worker 裡的 `fetch()`，和 worker 裡建的 blob URL 讓 Browser 知道；2c `MessagePort` 跨 thread；2d worker 裡建的 worker；2e module worker；2f WPT、文件、整個階段的檢查。先做最便宜、擋住最多 WPT 的（很多 worker 的測試一開始就讀 `location`），風險最高的 port 自己一段，module graph 的量最大、排在最後。
+
 1a 自己就有價值：它定下之後每個 API 怎麼寫。它做完先 merge（「已決定的事項」第 3 條）。
 
 ## 缺點
@@ -208,6 +210,10 @@ Firefox 和 Servo 也是每個 worker 一條 thread、自己的 JS runtime（這
 20. **worker 的 script 的 MIME type 照 Chrome 寬鬆地檢查**（2026-11-17，1b-6 開始前）：主 script 和 `importScripts()` 的回應只擋 `image/*`、`audio/*`、`video/*`、`text/csv`（Fetch 的「因為 MIME type 擋下回應」），其他的照樣執行；狀態不是 2xx 的是網路錯誤。和 Chrome 預設一樣（Chromium `main` 的 `a5229e6c`：`WorkerClassicScriptLoader` 用 `AllowedByNosniff::MimeTypeAsScript` 的 `kLaxForWorker`，嚴格要開 `StrictMimeTypesForWorkers`，那是 `experimental`、預設關著）。不選照 HTML 嚴格（http(s) 的回應不是 JavaScript 的 MIME type 就是網路錯誤）：伺服器把 script 設成 `text/plain` 之類的網站的 worker 會失敗，Chrome 也還沒這樣做；和規範不同的記在 `docs/limitations.md`。
 21. **沒有 window 的執行環境的 task 和 UA 的 timer 排進它自己的執行環境**（2026-11-17，1b-7 開始前）：`FileReader` 的讀、`Blob` 的讀（`text()` 等）、`AbortSignal.timeout()` 這類不屬於元素的 task 和 timer，在 worker 裡不再找 window 的文件，不帶元素，排進 worker 的執行環境，由 worker 的 engine 跑 task 的那條路跑（和 window 的同一條）。和 Blink 一樣（`ExecutionContext::GetTaskRunner`：worker 的 task 在它自己的 thread 上跑，不需要文件）。不選留成限制：這幾個 API 在 worker 裡會停住或永遠不完成，WPT 的 FileAPI 的 worker variant 也一直失敗。
 22. **WPT 加 `workers/` 裡 dedicated worker 的部分，已經在清單裡的目錄的 worker variant 都跑**（2026-11-17，1b-7 開始前）：`workers/` 排除 shared worker、module worker、巢狀的 worker、service worker；清單裡的目錄（FileAPI、performance-timeline、netinfo、screen-wake-lock……）的 worker variant 不再標成「沒有 worker」，預期結果寫真正的原因（例如第 2 階段才有的 `fetch()`、`performance`、`location`）。和 Chromium 一樣（整個 `workers/` 在 CI 跑，失敗的寫在 `TestExpectations`）。不選只更新清單裡的目錄、`workers/` 留到第 2 階段：dedicated worker 自己的測試在 1b 做完時就該跑。
+23. **worker 的 `navigator` 的值在啟動時交給它的 engine**（2026-11-18，2a 開始前）：renderer 的 UA 和 `webdriver` 跟著啟動 worker 的參數一起給，worker 的 `Dom` 自己記著；物件沿用 `dom::Navigator` 的型別，表上另一個 `WorkerNavigator` interface，只有 worker 有的成員（NavigatorID 的一部分、language、`onLine`、`hardwareConcurrency`、`connection`）。和 Chrome 一樣（`GlobalScopeCreationParams` 帶著 user agent；Blink 的 `Navigator` 和 `WorkerNavigator` 共用 `NavigatorBase`）。不選每次讀的時候問 main thread：要跨 thread 同步等，值又不會變。
+24. **worker 的 time origin 是頁面呼叫 `new Worker()` 的時刻**（2026-11-18，2a 開始前）：main thread 啟動 worker 時記下時刻，交給 worker，它的 `performance.timeOrigin` 和 `now()` 從那裡算。和 Chrome 一樣（`WorkerThread` 的建構子在頁面的 thread 上記下 `TimeTicks::Now()`，Chromium `main` 的 `a5229e6c` 的 `worker_thread.cc`）。不選 worker 的 global 建好的時刻：machopo 的 global 在主 script 載入之後才建，比 Chrome 晚一段載入的時間。
+25. **`WorkerLocation` 照 HTML**（2026-11-18，2a 開始前）：worker 的 global 的網址（主 script redirect 之後的），成員都唯讀，`location` 每次是同一個物件（`[SameObject]`）。
+26. **宣告表的成員也可以寫 exposed，realm 不裝它的 global 沒有的成員**（2026-11-18，2a 做中）：WPT 抓到 worker 裡讀 `performance.timing` 會讓 machopo 結束（`Performance` 兩邊都有，`timing`、`navigation` 在規範裡是 `[Exposed=Window]`，表上原本只能寫在整個 interface 上，worker 也裝了它們，造出沒有 window 的 `PerformanceTiming`）。改成屬性和方法可以寫 `#[exposed(..)]`，只能比它的 interface 少，`InterfaceDesc` 的每個成員帶著自己的 exposed，`dom_js` 做 template 時照 isolate 的 global 的種類跳過沒有的成員；同名的 overload 要寫一樣的。和 Chrome 一樣（Blink 的 IDL 的成員可以寫 `[Exposed]`，產生的 binding 依 global 決定裝不裝：worker 裡 `'timing' in performance` 是 false）。是第 2 條的「個別的成員需要時也可以寫」。不選在 getter 裡擋（worker 裡丟錯誤或給 `null`）：成員還在，`in` 和 `getOwnPropertyNames` 和規範、Chrome 不同，之後每個同樣的成員都要再擋一次。
 
 ## 待決定
 

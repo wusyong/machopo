@@ -244,10 +244,12 @@ pub struct TimerState {
     pub interval: Option<f64>,
 }
 
-/// A window's `Location`: its document's URL, read through the window.
+/// A window's `Location`: its document's URL, read through the window; or
+/// a worker's global's (HTML's `WorkerLocation`): its URL.
 #[derive(GcObject)]
 pub struct Location {
     window: Member<Window>,
+    worker: Member<crate::WorkerGlobalScope>,
     wrapper: JsEdge,
 }
 
@@ -389,11 +391,22 @@ impl<'gc> Cx<'_, 'gc> {
     /// DOM was made (a navigation that started before its engine) is
     /// negative: the network's times of its navigation count from it too.
     pub fn set_window_time_origin(&self, window: Gc<'gc, Window>, origin: std::time::Instant) {
+        self.set_context_time_origin(self.window_context(window), origin);
+    }
+
+    /// Sets `context`'s time origin to `origin` (a worker's: when its page
+    /// made it, on another thread; Blink's `WorkerThread` takes the time as
+    /// it is made), as `set_window_time_origin` does a window's.
+    pub fn set_context_time_origin(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        origin: std::time::Instant,
+    ) {
         let ms = match origin.checked_duration_since(self.origin) {
             Some(after) => after.as_secs_f64() * 1000.0,
             None => -self.origin.saturating_duration_since(origin).as_secs_f64() * 1000.0,
         };
-        self.window_context(window).time_origin.set(ms);
+        context.time_origin.set(ms);
     }
 
     /// HTML's "queue an element task" to fire an event of `event_type` at
@@ -749,6 +762,7 @@ impl<'gc> Cx<'_, 'gc> {
             &sites::OTHER,
             LocationInit {
                 window: Some(window),
+                worker: None,
                 wrapper: (),
             },
         );
@@ -756,8 +770,35 @@ impl<'gc> Cx<'_, 'gc> {
         location
     }
 
-    pub fn location_window(&self, location: Gc<'gc, Location>) -> Gc<'gc, Window> {
-        location.window.get(self.gc).expect("a location's window")
+    /// `global`'s `WorkerLocation`, made at the first ask (the same after).
+    pub fn worker_location(&self, global: Gc<'gc, crate::WorkerGlobalScope>) -> Gc<'gc, Location> {
+        if let Some(location) = global.location.get(self.gc) {
+            return location;
+        }
+        let location = self.gc.alloc_in(
+            &sites::OTHER,
+            LocationInit {
+                window: None,
+                worker: Some(global),
+                wrapper: (),
+            },
+        );
+        global.location.set(self.gc, Some(location));
+        location
+    }
+
+    /// The window whose `Location` `location` is; none for a worker's.
+    pub fn location_window(&self, location: Gc<'gc, Location>) -> Option<Gc<'gc, Window>> {
+        location.window.get(self.gc)
+    }
+
+    /// The worker's global whose `WorkerLocation` `location` is; none for a
+    /// window's.
+    pub fn location_worker(
+        &self,
+        location: Gc<'gc, Location>,
+    ) -> Option<Gc<'gc, crate::WorkerGlobalScope>> {
+        location.worker.get(self.gc)
     }
 
     /// `window`'s time origin, in milliseconds since the DOM was made.

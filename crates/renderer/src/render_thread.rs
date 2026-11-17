@@ -432,6 +432,10 @@ impl RenderThread {
                 dom_api::EngineSettings {
                     web_tests: flags.web_tests,
                 },
+                crate::worker_thread::Agent {
+                    user_agent: flags.user_agent.clone(),
+                    webdriver: flags.automation,
+                },
                 scheduler.clone(),
                 to_browser.clone(),
             )),

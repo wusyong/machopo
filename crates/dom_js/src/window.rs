@@ -25,7 +25,7 @@ pub fn create_window_realm<'s>(
     url: &str,
     proxy: Option<v8::Local<'s, v8::Object>>,
 ) -> v8::Local<'s, v8::Context> {
-    state::install(scope);
+    state::install(scope, templates::GlobalKind::Window);
     let index = dom_api::INTERFACES
         .iter()
         .position(|interface| interface.name == "Window")

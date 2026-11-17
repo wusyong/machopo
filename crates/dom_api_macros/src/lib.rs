@@ -112,6 +112,10 @@ struct InterfaceDef {
     parent: Option<Ident>,
     objects: Objects,
     members: Vec<MemberDef>,
+    /// Each member's `#[exposed(..)]` (WebIDL's `[Exposed]` on a member),
+    /// of no global its interface isn't in: none if it is in its
+    /// interface's.
+    member_exposed: Vec<Option<Vec<Ident>>>,
 }
 
 /// The globals an interface may be exposed in (WebIDL's names, as Blink's
@@ -363,17 +367,7 @@ impl Parse for InterfaceDef {
         let is_html_dda = attrs.iter().any(|attr| attr.path().is_ident("is_html_dda"));
         let mut exposed = None;
         for attr in attrs.iter().filter(|attr| attr.path().is_ident("exposed")) {
-            let globals =
-                attr.parse_args_with(Punctuated::<Ident, Token![,]>::parse_separated_nonempty)?;
-            for global in &globals {
-                if !GLOBALS.iter().any(|name| global == name) {
-                    return Err(syn::Error::new(
-                        global.span(),
-                        "an interface is exposed in `Window`, `Worker` or `DedicatedWorker`",
-                    ));
-                }
-            }
-            exposed = Some(globals.into_iter().collect());
+            exposed = Some(globals(attr)?);
         }
         attrs.retain(|attr| {
             !attr.path().is_ident("iterable")
@@ -419,9 +413,22 @@ impl Parse for InterfaceDef {
         };
         let body;
         braced!(body in input);
-        let mut members = Vec::new();
+        let (mut members, mut member_exposed) = (Vec::new(), Vec::new());
         while !body.is_empty() {
-            members.push(body.parse()?);
+            let mut attrs = body.call(Attribute::parse_outer)?;
+            let mut exposed = None;
+            if let Some(at) = attrs.iter().position(|attr| attr.path().is_ident("exposed")) {
+                let attr = attrs.remove(at);
+                if !body.peek(kw::attribute) && !body.peek(kw::method) {
+                    return Err(syn::Error::new_spanned(
+                        attr,
+                        "`#[exposed(..)]` marks an interface, an attribute or a method",
+                    ));
+                }
+                exposed = Some(globals(&attr)?);
+            }
+            members.push(MemberDef::parse_with(attrs, &body)?);
+            member_exposed.push(exposed);
         }
         if namespace {
             if let Some(parent) = &parent {
@@ -455,13 +462,36 @@ impl Parse for InterfaceDef {
             parent,
             objects,
             members,
+            member_exposed,
         })
     }
+}
+
+/// The globals an `#[exposed(..)]` names, each one of `GLOBALS`.
+fn globals(attr: &Attribute) -> syn::Result<Vec<Ident>> {
+    let globals =
+        attr.parse_args_with(Punctuated::<Ident, Token![,]>::parse_separated_nonempty)?;
+    for global in &globals {
+        if !GLOBALS.iter().any(|name| global == name) {
+            return Err(syn::Error::new(
+                global.span(),
+                "an interface is exposed in `Window`, `Worker` or `DedicatedWorker`",
+            ));
+        }
+    }
+    Ok(globals.into_iter().collect())
 }
 
 impl Parse for MemberDef {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let attrs = input.call(Attribute::parse_outer)?;
+        Self::parse_with(attrs, input)
+    }
+}
+
+impl MemberDef {
+    /// A member whose attributes, `attrs`, were parsed already.
+    fn parse_with(attrs: Vec<Attribute>, input: ParseStream<'_>) -> syn::Result<Self> {
         let (
             mut front,
             mut calls_script,
@@ -917,6 +947,22 @@ struct Entry<'a> {
     anonymous: bool,
 }
 
+/// The description of the globals `exposed` names (`declare::Exposed`).
+fn exposed_desc(exposed: &[Ident]) -> Tokens {
+    let api = api();
+    let exposed_in = |global: &str| exposed.iter().any(|exposed| exposed == global);
+    let (window, worker, dedicated_worker) = (
+        exposed_in("Window"),
+        exposed_in("Worker"),
+        exposed_in("DedicatedWorker"),
+    );
+    quote!(#api::declare::Exposed {
+        window: #window,
+        worker: #worker,
+        dedicated_worker: #dedicated_worker,
+    })
+}
+
 /// The paths every expansion names: the API's crate, and the DOM's.
 fn api() -> Tokens {
     quote!(::dom_api)
@@ -976,12 +1022,7 @@ fn expand(table: &Table) -> syn::Result<Tokens> {
             Objects::Nodes(_) | Objects::Type(_) => quote!(::std::option::Option::None),
         };
         let descs = entries.iter().map(|entry| &entry.desc);
-        let exposed_in = |global: &str| interface.exposed.iter().any(|exposed| exposed == global);
-        let (in_window, in_worker, in_dedicated_worker) = (
-            exposed_in("Window"),
-            exposed_in("Worker"),
-            exposed_in("DedicatedWorker"),
-        );
+        let exposed = exposed_desc(&interface.exposed);
         items.extend(quote! {
             #(#attrs)*
             pub struct #name;
@@ -998,11 +1039,7 @@ fn expand(table: &Table) -> syn::Result<Tokens> {
                     namespace: #namespace,
                     global: #global,
                     is_html_dda: #is_html_dda,
-                    exposed: #api::declare::Exposed {
-                        window: #in_window,
-                        worker: #in_worker,
-                        dedicated_worker: #in_dedicated_worker,
-                    },
+                    exposed: #exposed,
                     members: &[#(#descs),*],
                 };
                 const NAME: &'static str = #name_str;
@@ -1250,7 +1287,37 @@ fn check(table: &Table) -> syn::Result<()> {
             ));
         }
         let mut seen: Vec<(String, u8)> = Vec::new();
-        for member in &interface.members {
+        // Each method's name and the globals of its first form.
+        let mut methods: Vec<(String, Option<Vec<String>>)> = Vec::new();
+        for (member, exposed) in interface.members.iter().zip(&interface.member_exposed) {
+            // WebIDL: a member is exposed in no global its interface isn't
+            // in (a dedicated worker's is a worker's).
+            let outside = exposed.iter().flatten().find(|global| {
+                !interface.exposed.iter().any(|of| {
+                    of == *global || (of == "Worker" && *global == "DedicatedWorker")
+                })
+            });
+            if let Some(global) = outside {
+                fail(syn::Error::new(
+                    global.span(),
+                    format!("`{}` isn't exposed in `{global}`", interface.name),
+                ));
+            }
+            // One function of the prototype's is all of an overload's forms.
+            if let MemberDef::Method { name, .. } = member {
+                let globals = exposed
+                    .as_ref()
+                    .map(|globals| globals.iter().map(Ident::to_string).collect());
+                let key = name.unraw().to_string();
+                match methods.iter().find(|(other, _)| *other == key) {
+                    Some((_, first)) if *first != globals => fail(syn::Error::new(
+                        name.span(),
+                        "an overload's forms are exposed in the same globals",
+                    )),
+                    Some(_) => {}
+                    None => methods.push((key, globals)),
+                }
+            }
             let (name, kinds): (Ident, &[u8]) = match member {
                 MemberDef::Const { name, .. } => (name.clone(), &[0]),
                 MemberDef::Attribute {
@@ -1336,7 +1403,8 @@ fn entries(interface: &InterfaceDef) -> Vec<Entry<'_>> {
     let api = api();
     let iface = &interface.name;
     let mut entries = Vec::new();
-    for member in &interface.members {
+    for (member, exposed) in interface.members.iter().zip(&interface.member_exposed) {
+        let exposed = exposed_desc(exposed.as_deref().unwrap_or(&interface.exposed));
         match member {
             MemberDef::Const { name, value } => {
                 let js = js_name(name);
@@ -1355,6 +1423,7 @@ fn entries(interface: &InterfaceDef) -> Vec<Entry<'_>> {
                             is_static: false,
                             pairs: false,
                             replaceable: false,
+                            exposed: #exposed,
                         }
                     },
                     path: None,
@@ -1392,6 +1461,7 @@ fn entries(interface: &InterfaceDef) -> Vec<Entry<'_>> {
                             is_static: #is_static,
                             pairs: false,
                             replaceable: #replaceable,
+                            exposed: #exposed,
                         }
                     },
                     path: Some((
@@ -1452,6 +1522,7 @@ fn entries(interface: &InterfaceDef) -> Vec<Entry<'_>> {
                                 is_static: false,
                                 pairs: false,
                                 replaceable: false,
+                                exposed: #exposed,
                             }
                         },
                         path: Some((
@@ -1578,6 +1649,7 @@ fn entries(interface: &InterfaceDef) -> Vec<Entry<'_>> {
                             is_static: #is_static,
                             pairs: #pairs,
                             replaceable: false,
+                            exposed: #exposed,
                         }
                     },
                     path: Some((
@@ -1639,6 +1711,7 @@ fn entries(interface: &InterfaceDef) -> Vec<Entry<'_>> {
                             is_static: false,
                             pairs: false,
                             replaceable: false,
+                            exposed: #exposed,
                         }
                     },
                     path: Some((
@@ -2929,6 +3002,81 @@ mod tests {
             error("#[exposed(Window, ServiceWorker)] interface A [] {}"),
             "an interface is exposed in `Window`, `Worker` or `DedicatedWorker`"
         );
+    }
+
+    #[test]
+    fn a_member_is_exposed_in_its_interface_s_globals() {
+        assert_eq!(
+            error(
+                "interface A [type = dom::A] { #[exposed(Worker)] attribute a: u32, get = a::a; }"
+            ),
+            "`A` isn't exposed in `Worker`"
+        );
+        assert_eq!(
+            error(
+                "#[exposed(DedicatedWorker)] interface A [type = dom::A] { \
+                 #[exposed(Worker)] method f() = a::f; }"
+            ),
+            "`A` isn't exposed in `Worker`"
+        );
+        // A dedicated worker's global is a worker's.
+        for exposed in ["Window", "DedicatedWorker"] {
+            let table = format!(
+                "#[exposed(Window, Worker)] interface A [type = dom::A] {{ \
+                 #[exposed({exposed})] attribute a: u32, get = a::a; }}"
+            );
+            expand(&syn::parse_str::<Table>(&table).unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn exposed_marks_an_interface_an_attribute_or_a_method() {
+        assert_eq!(
+            error("#[exposed(Window, Worker)] interface A [] { #[exposed(Window)] const A: u32 = 1; }"),
+            "`#[exposed(..)]` marks an interface, an attribute or a method"
+        );
+        assert_eq!(
+            error(
+                "#[exposed(Window, Worker)] interface A [type = dom::A] { \
+                 #[exposed(Window)] constructor() = a::construct; }"
+            ),
+            "`#[exposed(..)]` marks an interface, an attribute or a method"
+        );
+    }
+
+    #[test]
+    fn an_overload_s_forms_are_exposed_alike() {
+        assert_eq!(
+            error(
+                "#[exposed(Window, Worker)] interface A [type = dom::A] { \
+                 method f() = a::f; #[exposed(Window)] method f(x: u32) = a::g; }"
+            ),
+            "an overload's forms are exposed in the same globals"
+        );
+    }
+
+    #[test]
+    fn a_member_s_exposed_is_its_own_or_its_interface_s() {
+        let table = syn::parse_str::<Table>(
+            "#[exposed(Window, Worker)] interface A [type = dom::A] { \
+             attribute a: u32, get = a::a, set = a::set_a; \
+             #[exposed(Window)] attribute b: u32, get = a::b, set = a::set_b; }",
+        )
+        .unwrap();
+        let entries = crate::entries(&table.interfaces[0]);
+        let exposed = |entry: &crate::Entry<'_>| {
+            let desc = entry.desc.to_string().replace(' ', "");
+            let at = desc.find("exposed:").expect("an exposed");
+            desc[at..].to_owned()
+        };
+        // A getter and a setter each.
+        assert_eq!(entries.len(), 4);
+        for entry in &entries[..2] {
+            assert!(exposed(entry).contains("window:true,worker:true,"));
+        }
+        for entry in &entries[2..] {
+            assert!(exposed(entry).contains("window:true,worker:false,dedicated_worker:false"));
+        }
     }
 
     #[test]

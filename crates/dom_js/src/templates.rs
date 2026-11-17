@@ -103,6 +103,7 @@ fn make_template<'s>(
         }
         ancestor = INTERFACES[index].parent;
     }
+    let kind = scope.state().0.kind;
     let scope = scope.scope();
     let prototype = template.prototype_template(scope);
     to_string_tag(scope, prototype, desc.name);
@@ -130,6 +131,7 @@ fn make_template<'s>(
         pairs: None,
         named: NamedCalls::default(),
         only_unforgeable: false,
+        kind,
     };
     dom_api::visit_typed(&mut members);
     members.install_ordered();
@@ -156,6 +158,7 @@ fn make_template<'s>(
             pairs: None,
             named: NamedCalls::default(),
             only_unforgeable,
+            kind,
         };
         dom_api::visit_typed(&mut members);
         members.install_ordered();
@@ -338,6 +341,9 @@ struct Members<'a, 's, 'i> {
     /// Whether only the unforgeable members are wanted: an ancestor's,
     /// for each object of a descendant interface.
     only_unforgeable: bool,
+    /// The kind of global the isolate's realms have: only the members
+    /// exposed in it are wanted (WebIDL's `[Exposed]` on a member).
+    kind: GlobalKind,
     setters: Vec<(&'static str, v8::Local<'s, v8::FunctionTemplate>)>,
     named: NamedCalls,
 }
@@ -553,10 +559,13 @@ impl TypedVisitor for Members<'_, '_, '_> {
 
 impl Members<'_, '_, '_> {
     /// Whether `M` is one of the members wanted: this interface's (only
-    /// its unforgeable ones for a descendant's objects).
+    /// its unforgeable ones for a descendant's objects) exposed in the
+    /// isolate's kind of global.
     fn takes<M: TypedMember>(&self) -> bool {
+        let desc = &INTERFACES[M::INTERFACE].members[M::MEMBER];
         M::INTERFACE == self.interface
-            && (!self.only_unforgeable || INTERFACES[M::INTERFACE].members[M::MEMBER].unforgeable)
+            && (!self.only_unforgeable || desc.unforgeable)
+            && self.kind.has(desc.exposed)
     }
 
     /// An attribute's accessor or an operation: its function, its
@@ -1455,7 +1464,7 @@ pub fn install(
     global: v8::Local<'_, v8::Object>,
     kind: GlobalKind,
 ) {
-    state::install(scope);
+    state::install(scope, kind);
     let window = kind == GlobalKind::Window;
     let names = INTERFACES
         .iter()

@@ -16,7 +16,7 @@ use elise::Persistent;
 use crate::front::wrap_new_object;
 use crate::listeners::{ReportAt, report_caught};
 use crate::state::{self, State};
-use crate::templates;
+use crate::templates::{self, GlobalKind};
 
 pub struct V8WorkerEngine {
     settings: EngineSettings,
@@ -33,7 +33,7 @@ pub struct V8WorkerEngine {
 impl V8WorkerEngine {
     pub fn new(settings: EngineSettings) -> Self {
         let mut data = V8PerIsolateData::new();
-        state::install(data.isolate());
+        state::install(data.isolate(), GlobalKind::DedicatedWorker);
         let bootstrap = {
             let isolate = data.isolate();
             v8::scope!(let scope, isolate);
@@ -89,15 +89,13 @@ impl V8WorkerEngine {
 /// `queueMicrotask`; `testRunner` too with web tests.
 fn create_worker_realm<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    url: &url::Url,
-    origin: url::Origin,
-    name: &str,
+    params: dom_api::WorkerGlobalParams,
     web_tests: bool,
 ) -> (
     v8::Local<'s, v8::Context>,
     Persistent<dom::WorkerGlobalScope>,
 ) {
-    state::install(scope);
+    state::install(scope, GlobalKind::DedicatedWorker);
     let index = dom_api::INTERFACES
         .iter()
         .position(|interface| interface.name == "DedicatedWorkerGlobalScope")
@@ -120,12 +118,17 @@ fn create_worker_realm<'s>(
         let mut scope = state::scope(scope).expect("installed");
         let (state, mut no_gc) = scope.state_mut();
         state.dom.mutate(|cx| {
-            let global = cx.create_worker_global(url.clone(), origin, dom::DomString::new(name));
+            let global = cx.create_worker_global(
+                params.url,
+                params.origin,
+                dom::DomString::new(&params.name),
+            );
+            cx.set_context_time_origin(cx.worker_global_context(global), params.time_origin);
             wrap_new_object(&mut no_gc, cx, proxy, dom::ObjectRef::WorkerGlobal(global));
             Persistent::new(cx.gc, global)
         })
     };
-    templates::install(scope, proxy, templates::GlobalKind::DedicatedWorker);
+    templates::install(scope, proxy, GlobalKind::DedicatedWorker);
     crate::window::install_queue_microtask(scope, proxy);
     if web_tests {
         crate::engine::install_test_runner(scope, proxy);
@@ -200,18 +203,19 @@ pub(crate) fn import_script(
 impl WorkerEngine for V8WorkerEngine {
     fn create_global(
         &mut self,
-        url: &url::Url,
-        origin: url::Origin,
-        name: &str,
+        params: dom_api::WorkerGlobalParams,
         host: Box<dyn dom_api::WorkerGlobalHost>,
     ) {
         self.state().caches.worker_global_host = Some(host);
+        self.state()
+            .dom
+            .set_agent(&params.user_agent, params.webdriver);
         let web_tests = self.settings.web_tests;
         let isolate = self.data.isolate();
         v8::scope!(let scope, isolate);
         let bootstrap = v8::Local::new(scope, &self.bootstrap);
         let scope = &mut v8::ContextScope::new(scope, bootstrap);
-        let (context, global) = create_worker_realm(scope, url, origin, name, web_tests);
+        let (context, global) = create_worker_realm(scope, params, web_tests);
         self.context = Some(v8::Global::new(scope, context));
         self.global = Some(global);
     }

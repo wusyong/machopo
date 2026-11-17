@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 1a 的原型：`#[window]` 的成員拿得到 window、其他成員拿不到，exposed 寫在表上 | 做完（程式留著，隨 1a 定下來） | 2026-11-17 |
 | 1a：執行環境從 `Window` 分出來、成員改成拿執行環境、global 照 exposed 建 | 做完，merge 回 `main` | 2026-11-17 |
-| 1b：dedicated worker | 做完（1b-1 到 1b-7），還沒 merge 回 `main` | 2026-11-18 |
+| 1b：dedicated worker | 做完（1b-1 到 1b-7），merge 回 `main` | 2026-11-18 |
 | 1b-1：被打斷的 script 不被 `dom_js` 回頭呼叫 script 的地方吞掉 | 做完（「已決定的事項」第 13 條） | 2026-11-17 |
 | 1b-2：`dom` 的 worker 的 global（自己的執行環境、event target），執行環境的 timer 和 task | 做完（第 14、15 條） | 2026-11-17 |
 | 1b-3：`dom_api` 的 `Worker`、`WorkerGlobalScope`、`DedicatedWorkerGlobalScope` 和 worker 也有的 timer 等成員 | 做完（第 16、17 條） | 2026-11-17 |
@@ -16,7 +16,13 @@
 | 1b-5：`renderer` 的 worker 的 thread 和 event loop、兩個方向的 `postMessage`、`terminate()`、`close()`、`onerror` | 做完（第 19 條；主 script 暫時只有 `data:` 的網址） | 2026-11-17 |
 | 1b-6：Browser 的登記和主 script 的載入、子資源的請求帶 client、`importScripts()` | 做完（第 20 條） | 2026-11-17 |
 | 1b-7：WPT 的 `workers/`、情境、`about:demo`、文件、整個階段的檢查 | 做完（第 21、22 條） | 2026-11-18 |
-| 2：worker 裡的 `fetch()`、`MessagePort` 跨 thread、module worker | 還沒開始 | |
+| 2：worker 裡的 `fetch()`、`MessagePort` 跨 thread、module worker、巢狀的 worker、`WorkerNavigator`、`WorkerLocation`、`performance` | 做中：2a 做完 | |
+| 2a：worker 裡的 `location`、`navigator`、`performance` | 做完（第 23 到 26 條） | 2026-11-18 |
+| 2b：worker 裡的 `fetch()`、worker 建的 blob URL | 還沒開始 | |
+| 2c：`MessagePort` 跨 thread | 還沒開始 | |
+| 2d：worker 裡建的 worker | 還沒開始 | |
+| 2e：module worker | 還沒開始 | |
+| 2f：WPT、文件、整個階段的檢查 | 還沒開始 | |
 
 ## 驗收
 
@@ -159,3 +165,18 @@
 - 新的測試：`dom_js` 的 `worker::a_worker_s_tasks_of_no_element_run`、`a_worker_s_script_that_doesn_t_parse_runs_nothing`、`a_worker_s_name_is_replaceable`，`a_window_s_worker_hears_from_its_worker` 改成錯誤排成 task；`shell` 的 `workers::a_worker_whose_script_doesn_t_parse_errs`、`a_worker_s_message_comes_before_its_error`，`nosniff` 和 window 的 `onerror` 的 `null` 加進既有的測試；`dom_js` 的 `messages::clones_and_transfers` 多了 `[{}]`、`[null]`。
 - mutation test（`rfcs/0103-worker-global-scope/mutants-1b7.toml`，現在 13 條）：沒有元素的 task 和 timer 的 6 條：第一次 4 條抓到、2 條編不過（`match` 不完整），改寫成一條「沒有元素的 task 不跑」之後抓到；後面的修正 9 條：8 條抓到，沒抓到的「排錯誤時不看已經結束」是多餘的檢查（engine 只找得到沒結束的 `Worker`、發事件時也看），拿掉那段程式和那條 mutant。
 - 整個階段的檢查：`cargo fmt`（也修了 1b 前幾段留下的格式）、`cargo clippy --workspace --all-targets -- -D warnings`（修了：`take_due_native_timer` 的回傳型別換成 `DueNativeTimer`、`WorkerTask::Browser` 改成 `Box`、worker 的 thread 的參數包成 `WorkerThread`、`loader.rs` 的函式搬到測試模組之前、測試裡多餘的 `to_string()`）、`cargo test --workspace` 都通過；`sanity.py` 的每一項都通過。
+
+### 2a：worker 的 `location`、`navigator`、`performance`（2026-11-18，macOS，Apple Silicon）
+
+- 第 23 到 25 條：`dom_api::WorkerGlobalParams`（Chromium 的 `GlobalScopeCreationParams`）把 URL、origin、名稱、time origin、UA 和 `webdriver` 一起交給 worker 的 engine；`renderer` 在 `new Worker()` 的時候記下時刻（`worker_thread` 的 `start`）。`dom` 的 `Location`、`Navigator` 可以屬於 worker 的 global（`worker_location`、`worker_navigator`），`dom_api` 的 `interface_of` 照這個分成 `WorkerLocation`、`WorkerNavigator`；`performance` 用 window 的同一份實作，照執行環境的 time origin 算。
+- 第 26 條（WPT 的 `workers/worker-performance.worker.html` 抓到的 crash）：宣告表的 attribute 和 method 可以寫 `#[exposed(..)]`，只能比它的 interface 少、同名的 overload 要一樣，`declare::Member` 帶著自己的 `exposed`；`dom_js` 的 isolate 的狀態記著它的 realm 的 global 是哪一種（`state::install` 收 `GlobalKind`，同一個 isolate 只能有一種），template 不裝那種 global 沒有的成員。`Performance` 的 `timing`、`navigation` 只在 window。
+- WPT 另外找到、修好的：
+  - worker 的 `onerror` 自己丟的例外也要傳到 `Worker`（HTML 的 report an exception：在 global 報告前一個錯誤時丟出的，那個 global 不再發 `error`、直接往外報），原本只傳了第一個；`dom_js` 的 `listeners::report` 改成「沒有被取消」就傳；
+  - User Timing 在 worker 裡：`mark()` 和 `new PerformanceMark()` 的名稱是 `PerformanceTiming` 的 attribute 時，只有 window 是 `SyntaxError`；`measure()` 從這種名稱開始或結束時，worker 裡是 `TypeError`（有同名的 mark 也一樣）。
+- WPT：`disabled` 裡因為 worker 沒有 `location`、`navigator`、`performance` 而等不到訊息的拿掉；`user-timing/` 的兩份 `.worker.js` 加進 `include.txt`；21 個目錄用 `MACHOPO_UPDATE_EXPECTATIONS` 重寫，過時的註解改成真正的原因（worker 裡的 `fetch()`、Resource Timing、`toJSON()`、`navigationId`；`wakelock-screen-type-on-worker` 要 worker 裡有 `navigator.wakeLock`，Screen Wake Lock 現在只給 window，和 Chrome 一樣）。`droppedentriescount.any.worker.html` 和 window 的一樣逾時（等 `resource` 的 entry）。重寫時又動到 `dom/events/scrolling/` 的一份（Mac 上的結果），還原。WPT_RESULTS
+- 新的測試：
+  - `dom_js` 的 `worker::a_worker_s_location_is_its_url`、`a_worker_s_navigator_is_a_worker_navigator`、`a_worker_s_performance_counts_from_its_time_origin`、`a_worker_s_marks_may_have_timing_names`、`a_worker_s_realm_has_only_the_members_exposed_there`、`what_a_worker_s_onerror_throws_goes_to_its_host`；
+  - `shell` 的 `workers::a_worker_s_time_origin_agent_and_location`（主 script 慢 300 ms 才回應：time origin 是 `new Worker()` 的時刻，不是 script 到的時刻）；
+  - `dom_api` 的 `table::members_are_exposed_in_their_interface_s_globals_or_fewer`，`dom_api_macros` 的成員的 exposed 的 4 個（只能比 interface 少、只標在 attribute 和 method 上、overload 一樣、描述帶著成員自己的）。
+- mutation test（`rfcs/0103-worker-global-scope/mutants-2a.toml`，21 條）：全部抓到。第一次 11 條裡「renderer 太晚記 time origin」沒抓到（`data:` 的 script 載入太快，晚記也差不多），測試改成用慢的 script 之後抓到；之後加的成員的 exposed 的 8 條和 User Timing 的 2 條都抓到。
+- 跑過的：`cargo test -p dom -p dom_api -p dom_api_macros -p dom_js -p dom_wasm -p renderer`、`shell` 的 `workers::`、sanity 的每一項。`cargo test --workspace`、fmt、clippy 等第 2 階段做完時跑。

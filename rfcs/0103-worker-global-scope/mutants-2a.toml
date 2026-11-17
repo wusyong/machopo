@@ -1,0 +1,148 @@
+# 2a: a worker's location, navigator and performance (its time origin when
+# its page made it, its user agent the page's); a member's exposed (a
+# window's `performance.timing`); a worker's marks of timing names; an
+# error its `onerror` throws.
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "worker::"]
+timeout = 900
+
+[[mutant]]
+name = "a worker's location is a new one each time"
+file = "crates/dom/src/window.rs"
+from = '''        global.location.set(self.gc, Some(location));'''
+to = '''        let _ = &global.location;'''
+
+[[mutant]]
+name = "a worker's location reads the window's URL"
+file = "crates/dom_api/src/location.rs"
+from = '''    if let Some(global) = cx.location_worker(this) {
+        return cx.worker_global_url(global).clone();
+    }'''
+to = '''    let _ = cx.location_worker(this);'''
+
+[[mutant]]
+name = "a worker's location is a Location"
+file = "crates/dom_api/src/typed.rs"
+from = '''        ObjectRef::Location(location) if cx.location_worker(location).is_some() => {'''
+to = '''        ObjectRef::Location(location) if cx.location_worker(location).is_some() && false => {'''
+
+[[mutant]]
+name = "a worker's navigator is a Navigator"
+file = "crates/dom_api/src/typed.rs"
+from = '''        ObjectRef::Navigator(navigator) if cx.navigator_window(navigator).is_none() => {'''
+to = '''        ObjectRef::Navigator(navigator) if cx.navigator_window(navigator).is_none() && false => {'''
+
+[[mutant]]
+name = "a worker's navigator is a new one each time"
+file = "crates/dom/src/navigator.rs"
+from = '''        global.navigator.set(self.gc, Some(navigator));'''
+to = '''        let _ = &global.navigator;'''
+
+[[mutant]]
+name = "a worker's connection isn't a network information"
+file = "crates/dom/src/navigator.rs"
+from = '''        connection.connection.set(self.gc, Some(navigator));'''
+to = '''        let _ = &connection.connection;'''
+
+[[mutant]]
+name = "a worker's user agent isn't set"
+file = "crates/dom_js/src/worker.rs"
+from = '''            .set_agent(&params.user_agent, params.webdriver);'''
+to = '''            .set_agent("", params.webdriver);'''
+
+[[mutant]]
+name = "a worker's time origin is its global's making"
+file = "crates/dom_js/src/worker.rs"
+from = '''            cx.set_context_time_origin(cx.worker_global_context(global), params.time_origin);'''
+to = '''            let _ = params.time_origin;'''
+
+[[mutant]]
+name = "a worker's time origin counts the other way"
+file = "crates/dom/src/window.rs"
+from = '''            None => -self.origin.saturating_duration_since(origin).as_secs_f64() * 1000.0,
+        };
+        context.time_origin.set(ms);'''
+to = '''            None => self.origin.saturating_duration_since(origin).as_secs_f64() * 1000.0,
+        };
+        context.time_origin.set(ms);'''
+
+[[mutant]]
+name = "the renderer gives a worker no user agent"
+file = "crates/renderer/src/render_thread.rs"
+from = '''                    user_agent: flags.user_agent.clone(),'''
+to = '''                    user_agent: String::new(),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::"]
+
+[[mutant]]
+name = "the renderer takes a worker's time origin late"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''            time_origin,
+            user_agent: agent.user_agent,'''
+to = '''            time_origin: time_origin.max(std::time::Instant::now()),
+            user_agent: agent.user_agent,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::"]
+
+[[mutant]]
+name = "an error thrown while a worker's global reported another doesn't reach its Worker"
+file = "crates/dom_js/src/listeners.rs"
+from = '''    if reported != Reported::Canceled
+        && matches!(at, Some(dom::GlobalRoot::WorkerGlobal(_)))'''
+to = '''    if reported == Reported::NotCanceled
+        && matches!(at, Some(dom::GlobalRoot::WorkerGlobal(_)))'''
+
+[[mutant]]
+name = "a template has every member of its interface"
+file = "crates/dom_js/src/templates.rs"
+from = '''            && self.kind.has(desc.exposed)'''
+to = '''            && (self.kind.has(desc.exposed) || true)'''
+
+[[mutant]]
+name = "a template's members are a window's"
+file = "crates/dom_js/src/templates.rs"
+from = '''    let kind = scope.state().0.kind;'''
+to = '''    let kind = GlobalKind::Window;'''
+
+[[mutant]]
+name = "a member's exposed is its interface's"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''        let exposed = exposed_desc(exposed.as_deref().unwrap_or(&interface.exposed));'''
+to = '''        let exposed = exposed_desc(exposed.as_deref().map_or(&interface.exposed, |_| &interface.exposed));'''
+
+[[mutant]]
+name = "the table drops a member's exposed"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''                exposed = Some(globals(&attr)?);'''
+to = '''                let _ = globals(&attr)?;'''
+test = ["cargo", "test", "-q", "-p", "dom_api_macros"]
+
+[[mutant]]
+name = "a member may be exposed where its interface isn't"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''            if let Some(global) = outside {'''
+to = '''            if let Some(global) = outside.filter(|_| false) {'''
+test = ["cargo", "test", "-q", "-p", "dom_api_macros"]
+
+[[mutant]]
+name = "a worker's interface's member may not be a dedicated worker's alone"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''                    of == *global || (of == "Worker" && *global == "DedicatedWorker")'''
+to = '''                    of == *global'''
+test = ["cargo", "test", "-q", "-p", "dom_api_macros"]
+
+[[mutant]]
+name = "an overload's forms may be exposed apart"
+file = "crates/dom_api_macros/src/lib.rs"
+from = '''                    Some((_, first)) if *first != globals => fail(syn::Error::new('''
+to = '''                    Some((_, first)) if *first != globals && false => fail(syn::Error::new('''
+test = ["cargo", "test", "-q", "-p", "dom_api_macros"]
+
+[[mutant]]
+name = "a worker's mark of a timing name is a SyntaxError"
+file = "crates/dom_api/src/performance.rs"
+from = '''    if TIMING_NAMES.contains(&name) && cx.context_worker_global(context).is_none() {'''
+to = '''    if TIMING_NAMES.contains(&name) {'''
+
+[[mutant]]
+name = "a worker measures from a timing name"
+file = "crates/dom_api/src/performance.rs"
+from = '''    if TIMING_NAMES.contains(&name) && cx.context_worker_global(context).is_some() {'''
+to = '''    if TIMING_NAMES.contains(&name) && cx.context_worker_global(context).is_some() && false {'''
