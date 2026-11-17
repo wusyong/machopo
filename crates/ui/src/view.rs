@@ -113,6 +113,21 @@ pub(crate) struct Shared<A: App> {
     pub messages: Vec<A::Message>,
 }
 
+/// While a view is made from an element's props.
+pub struct CreateCtx<'a, A: App> {
+    pub(crate) shared: &'a mut Shared<A>,
+}
+
+impl<A: App> CreateCtx<'_, A> {
+    pub fn theme(&self) -> &A::Theme {
+        &self.shared.theme
+    }
+
+    pub fn text(&mut self) -> &mut TextContexts {
+        &mut self.shared.text
+    }
+}
+
 /// While a view measures.
 pub struct MeasureCtx<'a, A: App> {
     pub(crate) shared: &'a mut Shared<A>,

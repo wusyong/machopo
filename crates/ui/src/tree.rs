@@ -5,6 +5,7 @@
 //! and dispatches the user's events.
 
 use std::any::Any;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use compositor_paint::DisplayItemList;
@@ -16,10 +17,13 @@ use taffy::{
     compute_hidden_layout, compute_leaf_layout,
 };
 
+use crate::element::{AnyProps, Element, ElementKey};
 use crate::event::{Clipboard, Cursor, Handled, ImeEvent, KeyEvent, PointerButton, PointerEvent};
 use crate::id::{AnyViewId, ViewId};
 use crate::text::TextContexts;
-use crate::view::{App, Container, EventCtx, MeasureCtx, PaintCtx, Requests, Shared, View};
+use crate::view::{
+    App, Container, CreateCtx, EventCtx, MeasureCtx, PaintCtx, Requests, Shared, View,
+};
 
 /// A slot of the arena: the node it holds now, if any, and how many views
 /// it has held.
@@ -61,6 +65,17 @@ impl Painted {
             .fold(RectF::default(), |drawn, rect| drawn.union(rect))
             .offset(self.origin.x, self.origin.y)
     }
+}
+
+/// A view the description made, as last described: what the next
+/// description is compared with.
+struct Mounted<A: App> {
+    id: AnyViewId,
+    key: Option<ElementKey>,
+    name: Option<&'static str>,
+    props: Box<dyn AnyProps<A>>,
+    style: Style,
+    children: Vec<Mounted<A>>,
 }
 
 /// What the tree drew: its layers, the first under the others. There is
@@ -108,6 +123,11 @@ pub struct ViewTree<A: App> {
     /// Every paint checks that no view's kept recording is stale (debug
     /// builds; see [`ViewTree::set_check_recordings`]).
     check_recordings: bool,
+    /// The root's children as last described, and its style.
+    described: Vec<Mounted<A>>,
+    described_root_style: Option<Style>,
+    /// The described views with names, by name.
+    names: HashMap<&'static str, AnyViewId>,
 }
 
 impl<A: App> ViewTree<A> {
@@ -134,6 +154,9 @@ impl<A: App> ViewTree<A> {
             captured: None,
             focused: None,
             check_recordings: cfg!(debug_assertions),
+            described: Vec::new(),
+            described_root_style: None,
+            names: HashMap::new(),
         };
         tree.root = tree.insert(Container).any();
         tree
@@ -200,6 +223,10 @@ impl<A: App> ViewTree<A> {
     /// Adds `view` to the tree, in no parent yet (see
     /// [`ViewTree::append_child`]), with the default style.
     pub fn insert<T: View<A>>(&mut self, view: T) -> ViewId<T> {
+        ViewId::new(self.insert_boxed(Box::new(view)))
+    }
+
+    fn insert_boxed(&mut self, view: Box<dyn View<A>>) -> AnyViewId {
         let node = Node {
             parent: None,
             children: Vec::new(),
@@ -217,7 +244,7 @@ impl<A: App> ViewTree<A> {
                     generation: self.slots[index as usize].generation,
                 };
                 self.slots[id.slot()].node = Some(node);
-                self.views[id.slot()] = Some(Box::new(view));
+                self.views[id.slot()] = Some(view);
                 id
             }
             None => {
@@ -227,14 +254,14 @@ impl<A: App> ViewTree<A> {
                     generation: 0,
                     node: Some(node),
                 });
-                self.views.push(Some(Box::new(view)));
+                self.views.push(Some(view));
                 AnyViewId {
                     index,
                     generation: 0,
                 }
             }
         };
-        ViewId::new(id)
+        id
     }
 
     fn node(&self, id: AnyViewId) -> Option<&Node> {
@@ -492,6 +519,131 @@ impl<A: App> ViewTree<A> {
             Some(false) if self.focused == Some(id) => self.set_focus(None),
             _ => {}
         }
+    }
+
+    // --- Description --------------------------------------------------------
+
+    /// Makes the tree what `root` describes: `root` is the tree's root (a
+    /// [`Container`]), its children the root's. The views described before
+    /// are kept where the same type is at the same key (or place, among
+    /// siblings without keys), given the new props only if they changed,
+    /// moved if they moved; the others are made, or removed. The root's
+    /// children are the description's: don't add views to the root by
+    /// hand as well.
+    pub fn describe(&mut self, root: Element<A>) {
+        assert!(
+            root.props.view_type() == std::any::TypeId::of::<Container>(),
+            "the root is a container"
+        );
+        if self.described_root_style.as_ref() != Some(&root.style) {
+            self.set_style(self.root, root.style.clone());
+            self.described_root_style = Some(root.style);
+        }
+        let old = std::mem::take(&mut self.described);
+        self.described = self.reconcile_children(self.root, old, root.children);
+        self.names.clear();
+        let mut stack: Vec<&Mounted<A>> = self.described.iter().collect();
+        while let Some(mounted) = stack.pop() {
+            if let Some(name) = mounted.name {
+                let unique = self.names.insert(name, mounted.id).is_none();
+                debug_assert!(unique, "two views named {name}");
+            }
+            stack.extend(&mounted.children);
+        }
+    }
+
+    /// The described view named `name`, if it is a `T`.
+    pub fn find<T: View<A>>(&self, name: &str) -> Option<ViewId<T>> {
+        let id = *self.names.get(name)?;
+        let view: &dyn Any = self.views[id.slot()].as_deref()?;
+        view.is::<T>().then(|| ViewId::new(id))
+    }
+
+    /// `parent`'s children as `new` describes them, from `old`.
+    fn reconcile_children(
+        &mut self,
+        parent: AnyViewId,
+        old: Vec<Mounted<A>>,
+        new: Vec<Element<A>>,
+    ) -> Vec<Mounted<A>> {
+        let mut keyed: HashMap<ElementKey, Mounted<A>> = HashMap::new();
+        let mut unkeyed: VecDeque<Mounted<A>> = VecDeque::new();
+        for mounted in old {
+            match mounted.key.clone() {
+                Some(key) => {
+                    keyed.insert(key, mounted);
+                }
+                None => unkeyed.push_back(mounted),
+            }
+        }
+        let mut out = Vec::with_capacity(new.len());
+        for (index, element) in new.into_iter().enumerate() {
+            let candidate = match &element.key {
+                Some(key) => keyed.remove(key),
+                None => unkeyed.pop_front(),
+            };
+            let mounted = match candidate {
+                Some(mounted) if mounted.props.view_type() == element.props.view_type() => {
+                    self.update_mounted(mounted, element)
+                }
+                Some(mounted) => {
+                    self.remove(mounted.id);
+                    self.mount(element)
+                }
+                None => self.mount(element),
+            };
+            if self.children(parent).get(index) != Some(&mounted.id) {
+                self.insert_child(parent, index, mounted.id);
+            }
+            out.push(mounted);
+        }
+        for mounted in keyed.into_values().chain(unkeyed) {
+            self.remove(mounted.id);
+        }
+        out
+    }
+
+    /// A new view for `element`, and for its children.
+    fn mount(&mut self, element: Element<A>) -> Mounted<A> {
+        let view = element.props.create(&mut CreateCtx {
+            shared: &mut self.shared,
+        });
+        let id = self.insert_boxed(view);
+        self.set_style(id, element.style.clone());
+        let children = element
+            .children
+            .into_iter()
+            .map(|child| {
+                let child = self.mount(child);
+                self.append_child(id, child.id);
+                child
+            })
+            .collect();
+        Mounted {
+            id,
+            key: element.key,
+            name: element.name,
+            props: element.props,
+            style: element.style,
+            children,
+        }
+    }
+
+    /// `mounted`'s view as `element` describes it now.
+    fn update_mounted(&mut self, mut mounted: Mounted<A>, element: Element<A>) -> Mounted<A> {
+        let id = mounted.id;
+        if element.style != mounted.style {
+            self.set_style(id, element.style.clone());
+            mounted.style = element.style;
+        }
+        if !element.props.same(&*mounted.props) {
+            let props = &element.props;
+            self.call(id, |view, ctx| props.update(view, ctx));
+            mounted.props = element.props;
+        }
+        mounted.name = element.name;
+        mounted.children = self.reconcile_children(id, mounted.children, element.children);
+        mounted
     }
 
     // --- Layout -------------------------------------------------------------

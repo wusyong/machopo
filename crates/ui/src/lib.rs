@@ -26,6 +26,7 @@
     )
 )]
 
+mod element;
 pub mod event;
 mod id;
 pub mod text;
@@ -33,6 +34,7 @@ mod theme;
 mod tree;
 mod view;
 
+pub use element::{Component, Element, ElementKey};
 pub use event::{
     Clipboard, Cursor, Handled, ImeEvent, Key, KeyEvent, Modifiers, NamedKey, PointerButton,
     PointerEvent,
@@ -42,7 +44,7 @@ pub use taffy;
 pub use text::TextContexts;
 pub use theme::{Token, TokenTable};
 pub use tree::{Frame, FrameLayer, ViewTree};
-pub use view::{App, Container, EventCtx, MeasureCtx, PaintCtx, View};
+pub use view::{App, Container, CreateCtx, EventCtx, MeasureCtx, PaintCtx, View};
 
 #[cfg(test)]
 mod tests;

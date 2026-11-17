@@ -1,0 +1,141 @@
+# The declarative layer (`ui`'s `describe`) and the browser UI described
+# from `UiState`.
+test = ["cargo", "test", "-q", "-p", "ui"]
+timeout = 900
+
+[[mutant]]
+name = "equal props are given again"
+file = "crates/ui/src/element.rs"
+from = '''            .is_some_and(|old| old.props == self.props)'''
+to = '''            .is_some_and(|old| old.props == self.props && false)'''
+
+[[mutant]]
+name = "new props are never given"
+file = "crates/ui/src/element.rs"
+from = '''            .is_some_and(|old| old.props == self.props)'''
+to = '''            .is_some_and(|_| true)'''
+
+[[mutant]]
+name = "keys are ignored"
+file = "crates/ui/src/tree.rs"
+from = '''            let candidate = match &element.key {
+                Some(key) => keyed.remove(key),
+                None => unkeyed.pop_front(),
+            };'''
+to = '''            let candidate = match &element.key {
+                Some(key) => keyed.remove(key).filter(|_| false),
+                None => unkeyed.pop_front(),
+            };'''
+
+[[mutant]]
+name = "a view of another type is kept"
+file = "crates/ui/src/tree.rs"
+from = '''                Some(mounted) if mounted.props.view_type() == element.props.view_type() => {'''
+to = '''                Some(mounted) if true => {'''
+
+[[mutant]]
+name = "a view moved isn't moved"
+file = "crates/ui/src/tree.rs"
+from = '''            if self.children(parent).get(index) != Some(&mounted.id) {
+                self.insert_child(parent, index, mounted.id);
+            }'''
+to = '''            if self.children(parent).get(index) != Some(&mounted.id)
+                && !self.children(parent).contains(&mounted.id)
+            {
+                self.insert_child(parent, index, mounted.id);
+            }'''
+
+[[mutant]]
+name = "views described no more stay"
+file = "crates/ui/src/tree.rs"
+from = '''        for mounted in keyed.into_values().chain(unkeyed) {
+            self.remove(mounted.id);
+        }'''
+to = '''        for mounted in keyed.into_values().chain(unkeyed) {
+            drop(mounted);
+        }'''
+
+[[mutant]]
+name = "a new style isn't set"
+file = "crates/ui/src/tree.rs"
+from = '''        if element.style != mounted.style {
+            self.set_style(id, element.style.clone());'''
+to = '''        if element.style != mounted.style && false {
+            self.set_style(id, element.style.clone());'''
+
+[[mutant]]
+name = "a new view's children aren't put under it"
+file = "crates/ui/src/tree.rs"
+from = '''                let child = self.mount(child);
+                self.append_child(id, child.id);
+                child'''
+to = '''                self.mount(child)'''
+
+[[mutant]]
+name = "names stay from the last description"
+file = "crates/ui/src/tree.rs"
+from = '''        self.names.clear();'''
+to = '''        // self.names.clear();'''
+
+[[mutant]]
+name = "a name finds a view of another type"
+file = "crates/ui/src/tree.rs"
+from = '''        view.is::<T>().then(|| ViewId::new(id))'''
+to = '''        let _ = view;
+        Some(ViewId::new(id))'''
+
+[[mutant]]
+name = "the UI's size isn't the state's"
+file = "crates/shell/src/chrome.rs"
+from = '''            state.strip_height + toolbar::HEIGHT,'''
+to = '''            toolbar::HEIGHT,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "chrome"]
+
+[[mutant]]
+name = "a button made disabled from its props"
+file = "crates/shell/src/toolbar.rs"
+from = '''        button.enabled = props.enabled;'''
+to = '''        let _ = props.enabled;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "chrome"]
+
+[[mutant]]
+name = "the field's new URL isn't painted again"
+file = "crates/shell/src/omnibox.rs"
+from = '''        if self.set_url(ctx.text(), &props.url) {
+            ctx.request_paint();
+        }'''
+to = '''        self.set_url(ctx.text(), &props.url);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "chrome"]
+
+[[mutant]]
+name = "the tab strip's new tabs aren't painted again"
+file = "crates/shell/src/tab_strip.rs"
+from = '''        if self.set_tabs(props.titles.clone(), props.active) {
+            ctx.request_paint();
+        }
+    }'''
+to = '''        self.set_tabs(props.titles.clone(), props.active);
+    }'''
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "chrome"]
+
+[[mutant]]
+name = "the UI follows nothing"
+file = "crates/shell/src/browser_view.rs"
+from = '''        let state = self.ui_state();
+        self.chrome.update(state);'''
+to = '''        let _ = self.ui_state();'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::", "windowless::"]
+
+[[mutant]]
+name = "the state has the first tab's URL"
+file = "crates/shell/src/browser_view.rs"
+from = '''            url: self.tabs.active().url().unwrap_or_default().to_owned(),'''
+to = '''            url: self.tabs.iter().next().and_then(|t| t.url()).unwrap_or_default().to_owned(),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::", "windowless::"]
+
+[[mutant]]
+name = "the editing keys are never macOS's"
+file = "crates/shell/src/browser_view.rs"
+from = '''            mac: self.mac,'''
+to = '''            mac: false,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::", "windowless::"]

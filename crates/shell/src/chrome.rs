@@ -1,18 +1,21 @@
 //! The browser's own UI on `ui`'s tree: the tab strip above the toolbar
 //! (back, forward, reload and the address field), the types its views
-//! share, and the messages they send the browser view. The tree covers
-//! the area above the web views; the web views are the browser view's.
+//! share, and the messages they send the browser view. The UI is
+//! described from a snapshot of the browser's state ([`UiState`]) each time
+//! that changes, and the tree keeps the views that are still the same. The
+//! tree covers the area above the web views; the web views are the browser
+//! view's.
 
 use gfx::SizeF;
 use ui::taffy::prelude::{length, percent};
 use ui::taffy::{AlignItems, FlexDirection, Rect, Size, Style};
-use ui::{Clipboard, TextContexts, ViewId, ViewTree};
+use ui::{Clipboard, Element, TextContexts, ViewId, ViewTree};
 
 use crate::browser_view::Command;
-use crate::omnibox::Omnibox;
-use crate::tab_strip::TabStrip;
+use crate::omnibox::{Omnibox, OmniboxProps};
+use crate::tab_strip::{TabStrip, TabStripProps};
 use crate::theme::{BrowserTheme, SizeToken};
-use crate::toolbar::{self, Button, NavButton, ToolbarRow};
+use crate::toolbar::{self, Button, NavButton, NavButtonProps, ToolbarRow};
 
 /// What the browser UI's views share: they send [`UiMessage`]s and paint
 /// with a [`BrowserTheme`].
@@ -35,6 +38,95 @@ pub enum UiMessage {
     Navigate(String),
 }
 
+/// What the UI shows of the browser: all a description of it reads.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UiState {
+    /// The tabs' titles, in order, and the active one's index.
+    pub titles: Vec<String>,
+    pub active: usize,
+    /// The active tab's URL.
+    pub url: String,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+    /// Editing keys as on macOS.
+    pub mac: bool,
+    /// The UI's width, CSS px: the window's.
+    pub width: f32,
+    /// How high the tab strip is, CSS px: the toolbar starts there, a whole
+    /// physical px, which the strip's own height in CSS px needn't be at
+    /// every scale.
+    pub strip_height: f32,
+}
+
+impl Default for UiState {
+    fn default() -> Self {
+        Self {
+            titles: Vec::new(),
+            active: 0,
+            url: String::new(),
+            can_go_back: false,
+            can_go_forward: false,
+            mac: cfg!(target_os = "macos"),
+            width: 0.0,
+            strip_height: crate::tab_strip::HEIGHT,
+        }
+    }
+}
+
+/// The browser UI as it is now: the tab strip, then the toolbar's row of
+/// back, forward and reload and the address field, as wide as the window.
+pub fn horizontal(state: &UiState, theme: &BrowserTheme) -> Element<BrowserUi> {
+    let button_size = theme.size(SizeToken::ToolbarButton);
+    let button = |button: Button, name, enabled| {
+        Element::new::<NavButton>(NavButtonProps { button, enabled })
+            .name(name)
+            .style(Style {
+                flex_shrink: 0.0,
+                size: Size {
+                    width: length(button_size),
+                    height: length(button_size),
+                },
+                ..Style::default()
+            })
+    };
+    Element::container()
+        .style(Style {
+            flex_direction: FlexDirection::Column,
+            ..Style::default()
+        })
+        .child(
+            Element::new::<TabStrip>(TabStripProps {
+                titles: state.titles.clone(),
+                active: state.active,
+            })
+            .name("tab-strip")
+            .style(Style {
+                flex_shrink: 0.0,
+                size: Size {
+                    width: percent(1.0),
+                    height: length(state.strip_height),
+                },
+                ..Style::default()
+            }),
+        )
+        .child(
+            Element::new::<ToolbarRow>(())
+                .name("toolbar")
+                .style(toolbar_style(theme))
+                .child(button(Button::Back, "back", state.can_go_back))
+                .child(button(Button::Forward, "forward", state.can_go_forward))
+                .child(button(Button::Reload, "reload", true))
+                .child(
+                    Element::new::<Omnibox>(OmniboxProps {
+                        url: state.url.clone(),
+                        mac: state.mac,
+                    })
+                    .name("omnibox")
+                    .style(field_style(theme)),
+                ),
+        )
+}
+
 /// The tree and the views the browser view talks to.
 pub struct Chrome {
     pub tree: ViewTree<BrowserUi>,
@@ -43,105 +135,43 @@ pub struct Chrome {
     /// Back, forward and reload, in `Button::ALL`'s order.
     pub buttons: [ViewId<NavButton>; 3],
     pub omnibox: ViewId<Omnibox>,
-    /// How high the tab strip is laid out, CSS px.
-    strip_height: f32,
+    /// What the UI was last described from.
+    state: UiState,
 }
 
 impl Chrome {
     /// `test_fonts`: Lato for every family, as the renderer's test fonts.
     pub fn new(test_fonts: bool, clipboard: Box<dyn Clipboard>) -> Self {
-        let theme = BrowserTheme::light();
-        let tab_strip = TabStrip::new(&theme);
-        let omnibox = Omnibox::new(theme.size(SizeToken::FieldFontSize));
-        let toolbar_style = toolbar_style(&theme);
-        let button_size = theme.size(SizeToken::ToolbarButton);
-        let field_style = Style {
-            flex_grow: 1.0,
-            flex_shrink: 1.0,
-            flex_basis: length(0.0),
-            min_size: Size {
-                width: length(0.0),
-                height: length(0.0),
-            },
-            size: Size {
-                width: ui::taffy::Dimension::auto(),
-                height: length(theme.size(SizeToken::FieldHeight)),
-            },
-            // The gap before it is two of the buttons'.
-            margin: Rect {
-                left: length(theme.size(SizeToken::ToolbarGap)),
-                right: length(0.0),
-                top: length(0.0),
-                bottom: length(0.0),
-            },
-            ..Style::default()
-        };
-        let mut tree = ViewTree::new(theme, TextContexts::new(test_fonts));
+        let mut tree = ViewTree::new(BrowserTheme::light(), TextContexts::new(test_fonts));
         tree.set_clipboard(clipboard);
-        let root = tree.root();
-        tree.set_style(
-            root,
-            Style {
-                flex_direction: FlexDirection::Column,
-                ..Style::default()
-            },
-        );
-        let tab_strip = tree.insert(tab_strip);
-        tree.append_child(root, tab_strip);
-        let toolbar = tree.insert(ToolbarRow);
-        tree.append_child(root, toolbar);
-        tree.set_style(toolbar, toolbar_style);
-        let buttons = Button::ALL.map(|button| {
-            let id = tree.insert(NavButton::new(button));
-            tree.append_child(toolbar, id);
-            tree.set_style(
-                id,
-                Style {
-                    flex_shrink: 0.0,
-                    size: Size {
-                        width: length(button_size),
-                        height: length(button_size),
-                    },
-                    ..Style::default()
-                },
-            );
-            id
-        });
-        let omnibox = tree.insert(omnibox);
-        tree.append_child(toolbar, omnibox);
-        tree.set_style(omnibox, field_style);
-        let mut chrome = Self {
+        let state = UiState::default();
+        tree.describe(horizontal(&state, tree.theme()));
+        Self {
+            tab_strip: found(&tree, "tab-strip"),
+            toolbar: found(&tree, "toolbar"),
+            buttons: [
+                found(&tree, "back"),
+                found(&tree, "forward"),
+                found(&tree, "reload"),
+            ],
+            omnibox: found(&tree, "omnibox"),
             tree,
-            tab_strip,
-            toolbar,
-            buttons,
-            omnibox,
-            strip_height: -1.0,
-        };
-        chrome.set_size(0.0, 0.0);
-        chrome
+            state,
+        }
     }
 
-    /// The UI `width` CSS px wide, its tab strip `strip_height` high (the
-    /// toolbar starts there: a whole physical px, which the strip's own
-    /// height in CSS px needn't be at every scale), the toolbar under it.
-    pub fn set_size(&mut self, width: f32, strip_height: f32) {
-        self.tree
-            .set_size(SizeF::new(width, strip_height + toolbar::HEIGHT));
-        if strip_height != self.strip_height {
-            self.strip_height = strip_height;
-            self.tree.set_style(
-                self.tab_strip,
-                Style {
-                    flex_shrink: 0.0,
-                    size: Size {
-                        width: percent(1.0),
-                        height: length(strip_height),
-                    },
-                    ..Style::default()
-                },
-            );
+    /// Describes the UI again from `state`, if it changed: only the views
+    /// whose props changed are touched.
+    pub fn update(&mut self, state: UiState) {
+        if state == self.state {
+            return;
         }
+        self.tree.set_size(SizeF::new(
+            state.width,
+            state.strip_height + toolbar::HEIGHT,
+        ));
+        self.tree.describe(horizontal(&state, self.tree.theme()));
+        self.state = state;
     }
 
     pub fn omnibox(&self) -> &Omnibox {
@@ -187,16 +217,12 @@ impl Chrome {
         };
         (enabled(self.buttons[0]), enabled(self.buttons[1]))
     }
+}
 
-    pub fn set_history(&mut self, can_go_back: bool, can_go_forward: bool) {
-        for (id, enabled) in [
-            (self.buttons[0], can_go_back),
-            (self.buttons[1], can_go_forward),
-        ] {
-            self.tree
-                .update(id, |button, ctx| button.set_enabled(enabled, ctx));
-        }
-    }
+/// The view the description names `name`: a horizontal and a vertical UI
+/// name theirs alike, and keep them while they last.
+fn found<T: ui::View<BrowserUi>>(tree: &ViewTree<BrowserUi>, name: &str) -> ViewId<T> {
+    tree.find(name).expect("the description names it")
 }
 
 /// The toolbar's row: as wide as the window, `toolbar::HEIGHT` high, the
@@ -225,6 +251,31 @@ fn toolbar_style(theme: &BrowserTheme) -> Style {
     }
 }
 
+/// The address field: what the buttons leave of the row, the gap before
+/// it two of the buttons'.
+fn field_style(theme: &BrowserTheme) -> Style {
+    Style {
+        flex_grow: 1.0,
+        flex_shrink: 1.0,
+        flex_basis: length(0.0),
+        min_size: Size {
+            width: length(0.0),
+            height: length(0.0),
+        },
+        size: Size {
+            width: ui::taffy::Dimension::auto(),
+            height: length(theme.size(SizeToken::FieldHeight)),
+        },
+        margin: Rect {
+            left: length(theme.size(SizeToken::ToolbarGap)),
+            right: length(0.0),
+            top: length(0.0),
+            bottom: length(0.0),
+        },
+        ..Style::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use gfx::{PointF, RectF};
@@ -241,12 +292,28 @@ mod tests {
         fn write(&mut self, _: &str) {}
     }
 
-    /// The UI 800 CSS px wide, laid out.
+    /// The UI's state, 800 CSS px wide.
+    fn state() -> UiState {
+        UiState {
+            width: 800.0,
+            ..UiState::default()
+        }
+    }
+
+    /// The UI for `state()`, laid out.
     fn chrome() -> Chrome {
         let mut chrome = Chrome::new(true, Box::new(NoClipboard));
-        chrome.set_size(800.0, crate::tab_strip::HEIGHT);
+        chrome.update(state());
         chrome.tree.layout();
         chrome
+    }
+
+    fn set_history(chrome: &mut Chrome, can_go_back: bool, can_go_forward: bool) {
+        chrome.update(UiState {
+            can_go_back,
+            can_go_forward,
+            ..state()
+        });
     }
 
     fn rect(chrome: &Chrome, id: impl Into<ui::AnyViewId>) -> RectF {
@@ -308,7 +375,7 @@ mod tests {
         // Back is disabled with nothing to go back to.
         click(&mut chrome, back, PointerButton::Primary);
         assert_eq!(chrome.tree.take_messages(), []);
-        chrome.set_history(true, false);
+        set_history(&mut chrome, true, false);
         assert_eq!(chrome.history(), (true, false));
         click(&mut chrome, back, PointerButton::Primary);
         assert_eq!(
@@ -368,7 +435,7 @@ mod tests {
         });
         assert!(!lit(&mut chrome));
         // Enabled under the pointer, it lights up.
-        chrome.set_history(false, true);
+        set_history(&mut chrome, false, true);
         assert!(lit(&mut chrome));
         chrome.tree.pointer_left();
         assert!(!lit(&mut chrome));
@@ -378,8 +445,9 @@ mod tests {
     #[test]
     fn a_click_in_the_field_focuses_it_with_its_ring() {
         let mut chrome = chrome();
-        chrome.tree.update(chrome.omnibox, |omnibox, ctx| {
-            omnibox.set_url(ctx.text(), "https://a.test/")
+        chrome.update(UiState {
+            url: "https://a.test/".into(),
+            ..state()
         });
         let field = center(rect(&chrome, chrome.omnibox));
         click(&mut chrome, field, PointerButton::Primary);
@@ -421,7 +489,7 @@ mod tests {
         });
         assert_eq!(chrome.tree.captured(), Some(chrome.toolbar.any()));
         // The page it was on has history now: the up isn't a press.
-        chrome.set_history(true, false);
+        set_history(&mut chrome, true, false);
         chrome.tree.pointer(PointerEvent::Up {
             position: back,
             button: PointerButton::Primary,
@@ -462,9 +530,9 @@ mod tests {
     #[test]
     fn the_tab_strip_sends_what_its_clicks_ask() {
         let mut chrome = chrome();
-        chrome.tree.update(chrome.tab_strip, |strip, ctx| {
-            strip.set_tabs(vec!["a".into(), "b".into()], 0);
-            ctx.request_paint();
+        chrome.update(UiState {
+            titles: vec!["a".into(), "b".into()],
+            ..state()
         });
         chrome.tree.paint();
         let tab = center(chrome.tab_strip().tab_rect(1));
@@ -492,5 +560,84 @@ mod tests {
         chrome.tree.pointer_left();
         assert!(chrome.tree.paint().is_some());
         assert_eq!(chrome.tree.stale_views(), []);
+    }
+}
+
+#[cfg(test)]
+mod description_tests {
+    use super::*;
+
+    struct NoClipboard;
+
+    impl Clipboard for NoClipboard {
+        fn read(&mut self) -> Option<String> {
+            None
+        }
+        fn write(&mut self, _: &str) {}
+    }
+
+    #[test]
+    fn the_horizontal_ui_is_the_strip_then_the_toolbar_from_the_state() {
+        let mut chrome = Chrome::new(true, Box::new(NoClipboard));
+        let state = UiState {
+            titles: vec!["one".into(), "two".into()],
+            active: 1,
+            url: "https://a.test/".into(),
+            can_go_back: true,
+            can_go_forward: false,
+            mac: true,
+            width: 640.0,
+            strip_height: 34.0,
+        };
+        chrome.update(state.clone());
+        let root = chrome.tree.root();
+        assert_eq!(
+            chrome.tree.children(root),
+            [chrome.tab_strip.any(), chrome.toolbar.any()]
+        );
+        assert_eq!(chrome.tab_strip().titles(), ["one", "two"]);
+        assert_eq!(chrome.omnibox().text(), "https://a.test/");
+        assert_eq!(chrome.history(), (true, false));
+        assert_eq!(chrome.tree.size(), SizeF::new(640.0, 34.0 + toolbar::HEIGHT));
+        chrome.tree.paint();
+        // The same views, told what changed.
+        let views = (chrome.tab_strip, chrome.omnibox, chrome.buttons);
+        chrome.update(UiState {
+            titles: vec!["one".into()],
+            active: 0,
+            url: "https://b.test/".into(),
+            can_go_back: false,
+            ..state
+        });
+        assert_eq!(views, (chrome.tab_strip, chrome.omnibox, chrome.buttons));
+        assert!(chrome.tree.contains(chrome.tab_strip));
+        assert_eq!(chrome.tab_strip().titles(), ["one"]);
+        assert_eq!(chrome.omnibox().text(), "https://b.test/");
+        assert_eq!(chrome.history(), (false, false));
+        // Checked: each view changed asked to be painted again.
+        chrome.tree.paint();
+    }
+}
+
+#[cfg(test)]
+mod made_from_props_tests {
+    use super::*;
+
+    #[test]
+    fn buttons_made_from_a_state_with_history_are_enabled() {
+        // A UI described for the first time with history: the buttons are
+        // made from the props, not told after.
+        let mut tree = ViewTree::<BrowserUi>::new(BrowserTheme::light(), TextContexts::new(true));
+        let state = UiState {
+            can_go_back: true,
+            can_go_forward: true,
+            width: 400.0,
+            ..UiState::default()
+        };
+        tree.describe(horizontal(&state, tree.theme()));
+        for name in ["back", "forward", "reload"] {
+            let button: ViewId<NavButton> = found(&tree, name);
+            assert!(tree.get(button).unwrap().is_enabled(), "{name}");
+        }
     }
 }

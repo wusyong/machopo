@@ -10,7 +10,7 @@ use gfx::{PointF, RRectF, RectF, SizeF};
 use parley::{Affinity, Cursor as TextCursor, PlainEditor, Selection};
 use ui::taffy::{AvailableSpace, Size};
 use ui::{
-    Cursor, EventCtx, Handled, ImeEvent, Key, KeyEvent, MeasureCtx, Modifiers, NamedKey, PaintCtx,
+    Component, CreateCtx, Cursor, EventCtx, Handled, ImeEvent, Key, KeyEvent, MeasureCtx, Modifiers, NamedKey, PaintCtx,
     PointerButton, PointerEvent, TextContexts, View,
 };
 
@@ -29,6 +29,15 @@ pub enum KeyResult {
     /// Enter: navigate to what was typed, as typed (the caller fixes it
     /// up into a URL).
     Navigate(String),
+}
+
+/// What the field shows while not editing, and how it edits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OmniboxProps {
+    /// The page's URL.
+    pub url: String,
+    /// Editing keys as on macOS.
+    pub mac: bool,
 }
 
 pub struct Omnibox {
@@ -388,6 +397,24 @@ fn text_area(theme: &BrowserTheme, size: SizeF) -> RectF {
         (size.width - 2.0 * padding).max(0.0),
         size.height,
     )
+}
+
+impl Component<BrowserUi> for Omnibox {
+    type Props = OmniboxProps;
+
+    fn create(props: &OmniboxProps, ctx: &mut CreateCtx<'_, BrowserUi>) -> Self {
+        let mut omnibox = Self::new(ctx.theme().size(SizeToken::FieldFontSize));
+        omnibox.set_mac(props.mac);
+        omnibox.set_url(ctx.text(), &props.url);
+        omnibox
+    }
+
+    fn set_props(&mut self, props: &OmniboxProps, ctx: &mut EventCtx<'_, BrowserUi>) {
+        self.set_mac(props.mac);
+        if self.set_url(ctx.text(), &props.url) {
+            ctx.request_paint();
+        }
+    }
 }
 
 impl View<BrowserUi> for Omnibox {

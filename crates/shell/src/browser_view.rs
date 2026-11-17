@@ -35,7 +35,7 @@ use std::sync::Arc;
 use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 
 use crate::browser_view_layout::{BrowserViewLayout, DefaultLayout};
-use crate::chrome::{Chrome, UiMessage};
+use crate::chrome::{Chrome, UiMessage, UiState};
 use crate::keyboard::{self, KeyInput};
 use crate::omnibox::Clipboard;
 use crate::omnibox::Omnibox;
@@ -373,9 +373,7 @@ impl BrowserView {
     /// default.
     pub fn set_mac(&mut self, mac: bool) {
         self.mac = mac;
-        self.chrome
-            .tree
-            .update(self.chrome.omnibox, |omnibox, _| omnibox.set_mac(mac));
+        self.sync_ui();
     }
 
     /// Where new tabs come from.
@@ -421,7 +419,7 @@ impl BrowserView {
         act: impl FnOnce(&mut WebContents) -> R,
     ) -> Option<R> {
         let result = act(self.contents_mut(tab)?);
-        self.sync_toolbar();
+        self.sync_ui();
         // A debug URL may have changed what the tab shows (`about:crash`).
         self.update();
         Some(result)
@@ -499,7 +497,7 @@ impl BrowserView {
         self.focused = tab;
         self.chrome.blur_omnibox();
         self.relayout();
-        self.sync_toolbar();
+        self.sync_ui();
         self.update();
     }
 
@@ -601,7 +599,7 @@ impl BrowserView {
             let index = self.tabs.append(contents);
             self.activate_tab(index);
         }
-        self.sync_toolbar();
+        self.sync_ui();
         self.update();
         Some(tab)
     }
@@ -613,7 +611,7 @@ impl BrowserView {
             return false;
         };
         self.close_tab(index);
-        self.sync_toolbar();
+        self.sync_ui();
         self.update();
         true
     }
@@ -625,7 +623,7 @@ impl BrowserView {
             return false;
         };
         self.activate_tab(index);
-        self.sync_toolbar();
+        self.sync_ui();
         self.update();
         true
     }
@@ -754,7 +752,7 @@ impl BrowserView {
     pub fn navigate(&mut self, url: &str) {
         self.tabs.active_mut().navigate(url);
         self.chrome.blur_omnibox();
-        self.sync_toolbar();
+        self.sync_ui();
         // A debug URL may have changed what the tab shows (`about:crash`).
         self.update();
     }
@@ -793,9 +791,7 @@ impl BrowserView {
         // The toolbar starts where the tab strip's whole physical px end.
         // A new scale alone needs no new frame of the UI: its layer's
         // tiles are rastered again at it.
-        let strip = layout.tab_strip.height as f32 / self.scale;
-        self.chrome
-            .set_size(layout.toolbar.width as f32 / self.scale, strip);
+        self.sync_ui();
         for (view, bounds) in self.web_views.iter_mut().zip(layout.web_views) {
             view.bounds = bounds;
             if bounds.is_empty() {
@@ -1115,7 +1111,7 @@ impl BrowserView {
                             if let Some(contents) = self.contents_mut(tab) {
                                 contents.reload();
                             }
-                            self.sync_toolbar();
+                            self.sync_ui();
                         }
                     }
                     self.update();
@@ -1168,7 +1164,7 @@ impl BrowserView {
                 UiMessage::Command(command) => self.run(command),
                 UiMessage::CloseTab(index) => {
                     self.close_tab(index);
-                    self.sync_toolbar();
+                    self.sync_ui();
                 }
                 UiMessage::Navigate(typed) => {
                     if let Some(url) = fixup_url(&typed, &self.cwd) {
@@ -1338,7 +1334,7 @@ impl BrowserView {
             Command::SelectTab(index) => self.activate_tab(index),
             Command::SelectLastTab => self.activate_tab(self.tabs.last_index()),
         }
-        self.sync_toolbar();
+        self.sync_ui();
         self.update();
     }
 
@@ -1440,29 +1436,31 @@ impl BrowserView {
             }
             _ => {}
         }
-        self.sync_toolbar();
+        self.sync_ui();
         self.update();
     }
 
-    /// The URL and the history buttons follow the active tab; the tab strip
-    /// shows every tab's title.
-    fn sync_toolbar(&mut self) {
-        let titles = self.tabs.iter().map(tab_title).collect();
-        let active = self.tabs.active_index();
-        let chrome = &mut self.chrome;
-        chrome.tree.update(chrome.tab_strip, |strip, ctx| {
-            if strip.set_tabs(titles, active) {
-                ctx.request_paint();
-            }
-        });
-        let url = self.tabs.active().url().unwrap_or_default().to_owned();
-        chrome.tree.update(chrome.omnibox, |omnibox, ctx| {
-            if omnibox.set_url(ctx.text(), &url) {
-                ctx.request_paint();
-            }
-        });
+    /// What the UI shows of the browser now: every tab's title, the active
+    /// tab's URL and history, the window's width.
+    fn ui_state(&self) -> UiState {
         let controller = self.tabs.active().controller();
-        chrome.set_history(controller.can_go_back(), controller.can_go_forward());
+        UiState {
+            titles: self.tabs.iter().map(tab_title).collect(),
+            active: self.tabs.active_index(),
+            url: self.tabs.active().url().unwrap_or_default().to_owned(),
+            can_go_back: controller.can_go_back(),
+            can_go_forward: controller.can_go_forward(),
+            mac: self.mac,
+            width: self.toolbar_bounds.width as f32 / self.scale,
+            strip_height: self.tab_strip_bounds.height as f32 / self.scale,
+        }
+    }
+
+    /// The UI follows the browser: described again if what it shows
+    /// changed.
+    fn sync_ui(&mut self) {
+        let state = self.ui_state();
+        self.chrome.update(state);
     }
 
     /// What the pointer should look like where it is: over a page, what
@@ -1514,6 +1512,7 @@ impl BrowserView {
     /// Draws the browser's frame if anything in it changed: the tab strip
     /// or the toolbar, the window's size, or a web view's surface.
     fn update(&mut self) {
+        self.sync_ui();
         self.sync_focus();
         if self.size.is_empty() {
             return;

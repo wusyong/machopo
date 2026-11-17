@@ -12,7 +12,7 @@ use compositor_paint::{DisplayItemList, PaintFlags, PaintOp};
 use gfx::{Color, PointF, RRectF, RectF, SizeF};
 use ui::taffy::{AvailableSpace, Size};
 use ui::{
-    EventCtx, Handled, MeasureCtx, PaintCtx, PointerButton, PointerEvent, TextContexts, View,
+    Component, CreateCtx, EventCtx, Handled, MeasureCtx, PaintCtx, PointerButton, PointerEvent, TextContexts, View,
 };
 
 use crate::browser_view::Command;
@@ -424,6 +424,30 @@ fn fill(list: &mut DisplayItemList, rect: RectF, color: Color) {
 
 fn center(rect: RectF) -> PointF {
     PointF::new(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0)
+}
+
+/// The tabs the strip shows: their titles, in order, and the active one's
+/// index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TabStripProps {
+    pub titles: Vec<String>,
+    pub active: usize,
+}
+
+impl Component<BrowserUi> for TabStrip {
+    type Props = TabStripProps;
+
+    fn create(props: &TabStripProps, ctx: &mut CreateCtx<'_, BrowserUi>) -> Self {
+        let mut strip = Self::new(ctx.theme());
+        strip.set_tabs(props.titles.clone(), props.active);
+        strip
+    }
+
+    fn set_props(&mut self, props: &TabStripProps, ctx: &mut EventCtx<'_, BrowserUi>) {
+        if self.set_tabs(props.titles.clone(), props.active) {
+            ctx.request_paint();
+        }
+    }
 }
 
 impl View<BrowserUi> for TabStrip {

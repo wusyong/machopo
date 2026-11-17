@@ -854,3 +854,232 @@ fn checking_recordings_a_paint_of_fresh_views_passes() {
     });
     assert!(tree.paint().is_some());
 }
+
+// --- Description ----------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq)]
+struct TileProps {
+    width: f32,
+    color: Color,
+}
+
+/// A leaf made from its props, counting the props it was given after.
+struct Tile {
+    props: TileProps,
+    sets: u32,
+}
+
+impl View<TestApp> for Tile {
+    fn measure(
+        &mut self,
+        _: &mut MeasureCtx<'_, TestApp>,
+        _: Size<Option<f32>>,
+        _: Size<AvailableSpace>,
+    ) -> SizeF {
+        SizeF::new(self.props.width, 10.0)
+    }
+
+    fn paint(&mut self, ctx: &mut PaintCtx<'_, TestApp>, list: &mut DisplayItemList) {
+        list.push_op(PaintOp::DrawRect {
+            rect: RectF::from_size(ctx.size()),
+            flags: PaintFlags::fill(self.props.color),
+        });
+    }
+}
+
+impl crate::Component<TestApp> for Tile {
+    type Props = TileProps;
+
+    fn create(props: &TileProps, _: &mut crate::CreateCtx<'_, TestApp>) -> Self {
+        Self {
+            props: props.clone(),
+            sets: 0,
+        }
+    }
+
+    fn set_props(&mut self, props: &TileProps, ctx: &mut EventCtx<'_, TestApp>) {
+        self.sets += 1;
+        if props.width != self.props.width {
+            ctx.request_layout();
+        }
+        if props.color != self.props.color {
+            ctx.request_paint();
+        }
+        self.props = props.clone();
+    }
+}
+
+type El = crate::Element<TestApp>;
+
+fn tile(width: f32) -> El {
+    El::new::<Tile>(TileProps {
+        width,
+        color: Color::rgb(0, 0, 255),
+    })
+}
+
+/// A row of `children` as the root.
+fn described(tree: &mut ViewTree<TestApp>, children: Vec<El>) {
+    tree.describe(El::container().style(row()).children(children));
+}
+
+/// The root's children's ids.
+fn ids(tree: &ViewTree<TestApp>) -> Vec<AnyViewId> {
+    tree.children(tree.root()).to_vec()
+}
+
+fn tile_at(tree: &ViewTree<TestApp>, index: usize) -> &Tile {
+    let id = ids(tree)[index];
+    tree.get(ViewId::<Tile>::new(id)).unwrap()
+}
+
+#[test]
+fn a_description_makes_its_views_with_their_props_and_styles() {
+    let mut tree = tree();
+    described(
+        &mut tree,
+        vec![
+            tile(30.0),
+            El::container()
+                .style(sized_row(50.0, 20.0))
+                .child(tile(10.0).name("inner")),
+        ],
+    );
+    tree.layout();
+    let [first, group] = ids(&tree)[..] else {
+        panic!("two children")
+    };
+    assert_eq!(tree.bounds(first), Some(RectF::new(0.0, 0.0, 30.0, 10.0)));
+    assert_eq!(tree.bounds(group), Some(RectF::new(30.0, 0.0, 50.0, 20.0)));
+    let inner = tree.find::<Tile>("inner").unwrap();
+    assert_eq!(tree.parent(inner), Some(group));
+    assert_eq!(tree.get(inner).unwrap().props.width, 10.0);
+    // Found only as what it is.
+    assert!(tree.find::<crate::Container>("inner").is_none());
+    assert!(tree.find::<Tile>("nobody").is_none());
+}
+
+#[test]
+fn equal_props_leave_a_view_alone_and_new_ones_are_given_to_it() {
+    let mut tree = tree();
+    described(&mut tree, vec![tile(30.0), tile(40.0)]);
+    let before = ids(&tree);
+    paint(&mut tree);
+    described(&mut tree, vec![tile(30.0), tile(40.0)]);
+    assert_eq!(ids(&tree), before, "the same views");
+    assert_eq!((tile_at(&tree, 0).sets, tile_at(&tree, 1).sets), (0, 0));
+    assert_eq!(tree.paint().map(|_| ()), None);
+    // Another color for the second: given to it, painted again.
+    described(
+        &mut tree,
+        vec![
+            tile(30.0),
+            El::new::<Tile>(TileProps {
+                width: 40.0,
+                color: Color::rgb(255, 0, 0),
+            }),
+        ],
+    );
+    assert_eq!(ids(&tree), before);
+    assert_eq!((tile_at(&tree, 0).sets, tile_at(&tree, 1).sets), (0, 1));
+    let damage = paint(&mut tree).unwrap().unwrap();
+    assert_eq!(damage, [RectF::new(30.0, 0.0, 40.0, 10.0)]);
+    // Wider: laid out again, the first stays.
+    described(&mut tree, vec![tile(30.0), tile(60.0)]);
+    tree.layout();
+    assert_eq!(tree.bounds(ids(&tree)[1]).unwrap().width, 60.0);
+    paint(&mut tree);
+    assert_fresh(&mut tree);
+}
+
+#[test]
+fn keyed_views_moved_are_kept_and_moved() {
+    let mut tree = tree();
+    described(
+        &mut tree,
+        vec![tile(10.0).key(1), tile(20.0).key(2), tile(30.0).key(3)],
+    );
+    let [a, b, c] = ids(&tree)[..] else {
+        panic!("three")
+    };
+    described(
+        &mut tree,
+        vec![tile(30.0).key(3), tile(10.0).key(1), tile(20.0).key(2)],
+    );
+    assert_eq!(ids(&tree), [c, a, b]);
+    // One taken out of the middle, one new at the end.
+    described(
+        &mut tree,
+        vec![tile(30.0).key(3), tile(20.0).key(2), tile(5.0).key(4)],
+    );
+    let after = ids(&tree);
+    assert_eq!(after[..2], [c, b]);
+    assert!(!tree.contains(a));
+    assert!(![a, b, c].contains(&after[2]));
+    tree.layout();
+    assert_eq!(tree.bounds(after[2]).unwrap().width, 5.0);
+}
+
+#[test]
+fn views_without_keys_are_matched_by_place_and_another_type_is_made_anew() {
+    let mut tree = tree();
+    described(&mut tree, vec![tile(10.0), tile(20.0)]);
+    let [a, b] = ids(&tree)[..] else {
+        panic!("two")
+    };
+    // The first stays (another width given to it); a container where the
+    // second was is new; the second's gone.
+    described(&mut tree, vec![tile(15.0), El::container()]);
+    let [first, second] = ids(&tree)[..] else {
+        panic!("two")
+    };
+    assert_eq!(first, a);
+    assert_eq!(tile_at(&tree, 0).sets, 1);
+    assert_ne!(second, b);
+    assert!(!tree.contains(b));
+    // Fewer: the rest removed.
+    described(&mut tree, vec![tile(15.0)]);
+    assert_eq!(ids(&tree), [a]);
+    assert!(!tree.contains(second));
+}
+
+#[test]
+fn children_are_described_within_their_parent() {
+    let mut tree = tree();
+    let group = |children: Vec<El>| {
+        El::container()
+            .key("group")
+            .style(sized_row(100.0, 20.0))
+            .children(children)
+    };
+    described(&mut tree, vec![group(vec![tile(10.0).key(1), tile(20.0).key(2)])]);
+    let parent = ids(&tree)[0];
+    let inner = tree.children(parent).to_vec();
+    described(&mut tree, vec![group(vec![tile(20.0).key(2), tile(10.0).key(1)])]);
+    assert_eq!(ids(&tree), [parent]);
+    assert_eq!(tree.children(parent), [inner[1], inner[0]]);
+    // A new style for the group: laid out with it.
+    tree.describe(
+        El::container().style(row()).child(
+            El::container()
+                .key("group")
+                .style(sized_row(80.0, 20.0))
+                .children(vec![tile(20.0).key(2), tile(10.0).key(1)]),
+        ),
+    );
+    tree.layout();
+    assert_eq!(tree.bounds(parent).unwrap().width, 80.0);
+}
+
+#[test]
+fn a_name_described_no_more_finds_nothing() {
+    let mut tree = tree();
+    described(&mut tree, vec![tile(10.0).name("first").key(1)]);
+    let first = tree.find::<Tile>("first").unwrap();
+    // The view gone, then a new one of the same type in its slot, unnamed.
+    described(&mut tree, vec![]);
+    described(&mut tree, vec![tile(20.0).key(2)]);
+    assert!(!tree.contains(first));
+    assert_eq!(ids(&tree)[0].index, first.any().index);
+    assert!(tree.find::<Tile>("first").is_none());
+}

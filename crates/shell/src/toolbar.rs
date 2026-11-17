@@ -7,7 +7,10 @@ use std::f32::consts::PI;
 use compositor_paint::{DisplayItemList, PaintFlags, PaintOp};
 use gfx::{PointF, RRectF, RectF, SizeF};
 use ui::taffy::{AvailableSpace, Size};
-use ui::{EventCtx, Handled, MeasureCtx, PaintCtx, PointerButton, PointerEvent, View};
+use ui::{
+    Component, CreateCtx, EventCtx, Handled, MeasureCtx, PaintCtx, PointerButton, PointerEvent,
+    View,
+};
 
 use crate::browser_view::Command;
 use crate::chrome::{BrowserUi, UiMessage};
@@ -75,6 +78,23 @@ impl View<BrowserUi> for ToolbarRow {
     }
 }
 
+impl Component<BrowserUi> for ToolbarRow {
+    type Props = ();
+
+    fn create(_: &(), _: &mut CreateCtx<'_, BrowserUi>) -> Self {
+        ToolbarRow
+    }
+
+    fn set_props(&mut self, _: &(), _: &mut EventCtx<'_, BrowserUi>) {}
+}
+
+/// What a toolbar button is: which, and whether it can be pressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NavButtonProps {
+    pub button: Button,
+    pub enabled: bool,
+}
+
 /// Back, forward or reload: pressed by the primary button going down and
 /// up on it while it is enabled.
 pub struct NavButton {
@@ -105,6 +125,24 @@ impl NavButton {
             self.enabled = enabled;
             ctx.request_paint();
         }
+    }
+}
+
+impl Component<BrowserUi> for NavButton {
+    type Props = NavButtonProps;
+
+    fn create(props: &NavButtonProps, _: &mut CreateCtx<'_, BrowserUi>) -> Self {
+        let mut button = Self::new(props.button);
+        button.enabled = props.enabled;
+        button
+    }
+
+    fn set_props(&mut self, props: &NavButtonProps, ctx: &mut EventCtx<'_, BrowserUi>) {
+        if self.button != props.button {
+            self.button = props.button;
+            ctx.request_paint();
+        }
+        self.set_enabled(props.enabled, ctx);
     }
 }
 

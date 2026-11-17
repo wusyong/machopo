@@ -10,7 +10,9 @@
 | 1a：`ui` 的樹、排版、畫、事件、主題；`ui_text` 搬進來 | 做完 | 2026-11-16 |
 | 1b：工具列和分頁列改寫成 view，`BrowserView` 走樹 | 做完 | 2026-11-17 |
 | 1c：文件和階段結束的檢查 | 做完 | 2026-11-17 |
-| 第 2 階段：宣告式的一層、版面管理和側邊欄 | 還沒開始 | |
+| 第 2 階段：宣告式的一層、版面管理和側邊欄 | 進行中 | |
+| 2a：宣告式的一層，橫式 UI 用函式描述 | 做完 | 2026-11-17 |
+| 2b：直的分頁清單、側邊欄的版面和切換 | 還沒開始 | |
 | 第 3 階段：外觀 | 還沒開始 | |
 
 ## 驗收
@@ -24,6 +26,9 @@
 | `BrowserView` 走樹：網址列、按鈕、分頁列的操作和游標照舊；hover 一個按鈕只重 raster 那個按鈕；輸入法的位置在網址列的文字裡 | `cargo test -p shell --test it -- browser_view:: windowless::` |
 | 每次 paint 都檢查 view 留著的錄製沒有過期（debug build），`shell` 的測試和情境都經過它 | `cargo test -p shell --test it`；`python3 scripts/test.py scenarios tab-strip navigation demo-busy rounded demo-script gpu-crash` |
 | 外觀不變 | 見「做過的檢查」的 1b：改之前、改之後的截圖逐像素比較 |
+| 宣告式的一層：第一次描述建立 view、Props 相等不碰、新的 Props 給 view、有 key 的搬動不重建、沒有 key 的照位置、換型別重建、拿掉、名字找得到帶型別的 view、拿掉的名字找不到 | `cargo test -p ui` |
+| 橫式 UI 從 `UiState` 描述：分頁列在上、工具列在下，狀態變了同一批 view 被告知、按鈕照 Props 建立 | `cargo test -p shell --lib chrome` |
+| `BrowserView` 用 `UiState` 取代 `sync_toolbar`，行為不變 | `cargo test -p shell --test it`；情境 `tab-strip`、`navigation`、`demo-busy`、`rounded`、`demo-script`、`gpu-crash` |
 
 ## 做過的檢查
 
@@ -71,3 +76,14 @@
 - **`cargo clippy --workspace --all-targets -- -D warnings`**：沒有警告。
 - **真的視窗**（`python3 scripts/test.py scenarios --window tab-strip navigation demo-busy rounded demo-script gpu-crash`）：6 個都通過；看過 `target/automation-results/tab-strip/tab-strip.png`（2 倍、系統字型），分頁列、工具列、按鈕和網址列和改寫前一樣。
 - `sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 都通過。
+
+### 2a
+
+2026-11-17，macOS（Apple Silicon）。
+
+- **實作時改的設計**：`Component::create` 拿一個 context（`CreateCtx`：主題和文字的 context），不只拿主題：網址列建立時就要設網址，要用到字型的 context。
+- **外觀**：照 1b 的做法（「已決定的事項」第 19 條），同樣 14 種狀態、4 種倍率的暫時情境，先在 1c 的 commit（`d875f46`）上截圖，改完再截：112 張全部完全相同（這次只改了 UI 怎麼建立，view 和畫法沒變）。情境沒有 commit。
+- **新的測試**：`ui` 的 8 個（描述的建立、Props 相等不碰和新的 Props、有 key 的搬動、照位置和換型別、巢狀、名字找不到拿掉的 view）；`shell` 的 `chrome` 的 2 個（從 `UiState` 描述出來的樣子和狀態變了的更新、按鈕照 Props 建立）。原本 `chrome` 的測試改成用 `UiState` 描述，不再命令式地設網址、上一頁和分頁。
+- **跑過的測試**：`ui` 34 個；`shell` 的單元測試 74 個；`shell` 的整合測試 571 個；情境 `tab-strip`、`navigation`、`demo-busy`、`rounded`、`demo-script`、`gpu-crash` 和外觀比較的暫時情境。
+- **mutation test**（`mutants-2a.toml`，`python3 scripts/test.py mutate --keep-going rfcs/0102-browser-ui-views/mutants-2a.toml`）：17 個抓到 16 個。沒抓到的：按鈕建立時不照 Props 的 `enabled`。測試裡的按鈕都從預設的狀態建立（上一頁不能按、重新載入可以），剛好和 `NavButton::new` 的預設一樣；2b 換版面時按鈕會在有上一頁的時候重新建立。補測試 `buttons_made_from_a_state_with_history_are_enabled`，重跑抓到。
+- **跑過的檢查**：`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
