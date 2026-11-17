@@ -352,7 +352,7 @@ pub fn run_animation_frames(
         let (state, _) = scope.state();
         state
             .dom
-            .read(|cx| cx.time_at(window.get(cx.gc), frame_time))
+            .read(|cx| cx.time_at(cx.window_context(window.get(cx.gc)), frame_time))
     };
     dom_api::run_animation_frame_callbacks(&mut Host { scope: &mut scope }, &window, now);
     state::report(&mut scope);
@@ -393,7 +393,9 @@ pub fn run_idle_callback(
     };
     let deadline = {
         let (state, _) = scope.state();
-        state.dom.read(|cx| cx.time_at(window.get(cx.gc), deadline))
+        state
+            .dom
+            .read(|cx| cx.time_at(cx.window_context(window.get(cx.gc)), deadline))
     };
     let ran = dom_api::run_idle_callback(&mut Host { scope: &mut scope }, &window, deadline);
     state::report(&mut scope);

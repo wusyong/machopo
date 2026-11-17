@@ -404,7 +404,10 @@ fn a_spin_button_held() {
     // time counts.
     let window = page.window.clone();
     let pressed = page.dom.read(|cx| cx.now_since(Some(window.get(cx.gc))));
-    let due = page.dom.read(|cx| cx.next_due(window.get(cx.gc))).unwrap();
+    let due = page
+        .dom
+        .read(|cx| cx.next_due(cx.window_context(window.get(cx.gc))))
+        .unwrap();
     assert!((due - pressed - 250.0).abs() < 50.0, "{due} {pressed}");
     let run = |page: &mut Page, at: f64| {
         with_host(&page.dom, |host| {

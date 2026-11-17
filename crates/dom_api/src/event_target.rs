@@ -337,7 +337,7 @@ fn parent_of<'gc>(
             }
             None => None,
         },
-        TargetRef::Window(_) | TargetRef::EventTarget(_) => None,
+        TargetRef::Window(_) | TargetRef::EventTarget(_) | TargetRef::WorkerGlobal(_) => None,
     }
 }
 
@@ -394,7 +394,7 @@ impl<'gc> ScopeKey<'gc> {
         match target {
             TargetRef::Node(node) if cx.is_shadow_root(node) => Self::Node(Some(node)),
             TargetRef::Node(node) => Self::Node(cx.containing_shadow_root(node)),
-            TargetRef::Window(_) | TargetRef::EventTarget(_) => Self::NotNode,
+            TargetRef::Window(_) | TargetRef::EventTarget(_) | TargetRef::WorkerGlobal(_) => Self::NotNode,
         }
     }
 
@@ -451,7 +451,7 @@ fn retarget_target<'gc>(
         TargetRef::Node(a) => {
             let b = match b {
                 TargetRef::Node(b) => Some(b),
-                TargetRef::Window(_) | TargetRef::EventTarget(_) => None,
+                TargetRef::Window(_) | TargetRef::EventTarget(_) | TargetRef::WorkerGlobal(_) => None,
             };
             TargetRef::Node(cx.retarget(a, b))
         }
@@ -483,7 +483,7 @@ fn shadow_path<'gc>(
     }
     let first_root = match target {
         TargetRef::Node(node) => Some(cx.root_node(node, false)),
-        TargetRef::Window(_) | TargetRef::EventTarget(_) => None,
+        TargetRef::Window(_) | TargetRef::EventTarget(_) | TargetRef::WorkerGlobal(_) => None,
     };
     let mut path = vec![target];
     // DOM's "target": the outermost host the path went through.
@@ -708,7 +708,7 @@ fn current_target_fully_active<'gc>(cx: &dom::Cx<'_, 'gc>, event: Gc<'gc, Event>
     let target = cx.event_current_target(event).expect("invoked at a target");
     let window = match target {
         TargetRef::Node(node) => cx.document_relevant_window(cx.document_of(node)),
-        TargetRef::Window(_) | TargetRef::EventTarget(_) => cx.target_window(target),
+        TargetRef::Window(_) | TargetRef::EventTarget(_) | TargetRef::WorkerGlobal(_) => cx.target_window(target),
     };
     window.is_none_or(|window| {
         let document = cx.window_document(window);

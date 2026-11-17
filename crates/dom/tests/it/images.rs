@@ -42,7 +42,7 @@ fn run_updates(cx: &Cx<'_, '_>) {
 /// `document`'s window's element tasks, taken: the images'.
 fn tasks<'gc>(cx: &Cx<'_, 'gc>, document: NodeRef<'gc>) -> Vec<(NodeRef<'gc>, ImageTaskAction)> {
     let window = cx.window_of(document).unwrap();
-    std::iter::from_fn(|| cx.take_element_task(window))
+    std::iter::from_fn(|| cx.take_element_task(cx.window_context(window)))
         .map(|(element, kind, _)| match kind {
             ElementTaskKind::Image(action) => (element, action),
             _ => panic!("an image's task"),

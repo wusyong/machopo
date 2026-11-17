@@ -46,7 +46,7 @@ fn add<'gc, O: OpFront>(
     timeout: i32,
     repeat: bool,
 ) -> i32 {
-    let timer = cx.add_timer(window, timeout.into(), repeat);
+    let timer = cx.add_timer(cx.window_context(window), timeout.into(), repeat);
     op.store_callback(cx, cx.timer_callback_edge(timer), handler);
     if let Some(arguments) = arguments {
         op.store_rest(cx, cx.timer_arguments_edge(timer), arguments);
@@ -61,7 +61,7 @@ pub(crate) fn clear_timer<'gc>(
     this: Gc<'gc, Window>,
     id: i32,
 ) -> Result<(), ApiError> {
-    cx.remove_timer(this, id);
+    cx.remove_timer(cx.window_context(this), id);
     Ok(())
 }
 
@@ -104,7 +104,7 @@ pub fn run_next_due<H: ScriptHost>(host: &mut H, window: &Persistent<Window>, no
         cx.next_idle_timeout(window).is_some_and(|idle| {
             idle <= now
                 && cx
-                    .next_script_timer_due(window)
+                    .next_script_timer_due(cx.window_context(window))
                     .is_none_or(|timer| idle < timer)
         })
     });
@@ -137,7 +137,8 @@ pub fn run_task<H: ScriptHost>(
 /// microtask checkpoint). Whether one ran.
 fn run_native_timer<H: ScriptHost>(host: &mut H, window: &Persistent<Window>, now: f64) -> bool {
     let native = host.mutate(|cx| {
-        let (element, action, data, target) = cx.take_due_native_timer(window.get(cx.gc), now)?;
+        let (element, action, data, target) =
+            cx.take_due_native_timer(cx.window_context(window.get(cx.gc)), now)?;
         Some((
             cx.root(element),
             action,
@@ -165,8 +166,8 @@ fn run_native_timer<H: ScriptHost>(host: &mut H, window: &Persistent<Window>, no
 fn run_script_timer<H: ScriptHost>(host: &mut H, window: &Persistent<Window>, now: f64) -> bool {
     let timer = host.mutate(|cx| {
         let window = window.get(cx.gc);
-        let (timer, nesting) = cx.take_due(window, now)?;
-        cx.set_timer_nesting(window, nesting);
+        let (timer, nesting) = cx.take_due(cx.window_context(window), now)?;
+        cx.set_timer_nesting(cx.window_context(window), nesting);
         Some(Persistent::new(cx.gc, timer))
     });
     let Some(timer) = timer else {
@@ -178,7 +179,7 @@ fn run_script_timer<H: ScriptHost>(host: &mut H, window: &Persistent<Window>, no
     // Its nesting level goes before its microtasks run: a timer one of
     // them sets isn't nested (HTML's timer task, Blink's `DOMTimer::Fired`
     // resetting it as the callback returns).
-    host.read(|cx| cx.set_timer_nesting(window.get(cx.gc), 0));
+    host.read(|cx| cx.set_timer_nesting(cx.window_context(window.get(cx.gc)), 0));
     host.perform_microtask_checkpoint();
     true
 }
@@ -190,10 +191,12 @@ pub fn until_next_due<'gc>(
     window: elise::Gc<'gc, Window>,
 ) -> Option<std::time::Duration> {
     // An element task or a message queued is due now.
-    let wait = if cx.has_element_task(window) || cx.has_posted_message(window) {
+    let wait = if cx.has_element_task(cx.window_context(window))
+        || cx.has_posted_message(cx.window_context(window))
+    {
         0.0
     } else {
-        cx.next_due(window)? - cx.now_since(Some(window))
+        cx.next_due(cx.window_context(window))? - cx.now_since(Some(window))
     };
     Some(std::time::Duration::from_secs_f64(wait.max(0.0) / 1000.0))
 }
@@ -201,7 +204,7 @@ pub fn until_next_due<'gc>(
 /// When `window`'s next timer is due (milliseconds since its time
 /// origin), for the host's clock; none with no timer.
 pub fn next_due(dom: &Dom, window: &Persistent<Window>) -> Option<f64> {
-    dom.read(|cx| cx.next_due(window.get(cx.gc)))
+    dom.read(|cx| cx.next_due(cx.window_context(window.get(cx.gc))))
 }
 
 /// What became of an exception reported (`report_exception`).
@@ -230,10 +233,10 @@ pub fn report_exception<H: ScriptHost>(
     let mut error = error;
     let event = host.mutate_storing(|cx, store| {
         let window = window.get(cx.gc);
-        if cx.reporting(window) {
+        if cx.reporting(cx.window_context(window)) {
             return None;
         }
-        cx.set_reporting(window, true);
+        cx.set_reporting(cx.window_context(window), true);
         let event = cx.create_error_event(info, Some(cx.window_context(window)));
         let data = cx.error_event_data(event).expect("an error event's data");
         if let Some(error) = error.take() {
@@ -246,7 +249,7 @@ pub fn report_exception<H: ScriptHost>(
     };
     let target = host.read(|cx| cx.root_target(TargetRef::Window(window.get(cx.gc))));
     let not_canceled = dispatch(host, &target, &event);
-    host.read(|cx| cx.set_reporting(window.get(cx.gc), false));
+    host.read(|cx| cx.set_reporting(cx.window_context(window.get(cx.gc)), false));
     if not_canceled {
         Reported::NotCanceled
     } else {

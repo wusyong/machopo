@@ -114,7 +114,10 @@ fn timers_through_the_windows_members() {
     assert_eq!(run(&mut dom, &window, start + 1000.0), 0);
     assert_eq!(dom_api::next_due(&dom.dom(), &window), None);
     // The window's nesting level is back to 0 out of the timers.
-    assert_eq!(dom.read(|cx| cx.timer_nesting(window.get(cx.gc))), 0);
+    assert_eq!(
+        dom.read(|cx| cx.timer_nesting(cx.window_context(window.get(cx.gc)))),
+        0
+    );
 }
 
 /// A handler that isn't a function is kept as a string handler (the
@@ -180,7 +183,10 @@ fn timers_made_by_timers_nest() {
     assert_eq!(run(&mut dom, &window, 2e9), 8);
     let levels: Vec<u8> = calls(&dom).iter().map(|call| call.2).collect();
     assert_eq!(levels, [1, 2, 3, 4, 5, 6, 7, 8]);
-    assert_eq!(dom.read(|cx| cx.timer_nesting(window.get(cx.gc))), 0);
+    assert_eq!(
+        dom.read(|cx| cx.timer_nesting(cx.window_context(window.get(cx.gc)))),
+        0
+    );
     let interval = id(call(
         &mut dom,
         &object,
@@ -252,7 +258,7 @@ fn an_exception_reported_fires_an_error_event() {
     listen(&mut dom, &object, 2, Action::Cancel);
     assert_eq!(report(&mut dom, &window), Reported::Canceled);
     assert!(
-        !dom.read(|cx| cx.reporting(window.get(cx.gc))),
+        !dom.read(|cx| cx.reporting(cx.window_context(window.get(cx.gc)))),
         "no longer reporting"
     );
 

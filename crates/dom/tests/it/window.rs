@@ -150,13 +150,13 @@ fn a_windows_timers() {
     let mut dom = Dom::new();
     dom.mutate(|cx| {
         let window = cx.create_window(cx.create_document(true));
-        assert_eq!(cx.next_due(window), None);
-        assert!(cx.take_due(window, 1e9).is_none());
+        assert_eq!(cx.next_due(cx.window_context(window)), None);
+        assert!(cx.take_due(cx.window_context(window), 1e9).is_none());
         let now = cx.now_since(Some(window));
-        let late = cx.add_timer(window, 50.0, false);
-        let first = cx.add_timer(window, -5.0, false);
-        let second = cx.add_timer(window, 0.0, false);
-        let interval = cx.add_timer(window, 10.0, true);
+        let late = cx.add_timer(cx.window_context(window), 50.0, false);
+        let first = cx.add_timer(cx.window_context(window), -5.0, false);
+        let second = cx.add_timer(cx.window_context(window), 0.0, false);
+        let interval = cx.add_timer(cx.window_context(window), 10.0, true);
         let ids: Vec<_> = [late, first, second, interval]
             .map(|timer| cx.timer_state(timer).id)
             .into();
@@ -166,25 +166,32 @@ fn a_windows_timers() {
         assert!(cx.timer_state(late).due >= now + 50.0);
         assert_eq!(cx.timer_state(interval).interval, Some(10.0));
         assert_eq!(cx.timer_state(first).interval, None);
-        assert_eq!(cx.next_due(window), Some(first_due));
+        assert_eq!(cx.next_due(cx.window_context(window)), Some(first_due));
         // Nothing due before the first.
-        assert!(cx.take_due(window, first_due - 1.0).is_none());
+        assert!(
+            cx.take_due(cx.window_context(window), first_due - 1.0)
+                .is_none()
+        );
         // Due at once: in the order made, ahead of the later ones.
         let at = cx.timer_state(late).due + 1.0;
-        let taken: Vec<_> = std::iter::from_fn(|| cx.take_due(window, at))
+        let taken: Vec<_> = std::iter::from_fn(|| cx.take_due(cx.window_context(window), at))
             .take(3)
             .map(|(timer, _)| cx.timer_state(timer).id)
             .collect();
         assert_eq!(taken, [2, 3, 4]);
         // The interval stays, due again an interval after `at`.
         assert_eq!(cx.timer_state(interval).due, at + 10.0);
-        assert_eq!(cx.timer_state(cx.take_due(window, at).unwrap().0).id, 1);
-        assert!(cx.take_due(window, at).is_none());
-        assert_eq!(cx.next_due(window), Some(at + 10.0));
+        assert_eq!(
+            cx.timer_state(cx.take_due(cx.window_context(window), at).unwrap().0)
+                .id,
+            1
+        );
+        assert!(cx.take_due(cx.window_context(window), at).is_none());
+        assert_eq!(cx.next_due(cx.window_context(window)), Some(at + 10.0));
         // Removed by id (an unknown one nothing).
-        cx.remove_timer(window, 99);
-        cx.remove_timer(window, 4);
-        assert_eq!(cx.next_due(window), None);
+        cx.remove_timer(cx.window_context(window), 99);
+        cx.remove_timer(cx.window_context(window), 4);
+        assert_eq!(cx.next_due(cx.window_context(window)), None);
     });
 }
 
@@ -195,21 +202,23 @@ fn timers_due_at_once_go_in_the_order_made() {
     let mut dom = Dom::new();
     dom.mutate(|cx| {
         let window = cx.create_window(cx.create_document(true));
-        let a = cx.add_timer(window, 10.0, true);
-        let b = cx.add_timer(window, 10.0, true);
+        let a = cx.add_timer(cx.window_context(window), 10.0, true);
+        let b = cx.add_timer(cx.window_context(window), 10.0, true);
         let at = 1e6;
-        cx.take_due(window, at).unwrap();
-        cx.take_due(window, at).unwrap();
+        cx.take_due(cx.window_context(window), at).unwrap();
+        cx.take_due(cx.window_context(window), at).unwrap();
         assert_eq!(cx.timer_state(a).due, cx.timer_state(b).due);
-        let order: Vec<_> = std::iter::from_fn(|| cx.take_due(window, at + 10.0))
-            .map(|(timer, _)| cx.timer_state(timer).id)
-            .collect();
+        let order: Vec<_> =
+            std::iter::from_fn(|| cx.take_due(cx.window_context(window), at + 10.0))
+                .map(|(timer, _)| cx.timer_state(timer).id)
+                .collect();
         assert_eq!(order, [1, 2]);
         // A later one due earlier goes first.
-        let c = cx.add_timer(window, 0.0, false);
+        let c = cx.add_timer(cx.window_context(window), 0.0, false);
         assert!(cx.timer_state(c).due < cx.timer_state(a).due);
         assert_eq!(
-            cx.timer_state(cx.take_due(window, at + 20.0).unwrap().0).id,
+            cx.timer_state(cx.take_due(cx.window_context(window), at + 20.0).unwrap().0)
+                .id,
             3
         );
     });
@@ -223,36 +232,36 @@ fn nested_timers_wait_at_least_4_ms() {
     let mut dom = Dom::new();
     dom.mutate(|cx| {
         let window = cx.create_window(cx.create_document(true));
-        assert_eq!(cx.timer_nesting(window), 0);
-        let outer = cx.add_timer(window, 0.0, false);
+        assert_eq!(cx.timer_nesting(cx.window_context(window)), 0);
+        let outer = cx.add_timer(cx.window_context(window), 0.0, false);
         assert_eq!(cx.timer_state(outer).nesting, 1);
         // An interval's timeout, clamped as a timeout's is: not at 5.
-        cx.set_timer_nesting(window, 5);
-        let at_5 = cx.add_timer(window, 1.0, true);
+        cx.set_timer_nesting(cx.window_context(window), 5);
+        let at_5 = cx.add_timer(cx.window_context(window), 1.0, true);
         let state = cx.timer_state(at_5);
         assert_eq!((state.nesting, state.interval), (6, Some(1.0)));
-        cx.set_timer_nesting(window, 6);
+        cx.set_timer_nesting(cx.window_context(window), 6);
         let before = cx.now_since(Some(window));
-        let at_6 = cx.add_timer(window, 1.0, false);
+        let at_6 = cx.add_timer(cx.window_context(window), 1.0, false);
         let state = cx.timer_state(at_6);
         assert_eq!(state.nesting, 7);
         assert!(state.due >= before + 4.0, "{state:?}");
-        let interval_6 = cx.add_timer(window, -1.0, true);
+        let interval_6 = cx.add_timer(cx.window_context(window), -1.0, true);
         assert_eq!(cx.timer_state(interval_6).interval, Some(4.0));
-        cx.remove_timer(window, cx.timer_state(interval_6).id);
-        cx.set_timer_nesting(window, 0);
-        cx.remove_timer(window, cx.timer_state(outer).id);
-        cx.remove_timer(window, cx.timer_state(at_5).id);
-        cx.remove_timer(window, cx.timer_state(at_6).id);
+        cx.remove_timer(cx.window_context(window), cx.timer_state(interval_6).id);
+        cx.set_timer_nesting(cx.window_context(window), 0);
+        cx.remove_timer(cx.window_context(window), cx.timer_state(outer).id);
+        cx.remove_timer(cx.window_context(window), cx.timer_state(at_5).id);
+        cx.remove_timer(cx.window_context(window), cx.timer_state(at_6).id);
         // An interval of 0: due again at once until it ran 6 times.
-        let interval = cx.add_timer(window, 0.0, true);
+        let interval = cx.add_timer(cx.window_context(window), 0.0, true);
         let at = 1e6;
         for level in 1..=6u8 {
-            assert_eq!(cx.take_due(window, at).unwrap().1, level);
+            assert_eq!(cx.take_due(cx.window_context(window), at).unwrap().1, level);
         }
         let state = cx.timer_state(interval);
         assert_eq!((state.nesting, state.due), (7, at + 4.0));
-        assert!(cx.take_due(window, at).is_none());
+        assert!(cx.take_due(cx.window_context(window), at).is_none());
     });
 }
 
@@ -264,9 +273,9 @@ fn an_error_event_and_its_data() {
     let mut dom = Dom::new();
     dom.mutate(|cx| {
         let window = cx.create_window(cx.create_document(true));
-        assert!(!cx.reporting(window));
-        cx.set_reporting(window, true);
-        assert!(cx.reporting(window));
+        assert!(!cx.reporting(cx.window_context(window)));
+        cx.set_reporting(cx.window_context(window), true);
+        assert!(cx.reporting(cx.window_context(window)));
         let info = dom::ErrorInfo {
             message: "Error: boom".into(),
             filename: "https://example.test/a.js".into(),
@@ -306,7 +315,7 @@ fn timers_and_error_data_survive_gcs() {
     });
     let (window, event) = dom.mutate(|cx| {
         let window = cx.create_window(cx.create_document(true));
-        cx.add_timer(window, 5.0, true);
+        cx.add_timer(cx.window_context(window), 5.0, true);
         let info = dom::ErrorInfo {
             message: "m".into(),
             filename: "f".into(),
@@ -323,7 +332,7 @@ fn timers_and_error_data_survive_gcs() {
     dom.collect();
     dom.mutate(|cx| {
         let window = window.get(cx.gc);
-        let (timer, _) = cx.take_due(window, 1e9).unwrap();
+        let (timer, _) = cx.take_due(cx.window_context(window), 1e9).unwrap();
         assert_eq!(cx.timer_state(timer).interval, Some(5.0));
         let data = cx.error_event_data(event.get(cx.gc)).unwrap();
         assert_eq!(cx.error_info(data).colno, 2);
@@ -340,7 +349,10 @@ fn a_time_since_the_windows_origin() {
         let window = cx.create_window(document);
         let origin = std::time::Instant::now() + std::time::Duration::from_millis(500);
         cx.set_window_time_origin(window, origin);
-        let at = cx.time_at(window, origin + std::time::Duration::from_millis(50));
+        let at = cx.time_at(
+            cx.window_context(window),
+            origin + std::time::Duration::from_millis(50),
+        );
         assert!((at - 50.0).abs() < 1e-6, "{at}");
     });
 }

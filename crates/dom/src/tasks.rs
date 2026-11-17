@@ -17,7 +17,7 @@
 
 use elise::Gc;
 
-use crate::{Cx, Dom, NodeId, NodeRef, Window};
+use crate::{Cx, Dom, ExecutionContext, NodeId, NodeRef};
 
 /// The queue a window's next task is in (`Cx::next_task`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,31 +118,33 @@ impl<'gc> Cx<'_, 'gc> {
             .set(Some(self.changes.task_sequence.get()));
     }
 
-    /// The pass ends: `has_queued_tasks` says whether one of `windows` has
+    /// The pass ends: `has_queued_tasks` says whether one of `contexts` has
     /// a task waiting that doesn't wait for a time (one the pass held
     /// back, or queued meanwhile).
-    pub fn end_task_pass(&self, windows: &[Gc<'gc, Window>]) {
+    pub fn end_task_pass(&self, contexts: &[Gc<'gc, ExecutionContext>]) {
         self.changes.task_limit.set(None);
-        let queued = windows
+        let queued = contexts
             .iter()
-            .any(|&window| self.has_element_task(window) || self.has_posted_message(window));
+            .any(|&context| self.has_element_task(context) || self.has_posted_message(context));
         self.changes.tasks_queued.set(queued);
     }
 
-    /// `window`'s task to run next by `now` (the DOM's clock), of those
+    /// `context`'s task to run next by `now` (the DOM's clock), of those
     /// the pass lets run: the earliest `(time, number)` of its queues.
-    pub fn next_task(&self, window: Gc<'gc, Window>, now: f64) -> Option<NextTask> {
-        let origin = self.window_time_origin(window);
+    pub fn next_task(&self, context: Gc<'gc, ExecutionContext>, now: f64) -> Option<NextTask> {
+        let origin = context.time_origin.get();
         let candidates = [
-            self.next_due_timer(window)
+            self.next_due_timer(context)
                 .map(|(due, number)| (origin + due, number, TaskQueue::Timer)),
-            self.next_due_native_timer(window)
+            self.next_due_native_timer(context)
                 .map(|(due, number)| (origin + due, number, TaskQueue::NativeTimer)),
-            self.next_due_idle_timeout(window)
+            // A window's only (`requestIdleCallback`).
+            self.context_window(context)
+                .and_then(|window| self.next_due_idle_timeout(window))
                 .map(|(due, number)| (origin + due, number, TaskQueue::IdleTimeout)),
-            self.next_element_task(window)
+            self.next_element_task(context)
                 .map(|(at, number)| (at, number, TaskQueue::Element)),
-            self.next_posted_message(window)
+            self.next_posted_message(context)
                 .map(|(at, number)| (at, number, TaskQueue::Message)),
         ];
         candidates

@@ -592,12 +592,12 @@ impl<'gc> Cx<'_, 'gc> {
         timers.push(self.gc, timer);
     }
 
-    /// `window`'s native timer due by `now` to run next (the earliest, of
+    /// `context`'s native timer due by `now` to run next (the earliest, of
     /// those the first made), taken out: its element, action and data, and
     /// its target if it is of no element.
     pub fn take_due_native_timer(
         &self,
-        window: Gc<'gc, Window>,
+        context: Gc<'gc, crate::ExecutionContext>,
         now: f64,
     ) -> Option<(
         NodeRef<'gc>,
@@ -605,8 +605,8 @@ impl<'gc> Cx<'_, 'gc> {
         u64,
         Option<Gc<'gc, crate::EventTargetImpl>>,
     )> {
-        let timers = self.window_context(window).native_timers.get(self.gc)?;
-        let (index, timer) = self.first_native_timer(window)?;
+        let timers = context.native_timers.get(self.gc)?;
+        let (index, timer) = self.first_native_timer(context)?;
         if timer.due.get() > now {
             return None;
         }
@@ -619,26 +619,26 @@ impl<'gc> Cx<'_, 'gc> {
         ))
     }
 
-    /// Whether `window` has an element task queued.
-    pub fn has_element_task(&self, window: Gc<'gc, Window>) -> bool {
-        self.window_context(window)
+    /// Whether `context` has an element task queued.
+    pub fn has_element_task(&self, context: Gc<'gc, crate::ExecutionContext>) -> bool {
+        context
             .element_tasks
             .get(self.gc)
             .is_some_and(|tasks| !tasks.is_empty())
     }
 
-    /// `window`'s first element task taken out, if the host's pass lets it
+    /// `context`'s first element task taken out, if the host's pass lets it
     /// run (`tasks`): its element, what it does, and the event target it is
     /// of if it is of no element's.
     pub fn take_element_task(
         &self,
-        window: Gc<'gc, Window>,
+        context: Gc<'gc, crate::ExecutionContext>,
     ) -> Option<(
         NodeRef<'gc>,
         ElementTaskKind,
         Option<Gc<'gc, crate::EventTargetImpl>>,
     )> {
-        let tasks = self.window_context(window).element_tasks.get(self.gc)?;
+        let tasks = context.element_tasks.get(self.gc)?;
         let task = tasks.get(self.gc, 0)?;
         if !self.task_may_run(task.number.get()) {
             return None;
@@ -648,8 +648,9 @@ impl<'gc> Cx<'_, 'gc> {
         let kind = match task.action.get() {
             HASH_CHANGE => {
                 let (old, new) = self
-                    .take_hash_change(window)
-                    .expect("a hashchange queued with its task");
+                    .context_window(context)
+                    .and_then(|window| self.take_hash_change(window))
+                    .expect("a hashchange queued with its task: a window's");
                 ElementTaskKind::HashChange(old, new)
             }
             IMAGE_LOAD | IMAGE_ERROR => ElementTaskKind::Image(crate::ImageTaskAction::Event {
@@ -880,26 +881,30 @@ impl<'gc> Cx<'_, 'gc> {
         data
     }
 
-    /// A new timer of `window`, due `timeout` milliseconds from now (HTML's
+    /// A new timer of `context`, due `timeout` milliseconds from now (HTML's
     /// timer initialization steps: a negative timeout is 0; made by a
     /// timer nested deeper than 5, at least 4 ms), repeating every
     /// `timeout` if `repeat`, its nesting level one more than the timer
     /// running now. Its callback and arguments are the engine's to set.
-    pub fn add_timer(&self, window: Gc<'gc, Window>, timeout: f64, repeat: bool) -> Gc<'gc, Timer> {
-        let running = self.window_context(window).nesting.get();
+    pub fn add_timer(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        timeout: f64,
+        repeat: bool,
+    ) -> Gc<'gc, Timer> {
+        let running = context.nesting.get();
         let timeout = clamp_timeout(timeout, running);
-        let id = self
-            .window_context(window)
+        let id = context
             .last_timer_id
             .get()
             .checked_add(1)
             .expect("fewer than 2^31 timers a window");
-        self.window_context(window).last_timer_id.set(id);
+        context.last_timer_id.set(id);
         let timer = self.gc.alloc_in(
             &sites::OTHER,
             TimerInit {
                 id: Cell::new(id),
-                due: Cell::new(self.now_since(Some(window)) + timeout),
+                due: Cell::new(self.now_in(Some(context)) + timeout),
                 number: Cell::new(self.next_task_number()),
                 interval: Cell::new(repeat.then_some(timeout)),
                 nesting: Cell::new(running.saturating_add(1)),
@@ -907,13 +912,11 @@ impl<'gc> Cx<'_, 'gc> {
                 arguments: (),
             },
         );
-        let timers = match self.window_context(window).timers.get(self.gc) {
+        let timers = match context.timers.get(self.gc) {
             Some(timers) => timers,
             None => {
                 let timers = HeapVector::new(self.gc, 1);
-                self.window_context(window)
-                    .timers
-                    .set(self.gc, Some(timers));
+                context.timers.set(self.gc, Some(timers));
                 timers
             }
         };
@@ -1031,16 +1034,20 @@ impl<'gc> Cx<'_, 'gc> {
         window.focus_visible.set(visible);
     }
 
-    /// `at` in milliseconds since `window`'s time origin.
-    pub fn time_at(&self, window: Gc<'gc, Window>, at: std::time::Instant) -> f64 {
+    /// `at` in milliseconds since `context`'s time origin.
+    pub fn time_at(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        at: std::time::Instant,
+    ) -> f64 {
         let since = at.saturating_duration_since(self.origin);
-        since.as_secs_f64() * 1000.0 - self.window_context(window).time_origin.get()
+        since.as_secs_f64() * 1000.0 - context.time_origin.get()
     }
 
-    /// `clearTimeout`, `clearInterval`: `window`'s timer `id` removed, if it
+    /// `clearTimeout`, `clearInterval`: `context`'s timer `id` removed, if it
     /// has one.
-    pub fn remove_timer(&self, window: Gc<'gc, Window>, id: i32) {
-        let Some(timers) = self.window_context(window).timers.get(self.gc) else {
+    pub fn remove_timer(&self, context: Gc<'gc, crate::ExecutionContext>, id: i32) {
+        let Some(timers) = context.timers.get(self.gc) else {
             return;
         };
         let found = (0..timers.len()).find(|&index| {
@@ -1053,46 +1060,40 @@ impl<'gc> Cx<'_, 'gc> {
         }
     }
 
-    /// When `window`'s next timer is due, in milliseconds since its time
+    /// When `context`'s next timer is due, in milliseconds since its time
     /// origin; none with no timer.
-    pub fn next_due(&self, window: Gc<'gc, Window>) -> Option<f64> {
+    pub fn next_due(&self, context: Gc<'gc, crate::ExecutionContext>) -> Option<f64> {
         // The UA's own timers too (`add_native_timer`), and the idle
         // callbacks' timeouts (`idle`), which run as timers do.
-        let native = self
-            .window_context(window)
-            .native_timers
-            .get(self.gc)
-            .and_then(|timers| {
-                (0..timers.len())
-                    .filter_map(|index| timers.get(self.gc, index))
-                    .map(|timer| timer.due.get())
-                    .reduce(f64::min)
-            });
+        let native = context.native_timers.get(self.gc).and_then(|timers| {
+            (0..timers.len())
+                .filter_map(|index| timers.get(self.gc, index))
+                .map(|timer| timer.due.get())
+                .reduce(f64::min)
+        });
         [
-            self.next_script_timer_due(window),
+            self.next_script_timer_due(context),
             native,
-            self.next_idle_timeout(window),
+            self.context_window(context)
+                .and_then(|window| self.next_idle_timeout(window)),
         ]
         .into_iter()
         .flatten()
         .reduce(f64::min)
     }
 
-    /// When `window`'s next script timer (`setTimeout`'s, `setInterval`'s)
+    /// When `context`'s next script timer (`setTimeout`'s, `setInterval`'s)
     /// is due, in milliseconds since its time origin; none with none.
-    pub fn next_script_timer_due(&self, window: Gc<'gc, Window>) -> Option<f64> {
-        self.window_context(window)
-            .timers
-            .get(self.gc)
-            .and_then(|timers| {
-                (0..timers.len())
-                    .filter_map(|index| timers.get(self.gc, index))
-                    .map(|timer| timer.due.get())
-                    .reduce(f64::min)
-            })
+    pub fn next_script_timer_due(&self, context: Gc<'gc, crate::ExecutionContext>) -> Option<f64> {
+        context.timers.get(self.gc).and_then(|timers| {
+            (0..timers.len())
+                .filter_map(|index| timers.get(self.gc, index))
+                .map(|timer| timer.due.get())
+                .reduce(f64::min)
+        })
     }
 
-    /// `window`'s timer due by `now` (milliseconds since its time origin)
+    /// `context`'s timer due by `now` (milliseconds since its time origin)
     /// to run next: the earliest due, of those the first made (HTML's
     /// order; the timers are in the order made), and the nesting level it
     /// runs at. A timeout is taken out; an
@@ -1100,9 +1101,13 @@ impl<'gc> Cx<'_, 'gc> {
     /// (HTML's timer task, which initializes it again at its level, Blink's
     /// `DOMTimer::Fired`: past 5, at least 4 ms, so that a host running the
     /// timers due by one time ends). None if none is due.
-    pub fn take_due(&self, window: Gc<'gc, Window>, now: f64) -> Option<(Gc<'gc, Timer>, u8)> {
-        let timers = self.window_context(window).timers.get(self.gc)?;
-        let (index, timer) = self.first_timer(window)?;
+    pub fn take_due(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        now: f64,
+    ) -> Option<(Gc<'gc, Timer>, u8)> {
+        let timers = context.timers.get(self.gc)?;
+        let (index, timer) = self.first_timer(context)?;
         if timer.due.get() > now {
             return None;
         }
@@ -1123,11 +1128,14 @@ impl<'gc> Cx<'_, 'gc> {
         Some((timer, running))
     }
 
-    /// `window`'s timer to run first, of those the host's pass lets run:
+    /// `context`'s timer to run first, of those the host's pass lets run:
     /// the earliest due, ties by number (the order set; an interval's
     /// number is its latest).
-    fn first_timer(&self, window: Gc<'gc, Window>) -> Option<(usize, Gc<'gc, Timer>)> {
-        let timers = self.window_context(window).timers.get(self.gc)?;
+    fn first_timer(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+    ) -> Option<(usize, Gc<'gc, Timer>)> {
+        let timers = context.timers.get(self.gc)?;
         let mut first: Option<(usize, Gc<'gc, Timer>)> = None;
         for index in 0..timers.len() {
             let timer = timers.get(self.gc, index).expect("below the length");
@@ -1147,9 +1155,12 @@ impl<'gc> Cx<'_, 'gc> {
         first
     }
 
-    /// `window`'s native timer to run first (`first_timer`'s order).
-    fn first_native_timer(&self, window: Gc<'gc, Window>) -> Option<(usize, Gc<'gc, NativeTimer>)> {
-        let timers = self.window_context(window).native_timers.get(self.gc)?;
+    /// `context`'s native timer to run first (`first_timer`'s order).
+    fn first_native_timer(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+    ) -> Option<(usize, Gc<'gc, NativeTimer>)> {
+        let timers = context.native_timers.get(self.gc)?;
         let mut first: Option<(usize, Gc<'gc, NativeTimer>)> = None;
         for index in 0..timers.len() {
             let timer = timers.get(self.gc, index).expect("below the length");
@@ -1169,27 +1180,32 @@ impl<'gc> Cx<'_, 'gc> {
         first
     }
 
-    /// When `window`'s script timer to run first is due (since its time
+    /// When `context`'s script timer to run first is due (since its time
     /// origin), and its number (`tasks`).
-    pub(crate) fn next_due_timer(&self, window: Gc<'gc, Window>) -> Option<(f64, u64)> {
-        self.first_timer(window)
+    pub(crate) fn next_due_timer(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+    ) -> Option<(f64, u64)> {
+        self.first_timer(context)
             .map(|(_, timer)| (timer.due.get(), timer.number.get()))
     }
 
-    /// The same of `window`'s native timers.
-    pub(crate) fn next_due_native_timer(&self, window: Gc<'gc, Window>) -> Option<(f64, u64)> {
-        self.first_native_timer(window)
+    /// The same of `context`'s native timers.
+    pub(crate) fn next_due_native_timer(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+    ) -> Option<(f64, u64)> {
+        self.first_native_timer(context)
             .map(|(_, timer)| (timer.due.get(), timer.number.get()))
     }
 
-    /// When `window`'s first element task was queued (the DOM's clock), and
+    /// When `context`'s first element task was queued (the DOM's clock), and
     /// its number, if the host's pass lets it run (`tasks`).
-    pub(crate) fn next_element_task(&self, window: Gc<'gc, Window>) -> Option<(f64, u64)> {
-        let task = self
-            .window_context(window)
-            .element_tasks
-            .get(self.gc)?
-            .get(self.gc, 0)?;
+    pub(crate) fn next_element_task(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+    ) -> Option<(f64, u64)> {
+        let task = context.element_tasks.get(self.gc)?.get(self.gc, 0)?;
         let number = task.number.get();
         self.task_may_run(number)
             .then(|| (task.queued.get(), number))
@@ -1224,24 +1240,24 @@ impl<'gc> Cx<'_, 'gc> {
         &timer.into_ref().arguments
     }
 
-    /// The nesting level of the timer whose callback runs in `window` (0
+    /// The nesting level of the timer whose callback runs in `context` (0
     /// out of one); set as one runs and back after.
-    pub fn timer_nesting(&self, window: Gc<'gc, Window>) -> u8 {
-        self.window_context(window).nesting.get()
+    pub fn timer_nesting(&self, context: Gc<'gc, crate::ExecutionContext>) -> u8 {
+        context.nesting.get()
     }
 
-    pub fn set_timer_nesting(&self, window: Gc<'gc, Window>, nesting: u8) {
-        self.window_context(window).nesting.set(nesting);
+    pub fn set_timer_nesting(&self, context: Gc<'gc, crate::ExecutionContext>, nesting: u8) {
+        context.nesting.set(nesting);
     }
 
-    /// Whether `window` reports an exception now (HTML's "in error
+    /// Whether `context` reports an exception now (HTML's "in error
     /// reporting mode").
-    pub fn reporting(&self, window: Gc<'gc, Window>) -> bool {
-        self.window_context(window).reporting.get()
+    pub fn reporting(&self, context: Gc<'gc, crate::ExecutionContext>) -> bool {
+        context.reporting.get()
     }
 
-    pub fn set_reporting(&self, window: Gc<'gc, Window>, reporting: bool) {
-        self.window_context(window).reporting.set(reporting);
+    pub fn set_reporting(&self, context: Gc<'gc, crate::ExecutionContext>, reporting: bool) {
+        context.reporting.set(reporting);
     }
 
     pub(crate) fn window_wrapper_edge(&self, window: Gc<'gc, Window>) -> &'gc JsEdge {

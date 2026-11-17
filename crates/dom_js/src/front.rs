@@ -2830,6 +2830,7 @@ pub(crate) fn wrap_new_object<'gc, 's, N: WrapsNew<'s>>(
         ObjectRef::Event(event) => no_gc.wrap(cx.gc, wrapper, event),
         ObjectRef::EventTarget(target) => no_gc.wrap(cx.gc, wrapper, target),
         ObjectRef::Window(window) => no_gc.wrap(cx.gc, wrapper, window),
+        ObjectRef::WorkerGlobal(global) => no_gc.wrap(cx.gc, wrapper, global),
         ObjectRef::Location(location) => no_gc.wrap(cx.gc, wrapper, location),
         ObjectRef::History(history) => no_gc.wrap(cx.gc, wrapper, history),
         ObjectRef::Navigator(navigator) => no_gc.wrap(cx.gc, wrapper, navigator),

@@ -54,7 +54,10 @@ fn start_timeline<'gc>(cx: &ApiCx<'_, 'gc>, document: NodeRef<'gc>) -> Option<f6
         return Some(time);
     }
     let window = cx.window_of(document)?;
-    Some(cx.start_timeline(document, cx.time_at(window, Instant::now())))
+    Some(cx.start_timeline(
+        document,
+        cx.time_at(cx.window_context(window), Instant::now()),
+    ))
 }
 
 /// `f` on `this`'s animation at its timeline's time: its playback's

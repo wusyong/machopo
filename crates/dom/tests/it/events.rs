@@ -98,7 +98,8 @@ fn objects_have_their_own_wrapper_edges_and_roots() {
 }
 
 /// Every kind of node holds listeners (in its kind's data, a template's
-/// with its contents), and a plain target; a node with none reads as none.
+/// with its contents), a plain target and a worker's global; a node with
+/// none reads as none.
 #[test]
 fn every_target_holds_listeners() {
     use dom::{ListenerFlags, QualName, TargetRef};
@@ -116,6 +117,10 @@ fn every_target_holds_listeners() {
             TargetRef::Node(cx.create_comment(document, "c")),
             TargetRef::Node(cx.create_processing_instruction(document, "t", "d")),
             TargetRef::EventTarget(cx.create_event_target()),
+            TargetRef::WorkerGlobal(cx.create_worker_global(
+                url::Url::parse("https://example.test/w.js").unwrap(),
+                url::Url::parse("https://example.test/").unwrap().origin(),
+            )),
         ];
         for target in targets {
             assert!(cx.listeners(target).is_none());

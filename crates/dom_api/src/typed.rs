@@ -6875,6 +6875,10 @@ pub fn interface_of<'gc>(cx: &ApiCx<'_, 'gc>, object: ObjectRef<'gc>) -> usize {
         ObjectRef::EventTarget(_) => const { crate::declare::interface_index("EventTarget") },
         ObjectRef::MessageChannel(_) => const { crate::declare::interface_index("MessageChannel") },
         ObjectRef::Window(_) => const { crate::declare::interface_index("Window") },
+        // Its realm's global object, which the engine makes with the realm
+        // as a window's; `EventTarget` while the table has no interface of
+        // a worker's global.
+        ObjectRef::WorkerGlobal(_) => const { crate::declare::interface_index("EventTarget") },
         ObjectRef::Location(_) => const { crate::declare::interface_index("Location") },
         ObjectRef::History(_) => const { crate::declare::interface_index("History") },
         ObjectRef::Navigator(_) => const { crate::declare::interface_index("Navigator") },

@@ -241,6 +241,8 @@ pub enum TargetRef<'gc> {
     Node(NodeRef<'gc>),
     Window(Gc<'gc, Window>),
     EventTarget(Gc<'gc, EventTargetImpl>),
+    /// A worker's global (`worker_global`).
+    WorkerGlobal(Gc<'gc, crate::WorkerGlobalScope>),
 }
 
 impl<'gc> TargetRef<'gc> {
@@ -250,6 +252,7 @@ impl<'gc> TargetRef<'gc> {
             Self::Node(node) => node.erase(),
             Self::Window(window) => window.erase(),
             Self::EventTarget(target) => target.erase(),
+            Self::WorkerGlobal(global) => global.erase(),
         }
     }
 
@@ -262,8 +265,11 @@ impl<'gc> TargetRef<'gc> {
         if let Some(node) = object.downcast::<Node>() {
             return Self::Node(node);
         }
-        match object.downcast::<Window>() {
-            Some(window) => Self::Window(window),
+        if let Some(window) = object.downcast::<Window>() {
+            return Self::Window(window);
+        }
+        match object.downcast::<crate::WorkerGlobalScope>() {
+            Some(global) => Self::WorkerGlobal(global),
             None => Self::EventTarget(object.downcast().expect("an event target")),
         }
     }
@@ -279,6 +285,7 @@ pub enum TargetRoot {
     Node(NodeRoot),
     Window(Persistent<Window>),
     EventTarget(Persistent<EventTargetImpl>),
+    WorkerGlobal(Persistent<crate::WorkerGlobalScope>),
 }
 
 impl TargetRoot {
@@ -287,6 +294,7 @@ impl TargetRoot {
             Self::Node(root) => TargetRef::Node(root.get(cx)),
             Self::Window(root) => TargetRef::Window(root.get(cx)),
             Self::EventTarget(root) => TargetRef::EventTarget(root.get(cx)),
+            Self::WorkerGlobal(root) => TargetRef::WorkerGlobal(root.get(cx)),
         }
     }
 }
@@ -299,6 +307,7 @@ pub enum ObjectRef<'gc> {
     Event(Gc<'gc, Event>),
     EventTarget(Gc<'gc, EventTargetImpl>),
     Window(Gc<'gc, Window>),
+    WorkerGlobal(Gc<'gc, crate::WorkerGlobalScope>),
     Location(Gc<'gc, Location>),
     History(Gc<'gc, crate::History>),
     Navigator(Gc<'gc, crate::Navigator>),
@@ -370,6 +379,7 @@ impl<'gc> ObjectRef<'gc> {
             Self::Event(object) => object.erase(),
             Self::EventTarget(object) => object.erase(),
             Self::Window(object) => object.erase(),
+            Self::WorkerGlobal(object) => object.erase(),
             Self::Location(object) => object.erase(),
             Self::History(object) => object.erase(),
             Self::Navigator(object) => object.erase(),
@@ -459,6 +469,7 @@ impl<'gc> From<TargetRef<'gc>> for ObjectRef<'gc> {
             TargetRef::Node(node) => Self::Node(node),
             TargetRef::Window(window) => Self::Window(window),
             TargetRef::EventTarget(target) => Self::EventTarget(target),
+            TargetRef::WorkerGlobal(global) => Self::WorkerGlobal(global),
         }
     }
 }
@@ -830,6 +841,7 @@ pub enum ObjectRoot {
     Event(Persistent<Event>),
     EventTarget(Persistent<EventTargetImpl>),
     Window(Persistent<Window>),
+    WorkerGlobal(Persistent<crate::WorkerGlobalScope>),
     Location(Persistent<Location>),
     History(Persistent<crate::History>),
     Navigator(Persistent<crate::Navigator>),
@@ -900,6 +912,7 @@ impl ObjectRoot {
             Self::Event(root) => ObjectRef::Event(root.get(cx)),
             Self::EventTarget(root) => ObjectRef::EventTarget(root.get(cx)),
             Self::Window(root) => ObjectRef::Window(root.get(cx)),
+            Self::WorkerGlobal(root) => ObjectRef::WorkerGlobal(root.get(cx)),
             Self::Location(root) => ObjectRef::Location(root.get(cx)),
             Self::History(root) => ObjectRef::History(root.get(cx)),
             Self::Navigator(root) => ObjectRef::Navigator(root.get(cx)),
@@ -1492,6 +1505,7 @@ impl<'gc> Cx<'_, 'gc> {
             }
             TargetRef::Window(window) => window.listeners.get(self.gc),
             TargetRef::EventTarget(target) => target.listeners.get(self.gc),
+            TargetRef::WorkerGlobal(global) => global.listeners.get(self.gc),
         }
     }
 
@@ -1598,6 +1612,7 @@ impl<'gc> Cx<'_, 'gc> {
             }
             TargetRef::Window(window) => &window.into_ref().listeners,
             TargetRef::EventTarget(target) => &target.into_ref().listeners,
+            TargetRef::WorkerGlobal(global) => &global.into_ref().listeners,
         };
         match edge.get(self.gc) {
             Some(listeners) => listeners,
@@ -1885,7 +1900,7 @@ impl<'gc> Cx<'_, 'gc> {
         }
         let node = match target {
             TargetRef::Window(_) => return true,
-            TargetRef::EventTarget(_) => return false,
+            TargetRef::EventTarget(_) | TargetRef::WorkerGlobal(_) => return false,
             TargetRef::Node(node) => node,
         };
         if self.kind(node) == NodeKind::Document {
@@ -1946,6 +1961,7 @@ impl<'gc> Cx<'_, 'gc> {
                 self.document_element(node)
             }
             TargetRef::Window(window) => self.document_element(self.window_document(window)),
+            TargetRef::WorkerGlobal(_) => None,
             // A shadow root's is over its tree: its elements at the top.
             TargetRef::Node(root) if self.is_shadow_root(root) => {
                 let mut child = self.first_child(root);
@@ -2071,6 +2087,7 @@ impl<'gc> Cx<'_, 'gc> {
             ObjectRef::Event(event) => &event.into_ref().wrapper,
             ObjectRef::EventTarget(target) => &target.into_ref().wrapper,
             ObjectRef::Window(window) => self.window_wrapper_edge(window),
+            ObjectRef::WorkerGlobal(global) => self.worker_global_wrapper_edge(global),
             ObjectRef::Location(location) => self.location_wrapper_edge(location),
             ObjectRef::History(history) => self.history_wrapper_edge(history),
             ObjectRef::Navigator(navigator) => self.navigator_wrapper_edge(navigator),
@@ -2164,6 +2181,9 @@ impl<'gc> Cx<'_, 'gc> {
                 ObjectRoot::EventTarget(Persistent::new(self.gc, target))
             }
             ObjectRef::Window(window) => ObjectRoot::Window(Persistent::new(self.gc, window)),
+            ObjectRef::WorkerGlobal(global) => {
+                ObjectRoot::WorkerGlobal(Persistent::new(self.gc, global))
+            }
             ObjectRef::Location(location) => {
                 ObjectRoot::Location(Persistent::new(self.gc, location))
             }
@@ -2315,6 +2335,9 @@ impl<'gc> Cx<'_, 'gc> {
         match target {
             TargetRef::Node(node) => TargetRoot::Node(self.root(node)),
             TargetRef::Window(window) => TargetRoot::Window(Persistent::new(self.gc, window)),
+            TargetRef::WorkerGlobal(global) => {
+                TargetRoot::WorkerGlobal(Persistent::new(self.gc, global))
+            }
             TargetRef::EventTarget(target) => {
                 TargetRoot::EventTarget(Persistent::new(self.gc, target))
             }
@@ -2324,10 +2347,11 @@ impl<'gc> Cx<'_, 'gc> {
     /// The window `target` belongs to (its relevant global, as the DOM
     /// knows it): a window itself, a node's document's, a target's whose
     /// execution context is a window's; none for a node whose document has
-    /// none, or a target of no window.
+    /// none, a worker's global, or a target of no window.
     pub fn target_window(&self, target: TargetRef<'gc>) -> Option<Gc<'gc, Window>> {
         match target {
             TargetRef::Window(window) => Some(window),
+            TargetRef::WorkerGlobal(_) => None,
             TargetRef::Node(node) => self.window_of(self.document_of(node)),
             // A wake lock's sentinel's and a `connection`'s: their
             // navigator's.
@@ -2340,7 +2364,8 @@ impl<'gc> Cx<'_, 'gc> {
     }
 
     /// The execution context of the realm `target` belongs to (its relevant
-    /// global's): a window's, a node's document's window's; a plain
+    /// global's): a window's or a worker's global's, a node's document's
+    /// window's; a plain
     /// target's, an abort signal's and a `FileReader`'s, that of the realm
     /// it was made in; a message port's, its owner's; a wake lock's
     /// sentinel's and a `connection`'s, their navigator's window's. None for
@@ -2351,6 +2376,7 @@ impl<'gc> Cx<'_, 'gc> {
     ) -> Option<Gc<'gc, crate::ExecutionContext>> {
         match target {
             TargetRef::Window(window) => Some(self.window_context(window)),
+            TargetRef::WorkerGlobal(global) => Some(self.worker_global_context(global)),
             TargetRef::Node(node) => self
                 .window_of(self.document_of(node))
                 .map(|window| self.window_context(window)),

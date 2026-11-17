@@ -502,7 +502,7 @@ pub(crate) fn retargeted_related<'gc>(
         (TargetRef::Node(related), Some(TargetRef::Node(current))) => {
             TargetRef::Node(cx.retarget(related, Some(current)))
         }
-        (TargetRef::Node(related), Some(TargetRef::Window(_) | TargetRef::EventTarget(_))) => {
+        (TargetRef::Node(related), Some(TargetRef::Window(_) | TargetRef::EventTarget(_) | TargetRef::WorkerGlobal(_))) => {
             TargetRef::Node(cx.retarget(related, None))
         }
         (related, _) => related,
@@ -721,7 +721,7 @@ fn legacy_element<'gc>(
     };
     match target? {
         TargetRef::Node(node) => Some(node),
-        TargetRef::Window(_) | TargetRef::EventTarget(_) => None,
+        TargetRef::Window(_) | TargetRef::EventTarget(_) | TargetRef::WorkerGlobal(_) => None,
     }
 }
 

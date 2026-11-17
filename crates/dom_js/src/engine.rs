@@ -286,7 +286,9 @@ impl V8Engine {
                         now
                     }
                 };
-                let due = cx.next_due(window).filter(|due| *due <= now)?;
+                let due = cx
+                    .next_due(cx.window_context(window))
+                    .filter(|due| *due <= now)?;
                 // On the DOM's clock: windows' time origins differ.
                 Some((cx.window_time_origin(window) + due, now))
             });
@@ -1080,9 +1082,9 @@ impl ScriptEngine for V8Engine {
         // Its timeline's time: the frame's, from its window's time origin.
         let (now, any) = self.dom_mut().read(|cx| {
             let document = document.get(cx.gc);
-            let now = cx
-                .window_of(document)
-                .map_or(0.0, |window| cx.time_at(window, frame_time));
+            let now = cx.window_of(document).map_or(0.0, |window| {
+                cx.time_at(cx.window_context(window), frame_time)
+            });
             (now, cx.has_animations(document))
         });
         // A document with none (most): its timeline moves on, no realm
@@ -1365,7 +1367,7 @@ impl ScriptEngine for V8Engine {
                         let Some(window) = cx.window_of(document.get(cx.gc)) else {
                             continue;
                         };
-                        let Some(task) = cx.next_task(window, now) else {
+                        let Some(task) = cx.next_task(cx.window_context(window), now) else {
                             continue;
                         };
                         if best.as_ref().is_none_or(|(best, ..)| task.before(best)) {
@@ -1391,11 +1393,12 @@ impl ScriptEngine for V8Engine {
         }
         let frames = self.frames_as_made();
         self.state().dom.read(|cx| {
-            let windows: Vec<_> = frames
+            let contexts: Vec<_> = frames
                 .iter()
                 .filter_map(|(_, _, document)| cx.window_of(document.get(cx.gc)))
+                .map(|window| cx.window_context(window))
                 .collect();
-            cx.end_task_pass(&windows);
+            cx.end_task_pass(&contexts);
         });
         if ran {
             // Each task's own checkpoint ran; the rejections it left.

@@ -258,7 +258,8 @@ pub fn run_element_tasks<H: ScriptHost>(host: &mut H, window: &Persistent<Window
 pub fn run_element_task<H: ScriptHost>(host: &mut H, window: &Persistent<Window>) -> bool {
     {
         let task = host.mutate(|cx| {
-            let (element, kind, target) = cx.take_element_task(window.get(cx.gc))?;
+            let (element, kind, target) =
+                cx.take_element_task(cx.window_context(window.get(cx.gc)))?;
             Some((
                 cx.root(element),
                 kind,

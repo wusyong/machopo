@@ -333,7 +333,7 @@ fn deleting_and_moving_by_grapheme_cluster() {
         let document = page.document.clone();
         page.dom.mutate(|cx| {
             let window = cx.window_of(document.get(cx.gc)).unwrap();
-            std::iter::from_fn(|| cx.take_element_task(window)).count()
+            std::iter::from_fn(|| cx.take_element_task(cx.window_context(window))).count()
         })
     };
     tasks(&mut page);

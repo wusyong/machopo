@@ -936,9 +936,9 @@ impl ScriptEngine for WasmEngine {
         };
         let (now, any) = self.dom().read(|cx| {
             let document = document.get(cx.gc);
-            let now = cx
-                .window_of(document)
-                .map_or(0.0, |window| cx.time_at(window, frame_time));
+            let now = cx.window_of(document).map_or(0.0, |window| {
+                cx.time_at(cx.window_context(window), frame_time)
+            });
             (now, cx.has_animations(document))
         });
         if !any {
@@ -1046,7 +1046,7 @@ impl ScriptEngine for WasmEngine {
             let next = self.dom().read(|cx| {
                 let now = cx.dom_now();
                 let window = window.get(cx.gc);
-                let task = cx.next_task(window, now)?;
+                let task = cx.next_task(cx.window_context(window), now)?;
                 Some((task, now - cx.window_time_origin(window)))
             });
             let Some((task, now)) = next else {
@@ -1057,7 +1057,8 @@ impl ScriptEngine for WasmEngine {
             }
             ran = true;
         }
-        self.dom().read(|cx| cx.end_task_pass(&[window.get(cx.gc)]));
+        self.dom()
+            .read(|cx| cx.end_task_pass(&[cx.window_context(window.get(cx.gc))]));
         ran
     }
 

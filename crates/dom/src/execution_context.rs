@@ -22,13 +22,16 @@ pub(crate) type BlobReads = Vec<(u64, crate::BlobRead)>;
 
 #[derive(GcObject)]
 pub struct ExecutionContext {
-    /// The global it is the execution context of: what answers for it
-    /// what its global's document has (its base URL, its origin), as
-    /// Blink's `LocalDOMWindow` answers `ExecutionContext::BaseURL()`.
-    /// The DOM's own: no function gives it out, or its document, which
-    /// would give the window (`window_of`) to a member of an interface a
-    /// worker has too.
-    global: Member<Window>,
+    /// The global it is the execution context of, a window's: what
+    /// answers for it what its global's document has (its base URL, its
+    /// origin), as Blink's `LocalDOMWindow` answers `ExecutionContext::
+    /// BaseURL()`. The DOM's own: no function gives it out, or its
+    /// document, which would give the window (`window_of`) to a member of
+    /// an interface a worker has too.
+    window: Member<Window>,
+    /// Or a worker's (`worker_global`), which answers its URL and origin
+    /// itself, as Blink's `WorkerGlobalScope` does.
+    worker: Member<crate::WorkerGlobalScope>,
     /// Its time origin (HR-Time's), in milliseconds since the DOM was made:
     /// what its events' and timers' times count from.
     pub(crate) time_origin: Cell<f64>,
@@ -75,7 +78,8 @@ impl<'gc> Cx<'_, 'gc> {
         self.gc.alloc_in(
             &sites::OTHER,
             ExecutionContextInit {
-                global: None,
+                window: None,
+                worker: None,
                 time_origin: Cell::new(self.origin.elapsed().as_secs_f64() * 1000.0),
                 timers: None,
                 last_timer_id: Cell::new(0),
@@ -99,41 +103,83 @@ impl<'gc> Cx<'_, 'gc> {
         context: Gc<'gc, ExecutionContext>,
         window: Gc<'gc, Window>,
     ) {
-        context.global.set(self.gc, Some(window));
+        context.window.set(self.gc, Some(window));
+    }
+
+    /// Makes worker's global `global` the global `context` is the execution
+    /// context of.
+    pub(crate) fn set_context_worker_global(
+        &self,
+        context: Gc<'gc, ExecutionContext>,
+        global: Gc<'gc, crate::WorkerGlobalScope>,
+    ) {
+        context.worker.set(self.gc, Some(global));
     }
 
     /// The document of `context`'s global, if it has one (a window's): the
     /// DOM's own, as the global is.
     fn context_document(&self, context: Gc<'gc, ExecutionContext>) -> Option<NodeRef<'gc>> {
-        let window = context.global.get(self.gc)?;
+        let window = context.window.get(self.gc)?;
         Some(self.window_document(window))
     }
 
     /// `context`'s API base URL (HTML's): its global's document's base
-    /// URL; none without one.
+    /// URL, a worker's global's URL; none without one.
     pub fn context_base_url(&self, context: Gc<'gc, ExecutionContext>) -> Option<Url> {
+        if let Some(global) = context.worker.get(self.gc) {
+            return Some(self.worker_global_url(global).clone());
+        }
         self.document_base_url(self.context_document(context)?)
     }
 
-    /// `context`'s creation URL (HTML's): its global's document's URL; none
-    /// without one.
+    /// `context`'s creation URL (HTML's): its global's document's URL, a
+    /// worker's global's; none without one.
     pub fn context_url(&self, context: Gc<'gc, ExecutionContext>) -> Option<crate::DomString> {
+        if let Some(global) = context.worker.get(self.gc) {
+            return Some(crate::DomString::new(self.worker_global_url(global).as_str()));
+        }
         self.document_url(self.context_document(context)?)
     }
 
     /// `context`'s origin (HTML's): its global's document's
-    /// (`document_origin`); none without one.
+    /// (`document_origin`), a worker's global's; none without one.
     pub fn context_origin(&self, context: Gc<'gc, ExecutionContext>) -> Option<url::Origin> {
+        if let Some(global) = context.worker.get(self.gc) {
+            return Some(self.worker_global_origin(global).clone());
+        }
         self.document_origin(self.context_document(context)?)
     }
 
+    /// `context`'s global, as an event target: what a message posted to
+    /// it is for.
+    pub(crate) fn context_target(
+        &self,
+        context: Gc<'gc, ExecutionContext>,
+    ) -> crate::TargetRef<'gc> {
+        match context.worker.get(self.gc) {
+            Some(global) => crate::TargetRef::WorkerGlobal(global),
+            None => {
+                crate::TargetRef::Window(self.context_window(context).expect("a context's global"))
+            }
+        }
+    }
+
     /// The window `context` is the execution context of, if its global is
-    /// one: the DOM's own (`global`).
+    /// one: the DOM's own (`window`).
     pub(crate) fn context_window(
         &self,
         context: Gc<'gc, ExecutionContext>,
     ) -> Option<Gc<'gc, Window>> {
-        context.global.get(self.gc)
+        context.window.get(self.gc)
+    }
+
+    /// The worker's global `context` is the execution context of, if its
+    /// global is one.
+    pub fn context_worker_global(
+        &self,
+        context: Gc<'gc, ExecutionContext>,
+    ) -> Option<Gc<'gc, crate::WorkerGlobalScope>> {
+        context.worker.get(self.gc)
     }
 
     /// The time since `context`'s time origin (the DOM's start with none),

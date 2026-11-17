@@ -10,7 +10,7 @@
 | 1a：執行環境從 `Window` 分出來、成員改成拿執行環境、global 照 exposed 建 | 做完，merge 回 `main` | 2026-11-17 |
 | 1b：dedicated worker | 做中：開始前的決定（第 8 到 12 條）做完；打斷 script 的原型做完（`details.md` 的「1b 的原型：打斷 script」） | |
 | 1b-1：被打斷的 script 不被 `dom_js` 回頭呼叫 script 的地方吞掉 | 做完（「已決定的事項」第 13 條） | 2026-11-17 |
-| 1b-2：`dom` 的 worker 的 global（自己的執行環境、event target），執行環境的 timer 和 task | 還沒開始 | |
+| 1b-2：`dom` 的 worker 的 global（自己的執行環境、event target），執行環境的 timer 和 task | 做完（第 14、15 條） | 2026-11-17 |
 | 1b-3：`dom_api` 的 `Worker`、`WorkerGlobalScope`、`DedicatedWorkerGlobalScope` 和 worker 也有的 timer 等成員 | 還沒開始 | |
 | 1b-4：worker 的 engine（`dom_api` 的 trait、`dom_js` 的實作，global 照 exposed 建） | 還沒開始 | |
 | 1b-5：`renderer` 的 worker 的 thread 和 event loop、兩個方向的 `postMessage`、`terminate()`、`close()`、`onerror` | 還沒開始 | |
@@ -27,6 +27,7 @@
 | 1a：執行環境（time origin、timer、task、訊息、port、`fetch()`、blob、performance）在 `Window` 和成員之間行為不變 | `cargo test -p dom -p dom_api -p dom_js -p dom_wasm`；WPT 的相關目錄（「做過的檢查」的 1a 那幾段） |
 | 1a：worker 也有的物件的事件從它的 realm 的 time origin 算 | `cargo test -p dom_js --test it engine::` |
 | 1b-1：從別的 thread 打斷的 script 在 DOM 回頭呼叫的每種 callback 裡停下，呼叫它的 script 也停下、之後的一行都不跑，不回報錯誤；下一個 task 的 script 照常跑 | `cargo test -p dom_js --test it termination::`、`cargo test -p bindings --test it termination::`；debug 的 V8 加上 `--strict-termination-checks` 跑同樣的測試 |
+| 1b-2：worker 的 global 的執行環境回答它自己的 URL、base URL 和 origin；它的 timer、task、port 的訊息是它的執行環境的，和同一個 `Dom` 裡的 window 分開；它是自己的 event target | `cargo test -p dom --test it worker_global::`、`events::every_target_holds_listeners`、`tasks::` |
 
 ## 做過的檢查
 
@@ -83,4 +84,13 @@
   - 回頭呼叫 script 的入口的 7 道（下一個 listener、handler、編譯 handler、升級、lifecycle callback、script 元素、settle promise）：等價，記進 `docs/test-gaps.md` 的「等價、不用處理的 mutation」。拿掉之後下一個 callback 被呼叫，但再要求的打斷讓它在函式的入口就停下，看不到差別。
   - `report_caught_of`、node filter、JSON 接住打斷之後呼叫 `stop_again`（3 條，`stop_again` 本身由 `bindings` 的測試守著）、node filter 把打斷交給成員再丟一次、建 `DOMException` 和 `QuotaExceededError` 前的檢查、JSON 解析到一半被打斷時不 reject：記進 `docs/test-gaps.md` 的「能補、還沒補的測試空缺」。在測試走得到的路上，清掉打斷的 API 都有自己的入口檢查（兩層互相遮住）；沒找到「被打斷之後同一個成員裡丟 `DOMException`」的路；`busy` 的 JSON 迴圈不一定在解析中被打斷。
 - 跑過的：`cargo test -p dom -p dom_api -p dom_js -p dom_wasm`（改 `stop_again` 之前；之後 `cargo test -p dom_js -p bindings` 都通過）。
+
+### 1b-2：worker 的 global 和收執行環境的函式（2026-11-17，macOS，Apple Silicon）
+
+- `dom` 的 timer、task、訊息、回報例外的函式改收執行環境（「已決定的事項」第 15 條）：`add_timer`、`remove_timer`、`time_at`、`next_due`、`next_script_timer_due`、`take_due`、`timer_nesting`、`set_timer_nesting`、`take_due_native_timer`、`has_element_task`、`take_element_task`、`has_posted_message`、`take_posted_message`、`next_task`、`end_task_pass`（收執行環境的 slice）、`reporting`、`set_reporting`。`hashchange` 的 task 和 `requestIdleCallback` 的 timeout 只有 window 有，照執行環境的 global 判斷。`dom_api`、`dom_js`、`dom_wasm`、`renderer` 和測試裡約 100 處呼叫改成先拿 window 的執行環境（`window_context`）。`crypto`、`performance`、`fetch()` 的函式還收 window，第 2 階段用到時再改。
+- `dom` 的 `WorkerGlobalScope`（`worker_global.rs`，「已決定的事項」第 14 條）：執行環境、URL、origin、listener、wrapper 的參照；`create_worker_global`、`worker_global_context`、`worker_global_url`、`worker_global_origin`。`ExecutionContext` 的 global 分成 `window` 和 `worker` 兩個欄位，`context_base_url`、`context_url`、`context_origin` 對 worker 的 global 回答它自己的；`context_worker_global`。`TargetRef`、`TargetRoot`、`ObjectRef`、`ObjectRoot` 多一種 `WorkerGlobal`：event 的路徑只有它自己（和 `new EventTarget()` 一樣不往上走、不 retarget），沒有 window（`target_window` 是沒有），執行環境是它自己的（`target_context`），listener 是它自己的；觸控和滾輪的 listener 不預設 passive。
+- 留給之後的：`dom_api` 的 `interface_of` 把 worker 的 global 暫時對應到 `EventTarget`（1b-3 加上 `DedicatedWorkerGlobalScope` 時換掉）；把 `this` 轉成 target 的地方（`dom_api` 的 `typed.rs`、`dom_js` 的 `info_front.rs`、`devtools_page.rs`）、`onerror` 的特別的呼叫方式（`dom_js` 的 `listeners.rs` 只認 window；HTML 的 worker 的 global 的也是 `OnErrorEventHandler`）在 1b-4 有 worker 的 realm、測試走得到時改；`context_target` 對 worker 的 global 回答它（發給 global 自己的佇列的訊息的 target）在 1b-5 有 `postMessage` 時補測試。
+- 新的測試：`dom` 的 `worker_global::a_worker_s_global_answers_its_url_and_origin`、`a_worker_s_global_runs_its_own_timers`、`a_worker_s_global_delivers_its_ports_messages`、`an_event_at_a_worker_s_global_is_at_it`，`tasks::an_idle_callback_s_timeout_is_a_task_once_due`（mutation test 沒抓到的那一條補的：之前沒有測試看 `next_task` 給出 idle callback 的 timeout），`events::every_target_holds_listeners` 加上 worker 的 global。
+- mutation test（`rfcs/0103-worker-global-scope/mutants-1b2.toml`）：10 條。第一次 7 條抓到，沒抓到的 3 條：「idle callback 的 timeout 不是 `next_task` 的候選」（補了上面的測試，重跑抓到）、「讀回的 erased 的 worker 的 global 當成一般的 target」（補了 `an_event_at_a_worker_s_global_is_at_it`，重跑抓到）、「發給 worker 的 global 自己的訊息的 target 是 window」（現在沒有東西會把訊息排進 worker 的 global 自己的佇列，1b-5 的 `postMessage` 補測試）。
+- 跑過的：`cargo test -p dom -p dom_api -p dom_js -p dom_wasm -p renderer` 都通過。
 

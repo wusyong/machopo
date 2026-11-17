@@ -26,7 +26,7 @@ fn message() -> SerializedMessage {
 /// The queue of the task `window` runs next by now, if any.
 fn next<'gc>(cx: &Cx<'_, 'gc>, window: Gc<'gc, Window>) -> Option<TaskQueue> {
     // A little past now: the timer of 0 ms is due.
-    cx.next_task(window, cx.dom_now() + 1.0)
+    cx.next_task(cx.window_context(window), cx.dom_now() + 1.0)
         .map(|task| task.queue)
 }
 
@@ -34,9 +34,9 @@ fn next<'gc>(cx: &Cx<'_, 'gc>, window: Gc<'gc, Window>) -> Option<TaskQueue> {
 fn take<'gc>(cx: &Cx<'_, 'gc>, window: Gc<'gc, Window>, queue: TaskQueue) {
     let now = cx.now_since(Some(window)) + 1.0;
     match queue {
-        TaskQueue::Timer => assert!(cx.take_due(window, now).is_some()),
-        TaskQueue::Element => assert!(cx.take_element_task(window).is_some()),
-        TaskQueue::Message => assert!(cx.take_posted_message(window).is_some()),
+        TaskQueue::Timer => assert!(cx.take_due(cx.window_context(window), now).is_some()),
+        TaskQueue::Element => assert!(cx.take_element_task(cx.window_context(window)).is_some()),
+        TaskQueue::Message => assert!(cx.take_posted_message(cx.window_context(window)).is_some()),
         other => panic!("{other:?}"),
     }
 }
@@ -48,7 +48,7 @@ fn tasks_run_in_the_order_queued_across_their_sources() {
         let (window, document) = window(cx);
         let element = cx.create_element(document, QualName::html("p"));
         cx.post_window_message(window, message(), DomString::new(""), None, &[]);
-        cx.add_timer(window, 0.0, false);
+        cx.add_timer(cx.window_context(window), 0.0, false);
         cx.queue_element_task(element, names::event::SELECT);
         cx.post_window_message(window, message(), DomString::new(""), None, &[]);
         let mut order = Vec::new();
@@ -76,11 +76,11 @@ fn a_timer_waits_for_its_time_and_an_interval_goes_after() {
     dom.mutate(|cx| {
         let (window, document) = window(cx);
         let element = cx.create_element(document, QualName::html("p"));
-        cx.add_timer(window, 60_000.0, false);
-        let interval = cx.add_timer(window, 0.0, true);
+        cx.add_timer(cx.window_context(window), 60_000.0, false);
+        let interval = cx.add_timer(cx.window_context(window), 0.0, true);
         assert_eq!(next(cx, window), Some(TaskQueue::Timer));
         let now = cx.now_since(Some(window)) + 1.0;
-        let (taken, _) = cx.take_due(window, now).expect("due");
+        let (taken, _) = cx.take_due(cx.window_context(window), now).expect("due");
         assert!(Gc::ptr_eq(taken, interval));
         cx.queue_element_task(element, names::event::SELECT);
         // Due again at once (its interval clamped to 0), numbered after
@@ -95,7 +95,7 @@ fn a_timer_not_due_is_no_task() {
     let mut dom = Dom::new();
     dom.mutate(|cx| {
         let (window, _) = window(cx);
-        cx.add_timer(window, 60_000.0, false);
+        cx.add_timer(cx.window_context(window), 60_000.0, false);
         assert_eq!(next(cx, window), None);
     });
 }
@@ -107,12 +107,12 @@ fn an_interval_set_again_waits_for_the_next_pass() {
     let mut dom = Dom::new();
     dom.mutate(|cx| {
         let (window, _) = window(cx);
-        cx.add_timer(window, 0.0, true);
+        cx.add_timer(cx.window_context(window), 0.0, true);
         cx.begin_task_pass();
         assert_eq!(next(cx, window), Some(TaskQueue::Timer));
         take(cx, window, TaskQueue::Timer);
         assert_eq!(next(cx, window), None, "held back for the next pass");
-        cx.end_task_pass(&[window]);
+        cx.end_task_pass(&[cx.window_context(window)]);
         assert_eq!(next(cx, window), Some(TaskQueue::Timer));
     });
 }
@@ -126,9 +126,12 @@ fn an_element_task_queued_in_a_pass_waits_for_the_next() {
         let element = cx.create_element(document, QualName::html("p"));
         cx.begin_task_pass();
         cx.queue_element_task(element, names::event::SELECT);
-        assert!(cx.take_element_task(window).is_none(), "held back");
-        cx.end_task_pass(&[window]);
-        assert!(cx.take_element_task(window).is_some());
+        assert!(
+            cx.take_element_task(cx.window_context(window)).is_none(),
+            "held back"
+        );
+        cx.end_task_pass(&[cx.window_context(window)]);
+        assert!(cx.take_element_task(cx.window_context(window)).is_some());
     });
 }
 
@@ -147,8 +150,8 @@ fn a_pass_runs_what_was_queued_before_it() {
         // Its listener posts another.
         cx.post_window_message(window, message(), DomString::new(""), None, &[]);
         assert_eq!(next(cx, window), None, "held back for the next pass");
-        assert!(cx.take_posted_message(window).is_none());
-        cx.end_task_pass(&[window]);
+        assert!(cx.take_posted_message(cx.window_context(window)).is_none());
+        cx.end_task_pass(&[cx.window_context(window)]);
         assert_eq!(next(cx, window), Some(TaskQueue::Message));
     });
 }
@@ -161,7 +164,7 @@ fn the_flag_says_a_task_may_be_queued() {
     let mut dom = Dom::new();
     let window = dom.mutate(|cx| {
         let (window, _) = window(cx);
-        cx.add_timer(window, 0.0, false);
+        cx.add_timer(cx.window_context(window), 0.0, false);
         elise::Persistent::new(cx.gc, window)
     });
     assert!(!dom.has_queued_tasks(), "a timer waits for its time");
@@ -175,14 +178,14 @@ fn the_flag_says_a_task_may_be_queued() {
         cx.begin_task_pass();
         take(cx, window, TaskQueue::Message);
         cx.post_window_message(window, message(), DomString::new(""), None, &[]);
-        cx.end_task_pass(&[window]);
+        cx.end_task_pass(&[cx.window_context(window)]);
     });
     assert!(dom.has_queued_tasks(), "one held back");
     dom.mutate(|cx| {
         let window = window.get(cx.gc);
         cx.begin_task_pass();
         take(cx, window, TaskQueue::Message);
-        cx.end_task_pass(&[window]);
+        cx.end_task_pass(&[cx.window_context(window)]);
     });
     assert!(!dom.has_queued_tasks());
 }
@@ -197,9 +200,13 @@ fn the_windows_load_is_an_element_task() {
         let element = cx.create_element(document, QualName::html("p"));
         cx.queue_element_task(element, names::event::ERROR);
         cx.queue_window_load(document);
-        let (_, kind, _) = cx.take_element_task(window).expect("the error first");
+        let (_, kind, _) = cx
+            .take_element_task(cx.window_context(window))
+            .expect("the error first");
         assert_eq!(kind, ElementTaskKind::Fire(names::event::ERROR));
-        let (target, kind, _) = cx.take_element_task(window).expect("then the load");
+        let (target, kind, _) = cx
+            .take_element_task(cx.window_context(window))
+            .expect("then the load");
         assert_eq!(kind, ElementTaskKind::WindowLoad);
         assert!(Gc::ptr_eq(target, document));
         cx.note_document_loaded(document);
@@ -207,4 +214,21 @@ fn the_windows_load_is_an_element_task() {
     });
     assert_eq!(dom.take_loaded_documents(), [id]);
     assert!(dom.take_loaded_documents().is_empty());
+}
+
+/// A window's idle callback with a timeout is one of its tasks once the
+/// timeout is due, in its turn with the others; one with none never is.
+#[test]
+fn an_idle_callback_s_timeout_is_a_task_once_due() {
+    let mut dom = Dom::new();
+    dom.mutate(|cx| {
+        let (window, _) = window(cx);
+        let context = cx.window_context(window);
+        cx.add_idle_callback(window, 0);
+        assert!(cx.next_task(context, cx.dom_now() + 10_000.0).is_none());
+        cx.add_idle_callback(window, 5);
+        assert!(cx.next_task(context, cx.dom_now()).is_none());
+        let next = cx.next_task(context, cx.dom_now() + 10.0).expect("its timeout is due");
+        assert_eq!(next.queue, TaskQueue::IdleTimeout);
+    });
 }

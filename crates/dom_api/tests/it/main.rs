@@ -1054,7 +1054,7 @@ impl dom_api::ScriptHost for TestHost<'_, '_> {
             TimerCall {
                 callback: cx.timer_callback_edge(timer).embedder_word(cx.gc),
                 arguments: cx.timer_arguments_edge(timer).embedder_word(cx.gc),
-                nesting: cx.timer_nesting(window.get(cx.gc)),
+                nesting: cx.timer_nesting(cx.window_context(window.get(cx.gc))),
             }
         });
         let callback = call.callback;
@@ -1064,7 +1064,7 @@ impl dom_api::ScriptHost for TestHost<'_, '_> {
         // window's nesting level.
         if callback >= 100 {
             self.mutate(|cx| {
-                let timer = cx.add_timer(window.get(cx.gc), 0.0, false);
+                let timer = cx.add_timer(cx.window_context(window.get(cx.gc)), 0.0, false);
                 cx.timer_callback_edge(timer)
                     .set_embedder_word(cx.gc, callback - 100);
             });
@@ -1199,12 +1199,14 @@ pub fn with_host<R>(dom: &TestDom, f: impl FnOnce(&mut TestHost<'_, '_>) -> R) -
     f(&mut TestHost(&mut front))
 }
 
-/// A target's name in the tests' log: a node's name, `#window`, `#target`.
+/// A target's name in the tests' log: a node's name, `#window`, `#target`,
+/// `#worker`.
 fn target_name<'gc>(cx: &dom::Cx<'_, 'gc>, target: dom::TargetRef<'gc>) -> String {
     match target {
         dom::TargetRef::Node(node) => cx.node_name(node).to_string(),
         dom::TargetRef::Window(_) => "#window".to_owned(),
         dom::TargetRef::EventTarget(_) => "#target".to_owned(),
+        dom::TargetRef::WorkerGlobal(_) => "#worker".to_owned(),
     }
 }
 
@@ -1228,6 +1230,7 @@ pub fn erase(object: ObjectRef<'_>) -> elise::Gc<'_, elise::Erased> {
         ObjectRef::Event(event) => event.erase(),
         ObjectRef::EventTarget(target) => target.erase(),
         ObjectRef::Window(window) => window.erase(),
+        ObjectRef::WorkerGlobal(global) => global.erase(),
         ObjectRef::Location(location) => location.erase(),
         ObjectRef::History(history) => history.erase(),
         ObjectRef::Navigator(navigator) => navigator.erase(),

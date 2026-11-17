@@ -376,12 +376,16 @@ impl<'gc> Cx<'_, 'gc> {
         shipped
     }
 
-    /// `ports`, shipped in a message, now `window`'s (HTML's transfer-receiving
+    /// `ports`, shipped in a message, now `context`'s (HTML's transfer-receiving
     /// steps).
-    fn receive_ports(&self, window: Gc<'gc, Window>, ports: &[Gc<'gc, EventTargetImpl>]) {
+    fn receive_ports(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+        ports: &[Gc<'gc, EventTargetImpl>],
+    ) {
         for &port in ports {
             if let Some(data) = self.port_data(port) {
-                data.owner.set(self.gc, Some(self.window_context(window)));
+                data.owner.set(self.gc, Some(context));
             }
         }
     }
@@ -463,14 +467,14 @@ impl<'gc> Cx<'_, 'gc> {
         queue.push(self.gc, message);
     }
 
-    /// Whether `window` has a message to deliver: one posted to it, or one
+    /// Whether `context` has a message to deliver: one posted to it, or one
     /// in an enabled port's queue of its.
-    pub fn has_posted_message(&self, window: Gc<'gc, Window>) -> bool {
-        self.window_context(window)
+    pub fn has_posted_message(&self, context: Gc<'gc, crate::ExecutionContext>) -> bool {
+        context
             .posted_messages
             .get(self.gc)
             .is_some_and(|queue| !queue.is_empty())
-            || list_items(self, self.window_context(window).message_ports.get(self.gc))
+            || list_items(self, context.message_ports.get(self.gc))
                 .into_iter()
                 .any(|port| {
                     self.port_data(port)
@@ -479,16 +483,19 @@ impl<'gc> Cx<'_, 'gc> {
                 })
     }
 
-    /// `window`'s next message, taken: the first posted, of those posted
+    /// `context`'s next message, taken: the first posted, of those posted
     /// to it and those in its enabled ports' queues (the port it is for,
     /// the target), that the host's pass lets run (`tasks`); its payload,
     /// origin, source and ports (now the window's).
-    pub fn take_posted_message(&self, window: Gc<'gc, Window>) -> Option<TakenMessage<'gc>> {
-        let (port, _) = self.first_message(window)?;
+    pub fn take_posted_message(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+    ) -> Option<TakenMessage<'gc>> {
+        let (port, _) = self.first_message(context)?;
         let (message, target) = match port {
             None => {
-                let queue = self.window_context(window).posted_messages.get(self.gc)?;
-                (queue.remove(self.gc, 0), TargetRef::Window(window))
+                let queue = context.posted_messages.get(self.gc)?;
+                (queue.remove(self.gc, 0), self.context_target(context))
             }
             Some(port) => {
                 let queue = self.port_data(port)?.queue.get(self.gc)?;
@@ -499,7 +506,7 @@ impl<'gc> Cx<'_, 'gc> {
             }
         };
         let ports = list_items(self, message.ports.get(self.gc));
-        self.receive_ports(window, &ports);
+        self.receive_ports(context, &ports);
         Some(TakenMessage {
             target,
             payload: message.payload.get().take(),
@@ -511,27 +518,29 @@ impl<'gc> Cx<'_, 'gc> {
 }
 
 impl<'gc> Cx<'_, 'gc> {
-    /// When `window`'s first message was posted (the DOM's clock) and its
+    /// When `context`'s first message was posted (the DOM's clock) and its
     /// number, if the host's pass lets it run (`tasks`).
-    pub(crate) fn next_posted_message(&self, window: Gc<'gc, Window>) -> Option<(f64, u64)> {
-        self.first_message(window)
+    pub(crate) fn next_posted_message(
+        &self,
+        context: Gc<'gc, crate::ExecutionContext>,
+    ) -> Option<(f64, u64)> {
+        self.first_message(context)
             .map(|(_, message)| (message.queued.get(), message.number.get()))
     }
 
-    /// `window`'s first message to deliver: of the first in its own queue
+    /// `context`'s first message to deliver: of the first in its own queue
     /// and those in its enabled ports' (the port), the lowest numbered, if
     /// the host's pass lets it run.
     fn first_message(
         &self,
-        window: Gc<'gc, Window>,
+        context: Gc<'gc, crate::ExecutionContext>,
     ) -> Option<(Option<Gc<'gc, EventTargetImpl>>, Gc<'gc, PostedMessage>)> {
-        let own = self
-            .window_context(window)
+        let own = context
             .posted_messages
             .get(self.gc)
             .and_then(|queue| queue.get(self.gc, 0))
             .map(|message| (None, message));
-        let ports = list_items(self, self.window_context(window).message_ports.get(self.gc))
+        let ports = list_items(self, context.message_ports.get(self.gc))
             .into_iter()
             .filter_map(|port| {
                 let message = self.port_data(port)?.queue.get(self.gc)?.get(self.gc, 0)?;

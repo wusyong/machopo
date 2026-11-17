@@ -380,7 +380,7 @@ pub fn run_posted_messages<H: ScriptHost>(host: &mut H, window: &Persistent<Wind
 pub fn run_posted_message<H: ScriptHost>(host: &mut H, window: &Persistent<Window>) -> bool {
     {
         let taken = host.mutate(|cx| {
-            let taken = cx.take_posted_message(window.get(cx.gc))?;
+            let taken = cx.take_posted_message(cx.window_context(window.get(cx.gc)))?;
             let ports: Vec<_> = taken
                 .ports
                 .iter()
