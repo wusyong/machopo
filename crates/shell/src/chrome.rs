@@ -1,18 +1,25 @@
-//! The browser's own UI on `ui`'s tree: the tab strip above the toolbar
-//! (back, forward, reload and the address field), the types its views
-//! share, and the messages they send the browser view. The UI is
-//! described from a snapshot of the browser's state ([`UiState`]) each time
-//! that changes, and the tree keeps the views that are still the same. The
-//! tree covers the area above the web views; the web views are the browser
-//! view's.
+//! The browser's own UI on `ui`'s tree, in one of two layouts: the tab
+//! strip above the toolbar (back, forward, reload and the address field),
+//! or a sidebar down the window's left side with the same buttons and field
+//! and a row for each tab, after Zen's. The UI is described from a snapshot
+//! of the browser's state ([`UiState`]) each time that changes, and the tree
+//! keeps the views that are still the same. The tree covers the window: the
+//! web views are where its [`WebViewSlot`]s are laid out.
 
-use gfx::SizeF;
+use base::numerics::{clamp_round, saturated_cast};
+use gfx::{PointF, Rect, SizeF};
+use protocol::TabId;
 use ui::taffy::prelude::{length, percent};
-use ui::taffy::{AlignItems, FlexDirection, Rect, Size, Style};
-use ui::{Clipboard, Element, TextContexts, ViewId, ViewTree};
+use ui::taffy::{AlignItems, FlexDirection, Size, Style};
+use ui::{
+    Clipboard, Component, CreateCtx, Element, EventCtx, TextContexts, View, ViewId, ViewTree,
+};
 
 use crate::browser_view::Command;
 use crate::omnibox::{Omnibox, OmniboxProps};
+use crate::sidebar::{
+    NewTabRow, SidebarEdge, SidebarEdgeProps, SidebarPanel, SidebarTab, SidebarTabProps,
+};
 use crate::tab_strip::{TabStrip, TabStripProps};
 use crate::theme::{BrowserTheme, SizeToken};
 use crate::toolbar::{self, Button, NavButton, NavButtonProps, ToolbarRow};
@@ -27,48 +34,79 @@ impl ui::App for BrowserUi {
 }
 
 /// What a view of the browser UI asks of the browser view.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum UiMessage {
     /// What a shortcut would do too.
     Command(Command),
     /// Close the tab at this index (its close button, or the middle
-    /// button on it).
+    /// button on it, in the tab strip).
     CloseTab(usize),
+    /// Show this tab (its row in the sidebar).
+    SelectTabById(TabId),
+    /// Close this tab (its row's close button, or the middle button on it).
+    CloseTabById(TabId),
     /// Enter in the address field: go to what was typed, as typed.
     Navigate(String),
+    /// The sidebar's edge dragged: the width it would be, CSS px.
+    ResizeSidebar(f32),
+}
+
+/// Which way the UI is laid out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UiLayout {
+    /// The tab strip above the toolbar, above the page.
+    #[default]
+    Horizontal,
+    /// A sidebar down the left, the page right of it.
+    Sidebar,
 }
 
 /// What the UI shows of the browser: all a description of it reads.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UiState {
-    /// The tabs' titles, in order, and the active one's index.
+    pub layout: UiLayout,
+    /// The tabs, in order, their titles, and the active one's index.
+    pub tabs: Vec<TabId>,
     pub titles: Vec<String>,
     pub active: usize,
+    /// The web contents shown, the active tab's first; a layout may show
+    /// only some of them.
+    pub shown: Vec<TabId>,
     /// The active tab's URL.
     pub url: String,
     pub can_go_back: bool,
     pub can_go_forward: bool,
     /// Editing keys as on macOS.
     pub mac: bool,
-    /// The UI's width, CSS px: the window's.
+    /// The window's size, CSS px, and its scale.
     pub width: f32,
+    pub height: f32,
+    pub scale: f32,
     /// How high the tab strip is, CSS px: the toolbar starts there, a whole
     /// physical px, which the strip's own height in CSS px needn't be at
     /// every scale.
     pub strip_height: f32,
+    /// How wide the sidebar is, CSS px.
+    pub sidebar_width: f32,
 }
 
 impl Default for UiState {
     fn default() -> Self {
         Self {
+            layout: UiLayout::Horizontal,
+            tabs: Vec::new(),
             titles: Vec::new(),
             active: 0,
+            shown: Vec::new(),
             url: String::new(),
             can_go_back: false,
             can_go_forward: false,
             mac: cfg!(target_os = "macos"),
             width: 0.0,
+            height: 0.0,
+            scale: 1.0,
             strip_height: crate::tab_strip::HEIGHT,
+            sidebar_width: BrowserTheme::light().size(SizeToken::SidebarWidth),
         }
     }
 }
@@ -125,18 +163,211 @@ pub fn horizontal(state: &UiState, theme: &BrowserTheme) -> Element<BrowserUi> {
                     .style(field_style(theme)),
                 ),
         )
+        .children(first_web_view(state))
 }
+
+/// The UI laid out down a sidebar on the left: back, forward and reload,
+/// the address field, a new tab row and a row for each tab; its edge, which
+/// drags; the page right of it.
+pub fn sidebar(state: &UiState, theme: &BrowserTheme) -> Element<BrowserUi> {
+    let padding = theme.size(SizeToken::SidebarPadding);
+    let button_size = theme.size(SizeToken::ToolbarButton);
+    let fixed = |width, height| Style {
+        flex_shrink: 0.0,
+        size: Size { width, height },
+        ..Style::default()
+    };
+    let button = |button: Button, name, enabled| {
+        Element::new::<NavButton>(NavButtonProps { button, enabled })
+            .name(name)
+            .style(fixed(length(button_size), length(button_size)))
+    };
+    let tabs = state
+        .tabs
+        .iter()
+        .zip(&state.titles)
+        .enumerate()
+        .map(|(index, (&tab, title))| {
+            Element::new::<SidebarTab>(SidebarTabProps {
+                tab,
+                title: title.clone(),
+                active: index == state.active,
+            })
+            .key(u64::from(tab.0))
+            .style(fixed(
+                ui::taffy::Dimension::auto(),
+                ui::taffy::Dimension::auto(),
+            ))
+        });
+    Element::container()
+        .style(Style {
+            flex_direction: FlexDirection::Row,
+            ..Style::default()
+        })
+        .child(
+            Element::new::<SidebarPanel>(())
+                .name("sidebar")
+                .style(Style {
+                    flex_direction: FlexDirection::Column,
+                    flex_shrink: 0.0,
+                    padding: ui::taffy::Rect {
+                        left: length(padding),
+                        right: length(padding),
+                        top: length(padding),
+                        bottom: length(padding),
+                    },
+                    gap: Size {
+                        width: length(0.0),
+                        height: length(padding),
+                    },
+                    size: Size {
+                        width: length(state.sidebar_width),
+                        height: percent(1.0),
+                    },
+                    ..Style::default()
+                })
+                .child(
+                    Element::container()
+                        .style(Style {
+                            flex_direction: FlexDirection::Row,
+                            flex_shrink: 0.0,
+                            align_items: AlignItems::CENTER,
+                            gap: Size {
+                                width: length(theme.size(SizeToken::ToolbarGap)),
+                                height: length(0.0),
+                            },
+                            ..Style::default()
+                        })
+                        .child(button(Button::Back, "back", state.can_go_back))
+                        .child(button(Button::Forward, "forward", state.can_go_forward))
+                        .child(button(Button::Reload, "reload", true)),
+                )
+                .child(
+                    Element::new::<Omnibox>(OmniboxProps {
+                        url: state.url.clone(),
+                        mac: state.mac,
+                    })
+                    .name("omnibox")
+                    .style(fixed(
+                        ui::taffy::Dimension::auto(),
+                        length(theme.size(SizeToken::FieldHeight)),
+                    )),
+                )
+                .child(Element::new::<NewTabRow>(()).name("new-tab").style(fixed(
+                    ui::taffy::Dimension::auto(),
+                    ui::taffy::Dimension::auto(),
+                )))
+                .child(
+                    Element::container()
+                        .name("tabs")
+                        .style(Style {
+                            flex_direction: FlexDirection::Column,
+                            flex_shrink: 0.0,
+                            gap: Size {
+                                width: length(0.0),
+                                height: length(2.0),
+                            },
+                            ..Style::default()
+                        })
+                        .children(tabs),
+                ),
+        )
+        .child(
+            Element::new::<SidebarEdge>(SidebarEdgeProps {
+                width: state.sidebar_width,
+            })
+            .name("sidebar-edge")
+            .style(fixed(
+                length(theme.size(SizeToken::SidebarEdgeWidth)),
+                percent(1.0),
+            )),
+        )
+        .children(first_web_view(state))
+}
+
+/// The UI as `state` says it is laid out.
+pub fn describe(state: &UiState, theme: &BrowserTheme) -> Element<BrowserUi> {
+    match state.layout {
+        UiLayout::Horizontal => horizontal(state, theme),
+        UiLayout::Sidebar => sidebar(state, theme),
+    }
+}
+
+/// The active tab's web view, taking the rest of its parent: the layouts
+/// show one web contents (another, like a docked DevTools', needs a layout
+/// of its own).
+fn first_web_view(state: &UiState) -> Option<Element<BrowserUi>> {
+    let &tab = state.shown.first()?;
+    Some(
+        Element::new::<WebViewSlot>(WebViewSlotProps { tab })
+            .key(u64::from(tab.0))
+            .style(Style {
+                flex_grow: 1.0,
+                flex_shrink: 1.0,
+                flex_basis: length(0.0),
+                min_size: Size {
+                    width: length(0.0),
+                    height: length(0.0),
+                },
+                ..Style::default()
+            }),
+    )
+}
+
+/// Which web contents a web view slot shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WebViewSlotProps {
+    pub tab: TabId,
+}
+
+/// Where a web view is (Chromium's `views::WebView`): it draws nothing and
+/// isn't hit itself; the browser view puts the web contents' surface where
+/// it is laid out, and sends it the input there.
+pub struct WebViewSlot {
+    tab: TabId,
+}
+
+impl WebViewSlot {
+    pub fn tab(&self) -> TabId {
+        self.tab
+    }
+}
+
+impl Component<BrowserUi> for WebViewSlot {
+    type Props = WebViewSlotProps;
+
+    fn create(props: &WebViewSlotProps, _: &mut CreateCtx<'_, BrowserUi>) -> Self {
+        Self { tab: props.tab }
+    }
+
+    fn set_props(&mut self, props: &WebViewSlotProps, _: &mut EventCtx<'_, BrowserUi>) {
+        self.tab = props.tab;
+    }
+}
+
+impl View<BrowserUi> for WebViewSlot {
+    fn hit_test(&self, _: PointF) -> bool {
+        false
+    }
+}
+
+/// A layout of the browser's own: the UI for a state, instead of the one
+/// its `layout` names (tests that show two web views lay them out so).
+pub type CustomLayout = Box<dyn Fn(&UiState, &BrowserTheme) -> Element<BrowserUi>>;
 
 /// The tree and the views the browser view talks to.
 pub struct Chrome {
     pub tree: ViewTree<BrowserUi>,
-    pub tab_strip: ViewId<TabStrip>,
-    pub toolbar: ViewId<ToolbarRow>,
-    /// Back, forward and reload, in `Button::ALL`'s order.
+    /// The horizontal layout's.
+    pub tab_strip: Option<ViewId<TabStrip>>,
+    pub toolbar: Option<ViewId<ToolbarRow>>,
+    /// Back, forward and reload, in `Button::ALL`'s order: every layout
+    /// has them, and the address field.
     pub buttons: [ViewId<NavButton>; 3],
     pub omnibox: ViewId<Omnibox>,
     /// What the UI was last described from.
     state: UiState,
+    custom: Option<CustomLayout>,
 }
 
 impl Chrome {
@@ -145,10 +376,10 @@ impl Chrome {
         let mut tree = ViewTree::new(BrowserTheme::light(), TextContexts::new(test_fonts));
         tree.set_clipboard(clipboard);
         let state = UiState::default();
-        tree.describe(horizontal(&state, tree.theme()));
-        Self {
-            tab_strip: found(&tree, "tab-strip"),
-            toolbar: found(&tree, "toolbar"),
+        tree.describe(describe(&state, tree.theme()));
+        let mut chrome = Self {
+            tab_strip: None,
+            toolbar: None,
             buttons: [
                 found(&tree, "back"),
                 found(&tree, "forward"),
@@ -157,7 +388,31 @@ impl Chrome {
             omnibox: found(&tree, "omnibox"),
             tree,
             state,
-        }
+            custom: None,
+        };
+        chrome.find_views();
+        chrome
+    }
+
+    /// The views the browser view talks to, in the layout described last.
+    fn find_views(&mut self) {
+        let tree = &self.tree;
+        self.tab_strip = tree.find("tab-strip");
+        self.toolbar = tree.find("toolbar");
+        self.buttons = [
+            found(tree, "back"),
+            found(tree, "forward"),
+            found(tree, "reload"),
+        ];
+        self.omnibox = found(tree, "omnibox");
+    }
+
+    /// Lays the UI out with `layout` from now on, instead of as the state
+    /// says (`None`: as it says).
+    pub fn set_custom_layout(&mut self, layout: Option<CustomLayout>) {
+        self.custom = layout;
+        let state = self.state.clone();
+        self.describe(&state);
     }
 
     /// Describes the UI again from `state`, if it changed: only the views
@@ -166,20 +421,60 @@ impl Chrome {
         if state == self.state {
             return;
         }
-        self.tree.set_size(SizeF::new(
-            state.width,
-            state.strip_height + toolbar::HEIGHT,
-        ));
-        self.tree.describe(horizontal(&state, self.tree.theme()));
+        self.describe(&state);
         self.state = state;
+    }
+
+    fn describe(&mut self, state: &UiState) {
+        self.tree.set_size(SizeF::new(state.width, state.height));
+        let element = match &self.custom {
+            Some(layout) => layout(state, self.tree.theme()),
+            None => describe(state, self.tree.theme()),
+        };
+        self.tree.describe(element);
+        self.find_views();
+    }
+
+    pub fn state(&self) -> &UiState {
+        &self.state
+    }
+
+    /// The web views the UI lays out, in paint order: the web contents
+    /// each shows, and where, physical px of the window at `scale`, whole
+    /// pixels (a page between two would be blurred; what is drawn, the size
+    /// a renderer is told and where clicks land all agree).
+    pub fn web_views(&mut self, scale: f32) -> Vec<(TabId, Rect)> {
+        self.tree.layout();
+        let tree = &self.tree;
+        tree.find_all::<WebViewSlot>()
+            .into_iter()
+            .filter_map(|id| {
+                let tab = tree.get(id)?.tab();
+                let at = tree.absolute_bounds(id)?;
+                let x0: i32 = clamp_round(at.x * scale);
+                let y0: i32 = clamp_round(at.y * scale);
+                let x1: i32 = clamp_round(at.right() * scale);
+                let y1: i32 = clamp_round(at.bottom() * scale);
+                Some((
+                    tab,
+                    Rect::new(
+                        x0,
+                        y0,
+                        saturated_cast(x1.saturating_sub(x0)),
+                        saturated_cast(y1.saturating_sub(y0)),
+                    ),
+                ))
+            })
+            .collect()
     }
 
     pub fn omnibox(&self) -> &Omnibox {
         self.tree.get(self.omnibox).expect("the toolbar keeps it")
     }
 
-    pub fn tab_strip(&self) -> &TabStrip {
-        self.tree.get(self.tab_strip).expect("the UI keeps it")
+    /// The tab strip, in the horizontal layout.
+    pub fn tab_strip(&self) -> Option<&TabStrip> {
+        self.tree.get(self.tab_strip?)
     }
 
     /// Whether the address field has the keys.
@@ -233,7 +528,7 @@ fn toolbar_style(theme: &BrowserTheme) -> Style {
         flex_direction: FlexDirection::Row,
         flex_shrink: 0.0,
         align_items: AlignItems::CENTER,
-        padding: Rect {
+        padding: ui::taffy::Rect {
             left: length(padding),
             right: length(padding),
             top: length(0.0),
@@ -266,7 +561,7 @@ fn field_style(theme: &BrowserTheme) -> Style {
             width: ui::taffy::Dimension::auto(),
             height: length(theme.size(SizeToken::FieldHeight)),
         },
-        margin: Rect {
+        margin: ui::taffy::Rect {
             left: length(theme.size(SizeToken::ToolbarGap)),
             right: length(0.0),
             top: length(0.0),
@@ -296,6 +591,7 @@ mod tests {
     fn state() -> UiState {
         UiState {
             width: 800.0,
+            height: 600.0,
             ..UiState::default()
         }
     }
@@ -345,7 +641,7 @@ mod tests {
         let chrome = chrome();
         let top = crate::tab_strip::HEIGHT;
         assert_eq!(
-            rect(&chrome, chrome.toolbar),
+            rect(&chrome, chrome.toolbar.unwrap()),
             RectF::new(0.0, top, 800.0, toolbar::HEIGHT)
         );
         // 6 in, 28 square, 4 apart, centered down the toolbar.
@@ -362,7 +658,7 @@ mod tests {
         );
         // The strip above.
         assert_eq!(
-            rect(&chrome, chrome.tab_strip),
+            rect(&chrome, chrome.tab_strip.unwrap()),
             RectF::new(0.0, 0.0, 800.0, top)
         );
     }
@@ -487,7 +783,7 @@ mod tests {
             click_count: 1,
             modifiers: Modifiers::NONE,
         });
-        assert_eq!(chrome.tree.captured(), Some(chrome.toolbar.any()));
+        assert_eq!(chrome.tree.captured(), Some(chrome.toolbar.unwrap().any()));
         // The page it was on has history now: the up isn't a press.
         set_history(&mut chrome, true, false);
         chrome.tree.pointer(PointerEvent::Up {
@@ -510,7 +806,7 @@ mod tests {
             click_count: 1,
             modifiers: Modifiers::NONE,
         });
-        assert_eq!(chrome.tree.captured(), Some(chrome.toolbar.any()));
+        assert_eq!(chrome.tree.captured(), Some(chrome.toolbar.unwrap().any()));
         // Not with another button.
         chrome.tree.pointer(PointerEvent::Up {
             position: at,
@@ -535,9 +831,9 @@ mod tests {
             ..state()
         });
         chrome.tree.paint();
-        let tab = center(chrome.tab_strip().tab_rect(1));
-        let close = center(chrome.tab_strip().close_rect(0));
-        let new_tab = center(chrome.tab_strip().new_tab_rect());
+        let tab = center(chrome.tab_strip().unwrap().tab_rect(1));
+        let close = center(chrome.tab_strip().unwrap().close_rect(0));
+        let new_tab = center(chrome.tab_strip().unwrap().new_tab_rect());
         click(&mut chrome, tab, PointerButton::Primary);
         click(&mut chrome, close, PointerButton::Primary);
         click(&mut chrome, tab, PointerButton::Middle);
@@ -587,18 +883,23 @@ mod description_tests {
             can_go_forward: false,
             mac: true,
             width: 640.0,
+            height: 480.0,
             strip_height: 34.0,
+            ..UiState::default()
         };
         chrome.update(state.clone());
         let root = chrome.tree.root();
         assert_eq!(
             chrome.tree.children(root),
-            [chrome.tab_strip.any(), chrome.toolbar.any()]
+            [
+                chrome.tab_strip.unwrap().any(),
+                chrome.toolbar.unwrap().any()
+            ]
         );
-        assert_eq!(chrome.tab_strip().titles(), ["one", "two"]);
+        assert_eq!(chrome.tab_strip().unwrap().titles(), ["one", "two"]);
         assert_eq!(chrome.omnibox().text(), "https://a.test/");
         assert_eq!(chrome.history(), (true, false));
-        assert_eq!(chrome.tree.size(), SizeF::new(640.0, 34.0 + toolbar::HEIGHT));
+        assert_eq!(chrome.tree.size(), SizeF::new(640.0, 480.0));
         chrome.tree.paint();
         // The same views, told what changed.
         let views = (chrome.tab_strip, chrome.omnibox, chrome.buttons);
@@ -610,8 +911,8 @@ mod description_tests {
             ..state
         });
         assert_eq!(views, (chrome.tab_strip, chrome.omnibox, chrome.buttons));
-        assert!(chrome.tree.contains(chrome.tab_strip));
-        assert_eq!(chrome.tab_strip().titles(), ["one"]);
+        assert!(chrome.tree.contains(chrome.tab_strip.unwrap()));
+        assert_eq!(chrome.tab_strip().unwrap().titles(), ["one"]);
         assert_eq!(chrome.omnibox().text(), "https://b.test/");
         assert_eq!(chrome.history(), (false, false));
         // Checked: each view changed asked to be painted again.
@@ -632,6 +933,7 @@ mod made_from_props_tests {
             can_go_back: true,
             can_go_forward: true,
             width: 400.0,
+            height: 300.0,
             ..UiState::default()
         };
         tree.describe(horizontal(&state, tree.theme()));
@@ -639,5 +941,336 @@ mod made_from_props_tests {
             let button: ViewId<NavButton> = found(&tree, name);
             assert!(tree.get(button).unwrap().is_enabled(), "{name}");
         }
+    }
+}
+
+#[cfg(test)]
+mod web_view_tests {
+    use super::*;
+    use crate::browser_view_layout::tab_strip_height;
+
+    struct NoClipboard;
+
+    impl Clipboard for NoClipboard {
+        fn read(&mut self) -> Option<String> {
+            None
+        }
+        fn write(&mut self, _: &str) {}
+    }
+
+    /// Where the tab's web view is in a window `width` × `height` physical
+    /// px at `scale`, laid out `layout`, as the browser view lays it out.
+    fn web_view(layout: UiLayout, width: u32, height: u32, scale: f32) -> Rect {
+        web_view_with(layout, width, height, scale, 260.0)
+    }
+
+    fn web_view_with(
+        layout: UiLayout,
+        width: u32,
+        height: u32,
+        scale: f32,
+        sidebar_width: f32,
+    ) -> Rect {
+        let mut chrome = Chrome::new(true, Box::new(NoClipboard));
+        chrome.update(UiState {
+            layout,
+            tabs: vec![TabId(0)],
+            titles: vec!["a".into()],
+            shown: vec![TabId(0)],
+            width: width as f32 / scale,
+            height: height as f32 / scale,
+            scale,
+            strip_height: tab_strip_height(scale) as f32 / scale,
+            sidebar_width,
+            ..UiState::default()
+        });
+        let views = chrome.web_views(scale);
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].0, TabId(0));
+        views[0].1
+    }
+
+    #[test]
+    fn the_page_is_under_the_toolbar_on_a_whole_pixel() {
+        let horizontal = |w, h, scale| web_view(UiLayout::Horizontal, w, h, scale);
+        // 34 + 40 CSS px at 1x; 51 + 60 px at 1.5x.
+        assert_eq!(horizontal(400, 300, 1.0), Rect::new(0, 74, 400, 226));
+        assert_eq!(horizontal(600, 450, 1.5), Rect::new(0, 111, 600, 339));
+        // At 1.33x, 45.22px and 53.2px: the page starts on a whole pixel.
+        assert_eq!(horizontal(400, 300, 1.33), Rect::new(0, 98, 400, 202));
+        // Shorter than the tab strip and the toolbar: nothing left of it.
+        assert!(horizontal(400, 50, 1.0).is_empty());
+    }
+
+    #[test]
+    fn the_page_is_right_of_the_sidebar_and_its_edge() {
+        // 260 + 4 CSS px in.
+        assert_eq!(
+            web_view(UiLayout::Sidebar, 800, 600, 1.0),
+            Rect::new(264, 0, 536, 600)
+        );
+        assert_eq!(
+            web_view(UiLayout::Sidebar, 1200, 900, 1.5),
+            Rect::new(396, 0, 804, 900)
+        );
+        // Dragged to 261: the page from 397.5px, rounded half away from 0.
+        assert_eq!(
+            web_view_with(UiLayout::Sidebar, 1200, 900, 1.5, 261.0),
+            Rect::new(398, 0, 802, 900)
+        );
+    }
+}
+
+#[cfg(test)]
+mod sidebar_tests {
+    use gfx::RectF;
+    use ui::{Modifiers, PointerButton, PointerEvent};
+
+    use super::*;
+
+    struct NoClipboard;
+
+    impl Clipboard for NoClipboard {
+        fn read(&mut self) -> Option<String> {
+            None
+        }
+        fn write(&mut self, _: &str) {}
+    }
+
+    /// Three tabs, the second active, in the sidebar of an 800 × 600 window.
+    fn state() -> UiState {
+        UiState {
+            layout: UiLayout::Sidebar,
+            tabs: vec![TabId(1), TabId(2), TabId(3)],
+            titles: vec!["one".into(), "two".into(), "three".into()],
+            active: 1,
+            shown: vec![TabId(2)],
+            width: 800.0,
+            height: 600.0,
+            ..UiState::default()
+        }
+    }
+
+    fn chrome(state: UiState) -> Chrome {
+        let mut chrome = Chrome::new(true, Box::new(NoClipboard));
+        chrome.update(state);
+        chrome.tree.layout();
+        chrome.tree.paint();
+        chrome
+    }
+
+    fn rows(chrome: &Chrome) -> Vec<ViewId<SidebarTab>> {
+        chrome.tree.find_all()
+    }
+
+    fn rect(chrome: &Chrome, id: impl Into<ui::AnyViewId>) -> RectF {
+        chrome.tree.absolute_bounds(id).unwrap()
+    }
+
+    fn center(rect: RectF) -> PointF {
+        PointF::new(rect.x + rect.width / 2.0, rect.y + rect.height / 2.0)
+    }
+
+    fn press(chrome: &mut Chrome, at: PointF, button: PointerButton, down: bool) {
+        let modifiers = Modifiers::NONE;
+        chrome.tree.pointer(if down {
+            PointerEvent::Down {
+                position: at,
+                button,
+                click_count: 1,
+                modifiers,
+            }
+        } else {
+            PointerEvent::Up {
+                position: at,
+                button,
+                click_count: 1,
+                modifiers,
+            }
+        });
+    }
+
+    fn click(chrome: &mut Chrome, at: PointF, button: PointerButton) {
+        press(chrome, at, button, true);
+        press(chrome, at, button, false);
+    }
+
+    /// A row's close button's center: 10 from its end.
+    fn close_of(row: RectF) -> PointF {
+        PointF::new(row.right() - 10.0 - 8.0, row.y + row.height / 2.0)
+    }
+
+    #[test]
+    fn the_sidebar_is_the_buttons_the_field_new_tab_and_a_row_a_tab() {
+        let chrome = chrome(state());
+        assert!(chrome.tab_strip.is_none() && chrome.toolbar.is_none());
+        let sidebar = chrome.tree.find::<SidebarPanel>("sidebar").unwrap();
+        assert_eq!(rect(&chrome, sidebar), RectF::new(0.0, 0.0, 260.0, 600.0));
+        // 8 in: the buttons, then the field under them, then new tab, then
+        // the rows, 8 apart.
+        assert_eq!(
+            rect(&chrome, chrome.buttons[0]),
+            RectF::new(8.0, 8.0, 28.0, 28.0)
+        );
+        assert_eq!(
+            rect(&chrome, chrome.omnibox),
+            RectF::new(8.0, 44.0, 244.0, 30.0)
+        );
+        let new_tab = chrome.tree.find::<NewTabRow>("new-tab").unwrap();
+        assert_eq!(rect(&chrome, new_tab), RectF::new(8.0, 82.0, 244.0, 36.0));
+        let rows = rows(&chrome);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rect(&chrome, rows[0]), RectF::new(8.0, 126.0, 244.0, 36.0));
+        assert_eq!(rect(&chrome, rows[1]).y, 126.0 + 38.0);
+        // The edge, then the page.
+        let edge = chrome.tree.find::<SidebarEdge>("sidebar-edge").unwrap();
+        assert_eq!(rect(&chrome, edge), RectF::new(260.0, 0.0, 4.0, 600.0));
+        assert_eq!(
+            chrome.tree.cursor(center(rect(&chrome, edge))),
+            ui::Cursor::ResizeHorizontal
+        );
+    }
+
+    #[test]
+    fn a_tab_s_row_stays_its_own_as_tabs_open_close_and_move() {
+        let mut chrome = chrome(state());
+        let before = rows(&chrome);
+        // The first closed, a fourth at the end, the last two swapped.
+        chrome.update(UiState {
+            tabs: vec![TabId(3), TabId(2), TabId(4)],
+            titles: vec!["three".into(), "two".into(), "four".into()],
+            active: 1,
+            ..state()
+        });
+        let after = rows(&chrome);
+        assert_eq!(after[..2], [before[2], before[1]]);
+        assert!(!chrome.tree.contains(before[0]));
+        assert!(!before.contains(&after[2]));
+        chrome.tree.paint();
+    }
+
+    #[test]
+    fn rows_select_close_and_open_tabs() {
+        let mut chrome = chrome(state());
+        let rows = rows(&chrome);
+        let first = rect(&chrome, rows[0]);
+        let active = rect(&chrome, rows[1]);
+        // A press on a row shows its tab at once.
+        press(&mut chrome, center(first), PointerButton::Primary, true);
+        assert_eq!(
+            chrome.tree.take_messages(),
+            [UiMessage::SelectTabById(TabId(1))]
+        );
+        press(&mut chrome, center(first), PointerButton::Primary, false);
+        assert_eq!(chrome.tree.take_messages(), []);
+        // The active row's close button, down and up on it.
+        click(&mut chrome, close_of(active), PointerButton::Primary);
+        assert_eq!(
+            chrome.tree.take_messages(),
+            [UiMessage::CloseTabById(TabId(2))]
+        );
+        // Down on it, up off it: nothing.
+        press(&mut chrome, close_of(active), PointerButton::Primary, true);
+        press(&mut chrome, center(first), PointerButton::Primary, false);
+        assert_eq!(chrome.tree.take_messages(), []);
+        // The middle button closes the row it clicks.
+        click(&mut chrome, center(first), PointerButton::Middle);
+        assert_eq!(
+            chrome.tree.take_messages(),
+            [UiMessage::CloseTabById(TabId(1))]
+        );
+        // The new tab row: down and up on it, not off it.
+        let new_tab = chrome.tree.find::<NewTabRow>("new-tab").unwrap();
+        let at = center(rect(&chrome, new_tab));
+        press(&mut chrome, at, PointerButton::Primary, true);
+        press(&mut chrome, center(first), PointerButton::Primary, false);
+        assert_eq!(chrome.tree.take_messages(), []);
+        click(&mut chrome, at, PointerButton::Primary);
+        assert_eq!(
+            chrome.tree.take_messages(),
+            [UiMessage::Command(Command::NewTab)]
+        );
+        chrome.tree.paint();
+    }
+
+    #[test]
+    fn a_row_not_active_has_its_close_button_under_the_pointer() {
+        let mut chrome = chrome(state());
+        let first = rect(&chrome, rows(&chrome)[0]);
+        // The pointer over the row, it has a close button (a press comes
+        // with the pointer over it).
+        click(&mut chrome, close_of(first), PointerButton::Primary);
+        assert_eq!(
+            chrome.tree.take_messages(),
+            [UiMessage::CloseTabById(TabId(1))]
+        );
+        // Hovered and left, painted each time.
+        chrome.tree.pointer(PointerEvent::Move {
+            position: center(first),
+            modifiers: Modifiers::NONE,
+        });
+        assert!(chrome.tree.paint().is_some());
+        chrome.tree.pointer_left();
+        assert!(chrome.tree.paint().is_some());
+    }
+
+    #[test]
+    fn dragging_the_edge_asks_for_the_width_under_the_pointer() {
+        let mut chrome = chrome(state());
+        let edge = chrome.tree.find::<SidebarEdge>("sidebar-edge").unwrap();
+        let grab = PointF::new(261.0, 300.0);
+        assert_eq!(rect(&chrome, edge).x, 260.0);
+        press(&mut chrome, grab, PointerButton::Primary, true);
+        chrome.tree.pointer(PointerEvent::Move {
+            position: PointF::new(301.0, 300.0),
+            modifiers: Modifiers::NONE,
+        });
+        assert_eq!(
+            chrome.tree.take_messages(),
+            [UiMessage::ResizeSidebar(300.0)]
+        );
+        // The browser takes it: the edge is there now, and a further move
+        // goes on from it.
+        chrome.update(UiState {
+            sidebar_width: 300.0,
+            ..state()
+        });
+        chrome.tree.layout();
+        assert_eq!(rect(&chrome, edge).x, 300.0);
+        chrome.tree.pointer(PointerEvent::Move {
+            position: PointF::new(291.0, 300.0),
+            modifiers: Modifiers::NONE,
+        });
+        assert_eq!(
+            chrome.tree.take_messages(),
+            [UiMessage::ResizeSidebar(290.0)]
+        );
+        press(
+            &mut chrome,
+            PointF::new(291.0, 300.0),
+            PointerButton::Primary,
+            false,
+        );
+        chrome.tree.pointer(PointerEvent::Move {
+            position: PointF::new(400.0, 300.0),
+            modifiers: Modifiers::NONE,
+        });
+        assert_eq!(chrome.tree.take_messages(), [], "let go");
+    }
+
+    #[test]
+    fn switching_layouts_keeps_the_page_where_the_layout_puts_it() {
+        let mut chrome = chrome(UiState {
+            layout: UiLayout::Horizontal,
+            ..state()
+        });
+        assert!(chrome.tab_strip.is_some());
+        let horizontal = chrome.web_views(1.0);
+        chrome.update(state());
+        assert!(chrome.tab_strip.is_none());
+        let sidebar = chrome.web_views(1.0);
+        assert_eq!(horizontal, [(TabId(2), Rect::new(0, 74, 800, 526))]);
+        assert_eq!(sidebar, [(TabId(2), Rect::new(264, 0, 536, 600))]);
+        chrome.tree.paint();
     }
 }

@@ -1,0 +1,141 @@
+# The sidebar: its views, its description, the web views laid out by the
+# tree, the toggle and the width's bounds.
+test = ["cargo", "test", "-q", "-p", "shell", "--lib", "chrome"]
+timeout = 900
+
+[[mutant]]
+name = "a press on a row doesn't show its tab"
+file = "crates/shell/src/sidebar.rs"
+from = '''                (PointerButton::Primary, Some(Part::Tab)) => {
+                    ctx.submit(UiMessage::SelectTabById(self.props.tab));
+                }'''
+to = '''                (PointerButton::Primary, Some(Part::Tab)) => {}'''
+
+[[mutant]]
+name = "only the active row has a close button"
+file = "crates/shell/src/sidebar.rs"
+from = '''        self.hovered || self.props.active'''
+to = '''        self.props.active'''
+
+[[mutant]]
+name = "a close button is pressed by its up anywhere"
+file = "crates/shell/src/sidebar.rs"
+from = '''pressed == Part::Close && part == Some(Part::Close),'''
+to = '''pressed == Part::Close,'''
+
+[[mutant]]
+name = "the middle button doesn't close a row's tab"
+file = "crates/shell/src/sidebar.rs"
+from = '''                        PointerButton::Middle => part.is_some(),'''
+to = '''                        PointerButton::Middle => false,'''
+
+[[mutant]]
+name = "a row hovered isn't painted again"
+file = "crates/shell/src/sidebar.rs"
+from = '''            self.over_close &= hovered;
+            ctx.request_paint();'''
+to = '''            self.over_close &= hovered;'''
+
+[[mutant]]
+name = "new tab opens on an up anywhere"
+file = "crates/shell/src/sidebar.rs"
+from = '''                if RectF::from_size(ctx.size()).contains(position) {
+                    ctx.submit(UiMessage::Command(Command::NewTab));'''
+to = '''                if true || RectF::from_size(ctx.size()).contains(position) {
+                    ctx.submit(UiMessage::Command(Command::NewTab));'''
+
+[[mutant]]
+name = "the edge's drag isn't from the width"
+file = "crates/shell/src/sidebar.rs"
+from = '''ctx.submit(UiMessage::ResizeSidebar(self.width + position.x - grab));'''
+to = '''ctx.submit(UiMessage::ResizeSidebar(position.x - grab));'''
+
+[[mutant]]
+name = "the edge keeps the width it was made with"
+file = "crates/shell/src/sidebar.rs"
+from = '''        // Only where the drag starts from: it draws the same.
+        self.width = props.width;'''
+to = '''        let _ = props;'''
+
+[[mutant]]
+name = "the edge's cursor is the default"
+file = "crates/shell/src/sidebar.rs"
+from = '''        Cursor::ResizeHorizontal
+    }'''
+to = '''        Cursor::Default
+    }'''
+
+[[mutant]]
+name = "the sidebar's width isn't the state's"
+file = "crates/shell/src/chrome.rs"
+from = '''                        width: length(state.sidebar_width),'''
+to = '''                        width: length(260.0),'''
+
+[[mutant]]
+name = "web views start on the pixel below"
+file = "crates/shell/src/chrome.rs"
+from = '''                let x0: i32 = clamp_round(at.x * scale);'''
+to = '''                let x0: i32 = base::numerics::clamp_floor(at.x * scale + 0.4);'''
+
+[[mutant]]
+name = "a layout shows no web view"
+file = "crates/shell/src/chrome.rs"
+from = '''    let &tab = state.shown.first()?;'''
+to = '''    let &_tab = state.shown.first()?;
+    let tab: TabId = return None;'''
+
+[[mutant]]
+name = "the sidebar may be wider than half the window"
+file = "crates/shell/src/browser_view.rs"
+from = '''            .min(self.size.width as f32 / self.scale / 2.0);'''
+to = '''            .min(f32::MAX);'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::"]
+
+[[mutant]]
+name = "the sidebar may be narrower than its least"
+file = "crates/shell/src/browser_view.rs"
+from = '''        width.max(least).min(most)'''
+to = '''        let _ = least;
+        width.min(most)'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::"]
+
+[[mutant]]
+name = "the toggle keeps the layout"
+file = "crates/shell/src/browser_view.rs"
+from = '''                    UiLayout::Horizontal => UiLayout::Sidebar,'''
+to = '''                    UiLayout::Horizontal => UiLayout::Horizontal,'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::"]
+
+[[mutant]]
+name = "the toggle's shortcut wants the comma itself"
+file = "crates/shell/src/browser_view.rs"
+from = '''            "," | "<" if primary && shift => Some(Command::ToggleSidebar),'''
+to = '''            "," if primary && shift => Some(Command::ToggleSidebar),'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::"]
+
+[[mutant]]
+name = "a web view moved isn't told its size"
+file = "crates/shell/src/browser_view.rs"
+from = '''                    contents.resize(bounds.size(), scale);
+                }
+                WebView {'''
+to = '''                    let _ = contents;
+                }
+                WebView {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::"]
+
+[[mutant]]
+name = "a sidebar row's tab is found by index, not id"
+file = "crates/shell/src/browser_view.rs"
+from = '''                UiMessage::SelectTabById(tab) => {
+                    if let Some(index) = self.tabs.position(|c| c.tab() == tab) {'''
+to = '''                UiMessage::SelectTabById(tab) => {
+                    if let Some(index) = Some(tab.0 as usize) {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "--", "browser_view::"]
+
+[[mutant]]
+name = "--ui-layout is taken with the pipe"
+file = "crates/shell/src/main.rs"
+from = '''    if automation_pipe && ui_layout.is_some() {'''
+to = '''    if automation_pipe && ui_layout.is_some() && false {'''
+test = ["cargo", "test", "-q", "-p", "shell", "--bin", "machopo"]

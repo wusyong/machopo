@@ -4,7 +4,7 @@
 
 ## 鍵盤和滑鼠
 
-視窗模式的快捷鍵和滑鼠操作。改了 `crates/shell/src/browser_view.rs` 的 `command_for`、`BrowserView::key`、`BrowserView::mouse_input`，`crates/shell/src/toolbar.rs` 的 `NavButton::on_pointer`，`crates/shell/src/tab_strip.rs` 的 `TabStrip::mouse_down`、`TabStrip::mouse_up`，`crates/dom_api/src/hyperlink.rs` 的 `follow_hyperlink`，`crates/shell/src/omnibox.rs` 的 `Omnibox::key`，`crates/shell/src/keyboard.rs`（按鍵換成網頁的 `key`、`code`、`keyCode`）、`crates/shell/src/mouse.rs`（連點的次數），或 `crates/shell/src/window.rs` 裡滑鼠按鍵的對應時，這些表要跟著改。
+視窗模式的快捷鍵和滑鼠操作。改了 `crates/shell/src/browser_view.rs` 的 `command_for`、`BrowserView::key`、`BrowserView::mouse_input`，`crates/shell/src/toolbar.rs` 的 `NavButton::on_pointer`，`crates/shell/src/sidebar.rs` 的各個 `on_pointer`，`crates/shell/src/tab_strip.rs` 的 `TabStrip::mouse_down`、`TabStrip::mouse_up`，`crates/dom_api/src/hyperlink.rs` 的 `follow_hyperlink`，`crates/shell/src/omnibox.rs` 的 `Omnibox::key`，`crates/shell/src/keyboard.rs`（按鍵換成網頁的 `key`、`code`、`keyCode`）、`crates/shell/src/mouse.rs`（連點的次數），或 `crates/shell/src/window.rs` 裡滑鼠按鍵的對應時，這些表要跟著改。
 
 **導航**（網址列有沒有 focus 都可以用，例外見表）
 
@@ -26,12 +26,15 @@
 | 下一個分頁（最後一個之後回到第一個） | Ctrl+Tab，Cmd+Option+→，Cmd+Shift+] | Ctrl+Tab，Ctrl+PageDown |
 | 上一個分頁 | Ctrl+Shift+Tab，Cmd+Option+←，Cmd+Shift+[ | Ctrl+Shift+Tab，Ctrl+PageUp |
 | 第 1 到 8 個分頁、最後一個分頁 | Cmd+1 到 8、Cmd+9 | Ctrl+1 到 8、Ctrl+9 |
+| 切換側邊欄和橫式的版面 | Cmd+Shift+, | Ctrl+Shift+, |
 
 連結：中鍵、Cmd+點擊（macOS）或 Ctrl+點擊（Windows、Linux）在背景開新分頁，再加 Shift 在前景開；Shift+點擊和 `target="_blank"` 的連結在前景開新分頁。從連結開的分頁放在原本的分頁右邊，關掉它時回到原本的分頁。
 
 網頁上的連點：在系統的連按間隔之內（macOS 照「輔助使用」裡的設定，Windows、Linux 是 500 ms）、在同一處（各方向 2 px 之內）再按同一個鍵，算下一下，第二下有 `dblclick`。
 
 renderer 當掉的分頁顯示 sad tab：按它的「Reload」按鈕、重新整理的快捷鍵或工具列的重新整理，就開新的 renderer 重新載入。在網址列輸入 `about:crash` 可以讓目前的分頁的 renderer 結束（`about:gpucrash` 讓 GPU 遺失），網頁裡的連結觸發不了它們。
+
+側邊欄（`--ui-layout=sidebar` 或上面的快捷鍵）：在分頁那一列上按下主按鍵就切換；指標在那一列上或是目前的分頁時有關閉按鈕，要在它上面按下又放開才算；中鍵點那一列關掉它；「New Tab」那一列要按下又放開才算；拖右邊緣改寬度（200 CSS px 到 600 和視窗寬度的一半中較小的）。
 
 視窗上方的分頁列：在分頁上按下主按鍵就切換；分頁的關閉按鈕和 `+` 按鈕要在同一個按鈕上按下又放開才算；在分頁上按中鍵關掉它。分頁窄於 100 CSS px 時，只有目前的分頁有關閉按鈕。
 

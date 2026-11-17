@@ -29,6 +29,7 @@ use shell::automation_pipe::{self, Read};
 use shell::automation_session::{AutomationSession, ClientEvent, Input, Reply};
 use shell::browser_view::Command;
 use shell::browser_window::{self, BrowserWindow};
+use shell::chrome::UiLayout;
 use shell::devtools_http_handler::{self, DevToolsHttpHandler};
 use shell::keyboard::KeyInput;
 use shell::mouse::{ClickCounter, double_click_interval};
@@ -185,6 +186,8 @@ impl Running {
 
 struct App {
     initial_url: String,
+    /// How the UI is laid out at first (`--ui-layout`).
+    ui_layout: UiLayout,
     test_fonts: bool,
     num_raster_threads: Option<usize>,
     proxy: EventLoopProxy<ShellEvent>,
@@ -339,6 +342,7 @@ impl App {
         if automation {
             automation_pipe::start_blank(&mut browser);
         } else {
+            browser.view_mut().set_ui_layout(self.ui_layout);
             browser.view_mut().navigate(&self.initial_url);
         }
         let context_lost: Arc<dyn ContextLostObserver> =
@@ -769,6 +773,7 @@ impl ApplicationHandler<ShellEvent> for App {
 /// drive the window until its input ends, or `Browser.close`.
 pub fn run(
     url: String,
+    ui_layout: UiLayout,
     test_fonts: bool,
     num_raster_threads: Option<usize>,
     pipe: Option<NetworkContextParams>,
@@ -779,6 +784,7 @@ pub fn run(
         .map_err(|e| format!("event loop: {e}"))?;
     let mut app = App {
         initial_url: url,
+        ui_layout,
         test_fonts,
         num_raster_threads,
         proxy: event_loop.create_proxy(),

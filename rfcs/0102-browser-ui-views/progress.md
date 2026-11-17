@@ -10,9 +10,9 @@
 | 1a：`ui` 的樹、排版、畫、事件、主題；`ui_text` 搬進來 | 做完 | 2026-11-16 |
 | 1b：工具列和分頁列改寫成 view，`BrowserView` 走樹 | 做完 | 2026-11-17 |
 | 1c：文件和階段結束的檢查 | 做完 | 2026-11-17 |
-| 第 2 階段：宣告式的一層、版面管理和側邊欄 | 進行中 | |
+| 第 2 階段：宣告式的一層、版面管理和側邊欄 | 做完 | 2026-11-17 |
 | 2a：宣告式的一層，橫式 UI 用函式描述 | 做完 | 2026-11-17 |
-| 2b：直的分頁清單、側邊欄的版面和切換 | 還沒開始 | |
+| 2b：直的分頁清單、側邊欄的版面和切換 | 做完 | 2026-11-17 |
 | 第 3 階段：外觀 | 還沒開始 | |
 
 ## 驗收
@@ -28,6 +28,10 @@
 | 外觀不變 | 見「做過的檢查」的 1b：改之前、改之後的截圖逐像素比較 |
 | 宣告式的一層：第一次描述建立 view、Props 相等不碰、新的 Props 給 view、有 key 的搬動不重建、沒有 key 的照位置、換型別重建、拿掉、名字找得到帶型別的 view、拿掉的名字找不到 | `cargo test -p ui` |
 | 橫式 UI 從 `UiState` 描述：分頁列在上、工具列在下，狀態變了同一批 view 被告知、按鈕照 Props 建立 | `cargo test -p shell --lib chrome` |
+| 網頁 view 的位置從樹來：橫式在工具列下、整數像素（1x、1.5x、1.33x、比工具列矮的視窗），側邊欄在它和邊緣的右邊，拖到半個像素時四捨五入；兩個網頁 view 並排（從奇數像素開始、重疊）照舊 | `cargo test -p shell --lib chrome`；`cargo test -p shell --test it -- browser_view::` |
+| 側邊欄：按鈕、網址列、New Tab、每個分頁一列的位置；分頁開關搬動時列跟著分頁；點分頁、關閉鈕（指標在上面或是目前的分頁時）、中鍵、New Tab（按下放開都在上面）；拖邊緣送出指標下的寬度、游標 | `cargo test -p shell --lib chrome` |
+| 快捷鍵切換版面、網頁跟著移動；點側邊欄的列切換到那個分頁（第一個分頁關掉之後也是）；拖邊緣時網頁跟著縮放，夾在 200 到 min(600, 視窗的一半)；窄視窗裡側邊欄是視窗的一半 | `cargo test -p shell --test it -- browser_view::`；情境 `sidebar` |
+| `--ui-layout`：預設橫式，`sidebar`；不認得的值、和 `--automation-pipe` 一起都報錯 | `cargo test -p shell --bin machopo` |
 | `BrowserView` 用 `UiState` 取代 `sync_toolbar`，行為不變 | `cargo test -p shell --test it`；情境 `tab-strip`、`navigation`、`demo-busy`、`rounded`、`demo-script`、`gpu-crash` |
 
 ## 做過的檢查
@@ -87,3 +91,30 @@
 - **跑過的測試**：`ui` 34 個；`shell` 的單元測試 74 個；`shell` 的整合測試 571 個；情境 `tab-strip`、`navigation`、`demo-busy`、`rounded`、`demo-script`、`gpu-crash` 和外觀比較的暫時情境。
 - **mutation test**（`mutants-2a.toml`，`python3 scripts/test.py mutate --keep-going rfcs/0102-browser-ui-views/mutants-2a.toml`）：17 個抓到 16 個。沒抓到的：按鈕建立時不照 Props 的 `enabled`。測試裡的按鈕都從預設的狀態建立（上一頁不能按、重新載入可以），剛好和 `NavButton::new` 的預設一樣；2b 換版面時按鈕會在有上一頁的時候重新建立。補測試 `buttons_made_from_a_state_with_history_are_enabled`，重跑抓到。
 - **跑過的檢查**：`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`。
+
+### 2b
+
+2026-11-17，macOS（Apple Silicon）。
+
+- **實作時改的設計**：
+  - 側邊欄的寬度在算 `UiState` 時才夾進範圍（`BrowserView::sidebar_width_in_window`），不只在拖的時候：視窗太窄時預設的 260 也縮到視窗的一半，視窗再拉寬時回到拖的寬度。
+  - `BrowserViewLayout` 這個 trait 拿掉了：版面就是描述函式（第 24 條）。`browser_view_layout.rs` 只剩橫式的分頁列、工具列各是幾個 physical px。測試用的兩個網頁 view 並排的版面改寫成描述函式（`side_by_side_layout`），預期的位置改成直接用 px 算，不再從版面本身來。
+  - 側邊欄的分頁那一列在指標按下時已經是 hover 的（樹在分派之前更新 hover），所以「沒 hover 的分頁被按到關閉鈕的位置」不會發生；測試照實際會發生的寫。
+- **外觀**：橫式照 1b 的做法比較（同樣 14 種狀態、4 種倍率的暫時情境，對 2a 之前的截圖）：112 張完全相同，網頁 view 進樹沒有改到橫式。側邊欄的樣子看過情境 `sidebar` 的截圖。暫時的情境沒有 commit。
+- **新的測試**：`ui` 的 1 個（`find_all`）；`shell` 的 `chrome` 的側邊欄 6 個、網頁位置 2 個；`machopo` 的 `--ui-layout` 1 個；整合測試 4 個（快捷鍵切換、側邊欄的列切換分頁、拖邊緣、窄視窗）；情境 `sidebar`（照 macOS 和其他平台的快捷鍵各跑一次）。原本 `browser_view_layout.rs` 的單元測試搬到 `chrome` 的網頁位置的測試，數字不變。
+- **跑過的測試**：`ui` 35 個；`shell` 的單元測試 81 個；`shell` 的整合測試 575 個；情境 `sidebar`、`tab-strip`、`navigation` 和外觀比較的暫時情境。
+- **mutation test**（`mutants-2b.toml`，`python3 scripts/test.py mutate --keep-going rfcs/0102-browser-ui-views/mutants-2b.toml`）：19 個抓到 16 個。沒抓到的三個都補了測試，重跑都抓到：
+  - New Tab 那一列在別處放開也開新分頁：補「按下在它上面、放開在別處，不開」。
+  - 網頁的起點往下取整：測試的位置剛好都是整數像素；補一個落在半個像素上的（側邊欄拖到 261、1.5 倍，397.5 → 398）。
+  - 側邊欄的列用位置當成分頁的索引：測試裡分頁的 id 和索引剛好一樣；補「第一個分頁關掉之後，點第一列是 id 1 的那個」。
+- **只靠審查的**：直接開的視窗照 `--ui-layout=sidebar` 從側邊欄開始（`window.rs`）：情境一律從橫式開始，記進 `docs/test-gaps.md`。
+- **跑過的檢查**：`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs`；`cargo fmt --check`；`cargo clippy --workspace --all-targets -- -D warnings`（改了一處：`ui` 的 `insert_boxed` 直接回傳 `match`）。
+
+### 第 2 階段結束的檢查
+
+2026-11-17，macOS（Apple Silicon）。
+
+- **`cargo test --workspace`**：3954 個通過，沒有失敗。
+- **`cargo fmt --check`**、**`cargo clippy --workspace --all-targets -- -D warnings`**：見 2b。
+- **真的視窗**（`python3 scripts/test.py scenarios --window sidebar tab-strip navigation demo-busy rounded demo-script gpu-crash`）：7 個都通過；看過 `target/automation-results/sidebar/sidebar.png`（2 倍、系統字型）：按鈕、網址列、New Tab、兩列分頁（目前的白底、有關閉鈕），網頁在側邊欄和邊緣的右邊。
+- `sanity.py` 的 7 項都通過。

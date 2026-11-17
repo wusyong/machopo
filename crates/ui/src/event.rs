@@ -143,6 +143,8 @@ pub enum Cursor {
     Default,
     /// Over text that can be selected or edited: the I-beam.
     Text,
+    /// Over an edge that is dragged left and right.
+    ResizeHorizontal,
 }
 
 /// Whether a view used an event. One that didn't goes on to its parent.

@@ -10,8 +10,8 @@ use gfx::{PointF, RRectF, RectF, SizeF};
 use parley::{Affinity, Cursor as TextCursor, PlainEditor, Selection};
 use ui::taffy::{AvailableSpace, Size};
 use ui::{
-    Component, CreateCtx, Cursor, EventCtx, Handled, ImeEvent, Key, KeyEvent, MeasureCtx, Modifiers, NamedKey, PaintCtx,
-    PointerButton, PointerEvent, TextContexts, View,
+    Component, CreateCtx, Cursor, EventCtx, Handled, ImeEvent, Key, KeyEvent, MeasureCtx,
+    Modifiers, NamedKey, PaintCtx, PointerButton, PointerEvent, TextContexts, View,
 };
 
 use crate::chrome::{BrowserUi, UiMessage};

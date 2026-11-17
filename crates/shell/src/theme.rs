@@ -32,6 +32,14 @@ ui::tokens! {
         TabTitle,
         /// Between two tabs neither of them active nor hovered.
         TabSeparator,
+        /// The sidebar, the vertical tabs' background.
+        SidebarBackground,
+        /// Under a row of the sidebar the pointer is over.
+        SidebarRowHover,
+        /// Under the active tab's row.
+        SidebarTabActive,
+        /// The line where the sidebar is dragged wider or narrower.
+        SidebarEdge,
     }
 }
 
@@ -69,6 +77,20 @@ ui::tokens! {
         TabGap,
         /// How long a title too long for its tab fades out over.
         TabFade,
+        /// The sidebar's width at first.
+        SidebarWidth,
+        /// How narrow and how wide it can be dragged (and at most half the
+        /// window).
+        SidebarMinWidth,
+        SidebarMaxWidth,
+        /// Around the sidebar's content, and between its parts.
+        SidebarPadding,
+        /// A row of the sidebar: a tab, or the new tab row.
+        SidebarRowHeight,
+        SidebarRowRadius,
+        SidebarFontSize,
+        /// The edge dragged to resize the sidebar.
+        SidebarEdgeWidth,
     }
 }
 
@@ -95,6 +117,11 @@ impl BrowserTheme {
                 ColorToken::TabHover => Color::rgb(232, 234, 237),
                 ColorToken::TabButtonHover => Color::rgb(204, 207, 212),
                 ColorToken::TabSeparator => Color::rgb(160, 164, 170),
+                // The toolbar's, as the sidebar takes its place.
+                ColorToken::SidebarBackground => Color::rgb(241, 243, 244),
+                ColorToken::SidebarRowHover => Color::rgb(226, 229, 233),
+                ColorToken::SidebarTabActive => Color::WHITE,
+                ColorToken::SidebarEdge => Color::rgb(218, 220, 224),
             }),
             sizes: TokenTable::new(|token| match token {
                 SizeToken::ToolbarHeight => 40.0,
@@ -115,6 +142,14 @@ impl BrowserTheme {
                 SizeToken::TabFontSize => 12.0,
                 SizeToken::TabClose => 16.0,
                 SizeToken::TabFade => 24.0,
+                SizeToken::SidebarWidth => 260.0,
+                SizeToken::SidebarMinWidth => 200.0,
+                SizeToken::SidebarMaxWidth => 600.0,
+                SizeToken::SidebarPadding => 8.0,
+                SizeToken::SidebarRowHeight => 36.0,
+                SizeToken::SidebarRowRadius => 8.0,
+                SizeToken::SidebarFontSize => 13.0,
+                SizeToken::SidebarEdgeWidth => 4.0,
             }),
         }
     }

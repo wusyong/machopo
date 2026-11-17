@@ -34,8 +34,8 @@ use protocol::viz::{
 use std::sync::Arc;
 use winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 
-use crate::browser_view_layout::{BrowserViewLayout, DefaultLayout};
-use crate::chrome::{Chrome, UiMessage, UiState};
+use crate::browser_view_layout::tab_strip_height;
+use crate::chrome::{Chrome, CustomLayout, UiLayout, UiMessage, UiState};
 use crate::keyboard::{self, KeyInput};
 use crate::omnibox::Clipboard;
 use crate::omnibox::Omnibox;
@@ -43,7 +43,7 @@ use crate::popup_menu::{KeyOutcome, PopupMenu};
 use crate::sad_tab::{self, SadTab};
 use crate::tab_strip::TabStrip;
 use crate::tab_strip_model::TabStripModel;
-use crate::theme::SizeToken;
+use crate::theme::{BrowserTheme, SizeToken};
 use crate::url_fixup::fixup_url;
 
 /// The browser's own frame sink: the root of a window's `Display`.
@@ -113,6 +113,8 @@ pub enum Command {
     /// Show the tab at this index, if there is one.
     SelectTab(usize),
     SelectLastTab,
+    /// Lay the UI out down a sidebar, or across the top again.
+    ToggleSidebar,
 }
 
 /// The shortcut `key` is, with `modifiers` held, on macOS (`mac`) or
@@ -166,6 +168,8 @@ pub fn command_for(
             "l" if primary => Some(Command::FocusLocation),
             "d" if modifiers.alt_key() && !mac => Some(Command::FocusLocation),
             "t" if primary => Some(Command::NewTab),
+            // Shift with the comma types `<` on most layouts.
+            "," | "<" if primary && shift => Some(Command::ToggleSidebar),
             "w" if primary => Some(Command::CloseTab),
             "{" if primary && mac => Some(Command::PreviousTab),
             "}" if primary && mac => Some(Command::NextTab),
@@ -234,11 +238,10 @@ pub struct BrowserView {
     next_tab: u32,
     /// The last tab was closed: the window closes, and its tab with it.
     close_requested: bool,
-    layout: Box<dyn BrowserViewLayout>,
-    /// Physical px of the window.
-    toolbar_bounds: Rect,
-    /// Physical px of the window.
-    tab_strip_bounds: Rect,
+    /// Which way the UI is laid out.
+    ui_layout: UiLayout,
+    /// The sidebar's width, CSS px, as last dragged.
+    sidebar_width: f32,
     /// `ui::Compositor`.
     compositor: LayerTreeHost<SingleThreadProxy>,
     /// The tab strip and the toolbar (Chromium's `TopContainerView`), one
@@ -311,14 +314,14 @@ impl BrowserView {
             tabs: TabStripModel::new(web_contents),
             others: Vec::new(),
             factory: None,
-            web_views: vec![WebView::new(tab)],
+            // Where the UI lays them out, once the window has a size.
+            web_views: Vec::new(),
             cursors: HashMap::new(),
             openers: HashMap::new(),
             next_tab: 0,
             close_requested: false,
-            layout: Box::new(DefaultLayout),
-            toolbar_bounds: Rect::default(),
-            tab_strip_bounds: Rect::default(),
+            ui_layout: UiLayout::Horizontal,
+            sidebar_width: BrowserTheme::light().size(SizeToken::SidebarWidth),
             compositor: LayerTreeHost::new_single_threaded(
                 LayerTreeSettings {
                     shared_image_interface: gpu,
@@ -488,16 +491,11 @@ impl BrowserView {
         self.close_popup(PopupMenuResult::Canceled { by_press: false });
         let tab = self.tabs.active().tab();
         self.tabs.active_mut().was_shown();
-        if let Some(Target::WebView(captured)) = self.captured
-            && captured == self.web_views[0].contents
-        {
-            self.captured = None;
-        }
-        self.web_views[0].contents = tab;
         self.focused = tab;
         self.chrome.blur_omnibox();
+        // The web view the UI lays out shows it now: the one shown before
+        // is let go of (and its capture).
         self.relayout();
-        self.sync_ui();
         self.update();
     }
 
@@ -558,7 +556,11 @@ impl BrowserView {
     /// Puts `contents`, hidden, in the tab strip at `index` behind the tab
     /// shown, as big as the tab shown.
     fn insert_hidden(&mut self, index: usize, mut contents: WebContents) {
-        let bounds = self.web_views[0].bounds;
+        let shown = self.tabs.active().tab();
+        let bounds = self
+            .web_view(shown)
+            .map(|view| view.bounds)
+            .unwrap_or_default();
         if !bounds.is_empty() {
             contents.resize(bounds.size(), self.scale);
         }
@@ -688,12 +690,7 @@ impl BrowserView {
 
     /// Where a view of the UI is, CSS px of the window.
     fn chrome_rect(&self, id: ui::AnyViewId) -> RectF {
-        let origin = self.chrome_origin();
-        self.chrome
-            .tree
-            .absolute_bounds(id)
-            .unwrap_or_default()
-            .offset(origin.x, origin.y)
+        self.chrome.tree.absolute_bounds(id).unwrap_or_default()
     }
 
     /// Whether back and forward are enabled.
@@ -707,22 +704,36 @@ impl BrowserView {
         self.chrome_invalidation.as_deref()
     }
 
+    /// The tab strip, in the horizontal layout.
     pub fn tab_strip(&self) -> &TabStrip {
-        self.chrome.tab_strip()
+        self.chrome
+            .tab_strip()
+            .expect("the horizontal layout has a tab strip")
     }
 
-    /// Lays the window out with `layout` from now on.
-    pub fn set_layout(&mut self, layout: Box<dyn BrowserViewLayout>) {
-        self.layout = layout;
+    /// Lays the window out with `layout` from now on, instead of in the
+    /// horizontal or sidebar layout (`None`: in those again).
+    pub fn set_layout(&mut self, layout: Option<CustomLayout>) {
+        self.chrome.set_custom_layout(layout);
         self.relayout();
         self.update();
+    }
+
+    /// Lays the UI out `layout` from now on.
+    pub fn set_ui_layout(&mut self, layout: UiLayout) {
+        self.ui_layout = layout;
+        self.relayout();
+        self.update();
+    }
+
+    pub fn ui_layout(&self) -> UiLayout {
+        self.ui_layout
     }
 
     /// Shows `web_contents` too, in a web view of its own after the others.
     /// Its frames go to Viz like the tab's: the caller has Viz send it
     /// `BeginFrame`s.
     pub fn add_web_view(&mut self, web_contents: WebContents) {
-        self.web_views.push(WebView::new(web_contents.tab()));
         self.others.push(web_contents);
         self.relayout();
         self.update();
@@ -733,7 +744,6 @@ impl BrowserView {
     /// goes with it, and the focus goes back to the active tab.
     pub fn remove_web_view(&mut self, tab: TabId) -> Option<WebContents> {
         let index = self.others.iter().position(|c| c.tab() == tab)?;
-        self.web_views.retain(|view| view.contents != tab);
         let contents = self.others.remove(index);
         self.cursors.remove(&tab);
         if self.captured == Some(Target::WebView(tab)) {
@@ -778,35 +788,41 @@ impl BrowserView {
         self.update();
     }
 
-    /// Puts the tab strip, the toolbar and the web views where the layout
-    /// says, and tells
-    /// each renderer its size (`RenderWidgetHostViewAura::SetBounds`).
+    /// Lays the UI out again, puts the web views where it says, and tells
+    /// each renderer its size (`RenderWidgetHostViewAura::SetBounds`). A new
+    /// scale alone needs no new frame of the UI: its layer's tiles are
+    /// rastered again at it.
     fn relayout(&mut self) {
-        let layout = self
-            .layout
-            .layout(self.size, self.scale, self.web_views.len());
-        assert_eq!(layout.web_views.len(), self.web_views.len());
-        self.toolbar_bounds = layout.toolbar;
-        self.tab_strip_bounds = layout.tab_strip;
-        // The toolbar starts where the tab strip's whole physical px end.
-        // A new scale alone needs no new frame of the UI: its layer's
-        // tiles are rastered again at it.
         self.sync_ui();
-        for (view, bounds) in self.web_views.iter_mut().zip(layout.web_views) {
-            view.bounds = bounds;
-            if bounds.is_empty() {
-                continue;
-            }
-            if let Some(contents) = self
-                .tabs
-                .iter_mut()
-                .chain(&mut self.others)
-                .find(|c| c.tab() == view.contents)
-            {
-                contents.resize(bounds.size(), self.scale);
-            }
-        }
+        self.place_web_views();
         self.send_screen_rects();
+    }
+
+    /// The web views where the UI lays them out now, each renderer told its
+    /// size (`WebContents::resize` skips the same one). A web view no more
+    /// shown lets go of the pointer's capture.
+    fn place_web_views(&mut self) {
+        let placed = self.chrome.web_views(self.scale);
+        let scale = self.scale;
+        self.web_views = placed
+            .into_iter()
+            .map(|(tab, bounds)| {
+                if !bounds.is_empty()
+                    && let Some(contents) = self.contents_mut(tab)
+                {
+                    contents.resize(bounds.size(), scale);
+                }
+                WebView {
+                    contents: tab,
+                    bounds,
+                }
+            })
+            .collect();
+        if let Some(Target::WebView(tab)) = self.captured
+            && self.web_view(tab).is_none()
+        {
+            self.captured = None;
+        }
     }
 
     /// The window moved (the platform's, or as what drives the browser
@@ -856,7 +872,7 @@ impl BrowserView {
             .find(|view| view.bounds.to_f32().contains(at))
             .map(|view| Target::WebView(view.contents))
             .or_else(|| {
-                self.chrome_bounds()
+                self.window_bounds()
                     .to_f32()
                     .contains(at)
                     .then_some(Target::Chrome)
@@ -864,28 +880,16 @@ impl BrowserView {
         Some((target, self.in_target(target, point)?))
     }
 
-    /// The UI's area, physical px of the window: the tab strip's and the
-    /// toolbar's together.
-    fn chrome_bounds(&self) -> Rect {
-        let (strip, toolbar) = (self.tab_strip_bounds, self.toolbar_bounds);
-        Rect::new(
-            strip.x.min(toolbar.x),
-            strip.y.min(toolbar.y),
-            strip.width.max(toolbar.width),
-            strip.height.saturating_add(toolbar.height),
-        )
-    }
-
-    /// Where the UI's tree is, CSS px of the window.
-    fn chrome_origin(&self) -> PointF {
-        let at = self.chrome_bounds().to_f32().scale(1.0 / self.scale);
-        PointF::new(at.x, at.y)
+    /// The window, physical px: the UI's tree covers it, the web views
+    /// over it.
+    fn window_bounds(&self) -> Rect {
+        Rect::new(0, 0, self.size.width, self.size.height)
     }
 
     /// The bounds of `target`, if it's still there.
     fn bounds_of(&self, target: Target) -> Option<Rect> {
         match target {
-            Target::Chrome => Some(self.chrome_bounds()),
+            Target::Chrome => Some(self.window_bounds()),
             Target::WebView(tab) => self.web_view(tab).map(|view| view.bounds),
         }
     }
@@ -1146,6 +1150,28 @@ impl BrowserView {
         self.update();
     }
 
+    /// The sidebar `width` CSS px wide, as far as it may be in this window
+    /// (`sidebar_width_in_window`).
+    fn resize_sidebar(&mut self, width: f32) {
+        let width = self.sidebar_width_in_window(width);
+        if width != self.sidebar_width {
+            self.sidebar_width = width;
+            self.relayout();
+        }
+    }
+
+    /// `width` as wide as the sidebar may be in this window: not narrower
+    /// than the theme's least, not wider than its most nor half the window
+    /// (in a window too narrow for both, half the window).
+    fn sidebar_width_in_window(&self, width: f32) -> f32 {
+        let theme = self.chrome.tree.theme();
+        let least = theme.size(SizeToken::SidebarMinWidth);
+        let most = theme
+            .size(SizeToken::SidebarMaxWidth)
+            .min(self.size.width as f32 / self.scale / 2.0);
+        width.max(least).min(most)
+    }
+
     /// The keys held, as the UI's events have them.
     fn ui_modifiers(&self) -> ui::Modifiers {
         let m = self.modifiers;
@@ -1166,6 +1192,18 @@ impl BrowserView {
                     self.close_tab(index);
                     self.sync_ui();
                 }
+                UiMessage::SelectTabById(tab) => {
+                    if let Some(index) = self.tabs.position(|c| c.tab() == tab) {
+                        self.run(Command::SelectTab(index));
+                    }
+                }
+                UiMessage::CloseTabById(tab) => {
+                    if let Some(index) = self.tabs.position(|c| c.tab() == tab) {
+                        self.close_tab(index);
+                        self.sync_ui();
+                    }
+                }
+                UiMessage::ResizeSidebar(width) => self.resize_sidebar(width),
                 UiMessage::Navigate(typed) => {
                     if let Some(url) = fixup_url(&typed, &self.cwd) {
                         self.chrome.blur_omnibox();
@@ -1333,6 +1371,13 @@ impl BrowserView {
             Command::PreviousTab => self.activate_tab(self.tabs.previous_index()),
             Command::SelectTab(index) => self.activate_tab(index),
             Command::SelectLastTab => self.activate_tab(self.tabs.last_index()),
+            Command::ToggleSidebar => {
+                self.ui_layout = match self.ui_layout {
+                    UiLayout::Horizontal => UiLayout::Sidebar,
+                    UiLayout::Sidebar => UiLayout::Horizontal,
+                };
+                self.relayout();
+            }
         }
         self.sync_ui();
         self.update();
@@ -1451,8 +1496,18 @@ impl BrowserView {
             can_go_back: controller.can_go_back(),
             can_go_forward: controller.can_go_forward(),
             mac: self.mac,
-            width: self.toolbar_bounds.width as f32 / self.scale,
-            strip_height: self.tab_strip_bounds.height as f32 / self.scale,
+            width: self.size.width as f32 / self.scale,
+            height: self.size.height as f32 / self.scale,
+            scale: self.scale,
+            strip_height: tab_strip_height(self.scale) as f32 / self.scale,
+            // As dragged, or the theme's at first, within this window: a
+            // window made wider again gives it back.
+            sidebar_width: self.sidebar_width_in_window(self.sidebar_width),
+            layout: self.ui_layout,
+            tabs: self.tabs.iter().map(WebContents::tab).collect(),
+            shown: std::iter::once(self.tabs.active().tab())
+                .chain(self.others.iter().map(WebContents::tab))
+                .collect(),
         }
     }
 
@@ -1470,6 +1525,7 @@ impl BrowserView {
         match self.pointer_target() {
             Some((Target::Chrome, p)) => match self.chrome.tree.cursor(p) {
                 ui::Cursor::Text => CursorType::IBeam,
+                ui::Cursor::ResizeHorizontal => CursorType::EastWestResize,
                 ui::Cursor::Default => CursorType::Pointer,
             },
             Some((Target::WebView(tab), _)) => self
@@ -1513,6 +1569,7 @@ impl BrowserView {
     /// or the toolbar, the window's size, or a web view's surface.
     fn update(&mut self) {
         self.sync_ui();
+        self.place_web_views();
         self.sync_focus();
         if self.size.is_empty() {
             return;
@@ -1543,11 +1600,11 @@ impl BrowserView {
             None => false,
         };
         if chrome_changed || sad != self.sad_drawn || popup_dirty {
-            let origin = self.chrome_origin();
-            let size = self.chrome.tree.size();
+            // The window: the web views are drawn over it where the UI lays
+            // them out, and where no op draws its tiles aren't rastered.
             let mut layers = vec![PictureLayer {
                 id: LayerId(1),
-                bounds: SizeF::new(origin.x + size.width, origin.y + size.height),
+                bounds: self.chrome.tree.size(),
                 display_list: self.chrome_layer.clone().expect("painted"),
                 contents_opaque: true,
                 background_color: Color::WHITE,
@@ -1636,15 +1693,6 @@ fn tab_title(contents: &WebContents) -> String {
     match contents.title() {
         "" => contents.url().unwrap_or("machopo").to_owned(),
         title => title.to_owned(),
-    }
-}
-
-impl WebView {
-    fn new(contents: TabId) -> Self {
-        Self {
-            contents,
-            bounds: Rect::default(),
-        }
     }
 }
 

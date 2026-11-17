@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use browser::{HostMappingRules, NetworkContextParams};
+use shell::chrome::UiLayout;
 use shell::devtools_http_handler::{self, AllowedOrigins};
 use shell::{automation_pipe, to_url};
 use tracing_log::AsLog;
@@ -50,7 +51,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 const DEFAULT_LOG_FILTER: &str = "info,wgpu_core=warn,wgpu_hal=warn,naga=warn";
 
 const USAGE: &str = "\
-usage: machopo [--test-fonts] [--num-raster-threads N]
+usage: machopo [--ui-layout LAYOUT] [--test-fonts] [--num-raster-threads N]
            [--remote-debugging-port PORT [--remote-allow-origins ORIGINS]] [URL|PATH]
        machopo --automation-pipe [--window | --scale F] [--host-resolver-rules RULES]
            [--additional-trust-anchors PEM] [--test-fonts]
@@ -75,6 +76,11 @@ demo page, the default). Anything else is taken as a path; a relative one
 is resolved against the working directory.
 
 Options:
+  --ui-layout LAYOUT  In a window (not with --automation-pipe): how the UI is
+                      laid out at first, horizontal (the default: the tabs
+                      above the toolbar) or sidebar (the toolbar and the
+                      tabs down the left). Cmd+Shift+, (Ctrl+Shift+,
+                      elsewhere) switches between them.
   --scale F           With --automation-pipe (but not --window): the device
                       scale factor (default 1), as Chromium's
                       --force-device-scale-factor. The pipe's screenshots
@@ -165,6 +171,8 @@ enum Command {
 #[derive(Debug, PartialEq)]
 struct Args {
     url: String,
+    /// `--ui-layout`.
+    ui_layout: UiLayout,
     test_fonts: bool,
     automation_pipe: Option<AutomationPipe>,
     /// `--num-raster-threads`; `None`: the default.
@@ -200,6 +208,7 @@ impl Default for AutomationPipe {
 /// Parses the arguments after the program name. Errors say what was wrong.
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String> {
     let mut url = None;
+    let mut ui_layout = None;
     let mut scale = None;
     let mut test_fonts = false;
     let mut automation_pipe = false;
@@ -230,6 +239,18 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
                 scale = Some(parsed.ok_or_else(|| {
                     format!("--scale wants a positive number, like 2, not {v:?}")
                 })?);
+            }
+            "--ui-layout" => {
+                let v = value("--ui-layout")?;
+                ui_layout = Some(match v.as_str() {
+                    "horizontal" => UiLayout::Horizontal,
+                    "sidebar" => UiLayout::Sidebar,
+                    _ => {
+                        return Err(format!(
+                            "--ui-layout wants horizontal or sidebar, not {v:?}"
+                        ));
+                    }
+                });
             }
             "--test-fonts" => test_fonts = true,
             "--num-raster-threads" => {
@@ -271,6 +292,13 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
                 .into(),
         );
     }
+    if automation_pipe && ui_layout.is_some() {
+        return Err(
+            "--ui-layout only applies to a window: what drives the pipe starts horizontal, so \
+             that the page's size doesn't change with it"
+                .into(),
+        );
+    }
     if automation_pipe && url.is_some() {
         return Err(
             "--automation-pipe is driven through the pipe, which navigates: no URL or path".into(),
@@ -298,6 +326,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
     let scale = scale.unwrap_or(1.0);
     Ok(Command::Run(Box::new(Args {
         url: url.map_or_else(|| DEFAULT_URL.to_owned(), |arg| to_url(&arg)),
+        ui_layout: ui_layout.unwrap_or_default(),
         test_fonts,
         num_raster_threads,
         remote_debugging,
@@ -377,6 +406,7 @@ fn main() -> ExitCode {
         Some(pipe) => match network_params(pipe) {
             Ok(network) if pipe.window => window::run(
                 args.url,
+                UiLayout::Horizontal,
                 args.test_fonts,
                 args.num_raster_threads,
                 Some(network),
@@ -397,6 +427,7 @@ fn main() -> ExitCode {
         },
         None => window::run(
             args.url,
+            args.ui_layout,
             args.test_fonts,
             args.num_raster_threads,
             None,
@@ -475,6 +506,23 @@ mod tests {
 
     /// Chrome's `--name=value`, as well as `--name value`; a switch
     /// without a value takes none.
+    #[test]
+    fn the_ui_layout_of_a_window() {
+        assert_eq!(run(&[]).ui_layout, UiLayout::Horizontal);
+        assert_eq!(
+            run(&["--ui-layout", "sidebar"]).ui_layout,
+            UiLayout::Sidebar
+        );
+        assert_eq!(
+            run(&["--ui-layout=horizontal"]).ui_layout,
+            UiLayout::Horizontal
+        );
+        let err = |args: &[&str]| parse(args).unwrap_err();
+        assert!(err(&["--ui-layout", "vertical"]).contains("horizontal or sidebar"));
+        // What drives the pipe starts horizontal.
+        assert!(err(&["--automation-pipe", "--ui-layout", "sidebar"]).contains("only applies"));
+    }
+
     #[test]
     fn values_come_after_an_equals_sign_too() {
         let args = run(&["--num-raster-threads=2", "about:blank?a=b"]);

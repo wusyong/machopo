@@ -23,7 +23,8 @@ use protocol::viz::{
     SharedImage, SharedImageInterface, VizMsg,
 };
 use shell::browser_view::{BROWSER_FRAME_SINK, BrowserView, TabFactory};
-use shell::browser_view_layout::{BrowserViewLayout, Layout, tab_strip_height, toolbar_height};
+use shell::browser_view_layout::{tab_strip_height, toolbar_height};
+use shell::chrome::{self, CustomLayout, UiLayout, UiState, WebViewSlot, WebViewSlotProps};
 use shell::omnibox::Clipboard;
 use shell::sad_tab::SadTab;
 use shell::tab_strip::TabStrip;
@@ -40,6 +41,7 @@ const TOOLBAR_Y: f32 = tab_strip::HEIGHT;
 /// Where the page starts, CSS px.
 const TOP: f32 = tab_strip::HEIGHT + toolbar::HEIGHT;
 const GREEN: [u8; 4] = [0, 128, 0, 255];
+const SIDEBAR: [u8; 4] = [241, 243, 244, 255];
 const BLUE: [u8; 4] = [0, 0, 255, 255];
 const RED: [u8; 4] = [255, 0, 0, 255];
 /// The tab of a second web view.
@@ -163,7 +165,7 @@ impl Window {
     /// tab showing `first`, and a second web view `second`, both loaded.
     fn side_by_side(scale: f32, overlap: bool, first: &str, second: &str) -> Self {
         let mut window = Self::open(window_size(scale), scale);
-        window.view.set_layout(Box::new(SideBySide { overlap }));
+        window.view.set_layout(Some(side_by_side_layout(overlap)));
         window.load(first);
         let contents = start_contents(
             SECOND,
@@ -182,13 +184,26 @@ impl Window {
         window
     }
 
-    /// The bounds of the web views `SideBySide` gives this window.
+    /// Where `side_by_side_layout` puts the web views in this window,
+    /// physical px: the first under the toolbar, as wide as half the window
+    /// less 9 (or more 50, with `overlap`), the second from 1 past the
+    /// half and 31 lower, both to the window's bottom.
     fn web_views(&self, overlap: bool) -> (Rect, Rect) {
         let scale = self.view.scale();
-        let views = SideBySide { overlap }
-            .layout(window_size(scale), scale, 2)
-            .web_views;
-        (views[0], views[1])
+        let size = window_size(scale);
+        let chrome = tab_strip_height(scale) + toolbar_height(scale);
+        let half = size.width / 2;
+        let first_width = if overlap { half + 50 } else { half - 9 };
+        let top = chrome + 31;
+        (
+            Rect::new(0, chrome as i32, first_width, size.height - chrome),
+            Rect::new(
+                half as i32 + 1,
+                top as i32,
+                size.width - half - 1,
+                size.height - top,
+            ),
+        )
     }
 
     /// The text of `tab`'s `#out` now.
@@ -441,6 +456,14 @@ impl Window {
         self.view.set_modifiers(ModifiersState::empty());
     }
 
+    /// Cmd+Shift+, (`<`, as most layouts type it with Shift).
+    fn toggle_sidebar(&mut self) {
+        self.view
+            .set_modifiers(ModifiersState::SUPER | ModifiersState::SHIFT);
+        press(&mut self.view, Key::Character("<".into()), Some("<".into()));
+        self.view.set_modifiers(ModifiersState::empty());
+    }
+
     fn url(&self) -> Option<&str> {
         self.view.web_contents().url()
     }
@@ -536,33 +559,70 @@ fn window_size(scale: f32) -> Size {
 /// of the first,
 /// and 31px lower, so that it starts on odd pixels, between two CSS px at
 /// 1.5x and 2x. With `overlap`, it covers the first's right 50px instead.
-struct SideBySide {
-    overlap: bool,
-}
-
-impl BrowserViewLayout for SideBySide {
-    fn layout(&self, size: Size, scale: f32, web_views: usize) -> Layout {
-        let strip = tab_strip_height(scale);
-        let chrome = strip + toolbar_height(scale);
-        let half = size.width / 2;
-        let first_width = if self.overlap { half + 50 } else { half - 9 };
-        let top = chrome + 31;
-        let mut views = vec![
-            Rect::new(0, chrome as i32, first_width, size.height - chrome),
-            Rect::new(
-                half as i32 + 1,
-                top as i32,
-                size.width - half - 1,
-                size.height - top,
-            ),
-        ];
-        views.truncate(web_views);
-        Layout {
-            tab_strip: Rect::new(0, 0, size.width, strip),
-            toolbar: Rect::new(0, strip as i32, size.width, chrome - strip),
-            web_views: views,
-        }
-    }
+/// Laid out in physical px, each a CSS px for the UI's description: the
+/// web views are put back on the same whole pixels.
+fn side_by_side_layout(overlap: bool) -> CustomLayout {
+    use ui::taffy::prelude::length;
+    use ui::taffy::{FlexDirection, Rect as Edges, Size as Dims, Style};
+    Box::new(move |state: &UiState, theme| {
+        let scale = state.scale;
+        let width = (state.width * scale).round() as u32;
+        let half = width / 2;
+        let first_width = if overlap { half + 50 } else { half - 9 };
+        let css = |px: f32| px / scale;
+        let slot = |tab: TabId, style| {
+            ui::Element::new::<WebViewSlot>(WebViewSlotProps { tab })
+                .key(u64::from(tab.0))
+                .style(style)
+        };
+        let fixed = |width: f32, left: f32, top: f32| Style {
+            flex_grow: 0.0,
+            flex_shrink: 0.0,
+            margin: Edges {
+                left: length(left),
+                right: length(0.0),
+                top: length(top),
+                bottom: length(0.0),
+            },
+            size: Dims {
+                width: length(width),
+                height: ui::taffy::Dimension::auto(),
+            },
+            ..Style::default()
+        };
+        let mut views = state.shown.iter().copied();
+        let first = views
+            .next()
+            .map(|tab| slot(tab, fixed(css(first_width as f32), 0.0, 0.0)));
+        let second = views.next().map(|tab| {
+            slot(
+                tab,
+                fixed(
+                    css((width - half - 1) as f32),
+                    css(half as f32 + 1.0 - first_width as f32),
+                    css(31.0),
+                ),
+            )
+        });
+        chrome::horizontal(
+            &UiState {
+                shown: Vec::new(),
+                ..state.clone()
+            },
+            theme,
+        )
+        .child(
+            ui::Element::container()
+                .style(Style {
+                    flex_direction: FlexDirection::Row,
+                    flex_grow: 1.0,
+                    flex_basis: length(0.0),
+                    ..Style::default()
+                })
+                .children(first)
+                .children(second),
+        )
+    })
 }
 
 /// Where in the window, CSS px, `(x, y)` of a web view at `bounds` is.
@@ -1779,5 +1839,100 @@ fn a_removed_selects_dropdown(mut window: Window) {
     window.until(|msg| matches!(msg, RendererHostMsg::ShowPopupMenu(_)));
     window.until(|msg| matches!(msg, RendererHostMsg::HidePopupMenu));
     assert!(window.view.popup_menu().is_none());
+    window.close();
+}
+
+#[test]
+fn the_sidebar_comes_and_goes_with_its_shortcut_and_the_page_moves() {
+    let server = server(&[("/", GREEN_PAGE)]);
+    let mut window = Window::open(Size::new(800, 600), 1.0);
+    window.load(&server.url("/"));
+    assert_eq!(window.view.ui_layout(), UiLayout::Horizontal);
+    assert_eq!(
+        window.view.web_view_bounds(TabId(0)),
+        Some(RectF::new(0.0, TOP, 800.0, 600.0 - TOP))
+    );
+    window.toggle_sidebar();
+    assert_eq!(window.view.ui_layout(), UiLayout::Sidebar);
+    // 260 CSS px of sidebar and 4 of its edge, the page the rest, the
+    // whole height.
+    assert_eq!(
+        window.view.web_view_bounds(TabId(0)),
+        Some(RectF::new(264.0, 0.0, 536.0, 600.0))
+    );
+    window.until_pixel(270, 5, GREEN);
+    // The sidebar where the page was: its background.
+    assert_eq!(window.pixel(100, 590), SIDEBAR);
+    window.toggle_sidebar();
+    assert_eq!(
+        window.view.web_view_bounds(TabId(0)),
+        Some(RectF::new(0.0, TOP, 800.0, 600.0 - TOP))
+    );
+    window.until_pixel(270, 590, GREEN);
+    window.close();
+}
+
+#[test]
+fn a_row_in_the_sidebar_shows_its_tab() {
+    let server = server(&[("/green", GREEN_PAGE), ("/blue", BLUE_PAGE)]);
+    let mut window = Window::open(Size::new(800, 600), 1.0);
+    window.load(&server.url("/green"));
+    window.shortcut("t");
+    window.load(&server.url("/blue"));
+    window.toggle_sidebar();
+    window.until_pixel(270, 5, BLUE);
+    // The first row, under the buttons, the field and new tab.
+    window.click(100.0, 126.0 + 18.0);
+    assert_eq!(window.view.active_tab_index(), 0);
+    window.until_pixel(270, 5, GREEN);
+    // A row is its tab's, wherever the tab is: with the first closed, the
+    // first row is the blue one, whose id is 1.
+    window.shortcut("w");
+    window.until_pixel(270, 5, BLUE);
+    window.shortcut("t");
+    window.load(&server.url("/green"));
+    window.until_pixel(270, 5, GREEN);
+    window.click(100.0, 126.0 + 18.0);
+    assert_eq!(window.view.active_tab_index(), 0);
+    window.until_pixel(270, 5, BLUE);
+    window.close();
+}
+
+#[test]
+fn dragging_the_sidebar_s_edge_resizes_the_page_within_bounds() {
+    let server = server(&[("/", GREEN_PAGE)]);
+    let mut window = Window::open(Size::new(800, 600), 1.0);
+    window.load(&server.url("/"));
+    window.toggle_sidebar();
+    let drag = |window: &mut Window, from: f32, to: f32| {
+        window.view.pointer_moved(PointF::new(from, 300.0));
+        assert_eq!(window.view.cursor(), CursorType::EastWestResize);
+        window.view.mouse_input(MouseButton::Left, true);
+        window.view.pointer_moved(PointF::new(to, 300.0));
+        window.view.mouse_input(MouseButton::Left, false);
+    };
+    let page_x = |window: &Window| window.view.web_view_bounds(TabId(0)).unwrap().x;
+    drag(&mut window, 261.0, 361.0);
+    assert_eq!(page_x(&window), 364.0);
+    // No wider than half the window, no narrower than 200.
+    drag(&mut window, 361.0, 700.0);
+    assert_eq!(page_x(&window), 404.0);
+    drag(&mut window, 401.0, 10.0);
+    assert_eq!(page_x(&window), 204.0);
+    // The page's renderer is told its new size.
+    window.until_pixel(210, 5, GREEN);
+    window.close();
+}
+
+#[test]
+fn the_sidebar_is_no_wider_than_half_a_narrow_window() {
+    let server = server(&[("/", GREEN_PAGE)]);
+    let mut window = Window::open(Size::new(400, 300), 1.0);
+    window.load(&server.url("/"));
+    window.toggle_sidebar();
+    assert_eq!(
+        window.view.web_view_bounds(TabId(0)),
+        Some(RectF::new(204.0, 0.0, 196.0, 300.0))
+    );
     window.close();
 }

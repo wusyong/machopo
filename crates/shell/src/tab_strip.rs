@@ -12,7 +12,8 @@ use compositor_paint::{DisplayItemList, PaintFlags, PaintOp};
 use gfx::{Color, PointF, RRectF, RectF, SizeF};
 use ui::taffy::{AvailableSpace, Size};
 use ui::{
-    Component, CreateCtx, EventCtx, Handled, MeasureCtx, PaintCtx, PointerButton, PointerEvent, TextContexts, View,
+    Component, CreateCtx, EventCtx, Handled, MeasureCtx, PaintCtx, PointerButton, PointerEvent,
+    TextContexts, View,
 };
 
 use crate::browser_view::Command;

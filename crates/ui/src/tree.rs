@@ -237,7 +237,7 @@ impl<A: App> ViewTree<A> {
             needs_paint: true,
             painted: None,
         };
-        let id = match self.free.pop() {
+        match self.free.pop() {
             Some(index) => {
                 let id = AnyViewId {
                     index,
@@ -260,8 +260,7 @@ impl<A: App> ViewTree<A> {
                     generation: 0,
                 }
             }
-        };
-        id
+        }
     }
 
     fn node(&self, id: AnyViewId) -> Option<&Node> {
@@ -832,6 +831,20 @@ impl<A: App> ViewTree<A> {
                     .and_then(|node| node.painted.as_ref())
                     .is_some_and(|painted| painted.list != fresh)
             })
+            .collect()
+    }
+
+    /// Every view of type `T` in the tree, in paint order (an earlier one
+    /// under a later one).
+    pub fn find_all<T: View<A>>(&self) -> Vec<ViewId<T>> {
+        self.descendants(self.root)
+            .into_iter()
+            .filter(|&id| {
+                self.views[id.slot()]
+                    .as_deref()
+                    .is_some_and(|view| (view as &dyn Any).is::<T>())
+            })
+            .map(ViewId::new)
             .collect()
     }
 

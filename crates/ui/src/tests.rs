@@ -1052,10 +1052,16 @@ fn children_are_described_within_their_parent() {
             .style(sized_row(100.0, 20.0))
             .children(children)
     };
-    described(&mut tree, vec![group(vec![tile(10.0).key(1), tile(20.0).key(2)])]);
+    described(
+        &mut tree,
+        vec![group(vec![tile(10.0).key(1), tile(20.0).key(2)])],
+    );
     let parent = ids(&tree)[0];
     let inner = tree.children(parent).to_vec();
-    described(&mut tree, vec![group(vec![tile(20.0).key(2), tile(10.0).key(1)])]);
+    described(
+        &mut tree,
+        vec![group(vec![tile(20.0).key(2), tile(10.0).key(1)])],
+    );
     assert_eq!(ids(&tree), [parent]);
     assert_eq!(tree.children(parent), [inner[1], inner[0]]);
     // A new style for the group: laid out with it.
@@ -1082,4 +1088,27 @@ fn a_name_described_no_more_finds_nothing() {
     assert!(!tree.contains(first));
     assert_eq!(ids(&tree)[0].index, first.any().index);
     assert!(tree.find::<Tile>("first").is_none());
+}
+
+#[test]
+fn every_view_of_a_type_is_found_in_paint_order() {
+    let mut tree = tree();
+    described(
+        &mut tree,
+        vec![
+            tile(10.0).key(1),
+            El::container()
+                .key(2)
+                .style(sized_row(50.0, 20.0))
+                .child(tile(20.0).key(3)),
+            tile(30.0).key(4),
+        ],
+    );
+    let widths: Vec<f32> = tree
+        .find_all::<Tile>()
+        .into_iter()
+        .map(|id| tree.get(id).unwrap().props.width)
+        .collect();
+    assert_eq!(widths, [10.0, 20.0, 30.0]);
+    assert!(tree.find_all::<Swatch>().is_empty());
 }

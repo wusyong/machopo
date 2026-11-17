@@ -1,0 +1,24 @@
+# The sidebar: its shortcut lays the UI out down the left, the page right
+# of it; a row shows its tab; the shortcut lays it across the top again.
+# In the 800px wide window the sidebar is 260px wide, its rows from y 126,
+# 36 high and 2 apart: the first's middle is at (100, 144), the second's
+# at (100, 182).
+navigate pages/tab-one.html
+wait-loaded
+wait-text #name "one"
+key primary+t
+navigate pages/tab-two.html
+wait-loaded
+wait-text #name "two"
+key primary+shift+,
+# For a person to look at: the buttons, the field, new tab, two rows (the
+# second active), the page right of the sidebar.
+screenshot sidebar
+click-at 100 144
+wait-text #name "one"
+click-at 100 182
+wait-text #name "two"
+# Back across the top: the strip's first tab is at (128, 20).
+key primary+shift+,
+click-at 128 20
+wait-text #name "one"
