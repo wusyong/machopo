@@ -37,8 +37,7 @@ use std::thread::JoinHandle;
 use crossbeam_channel::Sender as BrowserSender;
 use dom_api::{ClassicScript, EngineSettings, WorkerEngine, WorkerError, WorkerStart};
 use protocol::network::{
-    CredentialsMode, LoadResult, RequestDestination, RequestMode, ResourceRequest,
-    ResponseTainting,
+    CredentialsMode, LoadResult, RequestDestination, RequestMode, ResourceRequest, ResponseTainting,
 };
 use protocol::renderer::{RendererHostMsg, RendererMsg};
 
@@ -51,8 +50,8 @@ pub(crate) enum WorkerEvent {
     Error(WorkerError),
     /// It closed itself (`close()`): no more of it.
     Closed,
-    /// Its script couldn't be had (HTML's: an `error` event at its
-    /// `Worker`): it ran nothing.
+    /// Its script couldn't be had, or didn't parse (HTML's: an `error`
+    /// event at its `Worker`): it ran nothing.
     ScriptFailed,
 }
 
@@ -64,8 +63,8 @@ pub(crate) enum WorkerTask {
     Stop,
     /// What the browser answers it: its main script
     /// (`RendererMsg::DedicatedWorkerScript`), or a load's response or
-    /// redirect.
-    Browser(RendererMsg),
+    /// redirect. Boxed: much bigger than the others, and rare.
+    Browser(Box<RendererMsg>),
 }
 
 /// What a worker's thread and the main thread share: whether it is to stop,
@@ -214,16 +213,16 @@ impl Workers {
                 let settings = self.settings;
                 let to_browser = self.to_browser.clone();
                 move || {
-                    run(
+                    run(WorkerThread {
                         id,
                         start,
-                        engine,
+                        make: engine,
                         settings,
                         from_owner,
-                        &shared,
+                        shared,
                         to_browser,
-                        &scheduler,
-                    );
+                        scheduler,
+                    });
                 }
             });
         match thread {
@@ -234,10 +233,12 @@ impl Workers {
                 self.running
                     .borrow_mut()
                     .insert(id, Running { tasks, shared });
-                let _ = self.to_browser.send(RendererHostMsg::DedicatedWorkerCreated {
-                    worker: id,
-                    request,
-                });
+                let _ = self
+                    .to_browser
+                    .send(RendererHostMsg::DedicatedWorkerCreated {
+                        worker: id,
+                        request,
+                    });
             }
             Err(error) => {
                 tracing::warn!(%error, "no thread for a worker");
@@ -335,22 +336,23 @@ impl GlobalHost {
         });
         loop {
             match self.inbox.from_owner.recv() {
-                Ok(WorkerTask::Browser(RendererMsg::ResourceResponse {
-                    request_id: answered,
-                    result,
-                    ..
-                })) if answered == request_id => return Some(result),
-                Ok(WorkerTask::Browser(RendererMsg::ReceivedRedirect {
-                    request_id: redirected,
-                    ..
-                })) if redirected == request_id => {
-                    let _ = self.to_browser.send(RendererHostMsg::FollowRedirect {
-                        request_id,
-                        worker,
-                    });
-                }
-                // Another load's, over.
-                Ok(WorkerTask::Browser(_)) => {}
+                Ok(WorkerTask::Browser(msg)) => match *msg {
+                    RendererMsg::ResourceResponse {
+                        request_id: answered,
+                        result,
+                        ..
+                    } if answered == request_id => return Some(result),
+                    RendererMsg::ReceivedRedirect {
+                        request_id: redirected,
+                        ..
+                    } if redirected == request_id => {
+                        let _ = self
+                            .to_browser
+                            .send(RendererHostMsg::FollowRedirect { request_id, worker });
+                    }
+                    // Another load's, over.
+                    _ => {}
+                },
                 Ok(task @ WorkerTask::Stop) => {
                     self.inbox.put_off.borrow_mut().push_back(task);
                     break;
@@ -364,10 +366,9 @@ impl GlobalHost {
                 break;
             }
         }
-        let _ = self.to_browser.send(RendererHostMsg::CancelResource {
-            request_id,
-            worker,
-        });
+        let _ = self
+            .to_browser
+            .send(RendererHostMsg::CancelResource { request_id, worker });
         None
     }
 }
@@ -407,20 +408,34 @@ impl dom_api::WorkerGlobalHost for GlobalHost {
     }
 }
 
-/// A worker's thread: its engine made, its global, its script run, then
-/// its loop (its tasks due, the messages from its `Worker`) till it is
-/// stopped or closes itself; its engine let go of as it ends, on this
-/// thread.
-fn run(
+/// What a worker's thread starts with (Blink's `DedicatedWorkerThread`'s
+/// startup data).
+struct WorkerThread {
     id: u64,
     start: WorkerStart,
     make: fn(EngineSettings) -> Box<dyn WorkerEngine>,
     settings: EngineSettings,
     from_owner: Receiver<WorkerTask>,
-    shared: &Arc<Shared>,
+    shared: Arc<Shared>,
     to_browser: BrowserSender<RendererHostMsg>,
-    scheduler: &Arc<MainThreadScheduler>,
-) {
+    scheduler: Arc<MainThreadScheduler>,
+}
+
+/// A worker's thread: its engine made, its global, its script run, then
+/// its loop (its tasks due, the messages from its `Worker`) till it is
+/// stopped or closes itself; its engine let go of as it ends, on this
+/// thread.
+fn run(thread: WorkerThread) {
+    let WorkerThread {
+        id,
+        start,
+        make,
+        settings,
+        from_owner,
+        shared,
+        to_browser,
+        scheduler,
+    } = thread;
     let inbox = Rc::new(Inbox {
         from_owner,
         put_off: RefCell::new(VecDeque::new()),
@@ -447,12 +462,13 @@ fn run(
     let mut early = Vec::new();
     let result = loop {
         match inbox.recv() {
-            Ok(WorkerTask::Browser(RendererMsg::DedicatedWorkerScript { result, .. })) => {
-                break result;
+            Ok(WorkerTask::Browser(msg)) => {
+                // It asked nothing else yet.
+                if let RendererMsg::DedicatedWorkerScript { result, .. } = *msg {
+                    break result;
+                }
             }
             Ok(WorkerTask::Message(message)) => early.push(message),
-            // It asked nothing else yet.
-            Ok(WorkerTask::Browser(_)) => {}
             Ok(WorkerTask::Stop) | Err(_) => return,
         }
     };
@@ -468,10 +484,7 @@ fn run(
     let origin = if url.scheme() == "data" {
         url::Origin::new_opaque()
     } else {
-        start
-            .owner_origin
-            .clone()
-            .unwrap_or_else(|| url.origin())
+        start.owner_origin.clone().unwrap_or_else(|| url.origin())
     };
     let closing = Rc::new(Cell::new(false));
     let host = GlobalHost {
@@ -485,7 +498,7 @@ fn run(
         shared: shared.clone(),
     };
     engine.create_global(&url, origin, &start.name, Box::new(host));
-    engine.run_classic_script(&ClassicScript {
+    let parsed = engine.run_classic_script(&ClassicScript {
         source: &source,
         url: url.as_str(),
         base_url: None,
@@ -493,6 +506,12 @@ fn run(
         muted: false,
         use_credentials: false,
     });
+    // A script that didn't parse: as one that couldn't be had (HTML's "run
+    // a worker": a plain `error` at its `Worker`, and it runs no more).
+    if !parsed {
+        scheduler.post_worker(id, WorkerEvent::ScriptFailed);
+        return;
+    }
     for message in early {
         engine.post_message(message);
     }
@@ -554,7 +573,8 @@ struct WorkerScript {
 /// A worker's script as Chrome takes it (`WorkerClassicScriptLoader`):
 /// none for a failed load (a network error, another origin's main
 /// script), a status that isn't ok, or a MIME type no script is (lax, as
-/// for a `<script>`: HTML asks for a JavaScript one); not checked for a
+/// for a `<script>`: HTML asks for a JavaScript one), or that isn't
+/// JavaScript's under `X-Content-Type-Options: nosniff`; not checked for a
 /// `data:` or `blob:` URL's, whose text the worker could have had anyway.
 /// Its text decoded as a `<script>`'s with UTF-8 to fall back on (a BOM,
 /// the response's charset; HTML decodes it as UTF-8 whatever it says).
@@ -564,8 +584,11 @@ fn worker_script(result: &LoadResult) -> Option<WorkerScript> {
         return None;
     }
     let url = url::Url::parse(&response.url).ok()?;
+    let mime = response.mime_type.as_str();
     if !matches!(url.scheme(), "data" | "blob")
-        && crate::loader::is_blocked_as_script(&response.mime_type)
+        && (crate::loader::is_blocked_as_script(mime)
+            || (crate::loader::is_nosniff(&response.headers)
+                && !dom_api::is_javascript_mime_type(mime)))
     {
         return None;
     }
@@ -601,7 +624,9 @@ mod tests {
         ) {
         }
 
-        fn run_classic_script(&mut self, _: &ClassicScript<'_>) {}
+        fn run_classic_script(&mut self, _: &ClassicScript<'_>) -> bool {
+            true
+        }
 
         fn post_message(&mut self, _: dom::SerializedMessage) {}
 

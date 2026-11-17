@@ -97,9 +97,9 @@ pub struct WorkerError {
 }
 
 /// What the worker of `worker` threw and its global didn't cancel (HTML's
-/// "run a worker"'s error reporting): an `ErrorEvent` fired at `worker`,
-/// cancelable, its `error` null; not canceled, reported at its realm's
-/// global as if thrown there (no value). Nothing for one terminated.
+/// "run a worker"'s error reporting): a task of `worker`'s realm, queued
+/// after what the worker posted before it, fires it (`fire_worker_error`).
+/// Nothing for one terminated.
 pub fn worker_error<H: ScriptHost>(
     host: &mut H,
     worker: &Persistent<EventTargetImpl>,
@@ -111,13 +111,24 @@ pub fn worker_error<H: ScriptHost>(
         lineno: error.lineno,
         colno: error.colno,
     };
+    host.mutate(|cx| cx.queue_worker_error(worker.get(cx.gc), info));
+}
+
+/// A worker's error's task: an `ErrorEvent` of `info` fired at `worker`,
+/// cancelable, its `error` null; not canceled, reported at its realm's
+/// global as if thrown there (no value). Nothing for one terminated since.
+pub(crate) fn fire_worker_error<H: ScriptHost>(
+    host: &mut H,
+    worker: &Persistent<EventTargetImpl>,
+    info: &dom::ErrorInfo,
+) {
     let event = host.mutate(|cx| {
         let worker = worker.get(cx.gc);
         if cx.worker_terminated(worker) {
             return None;
         }
         let context = cx.target_context(TargetRef::EventTarget(worker));
-        let event = cx.create_error_event(&info, context);
+        let event = cx.create_error_event(info, context);
         Some(Persistent::new(cx.gc, event))
     });
     let Some(event) = event else {
@@ -132,7 +143,7 @@ pub fn worker_error<H: ScriptHost>(
             .map(|window| cx.root_global(GlobalRef::Window(window)))
     });
     if let Some(global) = global {
-        crate::report_exception(host, &global, &info, None);
+        crate::report_exception(host, &global, info, None);
     }
 }
 

@@ -528,11 +528,16 @@ pub enum RendererHostMsg {
     /// as the renderer's from now on (its requests are let through), and
     /// loads its main script, `request`, answering
     /// `RendererMsg::DedicatedWorkerScript`. Handled on the IO thread.
-    DedicatedWorkerCreated { worker: u64, request: ResourceRequest },
+    DedicatedWorkerCreated {
+        worker: u64,
+        request: ResourceRequest,
+    },
     /// The dedicated worker `worker` is no more (terminated, closed, its
     /// document gone): its loads closed, its requests refused. Handled on
     /// the IO thread.
-    DedicatedWorkerGone { worker: u64 },
+    DedicatedWorkerGone {
+        worker: u64,
+    },
     /// `BlobURLStore::Register` (`URL.createObjectURL`): `url` stands for
     /// a blob of `bytes` and `mime_type` (its type, maybe empty), for this
     /// renderer's subresources and for any navigation, until revoked or

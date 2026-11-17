@@ -213,7 +213,8 @@ pub use window::{
     NamedProperty, named_property, named_property_collection, window_document_gets_for_testing,
 };
 pub use worker::{
-    ImportError, ImportedScript, WorkerError, WorkerGlobalHost, WorkerHost, WorkerStart, worker_error,
+    ImportError, ImportedScript, WorkerError, WorkerGlobalHost, WorkerHost, WorkerStart,
+    worker_error,
 };
 
 /// A member's call: the DOM's operation (`dom::Cx`, which it derefs

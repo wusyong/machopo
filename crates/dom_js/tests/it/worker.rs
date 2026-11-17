@@ -130,6 +130,19 @@ fn a_worker_s_global_is_its_realm_s() {
     );
 }
 
+/// `name` is `[Replaceable]`: script's own value replaces it.
+#[test]
+fn a_worker_s_name_is_replaceable() {
+    let (mut engine, _) = worker();
+    assert_eq!(
+        result(
+            &mut engine,
+            "[name, (name = 'other', name), typeof Object.getOwnPropertyDescriptor(self, 'name').value].join()"
+        ),
+        "fib,other,string"
+    );
+}
+
 /// A microtask its script queued runs as the script ends (HTML's "clean
 /// up after running script"), before its next.
 #[test]
@@ -184,6 +197,27 @@ fn a_worker_s_timers_are_its_tasks() {
     );
     // Cleared: none is due.
     assert!(engine.until_next_task().is_none());
+}
+
+/// What the DOM queues of no element's is its tasks too (its global has
+/// no document): a `FileReader`'s read, a `Blob`'s, `AbortSignal.timeout()`.
+#[test]
+fn a_worker_s_tasks_of_no_element_run() {
+    let (mut engine, _) = worker();
+    run(
+        &mut engine,
+        "globalThis.log = []; const blob = new Blob(['hi']); \
+         const reader = new FileReader(); \
+         reader.onload = () => log.push('read ' + reader.result); \
+         reader.readAsText(blob); \
+         blob.text().then(text => log.push('text ' + text)); \
+         AbortSignal.timeout(1).onabort = e => log.push('aborted ' + e.target.reason.name);",
+    );
+    run_tasks_until(&mut engine, |engine| result(engine, "log.length") == "3");
+    assert_eq!(
+        result(&mut engine, "log.sort().join()"),
+        "aborted TimeoutError,read hi,text hi"
+    );
 }
 
 /// `postMessage()` gives its host the message, serialized; a message its
@@ -290,13 +324,43 @@ fn a_worker_s_uncaught_errors_go_to_its_host() {
     );
 }
 
+/// Its script not parsed: nothing of it runs, nothing is reported (its
+/// `Worker` gets a plain `error`); one that parses and throws ran.
+#[test]
+fn a_worker_s_script_that_doesn_t_parse_runs_nothing() {
+    let (mut engine, sent) = worker();
+    let script = |source| ClassicScript {
+        source,
+        url: "https://example.test/w.js",
+        base_url: None,
+        line: 1,
+        muted: false,
+        use_credentials: false,
+    };
+    assert!(!engine.run_classic_script(&script("postMessage(1); (")));
+    assert!(sent.borrow().messages.is_empty());
+    assert!(sent.borrow().errors.is_empty());
+    assert!(engine.run_classic_script(&script("throw 1;")));
+    assert_eq!(sent.borrow().errors.len(), 1);
+}
+
 /// `importScripts()` runs what its host fetched, in turn, in its realm,
 /// each URL parsed against its own first (none with nothing given).
 #[test]
 fn import_scripts_runs_each_in_turn() {
     let (mut engine, sent) = worker();
-    script(&sent, "https://example.test/a.js", "var got = ['a'];", false);
-    script(&sent, "https://example.test/lib/b.js", "got.push('b', typeof self);", false);
+    script(
+        &sent,
+        "https://example.test/a.js",
+        "var got = ['a'];",
+        false,
+    );
+    script(
+        &sent,
+        "https://example.test/lib/b.js",
+        "got.push('b', typeof self);",
+        false,
+    );
     assert_eq!(
         result(
             &mut engine,
@@ -341,9 +405,19 @@ fn import_scripts_fails_as_html_says() {
 #[test]
 fn import_scripts_throws_what_a_script_threw() {
     let (mut engine, sent) = worker();
-    script(&sent, "https://example.test/throws.js", "throw self;", false);
+    script(
+        &sent,
+        "https://example.test/throws.js",
+        "throw self;",
+        false,
+    );
     script(&sent, "https://example.test/bad.js", "(", false);
-    script(&sent, "https://example.test/after.js", "var after = 1;", false);
+    script(
+        &sent,
+        "https://example.test/after.js",
+        "var after = 1;",
+        false,
+    );
     script(&sent, "https://other.test/muted.js", "throw self;", true);
     assert_eq!(
         result(
@@ -395,7 +469,10 @@ fn an_imported_script_s_errors_are_its_own() {
         .collect();
     assert_eq!(
         errors,
-        ["Uncaught Error: boom https://example.test/own.js", "Script error. "]
+        [
+            "Uncaught Error: boom https://example.test/own.js",
+            "Script error. "
+        ]
     );
 }
 
@@ -480,7 +557,7 @@ fn page_result(engine: &mut V8Engine, source: &str) -> String {
 /// `new Worker()` starts its worker through the window's host; what the
 /// worker posts is a `message` at the `Worker` as its realm's task, `null`
 /// its source and empty its origin; what it threw an `error` at the
-/// `Worker`, and at the window if that isn't canceled.
+/// `Worker` as a task too, and at the window if that isn't canceled.
 #[test]
 fn a_window_s_worker_hears_from_its_worker() {
     let (mut engine, workers) = page();
@@ -530,6 +607,12 @@ fn a_window_s_worker_hears_from_its_worker() {
             colno: 0,
         },
     );
+    // Each a task of the window's: none fired yet.
+    assert_eq!(
+        page_result(&mut engine, "got.join('|')"),
+        "message 40 true \"\""
+    );
+    engine.run_due_tasks();
     assert_eq!(
         page_result(&mut engine, "got.join('|')"),
         "message 40 true \"\"|worker error Uncaught Error: handled 2 null|\
@@ -619,7 +702,11 @@ fn a_document_s_workers_end_with_it() {
     // The iframe's (the first made) ended; the window's runs on.
     assert_eq!(ended(&workers), [1]);
     engine
-        .create_window(engine.top_frame(), "https://example.test/next.html", Instant::now())
+        .create_window(
+            engine.top_frame(),
+            "https://example.test/next.html",
+            Instant::now(),
+        )
         .expect("a window");
     assert_eq!(ended(&workers), [1, 2]);
 }

@@ -219,8 +219,8 @@ pub use ui_event::{
 pub use url::{Url, UrlSearchParams};
 pub use wake_lock::{WakeLock, WakeLockSentinelData};
 pub use window::{
-    AnimationFrame, ElementTask, ElementTaskKind, Location, NativeAction, NativeTimer, Timer,
-    TimerState, Window,
+    AnimationFrame, DueNativeTimer, ElementTask, ElementTaskKind, Location, NativeAction,
+    NativeTimer, Timer, TimerState, Window,
 };
 pub use worker::WorkerObjectData;
 pub use worker_global::{GlobalRef, GlobalRoot, WorkerGlobalScope};

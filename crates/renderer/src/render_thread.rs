@@ -933,8 +933,12 @@ impl RenderThread {
                 result,
             } => self.did_receive_resource(request_id, result),
             // A worker's go to its thread (`RendererSender::send`).
-            RendererMsg::ReceivedRedirect { worker: Some(_), .. }
-            | RendererMsg::ResourceResponse { worker: Some(_), .. }
+            RendererMsg::ReceivedRedirect {
+                worker: Some(_), ..
+            }
+            | RendererMsg::ResourceResponse {
+                worker: Some(_), ..
+            }
             | RendererMsg::DedicatedWorkerScript { .. } => {}
             RendererMsg::UpdateVisualProperties(props) => {
                 self.visual_properties = props;
@@ -1426,12 +1430,10 @@ impl RenderThread {
                 .push(protocol::renderer::RedirectHop::of(redirect));
         }
         self.network_agent.did_redirect(request_id, redirect);
-        let _ = self
-            .to_browser
-            .send(RendererHostMsg::FollowRedirect {
-                request_id,
-                worker: None,
-            });
+        let _ = self.to_browser.send(RendererHostMsg::FollowRedirect {
+            request_id,
+            worker: None,
+        });
     }
 
     /// What the page's log says of request `request_id`'s `result`, if

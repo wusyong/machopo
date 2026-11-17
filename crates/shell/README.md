@@ -96,7 +96,7 @@ UI 的深淺色跟著系統，系統切換時跟著換；`--ui-theme=light` 或 
 | `Target.createTarget` | 新的分頁，在其他分頁之後，顯示 `url`（`about:blank` 是 initial entry）；`background: true` 時不顯示（一樣在最後）。回答 `targetId`。沒有 `newWindow`（machopo 只有一個視窗） |
 | `Target.closeTarget`、`Target.activateTarget` | 關掉分頁（最後一個關掉視窗，machopo 結束；回答 `success: true`）；顯示分頁 |
 | `Target.setDiscoverTargets` | 打開時先告訴現有的分頁，之後有 `targetCreated`、`targetDestroyed`、`targetCrashed`（renderer 當掉，或 `about:crash`；分頁還在，顯示 sad tab） |
-| `Target.setAutoAttach` | 回答成功：沒有會自己接上的 target（iframe 都在分頁的 renderer 裡，沒有 worker），browser 層級的也不接上分頁（Chrome 會） |
+| `Target.setAutoAttach` | 回答成功：沒有會自己接上的 target（iframe 都在分頁的 renderer 裡，dedicated worker 沒有自己的 target），browser 層級的也不接上分頁（Chrome 會） |
 | `Target.detachFromTarget` | 拿掉 client 自己的 flat session（`sessionId`，或舊的 `targetId`），送 `Target.detachedFromTarget`（`sessionId`、`targetId`）；分頁關掉時，連在它上面的 flat session 也收到它（直接連到分頁的連線收到 `Inspector.detached`） |
 | `Page.enable` | 之後有 `Page.frameStartedNavigating`（載入一份文件的導覽開始了，不管是誰開始的：命令、連結、`location`；`navigationType` 是 `differentDocument`、`reload` 或 `historyDifferentDocument`）和 `Page.navigatedWithinDocument`（`fragment`、`historyApi`，上一頁、下一頁是 `other`） |
 | `Page.setLifecycleEventsEnabled` | 記下來之後轉給 renderer 的 `Page` agent（下一節），由它送 `Page.lifecycleEvent`；renderer 換了（當掉重開）時，browser 把 `Page.enable` 和它再交給新的 renderer |

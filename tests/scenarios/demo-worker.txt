@@ -1,0 +1,16 @@
+# about:demo's "A worker busy for 3 seconds": while a dedicated worker
+# keeps its own thread busy, the page's main thread isn't: a click is
+# answered at once, and the worker's message comes once it is done.
+# Tall enough that every element clicked is in the window.
+window size=800x1000
+navigate about:demo
+wait-loaded
+click #worker
+wait-text #worker-note "The worker is busy on its own thread: the page goes on."
+# A second is far less than the 3 seconds the worker is busy for.
+timeout 1
+click #clicker
+wait-text #count "Clicked 1 time (onclick)."
+timeout 10
+wait-text #worker-note "Done: the worker was busy for 3 seconds, the page wasn't."
+screenshot after

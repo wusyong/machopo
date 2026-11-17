@@ -8,14 +8,14 @@
 | --- | --- | --- |
 | 1a 的原型：`#[window]` 的成員拿得到 window、其他成員拿不到，exposed 寫在表上 | 做完（程式留著，隨 1a 定下來） | 2026-11-17 |
 | 1a：執行環境從 `Window` 分出來、成員改成拿執行環境、global 照 exposed 建 | 做完，merge 回 `main` | 2026-11-17 |
-| 1b：dedicated worker | 做中：開始前的決定（第 8 到 12 條）做完；打斷 script 的原型做完（`details.md` 的「1b 的原型：打斷 script」） | |
+| 1b：dedicated worker | 做完（1b-1 到 1b-7），還沒 merge 回 `main` | 2026-11-18 |
 | 1b-1：被打斷的 script 不被 `dom_js` 回頭呼叫 script 的地方吞掉 | 做完（「已決定的事項」第 13 條） | 2026-11-17 |
 | 1b-2：`dom` 的 worker 的 global（自己的執行環境、event target），執行環境的 timer 和 task | 做完（第 14、15 條） | 2026-11-17 |
 | 1b-3：`dom_api` 的 `Worker`、`WorkerGlobalScope`、`DedicatedWorkerGlobalScope` 和 worker 也有的 timer 等成員 | 做完（第 16、17 條） | 2026-11-17 |
 | 1b-4：worker 的 engine（`dom_api` 的 trait、`dom_js` 的實作，global 照 exposed 建） | 做完（第 18 條） | 2026-11-17 |
 | 1b-5：`renderer` 的 worker 的 thread 和 event loop、兩個方向的 `postMessage`、`terminate()`、`close()`、`onerror` | 做完（第 19 條；主 script 暫時只有 `data:` 的網址） | 2026-11-17 |
 | 1b-6：Browser 的登記和主 script 的載入、子資源的請求帶 client、`importScripts()` | 做完（第 20 條） | 2026-11-17 |
-| 1b-7：WPT 的 `workers/`、情境、`about:demo`、文件、整個階段的檢查 | 還沒開始 | |
+| 1b-7：WPT 的 `workers/`、情境、`about:demo`、文件、整個階段的檢查 | 做完（第 21、22 條） | 2026-11-18 |
 | 2：worker 裡的 `fetch()`、`MessagePort` 跨 thread、module worker | 還沒開始 | |
 
 ## 驗收
@@ -32,6 +32,7 @@
 | 1b-4：worker 的 engine 的 realm 的 global 是 worker 的 global，只有 dedicated worker 有的 interface，`[Global]` 的成員是 global 自己的；它的 timer、`Worker` 送來的訊息是它的 task，送出的和 `close()` 經過 host，例外到它的 `onerror`（`OnErrorEventHandler` 的呼叫方式），script 之後 microtask checkpoint，從別的 thread 打斷得了 | `cargo test -p dom_js --test it worker::` |
 | 1b-5：整個瀏覽器裡 `data:` 網址的 worker：兩個方向的訊息、例外到 `Worker` 和 window、`terminate()` 停得了跑不停的、`close()` 之後沒有、script 拿不到時 `Worker` 上是 `error`、renderer 結束時等 worker 的 thread；文件不在時它的 worker 結束 | `cargo test -p shell --test it workers::`、`cargo test -p dom_js --test it worker::`、`cargo test -p renderer --lib worker_thread` |
 | 1b-6：worker 的主 script 經過 Browser 載入（同源、redirect 之後的網址是 global 的、照 Chrome 寬鬆地檢查 MIME type、`data:` 不檢查、狀態不是 2xx 是 `error`），script 跑之前 `Worker` 送的訊息之後才到；`importScripts()` 照順序同步載入、執行（`no-cors`，別的 origin 的例外變成 `NetworkError`，自己的例外照樣往外丟，抓不到的是 `NetworkError`，等的期間其他 task 留著）；worker 不在時 Browser 關掉它的載入 | `cargo test -p shell --test it workers::`、`cargo test -p dom_js --test it worker::` |
+| 1b-7：worker 裡不屬於元素的 task 和 UA 的 timer（`FileReader`、`Blob` 的讀取、`AbortSignal.timeout()`）跑得完；script 編譯不成功時 `Worker` 上是一般的 `error`；worker 送來的訊息在它之後丟的錯誤之前；WPT 的 `workers/` 和清單裡的目錄的 worker variant 照預期結果；worker 忙的時候頁面照樣回應 | `cargo test -p dom_js --test it worker::`、`cargo test -p shell --test it workers::`、`python3 scripts/test.py wpt workers/`（和下面列的目錄）、`python3 scripts/test.py scenarios demo-worker` |
 
 ## 做過的檢查
 
@@ -141,3 +142,20 @@
 - 找到的問題：import 等待中 terminate 的測試一開始不穩定（8 次失敗 6 次）：worker 送出訊息之後才送請求，頁面收到訊息就 terminate，`DedicatedWorkerGone` 有時先到 Browser，請求被當成不認得的 worker 的而擋下，沒到 server。實作是對的，測試改成收到訊息 200 ms 之後才 terminate，之後連跑 16 次都通過。
 - mutation test（`rfcs/0103-worker-global-scope/mutants-1b6.toml`）：26 條。第一次 20 條抓到、6 條沒抓到：「import 的錯不再丟給呼叫者」（mutant 寫錯了，`?` 還在；改寫之後抓到）、「import 一律 muted」（補了 `an_imported_script_s_errors_are_its_own`，抓到）、「worker 不在時不關它的載入」和「terminate 時不告訴 Browser」（import 的載入 worker 自己會關，補了主 script 還沒到就 terminate 的測試，抓到；中間一次重跑「抓到」是上面不穩定的測試碰巧失敗）、「Browser 放行不認得的 worker 的請求」（只有不照規矩的 renderer 會送，記進 `docs/test-gaps.md` 的「只靠審查」）、「import 等待時聽不到結束」（等價：停下的旗標在送結束之前就設了，兩處都看旗標，記進 `docs/test-gaps.md`）。
 - 跑過的：`cargo test -p renderer -p browser -p dom_api -p dom_js -p protocol -p net -p dom_wasm`、`cargo test -p shell` 都通過；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 都通過。WPT 的 worker 的 variant 和預期結果在 1b-7 跑。
+
+### 1b-7：WPT、情境、整個階段的檢查（2026-11-18，macOS，Apple Silicon）
+
+- 第 21 條：`dom` 的 element task 和 UA 的 timer 的元素可以沒有（`push_target_task`、`push_context_task`、`add_target_timer` 在 worker 裡不帶元素，排進它的執行環境；`take_element_task`、`take_due_native_timer`（現在回傳 `DueNativeTimer`）給 `Option` 的元素），`dom_api` 跑 task 時只有要元素的那幾種看元素。worker 裡的 `FileReader`、`Blob.text()`、`AbortSignal.timeout()` 跑得完。
+- WPT 找到、修好的 1b 的 bug：
+  - worker 的 script 編譯不成功時 `Worker` 上是一般的 `Event`（HTML 的 run a worker；`WorkerEngine::run_classic_script` 回答有沒有編譯成功），原本是 `ErrorEvent`，window 也收到；
+  - worker 送來的訊息和錯誤的先後：錯誤原本在 render thread 收到時當場發，跑到之前送來、還排著的訊息前面；改成排成 `Worker` 的 realm 的 task（`dom` 的 `queue_worker_error`、`ElementTaskKind::WorkerError`，HTML 的 queue a global task）；
+  - 沒有值的錯誤傳到 window 的 `onerror` 時 `error` 參數是 `null`（原本 `undefined`；Blink 的 `ErrorEvent::error`）；
+  - transfer list 的項目不是物件時是 `TypeError`（WebIDL 的 `sequence<object>`），原本是 `DataCloneError`；window 的 `postMessage` 也一樣，`dom_js` 的 `messages::clones_and_transfers` 跟著改；
+  - `DedicatedWorkerGlobalScope.name` 是 `[Replaceable]`；
+  - worker 的 script 照 Chrome 看 `X-Content-Type-Options: nosniff`（`loader::is_nosniff`）。
+- WPT（第 22 條）：`include.txt` 加整個 `workers/`；shared worker、service worker、module worker、worker 裡建的 worker、cookie 的測試 `disabled`；等不到訊息而逾時的（worker 裡沒有 `navigator`、`location`、`performance`、`fetch()`）也 `disabled`，附原因。`workers/` 的 336 個測試、`FileAPI/`、`fetch/api/`、`url/`、`user-timing/`、`webmessaging/` 等 20 個目錄的 worker variant 用 `MACHOPO_UPDATE_EXPECTATIONS` 重寫，原本「machopo 沒有 worker」的註解改成真正的原因；92 份預期結果拿掉了（worker variant 也全過）。不穩定的 `workers/interfaces/WorkerUtils/importScripts/report-error-*.sub.any.worker.html`（6 份）查過之後標成 known intermittent（`[OK, ERROR]`）：worker 的 `error` listener 呼叫 `done()` 送出結果、再讓錯誤傳到 `Worker`；頁面收到結果之後 testharness.js 拿掉 `Worker.onerror`，錯誤傳到 window，頁面的結果在 `setTimeout` 裡送出，兩者的先後看頁面在 worker 送來的兩件事之間有沒有跑過一輪 task。不重寫、連跑兩次這 21 個目錄（19943 個檢查）：非預期的只有 1a 記下的 4 個 `scrollend`（Mac 上意外通過）；`workers/` 另外連跑三次都沒有。`dom/events/scrolling/` 的兩份重寫時順手被改了（Mac 上的結果），還原。
+- 決定照 Chrome、和 WPT 不同的（記在預期結果和 `docs/limitations.md`）：worker 的 script 寬鬆地檢查 MIME type（`Worker_script_mimetype.htm`、`importscripts_mime*.any.js`）、照 `charset` 解碼（`semantics/encodings/001.html`、`constructors/Worker/constructor-utf16-bom.html`）。
+- 情境：`demo-worker`（`about:demo` 的「A worker busy for 3 seconds」：worker 忙的時候按鈕照樣有反應，忙完它的訊息才到）；`demo-script` 的按鈕清單多一個。`test.py scenarios demo` 和 `--window demo` 都通過。
+- 新的測試：`dom_js` 的 `worker::a_worker_s_tasks_of_no_element_run`、`a_worker_s_script_that_doesn_t_parse_runs_nothing`、`a_worker_s_name_is_replaceable`，`a_window_s_worker_hears_from_its_worker` 改成錯誤排成 task；`shell` 的 `workers::a_worker_whose_script_doesn_t_parse_errs`、`a_worker_s_message_comes_before_its_error`，`nosniff` 和 window 的 `onerror` 的 `null` 加進既有的測試；`dom_js` 的 `messages::clones_and_transfers` 多了 `[{}]`、`[null]`。
+- mutation test（`rfcs/0103-worker-global-scope/mutants-1b7.toml`，現在 13 條）：沒有元素的 task 和 timer 的 6 條：第一次 4 條抓到、2 條編不過（`match` 不完整），改寫成一條「沒有元素的 task 不跑」之後抓到；後面的修正 9 條：8 條抓到，沒抓到的「排錯誤時不看已經結束」是多餘的檢查（engine 只找得到沒結束的 `Worker`、發事件時也看），拿掉那段程式和那條 mutant。
+- 整個階段的檢查：`cargo fmt`（也修了 1b 前幾段留下的格式）、`cargo clippy --workspace --all-targets -- -D warnings`（修了：`take_due_native_timer` 的回傳型別換成 `DueNativeTimer`、`WorkerTask::Browser` 改成 `Box`、worker 的 thread 的參數包成 `WorkerThread`、`loader.rs` 的函式搬到測試模組之前、測試裡多餘的 `to_string()`）、`cargo test --workspace` 都通過；`sanity.py` 的每一項都通過。

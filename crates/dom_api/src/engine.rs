@@ -587,8 +587,10 @@ pub trait WorkerEngine {
 
     /// Runs its classic script (its main script's), what it throws reported
     /// at its global (HTML's "run a classic script"); a microtask
-    /// checkpoint after.
-    fn run_classic_script(&mut self, script: &ClassicScript<'_>);
+    /// checkpoint after. False if it didn't parse: nothing ran or was
+    /// reported (HTML's "run a worker" then fires a plain `error` at its
+    /// `Worker`, as for a script that couldn't be had).
+    fn run_classic_script(&mut self, script: &ClassicScript<'_>) -> bool;
 
     /// A message from its `Worker`: a task of its global's, a `message` at
     /// it as it runs.

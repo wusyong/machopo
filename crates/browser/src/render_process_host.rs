@@ -435,10 +435,8 @@ fn fetch_for_renderer(
 ) {
     if is_file_url(&request.url) && !file_access.load(Ordering::Relaxed) {
         tracing::warn!(url = %request.url, "renderer may not read local files");
-        let _ = to_renderer.send(load.answer(Err(NetError::new(
-            NetErrorCode::AccessDenied,
-            request.url,
-        ))));
+        let _ = to_renderer
+            .send(load.answer(Err(NetError::new(NetErrorCode::AccessDenied, request.url))));
         return;
     }
     // A blob URL's blob, as it is now: answered at once, so a revoke after

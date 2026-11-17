@@ -208,7 +208,7 @@ fn the_windows_load_is_an_element_task() {
             .take_element_task(cx.window_context(window))
             .expect("then the load");
         assert_eq!(kind, ElementTaskKind::WindowLoad);
-        assert!(Gc::ptr_eq(target, document));
+        assert!(Gc::ptr_eq(target.expect("its document"), document));
         cx.note_document_loaded(document);
         cx.node_id(document)
     });

@@ -65,10 +65,17 @@ resize-observer/
 # `foreignObject`, and a `filter` on a `<tspan>`.
 intersection-observer/
 
+# Dedicated workers. Shared and service workers, module workers and
+# workers made in a worker don't run (`disabled`); what a dedicated worker
+# doesn't have yet (`location`, `navigator`, `fetch()`, XHR, a `MessagePort`
+# to or from it) fails.
+workers/
+
 # The navigator's Network Information, Geolocation and Screen Wake Lock.
 # Most of the last two's tests set the permission first through
 # testdriver's `set_permission`, which machopodriver doesn't have; their
-# workers' variants need workers.
+# workers' variants, `navigator` in a worker, which machopo's workers don't
+# have yet.
 netinfo/
 geolocation/
 screen-wake-lock/
@@ -110,8 +117,7 @@ html/semantics/scripting-1/the-template-element/
 
 # WebIDL's `DOMException`: the whole directory. What fails is the
 # proposal that `new DOMException()` has a `stack` (`Error.prototype.stack`
-# an accessor), which Chrome 152 doesn't have either, and the worker
-# globals.
+# an accessor), which Chrome 152 doesn't have either, in a worker too.
 webidl/ecmascript-binding/es-exceptions/
 
 # `AbortController` and `AbortSignal`.
@@ -1305,7 +1311,8 @@ performance-timeline/
 navigation-timing/
 
 # User Timing. The files of `user-timing/` that run
-# in a window over HTTP (the `.worker.js` ones need workers).
+# in a window over HTTP (the `.worker.js` ones need `performance` in a
+# worker, which machopo's workers don't have yet).
 user-timing/buffered-flag.any.js
 user-timing/case-sensitivity.any.js
 user-timing/clearMarks.html

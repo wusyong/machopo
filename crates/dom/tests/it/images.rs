@@ -44,7 +44,7 @@ fn tasks<'gc>(cx: &Cx<'_, 'gc>, document: NodeRef<'gc>) -> Vec<(NodeRef<'gc>, Im
     let window = cx.window_of(document).unwrap();
     std::iter::from_fn(|| cx.take_element_task(cx.window_context(window)))
         .map(|(element, kind, _)| match kind {
-            ElementTaskKind::Image(action) => (element, action),
+            ElementTaskKind::Image(action) => (element.expect("an image"), action),
             _ => panic!("an image's task"),
         })
         .collect()

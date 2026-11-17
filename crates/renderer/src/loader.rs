@@ -145,6 +145,29 @@ impl BlobUrls {
     }
 }
 
+/// Whether `headers` (names lowercase) say `X-Content-Type-Options:
+/// nosniff`: the first value's first item, without regard to ASCII case
+/// (Fetch's "determine nosniff", Blink's `ParseContentTypeOptionsHeader`).
+pub(crate) fn is_nosniff(headers: &[(String, String)]) -> bool {
+    headers
+        .iter()
+        .find(|(name, _)| name == "x-content-type-options")
+        .and_then(|(_, value)| value.split(',').next())
+        .is_some_and(|first| first.trim().eq_ignore_ascii_case("nosniff"))
+}
+
+/// Whether a response of MIME type `essence` (lowercase) is blocked as a
+/// classic script, a worker's or `importScripts()`'s too: `image/`,
+/// `audio/`, `video/` and `text/csv`, which Fetch's "should response to
+/// request be blocked due to its MIME type?" names; any other passes (Blink's
+/// `AllowedByNosniff::MimeTypeAsScript`, lax for elements and workers).
+pub(crate) fn is_blocked_as_script(essence: &str) -> bool {
+    ["image/", "audio/", "video/"]
+        .iter()
+        .any(|prefix| essence.starts_with(prefix))
+        || essence == "text/csv"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,16 +232,4 @@ mod tests {
         assert!(urls.is_revoked(&"blob:null/4".parse().unwrap()));
         assert!(!urls.is_revoked(&"blob:null/2".parse().unwrap()));
     }
-}
-
-/// Whether a response of MIME type `essence` (lowercase) is blocked as a
-/// classic script, a worker's or `importScripts()`'s too: `image/`,
-/// `audio/`, `video/` and `text/csv`, which Fetch's "should response to
-/// request be blocked due to its MIME type?" names; any other passes (Blink's
-/// `AllowedByNosniff::MimeTypeAsScript`, lax for elements and workers).
-pub(crate) fn is_blocked_as_script(essence: &str) -> bool {
-    ["image/", "audio/", "video/"]
-        .iter()
-        .any(|prefix| essence.starts_with(prefix))
-        || essence == "text/csv"
 }

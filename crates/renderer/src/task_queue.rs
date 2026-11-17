@@ -231,7 +231,7 @@ impl MainThreadScheduler {
     /// `msg` to worker `id`'s thread; dropped if it is no more.
     fn post_to_worker(&self, id: u64, msg: RendererMsg) {
         if let Some(tasks) = self.lock_routes().get(&id) {
-            let _ = tasks.send(crate::worker_thread::WorkerTask::Browser(msg));
+            let _ = tasks.send(crate::worker_thread::WorkerTask::Browser(Box::new(msg)));
         }
     }
 

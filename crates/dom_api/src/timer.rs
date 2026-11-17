@@ -195,21 +195,29 @@ pub fn run_task<H: ScriptHost>(
 /// microtask checkpoint). Whether one ran.
 fn run_native_timer<H: ScriptHost>(host: &mut H, global: &GlobalRoot, now: f64) -> bool {
     let native = host.mutate(|cx| {
-        let (element, action, data, target) =
-            cx.take_due_native_timer(cx.global_context(global.get(cx.gc)), now)?;
+        let dom::DueNativeTimer {
+            element,
+            action,
+            data,
+            target,
+        } = cx.take_due_native_timer(cx.global_context(global.get(cx.gc)), now)?;
         Some((
-            cx.root(element),
+            element.map(|element| cx.root(element)),
             action,
             data,
             target.map(|target| Persistent::new(cx.gc, target)),
         ))
     });
     if let Some((element, action, data, target)) = native {
-        match (action, target) {
-            (dom::NativeAction::AbortTimeout, Some(signal)) => {
-                crate::abort::timeout_fired(host, &signal)
+        match (action, target, element) {
+            (dom::NativeAction::AbortTimeout, Some(signal), _) => {
+                crate::abort::timeout_fired(host, &signal);
             }
-            _ => crate::controls::run_native_timer(host, &element, action, data, now),
+            (_, _, Some(element)) => {
+                crate::controls::run_native_timer(host, &element, action, data, now);
+            }
+            // An element's, of a worker: none is.
+            (_, _, None) => {}
         }
         host.perform_microtask_checkpoint();
         return true;

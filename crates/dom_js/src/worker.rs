@@ -216,15 +216,15 @@ impl WorkerEngine for V8WorkerEngine {
         self.global = Some(global);
     }
 
-    fn run_classic_script(&mut self, script: &ClassicScript<'_>) {
-        self.in_realm(|scope| {
+    fn run_classic_script(&mut self, script: &ClassicScript<'_>) -> bool {
+        let parsed = self.in_realm(|scope| {
             let global = scope.get_current_context().global(scope);
             v8::tc_scope!(let scope, scope);
             let (Some(source), Some(name)) = (
                 v8::String::new(scope, script.source),
                 v8::String::new(scope, script.url),
             ) else {
-                return;
+                return false;
             };
             let line_offset = i32::try_from(script.line.saturating_sub(1)).unwrap_or(i32::MAX);
             let options = bindings::script_options(
@@ -249,14 +249,21 @@ impl WorkerEngine for V8WorkerEngine {
             // classic script is.
             let _entry = bindings::trace::enter_script();
             let span = trace_event::trace_event!("EvaluateScript");
-            let ran = v8::Script::compile(scope, source, Some(&origin))
-                .and_then(|script| script.run(scope));
+            // Not parsed: its error is dropped, not reported (HTML's "run a
+            // worker", as Blink's `WorkerGlobalScope::EvaluateClassicScript`
+            // tells its `Worker` it failed).
+            let Some(compiled) = v8::Script::compile(scope, source, Some(&origin)) else {
+                return false;
+            };
+            let ran = compiled.run(scope);
             drop(span);
             if ran.is_none() {
                 report_caught(scope, ReportAt::Global(global));
             }
+            true
         });
         self.perform_microtask_checkpoint();
+        parsed.unwrap_or(false)
     }
 
     fn post_message(&mut self, message: dom::SerializedMessage) {

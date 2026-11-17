@@ -3603,12 +3603,10 @@ impl RenderThread {
         self.fetches.remove(&request_id);
         self.next_request_id.cancelled(request_id);
         self.network_agent.did_cancel(request_id);
-        let _ = self
-            .to_browser
-            .send(RendererHostMsg::CancelResource {
-                request_id,
-                worker: None,
-            });
+        let _ = self.to_browser.send(RendererHostMsg::CancelResource {
+            request_id,
+            worker: None,
+        });
     }
 
     /// The response to a `fetch()` of the DOM's, or its network error:

@@ -110,6 +110,8 @@ pub struct AnimationFrame {
 /// promise settled), `action` and `data` its kind and word.
 #[derive(GcObject)]
 pub struct ElementTask {
+    /// None for a worker's task of no element (its global has no
+    /// document).
     element: Member<crate::Node>,
     /// The event target a task of no element's is of (a `FileReader`'s
     /// read), its element its window's document.
@@ -137,6 +139,7 @@ pub(crate) const GEOLOCATION: u8 = 10;
 pub(crate) const WAKE_LOCK: u8 = 11;
 const WINDOW_LOAD: u8 = 12;
 pub(crate) const BLOB_READ: u8 = 13;
+pub(crate) const WORKER_ERROR: u8 = 14;
 
 /// What an element task does (`Cx::take_element_task`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,12 +176,15 @@ pub enum ElementTaskKind {
     WindowLoad,
     /// A blob read's promise, of the number, resolved (`Cx::take_blob_read`).
     BlobRead(u64),
+    /// What the worker of the `Worker` (the task's target) threw, fired at
+    /// it (`Cx::queue_worker_error`).
+    WorkerError(crate::ErrorInfo),
 }
 
 /// A timer of the UA's own for an element (Blink's `TaskRunnerTimer`s of
 /// an element's frame: a spin button's repeat), or for an event target of
 /// no element (`AbortSignal.timeout()`'s: its element the window's
-/// document): what it does, a word for it, and when it is due
+/// document, none in a worker): what it does, a word for it, and when it is due
 /// (milliseconds since its window's time origin).
 #[derive(GcObject)]
 pub struct NativeTimer {
@@ -189,6 +195,18 @@ pub struct NativeTimer {
     due: Cell<f64>,
     /// Its task's number (`tasks`).
     number: Cell<u64>,
+}
+
+/// A native timer due, taken out (`Cx::take_due_native_timer`).
+pub struct DueNativeTimer<'gc> {
+    /// Its element; none for a worker's of no element (its global has no
+    /// document).
+    pub element: Option<NodeRef<'gc>>,
+    pub action: NativeAction,
+    /// Its word.
+    pub data: u64,
+    /// The event target it is for, if it is of no element.
+    pub target: Option<Gc<'gc, crate::EventTargetImpl>>,
 }
 
 /// What a native timer does when it is due.
@@ -443,26 +461,32 @@ impl<'gc> Cx<'_, 'gc> {
         data: u64,
     ) {
         let context = self.window_context(window);
-        self.push_task(context, element, None, event_type, action, data);
+        self.push_task(context, Some(element), None, event_type, action, data);
+    }
+
+    /// The element a task or UA timer of no element's is of in `context`:
+    /// its window's document; none for a worker's global (Blink's tasks of
+    /// an `ExecutionContext`'s task runner, no document needed).
+    fn context_element(&self, context: Gc<'gc, crate::ExecutionContext>) -> Option<NodeRef<'gc>> {
+        self.context_window(context)
+            .map(|window| self.window_document(window))
     }
 
     /// A task of no element's or target's, in `context`'s queue (its
-    /// element the document of the context's window): a blob read's.
+    /// element the document of the context's window, if a window's): a blob
+    /// read's.
     pub(crate) fn push_context_task(
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
         action: u8,
         data: u64,
     ) {
-        let Some(window) = self.context_window(context) else {
-            return;
-        };
-        let document = self.window_document(window);
-        self.push_task(context, document, None, crate::names::NONE, action, data);
+        let element = self.context_element(context);
+        self.push_task(context, element, None, crate::names::NONE, action, data);
     }
 
     /// A task of `target`'s, of no element, in `context`'s queue (its
-    /// element the document of the context's window).
+    /// element the document of the context's window, if a window's).
     pub(crate) fn push_target_task(
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
@@ -470,13 +494,10 @@ impl<'gc> Cx<'_, 'gc> {
         action: u8,
         data: u64,
     ) {
-        let Some(window) = self.context_window(context) else {
-            return;
-        };
-        let document = self.window_document(window);
+        let element = self.context_element(context);
         self.push_task(
             context,
-            document,
+            element,
             Some(target),
             crate::names::NONE,
             action,
@@ -487,7 +508,7 @@ impl<'gc> Cx<'_, 'gc> {
     fn push_task(
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
-        element: NodeRef<'gc>,
+        element: Option<NodeRef<'gc>>,
         target: Option<Gc<'gc, crate::EventTargetImpl>>,
         event_type: NameId,
         action: u8,
@@ -497,7 +518,7 @@ impl<'gc> Cx<'_, 'gc> {
         let task = self.gc.alloc_in(
             &sites::OTHER,
             ElementTaskInit {
-                element: Some(element),
+                element,
                 target,
                 event_type: Cell::new(event_type),
                 action: Cell::new(action),
@@ -535,7 +556,7 @@ impl<'gc> Cx<'_, 'gc> {
         };
         self.push_native_timer(
             self.window_context(window),
-            element,
+            Some(element),
             None,
             action,
             data,
@@ -545,7 +566,7 @@ impl<'gc> Cx<'_, 'gc> {
 
     /// A native timer of `context`'s for `target`, an event target of no
     /// element, doing `action` in `delay` milliseconds from now (its element
-    /// the document of the context's window).
+    /// the document of the context's window, if a window's).
     pub fn add_target_timer(
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
@@ -553,18 +574,15 @@ impl<'gc> Cx<'_, 'gc> {
         action: NativeAction,
         delay: f64,
     ) {
-        let Some(window) = self.context_window(context) else {
-            return;
-        };
-        let document = self.window_document(window);
+        let element = self.context_element(context);
         let due = self.now_in(Some(context)) + delay;
-        self.push_native_timer(context, document, Some(target), action, 0, due);
+        self.push_native_timer(context, element, Some(target), action, 0, due);
     }
 
     fn push_native_timer(
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
-        element: NodeRef<'gc>,
+        element: Option<NodeRef<'gc>>,
         target: Option<Gc<'gc, crate::EventTargetImpl>>,
         action: NativeAction,
         data: u64,
@@ -573,7 +591,7 @@ impl<'gc> Cx<'_, 'gc> {
         let timer = self.gc.alloc_in(
             &sites::OTHER,
             NativeTimerInit {
-                element: Some(element),
+                element,
                 target,
                 action: Cell::new(action.raw()),
                 data: Cell::new(data),
@@ -593,30 +611,24 @@ impl<'gc> Cx<'_, 'gc> {
     }
 
     /// `context`'s native timer due by `now` to run next (the earliest, of
-    /// those the first made), taken out: its element, action and data, and
-    /// its target if it is of no element.
+    /// those the first made), taken out.
     pub fn take_due_native_timer(
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
         now: f64,
-    ) -> Option<(
-        NodeRef<'gc>,
-        NativeAction,
-        u64,
-        Option<Gc<'gc, crate::EventTargetImpl>>,
-    )> {
+    ) -> Option<DueNativeTimer<'gc>> {
         let timers = context.native_timers.get(self.gc)?;
         let (index, timer) = self.first_native_timer(context)?;
         if timer.due.get() > now {
             return None;
         }
         timers.remove(self.gc, index);
-        Some((
-            timer.element.get(self.gc).expect("a timer's element"),
-            NativeAction::from_raw(timer.action.get()),
-            timer.data.get(),
-            timer.target.get(self.gc),
-        ))
+        Some(DueNativeTimer {
+            element: timer.element.get(self.gc),
+            action: NativeAction::from_raw(timer.action.get()),
+            data: timer.data.get(),
+            target: timer.target.get(self.gc),
+        })
     }
 
     /// Whether `context` has an element task queued.
@@ -628,13 +640,13 @@ impl<'gc> Cx<'_, 'gc> {
     }
 
     /// `context`'s first element task taken out, if the host's pass lets it
-    /// run (`tasks`): its element, what it does, and the event target it is
-    /// of if it is of no element's.
+    /// run (`tasks`): its element (none for a worker's of no element), what
+    /// it does, and the event target it is of if it is of no element's.
     pub fn take_element_task(
         &self,
         context: Gc<'gc, crate::ExecutionContext>,
     ) -> Option<(
-        NodeRef<'gc>,
+        Option<NodeRef<'gc>>,
         ElementTaskKind,
         Option<Gc<'gc, crate::EventTargetImpl>>,
     )> {
@@ -687,13 +699,15 @@ impl<'gc> Cx<'_, 'gc> {
             },
             WINDOW_LOAD => ElementTaskKind::WindowLoad,
             BLOB_READ => ElementTaskKind::BlobRead(data),
+            WORKER_ERROR => ElementTaskKind::WorkerError(
+                task.target
+                    .get(self.gc)
+                    .and_then(|worker| self.take_worker_error(worker))
+                    .expect("a worker's error queued with its task"),
+            ),
             _ => ElementTaskKind::Fire(task.event_type.get()),
         };
-        Some((
-            task.element.get(self.gc).expect("a task's element"),
-            kind,
-            task.target.get(self.gc),
-        ))
+        Some((task.element.get(self.gc), kind, task.target.get(self.gc)))
     }
 
     /// `document`'s window, if it has one.

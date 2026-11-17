@@ -72,7 +72,7 @@ wait-text #abort-note "Aborted: TimeoutError (signal timed out)."
 # TreeWalker: the buttons, in tree order, through a filter
 # that skips everything else.
 click #walk
-wait-text #walk-note "49 buttons: Click me, Hide or show, performance.now(), innerHTML, MutationObserver, Start, Cancel, TreeWalker, element.style, getComputedStyle, adoptedStyleSheets, var(), calc(), margin-inline-start, getBoundingClientRect, scrollBy, elementsFromPoint, scrollIntoView, import(), Insert scripts, location.hash, history.pushState, fetch(), Busy for 3 seconds, Move A, Raise 1, Add a word, Widen tile 1, Swap sides, Rename, More, Bring 3 forward, Open menu, Pin a bar, Restyle the card, Add one later, Read a pixel, New size, Bigger text, Copy as image, More padding, Move the title, Add a row, Collapse a column, Collapse borders, Move the bar, Pause the spinner, Reverse the spinner, Add a line above."
+wait-text #walk-note "50 buttons: Click me, Hide or show, performance.now(), innerHTML, MutationObserver, Start, Cancel, TreeWalker, element.style, getComputedStyle, adoptedStyleSheets, var(), calc(), margin-inline-start, getBoundingClientRect, scrollBy, elementsFromPoint, scrollIntoView, import(), Insert scripts, location.hash, history.pushState, fetch(), Busy for 3 seconds, A worker busy for 3 seconds, Move A, Raise 1, Add a word, Widen tile 1, Swap sides, Rename, More, Bring 3 forward, Open menu, Pin a bar, Restyle the card, Add one later, Read a pixel, New size, Bigger text, Copy as image, More padding, Move the title, Add a row, Collapse a column, Collapse borders, Move the bar, Pause the spinner, Reverse the spinner, Add a line above."
 wait-change #mover
 screenshot demo
 # import(): a module from a data: URL (the modulepreload link's,

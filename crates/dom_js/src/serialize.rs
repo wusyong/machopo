@@ -235,7 +235,8 @@ pub(crate) enum TransferForm {
 }
 
 /// The items of a transfer list, `value` as `form` says: a sequence
-/// (undefined: none; anything else that isn't one a `TypeError`), or an
+/// of objects (undefined: none; anything else that isn't one, or an item
+/// that isn't an object, a `TypeError`), or an
 /// options dictionary whose `transfer` is one (undefined or null, or no
 /// `transfer`: none), or either (an iterable object is the sequence, as
 /// WebIDL's overload resolution has it). `None` if it threw.
@@ -279,7 +280,17 @@ fn transfer_items<'s>(
         }
     }
     let mut items = Vec::new();
-    crate::observable_array::for_each_item(scope, list, |_, item| {
+    crate::observable_array::for_each_item(scope, list, |scope, item| {
+        // WebIDL's `sequence<object>`: each converted as it is taken, a
+        // primitive (null among them) a `TypeError` then, before any is
+        // looked at as a transferable.
+        if !item.is_object() {
+            crate::throw_type_error(
+                scope,
+                &format!("Value at index {} is not an object.", items.len()),
+            );
+            return None;
+        }
         items.push(item);
         Some(())
     })?;

@@ -284,7 +284,7 @@ fn a_worker_s_global_has_its_own_timers() {
 fn a_worker_s_global_s_own_members() {
     let (mut dom, global) = worker_global(true);
     assert!(
-        matches!(get(&mut dom, &global, "DedicatedWorkerGlobalScope", "name"), Ret::Str(name) if name.to_string() == "fib")
+        matches!(get(&mut dom, &global, "DedicatedWorkerGlobalScope", "name"), Ret::Str(name) if name == "fib")
     );
     let Ret::Object(this) = get(&mut dom, &global, "WorkerGlobalScope", "self") else {
         panic!("an object");

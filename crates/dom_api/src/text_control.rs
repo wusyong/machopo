@@ -261,7 +261,7 @@ pub fn run_element_task<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> boo
             let (element, kind, target) =
                 cx.take_element_task(cx.global_context(global.get(cx.gc)))?;
             Some((
-                cx.root(element),
+                element.map(|element| cx.root(element)),
                 kind,
                 target.map(|target| Persistent::new(cx.gc, target)),
             ))
@@ -269,8 +269,8 @@ pub fn run_element_task<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> boo
         let Some((element, kind, target)) = task else {
             return false;
         };
-        match kind {
-            ElementTaskKind::Fire(event_type) => {
+        match (kind, element) {
+            (ElementTaskKind::Fire(event_type), Some(element)) => {
                 // `selectionchange` bubbles at a text control, not at a
                 // document; the next change schedules another.
                 let bubbles = match event_type {
@@ -284,29 +284,33 @@ pub fn run_element_task<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> boo
                 };
                 fire_event(host, &TargetRoot::Node(element), event_type, bubbles, false);
             }
-            ElementTaskKind::Image(action) => crate::image::run_image_task(host, &element, action),
-            ElementTaskKind::CanvasBlob(id) => crate::canvas::run_blob_task(host, id),
-            ElementTaskKind::Script => crate::script::run_script_task(host, &element),
-            ElementTaskKind::HashChange(old_url, new_url) => {
+            (ElementTaskKind::Image(action), Some(element)) => {
+                crate::image::run_image_task(host, &element, action);
+            }
+            (ElementTaskKind::CanvasBlob(id), _) => crate::canvas::run_blob_task(host, id),
+            (ElementTaskKind::Script, Some(element)) => {
+                crate::script::run_script_task(host, &element);
+            }
+            (ElementTaskKind::HashChange(old_url, new_url), Some(element)) => {
                 crate::history::run_hash_change(host, &element, old_url, new_url);
             }
-            ElementTaskKind::PerformanceTimeline => {
+            (ElementTaskKind::PerformanceTimeline, _) => {
                 if let Some(performance) = &target {
                     crate::performance::notify(host, performance);
                 }
             }
-            ElementTaskKind::FileRead(read, step) => {
+            (ElementTaskKind::FileRead(read, step), _) => {
                 if let Some(reader) = &target {
                     crate::file_reader::run_read_task(host, reader, read, step);
                 }
             }
             // A window's navigator's alone.
-            ElementTaskKind::Geolocation(step) => {
+            (ElementTaskKind::Geolocation(step), _) => {
                 if let GlobalRoot::Window(window) = global {
                     crate::geolocation::run_task(host, window, step);
                 }
             }
-            ElementTaskKind::WakeLockPermission { promise, answered } => {
+            (ElementTaskKind::WakeLockPermission { promise, answered }, _) => {
                 if let GlobalRoot::Window(window) = global {
                     crate::wake_lock::run_task(host, window, promise, answered);
                 }
@@ -314,17 +318,32 @@ pub fn run_element_task<H: ScriptHost>(host: &mut H, global: &GlobalRoot) -> boo
             // HTML's "the end": complete, the window's `load` (each event
             // with its checkpoint), then the host hears of it
             // (`Dom::take_loaded_documents`): its iframe's `load` next.
-            ElementTaskKind::BlobRead(promise) => {
+            (ElementTaskKind::WorkerError(info), _) => {
+                if let Some(worker) = &target {
+                    crate::worker::fire_worker_error(host, worker, &info);
+                }
+            }
+            (ElementTaskKind::BlobRead(promise), _) => {
                 let read = host
                     .read(|cx| cx.take_blob_read(cx.global_context(global.get(cx.gc)), promise));
                 if let Some(read) = read {
                     host.resolve_promise_with_read(promise, read);
                 }
             }
-            ElementTaskKind::WindowLoad => {
+            (ElementTaskKind::WindowLoad, Some(element)) => {
                 crate::lifecycle::document_ready(host, &element, crate::DocumentReadiness::Loaded);
                 host.mutate(|cx| cx.note_document_loaded(element.get(cx.gc)));
             }
+            // An element's, in a worker: none is queued there (its global
+            // has no document).
+            (
+                ElementTaskKind::Fire(_)
+                | ElementTaskKind::Image(_)
+                | ElementTaskKind::Script
+                | ElementTaskKind::HashChange(..)
+                | ElementTaskKind::WindowLoad,
+                None,
+            ) => {}
         }
         host.perform_microtask_checkpoint();
         true

@@ -1,0 +1,119 @@
+# 1b-7: a worker's tasks and UA timers of no element (its global has no
+# document) are queued in its execution context and run there.
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "worker::"]
+timeout = 900
+
+[[mutant]]
+name = "a worker's target task is dropped"
+file = "crates/dom/src/window.rs"
+from = '''        let element = self.context_element(context);
+        self.push_task(
+            context,
+            element,
+            Some(target),'''
+to = '''        let Some(element) = self.context_element(context) else {
+            return;
+        };
+        let element = Some(element);
+        self.push_task(
+            context,
+            element,
+            Some(target),'''
+
+[[mutant]]
+name = "a worker's context task is dropped"
+file = "crates/dom/src/window.rs"
+from = '''        let element = self.context_element(context);
+        self.push_task(context, element, None, crate::names::NONE, action, data);'''
+to = '''        let Some(element) = self.context_element(context) else {
+            return;
+        };
+        self.push_task(context, Some(element), None, crate::names::NONE, action, data);'''
+
+[[mutant]]
+name = "a worker's target timer is dropped"
+file = "crates/dom/src/window.rs"
+from = '''        let element = self.context_element(context);
+        let due = self.now_in(Some(context)) + delay;'''
+to = '''        let Some(element) = self.context_element(context) else {
+            return;
+        };
+        let element = Some(element);
+        let due = self.now_in(Some(context)) + delay;'''
+
+[[mutant]]
+name = "a task of no element isn't run"
+file = "crates/dom_api/src/text_control.rs"
+from = '''        let Some((element, kind, target)) = task else {'''
+to = '''        let Some((element, kind, target)) = task.filter(|(element, _, _)| element.is_some()) else {'''
+
+[[mutant]]
+name = "an abort timeout needs an element"
+file = "crates/dom_api/src/timer.rs"
+from = '''            (dom::NativeAction::AbortTimeout, Some(signal), _) => {'''
+to = '''            (dom::NativeAction::AbortTimeout, Some(signal), Some(_)) => {'''
+
+[[mutant]]
+name = "a worker's parse error is reported as thrown"
+file = "crates/dom_js/src/worker.rs"
+from = '''            let Some(compiled) = v8::Script::compile(scope, source, Some(&origin)) else {
+                return false;
+            };'''
+to = '''            let Some(compiled) = v8::Script::compile(scope, source, Some(&origin)) else {
+                report_caught(scope, ReportAt::Global(global));
+                return true;
+            };'''
+
+[[mutant]]
+name = "a script that didn't parse goes on"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''    if !parsed {
+        scheduler.post_worker(id, WorkerEvent::ScriptFailed);
+        return;
+    }'''
+to = '''    let _ = parsed;'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::"]
+
+[[mutant]]
+name = "onerror's error is undefined when none"
+file = "crates/dom_js/src/listeners.rs"
+from = '''                let null = v8::null(v8_scope).into();'''
+to = '''                let null = v8::undefined(v8_scope).into();'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::"]
+
+[[mutant]]
+name = "a transfer list's primitive is let through"
+file = "crates/dom_js/src/serialize.rs"
+from = '''        if !item.is_object() {'''
+to = '''        if !item.is_object() && false {'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "messages::"]
+
+[[mutant]]
+name = "a worker's name isn't replaceable"
+file = "crates/dom_api/src/interfaces.rs"
+from = '''        #[replaceable]
+        attribute name: DomString, get = worker::name;'''
+to = '''        attribute name: DomString, get = worker::name;'''
+
+[[mutant]]
+name = "nosniff isn't heeded"
+file = "crates/renderer/src/loader.rs"
+from = '''        .is_some_and(|first| first.trim().eq_ignore_ascii_case("nosniff"))'''
+to = '''        .is_some_and(|first| first.trim() == "nosniff!")'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::"]
+
+[[mutant]]
+name = "nosniff's value is matched by case"
+file = "crates/renderer/src/loader.rs"
+from = '''        .is_some_and(|first| first.trim().eq_ignore_ascii_case("nosniff"))'''
+to = '''        .is_some_and(|first| first.trim() == "nosniff")'''
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::"]
+
+[[mutant]]
+name = "a worker's error is fired at once"
+file = "crates/dom_api/src/worker.rs"
+from = '''    host.mutate(|cx| cx.queue_worker_error(worker.get(cx.gc), info));
+}'''
+to = '''    fire_worker_error(host, worker, &info);
+}'''
+

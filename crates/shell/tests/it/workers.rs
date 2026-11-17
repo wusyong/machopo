@@ -107,13 +107,15 @@ fn a_page_and_its_worker_talk() {
 }
 
 /// What the worker throws is an `error` at its `Worker`, its message and
-/// line; at the window too unless the `Worker`'s listener cancels it.
+/// line; at the window too unless the `Worker`'s listener cancels it, its
+/// value null there (it comes without it).
 #[test]
 fn a_worker_s_error_reaches_its_worker_and_the_window() {
     assert_eq!(
         report(
             "const got = []; \
-             onerror = message => { got.push('window ' + message); }; \
+             onerror = (message, file, line, column, error) => { \
+               got.push('window ' + message + ' ' + error); }; \
              const w = worker(`setTimeout(() => { throw new Error('later'); }, 0); \
                throw new Error('first');`); \
              w.onerror = e => { got.push('worker ' + e.message + ' ' + e.lineno + ' ' + e.error); \
@@ -121,7 +123,21 @@ fn a_worker_s_error_reaches_its_worker_and_the_window() {
              setTimeout(() => report(got.join(' | ')), 300);"
         ),
         "worker Uncaught Error: first 1 null | worker Uncaught Error: later 1 null | \
-         window Uncaught Error: later"
+         window Uncaught Error: later null"
+    );
+}
+
+/// What the worker posted before it threw comes before its error (each a
+/// task of the page's, in order).
+#[test]
+fn a_worker_s_message_comes_before_its_error() {
+    assert_eq!(
+        report(
+            "const got = []; const w = worker(`postMessage('posted'); throw new Error('thrown');`); \
+             w.onmessage = e => got.push(e.data); \
+             w.onerror = e => { e.preventDefault(); got.push('error'); report(got.join()); };"
+        ),
+        "posted,error"
     );
 }
 
@@ -173,6 +189,21 @@ fn a_worker_whose_script_can_t_be_had_errs() {
     );
 }
 
+/// A script that doesn't parse: a plain `error` at its `Worker` (not an
+/// `ErrorEvent`), none at the window, and nothing of it runs.
+#[test]
+fn a_worker_whose_script_doesn_t_parse_errs() {
+    assert_eq!(
+        report(
+            "const got = []; onerror = () => got.push('window'); \
+             const w = worker('postMessage(1); ('); w.onmessage = () => got.push('ran'); \
+             w.onerror = e => { got.push(e.constructor.name); \
+               setTimeout(() => report(got.join()), 300); };"
+        ),
+        "Event"
+    );
+}
+
 /// Its script loaded, a redirect followed: its URL after it is the base
 /// of its imports (`moved.js` beside it, which an import follows to
 /// `lib.js`); another origin's import runs too (`no-cors`); what the page
@@ -205,8 +236,9 @@ fn a_worker_s_script_and_its_imports_are_loaded() {
 
 /// Its script isn't had from another origin (asked for, or redirected
 /// to), with a status that isn't ok, or of a MIME type no script is
-/// (`image/`, `text/csv`): an `error` at its `Worker`. Another MIME type
-/// runs (`text/plain`, as Chrome lets it), as any `data:` URL's does.
+/// (`image/`, `text/csv`), or not JavaScript's under `nosniff`: an `error`
+/// at its `Worker`. Another MIME type runs (`text/plain`, as Chrome lets
+/// it), as any `data:` URL's does.
 #[test]
 fn a_worker_s_script_is_had_as_chrome_has_it() {
     let ran = "postMessage('ran');";
@@ -215,27 +247,41 @@ fn a_worker_s_script_is_had_as_chrome_has_it() {
             "const got = []; \
              const tried = (name, url) => { const w = new Worker(url); \
                w.onmessage = e => done(name + ' ' + e.data); w.onerror = () => done(name + ' error'); }; \
-             const done = what => { got.push(what); if (got.length === 7) report(got.sort().join(', ')); }; \
+             const done = what => { got.push(what); if (got.length === 9) report(got.sort().join(', ')); }; \
              tried('other', OTHER + '/w.js'); tried('redirected', '/to-other.js'); \
              tried('missing', '/missing.js'); tried('image', '/image.js'); tried('csv', '/csv.js'); \
-             tried('plain', '/plain.js'); tried('data', 'data:image/png,postMessage(\"ran\")');",
+             tried('plain', '/plain.js'); tried('data', 'data:image/png,postMessage(\"ran\")'); \
+             tried('nosniff', '/nosniff.js'); tried('nosniff-js', '/nosniff-js.js');",
             |other| {
                 vec![
-                    ("/to-other.js", Route::redirect(302, &format!("{other}/w.js"))),
+                    (
+                        "/to-other.js",
+                        Route::redirect(302, &format!("{other}/w.js")),
+                    ),
                     ("/missing.js", Route::new(404, ran)),
                     ("/image.js", Route::ok("image/png", ran)),
                     ("/csv.js", Route::ok("text/csv", ran)),
                     ("/plain.js", Route::ok("text/plain", ran)),
+                    (
+                        "/nosniff.js",
+                        Route::ok("text/plain", ran)
+                            .with_header("X-Content-Type-Options", "NoSniff"),
+                    ),
+                    (
+                        "/nosniff-js.js",
+                        js(ran).with_header("X-Content-Type-Options", "nosniff"),
+                    ),
                 ]
             },
             &[("/w.js", js(ran))],
         ),
-        "csv error, data ran, image error, missing error, other error, plain ran, redirected error"
+        "csv error, data ran, image error, missing error, nosniff error, nosniff-js ran, other error, \
+         plain ran, redirected error"
     );
 }
 
 /// `importScripts()` of a script that can't be had (a status that isn't
-/// ok, a MIME type no script is) throws a `NetworkError`, as one of
+/// ok, a MIME type no script is, or not JavaScript's under `nosniff`) throws a `NetworkError`, as one of
 /// another origin's that throws does (its errors muted); what one of its
 /// own throws, it throws.
 #[test]
@@ -251,18 +297,23 @@ fn import_scripts_throws_as_html_says() {
                             "const tried = url => {{ try {{ importScripts(url); return 'ran'; }} \
                                catch (e) {{ return e === self ? 'self' : e.name; }} }}; \
                              postMessage(['/missing.js', '/image.js', '/throws.js', \
-                               '{other}/throws.js', '/plain.js'].map(tried).join());"
+                               '{other}/throws.js', '/plain.js', '/nosniff.js'].map(tried).join());"
                         )),
                     ),
                     ("/missing.js", Route::new(404, "")),
                     ("/image.js", Route::ok("image/png", "")),
                     ("/throws.js", js("throw self;")),
                     ("/plain.js", Route::ok("text/plain", "")),
+                    (
+                        "/nosniff.js",
+                        Route::ok("text/plain", "")
+                            .with_header("X-Content-Type-Options", "nosniff"),
+                    ),
                 ]
             },
             &[("/throws.js", js("throw self;"))],
         ),
-        "NetworkError,NetworkError,self,NetworkError,ran"
+        "NetworkError,NetworkError,self,NetworkError,ran,NetworkError"
     );
 }
 
@@ -328,7 +379,12 @@ fn a_worker_terminated_before_its_script_came_has_its_load_closed() {
     let (report, server) = run_served(
         "const w = new Worker('/slow.js'); w.onmessage = () => report('ran'); \
          setTimeout(() => w.terminate(), 200); setTimeout(() => report('done'), 2000);",
-        |_| vec![("/slow.js", js("postMessage(1);").with_delay(Duration::from_secs(1)))],
+        |_| {
+            vec![(
+                "/slow.js",
+                js("postMessage(1);").with_delay(Duration::from_secs(1)),
+            )]
+        },
         &[],
     );
     assert_eq!(report, "done");

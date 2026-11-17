@@ -87,7 +87,10 @@ fn a_stop_asked_for_again_ends_before_the_next_script() {
     let (mut data, state) = setup();
     bindings::stop_again(data.isolate());
     assert_eq!(
-        state.evaluate_classic_script(&mut data, "1 + 1").ok().as_deref(),
+        state
+            .evaluate_classic_script(&mut data, "1 + 1")
+            .ok()
+            .as_deref(),
         Some("2")
     );
 }

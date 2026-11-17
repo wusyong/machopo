@@ -118,8 +118,10 @@ fn a_message_to_a_window() {
     );
 }
 
-/// What can't be cloned: a `DataCloneError`, nothing posted; an
-/// `ArrayBuffer` transferred: detached here, its bytes there.
+/// What can't be cloned: a `DataCloneError`, nothing posted (a transfer
+/// list's item that isn't an object a `TypeError` first, WebIDL's
+/// `sequence<object>`); an `ArrayBuffer` transferred: detached here, its
+/// bytes there.
 #[test]
 fn clones_and_transfers() {
     let mut engine = engine();
@@ -127,7 +129,7 @@ fn clones_and_transfers() {
         &mut engine,
         "addEventListener('message', e => log.push(new Uint8Array(e.data.buffer).join()));
          log.push(error(() => postMessage(() => {}, '*')), error(() => postMessage(document, '*')),
-                  error(() => postMessage(1, '*', [1])));
+                  error(() => postMessage(1, '*', [{}])), error(() => postMessage(1, '*', [null])));
          var buffer = new Uint8Array([1, 2, 3]).buffer;
          log.push(error(() => postMessage(1, '*', [buffer, buffer])));
          // A transfer list that isn't a sequence.
@@ -137,7 +139,7 @@ fn clones_and_transfers() {
     );
     assert_eq!(
         log(&mut engine),
-        "DataCloneError / DataCloneError / DataCloneError / DataCloneError / TypeError / TypeError / 0"
+        "DataCloneError / DataCloneError / DataCloneError / TypeError / DataCloneError / TypeError / TypeError / 0"
     );
     engine.run_posted_messages();
     assert_eq!(log(&mut engine), "1,2,3");

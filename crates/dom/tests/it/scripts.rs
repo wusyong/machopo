@@ -217,6 +217,7 @@ fn queued_scripts_take_their_turns() {
             let mut turns = Vec::new();
             while let Some((element, kind, _)) = cx.take_element_task(cx.window_context(window)) {
                 assert_eq!(kind, ElementTaskKind::Script);
+                let element = element.expect("a script");
                 let ready = cx.take_ready_script(element).expect("its pending script");
                 assert_eq!(cx.node_id(ready.document), cx.node_id(document.get(cx.gc)));
                 turns.push(ready.loaded.map(|loaded| match loaded {
@@ -282,6 +283,7 @@ fn a_moved_scripts_turn_is_its_first_documents() {
             .take_element_task(cx.window_context(window))
             .expect("its turn");
         assert_eq!(kind, ElementTaskKind::Script);
+        let element = element.expect("a script");
         assert_eq!(cx.node_id(element), cx.node_id(script.get(cx.gc)));
         assert!(cx.load_event_delayed(document.get(cx.gc)));
         let ready = cx.take_ready_script(element).expect("its pending script");

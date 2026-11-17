@@ -264,6 +264,9 @@
       <p><span id="stall" class="button" onclick="stall()">Busy for 3 seconds</span>
          <span id="stall-note">Script then keeps the page busy: scroll meanwhile, and the
          page still moves, while the clock and the blue square wait.</span></p>
+      <p><span id="worker" class="button" onclick="busyWorker()">A worker busy for 3 seconds</span>
+         <span id="worker-note">A dedicated worker keeps its own thread busy: the page
+         doesn't wait for it (click "Click me" meanwhile, the clock keeps going).</span></p>
       <p>Type <code>about:gpucrash</code> in the address field to lose the GPU device, as a
          driver reset would: the page and the toolbar are drawn again on a new one. Only
          what you type does that: <a href="about:gpucrash">a link to it</a> is just a
@@ -898,6 +901,17 @@
     const end = Date.now() + 3000;
     while (Date.now() < end) {}
     document.getElementById("stall-note").textContent = "Done: the page was busy for 3 seconds.";
+  }
+  function busyWorker() {
+    const note = document.getElementById("worker-note");
+    const source = "postMessage('started'); const end = Date.now() + 3000; " +
+      "while (Date.now() < end) {} postMessage('done');";
+    const worker = new Worker("data:text/javascript," + encodeURIComponent(source));
+    worker.onmessage = (event) => {
+      note.textContent = event.data === "started"
+        ? "The worker is busy on its own thread: the page goes on."
+        : "Done: the worker was busy for 3 seconds, the page wasn't.";
+    };
   }
   function markup() {
     const note = document.getElementById("markup-note");

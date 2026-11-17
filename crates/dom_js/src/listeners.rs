@@ -932,14 +932,17 @@ fn call_handler<'s>(
         let (arguments, cancel_on): (Vec<v8::Local<'_, v8::Value>>, bool) = match handler {
             HandlerCall::Event => (vec![argument.into()], false),
             HandlerCall::OnError(info, error) => {
-                let undefined = v8::undefined(v8_scope).into();
+                // None given (a worker's error, which comes without its
+                // value; the UA's own): null, as the event's `error` is
+                // (Blink's `ErrorEvent::error`).
+                let null = v8::null(v8_scope).into();
                 (
                     vec![
                         string(v8_scope, &info.message.to_str()).into(),
                         string(v8_scope, &info.filename.to_str()).into(),
                         v8::Integer::new_from_unsigned(v8_scope, info.lineno).into(),
                         v8::Integer::new_from_unsigned(v8_scope, info.colno).into(),
-                        error.unwrap_or(undefined),
+                        error.unwrap_or(null),
                     ],
                     true,
                 )

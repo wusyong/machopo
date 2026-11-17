@@ -289,6 +289,7 @@ crate::declare! {
     #[global]
     #[exposed(DedicatedWorker)]
     interface DedicatedWorkerGlobalScope : WorkerGlobalScope [type = dom::WorkerGlobalScope] {
+        #[replaceable]
         attribute name: DomString, get = worker::name;
         #[front]
         method postMessage(message: PortMessage) = worker::global_post_message;
