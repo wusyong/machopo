@@ -71,6 +71,7 @@ pub fn exception_code(name: ExceptionName) -> u32 {
         ExceptionName::QuotaExceeded => 21,
         ExceptionName::InvalidModification => 25,
         ExceptionName::Timeout => 26,
+        ExceptionName::Network => 27,
     }
 }
 

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -9,7 +9,7 @@ use crossbeam_channel::Sender;
 use net::{LoadHandle, NetworkContext};
 use protocol::TabId;
 use protocol::input::InputEvent;
-use protocol::network::{NetError, NetErrorCode, ResourceRequest};
+use protocol::network::{LoadResult, NetError, NetErrorCode, ResourceRequest};
 use protocol::renderer::{
     CompositorMsg, HistoryEntryParams, NavigationLoad, NavigationTimingType, RendererHostMsg,
     RendererMsg,
@@ -117,22 +117,60 @@ impl RenderProcessHost {
             std::thread::Builder::new()
                 .name("Chrome_IOThread".into())
                 .spawn(move || {
-                    // The renderer's loads still loading, by request id.
+                    // The renderer's loads still loading.
                     let loads = Loads::default();
+                    // Its dedicated workers, which may load (Chromium's
+                    // `DedicatedWorkerHost`s, each a `URLLoaderFactory`).
+                    let mut workers = HashSet::new();
                     while let Ok(msg) = from_renderer.recv() {
-                        match msg {
-                            RendererHostMsg::FetchResource {
-                                request_id,
-                                request,
-                            } => fetch_for_renderer(
+                        let fetch = |load, request| {
+                            fetch_for_renderer(
                                 &network,
                                 renderer_id,
                                 &file_access,
                                 &to_renderer,
                                 &loads,
-                                request_id,
+                                load,
                                 request,
-                            ),
+                            );
+                        };
+                        match msg {
+                            RendererHostMsg::FetchResource {
+                                request_id,
+                                worker,
+                                request,
+                            } => {
+                                let load = LoadKey::Resource { worker, request_id };
+                                if worker.is_some_and(|worker| !workers.contains(&worker)) {
+                                    // One it didn't make, or gone.
+                                    let _ = to_renderer.send(load.answer(Err(NetError::new(
+                                        NetErrorCode::AccessDenied,
+                                        request.url,
+                                    ))));
+                                } else {
+                                    fetch(load, request);
+                                }
+                            }
+                            RendererHostMsg::DedicatedWorkerCreated { worker, request } => {
+                                if workers.insert(worker) {
+                                    fetch(LoadKey::WorkerScript(worker), request);
+                                }
+                            }
+                            // Its loads close with it.
+                            RendererHostMsg::DedicatedWorkerGone { worker } => {
+                                workers.remove(&worker);
+                                let mut loads = loads.lock().expect("the loads");
+                                let ended: Vec<LoadKey> = loads
+                                    .keys()
+                                    .copied()
+                                    .filter(|load| load.worker() == Some(worker))
+                                    .collect();
+                                for load in ended {
+                                    if let Some(load) = loads.remove(&load) {
+                                        load.cancel();
+                                    }
+                                }
+                            }
                             // Here, before any load that comes after it on
                             // the channel (Chromium's `BlobURLStore` is a
                             // pipe of its own, its messages kept in order
@@ -148,15 +186,20 @@ impl RenderProcessHost {
                                 network.revoke_blob_url(renderer_id, &url);
                                 on_message(tab, RendererHostMsg::RevokeBlobUrl { url });
                             }
-                            RendererHostMsg::FollowRedirect { request_id } => {
-                                if let Some(load) =
-                                    loads.lock().expect("the loads").get(&request_id)
+                            RendererHostMsg::FollowRedirect { request_id, worker } => {
+                                if let Some(load) = loads
+                                    .lock()
+                                    .expect("the loads")
+                                    .get(&LoadKey::Resource { worker, request_id })
                                 {
                                     load.follow_redirect();
                                 }
                             }
-                            RendererHostMsg::CancelResource { request_id } => {
-                                let load = loads.lock().expect("the loads").remove(&request_id);
+                            RendererHostMsg::CancelResource { request_id, worker } => {
+                                let load = loads
+                                    .lock()
+                                    .expect("the loads")
+                                    .remove(&LoadKey::Resource { worker, request_id });
                                 if let Some(load) = load {
                                     load.cancel();
                                 }
@@ -340,9 +383,45 @@ impl Committer {
     }
 }
 
-/// A renderer's loads in flight, by request id, which the IO thread and
-/// the `NetworkService` thread (taking out one that is over) share.
-type Loads = Arc<Mutex<HashMap<u64, LoadHandle>>>;
+/// A load of a renderer's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum LoadKey {
+    /// A `FetchResource` of its main thread's or of its dedicated worker
+    /// `worker`'s, by its request id (unique to whichever asked).
+    Resource {
+        worker: Option<u64>,
+        request_id: u64,
+    },
+    /// The main script of its dedicated worker (`DedicatedWorkerCreated`),
+    /// its redirects followed here (Chromium's `WorkerScriptFetcher`).
+    WorkerScript(u64),
+}
+
+impl LoadKey {
+    /// The dedicated worker whose it is.
+    fn worker(self) -> Option<u64> {
+        match self {
+            Self::Resource { worker, .. } => worker,
+            Self::WorkerScript(worker) => Some(worker),
+        }
+    }
+
+    /// What tells the renderer it is over.
+    fn answer(self, result: LoadResult) -> RendererMsg {
+        match self {
+            Self::Resource { worker, request_id } => RendererMsg::ResourceResponse {
+                request_id,
+                worker,
+                result,
+            },
+            Self::WorkerScript(worker) => RendererMsg::DedicatedWorkerScript { worker, result },
+        }
+    }
+}
+
+/// A renderer's loads in flight, which the IO thread and the
+/// `NetworkService` thread (taking out one that is over) share.
+type Loads = Arc<Mutex<HashMap<LoadKey, LoadHandle>>>;
 
 #[allow(clippy::too_many_arguments)]
 fn fetch_for_renderer(
@@ -351,44 +430,51 @@ fn fetch_for_renderer(
     file_access: &AtomicBool,
     to_renderer: &RendererSender,
     loads: &Loads,
-    request_id: u64,
+    load: LoadKey,
     request: ResourceRequest,
 ) {
     if is_file_url(&request.url) && !file_access.load(Ordering::Relaxed) {
         tracing::warn!(url = %request.url, "renderer may not read local files");
-        let _ = to_renderer.send(RendererMsg::ResourceResponse {
-            request_id,
-            result: Err(NetError::new(NetErrorCode::AccessDenied, request.url)),
-        });
+        let _ = to_renderer.send(load.answer(Err(NetError::new(
+            NetErrorCode::AccessDenied,
+            request.url,
+        ))));
         return;
     }
     // A blob URL's blob, as it is now: answered at once, so a revoke after
     // the request doesn't reach it.
     if is_blob_url(&request.url) {
         let result = network.load_blob_url(&request, Some(renderer_id));
-        let _ = to_renderer.send(RendererMsg::ResourceResponse { request_id, result });
+        let _ = to_renderer.send(load.answer(result));
         return;
     }
-    let to_renderer = to_renderer.clone();
     // Held while the load starts, so one that is over at once finds its
     // entry to take out.
     let mut held = loads.lock().expect("the loads");
     let over = loads.clone();
-    let redirected = to_renderer.clone();
-    let load = network.fetch_with_redirects(
-        request,
-        move |redirect| {
-            let _ = redirected.send(RendererMsg::ReceivedRedirect {
-                request_id,
-                redirect: Box::new(redirect),
-            });
-        },
-        move |result| {
-            over.lock().expect("the loads").remove(&request_id);
-            let _ = to_renderer.send(RendererMsg::ResourceResponse { request_id, result });
-        },
-    );
-    held.insert(request_id, load);
+    let answered = to_renderer.clone();
+    let done = move |result| {
+        over.lock().expect("the loads").remove(&load);
+        let _ = answered.send(load.answer(result));
+    };
+    let handle = match load {
+        LoadKey::Resource { worker, request_id } => {
+            let redirected = to_renderer.clone();
+            network.fetch_with_redirects(
+                request,
+                move |redirect| {
+                    let _ = redirected.send(RendererMsg::ReceivedRedirect {
+                        request_id,
+                        worker,
+                        redirect: Box::new(redirect),
+                    });
+                },
+                done,
+            )
+        }
+        LoadKey::WorkerScript(_) => network.fetch(request, done),
+    };
+    held.insert(load, handle);
 }
 
 fn is_file_url(url: &str) -> bool {

@@ -282,6 +282,8 @@ crate::declare! {
         method clearTimeout(id?: i32) = timer::worker_clear_timer;
         method clearInterval(id?: i32) = timer::worker_clear_timer;
         method structuredClone(value: CloneValue) -> Cloned = crypto::worker_structured_clone;
+        #[calls_script]
+        method importScripts(urls?: Strings) = worker::import_scripts;
     }
 
     #[global]

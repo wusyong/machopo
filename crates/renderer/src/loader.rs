@@ -2,7 +2,7 @@
 //! `ResourceFetcher` handing loads to the frame's `URLLoaderFactory`): their
 //! ids, unique in the renderer, so a response for a document that has gone
 //! is recognised and dropped. And the blob URLs the renderer's realms
-//! registered (`BlobUrls`).
+//! registered (`BlobUrls`). And which responses no classic script is.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -209,4 +209,16 @@ mod tests {
         assert!(urls.is_revoked(&"blob:null/4".parse().unwrap()));
         assert!(!urls.is_revoked(&"blob:null/2".parse().unwrap()));
     }
+}
+
+/// Whether a response of MIME type `essence` (lowercase) is blocked as a
+/// classic script, a worker's or `importScripts()`'s too: `image/`,
+/// `audio/`, `video/` and `text/csv`, which Fetch's "should response to
+/// request be blocked due to its MIME type?" names; any other passes (Blink's
+/// `AllowedByNosniff::MimeTypeAsScript`, lax for elements and workers).
+pub(crate) fn is_blocked_as_script(essence: &str) -> bool {
+    ["image/", "audio/", "video/"]
+        .iter()
+        .any(|prefix| essence.starts_with(prefix))
+        || essence == "text/csv"
 }

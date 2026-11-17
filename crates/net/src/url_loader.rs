@@ -179,7 +179,9 @@ fn accept_for(destination: RequestDestination) -> &'static str {
         }
         RequestDestination::Style => "text/css,*/*;q=0.1",
         RequestDestination::Image => "image/png,image/jpeg,image/gif,image/*;q=0.8,*/*;q=0.5",
-        RequestDestination::Script | RequestDestination::Empty => "*/*",
+        RequestDestination::Script | RequestDestination::Worker | RequestDestination::Empty => {
+            "*/*"
+        }
     }
 }
 

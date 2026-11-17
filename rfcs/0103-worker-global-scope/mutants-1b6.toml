@@ -1,0 +1,211 @@
+# 1b-6: a dedicated worker's scripts the browser loads (the browser's IO
+# thread knowing the renderer's workers, the renderer's routes to their
+# threads, the worker waiting for its script), and importScripts().
+test = ["cargo", "test", "-q", "-p", "shell", "--test", "it", "workers::"]
+timeout = 900
+
+[[mutant]]
+name = "the browser loads no worker's script"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                                    fetch(LoadKey::WorkerScript(worker), request);'''
+to = '''                                    let _ = request;'''
+
+[[mutant]]
+name = "the browser lets an unknown worker's request through"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                                if worker.is_some_and(|worker| !workers.contains(&worker)) {'''
+to = '''                                if worker.is_some_and(|worker| !workers.contains(&worker)) && false {'''
+
+[[mutant]]
+name = "a gone worker's loads aren't closed"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                                for load in ended {'''
+to = '''                                for load in ended.into_iter().filter(|_| false) {'''
+
+[[mutant]]
+name = "a worker's redirect is the main thread's"
+file = "crates/browser/src/render_process_host.rs"
+from = '''                    let _ = redirected.send(RendererMsg::ReceivedRedirect {
+                        request_id,
+                        worker,'''
+to = '''                    let _ = redirected.send(RendererMsg::ReceivedRedirect {
+                        request_id,
+                        worker: worker.filter(|_| false),'''
+
+[[mutant]]
+name = "a worker's response goes to the main thread"
+file = "crates/renderer/src/task_queue.rs"
+from = '''        | RendererMsg::ResourceResponse {
+            worker: Some(worker),
+            ..
+        }
+        | RendererMsg::DedicatedWorkerScript'''
+to = '''        | RendererMsg::DedicatedWorkerScript'''
+
+[[mutant]]
+name = "no route to a worker's thread"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''                self.scheduler.add_worker_route(id, tasks.clone());'''
+to = '''                let _ = &self.scheduler;'''
+
+[[mutant]]
+name = "the browser isn't told of a worker"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''                let _ = self.to_browser.send(RendererHostMsg::DedicatedWorkerCreated {'''
+to = '''                let _ = (&self.to_browser, 0).1;
+                let _ = (RendererHostMsg::DedicatedWorkerCreated {'''
+
+[[mutant]]
+name = "the browser isn't told a terminated worker is gone"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''            let _ = worker.tasks.send(WorkerTask::Stop);
+            self.gone(id);'''
+to = '''            let _ = worker.tasks.send(WorkerTask::Stop);'''
+
+[[mutant]]
+name = "a worker's script request isn't same-origin"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''    request.mode = RequestMode::SameOrigin;'''
+to = '''    request.mode = RequestMode::NoCors;'''
+
+[[mutant]]
+name = "a worker's script request has no initiator"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''    request
+}
+
+/// A worker's script, its main one'''
+to = '''    request.initiator = None;
+    request
+}
+
+/// A worker's script, its main one'''
+
+[[mutant]]
+name = "a worker's global's URL isn't its script's after redirects"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''    engine.create_global(&url, origin, &start.name, Box::new(host));'''
+to = '''    engine.create_global(&start.url, origin, &start.name, Box::new(host));'''
+
+[[mutant]]
+name = "what the page posted before the script ran is dropped"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''    for message in early {
+        engine.post_message(message);
+    }'''
+to = '''    drop(early);'''
+
+[[mutant]]
+name = "a script of a status not ok runs"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''    if !(200..300).contains(&response.status) {
+        return None;
+    }
+    let url = url::Url::parse(&response.url).ok()?;'''
+to = '''    let url = url::Url::parse(&response.url).ok()?;'''
+
+[[mutant]]
+name = "a worker's script is of any MIME type"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''        && crate::loader::is_blocked_as_script(&response.mime_type)'''
+to = '''        && crate::loader::is_blocked_as_script(&response.mime_type) && false'''
+
+[[mutant]]
+name = "a data: URL's worker script is checked too"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''    if !matches!(url.scheme(), "data" | "blob")'''
+to = '''    if !matches!(url.scheme(), "blob")'''
+
+[[mutant]]
+name = "text/csv is a script"
+file = "crates/renderer/src/loader.rs"
+from = '''        || essence == "text/csv"'''
+to = '''        || essence == "text/csv!"'''
+
+[[mutant]]
+name = "an import is same-origin"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''        request.mode = RequestMode::NoCors;'''
+to = '''        request.mode = RequestMode::SameOrigin;'''
+
+[[mutant]]
+name = "an import's redirect isn't followed"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''                    let _ = self.to_browser.send(RendererHostMsg::FollowRedirect {
+                        request_id,
+                        worker,
+                    });'''
+to = '''                    let _ = worker;'''
+
+[[mutant]]
+name = "a message during an import is dropped"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''                Ok(task @ WorkerTask::Message(_)) => {
+                    self.inbox.put_off.borrow_mut().push_back(task);
+                }'''
+to = '''                Ok(WorkerTask::Message(_)) => {}'''
+
+[[mutant]]
+name = "a stop during an import isn't heard"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''                Ok(task @ WorkerTask::Stop) => {
+                    self.inbox.put_off.borrow_mut().push_back(task);
+                    break;
+                }'''
+to = '''                Ok(WorkerTask::Stop) => {}'''
+
+[[mutant]]
+name = "another origin's import isn't muted"
+file = "crates/renderer/src/worker_thread.rs"
+from = '''            muted: script.tainting == ResponseTainting::Opaque,'''
+to = '''            muted: script.tainting == ResponseTainting::Cors,'''
+
+[[mutant]]
+name = "an import's error is the caller's no more"
+file = "crates/dom_api/src/worker.rs"
+from = '''        })?;
+    }
+    Ok(())
+}'''
+to = '''        })
+        .ok();
+    }
+    Ok(())
+}'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "worker::"]
+
+[[mutant]]
+name = "an import's URLs are parsed as they are fetched"
+file = "crates/dom_api/src/worker.rs"
+from = '''        .collect::<Result<Vec<_>, _>>()?;
+    for url in &parsed {'''
+to = '''        .collect::<Vec<_>>();
+    for url in parsed {
+        let url = &url?;'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "worker::"]
+
+[[mutant]]
+name = "what an import threw isn't thrown on"
+file = "crates/dom_js/src/worker.rs"
+from = '''        tc.rethrow();
+        Err(ImportError::Thrown)'''
+to = '''        Err(ImportError::Thrown)'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "worker::"]
+
+[[mutant]]
+name = "a muted import's error is thrown on"
+file = "crates/dom_js/src/worker.rs"
+from = '''        if script.muted {
+            return Err(ImportError::Failed);
+        }'''
+to = ''''''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "worker::"]
+
+[[mutant]]
+name = "an import is run muted always"
+file = "crates/dom_js/src/worker.rs"
+from = '''            !script.muted,
+            0,'''
+to = '''            false,
+            0,'''
+test = ["cargo", "test", "-q", "-p", "dom_js", "--test", "it", "worker::"]

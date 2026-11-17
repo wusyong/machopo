@@ -889,6 +889,8 @@ impl WebContents {
             RendererHostMsg::FetchResource { .. }
             | RendererHostMsg::CancelResource { .. }
             | RendererHostMsg::FollowRedirect { .. }
+            | RendererHostMsg::DedicatedWorkerCreated { .. }
+            | RendererHostMsg::DedicatedWorkerGone { .. }
             | RendererHostMsg::RegisterBlobUrl { .. } => {}
             // Revoked for its loads already; the navigations asked for
             // before it, which came before it, have their blob.

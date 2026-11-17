@@ -39,6 +39,7 @@
 | 新的導覽開始時、分頁關掉時取消舊導覽的載入（`WebContents` 的 `begin_navigation`、`shutdown` 取消 `PendingNavigation` 的 `load`） | 被取代的導覽停在 redirect 時，取消和不取消看起來一樣：分頁不會再叫它繼續（`on_navigation_redirected` 只認最新的導覽），兩者都不再送出請求，差別只在載入一直佔著、直到網路服務結束 | 審查；只認最新的導覽由 `browser` 的 `a_navigation_waits_at_a_redirect_for_the_tab` 守住 | `net` 能數進行中的載入時補 |
 | 每條 raster thread 重複用一塊 buffer（`TILE_PIXELS`） | 每次配置新的 buffer 畫出來一樣，只差配置的次數 | 審查 | 有量配置次數的工具時補 |
 | GC 的 `unsafe` 和對 V8 的假設：fork 裡的 `unsafe`（I10）、手寫的 `unsafe impl Sync`、`SAFETY` 註解的內容、`extern` 的簽章、`build.rs` 沒比對到的 V8 假設（A1–A3、A4 的 atomic 讀寫、C2、C3；A9 的啟動檢查只驗證一組 tag） | 錯了不一定當下出事；有些依賴 V8 的 C++，Miri 跑不了 | `crates/bindings/soundness.md` 的「需要人工審查的地方」、`build.rs` 比對、mutation test | 修改這些程式和升級 `v8` 時照清單審查；TSan 能補上其中一部分（見下面的「缺少的工具和檢查」） |
+| Browser 的 IO thread 擋下 renderer 沒登記（或已經不在）的 dedicated worker 的請求，回答網路錯誤（`render_process_host.rs` 的 `FetchResource`，Chromium 的每個 worker 只拿得到自己的 `URLLoaderFactory`） | 只有不照規矩的 renderer 會送：renderer 在 worker 不在時拿掉它的路由、不再替它送請求，worker 自己的請求一定在 `DedicatedWorkerGone` 之前；拿掉這個檢查沒有測試失敗 | 審查 | 拆 process、有直接送 IPC 的測試工具時，送一個不認得的 worker 的 `FetchResource`，確認回答 `ERR_ACCESS_DENIED` |
 | Browser 的 IO thread 收到 `RevokeBlobUrl` 時先把網址標成子資源不能用（`render_process_host.rs`），UI thread 處理到時才拿掉 | 改成 IO thread 不標記，沒有測試失敗：renderer 自己擋下撤銷後的 `fetch()` 和 `<img>`，之後的 task 才要的 `<script>`、iframe 要到 Browser，但測試裡 UI thread 很快就拿掉了網址，碰不到 UI thread 還沒處理到的那段空檔 | 審查；`net` 的單元測試守住標記本身（`revoked_by_its_renderer`），`browser` 的 `blobs` 測試守住整條路的結果 | 拆 process、有 IPC 的測試工具時，讓 UI thread 暫停處理訊息，測那段空檔 |
 | 記憶體順序（concurrent marking） | DOM 的 heap（elise）的 marking 預設在 worker 上和 mutator 同時跑（V8 的 `CppHeap` 上沒有 machopo 的物件，只做 incremental）。elise 自己的 atomic 由 loom 照 C11 的模型窮舉小模型；marker 在 mutator 寫入的同時讀 V8 的 `TracedReference`（`crates/bindings/soundness.md` 的 C4）在 V8 的 C++ 裡，loom 碰不到。x86-64 不會重排寫入，ARM64 會，但 stress 碰不上 | elise 的部分 loom、shuttle（elise 的 `scripts/test.py models`）；C4 靠審查 | TSan；在 CI 的 ARM64（macOS）上跑 `scripts/test.py matrix`（之後） |
 | 新物件在建構子裡初始化（fork 的 `init_rust_obj`） | 錯誤取決於時序 | `bindings` 的 `build.rs` 比對 fork 的原始碼、審查 | 同上 |
@@ -392,6 +393,7 @@
 - 情境的查詢（`QueryElement`、`ScrollIntoViewIfNeeded`）之前先把 lifecycle 更新到 pre-paint（情境的查詢先等到畫出改變的那個 frame 才問，那時已經是最新的；照 Blink 留著）。
 - renderer 在 DOM 的樹有任何改動之後都重算主 frame 的標題（`update_title` 看 `tree_version`：不只 `<title>` 改了的時候，子 frame 的文件的改動也算）：重算的標題和上次送的一樣，不會再送。
 - DevTools 的 `DOM.requestNode` 對不是物件的值回答別的錯誤文字（`dom_js` 的 `devtools_page` 的 `node_of_object`，`v8::Object` 的 `try_from` 失敗的那一支）：V8 的 inspector 只給物件 `objectId`，`unwrapObject` 拿回來的一定是物件，這一支走不到；留著是因為 `unwrapObject` 的型別是 `Value`。
+- dedicated worker 的 `importScripts()` 等載入時收到結束的 task 照樣停下（`renderer` 的 `worker_thread.rs` 的 `GlobalHost::load` 把它留給 loop）：拿掉時也一樣，`terminate()` 在送出結束的 task 之前就設了停下的旗標，等載入的迴圈每收到一個 task 都看旗標、loop 一開始也看，兩處都會停；留著是為了不靠設旗標和送 task 的先後。
 
 **網路和載入**
 

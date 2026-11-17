@@ -124,6 +124,7 @@ pub enum ExceptionName {
     QuotaExceeded,
     InvalidModification,
     Timeout,
+    Network,
 }
 
 impl ExceptionName {
@@ -152,6 +153,7 @@ impl ExceptionName {
             Self::QuotaExceeded => "QuotaExceededError",
             Self::InvalidModification => "InvalidModificationError",
             Self::Timeout => "TimeoutError",
+            Self::Network => "NetworkError",
         }
     }
 

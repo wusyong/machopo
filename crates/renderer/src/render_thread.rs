@@ -433,6 +433,7 @@ impl RenderThread {
                     web_tests: flags.web_tests,
                 },
                 scheduler.clone(),
+                to_browser.clone(),
             )),
             to_browser,
             widget: Some(FrameWidget::new(layer_tree_host)),
@@ -923,11 +924,18 @@ impl RenderThread {
             }
             RendererMsg::ReceivedRedirect {
                 request_id,
+                worker: None,
                 redirect,
             } => self.did_receive_redirect(request_id, &redirect),
-            RendererMsg::ResourceResponse { request_id, result } => {
-                self.did_receive_resource(request_id, result)
-            }
+            RendererMsg::ResourceResponse {
+                request_id,
+                worker: None,
+                result,
+            } => self.did_receive_resource(request_id, result),
+            // A worker's go to its thread (`RendererSender::send`).
+            RendererMsg::ReceivedRedirect { worker: Some(_), .. }
+            | RendererMsg::ResourceResponse { worker: Some(_), .. }
+            | RendererMsg::DedicatedWorkerScript { .. } => {}
             RendererMsg::UpdateVisualProperties(props) => {
                 self.visual_properties = props;
                 self.set_viewport();
@@ -1420,7 +1428,10 @@ impl RenderThread {
         self.network_agent.did_redirect(request_id, redirect);
         let _ = self
             .to_browser
-            .send(RendererHostMsg::FollowRedirect { request_id });
+            .send(RendererHostMsg::FollowRedirect {
+                request_id,
+                worker: None,
+            });
     }
 
     /// What the page's log says of request `request_id`'s `result`, if

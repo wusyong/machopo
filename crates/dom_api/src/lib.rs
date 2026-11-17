@@ -212,7 +212,9 @@ pub use webdriver::{
 pub use window::{
     NamedProperty, named_property, named_property_collection, window_document_gets_for_testing,
 };
-pub use worker::{WorkerError, WorkerGlobalHost, WorkerHost, WorkerStart, worker_error};
+pub use worker::{
+    ImportError, ImportedScript, WorkerError, WorkerGlobalHost, WorkerHost, WorkerStart, worker_error,
+};
 
 /// A member's call: the DOM's operation (`dom::Cx`, which it derefs
 /// to), and what the engine gives the API: its frame's layout, if it has

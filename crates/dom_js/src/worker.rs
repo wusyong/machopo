@@ -134,6 +134,69 @@ fn create_worker_realm<'s>(
     (context, global)
 }
 
+/// `importScripts()`'s script at `url` (`ScriptHost::import_script`):
+/// fetched by the worker's host, run in the current realm, what it throws
+/// thrown on as the member returns (V8 holds it till then); muted, it
+/// fails (the member's `NetworkError`), what it threw dropped.
+pub(crate) fn import_script(
+    scope: &mut state::Scope<'_, '_, '_>,
+    url: &url::Url,
+) -> Result<(), dom_api::ImportError> {
+    use dom_api::ImportError;
+    let fetched = {
+        let (state, _) = scope.state();
+        state
+            .caches
+            .worker_global_host
+            .as_deref()
+            .and_then(|host| host.fetch_script(url))
+    };
+    let Some(script) = fetched else {
+        return Err(ImportError::Failed);
+    };
+    crate::listeners::run_script(scope, |scope| {
+        let scope = scope.scope();
+        v8::tc_scope!(let tc, scope);
+        let (Some(source), Some(name)) = (
+            v8::String::new(tc, &script.source),
+            v8::String::new(tc, &script.url),
+        ) else {
+            return Err(ImportError::Failed);
+        };
+        let options = bindings::script_options(tc, &script.url, Some("same-origin"));
+        let origin = v8::ScriptOrigin::new(
+            tc,
+            name.into(),
+            0,
+            0,
+            !script.muted,
+            0,
+            None,
+            false,
+            false,
+            false,
+            options,
+        );
+        let span = trace_event::trace_event!("EvaluateScript");
+        let ran = v8::Script::compile(tc, source, Some(&origin)).and_then(|script| script.run(tc));
+        drop(span);
+        if ran.is_some() {
+            return Ok(());
+        }
+        // Stopped: V8 throws the stop on as the `TryCatch` ends.
+        if tc.has_terminated() {
+            bindings::stop_again(tc);
+            return Err(ImportError::Thrown);
+        }
+        if script.muted {
+            return Err(ImportError::Failed);
+        }
+        // Thrown on as the `TryCatch` ends, for the member's caller.
+        tc.rethrow();
+        Err(ImportError::Thrown)
+    })
+}
+
 impl WorkerEngine for V8WorkerEngine {
     fn create_global(
         &mut self,

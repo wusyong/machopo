@@ -165,11 +165,23 @@ pub enum RendererMsg {
     /// `FollowRedirect`.
     ReceivedRedirect {
         request_id: u64,
+        /// The dedicated worker whose request it is (`FetchResource`'s);
+        /// none: the main thread's.
+        worker: Option<u64>,
         /// Boxed: a response's head, much bigger than the other messages.
         redirect: Box<RedirectInfo>,
     },
     /// The answer to a `FetchResource` (`URLLoaderClient::OnComplete`).
-    ResourceResponse { request_id: u64, result: LoadResult },
+    ResourceResponse {
+        request_id: u64,
+        /// As `ReceivedRedirect`'s.
+        worker: Option<u64>,
+        result: LoadResult,
+    },
+    /// The main script of the dedicated worker `worker`
+    /// (`DedicatedWorkerCreated`'s), loaded, or why it wasn't (Chromium's
+    /// `DedicatedWorkerHost`'s `WorkerScriptFetcher`).
+    DedicatedWorkerScript { worker: u64, result: LoadResult },
     /// `UpdateVisualProperties`.
     UpdateVisualProperties(VisualProperties),
     /// `blink.mojom.Widget::UpdateScreenRects`: where the browser window
@@ -489,6 +501,11 @@ pub enum RendererHostMsg {
     /// Handled on the IO thread; it never reaches the UI thread.
     FetchResource {
         request_id: u64,
+        /// The dedicated worker that asks (its thread sends it, its answer
+        /// goes to it: Chromium gives each worker a `URLLoaderFactory` of
+        /// its own); none: the main thread. One the browser doesn't know as
+        /// the renderer's (`DedicatedWorkerCreated`) is refused.
+        worker: Option<u64>,
         request: ResourceRequest,
     },
     /// Closing the `URLLoader` of a `FetchResource` still loading (an
@@ -496,6 +513,7 @@ pub enum RendererHostMsg {
     /// on the IO thread too.
     CancelResource {
         request_id: u64,
+        worker: Option<u64>,
     },
     /// `URLLoader::FollowRedirect`: the load of a `FetchResource` waiting
     /// at the redirect it told of (`RendererMsg::ReceivedRedirect`) goes
@@ -503,7 +521,18 @@ pub enum RendererHostMsg {
     /// Handled on the IO thread too.
     FollowRedirect {
         request_id: u64,
+        worker: Option<u64>,
     },
+    /// A dedicated worker the renderer made (`new Worker()`, Chromium's
+    /// `DedicatedWorkerHostFactory::CreateWorkerHost`): the browser knows it
+    /// as the renderer's from now on (its requests are let through), and
+    /// loads its main script, `request`, answering
+    /// `RendererMsg::DedicatedWorkerScript`. Handled on the IO thread.
+    DedicatedWorkerCreated { worker: u64, request: ResourceRequest },
+    /// The dedicated worker `worker` is no more (terminated, closed, its
+    /// document gone): its loads closed, its requests refused. Handled on
+    /// the IO thread.
+    DedicatedWorkerGone { worker: u64 },
     /// `BlobURLStore::Register` (`URL.createObjectURL`): `url` stands for
     /// a blob of `bytes` and `mime_type` (its type, maybe empty), for this
     /// renderer's subresources and for any navigation, until revoked or

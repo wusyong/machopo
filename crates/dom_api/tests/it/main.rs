@@ -981,6 +981,10 @@ impl dom_api::WorkerGlobalHost for TestFront<'_> {
             .calls
             .push(WorkerCall::Error(error));
     }
+
+    fn fetch_script(&self, _: &url::Url) -> Option<dom_api::ImportedScript> {
+        None
+    }
 }
 
 impl OpFront for TestFront<'_> {

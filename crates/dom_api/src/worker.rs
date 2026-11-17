@@ -1,6 +1,7 @@
 //! Dedicated workers' members: `Worker` in the realm that makes one (HTML's
 //! "new Worker", Blink's `DedicatedWorker`), and a worker's global's own
-//! (`DedicatedWorkerGlobalScope`'s `name`, `postMessage()`, `close()`).
+//! (`DedicatedWorkerGlobalScope`'s `name`, `postMessage()`, `close()`;
+//! `WorkerGlobalScope`'s `importScripts()`).
 //!
 //! The worker runs elsewhere (a thread of its own, its own DOM and engine):
 //! the members ask the engine's host at once (`WorkerHost` on the side that
@@ -65,6 +66,24 @@ pub trait WorkerGlobalHost {
     /// cancel (HTML's "report an exception" of a worker's): for its
     /// `Worker`'s `error` event.
     fn report_error(&self, error: WorkerError);
+
+    /// `importScripts()`'s script at `url`, fetched now (HTML's "fetch a
+    /// classic worker-imported script": `no-cors`, credentials
+    /// same-origin), the worker waiting for it (its other tasks after);
+    /// none if it couldn't be had (a network error, a status that isn't
+    /// ok, a MIME type no script is).
+    fn fetch_script(&self, url: &Url) -> Option<ImportedScript>;
+}
+
+/// A script `importScripts()` fetched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedScript {
+    /// Its text, decoded.
+    pub source: String,
+    /// Its URL after redirects.
+    pub url: String,
+    /// Whether its errors are muted (another origin's: tainted opaque).
+    pub muted: bool,
 }
 
 /// An uncaught exception of a worker, as it goes to its `Worker` (an
@@ -210,6 +229,59 @@ pub(crate) fn terminate<'gc, O: OpFront>(
         host.terminate_worker(cx.worker_id(this));
     }
     Ok(())
+}
+
+/// `importScripts(...urls)`: each URL parsed against the worker's API base
+/// URL first (a `SyntaxError` if one doesn't parse, nothing fetched), then
+/// each fetched and run in turn (`ScriptHost::import_script`), what one
+/// throws, or that it couldn't be had, ending it there.
+pub(crate) fn import_scripts<H: ScriptHost>(
+    host: &mut H,
+    this: Persistent<WorkerGlobalScope>,
+    urls: Vec<String>,
+) -> Result<(), ApiError> {
+    let base = host.read(|cx| {
+        let context = cx.global_context(GlobalRef::WorkerGlobal(this.get(cx.gc)));
+        cx.context_base_url(context)
+    });
+    let parsed = urls
+        .iter()
+        .map(|url| {
+            Url::options().base_url(base.as_ref()).parse(url).map_err(|_| {
+                dom_error(
+                    ExceptionName::Syntax,
+                    format!(
+                        "Failed to execute 'importScripts' on 'WorkerGlobalScope': The URL '{url}' is invalid."
+                    ),
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for url in &parsed {
+        host.import_script(url).map_err(|error| match error {
+            ImportError::Thrown => ApiError::Thrown,
+            // Blink's message.
+            ImportError::Failed => dom_error(
+                ExceptionName::Network,
+                format!(
+                    "Failed to execute 'importScripts' on 'WorkerGlobalScope': The script at '{url}' failed to load."
+                ),
+            ),
+        })?;
+    }
+    Ok(())
+}
+
+/// Why a script `importScripts()` asked for didn't run through
+/// (`ScriptHost::import_script`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportError {
+    /// It couldn't be had, or it threw and its errors are muted: a
+    /// `NetworkError`.
+    Failed,
+    /// It threw, and the engine holds the exception still, for the member
+    /// to throw on (`ApiError::Thrown`).
+    Thrown,
 }
 
 /// `self` of a worker's global: itself.

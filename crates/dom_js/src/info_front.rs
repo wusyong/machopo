@@ -2310,6 +2310,11 @@ impl<'s, K: InfoKind<'s>> dom_api::typed::ScriptFront for InfoFront<'s, K> {
         });
     }
 
+    fn import_script(&mut self, url: &url::Url) -> Result<(), dom_api::ImportError> {
+        self.info
+            .with_scope(|mut scope, _| crate::worker::import_script(&mut scope, url))
+    }
+
     fn call_node_filter(
         &mut self,
         traversal: &dom::TraversalRoot,

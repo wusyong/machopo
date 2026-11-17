@@ -557,6 +557,13 @@ pub trait ScriptFront: Front {
         unreachable!("a front end binding a traversal calls its filter")
     }
 
+    /// `ScriptHost::import_script`, for `importScripts()`.
+    fn import_script(&mut self, url: &url::Url) -> Result<(), crate::ImportError> {
+        const { assert!(Self::STUBS, "a front end with no stubs reaches one") };
+        let _ = url;
+        unreachable!("a front end binding a worker's global imports its scripts")
+    }
+
     /// The iframes' and script elements' steps for what the operation did
     /// to them (`frame::update_elements`), before its custom element
     /// reactions are invoked: HTML's post-connection steps come first, as
@@ -1927,6 +1934,17 @@ pub trait ScriptHost {
         let _ = (target, event_type);
     }
 
+    /// `importScripts()`'s script at `url` (HTML's "fetch a classic
+    /// worker-imported script", the worker waiting for it), run in the
+    /// current realm, a worker's (HTML's "run a classic script" with
+    /// "rethrow errors"): what it throws is the member's to throw on, but
+    /// a script of muted errors fails as one that couldn't be had. Fails
+    /// by default (a host that fetches none).
+    fn import_script(&mut self, url: &url::Url) -> Result<(), crate::ImportError> {
+        let _ = url;
+        Err(crate::ImportError::Failed)
+    }
+
     /// Runs `script`, a classic script, in the realm of the browsing
     /// context `document` is shown in (HTML's "run a classic script"),
     /// reporting what it throws there; nothing if none shows it. None by
@@ -2310,6 +2328,10 @@ impl<F: ScriptFront> ScriptHost for FrontHost<'_, F> {
         self.0.call_node_filter(traversal, node)
     }
 
+    fn import_script(&mut self, url: &url::Url) -> Result<(), crate::ImportError> {
+        self.0.import_script(url)
+    }
+
     fn compile_event_handler(&mut self, target: &TargetRoot, event_type: NameId) {
         self.0.compile_event_handler(target, event_type);
     }
@@ -2449,6 +2471,16 @@ impl<'gc> Root<'gc> for &str {
 
     fn root(self, _: &ApiCx<'_, 'gc>) -> String {
         self.to_owned()
+    }
+}
+
+/// The strings of a variadic argument of a member that calls script
+/// (`Strings`): copies.
+impl<'gc> Root<'gc> for Vec<&str> {
+    type Rooted = Vec<String>;
+
+    fn root(self, _: &ApiCx<'_, 'gc>) -> Vec<String> {
+        self.into_iter().map(str::to_owned).collect()
     }
 }
 

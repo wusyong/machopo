@@ -14,7 +14,7 @@
 | 1b-3：`dom_api` 的 `Worker`、`WorkerGlobalScope`、`DedicatedWorkerGlobalScope` 和 worker 也有的 timer 等成員 | 做完（第 16、17 條） | 2026-11-17 |
 | 1b-4：worker 的 engine（`dom_api` 的 trait、`dom_js` 的實作，global 照 exposed 建） | 做完（第 18 條） | 2026-11-17 |
 | 1b-5：`renderer` 的 worker 的 thread 和 event loop、兩個方向的 `postMessage`、`terminate()`、`close()`、`onerror` | 做完（第 19 條；主 script 暫時只有 `data:` 的網址） | 2026-11-17 |
-| 1b-6：Browser 的登記和主 script 的載入、子資源的請求帶 client、`importScripts()` | 還沒開始 | |
+| 1b-6：Browser 的登記和主 script 的載入、子資源的請求帶 client、`importScripts()` | 做完（第 20 條） | 2026-11-17 |
 | 1b-7：WPT 的 `workers/`、情境、`about:demo`、文件、整個階段的檢查 | 還沒開始 | |
 | 2：worker 裡的 `fetch()`、`MessagePort` 跨 thread、module worker | 還沒開始 | |
 
@@ -31,6 +31,7 @@
 | 1b-3：`new Worker()` 照 realm 的 base URL 解析網址、帶名稱和 realm 的 origin 當場請 host 啟動 worker，錯的網址、`type` 和沒有 host 時丟對的例外；`postMessage()`、`terminate()` 當場經過 host；worker 的 global 的 timer、`name`、`self`、`crypto`、`postMessage()`、`close()` | `cargo test -p dom_api --test it worker::`、`cargo test -p dom --test it worker::`；表的 `table::` 測試 |
 | 1b-4：worker 的 engine 的 realm 的 global 是 worker 的 global，只有 dedicated worker 有的 interface，`[Global]` 的成員是 global 自己的；它的 timer、`Worker` 送來的訊息是它的 task，送出的和 `close()` 經過 host，例外到它的 `onerror`（`OnErrorEventHandler` 的呼叫方式），script 之後 microtask checkpoint，從別的 thread 打斷得了 | `cargo test -p dom_js --test it worker::` |
 | 1b-5：整個瀏覽器裡 `data:` 網址的 worker：兩個方向的訊息、例外到 `Worker` 和 window、`terminate()` 停得了跑不停的、`close()` 之後沒有、script 拿不到時 `Worker` 上是 `error`、renderer 結束時等 worker 的 thread；文件不在時它的 worker 結束 | `cargo test -p shell --test it workers::`、`cargo test -p dom_js --test it worker::`、`cargo test -p renderer --lib worker_thread` |
+| 1b-6：worker 的主 script 經過 Browser 載入（同源、redirect 之後的網址是 global 的、照 Chrome 寬鬆地檢查 MIME type、`data:` 不檢查、狀態不是 2xx 是 `error`），script 跑之前 `Worker` 送的訊息之後才到；`importScripts()` 照順序同步載入、執行（`no-cors`，別的 origin 的例外變成 `NetworkError`，自己的例外照樣往外丟，抓不到的是 `NetworkError`，等的期間其他 task 留著）；worker 不在時 Browser 關掉它的載入 | `cargo test -p shell --test it workers::`、`cargo test -p dom_js --test it worker::` |
 
 ## 做過的檢查
 
@@ -130,3 +131,13 @@
 - WPT（`python3 scripts/test.py wpt html/webappapis/ dom/events/ webmessaging/ FileAPI/ netinfo/ geolocation/ screen-wake-lock/` 和預期結果提到 worker 的幾份）：3828 個檢查，和預期不同的 90 個：4 個是 1a 記下的 `scrollend`；86 個是 worker 的 variant（`.any.worker.html`、`Worker-read-file-constructor.worker.html` 等）從 ERROR 變成 TIMEOUT。原因：`Worker` 有了，但 http 的 script 還不抓（1b-6），`Worker` 上的 `error` 在 worker 送出第一個訊息之前到，testharness.js 留著它等 worker 開始（`RemoteContext::remote_error` 的 `early_exception`），一直等不到。這是 1b-6 之前的暫時狀態，預期結果在 1b-7 跑 worker 的 variant 時一起更新。
 - 跑過的：`cargo test -p dom -p dom_api -p dom_js -p dom_wasm -p renderer -p shell -p browser` 都通過。
 
+### 1b-6：worker 的 script 經過 Browser 載入、`importScripts()`（2026-11-17，macOS，Apple Silicon）
+
+- `protocol`：`RequestDestination::Worker`；`FetchResource`、`CancelResource`、`FollowRedirect` 和回答的 `ResourceResponse`、`ReceivedRedirect` 帶 `worker`（哪個 dedicated worker 的，request id 是它自己的）；新的 `DedicatedWorkerCreated`（帶主 script 的請求）、`DedicatedWorkerGone`、`DedicatedWorkerScript`。
+- Browser 的 IO thread（`render_process_host.rs`）：載入照 `LoadKey`（main thread 或 worker 的請求、worker 的主 script）記；`DedicatedWorkerCreated` 登記 worker、抓主 script（redirect 自己跟），之後才放行它的請求，不認得的 worker 的請求回答 `ERR_ACCESS_DENIED`；`DedicatedWorkerGone` 關掉它的載入、拿掉登記。
+- renderer：`MainThreadScheduler` 的 worker 路由表（另一把鎖），`RendererSender::send` 把帶 worker 的回答和 `DedicatedWorkerScript` 直接送進 worker 的 thread 的 channel；`Workers` 啟動 worker 時先加路由、再告訴 Browser，`terminate()` 和不在時拿掉路由、告訴 Browser。worker 的 thread 先等主 script（等的期間 `Worker` 送來的訊息留到 script 跑完），檢查狀態和 MIME type（第 20 條，和 `<script>` 共用 `loader::is_blocked_as_script`；`data:`、`blob:` 不檢查，和 Chrome 的 `AllowedByNosniff` 一樣），照 Chrome 用 BOM、`charset`、UTF-8 解碼，global 的網址是 redirect 之後的。`data:` 的主 script 也經過 Browser（Chromium 一樣），`renderer` 不再依賴 `data-url`。
+- `importScripts()`：`dom_api` 的成員（`#[calls_script]`，先解析全部的網址）、`ScriptHost::import_script`、`ImportError`、`WorkerGlobalHost::fetch_script`、`ImportedScript`、`ExceptionName::Network`（`dom_wasm` 的代碼 27）；`dom_js` 在目前的 realm 編譯、執行，例外用 `TryCatch::rethrow` 交給成員的呼叫者，muted 的換成 `NetworkError`，被打斷時再要求一次打斷（第 13 條）；renderer 的 `GlobalHost::load` 送 `FetchResource`、跟 redirect、等回答，其他的 task 留給 loop（`Inbox`），收到結束時送 `CancelResource`。
+- 新的測試：`shell` 的 `workers::` 多了 6 個（主 script 和 import 的載入、redirect、別的 origin 的 import；跨 origin、redirect 到別的 origin、404、`image/`、`text/csv` 的主 script 是 `error`，`text/plain` 和 `data:image/png` 的照樣跑；`importScripts()` 的 `NetworkError` 和例外；import 等待中的訊息；import 等待中 terminate；主 script 還沒到就 terminate、Browser 關掉載入），`a_worker_whose_script_can_t_be_had_errs` 現在是 404；`dom_js` 的 `worker::` 多了 4 個（照順序跑、解析和載入失敗、例外、import 的 script 之後丟的錯照它的 muted 回報）。
+- 找到的問題：import 等待中 terminate 的測試一開始不穩定（8 次失敗 6 次）：worker 送出訊息之後才送請求，頁面收到訊息就 terminate，`DedicatedWorkerGone` 有時先到 Browser，請求被當成不認得的 worker 的而擋下，沒到 server。實作是對的，測試改成收到訊息 200 ms 之後才 terminate，之後連跑 16 次都通過。
+- mutation test（`rfcs/0103-worker-global-scope/mutants-1b6.toml`）：26 條。第一次 20 條抓到、6 條沒抓到：「import 的錯不再丟給呼叫者」（mutant 寫錯了，`?` 還在；改寫之後抓到）、「import 一律 muted」（補了 `an_imported_script_s_errors_are_its_own`，抓到）、「worker 不在時不關它的載入」和「terminate 時不告訴 Browser」（import 的載入 worker 自己會關，補了主 script 還沒到就 terminate 的測試，抓到；中間一次重跑「抓到」是上面不穩定的測試碰巧失敗）、「Browser 放行不認得的 worker 的請求」（只有不照規矩的 renderer 會送，記進 `docs/test-gaps.md` 的「只靠審查」）、「import 等待時聽不到結束」（等價：停下的旗標在送結束之前就設了，兩處都看旗標，記進 `docs/test-gaps.md`）。
+- 跑過的：`cargo test -p renderer -p browser -p dom_api -p dom_js -p protocol -p net -p dom_wasm`、`cargo test -p shell` 都通過；`sanity.py` 的 `deps`、`spans`、`boundary`、`unsafe`、`tests`、`numerics`、`docs` 都通過。WPT 的 worker 的 variant 和預期結果在 1b-7 跑。

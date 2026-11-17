@@ -3,11 +3,13 @@
 //! window alone has), its members the global's own; its timers and the
 //! messages its `Worker` posts are its tasks; what it posts, `close()` and
 //! what it throws that its `onerror` doesn't cancel go to its host; its
-//! script stops from another thread. And a window's side (`V8Engine`): a
+//! script stops from another thread; `importScripts()` runs the scripts
+//! its host fetches, in turn. And a window's side (`V8Engine`): a
 //! `Worker` starts, posts and terminates through the window's workers'
 //! host; what its worker sends comes to it as its realm's tasks.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -17,12 +19,16 @@ use dom_api::{
 };
 use dom_js::{V8Engine, V8WorkerEngine};
 
-/// What the worker sent its host.
+/// What the worker sent its host, and what it fetched of it.
 #[derive(Default)]
 struct Sent {
     messages: Vec<dom::SerializedMessage>,
     closed: bool,
     errors: Vec<dom_api::WorkerError>,
+    /// The scripts its host has, by URL; another can't be had.
+    scripts: HashMap<String, dom_api::ImportedScript>,
+    /// The URLs it fetched, in order.
+    fetched: Vec<String>,
 }
 
 struct Host(Rc<RefCell<Sent>>);
@@ -39,6 +45,24 @@ impl WorkerGlobalHost for Host {
     fn report_error(&self, error: dom_api::WorkerError) {
         self.0.borrow_mut().errors.push(error);
     }
+
+    fn fetch_script(&self, url: &url::Url) -> Option<dom_api::ImportedScript> {
+        let mut sent = self.0.borrow_mut();
+        sent.fetched.push(url.to_string());
+        sent.scripts.get(url.as_str()).cloned()
+    }
+}
+
+/// `source` is the script at `url` (of muted errors if `muted`).
+fn script(sent: &Rc<RefCell<Sent>>, url: &str, source: &str, muted: bool) {
+    sent.borrow_mut().scripts.insert(
+        url.to_owned(),
+        dom_api::ImportedScript {
+            source: source.to_owned(),
+            url: url.to_owned(),
+            muted,
+        },
+    );
 }
 
 /// A worker's engine, its global of `https://example.test/w.js`, named
@@ -263,6 +287,115 @@ fn a_worker_s_uncaught_errors_go_to_its_host() {
             lineno: 1,
             colno: 109,
         }]
+    );
+}
+
+/// `importScripts()` runs what its host fetched, in turn, in its realm,
+/// each URL parsed against its own first (none with nothing given).
+#[test]
+fn import_scripts_runs_each_in_turn() {
+    let (mut engine, sent) = worker();
+    script(&sent, "https://example.test/a.js", "var got = ['a'];", false);
+    script(&sent, "https://example.test/lib/b.js", "got.push('b', typeof self);", false);
+    assert_eq!(
+        result(
+            &mut engine,
+            "(importScripts(), importScripts('a.js', '/lib/b.js'), got.join())"
+        ),
+        "a,b,object"
+    );
+    assert_eq!(
+        sent.borrow().fetched,
+        ["https://example.test/a.js", "https://example.test/lib/b.js"]
+    );
+}
+
+/// A URL that doesn't parse is a `SyntaxError`, before any is fetched; a
+/// script that can't be had a `NetworkError`, and those after it aren't
+/// fetched.
+#[test]
+fn import_scripts_fails_as_html_says() {
+    let (mut engine, sent) = worker();
+    script(&sent, "https://example.test/a.js", "var a = 1;", false);
+    assert_eq!(
+        result(&mut engine, "importScripts('a.js', 'https://[')"),
+        "threw SyntaxError: Failed to execute 'importScripts' on 'WorkerGlobalScope': \
+         The URL 'https://[' is invalid."
+    );
+    assert!(sent.borrow().fetched.is_empty());
+    assert_eq!(
+        result(
+            &mut engine,
+            "(() => { try { importScripts('gone.js', 'a.js'); } \
+               catch (e) { return e.name + ' ' + e.code + ' ' + (e instanceof DOMException) \
+                 + ' ' + typeof a; } })()"
+        ),
+        "NetworkError 19 true undefined"
+    );
+    assert_eq!(sent.borrow().fetched, ["https://example.test/gone.js"]);
+}
+
+/// What a script throws is what `importScripts()` throws, the very value,
+/// and those after it don't run; a syntax error too. One of muted errors
+/// (another origin's) throws a `NetworkError` instead.
+#[test]
+fn import_scripts_throws_what_a_script_threw() {
+    let (mut engine, sent) = worker();
+    script(&sent, "https://example.test/throws.js", "throw self;", false);
+    script(&sent, "https://example.test/bad.js", "(", false);
+    script(&sent, "https://example.test/after.js", "var after = 1;", false);
+    script(&sent, "https://other.test/muted.js", "throw self;", true);
+    assert_eq!(
+        result(
+            &mut engine,
+            "(() => { try { importScripts('throws.js', 'after.js'); } \
+               catch (e) { return (e === self) + ' ' + typeof after; } })()"
+        ),
+        "true undefined"
+    );
+    assert_eq!(
+        result(
+            &mut engine,
+            "(() => { try { importScripts('bad.js'); } catch (e) { return e.name; } })()"
+        ),
+        "SyntaxError"
+    );
+    assert_eq!(
+        result(
+            &mut engine,
+            "(() => { try { importScripts('https://other.test/muted.js'); } \
+               catch (e) { return e.name; } })()"
+        ),
+        "NetworkError"
+    );
+    // Nothing reported: each was thrown to the caller.
+    assert!(sent.borrow().errors.is_empty());
+}
+
+/// What a function an imported script made throws later is reported as
+/// that script's: its message and URL, unless its errors are muted (another
+/// origin's): then `Script error.` and nothing of where.
+#[test]
+fn an_imported_script_s_errors_are_its_own() {
+    let (mut engine, sent) = worker();
+    let boom = "var booms = (self.booms || []).concat(() => { throw new Error('boom'); });";
+    script(&sent, "https://example.test/own.js", boom, false);
+    script(&sent, "https://other.test/muted.js", boom, true);
+    run(
+        &mut engine,
+        "importScripts('own.js', 'https://other.test/muted.js'); \
+         for (const boom of booms) setTimeout(boom, 0);",
+    );
+    run_tasks_until(&mut engine, |engine| engine.until_next_task().is_none());
+    let errors: Vec<_> = sent
+        .borrow()
+        .errors
+        .iter()
+        .map(|error| format!("{} {}", error.message, error.filename))
+        .collect();
+    assert_eq!(
+        errors,
+        ["Uncaught Error: boom https://example.test/own.js", "Script error. "]
     );
 }
 

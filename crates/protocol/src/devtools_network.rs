@@ -14,7 +14,7 @@ pub fn resource_type(destination: RequestDestination) -> &'static str {
         RequestDestination::Document | RequestDestination::Iframe => "Document",
         RequestDestination::Style => "Stylesheet",
         RequestDestination::Image => "Image",
-        RequestDestination::Script => "Script",
+        RequestDestination::Script | RequestDestination::Worker => "Script",
         RequestDestination::Empty => "Fetch",
     }
 }

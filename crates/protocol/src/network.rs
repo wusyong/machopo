@@ -17,6 +17,8 @@ pub enum RequestDestination {
     Style,
     Image,
     Script,
+    /// A dedicated worker's script (Fetch's `worker`).
+    Worker,
     /// `fetch()`'s (Fetch's empty destination).
     Empty,
 }

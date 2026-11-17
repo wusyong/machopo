@@ -3605,7 +3605,10 @@ impl RenderThread {
         self.network_agent.did_cancel(request_id);
         let _ = self
             .to_browser
-            .send(RendererHostMsg::CancelResource { request_id });
+            .send(RendererHostMsg::CancelResource {
+                request_id,
+                worker: None,
+            });
     }
 
     /// The response to a `fetch()` of the DOM's, or its network error:
@@ -3797,6 +3800,7 @@ impl RenderThread {
         self.next_request_id.sent(request_id, &request);
         let _ = self.to_browser.send(RendererHostMsg::FetchResource {
             request_id,
+            worker: None,
             request,
         });
     }
@@ -4119,12 +4123,7 @@ fn script_loaded(
     if !(200..300).contains(&response.status) {
         return None;
     }
-    let mime = response.mime_type.as_str();
-    if ["image/", "audio/", "video/"]
-        .iter()
-        .any(|prefix| mime.starts_with(prefix))
-        || mime == "text/csv"
-    {
+    if crate::loader::is_blocked_as_script(&response.mime_type) {
         return None;
     }
     let fallback = charset
@@ -4159,6 +4158,7 @@ impl dom_api::LoadSink for RendererLoadSink {
         self.ids.sent(request_id, &resource);
         let _ = self.to_browser.send(RendererHostMsg::FetchResource {
             request_id,
+            worker: None,
             request: resource,
         });
         Some(request_id)

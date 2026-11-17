@@ -8,7 +8,8 @@
 //! runs the same scheduler with the page's queues paused), the others
 //! staying where they are, in order.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -133,6 +134,12 @@ pub struct MainThreadScheduler {
     /// The engine's, which has its thread take what interrupts script: set
     /// once, as the engine is made.
     interrupter: OnceLock<DevToolsInterrupter>,
+    /// The dedicated workers' threads, by number, while they run: what the
+    /// browser answers one (its script, its loads) goes there, not through
+    /// the main thread (Chromium gives each worker its own pipes to the
+    /// browser, bound on its thread). A lock of its own: a worker's thread
+    /// is told while the main thread waits on `state`.
+    worker_routes: Mutex<HashMap<u64, mpsc::Sender<crate::worker_thread::WorkerTask>>>,
 }
 
 impl MainThreadScheduler {
@@ -196,6 +203,36 @@ impl MainThreadScheduler {
             MainThreadTask::Worker { id, event },
             false,
         );
+    }
+
+    /// What the browser sends worker `id` goes to `tasks`, its thread's,
+    /// from now on.
+    pub(crate) fn add_worker_route(
+        &self,
+        id: u64,
+        tasks: mpsc::Sender<crate::worker_thread::WorkerTask>,
+    ) {
+        self.lock_routes().insert(id, tasks);
+    }
+
+    /// Worker `id` is no more: what the browser still sends it is dropped.
+    pub(crate) fn remove_worker_route(&self, id: u64) {
+        self.lock_routes().remove(&id);
+    }
+
+    fn lock_routes(
+        &self,
+    ) -> MutexGuard<'_, HashMap<u64, mpsc::Sender<crate::worker_thread::WorkerTask>>> {
+        self.worker_routes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// `msg` to worker `id`'s thread; dropped if it is no more.
+    fn post_to_worker(&self, id: u64, msg: RendererMsg) {
+        if let Some(tasks) = self.lock_routes().get(&id) {
+            let _ = tasks.send(crate::worker_thread::WorkerTask::Browser(msg));
+        }
     }
 
     /// The canvas encoder's file of the `toBlob` call `id`.
@@ -369,6 +406,20 @@ impl RendererSender {
     /// Fails once the main thread has gone; the message is dropped.
     pub fn send(&self, msg: RendererMsg) -> Result<(), RendererGone> {
         let scheduler = &self.scheduler;
+        // A dedicated worker's: to its thread.
+        if let RendererMsg::ReceivedRedirect {
+            worker: Some(worker),
+            ..
+        }
+        | RendererMsg::ResourceResponse {
+            worker: Some(worker),
+            ..
+        }
+        | RendererMsg::DedicatedWorkerScript { worker, .. } = msg
+        {
+            scheduler.post_to_worker(worker, msg);
+            return Ok(());
+        }
         let (queued, interrupt) = match msg {
             RendererMsg::DevToolsAttach { session } => (DevToolsQueued::Attach(session), false),
             RendererMsg::DevToolsDetach { session } => (DevToolsQueued::Detach(session), false),
